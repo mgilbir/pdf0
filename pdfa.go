@@ -3,7 +3,9 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"strings"
+	"unicode/utf8"
 )
 
 // PDFALevel represents a PDF/A conformance level.
@@ -95,6 +97,22 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkNoAlternateImages,
 		checkInterpolate,
 		checkNoOPI,
+		// Catalog version (6.1.12)
+		checkCatalogVersion,
+		// Font subsets (6.2.10)
+		checkFontSubsets,
+		// ExtGState forbidden keys (6.2.5)
+		checkExtGState,
+		// Info/XMP consistency (6.7.3)
+		checkInfoXMPConsistency,
+		// Transparency blending (6.2.4)
+		checkTransparencyBlending,
+		// Embedded files (6.1.12)
+		checkEmbeddedFiles,
+		// Optional content (6.1.13)
+		checkOptionalContent,
+		// Implementation limits (6.1.7)
+		checkImplementationLimits,
 	}
 
 	for _, check := range checks {
@@ -164,13 +182,8 @@ func checkFileID(doc *Document, level PDFALevel) []ValidationError {
 func checkHeader(doc *Document, level PDFALevel) []ValidationError {
 	switch level {
 	case PDFA1b:
-		if doc.Version != "1.4" {
-			return []ValidationError{{
-				Rule:    "6.1.2",
-				Level:   level,
-				Message: fmt.Sprintf("version must be 1.4, got %s", doc.Version),
-			}}
-		}
+		// Rule 6.1.2 is about header format, not version number.
+		// Accept any valid version for PDF/A-1b.
 	case PDFA2b, PDFA3b:
 		valid := doc.Version == "1.4" || doc.Version == "1.5" || doc.Version == "1.6" || doc.Version == "1.7"
 		if !valid {
@@ -181,11 +194,11 @@ func checkHeader(doc *Document, level PDFALevel) []ValidationError {
 			}}
 		}
 	case PDFA4:
-		if doc.Version != "2.0" {
+		if !strings.HasPrefix(doc.Version, "2.") {
 			return []ValidationError{{
 				Rule:    "6.1.2",
 				Level:   level,
-				Message: fmt.Sprintf("version must be 2.0, got %s", doc.Version),
+				Message: fmt.Sprintf("version must be 2.x, got %s", doc.Version),
 			}}
 		}
 	}
@@ -347,14 +360,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 
 	oiRef := catalog.Get("OutputIntents")
 	if oiRef == nil {
-		if level == PDFA4 {
-			return nil // PDF/A-4: OutputIntents is optional
-		}
-		return []ValidationError{{
-			Rule:    "6.2.3",
-			Level:   level,
-			Message: "catalog must have /OutputIntents",
-		}}
+		return nil // OutputIntents only required when device-dependent color spaces are used
 	}
 
 	oiObj := doc.Resolve(oiRef)
@@ -376,11 +382,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	if len(arr) == 0 {
-		return []ValidationError{{
-			Rule:    "6.2.3",
-			Level:   level,
-			Message: "/OutputIntents array must not be empty",
-		}}
+		return nil // Empty OutputIntents array is OK; absence is also OK
 	}
 
 	for i, elem := range arr {
@@ -1216,8 +1218,20 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		return nil
 	}
 
-	xmp := string(stream.Data)
+	xmp := decodeXMPToUTF8(stream.Data)
 	var errs []ValidationError
+
+	// Check pdfaid namespace URI
+	if strings.Contains(xmp, "pdfaid:") {
+		if !strings.Contains(xmp, `xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"`) {
+			errs = append(errs, ValidationError{
+				Rule:    "6.7.3",
+				Level:   level,
+				Message: "pdfaid namespace must be http://www.aiim.org/pdfa/ns/id/",
+			})
+			return errs
+		}
+	}
 
 	// Check pdfaid:part
 	expectedPart := ""
@@ -1382,7 +1396,7 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 					case Integer:
 						val = float64(tv)
 					}
-					if val != 1.0 {
+					if math.Abs(val-1.0) > 1e-6 {
 						errs = append(errs, ValidationError{
 							Rule:    "6.4",
 							Level:   level,
@@ -1466,6 +1480,1135 @@ func checkNoOPI(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 	return errs
+}
+
+// --- Catalog version check (MR-3) ---
+
+// Rule 6.1.12: PDF/A-4 catalog /Version must match pattern 2.N.
+func checkCatalogVersion(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA4 {
+		return nil
+	}
+
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+
+	versionObj := catalog.Get("Version")
+	if versionObj == nil {
+		return nil
+	}
+
+	vName, ok := versionObj.(Name)
+	if !ok {
+		return []ValidationError{{
+			Rule:    "6.1.12",
+			Level:   level,
+			Message: "catalog /Version must be a name",
+		}}
+	}
+
+	v := string(vName)
+	if len(v) != 3 || v[0] != '2' || v[1] != '.' || v[2] < '0' || v[2] > '9' {
+		return []ValidationError{{
+			Rule:    "6.1.12",
+			Level:   level,
+			Message: fmt.Sprintf("catalog /Version must match 2.N, got %s", v),
+		}}
+	}
+
+	return nil
+}
+
+// --- Font subset checks (MR-8) ---
+
+// Rule 6.2.10: PDF/A-1b subset fonts must have CharSet or CIDSet.
+func checkFontSubsets(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA1b {
+		return nil
+	}
+
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	pagesRef := catalog.Get("Pages")
+	if pagesRef == nil {
+		return nil
+	}
+
+	fonts := collectFonts(doc, pagesRef)
+	var errs []ValidationError
+
+	for objNum, fontDict := range fonts {
+		subtype, _ := fontDict.Get("Subtype").(Name)
+		baseFont, _ := fontDict.Get("BaseFont").(Name)
+
+		// Check if it's a subset font (XXXXXX+ prefix)
+		baseFontStr := string(baseFont)
+		if len(baseFontStr) < 7 || baseFontStr[6] != '+' {
+			continue
+		}
+		isSubset := true
+		for i := 0; i < 6; i++ {
+			if baseFontStr[i] < 'A' || baseFontStr[i] > 'Z' {
+				isSubset = false
+				break
+			}
+		}
+		if !isSubset {
+			continue
+		}
+
+		switch subtype {
+		case "Type1", "MMType1":
+			fd := getFontDescriptor(doc, fontDict)
+			if fd != nil && fd.Get("CharSet") == nil {
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.10",
+					Level:   level,
+					Message: fmt.Sprintf("subset font %s (Type1) must have /CharSet in FontDescriptor", baseFontStr),
+					Object:  objNum,
+				})
+			}
+		case "Type0":
+			dfRef := fontDict.Get("DescendantFonts")
+			if dfRef == nil {
+				continue
+			}
+			dfObj := doc.Resolve(dfRef)
+			dfArr, ok := dfObj.(Array)
+			if !ok || len(dfArr) == 0 {
+				continue
+			}
+			cidFont := doc.ResolveDict(dfArr[0])
+			if cidFont == nil {
+				continue
+			}
+			fdRef := cidFont.Get("FontDescriptor")
+			if fdRef == nil {
+				continue
+			}
+			fd := doc.ResolveDict(fdRef)
+			if fd != nil && fd.Get("CIDSet") == nil {
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.10",
+					Level:   level,
+					Message: fmt.Sprintf("subset CIDFont %s must have /CIDSet in FontDescriptor", baseFontStr),
+					Object:  objNum,
+				})
+			}
+		}
+	}
+
+	return errs
+}
+
+func getFontDescriptor(doc *Document, fontDict *Dictionary) *Dictionary {
+	fdRef := fontDict.Get("FontDescriptor")
+	if fdRef == nil {
+		return nil
+	}
+	return doc.ResolveDict(fdRef)
+}
+
+// --- ExtGState checks (MR-1) ---
+
+// Rule 6.2.5: ExtGState forbidden keys for PDF/A-2b/3b/4.
+func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA1b {
+		return nil // Handled by checkNoTransparency
+	}
+
+	var errs []ValidationError
+	for num, iobj := range doc.Objects {
+		dict, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		typeObj := dict.Get("Type")
+		if t, ok := typeObj.(Name); !ok || t != "ExtGState" {
+			continue
+		}
+
+		// /TR must not be present
+		if dict.Get("TR") != nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.5",
+				Level:   level,
+				Message: "ExtGState must not contain /TR",
+				Object:  num,
+			})
+		}
+
+		// /TR2 must be /Default if present
+		if tr2 := dict.Get("TR2"); tr2 != nil {
+			if n, ok := tr2.(Name); !ok || n != "Default" {
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.5",
+					Level:   level,
+					Message: "/TR2 must be /Default",
+					Object:  num,
+				})
+			}
+		}
+
+		// /HTO must not be present
+		if dict.Get("HTO") != nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.5",
+				Level:   level,
+				Message: "ExtGState must not contain /HTO",
+				Object:  num,
+			})
+		}
+
+		// Check halftone
+		if htRef := dict.Get("HT"); htRef != nil {
+			checkHalftoneErrors(doc, htRef, num, level, &errs)
+		}
+	}
+	return errs
+}
+
+func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+	htDict := doc.ResolveDict(htRef)
+	if htDict == nil {
+		if d, ok := htRef.(*Dictionary); ok {
+			htDict = d
+		}
+	}
+	if htDict == nil {
+		return
+	}
+
+	if htType := htDict.Get("HalftoneType"); htType != nil {
+		if intVal, ok := htType.(Integer); ok {
+			if intVal != 1 && intVal != 5 {
+				*errs = append(*errs, ValidationError{
+					Rule:    "6.2.5",
+					Level:   level,
+					Message: fmt.Sprintf("halftone type must be 1 or 5, got %d", intVal),
+					Object:  objNum,
+				})
+			}
+		}
+	}
+
+	if htDict.Get("HalftoneName") != nil {
+		*errs = append(*errs, ValidationError{
+			Rule:    "6.2.5",
+			Level:   level,
+			Message: "halftone must not contain /HalftoneName",
+			Object:  objNum,
+		})
+	}
+
+	if htDict.Get("TransferFunction") != nil {
+		*errs = append(*errs, ValidationError{
+			Rule:    "6.2.5",
+			Level:   level,
+			Message: "halftone must not contain /TransferFunction",
+			Object:  objNum,
+		})
+	}
+}
+
+// --- Info/XMP consistency check (MR-6) ---
+
+// Rule 6.7.3: PDF/A-1b requires Info dict and XMP metadata to be consistent.
+func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA1b {
+		return nil
+	}
+
+	infoRef := doc.Trailer.Get("Info")
+	if infoRef == nil {
+		return nil
+	}
+	infoDict := doc.ResolveDict(infoRef)
+	if infoDict == nil {
+		return nil
+	}
+
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	metaRef := catalog.Get("Metadata")
+	if metaRef == nil {
+		return nil
+	}
+	metaObj := doc.Resolve(metaRef)
+	if metaObj == nil {
+		return nil
+	}
+	stream, ok := metaObj.(*Stream)
+	if !ok {
+		return nil
+	}
+	xmp := decodeXMPToUTF8(stream.Data)
+
+	var errs []ValidationError
+
+	pairs := []struct {
+		infoKey string
+		xmpKey  string
+		isList  bool
+	}{
+		{"Title", "dc:title", true},
+		{"Author", "dc:creator", true},
+		{"Subject", "dc:description", true},
+		{"Keywords", "pdf:Keywords", false},
+		{"Creator", "xmp:CreatorTool", false},
+		{"Producer", "pdf:Producer", false},
+		{"CreationDate", "xmp:CreateDate", false},
+		{"ModDate", "xmp:ModifyDate", false},
+	}
+
+	for _, p := range pairs {
+		infoVal := getInfoString(infoDict, p.infoKey)
+		if infoVal == "" {
+			continue
+		}
+
+		var xmpVal string
+		if p.isList {
+			xmpVal = extractXMPListValue(xmp, p.xmpKey)
+		} else {
+			xmpVal = extractXMPValue(xmp, p.xmpKey)
+		}
+
+		if xmpVal == "" {
+			errs = append(errs, ValidationError{
+				Rule:    "6.7.3",
+				Level:   level,
+				Message: fmt.Sprintf("Info /%s present but XMP %s missing", p.infoKey, p.xmpKey),
+			})
+			continue
+		}
+
+		// For dates, normalize before comparing
+		if p.infoKey == "CreationDate" || p.infoKey == "ModDate" {
+			infoNorm := normalizePDFDate(infoVal)
+			xmpNorm := normalizeXMPDate(xmpVal)
+			if infoNorm != "" && xmpNorm != "" && infoNorm != xmpNorm {
+				errs = append(errs, ValidationError{
+					Rule:    "6.7.3",
+					Level:   level,
+					Message: fmt.Sprintf("Info /%s (%s) does not match XMP %s (%s)", p.infoKey, infoVal, p.xmpKey, xmpVal),
+				})
+			}
+		} else {
+			if infoVal != xmpVal {
+				errs = append(errs, ValidationError{
+					Rule:    "6.7.3",
+					Level:   level,
+					Message: fmt.Sprintf("Info /%s (%q) does not match XMP %s (%q)", p.infoKey, infoVal, p.xmpKey, xmpVal),
+				})
+			}
+		}
+	}
+
+	return errs
+}
+
+func getInfoString(info *Dictionary, key string) string {
+	obj := info.Get(Name(key))
+	if obj == nil {
+		return ""
+	}
+	if s, ok := obj.(String); ok {
+		return string(s.Value)
+	}
+	return ""
+}
+
+func extractXMPListValue(xmp, key string) string {
+	// Extract first rdf:li from an rdf:Seq/rdf:Bag/rdf:Alt container
+	openTag := "<" + key + ">"
+	closeTag := "</" + key + ">"
+	idx := strings.Index(xmp, openTag)
+	if idx < 0 {
+		return extractXMPValue(xmp, key)
+	}
+	start := idx + len(openTag)
+	endIdx := strings.Index(xmp[start:], closeTag)
+	if endIdx < 0 {
+		return ""
+	}
+	inner := xmp[start : start+endIdx]
+
+	liOpen := strings.Index(inner, "<rdf:li")
+	if liOpen < 0 {
+		return ""
+	}
+	gtIdx := strings.Index(inner[liOpen:], ">")
+	if gtIdx < 0 {
+		return ""
+	}
+	valStart := liOpen + gtIdx + 1
+	liClose := strings.Index(inner[valStart:], "</rdf:li>")
+	if liClose < 0 {
+		return ""
+	}
+	return strings.TrimSpace(inner[valStart : valStart+liClose])
+}
+
+func normalizePDFDate(s string) string {
+	// Convert D:YYYYMMDDHHmmSSOHH'mm' to YYYY-MM-DDTHH:mm:SS+HH:mm
+	s = strings.TrimPrefix(s, "D:")
+	if len(s) < 4 {
+		return s
+	}
+	year := s[0:4]
+	month := "01"
+	day := "01"
+	hour := "00"
+	min := "00"
+	sec := "00"
+	tz := "Z"
+
+	if len(s) >= 6 {
+		month = s[4:6]
+	}
+	if len(s) >= 8 {
+		day = s[6:8]
+	}
+	if len(s) >= 10 {
+		hour = s[8:10]
+	}
+	if len(s) >= 12 {
+		min = s[10:12]
+	}
+	if len(s) >= 14 {
+		sec = s[12:14]
+	}
+	if len(s) >= 15 {
+		tzChar := s[14]
+		if tzChar == 'Z' {
+			tz = "Z"
+		} else if tzChar == '+' || tzChar == '-' {
+			tzOff := string(tzChar)
+			if len(s) >= 17 {
+				tzOff += s[15:17]
+			}
+			rest := s[17:]
+			rest = strings.TrimPrefix(rest, "'")
+			if len(rest) >= 2 {
+				tzOff += ":" + rest[0:2]
+			} else {
+				tzOff += ":00"
+			}
+			tz = tzOff
+		}
+	}
+
+	result := year + "-" + month + "-" + day + "T" + hour + ":" + min + ":" + sec + tz
+	// Normalize UTC offsets: +00:00 and -00:00 are equivalent to Z
+	if strings.HasSuffix(result, "+00:00") {
+		result = result[:len(result)-6] + "Z"
+	} else if strings.HasSuffix(result, "-00:00") {
+		result = result[:len(result)-6] + "Z"
+	}
+	return result
+}
+
+func normalizeXMPDate(s string) string {
+	return strings.TrimSpace(s)
+}
+
+// --- Transparency blending check (MR-2) ---
+
+// Rule 6.2.4: Pages using transparency must have proper blending color space.
+func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA1b || level == PDFA4 {
+		return nil // PDF/A-1b prohibits transparency; PDF/A-4 has different rules (page-level OutputIntents)
+	}
+
+	var errs []ValidationError
+
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+
+	pagesRef := catalog.Get("Pages")
+	if pagesRef == nil {
+		return nil
+	}
+
+	pages := collectPages(doc, pagesRef)
+	for _, page := range pages {
+		if !pageUsesTransparency(doc, page.dict) {
+			continue
+		}
+
+		groupRef := page.dict.Get("Group")
+		if groupRef == nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "page using transparency must have /Group with /S /Transparency",
+				Object:  page.objNum,
+			})
+			continue
+		}
+		groupDict := doc.ResolveDict(groupRef)
+		if groupDict == nil {
+			if d, ok := groupRef.(*Dictionary); ok {
+				groupDict = d
+			}
+		}
+		if groupDict == nil {
+			continue
+		}
+
+		s, _ := groupDict.Get("S").(Name)
+		if s != "Transparency" {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "page /Group must have /S /Transparency",
+				Object:  page.objNum,
+			})
+			continue
+		}
+		if groupDict.Get("CS") == nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "page transparency group must have /CS (color space)",
+				Object:  page.objNum,
+			})
+		}
+	}
+
+	return errs
+}
+
+// pageUsesTransparency checks if a page's resources reference transparency features.
+func pageUsesTransparency(doc *Document, page *Dictionary) bool {
+	resRef := page.Get("Resources")
+	if resRef == nil {
+		return false
+	}
+	res := doc.ResolveDict(resRef)
+	if res == nil {
+		if d, ok := resRef.(*Dictionary); ok {
+			res = d
+		}
+	}
+	if res == nil {
+		return false
+	}
+
+	// Check ExtGState resources
+	gsRef := res.Get("ExtGState")
+	if gsRef != nil {
+		gsDict := doc.ResolveDict(gsRef)
+		if gsDict == nil {
+			if d, ok := gsRef.(*Dictionary); ok {
+				gsDict = d
+			}
+		}
+		if gsDict != nil {
+			for _, val := range gsDict.Values {
+				gs := doc.ResolveDict(val)
+				if gs == nil {
+					continue
+				}
+				// Only check CA/ca for non-opaque values as the primary
+				// transparency indicator requiring a page-level group.
+				for _, key := range []Name{"CA", "ca"} {
+					v := gs.Get(key)
+					if v != nil {
+						fval := 1.0
+						switch tv := v.(type) {
+						case Real:
+							fval = float64(tv)
+						case Integer:
+							fval = float64(tv)
+						}
+						if math.Abs(fval-1.0) > 1e-6 {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+type pageInfo struct {
+	dict   *Dictionary
+	objNum int
+}
+
+func collectPages(doc *Document, pageTreeRef Object) []pageInfo {
+	var pages []pageInfo
+	collectPagesRecursive(doc, pageTreeRef, &pages)
+	return pages
+}
+
+func collectPagesRecursive(doc *Document, ref Object, pages *[]pageInfo) {
+	objNum := 0
+	if iref, ok := ref.(IndirectRef); ok {
+		objNum = iref.Number
+	}
+	node := doc.ResolveDict(ref)
+	if node == nil {
+		return
+	}
+	nodeType, _ := node.Get("Type").(Name)
+	if nodeType == "Pages" {
+		kidsObj := doc.Resolve(node.Get("Kids"))
+		if kids, ok := kidsObj.(Array); ok {
+			for _, kid := range kids {
+				collectPagesRecursive(doc, kid, pages)
+			}
+		}
+	} else if nodeType == "Page" {
+		*pages = append(*pages, pageInfo{dict: node, objNum: objNum})
+	}
+}
+
+// --- Embedded files check (MR-4) ---
+
+// Rule 6.1.12: Embedded file restrictions.
+func checkEmbeddedFiles(doc *Document, level PDFALevel) []ValidationError {
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+
+	namesRef := catalog.Get("Names")
+	if namesRef == nil {
+		return nil
+	}
+	namesDict := doc.ResolveDict(namesRef)
+	if namesDict == nil {
+		if d, ok := namesRef.(*Dictionary); ok {
+			namesDict = d
+		}
+	}
+	if namesDict == nil {
+		return nil
+	}
+
+	efRef := namesDict.Get("EmbeddedFiles")
+
+	switch level {
+	case PDFA1b, PDFA2b:
+		if efRef != nil {
+			return []ValidationError{{
+				Rule:    "6.1.12",
+				Level:   level,
+				Message: "Names/EmbeddedFiles must not be present",
+			}}
+		}
+		return nil
+	case PDFA3b, PDFA4:
+		if efRef == nil {
+			return nil
+		}
+		return checkEmbeddedFileSpecs(doc, level, catalog)
+	}
+	return nil
+}
+
+func checkEmbeddedFileSpecs(doc *Document, level PDFALevel, catalog *Dictionary) []ValidationError {
+	var errs []ValidationError
+
+	// Check that /AF exists somewhere in the document
+	if !documentHasAF(doc) {
+		errs = append(errs, ValidationError{
+			Rule:    "6.1.12",
+			Level:   level,
+			Message: "document must have /AF array when embedded files are present",
+		})
+	}
+
+	for num, iobj := range doc.Objects {
+		dict, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		typeObj := dict.Get("Type")
+		if t, ok := typeObj.(Name); !ok || t != "Filespec" {
+			continue
+		}
+
+		if dict.Get("F") == nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.1.12",
+				Level:   level,
+				Message: "filespec must have /F",
+				Object:  num,
+			})
+		}
+		if dict.Get("UF") == nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.1.12",
+				Level:   level,
+				Message: "filespec must have /UF",
+				Object:  num,
+			})
+		}
+		if dict.Get("AFRelationship") == nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.1.12",
+				Level:   level,
+				Message: "filespec must have /AFRelationship",
+				Object:  num,
+			})
+		}
+
+		if level == PDFA4 {
+			efDictRef := dict.Get("EF")
+			if efDictRef != nil {
+				efDict := doc.ResolveDict(efDictRef)
+				if efDict == nil {
+					if d, ok := efDictRef.(*Dictionary); ok {
+						efDict = d
+					}
+				}
+				if efDict != nil {
+					for _, val := range efDict.Values {
+						efStream := doc.Resolve(val)
+						if stream, ok := efStream.(*Stream); ok {
+							st := stream.Dict.Get("Subtype")
+							if st == nil {
+								errs = append(errs, ValidationError{
+									Rule:    "6.1.12",
+									Level:   level,
+									Message: "embedded file stream must have /Subtype (MIME type)",
+									Object:  num,
+								})
+							} else if name, ok := st.(Name); ok {
+								if !strings.Contains(string(name), "/") {
+									errs = append(errs, ValidationError{
+										Rule:    "6.1.12",
+										Level:   level,
+										Message: fmt.Sprintf("embedded file stream /Subtype must be a MIME type, got /%s", name),
+										Object:  num,
+									})
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return errs
+}
+
+func documentHasAF(doc *Document) bool {
+	catalog := getCatalog(doc)
+	if catalog != nil && catalog.Get("AF") != nil {
+		return true
+	}
+	for _, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok {
+			if dict.Get("AF") != nil {
+				return true
+			}
+		}
+		if stream, ok := iobj.Value.(*Stream); ok {
+			if stream.Dict.Get("AF") != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// --- Optional content check (MR-5) ---
+
+// Rule 6.1.13: Optional content requirements for PDF/A-4.
+func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA4 {
+		return nil
+	}
+
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+
+	ocpRef := catalog.Get("OCProperties")
+	if ocpRef == nil {
+		return nil
+	}
+
+	ocpDict := doc.ResolveDict(ocpRef)
+	if ocpDict == nil {
+		if d, ok := ocpRef.(*Dictionary); ok {
+			ocpDict = d
+		}
+	}
+	if ocpDict == nil {
+		return nil
+	}
+
+	var errs []ValidationError
+
+	dRef := ocpDict.Get("D")
+	if dRef == nil {
+		return errs
+	}
+	dDict := doc.ResolveDict(dRef)
+	if dDict == nil {
+		if d, ok := dRef.(*Dictionary); ok {
+			dDict = d
+		}
+	}
+	if dDict == nil {
+		return errs
+	}
+
+	if dDict.Get("Name") == nil {
+		errs = append(errs, ValidationError{
+			Rule:    "6.1.13",
+			Level:   level,
+			Message: "OCProperties default config /D must have /Name",
+		})
+	}
+
+	// Check all config names unique
+	ocgsRef := ocpDict.Get("OCGs")
+	if ocgsRef == nil {
+		return errs
+	}
+	ocgsArr, ok := doc.Resolve(ocgsRef).(Array)
+	if !ok {
+		return errs
+	}
+
+	names := make(map[string]bool)
+	configs := []Object{dRef}
+	if configsRef := ocpDict.Get("Configs"); configsRef != nil {
+		if arr, ok := doc.Resolve(configsRef).(Array); ok {
+			configs = append(configs, arr...)
+		}
+	}
+	for _, cfgRef := range configs {
+		cfgDict := doc.ResolveDict(cfgRef)
+		if cfgDict == nil {
+			if d, ok := cfgRef.(*Dictionary); ok {
+				cfgDict = d
+			}
+		}
+		if cfgDict == nil {
+			continue
+		}
+		if nameObj := cfgDict.Get("Name"); nameObj != nil {
+			if s, ok := nameObj.(String); ok {
+				n := string(s.Value)
+				if names[n] {
+					errs = append(errs, ValidationError{
+						Rule:    "6.1.13",
+						Level:   level,
+						Message: fmt.Sprintf("OCProperties config name %q is not unique", n),
+					})
+				}
+				names[n] = true
+			}
+		}
+	}
+
+	// Check /Order references all OCGs
+	orderRef := dDict.Get("Order")
+	if orderRef != nil {
+		orderArr, ok := doc.Resolve(orderRef).(Array)
+		if ok {
+			referencedOCGs := make(map[int]bool)
+			collectOCGRefs(orderArr, referencedOCGs)
+			for _, ocgRef := range ocgsArr {
+				if iref, ok := ocgRef.(IndirectRef); ok {
+					if !referencedOCGs[iref.Number] {
+						errs = append(errs, ValidationError{
+							Rule:    "6.1.13",
+							Level:   level,
+							Message: fmt.Sprintf("OCG %d not referenced in /Order array", iref.Number),
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return errs
+}
+
+func collectOCGRefs(arr Array, refs map[int]bool) {
+	for _, item := range arr {
+		if iref, ok := item.(IndirectRef); ok {
+			refs[iref.Number] = true
+		}
+		if subArr, ok := item.(Array); ok {
+			collectOCGRefs(subArr, refs)
+		}
+	}
+}
+
+// --- Implementation limits check (MR-7) ---
+
+// Rule 6.1.7: Implementation limits for PDF/A.
+func checkImplementationLimits(doc *Document, level PDFALevel) []ValidationError {
+	var errs []ValidationError
+
+	maxNameLen := 127
+	maxStringLen := 65535
+	if level != PDFA1b {
+		maxStringLen = 32767
+	}
+	maxDictEntries := 4095
+
+	for num, iobj := range doc.Objects {
+		checkObjectLimits(iobj.Value, num, level, maxNameLen, maxStringLen, maxDictEntries, &errs)
+	}
+
+	// Page size limits for 2b+ only
+	if level != PDFA1b {
+		checkPageSizeLimits(doc, level, &errs)
+	}
+
+	return errs
+}
+
+func checkObjectLimits(obj Object, objNum int, level PDFALevel, maxNameLen, maxStringLen, maxDictEntries int, errs *[]ValidationError) {
+	if obj == nil {
+		return
+	}
+
+	switch v := obj.(type) {
+	case Name:
+		if len(string(v)) > maxNameLen {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("name length %d exceeds maximum %d", len(string(v)), maxNameLen),
+				Object:  objNum,
+			})
+		}
+	case String:
+		if len(v.Value) > maxStringLen {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("string length %d exceeds maximum %d", len(v.Value), maxStringLen),
+				Object:  objNum,
+			})
+		}
+	case Integer:
+		i := int64(v)
+		if i < -2147483648 || i > 2147483647 {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("integer %d out of range [-2^31, 2^31-1]", i),
+				Object:  objNum,
+			})
+		}
+	case *Dictionary:
+		if v.Len() > maxDictEntries {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("dictionary has %d entries, exceeds maximum %d", v.Len(), maxDictEntries),
+				Object:  objNum,
+			})
+		}
+		for i, key := range v.Keys {
+			checkObjectLimits(key, objNum, level, maxNameLen, maxStringLen, maxDictEntries, errs)
+			checkObjectLimits(v.Values[i], objNum, level, maxNameLen, maxStringLen, maxDictEntries, errs)
+		}
+	case Array:
+		for _, elem := range v {
+			checkObjectLimits(elem, objNum, level, maxNameLen, maxStringLen, maxDictEntries, errs)
+		}
+	case *Stream:
+		checkObjectLimits(&v.Dict, objNum, level, maxNameLen, maxStringLen, maxDictEntries, errs)
+	}
+}
+
+func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError) {
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return
+	}
+	pagesRef := catalog.Get("Pages")
+	if pagesRef == nil {
+		return
+	}
+
+	pages := collectPages(doc, pagesRef)
+	for _, page := range pages {
+		for _, boxKey := range []Name{"MediaBox", "CropBox"} {
+			boxObj := page.dict.Get(boxKey)
+			if boxObj == nil {
+				continue
+			}
+			arr, ok := boxObj.(Array)
+			if !ok || len(arr) != 4 {
+				continue
+			}
+			vals := make([]float64, 4)
+			valid := true
+			for i, elem := range arr {
+				switch ev := elem.(type) {
+				case Integer:
+					vals[i] = float64(ev)
+				case Real:
+					vals[i] = float64(ev)
+				default:
+					valid = false
+				}
+			}
+			if !valid {
+				continue
+			}
+			width := math.Abs(vals[2] - vals[0])
+			height := math.Abs(vals[3] - vals[1])
+			if width < 3 || width > 14400 || height < 3 || height > 14400 {
+				*errs = append(*errs, ValidationError{
+					Rule:    "6.1.7",
+					Level:   level,
+					Message: fmt.Sprintf("page %s dimensions %.0fx%.0f out of range [3, 14400]", boxKey, width, height),
+					Object:  page.objNum,
+				})
+			}
+		}
+	}
+}
+
+// --- XMP encoding helpers (FP-2) ---
+
+func decodeXMPToUTF8(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	// Check for BOM
+	if len(data) >= 4 {
+		// UTF-32 BE BOM: 00 00 FE FF
+		if data[0] == 0x00 && data[1] == 0x00 && data[2] == 0xFE && data[3] == 0xFF {
+			return decodeUTF32(data[4:], true)
+		}
+		// UTF-32 LE BOM: FF FE 00 00
+		if data[0] == 0xFF && data[1] == 0xFE && data[2] == 0x00 && data[3] == 0x00 {
+			return decodeUTF32(data[4:], false)
+		}
+	}
+	if len(data) >= 2 {
+		// UTF-16 BE BOM: FE FF
+		if data[0] == 0xFE && data[1] == 0xFF {
+			return decodeUTF16(data[2:], true)
+		}
+		// UTF-16 LE BOM: FF FE
+		if data[0] == 0xFF && data[1] == 0xFE {
+			return decodeUTF16(data[2:], false)
+		}
+	}
+
+	// UTF-8 BOM: EF BB BF - just skip it
+	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+		return string(data[3:])
+	}
+
+	// Heuristic: detect encoding without BOM (check UTF-32 before UTF-16)
+	if len(data) >= 4 {
+		// UTF-32 BE: 00 00 00 xx
+		if data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] != 0x00 {
+			return decodeUTF32(data, true)
+		}
+		// UTF-32 LE: xx 00 00 00
+		if data[0] != 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x00 {
+			return decodeUTF32(data, false)
+		}
+		// UTF-16 BE: 00 xx
+		if data[0] == 0x00 && data[1] != 0x00 {
+			return decodeUTF16(data, true)
+		}
+		// UTF-16 LE: xx 00
+		if data[0] != 0x00 && data[1] == 0x00 {
+			return decodeUTF16(data, false)
+		}
+	}
+
+	return string(data)
+}
+
+func decodeUTF16(data []byte, bigEndian bool) string {
+	if len(data) < 2 {
+		return ""
+	}
+	var buf []byte
+	for i := 0; i+1 < len(data); i += 2 {
+		var codeUnit uint16
+		if bigEndian {
+			codeUnit = uint16(data[i])<<8 | uint16(data[i+1])
+		} else {
+			codeUnit = uint16(data[i+1])<<8 | uint16(data[i])
+		}
+
+		// Handle surrogate pairs
+		if codeUnit >= 0xD800 && codeUnit <= 0xDBFF {
+			if i+3 < len(data) {
+				var low uint16
+				if bigEndian {
+					low = uint16(data[i+2])<<8 | uint16(data[i+3])
+				} else {
+					low = uint16(data[i+3])<<8 | uint16(data[i+2])
+				}
+				if low >= 0xDC00 && low <= 0xDFFF {
+					r := rune(0x10000 + (rune(codeUnit-0xD800)<<10 | rune(low-0xDC00)))
+					var tmp [4]byte
+					n := utf8.EncodeRune(tmp[:], r)
+					buf = append(buf, tmp[:n]...)
+					i += 2
+					continue
+				}
+			}
+			buf = append(buf, 0xEF, 0xBF, 0xBD) // replacement char
+			continue
+		}
+
+		var tmp [4]byte
+		n := utf8.EncodeRune(tmp[:], rune(codeUnit))
+		buf = append(buf, tmp[:n]...)
+	}
+	return string(buf)
+}
+
+func decodeUTF32(data []byte, bigEndian bool) string {
+	if len(data) < 4 {
+		return ""
+	}
+	var buf []byte
+	for i := 0; i+3 < len(data); i += 4 {
+		var codePoint uint32
+		if bigEndian {
+			codePoint = uint32(data[i])<<24 | uint32(data[i+1])<<16 | uint32(data[i+2])<<8 | uint32(data[i+3])
+		} else {
+			codePoint = uint32(data[i+3])<<24 | uint32(data[i+2])<<16 | uint32(data[i+1])<<8 | uint32(data[i])
+		}
+
+		r := rune(codePoint)
+		if !utf8.ValidRune(r) {
+			r = 0xFFFD
+		}
+		var tmp [4]byte
+		n := utf8.EncodeRune(tmp[:], r)
+		buf = append(buf, tmp[:n]...)
+	}
+	return string(buf)
 }
 
 // --- helpers ---
