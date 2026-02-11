@@ -33,3 +33,6 @@ go.work.sum
 
 # Test data (cloned repos)
 testdata/pdf20examples/
+
+# Generated example output
+output.pdf
