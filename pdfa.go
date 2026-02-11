@@ -1358,65 +1358,140 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok {
-			continue
+	gsEntries := collectAllExtGState(doc)
+	for _, entry := range gsEntries {
+		gs := entry.dict
+		objNum := entry.objNum
+
+		smask := gs.Get("SMask")
+		if smask != nil {
+			if n, ok := smask.(Name); ok && n == "None" {
+				// acceptable
+			} else {
+				errs = append(errs, ValidationError{
+					Rule:    "6.4",
+					Level:   level,
+					Message: "/SMask must not be used (PDF/A-1b)",
+					Object:  objNum,
+				})
+			}
 		}
 
-		typeObj := dict.Get("Type")
-		if t, ok := typeObj.(Name); ok && t == "ExtGState" {
-			smask := dict.Get("SMask")
-			if smask != nil {
-				if n, ok := smask.(Name); ok && n == "None" {
-					// acceptable
-				} else {
+		bm := gs.Get("BM")
+		if bm != nil {
+			if n, ok := bm.(Name); ok {
+				if n != "Normal" && n != "Compatible" {
 					errs = append(errs, ValidationError{
 						Rule:    "6.4",
 						Level:   level,
-						Message: "/SMask must not be used (PDF/A-1b)",
-						Object:  num,
+						Message: fmt.Sprintf("/BM must be /Normal or /Compatible, got /%s", n),
+						Object:  objNum,
 					})
 				}
 			}
+		}
 
-			bm := dict.Get("BM")
-			if bm != nil {
-				if n, ok := bm.(Name); ok {
-					if n != "Normal" && n != "Compatible" {
-						errs = append(errs, ValidationError{
-							Rule:    "6.4",
-							Level:   level,
-							Message: fmt.Sprintf("/BM must be /Normal or /Compatible, got /%s", n),
-							Object:  num,
-						})
-					}
+		for _, key := range []Name{"CA", "ca"} {
+			v := gs.Get(key)
+			if v != nil {
+				val := 1.0
+				switch tv := v.(type) {
+				case Real:
+					val = float64(tv)
+				case Integer:
+					val = float64(tv)
 				}
-			}
-
-			for _, key := range []Name{"CA", "ca"} {
-				v := dict.Get(key)
-				if v != nil {
-					val := 1.0
-					switch tv := v.(type) {
-					case Real:
-						val = float64(tv)
-					case Integer:
-						val = float64(tv)
-					}
-					if math.Abs(val-1.0) > 1e-6 {
-						errs = append(errs, ValidationError{
-							Rule:    "6.4",
-							Level:   level,
-							Message: fmt.Sprintf("/%s must be 1.0 (PDF/A-1b)", key),
-							Object:  num,
-						})
-					}
+				if math.Abs(val-1.0) > 1e-6 {
+					errs = append(errs, ValidationError{
+						Rule:    "6.4",
+						Level:   level,
+						Message: fmt.Sprintf("/%s must be 1.0 (PDF/A-1b)", key),
+						Object:  objNum,
+					})
 				}
 			}
 		}
 	}
 	return errs
+}
+
+// extGStateEntry holds a resolved ExtGState dictionary and its source object number.
+type extGStateEntry struct {
+	dict   *Dictionary
+	objNum int
+}
+
+// collectAllExtGState finds all ExtGState dictionaries by scanning Resources/ExtGState
+// in all pages, Form XObjects, and Type3 fonts. This avoids relying on the optional
+// /Type key which many ExtGState objects don't have.
+func collectAllExtGState(doc *Document) []extGStateEntry {
+	seen := make(map[*Dictionary]bool)
+	var entries []extGStateEntry
+
+	addFromResources := func(res *Dictionary, fallbackObjNum int) {
+		gsRef := res.Get("ExtGState")
+		if gsRef == nil {
+			return
+		}
+		gsDict := doc.ResolveDict(gsRef)
+		if gsDict == nil {
+			if d, ok := gsRef.(*Dictionary); ok {
+				gsDict = d
+			}
+		}
+		if gsDict == nil {
+			return
+		}
+		for _, val := range gsDict.Values {
+			objNum := fallbackObjNum
+			if iref, ok := val.(IndirectRef); ok {
+				objNum = iref.Number
+			}
+			gs := doc.ResolveDict(val)
+			if gs == nil {
+				continue
+			}
+			if seen[gs] {
+				continue
+			}
+			seen[gs] = true
+			entries = append(entries, extGStateEntry{dict: gs, objNum: objNum})
+		}
+	}
+
+	// Scan all objects for Resources dicts (pages, Form XObjects, Type3 fonts)
+	for num, iobj := range doc.Objects {
+		switch v := iobj.Value.(type) {
+		case *Dictionary:
+			resRef := v.Get("Resources")
+			if resRef != nil {
+				res := doc.ResolveDict(resRef)
+				if res == nil {
+					if d, ok := resRef.(*Dictionary); ok {
+						res = d
+					}
+				}
+				if res != nil {
+					addFromResources(res, num)
+				}
+			}
+		case *Stream:
+			resRef := v.Dict.Get("Resources")
+			if resRef != nil {
+				res := doc.ResolveDict(resRef)
+				if res == nil {
+					if d, ok := resRef.(*Dictionary); ok {
+						res = d
+					}
+				}
+				if res != nil {
+					addFromResources(res, num)
+				}
+			}
+		}
+	}
+
+	return entries
 }
 
 // --- Image checks (6.2.7) ---
@@ -1630,15 +1705,10 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok {
-			continue
-		}
-		typeObj := dict.Get("Type")
-		if t, ok := typeObj.(Name); !ok || t != "ExtGState" {
-			continue
-		}
+	gsEntries := collectAllExtGState(doc)
+	for _, entry := range gsEntries {
+		dict := entry.dict
+		num := entry.objNum
 
 		// /TR must not be present
 		if dict.Get("TR") != nil {
@@ -1676,8 +1746,34 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 		if htRef := dict.Get("HT"); htRef != nil {
 			checkHalftoneErrors(doc, htRef, num, level, &errs)
 		}
+
+		// Check BM is a valid blend mode
+		if bm := dict.Get("BM"); bm != nil {
+			if n, ok := bm.(Name); ok {
+				if !isValidBlendMode(n) {
+					errs = append(errs, ValidationError{
+						Rule:    "6.2.5",
+						Level:   level,
+						Message: fmt.Sprintf("invalid blend mode /%s", n),
+						Object:  num,
+					})
+				}
+			}
+		}
 	}
 	return errs
+}
+
+// isValidBlendMode returns true if the name is one of the standard PDF blend modes.
+func isValidBlendMode(bm Name) bool {
+	switch bm {
+	case "Normal", "Compatible", "Multiply", "Screen", "Overlay",
+		"Darken", "Lighten", "ColorDodge", "ColorBurn",
+		"HardLight", "SoftLight", "Difference", "Exclusion",
+		"Hue", "Saturation", "Color", "Luminosity":
+		return true
+	}
+	return false
 }
 
 func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALevel, errs *[]ValidationError) {
@@ -1931,8 +2027,8 @@ func normalizeXMPDate(s string) string {
 
 // Rule 6.2.4: Pages using transparency must have proper blending color space.
 func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError {
-	if level == PDFA1b || level == PDFA4 {
-		return nil // PDF/A-1b prohibits transparency; PDF/A-4 has different rules (page-level OutputIntents)
+	if level == PDFA1b {
+		return nil // PDF/A-1b prohibits transparency entirely
 	}
 
 	var errs []ValidationError
@@ -1997,8 +2093,20 @@ func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError
 }
 
 // pageUsesTransparency checks if a page's resources reference transparency features.
+// It checks ExtGState entries for CA/ca != 1.0, BM != Normal/Compatible, and SMask != None,
+// and also recurses into Form XObjects and Type3 font resources.
 func pageUsesTransparency(doc *Document, page *Dictionary) bool {
-	resRef := page.Get("Resources")
+	seen := make(map[*Dictionary]bool)
+	return resourcesUseTransparency(doc, page, seen)
+}
+
+func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Dictionary]bool) bool {
+	if seen[container] {
+		return false
+	}
+	seen[container] = true
+
+	resRef := container.Get("Resources")
 	if resRef == nil {
 		return false
 	}
@@ -2012,42 +2120,124 @@ func pageUsesTransparency(doc *Document, page *Dictionary) bool {
 		return false
 	}
 
-	// Check ExtGState resources
-	gsRef := res.Get("ExtGState")
-	if gsRef != nil {
-		gsDict := doc.ResolveDict(gsRef)
-		if gsDict == nil {
-			if d, ok := gsRef.(*Dictionary); ok {
-				gsDict = d
+	// Check ExtGState resources for transparency indicators
+	if extGStateUsesTransparency(doc, res) {
+		return true
+	}
+
+	// Recurse into Form XObjects
+	xobjRef := res.Get("XObject")
+	if xobjRef != nil {
+		xobjDict := doc.ResolveDict(xobjRef)
+		if xobjDict == nil {
+			if d, ok := xobjRef.(*Dictionary); ok {
+				xobjDict = d
 			}
 		}
-		if gsDict != nil {
-			for _, val := range gsDict.Values {
-				gs := doc.ResolveDict(val)
-				if gs == nil {
+		if xobjDict != nil {
+			for _, val := range xobjDict.Values {
+				obj := doc.Resolve(val)
+				stream, ok := obj.(*Stream)
+				if !ok {
 					continue
 				}
-				// Only check CA/ca for non-opaque values as the primary
-				// transparency indicator requiring a page-level group.
-				for _, key := range []Name{"CA", "ca"} {
-					v := gs.Get(key)
-					if v != nil {
-						fval := 1.0
-						switch tv := v.(type) {
-						case Real:
-							fval = float64(tv)
-						case Integer:
-							fval = float64(tv)
+				subtype, _ := stream.Dict.Get("Subtype").(Name)
+				if subtype == "Form" {
+					// Check if the Form XObject itself has a transparency Group
+					if stream.Dict.Get("Group") != nil {
+						groupDict := doc.ResolveDict(stream.Dict.Get("Group"))
+						if groupDict != nil {
+							s, _ := groupDict.Get("S").(Name)
+							if s == "Transparency" {
+								return true
+							}
 						}
-						if math.Abs(fval-1.0) > 1e-6 {
-							return true
-						}
+					}
+					// Recurse into Form XObject Resources
+					if resourcesUseTransparency(doc, &stream.Dict, seen) {
+						return true
 					}
 				}
 			}
 		}
 	}
 
+	// Recurse into Type3 font resources
+	fontRef := res.Get("Font")
+	if fontRef != nil {
+		fontDict := doc.ResolveDict(fontRef)
+		if fontDict == nil {
+			if d, ok := fontRef.(*Dictionary); ok {
+				fontDict = d
+			}
+		}
+		if fontDict != nil {
+			for _, val := range fontDict.Values {
+				fd := doc.ResolveDict(val)
+				if fd == nil {
+					continue
+				}
+				subtype, _ := fd.Get("Subtype").(Name)
+				if subtype == "Type3" {
+					if resourcesUseTransparency(doc, fd, seen) {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func extGStateUsesTransparency(doc *Document, res *Dictionary) bool {
+	gsRef := res.Get("ExtGState")
+	if gsRef == nil {
+		return false
+	}
+	gsDict := doc.ResolveDict(gsRef)
+	if gsDict == nil {
+		if d, ok := gsRef.(*Dictionary); ok {
+			gsDict = d
+		}
+	}
+	if gsDict == nil {
+		return false
+	}
+	for _, val := range gsDict.Values {
+		gs := doc.ResolveDict(val)
+		if gs == nil {
+			continue
+		}
+		// Check CA/ca for non-opaque values
+		for _, key := range []Name{"CA", "ca"} {
+			v := gs.Get(key)
+			if v != nil {
+				fval := 1.0
+				switch tv := v.(type) {
+				case Real:
+					fval = float64(tv)
+				case Integer:
+					fval = float64(tv)
+				}
+				if math.Abs(fval-1.0) > 1e-6 {
+					return true
+				}
+			}
+		}
+		// Check BM for non-Normal/Compatible blend modes
+		if bm := gs.Get("BM"); bm != nil {
+			if n, ok := bm.(Name); ok && n != "Normal" && n != "Compatible" {
+				return true
+			}
+		}
+		// Check SMask for non-None values
+		if smask := gs.Get("SMask"); smask != nil {
+			if n, ok := smask.(Name); !ok || n != "None" {
+				return true
+			}
+		}
+	}
 	return false
 }
 
@@ -2501,16 +2691,12 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 // Rule 6.2.3.3/6.2.4.3: Device color spaces (DeviceRGB, DeviceCMYK, DeviceGray)
 // require either a default color space mapping or a matching OutputIntent.
 func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
-	if level == PDFA4 {
-		return nil // PDF/A-4 allows page-level OutputIntents; rules differ
-	}
-
 	catalog := getCatalog(doc)
 	if catalog == nil {
 		return nil
 	}
 
-	// Determine which color spaces are covered by OutputIntents
+	// Determine which color spaces are covered by catalog-level OutputIntents
 	hasRGBIntent, hasCMYKIntent := getOutputIntentCoverage(doc, catalog)
 
 	pagesRef := catalog.Get("Pages")
@@ -2524,11 +2710,19 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		// Check what default color spaces the page defines
 		hasDefaultRGB, hasDefaultCMYK, hasDefaultGray := getDefaultColorSpaces(doc, page.dict)
 
+		// For PDF/A-4, also check page-level OutputIntents
+		pageRGB, pageCMYK := hasRGBIntent, hasCMYKIntent
+		if level == PDFA4 {
+			prgb, pcmyk := getOutputIntentCoverage(doc, page.dict)
+			pageRGB = pageRGB || prgb
+			pageCMYK = pageCMYK || pcmyk
+		}
+
 		// Scan for device color space usage on this page
 		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page.dict)
 
 		// DeviceRGB: needs DefaultRGB or RGB OutputIntent
-		if usesRGB && !hasDefaultRGB && !hasRGBIntent {
+		if usesRGB && !hasDefaultRGB && !pageRGB {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -2538,7 +2732,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		}
 
 		// DeviceCMYK: needs DefaultCMYK or CMYK OutputIntent
-		if usesCMYK && !hasDefaultCMYK && !hasCMYKIntent {
+		if usesCMYK && !hasDefaultCMYK && !pageCMYK {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -2548,7 +2742,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		}
 
 		// DeviceGray: needs DefaultGray, or any OutputIntent (Gray is always compatible)
-		if usesGray && !hasDefaultGray && !hasRGBIntent && !hasCMYKIntent {
+		if usesGray && !hasDefaultGray && !pageRGB && !pageCMYK {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,

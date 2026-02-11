@@ -708,13 +708,37 @@ func TestValidatePDFA_MetadataVersion(t *testing.T) {
 	})
 }
 
+// addExtGStateToDoc adds an ExtGState dict to the test doc's page Resources.
+// It creates a page (obj 20) with Resources/ExtGState referencing gsObj (obj 10).
+func addExtGStateToDoc(doc *Document, gs *Dictionary) {
+	doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+
+	gsDict := &Dictionary{}
+	gsDict.Set("GS0", IndirectRef{Number: 10})
+
+	resDict := &Dictionary{}
+	resDict.Set("ExtGState", gsDict)
+
+	page := &Dictionary{}
+	page.Set("Type", Name("Page"))
+	page.Set("Parent", IndirectRef{Number: 2})
+	page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
+	page.Set("Resources", resDict)
+
+	doc.Objects[20] = &IndirectObject{Number: 20, Value: page}
+
+	// Update page tree to include this page
+	pagesDict := doc.ResolveDict(IndirectRef{Number: 2})
+	pagesDict.Set("Kids", Array{IndirectRef{Number: 20}})
+	pagesDict.Set("Count", Integer(1))
+}
+
 func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-1b rejects SMask", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("SMask", &Dictionary{})
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := ValidatePDFA(doc, PDFA1b)
 		if !hasRule(errs, "6.4") {
@@ -725,9 +749,8 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-1b allows SMask None", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("SMask", Name("None"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := filterRule(ValidatePDFA(doc, PDFA1b), "6.4")
 		if len(errs) > 0 {
@@ -738,9 +761,8 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-1b rejects non-Normal BM", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("BM", Name("Multiply"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := ValidatePDFA(doc, PDFA1b)
 		if !hasRule(errs, "6.4") {
@@ -751,10 +773,9 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-2b allows transparency", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("SMask", &Dictionary{})
 		gs.Set("BM", Name("Multiply"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := filterRule(ValidatePDFA(doc, PDFA2b), "6.4")
 		if len(errs) > 0 {
@@ -1253,9 +1274,8 @@ func TestCheckExtGState(t *testing.T) {
 	t.Run("TR forbidden", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("TR", Name("Identity"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := checkExtGState(doc, PDFA2b)
 		if len(errs) == 0 {
@@ -1266,9 +1286,8 @@ func TestCheckExtGState(t *testing.T) {
 	t.Run("TR2 Default OK", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("TR2", Name("Default"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := checkExtGState(doc, PDFA2b)
 		if len(errs) > 0 {
@@ -1279,9 +1298,8 @@ func TestCheckExtGState(t *testing.T) {
 	t.Run("TR2 non-Default forbidden", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("TR2", Name("Identity"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := checkExtGState(doc, PDFA2b)
 		if len(errs) == 0 {
@@ -1292,9 +1310,8 @@ func TestCheckExtGState(t *testing.T) {
 	t.Run("skipped for PDFA1b", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("TR", Name("Identity"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := checkExtGState(doc, PDFA1b)
 		if len(errs) > 0 {
