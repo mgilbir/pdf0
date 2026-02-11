@@ -289,6 +289,10 @@ func applyFilter(name Name, data []byte) ([]byte, error) {
 	}
 }
 
+// maxDecodeSize is the maximum size of decompressed stream data (100 MB).
+// This prevents decompression bombs from consuming excessive memory.
+const maxDecodeSize = 100 << 20
+
 func flateDecode(data []byte) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -296,9 +300,13 @@ func flateDecode(data []byte) ([]byte, error) {
 	}
 	defer r.Close()
 
-	decoded, err := io.ReadAll(r)
+	limited := io.LimitReader(r, maxDecodeSize+1)
+	decoded, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("zlib decompress: %w", err)
+	}
+	if len(decoded) > maxDecodeSize {
+		return nil, fmt.Errorf("decompressed data exceeds maximum size (%d bytes)", maxDecodeSize)
 	}
 	return decoded, nil
 }

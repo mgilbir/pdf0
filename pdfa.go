@@ -2,7 +2,9 @@ package pdf0
 
 import (
 	"bytes"
+	"compress/zlib"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"unicode/utf8"
@@ -113,6 +115,12 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkOptionalContent,
 		// Implementation limits (6.1.7)
 		checkImplementationLimits,
+		// Device color spaces (6.2.3/6.2.4)
+		checkDeviceColorSpaces,
+		// ICCBased color spaces (6.2.4.2)
+		checkICCBasedProfiles,
+		// Separation/DeviceN color spaces (6.2.4.4)
+		checkSeparationDeviceN,
 	}
 
 	for _, check := range checks {
@@ -2483,6 +2491,802 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 					Message: fmt.Sprintf("page %s dimensions %.0fx%.0f out of range [3, 14400]", boxKey, width, height),
 					Object:  page.objNum,
 				})
+			}
+		}
+	}
+}
+
+// --- Device color space checks (6.2.3/6.2.4) ---
+
+// Rule 6.2.3.3/6.2.4.3: Device color spaces (DeviceRGB, DeviceCMYK, DeviceGray)
+// require either a default color space mapping or a matching OutputIntent.
+func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA4 {
+		return nil // PDF/A-4 allows page-level OutputIntents; rules differ
+	}
+
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+
+	// Determine which color spaces are covered by OutputIntents
+	hasRGBIntent, hasCMYKIntent := getOutputIntentCoverage(doc, catalog)
+
+	pagesRef := catalog.Get("Pages")
+	if pagesRef == nil {
+		return nil
+	}
+
+	var errs []ValidationError
+	pages := collectPages(doc, pagesRef)
+	for _, page := range pages {
+		// Check what default color spaces the page defines
+		hasDefaultRGB, hasDefaultCMYK, hasDefaultGray := getDefaultColorSpaces(doc, page.dict)
+
+		// Scan for device color space usage on this page
+		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page.dict)
+
+		// DeviceRGB: needs DefaultRGB or RGB OutputIntent
+		if usesRGB && !hasDefaultRGB && !hasRGBIntent {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "DeviceRGB used without matching OutputIntent or DefaultRGB",
+				Object:  page.objNum,
+			})
+		}
+
+		// DeviceCMYK: needs DefaultCMYK or CMYK OutputIntent
+		if usesCMYK && !hasDefaultCMYK && !hasCMYKIntent {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "DeviceCMYK used without matching OutputIntent or DefaultCMYK",
+				Object:  page.objNum,
+			})
+		}
+
+		// DeviceGray: needs DefaultGray, or any OutputIntent (Gray is always compatible)
+		if usesGray && !hasDefaultGray && !hasRGBIntent && !hasCMYKIntent {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "DeviceGray used without matching OutputIntent or DefaultGray",
+				Object:  page.objNum,
+			})
+		}
+	}
+
+	return errs
+}
+
+// getOutputIntentCoverage checks OutputIntents for DestOutputProfile and
+// returns which color space types are covered (RGB, CMYK).
+func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMYK bool) {
+	oiRef := catalog.Get("OutputIntents")
+	if oiRef == nil {
+		return
+	}
+	oiObj := doc.Resolve(oiRef)
+	arr, ok := oiObj.(Array)
+	if !ok || len(arr) == 0 {
+		return
+	}
+
+	for _, elem := range arr {
+		dict := doc.ResolveDict(elem)
+		if dict == nil {
+			continue
+		}
+		profileRef := dict.Get("DestOutputProfile")
+		if profileRef == nil {
+			// If there's an OutputIntent without a profile, it still signals
+			// intent. For OutputConditionIdentifier-based intents, treat as
+			// covering both RGB and CMYK (conservative).
+			oci := dict.Get("OutputConditionIdentifier")
+			if oci != nil {
+				hasRGB = true
+				hasCMYK = true
+			}
+			continue
+		}
+		profileObj := doc.Resolve(profileRef)
+		stream, ok := profileObj.(*Stream)
+		if !ok {
+			continue
+		}
+
+		// Decompress the profile data to read the ICC header
+		profileData := getICCProfileData(stream)
+		if len(profileData) < 20 {
+			// Can't read profile header; assume it covers both spaces
+			// to avoid false positives.
+			hasRGB = true
+			hasCMYK = true
+			continue
+		}
+
+		// ICC profile color space is at bytes 16-19
+		cs := string(profileData[16:20])
+		switch cs {
+		case "RGB ":
+			hasRGB = true
+		case "CMYK":
+			hasCMYK = true
+		case "GRAY":
+			hasRGB = true  // Gray is compatible with everything
+			hasCMYK = true
+		default:
+			// Unknown profile type - assume it covers both to avoid false positives
+			hasRGB = true
+			hasCMYK = true
+		}
+	}
+	return
+}
+
+// maxICCProfileSize is the maximum size for a decoded ICC profile (2 MB).
+const maxICCProfileSize = 2 << 20
+
+// getICCProfileData returns the decompressed ICC profile data from a stream.
+// Returns the raw stream data if no filter or decoding fails.
+// Limits decoded size to maxICCProfileSize to prevent decompression bombs.
+func getICCProfileData(stream *Stream) []byte {
+	filter := stream.Dict.Get("Filter")
+	if filter == nil {
+		if len(stream.Data) > maxICCProfileSize {
+			return nil
+		}
+		return stream.Data
+	}
+
+	filterName, ok := filter.(Name)
+	if !ok {
+		return nil
+	}
+	if filterName != "FlateDecode" {
+		return nil
+	}
+
+	if len(stream.Data) == 0 {
+		return nil
+	}
+
+	r, err := zlib.NewReader(bytes.NewReader(stream.Data))
+	if err != nil {
+		return nil
+	}
+	defer r.Close()
+
+	limited := io.LimitReader(r, maxICCProfileSize+1)
+	decoded, err := io.ReadAll(limited)
+	if err != nil {
+		return nil
+	}
+	if len(decoded) > maxICCProfileSize {
+		return nil
+	}
+	return decoded
+}
+
+// getDefaultColorSpaces checks if a page defines DefaultRGB, DefaultCMYK, or DefaultGray
+// in its Resources/ColorSpace dictionary.
+func getDefaultColorSpaces(doc *Document, page *Dictionary) (hasRGB, hasCMYK, hasGray bool) {
+	res := resolveResources(doc, page)
+	if res == nil {
+		return
+	}
+	csRef := res.Get("ColorSpace")
+	if csRef == nil {
+		return
+	}
+	csDict := doc.ResolveDict(csRef)
+	if csDict == nil {
+		if d, ok := csRef.(*Dictionary); ok {
+			csDict = d
+		}
+	}
+	if csDict == nil {
+		return
+	}
+	for _, key := range csDict.Keys {
+		switch key {
+		case "DefaultRGB":
+			hasRGB = true
+		case "DefaultCMYK":
+			hasCMYK = true
+		case "DefaultGray":
+			hasGray = true
+		}
+	}
+	return
+}
+
+// resolveResources resolves a page's Resources dictionary.
+func resolveResources(doc *Document, page *Dictionary) *Dictionary {
+	resRef := page.Get("Resources")
+	if resRef == nil {
+		return nil
+	}
+	res := doc.ResolveDict(resRef)
+	if res == nil {
+		if d, ok := resRef.(*Dictionary); ok {
+			return d
+		}
+	}
+	return res
+}
+
+// scanPageForDeviceCS checks if a page uses device color spaces.
+// It scans Image XObjects, Form XObjects, and content streams.
+func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, usesGray bool) {
+	res := resolveResources(doc, page)
+	if res == nil {
+		return
+	}
+
+	// Check ColorSpace dict for direct device CS references
+	csRef := res.Get("ColorSpace")
+	if csRef != nil {
+		csDict := doc.ResolveDict(csRef)
+		if csDict == nil {
+			if d, ok := csRef.(*Dictionary); ok {
+				csDict = d
+			}
+		}
+		if csDict != nil {
+			for _, val := range csDict.Values {
+				resolved := doc.Resolve(val)
+				if n, ok := resolved.(Name); ok {
+					switch n {
+					case "DeviceRGB":
+						usesRGB = true
+					case "DeviceCMYK":
+						usesCMYK = true
+					case "DeviceGray":
+						usesGray = true
+					}
+				}
+			}
+		}
+	}
+
+	// Check XObject resources for images/forms with device CS
+	xobjRef := res.Get("XObject")
+	if xobjRef != nil {
+		xobjDict := doc.ResolveDict(xobjRef)
+		if xobjDict == nil {
+			if d, ok := xobjRef.(*Dictionary); ok {
+				xobjDict = d
+			}
+		}
+		if xobjDict != nil {
+			for _, val := range xobjDict.Values {
+				resolved := doc.Resolve(val)
+				stream, ok := resolved.(*Stream)
+				if !ok {
+					continue
+				}
+				csObj := doc.Resolve(stream.Dict.Get("ColorSpace"))
+				if n, ok := csObj.(Name); ok {
+					switch n {
+					case "DeviceRGB":
+						usesRGB = true
+					case "DeviceCMYK":
+						usesCMYK = true
+					case "DeviceGray":
+						usesGray = true
+					}
+				}
+			}
+		}
+	}
+
+	// Scan content stream(s) for device color operators
+	contentsRef := page.Get("Contents")
+	if contentsRef != nil {
+		r, g, b := scanContentsForDeviceOps(doc, contentsRef)
+		usesRGB = usesRGB || r
+		usesCMYK = usesCMYK || g
+		usesGray = usesGray || b
+	}
+
+	return
+}
+
+// maxContentStreamSize is the maximum decoded content stream size we'll scan.
+// Larger streams are skipped to avoid decompression bombs.
+const maxContentStreamSize = 1 << 20 // 1 MB
+
+// decodeContentStream attempts to decode a stream for content scanning.
+// Returns nil if the stream is too large, compressed with an unsupported filter,
+// or otherwise undecodable. Uses a size-limited reader to prevent decompression bombs.
+func decodeContentStream(stream *Stream) []byte {
+	filter := stream.Dict.Get("Filter")
+	if filter == nil {
+		if len(stream.Data) > maxContentStreamSize {
+			return nil
+		}
+		return stream.Data
+	}
+
+	// Only handle FlateDecode for content streams
+	filterName, ok := filter.(Name)
+	if !ok {
+		return nil // arrays of filters not worth scanning for content ops
+	}
+	if filterName != "FlateDecode" {
+		return nil // only decode flate-compressed content
+	}
+
+	if len(stream.Data) == 0 {
+		return nil
+	}
+
+	r, err := zlib.NewReader(bytes.NewReader(stream.Data))
+	if err != nil {
+		return nil
+	}
+	defer r.Close()
+
+	// Read with a size limit to prevent decompression bombs
+	limited := io.LimitReader(r, maxContentStreamSize+1)
+	decoded, err := io.ReadAll(limited)
+	if err != nil {
+		return nil
+	}
+	if len(decoded) > maxContentStreamSize {
+		return nil // too large
+	}
+	return decoded
+}
+
+// scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
+// for device color operators (rg/RG, k/K, g/G).
+func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesCMYK, usesGray bool) {
+	resolved := doc.Resolve(contentsRef)
+	switch v := resolved.(type) {
+	case *Stream:
+		data := decodeContentStream(v)
+		if data == nil {
+			return
+		}
+		r, c, g := scanStreamForDeviceOps(data)
+		usesRGB = usesRGB || r
+		usesCMYK = usesCMYK || c
+		usesGray = usesGray || g
+	case Array:
+		for _, elem := range v {
+			streamObj := doc.Resolve(elem)
+			if s, ok := streamObj.(*Stream); ok {
+				data := decodeContentStream(s)
+				if data == nil {
+					continue
+				}
+				r, c, g := scanStreamForDeviceOps(data)
+				usesRGB = usesRGB || r
+				usesCMYK = usesCMYK || c
+				usesGray = usesGray || g
+			}
+		}
+	}
+	return
+}
+
+// scanStreamForDeviceOps scans decoded content stream bytes for device color operators.
+// Uses a simple tokenizer that handles inline images (BI/ID/EI) to avoid
+// scanning binary image data.
+func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
+	n := len(data)
+	// Scan for operators at word boundaries.
+	// An operator token is an alphabetic sequence preceded by whitespace (or BOF)
+	// and followed by whitespace, delimiter, or EOF.
+	i := 0
+	for i < n {
+		// Skip whitespace
+		for i < n && isContentWS(data[i]) {
+			i++
+		}
+		if i >= n {
+			break
+		}
+
+		b := data[i]
+
+		// Skip comments
+		if b == '%' {
+			for i < n && data[i] != '\n' && data[i] != '\r' {
+				i++
+			}
+			continue
+		}
+
+		// Skip string literals (...)
+		if b == '(' {
+			depth := 1
+			i++
+			for i < n && depth > 0 {
+				if data[i] == '\\' {
+					i++ // skip escape char
+					if i >= n {
+						break
+					}
+				} else if data[i] == '(' {
+					depth++
+				} else if data[i] == ')' {
+					depth--
+				}
+				i++
+			}
+			continue
+		}
+
+		// Skip hex strings and dict markers
+		if b == '<' {
+			i++
+			if i < n && data[i] == '<' {
+				i++ // <<
+			} else {
+				for i < n && data[i] != '>' {
+					i++
+				}
+				if i < n {
+					i++
+				}
+			}
+			continue
+		}
+		if b == '>' {
+			i++
+			if i < n && data[i] == '>' {
+				i++
+			}
+			continue
+		}
+
+		// Skip array/proc delimiters
+		if b == '[' || b == ']' || b == '{' || b == '}' {
+			i++
+			continue
+		}
+
+		// Skip PDF names (/Name)
+		if b == '/' {
+			i++
+			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+				i++
+			}
+			continue
+		}
+
+		// Read a token
+		start := i
+		for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			i++
+			// Safety: cap token length to avoid scanning huge binary data
+			if i-start > 256 {
+				break
+			}
+		}
+
+		tokLen := i - start
+
+		// Skip names (start with /)
+		if tokLen > 0 && data[start] == '/' {
+			continue
+		}
+
+		// Handle inline images: BI ... ID <binary> EI
+		// When we see "ID", skip binary data until we find "EI" at a word boundary
+		if tokLen == 2 && data[start] == 'I' && data[start+1] == 'D' {
+			// Skip one whitespace byte after ID
+			if i < n && isContentWS(data[i]) {
+				i++
+			}
+			// Scan for EI at word boundary
+			for i < n {
+				if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
+					// Check EI is at a word boundary
+					atBoundary := (i == 0 || isContentWS(data[i-1]))
+					endBoundary := (i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2]))
+					if atBoundary && endBoundary {
+						i += 2
+						break
+					}
+				}
+				i++
+			}
+			continue
+		}
+
+		// Check for device color operators (only short alphabetic tokens)
+		if tokLen == 2 {
+			if data[start] == 'r' && data[start+1] == 'g' {
+				usesRGB = true
+			} else if data[start] == 'R' && data[start+1] == 'G' {
+				usesRGB = true
+			}
+		} else if tokLen == 1 {
+			switch data[start] {
+			case 'g':
+				usesGray = true
+			case 'G':
+				usesGray = true
+			case 'k':
+				usesCMYK = true
+			case 'K':
+				usesCMYK = true
+			}
+		}
+	}
+	return
+}
+
+func isContentWS(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\x00' || b == '\x0c'
+}
+
+func isContentDelim(b byte) bool {
+	return b == '(' || b == ')' || b == '<' || b == '>' || b == '[' || b == ']' || b == '{' || b == '}' || b == '/' || b == '%'
+}
+
+// --- ICCBased color space checks (6.2.4.2) ---
+
+// Rule 6.2.4.2: ICCBased color spaces must reference valid ICC profiles.
+func checkICCBasedProfiles(doc *Document, level PDFALevel) []ValidationError {
+	var errs []ValidationError
+
+	for num, iobj := range doc.Objects {
+		stream, ok := iobj.Value.(*Stream)
+		if !ok {
+			continue
+		}
+
+		// Check if this stream is used as an ICC profile (has /N key typical of ICC)
+		nObj := stream.Dict.Get("N")
+		if nObj == nil {
+			continue
+		}
+
+		// Verify it's actually an ICC profile by checking for Alternate or being
+		// referenced from a ColorSpace array. We check for the /N key which is
+		// specific to ICC profile streams.
+		nVal := 0
+		switch v := nObj.(type) {
+		case Integer:
+			nVal = int(v)
+		default:
+			continue
+		}
+
+		// N must be 1, 3, or 4
+		if nVal != 1 && nVal != 3 && nVal != 4 {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: fmt.Sprintf("ICCBased profile /N must be 1, 3, or 4, got %d", nVal),
+				Object:  num,
+			})
+			continue
+		}
+
+		// Decompress profile data to check ICC header
+		profileData := getICCProfileData(stream)
+
+		// Check ICC profile header if data is available
+		if len(profileData) >= 20 {
+			cs := string(profileData[16:20])
+			expectedN := 0
+			switch cs {
+			case "RGB ":
+				expectedN = 3
+			case "CMYK":
+				expectedN = 4
+			case "GRAY":
+				expectedN = 1
+			}
+			if expectedN > 0 && expectedN != nVal {
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.4",
+					Level:   level,
+					Message: fmt.Sprintf("ICCBased profile /N=%d does not match ICC color space %q", nVal, cs),
+					Object:  num,
+				})
+			}
+		}
+
+		// Check ICC profile version
+		if len(profileData) >= 9 {
+			majorVersion := profileData[8]
+			maxVersion := byte(4) // Default max for 2b/3b/4
+			rule := "6.2.4"
+			if level == PDFA1b {
+				maxVersion = 2
+				rule = "6.2.3"
+			}
+			if majorVersion > maxVersion {
+				errs = append(errs, ValidationError{
+					Rule:    rule,
+					Level:   level,
+					Message: fmt.Sprintf("ICCBased profile version %d.x not allowed (max %d.x)", majorVersion, maxVersion),
+					Object:  num,
+				})
+			}
+		}
+	}
+
+	return errs
+}
+
+// --- Separation/DeviceN checks (6.2.4.4) ---
+
+// Rule 6.2.4.4: Separation and DeviceN color space restrictions.
+func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA1b {
+		return nil // PDF/A-1b has different rules handled elsewhere
+	}
+
+	var errs []ValidationError
+
+	// Scan all objects for color space arrays used in Resources
+	for num, iobj := range doc.Objects {
+		dict, isDict := iobj.Value.(*Dictionary)
+		stream, isStream := iobj.Value.(*Stream)
+
+		// Check dictionary Resources/ColorSpace
+		if isDict {
+			checkDictForSepDeviceN(doc, dict, num, level, &errs)
+		}
+		// Check stream dict (e.g., Form XObjects, Image XObjects)
+		if isStream {
+			csObj := stream.Dict.Get("ColorSpace")
+			if csObj != nil {
+				checkColorSpaceValue(doc, csObj, num, level, &errs)
+			}
+			// Also check Resources in Form XObjects
+			resRef := stream.Dict.Get("Resources")
+			if resRef != nil {
+				resDict := doc.ResolveDict(resRef)
+				if resDict == nil {
+					if d, ok := resRef.(*Dictionary); ok {
+						resDict = d
+					}
+				}
+				if resDict != nil {
+					checkDictForSepDeviceN(doc, resDict, num, level, &errs)
+				}
+			}
+		}
+		_ = dict
+	}
+
+	return errs
+}
+
+func checkDictForSepDeviceN(doc *Document, dict *Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
+	csRef := dict.Get("ColorSpace")
+	if csRef == nil {
+		return
+	}
+	csDict := doc.ResolveDict(csRef)
+	if csDict == nil {
+		if d, ok := csRef.(*Dictionary); ok {
+			csDict = d
+		}
+	}
+	if csDict == nil {
+		return
+	}
+	for _, val := range csDict.Values {
+		checkColorSpaceValue(doc, val, objNum, level, errs)
+	}
+}
+
+func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+	resolved := doc.Resolve(csObj)
+	arr, ok := resolved.(Array)
+	if !ok || len(arr) < 2 {
+		return
+	}
+
+	csType, ok := arr[0].(Name)
+	if !ok {
+		return
+	}
+
+	switch csType {
+	case "Separation":
+		// [/Separation name alternateSpace tintTransform]
+		if len(arr) < 4 {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "Separation color space array must have 4 elements",
+				Object:  objNum,
+			})
+			return
+		}
+		// Check colorant name is not None for PDF/A-2b+ (it's reserved)
+		if name, ok := arr[1].(Name); ok && name == "None" {
+			// "None" is a special name in PDF 2.0 only
+			if level != PDFA4 {
+				*errs = append(*errs, ValidationError{
+					Rule:    "6.2.4",
+					Level:   level,
+					Message: "Separation colorant name /None is reserved",
+					Object:  objNum,
+				})
+			}
+		}
+		// Check alternate color space is not a device space (for 2b/3b)
+		checkAlternateCS(doc, arr[2], objNum, level, errs)
+
+	case "DeviceN":
+		// [/DeviceN names alternateSpace tintTransform ...]
+		if len(arr) < 4 {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "DeviceN color space array must have at least 4 elements",
+				Object:  objNum,
+			})
+			return
+		}
+		// Check alternate color space
+		checkAlternateCS(doc, arr[2], objNum, level, errs)
+
+		// For PDF/A-2b/3b/4: if there's a 5th element (attributes dict),
+		// check for Colorants and their alternate spaces
+		if len(arr) >= 5 {
+			attrDict := doc.ResolveDict(arr[4])
+			if attrDict != nil {
+				colorantsRef := attrDict.Get("Colorants")
+				if colorantsRef != nil {
+					colorantsDict := doc.ResolveDict(colorantsRef)
+					if colorantsDict != nil {
+						for _, cval := range colorantsDict.Values {
+							checkColorSpaceValue(doc, cval, objNum, level, errs)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// checkAlternateCS validates that an alternate color space in Separation/DeviceN
+// is not a restricted device space.
+func checkAlternateCS(doc *Document, altCS Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+	resolved := doc.Resolve(altCS)
+
+	// If it's a Name, it should not be a device CS (those need OutputIntents)
+	// This is actually handled by checkDeviceColorSpaces. Here we check for
+	// other specific restrictions.
+	if n, ok := resolved.(Name); ok {
+		switch n {
+		case "DeviceRGB", "DeviceCMYK", "DeviceGray":
+			// Device alternate spaces are technically allowed if there's an OutputIntent,
+			// but we flag them here as they're commonly invalid
+			// Don't double-report - checkDeviceColorSpaces handles OutputIntent checks
+		case "Pattern":
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: "Separation/DeviceN alternate color space must not be /Pattern",
+				Object:  objNum,
+			})
+		}
+	}
+
+	// If it's an array, recurse to check for nested Separation/DeviceN
+	if arr, ok := resolved.(Array); ok && len(arr) >= 2 {
+		if csType, ok := arr[0].(Name); ok {
+			if csType == "Separation" || csType == "DeviceN" {
+				// Nested Separation/DeviceN - check their alternates too
+				if len(arr) >= 3 {
+					checkAlternateCS(doc, arr[2], objNum, level, errs)
+				}
 			}
 		}
 	}
