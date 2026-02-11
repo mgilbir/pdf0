@@ -346,6 +346,33 @@ func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects
 	return nil
 }
 
+// Resolve follows an IndirectRef to its value. Returns the object
+// unchanged if it is not an IndirectRef. Returns nil if the reference
+// target does not exist.
+func (d *Document) Resolve(obj Object) Object {
+	ref, ok := obj.(IndirectRef)
+	if !ok {
+		return obj
+	}
+	iobj, exists := d.Objects[ref.Number]
+	if !exists {
+		return nil
+	}
+	return iobj.Value
+}
+
+// ResolveDict resolves obj and type-asserts to *Dictionary.
+func (d *Document) ResolveDict(obj Object) *Dictionary {
+	v := d.Resolve(obj)
+	if v == nil {
+		return nil
+	}
+	if dict, ok := v.(*Dictionary); ok {
+		return dict
+	}
+	return nil
+}
+
 // sortInts sorts a slice of ints in ascending order (simple insertion sort to avoid import).
 func sortInts(a []int) {
 	for i := 1; i < len(a); i++ {
