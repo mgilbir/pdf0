@@ -34,5 +34,8 @@ go.work.sum
 # Test data (cloned repos)
 testdata/pdf20examples/
 
+# ISO spec PDFs (copyrighted)
+spec/
+
 # Generated example output
 output.pdf
