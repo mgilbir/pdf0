@@ -3171,8 +3171,99 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 			continue
 		}
 
-		// Handle inline images: BI ... ID <binary> EI
-		// When we see "ID", skip binary data until we find "EI" at a word boundary
+		// Handle inline images: BI <dict> ID <binary> EI
+		// Check for BI (begin inline image), parse dict for CS, then skip binary
+		if tokLen == 2 && data[start] == 'B' && data[start+1] == 'I' {
+			// Parse inline image dict until ID token
+			// Look for /CS or /ColorSpace keys with device CS values
+			foundID := false
+			for i < n && !foundID {
+				// Skip whitespace
+				for i < n && isContentWS(data[i]) {
+					i++
+				}
+				if i >= n {
+					break
+				}
+				// Check for ID token (end of inline image dict)
+				if data[i] == 'I' && i+1 < n && data[i+1] == 'D' &&
+					(i+2 >= n || isContentWS(data[i+2])) {
+					i += 2
+					// Skip one whitespace byte after ID
+					if i < n && isContentWS(data[i]) {
+						i++
+					}
+					foundID = true
+					break
+				}
+				// Read key or value token
+				if data[i] == '/' {
+					// Read name
+					keyStart := i + 1
+					i++
+					for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+						i++
+					}
+					key := string(data[keyStart:i])
+					// If key is CS or ColorSpace, check the next value
+					if key == "CS" || key == "ColorSpace" {
+						// Skip whitespace
+						for i < n && isContentWS(data[i]) {
+							i++
+						}
+						// Read value - could be /Name or /abbreviation
+						if i < n && data[i] == '/' {
+							valStart := i + 1
+							i++
+							for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+								i++
+							}
+							csVal := string(data[valStart:i])
+							switch csVal {
+							case "RGB", "DeviceRGB":
+								usesRGB = true
+							case "CMYK", "DeviceCMYK":
+								usesCMYK = true
+							case "G", "DeviceGray":
+								usesGray = true
+							}
+						}
+					}
+				} else {
+					// Skip non-name token (numbers, arrays, etc.)
+					prev := i
+					if data[i] == '[' || data[i] == ']' || data[i] == '(' || data[i] == ')' ||
+						data[i] == '<' || data[i] == '>' {
+						i++ // skip single delimiter
+					} else {
+						for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+							i++
+						}
+					}
+					// Safety: if no progress, advance by 1
+					if i == prev {
+						i++
+					}
+				}
+			}
+			// Now skip binary data until EI at word boundary
+			if foundID {
+				for i < n {
+					if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
+						atBoundary := (i == 0 || isContentWS(data[i-1]))
+						endBoundary := (i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2]))
+						if atBoundary && endBoundary {
+							i += 2
+							break
+						}
+					}
+					i++
+				}
+			}
+			continue
+		}
+
+		// Handle ID token outside of BI context (shouldn't happen, but be safe)
 		if tokLen == 2 && data[start] == 'I' && data[start+1] == 'D' {
 			// Skip one whitespace byte after ID
 			if i < n && isContentWS(data[i]) {
@@ -3181,7 +3272,6 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 			// Scan for EI at word boundary
 			for i < n {
 				if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
-					// Check EI is at a word boundary
 					atBoundary := (i == 0 || isContentWS(data[i-1]))
 					endBoundary := (i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2]))
 					if atBoundary && endBoundary {
