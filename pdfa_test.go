@@ -4,9 +4,16 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+type corpusFile struct {
+	path   string
+	rel    string
+	isPass bool
+}
 
 func TestNewPDFADocument(t *testing.T) {
 	for _, level := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
@@ -1145,6 +1152,11 @@ func TestCorpus(t *testing.T) {
 			if _, err := os.Stat(root); os.IsNotExist(err) {
 				t.Skipf("directory %s not found", root)
 			}
+
+			// Collect paths first, then iterate. This avoids holding all
+			// parsed Documents in memory at once (which caused OOM kills
+			// with the full 2900+ file corpus).
+			var files []corpusFile
 			filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 				if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
 					return nil
@@ -1155,8 +1167,13 @@ func TestCorpus(t *testing.T) {
 				if !isPass && !isFail {
 					return nil
 				}
-				t.Run(rel, func(t *testing.T) {
-					data, err := os.ReadFile(path)
+				files = append(files, corpusFile{path: path, rel: rel, isPass: isPass})
+				return nil
+			})
+
+			for i, f := range files {
+				t.Run(f.rel, func(t *testing.T) {
+					data, err := os.ReadFile(f.path)
 					if err != nil {
 						t.Fatalf("read: %v", err)
 					}
@@ -1165,17 +1182,22 @@ func TestCorpus(t *testing.T) {
 						t.Fatalf("parse: %v", err)
 					}
 					errs := ValidatePDFABytes(doc, level, data)
-					if isPass && len(errs) > 0 {
+					if f.isPass && len(errs) > 0 {
 						for _, e := range errs {
 							t.Errorf("unexpected error: %v", e)
 						}
 					}
-					if isFail && len(errs) == 0 {
+					if !f.isPass && len(errs) == 0 {
 						t.Error("expected validation errors for fail file, got none")
 					}
 				})
-				return nil
-			})
+				// Force GC every 100 files to keep memory bounded.
+				// Without this, the allocator outpaces the GC and
+				// memory grows until the OOM killer intervenes.
+				if (i+1)%100 == 0 {
+					runtime.GC()
+				}
+			}
 		})
 	}
 }

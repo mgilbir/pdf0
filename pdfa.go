@@ -3554,16 +3554,9 @@ func checkCSForDevice(doc *Document, csObj Object, usesRGB, usesCMYK, usesGray *
 			if len(arr) >= 2 {
 				checkCSForDevice(doc, arr[1], usesRGB, usesCMYK, usesGray)
 			}
-		case "Separation":
-			// [/Separation name alternateCS tintTransform] - check alternate
-			if len(arr) >= 3 {
-				checkCSForDevice(doc, arr[2], usesRGB, usesCMYK, usesGray)
-			}
-		case "DeviceN":
-			// [/DeviceN names alternateCS tintTransform] - check alternate
-			if len(arr) >= 3 {
-				checkCSForDevice(doc, arr[2], usesRGB, usesCMYK, usesGray)
-			}
+		case "Separation", "DeviceN":
+			// Separation/DeviceN alternates are fallback color spaces, not
+			// direct device CS usage - don't flag them here.
 		case "Pattern":
 			// [/Pattern underlyingCS] - check underlying
 			if len(arr) >= 2 {
@@ -4128,15 +4121,11 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 func checkAlternateCS(doc *Document, altCS Object, objNum int, level PDFALevel, errs *[]ValidationError) {
 	resolved := doc.Resolve(altCS)
 
-	// If it's a Name, it should not be a device CS (those need OutputIntents)
-	// This is actually handled by checkDeviceColorSpaces. Here we check for
-	// other specific restrictions.
 	if n, ok := resolved.(Name); ok {
 		switch n {
 		case "DeviceRGB", "DeviceCMYK", "DeviceGray":
-			// Device alternate spaces are technically allowed if there's an OutputIntent,
-			// but we flag them here as they're commonly invalid
-			// Don't double-report - checkDeviceColorSpaces handles OutputIntent checks
+			// Device alternate spaces in Separation/DeviceN are fallback mechanisms,
+			// not direct device CS usage. They don't require OutputIntent matching.
 		case "Pattern":
 			*errs = append(*errs, ValidationError{
 				Rule:    "6.2.4",
