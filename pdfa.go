@@ -3290,12 +3290,89 @@ func resolveResources(doc *Document, page *Dictionary) *Dictionary {
 // scanPageForDeviceCS checks if a page uses device color spaces.
 // It scans Image XObjects, Form XObjects, and content streams.
 func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, usesGray bool) {
-	res := resolveResources(doc, page)
+	seen := make(map[*Dictionary]bool)
+	scanResourcesForDeviceCS(doc, page, seen, &usesRGB, &usesCMYK, &usesGray)
+
+	// Also scan annotation appearance streams
+	annotsRef := page.Get("Annots")
+	if annotsRef != nil {
+		annotsObj := doc.Resolve(annotsRef)
+		if annotsArr, ok := annotsObj.(Array); ok {
+			for _, annotRef := range annotsArr {
+				annotDict := doc.ResolveDict(annotRef)
+				if annotDict == nil {
+					continue
+				}
+				ap := annotDict.Get("AP")
+				if ap == nil {
+					continue
+				}
+				apDict := doc.ResolveDict(ap)
+				if apDict == nil {
+					if d, ok := ap.(*Dictionary); ok {
+						apDict = d
+					}
+				}
+				if apDict == nil {
+					continue
+				}
+				for _, apKey := range []Name{"N", "R", "D"} {
+					apEntry := apDict.Get(apKey)
+					if apEntry == nil {
+						continue
+					}
+					apObj := doc.Resolve(apEntry)
+					switch v := apObj.(type) {
+					case *Stream:
+						scanResourcesForDeviceCS(doc, &v.Dict, seen, &usesRGB, &usesCMYK, &usesGray)
+					case *Dictionary:
+						for _, stateVal := range v.Values {
+							if s, ok := doc.Resolve(stateVal).(*Stream); ok {
+								scanResourcesForDeviceCS(doc, &s.Dict, seen, &usesRGB, &usesCMYK, &usesGray)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Check transparency group CS on page itself
+	if groupRef := page.Get("Group"); groupRef != nil {
+		groupDict := doc.ResolveDict(groupRef)
+		if groupDict == nil {
+			if d, ok := groupRef.(*Dictionary); ok {
+				groupDict = d
+			}
+		}
+		if groupDict != nil {
+			checkCSForDevice(doc, groupDict.Get("CS"), &usesRGB, &usesCMYK, &usesGray)
+		}
+	}
+
+	return
+}
+
+func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
+	if seen[container] {
+		return
+	}
+	seen[container] = true
+
+	res := resolveResources(doc, container)
 	if res == nil {
+		// Container itself might have Contents (like a page)
+		contentsRef := container.Get("Contents")
+		if contentsRef != nil {
+			r, c, g := scanContentsForDeviceOps(doc, contentsRef)
+			*usesRGB = *usesRGB || r
+			*usesCMYK = *usesCMYK || c
+			*usesGray = *usesGray || g
+		}
 		return
 	}
 
-	// Check ColorSpace dict for direct device CS references
+	// Check ColorSpace dict for device CS references (including Indexed bases)
 	csRef := res.Get("ColorSpace")
 	if csRef != nil {
 		csDict := doc.ResolveDict(csRef)
@@ -3306,22 +3383,12 @@ func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, us
 		}
 		if csDict != nil {
 			for _, val := range csDict.Values {
-				resolved := doc.Resolve(val)
-				if n, ok := resolved.(Name); ok {
-					switch n {
-					case "DeviceRGB":
-						usesRGB = true
-					case "DeviceCMYK":
-						usesCMYK = true
-					case "DeviceGray":
-						usesGray = true
-					}
-				}
+				checkCSForDevice(doc, val, usesRGB, usesCMYK, usesGray)
 			}
 		}
 	}
 
-	// Check XObject resources for images/forms with device CS
+	// Check XObject resources
 	xobjRef := res.Get("XObject")
 	if xobjRef != nil {
 		xobjDict := doc.ResolveDict(xobjRef)
@@ -3337,31 +3404,173 @@ func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, us
 				if !ok {
 					continue
 				}
-				csObj := doc.Resolve(stream.Dict.Get("ColorSpace"))
-				if n, ok := csObj.(Name); ok {
-					switch n {
-					case "DeviceRGB":
-						usesRGB = true
-					case "DeviceCMYK":
-						usesCMYK = true
-					case "DeviceGray":
-						usesGray = true
+				subtype, _ := stream.Dict.Get("Subtype").(Name)
+				if subtype == "Form" {
+					// Recurse into Form XObject
+					scanResourcesForDeviceCS(doc, &stream.Dict, seen, usesRGB, usesCMYK, usesGray)
+					// Check transparency group CS
+					if groupRef := stream.Dict.Get("Group"); groupRef != nil {
+						groupDict := doc.ResolveDict(groupRef)
+						if groupDict == nil {
+							if d, ok := groupRef.(*Dictionary); ok {
+								groupDict = d
+							}
+						}
+						if groupDict != nil {
+							checkCSForDevice(doc, groupDict.Get("CS"), usesRGB, usesCMYK, usesGray)
+						}
+					}
+				} else {
+					// Image XObject - check ColorSpace
+					checkCSForDevice(doc, stream.Dict.Get("ColorSpace"), usesRGB, usesCMYK, usesGray)
+				}
+			}
+		}
+	}
+
+	// Check Shading resources
+	shadingRef := res.Get("Shading")
+	if shadingRef != nil {
+		shadingDict := doc.ResolveDict(shadingRef)
+		if shadingDict == nil {
+			if d, ok := shadingRef.(*Dictionary); ok {
+				shadingDict = d
+			}
+		}
+		if shadingDict != nil {
+			for _, val := range shadingDict.Values {
+				sd := doc.ResolveDict(val)
+				if sd == nil {
+					// Could be a stream (type 4-7 shadings)
+					if s, ok := doc.Resolve(val).(*Stream); ok {
+						checkCSForDevice(doc, s.Dict.Get("ColorSpace"), usesRGB, usesCMYK, usesGray)
+					}
+					continue
+				}
+				checkCSForDevice(doc, sd.Get("ColorSpace"), usesRGB, usesCMYK, usesGray)
+			}
+		}
+	}
+
+	// Check Pattern resources (tiling patterns have content streams)
+	patRef := res.Get("Pattern")
+	if patRef != nil {
+		patDict := doc.ResolveDict(patRef)
+		if patDict == nil {
+			if d, ok := patRef.(*Dictionary); ok {
+				patDict = d
+			}
+		}
+		if patDict != nil {
+			for _, val := range patDict.Values {
+				obj := doc.Resolve(val)
+				if stream, ok := obj.(*Stream); ok {
+					// Tiling pattern - recurse into its resources
+					scanResourcesForDeviceCS(doc, &stream.Dict, seen, usesRGB, usesCMYK, usesGray)
+				}
+			}
+		}
+	}
+
+	// Check Type3 font CharProcs
+	fontRef := res.Get("Font")
+	if fontRef != nil {
+		fontDict := doc.ResolveDict(fontRef)
+		if fontDict == nil {
+			if d, ok := fontRef.(*Dictionary); ok {
+				fontDict = d
+			}
+		}
+		if fontDict != nil {
+			for _, val := range fontDict.Values {
+				fd := doc.ResolveDict(val)
+				if fd == nil {
+					continue
+				}
+				subtype, _ := fd.Get("Subtype").(Name)
+				if subtype == "Type3" {
+					// Recurse into Type3 font resources
+					scanResourcesForDeviceCS(doc, fd, seen, usesRGB, usesCMYK, usesGray)
+					// Also scan CharProc streams
+					cpRef := fd.Get("CharProcs")
+					cpDict := doc.ResolveDict(cpRef)
+					if cpDict == nil {
+						if d, ok := cpRef.(*Dictionary); ok {
+							cpDict = d
+						}
+					}
+					if cpDict != nil {
+						for _, cpVal := range cpDict.Values {
+							cpObj := doc.Resolve(cpVal)
+							if cpStream, ok := cpObj.(*Stream); ok {
+								data := decodeContentStream(cpStream)
+								if data != nil {
+									r, c, g := scanStreamForDeviceOps(data)
+									*usesRGB = *usesRGB || r
+									*usesCMYK = *usesCMYK || c
+									*usesGray = *usesGray || g
+								}
+							}
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// Scan content stream(s) for device color operators
-	contentsRef := page.Get("Contents")
+	// Scan content stream(s)
+	contentsRef := container.Get("Contents")
 	if contentsRef != nil {
-		r, g, b := scanContentsForDeviceOps(doc, contentsRef)
-		usesRGB = usesRGB || r
-		usesCMYK = usesCMYK || g
-		usesGray = usesGray || b
+		r, c, g := scanContentsForDeviceOps(doc, contentsRef)
+		*usesRGB = *usesRGB || r
+		*usesCMYK = *usesCMYK || c
+		*usesGray = *usesGray || g
 	}
+}
 
-	return
+// checkCSForDevice checks if a color space value is or contains a device color space.
+// Handles direct names, arrays (Indexed, Separation, DeviceN, Pattern with base).
+func checkCSForDevice(doc *Document, csObj Object, usesRGB, usesCMYK, usesGray *bool) {
+	if csObj == nil {
+		return
+	}
+	resolved := doc.Resolve(csObj)
+	if n, ok := resolved.(Name); ok {
+		switch n {
+		case "DeviceRGB":
+			*usesRGB = true
+		case "DeviceCMYK":
+			*usesCMYK = true
+		case "DeviceGray":
+			*usesGray = true
+		}
+		return
+	}
+	if arr, ok := resolved.(Array); ok && len(arr) >= 2 {
+		csType, _ := arr[0].(Name)
+		switch csType {
+		case "Indexed":
+			// [/Indexed base hival lookup] - check base
+			if len(arr) >= 2 {
+				checkCSForDevice(doc, arr[1], usesRGB, usesCMYK, usesGray)
+			}
+		case "Separation":
+			// [/Separation name alternateCS tintTransform] - check alternate
+			if len(arr) >= 3 {
+				checkCSForDevice(doc, arr[2], usesRGB, usesCMYK, usesGray)
+			}
+		case "DeviceN":
+			// [/DeviceN names alternateCS tintTransform] - check alternate
+			if len(arr) >= 3 {
+				checkCSForDevice(doc, arr[2], usesRGB, usesCMYK, usesGray)
+			}
+		case "Pattern":
+			// [/Pattern underlyingCS] - check underlying
+			if len(arr) >= 2 {
+				checkCSForDevice(doc, arr[1], usesRGB, usesCMYK, usesGray)
+			}
+		}
+	}
 }
 
 // maxContentStreamSize is the maximum decoded content stream size we'll scan.
