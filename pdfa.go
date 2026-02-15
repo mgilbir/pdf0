@@ -72,6 +72,7 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		// Catalog (6.1.12)
 		checkMetadataStream,
 		checkOutputIntents,
+		checkOutputIntentProfile,
 		checkNoCatalogAA,
 		checkNoOCProperties,
 		// Streams (6.1.6)
@@ -393,43 +394,254 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		return nil // Empty OutputIntents array is OK; absence is also OK
 	}
 
+	var errs []ValidationError
+	var pdfaIntentCount int
+	var firstPdfaProfile Object
+	_ = firstPdfaProfile
+
 	for i, elem := range arr {
 		dict := doc.ResolveDict(elem)
 		if dict == nil {
-			return []ValidationError{{
+			errs = append(errs, ValidationError{
 				Rule:    "6.2.3",
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] is not a dictionary", i),
-			}}
+			})
+			continue
 		}
 
 		s := dict.Get("S")
 		if s == nil {
-			return []ValidationError{{
+			errs = append(errs, ValidationError{
 				Rule:    "6.2.3",
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] must have /S", i),
-			}}
+			})
+			continue
 		}
 
-		if _, ok := s.(Name); !ok {
-			return []ValidationError{{
+		sName, ok := s.(Name)
+		if !ok {
+			errs = append(errs, ValidationError{
 				Rule:    "6.2.3",
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] /S must be a name", i),
-			}}
+			})
+			continue
 		}
 
-		if dict.Get("DestOutputProfile") == nil && dict.Get("OutputConditionIdentifier") == nil {
-			return []ValidationError{{
+		// For PDF/A, at least one OutputIntent must have /S = /GTS_PDFA1
+		if sName == "GTS_PDFA1" {
+			pdfaIntentCount++
+			profRef := dict.Get("DestOutputProfile")
+			if firstPdfaProfile == nil {
+				firstPdfaProfile = profRef
+			}
+		}
+
+		// /DestOutputProfileRef is not allowed in PDF/A
+		if dict.Get("DestOutputProfileRef") != nil {
+			errs = append(errs, ValidationError{
 				Rule:    "6.2.3",
 				Level:   level,
-				Message: fmt.Sprintf("/OutputIntents[%d] must have /DestOutputProfile or /OutputConditionIdentifier", i),
-			}}
+				Message: fmt.Sprintf("/OutputIntents[%d] must not have /DestOutputProfileRef", i),
+			})
+		}
+
+		profRef := dict.Get("DestOutputProfile")
+		if profRef == nil {
+			// /DestOutputProfile is required unless /OutputConditionIdentifier
+			// identifies a standard registered condition
+			oci := dict.Get("OutputConditionIdentifier")
+			if oci == nil {
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.3",
+					Level:   level,
+					Message: fmt.Sprintf("/OutputIntents[%d] must have /DestOutputProfile or /OutputConditionIdentifier", i),
+				})
+			}
 		}
 	}
 
-	return nil
+	// PDF/A requires at least one OutputIntent with /S = /GTS_PDFA1
+	if pdfaIntentCount == 0 {
+		errs = append(errs, ValidationError{
+			Rule:    "6.2.3",
+			Level:   level,
+			Message: "at least one OutputIntent must have /S /GTS_PDFA1",
+		})
+	}
+
+	// If there are multiple GTS_PDFA1 output intents, they must all reference
+	// the same ICC profile (same indirect reference)
+	if pdfaIntentCount > 1 {
+		var profileRefs []Object
+		for _, elem := range arr {
+			dict := doc.ResolveDict(elem)
+			if dict == nil {
+				continue
+			}
+			sName, _ := dict.Get("S").(Name)
+			if sName == "GTS_PDFA1" {
+				profileRefs = append(profileRefs, dict.Get("DestOutputProfile"))
+			}
+		}
+		// Check all profiles are the same indirect reference
+		for j := 1; j < len(profileRefs); j++ {
+			ref0, ok0 := profileRefs[0].(IndirectRef)
+			refJ, okJ := profileRefs[j].(IndirectRef)
+			if ok0 && okJ {
+				if ref0.Number != refJ.Number {
+					errs = append(errs, ValidationError{
+						Rule:    "6.2.3",
+						Level:   level,
+						Message: "multiple GTS_PDFA1 output intents must reference the same ICC profile",
+					})
+					break
+				}
+			}
+		}
+	}
+
+	// GTS_PDFA1 output intents must have /DestOutputProfile
+	for i, elem := range arr {
+		dict := doc.ResolveDict(elem)
+		if dict == nil {
+			continue
+		}
+		sName, _ := dict.Get("S").(Name)
+		if sName == "GTS_PDFA1" && dict.Get("DestOutputProfile") == nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.3",
+				Level:   level,
+				Message: fmt.Sprintf("/OutputIntents[%d] with /S /GTS_PDFA1 must have /DestOutputProfile", i),
+			})
+		}
+	}
+
+	return errs
+}
+
+func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError {
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+
+	oiRef := catalog.Get("OutputIntents")
+	if oiRef == nil {
+		return nil
+	}
+
+	oiObj := doc.Resolve(oiRef)
+	arr, ok := oiObj.(Array)
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+
+	var errs []ValidationError
+	for i, elem := range arr {
+		dict := doc.ResolveDict(elem)
+		if dict == nil {
+			continue
+		}
+		profRef := dict.Get("DestOutputProfile")
+		if profRef == nil {
+			continue
+		}
+		profObj := doc.Resolve(profRef)
+		profStream, ok := profObj.(*Stream)
+		if !ok {
+			continue
+		}
+		// Validate ICC profile N matches the profile data
+		nObj := profStream.Dict.Get("N")
+		if nObj == nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.3",
+				Level:   level,
+				Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile must have /N", i),
+			})
+			continue
+		}
+		nVal, ok := nObj.(Integer)
+		if !ok {
+			continue
+		}
+		// Decompress and check ICC profile header
+		data, err := decodeStreamData(profStream)
+		if err != nil || len(data) < 20 {
+			continue
+		}
+		// ICC profile header: bytes 16-19 contain color space signature
+		if len(data) >= 20 {
+			cs := string(data[16:20])
+			var expectedN int
+			switch cs {
+			case "GRAY":
+				expectedN = 1
+			case "RGB ":
+				expectedN = 3
+			case "CMYK":
+				expectedN = 4
+			default:
+				// Invalid or unsupported color space in output intent profile
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.3",
+					Level:   level,
+					Message: fmt.Sprintf("/OutputIntents[%d] ICC profile has unsupported color space %q", i, cs),
+				})
+			}
+			if expectedN > 0 && int(nVal) != expectedN {
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.3",
+					Level:   level,
+					Message: fmt.Sprintf("/OutputIntents[%d] /N=%d does not match ICC profile color space %s (expected %d)", i, nVal, cs, expectedN),
+				})
+			}
+		}
+		// ICC profile header: bytes 12-15 contain device class
+		if len(data) >= 16 {
+			cls := string(data[12:16])
+			// Output intent profiles must be of class "mntr" (monitor),
+			// "prtr" (printer), or "spac" (color space conversion)
+			switch cls {
+			case "mntr", "prtr", "spac":
+				// OK
+			default:
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.3",
+					Level:   level,
+					Message: fmt.Sprintf("/OutputIntents[%d] ICC profile has invalid device class %q (must be mntr, prtr, or spac)", i, cls),
+				})
+			}
+		}
+		// Check ICC profile version (bytes 8-11)
+		if len(data) >= 12 {
+			major := data[8]
+			minor := data[9] >> 4
+			if level == PDFA1b {
+				// PDF/A-1b: ICC profile version must be <= 2.x
+				if major > 2 {
+					errs = append(errs, ValidationError{
+						Rule:    "6.2.3",
+						Level:   level,
+						Message: fmt.Sprintf("/OutputIntents[%d] ICC profile version %d.%d not allowed for PDF/A-1b (max 2.x)", i, major, minor),
+					})
+				}
+			} else if level == PDFA2b || level == PDFA3b {
+				// PDF/A-2b/3b: ICC profile version must be <= 4.x
+				if major > 4 {
+					errs = append(errs, ValidationError{
+						Rule:    "6.2.3",
+						Level:   level,
+						Message: fmt.Sprintf("/OutputIntents[%d] ICC profile version %d.%d not allowed for PDF/A-2b/3b (max 4.x)", i, major, minor),
+					})
+				}
+			}
+		}
+	}
+	return errs
 }
 
 func checkNoCatalogAA(doc *Document, level PDFALevel) []ValidationError {
@@ -486,8 +698,47 @@ func checkNoLZW(doc *Document, level PDFALevel) []ValidationError {
 				Object:  num,
 			})
 		}
+		// Check for non-standard filter names
+		if badFilter := getNonStandardFilter(stream); badFilter != "" {
+			errs = append(errs, ValidationError{
+				Rule:    "6.1.6",
+				Level:   level,
+				Message: fmt.Sprintf("stream uses non-standard filter /%s", badFilter),
+				Object:  num,
+			})
+		}
 	}
 	return errs
+}
+
+func isStandardFilter(name Name) bool {
+	switch name {
+	case "ASCIIHexDecode", "ASCII85Decode", "LZWDecode", "FlateDecode",
+		"RunLengthDecode", "CCITTFaxDecode", "JBIG2Decode", "DCTDecode",
+		"JPXDecode", "Crypt":
+		return true
+	}
+	return false
+}
+
+func getNonStandardFilter(stream *Stream) string {
+	f := stream.Dict.Get("Filter")
+	if f == nil {
+		return ""
+	}
+	if name, ok := f.(Name); ok {
+		if !isStandardFilter(name) {
+			return string(name)
+		}
+	}
+	if arr, ok := f.(Array); ok {
+		for _, elem := range arr {
+			if name, ok := elem.(Name); ok && !isStandardFilter(name) {
+				return string(name)
+			}
+		}
+	}
+	return ""
 }
 
 func hasFilter(stream *Stream, filterName string) bool {
@@ -2097,7 +2348,105 @@ func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError
 // and also recurses into Form XObjects and Type3 font resources.
 func pageUsesTransparency(doc *Document, page *Dictionary) bool {
 	seen := make(map[*Dictionary]bool)
-	return resourcesUseTransparency(doc, page, seen)
+	if resourcesUseTransparency(doc, page, seen) {
+		return true
+	}
+	// Check annotations on this page for transparency features
+	annotsRef := page.Get("Annots")
+	if annotsRef == nil {
+		return false
+	}
+	annotsObj := doc.Resolve(annotsRef)
+	annotsArr, ok := annotsObj.(Array)
+	if !ok {
+		return false
+	}
+	for _, annotRef := range annotsArr {
+		annotDict := doc.ResolveDict(annotRef)
+		if annotDict == nil {
+			continue
+		}
+		// Check /BM on annotation itself
+		if bm := annotDict.Get("BM"); bm != nil {
+			if n, ok := bm.(Name); ok && n != "Normal" && n != "Compatible" {
+				return true
+			}
+		}
+		// Check /CA or /ca on annotation
+		for _, key := range []Name{"CA", "ca"} {
+			if v := annotDict.Get(key); v != nil {
+				fval := 1.0
+				switch tv := v.(type) {
+				case Real:
+					fval = float64(tv)
+				case Integer:
+					fval = float64(tv)
+				}
+				if math.Abs(fval-1.0) > 1e-6 {
+					return true
+				}
+			}
+		}
+		// Check appearance streams for transparency
+		ap := annotDict.Get("AP")
+		if ap == nil {
+			continue
+		}
+		apDict := doc.ResolveDict(ap)
+		if apDict == nil {
+			if d, ok := ap.(*Dictionary); ok {
+				apDict = d
+			}
+		}
+		if apDict == nil {
+			continue
+		}
+		// Check N, R, D appearance entries
+		for _, apKey := range []Name{"N", "R", "D"} {
+			apEntry := apDict.Get(apKey)
+			if apEntry == nil {
+				continue
+			}
+			// Could be a stream directly or a dict of states
+			apObj := doc.Resolve(apEntry)
+			switch v := apObj.(type) {
+			case *Stream:
+				if resourcesUseTransparency(doc, &v.Dict, seen) {
+					return true
+				}
+				// Check if the appearance stream has its own transparency group
+				if v.Dict.Get("Group") != nil {
+					groupDict := doc.ResolveDict(v.Dict.Get("Group"))
+					if groupDict != nil {
+						s, _ := groupDict.Get("S").(Name)
+						if s == "Transparency" {
+							return true
+						}
+					}
+				}
+			case *Dictionary:
+				// Dict of appearance states (e.g., /N << /Yes 12 0 R /Off 13 0 R >>)
+				for _, stateVal := range v.Values {
+					stateObj := doc.Resolve(stateVal)
+					if stateStream, ok := stateObj.(*Stream); ok {
+						if resourcesUseTransparency(doc, &stateStream.Dict, seen) {
+							return true
+						}
+						if stateStream.Dict.Get("Group") != nil {
+							groupDict := doc.ResolveDict(stateStream.Dict.Get("Group"))
+							if groupDict != nil {
+								s, _ := groupDict.Get("S").(Name)
+								if s == "Transparency" {
+									return true
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Dictionary]bool) bool {
@@ -2143,18 +2492,24 @@ func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Di
 				}
 				subtype, _ := stream.Dict.Get("Subtype").(Name)
 				if subtype == "Form" {
-					// Check if the Form XObject itself has a transparency Group
+					// If the Form XObject has its own transparency Group,
+					// it manages its own compositing - don't propagate to page level.
 					if stream.Dict.Get("Group") != nil {
 						groupDict := doc.ResolveDict(stream.Dict.Get("Group"))
 						if groupDict != nil {
 							s, _ := groupDict.Get("S").(Name)
 							if s == "Transparency" {
-								return true
+								continue // self-contained transparency group
 							}
 						}
 					}
 					// Recurse into Form XObject Resources
 					if resourcesUseTransparency(doc, &stream.Dict, seen) {
+						return true
+					}
+				} else if subtype == "Image" {
+					// Image XObjects with /SMask use transparency
+					if stream.Dict.Get("SMask") != nil {
 						return true
 					}
 				}
@@ -2182,6 +2537,30 @@ func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Di
 					if resourcesUseTransparency(doc, fd, seen) {
 						return true
 					}
+				}
+			}
+		}
+	}
+
+	// Recurse into tiling patterns
+	patRef := res.Get("Pattern")
+	if patRef != nil {
+		patDict := doc.ResolveDict(patRef)
+		if patDict == nil {
+			if d, ok := patRef.(*Dictionary); ok {
+				patDict = d
+			}
+		}
+		if patDict != nil {
+			for _, val := range patDict.Values {
+				obj := doc.Resolve(val)
+				stream, ok := obj.(*Stream)
+				if !ok {
+					continue
+				}
+				// Tiling patterns (PatternType 1) have their own Resources
+				if resourcesUseTransparency(doc, &stream.Dict, seen) {
+					return true
 				}
 			}
 		}
@@ -2225,12 +2604,8 @@ func extGStateUsesTransparency(doc *Document, res *Dictionary) bool {
 				}
 			}
 		}
-		// Check BM for non-Normal/Compatible blend modes
-		if bm := gs.Get("BM"); bm != nil {
-			if n, ok := bm.(Name); ok && n != "Normal" && n != "Compatible" {
-				return true
-			}
-		}
+		// Note: non-Normal blend modes alone do NOT require a page-level
+		// transparency group in PDF/A-2+/4 (only CA/ca < 1 or SMask do).
 		// Check SMask for non-None values
 		if smask := gs.Get("SMask"); smask != nil {
 			if n, ok := smask.(Name); !ok || n != "None" {
@@ -2697,7 +3072,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	// Determine which color spaces are covered by catalog-level OutputIntents
-	hasRGBIntent, hasCMYKIntent := getOutputIntentCoverage(doc, catalog)
+	hasRGBIntent, hasCMYKIntent, hasGrayIntent := getOutputIntentCoverage(doc, catalog)
 
 	pagesRef := catalog.Get("Pages")
 	if pagesRef == nil {
@@ -2711,11 +3086,12 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		hasDefaultRGB, hasDefaultCMYK, hasDefaultGray := getDefaultColorSpaces(doc, page.dict)
 
 		// For PDF/A-4, also check page-level OutputIntents
-		pageRGB, pageCMYK := hasRGBIntent, hasCMYKIntent
+		pageRGB, pageCMYK, pageGray := hasRGBIntent, hasCMYKIntent, hasGrayIntent
 		if level == PDFA4 {
-			prgb, pcmyk := getOutputIntentCoverage(doc, page.dict)
+			prgb, pcmyk, pgray := getOutputIntentCoverage(doc, page.dict)
 			pageRGB = pageRGB || prgb
 			pageCMYK = pageCMYK || pcmyk
+			pageGray = pageGray || pgray
 		}
 
 		// Scan for device color space usage on this page
@@ -2741,8 +3117,8 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 
-		// DeviceGray: needs DefaultGray, or any OutputIntent (Gray is always compatible)
-		if usesGray && !hasDefaultGray && !pageRGB && !pageCMYK {
+		// DeviceGray: needs DefaultGray, or any OutputIntent (Gray is compatible with any profile)
+		if usesGray && !hasDefaultGray && !pageRGB && !pageCMYK && !pageGray {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -2757,7 +3133,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 
 // getOutputIntentCoverage checks OutputIntents for DestOutputProfile and
 // returns which color space types are covered (RGB, CMYK).
-func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMYK bool) {
+func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMYK, hasGray bool) {
 	oiRef := catalog.Get("OutputIntents")
 	if oiRef == nil {
 		return
@@ -2809,8 +3185,7 @@ func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMY
 		case "CMYK":
 			hasCMYK = true
 		case "GRAY":
-			hasRGB = true  // Gray is compatible with everything
-			hasCMYK = true
+			hasGray = true
 		default:
 			// Unknown profile type - assume it covers both to avoid false positives
 			hasRGB = true
