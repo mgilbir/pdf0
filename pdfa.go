@@ -1609,6 +1609,37 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
+
+	// Check for page-level transparency Groups (forbidden in PDF/A-1b)
+	catalog := getCatalog(doc)
+	if catalog != nil {
+		pages := collectPages(doc, catalog.Get("Pages"))
+		for _, page := range pages {
+			groupRef := page.dict.Get("Group")
+			if groupRef == nil {
+				continue
+			}
+			groupDict := doc.ResolveDict(groupRef)
+			if groupDict == nil {
+				if d, ok := groupRef.(*Dictionary); ok {
+					groupDict = d
+				}
+			}
+			if groupDict == nil {
+				continue
+			}
+			s, _ := groupDict.Get("S").(Name)
+			if s == "Transparency" {
+				errs = append(errs, ValidationError{
+					Rule:    "6.4",
+					Level:   level,
+					Message: "page must not have /Group with /S /Transparency (PDF/A-1b forbids transparency)",
+					Object:  page.objNum,
+				})
+			}
+		}
+	}
+
 	gsEntries := collectAllExtGState(doc)
 	for _, entry := range gsEntries {
 		gs := entry.dict
@@ -2302,6 +2333,10 @@ func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError
 
 		groupRef := page.dict.Get("Group")
 		if groupRef == nil {
+			// Check if the requirement can be relaxed
+			if transparencyGroupNotRequired(doc, catalog, page.dict, level) {
+				continue
+			}
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -2331,22 +2366,83 @@ func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError
 			continue
 		}
 		if groupDict.Get("CS") == nil {
-			errs = append(errs, ValidationError{
-				Rule:    "6.2.4",
-				Level:   level,
-				Message: "page transparency group must have /CS (color space)",
-				Object:  page.objNum,
-			})
+			// For PDF/A-4, OutputIntents can provide the blending CS implicitly
+			if !transparencyGroupNotRequired(doc, catalog, page.dict, level) {
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.4",
+					Level:   level,
+					Message: "page transparency group must have /CS (color space)",
+					Object:  page.objNum,
+				})
+			}
 		}
 	}
 
 	return errs
 }
 
+// transparencyGroupNotRequired checks if the transparency /Group requirement
+// can be relaxed for a page. For PDF/A-4, OutputIntents provide implicit
+// blending CS. For PDF/A-2b/3b, DefaultCS coverage can substitute.
+func transparencyGroupNotRequired(doc *Document, catalog *Dictionary, page *Dictionary, level PDFALevel) bool {
+	if level == PDFA4 {
+		// PDF/A-4: page-level or catalog-level OutputIntents provide blending CS
+		catalogRGB, catalogCMYK, catalogGray := getOutputIntentCoverage(doc, catalog)
+		pageRGB, pageCMYK, pageGray := getOutputIntentCoverage(doc, page)
+		if catalogRGB || catalogCMYK || catalogGray || pageRGB || pageCMYK || pageGray {
+			return true
+		}
+	}
+
+	// For PDF/A-2b/3b: OutputIntents or DefaultCS coverage can provide blending CS
+	if level == PDFA2b || level == PDFA3b {
+		// Catalog-level OutputIntents provide blending CS for all pages
+		catalogRGB, catalogCMYK, catalogGray := getOutputIntentCoverage(doc, catalog)
+		if catalogRGB || catalogCMYK || catalogGray {
+			return true
+		}
+
+		// DefaultCS entries cover device CS usage
+		hasDefRGB, hasDefCMYK, hasDefGray := getDefaultColorSpaces(doc, page)
+		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page)
+		allCovered := true
+		if usesRGB && !hasDefRGB {
+			allCovered = false
+		}
+		if usesCMYK && !hasDefCMYK {
+			allCovered = false
+		}
+		if usesGray && !hasDefGray {
+			allCovered = false
+		}
+		if allCovered && (hasDefRGB || hasDefCMYK || hasDefGray) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // pageUsesTransparency checks if a page's resources reference transparency features.
 // It checks ExtGState entries for CA/ca != 1.0, BM != Normal/Compatible, and SMask != None,
 // and also recurses into Form XObjects and Type3 font resources.
 func pageUsesTransparency(doc *Document, page *Dictionary) bool {
+	// A page with a transparency Group is itself a transparency feature
+	if groupRef := page.Get("Group"); groupRef != nil {
+		groupDict := doc.ResolveDict(groupRef)
+		if groupDict == nil {
+			if d, ok := groupRef.(*Dictionary); ok {
+				groupDict = d
+			}
+		}
+		if groupDict != nil {
+			s, _ := groupDict.Get("S").(Name)
+			if s == "Transparency" {
+				return true
+			}
+		}
+	}
+
 	seen := make(map[*Dictionary]bool)
 	if resourcesUseTransparency(doc, page, seen) {
 		return true
@@ -2604,8 +2700,12 @@ func extGStateUsesTransparency(doc *Document, res *Dictionary) bool {
 				}
 			}
 		}
-		// Note: non-Normal blend modes alone do NOT require a page-level
-		// transparency group in PDF/A-2+/4 (only CA/ca < 1 or SMask do).
+		// Non-Normal blend modes are transparency features
+		if bm := gs.Get("BM"); bm != nil {
+			if n, ok := bm.(Name); ok && n != "Normal" && n != "Compatible" {
+				return true
+			}
+		}
 		// Check SMask for non-None values
 		if smask := gs.Get("SMask"); smask != nil {
 			if n, ok := smask.(Name); !ok || n != "None" {
@@ -2942,10 +3042,15 @@ func checkImplementationLimits(doc *Document, level PDFALevel) []ValidationError
 		maxStringLen = 32767
 	}
 	maxDictEntries := 4095
+	maxArrayLen := 8191
+	maxNestingDepth := 28
 
 	for num, iobj := range doc.Objects {
-		checkObjectLimits(iobj.Value, num, level, maxNameLen, maxStringLen, maxDictEntries, &errs)
+		checkObjectLimits(iobj.Value, num, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, 0, &errs)
 	}
+
+	// q/Q nesting depth check in content streams
+	checkQNestingDepth(doc, level, &errs)
 
 	// Page size limits for 2b+ only
 	if level != PDFA1b {
@@ -2955,7 +3060,7 @@ func checkImplementationLimits(doc *Document, level PDFALevel) []ValidationError
 	return errs
 }
 
-func checkObjectLimits(obj Object, objNum int, level PDFALevel, maxNameLen, maxStringLen, maxDictEntries int, errs *[]ValidationError) {
+func checkObjectLimits(obj Object, objNum int, level PDFALevel, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth int, errs *[]ValidationError) {
 	if obj == nil {
 		return
 	}
@@ -2990,6 +3095,15 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, maxNameLen, maxS
 			})
 		}
 	case *Dictionary:
+		if depth > maxNestingDepth {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("dictionary nesting depth %d exceeds maximum %d", depth, maxNestingDepth),
+				Object:  objNum,
+			})
+			return // Don't recurse further
+		}
 		if v.Len() > maxDictEntries {
 			*errs = append(*errs, ValidationError{
 				Rule:    "6.1.7",
@@ -2999,15 +3113,32 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, maxNameLen, maxS
 			})
 		}
 		for i, key := range v.Keys {
-			checkObjectLimits(key, objNum, level, maxNameLen, maxStringLen, maxDictEntries, errs)
-			checkObjectLimits(v.Values[i], objNum, level, maxNameLen, maxStringLen, maxDictEntries, errs)
+			checkObjectLimits(key, objNum, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth+1, errs)
+			checkObjectLimits(v.Values[i], objNum, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth+1, errs)
 		}
 	case Array:
+		if depth > maxNestingDepth {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("array nesting depth %d exceeds maximum %d", depth, maxNestingDepth),
+				Object:  objNum,
+			})
+			return // Don't recurse further
+		}
+		if len(v) > maxArrayLen {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("array has %d elements, exceeds maximum %d", len(v), maxArrayLen),
+				Object:  objNum,
+			})
+		}
 		for _, elem := range v {
-			checkObjectLimits(elem, objNum, level, maxNameLen, maxStringLen, maxDictEntries, errs)
+			checkObjectLimits(elem, objNum, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth+1, errs)
 		}
 	case *Stream:
-		checkObjectLimits(&v.Dict, objNum, level, maxNameLen, maxStringLen, maxDictEntries, errs)
+		checkObjectLimits(&v.Dict, objNum, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth, errs)
 	}
 }
 
@@ -3023,7 +3154,7 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 
 	pages := collectPages(doc, pagesRef)
 	for _, page := range pages {
-		for _, boxKey := range []Name{"MediaBox", "CropBox"} {
+		for _, boxKey := range []Name{"MediaBox", "CropBox", "BleedBox", "TrimBox", "ArtBox"} {
 			boxObj := page.dict.Get(boxKey)
 			if boxObj == nil {
 				continue
@@ -3059,6 +3190,103 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 			}
 		}
 	}
+}
+
+// checkQNestingDepth checks that q/Q nesting depth in content streams
+// does not exceed 28 levels (PDF/A implementation limit).
+func checkQNestingDepth(doc *Document, level PDFALevel, errs *[]ValidationError) {
+	const maxQDepth = 28
+
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return
+	}
+	pagesRef := catalog.Get("Pages")
+	if pagesRef == nil {
+		return
+	}
+
+	pages := collectPages(doc, pagesRef)
+	for _, page := range pages {
+		contentsRef := page.dict.Get("Contents")
+		if contentsRef == nil {
+			continue
+		}
+		data := getContentStreamData(doc, contentsRef)
+		if data == nil {
+			continue
+		}
+		depth := 0
+		maxDepth := 0
+		for i := 0; i < len(data); i++ {
+			// Skip whitespace
+			if data[i] <= ' ' {
+				continue
+			}
+			// Check for 'q' or 'Q' operators (single character followed by whitespace/EOL or EOF)
+			if data[i] == 'q' && (i+1 >= len(data) || data[i+1] <= ' ' || data[i+1] == '%') {
+				// Check it's not part of a longer keyword
+				if i == 0 || data[i-1] <= ' ' {
+					depth++
+					if depth > maxDepth {
+						maxDepth = depth
+					}
+				} else {
+					// Skip to end of token
+					for i < len(data) && data[i] > ' ' {
+						i++
+					}
+				}
+			} else if data[i] == 'Q' && (i+1 >= len(data) || data[i+1] <= ' ' || data[i+1] == '%') {
+				if i == 0 || data[i-1] <= ' ' {
+					if depth > 0 {
+						depth--
+					}
+				} else {
+					for i < len(data) && data[i] > ' ' {
+						i++
+					}
+				}
+			} else {
+				// Skip to end of token
+				for i < len(data) && data[i] > ' ' {
+					i++
+				}
+			}
+		}
+		if maxDepth > maxQDepth {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("q/Q nesting depth %d exceeds maximum %d", maxDepth, maxQDepth),
+				Object:  page.objNum,
+			})
+		}
+	}
+}
+
+// getContentStreamData extracts and concatenates content stream data.
+// Handles both single stream references and arrays of stream references.
+func getContentStreamData(doc *Document, contentsRef Object) []byte {
+	resolved := doc.Resolve(contentsRef)
+	switch v := resolved.(type) {
+	case *Stream:
+		return decodeContentStream(v)
+	case Array:
+		var result []byte
+		for _, elem := range v {
+			streamObj := doc.Resolve(elem)
+			if stream, ok := streamObj.(*Stream); ok {
+				data := decodeContentStream(stream)
+				if data != nil {
+					result = append(result, ' ')
+					result = append(result, data...)
+				}
+			}
+		}
+		return result
+	}
+	return nil
 }
 
 // --- Device color space checks (6.2.3/6.2.4) ---
@@ -3097,8 +3325,11 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		// Scan for device color space usage on this page
 		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page.dict)
 
-		// DeviceRGB: needs DefaultRGB or RGB OutputIntent
-		if usesRGB && !hasDefaultRGB && !pageRGB {
+		// Check if page's transparency /Group /CS provides implicit coverage
+		groupRGB, groupCMYK, groupGray := getGroupCSCoverage(doc, page.dict)
+
+		// DeviceRGB: needs DefaultRGB, RGB OutputIntent, or Group CS coverage
+		if usesRGB && !hasDefaultRGB && !pageRGB && !groupRGB {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -3107,8 +3338,8 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 
-		// DeviceCMYK: needs DefaultCMYK or CMYK OutputIntent
-		if usesCMYK && !hasDefaultCMYK && !pageCMYK {
+		// DeviceCMYK: needs DefaultCMYK, CMYK OutputIntent, or Group CS coverage
+		if usesCMYK && !hasDefaultCMYK && !pageCMYK && !groupCMYK {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -3117,8 +3348,8 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 
-		// DeviceGray: needs DefaultGray, or any OutputIntent (Gray is compatible with any profile)
-		if usesGray && !hasDefaultGray && !pageRGB && !pageCMYK && !pageGray {
+		// DeviceGray: needs DefaultGray, any OutputIntent, or any Group CS coverage
+		if usesGray && !hasDefaultGray && !pageRGB && !pageCMYK && !pageGray && !groupRGB && !groupCMYK && !groupGray {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -3272,6 +3503,70 @@ func getDefaultColorSpaces(doc *Document, page *Dictionary) (hasRGB, hasCMYK, ha
 	return
 }
 
+// getGroupCSCoverage checks if a page's transparency group /CS provides
+// implicit color space coverage for device color spaces. An ICCBased CS
+// with N=3 covers DeviceRGB, N=4 covers DeviceCMYK, N=1 covers DeviceGray.
+// CalRGB covers DeviceRGB, CalGray covers DeviceGray.
+func getGroupCSCoverage(doc *Document, page *Dictionary) (hasRGB, hasCMYK, hasGray bool) {
+	groupRef := page.Get("Group")
+	if groupRef == nil {
+		return
+	}
+	groupDict := doc.ResolveDict(groupRef)
+	if groupDict == nil {
+		if d, ok := groupRef.(*Dictionary); ok {
+			groupDict = d
+		}
+	}
+	if groupDict == nil {
+		return
+	}
+	csObj := groupDict.Get("CS")
+	if csObj == nil {
+		return
+	}
+	return classifyCalibratedCS(doc, csObj)
+}
+
+// classifyCalibratedCS determines what device color spaces a calibrated
+// color space provides coverage for. Returns false for all if the CS is
+// a device color space (DeviceRGB/CMYK/Gray).
+func classifyCalibratedCS(doc *Document, csObj Object) (coversRGB, coversCMYK, coversGray bool) {
+	resolved := doc.Resolve(csObj)
+	// Direct device CS names don't provide coverage
+	if _, ok := resolved.(Name); ok {
+		return
+	}
+	arr, ok := resolved.(Array)
+	if !ok || len(arr) < 2 {
+		return
+	}
+	csType, _ := arr[0].(Name)
+	switch csType {
+	case "ICCBased":
+		profileObj := doc.Resolve(arr[1])
+		if stream, ok := profileObj.(*Stream); ok {
+			if nObj := stream.Dict.Get("N"); nObj != nil {
+				if n, ok := nObj.(Integer); ok {
+					switch int(n) {
+					case 1:
+						coversGray = true
+					case 3:
+						coversRGB = true
+					case 4:
+						coversCMYK = true
+					}
+				}
+			}
+		}
+	case "CalRGB":
+		coversRGB = true
+	case "CalGray":
+		coversGray = true
+	}
+	return
+}
+
 // resolveResources resolves a page's Resources dictionary.
 func resolveResources(doc *Document, page *Dictionary) *Dictionary {
 	resRef := page.Get("Resources")
@@ -3406,8 +3701,11 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 				}
 				subtype, _ := stream.Dict.Get("Subtype").(Name)
 				if subtype == "Form" {
-					// Recurse into Form XObject
-					scanResourcesForDeviceCS(doc, &stream.Dict, seen, usesRGB, usesCMYK, usesGray)
+					// Scan Form XObject resources for device CS separately,
+					// so we can apply the Form's Group /CS coverage before
+					// propagating to the parent.
+					var formRGB, formCMYK, formGray bool
+					scanResourcesForDeviceCS(doc, &stream.Dict, seen, &formRGB, &formCMYK, &formGray)
 					// Check transparency group CS
 					if groupRef := stream.Dict.Get("Group"); groupRef != nil {
 						groupDict := doc.ResolveDict(groupRef)
@@ -3417,9 +3715,27 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 							}
 						}
 						if groupDict != nil {
-							checkCSForDevice(doc, groupDict.Get("CS"), usesRGB, usesCMYK, usesGray)
+							// Group /CS being a device CS is itself device usage
+							checkCSForDevice(doc, groupDict.Get("CS"), &formRGB, &formCMYK, &formGray)
+							// But a calibrated Group /CS covers device CS within the Form
+							if csObj := groupDict.Get("CS"); csObj != nil {
+								gRGB, gCMYK, gGray := classifyCalibratedCS(doc, csObj)
+								if gRGB {
+									formRGB = false
+								}
+								if gCMYK {
+									formCMYK = false
+								}
+								if gGray {
+									formGray = false
+								}
+							}
 						}
 					}
+					// Propagate only uncovered device CS to parent
+					*usesRGB = *usesRGB || formRGB
+					*usesCMYK = *usesCMYK || formCMYK
+					*usesGray = *usesGray || formGray
 				} else {
 					// Image XObject - check ColorSpace
 					checkCSForDevice(doc, stream.Dict.Get("ColorSpace"), usesRGB, usesCMYK, usesGray)
@@ -3982,13 +4298,13 @@ func checkICCBasedProfiles(doc *Document, level PDFALevel) []ValidationError {
 
 // --- Separation/DeviceN checks (6.2.4.4) ---
 
-// Rule 6.2.4.4: Separation and DeviceN color space restrictions.
+// Rule 6.2.4.4 / 6.2.3.4: Separation and DeviceN color space restrictions.
 func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
-	if level == PDFA1b {
-		return nil // PDF/A-1b has different rules handled elsewhere
-	}
 
 	var errs []ValidationError
+
+	// Track tint transform references by colorant name for consistency check
+	tintTransforms := make(map[Name]int) // colorant name → first seen tint transform obj num
 
 	// Scan all objects for color space arrays used in Resources
 	for num, iobj := range doc.Objects {
@@ -3998,6 +4314,7 @@ func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
 		// Check dictionary Resources/ColorSpace
 		if isDict {
 			checkDictForSepDeviceN(doc, dict, num, level, &errs)
+			collectTintTransforms(doc, dict, tintTransforms, num, level, &errs)
 		}
 		// Check stream dict (e.g., Form XObjects, Image XObjects)
 		if isStream {
@@ -4016,6 +4333,7 @@ func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
 				}
 				if resDict != nil {
 					checkDictForSepDeviceN(doc, resDict, num, level, &errs)
+					collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 				}
 			}
 		}
@@ -4023,6 +4341,56 @@ func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	return errs
+}
+
+// collectTintTransforms tracks Separation color spaces by colorant name
+// and flags inconsistent tint transforms for the same colorant name.
+func collectTintTransforms(doc *Document, dict *Dictionary, tintTransforms map[Name]int, objNum int, level PDFALevel, errs *[]ValidationError) {
+	csRef := dict.Get("ColorSpace")
+	if csRef == nil {
+		return
+	}
+	csDict := doc.ResolveDict(csRef)
+	if csDict == nil {
+		if d, ok := csRef.(*Dictionary); ok {
+			csDict = d
+		}
+	}
+	if csDict == nil {
+		return
+	}
+	for _, val := range csDict.Values {
+		resolved := doc.Resolve(val)
+		arr, ok := resolved.(Array)
+		if !ok || len(arr) < 4 {
+			continue
+		}
+		csType, _ := arr[0].(Name)
+		if csType != "Separation" {
+			continue
+		}
+		colorantName, ok := arr[1].(Name)
+		if !ok {
+			continue
+		}
+		// Get the tint transform reference (object number)
+		tintRef, isRef := arr[3].(IndirectRef)
+		if !isRef {
+			continue
+		}
+		if prevNum, exists := tintTransforms[colorantName]; exists {
+			if prevNum != tintRef.Number {
+				*errs = append(*errs, ValidationError{
+					Rule:    "6.2.4",
+					Level:   level,
+					Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", colorantName, prevNum, tintRef.Number),
+					Object:  objNum,
+				})
+			}
+		} else {
+			tintTransforms[colorantName] = tintRef.Number
+		}
+	}
 }
 
 func checkDictForSepDeviceN(doc *Document, dict *Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
@@ -4060,8 +4428,12 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 	case "Separation":
 		// [/Separation name alternateSpace tintTransform]
 		if len(arr) < 4 {
+			rule := "6.2.4"
+			if level == PDFA1b {
+				rule = "6.2.3"
+			}
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    rule,
 				Level:   level,
 				Message: "Separation color space array must have 4 elements",
 				Object:  objNum,
@@ -4086,8 +4458,12 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 	case "DeviceN":
 		// [/DeviceN names alternateSpace tintTransform ...]
 		if len(arr) < 4 {
+			rule := "6.2.4"
+			if level == PDFA1b {
+				rule = "6.2.3"
+			}
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    rule,
 				Level:   level,
 				Message: "DeviceN color space array must have at least 4 elements",
 				Object:  objNum,
@@ -4097,8 +4473,10 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 		// Check alternate color space
 		checkAlternateCS(doc, arr[2], objNum, level, errs)
 
-		// For PDF/A-2b/3b/4: if there's a 5th element (attributes dict),
-		// check for Colorants and their alternate spaces
+		// Get colorant names from the DeviceN array
+		namesArr, namesOk := doc.Resolve(arr[1]).(Array)
+
+		// If there's a 5th element (attributes dict), check Colorants
 		if len(arr) >= 5 {
 			attrDict := doc.ResolveDict(arr[4])
 			if attrDict != nil {
@@ -4106,6 +4484,26 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 				if colorantsRef != nil {
 					colorantsDict := doc.ResolveDict(colorantsRef)
 					if colorantsDict != nil {
+						// Check that each DeviceN colorant name has an entry in Colorants dict
+						if namesOk {
+							for _, nameObj := range namesArr {
+								if name, ok := nameObj.(Name); ok {
+									if colorantsDict.Get(name) == nil {
+										rule := "6.2.4"
+										if level == PDFA1b {
+											rule = "6.2.3"
+										}
+										*errs = append(*errs, ValidationError{
+											Rule:    rule,
+											Level:   level,
+											Message: fmt.Sprintf("DeviceN colorant /%s not found in Colorants dictionary", name),
+											Object:  objNum,
+										})
+									}
+								}
+							}
+						}
+						// Recursively check Colorant entries
 						for _, cval := range colorantsDict.Values {
 							checkColorSpaceValue(doc, cval, objNum, level, errs)
 						}
@@ -4117,18 +4515,33 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 }
 
 // checkAlternateCS validates that an alternate color space in Separation/DeviceN
-// is not a restricted device space.
+// is not a restricted space. For PDF/A-1b, device CS alternates are always forbidden
+// (must be CIE-based). For 2b/3b/4, device alternates are handled by checkDeviceColorSpaces
+// which verifies OutputIntent coverage.
 func checkAlternateCS(doc *Document, altCS Object, objNum int, level PDFALevel, errs *[]ValidationError) {
 	resolved := doc.Resolve(altCS)
 
 	if n, ok := resolved.(Name); ok {
 		switch n {
 		case "DeviceRGB", "DeviceCMYK", "DeviceGray":
-			// Device alternate spaces in Separation/DeviceN are fallback mechanisms,
-			// not direct device CS usage. They don't require OutputIntent matching.
+			// For PDF/A-1b: device alternates are always forbidden
+			if level == PDFA1b {
+				*errs = append(*errs, ValidationError{
+					Rule:    "6.2.3",
+					Level:   level,
+					Message: fmt.Sprintf("Separation/DeviceN alternate color space must not be %s (must be CIE-based)", n),
+					Object:  objNum,
+				})
+			}
+			// For 2b/3b/4: device alternates require OutputIntent coverage,
+			// which is checked by checkDeviceColorSpaces via checkCSForDevice.
 		case "Pattern":
+			rule := "6.2.4"
+			if level == PDFA1b {
+				rule = "6.2.3"
+			}
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    rule,
 				Level:   level,
 				Message: "Separation/DeviceN alternate color space must not be /Pattern",
 				Object:  objNum,
