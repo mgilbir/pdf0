@@ -338,7 +338,9 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 		{"Screen", PDFA4},
 		{"3D", PDFA4},
 		{"RichMedia", PDFA4},
-		{"FileAttachment", PDFA4},
+		// FileAttachment is forbidden in PDF/A-1b (which bans embedded files)
+		// but allowed in PDF/A-2/3/4 (it is the PDF/A-3 embedding mechanism).
+		{"FileAttachment", PDFA1b},
 	}
 
 	for _, tt := range forbidden {
@@ -360,7 +362,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 	}
 
 	t.Run("allowed subtypes pass", func(t *testing.T) {
-		allowed := []Name{"Text", "Link", "FreeText", "Widget", "Popup", "Stamp"}
+		allowed := []Name{"Text", "Link", "FreeText", "Widget", "Popup", "Stamp", "FileAttachment"}
 		for _, st := range allowed {
 			doc := NewPDFADocument(PDFA4)
 			annot := &Dictionary{}

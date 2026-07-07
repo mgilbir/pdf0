@@ -894,14 +894,16 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 		subtype := fontDict.Get("Subtype")
 		subtypeName, _ := subtype.(Name)
 
-		// Type3 and Type0 don't need direct embedding
-		if subtypeName == "Type3" || subtypeName == "Type0" {
+		// Type3 fonts define their glyphs with content streams, so they carry no
+		// font program to embed. Type0 (composite) fonts DO require embedding —
+		// via their descendant CIDFont's FontDescriptor, handled below.
+		if subtypeName == "Type3" {
 			continue
 		}
 
 		fdRef := fontDict.Get("FontDescriptor")
 		if fdRef == nil {
-			// Composite fonts: check DescendantFonts
+			// Composite fonts (Type0): check the descendant CIDFont's descriptor
 			dfRef := fontDict.Get("DescendantFonts")
 			if dfRef != nil {
 				dfObj := doc.Resolve(dfRef)
@@ -1050,6 +1052,7 @@ var allowedAnnotSubtypes = map[PDFALevel]map[Name]bool{
 		"Stamp": true, "Caret": true, "Ink": true, "Popup": true,
 		"Widget": true, "PrinterMark": true, "TrapNet": true,
 		"Watermark": true, "Redact": true, "Projection": true,
+		"FileAttachment": true,
 	},
 	// PDF/A-1b, 2b, 3b: same set minus Polygon, PolyLine, Projection, Redact; plus some others
 	// For now, 1b/2b/3b get the same restrictive list as 4 with adjustments
@@ -1063,7 +1066,7 @@ func init() {
 		"Highlight": true, "Underline": true, "Squiggly": true, "StrikeOut": true,
 		"Stamp": true, "Caret": true, "Ink": true, "Popup": true,
 		"Widget": true, "PrinterMark": true, "TrapNet": true, "Watermark": true,
-		"Redact": true,
+		"Redact": true, "FileAttachment": true,
 	}
 	allowedAnnotSubtypes[PDFA2b] = pdfa2bAnnots
 	allowedAnnotSubtypes[PDFA3b] = pdfa2bAnnots
@@ -1384,12 +1387,12 @@ func isForbiddenAction(s Name, level PDFALevel) bool {
 	case PDFA1b, PDFA2b, PDFA3b:
 		// Additionally forbidden in parts 1-3:
 		forbidden123 := map[Name]bool{
-			"JavaScript":   true,
-			"SetOCGState":  true,
-			"GoTo3DView":   true,
-			"GoToDp":       true,
-			"set-state":    true,
-			"no-op":        true,
+			"JavaScript":  true,
+			"SetOCGState": true,
+			"GoTo3DView":  true,
+			"GoToDp":      true,
+			"SetState":    true,
+			"NOP":         true,
 		}
 		return forbidden123[s]
 	case PDFA4:
@@ -1397,8 +1400,8 @@ func isForbiddenAction(s Name, level PDFALevel) bool {
 		forbidden4 := map[Name]bool{
 			"SetOCGState": true,
 			"GoTo3DView":  true,
-			"set-state":   true,
-			"no-op":       true,
+			"SetState":    true,
+			"NOP":         true,
 		}
 		return forbidden4[s]
 	}
