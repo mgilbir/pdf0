@@ -956,11 +956,17 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 
 func collectFonts(doc *Document, pageTreeRef Object) map[int]*Dictionary {
 	fonts := make(map[int]*Dictionary)
-	collectFontsRecursive(doc, pageTreeRef, fonts)
+	collectFontsRecursive(doc, pageTreeRef, fonts, make(map[int]bool))
 	return fonts
 }
 
-func collectFontsRecursive(doc *Document, ref Object, fonts map[int]*Dictionary) {
+func collectFontsRecursive(doc *Document, ref Object, fonts map[int]*Dictionary, seen map[int]bool) {
+	if r, ok := ref.(IndirectRef); ok {
+		if seen[r.Number] {
+			return // cycle in the page tree
+		}
+		seen[r.Number] = true
+	}
 	node := doc.ResolveDict(ref)
 	if node == nil {
 		return
@@ -972,7 +978,7 @@ func collectFontsRecursive(doc *Document, ref Object, fonts map[int]*Dictionary)
 		kidsObj := doc.Resolve(node.Get("Kids"))
 		if kids, ok := kidsObj.(Array); ok {
 			for _, kid := range kids {
-				collectFontsRecursive(doc, kid, fonts)
+				collectFontsRecursive(doc, kid, fonts, seen)
 			}
 		}
 		collectFontsFromResources(doc, node, fonts)
@@ -2370,13 +2376,17 @@ func normalizePDFDate(s string) string {
 			tzOff := string(tzChar)
 			if len(s) >= 17 {
 				tzOff += s[15:17]
-			}
-			rest := s[17:]
-			rest = strings.TrimPrefix(rest, "'")
-			if len(rest) >= 2 {
-				tzOff += ":" + rest[0:2]
+				rest := s[17:]
+				rest = strings.TrimPrefix(rest, "'")
+				if len(rest) >= 2 {
+					tzOff += ":" + rest[0:2]
+				} else {
+					tzOff += ":00"
+				}
 			} else {
-				tzOff += ":00"
+				// Offset hour is missing/truncated (e.g. "…SS+"); default to
+				// whole-hour zero rather than slicing past the end of the string.
+				tzOff += "00:00"
 			}
 			tz = tzOff
 		}
@@ -2814,14 +2824,18 @@ type pageInfo struct {
 
 func collectPages(doc *Document, pageTreeRef Object) []pageInfo {
 	var pages []pageInfo
-	collectPagesRecursive(doc, pageTreeRef, &pages)
+	collectPagesRecursive(doc, pageTreeRef, &pages, make(map[int]bool))
 	return pages
 }
 
-func collectPagesRecursive(doc *Document, ref Object, pages *[]pageInfo) {
+func collectPagesRecursive(doc *Document, ref Object, pages *[]pageInfo, seen map[int]bool) {
 	objNum := 0
 	if iref, ok := ref.(IndirectRef); ok {
 		objNum = iref.Number
+		if seen[objNum] {
+			return // cycle in the page tree
+		}
+		seen[objNum] = true
 	}
 	node := doc.ResolveDict(ref)
 	if node == nil {
@@ -2832,7 +2846,7 @@ func collectPagesRecursive(doc *Document, ref Object, pages *[]pageInfo) {
 		kidsObj := doc.Resolve(node.Get("Kids"))
 		if kids, ok := kidsObj.(Array); ok {
 			for _, kid := range kids {
-				collectPagesRecursive(doc, kid, pages)
+				collectPagesRecursive(doc, kid, pages, seen)
 			}
 		}
 	} else if nodeType == "Page" {
@@ -3938,8 +3952,18 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 // checkCSForDevice checks if a color space value is or contains a device color space.
 // Handles direct names, arrays (Indexed, Separation, DeviceN, Pattern with base).
 func checkCSForDevice(doc *Document, csObj Object, usesRGB, usesCMYK, usesGray *bool) {
+	checkCSForDeviceSeen(doc, csObj, usesRGB, usesCMYK, usesGray, make(map[int]bool))
+}
+
+func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGray *bool, seen map[int]bool) {
 	if csObj == nil {
 		return
+	}
+	if r, ok := csObj.(IndirectRef); ok {
+		if seen[r.Number] {
+			return // cycle through an indirect color-space reference
+		}
+		seen[r.Number] = true
 	}
 	resolved := doc.Resolve(csObj)
 	if n, ok := resolved.(Name); ok {
@@ -3959,7 +3983,7 @@ func checkCSForDevice(doc *Document, csObj Object, usesRGB, usesCMYK, usesGray *
 		case "Indexed":
 			// [/Indexed base hival lookup] - check base
 			if len(arr) >= 2 {
-				checkCSForDevice(doc, arr[1], usesRGB, usesCMYK, usesGray)
+				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen)
 			}
 		case "Separation", "DeviceN":
 			// Separation/DeviceN alternates are fallback color spaces, not
@@ -3967,7 +3991,7 @@ func checkCSForDevice(doc *Document, csObj Object, usesRGB, usesCMYK, usesGray *
 		case "Pattern":
 			// [/Pattern underlyingCS] - check underlying
 			if len(arr) >= 2 {
-				checkCSForDevice(doc, arr[1], usesRGB, usesCMYK, usesGray)
+				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen)
 			}
 		}
 	}
@@ -4504,6 +4528,16 @@ func checkDictForSepDeviceN(doc *Document, dict *Dictionary, objNum int, level P
 }
 
 func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+	checkColorSpaceValueSeen(doc, csObj, objNum, level, errs, make(map[int]bool))
+}
+
+func checkColorSpaceValueSeen(doc *Document, csObj Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+	if r, ok := csObj.(IndirectRef); ok {
+		if seen[r.Number] {
+			return // cycle through an indirect color-space reference
+		}
+		seen[r.Number] = true
+	}
 	resolved := doc.Resolve(csObj)
 	arr, ok := resolved.(Array)
 	if !ok || len(arr) < 2 {
@@ -4619,7 +4653,7 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 						}
 						// Recursively check Colorant entries
 						for _, cval := range colorantsDict.Values {
-							checkColorSpaceValue(doc, cval, objNum, level, errs)
+							checkColorSpaceValueSeen(doc, cval, objNum, level, errs, seen)
 						}
 					}
 				}
@@ -4633,6 +4667,16 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 // (must be CIE-based). For 2b/3b/4, device alternates are handled by checkDeviceColorSpaces
 // which verifies OutputIntent coverage.
 func checkAlternateCS(doc *Document, altCS Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+	checkAlternateCSSeen(doc, altCS, objNum, level, errs, make(map[int]bool))
+}
+
+func checkAlternateCSSeen(doc *Document, altCS Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+	if r, ok := altCS.(IndirectRef); ok {
+		if seen[r.Number] {
+			return // cycle through an indirect alternate color-space reference
+		}
+		seen[r.Number] = true
+	}
 	resolved := doc.Resolve(altCS)
 
 	if n, ok := resolved.(Name); ok {
@@ -4669,7 +4713,7 @@ func checkAlternateCS(doc *Document, altCS Object, objNum int, level PDFALevel, 
 			if csType == "Separation" || csType == "DeviceN" {
 				// Nested Separation/DeviceN - check their alternates too
 				if len(arr) >= 3 {
-					checkAlternateCS(doc, arr[2], objNum, level, errs)
+					checkAlternateCSSeen(doc, arr[2], objNum, level, errs, seen)
 				}
 			}
 		}
