@@ -1147,7 +1147,7 @@ const (
 	corpusMaxFalsePositives = 0
 	// Fail files the validator fails to flag (false negatives / unimplemented
 	// rules). This is the headline coverage gap; drive it down over time.
-	corpusMaxMissed = 38
+	corpusMaxMissed = 22
 	// Files the parser cannot read at all. All five are deliberately broken
 	// fail files: four with malformed stream keywords/lengths and one whose
 	// object stream holds corrupt zlib data.

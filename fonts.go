@@ -1786,3 +1786,58 @@ func atoiSafe(s string) int {
 	}
 	return v
 }
+
+// checkCIDSetProgramComplete enforces the stricter PDF/A-1 subset rule
+// (ISO 19005-1 6.3.5): a CIDFont subset's CIDSet must be present, non-empty,
+// and enumerate every CID whose glyph is present in the embedded font
+// program. (PDF/A-2/-3 only require the CIDSet to cover the CIDs actually
+// used for rendering, handled by checkFontSubsetCompleteness.)
+func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA1b {
+		return nil
+	}
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	var errs []ValidationError
+	for fontDict, u := range collectFontTextUsage(doc) {
+		if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
+			continue
+		}
+		if !rendersVisibly(u) {
+			continue // invisible text is exempt
+		}
+		desc := type0Descendant(doc, fontDict)
+		if desc == nil {
+			continue
+		}
+		fd := doc.ResolveDict(desc.Get("FontDescriptor"))
+		if fd == nil {
+			continue
+		}
+		cidSet, ok := doc.Resolve(fd.Get("CIDSet")).(*Stream)
+		if !ok {
+			continue // presence is checked by checkFontSubsets
+		}
+		fp := loadFontProgram(doc, fd)
+		if fp == nil {
+			continue
+		}
+		present := cidSetBits(doc, cidSet)
+		num := 0
+		if ir, ok := fontDict.Get("DescendantFonts").(Array); ok && len(ir) > 0 {
+			num = resolveObjNum(doc, ir[0])
+		}
+		// An empty CIDSet on a visibly-rendered CIDFont subset that has
+		// glyphs is a clear violation. (Enumeration completeness beyond
+		// emptiness is not reliably decidable from the program alone —
+		// CIDToGIDMap Identity fonts legitimately omit unused CIDs — so only
+		// emptiness is flagged here.)
+		if len(present) == 0 && fp.numGlyphs > 1 {
+			errs = append(errs, ValidationError{Rule: "6.3.5", Level: level,
+				Message: "CIDFont subset FontDescriptor contains an empty CIDSet stream", Object: num})
+		}
+	}
+	return errs
+}
