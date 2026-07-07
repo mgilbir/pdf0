@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 )
 
@@ -105,7 +106,32 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 		return nil, err
 	}
 
+	// 6. Drop file-structure artifacts so the document holds only content.
+	doc.normalizeStructure()
+
 	return doc, nil
+}
+
+// normalizeStructure removes cross-reference plumbing from the parsed
+// document. An xref stream's dictionary doubles as the trailer, so a document
+// read from a modern file would otherwise carry xref-stream-only keys in
+// doc.Trailer and re-emit stale /XRef and /ObjStm objects on Write — encoding
+// obsolete offsets contradicting the rewritten file (audit C5). Object-stream
+// contents are already materialized as ordinary objects, and Write always
+// regenerates the cross-reference structure and /Size, so nothing is lost.
+func (d *Document) normalizeStructure() {
+	for num, iobj := range d.Objects {
+		if stream, ok := iobj.Value.(*Stream); ok {
+			if t, ok := stream.Dict.Get("Type").(Name); ok && (t == "XRef" || t == "ObjStm") {
+				delete(d.Objects, num)
+			}
+		}
+	}
+	trailer := d.Trailer.Clone()
+	for _, key := range []Name{"Type", "W", "Index", "Filter", "DecodeParms", "Length", "Prev", "XRefStm", "Size"} {
+		trailer.Delete(key)
+	}
+	d.Trailer = *trailer
 }
 
 // parseXRefSection parses one cross-reference section (a traditional table
@@ -265,7 +291,7 @@ func (d *Document) Write(w io.Writer) error {
 	for num := range d.Objects {
 		objNums = append(objNums, num)
 	}
-	sortInts(objNums)
+	sort.Ints(objNums)
 
 	// 3. Write objects and record offsets
 	offsets := make(map[int]int64)
@@ -313,49 +339,56 @@ func (d *Document) Write(w io.Writer) error {
 	return nil
 }
 
-// writeXRefTable writes a traditional xref table.
+// writeXRefTable writes a traditional xref table. Contiguous object-number
+// runs are emitted as separate subsections, so sparse numbering does not
+// balloon the table with fabricated free entries whose free-list linkage
+// would then have to be maintained. The only free entry is the list head
+// (object 0, generation 65535, next-free 0: the canonical empty list).
 func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject) error {
 	if err := s.writeString("xref\n"); err != nil {
 		return err
 	}
 
-	// Find contiguous subsections
-	maxObj := 0
+	entryLine := func(num int) string {
+		if num == 0 {
+			return "0000000000 65535 f \r\n"
+		}
+		gen := 0
+		if obj, ok := objects[num]; ok {
+			gen = obj.Generation
+		}
+		return fmt.Sprintf("%010d %05d n \r\n", offsets[num], gen)
+	}
+
+	// Object 0 (the free-list head) always begins the first subsection;
+	// objects numbered from 1 up continue it.
+	section := []int{0}
+	flush := func() error {
+		if err := s.writeString(fmt.Sprintf("%d %d\n", section[0], len(section))); err != nil {
+			return err
+		}
+		for _, num := range section {
+			if err := s.writeString(entryLine(num)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	for _, num := range objNums {
-		if num > maxObj {
-			maxObj = num
+		if num <= 0 {
+			continue // object 0 is synthesized; negative numbers are invalid
 		}
-	}
-
-	// Write single section from 0 to maxObj
-	if err := s.writeString(fmt.Sprintf("0 %d\n", maxObj+1)); err != nil {
-		return err
-	}
-
-	// Entry 0: free entry head
-	if err := s.writeString("0000000000 65535 f \r\n"); err != nil {
-		return err
-	}
-
-	for i := 1; i <= maxObj; i++ {
-		if offset, ok := offsets[i]; ok {
-			gen := 0
-			if obj, ok := objects[i]; ok {
-				gen = obj.Generation
-			}
-			entry := fmt.Sprintf("%010d %05d n \r\n", offset, gen)
-			if err := s.writeString(entry); err != nil {
-				return err
-			}
-		} else {
-			// Free entry
-			if err := s.writeString("0000000000 00000 f \r\n"); err != nil {
-				return err
-			}
+		if num == section[0]+len(section) {
+			section = append(section, num)
+			continue
 		}
+		if err := flush(); err != nil {
+			return err
+		}
+		section = []int{num}
 	}
-
-	return nil
+	return flush()
 }
 
 // Resolve follows an IndirectRef to its value. Returns the object
@@ -383,17 +416,4 @@ func (d *Document) ResolveDict(obj Object) *Dictionary {
 		return dict
 	}
 	return nil
-}
-
-// sortInts sorts a slice of ints in ascending order (simple insertion sort to avoid import).
-func sortInts(a []int) {
-	for i := 1; i < len(a); i++ {
-		key := a[i]
-		j := i - 1
-		for j >= 0 && a[j] > key {
-			a[j+1] = a[j]
-			j--
-		}
-		a[j+1] = key
-	}
 }
