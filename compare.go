@@ -6,7 +6,10 @@ import (
 )
 
 // Equal reports whether two PDF objects are semantically equal.
-// It compares values deeply, including through indirect references.
+// It compares values deeply. IndirectRef values are compared by their
+// object/generation numbers only; Equal does not resolve references (it has no
+// document to resolve against), so an IndirectRef is never equal to the object
+// it points to.
 func Equal(a, b Object) bool {
 	if a == nil && b == nil {
 		return true
@@ -69,8 +72,25 @@ func Equal(a, b Object) bool {
 		}
 		return dictionaryEqual(av, bv)
 
+	case Dictionary:
+		bv, ok := b.(Dictionary)
+		if !ok {
+			return false
+		}
+		return dictionaryEqual(&av, &bv)
+
 	case *Stream:
 		bv, ok := b.(*Stream)
+		if !ok {
+			return false
+		}
+		if !dictionaryEqual(&av.Dict, &bv.Dict) {
+			return false
+		}
+		return bytes.Equal(av.Data, bv.Data)
+
+	case Stream:
+		bv, ok := b.(Stream)
 		if !ok {
 			return false
 		}

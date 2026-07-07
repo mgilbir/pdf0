@@ -90,6 +90,17 @@ func (d *Dictionary) Len() int {
 	return len(d.Keys)
 }
 
+// Clone returns a copy of the dictionary whose Keys and Values live in fresh
+// backing arrays, so that Set/Delete on the copy do not mutate the original.
+// Value objects are shared, not deep-copied.
+func (d *Dictionary) Clone() *Dictionary {
+	keys := make([]Name, len(d.Keys))
+	copy(keys, d.Keys)
+	values := make([]Object, len(d.Values))
+	copy(values, d.Values)
+	return &Dictionary{Keys: keys, Values: values}
+}
+
 // Stream represents a PDF stream object.
 type Stream struct {
 	Dict Dictionary

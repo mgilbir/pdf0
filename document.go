@@ -281,7 +281,9 @@ func (d *Document) Write(w io.Writer) error {
 	}
 
 	// 5. Write trailer
-	trailer := d.Trailer
+	// Clone so setting Size doesn't mutate the caller's Document.Trailer
+	// (Dictionary shares its backing slices on a plain struct copy).
+	trailer := d.Trailer.Clone()
 	// Update/set Size
 	maxObj := 0
 	for _, num := range objNums {
@@ -294,7 +296,7 @@ func (d *Document) Write(w io.Writer) error {
 	if err := s.writeString("trailer\n"); err != nil {
 		return err
 	}
-	if err := s.writeDictionary(&trailer); err != nil {
+	if err := s.writeDictionary(trailer); err != nil {
 		return err
 	}
 	if err := s.writeString("\n"); err != nil {

@@ -3,6 +3,7 @@ package pdf0
 import (
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -76,6 +77,9 @@ func (s *Serializer) writeInteger(i Integer) error {
 
 func (s *Serializer) writeReal(r Real) error {
 	f := float64(r)
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return fmt.Errorf("cannot serialize non-finite real %v as a PDF number", f)
+	}
 	str := strconv.FormatFloat(f, 'f', -1, 64)
 	// Ensure there's a decimal point
 	if !strings.Contains(str, ".") {
@@ -210,11 +214,17 @@ func (s *Serializer) writeDictionary(dict *Dictionary) error {
 }
 
 func (s *Serializer) writeStream(stream *Stream) error {
-	// Update Length in dictionary
-	dict := stream.Dict
-	dict.Set("Length", Integer(len(stream.Data)))
+	// Update Length in a copy so we don't mutate the caller's stream dictionary
+	// (Dictionary shares its backing slices on a plain struct copy). Preserve an
+	// indirect /Length (which points at a separate length object) rather than
+	// shadowing it with an inline value; only synthesize /Length when it's
+	// absent or already inline.
+	dict := stream.Dict.Clone()
+	if _, isRef := dict.Get("Length").(IndirectRef); !isRef {
+		dict.Set("Length", Integer(len(stream.Data)))
+	}
 
-	if err := s.writeDictionary(&dict); err != nil {
+	if err := s.writeDictionary(dict); err != nil {
 		return err
 	}
 	if err := s.writeString("\nstream\r\n"); err != nil {
