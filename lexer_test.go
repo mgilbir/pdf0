@@ -100,11 +100,11 @@ func TestLexerLiteralString(t *testing.T) {
 		{"(\\()", "("},
 		{"(\\))", ")"},
 		{"(\\\\)", "\\"},
-		{"(\\053)", "+"},          // octal escape
-		{"(\\53)", "+"},           // octal 2 digits
-		{"(\\0533)", "+3"},        // octal 3 digits + non-octal
-		{"(line1\rline2)", "line1\nline2"},     // \r → \n
-		{"(line1\r\nline2)", "line1\nline2"},   // \r\n → \n
+		{"(\\053)", "+"},                     // octal escape
+		{"(\\53)", "+"},                      // octal 2 digits
+		{"(\\0533)", "+3"},                   // octal 3 digits + non-octal
+		{"(line1\rline2)", "line1\nline2"},   // \r → \n
+		{"(line1\r\nline2)", "line1\nline2"}, // \r\n → \n
 	}
 	for _, tt := range tests {
 		l := NewLexer([]byte(tt.input))
@@ -151,7 +151,7 @@ func TestLexerHexString(t *testing.T) {
 		{"<48656C6C6F>", []byte("Hello")},
 		{"<48 65 6C 6C 6F>", []byte("Hello")},
 		{"<>", []byte{}},
-		{"<4>", []byte{0x40}},     // odd digits: pad with 0
+		{"<4>", []byte{0x40}},                 // odd digits: pad with 0
 		{"<901FA>", []byte{0x90, 0x1F, 0xA0}}, // odd digits
 	}
 	for _, tt := range tests {
@@ -182,7 +182,7 @@ func TestLexerName(t *testing.T) {
 		{"/A;Name_With-Various***Characters?", "A;Name_With-Various***Characters?"},
 		{"/.notdef", ".notdef"},
 		{"/", ""},
-		{"/Adobe#20Green", "Adobe Green"},  // hex escape
+		{"/Adobe#20Green", "Adobe Green"}, // hex escape
 		{"/PANTONE#205757#20EC", "PANTONE 5757 EC"},
 		{"/paired#28#29parentheses", "paired()parentheses"},
 		{"/The_Key_of_F#23_Minor", "The_Key_of_F#_Minor"},

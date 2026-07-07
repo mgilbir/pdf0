@@ -200,7 +200,6 @@ func hasPseudoCode(content string) bool {
 	return pseudoRe.MatchString(content)
 }
 
-
 // containsStream checks if content contains stream/endstream keywords.
 func containsStream(content string) bool {
 	return regexp.MustCompile(`\bstream\b`).MatchString(content) &&

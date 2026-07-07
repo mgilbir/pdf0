@@ -344,13 +344,6 @@ func putS15Fixed16(dst []byte, val float64) {
 	dst[3] = byte(v)
 }
 
-func putBEUint32(dst []byte, v uint32) {
-	dst[0] = byte(v >> 24)
-	dst[1] = byte(v >> 16)
-	dst[2] = byte(v >> 8)
-	dst[3] = byte(v)
-}
-
 func makeXYZTag(x, y, z float64) []byte {
 	// 'XYZ ' type: sig(4) + reserved(4) + XYZ values(12) = 20 bytes
 	data := make([]byte, 20)

@@ -389,16 +389,3 @@ func splitFields(s string) []string {
 	}
 	return fields
 }
-
-// trimSpace trims leading and trailing whitespace from a string.
-func trimSpace(s string) string {
-	start := 0
-	for start < len(s) && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	end := len(s)
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
-}
