@@ -418,19 +418,26 @@ func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects
 	return flush()
 }
 
-// Resolve follows an IndirectRef to its value. Returns the object
-// unchanged if it is not an IndirectRef. Returns nil if the reference
-// target does not exist.
+// Resolve follows an IndirectRef to its value, iterating through chains of
+// references (a legal indirect object whose value is itself a reference).
+// Returns the object unchanged if it is not an IndirectRef, and nil if any
+// target in the chain does not exist or the chain cycles.
 func (d *Document) Resolve(obj Object) Object {
-	ref, ok := obj.(IndirectRef)
-	if !ok {
-		return obj
+	// A bounded hop count doubles as the cycle guard without allocating a
+	// visited set on this hot path; real files chain a handful of hops at
+	// most, so exceeding the bound means a reference cycle or garbage.
+	for hops := 0; hops < 64; hops++ {
+		ref, ok := obj.(IndirectRef)
+		if !ok {
+			return obj
+		}
+		iobj, exists := d.Objects[ref.Number]
+		if !exists {
+			return nil
+		}
+		obj = iobj.Value
 	}
-	iobj, exists := d.Objects[ref.Number]
-	if !exists {
-		return nil
-	}
-	return iobj.Value
+	return nil
 }
 
 // ResolveDict resolves obj and type-asserts to *Dictionary.

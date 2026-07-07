@@ -431,8 +431,6 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 
 	var errs []ValidationError
 	var pdfaIntentCount int
-	var firstPdfaProfile Object
-	_ = firstPdfaProfile
 
 	for i, elem := range arr {
 		dict := doc.ResolveDict(elem)
@@ -468,10 +466,6 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		// For PDF/A, at least one OutputIntent must have /S = /GTS_PDFA1
 		if sName == "GTS_PDFA1" {
 			pdfaIntentCount++
-			profRef := dict.Get("DestOutputProfile")
-			if firstPdfaProfile == nil {
-				firstPdfaProfile = profRef
-			}
 		}
 
 		// /DestOutputProfileRef is not allowed in PDF/A
@@ -750,11 +744,6 @@ func checkPermsDict(doc *Document, level PDFALevel) []ValidationError {
 	}
 	permsDict := doc.ResolveDict(permsRef)
 	if permsDict == nil {
-		if d, ok := permsRef.(*Dictionary); ok {
-			permsDict = d
-		}
-	}
-	if permsDict == nil {
 		return nil
 	}
 
@@ -1027,12 +1016,7 @@ func collectFontsFromResources(doc *Document, pageOrPages *Dictionary, fonts map
 	}
 	res := doc.ResolveDict(resRef)
 	if res == nil {
-		if d, ok := resRef.(*Dictionary); ok {
-			res = d
-		}
-		if res == nil {
-			return
-		}
+		return
 	}
 
 	fontDictRef := res.Get("Font")
@@ -1041,12 +1025,7 @@ func collectFontsFromResources(doc *Document, pageOrPages *Dictionary, fonts map
 	}
 	fontDict := doc.ResolveDict(fontDictRef)
 	if fontDict == nil {
-		if d, ok := fontDictRef.(*Dictionary); ok {
-			fontDict = d
-		}
-		if fontDict == nil {
-			return
-		}
+		return
 	}
 
 	for _, fontRef := range fontDict.Values {
@@ -1056,11 +1035,6 @@ func collectFontsFromResources(doc *Document, pageOrPages *Dictionary, fonts map
 		}
 
 		fd := doc.ResolveDict(fontRef)
-		if fd == nil {
-			if d, ok := fontRef.(*Dictionary); ok {
-				fd = d
-			}
-		}
 		if fd == nil {
 			continue
 		}
@@ -1111,6 +1085,38 @@ func init() {
 	}
 }
 
+// annotOccurrence is one annotation dictionary paired with the object number
+// used for error attribution: the annotation's own number, or the owning
+// page's number when the annotation is a direct dictionary inside /Annots.
+type annotOccurrence struct {
+	dict *Dictionary
+	num  int
+}
+
+// collectDirectAnnotations returns annotations written as direct dictionaries
+// inside page /Annots arrays. These are not top-level objects, so the flat
+// doc.Objects scans the annotation checks start from can never see them
+// (audit A9); every annotation check runs over this list as well.
+func collectDirectAnnotations(doc *Document) []annotOccurrence {
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	var out []annotOccurrence
+	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+		annots, ok := doc.Resolve(page.dict.Get("Annots")).(Array)
+		if !ok {
+			continue
+		}
+		for _, el := range annots {
+			if dict, ok := el.(*Dictionary); ok {
+				out = append(out, annotOccurrence{dict: dict, num: page.objNum})
+			}
+		}
+	}
+	return out
+}
+
 func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 	allowed, ok := allowedAnnotSubtypes[level]
 	if !ok {
@@ -1118,18 +1124,10 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok {
-			continue
-		}
-		if !isAnnotation(dict) {
-			continue
-		}
-
+	check := func(dict *Dictionary, num int) {
 		st, ok := dict.Get("Subtype").(Name)
 		if !ok {
-			continue
+			return
 		}
 		if !allowed[st] {
 			errs = append(errs, ValidationError{
@@ -1140,6 +1138,14 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 	}
+	for num, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
+			check(dict, num)
+		}
+	}
+	for _, a := range collectDirectAnnotations(doc) {
+		check(a.dict, a.num)
+	}
 	return errs
 }
 
@@ -1147,19 +1153,11 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 // Hidden/Invisible/ToggleNoView/NoView clear.
 func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok {
-			continue
-		}
-		if !isAnnotation(dict) {
-			continue
-		}
-
+	check := func(dict *Dictionary, num int) {
 		// Popup annotations are exempt from F requirement
 		st, _ := dict.Get("Subtype").(Name)
 		if st == "Popup" {
-			continue
+			return
 		}
 
 		fObj := dict.Get("F")
@@ -1170,11 +1168,11 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 				Message: "annotation must have /F (flags)",
 				Object:  num,
 			})
-			continue
+			return
 		}
 		flags, ok := fObj.(Integer)
 		if !ok {
-			continue
+			return
 		}
 
 		const (
@@ -1226,31 +1224,31 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 	}
+	for num, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
+			check(dict, num)
+		}
+	}
+	for _, a := range collectDirectAnnotations(doc) {
+		check(a.dict, a.num)
+	}
 	return errs
 }
 
 // Rule 6.3.3-1: Annotations need AP except Popup, Link, Projection, and zero-area rects.
 func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok {
-			continue
-		}
-		if !isAnnotation(dict) {
-			continue
-		}
-
+	check := func(dict *Dictionary, num int) {
 		st, _ := dict.Get("Subtype").(Name)
 
 		// Exempt subtypes
 		if st == "Popup" || st == "Link" || st == "Projection" {
-			continue
+			return
 		}
 
 		// Exempt zero-area rectangles
 		if isZeroAreaRect(dict.Get("Rect")) {
-			continue
+			return
 		}
 
 		ap := dict.Get("AP")
@@ -1261,17 +1259,12 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 				Message: "annotation must have /AP (appearance dictionary)",
 				Object:  num,
 			})
-			continue
+			return
 		}
 
 		apDict := doc.ResolveDict(ap)
 		if apDict == nil {
-			if d, ok := ap.(*Dictionary); ok {
-				apDict = d
-			}
-		}
-		if apDict == nil {
-			continue
+			return
 		}
 
 		if apDict.Get("N") == nil {
@@ -1282,6 +1275,14 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 				Object:  num,
 			})
 		}
+	}
+	for num, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
+			check(dict, num)
+		}
+	}
+	for _, a := range collectDirectAnnotations(doc) {
+		check(a.dict, a.num)
 	}
 	return errs
 }
@@ -1311,14 +1312,10 @@ func isZeroAreaRect(obj Object) bool {
 // Rule 6.4.1-1: Widget annotation cannot contain A key.
 func checkWidgetNoAction(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok {
-			continue
-		}
+	check := func(dict *Dictionary, num int) {
 		st, _ := dict.Get("Subtype").(Name)
 		if st != "Widget" {
-			continue
+			return
 		}
 		if dict.Get("A") != nil {
 			errs = append(errs, ValidationError{
@@ -1328,6 +1325,14 @@ func checkWidgetNoAction(doc *Document, level PDFALevel) []ValidationError {
 				Object:  num,
 			})
 		}
+	}
+	for num, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok {
+			check(dict, num)
+		}
+	}
+	for _, a := range collectDirectAnnotations(doc) {
+		check(a.dict, a.num)
 	}
 	return errs
 }
@@ -1343,11 +1348,6 @@ func checkNoXFA(doc *Document, level PDFALevel) []ValidationError {
 		return nil
 	}
 	af := doc.ResolveDict(afRef)
-	if af == nil {
-		if d, ok := afRef.(*Dictionary); ok {
-			af = d
-		}
-	}
 	if af == nil {
 		return nil
 	}
@@ -1372,11 +1372,6 @@ func checkNeedAppearances(doc *Document, level PDFALevel) []ValidationError {
 		return nil
 	}
 	af := doc.ResolveDict(afRef)
-	if af == nil {
-		if d, ok := afRef.(*Dictionary); ok {
-			af = d
-		}
-	}
 	if af == nil {
 		return nil
 	}
@@ -1478,17 +1473,21 @@ func checkNoForbiddenActions(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 
+	// Annotations written as direct dictionaries inside /Annots are invisible
+	// to the object scan above. Check their direct /A actions explicitly (an
+	// indirect /A resolves to a top-level object the scan already covers).
+	for _, a := range collectDirectAnnotations(doc) {
+		if actionDict, ok := a.dict.Get("A").(*Dictionary); ok {
+			errs = append(errs, checkActionObject(doc, actionDict, a.num, level)...)
+		}
+	}
+
 	return errs
 }
 
 func checkActionObject(doc *Document, ref Object, objNum int, level PDFALevel) []ValidationError {
 	// ref might be an action dict or an array (for OpenAction destination)
 	actionDict := doc.ResolveDict(ref)
-	if actionDict == nil {
-		if d, ok := ref.(*Dictionary); ok {
-			actionDict = d
-		}
-	}
 	if actionDict == nil {
 		return nil // might be a destination array, not an action
 	}
@@ -1519,22 +1518,14 @@ func checkNamedActions(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok {
-			continue
-		}
+	check := func(dict *Dictionary, num int) {
 		s, _ := dict.Get("S").(Name)
 		if s != "Named" {
-			continue
+			return
 		}
-		n := dict.Get("N")
-		if n == nil {
-			continue
-		}
-		nName, ok := n.(Name)
+		nName, ok := dict.Get("N").(Name)
 		if !ok {
-			continue
+			return
 		}
 		if !allowedNames[string(nName)] {
 			errs = append(errs, ValidationError{
@@ -1543,6 +1534,18 @@ func checkNamedActions(doc *Document, level PDFALevel) []ValidationError {
 				Message: fmt.Sprintf("named action /%s not allowed (only NextPage, PrevPage, FirstPage, LastPage)", nName),
 				Object:  num,
 			})
+		}
+	}
+	for num, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok {
+			check(dict, num)
+		}
+	}
+	// Direct annotations may carry direct action dictionaries that never
+	// appear as top-level objects (an indirect /A is already covered above).
+	for _, a := range collectDirectAnnotations(doc) {
+		if actionDict, ok := a.dict.Get("A").(*Dictionary); ok {
+			check(actionDict, a.num)
 		}
 	}
 	return errs
@@ -1558,12 +1561,7 @@ func checkWidgetAA(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok {
-			continue
-		}
-
+	check := func(dict *Dictionary, num int) {
 		isWidgetOrField := false
 		if st, ok := dict.Get("Subtype").(Name); ok && st == "Widget" {
 			isWidgetOrField = true
@@ -1580,6 +1578,14 @@ func checkWidgetAA(doc *Document, level PDFALevel) []ValidationError {
 				Object:  num,
 			})
 		}
+	}
+	for num, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok {
+			check(dict, num)
+		}
+	}
+	for _, a := range collectDirectAnnotations(doc) {
+		check(a.dict, a.num)
 	}
 	return errs
 }
@@ -1752,11 +1758,6 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 			}
 			groupDict := doc.ResolveDict(groupRef)
 			if groupDict == nil {
-				if d, ok := groupRef.(*Dictionary); ok {
-					groupDict = d
-				}
-			}
-			if groupDict == nil {
 				continue
 			}
 			s, _ := groupDict.Get("S").(Name)
@@ -1848,11 +1849,6 @@ func collectAllExtGState(doc *Document) []extGStateEntry {
 		}
 		gsDict := doc.ResolveDict(gsRef)
 		if gsDict == nil {
-			if d, ok := gsRef.(*Dictionary); ok {
-				gsDict = d
-			}
-		}
-		if gsDict == nil {
 			return
 		}
 		for _, val := range gsDict.Values {
@@ -1879,11 +1875,6 @@ func collectAllExtGState(doc *Document) []extGStateEntry {
 			resRef := v.Get("Resources")
 			if resRef != nil {
 				res := doc.ResolveDict(resRef)
-				if res == nil {
-					if d, ok := resRef.(*Dictionary); ok {
-						res = d
-					}
-				}
 				if res != nil {
 					addFromResources(res, num)
 				}
@@ -1892,11 +1883,6 @@ func collectAllExtGState(doc *Document) []extGStateEntry {
 			resRef := v.Dict.Get("Resources")
 			if resRef != nil {
 				res := doc.ResolveDict(resRef)
-				if res == nil {
-					if d, ok := resRef.(*Dictionary); ok {
-						res = d
-					}
-				}
 				if res != nil {
 					addFromResources(res, num)
 				}
@@ -2192,11 +2178,6 @@ func isValidBlendMode(bm Name) bool {
 func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALevel, errs *[]ValidationError) {
 	htDict := doc.ResolveDict(htRef)
 	if htDict == nil {
-		if d, ok := htRef.(*Dictionary); ok {
-			htDict = d
-		}
-	}
-	if htDict == nil {
 		return
 	}
 
@@ -2482,11 +2463,6 @@ func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError
 		}
 		groupDict := doc.ResolveDict(groupRef)
 		if groupDict == nil {
-			if d, ok := groupRef.(*Dictionary); ok {
-				groupDict = d
-			}
-		}
-		if groupDict == nil {
 			continue
 		}
 
@@ -2565,11 +2541,6 @@ func pageUsesTransparency(doc *Document, page *Dictionary) bool {
 	// A page with a transparency Group is itself a transparency feature
 	if groupRef := page.Get("Group"); groupRef != nil {
 		groupDict := doc.ResolveDict(groupRef)
-		if groupDict == nil {
-			if d, ok := groupRef.(*Dictionary); ok {
-				groupDict = d
-			}
-		}
 		if groupDict != nil {
 			s, _ := groupDict.Get("S").(Name)
 			if s == "Transparency" {
@@ -2624,11 +2595,6 @@ func pageUsesTransparency(doc *Document, page *Dictionary) bool {
 			continue
 		}
 		apDict := doc.ResolveDict(ap)
-		if apDict == nil {
-			if d, ok := ap.(*Dictionary); ok {
-				apDict = d
-			}
-		}
 		if apDict == nil {
 			continue
 		}
@@ -2692,11 +2658,6 @@ func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Di
 	}
 	res := doc.ResolveDict(resRef)
 	if res == nil {
-		if d, ok := resRef.(*Dictionary); ok {
-			res = d
-		}
-	}
-	if res == nil {
 		return false
 	}
 
@@ -2709,11 +2670,6 @@ func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Di
 	xobjRef := res.Get("XObject")
 	if xobjRef != nil {
 		xobjDict := doc.ResolveDict(xobjRef)
-		if xobjDict == nil {
-			if d, ok := xobjRef.(*Dictionary); ok {
-				xobjDict = d
-			}
-		}
 		if xobjDict != nil {
 			for _, val := range xobjDict.Values {
 				obj := doc.Resolve(val)
@@ -2752,11 +2708,6 @@ func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Di
 	fontRef := res.Get("Font")
 	if fontRef != nil {
 		fontDict := doc.ResolveDict(fontRef)
-		if fontDict == nil {
-			if d, ok := fontRef.(*Dictionary); ok {
-				fontDict = d
-			}
-		}
 		if fontDict != nil {
 			for _, val := range fontDict.Values {
 				fd := doc.ResolveDict(val)
@@ -2777,11 +2728,6 @@ func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Di
 	patRef := res.Get("Pattern")
 	if patRef != nil {
 		patDict := doc.ResolveDict(patRef)
-		if patDict == nil {
-			if d, ok := patRef.(*Dictionary); ok {
-				patDict = d
-			}
-		}
 		if patDict != nil {
 			for _, val := range patDict.Values {
 				obj := doc.Resolve(val)
@@ -2806,11 +2752,6 @@ func extGStateUsesTransparency(doc *Document, res *Dictionary) bool {
 		return false
 	}
 	gsDict := doc.ResolveDict(gsRef)
-	if gsDict == nil {
-		if d, ok := gsRef.(*Dictionary); ok {
-			gsDict = d
-		}
-	}
 	if gsDict == nil {
 		return false
 	}
@@ -2903,11 +2844,6 @@ func checkEmbeddedFiles(doc *Document, level PDFALevel) []ValidationError {
 	}
 	namesDict := doc.ResolveDict(namesRef)
 	if namesDict == nil {
-		if d, ok := namesRef.(*Dictionary); ok {
-			namesDict = d
-		}
-	}
-	if namesDict == nil {
 		return nil
 	}
 
@@ -2983,11 +2919,6 @@ func checkEmbeddedFileSpecs(doc *Document, level PDFALevel, catalog *Dictionary)
 			efDictRef := dict.Get("EF")
 			if efDictRef != nil {
 				efDict := doc.ResolveDict(efDictRef)
-				if efDict == nil {
-					if d, ok := efDictRef.(*Dictionary); ok {
-						efDict = d
-					}
-				}
 				if efDict != nil {
 					for _, val := range efDict.Values {
 						efStream := doc.Resolve(val)
@@ -3060,11 +2991,6 @@ func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
 
 	ocpDict := doc.ResolveDict(ocpRef)
 	if ocpDict == nil {
-		if d, ok := ocpRef.(*Dictionary); ok {
-			ocpDict = d
-		}
-	}
-	if ocpDict == nil {
 		return nil
 	}
 
@@ -3075,11 +3001,6 @@ func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
 		return errs
 	}
 	dDict := doc.ResolveDict(dRef)
-	if dDict == nil {
-		if d, ok := dRef.(*Dictionary); ok {
-			dDict = d
-		}
-	}
 	if dDict == nil {
 		return errs
 	}
@@ -3111,11 +3032,6 @@ func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
 	}
 	for _, cfgRef := range configs {
 		cfgDict := doc.ResolveDict(cfgRef)
-		if cfgDict == nil {
-			if d, ok := cfgRef.(*Dictionary); ok {
-				cfgDict = d
-			}
-		}
 		if cfgDict == nil {
 			continue
 		}
@@ -3336,6 +3252,21 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 func checkQNestingDepth(doc *Document, level PDFALevel, errs *[]ValidationError) {
 	const maxQDepth = 28
 
+	report := func(data []byte, objNum int) {
+		if d := qNestingMaxDepth(data); d > maxQDepth {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.1.7",
+				Level:   level,
+				Message: fmt.Sprintf("q/Q nesting depth %d exceeds maximum %d", d, maxQDepth),
+				Object:  objNum,
+			})
+		}
+	}
+
+	// Only page /Contents is measured: the limit is about runtime
+	// graphics-state nesting, and a form XObject's q/Q only nest when the
+	// form is actually invoked (veraPDF passes a depth-30 form that no
+	// content stream executes).
 	catalog := getCatalog(doc)
 	if catalog == nil {
 		return
@@ -3344,64 +3275,39 @@ func checkQNestingDepth(doc *Document, level PDFALevel, errs *[]ValidationError)
 	if pagesRef == nil {
 		return
 	}
-
-	pages := collectPages(doc, pagesRef)
-	for _, page := range pages {
+	for _, page := range collectPages(doc, pagesRef) {
 		contentsRef := page.dict.Get("Contents")
 		if contentsRef == nil {
 			continue
 		}
-		data := getContentStreamData(doc, contentsRef)
-		if data == nil {
-			continue
-		}
-		depth := 0
-		maxDepth := 0
-		for i := 0; i < len(data); i++ {
-			// Skip whitespace
-			if data[i] <= ' ' {
-				continue
-			}
-			// Check for 'q' or 'Q' operators (single character followed by whitespace/EOL or EOF)
-			if data[i] == 'q' && (i+1 >= len(data) || data[i+1] <= ' ' || data[i+1] == '%') {
-				// Check it's not part of a longer keyword
-				if i == 0 || data[i-1] <= ' ' {
-					depth++
-					if depth > maxDepth {
-						maxDepth = depth
-					}
-				} else {
-					// Skip to end of token
-					for i < len(data) && data[i] > ' ' {
-						i++
-					}
-				}
-			} else if data[i] == 'Q' && (i+1 >= len(data) || data[i+1] <= ' ' || data[i+1] == '%') {
-				if i == 0 || data[i-1] <= ' ' {
-					if depth > 0 {
-						depth--
-					}
-				} else {
-					for i < len(data) && data[i] > ' ' {
-						i++
-					}
-				}
-			} else {
-				// Skip to end of token
-				for i < len(data) && data[i] > ' ' {
-					i++
-				}
-			}
-		}
-		if maxDepth > maxQDepth {
-			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
-				Level:   level,
-				Message: fmt.Sprintf("q/Q nesting depth %d exceeds maximum %d", maxDepth, maxQDepth),
-				Object:  page.objNum,
-			})
+		if data := getContentStreamData(doc, contentsRef); data != nil {
+			report(data, page.objNum)
 		}
 	}
+}
+
+// qNestingMaxDepth computes the maximum q/Q nesting depth of a decoded
+// content stream using a real operator tokenizer, so 'q' bytes inside string
+// literals, comments, names, or inline-image binary data do not count.
+func qNestingMaxDepth(data []byte) int {
+	depth, maxDepth := 0, 0
+	forEachContentOperator(data, func(op []byte) {
+		if len(op) != 1 {
+			return
+		}
+		switch op[0] {
+		case 'q':
+			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+		case 'Q':
+			if depth > 0 {
+				depth--
+			}
+		}
+	})
+	return maxDepth
 }
 
 // getContentStreamData extracts and concatenates content stream data.
@@ -3622,11 +3528,6 @@ func getDefaultColorSpaces(doc *Document, page *Dictionary) (hasRGB, hasCMYK, ha
 	}
 	csDict := doc.ResolveDict(csRef)
 	if csDict == nil {
-		if d, ok := csRef.(*Dictionary); ok {
-			csDict = d
-		}
-	}
-	if csDict == nil {
 		return
 	}
 	for _, key := range csDict.Keys {
@@ -3652,11 +3553,6 @@ func getGroupCSCoverage(doc *Document, page *Dictionary) (hasRGB, hasCMYK, hasGr
 		return
 	}
 	groupDict := doc.ResolveDict(groupRef)
-	if groupDict == nil {
-		if d, ok := groupRef.(*Dictionary); ok {
-			groupDict = d
-		}
-	}
 	if groupDict == nil {
 		return
 	}
@@ -3712,13 +3608,7 @@ func resolveResources(doc *Document, page *Dictionary) *Dictionary {
 	if resRef == nil {
 		return nil
 	}
-	res := doc.ResolveDict(resRef)
-	if res == nil {
-		if d, ok := resRef.(*Dictionary); ok {
-			return d
-		}
-	}
-	return res
+	return doc.ResolveDict(resRef)
 }
 
 // scanPageForDeviceCS checks if a page uses device color spaces.
@@ -3742,11 +3632,6 @@ func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, us
 					continue
 				}
 				apDict := doc.ResolveDict(ap)
-				if apDict == nil {
-					if d, ok := ap.(*Dictionary); ok {
-						apDict = d
-					}
-				}
 				if apDict == nil {
 					continue
 				}
@@ -3774,11 +3659,6 @@ func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, us
 	// Check transparency group CS on page itself
 	if groupRef := page.Get("Group"); groupRef != nil {
 		groupDict := doc.ResolveDict(groupRef)
-		if groupDict == nil {
-			if d, ok := groupRef.(*Dictionary); ok {
-				groupDict = d
-			}
-		}
 		if groupDict != nil {
 			checkCSForDevice(doc, groupDict.Get("CS"), &usesRGB, &usesCMYK, &usesGray)
 		}
@@ -3810,11 +3690,6 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 	csRef := res.Get("ColorSpace")
 	if csRef != nil {
 		csDict := doc.ResolveDict(csRef)
-		if csDict == nil {
-			if d, ok := csRef.(*Dictionary); ok {
-				csDict = d
-			}
-		}
 		if csDict != nil {
 			for _, val := range csDict.Values {
 				checkCSForDevice(doc, val, usesRGB, usesCMYK, usesGray)
@@ -3826,11 +3701,6 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 	xobjRef := res.Get("XObject")
 	if xobjRef != nil {
 		xobjDict := doc.ResolveDict(xobjRef)
-		if xobjDict == nil {
-			if d, ok := xobjRef.(*Dictionary); ok {
-				xobjDict = d
-			}
-		}
 		if xobjDict != nil {
 			for _, val := range xobjDict.Values {
 				resolved := doc.Resolve(val)
@@ -3848,11 +3718,6 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 					// Check transparency group CS
 					if groupRef := stream.Dict.Get("Group"); groupRef != nil {
 						groupDict := doc.ResolveDict(groupRef)
-						if groupDict == nil {
-							if d, ok := groupRef.(*Dictionary); ok {
-								groupDict = d
-							}
-						}
 						if groupDict != nil {
 							// Group /CS being a device CS is itself device usage
 							checkCSForDevice(doc, groupDict.Get("CS"), &formRGB, &formCMYK, &formGray)
@@ -3887,11 +3752,6 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 	shadingRef := res.Get("Shading")
 	if shadingRef != nil {
 		shadingDict := doc.ResolveDict(shadingRef)
-		if shadingDict == nil {
-			if d, ok := shadingRef.(*Dictionary); ok {
-				shadingDict = d
-			}
-		}
 		if shadingDict != nil {
 			for _, val := range shadingDict.Values {
 				sd := doc.ResolveDict(val)
@@ -3911,11 +3771,6 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 	patRef := res.Get("Pattern")
 	if patRef != nil {
 		patDict := doc.ResolveDict(patRef)
-		if patDict == nil {
-			if d, ok := patRef.(*Dictionary); ok {
-				patDict = d
-			}
-		}
 		if patDict != nil {
 			for _, val := range patDict.Values {
 				obj := doc.Resolve(val)
@@ -3931,11 +3786,6 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 	fontRef := res.Get("Font")
 	if fontRef != nil {
 		fontDict := doc.ResolveDict(fontRef)
-		if fontDict == nil {
-			if d, ok := fontRef.(*Dictionary); ok {
-				fontDict = d
-			}
-		}
 		if fontDict != nil {
 			for _, val := range fontDict.Values {
 				fd := doc.ResolveDict(val)
@@ -3949,11 +3799,6 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 					// Also scan CharProc streams
 					cpRef := fd.Get("CharProcs")
 					cpDict := doc.ResolveDict(cpRef)
-					if cpDict == nil {
-						if d, ok := cpRef.(*Dictionary); ok {
-							cpDict = d
-						}
-					}
 					if cpDict != nil {
 						for _, cpVal := range cpDict.Values {
 							cpObj := doc.Resolve(cpVal)
@@ -4349,6 +4194,144 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 	return
 }
 
+// forEachContentOperator tokenizes a decoded content stream and calls fn for
+// each operator-position token (anything that is not a string, hex string,
+// dictionary marker, array/procedure delimiter, comment, or name). String
+// literals, comments, and inline-image binary data (BI ... ID <binary> EI)
+// are skipped, so operator bytes occurring inside them are never reported.
+func forEachContentOperator(data []byte, fn func(op []byte)) {
+	n := len(data)
+	i := 0
+	for i < n {
+		for i < n && isContentWS(data[i]) {
+			i++
+		}
+		if i >= n {
+			return
+		}
+		switch b := data[i]; {
+		case b == '%': // comment to end of line
+			for i < n && data[i] != '\n' && data[i] != '\r' {
+				i++
+			}
+		case b == '(': // string literal with escapes and balanced parens
+			depth := 1
+			i++
+			for i < n && depth > 0 {
+				switch data[i] {
+				case '\\':
+					i++ // skip escaped char
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+				i++
+			}
+		case b == '<':
+			i++
+			if i < n && data[i] == '<' {
+				i++ // <<
+			} else { // hex string
+				for i < n && data[i] != '>' {
+					i++
+				}
+				if i < n {
+					i++
+				}
+			}
+		case b == '>':
+			i++
+			if i < n && data[i] == '>' {
+				i++
+			}
+		case b == '[' || b == ']' || b == '{' || b == '}':
+			i++
+		case b == '/': // name: skip
+			i++
+			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+				i++
+			}
+		default:
+			start := i
+			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+				i++
+				if i-start > 256 { // cap runaway binary tokens
+					break
+				}
+			}
+			tok := data[start:i]
+			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
+				skipInlineImage(data, &i)
+				continue
+			}
+			fn(tok)
+		}
+	}
+}
+
+// skipInlineImage advances *pos past an inline image: the parameter
+// dictionary tokens up to ID, then binary data until a whitespace-delimited
+// EI token.
+func skipInlineImage(data []byte, pos *int) {
+	n := len(data)
+	i := *pos
+	// Scan tokens until the ID keyword that starts the binary section.
+	for i < n {
+		for i < n && isContentWS(data[i]) {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		if data[i] == 'I' && i+1 < n && data[i+1] == 'D' && (i+2 >= n || isContentWS(data[i+2])) {
+			i += 2
+			if i < n && isContentWS(data[i]) {
+				i++ // single whitespace after ID
+			}
+			break
+		}
+		prev := i
+		if isContentDelim(data[i]) {
+			i++
+			if data[prev] == '(' { // string value inside the param dict
+				depth := 1
+				for i < n && depth > 0 {
+					switch data[i] {
+					case '\\':
+						i++
+					case '(':
+						depth++
+					case ')':
+						depth--
+					}
+					i++
+				}
+			}
+		} else {
+			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+				i++
+			}
+		}
+		if i == prev {
+			i++
+		}
+	}
+	// Skip binary data until EI at a token boundary.
+	for i < n {
+		if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
+			atBoundary := i == 0 || isContentWS(data[i-1])
+			endBoundary := i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2])
+			if atBoundary && endBoundary {
+				i += 2
+				break
+			}
+		}
+		i++
+	}
+	*pos = i
+}
+
 func isContentWS(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\x00' || b == '\x0c'
 }
@@ -4460,7 +4443,7 @@ func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 
 	// Track tint transform references by colorant name for consistency check
-	tintTransforms := make(map[Name]int) // colorant name → first seen tint transform obj num
+	tintTransforms := make(map[Name]sepColorantSeen) // colorant name → first seen definition
 
 	// Scan all objects for color space arrays used in Resources
 	for num, iobj := range doc.Objects {
@@ -4471,6 +4454,14 @@ func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
 		if isDict {
 			checkDictForSepDeviceN(doc, dict, num, level, &errs)
 			collectTintTransforms(doc, dict, tintTransforms, num, level, &errs)
+			// A direct /Resources sub-dictionary (the common case on pages)
+			// is not a top-level object, so this scan would never visit its
+			// /ColorSpace entries; descend explicitly. Indirect Resources
+			// are separate objects and are visited by the loop itself.
+			if resDict, ok := dict.Get("Resources").(*Dictionary); ok {
+				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
+				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
+			}
 		}
 		// Check stream dict (e.g., Form XObjects, Image XObjects)
 		if isStream {
@@ -4478,22 +4469,13 @@ func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
 			if csObj != nil {
 				checkColorSpaceValue(doc, csObj, num, level, &errs)
 			}
-			// Also check Resources in Form XObjects
-			resRef := stream.Dict.Get("Resources")
-			if resRef != nil {
-				resDict := doc.ResolveDict(resRef)
-				if resDict == nil {
-					if d, ok := resRef.(*Dictionary); ok {
-						resDict = d
-					}
-				}
-				if resDict != nil {
-					checkDictForSepDeviceN(doc, resDict, num, level, &errs)
-					collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
-				}
+			// Also check direct Resources in Form XObjects (indirect ones
+			// are visited as top-level objects).
+			if resDict, ok := stream.Dict.Get("Resources").(*Dictionary); ok {
+				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
+				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
 		}
-		_ = dict
 	}
 
 	return errs
@@ -4501,17 +4483,19 @@ func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
 
 // collectTintTransforms tracks Separation color spaces by colorant name
 // and flags inconsistent tint transforms for the same colorant name.
-func collectTintTransforms(doc *Document, dict *Dictionary, tintTransforms map[Name]int, objNum int, level PDFALevel, errs *[]ValidationError) {
+// sepColorantSeen records the first Separation definition seen for a
+// colorant name, for the same-tint-transform consistency rule.
+type sepColorantSeen struct {
+	objNum int
+	tint   Object
+}
+
+func collectTintTransforms(doc *Document, dict *Dictionary, tintTransforms map[Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
 	csRef := dict.Get("ColorSpace")
 	if csRef == nil {
 		return
 	}
 	csDict := doc.ResolveDict(csRef)
-	if csDict == nil {
-		if d, ok := csRef.(*Dictionary); ok {
-			csDict = d
-		}
-	}
 	if csDict == nil {
 		return
 	}
@@ -4529,22 +4513,28 @@ func collectTintTransforms(doc *Document, dict *Dictionary, tintTransforms map[N
 		if !ok {
 			continue
 		}
-		// Get the tint transform reference (object number)
 		tintRef, isRef := arr[3].(IndirectRef)
 		if !isRef {
 			continue
 		}
-		if prevNum, exists := tintTransforms[colorantName]; exists {
-			if prevNum != tintRef.Number {
-				*errs = append(*errs, ValidationError{
-					Rule:    "6.2.4",
-					Level:   level,
-					Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", colorantName, prevNum, tintRef.Number),
-					Object:  objNum,
-				})
+		if prev, exists := tintTransforms[colorantName]; exists {
+			if prev.objNum == tintRef.Number {
+				continue
 			}
+			// Different objects may still hold identical functions, which
+			// is conformant: the rule requires the SAME tint transform, and
+			// veraPDF accepts equal-by-content duplicates.
+			if Equal(doc.Resolve(prev.tint), doc.Resolve(tintRef)) {
+				continue
+			}
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", colorantName, prev.objNum, tintRef.Number),
+				Object:  objNum,
+			})
 		} else {
-			tintTransforms[colorantName] = tintRef.Number
+			tintTransforms[colorantName] = sepColorantSeen{objNum: tintRef.Number, tint: tintRef}
 		}
 	}
 }
@@ -4555,11 +4545,6 @@ func checkDictForSepDeviceN(doc *Document, dict *Dictionary, objNum int, level P
 		return
 	}
 	csDict := doc.ResolveDict(csRef)
-	if csDict == nil {
-		if d, ok := csRef.(*Dictionary); ok {
-			csDict = d
-		}
-	}
 	if csDict == nil {
 		return
 	}
@@ -4723,14 +4708,31 @@ func checkAlternateCSSeen(doc *Document, altCS Object, objNum int, level PDFALev
 	if n, ok := resolved.(Name); ok {
 		switch n {
 		case "DeviceRGB", "DeviceCMYK", "DeviceGray":
-			// For PDF/A-1b: device alternates are always forbidden
+			// For PDF/A-1b: a device alternate follows the same rule as
+			// direct device color-space use — legal when a matching
+			// OutputIntent covers it (ISO 19005-1, 6.2.3.2), forbidden
+			// otherwise.
 			if level == PDFA1b {
-				*errs = append(*errs, ValidationError{
-					Rule:    "6.2.3",
-					Level:   level,
-					Message: fmt.Sprintf("Separation/DeviceN alternate color space must not be %s (must be CIE-based)", n),
-					Object:  objNum,
-				})
+				covered := false
+				if catalog := getCatalog(doc); catalog != nil {
+					hasRGB, hasCMYK, hasGray := getOutputIntentCoverage(doc, catalog)
+					switch n {
+					case "DeviceRGB":
+						covered = hasRGB
+					case "DeviceCMYK":
+						covered = hasCMYK
+					case "DeviceGray":
+						covered = hasGray || hasRGB || hasCMYK
+					}
+				}
+				if !covered {
+					*errs = append(*errs, ValidationError{
+						Rule:    "6.2.3",
+						Level:   level,
+						Message: fmt.Sprintf("Separation/DeviceN alternate color space %s requires a matching OutputIntent", n),
+						Object:  objNum,
+					})
+				}
 			}
 			// For 2b/3b/4: device alternates require OutputIntent coverage,
 			// which is checked by checkDeviceColorSpaces via checkCSForDevice.
