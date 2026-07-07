@@ -9,6 +9,12 @@ import (
 // NewPDFADocument creates a minimal valid PDF/A document for the given level.
 // The document has an empty page tree and passes ValidatePDFA.
 func NewPDFADocument(level PDFALevel) *Document {
+	return NewPDFADocumentWithInfo(level, "", "")
+}
+
+// NewPDFADocumentWithInfo is NewPDFADocument with the document title and
+// author embedded in the generated XMP metadata.
+func NewPDFADocumentWithInfo(level PDFALevel, title, author string) *Document {
 	version := pdfaVersion(level)
 
 	// Generate file ID
@@ -30,7 +36,7 @@ func NewPDFADocument(level PDFALevel) *Document {
 	pages.Set("Count", Integer(0))
 
 	// Object 3: Metadata stream (XMP, unfiltered)
-	xmpData := GenerateXMPMetadata(level, "", "")
+	xmpData := GenerateXMPMetadata(level, title, author)
 	metaStream := &Stream{
 		Dict: Dictionary{},
 		Data: xmpData,
@@ -186,6 +192,12 @@ func xmlEscape(s string) string {
 		case '\'':
 			result = append(result, []byte("&apos;")...)
 		default:
+			// Control characters other than tab/LF/CR are illegal in XML
+			// 1.0 even when escaped; passing them through produced
+			// malformed XMP. Drop them.
+			if b < 0x20 && b != '\t' && b != '\n' && b != '\r' {
+				continue
+			}
 			result = append(result, b)
 		}
 	}

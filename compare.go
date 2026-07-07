@@ -28,8 +28,10 @@ func Equal(a, b Object) bool {
 		case Integer:
 			return av == bv
 		case Real:
-			// Integer can equal Real if values match
-			return float64(av) == float64(bv)
+			// Cross-type numeric equality is deliberate (serializers may
+			// legally rewrite 1.0 as 1); it uses the same epsilon as
+			// Real-Real so the tolerance is consistent in every direction.
+			return realEqual(float64(av), float64(bv))
 		}
 		return false
 
@@ -38,7 +40,7 @@ func Equal(a, b Object) bool {
 		case Real:
 			return realEqual(float64(av), float64(bv))
 		case Integer:
-			return float64(av) == float64(bv)
+			return realEqual(float64(av), float64(bv))
 		}
 		return false
 
