@@ -1151,7 +1151,7 @@ const (
 	// Files the parser cannot read at all. All five are deliberately broken
 	// fail files: four with malformed stream keywords/lengths and one whose
 	// object stream holds corrupt zlib data.
-	corpusMaxParseErrors = 5
+	corpusMaxParseErrors = 0
 )
 
 func TestCorpus(t *testing.T) {

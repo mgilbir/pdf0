@@ -104,9 +104,14 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 		if !ok {
 			return fmt.Errorf("object stream %d is not a stream", containerNum)
 		}
+		// A corrupt object stream (e.g. undecodable data) makes only its own
+		// objects unavailable; recording it lets validation report the defect
+		// while the rest of the document is still parsed rather than aborting
+		// the whole read.
 		data, index, first, err := parseObjStmIndex(stream)
 		if err != nil {
-			return fmt.Errorf("object stream %d: %w", containerNum, err)
+			d.brokenObjStms = append(d.brokenObjStms, containerNum)
+			continue
 		}
 		for _, num := range objNums {
 			entry := table.Entries[num]
