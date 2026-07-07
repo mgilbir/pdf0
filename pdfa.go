@@ -117,7 +117,7 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		// Actions (6.6)
 		checkNoForbiddenActions,
 		checkNamedActions,
-		checkWidgetAA,
+		checkAnnotationAA,
 		// Metadata (6.7)
 		checkMetadataVersion,
 		// Transparency (PDFA-1b only)
@@ -492,7 +492,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 				if oiDict == nil {
 					continue
 				}
-				sName, _ := oiDict.Get("S").(Name)
+				sName, _ := resolveName(doc, oiDict.Get("S"))
 				if sName != "GTS_PDFA1" {
 					errsPageLevel = append(errsPageLevel, ValidationError{
 						Rule:    "6.2.3",
@@ -512,27 +512,27 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 
 	oiObj := doc.Resolve(oiRef)
 	if oiObj == nil {
-		return []ValidationError{{
+		return append(errsPageLevel, ValidationError{
 			Rule:    "6.2.3",
 			Level:   level,
 			Message: "/OutputIntents reference target not found",
-		}}
+		})
 	}
 
 	arr, ok := oiObj.(Array)
 	if !ok {
-		return []ValidationError{{
+		return append(errsPageLevel, ValidationError{
 			Rule:    "6.2.3",
 			Level:   level,
 			Message: "/OutputIntents must be an array",
-		}}
+		})
 	}
 
 	if len(arr) == 0 {
-		return nil // Empty OutputIntents array is OK; absence is also OK
+		return errsPageLevel // Empty OutputIntents array is OK; absence is also OK
 	}
 
-	var errs []ValidationError
+	errs := errsPageLevel
 
 	for i, elem := range arr {
 		dict := doc.ResolveDict(elem)
@@ -628,7 +628,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		if dict == nil {
 			continue
 		}
-		sName, _ := dict.Get("S").(Name)
+		sName, _ := resolveName(doc, dict.Get("S"))
 		if sName == "GTS_PDFA1" && dict.Get("DestOutputProfile") == nil {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.3",
@@ -1024,81 +1024,97 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 
+	// Fonts reached only through form XObjects, tiling patterns, or Type3
+	// glyph procedures never appear in the page-tree /Resources that
+	// collectFonts walks, so they would escape the embedding rule. Include the
+	// executed-content fonts too (audit C21), deduped by dictionary pointer.
+	checked := make(map[*Dictionary]bool, len(fonts))
 	for objNum, fontDict := range fonts {
+		checked[fontDict] = true
 		if exemptInvisible[fontDict] {
 			continue
 		}
-		subtype := fontDict.Get("Subtype")
-		subtypeName, _ := subtype.(Name)
-
-		// Type3 fonts define their glyphs with content streams, so they carry no
-		// font program to embed. Type0 (composite) fonts DO require embedding —
-		// via their descendant CIDFont's FontDescriptor, handled below.
-		if subtypeName == "Type3" {
+		errs = append(errs, checkOneFontEmbedded(doc, fontDict, objNum, level)...)
+	}
+	for fontDict := range usage {
+		if checked[fontDict] || exemptInvisible[fontDict] {
 			continue
 		}
-
-		fdRef := fontDict.Get("FontDescriptor")
-		if fdRef == nil {
-			// Composite fonts (Type0): check the descendant CIDFont's descriptor
-			dfRef := fontDict.Get("DescendantFonts")
-			if dfRef != nil {
-				dfObj := doc.Resolve(dfRef)
-				if dfArr, ok := dfObj.(Array); ok && len(dfArr) > 0 {
-					cidFont := doc.ResolveDict(dfArr[0])
-					if cidFont != nil {
-						fdRef = cidFont.Get("FontDescriptor")
-					}
-				}
-			}
-		}
-
-		if fdRef == nil {
-			errs = append(errs, ValidationError{
-				Rule:    "6.2.10",
-				Level:   level,
-				Message: "font must have a /FontDescriptor",
-				Object:  objNum,
-			})
-			continue
-		}
-
-		fd := doc.ResolveDict(fdRef)
-		if fd == nil {
-			errs = append(errs, ValidationError{
-				Rule:    "6.2.10",
-				Level:   level,
-				Message: "/FontDescriptor reference not found",
-				Object:  objNum,
-			})
-			continue
-		}
-
-		// The FontFile entry must resolve to an actual stream: the corpus
-		// fails a descriptor whose FontFile3 references a missing object.
-		hasEmbed := false
-		for _, key := range []Name{"FontFile", "FontFile2", "FontFile3"} {
-			if _, ok := doc.Resolve(fd.Get(key)).(*Stream); ok {
-				hasEmbed = true
-				break
-			}
-		}
-		if !hasEmbed {
-			baseFontObj := fontDict.Get("BaseFont")
-			baseFontName := ""
-			if bn, ok := baseFontObj.(Name); ok {
-				baseFontName = string(bn)
-			}
-			errs = append(errs, ValidationError{
-				Rule:    "6.2.10",
-				Level:   level,
-				Message: fmt.Sprintf("font %s must be embedded (no FontFile/FontFile2/FontFile3 in descriptor)", baseFontName),
-				Object:  objNum,
-			})
-		}
+		errs = append(errs, checkOneFontEmbedded(doc, fontDict, fontObjNum(doc, fontDict), level)...)
 	}
 
 	return errs
+}
+
+// fontObjNum returns the object number of a font dictionary, or 0 if it is a
+// direct dictionary with no indirect identity.
+func fontObjNum(doc *Document, fontDict *Dictionary) int {
+	for num, iobj := range doc.Objects {
+		if d, ok := iobj.Value.(*Dictionary); ok && d == fontDict {
+			return num
+		}
+	}
+	return 0
+}
+
+// checkOneFontEmbedded applies the 6.2.10 embedding rule to a single font
+// dictionary.
+func checkOneFontEmbedded(doc *Document, fontDict *Dictionary, objNum int, level PDFALevel) []ValidationError {
+	subtypeName, _ := fontDict.Get("Subtype").(Name)
+
+	// Type3 fonts define their glyphs with content streams, so they carry no
+	// font program to embed. Type0 (composite) fonts DO require embedding —
+	// via their descendant CIDFont's FontDescriptor, handled below.
+	if subtypeName == "Type3" {
+		return nil
+	}
+
+	fdRef := fontDict.Get("FontDescriptor")
+	if fdRef == nil {
+		// Composite fonts (Type0): check the descendant CIDFont's descriptor
+		if dfArr, ok := doc.Resolve(fontDict.Get("DescendantFonts")).(Array); ok && len(dfArr) > 0 {
+			if cidFont := doc.ResolveDict(dfArr[0]); cidFont != nil {
+				fdRef = cidFont.Get("FontDescriptor")
+			}
+		}
+	}
+
+	if fdRef == nil {
+		return []ValidationError{{
+			Rule:    "6.2.10",
+			Level:   level,
+			Message: "font must have a /FontDescriptor",
+			Object:  objNum,
+		}}
+	}
+
+	fd := doc.ResolveDict(fdRef)
+	if fd == nil {
+		return []ValidationError{{
+			Rule:    "6.2.10",
+			Level:   level,
+			Message: "/FontDescriptor reference not found",
+			Object:  objNum,
+		}}
+	}
+
+	// The FontFile entry must resolve to an actual stream: the corpus
+	// fails a descriptor whose FontFile3 references a missing object.
+	for _, key := range []Name{"FontFile", "FontFile2", "FontFile3"} {
+		if _, ok := doc.Resolve(fd.Get(key)).(*Stream); ok {
+			return nil
+		}
+	}
+	baseFontName := ""
+	if bn, ok := fontDict.Get("BaseFont").(Name); ok {
+		baseFontName = string(bn)
+	}
+	return []ValidationError{{
+		Rule:    "6.2.10",
+		Level:   level,
+		Message: fmt.Sprintf("font %s must be embedded (no FontFile/FontFile2/FontFile3 in descriptor)", baseFontName),
+		Object:  objNum,
+	}}
 }
 
 func collectFonts(doc *Document, pageTreeRef Object) map[int]*Dictionary {
@@ -1249,6 +1265,15 @@ func collectDirectAnnotations(doc *Document) []annotOccurrence {
 	return out
 }
 
+// resolveName resolves obj (following an indirect reference) and returns it as
+// a Name. Rules must resolve before type-asserting: a value placed behind an
+// indirect reference — e.g. /Subtype 12 0 R — would otherwise silently evade
+// the check (audit C12).
+func resolveName(doc *Document, obj Object) (Name, bool) {
+	n, ok := doc.Resolve(obj).(Name)
+	return n, ok
+}
+
 func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 	allowed, ok := allowedAnnotSubtypes[level]
 	if !ok {
@@ -1257,7 +1282,7 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 
 	var errs []ValidationError
 	check := func(dict *Dictionary, num int) {
-		st, ok := dict.Get("Subtype").(Name)
+		st, ok := resolveName(doc, dict.Get("Subtype"))
 		if !ok {
 			return
 		}
@@ -1302,7 +1327,7 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 			})
 			return
 		}
-		flags, ok := fObj.(Integer)
+		flags, ok := doc.Resolve(fObj).(Integer)
 		if !ok {
 			return
 		}
@@ -1702,11 +1727,11 @@ func checkNamedActions(doc *Document, level PDFALevel) []ValidationError {
 
 	var errs []ValidationError
 	check := func(dict *Dictionary, num int) {
-		s, _ := dict.Get("S").(Name)
+		s, _ := resolveName(doc, dict.Get("S"))
 		if s != "Named" {
 			return
 		}
-		nName, ok := dict.Get("N").(Name)
+		nName, ok := resolveName(doc, dict.Get("N"))
 		if !ok {
 			return
 		}
@@ -1738,32 +1763,26 @@ func checkNamedActions(doc *Document, level PDFALevel) []ValidationError {
 // For PDF/A-1b/2b/3b: no /AA on widgets or form fields.
 // For PDF/A-4: AA allowed on widgets/form fields (trigger events).
 // Non-widget AA (doc/page/annot) keys restricted to: E, X, D, U, Fo, Bl.
-func checkWidgetAA(doc *Document, level PDFALevel) []ValidationError {
+func checkAnnotationAA(doc *Document, level PDFALevel) []ValidationError {
 	if level == PDFA4 {
-		return nil // PDF/A-4 allows AA on widgets/form fields
+		return nil // PDF/A-4 gates trigger events per-event; see checkA4TriggerEvents
 	}
 
+	// ISO 19005-1 6.5.3 / 19005-2 6.3.3: an annotation dictionary shall not
+	// contain the AA key — for ANY annotation, not only widgets/form fields.
 	var errs []ValidationError
 	check := func(dict *Dictionary, num int) {
-		isWidgetOrField := false
-		if st, ok := dict.Get("Subtype").(Name); ok && st == "Widget" {
-			isWidgetOrField = true
-		}
-		if dict.Get("FT") != nil {
-			isWidgetOrField = true
-		}
-
-		if isWidgetOrField && dict.Get("AA") != nil {
+		if dict.Get("AA") != nil {
 			errs = append(errs, ValidationError{
 				Rule:    "6.6.3",
 				Level:   level,
-				Message: "widget annotation/form field must not have /AA",
+				Message: "annotation must not have /AA (additional-actions)",
 				Object:  num,
 			})
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok {
+		if dict, ok := iobj.Value.(*Dictionary); ok && (isAnnotation(dict) || isWidgetOrField(dict)) {
 			check(dict, num)
 		}
 	}
@@ -1771,6 +1790,16 @@ func checkWidgetAA(doc *Document, level PDFALevel) []ValidationError {
 		check(a.dict, a.num)
 	}
 	return errs
+}
+
+// isWidgetOrField reports whether dict is a widget annotation or an interactive
+// form field, which the /AA prohibition also covers and which need not carry
+// the /Rect that isAnnotation looks for.
+func isWidgetOrField(dict *Dictionary) bool {
+	if st, ok := dict.Get("Subtype").(Name); ok && st == "Widget" {
+		return true
+	}
+	return dict.Get("FT") != nil
 }
 
 // --- Metadata checks (6.7) ---
@@ -1952,6 +1981,17 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 					Object:  page.objNum,
 				})
 			}
+		}
+	}
+
+	// Image soft masks and form transparency groups are equally forbidden
+	// (ISO 19005-1 6.4). The ExtGState scan below only sees the /SMask
+	// graphics-state parameter, so walk page resources for the XObject-level
+	// signals too.
+	if catalog != nil {
+		seen := map[*Dictionary]bool{}
+		for _, page := range collectPages(doc, catalog.Get("Pages")) {
+			find1bTransparencyXObjects(doc, page.dict, level, seen, &errs)
 		}
 	}
 
@@ -2936,6 +2976,78 @@ func pageUsesTransparency(doc *Document, page *Dictionary) bool {
 		}
 	}
 	return false
+}
+
+// find1bTransparencyXObjects recursively scans a resource-bearing dictionary's
+// XObjects (and nested form/pattern/Type3 resources) for the transparency
+// signals PDF/A-1b forbids but the page-/Group and ExtGState scans miss: image
+// soft masks and form transparency groups. Unlike resourcesUseTransparency
+// (tuned for the 2b+ blending-group question, which treats a self-contained
+// form group as not propagating), presence alone is a violation here.
+func find1bTransparencyXObjects(doc *Document, container *Dictionary, level PDFALevel, seen map[*Dictionary]bool, errs *[]ValidationError) {
+	if seen[container] {
+		return
+	}
+	seen[container] = true
+
+	res := doc.ResolveDict(container.Get("Resources"))
+	if res == nil {
+		return
+	}
+
+	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
+		for i, val := range xobjDict.Values {
+			stream, ok := doc.Resolve(val).(*Stream)
+			if !ok {
+				continue
+			}
+			num := resolveObjNum(doc, val)
+			switch subtype, _ := stream.Dict.Get("Subtype").(Name); subtype {
+			case "Image":
+				if sm := stream.Dict.Get("SMask"); sm != nil {
+					if n, ok := sm.(Name); !ok || n != "None" {
+						*errs = append(*errs, ValidationError{
+							Rule:    "6.4",
+							Level:   level,
+							Message: "image XObject must not have /SMask (PDF/A-1b forbids transparency)",
+							Object:  num,
+						})
+					}
+				}
+			case "Form":
+				if g := doc.ResolveDict(stream.Dict.Get("Group")); g != nil {
+					if s, _ := g.Get("S").(Name); s == "Transparency" {
+						*errs = append(*errs, ValidationError{
+							Rule:    "6.4",
+							Level:   level,
+							Message: "form XObject must not have a /Group with /S /Transparency (PDF/A-1b forbids transparency)",
+							Object:  num,
+						})
+					}
+				}
+				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs)
+			}
+			_ = i
+		}
+	}
+
+	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
+		for _, val := range patDict.Values {
+			if stream, ok := doc.Resolve(val).(*Stream); ok {
+				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs)
+			}
+		}
+	}
+
+	if fontDict := doc.ResolveDict(res.Get("Font")); fontDict != nil {
+		for _, val := range fontDict.Values {
+			if fd := doc.ResolveDict(val); fd != nil {
+				if st, _ := fd.Get("Subtype").(Name); st == "Type3" {
+					find1bTransparencyXObjects(doc, fd, level, seen, errs)
+				}
+			}
+		}
+	}
 }
 
 func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Dictionary]bool) bool {
