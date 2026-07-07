@@ -24,6 +24,7 @@ func checkFileStructureBytes(doc *Document, level PDFALevel, raw []byte) []Valid
 	errs = append(errs, checkHexStringFormat(doc, level, raw)...)
 	errs = append(errs, checkStreamKeywordFormat(doc, level, raw)...)
 	errs = append(errs, checkInlineImageFilters(doc, level)...)
+	errs = append(errs, checkInlineImageIntent(doc, level)...)
 	return errs
 }
 
@@ -898,6 +899,99 @@ var inlineFilterNames = map[string]bool{
 }
 
 var inlineLZWNames = map[string]bool{"LZW": true, "LZWDecode": true}
+
+// checkInlineImageIntent verifies that an inline image /Intent entry, when
+// present, names a standard rendering intent (ISO 19005-2 6.2.6, -4 6.2.9;
+// ISO 32000-1 8.6.5.8).
+func checkInlineImageIntent(doc *Document, level PDFALevel) []ValidationError {
+	rule := "6.2.6"
+	if level == PDFA4 {
+		rule = "6.2.9"
+	} else if level == PDFA1b {
+		rule = "6.2.4"
+	}
+	var errs []ValidationError
+	seen := map[string]bool{}
+	for num, data := range collectContentStreamData(doc) {
+		for _, intent := range inlineImageIntents(data) {
+			if standardRenderingIntents[intent] {
+				continue
+			}
+			msg := "inline image /Intent uses a non-standard rendering intent"
+			if seen[msg] {
+				continue
+			}
+			seen[msg] = true
+			errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: num})
+		}
+	}
+	return errs
+}
+
+// inlineImageIntents extracts the /Intent value of every inline image.
+func inlineImageIntents(data []byte) []string {
+	var out []string
+	n := len(data)
+	i := 0
+	for i < n {
+		if data[i] == 'B' && i+1 < n && data[i+1] == 'I' &&
+			(i == 0 || isContentWS(data[i-1]) || isContentDelim(data[i-1])) &&
+			(i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2])) {
+			i += 2
+			if v := inlineImageDictValue(data, &i, "Intent"); v != "" {
+				out = append(out, v)
+			}
+			continue
+		}
+		i++
+	}
+	return out
+}
+
+// inlineImageDictValue reads the named key's name value from an inline image
+// parameter dictionary, advancing past ID.
+func inlineImageDictValue(data []byte, pos *int, key string) string {
+	n := len(data)
+	i := *pos
+	var pendingKey, value string
+	readName := func() string {
+		i++
+		start := i
+		for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			i++
+		}
+		return string(data[start:i])
+	}
+	for i < n {
+		switch b := data[i]; {
+		case isContentWS(b):
+			i++
+		case b == '/':
+			name := readName()
+			if pendingKey == key {
+				value = name
+				pendingKey = ""
+			} else {
+				pendingKey = name
+			}
+		case b == 'I' && i+1 < n && data[i+1] == 'D':
+			*pos = i + 2
+			skipInlineImage(data, pos)
+			return value
+		default:
+			start := i
+			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+				i++
+			}
+			if i == start {
+				i++ // delimiter or other single byte
+			}
+			pendingKey = ""
+		}
+	}
+	*pos = i
+	return value
+}
 
 // checkInlineImageFilters verifies that every inline image's /F (Filter)
 // entry uses only permitted filters and never LZW.
