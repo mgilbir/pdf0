@@ -132,21 +132,21 @@ func (p *Parser) ParseObject() (Object, error) {
 }
 
 // parseIntegerOrRef handles the ambiguity between integer, indirect ref, and indirect obj.
+// Look-ahead failures are real lexer errors and are propagated: the lexer only
+// returns an error for malformed input (clean end of input is TokenEOF), and
+// swallowing it here would silently drop the diagnostic while the lexer has
+// already advanced past the bad bytes.
 func (p *Parser) parseIntegerOrRef(tok Token) (Object, error) {
 	// Try to look ahead for "N G R" or "N G obj"
 	tok2, err := p.peekToken(1)
 	if err != nil {
-		// Can't look ahead, just return integer
-		p.consumeToken()
-		return p.toInteger(tok)
+		return nil, err
 	}
 
 	if tok2.Type == TokenInteger {
 		tok3, err := p.peekToken(2)
 		if err != nil {
-			// Can't look ahead further, return first integer
-			p.consumeToken()
-			return p.toInteger(tok)
+			return nil, err
 		}
 
 		if tok3.Type == TokenRef {
@@ -155,8 +155,14 @@ func (p *Parser) parseIntegerOrRef(tok Token) (Object, error) {
 			p.consumeToken() // consume second int
 			p.consumeToken() // consume R
 
-			num, _ := strconv.Atoi(string(tok.Value))
-			gen, _ := strconv.Atoi(string(tok2.Value))
+			num, err := p.toObjectNumber(tok)
+			if err != nil {
+				return nil, err
+			}
+			gen, err := p.toObjectNumber(tok2)
+			if err != nil {
+				return nil, err
+			}
 			return IndirectRef{Number: num, Generation: gen}, nil
 		}
 
@@ -177,6 +183,20 @@ func (p *Parser) toInteger(tok Token) (Integer, error) {
 		return 0, fmt.Errorf("invalid integer %q at offset %d: %w", tok.Value, tok.Offset, err)
 	}
 	return Integer(val), nil
+}
+
+// toObjectNumber parses an object or generation number, rejecting values that
+// overflow or are negative. Overflow was previously swallowed (strconv.Atoi
+// error dropped), yielding garbage references like Number=MaxInt64.
+func (p *Parser) toObjectNumber(tok Token) (int, error) {
+	val, err := strconv.Atoi(string(tok.Value))
+	if err != nil {
+		return 0, fmt.Errorf("invalid object number %q at offset %d: %w", tok.Value, tok.Offset, err)
+	}
+	if val < 0 {
+		return 0, fmt.Errorf("negative object number %d at offset %d", val, tok.Offset)
+	}
+	return val, nil
 }
 
 // parseArray parses a PDF array: [ obj1 obj2 ... ]
@@ -236,13 +256,16 @@ func (p *Parser) parseDictOrStream() (Object, error) {
 			return nil, fmt.Errorf("parsing dictionary value for key %s: %w", key, err)
 		}
 
+		// Duplicate keys are legal to tolerate but undefined by the spec;
+		// Set keeps the last occurrence, matching common reader behavior.
 		dict.Set(key, val)
 	}
 
-	// Check if followed by 'stream'
+	// Check if followed by 'stream'. A look-ahead failure is a real lexer
+	// error (clean end of input is TokenEOF, not an error).
 	tok, err := p.peekToken(0)
 	if err != nil {
-		return &dict, nil
+		return nil, err
 	}
 	if tok.Type == TokenStream {
 		return p.parseStream(dict)
@@ -298,14 +321,15 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 		copy(data, p.lexer.data[pos:endPos])
 		p.lexer.pos = endPos
 	} else {
-		// Search for endstream keyword
-		endstreamMarker := []byte("endstream")
-		searchStart := pos
-		idx := bytes.Index(p.lexer.data[searchStart:], endstreamMarker)
-		if idx < 0 {
+		// Search for the endstream keyword. A raw substring match is not
+		// enough: binary stream data can legitimately contain the bytes
+		// "endstream", so require a real keyword — preceded by whitespace
+		// (the spec mandates an EOL before it) and followed by a
+		// non-regular character or end of input.
+		endPos := findDelimitedKeyword(p.lexer.data, pos, "endstream")
+		if endPos < 0 {
 			return nil, fmt.Errorf("could not find endstream marker")
 		}
-		endPos := searchStart + int64(idx)
 		// Remove trailing EOL before endstream
 		dataEnd := endPos
 		if dataEnd > pos && p.lexer.data[dataEnd-1] == '\n' {
@@ -334,6 +358,29 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 	return &Stream{Dict: dict, Data: data}, nil
 }
 
+// findDelimitedKeyword returns the offset of the first occurrence of keyword
+// at or after start that stands alone as a token: preceded by whitespace (or
+// at start) and followed by a non-regular character or end of input. Returns
+// -1 if none exists.
+func findDelimitedKeyword(data []byte, start int64, keyword string) int64 {
+	marker := []byte(keyword)
+	for from := start; from < int64(len(data)); {
+		idx := bytes.Index(data[from:], marker)
+		if idx < 0 {
+			return -1
+		}
+		at := from + int64(idx)
+		end := at + int64(len(marker))
+		beforeOK := at == start || isWhitespace(data[at-1])
+		afterOK := end >= int64(len(data)) || !isRegular(data[end])
+		if beforeOK && afterOK {
+			return at
+		}
+		from = at + 1
+	}
+	return -1
+}
+
 // ParseIndirectObject parses an indirect object definition: N G obj ... endobj
 func (p *Parser) ParseIndirectObject() (*IndirectObject, error) {
 	numTok, err := p.nextToken()
@@ -343,7 +390,10 @@ func (p *Parser) ParseIndirectObject() (*IndirectObject, error) {
 	if numTok.Type != TokenInteger {
 		return nil, fmt.Errorf("expected integer for object number, got %v at offset %d", numTok.Type, numTok.Offset)
 	}
-	num, _ := strconv.Atoi(string(numTok.Value))
+	num, err := p.toObjectNumber(numTok)
+	if err != nil {
+		return nil, err
+	}
 
 	genTok, err := p.nextToken()
 	if err != nil {
@@ -352,7 +402,10 @@ func (p *Parser) ParseIndirectObject() (*IndirectObject, error) {
 	if genTok.Type != TokenInteger {
 		return nil, fmt.Errorf("expected integer for generation number, got %v at offset %d", genTok.Type, genTok.Offset)
 	}
-	gen, _ := strconv.Atoi(string(genTok.Value))
+	gen, err := p.toObjectNumber(genTok)
+	if err != nil {
+		return nil, err
+	}
 
 	objTok, err := p.nextToken()
 	if err != nil {

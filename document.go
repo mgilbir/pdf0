@@ -13,14 +13,27 @@ type Document struct {
 	Version string                  // e.g., "2.0"
 	Objects map[int]*IndirectObject // object number → object
 	Trailer Dictionary
+	// Encrypted reports whether the file carries an /Encrypt dictionary.
+	// Decryption is not implemented: the document structure is readable, but
+	// string and stream contents remain in their encrypted form. Write
+	// refuses such documents.
+	Encrypted bool
 }
 
 // Read parses a PDF document from the given data.
+//
+// Encrypted files are parsed structurally but not decrypted; see
+// Document.Encrypted.
 func Read(r io.ReaderAt, size int64) (*Document, error) {
 	data := make([]byte, size)
-	_, err := r.ReadAt(data, 0)
+	n, err := r.ReadAt(data, 0)
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("reading input: %w", err)
+	}
+	if int64(n) < size {
+		// Zero padding from a short read counts as PDF whitespace and would
+		// silently mask truncated input.
+		return nil, fmt.Errorf("short read: got %d of %d bytes", n, size)
 	}
 
 	doc := &Document{
@@ -41,6 +54,9 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 	}
 	// All byte offsets in the PDF are relative to the %PDF- header
 	xrefOffset += headerOffset
+	if xrefOffset < 0 || xrefOffset >= size {
+		return nil, fmt.Errorf("startxref offset %d outside file (size %d)", xrefOffset, size)
+	}
 
 	// 3. Parse xref sections, following the /Prev chain. Both traditional
 	// tables and xref streams can carry /Prev (incremental updates), and a
@@ -108,6 +124,8 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 
 	// 6. Drop file-structure artifacts so the document holds only content.
 	doc.normalizeStructure()
+
+	doc.Encrypted = doc.Trailer.Get("Encrypt") != nil
 
 	return doc, nil
 }
@@ -273,7 +291,16 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 }
 
 // Write serializes the document to the writer in PDF format.
+//
+// Encrypted documents are refused: their string and stream contents are
+// still in encrypted form (decryption is not implemented), so writing them
+// without the original cross-reference layout would produce a file no
+// reader could decrypt.
 func (d *Document) Write(w io.Writer) error {
+	if d.Encrypted || d.Trailer.Get("Encrypt") != nil {
+		return fmt.Errorf("writing encrypted documents is not supported")
+	}
+
 	s := NewSerializer(w)
 
 	// 1. Write header

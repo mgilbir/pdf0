@@ -87,11 +87,17 @@ func NewLexer(data []byte) *Lexer {
 }
 
 // NewLexerFromReaderAt creates a Lexer from an io.ReaderAt by reading all data.
+// A reader that yields fewer than size bytes is an error: the zero padding a
+// short read would leave behind counts as PDF whitespace, silently masking
+// truncated input.
 func NewLexerFromReaderAt(r io.ReaderAt, size int64) (*Lexer, error) {
 	data := make([]byte, size)
-	_, err := r.ReadAt(data, 0)
+	n, err := r.ReadAt(data, 0)
 	if err != nil && err != io.EOF {
 		return nil, fmt.Errorf("reading input: %w", err)
+	}
+	if int64(n) < size {
+		return nil, fmt.Errorf("short read: got %d of %d bytes", n, size)
 	}
 	return NewLexer(data), nil
 }
@@ -392,6 +398,11 @@ func (l *Lexer) scanName(offset int64) (Token, error) {
 			if err != nil {
 				return Token{}, fmt.Errorf("invalid hex escape in name at offset %d: %w", offset, err)
 			}
+			if hi<<4|lo == 0 {
+				// The spec forbids NUL in names (7.3.5): #00 has no valid
+				// meaning and is a common smuggling vector.
+				return Token{}, fmt.Errorf("name contains #00 (NUL) at offset %d", offset)
+			}
 			buf.WriteByte(hi<<4 | lo)
 		} else {
 			buf.WriteByte(b)
@@ -418,7 +429,9 @@ func (l *Lexer) scanNumber(offset int64) (Token, error) {
 		b := l.peek()
 		if b == '.' {
 			if isReal {
-				break // second dot, stop
+				// A second '.' would silently split "1.2.3" into two reals,
+				// changing element counts; it is a malformed number.
+				return Token{}, fmt.Errorf("malformed number with multiple '.' at offset %d", offset)
 			}
 			isReal = true
 			l.advance()
