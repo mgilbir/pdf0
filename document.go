@@ -22,6 +22,11 @@ type Document struct {
 	// valCache memoizes traversals for the duration of one validation run;
 	// see validationCache.
 	valCache *validationCache
+
+	// Offsets records the absolute byte offset of each uncompressed indirect
+	// object, for the byte-level file-structure checks. Objects materialised
+	// from object streams are absent.
+	Offsets map[int]int64
 }
 
 // Read parses a PDF document from the given data.
@@ -102,6 +107,7 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 	}
 
 	// 4. Parse all uncompressed objects from xref entries
+	doc.Offsets = make(map[int]int64)
 	lexer := NewLexer(data)
 	for num, entry := range xrefTable.Entries {
 		if entry.Free || entry.Compressed {
@@ -111,6 +117,7 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 			continue // already loaded (e.g., xref stream)
 		}
 
+		doc.Offsets[num] = entry.Offset + headerOffset
 		lexer.SetPosition(entry.Offset + headerOffset)
 		parser := NewParserFromLexer(lexer)
 		iobj, err := parser.ParseIndirectObject()
