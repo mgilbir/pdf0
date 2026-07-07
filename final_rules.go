@@ -247,3 +247,93 @@ func checkA4TriggerEvents(doc *Document, level PDFALevel) []ValidationError {
 	}
 	return errs
 }
+
+// isPUARune reports whether a code point is in a Unicode Private Use Area.
+func isPUARune(r rune) bool {
+	return r >= 0xE000 && r <= 0xF8FF ||
+		r >= 0xF0000 && r <= 0xFFFFD ||
+		r >= 0x100000 && r <= 0x10FFFD
+}
+
+// stringHasPUA reports whether a decoded PDF text string contains any Private
+// Use Area code point.
+func stringHasPUA(b []byte) bool {
+	for _, r := range decodePDFTextString(b) {
+		if isPUARune(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkActualTextPUA enforces ISO 19005-4 6.2.10.8: an ActualText entry — in
+// a structure element dictionary or a marked-content property list — must not
+// contain Unicode Private Use Area values, which have no defined meaning.
+func checkActualTextPUA(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA4 {
+		return nil
+	}
+	var errs []ValidationError
+	seen := map[string]bool{}
+	add := func(msg string, obj int) {
+		if seen[msg] {
+			return
+		}
+		seen[msg] = true
+		errs = append(errs, ValidationError{Rule: "6.2.10.8", Level: level, Message: msg, Object: obj})
+	}
+
+	// Structure element (and any) dictionaries carrying /ActualText.
+	for num, iobj := range doc.Objects {
+		if d, ok := iobj.Value.(*Dictionary); ok {
+			if s, ok := d.Get("ActualText").(String); ok && stringHasPUA(s.Value) {
+				add("an ActualText entry in a dictionary contains a Unicode Private Use Area value", num)
+			}
+		}
+	}
+
+	// Marked-content property lists inside content streams
+	// (/Tag << /ActualText <...> >> BDC).
+	for num, data := range collectContentStreamData(doc) {
+		for _, v := range contentActualTexts(data) {
+			if stringHasPUA(v) {
+				add("an ActualText entry in a marked-content property list contains a Unicode Private Use Area value", num)
+			}
+		}
+	}
+	return errs
+}
+
+// contentActualTexts extracts the (decoded) value of every /ActualText entry
+// appearing in a content stream's inline marked-content property lists.
+func contentActualTexts(data []byte) [][]byte {
+	var out [][]byte
+	n := len(data)
+	i := 0
+	for i < n {
+		// Find "/ActualText" as a name token.
+		if data[i] == '/' && i+11 <= n && string(data[i+1:i+11]) == "ActualText" {
+			i += 11
+			for i < n && isContentWS(data[i]) {
+				i++
+			}
+			if i < n && data[i] == '<' {
+				j := i + 1
+				for j < n && data[j] != '>' {
+					j++
+				}
+				out = append(out, decodeHexBytes(data[i+1:j]))
+				i = j + 1
+				continue
+			}
+			if i < n && data[i] == '(' {
+				str, next := decodeContentLiteralString(data, i)
+				out = append(out, str)
+				i = next
+				continue
+			}
+		}
+		i++
+	}
+	return out
+}
