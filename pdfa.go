@@ -131,6 +131,10 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkICCBasedUsageRules,
 		// JPEG2000 image restrictions (6.2.8.3)
 		checkJPXImages,
+		// Font dictionary rules (6.3 / 6.2.11 / 6.2.10)
+		checkFontDictionaries,
+		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
+		checkFontSubsetCompleteness,
 	}
 
 	// Memoize expensive traversals (page-tree walks, content-stream
@@ -954,7 +958,21 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 
 	fonts := collectFonts(doc, pagesRef)
 
+	// A font used only for invisible text (rendering mode 3/7) is not
+	// "used for rendering" and need not be embedded (the corpus passes an
+	// unembedded Type1 shown in mode 3).
+	usage := collectFontTextUsage(doc)
+	exemptInvisible := make(map[*Dictionary]bool)
+	for d, u := range usage {
+		if !rendersVisibly(u) {
+			exemptInvisible[d] = true
+		}
+	}
+
 	for objNum, fontDict := range fonts {
+		if exemptInvisible[fontDict] {
+			continue
+		}
 		subtype := fontDict.Get("Subtype")
 		subtypeName, _ := subtype.(Name)
 
@@ -1001,7 +1019,15 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 			continue
 		}
 
-		hasEmbed := fd.Get("FontFile") != nil || fd.Get("FontFile2") != nil || fd.Get("FontFile3") != nil
+		// The FontFile entry must resolve to an actual stream: the corpus
+		// fails a descriptor whose FontFile3 references a missing object.
+		hasEmbed := false
+		for _, key := range []Name{"FontFile", "FontFile2", "FontFile3"} {
+			if _, ok := doc.Resolve(fd.Get(key)).(*Stream); ok {
+				hasEmbed = true
+				break
+			}
+		}
 		if !hasEmbed {
 			baseFontObj := fontDict.Get("BaseFont")
 			baseFontName := ""
