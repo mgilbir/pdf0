@@ -125,6 +125,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkSeparationDeviceN,
 		// Permissions dictionary (6.1.12)
 		checkPermsDict,
+		// XMP metadata properties (6.7.2 at 1b / 6.6.2.3 at 2b/3b)
+		checkXMPProperties,
 	}
 
 	// Memoize expensive traversals (page-tree walks, content-stream
