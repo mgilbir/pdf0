@@ -1,0 +1,216 @@
+package pdf0
+
+import "testing"
+
+func TestPredefinedCMapTable(t *testing.T) {
+	// Spot-check ISO 32000-1 Table 118 entries and their implied CIDSystemInfo.
+	cases := map[string]predefinedCMapInfo{
+		"Identity-H":     {"Adobe", "Identity"},
+		"UniGB-UTF16-H":  {"Adobe", "GB1"},
+		"UniJIS-UCS2-H":  {"Adobe", "Japan1"},
+		"UniKS-UCS2-H":   {"Adobe", "Korea1"},
+		"UniCNS-UTF16-V": {"Adobe", "CNS1"},
+	}
+	for name, want := range cases {
+		got, ok := predefinedCMaps[name]
+		if !ok || got != want {
+			t.Errorf("%s: got %v ok=%v, want %v", name, got, ok, want)
+		}
+	}
+	if _, ok := predefinedCMaps["Bogus-CMap"]; ok {
+		t.Error("unlisted CMap must not be predefined")
+	}
+}
+
+func TestAGLGlyphName(t *testing.T) {
+	for _, n := range []string{"A", "space", "uni20AC", "u1F600", "ampersand"} {
+		if !aglGlyphName(n) {
+			t.Errorf("%q should be a valid AGL name", n)
+		}
+	}
+	for _, n := range []string{"", "notAGlyph", "uniXYZW", "uni20A"} {
+		if aglGlyphName(n) {
+			t.Errorf("%q should not be a valid AGL name", n)
+		}
+	}
+}
+
+func TestGlyphNameToRune(t *testing.T) {
+	cases := []struct {
+		name string
+		code byte
+		want rune
+	}{
+		{"A", 65, 'A'},
+		{"uni20AC", 0x80, 0x20AC},
+		{"anything", 0x41, 'A'}, // ASCII identity by code
+		{"custom", 0xE9, 0xE9},  // Latin-1 high range by code
+	}
+	for _, c := range cases {
+		got, ok := glyphNameToRune(c.name, c.code)
+		if !ok || got != c.want {
+			t.Errorf("glyphNameToRune(%q,%d)=%v,%v want %v", c.name, c.code, got, ok, c.want)
+		}
+	}
+}
+
+func TestParseCharSet(t *testing.T) {
+	got := parseCharSet("/space/A/quoteright/period")
+	for _, n := range []string{"space", "A", "quoteright", "period"} {
+		if !got[n] {
+			t.Errorf("CharSet missing %q", n)
+		}
+	}
+	if len(got) != 4 {
+		t.Errorf("expected 4 names, got %d", len(got))
+	}
+}
+
+func TestSimpleFontEncodingDifferences(t *testing.T) {
+	font := &Dictionary{}
+	enc := &Dictionary{}
+	enc.Set("BaseEncoding", Name("WinAnsiEncoding"))
+	enc.Set("Differences", Array{Integer(65), Name("Alpha"), Name("Beta")})
+	font.Set("Encoding", enc)
+	doc := &Document{Objects: map[int]*IndirectObject{}}
+	table := simpleFontCodeToName(doc, font, false)
+	if table[65] != "Alpha" || table[66] != "Beta" {
+		t.Errorf("Differences not applied: %q %q", table[65], table[66])
+	}
+	if table[32] != "space" { // from WinAnsi base
+		t.Errorf("base encoding not applied: code32=%q", table[32])
+	}
+}
+
+func TestCharSetParsing_Numbers(t *testing.T) {
+	// Names may be adjacent without separators other than '/'.
+	got := parseCharSet("/one/two/three")
+	if !got["one"] || !got["two"] || !got["three"] {
+		t.Errorf("adjacency parse failed: %v", got)
+	}
+}
+
+// checkTrueTypeEncoding via crafted dictionaries (ISO 32000-1 9.6.6.4).
+func TestTrueTypeEncodingRules(t *testing.T) {
+	mk := func(symbolic bool, enc Object) (*Document, *Dictionary, *fontTextUsage) {
+		doc := &Document{Objects: map[int]*IndirectObject{}}
+		fd := &Dictionary{}
+		flags := 32 // nonsymbolic
+		if symbolic {
+			flags = 4
+		}
+		fd.Set("Flags", Integer(flags))
+		doc.Objects[5] = &IndirectObject{Number: 5, Value: fd}
+		font := &Dictionary{}
+		font.Set("Subtype", Name("TrueType"))
+		font.Set("FontDescriptor", IndirectRef{Number: 5})
+		if enc != nil {
+			font.Set("Encoding", enc)
+		}
+		return doc, font, &fontTextUsage{objNum: 9, modes: map[int]bool{}}
+	}
+
+	// Symbolic + Encoding present -> error.
+	doc, font, u := mk(true, Name("WinAnsiEncoding"))
+	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) == 0 {
+		t.Error("symbolic TrueType with Encoding must be flagged")
+	}
+	// Symbolic + no Encoding -> ok.
+	doc, font, u = mk(true, nil)
+	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) != 0 {
+		t.Error("symbolic TrueType without Encoding must pass")
+	}
+	// Nonsymbolic + WinAnsi -> ok.
+	doc, font, u = mk(false, Name("WinAnsiEncoding"))
+	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) != 0 {
+		t.Error("nonsymbolic WinAnsi must pass")
+	}
+	// Nonsymbolic + bad base encoding name -> error.
+	doc, font, u = mk(false, Name("StandardEncoding"))
+	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) == 0 {
+		t.Error("nonsymbolic StandardEncoding must be flagged")
+	}
+	// Nonsymbolic Encoding dict with Differences name not in AGL -> error.
+	e := &Dictionary{}
+	e.Set("BaseEncoding", Name("WinAnsiEncoding"))
+	e.Set("Differences", Array{Integer(1), Name("notAGlyphName")})
+	doc, font, u = mk(false, e)
+	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) == 0 {
+		t.Error("Differences glyph not in AGL must be flagged")
+	}
+}
+
+// ToUnicode forbidden values (A-4): U+0000, U+FEFF, U+FFFE.
+func TestToUnicodeForbiddenValues(t *testing.T) {
+	mk := func(body string) (*Document, *Stream) {
+		doc := &Document{Objects: map[int]*IndirectObject{}}
+		s := &Stream{Dict: Dictionary{}, Data: []byte(body)}
+		s.Dict.Set("Length", Integer(len(body)))
+		return doc, s
+	}
+	doc, s := mk("beginbfchar <0041> <0000> endbfchar")
+	if !hasForbiddenUnicodeTargets(doc, s) {
+		t.Error("bfchar mapping to U+0000 must be detected")
+	}
+	doc, s = mk("beginbfrange <0041> <0043> <FEFF> endbfrange")
+	if !hasForbiddenUnicodeTargets(doc, s) {
+		t.Error("bfrange mapping to U+FEFF must be detected")
+	}
+	doc, s = mk("beginbfchar <0041> <0041> endbfchar")
+	if hasForbiddenUnicodeTargets(doc, s) {
+		t.Error("valid ToUnicode must not be flagged")
+	}
+}
+
+// CIDToGIDMap requirement for embedded CIDFontType2 (ISO 32000-1 9.7.4.2).
+func TestCIDToGIDMapRule(t *testing.T) {
+	mkFont := func(cidToGID Object) (*Document, *Dictionary, *fontTextUsage) {
+		doc := &Document{Objects: map[int]*IndirectObject{}}
+		desc := &Dictionary{}
+		desc.Set("Subtype", Name("CIDFontType2"))
+		desc.Set("CIDSystemInfo", &Dictionary{})
+		if cidToGID != nil {
+			desc.Set("CIDToGIDMap", cidToGID)
+		}
+		doc.Objects[7] = &IndirectObject{Number: 7, Value: desc}
+		font := &Dictionary{}
+		font.Set("Subtype", Name("Type0"))
+		font.Set("Encoding", Name("Identity-H"))
+		font.Set("DescendantFonts", Array{IndirectRef{Number: 7}})
+		return doc, font, &fontTextUsage{objNum: 9, modes: map[int]bool{0: true}}
+	}
+	doc, font, u := mkFont(nil)
+	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11") {
+		t.Error("missing CIDToGIDMap must be flagged")
+	}
+	doc, font, u = mkFont(Name("Custom"))
+	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11") {
+		t.Error("non-Identity CIDToGIDMap name must be flagged")
+	}
+	doc, font, u = mkFont(Name("Identity"))
+	if hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11") {
+		t.Error("Identity CIDToGIDMap must pass")
+	}
+}
+
+func hasRuleErr(errs []ValidationError, rule string) bool {
+	for _, e := range errs {
+		if e.Rule == rule {
+			return true
+		}
+	}
+	return false
+}
+
+func TestParseCIDWidths(t *testing.T) {
+	doc := &Document{Objects: map[int]*IndirectObject{}}
+	// [ 1 [100 200] 5 7 300 ]  -> CID1=100, CID2=200, CID5..7=300
+	w := Array{Integer(1), Array{Integer(100), Integer(200)}, Integer(5), Integer(7), Integer(300)}
+	m := parseCIDWidths(doc, w)
+	if m[1] != 100 || m[2] != 200 || m[5] != 300 || m[7] != 300 {
+		t.Errorf("CID width parse wrong: %v", m)
+	}
+	if _, ok := m[3]; ok {
+		t.Error("CID3 should be unset")
+	}
+}
