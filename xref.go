@@ -289,6 +289,43 @@ func applyFilter(name Name, data []byte) ([]byte, error) {
 	}
 }
 
+// isSupportedFilter reports whether applyFilter can decode the named filter.
+func isSupportedFilter(name Name) bool {
+	switch name {
+	case "FlateDecode", "ASCIIHexDecode":
+		return true
+	}
+	return false
+}
+
+// streamFiltersSupported reports whether every filter on the stream is one that
+// decodeStreamData can actually apply. Callers use this to tell "we could not
+// inspect this stream" apart from "this stream is corrupt": a decode failure on
+// an unsupported-but-legal filter must not be reported as a violation.
+func streamFiltersSupported(stream *Stream) bool {
+	filter := stream.Dict.Get("Filter")
+	if filter == nil {
+		return true
+	}
+	switch f := filter.(type) {
+	case Name:
+		return isSupportedFilter(f)
+	case Array:
+		for _, e := range f {
+			name, ok := e.(Name)
+			if !ok || !isSupportedFilter(name) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// maxDecodeSize is the maximum size of decompressed stream data (100 MB).
+// This prevents decompression bombs from consuming excessive memory.
+const maxDecodeSize = 100 << 20
+
 func flateDecode(data []byte) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -296,9 +333,13 @@ func flateDecode(data []byte) ([]byte, error) {
 	}
 	defer r.Close()
 
-	decoded, err := io.ReadAll(r)
+	limited := io.LimitReader(r, maxDecodeSize+1)
+	decoded, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("zlib decompress: %w", err)
+	}
+	if len(decoded) > maxDecodeSize {
+		return nil, fmt.Errorf("decompressed data exceeds maximum size (%d bytes)", maxDecodeSize)
 	}
 	return decoded, nil
 }

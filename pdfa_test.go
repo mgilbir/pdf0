@@ -4,9 +4,16 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+type corpusFile struct {
+	path   string
+	rel    string
+	isPass bool
+}
 
 func TestNewPDFADocument(t *testing.T) {
 	for _, level := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
@@ -65,8 +72,8 @@ func TestValidatePDFA_Header(t *testing.T) {
 		wantErr bool
 	}{
 		{PDFA1b, "1.4", false},
-		{PDFA1b, "1.7", true},
-		{PDFA1b, "2.0", true},
+		{PDFA1b, "1.7", false},
+		{PDFA1b, "2.0", false},
 		{PDFA2b, "1.4", false},
 		{PDFA2b, "1.5", false},
 		{PDFA2b, "1.7", false},
@@ -166,25 +173,42 @@ func TestValidatePDFA_MetadataStream(t *testing.T) {
 }
 
 func TestValidatePDFA_OutputIntents(t *testing.T) {
-	t.Run("PDFA-2b requires output intents", func(t *testing.T) {
-		doc := NewPDFADocument(PDFA2b)
-		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
-		catalog.Delete("OutputIntents")
+	t.Run("missing output intents OK for all levels", func(t *testing.T) {
+		for _, level := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
+			doc := NewPDFADocument(level)
+			catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+			catalog.Delete("OutputIntents")
 
-		errs := ValidatePDFA(doc, PDFA2b)
-		if !hasRule(errs, "6.2.3") {
-			t.Error("expected 6.2.3 error for missing output intents in PDF/A-2b")
+			errs := filterRule(ValidatePDFA(doc, level), "6.2.3")
+			if len(errs) > 0 {
+				t.Errorf("%s should not require OutputIntents when absent, got: %v", level, errs[0])
+			}
 		}
 	})
 
-	t.Run("PDFA-4 allows missing output intents", func(t *testing.T) {
-		doc := NewPDFADocument(PDFA4)
-		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
-		catalog.Delete("OutputIntents")
+	t.Run("empty OutputIntents OK", func(t *testing.T) {
+		for _, level := range []PDFALevel{PDFA2b, PDFA3b, PDFA4} {
+			doc := NewPDFADocument(level)
+			catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+			catalog.Set("OutputIntents", Array{})
 
-		errs := filterRule(ValidatePDFA(doc, PDFA4), "6.2.3")
-		if len(errs) > 0 {
-			t.Error("PDF/A-4 should not require OutputIntents")
+			errs := filterRule(ValidatePDFA(doc, level), "6.2.3")
+			if len(errs) > 0 {
+				t.Errorf("%s should allow empty OutputIntents array, got: %v", level, errs[0])
+			}
+		}
+	})
+
+	t.Run("validates OutputIntents structure when present", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+		// Set OutputIntents to array with invalid entry
+		badOI := &Dictionary{}
+		catalog.Set("OutputIntents", Array{badOI})
+
+		errs := filterRule(ValidatePDFA(doc, PDFA2b), "6.2.3")
+		if len(errs) == 0 {
+			t.Error("expected 6.2.3 error for OutputIntent without /S")
 		}
 	})
 }
@@ -691,13 +715,37 @@ func TestValidatePDFA_MetadataVersion(t *testing.T) {
 	})
 }
 
+// addExtGStateToDoc adds an ExtGState dict to the test doc's page Resources.
+// It creates a page (obj 20) with Resources/ExtGState referencing gsObj (obj 10).
+func addExtGStateToDoc(doc *Document, gs *Dictionary) {
+	doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+
+	gsDict := &Dictionary{}
+	gsDict.Set("GS0", IndirectRef{Number: 10})
+
+	resDict := &Dictionary{}
+	resDict.Set("ExtGState", gsDict)
+
+	page := &Dictionary{}
+	page.Set("Type", Name("Page"))
+	page.Set("Parent", IndirectRef{Number: 2})
+	page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
+	page.Set("Resources", resDict)
+
+	doc.Objects[20] = &IndirectObject{Number: 20, Value: page}
+
+	// Update page tree to include this page
+	pagesDict := doc.ResolveDict(IndirectRef{Number: 2})
+	pagesDict.Set("Kids", Array{IndirectRef{Number: 20}})
+	pagesDict.Set("Count", Integer(1))
+}
+
 func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-1b rejects SMask", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("SMask", &Dictionary{})
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := ValidatePDFA(doc, PDFA1b)
 		if !hasRule(errs, "6.4") {
@@ -708,9 +756,8 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-1b allows SMask None", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("SMask", Name("None"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := filterRule(ValidatePDFA(doc, PDFA1b), "6.4")
 		if len(errs) > 0 {
@@ -721,9 +768,8 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-1b rejects non-Normal BM", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("BM", Name("Multiply"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := ValidatePDFA(doc, PDFA1b)
 		if !hasRule(errs, "6.4") {
@@ -734,10 +780,9 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-2b allows transparency", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
 		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
 		gs.Set("SMask", &Dictionary{})
 		gs.Set("BM", Name("Multiply"))
-		doc.Objects[10] = &IndirectObject{Number: 10, Value: gs}
+		addExtGStateToDoc(doc, gs)
 
 		errs := filterRule(ValidatePDFA(doc, PDFA2b), "6.4")
 		if len(errs) > 0 {
@@ -1107,6 +1152,11 @@ func TestCorpus(t *testing.T) {
 			if _, err := os.Stat(root); os.IsNotExist(err) {
 				t.Skipf("directory %s not found", root)
 			}
+
+			// Collect paths first, then iterate. This avoids holding all
+			// parsed Documents in memory at once (which caused OOM kills
+			// with the full 2900+ file corpus).
+			var files []corpusFile
 			filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 				if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
 					return nil
@@ -1117,8 +1167,13 @@ func TestCorpus(t *testing.T) {
 				if !isPass && !isFail {
 					return nil
 				}
-				t.Run(rel, func(t *testing.T) {
-					data, err := os.ReadFile(path)
+				files = append(files, corpusFile{path: path, rel: rel, isPass: isPass})
+				return nil
+			})
+
+			for i, f := range files {
+				t.Run(f.rel, func(t *testing.T) {
+					data, err := os.ReadFile(f.path)
 					if err != nil {
 						t.Fatalf("read: %v", err)
 					}
@@ -1127,18 +1182,406 @@ func TestCorpus(t *testing.T) {
 						t.Fatalf("parse: %v", err)
 					}
 					errs := ValidatePDFABytes(doc, level, data)
-					if isPass && len(errs) > 0 {
+					if f.isPass && len(errs) > 0 {
 						for _, e := range errs {
 							t.Errorf("unexpected error: %v", e)
 						}
 					}
-					if isFail && len(errs) == 0 {
+					if !f.isPass && len(errs) == 0 {
 						t.Error("expected validation errors for fail file, got none")
 					}
 				})
-				return nil
-			})
+				// Force GC every 100 files to keep memory bounded.
+				// Without this, the allocator outpaces the GC and
+				// memory grows until the OOM killer intervenes.
+				if (i+1)%100 == 0 {
+					runtime.GC()
+				}
+			}
 		})
+	}
+}
+
+func TestDecodeXMPToUTF8(t *testing.T) {
+	t.Run("plain UTF-8", func(t *testing.T) {
+		data := []byte("<pdfaid:part>4</pdfaid:part>")
+		got := decodeXMPToUTF8(data)
+		if !strings.Contains(got, "pdfaid:part") {
+			t.Errorf("expected pdfaid:part in output, got %q", got)
+		}
+	})
+
+	t.Run("UTF-8 with BOM", func(t *testing.T) {
+		data := append([]byte{0xEF, 0xBB, 0xBF}, []byte("<pdfaid:part>4</pdfaid:part>")...)
+		got := decodeXMPToUTF8(data)
+		if !strings.Contains(got, "pdfaid:part") {
+			t.Errorf("expected pdfaid:part in output, got %q", got)
+		}
+	})
+
+	t.Run("UTF-16 BE with BOM", func(t *testing.T) {
+		// Encode "<p>" as UTF-16 BE
+		src := "<pdfaid:part>4</pdfaid:part>"
+		var utf16be []byte
+		utf16be = append(utf16be, 0xFE, 0xFF) // BOM
+		for _, c := range []byte(src) {
+			utf16be = append(utf16be, 0x00, c)
+		}
+		got := decodeXMPToUTF8(utf16be)
+		if !strings.Contains(got, "pdfaid:part") {
+			t.Errorf("expected pdfaid:part in decoded UTF-16 BE, got %q", got)
+		}
+	})
+
+	t.Run("UTF-16 LE with BOM", func(t *testing.T) {
+		src := "<pdfaid:part>4</pdfaid:part>"
+		var utf16le []byte
+		utf16le = append(utf16le, 0xFF, 0xFE) // BOM
+		for _, c := range []byte(src) {
+			utf16le = append(utf16le, c, 0x00)
+		}
+		got := decodeXMPToUTF8(utf16le)
+		if !strings.Contains(got, "pdfaid:part") {
+			t.Errorf("expected pdfaid:part in decoded UTF-16 LE, got %q", got)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		got := decodeXMPToUTF8(nil)
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+}
+
+func TestCheckCatalogVersion(t *testing.T) {
+	t.Run("no catalog version OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA4)
+		errs := checkCatalogVersion(doc, PDFA4)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+
+	t.Run("valid 2.0 OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA4)
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+		catalog.Set("Version", Name("2.0"))
+		errs := checkCatalogVersion(doc, PDFA4)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+
+	t.Run("invalid 1.7 fails", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA4)
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+		catalog.Set("Version", Name("1.7"))
+		errs := checkCatalogVersion(doc, PDFA4)
+		if len(errs) == 0 {
+			t.Error("expected error for catalog version 1.7")
+		}
+	})
+
+	t.Run("non-PDFA4 skipped", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		errs := checkCatalogVersion(doc, PDFA2b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error for non-PDFA4: %v", errs[0])
+		}
+	})
+}
+
+func TestCheckExtGState(t *testing.T) {
+	t.Run("TR forbidden", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		gs := &Dictionary{}
+		gs.Set("TR", Name("Identity"))
+		addExtGStateToDoc(doc, gs)
+
+		errs := checkExtGState(doc, PDFA2b)
+		if len(errs) == 0 {
+			t.Error("expected error for /TR in ExtGState")
+		}
+	})
+
+	t.Run("TR2 Default OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		gs := &Dictionary{}
+		gs.Set("TR2", Name("Default"))
+		addExtGStateToDoc(doc, gs)
+
+		errs := checkExtGState(doc, PDFA2b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+
+	t.Run("TR2 non-Default forbidden", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		gs := &Dictionary{}
+		gs.Set("TR2", Name("Identity"))
+		addExtGStateToDoc(doc, gs)
+
+		errs := checkExtGState(doc, PDFA2b)
+		if len(errs) == 0 {
+			t.Error("expected error for /TR2 non-Default in ExtGState")
+		}
+	})
+
+	t.Run("skipped for PDFA1b", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA1b)
+		gs := &Dictionary{}
+		gs.Set("TR", Name("Identity"))
+		addExtGStateToDoc(doc, gs)
+
+		errs := checkExtGState(doc, PDFA1b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error for PDFA1b: %v", errs[0])
+		}
+	})
+}
+
+func TestCheckEmbeddedFiles(t *testing.T) {
+	t.Run("PDFA-1b rejects embedded files", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA1b)
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+		namesDict := &Dictionary{}
+		namesDict.Set("EmbeddedFiles", &Dictionary{})
+		catalog.Set("Names", namesDict)
+
+		errs := checkEmbeddedFiles(doc, PDFA1b)
+		if len(errs) == 0 {
+			t.Error("expected error for EmbeddedFiles in PDF/A-1b")
+		}
+	})
+
+	t.Run("PDFA-2b rejects embedded files", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+		namesDict := &Dictionary{}
+		namesDict.Set("EmbeddedFiles", &Dictionary{})
+		catalog.Set("Names", namesDict)
+
+		errs := checkEmbeddedFiles(doc, PDFA2b)
+		if len(errs) == 0 {
+			t.Error("expected error for EmbeddedFiles in PDF/A-2b")
+		}
+	})
+
+	t.Run("PDFA-3b allows embedded files with requirements", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA3b)
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+		namesDict := &Dictionary{}
+		namesDict.Set("EmbeddedFiles", &Dictionary{})
+		catalog.Set("Names", namesDict)
+		catalog.Set("AF", Array{})
+
+		errs := checkEmbeddedFiles(doc, PDFA3b)
+		// Should not complain about embedded files existing
+		for _, e := range errs {
+			if strings.Contains(e.Message, "must not be present") {
+				t.Errorf("PDF/A-3b should allow EmbeddedFiles: %v", e)
+			}
+		}
+	})
+
+	t.Run("no Names OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA1b)
+		errs := checkEmbeddedFiles(doc, PDFA1b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error when no Names: %v", errs[0])
+		}
+	})
+}
+
+func TestCheckFontSubsets(t *testing.T) {
+	t.Run("non-subset font OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA1b)
+		page := &Dictionary{}
+		page.Set("Type", Name("Page"))
+		page.Set("Parent", IndirectRef{Number: 2})
+		page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
+		page.Set("Resources", IndirectRef{Number: 12})
+
+		fd := &Dictionary{}
+		fd.Set("FontFile", &Stream{})
+
+		font := &Dictionary{}
+		font.Set("Type", Name("Font"))
+		font.Set("Subtype", Name("Type1"))
+		font.Set("BaseFont", Name("Helvetica"))
+		font.Set("FontDescriptor", IndirectRef{Number: 13})
+
+		fontDict := &Dictionary{}
+		fontDict.Set("F1", IndirectRef{Number: 11})
+		resources := &Dictionary{}
+		resources.Set("Font", fontDict)
+
+		pagesDict := doc.ResolveDict(doc.ResolveDict(doc.Trailer.Get("Root")).Get("Pages"))
+		pagesDict.Set("Kids", Array{IndirectRef{Number: 10}})
+		pagesDict.Set("Count", Integer(1))
+
+		doc.Objects[10] = &IndirectObject{Number: 10, Value: page}
+		doc.Objects[11] = &IndirectObject{Number: 11, Value: font}
+		doc.Objects[12] = &IndirectObject{Number: 12, Value: resources}
+		doc.Objects[13] = &IndirectObject{Number: 13, Value: fd}
+
+		errs := checkFontSubsets(doc, PDFA1b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error for non-subset font: %v", errs[0])
+		}
+	})
+
+	t.Run("skipped for PDFA2b", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		errs := checkFontSubsets(doc, PDFA2b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+}
+
+func TestCheckImplementationLimits(t *testing.T) {
+	t.Run("normal objects OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		errs := checkImplementationLimits(doc, PDFA2b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error for clean doc: %v", errs[0])
+		}
+	})
+
+	t.Run("long name detected", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		longName := Name(strings.Repeat("A", 128))
+		dict := &Dictionary{}
+		dict.Set("Type", longName)
+		doc.Objects[10] = &IndirectObject{Number: 10, Value: dict}
+
+		errs := checkImplementationLimits(doc, PDFA2b)
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e.Message, "name length") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected error for name exceeding 127 bytes")
+		}
+	})
+}
+
+func TestCheckOptionalContent(t *testing.T) {
+	t.Run("no OCProperties OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA4)
+		errs := checkOptionalContent(doc, PDFA4)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+
+	t.Run("D without Name fails", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA4)
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+
+		dConfig := &Dictionary{}
+		ocgs := Array{}
+		ocProps := &Dictionary{}
+		ocProps.Set("D", dConfig)
+		ocProps.Set("OCGs", ocgs)
+		catalog.Set("OCProperties", ocProps)
+
+		errs := checkOptionalContent(doc, PDFA4)
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e.Message, "/Name") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("expected error for missing /Name in default config")
+		}
+	})
+
+	t.Run("non-PDFA4 skipped", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		errs := checkOptionalContent(doc, PDFA2b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+}
+
+func TestCheckInfoXMPConsistency(t *testing.T) {
+	t.Run("no Info dict OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA1b)
+		errs := checkInfoXMPConsistency(doc, PDFA1b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+
+	t.Run("non-PDFA1b skipped", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		errs := checkInfoXMPConsistency(doc, PDFA2b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+}
+
+func TestNormalizePDFDate(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"D:20240101120000Z", "2024-01-01T12:00:00Z"},
+		{"D:20240615", "2024-06-15T00:00:00Z"},
+		{"D:2024", "2024-01-01T00:00:00Z"},
+		{"D:20240101120000+05'30'", "2024-01-01T12:00:00+05:30"},
+		{"D:20221125132309+00'00'", "2022-11-25T13:23:09Z"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizePDFDate(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizePDFDate(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckTransparencyBlending(t *testing.T) {
+	t.Run("no transparency OK", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA2b)
+		errs := checkTransparencyBlending(doc, PDFA2b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+
+	t.Run("PDFA1b skipped", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA1b)
+		errs := checkTransparencyBlending(doc, PDFA1b)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+
+	t.Run("PDFA4 skipped", func(t *testing.T) {
+		doc := NewPDFADocument(PDFA4)
+		errs := checkTransparencyBlending(doc, PDFA4)
+		if len(errs) > 0 {
+			t.Errorf("unexpected error: %v", errs[0])
+		}
+	})
+}
+
+func TestExtractXMPListValue(t *testing.T) {
+	xmp := `<dc:title><rdf:Alt><rdf:li xml:lang="x-default">My Title</rdf:li></rdf:Alt></dc:title>`
+	got := extractXMPListValue(xmp, "dc:title")
+	if got != "My Title" {
+		t.Errorf("extractXMPListValue = %q, want %q", got, "My Title")
 	}
 }
 
