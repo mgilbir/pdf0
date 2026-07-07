@@ -80,6 +80,28 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 		data := getContentStreamData(doc, page.dict.Get("Contents"))
 		walkExecutedContent(doc, page.dict, data, page.objNum, seenContainer, add)
 	}
+
+	// Type 3 font glyph procedures are content streams whose named resources
+	// must resolve in the Type 3 font's own /Resources — not inherited from
+	// the page (ISO 19005 6.2.2; a glyph proc that references a colour space
+	// present only in the page resources is invalid).
+	for fontDict, u := range collectFontTextUsage(doc) {
+		if st, _ := fontDict.Get("Subtype").(Name); st != "Type3" || !rendersVisibly(u) {
+			continue
+		}
+		res := doc.ResolveDict(fontDict.Get("Resources"))
+		cps := doc.ResolveDict(fontDict.Get("CharProcs"))
+		if cps == nil {
+			continue
+		}
+		for _, cpVal := range cps.Values {
+			if cp, ok := doc.Resolve(cpVal).(*Stream); ok {
+				if cpData := decodeContentStream(doc, cp); cpData != nil {
+					checkContentTokens(cpData, res, doc, u.objNum, add)
+				}
+			}
+		}
+	}
 	return errs
 }
 
@@ -371,7 +393,7 @@ func walkICCIdentity(doc *Document, container *Dictionary, data []byte, objNum i
 		if csDict == nil {
 			return
 		}
-		prof := iccCMYKProfile(doc, csDict.Get(Name(name)))
+		prof := renderedICCCMYKProfile(doc, csDict.Get(Name(name)))
 		if prof == nil {
 			return
 		}
@@ -418,6 +440,23 @@ func walkICCIdentity(doc *Document, container *Dictionary, data []byte, objNum i
 func groupBlendProfile(doc *Document, container *Dictionary) *Stream {
 	if g := doc.ResolveDict(container.Get("Group")); g != nil {
 		return iccProfileStream(doc, g.Get("CS"))
+	}
+	return nil
+}
+
+// renderedICCCMYKProfile returns the ICCBased CMYK profile a colour space
+// renders through: the space itself, or the ICCBased CMYK alternate of a
+// Separation or DeviceN space.
+func renderedICCCMYKProfile(doc *Document, csVal Object) *Stream {
+	if p := iccCMYKProfile(doc, csVal); p != nil {
+		return p
+	}
+	arr, ok := doc.Resolve(csVal).(Array)
+	if !ok || len(arr) < 3 {
+		return nil
+	}
+	if n, _ := arr[0].(Name); n == "Separation" || n == "DeviceN" {
+		return iccCMYKProfile(doc, arr[2])
 	}
 	return nil
 }

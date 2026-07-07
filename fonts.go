@@ -1117,7 +1117,9 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 			if renders && !glyphExists {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (code %d)", string(subtype), code))
 			}
-			if renders && isNotdefGlyph(fp, subtype, symbolic, code, name) {
+			// A .notdef reference is prohibited even in invisible text
+			// (rendering mode 3), so this is not gated on visible rendering.
+			if isNotdefGlyph(fp, subtype, symbolic, code, name) {
 				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(subtype)))
 			}
 
@@ -1174,7 +1176,7 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 			if renders && !exists {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
 			}
-			if renders && cid == 0 {
+			if cid == 0 {
 				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(cidSub)))
 			}
 
@@ -1348,12 +1350,19 @@ func trueTypeGID(fp *fontProgram, symbolic bool, code byte, name string) (int, b
 		}
 		return 0, false
 	}
+	// A non-symbolic code with no glyph name (undefined in the Encoding)
+	// renders the .notdef glyph (ISO 32000-1 9.6.6.4).
+	if name == "" {
+		return 0, true
+	}
 	if fp.cmap != nil {
 		if r, ok := glyphNameToRune(name, code); ok {
 			if gid, ok := fp.cmap[r]; ok {
 				return gid, true
 			}
 		}
+		// A named code absent from the (3,1) cmap maps to no glyph.
+		return 0, true
 	}
 	if fp.macCmap != nil {
 		if gid, ok := fp.macCmap[code]; ok {

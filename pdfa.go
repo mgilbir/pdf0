@@ -146,6 +146,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkFileTrailerID,
 		// PDF/A-4 trigger events (6.6.3)
 		checkA4TriggerEvents,
+		// ActualText Private Use Area values (6.2.10.8)
+		checkActualTextPUA,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
 		// CMap CID implementation limit (6.1.12 / 6.1.13)

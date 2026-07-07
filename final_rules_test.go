@@ -103,3 +103,26 @@ func TestA4TriggerEvents(t *testing.T) {
 		t.Error("interaction-only catalog AA must pass")
 	}
 }
+
+func TestPUADetection(t *testing.T) {
+	if !isPUARune(0xE000) || !isPUARune(0xF8FF) || !isPUARune(0xF0000) || !isPUARune(0x100000) {
+		t.Error("PUA ranges misjudged")
+	}
+	if isPUARune('A') || isPUARune(0xDFFF) || isPUARune(0xFFFF) {
+		t.Error("non-PUA flagged")
+	}
+	// UTF-16BE with a PUA code point (U+E29C).
+	if !stringHasPUA([]byte{0xFE, 0xFF, 0xE2, 0x9C, 0x00, 0x41}) {
+		t.Error("PUA in UTF-16BE string not detected")
+	}
+	if stringHasPUA([]byte{0xFE, 0xFF, 0x00, 0x41, 0x00, 0x42}) {
+		t.Error("clean string flagged as PUA")
+	}
+}
+
+func TestContentActualTexts(t *testing.T) {
+	got := contentActualTexts([]byte("/Span << /ActualText <FEFF0041> >> BDC (x) Tj EMC"))
+	if len(got) != 1 || string(got[0]) != "\xfe\xff\x00A" {
+		t.Errorf("ActualText extraction wrong: %q", got)
+	}
+}
