@@ -126,3 +126,60 @@ func TestContentActualTexts(t *testing.T) {
 		t.Errorf("ActualText extraction wrong: %q", got)
 	}
 }
+
+func TestType5HalftoneTransferFunction(t *testing.T) {
+	mk := func(colorant string, hasTF bool) *Document {
+		doc := NewPDFADocument(PDFA4)
+		comp := &Dictionary{}
+		comp.Set("HalftoneType", Integer(1))
+		if hasTF {
+			comp.Set("TransferFunction", Name("Identity"))
+		}
+		ht := &Dictionary{}
+		ht.Set("Type", Name("Halftone"))
+		ht.Set("HalftoneType", Integer(5))
+		ht.Set(Name(colorant), comp)
+		doc.Objects[30] = &IndirectObject{Number: 30, Value: ht}
+		gs := &Dictionary{}
+		gs.Set("Type", Name("ExtGState"))
+		gs.Set("HT", IndirectRef{Number: 30})
+		gsDict := &Dictionary{}
+		gsDict.Set("GS0", gs)
+		res := &Dictionary{}
+		res.Set("ExtGState", gsDict)
+		page := addTestPage(doc)
+		s := &Stream{Dict: Dictionary{}, Data: []byte("/GS0 gs")}
+		s.Dict.Set("Length", Integer(7))
+		doc.Objects[21] = &IndirectObject{Number: 21, Value: s}
+		page.Set("Contents", IndirectRef{Number: 21})
+		page.Set("Resources", res)
+		return doc
+	}
+	// Primary colorant with TransferFunction: fail.
+	if !hasRuleMsg(checkType5Halftones(mk("Cyan", true), PDFA4), "6.2.5") {
+		t.Error("primary colorant with TransferFunction must be flagged")
+	}
+	// Primary colorant without: pass.
+	if hasRuleMsg(checkType5Halftones(mk("Cyan", false), PDFA4), "6.2.5") {
+		t.Error("primary colorant without TransferFunction must pass")
+	}
+	// Non-primary colorant without TransferFunction: fail.
+	if !hasRuleMsg(checkType5Halftones(mk("Red", false), PDFA4), "6.2.5") {
+		t.Error("non-primary colorant without TransferFunction must be flagged")
+	}
+	// Non-primary with: pass.
+	if hasRuleMsg(checkType5Halftones(mk("Red", true), PDFA4), "6.2.5") {
+		t.Error("non-primary colorant with TransferFunction must pass")
+	}
+}
+
+func TestInfoAuthorMultiEntry(t *testing.T) {
+	xmp := `<dc:creator><rdf:Seq><rdf:li>A</rdf:li><rdf:li>B</rdf:li></rdf:Seq></dc:creator>`
+	if countXMPListEntries(xmp, "dc:creator") != 2 {
+		t.Errorf("expected 2 creator entries, got %d", countXMPListEntries(xmp, "dc:creator"))
+	}
+	single := `<dc:creator><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>`
+	if countXMPListEntries(single, "dc:creator") != 1 {
+		t.Error("expected 1 creator entry")
+	}
+}

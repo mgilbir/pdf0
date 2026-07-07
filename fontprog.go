@@ -19,6 +19,11 @@ type fontProgram struct {
 	widthByName map[string]float64
 	// numGlyphs is the glyph count (sfnt/CFF).
 	numGlyphs int
+	// glyphPresent[gid] reports whether a TrueType (glyf-based) glyph's
+	// outline data lies within the glyf table (present, possibly empty) as
+	// opposed to pointing beyond a truncated table (missing). nil when the
+	// font has no glyf table (e.g. CFF-flavoured OpenType).
+	glyphPresent []bool
 	// widthByGID gives advance widths by glyph index, scaled to 1/1000.
 	widthByGID []float64
 	// cmap maps Unicode code points to glyph indices ((3,1) subtable), and
@@ -97,6 +102,25 @@ func parseSFNT(data []byte) *fontProgram {
 				last = float64(be16(hmtx, 4*gid)) * 1000 / float64(unitsPerEm)
 			}
 			fp.widthByGID[gid] = last
+		}
+	}
+
+	// loca/glyf: which glyph indices have outline data within the table.
+	if head, loca, glyf := tables["head"], tables["loca"], tables["glyf"]; len(head) >= 52 && loca != nil && glyf != nil {
+		longLoca := be16(head, 50) == 1
+		glyfLen := len(glyf)
+		fp.glyphPresent = make([]bool, fp.numGlyphs)
+		offAt := func(i int) int {
+			if longLoca {
+				return int(be32(loca, 4*i))
+			}
+			return be16(loca, 2*i) * 2
+		}
+		for gid := 0; gid < fp.numGlyphs; gid++ {
+			start, end := offAt(gid), offAt(gid+1)
+			// Present when the entry is well-formed and lies within the glyf
+			// table (an empty glyph, start==end, is still present).
+			fp.glyphPresent[gid] = start <= end && end <= glyfLen
 		}
 	}
 
