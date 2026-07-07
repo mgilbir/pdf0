@@ -1881,14 +1881,18 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 	case PDFA4:
-		// PDF/A-4: conformance must NOT be present at all (even empty value counts)
+		// PDF/A-4: conformance is absent for plain A-4, but "F" (A-4f) and "E"
+		// (A-4e) are valid — a compliant 4f/4e file (e.g. an embedded one) must
+		// not be rejected for carrying it (audit C23).
 		if xmpHasKey(xmp, "pdfaid:conformance") {
 			conf := extractXMPValue(xmp, "pdfaid:conformance")
-			errs = append(errs, ValidationError{
-				Rule:    "6.7.3",
-				Level:   level,
-				Message: fmt.Sprintf("PDF/A-4 must not have pdfaid:conformance, got %q", conf),
-			})
+			if conf != "F" && conf != "E" {
+				errs = append(errs, ValidationError{
+					Rule:    "6.7.3",
+					Level:   level,
+					Message: fmt.Sprintf("PDF/A-4 pdfaid:conformance must be absent, F, or E, got %q", conf),
+				})
+			}
 		}
 
 		// Check pdfaid:rev must be "2020" for PDF/A-4
@@ -1918,8 +1922,8 @@ func xmpHasKey(xmp, key string) bool {
 	if strings.Contains(xmp, "<"+key+">") || strings.Contains(xmp, "<"+key+"/>") {
 		return true
 	}
-	// Check attribute form: key="..."
-	if strings.Contains(xmp, key+"=\"") {
+	// Check attribute form: key="..." or key='...' (both legal XML).
+	if strings.Contains(xmp, key+"=\"") || strings.Contains(xmp, key+"='") {
 		return true
 	}
 	return false
@@ -1938,12 +1942,14 @@ func extractXMPValue(xmp, key string) string {
 		}
 	}
 
-	// Try attribute form: key="value"
-	attrPrefix := key + "=\""
-	if idx := strings.Index(xmp, attrPrefix); idx >= 0 {
-		start := idx + len(attrPrefix)
-		if end := bytes.IndexByte([]byte(xmp[start:]), '"'); end >= 0 {
-			return xmp[start : start+end]
+	// Try attribute form: key="value" or key='value' (both legal XML).
+	for _, q := range []byte{'"', '\''} {
+		attrPrefix := key + "=" + string(q)
+		if idx := strings.Index(xmp, attrPrefix); idx >= 0 {
+			start := idx + len(attrPrefix)
+			if end := bytes.IndexByte([]byte(xmp[start:]), q); end >= 0 {
+				return xmp[start : start+end]
+			}
 		}
 	}
 
@@ -2750,7 +2756,30 @@ func normalizePDFDate(s string) string {
 }
 
 func normalizeXMPDate(s string) string {
-	return strings.TrimSpace(s)
+	s = strings.TrimSpace(s)
+	// normalizePDFDate folds a zero UTC offset to Z and always emits seconds;
+	// apply the same canonicalization to the XMP-side ISO 8601 date so equal
+	// instants written in different-but-equivalent forms compare equal (audit
+	// C22). Info D:202401011200Z and XMP 2024-01-01T12:00+00:00 are the same
+	// time and must not be reported as an Info/XMP mismatch.
+	if strings.HasSuffix(s, "+00:00") || strings.HasSuffix(s, "-00:00") {
+		s = s[:len(s)-6] + "Z"
+	}
+	if i := strings.IndexByte(s, 'T'); i >= 0 {
+		timePart := s[i+1:]
+		tzIdx := len(timePart)
+		for j := 0; j < len(timePart); j++ {
+			if c := timePart[j]; c == 'Z' || c == '+' || c == '-' {
+				tzIdx = j
+				break
+			}
+		}
+		hms := timePart[:tzIdx]
+		if strings.Count(hms, ":") == 1 { // hh:mm -> hh:mm:00
+			s = s[:i+1] + hms + ":00" + timePart[tzIdx:]
+		}
+	}
+	return s
 }
 
 // --- Transparency blending check (MR-2) ---
