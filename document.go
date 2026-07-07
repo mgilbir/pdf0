@@ -41,103 +41,49 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 	// All byte offsets in the PDF are relative to the %PDF- header
 	xrefOffset += headerOffset
 
-	// 3. Parse xref and trailer
-	lexer := NewLexer(data)
-	lexer.SetPosition(xrefOffset)
+	// 3. Parse xref sections, following the /Prev chain. Both traditional
+	// tables and xref streams can carry /Prev (incremental updates), and a
+	// visited-set guards against cycles: a /Prev pointing at an already-seen
+	// section (or at itself) would otherwise loop forever on a crafted or
+	// corrupt file.
+	xrefTable := &XRefTable{Entries: make(map[int]XRefEntry)}
+	visitedXref := make(map[int64]bool)
+	sectionOffset := xrefOffset
+	first := true
+	for {
+		if visitedXref[sectionOffset] {
+			break // cycle in the /Prev chain
+		}
+		visitedXref[sectionOffset] = true
 
-	// Check if it's a traditional xref table or xref stream
-	tok, err := lexer.NextToken()
-	if err != nil {
-		return nil, fmt.Errorf("reading xref: %w", err)
-	}
-
-	var xrefTable *XRefTable
-
-	if tok.Type == TokenXref {
-		// Traditional xref table
-		xrefTable, err = ParseXRefTable(data, lexer.Position())
+		sectionTable, sectionTrailer, err := parseXRefSection(data, sectionOffset, doc)
 		if err != nil {
-			return nil, fmt.Errorf("parsing xref table: %w", err)
+			if first {
+				return nil, err
+			}
+			break // tolerate a broken older section
 		}
-
-		// Parse trailer
-		lexer.SetPosition(lexer.Position())
-		// Skip to after xref entries to find trailer
-		trailer, err := findTrailer(data, lexer.Position())
-		if err != nil {
-			return nil, fmt.Errorf("parsing trailer: %w", err)
+		// Merge: newer sections take precedence over older ones.
+		for num, entry := range sectionTable.Entries {
+			if _, exists := xrefTable.Entries[num]; !exists {
+				xrefTable.Entries[num] = entry
+			}
 		}
-		doc.Trailer = *trailer
-
-		// Follow Prev chain. Guard against cycles: a /Prev pointing at an
-		// already-visited xref section (or at itself) would otherwise loop
-		// forever on a crafted or corrupt file.
-		visitedXref := map[int64]bool{xrefOffset: true}
-		prevObj := doc.Trailer.Get("Prev")
-		for prevObj != nil {
-			prevOffset, ok := prevObj.(Integer)
-			if !ok {
-				break
-			}
-			target := int64(prevOffset) + headerOffset
-			if visitedXref[target] {
-				break // cycle in the /Prev chain
-			}
-			visitedXref[target] = true
-			lexer.SetPosition(target)
-			tok, err := lexer.NextToken()
-			if err != nil || tok.Type != TokenXref {
-				break
-			}
-			prevTable, err := ParseXRefTable(data, lexer.Position())
-			if err != nil {
-				break
-			}
-			// Merge: earlier entries don't override later ones
-			for num, entry := range prevTable.Entries {
-				if _, exists := xrefTable.Entries[num]; !exists {
-					xrefTable.Entries[num] = entry
-				}
-			}
-			// Check for further Prev
-			prevTrailer, err := findTrailer(data, lexer.Position())
-			if err != nil {
-				break
-			}
-			prevObj = prevTrailer.Get("Prev")
+		if first {
+			doc.Trailer = *sectionTrailer
+			first = false
 		}
-	} else if tok.Type == TokenInteger {
-		// Xref stream: the xref is an indirect object containing a stream
-		lexer.SetPosition(xrefOffset)
-		parser := NewParserFromLexer(lexer)
-		iobj, err := parser.ParseIndirectObject()
-		if err != nil {
-			return nil, fmt.Errorf("parsing xref stream object: %w", err)
-		}
-		stream, ok := iobj.Value.(*Stream)
+		prevOffset, ok := sectionTrailer.Get("Prev").(Integer)
 		if !ok {
-			return nil, fmt.Errorf("xref stream object is not a stream")
+			break
 		}
-		xrefTable, err = ParseXRefStream(stream)
-		if err != nil {
-			return nil, fmt.Errorf("parsing xref stream: %w", err)
-		}
-		// The stream dictionary IS the trailer for xref streams
-		doc.Trailer = stream.Dict
-
-		// Store the xref stream object itself
-		doc.Objects[iobj.Number] = iobj
-	} else {
-		return nil, fmt.Errorf("expected 'xref' or object number at offset %d, got %v", xrefOffset, tok.Type)
+		sectionOffset = int64(prevOffset) + headerOffset
 	}
 
-	// 4. Parse all objects from xref entries
+	// 4. Parse all uncompressed objects from xref entries
+	lexer := NewLexer(data)
 	for num, entry := range xrefTable.Entries {
-		if entry.Free {
-			continue
-		}
-		if entry.Compressed {
-			// Object streams handled separately
+		if entry.Free || entry.Compressed {
 			continue
 		}
 		if _, exists := doc.Objects[num]; exists {
@@ -153,7 +99,63 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 		doc.Objects[num] = iobj
 	}
 
+	// 5. Materialize objects stored in object streams (type-2 entries). The
+	// containers themselves were loaded as ordinary objects in step 4.
+	if err := doc.loadCompressedObjects(xrefTable); err != nil {
+		return nil, err
+	}
+
 	return doc, nil
+}
+
+// parseXRefSection parses one cross-reference section (a traditional table
+// followed by its trailer, or an xref stream) at the given absolute offset.
+// For xref streams the stream dictionary doubles as the trailer, and the
+// stream object itself is recorded in doc.Objects.
+func parseXRefSection(data []byte, offset int64, doc *Document) (*XRefTable, *Dictionary, error) {
+	lexer := NewLexer(data)
+	lexer.SetPosition(offset)
+	tok, err := lexer.NextToken()
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading xref at offset %d: %w", offset, err)
+	}
+
+	switch tok.Type {
+	case TokenXref:
+		table, err := ParseXRefTable(data, lexer.Position())
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing xref table: %w", err)
+		}
+		trailer, err := findTrailer(data, lexer.Position())
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing trailer: %w", err)
+		}
+		return table, trailer, nil
+
+	case TokenInteger:
+		// Xref stream: the xref is an indirect object containing a stream
+		lexer.SetPosition(offset)
+		parser := NewParserFromLexer(lexer)
+		iobj, err := parser.ParseIndirectObject()
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing xref stream object: %w", err)
+		}
+		stream, ok := iobj.Value.(*Stream)
+		if !ok {
+			return nil, nil, fmt.Errorf("xref stream object is not a stream")
+		}
+		table, err := ParseXRefStream(stream)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing xref stream: %w", err)
+		}
+		if _, exists := doc.Objects[iobj.Number]; !exists {
+			doc.Objects[iobj.Number] = iobj
+		}
+		return table, &stream.Dict, nil
+
+	default:
+		return nil, nil, fmt.Errorf("expected 'xref' or object number at offset %d, got %v", offset, tok.Type)
+	}
 }
 
 // parseHeader extracts the PDF version from the header and returns the header offset.
