@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -217,5 +218,95 @@ func TestParseHeader(t *testing.T) {
 		if offset != tt.headerOffset {
 			t.Errorf("input %q: expected header offset %d, got %d", tt.input, tt.headerOffset, offset)
 		}
+	}
+}
+
+// TestRoundTripObjectStreamPDF verifies a document read from an
+// xref-stream/object-stream file writes back clean: no stale /XRef or
+// /ObjStm objects, no xref-stream keys polluting the trailer, and a second
+// read yields a semantically equal document.
+func TestRoundTripObjectStreamPDF(t *testing.T) {
+	pdf := buildObjStmPDF(t)
+	doc1, err := Read(bytes.NewReader(pdf), int64(len(pdf)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The trailer must not carry xref-stream plumbing.
+	for _, key := range []Name{"Type", "W", "Index", "Filter", "Length"} {
+		if doc1.Trailer.Get(key) != nil {
+			t.Errorf("trailer still contains xref-stream key /%s", key)
+		}
+	}
+	// The structural objects must be gone; the content objects present.
+	for num, iobj := range doc1.Objects {
+		if stream, ok := iobj.Value.(*Stream); ok {
+			if typ, ok := stream.Dict.Get("Type").(Name); ok && (typ == "XRef" || typ == "ObjStm") {
+				t.Errorf("object %d is a stale /%s stream", num, typ)
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := doc1.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.Bytes()
+	if bytes.Contains(out, []byte("/ObjStm")) || bytes.Contains(out, []byte("/XRef")) {
+		t.Error("written output contains stale cross-reference structure")
+	}
+
+	doc2, err := Read(bytes.NewReader(out), int64(len(out)))
+	if err != nil {
+		t.Fatalf("re-read: %v\n%s", err, out)
+	}
+	if !DocumentEqual(doc1, doc2) {
+		t.Error("documents differ after round-trip")
+	}
+	catalog := doc2.ResolveDict(doc2.Trailer.Get("Root"))
+	if catalog == nil {
+		t.Fatal("catalog not resolvable after round-trip")
+	}
+}
+
+// TestWriteXRefSubsections verifies sparse object numbers produce compact
+// subsections instead of a padded single section full of fabricated free
+// entries.
+func TestWriteXRefSubsections(t *testing.T) {
+	doc := &Document{
+		Version: "2.0",
+		Objects: map[int]*IndirectObject{
+			1:   {Number: 1, Value: &Dictionary{Keys: []Name{"Type"}, Values: []Object{Name("Catalog")}}},
+			2:   {Number: 2, Value: Integer(1)},
+			100: {Number: 100, Value: Integer(2)},
+			101: {Number: 101, Value: Integer(3)},
+		},
+		Trailer: Dictionary{Keys: []Name{"Root"}, Values: []Object{IndirectRef{Number: 1}}},
+	}
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	// Two subsections: 0-2 (head + two objects) and 100-101.
+	if !strings.Contains(out, "xref\n0 3\n") {
+		t.Errorf("missing first subsection header '0 3' in:\n%s", out)
+	}
+	if !strings.Contains(out, "100 2\n") {
+		t.Errorf("missing second subsection header '100 2' in:\n%s", out)
+	}
+	if strings.Contains(out, "0000000000 00000 f") {
+		t.Errorf("output contains fabricated free entries:\n%s", out)
+	}
+
+	// And it must read back.
+	data := buf.Bytes()
+	doc2, err := Read(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("re-read: %v\n%s", err, data)
+	}
+	if len(doc2.Objects) != 4 {
+		t.Errorf("expected 4 objects after re-read, got %d", len(doc2.Objects))
 	}
 }
