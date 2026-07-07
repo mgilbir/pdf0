@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -126,6 +127,16 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkPermsDict,
 	}
 
+	// Memoize expensive traversals (page-tree walks, content-stream
+	// decompression) for the duration of this run. Several checks walk the
+	// same structures; without the cache each content stream inflated up to
+	// three times per page and the page tree was collected in ~8 checks.
+	doc.valCache = &validationCache{
+		pages:   make(map[int][]pageInfo),
+		content: make(map[*Stream][]byte),
+	}
+	defer func() { doc.valCache = nil }()
+
 	for _, check := range checks {
 		errs = append(errs, check(doc, level)...)
 	}
@@ -135,7 +146,30 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		errs = append(errs, checkNoDataAfterEOF(rawData, level)...)
 	}
 
+	// Checks iterate map-ordered doc.Objects, so their concatenated output
+	// order is nondeterministic; sort for stable, diffable reports.
+	sort.Slice(errs, func(i, j int) bool {
+		if errs[i].Rule != errs[j].Rule {
+			return errs[i].Rule < errs[j].Rule
+		}
+		if errs[i].Object != errs[j].Object {
+			return errs[i].Object < errs[j].Object
+		}
+		return errs[i].Message < errs[j].Message
+	})
+
 	return errs
+}
+
+// validationCache memoizes traversals for one ValidatePDFABytes run. It is
+// installed at the start of a run and dropped at the end, so documents may
+// be mutated freely between validations. Validating the same Document from
+// multiple goroutines concurrently is not supported.
+type validationCache struct {
+	pages           map[int][]pageInfo // page-tree object number -> pages
+	content         map[*Stream][]byte // decoded content streams
+	directAnnots    []annotOccurrence
+	hasDirectAnnots bool
 }
 
 // --- File structure checks (6.1) ---
@@ -252,7 +286,7 @@ func checkTrailerInfo(doc *Document, level PDFALevel) []ValidationError {
 			return []ValidationError{{
 				Rule:    "6.1.3",
 				Level:   level,
-				Message: fmt.Sprintf("Info dictionary may only contain /ModDate, found /%s", key),
+				Message: fmt.Sprintf("Info dictionary may only contain /ModDate, found /%s", string(key)),
 			}}
 		}
 	}
@@ -398,7 +432,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 					errsPageLevel = append(errsPageLevel, ValidationError{
 						Rule:    "6.2.3",
 						Level:   level,
-						Message: fmt.Sprintf("page OutputIntents[%d] must have /S /GTS_PDFA1, got /%s", j, sName),
+						Message: fmt.Sprintf("page OutputIntents[%d] must have /S /GTS_PDFA1, got /%s", j, string(sName)),
 						Object:  page.objNum,
 					})
 				}
@@ -757,7 +791,7 @@ func checkPermsDict(doc *Document, level PDFALevel) []ValidationError {
 			errs = append(errs, ValidationError{
 				Rule:    "6.1.12",
 				Level:   level,
-				Message: fmt.Sprintf("Perms dictionary contains forbidden key /%s (only /UR3 and /DocMDP allowed)", key),
+				Message: fmt.Sprintf("Perms dictionary contains forbidden key /%s (only /UR3 and /DocMDP allowed)", string(key)),
 			})
 		}
 	}
@@ -786,7 +820,7 @@ func checkPermsDict(doc *Document, level PDFALevel) []ValidationError {
 					errs = append(errs, ValidationError{
 						Rule:    "6.1.12",
 						Level:   level,
-						Message: fmt.Sprintf("signature reference dictionary contains deprecated key /%s", forbidden),
+						Message: fmt.Sprintf("signature reference dictionary contains deprecated key /%s", string(forbidden)),
 					})
 				}
 			}
@@ -887,7 +921,7 @@ func checkNoExternalStreams(doc *Document, level PDFALevel) []ValidationError {
 				errs = append(errs, ValidationError{
 					Rule:    "6.1.6",
 					Level:   level,
-					Message: fmt.Sprintf("stream must not have /%s (external stream reference)", key),
+					Message: fmt.Sprintf("stream must not have /%s (external stream reference)", string(key)),
 					Object:  num,
 				})
 			}
@@ -1102,6 +1136,9 @@ type annotOccurrence struct {
 // doc.Objects scans the annotation checks start from can never see them
 // (audit A9); every annotation check runs over this list as well.
 func collectDirectAnnotations(doc *Document) []annotOccurrence {
+	if c := doc.valCache; c != nil && c.hasDirectAnnots {
+		return c.directAnnots
+	}
 	catalog := getCatalog(doc)
 	if catalog == nil {
 		return nil
@@ -1117,6 +1154,10 @@ func collectDirectAnnotations(doc *Document) []annotOccurrence {
 				out = append(out, annotOccurrence{dict: dict, num: page.objNum})
 			}
 		}
+	}
+	if c := doc.valCache; c != nil {
+		c.directAnnots = out
+		c.hasDirectAnnots = true
 	}
 	return out
 }
@@ -1137,7 +1178,7 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 			errs = append(errs, ValidationError{
 				Rule:    "6.3.1",
 				Level:   level,
-				Message: fmt.Sprintf("annotation subtype /%s is not allowed in %s", st, level),
+				Message: fmt.Sprintf("annotation subtype /%s is not allowed in %s", string(st), level),
 				Object:  num,
 			})
 		}
@@ -1470,7 +1511,7 @@ func checkNoForbiddenActions(doc *Document, level PDFALevel) []ValidationError {
 				errs = append(errs, ValidationError{
 					Rule:    "6.6.1",
 					Level:   level,
-					Message: fmt.Sprintf("forbidden action type /%s", s),
+					Message: fmt.Sprintf("forbidden action type /%s", string(s)),
 					Object:  num,
 				})
 			}
@@ -1510,7 +1551,7 @@ func checkActionChain(doc *Document, ref Object, objNum int, level PDFALevel, er
 		*errs = append(*errs, ValidationError{
 			Rule:    "6.6.1",
 			Level:   level,
-			Message: fmt.Sprintf("forbidden action type /%s", s),
+			Message: fmt.Sprintf("forbidden action type /%s", string(s)),
 			Object:  objNum,
 		})
 	}
@@ -1548,7 +1589,7 @@ func checkNamedActions(doc *Document, level PDFALevel) []ValidationError {
 			errs = append(errs, ValidationError{
 				Rule:    "6.6.1",
 				Level:   level,
-				Message: fmt.Sprintf("named action /%s not allowed (only NextPage, PrevPage, FirstPage, LastPage)", nName),
+				Message: fmt.Sprintf("named action /%s not allowed (only NextPage, PrevPage, FirstPage, LastPage)", string(nName)),
 				Object:  num,
 			})
 		}
@@ -1815,7 +1856,7 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 					errs = append(errs, ValidationError{
 						Rule:    "6.4",
 						Level:   level,
-						Message: fmt.Sprintf("/BM must be /Normal or /Compatible, got /%s", n),
+						Message: fmt.Sprintf("/BM must be /Normal or /Compatible, got /%s", string(n)),
 						Object:  objNum,
 					})
 				}
@@ -1836,7 +1877,7 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 					errs = append(errs, ValidationError{
 						Rule:    "6.4",
 						Level:   level,
-						Message: fmt.Sprintf("/%s must be 1.0 (PDF/A-1b)", key),
+						Message: fmt.Sprintf("/%s must be 1.0 (PDF/A-1b)", string(key)),
 						Object:  objNum,
 					})
 				}
@@ -2180,7 +2221,7 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 						errs = append(errs, ValidationError{
 							Rule:    rule,
 							Level:   level,
-							Message: fmt.Sprintf("invalid blend mode /%s", n),
+							Message: fmt.Sprintf("invalid blend mode /%s", string(n)),
 							Object:  num,
 						})
 					}
@@ -2858,8 +2899,18 @@ type pageInfo struct {
 }
 
 func collectPages(doc *Document, pageTreeRef Object) []pageInfo {
+	c := doc.valCache
+	ref, isRef := pageTreeRef.(IndirectRef)
+	if c != nil && isRef {
+		if pages, ok := c.pages[ref.Number]; ok {
+			return pages
+		}
+	}
 	var pages []pageInfo
 	collectPagesRecursive(doc, pageTreeRef, &pages, make(map[int]bool))
+	if c != nil && isRef {
+		c.pages[ref.Number] = pages
+	}
 	return pages
 }
 
@@ -3016,7 +3067,7 @@ func checkEmbeddedFileSpecs(doc *Document, level PDFALevel, catalog *Dictionary)
 							errs = append(errs, ValidationError{
 								Rule:    rule,
 								Level:   level,
-								Message: fmt.Sprintf("embedded file stream /Subtype must be a MIME type, got /%s", name),
+								Message: fmt.Sprintf("embedded file stream /Subtype must be a MIME type, got /%s", string(name)),
 								Object:  num,
 							})
 						}
@@ -3344,7 +3395,15 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 	pages := collectPages(doc, pagesRef)
 	for _, page := range pages {
 		for _, boxKey := range []Name{"MediaBox", "CropBox", "BleedBox", "TrimBox", "ArtBox"} {
-			boxObj := page.dict.Get(boxKey)
+			var boxObj Object
+			switch boxKey {
+			case "MediaBox", "CropBox":
+				// Inheritable attributes: a page without its own entry
+				// takes its Pages ancestor's.
+				boxObj = doc.Resolve(inheritedPageAttr(doc, page.dict, boxKey))
+			default:
+				boxObj = doc.Resolve(page.dict.Get(boxKey))
+			}
 			if boxObj == nil {
 				continue
 			}
@@ -3450,13 +3509,13 @@ func getContentStreamData(doc *Document, contentsRef Object) []byte {
 	resolved := doc.Resolve(contentsRef)
 	switch v := resolved.(type) {
 	case *Stream:
-		return decodeContentStream(v)
+		return decodeContentStream(doc, v)
 	case Array:
 		var result []byte
 		for _, elem := range v {
 			streamObj := doc.Resolve(elem)
 			if stream, ok := streamObj.(*Stream); ok {
-				data := decodeContentStream(stream)
+				data := decodeContentStream(doc, stream)
 				if data != nil {
 					result = append(result, ' ')
 					result = append(result, data...)
@@ -3744,11 +3803,22 @@ func classifyCalibratedCS(doc *Document, csObj Object) (coversRGB, coversCMYK, c
 
 // resolveResources resolves a page's Resources dictionary.
 func resolveResources(doc *Document, page *Dictionary) *Dictionary {
-	resRef := page.Get("Resources")
-	if resRef == nil {
-		return nil
+	return doc.ResolveDict(inheritedPageAttr(doc, page, "Resources"))
+}
+
+// inheritedPageAttr looks up an inheritable page attribute (Resources,
+// MediaBox, CropBox, Rotate), walking up the /Parent chain when the page
+// itself does not define it — pages routinely inherit these from their
+// Pages node, which the direct Get missed entirely.
+func inheritedPageAttr(doc *Document, page *Dictionary, key Name) Object {
+	node := page
+	for hops := 0; node != nil && hops < 64; hops++ {
+		if v := node.Get(key); v != nil {
+			return v
+		}
+		node = doc.ResolveDict(node.Get("Parent"))
 	}
-	return doc.ResolveDict(resRef)
+	return nil
 }
 
 // scanPageForDeviceCS checks if a page uses device color spaces.
@@ -3943,7 +4013,7 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 						for _, cpVal := range cpDict.Values {
 							cpObj := doc.Resolve(cpVal)
 							if cpStream, ok := cpObj.(*Stream); ok {
-								data := decodeContentStream(cpStream)
+								data := decodeContentStream(doc, cpStream)
 								if data != nil {
 									r, c, g := scanStreamForDeviceOps(data)
 									*usesRGB = *usesRGB || r
@@ -4017,50 +4087,30 @@ func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGr
 }
 
 // maxContentStreamSize is the maximum decoded content stream size we'll scan.
-// Larger streams are skipped to avoid decompression bombs.
-const maxContentStreamSize = 1 << 20 // 1 MB
+// Larger streams are skipped to bound memory on hostile input. The previous
+// 1 MB cap (and Flate-only, no-filter-array decoding) silently hid ordinary
+// content from every scanner — an oversize or [/FlateDecode]-wrapped stream
+// full of DeviceRGB validated clean.
+const maxContentStreamSize = 64 << 20 // 64 MB
 
-// decodeContentStream attempts to decode a stream for content scanning.
-// Returns nil if the stream is too large, compressed with an unsupported filter,
-// or otherwise undecodable. Uses a size-limited reader to prevent decompression bombs.
-func decodeContentStream(stream *Stream) []byte {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		if len(stream.Data) > maxContentStreamSize {
-			return nil
+// decodeContentStream decodes a stream for content scanning through the full
+// filter pipeline (filter arrays, ASCIIHex, predictors). Results are
+// memoized per validation run: several checks re-decode the same page
+// contents. Returns nil if the stream cannot be decoded.
+func decodeContentStream(doc *Document, stream *Stream) []byte {
+	if c := doc.valCache; c != nil {
+		if data, ok := c.content[stream]; ok {
+			return data
 		}
-		return stream.Data
 	}
-
-	// Only handle FlateDecode for content streams
-	filterName, ok := filter.(Name)
-	if !ok {
-		return nil // arrays of filters not worth scanning for content ops
+	var data []byte
+	if decoded, err := decodeStreamData(stream); err == nil && len(decoded) <= maxContentStreamSize {
+		data = decoded
 	}
-	if filterName != "FlateDecode" {
-		return nil // only decode flate-compressed content
+	if c := doc.valCache; c != nil {
+		c.content[stream] = data
 	}
-
-	if len(stream.Data) == 0 {
-		return nil
-	}
-
-	r, err := zlib.NewReader(bytes.NewReader(stream.Data))
-	if err != nil {
-		return nil
-	}
-	defer r.Close()
-
-	// Read with a size limit to prevent decompression bombs
-	limited := io.LimitReader(r, maxContentStreamSize+1)
-	decoded, err := io.ReadAll(limited)
-	if err != nil {
-		return nil
-	}
-	if len(decoded) > maxContentStreamSize {
-		return nil // too large
-	}
-	return decoded
+	return data
 }
 
 // scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
@@ -4069,7 +4119,7 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 	resolved := doc.Resolve(contentsRef)
 	switch v := resolved.(type) {
 	case *Stream:
-		data := decodeContentStream(v)
+		data := decodeContentStream(doc, v)
 		if data == nil {
 			return
 		}
@@ -4081,7 +4131,7 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 		for _, elem := range v {
 			streamObj := doc.Resolve(elem)
 			if s, ok := streamObj.(*Stream); ok {
-				data := decodeContentStream(s)
+				data := decodeContentStream(doc, s)
 				if data == nil {
 					continue
 				}
@@ -4670,7 +4720,7 @@ func collectTintTransforms(doc *Document, dict *Dictionary, tintTransforms map[N
 			*errs = append(*errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
-				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", colorantName, prev.objNum, tintRef.Number),
+				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", string(colorantName), prev.objNum, tintRef.Number),
 				Object:  objNum,
 			})
 		} else {
@@ -4810,7 +4860,7 @@ func checkColorSpaceValueSeen(doc *Document, csObj Object, objNum int, level PDF
 										*errs = append(*errs, ValidationError{
 											Rule:    rule,
 											Level:   level,
-											Message: fmt.Sprintf("DeviceN colorant /%s not found in Colorants dictionary", name),
+											Message: fmt.Sprintf("DeviceN colorant /%s not found in Colorants dictionary", string(name)),
 											Object:  objNum,
 										})
 									}

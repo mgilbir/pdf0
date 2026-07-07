@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"compress/zlib"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1146,7 +1147,7 @@ const (
 	corpusMaxFalsePositives = 0
 	// Fail files the validator fails to flag (false negatives / unimplemented
 	// rules). This is the headline coverage gap; drive it down over time.
-	corpusMaxMissed = 783
+	corpusMaxMissed = 779
 	// Files the parser cannot read at all. All five are deliberately broken
 	// fail files: four with malformed stream keywords/lengths and one whose
 	// object stream holds corrupt zlib data.
@@ -1980,5 +1981,106 @@ func TestValidatePDFA_OutputIntentRules(t *testing.T) {
 	catalog2.Set("OutputIntents", Array{i1, i2})
 	if !hasRule(checkOutputIntents(doc2, PDFA2b), "6.2.3") {
 		t.Error("differing DestOutputProfile objects across intents must be flagged")
+	}
+}
+
+// Validation output must be deterministic (checks iterate Go maps).
+func TestValidatePDFA_DeterministicOutput(t *testing.T) {
+	doc := NewPDFADocument(PDFA2b)
+	page := addTestPage(doc)
+	// Provoke several errors from different checks.
+	page.Set("AA", &Dictionary{})
+	annot := &Dictionary{}
+	annot.Set("Subtype", Name("Screen"))
+	annot.Set("Rect", Array{Integer(0), Integer(0), Integer(10), Integer(10)})
+	page.Set("Annots", Array{annot})
+
+	first := ValidatePDFA(doc, PDFA2b)
+	for i := 0; i < 5; i++ {
+		again := ValidatePDFA(doc, PDFA2b)
+		if len(again) != len(first) {
+			t.Fatalf("run %d: %d errors vs %d", i, len(again), len(first))
+		}
+		for j := range again {
+			if again[j] != first[j] {
+				t.Fatalf("run %d: error %d differs: %v vs %v", i, j, again[j], first[j])
+			}
+		}
+	}
+}
+
+// A24: content wrapped in a filter ARRAY must still be scanned.
+func TestContentScanHandlesFilterArrays(t *testing.T) {
+	var raw bytes.Buffer
+	for i := 0; i < 30; i++ {
+		raw.WriteString("q ")
+	}
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	zw.Write(raw.Bytes())
+	zw.Close()
+
+	doc := NewPDFADocument(PDFA2b)
+	page := addTestPage(doc)
+	content := &Stream{Dict: Dictionary{}, Data: z.Bytes()}
+	content.Dict.Set("Filter", Array{Name("FlateDecode")})
+	content.Dict.Set("Length", Integer(z.Len()))
+	doc.Objects[21] = &IndirectObject{Number: 21, Value: content}
+	page.Set("Contents", IndirectRef{Number: 21})
+
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.1.13") {
+		t.Error("q/Q nesting inside a filter-array stream must be detected")
+	}
+}
+
+// A31: inheritable page attributes come from the Pages ancestors.
+func TestPageSizeLimitInherited(t *testing.T) {
+	doc := NewPDFADocument(PDFA2b)
+	page := addTestPage(doc)
+	page.Delete("MediaBox")
+	pages := doc.Objects[2].Value.(*Dictionary)
+	pages.Set("MediaBox", Array{Integer(0), Integer(0), Integer(1), Integer(1)}) // 1x1: below 3-unit floor
+
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.1.13") {
+		t.Error("undersized inherited MediaBox must be detected")
+	}
+}
+
+// C21: builder accepts title/author and stays conformant.
+func TestNewPDFADocumentWithInfo(t *testing.T) {
+	doc := NewPDFADocumentWithInfo(PDFA2b, "My Title", "An Author")
+	meta := doc.Objects[3].Value.(*Stream)
+	if !bytes.Contains(meta.Data, []byte("My Title")) || !bytes.Contains(meta.Data, []byte("An Author")) {
+		t.Error("title/author missing from generated XMP")
+	}
+	if errs := ValidatePDFA(doc, PDFA2b); len(errs) > 0 {
+		t.Errorf("document with info should validate clean: %v", errs)
+	}
+}
+
+// C30: XML-illegal control characters are stripped from XMP values.
+func TestXMLEscapeControlChars(t *testing.T) {
+	got := xmlEscape("a\x00b\x1Fc\td\ne")
+	if got != "abc\td\ne" {
+		t.Errorf("expected control chars stripped, got %q", got)
+	}
+	if xmlEscape("<&>") != "&lt;&amp;&gt;" {
+		t.Error("metacharacter escaping broken")
+	}
+}
+
+// C22: Integer-Real equality uses the same epsilon as Real-Real.
+func TestEqualNumericEpsilonConsistency(t *testing.T) {
+	if !Equal(Real(1.0), Real(1.0+1e-12)) {
+		t.Error("Real-Real epsilon expected")
+	}
+	if !Equal(Integer(1), Real(1.0+1e-12)) {
+		t.Error("Integer-Real must use the same epsilon as Real-Real")
+	}
+	if !Equal(Real(1.0+1e-12), Integer(1)) {
+		t.Error("Real-Integer must use the same epsilon as Real-Real")
+	}
+	if Equal(Integer(1), Real(1.5)) {
+		t.Error("distinct values must not be equal")
 	}
 }

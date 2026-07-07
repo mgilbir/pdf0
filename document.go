@@ -18,6 +18,10 @@ type Document struct {
 	// string and stream contents remain in their encrypted form. Write
 	// refuses such documents.
 	Encrypted bool
+
+	// valCache memoizes traversals for the duration of one validation run;
+	// see validationCache.
+	valCache *validationCache
 }
 
 // Read parses a PDF document from the given data.
