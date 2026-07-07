@@ -160,12 +160,25 @@ func dictionaryEqualDepth(a, b *Dictionary, depth int) bool {
 	if a.Len() != b.Len() {
 		return false
 	}
+	// Match each of a's (key, value) entries to a distinct entry of b. Using
+	// b.Get (first occurrence) would give false positives on duplicate keys —
+	// e.g. {A:1, A:1} would compare equal to {A:1, B:99}, and {A:1, A:2} would
+	// not compare equal to itself (audit C26). Equal lengths plus a full
+	// one-to-one matching is correct multiset equality.
+	used := make([]bool, len(b.Keys))
 	for i, key := range a.Keys {
-		bVal := b.Get(key)
-		if bVal == nil {
-			return false
+		matched := false
+		for j, bKey := range b.Keys {
+			if used[j] || bKey != key {
+				continue
+			}
+			if equalDepth(a.Values[i], b.Values[j], depth+1) {
+				used[j] = true
+				matched = true
+				break
+			}
 		}
-		if !equalDepth(a.Values[i], bVal, depth+1) {
+		if !matched {
 			return false
 		}
 	}

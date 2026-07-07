@@ -717,6 +717,36 @@ func collectContentStreamData(doc *Document) map[int][]byte {
 			out[num] = data
 		}
 	}
+	// Type3 glyph procedures are content streams too, but carry no
+	// Subtype/PatternType marker, so the loop above misses them. Pull them from
+	// each Type3 font's /CharProcs (audit C27).
+	for _, iobj := range doc.Objects {
+		fd, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		if st, _ := fd.Get("Subtype").(Name); st != "Type3" {
+			continue
+		}
+		cp := doc.ResolveDict(fd.Get("CharProcs"))
+		if cp == nil {
+			continue
+		}
+		for _, val := range cp.Values {
+			num := resolveObjNum(doc, val)
+			if num == 0 {
+				continue
+			}
+			if _, done := out[num]; done {
+				continue
+			}
+			if s, ok := doc.Resolve(val).(*Stream); ok {
+				if data := decodeContentStream(doc, s); data != nil {
+					out[num] = data
+				}
+			}
+		}
+	}
 	return out
 }
 
