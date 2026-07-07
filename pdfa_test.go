@@ -1147,7 +1147,7 @@ const (
 	corpusMaxFalsePositives = 0
 	// Fail files the validator fails to flag (false negatives / unimplemented
 	// rules). This is the headline coverage gap; drive it down over time.
-	corpusMaxMissed = 291
+	corpusMaxMissed = 223
 	// Files the parser cannot read at all. All five are deliberately broken
 	// fail files: four with malformed stream keywords/lengths and one whose
 	// object stream holds corrupt zlib data.
@@ -1796,8 +1796,11 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 		doc.Objects[30] = &IndirectObject{Number: 30, Value: fn}
 		doc.Objects[31] = &IndirectObject{Number: 31, Value: fn2Body}
 
-		sep1 := Array{Name("Separation"), Name("Spot"), Name("DeviceCMYK"), IndirectRef{Number: 30}}
-		sep2 := Array{Name("Separation"), Name("Spot"), Name("DeviceCMYK"), IndirectRef{Number: 31}}
+		// The alternate must be CIE-based: a device alternate would need
+		// OutputIntent coverage and trip the device-colour rule instead.
+		alt := Array{Name("ICCBased"), IndirectRef{Number: 5}}
+		sep1 := Array{Name("Separation"), Name("Spot"), alt, IndirectRef{Number: 30}}
+		sep2 := Array{Name("Separation"), Name("Spot"), alt, IndirectRef{Number: 31}}
 		csDict := &Dictionary{}
 		csDict.Set("CS0", sep1)
 		csDict.Set("CS1", sep2)
