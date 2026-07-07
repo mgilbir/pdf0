@@ -337,3 +337,120 @@ func contentActualTexts(data []byte) [][]byte {
 	}
 	return out
 }
+
+// primaryColorants are the process colorants whose Type 5 halftone
+// component must NOT carry a TransferFunction. A component for any other
+// (non-primary) colorant must carry one, so its output can be mapped.
+var primaryColorants = map[Name]bool{
+	"Cyan": true, "Magenta": true, "Yellow": true, "Black": true, "Gray": true,
+}
+
+// halftoneReserved are the non-colorant keys of a Type 5 halftone dictionary.
+var halftoneReserved = map[Name]bool{"Type": true, "HalftoneType": true, "HalftoneName": true}
+
+// checkType5Halftones validates the TransferFunction usage in Type 5
+// (multi-component) halftone dictionaries (ISO 19005-2/-4 6.2.5): a component
+// for a process (primary) colorant must not contain a TransferFunction, and
+// a component for a non-primary colorant must contain one.
+func checkType5Halftones(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA1b {
+		return nil // 1b forbids transparency/halftone features via other rules
+	}
+	rule := "6.2.5"
+	if level == PDFA4 {
+		rule = "6.2.5"
+	}
+	var errs []ValidationError
+	seen := map[string]bool{}
+	add := func(msg string, obj int) {
+		if seen[msg] {
+			return
+		}
+		seen[msg] = true
+		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+	}
+
+	// Only halftones actually applied through a used ExtGState count (the
+	// corpus passes an unused Type 5 halftone with RGB colorants and a
+	// TransferFunction).
+	for _, d := range collectAppliedHalftones(doc) {
+		if ht, _ := doc.Resolve(d.Get("HalftoneType")).(Integer); ht != 5 {
+			continue
+		}
+		num := 0
+		for _, key := range d.Keys {
+			if halftoneReserved[key] || key == "Default" {
+				continue
+			}
+			comp := doc.ResolveDict(d.Get(key))
+			if comp == nil {
+				continue
+			}
+			hasTF := comp.Get("TransferFunction") != nil
+			if primaryColorants[key] {
+				if hasTF {
+					add("a Type 5 halftone component for a primary colorant must not contain a TransferFunction", num)
+				}
+			} else if !hasTF {
+				add("a Type 5 halftone component for a non-primary colorant must contain a TransferFunction", num)
+			}
+		}
+	}
+	return errs
+}
+
+// collectAppliedHalftones returns every halftone dictionary referenced by the
+// /HT entry of an ExtGState that is applied (via gs) in executed content.
+func collectAppliedHalftones(doc *Document) []*Dictionary {
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	var out []*Dictionary
+	seenHT := map[*Dictionary]bool{}
+	seenC := map[*Dictionary]bool{}
+	var walk func(container *Dictionary, data []byte)
+	walk = func(container *Dictionary, data []byte) {
+		if container == nil || seenC[container] || data == nil {
+			return
+		}
+		seenC[container] = true
+		res := resolveResources(doc, container)
+		if res == nil {
+			return
+		}
+		used := contentUsedNames(data)
+		gsNames := scanContentColorUsage(data).gsNames
+		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
+			for i, key := range gsDict.Keys {
+				if !gsNames[string(key)] {
+					continue
+				}
+				gs := doc.ResolveDict(gsDict.Values[i])
+				if gs == nil {
+					continue
+				}
+				if ht := doc.ResolveDict(gs.Get("HT")); ht != nil && !seenHT[ht] {
+					seenHT[ht] = true
+					out = append(out, ht)
+				}
+			}
+		}
+		if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
+			for i, key := range xobj.Keys {
+				if !used.xobjects[string(key)] {
+					continue
+				}
+				if s, ok := doc.Resolve(xobj.Values[i]).(*Stream); ok {
+					if st, _ := s.Dict.Get("Subtype").(Name); st == "Form" {
+						walk(&s.Dict, decodeContentStream(doc, s))
+					}
+				}
+			}
+		}
+	}
+	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+		walk(page.dict, getContentStreamData(doc, page.dict.Get("Contents")))
+	}
+	return out
+}

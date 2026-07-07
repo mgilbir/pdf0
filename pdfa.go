@@ -148,6 +148,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkA4TriggerEvents,
 		// ActualText Private Use Area values (6.2.10.8)
 		checkActualTextPUA,
+		// Type 5 halftone components (6.2.5)
+		checkType5Halftones,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
 		// CMap CID implementation limit (6.1.12 / 6.1.13)
@@ -2446,8 +2448,38 @@ func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	for _, p := range pairs {
-		infoVal := getInfoString(infoDict, p.infoKey)
+		raw := infoDict.Get(Name(p.infoKey))
+		if raw == nil {
+			continue
+		}
+		// An Info entry that is an indirect object must resolve to a string
+		// (ISO 19005-1 6.7.3): a non-string value is itself a violation.
+		resolved := doc.Resolve(raw)
+		if _, isNull := resolved.(Null); isNull || resolved == nil {
+			continue // an indirect null value is equivalent to absence
+		}
+		strVal, isStr := resolved.(String)
+		if !isStr {
+			errs = append(errs, ValidationError{
+				Rule:    "6.7.3",
+				Level:   level,
+				Message: fmt.Sprintf("Info /%s is not a string value", p.infoKey),
+			})
+			continue
+		}
+		infoVal := decodePDFTextString(strVal.Value)
 		if infoVal == "" {
+			continue
+		}
+
+		// When Info /Author is present, XMP dc:creator shall contain
+		// exactly one entry (ISO 19005-1 6.7.3).
+		if p.infoKey == "Author" && countXMPListEntries(xmp, "dc:creator") > 1 {
+			errs = append(errs, ValidationError{
+				Rule:    "6.7.3",
+				Level:   level,
+				Message: "XMP dc:creator contains more than one entry while Info /Author is present",
+			})
 			continue
 		}
 
@@ -2530,6 +2562,24 @@ func decodePDFTextString(b []byte) string {
 	}
 	// PDFDocEncoding matches ASCII in the printable range; pass through.
 	return string(b)
+}
+
+// countXMPListEntries counts the rdf:li entries inside an XMP list-valued
+// property (rdf:Seq/rdf:Bag/rdf:Alt).
+func countXMPListEntries(xmp, key string) int {
+	openTag := "<" + key + ">"
+	closeTag := "</" + key + ">"
+	i := strings.Index(xmp, openTag)
+	if i < 0 {
+		return 0
+	}
+	i += len(openTag)
+	end := strings.Index(xmp[i:], closeTag)
+	if end < 0 {
+		return 0
+	}
+	section := xmp[i : i+end]
+	return strings.Count(section, "<rdf:li")
 }
 
 func extractXMPListValue(xmp, key string) string {
@@ -3288,6 +3338,17 @@ func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
 	if configsRef := ocpDict.Get("Configs"); configsRef != nil {
 		if arr, ok := doc.Resolve(configsRef).(Array); ok {
 			configs = append(configs, arr...)
+			// Every configuration dictionary in /Configs must carry a /Name
+			// (ISO 19005-2/-3 6.9, -4 6.10).
+			for _, cfgRef := range arr {
+				if cfg := doc.ResolveDict(cfgRef); cfg != nil && cfg.Get("Name") == nil {
+					errs = append(errs, ValidationError{
+						Rule:    ocRule,
+						Level:   level,
+						Message: "an optional-content configuration in /Configs must contain a /Name",
+					})
+				}
+			}
 		}
 	}
 	for _, cfgRef := range configs {

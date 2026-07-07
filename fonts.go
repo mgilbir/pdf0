@@ -1407,7 +1407,13 @@ func cidGlyphWidth(fp *fontProgram, desc *Dictionary, doc *Document, cidSub Name
 
 func cidGlyphExists(fp *fontProgram, cidSub Name, cid int) bool {
 	if cidSub == "CIDFontType2" {
-		return cid > 0 && cid < fp.numGlyphs
+		if cid <= 0 || cid >= fp.numGlyphs {
+			return false
+		}
+		if fp.glyphPresent != nil {
+			return fp.glyphPresent[cid]
+		}
+		return true
 	}
 	if fp.cidGIDs != nil {
 		return fp.cidGIDs[cid]
