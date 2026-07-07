@@ -310,20 +310,7 @@ func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
 	if catalog == nil {
 		return nil
 	}
-	var oiProfile *Stream
-	if arr, ok := doc.Resolve(catalog.Get("OutputIntents")).(Array); ok {
-		for _, el := range arr {
-			d := doc.ResolveDict(el)
-			if d == nil {
-				continue
-			}
-			if s, _ := d.Get("S").(Name); s == "GTS_PDFA1" {
-				if p, ok := doc.Resolve(d.Get("DestOutputProfile")).(*Stream); ok {
-					oiProfile = p
-				}
-			}
-		}
-	}
+	catalogOI := pdfaOutputIntentProfile(doc, catalog)
 
 	var errs []ValidationError
 	seen := map[string]bool{}
@@ -336,11 +323,37 @@ func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
 	}
 	seenC := map[*Dictionary]bool{}
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+		// PDF/A-4 permits page-level output intents; prefer the page's own.
+		oiProfile := catalogOI
+		if p := pdfaOutputIntentProfile(doc, page.dict); p != nil {
+			oiProfile = p
+		}
 		data := getContentStreamData(doc, page.dict.Get("Contents"))
 		blend := groupBlendProfile(doc, page.dict)
 		walkICCIdentity(doc, page.dict, data, page.objNum, oiProfile, blend, seenC, add)
 	}
 	return errs
+}
+
+// pdfaOutputIntentProfile returns the DestOutputProfile of a dictionary's
+// GTS_PDFA1 output intent, or nil.
+func pdfaOutputIntentProfile(doc *Document, container *Dictionary) *Stream {
+	arr, ok := doc.Resolve(container.Get("OutputIntents")).(Array)
+	if !ok {
+		return nil
+	}
+	for _, el := range arr {
+		d := doc.ResolveDict(el)
+		if d == nil {
+			continue
+		}
+		if s, _ := d.Get("S").(Name); s == "GTS_PDFA1" {
+			if p, ok := doc.Resolve(d.Get("DestOutputProfile")).(*Stream); ok {
+				return p
+			}
+		}
+	}
+	return nil
 }
 
 func walkICCIdentity(doc *Document, container *Dictionary, data []byte, objNum int, oi, blend *Stream, seen map[*Dictionary]bool, add func(string, int)) {

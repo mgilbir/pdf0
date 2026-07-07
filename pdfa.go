@@ -138,10 +138,20 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkFontDictionaries,
 		// Content-stream operators (6.2.2)
 		checkContentStreamOperators,
+		// Prohibited catalog/page entries (6.11 / 6.12)
+		checkProhibitedCatalogEntries,
+		// Image interpolation / rendering intent (6.2.4-6.2.9)
+		checkImageIntentAndInterpolate,
+		// File trailer identifier (6.1.3)
+		checkFileTrailerID,
+		// PDF/A-4 trigger events (6.6.3)
+		checkA4TriggerEvents,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
 		// CMap CID implementation limit (6.1.12 / 6.1.13)
 		checkCMapCIDLimit,
+		// PDF/A-1 CIDSet program completeness (6.3.5)
+		checkCIDSetProgramComplete,
 	}
 
 	// Memoize expensive traversals (page-tree walks, content-stream
@@ -2293,16 +2303,14 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 				Object:  num,
 			})
 		}
-		// /RI, when present, must be a standard rendering intent.
-		if level != PDFA1b {
-			if ri, ok := doc.Resolve(dict.Get("RI")).(Name); ok && !standardRenderingIntents[string(ri)] {
-				errs = append(errs, ValidationError{
-					Rule:    rule,
-					Level:   level,
-					Message: fmt.Sprintf("ExtGState /RI uses a non-standard rendering intent /%s", string(ri)),
-					Object:  num,
-				})
-			}
+		// /RI, when present, must be a standard rendering intent (all levels).
+		if ri, ok := doc.Resolve(dict.Get("RI")).(Name); ok && !standardRenderingIntents[string(ri)] {
+			errs = append(errs, ValidationError{
+				Rule:    rule,
+				Level:   level,
+				Message: fmt.Sprintf("ExtGState /RI uses a non-standard rendering intent /%s", string(ri)),
+				Object:  num,
+			})
 		}
 
 		// Check halftone

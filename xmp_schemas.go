@@ -457,6 +457,13 @@ func predefinedXMPSchemas(level PDFALevel) map[string]map[string]xmpPropType {
 		}
 		schemas[nsXMPBasic] = basic
 	} else {
+		// PDF/A-1 (2005) predates the corr (corrigendum) identifier.
+		aid := make(map[string]xmpPropType, len(xmpPDFAIDProperties))
+		for k, v := range xmpPDFAIDProperties {
+			aid[k] = v
+		}
+		delete(aid, "corr")
+		schemas[nsPDFAID] = aid
 		// XMP 2004 versions of the tables: drop the 2005-only properties.
 		tpg := map[string]xmpPropType{"MaxPageSize": tStruct(), "NPages": tInt()}
 		schemas[nsXMPTPg] = tpg
