@@ -231,3 +231,50 @@ func TestExtractXMPAttr(t *testing.T) {
 		t.Errorf("missing attr should be empty: %q", got)
 	}
 }
+
+func TestParseToUnicodeMapSpaceless(t *testing.T) {
+	// bfrange with no separators between <hhhh> tokens (real-world format).
+	cmap := "begincmap\n2 beginbfrange\n<0003><0003><0020>\n<0028><0028><0048>\nendbfrange\nendcmap"
+	doc := &Document{Objects: map[int]*IndirectObject{}}
+	s := &Stream{Dict: Dictionary{}, Data: []byte(cmap)}
+	s.Dict.Set("Length", Integer(len(cmap)))
+	doc.Objects[1] = &IndirectObject{Number: 1, Value: s}
+	fontDict := &Dictionary{}
+	fontDict.Set("ToUnicode", IndirectRef{Number: 1})
+	m := parseToUnicodeMap(doc, fontDict)
+	if m[3] != 0x20 || m[0x28] != 0x48 {
+		t.Errorf("bfrange parse wrong: %v", m)
+	}
+	if !isGlyphWhitespace(m[3]) || isGlyphWhitespace(m[0x28]) {
+		t.Error("whitespace classification wrong")
+	}
+}
+
+func TestParseToUnicodeMapMalformed(t *testing.T) {
+	// Must not panic on truncated / overlapping markers.
+	for _, bad := range []string{
+		"beginbfchar", "endbfchar beginbfchar", "beginbfrangeendbfrange",
+		"beginbfchar<00", "beginbfrange<0><1><2>", "",
+	} {
+		doc := &Document{Objects: map[int]*IndirectObject{}}
+		s := &Stream{Dict: Dictionary{}, Data: []byte(bad)}
+		s.Dict.Set("Length", Integer(len(bad)))
+		doc.Objects[1] = &IndirectObject{Number: 1, Value: s}
+		fontDict := &Dictionary{}
+		fontDict.Set("ToUnicode", IndirectRef{Number: 1})
+		_ = parseToUnicodeMap(doc, fontDict) // just must not panic
+	}
+}
+
+func TestAngleTokens(t *testing.T) {
+	got := angleTokens("<0003><0003><0020>")
+	if len(got) != 3 || got[0] != "<0003>" || got[2] != "<0020>" {
+		t.Errorf("angleTokens wrong: %v", got)
+	}
+	if len(angleTokens("no tokens here")) != 0 {
+		t.Error("expected no tokens")
+	}
+	if len(angleTokens("<unterminated")) != 0 {
+		t.Error("unterminated must yield nothing")
+	}
+}
