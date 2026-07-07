@@ -154,6 +154,7 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 	// Byte-level checks (require raw file data)
 	if rawData != nil {
 		errs = append(errs, checkNoDataAfterEOF(rawData, level)...)
+		errs = append(errs, checkFileStructureBytes(doc, level, rawData)...)
 	}
 
 	// Checks iterate map-ordered doc.Objects, so their concatenated output
