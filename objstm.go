@@ -37,8 +37,10 @@ func parseObjStmIndex(stream *Stream) (data []byte, entries []objStmEntry, first
 		return nil, nil, 0, fmt.Errorf("object stream /First %d beyond data length %d", firstInt, len(data))
 	}
 	// Each index pair needs at least 4 bytes ("N O "); reject absurd /N
-	// before allocating.
-	if int64(n)*4 > int64(firstInt) {
+	// before allocating. Divide rather than multiply: int64(n)*4 overflows for
+	// /N near MaxInt64, wrapping negative and defeating the guard, which then
+	// panics in make([]objStmEntry, 0, int(n)).
+	if int64(n) > int64(firstInt)/4 {
 		return nil, nil, 0, fmt.Errorf("object stream /N %d does not fit in /First %d bytes", n, firstInt)
 	}
 
