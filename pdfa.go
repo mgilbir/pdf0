@@ -133,6 +133,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkJPXImages,
 		// Font dictionary rules (6.3 / 6.2.11 / 6.2.10)
 		checkFontDictionaries,
+		// Content-stream operators (6.2.2)
+		checkContentStreamOperators,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
 	}
@@ -2230,7 +2232,8 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 			}
 		}
 
-		// /HTO must not be present (PDF 2.0 key; restricted at 2b+)
+		// /HTO and /HTP must not be present (PDF 2.0 halftone keys;
+		// restricted at 2b+).
 		if level != PDFA1b && dict.Get("HTO") != nil {
 			errs = append(errs, ValidationError{
 				Rule:    rule,
@@ -2238,6 +2241,25 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 				Message: "ExtGState must not contain /HTO",
 				Object:  num,
 			})
+		}
+		if level != PDFA1b && dict.Get("HTP") != nil {
+			errs = append(errs, ValidationError{
+				Rule:    rule,
+				Level:   level,
+				Message: "ExtGState must not contain /HTP",
+				Object:  num,
+			})
+		}
+		// /RI, when present, must be a standard rendering intent.
+		if level != PDFA1b {
+			if ri, ok := doc.Resolve(dict.Get("RI")).(Name); ok && !standardRenderingIntents[string(ri)] {
+				errs = append(errs, ValidationError{
+					Rule:    rule,
+					Level:   level,
+					Message: fmt.Sprintf("ExtGState /RI uses a non-standard rendering intent /%s", string(ri)),
+					Object:  num,
+				})
+			}
 		}
 
 		// Check halftone
