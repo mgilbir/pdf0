@@ -150,6 +150,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkActualTextPUA,
 		// Type 5 halftone components (6.2.5)
 		checkType5Halftones,
+		// Embedded PDF/A files (6.9)
+		checkEmbeddedPDFA,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
 		// CMap CID implementation limit (6.1.12 / 6.1.13)

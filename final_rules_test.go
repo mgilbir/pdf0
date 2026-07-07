@@ -183,3 +183,51 @@ func TestInfoAuthorMultiEntry(t *testing.T) {
 		t.Error("expected 1 creator entry")
 	}
 }
+
+func TestIsPDFMIME(t *testing.T) {
+	if !isPDFMIME(Name("application/pdf")) {
+		t.Error("application/pdf not recognized")
+	}
+	if isPDFMIME(Name("text/plain")) || isPDFMIME(Integer(1)) || isPDFMIME(nil) {
+		t.Error("non-pdf MIME wrongly recognized")
+	}
+}
+
+func TestDeclaredPDFALevel(t *testing.T) {
+	mk := func(xmp string) *Document {
+		doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
+		cat := &Dictionary{}
+		cat.Set("Type", Name("Catalog"))
+		s := &Stream{Dict: Dictionary{}, Data: []byte(xmp)}
+		s.Dict.Set("Length", Integer(len(xmp)))
+		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
+		doc.Objects[2] = &IndirectObject{Number: 2, Value: s}
+		cat.Set("Metadata", IndirectRef{Number: 2})
+		doc.Trailer.Set("Root", IndirectRef{Number: 1})
+		return doc
+	}
+	// Attribute form.
+	if lvl, ok := declaredPDFALevel(mk(`<rdf:Description pdfaid:part="4" pdfaid:conformance="B"/>`)); !ok || lvl != PDFA4 {
+		t.Errorf("part=4 attr: got %v %v", lvl, ok)
+	}
+	// Element form.
+	if lvl, ok := declaredPDFALevel(mk(`<pdfaid:part>2</pdfaid:part>`)); !ok || lvl != PDFA2b {
+		t.Errorf("part=2 elem: got %v %v", lvl, ok)
+	}
+	// No pdfaid: not PDF/A.
+	if _, ok := declaredPDFALevel(mk(`<rdf:Description/>`)); ok {
+		t.Error("document without pdfaid must not be PDF/A")
+	}
+}
+
+func TestExtractXMPAttr(t *testing.T) {
+	if got := extractXMPAttr(`x pdfaid:part="4" y`, "pdfaid:part"); got != "4" {
+		t.Errorf("double-quote attr: %q", got)
+	}
+	if got := extractXMPAttr(`x pdfaid:part='3' y`, "pdfaid:part"); got != "3" {
+		t.Errorf("single-quote attr: %q", got)
+	}
+	if got := extractXMPAttr(`x y`, "pdfaid:part"); got != "" {
+		t.Errorf("missing attr should be empty: %q", got)
+	}
+}
