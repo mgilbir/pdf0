@@ -193,15 +193,19 @@ func checkFileID(doc *Document, level PDFALevel) []ValidationError {
 func checkHeader(doc *Document, level PDFALevel) []ValidationError {
 	switch level {
 	case PDFA1b:
-		// Rule 6.1.2 is about header format, not version number.
-		// Accept any valid version for PDF/A-1b.
+		// The 19005-1 header rule is about format, not version: the veraPDF
+		// corpus passes a %PDF-2.0 header at PDF/A-1b. No version check.
 	case PDFA2b, PDFA3b:
-		valid := doc.Version == "1.4" || doc.Version == "1.5" || doc.Version == "1.6" || doc.Version == "1.7"
+		// PDF/A-2/3 accept any PDF 1.x header (1.0-1.7): the standard is
+		// built on PDF 1.7 but earlier headers are legal; the previous
+		// 1.4-1.7 floor false-positived on conforming 1.0-1.3 files.
+		valid := len(doc.Version) == 3 && strings.HasPrefix(doc.Version, "1.") &&
+			doc.Version[2] >= '0' && doc.Version[2] <= '7'
 		if !valid {
 			return []ValidationError{{
 				Rule:    "6.1.2",
 				Level:   level,
-				Message: fmt.Sprintf("version must be 1.4-1.7, got %s", doc.Version),
+				Message: fmt.Sprintf("header version must be 1.0-1.7, got %s", doc.Version),
 			}}
 		}
 	case PDFA4:
@@ -430,7 +434,6 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
-	var pdfaIntentCount int
 
 	for i, elem := range arr {
 		dict := doc.ResolveDict(elem)
@@ -453,19 +456,13 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 			continue
 		}
 
-		sName, ok := s.(Name)
-		if !ok {
+		if _, ok := s.(Name); !ok {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.3",
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] /S must be a name", i),
 			})
 			continue
-		}
-
-		// For PDF/A, at least one OutputIntent must have /S = /GTS_PDFA1
-		if sName == "GTS_PDFA1" {
-			pdfaIntentCount++
 		}
 
 		// /DestOutputProfileRef is not allowed in PDF/A
@@ -492,30 +489,24 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 
-	// PDF/A requires at least one OutputIntent with /S = /GTS_PDFA1
-	if pdfaIntentCount == 0 {
-		errs = append(errs, ValidationError{
-			Rule:    "6.2.3",
-			Level:   level,
-			Message: "at least one OutputIntent must have /S /GTS_PDFA1",
-		})
-	}
+	// A PDF/A OutputIntent (GTS_PDFA1) is NOT mandatory: it is only needed
+	// when device-dependent color is used, which checkDeviceColorSpaces
+	// verifies. A file whose only intent is e.g. PDF/X remains conformant.
 
-	// If there are multiple GTS_PDFA1 output intents, they must all reference
-	// the same ICC profile (same indirect reference)
-	if pdfaIntentCount > 1 {
+	// When the array has multiple entries, ALL entries carrying a
+	// DestOutputProfile must reference the same object — the spec covers
+	// every intent, not only the GTS_PDFA1 ones.
+	if len(arr) > 1 {
 		var profileRefs []Object
 		for _, elem := range arr {
 			dict := doc.ResolveDict(elem)
 			if dict == nil {
 				continue
 			}
-			sName, _ := dict.Get("S").(Name)
-			if sName == "GTS_PDFA1" {
-				profileRefs = append(profileRefs, dict.Get("DestOutputProfile"))
+			if p := dict.Get("DestOutputProfile"); p != nil {
+				profileRefs = append(profileRefs, p)
 			}
 		}
-		// Check all profiles are the same indirect reference
 		for j := 1; j < len(profileRefs); j++ {
 			ref0, ok0 := profileRefs[0].(IndirectRef)
 			refJ, okJ := profileRefs[j].(IndirectRef)
@@ -524,7 +515,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 					errs = append(errs, ValidationError{
 						Rule:    "6.2.3",
 						Level:   level,
-						Message: "multiple GTS_PDFA1 output intents must reference the same ICC profile",
+						Message: "all output intents with /DestOutputProfile must reference the same ICC profile",
 					})
 					break
 				}
@@ -701,14 +692,27 @@ func checkNoCatalogAA(doc *Document, level PDFALevel) []ValidationError {
 	if catalog == nil {
 		return nil
 	}
+	var errs []ValidationError
 	if catalog.Get("AA") != nil {
-		return []ValidationError{{
+		errs = append(errs, ValidationError{
 			Rule:    "6.6.1",
 			Level:   level,
 			Message: "catalog must not contain /AA (additional actions)",
-		}}
+		})
 	}
-	return nil
+	// Page dictionaries are equally forbidden from carrying /AA at 1b/2b/3b
+	// (ISO 19005-2, 6.6.2); previously only the catalog was checked.
+	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+		if page.dict.Get("AA") != nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.6.2",
+				Level:   level,
+				Message: "page dictionary must not contain /AA (additional actions)",
+				Object:  page.objNum,
+			})
+		}
+	}
+	return errs
 }
 
 func checkNoOCProperties(doc *Document, level PDFALevel) []ValidationError {
@@ -1486,26 +1490,39 @@ func checkNoForbiddenActions(doc *Document, level PDFALevel) []ValidationError {
 }
 
 func checkActionObject(doc *Document, ref Object, objNum int, level PDFALevel) []ValidationError {
+	var errs []ValidationError
+	checkActionChain(doc, ref, objNum, level, &errs, make(map[*Dictionary]bool))
+	return errs
+}
+
+// checkActionChain validates one action dictionary and follows its /Next
+// entry (a single action or an array of actions), which previous versions
+// ignored entirely — a legal action whose /Next launches JavaScript passed.
+func checkActionChain(doc *Document, ref Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[*Dictionary]bool) {
 	// ref might be an action dict or an array (for OpenAction destination)
 	actionDict := doc.ResolveDict(ref)
-	if actionDict == nil {
-		return nil // might be a destination array, not an action
+	if actionDict == nil || seen[actionDict] {
+		return // destination array, unresolvable, or a /Next cycle
 	}
+	seen[actionDict] = true
 
-	s, ok := actionDict.Get("S").(Name)
-	if !ok {
-		return nil
-	}
-
-	if isForbiddenAction(s, level) {
-		return []ValidationError{{
+	if s, ok := actionDict.Get("S").(Name); ok && isForbiddenAction(s, level) {
+		*errs = append(*errs, ValidationError{
 			Rule:    "6.6.1",
 			Level:   level,
 			Message: fmt.Sprintf("forbidden action type /%s", s),
 			Object:  objNum,
-		}}
+		})
 	}
-	return nil
+
+	switch next := doc.Resolve(actionDict.Get("Next")).(type) {
+	case *Dictionary:
+		checkActionChain(doc, next, objNum, level, errs, seen)
+	case Array:
+		for _, el := range next {
+			checkActionChain(doc, el, objNum, level, errs, seen)
+		}
+	}
 }
 
 // Rule 6.6.1-2: Named actions limited to NextPage, PrevPage, FirstPage, LastPage.
@@ -2007,6 +2024,9 @@ func checkCatalogVersion(doc *Document, level PDFALevel) []ValidationError {
 
 // Rule 6.2.10: PDF/A-1b subset fonts must have CharSet or CIDSet.
 func checkFontSubsets(doc *Document, level PDFALevel) []ValidationError {
+	// CharSet/CIDSet PRESENCE is only required by 19005-1: the veraPDF
+	// corpus passes a PDF/A-2 subset CIDFont without /CIDSet (Part 2 only
+	// constrains the sets when present).
 	if level != PDFA1b {
 		return nil
 	}
@@ -2099,8 +2119,13 @@ func getFontDescriptor(doc *Document, fontDict *Dictionary) *Dictionary {
 
 // Rule 6.2.5: ExtGState forbidden keys for PDF/A-2b/3b/4.
 func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
+	// ISO 19005-1 clause 6.2.8 carries the same TR/TR2 prohibitions as
+	// 19005-2 clause 6.2.5; previously the whole check was skipped at 1b
+	// with a comment claiming checkNoTransparency covered it, which never
+	// looked at /TR, /TR2, or halftones.
+	rule := "6.2.5"
 	if level == PDFA1b {
-		return nil // Handled by checkNoTransparency
+		rule = "6.2.8"
 	}
 
 	var errs []ValidationError
@@ -2112,7 +2137,7 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 		// /TR must not be present
 		if dict.Get("TR") != nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.5",
+				Rule:    rule,
 				Level:   level,
 				Message: "ExtGState must not contain /TR",
 				Object:  num,
@@ -2123,7 +2148,7 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 		if tr2 := dict.Get("TR2"); tr2 != nil {
 			if n, ok := tr2.(Name); !ok || n != "Default" {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.5",
+					Rule:    rule,
 					Level:   level,
 					Message: "/TR2 must be /Default",
 					Object:  num,
@@ -2131,10 +2156,10 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 			}
 		}
 
-		// /HTO must not be present
-		if dict.Get("HTO") != nil {
+		// /HTO must not be present (PDF 2.0 key; restricted at 2b+)
+		if level != PDFA1b && dict.Get("HTO") != nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.5",
+				Rule:    rule,
 				Level:   level,
 				Message: "ExtGState must not contain /HTO",
 				Object:  num,
@@ -2146,16 +2171,19 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 			checkHalftoneErrors(doc, htRef, num, level, &errs)
 		}
 
-		// Check BM is a valid blend mode
-		if bm := dict.Get("BM"); bm != nil {
-			if n, ok := bm.(Name); ok {
-				if !isValidBlendMode(n) {
-					errs = append(errs, ValidationError{
-						Rule:    "6.2.5",
-						Level:   level,
-						Message: fmt.Sprintf("invalid blend mode /%s", n),
-						Object:  num,
-					})
+		// Check BM is a valid blend mode. At 1b any transparency use is
+		// forbidden wholesale by checkNoTransparency.
+		if level != PDFA1b {
+			if bm := dict.Get("BM"); bm != nil {
+				if n, ok := bm.(Name); ok {
+					if !isValidBlendMode(n) {
+						errs = append(errs, ValidationError{
+							Rule:    rule,
+							Level:   level,
+							Message: fmt.Sprintf("invalid blend mode /%s", n),
+							Object:  num,
+						})
+					}
 				}
 			}
 		}
@@ -2217,6 +2245,9 @@ func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALeve
 
 // Rule 6.7.3: PDF/A-1b requires Info dict and XMP metadata to be consistent.
 func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
+	// Info<->XMP consistency is a 19005-1 (6.7.3) requirement only: the
+	// veraPDF corpus passes PDF/A-2 files whose Info entries deliberately
+	// differ from their XMP counterparts (Part 2 deprecates Info instead).
 	if level != PDFA1b {
 		return nil
 	}
@@ -2318,9 +2349,38 @@ func getInfoString(info *Dictionary, key string) string {
 		return ""
 	}
 	if s, ok := obj.(String); ok {
-		return string(s.Value)
+		return decodePDFTextString(s.Value)
 	}
 	return ""
+}
+
+// decodePDFTextString converts a PDF text string to UTF-8. Text strings are
+// either UTF-16BE with a BOM (PDF 2.0 adds UTF-8 with a BOM) or
+// PDFDocEncoded; comparing raw bytes against UTF-8 XMP values made every
+// UTF-16 Info entry "inconsistent" with its metadata counterpart.
+func decodePDFTextString(b []byte) string {
+	if len(b) >= 2 && b[0] == 0xFE && b[1] == 0xFF {
+		// UTF-16BE
+		u := b[2:]
+		var sb strings.Builder
+		for i := 0; i+1 < len(u); i += 2 {
+			r := rune(u[i])<<8 | rune(u[i+1])
+			if r >= 0xD800 && r <= 0xDBFF && i+3 < len(u) {
+				lo := rune(u[i+2])<<8 | rune(u[i+3])
+				if lo >= 0xDC00 && lo <= 0xDFFF {
+					r = 0x10000 + (r-0xD800)<<10 + (lo - 0xDC00)
+					i += 2
+				}
+			}
+			sb.WriteRune(r)
+		}
+		return sb.String()
+	}
+	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
+		return string(b[3:]) // UTF-8 with BOM (PDF 2.0)
+	}
+	// PDFDocEncoding matches ASCII in the printable range; pass through.
+	return string(b)
 }
 
 func extractXMPListValue(xmp, key string) string {
@@ -2833,48 +2893,63 @@ func collectPagesRecursive(doc *Document, ref Object, pages *[]pageInfo, seen ma
 
 // Rule 6.1.12: Embedded file restrictions.
 func checkEmbeddedFiles(doc *Document, level PDFALevel) []ValidationError {
+	// PDF/A-1 (ISO 19005-1, 6.1.11) forbids embedded files outright: no
+	// file specification may carry /EF, wherever it lives — not only in the
+	// catalog's Names tree.
+	if level == PDFA1b {
+		var errs []ValidationError
+		for num, iobj := range doc.Objects {
+			if dict, ok := iobj.Value.(*Dictionary); ok && dict.Get("EF") != nil {
+				errs = append(errs, ValidationError{
+					Rule:    "6.1.11",
+					Level:   level,
+					Message: "file specification must not contain /EF (embedded files are forbidden in PDF/A-1)",
+					Object:  num,
+				})
+			}
+		}
+		catalog := getCatalog(doc)
+		if catalog != nil {
+			if namesDict := doc.ResolveDict(catalog.Get("Names")); namesDict != nil {
+				if namesDict.Get("EmbeddedFiles") != nil {
+					errs = append(errs, ValidationError{
+						Rule:    "6.1.11",
+						Level:   level,
+						Message: "Names/EmbeddedFiles must not be present",
+					})
+				}
+			}
+		}
+		return errs
+	}
+
+	// PDF/A-2 permits embedded files (they must themselves be PDF/A, which
+	// is not machine-checkable here); PDF/A-3/4 permit arbitrary embedded
+	// files. All three levels constrain the file specifications.
 	catalog := getCatalog(doc)
 	if catalog == nil {
 		return nil
 	}
-
-	namesRef := catalog.Get("Names")
-	if namesRef == nil {
-		return nil
-	}
-	namesDict := doc.ResolveDict(namesRef)
-	if namesDict == nil {
-		return nil
-	}
-
-	efRef := namesDict.Get("EmbeddedFiles")
-
-	switch level {
-	case PDFA1b, PDFA2b:
-		if efRef != nil {
-			return []ValidationError{{
-				Rule:    "6.1.12",
-				Level:   level,
-				Message: "Names/EmbeddedFiles must not be present",
-			}}
-		}
-		return nil
-	case PDFA3b, PDFA4:
-		if efRef == nil {
-			return nil
-		}
-		return checkEmbeddedFileSpecs(doc, level, catalog)
-	}
-	return nil
+	return checkEmbeddedFileSpecs(doc, level, catalog)
 }
 
 func checkEmbeddedFileSpecs(doc *Document, level PDFALevel, catalog *Dictionary) []ValidationError {
 	var errs []ValidationError
 
-	// Check that /AF exists somewhere in the document
-	if !documentHasAF(doc) {
+	// Embedded-file rules live in clause 6.8 for 19005-2/-3 and 6.9 for
+	// 19005-4.
+	rule := "6.8"
+	if level == PDFA4 {
+		rule = "6.9"
+	}
+
+	// PDF/A-3 and A-4 require embedded files to be associated with the
+	// document or one of its parts via /AF (the corpus fails A-3 files
+	// whose embedded file is associated with nothing). PDF/A-2 has no
+	// association mechanism.
+	if level != PDFA2b && documentHasEmbeddedFiles(doc, catalog) && !documentHasAF(doc) {
 		errs = append(errs, ValidationError{
-			Rule:    "6.1.12",
+			Rule:    rule,
 			Level:   level,
 			Message: "document must have /AF array when embedded files are present",
 		})
@@ -2885,14 +2960,17 @@ func checkEmbeddedFileSpecs(doc *Document, level PDFALevel, catalog *Dictionary)
 		if !ok {
 			continue
 		}
-		typeObj := dict.Get("Type")
-		if t, ok := typeObj.(Name); !ok || t != "Filespec" {
+		// A file specification is not required to carry /Type /Filespec;
+		// anything holding an /EF is acting as one.
+		t, hasType := dict.Get("Type").(Name)
+		isFilespec := (hasType && t == "Filespec") || dict.Get("EF") != nil
+		if !isFilespec {
 			continue
 		}
 
 		if dict.Get("F") == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.1.12",
+				Rule:    rule,
 				Level:   level,
 				Message: "filespec must have /F",
 				Object:  num,
@@ -2900,47 +2978,47 @@ func checkEmbeddedFileSpecs(doc *Document, level PDFALevel, catalog *Dictionary)
 		}
 		if dict.Get("UF") == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.1.12",
+				Rule:    rule,
 				Level:   level,
 				Message: "filespec must have /UF",
 				Object:  num,
 			})
 		}
-		if dict.Get("AFRelationship") == nil {
+		// /AFRelationship is the PDF/A-3+ mechanism relating an embedded
+		// file to the document; PDF/A-2 has no such key.
+		if level != PDFA2b && dict.Get("AFRelationship") == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.1.12",
+				Rule:    rule,
 				Level:   level,
 				Message: "filespec must have /AFRelationship",
 				Object:  num,
 			})
 		}
 
-		if level == PDFA4 {
-			efDictRef := dict.Get("EF")
-			if efDictRef != nil {
-				efDict := doc.ResolveDict(efDictRef)
-				if efDict != nil {
-					for _, val := range efDict.Values {
-						efStream := doc.Resolve(val)
-						if stream, ok := efStream.(*Stream); ok {
-							st := stream.Dict.Get("Subtype")
-							if st == nil {
-								errs = append(errs, ValidationError{
-									Rule:    "6.1.12",
-									Level:   level,
-									Message: "embedded file stream must have /Subtype (MIME type)",
-									Object:  num,
-								})
-							} else if name, ok := st.(Name); ok {
-								if !strings.Contains(string(name), "/") {
-									errs = append(errs, ValidationError{
-										Rule:    "6.1.12",
-										Level:   level,
-										Message: fmt.Sprintf("embedded file stream /Subtype must be a MIME type, got /%s", name),
-										Object:  num,
-									})
-								}
-							}
+		// Embedded file streams must declare their MIME type in PDF/A-3/4.
+		if level == PDFA3b || level == PDFA4 {
+			if efDict := doc.ResolveDict(dict.Get("EF")); efDict != nil {
+				for _, val := range efDict.Values {
+					stream, ok := doc.Resolve(val).(*Stream)
+					if !ok {
+						continue
+					}
+					st := stream.Dict.Get("Subtype")
+					if st == nil {
+						errs = append(errs, ValidationError{
+							Rule:    rule,
+							Level:   level,
+							Message: "embedded file stream must have /Subtype (MIME type)",
+							Object:  num,
+						})
+					} else if name, ok := st.(Name); ok {
+						if !strings.Contains(string(name), "/") {
+							errs = append(errs, ValidationError{
+								Rule:    rule,
+								Level:   level,
+								Message: fmt.Sprintf("embedded file stream /Subtype must be a MIME type, got /%s", name),
+								Object:  num,
+							})
 						}
 					}
 				}
@@ -2949,6 +3027,22 @@ func checkEmbeddedFileSpecs(doc *Document, level PDFALevel, catalog *Dictionary)
 	}
 
 	return errs
+}
+
+// documentHasEmbeddedFiles reports whether the catalog's Names tree declares
+// EmbeddedFiles or any object carries an /EF file specification.
+func documentHasEmbeddedFiles(doc *Document, catalog *Dictionary) bool {
+	if namesDict := doc.ResolveDict(catalog.Get("Names")); namesDict != nil {
+		if namesDict.Get("EmbeddedFiles") != nil {
+			return true
+		}
+	}
+	for _, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok && dict.Get("EF") != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func documentHasAF(doc *Document) bool {
@@ -2975,8 +3069,15 @@ func documentHasAF(doc *Document) bool {
 
 // Rule 6.1.13: Optional content requirements for PDF/A-4.
 func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
-	if level != PDFA4 {
+	// Optional-content configuration rules are 19005-2/-3 clause 6.9 and
+	// 19005-4 clause 6.10. PDF/A-1 forbids optional content wholesale
+	// (checkNoOCProperties).
+	if level == PDFA1b {
 		return nil
+	}
+	ocRule := "6.9"
+	if level == PDFA4 {
+		ocRule = "6.10"
 	}
 
 	catalog := getCatalog(doc)
@@ -3007,7 +3108,7 @@ func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
 
 	if dDict.Get("Name") == nil {
 		errs = append(errs, ValidationError{
-			Rule:    "6.1.13",
+			Rule:    ocRule,
 			Level:   level,
 			Message: "OCProperties default config /D must have /Name",
 		})
@@ -3040,7 +3141,7 @@ func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
 				n := string(s.Value)
 				if names[n] {
 					errs = append(errs, ValidationError{
-						Rule:    "6.1.13",
+						Rule:    ocRule,
 						Level:   level,
 						Message: fmt.Sprintf("OCProperties config name %q is not unique", n),
 					})
@@ -3061,7 +3162,7 @@ func checkOptionalContent(doc *Document, level PDFALevel) []ValidationError {
 				if iref, ok := ocgRef.(IndirectRef); ok {
 					if !referencedOCGs[iref.Number] {
 						errs = append(errs, ValidationError{
-							Rule:    "6.1.13",
+							Rule:    ocRule,
 							Level:   level,
 							Message: fmt.Sprintf("OCG %d not referenced in /Order array", iref.Number),
 						})
@@ -3088,24 +3189,48 @@ func collectOCGRefs(arr Array, refs map[int]bool) {
 // --- Implementation limits check (MR-7) ---
 
 // Rule 6.1.7: Implementation limits for PDF/A.
+// implLimits carries the Annex C implementation limits and the rule ID they
+// are reported under: ISO 19005-1 clause 6.1.12 for PDF/A-1, ISO 19005-2/-3
+// clause 6.1.13 for PDF/A-2/-3. PDF/A-4 (PDF 2.0) has no such clause.
+type implLimits struct {
+	rule      string
+	nameLen   int
+	stringLen int
+	dictEnt   int
+	arrayLen  int
+	nesting   int
+	realLimit float64
+}
+
 func checkImplementationLimits(doc *Document, level PDFALevel) []ValidationError {
-	var errs []ValidationError
-
-	maxNameLen := 127
-	maxStringLen := 65535
-	if level != PDFA1b {
-		maxStringLen = 32767
+	if level == PDFA4 {
+		// PDF 2.0 (ISO 32000-2) abolished the Annex C limits; ISO 19005-4
+		// has no implementation-limits clause.
+		return nil
 	}
-	maxDictEntries := 4095
-	maxArrayLen := 8191
-	maxNestingDepth := 28
 
+	lim := implLimits{
+		rule:      "6.1.12", // ISO 19005-1
+		nameLen:   127,
+		stringLen: 65535,
+		dictEnt:   4095,
+		arrayLen:  8191,
+		nesting:   28,
+		realLimit: 32767, // PDF 1.4 Annex C
+	}
+	if level == PDFA2b || level == PDFA3b {
+		lim.rule = "6.1.13" // ISO 19005-2/-3
+		lim.stringLen = 32767
+		lim.realLimit = 3.403e38 // PDF 1.7 Annex C (float32 range)
+	}
+
+	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		checkObjectLimits(iobj.Value, num, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, 0, &errs)
+		checkObjectLimits(iobj.Value, num, level, lim, 0, &errs)
 	}
 
 	// q/Q nesting depth check in content streams
-	checkQNestingDepth(doc, level, &errs)
+	checkQNestingDepth(doc, level, lim.rule, &errs)
 
 	// Page size limits for 2b+ only
 	if level != PDFA1b {
@@ -3115,27 +3240,27 @@ func checkImplementationLimits(doc *Document, level PDFALevel) []ValidationError
 	return errs
 }
 
-func checkObjectLimits(obj Object, objNum int, level PDFALevel, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth int, errs *[]ValidationError) {
+func checkObjectLimits(obj Object, objNum int, level PDFALevel, lim implLimits, depth int, errs *[]ValidationError) {
 	if obj == nil {
 		return
 	}
 
 	switch v := obj.(type) {
 	case Name:
-		if len(string(v)) > maxNameLen {
+		if len(string(v)) > lim.nameLen {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
+				Rule:    lim.rule,
 				Level:   level,
-				Message: fmt.Sprintf("name length %d exceeds maximum %d", len(string(v)), maxNameLen),
+				Message: fmt.Sprintf("name length %d exceeds maximum %d", len(string(v)), lim.nameLen),
 				Object:  objNum,
 			})
 		}
 	case String:
-		if len(v.Value) > maxStringLen {
+		if len(v.Value) > lim.stringLen {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
+				Rule:    lim.rule,
 				Level:   level,
-				Message: fmt.Sprintf("string length %d exceeds maximum %d", len(v.Value), maxStringLen),
+				Message: fmt.Sprintf("string length %d exceeds maximum %d", len(v.Value), lim.stringLen),
 				Object:  objNum,
 			})
 		}
@@ -3143,57 +3268,66 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, maxNameLen, maxS
 		i := int64(v)
 		if i < -2147483648 || i > 2147483647 {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
+				Rule:    lim.rule,
 				Level:   level,
 				Message: fmt.Sprintf("integer %d out of range [-2^31, 2^31-1]", i),
 				Object:  objNum,
 			})
 		}
-	case *Dictionary:
-		if depth > maxNestingDepth {
+	case Real:
+		if math.Abs(float64(v)) > lim.realLimit {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
+				Rule:    lim.rule,
 				Level:   level,
-				Message: fmt.Sprintf("dictionary nesting depth %d exceeds maximum %d", depth, maxNestingDepth),
+				Message: fmt.Sprintf("real %g exceeds magnitude limit %g", float64(v), lim.realLimit),
+				Object:  objNum,
+			})
+		}
+	case *Dictionary:
+		if depth > lim.nesting {
+			*errs = append(*errs, ValidationError{
+				Rule:    lim.rule,
+				Level:   level,
+				Message: fmt.Sprintf("dictionary nesting depth %d exceeds maximum %d", depth, lim.nesting),
 				Object:  objNum,
 			})
 			return // Don't recurse further
 		}
-		if v.Len() > maxDictEntries {
+		if v.Len() > lim.dictEnt {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
+				Rule:    lim.rule,
 				Level:   level,
-				Message: fmt.Sprintf("dictionary has %d entries, exceeds maximum %d", v.Len(), maxDictEntries),
+				Message: fmt.Sprintf("dictionary has %d entries, exceeds maximum %d", v.Len(), lim.dictEnt),
 				Object:  objNum,
 			})
 		}
 		for i, key := range v.Keys {
-			checkObjectLimits(key, objNum, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth+1, errs)
-			checkObjectLimits(v.Values[i], objNum, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth+1, errs)
+			checkObjectLimits(key, objNum, level, lim, depth+1, errs)
+			checkObjectLimits(v.Values[i], objNum, level, lim, depth+1, errs)
 		}
 	case Array:
-		if depth > maxNestingDepth {
+		if depth > lim.nesting {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
+				Rule:    lim.rule,
 				Level:   level,
-				Message: fmt.Sprintf("array nesting depth %d exceeds maximum %d", depth, maxNestingDepth),
+				Message: fmt.Sprintf("array nesting depth %d exceeds maximum %d", depth, lim.nesting),
 				Object:  objNum,
 			})
 			return // Don't recurse further
 		}
-		if len(v) > maxArrayLen {
+		if len(v) > lim.arrayLen {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
+				Rule:    lim.rule,
 				Level:   level,
-				Message: fmt.Sprintf("array has %d elements, exceeds maximum %d", len(v), maxArrayLen),
+				Message: fmt.Sprintf("array has %d elements, exceeds maximum %d", len(v), lim.arrayLen),
 				Object:  objNum,
 			})
 		}
 		for _, elem := range v {
-			checkObjectLimits(elem, objNum, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth+1, errs)
+			checkObjectLimits(elem, objNum, level, lim, depth+1, errs)
 		}
 	case *Stream:
-		checkObjectLimits(&v.Dict, objNum, level, maxNameLen, maxStringLen, maxDictEntries, maxArrayLen, maxNestingDepth, depth, errs)
+		checkObjectLimits(&v.Dict, objNum, level, lim, depth, errs)
 	}
 }
 
@@ -3237,7 +3371,7 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 			height := math.Abs(vals[3] - vals[1])
 			if width < 3 || width > 14400 || height < 3 || height > 14400 {
 				*errs = append(*errs, ValidationError{
-					Rule:    "6.1.7",
+					Rule:    "6.1.13",
 					Level:   level,
 					Message: fmt.Sprintf("page %s dimensions %.0fx%.0f out of range [3, 14400]", boxKey, width, height),
 					Object:  page.objNum,
@@ -3249,13 +3383,13 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 
 // checkQNestingDepth checks that q/Q nesting depth in content streams
 // does not exceed 28 levels (PDF/A implementation limit).
-func checkQNestingDepth(doc *Document, level PDFALevel, errs *[]ValidationError) {
+func checkQNestingDepth(doc *Document, level PDFALevel, rule string, errs *[]ValidationError) {
 	const maxQDepth = 28
 
 	report := func(data []byte, objNum int) {
 		if d := qNestingMaxDepth(data); d > maxQDepth {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.1.7",
+				Rule:    rule,
 				Level:   level,
 				Message: fmt.Sprintf("q/Q nesting depth %d exceeds maximum %d", d, maxQDepth),
 				Object:  objNum,
@@ -3423,6 +3557,12 @@ func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMY
 	for _, elem := range arr {
 		dict := doc.ResolveDict(elem)
 		if dict == nil {
+			continue
+		}
+		// Only the PDF/A output intent counts: device colour backed solely
+		// by e.g. a PDF/X intent is a violation (the corpus fails a
+		// DeviceRGB file whose only intent is GTS_PDFX).
+		if s, _ := dict.Get("S").(Name); s != "GTS_PDFA1" {
 			continue
 		}
 		profileRef := dict.Get("DestOutputProfile")

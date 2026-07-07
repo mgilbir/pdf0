@@ -1146,7 +1146,7 @@ const (
 	corpusMaxFalsePositives = 0
 	// Fail files the validator fails to flag (false negatives / unimplemented
 	// rules). This is the headline coverage gap; drive it down over time.
-	corpusMaxMissed = 790
+	corpusMaxMissed = 783
 	// Files the parser cannot read at all. All five are deliberately broken
 	// fail files: four with malformed stream keywords/lengths and one whose
 	// object stream holds corrupt zlib data.
@@ -1375,15 +1375,18 @@ func TestCheckExtGState(t *testing.T) {
 		}
 	})
 
-	t.Run("skipped for PDFA1b", func(t *testing.T) {
+	t.Run("TR forbidden at PDFA1b under 6.2.8", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
 		gs := &Dictionary{}
 		gs.Set("TR", Name("Identity"))
 		addExtGStateToDoc(doc, gs)
 
 		errs := checkExtGState(doc, PDFA1b)
-		if len(errs) > 0 {
-			t.Errorf("unexpected error for PDFA1b: %v", errs[0])
+		if len(errs) == 0 {
+			t.Fatal("expected /TR error at PDF/A-1b (ISO 19005-1, 6.2.8)")
+		}
+		if errs[0].Rule != "6.2.8" {
+			t.Errorf("expected rule 6.2.8 at 1b, got %s", errs[0].Rule)
 		}
 	})
 }
@@ -1402,16 +1405,19 @@ func TestCheckEmbeddedFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("PDFA-2b rejects embedded files", func(t *testing.T) {
+	t.Run("PDFA-2b allows embedded files", func(t *testing.T) {
+		// ISO 19005-2 permits embedded files (they must themselves be
+		// PDF/A, which is not machine-checkable here).
 		doc := NewPDFADocument(PDFA2b)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		namesDict := &Dictionary{}
 		namesDict.Set("EmbeddedFiles", &Dictionary{})
 		catalog.Set("Names", namesDict)
 
-		errs := checkEmbeddedFiles(doc, PDFA2b)
-		if len(errs) == 0 {
-			t.Error("expected error for EmbeddedFiles in PDF/A-2b")
+		for _, e := range checkEmbeddedFiles(doc, PDFA2b) {
+			if strings.Contains(e.Message, "must not be present") {
+				t.Errorf("PDF/A-2b should allow EmbeddedFiles: %v", e)
+			}
 		}
 	})
 
@@ -1815,5 +1821,164 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 	different.Set("N", Integer(2))
 	if !hasRule(ValidatePDFA(build(different), PDFA2b), "6.2.4") {
 		t.Error("differing tint transforms for the same colorant must be flagged")
+	}
+}
+
+// A18: PDF/A-2/3 accept any 1.x header; only A-4 requires 2.x.
+func TestValidatePDFA_HeaderEarlyVersionsAllowed(t *testing.T) {
+	for _, v := range []string{"1.0", "1.3", "1.7"} {
+		doc := NewPDFADocument(PDFA2b)
+		doc.Version = v
+		if hasRule(checkHeader(doc, PDFA2b), "6.1.2") {
+			t.Errorf("header %s must be legal at PDF/A-2b", v)
+		}
+	}
+	doc := NewPDFADocument(PDFA2b)
+	doc.Version = "2.0"
+	if !hasRule(checkHeader(doc, PDFA2b), "6.1.2") {
+		t.Error("header 2.0 must be rejected at PDF/A-2b")
+	}
+}
+
+// A14: implementation limits are 6.1.12 at A-1, 6.1.13 at A-2/3, absent at A-4.
+func TestValidatePDFA_ImplementationLimitLevels(t *testing.T) {
+	longName := Name(strings.Repeat("x", 200))
+	mk := func(level PDFALevel) *Document {
+		doc := NewPDFADocument(level)
+		d := &Dictionary{}
+		d.Set("K", longName)
+		doc.Objects[40] = &IndirectObject{Number: 40, Value: d}
+		return doc
+	}
+	if errs := checkImplementationLimits(mk(PDFA1b), PDFA1b); !hasRule(errs, "6.1.12") {
+		t.Errorf("expected 6.1.12 name-length error at 1b, got %v", errs)
+	}
+	if errs := checkImplementationLimits(mk(PDFA2b), PDFA2b); !hasRule(errs, "6.1.13") {
+		t.Errorf("expected 6.1.13 name-length error at 2b, got %v", errs)
+	}
+	if errs := checkImplementationLimits(mk(PDFA4), PDFA4); len(errs) > 0 {
+		t.Errorf("PDF/A-4 has no implementation limits, got %v", errs)
+	}
+
+	// Real magnitude limit at 1b (PDF 1.4 Annex C).
+	doc := NewPDFADocument(PDFA1b)
+	d := &Dictionary{}
+	d.Set("V", Real(40000))
+	doc.Objects[41] = &IndirectObject{Number: 41, Value: d}
+	if errs := checkImplementationLimits(doc, PDFA1b); !hasRule(errs, "6.1.12") {
+		t.Errorf("expected real-magnitude error at 1b, got %v", errs)
+	}
+}
+
+// A19: forbidden actions hiding behind /Next chains must be found.
+func TestValidatePDFA_ActionNextChain(t *testing.T) {
+	doc := NewPDFADocument(PDFA2b)
+	launch := &Dictionary{}
+	launch.Set("S", Name("Launch"))
+	action := &Dictionary{}
+	action.Set("S", Name("GoTo"))
+	action.Set("Next", Array{launch})
+	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+	catalog.Set("OpenAction", action)
+
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.1") {
+		t.Error("expected 6.6.1 error for Launch action in /Next chain")
+	}
+
+	// A /Next cycle must terminate.
+	a := &Dictionary{}
+	a.Set("S", Name("GoTo"))
+	a.Set("Next", a)
+	doc2 := NewPDFADocument(PDFA2b)
+	catalog2 := doc2.ResolveDict(doc2.Trailer.Get("Root"))
+	catalog2.Set("OpenAction", a)
+	ValidatePDFA(doc2, PDFA2b) // must not hang
+}
+
+// A19: page dictionaries must not carry /AA at 1b/2b/3b.
+func TestValidatePDFA_PageAA(t *testing.T) {
+	doc := NewPDFADocument(PDFA2b)
+	page := addTestPage(doc)
+	page.Set("AA", &Dictionary{})
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.2") {
+		t.Error("expected 6.6.2 error for page /AA")
+	}
+}
+
+// A20: 1b ExtGState /TR2 rule.
+func TestValidatePDFA_ExtGStateTR2At1b(t *testing.T) {
+	doc := NewPDFADocument(PDFA1b)
+	gs := &Dictionary{}
+	gs.Set("TR2", Name("Identity"))
+	addExtGStateToDoc(doc, gs)
+	errs := checkExtGState(doc, PDFA1b)
+	if !hasRule(errs, "6.2.8") {
+		t.Errorf("expected 6.2.8 error for /TR2 at 1b, got %v", errs)
+	}
+}
+
+// A22: UTF-16BE Info strings must compare equal to their UTF-8 XMP values.
+func TestDecodePDFTextString(t *testing.T) {
+	utf16 := []byte{0xFE, 0xFF, 0x00, 'H', 0x00, 'i', 0x20, 0xAC >> 8, 0xAC & 0xFF}
+	_ = utf16
+	if got := decodePDFTextString([]byte{0xFE, 0xFF, 0x00, 'H', 0x00, 'i'}); got != "Hi" {
+		t.Errorf("UTF-16BE decode: expected 'Hi', got %q", got)
+	}
+	if got := decodePDFTextString([]byte{0xEF, 0xBB, 0xBF, 'H', 'i'}); got != "Hi" {
+		t.Errorf("UTF-8 BOM decode: expected 'Hi', got %q", got)
+	}
+	if got := decodePDFTextString([]byte("plain")); got != "plain" {
+		t.Errorf("plain decode: expected 'plain', got %q", got)
+	}
+	// Surrogate pair: U+1D11E MUSICAL SYMBOL G CLEF
+	if got := decodePDFTextString([]byte{0xFE, 0xFF, 0xD8, 0x34, 0xDD, 0x1E}); got != "\U0001D11E" {
+		t.Errorf("surrogate decode: got %q", got)
+	}
+}
+
+// A26: PDF/A-1 forbids /EF on any file specification, not only Names-tree ones.
+func TestValidatePDFA_EFAnywhereForbiddenAt1b(t *testing.T) {
+	doc := NewPDFADocument(PDFA1b)
+	fs := &Dictionary{}
+	fs.Set("Type", Name("Filespec"))
+	fs.Set("F", String{Value: []byte("x.txt")})
+	fs.Set("EF", &Dictionary{})
+	doc.Objects[50] = &IndirectObject{Number: 50, Value: fs}
+	if !hasRule(checkEmbeddedFiles(doc, PDFA1b), "6.1.11") {
+		t.Error("expected 6.1.11 error for /EF filespec at 1b")
+	}
+}
+
+// A32: a PDF/X-only OutputIntents array is legal when no device color needs
+// coverage, but multiple intents with different profiles are not.
+func TestValidatePDFA_OutputIntentRules(t *testing.T) {
+	doc := NewPDFADocument(PDFA2b)
+	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+	pdfx := &Dictionary{}
+	pdfx.Set("Type", Name("OutputIntent"))
+	pdfx.Set("S", Name("GTS_PDFX"))
+	pdfx.Set("OutputConditionIdentifier", String{Value: []byte("CGATS TR 001")})
+	catalog.Set("OutputIntents", Array{pdfx})
+	if hasRule(checkOutputIntents(doc, PDFA2b), "6.2.3") {
+		t.Error("PDF/X-only OutputIntents must be legal")
+	}
+
+	// Two intents with different DestOutputProfile objects.
+	doc2 := NewPDFADocument(PDFA2b)
+	catalog2 := doc2.ResolveDict(doc2.Trailer.Get("Root"))
+	i1 := &Dictionary{}
+	i1.Set("Type", Name("OutputIntent"))
+	i1.Set("S", Name("GTS_PDFA1"))
+	i1.Set("OutputConditionIdentifier", String{Value: []byte("c")})
+	i1.Set("DestOutputProfile", IndirectRef{Number: 5})
+	i2 := &Dictionary{}
+	i2.Set("Type", Name("OutputIntent"))
+	i2.Set("S", Name("GTS_PDFX"))
+	i2.Set("OutputConditionIdentifier", String{Value: []byte("c")})
+	i2.Set("DestOutputProfile", IndirectRef{Number: 6})
+	doc2.Objects[6] = &IndirectObject{Number: 6, Value: &Stream{}}
+	catalog2.Set("OutputIntents", Array{i1, i2})
+	if !hasRule(checkOutputIntents(doc2, PDFA2b), "6.2.3") {
+		t.Error("differing DestOutputProfile objects across intents must be flagged")
 	}
 }
