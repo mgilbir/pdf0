@@ -5,12 +5,25 @@ import (
 	"math"
 )
 
+// maxCompareDepth bounds recursion through nested arrays/dictionaries so that a
+// cyclic direct object (constructable programmatically, since Dictionary fields
+// are exported) cannot exhaust the goroutine stack — an unrecoverable fatal
+// error. Beyond the cap the objects are treated as not-equal.
+const maxCompareDepth = 1000
+
 // Equal reports whether two PDF objects are semantically equal.
 // It compares values deeply. IndirectRef values are compared by their
 // object/generation numbers only; Equal does not resolve references (it has no
 // document to resolve against), so an IndirectRef is never equal to the object
 // it points to.
 func Equal(a, b Object) bool {
+	return equalDepth(a, b, 0)
+}
+
+func equalDepth(a, b Object, depth int) bool {
+	if depth > maxCompareDepth {
+		return false
+	}
 	if a == nil && b == nil {
 		return true
 	}
@@ -61,7 +74,7 @@ func Equal(a, b Object) bool {
 			return false
 		}
 		for i := range av {
-			if !Equal(av[i], bv[i]) {
+			if !equalDepth(av[i], bv[i], depth+1) {
 				return false
 			}
 		}
@@ -72,21 +85,27 @@ func Equal(a, b Object) bool {
 		if !ok {
 			return false
 		}
-		return dictionaryEqual(av, bv)
+		if av == nil || bv == nil {
+			return av == nil && bv == nil
+		}
+		return dictionaryEqualDepth(av, bv, depth)
 
 	case Dictionary:
 		bv, ok := b.(Dictionary)
 		if !ok {
 			return false
 		}
-		return dictionaryEqual(&av, &bv)
+		return dictionaryEqualDepth(&av, &bv, depth)
 
 	case *Stream:
 		bv, ok := b.(*Stream)
 		if !ok {
 			return false
 		}
-		if !dictionaryEqual(&av.Dict, &bv.Dict) {
+		if av == nil || bv == nil {
+			return av == nil && bv == nil
+		}
+		if !dictionaryEqualDepth(&av.Dict, &bv.Dict, depth) {
 			return false
 		}
 		return bytes.Equal(av.Data, bv.Data)
@@ -96,7 +115,7 @@ func Equal(a, b Object) bool {
 		if !ok {
 			return false
 		}
-		if !dictionaryEqual(&av.Dict, &bv.Dict) {
+		if !dictionaryEqualDepth(&av.Dict, &bv.Dict, depth) {
 			return false
 		}
 		return bytes.Equal(av.Data, bv.Data)
@@ -110,9 +129,12 @@ func Equal(a, b Object) bool {
 		if !ok {
 			return false
 		}
+		if av == nil || bv == nil {
+			return av == nil && bv == nil
+		}
 		return av.Number == bv.Number &&
 			av.Generation == bv.Generation &&
-			Equal(av.Value, bv.Value)
+			equalDepth(av.Value, bv.Value, depth+1)
 
 	case IndirectRef:
 		bv, ok := b.(IndirectRef)
@@ -128,6 +150,13 @@ func Equal(a, b Object) bool {
 // dictionaryEqual compares two dictionaries semantically.
 // Key order is ignored for semantic comparison.
 func dictionaryEqual(a, b *Dictionary) bool {
+	return dictionaryEqualDepth(a, b, 0)
+}
+
+func dictionaryEqualDepth(a, b *Dictionary, depth int) bool {
+	if depth > maxCompareDepth {
+		return false
+	}
 	if a.Len() != b.Len() {
 		return false
 	}
@@ -136,7 +165,7 @@ func dictionaryEqual(a, b *Dictionary) bool {
 		if bVal == nil {
 			return false
 		}
-		if !Equal(a.Values[i], bVal) {
+		if !equalDepth(a.Values[i], bVal, depth+1) {
 			return false
 		}
 	}

@@ -42,7 +42,16 @@ type Document struct {
 //
 // Encrypted files are parsed structurally but not decrypted; see
 // Document.Encrypted.
-func Read(r io.ReaderAt, size int64) (*Document, error) {
+//
+// A malformed or adversarial file always yields an error, never a panic: any
+// panic escaping the parse is recovered and returned as an error.
+func Read(r io.ReaderAt, size int64) (doc *Document, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			doc = nil
+			err = fmt.Errorf("recovered from panic while reading PDF: %v", rec)
+		}
+	}()
 	data := make([]byte, size)
 	n, err := r.ReadAt(data, 0)
 	if err != nil && err != io.EOF {
@@ -54,7 +63,7 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 		return nil, fmt.Errorf("short read: got %d of %d bytes", n, size)
 	}
 
-	doc := &Document{
+	doc = &Document{
 		Objects: make(map[int]*IndirectObject),
 	}
 

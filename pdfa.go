@@ -58,6 +58,31 @@ func ValidatePDFA(doc *Document, level PDFALevel) []ValidationError {
 	return ValidatePDFABytes(doc, level, nil)
 }
 
+// runCheck runs one validation check, converting a panic into a reported
+// violation instead of letting it crash the caller. The validator processes
+// untrusted files, so a bug (or an adversarial structure) in one check must not
+// take down the whole process. Stack overflows from unbounded recursion are
+// fatal and cannot be recovered here; those are prevented at their source.
+func runCheck(doc *Document, level PDFALevel, check func(*Document, PDFALevel) []ValidationError) (out []ValidationError) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = []ValidationError{{Rule: "internal", Level: level, Message: fmt.Sprintf("internal validator error: %v", r)}}
+		}
+	}()
+	return check(doc, level)
+}
+
+// runByteCheck is runCheck for the byte-level checks, which have a different
+// signature.
+func runByteCheck(level PDFALevel, check func() []ValidationError) (out []ValidationError) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = []ValidationError{{Rule: "internal", Level: level, Message: fmt.Sprintf("internal validator error: %v", r)}}
+		}
+	}()
+	return check()
+}
+
 // ValidatePDFABytes checks whether doc conforms to the given PDF/A level.
 // If rawData is non-nil, additional byte-level checks are performed (e.g., no data after %%EOF).
 // Returns nil if conformant, or a slice of violations.
@@ -177,13 +202,13 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 	defer func() { doc.valCache = nil }()
 
 	for _, check := range checks {
-		errs = append(errs, check(doc, level)...)
+		errs = append(errs, runCheck(doc, level, check)...)
 	}
 
 	// Byte-level checks (require raw file data)
 	if rawData != nil {
-		errs = append(errs, checkNoDataAfterEOF(rawData, level)...)
-		errs = append(errs, checkFileStructureBytes(doc, level, rawData)...)
+		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkNoDataAfterEOF(rawData, level) })...)
+		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkFileStructureBytes(doc, level, rawData) })...)
 	}
 
 	// Checks iterate map-ordered doc.Objects, so their concatenated output
@@ -5031,9 +5056,23 @@ func collectTintTransforms(doc *Document, dict *Dictionary, tintTransforms map[N
 // inside a DeviceN/NChannel Colorants dictionary) and flags same-name
 // definitions whose tint transform or alternate space differ.
 func collectSeparationConsistency(doc *Document, val Object, tintTransforms map[Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
+	collectSeparationConsistencySeen(doc, val, tintTransforms, objNum, level, errs, make(map[int]bool))
+}
+
+func collectSeparationConsistencySeen(doc *Document, val Object, tintTransforms map[Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+	// Guard against a DeviceN whose /Colorants entry cycles back to itself: a
+	// self-referential colorant would otherwise recurse until the goroutine
+	// stack overflows (an unrecoverable fatal error), like the other
+	// colour-space walkers this thread a visited-set keyed on object number.
+	if ref, ok := val.(IndirectRef); ok {
+		if seen[ref.Number] {
+			return
+		}
+		seen[ref.Number] = true
+	}
 	resolved := doc.Resolve(val)
 	arr, ok := resolved.(Array)
-	if !ok {
+	if !ok || len(arr) == 0 {
 		return
 	}
 	csType, _ := arr[0].(Name)
@@ -5045,7 +5084,7 @@ func collectSeparationConsistency(doc *Document, val Object, tintTransforms map[
 		if attrDict := doc.ResolveDict(arr[4]); attrDict != nil {
 			if colorantsDict := doc.ResolveDict(attrDict.Get("Colorants")); colorantsDict != nil {
 				for _, cval := range colorantsDict.Values {
-					collectSeparationConsistency(doc, cval, tintTransforms, objNum, level, errs)
+					collectSeparationConsistencySeen(doc, cval, tintTransforms, objNum, level, errs, seen)
 				}
 			}
 		}
