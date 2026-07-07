@@ -6,11 +6,18 @@ import (
 	"strconv"
 )
 
+// maxParseDepth bounds recursion through nested arrays and dictionaries so that
+// adversarial input (e.g. millions of nested '[') cannot exhaust the goroutine
+// stack, which would abort the process uncatchably. Real PDFs nest only a
+// handful of levels deep.
+const maxParseDepth = 1000
+
 // Parser builds PDF Object values from a token stream.
 type Parser struct {
 	lexer  *Lexer
 	buf    []Token // look-ahead buffer
 	bufLen int
+	depth  int // current nesting depth (arrays/dictionaries)
 }
 
 // NewParser creates a new Parser for the given data.
@@ -63,6 +70,12 @@ func (p *Parser) consumeToken() {
 
 // ParseObject parses any PDF object from the token stream.
 func (p *Parser) ParseObject() (Object, error) {
+	p.depth++
+	defer func() { p.depth-- }()
+	if p.depth > maxParseDepth {
+		return nil, fmt.Errorf("maximum nesting depth %d exceeded", maxParseDepth)
+	}
+
 	tok, err := p.peekToken(0)
 	if err != nil {
 		return nil, err

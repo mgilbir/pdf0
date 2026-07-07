@@ -145,9 +145,15 @@ func ParseXRefStream(stream *Stream) (*XRefTable, error) {
 		if !ok {
 			return nil, fmt.Errorf("xref stream /W[%d] is not an integer", i)
 		}
+		if iv < 0 {
+			return nil, fmt.Errorf("xref stream /W[%d] is negative (%d)", i, iv)
+		}
 		w[i] = int(iv)
 	}
 	entrySize := w[0] + w[1] + w[2]
+	if entrySize == 0 {
+		return nil, fmt.Errorf("xref stream /W field widths sum to zero")
+	}
 
 	// Get Index array (default: [0 Size])
 	var indices []int
@@ -163,6 +169,9 @@ func ParseXRefStream(stream *Stream) (*XRefTable, error) {
 				return nil, fmt.Errorf("xref stream /Index element is not an integer")
 			}
 			indices = append(indices, int(iv))
+		}
+		if len(indices)%2 != 0 {
+			return nil, fmt.Errorf("xref stream /Index must have an even number of elements, got %d", len(indices))
 		}
 	} else {
 		sizeObj := stream.Dict.Get("Size")

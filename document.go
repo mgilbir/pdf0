@@ -69,14 +69,22 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 		}
 		doc.Trailer = *trailer
 
-		// Follow Prev chain
+		// Follow Prev chain. Guard against cycles: a /Prev pointing at an
+		// already-visited xref section (or at itself) would otherwise loop
+		// forever on a crafted or corrupt file.
+		visitedXref := map[int64]bool{xrefOffset: true}
 		prevObj := doc.Trailer.Get("Prev")
 		for prevObj != nil {
 			prevOffset, ok := prevObj.(Integer)
 			if !ok {
 				break
 			}
-			lexer.SetPosition(int64(prevOffset) + headerOffset)
+			target := int64(prevOffset) + headerOffset
+			if visitedXref[target] {
+				break // cycle in the /Prev chain
+			}
+			visitedXref[target] = true
+			lexer.SetPosition(target)
 			tok, err := lexer.NextToken()
 			if err != nil || tok.Type != TokenXref {
 				break
