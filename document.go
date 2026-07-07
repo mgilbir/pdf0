@@ -27,6 +27,10 @@ type Document struct {
 	// object, for the byte-level file-structure checks. Objects materialised
 	// from object streams are absent.
 	Offsets map[int]int64
+
+	// embeddedDepth guards the recursive validation of embedded PDF/A files
+	// (see checkEmbeddedPDFA); it is 0 for a top-level document.
+	embeddedDepth int
 }
 
 // Read parses a PDF document from the given data.

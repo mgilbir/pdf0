@@ -1,5 +1,10 @@
 package pdf0
 
+import (
+	"bytes"
+	"strings"
+)
+
 // This file collects the remaining low-frequency PDF/A rules: prohibited
 // catalog/page entries (PDF/A-4), image interpolation and rendering-intent
 // restrictions on inline and image XObjects, and file-trailer identifier
@@ -453,4 +458,115 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 		walk(page.dict, getContentStreamData(doc, page.dict.Get("Contents")))
 	}
 	return out
+}
+
+// checkEmbeddedPDFA enforces ISO 19005-4 6.9: an embedded file whose MIME
+// subtype is application/pdf shall itself be a valid PDF/A document. Each
+// such file is decoded and validated one level deep (a depth guard prevents
+// unbounded recursion).
+func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA4 || doc.embeddedDepth > 0 {
+		return nil
+	}
+	var errs []ValidationError
+	for num, iobj := range doc.Objects {
+		dict, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		efDict := doc.ResolveDict(dict.Get("EF"))
+		if efDict == nil {
+			continue
+		}
+		for _, val := range efDict.Values {
+			stream, ok := doc.Resolve(val).(*Stream)
+			if !ok {
+				continue
+			}
+			if !isPDFMIME(stream.Dict.Get("Subtype")) {
+				continue
+			}
+			data, err := decodeStreamData(stream)
+			if err != nil || len(data) == 0 {
+				continue
+			}
+			if !embeddedPDFACompliant(data) {
+				errs = append(errs, ValidationError{Rule: "6.9", Level: level,
+					Message: "an embedded PDF file is not compliant with PDF/A", Object: num})
+			}
+		}
+	}
+	return errs
+}
+
+// isPDFMIME reports whether a stream /Subtype names the application/pdf MIME
+// type (stored as the name /application#2Fpdf).
+func isPDFMIME(subtype Object) bool {
+	n, ok := subtype.(Name)
+	return ok && string(n) == "application/pdf"
+}
+
+// embeddedPDFACompliant reports whether embedded PDF bytes parse as a PDF/A
+// document and validate against their own declared conformance level.
+func embeddedPDFACompliant(data []byte) bool {
+	edoc, err := Read(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return false
+	}
+	elevel, ok := declaredPDFALevel(edoc)
+	if !ok {
+		return false // an embedded PDF that is not PDF/A at all
+	}
+	edoc.embeddedDepth = 1
+	return len(ValidatePDFABytes(edoc, elevel, data)) == 0
+}
+
+// declaredPDFALevel reads the PDF/A conformance level a document claims via
+// its XMP pdfaid:part / pdfaid:conformance identifiers.
+func declaredPDFALevel(doc *Document) (PDFALevel, bool) {
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return 0, false
+	}
+	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*Stream)
+	if !ok {
+		return 0, false
+	}
+	xmp := decodeXMPToUTF8(stream.Data)
+	part := extractXMPValue(xmp, "pdfaid:part")
+	if part == "" {
+		part = extractXMPAttr(xmp, "pdfaid:part")
+	}
+	switch part {
+	case "1":
+		return PDFA1b, true
+	case "2":
+		return PDFA2b, true
+	case "3":
+		return PDFA3b, true
+	case "4":
+		return PDFA4, true
+	}
+	return 0, false
+}
+
+// extractXMPAttr reads an attribute-form XMP value (key="value").
+func extractXMPAttr(xmp, key string) string {
+	i := strings.Index(xmp, key+"=")
+	if i < 0 {
+		return ""
+	}
+	rest := xmp[i+len(key)+1:]
+	if len(rest) == 0 {
+		return ""
+	}
+	q := rest[0]
+	if q != '"' && q != '\'' {
+		return ""
+	}
+	end := strings.IndexByte(rest[1:], q)
+	if end < 0 {
+		return ""
+	}
+	return rest[1 : 1+end]
 }
