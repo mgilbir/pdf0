@@ -122,6 +122,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkICCBasedProfiles,
 		// Separation/DeviceN color spaces (6.2.4.4)
 		checkSeparationDeviceN,
+		// Permissions dictionary (6.1.12)
+		checkPermsDict,
 	}
 
 	for _, check := range checks {
@@ -367,9 +369,42 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		return nil
 	}
 
+	// PDF/A-4: validate page-level OutputIntents have /S /GTS_PDFA1
+	// (must run even if no catalog-level OutputIntents)
+	var errsPageLevel []ValidationError
+	if level == PDFA4 {
+		pages := collectPages(doc, catalog.Get("Pages"))
+		for _, page := range pages {
+			pageOIRef := page.dict.Get("OutputIntents")
+			if pageOIRef == nil {
+				continue
+			}
+			pageOIObj := doc.Resolve(pageOIRef)
+			pageOIArr, ok := pageOIObj.(Array)
+			if !ok || len(pageOIArr) == 0 {
+				continue
+			}
+			for j, elem := range pageOIArr {
+				oiDict := doc.ResolveDict(elem)
+				if oiDict == nil {
+					continue
+				}
+				sName, _ := oiDict.Get("S").(Name)
+				if sName != "GTS_PDFA1" {
+					errsPageLevel = append(errsPageLevel, ValidationError{
+						Rule:    "6.2.3",
+						Level:   level,
+						Message: fmt.Sprintf("page OutputIntents[%d] must have /S /GTS_PDFA1, got /%s", j, sName),
+						Object:  page.objNum,
+					})
+				}
+			}
+		}
+	}
+
 	oiRef := catalog.Get("OutputIntents")
 	if oiRef == nil {
-		return nil // OutputIntents only required when device-dependent color spaces are used
+		return errsPageLevel // OutputIntents only required when device-dependent color spaces are used
 	}
 
 	oiObj := doc.Resolve(oiRef)
@@ -519,6 +554,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 
+	errs = append(errs, errsPageLevel...)
 	return errs
 }
 
@@ -570,7 +606,26 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 		}
 		// Decompress and check ICC profile header
 		data, err := decodeStreamData(profStream)
-		if err != nil || len(data) < 20 {
+		if err != nil {
+			// Only treat a decode failure as a violation when we actually
+			// support every filter on the stream. A legal profile encoded with
+			// a filter we don't decode (e.g. ASCII85Decode, RunLengthDecode, or
+			// a filter array) must not produce a false positive.
+			if streamFiltersSupported(profStream) {
+				errs = append(errs, ValidationError{
+					Rule:    "6.2.3",
+					Level:   level,
+					Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data cannot be decoded: %v", i, err),
+				})
+			}
+			continue
+		}
+		if len(data) < 128 {
+			errs = append(errs, ValidationError{
+				Rule:    "6.2.3",
+				Level:   level,
+				Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data too short (%d bytes, minimum 128)", i, len(data)),
+			})
 			continue
 		}
 		// ICC profile header: bytes 16-19 contain color space signature
@@ -678,6 +733,42 @@ func checkNoOCProperties(doc *Document, level PDFALevel) []ValidationError {
 		}}
 	}
 	return nil
+}
+
+// Rule 6.1.12: Perms dictionary may only contain UR3 and DocMDP keys.
+func checkPermsDict(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA1b {
+		return nil // PDF/A-1b doesn't have Perms rules
+	}
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	permsRef := catalog.Get("Perms")
+	if permsRef == nil {
+		return nil
+	}
+	permsDict := doc.ResolveDict(permsRef)
+	if permsDict == nil {
+		if d, ok := permsRef.(*Dictionary); ok {
+			permsDict = d
+		}
+	}
+	if permsDict == nil {
+		return nil
+	}
+
+	var errs []ValidationError
+	for _, key := range permsDict.Keys {
+		if key != "UR3" && key != "DocMDP" {
+			errs = append(errs, ValidationError{
+				Rule:    "6.1.12",
+				Level:   level,
+				Message: fmt.Sprintf("Perms dictionary contains forbidden key /%s (only /UR3 and /DocMDP allowed)", key),
+			})
+		}
+	}
+	return errs
 }
 
 // --- Stream checks (6.1.6) ---
@@ -4472,6 +4563,29 @@ func checkColorSpaceValue(doc *Document, csObj Object, objNum int, level PDFALev
 		}
 		// Check alternate color space
 		checkAlternateCS(doc, arr[2], objNum, level, errs)
+
+		// DeviceN colorant limit is an implementation limit that varies by part:
+		// PDF/A-1 (PDF 1.4) caps DeviceN at 8 colorants; PDF/A-2 and PDF/A-3
+		// (PDF 1.7, NChannel) raise it to 32; PDF/A-4 (PDF 2.0) has no such limit.
+		maxColorants := 0
+		rule := "6.2.4"
+		switch level {
+		case PDFA1b:
+			maxColorants = 8
+			rule = "6.2.3"
+		case PDFA2b, PDFA3b:
+			maxColorants = 32
+		}
+		if maxColorants > 0 {
+			if namesArr, ok := doc.Resolve(arr[1]).(Array); ok && len(namesArr) > maxColorants {
+				*errs = append(*errs, ValidationError{
+					Rule:    rule,
+					Level:   level,
+					Message: fmt.Sprintf("DeviceN color space has %d colorants, maximum is %d", len(namesArr), maxColorants),
+					Object:  objNum,
+				})
+			}
+		}
 
 		// Get colorant names from the DeviceN array
 		namesArr, namesOk := doc.Resolve(arr[1]).(Array)
