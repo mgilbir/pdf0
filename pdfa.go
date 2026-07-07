@@ -127,8 +127,11 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkPermsDict,
 		// XMP metadata properties (6.7.2 at 1b / 6.6.2.3 at 2b/3b)
 		checkXMPProperties,
+		// XMP packet header / well-formedness (6.6.2.1 / 6.7.2.1)
+		checkXMPWellFormed,
 		// ICCBased overprint and profile-identity rules (6.2.4.2)
 		checkICCBasedUsageRules,
+		checkICCProfileIdentity,
 		// JPEG2000 image restrictions (6.2.8.3)
 		checkJPXImages,
 		// Font dictionary rules (6.3 / 6.2.11 / 6.2.10)
@@ -137,6 +140,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkContentStreamOperators,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
+		// CMap CID implementation limit (6.1.12 / 6.1.13)
+		checkCMapCIDLimit,
 	}
 
 	// Memoize expensive traversals (page-tree walks, content-stream
@@ -1355,6 +1360,31 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 				Object:  num,
 			})
 		}
+
+		// The appearance dictionary shall contain only the N entry (ISO
+		// 19005-2 6.3.3, -4 6.3.4): the down (D) and rollover (R) appearances
+		// are not permitted.
+		if apDict.Get("D") != nil || apDict.Get("R") != nil {
+			errs = append(errs, ValidationError{
+				Rule:    "6.3.3",
+				Level:   level,
+				Message: "annotation appearance dictionary must contain only the /N entry (not /D or /R)",
+				Object:  num,
+			})
+		}
+
+		// For a Widget of button field type (FT Btn), the N appearance shall
+		// be a sub-dictionary of appearance states, not a single stream.
+		if st == "Widget" && annotFieldType(doc, dict) == "Btn" {
+			if _, ok := doc.Resolve(apDict.Get("N")).(*Dictionary); !ok {
+				errs = append(errs, ValidationError{
+					Rule:    "6.3.3",
+					Level:   level,
+					Message: "button Widget /AP /N must be an appearance sub-dictionary of states, not a stream",
+					Object:  num,
+				})
+			}
+		}
 	}
 	for num, iobj := range doc.Objects {
 		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
@@ -1365,6 +1395,19 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 		check(a.dict, a.num)
 	}
 	return errs
+}
+
+// annotFieldType returns the form field type (FT) governing a widget
+// annotation: its own FT, or an inherited one from its /Parent field chain.
+func annotFieldType(doc *Document, dict *Dictionary) Name {
+	node := dict
+	for hops := 0; node != nil && hops < 32; hops++ {
+		if ft, ok := node.Get("FT").(Name); ok {
+			return ft
+		}
+		node = doc.ResolveDict(node.Get("Parent"))
+	}
+	return ""
 }
 
 func isZeroAreaRect(obj Object) bool {
@@ -3337,6 +3380,11 @@ func checkImplementationLimits(doc *Document, level PDFALevel) []ValidationError
 
 	// q/Q nesting depth check in content streams
 	checkQNestingDepth(doc, level, lim.rule, &errs)
+
+	// Content-stream operand limits (Annex C: reals, integers, and the
+	// content-stream string-length limit apply per-operand, not to the
+	// parsed object model).
+	checkContentStreamLimits(doc, level, lim, &errs)
 
 	// Page size limits for 2b+ only
 	if level != PDFA1b {
@@ -5546,6 +5594,16 @@ func sameICCProfile(doc *Document, a, b *Stream) bool {
 		return false
 	}
 	if len(da) >= 100 {
+		// The ICC Profile ID (header bytes 84-99) is an MD5 of the profile.
+		// When both profiles carry a non-zero Profile ID, they are the same
+		// iff the IDs match — two profiles with different non-zero IDs are
+		// distinct even if otherwise byte-identical. When either ID is zero
+		// (not computed), fall back to comparing the content with the ID
+		// field zeroed.
+		ida, idb := da[84:100], db[84:100]
+		if !allZero(ida) && !allZero(idb) {
+			return bytes.Equal(ida, idb)
+		}
 		na := append([]byte(nil), da...)
 		nb := append([]byte(nil), db...)
 		for i := 84; i < 100; i++ {
@@ -5571,22 +5629,6 @@ func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
 	catalog := getCatalog(doc)
 	if catalog == nil {
 		return nil
-	}
-
-	// Output intent profile (for the A-4 identity rule).
-	var oiProfile *Stream
-	if arr, ok := doc.Resolve(catalog.Get("OutputIntents")).(Array); ok {
-		for _, el := range arr {
-			d := doc.ResolveDict(el)
-			if d == nil {
-				continue
-			}
-			if s, _ := d.Get("S").(Name); s == "GTS_PDFA1" {
-				if p, ok := doc.Resolve(d.Get("DestOutputProfile")).(*Stream); ok {
-					oiProfile = p
-				}
-			}
-		}
 	}
 
 	var errs []ValidationError
@@ -5627,12 +5669,6 @@ func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
 			}
 		}
 
-		// Blending colour space profile of the page's transparency group.
-		var groupProfile *Stream
-		if groupDict := doc.ResolveDict(page.dict.Get("Group")); groupDict != nil {
-			groupProfile = iccProfileStream(doc, groupDict.Get("CS"))
-		}
-
 		csDict := doc.ResolveDict(res.Get("ColorSpace"))
 		if csDict == nil {
 			continue
@@ -5648,27 +5684,6 @@ func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
 						Rule:    "6.2.4.2",
 						Level:   level,
 						Message: "overprint mode must not be 1 when an ICCBased CMYK colour space is used with overprinting",
-						Object:  page.objNum,
-					})
-				}
-			}
-			if level == PDFA4 {
-				// Only CMYK: the corpus passes an ICCBased RGB space whose
-				// profile is identical to the output intent's.
-				prof := iccCMYKProfile(doc, csVal)
-				if sameICCProfile(doc, prof, oiProfile) {
-					errs = append(errs, ValidationError{
-						Rule:    "6.2.4.2",
-						Level:   level,
-						Message: "ICCBased colour space must not embed the same profile as the PDF/A output intent",
-						Object:  page.objNum,
-					})
-				}
-				if sameICCProfile(doc, prof, groupProfile) {
-					errs = append(errs, ValidationError{
-						Rule:    "6.2.4.2",
-						Level:   level,
-						Message: "ICCBased colour space must not embed the same profile as the transparency blending colour space",
 						Object:  page.objNum,
 					})
 				}
@@ -5829,4 +5844,14 @@ func checkJPXImages(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 	return errs
+}
+
+// allZero reports whether every byte is zero.
+func allZero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }

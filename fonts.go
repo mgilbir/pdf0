@@ -74,9 +74,13 @@ func forEachContentItem(data []byte, fn func(kind contentItemKind, payload []byt
 			fn(itemName, data[start:i])
 		default:
 			start := i
+			// Numeric tokens may be arbitrarily long (Annex C allows huge
+			// precision); read them whole. Non-numeric keyword tokens are
+			// capped to bound scanning over stray binary data.
+			numeric := data[i] >= '0' && data[i] <= '9' || data[i] == '+' || data[i] == '-' || data[i] == '.'
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 				i++
-				if i-start > 256 {
+				if !numeric && i-start > 256 {
 					break
 				}
 			}
@@ -85,7 +89,7 @@ func forEachContentItem(data []byte, fn func(kind contentItemKind, payload []byt
 				skipInlineImage(data, &i)
 				continue
 			}
-			if len(tok) > 0 && (tok[0] >= '0' && tok[0] <= '9' || tok[0] == '+' || tok[0] == '-' || tok[0] == '.') {
+			if numeric {
 				fn(itemNumber, tok)
 				continue
 			}
@@ -425,8 +429,19 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 					bad("CMap dictionary WMode %d differs from the embedded CMap content WMode %d", int(dictWMode), contentWMode)
 				}
 			}
-			// usecmap references must be predefined (or embedded, which a
-			// name reference is not).
+			// A CMap's UseCMap reference must be to a predefined CMap
+			// (ISO 32000-1 9.7.5.2, Table 118): an embedded CMap stream or a
+			// non-predefined name is not permitted.
+			switch uc := doc.Resolve(enc.Dict.Get("UseCMap")).(type) {
+			case Name:
+				if _, ok := predefinedCMaps[string(uc)]; !ok {
+					bad("embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", string(uc))
+				}
+			case *Stream:
+				bad("embedded CMap references another embedded CMap, but UseCMap must name a predefined CMap (Table 118)")
+			}
+			// The usecmap operator in the CMap body must likewise name a
+			// predefined CMap.
 			if refName, found := cmapUseCMap(doc, enc); found {
 				if _, ok := predefinedCMaps[refName]; !ok {
 					bad("embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", refName)
@@ -555,11 +570,6 @@ func cmapContentWMode(doc *Document, stream *Stream) (int, bool) {
 
 // cmapUseCMap extracts a "/Name usecmap" reference from an embedded CMap.
 func cmapUseCMap(doc *Document, stream *Stream) (string, bool) {
-	// The referenced CMap may also be declared via /UseCMap in the stream
-	// dictionary.
-	if n, ok := doc.Resolve(stream.Dict.Get("UseCMap")).(Name); ok {
-		return string(n), true
-	}
 	data := decodeContentStream(doc, stream)
 	if data == nil {
 		return "", false
@@ -1664,4 +1674,115 @@ func cidSetBits(doc *Document, s *Stream) map[int]bool {
 		}
 	}
 	return out
+}
+
+// checkCMapCIDLimit verifies that no character identifier defined by an
+// embedded CMap exceeds 65535 (ISO 19005-1 6.1.12, -2/-3 6.1.13; the CID is
+// a 16-bit value per ISO 32000-1 9.7.4).
+func checkCMapCIDLimit(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA4 {
+		return nil // PDF/A-4 has no implementation-limits clause
+	}
+	rule := "6.1.12"
+	if level == PDFA2b || level == PDFA3b {
+		rule = "6.1.13"
+	}
+	var errs []ValidationError
+	seen := map[int]bool{}
+	for num, iobj := range doc.Objects {
+		fontDict, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
+			continue
+		}
+		enc, ok := doc.Resolve(fontDict.Get("Encoding")).(*Stream)
+		if !ok {
+			continue
+		}
+		data := decodeContentStream(doc, enc)
+		if data == nil {
+			continue
+		}
+		if maxCMapCID(data) > 65535 && !seen[num] {
+			seen[num] = true
+			errs = append(errs, ValidationError{
+				Rule:    rule,
+				Level:   level,
+				Message: "a character identifier (CID) defined in the CMap exceeds the maximum value 65535",
+				Object:  num,
+			})
+		}
+	}
+	return errs
+}
+
+// maxCMapCID returns the largest CID mapped by a CMap's cidrange and cidchar
+// sections.
+func maxCMapCID(data []byte) int {
+	max := 0
+	consider := func(v int) {
+		if v > max {
+			max = v
+		}
+	}
+	// cidrange: <lo> <hi> startCID  -> max CID = startCID + (hi - lo)
+	s := string(data)
+	scanRanges := func(begin, end string, isRange bool) {
+		rest := s
+		for {
+			b := strings.Index(rest, begin)
+			if b < 0 {
+				return
+			}
+			e := strings.Index(rest[b:], end)
+			if e < 0 {
+				return
+			}
+			section := rest[b+len(begin) : b+e]
+			for _, line := range strings.Split(section, "\n") {
+				fields := strings.Fields(line)
+				if isRange && len(fields) >= 3 {
+					lo := hexVal4(fields[0])
+					hi := hexVal4(fields[1])
+					cid := atoiSafe(fields[2])
+					if lo >= 0 && hi >= lo {
+						consider(cid + (hi - lo))
+					}
+				} else if !isRange && len(fields) >= 2 {
+					consider(atoiSafe(fields[1]))
+				}
+			}
+			rest = rest[b+e+len(end):]
+		}
+	}
+	scanRanges("begincidrange", "endcidrange", true)
+	scanRanges("begincidchar", "endcidchar", false)
+	return max
+}
+
+// hexVal4 parses a <hhhh> hex token to an int, or -1.
+func hexVal4(s string) int {
+	s = strings.TrimPrefix(s, "<")
+	s = strings.TrimSuffix(s, ">")
+	if s == "" {
+		return -1
+	}
+	v, ok := parseHexN(s)
+	if !ok {
+		return -1
+	}
+	return v
+}
+
+func atoiSafe(s string) int {
+	v := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			break
+		}
+		v = v*10 + int(s[i]-'0')
+	}
+	return v
 }
