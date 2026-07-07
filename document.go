@@ -160,6 +160,12 @@ func Read(r io.ReaderAt, size int64) (doc *Document, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("parsing object %d at offset %d: %w", num, entry.Offset, err)
 		}
+		// The cross-reference key is the authoritative object number: readers
+		// resolve references through the xref, so the body's declared number
+		// must not override it. Otherwise a body "3 0 obj" reached via xref slot
+		// 4 would be written back numbered 3 under slot 4 — dangling for any
+		// other reader (audit C7).
+		iobj.Number = num
 		doc.Objects[num] = iobj
 	}
 
@@ -347,8 +353,34 @@ func (d *Document) Write(w io.Writer) error {
 	if d.Encrypted || d.Trailer.Get("Encrypt") != nil {
 		return fmt.Errorf("writing encrypted documents is not supported")
 	}
+	// Object number 0 is reserved as the free-list head (ISO 32000-1 7.5.4); it
+	// cannot be represented as an in-use object. Refuse rather than silently
+	// dropping it from the written file (audit C16).
+	if _, ok := d.Objects[0]; ok {
+		return fmt.Errorf("object number 0 is reserved and cannot be written")
+	}
+	// A broken object stream left some objects unmaterialised during Read; the
+	// document may reference them, so writing would emit dangling references
+	// (audit C19).
+	if len(d.brokenObjStms) > 0 {
+		return fmt.Errorf("cannot write: %d object stream(s) failed to decode on read, so some objects are missing", len(d.brokenObjStms))
+	}
 
 	s := NewSerializer(w)
+
+	// A stale indirect /Length (its target integer object not updated after a
+	// stream's data changed, or a wrong length the parser recovered from) would
+	// otherwise be re-emitted verbatim. Compute the correct value for each
+	// indirect-length target so the written length object matches the data
+	// (audit C8).
+	lengthOverrides := make(map[int]int64)
+	for _, iobj := range d.Objects {
+		if stream, ok := iobj.Value.(*Stream); ok {
+			if ref, isRef := stream.Dict.Get("Length").(IndirectRef); isRef {
+				lengthOverrides[ref.Number] = int64(len(stream.Data))
+			}
+		}
+	}
 
 	// 1. Write header
 	version := d.Version
@@ -371,7 +403,14 @@ func (d *Document) Write(w io.Writer) error {
 	offsets := make(map[int]int64)
 	for _, num := range objNums {
 		offsets[num] = s.Offset()
-		if err := s.WriteIndirectObject(d.Objects[num]); err != nil {
+		iobj := d.Objects[num]
+		if newLen, ok := lengthOverrides[num]; ok {
+			if _, isInt := iobj.Value.(Integer); isInt {
+				// Emit the corrected length without mutating the caller's object.
+				iobj = &IndirectObject{Number: iobj.Number, Generation: iobj.Generation, Value: Integer(newLen)}
+			}
+		}
+		if err := s.WriteIndirectObject(iobj); err != nil {
 			return fmt.Errorf("writing object %d: %w", num, err)
 		}
 	}
@@ -423,15 +462,20 @@ func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects
 		return err
 	}
 
+	// Each entry must be exactly 20 bytes (ISO 32000-1 7.5.4): a 10-digit
+	// offset, space, 5-digit generation, space, the type byte, then a 2-byte
+	// EOL. Emitting "n \r\n" (a space AND CRLF after the type) produced a
+	// 21-byte line that no fixed-format reader — including this package's own
+	// 6.1.4 validator — accepts. Use a bare CRLF EOL.
 	entryLine := func(num int) string {
 		if num == 0 {
-			return "0000000000 65535 f \r\n"
+			return "0000000000 65535 f\r\n"
 		}
 		gen := 0
 		if obj, ok := objects[num]; ok {
 			gen = obj.Generation
 		}
-		return fmt.Sprintf("%010d %05d n \r\n", offsets[num], gen)
+		return fmt.Sprintf("%010d %05d n\r\n", offsets[num], gen)
 	}
 
 	// Object 0 (the free-list head) always begins the first subsection;
