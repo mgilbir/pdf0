@@ -154,6 +154,10 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkEmbeddedPDFA,
 		// Inherited page XObject (6.2.2)
 		checkInheritedPageXObject,
+		// Stream /Length correctness (6.1.6/6.1.7)
+		checkStreamLength,
+		// Object stream decodability (6.1.6/6.1.7)
+		checkObjectStreamDecodable,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
 		// CMap CID implementation limit (6.1.12 / 6.1.13)

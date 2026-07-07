@@ -1148,11 +1148,52 @@ const (
 	// Fail files the validator fails to flag (false negatives / unimplemented
 	// rules). This is the headline coverage gap; drive it down over time.
 	corpusMaxMissed = 0
-	// Files the parser cannot read at all. All five are deliberately broken
-	// fail files: four with malformed stream keywords/lengths and one whose
-	// object stream holds corrupt zlib data.
-	corpusMaxParseErrors = 5
+	// Every PDF_A-* corpus file now parses; the parser recovers from the
+	// deliberately-malformed structure the fail files exercise (wrong stream
+	// Length, header-offset convention, corrupt object streams) and reports
+	// the defect rather than aborting.
+	corpusMaxParseErrors = 0
 )
+
+// TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
+// — not just the PDF_A-* conformance subset that TestCorpus validates, but the
+// Isartor and PDF/UA suites too — reads without error. The parser recovery
+// work (PR "parser-recovery") fixed the same malformations across all suites,
+// and this guards against regressing that.
+func TestCorpusParsesEntirely(t *testing.T) {
+	corpusDir := os.Getenv("VERAPDF_CORPUS")
+	if corpusDir == "" {
+		corpusDir = "testdata/verapdf-corpus"
+	}
+	if _, err := os.Stat(corpusDir); os.IsNotExist(err) {
+		t.Skip("veraPDF corpus not found; run `make corpus` to download")
+	}
+	var total int
+	var failures []string
+	filepath.Walk(corpusDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
+			return nil
+		}
+		base := filepath.Base(path)
+		if !strings.Contains(base, "-pass-") && !strings.Contains(base, "-fail-") {
+			return nil
+		}
+		total++
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		if _, e := Read(bytes.NewReader(data), int64(len(data))); e != nil {
+			rel, _ := filepath.Rel(corpusDir, path)
+			failures = append(failures, rel+" :: "+e.Error())
+		}
+		return nil
+	})
+	t.Logf("corpus parse: %d files, %d failures", total, len(failures))
+	if len(failures) > 0 {
+		t.Errorf("%d corpus files failed to parse:\n  %s", len(failures), strings.Join(failures, "\n  "))
+	}
+}
 
 func TestCorpus(t *testing.T) {
 	corpusDir := os.Getenv("VERAPDF_CORPUS")

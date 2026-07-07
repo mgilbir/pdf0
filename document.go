@@ -31,6 +31,11 @@ type Document struct {
 	// embeddedDepth guards the recursive validation of embedded PDF/A files
 	// (see checkEmbeddedPDFA); it is 0 for a top-level document.
 	embeddedDepth int
+
+	// brokenObjStms lists object-stream container numbers whose contents could
+	// not be decoded during Read. The document parses without them so that
+	// validation can report the defect (see checkStreamLength / objstm rules).
+	brokenObjStms []int
 }
 
 // Read parses a PDF document from the given data.
@@ -65,8 +70,16 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	// All byte offsets in the PDF are relative to the %PDF- header
-	xrefOffset += headerOffset
+	// Byte offsets are specified from the start of the file (ISO 32000-1
+	// 7.5.4), so absolute offsets are correct even when data precedes the
+	// header. Some producers, however, prepend bytes without updating their
+	// offsets, leaving them relative to %PDF-. Choose whichever convention
+	// actually lands on the cross-reference section, preferring absolute.
+	adjust := int64(0)
+	if !xrefLooksValid(data, xrefOffset) && headerOffset != 0 && xrefLooksValid(data, xrefOffset+headerOffset) {
+		adjust = headerOffset
+	}
+	xrefOffset += adjust
 	if xrefOffset < 0 || xrefOffset >= size {
 		return nil, fmt.Errorf("startxref offset %d outside file (size %d)", xrefOffset, size)
 	}
@@ -107,7 +120,7 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 		if !ok {
 			break
 		}
-		sectionOffset = int64(prevOffset) + headerOffset
+		sectionOffset = int64(prevOffset) + adjust
 	}
 
 	// 4. Parse all uncompressed objects from xref entries
@@ -121,8 +134,8 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 			continue // already loaded (e.g., xref stream)
 		}
 
-		doc.Offsets[num] = entry.Offset + headerOffset
-		lexer.SetPosition(entry.Offset + headerOffset)
+		doc.Offsets[num] = entry.Offset + adjust
+		lexer.SetPosition(entry.Offset + adjust)
 		parser := NewParserFromLexer(lexer)
 		iobj, err := parser.ParseIndirectObject()
 		if err != nil {
@@ -465,4 +478,30 @@ func (d *Document) ResolveDict(obj Object) *Dictionary {
 		return dict
 	}
 	return nil
+}
+
+// xrefLooksValid reports whether a cross-reference section plausibly begins at
+// the given offset: either the traditional "xref" keyword or the start of an
+// "N G obj" cross-reference stream, allowing leading whitespace.
+func xrefLooksValid(data []byte, off int64) bool {
+	if off < 0 || off >= int64(len(data)) {
+		return false
+	}
+	i := off
+	for i < int64(len(data)) && isWhitespace(data[i]) {
+		i++
+	}
+	rest := data[i:]
+	if bytes.HasPrefix(rest, []byte("xref")) {
+		return true
+	}
+	// Cross-reference stream: "<num> <num> obj ... /Type /XRef".
+	if len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+		window := rest
+		if len(window) > 64 {
+			window = window[:64]
+		}
+		return bytes.Contains(window, []byte("obj"))
+	}
+	return false
 }

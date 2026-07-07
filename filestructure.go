@@ -1116,3 +1116,48 @@ func parseInlineImageFilter(data []byte, pos *int) []string {
 	*pos = i
 	return filters
 }
+
+// checkStreamLength enforces that a stream's /Length entry equals the actual
+// number of bytes between the stream and endstream keywords (ISO 19005-1
+// 6.1.7, -2/-3 6.1.7, -4 6.1.6; ISO 32000-1 7.3.8.2). The parser recovers a
+// stream with an incorrect Length by locating endstream, so Stream.Data holds
+// the true byte count and a divergence from the declared value is a mismatch.
+func checkStreamLength(doc *Document, level PDFALevel) []ValidationError {
+	rule := "6.1.7"
+	if level == PDFA4 {
+		rule = "6.1.6"
+	}
+	var errs []ValidationError
+	for num, iobj := range doc.Objects {
+		s, ok := iobj.Value.(*Stream)
+		if !ok {
+			continue
+		}
+		length, ok := doc.Resolve(s.Dict.Get("Length")).(Integer)
+		if !ok {
+			continue // absent or unresolvable Length is a separate rule
+		}
+		if int(length) != len(s.Data) {
+			errs = append(errs, ValidationError{Rule: rule, Level: level,
+				Message: "the value of the Length key does not match the actual number of bytes in the stream",
+				Object:  num})
+		}
+	}
+	return errs
+}
+
+// checkObjectStreamDecodable flags an object stream whose compressed contents
+// could not be decoded (ISO 32000-1 7.5.7, 7.3.8): such a stream is malformed,
+// and the objects it should provide are unavailable.
+func checkObjectStreamDecodable(doc *Document, level PDFALevel) []ValidationError {
+	rule := "6.1.7"
+	if level == PDFA4 {
+		rule = "6.1.6"
+	}
+	var errs []ValidationError
+	for _, num := range doc.brokenObjStms {
+		errs = append(errs, ValidationError{Rule: rule, Level: level,
+			Message: "an object stream could not be decoded (malformed stream data)", Object: num})
+	}
+	return errs
+}

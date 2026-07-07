@@ -312,11 +312,14 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 	}
 
 	var data []byte
-	if length >= 0 {
+	// A declared Length is authoritative only when the endstream keyword
+	// actually follows the indicated data (allowing one EOL). If it does not
+	// — an incorrect Length, which PDF/A forbids but which a conforming
+	// reader must recover from (ISO 32000-1 7.3.8.1, NOTE 2) — fall back to
+	// locating endstream by search. The resulting Stream.Data then reflects
+	// the true byte count, letting the validator flag the mismatch.
+	if length >= 0 && endstreamFollowsAt(p.lexer.data, pos+length) {
 		endPos := pos + length
-		if endPos > p.lexer.size {
-			return nil, fmt.Errorf("stream data extends beyond input (need %d bytes at offset %d)", length, pos)
-		}
 		data = make([]byte, length)
 		copy(data, p.lexer.data[pos:endPos])
 		p.lexer.pos = endPos
@@ -433,4 +436,27 @@ func (p *Parser) ParseIndirectObject() (*IndirectObject, error) {
 		Generation: gen,
 		Value:      value,
 	}, nil
+}
+
+// endstreamFollowsAt reports whether the endstream keyword appears at offset
+// off, allowing a single optional EOL marker of whitespace before it. Used to
+// decide whether a declared stream Length can be trusted.
+func endstreamFollowsAt(data []byte, off int64) bool {
+	n := int64(len(data))
+	if off < 0 || off > n {
+		return false
+	}
+	i := off
+	// Tolerate any trailing whitespace between the declared data end and the
+	// keyword (a correct stream has exactly one EOL, but some writers add
+	// more); a genuinely wrong Length lands on non-whitespace, non-keyword
+	// bytes and is rejected.
+	for i < n && isWhitespace(data[i]) {
+		i++
+	}
+	marker := []byte("endstream")
+	if i+int64(len(marker)) > n {
+		return false
+	}
+	return bytes.Equal(data[i:i+int64(len(marker))], marker)
 }
