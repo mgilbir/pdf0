@@ -3,6 +3,7 @@ package pdf0
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // This file implements the PDF/A font rule family (ISO 19005-1 clause 6.3,
@@ -1162,10 +1163,17 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: u.objNum})
 	}
 	renders := rendersVisibly(u)
+	toUni := parseToUnicodeMap(doc, fontDict)
 
 	for _, s := range u.strings {
 		if !identity {
 			continue // only Identity CID decoding is handled precisely
+		}
+		// Identity-H/V codes are exactly two bytes; a string of odd length
+		// ends in an incomplete code that cannot reference a defined glyph
+		// (ISO 32000-1 9.7.5, 9.10).
+		if renders && len(s)%2 == 1 {
+			report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (incomplete character code)", string(cidSub)))
 		}
 		for i := 0; i+1 < len(s); i += 2 {
 			cid := int(s[i])<<8 | int(s[i+1])
@@ -1175,6 +1183,14 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 
 			if renders && !exists {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
+			} else if renders && exists && cidSub == "CIDFontType2" && fp.glyphNonEmpty != nil &&
+				cid < len(fp.glyphNonEmpty) && !fp.glyphNonEmpty[cid] {
+				// A subset must embed an outline for every rendered glyph; an
+				// empty glyf entry is acceptable only for a whitespace
+				// character (ISO 19005 6.2.11.4.1/6.2.10.4.1).
+				if r, ok := toUni[cid]; ok && !isGlyphWhitespace(r) {
+					report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
+				}
 			}
 			if cid == 0 {
 				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(cidSub)))
@@ -1755,7 +1771,12 @@ func maxCMapCID(data []byte) int {
 			if e < 0 {
 				return
 			}
-			section := rest[b+len(begin) : b+e]
+			lo, hi := b+len(begin), b+e
+			if lo > hi {
+				rest = rest[b+e+len(end):]
+				continue
+			}
+			section := rest[lo:hi]
 			for _, line := range strings.Split(section, "\n") {
 				fields := strings.Fields(line)
 				if isRange && len(fields) >= 3 {
@@ -1852,7 +1873,131 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		if len(present) == 0 && fp.numGlyphs > 1 {
 			errs = append(errs, ValidationError{Rule: "6.3.5", Level: level,
 				Message: "CIDFont subset FontDescriptor contains an empty CIDSet stream", Object: num})
+			continue
+		}
+		// The CIDSet must enumerate every glyph present in the embedded font
+		// program (ISO 19005-1 6.3.5). With an Identity CIDToGIDMap the CID
+		// equals the glyph index, so a present (non-empty) glyph whose bit is
+		// clear is a violation. Empty glyphs are not counted as present.
+		missing := false
+		if fp.cidGIDs != nil {
+			// CFF CIDFont: the charset enumerates the CIDs actually present.
+			for cid := range fp.cidGIDs {
+				if cid != 0 && !present[cid] {
+					missing = true
+					break
+				}
+			}
+		} else if cgm, _ := doc.Resolve(desc.Get("CIDToGIDMap")).(Name); (cgm == "Identity" || cgm == "") && fp.glyphNonEmpty != nil {
+			// CIDFontType2 with an Identity map: CID == glyph index, so every
+			// present (non-empty) glyph must be listed.
+			for gid, ne := range fp.glyphNonEmpty {
+				if ne && !present[gid] {
+					missing = true
+					break
+				}
+			}
+		}
+		if missing {
+			errs = append(errs, ValidationError{Rule: "6.3.5", Level: level,
+				Message: "CIDSet does not list all glyphs present in the embedded font program", Object: num})
 		}
 	}
 	return errs
+}
+
+// parseToUnicodeMap parses a font's ToUnicode CMap into a map from character
+// code to the first Unicode scalar value it produces. Used to tell whether a
+// rendered glyph represents whitespace (ISO 32000-1 9.10.3).
+func parseToUnicodeMap(doc *Document, fontDict *Dictionary) map[int]rune {
+	s, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*Stream)
+	if !ok {
+		return nil
+	}
+	data := decodeContentStream(doc, s)
+	if data == nil {
+		return nil
+	}
+	m := map[int]rune{}
+	str := string(data)
+	scan := func(begin, end string, isRange bool) {
+		rest := str
+		for {
+			b := strings.Index(rest, begin)
+			if b < 0 {
+				return
+			}
+			e := strings.Index(rest[b:], end)
+			if e < 0 {
+				return
+			}
+			// Section body lies between the two markers. Guard against a
+			// malformed stream where end overlaps begin (low > high).
+			lo, hi := b+len(begin), b+e
+			if lo > hi {
+				rest = rest[b+e+len(end):]
+				continue
+			}
+			for _, line := range strings.Split(rest[lo:hi], "\n") {
+				// Tokens are <hhhh> groups, often with no separating space
+				// (e.g. <0003><0003><0020>).
+				f := angleTokens(line)
+				if isRange && len(f) >= 3 {
+					lo, hi, r := hexVal4(f[0]), hexVal4(f[1]), firstRuneFromHex(f[2])
+					if lo >= 0 && hi >= lo && hi-lo < 65536 && r != 0 {
+						for c := lo; c <= hi; c++ {
+							m[c] = r + rune(c-lo)
+						}
+					}
+				} else if !isRange && len(f) >= 2 {
+					if src := hexVal4(f[0]); src >= 0 {
+						if r := firstRuneFromHex(f[1]); r != 0 {
+							m[src] = r
+						}
+					}
+				}
+			}
+			rest = rest[b+e+len(end):]
+		}
+	}
+	scan("beginbfchar", "endbfchar", false)
+	scan("beginbfrange", "endbfrange", true)
+	return m
+}
+
+// firstRuneFromHex returns the first UTF-16 code unit of a <hhhh...> token as
+// a rune, or 0.
+func firstRuneFromHex(tok string) rune {
+	tok = strings.TrimPrefix(strings.TrimSuffix(tok, ">"), "<")
+	if len(tok) > 4 {
+		tok = tok[:4]
+	}
+	if v, ok := parseHexN(tok); ok {
+		return rune(v)
+	}
+	return 0
+}
+
+// isGlyphWhitespace reports whether a Unicode scalar value is whitespace, for
+// which an empty (outline-less) glyph is legitimate.
+func isGlyphWhitespace(r rune) bool {
+	return unicode.IsSpace(r) || r == 0x200B || r == 0xFEFF
+}
+
+// angleTokens returns the <...> tokens in a line, each including the angle
+// brackets.
+func angleTokens(line string) []string {
+	var out []string
+	for {
+		i := strings.IndexByte(line, '<')
+		if i < 0 {
+			return out
+		}
+		j := strings.IndexByte(line[i:], '>')
+		if j < 0 {
+			return out
+		}
+		out = append(out, line[i:i+j+1])
+		line = line[i+j+1:]
+	}
 }

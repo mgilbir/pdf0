@@ -24,6 +24,9 @@ type fontProgram struct {
 	// opposed to pointing beyond a truncated table (missing). nil when the
 	// font has no glyf table (e.g. CFF-flavoured OpenType).
 	glyphPresent []bool
+	// glyphNonEmpty[gid] reports whether the glyph has an outline (a non-zero
+	// length glyf entry). An empty entry is a blank glyph such as space.
+	glyphNonEmpty []bool
 	// widthByGID gives advance widths by glyph index, scaled to 1/1000.
 	widthByGID []float64
 	// cmap maps Unicode code points to glyph indices ((3,1) subtable), and
@@ -116,11 +119,13 @@ func parseSFNT(data []byte) *fontProgram {
 			}
 			return be16(loca, 2*i) * 2
 		}
+		fp.glyphNonEmpty = make([]bool, fp.numGlyphs)
 		for gid := 0; gid < fp.numGlyphs; gid++ {
 			start, end := offAt(gid), offAt(gid+1)
 			// Present when the entry is well-formed and lies within the glyf
 			// table (an empty glyph, start==end, is still present).
 			fp.glyphPresent[gid] = start <= end && end <= glyfLen
+			fp.glyphNonEmpty[gid] = start < end && end <= glyfLen
 		}
 	}
 
