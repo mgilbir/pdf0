@@ -278,3 +278,44 @@ func TestAngleTokens(t *testing.T) {
 		t.Error("unterminated must yield nothing")
 	}
 }
+
+func TestInheritedPageXObject(t *testing.T) {
+	mk := func(pageHasOwn bool) *Document {
+		doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
+		xo := &Dictionary{}
+		xo.Set("X0", IndirectRef{Number: 90})
+		page := &Dictionary{}
+		page.Set("Type", Name("Page"))
+		page.Set("Parent", IndirectRef{Number: 2})
+		page.Set("Contents", IndirectRef{Number: 91})
+		if pageHasOwn {
+			ownRes := &Dictionary{}
+			ownRes.Set("XObject", xo)
+			page.Set("Resources", ownRes)
+		}
+		pagesRes := &Dictionary{}
+		pagesRes.Set("XObject", xo)
+		pages := &Dictionary{}
+		pages.Set("Type", Name("Pages"))
+		pages.Set("Kids", Array{IndirectRef{Number: 3}})
+		pages.Set("Count", Integer(1))
+		pages.Set("Resources", pagesRes)
+		cat := &Dictionary{}
+		cat.Set("Type", Name("Catalog"))
+		cat.Set("Pages", IndirectRef{Number: 2})
+		c := &Stream{Dict: Dictionary{}, Data: []byte("/X0 Do")}
+		c.Dict.Set("Length", Integer(6))
+		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
+		doc.Objects[2] = &IndirectObject{Number: 2, Value: pages}
+		doc.Objects[3] = &IndirectObject{Number: 3, Value: page}
+		doc.Objects[91] = &IndirectObject{Number: 91, Value: c}
+		doc.Trailer.Set("Root", IndirectRef{Number: 1})
+		return doc
+	}
+	if !hasRuleMsg(checkInheritedPageXObject(mk(false), PDFA4), "6.2.2") {
+		t.Error("inherited page XObject must be flagged")
+	}
+	if hasRuleMsg(checkInheritedPageXObject(mk(true), PDFA4), "6.2.2") {
+		t.Error("page with own XObject resource must pass")
+	}
+}

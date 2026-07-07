@@ -152,6 +152,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkType5Halftones,
 		// Embedded PDF/A files (6.9)
 		checkEmbeddedPDFA,
+		// Inherited page XObject (6.2.2)
+		checkInheritedPageXObject,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
 		// CMap CID implementation limit (6.1.12 / 6.1.13)
