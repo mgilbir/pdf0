@@ -768,6 +768,37 @@ func checkPermsDict(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 	}
+
+	// The signature referenced by /DocMDP must not use the deprecated
+	// DigestLocation/DigestMethod/DigestValue keys in its signature reference
+	// dictionaries (ISO 19005-2, 6.1.12).
+	if sigDict := doc.ResolveDict(permsDict.Get("DocMDP")); sigDict != nil {
+		refArr, ok := doc.Resolve(sigDict.Get("Reference")).(Array)
+		if !ok {
+			if a, isArr := sigDict.Get("Reference").(Array); isArr {
+				refArr = a
+			}
+		}
+		for _, el := range refArr {
+			refDict := doc.ResolveDict(el)
+			if refDict == nil {
+				if d, isDict := el.(*Dictionary); isDict {
+					refDict = d
+				} else {
+					continue
+				}
+			}
+			for _, forbidden := range []Name{"DigestLocation", "DigestMethod", "DigestValue"} {
+				if refDict.Get(forbidden) != nil {
+					errs = append(errs, ValidationError{
+						Rule:    "6.1.12",
+						Level:   level,
+						Message: fmt.Sprintf("signature reference dictionary contains deprecated key /%s", forbidden),
+					})
+				}
+			}
+		}
+	}
 	return errs
 }
 
@@ -4341,6 +4372,13 @@ func checkICCBasedProfiles(doc *Document, level PDFALevel) []ValidationError {
 		// Check if this stream is used as an ICC profile (has /N key typical of ICC)
 		nObj := stream.Dict.Get("N")
 		if nObj == nil {
+			continue
+		}
+
+		// Structural stream types also carry an integer /N with a different
+		// meaning (an object stream's /N is its object count); they are never
+		// ICC profiles.
+		if t, ok := stream.Dict.Get("Type").(Name); ok && (t == "ObjStm" || t == "XRef") {
 			continue
 		}
 
