@@ -468,6 +468,12 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 	if level != PDFA4 || doc.embeddedDepth > 0 {
 		return nil
 	}
+	// PDF/A-4f and PDF/A-4e permit arbitrary embedded files; plain PDF/A-4
+	// requires every embedded file to itself be a compliant PDF/A document
+	// (ISO 19005-4 6.9).
+	if c := pdfaConformanceFlag(doc); c == "F" || c == "E" {
+		return nil
+	}
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
 		dict, ok := iobj.Value.(*Dictionary)
@@ -484,6 +490,8 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 				continue
 			}
 			if !isPDFMIME(stream.Dict.Get("Subtype")) {
+				errs = append(errs, ValidationError{Rule: "6.9", Level: level,
+					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
 				continue
 			}
 			data, err := decodeStreamData(stream)
@@ -497,6 +505,24 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 	return errs
+}
+
+// pdfaConformanceFlag returns the document's XMP pdfaid:conformance value
+// ("F", "E", "B", "A", ...) or "" if absent.
+func pdfaConformanceFlag(doc *Document) string {
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return ""
+	}
+	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*Stream)
+	if !ok {
+		return ""
+	}
+	xmp := decodeXMPToUTF8(stream.Data)
+	if v := extractXMPValue(xmp, "pdfaid:conformance"); v != "" {
+		return strings.ToUpper(v)
+	}
+	return strings.ToUpper(extractXMPAttr(xmp, "pdfaid:conformance"))
 }
 
 // isPDFMIME reports whether a stream /Subtype names the application/pdf MIME
@@ -569,4 +595,43 @@ func extractXMPAttr(xmp, key string) string {
 		return ""
 	}
 	return rest[1 : 1+end]
+}
+
+// checkInheritedPageXObject enforces that an XObject drawn (Do) by a page's
+// content stream is present in the page's own resource dictionary rather than
+// inherited from a /Pages tree node (ISO 19005-2 6.2.2, -4 6.2.2). Resource
+// inheritance in general remains permitted; only a rendered XObject that is
+// resolved solely through inheritance is rejected.
+func checkInheritedPageXObject(doc *Document, level PDFALevel) []ValidationError {
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	var errs []ValidationError
+	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+		data := getContentStreamData(doc, page.dict.Get("Contents"))
+		if data == nil {
+			continue
+		}
+		used := contentUsedNames(data)
+		if len(used.xobjects) == 0 {
+			continue
+		}
+		var ownXObj *Dictionary
+		if own := doc.ResolveDict(page.dict.Get("Resources")); own != nil {
+			ownXObj = doc.ResolveDict(own.Get("XObject"))
+		}
+		reported := false
+		for name := range used.xobjects {
+			if ownXObj == nil || ownXObj.Get(Name(name)) == nil {
+				if !reported {
+					reported = true
+					errs = append(errs, ValidationError{Rule: "6.2.2", Level: level,
+						Message: "page content draws an XObject that is inherited from a Pages node rather than present in the page's own resource dictionary",
+						Object:  page.objNum})
+				}
+			}
+		}
+	}
+	return errs
 }
