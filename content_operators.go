@@ -224,3 +224,187 @@ func resolveObjNum(doc *Document, o Object) int {
 	}
 	return 0
 }
+
+// checkContentStreamLimits enforces the Annex C architectural limits on
+// numeric and string operands within content streams (ISO 19005-1 6.1.12,
+// -2/-3 6.1.13). The real magnitude and string-length limits differ by
+// part; the integer limit (2^31-1) is universal.
+func checkContentStreamLimits(doc *Document, level PDFALevel, lim implLimits, errs *[]ValidationError) {
+	seen := map[string]bool{}
+	add := func(msg string, obj int) {
+		if seen[msg] {
+			return
+		}
+		seen[msg] = true
+		*errs = append(*errs, ValidationError{Rule: lim.rule, Level: level, Message: msg, Object: obj})
+	}
+	for num, data := range collectContentStreamData(doc) {
+		forEachContentItem(data, func(kind contentItemKind, payload []byte) {
+			switch kind {
+			case itemNumber:
+				checkContentNumberLimit(string(payload), lim, num, add)
+			case itemString:
+				if len(payload) > lim.stringLen {
+					add(fmt.Sprintf("a content-stream string of %d bytes exceeds the maximum length %d", len(payload), lim.stringLen), num)
+				}
+			}
+		})
+	}
+}
+
+// checkContentNumberLimit validates a numeric content operand against the
+// integer or real architectural limit.
+func checkContentNumberLimit(s string, lim implLimits, objNum int, add func(string, int)) {
+	isReal := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '.' || s[i] == 'e' || s[i] == 'E' {
+			isReal = true
+			break
+		}
+	}
+	if isReal {
+		v := numVal(parseNumberToken([]byte(s)))
+		if absf(v) > lim.realLimit {
+			add(fmt.Sprintf("a content-stream real value %s exceeds the magnitude limit %g", s, lim.realLimit), objNum)
+		}
+		return
+	}
+	// Integer: parse with overflow guard against the 2^31-1 architectural
+	// limit (ISO 32000-1 Annex C, Table C.1).
+	neg := false
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		neg = s[i] == '-'
+		i++
+	}
+	var v int64
+	overflow := false
+	for ; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return
+		}
+		v = v*10 + int64(s[i]-'0')
+		if v > 1<<40 {
+			overflow = true
+			break
+		}
+	}
+	if neg {
+		v = -v
+	}
+	if overflow || v > 2147483647 || v < -2147483648 {
+		add(fmt.Sprintf("a content-stream integer value %s is outside [-2^31, 2^31-1]", s), objNum)
+	}
+}
+
+// checkICCProfileIdentity implements the PDF/A-4 rule (ISO 19005-4 6.2.4.2)
+// that an ICCBased CMYK colour space used for rendering must not embed the
+// same ICC profile as the PDF/A output intent or the current transparency
+// blending colour space. Content is followed through invoked form XObjects,
+// carrying the enclosing group's blending profile.
+func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA4 {
+		return nil
+	}
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	var oiProfile *Stream
+	if arr, ok := doc.Resolve(catalog.Get("OutputIntents")).(Array); ok {
+		for _, el := range arr {
+			d := doc.ResolveDict(el)
+			if d == nil {
+				continue
+			}
+			if s, _ := d.Get("S").(Name); s == "GTS_PDFA1" {
+				if p, ok := doc.Resolve(d.Get("DestOutputProfile")).(*Stream); ok {
+					oiProfile = p
+				}
+			}
+		}
+	}
+
+	var errs []ValidationError
+	seen := map[string]bool{}
+	add := func(msg string, obj int) {
+		if seen[msg] {
+			return
+		}
+		seen[msg] = true
+		errs = append(errs, ValidationError{Rule: "6.2.4.2", Level: level, Message: msg, Object: obj})
+	}
+	seenC := map[*Dictionary]bool{}
+	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+		data := getContentStreamData(doc, page.dict.Get("Contents"))
+		blend := groupBlendProfile(doc, page.dict)
+		walkICCIdentity(doc, page.dict, data, page.objNum, oiProfile, blend, seenC, add)
+	}
+	return errs
+}
+
+func walkICCIdentity(doc *Document, container *Dictionary, data []byte, objNum int, oi, blend *Stream, seen map[*Dictionary]bool, add func(string, int)) {
+	if container == nil || seen[container] || data == nil {
+		return
+	}
+	seen[container] = true
+	res := resolveResources(doc, container)
+	if res == nil {
+		return
+	}
+	usage := scanContentColorUsage(data)
+	csDict := doc.ResolveDict(res.Get("ColorSpace"))
+	checkName := func(name string) {
+		if csDict == nil {
+			return
+		}
+		prof := iccCMYKProfile(doc, csDict.Get(Name(name)))
+		if prof == nil {
+			return
+		}
+		if sameICCProfile(doc, prof, oi) {
+			add("ICCBased CMYK colour space must not embed the same profile as the PDF/A output intent", objNum)
+		}
+		if sameICCProfile(doc, prof, blend) {
+			add("ICCBased CMYK colour space must not embed the same profile as the transparency blending colour space", objNum)
+		}
+	}
+	for name := range usage.fillCS {
+		checkName(name)
+	}
+	for name := range usage.strokeCS {
+		checkName(name)
+	}
+
+	// Recurse into invoked form XObjects, updating the blending profile when
+	// the form is an isolated transparency group.
+	used := contentUsedNames(data)
+	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
+		for i, key := range xobj.Keys {
+			if !used.xobjects[string(key)] {
+				continue
+			}
+			s, ok := doc.Resolve(xobj.Values[i]).(*Stream)
+			if !ok {
+				continue
+			}
+			if st, _ := s.Dict.Get("Subtype").(Name); st != "Form" {
+				continue
+			}
+			childBlend := blend
+			if gp := groupBlendProfile(doc, &s.Dict); gp != nil {
+				childBlend = gp
+			}
+			walkICCIdentity(doc, &s.Dict, decodeContentStream(doc, s), resolveObjNum(doc, xobj.Values[i]), oi, childBlend, seen, add)
+		}
+	}
+}
+
+// groupBlendProfile returns the ICC profile of a container's transparency
+// group blending colour space, or nil.
+func groupBlendProfile(doc *Document, container *Dictionary) *Stream {
+	if g := doc.ResolveDict(container.Get("Group")); g != nil {
+		return iccProfileStream(doc, g.Get("CS"))
+	}
+	return nil
+}

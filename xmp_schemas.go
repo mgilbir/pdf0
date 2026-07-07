@@ -751,11 +751,14 @@ func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
 	declared := extensionDeclared(props)
 
 	var errs []ValidationError
-	// The extension schema container itself is constrained at 2b/3b
-	// (canonical prefixes, required description fields at every level).
-	if level == PDFA2b || level == PDFA3b {
-		errs = append(errs, checkXMPExtensionContainer(xmp, props, rule, level)...)
+	// The extension schema container itself is constrained at every level:
+	// canonical prefixes and required description fields (ISO 19005-1 6.7.8,
+	// -2/-3 6.6.2.3.3).
+	containerRule := rule
+	if level == PDFA1b {
+		containerRule = "6.7.8"
 	}
+	errs = append(errs, checkXMPExtensionContainer(xmp, props, containerRule, level)...)
 	typeFields := extensionTypeFields(props)
 	for _, p := range props {
 		// The extension schema machinery itself is validated separately.
@@ -1030,4 +1033,95 @@ func extensionTypeFields(props []xmpProperty) map[string]map[string]bool {
 		}
 	}
 	return types
+}
+
+// checkXMPWellFormed validates the XMP packet wrapper (ISO 19005-2 6.6.2.1,
+// -4 6.7.2.1): the xpacket processing instruction must not carry a bytes or
+// encoding attribute, the packet must be well-formed XML, and (PDF/A-4) it
+// must be encoded as UTF-8.
+func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA1b {
+		return nil // PDF/A-1 predates these XMP packet requirements
+	}
+	rule := "6.6.2.1"
+	if level == PDFA4 {
+		rule = "6.7.2.1"
+	}
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*Stream)
+	if !ok {
+		return nil
+	}
+	raw, err := decodeStreamData(stream)
+	if err != nil {
+		raw = stream.Data
+	}
+
+	var errs []ValidationError
+	add := func(msg string) {
+		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg})
+	}
+
+	// The xpacket header processing instruction.
+	if hdr := extractXPacketHeader(raw); hdr != "" {
+		if xpacketHasAttr(hdr, "bytes") {
+			add("the XMP packet header must not contain a bytes attribute")
+		}
+		if xpacketHasAttr(hdr, "encoding") {
+			add("the XMP packet header must not contain an encoding attribute")
+		}
+	}
+
+	if level == PDFA4 && !xmpIsUTF8(raw) {
+		add("the XMP packet is not encoded as UTF-8")
+	}
+
+	xmp := decodeXMPToUTF8(raw)
+	if xmp != "" {
+		if _, err := parseXMLTree([]byte(xmp)); err != nil {
+			add("the XMP packet is not well-formed XML")
+		}
+	}
+	return errs
+}
+
+// extractXPacketHeader returns the text of the leading "<?xpacket ... ?>"
+// processing instruction, or "".
+func extractXPacketHeader(raw []byte) string {
+	s := decodeXMPToUTF8(raw)
+	i := strings.Index(s, "<?xpacket")
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i:], "?>")
+	if j < 0 {
+		return ""
+	}
+	return s[i : i+j]
+}
+
+// xpacketHasAttr reports whether the xpacket header carries the named
+// attribute.
+func xpacketHasAttr(hdr, attr string) bool {
+	return strings.Contains(hdr, " "+attr+"=") || strings.Contains(hdr, " "+attr+" =")
+}
+
+// xmpIsUTF8 reports whether the raw metadata bytes are UTF-8 (no UTF-16/32
+// BOM and valid UTF-8).
+func xmpIsUTF8(raw []byte) bool {
+	if len(raw) >= 2 && (raw[0] == 0xFE && raw[1] == 0xFF || raw[0] == 0xFF && raw[1] == 0xFE) {
+		return false // UTF-16
+	}
+	if len(raw) >= 4 && raw[0] == 0 && raw[1] == 0 {
+		return false // UTF-32
+	}
+	// Strip a UTF-8 BOM if present, then validate.
+	b := raw
+	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
+		b = b[3:]
+	}
+	return utf8Valid(b)
 }

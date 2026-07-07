@@ -308,19 +308,38 @@ func checkNameUTF8(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	for num, iobj := range doc.Objects {
-		switch v := iobj.Value.(type) {
-		case Array:
-			checkColorantArrayUTF8(doc, v, num, add)
-		case *Dictionary:
-			checkColorantsInDict(doc, v, num, add)
-			if level == PDFA4 {
-				checkA4NameUTF8(doc, v, num, add)
+		walkColorantUTF8(doc, iobj.Value, num, add, 0)
+		if level == PDFA4 {
+			if d, ok := iobj.Value.(*Dictionary); ok {
+				checkA4NameUTF8(doc, d, num, add)
 			}
-		case *Stream:
-			checkColorantsInDict(doc, &v.Dict, num, add)
 		}
 	}
 	return errs
+}
+
+// walkColorantUTF8 descends an object's structure (bounded depth, without
+// following indirect references, which are visited as their own objects)
+// checking every Separation/DeviceN colour-space array's colorant names.
+func walkColorantUTF8(doc *Document, obj Object, num int, add func(string, int), depth int) {
+	if depth > 12 {
+		return
+	}
+	switch v := obj.(type) {
+	case Array:
+		checkColorantArrayUTF8(doc, v, num, add)
+		for _, e := range v {
+			walkColorantUTF8(doc, e, num, add, depth+1)
+		}
+	case *Dictionary:
+		for _, val := range v.Values {
+			walkColorantUTF8(doc, val, num, add, depth+1)
+		}
+	case *Stream:
+		for _, val := range v.Dict.Values {
+			walkColorantUTF8(doc, val, num, add, depth+1)
+		}
+	}
 }
 
 // checkColorantArrayUTF8 checks a Separation/DeviceN colour-space array's
@@ -342,20 +361,6 @@ func checkColorantArrayUTF8(doc *Document, arr Array, num int, add func(string, 
 					add("the colorant name in a DeviceN colour space is not a valid UTF-8 string", num)
 				}
 			}
-		}
-	}
-}
-
-// checkColorantsInDict walks a resource ColorSpace dictionary for colour-space
-// arrays.
-func checkColorantsInDict(doc *Document, dict *Dictionary, num int, add func(string, int)) {
-	csDict := doc.ResolveDict(dict.Get("ColorSpace"))
-	if csDict == nil {
-		return
-	}
-	for _, v := range csDict.Values {
-		if arr, ok := doc.Resolve(v).(Array); ok {
-			checkColorantArrayUTF8(doc, arr, num, add)
 		}
 	}
 }
