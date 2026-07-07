@@ -253,13 +253,15 @@ func readField(data []byte, width int) int {
 	return val
 }
 
-// decodeStreamData decompresses stream data based on the /Filter entry.
+// decodeStreamData decompresses stream data based on the /Filter and
+// /DecodeParms entries.
 func decodeStreamData(stream *Stream) ([]byte, error) {
 	filter := stream.Dict.Get("Filter")
 	if filter == nil {
 		// No filter, return raw data
 		return stream.Data, nil
 	}
+	parms := stream.Dict.Get("DecodeParms")
 
 	filterName, ok := filter.(Name)
 	if !ok {
@@ -270,13 +272,13 @@ func decodeStreamData(stream *Stream) ([]byte, error) {
 		}
 		// Apply filters in order
 		data := stream.Data
-		for _, f := range filterArr {
+		for i, f := range filterArr {
 			fname, ok := f.(Name)
 			if !ok {
 				return nil, fmt.Errorf("filter array element is not a Name")
 			}
 			var err error
-			data, err = applyFilter(fname, data)
+			data, err = applyFilter(fname, data, parmsDictAt(parms, i))
 			if err != nil {
 				return nil, err
 			}
@@ -284,13 +286,17 @@ func decodeStreamData(stream *Stream) ([]byte, error) {
 		return data, nil
 	}
 
-	return applyFilter(filterName, stream.Data)
+	return applyFilter(filterName, stream.Data, parmsDictAt(parms, 0))
 }
 
-func applyFilter(name Name, data []byte) ([]byte, error) {
+func applyFilter(name Name, data []byte, parms *Dictionary) ([]byte, error) {
 	switch name {
 	case "FlateDecode":
-		return flateDecode(data)
+		decoded, err := flateDecode(data)
+		if err != nil {
+			return nil, err
+		}
+		return applyPredictor(decoded, predictorFromDict(parms))
 	case "ASCIIHexDecode":
 		return asciiHexDecode(data)
 	default:
@@ -316,16 +322,35 @@ func streamFiltersSupported(stream *Stream) bool {
 	if filter == nil {
 		return true
 	}
+	parms := stream.Dict.Get("DecodeParms")
 	switch f := filter.(type) {
 	case Name:
-		return isSupportedFilter(f)
+		return isSupportedFilter(f) && predictorSupported(predictorFromDict(parmsDictAt(parms, 0)))
 	case Array:
-		for _, e := range f {
+		for i, e := range f {
 			name, ok := e.(Name)
 			if !ok || !isSupportedFilter(name) {
 				return false
 			}
+			if !predictorSupported(predictorFromDict(parmsDictAt(parms, i))) {
+				return false
+			}
 		}
+		return true
+	}
+	return false
+}
+
+// predictorSupported reports whether applyPredictor can reverse the given
+// predictor parameters. TIFF horizontal differencing with sub-byte components
+// is the one legal-but-unimplemented combination.
+func predictorSupported(p predictorParms) bool {
+	switch {
+	case p.Predictor == 1:
+		return true
+	case p.Predictor == 2:
+		return p.BitsPerComponent == 8 || p.BitsPerComponent == 16
+	case p.Predictor >= 10 && p.Predictor <= 15:
 		return true
 	}
 	return false
