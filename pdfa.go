@@ -127,6 +127,10 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkPermsDict,
 		// XMP metadata properties (6.7.2 at 1b / 6.6.2.3 at 2b/3b)
 		checkXMPProperties,
+		// ICCBased overprint and profile-identity rules (6.2.4.2)
+		checkICCBasedUsageRules,
+		// JPEG2000 image restrictions (6.2.8.3)
+		checkJPXImages,
 	}
 
 	// Memoize expensive traversals (page-tree walks, content-stream
@@ -3550,9 +3554,6 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	pages := collectPages(doc, pagesRef)
 	for _, page := range pages {
-		// Check what default color spaces the page defines
-		hasDefaultRGB, hasDefaultCMYK, hasDefaultGray := getDefaultColorSpaces(doc, page.dict)
-
 		// For PDF/A-4, also check page-level OutputIntents
 		pageRGB, pageCMYK, pageGray := hasRGBIntent, hasCMYKIntent, hasGrayIntent
 		if level == PDFA4 {
@@ -3562,14 +3563,19 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 			pageGray = pageGray || pgray
 		}
 
-		// Scan for device color space usage on this page
+		// Scan for device color space usage on this page. Default* colour
+		// spaces are applied inside the scan, per resource scope: a page-
+		// level DefaultCMYK does not cover DeviceCMYK inside a pattern with
+		// its own resources, and the corpus fails exactly that.
 		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page.dict)
 
-		// Check if page's transparency /Group /CS provides implicit coverage
-		groupRGB, groupCMYK, groupGray := getGroupCSCoverage(doc, page.dict)
+		// The page's transparency /Group /CS covers type-matched DeviceRGB
+		// and DeviceCMYK, but NOT DeviceGray: the corpus passes DeviceRGB
+		// under an ICCBased RGB page group yet fails DeviceGray under an
+		// ICCBased Gray one.
+		groupRGB, groupCMYK, _ := getGroupCSCoverage(doc, page.dict)
 
-		// DeviceRGB: needs DefaultRGB, RGB OutputIntent, or Group CS coverage
-		if usesRGB && !hasDefaultRGB && !pageRGB && !groupRGB {
+		if usesRGB && !pageRGB && !groupRGB {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -3578,8 +3584,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 
-		// DeviceCMYK: needs DefaultCMYK, CMYK OutputIntent, or Group CS coverage
-		if usesCMYK && !hasDefaultCMYK && !pageCMYK && !groupCMYK {
+		if usesCMYK && !pageCMYK && !groupCMYK {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -3588,8 +3593,8 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 			})
 		}
 
-		// DeviceGray: needs DefaultGray, any OutputIntent, or any Group CS coverage
-		if usesGray && !hasDefaultGray && !pageRGB && !pageCMYK && !pageGray && !groupRGB && !groupCMYK && !groupGray {
+		// DeviceGray: any OutputIntent covers it
+		if usesGray && !pageRGB && !pageCMYK && !pageGray {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
@@ -3855,11 +3860,11 @@ func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, us
 					apObj := doc.Resolve(apEntry)
 					switch v := apObj.(type) {
 					case *Stream:
-						scanResourcesForDeviceCS(doc, &v.Dict, seen, &usesRGB, &usesCMYK, &usesGray)
+						scanContentStreamForDeviceCS(doc, v, seen, &usesRGB, &usesCMYK, &usesGray)
 					case *Dictionary:
 						for _, stateVal := range v.Values {
 							if s, ok := doc.Resolve(stateVal).(*Stream); ok {
-								scanResourcesForDeviceCS(doc, &s.Dict, seen, &usesRGB, &usesCMYK, &usesGray)
+								scanContentStreamForDeviceCS(doc, s, seen, &usesRGB, &usesCMYK, &usesGray)
 							}
 						}
 					}
@@ -3879,22 +3884,66 @@ func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, us
 	return
 }
 
+// scanContentStreamForDeviceCS scans a content-bearing stream — a form
+// XObject, tiling pattern, or appearance stream. Unlike pages, whose content
+// lives behind /Contents, these carry their operators in the stream body
+// itself (ISO 32000-1, 7.8.2), which the resources walk alone never read: a
+// form with '1 0 0 rg' and no resources scanned as clean.
+func scanContentStreamForDeviceCS(doc *Document, stream *Stream, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
+	if seen[&stream.Dict] {
+		return
+	}
+	scanContainerForDeviceCS(doc, &stream.Dict, decodeContentStream(doc, stream), seen, usesRGB, usesCMYK, usesGray)
+}
+
 func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
+	if seen[container] {
+		return
+	}
+	var data []byte
+	if contentsRef := container.Get("Contents"); contentsRef != nil {
+		data = getContentStreamData(doc, contentsRef)
+	}
+	scanContainerForDeviceCS(doc, container, data, seen, usesRGB, usesCMYK, usesGray)
+}
+
+// scanContainerForDeviceCS scans one content container — a page (content
+// behind /Contents), a form XObject, tiling pattern, or appearance stream
+// (content in the stream body, passed as data) — for device colour usage.
+//
+// Only EXECUTED resources count: a form XObject or pattern that is listed in
+// the resource dictionary but never invoked by a Do/scn/sh operator does not
+// contribute (the corpus passes a DeviceCMYK form that no content stream
+// draws), so the resource walks below are gated on the names the content
+// actually uses.
+func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
 	if seen[container] {
 		return
 	}
 	seen[container] = true
 
+	// Device usage selected in THIS container's scope; masked by the
+	// container's own Default* colour spaces before propagating (ISO
+	// 32000-1, 8.6.5.6: DefaultRGB/DefaultCMYK/DefaultGray in the resource
+	// dictionary substitute for device spaces selected in that scope).
+	var localRGB, localCMYK, localGray bool
+	defer func() {
+		dR, dC, dG := getDefaultColorSpaces(doc, container)
+		*usesRGB = *usesRGB || (localRGB && !dR)
+		*usesCMYK = *usesCMYK || (localCMYK && !dC)
+		*usesGray = *usesGray || (localGray && !dG)
+	}()
+
+	if data != nil {
+		r, c, g := scanStreamForDeviceOps(data)
+		localRGB = localRGB || r
+		localCMYK = localCMYK || c
+		localGray = localGray || g
+	}
+	used := contentUsedNames(data)
+
 	res := resolveResources(doc, container)
 	if res == nil {
-		// Container itself might have Contents (like a page)
-		contentsRef := container.Get("Contents")
-		if contentsRef != nil {
-			r, c, g := scanContentsForDeviceOps(doc, contentsRef)
-			*usesRGB = *usesRGB || r
-			*usesCMYK = *usesCMYK || c
-			*usesGray = *usesGray || g
-		}
 		return
 	}
 
@@ -3904,37 +3953,45 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 		csDict := doc.ResolveDict(csRef)
 		if csDict != nil {
 			for _, val := range csDict.Values {
-				checkCSForDevice(doc, val, usesRGB, usesCMYK, usesGray)
+				checkCSForDevice(doc, val, &localRGB, &localCMYK, &localGray)
 			}
 		}
 	}
 
-	// Check XObject resources
+	// Check XObject resources actually invoked with Do
 	xobjRef := res.Get("XObject")
 	if xobjRef != nil {
 		xobjDict := doc.ResolveDict(xobjRef)
 		if xobjDict != nil {
-			for _, val := range xobjDict.Values {
-				resolved := doc.Resolve(val)
+			for i, key := range xobjDict.Keys {
+				if !used.xobjects[string(key)] {
+					continue
+				}
+				resolved := doc.Resolve(xobjDict.Values[i])
 				stream, ok := resolved.(*Stream)
 				if !ok {
 					continue
 				}
 				subtype, _ := stream.Dict.Get("Subtype").(Name)
 				if subtype == "Form" {
-					// Scan Form XObject resources for device CS separately,
-					// so we can apply the Form's Group /CS coverage before
-					// propagating to the parent.
+					// Scan the Form XObject (its own content stream plus its
+					// resources) separately, so the Form's Group /CS coverage
+					// applies before propagating to the parent.
 					var formRGB, formCMYK, formGray bool
-					scanResourcesForDeviceCS(doc, &stream.Dict, seen, &formRGB, &formCMYK, &formGray)
+					scanContentStreamForDeviceCS(doc, stream, seen, &formRGB, &formCMYK, &formGray)
 					// Check transparency group CS
 					if groupRef := stream.Dict.Get("Group"); groupRef != nil {
 						groupDict := doc.ResolveDict(groupRef)
 						if groupDict != nil {
 							// Group /CS being a device CS is itself device usage
 							checkCSForDevice(doc, groupDict.Get("CS"), &formRGB, &formCMYK, &formGray)
-							// But a calibrated Group /CS covers device CS within the Form
-							if csObj := groupDict.Get("CS"); csObj != nil {
+							// A calibrated Group /CS covers device CS within
+							// the Form only when the group is ISOLATED: a
+							// non-isolated group composites against the
+							// backdrop, and the corpus fails DeviceRGB in a
+							// non-isolated CalRGB group.
+							isolated, _ := doc.Resolve(groupDict.Get("I")).(Boolean)
+							if csObj := groupDict.Get("CS"); csObj != nil && bool(isolated) {
 								gRGB, gCMYK, gGray := classifyCalibratedCS(doc, csObj)
 								if gRGB {
 									formRGB = false
@@ -3954,41 +4011,55 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 					*usesGray = *usesGray || formGray
 				} else {
 					// Image XObject - check ColorSpace
-					checkCSForDevice(doc, stream.Dict.Get("ColorSpace"), usesRGB, usesCMYK, usesGray)
+					checkCSForDevice(doc, stream.Dict.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
 				}
 			}
 		}
 	}
 
-	// Check Shading resources
+	// Check Shading resources painted with sh
 	shadingRef := res.Get("Shading")
 	if shadingRef != nil {
 		shadingDict := doc.ResolveDict(shadingRef)
 		if shadingDict != nil {
-			for _, val := range shadingDict.Values {
+			for i, key := range shadingDict.Keys {
+				if !used.shadings[string(key)] {
+					continue
+				}
+				val := shadingDict.Values[i]
 				sd := doc.ResolveDict(val)
 				if sd == nil {
 					// Could be a stream (type 4-7 shadings)
 					if s, ok := doc.Resolve(val).(*Stream); ok {
-						checkCSForDevice(doc, s.Dict.Get("ColorSpace"), usesRGB, usesCMYK, usesGray)
+						checkCSForDevice(doc, s.Dict.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
 					}
 					continue
 				}
-				checkCSForDevice(doc, sd.Get("ColorSpace"), usesRGB, usesCMYK, usesGray)
+				checkCSForDevice(doc, sd.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
 			}
 		}
 	}
 
-	// Check Pattern resources (tiling patterns have content streams)
+	// Check Pattern resources set with scn/SCN (tiling patterns have
+	// content streams; shading patterns carry a /Shading)
 	patRef := res.Get("Pattern")
 	if patRef != nil {
 		patDict := doc.ResolveDict(patRef)
 		if patDict != nil {
-			for _, val := range patDict.Values {
-				obj := doc.Resolve(val)
-				if stream, ok := obj.(*Stream); ok {
-					// Tiling pattern - recurse into its resources
-					scanResourcesForDeviceCS(doc, &stream.Dict, seen, usesRGB, usesCMYK, usesGray)
+			for i, key := range patDict.Keys {
+				if !used.patterns[string(key)] {
+					continue
+				}
+				obj := doc.Resolve(patDict.Values[i])
+				switch v := obj.(type) {
+				case *Stream:
+					// Tiling pattern: its body is a content stream.
+					scanContentStreamForDeviceCS(doc, v, seen, usesRGB, usesCMYK, usesGray)
+				case *Dictionary:
+					// Shading pattern.
+					if sd := doc.ResolveDict(v.Get("Shading")); sd != nil {
+						checkCSForDevice(doc, sd.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
+					}
 				}
 			}
 		}
@@ -4029,15 +4100,6 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 			}
 		}
 	}
-
-	// Scan content stream(s)
-	contentsRef := container.Get("Contents")
-	if contentsRef != nil {
-		r, c, g := scanContentsForDeviceOps(doc, contentsRef)
-		*usesRGB = *usesRGB || r
-		*usesCMYK = *usesCMYK || c
-		*usesGray = *usesGray || g
-	}
 }
 
 // checkCSForDevice checks if a color space value is or contains a device color space.
@@ -4076,9 +4138,17 @@ func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGr
 			if len(arr) >= 2 {
 				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen)
 			}
-		case "Separation", "DeviceN":
-			// Separation/DeviceN alternates are fallback color spaces, not
-			// direct device CS usage - don't flag them here.
+		case "Separation":
+			// A device alternate needs OutputIntent coverage like direct
+			// device colour: the corpus fails a Separation with a
+			// DeviceCMYK alternate absent a CMYK PDF/A intent.
+			if len(arr) >= 3 {
+				checkCSForDeviceSeen(doc, arr[2], usesRGB, usesCMYK, usesGray, seen)
+			}
+		case "DeviceN":
+			if len(arr) >= 3 {
+				checkCSForDeviceSeen(doc, arr[2], usesRGB, usesCMYK, usesGray, seen)
+			}
 		case "Pattern":
 			// [/Pattern underlyingCS] - check underlying
 			if len(arr) >= 2 {
@@ -4152,6 +4222,16 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 // scanning binary image data.
 func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 	n := len(data)
+	var lastName string
+	sawColorOp := false
+	paints := false
+	defer func() {
+		// Painting without ever selecting a colour uses the initial colour:
+		// DeviceGray black (ISO 32000-1, 8.4.1).
+		if paints && !sawColorOp {
+			usesGray = true
+		}
+	}()
 	// Scan for operators at word boundaries.
 	// An operator token is an alphabetic sequence preceded by whitespace (or BOF)
 	// and followed by whitespace, delimiter, or EOF.
@@ -4224,12 +4304,15 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 			continue
 		}
 
-		// Skip PDF names (/Name)
+		// PDF names (/Name): remember the last one seen, so a following
+		// cs/CS operator can be checked for direct device selection.
 		if b == '/' {
 			i++
+			nameStart := i
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 				i++
 			}
+			lastName = string(data[nameStart:i])
 			continue
 		}
 
@@ -4248,6 +4331,13 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 		// Skip names (start with /)
 		if tokLen > 0 && data[start] == '/' {
 			continue
+		}
+
+		switch string(data[start:i]) {
+		case "rg", "RG", "g", "G", "k", "K", "cs", "CS", "sc", "scn", "SC", "SCN":
+			sawColorOp = true
+		case "f", "F", "f*", "S", "s", "B", "B*", "b", "b*", "Tj", "TJ", "'", "\"", "sh":
+			paints = true
 		}
 
 		// Handle inline images: BI <dict> ID <binary> EI
@@ -4369,6 +4459,19 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 				usesRGB = true
 			} else if data[start] == 'R' && data[start+1] == 'G' {
 				usesRGB = true
+			} else if (data[start] == 'c' && data[start+1] == 's') ||
+				(data[start] == 'C' && data[start+1] == 'S') {
+				// Direct device selection: /DeviceRGB cs (etc.). Named
+				// resource selections (/CS0 cs) are covered by the
+				// resource-dictionary walk.
+				switch lastName {
+				case "DeviceRGB":
+					usesRGB = true
+				case "DeviceCMYK":
+					usesCMYK = true
+				case "DeviceGray":
+					usesGray = true
+				}
 			}
 		} else if tokLen == 1 {
 			switch data[start] {
@@ -4392,6 +4495,17 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 // literals, comments, and inline-image binary data (BI ... ID <binary> EI)
 // are skipped, so operator bytes occurring inside them are never reported.
 func forEachContentOperator(data []byte, fn func(op []byte)) {
+	forEachContentToken(data, func(tok []byte, isName bool) {
+		if !isName {
+			fn(tok)
+		}
+	})
+}
+
+// forEachContentToken is forEachContentOperator's core walker; it also
+// reports name tokens (without the leading slash) so callers can associate
+// operand names with the operators that consume them.
+func forEachContentToken(data []byte, fn func(tok []byte, isName bool)) {
 	n := len(data)
 	i := 0
 	for i < n {
@@ -4439,11 +4553,13 @@ func forEachContentOperator(data []byte, fn func(op []byte)) {
 			}
 		case b == '[' || b == ']' || b == '{' || b == '}':
 			i++
-		case b == '/': // name: skip
+		case b == '/':
 			i++
+			start := i
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 				i++
 			}
+			fn(data[start:i], true)
 		default:
 			start := i
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
@@ -4457,9 +4573,47 @@ func forEachContentOperator(data []byte, fn func(op []byte)) {
 				skipInlineImage(data, &i)
 				continue
 			}
-			fn(tok)
+			fn(tok, false)
 		}
 	}
+}
+
+// usedResourceNames records which named resources a content stream actually
+// executes. Device colour (and other content-level properties) only matter
+// on executed content: a form XObject that is referenced in /XObject but
+// never invoked with Do does not contribute (the corpus passes a DeviceCMYK
+// form that no content stream draws).
+type usedResourceNames struct {
+	xobjects map[string]bool
+	patterns map[string]bool
+	shadings map[string]bool
+}
+
+func contentUsedNames(data []byte) usedResourceNames {
+	u := usedResourceNames{
+		xobjects: make(map[string]bool),
+		patterns: make(map[string]bool),
+		shadings: make(map[string]bool),
+	}
+	var lastName string
+	forEachContentToken(data, func(tok []byte, isName bool) {
+		if isName {
+			lastName = string(tok)
+			return
+		}
+		switch string(tok) {
+		case "Do":
+			u.xobjects[lastName] = true
+		case "sh":
+			u.shadings[lastName] = true
+		case "scn", "SCN":
+			// A pattern is set by name; non-pattern scn uses numeric
+			// operands, in which case lastName is stale — over-recording is
+			// harmless (it only widens the scan).
+			u.patterns[lastName] = true
+		}
+	})
+	return u
 }
 
 // skipInlineImage advances *pos past an inline image: the parameter
@@ -4676,10 +4830,11 @@ func checkSeparationDeviceN(doc *Document, level PDFALevel) []ValidationError {
 // collectTintTransforms tracks Separation color spaces by colorant name
 // and flags inconsistent tint transforms for the same colorant name.
 // sepColorantSeen records the first Separation definition seen for a
-// colorant name, for the same-tint-transform consistency rule.
+// colorant name, for the same-tint-transform/same-alternate consistency rule.
 type sepColorantSeen struct {
 	objNum int
 	tint   Object
+	alt    Object
 }
 
 func collectTintTransforms(doc *Document, dict *Dictionary, tintTransforms map[Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
@@ -4692,42 +4847,69 @@ func collectTintTransforms(doc *Document, dict *Dictionary, tintTransforms map[N
 		return
 	}
 	for _, val := range csDict.Values {
-		resolved := doc.Resolve(val)
-		arr, ok := resolved.(Array)
-		if !ok || len(arr) < 4 {
-			continue
-		}
-		csType, _ := arr[0].(Name)
-		if csType != "Separation" {
-			continue
-		}
-		colorantName, ok := arr[1].(Name)
-		if !ok {
-			continue
-		}
-		tintRef, isRef := arr[3].(IndirectRef)
-		if !isRef {
-			continue
-		}
-		if prev, exists := tintTransforms[colorantName]; exists {
-			if prev.objNum == tintRef.Number {
-				continue
+		collectSeparationConsistency(doc, val, tintTransforms, objNum, level, errs)
+	}
+}
+
+// collectSeparationConsistency records a Separation definition (top-level or
+// inside a DeviceN/NChannel Colorants dictionary) and flags same-name
+// definitions whose tint transform or alternate space differ.
+func collectSeparationConsistency(doc *Document, val Object, tintTransforms map[Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
+	resolved := doc.Resolve(val)
+	arr, ok := resolved.(Array)
+	if !ok {
+		return
+	}
+	csType, _ := arr[0].(Name)
+
+	// Separations inside a DeviceN attributes' Colorants dictionary join
+	// the same consistency pool (the corpus flags NChannel colorants with
+	// same-name/different-transform Separations).
+	if csType == "DeviceN" && len(arr) >= 5 {
+		if attrDict := doc.ResolveDict(arr[4]); attrDict != nil {
+			if colorantsDict := doc.ResolveDict(attrDict.Get("Colorants")); colorantsDict != nil {
+				for _, cval := range colorantsDict.Values {
+					collectSeparationConsistency(doc, cval, tintTransforms, objNum, level, errs)
+				}
 			}
-			// Different objects may still hold identical functions, which
-			// is conformant: the rule requires the SAME tint transform, and
-			// veraPDF accepts equal-by-content duplicates.
-			if Equal(doc.Resolve(prev.tint), doc.Resolve(tintRef)) {
-				continue
-			}
+		}
+		return
+	}
+
+	if csType != "Separation" || len(arr) < 4 {
+		return
+	}
+	colorantName, ok := arr[1].(Name)
+	if !ok {
+		return
+	}
+	tintRef, isRef := arr[3].(IndirectRef)
+	if !isRef {
+		return
+	}
+	if prev, exists := tintTransforms[colorantName]; exists {
+		// Different objects may still hold identical content, which is
+		// conformant: the rule requires the SAME tint transform and
+		// alternate space, and veraPDF accepts equal-by-content duplicates.
+		sameTint := prev.objNum == tintRef.Number || Equal(doc.Resolve(prev.tint), doc.Resolve(tintRef))
+		if !sameTint {
 			*errs = append(*errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
 				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", string(colorantName), prev.objNum, tintRef.Number),
 				Object:  objNum,
 			})
-		} else {
-			tintTransforms[colorantName] = sepColorantSeen{objNum: tintRef.Number, tint: tintRef}
 		}
+		if !Equal(doc.Resolve(prev.alt), doc.Resolve(arr[2])) {
+			*errs = append(*errs, ValidationError{
+				Rule:    "6.2.4",
+				Level:   level,
+				Message: fmt.Sprintf("Separation colorant /%s has inconsistent alternate color spaces", string(colorantName)),
+				Object:  objNum,
+			})
+		}
+	} else {
+		tintTransforms[colorantName] = sepColorantSeen{objNum: tintRef.Number, tint: tintRef, alt: arr[2]}
 	}
 }
 
@@ -4768,6 +4950,13 @@ func checkColorSpaceValueSeen(doc *Document, csObj Object, objNum int, level PDF
 	}
 
 	switch csType {
+	case "CalGray", "CalRGB", "Lab":
+		if dict := doc.ResolveDict(arr[1]); dict != nil {
+			checkCIEDictParams(doc, string(csType), dict, objNum, level, errs)
+		}
+	case "Indexed":
+		// [/Indexed base hival lookup] — validate the base space too.
+		checkColorSpaceValueSeen(doc, arr[1], objNum, level, errs, seen)
 	case "Separation":
 		// [/Separation name alternateSpace tintTransform]
 		if len(arr) < 4 {
@@ -4842,6 +5031,35 @@ func checkColorSpaceValueSeen(doc *Document, csObj Object, objNum int, level PDF
 		// Get colorant names from the DeviceN array
 		namesArr, namesOk := doc.Resolve(arr[1]).(Array)
 
+		// Spot colorants require a Colorants dictionary with their
+		// definitions (ISO 19005-2/-3/-4, 6.2.4.4); process colour names
+		// need none.
+		if level != PDFA1b && namesOk {
+			hasSpot := false
+			for _, nameObj := range namesArr {
+				if name, ok := nameObj.(Name); ok && !isProcessColorant(name) {
+					hasSpot = true
+					break
+				}
+			}
+			if hasSpot {
+				hasColorants := false
+				if len(arr) >= 5 {
+					if attrDict := doc.ResolveDict(arr[4]); attrDict != nil {
+						hasColorants = doc.ResolveDict(attrDict.Get("Colorants")) != nil
+					}
+				}
+				if !hasColorants {
+					*errs = append(*errs, ValidationError{
+						Rule:    "6.2.4",
+						Level:   level,
+						Message: "DeviceN color space with spot colorants must have a Colorants dictionary",
+						Object:  objNum,
+					})
+				}
+			}
+		}
+
 		// If there's a 5th element (attributes dict), check Colorants
 		if len(arr) >= 5 {
 			attrDict := doc.ResolveDict(arr[4])
@@ -4878,6 +5096,95 @@ func checkColorSpaceValueSeen(doc *Document, csObj Object, objNum int, level PDF
 			}
 		}
 	}
+}
+
+// checkCIEDictParams validates the parameter dictionary of a CalGray,
+// CalRGB, or Lab colour space against ISO 32000-1 Tables 63-65: WhitePoint
+// is required with Xw, Zw positive and Yw exactly 1.0; BlackPoint components
+// must be non-negative; a Lab Range must be four numbers with min <= max.
+func checkCIEDictParams(doc *Document, family string, dict *Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
+	rule := "6.2.4"
+	if level == PDFA1b {
+		rule = "6.2.3"
+	}
+	bad := func(format string, args ...interface{}) {
+		*errs = append(*errs, ValidationError{
+			Rule:    rule,
+			Level:   level,
+			Message: fmt.Sprintf("%s colour space: ", family) + fmt.Sprintf(format, args...),
+			Object:  objNum,
+		})
+	}
+	nums := func(v Object) ([]float64, bool) {
+		arr, ok := doc.Resolve(v).(Array)
+		if !ok {
+			return nil, false
+		}
+		out := make([]float64, 0, len(arr))
+		for _, el := range arr {
+			switch n := doc.Resolve(el).(type) {
+			case Integer:
+				out = append(out, float64(n))
+			case Real:
+				out = append(out, float64(n))
+			default:
+				return nil, false
+			}
+		}
+		return out, true
+	}
+
+	wp := dict.Get("WhitePoint")
+	if wp == nil {
+		bad("required /WhitePoint is missing")
+	} else if vals, ok := nums(wp); !ok || len(vals) != 3 {
+		bad("/WhitePoint must be an array of three numbers")
+	} else if vals[0] <= 0 || vals[2] <= 0 || vals[1] != 1.0 {
+		bad("/WhitePoint [%g %g %g] must have positive Xw and Zw and Yw equal to 1.0", vals[0], vals[1], vals[2])
+	}
+
+	if bp := dict.Get("BlackPoint"); bp != nil {
+		if vals, ok := nums(bp); !ok || len(vals) != 3 {
+			bad("/BlackPoint must be an array of three numbers")
+		} else if vals[0] < 0 || vals[1] < 0 || vals[2] < 0 {
+			bad("/BlackPoint components must be non-negative")
+		}
+	}
+
+	if family == "Lab" {
+		if r := dict.Get("Range"); r != nil {
+			if vals, ok := nums(r); !ok || len(vals) != 4 {
+				bad("/Range must be an array of four numbers")
+			} else if vals[0] > vals[1] || vals[2] > vals[3] {
+				bad("/Range minima must not exceed maxima")
+			}
+		}
+	}
+
+	if family == "CalGray" {
+		if g := dict.Get("Gamma"); g != nil {
+			gv, isNum := 0.0, false
+			switch n := doc.Resolve(g).(type) {
+			case Integer:
+				gv, isNum = float64(n), true
+			case Real:
+				gv, isNum = float64(n), true
+			}
+			if !isNum || gv <= 0 {
+				bad("/Gamma must be a positive number")
+			}
+		}
+	}
+}
+
+// isProcessColorant reports whether a DeviceN colorant name refers to a
+// process colour (or the reserved names), which needs no Colorants entry.
+func isProcessColorant(name Name) bool {
+	switch name {
+	case "Cyan", "Magenta", "Yellow", "Black", "None", "All":
+		return true
+	}
+	return false
 }
 
 // checkAlternateCS validates that an alternate color space in Separation/DeviceN
@@ -5089,4 +5396,388 @@ func isAnnotation(dict *Dictionary) bool {
 		return true
 	}
 	return false
+}
+
+// --- ICCBased overprint and profile-identity rules (6.2.4.2 at 2b+/A-4) ---
+
+// contentColorUsage summarizes the colour-relevant selections a content
+// stream makes: fill/stroke colour space resource names (cs/CS) and
+// ExtGState applications (gs).
+type contentColorUsage struct {
+	fillCS   map[string]bool
+	strokeCS map[string]bool
+	gsNames  map[string]bool
+	// Whether any painting operation of each flavour occurs: setting a
+	// stroke colour space that never strokes is not a use.
+	paintsFill   bool
+	paintsStroke bool
+}
+
+func scanContentColorUsage(data []byte) contentColorUsage {
+	u := contentColorUsage{
+		fillCS:   make(map[string]bool),
+		strokeCS: make(map[string]bool),
+		gsNames:  make(map[string]bool),
+	}
+	var lastName string
+	forEachContentToken(data, func(tok []byte, isName bool) {
+		if isName {
+			lastName = string(tok)
+			return
+		}
+		switch string(tok) {
+		case "cs":
+			u.fillCS[lastName] = true
+		case "CS":
+			u.strokeCS[lastName] = true
+		case "gs":
+			u.gsNames[lastName] = true
+		case "f", "F", "f*":
+			u.paintsFill = true
+		case "S", "s":
+			u.paintsStroke = true
+		case "B", "B*", "b", "b*":
+			u.paintsFill = true
+			u.paintsStroke = true
+		case "Tj", "TJ", "'", "\"":
+			// Text defaults to fill rendering mode.
+			u.paintsFill = true
+		}
+	})
+	return u
+}
+
+// iccCMYKProfile returns the profile stream when csVal is an ICCBased colour
+// space with N=4, nil otherwise.
+func iccCMYKProfile(doc *Document, csVal Object) *Stream {
+	arr, ok := doc.Resolve(csVal).(Array)
+	if !ok || len(arr) < 2 {
+		return nil
+	}
+	if n, _ := arr[0].(Name); n != "ICCBased" {
+		return nil
+	}
+	stream, ok := doc.Resolve(arr[1]).(*Stream)
+	if !ok {
+		return nil
+	}
+	if n, ok := stream.Dict.Get("N").(Integer); !ok || n != 4 {
+		return nil
+	}
+	return stream
+}
+
+// iccProfileStream returns the profile stream of any ICCBased colour space.
+func iccProfileStream(doc *Document, csVal Object) *Stream {
+	arr, ok := doc.Resolve(csVal).(Array)
+	if !ok || len(arr) < 2 {
+		return nil
+	}
+	if n, _ := arr[0].(Name); n != "ICCBased" {
+		return nil
+	}
+	stream, _ := doc.Resolve(arr[1]).(*Stream)
+	return stream
+}
+
+// sameICCProfile reports whether two profile streams hold the same profile:
+// the same object, or byte-identical data after zeroing the Profile ID field
+// (ICC header bytes 84-99), which is what distinguishes an original from a
+// copy whose MD5 was filled in.
+func sameICCProfile(doc *Document, a, b *Stream) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	da := getICCProfileData(a)
+	db := getICCProfileData(b)
+	if len(da) == 0 || len(da) != len(db) {
+		return false
+	}
+	if len(da) >= 100 {
+		na := append([]byte(nil), da...)
+		nb := append([]byte(nil), db...)
+		for i := 84; i < 100; i++ {
+			na[i], nb[i] = 0, 0
+		}
+		return bytes.Equal(na, nb)
+	}
+	return bytes.Equal(da, db)
+}
+
+// checkICCBasedUsageRules implements two content-level ICCBased rules:
+//
+//   - Overprint (ISO 19005-2/-4): when an ICCBased CMYK colour space is used
+//     for a fill or stroke that overprints, overprint mode shall not be 1.
+//   - Profile identity (ISO 19005-4, 6.2.4.2): an ICCBased colour space used
+//     for rendering shall not embed the same profile as the current PDF/A
+//     output intent or the current transparency blending colour space — the
+//     device colour operators exist for exactly that case.
+func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA1b {
+		return nil
+	}
+	catalog := getCatalog(doc)
+	if catalog == nil {
+		return nil
+	}
+
+	// Output intent profile (for the A-4 identity rule).
+	var oiProfile *Stream
+	if arr, ok := doc.Resolve(catalog.Get("OutputIntents")).(Array); ok {
+		for _, el := range arr {
+			d := doc.ResolveDict(el)
+			if d == nil {
+				continue
+			}
+			if s, _ := d.Get("S").(Name); s == "GTS_PDFA1" {
+				if p, ok := doc.Resolve(d.Get("DestOutputProfile")).(*Stream); ok {
+					oiProfile = p
+				}
+			}
+		}
+	}
+
+	var errs []ValidationError
+	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+		res := resolveResources(doc, page.dict)
+		if res == nil {
+			continue
+		}
+		data := getContentStreamData(doc, page.dict.Get("Contents"))
+		if data == nil {
+			continue
+		}
+		usage := scanContentColorUsage(data)
+
+		// Accumulated overprint state from applied ExtGStates.
+		opm1, opFill, opStroke := false, false, false
+		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
+			for i, name := range gsDict.Keys {
+				if !usage.gsNames[string(name)] {
+					continue
+				}
+				gs := doc.ResolveDict(gsDict.Values[i])
+				if gs == nil {
+					continue
+				}
+				if v, ok := gs.Get("OPM").(Integer); ok && v == 1 {
+					opm1 = true
+				}
+				strokeSet, strokeIsSet := gs.Get("OP").(Boolean)
+				fillSet, fillIsSet := gs.Get("op").(Boolean)
+				if strokeIsSet && bool(strokeSet) {
+					opStroke = true
+				}
+				// op defaults to OP when absent (ISO 32000-1, Table 58).
+				if fillIsSet && bool(fillSet) || !fillIsSet && strokeIsSet && bool(strokeSet) {
+					opFill = true
+				}
+			}
+		}
+
+		// Blending colour space profile of the page's transparency group.
+		var groupProfile *Stream
+		if groupDict := doc.ResolveDict(page.dict.Get("Group")); groupDict != nil {
+			groupProfile = iccProfileStream(doc, groupDict.Get("CS"))
+		}
+
+		csDict := doc.ResolveDict(res.Get("ColorSpace"))
+		if csDict == nil {
+			continue
+		}
+		checkOne := func(name string, stroke bool) {
+			csVal := csDict.Get(Name(name))
+			if csVal == nil {
+				return
+			}
+			if cmyk := iccCMYKProfile(doc, csVal); cmyk != nil && opm1 {
+				if (stroke && opStroke && usage.paintsStroke) || (!stroke && opFill && usage.paintsFill) {
+					errs = append(errs, ValidationError{
+						Rule:    "6.2.4.2",
+						Level:   level,
+						Message: "overprint mode must not be 1 when an ICCBased CMYK colour space is used with overprinting",
+						Object:  page.objNum,
+					})
+				}
+			}
+			if level == PDFA4 {
+				// Only CMYK: the corpus passes an ICCBased RGB space whose
+				// profile is identical to the output intent's.
+				prof := iccCMYKProfile(doc, csVal)
+				if sameICCProfile(doc, prof, oiProfile) {
+					errs = append(errs, ValidationError{
+						Rule:    "6.2.4.2",
+						Level:   level,
+						Message: "ICCBased colour space must not embed the same profile as the PDF/A output intent",
+						Object:  page.objNum,
+					})
+				}
+				if sameICCProfile(doc, prof, groupProfile) {
+					errs = append(errs, ValidationError{
+						Rule:    "6.2.4.2",
+						Level:   level,
+						Message: "ICCBased colour space must not embed the same profile as the transparency blending colour space",
+						Object:  page.objNum,
+					})
+				}
+			}
+		}
+		for name := range usage.fillCS {
+			checkOne(name, false)
+		}
+		for name := range usage.strokeCS {
+			checkOne(name, true)
+		}
+	}
+	return errs
+}
+
+// --- JPEG2000 image rules (ISO 19005-2/-3, 6.2.8.3; -4, 6.2.8) ---
+
+// jp2Info summarizes the JP2 header boxes of a JPXDecode stream.
+type jp2Info struct {
+	valid      bool
+	nc         int  // ihdr number of components
+	bpcRaw     byte // ihdr bits-per-component field (0xFF = per-component bpcc box)
+	hasBPCC    bool
+	colrMETH   []byte // METH of each colour specification box
+	colrAPPROX []byte
+	colrEnumCS []uint32 // EnumCS when METH==1, else 0
+}
+
+// parseJP2Header walks the box structure of a JP2 file far enough to read
+// the image header (ihdr) and colour specification (colr) boxes.
+func parseJP2Header(data []byte) jp2Info {
+	var info jp2Info
+	// A raw JPEG2000 codestream (SOC marker) carries no boxes.
+	if len(data) < 8 || (data[0] == 0xFF && data[1] == 0x4F) {
+		return info
+	}
+	var walk func(b []byte, depth int)
+	walk = func(b []byte, depth int) {
+		if depth > 4 {
+			return
+		}
+		for len(b) >= 8 {
+			lbox := uint64(b[0])<<24 | uint64(b[1])<<16 | uint64(b[2])<<8 | uint64(b[3])
+			tbox := string(b[4:8])
+			header := uint64(8)
+			if lbox == 1 {
+				if len(b) < 16 {
+					return
+				}
+				lbox = 0
+				for _, by := range b[8:16] {
+					lbox = lbox<<8 | uint64(by)
+				}
+				header = 16
+			} else if lbox == 0 {
+				lbox = uint64(len(b)) // box extends to end
+			}
+			if lbox < header || lbox > uint64(len(b)) {
+				return
+			}
+			payload := b[header:lbox]
+			switch tbox {
+			case "jp2h":
+				walk(payload, depth+1)
+			case "ihdr":
+				if len(payload) >= 10 {
+					info.valid = true
+					info.nc = int(payload[8])<<8 | int(payload[9])
+					if len(payload) >= 11 {
+						info.bpcRaw = payload[10]
+					}
+				}
+			case "bpcc":
+				info.hasBPCC = true
+			case "colr":
+				if len(payload) >= 3 {
+					info.colrMETH = append(info.colrMETH, payload[0])
+					info.colrAPPROX = append(info.colrAPPROX, payload[2])
+					var enum uint32
+					if payload[0] == 1 && len(payload) >= 7 {
+						enum = uint32(payload[3])<<24 | uint32(payload[4])<<16 | uint32(payload[5])<<8 | uint32(payload[6])
+					}
+					info.colrEnumCS = append(info.colrEnumCS, enum)
+				}
+			}
+			b = b[lbox:]
+		}
+	}
+	walk(data, 0)
+	return info
+}
+
+// checkJPXImages validates JPEG2000 image data against the PDF/A-2/-3/-4
+// restrictions: 1/3/4 colour channels, bit depth 1-38, colour-specification
+// method 1-3, permitted enumerated colour spaces, and a single authoritative
+// colour specification when several are present.
+func checkJPXImages(doc *Document, level PDFALevel) []ValidationError {
+	if level == PDFA1b {
+		return nil // JPXDecode is forbidden outright at PDF/A-1 (6.1.10)
+	}
+	rule := "6.2.8.3"
+	if level == PDFA4 {
+		rule = "6.2.8"
+	}
+
+	var errs []ValidationError
+	for num, iobj := range doc.Objects {
+		stream, ok := iobj.Value.(*Stream)
+		if !ok || !hasFilter(stream, "JPXDecode") {
+			continue
+		}
+		info := parseJP2Header(stream.Data)
+		if !info.valid {
+			continue
+		}
+		bad := func(format string, args ...interface{}) {
+			errs = append(errs, ValidationError{
+				Rule:    rule,
+				Level:   level,
+				Message: fmt.Sprintf(format, args...),
+				Object:  num,
+			})
+		}
+
+		if info.nc != 1 && info.nc != 3 && info.nc != 4 {
+			bad("JPEG2000 image has %d colour channels; only 1, 3 or 4 are permitted", info.nc)
+		}
+		if info.bpcRaw != 0xFF {
+			depth := int(info.bpcRaw&0x7F) + 1
+			if depth < 1 || depth > 38 {
+				bad("JPEG2000 image bit depth %d outside the permitted 1-38 range", depth)
+			}
+		}
+		for i, meth := range info.colrMETH {
+			if meth != 1 && meth != 2 && meth != 3 {
+				bad("JPEG2000 colour specification METH %d is not 1, 2 or 3", meth)
+			}
+			if meth == 1 {
+				switch info.colrEnumCS[i] {
+				case 12, 16, 17, 18: // CMYK, sRGB, greyscale, sYCC
+				default:
+					bad("JPEG2000 enumerated colour space %d is not permitted", info.colrEnumCS[i])
+				}
+			}
+		}
+		// When several colour specifications exist, exactly one shall be
+		// the authoritative one (APPROX 0x01).
+		if len(info.colrMETH) > 1 && stream.Dict.Get("ColorSpace") == nil {
+			approxOnes := 0
+			for _, a := range info.colrAPPROX {
+				if a == 1 {
+					approxOnes++
+				}
+			}
+			if approxOnes != 1 {
+				bad("JPEG2000 image with %d colour specifications must mark exactly one with APPROX 1", len(info.colrMETH))
+			}
+		}
+	}
+	return errs
 }
