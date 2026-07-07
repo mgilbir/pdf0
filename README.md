@@ -95,15 +95,28 @@ absent, so a fresh clone's `go test ./...` stays green.
 
 ## Status and limitations
 
-This is a young library. Known gaps (see `docs/audits/` for the full audit):
+This is a young library. What works:
 
-- **Object streams and cross-reference-stream predictors are not yet
-  implemented.** PDFs that store objects in object streams, or whose xref
-  streams use a PNG/TIFF predictor, will not read correctly.
-- **Encryption is not supported**; encrypted PDFs are not detected.
-- The PDF/A validator implements a subset of the ISO 19005 rules; it has a
-  meaningful false-negative rate against the veraPDF corpus (tracked by
-  `TestCorpus`).
+- Object streams (`/Type /ObjStm`) and cross-reference streams, including the
+  PNG/TIFF `/Predictor` filters, are read.
+- The reader recovers from common malformations (wrong stream `/Length`,
+  offset-shifted xref, broken object streams) and never panics on adversarial
+  input.
+
+Known limitations:
+
+- **Decryption is not implemented.** Encrypted files are *detected*
+  (`Document.Encrypted` is set and `Write` refuses them), but their strings and
+  streams remain in encrypted form.
+- **`Write` always emits a traditional cross-reference table**, even for a file
+  read from an xref stream; the object model round-trips, the on-disk layout is
+  regenerated.
+- The PDF/A validator implements a subset of the ISO 19005 rules. Against the
+  veraPDF corpus it currently reports no false positives, no missed violations,
+  and no parse errors (tracked by `TestCorpus`), but coverage beyond the corpus
+  is not guaranteed — an empty validation result is not a conformance guarantee.
+
+See `docs/audits/` for the detailed audit history.
 
 ## Layout
 
@@ -112,10 +125,14 @@ This is a young library. Known gaps (see `docs/audits/` for the full audit):
 | `object.go` | The `Object` interface and all PDF value types |
 | `lexer.go` / `parser.go` | Tokenizer and recursive-descent parser |
 | `serializer.go` | Object model → PDF bytes |
-| `xref.go` | Cross-reference tables and xref streams |
+| `xref.go` / `objstm.go` / `filters.go` | Cross-reference tables/streams, object streams, and predictor filters |
 | `document.go` | Full document read/write |
 | `compare.go` | Deep semantic equality |
-| `pdfa.go` / `pdfa_create.go` | PDF/A validation and document building |
+| `pdfa.go` | PDF/A validation engine (rule dispatch and most rules) |
+| `final_rules.go` / `content_operators.go` / `filestructure.go` | Additional PDF/A rules (catalog, content operators, byte-level structure) |
+| `fonts.go` / `fontprog.go` / `font_encodings.go` / `cff_strings.go` | Font-dictionary rules and sfnt/CFF/Type1 program parsing |
+| `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
+| `pdfa_create.go` | Minimal PDF/A document builder |
 
 ## License
 

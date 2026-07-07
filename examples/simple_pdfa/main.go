@@ -101,5 +101,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("wrote output.pdf (PDF/A-4 conformant)")
+	// Note: this demonstrates the builder API. The embedded font program and
+	// ICC profile are placeholders, so the result is not a fully valid PDF/A
+	// file — validate real output with veraPDF.
+	fmt.Println("wrote output.pdf (PDF/A-4 builder demo; not veraPDF-validated)")
 }

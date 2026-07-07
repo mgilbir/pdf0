@@ -51,9 +51,12 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("[%s %s] %s", e.Level, e.Rule, e.Message)
 }
 
-// ValidatePDFA checks whether doc conforms to the given PDF/A level.
-// Returns nil if conformant, or a slice of violations.
-// For checks that require raw file bytes (e.g., post-EOF data), use ValidatePDFABytes instead.
+// ValidatePDFA checks doc against the implemented rules for the given PDF/A
+// level and returns the violations found. An empty result means "none of the
+// implemented checks fired", not a guarantee of full conformance: the validator
+// covers a subset of ISO 19005 (see the package README). Because it takes no
+// raw bytes, it also skips every byte-level file-structure rule — use
+// ValidatePDFABytes when you have the file bytes and want those too.
 func ValidatePDFA(doc *Document, level PDFALevel) []ValidationError {
 	return ValidatePDFABytes(doc, level, nil)
 }
@@ -83,9 +86,11 @@ func runByteCheck(level PDFALevel, check func() []ValidationError) (out []Valida
 	return check()
 }
 
-// ValidatePDFABytes checks whether doc conforms to the given PDF/A level.
-// If rawData is non-nil, additional byte-level checks are performed (e.g., no data after %%EOF).
-// Returns nil if conformant, or a slice of violations.
+// ValidatePDFABytes checks doc against the implemented rules for the given
+// PDF/A level and returns the violations found. If rawData is non-nil, the
+// byte-level file-structure rules run too (e.g. no data after %%EOF). An empty
+// result means no implemented check fired, not a guarantee of full conformance
+// (the validator covers a subset of ISO 19005).
 func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []ValidationError {
 	var errs []ValidationError
 
@@ -1046,15 +1051,21 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 	return errs
 }
 
-// fontObjNum returns the object number of a font dictionary, or 0 if it is a
-// direct dictionary with no indirect identity.
-func fontObjNum(doc *Document, fontDict *Dictionary) int {
+// objNumForDict returns the object number under which dict is stored, or 0 if
+// it is a direct dictionary with no indirect identity.
+func objNumForDict(doc *Document, dict *Dictionary) int {
 	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*Dictionary); ok && d == fontDict {
+		if d, ok := iobj.Value.(*Dictionary); ok && d == dict {
 			return num
 		}
 	}
 	return 0
+}
+
+// fontObjNum returns the object number of a font dictionary, or 0 if it is a
+// direct dictionary with no indirect identity.
+func fontObjNum(doc *Document, fontDict *Dictionary) int {
+	return objNumForDict(doc, fontDict)
 }
 
 // checkOneFontEmbedded applies the 6.2.10 embedding rule to a single font
@@ -2398,7 +2409,7 @@ func checkExtGState(doc *Document, level PDFALevel) []ValidationError {
 
 		// Check halftone
 		if htRef := dict.Get("HT"); htRef != nil {
-			checkHalftoneErrors(doc, htRef, num, level, &errs)
+			checkHalftoneErrors(doc, htRef, num, level, rule, &errs)
 		}
 
 		// Check BM is a valid blend mode. At 1b any transparency use is
@@ -2433,7 +2444,7 @@ func isValidBlendMode(bm Name) bool {
 	return false
 }
 
-func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALevel, rule string, errs *[]ValidationError) {
 	htDict := doc.ResolveDict(htRef)
 	if htDict == nil {
 		return
@@ -2443,7 +2454,7 @@ func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALeve
 		if intVal, ok := htType.(Integer); ok {
 			if intVal != 1 && intVal != 5 {
 				*errs = append(*errs, ValidationError{
-					Rule:    "6.2.5",
+					Rule:    rule,
 					Level:   level,
 					Message: fmt.Sprintf("halftone type must be 1 or 5, got %d", intVal),
 					Object:  objNum,
@@ -2454,7 +2465,7 @@ func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALeve
 
 	if htDict.Get("HalftoneName") != nil {
 		*errs = append(*errs, ValidationError{
-			Rule:    "6.2.5",
+			Rule:    rule,
 			Level:   level,
 			Message: "halftone must not contain /HalftoneName",
 			Object:  objNum,
@@ -2463,7 +2474,7 @@ func checkHalftoneErrors(doc *Document, htRef Object, objNum int, level PDFALeve
 
 	if htDict.Get("TransferFunction") != nil {
 		*errs = append(*errs, ValidationError{
-			Rule:    "6.2.5",
+			Rule:    rule,
 			Level:   level,
 			Message: "halftone must not contain /TransferFunction",
 			Object:  objNum,

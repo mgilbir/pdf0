@@ -25,11 +25,12 @@ func TestProhibitedCatalogEntries(t *testing.T) {
 	if len(checkProhibitedCatalogEntries(NewPDFADocument(PDFA4), PDFA4)) != 0 {
 		t.Error("clean document flagged")
 	}
-	// Not applied at other levels.
-	if len(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
+	// The /Requirements (6.12) prohibition is PDF/A-4 only; it must not fire at
+	// 2b. A t.Skip here would let a level-gating regression pass silently.
+	if got := len(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
 		c.Set("Requirements", Array{})
-	}), PDFA2b)) != 0 {
-		t.Skip()
+	}), PDFA2b)); got != 0 {
+		t.Errorf("6.12 /Requirements must not be flagged at PDF/A-2b, got %d errors", got)
 	}
 }
 

@@ -361,10 +361,6 @@ func checkType5Halftones(doc *Document, level PDFALevel) []ValidationError {
 	if level == PDFA1b {
 		return nil // 1b forbids transparency/halftone features via other rules
 	}
-	rule := "6.2.5"
-	if level == PDFA4 {
-		rule = "6.2.5"
-	}
 	var errs []ValidationError
 	seen := map[string]bool{}
 	add := func(msg string, obj int) {
@@ -372,7 +368,7 @@ func checkType5Halftones(doc *Document, level PDFALevel) []ValidationError {
 			return
 		}
 		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		errs = append(errs, ValidationError{Rule: "6.2.5", Level: level, Message: msg, Object: obj})
 	}
 
 	// Only halftones actually applied through a used ExtGState count (the
@@ -382,7 +378,7 @@ func checkType5Halftones(doc *Document, level PDFALevel) []ValidationError {
 		if ht, _ := doc.Resolve(d.Get("HalftoneType")).(Integer); ht != 5 {
 			continue
 		}
-		num := 0
+		num := objNumForDict(doc, d)
 		for _, key := range d.Keys {
 			if halftoneReserved[key] || key == "Default" {
 				continue
