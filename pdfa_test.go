@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1145,7 +1146,7 @@ const (
 	corpusMaxFalsePositives = 0
 	// Fail files the validator fails to flag (false negatives / unimplemented
 	// rules). This is the headline coverage gap; drive it down over time.
-	corpusMaxMissed = 798
+	corpusMaxMissed = 790
 	// Files the parser cannot read at all. All five are deliberately broken
 	// fail files: four with malformed stream keywords/lengths and one whose
 	// object stream holds corrupt zlib data.
@@ -1649,4 +1650,170 @@ func filterRule(errs []ValidationError, rule string) []ValidationError {
 		}
 	}
 	return result
+}
+
+// addTestPage inserts a page (object 20) into a NewPDFADocument's empty page
+// tree and returns its dictionary for further mutation.
+func addTestPage(doc *Document) *Dictionary {
+	page := &Dictionary{}
+	page.Set("Type", Name("Page"))
+	page.Set("Parent", IndirectRef{Number: 2})
+	page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
+	doc.Objects[20] = &IndirectObject{Number: 20, Value: page}
+	pages := doc.Objects[2].Value.(*Dictionary)
+	pages.Set("Kids", Array{IndirectRef{Number: 20}})
+	pages.Set("Count", Integer(1))
+	return page
+}
+
+// A7: Resolve must follow ref->ref chains and bail out on cycles.
+func TestResolveChainsAndCycles(t *testing.T) {
+	doc := &Document{Objects: map[int]*IndirectObject{
+		1: {Number: 1, Value: IndirectRef{Number: 2}},
+		2: {Number: 2, Value: IndirectRef{Number: 3}},
+		3: {Number: 3, Value: Integer(42)},
+		7: {Number: 7, Value: IndirectRef{Number: 8}},
+		8: {Number: 8, Value: IndirectRef{Number: 7}},
+	}}
+	if v, ok := doc.Resolve(IndirectRef{Number: 1}).(Integer); !ok || v != 42 {
+		t.Errorf("chained resolve: expected 42, got %#v", doc.Resolve(IndirectRef{Number: 1}))
+	}
+	if v := doc.Resolve(IndirectRef{Number: 7}); v != nil {
+		t.Errorf("cyclic resolve: expected nil, got %#v", v)
+	}
+	if v, ok := doc.Resolve(Integer(5)).(Integer); !ok || v != 5 {
+		t.Error("non-ref must resolve to itself")
+	}
+}
+
+// A9: annotations written as direct dictionaries in a page's /Annots must be
+// subject to the same checks as top-level annotation objects.
+func TestValidatePDFA_DirectAnnotationsChecked(t *testing.T) {
+	doc := NewPDFADocument(PDFA2b)
+	page := addTestPage(doc)
+
+	annot := &Dictionary{}
+	annot.Set("Subtype", Name("Screen")) // forbidden at 2b
+	annot.Set("Rect", Array{Integer(0), Integer(0), Integer(10), Integer(10)})
+	// no /F, no /AP: should also trip 6.3.2 and 6.3.3
+	page.Set("Annots", Array{annot})
+
+	errs := ValidatePDFA(doc, PDFA2b)
+	for _, rule := range []string{"6.3.1", "6.3.2", "6.3.3"} {
+		if !hasRule(errs, rule) {
+			t.Errorf("expected %s error for direct-dict annotation, got %v", rule, errs)
+		}
+	}
+}
+
+// A9: direct annotations with direct forbidden actions must be flagged.
+func TestValidatePDFA_DirectAnnotationForbiddenAction(t *testing.T) {
+	doc := NewPDFADocument(PDFA2b)
+	page := addTestPage(doc)
+
+	action := &Dictionary{}
+	action.Set("S", Name("Launch"))
+	annot := &Dictionary{}
+	annot.Set("Subtype", Name("Link"))
+	annot.Set("Rect", Array{Integer(0), Integer(0), Integer(10), Integer(10)})
+	annot.Set("F", Integer(4))
+	annot.Set("A", action)
+	page.Set("Annots", Array{annot})
+
+	errs := ValidatePDFA(doc, PDFA2b)
+	if !hasRule(errs, "6.6.1") {
+		t.Errorf("expected 6.6.1 error for direct annotation's Launch action, got %v", errs)
+	}
+}
+
+// A13: Separation/DeviceN rules must fire when Resources is a direct
+// dictionary on the page (the common case).
+func TestValidatePDFA_SeparationInDirectResources(t *testing.T) {
+	doc := NewPDFADocument(PDFA2b)
+	page := addTestPage(doc)
+
+	// DeviceN with 33 colorants exceeds the PDF/A-2 limit of 32.
+	var colorants Array
+	for i := 0; i < 33; i++ {
+		colorants = append(colorants, Name(fmt.Sprintf("C%d", i)))
+	}
+	deviceN := Array{Name("DeviceN"), colorants, Name("DeviceCMYK"), IndirectRef{Number: 5}}
+	csDict := &Dictionary{}
+	csDict.Set("CS0", deviceN)
+	resources := &Dictionary{}
+	resources.Set("ColorSpace", csDict)
+	page.Set("Resources", resources) // direct, not an indirect object
+
+	errs := ValidatePDFA(doc, PDFA2b)
+	if !hasRule(errs, "6.2.4") {
+		t.Errorf("expected 6.2.4 error for 33-colorant DeviceN in direct Resources, got %v", errs)
+	}
+}
+
+// A15: q/Q bytes inside string literals are data, not operators.
+func TestQNestingIgnoresStrings(t *testing.T) {
+	var content bytes.Buffer
+	content.WriteString("BT (")
+	for i := 0; i < 40; i++ {
+		content.WriteString("q ")
+	}
+	content.WriteString(") Tj ET\nq Q\n")
+	if d := qNestingMaxDepth(content.Bytes()); d != 1 {
+		t.Errorf("expected depth 1 (string content ignored), got %d", d)
+	}
+
+	// Real nesting still counts, including with delimiters after operators.
+	real := []byte("q q q(x)Tj Q Q Q")
+	if d := qNestingMaxDepth(real); d != 3 {
+		t.Errorf("expected depth 3, got %d", d)
+	}
+
+	// Inline image binary containing 'q' bytes is skipped.
+	img := []byte("q BI /W 1 /H 1 ID q q q q\x00\xff EI Q")
+	if d := qNestingMaxDepth(img); d != 1 {
+		t.Errorf("expected depth 1 (inline image ignored), got %d", d)
+	}
+}
+
+// Separation tint transforms: equal-by-content duplicates are conformant;
+// genuinely different transforms for the same colorant are not.
+func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
+	build := func(fn2Body Object) *Document {
+		doc := NewPDFADocument(PDFA2b)
+		page := addTestPage(doc)
+
+		fn := &Dictionary{}
+		fn.Set("FunctionType", Integer(2))
+		fn.Set("Domain", Array{Integer(0), Integer(1)})
+		fn.Set("N", Integer(1))
+		doc.Objects[30] = &IndirectObject{Number: 30, Value: fn}
+		doc.Objects[31] = &IndirectObject{Number: 31, Value: fn2Body}
+
+		sep1 := Array{Name("Separation"), Name("Spot"), Name("DeviceCMYK"), IndirectRef{Number: 30}}
+		sep2 := Array{Name("Separation"), Name("Spot"), Name("DeviceCMYK"), IndirectRef{Number: 31}}
+		csDict := &Dictionary{}
+		csDict.Set("CS0", sep1)
+		csDict.Set("CS1", sep2)
+		resources := &Dictionary{}
+		resources.Set("ColorSpace", csDict)
+		page.Set("Resources", resources)
+		return doc
+	}
+
+	identical := &Dictionary{}
+	identical.Set("FunctionType", Integer(2))
+	identical.Set("Domain", Array{Integer(0), Integer(1)})
+	identical.Set("N", Integer(1))
+	errs := filterRule(ValidatePDFA(build(identical), PDFA2b), "6.2.4")
+	if len(errs) > 0 {
+		t.Errorf("identical tint transforms in different objects must pass, got %v", errs)
+	}
+
+	different := &Dictionary{}
+	different.Set("FunctionType", Integer(2))
+	different.Set("Domain", Array{Integer(0), Integer(1)})
+	different.Set("N", Integer(2))
+	if !hasRule(ValidatePDFA(build(different), PDFA2b), "6.2.4") {
+		t.Error("differing tint transforms for the same colorant must be flagged")
+	}
 }
