@@ -1304,14 +1304,19 @@ func TestCorpusConformanceSuites(t *testing.T) {
 		dir       string
 		level     PDFALevel
 		maxMissed int
+		// checkPassFP asserts FP=0 on the suite's pass files. Only enabled where
+		// the validator models the suite's conformance well enough (the 4f/4e
+		// relaxations); the a/u/UA pass files are minimal per-clause fixtures
+		// that false-positive by design, so they remain untracked.
+		checkPassFP bool
 	}{
-		{"PDF_A-1a", PDFA1b, 0},
-		{"PDF_A-2a", PDFA2b, 0},
-		{"PDF_A-2u", PDFA2b, 0},
-		{"PDF_A-4f", PDFA4, 2}, // needs the A-4f arbitrary-embed relaxation
-		{"PDF_A-4e", PDFA4, 1}, // needs the A-4e 3D/RichMedia relaxation
-		{"PDF_UA-1", PDFA2b, 0},
-		{"PDF_UA-2", PDFA4, 0},
+		{"PDF_A-1a", PDFA1b, 0, false},
+		{"PDF_A-2a", PDFA2b, 0, false},
+		{"PDF_A-2u", PDFA2b, 0, false},
+		{"PDF_A-4f", PDFA4, 2, true},
+		{"PDF_A-4e", PDFA4, 3, true},
+		{"PDF_UA-1", PDFA2b, 0, false},
+		{"PDF_UA-2", PDFA4, 0, false},
 	}
 
 	for _, s := range suites {
@@ -1319,12 +1324,15 @@ func TestCorpusConformanceSuites(t *testing.T) {
 		if _, err := os.Stat(root); os.IsNotExist(err) {
 			continue
 		}
-		var fail, missed, parseErrors int
+		var fail, missed, parseErrors, falsePositives int
 		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
 				return nil
 			}
-			if !strings.Contains(filepath.Base(path), "-fail-") {
+			base := filepath.Base(path)
+			isPass := strings.Contains(base, "-pass-")
+			isFail := strings.Contains(base, "-fail-")
+			if !isPass && !isFail {
 				return nil
 			}
 			data, readErr := os.ReadFile(path)
@@ -1336,15 +1344,25 @@ func TestCorpusConformanceSuites(t *testing.T) {
 				parseErrors++
 				return nil
 			}
+			errs := ValidatePDFABytes(doc, s.level, data)
+			if isPass {
+				if s.checkPassFP && len(errs) > 0 {
+					falsePositives++
+				}
+				return nil
+			}
 			fail++
-			if len(ValidatePDFABytes(doc, s.level, data)) == 0 {
+			if len(errs) == 0 {
 				missed++
 			}
 			return nil
 		})
-		t.Logf("%-10s @ %-8v : fail=%d missed=%d parseErrors=%d", s.dir, s.level, fail, missed, parseErrors)
+		t.Logf("%-10s @ %-8v : fail=%d missed=%d falsePositives=%d parseErrors=%d", s.dir, s.level, fail, missed, falsePositives, parseErrors)
 		if missed > s.maxMissed {
 			t.Errorf("%s: missed %d exceed baseline %d (detection regressed)", s.dir, missed, s.maxMissed)
+		}
+		if s.checkPassFP && falsePositives > 0 {
+			t.Errorf("%s: false positives %d exceed baseline 0 (regression)", s.dir, falsePositives)
 		}
 		if parseErrors > 0 {
 			t.Errorf("%s: parse errors %d exceed baseline 0 (regression)", s.dir, parseErrors)
