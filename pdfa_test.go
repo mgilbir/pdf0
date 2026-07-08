@@ -1161,8 +1161,9 @@ const (
 	// XMP packet-header / well-formedness rules at PDF/A-1b; 11 after enabling
 	// the TrueType-encoding rule at 1b; 8 after flagging damaged embedded font
 	// programs; 7 after the symbolic-TrueType single-cmap rule; 6 after
-	// scanning annotation appearance streams for undefined operators.)
-	corpusMaxIsartorMissed = 6
+	// scanning annotation appearance streams for undefined operators; 5 after
+	// the PDF/A-1 CMap-embedding rule.)
+	corpusMaxIsartorMissed = 5
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus

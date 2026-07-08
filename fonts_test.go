@@ -283,3 +283,23 @@ func TestSymbolicTrueTypeSingleCmap(t *testing.T) {
 		}
 	}
 }
+
+// TestCMapEmbeddedAt1b ensures a Type0 font with a named predefined CMap (not
+// Identity) is flagged at PDF/A-1b but not at 2b (ISO 19005-1 6.3.3.3).
+func TestCMapEmbeddedAt1b(t *testing.T) {
+	font := &Dictionary{}
+	font.Set("Subtype", Name("Type0"))
+	font.Set("Encoding", Name("UniJIS-UCS2-H"))
+	doc := &Document{Objects: map[int]*IndirectObject{1: {Number: 1, Value: font}}}
+	if got := len(checkCMapEmbedded(doc, PDFA1b)); got == 0 {
+		t.Error("named predefined CMap not flagged at 1b")
+	}
+	if got := len(checkCMapEmbedded(doc, PDFA2b)); got != 0 {
+		t.Errorf("2b permits predefined CMaps by name, got %d", got)
+	}
+	// Identity is always fine.
+	font.Set("Encoding", Name("Identity-H"))
+	if got := len(checkCMapEmbedded(doc, PDFA1b)); got != 0 {
+		t.Errorf("Identity-H wrongly flagged at 1b: %d", got)
+	}
+}

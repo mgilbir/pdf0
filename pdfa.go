@@ -194,6 +194,8 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkCMapCIDLimit,
 		// PDF/A-1 CIDSet program completeness (6.3.5)
 		checkCIDSetProgramComplete,
+		// CMap embedding (6.3.3.3, PDF/A-1 only)
+		checkCMapEmbedded,
 	}
 
 	// Validate against a shallow copy of the Document so the per-run cache is
