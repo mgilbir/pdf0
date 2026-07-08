@@ -96,3 +96,29 @@ func TestA4ConformanceFE(t *testing.T) {
 		t.Errorf("invalid A-4 conformance B was not flagged")
 	}
 }
+
+// TestXMPPacketHeaderAt1b ensures the xpacket bytes/encoding-attribute and
+// well-formedness rules apply at PDF/A-1b (ISO 19005-1 6.7.5 / 6.7.9).
+func TestXMPPacketHeaderAt1b(t *testing.T) {
+	mk := func(xmp string) *Document {
+		meta := &Stream{Dict: Dictionary{}, Data: []byte(xmp)}
+		meta.Dict.Set("Type", Name("Metadata"))
+		cat := &Dictionary{}
+		cat.Set("Type", Name("Catalog"))
+		cat.Set("Metadata", IndirectRef{Number: 2})
+		return &Document{Version: "1.7", Objects: map[int]*IndirectObject{
+			1: {Number: 1, Value: cat},
+			2: {Number: 2, Value: meta},
+		}, Trailer: dictWith("Root", IndirectRef{Number: 1})}
+	}
+	wf := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"></rdf:RDF></x:xmpmeta>`
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" bytes="47"?>`+wf), PDFA1b)); got == 0 {
+		t.Error("xpacket bytes attribute not flagged at 1b")
+	}
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" encoding="UTF-8"?>`+wf), PDFA1b)); got == 0 {
+		t.Error("xpacket encoding attribute not flagged at 1b")
+	}
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin=""?>`+wf), PDFA1b)); got != 0 {
+		t.Errorf("clean XMP flagged at 1b: %d", got)
+	}
+}

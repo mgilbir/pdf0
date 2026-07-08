@@ -1157,8 +1157,9 @@ const (
 	// Isartor fail files (all PDF/A-1b) that the validator does not yet flag.
 	// TestCorpus validates only the PDF_A-* suites, so without this the Isartor
 	// gaps regress invisibly. Drive it down; each drop means a newly covered
-	// rule. (Was 18 before the transparency-detection fix.)
-	corpusMaxIsartorMissed = 16
+	// rule. (18 originally; 16 after the transparency fix; 13 after enabling the
+	// XMP packet-header / well-formedness rules at PDF/A-1b.)
+	corpusMaxIsartorMissed = 13
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
