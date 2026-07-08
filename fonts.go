@@ -653,6 +653,35 @@ func hasForbiddenUnicodeTargets(doc *Document, stream *Stream) bool {
 // non-symbolic one shall specify WinAnsiEncoding or MacRomanEncoding —
 // directly or as BaseEncoding — and Differences names must come from the
 // Adobe Glyph List.
+// checkCMapEmbedded enforces ISO 19005-1 6.3.3.3: in PDF/A-1 every CMap used by
+// a Type 0 font other than Identity-H/Identity-V shall be embedded (given as a
+// stream), not referenced by a predefined name. Parts 2 and later permit
+// predefined CMaps by name, so this is a PDF/A-1-only rule.
+func checkCMapEmbedded(doc *Document, level PDFALevel) []ValidationError {
+	if level != PDFA1b {
+		return nil
+	}
+	var errs []ValidationError
+	for num, iobj := range doc.Objects {
+		dict, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		if st, _ := dict.Get("Subtype").(Name); st != "Type0" {
+			continue
+		}
+		if enc, ok := doc.Resolve(dict.Get("Encoding")).(Name); ok && enc != "Identity-H" && enc != "Identity-V" {
+			errs = append(errs, ValidationError{
+				Rule:    "6.3.3.3",
+				Level:   level,
+				Message: fmt.Sprintf("CMap /%s must be embedded (PDF/A-1 permits only Identity-H/V by name)", string(enc)),
+				Object:  num,
+			})
+		}
+	}
+	return errs
+}
+
 func checkTrueTypeEncoding(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
 	if level == PDFA1b {
 		rule = "6.3.7" // ISO 19005-1 clause for TrueType character encodings
