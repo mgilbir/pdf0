@@ -118,11 +118,11 @@ func (l *Lexer) Data() []byte {
 }
 
 func (l *Lexer) atEnd() bool {
-	return l.pos >= l.size
+	return l.pos < 0 || l.pos >= l.size
 }
 
 func (l *Lexer) peek() byte {
-	if l.pos >= l.size {
+	if l.pos < 0 || l.pos >= l.size {
 		return 0
 	}
 	return l.data[l.pos]
@@ -137,7 +137,7 @@ func (l *Lexer) peekAt(offset int64) byte {
 }
 
 func (l *Lexer) advance() byte {
-	if l.pos >= l.size {
+	if l.pos < 0 || l.pos >= l.size {
 		return 0
 	}
 	b := l.data[l.pos]

@@ -121,6 +121,9 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 			break
 		}
 		sectionOffset = int64(prevOffset) + adjust
+		if sectionOffset < 0 || sectionOffset >= size {
+			break // /Prev points outside the file; ignore the broken chain tail
+		}
 	}
 
 	// 4. Parse all uncompressed objects from xref entries
@@ -134,8 +137,15 @@ func Read(r io.ReaderAt, size int64) (*Document, error) {
 			continue // already loaded (e.g., xref stream)
 		}
 
-		doc.Offsets[num] = entry.Offset + adjust
-		lexer.SetPosition(entry.Offset + adjust)
+		off := entry.Offset + adjust
+		if off < 0 || off >= size {
+			// A negative or out-of-range offset (e.g. a crafted "-0000000010"
+			// entry, or an 8-byte /W field whose high bit overflowed int) would
+			// otherwise seek the lexer to an invalid position.
+			return nil, fmt.Errorf("object %d xref offset %d outside file (size %d)", num, off, size)
+		}
+		doc.Offsets[num] = off
+		lexer.SetPosition(off)
 		parser := NewParserFromLexer(lexer)
 		iobj, err := parser.ParseIndirectObject()
 		if err != nil {

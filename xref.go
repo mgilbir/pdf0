@@ -63,6 +63,9 @@ func ParseXRefTable(data []byte, pos int64) (*XRefTable, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid object count %q: %w", parts[1], err)
 		}
+		if startObj < 0 || count < 0 {
+			return nil, fmt.Errorf("invalid xref subsection header %q: negative start or count", line)
+		}
 
 		// Skip past the header line
 		pos = lineEnd

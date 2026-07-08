@@ -308,7 +308,10 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 		// No Length specified, try to find endstream
 		length = -1
 	default:
-		return nil, fmt.Errorf("invalid Length type %T in stream dictionary", lengthObj)
+		// A wrong-typed /Length (e.g. a Real) is malformed but recoverable:
+		// fall back to locating endstream by search rather than aborting the
+		// whole read (ISO 32000-1 7.3.8.1, NOTE 2).
+		length = -1
 	}
 
 	var data []byte
