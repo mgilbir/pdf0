@@ -49,13 +49,13 @@ func TestCheckStreamLength(t *testing.T) {
 			7: {Number: 7, Value: s},
 		}}
 	}
-	if hasRuleMsg(checkStreamLength(mk(10, 10), PDFA4), "6.1.6") {
+	if hasRuleMsg(checkStreamLength(mk(10, 10), PDFA4), "6.1.6.1") {
 		t.Error("matching Length must not be flagged")
 	}
-	if !hasRuleMsg(checkStreamLength(mk(10, 8), PDFA4), "6.1.6") {
+	if !hasRuleMsg(checkStreamLength(mk(10, 8), PDFA4), "6.1.6.1") {
 		t.Error("mismatched Length must be flagged at A-4")
 	}
-	if !hasRuleMsg(checkStreamLength(mk(10, 8), PDFA2b), "6.1.7") {
+	if !hasRuleMsg(checkStreamLength(mk(10, 8), PDFA2b), "6.1.7.1") {
 		t.Error("mismatched Length must be flagged at 2b with rule 6.1.7")
 	}
 }
