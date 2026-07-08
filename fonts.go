@@ -1137,6 +1137,13 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: u.objNum})
 	}
 
+	// ISO 19005-1 6.3.7: a symbolic TrueType font's embedded program shall
+	// contain exactly one cmap subtable. (cmapSubtableCount is 0 for a
+	// non-sfnt program, which this rule does not apply to.)
+	if subtype == "TrueType" && symbolic && fp.cmapSubtableCount > 0 && fp.cmapSubtableCount != 1 {
+		report("cmap", fmt.Sprintf("symbolic TrueType font must have exactly one cmap subtable, found %d", fp.cmapSubtableCount))
+	}
+
 	renders := rendersVisibly(u)
 	for _, s := range u.strings {
 		for _, code := range s {
