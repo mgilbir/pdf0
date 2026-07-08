@@ -1388,11 +1388,36 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 	return errs
 }
 
+// annotOpacity returns an annotation /CA value as a float, if it is numeric.
+func annotOpacity(v Object) (float64, bool) {
+	switch n := v.(type) {
+	case Integer:
+		return float64(n), true
+	case Real:
+		return float64(n), true
+	}
+	return 0, false
+}
+
 // Rule 6.3.2-1/2: Non-Popup annotations require F key; flags must have Print set,
 // Hidden/Invisible/ToggleNoView/NoView clear.
 func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	check := func(dict *Dictionary, num int) {
+		// 6.5.3: at PDF/A-1, an annotation's /CA (constant opacity) must be 1.0
+		// — annotation transparency is not permitted. This applies to every
+		// annotation subtype, so it precedes the Popup exemption below.
+		if level == PDFA1b {
+			if ca, ok := annotOpacity(doc.Resolve(dict.Get("CA"))); ok && math.Abs(ca-1.0) > 1e-6 {
+				errs = append(errs, ValidationError{
+					Rule:    "6.5.3",
+					Level:   level,
+					Message: "annotation /CA (opacity) must be 1.0",
+					Object:  num,
+				})
+			}
+		}
+
 		// Popup annotations are exempt from F requirement
 		st, _ := dict.Get("Subtype").(Name)
 		if st == "Popup" {
