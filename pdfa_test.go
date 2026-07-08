@@ -546,6 +546,36 @@ func TestValidatePDFA_NeedAppearances(t *testing.T) {
 	}
 }
 
+// 6.5.3: at PDF/A-1 an annotation /CA (opacity) must be 1.0; other levels allow it.
+func TestValidatePDFA_AnnotationOpacity(t *testing.T) {
+	mk := func(ca Object) *Document {
+		doc := NewPDFADocument(PDFA1b)
+		annot := &Dictionary{}
+		annot.Set("Type", Name("Annot"))
+		annot.Set("Subtype", Name("Text"))
+		annot.Set("Rect", Array{Integer(0), Integer(0), Integer(100), Integer(100)})
+		annot.Set("F", Integer(4)) // Print
+		annot.Set("AP", &Dictionary{Keys: []Name{"N"}, Values: []Object{&Stream{}}})
+		if ca != nil {
+			annot.Set("CA", ca)
+		}
+		doc.Objects[10] = &IndirectObject{Number: 10, Value: annot}
+		return doc
+	}
+	if !hasRule(ValidatePDFA(mk(Real(0.5)), PDFA1b), "6.5.3") {
+		t.Error("CA=0.5 must be flagged at PDF/A-1b")
+	}
+	if hasRule(ValidatePDFA(mk(Integer(1)), PDFA1b), "6.5.3") {
+		t.Error("CA=1 must not be flagged")
+	}
+	if hasRule(ValidatePDFA(mk(nil), PDFA1b), "6.5.3") {
+		t.Error("absent CA must not be flagged")
+	}
+	if hasRule(ValidatePDFA(mk(Real(0.5)), PDFA2b), "6.5.3") {
+		t.Error("CA=0.5 must not be flagged at PDF/A-2b (transparency allowed)")
+	}
+}
+
 func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 	t.Run("missing Print flag", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA4)
