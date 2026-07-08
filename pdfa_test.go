@@ -1164,8 +1164,9 @@ const (
 	// scanning annotation appearance streams for undefined operators; 5 after
 	// the PDF/A-1 CMap-embedding rule; 4 after validating extension-schema
 	// field value types; 3 after flagging an XMP packet whose rdf:RDF
-	// namespace prefix is undeclared.)
-	corpusMaxIsartorMissed = 3
+	// namespace prefix is undeclared; 2 after the linearized-file /ID
+	// consistency rule.)
+	corpusMaxIsartorMissed = 2
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus

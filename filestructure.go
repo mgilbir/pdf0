@@ -1191,3 +1191,54 @@ func checkObjectStreamDecodable(doc *Document, level PDFALevel) []ValidationErro
 	}
 	return errs
 }
+
+// checkLinearizedTrailerID enforces ISO 19005-1 6.1.3 for linearized files: the
+// file identifier (/ID) in the first-page trailer and the last trailer shall be
+// the same. encoding/xml is not involved here — this is a byte-level scan of
+// the traditional trailers a linearized PDF/A-1 file uses. Gated on
+// /Linearized: a non-linearized incremental-update file legitimately carries
+// several trailers, and comparing them there produced a false positive.
+func checkLinearizedTrailerID(raw []byte, level PDFALevel) []ValidationError {
+	if !bytes.Contains(raw, []byte("/Linearized")) {
+		return nil
+	}
+	ids := collectTrailerIDFirstElements(raw)
+	if len(ids) >= 2 && !bytes.Equal(ids[0], ids[len(ids)-1]) {
+		return []ValidationError{{
+			Rule:    "6.1.3",
+			Level:   level,
+			Message: "linearized file: the file identifier /ID in the first-page trailer and the last trailer differ",
+		}}
+	}
+	return nil
+}
+
+// collectTrailerIDFirstElements returns the first element of the /ID array of
+// every traditional "trailer" dictionary in raw, in file order.
+func collectTrailerIDFirstElements(raw []byte) [][]byte {
+	var ids [][]byte
+	for i := 0; ; {
+		idx := bytes.Index(raw[i:], []byte("trailer"))
+		if idx < 0 {
+			break
+		}
+		at := i + idx
+		i = at + 7
+		p := NewParser(raw)
+		p.Lexer().SetPosition(int64(at + 7))
+		obj, err := p.ParseObject()
+		if err != nil {
+			continue
+		}
+		d, ok := obj.(*Dictionary)
+		if !ok {
+			continue
+		}
+		if arr, ok := d.Get("ID").(Array); ok && len(arr) >= 1 {
+			if s, ok := arr[0].(String); ok {
+				ids = append(ids, append([]byte(nil), s.Value...))
+			}
+		}
+	}
+	return ids
+}

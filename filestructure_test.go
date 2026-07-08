@@ -177,3 +177,24 @@ func TestNameUTF8(t *testing.T) {
 		t.Error("UTF-8 name rule must not apply at PDF/A-1")
 	}
 }
+
+// TestLinearizedTrailerIDMismatch ensures a linearized file whose first-page
+// and last trailer /ID differ is flagged, and a consistent one is not.
+func TestLinearizedTrailerIDMismatch(t *testing.T) {
+	mk := func(id1, id2 string) []byte {
+		return []byte("%PDF-1.4\n<< /Linearized 1 >>\n" +
+			"trailer\n<< /ID [<" + id1 + "> <AAAA>] >>\n" +
+			"trailer\n<< /ID [<" + id2 + "> <BBBB>] >>\n")
+	}
+	if got := len(checkLinearizedTrailerID(mk("1111", "2222"), PDFA1b)); got == 0 {
+		t.Error("mismatched linearized trailer IDs not flagged")
+	}
+	if got := len(checkLinearizedTrailerID(mk("1111", "1111"), PDFA1b)); got != 0 {
+		t.Errorf("consistent linearized trailer IDs wrongly flagged: %d", got)
+	}
+	// Not linearized -> not this rule's concern.
+	nonLin := []byte("%PDF-1.4\ntrailer\n<< /ID [<1111> <A>] >>\ntrailer\n<< /ID [<2222> <B>] >>\n")
+	if got := len(checkLinearizedTrailerID(nonLin, PDFA1b)); got != 0 {
+		t.Errorf("non-linearized file wrongly flagged: %d", got)
+	}
+}
