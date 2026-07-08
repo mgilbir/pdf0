@@ -198,3 +198,41 @@ func TestLinearizedTrailerIDMismatch(t *testing.T) {
 		t.Errorf("non-linearized file wrongly flagged: %d", got)
 	}
 }
+
+// TestStreamLengthBytes ensures a /Length that wrongly includes the EOL before
+// endstream is flagged, while a correct length (EOL excluded, CR-vs-CRLF
+// tolerated) is not (ISO 32000-1 7.3.8.2; Isartor 6.1.7-t03).
+func TestStreamLengthBytes(t *testing.T) {
+	// Object body: "stream\nABCD\nendstream" — 4 data bytes, then a \n EOL that
+	// must not be counted, so the only valid /Length is 4.
+	run := func(length int) int {
+		raw := []byte("%PDF-1.4\n1 0 obj\n<< /Length 0 >>\nstream\nABCD\nendstream\nendobj\n")
+		off := int64(bytesIndexStr(raw, "1 0 obj"))
+		s := &Stream{Dict: Dictionary{}, Data: []byte("ABCD")}
+		s.Dict.Set("Length", Integer(length))
+		doc := &Document{
+			Objects: map[int]*IndirectObject{1: {Number: 1, Value: s}},
+			Offsets: map[int]int64{1: off},
+		}
+		n := 0
+		for _, e := range checkStreamLengthBytes(doc, PDFA1b, raw) {
+			if e.Rule == "6.1.7" {
+				n++
+			}
+		}
+		return n
+	}
+	if run(4) != 0 {
+		t.Error("correct /Length 4 wrongly flagged")
+	}
+	if run(5) == 0 {
+		t.Error("/Length 5 (EOL wrongly counted) not flagged")
+	}
+	if run(3) == 0 {
+		t.Error("/Length 3 (too short) not flagged")
+	}
+}
+
+func bytesIndexStr(b []byte, s string) int {
+	return bytes.Index(b, []byte(s))
+}

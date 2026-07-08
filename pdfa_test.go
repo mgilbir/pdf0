@@ -1165,8 +1165,8 @@ const (
 	// the PDF/A-1 CMap-embedding rule; 4 after validating extension-schema
 	// field value types; 3 after flagging an XMP packet whose rdf:RDF
 	// namespace prefix is undeclared; 2 after the linearized-file /ID
-	// consistency rule.)
-	corpusMaxIsartorMissed = 2
+	// consistency rule; 1 after the byte-level stream /Length check.)
+	corpusMaxIsartorMissed = 1
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
