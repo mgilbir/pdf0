@@ -395,11 +395,44 @@ func fontRule(level PDFALevel) string {
 	return "6.2.11"
 }
 
+// fontClause returns the specific ISO clause for a font-rule concept at the
+// given level. The font requirements live under different clause trees per part
+// (ISO 19005-1 6.3.x; -2/-3 6.2.11.x; -4 6.2.10.x), so a single fontRule parent
+// clause mis-cites the rule in the reported error. Clauses follow the veraPDF
+// validation profiles.
+func fontClause(concept string, level PDFALevel) string {
+	// [1b, 2b/3b, 4]
+	m := map[string][3]string{
+		"general":       {"6.3.2", "6.2.11.2", "6.2.10.2"},
+		"cidSystemInfo": {"6.3.3.1", "6.2.11.3.1", "6.2.10.3.1"},
+		"cidToGID":      {"6.3.3.2", "6.2.11.3.2", "6.2.10.3.2"},
+		"cmap":          {"6.3.3.3", "6.2.11.3.3", "6.2.10.3.3"},
+		"embed":         {"6.3.4", "6.2.11.4.1", "6.2.10.4.1"},
+		"glyphs":        {"6.3.5", "6.2.11.4.1", "6.2.10.4.1"},
+		"charSet":       {"6.3.5", "6.2.11.4.2", "6.2.10.4.2"},
+		"width":         {"6.3.6", "6.2.11.5", "6.2.10.5"},
+		"encoding":      {"6.3.7", "6.2.11.6", "6.2.10.6"},
+		"notdef":        {"6.3.5", "6.2.11.8", "6.2.10.9"},
+	}
+	c, ok := m[concept]
+	if !ok {
+		return fontRule(level)
+	}
+	switch level {
+	case PDFA1b:
+		return c[0]
+	case PDFA4:
+		return c[2]
+	default:
+		return c[1]
+	}
+}
+
 func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
 	var errs []ValidationError
-	bad := func(format string, args ...interface{}) {
+	bad := func(concept, format string, args ...interface{}) {
 		errs = append(errs, ValidationError{
-			Rule:    rule,
+			Rule:    fontClause(concept, level),
 			Level:   level,
 			Message: fmt.Sprintf(format, args...),
 			Object:  u.objNum,
@@ -418,7 +451,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 		switch enc := doc.Resolve(encObj).(type) {
 		case Name:
 			if _, ok := predefinedCMaps[string(enc)]; !ok {
-				bad("Type0 font Encoding CMap /%s is neither embedded nor predefined (ISO 32000, Table 118)", string(enc))
+				bad("cmap", "Type0 font Encoding CMap /%s is neither embedded nor predefined (ISO 32000, Table 118)", string(enc))
 			}
 		case *Stream:
 			cmapStream = enc
@@ -427,7 +460,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			// content (9.7.5.3).
 			if dictWMode, ok := doc.Resolve(enc.Dict.Get("WMode")).(Integer); ok {
 				if contentWMode, found := cmapContentWMode(doc, enc); found && int(dictWMode) != contentWMode {
-					bad("CMap dictionary WMode %d differs from the embedded CMap content WMode %d", int(dictWMode), contentWMode)
+					bad("cmap", "CMap dictionary WMode %d differs from the embedded CMap content WMode %d", int(dictWMode), contentWMode)
 				}
 			}
 			// A CMap's UseCMap reference must be to a predefined CMap
@@ -436,16 +469,16 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			switch uc := doc.Resolve(enc.Dict.Get("UseCMap")).(type) {
 			case Name:
 				if _, ok := predefinedCMaps[string(uc)]; !ok {
-					bad("embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", string(uc))
+					bad("cmap", "embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", string(uc))
 				}
 			case *Stream:
-				bad("embedded CMap references another embedded CMap, but UseCMap must name a predefined CMap (Table 118)")
+				bad("cmap", "embedded CMap references another embedded CMap, but UseCMap must name a predefined CMap (Table 118)")
 			}
 			// The usecmap operator in the CMap body must likewise name a
 			// predefined CMap.
 			if refName, found := cmapUseCMap(doc, enc); found {
 				if _, ok := predefinedCMaps[refName]; !ok {
-					bad("embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", refName)
+					bad("cmap", "embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", refName)
 				}
 			}
 		}
@@ -475,17 +508,17 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 				reg := pdfTextString(doc, cidInfo.Get("Registry"))
 				ord := pdfTextString(doc, cidInfo.Get("Ordering"))
 				if reg != cmReg {
-					bad("CIDFont CIDSystemInfo Registry %q does not match the CMap's %q", reg, cmReg)
+					bad("cidSystemInfo", "CIDFont CIDSystemInfo Registry %q does not match the CMap's %q", reg, cmReg)
 				}
 				if ord != cmOrd {
-					bad("CIDFont CIDSystemInfo Ordering %q does not match the CMap's %q", ord, cmOrd)
+					bad("cidSystemInfo", "CIDFont CIDSystemInfo Ordering %q does not match the CMap's %q", ord, cmOrd)
 				}
 				// The corpus pins the direction: a CIDFont Supplement
 				// GREATER than the CMap's fails (the CMap cannot address
 				// the extra glyphs); a smaller one passes.
 				if cmapStream != nil {
 					if supp, ok := doc.Resolve(cidInfo.Get("Supplement")).(Integer); ok && supp > cmSupp {
-						bad("CIDFont CIDSystemInfo Supplement %d is greater than the CMap's %d", int(supp), int(cmSupp))
+						bad("cidSystemInfo", "CIDFont CIDSystemInfo Supplement %d is greater than the CMap's %d", int(supp), int(cmSupp))
 					}
 				}
 			}
@@ -503,15 +536,15 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			if dsub, _ := desc.Get("Subtype").(Name); dsub == "CIDFontType2" && !onlyInvisible {
 				switch v := doc.Resolve(desc.Get("CIDToGIDMap")).(type) {
 				case nil:
-					bad("CIDFontType2 must contain a CIDToGIDMap entry (stream or /Identity)")
+					bad("cidToGID", "CIDFontType2 must contain a CIDToGIDMap entry (stream or /Identity)")
 				case Name:
 					if v != "Identity" {
-						bad("CIDFontType2 CIDToGIDMap name must be /Identity, got /%s", string(v))
+						bad("cidToGID", "CIDFontType2 CIDToGIDMap name must be /Identity, got /%s", string(v))
 					}
 				case *Stream:
 					// fine
 				default:
-					bad("CIDFontType2 CIDToGIDMap must be a stream or the name /Identity")
+					bad("cidToGID", "CIDFontType2 CIDToGIDMap must be a stream or the name /Identity")
 				}
 			}
 		}
@@ -526,7 +559,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 	if level == PDFA4 {
 		if tu, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*Stream); ok {
 			if hasForbiddenUnicodeTargets(doc, tu) {
-				bad("ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)")
+				bad("general", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)")
 			}
 		}
 	}
@@ -683,9 +716,7 @@ func checkCMapEmbedded(doc *Document, level PDFALevel) []ValidationError {
 }
 
 func checkTrueTypeEncoding(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
-	if level == PDFA1b {
-		rule = "6.3.7" // ISO 19005-1 clause for TrueType character encodings
-	}
+	rule = fontClause("encoding", level) // 6.3.7 / 6.2.11.6 / 6.2.10.6
 	var errs []ValidationError
 	bad := func(format string, args ...interface{}) {
 		errs = append(errs, ValidationError{
@@ -1117,7 +1148,7 @@ func damagedFontProgramError(doc *Document, level PDFALevel, rule string, fontDi
 	}
 	subtype, _ := fontDict.Get("Subtype").(Name)
 	return []ValidationError{{
-		Rule:    rule,
+		Rule:    fontClause("embed", level),
 		Level:   level,
 		Message: fmt.Sprintf("embedded %s font program is damaged and could not be parsed", string(subtype)),
 		Object:  u.objNum,
@@ -1133,6 +1164,21 @@ func hasEmbeddedFontProgram(doc *Document, fd *Dictionary) bool {
 		}
 	}
 	return false
+}
+
+// fontKindClause maps a report "kind" to its ISO clause for the level.
+func fontKindClause(kind string, level PDFALevel) string {
+	switch kind {
+	case "glyph":
+		return fontClause("glyphs", level)
+	case "notdef":
+		return fontClause("notdef", level)
+	case "width":
+		return fontClause("width", level)
+	case "cmap":
+		return fontClause("encoding", level)
+	}
+	return fontClause("general", level)
 }
 
 func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
@@ -1163,7 +1209,7 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 			return
 		}
 		reported[kind] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: u.objNum})
+		errs = append(errs, ValidationError{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.objNum})
 	}
 
 	// ISO 19005-1 6.3.7: a symbolic TrueType font's embedded program shall
@@ -1227,7 +1273,7 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 			return
 		}
 		reported[kind] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: u.objNum})
+		errs = append(errs, ValidationError{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.objNum})
 	}
 	renders := rendersVisibly(u)
 	toUni := parseToUnicodeMap(doc, fontDict)
@@ -1313,7 +1359,7 @@ func checkType3Widths(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			progW := glyphW * fm[0] * 1000
 			if absf(pdfW-progW) > glyphWidthTolerance && !reported {
 				reported = true
-				errs = append(errs, ValidationError{Rule: rule, Level: level,
+				errs = append(errs, ValidationError{Rule: fontClause("width", level), Level: level,
 					Message: "width information for glyphs used for rendering is inconsistent in Type3 font", Object: u.objNum})
 			}
 		}

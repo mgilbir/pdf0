@@ -325,8 +325,8 @@ func TestValidatePDFA_FontsEmbedded(t *testing.T) {
 	doc.Objects[12] = &IndirectObject{Number: 12, Value: resources}
 
 	errs := ValidatePDFA(doc, PDFA4)
-	if !hasRule(errs, "6.2.10") {
-		t.Error("expected 6.2.10 error for non-embedded font")
+	if !hasRule(errs, "6.2.10.4.1") {
+		t.Error("expected 6.2.10.4.1 error for non-embedded font")
 	}
 }
 
