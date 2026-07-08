@@ -189,6 +189,12 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		startBase := endBase + segX2 + 2
 		deltaBase := startBase + segX2
 		rangeBase := deltaBase + segX2
+		// A valid format-4 subtable partitions the BMP, so it never needs more
+		// than ~65536 inner iterations. A hostile table with many segments each
+		// spanning the whole range is O(segments x 65535) — seconds to minutes
+		// of CPU on an untrusted font. Bound the total work (audit C10).
+		const maxCmapFormat4Work = 1 << 18
+		work := 0
 		for s := 0; s < segX2; s += 2 {
 			end := be16(b, endBase+s)
 			start := be16(b, startBase+s)
@@ -198,6 +204,9 @@ func parseCmapSubtable(b []byte) map[rune]int {
 				continue
 			}
 			for c := start; c <= end && c != 0; c++ {
+				if work++; work > maxCmapFormat4Work {
+					return out
+				}
 				var gid int
 				if rangeOff == 0 {
 					gid = (c + delta) & 0xFFFF
@@ -691,10 +700,10 @@ func parseType1(data []byte) *fontProgram {
 
 	lenIV := 4
 	if li := strings.Index(text, "/lenIV"); li >= 0 {
-		var v int
-		if n, _ := sscanInt(text[li+6:]); n {
-			v = parseLeadingInt(text[li+6:])
-			lenIV = v
+		// sscanInt skips the leading space after "/lenIV"; use its value
+		// directly (parseLeadingInt would start on the space and return 0).
+		if ok, val := sscanInt(text[li+6:]); ok {
+			lenIV = val
 		}
 	}
 

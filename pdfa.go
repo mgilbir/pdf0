@@ -4964,6 +4964,7 @@ func contentUsedNames(data []byte) usedResourceNames {
 func skipInlineImage(data []byte, pos *int) {
 	n := len(data)
 	i := *pos
+	paramStart := i
 	// Scan tokens until the ID keyword that starts the binary section.
 	for i < n {
 		for i < n && isContentWS(data[i]) {
@@ -5005,6 +5006,28 @@ func skipInlineImage(data []byte, pos *int) {
 			i++
 		}
 	}
+	// Inline-image sample data is arbitrary binary and can contain the bytes
+	// "EI" by chance, which the boundary search below would mistake for the end
+	// (spewing the rest of the image as bogus operators/hex strings). When the
+	// dictionary declares /L (or /Length), skip exactly that many bytes and
+	// confirm EI follows; only fall back to the search if it is absent or
+	// inconsistent, so behaviour never regresses (audit C25).
+	binaryStart := i
+	if declLen, ok := inlineImageDeclaredLength(data[paramStart:binaryStart]); ok {
+		end := binaryStart + declLen
+		if end <= n {
+			j := end
+			for j < n && isContentWS(data[j]) {
+				j++
+			}
+			if j+1 < n && data[j] == 'E' && data[j+1] == 'I' &&
+				(j+2 >= n || isContentWS(data[j+2]) || isContentDelim(data[j+2])) {
+				*pos = j + 2
+				return
+			}
+		}
+	}
+
 	// Skip binary data until EI at a token boundary.
 	for i < n {
 		if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
@@ -5018,6 +5041,41 @@ func skipInlineImage(data []byte, pos *int) {
 		i++
 	}
 	*pos = i
+}
+
+// inlineImageDeclaredLength extracts the /L (or /Length) value from an inline
+// image's parameter region, if present. It reports the declared byte count of
+// the binary sample data.
+func inlineImageDeclaredLength(params []byte) (int, bool) {
+	for i := 0; i < len(params); i++ {
+		if params[i] != '/' {
+			continue
+		}
+		// Read the key name.
+		j := i + 1
+		for j < len(params) && !isContentWS(params[j]) && !isContentDelim(params[j]) {
+			j++
+		}
+		key := string(params[i+1 : j])
+		if key != "L" && key != "Length" {
+			continue
+		}
+		// Skip whitespace to the value.
+		for j < len(params) && isContentWS(params[j]) {
+			j++
+		}
+		start := j
+		v := 0
+		for j < len(params) && params[j] >= '0' && params[j] <= '9' {
+			v = v*10 + int(params[j]-'0')
+			j++
+		}
+		if j == start {
+			continue
+		}
+		return v, true
+	}
+	return 0, false
 }
 
 func isContentWS(b byte) bool {

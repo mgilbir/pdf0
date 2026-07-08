@@ -195,6 +195,12 @@ func (d *Document) normalizeStructure() {
 		if stream, ok := iobj.Value.(*Stream); ok {
 			if t, ok := stream.Dict.Get("Type").(Name); ok && (t == "XRef" || t == "ObjStm") {
 				delete(d.Objects, num)
+				// Drop the byte offset too: leaving it in d.Offsets makes the
+				// byte-level file-structure checks treat the removed object's
+				// span as part of the previous surviving object's region,
+				// mis-attributing errors and skipping the last real object's
+				// endobj check (audit C9).
+				delete(d.Offsets, num)
 			}
 		}
 	}

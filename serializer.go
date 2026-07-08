@@ -182,6 +182,12 @@ func (s *Serializer) writeName(n Name) error {
 	}
 	for i := 0; i < len(n); i++ {
 		b := n[i]
+		// A NUL byte cannot appear in a name (ISO 32000-1 7.3.5); emitting
+		// "#00" would produce a name this package's own lexer rejects. Refuse
+		// rather than write unparseable output (audit C31).
+		if b == 0 {
+			return fmt.Errorf("name contains a NUL byte, which cannot be serialized")
+		}
 		// Escape characters that must be hex-encoded in names:
 		// - non-printable, whitespace, delimiters, #
 		if b < '!' || b > '~' || isDelimiter(b) || b == '#' {
