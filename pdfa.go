@@ -482,6 +482,31 @@ func checkMetadataStream(doc *Document, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.2.3: OutputIntents requirements.
+// colourClause returns the ISO clause for a colour-rule concept at the given
+// level. Colour is under 6.2.3.x in ISO 19005-1 but 6.2.4.x in parts 2/3/4, and
+// output intents move from 6.2.2 to 6.2.3; clauses follow the veraPDF profiles.
+func colourClause(concept string, level PDFALevel) string {
+	// [1b, 2b/3b, 4]
+	m := map[string][3]string{
+		"outputIntent": {"6.2.2", "6.2.3", "6.2.3"},
+		"iccBased":     {"6.2.3.2", "6.2.4.2", "6.2.4.2"},
+		"deviceColour": {"6.2.3.3", "6.2.4.3", "6.2.4.3"},
+		"spot":         {"6.2.4.4", "6.2.4.4", "6.2.4.4"},
+	}
+	cl, ok := m[concept]
+	if !ok {
+		return "6.2.4"
+	}
+	switch level {
+	case PDFA1b:
+		return cl[0]
+	case PDFA4:
+		return cl[2]
+	default:
+		return cl[1]
+	}
+}
+
 func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 	catalog := getCatalog(doc)
 	if catalog == nil {
@@ -511,7 +536,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 				sName, _ := resolveName(doc, oiDict.Get("S"))
 				if sName != "GTS_PDFA1" {
 					errsPageLevel = append(errsPageLevel, ValidationError{
-						Rule:    "6.2.3",
+						Rule:    colourClause("outputIntent", level),
 						Level:   level,
 						Message: fmt.Sprintf("page OutputIntents[%d] must have /S /GTS_PDFA1, got /%s", j, string(sName)),
 						Object:  page.objNum,
@@ -529,7 +554,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 	oiObj := doc.Resolve(oiRef)
 	if oiObj == nil {
 		return append(errsPageLevel, ValidationError{
-			Rule:    "6.2.3",
+			Rule:    colourClause("outputIntent", level),
 			Level:   level,
 			Message: "/OutputIntents reference target not found",
 		})
@@ -538,7 +563,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 	arr, ok := oiObj.(Array)
 	if !ok {
 		return append(errsPageLevel, ValidationError{
-			Rule:    "6.2.3",
+			Rule:    colourClause("outputIntent", level),
 			Level:   level,
 			Message: "/OutputIntents must be an array",
 		})
@@ -554,7 +579,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		dict := doc.ResolveDict(elem)
 		if dict == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.3",
+				Rule:    colourClause("outputIntent", level),
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] is not a dictionary", i),
 			})
@@ -564,7 +589,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		s := dict.Get("S")
 		if s == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.3",
+				Rule:    colourClause("outputIntent", level),
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] must have /S", i),
 			})
@@ -573,7 +598,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 
 		if _, ok := s.(Name); !ok {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.3",
+				Rule:    colourClause("outputIntent", level),
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] /S must be a name", i),
 			})
@@ -583,7 +608,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		// /DestOutputProfileRef is not allowed in PDF/A
 		if dict.Get("DestOutputProfileRef") != nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.3",
+				Rule:    colourClause("outputIntent", level),
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] must not have /DestOutputProfileRef", i),
 			})
@@ -596,7 +621,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 			oci := dict.Get("OutputConditionIdentifier")
 			if oci == nil {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.3",
+					Rule:    colourClause("outputIntent", level),
 					Level:   level,
 					Message: fmt.Sprintf("/OutputIntents[%d] must have /DestOutputProfile or /OutputConditionIdentifier", i),
 				})
@@ -628,7 +653,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 			if ok0 && okJ {
 				if ref0.Number != refJ.Number {
 					errs = append(errs, ValidationError{
-						Rule:    "6.2.3",
+						Rule:    colourClause("outputIntent", level),
 						Level:   level,
 						Message: "all output intents with /DestOutputProfile must reference the same ICC profile",
 					})
@@ -647,7 +672,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		sName, _ := resolveName(doc, dict.Get("S"))
 		if sName == "GTS_PDFA1" && dict.Get("DestOutputProfile") == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.3",
+				Rule:    colourClause("outputIntent", level),
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] with /S /GTS_PDFA1 must have /DestOutputProfile", i),
 			})
@@ -694,7 +719,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 		nObj := profStream.Dict.Get("N")
 		if nObj == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.3",
+				Rule:    colourClause("outputIntent", level),
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile must have /N", i),
 			})
@@ -713,7 +738,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 			// a filter array) must not produce a false positive.
 			if streamFiltersSupported(profStream) {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.3",
+					Rule:    colourClause("outputIntent", level),
 					Level:   level,
 					Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data cannot be decoded: %v", i, err),
 				})
@@ -722,7 +747,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 		}
 		if len(data) < 128 {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.3",
+				Rule:    colourClause("outputIntent", level),
 				Level:   level,
 				Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data too short (%d bytes, minimum 128)", i, len(data)),
 			})
@@ -742,14 +767,14 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 			default:
 				// Invalid or unsupported color space in output intent profile
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.3",
+					Rule:    colourClause("outputIntent", level),
 					Level:   level,
 					Message: fmt.Sprintf("/OutputIntents[%d] ICC profile has unsupported color space %q", i, cs),
 				})
 			}
 			if expectedN > 0 && int(nVal) != expectedN {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.3",
+					Rule:    colourClause("outputIntent", level),
 					Level:   level,
 					Message: fmt.Sprintf("/OutputIntents[%d] /N=%d does not match ICC profile color space %s (expected %d)", i, nVal, cs, expectedN),
 				})
@@ -765,7 +790,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 				// OK
 			default:
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.3",
+					Rule:    colourClause("outputIntent", level),
 					Level:   level,
 					Message: fmt.Sprintf("/OutputIntents[%d] ICC profile has invalid device class %q (must be mntr, prtr, or spac)", i, cls),
 				})
@@ -779,7 +804,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 				// PDF/A-1b: ICC profile version must be <= 2.x
 				if major > 2 {
 					errs = append(errs, ValidationError{
-						Rule:    "6.2.3",
+						Rule:    colourClause("outputIntent", level),
 						Level:   level,
 						Message: fmt.Sprintf("/OutputIntents[%d] ICC profile version %d.%d not allowed for PDF/A-1b (max 2.x)", i, major, minor),
 					})
@@ -788,7 +813,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 				// PDF/A-2b/3b: ICC profile version must be <= 4.x
 				if major > 4 {
 					errs = append(errs, ValidationError{
-						Rule:    "6.2.3",
+						Rule:    colourClause("outputIntent", level),
 						Level:   level,
 						Message: fmt.Sprintf("/OutputIntents[%d] ICC profile version %d.%d not allowed for PDF/A-2b/3b (max 4.x)", i, major, minor),
 					})
@@ -3992,7 +4017,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 
 		if usesRGB && !pageRGB && !groupRGB {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    colourClause("deviceColour", level),
 				Level:   level,
 				Message: "DeviceRGB used without matching OutputIntent or DefaultRGB",
 				Object:  page.objNum,
@@ -4001,7 +4026,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 
 		if usesCMYK && !pageCMYK && !groupCMYK {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    colourClause("deviceColour", level),
 				Level:   level,
 				Message: "DeviceCMYK used without matching OutputIntent or DefaultCMYK",
 				Object:  page.objNum,
@@ -4011,7 +4036,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		// DeviceGray: any OutputIntent covers it
 		if usesGray && !pageRGB && !pageCMYK && !pageGray {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    colourClause("deviceColour", level),
 				Level:   level,
 				Message: "DeviceGray used without matching OutputIntent or DefaultGray",
 				Object:  page.objNum,
@@ -5198,7 +5223,7 @@ func checkICCBasedProfiles(doc *Document, level PDFALevel) []ValidationError {
 		// N must be 1, 3, or 4
 		if nVal != 1 && nVal != 3 && nVal != 4 {
 			errs = append(errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    colourClause("iccBased", level),
 				Level:   level,
 				Message: fmt.Sprintf("ICCBased profile /N must be 1, 3, or 4, got %d", nVal),
 				Object:  num,
@@ -5223,7 +5248,7 @@ func checkICCBasedProfiles(doc *Document, level PDFALevel) []ValidationError {
 			}
 			if expectedN > 0 && expectedN != nVal {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.4",
+					Rule:    colourClause("iccBased", level),
 					Level:   level,
 					Message: fmt.Sprintf("ICCBased profile /N=%d does not match ICC color space %q", nVal, cs),
 					Object:  num,
@@ -5381,7 +5406,7 @@ func collectSeparationConsistencySeen(doc *Document, val Object, tintTransforms 
 		sameTint := prev.objNum == tintRef.Number || Equal(doc.Resolve(prev.tint), doc.Resolve(tintRef))
 		if !sameTint {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    colourClause("spot", level),
 				Level:   level,
 				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", string(colorantName), prev.objNum, tintRef.Number),
 				Object:  objNum,
@@ -5389,7 +5414,7 @@ func collectSeparationConsistencySeen(doc *Document, val Object, tintTransforms 
 		}
 		if !Equal(doc.Resolve(prev.alt), doc.Resolve(arr[2])) {
 			*errs = append(*errs, ValidationError{
-				Rule:    "6.2.4",
+				Rule:    colourClause("spot", level),
 				Level:   level,
 				Message: fmt.Sprintf("Separation colorant /%s has inconsistent alternate color spaces", string(colorantName)),
 				Object:  objNum,
@@ -5464,7 +5489,7 @@ func checkColorSpaceValueSeen(doc *Document, csObj Object, objNum int, level PDF
 			// "None" is a special name in PDF 2.0 only
 			if level != PDFA4 {
 				*errs = append(*errs, ValidationError{
-					Rule:    "6.2.4",
+					Rule:    colourClause("spot", level),
 					Level:   level,
 					Message: "Separation colorant name /None is reserved",
 					Object:  objNum,
@@ -5538,7 +5563,7 @@ func checkColorSpaceValueSeen(doc *Document, csObj Object, objNum int, level PDF
 				}
 				if !hasColorants {
 					*errs = append(*errs, ValidationError{
-						Rule:    "6.2.4",
+						Rule:    colourClause("spot", level),
 						Level:   level,
 						Message: "DeviceN color space with spot colorants must have a Colorants dictionary",
 						Object:  objNum,
@@ -6071,7 +6096,7 @@ func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
 			if cmyk := iccCMYKProfile(doc, csVal); cmyk != nil && opm1 {
 				if (stroke && opStroke && usage.paintsStroke) || (!stroke && opFill && usage.paintsFill) {
 					errs = append(errs, ValidationError{
-						Rule:    "6.2.4.2",
+						Rule:    colourClause("iccBased", level),
 						Level:   level,
 						Message: "overprint mode must not be 1 when an ICCBased CMYK colour space is used with overprinting",
 						Object:  page.objNum,

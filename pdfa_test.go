@@ -2036,7 +2036,7 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 	identical.Set("FunctionType", Integer(2))
 	identical.Set("Domain", Array{Integer(0), Integer(1)})
 	identical.Set("N", Integer(1))
-	errs := filterRule(ValidatePDFA(build(identical), PDFA2b), "6.2.4")
+	errs := filterRule(ValidatePDFA(build(identical), PDFA2b), "6.2.4.4")
 	if len(errs) > 0 {
 		t.Errorf("identical tint transforms in different objects must pass, got %v", errs)
 	}
@@ -2045,7 +2045,7 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 	different.Set("FunctionType", Integer(2))
 	different.Set("Domain", Array{Integer(0), Integer(1)})
 	different.Set("N", Integer(2))
-	if !hasRule(ValidatePDFA(build(different), PDFA2b), "6.2.4") {
+	if !hasRule(ValidatePDFA(build(different), PDFA2b), "6.2.4.4") {
 		t.Error("differing tint transforms for the same colorant must be flagged")
 	}
 }
