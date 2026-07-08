@@ -70,6 +70,21 @@ Workflow when your change moves the counts:
 5. Add a unit test, then run `make test-corpus` and follow the ratchet workflow
    above.
 
+## Checking rule coverage
+
+The [veraPDF validation profiles](https://github.com/veraPDF/veraPDF-validation-profiles)
+are a machine-readable inventory of every PDF/A rule the reference validator
+checks (CC BY 4.0, veraPDF Consortium). `make rule-coverage` clones them under
+`spec/` (gitignored) and cross-references them against the rule IDs this
+validator emits, printing the clauses with no matching pdf0 rule. Use it to find
+coverage gaps.
+
+The match is by ISO clause string, so it is approximate: pdf0 emits some rule IDs
+with ISO 19005-2 numbering even at PDF/A-1, so a clause reported as uncovered may
+be implemented under a different number — the printed rule description tells you
+which to check. (The corpus ratchet above is the numbering-agnostic check of
+actual detection.)
+
 ## Style
 
 - `gofmt`-clean, `go vet`-clean.
