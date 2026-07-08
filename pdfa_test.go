@@ -804,7 +804,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 		doc.Objects[10] = &IndirectObject{Number: 10, Value: img}
 
 		errs := ValidatePDFA(doc, PDFA4)
-		if !hasRule(errs, "6.2.7") {
+		if !hasRule(errs, "6.2.7.1") {
 			t.Error("expected 6.2.7 error for /Alternates")
 		}
 	})
@@ -817,7 +817,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 		doc.Objects[10] = &IndirectObject{Number: 10, Value: img}
 
 		errs := ValidatePDFA(doc, PDFA4)
-		if !hasRule(errs, "6.2.7") {
+		if !hasRule(errs, "6.2.7.1") {
 			t.Error("expected 6.2.7 error for /Interpolate true")
 		}
 	})
@@ -830,7 +830,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 		doc.Objects[10] = &IndirectObject{Number: 10, Value: img}
 
 		errs := ValidatePDFA(doc, PDFA4)
-		if !hasRule(errs, "6.2.7") {
+		if !hasRule(errs, "6.2.7.1") {
 			t.Error("expected 6.2.7 error for /OPI")
 		}
 	})

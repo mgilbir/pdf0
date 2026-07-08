@@ -1153,9 +1153,12 @@ func parseInlineImageFilter(data []byte, pos *int) []string {
 // stream with an incorrect Length by locating endstream, so Stream.Data holds
 // the true byte count and a divergence from the declared value is a mismatch.
 func checkStreamLength(doc *Document, level PDFALevel) []ValidationError {
-	rule := "6.1.7"
-	if level == PDFA4 {
-		rule = "6.1.6"
+	rule := "6.1.7" // 6.1.7 in ISO 19005-1
+	switch level {
+	case PDFA4:
+		rule = "6.1.6.1"
+	case PDFA2b, PDFA3b:
+		rule = "6.1.7.1"
 	}
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
@@ -1259,9 +1262,12 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 //     (raw exactly when none is), and only a length outside that range — such as
 //     one that wrongly includes the whole EOL — is a violation.
 func checkStreamLengthBytes(doc *Document, level PDFALevel, raw []byte) []ValidationError {
-	rule := "6.1.7"
-	if level == PDFA4 {
-		rule = "6.1.6"
+	rule := "6.1.7" // 6.1.7 in ISO 19005-1
+	switch level {
+	case PDFA4:
+		rule = "6.1.6.1"
+	case PDFA2b, PDFA3b:
+		rule = "6.1.7.1"
 	}
 	var errs []ValidationError
 	for num, off := range doc.Offsets {

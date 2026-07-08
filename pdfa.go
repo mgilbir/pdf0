@@ -514,10 +514,12 @@ func colourClause(concept string, level PDFALevel) string {
 func annotActionClause(concept string, level PDFALevel) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
-		"subtype":   {"6.5.2", "6.3.1", "6.3.1"},
-		"widget":    {"6.6.2", "6.4.1", "6.4.1"},
-		"forbidden": {"6.6.1", "6.5.1", "6.6.1"},
-		"catalogAA": {"6.6.1", "6.5.2", "6.6.3"},
+		"subtype":    {"6.5.2", "6.3.1", "6.3.1"},
+		"widget":     {"6.6.2", "6.4.1", "6.4.1"},
+		"forbidden":  {"6.6.1", "6.5.1", "6.6.1"},
+		"catalogAA":  {"6.6.1", "6.5.2", "6.6.3"},
+		"flags":      {"6.5.3", "6.3.2", "6.3.2"},
+		"appearance": {"6.5.3", "6.3.3", "6.3.3"},
 	}
 	c, ok := m[concept]
 	if !ok {
@@ -1400,7 +1402,7 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 		fObj := dict.Get("F")
 		if fObj == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.2",
+				Rule:    annotActionClause("flags", level),
 				Level:   level,
 				Message: "annotation must have /F (flags)",
 				Object:  num,
@@ -1422,7 +1424,7 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 
 		if int(flags)&flagPrint == 0 {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.2",
+				Rule:    annotActionClause("flags", level),
 				Level:   level,
 				Message: "annotation /F must have Print bit set",
 				Object:  num,
@@ -1430,7 +1432,7 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 		}
 		if int(flags)&flagHidden != 0 {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.2",
+				Rule:    annotActionClause("flags", level),
 				Level:   level,
 				Message: "annotation /F must not have Hidden bit set",
 				Object:  num,
@@ -1438,7 +1440,7 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 		}
 		if int(flags)&flagInvisible != 0 {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.2",
+				Rule:    annotActionClause("flags", level),
 				Level:   level,
 				Message: "annotation /F must not have Invisible bit set",
 				Object:  num,
@@ -1446,7 +1448,7 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 		}
 		if int(flags)&flagNoView != 0 {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.2",
+				Rule:    annotActionClause("flags", level),
 				Level:   level,
 				Message: "annotation /F must not have NoView bit set",
 				Object:  num,
@@ -1454,7 +1456,7 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 		}
 		if int(flags)&flagToggleNoView != 0 {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.2",
+				Rule:    annotActionClause("flags", level),
 				Level:   level,
 				Message: "annotation /F must not have ToggleNoView bit set",
 				Object:  num,
@@ -1491,7 +1493,7 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 		ap := dict.Get("AP")
 		if ap == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.3",
+				Rule:    annotActionClause("appearance", level),
 				Level:   level,
 				Message: "annotation must have /AP (appearance dictionary)",
 				Object:  num,
@@ -1506,7 +1508,7 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 
 		if apDict.Get("N") == nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.3",
+				Rule:    annotActionClause("appearance", level),
 				Level:   level,
 				Message: "annotation /AP must have /N (normal appearance)",
 				Object:  num,
@@ -1518,7 +1520,7 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 		// are not permitted.
 		if apDict.Get("D") != nil || apDict.Get("R") != nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.3",
+				Rule:    annotActionClause("appearance", level),
 				Level:   level,
 				Message: "annotation appearance dictionary must contain only the /N entry (not /D or /R)",
 				Object:  num,
@@ -1530,7 +1532,7 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 		if st == "Widget" && annotFieldType(doc, dict) == "Btn" {
 			if _, ok := doc.Resolve(apDict.Get("N")).(*Dictionary); !ok {
 				errs = append(errs, ValidationError{
-					Rule:    "6.3.3",
+					Rule:    annotActionClause("appearance", level),
 					Level:   level,
 					Message: "button Widget /AP /N must be an appearance sub-dictionary of states, not a stream",
 					Object:  num,
@@ -2241,6 +2243,29 @@ func collectAllExtGState(doc *Document) []extGStateEntry {
 // --- Image checks (6.2.7) ---
 
 // Rule 6.2.7.1-1: No /Alternates in image XObjects.
+// imageClause returns the ISO clause for an image/XObject-rule concept at the
+// given level. Images are 6.2.4 in ISO 19005-1, 6.2.8.x in parts 2/3, and
+// 6.2.7.x in part 4; clauses follow the veraPDF profiles.
+func imageClause(concept string, level PDFALevel) string {
+	// [1b, 2b/3b, 4]
+	m := map[string][3]string{
+		"image": {"6.2.4", "6.2.8", "6.2.7.1"},
+		"jpx":   {"6.2.4", "6.2.8.3", "6.2.7.3"},
+	}
+	c, ok := m[concept]
+	if !ok {
+		return "6.2.8"
+	}
+	switch level {
+	case PDFA1b:
+		return c[0]
+	case PDFA4:
+		return c[2]
+	default:
+		return c[1]
+	}
+}
+
 func checkNoAlternateImages(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
@@ -2251,7 +2276,7 @@ func checkNoAlternateImages(doc *Document, level PDFALevel) []ValidationError {
 		if st, ok := stream.Dict.Get("Subtype").(Name); ok && st == "Image" {
 			if stream.Dict.Get("Alternates") != nil {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.7",
+					Rule:    imageClause("image", level),
 					Level:   level,
 					Message: "image XObject must not have /Alternates",
 					Object:  num,
@@ -2275,7 +2300,7 @@ func checkInterpolate(doc *Document, level PDFALevel) []ValidationError {
 			if interpObj != nil {
 				if b, ok := interpObj.(Boolean); ok && bool(b) {
 					errs = append(errs, ValidationError{
-						Rule:    "6.2.7",
+						Rule:    imageClause("image", level),
 						Level:   level,
 						Message: "/Interpolate must be false in image XObjects",
 						Object:  num,
@@ -2298,7 +2323,7 @@ func checkNoOPI(doc *Document, level PDFALevel) []ValidationError {
 		if st, ok := stream.Dict.Get("Subtype").(Name); ok && (st == "Image" || st == "Form") {
 			if stream.Dict.Get("OPI") != nil {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.7",
+					Rule:    imageClause("image", level),
 					Level:   level,
 					Message: "XObject must not have /OPI",
 					Object:  num,
@@ -6225,10 +6250,7 @@ func checkJPXImages(doc *Document, level PDFALevel) []ValidationError {
 	if level == PDFA1b {
 		return nil // JPXDecode is forbidden outright at PDF/A-1 (6.1.10)
 	}
-	rule := "6.2.8.3"
-	if level == PDFA4 {
-		rule = "6.2.8"
-	}
+	rule := imageClause("jpx", level)
 
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
