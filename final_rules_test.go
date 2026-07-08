@@ -339,3 +339,21 @@ func TestInheritedPageXObject(t *testing.T) {
 		t.Error("page with own XObject resource must pass")
 	}
 }
+
+// TestA4EConformanceRelaxations checks that PDF/A-4e permits the 3D/RichMedia
+// annotations and 3D/multimedia actions that plain PDF/A-4 forbids.
+func TestA4EConformanceRelaxations(t *testing.T) {
+	// isForbiddenAction: SetOCGState/GoTo3DView allowed only at conformance E.
+	for _, act := range []Name{"SetOCGState", "GoTo3DView"} {
+		if !isForbiddenAction(act, PDFA4, "") {
+			t.Errorf("plain PDF/A-4 should forbid /%s", act)
+		}
+		if isForbiddenAction(act, PDFA4, "E") {
+			t.Errorf("PDF/A-4e should permit /%s", act)
+		}
+	}
+	// SetState/NOP stay forbidden even at 4e.
+	if !isForbiddenAction("SetState", PDFA4, "E") {
+		t.Error("PDF/A-4e must still forbid /SetState")
+	}
+}

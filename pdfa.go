@@ -1297,6 +1297,13 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
+	// PDF/A-4e permits 3D and RichMedia annotations (they carry the embedded
+	// 3D/multimedia content that "e" stands for); plain PDF/A-4 forbids them.
+	extra := map[Name]bool{}
+	if level == PDFA4 && pdfaConformanceFlag(doc) == "E" {
+		extra["3D"] = true
+		extra["RichMedia"] = true
+	}
 
 	var errs []ValidationError
 	check := func(dict *Dictionary, num int) {
@@ -1304,7 +1311,7 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 		if !ok {
 			return
 		}
-		if !allowed[st] {
+		if !allowed[st] && !extra[st] {
 			errs = append(errs, ValidationError{
 				Rule:    "6.3.1",
 				Level:   level,
@@ -1606,7 +1613,7 @@ func checkNeedAppearances(doc *Document, level PDFALevel) []ValidationError {
 
 // Forbidden action types by level per ISO 19005.
 // Rule 6.6.1-1.
-func isForbiddenAction(s Name, level PDFALevel) bool {
+func isForbiddenAction(s Name, level PDFALevel, conformance string) bool {
 	// Universally forbidden across all PDF/A levels:
 	universallyForbidden := map[Name]bool{
 		"Launch":     true,
@@ -1635,7 +1642,12 @@ func isForbiddenAction(s Name, level PDFALevel) bool {
 		}
 		return forbidden123[s]
 	case PDFA4:
-		// PDF/A-4: SetOCGState and GoTo3DView only allowed in 4e (not base 4)
+		// PDF/A-4e permits the 3D/multimedia navigation actions SetOCGState and
+		// GoTo3DView; plain PDF/A-4 forbids them. SetState/NOP (deprecated) stay
+		// forbidden at every part-4 conformance.
+		if conformance == "E" {
+			return s == "SetState" || s == "NOP"
+		}
 		forbidden4 := map[Name]bool{
 			"SetOCGState": true,
 			"GoTo3DView":  true,
@@ -1650,12 +1662,19 @@ func isForbiddenAction(s Name, level PDFALevel) bool {
 func checkNoForbiddenActions(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 
+	// PDF/A-4e relaxes a couple of 3D/multimedia actions; the conformance flag
+	// selects that behaviour. Computed once (it decodes the XMP packet).
+	conformance := ""
+	if level == PDFA4 {
+		conformance = pdfaConformanceFlag(doc)
+	}
+
 	// Check catalog /OpenAction
 	catalog := getCatalog(doc)
 	if catalog != nil {
 		oaRef := catalog.Get("OpenAction")
 		if oaRef != nil {
-			errs = append(errs, checkActionObject(doc, oaRef, 0, level)...)
+			errs = append(errs, checkActionObject(doc, oaRef, 0, level, conformance)...)
 		}
 	}
 
@@ -1668,14 +1687,14 @@ func checkNoForbiddenActions(doc *Document, level PDFALevel) []ValidationError {
 
 		// Check /A (action) in any dictionary
 		if aRef := dict.Get("A"); aRef != nil {
-			errs = append(errs, checkActionObject(doc, aRef, num, level)...)
+			errs = append(errs, checkActionObject(doc, aRef, num, level, conformance)...)
 		}
 
 		// Check if the object itself is an action dict (has /S and /Type=Action or no /Type)
 		if s, ok := dict.Get("S").(Name); ok {
 			typeObj := dict.Get("Type")
 			isAction := typeObj == nil || typeObj == Name("Action")
-			if isAction && isForbiddenAction(s, level) {
+			if isAction && isForbiddenAction(s, level, conformance) {
 				errs = append(errs, ValidationError{
 					Rule:    "6.6.1",
 					Level:   level,
@@ -1691,23 +1710,23 @@ func checkNoForbiddenActions(doc *Document, level PDFALevel) []ValidationError {
 	// indirect /A resolves to a top-level object the scan already covers).
 	for _, a := range collectDirectAnnotations(doc) {
 		if actionDict, ok := a.dict.Get("A").(*Dictionary); ok {
-			errs = append(errs, checkActionObject(doc, actionDict, a.num, level)...)
+			errs = append(errs, checkActionObject(doc, actionDict, a.num, level, conformance)...)
 		}
 	}
 
 	return errs
 }
 
-func checkActionObject(doc *Document, ref Object, objNum int, level PDFALevel) []ValidationError {
+func checkActionObject(doc *Document, ref Object, objNum int, level PDFALevel, conformance string) []ValidationError {
 	var errs []ValidationError
-	checkActionChain(doc, ref, objNum, level, &errs, make(map[*Dictionary]bool))
+	checkActionChain(doc, ref, objNum, level, conformance, &errs, make(map[*Dictionary]bool))
 	return errs
 }
 
 // checkActionChain validates one action dictionary and follows its /Next
 // entry (a single action or an array of actions), which previous versions
 // ignored entirely — a legal action whose /Next launches JavaScript passed.
-func checkActionChain(doc *Document, ref Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[*Dictionary]bool) {
+func checkActionChain(doc *Document, ref Object, objNum int, level PDFALevel, conformance string, errs *[]ValidationError, seen map[*Dictionary]bool) {
 	// ref might be an action dict or an array (for OpenAction destination)
 	actionDict := doc.ResolveDict(ref)
 	if actionDict == nil || seen[actionDict] {
@@ -1715,7 +1734,7 @@ func checkActionChain(doc *Document, ref Object, objNum int, level PDFALevel, er
 	}
 	seen[actionDict] = true
 
-	if s, ok := actionDict.Get("S").(Name); ok && isForbiddenAction(s, level) {
+	if s, ok := actionDict.Get("S").(Name); ok && isForbiddenAction(s, level, conformance) {
 		*errs = append(*errs, ValidationError{
 			Rule:    "6.6.1",
 			Level:   level,
@@ -1726,10 +1745,10 @@ func checkActionChain(doc *Document, ref Object, objNum int, level PDFALevel, er
 
 	switch next := doc.Resolve(actionDict.Get("Next")).(type) {
 	case *Dictionary:
-		checkActionChain(doc, next, objNum, level, errs, seen)
+		checkActionChain(doc, next, objNum, level, conformance, errs, seen)
 	case Array:
 		for _, el := range next {
-			checkActionChain(doc, el, objNum, level, errs, seen)
+			checkActionChain(doc, el, objNum, level, conformance, errs, seen)
 		}
 	}
 }
@@ -3347,8 +3366,16 @@ func checkEmbeddedFileSpecs(doc *Document, level PDFALevel, catalog *Dictionary)
 	// PDF/A-3 and A-4 require embedded files to be associated with the
 	// document or one of its parts via /AF (the corpus fails A-3 files
 	// whose embedded file is associated with nothing). PDF/A-2 has no
-	// association mechanism.
-	if level != PDFA2b && documentHasEmbeddedFiles(doc, catalog) && !documentHasAF(doc) {
+	// association mechanism. PDF/A-4f and -4e exist to carry embedded files
+	// (arbitrary files; 3D/RichMedia content) and associate them per-filespec
+	// via /AFRelationship rather than a document-level /AF array, so the
+	// document-/AF requirement is relaxed for both.
+	conformance := ""
+	if level == PDFA4 {
+		conformance = pdfaConformanceFlag(doc)
+	}
+	relaxAF := conformance == "F" || conformance == "E"
+	if level != PDFA2b && !relaxAF && documentHasEmbeddedFiles(doc, catalog) && !documentHasAF(doc) {
 		errs = append(errs, ValidationError{
 			Rule:    rule,
 			Level:   level,
