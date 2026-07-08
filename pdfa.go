@@ -2352,6 +2352,30 @@ func checkInterpolate(doc *Document, level PDFALevel) []ValidationError {
 }
 
 // Rules 6.2.7.1-2, 6.2.8.1-1: No /OPI in XObjects.
+// xobjectClause returns the ISO clause for a form-XObject rule at the given
+// level. A form XObject must not carry OPI/Subtype2/PS, and reference XObjects
+// (a /Ref key) are forbidden outright. ISO 19005-1 6.2.4/6.2.6; -2/-3 6.2.9;
+// -4 6.2.8.1/6.2.8.2. Clauses follow the veraPDF profiles.
+func xobjectClause(concept string, level PDFALevel) string {
+	// [1b, 2b/3b, 4]
+	m := map[string][3]string{
+		"formMisc": {"6.2.4", "6.2.9", "6.2.8.1"}, // OPI / Subtype2 / PS on a form
+		"refXObj":  {"6.2.6", "6.2.9", "6.2.8.2"}, // reference XObjects
+	}
+	c, ok := m[concept]
+	if !ok {
+		return "6.2.9"
+	}
+	switch level {
+	case PDFA1b:
+		return c[0]
+	case PDFA4:
+		return c[2]
+	default:
+		return c[1]
+	}
+}
+
 func checkNoOPI(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
@@ -2359,14 +2383,28 @@ func checkNoOPI(doc *Document, level PDFALevel) []ValidationError {
 		if !ok {
 			continue
 		}
-		if st, ok := stream.Dict.Get("Subtype").(Name); ok && (st == "Image" || st == "Form") {
+		st, ok := stream.Dict.Get("Subtype").(Name)
+		if !ok {
+			continue
+		}
+		add := func(rule, msg string) {
+			errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: num})
+		}
+		switch st {
+		case "Image":
 			if stream.Dict.Get("OPI") != nil {
-				errs = append(errs, ValidationError{
-					Rule:    imageClause("image", level),
-					Level:   level,
-					Message: "XObject must not have /OPI",
-					Object:  num,
-				})
+				add(imageClause("image", level), "image XObject must not have /OPI")
+			}
+		case "Form":
+			// 6.2.9 (parts 2/3) / 6.2.8.1 (part 4): a form XObject shall not
+			// contain the OPI key. (Subtype2/PS PostScript XObjects are handled
+			// under the executed-content model in content_operators.go.)
+			if stream.Dict.Get("OPI") != nil {
+				add(xobjectClause("formMisc", level), "form XObject must not have /OPI")
+			}
+			// Reference XObjects (a /Ref key) are forbidden outright.
+			if stream.Dict.Get("Ref") != nil {
+				add(xobjectClause("refXObj", level), "form XObject must not be a reference XObject (/Ref)")
 			}
 		}
 	}
