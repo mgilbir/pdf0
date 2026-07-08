@@ -214,3 +214,24 @@ func TestParseCIDWidths(t *testing.T) {
 		t.Error("CID3 should be unset")
 	}
 }
+
+// TestTrueTypeEncodingAt1b ensures the TrueType encoding rules apply at
+// PDF/A-1b (ISO 19005-1 6.3.7): symbolic fonts must not carry an Encoding.
+func TestTrueTypeEncodingAt1b(t *testing.T) {
+	fd := &Dictionary{}
+	fd.Set("Flags", Integer(4)) // symbolic
+	font := &Dictionary{}
+	font.Set("Subtype", Name("TrueType"))
+	font.Set("FontDescriptor", fd)
+	font.Set("Encoding", Name("WinAnsiEncoding")) // forbidden on a symbolic TT font
+	doc := &Document{Objects: map[int]*IndirectObject{1: {Number: 1, Value: font}}}
+	u := &fontTextUsage{objNum: 1}
+	if got := len(checkTrueTypeEncoding(doc, PDFA1b, "6.3", font, u)); got == 0 {
+		t.Error("symbolic TrueType /Encoding not flagged at 1b")
+	}
+	// A non-symbolic font with WinAnsiEncoding is fine.
+	fd.Set("Flags", Integer(32))
+	if got := len(checkTrueTypeEncoding(doc, PDFA1b, "6.3", font, u)); got != 0 {
+		t.Errorf("non-symbolic TrueType with WinAnsiEncoding wrongly flagged at 1b: %d", got)
+	}
+}

@@ -655,7 +655,7 @@ func hasForbiddenUnicodeTargets(doc *Document, stream *Stream) bool {
 // Adobe Glyph List.
 func checkTrueTypeEncoding(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
 	if level == PDFA1b {
-		return nil
+		rule = "6.3.7" // ISO 19005-1 clause for TrueType character encodings
 	}
 	var errs []ValidationError
 	bad := func(format string, args ...interface{}) {
