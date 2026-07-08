@@ -1276,6 +1276,82 @@ func TestCorpusIsartor(t *testing.T) {
 	}
 }
 
+// TestCorpusConformanceSuites ratchets the FAIL files of the remaining
+// conformance suites that TestCorpus does not cover, guarding detection from
+// regressing across the whole corpus.
+//
+// It deliberately counts only fail files. The pass files of these suites cannot
+// be ratcheted at FP=0: they are minimal per-clause fixtures (a "1a-pass" file
+// passes the one accessibility clause it targets but is not a complete 1b
+// document), and the 4e/4f feature relaxations (embedded 3D/RichMedia,
+// arbitrary embedded files) are not modelled — so validating their pass files
+// yields expected false positives. Baking those in would lower the FP=0 bar.
+//
+// A further caveat: many of these fail files are caught incidentally (they trip
+// an implemented PDF/A rule unrelated to the clause they were built for, and
+// PDF/UA is a different standard entirely). This is a regression net, not a
+// claim of 1a/2a/2u/UA conformance coverage — that needs new rule families.
+func TestCorpusConformanceSuites(t *testing.T) {
+	corpusDir := os.Getenv("VERAPDF_CORPUS")
+	if corpusDir == "" {
+		corpusDir = "testdata/verapdf-corpus"
+	}
+	if _, err := os.Stat(corpusDir); os.IsNotExist(err) {
+		t.Skip("veraPDF corpus not found; run `make corpus` to download")
+	}
+
+	suites := []struct {
+		dir       string
+		level     PDFALevel
+		maxMissed int
+	}{
+		{"PDF_A-1a", PDFA1b, 0},
+		{"PDF_A-2a", PDFA2b, 0},
+		{"PDF_A-2u", PDFA2b, 0},
+		{"PDF_A-4f", PDFA4, 2}, // needs the A-4f arbitrary-embed relaxation
+		{"PDF_A-4e", PDFA4, 1}, // needs the A-4e 3D/RichMedia relaxation
+		{"PDF_UA-1", PDFA2b, 0},
+		{"PDF_UA-2", PDFA4, 0},
+	}
+
+	for _, s := range suites {
+		root := filepath.Join(corpusDir, s.dir)
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue
+		}
+		var fail, missed, parseErrors int
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
+				return nil
+			}
+			if !strings.Contains(filepath.Base(path), "-fail-") {
+				return nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil
+			}
+			doc, e := Read(bytes.NewReader(data), int64(len(data)))
+			if e != nil {
+				parseErrors++
+				return nil
+			}
+			fail++
+			if len(ValidatePDFABytes(doc, s.level, data)) == 0 {
+				missed++
+			}
+			return nil
+		})
+		t.Logf("%-10s @ %-8v : fail=%d missed=%d parseErrors=%d", s.dir, s.level, fail, missed, parseErrors)
+		if missed > s.maxMissed {
+			t.Errorf("%s: missed %d exceed baseline %d (detection regressed)", s.dir, missed, s.maxMissed)
+		}
+		if parseErrors > 0 {
+			t.Errorf("%s: parse errors %d exceed baseline 0 (regression)", s.dir, parseErrors)
+		}
+	}
+}
+
 func TestCorpus(t *testing.T) {
 	corpusDir := os.Getenv("VERAPDF_CORPUS")
 	if corpusDir == "" {
