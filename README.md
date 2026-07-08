@@ -75,7 +75,12 @@ gofmt -l .             # should print nothing
 
 The default `go test ./...` runs the parser/serializer/validator unit tests and
 the PDF 1.7 / 2.0 spec-example tests (the spec examples are committed as JSON
-under `testdata/`).
+under `testdata/`). The round-trip tests need reference PDFs that are not
+committed; fetch them with `make refpdfs` (they self-skip when absent).
+
+For how the code is structured, see [docs/architecture.md](docs/architecture.md);
+for the corpus-ratchet workflow and how to add a rule, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## PDF/A conformance corpus
 
@@ -100,8 +105,8 @@ This is a young library. What works:
 - Object streams (`/Type /ObjStm`) and cross-reference streams, including the
   PNG/TIFF `/Predictor` filters, are read.
 - The reader recovers from common malformations (wrong stream `/Length`,
-  offset-shifted xref, broken object streams) and never panics on adversarial
-  input.
+  offset-shifted xref, broken object streams) and converts any panic into an
+  error rather than crashing on adversarial input.
 
 Known limitations:
 
@@ -116,7 +121,9 @@ Known limitations:
   and no parse errors (tracked by `TestCorpus`), but coverage beyond the corpus
   is not guaranteed — an empty validation result is not a conformance guarantee.
 
-See `docs/audits/` for the detailed audit history.
+See [`docs/audits/`](docs/audits/README.md) for the audit history (point-in-time
+findings, not a description of how the code works — for that see
+[docs/architecture.md](docs/architecture.md)).
 
 ## Layout
 
