@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -39,11 +40,11 @@ func TestDeviceColorInFormBody(t *testing.T) {
 
 	// Invoked: DeviceCMYK without CMYK intent coverage must be flagged
 	// (NewPDFADocument embeds an RGB output intent).
-	if !hasRule(ValidatePDFA(build("q /X0 Do Q"), PDFA2b), "6.2.4") {
+	if !hasRule(ValidatePDFA(build("q /X0 Do Q"), PDFA2b), "6.2.4.3") {
 		t.Error("DeviceCMYK inside an invoked form must be flagged")
 	}
 	// Referenced but never invoked: executed-content model, no violation.
-	if hasRule(ValidatePDFA(build("q 0.1 0.2 0.3 rg 0 0 5 5 re f Q"), PDFA2b), "6.2.4") {
+	if hasRule(ValidatePDFA(build("q 0.1 0.2 0.3 rg 0 0 5 5 re f Q"), PDFA2b), "6.2.4.3") {
 		t.Error("a form that is never invoked must not be flagged")
 	}
 }
@@ -52,7 +53,7 @@ func TestDeviceColorInFormBody(t *testing.T) {
 func TestDeviceColorViaCSOperator(t *testing.T) {
 	doc := NewPDFADocument(PDFA2b)
 	pageWithContent(doc, "/DeviceCMYK cs 0 0 0 1 sc 0 0 5 5 re f", nil)
-	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.2.4") {
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.2.4.3") {
 		t.Error("device colour selected via cs operator must be detected")
 	}
 }
@@ -91,10 +92,10 @@ func TestDefaultColorSpaceScope(t *testing.T) {
 		return doc
 	}
 
-	if !hasRule(ValidatePDFA(build(false), PDFA2b), "6.2.4") {
+	if !hasRule(ValidatePDFA(build(false), PDFA2b), "6.2.4.3") {
 		t.Error("page-level DefaultCMYK must not cover device colour inside a pattern")
 	}
-	if hasRule(ValidatePDFA(build(true), PDFA2b), "6.2.4") {
+	if hasRule(ValidatePDFA(build(true), PDFA2b), "6.2.4.3") {
 		t.Error("the pattern's own DefaultCMYK must cover its device colour")
 	}
 }
@@ -159,13 +160,23 @@ func TestICCCMYKOverprint(t *testing.T) {
 		pageWithContent(doc, "/GS0 gs /CS0 CS 0 0 0 1 SCN 0 0 5 5 re "+paint, res)
 		return doc
 	}
-	if !hasRule(ValidatePDFA(build(true, "S"), PDFA2b), "6.2.4.2") {
+	// ICC-profile validity and overprint share clause 6.2.4.2 (different tests),
+	// so match the overprint rule by its message to isolate it.
+	hasOverprint := func(errs []ValidationError) bool {
+		for _, e := range errs {
+			if e.Rule == "6.2.4.2" && strings.Contains(e.Message, "overprint") {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasOverprint(ValidatePDFA(build(true, "S"), PDFA2b)) {
 		t.Error("OPM=1 + OP + stroked ICC CMYK must be flagged")
 	}
-	if hasRule(ValidatePDFA(build(false, "S"), PDFA2b), "6.2.4.2") {
+	if hasOverprint(ValidatePDFA(build(false, "S"), PDFA2b)) {
 		t.Error("without overprinting there is no violation")
 	}
-	if hasRule(ValidatePDFA(build(true, "f"), PDFA2b), "6.2.4.2") {
+	if hasOverprint(ValidatePDFA(build(true, "f"), PDFA2b)) {
 		t.Error("stroke CS that never strokes must not be flagged")
 	}
 }
@@ -227,7 +238,7 @@ func TestDeviceAlternateNeedsCoverage(t *testing.T) {
 	res := &Dictionary{}
 	res.Set("ColorSpace", csDict)
 	pageWithContent(doc, "/CS0 cs 1 sc 0 0 5 5 re f", res)
-	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.2.4") {
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.2.4.3") {
 		t.Error("DeviceCMYK alternate without CMYK intent must be flagged")
 	}
 }
