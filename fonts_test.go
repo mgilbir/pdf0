@@ -180,15 +180,15 @@ func TestCIDToGIDMapRule(t *testing.T) {
 		return doc, font, &fontTextUsage{objNum: 9, modes: map[int]bool{0: true}}
 	}
 	doc, font, u := mkFont(nil)
-	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11") {
+	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
 		t.Error("missing CIDToGIDMap must be flagged")
 	}
 	doc, font, u = mkFont(Name("Custom"))
-	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11") {
+	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
 		t.Error("non-Identity CIDToGIDMap name must be flagged")
 	}
 	doc, font, u = mkFont(Name("Identity"))
-	if hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11") {
+	if hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
 		t.Error("Identity CIDToGIDMap must pass")
 	}
 }

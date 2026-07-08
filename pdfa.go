@@ -1103,7 +1103,7 @@ func checkOneFontEmbedded(doc *Document, fontDict *Dictionary, objNum int, level
 
 	if fdRef == nil {
 		return []ValidationError{{
-			Rule:    "6.2.10",
+			Rule:    fontClause("embed", level),
 			Level:   level,
 			Message: "font must have a /FontDescriptor",
 			Object:  objNum,
@@ -1113,7 +1113,7 @@ func checkOneFontEmbedded(doc *Document, fontDict *Dictionary, objNum int, level
 	fd := doc.ResolveDict(fdRef)
 	if fd == nil {
 		return []ValidationError{{
-			Rule:    "6.2.10",
+			Rule:    fontClause("embed", level),
 			Level:   level,
 			Message: "/FontDescriptor reference not found",
 			Object:  objNum,
@@ -1132,7 +1132,7 @@ func checkOneFontEmbedded(doc *Document, fontDict *Dictionary, objNum int, level
 		baseFontName = string(bn)
 	}
 	return []ValidationError{{
-		Rule:    "6.2.10",
+		Rule:    fontClause("embed", level),
 		Level:   level,
 		Message: fmt.Sprintf("font %s must be embedded (no FontFile/FontFile2/FontFile3 in descriptor)", baseFontName),
 		Object:  objNum,
@@ -2321,7 +2321,7 @@ func checkFontSubsets(doc *Document, level PDFALevel) []ValidationError {
 			fd := getFontDescriptor(doc, fontDict)
 			if fd != nil && fd.Get("CharSet") == nil {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.10",
+					Rule:    fontClause("charSet", level),
 					Level:   level,
 					Message: fmt.Sprintf("subset font %s (Type1) must have /CharSet in FontDescriptor", baseFontStr),
 					Object:  objNum,
@@ -2348,7 +2348,7 @@ func checkFontSubsets(doc *Document, level PDFALevel) []ValidationError {
 			fd := doc.ResolveDict(fdRef)
 			if fd != nil && fd.Get("CIDSet") == nil {
 				errs = append(errs, ValidationError{
-					Rule:    "6.2.10",
+					Rule:    fontClause("charSet", level),
 					Level:   level,
 					Message: fmt.Sprintf("subset CIDFont %s must have /CIDSet in FontDescriptor", baseFontStr),
 					Object:  objNum,
