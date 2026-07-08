@@ -965,7 +965,21 @@ func checkPermsDict(doc *Document, level PDFALevel) []ValidationError {
 
 // --- Stream checks (6.1.6) ---
 
-// Rule 6.1.6.2-1: LZWDecode prohibited in all PDF/A levels.
+// filterClause returns the stream-filter rule's ISO clause for the level: only
+// the standard filters (Table 6) are permitted, so LZWDecode and any
+// non-standard name are rejected. ISO 19005-1 6.1.10; -2/-3 6.1.7.2; -4 6.1.6.2.
+func filterClause(level PDFALevel) string {
+	switch level {
+	case PDFA1b:
+		return "6.1.10"
+	case PDFA4:
+		return "6.1.6.2"
+	default:
+		return "6.1.7.2"
+	}
+}
+
+// Rule: only the standard stream filters may be used; LZWDecode is prohibited.
 func checkNoLZW(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
@@ -975,7 +989,7 @@ func checkNoLZW(doc *Document, level PDFALevel) []ValidationError {
 		}
 		if hasFilter(stream, "LZWDecode") {
 			errs = append(errs, ValidationError{
-				Rule:    "6.1.6",
+				Rule:    filterClause(level),
 				Level:   level,
 				Message: "stream must not use /LZWDecode filter",
 				Object:  num,
@@ -984,7 +998,7 @@ func checkNoLZW(doc *Document, level PDFALevel) []ValidationError {
 		// Check for non-standard filter names
 		if badFilter := getNonStandardFilter(stream); badFilter != "" {
 			errs = append(errs, ValidationError{
-				Rule:    "6.1.6",
+				Rule:    filterClause(level),
 				Level:   level,
 				Message: fmt.Sprintf("stream uses non-standard filter /%s", badFilter),
 				Object:  num,
