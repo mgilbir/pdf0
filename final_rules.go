@@ -15,18 +15,21 @@ import (
 // PDF/A-4: alternate presentations, page presentation steps, and the
 // Requirements dictionary (ISO 19005-4 6.11, 6.12).
 func checkProhibitedCatalogEntries(doc *Document, level PDFALevel) []ValidationError {
-	if level != PDFA4 {
-		return nil
+	if level == PDFA1b {
+		return nil // 6.11 / 6.12 are clauses of ISO 19005 parts 2 and later
 	}
 	catalog := getCatalog(doc)
 	if catalog == nil {
 		return nil
 	}
 	var errs []ValidationError
-	if catalog.Get("Requirements") != nil {
+	// 6.12 (embedded-file requirements) applies only to PDF/A-4.
+	if level == PDFA4 && catalog.Get("Requirements") != nil {
 		errs = append(errs, ValidationError{Rule: "6.12", Level: level,
 			Message: "document catalog must not contain a /Requirements entry"})
 	}
+	// 6.11 forbids alternate presentations at PDF/A-2, -3, and -4 (ISO 19005-2/-3
+	// 6.11, 19005-4 6.11), not only A-4.
 	if names := doc.ResolveDict(catalog.Get("Names")); names != nil {
 		if names.Get("AlternatePresentations") != nil {
 			errs = append(errs, ValidationError{Rule: "6.11", Level: level,

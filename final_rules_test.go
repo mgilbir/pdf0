@@ -32,6 +32,25 @@ func TestProhibitedCatalogEntries(t *testing.T) {
 	}), PDFA2b)); got != 0 {
 		t.Errorf("6.12 /Requirements must not be flagged at PDF/A-2b, got %d errors", got)
 	}
+	// 6.11 (AlternatePresentations / PresSteps) DOES apply at 2b and 3b.
+	for _, lvl := range []PDFALevel{PDFA2b, PDFA3b} {
+		altDoc := mk(func(c *Dictionary, d *Document) {
+			names := &Dictionary{}
+			names.Set("AlternatePresentations", &Dictionary{})
+			c.Set("Names", names)
+		})
+		if !hasRuleMsg(checkProhibitedCatalogEntries(altDoc, lvl), "6.11") {
+			t.Errorf("AlternatePresentations must be flagged at %s", lvl)
+		}
+	}
+	// 1b does not use these clauses.
+	if got := len(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
+		names := &Dictionary{}
+		names.Set("AlternatePresentations", &Dictionary{})
+		c.Set("Names", names)
+	}), PDFA1b)); got != 0 {
+		t.Errorf("6.11 must not be applied at PDF/A-1b, got %d errors", got)
+	}
 }
 
 func TestFileTrailerID(t *testing.T) {
