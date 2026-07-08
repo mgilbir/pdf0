@@ -81,6 +81,15 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 		walkExecutedContent(doc, page.dict, data, page.objNum, seenContainer, add)
 	}
 
+	// Annotation appearance streams (their /AP /N) are executed content too:
+	// an operator not defined in the PDF imaging model is equally forbidden
+	// there (ISO 19005-1 6.2.10; Isartor 6.2.10-t01-fail-c).
+	for _, ap := range collectAppearanceStreams(doc) {
+		if data := decodeContentStream(doc, ap.stream); data != nil {
+			checkContentTokens(data, doc.ResolveDict(ap.stream.Dict.Get("Resources")), doc, ap.objNum, add)
+		}
+	}
+
 	// Type 3 font glyph procedures are content streams whose named resources
 	// must resolve in the Type 3 font's own /Resources — not inherited from
 	// the page (ISO 19005 6.2.2; a glyph proc that references a colour space
@@ -103,6 +112,46 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 		}
 	}
 	return errs
+}
+
+// appearanceStream pairs an annotation appearance stream with the object number
+// to attribute its violations to.
+type appearanceStream struct {
+	stream *Stream
+	objNum int
+}
+
+// collectAppearanceStreams gathers the normal-appearance (/AP /N) streams of
+// every annotation, following the button-widget form where /N is a
+// sub-dictionary of appearance-state streams.
+func collectAppearanceStreams(doc *Document) []appearanceStream {
+	var out []appearanceStream
+	add := func(n Object, objNum int) {
+		switch v := doc.Resolve(n).(type) {
+		case *Stream:
+			out = append(out, appearanceStream{stream: v, objNum: objNum})
+		case *Dictionary:
+			for _, sv := range v.Values {
+				if s, ok := doc.Resolve(sv).(*Stream); ok {
+					out = append(out, appearanceStream{stream: s, objNum: objNum})
+				}
+			}
+		}
+	}
+	visit := func(annot *Dictionary, num int) {
+		if ap := doc.ResolveDict(annot.Get("AP")); ap != nil {
+			add(ap.Get("N"), num)
+		}
+	}
+	for num, iobj := range doc.Objects {
+		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
+			visit(dict, num)
+		}
+	}
+	for _, a := range collectDirectAnnotations(doc) {
+		visit(a.dict, a.num)
+	}
+	return out
 }
 
 // walkExecutedContent validates a content stream and recurses into the form

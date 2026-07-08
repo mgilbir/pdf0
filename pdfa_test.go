@@ -1160,8 +1160,9 @@ const (
 	// rule. (18 originally; 16 after the transparency fix; 13 after enabling the
 	// XMP packet-header / well-formedness rules at PDF/A-1b; 11 after enabling
 	// the TrueType-encoding rule at 1b; 8 after flagging damaged embedded font
-	// programs; 7 after the symbolic-TrueType single-cmap rule.)
-	corpusMaxIsartorMissed = 7
+	// programs; 7 after the symbolic-TrueType single-cmap rule; 6 after
+	// scanning annotation appearance streams for undefined operators.)
+	corpusMaxIsartorMissed = 6
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
