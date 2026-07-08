@@ -8,10 +8,17 @@ import (
 	"strings"
 )
 
+// maxSerializeDepth bounds recursion through nested arrays/dictionaries so a
+// cyclic direct object cannot exhaust the goroutine stack (an unrecoverable
+// fatal error). The parser cannot build such cycles, but Dictionary fields are
+// exported and callers construct object graphs programmatically.
+const maxSerializeDepth = 1000
+
 // Serializer writes PDF objects to an io.Writer.
 type Serializer struct {
 	w      io.Writer
 	offset int64 // tracks byte offset for xref generation
+	depth  int   // current nesting depth (arrays/dictionaries/streams)
 }
 
 // NewSerializer creates a new Serializer writing to w.
@@ -36,6 +43,12 @@ func (s *Serializer) writeString(str string) error {
 
 // WriteObject writes any PDF object to the output.
 func (s *Serializer) WriteObject(obj Object) error {
+	if s.depth > maxSerializeDepth {
+		return fmt.Errorf("maximum nesting depth %d exceeded (cyclic object graph?)", maxSerializeDepth)
+	}
+	s.depth++
+	defer func() { s.depth-- }()
+
 	switch v := obj.(type) {
 	case Boolean:
 		return s.writeBoolean(v)
@@ -50,12 +63,21 @@ func (s *Serializer) WriteObject(obj Object) error {
 	case Array:
 		return s.writeArray(v)
 	case *Dictionary:
+		if v == nil {
+			return fmt.Errorf("cannot serialize a nil *Dictionary")
+		}
 		return s.writeDictionary(v)
 	case *Stream:
+		if v == nil {
+			return fmt.Errorf("cannot serialize a nil *Stream")
+		}
 		return s.writeStream(v)
 	case Null:
 		return s.writeString("null")
 	case *IndirectObject:
+		if v == nil {
+			return fmt.Errorf("cannot serialize a nil *IndirectObject")
+		}
 		return s.WriteIndirectObject(v)
 	case IndirectRef:
 		return s.writeIndirectRef(v)
