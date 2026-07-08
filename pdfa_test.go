@@ -222,8 +222,8 @@ func TestValidatePDFA_CatalogAA(t *testing.T) {
 		catalog.Set("AA", &Dictionary{})
 
 		errs := ValidatePDFA(doc, PDFA2b)
-		if !hasRule(errs, "6.6.1") {
-			t.Error("expected 6.6.1 error for /AA in catalog")
+		if !hasRule(errs, "6.5.2") {
+			t.Error("expected 6.5.2 error for /AA in catalog")
 		}
 	})
 
@@ -232,7 +232,7 @@ func TestValidatePDFA_CatalogAA(t *testing.T) {
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("AA", &Dictionary{})
 
-		errs := filterRule(ValidatePDFA(doc, PDFA4), "6.6.1")
+		errs := filterRule(ValidatePDFA(doc, PDFA4), "6.6.3")
 		if len(errs) > 0 {
 			t.Error("PDF/A-4 should allow /AA in catalog")
 		}
@@ -357,7 +357,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			doc.Objects[10] = &IndirectObject{Number: 10, Value: annot}
 
 			errs := ValidatePDFA(doc, tt.level)
-			if !hasRule(errs, "6.3.1") {
+			if !hasRule(errs, annotActionClause("subtype", tt.level)) {
 				t.Errorf("expected 6.3.1 error for forbidden subtype /%s", tt.subtype)
 			}
 		})
@@ -415,7 +415,7 @@ func TestValidatePDFA_ForbiddenActions(t *testing.T) {
 			}
 			doc.Objects[10] = &IndirectObject{Number: 10, Value: action}
 
-			errs := filterRule(ValidatePDFA(doc, PDFA4), "6.6.1")
+			errs := filterRule(ValidatePDFA(doc, PDFA4), "6.6.3")
 			if len(errs) > 0 {
 				t.Errorf("action /%s should be allowed in PDF/A-4, got: %v", s, errs[0])
 			}
@@ -458,7 +458,7 @@ func TestValidatePDFA_NamedActions(t *testing.T) {
 			action.Set("N", name)
 			doc.Objects[10] = &IndirectObject{Number: 10, Value: action}
 
-			errs := filterRule(ValidatePDFA(doc, PDFA4), "6.6.1")
+			errs := filterRule(ValidatePDFA(doc, PDFA4), "6.6.3")
 			if len(errs) > 0 {
 				t.Errorf("named action /%s should be allowed", name)
 			}
@@ -1950,7 +1950,7 @@ func TestValidatePDFA_DirectAnnotationForbiddenAction(t *testing.T) {
 	page.Set("Annots", Array{annot})
 
 	errs := ValidatePDFA(doc, PDFA2b)
-	if !hasRule(errs, "6.6.1") {
+	if !hasRule(errs, "6.5.1") {
 		t.Errorf("expected 6.6.1 error for direct annotation's Launch action, got %v", errs)
 	}
 }
@@ -2107,7 +2107,7 @@ func TestValidatePDFA_ActionNextChain(t *testing.T) {
 	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 	catalog.Set("OpenAction", action)
 
-	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.1") {
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.5.1") {
 		t.Error("expected 6.6.1 error for Launch action in /Next chain")
 	}
 
@@ -2126,7 +2126,7 @@ func TestValidatePDFA_PageAA(t *testing.T) {
 	doc := NewPDFADocument(PDFA2b)
 	page := addTestPage(doc)
 	page.Set("AA", &Dictionary{})
-	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.2") {
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.5.2") {
 		t.Error("expected 6.6.2 error for page /AA")
 	}
 }
