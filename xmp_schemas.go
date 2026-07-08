@@ -933,11 +933,28 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 		}
 	}
 
-	requireFields := func(what string, v xmpValue, ns string, required []string) map[string]xmpValue {
+	// undefinedFieldsRule is the clause for an extension-schema object carrying a
+	// field not defined by the spec (ISO 19005-1 6.7.8; -2/-3 6.6.2.3.2).
+	undefinedFieldsRule := "6.7.8"
+	if level == PDFA2b || level == PDFA3b {
+		undefinedFieldsRule = "6.6.2.3.2"
+	}
+	requireFields := func(what string, v xmpValue, ns string, required, optional []string) map[string]xmpValue {
 		got := make(map[string]xmpValue)
+		allowed := make(map[string]bool)
+		for _, name := range required {
+			allowed[name] = true
+		}
+		for _, name := range optional {
+			allowed[name] = true
+		}
 		for _, f := range v.Fields {
 			if f.NS == ns {
 				got[f.Name] = f.Value
+				if !allowed[f.Name] {
+					errs = append(errs, ValidationError{Rule: undefinedFieldsRule, Level: level,
+						Message: fmt.Sprintf("extension schema %s contains undefined field %s", what, f.Name)})
+				}
 			}
 		}
 		for _, name := range required {
@@ -962,7 +979,7 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 				continue
 			}
 			fields := requireFields("schema description", schema, nsPDFASchema,
-				[]string{"schema", "namespaceURI", "prefix"})
+				[]string{"schema", "namespaceURI", "prefix"}, []string{"property", "valueType"})
 
 			if propSeq, ok := fields["property"]; ok {
 				if propSeq.Kind != xmpSeq {
@@ -974,7 +991,7 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 							continue
 						}
 						got := requireFields("property definition", prop, nsPDFAProperty,
-							[]string{"name", "valueType", "category", "description"})
+							[]string{"name", "valueType", "category", "description"}, nil)
 						if cat, ok := got["category"]; ok && cat.Text != "internal" && cat.Text != "external" {
 							report("pdfaProperty:category must be internal or external, got %q", cat.Text)
 						}
@@ -1006,7 +1023,7 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 						continue
 					}
 					vtFields := requireFields("value type definition", vt, nsPDFAType,
-						[]string{"type", "namespaceURI", "prefix", "description"})
+						[]string{"type", "namespaceURI", "prefix", "description"}, []string{"field"})
 					if fieldSeq, ok := vtFields["field"]; ok {
 						if fieldSeq.Kind != xmpSeq {
 							report("pdfaType:field must be a Seq, got %s", fieldSeq.Kind)
@@ -1017,8 +1034,7 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 								report("pdfaType:field entries must be structures, got %s", fld.Kind)
 								continue
 							}
-							fFields := requireFields("field definition", fld, nsPDFAField,
-								[]string{"name", "valueType", "description"})
+							fFields := requireFields("field definition", fld, nsPDFAField, []string{"name", "valueType", "description"}, nil)
 							// A field's value type must be a standard XMP type
 							// or a custom type this schema declares; otherwise
 							// the referenced type has no definition (ISO 19005-1

@@ -211,6 +211,24 @@ func TestValidatePDFA_XMPExtensionSchema(t *testing.T) {
 	}
 }
 
+// 6.6.2.3.2: an extension schema object must not carry a field the spec does
+// not define.
+func TestValidatePDFA_XMPUndefinedField(t *testing.T) {
+	withExtra := strings.Replace(extSchemaOK, "<pdfaSchema:prefix>ex</pdfaSchema:prefix>",
+		"<pdfaSchema:prefix>ex</pdfaSchema:prefix><pdfaSchema:bogus>x</pdfaSchema:bogus>", 1)
+	doc := NewPDFADocument(PDFA2b)
+	setDocXMP(doc, xmpWithPDFAID(PDFA2b, withExtra))
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.2.3.2") {
+		t.Error("undefined pdfaSchema field must be flagged as 6.6.2.3.2")
+	}
+	// The unmodified schema must stay clean.
+	clean := NewPDFADocument(PDFA2b)
+	setDocXMP(clean, xmpWithPDFAID(PDFA2b, extSchemaOK))
+	if hasRule(ValidatePDFA(clean, PDFA2b), "6.6.2.3.2") {
+		t.Error("a well-formed extension schema must not be flagged")
+	}
+}
+
 func TestValidatePDFA_XMPExtensionContainerRules(t *testing.T) {
 	// Missing pdfaSchema:prefix.
 	missingPrefix := strings.Replace(extSchemaOK, "<pdfaSchema:prefix>ex</pdfaSchema:prefix>", "", 1)
