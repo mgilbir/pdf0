@@ -749,10 +749,7 @@ func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
 		return nil // malformed XML is checked elsewhere
 	}
 
-	rule := "6.7.2" // ISO 19005-1
-	if level == PDFA2b || level == PDFA3b {
-		rule = "6.6.2.3"
-	}
+	rule := metadataClause("xmpProperties", level)
 
 	schemas := predefinedXMPSchemas(level)
 	declared := extensionDeclared(props)
@@ -761,10 +758,7 @@ func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
 	// The extension schema container itself is constrained at every level:
 	// canonical prefixes and required description fields (ISO 19005-1 6.7.8,
 	// -2/-3 6.6.2.3.3).
-	containerRule := rule
-	if level == PDFA1b {
-		containerRule = "6.7.8"
-	}
+	containerRule := metadataClause("extSchema", level)
 	errs = append(errs, checkXMPExtensionContainer(xmp, props, containerRule, level)...)
 	typeFields := extensionTypeFields(props)
 	for _, p := range props {

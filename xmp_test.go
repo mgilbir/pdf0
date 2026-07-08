@@ -137,8 +137,8 @@ func TestValidatePDFA_XMPSyntaxChecked(t *testing.T) {
 		<rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/">
 			<exif:ColorSpace>1.3</exif:ColorSpace>
 		</rdf:Description>`))
-	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.2.3") {
-		t.Error("expected 6.6.2.3 error for non-integer exif:ColorSpace")
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.2.3.1") {
+		t.Error("expected 6.6.2.3.1 error for non-integer exif:ColorSpace")
 	}
 }
 
@@ -154,7 +154,7 @@ func TestValidatePDFA_XMPLevelDependentSchemas(t *testing.T) {
 
 	doc2 := NewPDFADocument(PDFA2b)
 	setDocXMP(doc2, xmpWithPDFAID(PDFA2b, body))
-	if hasRule(ValidatePDFA(doc2, PDFA2b), "6.6.2.3") {
+	if hasRule(ValidatePDFA(doc2, PDFA2b), "6.6.2.3.3") {
 		t.Error("crs property must pass at 2b (predefined in XMP 2005)")
 	}
 }
@@ -183,7 +183,7 @@ func TestValidatePDFA_XMPExtensionSchema(t *testing.T) {
 	// Declared and well-typed: passes.
 	doc := NewPDFADocument(PDFA2b)
 	setDocXMP(doc, xmpWithPDFAID(PDFA2b, extSchemaOK+use))
-	if errs := filterRule(ValidatePDFA(doc, PDFA2b), "6.6.2.3"); len(errs) > 0 {
+	if errs := filterRule(ValidatePDFA(doc, PDFA2b), "6.6.2.3.3"); len(errs) > 0 {
 		t.Errorf("declared extension property should pass: %v", errs)
 	}
 
@@ -191,7 +191,7 @@ func TestValidatePDFA_XMPExtensionSchema(t *testing.T) {
 	badUse := `<rdf:Description rdf:about="" xmlns:ex="http://example.org/ns/"><ex:thing>x</ex:thing></rdf:Description>`
 	doc2 := NewPDFADocument(PDFA2b)
 	setDocXMP(doc2, xmpWithPDFAID(PDFA2b, extSchemaOK+badUse))
-	if !hasRule(ValidatePDFA(doc2, PDFA2b), "6.6.2.3") {
+	if !hasRule(ValidatePDFA(doc2, PDFA2b), "6.6.2.3.1") {
 		t.Error("declared-type violation must be flagged")
 	}
 
@@ -199,14 +199,14 @@ func TestValidatePDFA_XMPExtensionSchema(t *testing.T) {
 	otherUse := `<rdf:Description rdf:about="" xmlns:ex="http://example.org/ns/"><ex:other>5</ex:other></rdf:Description>`
 	doc3 := NewPDFADocument(PDFA2b)
 	setDocXMP(doc3, xmpWithPDFAID(PDFA2b, extSchemaOK+otherUse))
-	if !hasRule(ValidatePDFA(doc3, PDFA2b), "6.6.2.3") {
+	if !hasRule(ValidatePDFA(doc3, PDFA2b), "6.6.2.3.1") {
 		t.Error("undeclared property in extension namespace must be flagged")
 	}
 
 	// Unknown namespace with no extension schema at all.
 	doc4 := NewPDFADocument(PDFA2b)
 	setDocXMP(doc4, xmpWithPDFAID(PDFA2b, use))
-	if !hasRule(ValidatePDFA(doc4, PDFA2b), "6.6.2.3") {
+	if !hasRule(ValidatePDFA(doc4, PDFA2b), "6.6.2.3.1") {
 		t.Error("unknown schema without declaration must be flagged")
 	}
 }
@@ -216,7 +216,7 @@ func TestValidatePDFA_XMPExtensionContainerRules(t *testing.T) {
 	missingPrefix := strings.Replace(extSchemaOK, "<pdfaSchema:prefix>ex</pdfaSchema:prefix>", "", 1)
 	doc := NewPDFADocument(PDFA2b)
 	setDocXMP(doc, xmpWithPDFAID(PDFA2b, missingPrefix))
-	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.2.3") {
+	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.6.2.3.3") {
 		t.Error("missing pdfaSchema:prefix must be flagged")
 	}
 
@@ -226,7 +226,7 @@ func TestValidatePDFA_XMPExtensionContainerRules(t *testing.T) {
 		`xmlns:wrongPrefix="http://www.aiim.org/pdfa/ns/schema#"`, 1)
 	doc2 := NewPDFADocument(PDFA2b)
 	setDocXMP(doc2, xmpWithPDFAID(PDFA2b, badPrefix))
-	if !hasRule(ValidatePDFA(doc2, PDFA2b), "6.6.2.3") {
+	if !hasRule(ValidatePDFA(doc2, PDFA2b), "6.6.2.3.3") {
 		t.Error("non-canonical extension prefix must be flagged")
 	}
 
@@ -234,7 +234,7 @@ func TestValidatePDFA_XMPExtensionContainerRules(t *testing.T) {
 	missingCat := strings.Replace(extSchemaOK, "<pdfaProperty:category>external</pdfaProperty:category>", "", 1)
 	doc3 := NewPDFADocument(PDFA2b)
 	setDocXMP(doc3, xmpWithPDFAID(PDFA2b, missingCat))
-	if !hasRule(ValidatePDFA(doc3, PDFA2b), "6.6.2.3") {
+	if !hasRule(ValidatePDFA(doc3, PDFA2b), "6.6.2.3.3") {
 		t.Error("missing pdfaProperty:category must be flagged")
 	}
 }

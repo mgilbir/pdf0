@@ -1846,6 +1846,30 @@ func isWidgetOrField(dict *Dictionary) bool {
 // --- Metadata checks (6.7) ---
 
 // Rule 6.7.3: Version identification via XMP pdfaid:part, pdfaid:rev, pdfaid:conformance.
+// metadataClause returns the ISO clause for a metadata-rule concept at the
+// given level. Metadata requirements are numbered differently per part (ISO
+// 19005-1 6.7.x; -2/-3 6.6.x; -4 6.7.x); clauses follow the veraPDF profiles.
+func metadataClause(concept string, level PDFALevel) string {
+	// [1b, 2b/3b, 4]
+	m := map[string][3]string{
+		"version":       {"6.7.11", "6.6.4", "6.7.3"},
+		"xmpProperties": {"6.7.2", "6.6.2.3.1", "6.7.2"},
+		"extSchema":     {"6.7.8", "6.6.2.3.3", "6.7.8"},
+	}
+	c, ok := m[concept]
+	if !ok {
+		return "6.7"
+	}
+	switch level {
+	case PDFA1b:
+		return c[0]
+	case PDFA4:
+		return c[2]
+	default:
+		return c[1]
+	}
+}
+
 func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 	catalog := getCatalog(doc)
 	if catalog == nil {
@@ -1874,7 +1898,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 	if strings.Contains(xmp, "pdfaid:") {
 		if !strings.Contains(xmp, `xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"`) {
 			errs = append(errs, ValidationError{
-				Rule:    "6.7.3",
+				Rule:    metadataClause("version", level),
 				Level:   level,
 				Message: "pdfaid namespace must be http://www.aiim.org/pdfa/ns/id/",
 			})
@@ -1898,13 +1922,13 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 	part := extractXMPValue(xmp, "pdfaid:part")
 	if part == "" {
 		errs = append(errs, ValidationError{
-			Rule:    "6.7.3",
+			Rule:    metadataClause("version", level),
 			Level:   level,
 			Message: "metadata must contain pdfaid:part",
 		})
 	} else if part != expectedPart {
 		errs = append(errs, ValidationError{
-			Rule:    "6.7.3",
+			Rule:    metadataClause("version", level),
 			Level:   level,
 			Message: fmt.Sprintf("pdfaid:part must be %s, got %s", expectedPart, part),
 		})
@@ -1916,7 +1940,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		conf := extractXMPValue(xmp, "pdfaid:conformance")
 		if conf != "B" {
 			errs = append(errs, ValidationError{
-				Rule:    "6.7.3",
+				Rule:    metadataClause("version", level),
 				Level:   level,
 				Message: fmt.Sprintf("pdfaid:conformance must be B, got %q", conf),
 			})
@@ -1929,7 +1953,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 			conf := extractXMPValue(xmp, "pdfaid:conformance")
 			if conf != "F" && conf != "E" {
 				errs = append(errs, ValidationError{
-					Rule:    "6.7.3",
+					Rule:    metadataClause("version", level),
 					Level:   level,
 					Message: fmt.Sprintf("PDF/A-4 pdfaid:conformance must be absent, F, or E, got %q", conf),
 				})
@@ -1940,13 +1964,13 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		rev := extractXMPValue(xmp, "pdfaid:rev")
 		if rev == "" {
 			errs = append(errs, ValidationError{
-				Rule:    "6.7.3",
+				Rule:    metadataClause("version", level),
 				Level:   level,
 				Message: "PDF/A-4 metadata must contain pdfaid:rev",
 			})
 		} else if rev != "2020" {
 			errs = append(errs, ValidationError{
-				Rule:    "6.7.3",
+				Rule:    metadataClause("version", level),
 				Level:   level,
 				Message: fmt.Sprintf("pdfaid:rev must be 2020, got %q", rev),
 			})
