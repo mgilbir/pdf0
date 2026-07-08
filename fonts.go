@@ -1075,11 +1075,42 @@ func checkFontProgramConsistency(doc *Document, level PDFALevel, rule string, fo
 	return checkSimpleFontConsistency(doc, level, rule, fontDict, u)
 }
 
+// damagedFontProgramError is returned in place of the silent fp==nil exemption:
+// if a font whose glyphs are actually shown carries an embedded font program
+// that could not be parsed, the program is damaged and cannot provide those
+// glyphs. Only visibly-rendered fonts count (invisible text needs no embedded
+// program at all), and only when a FontFile is present (a missing program is
+// the separate embedding rule). Across the corpus, every valid embedded program
+// parses, so this raises no false positive.
+func damagedFontProgramError(doc *Document, level PDFALevel, rule string, fontDict, fd *Dictionary, u *fontTextUsage) []ValidationError {
+	if fd == nil || !rendersVisibly(u) || !hasEmbeddedFontProgram(doc, fd) {
+		return nil
+	}
+	subtype, _ := fontDict.Get("Subtype").(Name)
+	return []ValidationError{{
+		Rule:    rule,
+		Level:   level,
+		Message: fmt.Sprintf("embedded %s font program is damaged and could not be parsed", string(subtype)),
+		Object:  u.objNum,
+	}}
+}
+
+// hasEmbeddedFontProgram reports whether the descriptor carries an embedded font
+// program stream (FontFile/FontFile2/FontFile3).
+func hasEmbeddedFontProgram(doc *Document, fd *Dictionary) bool {
+	for _, k := range []Name{"FontFile", "FontFile2", "FontFile3"} {
+		if _, ok := doc.Resolve(fd.Get(k)).(*Stream); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
 	fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
 	fp := loadFontProgram(doc, fd)
 	if fp == nil {
-		return nil // embedding checked elsewhere; nothing to compare against
+		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
 	}
 	subtype, _ := fontDict.Get("Subtype").(Name)
 	symbolic := false
@@ -1142,7 +1173,7 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 	fd := doc.ResolveDict(desc.Get("FontDescriptor"))
 	fp := loadFontProgram(doc, fd)
 	if fp == nil {
-		return nil
+		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
 	}
 	cidSub, _ := desc.Get("Subtype").(Name)
 	identity := isIdentityEncoding(doc, fontDict)

@@ -235,3 +235,32 @@ func TestTrueTypeEncodingAt1b(t *testing.T) {
 		t.Errorf("non-symbolic TrueType with WinAnsiEncoding wrongly flagged at 1b: %d", got)
 	}
 }
+
+// TestDamagedFontProgramFlagged ensures a visibly-rendered font with an
+// embedded but unparseable program is flagged rather than silently exempted.
+func TestDamagedFontProgramFlagged(t *testing.T) {
+	fd := &Dictionary{}
+	fd.Set("Flags", Integer(32))
+	fd.Set("FontFile2", IndirectRef{Number: 9}) // resolves to a garbage stream
+	font := &Dictionary{}
+	font.Set("Subtype", Name("TrueType"))
+	font.Set("FontDescriptor", fd)
+	doc := &Document{Objects: map[int]*IndirectObject{
+		1: {Number: 1, Value: font},
+		9: {Number: 9, Value: &Stream{Dict: Dictionary{}, Data: []byte("not a font program")}},
+	}}
+	// A usage that renders visible text.
+	u := &fontTextUsage{objNum: 1, strings: [][]byte{[]byte("Hi")}, modes: map[int]bool{0: true}}
+	if loadFontProgram(doc, fd) != nil {
+		t.Skip("garbage stream unexpectedly parsed as a font program")
+	}
+	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd, u)); got == 0 {
+		t.Error("damaged embedded font program not flagged for a rendered font")
+	}
+	// Not embedded -> not this rule's concern (embedding is a separate check).
+	fd2 := &Dictionary{}
+	fd2.Set("Flags", Integer(32))
+	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd2, u)); got != 0 {
+		t.Errorf("non-embedded font wrongly flagged as damaged: %d", got)
+	}
+}
