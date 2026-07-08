@@ -1047,12 +1047,16 @@ func extensionTypeFields(props []xmpProperty) map[string]map[string]bool {
 // encoding attribute, the packet must be well-formed XML, and (PDF/A-4) it
 // must be encoded as UTF-8.
 func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
-	if level == PDFA1b {
-		return nil // PDF/A-1 predates these XMP packet requirements
-	}
-	rule := "6.6.2.1"
-	if level == PDFA4 {
-		rule = "6.7.2.1"
+	// The rule numbers differ by part, but the requirements — no bytes/encoding
+	// attribute on the xpacket header, and a well-formed XMP packet — apply from
+	// PDF/A-1 onward (ISO 19005-1 6.7.5 / 6.7.9). PDF/A-1 was previously skipped
+	// entirely, missing both.
+	attrRule, wfRule := "6.6.2.1", "6.6.2.1"
+	switch level {
+	case PDFA1b:
+		attrRule, wfRule = "6.7.5", "6.7.9"
+	case PDFA4:
+		attrRule, wfRule = "6.7.2.1", "6.7.2.1"
 	}
 	catalog := getCatalog(doc)
 	if catalog == nil {
@@ -1068,28 +1072,25 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
-	add := func(msg string) {
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg})
-	}
 
 	// The xpacket header processing instruction.
 	if hdr := extractXPacketHeader(raw); hdr != "" {
 		if xpacketHasAttr(hdr, "bytes") {
-			add("the XMP packet header must not contain a bytes attribute")
+			errs = append(errs, ValidationError{Rule: attrRule, Level: level, Message: "the XMP packet header must not contain a bytes attribute"})
 		}
 		if xpacketHasAttr(hdr, "encoding") {
-			add("the XMP packet header must not contain an encoding attribute")
+			errs = append(errs, ValidationError{Rule: attrRule, Level: level, Message: "the XMP packet header must not contain an encoding attribute"})
 		}
 	}
 
 	if level == PDFA4 && !xmpIsUTF8(raw) {
-		add("the XMP packet is not encoded as UTF-8")
+		errs = append(errs, ValidationError{Rule: attrRule, Level: level, Message: "the XMP packet is not encoded as UTF-8"})
 	}
 
 	xmp := decodeXMPToUTF8(raw)
 	if xmp != "" {
 		if _, err := parseXMLTree([]byte(xmp)); err != nil {
-			add("the XMP packet is not well-formed XML")
+			errs = append(errs, ValidationError{Rule: wfRule, Level: level, Message: "the XMP packet is not well-formed XML"})
 		}
 	}
 	return errs
