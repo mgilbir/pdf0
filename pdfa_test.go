@@ -546,6 +546,37 @@ func TestValidatePDFA_NeedAppearances(t *testing.T) {
 	}
 }
 
+// Form XObject rules: /OPI is forbidden and a /Ref key (reference XObject) is
+// forbidden outright, each cited under the level's clause.
+func TestValidatePDFA_FormXObjectRules(t *testing.T) {
+	mk := func(key Name) *Document {
+		doc := NewPDFADocument(PDFA4)
+		form := &Stream{Dict: Dictionary{}}
+		form.Dict.Set("Type", Name("XObject"))
+		form.Dict.Set("Subtype", Name("Form"))
+		form.Dict.Set(key, &Dictionary{})
+		doc.Objects[20] = &IndirectObject{Number: 20, Value: form}
+		return doc
+	}
+	if !hasRule(ValidatePDFA(mk("OPI"), PDFA4), "6.2.8.1") {
+		t.Error("form XObject /OPI must be flagged as 6.2.8.1 at PDF/A-4")
+	}
+	if !hasRule(ValidatePDFA(mk("Ref"), PDFA4), "6.2.8.2") {
+		t.Error("reference XObject (/Ref) must be flagged as 6.2.8.2 at PDF/A-4")
+	}
+	if !hasRule(ValidatePDFA(mk("Ref"), PDFA2b), "6.2.9") {
+		t.Error("reference XObject (/Ref) must be flagged as 6.2.9 at PDF/A-2b")
+	}
+	// A plain form XObject with neither key is clean.
+	clean := NewPDFADocument(PDFA4)
+	form := &Stream{Dict: Dictionary{}}
+	form.Dict.Set("Subtype", Name("Form"))
+	clean.Objects[20] = &IndirectObject{Number: 20, Value: form}
+	if hasRule(ValidatePDFA(clean, PDFA4), "6.2.8.2") {
+		t.Error("a form XObject without /Ref must not be flagged")
+	}
+}
+
 // 6.5.3: at PDF/A-1 an annotation /CA (opacity) must be 1.0; other levels allow it.
 func TestValidatePDFA_AnnotationOpacity(t *testing.T) {
 	mk := func(ca Object) *Document {
