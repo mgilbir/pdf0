@@ -1163,8 +1163,9 @@ const (
 	// programs; 7 after the symbolic-TrueType single-cmap rule; 6 after
 	// scanning annotation appearance streams for undefined operators; 5 after
 	// the PDF/A-1 CMap-embedding rule; 4 after validating extension-schema
-	// field value types.)
-	corpusMaxIsartorMissed = 4
+	// field value types; 3 after flagging an XMP packet whose rdf:RDF
+	// namespace prefix is undeclared.)
+	corpusMaxIsartorMissed = 3
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
