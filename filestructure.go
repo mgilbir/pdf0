@@ -1242,3 +1242,98 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 	}
 	return ids
 }
+
+// checkStreamLengthBytes verifies each uncompressed stream's /Length against the
+// byte extent measured from the raw file (ISO 32000-1 7.3.8.2; PDF/A 6.1.7 /
+// 6.1.6). The parser recovers from a wrong /Length by searching for endstream,
+// so the in-memory Stream.Data can mask the defect; this measures the file
+// directly.
+//
+// Two spec facts make the measurement unambiguous and false-positive-free:
+//   - Only white space may appear between endstream and endobj (7.3.8.1), so the
+//     real endstream is the one just before endobj even when the stream data
+//     itself contains the bytes "endstream".
+//   - The optional end-of-line marker before endstream is not counted in the
+//     length, and a lone CARRIAGE RETURN may be data (NOTE 2). The declared
+//     length is therefore valid within [raw-eol, raw-1] when an EOL is present
+//     (raw exactly when none is), and only a length outside that range — such as
+//     one that wrongly includes the whole EOL — is a violation.
+func checkStreamLengthBytes(doc *Document, level PDFALevel, raw []byte) []ValidationError {
+	rule := "6.1.7"
+	if level == PDFA4 {
+		rule = "6.1.6"
+	}
+	var errs []ValidationError
+	for num, off := range doc.Offsets {
+		iobj := doc.Objects[num]
+		if iobj == nil {
+			continue
+		}
+		s, ok := iobj.Value.(*Stream)
+		if !ok {
+			continue
+		}
+		declared, ok := doc.Resolve(s.Dict.Get("Length")).(Integer)
+		if !ok {
+			continue
+		}
+		rawLen, eol, ok := streamByteExtent(raw, off)
+		if !ok {
+			continue
+		}
+		hi := rawLen
+		if eol > 0 {
+			hi = rawLen - 1
+		}
+		lo := rawLen - eol
+		if int64(declared) < lo || int64(declared) > hi {
+			errs = append(errs, ValidationError{
+				Rule:    rule,
+				Level:   level,
+				Message: "the value of the Length key does not match the actual number of bytes in the stream",
+				Object:  num,
+			})
+		}
+	}
+	return errs
+}
+
+// streamByteExtent returns, for the stream object beginning at objStart, the
+// number of raw bytes between the EOL after the stream keyword and the real
+// endstream (anchored on endobj), and the length of the trailing EOL before
+// that endstream (0, 1, or 2). ok is false if the structure cannot be located.
+func streamByteExtent(data []byte, objStart int64) (rawLen, eol int64, ok bool) {
+	// Locate the stream keyword as a delimited token, not a substring: an
+	// embedded-file dictionary can contain the letters "stream" in a value, and
+	// matching that would place the data start too early.
+	sk := findDelimitedKeyword(data, objStart, "stream")
+	if sk < 0 {
+		return 0, 0, false
+	}
+	ds := sk + 6
+	if ds < int64(len(data)) && data[ds] == '\r' {
+		ds++
+	}
+	if ds < int64(len(data)) && data[ds] == '\n' {
+		ds++
+	}
+	endobj := findDelimitedKeyword(data, ds, "endobj")
+	if endobj < 0 {
+		return 0, 0, false
+	}
+	j := endobj - 1
+	for j >= ds && isWhitespace(data[j]) {
+		j--
+	}
+	if j-8 < ds || string(data[j-8:j+1]) != "endstream" {
+		return 0, 0, false
+	}
+	esStart := j - 8
+	rawLen = esStart - ds
+	if esStart-2 >= ds && data[esStart-1] == '\n' && data[esStart-2] == '\r' {
+		eol = 2
+	} else if esStart-1 >= ds && (data[esStart-1] == '\n' || data[esStart-1] == '\r') {
+		eol = 1
+	}
+	return rawLen, eol, true
+}
