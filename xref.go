@@ -300,6 +300,18 @@ func applyFilter(name Name, data []byte, parms *Dictionary) ([]byte, error) {
 			return nil, err
 		}
 		return applyPredictor(decoded, predictorFromDict(parms))
+	case "LZWDecode":
+		early := 1
+		if parms != nil {
+			if e, ok := parms.Get("EarlyChange").(Integer); ok {
+				early = int(e)
+			}
+		}
+		decoded, err := lzwDecode(data, early)
+		if err != nil {
+			return nil, err
+		}
+		return applyPredictor(decoded, predictorFromDict(parms))
 	case "ASCIIHexDecode":
 		return asciiHexDecode(data)
 	default:
@@ -310,7 +322,7 @@ func applyFilter(name Name, data []byte, parms *Dictionary) ([]byte, error) {
 // isSupportedFilter reports whether applyFilter can decode the named filter.
 func isSupportedFilter(name Name) bool {
 	switch name {
-	case "FlateDecode", "ASCIIHexDecode":
+	case "FlateDecode", "LZWDecode", "ASCIIHexDecode":
 		return true
 	}
 	return false

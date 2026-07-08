@@ -2,6 +2,100 @@ package pdf0
 
 import "fmt"
 
+// LZW special codes (ISO 32000-1 7.4.4.2).
+const (
+	lzwClearTable = 256
+	lzwEOD        = 257
+	lzwFirstCode  = 258
+)
+
+// lzwDecode reverses the PDF LZWDecode filter. Codes are variable width, 9 to
+// 12 bits, MSB-first; earlyChange (default 1, the PDF default) bumps the code
+// width one entry early, matching the TIFF-style encoders PDF producers use.
+//
+// Output is capped at maxDecodeSize to bound memory on hostile input.
+func lzwDecode(data []byte, earlyChange int) ([]byte, error) {
+	if earlyChange != 0 && earlyChange != 1 {
+		return nil, fmt.Errorf("LZW: invalid EarlyChange %d", earlyChange)
+	}
+
+	// table maps a code to its byte string. The first 256 entries are the
+	// literals; 256/257 are Clear/EOD; entries grow from 258.
+	var table [][]byte
+	reset := func() {
+		table = make([][]byte, lzwFirstCode, 4096)
+		for i := 0; i < 256; i++ {
+			table[i] = []byte{byte(i)}
+		}
+	}
+	reset()
+
+	var out []byte
+	var prev []byte
+	codeWidth := 9
+
+	var bitBuf uint32
+	var bitCnt int
+	pos := 0
+	nextCode := func() (int, bool) {
+		for bitCnt < codeWidth {
+			if pos >= len(data) {
+				return 0, false
+			}
+			bitBuf = bitBuf<<8 | uint32(data[pos])
+			pos++
+			bitCnt += 8
+		}
+		bitCnt -= codeWidth
+		return int(bitBuf>>uint(bitCnt)) & ((1 << uint(codeWidth)) - 1), true
+	}
+
+	for {
+		code, ok := nextCode()
+		if !ok {
+			break
+		}
+		switch {
+		case code == lzwEOD:
+			return out, nil
+		case code == lzwClearTable:
+			reset()
+			codeWidth = 9
+			prev = nil
+			continue
+		}
+
+		var entry []byte
+		if code < len(table) {
+			entry = table[code]
+		} else if code == len(table) && prev != nil {
+			// The KwKwK case: the code is the one about to be added.
+			entry = append(append([]byte{}, prev...), prev[0])
+		} else {
+			return nil, fmt.Errorf("LZW: invalid code %d (table size %d)", code, len(table))
+		}
+
+		out = append(out, entry...)
+		if len(out) > maxDecodeSize {
+			return nil, fmt.Errorf("LZW: decompressed data exceeds maximum size (%d bytes)", maxDecodeSize)
+		}
+
+		if prev != nil {
+			newEntry := append(append([]byte{}, prev...), entry[0])
+			table = append(table, newEntry)
+			// Widen the code once the next code to be read (len(table), the
+			// index the next entry will take, allowing for the KwKwK case) no
+			// longer fits. earlyChange (1 by default) widens one code sooner,
+			// matching the encoder.
+			if len(table)+earlyChange >= (1<<uint(codeWidth)) && codeWidth < 12 {
+				codeWidth++
+			}
+		}
+		prev = entry
+	}
+	return out, nil
+}
+
 // predictorParms holds the /DecodeParms values that drive predictor reversal
 // (ISO 32000-2:2020, 7.4.4.4 "LZW and Flate predictor functions").
 type predictorParms struct {
