@@ -35,6 +35,10 @@ type fontProgram struct {
 	cmap       map[rune]int
 	macCmap    map[byte]int
 	symbolCmap map[uint16]int
+	// cmapSubtableCount is the number of subtables declared in the sfnt cmap
+	// table (ISO 19005-1 6.3.7 requires a symbolic TrueType font to have
+	// exactly one). Zero when there is no cmap table.
+	cmapSubtableCount int
 	// cidGIDs reports which CIDs have charstrings (CFF CID-keyed fonts);
 	// nil when not CID-keyed.
 	cidGIDs map[int]bool
@@ -132,6 +136,7 @@ func parseSFNT(data []byte) *fontProgram {
 	// cmap subtables.
 	if cmap := tables["cmap"]; len(cmap) >= 4 {
 		n := be16(cmap, 2)
+		fp.cmapSubtableCount = n
 		for i := 0; i < n; i++ {
 			rec := 4 + 8*i
 			if rec+8 > len(cmap) {

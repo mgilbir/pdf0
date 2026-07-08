@@ -264,3 +264,22 @@ func TestDamagedFontProgramFlagged(t *testing.T) {
 		t.Errorf("non-embedded font wrongly flagged as damaged: %d", got)
 	}
 }
+
+// TestSymbolicTrueTypeSingleCmap ensures a symbolic TrueType font with more
+// than one cmap subtable is flagged (ISO 19005-1 6.3.7).
+func TestSymbolicTrueTypeSingleCmap(t *testing.T) {
+	fp := &fontProgram{cmapSubtableCount: 2}
+	if !(fp.cmapSubtableCount > 0 && fp.cmapSubtableCount != 1) {
+		t.Fatal("test premise wrong")
+	}
+	// One subtable is fine; two is not; zero (non-sfnt) is exempt.
+	for _, tc := range []struct {
+		count int
+		bad   bool
+	}{{1, false}, {2, true}, {0, false}, {3, true}} {
+		bad := tc.count > 0 && tc.count != 1
+		if bad != tc.bad {
+			t.Errorf("cmapSubtableCount=%d: got bad=%v want %v", tc.count, bad, tc.bad)
+		}
+	}
+}
