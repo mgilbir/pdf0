@@ -546,6 +546,38 @@ func TestValidatePDFA_NeedAppearances(t *testing.T) {
 	}
 }
 
+// 6.4.3 (parts 2/3): a signature's /ByteRange must start at 0 and cover to the
+// end of the file; a range that stops short leaves unsigned trailing bytes.
+func TestValidatePDFA_SignatureByteRange(t *testing.T) {
+	raw := make([]byte, 1000)
+	mk := func(br Array) *Document {
+		doc := NewPDFADocument(PDFA2b)
+		sig := &Dictionary{}
+		sig.Set("Type", Name("Sig"))
+		sig.Set("SubFilter", Name("adbe.pkcs7.detached"))
+		sig.Set("Contents", String{Value: []byte("0000"), IsHex: true})
+		sig.Set("ByteRange", br)
+		doc.Objects[20] = &IndirectObject{Number: 20, Value: sig}
+		return doc
+	}
+	flagged := func(br Array) bool {
+		return hasRule(ValidatePDFABytes(mk(br), PDFA2b, raw), "6.4.3")
+	}
+	// [start1 len1 start2 len2]; the gap is /Contents.
+	if flagged(Array{Integer(0), Integer(400), Integer(600), Integer(400)}) {
+		t.Error("a range reaching EOF (1000) must not be flagged")
+	}
+	if flagged(Array{Integer(0), Integer(400), Integer(600), Integer(500)}) {
+		t.Error("a range overshooting the file must not be flagged (covers all)")
+	}
+	if !flagged(Array{Integer(0), Integer(400), Integer(600), Integer(300)}) {
+		t.Error("a range stopping short of EOF (900<1000) must be flagged")
+	}
+	if !flagged(Array{Integer(10), Integer(400), Integer(600), Integer(390)}) {
+		t.Error("a range not starting at byte 0 must be flagged")
+	}
+}
+
 // Form XObject rules: /OPI is forbidden and a /Ref key (reference XObject) is
 // forbidden outright, each cited under the level's clause.
 func TestValidatePDFA_FormXObjectRules(t *testing.T) {

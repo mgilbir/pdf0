@@ -225,6 +225,7 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkFileStructureBytes(doc, level, rawData) })...)
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkLinearizedTrailerID(rawData, level) })...)
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkStreamLengthBytes(doc, level, rawData) })...)
+		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkSignatureByteRange(doc, level, rawData) })...)
 	}
 
 	// Checks iterate map-ordered doc.Objects, so their concatenated output
@@ -1003,6 +1004,72 @@ func checkNoLZW(doc *Document, level PDFALevel) []ValidationError {
 				Message: fmt.Sprintf("stream uses non-standard filter /%s", badFilter),
 				Object:  num,
 			})
+		}
+	}
+	return errs
+}
+
+// checkSignatureByteRange enforces 6.4.3 (parts 2/3): a signature's digest must
+// be computed over the entire file, so the /ByteRange of each signature must
+// start at byte 0 and its two covered segments plus the excluded /Contents gap
+// must span to the end of the file. Works from the raw bytes; only the single
+// gap (the signature value) may be uncovered.
+func checkSignatureByteRange(doc *Document, level PDFALevel, raw []byte) []ValidationError {
+	if level != PDFA2b && level != PDFA3b {
+		return nil
+	}
+	var errs []ValidationError
+	for num, iobj := range doc.Objects {
+		dict, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		// A signature dictionary carries both /ByteRange and /Contents; that
+		// pairing is unique to signatures (and document timestamps).
+		brObj := dict.Get("ByteRange")
+		if brObj == nil || dict.Get("Contents") == nil {
+			continue
+		}
+		if t, _ := dict.Get("Type").(Name); t != "" && t != "Sig" && t != "DocTimeStamp" {
+			continue
+		}
+
+		bad := func(msg string) {
+			errs = append(errs, ValidationError{Rule: "6.4.3", Level: level, Message: msg, Object: num})
+		}
+		br, ok := doc.Resolve(brObj).(Array)
+		if !ok || len(br) != 4 {
+			bad("signature /ByteRange must be an array of four integers")
+			continue
+		}
+		var v [4]int64
+		malformed := false
+		for i, e := range br {
+			n, ok := doc.Resolve(e).(Integer)
+			if !ok {
+				malformed = true
+				break
+			}
+			v[i] = int64(n)
+		}
+		if malformed {
+			bad("signature /ByteRange must be an array of four integers")
+			continue
+		}
+		// v = [start1, len1, start2, len2]. The digest covers [start1,start1+len1)
+		// and [start2,start2+len2); the hole between them is the /Contents value.
+		start1, len1, start2, len2 := v[0], v[1], v[2], v[3]
+		if start1 != 0 || len1 < 0 || len2 < 0 || start2 < start1+len1 {
+			bad("signature /ByteRange does not cover the document from its start")
+			continue
+		}
+		// The signed range must reach the end of the file: if it stops short,
+		// the trailing bytes are unsigned and the digest does not cover the whole
+		// document. A range that meets or exceeds the file length covers it — the
+		// veraPDF corpus carries stub signatures whose /ByteRange overshoots the
+		// truncated test file, and those are treated as covering (not a defect).
+		if start2+len2 < int64(len(raw)) {
+			bad("signature /ByteRange does not cover the entire document")
 		}
 	}
 	return errs
