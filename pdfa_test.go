@@ -1153,6 +1153,12 @@ const (
 	// Length, header-offset convention, corrupt object streams) and reports
 	// the defect rather than aborting.
 	corpusMaxParseErrors = 0
+
+	// Isartor fail files (all PDF/A-1b) that the validator does not yet flag.
+	// TestCorpus validates only the PDF_A-* suites, so without this the Isartor
+	// gaps regress invisibly. Drive it down; each drop means a newly covered
+	// rule. (Was 18 before the transparency-detection fix.)
+	corpusMaxIsartorMissed = 16
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
@@ -1192,6 +1198,79 @@ func TestCorpusParsesEntirely(t *testing.T) {
 	t.Logf("corpus parse: %d files, %d failures", total, len(failures))
 	if len(failures) > 0 {
 		t.Errorf("%d corpus files failed to parse:\n  %s", len(failures), strings.Join(failures, "\n  "))
+	}
+}
+
+// TestCorpusIsartor ratchets the Isartor PDF/A-1b fail suite, which TestCorpus
+// (PDF_A-* only) does not cover. Every Isartor file is a known 1b violation, so
+// a file validating with zero errors is a missed detection. The suite has no
+// pass files, so this guards detection (missed <= baseline) and any future
+// false positive (fp must stay 0).
+//
+// The PDF_A-4f / PDF_A-4e suites are deliberately NOT ratcheted yet: validating
+// them at PDF/A-4 yields false positives because the A-4e/A-4f feature
+// relaxations (embedded 3D/RichMedia for 4e, arbitrary embedded files for 4f)
+// are not modelled. Baking those false positives into a baseline would lower
+// the FP=0 bar; they can join once those relaxations exist.
+func TestCorpusIsartor(t *testing.T) {
+	corpusDir := os.Getenv("VERAPDF_CORPUS")
+	if corpusDir == "" {
+		corpusDir = "testdata/verapdf-corpus"
+	}
+	root := filepath.Join(corpusDir, "Isartor test files")
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		t.Skip("veraPDF corpus not found; run `make corpus` to download")
+	}
+
+	var fail, missed, fp, parseErrors int
+	var missedFiles []string
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
+			return nil
+		}
+		base := filepath.Base(path)
+		isPass := strings.Contains(base, "-pass-")
+		isFail := strings.Contains(base, "-fail-")
+		if !isPass && !isFail {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		doc, e := Read(bytes.NewReader(data), int64(len(data)))
+		if e != nil {
+			parseErrors++
+			return nil
+		}
+		// Isartor is a PDF/A-1b test suite.
+		errs := ValidatePDFABytes(doc, PDFA1b, data)
+		if isPass {
+			if len(errs) > 0 {
+				fp++
+			}
+			return nil
+		}
+		fail++
+		if len(errs) == 0 {
+			missed++
+			missedFiles = append(missedFiles, base)
+		}
+		return nil
+	})
+
+	t.Logf("Isartor results: fail=%d | falsePositives=%d missed=%d parseErrors=%d",
+		fail, fp, missed, parseErrors)
+
+	if fp > 0 {
+		t.Errorf("Isartor false positives %d exceed baseline 0 (regression)", fp)
+	}
+	if missed > corpusMaxIsartorMissed {
+		t.Errorf("Isartor missed %d exceed baseline %d (detection regressed):\n  %s",
+			missed, corpusMaxIsartorMissed, strings.Join(missedFiles, "\n  "))
+	}
+	if parseErrors > 0 {
+		t.Errorf("Isartor parse errors %d exceed baseline 0 (regression)", parseErrors)
 	}
 }
 
