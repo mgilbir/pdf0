@@ -274,8 +274,8 @@ func TestValidatePDFA_LZW(t *testing.T) {
 				doc.Objects[10] = &IndirectObject{Number: 10, Value: stream}
 
 				errs := ValidatePDFA(doc, level)
-				if !hasRule(errs, "6.1.6") {
-					t.Errorf("expected 6.1.6 error for LZW filter in %s", level)
+				if !hasRule(errs, filterClause(level)) {
+					t.Errorf("expected %s error for LZW filter in %s", filterClause(level), level)
 				}
 			})
 		}
