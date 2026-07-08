@@ -1,9 +1,17 @@
-.PHONY: test test-corpus clean-corpus
+.PHONY: test corpus test-corpus clean-corpus refpdfs
 
 CORPUS_DIR := testdata/verapdf-corpus
+REFPDF_DIR := testdata/pdf20examples
 
 test:
 	go test ./...
+
+# Reference PDF 2.0 files for the round-trip tests.
+refpdfs: $(REFPDF_DIR)/.ok
+
+$(REFPDF_DIR)/.ok:
+	git clone --depth 1 https://github.com/pdf-association/pdf20examples $(REFPDF_DIR)
+	touch $@
 
 corpus: $(CORPUS_DIR)/.ok
 
