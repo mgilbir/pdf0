@@ -413,6 +413,7 @@ func fontClause(concept string, level PDFALevel) string {
 		"width":         {"6.3.6", "6.2.11.5", "6.2.10.5"},
 		"encoding":      {"6.3.7", "6.2.11.6", "6.2.10.6"},
 		"notdef":        {"6.3.5", "6.2.11.8", "6.2.10.9"},
+		"toUnicode":     {"6.3.2", "6.2.11.2", "6.2.10.7"},
 	}
 	c, ok := m[concept]
 	if !ok {
@@ -559,7 +560,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 	if level == PDFA4 {
 		if tu, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*Stream); ok {
 			if hasForbiddenUnicodeTargets(doc, tu) {
-				bad("general", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)")
+				bad("toUnicode", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)")
 			}
 		}
 	}
