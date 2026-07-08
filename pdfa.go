@@ -1071,6 +1071,21 @@ func checkSignatureByteRange(doc *Document, level PDFALevel, raw []byte) []Valid
 		if start2+len2 < int64(len(raw)) {
 			bad("signature /ByteRange does not cover the entire document")
 		}
+
+		// The PKCS#7/CMS signature blob in /Contents must embed the signing
+		// certificate and hold exactly one SignerInfo. Only applies when the blob
+		// parses as CMS SignedData — an adbe.x509.rsa_sha1 signature stores a raw
+		// value and its certificate in /Cert instead.
+		if c, ok := doc.Resolve(dict.Get("Contents")).(String); ok {
+			if info := parseCMSSignedData(c.Value); info.parsed {
+				if !info.hasCertificate {
+					bad("signature PKCS#7 data must contain the signing certificate")
+				}
+				if info.signerInfoCount != 1 {
+					bad(fmt.Sprintf("signature PKCS#7 data must contain exactly one SignerInfo, found %d", info.signerInfoCount))
+				}
+			}
+		}
 	}
 	return errs
 }
