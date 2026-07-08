@@ -889,6 +889,25 @@ var canonicalXMPPrefixes = map[string]string{
 // checkXMPExtensionContainer validates the structure of embedded PDF/A
 // extension schemas: canonical prefixes, required fields at every level
 // (schema, property, value type, field), and correct container forms.
+// standardXMPValueTypes are the value-type names an extension-schema field may
+// reference without declaring them (the XMP basic and structured types, ISO
+// 16684-2 / the PDF/A extension-schema value-type namespaces). Any other name
+// must be declared by the schema's own pdfaType list.
+var standardXMPValueTypes = map[string]bool{
+	// Basic value types.
+	"Text": true, "ProperName": true, "XPath": true, "Boolean": true,
+	"Integer": true, "Real": true, "MIMEType": true, "AgentName": true,
+	"RenditionClass": true, "URL": true, "URI": true, "Date": true,
+	"GUID": true, "Locale": true, "Lang": true, "Choice": true, "Rational": true,
+	// Structured value types (XMP 2005).
+	"Colorant": true, "Dimensions": true, "Font": true, "Thumbnail": true,
+	"ResourceRef": true, "ResourceEvent": true, "Version": true, "Job": true,
+	"Struct": true, "Time": true, "Marker": true, "Media": true, "Track": true,
+	"ProjectLink": true, "BeatSpliceStretch": true, "ResampleStretch": true,
+	"TimeCode": true, "TimeScaleStretch": true, "PartMapping": true,
+	"LayerGroup": true, "Frame": true, "CuePointParam": true,
+}
+
 func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	report := func(format string, args ...interface{}) {
@@ -974,6 +993,19 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 					report("pdfaSchema:valueType must be a Seq, got %s", vtSeq.Kind)
 					continue
 				}
+				// First pass: collect the custom value types this schema
+				// declares, so a field may reference one declared later.
+				declaredTypes := map[string]bool{}
+				for _, vt := range vtSeq.Items {
+					if vt.Kind != xmpStruct {
+						continue
+					}
+					for _, f := range vt.Fields {
+						if f.NS == nsPDFAType && f.Name == "type" {
+							declaredTypes[f.Value.Text] = true
+						}
+					}
+				}
 				for _, vt := range vtSeq.Items {
 					if vt.Kind != xmpStruct {
 						report("pdfaSchema:valueType entries must be structures, got %s", vt.Kind)
@@ -991,8 +1023,18 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 								report("pdfaType:field entries must be structures, got %s", fld.Kind)
 								continue
 							}
-							requireFields("field definition", fld, nsPDFAField,
+							fFields := requireFields("field definition", fld, nsPDFAField,
 								[]string{"name", "valueType", "description"})
+							// A field's value type must be a standard XMP type
+							// or a custom type this schema declares; otherwise
+							// the referenced type has no definition (ISO 19005-1
+							// 6.7.8; Isartor 6.7.8-t02-fail-j/k).
+							if fv, ok := fFields["valueType"]; ok {
+								vtName := fv.Text
+								if vtName != "" && !standardXMPValueTypes[vtName] && !declaredTypes[vtName] {
+									report("field value type %q is neither a standard type nor declared by the extension schema", vtName)
+								}
+							}
 						}
 					}
 				}

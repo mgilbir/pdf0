@@ -238,3 +238,35 @@ func TestValidatePDFA_XMPExtensionContainerRules(t *testing.T) {
 		t.Error("missing pdfaProperty:category must be flagged")
 	}
 }
+
+// TestExtensionFieldUndeclaredType ensures a field whose value type is neither
+// a standard type nor declared by the extension schema is flagged
+// (ISO 19005-1 6.7.8).
+func TestExtensionFieldUndeclaredType(t *testing.T) {
+	xmp := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#" xmlns:pdfaType="http://www.aiim.org/pdfa/ns/type#" xmlns:pdfaField="http://www.aiim.org/pdfa/ns/field#">
+<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">
+<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://x/</pdfaSchema:namespaceURI><pdfaSchema:prefix>x</pdfaSchema:prefix>
+<pdfaSchema:valueType><rdf:Seq><rdf:li rdf:parseType="Resource">
+<pdfaType:type>mailaddress</pdfaType:type><pdfaType:namespaceURI>http://x/m/</pdfaType:namespaceURI><pdfaType:prefix>m</pdfaType:prefix><pdfaType:description>d</pdfaType:description>
+<pdfaType:field><rdf:Seq><rdf:li rdf:parseType="Resource">
+<pdfaField:name>mailto</pdfaField:name><pdfaField:valueType>CT</pdfaField:valueType><pdfaField:description>e</pdfaField:description>
+</rdf:li></rdf:Seq></pdfaType:field>
+</rdf:li></rdf:Seq></pdfaSchema:valueType>
+</rdf:li></rdf:Bag></pdfaExtension:schemas>
+</rdf:Description></rdf:RDF></x:xmpmeta>`
+	props, err := parseXMPProperties([]byte(xmp))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	errs := checkXMPExtensionContainer(xmp, props, "6.7.8", PDFA1b)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, `"CT"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("undeclared field value type CT not flagged; errs=%v", errs)
+	}
+}
