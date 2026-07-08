@@ -196,15 +196,22 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		checkCIDSetProgramComplete,
 	}
 
+	// Validate against a shallow copy of the Document so the per-run cache is
+	// installed on the copy, never on the caller's Document. The copy shares
+	// the (read-only during validation) Objects/Trailer/Offsets, so this is
+	// cheap, and it lets a caller validate one Document concurrently — across
+	// goroutines and at several levels at once — without a data race.
+	//
 	// Memoize expensive traversals (page-tree walks, content-stream
-	// decompression) for the duration of this run. Several checks walk the
-	// same structures; without the cache each content stream inflated up to
-	// three times per page and the page tree was collected in ~8 checks.
-	doc.valCache = &validationCache{
+	// decompression) for the duration of this run: several checks walk the same
+	// structures, and without the cache each content stream inflated up to three
+	// times per page and the page tree was collected in ~8 checks.
+	runDoc := *doc
+	runDoc.valCache = &validationCache{
 		pages:   make(map[int][]pageInfo),
 		content: make(map[*Stream][]byte),
 	}
-	defer func() { doc.valCache = nil }()
+	doc = &runDoc
 
 	for _, check := range checks {
 		errs = append(errs, runCheck(doc, level, check)...)
