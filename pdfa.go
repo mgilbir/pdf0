@@ -507,6 +507,32 @@ func colourClause(concept string, level PDFALevel) string {
 	}
 }
 
+// annotActionClause returns the ISO clause for an annotation/action concept at
+// the given level. These rules move between clause trees per part (annotations:
+// 6.5.x in part 1, 6.3.x/6.4.x in parts 2/3/4; actions: 6.6.x in parts 1/4,
+// 6.5.x in parts 2/3); clauses follow the veraPDF profiles.
+func annotActionClause(concept string, level PDFALevel) string {
+	// [1b, 2b/3b, 4]
+	m := map[string][3]string{
+		"subtype":   {"6.5.2", "6.3.1", "6.3.1"},
+		"widget":    {"6.6.2", "6.4.1", "6.4.1"},
+		"forbidden": {"6.6.1", "6.5.1", "6.6.1"},
+		"catalogAA": {"6.6.1", "6.5.2", "6.6.3"},
+	}
+	c, ok := m[concept]
+	if !ok {
+		return "6.6.1"
+	}
+	switch level {
+	case PDFA1b:
+		return c[0]
+	case PDFA4:
+		return c[2]
+	default:
+		return c[1]
+	}
+}
+
 func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 	catalog := getCatalog(doc)
 	if catalog == nil {
@@ -835,7 +861,7 @@ func checkNoCatalogAA(doc *Document, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	if catalog.Get("AA") != nil {
 		errs = append(errs, ValidationError{
-			Rule:    "6.6.1",
+			Rule:    annotActionClause("catalogAA", level),
 			Level:   level,
 			Message: "catalog must not contain /AA (additional actions)",
 		})
@@ -845,7 +871,7 @@ func checkNoCatalogAA(doc *Document, level PDFALevel) []ValidationError {
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
 		if page.dict.Get("AA") != nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.6.2",
+				Rule:    annotActionClause("catalogAA", level),
 				Level:   level,
 				Message: "page dictionary must not contain /AA (additional actions)",
 				Object:  page.objNum,
@@ -1342,7 +1368,7 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 		}
 		if !allowed[st] && !extra[st] {
 			errs = append(errs, ValidationError{
-				Rule:    "6.3.1",
+				Rule:    annotActionClause("subtype", level),
 				Level:   level,
 				Message: fmt.Sprintf("annotation subtype /%s is not allowed in %s", string(st), level),
 				Object:  num,
@@ -1568,7 +1594,7 @@ func checkWidgetNoAction(doc *Document, level PDFALevel) []ValidationError {
 		}
 		if dict.Get("A") != nil {
 			errs = append(errs, ValidationError{
-				Rule:    "6.4.1",
+				Rule:    annotActionClause("widget", level),
 				Level:   level,
 				Message: "Widget annotation must not contain /A key",
 				Object:  num,
@@ -1725,7 +1751,7 @@ func checkNoForbiddenActions(doc *Document, level PDFALevel) []ValidationError {
 			isAction := typeObj == nil || typeObj == Name("Action")
 			if isAction && isForbiddenAction(s, level, conformance) {
 				errs = append(errs, ValidationError{
-					Rule:    "6.6.1",
+					Rule:    annotActionClause("forbidden", level),
 					Level:   level,
 					Message: fmt.Sprintf("forbidden action type /%s", string(s)),
 					Object:  num,
@@ -1765,7 +1791,7 @@ func checkActionChain(doc *Document, ref Object, objNum int, level PDFALevel, co
 
 	if s, ok := actionDict.Get("S").(Name); ok && isForbiddenAction(s, level, conformance) {
 		*errs = append(*errs, ValidationError{
-			Rule:    "6.6.1",
+			Rule:    annotActionClause("forbidden", level),
 			Level:   level,
 			Message: fmt.Sprintf("forbidden action type /%s", string(s)),
 			Object:  objNum,
@@ -1803,7 +1829,7 @@ func checkNamedActions(doc *Document, level PDFALevel) []ValidationError {
 		}
 		if !allowedNames[string(nName)] {
 			errs = append(errs, ValidationError{
-				Rule:    "6.6.1",
+				Rule:    annotActionClause("forbidden", level),
 				Level:   level,
 				Message: fmt.Sprintf("named action /%s not allowed (only NextPage, PrevPage, FirstPage, LastPage)", string(nName)),
 				Object:  num,
