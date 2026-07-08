@@ -1120,10 +1120,16 @@ func xpacketHasAttr(hdr, attr string) bool {
 // BOM and valid UTF-8).
 func xmpIsUTF8(raw []byte) bool {
 	if len(raw) >= 2 && (raw[0] == 0xFE && raw[1] == 0xFF || raw[0] == 0xFF && raw[1] == 0xFE) {
-		return false // UTF-16
+		return false // UTF-16 (BOM)
 	}
 	if len(raw) >= 4 && raw[0] == 0 && raw[1] == 0 {
 		return false // UTF-32
+	}
+	// A UTF-8 XMP packet begins with printable ASCII ("<?xpacket" or
+	// "<x:xmpmeta"), so a NUL as the second byte can only mean a BOM-less
+	// UTF-16 encoding — which is not UTF-8 and must be flagged (audit C24).
+	if len(raw) >= 2 && (raw[0] != 0 && raw[1] == 0 || raw[0] == 0 && raw[1] != 0) {
+		return false // BOM-less UTF-16 (LE or BE)
 	}
 	// Strip a UTF-8 BOM if present, then validate.
 	b := raw
