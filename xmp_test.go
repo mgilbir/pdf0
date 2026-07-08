@@ -270,3 +270,30 @@ func TestExtensionFieldUndeclaredType(t *testing.T) {
 		t.Errorf("undeclared field value type CT not flagged; errs=%v", errs)
 	}
 }
+
+// TestXMPUndeclaredRDFPrefix ensures a packet whose rdf:RDF element uses an
+// undeclared namespace prefix is flagged. encoding/xml resolves a declared
+// prefix to its URI, so an undeclared <RDF:RDF> leaves the raw prefix as the
+// namespace (ISO 19005-1; Isartor 6.7.2-t02-fail-a).
+func TestXMPUndeclaredRDFPrefix(t *testing.T) {
+	mk := func(body string) *Document {
+		meta := &Stream{Dict: Dictionary{}, Data: []byte(body)}
+		meta.Dict.Set("Type", Name("Metadata"))
+		cat := &Dictionary{}
+		cat.Set("Type", Name("Catalog"))
+		cat.Set("Metadata", IndirectRef{Number: 2})
+		return &Document{Version: "1.7", Objects: map[int]*IndirectObject{
+			1: {Number: 1, Value: cat},
+			2: {Number: 2, Value: meta},
+		}, Trailer: dictWith("Root", IndirectRef{Number: 1})}
+	}
+	rdfNS := `xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"`
+	bad := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF:RDF ` + rdfNS + `><rdf:Description/></RDF:RDF></x:xmpmeta>`
+	good := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF ` + rdfNS + `><rdf:Description/></rdf:RDF></x:xmpmeta>`
+	if got := len(checkXMPWellFormed(mk(bad), PDFA1b)); got == 0 {
+		t.Error("undeclared RDF prefix not flagged")
+	}
+	if got := len(checkXMPWellFormed(mk(good), PDFA1b)); got != 0 {
+		t.Errorf("valid rdf:RDF wrongly flagged: %d", got)
+	}
+}

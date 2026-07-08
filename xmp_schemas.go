@@ -1131,8 +1131,15 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 
 	xmp := decodeXMPToUTF8(raw)
 	if xmp != "" {
-		if _, err := parseXMLTree([]byte(xmp)); err != nil {
+		if tree, err := parseXMLTree([]byte(xmp)); err != nil {
 			errs = append(errs, ValidationError{Rule: wfRule, Level: level, Message: "the XMP packet is not well-formed XML"})
+		} else if findRDF(tree) == nil {
+			// The packet is well-formed XML but carries no properly namespaced
+			// rdf:RDF element — e.g. the RDF namespace prefix is undeclared.
+			// encoding/xml resolves a declared prefix to its URI, so an
+			// undeclared <RDF:RDF> yields the raw prefix "RDF" as the namespace
+			// rather than the RDF URI (Isartor 6.7.2-t02-fail-a).
+			errs = append(errs, ValidationError{Rule: wfRule, Level: level, Message: "the XMP packet has no properly namespaced rdf:RDF element"})
 		}
 	}
 	return errs
