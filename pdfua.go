@@ -85,6 +85,10 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
 	v = append(v, doc.checkUAXFA(cat)...)
 
+	// 7.10 — optional-content config; 7.11 — embedded-file specifications.
+	v = append(v, doc.checkUAOptionalContent(cat)...)
+	v = append(v, doc.checkUAEmbeddedFiles()...)
+
 	// 6.1 — PDF/UA-1 requires a 1.x header.
 	v = append(v, doc.checkUAHeaderVersion()...)
 
@@ -301,6 +305,57 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 		// element. (Hidden and Popup annotations were already skipped above.)
 		if a.Get("StructParent") == nil {
 			v = append(v, UAViolation{"7.18.1", "annotation is not tagged (no /StructParent linking it to the structure tree)", num})
+		}
+	}
+	return v
+}
+
+// checkUAOptionalContent enforces the optional-content configuration
+// requirements (7.10): every OC configuration dictionary — the /D default and
+// each entry of /Configs — must carry a non-empty /Name and must not contain an
+// /AS key (which would make visibility depend on usage/state).
+func (d *Document) checkUAOptionalContent(cat *Dictionary) []UAViolation {
+	ocp := d.ResolveDict(cat.Get("OCProperties"))
+	if ocp == nil {
+		return nil
+	}
+	var v []UAViolation
+	check := func(cfg *Dictionary) {
+		if cfg == nil {
+			return
+		}
+		if name, _ := d.Resolve(cfg.Get("Name")).(String); len(name.Value) == 0 {
+			v = append(v, UAViolation{"7.10", "optional-content configuration dictionary has no non-empty /Name", 0})
+		}
+		if cfg.Get("AS") != nil {
+			v = append(v, UAViolation{"7.10", "optional-content configuration dictionary must not contain an /AS key", 0})
+		}
+	}
+	check(d.ResolveDict(ocp.Get("D")))
+	if cfgs, ok := d.Resolve(ocp.Get("Configs")).(Array); ok {
+		for _, c := range cfgs {
+			check(d.ResolveDict(c))
+		}
+	}
+	return v
+}
+
+// checkUAEmbeddedFiles requires every embedded-file specification (a file spec
+// with an /EF entry) to carry non-empty /F and /UF file names (7.11).
+func (d *Document) checkUAEmbeddedFiles() []UAViolation {
+	var v []UAViolation
+	for num, iobj := range d.Objects {
+		fs, ok := iobj.Value.(*Dictionary)
+		if !ok || fs.Get("EF") == nil {
+			continue
+		}
+		if t, _ := fs.Get("Type").(Name); t != "" && t != "Filespec" {
+			continue
+		}
+		f, _ := d.Resolve(fs.Get("F")).(String)
+		uf, _ := d.Resolve(fs.Get("UF")).(String)
+		if len(f.Value) == 0 || len(uf.Value) == 0 {
+			v = append(v, UAViolation{"7.11", "embedded-file specification must have non-empty /F and /UF keys", num})
 		}
 	}
 	return v
