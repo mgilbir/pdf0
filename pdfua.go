@@ -61,6 +61,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	v = append(v, doc.checkUAFonts()...)
 	v = append(v, doc.checkUAFontDicts()...)
 	v = append(v, doc.checkUACMaps()...)
+	v = append(v, doc.checkUAToUnicodeValues()...)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
 	v = append(v, doc.checkUACharMapping()...)
@@ -455,6 +456,21 @@ func (d *Document) checkOneUACMap(fontDict *Dictionary) []UAViolation {
 		}
 	}
 	return nil
+}
+
+// checkUAToUnicodeValues flags a rendered font whose ToUnicode CMap maps any
+// character code to a forbidden Unicode value (U+0000, U+FEFF, or U+FFFE), which
+// carry no usable text meaning (7.21.7).
+func (d *Document) checkUAToUnicodeValues() []UAViolation {
+	var v []UAViolation
+	for fontDict := range collectFontTextUsage(d) {
+		if tu, ok := d.Resolve(fontDict.Get("ToUnicode")).(*Stream); ok {
+			if hasForbiddenUnicodeTargets(d, tu) {
+				v = append(v, UAViolation{"7.21.7", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)", d.dictObjNum(fontDict)})
+			}
+		}
+	}
+	return v
 }
 
 // checkUAReferenceXObjects flags reference XObjects — Form XObjects carrying a
