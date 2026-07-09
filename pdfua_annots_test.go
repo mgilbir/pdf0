@@ -75,3 +75,20 @@ func TestUAAnnotationTagged(t *testing.T) {
 		t.Error("hidden annotation should be exempt from tagging")
 	}
 }
+
+// TestUALinkAltText flags a Link annotation without /Contents.
+func TestUALinkAltText(t *testing.T) {
+	doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
+	a := &Dictionary{}
+	a.Set("Type", Name("Annot"))
+	a.Set("Subtype", Name("Link"))
+	a.Set("StructParent", Integer(0)) // tagged, so only the alt-text rule applies
+	doc.Objects[5] = &IndirectObject{Number: 5, Value: a}
+	if !hasUAClause(doc.checkUAAnnotations(), "7.18.5") {
+		t.Error("Link without /Contents not flagged")
+	}
+	a.Set("Contents", String{Value: []byte("go to the next section")})
+	if hasUAClause(doc.checkUAAnnotations(), "7.18.5") {
+		t.Error("Link with /Contents should be clean")
+	}
+}

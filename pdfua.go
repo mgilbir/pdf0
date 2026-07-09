@@ -278,6 +278,12 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 		if st == "TrapNet" {
 			v = append(v, UAViolation{"7.18.2", "TrapNet annotations are not permitted", num})
 		}
+		// 28-012: a Link annotation needs an alternate description in /Contents.
+		if st == "Link" {
+			if c, _ := d.Resolve(a.Get("Contents")).(String); len(c.Value) == 0 {
+				v = append(v, UAViolation{"7.18.5", "Link annotation has no alternate description (/Contents)", num})
+			}
+		}
 		// 28-002/010/011: a visible annotation must be represented in the
 		// structure tree — it carries a /StructParent linking it to a structure
 		// element. (Hidden and Popup annotations were already skipped above.)
