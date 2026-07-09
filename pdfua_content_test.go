@@ -56,3 +56,43 @@ func TestUARealContent(t *testing.T) {
 		t.Error("/OC-wrapped tagged content should be clean")
 	}
 }
+
+// TestUAAnnotStructType flags an annotation nested under the wrong structure
+// element type and clears it under the right one.
+func TestUAAnnotStructType(t *testing.T) {
+	mk := func(parentType Name) *Document {
+		doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
+		cat := &Dictionary{}
+		cat.Set("Type", Name("Catalog"))
+		cat.Set("StructTreeRoot", IndirectRef{Number: 2})
+		// StructTreeRoot -> element (parentType) -> OBJR -> widget annot (obj 5)
+		objr := &Dictionary{}
+		objr.Set("Type", Name("OBJR"))
+		objr.Set("Obj", IndirectRef{Number: 5})
+		elem := &Dictionary{}
+		elem.Set("S", parentType)
+		elem.Set("K", IndirectRef{Number: 4})
+		root := &Dictionary{}
+		root.Set("Type", Name("StructTreeRoot"))
+		root.Set("K", IndirectRef{Number: 3})
+		annot := &Dictionary{}
+		annot.Set("Type", Name("Annot"))
+		annot.Set("Subtype", Name("Widget"))
+		annot.Set("StructParent", Integer(0))
+		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
+		doc.Objects[2] = &IndirectObject{Number: 2, Value: root}
+		doc.Objects[3] = &IndirectObject{Number: 3, Value: elem}
+		doc.Objects[4] = &IndirectObject{Number: 4, Value: objr}
+		doc.Objects[5] = &IndirectObject{Number: 5, Value: annot}
+		doc.Trailer.Set("Root", IndirectRef{Number: 1})
+		return doc
+	}
+	bad := mk("P") // widget under <P>, not <Form>
+	if len(bad.checkUAAnnotStructType(bad.ResolveDict(bad.Trailer.Get("Root")))) == 0 {
+		t.Error("widget under <P> not flagged")
+	}
+	good := mk("Form")
+	if len(good.checkUAAnnotStructType(good.ResolveDict(good.Trailer.Get("Root")))) != 0 {
+		t.Error("widget under <Form> should be clean")
+	}
+}

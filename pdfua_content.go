@@ -93,3 +93,84 @@ func operandsHaveName(operands []contentToken, name string) bool {
 	}
 	return false
 }
+
+// checkUAAnnotStructType correlates annotations with the structure tree via OBJR
+// references and flags a mismatch between an annotation's subtype and its
+// enclosing structure element: a Widget must sit under <Form>, a Link under
+// <Link>, and any other annotation under <Annot> (Matterhorn 28-002/010/011).
+// Annotations not reachable through an OBJR are left to the tagging check.
+func (d *Document) checkUAAnnotStructType(cat *Dictionary) []UAViolation {
+	root := d.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return nil
+	}
+	annotParent := map[int]Name{}
+	seen := map[int]bool{}
+	var walk func(node Object, parentType Name)
+	walk = func(node Object, parentType Name) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		elem := d.ResolveDict(node)
+		if elem == nil {
+			if arr, ok := d.Resolve(node).(Array); ok {
+				for _, kid := range arr {
+					walk(kid, parentType)
+				}
+			}
+			return
+		}
+		// An OBJR structure element references an object (often an annotation).
+		if t, _ := elem.Get("Type").(Name); t == "OBJR" {
+			if ref, ok := elem.Get("Obj").(IndirectRef); ok {
+				annotParent[ref.Number] = parentType
+			}
+			return
+		}
+		s, _ := elem.Get("S").(Name)
+		if k := elem.Get("K"); k != nil {
+			switch kids := d.Resolve(k).(type) {
+			case Array:
+				for _, kid := range kids {
+					walk(kid, s)
+				}
+			default:
+				walk(k, s)
+			}
+		}
+	}
+	walk(root.Get("K"), "")
+
+	var v []UAViolation
+	for num, iobj := range d.Objects {
+		a, ok := iobj.Value.(*Dictionary)
+		if !ok || !isAnnotation(a) {
+			continue
+		}
+		st, _ := a.Get("Subtype").(Name)
+		if st == "Popup" {
+			continue
+		}
+		if f, _ := d.Resolve(a.Get("F")).(Integer); int(f)&0x2 != 0 {
+			continue
+		}
+		parent, linked := annotParent[num]
+		if !linked {
+			continue // not reached via OBJR; the tagging check covers presence
+		}
+		want := Name("Annot")
+		switch st {
+		case "Widget":
+			want = "Form"
+		case "Link":
+			want = "Link"
+		}
+		if parent != want {
+			v = append(v, UAViolation{"7.18.1", "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", num})
+		}
+	}
+	return v
+}

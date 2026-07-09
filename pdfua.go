@@ -84,6 +84,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.1 — real content must be tagged or marked as an artifact (Matterhorn 01).
 	v = append(v, doc.checkUARealContent(cat)...)
 
+	// 7.18 — annotation must sit under the right structure element (28-010/011).
+	v = append(v, doc.checkUAAnnotStructType(cat)...)
+
 	// 7.3 — every figure needs alternate text.
 	v = append(v, doc.checkFigureAlt(cat)...)
 	return v
