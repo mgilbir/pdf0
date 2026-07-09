@@ -52,3 +52,26 @@ func TestUATrapNet(t *testing.T) {
 		t.Error("hidden annotation should be exempt")
 	}
 }
+
+// TestUAAnnotationTagged flags a visible, untagged annotation and accepts a
+// tagged one.
+func TestUAAnnotationTagged(t *testing.T) {
+	doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
+	a := &Dictionary{}
+	a.Set("Type", Name("Annot"))
+	a.Set("Subtype", Name("Text"))
+	doc.Objects[5] = &IndirectObject{Number: 5, Value: a}
+	if !hasUAClause(doc.checkUAAnnotations(), "7.18.1") {
+		t.Error("untagged annotation not flagged")
+	}
+	a.Set("StructParent", Integer(0))
+	if hasUAClause(doc.checkUAAnnotations(), "7.18.1") {
+		t.Error("tagged annotation should be clean")
+	}
+	// Hidden annotations are exempt even without /StructParent.
+	a.Delete("StructParent")
+	a.Set("F", Integer(2))
+	if hasUAClause(doc.checkUAAnnotations(), "7.18.1") {
+		t.Error("hidden annotation should be exempt from tagging")
+	}
+}
