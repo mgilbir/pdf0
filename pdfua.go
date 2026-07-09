@@ -61,6 +61,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	v = append(v, doc.checkUAFonts()...)
 	v = append(v, doc.checkUAFontDicts()...)
 	v = append(v, doc.checkUACMaps()...)
+	v = append(v, doc.checkUACMapWMode()...)
 	v = append(v, doc.checkUACIDSystemInfo()...)
 	v = append(v, doc.checkUAToUnicodeValues()...)
 
@@ -561,6 +562,56 @@ func (d *Document) cidSystemInfo(dict *Dictionary) (string, string) {
 	r, _ := d.Resolve(si.Get("Registry")).(String)
 	o, _ := d.Resolve(si.Get("Ordering")).(String)
 	return string(r.Value), string(o.Value)
+}
+
+// checkUACMapWMode enforces that an embedded CMap's /WMode dictionary entry
+// matches the WMode declared inside the CMap stream itself (7.21.3.3, CMapFile
+// rule). Only Type 0 fonts used for rendering are considered.
+func (d *Document) checkUACMapWMode() []UAViolation {
+	var v []UAViolation
+	for fontDict := range collectFontTextUsage(d) {
+		if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
+			continue
+		}
+		s, ok := d.Resolve(fontDict.Get("Encoding")).(*Stream)
+		if !ok {
+			continue
+		}
+		dictWM := 0
+		if w, ok := d.Resolve(s.Dict.Get("WMode")).(Integer); ok {
+			dictWM = int(w)
+		}
+		if inner, found := cmapInnerWMode(decodeContentStream(d, s)); found && inner != dictWM {
+			v = append(v, UAViolation{"7.21.3.3", fmt.Sprintf("embedded CMap /WMode %d does not match the WMode %d declared in the CMap stream", dictWM, inner), d.dictObjNum(fontDict)})
+		}
+	}
+	return v
+}
+
+// cmapInnerWMode extracts the integer following the first "/WMode" token in a
+// decoded CMap stream (e.g. "/WMode 1 def"), returning it and whether it was
+// found.
+func cmapInnerWMode(data []byte) (int, bool) {
+	i := strings.Index(string(data), "/WMode")
+	if i < 0 {
+		return 0, false
+	}
+	j := i + len("/WMode")
+	for j < len(data) && (data[j] == ' ' || data[j] == '\t' || data[j] == '\r' || data[j] == '\n') {
+		j++
+	}
+	start := j
+	for j < len(data) && data[j] >= '0' && data[j] <= '9' {
+		j++
+	}
+	if j == start {
+		return 0, false
+	}
+	n := 0
+	for _, c := range data[start:j] {
+		n = n*10 + int(c-'0')
+	}
+	return n, true
 }
 
 func (d *Document) checkOneUACMap(fontDict *Dictionary) []UAViolation {
