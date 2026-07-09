@@ -13,8 +13,8 @@ import (
 )
 
 // The PDF standard security handler (ISO 32000-1 §7.6, ISO 32000-2 §7.6).
-// Decryption for the empty user password: RC4 (V1/V2, R2–R4) and AES-128
-// (V4, /AESV2). AES-256 (V5, /AESV3, R6) is handled separately.
+// Decryption for a user or owner password: RC4 (V1/V2, R2–R4), AES-128
+// (V4, /AESV2), and AES-256 (V5, /AESV3, R6).
 
 // passwordPad is the 32-byte padding string (ISO 32000-1 §7.6.3.3, Algorithm 2,
 // step a). An empty user password pads to exactly this string.
@@ -47,10 +47,11 @@ type stdSecurityHandler struct {
 }
 
 // buildStdSecurityHandler parses the trailer's /Encrypt dictionary and derives
-// the file key for the empty user password. It returns (nil, nil) when the
-// scheme is one decryption does not support, so the caller leaves the document
+// the file key for the given password (empty for the common case), trying it as
+// both the user and owner password. It returns (nil, nil) when the password is
+// wrong or the scheme is unsupported, so the caller leaves the document
 // encrypted; an error signals malformed encryption metadata.
-func buildStdSecurityHandler(doc *Document) (*stdSecurityHandler, error) {
+func buildStdSecurityHandler(doc *Document, password string) (*stdSecurityHandler, error) {
 	encObj := doc.Trailer.Get("Encrypt")
 	if encObj == nil {
 		return nil, nil
@@ -85,7 +86,7 @@ func buildStdSecurityHandler(doc *Document) (*stdSecurityHandler, error) {
 		ue := resolveBytes(doc, enc.Get("UE"))
 		o := resolveBytes(doc, enc.Get("O"))
 		oe := resolveBytes(doc, enc.Get("OE"))
-		if !h.deriveKeyR6(u, ue, o, oe) {
+		if !h.deriveKeyR6([]byte(password), u, ue, o, oe) {
 			return nil, nil // cannot derive the key — leave the document encrypted
 		}
 		return h, nil
@@ -107,8 +108,22 @@ func buildStdSecurityHandler(doc *Document) (*stdSecurityHandler, error) {
 			id = s.Value
 		}
 	}
-	h.deriveKeyR234(o.Value[:32], p, id)
-	return h, nil
+	u := resolveBytes(doc, enc.Get("U"))
+
+	// Try the password as the user password, then as the owner password
+	// (Algorithm 7 recovers the user password from /O). If neither validates
+	// against /U, the password is wrong and the document is left encrypted.
+	padded := padPassword(password)
+	h.deriveKeyR234(padded, o.Value[:32], p, id)
+	if h.userKeyValid(u, id) {
+		return h, nil
+	}
+	userPad := ownerUserPassword(padded, o.Value[:32], h.r, h.keyLen)
+	h.deriveKeyR234(userPad, o.Value[:32], p, id)
+	if h.userKeyValid(u, id) {
+		return h, nil
+	}
+	return nil, nil
 }
 
 // resolveMethods sets the stream and string crypt methods. Below V4 both are
@@ -143,11 +158,11 @@ func (h *stdSecurityHandler) resolveMethods(doc *Document, enc *Dictionary) {
 	h.strMethod = methodFor(strF)
 }
 
-// deriveKeyR234 computes the file encryption key for revisions 2–4
-// (ISO 32000-1 Algorithm 2) with the empty user password.
-func (h *stdSecurityHandler) deriveKeyR234(o []byte, p int32, id []byte) {
+// deriveKeyR234 computes the file encryption key from the padded password for
+// revisions 2–4 (ISO 32000-1 Algorithm 2).
+func (h *stdSecurityHandler) deriveKeyR234(paddedPw, o []byte, p int32, id []byte) {
 	sum := md5.New()
-	sum.Write(passwordPad) // empty password → the padding string
+	sum.Write(paddedPw)
 	sum.Write(o)
 	var pb [4]byte
 	binary.LittleEndian.PutUint32(pb[:], uint32(p))
@@ -166,12 +181,98 @@ func (h *stdSecurityHandler) deriveKeyR234(o []byte, p int32, id []byte) {
 	h.fileKey = append([]byte(nil), key[:h.keyLen]...)
 }
 
-// deriveKeyR6 recovers the AES-256 file key for the empty password
+// padPassword pads (or truncates) a password to the 32-byte field used by
+// revisions 2–4 (ISO 32000-1 Algorithm 2, step a).
+func padPassword(password string) []byte {
+	out := make([]byte, 32)
+	n := copy(out, password)
+	copy(out[n:], passwordPad)
+	return out
+}
+
+// userKeyValid checks that the current file key matches /U, i.e. the password
+// used to derive it is the correct user password (ISO 32000-1 Algorithm 4 for
+// R2, Algorithm 6 for R3–4).
+func (h *stdSecurityHandler) userKeyValid(u, id []byte) bool {
+	if len(u) < 16 {
+		return false
+	}
+	if h.r == 2 {
+		c, err := rc4.NewCipher(h.fileKey)
+		if err != nil {
+			return false
+		}
+		out := make([]byte, 32)
+		c.XORKeyStream(out, passwordPad)
+		return len(u) >= 32 && bytes.Equal(out, u[:32])
+	}
+	sum := md5.New()
+	sum.Write(passwordPad)
+	sum.Write(id)
+	val := sum.Sum(nil) // 16 bytes
+	c, err := rc4.NewCipher(h.fileKey)
+	if err != nil {
+		return false
+	}
+	c.XORKeyStream(val, val)
+	for i := 1; i <= 19; i++ {
+		key := make([]byte, len(h.fileKey))
+		for j := range key {
+			key[j] = h.fileKey[j] ^ byte(i)
+		}
+		c, err := rc4.NewCipher(key)
+		if err != nil {
+			return false
+		}
+		c.XORKeyStream(val, val)
+	}
+	// Only the first 16 bytes of /U are the checkable value (the rest is
+	// arbitrary padding under R3–4).
+	return bytes.Equal(val, u[:16])
+}
+
+// ownerUserPassword recovers the padded user password from /O given the padded
+// owner password (ISO 32000-1 Algorithm 7).
+func ownerUserPassword(paddedOwnerPw, o []byte, r, keyLen int) []byte {
+	sum := md5.New()
+	sum.Write(paddedOwnerPw)
+	key := sum.Sum(nil)
+	if r >= 3 {
+		for i := 0; i < 50; i++ {
+			s := md5.Sum(key[:keyLen])
+			key = s[:]
+		}
+	}
+	ownerKey := key[:keyLen]
+
+	userPad := append([]byte(nil), o...)
+	if r == 2 {
+		c, err := rc4.NewCipher(ownerKey)
+		if err != nil {
+			return userPad
+		}
+		c.XORKeyStream(userPad, userPad)
+		return userPad
+	}
+	for i := 19; i >= 0; i-- {
+		k := make([]byte, keyLen)
+		for j := range k {
+			k[j] = ownerKey[j] ^ byte(i)
+		}
+		c, err := rc4.NewCipher(k)
+		if err != nil {
+			return userPad
+		}
+		c.XORKeyStream(userPad, userPad)
+	}
+	return userPad
+}
+
+// deriveKeyR6 recovers the AES-256 file key for the given password
 // (ISO 32000-2 Algorithm 2.A). It tries the user entry, then the owner entry,
-// validating the empty password against the stored hash before decrypting the
+// validating the password against the stored hash before decrypting the
 // corresponding /UE or /OE. Returns false if neither validates.
-func (h *stdSecurityHandler) deriveKeyR6(u, ue, o, oe []byte) bool {
-	pw := []byte{} // empty user/owner password
+func (h *stdSecurityHandler) deriveKeyR6(pw, u, ue, o, oe []byte) bool {
 	if len(u) >= 48 && len(ue) >= 32 {
 		validationSalt, keySalt := u[32:40], u[40:48]
 		if bytes.Equal(hash2B(pw, validationSalt, nil), u[:32]) {
