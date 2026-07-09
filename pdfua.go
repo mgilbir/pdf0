@@ -69,6 +69,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.1 — structure types must be standard or mapped via /RoleMap.
 	v = append(v, doc.checkUARoleMap(cat)...)
 
+	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile.
+	v = append(v, doc.checkUAStructNesting(cat)...)
+
 	// 7.4 — numbered heading levels must not be skipped.
 	v = append(v, doc.checkUAHeadings(cat)...)
 
