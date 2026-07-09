@@ -54,6 +54,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 5 — the file must declare PDF/UA conformance in its XMP metadata.
 	v = append(v, doc.checkUAIdentifier(cat)...)
 
+	// Matterhorn checkpoint 06: the document must have an XMP dc:title.
+	v = append(v, doc.checkUATitle(cat)...)
+
 	// 7.21 — every font used for rendering must be embedded.
 	v = append(v, doc.checkUAFonts()...)
 
@@ -217,6 +220,20 @@ func (d *Document) checkUAIdentifier(cat *Dictionary) []UAViolation {
 	}
 	if !strings.Contains(decodeXMPToUTF8(stream.Data), "pdfuaid:part") {
 		return []UAViolation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
+	}
+	return nil
+}
+
+// checkUATitle requires the XMP metadata to carry a document title (dc:title),
+// which together with /DisplayDocTitle makes assistive tools announce the title
+// rather than the file name (Matterhorn checkpoint 06).
+func (d *Document) checkUATitle(cat *Dictionary) []UAViolation {
+	stream, ok := d.Resolve(cat.Get("Metadata")).(*Stream)
+	if !ok {
+		return nil // absence of metadata is already reported by the identifier check
+	}
+	if !strings.Contains(decodeXMPToUTF8(stream.Data), "dc:title") {
+		return []UAViolation{{"7.1", "XMP metadata has no document title (dc:title)", 0}}
 	}
 	return nil
 }
