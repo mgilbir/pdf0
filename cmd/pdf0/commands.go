@@ -126,6 +126,28 @@ func cmdExtract(args []string) error {
 	return nil
 }
 
+func cmdRepair(args []string) error {
+	fs := flag.NewFlagSet("repair", flag.ExitOnError)
+	level := fs.String("level", "2b", "target PDF/A level")
+	pw := fs.String("password", "", "user or owner password")
+	fs.Parse(args)
+	if fs.NArg() != 2 {
+		return fmt.Errorf("usage: pdf0 repair [-level 1b|2b|3b|4] [-password PW] <in> <out>")
+	}
+	lvl, ok := parseLevel(*level)
+	if !ok {
+		return fmt.Errorf("unknown level %q", *level)
+	}
+	doc, err := readDoc(fs.Arg(0), *pw)
+	if err != nil {
+		return err
+	}
+	for _, a := range doc.Repair(lvl) {
+		fmt.Println("fixed:", a.Description)
+	}
+	return writeDoc(doc, fs.Arg(1))
+}
+
 func parseLevel(s string) (pdf0.PDFALevel, bool) {
 	switch s {
 	case "1b":
