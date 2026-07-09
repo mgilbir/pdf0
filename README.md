@@ -11,10 +11,22 @@ go get github.com/mgilbir/pdf0
 
 - **Parse** a PDF into a typed object model (`Read`), preserving dictionary key
   order for faithful round-tripping.
-- **Serialize** the object model back to PDF bytes (`Document.Write`).
-- **Validate** a document against PDF/A conformance levels (`ValidatePDFA` /
-  `ValidatePDFABytes`): PDF/A-1b, -2b, -3b, and -4.
+- **Serialize** the object model back to PDF bytes (`Document.Write`),
+  regenerating cross-reference streams and object streams where the source used
+  them.
+- **Validate** against PDF/A conformance levels (`ValidatePDFA` /
+  `ValidatePDFABytes`): PDF/A-1b, -2b, -3b, and -4; plus foundational PDF/UA-1
+  accessibility checks (`ValidatePDFUA`).
+- **Encrypt / decrypt** with the standard security handler — RC4, AES-128, and
+  AES-256, via `ReadWithPassword`, `SetEncryption`, and `RemoveEncryption`.
+- **Sign and verify** digital signatures (`WriteSigned` / `VerifySignatures`,
+  CMS/PKCS#7).
+- **Extract text** (`ExtractText`), **repair** common conformance failures
+  (`Repair`), and **manipulate pages** (`ExtractPages`, `AppendPages`).
 - **Build** a minimal conformant PDF/A document (`NewPDFADocument`).
+
+A command-line tool (`cmd/pdf0`) wraps these: `info`, `validate`, `ua`,
+`decrypt`, `encrypt`, `extract`, `repair`, and `merge`.
 
 ## Quick start
 
@@ -149,6 +161,11 @@ findings, not a description of how the code works — for that see
 | `fonts.go` / `fontprog.go` / `font_encodings.go` / `cff_strings.go` | Font-dictionary rules and sfnt/CFF/Type1 program parsing |
 | `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
 | `pdfa_create.go` | Minimal PDF/A document builder |
+| `crypt.go` / `crypt_encrypt.go` / `cms.go` | Standard security handler (RC4/AES decrypt & encrypt) and CMS parsing |
+| `signatures.go` / `sign.go` | Digital signature verification and signing |
+| `text.go` | Content-stream text extraction |
+| `pages.go` / `preflight.go` / `pdfua.go` | Page operations, repair, and PDF/UA checks |
+| `cmd/pdf0` | Command-line tool |
 
 ## License
 
