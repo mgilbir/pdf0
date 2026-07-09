@@ -110,12 +110,12 @@ This is a young library. What works:
 
 Known limitations:
 
-- **Decryption is partial.** Files using the standard security handler with the
-  empty user password are decrypted on `Read` for RC4 (V1/V2) and AES-128
-  (V4/`AESV2`); their strings and streams are available in the clear.
-  AES-256 (V5/`AESV3`, R6) and non-empty passwords are not yet handled — such
-  files are still detected (`Document.Encrypted`) but left encrypted. `Write`
-  refuses encrypted documents pending re-encryption support.
+- **Decryption is read-only.** Files using the standard security handler with
+  the empty user password are decrypted on `Read` for RC4 (V1/V2), AES-128
+  (V4/`AESV2`), and AES-256 (V5/`AESV3`, R6); their strings and streams are
+  available in the clear. Non-empty passwords are not yet handled — such files
+  are detected (`Document.Encrypted`) but left encrypted. `Write` refuses
+  encrypted documents pending re-encryption support.
 - **`Write` always emits a traditional cross-reference table**, even for a file
   read from an xref stream; the object model round-trips, the on-disk layout is
   regenerated.
