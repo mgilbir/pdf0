@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/rc4"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -428,6 +429,111 @@ func aesCBCDecrypt(key, data []byte) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// encrypt is the inverse of decrypt: it enciphers plaintext for object
+// (num, gen) under the given method.
+func (h *stdSecurityHandler) encrypt(data []byte, num, gen int, method cryptMethod) []byte {
+	switch method {
+	case cryptRC4:
+		c, err := rc4.NewCipher(h.objectKey(num, gen, false))
+		if err != nil {
+			return data
+		}
+		out := make([]byte, len(data))
+		c.XORKeyStream(out, data)
+		return out
+	case cryptAESV2:
+		if out, err := aesCBCEncrypt(h.objectKey(num, gen, true), data); err == nil {
+			return out
+		}
+	case cryptAESV3:
+		if out, err := aesCBCEncrypt(h.fileKey, data); err == nil {
+			return out
+		}
+	}
+	return data
+}
+
+// aesCBCEncrypt encrypts with AES-CBC, prepending a random IV and applying
+// PKCS#7 padding â the format aesCBCDecrypt expects.
+func aesCBCEncrypt(key, data []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	pad := aes.BlockSize - len(data)%aes.BlockSize
+	padded := append(append([]byte(nil), data...), bytes.Repeat([]byte{byte(pad)}, pad)...)
+	out := make([]byte, aes.BlockSize+len(padded))
+	if _, err := rand.Read(out[:aes.BlockSize]); err != nil {
+		return nil, err
+	}
+	cipher.NewCBCEncrypter(block, out[:aes.BlockSize]).CryptBlocks(out[aes.BlockSize:], padded)
+	return out, nil
+}
+
+// encryptCopy returns encrypted copies of the given objects, leaving the
+// originals (the in-memory plaintext) untouched. The /Encrypt dictionary is
+// passed through unencrypted. A stream whose data grows (AES padding) gets its
+// direct /Length updated; an indirect /Length is handled by the caller.
+func (h *stdSecurityHandler) encryptCopy(objects map[int]*IndirectObject) map[int]*IndirectObject {
+	out := make(map[int]*IndirectObject, len(objects))
+	for num, iobj := range objects {
+		if num == h.encryptObjNum {
+			out[num] = iobj
+			continue
+		}
+		out[num] = &IndirectObject{
+			Number:     iobj.Number,
+			Generation: iobj.Generation,
+			Value:      h.encryptObj(iobj.Value, iobj.Number, iobj.Generation),
+		}
+	}
+	return out
+}
+
+func (h *stdSecurityHandler) encryptObj(o Object, num, gen int) Object {
+	switch v := o.(type) {
+	case String:
+		if h.strMethod == cryptNone {
+			return v
+		}
+		return String{Value: h.encrypt(v.Value, num, gen, h.strMethod), IsHex: v.IsHex}
+	case Array:
+		cp := make(Array, len(v))
+		for i := range v {
+			cp[i] = h.encryptObj(v[i], num, gen)
+		}
+		return cp
+	case *Dictionary:
+		return h.encryptDictCopy(v, num, gen)
+	case *Stream:
+		d := h.encryptDictCopy(&v.Dict, num, gen)
+		data := v.Data
+		skip := h.stmMethod == cryptNone
+		if t, _ := v.Dict.Get("Type").(Name); t == "XRef" || (!h.encryptMetadata && t == "Metadata") {
+			skip = true
+		}
+		if !skip {
+			data = h.encrypt(v.Data, num, gen, h.stmMethod)
+			if _, isRef := d.Get("Length").(IndirectRef); !isRef {
+				d.Set("Length", Integer(len(data)))
+			}
+		}
+		return &Stream{Dict: *d, Data: data}
+	}
+	return o
+}
+
+func (h *stdSecurityHandler) encryptDictCopy(d *Dictionary, num, gen int) *Dictionary {
+	cp := &Dictionary{
+		Keys:   append([]Name(nil), d.Keys...),
+		Values: make([]Object, len(d.Values)),
+	}
+	for i, val := range d.Values {
+		cp.Values[i] = h.encryptObj(val, num, gen)
+	}
+	return cp
 }
 
 // decryptDocument decrypts every string and stream in the loaded (top-level)

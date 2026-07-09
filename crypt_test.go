@@ -3,8 +3,6 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rc4"
 	"io"
 	"os"
@@ -87,26 +85,13 @@ func TestDecryptRoundTrip(t *testing.T) {
 		t.Errorf("RC4 round-trip: got %q", got)
 	}
 
-	aesEnc := aesCBCEncrypt(t, h.objectKey(7, 0, true), plain)
-	if got := h.decrypt(aesEnc, 7, 0, cryptAESV2); !bytes.Equal(got, plain) {
-		t.Errorf("AES-128 round-trip: got %q", got)
-	}
-}
-
-// aesCBCEncrypt is the inverse of aesCBCDecrypt, for the round-trip test.
-func aesCBCEncrypt(t *testing.T, key, plain []byte) []byte {
-	t.Helper()
-	block, err := aes.NewCipher(key)
+	aesEnc, err := aesCBCEncrypt(h.objectKey(7, 0, true), plain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pad := aes.BlockSize - len(plain)%aes.BlockSize
-	padded := append(append([]byte(nil), plain...), bytes.Repeat([]byte{byte(pad)}, pad)...)
-	iv := bytes.Repeat([]byte{0x01}, aes.BlockSize)
-	out := make([]byte, aes.BlockSize+len(padded))
-	copy(out, iv)
-	cipher.NewCBCEncrypter(block, iv).CryptBlocks(out[aes.BlockSize:], padded)
-	return out
+	if got := h.decrypt(aesEnc, 7, 0, cryptAESV2); !bytes.Equal(got, plain) {
+		t.Errorf("AES-128 round-trip: got %q", got)
+	}
 }
 
 func findCorpusFile(root, sub string) string {
