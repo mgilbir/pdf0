@@ -42,3 +42,4 @@ output.pdf
 
 # veraPDF test corpus (downloaded via `make corpus`)
 testdata/verapdf-corpus/
+testdata/fuzz/
