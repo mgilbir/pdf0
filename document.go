@@ -13,10 +13,12 @@ type Document struct {
 	Version string                  // e.g., "2.0"
 	Objects map[int]*IndirectObject // object number → object
 	Trailer Dictionary
-	// Encrypted reports whether the file carries an /Encrypt dictionary.
-	// Decryption is not implemented: the document structure is readable, but
-	// string and stream contents remain in their encrypted form. Write
-	// refuses such documents.
+	// Encrypted reports whether the file carried an /Encrypt dictionary.
+	// Standard-security-handler files with the empty user password are decrypted
+	// on Read (RC4 and AES-128); their strings and streams are then in the clear
+	// but this flag stays set. Schemes decryption does not handle (AES-256,
+	// non-empty passwords) keep their contents encrypted. Write refuses encrypted
+	// documents.
 	Encrypted bool
 
 	// valCache memoizes traversals for the duration of one validation run;
@@ -36,6 +38,12 @@ type Document struct {
 	// not be decoded during Read. The document parses without them so that
 	// validation can report the defect (see checkStreamLength / objstm rules).
 	brokenObjStms []int
+
+	// security holds the standard security handler when an encrypted file was
+	// decrypted on Read. It retains the file key and parameters so the same
+	// encryption can be reproduced on Write. nil for unencrypted documents (or
+	// for a scheme decryption does not support).
+	security *stdSecurityHandler
 }
 
 // Read parses a PDF document from the given data.
@@ -167,6 +175,20 @@ func Read(r io.ReaderAt, size int64) (doc *Document, err error) {
 		// other reader (audit C7).
 		iobj.Number = num
 		doc.Objects[num] = iobj
+	}
+
+	// 4.5. Decrypt strings and streams under the standard security handler. This
+	// runs before object streams are materialized: an /ObjStm container is an
+	// encrypted stream, but the objects inside it are not separately encrypted.
+	if doc.Trailer.Get("Encrypt") != nil {
+		h, err := buildStdSecurityHandler(doc)
+		if err != nil {
+			return nil, fmt.Errorf("encryption: %w", err)
+		}
+		if h != nil {
+			h.decryptDocument(doc)
+			doc.security = h
+		}
 	}
 
 	// 5. Materialize objects stored in object streams (type-2 entries). The
