@@ -84,6 +84,14 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
 	v = append(v, doc.checkUAXFA(cat)...)
 
+	// 6.1 — PDF/UA-1 requires a 1.x header.
+	v = append(v, doc.checkUAHeaderVersion()...)
+
+	// 7.1 — Suspects must not be true; 7.4.4 strong/weak; 7.9 Note IDs.
+	v = append(v, doc.checkUASuspects(cat)...)
+	v = append(v, doc.checkUAStrongWeak(cat)...)
+	v = append(v, doc.checkUANotes(cat)...)
+
 	// 7.1 — real content must be tagged or marked as an artifact (Matterhorn 01).
 	v = append(v, doc.checkUARealContent(cat)...)
 
