@@ -65,8 +65,9 @@ func TestUAAnnotationTagged(t *testing.T) {
 		t.Error("untagged annotation not flagged")
 	}
 	a.Set("StructParent", Integer(0))
+	a.Set("Contents", String{Value: []byte("a note")}) // 7.18.1 also needs a description
 	if hasUAClause(doc.checkUAAnnotations(), "7.18.1") {
-		t.Error("tagged annotation should be clean")
+		t.Error("tagged annotation with a description should be clean")
 	}
 	// Hidden annotations are exempt even without /StructParent.
 	a.Delete("StructParent")

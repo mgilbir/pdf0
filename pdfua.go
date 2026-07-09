@@ -303,6 +303,16 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 				v = append(v, UAViolation{"7.18.5", "Link annotation has no alternate description (/Contents)", num})
 			}
 		}
+		// 7.18.1: every other visible annotation (not a Widget, which has its own
+		// TU/Alt rule, and not a PrinterMark artifact) must carry an alternate
+		// description in /Contents or /Alt.
+		if st != "Widget" && st != "Link" && st != "PrinterMark" {
+			c, _ := d.Resolve(a.Get("Contents")).(String)
+			alt, _ := d.Resolve(a.Get("Alt")).(String)
+			if len(c.Value) == 0 && len(alt.Value) == 0 {
+				v = append(v, UAViolation{"7.18.1", "annotation of subtype /" + string(st) + " has no alternate description (/Contents or /Alt)", num})
+			}
+		}
 		// 28-002/010/011: a visible annotation must be represented in the
 		// structure tree — it carries a /StructParent linking it to a structure
 		// element. (Hidden and Popup annotations were already skipped above.)
