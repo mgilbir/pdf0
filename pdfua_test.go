@@ -60,4 +60,32 @@ func TestValidatePDFUA(t *testing.T) {
 	if !found {
 		t.Error("figure without /Alt not flagged")
 	}
+
+	// A non-standard, unmapped structure type is flagged (7.1 role map).
+	bad := &Dictionary{}
+	bad.Set("S", Name("MadeUpType"))
+	doc.Objects[101] = &IndirectObject{Number: 101, Value: bad}
+	structRoot.Set("K", Array{IndirectRef{Number: 100}, IndirectRef{Number: 101}})
+	hasClause := func(c string) bool {
+		for _, e := range ValidatePDFUA(doc) {
+			if e.Clause == c {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasClause("7.1") {
+		t.Error("non-standard structure type not flagged by the role-map check")
+	}
+
+	// A page with an annotation but no /Tabs /S is flagged (7.18.3).
+	page := doc.PageList()[0]
+	page.Set("Annots", Array{IndirectRef{Number: 100}})
+	if !hasClause("7.18.3") {
+		t.Error("page with annotations and no /Tabs /S not flagged")
+	}
+	page.Set("Tabs", Name("S"))
+	if hasClause("7.18.3") {
+		t.Error("/Tabs /S should satisfy the tab-order rule")
+	}
 }
