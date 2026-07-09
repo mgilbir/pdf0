@@ -65,6 +65,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	v = append(v, doc.checkUACIDSystemInfo()...)
 	v = append(v, doc.checkUAToUnicodeValues()...)
 	v = append(v, doc.checkUAFontSubsetGlyphs()...)
+	v = append(v, doc.checkUANotdefCID()...)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
 	v = append(v, doc.checkUACharMapping()...)
@@ -688,6 +689,39 @@ func (d *Document) checkUAFontSubsetGlyphs() []UAViolation {
 				v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + name + " present in the embedded font program", d.dictObjNum(fontDict)})
 				break
 			}
+		}
+	}
+	return v
+}
+
+// checkUANotdefCID enforces 7.21.8 for composite fonts: a text-showing operator
+// must not reference the .notdef glyph. For an Identity-encoded Type 0 font the
+// two-byte codes are CIDs, and CID 0 is unambiguously .notdef — a definite
+// signal that needs no font-program lookup. The simple-font .notdef case is not
+// handled here because it can only be resolved through the font program, where a
+// lookup failure is indistinguishable from a genuine .notdef reference.
+func (d *Document) checkUANotdefCID() []UAViolation {
+	var v []UAViolation
+	for fontDict, u := range collectFontTextUsage(d) {
+		if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
+			continue
+		}
+		if !isIdentityEncoding(d, fontDict) {
+			continue
+		}
+		if u == nil {
+			continue
+		}
+		found := false
+		for _, s := range u.strings {
+			for i := 0; i+1 < len(s); i += 2 {
+				if int(s[i])<<8|int(s[i+1]) == 0 {
+					found = true
+				}
+			}
+		}
+		if found {
+			v = append(v, UAViolation{"7.21.8", "a text-showing operator references the .notdef glyph (CID 0)", d.dictObjNum(fontDict)})
 		}
 	}
 	return v
