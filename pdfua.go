@@ -61,6 +61,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	v = append(v, doc.checkUAFonts()...)
 	v = append(v, doc.checkUAFontDicts()...)
 	v = append(v, doc.checkUACMaps()...)
+	v = append(v, doc.checkUACIDSystemInfo()...)
 	v = append(v, doc.checkUAToUnicodeValues()...)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
@@ -495,6 +496,71 @@ func (d *Document) checkUACMaps() []UAViolation {
 		v = append(v, d.checkOneUACMap(fontDict)...)
 	}
 	return v
+}
+
+// checkUACIDSystemInfo enforces that a composite font's CIDFont CIDSystemInfo
+// matches the Registry and Ordering implied by its CMap encoding (7.21.3.1).
+// Identity encodings are exempt; the check runs only when both sides declare a
+// Registry and Ordering.
+func (d *Document) checkUACIDSystemInfo() []UAViolation {
+	var v []UAViolation
+	for fontDict := range collectFontTextUsage(d) {
+		v = append(v, d.checkOneUACIDSystemInfo(fontDict)...)
+	}
+	return v
+}
+
+func (d *Document) checkOneUACIDSystemInfo(fontDict *Dictionary) []UAViolation {
+	if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
+		return nil
+	}
+	var wantReg, wantOrd string
+	switch enc := d.Resolve(fontDict.Get("Encoding")).(type) {
+	case Name:
+		if enc == "Identity-H" || enc == "Identity-V" {
+			return nil
+		}
+		info, ok := predefinedCMaps[string(enc)]
+		if !ok {
+			return nil
+		}
+		wantReg, wantOrd = info.Registry, info.Ordering
+	case *Stream:
+		wantReg, wantOrd = d.cidSystemInfo(&enc.Dict)
+	default:
+		return nil
+	}
+	if wantReg == "" && wantOrd == "" {
+		return nil
+	}
+	df, _ := d.Resolve(fontDict.Get("DescendantFonts")).(Array)
+	if len(df) == 0 {
+		return nil
+	}
+	cid := d.ResolveDict(df[0])
+	if cid == nil {
+		return nil
+	}
+	gotReg, gotOrd := d.cidSystemInfo(cid)
+	if gotReg == "" && gotOrd == "" {
+		return nil
+	}
+	if gotReg != wantReg || gotOrd != wantOrd {
+		return []UAViolation{{"7.21.3.1", "CIDFont CIDSystemInfo (" + gotReg + "-" + gotOrd + ") does not match the CMap (" + wantReg + "-" + wantOrd + ")", d.dictObjNum(fontDict)}}
+	}
+	return nil
+}
+
+// cidSystemInfo returns the Registry and Ordering strings of a dictionary's
+// /CIDSystemInfo, or empty strings if absent.
+func (d *Document) cidSystemInfo(dict *Dictionary) (string, string) {
+	si := d.ResolveDict(dict.Get("CIDSystemInfo"))
+	if si == nil {
+		return "", ""
+	}
+	r, _ := d.Resolve(si.Get("Registry")).(String)
+	o, _ := d.Resolve(si.Get("Ordering")).(String)
+	return string(r.Value), string(o.Value)
 }
 
 func (d *Document) checkOneUACMap(fontDict *Dictionary) []UAViolation {
