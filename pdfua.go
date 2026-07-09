@@ -63,8 +63,64 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.1 — structure types must be standard or mapped via /RoleMap.
 	v = append(v, doc.checkUARoleMap(cat)...)
 
+	// 7.4 — numbered heading levels must not be skipped.
+	v = append(v, doc.checkUAHeadings(cat)...)
+
 	// 7.3 — every figure needs alternate text.
 	v = append(v, doc.checkFigureAlt(cat)...)
+	return v
+}
+
+// checkUAHeadings flags a skipped numbered-heading level (e.g. H1 followed by H3
+// without an intervening H2), walking the structure tree in document order.
+func (d *Document) checkUAHeadings(cat *Dictionary) []UAViolation {
+	root := d.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return nil
+	}
+	var levels []int
+	seen := map[int]bool{}
+	var walk func(node Object)
+	walk = func(node Object) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		elem := d.ResolveDict(node)
+		if elem == nil {
+			if arr, ok := d.Resolve(node).(Array); ok {
+				for _, kid := range arr {
+					walk(kid)
+				}
+			}
+			return
+		}
+		if st, ok := elem.Get("S").(Name); ok && len(st) == 2 && st[0] == 'H' && st[1] >= '1' && st[1] <= '6' {
+			levels = append(levels, int(st[1]-'0'))
+		}
+		if k := elem.Get("K"); k != nil {
+			switch kids := d.Resolve(k).(type) {
+			case Array:
+				for _, kid := range kids {
+					walk(kid)
+				}
+			default:
+				walk(k)
+			}
+		}
+	}
+	walk(root.Get("K"))
+
+	var v []UAViolation
+	prev := 0
+	for _, lvl := range levels {
+		if prev != 0 && lvl > prev+1 {
+			v = append(v, UAViolation{"7.4", fmt.Sprintf("heading level H%d follows H%d, skipping a level", lvl, prev), 0})
+		}
+		prev = lvl
+	}
 	return v
 }
 
