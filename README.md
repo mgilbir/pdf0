@@ -117,7 +117,8 @@ Known limitations:
   A wrong password leaves the file encrypted (`Document.Encrypted`), and `Write`
   refuses such a document. A file that *was* decrypted round-trips: `Write`
   re-encrypts its content with the retained key and re-emits the preserved
-  `/Encrypt`. Encrypting a previously-unencrypted document is not yet supported.
+  `/Encrypt`. `Document.SetEncryption` encrypts a previously-unencrypted
+  document with AES-256.
 - **`Write` regenerates, rather than preserves, the file layout.** A file read
   from a cross-reference stream is written back as one, with compressible
   objects repacked into an object stream (`/ObjStm`); a traditional-table file
