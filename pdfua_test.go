@@ -38,6 +38,9 @@ func TestValidatePDFUA(t *testing.T) {
 	structRoot.Set("Type", Name("StructTreeRoot"))
 	doc.Objects[99] = &IndirectObject{Number: 99, Value: structRoot}
 	cat.Set("StructTreeRoot", IndirectRef{Number: 99})
+	meta := &Stream{Dict: Dictionary{}, Data: []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="1"/></rdf:RDF></x:xmpmeta>`)}
+	doc.Objects[98] = &IndirectObject{Number: 98, Value: meta}
+	cat.Set("Metadata", IndirectRef{Number: 98})
 
 	if v := ValidatePDFUA(doc); len(v) != 0 {
 		t.Errorf("compliant document still reports violations: %v", v)

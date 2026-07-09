@@ -1,6 +1,9 @@
 package pdf0
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // UAViolation is a PDF/UA-1 (ISO 14289-1) accessibility conformance failure.
 type UAViolation struct {
@@ -48,9 +51,60 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 		v = append(v, UAViolation{"7.1", "/ViewerPreferences /DisplayDocTitle must be true", 0})
 	}
 
+	// 5 — the file must declare PDF/UA conformance in its XMP metadata.
+	v = append(v, doc.checkUAIdentifier(cat)...)
+
+	// 7.21 — every font used for rendering must be embedded.
+	v = append(v, doc.checkUAFonts()...)
+
 	// 7.3 — every figure needs alternate text.
 	v = append(v, doc.checkFigureAlt(cat)...)
 	return v
+}
+
+// checkUAIdentifier requires an XMP metadata stream declaring the PDF/UA part.
+func (d *Document) checkUAIdentifier(cat *Dictionary) []UAViolation {
+	stream, ok := d.Resolve(cat.Get("Metadata")).(*Stream)
+	if !ok {
+		return []UAViolation{{"5", "document has no XMP metadata (a PDF/UA identifier is required)", 0}}
+	}
+	if !strings.Contains(decodeXMPToUTF8(stream.Data), "pdfuaid:part") {
+		return []UAViolation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
+	}
+	return nil
+}
+
+// checkUAFonts flags fonts used for rendering but not embedded. It considers
+// only fonts actually shown (the executed-content model), so unused or invisible
+// font dictionaries are not false-flagged.
+func (d *Document) checkUAFonts() []UAViolation {
+	var v []UAViolation
+	for fontDict := range collectFontTextUsage(d) {
+		st, _ := fontDict.Get("Subtype").(Name)
+		if st == "Type3" {
+			continue // procedural glyphs, no font program
+		}
+		embedded := d.fontProgramEmbedded(fontDict)
+		if st == "Type0" {
+			if df, _ := d.Resolve(fontDict.Get("DescendantFonts")).(Array); len(df) > 0 {
+				if cid := d.ResolveDict(df[0]); cid != nil {
+					embedded = d.fontProgramEmbedded(cid)
+				}
+			}
+		}
+		if !embedded {
+			v = append(v, UAViolation{"7.21.4.1", "font used for rendering is not embedded", d.dictObjNum(fontDict)})
+		}
+	}
+	return v
+}
+
+func (d *Document) fontProgramEmbedded(font *Dictionary) bool {
+	fd := d.ResolveDict(font.Get("FontDescriptor"))
+	if fd == nil {
+		return false
+	}
+	return fd.Get("FontFile") != nil || fd.Get("FontFile2") != nil || fd.Get("FontFile3") != nil
 }
 
 func (d *Document) isTrue(o Object) bool {
