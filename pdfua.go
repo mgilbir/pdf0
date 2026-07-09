@@ -59,6 +59,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 
 	// 7.21 — every font used for rendering must be embedded.
 	v = append(v, doc.checkUAFonts()...)
+	v = append(v, doc.checkUAFontDicts()...)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
 	v = append(v, doc.checkUACharMapping()...)
@@ -399,6 +400,72 @@ func (d *Document) checkUACharMapping() []UAViolation {
 		}
 	}
 	return v
+}
+
+// checkUAFontDicts enforces dictionary-level font requirements from clause 7.21
+// on the fonts actually used for rendering (executed-content model):
+//   - 7.21.3.2 an embedded CIDFontType2 must carry a /CIDToGIDMap;
+//   - 7.21.6   a symbolic TrueType font must not have an /Encoding entry, and a
+//     non-symbolic one must use MacRomanEncoding or WinAnsiEncoding.
+func (d *Document) checkUAFontDicts() []UAViolation {
+	var v []UAViolation
+	for fontDict := range collectFontTextUsage(d) {
+		v = append(v, d.checkOneUAFontDict(fontDict)...)
+	}
+	return v
+}
+
+// checkOneUAFontDict applies the dictionary-level clause 7.21 rules to a single
+// font dictionary.
+func (d *Document) checkOneUAFontDict(fontDict *Dictionary) []UAViolation {
+	var v []UAViolation
+	st, _ := fontDict.Get("Subtype").(Name)
+	num := d.dictObjNum(fontDict)
+	switch st {
+	case "Type0":
+		df, _ := d.Resolve(fontDict.Get("DescendantFonts")).(Array)
+		if len(df) == 0 {
+			return nil
+		}
+		cid := d.ResolveDict(df[0])
+		if cid == nil {
+			return nil
+		}
+		cst, _ := cid.Get("Subtype").(Name)
+		if cst == "CIDFontType2" && d.fontProgramEmbedded(cid) && cid.Get("CIDToGIDMap") == nil {
+			v = append(v, UAViolation{"7.21.3.2", "embedded CIDFontType2 font has no /CIDToGIDMap", num})
+		}
+	case "TrueType":
+		symbolic := d.fontIsSymbolic(fontDict)
+		enc := d.Resolve(fontDict.Get("Encoding"))
+		if symbolic {
+			if enc != nil {
+				if _, isNull := enc.(Null); !isNull {
+					v = append(v, UAViolation{"7.21.6", "symbolic TrueType font must not contain an /Encoding entry", num})
+				}
+			}
+			return v
+		}
+		base, _ := enc.(Name)
+		if ed := d.ResolveDict(fontDict.Get("Encoding")); ed != nil {
+			base, _ = ed.Get("BaseEncoding").(Name)
+		}
+		if base != "MacRomanEncoding" && base != "WinAnsiEncoding" {
+			v = append(v, UAViolation{"7.21.6", "non-symbolic TrueType font must use MacRomanEncoding or WinAnsiEncoding", num})
+		}
+	}
+	return v
+}
+
+// fontIsSymbolic reports whether a font's descriptor marks it symbolic (Flags
+// bit 3, value 4).
+func (d *Document) fontIsSymbolic(font *Dictionary) bool {
+	fd := d.ResolveDict(font.Get("FontDescriptor"))
+	if fd == nil {
+		return false
+	}
+	flags, _ := d.Resolve(fd.Get("Flags")).(Integer)
+	return int(flags)&0x4 != 0
 }
 
 func (d *Document) fontProgramEmbedded(font *Dictionary) bool {
