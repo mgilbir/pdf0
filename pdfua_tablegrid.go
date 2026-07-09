@@ -16,6 +16,105 @@ type tableCell struct {
 // tableRow is the ordered cells of one TR.
 type tableRow []tableCell
 
+// checkUATableAssociation enforces the minimum of 7.5: a table that contains
+// header cells (TH) must provide some header-association mechanism. If not one
+// cell in the whole table carries a Scope attribute, a /Headers reference, or an
+// /ID, the header structure is not determinable at all and is flagged. This is
+// the conservative whole-table form of the rule — a table that uses any of the
+// three mechanisms is left alone, so a well-formed table never false-positives.
+func (d *Document) checkUATableAssociation(cat *Dictionary) []UAViolation {
+	root := d.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return nil
+	}
+	roleMap := d.ResolveDict(root.Get("RoleMap"))
+	var v []UAViolation
+	seen := map[int]bool{}
+	var walk func(node Object)
+	walk = func(node Object) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		elem := d.ResolveDict(node)
+		if elem == nil {
+			if arr, ok := d.Resolve(node).(Array); ok {
+				for _, kid := range arr {
+					walk(kid)
+				}
+			}
+			return
+		}
+		if d.standardStructType(elem, roleMap) == "Table" {
+			if d.tableLacksAssociation(elem, roleMap) {
+				v = append(v, UAViolation{"7.5", "table with header cells provides no header association (no Scope, /Headers, or /ID on any cell)", 0})
+			}
+		}
+		for _, kid := range d.structKids(elem) {
+			walk(kid)
+		}
+	}
+	walk(root.Get("K"))
+	return v
+}
+
+// tableLacksAssociation reports whether a table has at least one TH but no cell
+// carrying a Scope attribute, a /Headers reference, or an /ID.
+func (d *Document) tableLacksAssociation(table *Dictionary, roleMap *Dictionary) bool {
+	hasTH, anyAssoc := false, false
+	seen := map[int]bool{}
+	var scan func(node Object, top bool)
+	scan = func(node Object, top bool) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		e := d.ResolveDict(node)
+		if e == nil {
+			if arr, ok := d.Resolve(node).(Array); ok {
+				for _, k := range arr {
+					scan(k, top)
+				}
+			}
+			return
+		}
+		t := d.standardStructType(e, roleMap)
+		if !top && t == "Table" {
+			return
+		}
+		if t == "TH" {
+			hasTH = true
+			if d.cellHasScope(e) {
+				anyAssoc = true
+			}
+		}
+		if t == "TH" || t == "TD" {
+			if e.Get("Headers") != nil || e.Get("ID") != nil {
+				anyAssoc = true
+			}
+		}
+		for _, k := range d.structKids(e) {
+			scan(k, false)
+		}
+	}
+	scan(table, true)
+	return hasTH && !anyAssoc
+}
+
+// cellHasScope reports whether a cell carries a /Scope in a Table attribute.
+func (d *Document) cellHasScope(cell *Dictionary) bool {
+	for _, ad := range d.tableAttrDicts(cell) {
+		if ad.Get("Scope") != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // checkUATableGrid lays out every Table's cells and reports grid defects (7.2).
 func (d *Document) checkUATableGrid(cat *Dictionary) []UAViolation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
