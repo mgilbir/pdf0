@@ -48,12 +48,23 @@ type Document struct {
 
 // Read parses a PDF document from the given data.
 //
-// Encrypted files are parsed structurally but not decrypted; see
-// Document.Encrypted.
-//
 // A malformed or adversarial file always yields an error, never a panic: any
 // panic escaping the parse is recovered and returned as an error.
-func Read(r io.ReaderAt, size int64) (doc *Document, err error) {
+//
+// Encrypted files (standard security handler) are decrypted with the empty
+// password; use ReadWithPassword to supply a user or owner password. A file
+// that cannot be decrypted is still parsed structurally, with its strings and
+// streams left encrypted (see Document.Encrypted).
+func Read(r io.ReaderAt, size int64) (*Document, error) {
+	return readDocument(r, size, "")
+}
+
+// ReadWithPassword is Read with a user or owner password for an encrypted file.
+func ReadWithPassword(r io.ReaderAt, size int64, password string) (*Document, error) {
+	return readDocument(r, size, password)
+}
+
+func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			doc = nil
@@ -181,7 +192,7 @@ func Read(r io.ReaderAt, size int64) (doc *Document, err error) {
 	// runs before object streams are materialized: an /ObjStm container is an
 	// encrypted stream, but the objects inside it are not separately encrypted.
 	if doc.Trailer.Get("Encrypt") != nil {
-		h, err := buildStdSecurityHandler(doc)
+		h, err := buildStdSecurityHandler(doc, password)
 		if err != nil {
 			return nil, fmt.Errorf("encryption: %w", err)
 		}
