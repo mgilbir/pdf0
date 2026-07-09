@@ -85,6 +85,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
 	v = append(v, doc.checkUAXFA(cat)...)
 
+	// 7.2 — any present /Lang must be a valid BCP 47 tag.
+	v = append(v, doc.checkUALang(cat)...)
+
 	// 7.10 — optional-content config; 7.11 — embedded-file specifications.
 	v = append(v, doc.checkUAOptionalContent(cat)...)
 	v = append(v, doc.checkUAEmbeddedFiles()...)
@@ -308,6 +311,67 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 		}
 	}
 	return v
+}
+
+// checkUALang enforces that any /Lang value present — in the catalog or on a
+// structure element — is a syntactically valid BCP 47 language tag (7.2, CosLang
+// rule of the UA profile). An empty /Lang is permitted (it defers to an
+// ancestor); a present but malformed tag is not.
+func (d *Document) checkUALang(cat *Dictionary) []UAViolation {
+	var v []UAViolation
+	if s, ok := d.Resolve(cat.Get("Lang")).(String); ok && len(s.Value) > 0 && !validBCP47(string(s.Value)) {
+		v = append(v, UAViolation{"7.2", "catalog /Lang " + quote(string(s.Value)) + " is not a valid language identifier", 0})
+	}
+	d.walkStructElems(cat, func(elem *Dictionary, _ Name) {
+		if s, ok := d.Resolve(elem.Get("Lang")).(String); ok && len(s.Value) > 0 && !validBCP47(string(s.Value)) {
+			v = append(v, UAViolation{"7.2", "structure element /Lang " + quote(string(s.Value)) + " is not a valid language identifier", 0})
+		}
+	})
+	return v
+}
+
+func quote(s string) string { return "\"" + s + "\"" }
+
+// validBCP47 reports whether tag is a syntactically well-formed BCP 47 (RFC
+// 5646) language tag. It validates the subtag structure rather than a registry:
+// a non-empty primary language of 2–8 letters (or an x-/i- private/grandfathered
+// singleton), followed by subtags of 1–8 alphanumerics each.
+func validBCP47(tag string) bool {
+	subs := strings.Split(tag, "-")
+	first := subs[0]
+	if len(first) == 1 {
+		if first != "x" && first != "i" && first != "X" && first != "I" {
+			return false // a lone singleton cannot be the primary language
+		}
+	} else if len(first) < 2 || len(first) > 8 || !allAlpha(first) {
+		return false
+	}
+	for _, s := range subs[1:] {
+		if len(s) < 1 || len(s) > 8 || !allAlnum(s) {
+			return false
+		}
+	}
+	return true
+}
+
+func allAlpha(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+func allAlnum(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // checkUAOptionalContent enforces the optional-content configuration
