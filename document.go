@@ -424,9 +424,9 @@ func (d *Document) Write(w io.Writer) error {
 	// When re-encrypting, serialize encrypted copies rather than the in-memory
 	// plaintext (which stays untouched for the caller). The /Encrypt dictionary
 	// and /ID remain in the trailer and are written as-is.
-	writeObjects := d.Objects
+	writeObjects, xrefType2 := d.buildWriteSet()
 	if d.security != nil {
-		writeObjects = d.security.encryptCopy(d.Objects)
+		writeObjects = d.security.encryptCopy(writeObjects)
 	}
 
 	// A stale indirect /Length (its target integer object not updated after a
@@ -488,7 +488,7 @@ func (d *Document) Write(w io.Writer) error {
 	// otherwise a traditional table followed by a trailer.
 	xrefOffset := s.Offset()
 	if d.usedXRefStream {
-		if err := writeXRefStream(s, objNums, offsets, writeObjects, &d.Trailer, maxObj+1); err != nil {
+		if err := writeXRefStream(s, objNums, offsets, writeObjects, xrefType2, &d.Trailer, maxObj+1); err != nil {
 			return err
 		}
 	} else {
@@ -522,24 +522,31 @@ func (d *Document) Write(w io.Writer) error {
 // object numbered xrefObjNum (which lands at the current serializer offset, so
 // its own entry points there). Trailer keys (/Root, /Info, /ID, /Encrypt) carry
 // into the stream dictionary. The binary entries are FlateDecode-compressed.
-func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject, trailer *Dictionary, xrefObjNum int) error {
+func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject, type2 map[int][2]int, trailer *Dictionary, xrefObjNum int) error {
 	offsets[xrefObjNum] = s.Offset()
 
-	// Entry set: the free-list head (object 0) plus every written object,
-	// including this xref stream itself.
-	nums := make([]int, 0, len(objNums)+2)
-	nums = append(nums, 0)
-	nums = append(nums, objNums...)
-	nums = append(nums, xrefObjNum)
+	// Entry set: the free-list head (object 0), every written object (including
+	// this xref stream itself), and every object packed into an object stream.
+	numSet := map[int]bool{0: true, xrefObjNum: true}
+	for _, num := range objNums {
+		numSet[num] = true
+	}
+	for num := range type2 {
+		numSet[num] = true
+	}
+	nums := make([]int, 0, len(numSet))
+	for num := range numSet {
+		nums = append(nums, num)
+	}
 	sort.Ints(nums)
 
-	var maxOffset int64
+	var maxField2 uint64
 	for _, off := range offsets {
-		if off > maxOffset {
-			maxOffset = off
+		if uint64(off) > maxField2 {
+			maxField2 = uint64(off)
 		}
 	}
-	w := [3]int{1, byteWidth(uint64(maxOffset)), 2} // type, offset, generation
+	w := [3]int{1, byteWidth(maxField2), 2} // type, field2 (offset/objstm), field3
 
 	var body bytes.Buffer
 	put := func(v uint64, width int) {
@@ -548,19 +555,25 @@ func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, object
 		}
 	}
 	for _, num := range nums {
-		if num == 0 {
+		switch {
+		case num == 0:
 			put(0, w[0]) // type 0: free-list head
 			put(0, w[1])
 			put(65535, w[2])
-			continue
+		case type2[num] != [2]int{}:
+			e := type2[num] // {objStmNum, index}
+			put(2, w[0])    // type 2: object stored in an object stream
+			put(uint64(e[0]), w[1])
+			put(uint64(e[1]), w[2])
+		default:
+			gen := 0
+			if o, ok := objects[num]; ok {
+				gen = o.Generation
+			}
+			put(1, w[0]) // type 1: uncompressed object
+			put(uint64(offsets[num]), w[1])
+			put(uint64(gen), w[2])
 		}
-		gen := 0
-		if o, ok := objects[num]; ok {
-			gen = o.Generation
-		}
-		put(1, w[0]) // type 1: uncompressed object
-		put(uint64(offsets[num]), w[1])
-		put(uint64(gen), w[2])
 	}
 
 	// /Index: [start count ...] over contiguous runs of object numbers.

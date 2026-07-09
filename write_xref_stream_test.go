@@ -65,6 +65,11 @@ func TestWriteXRefStream(t *testing.T) {
 	if !bytes.Contains(out, []byte("/XRef")) {
 		t.Error("output has no /Type /XRef stream")
 	}
+	// The three dictionary objects are compressible, so they are repacked into
+	// an object stream and reachable only through type-2 xref entries.
+	if !bytes.Contains(out, []byte("/ObjStm")) {
+		t.Error("output did not repack objects into an object stream")
+	}
 
 	doc2, err := Read(bytes.NewReader(out), int64(len(out)))
 	if err != nil {
@@ -75,6 +80,10 @@ func TestWriteXRefStream(t *testing.T) {
 	}
 	if !DocumentEqual(doc, doc2) {
 		t.Error("document did not round-trip through the cross-reference stream")
+	}
+	// A packed object (the catalog) must resolve through the object stream.
+	if cat := doc2.ResolveDict(doc2.Trailer.Get("Root")); cat == nil {
+		t.Error("catalog did not resolve through the object stream")
 	}
 }
 
