@@ -111,6 +111,21 @@ func cmdEncrypt(args []string) error {
 	return writeDoc(doc, fs.Arg(1))
 }
 
+func cmdExtract(args []string) error {
+	fs := flag.NewFlagSet("extract", flag.ExitOnError)
+	pw := fs.String("password", "", "user or owner password")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: pdf0 extract [-password PW] <file>")
+	}
+	doc, err := readDoc(fs.Arg(0), *pw)
+	if err != nil {
+		return err
+	}
+	fmt.Print(doc.ExtractText())
+	return nil
+}
+
 func parseLevel(s string) (pdf0.PDFALevel, bool) {
 	switch s {
 	case "1b":
