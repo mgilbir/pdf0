@@ -148,6 +148,27 @@ func cmdRepair(args []string) error {
 	return writeDoc(doc, fs.Arg(1))
 }
 
+func cmdMerge(args []string) error {
+	fs := flag.NewFlagSet("merge", flag.ExitOnError)
+	fs.Parse(args)
+	if fs.NArg() < 2 {
+		return fmt.Errorf("usage: pdf0 merge <out> <in1> <in2> [in3 ...]")
+	}
+	out := fs.Arg(0)
+	merged, err := readDoc(fs.Arg(1), "")
+	if err != nil {
+		return err
+	}
+	for _, in := range fs.Args()[2:] {
+		next, err := readDoc(in, "")
+		if err != nil {
+			return err
+		}
+		merged.AppendPages(next)
+	}
+	return writeDoc(merged, out)
+}
+
 func parseLevel(s string) (pdf0.PDFALevel, bool) {
 	switch s {
 	case "1b":

@@ -29,6 +29,8 @@ func main() {
 		err = cmdExtract(os.Args[2:])
 	case "repair":
 		err = cmdRepair(os.Args[2:])
+	case "merge":
+		err = cmdMerge(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -53,6 +55,7 @@ usage:
   pdf0 encrypt -user PW [-owner PW] <in> <out>
   pdf0 extract  [-password PW] <file>
   pdf0 repair   [-level ...] <in> <out>
+  pdf0 merge    <out> <in1> <in2> [in3 ...]
 `)
 }
 
