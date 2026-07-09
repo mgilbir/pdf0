@@ -150,3 +150,96 @@ func orList(names []Name) string {
 	}
 	return s
 }
+
+// walkStructElems invokes fn for every structure element (with an /S type) in
+// the tree, passing its role-map-resolved standard type.
+func (d *Document) walkStructElems(cat *Dictionary, fn func(elem *Dictionary, stdType Name)) {
+	root := d.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return
+	}
+	roleMap := d.ResolveDict(root.Get("RoleMap"))
+	seen := map[int]bool{}
+	var walk func(node Object)
+	walk = func(node Object) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		elem := d.ResolveDict(node)
+		if elem == nil {
+			if arr, ok := d.Resolve(node).(Array); ok {
+				for _, kid := range arr {
+					walk(kid)
+				}
+			}
+			return
+		}
+		if _, hasS := elem.Get("S").(Name); hasS {
+			fn(elem, d.standardStructType(elem, roleMap))
+		}
+		for _, kid := range d.structKids(elem) {
+			walk(kid)
+		}
+	}
+	walk(root.Get("K"))
+}
+
+// checkUAHeaderVersion: PDF/UA-1 is defined against PDF 1.7, so the header must
+// declare a 1.n version.
+func (d *Document) checkUAHeaderVersion() []UAViolation {
+	if len(d.Version) >= 2 && d.Version[0] == '1' && d.Version[1] == '.' {
+		return nil
+	}
+	return []UAViolation{{"6.1", "PDF/UA-1 requires a PDF 1.x header, got " + d.Version, 0}}
+}
+
+// checkUASuspects: a MarkInfo /Suspects value of true means the tagging may be
+// unreliable and is not permitted.
+func (d *Document) checkUASuspects(cat *Dictionary) []UAViolation {
+	if mark := d.ResolveDict(cat.Get("MarkInfo")); mark != nil && d.isTrue(mark.Get("Suspects")) {
+		return []UAViolation{{"7.1", "/MarkInfo /Suspects must not be true", 0}}
+	}
+	return nil
+}
+
+// checkUAStrongWeak: a document must be either strongly structured (H1–H6) or
+// weakly structured (H), not both (7.4.4).
+func (d *Document) checkUAStrongWeak(cat *Dictionary) []UAViolation {
+	var hasH, hasHn bool
+	d.walkStructElems(cat, func(_ *Dictionary, t Name) {
+		switch {
+		case t == "H":
+			hasH = true
+		case len(t) == 2 && t[0] == 'H' && t[1] >= '1' && t[1] <= '6':
+			hasHn = true
+		}
+	})
+	if hasH && hasHn {
+		return []UAViolation{{"7.4.4", "document mixes <H> and <H1>–<H6> headings; it must be either strongly or weakly structured", 0}}
+	}
+	return nil
+}
+
+// checkUANotes: every Note structure element must carry a unique /ID (7.9).
+func (d *Document) checkUANotes(cat *Dictionary) []UAViolation {
+	var v []UAViolation
+	ids := map[string]bool{}
+	d.walkStructElems(cat, func(elem *Dictionary, t Name) {
+		if t != "Note" {
+			return
+		}
+		id, _ := d.Resolve(elem.Get("ID")).(String)
+		if len(id.Value) == 0 {
+			v = append(v, UAViolation{"7.9", "<Note> structure element has no /ID", 0})
+			return
+		}
+		if ids[string(id.Value)] {
+			v = append(v, UAViolation{"7.9", "<Note> structure elements share a non-unique /ID", 0})
+		}
+		ids[string(id.Value)] = true
+	})
+	return v
+}

@@ -30,6 +30,7 @@ func TestValidatePDFUA(t *testing.T) {
 	}
 
 	// Make the document conform to the implemented checks.
+	doc.Version = "1.7" // PDF/UA-1 is a 1.x profile
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	cat.Set("Lang", String{Value: []byte("en-US")})
 	cat.Set("MarkInfo", &Dictionary{Keys: []Name{"Marked"}, Values: []Object{Boolean(true)}})
