@@ -77,8 +77,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile.
 	v = append(v, doc.checkUAStructNesting(cat)...)
 
-	// 7.4 — numbered heading levels must not be skipped.
+	// 7.4 — heading levels must not be skipped; start at H1; one <H> per node.
 	v = append(v, doc.checkUAHeadings(cat)...)
+	v = append(v, doc.checkUAOneHPerNode(cat)...)
 
 	// 7.16 — encryption must not disable accessibility (Matterhorn 26).
 	v = append(v, doc.checkUASecurity()...)
@@ -164,6 +165,10 @@ func (d *Document) checkUAHeadings(cat *Dictionary) []UAViolation {
 	walk(root.Get("K"))
 
 	var v []UAViolation
+	// 7.4.2: a strongly structured document's first numbered heading must be H1.
+	if len(levels) > 0 && levels[0] != 1 {
+		v = append(v, UAViolation{"7.4.2", fmt.Sprintf("first heading is H%d; a strongly structured document must start at H1", levels[0]), 0})
+	}
 	prev := 0
 	for _, lvl := range levels {
 		if prev != 0 && lvl > prev+1 {
@@ -171,6 +176,50 @@ func (d *Document) checkUAHeadings(cat *Dictionary) []UAViolation {
 		}
 		prev = lvl
 	}
+	return v
+}
+
+// checkUAOneHPerNode enforces 7.4.4: in a weakly structured document each
+// structure node may contain at most one child <H> heading.
+func (d *Document) checkUAOneHPerNode(cat *Dictionary) []UAViolation {
+	root := d.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return nil
+	}
+	roleMap := d.ResolveDict(root.Get("RoleMap"))
+	var v []UAViolation
+	seen := map[int]bool{}
+	var walk func(node Object)
+	walk = func(node Object) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		elem := d.ResolveDict(node)
+		if elem == nil {
+			if arr, ok := d.Resolve(node).(Array); ok {
+				for _, kid := range arr {
+					walk(kid)
+				}
+			}
+			return
+		}
+		hCount := 0
+		for _, ct := range d.childStructTypes(elem, roleMap) {
+			if ct == "H" {
+				hCount++
+			}
+		}
+		if hCount > 1 {
+			v = append(v, UAViolation{"7.4.4", "a structure node contains more than one child <H> heading", 0})
+		}
+		for _, kid := range d.structKids(elem) {
+			walk(kid)
+		}
+	}
+	walk(root.Get("K"))
 	return v
 }
 
