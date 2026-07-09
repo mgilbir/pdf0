@@ -28,6 +28,7 @@ func TestDecryptCorpusFiles(t *testing.T) {
 	cases := []struct{ name, sub string }{
 		{"RC4 V2/R3", filepath.Join("PDFA-1b", "6.1 File structure", "6.1.3 File trailer", "isartor-6-1-3-t02-fail-a")},
 		{"AES-128 V4/R4", filepath.Join("PDF_A-2b", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a")},
+		{"AES-256 V5/R6", filepath.Join("PDF_A-4", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

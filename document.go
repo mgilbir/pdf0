@@ -15,10 +15,10 @@ type Document struct {
 	Trailer Dictionary
 	// Encrypted reports whether the file carried an /Encrypt dictionary.
 	// Standard-security-handler files with the empty user password are decrypted
-	// on Read (RC4 and AES-128); their strings and streams are then in the clear
-	// but this flag stays set. Schemes decryption does not handle (AES-256,
-	// non-empty passwords) keep their contents encrypted. Write refuses encrypted
-	// documents.
+	// on Read (RC4, AES-128, and AES-256); their strings and streams are then in
+	// the clear but this flag stays set. Schemes decryption does not handle
+	// (non-empty passwords) keep their contents encrypted. Write refuses
+	// encrypted documents.
 	Encrypted bool
 
 	// valCache memoizes traversals for the duration of one validation run;
