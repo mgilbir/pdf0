@@ -60,6 +60,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.21 — every font used for rendering must be embedded.
 	v = append(v, doc.checkUAFonts()...)
 
+	// 7.2 — text must map to Unicode (Matterhorn 10-001).
+	v = append(v, doc.checkUACharMapping()...)
+
 	// 7.18.3 — pages with annotations must use structure tab order.
 	v = append(v, doc.checkUATabOrder()...)
 
@@ -353,6 +356,26 @@ func (d *Document) checkUAFonts() []UAViolation {
 		}
 		if !embedded {
 			v = append(v, UAViolation{"7.21.4.1", "font used for rendering is not embedded", d.dictObjNum(fontDict)})
+		}
+	}
+	return v
+}
+
+// checkUACharMapping flags text shown with a font whose character codes cannot
+// be mapped to Unicode. The clear, false-positive-free case: a composite
+// (Type0) font with Identity encoding and no ToUnicode CMap — its codes are
+// CIDs with no defined Unicode mapping (Matterhorn 10-001).
+func (d *Document) checkUACharMapping() []UAViolation {
+	var v []UAViolation
+	for fontDict := range collectFontTextUsage(d) {
+		if fontDict.Get("ToUnicode") != nil {
+			continue
+		}
+		if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
+			continue
+		}
+		if enc, _ := d.Resolve(fontDict.Get("Encoding")).(Name); enc == "Identity-H" || enc == "Identity-V" {
+			v = append(v, UAViolation{"7.2", "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", d.dictObjNum(fontDict)})
 		}
 	}
 	return v
