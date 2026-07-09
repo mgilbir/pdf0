@@ -72,3 +72,55 @@ func producerOf(doc *Document) string {
 	s, _ := info.Get("Producer").(String)
 	return string(s.Value)
 }
+
+// TestRemoveEncryption confirms that dropping encryption lets Write emit the
+// document in the clear again.
+func TestRemoveEncryption(t *testing.T) {
+	const secret = "pdf0 removable producer"
+	base := buildMinimalPDF()
+	doc, err := Read(bytes.NewReader(base), int64(len(base)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := &Dictionary{}
+	info.Set("Producer", String{Value: []byte(secret)})
+	doc.Objects[4] = &IndirectObject{Number: 4, Value: info}
+	doc.Trailer.Set("Info", IndirectRef{Number: 4})
+	if err := doc.SetEncryption("pw", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	var enc bytes.Buffer
+	if err := doc.Write(&enc); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen with the password, strip encryption, write again.
+	dec, err := ReadWithPassword(bytes.NewReader(enc.Bytes()), int64(enc.Len()), "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec.RemoveEncryption()
+	if dec.Encrypted {
+		t.Error("Encrypted still set after RemoveEncryption")
+	}
+	var plain bytes.Buffer
+	if err := dec.Write(&plain); err != nil {
+		t.Fatalf("write after RemoveEncryption: %v", err)
+	}
+	if !bytes.Contains(plain.Bytes(), []byte(secret)) {
+		t.Error("decrypted output does not contain the plaintext string")
+	}
+	if bytes.Contains(plain.Bytes(), []byte("/Encrypt")) {
+		t.Error("plaintext output still references /Encrypt")
+	}
+	doc2, err := Read(bytes.NewReader(plain.Bytes()), int64(plain.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc2.Encrypted {
+		t.Error("re-read document is still encrypted")
+	}
+	if got := producerOf(doc2); got != secret {
+		t.Errorf("/Producer = %q, want %q", got, secret)
+	}
+}
