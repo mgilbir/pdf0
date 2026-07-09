@@ -100,8 +100,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.18.6.2 — media clip data dictionaries need /CT and /Alt.
 	v = append(v, doc.checkUAMediaClips()...)
 
-	// 7.20 — reference XObjects are forbidden.
+	// 7.20 — reference XObjects are forbidden; tagged forms painted once.
 	v = append(v, doc.checkUAReferenceXObjects()...)
+	v = append(v, doc.checkUAFormXObjectMCID()...)
 
 	// 7.2 — any present /Lang must be a valid BCP 47 tag.
 	v = append(v, doc.checkUALang(cat)...)
