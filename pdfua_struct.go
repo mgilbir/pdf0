@@ -110,6 +110,110 @@ func (d *Document) structKids(elem *Dictionary) []Object {
 	return []Object{k}
 }
 
+// checkUATableListStructure enforces the well-formedness rules for Table, List
+// (L) and table-of-contents (TOC) containers that go beyond simple parent/child
+// typing (UA profile / ISO 32000-1 14.8.4.3): at most one Caption/THead/TFoot,
+// a THead or TFoot requires a TBody, and a Caption must sit in the permitted
+// position (first-or-last for a Table, first for a List or TOC).
+func (d *Document) checkUATableListStructure(cat *Dictionary) []UAViolation {
+	root := d.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return nil
+	}
+	roleMap := d.ResolveDict(root.Get("RoleMap"))
+	var v []UAViolation
+	seen := map[int]bool{}
+	var walk func(node Object)
+	walk = func(node Object) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		elem := d.ResolveDict(node)
+		if elem == nil {
+			if arr, ok := d.Resolve(node).(Array); ok {
+				for _, kid := range arr {
+					walk(kid)
+				}
+			}
+			return
+		}
+		t := d.standardStructType(elem, roleMap)
+		kids := d.childStructTypes(elem, roleMap)
+		switch t {
+		case "Table":
+			v = append(v, tableStructErrors(kids)...)
+		case "L":
+			if n := countName(kids, "Caption"); n > 1 {
+				v = append(v, UAViolation{"7.2", "list (L) has more than one Caption", 0})
+			} else if n == 1 && firstIndexName(kids, "Caption") != 0 {
+				v = append(v, UAViolation{"7.2", "list (L) Caption must be the first child", 0})
+			}
+		case "TOC":
+			if n := countName(kids, "Caption"); n > 1 {
+				v = append(v, UAViolation{"7.2", "table of contents (TOC) has more than one Caption", 0})
+			} else if n == 1 && firstIndexName(kids, "Caption") != 0 {
+				v = append(v, UAViolation{"7.2", "table of contents (TOC) Caption must be the first child", 0})
+			}
+		}
+		for _, kid := range d.structKids(elem) {
+			walk(kid)
+		}
+	}
+	walk(root.Get("K"))
+	return v
+}
+
+// tableStructErrors reports the Table-container well-formedness violations for a
+// table's ordered child-type list.
+func tableStructErrors(kids []Name) []UAViolation {
+	var v []UAViolation
+	captions := countName(kids, "Caption")
+	theads := countName(kids, "THead")
+	tfoots := countName(kids, "TFoot")
+	tbodies := countName(kids, "TBody")
+	if captions > 1 {
+		v = append(v, UAViolation{"7.2", "table has more than one Caption", 0})
+	}
+	if theads > 1 {
+		v = append(v, UAViolation{"7.2", "table has more than one THead", 0})
+	}
+	if tfoots > 1 {
+		v = append(v, UAViolation{"7.2", "table has more than one TFoot", 0})
+	}
+	if (theads > 0 || tfoots > 0) && tbodies == 0 {
+		v = append(v, UAViolation{"7.2", "table has a THead or TFoot but no TBody", 0})
+	}
+	if captions == 1 {
+		i := firstIndexName(kids, "Caption")
+		if i != 0 && i != len(kids)-1 {
+			v = append(v, UAViolation{"7.2", "table Caption must be the first or last child", 0})
+		}
+	}
+	return v
+}
+
+func countName(names []Name, want Name) int {
+	n := 0
+	for _, x := range names {
+		if x == want {
+			n++
+		}
+	}
+	return n
+}
+
+func firstIndexName(names []Name, want Name) int {
+	for i, x := range names {
+		if x == want {
+			return i
+		}
+	}
+	return -1
+}
+
 // childStructTypes returns the resolved standard types of an element's
 // structure-element children (ignoring marked-content and object references).
 func (d *Document) childStructTypes(elem *Dictionary, roleMap *Dictionary) []Name {
