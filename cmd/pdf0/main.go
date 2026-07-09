@@ -27,6 +27,8 @@ func main() {
 		err = cmdEncrypt(os.Args[2:])
 	case "extract":
 		err = cmdExtract(os.Args[2:])
+	case "repair":
+		err = cmdRepair(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -50,6 +52,7 @@ usage:
   pdf0 decrypt [-password PW] <in> <out>
   pdf0 encrypt -user PW [-owner PW] <in> <out>
   pdf0 extract  [-password PW] <file>
+  pdf0 repair   [-level ...] <in> <out>
 `)
 }
 
