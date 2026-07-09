@@ -57,8 +57,99 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.21 — every font used for rendering must be embedded.
 	v = append(v, doc.checkUAFonts()...)
 
+	// 7.18.3 — pages with annotations must use structure tab order.
+	v = append(v, doc.checkUATabOrder()...)
+
+	// 7.1 — structure types must be standard or mapped via /RoleMap.
+	v = append(v, doc.checkUARoleMap(cat)...)
+
 	// 7.3 — every figure needs alternate text.
 	v = append(v, doc.checkFigureAlt(cat)...)
+	return v
+}
+
+// standardStructTypes are the ISO 32000 standard structure types (Table 333/337).
+var standardStructTypes = map[Name]bool{
+	"Document": true, "Part": true, "Art": true, "Sect": true, "Div": true,
+	"BlockQuote": true, "Caption": true, "TOC": true, "TOCI": true, "Index": true,
+	"NonStruct": true, "Private": true, "P": true, "H": true, "H1": true, "H2": true,
+	"H3": true, "H4": true, "H5": true, "H6": true, "L": true, "LI": true, "Lbl": true,
+	"LBody": true, "Table": true, "TR": true, "TH": true, "TD": true, "THead": true,
+	"TBody": true, "TFoot": true, "Span": true, "Quote": true, "Note": true,
+	"Reference": true, "BibEntry": true, "Code": true, "Link": true, "Annot": true,
+	"Ruby": true, "RB": true, "RT": true, "RP": true, "Warichu": true, "WT": true,
+	"WP": true, "Figure": true, "Formula": true, "Form": true,
+}
+
+// checkUATabOrder requires structure tab order on pages that carry annotations.
+func (d *Document) checkUATabOrder() []UAViolation {
+	var v []UAViolation
+	for _, pg := range collectPages(d, d.catalogPages()) {
+		annots, _ := d.Resolve(pg.dict.Get("Annots")).(Array)
+		if len(annots) == 0 {
+			continue
+		}
+		if tabs, _ := d.Resolve(pg.dict.Get("Tabs")).(Name); tabs != "S" {
+			v = append(v, UAViolation{"7.18.3", "page with annotations must set /Tabs /S (structure tab order)", pg.objNum})
+		}
+	}
+	return v
+}
+
+// checkUARoleMap flags structure element types that are neither standard nor
+// mapped to a standard type through the structure tree's /RoleMap.
+func (d *Document) checkUARoleMap(cat *Dictionary) []UAViolation {
+	root := d.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return nil
+	}
+	roleMap := d.ResolveDict(root.Get("RoleMap"))
+	mapped := func(t Name) bool {
+		if standardStructTypes[t] {
+			return true
+		}
+		if roleMap == nil {
+			return false
+		}
+		to, _ := d.Resolve(roleMap.Get(t)).(Name)
+		return standardStructTypes[to]
+	}
+	var v []UAViolation
+	seen := map[int]bool{}
+	reported := map[Name]bool{}
+	var walk func(node Object)
+	walk = func(node Object) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		elem := d.ResolveDict(node)
+		if elem == nil {
+			if arr, ok := d.Resolve(node).(Array); ok {
+				for _, kid := range arr {
+					walk(kid)
+				}
+			}
+			return
+		}
+		if st, ok := elem.Get("S").(Name); ok && st != "" && !mapped(st) && !reported[st] {
+			reported[st] = true
+			v = append(v, UAViolation{"7.1", "structure type /" + string(st) + " is neither standard nor mapped in /RoleMap", 0})
+		}
+		if k := elem.Get("K"); k != nil {
+			switch kids := d.Resolve(k).(type) {
+			case Array:
+				for _, kid := range kids {
+					walk(kid)
+				}
+			default:
+				walk(k)
+			}
+		}
+	}
+	walk(root.Get("K"))
 	return v
 }
 
