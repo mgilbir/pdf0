@@ -91,3 +91,12 @@ actual detection.)
 - Match the surrounding code's naming and comment density. Comment the *why*
   (especially any corpus-driven decision that contradicts a naive spec reading),
   not the *what*.
+
+## PDF/UA false-positive oracle
+
+`TestUAReferenceFilesNoFalsePositives` runs `ValidatePDFUA` over the PDF
+Association's conformant reference files and requires zero violations. The files
+(the `PDFUA-Reference-Files` suite from pdfa.org) are **not committed** — place
+the extracted PDFs under `spec/pdfua/reference-files/` (gitignored) and the test
+picks them up, self-skipping when absent. Add a rule only if these conformant
+documents stay clean.
