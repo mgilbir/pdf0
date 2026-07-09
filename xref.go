@@ -375,6 +375,16 @@ func predictorSupported(p predictorParms) bool {
 // This prevents decompression bombs from consuming excessive memory.
 const maxDecodeSize = 100 << 20
 
+// flateEncode zlib-compresses data (the inverse of flateDecode) for writing a
+// FlateDecode stream such as a cross-reference stream.
+func flateEncode(data []byte) []byte {
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	w.Write(data)
+	w.Close()
+	return buf.Bytes()
+}
+
 func flateDecode(data []byte) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
