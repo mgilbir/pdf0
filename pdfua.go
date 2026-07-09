@@ -85,6 +85,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
 	v = append(v, doc.checkUAXFA(cat)...)
 
+	// 7.18.6.2 — media clip data dictionaries need /CT and /Alt.
+	v = append(v, doc.checkUAMediaClips()...)
+
 	// 7.2 — any present /Lang must be a valid BCP 47 tag.
 	v = append(v, doc.checkUALang(cat)...)
 
@@ -313,7 +316,15 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 				v = append(v, UAViolation{"7.18.1", "annotation of subtype /" + string(st) + " has no alternate description (/Contents or /Alt)", num})
 			}
 		}
-		// 28-002/010/011: a visible annotation must be represented in the
+		// 7.18.8: a PrinterMark is an incidental artifact and must NOT be tagged;
+		// a visible one carrying a /StructParent is a violation.
+		if st == "PrinterMark" {
+			if a.Get("StructParent") != nil {
+				v = append(v, UAViolation{"7.18.8", "PrinterMark annotation must be an artifact, not tagged (has /StructParent)", num})
+			}
+			continue
+		}
+		// 28-002/010/011: every other visible annotation must be represented in the
 		// structure tree — it carries a /StructParent linking it to a structure
 		// element. (Hidden and Popup annotations were already skipped above.)
 		if a.Get("StructParent") == nil {
@@ -321,6 +332,71 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 		}
 	}
 	return v
+}
+
+// checkUAMediaClips requires every media clip data dictionary (Type /MediaClip)
+// to carry both the /CT (content type) and /Alt (alternate text) keys
+// (7.18.6.2). Media clips are typically inline dictionaries nested inside a
+// Screen annotation's Rendition action, so the whole object graph is walked.
+func (d *Document) checkUAMediaClips() []UAViolation {
+	var v []UAViolation
+	d.walkAllDicts(func(mc *Dictionary, num int) {
+		if t, _ := mc.Get("Type").(Name); t != "MediaClip" {
+			return
+		}
+		if mc.Get("CT") == nil {
+			v = append(v, UAViolation{"7.18.6.2", "media clip data dictionary has no /CT (content type)", num})
+		}
+		if mc.Get("Alt") == nil {
+			v = append(v, UAViolation{"7.18.6.2", "media clip data dictionary has no /Alt (alternate text)", num})
+		}
+	})
+	return v
+}
+
+// walkAllDicts visits every dictionary reachable in the object graph — including
+// dictionaries nested inline inside arrays, streams, and other dictionaries —
+// exactly once. objNum is the number of the enclosing top-level object.
+func (d *Document) walkAllDicts(fn func(dict *Dictionary, objNum int)) {
+	seenRef := map[int]bool{}
+	seenPtr := map[*Dictionary]bool{}
+	var visit func(o Object, objNum int)
+	visit = func(o Object, objNum int) {
+		switch x := o.(type) {
+		case IndirectRef:
+			if seenRef[x.Number] {
+				return
+			}
+			seenRef[x.Number] = true
+			if io := d.Objects[x.Number]; io != nil {
+				visit(io.Value, x.Number)
+			}
+		case *Dictionary:
+			if seenPtr[x] {
+				return
+			}
+			seenPtr[x] = true
+			fn(x, objNum)
+			for _, val := range x.Values {
+				visit(val, objNum)
+			}
+		case *Stream:
+			if !seenPtr[&x.Dict] {
+				seenPtr[&x.Dict] = true
+				fn(&x.Dict, objNum)
+				for _, val := range x.Dict.Values {
+					visit(val, objNum)
+				}
+			}
+		case Array:
+			for _, e := range x {
+				visit(e, objNum)
+			}
+		}
+	}
+	for num, io := range d.Objects {
+		visit(io.Value, num)
+	}
 }
 
 // checkUALang enforces that any /Lang value present — in the catalog or on a
