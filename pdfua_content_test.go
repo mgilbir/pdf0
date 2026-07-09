@@ -39,4 +39,20 @@ func TestUARealContent(t *testing.T) {
 	if len(artifact.checkUARealContent(cat(artifact))) != 0 {
 		t.Error("artifact page text should be clean")
 	}
+
+	// Artifact nested inside tagged content (01-003).
+	artInTag := mk("/P <</MCID 0>> BDC /Artifact BMC (x) Tj EMC EMC")
+	if len(artInTag.checkUARealContent(cat(artInTag))) == 0 {
+		t.Error("artifact nested in tagged content not flagged")
+	}
+	// Tagged content nested inside an artifact (01-004).
+	tagInArt := mk("/Artifact BMC /P <</MCID 0>> BDC (x) Tj EMC EMC")
+	if len(tagInArt.checkUARealContent(cat(tagInArt))) == 0 {
+		t.Error("tagged content nested in an artifact not flagged")
+	}
+	// Optional content (/OC) around tagged content is transparent (no violation).
+	ocWrap := mk("/OC /MC0 BDC /P <</MCID 0>> BDC (x) Tj EMC EMC")
+	if len(ocWrap.checkUARealContent(cat(ocWrap))) != 0 {
+		t.Error("/OC-wrapped tagged content should be clean")
+	}
 }
