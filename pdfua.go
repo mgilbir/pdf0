@@ -91,6 +91,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.18.6.2 — media clip data dictionaries need /CT and /Alt.
 	v = append(v, doc.checkUAMediaClips()...)
 
+	// 7.20 — reference XObjects are forbidden.
+	v = append(v, doc.checkUAReferenceXObjects()...)
+
 	// 7.2 — any present /Lang must be a valid BCP 47 tag.
 	v = append(v, doc.checkUALang(cat)...)
 
@@ -452,6 +455,25 @@ func (d *Document) checkOneUACMap(fontDict *Dictionary) []UAViolation {
 		}
 	}
 	return nil
+}
+
+// checkUAReferenceXObjects flags reference XObjects — Form XObjects carrying a
+// /Ref entry, which import content from an external file — which PDF/UA forbids
+// (7.20).
+func (d *Document) checkUAReferenceXObjects() []UAViolation {
+	var v []UAViolation
+	d.walkAllDicts(func(dict *Dictionary, num int) {
+		if st, _ := dict.Get("Subtype").(Name); st != "Form" {
+			return
+		}
+		if ty, _ := dict.Get("Type").(Name); ty != "" && ty != "XObject" {
+			return
+		}
+		if dict.Get("Ref") != nil {
+			v = append(v, UAViolation{"7.20", "reference XObject (Form XObject with /Ref) is not permitted", num})
+		}
+	})
+	return v
 }
 
 // checkUAMediaClips requires every media clip data dictionary (Type /MediaClip)
