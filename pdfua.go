@@ -70,6 +70,8 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 
 	// 7.1 — structure types must be standard or mapped via /RoleMap.
 	v = append(v, doc.checkUARoleMap(cat)...)
+	v = append(v, doc.checkUARoleMapIntegrity(cat)...)
+	v = append(v, doc.checkUAStructParent(cat)...)
 
 	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile.
 	v = append(v, doc.checkUAStructNesting(cat)...)
@@ -259,10 +261,91 @@ func (d *Document) checkUAIdentifier(cat *Dictionary) []UAViolation {
 	if !ok {
 		return []UAViolation{{"5", "document has no XMP metadata (a PDF/UA identifier is required)", 0}}
 	}
-	if !strings.Contains(decodeXMPToUTF8(stream.Data), "pdfuaid:part") {
+	xmp := decodeXMPToUTF8(stream.Data)
+	if !strings.Contains(xmp, "pdfuaid:part") {
 		return []UAViolation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
 	}
+	if part := xmpPDFUAPart(xmp); part != "" && part != "1" {
+		return []UAViolation{{"5", "pdfuaid:part must be 1 for PDF/UA-1, got " + part, 0}}
+	}
 	return nil
+}
+
+// xmpPDFUAPart extracts the pdfuaid:part value from an XMP packet, handling both
+// the attribute form (pdfuaid:part="1") and the element form
+// (<pdfuaid:part>1</pdfuaid:part>). It returns "" if no value is found.
+func xmpPDFUAPart(xmp string) string {
+	i := strings.Index(xmp, "pdfuaid:part")
+	if i < 0 {
+		return ""
+	}
+	rest := xmp[i+len("pdfuaid:part"):]
+	// Attribute form: ="N"
+	if j := strings.IndexAny(rest, "=>"); j >= 0 && rest[j] == '=' {
+		k := strings.IndexAny(rest[j:], "\"'")
+		if k >= 0 {
+			q := rest[j+k+1:]
+			if e := strings.IndexAny(q, "\"'"); e >= 0 {
+				return strings.TrimSpace(q[:e])
+			}
+		}
+		return ""
+	}
+	// Element form: >N<
+	if j := strings.IndexByte(rest, '>'); j >= 0 {
+		q := rest[j+1:]
+		if e := strings.IndexByte(q, '<'); e >= 0 {
+			return strings.TrimSpace(q[:e])
+		}
+	}
+	return ""
+}
+
+// checkUAStructParent flags a structure element that lacks the required /P
+// (parent) entry (7.1, ISO 32000-1 14.7.2 Table 323).
+func (d *Document) checkUAStructParent(cat *Dictionary) []UAViolation {
+	var v []UAViolation
+	d.walkStructElems(cat, func(elem *Dictionary, t Name) {
+		if elem.Get("P") == nil {
+			v = append(v, UAViolation{"7.1", "structure element <" + string(t) + "> has no /P (parent) entry", 0})
+		}
+	})
+	return v
+}
+
+// checkUARoleMapIntegrity flags a /RoleMap that remaps a standard structure type
+// or contains a circular mapping (7.1).
+func (d *Document) checkUARoleMapIntegrity(cat *Dictionary) []UAViolation {
+	root := d.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return nil
+	}
+	roleMap := d.ResolveDict(root.Get("RoleMap"))
+	if roleMap == nil {
+		return nil
+	}
+	var v []UAViolation
+	for _, key := range roleMap.Keys {
+		if standardStructTypes[key] {
+			v = append(v, UAViolation{"7.1", "/RoleMap remaps standard structure type <" + string(key) + ">", 0})
+		}
+		// Follow the mapping chain from key; a repeat is a cycle.
+		seen := map[Name]bool{key: true}
+		cur := key
+		for {
+			next, ok := d.Resolve(roleMap.Get(cur)).(Name)
+			if !ok || next == "" {
+				break
+			}
+			if seen[next] {
+				v = append(v, UAViolation{"7.1", "/RoleMap contains a circular mapping involving <" + string(key) + ">", 0})
+				break
+			}
+			seen[next] = true
+			cur = next
+		}
+	}
+	return v
 }
 
 // checkUASecurity flags an encrypted document that lacks a /P entry or whose
