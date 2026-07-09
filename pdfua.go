@@ -394,6 +394,14 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 				v = append(v, UAViolation{"7.18.5", "Link annotation has no alternate description (/Contents)", num})
 			}
 		}
+		// 7.18.1: a form-field Widget must have a non-empty field description /TU
+		// (own or inherited from its parent field) or an /Alt on the widget.
+		if st == "Widget" {
+			alt, _ := d.Resolve(a.Get("Alt")).(String)
+			if len(d.effectiveFieldTU(a)) == 0 && len(alt.Value) == 0 {
+				v = append(v, UAViolation{"7.18.1", "form-field Widget has neither a field description (/TU) nor an /Alt", num})
+			}
+		}
 		// 7.18.1: every other visible annotation (not a Widget, which has its own
 		// TU/Alt rule, and not a PrinterMark artifact) must carry an alternate
 		// description in /Contents or /Alt.
@@ -667,6 +675,22 @@ func (d *Document) checkUAEmbeddedFiles() []UAViolation {
 		}
 	}
 	return v
+}
+
+// effectiveFieldTU returns a Widget/field's user-facing description (/TU),
+// following the /Parent field chain (bounded and cycle-guarded) since a terminal
+// Widget may inherit /TU from its parent field.
+func (d *Document) effectiveFieldTU(a *Dictionary) []byte {
+	seen := map[*Dictionary]bool{}
+	cur := a
+	for i := 0; i < 32 && cur != nil && !seen[cur]; i++ {
+		seen[cur] = true
+		if tu, _ := d.Resolve(cur.Get("TU")).(String); len(tu.Value) > 0 {
+			return tu.Value
+		}
+		cur = d.ResolveDict(cur.Get("Parent"))
+	}
+	return nil
 }
 
 // checkUAXFA flags a dynamic XFA form (dynamicRender = required), which PDF/UA
