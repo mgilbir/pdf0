@@ -69,6 +69,15 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.4 — numbered heading levels must not be skipped.
 	v = append(v, doc.checkUAHeadings(cat)...)
 
+	// 7.16 — encryption must not disable accessibility (Matterhorn 26).
+	v = append(v, doc.checkUASecurity()...)
+
+	// 7.18.2 — forbidden annotation subtypes (Matterhorn 28-007).
+	v = append(v, doc.checkUAAnnotations()...)
+
+	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
+	v = append(v, doc.checkUAXFA(cat)...)
+
 	// 7.3 — every figure needs alternate text.
 	v = append(v, doc.checkFigureAlt(cat)...)
 	return v
@@ -222,6 +231,83 @@ func (d *Document) checkUAIdentifier(cat *Dictionary) []UAViolation {
 		return []UAViolation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
 	}
 	return nil
+}
+
+// checkUASecurity flags an encrypted document that lacks a /P entry or whose
+// permissions disable text extraction for accessibility (Matterhorn 26-001/002).
+func (d *Document) checkUASecurity() []UAViolation {
+	enc := d.ResolveDict(d.Trailer.Get("Encrypt"))
+	if enc == nil {
+		return nil
+	}
+	p, ok := d.Resolve(enc.Get("P")).(Integer)
+	if !ok {
+		return []UAViolation{{"7.16", "encrypted document has no /P permissions entry", 0}}
+	}
+	if uint32(int32(p))&0x200 == 0 { // bit position 10: extract for accessibility
+		return []UAViolation{{"7.16", "encryption disables text extraction for accessibility (permission bit 10)", 0}}
+	}
+	return nil
+}
+
+// checkUAAnnotations flags forbidden annotation subtypes. Hidden and Popup
+// annotations are exempt from checkpoint 28.
+func (d *Document) checkUAAnnotations() []UAViolation {
+	var v []UAViolation
+	for num, iobj := range d.Objects {
+		a, ok := iobj.Value.(*Dictionary)
+		if !ok || !isAnnotation(a) {
+			continue
+		}
+		st, _ := a.Get("Subtype").(Name)
+		if st == "Popup" {
+			continue
+		}
+		if f, _ := d.Resolve(a.Get("F")).(Integer); int(f)&0x2 != 0 {
+			continue // hidden
+		}
+		if st == "TrapNet" {
+			v = append(v, UAViolation{"7.18.2", "TrapNet annotations are not permitted", num})
+		}
+	}
+	return v
+}
+
+// checkUAXFA flags a dynamic XFA form (dynamicRender = required), which PDF/UA
+// forbids (Matterhorn 25-001).
+func (d *Document) checkUAXFA(cat *Dictionary) []UAViolation {
+	form := d.ResolveDict(cat.Get("AcroForm"))
+	if form == nil {
+		return nil
+	}
+	var xfa []byte
+	switch v := d.Resolve(form.Get("XFA")).(type) {
+	case *Stream:
+		xfa = v.Data
+	case Array:
+		for _, e := range v {
+			if st, ok := d.Resolve(e).(*Stream); ok {
+				xfa = append(xfa, st.Data...)
+			}
+		}
+	}
+	if dynamicXFARequired(xfa) {
+		return []UAViolation{{"7.15", "dynamic XFA forms are not permitted (dynamicRender required)", 0}}
+	}
+	return nil
+}
+
+// dynamicXFARequired reports whether an XFA config declares dynamic rendering.
+func dynamicXFARequired(xfa []byte) bool {
+	i := bytesIndexFold(xfa, "dynamicRender")
+	if i < 0 {
+		return false
+	}
+	return bytesIndexFold(xfa[i:min(i+64, len(xfa))], "required") >= 0
+}
+
+func bytesIndexFold(b []byte, sub string) int {
+	return strings.Index(strings.ToLower(string(b)), strings.ToLower(sub))
 }
 
 // checkUATitle requires the XMP metadata to carry a document title (dc:title),
