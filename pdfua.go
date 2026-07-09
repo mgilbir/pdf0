@@ -778,9 +778,28 @@ func (d *Document) checkUAMediaClips() []UAViolation {
 		}
 		if mc.Get("Alt") == nil {
 			v = append(v, UAViolation{"7.18.6.2", "media clip data dictionary has no /Alt (alternate text)", num})
+		} else if !d.altArrayHasText(mc.Get("Alt")) {
+			v = append(v, UAViolation{"7.18.6.2", "media clip data dictionary /Alt is empty", num})
 		}
 	})
 	return v
+}
+
+// altArrayHasText reports whether an /Alt value carries at least one non-empty
+// text string. Media-clip /Alt is an array of alternating culture/text strings;
+// a plain string is also accepted.
+func (d *Document) altArrayHasText(o Object) bool {
+	switch a := d.Resolve(o).(type) {
+	case String:
+		return len(a.Value) > 0
+	case Array:
+		for _, e := range a {
+			if s, ok := d.Resolve(e).(String); ok && len(s.Value) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // walkAllDicts visits every dictionary reachable in the object graph — including
@@ -1159,10 +1178,10 @@ func (d *Document) checkFigureAlt(cat *Dictionary) []UAViolation {
 			return
 		}
 		if s, _ := elem.Get("S").(Name); s == "Figure" {
-			_, hasAlt := d.Resolve(elem.Get("Alt")).(String)
-			_, hasActual := d.Resolve(elem.Get("ActualText")).(String)
-			if !hasAlt && !hasActual {
-				v = append(v, UAViolation{"7.3", "figure structure element has no alternate text (/Alt)", 0})
+			alt, _ := d.Resolve(elem.Get("Alt")).(String)
+			actual, _ := d.Resolve(elem.Get("ActualText")).(String)
+			if len(alt.Value) == 0 && len(actual.Value) == 0 {
+				v = append(v, UAViolation{"7.3", "figure structure element has no non-empty alternate text (/Alt or /ActualText)", 0})
 			}
 		}
 		if k := elem.Get("K"); k != nil {
