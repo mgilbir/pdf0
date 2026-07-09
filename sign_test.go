@@ -46,3 +46,34 @@ func TestSignAndVerify(t *testing.T) {
 		}
 	}
 }
+
+// TestSignIncremental signs as an incremental update: the original bytes must be
+// preserved verbatim and the signature must verify.
+func TestSignIncremental(t *testing.T) {
+	cert, key := testCertKey(t)
+	original := buildMinimalPDF()
+	doc, err := Read(bytes.NewReader(original), int64(len(original)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := doc.WriteSignedIncremental(&buf, original, cert, key); err != nil {
+		t.Fatalf("WriteSignedIncremental: %v", err)
+	}
+	out := buf.Bytes()
+
+	if !bytes.HasPrefix(out, original) {
+		t.Fatal("incremental signature altered the original bytes")
+	}
+	signed, err := Read(bytes.NewReader(out), int64(len(out)))
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	res := signed.VerifySignatures(out)
+	if len(res) != 1 || !res[0].Valid {
+		t.Fatalf("incremental signature did not verify: %+v", res)
+	}
+	if !res[0].CoversWholeDocument {
+		t.Error("signature should cover the whole document")
+	}
+}

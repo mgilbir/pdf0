@@ -29,81 +29,108 @@ func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.S
 	if d.Encrypted || d.security != nil {
 		return errors.New("cannot sign an encrypted document")
 	}
-	signedDoc, err := d.withSignatureField()
+	signedDoc, _, err := d.withSignatureField()
 	if err != nil {
 		return err
 	}
-
 	var buf bytes.Buffer
 	if err := signedDoc.Write(&buf); err != nil {
 		return err
 	}
-	data := buf.Bytes()
-
-	// Locate the /Contents placeholder: the hex string after "/Contents".
-	ci := bytes.Index(data, []byte("/Contents"))
-	if ci < 0 {
-		return errors.New("signing: /Contents not found in output")
-	}
-	lt := bytes.IndexByte(data[ci:], '<')
-	if lt < 0 {
-		return errors.New("signing: /Contents value not found")
-	}
-	contentsStart := ci + lt                         // index of '<'
-	gt := bytes.IndexByte(data[contentsStart:], '>') // relative
-	if gt < 0 {
-		return errors.New("signing: /Contents not terminated")
-	}
-	contentsEnd := contentsStart + gt + 1 // index just after '>'
-
-	// The signed range is everything except the /Contents value (the <...>).
-	start1, len1 := 0, contentsStart
-	start2, len2 := contentsEnd, len(data)-contentsEnd
-
-	// Patch the /ByteRange placeholder in place (same length so nothing shifts).
-	// The leading 0 (start1) is literal; the three fields are len1, start2, len2.
-	real := fmt.Sprintf("0 %010d %010d %010d", len1, start2, len2)
-	if len(real) != len(byteRangePlaceholder) {
-		return errors.New("signing: /ByteRange width mismatch")
-	}
-	pi := bytes.Index(data, []byte(byteRangePlaceholder))
-	if pi < 0 || pi > contentsStart {
-		return errors.New("signing: /ByteRange placeholder not found")
-	}
-	copy(data[pi:pi+len(real)], real)
-
-	// Digest and sign the covered bytes (now that /ByteRange is final).
-	signed := append(append([]byte(nil), data[start1:start1+len1]...), data[start2:start2+len2]...)
-	cms, err := buildSignedData(cert, key, signed)
+	out, err := patchSignature(buf.Bytes(), cert, key)
 	if err != nil {
 		return err
 	}
-	hexSig := hex.EncodeToString(cms)
-	room := contentsEnd - 1 - (contentsStart + 1) // hex chars between < and >
-	if len(hexSig) > room {
-		return fmt.Errorf("signing: signature (%d hex) exceeds reserved space (%d)", len(hexSig), room)
+	_, err = w.Write(out)
+	return err
+}
+
+// WriteSignedIncremental signs the document as an incremental update: the
+// original bytes are preserved verbatim and only the signature objects are
+// appended. This is the correct way to add a signature without invalidating any
+// signature already present. original must be the bytes the document was read
+// from.
+func (d *Document) WriteSignedIncremental(w io.Writer, original []byte, cert *x509.Certificate, key crypto.Signer) error {
+	if d.Encrypted || d.security != nil {
+		return errors.New("cannot sign an encrypted document")
 	}
-	// Fill the placeholder: signature hex followed by '0' padding.
+	signedDoc, changed, err := d.withSignatureField()
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := signedDoc.WriteIncremental(&buf, original, changed); err != nil {
+		return err
+	}
+	out, err := patchSignature(buf.Bytes(), cert, key)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(out)
+	return err
+}
+
+// patchSignature fills the /ByteRange and /Contents placeholders in serialized
+// output: it locates the /Contents placeholder, patches /ByteRange in place,
+// signs the covered bytes, and writes the CMS into /Contents. It works on both a
+// full rewrite and an incremental update.
+func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer) ([]byte, error) {
+	ci := bytes.Index(data, []byte("/Contents"))
+	if ci < 0 {
+		return nil, errors.New("signing: /Contents not found in output")
+	}
+	lt := bytes.IndexByte(data[ci:], '<')
+	if lt < 0 {
+		return nil, errors.New("signing: /Contents value not found")
+	}
+	contentsStart := ci + lt
+	gt := bytes.IndexByte(data[contentsStart:], '>')
+	if gt < 0 {
+		return nil, errors.New("signing: /Contents not terminated")
+	}
+	contentsEnd := contentsStart + gt + 1
+
+	len1 := contentsStart
+	start2, len2 := contentsEnd, len(data)-contentsEnd
+
+	real := fmt.Sprintf("0 %010d %010d %010d", len1, start2, len2)
+	if len(real) != len(byteRangePlaceholder) {
+		return nil, errors.New("signing: /ByteRange width mismatch")
+	}
+	pi := bytes.Index(data, []byte(byteRangePlaceholder))
+	if pi < 0 || pi > contentsStart {
+		return nil, errors.New("signing: /ByteRange placeholder not found")
+	}
+	copy(data[pi:pi+len(real)], real)
+
+	signed := append(append([]byte(nil), data[:len1]...), data[start2:start2+len2]...)
+	cms, err := buildSignedData(cert, key, signed)
+	if err != nil {
+		return nil, err
+	}
+	hexSig := hex.EncodeToString(cms)
+	room := contentsEnd - 1 - (contentsStart + 1)
+	if len(hexSig) > room {
+		return nil, fmt.Errorf("signing: signature (%d hex) exceeds reserved space (%d)", len(hexSig), room)
+	}
 	region := data[contentsStart+1 : contentsEnd-1]
 	for i := range region {
 		region[i] = '0'
 	}
 	copy(region, hexSig)
-
-	_, err = w.Write(data)
-	return err
+	return data, nil
 }
 
 // withSignatureField returns a copy of the document with a signature field, its
 // AcroForm entry, and a placeholder /Sig dictionary added.
-func (d *Document) withSignatureField() (*Document, error) {
+func (d *Document) withSignatureField() (*Document, []int, error) {
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
-		return nil, errors.New("signing: document has no catalog")
+		return nil, nil, errors.New("signing: document has no catalog")
 	}
 	page := d.firstPage(catalog)
 	if page == nil {
-		return nil, errors.New("signing: document has no page to attach the signature to")
+		return nil, nil, errors.New("signing: document has no page to attach the signature to")
 	}
 
 	clone := &Document{
@@ -154,13 +181,16 @@ func (d *Document) withSignatureField() (*Document, error) {
 	pageClone := page.Clone()
 	annots, _ := d.Resolve(pageClone.Get("Annots")).(Array)
 	pageClone.Set("Annots", append(append(Array{}, annots...), IndirectRef{Number: fieldNum}))
-	clone.Objects[d.dictObjNum(page)] = &IndirectObject{Number: d.dictObjNum(page), Value: pageClone}
+	pageNum := d.dictObjNum(page)
+	clone.Objects[pageNum] = &IndirectObject{Number: pageNum, Value: pageClone}
 
 	catClone := catalog.Clone()
 	catClone.Set("AcroForm", IndirectRef{Number: formNum})
-	clone.Objects[d.dictObjNum(catalog)] = &IndirectObject{Number: d.dictObjNum(catalog), Value: catClone}
+	catNum := d.dictObjNum(catalog)
+	clone.Objects[catNum] = &IndirectObject{Number: catNum, Value: catClone}
 
-	return clone, nil
+	changed := []int{sigNum, fieldNum, formNum, pageNum, catNum}
+	return clone, changed, nil
 }
 
 func (d *Document) firstPage(catalog *Dictionary) *Dictionary {
