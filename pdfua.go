@@ -1104,6 +1104,11 @@ func (d *Document) checkOneUAFontDict(fontDict *Dictionary) []UAViolation {
 		if cst == "CIDFontType2" && d.fontProgramEmbedded(cid) && cid.Get("CIDToGIDMap") == nil {
 			v = append(v, UAViolation{"7.21.3.2", "embedded CIDFontType2 font has no /CIDToGIDMap", num})
 		}
+		// /CIDToGIDMap, when it is a name, must be exactly "Identity"; any other
+		// name (e.g. "NoIdentity" or empty) is invalid (ISO 32000-1 9.7.4.3).
+		if m, ok := d.Resolve(cid.Get("CIDToGIDMap")).(Name); ok && m != "Identity" {
+			v = append(v, UAViolation{"7.21.3.2", "/CIDToGIDMap name value must be Identity, got /" + string(m), num})
+		}
 	case "TrueType":
 		symbolic := d.fontIsSymbolic(fontDict)
 		enc := d.Resolve(fontDict.Get("Encoding"))

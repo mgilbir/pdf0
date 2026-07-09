@@ -86,3 +86,34 @@ func TestUAFontDicts(t *testing.T) {
 		t.Errorf("non-symbolic TrueType with WinAnsiEncoding wrongly flagged: %v", nsok)
 	}
 }
+
+// TestUACIDToGIDMapValue flags a /CIDToGIDMap name other than Identity.
+func TestUACIDToGIDMapValue(t *testing.T) {
+	mk := func(v Object) *Document {
+		doc := &Document{Objects: map[int]*IndirectObject{}}
+		cid := &Dictionary{}
+		cid.Set("Subtype", Name("CIDFontType2"))
+		if v != nil {
+			cid.Set("CIDToGIDMap", v)
+		}
+		doc.Objects[11] = &IndirectObject{Number: 11, Value: cid}
+		f := &Dictionary{}
+		f.Set("Subtype", Name("Type0"))
+		f.Set("DescendantFonts", Array{IndirectRef{Number: 11}})
+		doc.Objects[10] = &IndirectObject{Number: 10, Value: f}
+		return doc
+	}
+	check := func(doc *Document) []UAViolation {
+		return doc.checkOneUAFontDict(doc.Objects[10].Value.(*Dictionary))
+	}
+	if !hasUAClause(check(mk(Name("NoIdentity"))), "7.21.3.2") {
+		t.Error("CIDToGIDMap /NoIdentity not flagged")
+	}
+	if hasUAClause(check(mk(Name("Identity"))), "7.21.3.2") {
+		t.Error("CIDToGIDMap /Identity wrongly flagged")
+	}
+	// A stream value is valid.
+	if hasUAClause(check(mk(&Stream{})), "7.21.3.2") {
+		t.Error("CIDToGIDMap stream wrongly flagged")
+	}
+}
