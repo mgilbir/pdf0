@@ -169,6 +169,28 @@ func cmdMerge(args []string) error {
 	return writeDoc(merged, out)
 }
 
+func cmdUA(args []string) error {
+	fs := flag.NewFlagSet("ua", flag.ExitOnError)
+	pw := fs.String("password", "", "user or owner password")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: pdf0 ua [-password PW] <file>")
+	}
+	doc, err := readDoc(fs.Arg(0), *pw)
+	if err != nil {
+		return err
+	}
+	v := pdf0.ValidatePDFUA(doc)
+	if len(v) == 0 {
+		fmt.Printf("%s: no PDF/UA violations found (foundational checks)\n", fs.Arg(0))
+		return nil
+	}
+	for _, e := range v {
+		fmt.Println(e)
+	}
+	return fmt.Errorf("%d PDF/UA violation(s)", len(v))
+}
+
 func parseLevel(s string) (pdf0.PDFALevel, bool) {
 	switch s {
 	case "1b":
