@@ -1052,11 +1052,11 @@ func (d *Document) checkUAXFA(cat *Dictionary) []UAViolation {
 	var xfa []byte
 	switch v := d.Resolve(form.Get("XFA")).(type) {
 	case *Stream:
-		xfa = v.Data
+		xfa = decodeContentStream(d, v)
 	case Array:
 		for _, e := range v {
 			if st, ok := d.Resolve(e).(*Stream); ok {
-				xfa = append(xfa, st.Data...)
+				xfa = append(xfa, decodeContentStream(d, st)...)
 			}
 		}
 	}
