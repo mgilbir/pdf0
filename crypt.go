@@ -612,3 +612,21 @@ func encInt(doc *Document, o Object) int {
 	}
 	return 0
 }
+
+// RemoveEncryption drops encryption from a document that was decrypted on Read,
+// so a subsequent Write emits it in the clear. It clears the security handler
+// and removes /Encrypt from the trailer (and the object graph). It has no
+// effect on a document whose content could not be decrypted.
+func (d *Document) RemoveEncryption() {
+	if d.security == nil {
+		return
+	}
+	if d.security.encryptObjNum >= 0 {
+		delete(d.Objects, d.security.encryptObjNum)
+	}
+	d.security = nil
+	d.Encrypted = false
+	trailer := d.Trailer.Clone()
+	trailer.Delete("Encrypt")
+	d.Trailer = *trailer
+}
