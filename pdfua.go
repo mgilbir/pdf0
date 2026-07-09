@@ -60,6 +60,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.21 — every font used for rendering must be embedded.
 	v = append(v, doc.checkUAFonts()...)
 	v = append(v, doc.checkUAFontDicts()...)
+	v = append(v, doc.checkUACMaps()...)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
 	v = append(v, doc.checkUACharMapping()...)
@@ -332,6 +333,42 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 		}
 	}
 	return v
+}
+
+// isPredefinedCMap reports whether name is a predefined CMap from ISO 32000-1,
+// 9.7.5.2, Table 118 (the predefinedCMaps table, which includes Identity-H/V).
+func isPredefinedCMap(name Name) bool {
+	_, ok := predefinedCMaps[string(name)]
+	return ok
+}
+
+// checkUACMaps enforces that a Type 0 font's CMap is either predefined (Table
+// 118) or embedded, and that an embedded CMap's /UseCMap references only a
+// predefined CMap (7.21.3.3). Only fonts used for rendering are considered.
+func (d *Document) checkUACMaps() []UAViolation {
+	var v []UAViolation
+	for fontDict := range collectFontTextUsage(d) {
+		v = append(v, d.checkOneUACMap(fontDict)...)
+	}
+	return v
+}
+
+func (d *Document) checkOneUACMap(fontDict *Dictionary) []UAViolation {
+	if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
+		return nil
+	}
+	num := d.dictObjNum(fontDict)
+	switch enc := d.Resolve(fontDict.Get("Encoding")).(type) {
+	case Name:
+		if !isPredefinedCMap(enc) {
+			return []UAViolation{{"7.21.3.3", "Type 0 font uses CMap /" + string(enc) + ", which is neither predefined nor embedded", num}}
+		}
+	case *Stream:
+		if use, ok := enc.Dict.Get("UseCMap").(Name); ok && !isPredefinedCMap(use) {
+			return []UAViolation{{"7.21.3.3", "embedded CMap references non-predefined CMap /" + string(use) + " via /UseCMap", num}}
+		}
+	}
+	return nil
 }
 
 // checkUAMediaClips requires every media clip data dictionary (Type /MediaClip)
