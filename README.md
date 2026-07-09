@@ -118,10 +118,12 @@ Known limitations:
   refuses such a document. A file that *was* decrypted round-trips: `Write`
   re-encrypts its content with the retained key and re-emits the preserved
   `/Encrypt`. Encrypting a previously-unencrypted document is not yet supported.
-- **`Write` does not repack object streams.** A file read from a cross-reference
-  stream is written back as one, but objects that were compressed in an
-  `/ObjStm` are re-emitted as individual uncompressed objects (the object model
-  round-trips; the file is larger than the original).
+- **`Write` regenerates, rather than preserves, the file layout.** A file read
+  from a cross-reference stream is written back as one, with compressible
+  objects repacked into an object stream (`/ObjStm`); a traditional-table file
+  is written with a table. The object model round-trips, but the exact byte
+  layout (object order, which objects share a stream) is regenerated, not
+  preserved.
 - The PDF/A validator implements a subset of the ISO 19005 rules. Against the
   veraPDF corpus it currently reports no false positives, no missed violations,
   and no parse errors (tracked by `TestCorpus`), but coverage beyond the corpus
