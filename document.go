@@ -17,8 +17,9 @@ type Document struct {
 	// Standard-security-handler files with the empty user password are decrypted
 	// on Read (RC4, AES-128, and AES-256); their strings and streams are then in
 	// the clear but this flag stays set. Schemes decryption does not handle
-	// (non-empty passwords) keep their contents encrypted. Write refuses
-	// encrypted documents.
+	// (non-empty passwords) keep their contents encrypted. Write re-encrypts a
+	// decrypted document (reproducing the original /Encrypt) but refuses one whose
+	// content is still encrypted.
 	Encrypted bool
 
 	// valCache memoizes traversals for the duration of one validation run;
@@ -389,7 +390,12 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 // without the original cross-reference layout would produce a file no
 // reader could decrypt.
 func (d *Document) Write(w io.Writer) error {
-	if d.Encrypted || d.Trailer.Get("Encrypt") != nil {
+	// An encrypted document can be written only when we hold the security
+	// handler (from decrypting it on Read): Write re-encrypts the content with
+	// the retained key and re-emits the preserved /Encrypt and /ID. Without a
+	// handler (an unsupported scheme, or a wrong password) the content is still
+	// encrypted, so refuse rather than write a file no reader could decrypt.
+	if (d.Encrypted || d.Trailer.Get("Encrypt") != nil) && d.security == nil {
 		return fmt.Errorf("writing encrypted documents is not supported")
 	}
 	// Object number 0 is reserved as the free-list head (ISO 32000-1 7.5.4); it
@@ -407,13 +413,21 @@ func (d *Document) Write(w io.Writer) error {
 
 	s := NewSerializer(w)
 
+	// When re-encrypting, serialize encrypted copies rather than the in-memory
+	// plaintext (which stays untouched for the caller). The /Encrypt dictionary
+	// and /ID remain in the trailer and are written as-is.
+	writeObjects := d.Objects
+	if d.security != nil {
+		writeObjects = d.security.encryptCopy(d.Objects)
+	}
+
 	// A stale indirect /Length (its target integer object not updated after a
 	// stream's data changed, or a wrong length the parser recovered from) would
 	// otherwise be re-emitted verbatim. Compute the correct value for each
-	// indirect-length target so the written length object matches the data
-	// (audit C8).
+	// indirect-length target so the written length object matches the data —
+	// after encryption, since AES padding changes the length (audit C8).
 	lengthOverrides := make(map[int]int64)
-	for _, iobj := range d.Objects {
+	for _, iobj := range writeObjects {
 		if stream, ok := iobj.Value.(*Stream); ok {
 			if ref, isRef := stream.Dict.Get("Length").(IndirectRef); isRef {
 				lengthOverrides[ref.Number] = int64(len(stream.Data))
@@ -433,7 +447,7 @@ func (d *Document) Write(w io.Writer) error {
 
 	// 2. Collect and sort object numbers
 	var objNums []int
-	for num := range d.Objects {
+	for num := range writeObjects {
 		objNums = append(objNums, num)
 	}
 	sort.Ints(objNums)
@@ -442,7 +456,7 @@ func (d *Document) Write(w io.Writer) error {
 	offsets := make(map[int]int64)
 	for _, num := range objNums {
 		offsets[num] = s.Offset()
-		iobj := d.Objects[num]
+		iobj := writeObjects[num]
 		if newLen, ok := lengthOverrides[num]; ok {
 			if _, isInt := iobj.Value.(Integer); isInt {
 				// Emit the corrected length without mutating the caller's object.
@@ -456,7 +470,7 @@ func (d *Document) Write(w io.Writer) error {
 
 	// 4. Write xref table
 	xrefOffset := s.Offset()
-	if err := writeXRefTable(s, objNums, offsets, d.Objects); err != nil {
+	if err := writeXRefTable(s, objNums, offsets, writeObjects); err != nil {
 		return err
 	}
 

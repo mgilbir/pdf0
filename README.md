@@ -114,8 +114,10 @@ Known limitations:
   decrypted on `Read` for RC4 (V1/V2), AES-128 (V4/`AESV2`), and AES-256
   (V5/`AESV3`, R6); their strings and streams are available in the clear. `Read`
   uses the empty password; `ReadWithPassword` accepts a user or owner password.
-  A wrong password leaves the file encrypted (`Document.Encrypted`). `Write`
-  refuses encrypted documents pending re-encryption support.
+  A wrong password leaves the file encrypted (`Document.Encrypted`), and `Write`
+  refuses such a document. A file that *was* decrypted round-trips: `Write`
+  re-encrypts its content with the retained key and re-emits the preserved
+  `/Encrypt`. Encrypting a previously-unencrypted document is not yet supported.
 - **`Write` always emits a traditional cross-reference table**, even for a file
   read from an xref stream; the object model round-trips, the on-disk layout is
   regenerated.
