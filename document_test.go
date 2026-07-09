@@ -252,8 +252,14 @@ func TestRoundTripObjectStreamPDF(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.Bytes()
-	if bytes.Contains(out, []byte("/ObjStm")) || bytes.Contains(out, []byte("/XRef")) {
-		t.Error("written output contains stale cross-reference structure")
+	// Object streams are not repacked, so /ObjStm must not reappear. The file
+	// used a cross-reference stream, so Write regenerates one (a fresh /XRef,
+	// not the stale original).
+	if bytes.Contains(out, []byte("/ObjStm")) {
+		t.Error("written output repacked object streams (not supported)")
+	}
+	if !bytes.Contains(out, []byte("/XRef")) {
+		t.Error("expected a regenerated cross-reference stream")
 	}
 
 	doc2, err := Read(bytes.NewReader(out), int64(len(out)))

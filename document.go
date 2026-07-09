@@ -45,6 +45,11 @@ type Document struct {
 	// encryption can be reproduced on Write. nil for unencrypted documents (or
 	// for a scheme decryption does not support).
 	security *stdSecurityHandler
+
+	// usedXRefStream records that the file's primary cross-reference section was
+	// a cross-reference stream (/Type /XRef) rather than a traditional table, so
+	// Write regenerates the same kind of structure.
+	usedXRefStream bool
 }
 
 // Read parses a PDF document from the given data.
@@ -143,6 +148,9 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 		}
 		if first {
 			doc.Trailer = *sectionTrailer
+			if t, _ := sectionTrailer.Get("Type").(Name); t == "XRef" {
+				doc.usedXRefStream = true
+			}
 			first = false
 		}
 		prevOffset, ok := sectionTrailer.Get("Prev").(Integer)
@@ -468,41 +476,123 @@ func (d *Document) Write(w io.Writer) error {
 		}
 	}
 
-	// 4. Write xref table
-	xrefOffset := s.Offset()
-	if err := writeXRefTable(s, objNums, offsets, writeObjects); err != nil {
-		return err
-	}
-
-	// 5. Write trailer
-	// Clone so setting Size doesn't mutate the caller's Document.Trailer
-	// (Dictionary shares its backing slices on a plain struct copy).
-	trailer := d.Trailer.Clone()
-	// Update/set Size
 	maxObj := 0
 	for _, num := range objNums {
 		if num > maxObj {
 			maxObj = num
 		}
 	}
-	trailer.Set("Size", Integer(maxObj+1))
 
-	if err := s.writeString("trailer\n"); err != nil {
-		return err
-	}
-	if err := s.writeDictionary(trailer); err != nil {
-		return err
-	}
-	if err := s.writeString("\n"); err != nil {
-		return err
+	// 4. Write the cross-reference structure. A file read from a cross-reference
+	// stream is regenerated as one (its dictionary doubles as the trailer);
+	// otherwise a traditional table followed by a trailer.
+	xrefOffset := s.Offset()
+	if d.usedXRefStream {
+		if err := writeXRefStream(s, objNums, offsets, writeObjects, &d.Trailer, maxObj+1); err != nil {
+			return err
+		}
+	} else {
+		if err := writeXRefTable(s, objNums, offsets, writeObjects); err != nil {
+			return err
+		}
+		// Clone so setting Size doesn't mutate the caller's Document.Trailer
+		// (Dictionary shares its backing slices on a plain struct copy).
+		trailer := d.Trailer.Clone()
+		trailer.Set("Size", Integer(maxObj+1))
+		if err := s.writeString("trailer\n"); err != nil {
+			return err
+		}
+		if err := s.writeDictionary(trailer); err != nil {
+			return err
+		}
+		if err := s.writeString("\n"); err != nil {
+			return err
+		}
 	}
 
-	// 6. Write startxref
+	// 5. Write startxref
 	if err := s.writeString(fmt.Sprintf("startxref\n%d\n%%%%EOF\n", xrefOffset)); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// writeXRefStream writes the cross-reference structure as a /Type /XRef stream
+// object numbered xrefObjNum (which lands at the current serializer offset, so
+// its own entry points there). Trailer keys (/Root, /Info, /ID, /Encrypt) carry
+// into the stream dictionary. The binary entries are FlateDecode-compressed.
+func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject, trailer *Dictionary, xrefObjNum int) error {
+	offsets[xrefObjNum] = s.Offset()
+
+	// Entry set: the free-list head (object 0) plus every written object,
+	// including this xref stream itself.
+	nums := make([]int, 0, len(objNums)+2)
+	nums = append(nums, 0)
+	nums = append(nums, objNums...)
+	nums = append(nums, xrefObjNum)
+	sort.Ints(nums)
+
+	var maxOffset int64
+	for _, off := range offsets {
+		if off > maxOffset {
+			maxOffset = off
+		}
+	}
+	w := [3]int{1, byteWidth(uint64(maxOffset)), 2} // type, offset, generation
+
+	var body bytes.Buffer
+	put := func(v uint64, width int) {
+		for i := width - 1; i >= 0; i-- {
+			body.WriteByte(byte(v >> (8 * uint(i))))
+		}
+	}
+	for _, num := range nums {
+		if num == 0 {
+			put(0, w[0]) // type 0: free-list head
+			put(0, w[1])
+			put(65535, w[2])
+			continue
+		}
+		gen := 0
+		if o, ok := objects[num]; ok {
+			gen = o.Generation
+		}
+		put(1, w[0]) // type 1: uncompressed object
+		put(uint64(offsets[num]), w[1])
+		put(uint64(gen), w[2])
+	}
+
+	// /Index: [start count ...] over contiguous runs of object numbers.
+	var index Array
+	for i := 0; i < len(nums); {
+		j := i
+		for j+1 < len(nums) && nums[j+1] == nums[j]+1 {
+			j++
+		}
+		index = append(index, Integer(nums[i]), Integer(j-i+1))
+		i = j + 1
+	}
+
+	dict := trailer.Clone()
+	dict.Set("Type", Name("XRef"))
+	dict.Set("Size", Integer(xrefObjNum+1))
+	dict.Set("W", Array{Integer(w[0]), Integer(w[1]), Integer(w[2])})
+	dict.Set("Index", index)
+	encoded := flateEncode(body.Bytes())
+	dict.Set("Filter", Name("FlateDecode"))
+	dict.Set("Length", Integer(len(encoded)))
+
+	return s.WriteIndirectObject(&IndirectObject{Number: xrefObjNum, Value: &Stream{Dict: *dict, Data: encoded}})
+}
+
+// byteWidth returns the number of bytes needed to hold v (at least 1).
+func byteWidth(v uint64) int {
+	n := 1
+	for v >>= 8; v != 0; v >>= 8 {
+		n++
+	}
+	return n
 }
 
 // writeXRefTable writes a traditional xref table. Contiguous object-number
