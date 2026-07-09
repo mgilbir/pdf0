@@ -269,6 +269,12 @@ func (d *Document) checkUAAnnotations() []UAViolation {
 		if st == "TrapNet" {
 			v = append(v, UAViolation{"7.18.2", "TrapNet annotations are not permitted", num})
 		}
+		// 28-002/010/011: a visible annotation must be represented in the
+		// structure tree — it carries a /StructParent linking it to a structure
+		// element. (Hidden and Popup annotations were already skipped above.)
+		if a.Get("StructParent") == nil {
+			v = append(v, UAViolation{"7.18.1", "annotation is not tagged (no /StructParent linking it to the structure tree)", num})
+		}
 	}
 	return v
 }
