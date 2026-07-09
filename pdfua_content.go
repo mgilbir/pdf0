@@ -31,23 +31,65 @@ func (d *Document) checkPageRealContent(page *Dictionary, objNum int) []UAViolat
 		}
 	}
 
-	depth := 0
+	// Classify each marked-content sequence. A BDC/BMC is an Artifact if its tag
+	// is /Artifact, tagged (structure-linked) if its properties carry an /MCID,
+	// and otherwise transparent (/OC optional content, or property-less) — which
+	// participates in nesting balance but not in the mis-nesting rules.
+	const (
+		mcTransparent = iota
+		mcArtifact
+		mcTagged
+	)
+	var stack []int
+	hasAncestor := func(kind int) bool {
+		for _, s := range stack {
+			if s == kind {
+				return true
+			}
+		}
+		return false
+	}
+	var operands []contentToken
 	for _, tk := range tokenizeContent(content) {
 		if tk.kind != ctOp {
+			operands = append(operands, tk)
 			continue
 		}
 		switch tk.op {
 		case "BDC", "BMC":
-			depth++
+			kind := mcTransparent
+			switch {
+			case len(operands) > 0 && operands[0].kind == ctName && operands[0].name == "Artifact":
+				kind = mcArtifact
+			case operandsHaveName(operands, "MCID"):
+				kind = mcTagged
+			}
+			if kind == mcArtifact && hasAncestor(mcTagged) {
+				report("content marked as /Artifact is nested inside tagged content")
+			}
+			if kind == mcTagged && hasAncestor(mcArtifact) {
+				report("tagged content is nested inside an /Artifact")
+			}
+			stack = append(stack, kind)
 		case "EMC":
-			if depth > 0 {
-				depth--
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
 			}
 		case "Tj", "TJ", "'", "\"":
-			if depth == 0 {
+			if len(stack) == 0 {
 				report("page contains text that is neither tagged nor marked as an /Artifact")
 			}
 		}
+		operands = operands[:0]
 	}
 	return v
+}
+
+func operandsHaveName(operands []contentToken, name string) bool {
+	for _, o := range operands {
+		if o.kind == ctName && o.name == name {
+			return true
+		}
+	}
+	return false
 }
