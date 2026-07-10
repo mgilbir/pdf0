@@ -64,7 +64,12 @@ func forEachContentItem(data []byte, fn func(kind contentItemKind, payload []byt
 			if i < n && data[i] == '>' {
 				i++
 			}
-		case b == '[' || b == ']' || b == '{' || b == '}':
+		case b == '[' || b == ']' || b == '{' || b == '}' || b == ')':
+			// A stray ')' (unbalanced by any '(') is not the start of a token;
+			// consume it so the scan always advances. Without this, a content
+			// stream with an unmatched ')' — e.g. leaked inline-image sample
+			// data — spins forever, since ')' is a delimiter the default token
+			// scan below cannot consume (a parser DoS on untrusted input).
 			i++
 		case b == '/':
 			i++
@@ -84,6 +89,12 @@ func forEachContentItem(data []byte, fn func(kind contentItemKind, payload []byt
 				if !numeric && i-start > 256 {
 					break
 				}
+			}
+			if i == start {
+				// Defensive: an unhandled delimiter would yield no token and no
+				// progress. Skip it so the scan can never stall.
+				i++
+				continue
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {

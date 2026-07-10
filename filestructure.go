@@ -664,7 +664,7 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 			if i < n && data[i] == '>' {
 				i++
 			}
-		case b == '/' || b == '[' || b == ']' || b == '{' || b == '}':
+		case b == '/' || b == '[' || b == ']' || b == '{' || b == '}' || b == ')':
 			i++
 		default:
 			start := i
@@ -673,6 +673,10 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 				if i-start > 256 {
 					break
 				}
+			}
+			if i == start {
+				i++ // unhandled delimiter (e.g. stray ')'): guarantee progress
+				continue
 			}
 			if i-start == 2 && data[start] == 'B' && data[start+1] == 'I' {
 				skipInlineImage(data, &i)
