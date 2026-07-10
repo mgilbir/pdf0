@@ -74,3 +74,30 @@ func TestUAMediaClips(t *testing.T) {
 		t.Error("complete media clip wrongly flagged")
 	}
 }
+
+// TestUAMediaClipEmptyAlt flags a media clip whose /Alt has no non-empty text.
+func TestUAMediaClipEmptyAlt(t *testing.T) {
+	mk := func(alt Object) *Document {
+		doc := &Document{Objects: map[int]*IndirectObject{}}
+		mc := &Dictionary{}
+		mc.Set("Type", Name("MediaClip"))
+		mc.Set("CT", String{Value: []byte("video/mp4")})
+		mc.Set("Alt", alt)
+		rend := &Dictionary{}
+		rend.Set("C", mc)
+		annot := &Dictionary{}
+		annot.Set("Type", Name("Annot"))
+		annot.Set("Subtype", Name("Screen"))
+		annot.Set("A", rend)
+		doc.Objects[5] = &IndirectObject{Number: 5, Value: annot}
+		return doc
+	}
+	empty := Array{String{Value: []byte("")}, String{Value: []byte("")}}
+	if !hasUAClause(mk(empty).checkUAMediaClips(), "7.18.6.2") {
+		t.Error("empty /Alt not flagged")
+	}
+	good := Array{String{Value: []byte("")}, String{Value: []byte("a video")}}
+	if hasUAClause(mk(good).checkUAMediaClips(), "7.18.6.2") {
+		t.Error("media clip with alt text wrongly flagged")
+	}
+}
