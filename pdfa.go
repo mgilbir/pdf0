@@ -4951,8 +4951,9 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 			continue
 		}
 
-		// Skip array/proc delimiters
-		if b == '[' || b == ']' || b == '{' || b == '}' {
+		// Skip array/proc delimiters, and a stray ')' (a delimiter that would
+		// otherwise stall the token scan below on untrusted content).
+		if b == '[' || b == ']' || b == '{' || b == '}' || b == ')' {
 			i++
 			continue
 		}
@@ -5204,7 +5205,10 @@ func forEachContentToken(data []byte, fn func(tok []byte, isName bool)) {
 			if i < n && data[i] == '>' {
 				i++
 			}
-		case b == '[' || b == ']' || b == '{' || b == '}':
+		case b == '[' || b == ']' || b == '{' || b == '}' || b == ')':
+			// A stray ')' is a delimiter, not a token start; consume it so the
+			// scan always advances (an unmatched ')' would otherwise spin
+			// forever — a DoS on untrusted content).
 			i++
 		case b == '/':
 			i++
@@ -5220,6 +5224,11 @@ func forEachContentToken(data []byte, fn func(tok []byte, isName bool)) {
 				if i-start > 256 { // cap runaway binary tokens
 					break
 				}
+			}
+			if i == start {
+				// Defensive: an unhandled delimiter yields no progress; skip it.
+				i++
+				continue
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
