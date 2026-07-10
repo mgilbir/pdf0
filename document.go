@@ -546,7 +546,23 @@ func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, object
 			maxField2 = uint64(off)
 		}
 	}
-	w := [3]int{1, byteWidth(maxField2), 2} // type, field2 (offset/objstm), field3
+	// field3 holds the free-list generation (65535 for the head), an object
+	// generation, or — for type-2 entries — the index within an object stream,
+	// which can exceed 65535 when a stream packs more than 65536 objects. Size
+	// the field to the largest value actually written, rather than assuming two
+	// bytes, or a large index silently wraps and corrupts the xref.
+	maxField3 := uint64(65535) // free-list head generation
+	for _, e := range type2 {
+		if uint64(e[1]) > maxField3 {
+			maxField3 = uint64(e[1])
+		}
+	}
+	for _, o := range objects {
+		if uint64(o.Generation) > maxField3 {
+			maxField3 = uint64(o.Generation)
+		}
+	}
+	w := [3]int{1, byteWidth(maxField2), byteWidth(maxField3)} // type, field2, field3
 
 	var body bytes.Buffer
 	put := func(v uint64, width int) {
