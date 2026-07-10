@@ -772,12 +772,24 @@ func (d *Document) checkUAFontSubsetGlyphs() []UAViolation {
 			continue
 		}
 		listed := parseCharSet(string(cs.Value))
+		num := d.dictObjNum(fontDict)
+		// Forward: every glyph in the program must be listed in /CharSet.
 		for name := range fp.glyphNames {
 			if name == ".notdef" || name == "" {
 				continue
 			}
 			if !listed[name] {
-				v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + name + " present in the embedded font program", d.dictObjNum(fontDict)})
+				v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + name + " present in the embedded font program", num})
+				break
+			}
+		}
+		// Reverse: /CharSet must not list a glyph absent from the program.
+		for name := range listed {
+			if name == ".notdef" || name == "" {
+				continue
+			}
+			if !fp.glyphNames[name] {
+				v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet lists glyph " + name + " that is not present in the embedded font program", num})
 				break
 			}
 		}
