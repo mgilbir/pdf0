@@ -1,0 +1,27 @@
+# Well Tagged PDF (WTPDF) / PDF/UA-2 example documents by the LaTeX Project.
+# Source: https://github.com/latex3/tagging-project/discussions/72
+# All files are PDF 2.0, generated with LuaLaTeX, and conform (per the authors)
+# to PDF/UA-2, PDF/A-4/4F, WTPDF Accessibility + Reuse, and Arlington.
+# LaTeX sources: https://github.com/latex3/tagging-project/tree/main/project-examples
+# Licences vary (CC-BY for the arXiv papers, public domain for the historical
+# texts); see the discussion. Hosted on Google Drive; downloaded via download.sh.
+#
+# Format: <google-drive-file-id><TAB><output-filename>
+#
+# NOTE: the discussion lists 2401.05361v1-tagged with the same Drive file id as
+# 2401.09436v1-tagged (an apparent copy/paste error in the source); we fetch the
+# id once as 2401.09436v1-tagged.pdf.
+1sBC6JGV2Z7nNBM0HeK078WRDheTZQ9uN	mathml-AF-ex1.pdf
+1aje39vgl8Rm1xL1Lqzxzr_up9xaOHbeg	mathml-AF-ex2.pdf
+1yw59YaKhMg94WNY8prYJI5GEvHhzs8Hx	Sample-AF-Math-LaTeX.pdf
+1snBNo50ZT3GMPtP8m314_EEBe4jbw8en	amsldoc-tagged.pdf
+1wR2lCYb0JGxpna2wjlHrcHjcf1gWK2IT	2401.09965v1-tagged.pdf
+1sXg4aYw7SFygryrXfwgPplUzW5AoCfXC	2401.09436v1-tagged.pdf
+16A6Q2hLD9RvrmtgTv9qDxmpX0un46bLW	47464-t-tagged.pdf
+16YgS2deqg7sAQv1_RXBShSREF356OC7s	macbeth-tagged.pdf
+1B5fboVk2brFB6BBmWcUkMloUJVYIoTVQ	ASV-Bible.pdf
+12u7SV7UD33bGzzxdi1XOFeN4wYLgrvvJ	pg17161-tagged.pdf
+1ARMVgdV0dEFmf-QNTLp8xarc9y1hHlJI	tb139mitt-deims24.pdf
+1OfJWlq0CioRU0ZQwnD6i3hbssYFRr_Pj	pdfa-art.pdf
+1AhC71y0gVVADdvOQrY4atE3EcHVj7Eu2	525Da-23-group-theory.pdf
+1erFAVzHoNJ-yZi19SolAjZ99z82cK0k7	PHY-exam.pdf
