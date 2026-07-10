@@ -588,6 +588,7 @@ func (d *Document) checkOneUACIDSystemInfo(fontDict *Dictionary) []UAViolation {
 		return nil
 	}
 	var wantReg, wantOrd string
+	wantSup, haveWantSup := 0, false
 	switch enc := d.Resolve(fontDict.Get("Encoding")).(type) {
 	case Name:
 		if enc == "Identity-H" || enc == "Identity-V" {
@@ -600,6 +601,7 @@ func (d *Document) checkOneUACIDSystemInfo(fontDict *Dictionary) []UAViolation {
 		wantReg, wantOrd = info.Registry, info.Ordering
 	case *Stream:
 		wantReg, wantOrd = d.cidSystemInfo(&enc.Dict)
+		wantSup, haveWantSup = d.cidSupplement(&enc.Dict)
 	default:
 		return nil
 	}
@@ -621,7 +623,22 @@ func (d *Document) checkOneUACIDSystemInfo(fontDict *Dictionary) []UAViolation {
 	if gotReg != wantReg || gotOrd != wantOrd {
 		return []UAViolation{{"7.21.3.1", "CIDFont CIDSystemInfo (" + gotReg + "-" + gotOrd + ") does not match the CMap (" + wantReg + "-" + wantOrd + ")", d.dictObjNum(fontDict)}}
 	}
+	// The CIDFont's Supplement must not exceed the CMap's (a CMap of a lower
+	// supplement cannot address CIDs introduced by a higher one).
+	if gotSup, ok := d.cidSupplement(cid); ok && haveWantSup && gotSup > wantSup {
+		return []UAViolation{{"7.21.3.1", fmt.Sprintf("CIDFont CIDSystemInfo Supplement %d exceeds the CMap Supplement %d", gotSup, wantSup), d.dictObjNum(fontDict)}}
+	}
 	return nil
+}
+
+// cidSupplement returns a dictionary's /CIDSystemInfo /Supplement value.
+func (d *Document) cidSupplement(dict *Dictionary) (int, bool) {
+	si := d.ResolveDict(dict.Get("CIDSystemInfo"))
+	if si == nil {
+		return 0, false
+	}
+	n, ok := d.Resolve(si.Get("Supplement")).(Integer)
+	return int(n), ok
 }
 
 // cidSystemInfo returns the Registry and Ordering strings of a dictionary's
