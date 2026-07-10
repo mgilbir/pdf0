@@ -327,7 +327,74 @@ func (d *Document) checkUAIdentifier(cat *Dictionary) []UAViolation {
 	if part := xmpPDFUAPart(xmp); part != "" && part != "1" {
 		return []UAViolation{{"5", "pdfuaid:part must be 1 for PDF/UA-1, got " + part, 0}}
 	}
-	return nil
+	return d.checkUAIdentifierPrefix(xmp)
+}
+
+// pdfuaidNamespaceURI is the namespace of the PDF/UA Identification Schema.
+const pdfuaidNamespaceURI = "http://www.aiim.org/pdfua/ns/id/"
+
+// checkUAIdentifierPrefix flags a PDF/UA Identification Schema property (part,
+// amd, corr) that is written with a namespace prefix other than the required
+// "pdfuaid" (clause 5). It considers only prefixes bound to the PDF/UA-id
+// namespace URI, so an unrelated element named amd/corr elsewhere is ignored.
+func (d *Document) checkUAIdentifierPrefix(xmp string) []UAViolation {
+	var v []UAViolation
+	for _, prop := range []string{"part", "amd", "corr"} {
+		for _, prefix := range xmpElementPrefixes(xmp, prop) {
+			if prefix == "pdfuaid" || prefix == "" {
+				continue
+			}
+			if xmpBindsPrefixTo(xmp, prefix, pdfuaidNamespaceURI) {
+				v = append(v, UAViolation{"5", "PDF/UA identification property '" + prop + "' uses namespace prefix '" + prefix + "', must be 'pdfuaid'", 0})
+			}
+		}
+	}
+	return v
+}
+
+// xmpElementPrefixes returns the distinct prefixes used on elements with the
+// given local name (e.g. "<pdfuaia:amd>" yields "pdfuaia").
+func xmpElementPrefixes(xmp, local string) []string {
+	seen := map[string]bool{}
+	var out []string
+	needle := ":" + local
+	for i := 0; ; {
+		j := strings.Index(xmp[i:], needle)
+		if j < 0 {
+			break
+		}
+		pos := i + j
+		i = pos + len(needle)
+		// The character after the local name must end the element name.
+		if i < len(xmp) {
+			if c := xmp[i]; c != '>' && c != ' ' && c != '\t' && c != '\r' && c != '\n' && c != '/' {
+				continue
+			}
+		}
+		// Walk back over the prefix (letters/digits) to the '<'.
+		k := pos
+		for k > 0 && isXMLNameChar(xmp[k-1]) {
+			k--
+		}
+		if k > 0 && xmp[k-1] == '<' {
+			prefix := xmp[k:pos]
+			if prefix != "" && !seen[prefix] {
+				seen[prefix] = true
+				out = append(out, prefix)
+			}
+		}
+	}
+	return out
+}
+
+// xmpBindsPrefixTo reports whether the XMP declares xmlns:prefix="uri".
+func xmpBindsPrefixTo(xmp, prefix, uri string) bool {
+	return strings.Contains(xmp, "xmlns:"+prefix+"=\""+uri+"\"") ||
+		strings.Contains(xmp, "xmlns:"+prefix+"='"+uri+"'")
+}
+
+func isXMLNameChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.'
 }
 
 // xmpPDFUAPart extracts the pdfuaid:part value from an XMP packet, handling both
