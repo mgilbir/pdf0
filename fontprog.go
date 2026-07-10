@@ -27,6 +27,10 @@ type fontProgram struct {
 	// glyphNonEmpty[gid] reports whether the glyph has an outline (a non-zero
 	// length glyf entry). An empty entry is a blank glyph such as space.
 	glyphNonEmpty []bool
+	// componentGID[gid] reports whether the glyph is referenced as a component
+	// of a composite glyph. Such a glyph may carry an outline solely to serve
+	// as a building block (e.g. an accent) without being a directly mapped CID.
+	componentGID []bool
 	// widthByGID gives advance widths by glyph index, scaled to 1/1000.
 	widthByGID []float64
 	// cmap maps Unicode code points to glyph indices ((3,1) subtable), and
@@ -61,6 +65,40 @@ func be32(b []byte, off int) uint32 {
 	}
 	return binary.BigEndian.Uint32(b[off:])
 }
+
+// markComposite, given one glyph's glyf bytes, marks every glyph index it
+// references as a component (when the glyph is composite, numberOfContours == -1).
+func markComposite(g []byte, numGlyphs int, out []bool) {
+	if len(g) < 2 || int16(be16(g, 0)) != -1 {
+		return
+	}
+	o := 10
+	for o+4 <= len(g) {
+		flags := be16(g, o)
+		if cgid := be16(g, o+2); cgid >= 0 && cgid < numGlyphs {
+			out[cgid] = true
+		}
+		o += 4
+		if flags&0x0001 != 0 { // ARG_1_AND_2_ARE_WORDS
+			o += 4
+		} else {
+			o += 2
+		}
+		switch {
+		case flags&0x0008 != 0: // WE_HAVE_A_SCALE
+			o += 2
+		case flags&0x0040 != 0: // WE_HAVE_AN_X_AND_Y_SCALE
+			o += 4
+		case flags&0x0080 != 0: // WE_HAVE_A_TWO_BY_TWO
+			o += 8
+		}
+		if flags&0x0020 == 0 { // no MORE_COMPONENTS
+			break
+		}
+	}
+}
+
+// be16 as signed for the numberOfContours check.
 
 // parseSFNT parses a TrueType/OpenType font program.
 func parseSFNT(data []byte) *fontProgram {
@@ -124,12 +162,16 @@ func parseSFNT(data []byte) *fontProgram {
 			return be16(loca, 2*i) * 2
 		}
 		fp.glyphNonEmpty = make([]bool, fp.numGlyphs)
+		fp.componentGID = make([]bool, fp.numGlyphs)
 		for gid := 0; gid < fp.numGlyphs; gid++ {
 			start, end := offAt(gid), offAt(gid+1)
 			// Present when the entry is well-formed and lies within the glyf
 			// table (an empty glyph, start==end, is still present).
 			fp.glyphPresent[gid] = start <= end && end <= glyfLen
 			fp.glyphNonEmpty[gid] = start < end && end <= glyfLen
+			if fp.glyphNonEmpty[gid] {
+				markComposite(glyf[start:end], fp.numGlyphs, fp.componentGID)
+			}
 		}
 	}
 
