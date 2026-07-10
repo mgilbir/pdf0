@@ -770,45 +770,102 @@ func (d *Document) checkUAFontSubsetGlyphs() []UAViolation {
 		if !isSubsetFont(fontDict) {
 			continue
 		}
-		if st, _ := fontDict.Get("Subtype").(Name); st != "Type1" && st != "MMType1" {
-			continue
-		}
-		fd := d.ResolveDict(fontDict.Get("FontDescriptor"))
-		if fd == nil {
-			continue
-		}
-		cs, ok := d.Resolve(fd.Get("CharSet")).(String)
-		if !ok {
-			continue
-		}
-		fp := loadFontProgram(d, fd)
-		if fp == nil || fp.glyphNames == nil {
-			continue
-		}
-		listed := parseCharSet(string(cs.Value))
-		num := d.dictObjNum(fontDict)
-		// Forward: every glyph in the program must be listed in /CharSet.
-		for name := range fp.glyphNames {
-			if name == ".notdef" || name == "" {
-				continue
-			}
-			if !listed[name] {
-				v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + name + " present in the embedded font program", num})
-				break
-			}
-		}
-		// Reverse: /CharSet must not list a glyph absent from the program.
-		for name := range listed {
-			if name == ".notdef" || name == "" {
-				continue
-			}
-			if !fp.glyphNames[name] {
-				v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet lists glyph " + name + " that is not present in the embedded font program", num})
-				break
-			}
+		switch st, _ := fontDict.Get("Subtype").(Name); st {
+		case "Type1", "MMType1":
+			v = append(v, d.checkType1CharSet(fontDict)...)
+		case "Type0":
+			v = append(v, d.checkCIDFontCIDSet(fontDict)...)
 		}
 	}
 	return v
+}
+
+// checkType1CharSet verifies a subset Type 1 font's /CharSet lists exactly the
+// glyph names present in the embedded program.
+func (d *Document) checkType1CharSet(fontDict *Dictionary) []UAViolation {
+	fd := d.ResolveDict(fontDict.Get("FontDescriptor"))
+	if fd == nil {
+		return nil
+	}
+	cs, ok := d.Resolve(fd.Get("CharSet")).(String)
+	if !ok {
+		return nil
+	}
+	fp := loadFontProgram(d, fd)
+	if fp == nil || fp.glyphNames == nil {
+		return nil
+	}
+	listed := parseCharSet(string(cs.Value))
+	num := d.dictObjNum(fontDict)
+	var v []UAViolation
+	// Forward: every glyph in the program must be listed in /CharSet.
+	for name := range fp.glyphNames {
+		if name == ".notdef" || name == "" {
+			continue
+		}
+		if !listed[name] {
+			v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + name + " present in the embedded font program", num})
+			break
+		}
+	}
+	// Reverse: /CharSet must not list a glyph absent from the program.
+	for name := range listed {
+		if name == ".notdef" || name == "" {
+			continue
+		}
+		if !fp.glyphNames[name] {
+			v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet lists glyph " + name + " that is not present in the embedded font program", num})
+			break
+		}
+	}
+	return v
+}
+
+// checkCIDFontCIDSet verifies a subset CIDFontType2 font's /CIDSet identifies
+// every CID present in the embedded program. A CID is "present" when its glyph
+// carries an outline, EXCEPT glyphs that appear only as composite-glyph
+// components (e.g. an accent reused across letters): such a glyph carries an
+// outline as a building block but is not a directly mapped CID, so a conformant
+// /CIDSet does not list it. Only the Identity CIDToGIDMap case (CID == GID) is
+// handled; a mapping stream would need inversion and is left alone.
+func (d *Document) checkCIDFontCIDSet(fontDict *Dictionary) []UAViolation {
+	desc := type0Descendant(d, fontDict)
+	if desc == nil {
+		return nil
+	}
+	if cs, _ := desc.Get("Subtype").(Name); cs != "CIDFontType2" {
+		return nil
+	}
+	if m := d.Resolve(desc.Get("CIDToGIDMap")); m != nil {
+		if n, ok := m.(Name); !ok || n != "Identity" {
+			return nil
+		}
+	}
+	fd := d.ResolveDict(desc.Get("FontDescriptor"))
+	if fd == nil {
+		return nil
+	}
+	cidSet, ok := d.Resolve(fd.Get("CIDSet")).(*Stream)
+	if !ok {
+		return nil
+	}
+	fp := loadFontProgram(d, fd)
+	if fp == nil || fp.glyphNonEmpty == nil {
+		return nil
+	}
+	present := cidSetBits(d, cidSet)
+	for gid, nonEmpty := range fp.glyphNonEmpty {
+		if !nonEmpty || gid == 0 {
+			continue
+		}
+		if gid < len(fp.componentGID) && fp.componentGID[gid] {
+			continue // outline serves only as a composite component
+		}
+		if !present[gid] {
+			return []UAViolation{{"7.21.4.2", "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", d.dictObjNum(fontDict)}}
+		}
+	}
+	return nil
 }
 
 // checkUANotdefCID enforces 7.21.8 for composite fonts: a text-showing operator
