@@ -85,6 +85,122 @@ func (d *Document) checkPageRealContent(page *Dictionary, objNum int) []UAViolat
 	return v
 }
 
+// checkUAFormXObjectMCID enforces 7.20: a form XObject whose content is tagged
+// (contains an /MCID marked-content sequence) must be painted at most once. If
+// it is invoked by more than one Do operator, a single structure element would
+// map to several renderings, breaking the one-to-one structure/content mapping.
+func (d *Document) checkUAFormXObjectMCID() []UAViolation {
+	mcidForm := map[int]bool{}
+	for num, iobj := range d.Objects {
+		s, ok := iobj.Value.(*Stream)
+		if !ok {
+			continue
+		}
+		if st, _ := s.Dict.Get("Subtype").(Name); st != "Form" {
+			continue
+		}
+		if bytesContainsToken(decodeContentStream(d, s), "/MCID") {
+			mcidForm[num] = true
+		}
+	}
+	if len(mcidForm) == 0 {
+		return nil
+	}
+
+	doCount := map[int]int{}
+	countDo := func(content []byte, res *Dictionary) {
+		if res == nil {
+			return
+		}
+		xobjs := d.ResolveDict(res.Get("XObject"))
+		if xobjs == nil {
+			return
+		}
+		name2num := map[string]int{}
+		for i, k := range xobjs.Keys {
+			if ref, ok := xobjs.Values[i].(IndirectRef); ok {
+				name2num[string(k)] = ref.Number
+			}
+		}
+		var last string
+		for _, tk := range tokenizeContent(content) {
+			switch {
+			case tk.kind == ctName:
+				last = tk.name
+			case tk.kind == ctOp && tk.op == "Do":
+				if n, ok := name2num[last]; ok {
+					doCount[n]++
+				}
+			}
+		}
+	}
+	// Page content sources.
+	for _, pg := range collectPages(d, d.catalogPages()) {
+		countDo(getContentStreamData(d, pg.dict.Get("Contents")), d.ResolveDict(pg.dict.Get("Resources")))
+	}
+	// Form XObject content sources (a form may invoke another form).
+	for _, iobj := range d.Objects {
+		s, ok := iobj.Value.(*Stream)
+		if !ok {
+			continue
+		}
+		if st, _ := s.Dict.Get("Subtype").(Name); st != "Form" {
+			continue
+		}
+		countDo(decodeContentStream(d, s), d.ResolveDict(s.Dict.Get("Resources")))
+	}
+
+	var v []UAViolation
+	for _, num := range sortedInts(mcidForm) {
+		if doCount[num] > 1 {
+			v = append(v, UAViolation{"7.20", "a form XObject containing marked content (/MCID) is painted by more than one Do operator", num})
+		}
+	}
+	return v
+}
+
+// bytesContainsToken reports whether tok appears in data followed by a
+// delimiter/whitespace (so "/MCID" does not match "/MCIDExtra").
+func bytesContainsToken(data []byte, tok string) bool {
+	for i := 0; ; {
+		j := indexBytes(data[i:], tok)
+		if j < 0 {
+			return false
+		}
+		end := i + j + len(tok)
+		if end >= len(data) || isWhitespace(data[end]) || isContentDelim(data[end]) {
+			return true
+		}
+		i = i + j + 1
+	}
+}
+
+func indexBytes(b []byte, s string) int {
+	n := len(s)
+	if n == 0 {
+		return 0
+	}
+	for i := 0; i+n <= len(b); i++ {
+		if string(b[i:i+n]) == s {
+			return i
+		}
+	}
+	return -1
+}
+
+func sortedInts(m map[int]bool) []int {
+	out := make([]int, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1] > out[j]; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
+}
+
 func operandsHaveName(operands []contentToken, name string) bool {
 	for _, o := range operands {
 		if o.kind == ctName && o.name == name {
