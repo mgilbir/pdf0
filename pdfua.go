@@ -97,6 +97,9 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
 	v = append(v, doc.checkUAXFA(cat)...)
 
+	// 7.18.1 — a form field description belongs on the field, not its widgets.
+	v = append(v, doc.checkUAFieldDescription(cat)...)
+
 	// 7.18.6.2 — media clip data dictionaries need /CT and /Alt.
 	v = append(v, doc.checkUAMediaClips()...)
 
@@ -1059,6 +1062,61 @@ func (d *Document) effectiveFieldTU(a *Dictionary) []byte {
 		cur = d.ResolveDict(cur.Get("Parent"))
 	}
 	return nil
+}
+
+// checkUAFieldDescription enforces 7.18.1 for form fields with multiple widgets:
+// the accessible description /TU belongs on the field, not on its widget
+// annotations. When a field carries no /TU of its own but a pure-widget child
+// (a /Widget with no /T, i.e. not itself a named sub-field) carries a /TU, the
+// description is misplaced. A widget child that is a named sub-field (has /T) is
+// exempt, as is a field that supplies its own /TU.
+func (d *Document) checkUAFieldDescription(cat *Dictionary) []UAViolation {
+	form := d.ResolveDict(cat.Get("AcroForm"))
+	if form == nil {
+		return nil
+	}
+	var v []UAViolation
+	seen := map[int]bool{}
+	var walk func(node Object)
+	walk = func(node Object) {
+		if ref, ok := node.(IndirectRef); ok {
+			if seen[ref.Number] {
+				return
+			}
+			seen[ref.Number] = true
+		}
+		fd := d.ResolveDict(node)
+		if fd == nil {
+			return
+		}
+		_, hasFT := fd.Get("FT").(Name)
+		ftu, _ := d.Resolve(fd.Get("TU")).(String)
+		kids, _ := d.Resolve(fd.Get("Kids")).(Array)
+		if hasFT && len(ftu.Value) == 0 {
+			for _, kr := range kids {
+				kd := d.ResolveDict(kr)
+				if kd == nil {
+					continue
+				}
+				st, _ := kd.Get("Subtype").(Name)
+				kt, _ := d.Resolve(kd.Get("T")).(String)
+				ktu, _ := d.Resolve(kd.Get("TU")).(String)
+				if st == "Widget" && len(kt.Value) == 0 && len(ktu.Value) > 0 {
+					v = append(v, UAViolation{"7.18.1", "form field has no /TU; its accessible description is misplaced on a widget annotation", d.dictObjNum(fd)})
+					break
+				}
+			}
+		}
+		for _, kr := range kids {
+			walk(kr)
+		}
+	}
+	if fields, ok := d.Resolve(form.Get("Fields")).(Array); ok {
+		for _, fr := range fields {
+			walk(fr)
+		}
+	}
+	return v
 }
 
 // checkUAXFA flags a dynamic XFA form (dynamicRender = required), which PDF/UA
