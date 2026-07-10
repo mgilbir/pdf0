@@ -82,6 +82,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	v = append(v, doc.checkUAStructNesting(cat)...)
 	v = append(v, doc.checkUATableListStructure(cat)...)
 	v = append(v, doc.checkUATableGrid(cat)...)
+	v = append(v, doc.checkUATableAssociation(cat)...)
 
 	// 7.4 — heading levels must not be skipped; start at H1; one <H> per node.
 	v = append(v, doc.checkUAHeadings(cat)...)
