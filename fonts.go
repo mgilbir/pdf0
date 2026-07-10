@@ -202,15 +202,20 @@ type fontTextUsage struct {
 // collectFontTextUsage walks every page's executed content (including form
 // XObjects and tiling patterns) and records which fonts show which text.
 func collectFontTextUsage(doc *Document) map[*Dictionary]*fontTextUsage {
-	usage := make(map[*Dictionary]*fontTextUsage)
-	catalog := getCatalog(doc)
-	if catalog == nil {
-		return usage
+	if c := doc.valCache; c != nil && c.fontUsageValid {
+		return c.fontUsage
 	}
-	seen := make(map[*Dictionary]bool)
-	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data := getContentStreamData(doc, page.dict.Get("Contents"))
-		collectTextFromContainer(doc, page.dict, data, usage, seen)
+	usage := make(map[*Dictionary]*fontTextUsage)
+	if catalog := getCatalog(doc); catalog != nil {
+		seen := make(map[*Dictionary]bool)
+		for _, page := range collectPages(doc, catalog.Get("Pages")) {
+			data := getContentStreamData(doc, page.dict.Get("Contents"))
+			collectTextFromContainer(doc, page.dict, data, usage, seen)
+		}
+	}
+	if c := doc.valCache; c != nil {
+		c.fontUsage = usage
+		c.fontUsageValid = true
 	}
 	return usage
 }
