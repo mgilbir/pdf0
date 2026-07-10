@@ -47,3 +47,7 @@ testdata/fuzz/
 # corpus test harness binaries
 /corpusprobe
 /corpustime
+
+# WTPDF / PDF/UA-2 example PDFs (downloaded via `make wtpdf`); manifest + script are committed
+testdata/wtpdf/*.pdf
+testdata/wtpdf/.ok
