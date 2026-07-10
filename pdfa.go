@@ -252,6 +252,9 @@ type validationCache struct {
 	content         map[*Stream][]byte // decoded content streams
 	directAnnots    []annotOccurrence
 	hasDirectAnnots bool
+
+	fontUsage      map[*Dictionary]*fontTextUsage // memoized collectFontTextUsage
+	fontUsageValid bool
 }
 
 // --- File structure checks (6.1) ---

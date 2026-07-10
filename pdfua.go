@@ -25,6 +25,20 @@ func (v UAViolation) Error() string {
 // figure alternate text. It is a partial validator — a clean result means the
 // implemented checks passed, not full PDF/UA conformance.
 func ValidatePDFUA(doc *Document) []UAViolation {
+	// Install a per-run cache (page tree, decoded content, font-usage map) on a
+	// shallow copy so the original document is never mutated. Many checks walk
+	// the same structures — collectFontTextUsage alone runs in nine font checks —
+	// and without the cache a large document's content was decoded and tokenized
+	// dozens of times, making validation quadratic in practice.
+	if doc.valCache == nil {
+		runDoc := *doc
+		runDoc.valCache = &validationCache{
+			pages:   make(map[int][]pageInfo),
+			content: make(map[*Stream][]byte),
+		}
+		doc = &runDoc
+	}
+
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return []UAViolation{{"7.1", "document has no catalog", 0}}
