@@ -64,6 +64,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	v = append(v, doc.checkUACMapWMode()...)
 	v = append(v, doc.checkUACIDSystemInfo()...)
 	v = append(v, doc.checkUAToUnicodeValues()...)
+	v = append(v, doc.checkUAFontSubsetGlyphs()...)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
 	v = append(v, doc.checkUACharMapping()...)
@@ -645,6 +646,66 @@ func (d *Document) checkUAToUnicodeValues() []UAViolation {
 		}
 	}
 	return v
+}
+
+// checkUAFontSubsetGlyphs enforces 7.21.4.2 for Type 1 subset fonts: when the
+// FontDescriptor carries a /CharSet string, it must list the name of every glyph
+// actually present in the embedded font program — not merely the glyphs used for
+// rendering. The .notdef glyph is never required to be listed. Only subset fonts
+// (ABCDEF+ BaseFont prefix) are in scope, matching the profile.
+//
+// The CIDFont /CIDSet variant of this rule is deliberately not implemented: a
+// subset CIDFont's embedded program routinely contains padded/present glyphs
+// that a conformant /CIDSet does not enumerate, so a program-vs-CIDSet
+// comparison raises false positives on well-formed files.
+func (d *Document) checkUAFontSubsetGlyphs() []UAViolation {
+	var v []UAViolation
+	for fontDict := range collectFontTextUsage(d) {
+		if !isSubsetFont(fontDict) {
+			continue
+		}
+		if st, _ := fontDict.Get("Subtype").(Name); st != "Type1" && st != "MMType1" {
+			continue
+		}
+		fd := d.ResolveDict(fontDict.Get("FontDescriptor"))
+		if fd == nil {
+			continue
+		}
+		cs, ok := d.Resolve(fd.Get("CharSet")).(String)
+		if !ok {
+			continue
+		}
+		fp := loadFontProgram(d, fd)
+		if fp == nil || fp.glyphNames == nil {
+			continue
+		}
+		listed := parseCharSet(string(cs.Value))
+		for name := range fp.glyphNames {
+			if name == ".notdef" || name == "" {
+				continue
+			}
+			if !listed[name] {
+				v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + name + " present in the embedded font program", d.dictObjNum(fontDict)})
+				break
+			}
+		}
+	}
+	return v
+}
+
+// isSubsetFont reports whether a font dictionary's BaseFont carries the six
+// uppercase letters + '+' subset tag (e.g. ABCDEF+Arial).
+func isSubsetFont(fontDict *Dictionary) bool {
+	bf, _ := fontDict.Get("BaseFont").(Name)
+	if len(bf) < 7 || bf[6] != '+' {
+		return false
+	}
+	for i := 0; i < 6; i++ {
+		if bf[i] < 'A' || bf[i] > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // checkUAReferenceXObjects flags reference XObjects — Form XObjects carrying a
