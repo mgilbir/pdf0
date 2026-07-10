@@ -255,6 +255,8 @@ type validationCache struct {
 
 	fontUsage      map[*Dictionary]*fontTextUsage // memoized collectFontTextUsage
 	fontUsageValid bool
+
+	dictNum map[*Dictionary]int // reverse index: dictionary value -> object number
 }
 
 // --- File structure checks (6.1) ---

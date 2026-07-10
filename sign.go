@@ -221,8 +221,25 @@ func (d *Document) pageRef(catalog *Dictionary) Object {
 	return Null{}
 }
 
-// dictObjNum finds the object number whose value is the given dictionary.
+// dictObjNum finds the object number whose value is the given dictionary. During
+// a validation run a reverse index is built once in the cache and reused, so the
+// many per-font and per-cell lookups do not each scan the whole object table
+// (which is quadratic on large documents — hundreds of thousands of objects).
 func (d *Document) dictObjNum(target *Dictionary) int {
+	if c := d.valCache; c != nil {
+		if c.dictNum == nil {
+			c.dictNum = make(map[*Dictionary]int, len(d.Objects))
+			for num, iobj := range d.Objects {
+				if dp, ok := iobj.Value.(*Dictionary); ok {
+					c.dictNum[dp] = num
+				}
+			}
+		}
+		if n, ok := c.dictNum[target]; ok {
+			return n
+		}
+		return -1
+	}
 	for num, iobj := range d.Objects {
 		if dp, ok := iobj.Value.(*Dictionary); ok && dp == target {
 			return num
