@@ -169,16 +169,34 @@ func isRegular(b byte) bool {
 }
 
 // skipWhitespaceAndComments skips whitespace and comments.
+// maxTokenGap bounds how far skipWhitespaceAndComments advances looking for the
+// next token. Legitimate inter-token whitespace and comments are tiny; a run
+// this long means the cursor is inside binary data — e.g. an xref offset that
+// points into a stream, where the stream bytes (often containing a stray '%'
+// that reads as a giant no-newline comment) are being tokenized. Continuing is
+// pointless, and repeated across many such offsets it makes parsing quadratic in
+// the file size. Stop so the caller fails fast instead of scanning to EOF per
+// object.
+const maxTokenGap = 1 << 20 // 1 MiB
+
 func (l *Lexer) skipWhitespaceAndComments() {
+	start := l.pos
 	for !l.atEnd() {
+		if l.pos-start > maxTokenGap {
+			return
+		}
 		b := l.peek()
 		if isWhitespace(b) {
 			l.advance()
 			continue
 		}
 		if b == '%' {
-			// Skip comment to end of line
+			// Skip comment to end of line (bounded: a "comment" that runs past
+			// the gap limit with no newline is binary data, not a real comment).
 			for !l.atEnd() {
+				if l.pos-start > maxTokenGap {
+					return
+				}
 				c := l.advance()
 				if c == '\r' || c == '\n' {
 					break
