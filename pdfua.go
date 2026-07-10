@@ -81,6 +81,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile.
 	v = append(v, doc.checkUAStructNesting(cat)...)
 	v = append(v, doc.checkUATableListStructure(cat)...)
+	v = append(v, doc.checkUATableGrid(cat)...)
 
 	// 7.4 — heading levels must not be skipped; start at H1; one <H> per node.
 	v = append(v, doc.checkUAHeadings(cat)...)
