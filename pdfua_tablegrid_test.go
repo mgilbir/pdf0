@@ -101,3 +101,49 @@ func TestGridDefectsSparseHuge(t *testing.T) {
 		t.Errorf("tall single-column table flagged: %v", v)
 	}
 }
+
+// TestGridDefectsSpanBomb guards against the fill-loop blow-up: a cell whose
+// ColSpan or RowSpan is enormous must not make gridDefects fill billions of
+// grid slots. Such a table exceeds the work budget and is analyzed in bounded
+// time (reported with no grid defects rather than hanging).
+func TestGridDefectsSpanBomb(t *testing.T) {
+	cases := []struct {
+		name string
+		rows []tableRow
+	}{
+		// A single cell claiming a two-billion-column span.
+		{"colspan", []tableRow{{cell(1, 1 << 31)}, {cell(1, 1), cell(1, 1)}}},
+		// A single cell claiming a two-billion-row span.
+		{"rowspan", []tableRow{{cell(1<<31, 1)}, {cell(1, 1)}}},
+		// Near-int-max spans must not overflow the budget arithmetic.
+		{"maxint", []tableRow{{cell(1, 1<<62)}, {cell(1, 1<<62)}}},
+		// Many moderately-large cells that together blow the budget.
+		{"cumulative", func() []tableRow {
+			rows := make([]tableRow, 100)
+			for i := range rows {
+				rows[i] = tableRow{cell(1, 1 << 20)}
+			}
+			return rows
+		}()},
+	}
+	// The budget bounds the work to a few million map writes (~seconds at the
+	// ceiling), so any of these returns quickly; an unbounded fill would run for
+	// minutes. The threshold is generous so the test is not flaky under load —
+	// the point is bounded-vs-unbounded, not a precise time.
+	for _, tc := range cases {
+		done := make(chan int, 1)
+		go func() { done <- len(gridDefects(tc.rows)) }()
+		select {
+		case <-done:
+		case <-time.After(25 * time.Second):
+			t.Fatalf("%s: gridDefects did not return within 25s; span bomb not bounded", tc.name)
+		}
+	}
+
+	// A table just under the budget is still laid out normally (not treated as
+	// oversize): two full rows of a modest width report no defect.
+	small := []tableRow{{cell(1, 3)}, {cell(1, 1), cell(1, 1), cell(1, 1)}}
+	if v := gridDefects(small); len(v) != 0 {
+		t.Errorf("well-formed small table flagged: %v", v)
+	}
+}
