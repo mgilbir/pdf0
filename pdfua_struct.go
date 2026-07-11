@@ -116,53 +116,26 @@ func (d *Document) structKids(elem *Dictionary) []Object {
 // a THead or TFoot requires a TBody, and a Caption must sit in the permitted
 // position (first-or-last for a Table, first for a List or TOC).
 func (d *Document) checkUATableListStructure(cat *Dictionary) []UAViolation {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
-	roleMap := d.ResolveDict(root.Get("RoleMap"))
 	var v []UAViolation
-	seen := map[int]bool{}
-	var walk func(node Object)
-	walk = func(node Object) {
-		if ref, ok := node.(IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
-		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(Array); ok {
-				for _, kid := range arr {
-					walk(kid)
-				}
-			}
-			return
-		}
-		t := d.standardStructType(elem, roleMap)
-		kids := d.childStructTypes(elem, roleMap)
-		switch t {
+	for _, n := range d.structTree(cat) {
+		kids := n.childTypes
+		switch n.stdType {
 		case "Table":
 			v = append(v, tableStructErrors(kids)...)
 		case "L":
-			if n := countName(kids, "Caption"); n > 1 {
+			if c := countName(kids, "Caption"); c > 1 {
 				v = append(v, UAViolation{"7.2", "list (L) has more than one Caption", 0})
-			} else if n == 1 && firstIndexName(kids, "Caption") != 0 {
+			} else if c == 1 && firstIndexName(kids, "Caption") != 0 {
 				v = append(v, UAViolation{"7.2", "list (L) Caption must be the first child", 0})
 			}
 		case "TOC":
-			if n := countName(kids, "Caption"); n > 1 {
+			if c := countName(kids, "Caption"); c > 1 {
 				v = append(v, UAViolation{"7.2", "table of contents (TOC) has more than one Caption", 0})
-			} else if n == 1 && firstIndexName(kids, "Caption") != 0 {
+			} else if c == 1 && firstIndexName(kids, "Caption") != 0 {
 				v = append(v, UAViolation{"7.2", "table of contents (TOC) Caption must be the first child", 0})
 			}
 		}
-		for _, kid := range d.structKids(elem) {
-			walk(kid)
-		}
 	}
-	walk(root.Get("K"))
 	return v
 }
 
@@ -255,22 +228,53 @@ func orList(names []Name) string {
 	return s
 }
 
-// walkStructElems invokes fn for every structure element (with an /S type) in
-// the tree, passing its role-map-resolved standard type.
-func (d *Document) walkStructElems(cat *Dictionary, fn func(elem *Dictionary, stdType Name)) {
+// structNode is one structure-tree dict node in the flattened pre-order model
+// built by structTree. It carries the fields the per-check walks need so they
+// can iterate a cached list instead of each re-descending the tree — a large
+// win on documents with hundreds of thousands of structure elements.
+type structNode struct {
+	elem       *Dictionary // resolved element dictionary
+	objNum     int         // object number if reached via an indirect ref, else -1
+	rawS       Name        // elem's /S as written (before /RoleMap resolution)
+	hasS       bool        // whether /S is present and a name
+	stdType    Name        // /RoleMap-resolved standard type
+	childTypes []Name      // resolved standard types of the /S children, in order
+}
+
+// structTree returns the document's structure tree flattened into a pre-order
+// list of dict nodes, computed once per validation run and memoized in the
+// validation cache. The traversal matches the historical per-check walk: every
+// dict reachable through /K is visited (indirect refs deduped for cycle safety),
+// arrays are descended transparently, and both /S and non-/S dicts are recorded.
+func (d *Document) structTree(cat *Dictionary) []structNode {
+	if c := d.valCache; c != nil && c.structTreeValid {
+		return c.structTree
+	}
+	nodes := d.buildStructTree(cat)
+	if c := d.valCache; c != nil {
+		c.structTree = nodes
+		c.structTreeValid = true
+	}
+	return nodes
+}
+
+func (d *Document) buildStructTree(cat *Dictionary) []structNode {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
-		return
+		return nil
 	}
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
+	var nodes []structNode
 	seen := map[int]bool{}
 	var walk func(node Object)
 	walk = func(node Object) {
+		objNum := -1
 		if ref, ok := node.(IndirectRef); ok {
 			if seen[ref.Number] {
 				return
 			}
 			seen[ref.Number] = true
+			objNum = ref.Number
 		}
 		elem := d.ResolveDict(node)
 		if elem == nil {
@@ -281,14 +285,43 @@ func (d *Document) walkStructElems(cat *Dictionary, fn func(elem *Dictionary, st
 			}
 			return
 		}
-		if _, hasS := elem.Get("S").(Name); hasS {
-			fn(elem, d.standardStructType(elem, roleMap))
+		rawS, hasS := elem.Get("S").(Name)
+		kids := d.structKids(elem)
+		var childTypes []Name
+		for _, kid := range kids {
+			child := d.ResolveDict(kid)
+			if child == nil {
+				continue
+			}
+			if _, ok := child.Get("S").(Name); !ok {
+				continue
+			}
+			childTypes = append(childTypes, d.standardStructType(child, roleMap))
 		}
-		for _, kid := range d.structKids(elem) {
+		nodes = append(nodes, structNode{
+			elem:       elem,
+			objNum:     objNum,
+			rawS:       rawS,
+			hasS:       hasS,
+			stdType:    d.standardStructType(elem, roleMap),
+			childTypes: childTypes,
+		})
+		for _, kid := range kids {
 			walk(kid)
 		}
 	}
 	walk(root.Get("K"))
+	return nodes
+}
+
+// walkStructElems invokes fn for every structure element (with an /S type) in
+// the tree, passing its role-map-resolved standard type.
+func (d *Document) walkStructElems(cat *Dictionary, fn func(elem *Dictionary, stdType Name)) {
+	for _, n := range d.structTree(cat) {
+		if n.hasS {
+			fn(n.elem, n.stdType)
+		}
+	}
 }
 
 // checkUAHeaderVersion: PDF/UA-1 is defined against PDF 1.7, so the header must
