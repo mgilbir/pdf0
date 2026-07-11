@@ -225,10 +225,21 @@ func (p *Parser) parseArray() (Object, error) {
 	}
 }
 
+// dictIndexThreshold is the key count past which parseDictOrStream stops
+// deduplicating keys by a linear scan (Dictionary.Set) and builds a name→index
+// map instead. Below it the linear scan is cheaper than a map allocation;
+// above it the O(n²) scan is what makes a dictionary with hundreds of thousands
+// of keys (from a crafted object stream) take minutes to parse.
+const dictIndexThreshold = 64
+
 // parseDictOrStream parses a dictionary, and if followed by 'stream', parses it as a Stream.
 func (p *Parser) parseDictOrStream() (Object, error) {
 	p.consumeToken() // consume '<<'
 	dict := Dictionary{}
+	// index maps a key to its slot in dict once the dictionary grows past
+	// dictIndexThreshold, so duplicate-key handling stays O(1) instead of a
+	// linear scan per key. It is nil (and unused) for small dictionaries.
+	var index map[Name]int
 
 	for {
 		tok, err := p.peekToken(0)
@@ -256,9 +267,26 @@ func (p *Parser) parseDictOrStream() (Object, error) {
 			return nil, fmt.Errorf("parsing dictionary value for key %s: %w", key, err)
 		}
 
-		// Duplicate keys are legal to tolerate but undefined by the spec;
-		// Set keeps the last occurrence, matching common reader behavior.
-		dict.Set(key, val)
+		// Duplicate keys are legal to tolerate but undefined by the spec; keep
+		// the last value at the key's first position, matching Dictionary.Set
+		// and common reader behavior.
+		if index != nil {
+			if i, ok := index[key]; ok {
+				dict.Values[i] = val
+			} else {
+				index[key] = len(dict.Keys)
+				dict.Keys = append(dict.Keys, key)
+				dict.Values = append(dict.Values, val)
+			}
+		} else {
+			dict.Set(key, val)
+			if len(dict.Keys) >= dictIndexThreshold {
+				index = make(map[Name]int, len(dict.Keys)*2)
+				for i, k := range dict.Keys {
+					index[k] = i
+				}
+			}
+		}
 	}
 
 	// Check if followed by 'stream'. A look-ahead failure is a real lexer
