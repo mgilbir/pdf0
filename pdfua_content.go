@@ -13,49 +13,56 @@ func (d *Document) checkUARealContent(cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	for _, pg := range collectPages(d, cat.Get("Pages")) {
 		data, key := d.contentBytesAndKey(pg.dict.Get("Contents"))
-		for _, msg := range d.realContentMessages(data, key) {
+		for _, msg := range d.contentFacts(data, key).realMsgs {
 			v = append(v, UAViolation{"7.1", msg, pg.objNum})
 		}
 	}
 	return v
 }
 
-// realContentMessages returns the distinct real-content violation messages for
-// a page's content, memoized per content stream (key) so a stream shared by
-// many pages is analyzed once. The analysis depends only on the content bytes
-// (marked-content nesting and text operators), not the page, so the same stream
-// always yields the same messages — each page emits them under its own object
-// number.
-func (d *Document) realContentMessages(content []byte, key *Stream) []string {
-	if key != nil {
-		if c := d.valCache; c != nil {
-			if m, ok := c.realContent[key]; ok {
-				return m
-			}
-		}
-	}
-	msgs := analyzeRealContent(content)
-	if key != nil {
-		if c := d.valCache; c != nil {
-			if c.realContent == nil {
-				c.realContent = make(map[*Stream][]string)
-			}
-			c.realContent[key] = msgs
-		}
-	}
-	return msgs
+// streamContentFacts holds the facts several UA checks derive from a single
+// tokenizeContent pass over one content stream: the real-content (7.1)
+// violation messages and, for the form-XObject-painting rule (7.20), the
+// sequence of XObject names invoked by Do operators. Both depend only on the
+// stream bytes, so a stream shared by many containers — or examined by more
+// than one check — is tokenized once.
+type streamContentFacts struct {
+	realMsgs []string // distinct real-content (7.1) messages, in first-seen order
+	doNames  []string // the operand name in effect at each Do operator, in order
 }
 
-func analyzeRealContent(content []byte) []string {
-	if len(content) == 0 {
-		return nil
+// contentFacts returns the streamContentFacts for content, memoized per content
+// stream (key) when a validation cache is present.
+func (d *Document) contentFacts(content []byte, key *Stream) *streamContentFacts {
+	if key != nil {
+		if c := d.valCache; c != nil {
+			if f, ok := c.streamFacts[key]; ok {
+				return f
+			}
+		}
 	}
-	var msgs []string
+	f := buildContentFacts(content)
+	if key != nil {
+		if c := d.valCache; c != nil {
+			if c.streamFacts == nil {
+				c.streamFacts = make(map[*Stream]*streamContentFacts)
+			}
+			c.streamFacts[key] = f
+		}
+	}
+	return f
+}
+
+func buildContentFacts(content []byte) *streamContentFacts {
+	f := &streamContentFacts{}
+	if len(content) == 0 {
+		return f
+	}
 	reported := map[string]bool{}
 	report := func(msg string) {
 		if !reported[msg] {
 			reported[msg] = true
-			msgs = append(msgs, msg)
+			f.realMsgs = append(f.realMsgs, msg)
 		}
 	}
 
@@ -78,9 +85,13 @@ func analyzeRealContent(content []byte) []string {
 		return false
 	}
 	var operands []contentToken
+	var lastName string // most recent name operand (for the Do-operator target)
 	for _, tk := range tokenizeContent(content) {
 		if tk.kind != ctOp {
 			operands = append(operands, tk)
+			if tk.kind == ctName {
+				lastName = tk.name
+			}
 			continue
 		}
 		switch tk.op {
@@ -107,10 +118,12 @@ func analyzeRealContent(content []byte) []string {
 			if len(stack) == 0 {
 				report("page contains text that is neither tagged nor marked as an /Artifact")
 			}
+		case "Do":
+			f.doNames = append(f.doNames, lastName)
 		}
 		operands = operands[:0]
 	}
-	return msgs
+	return f
 }
 
 // checkUAFormXObjectMCID enforces 7.20: a form XObject whose content is tagged
@@ -136,7 +149,11 @@ func (d *Document) checkUAFormXObjectMCID() []UAViolation {
 	}
 
 	doCount := map[int]int{}
-	countDo := func(content []byte, res *Dictionary) {
+	// countDo resolves the Do-invoked XObject names of one content stream
+	// against its container's /XObject resources and tallies each target. The
+	// name sequence comes from the shared per-stream facts, so the content is
+	// tokenized once even though the real-content check scans the same pages.
+	countDo := func(content []byte, key *Stream, res *Dictionary) {
 		if res == nil {
 			return
 		}
@@ -150,21 +167,16 @@ func (d *Document) checkUAFormXObjectMCID() []UAViolation {
 				name2num[string(k)] = ref.Number
 			}
 		}
-		var last string
-		for _, tk := range tokenizeContent(content) {
-			switch {
-			case tk.kind == ctName:
-				last = tk.name
-			case tk.kind == ctOp && tk.op == "Do":
-				if n, ok := name2num[last]; ok {
-					doCount[n]++
-				}
+		for _, name := range d.contentFacts(content, key).doNames {
+			if n, ok := name2num[name]; ok {
+				doCount[n]++
 			}
 		}
 	}
 	// Page content sources.
 	for _, pg := range collectPages(d, d.catalogPages()) {
-		countDo(getContentStreamData(d, pg.dict.Get("Contents")), d.ResolveDict(pg.dict.Get("Resources")))
+		data, key := d.contentBytesAndKey(pg.dict.Get("Contents"))
+		countDo(data, key, d.ResolveDict(pg.dict.Get("Resources")))
 	}
 	// Form XObject content sources (a form may invoke another form).
 	for _, iobj := range d.Objects {
@@ -175,7 +187,7 @@ func (d *Document) checkUAFormXObjectMCID() []UAViolation {
 		if st, _ := s.Dict.Get("Subtype").(Name); st != "Form" {
 			continue
 		}
-		countDo(decodeContentStream(d, s), d.ResolveDict(s.Dict.Get("Resources")))
+		countDo(decodeContentStream(d, s), s, d.ResolveDict(s.Dict.Get("Resources")))
 	}
 
 	var v []UAViolation

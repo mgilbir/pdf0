@@ -142,7 +142,7 @@ func TestRealContentSharedStreamMemo(t *testing.T) {
 		t.Errorf("violations cover %d distinct pages, want %d", len(objs), nPages)
 	}
 	// The shared stream was analyzed once and cached.
-	if n := len(doc.valCache.realContent); n != 1 {
-		t.Errorf("realContent cache holds %d streams, want 1", n)
+	if n := len(doc.valCache.streamFacts); n != 1 {
+		t.Errorf("streamFacts cache holds %d streams, want 1", n)
 	}
 }
