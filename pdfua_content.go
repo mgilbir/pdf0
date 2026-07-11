@@ -12,22 +12,50 @@ package pdf0
 func (d *Document) checkUARealContent(cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	for _, pg := range collectPages(d, cat.Get("Pages")) {
-		v = append(v, d.checkPageRealContent(pg.dict, pg.objNum)...)
+		data, key := d.contentBytesAndKey(pg.dict.Get("Contents"))
+		for _, msg := range d.realContentMessages(data, key) {
+			v = append(v, UAViolation{"7.1", msg, pg.objNum})
+		}
 	}
 	return v
 }
 
-func (d *Document) checkPageRealContent(page *Dictionary, objNum int) []UAViolation {
-	content := getContentStreamData(d, page.Get("Contents"))
+// realContentMessages returns the distinct real-content violation messages for
+// a page's content, memoized per content stream (key) so a stream shared by
+// many pages is analyzed once. The analysis depends only on the content bytes
+// (marked-content nesting and text operators), not the page, so the same stream
+// always yields the same messages — each page emits them under its own object
+// number.
+func (d *Document) realContentMessages(content []byte, key *Stream) []string {
+	if key != nil {
+		if c := d.valCache; c != nil {
+			if m, ok := c.realContent[key]; ok {
+				return m
+			}
+		}
+	}
+	msgs := analyzeRealContent(content)
+	if key != nil {
+		if c := d.valCache; c != nil {
+			if c.realContent == nil {
+				c.realContent = make(map[*Stream][]string)
+			}
+			c.realContent[key] = msgs
+		}
+	}
+	return msgs
+}
+
+func analyzeRealContent(content []byte) []string {
 	if len(content) == 0 {
 		return nil
 	}
-	var v []UAViolation
+	var msgs []string
 	reported := map[string]bool{}
 	report := func(msg string) {
 		if !reported[msg] {
 			reported[msg] = true
-			v = append(v, UAViolation{"7.1", msg, objNum})
+			msgs = append(msgs, msg)
 		}
 	}
 
@@ -82,7 +110,7 @@ func (d *Document) checkPageRealContent(page *Dictionary, objNum int) []UAViolat
 		}
 		operands = operands[:0]
 	}
-	return v
+	return msgs
 }
 
 // checkUAFormXObjectMCID enforces 7.20: a form XObject whose content is tagged

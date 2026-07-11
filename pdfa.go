@@ -256,6 +256,13 @@ type validationCache struct {
 	fontUsage      map[*Dictionary]*fontTextUsage // memoized collectFontTextUsage
 	fontUsageValid bool
 
+	// Per-content-stream memoization for the executed-content walk. A stream
+	// shared by many containers (e.g. one content stream referenced by
+	// thousands of pages) is tokenized only once instead of once per container.
+	fontEvents  map[*Stream][]fontEvent       // stream -> replayable font-usage skeleton
+	usedNames   map[*Stream]usedResourceNames // stream -> invoked XObject/pattern names
+	realContent map[*Stream][]string          // stream -> real-content (7.1) messages
+
 	dictNum map[*Dictionary]int // reverse index: dictionary value -> object number
 
 	structTree      []structNode // flattened pre-order struct-tree nodes
