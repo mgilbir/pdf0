@@ -18,6 +18,14 @@ type Parser struct {
 	buf    []Token // look-ahead buffer
 	bufLen int
 	depth  int // current nesting depth (arrays/dictionaries)
+
+	// resolveLength, when set, resolves an indirect stream /Length reference to
+	// its integer value (typically via the cross-reference table). It lets
+	// parseStream honour a forward-referenced /Length instead of falling back to
+	// the endstream search, which can catastrophically over-read (see
+	// parseStream). It returns false when the reference cannot be resolved to a
+	// plain non-negative integer, in which case the search fallback is used.
+	resolveLength func(ref IndirectRef) (int64, bool)
 }
 
 // NewParser creates a new Parser for the given data.
@@ -199,6 +207,33 @@ func (p *Parser) toObjectNumber(tok Token) (int, error) {
 	return val, nil
 }
 
+// integerObjectValue reads an indirect object of the exact shape
+// "N G obj <integer>" and returns its non-negative integer value. It is used to
+// resolve an indirect stream /Length without parsing an arbitrarily large
+// value: it reads only four tokens and never recurses, so an adversarial
+// /Length pointing at a huge composite object costs nothing. It returns false
+// unless the four tokens are exactly integer, integer, 'obj', integer with a
+// non-negative value.
+func (p *Parser) integerObjectValue() (int64, bool) {
+	var toks [4]Token
+	for i := range toks {
+		t, err := p.nextToken()
+		if err != nil {
+			return 0, false
+		}
+		toks[i] = t
+	}
+	if toks[0].Type != TokenInteger || toks[1].Type != TokenInteger ||
+		toks[2].Type != TokenObj || toks[3].Type != TokenInteger {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(string(toks[3].Value), 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
 // parseArray parses a PDF array: [ obj1 obj2 ... ]
 func (p *Parser) parseArray() (Object, error) {
 	p.consumeToken() // consume '['
@@ -329,9 +364,24 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 	case Integer:
 		length = int64(l)
 	case IndirectRef:
-		// Length is an indirect reference - we can't resolve it here.
-		// We'll need to find endstream and calculate the length.
+		// Length is an indirect reference to an integer object defined
+		// elsewhere in the file (often a forward reference). Resolve it through
+		// the cross-reference table when a resolver is available; this is what
+		// conforming readers do. Resolving avoids a pathological over-read:
+		// without the true length the code falls back to searching for
+		// endstream, and that search skips any endstream keyword not preceded by
+		// whitespace — but binary stream data may end in any byte, so a
+		// legitimate endstream is skipped and the search slurps forward to a
+		// distant one. Across many such streams that is O(n^2) in the file size
+		// (a 10 MB file was observed to expand to 8 GB of stream data on read).
+		// If resolution fails, or the resolved length does not actually place
+		// endstream where expected, the search fallback below still runs.
 		length = -1
+		if p.resolveLength != nil {
+			if n, ok := p.resolveLength(l); ok {
+				length = n
+			}
+		}
 	case nil:
 		// No Length specified, try to find endstream
 		length = -1

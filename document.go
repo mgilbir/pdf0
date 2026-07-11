@@ -166,6 +166,26 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 	// 4. Parse all uncompressed objects from xref entries
 	doc.Offsets = make(map[int]int64)
 	lexer := NewLexer(data)
+	// resolveLen resolves an indirect stream /Length by seeking to the length
+	// object via the cross-reference table and reading its integer value. This
+	// lets a stream with a (frequently forward-referenced) indirect /Length be
+	// read by its true byte count rather than by searching for endstream, which
+	// can over-read pathologically when binary data ends in a non-whitespace
+	// byte (see parseStream). A fresh parser with no resolver is used so a
+	// length object cannot itself trigger recursive length resolution.
+	resolveLen := func(ref IndirectRef) (int64, bool) {
+		ent, ok := xrefTable.Entries[ref.Number]
+		if !ok || ent.Free || ent.Compressed {
+			return 0, false
+		}
+		lo := ent.Offset + adjust
+		if lo < 0 || lo >= size {
+			return 0, false
+		}
+		lx := NewLexer(data)
+		lx.SetPosition(lo)
+		return NewParserFromLexer(lx).integerObjectValue()
+	}
 	for num, entry := range xrefTable.Entries {
 		if entry.Free || entry.Compressed {
 			continue
@@ -184,6 +204,7 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 		doc.Offsets[num] = off
 		lexer.SetPosition(off)
 		parser := NewParserFromLexer(lexer)
+		parser.resolveLength = resolveLen
 		iobj, err := parser.ParseIndirectObject()
 		if err != nil {
 			return nil, fmt.Errorf("parsing object %d at offset %d: %w", num, entry.Offset, err)
