@@ -226,7 +226,11 @@ func gridDefects(rows []tableRow) []UAViolation {
 	}
 
 	// A hole exists if, after placement, some row does not fill the full grid
-	// width (the maximum column reached by any row).
+	// width (the maximum column reached by any row). Every occupied[r] key is a
+	// distinct filled column in [0,width), so a row has a hole exactly when it
+	// has fewer than width filled columns — an O(rows) test rather than scanning
+	// the whole rows×width grid, which for a sparse-but-huge table (tens of
+	// thousands of rows and columns) would be billions of lookups.
 	width := 0
 	for _, w := range rowWidth {
 		if w > width {
@@ -235,10 +239,9 @@ func gridDefects(rows []tableRow) []UAViolation {
 	}
 	hole := false
 	for r := 0; r < nRows; r++ {
-		for c := 0; c < width; c++ {
-			if !occupied[r][c] {
-				hole = true
-			}
+		if len(occupied[r]) < width {
+			hole = true
+			break
 		}
 	}
 
