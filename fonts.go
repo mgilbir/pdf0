@@ -219,9 +219,10 @@ func collectFontTextUsage(doc *Document) map[*Dictionary]*fontTextUsage {
 	usage := make(map[*Dictionary]*fontTextUsage)
 	if catalog := getCatalog(doc); catalog != nil {
 		seen := make(map[*Dictionary]bool)
+		applied := make(map[sfKey]bool)
 		for _, page := range collectPages(doc, catalog.Get("Pages")) {
-			data := getContentStreamData(doc, page.dict.Get("Contents"))
-			collectTextFromContainer(doc, page.dict, data, usage, seen)
+			data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
+			collectTextFromContainer(doc, page.dict, data, key, usage, seen, applied)
 		}
 	}
 	if c := doc.valCache; c != nil {
@@ -231,22 +232,155 @@ func collectFontTextUsage(doc *Document) map[*Dictionary]*fontTextUsage {
 	return usage
 }
 
-func collectTextFromContainer(doc *Document, container *Dictionary, data []byte, usage map[*Dictionary]*fontTextUsage, seen map[*Dictionary]bool) {
+// fontEventKind classifies the replayable events extracted from a content
+// stream by buildFontEvents.
+type fontEventKind uint8
+
+const (
+	evTf   fontEventKind = iota // select the font named by `name`
+	evTr                        // set the text rendering mode to `mode`
+	evShow                      // show `strings` with the current font/mode
+)
+
+// fontEvent is one entry in a content stream's font-usage skeleton: the
+// container-independent result of tokenizing the stream once. Replaying the
+// skeleton against a container's resources reproduces exactly what a direct
+// walk would attribute to each font, without re-tokenizing the bytes.
+type fontEvent struct {
+	kind    fontEventKind
+	name    string   // evTf: the operand name of the Tf operator
+	mode    int      // evTr: the text rendering mode
+	strings [][]byte // evShow: the strings pending at the show operator
+}
+
+// buildFontEvents tokenizes a decoded content stream once into a replayable
+// list of font events. Font-name resolution is deliberately deferred to replay
+// (it depends on the container's resources); everything captured here — the
+// operand names, render modes, and shown string bytes — is a pure function of
+// the stream contents.
+func buildFontEvents(data []byte) []fontEvent {
+	if data == nil {
+		return nil
+	}
+	var events []fontEvent
+	var lastName, lastNumber string
+	var pending [][]byte
+	forEachContentItem(data, func(kind contentItemKind, payload []byte) {
+		switch kind {
+		case itemName:
+			lastName = string(payload)
+		case itemNumber:
+			lastNumber = string(payload)
+		case itemString:
+			pending = append(pending, append([]byte(nil), payload...))
+		case itemOperator:
+			switch string(payload) {
+			case "Tf":
+				events = append(events, fontEvent{kind: evTf, name: lastName})
+				pending = nil
+			case "Tr":
+				m := 0
+				if lastNumber != "" {
+					fmt.Sscanf(lastNumber, "%d", &m)
+				}
+				events = append(events, fontEvent{kind: evTr, mode: m})
+				pending = nil
+			case "Tj", "TJ", "'", "\"":
+				events = append(events, fontEvent{kind: evShow, strings: pending})
+				pending = nil
+			default:
+				pending = nil
+			}
+		}
+	})
+	return events
+}
+
+// contentFontEvents returns the font-usage skeleton for data, memoized per
+// content stream (key) when a validation cache is present so a stream shared by
+// many containers is tokenized only once.
+func (d *Document) contentFontEvents(data []byte, key *Stream) []fontEvent {
+	if key != nil {
+		if c := d.valCache; c != nil {
+			if ev, ok := c.fontEvents[key]; ok {
+				return ev
+			}
+			ev := buildFontEvents(data)
+			if c.fontEvents == nil {
+				c.fontEvents = make(map[*Stream][]fontEvent)
+			}
+			c.fontEvents[key] = ev
+			return ev
+		}
+	}
+	return buildFontEvents(data)
+}
+
+// contentUsedNamesCached returns contentUsedNames(data), memoized per content
+// stream (key) when a validation cache is present.
+func (d *Document) contentUsedNamesCached(data []byte, key *Stream) usedResourceNames {
+	if key != nil {
+		if c := d.valCache; c != nil {
+			if u, ok := c.usedNames[key]; ok {
+				return u
+			}
+			u := contentUsedNames(data)
+			if c.usedNames == nil {
+				c.usedNames = make(map[*Stream]usedResourceNames)
+			}
+			c.usedNames[key] = u
+			return u
+		}
+	}
+	return contentUsedNames(data)
+}
+
+// contentBytesAndKey resolves a container's content reference to its decoded
+// bytes and, when the reference is a single stream, that stream (usable as a
+// per-stream memoization key). Array contents are container-specific
+// concatenations and get no key.
+func (d *Document) contentBytesAndKey(ref Object) ([]byte, *Stream) {
+	data := getContentStreamData(d, ref)
+	if s, ok := d.Resolve(ref).(*Stream); ok {
+		return data, s
+	}
+	return data, nil
+}
+
+// sfKey identifies a (content stream, /Font resource dictionary) pair. A
+// container's font attribution is fully determined by this pair, so two
+// containers sharing both produce byte-identical contributions to the usage
+// map — the second and later are skipped (see collectTextFromContainer). This
+// is what stops a document that references one content stream from thousands of
+// pages from re-attributing, and re-accumulating, the same shown text per page.
+type sfKey struct {
+	stream  *Stream
+	fontRes *Dictionary
+}
+
+// collectTextFromContainer attributes the text shown in a container's content
+// (key identifies the single backing stream, if any) to the fonts it selects,
+// then recurses into the form XObjects and tiling patterns it actually invokes.
+// Tokenization is memoized per stream via key, and the font attribution is
+// skipped when an identical (stream, /Font) pair was already processed, so
+// content shared across many containers is handled once rather than per
+// container.
+func collectTextFromContainer(doc *Document, container *Dictionary, data []byte, key *Stream, usage map[*Dictionary]*fontTextUsage, seen map[*Dictionary]bool, applied map[sfKey]bool) {
 	if container == nil || seen[container] {
 		return
 	}
 	seen[container] = true
 	res := resolveResources(doc, container)
 
+	fontRes := (*Dictionary)(nil)
+	if res != nil {
+		fontRes = doc.ResolveDict(res.Get("Font"))
+	}
 	fontFor := func(name string) (*Dictionary, int) {
-		if res == nil {
+		if fontRes == nil {
 			return nil, 0
 		}
-		fontsDict := doc.ResolveDict(res.Get("Font"))
-		if fontsDict == nil {
-			return nil, 0
-		}
-		ref := fontsDict.Get(Name(name))
+		ref := fontRes.Get(Name(name))
 		objNum := 0
 		if ir, ok := ref.(IndirectRef); ok {
 			objNum = ir.Number
@@ -254,35 +388,21 @@ func collectTextFromContainer(doc *Document, container *Dictionary, data []byte,
 		return doc.ResolveDict(ref), objNum
 	}
 
-	var curFont *fontTextUsage
-	mode := 0
-	var lastName string
-	var lastNumber string
-	var pending [][]byte
-
-	record := func() {
-		if curFont == nil {
-			pending = nil
-			return
-		}
-		curFont.strings = append(curFont.strings, pending...)
-		curFont.modes[mode] = true
-		pending = nil
-	}
-
-	if data != nil {
-		forEachContentItem(data, func(kind contentItemKind, payload []byte) {
-			switch kind {
-			case itemName:
-				lastName = string(payload)
-			case itemNumber:
-				lastNumber = string(payload)
-			case itemString:
-				pending = append(pending, append([]byte(nil), payload...))
-			case itemOperator:
-				switch string(payload) {
-				case "Tf":
-					if dict, num := fontFor(lastName); dict != nil {
+	// Replay the stream's font-usage skeleton against this container's fonts,
+	// unless an identical (stream, /Font) pair already contributed the same
+	// attribution — its shown text is already recorded.
+	if res != nil {
+		sk := sfKey{key, fontRes}
+		if key == nil || !applied[sk] {
+			if key != nil {
+				applied[sk] = true
+			}
+			var curFont *fontTextUsage
+			mode := 0
+			for _, ev := range doc.contentFontEvents(data, key) {
+				switch ev.kind {
+				case evTf:
+					if dict, num := fontFor(ev.name); dict != nil {
 						u := usage[dict]
 						if u == nil {
 							u = &fontTextUsage{fontDict: dict, objNum: num, modes: make(map[int]bool)}
@@ -292,47 +412,42 @@ func collectTextFromContainer(doc *Document, container *Dictionary, data []byte,
 					} else {
 						curFont = nil
 					}
-					pending = nil
-				case "Tr":
-					if v := lastNumber; v != "" {
-						m := 0
-						fmt.Sscanf(v, "%d", &m)
-						mode = m
+				case evTr:
+					mode = ev.mode
+				case evShow:
+					if curFont != nil {
+						curFont.strings = append(curFont.strings, ev.strings...)
+						curFont.modes[mode] = true
 					}
-					pending = nil
-				case "Tj", "TJ", "'", "\"":
-					record()
-				default:
-					pending = nil
 				}
 			}
-		})
+		}
 	}
 
 	// Recurse into executed forms and patterns.
 	if res == nil {
 		return
 	}
-	used := contentUsedNames(data)
+	used := doc.contentUsedNamesCached(data, key)
 	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
-		for i, key := range xobjDict.Keys {
-			if !used.xobjects[string(key)] {
+		for i, name := range xobjDict.Keys {
+			if !used.xobjects[string(name)] {
 				continue
 			}
 			if s, ok := doc.Resolve(xobjDict.Values[i]).(*Stream); ok {
 				if st, _ := s.Dict.Get("Subtype").(Name); st == "Form" {
-					collectTextFromContainer(doc, &s.Dict, decodeContentStream(doc, s), usage, seen)
+					collectTextFromContainer(doc, &s.Dict, decodeContentStream(doc, s), s, usage, seen, applied)
 				}
 			}
 		}
 	}
 	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
-		for i, key := range patDict.Keys {
-			if !used.patterns[string(key)] {
+		for i, name := range patDict.Keys {
+			if !used.patterns[string(name)] {
 				continue
 			}
 			if s, ok := doc.Resolve(patDict.Values[i]).(*Stream); ok {
-				collectTextFromContainer(doc, &s.Dict, decodeContentStream(doc, s), usage, seen)
+				collectTextFromContainer(doc, &s.Dict, decodeContentStream(doc, s), s, usage, seen, applied)
 			}
 		}
 	}
