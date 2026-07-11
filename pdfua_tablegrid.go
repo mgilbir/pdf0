@@ -61,34 +61,14 @@ func (d *Document) checkUATableGrid(cat *Dictionary) []UAViolation {
 	}
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
 	var v []UAViolation
-	seen := map[int]bool{}
-	var walk func(node Object)
-	walk = func(node Object) {
-		if ref, ok := node.(IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
+	for _, n := range d.structTree(cat) {
+		if n.stdType != "Table" {
+			continue
 		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(Array); ok {
-				for _, kid := range arr {
-					walk(kid)
-				}
-			}
-			return
-		}
-		if d.standardStructType(elem, roleMap) == "Table" {
-			if rows := d.collectTableRows(elem, roleMap); len(rows) > 0 {
-				v = append(v, gridDefects(rows)...)
-			}
-		}
-		for _, kid := range d.structKids(elem) {
-			walk(kid)
+		if rows := d.collectTableRows(n.elem, roleMap); len(rows) > 0 {
+			v = append(v, gridDefects(rows)...)
 		}
 	}
-	walk(root.Get("K"))
 	return v
 }
 

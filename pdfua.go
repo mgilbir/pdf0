@@ -150,44 +150,12 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 // checkUAHeadings flags a skipped numbered-heading level (e.g. H1 followed by H3
 // without an intervening H2), walking the structure tree in document order.
 func (d *Document) checkUAHeadings(cat *Dictionary) []UAViolation {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
 	var levels []int
-	seen := map[int]bool{}
-	var walk func(node Object)
-	walk = func(node Object) {
-		if ref, ok := node.(IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
-		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(Array); ok {
-				for _, kid := range arr {
-					walk(kid)
-				}
-			}
-			return
-		}
-		if st, ok := elem.Get("S").(Name); ok && len(st) == 2 && st[0] == 'H' && st[1] >= '1' && st[1] <= '6' {
+	for _, n := range d.structTree(cat) {
+		if st := n.rawS; len(st) == 2 && st[0] == 'H' && st[1] >= '1' && st[1] <= '6' {
 			levels = append(levels, int(st[1]-'0'))
 		}
-		if k := elem.Get("K"); k != nil {
-			switch kids := d.Resolve(k).(type) {
-			case Array:
-				for _, kid := range kids {
-					walk(kid)
-				}
-			default:
-				walk(k)
-			}
-		}
 	}
-	walk(root.Get("K"))
 
 	var v []UAViolation
 	// 7.4.2: a strongly structured document's first numbered heading must be H1.
@@ -207,44 +175,12 @@ func (d *Document) checkUAHeadings(cat *Dictionary) []UAViolation {
 // checkUAOneHPerNode enforces 7.4.4: in a weakly structured document each
 // structure node may contain at most one child <H> heading.
 func (d *Document) checkUAOneHPerNode(cat *Dictionary) []UAViolation {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
-	roleMap := d.ResolveDict(root.Get("RoleMap"))
 	var v []UAViolation
-	seen := map[int]bool{}
-	var walk func(node Object)
-	walk = func(node Object) {
-		if ref, ok := node.(IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
-		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(Array); ok {
-				for _, kid := range arr {
-					walk(kid)
-				}
-			}
-			return
-		}
-		hCount := 0
-		for _, ct := range d.childStructTypes(elem, roleMap) {
-			if ct == "H" {
-				hCount++
-			}
-		}
-		if hCount > 1 {
+	for _, n := range d.structTree(cat) {
+		if countName(n.childTypes, "H") > 1 {
 			v = append(v, UAViolation{"7.4.4", "a structure node contains more than one child <H> heading", 0})
 		}
-		for _, kid := range d.structKids(elem) {
-			walk(kid)
-		}
 	}
-	walk(root.Get("K"))
 	return v
 }
 
@@ -295,41 +231,13 @@ func (d *Document) checkUARoleMap(cat *Dictionary) []UAViolation {
 		return standardStructTypes[to]
 	}
 	var v []UAViolation
-	seen := map[int]bool{}
 	reported := map[Name]bool{}
-	var walk func(node Object)
-	walk = func(node Object) {
-		if ref, ok := node.(IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
-		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(Array); ok {
-				for _, kid := range arr {
-					walk(kid)
-				}
-			}
-			return
-		}
-		if st, ok := elem.Get("S").(Name); ok && st != "" && !mapped(st) && !reported[st] {
+	for _, n := range d.structTree(cat) {
+		if st := n.rawS; st != "" && !mapped(st) && !reported[st] {
 			reported[st] = true
 			v = append(v, UAViolation{"7.1", "structure type /" + string(st) + " is neither standard nor mapped in /RoleMap", 0})
 		}
-		if k := elem.Get("K"); k != nil {
-			switch kids := d.Resolve(k).(type) {
-			case Array:
-				for _, kid := range kids {
-					walk(kid)
-				}
-			default:
-				walk(k)
-			}
-		}
 	}
-	walk(root.Get("K"))
 	return v
 }
 
@@ -1385,48 +1293,16 @@ func (d *Document) isTrue(o Object) bool {
 // checkFigureAlt walks the structure tree and flags Figure elements that carry
 // neither /Alt nor /ActualText.
 func (d *Document) checkFigureAlt(cat *Dictionary) []UAViolation {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
 	var v []UAViolation
-	seen := map[int]bool{}
-	var walk func(node Object)
-	walk = func(node Object) {
-		if ref, ok := node.(IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
+	for _, n := range d.structTree(cat) {
+		if n.rawS != "Figure" {
+			continue
 		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			// A /K entry can also be an array of children or a marked-content id.
-			if arr, ok := d.Resolve(node).(Array); ok {
-				for _, kid := range arr {
-					walk(kid)
-				}
-			}
-			return
-		}
-		if s, _ := elem.Get("S").(Name); s == "Figure" {
-			alt, _ := d.Resolve(elem.Get("Alt")).(String)
-			actual, _ := d.Resolve(elem.Get("ActualText")).(String)
-			if len(alt.Value) == 0 && len(actual.Value) == 0 {
-				v = append(v, UAViolation{"7.3", "figure structure element has no non-empty alternate text (/Alt or /ActualText)", 0})
-			}
-		}
-		if k := elem.Get("K"); k != nil {
-			switch kids := d.Resolve(k).(type) {
-			case Array:
-				for _, kid := range kids {
-					walk(kid)
-				}
-			default:
-				walk(k)
-			}
+		alt, _ := d.Resolve(n.elem.Get("Alt")).(String)
+		actual, _ := d.Resolve(n.elem.Get("ActualText")).(String)
+		if len(alt.Value) == 0 && len(actual.Value) == 0 {
+			v = append(v, UAViolation{"7.3", "figure structure element has no non-empty alternate text (/Alt or /ActualText)", 0})
 		}
 	}
-	walk(root.Get("K"))
 	return v
 }
