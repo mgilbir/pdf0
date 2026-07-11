@@ -2,8 +2,27 @@ package pdf0
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 )
+
+// maxObjStmDecompressedTotal bounds the aggregate decompressed size of all
+// object streams materialized during a single Read. Object streams are the
+// compression-amplification vector: a small file can carry many object streams
+// that decompress to hundreds of megabytes of small objects (e.g. arrays of
+// hundreds of millions of elements), and parsing them all builds a pointer-heavy
+// object graph that makes garbage collection dominate — turning a 20 MB file
+// into ~30 s and multiple gigabytes of memory. Content streams are already
+// bounded per stream (maxContentStreamSize); this bounds object streams in
+// aggregate. The limit is generous: no realistic document has half a gigabyte
+// of decompressed object-stream data (that would be a multi-gigabyte file), so
+// only pathological amplification is affected. Object streams beyond the budget
+// are recorded as broken, exactly like an undecodable one — their objects are
+// simply unavailable and validation can report the defect.
+//
+// It is a var, not a const, only so tests can lower it to exercise the budget
+// without constructing a half-gigabyte fixture.
+var maxObjStmDecompressedTotal int64 = 512 << 20 // 512 MB
 
 // objStmEntry is one (object number, byte offset) pair from an object
 // stream's leading index. Offsets are relative to /First.
@@ -97,7 +116,18 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 		byContainer[entry.StreamObjNum] = append(byContainer[entry.StreamObjNum], num)
 	}
 
-	for containerNum, objNums := range byContainer {
+	// Process containers in object-number order so that, if the aggregate
+	// decompression budget is reached, the set of object streams left
+	// unmaterialized is deterministic rather than dependent on map iteration.
+	containers := make([]int, 0, len(byContainer))
+	for containerNum := range byContainer {
+		containers = append(containers, containerNum)
+	}
+	sort.Ints(containers)
+
+	var decompressed int64
+	for _, containerNum := range containers {
+		objNums := byContainer[containerNum]
 		container, ok := d.Objects[containerNum]
 		if !ok {
 			return fmt.Errorf("object stream %d referenced by xref but not present", containerNum)
@@ -105,6 +135,13 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 		stream, ok := container.Value.(*Stream)
 		if !ok {
 			return fmt.Errorf("object stream %d is not a stream", containerNum)
+		}
+		// Once the aggregate decompressed object-stream budget is exhausted,
+		// stop materializing further streams (recorded as broken, like an
+		// undecodable one) to bound the parser's work and memory.
+		if decompressed >= maxObjStmDecompressedTotal {
+			d.brokenObjStms = append(d.brokenObjStms, containerNum)
+			continue
 		}
 		// A corrupt object stream (e.g. undecodable data) makes only its own
 		// objects unavailable; recording it lets validation report the defect
@@ -115,6 +152,7 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 			d.brokenObjStms = append(d.brokenObjStms, containerNum)
 			continue
 		}
+		decompressed += int64(len(data))
 		for _, num := range objNums {
 			entry := table.Entries[num]
 			idx := entry.IndexInStream
