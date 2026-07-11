@@ -7,6 +7,12 @@ package pdf0
 // span the same number of columns (a hole) — are reported. Only unambiguous
 // defects are flagged so a well-formed table never raises a false positive.
 
+// maxGridFills bounds the number of grid slots gridDefects will fill for one
+// table. It caps the work a pathological table (huge RowSpan/ColSpan values)
+// can force. It counts actually-filled slots, so a large but sparse table is
+// unaffected; the largest real tables observed fill well under a million.
+const maxGridFills = 1 << 24 // 16,777,216
+
 // tableCell is one TH/TD with its resolved span.
 type tableCell struct {
 	rowSpan int
@@ -181,32 +187,63 @@ func gridDefects(rows []tableRow) []UAViolation {
 	overlap := false
 	outOfRows := false
 
-	for r := 0; r < nRows; r++ {
+	// Total grid slots filled so far. Bound it: a table whose spans imply more
+	// than maxGridFills occupied slots — e.g. a single cell with a multi-million
+	// ColSpan, or many such cells — is pathological and is not laid out, so a
+	// small degenerate table cannot force billions of map writes. This counts
+	// actually-filled slots (not the nominal rows×cols area), so a genuinely
+	// large but sparse table (tens of thousands of rows/cols, few real cells)
+	// is unaffected; real tables fill far below the limit.
+	var fills int64
+	oversize := false
+	for r := 0; r < nRows && !oversize; r++ {
 		col := 0
 		for _, cell := range rows[r] {
 			// Skip columns already taken by a row span from above.
 			for occupied[r][col] {
 				col++
 			}
-			if r+cell.rowSpan > nRows {
+			// Overflow-safe "RowSpan extends beyond the last row" test.
+			if cell.rowSpan > nRows-r {
 				outOfRows = true
 			}
-			for dr := 0; dr < cell.rowSpan && r+dr < nRows; dr++ {
-				for dc := 0; dc < cell.colSpan; dc++ {
+			er := cell.rowSpan
+			if er > nRows-r {
+				er = nRows - r
+			}
+			cs := cell.colSpan
+			// Would filling this cell (er×cs slots) exceed the budget? The
+			// division keeps the comparison from overflowing on a huge span.
+			if er > 0 && cs > 0 && int64(er) > (maxGridFills-fills)/int64(cs) {
+				oversize = true
+				break
+			}
+			for dr := 0; dr < er; dr++ {
+				for dc := 0; dc < cs; dc++ {
 					c := col + dc
 					if occupied[r+dr][c] {
 						overlap = true
 					}
 					occupied[r+dr][c] = true
+					fills++
 				}
 			}
-			col += cell.colSpan
+			col += cs
 		}
 		rowWidth[r] = col
 	}
+	if oversize {
+		// Too large to lay out within the work budget; report no grid defects
+		// rather than hang or fabricate a result on adversarial input.
+		return nil
+	}
 
 	// A hole exists if, after placement, some row does not fill the full grid
-	// width (the maximum column reached by any row).
+	// width (the maximum column reached by any row). Every occupied[r] key is a
+	// distinct filled column in [0,width), so a row has a hole exactly when it
+	// has fewer than width filled columns — an O(rows) test rather than scanning
+	// the whole rows×width grid, which for a sparse-but-huge table (tens of
+	// thousands of rows and columns) would be billions of lookups.
 	width := 0
 	for _, w := range rowWidth {
 		if w > width {
@@ -215,10 +252,9 @@ func gridDefects(rows []tableRow) []UAViolation {
 	}
 	hole := false
 	for r := 0; r < nRows; r++ {
-		for c := 0; c < width; c++ {
-			if !occupied[r][c] {
-				hole = true
-			}
+		if len(occupied[r]) < width {
+			hole = true
+			break
 		}
 	}
 
