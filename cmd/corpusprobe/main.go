@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -51,8 +52,13 @@ func probe(path string) outcome {
 		// Exercise more of the pipeline on a successful parse — all of these
 		// run on untrusted input and must also never panic.
 		_ = doc.PageCount()
-		var buf bytes.Buffer
-		_ = doc.Write(&buf)
+		// Stream the serialized output to io.Discard rather than buffering it:
+		// a pathological file can legitimately produce a very large output (e.g.
+		// a malformed xref that references one big stream from many objects), and
+		// buffering it would OOM the probe on otherwise-handled input. A real
+		// consumer writes to a streaming io.Writer, so this matches real usage
+		// while still exercising the serializer.
+		_ = doc.Write(io.Discard)
 		_ = pdf0.ValidatePDFUA(doc)
 		ch <- r{"ok", ""}
 	}()
