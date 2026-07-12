@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -41,7 +42,7 @@ func main() {
 			continue
 		}
 		stage("PageCount", 60*time.Second, func() { _ = doc.PageCount() })
-		stage("Write", 180*time.Second, func() { var b bytes.Buffer; _ = doc.Write(&b) })
+		stage("Write", 180*time.Second, func() { _ = doc.Write(io.Discard) })
 		stage("ValidatePDFUA", 180*time.Second, func() { _ = pdf0.ValidatePDFUA(doc) })
 	}
 }
