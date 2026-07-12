@@ -1,7 +1,12 @@
-.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf
+.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
+# Arlington PDF Model (Apache-2.0, PDF Association): a machine-readable grammar of
+# the ISO 32000 object model. Cloned under testdata (gitignored) and used by the
+# structural oracle test to verify pdf0's parser and serializer represent objects
+# faithfully (right types, keys, structure). Not committed.
+ARLINGTON_DIR := testdata/arlington-pdf-model
 # Well Tagged PDF / PDF/UA-2 example documents by the LaTeX Project
 # (github.com/latex3/tagging-project/discussions/72). Downloaded from Google
 # Drive into testdata/wtpdf (gitignored); the id->name manifest and downloader
@@ -47,6 +52,21 @@ wtpdf: $(WTPDF_DIR)/.ok
 $(WTPDF_DIR)/.ok: $(WTPDF_DIR)/sources.tsv $(WTPDF_DIR)/download.sh
 	bash $(WTPDF_DIR)/download.sh
 	touch $@
+
+arlington: $(ARLINGTON_DIR)/.ok
+
+$(ARLINGTON_DIR)/.ok:
+	git clone --depth 1 https://github.com/pdf-association/arlington-pdf-model $(ARLINGTON_DIR)
+	touch $@
+
+# Check pdf0's parser/serializer represent objects faithfully against the
+# Arlington grammar. With the corpus present it also runs the broad parse-check
+# over the veraPDF conformant (-pass-) files.
+test-arlington: arlington refpdfs
+	ARLINGTON_MODEL=$(ARLINGTON_DIR)/tsv/2.0 go test -v -run TestArlington -count=1 ./...
+
+clean-arlington:
+	rm -rf $(ARLINGTON_DIR)
 
 clean-corpus:
 	rm -rf $(CORPUS_DIR)

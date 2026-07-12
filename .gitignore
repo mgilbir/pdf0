@@ -51,3 +51,7 @@ testdata/fuzz/
 # WTPDF / PDF/UA-2 example PDFs (downloaded via `make wtpdf`); manifest + script are committed
 testdata/wtpdf/*.pdf
 testdata/wtpdf/.ok
+
+# Arlington PDF Model (Apache-2.0, pdf-association) — machine-readable ISO 32000
+# object grammar; cloned via `make arlington` for the structural oracle test.
+testdata/arlington-pdf-model/
