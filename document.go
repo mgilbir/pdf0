@@ -166,6 +166,16 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 	// 4. Parse all uncompressed objects from xref entries
 	doc.Offsets = make(map[int]int64)
 	lexer := NewLexer(data)
+	// parsedByOffset caches the object parsed at each byte offset. A malformed
+	// cross-reference table can point many distinct object numbers at the same
+	// offset; parsing it once per number would re-materialize the object, and if
+	// it is a large stream, re-allocate its data every time (a 55 MB file with
+	// 819 entries all pointing at one 7.7 MB stream expanded to 6.3 GB of stream
+	// data on read — a small-input memory-DoS). Parsing each distinct offset only
+	// once bounds the work to the file's real content. Parsing identical bytes
+	// always yields an identical object, so the shared value is correct; the
+	// per-number wrapper still carries the authoritative object number.
+	parsedByOffset := make(map[int64]*IndirectObject)
 	// resolveLen resolves an indirect stream /Length by seeking to the length
 	// object via the cross-reference table and reading its integer value. This
 	// lets a stream with a (frequently forward-referenced) indirect /Length be
@@ -202,6 +212,12 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 			return nil, fmt.Errorf("object %d xref offset %d outside file (size %d)", num, off, size)
 		}
 		doc.Offsets[num] = off
+		if prev, ok := parsedByOffset[off]; ok {
+			// Same bytes already parsed under another number: reuse the value
+			// rather than re-parsing (and re-allocating any stream data).
+			doc.Objects[num] = &IndirectObject{Number: num, Generation: prev.Generation, Value: prev.Value}
+			continue
+		}
 		lexer.SetPosition(off)
 		parser := NewParserFromLexer(lexer)
 		parser.resolveLength = resolveLen
@@ -216,6 +232,7 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 		// other reader (audit C7).
 		iobj.Number = num
 		doc.Objects[num] = iobj
+		parsedByOffset[off] = iobj
 	}
 
 	// 4.5. Decrypt strings and streams under the standard security handler. This
