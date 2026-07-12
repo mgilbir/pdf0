@@ -250,6 +250,7 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 type validationCache struct {
 	pages           map[int][]pageInfo // page-tree object number -> pages
 	content         map[*Stream][]byte // decoded content streams
+	contentBytes    int64              // total bytes retained in content (bounded, see decodeContentStream)
 	directAnnots    []annotOccurrence
 	hasDirectAnnots bool
 
@@ -4830,14 +4831,38 @@ func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGr
 // full of DeviceRGB validated clean.
 const maxContentStreamSize = 64 << 20 // 64 MB
 
+// maxDecodedContentTotal bounds the aggregate size of decoded content that one
+// validation run will materialize. The per-stream cap (maxContentStreamSize)
+// stops a single stream from exploding, but a small file can carry many content
+// streams that each decompress near that cap (a flate bomb): 100 pages whose
+// contents each inflate to ~60 MB is a ~12 MB file that would otherwise decode
+// and tokenize ~6 GB of content, driving validation past 9 GB of memory. Once
+// this budget is reached, further content streams are treated as undecodable
+// (nil), so they are neither decoded nor tokenized and the work stays bounded.
+// Real documents decode far less than this, so the budget never affects their
+// validation; it only truncates pathologically amplified input. 512 MB is well
+// above any conformant file observed in the corpus. It is a var (not a const)
+// so tests can lower it to exercise the budget without materializing gigabytes.
+var maxDecodedContentTotal int64 = 512 << 20 // 512 MB
+
 // decodeContentStream decodes a stream for content scanning through the full
 // filter pipeline (filter arrays, ASCIIHex, predictors). Results are
 // memoized per validation run: several checks re-decode the same page
-// contents. Returns nil if the stream cannot be decoded.
+// contents. Returns nil if the stream cannot be decoded, or if the run's
+// aggregate decoded-content budget (maxDecodedContentTotal) is exhausted.
 func decodeContentStream(doc *Document, stream *Stream) []byte {
 	if c := doc.valCache; c != nil {
 		if data, ok := c.content[stream]; ok {
 			return data
+		}
+		// Aggregate budget: once this run has decoded maxDecodedContentTotal
+		// bytes of content, treat further content streams as undecodable and do
+		// not decode (or tokenize) them. This bounds the memory a flate-bomb
+		// document can force. Undecodable is negatively cached below, so the
+		// decision is stable across the several checks that walk the same page.
+		if c.contentBytes >= maxDecodedContentTotal {
+			c.content[stream] = nil
+			return nil
 		}
 	}
 	var data []byte
@@ -4846,6 +4871,7 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 	}
 	if c := doc.valCache; c != nil {
 		c.content[stream] = data
+		c.contentBytes += int64(len(data))
 	}
 	return data
 }
