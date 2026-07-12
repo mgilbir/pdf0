@@ -727,8 +727,16 @@ func simpleDeclaredSyntax(lower string) (xmpSyntax, bool) {
 // checkXMPProperties validates every XMP property against the predefined
 // schema tables (or the packet's extension schema declarations).
 func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
-	// PDF/A-4 uses ISO 16684-1:2012 with a different predefined set; not
-	// implemented yet.
+	// PDF/A-4 (ISO 19005-4) does NOT apply the strict per-property value-form
+	// validation that 1b/2b/3b do. This is deliberate, not a TODO: the veraPDF
+	// corpus proves A-4 tolerates non-conforming XMP property values — e.g.
+	// PDF_A-4/6.1.5/…6-1-5-t02-pass-a.pdf carries xmp:CreateDate =
+	// "D:20221116191452+00'00" (a PDF date string, not an XMP/ISO 8601 date) and
+	// still passes at A-4. Enabling these checks at A-4 therefore produces false
+	// positives on conformant files. A-4 XMP is instead governed by the
+	// well-formedness and UTF-8 requirements, which are checked separately (see
+	// checkXMPWellFormed). Do not "implement" property-value validation here for
+	// A-4 without corpus evidence that veraPDF requires it.
 	if level == PDFA4 {
 		return nil
 	}
