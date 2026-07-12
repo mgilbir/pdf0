@@ -1316,7 +1316,7 @@ func streamByteExtent(data []byte, objStart int64) (rawLen, eol int64, ok bool) 
 	// Locate the stream keyword as a delimited token, not a substring: an
 	// embedded-file dictionary can contain the letters "stream" in a value, and
 	// matching that would place the data start too early.
-	sk := findDelimitedKeyword(data, objStart, "stream")
+	sk := findDelimitedKeyword(data, objStart, "stream", true)
 	if sk < 0 {
 		return 0, 0, false
 	}
@@ -1327,7 +1327,7 @@ func streamByteExtent(data []byte, objStart int64) (rawLen, eol int64, ok bool) 
 	if ds < int64(len(data)) && data[ds] == '\n' {
 		ds++
 	}
-	endobj := findDelimitedKeyword(data, ds, "endobj")
+	endobj := findDelimitedKeyword(data, ds, "endobj", true)
 	if endobj < 0 {
 		return 0, 0, false
 	}

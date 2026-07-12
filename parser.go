@@ -355,12 +355,16 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 		copy(data, p.lexer.data[pos:endPos])
 		p.lexer.pos = endPos
 	} else {
-		// Search for the endstream keyword. A raw substring match is not
-		// enough: binary stream data can legitimately contain the bytes
-		// "endstream", so require a real keyword — preceded by whitespace
-		// (the spec mandates an EOL before it) and followed by a
-		// non-regular character or end of input.
-		endPos := findDelimitedKeyword(p.lexer.data, pos, "endstream")
+		// Search for the endstream keyword. It must stand alone as a token —
+		// followed by a non-regular character or end of input — but must NOT be
+		// required to be preceded by whitespace: a stream's raw data may end in
+		// any byte (binary FlateDecode/DCTDecode), and ISO 32000-1 7.3.8.1 only
+		// recommends (does not require) an EOL before endstream. Requiring a
+		// leading whitespace made the search step over a legitimate endstream
+		// that follows binary data and slurp forward to a distant one — an
+		// O(n^2) over-read across many streams (a 55 MB file with streams
+		// sharing one wrong /Length expanded to 6.3 GB of stream data on read).
+		endPos := findDelimitedKeyword(p.lexer.data, pos, "endstream", false)
 		if endPos < 0 {
 			return nil, fmt.Errorf("could not find endstream marker")
 		}
@@ -393,10 +397,18 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 }
 
 // findDelimitedKeyword returns the offset of the first occurrence of keyword
-// at or after start that stands alone as a token: preceded by whitespace (or
-// at start) and followed by a non-regular character or end of input. Returns
-// -1 if none exists.
-func findDelimitedKeyword(data []byte, start int64, keyword string) int64 {
+// at or after start that stands alone as a token: followed by a non-regular
+// character or end of input, and — when requireLeadingWS is set — preceded by
+// whitespace (or at start). Returns -1 if none exists.
+//
+// The endstream search passes requireLeadingWS=false: a stream's raw data may
+// end in any byte, and the spec only recommends an EOL before endstream, so a
+// real endstream is often preceded by a non-whitespace byte; requiring leading
+// whitespace there made the search skip it and over-read (see parseStream).
+// Callers scanning file structure for the "stream"/"endobj" keywords pass true:
+// those keywords are whitespace-delimited, and it is what lets the "stream"
+// search avoid matching the trailing "stream" inside "endstream".
+func findDelimitedKeyword(data []byte, start int64, keyword string, requireLeadingWS bool) int64 {
 	marker := []byte(keyword)
 	for from := start; from < int64(len(data)); {
 		idx := bytes.Index(data[from:], marker)
@@ -405,7 +417,7 @@ func findDelimitedKeyword(data []byte, start int64, keyword string) int64 {
 		}
 		at := from + int64(idx)
 		end := at + int64(len(marker))
-		beforeOK := at == start || isWhitespace(data[at-1])
+		beforeOK := !requireLeadingWS || at == start || isWhitespace(data[at-1])
 		afterOK := end >= int64(len(data)) || !isRegular(data[end])
 		if beforeOK && afterOK {
 			return at
