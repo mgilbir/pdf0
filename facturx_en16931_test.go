@@ -89,6 +89,11 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 		{"allowance no amount", withAllowanceCharge(`<SpecifiedTradeAllowanceCharge><ChargeIndicator><Indicator>false</Indicator></ChargeIndicator><CategoryTradeTax><CategoryCode>S</CategoryCode></CategoryTradeTax><Reason>r</Reason></SpecifiedTradeAllowanceCharge>`), "BR-31"},
 		{"allowance no reason", withAllowanceCharge(`<SpecifiedTradeAllowanceCharge><ChargeIndicator><Indicator>false</Indicator></ChargeIndicator><ActualAmount>0.00</ActualAmount><CategoryTradeTax><CategoryCode>S</CategoryCode></CategoryTradeTax></SpecifiedTradeAllowanceCharge>`), "BR-33"},
 		{"charge no category", withAllowanceCharge(`<SpecifiedTradeAllowanceCharge><ChargeIndicator><Indicator>true</Indicator></ChargeIndicator><ActualAmount>0.00</ActualAmount><Reason>r</Reason></SpecifiedTradeAllowanceCharge>`), "BR-37"},
+		{"bad currency code", strings.Replace(validCII, "<InvoiceCurrencyCode>EUR</InvoiceCurrencyCode>", "<InvoiceCurrencyCode>EU</InvoiceCurrencyCode>", 1), "BR-CL-03"},
+		{"bad type code", strings.Replace(validCII, "<TypeCode>380</TypeCode>", "<TypeCode>999</TypeCode>", 1), "BR-CL-05"},
+		{"bad country code", strings.Replace(validCII, "<CountryID>FR</CountryID>", "<CountryID>F</CountryID>", 1), "BR-CL-14"},
+		{"bad vat category", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "<CategoryCode>X</CategoryCode>", 1), "BR-CL-17"},
+		{"too many decimals", strings.Replace(validCII, "<GrandTotalAmount>120.00</GrandTotalAmount>", "<GrandTotalAmount>120.001</GrandTotalAmount>", 1), "BR-DEC-17"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

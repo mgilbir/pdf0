@@ -171,6 +171,35 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 	req("BR-15", "An Invoice shall have the Amount due for payment (BT-115)",
 		sum.orNil().str("DuePayableAmount"))
 
+	// Code lists (BR-CL-*). The Invoice currency (BT-5) and country codes
+	// (BT-40/55) are checked for ISO 4217 / ISO 3166-1 alpha-2 shape; the invoice
+	// type code (BT-3) against the EN 16931 UNTDID 1001 subset.
+	if cur := settle.orNil().str("InvoiceCurrencyCode"); cur != "" && !isUpperAlpha(cur, 3) {
+		add("BR-CL-03", fmt.Sprintf("Invoice currency code (BT-5=%q) shall be a valid ISO 4217 code", cur))
+	}
+	if tc := doc.orNil().str("TypeCode"); tc != "" && !facturxTypeCodes[tc] {
+		add("BR-CL-05", fmt.Sprintf("Invoice type code (BT-3=%q) is not a permitted UNTDID 1001 value", tc))
+	}
+	if c := agr.orNil().str("SellerTradeParty", "PostalTradeAddress", "CountryID"); c != "" && !isUpperAlpha(c, 2) {
+		add("BR-CL-14", fmt.Sprintf("Seller country code (BT-40=%q) shall be a valid ISO 3166-1 code", c))
+	}
+	if c := agr.orNil().str("BuyerTradeParty", "PostalTradeAddress", "CountryID"); c != "" && !isUpperAlpha(c, 2) {
+		add("BR-CL-15", fmt.Sprintf("Buyer country code (BT-55=%q) shall be a valid ISO 3166-1 code", c))
+	}
+
+	// Decimals (BR-DEC-*): monetary amounts shall have at most two decimal places.
+	if sum != nil {
+		for _, fld := range []struct{ rule, name string }{
+			{"BR-DEC-12", "LineTotalAmount"}, {"BR-DEC-15", "TaxBasisTotalAmount"},
+			{"BR-DEC-16", "TaxTotalAmount"}, {"BR-DEC-17", "GrandTotalAmount"},
+			{"BR-DEC-18", "DuePayableAmount"},
+		} {
+			if v := sum.str(fld.name); v != "" && decimalCount(v) > 2 {
+				add(fld.rule, fmt.Sprintf("amount %s (%q) shall have at most two decimals", fld.name, v))
+			}
+		}
+	}
+
 	// BR-CO-15: Invoice total with VAT (BT-112) = total without VAT (BT-109) +
 	// total VAT amount (BT-110).
 	if sum != nil {
@@ -202,6 +231,8 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 		}
 		if cat == "" {
 			add("BR-47", "Each VAT breakdown (BG-23) shall be defined through a VAT category code (BT-118)")
+		} else if !facturxVATCategories[cat] {
+			add("BR-CL-17", fmt.Sprintf("VAT category code (BT-118=%q) is not a valid UNCL 5305 value", cat))
 		}
 		// BR-48: a rate is required except for the "Not subject to VAT" category (O).
 		if rate == "" && cat != "O" {
@@ -396,6 +427,48 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 
 // round2 rounds to two decimal places, half away from zero.
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
+
+// decimalCount returns the number of digits after the decimal point in s.
+func decimalCount(s string) int {
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		return len(s) - i - 1
+	}
+	return 0
+}
+
+// isUpperAlpha reports whether s is exactly n uppercase ASCII letters (the shape
+// of ISO 4217 currency and ISO 3166-1 alpha-2 country codes).
+func isUpperAlpha(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		if s[i] < 'A' || s[i] > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+// facturxVATCategories is the UNCL 5305 VAT category code subset used by EN 16931.
+var facturxVATCategories = map[string]bool{
+	"S": true, "Z": true, "E": true, "AE": true, "K": true,
+	"G": true, "O": true, "L": true, "M": true,
+}
+
+// facturxTypeCodes is the EN 16931 permitted subset of UNTDID 1001 invoice type
+// codes for BT-3.
+var facturxTypeCodes = map[string]bool{
+	"71": true, "80": true, "82": true, "84": true, "102": true, "130": true,
+	"202": true, "203": true, "204": true, "211": true, "218": true, "219": true,
+	"261": true, "262": true, "295": true, "296": true, "308": true, "325": true,
+	"326": true, "331": true, "380": true, "381": true, "382": true, "383": true,
+	"384": true, "385": true, "386": true, "387": true, "388": true, "389": true,
+	"390": true, "393": true, "394": true, "395": true, "456": true, "457": true,
+	"458": true, "527": true, "575": true, "623": true, "633": true, "751": true,
+	"780": true, "817": true, "870": true, "875": true, "876": true, "877": true,
+	"935": true,
+}
 
 // orNil lets a possibly-nil node be traversed without panicking.
 func (n *ciiNode) orNil() *ciiNode {
