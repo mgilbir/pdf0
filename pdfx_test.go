@@ -94,6 +94,14 @@ func buildPDFX4Doc() *Document {
 	return d
 }
 
+// objWith builds an indirect object (number 12) holding a dictionary with a
+// single key, for injecting a forbidden construct into a built document.
+func objWith(key Name, val Object) *IndirectObject {
+	d := &Dictionary{}
+	d.Set(key, val)
+	return &IndirectObject{Number: 12, Value: d}
+}
+
 func TestValidatePDFXValid(t *testing.T) {
 	d := buildPDFX4Doc()
 	if v := ValidatePDFX(d, PDFX4); len(v) != 0 {
@@ -129,6 +137,40 @@ func TestValidatePDFXViolations(t *testing.T) {
 			// Paint with DeviceRGB (rg) under a CMYK-only output intent, no DefaultRGB.
 			d.Objects[10] = &IndirectObject{Number: 10, Value: &Stream{Dict: Dictionary{}, Data: []byte("1 0 0 rg BT /F1 12 Tf 100 700 Td (hi) Tj ET")}}
 		}, "color", "DeviceRGB used"},
+		{"catalog additional actions", func(d *Document) { objDict(d, 1).Set("AA", &Dictionary{}) }, "forbidden", "additional actions"},
+		{"catalog open action", func(d *Document) {
+			oa := &Dictionary{}
+			oa.Set("S", Name("GoTo"))
+			objDict(d, 1).Set("OpenAction", oa)
+		}, "forbidden", "OpenAction"},
+		{"javascript name tree", func(d *Document) {
+			n := &Dictionary{}
+			n.Set("JavaScript", &Dictionary{})
+			objDict(d, 1).Set("Names", n)
+		}, "forbidden", "JavaScript name tree"},
+		{"javascript action", func(d *Document) { d.Objects[12] = objWith("S", Name("JavaScript")) }, "forbidden", "JavaScript actions"},
+		{"opi proxy", func(d *Document) {
+			f := objWith("Subtype", Name("Form"))
+			f.Value.(*Dictionary).Set("OPI", &Dictionary{})
+			d.Objects[12] = f
+		}, "forbidden", "OPI"},
+		{"postscript xobject", func(d *Document) { d.Objects[12] = objWith("Subtype", Name("PS")) }, "forbidden", "PostScript"},
+		{"image alternates", func(d *Document) {
+			im := objWith("Subtype", Name("Image"))
+			im.Value.(*Dictionary).Set("Alternates", Array{})
+			d.Objects[12] = im
+		}, "forbidden", "Alternates"},
+		{"reference xobject", func(d *Document) {
+			f := objWith("Subtype", Name("Form"))
+			f.Value.(*Dictionary).Set("Ref", &Dictionary{})
+			d.Objects[12] = f
+		}, "forbidden", "reference XObject"},
+		{"transfer function", func(d *Document) {
+			g := objWith("Type", Name("ExtGState"))
+			g.Value.(*Dictionary).Set("TR", &Dictionary{})
+			d.Objects[12] = g
+		}, "forbidden", "transfer function"},
+		{"movie annotation", func(d *Document) { d.Objects[12] = objWith("Subtype", Name("Movie")) }, "forbidden", "Movie"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
