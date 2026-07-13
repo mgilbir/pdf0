@@ -345,6 +345,22 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 	// The lexer has already advanced past the keyword, so we need to check
 	// for the EOL at the current lexer position.
 	pos := p.lexer.pos
+	// Some producers emit spurious spaces/tabs between the keyword and the EOL
+	// ("stream \r\n") — non-conformant (ISO 32000-1 7.3.8.1) but common. Skip
+	// them so the stream data does not absorb the whitespace: absorbing it both
+	// corrupts the data (e.g. bytes before a FlateDecode header, breaking the
+	// filter) and shifts the byte count so the declared /Length no longer
+	// matches, forcing an endstream search and an unstable round-trip. Only skip
+	// when an EOL actually follows, so data that legitimately begins with a
+	// space is never consumed.
+	if q := pos; q < p.lexer.size {
+		for q < p.lexer.size && (p.lexer.data[q] == ' ' || p.lexer.data[q] == '\t') {
+			q++
+		}
+		if q < p.lexer.size && (p.lexer.data[q] == '\r' || p.lexer.data[q] == '\n') {
+			pos = q
+		}
+	}
 	if pos < p.lexer.size {
 		if p.lexer.data[pos] == '\r' {
 			pos++
