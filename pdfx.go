@@ -80,8 +80,89 @@ func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
 	pdfxCheckPageBoxes(doc, add)
 	pdfxCheckFontsEmbedded(doc, add)
 	pdfxCheckDeviceColor(doc, add)
+	pdfxCheckForbidden(doc, add)
 
 	return out
+}
+
+// pdfxCheckForbidden flags features PDF/X-4 does not permit (ISO 15930-7 6.x):
+// interactive actions and JavaScript, OPI proxies, PostScript XObjects,
+// reference (external-content) XObjects, alternate images, non-identity transfer
+// functions, and multimedia annotations. It walks the object list once, so it
+// stays fast regardless of page count.
+func pdfxCheckForbidden(doc *Document, add func(rule, msg string, obj int)) {
+	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
+		if cat.Get("AA") != nil {
+			add("forbidden", "the document catalog shall not carry additional actions (/AA)", 0)
+		}
+		if d, ok := doc.Resolve(cat.Get("OpenAction")).(*Dictionary); ok && d.Get("S") != nil {
+			add("forbidden", "the document catalog shall not carry an /OpenAction action", 0)
+		}
+		if names := doc.ResolveDict(cat.Get("Names")); names != nil && names.Get("JavaScript") != nil {
+			add("forbidden", "a JavaScript name tree is not permitted", 0)
+		}
+	}
+
+	for num, iobj := range doc.Objects {
+		var d *Dictionary
+		switch v := iobj.Value.(type) {
+		case *Dictionary:
+			d = v
+		case *Stream:
+			d = &v.Dict
+		}
+		if d == nil {
+			continue
+		}
+		sub, _ := d.Get("Subtype").(Name)
+
+		if d.Get("OPI") != nil {
+			add("forbidden", "OPI (Open Prepress Interface) proxies are not permitted", num)
+		}
+		if s, _ := d.Get("S").(Name); s == "JavaScript" {
+			add("forbidden", "JavaScript actions are not permitted", num)
+		}
+		switch sub {
+		case "PS":
+			add("forbidden", "PostScript XObjects are not permitted", num)
+		case "Image":
+			if d.Get("Alternates") != nil {
+				add("forbidden", "image XObjects shall not carry /Alternates", num)
+			}
+		case "Form":
+			if d.Get("Ref") != nil {
+				add("forbidden", "reference XObjects (/Ref) are not permitted in PDF/X-4", num)
+			}
+		case "Movie", "Sound", "Screen", "FileAttachment":
+			add("forbidden", fmt.Sprintf("annotation subtype /%s is not permitted", sub), num)
+		}
+		if t, _ := d.Get("Type").(Name); t == "ExtGState" {
+			for _, k := range []Name{"TR", "TR2"} {
+				if tr := d.Get(k); tr != nil && !pdfxTransferIsIdentity(doc, tr) {
+					add("forbidden", fmt.Sprintf("a transfer function (ExtGState /%s) is not permitted", k), num)
+				}
+			}
+		}
+	}
+}
+
+// pdfxTransferIsIdentity reports whether a transfer-function value is the benign
+// /Identity or /Default (or an array of those, one per colorant), as opposed to
+// an actual function that PDF/X-4 forbids.
+func pdfxTransferIsIdentity(doc *Document, o Object) bool {
+	switch v := doc.Resolve(o).(type) {
+	case Name:
+		return v == "Identity" || v == "Default"
+	case Array:
+		for _, e := range v {
+			n, ok := doc.Resolve(e).(Name)
+			if !ok || (n != "Identity" && n != "Default") {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // pdfxCheckDeviceColor verifies that device-dependent colour (DeviceRGB,
