@@ -144,3 +144,64 @@ func TestValidateFacturXInvoiceCorpus(t *testing.T) {
 		}
 	}
 }
+
+// subLineCII is an EXTENDED-style invoice with two sub-invoice lines (11, 12)
+// under a grouping line (1). The grouping line rolls up its children (60+40=100)
+// and carries no quantity/price; the summation line total is the top-level sum.
+const subLineCII = `<CrossIndustryInvoice>
+  <ExchangedDocumentContext><GuidelineSpecifiedDocumentContextParameter><ID>urn:factur-x.eu:1p0:extended</ID></GuidelineSpecifiedDocumentContextParameter></ExchangedDocumentContext>
+  <ExchangedDocument><ID>INV-2</ID><TypeCode>380</TypeCode><IssueDateTime><DateTimeString>20240101</DateTimeString></IssueDateTime></ExchangedDocument>
+  <SupplyChainTradeTransaction>
+    <IncludedSupplyChainTradeLineItem>
+      <AssociatedDocumentLineDocument><LineID>1</LineID></AssociatedDocumentLineDocument>
+      <SpecifiedTradeProduct><Name>Group</Name></SpecifiedTradeProduct>
+      <SpecifiedLineTradeSettlement><SpecifiedTradeSettlementLineMonetarySummation><LineTotalAmount>100.00</LineTotalAmount></SpecifiedTradeSettlementLineMonetarySummation></SpecifiedLineTradeSettlement>
+    </IncludedSupplyChainTradeLineItem>
+    <IncludedSupplyChainTradeLineItem>
+      <AssociatedDocumentLineDocument><LineID>11</LineID><ParentLineID>1</ParentLineID></AssociatedDocumentLineDocument>
+      <SpecifiedTradeProduct><Name>Child A</Name></SpecifiedTradeProduct>
+      <SpecifiedLineTradeAgreement><NetPriceProductTradePrice><ChargeAmount>60.00</ChargeAmount></NetPriceProductTradePrice></SpecifiedLineTradeAgreement>
+      <SpecifiedLineTradeDelivery><BilledQuantity unitCode="C62">1</BilledQuantity></SpecifiedLineTradeDelivery>
+      <SpecifiedLineTradeSettlement><SpecifiedTradeSettlementLineMonetarySummation><LineTotalAmount>60.00</LineTotalAmount></SpecifiedTradeSettlementLineMonetarySummation></SpecifiedLineTradeSettlement>
+    </IncludedSupplyChainTradeLineItem>
+    <IncludedSupplyChainTradeLineItem>
+      <AssociatedDocumentLineDocument><LineID>12</LineID><ParentLineID>1</ParentLineID></AssociatedDocumentLineDocument>
+      <SpecifiedTradeProduct><Name>Child B</Name></SpecifiedTradeProduct>
+      <SpecifiedLineTradeAgreement><NetPriceProductTradePrice><ChargeAmount>40.00</ChargeAmount></NetPriceProductTradePrice></SpecifiedLineTradeAgreement>
+      <SpecifiedLineTradeDelivery><BilledQuantity unitCode="C62">1</BilledQuantity></SpecifiedLineTradeDelivery>
+      <SpecifiedLineTradeSettlement><SpecifiedTradeSettlementLineMonetarySummation><LineTotalAmount>40.00</LineTotalAmount></SpecifiedTradeSettlementLineMonetarySummation></SpecifiedLineTradeSettlement>
+    </IncludedSupplyChainTradeLineItem>
+    <ApplicableHeaderTradeAgreement>
+      <SellerTradeParty><Name>Seller Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress></SellerTradeParty>
+      <BuyerTradeParty><Name>Buyer Co</Name></BuyerTradeParty>
+    </ApplicableHeaderTradeAgreement>
+    <ApplicableHeaderTradeSettlement>
+      <InvoiceCurrencyCode>EUR</InvoiceCurrencyCode>
+      <ApplicableTradeTax><CalculatedAmount>20.00</CalculatedAmount><BasisAmount>100.00</BasisAmount><CategoryCode>S</CategoryCode><RateApplicablePercent>20.00</RateApplicablePercent></ApplicableTradeTax>
+      <SpecifiedTradeSettlementHeaderMonetarySummation>
+        <LineTotalAmount>100.00</LineTotalAmount>
+        <TaxBasisTotalAmount>100.00</TaxBasisTotalAmount>
+        <TaxTotalAmount>20.00</TaxTotalAmount>
+        <GrandTotalAmount>120.00</GrandTotalAmount>
+        <DuePayableAmount>120.00</DuePayableAmount>
+      </SpecifiedTradeSettlementHeaderMonetarySummation>
+    </ApplicableHeaderTradeSettlement>
+  </SupplyChainTradeTransaction>
+</CrossIndustryInvoice>`
+
+func TestValidateFacturXSubLines(t *testing.T) {
+	if v := ValidateFacturXInvoice([]byte(subLineCII), FacturXExtended); len(v) != 0 {
+		t.Fatalf("valid sub-invoice-line document reported %d violation(s): %v", len(v), v)
+	}
+	// Breaking a child amount so the top-level rollup no longer matches must fire.
+	bad := strings.Replace(subLineCII, "<LineTotalAmount>100.00</LineTotalAmount>\n        <TaxBasisTotalAmount>", "<LineTotalAmount>90.00</LineTotalAmount>\n        <TaxBasisTotalAmount>", 1)
+	found := false
+	for _, e := range ValidateFacturXInvoice([]byte(bad), FacturXExtended) {
+		if e.Rule == "BR-CO-10" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected BR-CO-10 when the top-level line total is inconsistent")
+	}
+}

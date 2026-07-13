@@ -347,48 +347,55 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 	}
 
 	// Line-item rules (BG-25): each invoice line carries its mandatory business
-	// terms. The EXTENDED profile's sub-invoice lines include parent grouping
-	// lines that need not carry quantity/price, so line-item checks are applied
-	// only to the flat-model profiles here.
-	flatModel := profile != FacturXExtended
-	if flatModel {
-		for i, li := range tx.orNil().all("IncludedSupplyChainTradeLineItem") {
-			if li.str("AssociatedDocumentLineDocument", "LineID") == "" {
-				add("BR-21", fmt.Sprintf("Invoice line %d shall have an Invoice line identifier (BT-126)", i+1))
-			}
-			if li.str("SpecifiedTradeProduct", "Name") == "" {
-				add("BR-25", "Each Invoice line shall have an Item name (BT-153)")
-			}
-			if li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount") == "" {
-				add("BR-24", "Each Invoice line shall have an Invoice line net amount (BT-131)")
-			}
-			qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity")
-			if qty == nil || strings.TrimSpace(qty.text) == "" {
-				add("BR-22", "Each Invoice line shall have an Invoiced quantity (BT-129)")
-			} else if qty.attr("unitCode") == "" {
-				add("BR-23", "Each Invoice line shall have an Invoiced quantity unit of measure (BT-130)")
-			}
-			price := li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount")
-			if price == "" {
-				add("BR-26", "Each Invoice line shall have an Item net price (BT-146)")
-			} else if p, ok := parseAmount(price); ok && p < 0 {
-				add("BR-27", "The Item net price (BT-146) shall not be negative")
-			}
+	// terms. This includes the EXTENDED profile's sub-invoice lines, which are
+	// flat siblings distinguished by a parent line reference. A grouping line —
+	// one referenced as another line's parent — aggregates its sub-lines and need
+	// not carry an invoiced quantity or item price, so those two are checked only
+	// on leaf lines.
+	lines := tx.orNil().all("IncludedSupplyChainTradeLineItem")
+	grouping := map[string]bool{}
+	for _, li := range lines {
+		if p := li.str("AssociatedDocumentLineDocument", "ParentLineID"); p != "" {
+			grouping[p] = true
+		}
+	}
+	for i, li := range lines {
+		id := li.str("AssociatedDocumentLineDocument", "LineID")
+		if id == "" {
+			add("BR-21", fmt.Sprintf("Invoice line %d shall have an Invoice line identifier (BT-126)", i+1))
+		}
+		if li.str("SpecifiedTradeProduct", "Name") == "" {
+			add("BR-25", "Each Invoice line shall have an Item name (BT-153)")
+		}
+		if li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount") == "" {
+			add("BR-24", "Each Invoice line shall have an Invoice line net amount (BT-131)")
+		}
+		if grouping[id] {
+			continue // grouping line: no direct quantity or price
+		}
+		qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity")
+		if qty == nil || strings.TrimSpace(qty.text) == "" {
+			add("BR-22", "Each Invoice line shall have an Invoiced quantity (BT-129)")
+		} else if qty.attr("unitCode") == "" {
+			add("BR-23", "Each Invoice line shall have an Invoiced quantity unit of measure (BT-130)")
+		}
+		price := li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount")
+		if price == "" {
+			add("BR-26", "Each Invoice line shall have an Item net price (BT-146)")
+		} else if p, ok := parseAmount(price); ok && p < 0 {
+			add("BR-27", "The Item net price (BT-146) shall not be negative")
 		}
 	}
 
-	// BR-CO-10 and BR-CO-13 assume the flat EN 16931 line model. The EXTENDED
-	// profile adds sub-invoice lines (a parent line rolls up its children, so a
-	// naive sum double-counts) and richer document-level allowance/charge
-	// structures; validating those correctly is deferred, so these two totals are
-	// checked only for the non-EXTENDED profiles here.
-
 	// BR-CO-10: Sum of Invoice line net amounts (BT-106) = sum of line net
-	// amounts (BT-131), when line items are present.
-	lines := tx.orNil().all("IncludedSupplyChainTradeLineItem")
-	if flatModel && len(lines) > 0 && sum != nil {
+	// amounts (BT-131). A sub-invoice line's amount is rolled up into its parent
+	// (identified by a parent line reference), so only top-level lines are summed.
+	if len(lines) > 0 && sum != nil {
 		var lineSum float64
 		for _, li := range lines {
+			if li.str("AssociatedDocumentLineDocument", "ParentLineID") != "" {
+				continue
+			}
 			if v, ok := parseAmount(li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount")); ok {
 				lineSum += v
 			}
@@ -398,23 +405,14 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 		}
 	}
 
-	// BR-CO-13: Invoice total without VAT (BT-109) = sum of line net amounts
-	// (BT-106) minus document allowances (BT-107) plus document charges (BT-108),
-	// when the line total is present.
-	if flatModel && sum != nil {
+	// BR-CO-13: Invoice total without VAT (BT-109) = line total (BT-106) minus
+	// the allowance total (BT-107) plus the charge total (BT-108). The allowance
+	// and charge totals are the summation values, which cover charges (e.g.
+	// logistics) not expressed as individual document allowance/charge entries.
+	if sum != nil {
 		if lt, ok := parseAmount(sum.str("LineTotalAmount")); ok {
-			var allowances, charges float64
-			for _, ac := range settle.orNil().all("SpecifiedTradeAllowanceCharge") {
-				amt, ok := parseAmount(ac.str("ActualAmount"))
-				if !ok {
-					continue
-				}
-				if strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true") {
-					charges += amt
-				} else {
-					allowances += amt
-				}
-			}
+			allowances, _ := parseAmount(sum.str("AllowanceTotalAmount"))
+			charges, _ := parseAmount(sum.str("ChargeTotalAmount"))
 			if basis, ok := parseAmount(sum.str("TaxBasisTotalAmount")); ok &&
 				math.Abs(round2(lt-allowances+charges)-basis) > 0.005 {
 				add("BR-CO-13", fmt.Sprintf("Invoice total without VAT (BT-109=%.2f) shall equal line total (%.2f) - allowances (%.2f) + charges (%.2f)", basis, lt, allowances, charges))
