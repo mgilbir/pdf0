@@ -20,19 +20,33 @@ import (
 type FacturXProfile string
 
 const (
-	FacturXMinimum  FacturXProfile = "MINIMUM"
-	FacturXBasicWL  FacturXProfile = "BASIC WL"
-	FacturXBasic    FacturXProfile = "BASIC"
-	FacturXEN16931  FacturXProfile = "EN 16931"
-	FacturXExtended FacturXProfile = "EXTENDED"
+	FacturXMinimum   FacturXProfile = "MINIMUM"
+	FacturXBasicWL   FacturXProfile = "BASIC WL"
+	FacturXBasic     FacturXProfile = "BASIC"
+	FacturXEN16931   FacturXProfile = "EN 16931"
+	FacturXExtended  FacturXProfile = "EXTENDED"
+	FacturXXRechnung FacturXProfile = "XRECHNUNG" // ZUGFeRD 2.x German XRechnung CIUS of EN 16931
 )
 
-var facturxProfiles = map[string]FacturXProfile{
-	"MINIMUM":  FacturXMinimum,
-	"BASIC WL": FacturXBasicWL,
-	"BASIC":    FacturXBasic,
-	"EN 16931": FacturXEN16931,
-	"EXTENDED": FacturXExtended,
+// facturxProfileFor maps an XMP ConformanceLevel string to a profile. The value
+// is matched case- and space-insensitively, since producers write both "EN
+// 16931" and "EN16931", and "BASIC WL" and "BASICWL".
+func facturxProfileFor(level string) (FacturXProfile, bool) {
+	switch strings.ToUpper(strings.ReplaceAll(level, " ", "")) {
+	case "MINIMUM":
+		return FacturXMinimum, true
+	case "BASICWL":
+		return FacturXBasicWL, true
+	case "BASIC":
+		return FacturXBasic, true
+	case "EN16931":
+		return FacturXEN16931, true
+	case "EXTENDED":
+		return FacturXExtended, true
+	case "XRECHNUNG":
+		return FacturXXRechnung, true
+	}
+	return "", false
 }
 
 // The embedded invoice XML is named factur-x.xml (Factur-X and ZUGFeRD 2.1+);
@@ -151,7 +165,7 @@ func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
 	}
 	if level == "" {
 		add("metadata", "missing XMP fx:ConformanceLevel", 0)
-	} else if p, ok := facturxProfiles[level]; !ok {
+	} else if p, ok := facturxProfileFor(level); !ok {
 		add("metadata", fmt.Sprintf("XMP fx:ConformanceLevel %q is not a Factur-X profile", level), 0)
 	} else {
 		res.Profile = p
