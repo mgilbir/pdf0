@@ -284,6 +284,37 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 		}
 	}
 
+	// Document-level allowance (BG-20) and charge (BG-21) rules: each present
+	// allowance or charge shall carry an amount, a VAT category code, and a
+	// reason or reason code. Applied to every existing entry, so profiles without
+	// document allowances/charges are unaffected.
+	for _, ac := range settle.orNil().all("SpecifiedTradeAllowanceCharge") {
+		amt := ac.str("ActualAmount")
+		cat := ac.str("CategoryTradeTax", "CategoryCode")
+		hasReason := ac.str("Reason") != "" || ac.str("ReasonCode") != ""
+		if strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true") {
+			if amt == "" {
+				add("BR-36", "Each Document level charge (BG-21) shall have a Document level charge amount (BT-99)")
+			}
+			if cat == "" {
+				add("BR-37", "Each Document level charge (BG-21) shall have a Document level charge VAT category code (BT-102)")
+			}
+			if !hasReason {
+				add("BR-38", "Each Document level charge (BG-21) shall have a Document level charge reason (BT-104) or reason code (BT-105)")
+			}
+		} else {
+			if amt == "" {
+				add("BR-31", "Each Document level allowance (BG-20) shall have a Document level allowance amount (BT-92)")
+			}
+			if cat == "" {
+				add("BR-32", "Each Document level allowance (BG-20) shall have a Document level allowance VAT category code (BT-95)")
+			}
+			if !hasReason {
+				add("BR-33", "Each Document level allowance (BG-20) shall have a Document level allowance reason (BT-97) or reason code (BT-98)")
+			}
+		}
+	}
+
 	// Line-item rules (BG-25): each invoice line carries its mandatory business
 	// terms. The EXTENDED profile's sub-invoice lines include parent grouping
 	// lines that need not carry quantity/price, so line-item checks are applied

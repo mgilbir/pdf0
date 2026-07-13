@@ -41,6 +41,13 @@ const validCII = `<CrossIndustryInvoice>
   </SupplyChainTradeTransaction>
 </CrossIndustryInvoice>`
 
+// withAllowanceCharge injects a document-level allowance or charge into validCII
+// (whose amount is zero, keeping the invoice totals consistent).
+func withAllowanceCharge(ac string) string {
+	return strings.Replace(validCII, "<InvoiceCurrencyCode>EUR</InvoiceCurrencyCode>",
+		"<InvoiceCurrencyCode>EUR</InvoiceCurrencyCode>"+ac, 1)
+}
+
 func TestValidateFacturXInvoiceValid(t *testing.T) {
 	if v := ValidateFacturXInvoice([]byte(validCII), FacturXEN16931); len(v) != 0 {
 		t.Fatalf("valid CII reported %d violation(s): %v", len(v), v)
@@ -79,6 +86,9 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 		{"line no item name", strings.Replace(validCII, "<SpecifiedTradeProduct><Name>Widget</Name></SpecifiedTradeProduct>", "", 1), "BR-25"},
 		{"line no unit code", strings.Replace(validCII, `<BilledQuantity unitCode="C62">1</BilledQuantity>`, "<BilledQuantity>1</BilledQuantity>", 1), "BR-23"},
 		{"line negative price", strings.Replace(validCII, "<ChargeAmount>100.00</ChargeAmount>", "<ChargeAmount>-5.00</ChargeAmount>", 1), "BR-27"},
+		{"allowance no amount", withAllowanceCharge(`<SpecifiedTradeAllowanceCharge><ChargeIndicator><Indicator>false</Indicator></ChargeIndicator><CategoryTradeTax><CategoryCode>S</CategoryCode></CategoryTradeTax><Reason>r</Reason></SpecifiedTradeAllowanceCharge>`), "BR-31"},
+		{"allowance no reason", withAllowanceCharge(`<SpecifiedTradeAllowanceCharge><ChargeIndicator><Indicator>false</Indicator></ChargeIndicator><ActualAmount>0.00</ActualAmount><CategoryTradeTax><CategoryCode>S</CategoryCode></CategoryTradeTax></SpecifiedTradeAllowanceCharge>`), "BR-33"},
+		{"charge no category", withAllowanceCharge(`<SpecifiedTradeAllowanceCharge><ChargeIndicator><Indicator>true</Indicator></ChargeIndicator><ActualAmount>0.00</ActualAmount><Reason>r</Reason></SpecifiedTradeAllowanceCharge>`), "BR-37"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
