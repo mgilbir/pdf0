@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"unicode/utf8"
 )
 
@@ -1273,6 +1274,14 @@ func checkStreamLengthBytes(doc *Document, level PDFALevel, raw []byte) []Valida
 	case PDFA2b, PDFA3b:
 		rule = "6.1.7.1"
 	}
+	// Locate every delimited "stream" and "endobj" keyword once, up front, so
+	// each object's extent is a binary search rather than a fresh forward scan.
+	// Searching per object made this O(objects × filesize): a 27 MB file with
+	// ~40k streams spent >80 s here because each scan restarted from the object's
+	// offset. The single-pass precompute is O(filesize) total.
+	streamKW := allDelimitedKeywords(raw, "stream", true)
+	endobjKW := allDelimitedKeywords(raw, "endobj", true)
+
 	var errs []ValidationError
 	for num, off := range doc.Offsets {
 		iobj := doc.Objects[num]
@@ -1287,7 +1296,7 @@ func checkStreamLengthBytes(doc *Document, level PDFALevel, raw []byte) []Valida
 		if !ok {
 			continue
 		}
-		rawLen, eol, ok := streamByteExtent(raw, off)
+		rawLen, eol, ok := streamByteExtent(raw, off, streamKW, endobjKW)
 		if !ok {
 			continue
 		}
@@ -1308,15 +1317,53 @@ func checkStreamLengthBytes(doc *Document, level PDFALevel, raw []byte) []Valida
 	return errs
 }
 
+// allDelimitedKeywords returns, in ascending order, every offset where keyword
+// occurs as a delimited token in data: preceded by whitespace (when
+// requireLeadingWS) and followed by a non-regular byte or end of input — the
+// same match findDelimitedKeyword makes, collected in a single O(filesize) pass
+// so callers can binary-search instead of re-scanning per object.
+func allDelimitedKeywords(data []byte, keyword string, requireLeadingWS bool) []int64 {
+	marker := []byte(keyword)
+	var out []int64
+	for from := 0; from < len(data); {
+		idx := bytes.Index(data[from:], marker)
+		if idx < 0 {
+			break
+		}
+		at := from + idx
+		end := at + len(marker)
+		beforeOK := !requireLeadingWS || at == 0 || isWhitespace(data[at-1])
+		afterOK := end >= len(data) || !isRegular(data[end])
+		if beforeOK && afterOK {
+			out = append(out, int64(at))
+		}
+		from = at + 1
+	}
+	return out
+}
+
+// firstKeywordAtOrAfter returns the first offset in the ascending slice that is
+// >= pos, or -1 if none — the binary-search equivalent of a forward keyword scan
+// from pos.
+func firstKeywordAtOrAfter(sorted []int64, pos int64) int64 {
+	i := sort.Search(len(sorted), func(i int) bool { return sorted[i] >= pos })
+	if i < len(sorted) {
+		return sorted[i]
+	}
+	return -1
+}
+
 // streamByteExtent returns, for the stream object beginning at objStart, the
 // number of raw bytes between the EOL after the stream keyword and the real
 // endstream (anchored on endobj), and the length of the trailing EOL before
 // that endstream (0, 1, or 2). ok is false if the structure cannot be located.
-func streamByteExtent(data []byte, objStart int64) (rawLen, eol int64, ok bool) {
+// streamKW and endobjKW are the precomputed delimited-keyword offsets (see
+// allDelimitedKeywords).
+func streamByteExtent(data []byte, objStart int64, streamKW, endobjKW []int64) (rawLen, eol int64, ok bool) {
 	// Locate the stream keyword as a delimited token, not a substring: an
 	// embedded-file dictionary can contain the letters "stream" in a value, and
 	// matching that would place the data start too early.
-	sk := findDelimitedKeyword(data, objStart, "stream", true)
+	sk := firstKeywordAtOrAfter(streamKW, objStart)
 	if sk < 0 {
 		return 0, 0, false
 	}
@@ -1327,7 +1374,7 @@ func streamByteExtent(data []byte, objStart int64) (rawLen, eol int64, ok bool) 
 	if ds < int64(len(data)) && data[ds] == '\n' {
 		ds++
 	}
-	endobj := findDelimitedKeyword(data, ds, "endobj", true)
+	endobj := firstKeywordAtOrAfter(endobjKW, ds)
 	if endobj < 0 {
 		return 0, 0, false
 	}
