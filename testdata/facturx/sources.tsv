@@ -1,0 +1,16 @@
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/XML-Rechnung/FX/EN16931_Einfach.pdf	corpus_EN16931_Einfach.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/XML-Rechnung/FX/EN16931_Rabatte.pdf	corpus_EN16931_Rabatte.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/XML-Rechnung/FX/EN16931_Gutschrift.pdf	corpus_EN16931_Gutschrift.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/XML-Rechnung/FX/EN16931_Miete.pdf	corpus_EN16931_Miete.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/XML-Rechnung/FX/EN16931_Reisekostenabrechnung.pdf	corpus_EN16931_Reisekostenabrechnung.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/XML-Rechnung/FX/EN16931_Betriebskostenabrechnung.pdf	corpus_EN16931_Betriebskostenabrechnung.pdf
+https://raw.githubusercontent.com/ZUGFeRD/mustangproject/master/validator/src/test/resources/validAvoir_FR_type380_BASICWL.pdf	mustang_BASICWL_avoir.pdf
+https://raw.githubusercontent.com/ZUGFeRD/mustangproject/master/validator/src/test/resources/zugferd_2p1_EXTENDED_PDFA-3A.pdf	mustang_EXTENDED.pdf
+https://raw.githubusercontent.com/ZUGFeRD/mustangproject/master/validator/src/test/resources/attributeBasedXMP_zugferd_2p0_EN16931_Einfach.pdf	mustang_EN16931_attrXMP.pdf
+https://raw.githubusercontent.com/ZUGFeRD/mustangproject/master/validator/src/test/resources/Facture_F20180027.pdf	mustang_Facture_FR.pdf
+https://raw.githubusercontent.com/ZUGFeRD/mustangproject/master/Mustang-CLI/src/test/resources/corrupt-factur-x-waytoosmall.pdf	FAIL_corrupt_waytoosmall.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/ZUGFeRDv2/correct/FNFE-factur-x-examples/Facture_FR_MINIMUM.pdf	fnfe_MINIMUM.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/ZUGFeRDv2/correct/FNFE-factur-x-examples/Facture_UE_MINIMUM.pdf	fnfe_MINIMUM_UE.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/ZUGFeRDv2/correct/FNFE-factur-x-examples/Avoir_FR_type381_BASIC.pdf	fnfe_BASIC.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/ZUGFeRDv2/correct/intarsys/BASIC/zugferd_2p0_BASIC_Einfach.pdf	intarsys_BASIC.pdf
+https://raw.githubusercontent.com/ZUGFeRD/corpus/master/ZUGFeRDv2/correct/intarsys/MINIMUM/zugferd_2p0_MINIMUM.pdf	intarsys_MINIMUM.pdf
