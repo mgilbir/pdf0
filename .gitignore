@@ -55,3 +55,8 @@ testdata/wtpdf/.ok
 # Arlington PDF Model (Apache-2.0, pdf-association) — machine-readable ISO 32000
 # object grammar; cloned via `make arlington` for the structural oracle test.
 testdata/arlington-pdf-model/
+
+# Cal Poly Graphic Communications PDF/VT-1 Test File Suite — graphically-rich
+# valid PDF/VT-1 files used as the FP=0 oracle for PDF/VT validation. Not
+# vendored (copyrighted test content); placed here out of band.
+testdata/pdfvt/
