@@ -79,8 +79,81 @@ func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
 	pdfxCheckTrapped(doc, add)
 	pdfxCheckPageBoxes(doc, add)
 	pdfxCheckFontsEmbedded(doc, add)
+	pdfxCheckDeviceColor(doc, add)
 
 	return out
+}
+
+// pdfxCheckDeviceColor verifies that device-dependent colour (DeviceRGB,
+// DeviceCMYK, DeviceGray) is only used where the printing condition is defined —
+// by the GTS_PDFX output intent's ICC destination profile, a Default* colour
+// space in scope, or a covering transparency-group colour space (ISO 15930-7
+// 6.2, PDF Reference device-colour rules). It uses a memoised scan so the
+// per-page content walk stays fast on PDF/VT files that reuse content across
+// very many pages.
+func pdfxCheckDeviceColor(doc *Document, add func(rule, msg string, obj int)) {
+	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
+	if cat == nil {
+		return
+	}
+	oiRGB, oiCMYK, oiGray := pdfxOutputIntentCoverage(doc, cat)
+	sc := newDevColorScanner(doc)
+	for _, page := range collectPages(doc, cat.Get("Pages")) {
+		u := sc.pageDeviceUse(page.dict)
+		groupRGB, groupCMYK, _ := getGroupCSCoverage(doc, page.dict)
+		if u.rgb && !oiRGB && !groupRGB {
+			add("color", "DeviceRGB used without a matching OutputIntent, DefaultRGB or covering group colour space", page.objNum)
+		}
+		if u.cmyk && !oiCMYK && !groupCMYK {
+			add("color", "DeviceCMYK used without a matching OutputIntent, DefaultCMYK or covering group colour space", page.objNum)
+		}
+		if u.gray && !oiRGB && !oiCMYK && !oiGray {
+			add("color", "DeviceGray used without any OutputIntent or DefaultGray", page.objNum)
+		}
+	}
+}
+
+// pdfxOutputIntentCoverage reports which device colour families the GTS_PDFX
+// output intent's ICC destination profile covers, read from the profile's
+// colour-space signature. An intent with an OutputConditionIdentifier but no
+// embedded profile is treated conservatively as covering RGB and CMYK.
+func pdfxOutputIntentCoverage(doc *Document, cat *Dictionary) (rgb, cmyk, gray bool) {
+	arr, ok := doc.Resolve(cat.Get("OutputIntents")).(Array)
+	if !ok {
+		return
+	}
+	for _, e := range arr {
+		oi := doc.ResolveDict(e)
+		if oi == nil {
+			continue
+		}
+		if s, _ := oi.Get("S").(Name); s != "GTS_PDFX" {
+			continue
+		}
+		stream, ok := doc.Resolve(oi.Get("DestOutputProfile")).(*Stream)
+		if !ok {
+			if oi.Get("OutputConditionIdentifier") != nil {
+				rgb, cmyk = true, true
+			}
+			continue
+		}
+		data := getICCProfileData(stream)
+		if len(data) < 20 {
+			rgb, cmyk = true, true
+			continue
+		}
+		switch string(data[16:20]) {
+		case "RGB ":
+			rgb = true
+		case "CMYK":
+			cmyk = true
+		case "GRAY":
+			gray = true
+		default:
+			rgb, cmyk = true, true
+		}
+	}
+	return
 }
 
 // pdfxCheckIdentification verifies the file identifies as the requested PDF/X
