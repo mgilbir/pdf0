@@ -73,3 +73,17 @@ clean-corpus:
 
 clean-wtpdf:
 	rm -f $(WTPDF_DIR)/*.pdf $(WTPDF_DIR)/.ok
+
+# Factur-X / ZUGFeRD example invoices (Apache-2.0) used as the Factur-X
+# validator's oracle. Downloaded into testdata/facturx (gitignored); the source
+# manifest and downloader are committed so the set is reproducible.
+FACTURX_DIR := testdata/facturx
+
+facturx: $(FACTURX_DIR)/.ok
+
+$(FACTURX_DIR)/.ok: $(FACTURX_DIR)/sources.tsv $(FACTURX_DIR)/download.sh
+	bash $(FACTURX_DIR)/download.sh
+	touch $@
+
+clean-facturx:
+	rm -f $(FACTURX_DIR)/*.pdf $(FACTURX_DIR)/.ok

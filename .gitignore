@@ -60,3 +60,8 @@ testdata/arlington-pdf-model/
 # valid PDF/VT-1 files used as the FP=0 oracle for PDF/VT validation. Not
 # vendored (copyrighted test content); placed here out of band.
 testdata/pdfvt/
+
+# Factur-X example invoices (oracle) — not vendored
+testdata/facturx/*.pdf
+testdata/facturx/.ok
+testdata/facturx-official/
