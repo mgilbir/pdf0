@@ -68,6 +68,9 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 		{"vat calc wrong", strings.Replace(validCII, "<CalculatedAmount>20.00</CalculatedAmount>", "<CalculatedAmount>99.00</CalculatedAmount>", 1), "BR-CO-17"},
 		{"vat total mismatch", strings.Replace(validCII, "<TaxTotalAmount>20.00</TaxTotalAmount>", "<TaxTotalAmount>25.00</TaxTotalAmount>", 1), "BR-CO-14"},
 		{"line sum mismatch", strings.Replace(validCII, "<LineTotalAmount>100.00</LineTotalAmount>\n        <TaxBasisTotalAmount>", "<LineTotalAmount>77.00</LineTotalAmount>\n        <TaxBasisTotalAmount>", 1), "BR-CO-13"},
+		{"zero rated with tax", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "<CategoryCode>Z</CategoryCode>", 1), "BR-Z-09"},
+		{"standard with exemption reason", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "<CategoryCode>S</CategoryCode><ExemptionReason>oops</ExemptionReason>", 1), "BR-S-10"},
+		{"exempt without reason", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "<CategoryCode>E</CategoryCode>", 1), "BR-E-10"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
