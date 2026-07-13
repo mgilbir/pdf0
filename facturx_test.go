@@ -76,10 +76,14 @@ func TestFacturXAttachmentDetection(t *testing.T) {
 }
 
 func TestFacturXProfilesComplete(t *testing.T) {
-	for _, p := range []string{"MINIMUM", "BASIC WL", "BASIC", "EN 16931", "EXTENDED"} {
-		if _, ok := facturxProfiles[p]; !ok {
-			t.Errorf("profile %q missing from facturxProfiles", p)
+	// Both the spaced and unspaced spellings map to the same profile.
+	for _, p := range []string{"MINIMUM", "BASIC WL", "BASICWL", "BASIC", "EN 16931", "EN16931", "EXTENDED", "en 16931"} {
+		if _, ok := facturxProfileFor(p); !ok {
+			t.Errorf("ConformanceLevel %q not recognised", p)
 		}
+	}
+	if _, ok := facturxProfileFor("NONSENSE"); ok {
+		t.Error("NONSENSE must not be a profile")
 	}
 	if facturxIsXMLSubtype("application/pdf") {
 		t.Error("application/pdf must not count as an XML subtype")
