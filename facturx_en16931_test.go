@@ -17,6 +17,10 @@ const validCII = `<CrossIndustryInvoice>
   <ExchangedDocument><ID>INV-1</ID><TypeCode>380</TypeCode><IssueDateTime><DateTimeString>20240101</DateTimeString></IssueDateTime></ExchangedDocument>
   <SupplyChainTradeTransaction>
     <IncludedSupplyChainTradeLineItem>
+      <AssociatedDocumentLineDocument><LineID>1</LineID></AssociatedDocumentLineDocument>
+      <SpecifiedTradeProduct><Name>Widget</Name></SpecifiedTradeProduct>
+      <SpecifiedLineTradeAgreement><NetPriceProductTradePrice><ChargeAmount>100.00</ChargeAmount></NetPriceProductTradePrice></SpecifiedLineTradeAgreement>
+      <SpecifiedLineTradeDelivery><BilledQuantity unitCode="C62">1</BilledQuantity></SpecifiedLineTradeDelivery>
       <SpecifiedLineTradeSettlement><SpecifiedTradeSettlementLineMonetarySummation><LineTotalAmount>100.00</LineTotalAmount></SpecifiedTradeSettlementLineMonetarySummation></SpecifiedLineTradeSettlement>
     </IncludedSupplyChainTradeLineItem>
     <ApplicableHeaderTradeAgreement>
@@ -71,6 +75,10 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 		{"zero rated with tax", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "<CategoryCode>Z</CategoryCode>", 1), "BR-Z-09"},
 		{"standard with exemption reason", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "<CategoryCode>S</CategoryCode><ExemptionReason>oops</ExemptionReason>", 1), "BR-S-10"},
 		{"exempt without reason", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "<CategoryCode>E</CategoryCode>", 1), "BR-E-10"},
+		{"line no identifier", strings.Replace(validCII, "<AssociatedDocumentLineDocument><LineID>1</LineID></AssociatedDocumentLineDocument>", "", 1), "BR-21"},
+		{"line no item name", strings.Replace(validCII, "<SpecifiedTradeProduct><Name>Widget</Name></SpecifiedTradeProduct>", "", 1), "BR-25"},
+		{"line no unit code", strings.Replace(validCII, `<BilledQuantity unitCode="C62">1</BilledQuantity>`, "<BilledQuantity>1</BilledQuantity>", 1), "BR-23"},
+		{"line negative price", strings.Replace(validCII, "<ChargeAmount>100.00</ChargeAmount>", "<ChargeAmount>-5.00</ChargeAmount>", 1), "BR-27"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -23,7 +23,16 @@ import (
 type ciiNode struct {
 	name     string
 	text     string
+	attrs    map[string]string // keyed by local attribute name
 	children []*ciiNode
+}
+
+// attr returns the value of the named attribute (by local name), or "".
+func (n *ciiNode) attr(name string) string {
+	if n == nil {
+		return ""
+	}
+	return n.attrs[name]
 }
 
 // parseCII parses invoice XML into a local-name element tree, or returns nil and
@@ -43,6 +52,12 @@ func parseCII(data []byte) (*ciiNode, error) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			n := &ciiNode{name: t.Name.Local}
+			if len(t.Attr) > 0 {
+				n.attrs = make(map[string]string, len(t.Attr))
+				for _, a := range t.Attr {
+					n.attrs[a.Name.Local] = a.Value
+				}
+			}
 			if len(stack) > 0 {
 				parent := stack[len(stack)-1]
 				parent.children = append(parent.children, n)
@@ -269,12 +284,42 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 		}
 	}
 
+	// Line-item rules (BG-25): each invoice line carries its mandatory business
+	// terms. The EXTENDED profile's sub-invoice lines include parent grouping
+	// lines that need not carry quantity/price, so line-item checks are applied
+	// only to the flat-model profiles here.
+	flatModel := profile != FacturXExtended
+	if flatModel {
+		for i, li := range tx.orNil().all("IncludedSupplyChainTradeLineItem") {
+			if li.str("AssociatedDocumentLineDocument", "LineID") == "" {
+				add("BR-21", fmt.Sprintf("Invoice line %d shall have an Invoice line identifier (BT-126)", i+1))
+			}
+			if li.str("SpecifiedTradeProduct", "Name") == "" {
+				add("BR-25", "Each Invoice line shall have an Item name (BT-153)")
+			}
+			if li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount") == "" {
+				add("BR-24", "Each Invoice line shall have an Invoice line net amount (BT-131)")
+			}
+			qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity")
+			if qty == nil || strings.TrimSpace(qty.text) == "" {
+				add("BR-22", "Each Invoice line shall have an Invoiced quantity (BT-129)")
+			} else if qty.attr("unitCode") == "" {
+				add("BR-23", "Each Invoice line shall have an Invoiced quantity unit of measure (BT-130)")
+			}
+			price := li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount")
+			if price == "" {
+				add("BR-26", "Each Invoice line shall have an Item net price (BT-146)")
+			} else if p, ok := parseAmount(price); ok && p < 0 {
+				add("BR-27", "The Item net price (BT-146) shall not be negative")
+			}
+		}
+	}
+
 	// BR-CO-10 and BR-CO-13 assume the flat EN 16931 line model. The EXTENDED
 	// profile adds sub-invoice lines (a parent line rolls up its children, so a
 	// naive sum double-counts) and richer document-level allowance/charge
 	// structures; validating those correctly is deferred, so these two totals are
 	// checked only for the non-EXTENDED profiles here.
-	flatModel := profile != FacturXExtended
 
 	// BR-CO-10: Sum of Invoice line net amounts (BT-106) = sum of line net
 	// amounts (BT-131), when line items are present.
