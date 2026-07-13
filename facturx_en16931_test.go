@@ -16,13 +16,18 @@ const validCII = `<CrossIndustryInvoice>
   <ExchangedDocumentContext><GuidelineSpecifiedDocumentContextParameter><ID>urn:cen.eu:en16931:2017</ID></GuidelineSpecifiedDocumentContextParameter></ExchangedDocumentContext>
   <ExchangedDocument><ID>INV-1</ID><TypeCode>380</TypeCode><IssueDateTime><DateTimeString>20240101</DateTimeString></IssueDateTime></ExchangedDocument>
   <SupplyChainTradeTransaction>
+    <IncludedSupplyChainTradeLineItem>
+      <SpecifiedLineTradeSettlement><SpecifiedTradeSettlementLineMonetarySummation><LineTotalAmount>100.00</LineTotalAmount></SpecifiedTradeSettlementLineMonetarySummation></SpecifiedLineTradeSettlement>
+    </IncludedSupplyChainTradeLineItem>
     <ApplicableHeaderTradeAgreement>
       <SellerTradeParty><Name>Seller Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress></SellerTradeParty>
       <BuyerTradeParty><Name>Buyer Co</Name></BuyerTradeParty>
     </ApplicableHeaderTradeAgreement>
     <ApplicableHeaderTradeSettlement>
       <InvoiceCurrencyCode>EUR</InvoiceCurrencyCode>
+      <ApplicableTradeTax><CalculatedAmount>20.00</CalculatedAmount><BasisAmount>100.00</BasisAmount><CategoryCode>S</CategoryCode><RateApplicablePercent>20.00</RateApplicablePercent></ApplicableTradeTax>
       <SpecifiedTradeSettlementHeaderMonetarySummation>
+        <LineTotalAmount>100.00</LineTotalAmount>
         <TaxBasisTotalAmount>100.00</TaxBasisTotalAmount>
         <TaxTotalAmount>20.00</TaxTotalAmount>
         <GrandTotalAmount>120.00</GrandTotalAmount>
@@ -56,6 +61,13 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 		{"missing grand total", strings.Replace(validCII, "<GrandTotalAmount>120.00</GrandTotalAmount>", "", 1), "BR-14"},
 		{"missing due amount", strings.Replace(validCII, "<DuePayableAmount>120.00</DuePayableAmount>", "", 1), "BR-15"},
 		{"totals inconsistent", strings.Replace(validCII, "<GrandTotalAmount>120.00</GrandTotalAmount>", "<GrandTotalAmount>999.00</GrandTotalAmount>", 1), "BR-CO-15"},
+		{"vat breakdown no taxable", strings.Replace(validCII, "<BasisAmount>100.00</BasisAmount>", "", 1), "BR-45"},
+		{"vat breakdown no tax", strings.Replace(validCII, "<CalculatedAmount>20.00</CalculatedAmount>", "", 1), "BR-46"},
+		{"vat breakdown no category", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "", 1), "BR-47"},
+		{"vat breakdown no rate", strings.Replace(validCII, "<RateApplicablePercent>20.00</RateApplicablePercent>", "", 1), "BR-48"},
+		{"vat calc wrong", strings.Replace(validCII, "<CalculatedAmount>20.00</CalculatedAmount>", "<CalculatedAmount>99.00</CalculatedAmount>", 1), "BR-CO-17"},
+		{"vat total mismatch", strings.Replace(validCII, "<TaxTotalAmount>20.00</TaxTotalAmount>", "<TaxTotalAmount>25.00</TaxTotalAmount>", 1), "BR-CO-14"},
+		{"line sum mismatch", strings.Replace(validCII, "<LineTotalAmount>100.00</LineTotalAmount>\n        <TaxBasisTotalAmount>", "<LineTotalAmount>77.00</LineTotalAmount>\n        <TaxBasisTotalAmount>", 1), "BR-CO-13"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

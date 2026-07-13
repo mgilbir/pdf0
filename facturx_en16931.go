@@ -170,8 +170,98 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 		}
 	}
 
+	// VAT breakdown (BG-23) rules, applied to each ApplicableTradeTax present, so
+	// profiles without a breakdown (MINIMUM) are naturally skipped.
+	taxes := settle.orNil().all("ApplicableTradeTax")
+	var vatTotal float64
+	for _, tt := range taxes {
+		basis := tt.str("BasisAmount")
+		calc := tt.str("CalculatedAmount")
+		cat := tt.str("CategoryCode")
+		rate := tt.str("RateApplicablePercent")
+		if basis == "" {
+			add("BR-45", "Each VAT breakdown (BG-23) shall have a VAT category taxable amount (BT-116)")
+		}
+		if calc == "" {
+			add("BR-46", "Each VAT breakdown (BG-23) shall have a VAT category tax amount (BT-117)")
+		}
+		if cat == "" {
+			add("BR-47", "Each VAT breakdown (BG-23) shall be defined through a VAT category code (BT-118)")
+		}
+		// BR-48: a rate is required except for the "Not subject to VAT" category (O).
+		if rate == "" && cat != "O" {
+			add("BR-48", "Each VAT breakdown (BG-23) shall have a VAT category rate (BT-119)")
+		}
+		// BR-CO-17: BT-117 = BT-116 x (BT-119 / 100), rounded to two decimals.
+		b, okB := parseAmount(basis)
+		c, okC := parseAmount(calc)
+		r, okR := parseAmount(rate)
+		if okB && okC && okR && math.Abs(round2(b*r/100)-c) > 0.005 {
+			add("BR-CO-17", fmt.Sprintf("VAT category tax amount (BT-117=%.2f) shall equal taxable amount (BT-116=%.2f) x rate (BT-119=%.2f%%)", c, b, r))
+		}
+		if okC {
+			vatTotal += c
+		}
+	}
+	// BR-CO-14: Invoice total VAT amount (BT-110) = sum of VAT category tax
+	// amounts (BT-117), when a breakdown is present.
+	if len(taxes) > 0 && sum != nil {
+		if tax, ok := parseAmount(sum.str("TaxTotalAmount")); ok && math.Abs(vatTotal-tax) > 0.005 {
+			add("BR-CO-14", fmt.Sprintf("Invoice total VAT (BT-110=%.2f) shall equal the sum of VAT breakdown tax amounts (%.2f)", tax, vatTotal))
+		}
+	}
+
+	// BR-CO-10 and BR-CO-13 assume the flat EN 16931 line model. The EXTENDED
+	// profile adds sub-invoice lines (a parent line rolls up its children, so a
+	// naive sum double-counts) and richer document-level allowance/charge
+	// structures; validating those correctly is deferred, so these two totals are
+	// checked only for the non-EXTENDED profiles here.
+	flatModel := profile != FacturXExtended
+
+	// BR-CO-10: Sum of Invoice line net amounts (BT-106) = sum of line net
+	// amounts (BT-131), when line items are present.
+	lines := tx.orNil().all("IncludedSupplyChainTradeLineItem")
+	if flatModel && len(lines) > 0 && sum != nil {
+		var lineSum float64
+		for _, li := range lines {
+			if v, ok := parseAmount(li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount")); ok {
+				lineSum += v
+			}
+		}
+		if lt, ok := parseAmount(sum.str("LineTotalAmount")); ok && math.Abs(round2(lineSum)-lt) > 0.005 {
+			add("BR-CO-10", fmt.Sprintf("Sum of Invoice line net amount (BT-106=%.2f) shall equal the sum of line net amounts (%.2f)", lt, lineSum))
+		}
+	}
+
+	// BR-CO-13: Invoice total without VAT (BT-109) = sum of line net amounts
+	// (BT-106) minus document allowances (BT-107) plus document charges (BT-108),
+	// when the line total is present.
+	if flatModel && sum != nil {
+		if lt, ok := parseAmount(sum.str("LineTotalAmount")); ok {
+			var allowances, charges float64
+			for _, ac := range settle.orNil().all("SpecifiedTradeAllowanceCharge") {
+				amt, ok := parseAmount(ac.str("ActualAmount"))
+				if !ok {
+					continue
+				}
+				if strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true") {
+					charges += amt
+				} else {
+					allowances += amt
+				}
+			}
+			if basis, ok := parseAmount(sum.str("TaxBasisTotalAmount")); ok &&
+				math.Abs(round2(lt-allowances+charges)-basis) > 0.005 {
+				add("BR-CO-13", fmt.Sprintf("Invoice total without VAT (BT-109=%.2f) shall equal line total (%.2f) - allowances (%.2f) + charges (%.2f)", basis, lt, allowances, charges))
+			}
+		}
+	}
+
 	return out
 }
+
+// round2 rounds to two decimal places, half away from zero.
+func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
 // orNil lets a possibly-nil node be traversed without panicking.
 func (n *ciiNode) orNil() *ciiNode {
