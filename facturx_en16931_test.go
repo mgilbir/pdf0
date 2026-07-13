@@ -93,6 +93,7 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 		{"bad type code", strings.Replace(validCII, "<TypeCode>380</TypeCode>", "<TypeCode>999</TypeCode>", 1), "BR-CL-05"},
 		{"bad country code", strings.Replace(validCII, "<CountryID>FR</CountryID>", "<CountryID>F</CountryID>", 1), "BR-CL-14"},
 		{"bad vat category", strings.Replace(validCII, "<CategoryCode>S</CategoryCode>", "<CategoryCode>X</CategoryCode>", 1), "BR-CL-17"},
+		{"bad unit code", strings.Replace(validCII, `<BilledQuantity unitCode="C62">1</BilledQuantity>`, `<BilledQuantity unitCode="ZZZ">1</BilledQuantity>`, 1), "BR-CL-23"},
 		{"too many decimals", strings.Replace(validCII, "<GrandTotalAmount>120.00</GrandTotalAmount>", "<GrandTotalAmount>120.001</GrandTotalAmount>", 1), "BR-DEC-17"},
 	}
 	for _, tc := range cases {
