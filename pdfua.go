@@ -247,7 +247,7 @@ func (d *Document) checkUAIdentifier(cat *Dictionary) []UAViolation {
 	if !ok {
 		return []UAViolation{{"5", "document has no XMP metadata (a PDF/UA identifier is required)", 0}}
 	}
-	xmp := decodeXMPToUTF8(stream.Data)
+	xmp := decodeXMPToUTF8(decodeContentStream(d, stream))
 	if !strings.Contains(xmp, "pdfuaid:part") {
 		return []UAViolation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
 	}
@@ -1155,7 +1155,7 @@ func (d *Document) checkUATitle(cat *Dictionary) []UAViolation {
 	if !ok {
 		return nil // absence of metadata is already reported by the identifier check
 	}
-	if !strings.Contains(decodeXMPToUTF8(stream.Data), "dc:title") {
+	if !strings.Contains(decodeXMPToUTF8(decodeContentStream(d, stream)), "dc:title") {
 		return []UAViolation{{"7.1", "XMP metadata has no document title (dc:title)", 0}}
 	}
 	return nil

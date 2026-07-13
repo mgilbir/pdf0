@@ -487,7 +487,11 @@ func checkMetadataStream(doc *Document, level PDFALevel) []ValidationError {
 		})
 	}
 
-	if stream.Dict.Get("Filter") != nil {
+	// ISO 19005-1 (PDF/A-1) 6.7.2 forbids a Filter on the document metadata
+	// stream; PDF/A-2 and PDF/A-3 removed that restriction (a permitted filter
+	// such as FlateDecode is allowed). veraPDF carries the PDMetadata Filter rule
+	// only in its PDF/A-1 profile.
+	if level == PDFA1b && stream.Dict.Get("Filter") != nil {
 		errs = append(errs, ValidationError{
 			Rule:    "6.7.2",
 			Level:   level,
@@ -2081,7 +2085,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		return nil
 	}
 
-	xmp := decodeXMPToUTF8(stream.Data)
+	xmp := decodeXMPToUTF8(decodeContentStream(doc, stream))
 	var errs []ValidationError
 
 	// Check pdfaid namespace URI
@@ -2823,7 +2827,7 @@ func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	xmp := decodeXMPToUTF8(stream.Data)
+	xmp := decodeXMPToUTF8(decodeContentStream(doc, stream))
 
 	var errs []ValidationError
 
