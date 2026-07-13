@@ -163,13 +163,25 @@ func TestValidatePDFA_MetadataStream(t *testing.T) {
 	})
 
 	t.Run("metadata with filter", func(t *testing.T) {
-		doc := NewPDFADocument(PDFA4)
-		metaStream := doc.Objects[3].Value.(*Stream)
-		metaStream.Dict.Set("Filter", Name("FlateDecode"))
-
-		errs := ValidatePDFA(doc, PDFA4)
-		if !hasRule(errs, "6.7.2") {
-			t.Error("expected 6.7.2 error for filtered metadata")
+		// A Filter on the metadata stream is forbidden only in PDF/A-1
+		// (ISO 19005-1 6.7.2); PDF/A-2/3/4 permit a permitted filter.
+		filterErr := func(level PDFALevel) bool {
+			doc := NewPDFADocument(level)
+			cat := doc.ResolveDict(doc.Trailer.Get("Root"))
+			ms := doc.Resolve(cat.Get("Metadata")).(*Stream)
+			ms.Dict.Set("Filter", Name("FlateDecode"))
+			for _, e := range ValidatePDFA(doc, level) {
+				if strings.Contains(e.Message, "must not have /Filter") {
+					return true
+				}
+			}
+			return false
+		}
+		if !filterErr(PDFA1b) {
+			t.Error("PDF/A-1b: expected a metadata /Filter error")
+		}
+		if filterErr(PDFA4) {
+			t.Error("PDF/A-4: a metadata /Filter must be permitted")
 		}
 	})
 }

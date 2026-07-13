@@ -748,7 +748,7 @@ func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	xmp := decodeXMPToUTF8(stream.Data)
+	xmp := decodeXMPToUTF8(decodeContentStream(doc, stream))
 	if xmp == "" {
 		return nil
 	}
