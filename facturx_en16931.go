@@ -376,8 +376,10 @@ func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXVio
 		qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity")
 		if qty == nil || strings.TrimSpace(qty.text) == "" {
 			add("BR-22", "Each Invoice line shall have an Invoiced quantity (BT-129)")
-		} else if qty.attr("unitCode") == "" {
+		} else if u := qty.attr("unitCode"); u == "" {
 			add("BR-23", "Each Invoice line shall have an Invoiced quantity unit of measure (BT-130)")
+		} else if !facturxUnitCodes[u] {
+			add("BR-CL-23", fmt.Sprintf("Invoiced quantity unit code (BT-130=%q) is not a valid UNECE Rec 20/21 code", u))
 		}
 		price := li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount")
 		if price == "" {
