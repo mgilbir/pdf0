@@ -85,6 +85,46 @@ type xmlNode struct {
 	Text     string
 }
 
+// xmpPropertyMaxBytes caps the size of an XMP packet that parseXMPProperties
+// will build a node tree for. Building the tree is O(n²): a large packet
+// produces hundreds of thousands of nodes, and its incremental construction
+// (millions of small allocations from streaming tokens) triggers thousands of
+// GC cycles, each rescanning the ever-growing live tree. A 14 MB packet took
+// ~37 s. Real-world XMP is tiny — the largest in the veraPDF corpus is 66 KB —
+// so this bound is orders of magnitude above any legitimate packet, and the
+// property checks are simply skipped for a pathological one (well-formedness is
+// still validated by streaming; see xmpWellFormed). It is a var, not a const,
+// so a test can lower it without a multi-megabyte fixture.
+var xmpPropertyMaxBytes = 2 << 20 // 2 MiB
+
+// xmpWellFormed streams an XMP packet and reports whether it is well-formed XML
+// and whether it contains a properly namespaced rdf:RDF element, WITHOUT
+// building a node tree. Well-formedness needs no tree — the streaming decoder
+// already validates tag structure as it goes — so this stays O(n) even on an
+// adversarially large packet, where parseXMLTree would blow up (see
+// xmpPropertyMaxBytes). wellFormed is false for an empty or non-element packet,
+// matching parseXMLTree's "no XML content" error.
+func xmpWellFormed(data []byte) (wellFormed, hasRDF bool) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.CharsetReader = func(_ string, in io.Reader) (io.Reader, error) { return in, nil }
+	sawElement := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return sawElement, hasRDF
+		}
+		if err != nil {
+			return false, hasRDF
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			sawElement = true
+			if se.Name.Space == nsRDF && se.Name.Local == "RDF" {
+				hasRDF = true
+			}
+		}
+	}
+}
+
 // parseXMLTree parses an XML document into an xmlNode tree.
 func parseXMLTree(data []byte) (*xmlNode, error) {
 	dec := xml.NewDecoder(bytes.NewReader(data))
@@ -156,6 +196,12 @@ func isNamespaceDecl(a xml.Attr) bool {
 // parseXMPProperties extracts all top-level properties from every
 // rdf:Description block in the packet.
 func parseXMPProperties(data []byte) ([]xmpProperty, error) {
+	// Bound the O(n²) tree build; a pathologically large packet is not parsed
+	// for properties (the caller treats this as "no properties to check", not a
+	// violation — its well-formedness is validated separately by streaming).
+	if len(data) > xmpPropertyMaxBytes {
+		return nil, fmt.Errorf("XMP packet too large to parse for properties (%d bytes)", len(data))
+	}
 	root, err := parseXMLTree(data)
 	if err != nil {
 		return nil, err
