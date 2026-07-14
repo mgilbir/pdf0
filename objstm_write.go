@@ -59,6 +59,14 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 	if !d.usedXRefStream {
 		return d.Objects, nil
 	}
+	// An encrypted document we could not decrypt is written back as a passthrough:
+	// each object still holds its original per-object-encrypted bytes. Packing
+	// those into a new object stream would be wrong — a reader does not apply
+	// per-object decryption to objects inside an /ObjStm — so leave every object
+	// individually addressable and let Write emit an all-uncompressed xref stream.
+	if (d.Encrypted || d.Trailer.Get("Encrypt") != nil) && d.security == nil {
+		return d.Objects, nil
+	}
 
 	encNum := -1
 	if d.security != nil {
