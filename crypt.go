@@ -541,9 +541,36 @@ func (h *stdSecurityHandler) encryptDictCopy(d *Dictionary, num, gen int) *Dicti
 // an /ObjStm container is itself an encrypted stream, while the objects inside
 // it are not separately encrypted.
 func (h *stdSecurityHandler) decryptDocument(doc *Document) {
+	// The /Encrypt dictionary's own strings (/O, /U, /Perms, …) are never
+	// encrypted and must not be decrypted. Skipping by object number alone is
+	// not enough: a malformed file can point several xref entries at the
+	// /Encrypt dictionary's byte offset, and Read shares one parsed value across
+	// those object numbers (bounding re-parse work — the duplicate-offset
+	// guard). Only one of those numbers is h.encryptObjNum, so decrypting an
+	// alias would mutate the shared /Encrypt dictionary in place and corrupt the
+	// key material (AES padding strips /O and /U from 32 to 16 bytes), leaving
+	// the rewritten file undecryptable. Skip the dictionary by pointer identity.
+	encryptDict := doc.ResolveDict(doc.Trailer.Get("Encrypt"))
+	// A parsed value shared by several object numbers (duplicate xref offsets)
+	// must be decrypted at most once: decryptDocument mutates streams and
+	// dictionaries in place, so visiting the same value under a second number
+	// would double-decrypt and corrupt it. seen tracks the mutable reference
+	// values already processed; it never matches in a well-formed file, where
+	// every object is a distinct value, so behaviour there is unchanged.
+	seen := map[any]bool{}
 	for num, iobj := range doc.Objects {
 		if num == h.encryptObjNum {
 			continue // the /Encrypt dictionary's strings are not encrypted
+		}
+		if d, ok := iobj.Value.(*Dictionary); ok && d == encryptDict {
+			continue // an alias of the /Encrypt dictionary at a shared offset
+		}
+		switch iobj.Value.(type) {
+		case *Stream, *Dictionary:
+			if seen[iobj.Value] {
+				continue
+			}
+			seen[iobj.Value] = true
 		}
 		gen := iobj.Generation
 		switch v := iobj.Value.(type) {
