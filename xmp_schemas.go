@@ -1149,9 +1149,14 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 
 	xmp := decodeXMPToUTF8(raw)
 	if xmp != "" {
-		if tree, err := parseXMLTree([]byte(xmp)); err != nil {
+		// Stream the packet rather than building a node tree: well-formedness and
+		// the presence of a properly namespaced rdf:RDF element are all that is
+		// needed here, and streaming stays linear on an adversarially large
+		// packet that would make tree-building blow up (see xmpPropertyMaxBytes).
+		wellFormed, hasRDF := xmpWellFormed([]byte(xmp))
+		if !wellFormed {
 			errs = append(errs, ValidationError{Rule: wfRule, Level: level, Message: "the XMP packet is not well-formed XML"})
-		} else if findRDF(tree) == nil {
+		} else if !hasRDF {
 			// The packet is well-formed XML but carries no properly namespaced
 			// rdf:RDF element — e.g. the RDF namespace prefix is undeclared.
 			// encoding/xml resolves a declared prefix to its URI, so an
