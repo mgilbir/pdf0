@@ -102,10 +102,15 @@ func TestStreamEndstreamInBinaryData(t *testing.T) {
 	}
 }
 
-// C11: encrypted documents are flagged and refuse to Write.
+// C11: an encrypted document is flagged, and one whose /Encrypt dictionary is
+// unresolvable refuses to Write — its encryption state is unknown, so the
+// content cannot be safely written back. (A document with a resolvable /Encrypt
+// that pdf0 simply cannot decrypt is instead written back as a verbatim
+// passthrough; see TestEncryptedPassthroughRoundTrip.)
 func TestEncryptedDocumentDetectedAndNotWritten(t *testing.T) {
 	base := buildMinimalPDF()
-	// Rebuild the minimal PDF with an /Encrypt entry in the trailer.
+	// Rebuild the minimal PDF with an /Encrypt entry in the trailer that points
+	// at a nonexistent object, so the /Encrypt dictionary does not resolve.
 	s := string(base)
 	s = strings.Replace(s, "<< /Size 4 /Root 1 0 R >>", "<< /Size 4 /Root 1 0 R /Encrypt 9 0 R >>", 1)
 	if s == string(base) {
@@ -120,7 +125,7 @@ func TestEncryptedDocumentDetectedAndNotWritten(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err == nil {
-		t.Error("expected Write to refuse an encrypted document")
+		t.Error("expected Write to refuse an encrypted document with an unresolvable /Encrypt")
 	}
 }
 

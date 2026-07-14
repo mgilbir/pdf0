@@ -436,13 +436,30 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 // without the original cross-reference layout would produce a file no
 // reader could decrypt.
 func (d *Document) Write(w io.Writer) error {
-	// An encrypted document can be written only when we hold the security
-	// handler (from decrypting it on Read): Write re-encrypts the content with
-	// the retained key and re-emits the preserved /Encrypt and /ID. Without a
-	// handler (an unsupported scheme, or a wrong password) the content is still
-	// encrypted, so refuse rather than write a file no reader could decrypt.
+	// An encrypted document with a security handler (decrypted on Read) is
+	// re-encrypted below with the retained key. Without a handler (an unsupported
+	// scheme or a non-empty password) the content is still in its original
+	// encrypted form in the model; it is written back verbatim under the
+	// preserved /Encrypt and /ID — a lossless passthrough that keeps a file we
+	// cannot decrypt round-trippable rather than losing it on save.
 	if (d.Encrypted || d.Trailer.Get("Encrypt") != nil) && d.security == nil {
-		return fmt.Errorf("writing encrypted documents is not supported")
+		// The passthrough is sound only when the content is known to be
+		// encrypted and the whole object model survived Read:
+		//   - The /Encrypt dictionary must resolve. If it does not, the
+		//     encryption state is unknown — the content in the model may be
+		//     plaintext — and writing it back under a dangling /Encrypt would
+		//     produce a file a reader would wrongly try to decrypt.
+		//   - No object stream may have failed to decode: its compressed objects
+		//     are locked inside the still-encrypted container and missing from
+		//     the model, so re-serialization would silently drop them.
+		// (buildWriteSet leaves the objects unpacked here, so their per-object
+		// encryption is preserved.)
+		if d.ResolveDict(d.Trailer.Get("Encrypt")) == nil {
+			return fmt.Errorf("cannot write encrypted document: its /Encrypt dictionary is unresolvable, so the encryption state is unknown")
+		}
+		if len(d.brokenObjStms) > 0 {
+			return fmt.Errorf("cannot write encrypted document: %d object stream(s) could not be decrypted, so some objects are missing", len(d.brokenObjStms))
+		}
 	}
 	// Object number 0 is reserved as the free-list head (ISO 32000-1 7.5.4); it
 	// cannot be represented as an in-use object. Refuse rather than silently
