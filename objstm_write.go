@@ -72,6 +72,14 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 	if d.security != nil {
 		encNum = d.security.encryptObjNum
 	}
+	// Objects reachable from the /Encrypt dictionary (e.g. an indirectly
+	// referenced /CF crypt-filter dictionary) must never be packed into an
+	// object stream. The security handler consults them while reading the file,
+	// BEFORE object streams are materialised, so an object packed into a
+	// container the handler cannot yet decode resolves to nothing — silently
+	// disabling stream decryption and losing every object in the (still
+	// encrypted) container on the next read.
+	encReachable := d.encryptReachable()
 	// An indirect /Length target must stay individually addressable so Write can
 	// correct its value after (possibly length-changing) encryption.
 	lengthTargets := map[int]bool{}
@@ -89,9 +97,10 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 		if num > maxObj {
 			maxObj = num
 		}
-		// Streams, non-zero generations, the /Encrypt dictionary, and indirect
-		// /Length targets cannot (or must not) be compressed.
-		if num == encNum || iobj.Generation != 0 || lengthTargets[num] {
+		// Streams, non-zero generations, the /Encrypt dictionary (and anything it
+		// references), and indirect /Length targets cannot (or must not) be
+		// compressed.
+		if num == encNum || encReachable[num] || iobj.Generation != 0 || lengthTargets[num] {
 			continue
 		}
 		if _, isStream := iobj.Value.(*Stream); isStream {
@@ -160,4 +169,50 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 		return d.Objects, nil // nothing packable after all
 	}
 	return out, type2
+}
+
+// encryptReachable returns the object numbers reachable from the /Encrypt
+// dictionary via indirect references (transitively, including the dictionary's
+// own object if it is indirect). The standard security handler reads these while
+// building itself — before object streams are materialised — so they must stay
+// out of object streams; see the call site in buildWriteSet. The common case (a
+// direct /Encrypt with a direct /CF) yields the empty set.
+func (d *Document) encryptReachable() map[int]bool {
+	enc := d.Trailer.Get("Encrypt")
+	if enc == nil {
+		return nil
+	}
+	reachable := map[int]bool{}
+	var stack []int
+	var walk func(o Object)
+	walk = func(o Object) {
+		switch v := o.(type) {
+		case IndirectRef:
+			if !reachable[v.Number] {
+				reachable[v.Number] = true
+				stack = append(stack, v.Number)
+			}
+		case *Dictionary:
+			for _, val := range v.Values {
+				walk(val)
+			}
+		case Array:
+			for _, e := range v {
+				walk(e)
+			}
+		case *Stream:
+			for _, val := range v.Dict.Values {
+				walk(val)
+			}
+		}
+	}
+	walk(enc)
+	for len(stack) > 0 {
+		num := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if iobj, ok := d.Objects[num]; ok {
+			walk(iobj.Value)
+		}
+	}
+	return reachable
 }
