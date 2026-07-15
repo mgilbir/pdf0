@@ -413,8 +413,8 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 	var out []*Dictionary
 	seenHT := map[*Dictionary]bool{}
 	seenC := map[*Dictionary]bool{}
-	var walk func(container *Dictionary, data []byte)
-	walk = func(container *Dictionary, data []byte) {
+	var walk func(container *Dictionary, data []byte, key *Stream)
+	walk = func(container *Dictionary, data []byte, key *Stream) {
 		if container == nil || seenC[container] || data == nil {
 			return
 		}
@@ -423,7 +423,7 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 		if res == nil {
 			return
 		}
-		used := contentUsedNames(data)
+		used := doc.contentUsedNamesCached(data, key)
 		gsNames := scanContentColorUsage(data).gsNames
 		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
 			for i, key := range gsDict.Keys {
@@ -447,14 +447,15 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 				}
 				if s, ok := doc.Resolve(xobj.Values[i]).(*Stream); ok {
 					if st, _ := s.Dict.Get("Subtype").(Name); st == "Form" {
-						walk(&s.Dict, decodeContentStream(doc, s))
+						walk(&s.Dict, decodeContentStream(doc, s), s)
 					}
 				}
 			}
 		}
 	}
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		walk(page.dict, getContentStreamData(doc, page.dict.Get("Contents")))
+		data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
+		walk(page.dict, data, key)
 	}
 	return out
 }
@@ -608,11 +609,11 @@ func checkInheritedPageXObject(doc *Document, level PDFALevel) []ValidationError
 	}
 	var errs []ValidationError
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data := getContentStreamData(doc, page.dict.Get("Contents"))
+		data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
 		if data == nil {
 			continue
 		}
-		used := contentUsedNames(data)
+		used := doc.contentUsedNamesCached(data, key)
 		if len(used.xobjects) == 0 {
 			continue
 		}
