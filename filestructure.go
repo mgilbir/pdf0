@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 	"unicode/utf8"
 )
@@ -265,16 +266,12 @@ func lastIndexToken(b []byte, kw string) int {
 	return -1
 }
 
+// sortInt64 sorts a slice of object byte offsets ascending. The offsets are
+// collected from a map (doc.Offsets) in random order, so an insertion sort was
+// quadratic: a 46 MB file with many objects spent ~30s here, dominating
+// validation. slices.Sort is O(n log n) and produces the same ordering.
 func sortInt64(a []int64) {
-	for i := 1; i < len(a); i++ {
-		key := a[i]
-		j := i - 1
-		for j >= 0 && a[j] > key {
-			a[j+1] = a[j]
-			j--
-		}
-		a[j+1] = key
-	}
+	slices.Sort(a)
 }
 
 func min64(a, b int64) int64 {
