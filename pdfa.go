@@ -4563,7 +4563,7 @@ func scanContentStreamForDeviceCS(doc *Document, stream *Stream, seen map[*Dicti
 	if seen[&stream.Dict] {
 		return
 	}
-	scanContainerForDeviceCS(doc, &stream.Dict, decodeContentStream(doc, stream), seen, usesRGB, usesCMYK, usesGray)
+	scanContainerForDeviceCS(doc, &stream.Dict, decodeContentStream(doc, stream), stream, seen, usesRGB, usesCMYK, usesGray)
 }
 
 func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
@@ -4571,10 +4571,11 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 		return
 	}
 	var data []byte
+	var key *Stream
 	if contentsRef := container.Get("Contents"); contentsRef != nil {
-		data = getContentStreamData(doc, contentsRef)
+		data, key = doc.contentBytesAndKey(contentsRef)
 	}
-	scanContainerForDeviceCS(doc, container, data, seen, usesRGB, usesCMYK, usesGray)
+	scanContainerForDeviceCS(doc, container, data, key, seen, usesRGB, usesCMYK, usesGray)
 }
 
 // scanContainerForDeviceCS scans one content container — a page (content
@@ -4586,7 +4587,7 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 // contribute (the corpus passes a DeviceCMYK form that no content stream
 // draws), so the resource walks below are gated on the names the content
 // actually uses.
-func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
+func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte, key *Stream, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
 	if seen[container] {
 		return
 	}
@@ -4610,7 +4611,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 		localCMYK = localCMYK || c
 		localGray = localGray || g
 	}
-	used := contentUsedNames(data)
+	used := doc.contentUsedNamesCached(data, key)
 
 	res := resolveResources(doc, container)
 	if res == nil {

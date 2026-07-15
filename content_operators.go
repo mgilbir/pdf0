@@ -77,8 +77,8 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 	// corpus passes an UnknownOperator in an uninvoked form).
 	seenContainer := map[*Dictionary]bool{}
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data := getContentStreamData(doc, page.dict.Get("Contents"))
-		walkExecutedContent(doc, page.dict, data, page.objNum, seenContainer, add)
+		data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
+		walkExecutedContent(doc, page.dict, data, key, page.objNum, seenContainer, add)
 	}
 
 	// Annotation appearance streams (their /AP /N) are executed content too:
@@ -156,7 +156,7 @@ func collectAppearanceStreams(doc *Document) []appearanceStream {
 
 // walkExecutedContent validates a content stream and recurses into the form
 // XObjects and tiling patterns it actually invokes.
-func walkExecutedContent(doc *Document, container *Dictionary, data []byte, objNum int, seen map[*Dictionary]bool, add func(string, int)) {
+func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key *Stream, objNum int, seen map[*Dictionary]bool, add func(string, int)) {
 	if container == nil || seen[container] {
 		return
 	}
@@ -168,7 +168,7 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, objN
 	if res == nil {
 		return
 	}
-	used := contentUsedNames(data)
+	used := doc.contentUsedNamesCached(data, key)
 	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
 		for i, key := range xobj.Keys {
 			if !used.xobjects[string(key)] {
@@ -188,7 +188,7 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, objN
 					if s.Dict.Get("PS") != nil {
 						add("a drawn form XObject dictionary contains a /PS entry", xnum)
 					}
-					walkExecutedContent(doc, &s.Dict, decodeContentStream(doc, s), xnum, seen, add)
+					walkExecutedContent(doc, &s.Dict, decodeContentStream(doc, s), s, xnum, seen, add)
 				}
 			}
 		}
@@ -199,7 +199,7 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, objN
 				continue
 			}
 			if s, ok := doc.Resolve(pat.Values[i]).(*Stream); ok {
-				walkExecutedContent(doc, &s.Dict, decodeContentStream(doc, s), i, seen, add)
+				walkExecutedContent(doc, &s.Dict, decodeContentStream(doc, s), s, i, seen, add)
 			}
 		}
 	}
@@ -399,9 +399,9 @@ func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
 		if p := pdfaOutputIntentProfile(doc, page.dict); p != nil {
 			oiProfile = p
 		}
-		data := getContentStreamData(doc, page.dict.Get("Contents"))
+		data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
 		blend := groupBlendProfile(doc, page.dict)
-		walkICCIdentity(doc, page.dict, data, page.objNum, oiProfile, blend, seenC, add)
+		walkICCIdentity(doc, page.dict, data, key, page.objNum, oiProfile, blend, seenC, add)
 	}
 	return errs
 }
@@ -427,7 +427,7 @@ func pdfaOutputIntentProfile(doc *Document, container *Dictionary) *Stream {
 	return nil
 }
 
-func walkICCIdentity(doc *Document, container *Dictionary, data []byte, objNum int, oi, blend *Stream, seen map[*Dictionary]bool, add func(string, int)) {
+func walkICCIdentity(doc *Document, container *Dictionary, data []byte, key *Stream, objNum int, oi, blend *Stream, seen map[*Dictionary]bool, add func(string, int)) {
 	if container == nil || seen[container] || data == nil {
 		return
 	}
@@ -462,10 +462,10 @@ func walkICCIdentity(doc *Document, container *Dictionary, data []byte, objNum i
 
 	// Recurse into invoked form XObjects, updating the blending profile when
 	// the form is an isolated transparency group.
-	used := contentUsedNames(data)
+	used := doc.contentUsedNamesCached(data, key)
 	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
-		for i, key := range xobj.Keys {
-			if !used.xobjects[string(key)] {
+		for i, xkey := range xobj.Keys {
+			if !used.xobjects[string(xkey)] {
 				continue
 			}
 			s, ok := doc.Resolve(xobj.Values[i]).(*Stream)
@@ -479,7 +479,7 @@ func walkICCIdentity(doc *Document, container *Dictionary, data []byte, objNum i
 			if gp := groupBlendProfile(doc, &s.Dict); gp != nil {
 				childBlend = gp
 			}
-			walkICCIdentity(doc, &s.Dict, decodeContentStream(doc, s), resolveObjNum(doc, xobj.Values[i]), oi, childBlend, seen, add)
+			walkICCIdentity(doc, &s.Dict, decodeContentStream(doc, s), s, resolveObjNum(doc, xobj.Values[i]), oi, childBlend, seen, add)
 		}
 	}
 }

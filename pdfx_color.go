@@ -41,10 +41,11 @@ func newDevColorScanner(doc *Document) *devColorScanner {
 // returns, computed with shared form/pattern work memoised.
 func (s *devColorScanner) pageDeviceUse(page *Dictionary) devUse {
 	var data []byte
+	var key *Stream
 	if c := page.Get("Contents"); c != nil {
-		data = getContentStreamData(s.doc, c)
+		data, key = s.doc.contentBytesAndKey(c)
 	}
-	u := s.container(page, data)
+	u := s.container(page, data, key)
 
 	// Annotation appearance streams contribute their own escaping usage.
 	if annots, ok := s.doc.Resolve(page.Get("Annots")).(Array); ok {
@@ -86,13 +87,13 @@ func (s *devColorScanner) pageDeviceUse(page *Dictionary) devUse {
 // device usage is masked by the container's own Default* spaces; usage from
 // invoked forms, tiling patterns and Type 3 glyphs bypasses that masking (it was
 // already masked in their own scope), matching scanContainerForDeviceCS.
-func (s *devColorScanner) container(c *Dictionary, data []byte) devUse {
+func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) devUse {
 	var local, nested devUse
 	if data != nil {
 		r, cc, g := scanStreamForDeviceOps(data)
 		local.rgb, local.cmyk, local.gray = r, cc, g
 	}
-	used := contentUsedNames(data)
+	used := s.doc.contentUsedNamesCached(data, key)
 
 	res := resolveResources(s.doc, c)
 	if res != nil {
@@ -151,7 +152,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte) devUse {
 					continue
 				}
 				if sub, _ := fd.Get("Subtype").(Name); sub == "Type3" {
-					nested.or(s.container(fd, nil)) // Type3 font resources, own Default* scope
+					nested.or(s.container(fd, nil, nil)) // Type3 font resources, own Default* scope
 					if cp := s.doc.ResolveDict(fd.Get("CharProcs")); cp != nil {
 						for _, cpv := range cp.Values {
 							if st, ok := s.doc.Resolve(cpv).(*Stream); ok {
@@ -190,7 +191,7 @@ func (s *devColorScanner) streamEscape(st *Stream, applyGroup bool) devUse {
 	}
 	s.inProg[st] = true
 
-	u := s.container(&st.Dict, decodeContentStream(s.doc, st))
+	u := s.container(&st.Dict, decodeContentStream(s.doc, st), st)
 	if applyGroup {
 		if g := s.doc.ResolveDict(st.Dict.Get("Group")); g != nil {
 			checkCSForDevice(s.doc, g.Get("CS"), &u.rgb, &u.cmyk, &u.gray)
