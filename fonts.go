@@ -1867,12 +1867,12 @@ func checkFontSubsetCompleteness(doc *Document, level PDFALevel) []ValidationErr
 			if !isIdentityEncoding(doc, fontDict) {
 				continue
 			}
-			present := cidSetBits(doc, cidSet)
+			present := decodeCIDSet(doc, cidSet)
 			missing := false
 			for _, s := range u.strings {
 				for i := 0; i+1 < len(s); i += 2 {
 					cid := int(s[i])<<8 | int(s[i+1])
-					if cid != 0 && !present[cid] {
+					if cid != 0 && !present.has(cid) {
 						missing = true
 					}
 				}
@@ -1937,19 +1937,33 @@ func parseCharSet(s string) map[string]bool {
 	return out
 }
 
-// cidSetBits decodes a CIDSet stream: bit i (MSB-first per byte) set means
-// CID i is present.
-func cidSetBits(doc *Document, s *Stream) map[int]bool {
-	out := make(map[int]bool)
-	data := decodeContentStream(doc, s)
-	for i, b := range data {
-		for bit := 0; bit < 8; bit++ {
-			if b&(0x80>>bit) != 0 {
-				out[i*8+bit] = true
-			}
+// cidSet is a decoded CIDSet stream: bit i (MSB-first within each byte) set
+// means CID i is present. Membership is tested directly against the bytes, so a
+// large — or maliciously inflated — CIDSet costs nothing beyond the bounded
+// decode. Materialising a set of every present CID could be hundreds of millions
+// of map entries (a 64 MB CIDSet holds 512 M bits), which a crafted file used to
+// turn into ~70s of validation.
+type cidSet []byte
+
+// has reports whether CID i is marked present.
+func (c cidSet) has(i int) bool {
+	b := i / 8
+	return b >= 0 && b < len(c) && c[b]&(0x80>>(uint(i)%8)) != 0
+}
+
+// empty reports whether no CID is marked present (an absent or all-zero set).
+func (c cidSet) empty() bool {
+	for _, b := range c {
+		if b != 0 {
+			return false
 		}
 	}
-	return out
+	return true
+}
+
+// decodeCIDSet decodes a CIDSet stream into a cidSet for membership testing.
+func decodeCIDSet(doc *Document, s *Stream) cidSet {
+	return cidSet(decodeContentStream(doc, s))
 }
 
 // checkCMapCIDLimit verifies that no character identifier defined by an
@@ -2105,7 +2119,7 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		if fp == nil {
 			continue
 		}
-		present := cidSetBits(doc, cidSet)
+		present := decodeCIDSet(doc, cidSet)
 		num := 0
 		if ir, ok := fontDict.Get("DescendantFonts").(Array); ok && len(ir) > 0 {
 			num = resolveObjNum(doc, ir[0])
@@ -2115,7 +2129,7 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		// emptiness is not reliably decidable from the program alone —
 		// CIDToGIDMap Identity fonts legitimately omit unused CIDs — so only
 		// emptiness is flagged here.)
-		if len(present) == 0 && fp.numGlyphs > 1 {
+		if present.empty() && fp.numGlyphs > 1 {
 			errs = append(errs, ValidationError{Rule: "6.3.5", Level: level,
 				Message: "CIDFont subset FontDescriptor contains an empty CIDSet stream", Object: num})
 			continue
@@ -2128,7 +2142,7 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		if fp.cidGIDs != nil {
 			// CFF CIDFont: the charset enumerates the CIDs actually present.
 			for cid := range fp.cidGIDs {
-				if cid != 0 && !present[cid] {
+				if cid != 0 && !present.has(cid) {
 					missing = true
 					break
 				}
@@ -2137,7 +2151,7 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 			// CIDFontType2 with an Identity map: CID == glyph index, so every
 			// present (non-empty) glyph must be listed.
 			for gid, ne := range fp.glyphNonEmpty {
-				if ne && !present[gid] {
+				if ne && !present.has(gid) {
 					missing = true
 					break
 				}
