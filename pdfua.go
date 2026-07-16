@@ -761,7 +761,7 @@ func (d *Document) checkCIDFontCIDSet(fontDict *Dictionary) []UAViolation {
 	if fp == nil || fp.glyphNonEmpty == nil {
 		return nil
 	}
-	present := cidSetBits(d, cidSet)
+	present := decodeCIDSet(d, cidSet)
 	for gid, nonEmpty := range fp.glyphNonEmpty {
 		if !nonEmpty || gid == 0 {
 			continue
@@ -769,7 +769,7 @@ func (d *Document) checkCIDFontCIDSet(fontDict *Dictionary) []UAViolation {
 		if gid < len(fp.componentGID) && fp.componentGID[gid] {
 			continue // outline serves only as a composite component
 		}
-		if !present[gid] {
+		if !present.has(gid) {
 			return []UAViolation{{"7.21.4.2", "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", d.dictObjNum(fontDict)}}
 		}
 	}
