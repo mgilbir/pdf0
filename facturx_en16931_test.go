@@ -60,7 +60,7 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 		xml     string
 		rule    string
 	}{
-		{"not CII", `<Foo/>`, "cii"},
+		{"not CII or UBL", `<Foo/>`, "syntax"},
 		{"missing spec id", strings.Replace(validCII, "<ID>urn:cen.eu:en16931:2017</ID>", "", 1), "BR-01"},
 		{"missing invoice number", strings.Replace(validCII, "<ID>INV-1</ID>", "", 1), "BR-02"},
 		{"missing issue date", strings.Replace(validCII, "<IssueDateTime><DateTimeString>20240101</DateTimeString></IssueDateTime>", "", 1), "BR-03"},

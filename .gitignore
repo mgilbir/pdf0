@@ -65,3 +65,5 @@ testdata/pdfvt/
 testdata/facturx/*.pdf
 testdata/facturx/.ok
 testdata/facturx-official/
+testdata/en16931-ubl/*.xml
+testdata/en16931-ubl/.ok

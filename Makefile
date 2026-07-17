@@ -87,3 +87,17 @@ $(FACTURX_DIR)/.ok: $(FACTURX_DIR)/sources.tsv $(FACTURX_DIR)/download.sh
 
 clean-facturx:
 	rm -f $(FACTURX_DIR)/*.pdf $(FACTURX_DIR)/.ok
+
+# EN 16931 UBL example invoices (CEN TC 434 eInvoicing-EN16931; OpenPEPPOL
+# peppol-bis-invoice-3) used as the UBL oracle. Downloaded into
+# testdata/en16931-ubl (gitignored); manifest and downloader are committed.
+UBL_DIR := testdata/en16931-ubl
+
+en16931-ubl: $(UBL_DIR)/.ok
+
+$(UBL_DIR)/.ok: $(UBL_DIR)/sources.tsv $(UBL_DIR)/download.sh
+	bash $(UBL_DIR)/download.sh
+	touch $@
+
+clean-en16931-ubl:
+	rm -f $(UBL_DIR)/*.xml $(UBL_DIR)/.ok
