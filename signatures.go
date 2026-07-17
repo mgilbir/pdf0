@@ -21,12 +21,31 @@ type SignatureResult struct {
 	Err                 error  // why verification failed, if it did
 }
 
-// CMS / PKCS#7 object identifiers (RFC 5652).
+// CMS / PKCS#7 object identifiers (RFC 5652) and the CAdES/ESS attributes PAdES
+// relies on (RFC 5035, ETSI EN 319 122).
 var (
 	oidData          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
 	oidContentType   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 3}
 	oidMessageDigest = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
+	// ESS signing-certificate (v1: SHA-1) and v2 (SHA-256+): the CAdES-BES
+	// attribute binding the signer certificate into the signed attributes.
+	oidSigningCertificate   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 12}
+	oidSigningCertificateV2 = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 47}
+	// signature-timestamp: the unsigned attribute carrying a B-T timestamp token.
+	oidSignatureTimeStamp = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 14}
 )
+
+// essCertIDv2 is RFC 5035 ESSCertIDv2 with the default (SHA-256) hash algorithm
+// omitted: just the certificate hash. issuerSerial is optional and omitted.
+type essCertIDv2 struct {
+	CertHash []byte // OCTET STRING: hash of the certificate DER
+}
+
+// signingCertificateV2 is RFC 5035 SigningCertificateV2 (the policies field
+// omitted).
+type signingCertificateV2 struct {
+	Certs []essCertIDv2
+}
 
 // VerifySignatures verifies every signature in the document against the original
 // file bytes. For each it recomputes the digest over the signed /ByteRange,
@@ -283,7 +302,20 @@ func buildSignedData(cert *x509.Certificate, key crypto.Signer, content []byte) 
 	if err != nil {
 		return nil, err
 	}
-	attrsSet := derSet([][]byte{ctAttr, mdAttr}) // SET OF, DER-sorted
+
+	// signing-certificate-v2 (CAdES-BES): bind the signer certificate into the
+	// signed attributes so the signature is PAdES-B-B conformant.
+	ch := hashFn.New()
+	ch.Write(cert.Raw)
+	scVal, err := asn1.Marshal(signingCertificateV2{Certs: []essCertIDv2{{CertHash: ch.Sum(nil)}}})
+	if err != nil {
+		return nil, err
+	}
+	scAttr, err := marshalAttribute(oidSigningCertificateV2, scVal)
+	if err != nil {
+		return nil, err
+	}
+	attrsSet := derSet([][]byte{ctAttr, mdAttr, scAttr}) // SET OF, DER-sorted
 
 	// The signature is over the attributes encoded as SET (0x31).
 	ah := hashFn.New()
