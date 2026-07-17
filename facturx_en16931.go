@@ -162,16 +162,16 @@ func mapCII(root *ciiNode) *en16931Invoice {
 	sum := settle.orNil().child("SpecifiedTradeSettlementHeaderMonetarySummation")
 
 	inv := &en16931Invoice{
-		specID:        root.str("ExchangedDocumentContext", "GuidelineSpecifiedDocumentContextParameter", "ID"),
-		number:        doc.orNil().str("ID"),
-		issueDate:     doc.orNil().str("IssueDateTime", "DateTimeString"),
-		typeCode:      doc.orNil().str("TypeCode"),
-		currency:      settle.orNil().str("InvoiceCurrencyCode"),
-		sellerName:    agr.orNil().str("SellerTradeParty", "Name"),
-		buyerName:     agr.orNil().str("BuyerTradeParty", "Name"),
-		sellerCountry: agr.orNil().str("SellerTradeParty", "PostalTradeAddress", "CountryID"),
-		sellerCity:    agr.orNil().str("SellerTradeParty", "PostalTradeAddress", "CityName"),
-		buyerCountry:  agr.orNil().str("BuyerTradeParty", "PostalTradeAddress", "CountryID"),
+		specID:               root.str("ExchangedDocumentContext", "GuidelineSpecifiedDocumentContextParameter", "ID"),
+		number:               doc.orNil().str("ID"),
+		issueDate:            doc.orNil().str("IssueDateTime", "DateTimeString"),
+		typeCode:             doc.orNil().str("TypeCode"),
+		currency:             settle.orNil().str("InvoiceCurrencyCode"),
+		sellerName:           agr.orNil().str("SellerTradeParty", "Name"),
+		buyerName:            agr.orNil().str("BuyerTradeParty", "Name"),
+		sellerCountry:        agr.orNil().str("SellerTradeParty", "PostalTradeAddress", "CountryID"),
+		sellerAddressPresent: agr.orNil().child("SellerTradeParty", "PostalTradeAddress") != nil,
+		buyerCountry:         agr.orNil().str("BuyerTradeParty", "PostalTradeAddress", "CountryID"),
 	}
 	if sum != nil {
 		inv.hasTotals = true
@@ -248,20 +248,6 @@ var facturxVATCategories = map[string]bool{
 	"G": true, "O": true, "L": true, "M": true,
 }
 
-// facturxTypeCodes is the EN 16931 permitted subset of UNTDID 1001 invoice type
-// codes for BT-3.
-var facturxTypeCodes = map[string]bool{
-	"71": true, "80": true, "82": true, "84": true, "102": true, "130": true,
-	"202": true, "203": true, "204": true, "211": true, "218": true, "219": true,
-	"261": true, "262": true, "295": true, "296": true, "308": true, "325": true,
-	"326": true, "331": true, "380": true, "381": true, "382": true, "383": true,
-	"384": true, "385": true, "386": true, "387": true, "388": true, "389": true,
-	"390": true, "393": true, "394": true, "395": true, "456": true, "457": true,
-	"458": true, "527": true, "575": true, "623": true, "633": true, "751": true,
-	"780": true, "817": true, "870": true, "875": true, "876": true, "877": true,
-	"935": true,
-}
-
 // orNil lets a possibly-nil node be traversed without panicking.
 func (n *ciiNode) orNil() *ciiNode {
 	if n == nil {
@@ -311,11 +297,11 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		currency:  root.str("DocumentCurrencyCode"),
 		// BT-27/BT-44 bind to the legal registration name; some producers carry
 		// the name only in cac:PartyName, so fall back to it.
-		sellerName:    firstNonEmpty(seller.str("PartyLegalEntity", "RegistrationName"), seller.str("PartyName", "Name")),
-		buyerName:     firstNonEmpty(buyer.str("PartyLegalEntity", "RegistrationName"), buyer.str("PartyName", "Name")),
-		sellerCountry: seller.str("PostalAddress", "Country", "IdentificationCode"),
-		sellerCity:    seller.str("PostalAddress", "CityName"),
-		buyerCountry:  buyer.str("PostalAddress", "Country", "IdentificationCode"),
+		sellerName:           firstNonEmpty(seller.str("PartyLegalEntity", "RegistrationName"), seller.str("PartyName", "Name")),
+		buyerName:            firstNonEmpty(buyer.str("PartyLegalEntity", "RegistrationName"), buyer.str("PartyName", "Name")),
+		sellerCountry:        seller.str("PostalAddress", "Country", "IdentificationCode"),
+		sellerAddressPresent: seller.child("PostalAddress") != nil,
+		buyerCountry:         buyer.str("PostalAddress", "Country", "IdentificationCode"),
 	}
 	if total != nil {
 		inv.hasTotals = true

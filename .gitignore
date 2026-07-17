@@ -67,3 +67,6 @@ testdata/facturx/.ok
 testdata/facturx-official/
 testdata/en16931-ubl/*.xml
 testdata/en16931-ubl/.ok
+# CEN/TC 434 EN 16931 supporting artefacts (Schematron, code lists, unit tests)
+# cloned via `make en16931-artefacts` as a differential oracle; not committed.
+testdata/en16931-artefacts/
