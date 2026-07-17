@@ -153,6 +153,61 @@ func parseEN16931(xmlData []byte) (*en16931Invoice, error) {
 	return nil, fmt.Errorf("the invoice XML root %q is neither a CrossIndustryInvoice (CII) nor a UBL Invoice/CreditNote", root.name)
 }
 
+// ciiHasVATReg reports whether a CII trade party carries a VAT tax registration
+// (SpecifiedTaxRegistration whose ID scheme is "VA").
+func ciiHasVATReg(p *ciiNode) bool {
+	if p == nil {
+		return false
+	}
+	for _, r := range p.all("SpecifiedTaxRegistration") {
+		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && strings.EqualFold(id.attr("schemeID"), "VA") {
+			return true
+		}
+	}
+	return false
+}
+
+// ciiHasOtherReg reports whether a CII party carries a non-VAT tax registration.
+func ciiHasOtherReg(p *ciiNode) bool {
+	if p == nil {
+		return false
+	}
+	for _, r := range p.all("SpecifiedTaxRegistration") {
+		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && !strings.EqualFold(id.attr("schemeID"), "VA") {
+			return true
+		}
+	}
+	return false
+}
+
+// ublHasVATScheme reports whether a UBL party carries a VAT PartyTaxScheme with a
+// company identifier.
+func ublHasVATScheme(p *ciiNode) bool {
+	if p == nil {
+		return false
+	}
+	for _, pts := range p.all("PartyTaxScheme") {
+		if pts.str("CompanyID") != "" && strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
+			return true
+		}
+	}
+	return false
+}
+
+// ublHasOtherScheme reports whether a UBL party carries a non-VAT PartyTaxScheme
+// company identifier.
+func ublHasOtherScheme(p *ciiNode) bool {
+	if p == nil {
+		return false
+	}
+	for _, pts := range p.all("PartyTaxScheme") {
+		if pts.str("CompanyID") != "" && !strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
+			return true
+		}
+	}
+	return false
+}
+
 // mapCII extracts the EN 16931 business terms from a Cross Industry Invoice tree.
 func mapCII(root *ciiNode) *en16931Invoice {
 	doc := root.child("ExchangedDocument")
@@ -172,47 +227,75 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		sellerCountry:        agr.orNil().str("SellerTradeParty", "PostalTradeAddress", "CountryID"),
 		sellerAddressPresent: agr.orNil().child("SellerTradeParty", "PostalTradeAddress") != nil,
 		buyerCountry:         agr.orNil().str("BuyerTradeParty", "PostalTradeAddress", "CountryID"),
+		buyerAddressPresent:  agr.orNil().child("BuyerTradeParty", "PostalTradeAddress") != nil,
+		sellerVATID:          ciiHasVATReg(agr.orNil().child("SellerTradeParty")),
+		sellerTaxReg:         ciiHasOtherReg(agr.orNil().child("SellerTradeParty")),
+		taxRepVATID:          ciiHasVATReg(agr.orNil().child("SellerTaxRepresentativeTradeParty")),
+		buyerVATID:           ciiHasVATReg(agr.orNil().child("BuyerTradeParty")),
+		buyerLegalReg:        agr.orNil().str("BuyerTradeParty", "SpecifiedLegalOrganization", "ID") != "",
+		sellerEndpointScheme: agr.orNil().child("SellerTradeParty", "URIUniversalCommunication", "URIID").attr("schemeID"),
+		buyerEndpointScheme:  agr.orNil().child("BuyerTradeParty", "URIUniversalCommunication", "URIID").attr("schemeID"),
+	}
+	for _, pm := range settle.orNil().all("SpecifiedTradeSettlementPaymentMeans") {
+		if tc := pm.str("TypeCode"); tc != "" {
+			inv.paymentMeans = append(inv.paymentMeans, tc)
+		}
 	}
 	if sum != nil {
 		inv.hasTotals = true
 		inv.totals = monetaryTotals{
-			lineTotal:      sum.str("LineTotalAmount"),
-			allowanceTotal: sum.str("AllowanceTotalAmount"),
-			chargeTotal:    sum.str("ChargeTotalAmount"),
-			taxBasisTotal:  sum.str("TaxBasisTotalAmount"),
-			taxTotal:       sum.str("TaxTotalAmount"),
-			grandTotal:     sum.str("GrandTotalAmount"),
-			duePayable:     sum.str("DuePayableAmount"),
+			lineTotal:       sum.str("LineTotalAmount"),
+			allowanceTotal:  sum.str("AllowanceTotalAmount"),
+			chargeTotal:     sum.str("ChargeTotalAmount"),
+			taxBasisTotal:   sum.str("TaxBasisTotalAmount"),
+			taxTotal:        sum.str("TaxTotalAmount"),
+			grandTotal:      sum.str("GrandTotalAmount"),
+			paidAmount:      sum.str("TotalPrepaidAmount"),
+			payableRounding: sum.str("RoundingAmount"),
+			duePayable:      sum.str("DuePayableAmount"),
 		}
 	}
 	for _, tt := range settle.orNil().all("ApplicableTradeTax") {
 		inv.vatBreakdowns = append(inv.vatBreakdowns, vatBreakdown{
-			basis:     tt.str("BasisAmount"),
-			calc:      tt.str("CalculatedAmount"),
-			category:  tt.str("CategoryCode"),
-			rate:      tt.str("RateApplicablePercent"),
-			hasReason: tt.str("ExemptionReason") != "" || tt.str("ExemptionReasonCode") != "",
+			basis:      tt.str("BasisAmount"),
+			calc:       tt.str("CalculatedAmount"),
+			category:   tt.str("CategoryCode"),
+			rate:       tt.str("RateApplicablePercent"),
+			hasReason:  tt.str("ExemptionReason") != "" || tt.str("ExemptionReasonCode") != "",
+			reasonCode: tt.str("ExemptionReasonCode"),
 		})
 	}
 	for _, ac := range settle.orNil().all("SpecifiedTradeAllowanceCharge") {
 		inv.allowCharges = append(inv.allowCharges, docAllowanceCharge{
-			amount:    ac.str("ActualAmount"),
-			category:  ac.str("CategoryTradeTax", "CategoryCode"),
-			hasReason: ac.str("Reason") != "" || ac.str("ReasonCode") != "",
-			isCharge:  strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true"),
+			amount:     ac.str("ActualAmount"),
+			category:   ac.str("CategoryTradeTax", "CategoryCode"),
+			rate:       ac.str("CategoryTradeTax", "RateApplicablePercent"),
+			hasReason:  ac.str("Reason") != "" || ac.str("ReasonCode") != "",
+			reasonCode: ac.str("ReasonCode"),
+			isCharge:   strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true"),
 		})
 	}
 	for _, li := range tx.orNil().all("IncludedSupplyChainTradeLineItem") {
 		line := invoiceLine{
-			lineID:       li.str("AssociatedDocumentLineDocument", "LineID"),
-			parentLineID: li.str("AssociatedDocumentLineDocument", "ParentLineID"),
-			itemName:     li.str("SpecifiedTradeProduct", "Name"),
-			netAmount:    li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount"),
-			price:        li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount"),
+			lineID:        li.str("AssociatedDocumentLineDocument", "LineID"),
+			parentLineID:  li.str("AssociatedDocumentLineDocument", "ParentLineID"),
+			itemName:      li.str("SpecifiedTradeProduct", "Name"),
+			netAmount:     li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount"),
+			price:         li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount"),
+			vatCategory:   li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "CategoryCode"),
+			vatRate:       li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "RateApplicablePercent"),
+			originCountry: li.str("SpecifiedTradeProduct", "OriginTradeCountry", "ID"),
 		}
 		if qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity"); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
 			line.unitCode = qty.attr("unitCode")
+		}
+		for _, ac := range li.orNil().child("SpecifiedLineTradeSettlement").orNil().all("SpecifiedTradeAllowanceCharge") {
+			line.allowCharges = append(line.allowCharges, lineAllowanceCharge{
+				amount:    ac.str("ActualAmount"),
+				hasReason: ac.str("Reason") != "" || ac.str("ReasonCode") != "",
+				isCharge:  strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true"),
+			})
 		}
 		inv.lines = append(inv.lines, line)
 	}
@@ -240,12 +323,6 @@ func isUpperAlpha(s string, n int) bool {
 		}
 	}
 	return true
-}
-
-// facturxVATCategories is the UNCL 5305 VAT category code subset used by EN 16931.
-var facturxVATCategories = map[string]bool{
-	"S": true, "Z": true, "E": true, "AE": true, "K": true,
-	"G": true, "O": true, "L": true, "M": true,
 }
 
 // orNil lets a possibly-nil node be traversed without panicking.
@@ -302,46 +379,77 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		sellerCountry:        seller.str("PostalAddress", "Country", "IdentificationCode"),
 		sellerAddressPresent: seller.child("PostalAddress") != nil,
 		buyerCountry:         buyer.str("PostalAddress", "Country", "IdentificationCode"),
+		buyerAddressPresent:  buyer.child("PostalAddress") != nil,
+		sellerVATID:          ublHasVATScheme(seller),
+		sellerTaxReg:         ublHasOtherScheme(seller),
+		taxRepVATID:          ublHasVATScheme(root.child("TaxRepresentativeParty").orNil()),
+		buyerVATID:           ublHasVATScheme(buyer),
+		buyerLegalReg:        buyer.str("PartyLegalEntity", "CompanyID") != "",
+		sellerEndpointScheme: seller.child("EndpointID").attr("schemeID"),
+		buyerEndpointScheme:  buyer.child("EndpointID").attr("schemeID"),
+	}
+	for _, pm := range root.all("PaymentMeans") {
+		if code := pm.str("PaymentMeansCode"); code != "" {
+			inv.paymentMeans = append(inv.paymentMeans, code)
+		}
 	}
 	if total != nil {
 		inv.hasTotals = true
 		inv.totals = monetaryTotals{
-			lineTotal:      total.str("LineExtensionAmount"),
-			allowanceTotal: total.str("AllowanceTotalAmount"),
-			chargeTotal:    total.str("ChargeTotalAmount"),
-			taxBasisTotal:  total.str("TaxExclusiveAmount"),
-			taxTotal:       taxTotal.str("TaxAmount"), // BT-110: TaxTotal's direct amount
-			grandTotal:     total.str("TaxInclusiveAmount"),
-			duePayable:     total.str("PayableAmount"),
+			lineTotal:       total.str("LineExtensionAmount"),
+			allowanceTotal:  total.str("AllowanceTotalAmount"),
+			chargeTotal:     total.str("ChargeTotalAmount"),
+			taxBasisTotal:   total.str("TaxExclusiveAmount"),
+			taxTotal:        taxTotal.str("TaxAmount"), // BT-110: TaxTotal's direct amount
+			grandTotal:      total.str("TaxInclusiveAmount"),
+			paidAmount:      total.str("PrepaidAmount"),
+			payableRounding: total.str("PayableRoundingAmount"),
+			duePayable:      total.str("PayableAmount"),
 		}
 	}
+	// The Invoice total VAT amount (BT-110) lives in TaxTotal, independent of the
+	// document monetary summation, so read it even without a LegalMonetaryTotal.
+	inv.totals.taxTotal = taxTotal.str("TaxAmount")
 	for _, ts := range taxTotal.all("TaxSubtotal") {
 		inv.vatBreakdowns = append(inv.vatBreakdowns, vatBreakdown{
-			basis:     ts.str("TaxableAmount"),
-			calc:      ts.str("TaxAmount"),
-			category:  ts.str("TaxCategory", "ID"),
-			rate:      ts.str("TaxCategory", "Percent"),
-			hasReason: ts.str("TaxCategory", "TaxExemptionReason") != "" || ts.str("TaxCategory", "TaxExemptionReasonCode") != "",
+			basis:      ts.str("TaxableAmount"),
+			calc:       ts.str("TaxAmount"),
+			category:   ts.str("TaxCategory", "ID"),
+			rate:       ts.str("TaxCategory", "Percent"),
+			hasReason:  ts.str("TaxCategory", "TaxExemptionReason") != "" || ts.str("TaxCategory", "TaxExemptionReasonCode") != "",
+			reasonCode: ts.str("TaxCategory", "TaxExemptionReasonCode"),
 		})
 	}
 	for _, ac := range root.all("AllowanceCharge") {
 		inv.allowCharges = append(inv.allowCharges, docAllowanceCharge{
-			amount:    ac.str("Amount"),
-			category:  ac.str("TaxCategory", "ID"),
-			hasReason: ac.str("AllowanceChargeReason") != "" || ac.str("AllowanceChargeReasonCode") != "",
-			isCharge:  strings.EqualFold(ac.str("ChargeIndicator"), "true"),
+			amount:     ac.str("Amount"),
+			category:   ac.str("TaxCategory", "ID"),
+			rate:       ac.str("TaxCategory", "Percent"),
+			hasReason:  ac.str("AllowanceChargeReason") != "" || ac.str("AllowanceChargeReasonCode") != "",
+			reasonCode: ac.str("AllowanceChargeReasonCode"),
+			isCharge:   strings.EqualFold(ac.str("ChargeIndicator"), "true"),
 		})
 	}
 	for _, li := range root.all(lineName) {
 		line := invoiceLine{
-			lineID:    li.str("ID"),
-			itemName:  li.str("Item", "Name"),
-			netAmount: li.str("LineExtensionAmount"),
-			price:     li.str("Price", "PriceAmount"),
+			lineID:        li.str("ID"),
+			itemName:      li.str("Item", "Name"),
+			netAmount:     li.str("LineExtensionAmount"),
+			price:         li.str("Price", "PriceAmount"),
+			vatCategory:   li.str("Item", "ClassifiedTaxCategory", "ID"),
+			vatRate:       li.str("Item", "ClassifiedTaxCategory", "Percent"),
+			originCountry: li.str("Item", "OriginCountry", "IdentificationCode"),
 		}
 		if qty := li.child(qtyName); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
 			line.unitCode = qty.attr("unitCode")
+		}
+		for _, ac := range li.all("AllowanceCharge") {
+			line.allowCharges = append(line.allowCharges, lineAllowanceCharge{
+				amount:    ac.str("Amount"),
+				hasReason: ac.str("AllowanceChargeReason") != "" || ac.str("AllowanceChargeReasonCode") != "",
+				isCharge:  strings.EqualFold(ac.str("ChargeIndicator"), "true"),
+			})
 		}
 		inv.lines = append(inv.lines, line)
 	}

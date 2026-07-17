@@ -70,3 +70,9 @@ testdata/en16931-ubl/.ok
 # CEN/TC 434 EN 16931 supporting artefacts (Schematron, code lists, unit tests)
 # cloned via `make en16931-artefacts` as a differential oracle; not committed.
 testdata/en16931-artefacts/
+# Official CEN/TC 434 EN 16931 code lists (genericode bundle + EAS/VATEX xlsx)
+# fetched via `make en16931-codelists`; the committed Go tables are generated
+# from them. download.sh and gen.py are committed; the data is not.
+testdata/en16931-codelists/*.zip
+testdata/en16931-codelists/*.xlsx
+testdata/en16931-codelists/genericode/
