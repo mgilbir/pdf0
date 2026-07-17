@@ -74,15 +74,24 @@ type docAllowanceCharge struct {
 }
 
 type invoiceLine struct {
-	lineID       string // BT-126 Invoice line identifier
-	parentLineID string // EXTENDED sub-invoice-line parent reference
-	itemName     string // BT-153 Item name
-	netAmount    string // BT-131 Invoice line net amount
-	quantity     string // BT-129 Invoiced quantity (trimmed; "" if absent/empty)
-	unitCode     string // BT-130 Invoiced quantity unit of measure
-	price        string // BT-146 Item net price
-	vatCategory  string // BT-151 Invoiced item VAT category code
-	vatRate      string // BT-152 Invoiced item VAT rate ("" if absent)
+	lineID        string // BT-126 Invoice line identifier
+	parentLineID  string // EXTENDED sub-invoice-line parent reference
+	itemName      string // BT-153 Item name
+	netAmount     string // BT-131 Invoice line net amount
+	quantity      string // BT-129 Invoiced quantity (trimmed; "" if absent/empty)
+	unitCode      string // BT-130 Invoiced quantity unit of measure
+	price         string // BT-146 Item net price
+	vatCategory   string // BT-151 Invoiced item VAT category code
+	vatRate       string // BT-152 Invoiced item VAT rate ("" if absent)
+	originCountry string // BT-159 Item country of origin
+	allowCharges  []lineAllowanceCharge
+}
+
+// lineAllowanceCharge is an Invoice line allowance (BG-27) or charge (BG-28).
+type lineAllowanceCharge struct {
+	amount    string // BT-136 allowance / BT-141 charge amount
+	hasReason bool   // BT-139/BT-140 or BT-144/BT-145 present
+	isCharge  bool   // true = charge (BG-28); false = allowance (BG-27)
 }
 
 // validateEN16931 applies the EN 16931 core business rules to a mapped invoice.
@@ -148,11 +157,20 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	if tc := inv.typeCode; tc != "" && !en16931TypeCodes[tc] {
 		add("BR-CL-01", fmt.Sprintf("Invoice type code (BT-3=%q) is not a permitted UNTDID 1001 value", tc))
 	}
-	if c := inv.sellerCountry; c != "" && !en16931Countries[c] {
-		add("BR-CL-14", fmt.Sprintf("Seller country code (BT-40=%q) shall be a valid ISO 3166-1 code", c))
+	// BR-CL-14 covers every postal-address country code (a cac:Country); BR-CL-15
+	// is the Item country of origin (BT-159, a cac:OriginCountry).
+	for _, c := range []struct{ term, val string }{
+		{"Seller country code (BT-40)", inv.sellerCountry},
+		{"Buyer country code (BT-55)", inv.buyerCountry},
+	} {
+		if c.val != "" && !en16931Countries[c.val] {
+			add("BR-CL-14", fmt.Sprintf("%s=%q shall be a valid ISO 3166-1 code", c.term, c.val))
+		}
 	}
-	if c := inv.buyerCountry; c != "" && !en16931Countries[c] {
-		add("BR-CL-15", fmt.Sprintf("Buyer country code (BT-55=%q) shall be a valid ISO 3166-1 code", c))
+	for _, li := range inv.lines {
+		if oc := li.originCountry; oc != "" && !en16931Countries[oc] {
+			add("BR-CL-15", fmt.Sprintf("Item country of origin (BT-159=%q) shall be a valid ISO 3166-1 code", oc))
+		}
 	}
 
 	// Decimals (BR-DEC-*): monetary amounts shall have at most two decimal places.
@@ -237,7 +255,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	validateVATCategories(inv, add)
 	// BR-CO-14: Invoice total VAT amount (BT-110) = sum of VAT category tax
 	// amounts (BT-117), when a breakdown is present.
-	if len(inv.vatBreakdowns) > 0 && inv.hasTotals {
+	if len(inv.vatBreakdowns) > 0 {
 		if tax, ok := parseAmount(inv.totals.taxTotal); ok && math.Abs(vatTotal-tax) > 0.005 {
 			add("BR-CO-14", fmt.Sprintf("Invoice total VAT (BT-110=%.2f) shall equal the sum of VAT breakdown tax amounts (%.2f)", tax, vatTotal))
 		}
@@ -307,6 +325,30 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			add("BR-26", "Each Invoice line shall have an Item net price (BT-146)")
 		} else if p, ok := parseAmount(li.price); ok && p < 0 {
 			add("BR-27", "The Item net price (BT-146) shall not be negative")
+		}
+		// Invoice line allowances (BG-27) and charges (BG-28).
+		for _, ac := range li.allowCharges {
+			if ac.isCharge {
+				if ac.amount == "" {
+					add("BR-43", "Each Invoice line charge (BG-28) shall have an Invoice line charge amount (BT-141)")
+				} else {
+					dec("BR-DEC-27", "Invoice line charge amount (BT-141)", ac.amount)
+				}
+				if !ac.hasReason {
+					add("BR-44", "Each Invoice line charge (BG-28) shall have an Invoice line charge reason (BT-144) or reason code (BT-145)")
+					add("BR-CO-24", "Each Invoice line charge (BG-28) shall contain an Invoice line charge reason (BT-144) or reason code (BT-145)")
+				}
+			} else {
+				if ac.amount == "" {
+					add("BR-41", "Each Invoice line allowance (BG-27) shall have an Invoice line allowance amount (BT-136)")
+				} else {
+					dec("BR-DEC-24", "Invoice line allowance amount (BT-136)", ac.amount)
+				}
+				if !ac.hasReason {
+					add("BR-42", "Each Invoice line allowance (BG-27) shall have an Invoice line allowance reason (BT-139) or reason code (BT-140)")
+					add("BR-CO-23", "Each Invoice line allowance (BG-27) shall contain an Invoice line allowance reason (BT-139) or reason code (BT-140)")
+				}
+			}
 		}
 	}
 

@@ -268,17 +268,25 @@ func mapCII(root *ciiNode) *en16931Invoice {
 	}
 	for _, li := range tx.orNil().all("IncludedSupplyChainTradeLineItem") {
 		line := invoiceLine{
-			lineID:       li.str("AssociatedDocumentLineDocument", "LineID"),
-			parentLineID: li.str("AssociatedDocumentLineDocument", "ParentLineID"),
-			itemName:     li.str("SpecifiedTradeProduct", "Name"),
-			netAmount:    li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount"),
-			price:        li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount"),
-			vatCategory:  li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "CategoryCode"),
-			vatRate:      li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "RateApplicablePercent"),
+			lineID:        li.str("AssociatedDocumentLineDocument", "LineID"),
+			parentLineID:  li.str("AssociatedDocumentLineDocument", "ParentLineID"),
+			itemName:      li.str("SpecifiedTradeProduct", "Name"),
+			netAmount:     li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount"),
+			price:         li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount"),
+			vatCategory:   li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "CategoryCode"),
+			vatRate:       li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "RateApplicablePercent"),
+			originCountry: li.str("SpecifiedTradeProduct", "OriginTradeCountry", "ID"),
 		}
 		if qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity"); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
 			line.unitCode = qty.attr("unitCode")
+		}
+		for _, ac := range li.orNil().child("SpecifiedLineTradeSettlement").orNil().all("SpecifiedTradeAllowanceCharge") {
+			line.allowCharges = append(line.allowCharges, lineAllowanceCharge{
+				amount:    ac.str("ActualAmount"),
+				hasReason: ac.str("Reason") != "" || ac.str("ReasonCode") != "",
+				isCharge:  strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true"),
+			})
 		}
 		inv.lines = append(inv.lines, line)
 	}
@@ -389,6 +397,9 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			duePayable:      total.str("PayableAmount"),
 		}
 	}
+	// The Invoice total VAT amount (BT-110) lives in TaxTotal, independent of the
+	// document monetary summation, so read it even without a LegalMonetaryTotal.
+	inv.totals.taxTotal = taxTotal.str("TaxAmount")
 	for _, ts := range taxTotal.all("TaxSubtotal") {
 		inv.vatBreakdowns = append(inv.vatBreakdowns, vatBreakdown{
 			basis:     ts.str("TaxableAmount"),
@@ -409,16 +420,24 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 	}
 	for _, li := range root.all(lineName) {
 		line := invoiceLine{
-			lineID:      li.str("ID"),
-			itemName:    li.str("Item", "Name"),
-			netAmount:   li.str("LineExtensionAmount"),
-			price:       li.str("Price", "PriceAmount"),
-			vatCategory: li.str("Item", "ClassifiedTaxCategory", "ID"),
-			vatRate:     li.str("Item", "ClassifiedTaxCategory", "Percent"),
+			lineID:        li.str("ID"),
+			itemName:      li.str("Item", "Name"),
+			netAmount:     li.str("LineExtensionAmount"),
+			price:         li.str("Price", "PriceAmount"),
+			vatCategory:   li.str("Item", "ClassifiedTaxCategory", "ID"),
+			vatRate:       li.str("Item", "ClassifiedTaxCategory", "Percent"),
+			originCountry: li.str("Item", "OriginCountry", "IdentificationCode"),
 		}
 		if qty := li.child(qtyName); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
 			line.unitCode = qty.attr("unitCode")
+		}
+		for _, ac := range li.all("AllowanceCharge") {
+			line.allowCharges = append(line.allowCharges, lineAllowanceCharge{
+				amount:    ac.str("Amount"),
+				hasReason: ac.str("AllowanceChargeReason") != "" || ac.str("AllowanceChargeReasonCode") != "",
+				isCharge:  strings.EqualFold(ac.str("ChargeIndicator"), "true"),
+			})
 		}
 		inv.lines = append(inv.lines, line)
 	}
