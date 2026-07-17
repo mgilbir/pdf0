@@ -57,6 +57,9 @@ type en16931Invoice struct {
 
 	period invoicePeriod // BG-14 Invoicing period
 
+	docRefs        []docReference // BG-24 Additional supporting documents
+	billingRefNoID bool           // a Preceding invoice reference (BG-3) missing its ID (BT-25)
+
 	hasTotals bool           // whether a document monetary summation (BG-22) is present
 	totals    monetaryTotals // BG-22 Document totals
 
@@ -109,6 +112,19 @@ type invoiceLine struct {
 	originCountry string // BT-159 Item country of origin
 	allowCharges  []lineAllowanceCharge
 	period        invoicePeriod // BG-26 Invoice line period
+
+	grossPrice   string // BT-148 Item gross price
+	itemAttrBad  bool   // an Item attribute (BG-32) missing its name or value
+	stdIDPresent bool   // BT-157 Item standard identifier present
+	stdIDScheme  string // BT-157 scheme identifier
+	classPresent bool   // BT-158 Item classification identifier present
+	classListID  string // BT-158 classification scheme (list) identifier
+}
+
+// docReference is an Additional supporting document (BG-24).
+type docReference struct {
+	hasID    bool   // BT-122 Supporting document reference present
+	mimeCode string // attachment MIME code
 }
 
 // invoicePeriod is a billing period (BG-14 at document level, BG-26 per line).
@@ -203,6 +219,49 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		if !en16931Currencies[inv.taxCurrency] {
 			add("BR-CL-05", fmt.Sprintf("VAT accounting currency code (BT-6=%q) shall be a valid ISO 4217 code", inv.taxCurrency))
 		}
+	}
+
+	// Item detail: gross price (BR-28), item attributes (BR-54), and the item
+	// standard/classification identifiers and their scheme code lists (BR-64/65,
+	// BR-CL-21/13). Each identifier check is conditional on the element's presence.
+	for _, li := range inv.lines {
+		if gp := li.grossPrice; gp != "" {
+			if p, ok := parseAmount(gp); ok && p < 0 {
+				add("BR-28", "The Item gross price (BT-148) shall not be negative")
+			}
+		}
+		if li.itemAttrBad {
+			add("BR-54", "Each Item attribute (BG-32) shall contain an Item attribute name (BT-160) and value (BT-161)")
+		}
+		if li.stdIDPresent && li.stdIDScheme == "" {
+			add("BR-64", "The Item standard identifier (BT-157) shall have a Scheme identifier")
+		}
+		if s := li.stdIDScheme; s != "" && !en16931ICD[s] {
+			add("BR-CL-21", fmt.Sprintf("Item standard identifier scheme (%q) shall belong to the ISO 6523 ICD list", s))
+		}
+		if li.classPresent && li.classListID == "" {
+			add("BR-65", "The Item classification identifier (BT-158) shall have a Scheme identifier")
+		}
+		if l := li.classListID; l != "" && !en16931ItemClassCodes[l] {
+			add("BR-CL-13", fmt.Sprintf("Item classification scheme (%q) shall be a valid UNTDID 7143 value", l))
+		}
+	}
+
+	// Supporting documents (BR-52, mime BR-CL-24), preceding invoice references
+	// (BR-55) and the VAT point date code (BR-CL-06).
+	for _, d := range inv.docRefs {
+		if !d.hasID {
+			add("BR-52", "Each Additional supporting document (BG-24) shall contain a Supporting document reference (BT-122)")
+		}
+		if m := d.mimeCode; m != "" && !en16931MIME[m] {
+			add("BR-CL-24", fmt.Sprintf("Attachment MIME code (%q) is not a permitted value", m))
+		}
+	}
+	if inv.billingRefNoID {
+		add("BR-55", "Each Preceding Invoice reference (BG-3) shall contain a Preceding Invoice reference (BT-25)")
+	}
+	if c := inv.period.desc; c != "" && c != "3" && c != "35" && c != "432" {
+		add("BR-CL-06", fmt.Sprintf("Value added tax point date code (BT-8=%q) shall be a restriction of UNTDID 2005", c))
 	}
 
 	// Full-invoice profiles carry lines and a line-net total; the head-only

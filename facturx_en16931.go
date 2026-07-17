@@ -84,6 +84,9 @@ func parseCII(data []byte) (*ciiNode, error) {
 // child returns the first descendant reached by following the given local names,
 // or nil if any step is missing.
 func (n *ciiNode) child(path ...string) *ciiNode {
+	if n == nil {
+		return nil
+	}
 	cur := n
 	for _, name := range path {
 		var next *ciiNode
@@ -103,6 +106,9 @@ func (n *ciiNode) child(path ...string) *ciiNode {
 
 // all returns every direct child with the given local name.
 func (n *ciiNode) all(name string) []*ciiNode {
+	if n == nil {
+		return nil
+	}
 	var out []*ciiNode
 	for _, c := range n.children {
 		if c.name == name {
@@ -332,10 +338,23 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			vatRate:       li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "RateApplicablePercent"),
 			originCountry: li.str("SpecifiedTradeProduct", "OriginTradeCountry", "ID"),
 			period:        ciiPeriod(li.child("SpecifiedLineTradeSettlement")),
+			grossPrice:    li.str("SpecifiedLineTradeAgreement", "GrossPriceProductTradePrice", "ChargeAmount"),
 		}
 		if qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity"); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
 			line.unitCode = qty.attr("unitCode")
+		}
+		prod := li.child("SpecifiedTradeProduct").orNil()
+		if g := prod.child("GlobalID"); g != nil {
+			line.stdIDPresent, line.stdIDScheme = true, g.attr("schemeID")
+		}
+		if c := prod.child("DesignatedProductClassification", "ClassCode"); c != nil {
+			line.classPresent, line.classListID = true, c.attr("listID")
+		}
+		for _, a := range prod.all("ApplicableProductCharacteristic") {
+			if a.str("Description") == "" || a.str("Value") == "" {
+				line.itemAttrBad = true
+			}
 		}
 		for _, ac := range li.orNil().child("SpecifiedLineTradeSettlement").orNil().all("SpecifiedTradeAllowanceCharge") {
 			line.allowCharges = append(line.allowCharges, lineAllowanceCharge{
@@ -345,6 +364,21 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			})
 		}
 		inv.lines = append(inv.lines, line)
+	}
+	// Supporting documents (BG-24) and preceding invoice references (BG-3).
+	for _, d := range agr.orNil().all("AdditionalReferencedDocument") {
+		if d.str("TypeCode") != "916" { // 916 = supporting document
+			continue
+		}
+		inv.docRefs = append(inv.docRefs, docReference{
+			hasID:    d.str("IssuerAssignedID") != "",
+			mimeCode: d.child("AttachmentBinaryObject").attr("mimeCode"),
+		})
+	}
+	for _, r := range settle.orNil().all("InvoiceReferencedDocument") {
+		if r.str("IssuerAssignedID") == "" {
+			inv.billingRefNoID = true
+		}
 	}
 	return inv
 }
@@ -524,10 +558,23 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			vatRate:       li.str("Item", "ClassifiedTaxCategory", "Percent"),
 			originCountry: li.str("Item", "OriginCountry", "IdentificationCode"),
 			period:        ublPeriod(li),
+			grossPrice:    li.child("Price", "AllowanceCharge").str("BaseAmount"),
 		}
 		if qty := li.child(qtyName); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
 			line.unitCode = qty.attr("unitCode")
+		}
+		item := li.child("Item").orNil()
+		if s := item.child("StandardItemIdentification", "ID"); s != nil {
+			line.stdIDPresent, line.stdIDScheme = true, s.attr("schemeID")
+		}
+		if c := item.child("CommodityClassification", "ItemClassificationCode"); c != nil {
+			line.classPresent, line.classListID = true, c.attr("listID")
+		}
+		for _, a := range item.all("AdditionalItemProperty") {
+			if a.str("Name") == "" || a.str("Value") == "" {
+				line.itemAttrBad = true
+			}
 		}
 		for _, ac := range li.all("AllowanceCharge") {
 			line.allowCharges = append(line.allowCharges, lineAllowanceCharge{
@@ -537,6 +584,17 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			})
 		}
 		inv.lines = append(inv.lines, line)
+	}
+	for _, d := range root.all("AdditionalDocumentReference") {
+		inv.docRefs = append(inv.docRefs, docReference{
+			hasID:    d.str("ID") != "",
+			mimeCode: d.child("Attachment", "EmbeddedDocumentBinaryObject").attr("mimeCode"),
+		})
+	}
+	for _, r := range root.all("BillingReference") {
+		if r.str("InvoiceDocumentReference", "ID") == "" {
+			inv.billingRefNoID = true
+		}
 	}
 	return inv
 }

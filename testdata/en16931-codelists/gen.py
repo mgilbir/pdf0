@@ -52,6 +52,8 @@ TABLES = [
      "en16931MIME is the permitted attachment MIME code set (BR-CL-24)."),
     ("en16931RefTypeCodes", "1153.gc", 10,
      "en16931RefTypeCodes is the UNTDID 1153 reference type code set (BR-CL-07)."),
+    ("en16931ItemClassCodes", "Item.gc", 10,
+     "en16931ItemClassCodes is the UNTDID 7143 item classification scheme set (BR-CL-13)."),
     ("en16931Units", "Unit.gc", 8,
      "en16931Units is the UNECE Rec 20/21 unit of measure code set (BR-CL-23)."),
 ]
