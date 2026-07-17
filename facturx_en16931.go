@@ -223,6 +223,24 @@ func collectCommon(root *ciiNode, inv *en16931Invoice) {
 			}
 		}
 	}
+	// A monetary amount (an element named *Amount) shall have at most two fraction
+	// digits (UBL-DT-01) — except a unit price, which may carry more. Unit prices
+	// are the *PriceAmount elements and anything under a price container (UBL cac:
+	// Price, CII Net/GrossPriceProductTradePrice), so this holds in either syntax.
+	var walk func(c *ciiNode, inPrice bool)
+	walk = func(c *ciiNode, inPrice bool) {
+		if !inPrice && strings.HasSuffix(c.name, "Amount") && !strings.HasSuffix(c.name, "PriceAmount") {
+			if decimalCount(strings.TrimSpace(c.text)) > 2 {
+				inv.amountDecimalsBad = true
+			}
+		}
+		childInPrice := inPrice || c.name == "Price" ||
+			c.name == "NetPriceProductTradePrice" || c.name == "GrossPriceProductTradePrice"
+		for _, ch := range c.children {
+			walk(ch, childInPrice)
+		}
+	}
+	walk(root, false)
 }
 
 // ciiVATRegValue returns a CII party's VAT registration identifier (scheme "VA").
@@ -239,6 +257,28 @@ func ciiVATRegValue(p *ciiNode) string {
 // (SpecifiedTaxRegistration whose ID scheme is "VA").
 func ciiHasVATReg(p *ciiNode) bool {
 	return ciiVATRegValue(p) != ""
+}
+
+// ciiVATRegCount counts a CII party's VAT registrations (scheme "VA").
+func ciiVATRegCount(p *ciiNode) int {
+	n := 0
+	for _, r := range p.all("SpecifiedTaxRegistration") {
+		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && strings.EqualFold(id.attr("schemeID"), "VA") {
+			n++
+		}
+	}
+	return n
+}
+
+// ublVATSchemeCount counts a UBL party's VAT PartyTaxScheme entries.
+func ublVATSchemeCount(p *ciiNode) int {
+	n := 0
+	for _, pts := range p.all("PartyTaxScheme") {
+		if pts.str("CompanyID") != "" && strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
+			n++
+		}
+	}
+	return n
 }
 
 // ciiHasOtherReg reports whether a CII party carries a non-VAT tax registration.
@@ -441,9 +481,12 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		if d.str("TypeCode") != "916" { // 916 = supporting document
 			continue
 		}
+		bin := d.child("AttachmentBinaryObject")
 		inv.docRefs = append(inv.docRefs, docReference{
-			hasID:    d.str("IssuerAssignedID") != "",
-			mimeCode: d.child("AttachmentBinaryObject").attr("mimeCode"),
+			hasID:         d.str("IssuerAssignedID") != "",
+			binaryPresent: bin != nil,
+			mimeCode:      bin.attr("mimeCode"),
+			filename:      bin.attr("filename"),
 		})
 	}
 	for _, r := range settle.orNil().all("InvoiceReferencedDocument") {
@@ -459,9 +502,33 @@ func mapCII(root *ciiNode) *en16931Invoice {
 	inv.sellerEndpointPresent = agr.str("SellerTradeParty", "URIUniversalCommunication", "URIID") != ""
 	inv.buyerEndpointPresent = agr.str("BuyerTradeParty", "URIUniversalCommunication", "URIID") != ""
 	inv.deliveryDate = tx.str("ApplicableHeaderTradeDelivery", "ActualDeliverySupplyChainEvent", "OccurrenceDateTime", "DateTimeString")
+	inv.sellerVATIDCount = ciiVATRegCount(agr.child("SellerTradeParty"))
+	inv.buyerVATIDCount = ciiVATRegCount(agr.child("BuyerTradeParty"))
+	inv.supplierSchemeCnt = len(agr.child("SellerTradeParty").all("SpecifiedTaxRegistration"))
 	return inv
 }
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
+
+// distinct returns the number of distinct non-empty values in s.
+func distinct(s []string) int {
+	seen := map[string]bool{}
+	for _, v := range s {
+		if v != "" {
+			seen[v] = true
+		}
+	}
+	return len(seen)
+}
+
+// allEqual reports whether every value in s is equal (vacuously true for 0 or 1).
+func allEqual(s []string) bool {
+	for _, v := range s {
+		if v != s[0] {
+			return false
+		}
+	}
+	return true
+}
 
 // normDate reduces a date to its digits (YYYYMMDD) so CII (20130601) and UBL
 // (2013-06-01) forms compare lexically.
@@ -666,9 +733,12 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		inv.lines = append(inv.lines, line)
 	}
 	for _, d := range root.all("AdditionalDocumentReference") {
+		bin := d.child("Attachment", "EmbeddedDocumentBinaryObject")
 		inv.docRefs = append(inv.docRefs, docReference{
-			hasID:    d.str("ID") != "",
-			mimeCode: d.child("Attachment", "EmbeddedDocumentBinaryObject").attr("mimeCode"),
+			hasID:         d.str("ID") != "",
+			binaryPresent: bin != nil,
+			mimeCode:      bin.attr("mimeCode"),
+			filename:      bin.attr("filename"),
 		})
 	}
 	for _, r := range root.all("BillingReference") {
@@ -685,5 +755,13 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 	inv.buyerEndpointPresent = buyer.str("EndpointID") != ""
 	inv.vatPointDate = root.str("TaxPointDate")
 	inv.deliveryDate = root.str("Delivery", "ActualDeliveryDate")
+	inv.sellerVATIDCount = ublVATSchemeCount(seller)
+	inv.buyerVATIDCount = ublVATSchemeCount(buyer)
+	inv.supplierSchemeCnt = len(seller.all("PartyTaxScheme"))
+	for _, pm := range root.all("PaymentMeans") {
+		if id := pm.str("PaymentID"); id != "" {
+			inv.paymentIDs = append(inv.paymentIDs, id)
+		}
+	}
 	return inv
 }

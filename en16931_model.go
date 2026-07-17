@@ -76,6 +76,12 @@ type en16931Invoice struct {
 	docRefs        []docReference // BG-24 Additional supporting documents
 	billingRefNoID bool           // a Preceding invoice reference (BG-3) missing its ID (BT-25)
 
+	sellerVATIDCount  int      // number of Seller VAT identifiers (cardinality)
+	buyerVATIDCount   int      // number of Buyer VAT identifiers (cardinality)
+	supplierSchemeCnt int      // number of supplier party tax scheme entries
+	paymentIDs        []string // BT-83 payment identifiers
+	amountDecimalsBad bool     // an amount (any @currencyID element) exceeds two decimals
+
 	hasTotals bool           // whether a document monetary summation (BG-22) is present
 	totals    monetaryTotals // BG-22 Document totals
 
@@ -140,8 +146,10 @@ type invoiceLine struct {
 
 // docReference is an Additional supporting document (BG-24).
 type docReference struct {
-	hasID    bool   // BT-122 Supporting document reference present
-	mimeCode string // attachment MIME code
+	hasID         bool   // BT-122 Supporting document reference present
+	binaryPresent bool   // an embedded binary attachment is present
+	mimeCode      string // attachment MIME code
+	filename      string // attachment file name
 }
 
 // invoicePeriod is a billing period (BG-14 at document level, BG-26 per line).
@@ -349,6 +357,36 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		if inv.deliverToCountry == "" {
 			add("BR-IC-12", "an intra-community supply requires a Deliver to country code (BT-80)")
 		}
+	}
+
+	// Datatype and cardinality rules. Named in the UBL binding's rule set but
+	// syntax-neutral in substance: each is checked against the shared model, so it
+	// holds whichever syntax carried the invoice.
+	if inv.amountDecimalsBad {
+		add("UBL-DT-01", "Amounts shall be decimal up to two fraction digits")
+	}
+	for _, d := range inv.docRefs {
+		if d.binaryPresent && d.mimeCode == "" {
+			add("UBL-DT-06", "A binary object (attachment) shall carry a MIME code attribute")
+		}
+		if d.binaryPresent && d.filename == "" {
+			add("UBL-DT-07", "A binary object (attachment) shall carry a file name attribute")
+		}
+	}
+	if inv.sellerVATIDCount > 1 {
+		add("UBL-SR-12", "The Seller VAT identifier shall occur at most once")
+	}
+	if inv.buyerVATIDCount > 1 {
+		add("UBL-SR-18", "The Buyer VAT identifier shall occur at most once")
+	}
+	if inv.supplierSchemeCnt > 2 {
+		add("UBL-SR-42", "The supplier party tax scheme shall occur at most twice")
+	}
+	if distinct(inv.paymentIDs) > 1 {
+		add("UBL-SR-44", "An Invoice shall have at most one unique Payment identifier")
+	}
+	if !allEqual(inv.paymentMeans) {
+		add("UBL-SR-47", "When there is more than one Payment means code, they shall be equal")
 	}
 
 	// Full-invoice profiles carry lines and a line-net total; the head-only
