@@ -59,6 +59,7 @@ type vatBreakdown struct {
 type docAllowanceCharge struct {
 	amount    string // BT-92 allowance / BT-99 charge amount
 	category  string // BT-95 allowance / BT-102 charge VAT category code
+	rate      string // BT-96 allowance / BT-103 charge VAT rate
 	hasReason bool   // BT-97/BT-98 or BT-104/BT-105 present
 	isCharge  bool   // true = charge (BG-21); false = allowance (BG-20)
 }
@@ -71,6 +72,8 @@ type invoiceLine struct {
 	quantity     string // BT-129 Invoiced quantity (trimmed; "" if absent/empty)
 	unitCode     string // BT-130 Invoiced quantity unit of measure
 	price        string // BT-146 Item net price
+	vatCategory  string // BT-151 Invoiced item VAT category code
+	vatRate      string // BT-152 Invoiced item VAT rate ("" if absent)
 }
 
 // validateEN16931 applies the EN 16931 core business rules to a mapped invoice.
@@ -178,63 +181,11 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		if okC {
 			vatTotal += c
 		}
-
-		// VAT category rules: the tax amount is zero for the non-taxed
-		// categories, the zero-rated category carries a zero rate, and the
-		// exemption reason is present exactly when the category requires one.
-		zeroTax := okC && math.Abs(c) > 0.005
-		switch tt.category {
-		case "S": // Standard rate
-			if tt.hasReason {
-				add("BR-S-10", "A VAT breakdown with category \"Standard rate\" (S) shall not have a VAT exemption reason")
-			}
-		case "Z": // Zero rated
-			if okR && math.Abs(r) > 0.005 {
-				add("BR-Z-08", "A VAT breakdown with category \"Zero rated\" (Z) shall have a VAT rate of 0")
-			}
-			if zeroTax {
-				add("BR-Z-09", "The VAT category tax amount for category \"Zero rated\" (Z) shall be 0")
-			}
-			if tt.hasReason {
-				add("BR-Z-10", "A VAT breakdown with category \"Zero rated\" (Z) shall not have a VAT exemption reason")
-			}
-		case "E": // Exempt from VAT
-			if zeroTax {
-				add("BR-E-09", "The VAT category tax amount for category \"Exempt from VAT\" (E) shall be 0")
-			}
-			if !tt.hasReason {
-				add("BR-E-10", "A VAT breakdown with category \"Exempt from VAT\" (E) shall have a VAT exemption reason")
-			}
-		case "AE": // Reverse charge
-			if zeroTax {
-				add("BR-AE-09", "The VAT category tax amount for category \"Reverse charge\" (AE) shall be 0")
-			}
-			if !tt.hasReason {
-				add("BR-AE-10", "A VAT breakdown with category \"Reverse charge\" (AE) shall have a VAT exemption reason")
-			}
-		case "K": // Intra-community supply
-			if zeroTax {
-				add("BR-IC-09", "The VAT category tax amount for category \"Intra-community supply\" (K) shall be 0")
-			}
-			if !tt.hasReason {
-				add("BR-IC-10", "A VAT breakdown with category \"Intra-community supply\" (K) shall have a VAT exemption reason")
-			}
-		case "G": // Export outside the EU
-			if zeroTax {
-				add("BR-G-09", "The VAT category tax amount for category \"Export outside the EU\" (G) shall be 0")
-			}
-			if !tt.hasReason {
-				add("BR-G-10", "A VAT breakdown with category \"Export outside the EU\" (G) shall have a VAT exemption reason")
-			}
-		case "O": // Not subject to VAT
-			if zeroTax {
-				add("BR-O-09", "The VAT category tax amount for category \"Not subject to VAT\" (O) shall be 0")
-			}
-			if !tt.hasReason {
-				add("BR-O-10", "A VAT breakdown with category \"Not subject to VAT\" (O) shall have a VAT exemption reason")
-			}
-		}
 	}
+	// VAT category rules (BR-S/Z/E/AE/IC/G/O-*): breakdown existence, per-line and
+	// per-allowance/charge rate constraints, taxable-amount sums, tax-zero, and
+	// exemption-reason presence.
+	validateVATCategories(inv, add)
 	// BR-CO-14: Invoice total VAT amount (BT-110) = sum of VAT category tax
 	// amounts (BT-117), when a breakdown is present.
 	if len(inv.vatBreakdowns) > 0 && inv.hasTotals {

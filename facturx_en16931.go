@@ -198,6 +198,7 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		inv.allowCharges = append(inv.allowCharges, docAllowanceCharge{
 			amount:    ac.str("ActualAmount"),
 			category:  ac.str("CategoryTradeTax", "CategoryCode"),
+			rate:      ac.str("CategoryTradeTax", "RateApplicablePercent"),
 			hasReason: ac.str("Reason") != "" || ac.str("ReasonCode") != "",
 			isCharge:  strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true"),
 		})
@@ -209,6 +210,8 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			itemName:     li.str("SpecifiedTradeProduct", "Name"),
 			netAmount:    li.str("SpecifiedLineTradeSettlement", "SpecifiedTradeSettlementLineMonetarySummation", "LineTotalAmount"),
 			price:        li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "ChargeAmount"),
+			vatCategory:  li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "CategoryCode"),
+			vatRate:      li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "RateApplicablePercent"),
 		}
 		if qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity"); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
@@ -328,16 +331,19 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		inv.allowCharges = append(inv.allowCharges, docAllowanceCharge{
 			amount:    ac.str("Amount"),
 			category:  ac.str("TaxCategory", "ID"),
+			rate:      ac.str("TaxCategory", "Percent"),
 			hasReason: ac.str("AllowanceChargeReason") != "" || ac.str("AllowanceChargeReasonCode") != "",
 			isCharge:  strings.EqualFold(ac.str("ChargeIndicator"), "true"),
 		})
 	}
 	for _, li := range root.all(lineName) {
 		line := invoiceLine{
-			lineID:    li.str("ID"),
-			itemName:  li.str("Item", "Name"),
-			netAmount: li.str("LineExtensionAmount"),
-			price:     li.str("Price", "PriceAmount"),
+			lineID:      li.str("ID"),
+			itemName:    li.str("Item", "Name"),
+			netAmount:   li.str("LineExtensionAmount"),
+			price:       li.str("Price", "PriceAmount"),
+			vatCategory: li.str("Item", "ClassifiedTaxCategory", "ID"),
+			vatRate:     li.str("Item", "ClassifiedTaxCategory", "Percent"),
 		}
 		if qty := li.child(qtyName); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
