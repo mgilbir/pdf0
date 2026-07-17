@@ -208,6 +208,27 @@ func ublHasOtherScheme(p *ciiNode) bool {
 	return false
 }
 
+// ciiPeriod extracts a CII billing period (BillingSpecifiedPeriod) from a node.
+func ciiPeriod(n *ciiNode) invoicePeriod {
+	p := n.child("BillingSpecifiedPeriod")
+	if p == nil {
+		return invoicePeriod{}
+	}
+	return invoicePeriod{present: true,
+		start: p.str("StartDateTime", "DateTimeString"),
+		end:   p.str("EndDateTime", "DateTimeString")}
+}
+
+// ublPeriod extracts a UBL invoice period (InvoicePeriod) from a node.
+func ublPeriod(n *ciiNode) invoicePeriod {
+	p := n.child("InvoicePeriod")
+	if p == nil {
+		return invoicePeriod{}
+	}
+	return invoicePeriod{present: true, start: p.str("StartDate"), end: p.str("EndDate"),
+		desc: p.str("DescriptionCode")}
+}
+
 // mapCII extracts the EN 16931 business terms from a Cross Industry Invoice tree.
 func mapCII(root *ciiNode) *en16931Invoice {
 	doc := root.child("ExchangedDocument")
@@ -235,10 +256,35 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		buyerLegalReg:        agr.orNil().str("BuyerTradeParty", "SpecifiedLegalOrganization", "ID") != "",
 		sellerEndpointScheme: agr.orNil().child("SellerTradeParty", "URIUniversalCommunication", "URIID").attr("schemeID"),
 		buyerEndpointScheme:  agr.orNil().child("BuyerTradeParty", "URIUniversalCommunication", "URIID").attr("schemeID"),
+		period:               ciiPeriod(settle.orNil()),
+		taxRepPresent:        agr.orNil().child("SellerTaxRepresentativeTradeParty") != nil,
+		taxRepName:           agr.orNil().str("SellerTaxRepresentativeTradeParty", "Name"),
+		taxRepAddressPresent: agr.orNil().child("SellerTaxRepresentativeTradeParty", "PostalTradeAddress") != nil,
+		taxRepCountry:        agr.orNil().str("SellerTaxRepresentativeTradeParty", "PostalTradeAddress", "CountryID"),
+		payeePresent:         settle.orNil().child("PayeeTradeParty") != nil,
+		payeeName:            settle.orNil().str("PayeeTradeParty", "Name"),
+		deliverToPresent:     tx.orNil().child("ApplicableHeaderTradeDelivery", "ShipToTradeParty", "PostalTradeAddress") != nil,
+		deliverToCountry:     tx.orNil().str("ApplicableHeaderTradeDelivery", "ShipToTradeParty", "PostalTradeAddress", "CountryID"),
 	}
-	for _, pm := range settle.orNil().all("SpecifiedTradeSettlementPaymentMeans") {
+	pms := settle.orNil().all("SpecifiedTradeSettlementPaymentMeans")
+	inv.paymentInstrPresent = len(pms) > 0
+	for _, pm := range pms {
 		if tc := pm.str("TypeCode"); tc != "" {
 			inv.paymentMeans = append(inv.paymentMeans, tc)
+		}
+		if acc := pm.child("PayeePartyCreditorFinancialAccount"); acc != nil {
+			inv.creditAccountPresent = true
+			if id := firstNonEmpty(acc.str("IBANID"), acc.str("ProprietaryID")); id != "" {
+				inv.creditAccountID = id
+			}
+		}
+	}
+	inv.taxCurrency = settle.orNil().str("TaxCurrencyCode")
+	if inv.taxCurrency != "" {
+		for _, ta := range sum.orNil().all("TaxTotalAmount") {
+			if strings.EqualFold(ta.attr("currencyID"), inv.taxCurrency) {
+				inv.vatInTaxCurrency = true
+			}
 		}
 	}
 	if sum != nil {
@@ -285,6 +331,7 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			vatCategory:   li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "CategoryCode"),
 			vatRate:       li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "RateApplicablePercent"),
 			originCountry: li.str("SpecifiedTradeProduct", "OriginTradeCountry", "ID"),
+			period:        ciiPeriod(li.child("SpecifiedLineTradeSettlement")),
 		}
 		if qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity"); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
@@ -302,6 +349,18 @@ func mapCII(root *ciiNode) *en16931Invoice {
 	return inv
 }
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
+
+// normDate reduces a date to its digits (YYYYMMDD) so CII (20130601) and UBL
+// (2013-06-01) forms compare lexically.
+func normDate(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // decimalCount returns the number of digits after the decimal point in s.
 func decimalCount(s string) int {
@@ -387,10 +446,35 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		buyerLegalReg:        buyer.str("PartyLegalEntity", "CompanyID") != "",
 		sellerEndpointScheme: seller.child("EndpointID").attr("schemeID"),
 		buyerEndpointScheme:  buyer.child("EndpointID").attr("schemeID"),
+		period:               ublPeriod(root),
+		taxRepPresent:        root.child("TaxRepresentativeParty") != nil,
+		taxRepName:           firstNonEmpty(root.str("TaxRepresentativeParty", "PartyName", "Name"), root.str("TaxRepresentativeParty", "PartyLegalEntity", "RegistrationName")),
+		taxRepAddressPresent: root.child("TaxRepresentativeParty", "PostalAddress") != nil,
+		taxRepCountry:        root.str("TaxRepresentativeParty", "PostalAddress", "Country", "IdentificationCode"),
+		payeePresent:         root.child("PayeeParty") != nil,
+		payeeName:            root.str("PayeeParty", "PartyName", "Name"),
+		deliverToPresent:     root.child("Delivery", "DeliveryLocation", "Address") != nil,
+		deliverToCountry:     root.str("Delivery", "DeliveryLocation", "Address", "Country", "IdentificationCode"),
 	}
-	for _, pm := range root.all("PaymentMeans") {
+	pms := root.all("PaymentMeans")
+	inv.paymentInstrPresent = len(pms) > 0
+	for _, pm := range pms {
 		if code := pm.str("PaymentMeansCode"); code != "" {
 			inv.paymentMeans = append(inv.paymentMeans, code)
+		}
+		if acc := pm.child("PayeeFinancialAccount"); acc != nil {
+			inv.creditAccountPresent = true
+			if id := acc.str("ID"); id != "" {
+				inv.creditAccountID = id
+			}
+		}
+	}
+	inv.taxCurrency = root.str("TaxCurrencyCode")
+	if inv.taxCurrency != "" {
+		for _, tt := range root.all("TaxTotal") {
+			if strings.EqualFold(tt.child("TaxAmount").attr("currencyID"), inv.taxCurrency) {
+				inv.vatInTaxCurrency = true
+			}
 		}
 	}
 	if total != nil {
@@ -439,6 +523,7 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			vatCategory:   li.str("Item", "ClassifiedTaxCategory", "ID"),
 			vatRate:       li.str("Item", "ClassifiedTaxCategory", "Percent"),
 			originCountry: li.str("Item", "OriginCountry", "IdentificationCode"),
+			period:        ublPeriod(li),
 		}
 		if qty := li.child(qtyName); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)

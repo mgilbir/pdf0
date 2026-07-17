@@ -40,6 +40,23 @@ type en16931Invoice struct {
 	buyerEndpointScheme  string   // BT-49 Buyer electronic address scheme
 	paymentMeans         []string // BT-81 Payment means type codes
 
+	taxRepPresent        bool   // BG-11 Seller tax representative party present
+	taxRepName           string // BT-62 Seller tax representative name
+	taxRepAddressPresent bool   // BG-12 Seller tax representative postal address present
+	taxRepCountry        string // BT-69 Tax representative country code
+	payeePresent         bool   // BG-10 Payee present
+	payeeName            string // BT-59 Payee name
+	deliverToPresent     bool   // BG-15 Deliver-to address present
+	deliverToCountry     string // BT-80 Deliver-to country code
+
+	paymentInstrPresent  bool   // BG-16 Payment instructions present
+	creditAccountPresent bool   // BG-17 Credit transfer (payee financial account) present
+	creditAccountID      string // BT-84 Payment account identifier
+	taxCurrency          string // BT-6 VAT accounting currency code
+	vatInTaxCurrency     bool   // BT-111 VAT total in accounting currency present
+
+	period invoicePeriod // BG-14 Invoicing period
+
 	hasTotals bool           // whether a document monetary summation (BG-22) is present
 	totals    monetaryTotals // BG-22 Document totals
 
@@ -91,6 +108,15 @@ type invoiceLine struct {
 	vatRate       string // BT-152 Invoiced item VAT rate ("" if absent)
 	originCountry string // BT-159 Item country of origin
 	allowCharges  []lineAllowanceCharge
+	period        invoicePeriod // BG-26 Invoice line period
+}
+
+// invoicePeriod is a billing period (BG-14 at document level, BG-26 per line).
+type invoicePeriod struct {
+	present bool   // whether the period group is present
+	start   string // start date (BT-73 / BT-134)
+	end     string // end date (BT-74 / BT-135)
+	desc    string // BT-8 VAT point date code (UBL carries it in the period group)
 }
 
 // lineAllowanceCharge is an Invoice line allowance (BG-27) or charge (BG-28).
@@ -132,6 +158,51 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			add("BR-10", "An Invoice shall contain the Buyer postal address (BG-8)")
 		}
 		req("BR-11", "The Buyer postal address shall contain a Buyer country code (BT-55)", inv.buyerCountry)
+	}
+
+	// Conditional party groups. A Seller tax representative (BG-11), Payee (BG-10)
+	// or Deliver-to address (BG-15), when present, must carry its mandatory terms.
+	if inv.taxRepPresent {
+		req("BR-18", "The Seller tax representative name (BT-62) shall be provided when a tax representative party is present", inv.taxRepName)
+		if !inv.taxRepAddressPresent {
+			add("BR-19", "The Seller tax representative postal address (BG-12) shall be provided when a tax representative party is present")
+		}
+		if !inv.taxRepVATID {
+			add("BR-56", "Each Seller tax representative party (BG-11) shall have a Seller tax representative VAT identifier (BT-63)")
+		}
+	}
+	if inv.taxRepAddressPresent {
+		req("BR-20", "The Seller tax representative postal address (BG-12) shall contain a Tax representative country code (BT-69)", inv.taxRepCountry)
+	}
+	if inv.payeePresent {
+		req("BR-17", "The Payee name (BT-59) shall be provided when the Payee (BG-10) is present", inv.payeeName)
+	}
+	if inv.deliverToPresent {
+		req("BR-57", "Each Deliver to address (BG-15) shall contain a Deliver to country code (BT-80)", inv.deliverToCountry)
+	}
+
+	// Payment instructions (BG-16/17).
+	if inv.paymentInstrPresent && len(inv.paymentMeans) == 0 {
+		add("BR-49", "A Payment instruction (BG-16) shall specify the Payment means type code (BT-81)")
+	}
+	if inv.creditAccountPresent && inv.creditAccountID == "" {
+		add("BR-50", "A Payment account identifier (BT-84) shall be present when Credit transfer (BG-17) information is provided")
+	}
+	for _, pm := range inv.paymentMeans {
+		if (pm == "30" || pm == "58") && inv.creditAccountID == "" {
+			add("BR-61", "A credit-transfer payment means (BT-81) requires a Payment account identifier (BT-84)")
+			break
+		}
+	}
+	// BR-53: a VAT accounting currency (BT-6) requires the VAT total in that
+	// currency (BT-111); BR-CL-05 validates the code itself.
+	if inv.taxCurrency != "" {
+		if !inv.vatInTaxCurrency {
+			add("BR-53", "When a VAT accounting currency code (BT-6) is present, the Invoice total VAT amount in accounting currency (BT-111) shall be provided")
+		}
+		if !en16931Currencies[inv.taxCurrency] {
+			add("BR-CL-05", fmt.Sprintf("VAT accounting currency code (BT-6=%q) shall be a valid ISO 4217 code", inv.taxCurrency))
+		}
 	}
 
 	// Full-invoice profiles carry lines and a line-net total; the head-only
@@ -437,6 +508,27 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		if ct, ok := parseAmount(inv.totals.chargeTotal); ok && math.Abs(round2(chargeSum)-ct) > 0.005 {
 			add("BR-CO-12", fmt.Sprintf("Sum of charges on document level (BT-108=%.2f) shall equal the sum of Document level charge amounts (%.2f)", ct, chargeSum))
 		}
+	}
+
+	// Invoicing period (BG-14) and Invoice line period (BG-26): when present, a
+	// start or end date is required (BR-CO-19/20), and a given end must not precede
+	// a given start (BR-29/30).
+	checkPeriod := func(present, order string, p invoicePeriod) {
+		if !p.present {
+			return
+		}
+		// A period group carrying only a VAT point date code (BT-8) is not an
+		// invoicing period in the BR-CO-19/20 sense.
+		if p.start == "" && p.end == "" && p.desc == "" {
+			add(present, "if an invoicing period (BG-14/BG-26) is used, its start or end date shall be present")
+		}
+		if p.start != "" && p.end != "" && normDate(p.end) < normDate(p.start) {
+			add(order, "the invoicing period end date shall not precede its start date")
+		}
+	}
+	checkPeriod("BR-CO-19", "BR-29", inv.period)
+	for _, li := range inv.lines {
+		checkPeriod("BR-CO-20", "BR-30", li.period)
 	}
 
 	// BR-CO-16: Amount due for payment (BT-115) = Invoice total with VAT (BT-112)
