@@ -23,11 +23,11 @@ type en16931Invoice struct {
 	typeCode  string // BT-3  Invoice type code
 	currency  string // BT-5  Invoice currency code
 
-	sellerName    string // BT-27 Seller name
-	buyerName     string // BT-44 Buyer name
-	sellerCountry string // BT-40 Seller country code
-	sellerCity    string // BT-37 Seller city (for the BG-5 presence test only)
-	buyerCountry  string // BT-55 Buyer country code
+	sellerName           string // BT-27 Seller name
+	buyerName            string // BT-44 Buyer name
+	sellerCountry        string // BT-40 Seller country code
+	sellerAddressPresent bool   // whether the Seller postal address group (BG-5) is present
+	buyerCountry         string // BT-55 Buyer country code
 
 	hasTotals bool           // whether a document monetary summation (BG-22) is present
 	totals    monetaryTotals // BG-22 Document totals
@@ -93,22 +93,25 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	req("BR-05", "An Invoice shall have an Invoice currency code (BT-5)", inv.currency)
 	req("BR-06", "An Invoice shall contain the Seller name (BT-27)", inv.sellerName)
 	req("BR-07", "An Invoice shall contain the Buyer name (BT-44)", inv.buyerName)
-	req("BR-08", "An Invoice shall contain the Seller postal address (BG-5)",
-		firstNonEmpty(inv.sellerCountry, inv.sellerCity))
+	// BR-08 is a group-presence test: the Seller postal address (BG-5) element
+	// must be present, even if empty. Its content (the country code) is BR-09.
+	if !inv.sellerAddressPresent {
+		add("BR-08", "An Invoice shall contain the Seller postal address (BG-5)")
+	}
 	req("BR-09", "The Seller postal address shall contain a Seller country code (BT-40)", inv.sellerCountry)
 
 	req("BR-13", "An Invoice shall have the Invoice total amount without VAT (BT-109)", inv.totals.taxBasisTotal)
 	req("BR-14", "An Invoice shall have the Invoice total amount with VAT (BT-112)", inv.totals.grandTotal)
 	req("BR-15", "An Invoice shall have the Amount due for payment (BT-115)", inv.totals.duePayable)
 
-	// Code lists (BR-CL-*). Currency (BT-5) and country codes (BT-40/55) are
-	// checked for ISO 4217 / ISO 3166-1 alpha-2 shape; the invoice type code
-	// (BT-3) against the EN 16931 UNTDID 1001 subset.
-	if cur := inv.currency; cur != "" && !isUpperAlpha(cur, 3) {
-		add("BR-CL-03", fmt.Sprintf("Invoice currency code (BT-5=%q) shall be a valid ISO 4217 code", cur))
+	// Code lists (BR-CL-*). The Invoice currency code (BT-5, BR-CL-04) and the
+	// Invoice type code (BT-3, BR-CL-01) are checked against the exact EN 16931
+	// code lists; the country codes (BT-40/55) against ISO 3166-1 alpha-2 shape.
+	if cur := inv.currency; cur != "" && !en16931Currencies[cur] {
+		add("BR-CL-04", fmt.Sprintf("Invoice currency code (BT-5=%q) shall be a valid ISO 4217 alpha-3 code", cur))
 	}
-	if tc := inv.typeCode; tc != "" && !facturxTypeCodes[tc] {
-		add("BR-CL-05", fmt.Sprintf("Invoice type code (BT-3=%q) is not a permitted UNTDID 1001 value", tc))
+	if tc := inv.typeCode; tc != "" && !en16931TypeCodes[tc] {
+		add("BR-CL-01", fmt.Sprintf("Invoice type code (BT-3=%q) is not a permitted UNTDID 1001 value", tc))
 	}
 	if c := inv.sellerCountry; c != "" && !isUpperAlpha(c, 2) {
 		add("BR-CL-14", fmt.Sprintf("Seller country code (BT-40=%q) shall be a valid ISO 3166-1 code", c))

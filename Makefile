@@ -1,4 +1,4 @@
-.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington
+.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington en16931-artefacts clean-en16931-artefacts
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -101,3 +101,19 @@ $(UBL_DIR)/.ok: $(UBL_DIR)/sources.tsv $(UBL_DIR)/download.sh
 
 clean-en16931-ubl:
 	rm -f $(UBL_DIR)/*.xml $(UBL_DIR)/.ok
+
+# Official CEN/TC 434 EN 16931 supporting artefacts (ConnectingEurope/
+# eInvoicing-EN16931, EUPL-1.2): the validation Schematron, code lists, and the
+# per-rule unit-test suite. Cloned under testdata (gitignored) and used as a
+# differential oracle for the EN 16931 rule engine and to verify the committed
+# code-list tables. Not committed.
+EN16931_DIR := testdata/en16931-artefacts
+
+en16931-artefacts: $(EN16931_DIR)/.ok
+
+$(EN16931_DIR)/.ok:
+	git clone --depth 1 https://github.com/ConnectingEurope/eInvoicing-EN16931 $(EN16931_DIR)
+	touch $@
+
+clean-en16931-artefacts:
+	rm -rf $(EN16931_DIR)
