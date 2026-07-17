@@ -19,6 +19,12 @@ const (
 	PDFA2b
 	PDFA3b
 	PDFA4
+	// Level A (accessible) conformance: Level B plus tagged logical structure,
+	// natural-language specification and Unicode character mapping. PDF/A-4 has
+	// no Level A — accessibility there is expressed via PDF/UA-2.
+	PDFA1a
+	PDFA2a
+	PDFA3a
 )
 
 func (l PDFALevel) String() string {
@@ -31,9 +37,32 @@ func (l PDFALevel) String() string {
 		return "PDF/A-3b"
 	case PDFA4:
 		return "PDF/A-4"
+	case PDFA1a:
+		return "PDF/A-1a"
+	case PDFA2a:
+		return "PDF/A-2a"
+	case PDFA3a:
+		return "PDF/A-3a"
 	default:
 		return fmt.Sprintf("PDFALevel(%d)", int(l))
 	}
+}
+
+// isA reports whether l is a Level A (accessible) conformance level.
+func (l PDFALevel) isA() bool { return l == PDFA1a || l == PDFA2a || l == PDFA3a }
+
+// baseB returns the Level B conformance level whose requirements a Level A level
+// includes (1a→1b, 2a→2b, 3a→3b); for a non-A level it returns the level itself.
+func (l PDFALevel) baseB() PDFALevel {
+	switch l {
+	case PDFA1a:
+		return PDFA1b
+	case PDFA2a:
+		return PDFA2b
+	case PDFA3a:
+		return PDFA3b
+	}
+	return l
 }
 
 // ValidationError describes a single PDF/A conformance violation.
@@ -92,6 +121,13 @@ func runByteCheck(level PDFALevel, check func() []ValidationError) (out []Valida
 // result means no implemented check fired, not a guarantee of full conformance
 // (the validator covers a subset of ISO 19005).
 func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []ValidationError {
+	// Level A conformance is Level B plus the accessibility requirements; it is
+	// validated by running the Level B checks and adding the Level A rule
+	// families (see validatePDFALevelA).
+	if level.isA() {
+		return validatePDFALevelA(doc, level, rawData)
+	}
+
 	var errs []ValidationError
 
 	checks := []func(*Document, PDFALevel) []ValidationError{
