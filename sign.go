@@ -153,7 +153,7 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 	sig := &Dictionary{}
 	sig.Set("Type", Name("Sig"))
 	sig.Set("Filter", Name("Adobe.PPKLite"))
-	sig.Set("SubFilter", Name("adbe.pkcs7.detached"))
+	sig.Set("SubFilter", Name("ETSI.CAdES.detached"))
 	sig.Set("ByteRange", Array{Integer(0), Integer(9999999999), Integer(9999999999), Integer(9999999999)})
 	sig.Set("Contents", String{Value: make([]byte, sigContentsBytes), IsHex: true})
 
