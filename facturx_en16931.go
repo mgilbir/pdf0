@@ -172,17 +172,20 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		sellerCountry:        agr.orNil().str("SellerTradeParty", "PostalTradeAddress", "CountryID"),
 		sellerAddressPresent: agr.orNil().child("SellerTradeParty", "PostalTradeAddress") != nil,
 		buyerCountry:         agr.orNil().str("BuyerTradeParty", "PostalTradeAddress", "CountryID"),
+		buyerAddressPresent:  agr.orNil().child("BuyerTradeParty", "PostalTradeAddress") != nil,
 	}
 	if sum != nil {
 		inv.hasTotals = true
 		inv.totals = monetaryTotals{
-			lineTotal:      sum.str("LineTotalAmount"),
-			allowanceTotal: sum.str("AllowanceTotalAmount"),
-			chargeTotal:    sum.str("ChargeTotalAmount"),
-			taxBasisTotal:  sum.str("TaxBasisTotalAmount"),
-			taxTotal:       sum.str("TaxTotalAmount"),
-			grandTotal:     sum.str("GrandTotalAmount"),
-			duePayable:     sum.str("DuePayableAmount"),
+			lineTotal:       sum.str("LineTotalAmount"),
+			allowanceTotal:  sum.str("AllowanceTotalAmount"),
+			chargeTotal:     sum.str("ChargeTotalAmount"),
+			taxBasisTotal:   sum.str("TaxBasisTotalAmount"),
+			taxTotal:        sum.str("TaxTotalAmount"),
+			grandTotal:      sum.str("GrandTotalAmount"),
+			paidAmount:      sum.str("TotalPrepaidAmount"),
+			payableRounding: sum.str("RoundingAmount"),
+			duePayable:      sum.str("DuePayableAmount"),
 		}
 	}
 	for _, tt := range settle.orNil().all("ApplicableTradeTax") {
@@ -305,17 +308,20 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		sellerCountry:        seller.str("PostalAddress", "Country", "IdentificationCode"),
 		sellerAddressPresent: seller.child("PostalAddress") != nil,
 		buyerCountry:         buyer.str("PostalAddress", "Country", "IdentificationCode"),
+		buyerAddressPresent:  buyer.child("PostalAddress") != nil,
 	}
 	if total != nil {
 		inv.hasTotals = true
 		inv.totals = monetaryTotals{
-			lineTotal:      total.str("LineExtensionAmount"),
-			allowanceTotal: total.str("AllowanceTotalAmount"),
-			chargeTotal:    total.str("ChargeTotalAmount"),
-			taxBasisTotal:  total.str("TaxExclusiveAmount"),
-			taxTotal:       taxTotal.str("TaxAmount"), // BT-110: TaxTotal's direct amount
-			grandTotal:     total.str("TaxInclusiveAmount"),
-			duePayable:     total.str("PayableAmount"),
+			lineTotal:       total.str("LineExtensionAmount"),
+			allowanceTotal:  total.str("AllowanceTotalAmount"),
+			chargeTotal:     total.str("ChargeTotalAmount"),
+			taxBasisTotal:   total.str("TaxExclusiveAmount"),
+			taxTotal:        taxTotal.str("TaxAmount"), // BT-110: TaxTotal's direct amount
+			grandTotal:      total.str("TaxInclusiveAmount"),
+			paidAmount:      total.str("PrepaidAmount"),
+			payableRounding: total.str("PayableRoundingAmount"),
+			duePayable:      total.str("PayableAmount"),
 		}
 	}
 	for _, ts := range taxTotal.all("TaxSubtotal") {

@@ -58,6 +58,7 @@ const minimalUBL = `<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd
   <PartyLegalEntity><RegistrationName>Seller Ltd</RegistrationName></PartyLegalEntity>
 </Party></AccountingSupplierParty>
 <AccountingCustomerParty><Party>
+  <PostalAddress><Country><IdentificationCode>DE</IdentificationCode></Country></PostalAddress>
   <PartyLegalEntity><RegistrationName>Buyer Ltd</RegistrationName></PartyLegalEntity>
 </Party></AccountingCustomerParty>
 <TaxTotal><TaxAmount>19.00</TaxAmount>
@@ -69,7 +70,8 @@ const minimalUBL = `<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd
   <PayableAmount>119.00</PayableAmount></LegalMonetaryTotal>
 <InvoiceLine><ID>1</ID><InvoicedQuantity unitCode="C62">1</InvoicedQuantity>
   <LineExtensionAmount>100.00</LineExtensionAmount>
-  <Item><Name>Widget</Name></Item><Price><PriceAmount>100.00</PriceAmount></Price></InvoiceLine>
+  <Item><Name>Widget</Name><ClassifiedTaxCategory><ID>S</ID><Percent>19</Percent></ClassifiedTaxCategory></Item>
+  <Price><PriceAmount>100.00</PriceAmount></Price></InvoiceLine>
 </Invoice>`
 
 func TestValidateUBLMutations(t *testing.T) {

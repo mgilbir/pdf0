@@ -28,6 +28,7 @@ type en16931Invoice struct {
 	sellerCountry        string // BT-40 Seller country code
 	sellerAddressPresent bool   // whether the Seller postal address group (BG-5) is present
 	buyerCountry         string // BT-55 Buyer country code
+	buyerAddressPresent  bool   // whether the Buyer postal address group (BG-8) is present
 
 	hasTotals bool           // whether a document monetary summation (BG-22) is present
 	totals    monetaryTotals // BG-22 Document totals
@@ -39,13 +40,15 @@ type en16931Invoice struct {
 
 // monetaryTotals holds the document total amounts (BG-22); absent terms are "".
 type monetaryTotals struct {
-	lineTotal      string // BT-106 Sum of line net amounts
-	allowanceTotal string // BT-107 Sum of allowances on document level
-	chargeTotal    string // BT-108 Sum of charges on document level
-	taxBasisTotal  string // BT-109 Invoice total without VAT
-	taxTotal       string // BT-110 Invoice total VAT amount (optional)
-	grandTotal     string // BT-112 Invoice total with VAT
-	duePayable     string // BT-115 Amount due for payment
+	lineTotal       string // BT-106 Sum of line net amounts
+	allowanceTotal  string // BT-107 Sum of allowances on document level
+	chargeTotal     string // BT-108 Sum of charges on document level
+	taxBasisTotal   string // BT-109 Invoice total without VAT
+	taxTotal        string // BT-110 Invoice total VAT amount (optional)
+	grandTotal      string // BT-112 Invoice total with VAT
+	paidAmount      string // BT-113 Paid amount
+	payableRounding string // BT-114 Rounding amount
+	duePayable      string // BT-115 Amount due for payment
 }
 
 type vatBreakdown struct {
@@ -102,6 +105,29 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		add("BR-08", "An Invoice shall contain the Seller postal address (BG-5)")
 	}
 	req("BR-09", "The Seller postal address shall contain a Seller country code (BT-40)", inv.sellerCountry)
+	// The Buyer postal address (BG-8) is not mandatory in the reduced MINIMUM CIUS.
+	if profile != FacturXMinimum {
+		if !inv.buyerAddressPresent {
+			add("BR-10", "An Invoice shall contain the Buyer postal address (BG-8)")
+		}
+		req("BR-11", "The Buyer postal address shall contain a Buyer country code (BT-55)", inv.buyerCountry)
+	}
+
+	// Full-invoice profiles carry lines and a line-net total; the head-only
+	// Factur-X CIUS (MINIMUM, BASIC WL) legitimately omit both, so gate the
+	// line-presence rules to profiles that carry lines.
+	headOnly := profile == FacturXMinimum || profile == FacturXBasicWL
+	if !headOnly {
+		if len(inv.lines) == 0 {
+			add("BR-16", "An Invoice shall have at least one Invoice line (BG-25)")
+		}
+		req("BR-12", "An Invoice shall have the Sum of Invoice line net amount (BT-106)", inv.totals.lineTotal)
+	}
+	// BR-CO-18: at least one VAT breakdown group. MINIMUM carries only totals, no
+	// breakdown, so it is exempt.
+	if profile != FacturXMinimum && len(inv.vatBreakdowns) == 0 {
+		add("BR-CO-18", "An Invoice shall at least have one VAT breakdown group (BG-23)")
+	}
 
 	req("BR-13", "An Invoice shall have the Invoice total amount without VAT (BT-109)", inv.totals.taxBasisTotal)
 	req("BR-14", "An Invoice shall have the Invoice total amount with VAT (BT-112)", inv.totals.grandTotal)
@@ -124,17 +150,34 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	}
 
 	// Decimals (BR-DEC-*): monetary amounts shall have at most two decimal places.
+	dec := func(rule, name, val string) {
+		if val != "" && decimalCount(val) > 2 {
+			add(rule, fmt.Sprintf("amount %s (%q) shall have at most two decimals", name, val))
+		}
+	}
 	if inv.hasTotals {
-		for _, fld := range []struct{ rule, name, val string }{
-			{"BR-DEC-12", "LineTotalAmount", inv.totals.lineTotal},
-			{"BR-DEC-15", "TaxBasisTotalAmount", inv.totals.taxBasisTotal},
-			{"BR-DEC-16", "TaxTotalAmount", inv.totals.taxTotal},
-			{"BR-DEC-17", "GrandTotalAmount", inv.totals.grandTotal},
-			{"BR-DEC-18", "DuePayableAmount", inv.totals.duePayable},
-		} {
-			if fld.val != "" && decimalCount(fld.val) > 2 {
-				add(fld.rule, fmt.Sprintf("amount %s (%q) shall have at most two decimals", fld.name, fld.val))
-			}
+		dec("BR-DEC-09", "Sum of line net amounts (BT-106)", inv.totals.lineTotal)
+		dec("BR-DEC-10", "Sum of allowances on document level (BT-107)", inv.totals.allowanceTotal)
+		dec("BR-DEC-11", "Sum of charges on document level (BT-108)", inv.totals.chargeTotal)
+		dec("BR-DEC-12", "Invoice total without VAT (BT-109)", inv.totals.taxBasisTotal)
+		dec("BR-DEC-13", "Invoice total VAT amount (BT-110)", inv.totals.taxTotal)
+		dec("BR-DEC-14", "Invoice total with VAT (BT-112)", inv.totals.grandTotal)
+		dec("BR-DEC-16", "Paid amount (BT-113)", inv.totals.paidAmount)
+		dec("BR-DEC-17", "Rounding amount (BT-114)", inv.totals.payableRounding)
+		dec("BR-DEC-18", "Amount due for payment (BT-115)", inv.totals.duePayable)
+	}
+	for _, tt := range inv.vatBreakdowns {
+		dec("BR-DEC-19", "VAT category taxable amount (BT-116)", tt.basis)
+		dec("BR-DEC-20", "VAT category tax amount (BT-117)", tt.calc)
+	}
+	for _, li := range inv.lines {
+		dec("BR-DEC-23", "Invoice line net amount (BT-131)", li.netAmount)
+	}
+	for _, ac := range inv.allowCharges {
+		if ac.isCharge {
+			dec("BR-DEC-05", "Document level charge amount (BT-99)", ac.amount)
+		} else {
+			dec("BR-DEC-01", "Document level allowance amount (BT-92)", ac.amount)
 		}
 	}
 
@@ -240,7 +283,10 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			add("BR-24", "Each Invoice line shall have an Invoice line net amount (BT-131)")
 		}
 		if grouping[li.lineID] {
-			continue // grouping line: no direct quantity or price
+			continue // grouping line: no direct quantity, price or item VAT category
+		}
+		if li.vatCategory == "" {
+			add("BR-CO-04", "Each Invoice line (BG-25) shall be categorized with an Invoiced item VAT category code (BT-151)")
 		}
 		if li.quantity == "" {
 			add("BR-22", "Each Invoice line shall have an Invoiced quantity (BT-129)")
@@ -287,6 +333,43 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		}
 	}
 
-	_ = profile // profile-specific rules apply per present group, not by gate
+	// BR-CO-11/12: the allowance (BT-107) and charge (BT-108) totals equal the sum
+	// of the document-level allowance (BT-92) and charge (BT-99) amounts. Some
+	// EXTENDED producers carry amounts in the totals without an itemizable BG-20/21
+	// entry, so these are checked only when every such amount is itemized — i.e.
+	// outside the EXTENDED profile.
+	if inv.hasTotals && profile != FacturXExtended {
+		var allowSum, chargeSum float64
+		for _, ac := range inv.allowCharges {
+			if v, ok := parseAmount(ac.amount); ok {
+				if ac.isCharge {
+					chargeSum += v
+				} else {
+					allowSum += v
+				}
+			}
+		}
+		if at, ok := parseAmount(inv.totals.allowanceTotal); ok && math.Abs(round2(allowSum)-at) > 0.005 {
+			add("BR-CO-11", fmt.Sprintf("Sum of allowances on document level (BT-107=%.2f) shall equal the sum of Document level allowance amounts (%.2f)", at, allowSum))
+		}
+		if ct, ok := parseAmount(inv.totals.chargeTotal); ok && math.Abs(round2(chargeSum)-ct) > 0.005 {
+			add("BR-CO-12", fmt.Sprintf("Sum of charges on document level (BT-108=%.2f) shall equal the sum of Document level charge amounts (%.2f)", ct, chargeSum))
+		}
+	}
+
+	// BR-CO-16: Amount due for payment (BT-115) = Invoice total with VAT (BT-112)
+	// - Paid amount (BT-113) + Rounding amount (BT-114). MINIMUM omits the paid
+	// amount from its reduced summation, so its due may differ without a modeled
+	// prepaid; exempt it.
+	if inv.hasTotals && profile != FacturXMinimum {
+		grand, okG := parseAmount(inv.totals.grandTotal)
+		due, okD := parseAmount(inv.totals.duePayable)
+		paid, _ := parseAmount(inv.totals.paidAmount)
+		rounding, _ := parseAmount(inv.totals.payableRounding)
+		if okG && okD && math.Abs(round2(grand-paid+rounding)-due) > 0.005 {
+			add("BR-CO-16", fmt.Sprintf("Amount due for payment (BT-115=%.2f) shall equal total with VAT (BT-112=%.2f) - paid (BT-113=%.2f) + rounding (BT-114=%.2f)", due, grand, paid, rounding))
+		}
+	}
+
 	return out
 }
