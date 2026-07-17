@@ -27,6 +27,14 @@ const (
 	// PDFX4p is PDF/X-4p, which permits an externally referenced destination
 	// profile instead of an embedded one.
 	PDFX4p
+	// PDFX1a is PDF/X-1a (ISO 15930-1/4): CMYK, grayscale and spot colour only,
+	// no transparency, defined against PDF 1.3/1.4.
+	PDFX1a
+	// PDFX3 is PDF/X-3 (ISO 15930-3/6): PDF/X-1a plus ICC-managed colour, still
+	// no transparency, PDF 1.3/1.4.
+	PDFX3
+	// PDFX6 is PDF/X-6 (ISO 15930-9): the PDF 2.0-based successor to PDF/X-4.
+	PDFX6
 )
 
 func (l PDFXLevel) String() string {
@@ -35,8 +43,45 @@ func (l PDFXLevel) String() string {
 		return "PDF/X-4"
 	case PDFX4p:
 		return "PDF/X-4p"
+	case PDFX1a:
+		return "PDF/X-1a"
+	case PDFX3:
+		return "PDF/X-3"
+	case PDFX6:
+		return "PDF/X-6"
 	default:
 		return "PDF/X"
+	}
+}
+
+// pdfxVersionPrefix is the GTS_PDFXVersion identifier prefix a level requires.
+func (l PDFXLevel) pdfxVersionPrefix() string {
+	switch l {
+	case PDFX1a:
+		return "PDF/X-1a"
+	case PDFX3:
+		return "PDF/X-3"
+	case PDFX6:
+		return "PDF/X-6"
+	default:
+		return "PDF/X-4"
+	}
+}
+
+// noTransparency reports whether the level forbids transparency (PDF/X-1a and
+// PDF/X-3 predate the transparency imaging model; PDF/X-4 and -6 permit it).
+func (l PDFXLevel) noTransparency() bool { return l == PDFX1a || l == PDFX3 }
+
+// maxPDFMinor returns the highest PDF 1.x minor version the level is defined
+// for, and whether the level is a PDF 2.0 level.
+func (l PDFXLevel) versionBound() (maxMinor int, pdf2 bool) {
+	switch l {
+	case PDFX1a, PDFX3:
+		return 4, false
+	case PDFX6:
+		return 0, true
+	default: // PDFX4 / PDFX4p
+		return 6, false
 	}
 }
 
@@ -68,10 +113,18 @@ func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
 		add("encryption", "a PDF/X file shall not be encrypted", 0)
 	}
 
-	// Version: PDF/X-4 is defined against PDF 1.6; 1.7+/2.0 features are out of
-	// scope. Older minor versions are tolerated.
-	if maj, min, ok := parsePDFVersion(doc.Version); ok && (maj != 1 || min > 6) {
-		add("version", fmt.Sprintf("PDF/X-4 is defined for PDF 1.6; file declares %s", doc.Version), 0)
+	// Version: each PDF/X level is defined for a specific PDF version. PDF/X-1a
+	// and -3 for PDF 1.3/1.4, PDF/X-4/-4p for 1.6, PDF/X-6 for PDF 2.0. A newer
+	// version than the level allows is out of scope.
+	if maj, min, ok := parsePDFVersion(doc.Version); ok {
+		maxMinor, pdf2 := level.versionBound()
+		if pdf2 {
+			if maj != 2 {
+				add("version", fmt.Sprintf("%s is defined for PDF 2.0; file declares %s", level, doc.Version), 0)
+			}
+		} else if maj != 1 || min > maxMinor {
+			add("version", fmt.Sprintf("%s is defined for PDF 1.%d; file declares %s", level, maxMinor, doc.Version), 0)
+		}
 	}
 
 	pdfxCheckIdentification(doc, level, add)
@@ -81,8 +134,33 @@ func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
 	pdfxCheckFontsEmbedded(doc, add)
 	pdfxCheckDeviceColor(doc, add)
 	pdfxCheckForbidden(doc, add)
+	if level.noTransparency() {
+		pdfxCheckNoTransparency(doc, add)
+	}
 
 	return out
+}
+
+// pdfxCheckNoTransparency flags any use of the transparency imaging model, which
+// PDF/X-1a and PDF/X-3 predate: a page transparency group, or transparency in a
+// page's own ExtGState resources (soft mask, non-normal blend mode, or alpha
+// other than fully opaque).
+func pdfxCheckNoTransparency(doc *Document, add func(rule, msg string, obj int)) {
+	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
+	if cat == nil {
+		return
+	}
+	for _, page := range collectPages(doc, cat.Get("Pages")) {
+		if grp := doc.ResolveDict(page.dict.Get("Group")); grp != nil {
+			if s, _ := grp.Get("S").(Name); s == "Transparency" {
+				add("transparency", "a page transparency group is not permitted in this PDF/X level", page.objNum)
+				continue
+			}
+		}
+		if pageUsesTransparency(doc, page.dict) {
+			add("transparency", "transparency (soft mask, blend mode or alpha) is not permitted in this PDF/X level", page.objNum)
+		}
+	}
 }
 
 // pdfxCheckForbidden flags features PDF/X-4 does not permit (ISO 15930-7 6.x):
@@ -263,8 +341,9 @@ func pdfxCheckIdentification(doc *Document, level PDFXLevel, add func(rule, msg 
 		add("identification", "file is not identified as PDF/X (no pdfxid:GTS_PDFXVersion or Info /GTS_PDFXVersion)", 0)
 		return
 	}
-	// The identifier for both PDF/X-4 and PDF/X-4p begins "PDF/X-4".
-	if !strings.HasPrefix(claimed, "PDF/X-4") {
+	// The identifier begins with the level's family prefix (e.g. "PDF/X-4" for
+	// both PDF/X-4 and PDF/X-4p, "PDF/X-1a" for PDF/X-1a:2001/2003).
+	if !strings.HasPrefix(claimed, level.pdfxVersionPrefix()) {
 		add("identification", fmt.Sprintf("GTS_PDFXVersion %q does not identify %s", claimed, level), 0)
 	}
 }
@@ -300,8 +379,10 @@ func pdfxCheckOutputIntent(doc *Document, level PDFXLevel, add func(rule, msg st
 		prof := oi.Get("DestOutputProfile")
 		if _, ok := doc.Resolve(prof).(*Stream); ok {
 			profiles = append(profiles, prof)
-		} else if level == PDFX4 {
-			add("output-intent", "PDF/X-4 requires an embedded ICC /DestOutputProfile in the GTS_PDFX output intent", refNum(e))
+		} else if level != PDFX4p {
+			// Only PDF/X-4p permits an external reference; every other level
+			// requires the ICC profile embedded.
+			add("output-intent", fmt.Sprintf("%s requires an embedded ICC /DestOutputProfile in the GTS_PDFX output intent", level), refNum(e))
 		} else if oi.Get("DestOutputProfileRef") == nil {
 			add("output-intent", "PDF/X-4p output intent has neither an embedded /DestOutputProfile nor a /DestOutputProfileRef", refNum(e))
 		}
