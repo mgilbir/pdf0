@@ -64,6 +64,7 @@ func TestEN16931CodeListsFaithful(t *testing.T) {
 		{"en16931ICD", en16931ICD, "ICD.gc"},
 		{"en16931MIME", en16931MIME, "MIME.gc"},
 		{"en16931RefTypeCodes", en16931RefTypeCodes, "1153.gc"},
+		{"en16931ItemClassCodes", en16931ItemClassCodes, "Item.gc"},
 		{"en16931Units", en16931Units, "Unit.gc"},
 	}
 	for _, tc := range cases {

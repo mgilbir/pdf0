@@ -84,6 +84,9 @@ func parseCII(data []byte) (*ciiNode, error) {
 // child returns the first descendant reached by following the given local names,
 // or nil if any step is missing.
 func (n *ciiNode) child(path ...string) *ciiNode {
+	if n == nil {
+		return nil
+	}
 	cur := n
 	for _, name := range path {
 		var next *ciiNode
@@ -103,6 +106,9 @@ func (n *ciiNode) child(path ...string) *ciiNode {
 
 // all returns every direct child with the given local name.
 func (n *ciiNode) all(name string) []*ciiNode {
+	if n == nil {
+		return nil
+	}
 	var out []*ciiNode
 	for _, c := range n.children {
 		if c.name == name {
@@ -146,25 +152,138 @@ func parseEN16931(xmlData []byte) (*en16931Invoice, error) {
 	}
 	switch root.name {
 	case "CrossIndustryInvoice":
-		return mapCII(root), nil
+		inv := mapCII(root)
+		collectCommon(root, inv)
+		return inv, nil
 	case "Invoice", "CreditNote":
-		return mapUBL(root), nil
+		inv := mapUBL(root)
+		collectCommon(root, inv)
+		return inv, nil
 	}
 	return nil, fmt.Errorf("the invoice XML root %q is neither a CrossIndustryInvoice (CII) nor a UBL Invoice/CreditNote", root.name)
+}
+
+// findAll returns every descendant (self included) with the given local name.
+func (n *ciiNode) findAll(name string) []*ciiNode {
+	if n == nil {
+		return nil
+	}
+	var out []*ciiNode
+	var rec func(*ciiNode)
+	rec = func(c *ciiNode) {
+		if c.name == name {
+			out = append(out, c)
+		}
+		for _, ch := range c.children {
+			rec(ch)
+		}
+	}
+	rec(n)
+	return out
+}
+
+// collectAttr gathers the values of the named attribute across all descendants.
+func (n *ciiNode) collectAttr(attr string) []string {
+	if n == nil {
+		return nil
+	}
+	var out []string
+	var rec func(*ciiNode)
+	rec = func(c *ciiNode) {
+		if v := c.attr(attr); v != "" {
+			out = append(out, v)
+		}
+		for _, ch := range c.children {
+			rec(ch)
+		}
+	}
+	rec(n)
+	return out
+}
+
+// collectCommon fills the tree-wide code-list fields that are gathered the same
+// way in either syntax (amount currency identifiers, party and object scheme
+// identifiers — the latter using UBL element names, absent from CII so harmless).
+func collectCommon(root *ciiNode, inv *en16931Invoice) {
+	if root.name == "CrossIndustryInvoice" {
+		inv.syntax = "CII"
+	} else {
+		inv.syntax = "UBL"
+	}
+	inv.currencyIDs = root.collectAttr("currencyID")
+	for _, p := range root.findAll("PartyIdentification") {
+		if s := p.child("ID").attr("schemeID"); s != "" {
+			inv.partySchemes = append(inv.partySchemes, s)
+		}
+	}
+	for _, p := range root.findAll("PartyLegalEntity") {
+		if s := p.child("CompanyID").attr("schemeID"); s != "" {
+			inv.legalSchemes = append(inv.legalSchemes, s)
+		}
+	}
+	for _, d := range root.findAll("AdditionalDocumentReference") {
+		if d.str("DocumentTypeCode") == "130" {
+			if s := d.child("ID").attr("schemeID"); s != "" {
+				inv.objectSchemes = append(inv.objectSchemes, s)
+			}
+		}
+	}
+	// A monetary amount (an element named *Amount) shall have at most two fraction
+	// digits (UBL-DT-01) — except a unit price, which may carry more. Unit prices
+	// are the *PriceAmount elements and anything under a price container (UBL cac:
+	// Price, CII Net/GrossPriceProductTradePrice), so this holds in either syntax.
+	var walk func(c *ciiNode, inPrice bool)
+	walk = func(c *ciiNode, inPrice bool) {
+		if !inPrice && strings.HasSuffix(c.name, "Amount") && !strings.HasSuffix(c.name, "PriceAmount") {
+			if decimalCount(strings.TrimSpace(c.text)) > 2 {
+				inv.amountDecimalsBad = true
+			}
+		}
+		childInPrice := inPrice || c.name == "Price" ||
+			c.name == "NetPriceProductTradePrice" || c.name == "GrossPriceProductTradePrice"
+		for _, ch := range c.children {
+			walk(ch, childInPrice)
+		}
+	}
+	walk(root, false)
+}
+
+// ciiVATRegValue returns a CII party's VAT registration identifier (scheme "VA").
+func ciiVATRegValue(p *ciiNode) string {
+	for _, r := range p.all("SpecifiedTaxRegistration") {
+		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && strings.EqualFold(id.attr("schemeID"), "VA") {
+			return strings.TrimSpace(id.text)
+		}
+	}
+	return ""
 }
 
 // ciiHasVATReg reports whether a CII trade party carries a VAT tax registration
 // (SpecifiedTaxRegistration whose ID scheme is "VA").
 func ciiHasVATReg(p *ciiNode) bool {
-	if p == nil {
-		return false
-	}
+	return ciiVATRegValue(p) != ""
+}
+
+// ciiVATRegCount counts a CII party's VAT registrations (scheme "VA").
+func ciiVATRegCount(p *ciiNode) int {
+	n := 0
 	for _, r := range p.all("SpecifiedTaxRegistration") {
 		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && strings.EqualFold(id.attr("schemeID"), "VA") {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
+}
+
+// ublVATSchemeCount counts a UBL party's VAT PartyTaxScheme entries.
+func ublVATSchemeCount(p *ciiNode) int {
+	n := 0
+	for _, pts := range p.all("PartyTaxScheme") {
+		if pts.str("CompanyID") != "" && strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
+			n++
+		}
+	}
+	return n
 }
 
 // ciiHasOtherReg reports whether a CII party carries a non-VAT tax registration.
@@ -180,18 +299,20 @@ func ciiHasOtherReg(p *ciiNode) bool {
 	return false
 }
 
+// ublVATSchemeValue returns a UBL party's VAT PartyTaxScheme company identifier.
+func ublVATSchemeValue(p *ciiNode) string {
+	for _, pts := range p.all("PartyTaxScheme") {
+		if id := pts.str("CompanyID"); id != "" && strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
+			return id
+		}
+	}
+	return ""
+}
+
 // ublHasVATScheme reports whether a UBL party carries a VAT PartyTaxScheme with a
 // company identifier.
 func ublHasVATScheme(p *ciiNode) bool {
-	if p == nil {
-		return false
-	}
-	for _, pts := range p.all("PartyTaxScheme") {
-		if pts.str("CompanyID") != "" && strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
-			return true
-		}
-	}
-	return false
+	return ublVATSchemeValue(p) != ""
 }
 
 // ublHasOtherScheme reports whether a UBL party carries a non-VAT PartyTaxScheme
@@ -206,6 +327,27 @@ func ublHasOtherScheme(p *ciiNode) bool {
 		}
 	}
 	return false
+}
+
+// ciiPeriod extracts a CII billing period (BillingSpecifiedPeriod) from a node.
+func ciiPeriod(n *ciiNode) invoicePeriod {
+	p := n.child("BillingSpecifiedPeriod")
+	if p == nil {
+		return invoicePeriod{}
+	}
+	return invoicePeriod{present: true,
+		start: p.str("StartDateTime", "DateTimeString"),
+		end:   p.str("EndDateTime", "DateTimeString")}
+}
+
+// ublPeriod extracts a UBL invoice period (InvoicePeriod) from a node.
+func ublPeriod(n *ciiNode) invoicePeriod {
+	p := n.child("InvoicePeriod")
+	if p == nil {
+		return invoicePeriod{}
+	}
+	return invoicePeriod{present: true, start: p.str("StartDate"), end: p.str("EndDate"),
+		desc: p.str("DescriptionCode")}
 }
 
 // mapCII extracts the EN 16931 business terms from a Cross Industry Invoice tree.
@@ -235,10 +377,40 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		buyerLegalReg:        agr.orNil().str("BuyerTradeParty", "SpecifiedLegalOrganization", "ID") != "",
 		sellerEndpointScheme: agr.orNil().child("SellerTradeParty", "URIUniversalCommunication", "URIID").attr("schemeID"),
 		buyerEndpointScheme:  agr.orNil().child("BuyerTradeParty", "URIUniversalCommunication", "URIID").attr("schemeID"),
+		period:               ciiPeriod(settle.orNil()),
+		taxRepPresent:        agr.orNil().child("SellerTaxRepresentativeTradeParty") != nil,
+		taxRepName:           agr.orNil().str("SellerTaxRepresentativeTradeParty", "Name"),
+		taxRepAddressPresent: agr.orNil().child("SellerTaxRepresentativeTradeParty", "PostalTradeAddress") != nil,
+		taxRepCountry:        agr.orNil().str("SellerTaxRepresentativeTradeParty", "PostalTradeAddress", "CountryID"),
+		payeePresent:         settle.orNil().child("PayeeTradeParty") != nil,
+		payeeName:            settle.orNil().str("PayeeTradeParty", "Name"),
+		deliverToPresent:     tx.orNil().child("ApplicableHeaderTradeDelivery", "ShipToTradeParty", "PostalTradeAddress") != nil,
+		deliverToCountry:     tx.orNil().str("ApplicableHeaderTradeDelivery", "ShipToTradeParty", "PostalTradeAddress", "CountryID"),
 	}
-	for _, pm := range settle.orNil().all("SpecifiedTradeSettlementPaymentMeans") {
+	pms := settle.orNil().all("SpecifiedTradeSettlementPaymentMeans")
+	inv.paymentInstrPresent = len(pms) > 0
+	for _, pm := range pms {
 		if tc := pm.str("TypeCode"); tc != "" {
 			inv.paymentMeans = append(inv.paymentMeans, tc)
+		}
+		if acc := pm.child("PayeePartyCreditorFinancialAccount"); acc != nil {
+			inv.creditAccountPresent = true
+			if id := firstNonEmpty(acc.str("IBANID"), acc.str("ProprietaryID")); id != "" {
+				inv.creditAccountID = id
+			}
+		}
+	}
+	for _, pr := range settle.orNil().all("PaymentReference") {
+		if t := strings.TrimSpace(pr.text); t != "" {
+			inv.paymentIDs = append(inv.paymentIDs, t)
+		}
+	}
+	inv.taxCurrency = settle.orNil().str("TaxCurrencyCode")
+	if inv.taxCurrency != "" {
+		for _, ta := range sum.orNil().all("TaxTotalAmount") {
+			if strings.EqualFold(ta.attr("currencyID"), inv.taxCurrency) {
+				inv.vatInTaxCurrency = true
+			}
 		}
 	}
 	if sum != nil {
@@ -285,10 +457,25 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			vatCategory:   li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "CategoryCode"),
 			vatRate:       li.str("SpecifiedLineTradeSettlement", "ApplicableTradeTax", "RateApplicablePercent"),
 			originCountry: li.str("SpecifiedTradeProduct", "OriginTradeCountry", "ID"),
+			period:        ciiPeriod(li.child("SpecifiedLineTradeSettlement")),
+			grossPrice:    li.str("SpecifiedLineTradeAgreement", "GrossPriceProductTradePrice", "ChargeAmount"),
+			baseQtyUnit:   li.child("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "BasisQuantity").attr("unitCode"),
 		}
 		if qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity"); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
 			line.unitCode = qty.attr("unitCode")
+		}
+		prod := li.child("SpecifiedTradeProduct").orNil()
+		if g := prod.child("GlobalID"); g != nil {
+			line.stdIDPresent, line.stdIDScheme = true, g.attr("schemeID")
+		}
+		if c := prod.child("DesignatedProductClassification", "ClassCode"); c != nil {
+			line.classPresent, line.classListID = true, c.attr("listID")
+		}
+		for _, a := range prod.all("ApplicableProductCharacteristic") {
+			if a.str("Description") == "" || a.str("Value") == "" {
+				line.itemAttrBad = true
+			}
 		}
 		for _, ac := range li.orNil().child("SpecifiedLineTradeSettlement").orNil().all("SpecifiedTradeAllowanceCharge") {
 			line.allowCharges = append(line.allowCharges, lineAllowanceCharge{
@@ -299,9 +486,71 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		}
 		inv.lines = append(inv.lines, line)
 	}
+	// Supporting documents (BG-24) and preceding invoice references (BG-3).
+	for _, d := range agr.orNil().all("AdditionalReferencedDocument") {
+		if d.str("TypeCode") != "916" { // 916 = supporting document
+			continue
+		}
+		bin := d.child("AttachmentBinaryObject")
+		inv.docRefs = append(inv.docRefs, docReference{
+			hasID:         d.str("IssuerAssignedID") != "",
+			binaryPresent: bin != nil,
+			mimeCode:      bin.attr("mimeCode"),
+			filename:      bin.attr("filename"),
+		})
+	}
+	for _, r := range settle.orNil().all("InvoiceReferencedDocument") {
+		if r.str("IssuerAssignedID") == "" {
+			inv.billingRefNoID = true
+		}
+	}
+	inv.sellerVATIDValue = ciiVATRegValue(agr.child("SellerTradeParty"))
+	inv.taxRepVATIDValue = ciiVATRegValue(agr.child("SellerTaxRepresentativeTradeParty"))
+	inv.buyerVATIDValue = ciiVATRegValue(agr.child("BuyerTradeParty"))
+	inv.sellerID = agr.str("SellerTradeParty", "ID")
+	inv.sellerLegalReg = agr.str("SellerTradeParty", "SpecifiedLegalOrganization", "ID")
+	inv.sellerEndpointPresent = agr.str("SellerTradeParty", "URIUniversalCommunication", "URIID") != ""
+	inv.buyerEndpointPresent = agr.str("BuyerTradeParty", "URIUniversalCommunication", "URIID") != ""
+	inv.deliveryDate = tx.str("ApplicableHeaderTradeDelivery", "ActualDeliverySupplyChainEvent", "OccurrenceDateTime", "DateTimeString")
+	inv.sellerVATIDCount = ciiVATRegCount(agr.child("SellerTradeParty"))
+	inv.buyerVATIDCount = ciiVATRegCount(agr.child("BuyerTradeParty"))
+	inv.supplierSchemeCnt = len(agr.child("SellerTradeParty").all("SpecifiedTaxRegistration"))
 	return inv
 }
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
+
+// distinct returns the number of distinct non-empty values in s.
+func distinct(s []string) int {
+	seen := map[string]bool{}
+	for _, v := range s {
+		if v != "" {
+			seen[v] = true
+		}
+	}
+	return len(seen)
+}
+
+// allEqual reports whether every value in s is equal (vacuously true for 0 or 1).
+func allEqual(s []string) bool {
+	for _, v := range s {
+		if v != s[0] {
+			return false
+		}
+	}
+	return true
+}
+
+// normDate reduces a date to its digits (YYYYMMDD) so CII (20130601) and UBL
+// (2013-06-01) forms compare lexically.
+func normDate(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // decimalCount returns the number of digits after the decimal point in s.
 func decimalCount(s string) int {
@@ -387,10 +636,35 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		buyerLegalReg:        buyer.str("PartyLegalEntity", "CompanyID") != "",
 		sellerEndpointScheme: seller.child("EndpointID").attr("schemeID"),
 		buyerEndpointScheme:  buyer.child("EndpointID").attr("schemeID"),
+		period:               ublPeriod(root),
+		taxRepPresent:        root.child("TaxRepresentativeParty") != nil,
+		taxRepName:           firstNonEmpty(root.str("TaxRepresentativeParty", "PartyName", "Name"), root.str("TaxRepresentativeParty", "PartyLegalEntity", "RegistrationName")),
+		taxRepAddressPresent: root.child("TaxRepresentativeParty", "PostalAddress") != nil,
+		taxRepCountry:        root.str("TaxRepresentativeParty", "PostalAddress", "Country", "IdentificationCode"),
+		payeePresent:         root.child("PayeeParty") != nil,
+		payeeName:            root.str("PayeeParty", "PartyName", "Name"),
+		deliverToPresent:     root.child("Delivery", "DeliveryLocation", "Address") != nil,
+		deliverToCountry:     root.str("Delivery", "DeliveryLocation", "Address", "Country", "IdentificationCode"),
 	}
-	for _, pm := range root.all("PaymentMeans") {
+	pms := root.all("PaymentMeans")
+	inv.paymentInstrPresent = len(pms) > 0
+	for _, pm := range pms {
 		if code := pm.str("PaymentMeansCode"); code != "" {
 			inv.paymentMeans = append(inv.paymentMeans, code)
+		}
+		if acc := pm.child("PayeeFinancialAccount"); acc != nil {
+			inv.creditAccountPresent = true
+			if id := acc.str("ID"); id != "" {
+				inv.creditAccountID = id
+			}
+		}
+	}
+	inv.taxCurrency = root.str("TaxCurrencyCode")
+	if inv.taxCurrency != "" {
+		for _, tt := range root.all("TaxTotal") {
+			if strings.EqualFold(tt.child("TaxAmount").attr("currencyID"), inv.taxCurrency) {
+				inv.vatInTaxCurrency = true
+			}
 		}
 	}
 	if total != nil {
@@ -439,10 +713,25 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			vatCategory:   li.str("Item", "ClassifiedTaxCategory", "ID"),
 			vatRate:       li.str("Item", "ClassifiedTaxCategory", "Percent"),
 			originCountry: li.str("Item", "OriginCountry", "IdentificationCode"),
+			period:        ublPeriod(li),
+			grossPrice:    li.child("Price", "AllowanceCharge").str("BaseAmount"),
+			baseQtyUnit:   li.child("Price", "BaseQuantity").attr("unitCode"),
 		}
 		if qty := li.child(qtyName); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
 			line.unitCode = qty.attr("unitCode")
+		}
+		item := li.child("Item").orNil()
+		if s := item.child("StandardItemIdentification", "ID"); s != nil {
+			line.stdIDPresent, line.stdIDScheme = true, s.attr("schemeID")
+		}
+		if c := item.child("CommodityClassification", "ItemClassificationCode"); c != nil {
+			line.classPresent, line.classListID = true, c.attr("listID")
+		}
+		for _, a := range item.all("AdditionalItemProperty") {
+			if a.str("Name") == "" || a.str("Value") == "" {
+				line.itemAttrBad = true
+			}
 		}
 		for _, ac := range li.all("AllowanceCharge") {
 			line.allowCharges = append(line.allowCharges, lineAllowanceCharge{
@@ -452,6 +741,37 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			})
 		}
 		inv.lines = append(inv.lines, line)
+	}
+	for _, d := range root.all("AdditionalDocumentReference") {
+		bin := d.child("Attachment", "EmbeddedDocumentBinaryObject")
+		inv.docRefs = append(inv.docRefs, docReference{
+			hasID:         d.str("ID") != "",
+			binaryPresent: bin != nil,
+			mimeCode:      bin.attr("mimeCode"),
+			filename:      bin.attr("filename"),
+		})
+	}
+	for _, r := range root.all("BillingReference") {
+		if r.str("InvoiceDocumentReference", "ID") == "" {
+			inv.billingRefNoID = true
+		}
+	}
+	inv.sellerVATIDValue = ublVATSchemeValue(seller)
+	inv.taxRepVATIDValue = ublVATSchemeValue(root.child("TaxRepresentativeParty"))
+	inv.buyerVATIDValue = ublVATSchemeValue(buyer)
+	inv.sellerID = seller.str("PartyIdentification", "ID")
+	inv.sellerLegalReg = seller.str("PartyLegalEntity", "CompanyID")
+	inv.sellerEndpointPresent = seller.str("EndpointID") != ""
+	inv.buyerEndpointPresent = buyer.str("EndpointID") != ""
+	inv.vatPointDate = root.str("TaxPointDate")
+	inv.deliveryDate = root.str("Delivery", "ActualDeliveryDate")
+	inv.sellerVATIDCount = ublVATSchemeCount(seller)
+	inv.buyerVATIDCount = ublVATSchemeCount(buyer)
+	inv.supplierSchemeCnt = len(seller.all("PartyTaxScheme"))
+	for _, pm := range root.all("PaymentMeans") {
+		if id := pm.str("PaymentID"); id != "" {
+			inv.paymentIDs = append(inv.paymentIDs, id)
+		}
 	}
 	return inv
 }

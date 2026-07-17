@@ -17,6 +17,7 @@ import (
 // examine. Scalar business terms are stored as their raw string values ("" when
 // absent); groups are slices.
 type en16931Invoice struct {
+	syntax    string // "CII" or "UBL" — the binding the invoice was expressed in
 	specID    string // BT-24 Specification identifier
 	number    string // BT-1  Invoice number
 	issueDate string // BT-2  Issue date
@@ -36,9 +37,51 @@ type en16931Invoice struct {
 	buyerVATID    bool // BT-48 Buyer VAT identifier present
 	buyerLegalReg bool // BT-47 Buyer legal registration identifier present
 
-	sellerEndpointScheme string   // BT-34 Seller electronic address scheme
-	buyerEndpointScheme  string   // BT-49 Buyer electronic address scheme
-	paymentMeans         []string // BT-81 Payment means type codes
+	sellerVATIDValue string // BT-31 Seller VAT identifier value
+	taxRepVATIDValue string // BT-63 tax representative VAT identifier value
+	buyerVATIDValue  string // BT-48 Buyer VAT identifier value
+	sellerID         string // BT-29 Seller identifier
+	sellerLegalReg   string // BT-30 Seller legal registration identifier
+
+	sellerEndpointScheme  string // BT-34 Seller electronic address scheme
+	sellerEndpointPresent bool   // BT-34 Seller electronic address present
+	buyerEndpointScheme   string // BT-49 Buyer electronic address scheme
+	buyerEndpointPresent  bool   // BT-49 Buyer electronic address present
+
+	paymentMeans []string // BT-81 Payment means type codes
+
+	vatPointDate  string   // BT-7 Value added tax point date
+	deliveryDate  string   // BT-72 Actual delivery date
+	partySchemes  []string // party identification schemes (BR-CL-10)
+	legalSchemes  []string // party legal registration schemes (BR-CL-11)
+	currencyIDs   []string // amount @currencyID values (BR-CL-03)
+	objectSchemes []string // invoiced object identifier schemes (BR-CL-07)
+
+	taxRepPresent        bool   // BG-11 Seller tax representative party present
+	taxRepName           string // BT-62 Seller tax representative name
+	taxRepAddressPresent bool   // BG-12 Seller tax representative postal address present
+	taxRepCountry        string // BT-69 Tax representative country code
+	payeePresent         bool   // BG-10 Payee present
+	payeeName            string // BT-59 Payee name
+	deliverToPresent     bool   // BG-15 Deliver-to address present
+	deliverToCountry     string // BT-80 Deliver-to country code
+
+	paymentInstrPresent  bool   // BG-16 Payment instructions present
+	creditAccountPresent bool   // BG-17 Credit transfer (payee financial account) present
+	creditAccountID      string // BT-84 Payment account identifier
+	taxCurrency          string // BT-6 VAT accounting currency code
+	vatInTaxCurrency     bool   // BT-111 VAT total in accounting currency present
+
+	period invoicePeriod // BG-14 Invoicing period
+
+	docRefs        []docReference // BG-24 Additional supporting documents
+	billingRefNoID bool           // a Preceding invoice reference (BG-3) missing its ID (BT-25)
+
+	sellerVATIDCount  int      // number of Seller VAT identifiers (cardinality)
+	buyerVATIDCount   int      // number of Buyer VAT identifiers (cardinality)
+	supplierSchemeCnt int      // number of supplier party tax scheme entries
+	paymentIDs        []string // BT-83 payment identifiers
+	amountDecimalsBad bool     // an amount (any @currencyID element) exceeds two decimals
 
 	hasTotals bool           // whether a document monetary summation (BG-22) is present
 	totals    monetaryTotals // BG-22 Document totals
@@ -91,6 +134,31 @@ type invoiceLine struct {
 	vatRate       string // BT-152 Invoiced item VAT rate ("" if absent)
 	originCountry string // BT-159 Item country of origin
 	allowCharges  []lineAllowanceCharge
+	period        invoicePeriod // BG-26 Invoice line period
+
+	grossPrice   string // BT-148 Item gross price
+	baseQtyUnit  string // BT-150 Item price base quantity unit of measure
+	itemAttrBad  bool   // an Item attribute (BG-32) missing its name or value
+	stdIDPresent bool   // BT-157 Item standard identifier present
+	stdIDScheme  string // BT-157 scheme identifier
+	classPresent bool   // BT-158 Item classification identifier present
+	classListID  string // BT-158 classification scheme (list) identifier
+}
+
+// docReference is an Additional supporting document (BG-24).
+type docReference struct {
+	hasID         bool   // BT-122 Supporting document reference present
+	binaryPresent bool   // an embedded binary attachment is present
+	mimeCode      string // attachment MIME code
+	filename      string // attachment file name
+}
+
+// invoicePeriod is a billing period (BG-14 at document level, BG-26 per line).
+type invoicePeriod struct {
+	present bool   // whether the period group is present
+	start   string // start date (BT-73 / BT-134)
+	end     string // end date (BT-74 / BT-135)
+	desc    string // BT-8 VAT point date code (UBL carries it in the period group)
 }
 
 // lineAllowanceCharge is an Invoice line allowance (BG-27) or charge (BG-28).
@@ -132,6 +200,206 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			add("BR-10", "An Invoice shall contain the Buyer postal address (BG-8)")
 		}
 		req("BR-11", "The Buyer postal address shall contain a Buyer country code (BT-55)", inv.buyerCountry)
+	}
+
+	// Conditional party groups. A Seller tax representative (BG-11), Payee (BG-10)
+	// or Deliver-to address (BG-15), when present, must carry its mandatory terms.
+	if inv.taxRepPresent {
+		req("BR-18", "The Seller tax representative name (BT-62) shall be provided when a tax representative party is present", inv.taxRepName)
+		if !inv.taxRepAddressPresent {
+			add("BR-19", "The Seller tax representative postal address (BG-12) shall be provided when a tax representative party is present")
+		}
+		if !inv.taxRepVATID {
+			add("BR-56", "Each Seller tax representative party (BG-11) shall have a Seller tax representative VAT identifier (BT-63)")
+		}
+	}
+	if inv.taxRepAddressPresent {
+		req("BR-20", "The Seller tax representative postal address (BG-12) shall contain a Tax representative country code (BT-69)", inv.taxRepCountry)
+	}
+	if inv.payeePresent {
+		req("BR-17", "The Payee name (BT-59) shall be provided when the Payee (BG-10) is present", inv.payeeName)
+	}
+	if inv.deliverToPresent {
+		req("BR-57", "Each Deliver to address (BG-15) shall contain a Deliver to country code (BT-80)", inv.deliverToCountry)
+	}
+
+	// Payment instructions (BG-16/17).
+	if inv.paymentInstrPresent && len(inv.paymentMeans) == 0 {
+		add("BR-49", "A Payment instruction (BG-16) shall specify the Payment means type code (BT-81)")
+	}
+	if inv.creditAccountPresent && inv.creditAccountID == "" {
+		add("BR-50", "A Payment account identifier (BT-84) shall be present when Credit transfer (BG-17) information is provided")
+	}
+	for _, pm := range inv.paymentMeans {
+		if (pm == "30" || pm == "58") && inv.creditAccountID == "" {
+			add("BR-61", "A credit-transfer payment means (BT-81) requires a Payment account identifier (BT-84)")
+			break
+		}
+	}
+	// BR-53: a VAT accounting currency (BT-6) requires the VAT total in that
+	// currency (BT-111); BR-CL-05 validates the code itself.
+	if inv.taxCurrency != "" {
+		if !inv.vatInTaxCurrency {
+			add("BR-53", "When a VAT accounting currency code (BT-6) is present, the Invoice total VAT amount in accounting currency (BT-111) shall be provided")
+		}
+		if !en16931Currencies[inv.taxCurrency] {
+			add("BR-CL-05", fmt.Sprintf("VAT accounting currency code (BT-6=%q) shall be a valid ISO 4217 code", inv.taxCurrency))
+		}
+	}
+
+	// Item detail: gross price (BR-28), item attributes (BR-54), and the item
+	// standard/classification identifiers and their scheme code lists (BR-64/65,
+	// BR-CL-21/13). Each identifier check is conditional on the element's presence.
+	for _, li := range inv.lines {
+		if gp := li.grossPrice; gp != "" {
+			if p, ok := parseAmount(gp); ok && p < 0 {
+				add("BR-28", "The Item gross price (BT-148) shall not be negative")
+			}
+		}
+		if li.itemAttrBad {
+			add("BR-54", "Each Item attribute (BG-32) shall contain an Item attribute name (BT-160) and value (BT-161)")
+		}
+		if li.stdIDPresent && li.stdIDScheme == "" {
+			add("BR-64", "The Item standard identifier (BT-157) shall have a Scheme identifier")
+		}
+		if s := li.stdIDScheme; s != "" && !en16931ICD[s] {
+			add("BR-CL-21", fmt.Sprintf("Item standard identifier scheme (%q) shall belong to the ISO 6523 ICD list", s))
+		}
+		if li.classPresent && li.classListID == "" {
+			add("BR-65", "The Item classification identifier (BT-158) shall have a Scheme identifier")
+		}
+		if l := li.classListID; l != "" && !en16931ItemClassCodes[l] {
+			add("BR-CL-13", fmt.Sprintf("Item classification scheme (%q) shall be a valid UNTDID 7143 value", l))
+		}
+		if u := li.baseQtyUnit; u != "" && !en16931Units[u] {
+			add("BR-CL-23", fmt.Sprintf("Item price base quantity unit code (BT-150=%q) is not a valid UNECE Rec 20/21 code", u))
+		}
+	}
+
+	// Supporting documents (BR-52, mime BR-CL-24), preceding invoice references
+	// (BR-55) and the VAT point date code (BR-CL-06).
+	for _, d := range inv.docRefs {
+		if !d.hasID {
+			add("BR-52", "Each Additional supporting document (BG-24) shall contain a Supporting document reference (BT-122)")
+		}
+		if m := d.mimeCode; m != "" && !en16931MIME[m] {
+			add("BR-CL-24", fmt.Sprintf("Attachment MIME code (%q) is not a permitted value", m))
+		}
+	}
+	if inv.billingRefNoID {
+		add("BR-55", "Each Preceding Invoice reference (BG-3) shall contain a Preceding Invoice reference (BT-25)")
+	}
+	if c := inv.period.desc; c != "" && c != "3" && c != "35" && c != "432" {
+		add("BR-CL-06", fmt.Sprintf("Value added tax point date code (BT-8=%q) shall be a restriction of UNTDID 2005", c))
+	}
+
+	// Electronic addresses (BR-62/63) and their and other scheme identifiers
+	// against the ISO 6523 / UNTDID 1153 code lists (BR-CL-10/11/07); amount
+	// currency identifiers against ISO 4217 (BR-CL-03).
+	if inv.sellerEndpointPresent && inv.sellerEndpointScheme == "" {
+		add("BR-62", "The Seller electronic address (BT-34) shall have a Scheme identifier")
+	}
+	if inv.buyerEndpointPresent && inv.buyerEndpointScheme == "" {
+		add("BR-63", "The Buyer electronic address (BT-49) shall have a Scheme identifier")
+	}
+	for _, s := range inv.partySchemes {
+		if !en16931ICD[s] && s != "SEPA" {
+			add("BR-CL-10", fmt.Sprintf("Party identifier scheme (%q) shall belong to the ISO 6523 ICD list", s))
+		}
+	}
+	for _, s := range inv.legalSchemes {
+		if !en16931ICD[s] {
+			add("BR-CL-11", fmt.Sprintf("Party legal registration scheme (%q) shall belong to the ISO 6523 ICD list", s))
+		}
+	}
+	for _, s := range inv.objectSchemes {
+		if !en16931RefTypeCodes[s] {
+			add("BR-CL-07", fmt.Sprintf("Object identifier scheme (%q) shall be a restriction of UNTDID 1153", s))
+		}
+	}
+	for _, c := range inv.currencyIDs {
+		if !en16931Currencies[c] {
+			add("BR-CL-03", fmt.Sprintf("Amount currency identifier (%q) shall be a valid ISO 4217 code", c))
+			break
+		}
+	}
+
+	// BR-CO-03: the VAT point date (BT-7) and its code (BT-8) are mutually
+	// exclusive.
+	if inv.vatPointDate != "" && inv.period.desc != "" {
+		add("BR-CO-03", "the Value added tax point date (BT-7) and code (BT-8) are mutually exclusive")
+	}
+	// BR-CO-09: each VAT identifier (BT-31/63/48) shall carry a country-code prefix.
+	for _, v := range []string{inv.sellerVATIDValue, inv.taxRepVATIDValue, inv.buyerVATIDValue} {
+		if len(v) >= 2 {
+			if p := v[:2]; !en16931Countries[p] && p != "EL" {
+				add("BR-CO-09", fmt.Sprintf("VAT identifier (%q) shall have a country-code prefix", v))
+			}
+		}
+	}
+	// BR-CO-26: the buyer must be able to identify the seller (BT-29/30/31).
+	if inv.sellerID == "" && inv.sellerLegalReg == "" && inv.sellerVATIDValue == "" {
+		add("BR-CO-26", "the Seller identifier (BT-29), legal registration (BT-30) or VAT identifier (BT-31) shall be present")
+	}
+
+	// BR-IC-11/12: an intra-community supply (category K) breakdown requires a
+	// delivery date or invoicing period, and a Deliver-to country.
+	hasIC := false
+	for _, b := range inv.vatBreakdowns {
+		if b.category == "K" {
+			hasIC = true
+		}
+	}
+	if hasIC {
+		hasDelivery := inv.deliveryDate != "" || (inv.period.present && (inv.period.start != "" || inv.period.end != ""))
+		if !hasDelivery {
+			add("BR-IC-11", "an intra-community supply requires an Actual delivery date (BT-72) or an Invoicing period (BG-14)")
+		}
+		if inv.deliverToCountry == "" {
+			add("BR-IC-12", "an intra-community supply requires a Deliver to country code (BT-80)")
+		}
+	}
+
+	// Datatype and cardinality rules. These live in each syntax's own binding rule
+	// set, so the check runs on the shared model but the reported identifier is the
+	// one for the invoice's syntax (a CII invoice never reports a UBL rule). Where
+	// a binding has no counterpart (its "" id) the rule is not reported: CII, for
+	// instance, bounds decimals through the shared BR-DEC rules instead of a
+	// blanket amount rule.
+	binding := func(ublID, ciiID, msg string) {
+		id := ublID
+		if inv.syntax == "CII" {
+			id = ciiID
+		}
+		if id != "" {
+			add(id, msg)
+		}
+	}
+	if inv.amountDecimalsBad {
+		binding("UBL-DT-01", "", "Amounts shall be decimal up to two fraction digits")
+	}
+	for _, d := range inv.docRefs {
+		if d.binaryPresent && d.mimeCode == "" {
+			binding("UBL-DT-06", "", "A binary object (attachment) shall carry a MIME code attribute")
+		}
+		if d.binaryPresent && d.filename == "" {
+			binding("UBL-DT-07", "", "A binary object (attachment) shall carry a file name attribute")
+		}
+	}
+	if inv.sellerVATIDCount > 1 {
+		binding("UBL-SR-12", "", "The Seller VAT identifier shall occur at most once")
+	}
+	if inv.buyerVATIDCount > 1 {
+		binding("UBL-SR-18", "", "The Buyer VAT identifier shall occur at most once")
+	}
+	if inv.supplierSchemeCnt > 2 {
+		binding("UBL-SR-42", "", "The supplier party tax scheme shall occur at most twice")
+	}
+	if distinct(inv.paymentIDs) > 1 {
+		binding("UBL-SR-44", "CII-SR-469", "The Payment reference (BT-83) shall occur at most once")
+	}
+	if !allEqual(inv.paymentMeans) {
+		binding("UBL-SR-47", "CII-SR-467", "All Payment means type codes (BT-81) shall have the same value")
 	}
 
 	// Full-invoice profiles carry lines and a line-net total; the head-only
@@ -437,6 +705,27 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		if ct, ok := parseAmount(inv.totals.chargeTotal); ok && math.Abs(round2(chargeSum)-ct) > 0.005 {
 			add("BR-CO-12", fmt.Sprintf("Sum of charges on document level (BT-108=%.2f) shall equal the sum of Document level charge amounts (%.2f)", ct, chargeSum))
 		}
+	}
+
+	// Invoicing period (BG-14) and Invoice line period (BG-26): when present, a
+	// start or end date is required (BR-CO-19/20), and a given end must not precede
+	// a given start (BR-29/30).
+	checkPeriod := func(present, order string, p invoicePeriod) {
+		if !p.present {
+			return
+		}
+		// A period group carrying only a VAT point date code (BT-8) is not an
+		// invoicing period in the BR-CO-19/20 sense.
+		if p.start == "" && p.end == "" && p.desc == "" {
+			add(present, "if an invoicing period (BG-14/BG-26) is used, its start or end date shall be present")
+		}
+		if p.start != "" && p.end != "" && normDate(p.end) < normDate(p.start) {
+			add(order, "the invoicing period end date shall not precede its start date")
+		}
+	}
+	checkPeriod("BR-CO-19", "BR-29", inv.period)
+	for _, li := range inv.lines {
+		checkPeriod("BR-CO-20", "BR-30", li.period)
 	}
 
 	// BR-CO-16: Amount due for payment (BT-115) = Invoice total with VAT (BT-112)

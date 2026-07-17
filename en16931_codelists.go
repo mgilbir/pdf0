@@ -275,6 +275,29 @@ var en16931RefTypeCodes = map[string]bool{
 	"WN": true, "WR": true, "WS": true, "WY": true, "XA": true, "XC": true, "XP": true, "ZZZ": true,
 }
 
+// en16931ItemClassCodes is the UNTDID 7143 item classification scheme set (BR-CL-13).
+var en16931ItemClassCodes = map[string]bool{
+	"AA": true, "AB": true, "AC": true, "AD": true, "AE": true, "AF": true, "AG": true, "AH": true, "AI": true, "AJ": true,
+	"AK": true, "AL": true, "AM": true, "AN": true, "AO": true, "AP": true, "AQ": true, "AR": true, "AS": true, "AT": true,
+	"AU": true, "AV": true, "AW": true, "AX": true, "AY": true, "AZ": true, "BA": true, "BB": true, "BC": true, "BD": true,
+	"BE": true, "BF": true, "BG": true, "BH": true, "BI": true, "BJ": true, "BK": true, "BL": true, "BM": true, "BN": true,
+	"BO": true, "BP": true, "BQ": true, "BR": true, "BS": true, "BT": true, "BU": true, "BV": true, "BW": true, "BX": true,
+	"BY": true, "BZ": true, "CC": true, "CG": true, "CL": true, "CR": true, "CV": true, "DR": true, "DW": true, "EC": true,
+	"EF": true, "EMD": true, "EN": true, "FS": true, "GB": true, "GMN": true, "GN": true, "GS": true, "HS": true, "IB": true,
+	"IN": true, "IS": true, "IT": true, "IZ": true, "MA": true, "MF": true, "MN": true, "MP": true, "NB": true, "ON": true,
+	"PD": true, "PL": true, "PO": true, "PPI": true, "PV": true, "QS": true, "RC": true, "RN": true, "RU": true, "RY": true,
+	"SA": true, "SG": true, "SK": true, "SN": true, "SRS": true, "SRT": true, "SRU": true, "SRV": true, "SRW": true, "SRX": true,
+	"SRY": true, "SRZ": true, "SS": true, "SSA": true, "SSB": true, "SSC": true, "SSD": true, "SSE": true, "SSF": true, "SSG": true,
+	"SSH": true, "SSI": true, "SSJ": true, "SSK": true, "SSL": true, "SSM": true, "SSN": true, "SSO": true, "SSP": true, "SSQ": true,
+	"SSR": true, "SSS": true, "SST": true, "SSU": true, "SSV": true, "SSW": true, "SSX": true, "SSY": true, "SSZ": true, "ST": true,
+	"STA": true, "STB": true, "STC": true, "STD": true, "STE": true, "STF": true, "STG": true, "STH": true, "STI": true, "STJ": true,
+	"STK": true, "STL": true, "STM": true, "STN": true, "STO": true, "STP": true, "STQ": true, "STR": true, "STS": true, "STT": true,
+	"STU": true, "STV": true, "STW": true, "STX": true, "STY": true, "STZ": true, "SUA": true, "SUB": true, "SUC": true, "SUD": true,
+	"SUE": true, "SUF": true, "SUG": true, "SUH": true, "SUI": true, "SUJ": true, "SUK": true, "SUL": true, "SUM": true, "TG": true,
+	"TSN": true, "TSO": true, "TSP": true, "TSQ": true, "TSR": true, "TSS": true, "TST": true, "TSU": true, "UA": true, "UP": true,
+	"VN": true, "VP": true, "VS": true, "VX": true, "ZZZ": true,
+}
+
 // en16931Units is the UNECE Rec 20/21 unit of measure code set (BR-CL-23).
 var en16931Units = map[string]bool{
 	"10": true, "11": true, "13": true, "14": true, "15": true, "20": true, "21": true, "22": true,
