@@ -15,14 +15,16 @@ import (
 
 // vatCatSpec captures the EN 16931 constraints of one VAT category code.
 type vatCatSpec struct {
-	fam           string // rule-id family (S, Z, E, AE, IC, G, O)
+	fam           string // rule-id family (S, Z, E, AE, IC, G, O, AF, AG)
 	name          string // category name used in messages
-	rate          byte   // rate on lines/allowances/charges: '+' >0, '0' ==0, '-' absent
+	rate          byte   // rate on lines/allowances/charges: '+' >0, 'g' >=0, '0' ==0, '-' absent
 	requireReason bool   // breakdown must (true) / must not (false) carry an exemption reason
-	taxZero       bool   // breakdown VAT tax amount (BT-117) must be 0 (else, for S, tax = taxable x rate)
+	taxZero       bool   // breakdown VAT tax amount (BT-117) must be 0 (else tax = taxable x rate)
 }
 
-// vatCatSpecs maps the UNCL 5305 category code to its constraints.
+// vatCatSpecs maps the UNCL 5305 category code to its constraints. The taxed
+// categories (S, and the Canary/Ceuta-Melilla IGIC/IPSI) group their breakdown
+// taxable-amount sums by rate; the others carry a single (zero) rate.
 var vatCatSpecs = map[string]vatCatSpec{
 	"S":  {"S", "Standard rated", '+', false, false},
 	"Z":  {"Z", "Zero rated", '0', false, true},
@@ -31,20 +33,37 @@ var vatCatSpecs = map[string]vatCatSpec{
 	"K":  {"IC", "Intra-community supply", '0', true, true},
 	"G":  {"G", "Export outside the EU", '0', true, true},
 	"O":  {"O", "Not subject to VAT", '-', true, true},
+	"L":  {"AF", "IGIC", 'g', false, false},
+	"M":  {"AG", "IPSI", 'g', false, false},
+}
+
+// vatCatByRate reports whether a category's breakdown taxable-amount sum is
+// grouped per VAT rate (the categories that permit more than one positive rate).
+func vatCatByRate(fam string) bool {
+	return fam == "S" || fam == "AF" || fam == "AG"
 }
 
 func validateVATCategories(inv *en16931Invoice, add func(rule, msg string)) {
-	// Categories actually used on lines and document allowances/charges.
+	// Categories actually used on lines and document allowances/charges. Each is
+	// checked against the UNCL 5305 category code list (BR-CL-18; the breakdown
+	// category is BR-CL-17).
 	used := map[string]bool{}
-	for _, li := range inv.lines {
-		if li.vatCategory != "" {
-			used[li.vatCategory] = true
+	clSeen := map[string]bool{}
+	useCat := func(cat string) {
+		if cat == "" {
+			return
+		}
+		used[cat] = true
+		if !facturxVATCategories[cat] && !clSeen[cat] {
+			clSeen[cat] = true
+			add("BR-CL-18", fmt.Sprintf("VAT category code (BT-151/95/102=%q) is not a valid UNCL 5305 value", cat))
 		}
 	}
+	for _, li := range inv.lines {
+		useCat(li.vatCategory)
+	}
 	for _, ac := range inv.allowCharges {
-		if ac.category != "" {
-			used[ac.category] = true
-		}
+		useCat(ac.category)
 	}
 	bdCats := map[string]int{}
 	for _, b := range inv.vatBreakdowns {
@@ -154,6 +173,11 @@ func checkVATRate(cat, rate, suffix, label string, add func(rule, msg string)) {
 		if rate == "" || (ok && r <= 0) {
 			add("BR-"+spec.fam+"-"+suffix, fmt.Sprintf("for category %q (%s), %s shall be greater than zero", spec.name, cat, label))
 		}
+	case 'g': // must be present and zero or greater
+		r, ok := parseAmount(rate)
+		if rate == "" || (ok && r < 0) {
+			add("BR-"+spec.fam+"-"+suffix, fmt.Sprintf("for category %q (%s), %s shall be zero or greater", spec.name, cat, label))
+		}
 	case '0': // must be zero
 		if r, ok := parseAmount(rate); ok && math.Abs(r) > 0.005 {
 			add("BR-"+spec.fam+"-"+suffix, fmt.Sprintf("for category %q (%s), %s shall be 0", spec.name, cat, label))
@@ -219,7 +243,7 @@ func validateVATTaxableSums(inv *en16931Invoice, add func(rule, msg string)) {
 		if !okBasis {
 			continue
 		}
-		byRate := spec.fam == "S"
+		byRate := vatCatByRate(spec.fam)
 		bRate, _ := parseAmount(b.rate)
 		sum, complete := 0.0, true
 		match := func(cat, rate string) bool {

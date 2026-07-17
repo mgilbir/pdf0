@@ -56,6 +56,12 @@ func TestEN16931CurrenciesFaithful(t *testing.T) {
 	assertSetMatches(t, "en16931Currencies", en16931Currencies, got)
 }
 
+func TestEN16931CountriesFaithful(t *testing.T) {
+	sch := readSchematron(t, "ubl/schematron/codelist/EN16931-UBL-codes.sch")
+	got := containsListAfter(sch, `Country/cbc:IdentificationCode`, `A-Z0-9`)
+	assertSetMatches(t, "en16931Countries", en16931Countries, got)
+}
+
 func TestEN16931TypeCodesFaithful(t *testing.T) {
 	// The CII code list carries the combined invoice + credit-note type-code set
 	// (the same union the UBL invoice and credit-note lists form together).

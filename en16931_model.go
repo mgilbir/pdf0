@@ -142,10 +142,10 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	if tc := inv.typeCode; tc != "" && !en16931TypeCodes[tc] {
 		add("BR-CL-01", fmt.Sprintf("Invoice type code (BT-3=%q) is not a permitted UNTDID 1001 value", tc))
 	}
-	if c := inv.sellerCountry; c != "" && !isUpperAlpha(c, 2) {
+	if c := inv.sellerCountry; c != "" && !en16931Countries[c] {
 		add("BR-CL-14", fmt.Sprintf("Seller country code (BT-40=%q) shall be a valid ISO 3166-1 code", c))
 	}
-	if c := inv.buyerCountry; c != "" && !isUpperAlpha(c, 2) {
+	if c := inv.buyerCountry; c != "" && !en16931Countries[c] {
 		add("BR-CL-15", fmt.Sprintf("Buyer country code (BT-55=%q) shall be a valid ISO 3166-1 code", c))
 	}
 
@@ -248,6 +248,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			}
 			if !ac.hasReason {
 				add("BR-38", "Each Document level charge (BG-21) shall have a Document level charge reason (BT-104) or reason code (BT-105)")
+				add("BR-CO-22", "Each Document level charge (BG-21) shall contain a Document level charge reason (BT-104) or reason code (BT-105)")
 			}
 		} else {
 			if ac.amount == "" {
@@ -258,6 +259,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			}
 			if !ac.hasReason {
 				add("BR-33", "Each Document level allowance (BG-20) shall have a Document level allowance reason (BT-97) or reason code (BT-98)")
+				add("BR-CO-21", "Each Document level allowance (BG-20) shall contain a Document level allowance reason (BT-97) or reason code (BT-98)")
 			}
 		}
 	}
