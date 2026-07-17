@@ -110,6 +110,35 @@ func TestValidateUBLMutations(t *testing.T) {
 	}
 }
 
+// TestBindingRuleIDsPerSyntax verifies that a binding-specific rule is reported
+// with the identifier of the invoice's own syntax: the same defect (inconsistent
+// payment means codes) is CII-SR-467 on a CII invoice and UBL-SR-47 on a UBL one,
+// and neither reports the other syntax's identifier.
+func TestBindingRuleIDsPerSyntax(t *testing.T) {
+	cii := strings.Replace(validCII, "<InvoiceCurrencyCode>EUR</InvoiceCurrencyCode>",
+		"<InvoiceCurrencyCode>EUR</InvoiceCurrencyCode>"+
+			"<SpecifiedTradeSettlementPaymentMeans><TypeCode>30</TypeCode></SpecifiedTradeSettlementPaymentMeans>"+
+			"<SpecifiedTradeSettlementPaymentMeans><TypeCode>58</TypeCode></SpecifiedTradeSettlementPaymentMeans>", 1)
+	v := ValidateFacturXInvoice([]byte(cii), FacturXEN16931)
+	if !hasFacturXRule(v, "CII-SR-467") {
+		t.Errorf("CII invoice should report CII-SR-467; got %v", v)
+	}
+	if hasFacturXRule(v, "UBL-SR-47") {
+		t.Error("CII invoice must not report the UBL identifier UBL-SR-47")
+	}
+
+	ubl := strings.Replace(minimalUBL, "</Invoice>",
+		"<PaymentMeans><PaymentMeansCode>30</PaymentMeansCode></PaymentMeans>"+
+			"<PaymentMeans><PaymentMeansCode>58</PaymentMeansCode></PaymentMeans></Invoice>", 1)
+	v = ValidateFacturXInvoice([]byte(ubl), FacturXEN16931)
+	if !hasFacturXRule(v, "UBL-SR-47") {
+		t.Errorf("UBL invoice should report UBL-SR-47; got %v", v)
+	}
+	if hasFacturXRule(v, "CII-SR-467") {
+		t.Error("UBL invoice must not report the CII identifier CII-SR-467")
+	}
+}
+
 // TestValidateUBLCalcMutation confirms a total-consistency rule fires when a
 // document total is made inconsistent.
 func TestValidateUBLCalcMutation(t *testing.T) {

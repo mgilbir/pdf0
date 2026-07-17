@@ -205,6 +205,11 @@ func (n *ciiNode) collectAttr(attr string) []string {
 // way in either syntax (amount currency identifiers, party and object scheme
 // identifiers — the latter using UBL element names, absent from CII so harmless).
 func collectCommon(root *ciiNode, inv *en16931Invoice) {
+	if root.name == "CrossIndustryInvoice" {
+		inv.syntax = "CII"
+	} else {
+		inv.syntax = "UBL"
+	}
 	inv.currencyIDs = root.collectAttr("currencyID")
 	for _, p := range root.findAll("PartyIdentification") {
 		if s := p.child("ID").attr("schemeID"); s != "" {
@@ -393,6 +398,11 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			if id := firstNonEmpty(acc.str("IBANID"), acc.str("ProprietaryID")); id != "" {
 				inv.creditAccountID = id
 			}
+		}
+	}
+	for _, pr := range settle.orNil().all("PaymentReference") {
+		if t := strings.TrimSpace(pr.text); t != "" {
+			inv.paymentIDs = append(inv.paymentIDs, t)
 		}
 	}
 	inv.taxCurrency = settle.orNil().str("TaxCurrencyCode")

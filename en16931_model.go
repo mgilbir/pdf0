@@ -17,6 +17,7 @@ import (
 // examine. Scalar business terms are stored as their raw string values ("" when
 // absent); groups are slices.
 type en16931Invoice struct {
+	syntax    string // "CII" or "UBL" — the binding the invoice was expressed in
 	specID    string // BT-24 Specification identifier
 	number    string // BT-1  Invoice number
 	issueDate string // BT-2  Issue date
@@ -359,34 +360,46 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		}
 	}
 
-	// Datatype and cardinality rules. Named in the UBL binding's rule set but
-	// syntax-neutral in substance: each is checked against the shared model, so it
-	// holds whichever syntax carried the invoice.
+	// Datatype and cardinality rules. These live in each syntax's own binding rule
+	// set, so the check runs on the shared model but the reported identifier is the
+	// one for the invoice's syntax (a CII invoice never reports a UBL rule). Where
+	// a binding has no counterpart (its "" id) the rule is not reported: CII, for
+	// instance, bounds decimals through the shared BR-DEC rules instead of a
+	// blanket amount rule.
+	binding := func(ublID, ciiID, msg string) {
+		id := ublID
+		if inv.syntax == "CII" {
+			id = ciiID
+		}
+		if id != "" {
+			add(id, msg)
+		}
+	}
 	if inv.amountDecimalsBad {
-		add("UBL-DT-01", "Amounts shall be decimal up to two fraction digits")
+		binding("UBL-DT-01", "", "Amounts shall be decimal up to two fraction digits")
 	}
 	for _, d := range inv.docRefs {
 		if d.binaryPresent && d.mimeCode == "" {
-			add("UBL-DT-06", "A binary object (attachment) shall carry a MIME code attribute")
+			binding("UBL-DT-06", "", "A binary object (attachment) shall carry a MIME code attribute")
 		}
 		if d.binaryPresent && d.filename == "" {
-			add("UBL-DT-07", "A binary object (attachment) shall carry a file name attribute")
+			binding("UBL-DT-07", "", "A binary object (attachment) shall carry a file name attribute")
 		}
 	}
 	if inv.sellerVATIDCount > 1 {
-		add("UBL-SR-12", "The Seller VAT identifier shall occur at most once")
+		binding("UBL-SR-12", "", "The Seller VAT identifier shall occur at most once")
 	}
 	if inv.buyerVATIDCount > 1 {
-		add("UBL-SR-18", "The Buyer VAT identifier shall occur at most once")
+		binding("UBL-SR-18", "", "The Buyer VAT identifier shall occur at most once")
 	}
 	if inv.supplierSchemeCnt > 2 {
-		add("UBL-SR-42", "The supplier party tax scheme shall occur at most twice")
+		binding("UBL-SR-42", "", "The supplier party tax scheme shall occur at most twice")
 	}
 	if distinct(inv.paymentIDs) > 1 {
-		add("UBL-SR-44", "An Invoice shall have at most one unique Payment identifier")
+		binding("UBL-SR-44", "CII-SR-469", "The Payment reference (BT-83) shall occur at most once")
 	}
 	if !allEqual(inv.paymentMeans) {
-		add("UBL-SR-47", "When there is more than one Payment means code, they shall be equal")
+		binding("UBL-SR-47", "CII-SR-467", "All Payment means type codes (BT-81) shall have the same value")
 	}
 
 	// Full-invoice profiles carry lines and a line-net total; the head-only
