@@ -152,25 +152,93 @@ func parseEN16931(xmlData []byte) (*en16931Invoice, error) {
 	}
 	switch root.name {
 	case "CrossIndustryInvoice":
-		return mapCII(root), nil
+		inv := mapCII(root)
+		collectCommon(root, inv)
+		return inv, nil
 	case "Invoice", "CreditNote":
-		return mapUBL(root), nil
+		inv := mapUBL(root)
+		collectCommon(root, inv)
+		return inv, nil
 	}
 	return nil, fmt.Errorf("the invoice XML root %q is neither a CrossIndustryInvoice (CII) nor a UBL Invoice/CreditNote", root.name)
+}
+
+// findAll returns every descendant (self included) with the given local name.
+func (n *ciiNode) findAll(name string) []*ciiNode {
+	if n == nil {
+		return nil
+	}
+	var out []*ciiNode
+	var rec func(*ciiNode)
+	rec = func(c *ciiNode) {
+		if c.name == name {
+			out = append(out, c)
+		}
+		for _, ch := range c.children {
+			rec(ch)
+		}
+	}
+	rec(n)
+	return out
+}
+
+// collectAttr gathers the values of the named attribute across all descendants.
+func (n *ciiNode) collectAttr(attr string) []string {
+	if n == nil {
+		return nil
+	}
+	var out []string
+	var rec func(*ciiNode)
+	rec = func(c *ciiNode) {
+		if v := c.attr(attr); v != "" {
+			out = append(out, v)
+		}
+		for _, ch := range c.children {
+			rec(ch)
+		}
+	}
+	rec(n)
+	return out
+}
+
+// collectCommon fills the tree-wide code-list fields that are gathered the same
+// way in either syntax (amount currency identifiers, party and object scheme
+// identifiers — the latter using UBL element names, absent from CII so harmless).
+func collectCommon(root *ciiNode, inv *en16931Invoice) {
+	inv.currencyIDs = root.collectAttr("currencyID")
+	for _, p := range root.findAll("PartyIdentification") {
+		if s := p.child("ID").attr("schemeID"); s != "" {
+			inv.partySchemes = append(inv.partySchemes, s)
+		}
+	}
+	for _, p := range root.findAll("PartyLegalEntity") {
+		if s := p.child("CompanyID").attr("schemeID"); s != "" {
+			inv.legalSchemes = append(inv.legalSchemes, s)
+		}
+	}
+	for _, d := range root.findAll("AdditionalDocumentReference") {
+		if d.str("DocumentTypeCode") == "130" {
+			if s := d.child("ID").attr("schemeID"); s != "" {
+				inv.objectSchemes = append(inv.objectSchemes, s)
+			}
+		}
+	}
+}
+
+// ciiVATRegValue returns a CII party's VAT registration identifier (scheme "VA").
+func ciiVATRegValue(p *ciiNode) string {
+	for _, r := range p.all("SpecifiedTaxRegistration") {
+		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && strings.EqualFold(id.attr("schemeID"), "VA") {
+			return strings.TrimSpace(id.text)
+		}
+	}
+	return ""
 }
 
 // ciiHasVATReg reports whether a CII trade party carries a VAT tax registration
 // (SpecifiedTaxRegistration whose ID scheme is "VA").
 func ciiHasVATReg(p *ciiNode) bool {
-	if p == nil {
-		return false
-	}
-	for _, r := range p.all("SpecifiedTaxRegistration") {
-		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && strings.EqualFold(id.attr("schemeID"), "VA") {
-			return true
-		}
-	}
-	return false
+	return ciiVATRegValue(p) != ""
 }
 
 // ciiHasOtherReg reports whether a CII party carries a non-VAT tax registration.
@@ -186,18 +254,20 @@ func ciiHasOtherReg(p *ciiNode) bool {
 	return false
 }
 
+// ublVATSchemeValue returns a UBL party's VAT PartyTaxScheme company identifier.
+func ublVATSchemeValue(p *ciiNode) string {
+	for _, pts := range p.all("PartyTaxScheme") {
+		if id := pts.str("CompanyID"); id != "" && strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
+			return id
+		}
+	}
+	return ""
+}
+
 // ublHasVATScheme reports whether a UBL party carries a VAT PartyTaxScheme with a
 // company identifier.
 func ublHasVATScheme(p *ciiNode) bool {
-	if p == nil {
-		return false
-	}
-	for _, pts := range p.all("PartyTaxScheme") {
-		if pts.str("CompanyID") != "" && strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
-			return true
-		}
-	}
-	return false
+	return ublVATSchemeValue(p) != ""
 }
 
 // ublHasOtherScheme reports whether a UBL party carries a non-VAT PartyTaxScheme
@@ -339,6 +409,7 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			originCountry: li.str("SpecifiedTradeProduct", "OriginTradeCountry", "ID"),
 			period:        ciiPeriod(li.child("SpecifiedLineTradeSettlement")),
 			grossPrice:    li.str("SpecifiedLineTradeAgreement", "GrossPriceProductTradePrice", "ChargeAmount"),
+			baseQtyUnit:   li.child("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "BasisQuantity").attr("unitCode"),
 		}
 		if qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity"); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
@@ -380,6 +451,14 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			inv.billingRefNoID = true
 		}
 	}
+	inv.sellerVATIDValue = ciiVATRegValue(agr.child("SellerTradeParty"))
+	inv.taxRepVATIDValue = ciiVATRegValue(agr.child("SellerTaxRepresentativeTradeParty"))
+	inv.buyerVATIDValue = ciiVATRegValue(agr.child("BuyerTradeParty"))
+	inv.sellerID = agr.str("SellerTradeParty", "ID")
+	inv.sellerLegalReg = agr.str("SellerTradeParty", "SpecifiedLegalOrganization", "ID")
+	inv.sellerEndpointPresent = agr.str("SellerTradeParty", "URIUniversalCommunication", "URIID") != ""
+	inv.buyerEndpointPresent = agr.str("BuyerTradeParty", "URIUniversalCommunication", "URIID") != ""
+	inv.deliveryDate = tx.str("ApplicableHeaderTradeDelivery", "ActualDeliverySupplyChainEvent", "OccurrenceDateTime", "DateTimeString")
 	return inv
 }
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
@@ -559,6 +638,7 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			originCountry: li.str("Item", "OriginCountry", "IdentificationCode"),
 			period:        ublPeriod(li),
 			grossPrice:    li.child("Price", "AllowanceCharge").str("BaseAmount"),
+			baseQtyUnit:   li.child("Price", "BaseQuantity").attr("unitCode"),
 		}
 		if qty := li.child(qtyName); qty != nil {
 			line.quantity = strings.TrimSpace(qty.text)
@@ -596,5 +676,14 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			inv.billingRefNoID = true
 		}
 	}
+	inv.sellerVATIDValue = ublVATSchemeValue(seller)
+	inv.taxRepVATIDValue = ublVATSchemeValue(root.child("TaxRepresentativeParty"))
+	inv.buyerVATIDValue = ublVATSchemeValue(buyer)
+	inv.sellerID = seller.str("PartyIdentification", "ID")
+	inv.sellerLegalReg = seller.str("PartyLegalEntity", "CompanyID")
+	inv.sellerEndpointPresent = seller.str("EndpointID") != ""
+	inv.buyerEndpointPresent = buyer.str("EndpointID") != ""
+	inv.vatPointDate = root.str("TaxPointDate")
+	inv.deliveryDate = root.str("Delivery", "ActualDeliveryDate")
 	return inv
 }

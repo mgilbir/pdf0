@@ -36,9 +36,25 @@ type en16931Invoice struct {
 	buyerVATID    bool // BT-48 Buyer VAT identifier present
 	buyerLegalReg bool // BT-47 Buyer legal registration identifier present
 
-	sellerEndpointScheme string   // BT-34 Seller electronic address scheme
-	buyerEndpointScheme  string   // BT-49 Buyer electronic address scheme
-	paymentMeans         []string // BT-81 Payment means type codes
+	sellerVATIDValue string // BT-31 Seller VAT identifier value
+	taxRepVATIDValue string // BT-63 tax representative VAT identifier value
+	buyerVATIDValue  string // BT-48 Buyer VAT identifier value
+	sellerID         string // BT-29 Seller identifier
+	sellerLegalReg   string // BT-30 Seller legal registration identifier
+
+	sellerEndpointScheme  string // BT-34 Seller electronic address scheme
+	sellerEndpointPresent bool   // BT-34 Seller electronic address present
+	buyerEndpointScheme   string // BT-49 Buyer electronic address scheme
+	buyerEndpointPresent  bool   // BT-49 Buyer electronic address present
+
+	paymentMeans []string // BT-81 Payment means type codes
+
+	vatPointDate  string   // BT-7 Value added tax point date
+	deliveryDate  string   // BT-72 Actual delivery date
+	partySchemes  []string // party identification schemes (BR-CL-10)
+	legalSchemes  []string // party legal registration schemes (BR-CL-11)
+	currencyIDs   []string // amount @currencyID values (BR-CL-03)
+	objectSchemes []string // invoiced object identifier schemes (BR-CL-07)
 
 	taxRepPresent        bool   // BG-11 Seller tax representative party present
 	taxRepName           string // BT-62 Seller tax representative name
@@ -114,6 +130,7 @@ type invoiceLine struct {
 	period        invoicePeriod // BG-26 Invoice line period
 
 	grossPrice   string // BT-148 Item gross price
+	baseQtyUnit  string // BT-150 Item price base quantity unit of measure
 	itemAttrBad  bool   // an Item attribute (BG-32) missing its name or value
 	stdIDPresent bool   // BT-157 Item standard identifier present
 	stdIDScheme  string // BT-157 scheme identifier
@@ -245,6 +262,9 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		if l := li.classListID; l != "" && !en16931ItemClassCodes[l] {
 			add("BR-CL-13", fmt.Sprintf("Item classification scheme (%q) shall be a valid UNTDID 7143 value", l))
 		}
+		if u := li.baseQtyUnit; u != "" && !en16931Units[u] {
+			add("BR-CL-23", fmt.Sprintf("Item price base quantity unit code (BT-150=%q) is not a valid UNECE Rec 20/21 code", u))
+		}
 	}
 
 	// Supporting documents (BR-52, mime BR-CL-24), preceding invoice references
@@ -262,6 +282,73 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	}
 	if c := inv.period.desc; c != "" && c != "3" && c != "35" && c != "432" {
 		add("BR-CL-06", fmt.Sprintf("Value added tax point date code (BT-8=%q) shall be a restriction of UNTDID 2005", c))
+	}
+
+	// Electronic addresses (BR-62/63) and their and other scheme identifiers
+	// against the ISO 6523 / UNTDID 1153 code lists (BR-CL-10/11/07); amount
+	// currency identifiers against ISO 4217 (BR-CL-03).
+	if inv.sellerEndpointPresent && inv.sellerEndpointScheme == "" {
+		add("BR-62", "The Seller electronic address (BT-34) shall have a Scheme identifier")
+	}
+	if inv.buyerEndpointPresent && inv.buyerEndpointScheme == "" {
+		add("BR-63", "The Buyer electronic address (BT-49) shall have a Scheme identifier")
+	}
+	for _, s := range inv.partySchemes {
+		if !en16931ICD[s] && s != "SEPA" {
+			add("BR-CL-10", fmt.Sprintf("Party identifier scheme (%q) shall belong to the ISO 6523 ICD list", s))
+		}
+	}
+	for _, s := range inv.legalSchemes {
+		if !en16931ICD[s] {
+			add("BR-CL-11", fmt.Sprintf("Party legal registration scheme (%q) shall belong to the ISO 6523 ICD list", s))
+		}
+	}
+	for _, s := range inv.objectSchemes {
+		if !en16931RefTypeCodes[s] {
+			add("BR-CL-07", fmt.Sprintf("Object identifier scheme (%q) shall be a restriction of UNTDID 1153", s))
+		}
+	}
+	for _, c := range inv.currencyIDs {
+		if !en16931Currencies[c] {
+			add("BR-CL-03", fmt.Sprintf("Amount currency identifier (%q) shall be a valid ISO 4217 code", c))
+			break
+		}
+	}
+
+	// BR-CO-03: the VAT point date (BT-7) and its code (BT-8) are mutually
+	// exclusive.
+	if inv.vatPointDate != "" && inv.period.desc != "" {
+		add("BR-CO-03", "the Value added tax point date (BT-7) and code (BT-8) are mutually exclusive")
+	}
+	// BR-CO-09: each VAT identifier (BT-31/63/48) shall carry a country-code prefix.
+	for _, v := range []string{inv.sellerVATIDValue, inv.taxRepVATIDValue, inv.buyerVATIDValue} {
+		if len(v) >= 2 {
+			if p := v[:2]; !en16931Countries[p] && p != "EL" {
+				add("BR-CO-09", fmt.Sprintf("VAT identifier (%q) shall have a country-code prefix", v))
+			}
+		}
+	}
+	// BR-CO-26: the buyer must be able to identify the seller (BT-29/30/31).
+	if inv.sellerID == "" && inv.sellerLegalReg == "" && inv.sellerVATIDValue == "" {
+		add("BR-CO-26", "the Seller identifier (BT-29), legal registration (BT-30) or VAT identifier (BT-31) shall be present")
+	}
+
+	// BR-IC-11/12: an intra-community supply (category K) breakdown requires a
+	// delivery date or invoicing period, and a Deliver-to country.
+	hasIC := false
+	for _, b := range inv.vatBreakdowns {
+		if b.category == "K" {
+			hasIC = true
+		}
+	}
+	if hasIC {
+		hasDelivery := inv.deliveryDate != "" || (inv.period.present && (inv.period.start != "" || inv.period.end != ""))
+		if !hasDelivery {
+			add("BR-IC-11", "an intra-community supply requires an Actual delivery date (BT-72) or an Invoicing period (BG-14)")
+		}
+		if inv.deliverToCountry == "" {
+			add("BR-IC-12", "an intra-community supply requires a Deliver to country code (BT-80)")
+		}
 	}
 
 	// Full-invoice profiles carry lines and a line-net total; the head-only
