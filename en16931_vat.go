@@ -59,12 +59,31 @@ func validateVATCategories(inv *en16931Invoice, add func(rule, msg string)) {
 			add("BR-CL-18", fmt.Sprintf("VAT category code (BT-151/95/102=%q) is not a valid UNCL 5305 value", cat))
 		}
 	}
+	lineCats, allowCats, chargeCats := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, li := range inv.lines {
 		useCat(li.vatCategory)
+		if li.vatCategory != "" {
+			lineCats[li.vatCategory] = true
+		}
 	}
 	for _, ac := range inv.allowCharges {
 		useCat(ac.category)
+		if ac.category != "" {
+			if ac.isCharge {
+				chargeCats[ac.category] = true
+			} else {
+				allowCats[ac.category] = true
+			}
+		}
 	}
+	// BR-{fam}-02/03/04: VAT-identifier requirements for a line / allowance /
+	// charge carrying a category. The standard, zero-rated, exempt, IGIC and IPSI
+	// categories need a Seller VAT/tax registration or tax-representative VAT
+	// identifier; export needs the Seller or tax-representative VAT identifier;
+	// reverse charge and intra-community additionally need a Buyer identifier;
+	// "Not subject to VAT" forbids the VAT identifiers.
+	validateVATIdentifiers(inv, lineCats, allowCats, chargeCats, add)
+
 	bdCats := map[string]int{}
 	for _, b := range inv.vatBreakdowns {
 		bdCats[b.category]++
@@ -159,6 +178,43 @@ func validateVATCategories(inv *en16931Invoice, add func(rule, msg string)) {
 			add("BR-O-14", "an Invoice with a \"Not subject to VAT\" (O) VAT breakdown shall not contain a charge with another VAT category")
 		}
 	}
+}
+
+// validateVATIdentifiers applies the per-category VAT-identifier requirements
+// (BR-{fam}-02 for lines, -03 for allowances, -04 for charges).
+func validateVATIdentifiers(inv *en16931Invoice, lineCats, allowCats, chargeCats map[string]bool, add func(rule, msg string)) {
+	sellerAny := inv.sellerVATID || inv.sellerTaxReg || inv.taxRepVATID
+	sellerVATorRep := inv.sellerVATID || inv.taxRepVATID
+	// idFail reports whether a category's identifier requirement is unmet.
+	idFail := func(cat string) (bool, bool) {
+		switch cat {
+		case "S", "Z", "E", "L", "M": // seller VAT / tax registration / tax rep
+			return !sellerAny, true
+		case "G": // seller or tax representative VAT identifier
+			return !sellerVATorRep, true
+		case "AE": // seller identifier and a buyer identifier
+			return !(sellerAny && (inv.buyerVATID || inv.buyerLegalReg)), true
+		case "K": // seller/tax-rep VAT and buyer VAT identifier
+			return !(sellerVATorRep && inv.buyerVATID), true
+		case "O": // must NOT contain seller/tax-rep/buyer VAT identifiers
+			return inv.sellerVATID || inv.taxRepVATID || inv.buyerVATID, true
+		}
+		return false, false
+	}
+	emit := func(cats map[string]bool, suffix string) {
+		for cat := range cats {
+			spec, ok := vatCatSpecs[cat]
+			if !ok {
+				continue
+			}
+			if fail, applies := idFail(cat); applies && fail {
+				add("BR-"+spec.fam+"-"+suffix, fmt.Sprintf("the VAT identifier requirement for category %q (%s) is not met", spec.name, cat))
+			}
+		}
+	}
+	emit(lineCats, "02")
+	emit(allowCats, "03")
+	emit(chargeCats, "04")
 }
 
 // checkVATRate enforces a category's rate constraint on one line/allowance/charge.

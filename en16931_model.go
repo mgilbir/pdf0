@@ -30,6 +30,12 @@ type en16931Invoice struct {
 	buyerCountry         string // BT-55 Buyer country code
 	buyerAddressPresent  bool   // whether the Buyer postal address group (BG-8) is present
 
+	sellerVATID   bool // BT-31 Seller VAT identifier present
+	sellerTaxReg  bool // BT-32 Seller tax registration identifier present
+	taxRepVATID   bool // BT-63 Seller tax representative VAT identifier present
+	buyerVATID    bool // BT-48 Buyer VAT identifier present
+	buyerLegalReg bool // BT-47 Buyer legal registration identifier present
+
 	hasTotals bool           // whether a document monetary summation (BG-22) is present
 	totals    monetaryTotals // BG-22 Document totals
 

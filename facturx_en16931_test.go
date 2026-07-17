@@ -24,7 +24,7 @@ const validCII = `<CrossIndustryInvoice>
       <SpecifiedLineTradeSettlement><ApplicableTradeTax><CategoryCode>S</CategoryCode><RateApplicablePercent>20.00</RateApplicablePercent></ApplicableTradeTax><SpecifiedTradeSettlementLineMonetarySummation><LineTotalAmount>100.00</LineTotalAmount></SpecifiedTradeSettlementLineMonetarySummation></SpecifiedLineTradeSettlement>
     </IncludedSupplyChainTradeLineItem>
     <ApplicableHeaderTradeAgreement>
-      <SellerTradeParty><Name>Seller Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress></SellerTradeParty>
+      <SellerTradeParty><Name>Seller Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress><SpecifiedTaxRegistration><ID schemeID="VA">FR12345678</ID></SpecifiedTaxRegistration></SellerTradeParty>
       <BuyerTradeParty><Name>Buyer Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress></BuyerTradeParty>
     </ApplicableHeaderTradeAgreement>
     <ApplicableHeaderTradeSettlement>
@@ -173,7 +173,7 @@ const subLineCII = `<CrossIndustryInvoice>
       <SpecifiedLineTradeSettlement><ApplicableTradeTax><CategoryCode>S</CategoryCode><RateApplicablePercent>20.00</RateApplicablePercent></ApplicableTradeTax><SpecifiedTradeSettlementLineMonetarySummation><LineTotalAmount>40.00</LineTotalAmount></SpecifiedTradeSettlementLineMonetarySummation></SpecifiedLineTradeSettlement>
     </IncludedSupplyChainTradeLineItem>
     <ApplicableHeaderTradeAgreement>
-      <SellerTradeParty><Name>Seller Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress></SellerTradeParty>
+      <SellerTradeParty><Name>Seller Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress><SpecifiedTaxRegistration><ID schemeID="VA">FR12345678</ID></SpecifiedTaxRegistration></SellerTradeParty>
       <BuyerTradeParty><Name>Buyer Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress></BuyerTradeParty>
     </ApplicableHeaderTradeAgreement>
     <ApplicableHeaderTradeSettlement>

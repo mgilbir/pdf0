@@ -153,6 +153,61 @@ func parseEN16931(xmlData []byte) (*en16931Invoice, error) {
 	return nil, fmt.Errorf("the invoice XML root %q is neither a CrossIndustryInvoice (CII) nor a UBL Invoice/CreditNote", root.name)
 }
 
+// ciiHasVATReg reports whether a CII trade party carries a VAT tax registration
+// (SpecifiedTaxRegistration whose ID scheme is "VA").
+func ciiHasVATReg(p *ciiNode) bool {
+	if p == nil {
+		return false
+	}
+	for _, r := range p.all("SpecifiedTaxRegistration") {
+		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && strings.EqualFold(id.attr("schemeID"), "VA") {
+			return true
+		}
+	}
+	return false
+}
+
+// ciiHasOtherReg reports whether a CII party carries a non-VAT tax registration.
+func ciiHasOtherReg(p *ciiNode) bool {
+	if p == nil {
+		return false
+	}
+	for _, r := range p.all("SpecifiedTaxRegistration") {
+		if id := r.child("ID"); id != nil && strings.TrimSpace(id.text) != "" && !strings.EqualFold(id.attr("schemeID"), "VA") {
+			return true
+		}
+	}
+	return false
+}
+
+// ublHasVATScheme reports whether a UBL party carries a VAT PartyTaxScheme with a
+// company identifier.
+func ublHasVATScheme(p *ciiNode) bool {
+	if p == nil {
+		return false
+	}
+	for _, pts := range p.all("PartyTaxScheme") {
+		if pts.str("CompanyID") != "" && strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
+			return true
+		}
+	}
+	return false
+}
+
+// ublHasOtherScheme reports whether a UBL party carries a non-VAT PartyTaxScheme
+// company identifier.
+func ublHasOtherScheme(p *ciiNode) bool {
+	if p == nil {
+		return false
+	}
+	for _, pts := range p.all("PartyTaxScheme") {
+		if pts.str("CompanyID") != "" && !strings.EqualFold(pts.str("TaxScheme", "ID"), "VAT") {
+			return true
+		}
+	}
+	return false
+}
+
 // mapCII extracts the EN 16931 business terms from a Cross Industry Invoice tree.
 func mapCII(root *ciiNode) *en16931Invoice {
 	doc := root.child("ExchangedDocument")
@@ -173,6 +228,11 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		sellerAddressPresent: agr.orNil().child("SellerTradeParty", "PostalTradeAddress") != nil,
 		buyerCountry:         agr.orNil().str("BuyerTradeParty", "PostalTradeAddress", "CountryID"),
 		buyerAddressPresent:  agr.orNil().child("BuyerTradeParty", "PostalTradeAddress") != nil,
+		sellerVATID:          ciiHasVATReg(agr.orNil().child("SellerTradeParty")),
+		sellerTaxReg:         ciiHasOtherReg(agr.orNil().child("SellerTradeParty")),
+		taxRepVATID:          ciiHasVATReg(agr.orNil().child("SellerTaxRepresentativeTradeParty")),
+		buyerVATID:           ciiHasVATReg(agr.orNil().child("BuyerTradeParty")),
+		buyerLegalReg:        agr.orNil().str("BuyerTradeParty", "SpecifiedLegalOrganization", "ID") != "",
 	}
 	if sum != nil {
 		inv.hasTotals = true
@@ -309,6 +369,11 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		sellerAddressPresent: seller.child("PostalAddress") != nil,
 		buyerCountry:         buyer.str("PostalAddress", "Country", "IdentificationCode"),
 		buyerAddressPresent:  buyer.child("PostalAddress") != nil,
+		sellerVATID:          ublHasVATScheme(seller),
+		sellerTaxReg:         ublHasOtherScheme(seller),
+		taxRepVATID:          ublHasVATScheme(root.child("TaxRepresentativeParty").orNil()),
+		buyerVATID:           ublHasVATScheme(buyer),
+		buyerLegalReg:        buyer.str("PartyLegalEntity", "CompanyID") != "",
 	}
 	if total != nil {
 		inv.hasTotals = true

@@ -55,6 +55,7 @@ const minimalUBL = `<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd
 <InvoiceTypeCode>380</InvoiceTypeCode><DocumentCurrencyCode>EUR</DocumentCurrencyCode>
 <AccountingSupplierParty><Party>
   <PostalAddress><Country><IdentificationCode>DE</IdentificationCode></Country></PostalAddress>
+  <PartyTaxScheme><CompanyID>DE123456789</CompanyID><TaxScheme><ID>VAT</ID></TaxScheme></PartyTaxScheme>
   <PartyLegalEntity><RegistrationName>Seller Ltd</RegistrationName></PartyLegalEntity>
 </Party></AccountingSupplierParty>
 <AccountingCustomerParty><Party>
