@@ -36,6 +36,10 @@ type en16931Invoice struct {
 	buyerVATID    bool // BT-48 Buyer VAT identifier present
 	buyerLegalReg bool // BT-47 Buyer legal registration identifier present
 
+	sellerEndpointScheme string   // BT-34 Seller electronic address scheme
+	buyerEndpointScheme  string   // BT-49 Buyer electronic address scheme
+	paymentMeans         []string // BT-81 Payment means type codes
+
 	hasTotals bool           // whether a document monetary summation (BG-22) is present
 	totals    monetaryTotals // BG-22 Document totals
 
@@ -58,19 +62,21 @@ type monetaryTotals struct {
 }
 
 type vatBreakdown struct {
-	basis     string // BT-116 VAT category taxable amount
-	calc      string // BT-117 VAT category tax amount
-	category  string // BT-118 VAT category code
-	rate      string // BT-119 VAT category rate
-	hasReason bool   // BT-120 exemption reason or BT-121 exemption reason code present
+	basis      string // BT-116 VAT category taxable amount
+	calc       string // BT-117 VAT category tax amount
+	category   string // BT-118 VAT category code
+	rate       string // BT-119 VAT category rate
+	hasReason  bool   // BT-120 exemption reason or BT-121 exemption reason code present
+	reasonCode string // BT-121 VAT exemption reason code
 }
 
 type docAllowanceCharge struct {
-	amount    string // BT-92 allowance / BT-99 charge amount
-	category  string // BT-95 allowance / BT-102 charge VAT category code
-	rate      string // BT-96 allowance / BT-103 charge VAT rate
-	hasReason bool   // BT-97/BT-98 or BT-104/BT-105 present
-	isCharge  bool   // true = charge (BG-21); false = allowance (BG-20)
+	amount     string // BT-92 allowance / BT-99 charge amount
+	category   string // BT-95 allowance / BT-102 charge VAT category code
+	rate       string // BT-96 allowance / BT-103 charge VAT rate
+	hasReason  bool   // BT-97/BT-98 or BT-104/BT-105 present
+	reasonCode string // BT-98 allowance / BT-105 charge reason code
+	isCharge   bool   // true = charge (BG-21); false = allowance (BG-20)
 }
 
 type invoiceLine struct {
@@ -172,6 +178,26 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			add("BR-CL-15", fmt.Sprintf("Item country of origin (BT-159=%q) shall be a valid ISO 3166-1 code", oc))
 		}
 	}
+	// BR-CL-16: payment means (BT-81) against UNCL 4461.
+	for _, pm := range inv.paymentMeans {
+		if !en16931PaymentMeans[pm] {
+			add("BR-CL-16", fmt.Sprintf("Payment means type code (BT-81=%q) is not a valid UNCL 4461 value", pm))
+		}
+	}
+	// BR-CL-25: the Seller/Buyer electronic address scheme (BT-34/49) against the
+	// CEF Electronic Address Scheme code list.
+	if s := inv.sellerEndpointScheme; s != "" && !en16931EAS[s] {
+		add("BR-CL-25", fmt.Sprintf("Seller electronic address scheme (BT-34=%q) is not a valid EAS value", s))
+	}
+	if s := inv.buyerEndpointScheme; s != "" && !en16931EAS[s] {
+		add("BR-CL-25", fmt.Sprintf("Buyer electronic address scheme (BT-49=%q) is not a valid EAS value", s))
+	}
+	// BR-CL-22: the VAT exemption reason code (BT-121) against the CEF VATEX list.
+	for _, tt := range inv.vatBreakdowns {
+		if rc := tt.reasonCode; rc != "" && !en16931VATEX[rc] {
+			add("BR-CL-22", fmt.Sprintf("VAT exemption reason code (BT-121=%q) is not a valid VATEX value", rc))
+		}
+	}
 
 	// Decimals (BR-DEC-*): monetary amounts shall have at most two decimal places.
 	dec := func(rule, name, val string) {
@@ -231,7 +257,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		}
 		if tt.category == "" {
 			add("BR-47", "Each VAT breakdown (BG-23) shall be defined through a VAT category code (BT-118)")
-		} else if !facturxVATCategories[tt.category] {
+		} else if !en16931VATCategories[tt.category] {
 			add("BR-CL-17", fmt.Sprintf("VAT category code (BT-118=%q) is not a valid UNCL 5305 value", tt.category))
 		}
 		// BR-48: a rate is required except for the "Not subject to VAT" category (O).
@@ -274,6 +300,9 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 				add("BR-38", "Each Document level charge (BG-21) shall have a Document level charge reason (BT-104) or reason code (BT-105)")
 				add("BR-CO-22", "Each Document level charge (BG-21) shall contain a Document level charge reason (BT-104) or reason code (BT-105)")
 			}
+			if rc := ac.reasonCode; rc != "" && !en16931ChargeReasons[rc] {
+				add("BR-CL-20", fmt.Sprintf("Document level charge reason code (BT-105=%q) is not a valid UNCL 7161 value", rc))
+			}
 		} else {
 			if ac.amount == "" {
 				add("BR-31", "Each Document level allowance (BG-20) shall have a Document level allowance amount (BT-92)")
@@ -284,6 +313,9 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			if !ac.hasReason {
 				add("BR-33", "Each Document level allowance (BG-20) shall have a Document level allowance reason (BT-97) or reason code (BT-98)")
 				add("BR-CO-21", "Each Document level allowance (BG-20) shall contain a Document level allowance reason (BT-97) or reason code (BT-98)")
+			}
+			if rc := ac.reasonCode; rc != "" && !en16931AllowanceReasons[rc] {
+				add("BR-CL-19", fmt.Sprintf("Document level allowance reason code (BT-98=%q) is not a valid UNCL 5189 value", rc))
 			}
 		}
 	}
@@ -318,7 +350,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 			add("BR-22", "Each Invoice line shall have an Invoiced quantity (BT-129)")
 		} else if li.unitCode == "" {
 			add("BR-23", "Each Invoice line shall have an Invoiced quantity unit of measure (BT-130)")
-		} else if !facturxUnitCodes[li.unitCode] {
+		} else if !en16931Units[li.unitCode] {
 			add("BR-CL-23", fmt.Sprintf("Invoiced quantity unit code (BT-130=%q) is not a valid UNECE Rec 20/21 code", li.unitCode))
 		}
 		if li.price == "" {

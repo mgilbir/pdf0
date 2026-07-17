@@ -144,7 +144,7 @@ func TestEN16931ConformanceSuite(t *testing.T) {
 
 	// Ratchet the number of rules whose error fragments we catch. It only goes
 	// up as rule coverage grows; a drop means a regression.
-	const caughtBaseline = 150
+	const caughtBaseline = 153
 	if len(caught) < caughtBaseline {
 		var caughtList []string
 		for r := range caught {

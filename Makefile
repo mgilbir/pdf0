@@ -1,4 +1,4 @@
-.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington en16931-artefacts clean-en16931-artefacts
+.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington en16931-artefacts clean-en16931-artefacts en16931-codelists clean-en16931-codelists
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -117,3 +117,16 @@ $(EN16931_DIR)/.ok:
 
 clean-en16931-artefacts:
 	rm -rf $(EN16931_DIR)
+
+# Official CEN/TC 434 EN 16931 code lists (genericode + EAS/VATEX). Downloaded
+# into testdata/en16931-codelists (gitignored); download.sh + gen.py are
+# committed. gen.py regenerates en16931_codelists.go; the fidelity test verifies
+# the committed tables against the genericode.
+CODELISTS_DIR := testdata/en16931-codelists
+
+en16931-codelists:
+	bash $(CODELISTS_DIR)/download.sh
+	python3 $(CODELISTS_DIR)/gen.py
+
+clean-en16931-codelists:
+	rm -rf $(CODELISTS_DIR)/genericode $(CODELISTS_DIR)/*.zip $(CODELISTS_DIR)/*.xlsx

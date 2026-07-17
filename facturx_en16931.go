@@ -233,6 +233,13 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		taxRepVATID:          ciiHasVATReg(agr.orNil().child("SellerTaxRepresentativeTradeParty")),
 		buyerVATID:           ciiHasVATReg(agr.orNil().child("BuyerTradeParty")),
 		buyerLegalReg:        agr.orNil().str("BuyerTradeParty", "SpecifiedLegalOrganization", "ID") != "",
+		sellerEndpointScheme: agr.orNil().child("SellerTradeParty", "URIUniversalCommunication", "URIID").attr("schemeID"),
+		buyerEndpointScheme:  agr.orNil().child("BuyerTradeParty", "URIUniversalCommunication", "URIID").attr("schemeID"),
+	}
+	for _, pm := range settle.orNil().all("SpecifiedTradeSettlementPaymentMeans") {
+		if tc := pm.str("TypeCode"); tc != "" {
+			inv.paymentMeans = append(inv.paymentMeans, tc)
+		}
 	}
 	if sum != nil {
 		inv.hasTotals = true
@@ -250,20 +257,22 @@ func mapCII(root *ciiNode) *en16931Invoice {
 	}
 	for _, tt := range settle.orNil().all("ApplicableTradeTax") {
 		inv.vatBreakdowns = append(inv.vatBreakdowns, vatBreakdown{
-			basis:     tt.str("BasisAmount"),
-			calc:      tt.str("CalculatedAmount"),
-			category:  tt.str("CategoryCode"),
-			rate:      tt.str("RateApplicablePercent"),
-			hasReason: tt.str("ExemptionReason") != "" || tt.str("ExemptionReasonCode") != "",
+			basis:      tt.str("BasisAmount"),
+			calc:       tt.str("CalculatedAmount"),
+			category:   tt.str("CategoryCode"),
+			rate:       tt.str("RateApplicablePercent"),
+			hasReason:  tt.str("ExemptionReason") != "" || tt.str("ExemptionReasonCode") != "",
+			reasonCode: tt.str("ExemptionReasonCode"),
 		})
 	}
 	for _, ac := range settle.orNil().all("SpecifiedTradeAllowanceCharge") {
 		inv.allowCharges = append(inv.allowCharges, docAllowanceCharge{
-			amount:    ac.str("ActualAmount"),
-			category:  ac.str("CategoryTradeTax", "CategoryCode"),
-			rate:      ac.str("CategoryTradeTax", "RateApplicablePercent"),
-			hasReason: ac.str("Reason") != "" || ac.str("ReasonCode") != "",
-			isCharge:  strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true"),
+			amount:     ac.str("ActualAmount"),
+			category:   ac.str("CategoryTradeTax", "CategoryCode"),
+			rate:       ac.str("CategoryTradeTax", "RateApplicablePercent"),
+			hasReason:  ac.str("Reason") != "" || ac.str("ReasonCode") != "",
+			reasonCode: ac.str("ReasonCode"),
+			isCharge:   strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true"),
 		})
 	}
 	for _, li := range tx.orNil().all("IncludedSupplyChainTradeLineItem") {
@@ -314,12 +323,6 @@ func isUpperAlpha(s string, n int) bool {
 		}
 	}
 	return true
-}
-
-// facturxVATCategories is the UNCL 5305 VAT category code subset used by EN 16931.
-var facturxVATCategories = map[string]bool{
-	"S": true, "Z": true, "E": true, "AE": true, "K": true,
-	"G": true, "O": true, "L": true, "M": true,
 }
 
 // orNil lets a possibly-nil node be traversed without panicking.
@@ -382,6 +385,13 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		taxRepVATID:          ublHasVATScheme(root.child("TaxRepresentativeParty").orNil()),
 		buyerVATID:           ublHasVATScheme(buyer),
 		buyerLegalReg:        buyer.str("PartyLegalEntity", "CompanyID") != "",
+		sellerEndpointScheme: seller.child("EndpointID").attr("schemeID"),
+		buyerEndpointScheme:  buyer.child("EndpointID").attr("schemeID"),
+	}
+	for _, pm := range root.all("PaymentMeans") {
+		if code := pm.str("PaymentMeansCode"); code != "" {
+			inv.paymentMeans = append(inv.paymentMeans, code)
+		}
 	}
 	if total != nil {
 		inv.hasTotals = true
@@ -402,20 +412,22 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 	inv.totals.taxTotal = taxTotal.str("TaxAmount")
 	for _, ts := range taxTotal.all("TaxSubtotal") {
 		inv.vatBreakdowns = append(inv.vatBreakdowns, vatBreakdown{
-			basis:     ts.str("TaxableAmount"),
-			calc:      ts.str("TaxAmount"),
-			category:  ts.str("TaxCategory", "ID"),
-			rate:      ts.str("TaxCategory", "Percent"),
-			hasReason: ts.str("TaxCategory", "TaxExemptionReason") != "" || ts.str("TaxCategory", "TaxExemptionReasonCode") != "",
+			basis:      ts.str("TaxableAmount"),
+			calc:       ts.str("TaxAmount"),
+			category:   ts.str("TaxCategory", "ID"),
+			rate:       ts.str("TaxCategory", "Percent"),
+			hasReason:  ts.str("TaxCategory", "TaxExemptionReason") != "" || ts.str("TaxCategory", "TaxExemptionReasonCode") != "",
+			reasonCode: ts.str("TaxCategory", "TaxExemptionReasonCode"),
 		})
 	}
 	for _, ac := range root.all("AllowanceCharge") {
 		inv.allowCharges = append(inv.allowCharges, docAllowanceCharge{
-			amount:    ac.str("Amount"),
-			category:  ac.str("TaxCategory", "ID"),
-			rate:      ac.str("TaxCategory", "Percent"),
-			hasReason: ac.str("AllowanceChargeReason") != "" || ac.str("AllowanceChargeReasonCode") != "",
-			isCharge:  strings.EqualFold(ac.str("ChargeIndicator"), "true"),
+			amount:     ac.str("Amount"),
+			category:   ac.str("TaxCategory", "ID"),
+			rate:       ac.str("TaxCategory", "Percent"),
+			hasReason:  ac.str("AllowanceChargeReason") != "" || ac.str("AllowanceChargeReasonCode") != "",
+			reasonCode: ac.str("AllowanceChargeReasonCode"),
+			isCharge:   strings.EqualFold(ac.str("ChargeIndicator"), "true"),
 		})
 	}
 	for _, li := range root.all(lineName) {

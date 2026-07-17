@@ -54,7 +54,7 @@ func validateVATCategories(inv *en16931Invoice, add func(rule, msg string)) {
 			return
 		}
 		used[cat] = true
-		if !facturxVATCategories[cat] && !clSeen[cat] {
+		if !en16931VATCategories[cat] && !clSeen[cat] {
 			clSeen[cat] = true
 			add("BR-CL-18", fmt.Sprintf("VAT category code (BT-151/95/102=%q) is not a valid UNCL 5305 value", cat))
 		}
