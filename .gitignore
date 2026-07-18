@@ -76,3 +76,7 @@ testdata/en16931-artefacts/
 testdata/en16931-codelists/*.zip
 testdata/en16931-codelists/*.xlsx
 testdata/en16931-codelists/genericode/
+# National CIUS oracles (KoSIT XRechnung + OpenPEPPOL BIS 3), cloned via
+# `make cius-oracles`; committed download recipe, not the data.
+testdata/xrechnung/
+testdata/peppol/
