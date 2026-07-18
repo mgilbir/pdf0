@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"crypto/x509"
 	"testing"
 )
 
@@ -173,5 +174,50 @@ func TestPAdESBTTimestamp(t *testing.T) {
 	}
 	if !r.Conformant {
 		t.Errorf("expected a conformant signature, issues: %v", r.Issues)
+	}
+}
+
+// TestPAdESBLTA signs B-T, then adds a DSS and a document time-stamp as an
+// incremental update, and checks the signature is assessed at level B-LTA with
+// its original signature still valid.
+func TestPAdESBLTA(t *testing.T) {
+	cert, key := testCertKey(t)
+	base := buildMinimalPDF()
+	doc, err := Read(bytes.NewReader(base), int64(len(base)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b1 bytes.Buffer
+	if err := doc.WriteSignedTimestamped(&b1, cert, key, cert, key); err != nil {
+		t.Fatalf("WriteSignedTimestamped: %v", err)
+	}
+	o1 := b1.Bytes()
+
+	d1, err := Read(bytes.NewReader(o1), int64(len(o1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b2 bytes.Buffer
+	if err := d1.WriteArchivalTimestamp(&b2, o1, []*x509.Certificate{cert}, cert, key); err != nil {
+		t.Fatalf("WriteArchivalTimestamp: %v", err)
+	}
+	o2 := b2.Bytes()
+
+	d2, err := Read(bytes.NewReader(o2), int64(len(o2)))
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	res := d2.ValidatePAdES(o2)
+	var lta *PAdESResult
+	for i := range res {
+		if res[i].Level == PAdESBLTA {
+			lta = &res[i]
+		}
+	}
+	if lta == nil {
+		t.Fatalf("expected a B-LTA signature; got %+v", res)
+	}
+	if !lta.Valid {
+		t.Error("the approval signature should still verify after the archival timestamp")
 	}
 }
