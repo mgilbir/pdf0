@@ -110,6 +110,25 @@ func TestValidateUBLMutations(t *testing.T) {
 	}
 }
 
+// TestVATAmountTolerance pins the EN 16931 ±1 tolerance of the VAT-breakdown
+// amount check (BR-CO-17): per-line rounding drift within one currency unit is
+// accepted, a larger drift is flagged.
+func TestVATAmountTolerance(t *testing.T) {
+	// Exact tax is 100.00 * 19% = 19.00.
+	within := strings.Replace(minimalUBL,
+		"<TaxableAmount>100.00</TaxableAmount><TaxAmount>19.00</TaxAmount>",
+		"<TaxableAmount>100.00</TaxableAmount><TaxAmount>19.60</TaxAmount>", 1)
+	if hasFacturXRule(ValidateFacturXInvoice([]byte(within), FacturXEN16931), "BR-CO-17") {
+		t.Error("BR-CO-17 must not fire for a 0.60 rounding drift (within the ±1 tolerance)")
+	}
+	beyond := strings.Replace(minimalUBL,
+		"<TaxableAmount>100.00</TaxableAmount><TaxAmount>19.00</TaxAmount>",
+		"<TaxableAmount>100.00</TaxableAmount><TaxAmount>21.00</TaxAmount>", 1)
+	if !hasFacturXRule(ValidateFacturXInvoice([]byte(beyond), FacturXEN16931), "BR-CO-17") {
+		t.Error("BR-CO-17 should fire for a 2.00 drift (beyond the ±1 tolerance)")
+	}
+}
+
 // TestBindingRuleIDsPerSyntax verifies that a binding-specific rule is reported
 // with the identifier of the invoice's own syntax: the same defect (inconsistent
 // payment means codes) is CII-SR-467 on a CII invoice and UBL-SR-47 on a UBL one,

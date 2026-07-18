@@ -133,7 +133,7 @@ func validateVATCategories(inv *en16931Invoice, add func(rule, msg string)) {
 		} else {
 			basis, okB := parseAmount(b.basis)
 			rate, okR := parseAmount(b.rate)
-			if okB && okC && okR && math.Abs(round2(basis*rate/100)-calc) > 0.005 {
+			if okB && okC && okR && math.Abs(round2(basis*rate/100)-calc) >= vatAmountTolerance {
 				add("BR-"+spec.fam+"-09", fmt.Sprintf("the VAT category tax amount (BT-117=%.2f) for category %q shall equal taxable amount x rate", calc, b.category))
 			}
 		}
