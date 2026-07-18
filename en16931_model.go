@@ -168,6 +168,13 @@ type lineAllowanceCharge struct {
 	isCharge  bool   // true = charge (BG-28); false = allowance (BG-27)
 }
 
+// vatAmountTolerance is the EN 16931 tolerance (±1 of the invoice currency) the
+// per-VAT-breakdown amount checks (BR-CO-17, BR-S-09) allow, absorbing the
+// per-line VAT rounding that accumulates into a breakdown's tax amount. The other
+// monetary-total rules require exact two-decimal equality, which the 0.005 epsilon
+// expresses for two-decimal amounts.
+const vatAmountTolerance = 1.0
+
 // validateEN16931 applies the EN 16931 core business rules to a mapped invoice.
 // The rule identifiers, messages and tolerances match the values validators and
 // the EN 16931 Schematron report, so the same output holds for either syntax.
@@ -532,11 +539,13 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		if tt.rate == "" && tt.category != "O" {
 			add("BR-48", "Each VAT breakdown (BG-23) shall have a VAT category rate (BT-119)")
 		}
-		// BR-CO-17: BT-117 = BT-116 x (BT-119 / 100), rounded to two decimals.
+		// BR-CO-17: BT-117 = BT-116 x (BT-119 / 100), rounded to two decimals. The
+		// EN 16931 tolerance is ±1 (vatAmountTolerance), not exact, because per-line
+		// VAT rounding accumulates into the breakdown amount.
 		b, okB := parseAmount(tt.basis)
 		c, okC := parseAmount(tt.calc)
 		r, okR := parseAmount(tt.rate)
-		if okB && okC && okR && math.Abs(round2(b*r/100)-c) > 0.005 {
+		if okB && okC && okR && math.Abs(round2(b*r/100)-c) >= vatAmountTolerance {
 			add("BR-CO-17", fmt.Sprintf("VAT category tax amount (BT-117=%.2f) shall equal taxable amount (BT-116=%.2f) x rate (BT-119=%.2f%%)", c, b, r))
 		}
 		if okC {
