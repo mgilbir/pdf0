@@ -20,9 +20,10 @@ type SignatureResult struct {
 	CoversWholeDocument bool      // the /ByteRange spans the whole file
 	Valid               bool      // digest matches and the signature verifies
 	SigningTime         time.Time // signing-time signed attribute, if present
-	TrustedChain        bool      // the certificate chains to a supplied trust root
-	ChainErr            error     // why the chain did not build (when roots were given)
-	Err                 error     // why signature verification failed, if it did
+	TrustedChain        bool           // the certificate chains to a supplied trust root
+	ChainErr            error          // why the chain did not build (when roots were given)
+	Revocation          RevocationInfo // revocation status from the document's DSS material
+	Err                 error          // why signature verification failed, if it did
 }
 
 // CMS / PKCS#7 object identifiers (RFC 5652) and the CAdES/ESS attributes PAdES
@@ -113,6 +114,15 @@ func (d *Document) verifyOneSignature(sig *Dictionary, raw []byte, roots *x509.C
 		return res
 	}
 	res.Valid = true
+
+	// Revocation status from the document's own long-term validation material
+	// (DSS). The issuer certificate is sought in the CMS and the DSS /Certs.
+	if issuer := issuerOf(cert, append(certs, d.DSSCerts()...)); issuer != nil {
+		crls, ocsps := d.DSSRevocationMaterial()
+		if len(crls) > 0 || len(ocsps) > 0 {
+			res.Revocation = CheckCertRevocation(cert, issuer, crls, ocsps)
+		}
+	}
 
 	// Optional trust-chain verification against a caller-supplied root store.
 	if roots != nil {
