@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"encoding/asn1"
+	"time"
 )
 
 // This file validates PDF Advanced Electronic Signatures (PAdES, ETSI EN 319
@@ -33,7 +34,9 @@ type PAdESResult struct {
 	Valid            bool       // the CMS signature cryptographically verifies
 	CoversDocument   bool       // the /ByteRange reaches the end of the file
 	SignerCommonName string
-	Issues           []string // PAdES conformance problems
+	TimestampValid   bool      // the signature time-stamp verifies (imprint + TSA signature)
+	TimestampTime    time.Time // the time asserted by a verified signature time-stamp
+	Issues           []string  // PAdES conformance problems
 }
 
 // ValidatePAdES assesses every signature in the document for PAdES conformance
@@ -113,6 +116,19 @@ func (d *Document) assessPAdES(sig *Dictionary, raw []byte, hasDSS, hasDocTimest
 		res.Issues = append(res.Issues, "the CMS lacks a signing-certificate attribute (required for CAdES-BES)")
 	}
 
+	// Cryptographically verify the B-T signature time-stamp: its TSA signature and
+	// that its message imprint is the hash of the outer signature value.
+	if hasSigTimestamp {
+		if token, sigValue, ok := extractSignatureTimestamp(contents.Value); ok {
+			if genTime, _, err := verifyTimestampToken(token, sigValue); err == nil {
+				res.TimestampValid = true
+				res.TimestampTime = genTime
+			} else {
+				res.Issues = append(res.Issues, "signature time-stamp does not verify: "+err.Error())
+			}
+		}
+	}
+
 	res.Conformant = len(res.Issues) == 0
 
 	// Baseline level: each level requires the previous. A non-conformant B-B
@@ -128,6 +144,70 @@ func (d *Document) assessPAdES(sig *Dictionary, raw []byte, hasDSS, hasDocTimest
 		}
 	}
 	return res
+}
+
+// extractSignatureTimestamp returns the signature time-stamp token and the outer
+// signature value it is computed over, from a CMS SignedData.
+func extractSignatureTimestamp(der []byte) (token, sigValue []byte, ok bool) {
+	var ci struct {
+		ContentType asn1.ObjectIdentifier
+		Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
+	}
+	if _, err := asn1.Unmarshal(der, &ci); err != nil || !ci.ContentType.Equal(oidSignedData) {
+		return nil, nil, false
+	}
+	var sd struct {
+		Version          int
+		DigestAlgorithms asn1.RawValue
+		EncapContentInfo asn1.RawValue
+		Certificates     asn1.RawValue   `asn1:"optional,tag:0"`
+		CRLs             asn1.RawValue   `asn1:"optional,tag:1"`
+		SignerInfos      []asn1.RawValue `asn1:"set"`
+	}
+	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil || len(sd.SignerInfos) == 0 {
+		return nil, nil, false
+	}
+	var si struct {
+		Version         int
+		SID             asn1.RawValue
+		DigestAlgorithm asn1.RawValue
+		SignedAttrs     asn1.RawValue `asn1:"optional,tag:0"`
+		SignatureAlgo   asn1.RawValue
+		Signature       []byte
+		UnsignedAttrs   asn1.RawValue `asn1:"optional,tag:1"`
+	}
+	if _, err := asn1.Unmarshal(sd.SignerInfos[0].FullBytes, &si); err != nil {
+		return nil, nil, false
+	}
+	token = attrValue(si.UnsignedAttrs.Bytes, oidSignatureTimeStamp)
+	if token == nil {
+		return nil, nil, false
+	}
+	return token, si.Signature, true
+}
+
+// attrValue returns the first value of the attribute with the given type in a DER
+// SET/sequence of Attribute, or nil.
+func attrValue(setBytes []byte, oid asn1.ObjectIdentifier) []byte {
+	rest := setBytes
+	for len(rest) > 0 {
+		var a struct {
+			Type   asn1.ObjectIdentifier
+			Values asn1.RawValue `asn1:"set"`
+		}
+		var err error
+		rest, err = asn1.Unmarshal(rest, &a)
+		if err != nil {
+			return nil
+		}
+		if a.Type.Equal(oid) {
+			var v asn1.RawValue
+			if _, err := asn1.Unmarshal(a.Values.Bytes, &v); err == nil {
+				return v.FullBytes
+			}
+		}
+	}
+	return nil
 }
 
 // cmsPAdESFacts reports whether a CMS SignedData carries the CAdES signing-

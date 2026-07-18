@@ -37,7 +37,31 @@ func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.S
 	if err := signedDoc.Write(&buf); err != nil {
 		return err
 	}
-	out, err := patchSignature(buf.Bytes(), cert, key)
+	out, err := patchSignature(buf.Bytes(), cert, key, nil, nil)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(out)
+	return err
+}
+
+// WriteSignedTimestamped signs the document like WriteSigned and additionally
+// embeds an RFC 3161 signature time-stamp over the signature value, produced by
+// the supplied time-stamp authority certificate and key, yielding a PAdES-B-T
+// signature.
+func (d *Document) WriteSignedTimestamped(w io.Writer, cert *x509.Certificate, key crypto.Signer, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
+	if d.Encrypted || d.security != nil {
+		return errors.New("cannot sign an encrypted document")
+	}
+	signedDoc, _, err := d.withSignatureField()
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := signedDoc.Write(&buf); err != nil {
+		return err
+	}
+	out, err := patchSignature(buf.Bytes(), cert, key, tsaCert, tsaKey)
 	if err != nil {
 		return err
 	}
@@ -62,7 +86,7 @@ func (d *Document) WriteSignedIncremental(w io.Writer, original []byte, cert *x5
 	if err := signedDoc.WriteIncremental(&buf, original, changed); err != nil {
 		return err
 	}
-	out, err := patchSignature(buf.Bytes(), cert, key)
+	out, err := patchSignature(buf.Bytes(), cert, key, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -74,7 +98,7 @@ func (d *Document) WriteSignedIncremental(w io.Writer, original []byte, cert *x5
 // output: it locates the /Contents placeholder, patches /ByteRange in place,
 // signs the covered bytes, and writes the CMS into /Contents. It works on both a
 // full rewrite and an incremental update.
-func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer) ([]byte, error) {
+func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error) {
 	ci := bytes.Index(data, []byte("/Contents"))
 	if ci < 0 {
 		return nil, errors.New("signing: /Contents not found in output")
@@ -104,7 +128,7 @@ func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer) ([]b
 	copy(data[pi:pi+len(real)], real)
 
 	signed := append(append([]byte(nil), data[:len1]...), data[start2:start2+len2]...)
-	cms, err := buildSignedData(cert, key, signed)
+	cms, err := buildSignedDataFull(cert, key, signed, tsaCert, tsaKey)
 	if err != nil {
 		return nil, err
 	}
