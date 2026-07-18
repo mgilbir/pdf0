@@ -1,4 +1,4 @@
-.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington en16931-artefacts clean-en16931-artefacts en16931-codelists clean-en16931-codelists
+.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington en16931-artefacts clean-en16931-artefacts en16931-codelists clean-en16931-codelists cius-oracles clean-cius-oracles
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -130,3 +130,14 @@ en16931-codelists:
 
 clean-en16931-codelists:
 	rm -rf $(CODELISTS_DIR)/genericode $(CODELISTS_DIR)/*.zip $(CODELISTS_DIR)/*.xlsx
+
+# National CIUS oracles: KoSIT XRechnung (Schematron + instance test suite) and
+# OpenPEPPOL BIS 3 (Schematron + examples). Cloned under testdata (gitignored);
+# used as FP=0 oracles for the XRechnung and Peppol rule layers. Not committed.
+cius-oracles:
+	git clone --depth 1 https://github.com/itplr-kosit/xrechnung-schematron testdata/xrechnung/schematron
+	git clone --depth 1 https://github.com/itplr-kosit/xrechnung-testsuite testdata/xrechnung/testsuite
+	git clone --depth 1 https://github.com/OpenPEPPOL/peppol-bis-invoice-3 testdata/peppol/repo
+
+clean-cius-oracles:
+	rm -rf testdata/xrechnung testdata/peppol

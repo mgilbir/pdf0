@@ -57,6 +57,20 @@ type en16931Invoice struct {
 	currencyIDs   []string // amount @currencyID values (BR-CL-03)
 	objectSchemes []string // invoiced object identifier schemes (BR-CL-07)
 
+	// Address/contact detail (optional in EN 16931; several are mandatory in the
+	// XRechnung CIUS).
+	buyerReference       string // BT-10 Buyer reference
+	sellerCity           string // BT-37 Seller city
+	sellerPostCode       string // BT-38 Seller post code
+	sellerContactPresent bool   // BG-6 Seller contact group present
+	sellerContactName    string // BT-41 Seller contact point
+	sellerPhone          string // BT-42 Seller contact telephone
+	sellerEmail          string // BT-43 Seller contact email
+	buyerCity            string // BT-52 Buyer city
+	buyerPostCode        string // BT-53 Buyer post code
+	deliverToCity        string // BT-77 Deliver-to city
+	deliverToPostCode    string // BT-78 Deliver-to post code
+
 	taxRepPresent        bool   // BG-11 Seller tax representative party present
 	taxRepName           string // BT-62 Seller tax representative name
 	taxRepAddressPresent bool   // BG-12 Seller tax representative postal address present
@@ -76,6 +90,11 @@ type en16931Invoice struct {
 
 	docRefs        []docReference // BG-24 Additional supporting documents
 	billingRefNoID bool           // a Preceding invoice reference (BG-3) missing its ID (BT-25)
+	hasBillingRef  bool           // any Preceding invoice reference (BG-3) present
+
+	directDebitPresent bool   // BG-19 Direct debit present
+	creditorID         string // BT-90 Bank assigned creditor identifier
+	debitedAccount     string // BT-91 Debited account identifier
 
 	sellerVATIDCount  int      // number of Seller VAT identifiers (cardinality)
 	buyerVATIDCount   int      // number of Buyer VAT identifiers (cardinality)

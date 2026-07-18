@@ -500,9 +500,20 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		})
 	}
 	for _, r := range settle.orNil().all("InvoiceReferencedDocument") {
+		inv.hasBillingRef = true
 		if r.str("IssuerAssignedID") == "" {
 			inv.billingRefNoID = true
 		}
+	}
+	inv.creditorID = settle.orNil().str("CreditorReferenceID")
+	for _, pm := range settle.orNil().all("SpecifiedTradeSettlementPaymentMeans") {
+		if acc := pm.child("PayerPartyDebtorFinancialAccount"); acc != nil {
+			inv.directDebitPresent = true
+			inv.debitedAccount = firstNonEmpty(acc.str("IBANID"), acc.str("ProprietaryID"))
+		}
+	}
+	if settle.orNil().str("SpecifiedTradePaymentTerms", "DirectDebitMandateID") != "" {
+		inv.directDebitPresent = true
 	}
 	inv.sellerVATIDValue = ciiVATRegValue(agr.child("SellerTradeParty"))
 	inv.taxRepVATIDValue = ciiVATRegValue(agr.child("SellerTaxRepresentativeTradeParty"))
@@ -515,6 +526,19 @@ func mapCII(root *ciiNode) *en16931Invoice {
 	inv.sellerVATIDCount = ciiVATRegCount(agr.child("SellerTradeParty"))
 	inv.buyerVATIDCount = ciiVATRegCount(agr.child("BuyerTradeParty"))
 	inv.supplierSchemeCnt = len(agr.child("SellerTradeParty").all("SpecifiedTaxRegistration"))
+	inv.buyerReference = agr.str("BuyerReference")
+	inv.sellerCity = agr.str("SellerTradeParty", "PostalTradeAddress", "CityName")
+	inv.sellerPostCode = agr.str("SellerTradeParty", "PostalTradeAddress", "PostcodeCode")
+	if c := agr.child("SellerTradeParty", "DefinedTradeContact"); c != nil {
+		inv.sellerContactPresent = true
+		inv.sellerContactName = firstNonEmpty(c.str("PersonName"), c.str("DepartmentName"))
+		inv.sellerPhone = c.str("TelephoneUniversalCommunication", "CompleteNumber")
+		inv.sellerEmail = c.str("EmailURIUniversalCommunication", "URIID")
+	}
+	inv.buyerCity = agr.str("BuyerTradeParty", "PostalTradeAddress", "CityName")
+	inv.buyerPostCode = agr.str("BuyerTradeParty", "PostalTradeAddress", "PostcodeCode")
+	inv.deliverToCity = tx.str("ApplicableHeaderTradeDelivery", "ShipToTradeParty", "PostalTradeAddress", "CityName")
+	inv.deliverToPostCode = tx.str("ApplicableHeaderTradeDelivery", "ShipToTradeParty", "PostalTradeAddress", "PostcodeCode")
 	return inv
 }
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
@@ -752,8 +776,20 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		})
 	}
 	for _, r := range root.all("BillingReference") {
+		inv.hasBillingRef = true
 		if r.str("InvoiceDocumentReference", "ID") == "" {
 			inv.billingRefNoID = true
+		}
+	}
+	for _, p := range append(seller.all("PartyIdentification"), root.child("PayeeParty").all("PartyIdentification")...) {
+		if strings.EqualFold(p.child("ID").attr("schemeID"), "SEPA") {
+			inv.creditorID = p.str("ID")
+		}
+	}
+	for _, pm := range root.all("PaymentMeans") {
+		if m := pm.child("PaymentMandate"); m != nil {
+			inv.directDebitPresent = true
+			inv.debitedAccount = m.str("PayerFinancialAccount", "ID")
 		}
 	}
 	inv.sellerVATIDValue = ublVATSchemeValue(seller)
@@ -768,6 +804,19 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 	inv.sellerVATIDCount = ublVATSchemeCount(seller)
 	inv.buyerVATIDCount = ublVATSchemeCount(buyer)
 	inv.supplierSchemeCnt = len(seller.all("PartyTaxScheme"))
+	inv.buyerReference = root.str("BuyerReference")
+	inv.sellerCity = seller.str("PostalAddress", "CityName")
+	inv.sellerPostCode = seller.str("PostalAddress", "PostalZone")
+	if c := seller.child("Contact"); c != nil {
+		inv.sellerContactPresent = true
+		inv.sellerContactName = c.str("Name")
+		inv.sellerPhone = c.str("Telephone")
+		inv.sellerEmail = c.str("ElectronicMail")
+	}
+	inv.buyerCity = buyer.str("PostalAddress", "CityName")
+	inv.buyerPostCode = buyer.str("PostalAddress", "PostalZone")
+	inv.deliverToCity = root.str("Delivery", "DeliveryLocation", "Address", "CityName")
+	inv.deliverToPostCode = root.str("Delivery", "DeliveryLocation", "Address", "PostalZone")
 	for _, pm := range root.all("PaymentMeans") {
 		if id := pm.str("PaymentID"); id != "" {
 			inv.paymentIDs = append(inv.paymentIDs, id)
