@@ -123,7 +123,89 @@ func validateXRechnungRules(inv *en16931Invoice, ext, cvd bool) []FacturXViolati
 	if e := inv.sellerEmail; e != "" && strings.Count(e, "@") != 1 {
 		add("BR-DE-28", "The Seller contact email address (BT-43) shall contain exactly one @ sign")
 	}
+
+	// BR-DE-16: a taxed VAT category requires the Seller VAT / tax registration /
+	// tax representative identifier.
+	usedTaxed := false
+	for _, li := range inv.lines {
+		if xrechnungVATCodes[li.vatCategory] {
+			usedTaxed = true
+		}
+	}
+	for _, ac := range inv.allowCharges {
+		if xrechnungVATCodes[ac.category] {
+			usedTaxed = true
+		}
+	}
+	if usedTaxed && !(inv.sellerVATID || inv.sellerTaxReg || inv.taxRepVATID) {
+		add("BR-DE-16", "A taxed VAT category requires the Seller VAT identifier, tax registration or tax representative VAT identifier")
+	}
+
+	// BR-DE-19/20: the credit-transfer / direct-debit account identifiers shall be
+	// a valid IBAN for the SEPA payment means.
+	for _, pm := range inv.paymentMeans {
+		if pm == "58" && inv.creditAccountID != "" && !validIBAN(inv.creditAccountID) {
+			add("BR-DE-19", "The Payment account identifier (BT-84) shall be a valid IBAN for a SEPA credit transfer")
+		}
+		if pm == "59" && inv.debitedAccount != "" && !validIBAN(inv.debitedAccount) {
+			add("BR-DE-20", "The Debited account identifier (BT-91) shall be a valid IBAN for a SEPA direct debit")
+		}
+	}
+
+	// BR-DE-26: a corrected invoice (type 384) requires a preceding invoice reference.
+	if inv.typeCode == "384" && !inv.hasBillingRef {
+		add("BR-DE-26", "A corrected invoice (type code 384) shall contain a Preceding Invoice reference (BG-3)")
+	}
+
+	// BR-DE-30/31: a direct debit requires the creditor identifier and the debited
+	// account identifier.
+	if inv.directDebitPresent {
+		req("BR-DE-30", "A direct debit (BG-19) shall carry the Bank assigned creditor identifier (BT-90)", inv.creditorID)
+		req("BR-DE-31", "A direct debit (BG-19) shall carry the Debited account identifier (BT-91)", inv.debitedAccount)
+	}
 	return out
+}
+
+// xrechnungVATCodes are the taxed VAT category codes that trigger BR-DE-16.
+var xrechnungVATCodes = map[string]bool{
+	"S": true, "Z": true, "E": true, "AE": true, "K": true, "G": true, "L": true, "M": true,
+}
+
+// validIBAN reports whether s is a syntactically valid IBAN (ISO 13616): two
+// letters, two check digits, up to 30 alphanumerics, passing the mod-97 check.
+func validIBAN(s string) bool {
+	s = strings.ToUpper(strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, s))
+	if len(s) < 5 || len(s) > 34 {
+		return false
+	}
+	if s[0] < 'A' || s[0] > 'Z' || s[1] < 'A' || s[1] > 'Z' || s[2] < '0' || s[2] > '9' || s[3] < '0' || s[3] > '9' {
+		return false
+	}
+	// Move the first four characters to the end and reduce mod 97.
+	rearranged := s[4:] + s[:4]
+	rem := 0
+	for _, r := range rearranged {
+		var d int
+		switch {
+		case r >= '0' && r <= '9':
+			d = int(r - '0')
+		case r >= 'A' && r <= 'Z':
+			d = int(r-'A') + 10
+		default:
+			return false
+		}
+		if d >= 10 {
+			rem = (rem*100 + d) % 97
+		} else {
+			rem = (rem*10 + d) % 97
+		}
+	}
+	return rem == 1
 }
 
 // countDigits returns the number of ASCII digits in s.

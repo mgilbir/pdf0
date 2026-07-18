@@ -90,6 +90,11 @@ type en16931Invoice struct {
 
 	docRefs        []docReference // BG-24 Additional supporting documents
 	billingRefNoID bool           // a Preceding invoice reference (BG-3) missing its ID (BT-25)
+	hasBillingRef  bool           // any Preceding invoice reference (BG-3) present
+
+	directDebitPresent bool   // BG-19 Direct debit present
+	creditorID         string // BT-90 Bank assigned creditor identifier
+	debitedAccount     string // BT-91 Debited account identifier
 
 	sellerVATIDCount  int      // number of Seller VAT identifiers (cardinality)
 	buyerVATIDCount   int      // number of Buyer VAT identifiers (cardinality)

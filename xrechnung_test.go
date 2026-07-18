@@ -58,6 +58,7 @@ func TestValidateXRechnungRules(t *testing.T) {
 		{"no seller city (BR-DE-3)", "<cbc:CityName>Berlin</cbc:CityName>", "", "BR-DE-3"},
 		{"no seller contact (BR-DE-2)", "<cac:Contact><cbc:Name>Tim Tester</cbc:Name><cbc:Telephone>012 3456789</cbc:Telephone><cbc:ElectronicMail>tim@test.de</cbc:ElectronicMail></cac:Contact>", "", "BR-DE-2"},
 		{"bad type code (BR-DE-17)", "<cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>", "<cbc:InvoiceTypeCode>999</cbc:InvoiceTypeCode>", "BR-DE-17"},
+		{"corrected without preceding ref (BR-DE-26)", "<cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>", "<cbc:InvoiceTypeCode>384</cbc:InvoiceTypeCode>", "BR-DE-26"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

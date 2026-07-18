@@ -500,9 +500,20 @@ func mapCII(root *ciiNode) *en16931Invoice {
 		})
 	}
 	for _, r := range settle.orNil().all("InvoiceReferencedDocument") {
+		inv.hasBillingRef = true
 		if r.str("IssuerAssignedID") == "" {
 			inv.billingRefNoID = true
 		}
+	}
+	inv.creditorID = settle.orNil().str("CreditorReferenceID")
+	for _, pm := range settle.orNil().all("SpecifiedTradeSettlementPaymentMeans") {
+		if acc := pm.child("PayerPartyDebtorFinancialAccount"); acc != nil {
+			inv.directDebitPresent = true
+			inv.debitedAccount = firstNonEmpty(acc.str("IBANID"), acc.str("ProprietaryID"))
+		}
+	}
+	if settle.orNil().str("SpecifiedTradePaymentTerms", "DirectDebitMandateID") != "" {
+		inv.directDebitPresent = true
 	}
 	inv.sellerVATIDValue = ciiVATRegValue(agr.child("SellerTradeParty"))
 	inv.taxRepVATIDValue = ciiVATRegValue(agr.child("SellerTaxRepresentativeTradeParty"))
@@ -765,8 +776,20 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		})
 	}
 	for _, r := range root.all("BillingReference") {
+		inv.hasBillingRef = true
 		if r.str("InvoiceDocumentReference", "ID") == "" {
 			inv.billingRefNoID = true
+		}
+	}
+	for _, p := range append(seller.all("PartyIdentification"), root.child("PayeeParty").all("PartyIdentification")...) {
+		if strings.EqualFold(p.child("ID").attr("schemeID"), "SEPA") {
+			inv.creditorID = p.str("ID")
+		}
+	}
+	for _, pm := range root.all("PaymentMeans") {
+		if m := pm.child("PaymentMandate"); m != nil {
+			inv.directDebitPresent = true
+			inv.debitedAccount = m.str("PayerFinancialAccount", "ID")
 		}
 	}
 	inv.sellerVATIDValue = ublVATSchemeValue(seller)
