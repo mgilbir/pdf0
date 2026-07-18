@@ -134,3 +134,44 @@ func TestPAdESLevelDetection(t *testing.T) {
 		t.Errorf("DSS without a timestamp must not reach B-LT; level = %q", got)
 	}
 }
+
+// TestPAdESBTTimestamp signs with an RFC 3161 signature time-stamp (a local TSA)
+// and checks that ValidatePAdES reaches level B-T with a cryptographically
+// verified time-stamp.
+func TestPAdESBTTimestamp(t *testing.T) {
+	cert, key := testCertKey(t)
+	base := buildMinimalPDF()
+	doc, err := Read(bytes.NewReader(base), int64(len(base)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := doc.WriteSignedTimestamped(&buf, cert, key, cert, key); err != nil {
+		t.Fatalf("WriteSignedTimestamped: %v", err)
+	}
+	out := buf.Bytes()
+	signed, err := Read(bytes.NewReader(out), int64(len(out)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := signed.ValidatePAdES(out)
+	if len(res) != 1 {
+		t.Fatalf("got %d PAdES results, want 1", len(res))
+	}
+	r := res[0]
+	if !r.Valid {
+		t.Error("signature should verify")
+	}
+	if !r.TimestampValid {
+		t.Errorf("signature time-stamp should verify; issues: %v", r.Issues)
+	}
+	if r.TimestampTime.IsZero() {
+		t.Error("expected a time-stamp time")
+	}
+	if r.Level != PAdESBT {
+		t.Errorf("level = %q, want B-T", r.Level)
+	}
+	if !r.Conformant {
+		t.Errorf("expected a conformant signature, issues: %v", r.Issues)
+	}
+}
