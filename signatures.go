@@ -10,15 +10,19 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"time"
 )
 
 // SignatureResult reports the outcome of verifying one signature field.
 type SignatureResult struct {
-	Field               string // signature field name, if any
-	SignerCommonName    string // Subject CN of the signing certificate
-	CoversWholeDocument bool   // the /ByteRange spans the whole file
-	Valid               bool   // digest matches and the signature verifies
-	Err                 error  // why verification failed, if it did
+	Field               string    // signature field name, if any
+	SignerCommonName    string    // Subject CN of the signing certificate
+	CoversWholeDocument bool      // the /ByteRange spans the whole file
+	Valid               bool      // digest matches and the signature verifies
+	SigningTime         time.Time // signing-time signed attribute, if present
+	TrustedChain        bool      // the certificate chains to a supplied trust root
+	ChainErr            error     // why the chain did not build (when roots were given)
+	Err                 error     // why signature verification failed, if it did
 }
 
 // CMS / PKCS#7 object identifiers (RFC 5652) and the CAdES/ESS attributes PAdES
@@ -27,6 +31,7 @@ var (
 	oidData          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
 	oidContentType   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 3}
 	oidMessageDigest = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
+	oidSigningTime   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
 	// ESS signing-certificate (v1: SHA-1) and v2 (SHA-256+): the CAdES-BES
 	// attribute binding the signer certificate into the signed attributes.
 	oidSigningCertificate   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 12}
@@ -55,6 +60,16 @@ type signingCertificateV2 struct {
 // content is intact and was signed by the holder of the embedded certificate's
 // private key.
 func (d *Document) VerifySignatures(raw []byte) []SignatureResult {
+	return d.VerifySignaturesWithRoots(raw, nil)
+}
+
+// VerifySignaturesWithRoots verifies every signature as VerifySignatures does and,
+// when roots is non-nil, additionally builds the signer's certificate chain to one
+// of those trust anchors (using the certificates embedded in the CMS as
+// intermediates, at the signing time when present). The chain outcome is reported
+// in TrustedChain / ChainErr and does not affect Valid, which remains a statement
+// about the cryptographic integrity of the signed content.
+func (d *Document) VerifySignaturesWithRoots(raw []byte, roots *x509.CertPool) []SignatureResult {
 	var results []SignatureResult
 	for _, iobj := range d.Objects {
 		dict, ok := iobj.Value.(*Dictionary)
@@ -64,12 +79,12 @@ func (d *Document) VerifySignatures(raw []byte) []SignatureResult {
 		if t, _ := dict.Get("Type").(Name); t != "" && t != "Sig" && t != "DocTimeStamp" {
 			continue
 		}
-		results = append(results, d.verifyOneSignature(dict, raw))
+		results = append(results, d.verifyOneSignature(dict, raw, roots))
 	}
 	return results
 }
 
-func (d *Document) verifyOneSignature(sig *Dictionary, raw []byte) SignatureResult {
+func (d *Document) verifyOneSignature(sig *Dictionary, raw []byte, roots *x509.CertPool) SignatureResult {
 	var res SignatureResult
 	contents, _ := d.Resolve(sig.Get("Contents")).(String)
 
@@ -88,13 +103,39 @@ func (d *Document) verifyOneSignature(sig *Dictionary, raw []byte) SignatureResu
 		signed = append(signed, raw[s[0]:s[0]+s[1]]...)
 	}
 
-	cn, err := verifyCMS(contents.Value, signed)
-	res.SignerCommonName = cn
+	cert, certs, signingTime, err := verifyCMS(contents.Value, signed)
+	if cert != nil {
+		res.SignerCommonName = cert.Subject.CommonName
+	}
+	res.SigningTime = signingTime
 	if err != nil {
 		res.Err = err
 		return res
 	}
 	res.Valid = true
+
+	// Optional trust-chain verification against a caller-supplied root store.
+	if roots != nil {
+		intermediates := x509.NewCertPool()
+		for _, c := range certs {
+			if c != cert {
+				intermediates.AddCert(c)
+			}
+		}
+		opts := x509.VerifyOptions{
+			Roots:         roots,
+			Intermediates: intermediates,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		}
+		if !signingTime.IsZero() {
+			opts.CurrentTime = signingTime
+		}
+		if _, err := cert.Verify(opts); err != nil {
+			res.ChainErr = err
+		} else {
+			res.TrustedChain = true
+		}
+	}
 	return res
 }
 
@@ -143,15 +184,16 @@ type attribute struct {
 	Values asn1.RawValue `asn1:"set"`
 }
 
-// verifyCMS verifies a detached CMS SignedData blob over content and returns the
-// signer certificate's common name.
-func verifyCMS(der, content []byte) (string, error) {
+// verifyCMS verifies a detached CMS SignedData blob over content. It returns the
+// signer certificate, every certificate embedded in the CMS (for chain building)
+// and the signing-time attribute, or an error if the signature does not verify.
+func verifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certificate, signingTime time.Time, err error) {
 	var ci struct {
 		ContentType asn1.ObjectIdentifier
 		Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
 	}
-	if _, err := asn1.Unmarshal(der, &ci); err != nil || !ci.ContentType.Equal(oidSignedData) {
-		return "", errors.New("not a CMS SignedData")
+	if _, e := asn1.Unmarshal(der, &ci); e != nil || !ci.ContentType.Equal(oidSignedData) {
+		return nil, nil, signingTime, errors.New("not a CMS SignedData")
 	}
 	var sd struct {
 		Version          int
@@ -161,43 +203,44 @@ func verifyCMS(der, content []byte) (string, error) {
 		CRLs             asn1.RawValue   `asn1:"optional,tag:1"`
 		SignerInfos      []asn1.RawValue `asn1:"set"`
 	}
-	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
-		return "", fmt.Errorf("parsing SignedData: %w", err)
+	if _, e := asn1.Unmarshal(ci.Content.Bytes, &sd); e != nil {
+		return nil, nil, signingTime, fmt.Errorf("parsing SignedData: %w", e)
 	}
 	if len(sd.SignerInfos) != 1 {
-		return "", fmt.Errorf("expected exactly one SignerInfo, got %d", len(sd.SignerInfos))
+		return nil, nil, signingTime, fmt.Errorf("expected exactly one SignerInfo, got %d", len(sd.SignerInfos))
 	}
 	var si signerInfo
-	if _, err := asn1.Unmarshal(sd.SignerInfos[0].FullBytes, &si); err != nil {
-		return "", fmt.Errorf("parsing SignerInfo: %w", err)
+	if _, e := asn1.Unmarshal(sd.SignerInfos[0].FullBytes, &si); e != nil {
+		return nil, nil, signingTime, fmt.Errorf("parsing SignerInfo: %w", e)
 	}
-	certs, err := x509.ParseCertificates(sd.Certificates.Bytes)
+	certs, err = x509.ParseCertificates(sd.Certificates.Bytes)
 	if err != nil || len(certs) == 0 {
-		return "", errors.New("no signing certificate")
+		return nil, nil, signingTime, errors.New("no signing certificate")
 	}
-	cert := signerCertificate(certs, si.SID)
+	cert = signerCertificate(certs, si.SID)
 	if cert == nil {
-		return "", errors.New("signer certificate not found among the embedded certificates")
+		return nil, certs, signingTime, errors.New("signer certificate not found among the embedded certificates")
 	}
 
 	hashFn, ok := hashForOID(si.DigestAlgorithm.Algorithm)
 	if !ok {
-		return cert.Subject.CommonName, errors.New("unsupported digest algorithm")
+		return cert, certs, signingTime, errors.New("unsupported digest algorithm")
 	}
 	h := hashFn.New()
 	h.Write(content)
 	contentDigest := h.Sum(nil)
 
 	if len(si.SignedAttrs.Bytes) == 0 {
-		return cert.Subject.CommonName, errors.New("signature without signed attributes is not supported")
+		return cert, certs, signingTime, errors.New("signature without signed attributes is not supported")
 	}
-	attrs, err := parseAttributes(si.SignedAttrs.Bytes)
-	if err != nil {
-		return cert.Subject.CommonName, err
+	attrs, e := parseAttributes(si.SignedAttrs.Bytes)
+	if e != nil {
+		return cert, certs, signingTime, e
 	}
+	signingTime = signingTimeFromAttrs(si.SignedAttrs.Bytes)
 	md, ok := attrs[oidMessageDigest.String()]
 	if !ok || !bytes.Equal(md, contentDigest) {
-		return cert.Subject.CommonName, errors.New("document digest does not match the signature (content was modified)")
+		return cert, certs, signingTime, errors.New("document digest does not match the signature (content was modified)")
 	}
 
 	// The signature is computed over the DER of the signed attributes encoded as
@@ -207,12 +250,33 @@ func verifyCMS(der, content []byte) (string, error) {
 	signedDER[0] = 0x31
 	sigAlgo, ok := signatureAlgorithm(cert.PublicKeyAlgorithm.String(), hashFn)
 	if !ok {
-		return cert.Subject.CommonName, errors.New("unsupported signature algorithm")
+		return cert, certs, signingTime, errors.New("unsupported signature algorithm")
 	}
 	if err := cert.CheckSignature(sigAlgo, signedDER, si.Signature); err != nil {
-		return cert.Subject.CommonName, fmt.Errorf("signature does not verify: %w", err)
+		return cert, certs, signingTime, fmt.Errorf("signature does not verify: %w", err)
 	}
-	return cert.Subject.CommonName, nil
+	return cert, certs, signingTime, nil
+}
+
+// signingTimeFromAttrs extracts the signing-time signed attribute, or the zero
+// time if it is absent or unparseable.
+func signingTimeFromAttrs(setBytes []byte) time.Time {
+	rest := setBytes
+	for len(rest) > 0 {
+		var a attribute
+		var err error
+		rest, err = asn1.Unmarshal(rest, &a)
+		if err != nil {
+			return time.Time{}
+		}
+		if a.Type.Equal(oidSigningTime) {
+			var t time.Time
+			if _, err := asn1.Unmarshal(a.Values.Bytes, &t); err == nil {
+				return t
+			}
+		}
+	}
+	return time.Time{}
 }
 
 func parseAttributes(setBytes []byte) (map[string][]byte, error) {

@@ -79,7 +79,7 @@ func (d *Document) assessPAdES(sig *Dictionary, raw []byte, hasDSS, hasDocTimest
 	res.SubFilter = string(sub)
 
 	// Reuse the CMS verification for cryptographic validity and signer identity.
-	v := d.verifyOneSignature(sig, raw)
+	v := d.verifyOneSignature(sig, raw, nil)
 	res.Valid = v.Valid
 	res.CoversDocument = v.CoversWholeDocument
 	res.SignerCommonName = v.SignerCommonName
