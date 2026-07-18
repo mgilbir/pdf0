@@ -360,6 +360,8 @@ func mapCII(root *ciiNode) *en16931Invoice {
 
 	inv := &en16931Invoice{
 		specID:               root.str("ExchangedDocumentContext", "GuidelineSpecifiedDocumentContextParameter", "ID"),
+		profileID:            root.str("ExchangedDocumentContext", "BusinessProcessSpecifiedDocumentContextParameter", "ID"),
+		orderRef:             tx.orNil().str("ApplicableHeaderTradeAgreement", "BuyerOrderReferencedDocument", "IssuerAssignedID"),
 		number:               doc.orNil().str("ID"),
 		issueDate:            doc.orNil().str("IssueDateTime", "DateTimeString"),
 		typeCode:             doc.orNil().str("TypeCode"),
@@ -459,6 +461,7 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			originCountry: li.str("SpecifiedTradeProduct", "OriginTradeCountry", "ID"),
 			period:        ciiPeriod(li.child("SpecifiedLineTradeSettlement")),
 			grossPrice:    li.str("SpecifiedLineTradeAgreement", "GrossPriceProductTradePrice", "ChargeAmount"),
+			baseQty:       li.str("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "BasisQuantity"),
 			baseQtyUnit:   li.child("SpecifiedLineTradeAgreement", "NetPriceProductTradePrice", "BasisQuantity").attr("unitCode"),
 		}
 		if qty := li.child("SpecifiedLineTradeDelivery", "BilledQuantity"); qty != nil {
@@ -512,8 +515,9 @@ func mapCII(root *ciiNode) *en16931Invoice {
 			inv.debitedAccount = firstNonEmpty(acc.str("IBANID"), acc.str("ProprietaryID"))
 		}
 	}
-	if settle.orNil().str("SpecifiedTradePaymentTerms", "DirectDebitMandateID") != "" {
+	if m := settle.orNil().str("SpecifiedTradePaymentTerms", "DirectDebitMandateID"); m != "" {
 		inv.directDebitPresent = true
+		inv.mandateRef = m
 	}
 	inv.sellerVATIDValue = ciiVATRegValue(agr.child("SellerTradeParty"))
 	inv.taxRepVATIDValue = ciiVATRegValue(agr.child("SellerTaxRepresentativeTradeParty"))
@@ -739,6 +743,7 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 			originCountry: li.str("Item", "OriginCountry", "IdentificationCode"),
 			period:        ublPeriod(li),
 			grossPrice:    li.child("Price", "AllowanceCharge").str("BaseAmount"),
+			baseQty:       li.str("Price", "BaseQuantity"),
 			baseQtyUnit:   li.child("Price", "BaseQuantity").attr("unitCode"),
 		}
 		if qty := li.child(qtyName); qty != nil {
@@ -790,6 +795,7 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 		if m := pm.child("PaymentMandate"); m != nil {
 			inv.directDebitPresent = true
 			inv.debitedAccount = m.str("PayerFinancialAccount", "ID")
+			inv.mandateRef = m.str("ID")
 		}
 	}
 	inv.sellerVATIDValue = ublVATSchemeValue(seller)
@@ -804,6 +810,8 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 	inv.sellerVATIDCount = ublVATSchemeCount(seller)
 	inv.buyerVATIDCount = ublVATSchemeCount(buyer)
 	inv.supplierSchemeCnt = len(seller.all("PartyTaxScheme"))
+	inv.profileID = root.str("ProfileID")
+	inv.orderRef = root.str("OrderReference", "ID")
 	inv.buyerReference = root.str("BuyerReference")
 	inv.sellerCity = seller.str("PostalAddress", "CityName")
 	inv.sellerPostCode = seller.str("PostalAddress", "PostalZone")

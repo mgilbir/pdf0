@@ -17,12 +17,15 @@ import (
 // examine. Scalar business terms are stored as their raw string values ("" when
 // absent); groups are slices.
 type en16931Invoice struct {
-	syntax    string // "CII" or "UBL" — the binding the invoice was expressed in
-	specID    string // BT-24 Specification identifier
-	number    string // BT-1  Invoice number
-	issueDate string // BT-2  Issue date
-	typeCode  string // BT-3  Invoice type code
-	currency  string // BT-5  Invoice currency code
+	syntax     string // "CII" or "UBL" — the binding the invoice was expressed in
+	specID     string // BT-24 Specification identifier
+	profileID  string // BT-23 Business process type
+	orderRef   string // BT-13 Purchase order reference
+	mandateRef string // BT-89 Mandate reference identifier
+	number     string // BT-1  Invoice number
+	issueDate  string // BT-2  Issue date
+	typeCode   string // BT-3  Invoice type code
+	currency   string // BT-5  Invoice currency code
 
 	sellerName           string // BT-27 Seller name
 	buyerName            string // BT-44 Buyer name
@@ -156,6 +159,7 @@ type invoiceLine struct {
 	period        invoicePeriod // BG-26 Invoice line period
 
 	grossPrice   string // BT-148 Item gross price
+	baseQty      string // BT-149 Item price base quantity
 	baseQtyUnit  string // BT-150 Item price base quantity unit of measure
 	itemAttrBad  bool   // an Item attribute (BG-32) missing its name or value
 	stdIDPresent bool   // BT-157 Item standard identifier present
