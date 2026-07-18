@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -47,15 +48,15 @@ func TestCMSRoundTrip(t *testing.T) {
 	if info := parseCMSSignedData(cms); !info.parsed || !info.hasCertificate || info.signerInfoCount != 1 {
 		t.Fatalf("built CMS is malformed: %+v", info)
 	}
-	cn, err := verifyCMS(cms, content)
+	signer, _, _, err := verifyCMS(cms, content)
 	if err != nil {
 		t.Fatalf("verifyCMS: %v", err)
 	}
-	if cn != "pdf0 test signer" {
-		t.Errorf("common name = %q", cn)
+	if signer.Subject.CommonName != "pdf0 test signer" {
+		t.Errorf("common name = %q", signer.Subject.CommonName)
 	}
 	tampered := append(append([]byte(nil), content...), '!')
-	if _, err := verifyCMS(cms, tampered); err == nil {
+	if _, _, _, err := verifyCMS(cms, tampered); err == nil {
 		t.Error("verification succeeded on modified content")
 	}
 }
@@ -112,5 +113,48 @@ func TestVerifySignatures(t *testing.T) {
 	tampered[0] ^= 0xFF
 	if res := doc.VerifySignatures(tampered); res[0].Valid {
 		t.Error("modified document still verified")
+	}
+}
+
+// TestVerifySignaturesWithRoots checks the optional trust-chain verification: a
+// self-signed signer verifies against a root store that contains it, does not
+// against an empty store, and the trust outcome never changes the integrity
+// verdict (Valid).
+func TestVerifySignaturesWithRoots(t *testing.T) {
+	cert, key := testCertKey(t)
+	base := buildMinimalPDF()
+	doc, err := Read(bytes.NewReader(base), int64(len(base)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := doc.WriteSigned(&buf, cert, key); err != nil {
+		t.Fatalf("WriteSigned: %v", err)
+	}
+	out := buf.Bytes()
+	signed, err := Read(bytes.NewReader(out), int64(len(out)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+	res := signed.VerifySignaturesWithRoots(out, roots)
+	if len(res) != 1 || !res[0].Valid {
+		t.Fatalf("expected one valid signature, got %+v", res)
+	}
+	if !res[0].TrustedChain {
+		t.Errorf("chain should be trusted against its own root: %v", res[0].ChainErr)
+	}
+
+	res = signed.VerifySignaturesWithRoots(out, x509.NewCertPool())
+	if res[0].TrustedChain {
+		t.Error("an empty root store must not trust the chain")
+	}
+	if res[0].ChainErr == nil {
+		t.Error("expected a chain error with no trusted roots")
+	}
+	if !res[0].Valid {
+		t.Error("Valid (content integrity) must hold regardless of trust")
 	}
 }
