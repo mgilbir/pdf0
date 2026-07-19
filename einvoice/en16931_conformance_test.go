@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"encoding/xml"
@@ -15,7 +15,7 @@ import (
 // suite (ConnectingEurope/eInvoicing-EN16931, EUPL-1.2) is a set of per-rule
 // testSets: each carries minimal UBL fragments tagged <success>BR-XX</success>
 // (the fragment satisfies rule BR-XX) or <error>BR-XX</error> (the fragment
-// violates it). We feed each fragment through ValidateFacturXInvoice and check
+// violates it). We feed each fragment through Validate and check
 // our verdict for that one rule against the tag.
 //
 // The suite is not vendored; clone it with `make en16931-artefacts` (gitignored).
@@ -26,7 +26,7 @@ func en16931SuiteDir() string {
 	if d := os.Getenv("EN16931_ARTEFACTS"); d != "" {
 		return d
 	}
-	d := filepath.Join("testdata", "en16931-artefacts")
+	d := filepath.Join("..", "testdata", "en16931-artefacts")
 	if _, err := os.Stat(filepath.Join(d, "test", "Invoice-unit-UBL")); err == nil {
 		return d
 	}
@@ -56,7 +56,7 @@ func documentFragment(inner string) string {
 	return ""
 }
 
-func hasFacturXRule(vs []FacturXViolation, rule string) bool {
+func hasFacturXRule(vs []Violation, rule string) bool {
 	for _, v := range vs {
 		if v.Rule == rule {
 			return true
@@ -112,7 +112,7 @@ func TestEN16931ConformanceSuite(t *testing.T) {
 				harnessErr++
 				continue
 			}
-			vs := ValidateFacturXInvoice([]byte(doc), FacturXEN16931)
+			vs := Validate([]byte(doc), ProfileEN16931)
 			reports := hasFacturXRule(vs, rule)
 			if isError {
 				errorSeen[rule] = true

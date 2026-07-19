@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"encoding/xml"
@@ -43,7 +43,7 @@ func gcCodes(t *testing.T, path string) map[string]bool {
 }
 
 func TestEN16931CodeListsFaithful(t *testing.T) {
-	dir := filepath.Join("testdata", "en16931-codelists", "genericode")
+	dir := filepath.Join("..", "testdata", "en16931-codelists", "genericode")
 	if _, err := os.Stat(dir); err != nil {
 		t.Skip("EN 16931 genericode bundle not present; run `make en16931-codelists`")
 	}

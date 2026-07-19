@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"os"
@@ -84,7 +84,7 @@ func TestValidateXRechnungRules(t *testing.T) {
 // instance (which is a conforming invoice) must validate with no violations. The
 // oracle is not vendored; the test skips when it is absent (run `make cius-oracles`).
 func TestValidateXRechnungCorpus(t *testing.T) {
-	root := filepath.Join("testdata", "xrechnung", "testsuite", "src", "test")
+	root := filepath.Join("..", "testdata", "xrechnung", "testsuite", "src", "test")
 	if _, err := os.Stat(root); err != nil {
 		t.Skip("XRechnung test suite not present (make cius-oracles)")
 	}

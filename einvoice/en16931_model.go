@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"fmt"
@@ -19,14 +19,14 @@ import (
 type en16931Invoice struct {
 	syntax       string // "CII" or "UBL" — the binding the invoice was expressed in
 	isCreditNote bool   // the UBL binding used a CreditNote (not Invoice) root
-	specID     string // BT-24 Specification identifier
-	profileID  string // BT-23 Business process type
-	orderRef   string // BT-13 Purchase order reference
-	mandateRef string // BT-89 Mandate reference identifier
-	number     string // BT-1  Invoice number
-	issueDate  string // BT-2  Issue date
-	typeCode   string // BT-3  Invoice type code
-	currency   string // BT-5  Invoice currency code
+	specID       string // BT-24 Specification identifier
+	profileID    string // BT-23 Business process type
+	orderRef     string // BT-13 Purchase order reference
+	mandateRef   string // BT-89 Mandate reference identifier
+	number       string // BT-1  Invoice number
+	issueDate    string // BT-2  Issue date
+	typeCode     string // BT-3  Invoice type code
+	currency     string // BT-5  Invoice currency code
 
 	sellerName           string // BT-27 Seller name
 	buyerName            string // BT-44 Buyer name
@@ -210,9 +210,9 @@ const vatAmountTolerance = 1.0
 // validateEN16931 applies the EN 16931 core business rules to a mapped invoice.
 // The rule identifiers, messages and tolerances match the values validators and
 // the EN 16931 Schematron report, so the same output holds for either syntax.
-func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViolation {
-	var out []FacturXViolation
-	add := func(rule, msg string) { out = append(out, FacturXViolation{Rule: rule, Message: msg}) }
+func validateEN16931(inv *en16931Invoice, profile Profile) []Violation {
+	var out []Violation
+	add := func(rule, msg string) { out = append(out, Violation{Rule: rule, Message: msg}) }
 	req := func(rule, msg, val string) {
 		if val == "" {
 			add(rule, msg)
@@ -234,7 +234,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	}
 	req("BR-09", "The Seller postal address shall contain a Seller country code (BT-40)", inv.sellerCountry)
 	// The Buyer postal address (BG-8) is not mandatory in the reduced MINIMUM CIUS.
-	if profile != FacturXMinimum {
+	if profile != ProfileMinimum {
 		if !inv.buyerAddressPresent {
 			add("BR-10", "An Invoice shall contain the Buyer postal address (BG-8)")
 		}
@@ -444,7 +444,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	// Full-invoice profiles carry lines and a line-net total; the head-only
 	// Factur-X CIUS (MINIMUM, BASIC WL) legitimately omit both, so gate the
 	// line-presence rules to profiles that carry lines.
-	headOnly := profile == FacturXMinimum || profile == FacturXBasicWL
+	headOnly := profile == ProfileMinimum || profile == ProfileBasicWL
 	if !headOnly {
 		if len(inv.lines) == 0 {
 			add("BR-16", "An Invoice shall have at least one Invoice line (BG-25)")
@@ -453,7 +453,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	}
 	// BR-CO-18: at least one VAT breakdown group. MINIMUM carries only totals, no
 	// breakdown, so it is exempt.
-	if profile != FacturXMinimum && len(inv.vatBreakdowns) == 0 {
+	if profile != ProfileMinimum && len(inv.vatBreakdowns) == 0 {
 		add("BR-CO-18", "An Invoice shall at least have one VAT breakdown group (BG-23)")
 	}
 
@@ -729,7 +729,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	// EXTENDED producers carry amounts in the totals without an itemizable BG-20/21
 	// entry, so these are checked only when every such amount is itemized — i.e.
 	// outside the EXTENDED profile.
-	if inv.hasTotals && profile != FacturXExtended {
+	if inv.hasTotals && profile != ProfileExtended {
 		var allowSum, chargeSum float64
 		for _, ac := range inv.allowCharges {
 			if v, ok := parseAmount(ac.amount); ok {
@@ -773,7 +773,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 	// - Paid amount (BT-113) + Rounding amount (BT-114). MINIMUM omits the paid
 	// amount from its reduced summation, so its due may differ without a modeled
 	// prepaid; exempt it.
-	if inv.hasTotals && profile != FacturXMinimum {
+	if inv.hasTotals && profile != ProfileMinimum {
 		grand, okG := parseAmount(inv.totals.grandTotal)
 		due, okD := parseAmount(inv.totals.duePayable)
 		paid, _ := parseAmount(inv.totals.paidAmount)

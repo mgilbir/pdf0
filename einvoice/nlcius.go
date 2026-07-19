@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import "fmt"
 
@@ -30,24 +30,24 @@ var nlciusTypeCodes = map[string]bool{"380": true, "381": true, "384": true, "38
 
 // ValidateNLCIUS validates an invoice XML against the Dutch NLCIUS (SimplerInvoicing)
 // CIUS: the EN 16931 core plus the NLCIUS-specific rules. It accepts either syntax.
-func ValidateNLCIUS(xmlData []byte) []FacturXViolation {
+func ValidateNLCIUS(xmlData []byte) []Violation {
 	inv, err := parseEN16931(xmlData)
 	if err != nil {
-		return []FacturXViolation{{Rule: "syntax", Message: err.Error()}}
+		return []Violation{{Rule: "syntax", Message: err.Error()}}
 	}
-	out := validateEN16931(inv, FacturXEN16931)
+	out := validateEN16931(inv, ProfileEN16931)
 	out = append(out, validateNLCIUSRules(inv)...)
 	return out
 }
 
 // validateNLCIUSRules applies the mandatory NLCIUS rules. All are gated on the
 // supplier being in the Netherlands.
-func validateNLCIUSRules(inv *en16931Invoice) []FacturXViolation {
+func validateNLCIUSRules(inv *en16931Invoice) []Violation {
 	if inv.sellerCountry != "NL" {
 		return nil
 	}
-	var out []FacturXViolation
-	add := func(rule, msg string) { out = append(out, FacturXViolation{Rule: rule, Message: msg}) }
+	var out []Violation
+	add := func(rule, msg string) { out = append(out, Violation{Rule: rule, Message: msg}) }
 
 	// BR-NL-1: the supplier must identify its legal entity with a KVK (scheme
 	// 0106) or OIN (scheme 0190) number.

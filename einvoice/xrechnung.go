@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"fmt"
@@ -28,16 +28,16 @@ var xrExtItemSchemes = map[string]bool{"XR01": true, "XR02": true, "XR03": true}
 // ValidateXRechnung validates an invoice XML against the XRechnung CIUS: the
 // EN 16931 core (with the XRechnung sub-profile overrides applied) plus the
 // BR-DE-* rules. It accepts either syntax.
-func ValidateXRechnung(xmlData []byte) []FacturXViolation {
+func ValidateXRechnung(xmlData []byte) []Violation {
 	inv, err := parseEN16931(xmlData)
 	if err != nil {
-		return []FacturXViolation{{Rule: "syntax", Message: err.Error()}}
+		return []Violation{{Rule: "syntax", Message: err.Error()}}
 	}
 	ext := strings.Contains(inv.specID, "extension")
 	cvd := strings.Contains(inv.specID, "cvd")
 
-	var out []FacturXViolation
-	for _, v := range validateEN16931(inv, FacturXXRechnung) {
+	var out []Violation
+	for _, v := range validateEN16931(inv, ProfileXRechnung) {
 		switch {
 		// The EXTENSION and CVD sub-profiles extend the item identifier code lists;
 		// re-checked below against the XRechnung-extended sets.
@@ -53,10 +53,10 @@ func ValidateXRechnung(xmlData []byte) []FacturXViolation {
 	// Re-apply the item identifier scheme checks with the XRechnung extensions.
 	for _, li := range inv.lines {
 		if s := li.stdIDScheme; s != "" && !en16931ICD[s] && !(ext && xrExtItemSchemes[s]) {
-			out = append(out, FacturXViolation{Rule: "BR-CL-21", Message: fmt.Sprintf("Item standard identifier scheme (%q) is not permitted", s)})
+			out = append(out, Violation{Rule: "BR-CL-21", Message: fmt.Sprintf("Item standard identifier scheme (%q) is not permitted", s)})
 		}
 		if l := li.classListID; l != "" && !en16931ItemClassCodes[l] && !(cvd && l == "CVD") {
-			out = append(out, FacturXViolation{Rule: "BR-CL-13", Message: fmt.Sprintf("Item classification scheme (%q) is not permitted", l)})
+			out = append(out, Violation{Rule: "BR-CL-13", Message: fmt.Sprintf("Item classification scheme (%q) is not permitted", l)})
 		}
 	}
 	out = append(out, validateXRechnungRules(inv, ext, cvd)...)
@@ -65,9 +65,9 @@ func ValidateXRechnung(xmlData []byte) []FacturXViolation {
 
 // validateXRechnungRules applies the mandatory-term and format rules XRechnung
 // adds on top of EN 16931 (the BR-DE-* family).
-func validateXRechnungRules(inv *en16931Invoice, ext, cvd bool) []FacturXViolation {
-	var out []FacturXViolation
-	add := func(rule, msg string) { out = append(out, FacturXViolation{Rule: rule, Message: msg}) }
+func validateXRechnungRules(inv *en16931Invoice, ext, cvd bool) []Violation {
+	var out []Violation
+	add := func(rule, msg string) { out = append(out, Violation{Rule: rule, Message: msg}) }
 	req := func(rule, msg, val string) {
 		if val == "" {
 			add(rule, msg)

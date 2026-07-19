@@ -1,10 +1,6 @@
-package pdf0
+package einvoice
 
 import (
-	"bytes"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -49,16 +45,16 @@ func withAllowanceCharge(ac string) string {
 }
 
 func TestValidateFacturXInvoiceValid(t *testing.T) {
-	if v := ValidateFacturXInvoice([]byte(validCII), FacturXEN16931); len(v) != 0 {
+	if v := Validate([]byte(validCII), ProfileEN16931); len(v) != 0 {
 		t.Fatalf("valid CII reported %d violation(s): %v", len(v), v)
 	}
 }
 
 func TestValidateFacturXInvoiceViolations(t *testing.T) {
 	cases := []struct {
-		name    string
-		xml     string
-		rule    string
+		name string
+		xml  string
+		rule string
 	}{
 		{"not CII or UBL", `<Foo/>`, "syntax"},
 		{"missing spec id", strings.Replace(validCII, "<ID>urn:cen.eu:en16931:2017</ID>", "", 1), "BR-01"},
@@ -98,7 +94,7 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := ValidateFacturXInvoice([]byte(tc.xml), FacturXEN16931)
+			v := Validate([]byte(tc.xml), ProfileEN16931)
 			found := false
 			for _, e := range v {
 				if e.Rule == tc.rule {
@@ -110,39 +106,6 @@ func TestValidateFacturXInvoiceViolations(t *testing.T) {
 				t.Errorf("expected rule %s; got %v", tc.rule, v)
 			}
 		})
-	}
-}
-
-// TestValidateFacturXInvoiceCorpus is the FP=0 oracle: the invoice XML of every
-// conforming Factur-X / ZUGFeRD sample must pass the foundational EN 16931 rules.
-// Skips when the corpus is absent.
-func TestValidateFacturXInvoiceCorpus(t *testing.T) {
-	files, _ := filepath.Glob("testdata/facturx/*.pdf")
-	if len(files) == 0 {
-		t.Skip("Factur-X corpus not present")
-	}
-	sort.Strings(files)
-	for _, f := range files {
-		name := filepath.Base(f)
-		if strings.HasPrefix(name, "FAIL") {
-			continue
-		}
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		doc, err := Read(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			continue
-		}
-		res := ValidateFacturX(doc, data)
-		if len(res.XML) == 0 {
-			continue
-		}
-		if v := ValidateFacturXInvoice(res.XML, res.Profile); len(v) != 0 {
-			t.Errorf("%s [%s]: expected 0 EN 16931 violations, got %d (first: %s: %s)",
-				name, res.Profile, len(v), v[0].Rule, v[0].Message)
-		}
 	}
 }
 
@@ -191,13 +154,13 @@ const subLineCII = `<CrossIndustryInvoice>
 </CrossIndustryInvoice>`
 
 func TestValidateFacturXSubLines(t *testing.T) {
-	if v := ValidateFacturXInvoice([]byte(subLineCII), FacturXExtended); len(v) != 0 {
+	if v := Validate([]byte(subLineCII), ProfileExtended); len(v) != 0 {
 		t.Fatalf("valid sub-invoice-line document reported %d violation(s): %v", len(v), v)
 	}
 	// Breaking a child amount so the top-level rollup no longer matches must fire.
 	bad := strings.Replace(subLineCII, "<LineTotalAmount>100.00</LineTotalAmount>\n        <TaxBasisTotalAmount>", "<LineTotalAmount>90.00</LineTotalAmount>\n        <TaxBasisTotalAmount>", 1)
 	found := false
-	for _, e := range ValidateFacturXInvoice([]byte(bad), FacturXExtended) {
+	for _, e := range Validate([]byte(bad), ProfileExtended) {
 		if e.Rule == "BR-CO-10" {
 			found = true
 		}

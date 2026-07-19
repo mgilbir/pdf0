@@ -3,6 +3,8 @@ package pdf0
 import (
 	"fmt"
 	"strings"
+
+	"github.com/mgilbir/pdf0/einvoice"
 )
 
 // This file validates the container of an Order-X (a.k.a. ZUGFeRD Order) hybrid
@@ -44,30 +46,12 @@ var orderXMLNames = map[string]bool{
 	"zugferd-order.xml": true,
 }
 
-// The order type codes (UNTDID 1001): order (220), order change (230), order
-// response (231).
-var orderXTypeCodes = map[string]bool{"220": true, "230": true, "231": true}
-
 // The XMP fx:DocumentType values Order-X uses for its three message kinds.
 var orderXDocumentTypes = map[string]bool{"ORDER": true, "ORDER_CHANGE": true, "ORDER_RESPONSE": true}
 
-// OrderXViolation reports a departure from the Order-X container requirements.
-type OrderXViolation struct {
-	Rule    string
-	Message string
-	Object  int
-}
-
-func (v OrderXViolation) Error() string {
-	if v.Object != 0 {
-		return fmt.Sprintf("Order-X %s: %s (object %d)", v.Rule, v.Message, v.Object)
-	}
-	return fmt.Sprintf("Order-X %s: %s", v.Rule, v.Message)
-}
-
 // OrderXResult is the outcome of validating an Order-X container.
 type OrderXResult struct {
-	Violations []OrderXViolation
+	Violations []einvoice.Violation
 	Profile    OrderXProfile // "" if not identifiable
 	XMLName    string        // embedded order filename, "" if not found
 	XML        []byte        // decoded order XML, nil if not found
@@ -77,7 +61,7 @@ type OrderXResult struct {
 func (doc *Document) ValidateOrderX(rawData []byte) OrderXResult {
 	var res OrderXResult
 	add := func(rule, msg string, obj int) {
-		res.Violations = append(res.Violations, OrderXViolation{Rule: rule, Message: msg, Object: obj})
+		res.Violations = append(res.Violations, einvoice.Violation{Rule: rule, Message: msg, Object: obj})
 	}
 
 	// An Order-X file shall be PDF/A-3 (validated at level B; the A-vs-B
@@ -151,7 +135,7 @@ func (doc *Document) ValidateOrderX(rawData []byte) OrderXResult {
 	// Order document head: a well-formed Cross Industry Order with the mandatory
 	// head terms (order number, issue date, type code, buyer and seller).
 	if len(res.XML) > 0 {
-		res.Violations = append(res.Violations, validateOrderXDocument(res.XML)...)
+		res.Violations = append(res.Violations, einvoice.ValidateOrderXML(res.XML)...)
 	}
 	return res
 }
@@ -173,38 +157,4 @@ func findOrderXAttachment(doc *Document, cat *Dictionary) (*Dictionary, string, 
 		}
 	}
 	return nil, "", 0
-}
-
-// validateOrderXDocument checks the embedded Cross Industry Order's structure
-// and mandatory head business terms.
-func validateOrderXDocument(xmlData []byte) []OrderXViolation {
-	var out []OrderXViolation
-	add := func(rule, msg string) { out = append(out, OrderXViolation{Rule: rule, Message: msg}) }
-
-	root, err := parseCII(xmlData)
-	if err != nil || root.name != "SCRDMCCBDACIOMessageStructure" {
-		add("order-xml", "the order XML is not a well-formed Cross Industry Order (SCRDMCCBDACIOMessageStructure)")
-		return out
-	}
-	doc := root.child("ExchangedDocument").orNil()
-	agr := root.child("SupplyChainTradeTransaction", "ApplicableHeaderTradeAgreement").orNil()
-
-	if doc.str("ID") == "" {
-		add("BR-O-01", "an Order shall have an order number (ExchangedDocument/ID)")
-	}
-	if doc.str("IssueDateTime", "DateTimeString") == "" {
-		add("BR-O-02", "an Order shall have an issue date (ExchangedDocument/IssueDateTime)")
-	}
-	if tc := doc.str("TypeCode"); tc == "" {
-		add("BR-O-03", "an Order shall have a document type code (ExchangedDocument/TypeCode)")
-	} else if !orderXTypeCodes[tc] {
-		add("BR-O-03", fmt.Sprintf("order type code %q is not a permitted UNTDID 1001 order value (220/230/231)", tc))
-	}
-	if agr.str("BuyerTradeParty", "Name") == "" {
-		add("BR-O-04", "an Order shall contain the Buyer name")
-	}
-	if agr.str("SellerTradeParty", "Name") == "" {
-		add("BR-O-05", "an Order shall contain the Seller name")
-	}
-	return out
 }

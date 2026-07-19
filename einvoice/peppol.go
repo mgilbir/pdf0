@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"fmt"
@@ -38,19 +38,19 @@ var peppolVATEX = map[string]struct {
 
 // ValidatePeppol validates an invoice XML against the OpenPEPPOL BIS Billing 3.0
 // CIUS: the EN 16931 core plus the Peppol-specific rules. It accepts either syntax.
-func ValidatePeppol(xmlData []byte) []FacturXViolation {
+func ValidatePeppol(xmlData []byte) []Violation {
 	inv, err := parseEN16931(xmlData)
 	if err != nil {
-		return []FacturXViolation{{Rule: "syntax", Message: err.Error()}}
+		return []Violation{{Rule: "syntax", Message: err.Error()}}
 	}
-	out := validateEN16931(inv, FacturXEN16931)
+	out := validateEN16931(inv, ProfileEN16931)
 	out = append(out, validatePeppolRules(inv)...)
 	return out
 }
 
-func validatePeppolRules(inv *en16931Invoice) []FacturXViolation {
-	var out []FacturXViolation
-	add := func(rule, msg string) { out = append(out, FacturXViolation{Rule: rule, Message: msg}) }
+func validatePeppolRules(inv *en16931Invoice) []Violation {
+	var out []Violation
+	add := func(rule, msg string) { out = append(out, Violation{Rule: rule, Message: msg}) }
 
 	// Business process (BT-23) and specification identifier (BT-24).
 	if inv.profileID == "" {

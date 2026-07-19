@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 // Code generated from the official CEN/TC 434 EN 16931 genericode bundle
 // (digital-genericodes, version 2026-05-15); DO NOT EDIT. Regenerate with

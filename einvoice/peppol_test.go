@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"os"
@@ -82,7 +82,7 @@ func TestValidatePeppolRules(t *testing.T) {
 // must validate with no violations. The oracle is not vendored; the test skips
 // when it is absent (run `make cius-oracles`).
 func TestValidatePeppolCorpus(t *testing.T) {
-	root := filepath.Join("testdata", "peppol", "repo", "rules", "examples")
+	root := filepath.Join("..", "testdata", "peppol", "repo", "rules", "examples")
 	if _, err := os.Stat(root); err != nil {
 		t.Skip("Peppol examples not present (make cius-oracles)")
 	}

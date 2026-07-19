@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"os"
@@ -20,11 +20,11 @@ import (
 // The suite is not vendored; the test skips when testdata/nlcius is absent (run
 // `make cius-oracles`).
 func TestNLCIUSConformanceSuite(t *testing.T) {
-	files, _ := filepath.Glob("testdata/nlcius/testsuite/*.xml")
+	files, _ := filepath.Glob("../testdata/nlcius/testsuite/*.xml")
 	if len(files) == 0 {
 		t.Skip("NLCIUS test suite not present (make cius-oracles)")
 	}
-	brNL := func(vs []FacturXViolation) []string {
+	brNL := func(vs []Violation) []string {
 		var r []string
 		for _, v := range vs {
 			if strings.HasPrefix(v.Rule, "BR-NL-") {

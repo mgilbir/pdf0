@@ -1,4 +1,4 @@
-package pdf0
+package einvoice
 
 import (
 	"encoding/xml"
@@ -126,19 +126,19 @@ func (n *ciiNode) str(path ...string) string {
 	return ""
 }
 
-// ValidateFacturXInvoice checks the CII invoice XML against the foundational
+// Validate checks the CII invoice XML against the foundational
 // EN 16931 business rules shared by every profile. It is the semantic layer
 // beneath ValidateFacturX's container checks; pass the profile so profile-
 // specific expectations can be applied as the rule set grows.
-// ValidateFacturXInvoice validates the embedded invoice XML against the EN 16931
+// Validate validates the embedded invoice XML against the EN 16931
 // core business rules. It accepts either syntax — a UN/CEFACT Cross Industry
 // Invoice (Factur-X/ZUGFeRD) or an OASIS UBL Invoice/CreditNote (Peppol BIS,
 // XRechnung UBL) — detecting which from the root element and mapping it onto the
 // shared semantic model before running the one rule engine (validateEN16931).
-func ValidateFacturXInvoice(xmlData []byte, profile FacturXProfile) []FacturXViolation {
+func Validate(xmlData []byte, profile Profile) []Violation {
 	inv, err := parseEN16931(xmlData)
 	if err != nil {
-		return []FacturXViolation{{Rule: "syntax", Message: err.Error()}}
+		return []Violation{{Rule: "syntax", Message: err.Error()}}
 	}
 	return validateEN16931(inv, profile)
 }
