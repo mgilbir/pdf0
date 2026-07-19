@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/formalis"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,7 +66,7 @@ func exercise(doc *Document, data []byte) {
 	_ = ValidatePDFVT(doc)
 	_ = ValidateDParts(doc)
 	if fx := ValidateFacturX(doc, data); len(fx.XML) > 0 {
-		_ = ValidateFacturXInvoice(fx.XML, fx.Profile)
+		_ = formalis.Validate(fx.XML, fx.Profile)
 	}
 	var buf bytes.Buffer
 	_ = doc.Write(&buf)

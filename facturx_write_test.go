@@ -2,17 +2,23 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/formalis"
 	"strings"
 	"testing"
 )
+
+// validCII is a minimal Cross Industry Invoice payload used to exercise the
+// container writer (the writer embeds these bytes verbatim; their EN 16931
+// validity is tested in the einvoice package).
+const validCII = `<CrossIndustryInvoice><ExchangedDocument><ID>INV-1</ID></ExchangedDocument></CrossIndustryInvoice>`
 
 // TestEmbedFacturXRoundTrip is the writer's core guarantee: a Factur-X document
 // built by embedding invoice XML into a PDF/A-3 base validates as a conforming
 // Factur-X container after a Write/Read round trip, with the invoice XML
 // recovered intact, for every profile.
 func TestEmbedFacturXRoundTrip(t *testing.T) {
-	for _, profile := range []FacturXProfile{
-		FacturXMinimum, FacturXBasicWL, FacturXBasic, FacturXEN16931, FacturXExtended,
+	for _, profile := range []formalis.Profile{
+		formalis.ProfileMinimum, formalis.ProfileBasicWL, formalis.ProfileBasic, formalis.ProfileEN16931, formalis.ProfileExtended,
 	} {
 		t.Run(string(profile), func(t *testing.T) {
 			doc := NewPDFADocument(PDFA3b)
@@ -47,7 +53,7 @@ func TestEmbedFacturXRoundTrip(t *testing.T) {
 
 func TestEmbedFacturXUnknownProfile(t *testing.T) {
 	doc := NewPDFADocument(PDFA3b)
-	if err := EmbedFacturX(doc, []byte(validCII), FacturXProfile("BOGUS"), ""); err == nil {
+	if err := EmbedFacturX(doc, []byte(validCII), formalis.Profile("BOGUS"), ""); err == nil {
 		t.Error("expected an error for an unknown profile")
 	}
 }
@@ -55,7 +61,7 @@ func TestEmbedFacturXUnknownProfile(t *testing.T) {
 // TestFacturXXMPPacket checks the generated metadata declares the fx extension
 // schema and the Factur-X properties for the profile.
 func TestFacturXXMPPacket(t *testing.T) {
-	xmp := string(facturxXMPPacket(FacturXBasic, "INVOICE", "Some & Title"))
+	xmp := string(facturxXMPPacket(formalis.ProfileBasic, "INVOICE", "Some & Title"))
 	for _, want := range []string{
 		"<pdfaid:part>3</pdfaid:part>",
 		"urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#",

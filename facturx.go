@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/formalis"
 	"strings"
 )
 
@@ -16,39 +17,6 @@ import (
 // The checks are calibrated against a corpus of conforming Factur-X / ZUGFeRD
 // invoices across all profiles (MINIMUM, BASIC WL, BASIC, EN 16931, EXTENDED).
 
-// FacturXProfile is a Factur-X conformance profile, in increasing data richness.
-type FacturXProfile string
-
-const (
-	FacturXMinimum   FacturXProfile = "MINIMUM"
-	FacturXBasicWL   FacturXProfile = "BASIC WL"
-	FacturXBasic     FacturXProfile = "BASIC"
-	FacturXEN16931   FacturXProfile = "EN 16931"
-	FacturXExtended  FacturXProfile = "EXTENDED"
-	FacturXXRechnung FacturXProfile = "XRECHNUNG" // ZUGFeRD 2.x German XRechnung CIUS of EN 16931
-)
-
-// facturxProfileFor maps an XMP ConformanceLevel string to a profile. The value
-// is matched case- and space-insensitively, since producers write both "EN
-// 16931" and "EN16931", and "BASIC WL" and "BASICWL".
-func facturxProfileFor(level string) (FacturXProfile, bool) {
-	switch strings.ToUpper(strings.ReplaceAll(level, " ", "")) {
-	case "MINIMUM":
-		return FacturXMinimum, true
-	case "BASICWL":
-		return FacturXBasicWL, true
-	case "BASIC":
-		return FacturXBasic, true
-	case "EN16931":
-		return FacturXEN16931, true
-	case "EXTENDED":
-		return FacturXExtended, true
-	case "XRECHNUNG":
-		return FacturXXRechnung, true
-	}
-	return "", false
-}
-
 // The embedded invoice XML is named factur-x.xml (Factur-X and ZUGFeRD 2.1+);
 // zugferd-invoice.xml (ZUGFeRD 2.0) and xrechnung.xml are also seen in practice.
 var facturxXMLNames = map[string]bool{
@@ -61,29 +29,14 @@ var facturxXMLNames = map[string]bool{
 // /Alternative in the Factur-X spec, and /Source is used by some producers.
 var facturxRelationships = map[Name]bool{"Data": true, "Alternative": true, "Source": true}
 
-// FacturXViolation reports a way in which a document departs from the Factur-X
-// container requirements. Base-profile issues are prefixed "pdfa-3/".
-type FacturXViolation struct {
-	Rule    string
-	Message string
-	Object  int
-}
-
-func (v FacturXViolation) Error() string {
-	if v.Object != 0 {
-		return fmt.Sprintf("Factur-X %s: %s (object %d)", v.Rule, v.Message, v.Object)
-	}
-	return fmt.Sprintf("Factur-X %s: %s", v.Rule, v.Message)
-}
-
 // FacturXResult is the outcome of validating a Factur-X container: the
 // violations found and, when identifiable, the declared conformance profile and
 // the embedded invoice XML (for downstream EN 16931 validation).
 type FacturXResult struct {
-	Violations []FacturXViolation
-	Profile    FacturXProfile // "" if not identifiable
-	XMLName    string         // embedded invoice filename, "" if not found
-	XML        []byte         // decoded invoice XML bytes, nil if not found
+	Violations []formalis.Violation
+	Profile    formalis.Profile // "" if not identifiable
+	XMLName    string           // embedded invoice filename, "" if not found
+	XML        []byte           // decoded invoice XML bytes, nil if not found
 }
 
 // ValidateFacturX checks whether doc is a conforming Factur-X invoice container.
@@ -91,7 +44,7 @@ type FacturXResult struct {
 func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
 	var res FacturXResult
 	add := func(rule, msg string, obj int) {
-		res.Violations = append(res.Violations, FacturXViolation{Rule: rule, Message: msg, Object: obj})
+		res.Violations = append(res.Violations, formalis.Violation{Rule: rule, Message: msg, Object: obj})
 	}
 
 	// A Factur-X file shall be PDF/A-3. pdf0 validates at level B; PDF/A-3 also
@@ -165,7 +118,7 @@ func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
 	}
 	if level == "" {
 		add("metadata", "missing XMP fx:ConformanceLevel", 0)
-	} else if p, ok := facturxProfileFor(level); !ok {
+	} else if p, ok := formalis.ProfileFor(level); !ok {
 		add("metadata", fmt.Sprintf("XMP fx:ConformanceLevel %q is not a Factur-X profile", level), 0)
 	} else {
 		res.Profile = p

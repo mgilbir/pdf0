@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/formalis"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,11 +79,11 @@ func TestFacturXAttachmentDetection(t *testing.T) {
 func TestFacturXProfilesComplete(t *testing.T) {
 	// Both the spaced and unspaced spellings map to the same profile.
 	for _, p := range []string{"MINIMUM", "BASIC WL", "BASICWL", "BASIC", "EN 16931", "EN16931", "EXTENDED", "en 16931"} {
-		if _, ok := facturxProfileFor(p); !ok {
+		if _, ok := formalis.ProfileFor(p); !ok {
 			t.Errorf("ConformanceLevel %q not recognised", p)
 		}
 	}
-	if _, ok := facturxProfileFor("NONSENSE"); ok {
+	if _, ok := formalis.ProfileFor("NONSENSE"); ok {
 		t.Error("NONSENSE must not be a profile")
 	}
 	if facturxIsXMLSubtype("application/pdf") {
@@ -103,7 +104,7 @@ func TestValidateFacturXCorpus(t *testing.T) {
 		t.Skip("Factur-X corpus not present (testdata/facturx)")
 	}
 	sort.Strings(files)
-	seenProfiles := map[FacturXProfile]bool{}
+	seenProfiles := map[formalis.Profile]bool{}
 	for _, f := range files {
 		name := filepath.Base(f)
 		data, err := os.ReadFile(f)

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/formalis"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,7 @@ const validOrderXML = `<SCRDMCCBDACIOMessageStructure>
 </ApplicableHeaderTradeAgreement></SupplyChainTradeTransaction></SCRDMCCBDACIOMessageStructure>`
 
 func TestValidateOrderXDocumentValid(t *testing.T) {
-	if v := validateOrderXDocument([]byte(validOrderXML)); len(v) != 0 {
+	if v := formalis.ValidateOrderXML([]byte(validOrderXML)); len(v) != 0 {
 		t.Errorf("valid order flagged: %v", v)
 	}
 }
@@ -34,7 +35,7 @@ func TestValidateOrderXDocumentViolations(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			broken := strings.Replace(validOrderXML, tc.remove, "", 1)
-			v := validateOrderXDocument([]byte(broken))
+			v := formalis.ValidateOrderXML([]byte(broken))
 			found := false
 			for _, e := range v {
 				if e.Rule == tc.rule {
@@ -48,7 +49,7 @@ func TestValidateOrderXDocumentViolations(t *testing.T) {
 	}
 	// A non-order type code is rejected.
 	badType := strings.Replace(validOrderXML, "<TypeCode>220</TypeCode>", "<TypeCode>380</TypeCode>", 1)
-	v := validateOrderXDocument([]byte(badType))
+	v := formalis.ValidateOrderXML([]byte(badType))
 	if len(v) == 0 || v[0].Rule != "BR-O-03" {
 		t.Errorf("invoice type code 380 should be rejected for an order; got %v", v)
 	}
