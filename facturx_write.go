@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/formalis"
 	"time"
 )
 
@@ -16,12 +17,12 @@ import (
 // be a valid PDF/A-3 document (for example from NewPDFADocument(PDFA3b)); the
 // result is a Factur-X container that ValidateFacturX accepts after a round
 // trip. title, when non-empty, is recorded as the document title in the XMP.
-func EmbedFacturX(doc *Document, invoiceXML []byte, profile FacturXProfile, title string) error {
+func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, title string) error {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return fmt.Errorf("document has no catalog")
 	}
-	if _, ok := facturxProfileFor(string(profile)); !ok {
+	if _, ok := formalis.ProfileFor(string(profile)); !ok {
 		return fmt.Errorf("unknown Factur-X profile %q", profile)
 	}
 
@@ -109,7 +110,7 @@ func encodeUTF16BE(s string) []byte {
 // facturxXMPPacket builds the Factur-X XMP metadata packet: PDF/A-3
 // identification, an optional document title, the PDF/A extension schema that
 // declares the fx: namespace, and the Factur-X properties.
-func facturxXMPPacket(profile FacturXProfile, docType, title string) []byte {
+func facturxXMPPacket(profile formalis.Profile, docType, title string) []byte {
 	titleBlock := ""
 	if title != "" {
 		titleBlock = fmt.Sprintf(`

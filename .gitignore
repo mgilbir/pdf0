@@ -80,3 +80,4 @@ testdata/en16931-codelists/genericode/
 # `make cius-oracles`; committed download recipe, not the data.
 testdata/xrechnung/
 testdata/peppol/
+testdata/nlcius/

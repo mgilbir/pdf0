@@ -1,4 +1,4 @@
-.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington en16931-artefacts clean-en16931-artefacts en16931-codelists clean-en16931-codelists cius-oracles clean-cius-oracles
+.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -88,56 +88,6 @@ $(FACTURX_DIR)/.ok: $(FACTURX_DIR)/sources.tsv $(FACTURX_DIR)/download.sh
 clean-facturx:
 	rm -f $(FACTURX_DIR)/*.pdf $(FACTURX_DIR)/.ok
 
-# EN 16931 UBL example invoices (CEN TC 434 eInvoicing-EN16931; OpenPEPPOL
-# peppol-bis-invoice-3) used as the UBL oracle. Downloaded into
-# testdata/en16931-ubl (gitignored); manifest and downloader are committed.
-UBL_DIR := testdata/en16931-ubl
-
-en16931-ubl: $(UBL_DIR)/.ok
-
-$(UBL_DIR)/.ok: $(UBL_DIR)/sources.tsv $(UBL_DIR)/download.sh
-	bash $(UBL_DIR)/download.sh
-	touch $@
-
-clean-en16931-ubl:
-	rm -f $(UBL_DIR)/*.xml $(UBL_DIR)/.ok
-
-# Official CEN/TC 434 EN 16931 supporting artefacts (ConnectingEurope/
-# eInvoicing-EN16931, EUPL-1.2): the validation Schematron, code lists, and the
-# per-rule unit-test suite. Cloned under testdata (gitignored) and used as a
-# differential oracle for the EN 16931 rule engine and to verify the committed
-# code-list tables. Not committed.
-EN16931_DIR := testdata/en16931-artefacts
-
-en16931-artefacts: $(EN16931_DIR)/.ok
-
-$(EN16931_DIR)/.ok:
-	git clone --depth 1 https://github.com/ConnectingEurope/eInvoicing-EN16931 $(EN16931_DIR)
-	touch $@
-
-clean-en16931-artefacts:
-	rm -rf $(EN16931_DIR)
-
-# Official CEN/TC 434 EN 16931 code lists (genericode + EAS/VATEX). Downloaded
-# into testdata/en16931-codelists (gitignored); download.sh + gen.py are
-# committed. gen.py regenerates en16931_codelists.go; the fidelity test verifies
-# the committed tables against the genericode.
-CODELISTS_DIR := testdata/en16931-codelists
-
-en16931-codelists:
-	bash $(CODELISTS_DIR)/download.sh
-	python3 $(CODELISTS_DIR)/gen.py
-
-clean-en16931-codelists:
-	rm -rf $(CODELISTS_DIR)/genericode $(CODELISTS_DIR)/*.zip $(CODELISTS_DIR)/*.xlsx
-
-# National CIUS oracles: KoSIT XRechnung (Schematron + instance test suite) and
-# OpenPEPPOL BIS 3 (Schematron + examples). Cloned under testdata (gitignored);
-# used as FP=0 oracles for the XRechnung and Peppol rule layers. Not committed.
-cius-oracles:
-	git clone --depth 1 https://github.com/itplr-kosit/xrechnung-schematron testdata/xrechnung/schematron
-	git clone --depth 1 https://github.com/itplr-kosit/xrechnung-testsuite testdata/xrechnung/testsuite
-	git clone --depth 1 https://github.com/OpenPEPPOL/peppol-bis-invoice-3 testdata/peppol/repo
-
-clean-cius-oracles:
-	rm -rf testdata/xrechnung testdata/peppol
+# The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
+# data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
+# suites) is fetched by that module's own Makefile.
