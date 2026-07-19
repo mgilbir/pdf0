@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"crypto/x509"
+	"strings"
 	"testing"
 )
 
@@ -219,5 +220,60 @@ func TestPAdESBLTA(t *testing.T) {
 	}
 	if !lta.Valid {
 		t.Error("the approval signature should still verify after the archival timestamp")
+	}
+	// The approval signature covers only its own revision — the appended DSS and
+	// document time-stamp are not under its /ByteRange — yet it stays conformant
+	// because the covering document time-stamp seals the rest.
+	if lta.CoversDocument {
+		t.Error("the approval signature should not cover the appended archival revision")
+	}
+	for _, iss := range lta.Issues {
+		if strings.Contains(iss, "does not cover the whole document") {
+			t.Errorf("byte-range issue should be relaxed under a covering document time-stamp: %q", iss)
+		}
+	}
+	if !lta.Conformant {
+		t.Errorf("a sealed B-LTA approval signature should be conformant; issues: %v", lta.Issues)
+	}
+}
+
+// TestPAdESUncoveredNotSealed checks the relaxation is specific: an approval
+// signature that does not cover the whole document is still flagged when there is
+// no covering, verifying document time-stamp to seal the trailing bytes.
+func TestPAdESUncoveredNotSealed(t *testing.T) {
+	cert, key := testCertKey(t)
+	base := buildMinimalPDF()
+	doc, err := Read(bytes.NewReader(base), int64(len(base)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b1 bytes.Buffer
+	if err := doc.WriteSigned(&b1, cert, key); err != nil {
+		t.Fatalf("WriteSigned: %v", err)
+	}
+	o1 := b1.Bytes()
+	// Append arbitrary bytes so the signature no longer reaches the end of file,
+	// with no document time-stamp covering them.
+	o1 = append(o1, []byte("\n% trailing bytes not covered by any signature\n")...)
+
+	d1, err := Read(bytes.NewReader(o1), int64(len(o1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := d1.ValidatePAdES(o1)
+	if len(res) != 1 {
+		t.Fatalf("expected one signature; got %d", len(res))
+	}
+	if res[0].CoversDocument {
+		t.Fatal("the signature should not cover the appended bytes")
+	}
+	found := false
+	for _, iss := range res[0].Issues {
+		if strings.Contains(iss, "does not cover the whole document") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("an uncovered signature without a sealing time-stamp should be flagged; issues: %v", res[0].Issues)
 	}
 }

@@ -58,6 +58,13 @@ func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 		}
 	}
 
+	// A document time-stamp whose /ByteRange covers the whole file and whose
+	// RFC 3161 token verifies seals every earlier revision. When one is present,
+	// an approval signature that only covers its own (earlier) revision is still
+	// PAdES-conformant — the trailing bytes are the DSS and the document
+	// time-stamp, protected by the time-stamp rather than the signature.
+	sealed := d.coveringDocTimestamp(raw)
+
 	var out []PAdESResult
 	for _, iobj := range d.Objects {
 		dict, ok := iobj.Value.(*Dictionary)
@@ -71,12 +78,48 @@ func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 		if t != "" && t != "Sig" {
 			continue
 		}
-		out = append(out, d.assessPAdES(dict, raw, hasDSS, hasDocTimestamp))
+		out = append(out, d.assessPAdES(dict, raw, hasDSS, hasDocTimestamp, sealed))
 	}
 	return out
 }
 
-func (d *Document) assessPAdES(sig *Dictionary, raw []byte, hasDSS, hasDocTimestamp bool) PAdESResult {
+// coveringDocTimestamp reports whether the document carries a document time-stamp
+// (/Type /DocTimeStamp) whose /ByteRange covers the whole file and whose RFC 3161
+// token verifies over those bytes.
+func (d *Document) coveringDocTimestamp(raw []byte) bool {
+	for _, iobj := range d.Objects {
+		dict, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		if t, _ := dict.Get("Type").(Name); t != "DocTimeStamp" {
+			continue
+		}
+		segs, covers, ok := byteRangeSegments(d, dict.Get("ByteRange"), int64(len(raw)))
+		if !ok || !covers {
+			continue
+		}
+		contents, _ := d.Resolve(dict.Get("Contents")).(String)
+		signed := make([]byte, 0, len(raw))
+		bad := false
+		for _, s := range segs {
+			if s[0] < 0 || s[1] < 0 || s[0]+s[1] > int64(len(raw)) {
+				bad = true
+				break
+			}
+			signed = append(signed, raw[s[0]:s[0]+s[1]]...)
+		}
+		if bad {
+			continue
+		}
+		if _, _, err := verifyTimestampToken(contents.Value, signed); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Document) assessPAdES(sig *Dictionary, raw []byte, hasDSS, hasDocTimestamp, sealed bool) PAdESResult {
 	var res PAdESResult
 	sub, _ := sig.Get("SubFilter").(Name)
 	res.SubFilter = string(sub)
@@ -106,7 +149,7 @@ func (d *Document) assessPAdES(sig *Dictionary, raw []byte, hasDSS, hasDocTimest
 	if sig.Get("Cert") != nil {
 		res.Issues = append(res.Issues, "the signature dictionary must not contain /Cert; the certificate belongs in the CMS")
 	}
-	if !v.CoversWholeDocument {
+	if !v.CoversWholeDocument && !sealed {
 		res.Issues = append(res.Issues, "the /ByteRange does not cover the whole document")
 	}
 
