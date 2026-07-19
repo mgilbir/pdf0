@@ -17,7 +17,8 @@ import (
 // examine. Scalar business terms are stored as their raw string values ("" when
 // absent); groups are slices.
 type en16931Invoice struct {
-	syntax     string // "CII" or "UBL" — the binding the invoice was expressed in
+	syntax       string // "CII" or "UBL" — the binding the invoice was expressed in
+	isCreditNote bool   // the UBL binding used a CreditNote (not Invoice) root
 	specID     string // BT-24 Specification identifier
 	profileID  string // BT-23 Business process type
 	orderRef   string // BT-13 Purchase order reference
@@ -64,7 +65,15 @@ type en16931Invoice struct {
 	// XRechnung CIUS).
 	buyerReference       string // BT-10 Buyer reference
 	sellerCity           string // BT-37 Seller city
+	sellerStreet         string // BT-35 Seller address line 1
 	sellerPostCode       string // BT-38 Seller post code
+	sellerLegalScheme    string // BT-30 Seller legal registration scheme identifier
+	buyerLegalScheme     string // BT-47 Buyer legal registration scheme identifier
+	buyerStreet          string // BT-50 Buyer address line 1
+	taxRepStreet         string // Seller tax representative address line 1
+	taxRepCity           string // Seller tax representative city
+	taxRepPostCode       string // Seller tax representative post code
+	hasOrderLineRef      bool   // BT-132 any Invoice line has an order line reference
 	sellerContactPresent bool   // BG-6 Seller contact group present
 	sellerContactName    string // BT-41 Seller contact point
 	sellerPhone          string // BT-42 Seller contact telephone

@@ -138,6 +138,12 @@ cius-oracles:
 	git clone --depth 1 https://github.com/itplr-kosit/xrechnung-schematron testdata/xrechnung/schematron
 	git clone --depth 1 https://github.com/itplr-kosit/xrechnung-testsuite testdata/xrechnung/testsuite
 	git clone --depth 1 https://github.com/OpenPEPPOL/peppol-bis-invoice-3 testdata/peppol/repo
+	@# NLCIUS (SimplerInvoicing SI-UBL) instance test suite, from phax/phive-rules.
+	@# The repo is large, so fetch just the newest SI-UBL test-file directory.
+	mkdir -p testdata/nlcius/testsuite
+	gh api repos/phax/phive-rules/contents/phive-rules-simplerinvoicing/src/test/resources/external/test-files/simplerinvoicing/SI-UBL-2.0.3.2 --jq '.[].name' \
+		| grep '\.xml$$' \
+		| while read f; do curl -sSL "https://raw.githubusercontent.com/phax/phive-rules/master/phive-rules-simplerinvoicing/src/test/resources/external/test-files/simplerinvoicing/SI-UBL-2.0.3.2/$$f" -o "testdata/nlcius/testsuite/$$f"; done
 
 clean-cius-oracles:
-	rm -rf testdata/xrechnung testdata/peppol
+	rm -rf testdata/xrechnung testdata/peppol testdata/nlcius

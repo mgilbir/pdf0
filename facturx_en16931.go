@@ -487,6 +487,9 @@ func mapCII(root *ciiNode) *en16931Invoice {
 				isCharge:  strings.EqualFold(ac.str("ChargeIndicator", "Indicator"), "true"),
 			})
 		}
+		if li.str("SpecifiedLineTradeAgreement", "BuyerOrderReferencedDocument", "LineID") != "" {
+			inv.hasOrderLineRef = true
+		}
 		inv.lines = append(inv.lines, line)
 	}
 	// Supporting documents (BG-24) and preceding invoice references (BG-3).
@@ -532,7 +535,14 @@ func mapCII(root *ciiNode) *en16931Invoice {
 	inv.supplierSchemeCnt = len(agr.child("SellerTradeParty").all("SpecifiedTaxRegistration"))
 	inv.buyerReference = agr.str("BuyerReference")
 	inv.sellerCity = agr.str("SellerTradeParty", "PostalTradeAddress", "CityName")
+	inv.sellerStreet = agr.str("SellerTradeParty", "PostalTradeAddress", "LineOne")
 	inv.sellerPostCode = agr.str("SellerTradeParty", "PostalTradeAddress", "PostcodeCode")
+	inv.sellerLegalScheme = agr.child("SellerTradeParty", "SpecifiedLegalOrganization", "ID").attr("schemeID")
+	inv.buyerLegalScheme = agr.child("BuyerTradeParty", "SpecifiedLegalOrganization", "ID").attr("schemeID")
+	inv.buyerStreet = agr.str("BuyerTradeParty", "PostalTradeAddress", "LineOne")
+	inv.taxRepStreet = agr.str("SellerTaxRepresentativeTradeParty", "PostalTradeAddress", "LineOne")
+	inv.taxRepCity = agr.str("SellerTaxRepresentativeTradeParty", "PostalTradeAddress", "CityName")
+	inv.taxRepPostCode = agr.str("SellerTaxRepresentativeTradeParty", "PostalTradeAddress", "PostcodeCode")
 	if c := agr.child("SellerTradeParty", "DefinedTradeContact"); c != nil {
 		inv.sellerContactPresent = true
 		inv.sellerContactName = firstNonEmpty(c.str("PersonName"), c.str("DepartmentName"))
@@ -769,6 +779,9 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 				isCharge:  strings.EqualFold(ac.str("ChargeIndicator"), "true"),
 			})
 		}
+		if li.str("OrderLineReference", "LineID") != "" {
+			inv.hasOrderLineRef = true
+		}
 		inv.lines = append(inv.lines, line)
 	}
 	for _, d := range root.all("AdditionalDocumentReference") {
@@ -811,10 +824,18 @@ func mapUBL(root *ciiNode) *en16931Invoice {
 	inv.buyerVATIDCount = ublVATSchemeCount(buyer)
 	inv.supplierSchemeCnt = len(seller.all("PartyTaxScheme"))
 	inv.profileID = root.str("ProfileID")
+	inv.isCreditNote = root.name == "CreditNote"
 	inv.orderRef = root.str("OrderReference", "ID")
 	inv.buyerReference = root.str("BuyerReference")
 	inv.sellerCity = seller.str("PostalAddress", "CityName")
+	inv.sellerStreet = seller.str("PostalAddress", "StreetName")
 	inv.sellerPostCode = seller.str("PostalAddress", "PostalZone")
+	inv.sellerLegalScheme = seller.child("PartyLegalEntity", "CompanyID").attr("schemeID")
+	inv.buyerLegalScheme = buyer.child("PartyLegalEntity", "CompanyID").attr("schemeID")
+	inv.buyerStreet = buyer.str("PostalAddress", "StreetName")
+	inv.taxRepStreet = root.str("TaxRepresentativeParty", "PostalAddress", "StreetName")
+	inv.taxRepCity = root.str("TaxRepresentativeParty", "PostalAddress", "CityName")
+	inv.taxRepPostCode = root.str("TaxRepresentativeParty", "PostalAddress", "PostalZone")
 	if c := seller.child("Contact"); c != nil {
 		inv.sellerContactPresent = true
 		inv.sellerContactName = c.str("Name")
