@@ -75,9 +75,23 @@ var en16931TypeCodes = map[string]bool{
 	"817": true, "870": true, "875": true, "876": true, "877": true, "935": true,
 }
 
-// en16931VATCategories is the UNCL 5305 VAT category code set (BR-CL-17/18).
+// en16931VATCategories is the UNCL 5305 VAT category code set as published in the
+// official genericode 5305 list: S (standard), Z (zero), E (exempt), AE (reverse
+// charge), K (intra-community), G (export), O (not subject), L (IGIC) and M
+// (IPSI). It is kept faithful to that list; the operative BR-CL-17/18 acceptance
+// set (which additionally permits "B") is validEN16931VATCategory.
 var en16931VATCategories = map[string]bool{
 	"S": true, "Z": true, "E": true, "AE": true, "K": true, "G": true, "O": true, "L": true, "M": true,
+}
+
+// validEN16931VATCategory reports whether a VAT category code (BT-118/151/95/102)
+// is accepted by BR-CL-17/18. The EN 16931 Schematron's BR-CL-17 permits ten
+// values — the nine genericode 5305 codes plus "B" (Split payment) — but the
+// published genericode 5305 list omits "B". The Schematron is the operative
+// validator (real Italian split-payment invoices carry "B" and pass it), so "B"
+// is accepted here while en16931VATCategories stays faithful to the genericode.
+func validEN16931VATCategory(c string) bool {
+	return en16931VATCategories[c] || c == "B"
 }
 
 // en16931PaymentMeans is the UNCL 4461 payment means code set (BR-CL-16).

@@ -54,7 +54,7 @@ func validateVATCategories(inv *en16931Invoice, add func(rule, msg string)) {
 			return
 		}
 		used[cat] = true
-		if !en16931VATCategories[cat] && !clSeen[cat] {
+		if !validEN16931VATCategory(cat) && !clSeen[cat] {
 			clSeen[cat] = true
 			add("BR-CL-18", fmt.Sprintf("VAT category code (BT-151/95/102=%q) is not a valid UNCL 5305 value", cat))
 		}
@@ -150,6 +150,9 @@ func validateVATCategories(inv *en16931Invoice, add func(rule, msg string)) {
 		validateVATTaxableSums(inv, add)
 	}
 
+	// BR-B-01/02: the "Split payment" category (B), an Italian domestic mechanism.
+	validateSplitPayment(inv, add)
+
 	// BR-O-11..14: "Not subject to VAT" (O) is exclusive of every other category.
 	if bdCats["O"] > 0 {
 		if len(bdCats) > 1 {
@@ -177,6 +180,49 @@ func validateVATCategories(inv *en16931Invoice, add func(rule, msg string)) {
 		if badCharge {
 			add("BR-O-14", "an Invoice with a \"Not subject to VAT\" (O) VAT breakdown shall not contain a charge with another VAT category")
 		}
+	}
+}
+
+// validateSplitPayment applies the "Split payment" VAT category rules (BR-B-01/
+// 02). Category B (an Italian domestic mechanism) has no breakdown/rate/reason
+// family of its own, only these two constraints, so it is handled here rather
+// than through vatCatSpecs. hasB/hasS consider lines, document allowances and
+// charges, and the VAT breakdown — matching the Schematron bindings.
+func validateSplitPayment(inv *en16931Invoice, add func(rule, msg string)) {
+	hasB, hasS := false, false
+	note := func(cat string) {
+		switch cat {
+		case "B":
+			hasB = true
+		case "S":
+			hasS = true
+		}
+	}
+	for _, li := range inv.lines {
+		note(li.vatCategory)
+	}
+	for _, ac := range inv.allowCharges {
+		note(ac.category)
+	}
+	for _, b := range inv.vatBreakdowns {
+		note(b.category)
+	}
+	if !hasB {
+		return
+	}
+	// BR-B-01: an Invoice using "Split payment" shall be domestic Italian — every
+	// country code present shall be IT. We check the country codes we extract
+	// (Seller BT-40, Buyer BT-55, tax representative BT-69, Deliver-to BT-80); a
+	// non-IT value among them is a definite violation.
+	for _, c := range []string{inv.sellerCountry, inv.buyerCountry, inv.taxRepCountry, inv.deliverToCountry} {
+		if c != "" && c != "IT" {
+			add("BR-B-01", "an Invoice using the \"Split payment\" (B) VAT category shall be a domestic Italian invoice (all country codes shall be IT)")
+			break
+		}
+	}
+	// BR-B-02: "Split payment" (B) and "Standard rated" (S) are mutually exclusive.
+	if hasS {
+		add("BR-B-02", "an Invoice using the \"Split payment\" (B) VAT category shall not also use the \"Standard rated\" (S) category")
 	}
 }
 

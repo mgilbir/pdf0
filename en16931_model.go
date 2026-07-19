@@ -555,7 +555,7 @@ func validateEN16931(inv *en16931Invoice, profile FacturXProfile) []FacturXViola
 		}
 		if tt.category == "" {
 			add("BR-47", "Each VAT breakdown (BG-23) shall be defined through a VAT category code (BT-118)")
-		} else if !en16931VATCategories[tt.category] {
+		} else if !validEN16931VATCategory(tt.category) {
 			add("BR-CL-17", fmt.Sprintf("VAT category code (BT-118=%q) is not a valid UNCL 5305 value", tt.category))
 		}
 		// BR-48: a rate is required except for the "Not subject to VAT" category (O).
