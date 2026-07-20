@@ -138,6 +138,27 @@ func TestJPXDecodeGray(t *testing.T) {
 	}
 }
 
+// TestJPXUnsupportedFallback checks that a codestream using code-block style
+// features the baseline tier-1 does not handle (p0_02: per-pass termination +
+// segmentation symbols) is declined cleanly rather than decoded to garbage.
+func TestJPXUnsupportedFallback(t *testing.T) {
+	path := filepath.Join("testdata/jpx", "p0_02.j2k")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Skip("no JPX sample codestreams; run `make jpx`")
+	}
+	im, err := parseJPX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if im.cod.cbStyle == 0 {
+		t.Skip("expected p0_02 to use advanced code-block styles")
+	}
+	if decodeJPXGray(im) != nil {
+		t.Error("expected an unsupported-code-block-style image to fall back (nil)")
+	}
+}
+
 // TestJPXParseAll parses every sample codestream without error (a smoke test of
 // the marker parser over diverse real files).
 func TestJPXParseAll(t *testing.T) {

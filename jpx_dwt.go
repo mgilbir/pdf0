@@ -164,38 +164,61 @@ func inv53(a []int32, i0, i1 int) {
 // grayscale (one byte per pixel), applying the DC level shift. Returns nil if the
 // image is not a form this milestone handles.
 func decodeJPXGray(im *jpxImage) []byte {
-	if len(im.comps) != 1 || im.cod.transform != 1 {
-		return nil // only single-component reversible for now
+	if len(im.comps) != 1 {
+		return nil // only single-component (grayscale) for now
+	}
+	if im.cod.cbStyle != 0 {
+		return nil // advanced code-block styles (termination, segmentation
+		// symbols, bypass, …) need extra tier-1 handling; fall back for now.
+	}
+	if im.cod.precinctsUsed {
+		return nil // non-maximal precincts not yet handled by tier-2
 	}
 	comp := im.comps[0]
 	out := make([]byte, im.xsiz*im.ysiz)
-	shift := int32(1) << uint(comp.depth-1)
-	maxv := int32(1)<<uint(comp.depth) - 1
+	shift := 1 << uint(comp.depth-1)
+	maxv := 1<<uint(comp.depth) - 1
+	reversible := im.cod.transform == 1
 	for t := 0; t < im.numXTiles()*im.numYTiles(); t++ {
 		x0, y0, x1, y1 := im.tileCoords(t)
 		tc := buildTileComp(im, 0, x0, y0, x1, y1)
 		if err := decodeTilePackets(im, tc, im.tileData(t)); err != nil {
 			return nil
 		}
-		band := reconstructComponent(im, tc)
-		for y := 0; y < band.h; y++ {
-			iy := band.y0 + y
+		var bx0, by0, bw, bh int
+		var sampleAt func(x, y int) int
+		if reversible {
+			band := reconstructComponent(im, tc)
+			bx0, by0, bw, bh = band.x0, band.y0, band.w, band.h
+			sampleAt = func(x, y int) int { return int(band.at(x, y)) }
+		} else {
+			band := reconstructComponentF(im, tc)
+			bx0, by0, bw, bh = band.x0, band.y0, band.w, band.h
+			sampleAt = func(x, y int) int {
+				v := band.data[y*band.w+x]
+				if v < 0 {
+					return int(v - 0.5)
+				}
+				return int(v + 0.5)
+			}
+		}
+		for y := 0; y < bh; y++ {
+			iy := by0 + y
 			if iy < 0 || iy >= im.ysiz {
 				continue
 			}
-			for x := 0; x < band.w; x++ {
-				ix := band.x0 + x
+			for x := 0; x < bw; x++ {
+				ix := bx0 + x
 				if ix < 0 || ix >= im.xsiz {
 					continue
 				}
-				v := band.at(x, y) + shift
+				v := sampleAt(x, y) + shift
 				if v < 0 {
 					v = 0
 				}
 				if v > maxv {
 					v = maxv
 				}
-				// Scale to 8 bits if the component is shallower/deeper.
 				if comp.depth < 8 {
 					v <<= uint(8 - comp.depth)
 				} else if comp.depth > 8 {
