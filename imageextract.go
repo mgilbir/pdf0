@@ -12,12 +12,13 @@ import (
 // XObject it reports the image geometry and, where the codec is one Go can decode
 // without a large bespoke implementation, the decoded pixels:
 //
-//   - DCTDecode (JPEG)                      -> decoded via image/jpeg (stdlib)
-//   - raw, FlateDecode, LZWDecode, etc.     -> decoded from the sample bytes
-//   - CCITTFaxDecode, JBIG2Decode, JPXDecode -> not decoded; the raw encoded bytes
-//     and the geometry are returned. These are large dedicated codecs (Group 4
-//     fax, JBIG2 arithmetic coding, JPEG 2000 wavelets) with no standard-library
-//     support; decoding them faithfully is out of scope here.
+//   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
+//   - raw, FlateDecode, LZWDecode, etc. -> decoded from the sample bytes
+//   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in ccitt.go codec
+//   - JBIG2Decode, JPXDecode            -> not decoded; the raw encoded bytes and
+//     the geometry are returned. These are large dedicated codecs (JBIG2
+//     arithmetic coding, JPEG 2000 wavelets) with no standard-library support;
+//     decoding them faithfully is out of scope here.
 
 // ExtractedImage is one image XObject: its geometry, its codec, and its decoded
 // pixels when available.
@@ -95,7 +96,26 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		} else {
 			img.Encoded, img.Note = st.Data, "JPEG decode failed: "+err.Error()
 		}
-	case "CCITTFaxDecode", "JBIG2Decode", "JPXDecode":
+	case "CCITTFaxDecode":
+		encoded, params, ok := ccittEncodedAndParams(d, st, img.Width, img.Height)
+		if !ok {
+			img.Encoded = st.Data
+			img.Note = "CCITTFaxDecode preceding filter chain could not be reversed; the raw encoded bytes are provided"
+			break
+		}
+		samples, err := decodeCCITT(encoded, params)
+		if err != nil {
+			img.Encoded = st.Data
+			img.Note = "CCITTFaxDecode failed: " + err.Error()
+			break
+		}
+		if m, ok := samplesToImage(samples, img.Width, img.Height, 1, "DeviceGray"); ok {
+			img.Image, img.Decoded = m, true
+		} else {
+			img.Encoded = samples
+			img.Note = "unsupported CCITT sample layout"
+		}
+	case "JBIG2Decode", "JPXDecode":
 		img.Encoded = st.Data
 		img.Note = "the " + img.Filter + " image codec is not decoded; the raw encoded bytes are provided"
 	default:
@@ -110,6 +130,49 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		}
 	}
 	return img
+}
+
+// ccittEncodedAndParams returns the CCITT-encoded bytes for an image XObject —
+// reversing any general-purpose filters (Flate/LZW/ASCIIHex) that precede the
+// CCITTFaxDecode codec in the filter chain — together with the /DecodeParms that
+// steer the fax decoder. ok is false when a preceding filter cannot be reversed.
+func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded []byte, params ccittParams, ok bool) {
+	filters := streamFilters(d, st)
+	if len(filters) == 0 {
+		return nil, params, false
+	}
+	last := len(filters) - 1
+	parms := d.Resolve(st.Dict.Get("DecodeParms"))
+
+	encoded = st.Data
+	for i := 0; i < last; i++ {
+		out, err := applyFilter(filters[i], encoded, parmsDictAt(parms, i))
+		if err != nil {
+			return nil, params, false
+		}
+		encoded = out
+	}
+
+	cp := parmsDictAt(parms, last)
+	params = ccittParams{columns: 1728, rows: height, k: 0}
+	if cp != nil {
+		if v, kOK := d.Resolve(cp.Get("K")).(Integer); kOK {
+			params.k = int(v)
+		}
+		if v, cOK := d.Resolve(cp.Get("Columns")).(Integer); cOK {
+			params.columns = int(v)
+		}
+		if v, rOK := d.Resolve(cp.Get("Rows")).(Integer); rOK && int(v) > 0 {
+			params.rows = int(v)
+		}
+		if b, aOK := d.Resolve(cp.Get("EncodedByteAlign")).(Boolean); aOK {
+			params.byteAlign = bool(b)
+		}
+	}
+	if params.columns <= 0 {
+		params.columns = width
+	}
+	return encoded, params, true
 }
 
 // samplesToImage builds an image from decoded PDF sample bytes for the common
