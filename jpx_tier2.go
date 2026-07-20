@@ -31,7 +31,10 @@ type jpxSubband struct {
 	blocks         []jpxCodeblock
 	inclTree       *jpxTagTree
 	zbpTree        *jpxTagTree
-	gain           int // log2 gain for dequant band ordering (0/1/1/2)
+	gain           int     // log2 gain for dequant band ordering (0/1/1/2)
+	exp            int     // quantization exponent for this subband
+	mant           int     // quantization mantissa (irreversible)
+	coeffs         []int32 // assembled coefficients (w*h), filled by tier-1
 }
 
 // jpxResolution is one resolution level of a tile-component.
@@ -78,6 +81,21 @@ func buildTileComp(im *jpxImage, c, tx0, ty0, tx1, ty1 int) *jpxTileComp {
 			}
 		}
 		tc.resolutions = append(tc.resolutions, res)
+	}
+	// Assign quantization parameters per subband, in the QCD ordering (the LL of
+	// the coarsest resolution, then HL/LH/HH from coarsest to finest).
+	bandIdx := 0
+	for _, res := range tc.resolutions {
+		for _, sb := range res.subbands {
+			s := jpxStep{}
+			if im.qcd.style == 1 && len(im.qcd.steps) > 0 {
+				s = im.qcd.steps[0] // derived: scaled per level during dequant
+			} else if bandIdx < len(im.qcd.steps) {
+				s = im.qcd.steps[bandIdx]
+			}
+			sb.exp, sb.mant = s.exp, s.mant
+			bandIdx++
+		}
 	}
 	return tc
 }

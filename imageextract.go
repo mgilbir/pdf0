@@ -184,8 +184,16 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			img.Note = "unsupported JBIG2 sample layout"
 		}
 	case "JPXDecode":
+		if im, err := parseJPX(st.Data); err == nil {
+			if gray := decodeJPXGray(im); gray != nil {
+				if m, ok := samplesToImage(gray, im.xsiz, im.ysiz, 8, "DeviceGray"); ok {
+					img.Image, img.Decoded = m, true
+					break
+				}
+			}
+		}
 		img.Encoded = st.Data
-		img.Note = "the " + img.Filter + " image codec is not decoded; the raw encoded bytes are provided"
+		img.Note = "JPXDecode not decoded (only single-component reversible JPEG 2000 supported); raw bytes provided"
 	default:
 		// No filter, or a general-purpose filter chain (Flate/LZW/RunLength/ASCII):
 		// decodeContentStream reverses the chain to raw samples.
