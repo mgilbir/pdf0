@@ -103,6 +103,32 @@ func ceilDiv(a, b int) int {
 	return (a + b - 1) / b
 }
 
+// tileCoords returns the pixel bounds [x0,x1)×[y0,y1) of tile t on the reference
+// grid (T.800 B.3).
+func (im *jpxImage) tileCoords(t int) (x0, y0, x1, y1 int) {
+	ntx := im.numXTiles()
+	if ntx <= 0 {
+		return
+	}
+	p, q := t%ntx, t/ntx
+	x0 = maxInt(im.xtosiz+p*im.xtsiz, im.xosiz)
+	y0 = maxInt(im.ytosiz+q*im.ytsiz, im.yosiz)
+	x1 = minInt(im.xtosiz+(p+1)*im.xtsiz, im.xsiz)
+	y1 = minInt(im.ytosiz+(q+1)*im.ytsiz, im.ysiz)
+	return
+}
+
+// tileData concatenates the data bodies of all tile-parts belonging to tile t.
+func (im *jpxImage) tileData(t int) []byte {
+	var out []byte
+	for _, tp := range im.tileParts {
+		if tp.tile == t {
+			out = append(out, tp.data...)
+		}
+	}
+	return out
+}
+
 // parseJPX parses a raw codestream or a JP2-wrapped one into a jpxImage.
 func parseJPX(data []byte) (*jpxImage, error) {
 	cs, err := jpxCodestream(data)

@@ -48,6 +48,53 @@ func TestJPXParseCodestream(t *testing.T) {
 	}
 }
 
+// TestJPXTier2 decodes the packets of each sample's first tile and checks the
+// geometry and that code-block data is extracted without error. p0_01 (128x128,
+// 3 levels, 64x64 code-blocks) has exactly 1+3+3+3 = 10 code-blocks.
+func TestJPXTier2(t *testing.T) {
+	files, _ := filepath.Glob("testdata/jpx/*.j2k")
+	if len(files) == 0 {
+		t.Skip("no JPX sample codestreams; run `make jpx`")
+	}
+	for _, p := range files {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		im, err := parseJPX(data)
+		if err != nil {
+			t.Errorf("%s: parse: %v", filepath.Base(p), err)
+			continue
+		}
+		x0, y0, x1, y1 := im.tileCoords(0)
+		tc := buildTileComp(im, 0, x0, y0, x1, y1)
+		if err := decodeTilePackets(im, tc, im.tileData(0)); err != nil {
+			t.Errorf("%s: tier-2: %v", filepath.Base(p), err)
+			continue
+		}
+		if len(tc.resolutions) != im.cod.levels+1 {
+			t.Errorf("%s: %d resolutions, want %d", filepath.Base(p), len(tc.resolutions), im.cod.levels+1)
+		}
+		blocks, withData := 0, 0
+		for _, res := range tc.resolutions {
+			for _, sb := range res.subbands {
+				for i := range sb.blocks {
+					blocks++
+					if len(sb.blocks[i].data) > 0 {
+						withData++
+					}
+				}
+			}
+		}
+		if blocks == 0 || withData == 0 {
+			t.Errorf("%s: no code-block data (blocks=%d withData=%d)", filepath.Base(p), blocks, withData)
+		}
+		if filepath.Base(p) == "p0_01.j2k" && blocks != 10 {
+			t.Errorf("p0_01: %d code-blocks, want 10", blocks)
+		}
+	}
+}
+
 // TestJPXParseAll parses every sample codestream without error (a smoke test of
 // the marker parser over diverse real files).
 func TestJPXParseAll(t *testing.T) {
