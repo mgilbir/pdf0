@@ -5,7 +5,6 @@ import (
 	"image"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -140,55 +139,63 @@ func bitsToBytes(bits string) []byte {
 	return out
 }
 
-// TestCCITTCorpusImages decodes every CCITTFaxDecode image found in the veraPDF
-// corpus, asserting the decoder produces a plausible bilevel image (correct size,
-// and — for images with real content — both black and white pixels present).
-func TestCCITTCorpusImages(t *testing.T) {
-	corpus := os.Getenv("VERAPDF_CORPUS")
-	if corpus == "" {
-		corpus = "testdata/verapdf-corpus"
+// TestCCITTRealFiles decodes the real-world CCITTFaxDecode sample PDFs (run
+// `make ccitt` to fetch them) and asserts each Group 4 image decodes to a
+// correctly-sized bilevel picture with genuine content (both colours present).
+// The veraPDF corpus contains no CCITT images, so these external samples are the
+// decoder's real-world oracle.
+func TestCCITTRealFiles(t *testing.T) {
+	dir := "testdata/ccitt"
+	entries, err := filepath.Glob(filepath.Join(dir, "*.pdf"))
+	if err != nil || len(entries) == 0 {
+		t.Skip("no CCITT sample PDFs; run `make ccitt`")
 	}
-	if _, err := os.Stat(corpus); err != nil {
-		t.Skip("veraPDF corpus not found; run `make corpus`")
-	}
-	decoded, files := 0, 0
-	_ = filepath.Walk(corpus, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-			return nil
-		}
+	total := 0
+	for _, path := range entries {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil
+			t.Errorf("%s: %v", filepath.Base(path), err)
+			continue
 		}
 		doc, err := Read(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
-			return nil
+			t.Errorf("%s: read: %v", filepath.Base(path), err)
+			continue
 		}
+		found := 0
 		for _, img := range doc.ExtractImages() {
 			if img.Filter != "CCITTFaxDecode" {
 				continue
 			}
-			files++
+			found++
+			total++
 			if !img.Decoded {
+				t.Errorf("%s obj %d: not decoded: %s", filepath.Base(path), img.ObjNum, img.Note)
 				continue
 			}
-			decoded++
 			g, ok := img.Image.(*image.Gray)
 			if !ok {
-				t.Errorf("%s obj %d: CCITT image is %T, want *image.Gray", filepath.Base(path), img.ObjNum, img.Image)
+				t.Errorf("%s obj %d: image is %T, want *image.Gray", filepath.Base(path), img.ObjNum, img.Image)
 				continue
 			}
 			if b := g.Bounds(); b.Dx() != img.Width || b.Dy() != img.Height {
 				t.Errorf("%s obj %d: decoded %dx%d, want %dx%d", filepath.Base(path), img.ObjNum, b.Dx(), b.Dy(), img.Width, img.Height)
 			}
+			black, white := 0, 0
+			for _, p := range g.Pix {
+				if p == 0 {
+					black++
+				} else {
+					white++
+				}
+			}
+			if black == 0 || white == 0 {
+				t.Errorf("%s obj %d: image is a single colour (black=%d white=%d) — likely a decode error", filepath.Base(path), img.ObjNum, black, white)
+			}
 		}
-		return nil
-	})
-	if files == 0 {
-		t.Skip("no CCITTFaxDecode images in the corpus")
+		t.Logf("%s: %d CCITT image(s) decoded", filepath.Base(path), found)
 	}
-	t.Logf("CCITTFaxDecode images: %d found, %d decoded", files, decoded)
-	if decoded == 0 {
-		t.Error("found CCITT images but decoded none")
+	if total == 0 {
+		t.Error("sample PDFs present but no CCITT images extracted")
 	}
 }

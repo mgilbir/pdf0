@@ -35,7 +35,8 @@ type ExtractedImage struct {
 }
 
 // ExtractImages returns every image XObject drawn from the document's pages, each
-// decoded when the codec is one this package handles.
+// decoded when the codec is one this package handles. Form XObjects are followed
+// into their own resources, so images nested inside forms are found too.
 func (d *Document) ExtractImages() []ExtractedImage {
 	cat := getCatalog(d)
 	if cat == nil {
@@ -44,32 +45,79 @@ func (d *Document) ExtractImages() []ExtractedImage {
 	var out []ExtractedImage
 	seen := map[int]bool{}
 	for _, pg := range collectPages(d, cat.Get("Pages")) {
-		res := resolveResources(d, pg.dict)
-		if res == nil {
+		d.collectImagesFrom(resolveResources(d, pg.dict), seen, 0, &out)
+		// Annotation appearance streams (/Annots -> /AP) are form XObjects with
+		// their own resources, a common home for images (stamps, form fields).
+		if annots, ok := d.Resolve(pg.dict.Get("Annots")).(Array); ok {
+			for _, a := range annots {
+				ad := d.ResolveDict(a)
+				if ad == nil {
+					continue
+				}
+				ap := d.ResolveDict(ad.Get("AP"))
+				if ap == nil {
+					continue
+				}
+				for _, entry := range ap.Values {
+					d.collectAppearanceImages(entry, seen, &out)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// collectAppearanceImages walks an annotation appearance entry (/N, /D or /R),
+// which is either a form-XObject stream or a subdictionary of appearance states
+// (each value a stream), following each into its resources.
+func (d *Document) collectAppearanceImages(entry Object, seen map[int]bool, out *[]ExtractedImage) {
+	switch v := d.Resolve(entry).(type) {
+	case *Stream:
+		if num := refNum(entry); num > 0 {
+			if seen[num] {
+				return
+			}
+			seen[num] = true
+		}
+		d.collectImagesFrom(d.ResolveDict(v.Dict.Get("Resources")), seen, 1, out)
+	case *Dictionary:
+		for _, state := range v.Values {
+			d.collectAppearanceImages(state, seen, out)
+		}
+	}
+}
+
+// collectImagesFrom walks a resource dictionary's /XObject entries, extracting
+// image XObjects and recursing into form XObjects' own resources. seen guards
+// against revisiting a shared or self-referential XObject; depth bounds runaway
+// recursion.
+func (d *Document) collectImagesFrom(res *Dictionary, seen map[int]bool, depth int, out *[]ExtractedImage) {
+	if res == nil || depth > 16 {
+		return
+	}
+	xobjs := d.ResolveDict(res.Get("XObject"))
+	if xobjs == nil {
+		return
+	}
+	for i := range xobjs.Keys {
+		ref := xobjs.Values[i]
+		st, ok := d.Resolve(ref).(*Stream)
+		if !ok {
 			continue
 		}
-		xobjs := d.ResolveDict(res.Get("XObject"))
-		if xobjs == nil {
-			continue
-		}
-		for i, key := range xobjs.Keys {
-			_ = key
-			st, ok := d.Resolve(xobjs.Values[i]).(*Stream)
-			if !ok {
-				continue
-			}
-			if sub, _ := st.Dict.Get("Subtype").(Name); sub != "Image" {
-				continue
-			}
-			num := refNum(xobjs.Values[i])
+		if num := refNum(ref); num > 0 {
 			if seen[num] {
 				continue
 			}
 			seen[num] = true
-			out = append(out, d.extractImage(st, num))
+		}
+		switch sub, _ := st.Dict.Get("Subtype").(Name); sub {
+		case "Image":
+			*out = append(*out, d.extractImage(st, refNum(ref)))
+		case "Form":
+			d.collectImagesFrom(d.ResolveDict(st.Dict.Get("Resources")), seen, depth+1, out)
 		}
 	}
-	return out
 }
 
 func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
