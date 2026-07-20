@@ -95,6 +95,49 @@ func TestJPXTier2(t *testing.T) {
 	}
 }
 
+// TestJPXDecodeGray decodes the single-component reversible conformance images
+// all the way to pixels (tier-1 EBCOT + inverse 5/3 DWT + level shift) and checks
+// the result is a real, non-uniform image. p0_01 is a grayscale photograph; a
+// broken entropy coder or wavelet transform cannot produce coherent tonal
+// content, so a healthy dark/light spread is a strong correctness signal.
+func TestJPXDecodeGray(t *testing.T) {
+	path := filepath.Join("testdata/jpx", "p0_01.j2k")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Skip("no JPX sample codestreams; run `make jpx`")
+	}
+	im, err := parseJPX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	gray := decodeJPXGray(im)
+	if gray == nil {
+		t.Fatal("decodeJPXGray returned nil for a single-component reversible image")
+	}
+	if len(gray) != im.xsiz*im.ysiz {
+		t.Fatalf("decoded %d samples, want %d", len(gray), im.xsiz*im.ysiz)
+	}
+	var sum, sumSq int64
+	dark, light := 0, 0
+	for _, p := range gray {
+		sum += int64(p)
+		sumSq += int64(p) * int64(p)
+		if p < 96 {
+			dark++
+		} else if p > 160 {
+			light++
+		}
+	}
+	n := int64(len(gray))
+	variance := sumSq/n - (sum/n)*(sum/n)
+	if variance < 500 {
+		t.Errorf("decoded image is nearly uniform (variance=%d) — likely a decode error", variance)
+	}
+	if dark < 500 || light < 500 {
+		t.Errorf("decoded image lacks tonal spread (dark=%d light=%d)", dark, light)
+	}
+}
+
 // TestJPXParseAll parses every sample codestream without error (a smoke test of
 // the marker parser over diverse real files).
 func TestJPXParseAll(t *testing.T) {
