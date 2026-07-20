@@ -127,12 +127,50 @@ func TestJBIG2SymbolText(t *testing.T) {
 	}
 }
 
+// TestJBIG2Refinement decodes the refinement encodings of the shared bitmap —
+// standalone generic refinement regions (templates 0/1, TPGRON, custom AT, whole
+// page) and symbol refinement (SBREFINE in text regions, SDREFAGG single-instance
+// in symbol dictionaries) — and asserts each matches the generic-region reference.
+func TestJBIG2Refinement(t *testing.T) {
+	dir := "testdata/jbig2"
+	ref := filepath.Join(dir, "bitmap-template1.pdf")
+	if _, err := os.Stat(ref); err != nil {
+		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
+	}
+	want := grayPixels(t, jbig2Image(t, ref)).Pix
+
+	for _, name := range []string{
+		"bitmap-refine.pdf",
+		"bitmap-refine-template1.pdf",
+		"bitmap-refine-tpgron.pdf",
+		"bitmap-refine-customat.pdf",
+		"bitmap-refine-page.pdf",
+		"bitmap-symbol-refine.pdf",
+		"bitmap-symbol-symbolrefineone.pdf",
+		"bitmap-symbol-symbolrefineone-template1.pdf",
+		"bitmap-symbol-textrefine.pdf",
+	} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		img := jbig2Image(t, path)
+		if !img.Decoded {
+			t.Errorf("%s: not decoded: %s", name, img.Note)
+			continue
+		}
+		if !bytes.Equal(grayPixels(t, img).Pix, want) {
+			t.Errorf("%s: pixels differ from the generic-region reference", name)
+		}
+	}
+}
+
 // TestJBIG2UnsupportedFallback checks that region types not yet implemented
-// (halftone, refinement) degrade gracefully: the image is reported undecoded
-// with the raw bytes, never a panic or a hard error to the caller.
+// (halftone, multi-instance aggregate) degrade gracefully: the image is reported
+// undecoded with the raw bytes, never a panic or a hard error to the caller.
 func TestJBIG2UnsupportedFallback(t *testing.T) {
 	dir := "testdata/jbig2"
-	for _, name := range []string{"bitmap-halftone.pdf", "bitmap-refine.pdf"} {
+	for _, name := range []string{"bitmap-halftone.pdf", "bitmap-symbol-symbolrefineseveral.pdf"} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err != nil {
 			t.Skip("no JBIG2 sample PDFs; run `make jbig2`")

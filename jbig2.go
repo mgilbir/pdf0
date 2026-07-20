@@ -16,11 +16,12 @@ import (
 // /DecodeParms carries shared segments (symbol dictionaries, tables) referenced
 // by the page stream.
 //
-// This decodes generic regions (arithmetic and MMR) and symbol-dictionary +
-// text regions (arithmetic), composing them onto the page. Halftone regions and
-// refinement/aggregation, plus the Huffman-coded symbol/text variants, are
-// recognised but not yet decoded; a document using them falls back to the raw
-// encoded bytes.
+// This decodes generic regions (arithmetic and MMR), symbol-dictionary + text
+// regions (arithmetic), and generic refinement — both standalone regions and
+// symbol refinement (SBREFINE / single-instance SDREFAGG) — composing them onto
+// the page. Halftone regions, multi-instance aggregation, and the Huffman-coded
+// symbol/text variants are recognised but not yet decoded; a document using them
+// falls back to the raw encoded bytes.
 //
 // Internally a bitmap stores one byte per pixel with 1 = black (the JBIG2
 // convention). The final packed output inverts this to the PDF image convention
@@ -293,10 +294,14 @@ func (d *jbig2Decoder) run(segs []jbSegment) error {
 			if err := d.readTextRegion(seg); err != nil {
 				return err
 			}
+		case 40, 42, 43: // generic refinement region
+			if err := d.readRefinementRegion(seg); err != nil {
+				return err
+			}
 		case 49, 50, 51, 62: // end of page/stripe/file, extension
 			// nothing to do
-		case 16, 20, 22, 23, 40, 42, 43:
-			return errJBIG2Unsupported // pattern/halftone/refinement — not yet
+		case 16, 20, 22, 23:
+			return errJBIG2Unsupported // pattern/halftone — not yet
 		default:
 			return errJBIG2Unsupported
 		}
@@ -426,6 +431,54 @@ func (b *jbBitmap) blit(src *jbBitmap, dx, dy, op int) {
 			}
 		}
 	}
+}
+
+// subregion copies a w x h window of b starting at (x,y) into a new bitmap,
+// reading 0 outside b's bounds.
+func (b *jbBitmap) subregion(x, y, w, h int) *jbBitmap {
+	s := newJBBitmap(w, h, 0)
+	for j := 0; j < h; j++ {
+		for i := 0; i < w; i++ {
+			s.pix[j*w+i] = b.get(x+i, y+j)
+		}
+	}
+	return s
+}
+
+// readRefinementRegion decodes a standalone generic refinement region (types
+// 40/42/43), refining the page content at the region's location in place.
+func (d *jbig2Decoder) readRefinementRegion(seg jbSegment) error {
+	r := &jbReader{data: seg.data}
+	ri, ok := readRegionInfo(r)
+	if !ok {
+		return errJBIG2Unsupported
+	}
+	flags, ok := r.u8()
+	if !ok {
+		return errJBIG2Unsupported
+	}
+	template := int(flags & 1)
+	tpgron := flags&2 != 0
+	var at []atPixel
+	if template == 0 {
+		for i := 0; i < 2; i++ {
+			ax, ok1 := r.s8()
+			ay, ok2 := r.s8()
+			if !ok1 || !ok2 {
+				return errJBIG2Unsupported
+			}
+			at = append(at, atPixel{ax, ay})
+		}
+	}
+	if d.page == nil {
+		d.page = newJBBitmap(d.imgW, d.imgH, 0)
+	}
+	ref := d.page.subregion(ri.x, ri.y, ri.w, ri.h)
+	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
+	cx := make([]mqState, 1<<13)
+	out := decodeRefinement(dec, cx, ri.w, ri.h, template, ref, 0, 0, tpgron, at)
+	d.page.blit(out, ri.x, ri.y, 4) // REPLACE the refined region
+	return nil
 }
 
 type atPixel struct{ x, y int }

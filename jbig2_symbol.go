@@ -98,8 +98,9 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 	sdhuff := flags & 1
 	sdrefagg := (flags >> 1) & 1
 	template := int((flags >> 10) & 3)
-	if sdhuff != 0 || sdrefagg != 0 {
-		return errJBIG2Unsupported // Huffman / refinement-aggregate not yet supported
+	sdrTemplate := int((flags >> 12) & 1)
+	if sdhuff != 0 {
+		return errJBIG2Unsupported // Huffman-coded symbol dictionaries not yet supported
 	}
 
 	var at []atPixel
@@ -116,6 +117,19 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 		at = append(at, atPixel{ax, ay})
 	}
 
+	// Refinement AT pixels follow the coding AT when aggregation uses template 0.
+	var rAt []atPixel
+	if sdrefagg != 0 && sdrTemplate == 0 {
+		for i := 0; i < 2; i++ {
+			ax, ok1 := r.s8()
+			ay, ok2 := r.s8()
+			if !ok1 || !ok2 {
+				return errJBIG2Unsupported
+			}
+			rAt = append(rAt, atPixel{ax, ay})
+		}
+	}
+
 	numEx, ok1 := r.u32()
 	numNew, ok2 := r.u32()
 	if !ok1 || !ok2 || numNew > 1<<20 || numEx > 1<<20 {
@@ -127,7 +141,15 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 
 	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 	iadh, iadw, iaex := newIAx(), newIAx(), newIAx()
+	iaai, iardx, iardy := newIAx(), newIAx(), newIAx()
 	gb := make([]mqState, 1<<16)
+	grCx := make([]mqState, 1<<13)
+	// Symbol-ID code length for aggregate/refinement references (input ++ new).
+	refCodeLen := ceilLog2(int(numNew) + len(input))
+	if refCodeLen < 1 {
+		refCodeLen = 1
+	}
+	iaid := make([]mqState, 1<<uint(refCodeLen+1))
 
 	hcHeight := 0
 	for len(newSyms) < int(numNew) {
@@ -146,7 +168,24 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 			if symWidth <= 0 || symWidth > 1<<16 || len(newSyms) >= int(numNew) {
 				return errJBIG2Unsupported
 			}
-			bmp := decodeGenericInto(dec, gb, symWidth, hcHeight, template, at, false)
+			var bmp *jbBitmap
+			if sdrefagg == 0 {
+				bmp = decodeGenericInto(dec, gb, symWidth, hcHeight, template, at, false)
+			} else {
+				// Aggregate/refinement coding (6.5.8.2).
+				nInst, _ := decodeInt(dec, iaai)
+				if nInst != 1 {
+					return errJBIG2Unsupported // multi-instance aggregate not yet supported
+				}
+				id := decodeIAID(dec, iaid, refCodeLen)
+				rdx, _ := decodeInt(dec, iardx)
+				rdy, _ := decodeInt(dec, iardy)
+				all := append(append([]*jbBitmap{}, input...), newSyms...)
+				if id < 0 || id >= len(all) {
+					return errJBIG2Unsupported
+				}
+				bmp = decodeRefinement(dec, grCx, symWidth, hcHeight, sdrTemplate, all[id], rdx, rdy, false, rAt)
+			}
 			newSyms = append(newSyms, bmp)
 		}
 	}
@@ -197,8 +236,22 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 	if dsOffset > 15 {
 		dsOffset -= 32 // signed 5-bit
 	}
-	if sbhuff != 0 || sbrefine != 0 {
-		return errJBIG2Unsupported // Huffman / refinement not yet supported
+	sbrTemplate := int((flags >> 15) & 1)
+	if sbhuff != 0 {
+		return errJBIG2Unsupported // Huffman-coded text regions not yet supported
+	}
+
+	// Refinement AT pixels precede SBNUMINSTANCES when refinement uses template 0.
+	var rAt []atPixel
+	if sbrefine != 0 && sbrTemplate == 0 {
+		for i := 0; i < 2; i++ {
+			ax, ok1 := r.s8()
+			ay, ok2 := r.s8()
+			if !ok1 || !ok2 {
+				return errJBIG2Unsupported
+			}
+			rAt = append(rAt, atPixel{ax, ay})
+		}
 	}
 
 	numInstances, ok := r.u32()
@@ -217,7 +270,9 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 
 	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 	iadt, iafs, iads, iait := newIAx(), newIAx(), newIAx(), newIAx()
+	iari, iardw, iardh, iardx, iardy := newIAx(), newIAx(), newIAx(), newIAx(), newIAx()
 	iaid := make([]mqState, 1<<uint(symCodeLen+1))
+	grCx := make([]mqState, 1<<13)
 
 	region := newJBBitmap(ri.w, ri.h, sbDefPixel)
 	strips := 1 << logStrips
@@ -255,6 +310,20 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 				return errJBIG2Unsupported
 			}
 			sym := syms[id]
+			if sbrefine != 0 {
+				if ri, _ := decodeInt(dec, iari); ri != 0 {
+					rdw, _ := decodeInt(dec, iardw)
+					rdh, _ := decodeInt(dec, iardh)
+					rdx, _ := decodeInt(dec, iardx)
+					rdy, _ := decodeInt(dec, iardy)
+					rw, rh := sym.w+rdw, sym.h+rdh
+					if rw <= 0 || rh <= 0 || rw > 1<<16 || rh > 1<<16 {
+						return errJBIG2Unsupported
+					}
+					sym = decodeRefinement(dec, grCx, rw, rh, sbrTemplate, sym,
+						(rdw>>1)+rdx, (rdh>>1)+rdy, false, rAt)
+				}
+			}
 			placeSymbol(region, sym, &curS, t, refCorner, transposed, sbCombOp)
 			inst++
 		}
