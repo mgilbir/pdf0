@@ -1,4 +1,4 @@
-.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington
+.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -87,6 +87,20 @@ $(FACTURX_DIR)/.ok: $(FACTURX_DIR)/sources.tsv $(FACTURX_DIR)/download.sh
 
 clean-facturx:
 	rm -f $(FACTURX_DIR)/*.pdf $(FACTURX_DIR)/.ok
+
+# Real-world CCITTFaxDecode sample PDFs (pdf.js Apache-2.0, PyPDF4 BSD) used as
+# the decode oracle for the Group 3/4 fax decoder. Downloaded into
+# testdata/ccitt (gitignored); the source manifest and downloader are committed.
+CCITT_DIR := testdata/ccitt
+
+ccitt: $(CCITT_DIR)/.ok
+
+$(CCITT_DIR)/.ok: $(CCITT_DIR)/sources.tsv $(CCITT_DIR)/download.sh
+	bash $(CCITT_DIR)/download.sh
+	touch $@
+
+clean-ccitt:
+	rm -f $(CCITT_DIR)/*.pdf $(CCITT_DIR)/.ok
 
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
