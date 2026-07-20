@@ -15,8 +15,8 @@ import (
 //   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
 //   - raw, FlateDecode, LZWDecode, etc. -> decoded from the sample bytes
 //   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in ccitt.go codec
-//   - JBIG2Decode                       -> generic regions decoded by jbig2.go
-//     (symbol/text and halftone regions fall back to the raw bytes for now)
+//   - JBIG2Decode                       -> generic and symbol/text regions
+//     decoded by jbig2.go (halftone and refinement fall back to the raw bytes)
 //   - JPXDecode                         -> not decoded; the raw encoded bytes and
 //     the geometry are returned. JPEG 2000 is a large wavelet codec with no
 //     standard-library support; decoding it faithfully is out of scope here.

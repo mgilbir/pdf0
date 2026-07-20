@@ -88,12 +88,51 @@ func TestJBIG2GenericCrossCheck(t *testing.T) {
 	}
 }
 
+// TestJBIG2SymbolText decodes the symbol-dictionary + text-region encodings of
+// the shared bitmap — including every reference corner, transposition, and a
+// negative S-offset — and asserts each reconstructs the same image as the
+// generic-region reference. This exercises the integer arithmetic decoder, the
+// symbol dictionary, and text-region symbol placement.
+func TestJBIG2SymbolText(t *testing.T) {
+	dir := "testdata/jbig2"
+	ref := filepath.Join(dir, "bitmap-template1.pdf")
+	if _, err := os.Stat(ref); err != nil {
+		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
+	}
+	want := grayPixels(t, jbig2Image(t, ref)).Pix
+
+	symbolFiles := []string{
+		"bitmap-symbol.pdf",
+		"bitmap-symbol-textbottomleft.pdf",
+		"bitmap-symbol-textbottomright.pdf",
+		"bitmap-symbol-texttopright.pdf",
+		"bitmap-symbol-texttranspose.pdf",
+		"bitmap-symbol-textbottomlefttranspose.pdf",
+		"bitmap-symbol-texttoprighttranspose.pdf",
+		"bitmap-symbol-negative-sbdsoffset.pdf",
+	}
+	for _, name := range symbolFiles {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		img := jbig2Image(t, path)
+		if !img.Decoded {
+			t.Errorf("%s: not decoded: %s", name, img.Note)
+			continue
+		}
+		if !bytes.Equal(grayPixels(t, img).Pix, want) {
+			t.Errorf("%s: pixels differ from the generic-region reference", name)
+		}
+	}
+}
+
 // TestJBIG2UnsupportedFallback checks that region types not yet implemented
-// (symbol/text, halftone, refinement) degrade gracefully: the image is reported
-// undecoded with the raw bytes, never a panic or a hard error to the caller.
+// (halftone, refinement) degrade gracefully: the image is reported undecoded
+// with the raw bytes, never a panic or a hard error to the caller.
 func TestJBIG2UnsupportedFallback(t *testing.T) {
 	dir := "testdata/jbig2"
-	for _, name := range []string{"bitmap-symbol.pdf", "bitmap-halftone.pdf", "bitmap-refine.pdf"} {
+	for _, name := range []string{"bitmap-halftone.pdf", "bitmap-refine.pdf"} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err != nil {
 			t.Skip("no JBIG2 sample PDFs; run `make jbig2`")

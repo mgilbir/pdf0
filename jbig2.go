@@ -16,9 +16,11 @@ import (
 // /DecodeParms carries shared segments (symbol dictionaries, tables) referenced
 // by the page stream.
 //
-// This milestone decodes generic regions (both arithmetic and MMR coded) and
-// composes them onto the page. Symbol/text and halftone regions are recognised
-// but not yet decoded; a document using them falls back to the raw encoded bytes.
+// This decodes generic regions (arithmetic and MMR) and symbol-dictionary +
+// text regions (arithmetic), composing them onto the page. Halftone regions and
+// refinement/aggregation, plus the Huffman-coded symbol/text variants, are
+// recognised but not yet decoded; a document using them falls back to the raw
+// encoded bytes.
 //
 // Internally a bitmap stores one byte per pixel with 1 = black (the JBIG2
 // convention). The final packed output inverts this to the PDF image convention
@@ -154,6 +156,7 @@ func (b *jbBitmap) packPDF() []byte {
 type jbig2Decoder struct {
 	imgW, imgH int
 	page       *jbBitmap
+	symbols    map[uint32][]*jbBitmap // exported symbols per symbol-dict segment
 }
 
 // parseJBIG2Segments parses the embedded (PDF) segment organisation: a sequence
@@ -282,10 +285,18 @@ func (d *jbig2Decoder) run(segs []jbSegment) error {
 			if err := d.readGenericRegion(seg); err != nil {
 				return err
 			}
+		case 0: // symbol dictionary
+			if err := d.readSymbolDict(seg); err != nil {
+				return err
+			}
+		case 4, 6, 7: // text region (intermediate / immediate / immediate lossless)
+			if err := d.readTextRegion(seg); err != nil {
+				return err
+			}
 		case 49, 50, 51, 62: // end of page/stripe/file, extension
 			// nothing to do
-		case 0, 4, 6, 7, 16, 20, 22, 23, 40, 42, 43:
-			return errJBIG2Unsupported // symbol/text/halftone/refinement — not yet
+		case 16, 20, 22, 23, 40, 42, 43:
+			return errJBIG2Unsupported // pattern/halftone/refinement — not yet
 		default:
 			return errJBIG2Unsupported
 		}
@@ -453,11 +464,21 @@ var jbCodingTemplates = [4][]atPixel{
 // per template, in the sorted-template bit ordering used here.
 var jbReusedContexts = [4]int{0x9B25, 0x0795, 0x00E5, 0x0195}
 
-// decodeGenericArith decodes an arithmetic-coded generic region (T.88 6.2.5.7).
+// decodeGenericArith decodes an arithmetic-coded generic region (T.88 6.2.5.7)
+// with its own decoder and context.
 func decodeGenericArith(data []byte, w, h, template int, tpgdon bool, at []atPixel) (*jbBitmap, error) {
 	if template < 0 || template > 3 {
 		return nil, errJBIG2Unsupported
 	}
+	dec := newMQDecoder(data, 0, len(data))
+	cx := make([]mqState, 1<<16)
+	return decodeGenericInto(dec, cx, w, h, template, at, tpgdon), nil
+}
+
+// decodeGenericInto decodes a generic region into a bitmap using a caller-owned
+// decoder and context array. Symbol-dictionary decoding reuses this with a
+// shared context across all symbols in the dictionary.
+func decodeGenericInto(dec *mqDecoder, cx []mqState, w, h, template int, at []atPixel, tpgdon bool) *jbBitmap {
 	// Build the full template (fixed pixels + AT pixels) and sort into raster
 	// order so the context label matches the reused TPGDON contexts.
 	tmpl := append([]atPixel{}, jbCodingTemplates[template]...)
@@ -470,15 +491,11 @@ func decodeGenericArith(data []byte, w, h, template int, tpgdon bool, at []atPix
 	})
 
 	bmp := newJBBitmap(w, h, 0)
-	cx := make([]mqState, 1<<16)
-	dec := newMQDecoder(data, 0, len(data))
 	ltp := 0
-
 	for y := 0; y < h; y++ {
 		if tpgdon {
 			ltp ^= dec.decode(cx, jbReusedContexts[template])
 			if ltp == 1 {
-				// Copy the row above verbatim.
 				if y > 0 {
 					copy(bmp.pix[y*w:(y+1)*w], bmp.pix[(y-1)*w:y*w])
 				}
@@ -493,5 +510,5 @@ func decodeGenericArith(data []byte, w, h, template int, tpgdon bool, at []atPix
 			bmp.pix[y*w+x] = byte(dec.decode(cx, ctx))
 		}
 	}
-	return bmp, nil
+	return bmp
 }

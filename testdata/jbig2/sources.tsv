@@ -8,3 +8,10 @@ https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-mmr.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol.pdf	bitmap-symbol.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone.pdf	bitmap-halftone.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-refine.pdf	bitmap-refine.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-textbottomleft.pdf	bitmap-symbol-textbottomleft.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-textbottomright.pdf	bitmap-symbol-textbottomright.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texttopright.pdf	bitmap-symbol-texttopright.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texttranspose.pdf	bitmap-symbol-texttranspose.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-textbottomlefttranspose.pdf	bitmap-symbol-textbottomlefttranspose.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texttoprighttranspose.pdf	bitmap-symbol-texttoprighttranspose.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-negative-sbdsoffset.pdf	bitmap-symbol-negative-sbdsoffset.pdf
