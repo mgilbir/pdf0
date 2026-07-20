@@ -15,10 +15,11 @@ import (
 //   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
 //   - raw, FlateDecode, LZWDecode, etc. -> decoded from the sample bytes
 //   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in ccitt.go codec
-//   - JBIG2Decode, JPXDecode            -> not decoded; the raw encoded bytes and
-//     the geometry are returned. These are large dedicated codecs (JBIG2
-//     arithmetic coding, JPEG 2000 wavelets) with no standard-library support;
-//     decoding them faithfully is out of scope here.
+//   - JBIG2Decode                       -> generic regions decoded by jbig2.go
+//     (symbol/text and halftone regions fall back to the raw bytes for now)
+//   - JPXDecode                         -> not decoded; the raw encoded bytes and
+//     the geometry are returned. JPEG 2000 is a large wavelet codec with no
+//     standard-library support; decoding it faithfully is out of scope here.
 
 // ExtractedImage is one image XObject: its geometry, its codec, and its decoded
 // pixels when available.
@@ -163,7 +164,26 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			img.Encoded = samples
 			img.Note = "unsupported CCITT sample layout"
 		}
-	case "JBIG2Decode", "JPXDecode":
+	case "JBIG2Decode":
+		encoded, globals, ok := jbig2EncodedAndGlobals(d, st)
+		if !ok {
+			img.Encoded = st.Data
+			img.Note = "JBIG2Decode preceding filter chain could not be reversed; the raw encoded bytes are provided"
+			break
+		}
+		samples, err := decodeJBIG2(globals, encoded, img.Width, img.Height)
+		if err != nil {
+			img.Encoded = st.Data
+			img.Note = "JBIG2Decode not decoded (" + err.Error() + "); the raw encoded bytes are provided"
+			break
+		}
+		if m, ok := samplesToImage(samples, img.Width, img.Height, 1, "DeviceGray"); ok {
+			img.Image, img.Decoded = m, true
+		} else {
+			img.Encoded = samples
+			img.Note = "unsupported JBIG2 sample layout"
+		}
+	case "JPXDecode":
 		img.Encoded = st.Data
 		img.Note = "the " + img.Filter + " image codec is not decoded; the raw encoded bytes are provided"
 	default:
@@ -221,6 +241,37 @@ func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded 
 		params.columns = width
 	}
 	return encoded, params, true
+}
+
+// jbig2EncodedAndGlobals returns the JBIG2-encoded bytes for an image XObject
+// (reversing any general-purpose filters that precede JBIG2Decode) and the
+// decoded /JBIG2Globals shared-segment stream when present. ok is false when a
+// preceding filter cannot be reversed.
+func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, ok bool) {
+	filters := streamFilters(d, st)
+	if len(filters) == 0 {
+		return nil, nil, false
+	}
+	last := len(filters) - 1
+	parms := d.Resolve(st.Dict.Get("DecodeParms"))
+
+	encoded = st.Data
+	for i := 0; i < last; i++ {
+		out, err := applyFilter(filters[i], encoded, parmsDictAt(parms, i))
+		if err != nil {
+			return nil, nil, false
+		}
+		encoded = out
+	}
+
+	if cp := parmsDictAt(parms, last); cp != nil {
+		if gs, ok := d.Resolve(cp.Get("JBIG2Globals")).(*Stream); ok {
+			if data, err := decodeStreamData(gs); err == nil {
+				globals = data
+			}
+		}
+	}
+	return encoded, globals, true
 }
 
 // samplesToImage builds an image from decoded PDF sample bytes for the common
