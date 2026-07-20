@@ -18,8 +18,9 @@ import (
 //
 // This decodes generic regions (arithmetic and MMR), symbol-dictionary + text
 // regions (arithmetic), and generic refinement — both standalone regions and
-// symbol refinement (SBREFINE / single-instance SDREFAGG) — composing them onto
-// the page. Halftone regions, multi-instance aggregation, and the Huffman-coded
+// symbol refinement (SBREFINE / single-instance SDREFAGG) — plus pattern
+// dictionaries and halftone regions (arithmetic), composing them onto the page.
+// MMR-coded halftone, multi-instance aggregation, and the Huffman-coded
 // symbol/text variants are recognised but not yet decoded; a document using them
 // falls back to the raw encoded bytes.
 //
@@ -158,6 +159,7 @@ type jbig2Decoder struct {
 	imgW, imgH int
 	page       *jbBitmap
 	symbols    map[uint32][]*jbBitmap // exported symbols per symbol-dict segment
+	patterns   map[uint32][]*jbBitmap // patterns per pattern-dict segment
 }
 
 // parseJBIG2Segments parses the embedded (PDF) segment organisation: a sequence
@@ -298,10 +300,16 @@ func (d *jbig2Decoder) run(segs []jbSegment) error {
 			if err := d.readRefinementRegion(seg); err != nil {
 				return err
 			}
+		case 16: // pattern dictionary
+			if err := d.readPatternDict(seg); err != nil {
+				return err
+			}
+		case 20, 22, 23: // halftone region
+			if err := d.readHalftoneRegion(seg); err != nil {
+				return err
+			}
 		case 49, 50, 51, 62: // end of page/stripe/file, extension
 			// nothing to do
-		case 16, 20, 22, 23:
-			return errJBIG2Unsupported // pattern/halftone — not yet
 		default:
 			return errJBIG2Unsupported
 		}
@@ -525,13 +533,15 @@ func decodeGenericArith(data []byte, w, h, template int, tpgdon bool, at []atPix
 	}
 	dec := newMQDecoder(data, 0, len(data))
 	cx := make([]mqState, 1<<16)
-	return decodeGenericInto(dec, cx, w, h, template, at, tpgdon), nil
+	return decodeGenericInto(dec, cx, w, h, template, at, tpgdon, nil), nil
 }
 
 // decodeGenericInto decodes a generic region into a bitmap using a caller-owned
 // decoder and context array. Symbol-dictionary decoding reuses this with a
-// shared context across all symbols in the dictionary.
-func decodeGenericInto(dec *mqDecoder, cx []mqState, w, h, template int, at []atPixel, tpgdon bool) *jbBitmap {
+// shared context across all symbols in the dictionary. When skip is non-nil, a
+// set pixel in skip forces the corresponding output pixel to 0 without decoding
+// (used by halftone grayscale-image decoding).
+func decodeGenericInto(dec *mqDecoder, cx []mqState, w, h, template int, at []atPixel, tpgdon bool, skip *jbBitmap) *jbBitmap {
 	// Build the full template (fixed pixels + AT pixels) and sort into raster
 	// order so the context label matches the reused TPGDON contexts.
 	tmpl := append([]atPixel{}, jbCodingTemplates[template]...)
@@ -556,6 +566,9 @@ func decodeGenericInto(dec *mqDecoder, cx []mqState, w, h, template int, at []at
 			}
 		}
 		for x := 0; x < w; x++ {
+			if skip != nil && skip.pix[y*w+x] != 0 {
+				continue // forced-0 pixel
+			}
 			ctx := 0
 			for _, p := range tmpl {
 				ctx = (ctx << 1) | int(bmp.get(x+p.x, y+p.y))

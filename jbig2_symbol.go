@@ -170,7 +170,7 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 			}
 			var bmp *jbBitmap
 			if sdrefagg == 0 {
-				bmp = decodeGenericInto(dec, gb, symWidth, hcHeight, template, at, false)
+				bmp = decodeGenericInto(dec, gb, symWidth, hcHeight, template, at, false, nil)
 			} else {
 				// Aggregate/refinement coding (6.5.8.2).
 				nInst, _ := decodeInt(dec, iaai)

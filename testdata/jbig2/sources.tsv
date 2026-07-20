@@ -24,3 +24,12 @@ https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symbolrefineone-template1.pdf	bitmap-symbol-symbolrefineone-template1.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-textrefine.pdf	bitmap-symbol-textrefine.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symbolrefineseveral.pdf	bitmap-symbol-symbolrefineseveral.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-template1.pdf	bitmap-halftone-template1.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-template2.pdf	bitmap-halftone-template2.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-template3.pdf	bitmap-halftone-template3.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-grid.pdf	bitmap-halftone-grid.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-skip-grid.pdf	bitmap-halftone-skip-grid.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-10bpp.pdf	bitmap-halftone-10bpp.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-composite.pdf	bitmap-halftone-composite.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-refine.pdf	bitmap-halftone-refine.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-10bpp-mmr.pdf	bitmap-halftone-10bpp-mmr.pdf
