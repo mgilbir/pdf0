@@ -46,9 +46,13 @@ func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle int, reve
 		if bpStart < 0 {
 			continue
 		}
-		// A code-block cannot have more coding passes than its bit-planes allow;
-		// a larger count means the packet headers desynced (e.g. an unsupported
-		// feature interaction), so the whole decode is untrustworthy.
+		// A code-block may legitimately carry more coding passes than its
+		// bit-planes hold: the stream is over-coded (the extra passes refine below
+		// the decoder's precision), and OpenJPEG simply decodes as many passes as
+		// the bit-planes allow and ignores the rest (t1.c: passno < real_num_passes
+		// && bpno_plus_one >= 1). Reproducing that bit-exactly needs a
+		// reconstruction step this decoder does not yet apply, so for now decline
+		// such streams rather than emit an approximation.
 		if cb.numPasses > 1+3*bpStart {
 			return false
 		}
