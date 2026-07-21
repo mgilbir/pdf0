@@ -33,7 +33,9 @@ func dequantSubband(sb *jpxSubband, depth int) []float64 {
 	if sb.coeffs == nil {
 		return out
 	}
-	delta := pow2(depth+sb.gain-sb.exp) * (1 + float64(sb.mant)/2048)
+	// The tier-1 magnitudes are doubled (midpoint reconstruction); the 0.5 factor
+	// folds the halving into the dequantization step (OpenJPEG: 0.5·stepsize).
+	delta := 0.5 * pow2(depth+sb.gain-sb.exp) * (1 + float64(sb.mant)/2048)
 	for i, q := range sb.coeffs {
 		out[i] = float64(q) * delta
 	}
@@ -44,9 +46,10 @@ func dequantSubband(sb *jpxSubband, depth int) []float64 {
 // path: tier-1, dequantization, then the inverse 9/7 wavelet transform.
 func reconstructComponentF(im *jpxImage, tc *jpxTileComp) *jpxFBand {
 	depth := im.comps[tc.comp].depth
+	roishift := im.roiShift(tc.tile, tc.comp)
 	for _, res := range tc.resolutions {
 		for _, sb := range res.subbands {
-			if !decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, im.cod.cbStyle, false) {
+			if !decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, im.cod.cbStyle, roishift, false) {
 				return nil
 			}
 		}

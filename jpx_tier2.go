@@ -71,6 +71,7 @@ type jpxResolution struct {
 
 // jpxTileComp holds the decoded structure for one component of one tile.
 type jpxTileComp struct {
+	tile                   int
 	comp                   int
 	tcx0, tcy0, tcx1, tcy1 int // component-grid tile bounds
 	refX0, refY0, refX1, refY1 int // reference-grid tile bounds (for positional progressions)
@@ -86,9 +87,10 @@ func ceilPow2(x, n int) int  { return (x + (1 << n) - 1) >> n }
 
 // buildTileComp computes the resolution/subband/precinct/code-block geometry for
 // one component of the tile occupying [tx0,tx1)×[ty0,ty1) (T.800 B.6, B.7, B.15).
-func buildTileComp(im *jpxImage, c, tx0, ty0, tx1, ty1 int) *jpxTileComp {
+func buildTileComp(im *jpxImage, tile, c, tx0, ty0, tx1, ty1 int) *jpxTileComp {
 	comp := im.comps[c]
 	tc := &jpxTileComp{
+		tile: tile,
 		comp: c,
 		tcx0: ceilDiv(tx0, comp.dx), tcy0: ceilDiv(ty0, comp.dy),
 		tcx1: ceilDiv(tx1, comp.dx), tcy1: ceilDiv(ty1, comp.dy),

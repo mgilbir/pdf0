@@ -94,6 +94,9 @@ type jpxImage struct {
 	qcd            jpxQuant
 	tileParts      []jpxTilePart
 	poc            []jpxProg // progression-order changes, when a POC marker is present
+	roishift       []int     // per-component region-of-interest MaxShift value (RGN)
+	tileRoishift   map[int][]int
+	tilePoc        map[int][]jpxProg
 }
 
 // numXTiles / numYTiles give the tile grid dimensions (T.800 B.3).
@@ -119,6 +122,29 @@ func (im *jpxImage) precinctExp(r int) (int, int) {
 		return im.cod.precinctW[r], im.cod.precinctH[r]
 	}
 	return 15, 15
+}
+
+// roiShift returns the region-of-interest MaxShift value for a tile-component,
+// preferring a tile-part RGN over the main-header RGN (0 when none applies).
+func (im *jpxImage) roiShift(tile, comp int) int {
+	if v, ok := im.tileRoishift[tile]; ok && comp >= 0 && comp < len(v) {
+		if v[comp] != 0 {
+			return v[comp]
+		}
+	}
+	if comp >= 0 && comp < len(im.roishift) {
+		return im.roishift[comp]
+	}
+	return 0
+}
+
+// tileProgressions returns the POC stages that apply to a tile (a tile-part POC
+// overrides the main-header POC).
+func (im *jpxImage) tileProgressions(tile int) []jpxProg {
+	if v, ok := im.tilePoc[tile]; ok && len(v) > 0 {
+		return v
+	}
+	return im.poc
 }
 
 // tileCoords returns the pixel bounds [x0,x1)×[y0,y1) of tile t on the reference
@@ -239,7 +265,9 @@ func parseJPXCodestream(cs []byte) (*jpxImage, error) {
 				}
 			case jpxPOC:
 				parsePOC(seg, im)
-			case jpxCOC, jpxQCC, jpxRGN, jpxTLM, jpxPLM, jpxPLT,
+			case jpxRGN:
+				parseRGN(seg, im)
+			case jpxCOC, jpxQCC, jpxTLM, jpxPLM, jpxPLT,
 				jpxPPM, jpxPPT, jpxCOM, jpxCRG:
 				// Recognised but not needed for the baseline path.
 			default:
@@ -301,13 +329,21 @@ func (r *jpxMarkerReader) readTilePart(im *jpxImage) error {
 	// Scan to the SOD marker; tile-part data runs from after SOD for the
 	// remaining length.
 	sotStart := r.pos - len(seg) - 4 // position of the SOT marker itself
+	// Tile-part header markers override the main-header defaults for this tile.
 	for r.pos+2 <= len(r.data) {
 		m := r.u16()
 		if m == jpxSOD {
 			break
 		}
-		if _, ok := r.segment(); !ok {
+		mseg, ok := r.segment()
+		if !ok {
 			return errJPX
+		}
+		switch m {
+		case jpxRGN:
+			parseTileRGN(mseg, im, tile)
+		case jpxPOC:
+			parseTilePOC(mseg, im, tile)
 		}
 	}
 	var end int
@@ -432,6 +468,72 @@ func parsePOC(seg []byte, im *jpxImage) {
 			resStart: rs, compStart: cs, layerEnd: lye,
 			resEnd: re, compEnd: ce, prog: prog,
 		})
+	}
+}
+
+// parseRGN parses an RGN marker (T.800 A.6.3), recording the region-of-interest
+// MaxShift value for a component. Coefficients scaled up by this many bit-planes
+// belong to the ROI and are shifted back down after tier-1 (Annex H). The
+// component index field is two bytes when there are more than 256 components.
+// rgnValues decodes an RGN segment into (component, shift), returning ok=false on
+// a malformed segment. The component index field is two bytes above 256 comps.
+func rgnValues(seg []byte, nc int) (comp, shift int, ok bool) {
+	p := 0
+	if nc > 256 {
+		if len(seg) < 4 {
+			return 0, 0, false
+		}
+		comp = int(binary.BigEndian.Uint16(seg))
+		p = 2
+	} else {
+		if len(seg) < 3 {
+			return 0, 0, false
+		}
+		comp = int(seg[0])
+		p = 1
+	}
+	// seg[p] is Srgn (ROI style; 0 = implicit MaxShift), seg[p+1] is SPrgn (shift).
+	if p+1 >= len(seg) || comp < 0 || comp >= nc {
+		return 0, 0, false
+	}
+	return comp, int(seg[p+1]), true
+}
+
+func parseRGN(seg []byte, im *jpxImage) {
+	comp, shift, ok := rgnValues(seg, len(im.comps))
+	if !ok {
+		return
+	}
+	if len(im.roishift) < len(im.comps) {
+		im.roishift = make([]int, len(im.comps))
+	}
+	im.roishift[comp] = shift
+}
+
+func parseTileRGN(seg []byte, im *jpxImage, tile int) {
+	comp, shift, ok := rgnValues(seg, len(im.comps))
+	if !ok {
+		return
+	}
+	if im.tileRoishift == nil {
+		im.tileRoishift = map[int][]int{}
+	}
+	v := im.tileRoishift[tile]
+	if len(v) < len(im.comps) {
+		v = make([]int, len(im.comps))
+		im.tileRoishift[tile] = v
+	}
+	v[comp] = shift
+}
+
+func parseTilePOC(seg []byte, im *jpxImage, tile int) {
+	if im.tilePoc == nil {
+		im.tilePoc = map[int][]jpxProg{}
+	}
+	tmp := &jpxImage{comps: im.comps}
+	parsePOC(seg, tmp)
+	if len(tmp.poc) > 0 {
+		im.tilePoc[tile] = append(im.tilePoc[tile], tmp.poc...)
 	}
 }
 

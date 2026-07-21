@@ -282,10 +282,13 @@ func scContext(hc, vc int) (ctx, xorBit int) {
 }
 
 // setSignificant marks (x,y) significant at bit-plane bp and decodes its sign.
+// The magnitude is reconstructed to the bit-plane midpoint (one-and-a-half of the
+// bit-plane weight), doubling the true coefficient; the caller halves it after all
+// passes (T.800; OpenJPEG's oneplushalf convention).
 func (t *jpxT1) setSignificant(x, y, bp int) {
 	i := y*t.w + x
 	t.sig[i] = 1
-	t.mag[i] |= 1 << uint(bp)
+	t.mag[i] = (int32(1) << uint(bp+1)) | (int32(1) << uint(bp))
 	t.sign[i] = t.decodeSign(x, y)
 }
 
@@ -331,8 +334,13 @@ func (t *jpxT1) magRef(bp int) {
 						ctx = 14
 					}
 				}
+				// Refinement moves the reconstructed value up or down by half the
+				// bit-plane weight (in the doubled magnitude space).
+				half := int32(1) << uint(bp)
 				if t.dec.decode(t.cx, ctx) == 1 {
-					t.mag[i] |= 1 << uint(bp)
+					t.mag[i] += half
+				} else {
+					t.mag[i] -= half
 				}
 				t.refined[i] = 1
 			}

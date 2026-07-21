@@ -73,7 +73,7 @@ func TestJPXTier2(t *testing.T) {
 			continue
 		}
 		x0, y0, x1, y1 := im.tileCoords(0)
-		tc := buildTileComp(im, 0, x0, y0, x1, y1)
+		tc := buildTileComp(im, 0, 0, x0, y0, x1, y1)
 		if err := decodeTilePackets(im, []*jpxTileComp{tc}, im.tileData(0)); err != nil {
 			t.Errorf("%s: tier-2: %v", filepath.Base(p), err)
 			continue
@@ -345,6 +345,36 @@ func TestJPXMoreExact(t *testing.T) {
 	}
 }
 
+// TestJPXROI decodes p0_15 and p0_03 — single-component images that use a
+// region-of-interest RGN marker (MaxShift, T.800 Annex H) placed in a tile-part
+// header. The ROI-scaled coefficients need the extra bit-planes decoded and then
+// shifted back down; without it the whole stream looks over-coded and declines.
+// Verified bit-exact against OpenJPEG at the raw component level.
+func TestJPXROI(t *testing.T) {
+	for _, nm := range []string{"p0_15", "p0_03"} {
+		data, err := os.ReadFile(filepath.Join("testdata/jpx", nm+".j2k"))
+		if err != nil {
+			t.Skip("no JPX sample codestreams; run `make jpx`")
+		}
+		im, err := parseJPX(data)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", nm, err)
+		}
+		if len(im.tileRoishift) == 0 {
+			t.Errorf("%s: expected a tile-part RGN marker to be parsed", nm)
+		}
+		g, ok := decodeJPXImage(im).(*image.Gray)
+		if !ok {
+			t.Fatalf("%s: ROI image did not decode to grayscale", nm)
+		}
+		for _, p := range [][3]int{{0, 0, 32}, {100, 100, 32}, {200, 200, 112}, {255, 255, 160}, {50, 150, 64}} {
+			if got := int(g.GrayAt(p[0], p[1]).Y); got != p[2] {
+				t.Errorf("%s pixel (%d,%d) = %d, want %d", nm, p[0], p[1], got, p[2])
+			}
+		}
+	}
+}
+
 // TestJPXPrecincts decodes p0_11 — a single-component image using non-maximal
 // precincts (and segmentation symbols) — and checks it bit-exactly against
 // OpenJPEG. This exercises the precinct partition of the tier-2 packet reader.
@@ -395,7 +425,7 @@ func TestJPXPOC(t *testing.T) {
 	}
 	// The POC order must read tile 0 without overrunning the coded data.
 	x0, y0, x1, y1 := im.tileCoords(0)
-	tc := buildTileComp(im, 0, x0, y0, x1, y1)
+	tc := buildTileComp(im, 0, 0, x0, y0, x1, y1)
 	if err := decodeTilePackets(im, []*jpxTileComp{tc}, im.tileData(0)); err != nil {
 		t.Errorf("POC-ordered tile-0 packet read failed: %v", err)
 	}

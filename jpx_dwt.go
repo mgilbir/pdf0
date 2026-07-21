@@ -20,7 +20,7 @@ func (b *jpxBand) at(x, y int) int32 { return b.data[y*b.w+x] }
 // magnitude bit-planes is G + Rb + gain_b - 1 (the QCD exponent, when explicit,
 // equals Rb+gain, but the derived QCD may signal 0); the irreversible path uses
 // the QCD exponent directly.
-func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle int, reversible bool) bool {
+func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle, roishift int, reversible bool) bool {
 	sbw := sb.x1 - sb.x0
 	sbh := sb.y1 - sb.y0
 	if sbw <= 0 || sbh <= 0 {
@@ -35,31 +35,51 @@ func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle int, reve
 	if sb.exp == 0 {
 		mb = guardBits + compDepth + sb.gain - 1
 	}
-	_ = reversible
+	roiThresh := int32(1) << uint(roishift)
 	for _, cb := range sb.blocks {
 		cbw := cb.x1 - cb.x0
 		cbh := cb.y1 - cb.y0
 		if cbw <= 0 || cbh <= 0 || len(cb.segs) == 0 || cb.numPasses == 0 {
 			continue
 		}
-		bpStart := mb - 1 - cb.zeroBitPlanes
+		// Region-of-interest coefficients are coded shifted up by roishift extra
+		// bit-planes (MaxShift, T.800 Annex H), so the top coded bit-plane rises
+		// accordingly.
+		bpStart := mb - 1 - cb.zeroBitPlanes + roishift
 		if bpStart < 0 {
 			continue
 		}
-		// A code-block may legitimately carry more coding passes than its
-		// bit-planes hold: the stream is over-coded (the extra passes refine below
-		// the decoder's precision), and OpenJPEG simply decodes as many passes as
-		// the bit-planes allow and ignores the rest (t1.c: passno < real_num_passes
-		// && bpno_plus_one >= 1). Reproducing that bit-exactly needs a
-		// reconstruction step this decoder does not yet apply, so for now decline
-		// such streams rather than emit an approximation.
+		// More passes than the bit-planes allow is a desynced packet stream.
 		if cb.numPasses > 1+3*bpStart {
 			return false
 		}
 		coeffs := decodeCodeblock(cb.segs, cbw, cbh, sb.kind, bpStart, cb.numPasses, cbStyle)
 		for y := 0; y < cbh; y++ {
 			for x := 0; x < cbw; x++ {
-				sb.coeffs[(cb.y0-sb.y0+y)*sbw+(cb.x0-sb.x0+x)] = coeffs[y*cbw+x]
+				v := coeffs[y*cbw+x]
+				if roishift > 0 {
+					// MaxShift descaling: a coefficient at or above the ROI threshold
+					// belongs to the region of interest and is shifted back down.
+					mag := v
+					if mag < 0 {
+						mag = -mag
+					}
+					if mag >= roiThresh {
+						mag >>= uint(roishift)
+						if v < 0 {
+							v = -mag
+						} else {
+							v = mag
+						}
+					}
+				}
+				// tier-1 reconstructs to double the true magnitude; the reversible
+				// path halves here (toward zero), the irreversible path folds the
+				// factor into dequantization.
+				if reversible {
+					v /= 2
+				}
+				sb.coeffs[(cb.y0-sb.y0+y)*sbw+(cb.x0-sb.x0+x)] = v
 			}
 		}
 	}
@@ -72,9 +92,10 @@ func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle int, reve
 func reconstructComponent(im *jpxImage, tc *jpxTileComp) *jpxBand {
 	reversible := im.cod.transform == 1
 	depth := im.comps[tc.comp].depth
+	roishift := im.roiShift(tc.tile, tc.comp)
 	for _, res := range tc.resolutions {
 		for _, sb := range res.subbands {
-			if !decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, im.cod.cbStyle, reversible) {
+			if !decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, im.cod.cbStyle, roishift, reversible) {
 				return nil
 			}
 		}
