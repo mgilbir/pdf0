@@ -15,11 +15,11 @@ import (
 //   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
 //   - raw, FlateDecode, LZWDecode, etc. -> decoded from the sample bytes
 //   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in ccitt.go codec
-//   - JBIG2Decode                       -> generic and symbol/text regions
-//     decoded by jbig2.go (halftone and refinement fall back to the raw bytes)
-//   - JPXDecode                         -> not decoded; the raw encoded bytes and
-//     the geometry are returned. JPEG 2000 is a large wavelet codec with no
-//     standard-library support; decoding it faithfully is out of scope here.
+//   - JBIG2Decode                       -> generic, symbol/text, refinement and
+//     halftone regions (arithmetic and Huffman) decoded by jbig2.go
+//   - JPXDecode                         -> JPEG 2000 decoded by jpx*.go (5/3 and
+//     9/7, multi-component with RCT/ICT colour, LRCP/RLCP progressions);
+//     advanced code-block styles and precincts fall back to the raw bytes
 
 // ExtractedImage is one image XObject: its geometry, its codec, and its decoded
 // pixels when available.
@@ -185,15 +185,13 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		}
 	case "JPXDecode":
 		if im, err := parseJPX(st.Data); err == nil {
-			if gray := decodeJPXGray(im); gray != nil {
-				if m, ok := samplesToImage(gray, im.xsiz, im.ysiz, 8, "DeviceGray"); ok {
-					img.Image, img.Decoded = m, true
-					break
-				}
+			if m := decodeJPXImage(im); m != nil {
+				img.Image, img.Decoded = m, true
+				break
 			}
 		}
 		img.Encoded = st.Data
-		img.Note = "JPXDecode not decoded (only single-component reversible JPEG 2000 supported); raw bytes provided"
+		img.Note = "JPXDecode not decoded (advanced code-block styles / precincts not yet supported); raw bytes provided"
 	default:
 		// No filter, or a general-purpose filter chain (Flate/LZW/RunLength/ASCII):
 		// decodeContentStream reverses the chain to raw samples.

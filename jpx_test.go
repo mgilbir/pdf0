@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"image"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,9 +67,14 @@ func TestJPXTier2(t *testing.T) {
 			t.Errorf("%s: parse: %v", filepath.Base(p), err)
 			continue
 		}
+		// Single-component tile-0 check; multi-component files interleave
+		// packets and files using unsupported progressions decline — skip those.
+		if len(im.comps) != 1 || (im.cod.progOrder != 0 && im.cod.progOrder != 1) {
+			continue
+		}
 		x0, y0, x1, y1 := im.tileCoords(0)
 		tc := buildTileComp(im, 0, x0, y0, x1, y1)
-		if err := decodeTilePackets(im, tc, im.tileData(0)); err != nil {
+		if err := decodeTilePackets(im, []*jpxTileComp{tc}, im.tileData(0)); err != nil {
 			t.Errorf("%s: tier-2: %v", filepath.Base(p), err)
 			continue
 		}
@@ -95,11 +101,10 @@ func TestJPXTier2(t *testing.T) {
 	}
 }
 
-// TestJPXDecodeGray decodes the single-component reversible conformance images
-// all the way to pixels (tier-1 EBCOT + inverse 5/3 DWT + level shift) and checks
-// the result is a real, non-uniform image. p0_01 is a grayscale photograph; a
-// broken entropy coder or wavelet transform cannot produce coherent tonal
-// content, so a healthy dark/light spread is a strong correctness signal.
+// TestJPXDecodeGray decodes the single-component reversible p0_01 all the way to
+// pixels (tier-1 EBCOT + inverse 5/3 DWT + level shift) and checks the result is a
+// real, non-uniform grayscale image. p0_01 is a photograph; a broken entropy
+// coder or wavelet transform cannot produce coherent tonal content.
 func TestJPXDecodeGray(t *testing.T) {
 	path := filepath.Join("testdata/jpx", "p0_01.j2k")
 	data, err := os.ReadFile(path)
@@ -110,16 +115,14 @@ func TestJPXDecodeGray(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	gray := decodeJPXGray(im)
-	if gray == nil {
-		t.Fatal("decodeJPXGray returned nil for a single-component reversible image")
-	}
-	if len(gray) != im.xsiz*im.ysiz {
-		t.Fatalf("decoded %d samples, want %d", len(gray), im.xsiz*im.ysiz)
+	m := decodeJPXImage(im)
+	g, ok := m.(*image.Gray)
+	if !ok {
+		t.Fatalf("decoded %T, want *image.Gray", m)
 	}
 	var sum, sumSq int64
 	dark, light := 0, 0
-	for _, p := range gray {
+	for _, p := range g.Pix {
 		sum += int64(p)
 		sumSq += int64(p) * int64(p)
 		if p < 96 {
@@ -128,13 +131,86 @@ func TestJPXDecodeGray(t *testing.T) {
 			light++
 		}
 	}
-	n := int64(len(gray))
-	variance := sumSq/n - (sum/n)*(sum/n)
-	if variance < 500 {
+	n := int64(len(g.Pix))
+	if variance := sumSq/n - (sum/n)*(sum/n); variance < 500 {
 		t.Errorf("decoded image is nearly uniform (variance=%d) — likely a decode error", variance)
 	}
 	if dark < 500 || light < 500 {
 		t.Errorf("decoded image lacks tonal spread (dark=%d light=%d)", dark, light)
+	}
+}
+
+// TestJPX97 decodes p0_09 (single-component, irreversible 9/7, expounded scalar
+// quantization) end to end, exercising the float wavelet path and dequantization,
+// and checks it yields a non-uniform grayscale image.
+func TestJPX97(t *testing.T) {
+	path := filepath.Join("testdata/jpx", "p0_09.j2k")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Skip("no JPX sample codestreams; run `make jpx`")
+	}
+	im, err := parseJPX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if im.cod.transform != 0 {
+		t.Skip("expected p0_09 to be the irreversible 9/7 transform")
+	}
+	g, ok := decodeJPXImage(im).(*image.Gray)
+	if !ok {
+		t.Fatal("9/7 image did not decode to grayscale")
+	}
+	first := g.Pix[0]
+	uniform := true
+	for _, p := range g.Pix {
+		if p != first {
+			uniform = false
+			break
+		}
+	}
+	if uniform {
+		t.Error("decoded 9/7 image is uniform — decode/dequant failure")
+	}
+}
+
+// TestJPXColor decodes p0_10 (three components, reversible, RCT colour transform,
+// tiled) and checks it yields a coherent, non-uniform RGB image. A broken
+// multi-component packet interleaving or colour transform produces garbage.
+func TestJPXColor(t *testing.T) {
+	path := filepath.Join("testdata/jpx", "p0_10.j2k")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Skip("no JPX sample codestreams; run `make jpx`")
+	}
+	im, err := parseJPX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	m := decodeJPXImage(im)
+	rgba, ok := m.(*image.RGBA)
+	if !ok {
+		t.Fatalf("decoded %T, want *image.RGBA", m)
+	}
+	// A coherent image has spatial correlation: adjacent pixels are usually close.
+	// Garbage (independent noise) has a large mean absolute neighbour difference.
+	var diff, count int64
+	b := rgba.Bounds()
+	for y := 0; y < b.Dy(); y++ {
+		for x := 1; x < b.Dx(); x++ {
+			for ch := 0; ch < 3; ch++ {
+				a := int(rgba.Pix[y*rgba.Stride+x*4+ch])
+				c := int(rgba.Pix[y*rgba.Stride+(x-1)*4+ch])
+				if a > c {
+					diff += int64(a - c)
+				} else {
+					diff += int64(c - a)
+				}
+				count++
+			}
+		}
+	}
+	if mad := float64(diff) / float64(count); mad > 40 {
+		t.Errorf("mean neighbour difference %.1f too high — image looks like noise, not a coherent picture", mad)
 	}
 }
 
@@ -154,7 +230,7 @@ func TestJPXUnsupportedFallback(t *testing.T) {
 	if im.cod.cbStyle == 0 {
 		t.Skip("expected p0_02 to use advanced code-block styles")
 	}
-	if decodeJPXGray(im) != nil {
+	if decodeJPXImage(im) != nil {
 		t.Error("expected an unsupported-code-block-style image to fall back (nil)")
 	}
 }

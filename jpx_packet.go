@@ -140,22 +140,61 @@ func (r *jpxPacketReader) readPasses() int {
 	return 37 + r.bits(7)
 }
 
-// decodeTilePackets walks the packets of one tile in the coding progression,
-// filling in each code-block's passes, zero-bit-planes and coded data. Only the
-// baseline (LRCP/RLCP, single precinct per resolution) is handled.
-func decodeTilePackets(im *jpxImage, tc *jpxTileComp, data []byte) error {
+// decodeTilePackets walks the packets of one tile across all its components in
+// the coding progression, filling in each code-block's passes, zero-bit-planes
+// and coded data. The tile data interleaves the components' packets, so they must
+// be decoded together from one reader. Only the baseline (LRCP/RLCP progressions,
+// single precinct per resolution) is handled.
+func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 	r := &jpxPacketReader{data: data}
 	layers := im.cod.layers
 	if layers < 1 {
 		layers = 1
 	}
-	// LRCP iterates layer-outer, RLCP resolution-outer; with one component and
-	// one precinct the two collapse to the same per-(resolution,layer) packets.
-	for layer := 0; layer < layers; layer++ {
-		for _, res := range tc.resolutions {
-			if err := readPacket(im, res, layer, r); err != nil {
-				return err
+	numRes := 0
+	for _, tc := range tcs {
+		if len(tc.resolutions) > numRes {
+			numRes = len(tc.resolutions)
+		}
+	}
+	one := func(c, res, layer int) error {
+		if res < len(tcs[c].resolutions) {
+			return readPacket(im, tcs[c].resolutions[res], layer, r)
+		}
+		return nil
+	}
+	nc := len(tcs)
+	// The five progression orders differ only in loop nesting. With one precinct
+	// per resolution the position/precinct dimension is trivial, so RPCL, PCRL and
+	// CPRL reduce to the orderings below.
+	var order [][3]int // sequence of (component, resolution, layer)
+	push := func(c, res, layer int) { order = append(order, [3]int{c, res, layer}) }
+	switch im.cod.progOrder {
+	case 0: // LRCP
+		for layer := 0; layer < layers; layer++ {
+			for res := 0; res < numRes; res++ {
+				for c := 0; c < nc; c++ {
+					push(c, res, layer)
+				}
 			}
+		}
+	case 1: // RLCP
+		for res := 0; res < numRes; res++ {
+			for layer := 0; layer < layers; layer++ {
+				for c := 0; c < nc; c++ {
+					push(c, res, layer)
+				}
+			}
+		}
+	default:
+		// RPCL/PCRL/CPRL iterate by precinct position across resolutions, which
+		// the maximal-precinct simplification here does not reproduce correctly;
+		// decline rather than mis-assign packets.
+		return errJPX
+	}
+	for _, o := range order {
+		if err := one(o[0], o[1], o[2]); err != nil {
+			return err
 		}
 	}
 	return nil
