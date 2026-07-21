@@ -299,6 +299,34 @@ func TestJPXUnsupportedFallback(t *testing.T) {
 	}
 }
 
+// TestJPXPOC checks the POC (progression-order change) marker is parsed and that
+// its stages drive the packet order: p0_03 declares PCRL in its COD but a POC
+// overrides the whole image to LRCP. With the POC applied the tile-0 packets read
+// without a desync (they land on the SOP markers); the COD order alone desyncs.
+func TestJPXPOC(t *testing.T) {
+	path := filepath.Join("testdata/jpx", "p0_03.j2k")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Skip("no JPX sample codestreams; run `make jpx`")
+	}
+	im, err := parseJPX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(im.poc) != 1 {
+		t.Fatalf("POC stages = %d, want 1", len(im.poc))
+	}
+	if p := im.poc[0]; p.prog != 0 || p.layerEnd != 8 {
+		t.Errorf("POC[0] = %+v, want prog 0 (LRCP), layerEnd 8", p)
+	}
+	// The POC order must read tile 0 without overrunning the coded data.
+	x0, y0, x1, y1 := im.tileCoords(0)
+	tc := buildTileComp(im, 0, x0, y0, x1, y1)
+	if err := decodeTilePackets(im, []*jpxTileComp{tc}, im.tileData(0)); err != nil {
+		t.Errorf("POC-ordered tile-0 packet read failed: %v", err)
+	}
+}
+
 // TestJPXParseAll parses every sample codestream without error (a smoke test of
 // the marker parser over diverse real files).
 func TestJPXParseAll(t *testing.T) {

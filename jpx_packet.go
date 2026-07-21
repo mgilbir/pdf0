@@ -169,34 +169,63 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 		return nil
 	}
 	nc := len(tcs)
-	// The five progression orders differ only in loop nesting. With one precinct
-	// per resolution the position/precinct dimension is trivial, so RPCL, PCRL and
-	// CPRL reduce to the orderings below.
-	var order [][3]int // sequence of (component, resolution, layer)
-	push := func(c, res, layer int) { order = append(order, [3]int{c, res, layer}) }
-	switch im.cod.progOrder {
-	case 0: // LRCP: layer, resolution, component
-		for layer := 0; layer < layers; layer++ {
-			for res := 0; res < numRes; res++ {
-				for c := 0; c < nc; c++ {
-					push(c, res, layer)
-				}
+	// Build the packet sequence as (component, resolution, layer) triples. When a
+	// POC marker is present its stages define the progression (each over a
+	// resolution/component/layer sub-range); otherwise the single COD progression
+	// covers everything. A packet is emitted at most once even if stages overlap.
+	var order [][3]int
+	seen := make(map[[3]int]bool)
+	emit := func(prog, rs, re, cs, ce, lye int) error {
+		if re > numRes {
+			re = numRes
+		}
+		if ce > nc {
+			ce = nc
+		}
+		if lye > layers {
+			lye = layers
+		}
+		push := func(c, res, layer int) {
+			k := [3]int{c, res, layer}
+			if !seen[k] {
+				seen[k] = true
+				order = append(order, k)
 			}
 		}
-	case 1: // RLCP: resolution, layer, component
-		for res := 0; res < numRes; res++ {
-			for layer := 0; layer < layers; layer++ {
-				for c := 0; c < nc; c++ {
-					push(c, res, layer)
+		switch prog {
+		case 0: // LRCP: layer, resolution, component
+			for layer := 0; layer < lye; layer++ {
+				for res := rs; res < re; res++ {
+					for c := cs; c < ce; c++ {
+						push(c, res, layer)
+					}
 				}
 			}
+		case 1: // RLCP: resolution, layer, component
+			for res := rs; res < re; res++ {
+				for layer := 0; layer < lye; layer++ {
+					for c := cs; c < ce; c++ {
+						push(c, res, layer)
+					}
+				}
+			}
+		default:
+			// The position progressions (RPCL/PCRL/CPRL) iterate by precinct
+			// position across resolutions; reducing them for the maximal-precinct
+			// case is not validated against any conformance file, so decline rather
+			// than risk a mis-assignment that reads plausible but wrong.
+			return errJPX
 		}
-	default:
-		// The position progressions (RPCL/PCRL/CPRL) iterate by precinct position
-		// across resolutions; reducing them for the maximal-precinct case is not
-		// validated against any conformance file, so decline rather than risk a
-		// mis-assignment that reads plausible but wrong.
-		return errJPX
+		return nil
+	}
+	if len(im.poc) > 0 {
+		for _, s := range im.poc {
+			if err := emit(s.prog, s.resStart, s.resEnd, s.compStart, s.compEnd, s.layerEnd); err != nil {
+				return err
+			}
+		}
+	} else if err := emit(im.cod.progOrder, 0, numRes, 0, nc, layers); err != nil {
+		return err
 	}
 	for _, o := range order {
 		if err := one(o[0], o[1], o[2]); err != nil {

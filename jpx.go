@@ -77,6 +77,13 @@ type jpxTilePart struct {
 	data []byte
 }
 
+// jpxProg is one progression stage from a POC marker (T.800 A.6.6): packets are
+// emitted for resolutions [resStart,resEnd) × components [compStart,compEnd) ×
+// layers [0,layerEnd) in the order given by prog.
+type jpxProg struct {
+	resStart, compStart, layerEnd, resEnd, compEnd, prog int
+}
+
 type jpxImage struct {
 	xsiz, ysiz     int
 	xosiz, yosiz   int
@@ -86,6 +93,7 @@ type jpxImage struct {
 	cod            jpxCoding
 	qcd            jpxQuant
 	tileParts      []jpxTilePart
+	poc            []jpxProg // progression-order changes, when a POC marker is present
 }
 
 // numXTiles / numYTiles give the tile grid dimensions (T.800 B.3).
@@ -219,7 +227,9 @@ func parseJPXCodestream(cs []byte) (*jpxImage, error) {
 				if err := parseQCD(seg, im); err != nil {
 					return nil, err
 				}
-			case jpxCOC, jpxQCC, jpxRGN, jpxPOC, jpxTLM, jpxPLM, jpxPLT,
+			case jpxPOC:
+				parsePOC(seg, im)
+			case jpxCOC, jpxQCC, jpxRGN, jpxTLM, jpxPLM, jpxPLT,
 				jpxPPM, jpxPPT, jpxCOM, jpxCRG:
 				// Recognised but not needed for the baseline path.
 			default:
@@ -371,6 +381,48 @@ func parseCOD(seg []byte, im *jpxImage) error {
 	}
 	im.cod = cod
 	return nil
+}
+
+// parsePOC parses a POC marker (T.800 A.6.6) into progression stages. Component
+// range fields are two bytes when there are more than 256 components, otherwise
+// one; the layer-end field is always two. A malformed segment is ignored (the
+// COD progression then stands).
+func parsePOC(seg []byte, im *jpxImage) {
+	wide := len(im.comps) > 256
+	entry := 7
+	if wide {
+		entry = 9
+	}
+	for off := 0; off+entry <= len(seg); off += entry {
+		p := off
+		rs := int(seg[p])
+		p++
+		var cs int
+		if wide {
+			cs = int(binary.BigEndian.Uint16(seg[p:]))
+			p += 2
+		} else {
+			cs = int(seg[p])
+			p++
+		}
+		lye := int(binary.BigEndian.Uint16(seg[p:]))
+		p += 2
+		re := int(seg[p])
+		p++
+		var ce int
+		if wide {
+			ce = int(binary.BigEndian.Uint16(seg[p:]))
+			p += 2
+		} else {
+			ce = int(seg[p])
+			p++
+		}
+		prog := int(seg[p])
+		im.poc = append(im.poc, jpxProg{
+			resStart: rs, compStart: cs, layerEnd: lye,
+			resEnd: re, compEnd: ce, prog: prog,
+		})
+	}
 }
 
 func parseQCD(seg []byte, im *jpxImage) error {
