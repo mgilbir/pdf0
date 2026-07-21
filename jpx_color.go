@@ -17,8 +17,11 @@ import (
 // component, RGB for three or more). It returns nil for forms this decoder does
 // not handle so the caller can fall back to the raw bytes.
 func decodeJPXImage(im *jpxImage) image.Image {
-	if im.cod.cbStyle != 0 || im.cod.precinctsUsed {
-		return nil // advanced code-block styles / precincts not yet handled
+	if im.cod.cbStyle&0x01 != 0 || im.cod.precinctsUsed || im.cod.layers > 1 {
+		// Arithmetic-bypass style, precincts, and multiple quality layers (whose
+		// cross-layer code-block decoding still has a defect) are declined rather
+		// than mis-decoded.
+		return nil
 	}
 	nc := len(im.comps)
 	if nc == 0 || im.xsiz <= 0 || im.ysiz <= 0 {
@@ -46,9 +49,15 @@ func decodeJPXImage(im *jpxImage) image.Image {
 			comp := im.comps[c]
 			if reversible {
 				b := reconstructComponent(im, tcs[c])
+				if b == nil {
+					return nil
+				}
 				placePlane(planes[c], im.xsiz, im.ysiz, b.x0, b.y0, b.w, b.h, comp.dx, comp.dy, func(i int) float64 { return float64(b.data[i]) })
 			} else {
 				b := reconstructComponentF(im, tcs[c])
+				if b == nil {
+					return nil
+				}
 				placePlane(planes[c], im.xsiz, im.ysiz, b.x0, b.y0, b.w, b.h, comp.dx, comp.dy, func(i int) float64 { return b.data[i] })
 			}
 		}

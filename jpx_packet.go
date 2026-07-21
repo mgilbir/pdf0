@@ -213,9 +213,12 @@ func readPacket(im *jpxImage, res *jpxResolution, layer int, r *jpxPacketReader)
 		skipEPH(im, r)
 		return nil
 	}
+	// Each contributing code-block adds one or more arithmetic segments: normally
+	// one per packet (layer) contribution, or one per pass under termination.
 	type contrib struct {
-		cb     *jpxCodeblock
-		length int
+		cb        *jpxCodeblock
+		segLens   []int
+		segPasses []int
 	}
 	var contribs []contrib
 	for _, sb := range res.subbands {
@@ -242,21 +245,34 @@ func readPacket(im *jpxImage, res *jpxResolution, layer int, r *jpxPacketReader)
 			for r.bit() == 1 {
 				cb.lblock++
 			}
-			nbits := cb.lblock + intLog2(passes)
-			length := r.bits(nbits)
 			cb.numPasses += passes
-			contribs = append(contribs, contrib{cb, length})
+			if im.cod.cbStyle&0x04 != 0 {
+				// Termination on each pass: one length per pass (each pass is its
+				// own segment, so floor(log2(1)) = 0 extra length bits).
+				c := contrib{cb: cb}
+				for p := 0; p < passes; p++ {
+					c.segLens = append(c.segLens, r.bits(cb.lblock))
+					c.segPasses = append(c.segPasses, 1)
+				}
+				contribs = append(contribs, c)
+			} else {
+				// One segment carrying all the contribution's passes.
+				length := r.bits(cb.lblock + intLog2(passes))
+				contribs = append(contribs, contrib{cb, []int{length}, []int{passes}})
+			}
 		}
 	}
 	r.alignByte()
 	skipEPH(im, r)
-	// Packet body: the coded bytes for each contributing code-block, in order.
+	// Packet body: the coded bytes for each code-block's segments, in order.
 	for _, c := range contribs {
-		if r.pos+c.length > len(r.data) {
-			return errJPX
+		for i, L := range c.segLens {
+			if r.pos+L > len(r.data) {
+				return errJPX
+			}
+			c.cb.segs = append(c.cb.segs, jpxSeg{data: r.data[r.pos : r.pos+L], passes: c.segPasses[i]})
+			r.pos += L
 		}
-		c.cb.data = append(c.cb.data, r.data[r.pos:r.pos+c.length]...)
-		r.pos += c.length
 	}
 	return nil
 }

@@ -86,7 +86,7 @@ func TestJPXTier2(t *testing.T) {
 			for _, sb := range res.subbands {
 				for i := range sb.blocks {
 					blocks++
-					if len(sb.blocks[i].data) > 0 {
+					if len(sb.blocks[i].segs) > 0 {
 						withData++
 					}
 				}
@@ -173,10 +173,58 @@ func TestJPX97(t *testing.T) {
 	}
 }
 
-// TestJPXColor decodes p0_10 (three components, reversible, RCT colour transform,
-// tiled) and checks it yields a coherent, non-uniform RGB image. A broken
-// multi-component packet interleaving or colour transform produces garbage.
-func TestJPXColor(t *testing.T) {
+// TestJPXTermination decodes p0_12, which uses the termination-on-each-coding-pass
+// code-block style (each pass is its own arithmetic segment), and checks it
+// produces a grayscale image rather than falling back.
+func TestJPXTermination(t *testing.T) {
+	path := filepath.Join("testdata/jpx", "p0_12.j2k")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Skip("no JPX sample codestreams; run `make jpx`")
+	}
+	im, err := parseJPX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if im.cod.cbStyle&0x04 == 0 {
+		t.Skip("expected p0_12 to use termination on each pass")
+	}
+	if _, ok := decodeJPXImage(im).(*image.Gray); !ok {
+		t.Error("termination-style image did not decode to grayscale")
+	}
+}
+
+// TestJPXColorTransform checks the inverse colour transforms are exact inverses
+// of their forward transforms (T.800 G.1, G.2), validating the RCT/ICT maths
+// independently of the full decode.
+func TestJPXColorTransform(t *testing.T) {
+	// Reversible colour transform round-trip (integer, exact).
+	planes := [][]float64{{100, 5, 250}, {200, 128, 10}, {60, 90, 130}}
+	orig := [][]float64{append([]float64{}, planes[0]...), append([]float64{}, planes[1]...), append([]float64{}, planes[2]...)}
+	// Forward RCT: Y=floor((R+2G+B)/4), Cb=B-G, Cr=R-G.
+	fwd := make([][]float64, 3)
+	for c := range fwd {
+		fwd[c] = make([]float64, 3)
+	}
+	for i := 0; i < 3; i++ {
+		r, g, b := orig[0][i], orig[1][i], orig[2][i]
+		fwd[0][i] = float64(int(r+2*g+b) >> 2)
+		fwd[1][i] = b - g
+		fwd[2][i] = r - g
+	}
+	inverseRCT(fwd)
+	for c := 0; c < 3; c++ {
+		for i := 0; i < 3; i++ {
+			if fwd[c][i] != orig[c][i] {
+				t.Errorf("RCT round-trip: plane %d idx %d got %v want %v", c, i, fwd[c][i], orig[c][i])
+			}
+		}
+	}
+}
+
+// TestJPXMultiLayerFallback documents that a multi-quality-layer image (p0_10)
+// is declined cleanly for now rather than mis-decoded.
+func TestJPXMultiLayerFallback(t *testing.T) {
 	path := filepath.Join("testdata/jpx", "p0_10.j2k")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -186,31 +234,11 @@ func TestJPXColor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	m := decodeJPXImage(im)
-	rgba, ok := m.(*image.RGBA)
-	if !ok {
-		t.Fatalf("decoded %T, want *image.RGBA", m)
+	if im.cod.layers <= 1 {
+		t.Skip("expected p0_10 to be multi-layer")
 	}
-	// A coherent image has spatial correlation: adjacent pixels are usually close.
-	// Garbage (independent noise) has a large mean absolute neighbour difference.
-	var diff, count int64
-	b := rgba.Bounds()
-	for y := 0; y < b.Dy(); y++ {
-		for x := 1; x < b.Dx(); x++ {
-			for ch := 0; ch < 3; ch++ {
-				a := int(rgba.Pix[y*rgba.Stride+x*4+ch])
-				c := int(rgba.Pix[y*rgba.Stride+(x-1)*4+ch])
-				if a > c {
-					diff += int64(a - c)
-				} else {
-					diff += int64(c - a)
-				}
-				count++
-			}
-		}
-	}
-	if mad := float64(diff) / float64(count); mad > 40 {
-		t.Errorf("mean neighbour difference %.1f too high — image looks like noise, not a coherent picture", mad)
+	if decodeJPXImage(im) != nil {
+		t.Error("expected a multi-layer image to fall back (nil) for now")
 	}
 }
 

@@ -20,7 +20,14 @@ type jpxCodeblock struct {
 	zeroBitPlanes  int
 	lblock         int
 	numPasses      int
-	data           []byte
+	segs           []jpxSeg // arithmetic segments (one per layer contribution, or per pass under termination)
+}
+
+// jpxSeg is one arithmetic codeword segment: its coded bytes and the number of
+// coding passes it carries. A fresh MQ decoder is used for each segment.
+type jpxSeg struct {
+	data   []byte
+	passes int
 }
 
 // jpxSubband is one subband (LL/HL/LH/HH) of a resolution level.

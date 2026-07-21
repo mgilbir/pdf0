@@ -46,7 +46,9 @@ func reconstructComponentF(im *jpxImage, tc *jpxTileComp) *jpxFBand {
 	depth := im.comps[tc.comp].depth
 	for _, res := range tc.resolutions {
 		for _, sb := range res.subbands {
-			decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, false)
+			if !decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, im.cod.cbStyle, false) {
+				return nil
+			}
 		}
 	}
 	res0 := tc.resolutions[0]
