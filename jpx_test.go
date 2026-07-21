@@ -138,6 +138,16 @@ func TestJPXDecodeGray(t *testing.T) {
 	if dark < 500 || light < 500 {
 		t.Errorf("decoded image lacks tonal spread (dark=%d light=%d)", dark, light)
 	}
+	// Golden pixels (OpenJPEG via Pillow): reversible 5/3 must be bit-exact. These
+	// guard the horizontal-then-vertical inverse-DWT ordering — the wrong order
+	// still yields a plausible photo but with ±1..4 rounding drift everywhere.
+	for _, p := range []struct{ x, y, v int }{
+		{0, 0, 185}, {64, 64, 208}, {127, 127, 34}, {10, 20, 194}, {127, 0, 183},
+	} {
+		if got := int(g.GrayAt(p.x, p.y).Y); got != p.v {
+			t.Errorf("pixel (%d,%d) = %d, want %d", p.x, p.y, got, p.v)
+		}
+	}
 }
 
 // TestJPX97 decodes p0_09 (single-component, irreversible 9/7, expounded scalar
@@ -189,8 +199,19 @@ func TestJPXTermination(t *testing.T) {
 	if im.cod.cbStyle&0x04 == 0 {
 		t.Skip("expected p0_12 to use termination on each pass")
 	}
-	if _, ok := decodeJPXImage(im).(*image.Gray); !ok {
-		t.Error("termination-style image did not decode to grayscale")
+	g, ok := decodeJPXImage(im).(*image.Gray)
+	if !ok {
+		t.Fatal("termination-style image did not decode to grayscale")
+	}
+	// p0_12 is a 3×5 image; assert the full pixel set bit-exactly (OpenJPEG/Pillow).
+	want := []byte{55, 98, 159, 50, 89, 95, 45, 109, 46, 160, 81, 50, 157, 111, 125}
+	if b := g.Bounds(); b.Dx() != 3 || b.Dy() != 5 {
+		t.Fatalf("size = %dx%d, want 3x5", b.Dx(), b.Dy())
+	}
+	for i, v := range want {
+		if got := g.Pix[i]; got != v {
+			t.Errorf("pixel %d = %d, want %d", i, got, v)
+		}
 	}
 }
 
@@ -222,9 +243,12 @@ func TestJPXColorTransform(t *testing.T) {
 	}
 }
 
-// TestJPXMultiLayerFallback documents that a multi-quality-layer image (p0_10)
-// is declined cleanly for now rather than mis-decoded.
-func TestJPXMultiLayerFallback(t *testing.T) {
+// TestJPXMultiLayerColor decodes p0_10 — a multi-quality-layer (6-layer) RGB image
+// with 4×-subsampled components and the reversible RCT — and checks it reconstructs
+// bit-exactly against known reference pixels (from OpenJPEG via Pillow). This
+// exercises the whole colour pipeline: continuous-MQ decoding across quality
+// layers, sub-sampled component assembly, the inverse RCT and the DC level shift.
+func TestJPXMultiLayerColor(t *testing.T) {
 	path := filepath.Join("testdata/jpx", "p0_10.j2k")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -234,11 +258,23 @@ func TestJPXMultiLayerFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if im.cod.layers <= 1 {
-		t.Skip("expected p0_10 to be multi-layer")
+	if im.cod.layers <= 1 || len(im.comps) < 3 {
+		t.Skip("expected p0_10 to be multi-layer RGB")
 	}
-	if decodeJPXImage(im) != nil {
-		t.Error("expected a multi-layer image to fall back (nil) for now")
+	m, ok := decodeJPXImage(im).(*image.RGBA)
+	if !ok {
+		t.Fatalf("decoded %T, want *image.RGBA", decodeJPXImage(im))
+	}
+	// Golden reference pixels: reversible 5/3 + RCT must reconstruct exactly.
+	for _, p := range []struct{ x, y, r, g, b int }{
+		{0, 0, 128, 128, 255}, {4, 0, 113, 128, 255}, {100, 100, 56, 35, 223},
+		{200, 50, 128, 128, 0}, {255, 255, 85, 108, 0}, {128, 64, 99, 128, 0},
+	} {
+		c := m.RGBAAt(p.x, p.y)
+		if int(c.R) != p.r || int(c.G) != p.g || int(c.B) != p.b {
+			t.Errorf("pixel (%d,%d) = (%d,%d,%d), want (%d,%d,%d)",
+				p.x, p.y, c.R, c.G, c.B, p.r, p.g, p.b)
+		}
 	}
 }
 

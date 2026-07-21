@@ -122,7 +122,12 @@ func idwt53Level(ll *jpxBand, res *jpxResolution) *jpxBand {
 	place(lh.x0, lh.y0, lh.x1-lh.x0, lh.y1-lh.y0, lh.coeffs, false, true)
 	place(hh.x0, hh.y0, hh.x1-hh.x0, hh.y1-hh.y0, hh.coeffs, true, true)
 
-	// Vertical inverse on each column, then horizontal inverse on each row.
+	// Horizontal inverse on each row, then vertical inverse on each column. The
+	// order matters for the integer 5/3 transform because floor rounding is
+	// non-linear; T.800 F.3.4 applies the horizontal 1D_SR before the vertical.
+	for row := 0; row < H; row++ {
+		inv53(out.data[row*W:row*W+W], res.x0, res.x1)
+	}
 	col := make([]int32, H)
 	for c := 0; c < W; c++ {
 		for row := 0; row < H; row++ {
@@ -132,9 +137,6 @@ func idwt53Level(ll *jpxBand, res *jpxResolution) *jpxBand {
 		for row := 0; row < H; row++ {
 			out.data[row*W+c] = col[row]
 		}
-	}
-	for row := 0; row < H; row++ {
-		inv53(out.data[row*W:row*W+W], res.x0, res.x1)
 	}
 	return out
 }
