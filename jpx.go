@@ -97,6 +97,8 @@ type jpxImage struct {
 	roishift       []int     // per-component region-of-interest MaxShift value (RGN)
 	tileRoishift   map[int][]int
 	tilePoc        map[int][]jpxProg
+	tileQcd        map[int]jpxQuant
+	tileCod        map[int]jpxCoding
 }
 
 // numXTiles / numYTiles give the tile grid dimensions (T.800 B.3).
@@ -114,12 +116,12 @@ func ceilDiv(a, b int) int {
 	return (a + b - 1) / b
 }
 
-// precinctExp returns the precinct-size exponents (PPx, PPy) for resolution r.
-// Without explicit precinct sizes the maximal exponent 15 gives one precinct per
-// resolution.
-func (im *jpxImage) precinctExp(r int) (int, int) {
-	if im.cod.precinctsUsed && r < len(im.cod.precinctW) {
-		return im.cod.precinctW[r], im.cod.precinctH[r]
+// precinctExp returns the precinct-size exponents (PPx, PPy) for resolution r of a
+// tile's coding parameters. Without explicit precinct sizes the maximal exponent
+// 15 gives one precinct per resolution.
+func precinctExp(cod jpxCoding, r int) (int, int) {
+	if cod.precinctsUsed && r < len(cod.precinctW) {
+		return cod.precinctW[r], cod.precinctH[r]
 	}
 	return 15, 15
 }
@@ -145,6 +147,24 @@ func (im *jpxImage) tileProgressions(tile int) []jpxProg {
 		return v
 	}
 	return im.poc
+}
+
+// tileQuant returns the quantization that applies to a tile (a tile-part QCD
+// overrides the main-header QCD).
+func (im *jpxImage) tileQuant(tile int) jpxQuant {
+	if q, ok := im.tileQcd[tile]; ok {
+		return q
+	}
+	return im.qcd
+}
+
+// tileCoding returns the coding parameters that apply to a tile (a tile-part COD
+// overrides the main-header COD).
+func (im *jpxImage) tileCoding(tile int) jpxCoding {
+	if c, ok := im.tileCod[tile]; ok {
+		return c
+	}
+	return im.cod
 }
 
 // tileCoords returns the pixel bounds [x0,x1)×[y0,y1) of tile t on the reference
@@ -344,6 +364,10 @@ func (r *jpxMarkerReader) readTilePart(im *jpxImage) error {
 			parseTileRGN(mseg, im, tile)
 		case jpxPOC:
 			parseTilePOC(mseg, im, tile)
+		case jpxQCD:
+			parseTileQCD(mseg, im, tile)
+		case jpxCOD:
+			parseTileCOD(mseg, im, tile)
 		}
 	}
 	var end int
@@ -392,9 +416,9 @@ func parseSIZ(seg []byte, im *jpxImage) error {
 	return nil
 }
 
-func parseCOD(seg []byte, im *jpxImage) error {
+func codingFromSeg(seg []byte) (jpxCoding, bool) {
 	if len(seg) < 10 {
-		return errJPX
+		return jpxCoding{}, false
 	}
 	scod := int(seg[0])
 	cod := jpxCoding{
@@ -411,13 +435,13 @@ func parseCOD(seg []byte, im *jpxImage) error {
 		transform:     int(seg[9]),
 	}
 	if cod.levels > 32 {
-		return errJPX
+		return jpxCoding{}, false
 	}
 	if cod.precinctsUsed {
 		off := 10
 		for i := 0; i <= cod.levels; i++ {
 			if off >= len(seg) {
-				return errJPX
+				return jpxCoding{}, false
 			}
 			b := int(seg[off])
 			cod.precinctW = append(cod.precinctW, b&0x0F)
@@ -425,8 +449,25 @@ func parseCOD(seg []byte, im *jpxImage) error {
 			off++
 		}
 	}
+	return cod, true
+}
+
+func parseCOD(seg []byte, im *jpxImage) error {
+	cod, ok := codingFromSeg(seg)
+	if !ok {
+		return errJPX
+	}
 	im.cod = cod
 	return nil
+}
+
+func parseTileCOD(seg []byte, im *jpxImage, tile int) {
+	if cod, ok := codingFromSeg(seg); ok {
+		if im.tileCod == nil {
+			im.tileCod = map[int]jpxCoding{}
+		}
+		im.tileCod[tile] = cod
+	}
 }
 
 // parsePOC parses a POC marker (T.800 A.6.6) into progression stages. Component
@@ -537,9 +578,11 @@ func parseTilePOC(seg []byte, im *jpxImage, tile int) {
 	}
 }
 
-func parseQCD(seg []byte, im *jpxImage) error {
+// quantFromSeg decodes a QCD/QCC quantization segment body (the Sqcd byte and the
+// step-size values).
+func quantFromSeg(seg []byte) (jpxQuant, bool) {
 	if len(seg) < 1 {
-		return errJPX
+		return jpxQuant{}, false
 	}
 	sqcd := int(seg[0])
 	qcd := jpxQuant{style: sqcd & 0x1F, guardBits: sqcd >> 5}
@@ -551,7 +594,7 @@ func parseQCD(seg []byte, im *jpxImage) error {
 		}
 	case 1: // scalar derived: a single 2-byte value
 		if len(body) < 2 {
-			return errJPX
+			return jpxQuant{}, false
 		}
 		v := int(binary.BigEndian.Uint16(body))
 		qcd.steps = append(qcd.steps, jpxStep{exp: v >> 11, mant: v & 0x7FF})
@@ -561,8 +604,25 @@ func parseQCD(seg []byte, im *jpxImage) error {
 			qcd.steps = append(qcd.steps, jpxStep{exp: v >> 11, mant: v & 0x7FF})
 		}
 	default:
+		return jpxQuant{}, false
+	}
+	return qcd, true
+}
+
+func parseQCD(seg []byte, im *jpxImage) error {
+	qcd, ok := quantFromSeg(seg)
+	if !ok {
 		return errJPX
 	}
 	im.qcd = qcd
 	return nil
+}
+
+func parseTileQCD(seg []byte, im *jpxImage, tile int) {
+	if qcd, ok := quantFromSeg(seg); ok {
+		if im.tileQcd == nil {
+			im.tileQcd = map[int]jpxQuant{}
+		}
+		im.tileQcd[tile] = qcd
+	}
 }

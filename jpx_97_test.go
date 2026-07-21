@@ -7,12 +7,12 @@ import (
 
 // fwd97 is the forward (analysis) 9/7 lifting, used only to validate that inv97
 // is its exact inverse. Even coordinates are low-pass, odd high-pass.
-func fwd97(a []float64, i0, i1 int) {
+func fwd97(a []float32, i0, i1 int) {
 	n := i1 - i0
 	if n == 1 {
 		return
 	}
-	ext := func(i int) float64 {
+	ext := func(i int) float32 {
 		for i < i0 || i >= i1 {
 			if i < i0 {
 				i = 2*i0 - i
@@ -58,15 +58,15 @@ func TestInv97RoundTrip(t *testing.T) {
 	cases := []struct{ i0, i1 int }{{0, 8}, {0, 7}, {0, 16}, {0, 15}, {0, 32}, {3, 19}, {2, 17}}
 	for _, c := range cases {
 		n := c.i1 - c.i0
-		orig := make([]float64, n)
+		orig := make([]float32, n)
 		for i := range orig {
-			orig[i] = float64((i*37+13)%100) - 50
+			orig[i] = float32((i*37+13)%100) - 50
 		}
-		a := append([]float64{}, orig...)
+		a := append([]float32{}, orig...)
 		fwd97(a, c.i0, c.i1)
 		inv97(a, c.i0, c.i1)
 		for i := range a {
-			if math.Abs(a[i]-orig[i]) > 1e-6 {
+			if math.Abs(float64(a[i]-orig[i])) > 1e-3 {
 				t.Errorf("[%d,%d) idx %d: got %.6f want %.6f", c.i0, c.i1, i, a[i], orig[i])
 				break
 			}

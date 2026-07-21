@@ -58,7 +58,7 @@ func decodeJPXImage(im *jpxImage) image.Image {
 				if b == nil {
 					return nil
 				}
-				placePlane(planes[c], im.xsiz, im.ysiz, b.x0, b.y0, b.w, b.h, comp.dx, comp.dy, func(i int) float64 { return b.data[i] })
+				placePlane(planes[c], im.xsiz, im.ysiz, b.x0, b.y0, b.w, b.h, comp.dx, comp.dy, func(i int) float64 { return float64(b.data[i]) })
 			}
 		}
 	}
