@@ -143,7 +143,25 @@ func (r *jpxPacketReader) readPasses() int {
 // be decoded together from one reader. Only the baseline (LRCP/RLCP progressions,
 // single precinct per resolution) is handled.
 func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
+	order, err := tilePacketOrder(im, tcs)
+	if err != nil {
+		return err
+	}
 	r := &jpxPacketReader{data: data}
+	for _, o := range order {
+		if o[1] < len(tcs[o[0]].resolutions) {
+			if err := readPacket(im, tcs[o[0]].resolutions[o[1]], o[3], o[2], r); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// tilePacketOrder builds the sequence of (component, resolution, layer, precinct)
+// packets for a tile in coding order (T.800 B.12), honouring POC stages when
+// present.
+func tilePacketOrder(im *jpxImage, tcs []*jpxTileComp) ([][4]int, error) {
 	layers := im.cod.layers
 	if layers < 1 {
 		layers = 1
@@ -215,20 +233,13 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 	if len(im.poc) > 0 {
 		for _, s := range im.poc {
 			if err := emit(s.prog, s.resStart, s.resEnd, s.compStart, s.compEnd, s.layerEnd); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	} else if err := emit(im.cod.progOrder, 0, numRes, 0, nc, layers); err != nil {
-		return err
+		return nil, err
 	}
-	for _, o := range order {
-		if o[1] < len(tcs[o[0]].resolutions) {
-			if err := readPacket(im, tcs[o[0]].resolutions[o[1]], o[3], o[2], r); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return order, nil
 }
 
 // emitPositional generates the packet order for the position progressions
