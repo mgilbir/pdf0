@@ -345,6 +345,34 @@ func TestJPXMoreExact(t *testing.T) {
 	}
 }
 
+// TestJPXPrecincts decodes p0_11 — a single-component image using non-maximal
+// precincts (and segmentation symbols) — and checks it bit-exactly against
+// OpenJPEG. This exercises the precinct partition of the tier-2 packet reader.
+func TestJPXPrecincts(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata/jpx", "p0_11.j2k"))
+	if err != nil {
+		t.Skip("no JPX sample codestreams; run `make jpx`")
+	}
+	im, err := parseJPX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !im.cod.precinctsUsed {
+		t.Skip("expected p0_11 to use precincts")
+	}
+	g, ok := decodeJPXImage(im).(*image.Gray)
+	if !ok {
+		t.Fatal("precinct image did not decode to grayscale")
+	}
+	// Every 8th pixel of the 128×1 strip (OpenJPEG via Pillow).
+	want := []byte{127, 106, 90, 96, 103, 117, 123, 104, 88, 90, 93, 98, 94, 90, 85, 81}
+	for i, v := range want {
+		if got := g.Pix[i*8]; got != v {
+			t.Errorf("pixel %d = %d, want %d", i*8, got, v)
+		}
+	}
+}
+
 // TestJPXPOC checks the POC (progression-order change) marker is parsed and that
 // its stages drive the packet order: p0_03 declares PCRL in its COD but a POC
 // overrides the whole image to LRCP. With the POC applied the tile-0 packets read

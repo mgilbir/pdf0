@@ -17,10 +17,10 @@ import (
 // component, RGB for three or more). It returns nil for forms this decoder does
 // not handle so the caller can fall back to the raw bytes.
 func decodeJPXImage(im *jpxImage) image.Image {
-	if im.cod.cbStyle&0x01 != 0 || im.cod.precinctsUsed {
-		// Arithmetic-bypass style and precincts are declined rather than
-		// mis-decoded. Multiple quality layers are handled: their per-layer code-
-		// block contributions concatenate into one continuous MQ run (tier-1).
+	if im.cod.cbStyle&0x01 != 0 {
+		// Arithmetic-bypass code-block coding is not yet handled. Everything else —
+		// multiple quality layers, precincts, and the position progressions — is
+		// decoded; a tier-1 consistency check declines anything that desyncs.
 		return nil
 	}
 	nc := len(im.comps)
