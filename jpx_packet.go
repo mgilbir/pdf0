@@ -114,8 +114,13 @@ func (r *jpxPacketReader) bits(n int) int {
 // alignByte discards any partial header bits and consumes the stuffed 0 bit that
 // follows a trailing 0xFF (B.10.1).
 func (r *jpxPacketReader) alignByte() {
-	if r.prevFF && r.bitsN == 8 {
-		// A fresh 0xFF at a byte boundary still owes its stuff bit.
+	if r.prevFF {
+		// The byte following a 0xFF carries a stuffed 0 in its top bit; on
+		// alignment that whole byte is consumed (OpenJPEG opj_bio_inalign,
+		// T.800 B.10.1). Without this a packet header ending on a 0xFF byte
+		// leaves the reader one byte short and every following packet desyncs
+		// — invisible with one packet per resolution, fatal for multi-component
+		// or multi-layer streams that pack many packets back to back.
 		r.pos++
 	}
 	r.bitsN = 0
@@ -170,7 +175,7 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 	var order [][3]int // sequence of (component, resolution, layer)
 	push := func(c, res, layer int) { order = append(order, [3]int{c, res, layer}) }
 	switch im.cod.progOrder {
-	case 0: // LRCP
+	case 0: // LRCP: layer, resolution, component
 		for layer := 0; layer < layers; layer++ {
 			for res := 0; res < numRes; res++ {
 				for c := 0; c < nc; c++ {
@@ -178,7 +183,7 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 				}
 			}
 		}
-	case 1: // RLCP
+	case 1: // RLCP: resolution, layer, component
 		for res := 0; res < numRes; res++ {
 			for layer := 0; layer < layers; layer++ {
 				for c := 0; c < nc; c++ {
@@ -187,9 +192,10 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 			}
 		}
 	default:
-		// RPCL/PCRL/CPRL iterate by precinct position across resolutions, which
-		// the maximal-precinct simplification here does not reproduce correctly;
-		// decline rather than mis-assign packets.
+		// The position progressions (RPCL/PCRL/CPRL) iterate by precinct position
+		// across resolutions; reducing them for the maximal-precinct case is not
+		// validated against any conformance file, so decline rather than risk a
+		// mis-assignment that reads plausible but wrong.
 		return errJPX
 	}
 	for _, o := range order {

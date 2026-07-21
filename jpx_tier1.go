@@ -43,6 +43,22 @@ func decodeCodeblock(segs []jpxSeg, w, h, kind, bpStart, numPasses, cbStyle int)
 	segSym := cbStyle&0x20 != 0
 	reset := cbStyle&0x02 != 0
 
+	// Segments delimit arithmetically-terminated runs. Without termination on each
+	// coding pass (0x04), the whole code-block is one continuous MQ run even when
+	// its bytes arrive split across quality layers — so concatenate those per-layer
+	// contributions and decode them under a single MQ decoder. Restarting the coder
+	// at every layer boundary corrupts every pass after the first layer (the source
+	// of the multi-layer noise).
+	if cbStyle&0x04 == 0 && len(segs) > 1 {
+		var merged []byte
+		total := 0
+		for _, s := range segs {
+			merged = append(merged, s.data...)
+			total += s.passes
+		}
+		segs = []jpxSeg{{data: merged, passes: total}}
+	}
+
 	// Build the pass schedule: the top bit-plane has only a cleanup pass; each
 	// lower bit-plane has significance-propagation, magnitude-refinement, cleanup.
 	type passSpec struct{ kind, bp int }
