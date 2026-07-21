@@ -90,12 +90,14 @@ func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle, roishift
 // subband, then the inverse DWT up the resolution pyramid. Returns nil if the
 // tier-1 pass counts are inconsistent (a desynced decode).
 func reconstructComponent(im *jpxImage, tc *jpxTileComp) *jpxBand {
-	reversible := im.cod.transform == 1
+	cod := im.tileCoding(tc.tile)
+	qcd := im.tileQuant(tc.tile)
+	reversible := cod.transform == 1
 	depth := im.comps[tc.comp].depth
 	roishift := im.roiShift(tc.tile, tc.comp)
 	for _, res := range tc.resolutions {
 		for _, sb := range res.subbands {
-			if !decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, im.cod.cbStyle, roishift, reversible) {
+			if !decodeSubbandCoeffs(sb, qcd.guardBits, depth, cod.cbStyle, roishift, reversible) {
 				return nil
 			}
 		}

@@ -96,9 +96,10 @@ func buildTileComp(im *jpxImage, tile, c, tx0, ty0, tx1, ty1 int) *jpxTileComp {
 		tcx1: ceilDiv(tx1, comp.dx), tcy1: ceilDiv(ty1, comp.dy),
 		refX0: tx0, refY0: ty0, refX1: tx1, refY1: ty1,
 	}
-	nl := im.cod.levels
-	cbExpW := intLog2(im.cod.cbW)
-	cbExpH := intLog2(im.cod.cbH)
+	cod := im.tileCoding(tile)
+	nl := cod.levels
+	cbExpW := intLog2(cod.cbW)
+	cbExpH := intLog2(cod.cbH)
 	for r := 0; r <= nl; r++ {
 		nb := nl - r // decomposition sublevel for this resolution's box
 		res := &jpxResolution{
@@ -116,7 +117,7 @@ func buildTileComp(im *jpxImage, tile, c, tx0, ty0, tx1, ty1 int) *jpxTileComp {
 				tc.newSubband(3, bandLevel), // HH
 			}
 		}
-		buildPrecincts(im, res, r, cbExpW, cbExpH)
+		buildPrecincts(cod, res, r, cbExpW, cbExpH)
 		tc.resolutions = append(tc.resolutions, res)
 	}
 	assignQuant(im, tc)
@@ -126,8 +127,8 @@ func buildTileComp(im *jpxImage, tile, c, tx0, ty0, tx1, ty1 int) *jpxTileComp {
 // buildPrecincts partitions a resolution into precincts and each precinct's
 // subbands into code-blocks with tag trees (T.800 B.6, B.7; mirrors OpenJPEG
 // opj_tcd_init_tile).
-func buildPrecincts(im *jpxImage, res *jpxResolution, r, cbExpW, cbExpH int) {
-	pdx, pdy := im.precinctExp(r)
+func buildPrecincts(cod jpxCoding, res *jpxResolution, r, cbExpW, cbExpH int) {
+	pdx, pdy := precinctExp(cod, r)
 	tlPrcX := floorPow2(res.x0, pdx) << pdx
 	tlPrcY := floorPow2(res.y0, pdy) << pdy
 	brPrcX := ceilPow2(res.x1, pdx) << pdx
@@ -205,14 +206,15 @@ func buildBandPrec(sb *jpxSubband, gx0, gy0, gx1, gy1, cw, ch int) *jpxBandPrec 
 // assignQuant fills each subband's quantization parameters, in the QCD ordering
 // (the LL of the coarsest resolution, then HL/LH/HH from coarsest to finest).
 func assignQuant(im *jpxImage, tc *jpxTileComp) {
+	qcd := im.tileQuant(tc.tile)
 	bandIdx := 0
 	for _, res := range tc.resolutions {
 		for _, sb := range res.subbands {
 			s := jpxStep{}
-			if im.qcd.style == 1 && len(im.qcd.steps) > 0 {
-				s = im.qcd.steps[0] // derived: scaled per level during dequant
-			} else if bandIdx < len(im.qcd.steps) {
-				s = im.qcd.steps[bandIdx]
+			if qcd.style == 1 && len(qcd.steps) > 0 {
+				s = qcd.steps[0] // derived: scaled per level during dequant
+			} else if bandIdx < len(qcd.steps) {
+				s = qcd.steps[bandIdx]
 			}
 			sb.exp, sb.mant = s.exp, s.mant
 			bandIdx++

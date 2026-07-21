@@ -151,10 +151,14 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 	if err != nil {
 		return err
 	}
+	cod := im.cod
+	if len(tcs) > 0 {
+		cod = im.tileCoding(tcs[0].tile)
+	}
 	r := &jpxPacketReader{data: data}
 	for _, o := range order {
 		if o[1] < len(tcs[o[0]].resolutions) {
-			if err := readPacket(im, tcs[o[0]].resolutions[o[1]], o[3], o[2], r); err != nil {
+			if err := readPacket(im, cod, tcs[o[0]].resolutions[o[1]], o[3], o[2], r); err != nil {
 				return err
 			}
 		}
@@ -166,7 +170,12 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 // packets for a tile in coding order (T.800 B.12), honouring POC stages when
 // present.
 func tilePacketOrder(im *jpxImage, tcs []*jpxTileComp) ([][4]int, error) {
-	layers := im.cod.layers
+	tile := 0
+	if len(tcs) > 0 {
+		tile = tcs[0].tile
+	}
+	cod := im.tileCoding(tile)
+	layers := cod.layers
 	if layers < 1 {
 		layers = 1
 	}
@@ -234,17 +243,13 @@ func tilePacketOrder(im *jpxImage, tcs []*jpxTileComp) ([][4]int, error) {
 		}
 		return nil
 	}
-	tile := 0
-	if len(tcs) > 0 {
-		tile = tcs[0].tile
-	}
 	if poc := im.tileProgressions(tile); len(poc) > 0 {
 		for _, s := range poc {
 			if err := emit(s.prog, s.resStart, s.resEnd, s.compStart, s.compEnd, s.layerEnd); err != nil {
 				return nil, err
 			}
 		}
-	} else if err := emit(im.cod.progOrder, 0, numRes, 0, nc, layers); err != nil {
+	} else if err := emit(cod.progOrder, 0, numRes, 0, nc, layers); err != nil {
 		return nil, err
 	}
 	return order, nil
@@ -259,6 +264,7 @@ func emitPositional(im *jpxImage, tcs []*jpxTileComp, prog, rs, re, cs, ce, lye 
 	if len(tcs) == 0 {
 		return errJPX
 	}
+	cod := im.tileCoding(tcs[0].tile)
 	tx0, ty0 := tcs[0].refX0, tcs[0].refY0
 	tx1, ty1 := tcs[0].refX1, tcs[0].refY1
 	numRes := 0
@@ -273,8 +279,8 @@ func emitPositional(im *jpxImage, tcs []*jpxTileComp, prog, rs, re, cs, ce, lye 
 	if ce > len(tcs) {
 		ce = len(tcs)
 	}
-	if lye > im.cod.layers {
-		lye = im.cod.layers
+	if lye > cod.layers {
+		lye = cod.layers
 	}
 	// stepXY returns the reference-grid precinct step for one (component,
 	// resolution): the precinct size scaled up by the resolution reduction and the
@@ -287,7 +293,7 @@ func emitPositional(im *jpxImage, tcs []*jpxTileComp, prog, rs, re, cs, ce, lye 
 		comp := im.comps[c]
 		levels := len(tc.resolutions) - 1
 		levelno := levels - res
-		pdx, pdy := im.precinctExp(res)
+		pdx, pdy := precinctExp(cod, res)
 		return comp.dx << (pdx + levelno), comp.dy << (pdy + levelno)
 	}
 	// precAt maps a reference position (x,y) to a precinct index for (c,res), or
@@ -304,7 +310,7 @@ func emitPositional(im *jpxImage, tcs []*jpxTileComp, prog, rs, re, cs, ce, lye 
 		comp := im.comps[c]
 		levels := len(tc.resolutions) - 1
 		levelno := levels - res
-		pdx, pdy := im.precinctExp(res)
+		pdx, pdy := precinctExp(cod, res)
 		trx0 := ceilDiv(tx0, comp.dx<<levelno)
 		try0 := ceilDiv(ty0, comp.dy<<levelno)
 		trx1 := ceilDiv(tx1, comp.dx<<levelno)
@@ -392,11 +398,11 @@ func emitPositional(im *jpxImage, tcs []*jpxTileComp, prog, rs, re, cs, ce, lye 
 	return nil
 }
 
-func readPacket(im *jpxImage, res *jpxResolution, precNo, layer int, r *jpxPacketReader) error {
+func readPacket(im *jpxImage, cod jpxCoding, res *jpxResolution, precNo, layer int, r *jpxPacketReader) error {
 	if precNo >= len(res.precincts) {
 		return nil
 	}
-	if im.cod.sop {
+	if cod.sop {
 		// Optional SOP marker (0xFF91, 6 bytes) precedes the packet.
 		if r.pos+2 <= len(r.data) && r.data[r.pos] == 0xFF && r.data[r.pos+1] == 0x91 {
 			r.pos += 6
@@ -405,7 +411,7 @@ func readPacket(im *jpxImage, res *jpxResolution, precNo, layer int, r *jpxPacke
 	present := r.bit()
 	if present == 0 {
 		r.alignByte()
-		skipEPH(im, r)
+		skipEPH(cod, r)
 		return nil
 	}
 	// Each contributing code-block adds one or more arithmetic segments: normally
@@ -438,7 +444,7 @@ func readPacket(im *jpxImage, res *jpxResolution, precNo, layer int, r *jpxPacke
 				cb.lblock++
 			}
 			cb.numPasses += passes
-			if im.cod.cbStyle&0x04 != 0 {
+			if cod.cbStyle&0x04 != 0 {
 				// Termination on each pass: one length per pass (each pass is its
 				// own segment, so floor(log2(1)) = 0 extra length bits).
 				c := contrib{cb: cb}
@@ -455,7 +461,7 @@ func readPacket(im *jpxImage, res *jpxResolution, precNo, layer int, r *jpxPacke
 		}
 	}
 	r.alignByte()
-	skipEPH(im, r)
+	skipEPH(cod, r)
 	// Packet body: the coded bytes for each code-block's segments, in order.
 	for _, c := range contribs {
 		for i, L := range c.segLens {
@@ -469,8 +475,8 @@ func readPacket(im *jpxImage, res *jpxResolution, precNo, layer int, r *jpxPacke
 	return nil
 }
 
-func skipEPH(im *jpxImage, r *jpxPacketReader) {
-	if im.cod.eph && r.pos+2 <= len(r.data) && r.data[r.pos] == 0xFF && r.data[r.pos+1] == 0x92 {
+func skipEPH(cod jpxCoding, r *jpxPacketReader) {
+	if cod.eph && r.pos+2 <= len(r.data) && r.data[r.pos] == 0xFF && r.data[r.pos+1] == 0x92 {
 		r.pos += 2
 	}
 }

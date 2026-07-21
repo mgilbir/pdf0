@@ -5,9 +5,11 @@ package pdf0
 // wavelet transform, which unlike the reversible 5/3 uses floating-point lifting.
 
 // jpxFBand is a float sample array with its origin on the tile-component grid.
+// The irreversible path uses 32-bit floats to match the reference decoder's
+// rounding (OpenJPEG performs the 9/7 transform in single precision).
 type jpxFBand struct {
 	x0, y0, w, h int
-	data         []float64
+	data         []float32
 }
 
 func pow2(e int) float64 {
@@ -26,18 +28,20 @@ func pow2(e int) float64 {
 
 // dequantSubband returns the dequantized float coefficients of a subband: step
 // delta_b = 2^(Rb+gain_b-exp_b)·(1+mant_b/2^11) (T.800 E.1).
-func dequantSubband(sb *jpxSubband, depth int) []float64 {
+func dequantSubband(sb *jpxSubband, depth int) []float32 {
 	w := sb.x1 - sb.x0
 	h := sb.y1 - sb.y0
-	out := make([]float64, w*h)
+	out := make([]float32, w*h)
 	if sb.coeffs == nil {
 		return out
 	}
 	// The tier-1 magnitudes are doubled (midpoint reconstruction); the 0.5 factor
 	// folds the halving into the dequantization step (OpenJPEG: 0.5·stepsize).
-	delta := 0.5 * pow2(depth+sb.gain-sb.exp) * (1 + float64(sb.mant)/2048)
+	// stepsize is formed in single precision, matching OpenJPEG.
+	stepsize := float32(pow2(depth+sb.gain-sb.exp) * (1 + float64(sb.mant)/2048))
+	delta := 0.5 * stepsize
 	for i, q := range sb.coeffs {
-		out[i] = float64(q) * delta
+		out[i] = float32(q) * delta
 	}
 	return out
 }
@@ -45,11 +49,13 @@ func dequantSubband(sb *jpxSubband, depth int) []float64 {
 // reconstructComponentF decodes one tile-component through the irreversible 9/7
 // path: tier-1, dequantization, then the inverse 9/7 wavelet transform.
 func reconstructComponentF(im *jpxImage, tc *jpxTileComp) *jpxFBand {
+	cod := im.tileCoding(tc.tile)
+	qcd := im.tileQuant(tc.tile)
 	depth := im.comps[tc.comp].depth
 	roishift := im.roiShift(tc.tile, tc.comp)
 	for _, res := range tc.resolutions {
 		for _, sb := range res.subbands {
-			if !decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, im.cod.cbStyle, roishift, false) {
+			if !decodeSubbandCoeffs(sb, qcd.guardBits, depth, cod.cbStyle, roishift, false) {
 				return nil
 			}
 		}
@@ -68,12 +74,12 @@ func reconstructComponentF(im *jpxImage, tc *jpxTileComp) *jpxFBand {
 func idwt97Level(ll *jpxFBand, res *jpxResolution, depth int) *jpxFBand {
 	W := res.x1 - res.x0
 	H := res.y1 - res.y0
-	out := &jpxFBand{x0: res.x0, y0: res.y0, w: W, h: H, data: make([]float64, W*H)}
+	out := &jpxFBand{x0: res.x0, y0: res.y0, w: W, h: H, data: make([]float32, W*H)}
 	if W <= 0 || H <= 0 {
 		return out
 	}
 	hl, lh, hh := res.subbands[0], res.subbands[1], res.subbands[2]
-	place := func(x0, y0, w, h int, data []float64, highH, highV bool) {
+	place := func(x0, y0, w, h int, data []float32, highH, highV bool) {
 		for ly := 0; ly < h; ly++ {
 			for lx := 0; lx < w; lx++ {
 				absX := 2 * (x0 + lx)
@@ -96,7 +102,7 @@ func idwt97Level(ll *jpxFBand, res *jpxResolution, depth int) *jpxFBand {
 	place(lh.x0, lh.y0, lh.x1-lh.x0, lh.y1-lh.y0, dequantSubband(lh, depth), false, true)
 	place(hh.x0, hh.y0, hh.x1-hh.x0, hh.y1-hh.y0, dequantSubband(hh, depth), true, true)
 
-	col := make([]float64, H)
+	col := make([]float32, H)
 	for c := 0; c < W; c++ {
 		for row := 0; row < H; row++ {
 			col[row] = out.data[row*W+c]
@@ -125,12 +131,12 @@ const (
 // coordinates run [i0,i1). Even coordinates are low-pass, odd high-pass; the
 // boundary uses whole-sample symmetric extension. It is the exact inverse of
 // fwd97 (validated by round-trip test).
-func inv97(a []float64, i0, i1 int) {
+func inv97(a []float32, i0, i1 int) {
 	n := i1 - i0
 	if n == 1 {
 		return
 	}
-	ext := func(i int) float64 {
+	ext := func(i int) float32 {
 		for i < i0 || i >= i1 {
 			if i < i0 {
 				i = 2*i0 - i
