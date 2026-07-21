@@ -299,6 +299,52 @@ func TestJPXUnsupportedFallback(t *testing.T) {
 	}
 }
 
+// TestJPXMoreExact decodes further conformance codestreams that exercise
+// combinations already supported (multi-component LRCP, multi-layer RLCP) and
+// checks them bit-exactly against known reference pixels (OpenJPEG via Pillow).
+func TestJPXMoreExact(t *testing.T) {
+	rgb := func(m image.Image, x, y int) (int, int, int) {
+		r, g, b, _ := m.At(x, y).RGBA()
+		return int(r >> 8), int(g >> 8), int(b >> 8)
+	}
+	cases := []struct {
+		file  string
+		gray  bool
+		gold  [][]int // {x,y,v} for gray, {x,y,r,g,b} for RGB
+	}{
+		{"p0_14.j2k", false, [][]int{{0, 0, 128, 128, 128}, {24, 24, 0, 255, 0}, {48, 48, 128, 128, 128}, {7, 11, 128, 128, 128}}},
+		{"p0_16.j2k", true, [][]int{{0, 0, 185}, {64, 64, 208}, {127, 127, 34}, {7, 11, 192}}},
+	}
+	for _, tc := range cases {
+		data, err := os.ReadFile(filepath.Join("testdata/jpx", tc.file))
+		if err != nil {
+			t.Skip("no JPX sample codestreams; run `make jpx`")
+		}
+		im, err := parseJPX(data)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", tc.file, err)
+		}
+		m := decodeJPXImage(im)
+		if m == nil {
+			t.Errorf("%s: declined, expected a decode", tc.file)
+			continue
+		}
+		for _, g := range tc.gold {
+			if tc.gray {
+				got := int(m.(*image.Gray).GrayAt(g[0], g[1]).Y)
+				if got != g[2] {
+					t.Errorf("%s pixel (%d,%d) = %d, want %d", tc.file, g[0], g[1], got, g[2])
+				}
+			} else {
+				r, gr, b := rgb(m, g[0], g[1])
+				if r != g[2] || gr != g[3] || b != g[4] {
+					t.Errorf("%s pixel (%d,%d) = (%d,%d,%d), want (%d,%d,%d)", tc.file, g[0], g[1], r, gr, b, g[2], g[3], g[4])
+				}
+			}
+		}
+	}
+}
+
 // TestJPXPOC checks the POC (progression-order change) marker is parsed and that
 // its stages drive the packet order: p0_03 declares PCRL in its COD but a POC
 // overrides the whole image to LRCP. With the POC applied the tile-0 packets read
