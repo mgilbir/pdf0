@@ -111,18 +111,10 @@ func (r *jpxPacketReader) bits(n int) int {
 	return v
 }
 
-// alignByte discards any partial header bits and consumes the stuffed 0 bit that
-// follows a trailing 0xFF (B.10.1).
+// alignByte moves to the next byte boundary at the end of a packet header. The
+// stuffed 0 bit that follows a 0xFF is already consumed while reading (bit sets
+// bitsN=7 after a 0xFF), so alignment only needs to discard the partial byte.
 func (r *jpxPacketReader) alignByte() {
-	if r.prevFF {
-		// The byte following a 0xFF carries a stuffed 0 in its top bit; on
-		// alignment that whole byte is consumed (OpenJPEG opj_bio_inalign,
-		// T.800 B.10.1). Without this a packet header ending on a 0xFF byte
-		// leaves the reader one byte short and every following packet desyncs
-		// — invisible with one packet per resolution, fatal for multi-component
-		// or multi-layer streams that pack many packets back to back.
-		r.pos++
-	}
 	r.bitsN = 0
 	r.prevFF = false
 }
