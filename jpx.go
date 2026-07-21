@@ -111,6 +111,16 @@ func ceilDiv(a, b int) int {
 	return (a + b - 1) / b
 }
 
+// precinctExp returns the precinct-size exponents (PPx, PPy) for resolution r.
+// Without explicit precinct sizes the maximal exponent 15 gives one precinct per
+// resolution.
+func (im *jpxImage) precinctExp(r int) (int, int) {
+	if im.cod.precinctsUsed && r < len(im.cod.precinctW) {
+		return im.cod.precinctW[r], im.cod.precinctH[r]
+	}
+	return 15, 15
+}
+
 // tileCoords returns the pixel bounds [x0,x1)×[y0,y1) of tile t on the reference
 // grid (T.800 B.3).
 func (im *jpxImage) tileCoords(t int) (x0, y0, x1, y1 int) {

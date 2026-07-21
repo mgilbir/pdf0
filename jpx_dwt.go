@@ -36,8 +36,7 @@ func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle int, reve
 		mb = guardBits + compDepth + sb.gain - 1
 	}
 	_ = reversible
-	for bi := range sb.blocks {
-		cb := &sb.blocks[bi]
+	for _, cb := range sb.blocks {
 		cbw := cb.x1 - cb.x0
 		cbh := cb.y1 - cb.y0
 		if cbw <= 0 || cbh <= 0 || len(cb.segs) == 0 || cb.numPasses == 0 {

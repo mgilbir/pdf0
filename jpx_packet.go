@@ -154,19 +154,27 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 			numRes = len(tc.resolutions)
 		}
 	}
-	one := func(c, res, layer int) error {
-		if res < len(tcs[c].resolutions) {
-			return readPacket(im, tcs[c].resolutions[res], layer, r)
-		}
-		return nil
-	}
 	nc := len(tcs)
-	// Build the packet sequence as (component, resolution, layer) triples. When a
-	// POC marker is present its stages define the progression (each over a
+	nprec := func(c, res int) int {
+		if res >= len(tcs[c].resolutions) {
+			return 0
+		}
+		rr := tcs[c].resolutions[res]
+		return rr.pw * rr.ph
+	}
+	// Build the packet sequence as (component, resolution, layer, precinct) tuples.
+	// When a POC marker is present its stages define the progression (each over a
 	// resolution/component/layer sub-range); otherwise the single COD progression
 	// covers everything. A packet is emitted at most once even if stages overlap.
-	var order [][3]int
-	seen := make(map[[3]int]bool)
+	var order [][4]int
+	seen := make(map[[4]int]bool)
+	push := func(c, res, layer, prec int) {
+		k := [4]int{c, res, layer, prec}
+		if !seen[k] {
+			seen[k] = true
+			order = append(order, k)
+		}
+	}
 	emit := func(prog, rs, re, cs, ce, lye int) error {
 		if re > numRes {
 			re = numRes
@@ -177,36 +185,30 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 		if lye > layers {
 			lye = layers
 		}
-		push := func(c, res, layer int) {
-			k := [3]int{c, res, layer}
-			if !seen[k] {
-				seen[k] = true
-				order = append(order, k)
-			}
-		}
 		switch prog {
-		case 0: // LRCP: layer, resolution, component
+		case 0: // LRCP: layer, resolution, component, precinct
 			for layer := 0; layer < lye; layer++ {
 				for res := rs; res < re; res++ {
 					for c := cs; c < ce; c++ {
-						push(c, res, layer)
+						for p := 0; p < nprec(c, res); p++ {
+							push(c, res, layer, p)
+						}
 					}
 				}
 			}
-		case 1: // RLCP: resolution, layer, component
+		case 1: // RLCP: resolution, layer, component, precinct
 			for res := rs; res < re; res++ {
 				for layer := 0; layer < lye; layer++ {
 					for c := cs; c < ce; c++ {
-						push(c, res, layer)
+						for p := 0; p < nprec(c, res); p++ {
+							push(c, res, layer, p)
+						}
 					}
 				}
 			}
 		default:
-			// The position progressions (RPCL/PCRL/CPRL) iterate by precinct
-			// position across resolutions; reducing them for the maximal-precinct
-			// case is not validated against any conformance file, so decline rather
-			// than risk a mis-assignment that reads plausible but wrong.
-			return errJPX
+			// RPCL / PCRL / CPRL iterate by spatial precinct position.
+			return emitPositional(im, tcs, prog, rs, re, cs, ce, lye, push)
 		}
 		return nil
 	}
@@ -220,14 +222,161 @@ func decodeTilePackets(im *jpxImage, tcs []*jpxTileComp, data []byte) error {
 		return err
 	}
 	for _, o := range order {
-		if err := one(o[0], o[1], o[2]); err != nil {
-			return err
+		if o[1] < len(tcs[o[0]].resolutions) {
+			if err := readPacket(im, tcs[o[0]].resolutions[o[1]], o[3], o[2], r); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func readPacket(im *jpxImage, res *jpxResolution, layer int, r *jpxPacketReader) error {
+// emitPositional generates the packet order for the position progressions
+// RPCL (2), PCRL (3) and CPRL (4), which iterate over spatial precinct positions
+// on the reference grid (T.800 B.12.1.3–5; mirrors OpenJPEG opj_pi_next_rpcl/
+// pcrl/cprl). The three differ only in loop nesting around the shared (position →
+// component/resolution → precinct) mapping.
+func emitPositional(im *jpxImage, tcs []*jpxTileComp, prog, rs, re, cs, ce, lye int, push func(c, res, layer, prec int)) error {
+	if len(tcs) == 0 {
+		return errJPX
+	}
+	tx0, ty0 := tcs[0].refX0, tcs[0].refY0
+	tx1, ty1 := tcs[0].refX1, tcs[0].refY1
+	numRes := 0
+	for _, tc := range tcs {
+		if len(tc.resolutions) > numRes {
+			numRes = len(tc.resolutions)
+		}
+	}
+	if re > numRes {
+		re = numRes
+	}
+	if ce > len(tcs) {
+		ce = len(tcs)
+	}
+	if lye > im.cod.layers {
+		lye = im.cod.layers
+	}
+	// stepXY returns the reference-grid precinct step for one (component,
+	// resolution): the precinct size scaled up by the resolution reduction and the
+	// component sub-sampling.
+	stepXY := func(c, res int) (int, int) {
+		tc := tcs[c]
+		if res >= len(tc.resolutions) {
+			return 0, 0
+		}
+		comp := im.comps[c]
+		levels := len(tc.resolutions) - 1
+		levelno := levels - res
+		pdx, pdy := im.precinctExp(res)
+		return comp.dx << (pdx + levelno), comp.dy << (pdy + levelno)
+	}
+	// precAt maps a reference position (x,y) to a precinct index for (c,res), or
+	// returns (-1) when the position is not the top-left of a precinct there.
+	precAt := func(c, res, x, y int) int {
+		tc := tcs[c]
+		if res >= len(tc.resolutions) {
+			return -1
+		}
+		rr := tc.resolutions[res]
+		if rr.pw == 0 || rr.ph == 0 {
+			return -1
+		}
+		comp := im.comps[c]
+		levels := len(tc.resolutions) - 1
+		levelno := levels - res
+		pdx, pdy := im.precinctExp(res)
+		trx0 := ceilDiv(tx0, comp.dx<<levelno)
+		try0 := ceilDiv(ty0, comp.dy<<levelno)
+		trx1 := ceilDiv(tx1, comp.dx<<levelno)
+		try1 := ceilDiv(ty1, comp.dy<<levelno)
+		if trx0 == trx1 || try0 == try1 {
+			return -1
+		}
+		rpx := pdx + levelno
+		rpy := pdy + levelno
+		// The position contributes to this resolution only at precinct boundaries
+		// (or at the tile origin when the origin is not itself precinct-aligned).
+		if !(x%(comp.dx<<rpx) == 0 || (x == tx0 && (trx0<<levelno)%(1<<rpx) != 0)) {
+			return -1
+		}
+		if !(y%(comp.dy<<rpy) == 0 || (y == ty0 && (try0<<levelno)%(1<<rpy) != 0)) {
+			return -1
+		}
+		prci := floorPow2(ceilDiv(x, comp.dx<<levelno), pdx) - floorPow2(trx0, pdx)
+		prcj := floorPow2(ceilDiv(y, comp.dy<<levelno), pdy) - floorPow2(try0, pdy)
+		p := prcj*rr.pw + prci
+		if p < 0 || p >= rr.pw*rr.ph {
+			return -1
+		}
+		return p
+	}
+	// forEachPosition walks the reference grid with the smallest precinct step over
+	// the given resolution/component ranges, invoking fn(x,y).
+	forEachPosition := func(resLo, resHi, cLo, cHi int, fn func(x, y int)) {
+		dx, dy := 0, 0
+		for res := resLo; res < resHi; res++ {
+			for c := cLo; c < cHi; c++ {
+				sx, sy := stepXY(c, res)
+				if sx > 0 && (dx == 0 || sx < dx) {
+					dx = sx
+				}
+				if sy > 0 && (dy == 0 || sy < dy) {
+					dy = sy
+				}
+			}
+		}
+		if dx == 0 || dy == 0 {
+			return
+		}
+		for y := ty0; y < ty1; y += dy - (y % dy) {
+			for x := tx0; x < tx1; x += dx - (x % dx) {
+				fn(x, y)
+			}
+		}
+	}
+	emitCRL := func(c, res, x, y int) { // component,resolution fixed → precinct,layer
+		if p := precAt(c, res, x, y); p >= 0 {
+			for l := 0; l < lye; l++ {
+				push(c, res, l, p)
+			}
+		}
+	}
+	switch prog {
+	case 2: // RPCL: resolution, position, component, layer
+		for res := rs; res < re; res++ {
+			forEachPosition(res, res+1, cs, ce, func(x, y int) {
+				for c := cs; c < ce; c++ {
+					emitCRL(c, res, x, y)
+				}
+			})
+		}
+	case 3: // PCRL: position, component, resolution, layer
+		forEachPosition(rs, re, cs, ce, func(x, y int) {
+			for c := cs; c < ce; c++ {
+				for res := rs; res < re; res++ {
+					emitCRL(c, res, x, y)
+				}
+			}
+		})
+	case 4: // CPRL: component, position, resolution, layer
+		for c := cs; c < ce; c++ {
+			forEachPosition(rs, re, c, c+1, func(x, y int) {
+				for res := rs; res < re; res++ {
+					emitCRL(c, res, x, y)
+				}
+			})
+		}
+	default:
+		return errJPX
+	}
+	return nil
+}
+
+func readPacket(im *jpxImage, res *jpxResolution, precNo, layer int, r *jpxPacketReader) error {
+	if precNo >= len(res.precincts) {
+		return nil
+	}
 	if im.cod.sop {
 		// Optional SOP marker (0xFF91, 6 bytes) precedes the packet.
 		if r.pos+2 <= len(r.data) && r.data[r.pos] == 0xFF && r.data[r.pos+1] == 0x91 {
@@ -248,20 +397,17 @@ func readPacket(im *jpxImage, res *jpxResolution, layer int, r *jpxPacketReader)
 		segPasses []int
 	}
 	var contribs []contrib
-	for _, sb := range res.subbands {
-		for bi := range sb.blocks {
-			cb := &sb.blocks[bi]
-			col := bi % sb.numXcb
-			row := bi / sb.numXcb
+	for _, bp := range res.precincts[precNo].bands {
+		for _, cb := range bp.blocks {
 			var included bool
 			if cb.included {
 				included = r.bit() == 1
 			} else {
-				v := sb.inclTree.decode(r, col, row, layer+1)
+				v := bp.inclTree.decode(r, cb.lx, cb.ly, layer+1)
 				included = v <= layer
 				if included {
 					cb.included = true
-					cb.zeroBitPlanes = sb.zbpTree.decode(r, col, row, 1<<30)
+					cb.zeroBitPlanes = bp.zbpTree.decode(r, cb.lx, cb.ly, 1<<30)
 					cb.lblock = 3
 				}
 			}
