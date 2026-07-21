@@ -49,7 +49,9 @@ func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle, roishift
 		if bpStart < 0 {
 			continue
 		}
-		// More passes than the bit-planes allow is a desynced packet stream.
+		// More coding passes than the (ROI-adjusted) bit-planes allow means the
+		// packet stream desynced or uses a code-block feature not yet handled, so
+		// decline rather than emit an approximation.
 		if cb.numPasses > 1+3*bpStart {
 			return false
 		}
