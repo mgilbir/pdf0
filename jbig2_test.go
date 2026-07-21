@@ -203,6 +203,40 @@ func TestJBIG2Halftone(t *testing.T) {
 	}
 }
 
+// TestJBIG2Huffman decodes the Huffman-coded symbol/text encodings of the shared
+// bitmap — standard tables, alternate standard tables, custom table segments, and
+// an uncompressed collective bitmap — and asserts each matches the arithmetic
+// generic-region reference.
+func TestJBIG2Huffman(t *testing.T) {
+	dir := "testdata/jbig2"
+	ref := filepath.Join(dir, "bitmap-template1.pdf")
+	if _, err := os.Stat(ref); err != nil {
+		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
+	}
+	want := grayPixels(t, jbig2Image(t, ref)).Pix
+
+	for _, name := range []string{
+		"bitmap-symbol-symhuff-texthuff.pdf",
+		"bitmap-symbol-symhuff-texthuffB10B13.pdf",
+		"bitmap-symbol-symhuffB5B3-texthuffB7B9B12.pdf",
+		"bitmap-symbol-symhuffcustom-texthuffcustom.pdf",
+		"bitmap-symbol-symhuffuncompressed-texthuff.pdf",
+	} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		img := jbig2Image(t, path)
+		if !img.Decoded {
+			t.Errorf("%s: not decoded: %s", name, img.Note)
+			continue
+		}
+		if !bytes.Equal(grayPixels(t, img).Pix, want) {
+			t.Errorf("%s: pixels differ from the generic-region reference", name)
+		}
+	}
+}
+
 // TestJBIG2UnsupportedFallback checks that features not yet implemented (MMR
 // halftone, multi-instance aggregate) degrade gracefully: the image is reported
 // undecoded with the raw bytes, never a panic or a hard error to the caller.

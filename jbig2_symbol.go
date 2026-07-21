@@ -7,10 +7,9 @@ package pdf0
 // the integer decoding procedures IADH/IADW/IAEX/… (Annex A) and the symbol-ID
 // decoder IAID.
 //
-// This covers the arithmetic-coded path without symbol refinement or aggregation
-// (SDREFAGG/SBREFINE) and without the Huffman-coded variants (SDHUFF/SBHUFF);
-// segments needing those are reported unsupported so the image falls back to its
-// raw bytes.
+// This is the arithmetic-coded path; the Huffman-coded variants (SDHUFF/SBHUFF)
+// are in jbig2_huffcode.go. Multi-instance symbol refinement/aggregation is not
+// yet handled and falls back to the raw bytes.
 
 // newIAx allocates an integer-arithmetic context (Annex A: 512 states).
 func newIAx() []mqState { return make([]mqState, 512) }
@@ -100,7 +99,7 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 	template := int((flags >> 10) & 3)
 	sdrTemplate := int((flags >> 12) & 1)
 	if sdhuff != 0 {
-		return errJBIG2Unsupported // Huffman-coded symbol dictionaries not yet supported
+		return d.readSymbolDictHuff(seg, r, flags)
 	}
 
 	var at []atPixel
@@ -238,7 +237,7 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 	}
 	sbrTemplate := int((flags >> 15) & 1)
 	if sbhuff != 0 {
-		return errJBIG2Unsupported // Huffman-coded text regions not yet supported
+		return d.readTextRegionHuff(seg, r, ri, logStrips, refCorner, transposed, sbCombOp, sbDefPixel, dsOffset, int(sbrefine))
 	}
 
 	// Refinement AT pixels precede SBNUMINSTANCES when refinement uses template 0.

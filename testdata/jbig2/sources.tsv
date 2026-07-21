@@ -33,3 +33,8 @@ https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halfton
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-composite.pdf	bitmap-halftone-composite.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-refine.pdf	bitmap-halftone-refine.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-halftone-10bpp-mmr.pdf	bitmap-halftone-10bpp-mmr.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuff-texthuff.pdf	bitmap-symbol-symhuff-texthuff.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuff-texthuffB10B13.pdf	bitmap-symbol-symhuff-texthuffB10B13.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffB5B3-texthuffB7B9B12.pdf	bitmap-symbol-symhuffB5B3-texthuffB7B9B12.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffcustom-texthuffcustom.pdf	bitmap-symbol-symhuffcustom-texthuffcustom.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffuncompressed-texthuff.pdf	bitmap-symbol-symhuffuncompressed-texthuff.pdf

@@ -160,6 +160,7 @@ type jbig2Decoder struct {
 	page       *jbBitmap
 	symbols    map[uint32][]*jbBitmap // exported symbols per symbol-dict segment
 	patterns   map[uint32][]*jbBitmap // patterns per pattern-dict segment
+	huffTables map[uint32]*huffTable  // custom Huffman tables per table segment
 }
 
 // parseJBIG2Segments parses the embedded (PDF) segment organisation: a sequence
@@ -306,6 +307,10 @@ func (d *jbig2Decoder) run(segs []jbSegment) error {
 			}
 		case 20, 22, 23: // halftone region
 			if err := d.readHalftoneRegion(seg); err != nil {
+				return err
+			}
+		case 53: // custom Huffman table
+			if err := d.readCustomTable(seg); err != nil {
 				return err
 			}
 		case 49, 50, 51, 62: // end of page/stripe/file, extension
