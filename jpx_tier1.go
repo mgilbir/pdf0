@@ -14,15 +14,23 @@ const (
 	jpxCtxUni = 18
 )
 
+// Coding-pass kinds.
+const (
+	passCleanup = 0
+	passSigProp = 1
+	passMagRef  = 2
+)
+
 // decodeCodeblock decodes one code-block into w*h signed coefficients. bpStart is
 // the most-significant coded bit-plane index (Mb-1-zeroBitPlanes); numPasses is
-// the number of coding passes gathered by tier-2; kind is the subband
-// orientation (0 LL, 1 HL, 2 LH, 3 HH).
-func decodeCodeblock(data []byte, w, h, kind, bpStart, numPasses int) []int32 {
-	if w <= 0 || h <= 0 || bpStart < 0 || numPasses <= 0 || len(data) == 0 {
+// the total coding-pass count; kind is the subband orientation (0 LL, 1 HL, 2 LH,
+// 3 HH). segs are the arithmetic segments (a fresh MQ decoder per segment); the
+// coefficient state persists across them.
+func decodeCodeblock(segs []jpxSeg, w, h, kind, bpStart, numPasses, cbStyle int) []int32 {
+	if w <= 0 || h <= 0 || bpStart < 0 || numPasses <= 0 || len(segs) == 0 {
 		return make([]int32, maxInt(0, w*h))
 	}
-	t := &jpxT1{w: w, h: h, kind: kind}
+	t := &jpxT1{w: w, h: h, kind: kind, causal: cbStyle&0x08 != 0}
 	n := w * h
 	t.mag = make([]int32, n)
 	t.sign = make([]uint8, n)
@@ -30,29 +38,60 @@ func decodeCodeblock(data []byte, w, h, kind, bpStart, numPasses int) []int32 {
 	t.vis = make([]uint8, n)
 	t.refined = make([]uint8, n)
 	t.cx = make([]mqState, 19)
-	t.cx[0] = 4 << 1 // zero-coding context 0 starts at (4,0)
-	t.cx[jpxCtxRun] = 3 << 1
-	t.cx[jpxCtxUni] = 46 << 1
-	t.dec = newMQDecoder(data, 0, len(data))
+	t.initContexts()
 
-	pass := 0
+	segSym := cbStyle&0x20 != 0
+	reset := cbStyle&0x02 != 0
+
+	// Build the pass schedule: the top bit-plane has only a cleanup pass; each
+	// lower bit-plane has significance-propagation, magnitude-refinement, cleanup.
+	type passSpec struct{ kind, bp int }
+	var passes []passSpec
 	bp := bpStart
-	t.cleanup(bp)
-	pass++
+	passes = append(passes, passSpec{passCleanup, bp})
 	bp--
-	for pass < numPasses && bp >= 0 {
-		t.clearVisited()
-		t.sigProp(bp)
-		if pass++; pass >= numPasses {
+	for len(passes) < numPasses && bp >= 0 {
+		passes = append(passes, passSpec{passSigProp, bp})
+		if len(passes) >= numPasses {
 			break
 		}
-		t.magRef(bp)
-		if pass++; pass >= numPasses {
+		passes = append(passes, passSpec{passMagRef, bp})
+		if len(passes) >= numPasses {
 			break
 		}
-		t.cleanup(bp)
-		pass++
+		passes = append(passes, passSpec{passCleanup, bp})
 		bp--
+	}
+	if len(passes) > numPasses {
+		passes = passes[:numPasses]
+	}
+
+	schedIdx := 0
+	for _, seg := range segs {
+		t.dec = newMQDecoder(seg.data, 0, len(seg.data))
+		for p := 0; p < seg.passes && schedIdx < len(passes); p++ {
+			ps := passes[schedIdx]
+			schedIdx++
+			if reset {
+				t.initContexts()
+			}
+			switch ps.kind {
+			case passSigProp:
+				t.clearVisited()
+				t.sigProp(ps.bp)
+			case passMagRef:
+				t.magRef(ps.bp)
+			case passCleanup:
+				t.cleanup(ps.bp)
+				if segSym {
+					// Segmentation symbol (0xA) via the uniform context, for error
+					// resilience; decoded and discarded.
+					for k := 0; k < 4; k++ {
+						t.dec.decode(t.cx, jpxCtxUni)
+					}
+				}
+			}
+		}
 	}
 
 	out := make([]int32, n)
@@ -68,6 +107,7 @@ func decodeCodeblock(data []byte, w, h, kind, bpStart, numPasses int) []int32 {
 
 type jpxT1 struct {
 	w, h, kind int
+	causal     bool
 	mag        []int32
 	sign       []uint8
 	sig        []uint8
@@ -75,6 +115,16 @@ type jpxT1 struct {
 	refined    []uint8
 	cx         []mqState
 	dec        *mqDecoder
+}
+
+// initContexts sets the MQ contexts to their tier-1 initial states (T.800 D.3).
+func (t *jpxT1) initContexts() {
+	for i := range t.cx {
+		t.cx[i] = 0
+	}
+	t.cx[0] = 4 << 1 // zero-coding context 0 starts at (4,0)
+	t.cx[jpxCtxRun] = 3 << 1
+	t.cx[jpxCtxUni] = 46 << 1
 }
 
 func (t *jpxT1) clearVisited() {
@@ -91,11 +141,17 @@ func (t *jpxT1) sigAt(x, y int) int {
 }
 
 // neighbourSums returns the significant-neighbour counts: horizontal (left+right),
-// vertical (top+bottom) and diagonal (four corners).
+// vertical (top+bottom) and diagonal (four corners). Under vertically-causal
+// context formation the row below is ignored when it belongs to the next stripe
+// (T.800 D.7).
 func (t *jpxT1) neighbourSums(x, y int) (hs, vs, ds int) {
 	hs = t.sigAt(x-1, y) + t.sigAt(x+1, y)
-	vs = t.sigAt(x, y-1) + t.sigAt(x, y+1)
-	ds = t.sigAt(x-1, y-1) + t.sigAt(x+1, y-1) + t.sigAt(x-1, y+1) + t.sigAt(x+1, y+1)
+	vs = t.sigAt(x, y-1)
+	ds = t.sigAt(x-1, y-1) + t.sigAt(x+1, y-1)
+	if !(t.causal && y%4 == 3) {
+		vs += t.sigAt(x, y+1)
+		ds += t.sigAt(x-1, y+1) + t.sigAt(x+1, y+1)
+	}
 	return
 }
 

@@ -20,45 +20,60 @@ func (b *jpxBand) at(x, y int) int32 { return b.data[y*b.w+x] }
 // magnitude bit-planes is G + Rb + gain_b - 1 (the QCD exponent, when explicit,
 // equals Rb+gain, but the derived QCD may signal 0); the irreversible path uses
 // the QCD exponent directly.
-func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth int, reversible bool) {
+func decodeSubbandCoeffs(sb *jpxSubband, guardBits, compDepth, cbStyle int, reversible bool) bool {
 	sbw := sb.x1 - sb.x0
 	sbh := sb.y1 - sb.y0
 	if sbw <= 0 || sbh <= 0 {
-		return
+		return true
 	}
 	sb.coeffs = make([]int32, sbw*sbh)
+	// Magnitude bit-planes: G + ε_b - 1 from the QCD exponent, which encodes the
+	// per-subband dynamic range (growing with the resolution level). The derived
+	// QCD form can signal 0, in which case fall back to the range from the
+	// component precision and subband gain.
 	mb := guardBits + sb.exp - 1
-	if reversible {
+	if sb.exp == 0 {
 		mb = guardBits + compDepth + sb.gain - 1
 	}
+	_ = reversible
 	for bi := range sb.blocks {
 		cb := &sb.blocks[bi]
 		cbw := cb.x1 - cb.x0
 		cbh := cb.y1 - cb.y0
-		if cbw <= 0 || cbh <= 0 || len(cb.data) == 0 || cb.numPasses == 0 {
+		if cbw <= 0 || cbh <= 0 || len(cb.segs) == 0 || cb.numPasses == 0 {
 			continue
 		}
 		bpStart := mb - 1 - cb.zeroBitPlanes
 		if bpStart < 0 {
 			continue
 		}
-		coeffs := decodeCodeblock(cb.data, cbw, cbh, sb.kind, bpStart, cb.numPasses)
+		// A code-block cannot have more coding passes than its bit-planes allow;
+		// a larger count means the packet headers desynced (e.g. an unsupported
+		// feature interaction), so the whole decode is untrustworthy.
+		if cb.numPasses > 1+3*bpStart {
+			return false
+		}
+		coeffs := decodeCodeblock(cb.segs, cbw, cbh, sb.kind, bpStart, cb.numPasses, cbStyle)
 		for y := 0; y < cbh; y++ {
 			for x := 0; x < cbw; x++ {
 				sb.coeffs[(cb.y0-sb.y0+y)*sbw+(cb.x0-sb.x0+x)] = coeffs[y*cbw+x]
 			}
 		}
 	}
+	return true
 }
 
 // reconstructComponent decodes one tile-component to samples: tier-1 on every
-// subband, then the inverse DWT up the resolution pyramid.
+// subband, then the inverse DWT up the resolution pyramid. Returns nil if the
+// tier-1 pass counts are inconsistent (a desynced decode).
 func reconstructComponent(im *jpxImage, tc *jpxTileComp) *jpxBand {
 	reversible := im.cod.transform == 1
 	depth := im.comps[tc.comp].depth
 	for _, res := range tc.resolutions {
 		for _, sb := range res.subbands {
-			decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, reversible)
+			if !decodeSubbandCoeffs(sb, im.qcd.guardBits, depth, im.cod.cbStyle, reversible) {
+				return nil
+			}
 		}
 	}
 	res0 := tc.resolutions[0]
