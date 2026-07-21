@@ -345,6 +345,40 @@ func TestJPXMoreExact(t *testing.T) {
 	}
 }
 
+// TestJPXTiledPOC decodes p0_07 (2048×2048, 16×16 tiles, 3-component 5/3 with a
+// two-stage POC in tile 0's second tile-part) and p0_04 (precincts + irreversible
+// 9/7 with the ICT). p0_07 is bit-exact against OpenJPEG at the raw component
+// level; both are pinned here by golden pixels from the decoded RGB.
+func TestJPXTiledPOC(t *testing.T) {
+	cases := []struct {
+		file string
+		gold [][5]int // x,y,r,g,b
+	}{
+		{"p0_07.j2k", [][5]int{{0, 0, 19, 0, 46}, {1024, 1024, 252, 228, 192}, {2047, 2047, 22, 8, 43}, {682, 512, 23, 6, 40}}},
+		{"p0_04.j2k", [][5]int{{0, 0, 218, 209, 251}, {320, 240, 239, 233, 252}, {639, 479, 1, 1, 4}, {213, 120, 248, 244, 255}}},
+	}
+	for _, tc := range cases {
+		data, err := os.ReadFile(filepath.Join("testdata/jpx", tc.file))
+		if err != nil {
+			t.Skip("no JPX sample codestreams; run `make jpx`")
+		}
+		im, err := parseJPX(data)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", tc.file, err)
+		}
+		m, ok := decodeJPXImage(im).(*image.RGBA)
+		if !ok {
+			t.Fatalf("%s: did not decode to RGBA", tc.file)
+		}
+		for _, g := range tc.gold {
+			c := m.RGBAAt(g[0], g[1])
+			if int(c.R) != g[2] || int(c.G) != g[3] || int(c.B) != g[4] {
+				t.Errorf("%s pixel (%d,%d) = (%d,%d,%d), want (%d,%d,%d)", tc.file, g[0], g[1], c.R, c.G, c.B, g[2], g[3], g[4])
+			}
+		}
+	}
+}
+
 // TestJPXROI decodes p0_15 and p0_03 — single-component images that use a
 // region-of-interest RGN marker (MaxShift, T.800 Annex H) placed in a tile-part
 // header. The ROI-scaled coefficients need the extra bit-planes decoded and then
