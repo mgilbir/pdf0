@@ -230,8 +230,12 @@ func tilePacketOrder(im *jpxImage, tcs []*jpxTileComp) ([][4]int, error) {
 		}
 		return nil
 	}
-	if len(im.poc) > 0 {
-		for _, s := range im.poc {
+	tile := 0
+	if len(tcs) > 0 {
+		tile = tcs[0].tile
+	}
+	if poc := im.tileProgressions(tile); len(poc) > 0 {
+		for _, s := range poc {
 			if err := emit(s.prog, s.resStart, s.resEnd, s.compStart, s.compEnd, s.layerEnd); err != nil {
 				return nil, err
 			}

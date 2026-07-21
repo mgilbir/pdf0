@@ -40,7 +40,7 @@ func decodeJPXImage(im *jpxImage) image.Image {
 		tx0, ty0, tx1, ty1 := im.tileCoords(t)
 		tcs := make([]*jpxTileComp, nc)
 		for c := 0; c < nc; c++ {
-			tcs[c] = buildTileComp(im, c, tx0, ty0, tx1, ty1)
+			tcs[c] = buildTileComp(im, t, c, tx0, ty0, tx1, ty1)
 		}
 		if err := decodeTilePackets(im, tcs, im.tileData(t)); err != nil {
 			return nil
@@ -72,13 +72,13 @@ func decodeJPXImage(im *jpxImage) image.Image {
 		}
 	}
 
-	// DC level shift + clamp per component.
+	// DC level shift + clamp per component. Unsigned components had 2^(depth-1)
+	// subtracted at encode time and get it back here; signed components carry no
+	// DC shift but are still offset by 2^(depth-1) to map them into the unsigned
+	// display range (as OpenJPEG does for its output).
 	for c := 0; c < nc; c++ {
 		comp := im.comps[c]
-		shift := 0.0
-		if !comp.signed {
-			shift = math.Ldexp(1, comp.depth-1)
-		}
+		shift := math.Ldexp(1, comp.depth-1)
 		maxv := math.Ldexp(1, comp.depth) - 1
 		for i := range planes[c] {
 			v := math.Round(planes[c][i]) + shift
