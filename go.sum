@@ -1,2 +1,4 @@
 github.com/mgilbir/formalis v0.1.0 h1:LQ/tjPemLjQw1XL02XRAQCZhI7DWHoCDfAYMxwAiIHg=
 github.com/mgilbir/formalis v0.1.0/go.mod h1:M82rAk4SewJbe1B3bhgQKw0w7ojFOHus7Nm1roqZYEk=
+github.com/mgilbir/gopenjpeg v0.0.0-20260722145908-13c3215c24ba h1:s6yss8qf8qwtk+Y4tmklhwwP/z/bRbc+TuanLZdrRBw=
+github.com/mgilbir/gopenjpeg v0.0.0-20260722145908-13c3215c24ba/go.mod h1:mZ+JnrtLi7zmdbaGgIZibLxvhpmo+RobZiRlTwHtNfw=

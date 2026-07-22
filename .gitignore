@@ -71,12 +71,6 @@ testdata/ccitt/.ok
 testdata/jbig2/*.pdf
 testdata/jbig2/.ok
 
-# JPEG 2000 sample codestreams (downloaded via `make jpx`) — decode oracle for
-# the JPXDecode decoder (OpenJPEG conformance set); manifest + script committed.
-testdata/jpx/*.j2k
-testdata/jpx/*.jp2
-testdata/jpx/.ok
-
 # Factur-X example invoices (oracle) — not vendored
 testdata/facturx/*.pdf
 testdata/facturx/.ok

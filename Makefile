@@ -1,4 +1,4 @@
-.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 jpx clean-jpx
+.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -115,20 +115,6 @@ $(JBIG2_DIR)/.ok: $(JBIG2_DIR)/sources.tsv $(JBIG2_DIR)/download.sh
 
 clean-jbig2:
 	rm -f $(JBIG2_DIR)/*.pdf $(JBIG2_DIR)/.ok
-
-# JPEG 2000 sample codestreams (OpenJPEG conformance set, BSD-2-Clause) used as
-# the decode oracle for the JPXDecode decoder. Downloaded into testdata/jpx
-# (gitignored); the source manifest and downloader are committed.
-JPX_DIR := testdata/jpx
-
-jpx: $(JPX_DIR)/.ok
-
-$(JPX_DIR)/.ok: $(JPX_DIR)/sources.tsv $(JPX_DIR)/download.sh
-	bash $(JPX_DIR)/download.sh
-	touch $@
-
-clean-jpx:
-	rm -f $(JPX_DIR)/*.j2k $(JPX_DIR)/*.jp2 $(JPX_DIR)/.ok
 
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
