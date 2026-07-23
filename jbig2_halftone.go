@@ -6,8 +6,8 @@ package pdf0
 // values and stamping the matching pattern at each grid position. This is how
 // JBIG2 encodes continuous-tone content in a bilevel stream.
 //
-// This covers the arithmetic-coded path; MMR-coded pattern/halftone data falls
-// back to the raw bytes.
+// Both the arithmetic and MMR (Group-4) coded paths are handled: the pattern
+// collective bitmap and the greyscale bitplanes may be either.
 
 // readPatternDict decodes a pattern dictionary segment (type 16), storing its
 // patterns under the segment number.
@@ -22,8 +22,8 @@ func (d *jbig2Decoder) readPatternDict(seg jbSegment) error {
 	hdpw, ok1 := r.u8()
 	hdph, ok2 := r.u8()
 	grayMax, ok3 := r.u32()
-	if !ok1 || !ok2 || !ok3 || hdmmr != 0 {
-		return errJBIG2Unsupported // MMR pattern dictionaries not yet supported
+	if !ok1 || !ok2 || !ok3 {
+		return errJBIG2Unsupported
 	}
 	if hdpw == 0 || hdph == 0 || grayMax > 1<<16 {
 		return errJBIG2Unsupported
@@ -32,11 +32,20 @@ func (d *jbig2Decoder) readPatternDict(seg jbSegment) error {
 	pw, ph := int(hdpw), int(hdph)
 
 	// The patterns are decoded as one collective bitmap and then sliced apart.
-	// The pattern-dictionary A1 adaptive pixel is (-HDPW, 0) (T.88 6.7.5).
-	at := halftoneAT(template, atPixel{-pw, 0})
-	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
-	gb := make([]mqState, 1<<16)
-	collective := decodeGenericInto(dec, gb, numPats*pw, ph, template, at, false, nil)
+	var collective *jbBitmap
+	if hdmmr != 0 {
+		bmp, err := newMMRPlaneReader(r.data[r.pos:]).plane(numPats*pw, ph, false)
+		if err != nil {
+			return err
+		}
+		collective = bmp
+	} else {
+		// The pattern-dictionary A1 adaptive pixel is (-HDPW, 0) (T.88 6.7.5).
+		at := halftoneAT(template, atPixel{-pw, 0})
+		dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
+		gb := make([]mqState, 1<<16)
+		collective = decodeGenericInto(dec, gb, numPats*pw, ph, template, at, false, nil)
+	}
 
 	patterns := make([]*jbBitmap, numPats)
 	for m := 0; m < numPats; m++ {
@@ -101,8 +110,8 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 	hgyU, ok4 := r.u32()
 	hrx, ok5 := r.u16()
 	hry, ok6 := r.u16()
-	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || hmmr != 0 {
-		return errJBIG2Unsupported // MMR halftone not yet supported
+	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 {
+		return errJBIG2Unsupported
 	}
 	if hgw == 0 || hgh == 0 || hgw > 1<<16 || hgh > 1<<16 {
 		return errJBIG2Unsupported
@@ -137,14 +146,19 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 		}
 	}
 
-	a1x := 3
-	if template > 1 {
-		a1x = 2
+	var gray []int
+	if hmmr != 0 {
+		gray = decodeGrayScaleMMR(r.data[r.pos:], gw, gh, bpp)
+	} else {
+		a1x := 3
+		if template > 1 {
+			a1x = 2
+		}
+		at := halftoneAT(template, atPixel{a1x, -1})
+		dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
+		gb := make([]mqState, 1<<16)
+		gray = decodeGrayScale(dec, gb, gw, gh, template, bpp, at, skip)
 	}
-	at := halftoneAT(template, atPixel{a1x, -1})
-	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
-	gb := make([]mqState, 1<<16)
-	gray := decodeGrayScale(dec, gb, gw, gh, template, bpp, at, skip)
 
 	for m := 0; m < gh; m++ {
 		for n := 0; n < gw; n++ {
@@ -178,6 +192,29 @@ func decodeGrayScale(dec *mqDecoder, gb []mqState, w, h, template, bpp int, at [
 	for i := bpp - 1; i >= 0; i-- { // most significant plane first
 		planes[i] = decodeGenericInto(dec, gb, w, h, template, at, false, skip)
 	}
+	return grayCombine(planes, w, h, bpp)
+}
+
+// decodeGrayScaleMMR decodes the greyscale image when the halftone region is
+// MMR-coded (HMMR = 1): the bitplanes are consecutive Group-4 bitmaps sharing one
+// bit stream, each ended by an EOFB (Annex C.5). A malformed plane yields zeros.
+func decodeGrayScaleMMR(data []byte, w, h, bpp int) []int {
+	mr := newMMRPlaneReader(data)
+	planes := make([]*jbBitmap, bpp)
+	for i := bpp - 1; i >= 0; i-- { // most significant plane first
+		p, err := mr.plane(w, h, true)
+		if err != nil {
+			p = newJBBitmap(w, h, 0)
+		}
+		planes[i] = p
+	}
+	return grayCombine(planes, w, h, bpp)
+}
+
+// grayCombine turns bpp Gray-coded bitplanes (MSB first) into one integer per
+// cell (T.88 C.5): the top plane is the value's high bit and each lower plane is
+// XORed with the running bit to convert Gray code to binary.
+func grayCombine(planes []*jbBitmap, w, h, bpp int) []int {
 	gray := make([]int, w*h)
 	for i := range gray {
 		v := int(planes[bpp-1].pix[i])

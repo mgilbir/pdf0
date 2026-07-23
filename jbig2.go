@@ -266,7 +266,15 @@ func parseJBIG2Header(r *jbReader) (jbSegment, bool, error) {
 		return seg, false, errJBIG2Unsupported
 	}
 	if dataLen == 0xFFFFFFFF {
-		return seg, false, errJBIG2Unsupported // unknown-length segments not yet handled
+		// Unknown segment length (7.2.7): permitted only for immediate generic
+		// regions. The row data is followed by a 6-byte terminator — {0xFF,0xAC}
+		// (arithmetic) or {0x00,0x00} (MMR) then the region height — that we scan
+		// for to recover the length.
+		n, ok := unknownGenericLength(r.data[r.pos:], seg.typ)
+		if !ok {
+			return seg, false, errJBIG2Unsupported
+		}
+		dataLen = uint32(n)
 	}
 	if int(dataLen) > r.remaining() {
 		return seg, false, errJBIG2Unsupported
@@ -274,6 +282,38 @@ func parseJBIG2Header(r *jbReader) (jbSegment, bool, error) {
 	seg.data = r.data[r.pos : r.pos+int(dataLen)]
 	r.pos += int(dataLen)
 	return seg, true, nil
+}
+
+// unknownGenericLength recovers the data length of an immediate generic region
+// segment written with the unknown-length marker 0xFFFFFFFF (7.2.7). The row data
+// is followed by the coder's end marker then a four-byte row count. For the
+// arithmetic coder the marker {0xFF,0xAC} cannot occur in valid data (MQ byte
+// stuffing forbids 0xFF followed by >0x8F), so it locates the end on its own; for
+// MMR the {0x00,0x00} marker is ambiguous, so the declared region height (which
+// the terminator repeats) disambiguates it.
+func unknownGenericLength(data []byte, typ int) (int, bool) {
+	if typ != 36 && typ != 38 && typ != 39 { // immediate/intermediate generic region
+		return 0, false
+	}
+	if len(data) < 18 { // region info (17) + generic flags (1)
+		return 0, false
+	}
+	if data[17]&1 == 0 { // arithmetic: the FF AC marker is self-delimiting
+		for i := 18; i+6 <= len(data); i++ {
+			if data[i] == 0xFF && data[i+1] == 0xAC {
+				return i + 6, true // 2 marker bytes + 4-byte row count
+			}
+		}
+		return 0, false
+	}
+	var pat [6]byte // MMR: {0x00,0x00} + region height
+	copy(pat[2:], data[4:8])
+	for i := 18; i+6 <= len(data); i++ {
+		if [6]byte(data[i:i+6]) == pat {
+			return i + 6, true
+		}
+	}
+	return 0, false
 }
 
 // run dispatches each segment. Unknown or not-yet-supported region types return
@@ -513,6 +553,55 @@ func decodeGenericMMR(data []byte, w, h int) (*jbBitmap, error) {
 				bmp.pix[y*w+x] = 1
 			}
 		}
+	}
+	return bmp, nil
+}
+
+// mmrPlaneReader decodes successive Group-4 (MMR) bitmaps from one shared bit
+// stream. JBIG2 codes an MMR pattern-dictionary collective bitmap as a single
+// plane, and an MMR grayscale image (T.88 Annex C.5) as a run of planes each
+// terminated by an EOFB and byte-aligned, so the same reader must span them all.
+type mmrPlaneReader struct {
+	br *ccittBitReader
+}
+
+func newMMRPlaneReader(data []byte) *mmrPlaneReader {
+	return &mmrPlaneReader{br: &ccittBitReader{data: data}}
+}
+
+// plane decodes one w x h Group-4 bitmap (1 = black), then, when eofb is set,
+// consumes the trailing EOFB and byte-aligns so the reader is positioned at the
+// next plane.
+func (m *mmrPlaneReader) plane(w, h int, eofb bool) (*jbBitmap, error) {
+	bmp := newJBBitmap(w, h, 0)
+	ref := []int{}
+	for row := 0; row < h; row++ {
+		cur, err := decode2DLine(m.br, ref, w)
+		if err != nil {
+			return nil, err
+		}
+		color, prev := 0, 0
+		for _, c := range cur {
+			if c > w {
+				c = w
+			}
+			if color == 1 {
+				for x := prev; x < c; x++ {
+					bmp.pix[row*w+x] = 1
+				}
+			}
+			prev, color = c, color^1
+		}
+		if color == 1 {
+			for x := prev; x < w; x++ {
+				bmp.pix[row*w+x] = 1
+			}
+		}
+		ref = cur
+	}
+	if eofb {
+		m.br.consumeEOFB()
+		m.br.align()
 	}
 	return bmp, nil
 }

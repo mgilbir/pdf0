@@ -52,3 +52,11 @@ https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texthuffrefinecustomsize.pdf	bitmap-symbol-texthuffrefinecustomsize.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-textrefine-customat.pdf	bitmap-symbol-textrefine-customat.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-textrefine-negative-delta-width.pdf	bitmap-symbol-textrefine-negative-delta-width.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-stripe.pdf	bitmap-stripe.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-stripe-single.pdf	bitmap-stripe-single.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-stripe-last-implicit.pdf	bitmap-stripe-last-implicit.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-stripe-initially-unknown-height.pdf	bitmap-stripe-initially-unknown-height.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-initially-unknown-size.pdf	bitmap-initially-unknown-size.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-context-reuse.pdf	bitmap-symbol-context-reuse.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-empty.pdf	bitmap-symbol-empty.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-big-segmentid.pdf	bitmap-symbol-big-segmentid.pdf

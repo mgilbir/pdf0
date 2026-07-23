@@ -39,8 +39,9 @@ func grayPixels(t *testing.T, img ExtractedImage) *image.Gray {
 
 // TestJBIG2GenericCrossCheck decodes every generic-region encoding of the shared
 // test bitmap (arithmetic templates 0-3, custom AT, TPGDON typical prediction,
-// and MMR) and asserts they all produce byte-identical pixels. Different coders
-// agreeing on the same output is strong evidence the decoder is correct.
+// MMR, striped pages, and an unknown-length segment) and asserts they all produce
+// byte-identical pixels. Different coders agreeing on the same output is strong
+// evidence the decoder is correct.
 func TestJBIG2GenericCrossCheck(t *testing.T) {
 	dir := "testdata/jbig2"
 	generic := []string{
@@ -51,6 +52,13 @@ func TestJBIG2GenericCrossCheck(t *testing.T) {
 		"bitmap-tpgdon.pdf",
 		"bitmap-template1-customat-tpgdon.pdf",
 		"bitmap-mmr.pdf",
+		// Striped pages (end-of-stripe segments) and a generic region written with
+		// the unknown-length marker (7.2.7).
+		"bitmap-stripe.pdf",
+		"bitmap-stripe-single.pdf",
+		"bitmap-stripe-last-implicit.pdf",
+		"bitmap-stripe-initially-unknown-height.pdf",
+		"bitmap-initially-unknown-size.pdf",
 	}
 	if _, err := os.Stat(filepath.Join(dir, generic[0])); err != nil {
 		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
@@ -188,8 +196,8 @@ func TestJBIG2Refinement(t *testing.T) {
 
 // TestJBIG2Halftone decodes the halftone encodings of the shared bitmap —
 // pattern dictionary + halftone region across templates, grid vectors, the skip
-// optimisation, a 10-bit-per-pixel grid, compositing and refinement — and
-// asserts each matches the generic-region reference.
+// optimisation, a 10-bit-per-pixel grid (arithmetic and MMR), compositing and
+// refinement — and asserts each matches the generic-region reference.
 func TestJBIG2Halftone(t *testing.T) {
 	dir := "testdata/jbig2"
 	ref := filepath.Join(dir, "bitmap-template1.pdf")
@@ -206,6 +214,7 @@ func TestJBIG2Halftone(t *testing.T) {
 		"bitmap-halftone-grid.pdf",
 		"bitmap-halftone-skip-grid.pdf",
 		"bitmap-halftone-10bpp.pdf",
+		"bitmap-halftone-10bpp-mmr.pdf",
 		"bitmap-halftone-composite.pdf",
 		"bitmap-halftone-refine.pdf",
 	} {
@@ -258,12 +267,17 @@ func TestJBIG2Huffman(t *testing.T) {
 	}
 }
 
-// TestJBIG2UnsupportedFallback checks that features not yet implemented (MMR
-// halftone) degrade gracefully: the image is reported undecoded with the raw
+// TestJBIG2UnsupportedFallback checks that features not yet implemented (symbol
+// context reuse/retention, empty symbol dictionaries, large referred-to segment
+// numbers) degrade gracefully: the image is reported undecoded with the raw
 // bytes, never a panic or a hard error to the caller.
 func TestJBIG2UnsupportedFallback(t *testing.T) {
 	dir := "testdata/jbig2"
-	for _, name := range []string{"bitmap-halftone-10bpp-mmr.pdf"} {
+	for _, name := range []string{
+		"bitmap-symbol-context-reuse.pdf",
+		"bitmap-symbol-empty.pdf",
+		"bitmap-symbol-big-segmentid.pdf",
+	} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err != nil {
 			t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
