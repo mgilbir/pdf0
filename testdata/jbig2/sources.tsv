@@ -38,3 +38,17 @@ https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffB5B3-texthuffB7B9B12.pdf	bitmap-symbol-symhuffB5B3-texthuffB7B9B12.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffcustom-texthuffcustom.pdf	bitmap-symbol-symhuffcustom-texthuffcustom.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffuncompressed-texthuff.pdf	bitmap-symbol-symhuffuncompressed-texthuff.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffrefineone.pdf	bitmap-symbol-symhuffrefineone.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffrefineseveral.pdf	bitmap-symbol-symhuffrefineseveral.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symhuffrefine-textrefine.pdf	bitmap-symbol-symhuffrefine-textrefine.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symbolrefine-textrefine.pdf	bitmap-symbol-symbolrefine-textrefine.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-symbolrefineone-customat.pdf	bitmap-symbol-symbolrefineone-customat.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texthuffrefine.pdf	bitmap-symbol-texthuffrefine.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texthuffrefineB15.pdf	bitmap-symbol-texthuffrefineB15.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texthuffrefinecustom.pdf	bitmap-symbol-texthuffrefinecustom.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texthuffrefinecustomdims.pdf	bitmap-symbol-texthuffrefinecustomdims.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texthuffrefinecustomposdims.pdf	bitmap-symbol-texthuffrefinecustomposdims.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texthuffrefinecustompos.pdf	bitmap-symbol-texthuffrefinecustompos.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-texthuffrefinecustomsize.pdf	bitmap-symbol-texthuffrefinecustomsize.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-textrefine-customat.pdf	bitmap-symbol-textrefine-customat.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-textrefine-negative-delta-width.pdf	bitmap-symbol-textrefine-negative-delta-width.pdf

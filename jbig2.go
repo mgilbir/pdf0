@@ -17,12 +17,12 @@ import (
 // by the page stream.
 //
 // This decodes generic regions (arithmetic and MMR), symbol-dictionary + text
-// regions (arithmetic), and generic refinement — both standalone regions and
-// symbol refinement (SBREFINE / single-instance SDREFAGG) — plus pattern
+// regions (both arithmetic and Huffman), and generic refinement — standalone
+// regions, text-region symbol refinement (SBREFINE), and symbol-dictionary
+// refinement/aggregation (SDREFAGG, single- and multi-instance) — plus pattern
 // dictionaries and halftone regions (arithmetic), composing them onto the page.
-// MMR-coded halftone, multi-instance aggregation, and the Huffman-coded
-// symbol/text variants are recognised but not yet decoded; a document using them
-// falls back to the raw encoded bytes.
+// MMR-coded halftone is recognised but not yet decoded; such a document falls
+// back to the raw encoded bytes.
 //
 // Internally a bitmap stores one byte per pixel with 1 = black (the JBIG2
 // convention). The final packed output inverts this to the PDF image convention

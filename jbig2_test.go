@@ -129,8 +129,9 @@ func TestJBIG2SymbolText(t *testing.T) {
 
 // TestJBIG2Refinement decodes the refinement encodings of the shared bitmap —
 // standalone generic refinement regions (templates 0/1, TPGRON, custom AT, whole
-// page) and symbol refinement (SBREFINE in text regions, SDREFAGG single-instance
-// in symbol dictionaries) — and asserts each matches the generic-region reference.
+// page) and symbol refinement (SBREFINE text regions and SDREFAGG symbol
+// dictionaries, single-instance and multi-instance aggregate, arithmetic and
+// Huffman) — and asserts each matches the generic-region reference.
 func TestJBIG2Refinement(t *testing.T) {
 	dir := "testdata/jbig2"
 	ref := filepath.Join(dir, "bitmap-template1.pdf")
@@ -148,7 +149,27 @@ func TestJBIG2Refinement(t *testing.T) {
 		"bitmap-symbol-refine.pdf",
 		"bitmap-symbol-symbolrefineone.pdf",
 		"bitmap-symbol-symbolrefineone-template1.pdf",
+		"bitmap-symbol-symbolrefineone-customat.pdf",
 		"bitmap-symbol-textrefine.pdf",
+		"bitmap-symbol-textrefine-customat.pdf",
+		"bitmap-symbol-textrefine-negative-delta-width.pdf",
+		// Arithmetic multi-instance aggregation (SDREFAGG > 1) and combined
+		// symbol+text refinement (6.5.8.2.1).
+		"bitmap-symbol-symbolrefineseveral.pdf",
+		"bitmap-symbol-symbolrefine-textrefine.pdf",
+		// Huffman symbol refinement/aggregation (SDHUFF+SDREFAGG, 6.5.8.2).
+		"bitmap-symbol-symhuffrefineone.pdf",
+		"bitmap-symbol-symhuffrefineseveral.pdf",
+		"bitmap-symbol-symhuffrefine-textrefine.pdf",
+		// Huffman text-region refinement (SBHUFF+SBREFINE, 6.4.11): standard,
+		// B.15 size, and custom RDW/RDH/RDX/RDY/RSIZE tables.
+		"bitmap-symbol-texthuffrefine.pdf",
+		"bitmap-symbol-texthuffrefineB15.pdf",
+		"bitmap-symbol-texthuffrefinecustom.pdf",
+		"bitmap-symbol-texthuffrefinecustomdims.pdf",
+		"bitmap-symbol-texthuffrefinecustompos.pdf",
+		"bitmap-symbol-texthuffrefinecustomposdims.pdf",
+		"bitmap-symbol-texthuffrefinecustomsize.pdf",
 	} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err != nil {
@@ -238,11 +259,11 @@ func TestJBIG2Huffman(t *testing.T) {
 }
 
 // TestJBIG2UnsupportedFallback checks that features not yet implemented (MMR
-// halftone, multi-instance aggregate) degrade gracefully: the image is reported
-// undecoded with the raw bytes, never a panic or a hard error to the caller.
+// halftone) degrade gracefully: the image is reported undecoded with the raw
+// bytes, never a panic or a hard error to the caller.
 func TestJBIG2UnsupportedFallback(t *testing.T) {
 	dir := "testdata/jbig2"
-	for _, name := range []string{"bitmap-halftone-10bpp-mmr.pdf", "bitmap-symbol-symbolrefineseveral.pdf"} {
+	for _, name := range []string{"bitmap-halftone-10bpp-mmr.pdf"} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err != nil {
 			t.Skip("no JBIG2 sample PDFs; run `make jbig2`")

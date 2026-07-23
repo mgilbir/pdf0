@@ -8,8 +8,9 @@ package pdf0
 // decoder IAID.
 //
 // This is the arithmetic-coded path; the Huffman-coded variants (SDHUFF/SBHUFF)
-// are in jbig2_huffcode.go. Multi-instance symbol refinement/aggregation is not
-// yet handled and falls back to the raw bytes.
+// are in jbig2_huffcode.go. Symbol refinement and aggregation (SDREFAGG,
+// single- and multi-instance, and SBREFINE) are handled here and shared with the
+// Huffman path via decodeRefinement.
 
 // newIAx allocates an integer-arithmetic context (Annex A: 512 states).
 func newIAx() []mqState { return make([]mqState, 512) }
@@ -141,6 +142,9 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 	iadh, iadw, iaex := newIAx(), newIAx(), newIAx()
 	iaai, iardx, iardy := newIAx(), newIAx(), newIAx()
+	// Contexts for the aggregate text-region sub-procedure (6.5.8.2.1, Table 17).
+	iadt, iafs, iads := newIAx(), newIAx(), newIAx()
+	iari, iardw, iardh := newIAx(), newIAx(), newIAx()
 	gb := make([]mqState, 1<<16)
 	grCx := make([]mqState, 1<<13)
 	// Symbol-ID code length for aggregate/refinement references (input ++ new).
@@ -173,17 +177,28 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 			} else {
 				// Aggregate/refinement coding (6.5.8.2).
 				nInst, _ := decodeInt(dec, iaai)
-				if nInst != 1 {
-					return errJBIG2Unsupported // multi-instance aggregate not yet supported
-				}
-				id := decodeIAID(dec, iaid, refCodeLen)
-				rdx, _ := decodeInt(dec, iardx)
-				rdy, _ := decodeInt(dec, iardy)
 				all := append(append([]*jbBitmap{}, input...), newSyms...)
-				if id < 0 || id >= len(all) {
+				if nInst == 1 {
+					// Single-instance refinement (6.5.8.2.2).
+					id := decodeIAID(dec, iaid, refCodeLen)
+					rdx, _ := decodeInt(dec, iardx)
+					rdy, _ := decodeInt(dec, iardy)
+					if id < 0 || id >= len(all) {
+						return errJBIG2Unsupported
+					}
+					bmp = decodeRefinement(dec, grCx, symWidth, hcHeight, sdrTemplate, all[id], rdx, rdy, false, rAt)
+				} else if nInst <= 0 {
 					return errJBIG2Unsupported
+				} else {
+					// Multiple instances aggregate into the symbol via a text-region
+					// decoding procedure (6.5.8.2.1).
+					c := aggCtx{iadt: iadt, iafs: iafs, iads: iads, iait: newIAx(), iari: iari, iardw: iardw, iardh: iardh, iardx: iardx, iardy: iardy, iaid: iaid, gr: grCx}
+					b, err := decodeAggregateArith(dec, c, symWidth, hcHeight, nInst, refCodeLen, all, sdrTemplate, rAt)
+					if err != nil {
+						return err
+					}
+					bmp = b
 				}
-				bmp = decodeRefinement(dec, grCx, symWidth, hcHeight, sdrTemplate, all[id], rdx, rdy, false, rAt)
 			}
 			newSyms = append(newSyms, bmp)
 		}
@@ -237,7 +252,7 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 	}
 	sbrTemplate := int((flags >> 15) & 1)
 	if sbhuff != 0 {
-		return d.readTextRegionHuff(seg, r, ri, logStrips, refCorner, transposed, sbCombOp, sbDefPixel, dsOffset, int(sbrefine))
+		return d.readTextRegionHuff(seg, r, ri, logStrips, refCorner, transposed, sbCombOp, sbDefPixel, dsOffset, int(sbrefine), sbrTemplate)
 	}
 
 	// Refinement AT pixels precede SBNUMINSTANCES when refinement uses template 0.
@@ -332,6 +347,66 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 	}
 	d.page.blit(region, ri.x, ri.y, ri.combOp)
 	return nil
+}
+
+// aggCtx bundles the integer-arithmetic and refinement contexts a symbol-dict
+// aggregate shares with the enclosing dictionary decode (T.88 Table 17).
+type aggCtx struct {
+	iadt, iafs, iads, iait []mqState
+	iari, iardw, iardh     []mqState
+	iardx, iardy, iaid, gr []mqState
+}
+
+// decodeAggregateArith decodes an aggregate symbol (REFAGGNINST > 1) as a small
+// arithmetic text region of numInst instances (T.88 6.5.8.2.1): single-pixel
+// strips, top-left reference corner, OR compositing, no S offset. It reads from
+// the dictionary's ongoing MQ stream and shared contexts.
+func decodeAggregateArith(dec *mqDecoder, c aggCtx, w, height, numInst, symCodeLen int, syms []*jbBitmap, sbrTemplate int, rAt []atPixel) (*jbBitmap, error) {
+	region := newJBBitmap(w, height, 0)
+	dt0, _ := decodeInt(dec, c.iadt)
+	stripT := -dt0 // SBSTRIPS == 1
+	firstS := 0
+	inst := 0
+	for inst < numInst {
+		dt, _ := decodeInt(dec, c.iadt)
+		stripT += dt
+		dfs, _ := decodeInt(dec, c.iafs)
+		firstS += dfs
+		curS := firstS
+		first := true
+		for {
+			if !first {
+				ids, ok := decodeInt(dec, c.iads)
+				if !ok {
+					break // OOB: end of strip
+				}
+				curS += ids // SBDSOFFSET == 0
+			}
+			first = false
+			if inst >= numInst {
+				break
+			}
+			id := decodeIAID(dec, c.iaid, symCodeLen)
+			if id < 0 || id >= len(syms) {
+				return nil, errJBIG2Unsupported
+			}
+			sym := syms[id]
+			if ri, _ := decodeInt(dec, c.iari); ri != 0 {
+				rdw, _ := decodeInt(dec, c.iardw)
+				rdh, _ := decodeInt(dec, c.iardh)
+				rdx, _ := decodeInt(dec, c.iardx)
+				rdy, _ := decodeInt(dec, c.iardy)
+				rw, rh := sym.w+rdw, sym.h+rdh
+				if rw <= 0 || rh <= 0 || rw > 1<<16 || rh > 1<<16 {
+					return nil, errJBIG2Unsupported
+				}
+				sym = decodeRefinement(dec, c.gr, rw, rh, sbrTemplate, sym, (rdw>>1)+rdx, (rdh>>1)+rdy, false, rAt)
+			}
+			placeSymbol(region, sym, &curS, stripT, 1 /*TOPLEFT*/, false, 0 /*OR*/)
+			inst++
+		}
+	}
+	return region, nil
 }
 
 // placeSymbol draws one symbol instance into the region at the current S
