@@ -16,13 +16,14 @@ import (
 // /DecodeParms carries shared segments (symbol dictionaries, tables) referenced
 // by the page stream.
 //
-// This decodes generic regions (arithmetic and MMR), symbol-dictionary + text
-// regions (both arithmetic and Huffman), and generic refinement — standalone
-// regions, text-region symbol refinement (SBREFINE), and symbol-dictionary
-// refinement/aggregation (SDREFAGG, single- and multi-instance) — plus pattern
-// dictionaries and halftone regions (arithmetic), composing them onto the page.
-// MMR-coded halftone is recognised but not yet decoded; such a document falls
-// back to the raw encoded bytes.
+// This decodes generic regions (arithmetic and MMR, including unknown-length
+// segments), symbol-dictionary + text regions (both arithmetic and Huffman, with
+// coding-context reuse), and generic refinement — standalone regions, text-region
+// symbol refinement (SBREFINE), symbol-dictionary refinement/aggregation
+// (SDREFAGG, single- and multi-instance), and intermediate regions used as a
+// refinement reference — plus pattern dictionaries and halftone regions
+// (arithmetic and MMR), composing them onto the page. A document that uses a
+// segment type or feature not handled here falls back to the raw encoded bytes.
 //
 // Internally a bitmap stores one byte per pixel with 1 = black (the JBIG2
 // convention). The final packed output inverts this to the PDF image convention
@@ -161,6 +162,15 @@ type jbig2Decoder struct {
 	symbols    map[uint32][]*jbBitmap // exported symbols per symbol-dict segment
 	patterns   map[uint32][]*jbBitmap // patterns per pattern-dict segment
 	huffTables map[uint32]*huffTable  // custom Huffman tables per table segment
+	symCtx     map[uint32]*symbolCtx  // retained coding contexts per symbol-dict segment
+	intermrgn  map[uint32]*jbBitmap   // intermediate region results (types 36/40) keyed by segment
+}
+
+// symbolCtx holds the generic (GB) and refinement (GR) arithmetic coding
+// contexts a symbol dictionary retains for a later dictionary to resume from
+// (SDRETAINCONTEXT / SDUSEDCONTEXT, T.88 7.4.3.1.7).
+type symbolCtx struct {
+	gb, gr []mqState
 }
 
 // parseJBIG2Segments parses the embedded (PDF) segment organisation: a sequence
@@ -320,46 +330,37 @@ func unknownGenericLength(data []byte, typ int) (int, bool) {
 // an error so the caller can fall back to the raw encoded bytes.
 func (d *jbig2Decoder) run(segs []jbSegment) error {
 	for _, seg := range segs {
-		switch seg.typ {
-		case 48: // page info
-			if err := d.readPageInfo(seg); err != nil {
-				return err
-			}
-		case 36, 38, 39: // immediate generic region
-			if err := d.readGenericRegion(seg); err != nil {
-				return err
-			}
-		case 0: // symbol dictionary
-			if err := d.readSymbolDict(seg); err != nil {
-				return err
-			}
-		case 4, 6, 7: // text region (intermediate / immediate / immediate lossless)
-			if err := d.readTextRegion(seg); err != nil {
-				return err
-			}
-		case 40, 42, 43: // generic refinement region
-			if err := d.readRefinementRegion(seg); err != nil {
-				return err
-			}
-		case 16: // pattern dictionary
-			if err := d.readPatternDict(seg); err != nil {
-				return err
-			}
-		case 20, 22, 23: // halftone region
-			if err := d.readHalftoneRegion(seg); err != nil {
-				return err
-			}
-		case 53: // custom Huffman table
-			if err := d.readCustomTable(seg); err != nil {
-				return err
-			}
-		case 49, 50, 51, 62: // end of page/stripe/file, extension
-			// nothing to do
-		default:
-			return errJBIG2Unsupported
+		if err := d.dispatch(seg); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// dispatch decodes one segment by type.
+func (d *jbig2Decoder) dispatch(seg jbSegment) error {
+	switch seg.typ {
+	case 48: // page info
+		return d.readPageInfo(seg)
+	case 36, 38, 39: // immediate generic region
+		return d.readGenericRegion(seg)
+	case 0: // symbol dictionary
+		return d.readSymbolDict(seg)
+	case 4, 6, 7: // text region (intermediate / immediate / immediate lossless)
+		return d.readTextRegion(seg)
+	case 40, 42, 43: // generic refinement region
+		return d.readRefinementRegion(seg)
+	case 16: // pattern dictionary
+		return d.readPatternDict(seg)
+	case 20, 22, 23: // halftone region
+		return d.readHalftoneRegion(seg)
+	case 53: // custom Huffman table
+		return d.readCustomTable(seg)
+	case 49, 50, 51, 62: // end of page/stripe/file, extension
+		return nil
+	default:
+		return errJBIG2Unsupported
+	}
 }
 
 func (d *jbig2Decoder) readPageInfo(seg jbSegment) error {
@@ -447,12 +448,25 @@ func (d *jbig2Decoder) readGenericRegion(seg jbSegment) error {
 	if err != nil {
 		return err
 	}
+	if seg.typ == 36 { // intermediate: stored for a later segment, not composed
+		d.storeIntermediate(seg.number, bmp)
+		return nil
+	}
 	if d.page == nil {
 		// No explicit page info; make the region the page.
 		d.page = newJBBitmap(d.imgW, d.imgH, 0)
 	}
 	d.page.blit(bmp, ri.x, ri.y, ri.combOp)
 	return nil
+}
+
+// storeIntermediate records an intermediate region result under its segment
+// number so a later refinement region can use it as a reference (T.88 7.4.6/7.4.7).
+func (d *jbig2Decoder) storeIntermediate(number uint32, bmp *jbBitmap) {
+	if d.intermrgn == nil {
+		d.intermrgn = map[uint32]*jbBitmap{}
+	}
+	d.intermrgn[number] = bmp
 }
 
 // blit composes src onto b at (dx,dy) using the JBIG2 combination operator
@@ -523,14 +537,39 @@ func (d *jbig2Decoder) readRefinementRegion(seg jbSegment) error {
 			at = append(at, atPixel{ax, ay})
 		}
 	}
-	if d.page == nil {
-		d.page = newJBBitmap(d.imgW, d.imgH, 0)
+	// The reference is an intermediate region this segment refers to, if any;
+	// otherwise it is the page content at the region's location (7.4.7.2).
+	var ref *jbBitmap
+	for _, rr := range seg.refs {
+		if im, ok := d.intermrgn[rr]; ok {
+			ref = im
+			break
+		}
 	}
-	ref := d.page.subregion(ri.x, ri.y, ri.w, ri.h)
+	onPage := ref == nil
+	if onPage {
+		if d.page == nil {
+			d.page = newJBBitmap(d.imgW, d.imgH, 0)
+		}
+		ref = d.page.subregion(ri.x, ri.y, ri.w, ri.h)
+	}
 	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 	cx := make([]mqState, 1<<13)
 	out := decodeRefinement(dec, cx, ri.w, ri.h, template, ref, 0, 0, tpgron, at)
-	d.page.blit(out, ri.x, ri.y, 4) // REPLACE the refined region
+	if seg.typ == 40 { // intermediate: stored, not composed
+		d.storeIntermediate(seg.number, out)
+		return nil
+	}
+	if d.page == nil {
+		d.page = newJBBitmap(d.imgW, d.imgH, 0)
+	}
+	// Refining the page in place replaces that region; refining a referenced
+	// intermediate region composes the result with the region's operator.
+	op := 4 // REPLACE
+	if !onPage {
+		op = ri.combOp
+	}
+	d.page.blit(out, ri.x, ri.y, op)
 	return nil
 }
 

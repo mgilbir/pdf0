@@ -178,6 +178,11 @@ func TestJBIG2Refinement(t *testing.T) {
 		"bitmap-symbol-texthuffrefinecustompos.pdf",
 		"bitmap-symbol-texthuffrefinecustomposdims.pdf",
 		"bitmap-symbol-texthuffrefinecustomsize.pdf",
+		// Intermediate regions (types 36/40) referenced as the refinement's
+		// reference bitmap, then composed with AND/XNOR/XOR/REPLACE (7.4.6/7.4.7).
+		"bitmap-composite-and-xnor-refine.pdf",
+		"bitmap-composite-or-xor-replace-refine.pdf",
+		"bitmap-trailing-7fff-stripped-harder-refine.pdf",
 	} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err != nil {
@@ -267,30 +272,37 @@ func TestJBIG2Huffman(t *testing.T) {
 	}
 }
 
-// TestJBIG2UnsupportedFallback checks that features not yet implemented (symbol
-// context reuse/retention, empty symbol dictionaries, large referred-to segment
-// numbers) degrade gracefully: the image is reported undecoded with the raw
-// bytes, never a panic or a hard error to the caller.
-func TestJBIG2UnsupportedFallback(t *testing.T) {
+// TestJBIG2EdgeCases decodes the shared bitmap through structural edge cases —
+// symbol-dictionary coding-context reuse/retention (SDUSEDCONTEXT/SDRETAINCONTEXT),
+// empty symbol dictionaries, large referred-to segment numbers (2- and 4-byte
+// referencing), and region compositing with every operator — and asserts each
+// matches the generic-region reference.
+func TestJBIG2EdgeCases(t *testing.T) {
 	dir := "testdata/jbig2"
+	ref := filepath.Join(dir, "bitmap-template1.pdf")
+	if _, err := os.Stat(ref); err != nil {
+		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
+	}
+	want := grayPixels(t, jbig2Image(t, ref)).Pix
+
 	for _, name := range []string{
 		"bitmap-symbol-context-reuse.pdf",
 		"bitmap-symbol-empty.pdf",
 		"bitmap-symbol-big-segmentid.pdf",
+		"bitmap-composite-and-xnor.pdf",
+		"bitmap-composite-or-xor-replace.pdf",
 	} {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err != nil {
-			t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
+			continue
 		}
 		img := jbig2Image(t, path)
-		if img.Decoded {
-			continue // fine if a later milestone decodes it
+		if !img.Decoded {
+			t.Errorf("%s: not decoded: %s", name, img.Note)
+			continue
 		}
-		if len(img.Encoded) == 0 {
-			t.Errorf("%s: undecoded image should carry the raw encoded bytes", name)
-		}
-		if img.Note == "" {
-			t.Errorf("%s: undecoded image should explain why", name)
+		if !bytes.Equal(grayPixels(t, img).Pix, want) {
+			t.Errorf("%s: pixels differ from the generic-region reference", name)
 		}
 	}
 }

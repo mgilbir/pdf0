@@ -97,6 +97,8 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 	}
 	sdhuff := flags & 1
 	sdrefagg := (flags >> 1) & 1
+	usedCtx := (flags >> 8) & 1
+	retainCtx := (flags >> 9) & 1
 	template := int((flags >> 10) & 3)
 	sdrTemplate := int((flags >> 12) & 1)
 	if sdhuff != 0 {
@@ -147,6 +149,18 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 	iari, iardw, iardh := newIAx(), newIAx(), newIAx()
 	gb := make([]mqState, 1<<16)
 	grCx := make([]mqState, 1<<13)
+	// A dictionary may resume the coding contexts a referred dictionary retained
+	// (SDUSEDCONTEXT), rather than starting from a cleared model (7.4.3.1.7).
+	if usedCtx != 0 {
+		if sc := d.referredSymbolCtx(seg); sc != nil {
+			if len(sc.gb) == len(gb) {
+				copy(gb, sc.gb)
+			}
+			if len(sc.gr) == len(grCx) {
+				copy(grCx, sc.gr)
+			}
+		}
+	}
 	// Symbol-ID code length for aggregate/refinement references (input ++ new).
 	refCodeLen := ceilLog2(int(numNew) + len(input))
 	if refCodeLen < 1 {
@@ -224,6 +238,30 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 		d.symbols = map[uint32][]*jbBitmap{}
 	}
 	d.symbols[seg.number] = exported
+	// Retain the final coding contexts so a later dictionary can resume them
+	// (SDRETAINCONTEXT).
+	if retainCtx != 0 {
+		if d.symCtx == nil {
+			d.symCtx = map[uint32]*symbolCtx{}
+		}
+		d.symCtx[seg.number] = &symbolCtx{
+			gb: append([]mqState(nil), gb...),
+			gr: append([]mqState(nil), grCx...),
+		}
+	}
+	return nil
+}
+
+// referredSymbolCtx returns the retained coding contexts to resume from: the
+// last referred symbol-dictionary segment that kept them (SDUSEDCONTEXT). A chain
+// of dictionaries each building on the previous retains an accumulating context,
+// so the most recent one carries the full state.
+func (d *jbig2Decoder) referredSymbolCtx(seg jbSegment) *symbolCtx {
+	for i := len(seg.refs) - 1; i >= 0; i-- {
+		if sc, ok := d.symCtx[seg.refs[i]]; ok {
+			return sc
+		}
+	}
 	return nil
 }
 
@@ -274,13 +312,10 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 	}
 
 	syms := d.inputSymbols(seg)
-	if len(syms) == 0 {
-		return errJBIG2Unsupported
-	}
+	// SBSYMCODELEN = ceil(log2(SBNUMSYMS)); a lone symbol needs no ID bits at all
+	// (T.88 6.5.8.2.3, matching jbig2dec). A larger value here would read a spurious
+	// ID bit and desync.
 	symCodeLen := ceilLog2(len(syms))
-	if symCodeLen < 1 {
-		symCodeLen = 1
-	}
 
 	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 	iadt, iafs, iads, iait := newIAx(), newIAx(), newIAx(), newIAx()

@@ -60,3 +60,8 @@ https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-initial
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-context-reuse.pdf	bitmap-symbol-context-reuse.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-empty.pdf	bitmap-symbol-empty.pdf
 https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-symbol-big-segmentid.pdf	bitmap-symbol-big-segmentid.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-composite-and-xnor.pdf	bitmap-composite-and-xnor.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-composite-and-xnor-refine.pdf	bitmap-composite-and-xnor-refine.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-composite-or-xor-replace.pdf	bitmap-composite-or-xor-replace.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-composite-or-xor-replace-refine.pdf	bitmap-composite-or-xor-replace-refine.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/bitmap-trailing-7fff-stripped-harder-refine.pdf	bitmap-trailing-7fff-stripped-harder-refine.pdf
