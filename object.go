@@ -45,12 +45,54 @@ func (Array) pdfObject() {}
 type Dictionary struct {
 	Keys   []Name
 	Values []Object
+
+	// index maps a key to the slot of its FIRST occurrence, giving Get/Set
+	// amortized O(1) lookup once the dictionary grows past dictLookupThreshold.
+	// Below the threshold a linear scan is cheaper than allocating the map.
+	//
+	// The index is built lazily and is self-healing: indexLen records len(Keys)
+	// at build time, and any mismatch forces a rebuild. Structural changes that
+	// shift slots (Delete) drop it. This keeps a large dictionary walked in a
+	// loop — a /RoleMap, a /Names tree, a big resource dict — from being O(n)
+	// per lookup, which is what turns an attacker-sized dictionary into a
+	// super-linear CPU DoS through the validators. The index is owned by the
+	// Dictionary: copying a Dictionary by value and then mutating both copies is
+	// unsupported (as it already is for the shared Values backing array).
+	index    map[Name]int
+	indexLen int
 }
 
 func (Dictionary) pdfObject() {}
 
+// dictLookupThreshold is the key count at or above which Get/Set maintain a
+// name→slot index instead of scanning linearly. It matches the parser's own
+// dictIndexThreshold: below it the linear scan beats a map allocation.
+const dictLookupThreshold = 64
+
+// buildIndex populates d.index with the slot of the first occurrence of each
+// key, matching the first-match semantics of the linear scan.
+func (d *Dictionary) buildIndex() {
+	idx := make(map[Name]int, len(d.Keys))
+	for i, k := range d.Keys {
+		if _, ok := idx[k]; !ok {
+			idx[k] = i
+		}
+	}
+	d.index = idx
+	d.indexLen = len(d.Keys)
+}
+
 // Get returns the value associated with the given key, or nil if not found.
 func (d *Dictionary) Get(key Name) Object {
+	if len(d.Keys) >= dictLookupThreshold {
+		if d.index == nil || d.indexLen != len(d.Keys) {
+			d.buildIndex()
+		}
+		if i, ok := d.index[key]; ok {
+			return d.Values[i]
+		}
+		return nil
+	}
 	for i, k := range d.Keys {
 		if k == key {
 			return d.Values[i]
@@ -59,8 +101,16 @@ func (d *Dictionary) Get(key Name) Object {
 	return nil
 }
 
-// Set sets the value for the given key. If the key already exists, it updates the value.
-// Otherwise, it appends a new key-value pair.
+// Set sets the value for the given key. If the key already exists, it updates the
+// value in place (its slot is unchanged, so the lookup index stays valid).
+// Otherwise it appends a new key-value pair and drops the index, which the next
+// lookup rebuilds lazily.
+//
+// Set deliberately scans linearly rather than consulting the index: building the
+// index here would make append-heavy construction O(n^2) (each Set would rebuild
+// an O(n) map). The index accelerates the read-heavy Get path, which is where the
+// super-linear validator traversals live; the parser, the one producer of very
+// large dictionaries, populates Keys/Values directly and never routes through Set.
 func (d *Dictionary) Set(key Name, value Object) {
 	for i, k := range d.Keys {
 		if k == key {
@@ -70,6 +120,10 @@ func (d *Dictionary) Set(key Name, value Object) {
 	}
 	d.Keys = append(d.Keys, key)
 	d.Values = append(d.Values, value)
+	// A new slot invalidates the index. Clearing this Dictionary's own field
+	// (never writing into the possibly-shared map) keeps value-copies safe: an
+	// aliasing copy still points at the old, still-correct read-only map.
+	d.index = nil
 }
 
 // Delete removes the key-value pair for the given key.
@@ -79,6 +133,7 @@ func (d *Dictionary) Delete(key Name) bool {
 		if k == key {
 			d.Keys = append(d.Keys[:i], d.Keys[i+1:]...)
 			d.Values = append(d.Values[:i], d.Values[i+1:]...)
+			d.index = nil // slots shifted; rebuild lazily on next lookup
 			return true
 		}
 	}
