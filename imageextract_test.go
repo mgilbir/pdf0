@@ -106,7 +106,8 @@ func TestExtractImages(t *testing.T) {
 	}
 
 	// Verify the RGB sample layout decodes.
-	if m, ok := samplesToImage([]byte{255, 0, 0, 0, 255, 0}, 1, 2, 8, "DeviceRGB"); !ok {
+	st := imageXObject(1, 2, 8, "DeviceRGB", "", []byte{255, 0, 0, 0, 255, 0})
+	if m, ok := (&Document{}).buildImage(st, st.Data, 1, 2, 8); !ok {
 		t.Error("RGB samples should decode")
 	} else if r, _, _, _ := m.At(0, 0).RGBA(); r>>8 != 255 {
 		t.Error("RGB pixel wrong")

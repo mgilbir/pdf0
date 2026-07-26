@@ -102,7 +102,14 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		// No filter, or a general-purpose filter chain (Flate/LZW/RunLength/ASCII):
 		// decodeContentStream reverses the chain to raw samples.
 		raw := decodeContentStream(d, st)
-		if m, ok := samplesToImage(raw, img.Width, img.Height, img.BitsPerComponent, img.ColorSpace); ok {
+		var m image.Image
+		var ok bool
+		if img.ColorSpace == "ImageMask" {
+			m, ok = imageMaskToImage(d, st, raw, img.Width, img.Height)
+		} else {
+			m, ok = d.buildImage(st, raw, img.Width, img.Height, img.BitsPerComponent)
+		}
+		if ok {
 			img.Image, img.Decoded = m, true
 		} else {
 			img.Encoded = raw
@@ -112,59 +119,31 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 	return img
 }
 
-// samplesToImage builds an image from decoded PDF sample bytes for the common
-// grayscale and RGB layouts. Rows are byte-aligned, as PDF requires.
-func samplesToImage(data []byte, w, h, bpc int, cs string) (image.Image, bool) {
-	if w <= 0 || h <= 0 {
+// imageMaskToImage renders a 1-bit stencil mask (/ImageMask true): samples select
+// where the fill colour would paint. It is rendered as black where painted, white
+// elsewhere; /Decode [1 0] inverts which bit paints.
+func imageMaskToImage(d *Document, st *Stream, data []byte, w, h int) (image.Image, bool) {
+	if w <= 0 || h <= 0 || !sampleDataFits(data, w, h, 1, 1) {
 		return nil, false
 	}
-	gray := cs == "DeviceGray" || cs == "CalGray" || cs == "G"
-	mask := cs == "ImageMask"
-	rgb := cs == "DeviceRGB" || cs == "CalRGB" || cs == "RGB"
-
-	switch {
-	case (gray || mask) && bpc == 1:
-		stride := (w + 7) / 8
-		if len(data) < stride*h {
-			return nil, false
-		}
-		im := image.NewGray(image.Rect(0, 0, w, h))
-		for y := 0; y < h; y++ {
-			row := data[y*stride:]
-			for x := 0; x < w; x++ {
-				bit := (row[x/8] >> (7 - uint(x%8))) & 1
-				// For an image mask a 1 marks the area to paint; render 1 as black.
-				v := byte(0)
-				if (mask && bit == 0) || (!mask && bit == 1) {
-					v = 255
-				}
-				im.SetGray(x, y, color.Gray{Y: v})
-			}
-		}
-		return im, true
-	case gray && bpc == 8:
-		if len(data) < w*h {
-			return nil, false
-		}
-		im := image.NewGray(image.Rect(0, 0, w, h))
-		for y := 0; y < h; y++ {
-			copy(im.Pix[y*im.Stride:], data[y*w:y*w+w])
-		}
-		return im, true
-	case rgb && bpc == 8:
-		if len(data) < w*h*3 {
-			return nil, false
-		}
-		im := image.NewRGBA(image.Rect(0, 0, w, h))
-		for y := 0; y < h; y++ {
-			src := data[y*w*3:]
-			for x := 0; x < w; x++ {
-				im.SetRGBA(x, y, color.RGBA{R: src[x*3], G: src[x*3+1], B: src[x*3+2], A: 255})
-			}
-		}
-		return im, true
+	paintBit := byte(0) // default /Decode [0 1]: a 0 sample paints
+	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && floatValue(d.Resolve(arr[0])) == 1 {
+		paintBit = 1
 	}
-	return nil, false
+	stride := (w + 7) / 8
+	im := image.NewGray(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		row := data[y*stride:]
+		for x := 0; x < w; x++ {
+			bit := (row[x/8] >> (7 - uint(x%8))) & 1
+			v := byte(255)
+			if bit == paintBit {
+				v = 0 // painted -> black
+			}
+			im.SetGray(x, y, color.Gray{Y: v})
+		}
+	}
+	return im, true
 }
 
 // colorSpaceName returns a best-effort colour space name: a direct name, or the
@@ -189,6 +168,16 @@ func intValue(obj Object) int {
 		return int(n)
 	case Real:
 		return int(n)
+	}
+	return 0
+}
+
+func floatValue(obj Object) float64 {
+	switch n := obj.(type) {
+	case Integer:
+		return float64(n)
+	case Real:
+		return float64(n)
 	}
 	return 0
 }
