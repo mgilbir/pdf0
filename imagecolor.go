@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"image"
+	"image/color"
 	"math"
 )
 
@@ -23,6 +24,21 @@ type imgColorSpace struct {
 	base    *imgColorSpace
 	decode  []float64                         // default /Decode (min,max per component)
 	toRGB   func(c []float64) (r, g, b uint8) // c holds ncomp values already mapped through /Decode
+	// toRGB16 is the full-precision counterpart of toRGB, used for 16-bit images.
+	// When nil the 8-bit toRGB result is promoted (byte*257), which is exact for
+	// spaces whose precision is inherently 8-bit.
+	toRGB16 func(c []float64) (r, g, b uint16)
+}
+
+// toRGB16Comps converts already-decoded components to 16-bit RGB, using the
+// space's own 16-bit conversion when available and otherwise promoting the
+// 8-bit result losslessly across the full range (0xFF -> 0xFFFF).
+func (cs *imgColorSpace) toRGB16Comps(c []float64) (r, g, b uint16) {
+	if cs.toRGB16 != nil {
+		return cs.toRGB16(c)
+	}
+	r8, g8, b8 := cs.toRGB(c)
+	return uint16(r8) * 257, uint16(g8) * 257, uint16(b8) * 257
 }
 
 // buildImage converts an image XObject's decoded samples to an image, applying
@@ -46,6 +62,10 @@ func (d *Document) buildImage(st *Stream, raw []byte, w, h, bpc int) (image.Imag
 	}
 
 	colorKey := d.colorKeyMask(st, cs.ncomp) // range array making matching samples transparent
+
+	if bpc == 16 {
+		return d.buildImage16(st, raw, w, h, cs, decode, maxval, colorKey)
+	}
 
 	im := image.NewNRGBA(image.Rect(0, 0, w, h))
 	sr := sampleReader{data: raw, bpc: bpc, w: w, ncomp: cs.ncomp}
@@ -80,6 +100,42 @@ func (d *Document) buildImage(st *Stream, raw []byte, w, h, bpc int) (image.Imag
 	return im, true
 }
 
+// buildImage16 renders a 16-bit-per-component image to an *image.NRGBA64,
+// preserving the full sample precision that an 8-bit *image.NRGBA would discard.
+// It mirrors the 8-bit path but keeps colour arithmetic in floats down to a
+// 16-bit clamp so a DeviceGray sample of 0xFFFF yields R=0xFFFF, 0x8000 ~ 0x8000.
+func (d *Document) buildImage16(st *Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, bool) {
+	im := image.NewNRGBA64(image.Rect(0, 0, w, h))
+	sr := sampleReader{data: raw, bpc: 16, w: w, ncomp: cs.ncomp}
+	comps := make([]float64, cs.ncomp)
+	rawS := make([]int, cs.ncomp)
+	for y := 0; y < h; y++ {
+		sr.startRow(y)
+		for x := 0; x < w; x++ {
+			var r, g, b uint16
+			if cs.indexed {
+				rawS[0] = sr.next()
+				idx := int(math.Round(decode[0] + float64(rawS[0])*(decode[1]-decode[0])/maxval))
+				r, g, b = cs.paletteRGB16(idx)
+			} else {
+				for k := 0; k < cs.ncomp; k++ {
+					rawS[k] = sr.next()
+					comps[k] = decode[2*k] + float64(rawS[k])*(decode[2*k+1]-decode[2*k])/maxval
+				}
+				r, g, b = cs.toRGB16Comps(comps)
+			}
+			a := uint16(0xFFFF)
+			if colorKey != nil && inColorKey(rawS, colorKey) {
+				a = 0
+			}
+			im.SetNRGBA64(x, y, color.NRGBA64{R: r, G: g, B: b, A: a})
+		}
+	}
+	d.applyStencilMask64(st, im)
+	d.applySoftMask64(st, im)
+	return im, true
+}
+
 // colorKeyMask returns the /Mask colour-key range array [min1 max1 …] when
 // present and well-formed for ncomp components, else nil.
 func (d *Document) colorKeyMask(st *Stream, ncomp int) []int {
@@ -105,22 +161,33 @@ func inColorKey(samples, ranges []int) bool {
 	return true
 }
 
+// stencilMask decodes a stencil /Mask (a 1-bit image XObject) into its packed
+// rows plus the sample value that marks a pixel hidden. ok is false when there
+// is no usable stencil mask. /Decode [1 0] inverts which sample hides.
+func (d *Document) stencilMask(st *Stream) (data []byte, mw, mh int, hideBit byte, ok bool) {
+	mk, ok := d.Resolve(st.Dict.Get("Mask")).(*Stream)
+	if !ok {
+		return nil, 0, 0, 0, false
+	}
+	mw = intValue(d.Resolve(mk.Dict.Get("Width")))
+	mh = intValue(d.Resolve(mk.Dict.Get("Height")))
+	data = decodeContentStream(d, mk)
+	if mw <= 0 || mh <= 0 || !sampleDataFits(data, mw, mh, 1, 1) {
+		return nil, 0, 0, 0, false
+	}
+	hideBit = byte(1) // default /Decode [0 1]: a 1 sample hides
+	if arr, ok := d.Resolve(mk.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && floatValue(d.Resolve(arr[0])) == 1 {
+		hideBit = 0
+	}
+	return data, mw, mh, hideBit, true
+}
+
 // applyStencilMask applies a stencil /Mask (a 1-bit image XObject): samples of 1
 // mark pixels to hide, so those become transparent. /Decode [1 0] inverts it.
 func (d *Document) applyStencilMask(st *Stream, im *image.NRGBA) {
-	mk, ok := d.Resolve(st.Dict.Get("Mask")).(*Stream)
+	data, mw, mh, hideBit, ok := d.stencilMask(st)
 	if !ok {
 		return
-	}
-	mw := intValue(d.Resolve(mk.Dict.Get("Width")))
-	mh := intValue(d.Resolve(mk.Dict.Get("Height")))
-	if mw <= 0 || mh <= 0 || !sampleDataFits(decodeContentStream(d, mk), mw, mh, 1, 1) {
-		return
-	}
-	data := decodeContentStream(d, mk)
-	hideBit := byte(1) // default /Decode [0 1]: a 1 sample hides
-	if arr, ok := d.Resolve(mk.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && floatValue(d.Resolve(arr[0])) == 1 {
-		hideBit = 0
 	}
 	stride := (mw + 7) / 8
 	w, h := im.Rect.Dx(), im.Rect.Dy()
@@ -131,6 +198,27 @@ func (d *Document) applyStencilMask(st *Stream, im *image.NRGBA) {
 			mx := x * mw / w
 			if (row[mx/8]>>(7-uint(mx%8)))&1 == hideBit {
 				im.Pix[im.PixOffset(x, y)+3] = 0
+			}
+		}
+	}
+}
+
+// applyStencilMask64 is the *image.NRGBA64 counterpart of applyStencilMask.
+func (d *Document) applyStencilMask64(st *Stream, im *image.NRGBA64) {
+	data, mw, mh, hideBit, ok := d.stencilMask(st)
+	if !ok {
+		return
+	}
+	stride := (mw + 7) / 8
+	w, h := im.Rect.Dx(), im.Rect.Dy()
+	for y := 0; y < h; y++ {
+		my := y * mh / h
+		row := data[my*stride:]
+		for x := 0; x < w; x++ {
+			mx := x * mw / w
+			if (row[mx/8]>>(7-uint(mx%8)))&1 == hideBit {
+				o := im.PixOffset(x, y)
+				im.Pix[o+6], im.Pix[o+7] = 0, 0 // 16-bit alpha, big-endian
 			}
 		}
 	}
@@ -154,6 +242,27 @@ func (cs *imgColorSpace) paletteRGB(idx int) (r, g, b uint8) {
 		bc[k] = float64(cs.lookup[off+k]) / 255
 	}
 	return cs.base.toRGB(bc)
+}
+
+// paletteRGB16 is the 16-bit counterpart of paletteRGB. Palette entries are
+// 8-bit, so precision comes only from the base space's conversion arithmetic
+// (Lab/ICC); toRGB16Comps promotes exactly when the base has no 16-bit path.
+func (cs *imgColorSpace) paletteRGB16(idx int) (r, g, b uint16) {
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > cs.hival {
+		idx = cs.hival
+	}
+	off := idx * cs.base.ncomp
+	if off+cs.base.ncomp > len(cs.lookup) {
+		return 0, 0, 0
+	}
+	bc := make([]float64, cs.base.ncomp)
+	for k := range bc {
+		bc[k] = float64(cs.lookup[off+k]) / 255
+	}
+	return cs.base.toRGB16Comps(bc)
 }
 
 // sampleReader reads bpc-bit samples MSB-first from packed rows; each image row
@@ -231,13 +340,18 @@ func deviceColorSpace(name string) (*imgColorSpace, bool) {
 		return &imgColorSpace{ncomp: 1, decode: []float64{0, 1}, toRGB: func(c []float64) (uint8, uint8, uint8) {
 			v := clamp8(c[0])
 			return v, v, v
+		}, toRGB16: func(c []float64) (uint16, uint16, uint16) {
+			v := clamp16(c[0])
+			return v, v, v
 		}}, true
 	case "DeviceRGB", "CalRGB", "RGB":
 		return &imgColorSpace{ncomp: 3, decode: []float64{0, 1, 0, 1, 0, 1}, toRGB: func(c []float64) (uint8, uint8, uint8) {
 			return clamp8(c[0]), clamp8(c[1]), clamp8(c[2])
+		}, toRGB16: func(c []float64) (uint16, uint16, uint16) {
+			return clamp16(c[0]), clamp16(c[1]), clamp16(c[2])
 		}}, true
 	case "DeviceCMYK", "CMYK":
-		return &imgColorSpace{ncomp: 4, decode: []float64{0, 1, 0, 1, 0, 1, 0, 1}, toRGB: cmykToRGB}, true
+		return &imgColorSpace{ncomp: 4, decode: []float64{0, 1, 0, 1, 0, 1, 0, 1}, toRGB: cmykToRGB, toRGB16: cmykToRGB16}, true
 	}
 	return nil, false
 }
@@ -325,7 +439,12 @@ func (d *Document) labColorSpace(cs Array) (*imgColorSpace, bool) {
 		ncomp:  3,
 		decode: []float64{0, 100, amin, amax, bmin, bmax},
 		toRGB: func(c []float64) (uint8, uint8, uint8) {
-			return labToRGB(c[0], c[1], c[2], wp)
+			r, g, b := labToSRGB(c[0], c[1], c[2], wp)
+			return clamp8(r), clamp8(g), clamp8(b)
+		},
+		toRGB16: func(c []float64) (uint16, uint16, uint16) {
+			r, g, b := labToSRGB(c[0], c[1], c[2], wp)
+			return clamp16(r), clamp16(g), clamp16(b)
 		},
 	}, true
 }
@@ -335,25 +454,31 @@ func cmykToRGB(c []float64) (uint8, uint8, uint8) {
 	return clamp8((1 - c[0]) * (1 - k)), clamp8((1 - c[1]) * (1 - k)), clamp8((1 - c[2]) * (1 - k))
 }
 
-// labToRGB converts CIE L*a*b* to sRGB via XYZ, adapted to the given white point.
-func labToRGB(l, a, bb float64, wp [3]float64) (uint8, uint8, uint8) {
+func cmykToRGB16(c []float64) (uint16, uint16, uint16) {
+	k := c[3]
+	return clamp16((1 - c[0]) * (1 - k)), clamp16((1 - c[1]) * (1 - k)), clamp16((1 - c[2]) * (1 - k))
+}
+
+// labToSRGB converts CIE L*a*b* to gamma-encoded sRGB in [0,1], adapted to the
+// given white point. Callers clamp to 8- or 16-bit.
+func labToSRGB(l, a, bb float64, wp [3]float64) (r, g, b float64) {
 	fy := (l + 16) / 116
 	fx := fy + a/500
 	fz := fy - bb/200
-	g := func(t float64) float64 {
+	gg := func(t float64) float64 {
 		if t3 := t * t * t; t3 > 0.008856 {
 			return t3
 		}
 		return (t - 16.0/116) / 7.787
 	}
-	x := wp[0] * g(fx)
-	y := wp[1] * g(fy)
-	z := wp[2] * g(fz)
+	x := wp[0] * gg(fx)
+	y := wp[1] * gg(fy)
+	z := wp[2] * gg(fz)
 	// XYZ (D50-ish) to linear sRGB.
-	r := 3.1338*x - 1.6168*y - 0.4906*z
-	gr := -0.9787*x + 1.9161*y + 0.0334*z
-	b := 0.0719*x - 0.2289*y + 1.4052*z
-	return clamp8(gammaSRGB(r)), clamp8(gammaSRGB(gr)), clamp8(gammaSRGB(b))
+	lr := 3.1338*x - 1.6168*y - 0.4906*z
+	lg := -0.9787*x + 1.9161*y + 0.0334*z
+	lb := 0.0719*x - 0.2289*y + 1.4052*z
+	return gammaSRGB(lr), gammaSRGB(lg), gammaSRGB(lb)
 }
 
 func gammaSRGB(v float64) float64 {
@@ -371,6 +496,18 @@ func clamp8(v float64) uint8 {
 		return 255
 	default:
 		return uint8(v*255 + 0.5)
+	}
+}
+
+// clamp16 maps a [0,1] value to the full 16-bit range so 1.0 -> 0xFFFF exactly.
+func clamp16(v float64) uint16 {
+	switch {
+	case v <= 0:
+		return 0
+	case v >= 1:
+		return 65535
+	default:
+		return uint16(v*65535 + 0.5)
 	}
 }
 
@@ -410,6 +547,29 @@ func (d *Document) applySoftMask(st *Stream, im *image.NRGBA) {
 			mx := x * mw / w
 			o := im.PixOffset(x, y)
 			im.Pix[o+3] = alpha[my*mw+mx]
+		}
+	}
+}
+
+// applySoftMask64 is the *image.NRGBA64 counterpart of applySoftMask. The mask
+// carries one alpha byte per pixel, promoted to 16 bits (byte*257).
+func (d *Document) applySoftMask64(st *Stream, im *image.NRGBA64) {
+	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*Stream)
+	if !ok {
+		return
+	}
+	alpha, mw, mh, ok := d.decodeAlphaMask(sm)
+	if !ok || mw <= 0 || mh <= 0 {
+		return
+	}
+	w, h := im.Rect.Dx(), im.Rect.Dy()
+	for y := 0; y < h; y++ {
+		my := y * mh / h
+		for x := 0; x < w; x++ {
+			mx := x * mw / w
+			a := uint16(alpha[my*mw+mx]) * 257
+			o := im.PixOffset(x, y)
+			im.Pix[o+6], im.Pix[o+7] = uint8(a>>8), uint8(a) // 16-bit alpha, big-endian
 		}
 	}
 }
