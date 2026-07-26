@@ -227,7 +227,8 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 	switch img.Filter {
 	case "DCTDecode":
 		if m, err := jpeg.Decode(bytes.NewReader(st.Data)); err == nil {
-			img.Image, img.Decoded = m, true
+			m = applyJPEGDecode(m, jpegDecodeArray(d, st))
+			img.Image, img.Decoded = d.applyImageMasks(st, m), true
 		} else {
 			img.Encoded, img.Note = st.Data, "JPEG decode failed: "+err.Error()
 		}
@@ -245,7 +246,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			break
 		}
 		if m, ok := samplesToImage(samples, img.Width, img.Height, 1, "DeviceGray"); ok {
-			img.Image, img.Decoded = m, true
+			img.Image, img.Decoded = d.applyImageMasks(st, m), true
 		} else {
 			img.Encoded = samples
 			img.Note = "unsupported CCITT sample layout"
@@ -264,23 +265,32 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			break
 		}
 		if m, ok := samplesToImage(samples, img.Width, img.Height, 1, "DeviceGray"); ok {
-			img.Image, img.Decoded = m, true
+			img.Image, img.Decoded = d.applyImageMasks(st, m), true
 		} else {
 			img.Encoded = samples
 			img.Note = "unsupported JBIG2 sample layout"
 		}
 	case "JPXDecode":
 		if m := decodeJPX(st.Data); m != nil {
-			img.Image, img.Decoded = m, true
+			img.Image, img.Decoded = d.applyImageMasks(st, m), true
 			break
 		}
 		img.Encoded = st.Data
 		img.Note = "JPXDecode not decoded; raw bytes provided"
 	default:
 		// No filter, or a general-purpose filter chain (Flate/LZW/RunLength/ASCII):
-		// decodeContentStream reverses the chain to raw samples.
+		// decodeContentStream reverses the chain to raw samples, which
+		// buildImage renders through the colour space, bit depth, /Decode and
+		// masks (image masks keep their own 1-bit stencil rendering).
 		raw := decodeContentStream(d, st)
-		if m, ok := samplesToImage(raw, img.Width, img.Height, img.BitsPerComponent, img.ColorSpace); ok {
+		var m image.Image
+		var ok bool
+		if img.ColorSpace == "ImageMask" {
+			m, ok = imageMaskToImage(d, st, raw, img.Width, img.Height)
+		} else {
+			m, ok = d.buildImage(st, raw, img.Width, img.Height, img.BitsPerComponent)
+		}
+		if ok {
 			img.Image, img.Decoded = m, true
 		} else {
 			img.Encoded = raw
@@ -443,4 +453,41 @@ func intValue(obj Object) int {
 		return int(n)
 	}
 	return 0
+}
+
+func floatValue(obj Object) float64 {
+	switch n := obj.(type) {
+	case Integer:
+		return float64(n)
+	case Real:
+		return float64(n)
+	}
+	return 0
+}
+
+// imageMaskToImage renders a 1-bit stencil mask (/ImageMask true): samples select
+// where the fill colour would paint. It is rendered as black where painted, white
+// elsewhere; /Decode [1 0] inverts which bit paints.
+func imageMaskToImage(d *Document, st *Stream, data []byte, w, h int) (image.Image, bool) {
+	if w <= 0 || h <= 0 || !sampleDataFits(data, w, h, 1, 1) {
+		return nil, false
+	}
+	paintBit := byte(0) // default /Decode [0 1]: a 0 sample paints
+	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && floatValue(d.Resolve(arr[0])) == 1 {
+		paintBit = 1
+	}
+	stride := (w + 7) / 8
+	im := image.NewGray(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		row := data[y*stride:]
+		for x := 0; x < w; x++ {
+			bit := (row[x/8] >> (7 - uint(x%8))) & 1
+			v := byte(255)
+			if bit == paintBit {
+				v = 0 // painted -> black
+			}
+			im.SetGray(x, y, color.Gray{Y: v})
+		}
+	}
+	return im, true
 }
