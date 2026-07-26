@@ -61,6 +61,11 @@ testdata/arlington-pdf-model/
 # vendored (copyrighted test content); placed here out of band.
 testdata/pdfvt/
 
+# CCITTFaxDecode sample PDFs (downloaded via `make ccitt`) — decode oracle for
+# the Group 3/4 fax decoder; manifest + script are committed, files are not.
+testdata/ccitt/*.pdf
+testdata/ccitt/.ok
+
 # Factur-X example invoices (oracle) — not vendored
 testdata/facturx/*.pdf
 testdata/facturx/.ok

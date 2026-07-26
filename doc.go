@@ -18,10 +18,15 @@
 //	var out bytes.Buffer
 //	err = doc.Write(&out)
 //
-// Encrypted files are parsed structurally but not decrypted: Document.Encrypted
-// reports the presence of an /Encrypt dictionary, strings and streams stay in
-// their encrypted form, and Write refuses such documents. Write always emits a
-// traditional cross-reference table, regenerating the on-disk layout.
+// Encrypted files using the standard security handler are decrypted on Read
+// when the (empty or supplied) user or owner password is correct: RC4, AES-128,
+// and AES-256 (revisions 2–6) are supported. Document.Encrypted reports the
+// presence of an /Encrypt dictionary; a decrypted document retains its file key
+// and re-encrypts on Write so it round-trips byte-for-byte. Document.RemoveEncryption
+// drops the encryption so Write emits plaintext. A document whose scheme or
+// password could not be handled stays encrypted and is written back unchanged as
+// a lossless passthrough. Write always emits a traditional cross-reference table,
+// regenerating the on-disk layout.
 //
 // # Validating
 //
