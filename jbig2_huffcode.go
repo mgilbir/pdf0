@@ -298,6 +298,20 @@ func decodeRefAggSymbolHuff(h *huffReader, cx []mqState, symWidth, hcHeight int,
 // use fixed standard tables (FS=B.6, DS=B.8, DT=B.11) and single-pixel strips;
 // refinement parameters use B.15/B.1, matching the SBHUFF text-region path. cx is
 // the caller's GR context, shared across refinements.
+//
+// SPEC-VS-JBIG2DEC FORK — symbol ID coding. T.88 6.5.8.2.3 codes the aggregate's
+// symbol IDs as fixed-length SBSYMCODELEN-bit values (what readBits below does),
+// and that is what the pdf.js conformance fixtures actually put on the wire
+// (bitmap-symbol-symhuffrefineseveral.pdf, bitmap-symbol-symhuffrefine-textrefine.pdf).
+// jbig2dec instead reuses the run-code-built SBSYMCODES Huffman table that a normal
+// Huffman text region reads per 7.4.3.1.7 (a byte-aligned preamble of 35 four-bit
+// run-code lengths, then per-symbol code lengths, then align — see readTextRegionHuff).
+// The two forms are mutually exclusive on the wire and carry NO in-band signal to
+// tell them apart: switching this function to build+consume the runcode table
+// (preamble included, exactly like readTextRegionHuff) makes both fixtures fail to
+// decode, because the bytes the preamble would consume are not present. Fixed-length
+// is therefore retained; do not "improve" this to the runcode form without a fixture
+// that demonstrably uses it, or the passing fixtures will break.
 func decodeAggregateHuff(h *huffReader, cx []mqState, w, height, numInst, symCodeLen int, syms []*jbBitmap, sbrTemplate int, rAt []atPixel) (*jbBitmap, error) {
 	fsTable, dsTable, dtTable := stdHuffTable(6), stdHuffTable(8), stdHuffTable(11)
 	rdwT, rdhT := stdHuffTable(15), stdHuffTable(15)
