@@ -9,9 +9,8 @@ import (
 // This file turns the decoded samples of an image XObject into an image.Image,
 // honouring the colour space, bit depth, /Decode array and /SMask. It covers the
 // device and CIE-based spaces (Gray/RGB/CMYK, CalGray/CalRGB, Lab, ICCBased by
-// component count) and Indexed palettes. Separation and DeviceN need tint-
-// transform function evaluation, which this package does not do, so they fall
-// back to the raw bytes.
+// component count), Indexed palettes and Separation/DeviceN (via tint-transform
+// function evaluation into their alternate space).
 
 // imgColorSpace is a resolved image colour space: how many components a pixel's
 // samples carry and how to turn them into RGB. For an Indexed space the single
@@ -22,6 +21,8 @@ type imgColorSpace struct {
 	hival   int
 	lookup  []byte // indexed: base.ncomp bytes per palette entry
 	base    *imgColorSpace
+	tintFn  Object                            // Separation/DeviceN: tint-transform function
+	alt     *imgColorSpace                    // Separation/DeviceN: alternate colour space
 	decode  []float64                         // default /Decode (min,max per component)
 	toRGB   func(c []float64) (r, g, b uint8) // c holds ncomp values already mapped through /Decode
 	// toRGB16 is the full-precision counterpart of toRGB, used for 16-bit images.
@@ -326,9 +327,10 @@ func (d *Document) resolveColorSpace(obj Object) (*imgColorSpace, bool) {
 			return d.indexedColorSpace(cs)
 		case "DeviceGray", "DeviceRGB", "DeviceCMYK", "G", "RGB", "CMYK":
 			return deviceColorSpace(string(head))
-		case "Separation", "DeviceN":
-			// Needs tint-transform function evaluation; not rendered.
-			return nil, false
+		case "Separation":
+			return d.separationColorSpace(cs)
+		case "DeviceN":
+			return d.deviceNColorSpace(cs)
 		}
 	}
 	return nil, false
@@ -414,6 +416,62 @@ func (d *Document) indexedColorSpace(cs Array) (*imgColorSpace, bool) {
 		lookup:  lookup,
 		base:    base,
 		decode:  []float64{0, float64(hival)},
+	}, true
+}
+
+// separationColorSpace resolves [/Separation name altSpace tintFn]: one tint
+// component fed through tintFn into the alternate space.
+func (d *Document) separationColorSpace(cs Array) (*imgColorSpace, bool) {
+	if len(cs) < 4 {
+		return nil, false
+	}
+	return d.tintColorSpace(1, cs[2], cs[3])
+}
+
+// deviceNColorSpace resolves [/DeviceN names altSpace tintFn]: len(names) tint
+// components fed through tintFn into the alternate space.
+func (d *Document) deviceNColorSpace(cs Array) (*imgColorSpace, bool) {
+	if len(cs) < 4 {
+		return nil, false
+	}
+	names, ok := d.Resolve(cs[1]).(Array)
+	if !ok || len(names) == 0 {
+		return nil, false
+	}
+	return d.tintColorSpace(len(names), cs[2], cs[3])
+}
+
+// tintColorSpace builds an imgColorSpace with ncomp tint components whose toRGB
+// runs the tint-transform function into the alternate space's toRGB. It refuses
+// the space if the tint function does not evaluate for a probe input, so callers
+// fall back to the raw bytes rather than render garbage.
+func (d *Document) tintColorSpace(ncomp int, altObj, tintFn Object) (*imgColorSpace, bool) {
+	alt, ok := d.resolveColorSpace(altObj)
+	if !ok || alt.indexed {
+		return nil, false
+	}
+	// Verify the tint function evaluates to the alternate space's arity.
+	probe := make([]float64, ncomp)
+	altComps, ok := d.evalFunction(tintFn, probe)
+	if !ok || len(altComps) != alt.ncomp {
+		return nil, false
+	}
+	decode := make([]float64, 2*ncomp)
+	for i := 0; i < ncomp; i++ {
+		decode[2*i], decode[2*i+1] = 0, 1
+	}
+	return &imgColorSpace{
+		ncomp:  ncomp,
+		tintFn: tintFn,
+		alt:    alt,
+		decode: decode,
+		toRGB: func(c []float64) (uint8, uint8, uint8) {
+			comps, ok := d.evalFunction(tintFn, c)
+			if !ok || len(comps) != alt.ncomp {
+				return 0, 0, 0
+			}
+			return alt.toRGB(comps)
+		},
 	}, true
 }
 

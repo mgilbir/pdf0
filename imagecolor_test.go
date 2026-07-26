@@ -194,10 +194,55 @@ func TestBuildImageStencilMask(t *testing.T) {
 }
 
 func TestBuildImageSeparationFallsBack(t *testing.T) {
-	// Separation needs tint-transform evaluation; buildImage declines it.
+	// A Separation whose tint function cannot be evaluated (here a bogus scalar)
+	// declines rendering, so callers fall back to the raw bytes.
 	st := imageXObject(1, 1, 8, "", "", []byte{128})
 	st.Dict.Set("ColorSpace", Array{Name("Separation"), Name("Spot"), Name("DeviceGray"), Integer(0)})
 	if _, ok := (&Document{}).buildImage(st, st.Data, 1, 1, 8); ok {
-		t.Error("Separation should not be rendered (needs function evaluation)")
+		t.Error("Separation with unusable tint should not be rendered")
+	}
+}
+
+func TestBuildImageSeparation(t *testing.T) {
+	// Separation over DeviceGray with a type-2 tint that inverts the tint value:
+	// tint 0 -> gray 1 (white), tint 1 -> gray 0 (black).
+	tint := &Dictionary{}
+	tint.Set("FunctionType", Integer(2))
+	tint.Set("Domain", Array{Real(0), Real(1)})
+	tint.Set("C0", Array{Real(1)})
+	tint.Set("C1", Array{Real(0)})
+	tint.Set("N", Real(1))
+
+	st := imageXObject(2, 1, 8, "", "", []byte{0, 255})
+	st.Dict.Set("ColorSpace", Array{Name("Separation"), Name("Spot"), Name("DeviceGray"), tint})
+	m := mustBuild(t, st, 2, 1, 8)
+	// pixel0 tint 0 -> white
+	if r, _, _, _ := rgb8(t, m, 0, 0); r != 255 {
+		t.Errorf("separation pixel0 = %d, want 255", r)
+	}
+	// pixel1 tint 1 -> black
+	if r, _, _, _ := rgb8(t, m, 1, 0); r != 0 {
+		t.Errorf("separation pixel1 = %d, want 0", r)
+	}
+}
+
+func TestBuildImageDeviceN(t *testing.T) {
+	// DeviceN with two colorants over DeviceRGB, tint via a type-4 function that
+	// maps (c0,c1) -> (c0, c1, 0). A pixel (1,0) becomes red.
+	tint := &Stream{Dict: Dictionary{}, Data: []byte("{ 0 }")}
+	tint.Dict.Set("FunctionType", Integer(4))
+	tint.Dict.Set("Domain", Array{Real(0), Real(1), Real(0), Real(1)})
+	tint.Dict.Set("Range", Array{Real(0), Real(1), Real(0), Real(1), Real(0), Real(1)})
+
+	st := imageXObject(1, 1, 8, "", "", []byte{255, 0})
+	st.Dict.Set("ColorSpace", Array{
+		Name("DeviceN"),
+		Array{Name("ColA"), Name("ColB")},
+		Name("DeviceRGB"),
+		tint,
+	})
+	m := mustBuild(t, st, 1, 1, 8)
+	if r, g, b, _ := rgb8(t, m, 0, 0); r != 255 || g != 0 || b != 0 {
+		t.Errorf("deviceN pixel = (%d,%d,%d), want (255,0,0)", r, g, b)
 	}
 }
