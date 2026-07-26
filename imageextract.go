@@ -91,6 +91,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 	switch img.Filter {
 	case "DCTDecode":
 		if m, err := jpeg.Decode(bytes.NewReader(st.Data)); err == nil {
+			m = applyJPEGDecode(m, jpegDecodeArray(d, st))
 			img.Image, img.Decoded = m, true
 		} else {
 			img.Encoded, img.Note = st.Data, "JPEG decode failed: "+err.Error()
