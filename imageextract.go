@@ -92,13 +92,18 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 	case "DCTDecode":
 		if m, err := jpeg.Decode(bytes.NewReader(st.Data)); err == nil {
 			m = applyJPEGDecode(m, jpegDecodeArray(d, st))
-			img.Image, img.Decoded = m, true
+			img.Image, img.Decoded = d.applyImageMasks(st, m), true
 		} else {
 			img.Encoded, img.Note = st.Data, "JPEG decode failed: "+err.Error()
 		}
 	case "CCITTFaxDecode", "JBIG2Decode", "JPXDecode":
+		// These codecs are not decoded on this branch; when a merged codec
+		// produces img.Image, mask it too.
 		img.Encoded = st.Data
 		img.Note = "the " + img.Filter + " image codec is not decoded; the raw encoded bytes are provided"
+		if img.Image != nil {
+			img.Image = d.applyImageMasks(st, img.Image)
+		}
 	default:
 		// No filter, or a general-purpose filter chain (Flate/LZW/RunLength/ASCII):
 		// decodeContentStream reverses the chain to raw samples.
