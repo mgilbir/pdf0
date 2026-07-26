@@ -6,7 +6,94 @@ import (
 	"image/color"
 	"image/jpeg"
 	"strconv"
+
+	"github.com/mgilbir/gopenjpeg"
 )
+
+// decodeJPX decodes a JPEG 2000 (JPXDecode) codestream or JP2 container to a
+// standard-library image using gopenjpeg, a pure-Go port of OpenJPEG. It returns
+// nil for inputs it cannot render (decode error, ICC-only colour, sub-sampled or
+// >16-bit components) so the caller can fall back to the raw bytes.
+func decodeJPX(data []byte) image.Image {
+	img, err := gopenjpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	// Normalise colour (sYCC/eYCC/CMYK -> sRGB and upsample sub-sampled
+	// components); images carrying only an ICC profile keep their raw layout.
+	_ = img.ConvertToRGB()
+	if std, err := img.ToStandard(); err == nil {
+		return std
+	}
+	// ToStandard declines sub-sampled or many-component images; assemble them from
+	// the component data, upsampling each to the largest component's grid.
+	return jpxComponentsToImage(img)
+}
+
+// jpxComponentsToImage builds a grayscale or RGB image from a decoded JPEG 2000
+// image's components, nearest-neighbour upsampling any sub-sampled component to
+// the largest component's dimensions and scaling each sample to 8 bits.
+func jpxComponentsToImage(img *gopenjpeg.Image) image.Image {
+	nc := img.NumComponents()
+	if nc == 0 {
+		return nil
+	}
+	refW, refH := 0, 0
+	for i := 0; i < nc; i++ {
+		c := img.Component(i)
+		if int(c.W) > refW {
+			refW = int(c.W)
+		}
+		if int(c.H) > refH {
+			refH = int(c.H)
+		}
+	}
+	if refW <= 0 || refH <= 0 {
+		return nil
+	}
+	// at returns component c's sample covering reference pixel (rx,ry), level-
+	// shifted, scaled to 8 bits and clamped.
+	at := func(c gopenjpeg.Component, rx, ry int) uint8 {
+		cx, cy := rx*int(c.W)/refW, ry*int(c.H)/refH
+		v := c.Data[cy*int(c.W)+cx]
+		if c.Sgnd {
+			v += 1 << (c.Prec - 1)
+		}
+		if c.Prec < 8 {
+			v <<= (8 - c.Prec)
+		} else if c.Prec > 8 {
+			v >>= (c.Prec - 8)
+		}
+		if v < 0 {
+			v = 0
+		} else if v > 0xff {
+			v = 0xff
+		}
+		return uint8(v)
+	}
+	if nc == 1 {
+		g := image.NewGray(image.Rect(0, 0, refW, refH))
+		c := img.Component(0)
+		for y := 0; y < refH; y++ {
+			for x := 0; x < refW; x++ {
+				g.Pix[y*refW+x] = at(c, x, y)
+			}
+		}
+		return g
+	}
+	c0, c1, c2 := img.Component(0), img.Component(1), img.Component(2)
+	rgba := image.NewNRGBA(image.Rect(0, 0, refW, refH))
+	for y := 0; y < refH; y++ {
+		for x := 0; x < refW; x++ {
+			i := rgba.PixOffset(x, y)
+			rgba.Pix[i] = at(c0, x, y)
+			rgba.Pix[i+1] = at(c1, x, y)
+			rgba.Pix[i+2] = at(c2, x, y)
+			rgba.Pix[i+3] = 0xff
+		}
+	}
+	return rgba
+}
 
 // This file extracts the raster images embedded in a PDF's pages. For each image
 // XObject it reports the image geometry and, where the codec is one Go can decode
@@ -15,11 +102,10 @@ import (
 //   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
 //   - raw, FlateDecode, LZWDecode, etc. -> decoded from the sample bytes
 //   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in ccitt.go codec
-//   - JBIG2Decode                       -> generic and symbol/text regions
-//     decoded by jbig2.go (halftone and refinement fall back to the raw bytes)
-//   - JPXDecode                         -> not decoded; the raw encoded bytes and
-//     the geometry are returned. JPEG 2000 is a large wavelet codec with no
-//     standard-library support; decoding it faithfully is out of scope here.
+//   - JBIG2Decode                       -> generic, symbol/text, refinement and
+//     halftone regions (arithmetic and Huffman) decoded by jbig2.go
+//   - JPXDecode                         -> JPEG 2000 decoded by gopenjpeg, a
+//     pure-Go port of the OpenJPEG reference codec
 
 // ExtractedImage is one image XObject: its geometry, its codec, and its decoded
 // pixels when available.
@@ -184,8 +270,12 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			img.Note = "unsupported JBIG2 sample layout"
 		}
 	case "JPXDecode":
+		if m := decodeJPX(st.Data); m != nil {
+			img.Image, img.Decoded = m, true
+			break
+		}
 		img.Encoded = st.Data
-		img.Note = "the " + img.Filter + " image codec is not decoded; the raw encoded bytes are provided"
+		img.Note = "JPXDecode not decoded; raw bytes provided"
 	default:
 		// No filter, or a general-purpose filter chain (Flate/LZW/RunLength/ASCII):
 		// decodeContentStream reverses the chain to raw samples.
