@@ -270,6 +270,17 @@ func (b *ccittBitReader) align() {
 	}
 }
 
+// consumeEOFB consumes the Group-4 end-of-facsimile-block marker (two EOL codes,
+// 000000000001000000000001) that terminates each MMR bitmap. Nothing is consumed
+// if the marker is absent.
+func (b *ccittBitReader) consumeEOFB() {
+	save := b.pos
+	if b.consumeEOL() && b.consumeEOL() {
+		return
+	}
+	b.pos = save
+}
+
 // skipEOLs consumes any run of consecutive end-of-line codes (000000000001) at
 // the current position. It reports whether two or more were seen back to back,
 // which is the Group 3/4 end-of-block marker.
