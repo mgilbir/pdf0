@@ -192,7 +192,8 @@ pdf0 is one flat Go package. The subsystems, and the doc that maps each:
 | PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `preflight.go` | [validators.md](docs/validators.md) |
 | The other validators | `pdfua*.go`, `pdfx*.go`, `pdfvt.go`, `pdfr.go`, `dpart.go`, `facturx*.go`, `order_x.go`, `violations.go` | [validators.md](docs/validators.md) |
 | Fonts and metadata | `fonts.go`, `fontprog.go`, `font_encodings.go`, `cff_strings.go`, `xmp.go`, `xmp_schemas.go` | [validators.md](docs/validators.md) |
-| Encryption and signatures | `crypt.go`, `crypt_encrypt.go`, `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
+| Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
+| Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | godoc + [troubleshooting.md](docs/troubleshooting.md#encrypted-files) — no subsystem doc yet |
 | Images and codecs | `imageextract.go`, `imagejpeg.go`, `imagecolor.go`, `imagemask.go`, `ccitt.go`, `mq.go`, `jbig2*.go`, `function.go`, `function_ps.go` | [images.md](docs/images.md) |
 | Text and pages | `text.go`, `pages.go` | [architecture.md](docs/architecture.md) |
 | Command-line tool | `cmd/pdf0` | [cli.md](docs/cli.md) |
