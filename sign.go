@@ -231,7 +231,7 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 			maxObj = num
 		}
 	}
-	sigNum, fieldNum, formNum := maxObj+1, maxObj+2, maxObj+3
+	sigNum, fieldNum := maxObj+1, maxObj+2
 
 	// Placeholder signature dictionary. /ByteRange before /Contents so the array
 	// sits in the first signed segment.
@@ -247,35 +247,143 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 	field.Set("Type", Name("Annot"))
 	field.Set("Subtype", Name("Widget"))
 	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: []byte("Signature1")})
+	field.Set("T", String{Value: []byte(d.freeSignatureFieldName(catalog))})
 	field.Set("V", IndirectRef{Number: sigNum})
 	field.Set("Rect", Array{Integer(0), Integer(0), Integer(0), Integer(0)})
 	field.Set("F", Integer(132)) // Print | Locked
 	field.Set("P", d.pageRef(catalog))
 
-	acroForm := &Dictionary{}
-	acroForm.Set("Fields", Array{IndirectRef{Number: fieldNum}})
-	acroForm.Set("SigFlags", Integer(3))
-
 	clone.Objects[sigNum] = &IndirectObject{Number: sigNum, Value: sig}
 	clone.Objects[fieldNum] = &IndirectObject{Number: fieldNum, Value: field}
-	clone.Objects[formNum] = &IndirectObject{Number: formNum, Value: acroForm}
 
-	// Attach the field to the page (/Annots) and the form to the catalog, cloning
-	// both so the caller's document is untouched.
+	// Attach the field to the page (/Annots), cloning it so the caller's document
+	// is untouched.
 	pageClone := page.Clone()
 	annots, _ := d.Resolve(pageClone.Get("Annots")).(Array)
 	pageClone.Set("Annots", append(append(Array{}, annots...), IndirectRef{Number: fieldNum}))
 	pageNum := d.dictObjNum(page)
 	clone.Objects[pageNum] = &IndirectObject{Number: pageNum, Value: pageClone}
 
-	catClone := catalog.Clone()
-	catClone.Set("AcroForm", IndirectRef{Number: formNum})
-	catNum := d.dictObjNum(catalog)
-	clone.Objects[catNum] = &IndirectObject{Number: catNum, Value: catClone}
+	changed := []int{sigNum, fieldNum, pageNum}
 
-	changed := []int{sigNum, fieldNum, formNum, pageNum, catNum}
+	// The interactive form. An existing one is extended, never replaced: the new
+	// field is appended to whatever /Fields already lists, the signature bits are
+	// OR-ed into /SigFlags, and every other key (/DA, /DR, /NeedAppearances, /Q,
+	// …) is carried over by the clone. Replacing it would orphan an earlier
+	// signature's field — a viewer enumerating the form would see one signature
+	// where there are two — and drop every non-signature field from the document.
+	existingForm := d.ResolveDict(catalog.Get("AcroForm"))
+	acroForm := &Dictionary{}
+	if existingForm != nil {
+		acroForm = existingForm.Clone()
+	}
+	fields, _ := d.Resolve(acroForm.Get("Fields")).(Array)
+	acroForm.Set("Fields", append(append(Array{}, fields...), IndirectRef{Number: fieldNum}))
+	// /SigFlags is a bit field (ISO 32000-2 Table 225): bit 1 SignaturesExist,
+	// bit 2 AppendOnly. Both are now true, but any other bit the producer set
+	// must survive, so OR rather than assign.
+	sigFlags, _ := d.Resolve(acroForm.Get("SigFlags")).(Integer)
+	acroForm.Set("SigFlags", sigFlags|3)
+
+	// Update the existing form object where there is one, so the incremental
+	// update supersedes it instead of leaving it behind; otherwise allocate. A
+	// form stored directly in the catalog (dictObjNum reports -1) has no object
+	// of its own to update, so it is promoted to an indirect object.
+	formNum := -1
+	if existingForm != nil {
+		formNum = d.dictObjNum(existingForm)
+	}
+	if formNum >= 0 {
+		clone.Objects[formNum] = &IndirectObject{Number: formNum, Value: acroForm}
+		changed = append(changed, formNum)
+	} else {
+		formNum = maxObj + 3
+		clone.Objects[formNum] = &IndirectObject{Number: formNum, Value: acroForm}
+		catClone := catalog.Clone()
+		catClone.Set("AcroForm", IndirectRef{Number: formNum})
+		catNum := d.dictObjNum(catalog)
+		clone.Objects[catNum] = &IndirectObject{Number: catNum, Value: catClone}
+		changed = append(changed, formNum, catNum)
+	}
 	return clone, changed, nil
+}
+
+// freeSignatureFieldName returns a partial field name no field in the document
+// already uses. ISO 32000-2 §12.7.4.2 requires fully qualified field names to be
+// unique, and the new field is added at the top level of the form, so its
+// partial name is its qualified name. The first signature of a document keeps
+// the conventional "Signature1"; a second signature becomes "Signature2", so the
+// two are tellable apart in SignatureResult.Field.
+func (d *Document) freeSignatureFieldName(catalog *Dictionary) string {
+	used := d.usedFieldNames(catalog)
+	for i := 1; ; i++ {
+		name := fmt.Sprintf("Signature%d", i)
+		if !used[name] {
+			return name
+		}
+	}
+}
+
+// usedFieldNames collects the qualified names already taken: every name in the
+// interactive form's field tree, plus those of field-like dictionaries the tree
+// does not reach. The second pass matters because a signature field can be
+// orphaned from /Fields — producers do emit page-only widgets, and pdf0 itself
+// did before the form was preserved — and reusing such a name would still be a
+// duplicate. Over-collecting is harmless here: it only skips a number.
+func (d *Document) usedFieldNames(catalog *Dictionary) map[string]bool {
+	used := map[string]bool{}
+	if catalog != nil {
+		if form := d.ResolveDict(catalog.Get("AcroForm")); form != nil {
+			fields, _ := d.Resolve(form.Get("Fields")).(Array)
+			seen := map[int]bool{}
+			for _, f := range fields {
+				d.collectUsedFieldNames(f, "", seen, used, 0)
+			}
+		}
+	}
+	for _, iobj := range d.Objects {
+		if iobj == nil {
+			continue
+		}
+		fd, ok := iobj.Value.(*Dictionary)
+		if !ok {
+			continue
+		}
+		if fd.Get("FT") == nil && fd.Get("V") == nil {
+			continue // not a form field
+		}
+		if name := d.qualifiedFieldName(fd); name != "" {
+			used[name] = true
+		}
+	}
+	return used
+}
+
+// collectUsedFieldNames walks one branch of the field tree, recording the
+// qualified name of every node. Depth-capped and cycle-guarded like the naming
+// walk in signatures.go: the document may be untrusted.
+func (d *Document) collectUsedFieldNames(node Object, prefix string, seen map[int]bool, used map[string]bool, depth int) {
+	if depth > maxFieldTreeDepth {
+		return
+	}
+	if ref, ok := node.(IndirectRef); ok {
+		if seen[ref.Number] {
+			return // already visited: a cyclic or shared /Kids entry
+		}
+		seen[ref.Number] = true
+	}
+	fd := d.ResolveDict(node)
+	if fd == nil {
+		return
+	}
+	name := joinFieldName(prefix, d.fieldPartialName(fd))
+	if name != "" {
+		used[name] = true
+	}
+	kids, _ := d.Resolve(fd.Get("Kids")).(Array)
+	for _, k := range kids {
+		d.collectUsedFieldNames(k, name, seen, used, depth+1)
+	}
 }
 
 func (d *Document) firstPage(catalog *Dictionary) *Dictionary {
