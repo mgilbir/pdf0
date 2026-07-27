@@ -447,3 +447,114 @@ func splitFields(s string) []string {
 	}
 	return fields
 }
+
+// rebuildXRefByScan reconstructs a cross-reference table by scanning the raw
+// bytes for indirect-object headers. It is the last-resort recovery for a file
+// whose cross-reference data is unusable (a table that does not parse, or one
+// whose offsets do not land on the objects they promise).
+//
+// The scan recognizes the header form ISO 32000-2, 7.3.10 defines: an object
+// number (a positive integer), a generation number (a non-negative integer not
+// exceeding 65535) and the keyword "obj", each delimited. When the same object
+// number is defined more than once, the definition later in the file wins —
+// the same precedence 7.5.6 gives objects re-defined by incremental updates.
+// A header-shaped byte run inside a stream body can produce a bogus entry;
+// the caller loads rebuilt tables leniently, dropping entries that do not
+// parse as objects.
+func rebuildXRefByScan(data []byte) *XRefTable {
+	table := &XRefTable{Entries: make(map[int]XRefEntry)}
+	for i := 0; i+3 <= len(data); {
+		j := bytes.Index(data[i:], []byte("obj"))
+		if j < 0 {
+			break
+		}
+		pos := i + j
+		i = pos + 3
+		// The keyword must be delimited on both sides ("endobj" has 'd'
+		// before; "objx" has a regular character after).
+		if pos+3 < len(data) && !isWhitespace(data[pos+3]) && !isDelimiter(data[pos+3]) {
+			continue
+		}
+		if pos == 0 || !isWhitespace(data[pos-1]) {
+			continue
+		}
+		// Backtrack over: whitespace, generation digits, whitespace, object
+		// number digits.
+		k := pos - 1
+		for k >= 0 && isWhitespace(data[k]) {
+			k--
+		}
+		genEnd := k + 1
+		for k >= 0 && data[k] >= '0' && data[k] <= '9' {
+			k--
+		}
+		genStart := k + 1
+		if genStart == genEnd || genEnd-genStart > 5 {
+			continue
+		}
+		if k < 0 || !isWhitespace(data[k]) {
+			continue
+		}
+		for k >= 0 && isWhitespace(data[k]) {
+			k--
+		}
+		numEnd := k + 1
+		for k >= 0 && data[k] >= '0' && data[k] <= '9' {
+			k--
+		}
+		numStart := k + 1
+		if numStart == numEnd || numEnd-numStart > 9 {
+			continue
+		}
+		// The object number must itself be delimited (start of file,
+		// whitespace or a delimiter before it).
+		if numStart > 0 && !isWhitespace(data[numStart-1]) && !isDelimiter(data[numStart-1]) {
+			continue
+		}
+		num, err1 := strconv.Atoi(string(data[numStart:numEnd]))
+		gen, err2 := strconv.Atoi(string(data[genStart:genEnd]))
+		// Object number 0 is the reserved free-list head and can never be an
+		// in-use object (7.5.4); generations cap at 65535.
+		if err1 != nil || err2 != nil || num < 1 || gen > 65535 {
+			continue
+		}
+		table.Entries[num] = XRefEntry{Offset: int64(numStart), Generation: gen}
+	}
+	if len(table.Entries) == 0 {
+		return nil
+	}
+	return table
+}
+
+// findTrailerByScan locates the file's trailer dictionary when the
+// cross-reference chain could not provide one: it scans for every delimited
+// "trailer" keyword and returns the last dictionary that parses and carries
+// /Root — the trailer of the newest update (7.5.6). It returns nil if none
+// qualifies.
+func findTrailerByScan(data []byte) *Dictionary {
+	var best *Dictionary
+	for i := 0; ; {
+		j := bytes.Index(data[i:], []byte("trailer"))
+		if j < 0 {
+			break
+		}
+		pos := i + j
+		i = pos + 7
+		if pos > 0 && !isWhitespace(data[pos-1]) && !isDelimiter(data[pos-1]) {
+			continue
+		}
+		if pos+7 < len(data) && !isWhitespace(data[pos+7]) && !isDelimiter(data[pos+7]) {
+			continue
+		}
+		lx := NewLexer(data)
+		lx.SetPosition(int64(pos + 7))
+		dict, err := NewParserFromLexer(lx).ParseObject()
+		if err != nil {
+			continue
+		}
+		if d, ok := dict.(*Dictionary); ok && d.Get("Root") != nil {
+			best = d
+		}
+	}
+	return best
+}

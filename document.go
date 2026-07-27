@@ -127,6 +127,8 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 	visitedXref := make(map[int64]bool)
 	sectionOffset := xrefOffset
 	first := true
+	rebuilt := false // the table was reconstructed by scanning (load leniently)
+	var firstErr error
 	for {
 		if visitedXref[sectionOffset] {
 			break // cycle in the /Prev chain
@@ -149,6 +151,21 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 			}
 			if err != nil {
 				if first {
+					// Last resort: the cross-reference data is unusable, so
+					// rebuild the table by scanning for object headers (the
+					// long-standing reader practice for damaged files; see
+					// rebuildXRefByScan). The trailer comes from a scan too;
+					// an xref-stream file whose trailer IS the broken stream
+					// dictionary gets /Root synthesized from the catalog
+					// after the objects load.
+					if t := rebuildXRefByScan(data); t != nil {
+						xrefTable = t
+						rebuilt, firstErr = true, err
+						if tr := findTrailerByScan(data); tr != nil {
+							doc.Trailer = *tr
+						}
+						break
+					}
 					return nil, err
 				}
 				break // tolerate a broken older section
@@ -177,7 +194,94 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 		}
 	}
 
-	// 4. Parse all uncompressed objects from xref entries
+	// 4. Parse all uncompressed objects from xref entries. A rebuilt table
+	// loads leniently — an entry that does not parse is dropped, since a
+	// header-shaped byte run inside a stream body can fabricate one. A table
+	// the file itself supplied is authoritative, so a load failure there
+	// triggers the same scan-rebuild as an unparseable section before giving
+	// up (the sweep-13 holdout: the table parses, but every offset in it is
+	// shifted and lands inside the previous object).
+	effAdjust := adjust
+	if rebuilt {
+		effAdjust = 0 // scanned offsets are absolute by construction
+	}
+	if err := doc.loadObjectsFromXref(data, size, xrefTable, effAdjust, rebuilt); err != nil {
+		t := rebuildXRefByScan(data)
+		if t == nil {
+			return nil, err
+		}
+		xrefTable, rebuilt = t, true
+		doc.Objects = make(map[int]*IndirectObject)
+		if err2 := doc.loadObjectsFromXref(data, size, xrefTable, 0, true); err2 != nil {
+			return nil, err
+		}
+	}
+	// A rebuilt file may have no parseable trailer at all (an xref-stream
+	// file's trailer IS its broken stream dictionary). The document catalog is
+	// the root of the object hierarchy (ISO 32000-2, 7.7.2), so synthesize the
+	// /Root the trailer exists to provide from the first catalog object.
+	if rebuilt && doc.Trailer.Get("Root") == nil {
+		nums := make([]int, 0, len(doc.Objects))
+		for num := range doc.Objects {
+			nums = append(nums, num)
+		}
+		sort.Ints(nums)
+		for _, num := range nums {
+			if d, ok := doc.Objects[num].Value.(*Dictionary); ok {
+				if t, _ := d.Get("Type").(Name); t == "Catalog" {
+					doc.Trailer.Set("Root", IndirectRef{Number: num})
+					break
+				}
+			}
+		}
+		if doc.Trailer.Get("Root") == nil {
+			if firstErr != nil {
+				return nil, firstErr
+			}
+			return nil, fmt.Errorf("rebuilt cross-reference table found no document catalog")
+		}
+	}
+
+	// 4.5. Decrypt strings and streams under the standard security handler. This
+	// runs before object streams are materialized: an /ObjStm container is an
+	// encrypted stream, but the objects inside it are not separately encrypted.
+	if doc.Trailer.Get("Encrypt") != nil {
+		h, err := buildStdSecurityHandler(doc, password)
+		if err != nil {
+			return nil, fmt.Errorf("encryption: %w", err)
+		}
+		if h != nil {
+			h.decryptDocument(doc)
+			doc.security = h
+		}
+	}
+
+	// 5. Materialize objects stored in object streams (type-2 entries). The
+	// containers themselves were loaded as ordinary objects in step 4.
+	if err := doc.loadCompressedObjects(xrefTable); err != nil {
+		return nil, err
+	}
+	// A rebuilt table has no type-2 entries — the scan sees only what is at
+	// the byte level — so objects living inside /Type /ObjStm containers
+	// would be missing. Materialize every container's objects directly.
+	if rebuilt {
+		doc.materializeScannedObjStms()
+	}
+
+	// 6. Drop file-structure artifacts so the document holds only content.
+	doc.normalizeStructure()
+
+	doc.Encrypted = doc.Trailer.Get("Encrypt") != nil
+
+	return doc, nil
+}
+
+// loadObjectsFromXref parses every uncompressed object the cross-reference
+// table lists into doc.Objects, resetting doc.Offsets first. In lenient mode
+// (used for tables reconstructed by rebuildXRefByScan) an entry whose offset
+// is out of range or whose bytes do not parse is dropped rather than failing
+// the read: a scanned entry has no authority beyond the bytes it points at.
+func (doc *Document) loadObjectsFromXref(data []byte, size int64, xrefTable *XRefTable, adjust int64, lenient bool) error {
 	doc.Offsets = make(map[int]int64)
 	lexer := NewLexer(data)
 	// parsedByOffset caches the object parsed at each byte offset. A malformed
@@ -228,10 +332,13 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 
 		off := entry.Offset + adjust
 		if off < 0 || off >= size {
+			if lenient {
+				continue
+			}
 			// A negative or out-of-range offset (e.g. a crafted "-0000000010"
 			// entry, or an 8-byte /W field whose high bit overflowed int) would
 			// otherwise seek the lexer to an invalid position.
-			return nil, fmt.Errorf("object %d xref offset %d outside file (size %d)", num, off, size)
+			return fmt.Errorf("object %d xref offset %d outside file (size %d)", num, off, size)
 		}
 		doc.Offsets[num] = off
 		if prev, ok := parsedByOffset[off]; ok {
@@ -245,7 +352,11 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 		parser.resolveLength = resolveLen
 		iobj, err := parser.ParseIndirectObject()
 		if err != nil {
-			return nil, fmt.Errorf("parsing object %d at offset %d: %w", num, entry.Offset, err)
+			if lenient {
+				delete(doc.Offsets, num)
+				continue
+			}
+			return fmt.Errorf("parsing object %d at offset %d: %w", num, entry.Offset, err)
 		}
 		// The cross-reference key is the authoritative object number: readers
 		// resolve references through the xref, so the body's declared number
@@ -256,33 +367,7 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 		doc.Objects[num] = iobj
 		parsedByOffset[off] = iobj
 	}
-
-	// 4.5. Decrypt strings and streams under the standard security handler. This
-	// runs before object streams are materialized: an /ObjStm container is an
-	// encrypted stream, but the objects inside it are not separately encrypted.
-	if doc.Trailer.Get("Encrypt") != nil {
-		h, err := buildStdSecurityHandler(doc, password)
-		if err != nil {
-			return nil, fmt.Errorf("encryption: %w", err)
-		}
-		if h != nil {
-			h.decryptDocument(doc)
-			doc.security = h
-		}
-	}
-
-	// 5. Materialize objects stored in object streams (type-2 entries). The
-	// containers themselves were loaded as ordinary objects in step 4.
-	if err := doc.loadCompressedObjects(xrefTable); err != nil {
-		return nil, err
-	}
-
-	// 6. Drop file-structure artifacts so the document holds only content.
-	doc.normalizeStructure()
-
-	doc.Encrypted = doc.Trailer.Get("Encrypt") != nil
-
-	return doc, nil
+	return nil
 }
 
 // normalizeStructure removes cross-reference plumbing from the parsed

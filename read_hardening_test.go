@@ -19,8 +19,10 @@ func noPanic(t *testing.T, name string, fn func()) {
 	fn()
 }
 
-// TestReadNegativeXrefOffset ensures a negative traditional-xref entry offset is
-// rejected with an error rather than panicking the lexer (audit C1).
+// TestReadNegativeXrefOffset ensures a negative traditional-xref entry offset
+// never seeks the lexer to an invalid position (audit C1). The strict load
+// rejects the entry; the scan rebuild then recovers the file's real objects,
+// so the read succeeds without ever using the crafted offset.
 func TestReadNegativeXrefOffset(t *testing.T) {
 	body := "%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
 	xrefAt := len(body)
@@ -30,8 +32,12 @@ func TestReadNegativeXrefOffset(t *testing.T) {
 		t.Fatalf("test constructed a bad offset")
 	}
 	noPanic(t, "negative xref offset", func() {
-		if _, err := Read(bytes.NewReader([]byte(pdf)), int64(len(pdf))); err == nil {
-			t.Fatalf("expected an error for a negative xref offset, got nil")
+		doc, err := Read(bytes.NewReader([]byte(pdf)), int64(len(pdf)))
+		if err != nil {
+			t.Fatalf("rebuild should recover the crafted file: %v", err)
+		}
+		if getCatalog(doc) == nil {
+			t.Fatalf("catalog not recovered")
 		}
 	})
 }
@@ -163,15 +169,37 @@ func TestStartxrefIntoTableRecovers(t *testing.T) {
 	}
 }
 
-// TestStartxrefFarFromTableStillFails: an offset with no xref keyword within
-// the bounded recovery window is still an error — recovery must not scan the
-// whole file for unrelated sections.
-func TestStartxrefFarFromTableStillFails(t *testing.T) {
+// TestStartxrefFarFromTable: with no xref keyword inside the bounded
+// relocation window, the keyword probe gives up (unit-checked below) and the
+// scan rebuild takes over, recovering the file's objects.
+func TestStartxrefFarFromTable(t *testing.T) {
 	body := "%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
 	pad := strings.Repeat("% padding\n", 300) // > the 1024-byte window
 	body += pad
 	pdf := body + "startxref\n" + fmt.Sprintf("%d", len(body)-20) + "\n%%EOF\n"
-	if _, err := Read(bytes.NewReader([]byte(pdf)), int64(len(pdf))); err == nil {
-		t.Fatal("expected an error when no cross-reference section exists near the offset")
+	doc, err := Read(bytes.NewReader([]byte(pdf)), int64(len(pdf)))
+	if err != nil {
+		t.Fatalf("rebuild should recover the file: %v", err)
+	}
+	if getCatalog(doc) == nil {
+		t.Fatal("catalog not recovered")
+	}
+}
+
+// TestPrecedingXrefKeywordWindow pins the relocation probe's bounds: the
+// search never leaves its 1KB window, and the tail of "startxref" is not a
+// keyword.
+func TestPrecedingXrefKeywordWindow(t *testing.T) {
+	far := []byte("xref\n" + strings.Repeat(" ", 2000))
+	if got := precedingXrefKeyword(far, 2000); got != -1 {
+		t.Errorf("keyword beyond the window found at %d, want -1", got)
+	}
+	near := []byte(strings.Repeat(" ", 100) + "xref\n0 1\n" + strings.Repeat(" ", 50))
+	if got := precedingXrefKeyword(near, 140); got != 100 {
+		t.Errorf("keyword at 100 not found: got %d", got)
+	}
+	sx := []byte("startxref\n123\n")
+	if got := precedingXrefKeyword(sx, int64(len(sx))); got != -1 {
+		t.Errorf("the tail of startxref matched as a keyword at %d", got)
 	}
 }
