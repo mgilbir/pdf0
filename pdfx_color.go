@@ -27,13 +27,19 @@ func (u *devUse) or(o devUse) {
 // tiling patterns, and appearance streams so a page's device usage can be
 // computed without rescanning shared content.
 type devColorScanner struct {
-	doc    *Document
-	memo   map[*Stream]devUse // stream -> escaping usage (forms include group masking)
-	inProg map[*Stream]bool   // recursion guard for cyclic form/pattern references
+	doc        *Document
+	memo       map[*Stream]devUse   // stream -> escaping usage (forms include group masking)
+	inProg     map[*Stream]bool     // recursion guard for cyclic form/pattern references
+	inProgDict map[*Dictionary]bool // recursion guard for cyclic Type3-font container references
 }
 
 func newDevColorScanner(doc *Document) *devColorScanner {
-	return &devColorScanner{doc: doc, memo: map[*Stream]devUse{}, inProg: map[*Stream]bool{}}
+	return &devColorScanner{
+		doc:        doc,
+		memo:       map[*Stream]devUse{},
+		inProg:     map[*Stream]bool{},
+		inProgDict: map[*Dictionary]bool{},
+	}
 }
 
 // pageDeviceUse returns the device colour families used on a page and left
@@ -88,6 +94,18 @@ func (s *devColorScanner) pageDeviceUse(page *Dictionary) devUse {
 // invoked forms, tiling patterns and Type 3 glyphs bypasses that masking (it was
 // already masked in their own scope), matching scanContainerForDeviceCS.
 func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) devUse {
+	// A Type3 font whose /Resources reference itself (directly or through another
+	// Type3 font) would recurse here forever — a stack overflow, which is fatal
+	// and not recoverable. The stream path is guarded by inProg; guard the dict
+	// path too, mirroring the PDF/A device-colour scanner (audit C3).
+	if c != nil {
+		if s.inProgDict[c] {
+			return devUse{}
+		}
+		s.inProgDict[c] = true
+		defer delete(s.inProgDict, c)
+	}
+
 	var local, nested devUse
 	if data != nil {
 		r, cc, g := scanStreamForDeviceOps(data)

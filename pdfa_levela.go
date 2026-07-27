@@ -28,9 +28,12 @@ func validatePDFALevelA(doc *Document, level PDFALevel, rawData []byte) []Valida
 		errs = append(errs, e)
 	}
 
-	errs = append(errs, checkLevelAConformance(doc, level)...)
-	errs = append(errs, checkLevelAStructure(doc, level)...)
-	errs = append(errs, checkLevelALanguage(doc, level)...)
+	// Run the Level A checks through runCheck like every Level B check, so a
+	// panic on hostile input becomes a reported "internal" finding rather than
+	// crashing the caller — the asymmetry runCheck exists to prevent (audit C27).
+	errs = append(errs, runCheck(doc, level, checkLevelAConformance)...)
+	errs = append(errs, runCheck(doc, level, checkLevelAStructure)...)
+	errs = append(errs, runCheck(doc, level, checkLevelALanguage)...)
 	return errs
 }
 
