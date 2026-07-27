@@ -128,3 +128,50 @@ func TestReadObjectZeroInUse(t *testing.T) {
 		t.Error("round trip lost content")
 	}
 }
+
+// TestStartxrefIntoTableRecovers: ISO 32000-2, 7.5.5 requires startxref to give
+// the offset of "the beginning of the xref keyword in the last cross-reference
+// section". Real-world files (Common Crawl sweep #13) point it a few dozen
+// bytes INTO the table's entries instead; the offset then reads as an integer
+// and mis-dispatched to the xref-stream parser ("unknown keyword \"f\"").
+// Read recovers by relocating to the nearest preceding standalone keyword.
+func TestStartxrefIntoTableRecovers(t *testing.T) {
+	body := "%PDF-1.7\n"
+	oneAt := len(body)
+	body += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+	twoAt := len(body)
+	body += "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+	xrefAt := len(body)
+	xref := fmt.Sprintf("xref\n0 3\n0000000000 65535 f \n%010d 00000 n \n%010d 00000 n \ntrailer\n<< /Root 1 0 R /Size 3 >>\n", oneAt, twoAt)
+	// Point startxref 56 bytes past the keyword — into the second entry, the
+	// drift the sweep files carry (55-57 bytes).
+	pdf := body + xref + fmt.Sprintf("startxref\n%d\n%%%%EOF\n", xrefAt+56)
+
+	doc, err := Read(bytes.NewReader([]byte(pdf)), int64(len(pdf)))
+	if err != nil {
+		t.Fatalf("Read did not recover from a startxref pointing into the table: %v", err)
+	}
+	if got := len(doc.Objects); got != 2 {
+		t.Errorf("loaded %d objects, want 2", got)
+	}
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+		t.Fatalf("round-trip re-Read: %v", err)
+	}
+}
+
+// TestStartxrefFarFromTableStillFails: an offset with no xref keyword within
+// the bounded recovery window is still an error — recovery must not scan the
+// whole file for unrelated sections.
+func TestStartxrefFarFromTableStillFails(t *testing.T) {
+	body := "%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+	pad := strings.Repeat("% padding\n", 300) // > the 1024-byte window
+	body += pad
+	pdf := body + "startxref\n" + fmt.Sprintf("%d", len(body)-20) + "\n%%EOF\n"
+	if _, err := Read(bytes.NewReader([]byte(pdf)), int64(len(pdf))); err == nil {
+		t.Fatal("expected an error when no cross-reference section exists near the offset")
+	}
+}
