@@ -251,11 +251,11 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 	field.Set("Type", Name("Annot"))
 	field.Set("Subtype", Name("Widget"))
 	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: []byte(d.freeSignatureFieldName(catalog))})
+	field.Set("T", String{Value: []byte(d.freeFieldName(catalog, "Signature"))})
 	field.Set("V", IndirectRef{Number: sigNum})
 	field.Set("Rect", Array{Integer(0), Integer(0), Integer(0), Integer(0)})
 	field.Set("F", Integer(132)) // Print | Locked
-	field.Set("P", d.pageRef(catalog))
+	field.Set("P", IndirectRef{Number: pageNum})
 
 	clone.Objects[sigNum] = &IndirectObject{Number: sigNum, Value: sig}
 	clone.Objects[fieldNum] = &IndirectObject{Number: fieldNum, Value: field}
@@ -310,16 +310,24 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 	return clone, changed, nil
 }
 
-// freeSignatureFieldName returns a partial field name no field in the document
-// already uses. ISO 32000-2 §12.7.4.2 requires fully qualified field names to be
-// unique, and the new field is added at the top level of the form, so its
-// partial name is its qualified name. The first signature of a document keeps
-// the conventional "Signature1"; a second signature becomes "Signature2", so the
-// two are tellable apart in SignatureResult.Field.
-func (d *Document) freeSignatureFieldName(catalog *Dictionary) string {
+// freeFieldName returns prefix followed by the lowest positive integer that no
+// field in the document already uses. ISO 32000-2 §12.7.4.2 requires fully
+// qualified field names to be unique, and the new field is added at the top
+// level of the form, so its partial name is its qualified name.
+//
+// The prefix is the caller's: signing passes "Signature" and the document
+// time-stamp "Timestamp", so the first of each in a document keeps the
+// conventional "Signature1" / "Timestamp1" and a second becomes "Signature2" /
+// "Timestamp2". Anything else would be a duplicate name — the time-stamp path
+// used to write a literal "Timestamp1" every time, so two archival time-stamps
+// produced two fields with one name and SignatureResult.Field could not tell
+// them apart. The counters are per prefix and the scan is over every name in
+// use, so a time-stamp added to an already-signed document is unaffected by the
+// signature's number and vice versa.
+func (d *Document) freeFieldName(catalog *Dictionary, prefix string) string {
 	used := d.usedFieldNames(catalog)
 	for i := 1; ; i++ {
-		name := fmt.Sprintf("Signature%d", i)
+		name := fmt.Sprintf("%s%d", prefix, i)
 		if !used[name] {
 			return name
 		}
@@ -388,32 +396,63 @@ func (d *Document) collectUsedFieldNames(node Object, prefix string, seen map[in
 	}
 }
 
+// maxPageTreeDepth caps the page-tree descent below. The tree of an untrusted
+// document may be absurdly deep; the cycle guard handles /Kids that point back
+// up, this handles the rest.
+const maxPageTreeDepth = 64
+
+// firstPage returns the page a signature or document time-stamp widget is
+// attached to: the document's first page in reading order, or nil when the page
+// tree holds none.
+//
+// The walk descends into intermediate /Pages nodes. A node's /Kids may mix
+// intermediate nodes and leaves in any order (ISO 32000-2 §7.7.3.2), and every
+// page tree deeper than one level puts its first page inside an intermediate
+// node, so the earlier version — which looked only at the root's /Kids and took
+// the first entry typed /Page — found no page at all in such a document and
+// signing failed outright with "document has no page to attach the signature
+// to". Descending agrees with PageList: the page signed is the one a reader
+// shows first.
+//
+// Only the dictionary is returned, deliberately. The widget's /P must be an
+// indirect reference to the page whose /Annots carries it (Table 166), and the
+// caller takes that object number from signingObjNums, which derives it from
+// this very dictionary — so the annotation and its /P cannot name different
+// objects. A separate helper that re-walked the tree for the reference is what
+// made them disagree: it returned the root's first /Kids entry whether or not
+// that entry was a page, and pointed /P at an intermediate /Pages node.
 func (d *Document) firstPage(catalog *Dictionary) *Dictionary {
-	pages := d.ResolveDict(catalog.Get("Pages"))
-	if pages == nil {
+	return d.firstPageIn(catalog.Get("Pages"), map[int]bool{}, 0)
+}
+
+// firstPageIn returns the first leaf page of the subtree rooted at node.
+func (d *Document) firstPageIn(node Object, seen map[int]bool, depth int) *Dictionary {
+	if depth > maxPageTreeDepth {
 		return nil
 	}
-	kids, _ := d.Resolve(pages.Get("Kids")).(Array)
+	if ref, ok := node.(IndirectRef); ok {
+		if seen[ref.Number] {
+			return nil // a cycle, or a node reachable by two paths
+		}
+		seen[ref.Number] = true
+	}
+	dict := d.ResolveDict(node)
+	if dict == nil {
+		return nil
+	}
+	// A leaf counts as a page only when it says so: an untyped leaf was never
+	// accepted here and is not now. An untyped node holding /Kids is descended
+	// into all the same, since only its children can be pages.
+	if t, _ := dict.Get("Type").(Name); t == "Page" {
+		return dict
+	}
+	kids, _ := d.Resolve(dict.Get("Kids")).(Array)
 	for _, kid := range kids {
-		if pg := d.ResolveDict(kid); pg != nil {
-			if t, _ := pg.Get("Type").(Name); t == "Page" {
-				return pg
-			}
+		if pg := d.firstPageIn(kid, seen, depth+1); pg != nil {
+			return pg
 		}
 	}
 	return nil
-}
-
-func (d *Document) pageRef(catalog *Dictionary) Object {
-	pages := d.ResolveDict(catalog.Get("Pages"))
-	if pages == nil {
-		return Null{}
-	}
-	kids, _ := d.Resolve(pages.Get("Kids")).(Array)
-	if len(kids) > 0 {
-		return kids[0]
-	}
-	return Null{}
 }
 
 // signingObjNums reports the object numbers of the document catalog and of the
