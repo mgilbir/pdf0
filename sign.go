@@ -209,15 +209,7 @@ func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer, tsaC
 // withSignatureField returns a copy of the document with a signature field, its
 // AcroForm entry, and a placeholder /Sig dictionary added.
 func (d *Document) withSignatureField() (*Document, []int, error) {
-	catalog := d.ResolveDict(d.Trailer.Get("Root"))
-	if catalog == nil {
-		return nil, nil, errors.New("signing: document has no catalog")
-	}
-	page := d.firstPage(catalog)
-	if page == nil {
-		return nil, nil, errors.New("signing: document has no page to attach the signature to")
-	}
-	catNum, pageNum, err := d.signingObjNums("signing", catalog, page)
+	catalog, page, catNum, pageNum, err := d.signingTarget("signing")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -409,10 +401,9 @@ const maxPageTreeDepth = 64
 // intermediate nodes and leaves in any order (ISO 32000-2 §7.7.3.2), and every
 // page tree deeper than one level puts its first page inside an intermediate
 // node, so the earlier version — which looked only at the root's /Kids and took
-// the first entry typed /Page — found no page at all in such a document and
-// signing failed outright with "document has no page to attach the signature
-// to". Descending agrees with PageList: the page signed is the one a reader
-// shows first.
+// the first entry typed /Page — found no page at all in such a document, so
+// signing and time-stamping refused it outright. Descending agrees with
+// PageList: the page signed is the one a reader shows first.
 //
 // Only the dictionary is returned, deliberately. The widget's /P must be an
 // indirect reference to the page whose /Annots carries it (Table 166), and the
@@ -455,10 +446,15 @@ func (d *Document) firstPageIn(node Object, seen map[int]bool, depth int) *Dicti
 	return nil
 }
 
-// signingObjNums reports the object numbers of the document catalog and of the
-// page a signature or document time-stamp widget is attached to, refusing a
-// document in which either is a direct object. what names the caller ("signing",
-// "timestamp") for the error message.
+// signingTarget resolves what a signature or document time-stamp field attaches
+// to: the document catalog and the first page, with the object numbers under
+// which both are rewritten. It refuses a document that has no catalog, no page,
+// or in which either is a direct object. what names the caller ("signing",
+// "timestamp") and prefixes every error.
+//
+// Signing and time-stamping need exactly this preamble and had grown their own
+// copies of it, which drifted — the two reported a missing page with different
+// wording, and only one of them checked for a direct object at first.
 //
 // Both dictionaries are rewritten when a field is added — the page gains the
 // widget in its /Annots, the catalog gains an /AcroForm reference or a /DSS —
@@ -473,16 +469,24 @@ func (d *Document) firstPageIn(node Object, seen map[int]bool, depth int) *Dicti
 // reference and §7.7.3.2 requires every page-tree /Kids entry to be one. Rather
 // than silently repair a broken file — and change the identity of a structure
 // other objects may already reference — signing reports it.
-func (d *Document) signingObjNums(what string, catalog, page *Dictionary) (catNum, pageNum int, err error) {
+func (d *Document) signingTarget(what string) (catalog, page *Dictionary, catNum, pageNum int, err error) {
+	catalog = d.ResolveDict(d.Trailer.Get("Root"))
+	if catalog == nil {
+		return nil, nil, 0, 0, fmt.Errorf("%s: document has no catalog", what)
+	}
+	page = d.firstPage(catalog)
+	if page == nil {
+		return nil, nil, 0, 0, fmt.Errorf("%s: document has no page to attach the field to", what)
+	}
 	catNum = d.dictObjNum(catalog)
 	if catNum < 0 {
-		return 0, 0, fmt.Errorf("%s: the document catalog is a direct object, so it cannot be updated; ISO 32000-2 §7.5.5 requires the trailer /Root to be an indirect reference", what)
+		return nil, nil, 0, 0, fmt.Errorf("%s: the document catalog is a direct object, so it cannot be updated; ISO 32000-2 §7.5.5 requires the trailer /Root to be an indirect reference", what)
 	}
 	pageNum = d.dictObjNum(page)
 	if pageNum < 0 {
-		return 0, 0, fmt.Errorf("%s: the first page is a direct object, so it cannot be updated; ISO 32000-2 §7.7.3.2 requires the page tree's /Kids entries to be indirect references", what)
+		return nil, nil, 0, 0, fmt.Errorf("%s: the first page is a direct object, so it cannot be updated; ISO 32000-2 §7.7.3.2 requires the page tree's /Kids entries to be indirect references", what)
 	}
-	return catNum, pageNum, nil
+	return catalog, page, catNum, pageNum, nil
 }
 
 // dictObjNum finds the object number whose value is the given dictionary. During
