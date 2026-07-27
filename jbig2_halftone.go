@@ -30,6 +30,9 @@ func (d *jbig2Decoder) readPatternDict(seg jbSegment) error {
 	}
 	numPats := int(grayMax) + 1
 	pw, ph := int(hdpw), int(hdph)
+	if err := d.reserve(numPats*pw, ph); err != nil {
+		return err
+	}
 
 	// The patterns are decoded as one collective bitmap and then sliced apart.
 	var collective *jbBitmap
@@ -118,6 +121,15 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 	}
 	hgx, hgy := int(int32(hgxU)), int(int32(hgyU))
 	gw, gh := int(hgw), int(hgh)
+	// The gray-scale decode allocates one bitplane per bit of depth plus an int
+	// per cell, so the grid area is amplified several-fold. Bound it well below
+	// the generic bitmap ceiling (audit C2).
+	if int64(gw)*int64(gh) > maxJBIG2GrayCells {
+		return errJBIG2Unsupported
+	}
+	if err := d.reserve(ri.w, ri.h); err != nil {
+		return err
+	}
 
 	patterns := d.refPatterns(seg)
 	if len(patterns) == 0 {

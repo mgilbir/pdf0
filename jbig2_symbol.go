@@ -185,6 +185,9 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 			if symWidth <= 0 || symWidth > 1<<16 || len(newSyms) >= int(numNew) {
 				return errJBIG2Unsupported
 			}
+			if err := d.reserve(symWidth, hcHeight); err != nil {
+				return err
+			}
 			var bmp *jbBitmap
 			if sdrefagg == 0 {
 				bmp = decodeGenericInto(dec, gb, symWidth, hcHeight, template, at, false, nil)
@@ -272,6 +275,9 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 	ri, ok := readRegionInfo(r)
 	if !ok {
 		return errJBIG2Unsupported
+	}
+	if err := d.reserve(ri.w, ri.h); err != nil {
+		return err
 	}
 	flags, ok := r.u16()
 	if !ok {

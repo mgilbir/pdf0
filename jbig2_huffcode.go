@@ -162,6 +162,9 @@ func (d *jbig2Decoder) readSymbolDictHuff(seg jbSegment, r *jbReader, flags uint
 				if symWidth <= 0 || symWidth > 1<<16 || len(newSyms) >= int(numNew) {
 					return errJBIG2Unsupported
 				}
+				if err := d.reserve(symWidth, hcHeight); err != nil {
+					return err
+				}
 				bmp, err := decodeRefAggSymbolHuff(h, grCx, symWidth, hcHeight, aggTable, symCodeLen, input, newSyms, sdrTemplate, rAt)
 				if err != nil {
 					return err
@@ -193,6 +196,9 @@ func (d *jbig2Decoder) readSymbolDictHuff(seg jbSegment, r *jbReader, flags uint
 			}
 			if totWidth == 0 {
 				continue
+			}
+			if err := d.reserve(totWidth, hcHeight); err != nil {
+				return err
 			}
 			// Decode the height-class collective bitmap (6.5.9).
 			bmSize, _ := bmTable.decode(h)
