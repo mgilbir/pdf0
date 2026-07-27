@@ -44,7 +44,7 @@ func TestExtractImagesTintFunctionCached(t *testing.T) {
 	imgDict.Set("Height", Integer(h))
 	imgDict.Set("BitsPerComponent", Integer(8))
 	imgDict.Set("ColorSpace", Array{Name("Separation"), Name("Spot"), Name("DeviceRGB"), fnRef})
-	imgDict.Set("Length", Integer(w * h))
+	imgDict.Set("Length", Integer(w*h))
 	imgRef := set(5, &Stream{Dict: imgDict, Data: make([]byte, w*h)})
 
 	xobj := &Dictionary{}
