@@ -1,7 +1,10 @@
 package pdf0
 
-// cffStandardStrings is the 391 predefined CFF strings (Adobe Technical
-// Note #5176, Appendix A), indexed by SID.
+// cffStandardStrings is the 391 predefined CFF strings (Adobe Technical Note
+// #5176, Appendix A), indexed by SID. Transcribed by hand — there is no
+// committed generator and no external schema to diff against, so
+// font_tables_test.go pins the length and both ends: a dropped or inserted entry
+// shifts every SID after it and silently changes which glyph a font names.
 var cffStandardStrings = []string{
 	".notdef", "space", "exclam", "quotedbl", "numbersign", "dollar", "percent", "ampersand",
 	"quoteright", "parenleft", "parenright", "asterisk", "plus", "comma", "hyphen", "period", "slash",

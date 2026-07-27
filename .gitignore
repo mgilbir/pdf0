@@ -91,3 +91,6 @@ testdata/en16931-codelists/genericode/
 testdata/xrechnung/
 testdata/peppol/
 testdata/nlcius/
+
+# Agent worktrees created by tooling under .claude/; never part of the repo.
+.claude/worktrees/
