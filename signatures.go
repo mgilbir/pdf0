@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/asn1"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -14,16 +15,32 @@ import (
 )
 
 // SignatureResult reports the outcome of verifying one signature field.
+//
+// Valid and CoversWholeDocument are independent and must both be consulted:
+// Valid says the bytes inside the signed /ByteRange are intact and were signed
+// by the embedded certificate's key, but it says nothing about bytes OUTSIDE
+// that range. A signed document can be modified after signing by an incremental
+// update — the original signed range stays intact (Valid == true) while the
+// rendered content changes (CoversWholeDocument == false). Use DocumentUnmodified
+// for the combined "signed and nothing was changed" verdict.
 type SignatureResult struct {
-	Field               string    // signature field name, if any
-	SignerCommonName    string    // Subject CN of the signing certificate
-	CoversWholeDocument bool      // the /ByteRange spans the whole file
-	Valid               bool      // digest matches and the signature verifies
-	SigningTime         time.Time // signing-time signed attribute, if present
+	Field               string         // signature field name, if any
+	SignerCommonName    string         // Subject CN of the signing certificate
+	CoversWholeDocument bool           // the /ByteRange covers the whole file except the /Contents window
+	Valid               bool           // the signed bytes are intact and the signature verifies
+	SigningTime         time.Time      // signing-time signed attribute, if present (self-asserted, untrusted)
 	TrustedChain        bool           // the certificate chains to a supplied trust root
 	ChainErr            error          // why the chain did not build (when roots were given)
 	Revocation          RevocationInfo // revocation status from the document's DSS material
 	Err                 error          // why signature verification failed, if it did
+}
+
+// DocumentUnmodified reports the safe combined verdict: the signature
+// cryptographically verifies AND it covers the whole document, so nothing was
+// changed after signing. Callers that read only Valid accept a document whose
+// content was altered by a post-signing incremental update; prefer this.
+func (r SignatureResult) DocumentUnmodified() bool {
+	return r.Valid && r.CoversWholeDocument
 }
 
 // CMS / PKCS#7 object identifiers (RFC 5652) and the CAdES/ESS attributes PAdES
@@ -57,9 +74,12 @@ type signingCertificateV2 struct {
 // file bytes. For each it recomputes the digest over the signed /ByteRange,
 // checks it against the signature's messageDigest attribute, and verifies the
 // signature over the signed attributes with the embedded certificate. It does
-// not build a trust chain (no root store): a Valid result means the document
-// content is intact and was signed by the holder of the embedded certificate's
-// private key.
+// not build a trust chain (no root store): a Valid result means the bytes inside
+// the signed /ByteRange are intact and were signed by the holder of the embedded
+// certificate's private key. It does NOT by itself mean the document was not
+// modified after signing — an incremental update can change the rendered content
+// while leaving the signed range intact. Combine Valid with CoversWholeDocument
+// (see SignatureResult.DocumentUnmodified).
 func (d *Document) VerifySignatures(raw []byte) []SignatureResult {
 	return d.VerifySignaturesWithRoots(raw, nil)
 }
@@ -67,7 +87,7 @@ func (d *Document) VerifySignatures(raw []byte) []SignatureResult {
 // VerifySignaturesWithRoots verifies every signature as VerifySignatures does and,
 // when roots is non-nil, additionally builds the signer's certificate chain to one
 // of those trust anchors (using the certificates embedded in the CMS as
-// intermediates, at the signing time when present). The chain outcome is reported
+// intermediates), validating at the current time. The chain outcome is reported
 // in TrustedChain / ChainErr and does not affect Valid, which remains a statement
 // about the cryptographic integrity of the signed content.
 func (d *Document) VerifySignaturesWithRoots(raw []byte, roots *x509.CertPool) []SignatureResult {
@@ -90,11 +110,17 @@ func (d *Document) verifyOneSignature(sig *Dictionary, raw []byte, roots *x509.C
 	contents, _ := d.Resolve(sig.Get("Contents")).(String)
 
 	segments, covers, ok := byteRangeSegments(d, sig.Get("ByteRange"), int64(len(raw)))
-	res.CoversWholeDocument = covers
 	if !ok {
 		res.Err = errors.New("malformed /ByteRange")
 		return res
 	}
+	// "Covers the whole document" requires more than the segments reaching the
+	// end of the file: there must be exactly two segments, the first starting at
+	// offset 0, and the single gap between them must be exactly the signature's
+	// /Contents window (<…hex…>). Otherwise a crafted multi-segment ByteRange, or
+	// a gap that does not coincide with /Contents, could leave arbitrary file
+	// bytes unsigned while still reaching the end (audit C12).
+	res.CoversWholeDocument = covers && contentsGapIsSignature(raw, segments, contents.Value)
 	signed := make([]byte, 0, len(raw))
 	for _, s := range segments {
 		if s[0] < 0 || s[1] < 0 || s[0]+s[1] > int64(len(raw)) {
@@ -126,27 +152,38 @@ func (d *Document) verifyOneSignature(sig *Dictionary, raw []byte, roots *x509.C
 
 	// Optional trust-chain verification against a caller-supplied root store.
 	if roots != nil {
-		intermediates := x509.NewCertPool()
-		for _, c := range certs {
-			if c != cert {
-				intermediates.AddCert(c)
-			}
-		}
-		opts := x509.VerifyOptions{
-			Roots:         roots,
-			Intermediates: intermediates,
-			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-		}
-		if !signingTime.IsZero() {
-			opts.CurrentTime = signingTime
-		}
-		if _, err := cert.Verify(opts); err != nil {
+		if err := chainTrusted(cert, certs, roots); err != nil {
 			res.ChainErr = err
 		} else {
 			res.TrustedChain = true
 		}
 	}
 	return res
+}
+
+// chainTrusted builds cert's chain to one of the trust anchors in roots, using
+// the other embedded certs as intermediates, and returns nil if it verifies.
+//
+// It validates at the current wall-clock time (VerifyOptions.CurrentTime left
+// zero). The signer's signing-time attribute is deliberately NOT used as the
+// reference time: it is signed only by the (possibly adversarial) signer, so a
+// holder of an expired or since-revoked certificate could backdate it into the
+// certificate's old validity window and forge a trusted chain (audit C4). A
+// trustworthy signing time comes only from a verified timestamp, which the PAdES
+// B-T/B-LTA path establishes separately.
+func chainTrusted(cert *x509.Certificate, certs []*x509.Certificate, roots *x509.CertPool) error {
+	intermediates := x509.NewCertPool()
+	for _, c := range certs {
+		if c != cert {
+			intermediates.AddCert(c)
+		}
+	}
+	_, err := cert.Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	})
+	return err
 }
 
 // byteRangeSegments returns the [start,length] pairs of a /ByteRange and whether
@@ -172,6 +209,49 @@ func byteRangeSegments(d *Document, obj Object, fileLen int64) (segs [][2]int64,
 		}
 	}
 	return segs, end >= fileLen, true
+}
+
+// contentsGapIsSignature reports whether the /ByteRange describes the canonical
+// two-segment signing layout: the first segment starts at offset 0, the second
+// ends at the end of the file, and the single gap between them is exactly the
+// signature's /Contents hex string (<…>) — i.e. only the signature value itself
+// is left unsigned. This is what "covers the whole document" must mean; without
+// it a ByteRange could reach the end of the file while leaving other bytes
+// unsigned (audit C12).
+func contentsGapIsSignature(raw []byte, segs [][2]int64, contents []byte) bool {
+	if len(segs) != 2 || segs[0][0] != 0 {
+		return false
+	}
+	gapStart := segs[0][0] + segs[0][1]
+	gapEnd := segs[1][0]
+	if gapStart < 0 || gapEnd <= gapStart || gapEnd > int64(len(raw)) {
+		return false
+	}
+	if segs[1][0]+segs[1][1] != int64(len(raw)) {
+		return false // the second segment must reach the very end
+	}
+	window := raw[gapStart:gapEnd]
+	if len(window) < 2 || window[0] != '<' || window[len(window)-1] != '>' {
+		return false
+	}
+	// Hex-decode the bytes between the angle brackets (PDF permits whitespace in
+	// a hex string) and require them to equal the parsed /Contents value.
+	digits := make([]byte, 0, len(window)-2)
+	for _, b := range window[1 : len(window)-1] {
+		switch b {
+		case ' ', '\t', '\r', '\n', '\f', 0:
+			continue
+		}
+		digits = append(digits, b)
+	}
+	if len(digits)%2 != 0 {
+		return false
+	}
+	decoded := make([]byte, len(digits)/2)
+	if _, err := hex.Decode(decoded, digits); err != nil {
+		return false
+	}
+	return bytes.Equal(decoded, contents)
 }
 
 // signerInfo mirrors the RFC 5652 SignerInfo fields verification needs.
