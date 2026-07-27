@@ -545,16 +545,63 @@ func (h *stdSecurityHandler) encryptDictCopy(d *Dictionary, num, gen int) *Dicti
 		Keys:   append([]Name(nil), d.Keys...),
 		Values: make([]Object, len(d.Values)),
 	}
+	sig := isSignatureDict(d)
 	for i, val := range d.Values {
+		if sig && d.Keys[i] == "Contents" {
+			cp.Values[i] = val // the signature value is never encrypted (7.6.2)
+			continue
+		}
 		cp.Values[i] = h.encryptObj(val, num, gen)
 	}
 	return cp
+}
+
+// isSignatureDict reports whether d is a signature (or document time-stamp)
+// dictionary holding a signature value in a direct /Contents string.
+//
+// ISO 32000-2, 7.6.2 lists "any hexadecimal strings representing the value of
+// the Contents key in a Signature dictionary" among the values encryption does
+// not apply to, alongside the trailer /ID and the /Encrypt dictionary's strings.
+// The exemption exists because the signature is computed over the file's own
+// bytes — everything outside the /ByteRange gap that /Contents sits in — so
+// enciphering the signature value would be circular: a verifier reads the bytes
+// that are in the file, and those bytes must be the CMS blob itself.
+//
+// The test deliberately matches the one VerifySignatures uses to find
+// signatures (/ByteRange and /Contents present, /Type absent or /Sig or
+// /DocTimeStamp). The two must agree: if the crypt layer transformed a value
+// that verification then treats as a signature, verification would be run
+// against something the file does not contain. /Contents must be a direct
+// string — 7.6.2's exemption is about the string itself, and Table 255 requires
+// a (hexadecimal) string value whenever /ByteRange is present. IsHex is not
+// required: a producer writing the value as a literal string still means it as
+// the signature value, and leniency here only preserves bytes.
+func isSignatureDict(d *Dictionary) bool {
+	if d.Get("ByteRange") == nil {
+		return false
+	}
+	if _, ok := d.Get("Contents").(String); !ok {
+		return false
+	}
+	if t, _ := d.Get("Type").(Name); t != "" && t != "Sig" && t != "DocTimeStamp" {
+		return false
+	}
+	return true
 }
 
 // decryptDocument decrypts every string and stream in the loaded (top-level)
 // objects in place. It must run before object-stream contents are materialised:
 // an /ObjStm container is itself an encrypted stream, while the objects inside
 // it are not separately encrypted.
+//
+// ISO 32000-2, 7.6.2 exempts four things from encryption; each is honoured here.
+// The trailer's /ID values are safe by construction: the walk covers only
+// doc.Objects, and the trailer is not one of them — with a cross-reference
+// stream the trailer IS an object, but a /Type /XRef stream is skipped whole
+// below. Strings inside an encrypted stream are covered by the stream's own
+// decryption and are never visited separately. The /Encrypt dictionary's strings
+// and a signature's /Contents are skipped explicitly (see below and
+// decryptDictStrings).
 func (h *stdSecurityHandler) decryptDocument(doc *Document) {
 	// The /Encrypt dictionary's own strings (/O, /U, /Perms, …) are never
 	// encrypted and must not be decrypted. Skipping by object number alone is
@@ -617,7 +664,23 @@ func (h *stdSecurityHandler) decryptDocument(doc *Document) {
 }
 
 func (h *stdSecurityHandler) decryptDictStrings(d *Dictionary, num, gen int) {
+	// A signature dictionary's /Contents is not encrypted (ISO 32000-2, 7.6.2;
+	// see isSignatureDict), so it must not be decrypted either. Decrypting it
+	// would replace the CMS blob the file actually contains with a transform of
+	// it: with RC4 that is always a different value, so every conformant
+	// encrypted-and-signed file would fail verification with a misleading
+	// "not a CMS SignedData"; with AES it is caught by the padding check ~99.6%
+	// of the time and silently truncates the value the rest.
+	//
+	// This runs for nested dictionaries too, and the exemption is by key within
+	// the dictionary rather than by object number, so it is unaffected by the
+	// aliasing hazard the /Encrypt skip in decryptDocument documents: whichever
+	// object number a shared value is reached under, its /Contents is skipped.
+	sig := isSignatureDict(d)
 	for i := range d.Values {
+		if sig && d.Keys[i] == "Contents" {
+			continue
+		}
 		d.Values[i] = h.decryptValue(d.Values[i], num, gen)
 	}
 }
