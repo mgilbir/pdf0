@@ -4,6 +4,6 @@ go 1.25
 
 require github.com/mgilbir/formalis v0.1.0
 
-require github.com/mgilbir/gopenjpeg v0.0.0-20260723125529-024704ecde50
+require github.com/mgilbir/gopenjpeg v0.0.0-20260727163526-8a139bc479b2
 
-require github.com/mgilbir/golittlecms v0.0.0-20260723125238-2845cbfd270b
+require github.com/mgilbir/golittlecms v0.0.0-20260727161601-f6af7cfe1556
