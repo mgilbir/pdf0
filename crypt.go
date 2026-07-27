@@ -423,12 +423,24 @@ func aesCBCDecrypt(key, data []byte) ([]byte, error) {
 	}
 	out := make([]byte, len(ct))
 	cipher.NewCBCDecrypter(block, iv).CryptBlocks(out, ct)
-	if n := len(out); n > 0 {
-		if pad := int(out[n-1]); pad >= 1 && pad <= aes.BlockSize && pad <= n {
-			out = out[:n-pad]
+	// Strip and validate the PKCS#7 padding. The final byte gives the pad length,
+	// and every padding byte must equal it; trusting the length byte alone (the
+	// previous behaviour) would mis-truncate crafted or corrupt ciphertext to a
+	// wrong, silently-accepted plaintext (audit C37).
+	n := len(out)
+	if n == 0 {
+		return nil, errors.New("AES plaintext is empty")
+	}
+	pad := int(out[n-1])
+	if pad < 1 || pad > aes.BlockSize || pad > n {
+		return nil, errors.New("invalid PKCS#7 padding")
+	}
+	for _, b := range out[n-pad:] {
+		if int(b) != pad {
+			return nil, errors.New("invalid PKCS#7 padding")
 		}
 	}
-	return out, nil
+	return out[:n-pad], nil
 }
 
 // encrypt is the inverse of decrypt: it enciphers plaintext for object
