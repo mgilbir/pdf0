@@ -14,23 +14,17 @@ func cmdInfo(args []string) error {
 	pw := fs.String("password", "", "user or owner password")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: pdf0 info [-password PW] <file>")
+		return usagef("usage: pdf0 info [-password PW] <file>")
 	}
 	doc, err := readDoc(fs.Arg(0), *pw)
 	if err != nil {
 		return err
 	}
-	pages := 0
-	for _, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*pdf0.Dictionary); ok {
-			if t, _ := d.Get("Type").(pdf0.Name); t == "Page" {
-				pages++
-			}
-		}
-	}
 	fmt.Printf("version:   %s\n", doc.Version)
 	fmt.Printf("objects:   %d\n", len(doc.Objects))
-	fmt.Printf("pages:     %d\n", pages)
+	// The page tree, not a /Type /Page scan: orphan page objects outside the
+	// tree must not inflate the count (audit C47).
+	fmt.Printf("pages:     %d\n", doc.PageCount())
 	fmt.Printf("encrypted: %v\n", doc.Encrypted)
 	return nil
 }
@@ -41,11 +35,11 @@ func cmdValidate(args []string) error {
 	pw := fs.String("password", "", "user or owner password")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: pdf0 validate [-level 1b|2b|3b|4] <file>")
+		return usagef("usage: pdf0 validate [-level 1b|2b|3b|4] [-password PW] <file>")
 	}
 	lvl, ok := parseLevel(*level)
 	if !ok {
-		return fmt.Errorf("unknown level %q (want 1b, 2b, 3b, or 4)", *level)
+		return usagef("unknown level %q (want 1b, 2b, 3b, or 4)", *level)
 	}
 	data, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
@@ -71,7 +65,7 @@ func cmdValidate(args []string) error {
 	for _, e := range errs {
 		fmt.Println(e)
 	}
-	return fmt.Errorf("%d violation(s) found", len(errs))
+	return violationsf("%d violation(s) found", len(errs))
 }
 
 func cmdDecrypt(args []string) error {
@@ -79,7 +73,7 @@ func cmdDecrypt(args []string) error {
 	pw := fs.String("password", "", "user or owner password")
 	fs.Parse(args)
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: pdf0 decrypt [-password PW] <in> <out>")
+		return usagef("usage: pdf0 decrypt [-password PW] <in> <out>")
 	}
 	doc, err := readDoc(fs.Arg(0), *pw)
 	if err != nil {
@@ -101,10 +95,10 @@ func cmdEncrypt(args []string) error {
 	owner := fs.String("owner", "", "owner password (defaults to the user password)")
 	fs.Parse(args)
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: pdf0 encrypt -user PW [-owner PW] <in> <out>")
+		return usagef("usage: pdf0 encrypt -user PW [-owner PW] <in> <out>")
 	}
 	if *user == "" && *owner == "" {
-		return fmt.Errorf("encrypt requires -user (and optionally -owner)")
+		return usagef("encrypt requires -user (and optionally -owner)")
 	}
 	ownerPw := *owner
 	if ownerPw == "" {
@@ -128,7 +122,7 @@ func cmdExtract(args []string) error {
 	pw := fs.String("password", "", "user or owner password")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: pdf0 extract [-password PW] <file>")
+		return usagef("usage: pdf0 extract [-password PW] <file>")
 	}
 	doc, err := readDoc(fs.Arg(0), *pw)
 	if err != nil {
@@ -147,27 +141,46 @@ func cmdRepair(args []string) error {
 	pw := fs.String("password", "", "user or owner password")
 	fs.Parse(args)
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: pdf0 repair [-level 1b|2b|3b|4] [-password PW] <in> <out>")
+		return usagef("usage: pdf0 repair [-level 1b|2b|3b|4] [-password PW] <in> <out>")
 	}
 	lvl, ok := parseLevel(*level)
 	if !ok {
-		return fmt.Errorf("unknown level %q", *level)
+		return usagef("unknown level %q", *level)
 	}
 	doc, err := readDoc(fs.Arg(0), *pw)
 	if err != nil {
 		return err
 	}
-	for _, a := range doc.Repair(lvl) {
+	actions := doc.Repair(lvl)
+	for _, a := range actions {
 		fmt.Println("fixed:", a.Description)
 	}
-	return writeDoc(doc, fs.Arg(1))
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		return err
+	}
+	if err := os.WriteFile(fs.Arg(1), buf.Bytes(), 0o644); err != nil {
+		return err
+	}
+	// Repair only removes forbidden document-level constructs; always say what
+	// was done and what still fails, instead of exiting silently when nothing
+	// was fixable (audit C47).
+	remaining := 0
+	if rt, err := pdf0.Read(bytes.NewReader(buf.Bytes()), int64(buf.Len())); err == nil {
+		remaining = len(pdf0.ValidatePDFABytes(rt, lvl, buf.Bytes()))
+	}
+	fmt.Printf("%s: %d fix(es) applied, %d violation(s) remain\n", fs.Arg(1), len(actions), remaining)
+	if remaining > 0 {
+		return violationsf("%d violation(s) remain after repair (run: pdf0 validate -level %s %s)", remaining, *level, fs.Arg(1))
+	}
+	return nil
 }
 
 func cmdMerge(args []string) error {
 	fs := flag.NewFlagSet("merge", flag.ExitOnError)
 	fs.Parse(args)
 	if fs.NArg() < 2 {
-		return fmt.Errorf("usage: pdf0 merge <out> <in1> <in2> [in3 ...]")
+		return usagef("usage: pdf0 merge <out> <in1> <in2> [in3 ...]")
 	}
 	out := fs.Arg(0)
 	merged, err := readDoc(fs.Arg(1), "")
@@ -197,7 +210,7 @@ func cmdUA(args []string) error {
 	pw := fs.String("password", "", "user or owner password")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: pdf0 ua [-password PW] <file>")
+		return usagef("usage: pdf0 ua [-password PW] <file>")
 	}
 	doc, err := readDoc(fs.Arg(0), *pw)
 	if err != nil {
@@ -214,7 +227,7 @@ func cmdUA(args []string) error {
 	for _, e := range v {
 		fmt.Println(e)
 	}
-	return fmt.Errorf("%d PDF/UA violation(s)", len(v))
+	return violationsf("%d PDF/UA violation(s)", len(v))
 }
 
 func parseLevel(s string) (pdf0.PDFALevel, bool) {
