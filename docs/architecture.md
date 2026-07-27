@@ -1,12 +1,16 @@
 # Architecture
 
-How bytes flow through pdf0. This is the map to read before changing the parser,
-serializer, or validator. For the public API surface, see the package godoc; for
-the file-by-file layout, see the table in the [README](../README.md#layout).
+How bytes flow through pdf0's core: **Read** (bytes → object model) and **Write**
+(object model → bytes), over one shared, typed object model. Read this before
+changing the parser or serializer. For the public API surface, see the package
+godoc.
 
-pdf0 has three pipelines — **Read** (bytes → object model), **Write** (object
-model → bytes), and **Validate** (object model → PDF/A violations) — over one
-shared, typed object model.
+Each subsystem built on that core has its own map:
+
+| Subsystem | Doc |
+|-----------|-----|
+| The validator family (PDF/A, PDF/UA, PDF/X, PDF/VT, PDF/R, DPart, Factur-X) | [validators.md](validators.md) |
+| Decisions that keep coming up | [adr/](adr/README.md) |
 
 ## The object model
 
@@ -16,7 +20,8 @@ Every PDF value implements the `Object` interface (`object.go`): `Boolean`,
 `IndirectObject`), the `Trailer` dictionary, and — after `Read` — `Offsets`
 (object number → absolute byte offset, used by the byte-level validation rules).
 `Dictionary` uses parallel `Keys`/`Values` slices to preserve key order for
-faithful round-tripping.
+faithful round-tripping, with a lazy name→slot index above 64 keys — see
+[ADR 0005](adr/0005-parallel-slice-dictionary.md).
 
 ## Read
 
@@ -129,48 +134,7 @@ workflows require, since rewriting would break every existing signature.
 
 ## Validate
 
-`ValidatePDFABytes` (`pdfa.go`) runs a fixed list of 59 check functions, then —
-if raw bytes are supplied — the byte-level file-structure checks. Each check runs
-behind a `recover()` boundary so a bug or an adversarial structure in one check
-cannot crash the caller. Validation runs against a shallow copy of the
-`Document`, so it never mutates the caller's document and is safe to run
-concurrently on the same document.
-
-```mermaid
-flowchart TD
-    A[ValidatePDFABytes doc, level, rawData] --> B[shallow-copy doc,<br/>install per-run cache]
-    B --> C[for each of 59 checks]
-    C --> D[runCheck: recover panic -> 'internal' violation]
-    D --> C
-    C --> E{rawData != nil?}
-    E -->|yes| F[byte-level checks<br/>runByteCheck: recover]
-    E -->|no| G
-    F --> G[sort violations by Rule, Object, Message]
-    G --> I[return violation list]
-```
-
-`ValidatePDFA(doc, level)` is `ValidatePDFABytes(doc, level, nil)`: it skips the
-byte-level rules because they need the file bytes.
-
-**Executed-content model.** Many PDF/A rules apply only to content that is
-actually *used*, not merely present. Colour spaces, fonts, and ExtGState
-parameters are checked when a page (or a form XObject / pattern / Type3 glyph it
-invokes) actually references them — see `walkExecutedContent` and
-`collectFontTextUsage`. A form XObject that is never drawn does not trigger
-font-embedding or colour rules. This mirrors what a conformance checker like
-veraPDF does and is why the corpus is the oracle for rule semantics (see
-[CONTRIBUTING](../CONTRIBUTING.md)).
-
-## Where the rules live
-
-The validation checks are spread across files by concern, all dispatched from the
-`checks` slice in `ValidatePDFABytes`:
-
-| File | Rules |
-|------|-------|
-| `pdfa.go` | Dispatch + most rules (fonts-embedding, colour, metadata, annotations, output intents, transparency) |
-| `final_rules.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects |
-| `content_operators.go` | Content-stream operator whitelist, named resources |
-| `filestructure.go` | Byte-level structure rules over the raw file (`Document.Offsets`) |
-| `fonts.go` / `fontprog.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
-| `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
+Validation reads the object model and reports findings; it never mutates the
+document. Ten standards are supported and the PDF/A engine has its own dispatch,
+executed-content model and rule-file map — all of that lives in
+[validators.md](validators.md).
