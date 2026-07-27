@@ -126,7 +126,9 @@ platform at equal coverage because ISO 32000-1 9.6.6.4 describes code→GID in
 terms of the Windows subtables, and because that keeps the choice unchanged for
 every font whose subtables are the `(3,1)`/`(3,0)`/`(1,0)` trio. Equal ranks
 resolve to the later subtable, as the un-ranked code always did. An unreadable
-higher-ranked subtable never displaces a readable lower-ranked one.
+higher-ranked subtable never displaces a readable lower-ranked one — nor does a
+higher-ranked one that is perfectly well formed but maps nothing, which amounts
+to the same thing and is why "maps nothing" is folded into "unreadable" below.
 
 **Subtable formats.** 0 (byte table), 4 (segment mapping), 6 (trimmed table) and
 12 (segmented coverage) are parsed; formats 2, 8, 10, 13 and 14 are not. Format
@@ -135,7 +137,11 @@ higher-ranked subtable never displaces a readable lower-ranked one.
 unknown format, truncated body, a declared `length`/`nGroups` the buffer cannot
 back — yields `nil`, never an empty map: `trueTypeGID` treats a non-nil `cmap` as
 authoritative, so an empty one would read as "every code is `.notdef`" instead of
-"unknown".
+"unknown". So does a subtable that parses cleanly and maps nothing at all, which
+is not a theoretical shape: sixteen bytes of format-12 header declaring
+`nGroups` 0, a lone `0xFFFF` format-4 sentinel, or a table whose every group
+lies outside Unicode all reach the end of the parse holding no mapping.
+`FuzzCmapSubtable` found the last of those, and pins the invariant.
 
 **Empty glyph is not missing glyph.** This distinction is the trap, and it is
 why two parallel arrays exist. `glyphPresent[gid]` means the loca entry is

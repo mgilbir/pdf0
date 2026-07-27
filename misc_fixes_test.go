@@ -369,22 +369,98 @@ func TestCmapSubtablePreference(t *testing.T) {
 	}
 }
 
+// buildCmapFormat0 assembles a format-0 (byte encoding) cmap subtable from a
+// code→glyph table; codes absent from gidByCode map to nothing.
+func buildCmapFormat0(gidByCode map[byte]byte) []byte {
+	b := make([]byte, 262)
+	b[1] = 0 // format
+	binary.BigEndian.PutUint16(b[2:], uint16(len(b)))
+	for code, gid := range gidByCode {
+		b[6+int(code)] = gid
+	}
+	return b
+}
+
+// buildCmapFormat6 assembles a format-6 (trimmed table) cmap subtable mapping
+// first, first+1, … to the given glyph ids.
+func buildCmapFormat6(first int, gids []int) []byte {
+	b := make([]byte, 10+2*len(gids))
+	put16 := func(off, v int) { b[off] = byte(v >> 8); b[off+1] = byte(v) }
+	put16(0, 6)         // format
+	put16(2, len(b))    // length
+	put16(6, first)     // firstCode
+	put16(8, len(gids)) // entryCount
+	for i, gid := range gids {
+		put16(10+2*i, gid)
+	}
+	return b
+}
+
 // TestCmapFormat6PastBMP ensures a format-6 subtable whose entries run past
 // 0xFFFF drops the out-of-range codes instead of aliasing them onto low codes
 // when the caller narrows the map to uint16.
 func TestCmapFormat6PastBMP(t *testing.T) {
-	b := make([]byte, 10+2*4)
-	put16 := func(off, v int) { b[off] = byte(v >> 8); b[off+1] = byte(v) }
-	put16(0, 6)      // format
-	put16(2, len(b)) // length
-	put16(6, 0xFFFE) // firstCode
-	put16(8, 4)      // entryCount, runs to 0x10001
-	for i := 0; i < 4; i++ {
-		put16(10+2*i, 7+i)
-	}
-	m := parseCmapSubtable(b)
+	// firstCode 0xFFFE with four entries runs to 0x10001.
+	m := parseCmapSubtable(buildCmapFormat6(0xFFFE, []int{7, 8, 9, 10}))
 	if len(m) != 2 || m[0xFFFE] != 7 || m[0xFFFF] != 8 {
 		t.Errorf("format 6 past the BMP: got %v, want only U+FFFE->7 and U+FFFF->8", m)
+	}
+}
+
+// TestCmapMappingNothingIsNil ensures a subtable that is perfectly well formed
+// but maps no character comes back as nil rather than as an empty map. Found by
+// FuzzCmapSubtable. The distinction is load-bearing: trueTypeGID treats a
+// non-nil cmap as authoritative, so an empty one answers ".notdef" for every
+// code — a font-wide false PDF/A finding from sixteen bytes of input.
+func TestCmapMappingNothingIsNil(t *testing.T) {
+	cases := map[string][]byte{
+		// A 16-byte format-12 header declaring no groups at all.
+		"format 12, nGroups 0": buildCmapFormat12(nil),
+		// The sentinel segment a conformant format-4 table always ends with,
+		// alone: it maps nothing by definition.
+		"format 4, sentinel only": buildCmapFormat4([][3]int{{0xFFFF, 0xFFFF, 1}}),
+		"format 0, all .notdef":   buildCmapFormat0(nil),
+		"format 6, no entries":    buildCmapFormat6(0x41, nil),
+		// What the fuzzer actually minimised to: one group lying wholly outside
+		// Unicode, so every mapping in it is skipped.
+		"format 12, sole group outside Unicode": buildCmapFormat12([][3]uint32{{0x30303030, 0x30303030, 0x30303030}}),
+		// Budget exhaustion with nothing recorded: every group's glyph ids are
+		// wider than 16 bits, so no mapping survives, and the loop gives up on
+		// the work cap rather than on the end of the table.
+		"format 12, budget spent on out-of-range glyphs": buildCmapFormat12(func() [][3]uint32 {
+			g := make([][3]uint32, 64)
+			for i := range g {
+				g[i] = [3]uint32{0, 0x10FFFF, 0x10000}
+			}
+			return g
+		}()),
+	}
+	for name, b := range cases {
+		if m := parseCmapSubtable(b); m != nil {
+			t.Errorf("%s: got a non-nil map with %d entries, want nil", name, len(m))
+		}
+	}
+}
+
+// TestCmapEmptySubtableDoesNotDisplace ensures a higher-ranked subtable that
+// maps nothing leaves the font's mappings alone. Before the nil-not-empty fix a
+// sixteen-byte (3,10) table blanked a perfectly good (3,1) one, because the
+// ranking accepted the empty map as the better source.
+func TestCmapEmptySubtableDoesNotDisplace(t *testing.T) {
+	type sub = struct {
+		plat, enc int
+		data      []byte
+	}
+	bmp := buildCmapFormat4([][3]int{{0x0041, 0x0041, 100 - 0x41}, {0xFFFF, 0xFFFF, 1}})
+	fp := parseSFNT(buildSFNTWithCmapSubtables([]sub{
+		{3, 1, bmp},
+		{3, 10, buildCmapFormat12(nil)}, // well formed, maps nothing
+	}))
+	if fp.cmap[0x41] != 100 {
+		t.Errorf("empty (3,10): cmap[U+0041] = %d, want the (3,1) mapping 100", fp.cmap[0x41])
+	}
+	if isNotdefGlyph(fp, "TrueType", false, 'A', "A") {
+		t.Errorf("an empty preferred subtable made every code read as .notdef")
 	}
 }
 

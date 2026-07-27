@@ -99,8 +99,10 @@ script). There is no `clean-refpdfs` or `clean-profiles`; remove those by hand.
 
 ## Fuzzing
 
-Two fuzz targets live in `fuzz_test.go`. Neither runs under a plain `go test`
+Four fuzz targets live in `fuzz_test.go`. None runs under a plain `go test`
 beyond replaying its seed corpus.
+
+Two take a whole file:
 
 - **`FuzzRead`** — `Read` must never panic on arbitrary input, and any document it
   returns must survive every validator (`ValidatePDFUA`, `ValidatePDFABytes` at
@@ -111,17 +113,51 @@ beyond replaying its seed corpus.
   cleanly and losslessly: the output must re-parse, must leave no object stream
   undecodable, and must not drop objects.
 
+Two go straight at the TrueType `cmap` parser, which reads attacker-controlled
+binary out of an embedded font program. The whole-file targets reach it only
+through a valid-enough PDF carrying a valid-enough sfnt carrying a cmap table,
+which no random mutation assembles — so in practice they never exercise it at
+all:
+
+- **`FuzzCmapSubtable`** — `parseCmapSubtable` on raw subtable bytes, the deep
+  target. Beyond "does not panic" it asserts the invariants the work budgets and
+  the recent fixes exist to hold: the returned map never exceeds
+  `maxCmapFormat4Work`/`maxCmapFormat12Work` however many groups the table
+  claims; an unreadable subtable — or one that maps nothing — returns nil rather
+  than an empty non-nil map (`trueTypeGID` treats a non-nil cmap as
+  authoritative, so an empty one reads as "every code is `.notdef`" and produces
+  font-wide false findings); and every key is a Unicode code point mapping to a
+  glyph index in 1..0xFFFF, never 0. Seeded from the builders behind the
+  hand-written cmap tests: each supported format, the budget-tripping tables, the
+  truncated and malformed variants, and formats 2/13/14, which are not parsed.
+- **`FuzzSFNTCmap`** — `parseSFNT`, the smallest entry point that exercises
+  subtable *selection*. The (3,10) > (3,1) > (0,x) ranking runs on
+  attacker-supplied platform ids, encoding ids and offsets and decides which
+  subtable becomes the font's authoritative cmap; whichever it picks must satisfy
+  the same invariants, and the derived symbol and Mac maps must carry only real
+  glyph indices. Seeded from multi-subtable fonts built by
+  `buildSFNTWithCmapSubtables`.
+
+Neither cmap target asserts a wall-clock bound: inside a fuzz target that is a
+flake, since workers run in parallel under load and seed replay runs under
+`-race`. Bounded work is asserted through the size of the returned map instead;
+the timing assertions stay in `TestCmapFormat4Budget` and
+`TestCmapFormat12Budget`, where the input is fixed.
+
 Run them one at a time (Go allows only one fuzz target per invocation):
 
 ```
 go test -run=NONE -fuzz=FuzzRead -fuzztime=5m
 go test -run=NONE -fuzz=FuzzRoundTrip -fuzztime=5m
+go test -run=NONE -fuzz=FuzzCmapSubtable -fuzztime=90s
+go test -run=NONE -fuzz=FuzzSFNTCmap -fuzztime=90s
 ```
 
-Both are seeded from the two structural builders, their AES-256-encrypted forms
-(so the fuzzer explores the decrypt/re-encrypt paths), a few degenerate headers,
-and any reference PDFs present under `testdata/pdf20examples/` — so
-`make refpdfs` first gives the fuzzer a much better starting corpus.
+The two whole-file targets are seeded from the two structural builders, their
+AES-256-encrypted forms (so the fuzzer explores the decrypt/re-encrypt paths), a
+few degenerate headers, and any reference PDFs present under
+`testdata/pdf20examples/` — so `make refpdfs` first gives them a much better
+starting corpus.
 
 **Where the corpus lands.** The generated corpus lives in the Go build cache
 (`$(go env GOCACHE)/fuzz`); a crashing input is written to

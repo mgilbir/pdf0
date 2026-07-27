@@ -260,11 +260,33 @@ func unicodeCmapRank(plat, enc int) int {
 	return 0
 }
 
+// Work budgets for the two expanding subtable formats. Package-level so the
+// tests can assert the bound the parser promises rather than a copy of it.
+const (
+	maxCmapFormat4Work  = 1 << 18
+	maxCmapFormat12Work = 1 << 18
+)
+
+// cmapResult returns out, or nil when it holds no mapping. A subtable that maps
+// nothing is, to every caller, indistinguishable from one that could not be
+// read, and the distinction that matters is nil vs non-nil: trueTypeGID treats a
+// non-nil cmap as authoritative, so an empty one answers "every code is .notdef"
+// where the honest answer is "unknown". Reachable from well-formed bytes — a
+// 16-byte format-12 subtable declaring nGroups 0, or a budget-exhausted table
+// whose every candidate mapping was skipped — so it has to be handled on the way
+// out rather than assumed away.
+func cmapResult(out map[rune]int) map[rune]int {
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // parseCmapSubtable handles cmap formats 0, 4, 6, and 12. It returns nil — not an
-// empty map — when the subtable cannot be read (an unsupported format, or one
-// truncated past use): callers treat a non-nil cmap as authoritative, so an
-// empty map would claim the font maps no character at all, which reads as
-// "every code is .notdef" rather than "unknown".
+// empty map — when the subtable cannot be read (an unsupported format, one
+// truncated past use, or one that maps nothing at all): callers treat a non-nil
+// cmap as authoritative, so an empty map would claim the font maps no character
+// at all, which reads as "every code is .notdef" rather than "unknown".
 func parseCmapSubtable(b []byte) map[rune]int {
 	out := make(map[rune]int)
 	switch be16(b, 0) {
@@ -290,7 +312,6 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		// than ~65536 inner iterations. A hostile table with many segments each
 		// spanning the whole range is O(segments x 65535) — seconds to minutes
 		// of CPU on an untrusted font. Bound the total work (audit C10).
-		const maxCmapFormat4Work = 1 << 18
 		work := 0
 		for s := 0; s < segX2; s += 2 {
 			end := be16(b, endBase+s)
@@ -312,7 +333,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 			// segment beginning at code 0 (audit C46).
 			for c := start; c <= end; c++ {
 				if work++; work > maxCmapFormat4Work {
-					return out
+					return cmapResult(out)
 				}
 				var gid int
 				if rangeOff == 0 {
@@ -372,11 +393,10 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		// the font. The cap is the format-4 one: an sfnt has at most 65535
 		// glyphs, so no honest font needs to map anywhere near 2^18 code
 		// points, and the resulting map stays a few megabytes at worst.
-		const maxCmapFormat12Work = 1 << 18
 		work := 0
 		for g := 0; g < int(nGroups); g++ {
 			if work++; work > maxCmapFormat12Work {
-				return out
+				return cmapResult(out)
 			}
 			p := 16 + 12*g
 			start := be32(b, p)
@@ -399,7 +419,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 			}
 			for c := start; ; c++ {
 				if work++; work > maxCmapFormat12Work {
-					return out
+					return cmapResult(out)
 				}
 				gid := uint64(startGID) + uint64(c-start)
 				// Glyph indices are 16-bit; anything wider is malformed and
@@ -416,7 +436,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		// Formats 2, 8, 10, 13 and 14 are not parsed.
 		return nil
 	}
-	return out
+	return cmapResult(out)
 }
 
 // --- CFF ---
