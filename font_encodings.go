@@ -1,7 +1,11 @@
 package pdf0
 
-// Character-code to glyph-name tables for the standard Latin-text
-// encodings, generated from ISO 32000-1 Annex D.2 (spec/pdf1.7).
+// Character-code to glyph-name tables for the standard Latin-text encodings,
+// transcribed from ISO 32000-1 Annex D.2 (spec/pdf1.7, gitignored). Unlike the
+// spec-example JSON there is no committed generator, so these are maintained by
+// hand and cannot be regenerated — font_tables_test.go pins their shape and the
+// codes where the encodings deliberately disagree, which is what a bad edit or a
+// shift would break.
 
 var standardEncodingNames = map[byte]string{
 	32:  "space",
