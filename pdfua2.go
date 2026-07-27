@@ -19,7 +19,7 @@ import "fmt"
 
 // ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the UAViolation
 // type; clause identifiers follow ISO 14289-2.
-func (d *Document) ValidatePDFUA2() []UAViolation {
+func ValidatePDFUA2(d *Document) []UAViolation {
 	// The shared checks (tagging, structure tree, default language, displayed
 	// title, Unicode mapping, artifacts, headings), parameterized for part 2 so
 	// the identification rule requires pdfuaid:part 2 and the UA-1 header rule

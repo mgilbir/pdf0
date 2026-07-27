@@ -66,7 +66,7 @@ func hasPDFRRule(errs []PDFRViolation, rule string) bool {
 }
 
 func TestValidatePDFRValid(t *testing.T) {
-	if v := buildPDFRDoc().ValidatePDFR(); len(v) != 0 {
+	if v := ValidatePDFR(buildPDFRDoc()); len(v) != 0 {
 		t.Errorf("conformant PDF/R flagged: %d violations (first: %s)", len(v), v[0].Error())
 	}
 }
@@ -106,7 +106,7 @@ func TestValidatePDFRViolations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := buildPDFRDoc()
 			tc.mutate(d)
-			if v := d.ValidatePDFR(); !hasPDFRRule(v, tc.rule) {
+			if v := ValidatePDFR(d); !hasPDFRRule(v, tc.rule) {
 				t.Errorf("expected %q violation; got %v", tc.rule, v)
 			}
 		})

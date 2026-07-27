@@ -54,7 +54,7 @@ var pdfrTextOrVectorOps = map[string]bool{
 }
 
 // ValidatePDFR checks a document against the PDF/R structural profile.
-func (d *Document) ValidatePDFR() []PDFRViolation {
+func ValidatePDFR(d *Document) []PDFRViolation {
 	var out []PDFRViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFRViolation{Rule: rule, Message: msg, Object: obj})

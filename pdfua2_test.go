@@ -32,7 +32,7 @@ func buildUA2Doc(t *testing.T) *Document {
 }
 
 func TestValidatePDFUA2Valid(t *testing.T) {
-	if v := buildUA2Doc(t).ValidatePDFUA2(); len(v) != 0 {
+	if v := ValidatePDFUA2(buildUA2Doc(t)); len(v) != 0 {
 		t.Errorf("conformant PDF/UA-2 document flagged: %v", v)
 	}
 }
@@ -50,21 +50,21 @@ func TestValidatePDFUA2Violations(t *testing.T) {
 	// pdfuaid:part 1 is wrong for PDF/UA-2.
 	d := buildUA2Doc(t)
 	d.Objects[98].Value.(*Stream).Data = bytes.Replace(d.Objects[98].Value.(*Stream).Data, []byte(`pdfuaid:part="2"`), []byte(`pdfuaid:part="1"`), 1)
-	if v := d.ValidatePDFUA2(); !uaHas(v, "pdfuaid:part must be 2") {
+	if v := ValidatePDFUA2(d); !uaHas(v, "pdfuaid:part must be 2") {
 		t.Errorf("part 1 should be rejected for PDF/UA-2; got %v", v)
 	}
 
 	// PDF/UA-2 requires PDF 2.0.
 	d = buildUA2Doc(t)
 	d.Version = "1.7"
-	if v := d.ValidatePDFUA2(); !uaHas(v, "PDF 2.0") {
+	if v := ValidatePDFUA2(d); !uaHas(v, "PDF 2.0") {
 		t.Errorf("PDF 1.7 should be rejected for PDF/UA-2; got %v", v)
 	}
 
 	// A carried-over PDF/UA-1 structural requirement still fires (not tagged).
 	d = buildUA2Doc(t)
 	d.ResolveDict(d.Trailer.Get("Root")).Delete("MarkInfo")
-	if v := d.ValidatePDFUA2(); !uaHas(v, "tagged") {
+	if v := ValidatePDFUA2(d); !uaHas(v, "tagged") {
 		t.Errorf("an untagged document should be flagged; got %v", v)
 	}
 }
