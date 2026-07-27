@@ -34,6 +34,12 @@ jobs:
         # The conformance corpora are not vendored; corpus-gated tests skip.
         run: go test ./... -count=1
 
+      - name: mermaid diagrams render
+        # A diagram that does not parse is rendered by GitHub as an error box, so
+        # the reader loses the explanation. Caught one already: a ';' in a Note,
+        # which mermaid reads as a statement separator (docs audit follow-up).
+        run: ./scripts/check-mermaid.sh
+
       - name: example runs
         # The README's headline example must run and produce a file (audit C9).
         # extract_images builds its own document and exits non-zero if the images

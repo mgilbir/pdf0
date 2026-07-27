@@ -12,7 +12,7 @@ Each subsystem built on that core has its own map:
 | The validator family (PDF/A, PDF/UA, PDF/X, PDF/VT, PDF/R, DPart, Factur-X) | [validators.md](validators.md) |
 | Signing, verification, PAdES, timestamps, revocation | [signing.md](signing.md) |
 | Image extraction and the codec stack | [images.md](images.md) |
-| The `pdf0` command-line tool | [cli.md](cli.md) |
+| `cmd/pdf0`, the command-line dev aid | [cli.md](cli.md) |
 | Test data, oracles, fuzzing and CI | [testing.md](testing.md) |
 | Symptom-first troubleshooting | [troubleshooting.md](troubleshooting.md) |
 | Decisions that keep coming up | [adr/](adr/README.md) |

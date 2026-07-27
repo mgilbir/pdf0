@@ -675,16 +675,20 @@ a colour-key `/Mask`. The diagram shipped in `docs/images.md` is the corrected o
 
 ## 7. Open questions (maintainer-only)
 
-1. **Is the CLI a product or a demo?** It shapes D4's size: a supported tool needs `docs/cli.md`,
-   an exit-code contract and probably subcommands for the validators it can't currently reach; a demo
-   needs one honest README paragraph saying so. The current text implies the former, the feature
-   coverage implies the latter.
+1. ~~**Is the CLI a product or a demo?**~~ **Answered by the maintainer (2026-07-27): pdf0 is a
+   library.** `cmd/pdf0` is a development aid, not a supported surface. The README, the docs index,
+   `docs/architecture.md` and `docs/cli.md` now say so, and the CLI has been demoted out of the
+   README's headline. It follows that the eight usage-text-versus-behaviour discrepancies recorded in
+   §6b are documentation facts rather than bugs to fix, and that the CLI's inability to reach Level A,
+   PDF/X, PDF/VT, PDF/R, DPart, Factur-X, signing and image extraction is by design rather than a gap.
 2. **Is `docs/audits/` the right long-term home for findings reports?** Six reports totalling ~2 300
    lines now sit one click from the README, and they are being used as de-facto architecture
    documentation because `docs/architecture.md` covers less than half the system (D5). Archiving
    resolved reports (or moving them out of `docs/`) would sharpen what `docs/` means.
-3. **API stability and tagging** (D20b) — the README leads with `go get` on an untagged module. Is
-   a v0 tag + a one-line stability statement wanted, or is "expect breakage" the intended message?
+3. ~~**API stability and tagging**~~ (D20b) — **deferred by the maintainer (2026-07-27):** not a
+   priority yet. The README's one-line "no release tags yet, the API is not frozen" note stays, since
+   it is accurate and answers the question a reader actually has when `go get` resolves a
+   pseudo-version. Revisit when a v1 is in view.
 4. **Should `remediation-plan-2026-07-26.md` live in `docs/` at all?** It is a live work plan, not a
    document; an issue or a branch-local file may serve it better than the audit archive (D14).
 5. **PDF/A Level A support level** — is 1a/2a/3a considered shipped (in which case the CLI should

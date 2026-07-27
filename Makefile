@@ -1,4 +1,4 @@
-.PHONY: test corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx
+.PHONY: test check-mermaid corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -19,6 +19,13 @@ PROFILES_DIR := spec/verapdf-profiles
 
 test:
 	go test ./...
+
+# Render every ```mermaid block in the Markdown and fail if one does not parse.
+# The docs use Mermaid for the pipelines prose carries badly, and GitHub replaces
+# a broken block with an error box — so a silent syntax error costs the reader the
+# explanation. Needs node/npx; the mermaid-cli version is pinned in the script.
+check-mermaid:
+	./scripts/check-mermaid.sh
 
 # Reference PDF 2.0 files for the round-trip tests.
 refpdfs: $(REFPDF_DIR)/.ok
