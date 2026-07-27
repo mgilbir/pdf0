@@ -1,7 +1,8 @@
 # pdf0
 
-A PDF 2.0 parser, serializer, and PDF/A validator written in Go, with no
-third-party dependencies.
+A PDF 2.0 parser, serializer, and PDF/A validator written in Go. Its only
+dependencies are the author's own pure-Go modules (`formalis` for EN 16931
+invoice rules, `golittlecms` for ICC profiles, `gopenjpeg` for JPEG 2000).
 
 ```
 go get github.com/mgilbir/pdf0
@@ -15,15 +16,22 @@ go get github.com/mgilbir/pdf0
   regenerating cross-reference streams and object streams where the source used
   them.
 - **Validate** against PDF/A conformance levels (`ValidatePDFA` /
-  `ValidatePDFABytes`): PDF/A-1b, -2b, -3b, and -4; plus foundational PDF/UA-1
-  accessibility checks (`ValidatePDFUA`).
+  `ValidatePDFABytes`): PDF/A-1a/1b, -2a/2b, -3a/3b, and -4; plus PDF/UA-1 and
+  PDF/UA-2 accessibility (`ValidatePDFUA` / `ValidatePDFUA2`), PDF/X
+  (`ValidatePDFX`), PDF/VT (`ValidatePDFVT` / `ValidatePDFVT2`), PDF/R
+  (`ValidatePDFR`), DPart (`ValidateDParts`), and Factur-X / Order-X container
+  checks (`ValidateFacturX` / `ValidateOrderX`).
 - **Encrypt / decrypt** with the standard security handler — RC4, AES-128, and
-  AES-256, via `ReadWithPassword`, `SetEncryption`, and `RemoveEncryption`.
+  AES-256, via `ReadWithPassword`, `SetEncryption`, and `RemoveEncryption`
+  (`Document.Locked` reports a file that could not be decrypted).
 - **Sign and verify** digital signatures (`WriteSigned` / `VerifySignatures`,
-  CMS/PKCS#7).
-- **Extract text** (`ExtractText`), **repair** common conformance failures
-  (`Repair`), and **manipulate pages** (`ExtractPages`, `AppendPages`).
-- **Build** a minimal conformant PDF/A document (`NewPDFADocument`).
+  CMS/PKCS#7), including PAdES B-B through B-LTA (`ValidatePAdES`), RFC 3161
+  timestamps, and CRL/OCSP revocation.
+- **Extract** text (`ExtractText`) and images (`ExtractImages`, decoding
+  DCTDecode, CCITTFax, JBIG2 and JPXDecode), **repair** common conformance
+  failures (`Repair`), and **manipulate pages** (`ExtractPages`, `AppendPages`).
+- **Write incrementally** (`WriteIncremental`) and **build** a minimal
+  conformant PDF/A document (`NewPDFADocument`).
 
 A command-line tool (`cmd/pdf0`) wraps these: `info`, `validate`, `ua`,
 `decrypt`, `encrypt`, `extract`, `repair`, and `merge`.

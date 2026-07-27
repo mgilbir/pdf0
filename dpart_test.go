@@ -103,7 +103,10 @@ func TestValidateDPartsViolations(t *testing.T) {
 		{"both DParts and Start", func(d *Document) { objDict(d, 9).Set("DParts", Array{Array{}}) }, "14.12.4.1", "both /DParts and /Start"},
 		{"neither DParts nor Start", func(d *Document) { objDict(d, 9).Delete("Start"); objDict(d, 9).Delete("End") }, "14.12.4.1", "neither /DParts"},
 		{"empty DParts", func(d *Document) { objDict(d, 8).Set("DParts", Array{}) }, "14.12.4.1", "non-empty array"},
-		{"End before Start", func(d *Document) { objDict(d, 9).Set("Start", IndirectRef{Number: 4}); objDict(d, 9).Set("End", IndirectRef{Number: 3}) }, "14.12.4.1", "precedes /Start"},
+		{"End before Start", func(d *Document) {
+			objDict(d, 9).Set("Start", IndirectRef{Number: 4})
+			objDict(d, 9).Set("End", IndirectRef{Number: 3})
+		}, "14.12.4.1", "precedes /Start"},
 		{"Start not a page", func(d *Document) { objDict(d, 9).Set("Start", IndirectRef{Number: 7}) }, "14.12.3", "/Start does not reference a page"},
 		{"page uncovered / gap", func(d *Document) { objDict(d, 9).Set("End", IndirectRef{Number: 3}) }, "14.12.3", "not contiguous"},
 		{"overlapping ranges", func(d *Document) { objDict(d, 10).Set("Start", IndirectRef{Number: 4}) }, "14.12.2", "more than one DPart leaf range"},

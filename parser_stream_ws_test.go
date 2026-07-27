@@ -83,8 +83,14 @@ func TestParseStreamKeywordTrailingWhitespace(t *testing.T) {
 	}
 }
 
-func itoa(n int) string  { return string(appendInt(nil, n)) }
-func pad10(n int) string { s := itoa(n); for len(s) < 10 { s = "0" + s }; return s }
+func itoa(n int) string { return string(appendInt(nil, n)) }
+func pad10(n int) string {
+	s := itoa(n)
+	for len(s) < 10 {
+		s = "0" + s
+	}
+	return s
+}
 func appendInt(b []byte, n int) []byte {
 	if n == 0 {
 		return append(b, '0')
