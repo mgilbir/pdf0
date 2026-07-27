@@ -193,15 +193,23 @@ func parseSFNT(data []byte) *fontProgram {
 			sub := cmap[off:]
 			switch {
 			case plat == 3 && enc == 1:
-				fp.cmap = parseCmapSubtable(sub)
+				if m := parseCmapSubtable(sub); m != nil {
+					fp.cmap = m
+				}
 			case plat == 3 && enc == 0:
 				m := parseCmapSubtable(sub)
+				if m == nil {
+					continue // unreadable: leave the cmap unset, not empty
+				}
 				fp.symbolCmap = make(map[uint16]int, len(m))
 				for r, gid := range m {
 					fp.symbolCmap[uint16(r)] = gid
 				}
 			case plat == 1 && enc == 0:
 				m := parseCmapSubtable(sub)
+				if m == nil {
+					continue
+				}
 				fp.macCmap = make(map[byte]int, len(m))
 				for r, gid := range m {
 					if r <= 0xFF {
@@ -214,13 +222,17 @@ func parseSFNT(data []byte) *fontProgram {
 	return fp
 }
 
-// parseCmapSubtable handles cmap formats 0, 4, and 6.
+// parseCmapSubtable handles cmap formats 0, 4, and 6. It returns nil — not an
+// empty map — when the subtable cannot be read (an unsupported format, or one
+// truncated past use): callers treat a non-nil cmap as authoritative, so an
+// empty map would claim the font maps no character at all, which reads as
+// "every code is .notdef" rather than "unknown".
 func parseCmapSubtable(b []byte) map[rune]int {
 	out := make(map[rune]int)
 	switch be16(b, 0) {
 	case 0:
 		if len(b) < 262 {
-			return out
+			return nil
 		}
 		for c := 0; c < 256; c++ {
 			if gid := int(b[6+c]); gid != 0 {
@@ -230,7 +242,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 	case 4:
 		segX2 := be16(b, 6)
 		if segX2 == 0 || len(b) < 16+4*segX2 {
-			return out
+			return nil
 		}
 		endBase := 14
 		startBase := endBase + segX2 + 2
@@ -247,10 +259,20 @@ func parseCmapSubtable(b []byte) map[rune]int {
 			start := be16(b, startBase+s)
 			delta := be16(b, deltaBase+s)
 			rangeOff := be16(b, rangeBase+s)
-			if start == 0xFFFF {
+			// The final segment of a conformant table is the sentinel
+			// 0xFFFF..0xFFFF, which maps nothing. An inverted segment
+			// (start > end) can only come from a malformed table; reading it
+			// as if it ran from start upwards would walk into the following
+			// segments' codes.
+			if start == 0xFFFF || start > end {
 				continue
 			}
-			for c := start; c <= end && c != 0; c++ {
+			// c is an int, so a segment ending at 0xFFFF stops on the ordinary
+			// comparison — there is no 16-bit counter here to wrap. The wrap
+			// guard this loop used to carry ("c != 0") therefore protected
+			// nothing and, being false on entry, dropped every mapping of a
+			// segment beginning at code 0 (audit C46).
+			for c := start; c <= end; c++ {
 				if work++; work > maxCmapFormat4Work {
 					return out
 				}
@@ -268,19 +290,28 @@ func parseCmapSubtable(b []byte) map[rune]int {
 				if gid != 0 {
 					out[rune(c)] = gid
 				}
-				if c == 0xFFFF {
-					break
-				}
 			}
 		}
 	case 6:
 		first := be16(b, 6)
 		count := be16(b, 8)
-		for i := 0; i < count; i++ {
+		if len(b) < 10+2*count {
+			return nil
+		}
+		// Character codes are 16-bit, so a first+count that runs past 0xFFFF
+		// is malformed. Recording those entries would be worse than dropping
+		// them: the caller narrows this map to uint16 for the (3,0) symbol
+		// cmap, where code 0x10000 would alias onto code 0.
+		for i := 0; i < count && first+i <= 0xFFFF; i++ {
 			if gid := be16(b, 10+2*i); gid != 0 {
 				out[rune(first+i)] = gid
 			}
 		}
+	default:
+		// Formats 2, 8, 10, 12, 13 and 14 are not parsed. Format 12 in
+		// particular carries the supra-BMP coverage of a (3,10) subtable,
+		// which the caller does not select.
+		return nil
 	}
 	return out
 }
