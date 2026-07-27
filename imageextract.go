@@ -200,7 +200,8 @@ func jpxComponentsToImage(img *gopenjpeg.Image, smaskInData int) image.Image {
 // without a large bespoke implementation, the decoded pixels:
 //
 //   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
-//   - raw, FlateDecode, LZWDecode, etc. -> decoded from the sample bytes
+//   - raw, FlateDecode, LZWDecode,
+//     ASCIIHexDecode                     -> decoded from the sample bytes
 //   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in ccitt.go codec
 //   - JBIG2Decode                       -> generic, symbol/text, refinement and
 //     halftone regions (arithmetic and Huffman) decoded by jbig2.go
@@ -416,10 +417,10 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		img.Encoded = st.Data
 		img.Note = "JPXDecode not decoded; raw bytes provided"
 	default:
-		// No filter, or a general-purpose filter chain (Flate/LZW/RunLength/ASCII):
-		// reverse the chain to raw samples, which buildImage renders through the
-		// colour space, bit depth, /Decode and masks (image masks keep their own
-		// 1-bit stencil rendering).
+		// No filter, or a general-purpose filter chain (Flate/LZW/ASCIIHex — the
+		// only ones applyFilter reverses): reverse the chain to raw samples, which
+		// buildImage renders through the colour space, bit depth, /Decode and masks
+		// (image masks keep their own 1-bit stencil rendering).
 		d.renderSamples(st, &img, decodeImageSamples(st), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
 	}
 	return img

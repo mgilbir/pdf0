@@ -36,7 +36,11 @@ jobs:
 
       - name: example runs
         # The README's headline example must run and produce a file (audit C9).
+        # extract_images builds its own document and exits non-zero if the images
+        # it wrote do not come back decoded, so it guards the extraction API the
+        # docs describe (docs audit D13).
         run: |
           go run ./examples/simple_pdfa
           test -s output.pdf
           rm output.pdf
+          go run ./examples/extract_images
