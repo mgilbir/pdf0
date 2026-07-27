@@ -1,9 +1,24 @@
 # Validators
 
-pdf0 validates a `*Document` against ten conformance standards. Every validator
-is read-only, panic-safe, and safe to run concurrently on the same document.
-Reach for this doc to pick an entry point, to understand what a result type does
-and does not promise, or before adding a rule.
+pdf0 validates a `*Document` against ten conformance standards. Reach for this
+doc to pick an entry point, to understand what a result type does and does not
+promise, or before adding a rule.
+
+Every validator is **read-only**: each installs its per-run cache on a shallow
+copy, so the caller's document is never mutated and the same document can be
+validated concurrently (`TestValidateConcurrentSameDoc`, `TestUAValidationCacheIsolation`).
+Two properties are **PDF/A-only**, and it is worth knowing which:
+
+- **Panic safety.** Only the PDF/A engine runs its checks behind `runCheck`'s
+  `recover()` boundary. `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`,
+  `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`,
+  `ValidateFacturX` and `ValidateOrderX` call their checks directly, so a bug or
+  an adversarial structure panics into the caller. Wrap them yourself if you
+  validate untrusted files. (Tracked as C27 in the 2026-07-26 codebase audit.)
+- **Deterministic order.** `ValidatePDFABytes` sorts by rule, object and message
+  before returning. The others return findings in discovery order, and several
+  iterate `Document.Objects` — a Go map — so their order varies between runs.
+  Sort before diffing or snapshotting.
 
 ## Pick an entry point
 
@@ -119,14 +134,24 @@ flowchart TD
 byte-level rules because they need the file bytes. Use `ValidatePDFABytes`
 whenever you have them.
 
-**Level A** (1a/2a/3a) is Level B plus the accessibility requirements — tagged
-logical structure, a natural-language specification, Unicode character mapping,
-and an `A` conformance declaration. It is validated by running the Level B
-pipeline and adding those families (`pdfa_levela.go`), so every Level B rule
-applies at Level A too.
+**Level A** (1a/2a/3a) is Level B plus the accessibility requirements. It is
+validated by running the Level B pipeline and adding the Level A families
+(`pdfa_levela.go`), so every Level B rule applies at Level A too.
+
+Be precise about how much that adds: there are **three** Level A checks —
+`checkLevelAConformance` (the `A` conformance declaration),
+`checkLevelAStructure` (`/MarkInfo` and `/StructTreeRoot` present) and
+`checkLevelALanguage` (catalog `/Lang` syntax). Unicode character mapping is
+*not* an extra Level A rule; the ToUnicode requirements live in the Level B
+font rules. Level A also has no corpus oracle: `TestCorpus` runs the
+`PDF_A-1b/2b/3b/4` suites, and `TestCorpusConformanceSuites` validates the
+`PDF_A-1a`/`PDF_A-2a` directories at Level *B*, so `validatePDFALevelA` is
+unratcheted. Treat a clean Level A result more cautiously than a Level B one.
 
 **Executed-content model.** Many PDF/A rules apply only to content that is
-actually *used*, not merely present. Colour spaces, fonts, and ExtGState
+actually *used*, not merely present. (Two font rules are deliberate exceptions
+and scan `Document.Objects` directly: `checkCMapEmbedded` and
+`checkCMapCIDLimit`.) Colour spaces, fonts, and ExtGState
 parameters are checked when a page (or a form XObject / pattern / Type3 glyph it
 invokes) actually references them — see `walkExecutedContent` and
 `collectFontTextUsage`. A form XObject that is never drawn does not trigger

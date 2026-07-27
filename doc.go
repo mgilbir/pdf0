@@ -29,13 +29,16 @@
 //	err = doc.Write(&out)
 //
 // Encrypted files using the standard security handler are decrypted on Read
-// when the (empty or supplied) user or owner password is correct: RC4, AES-128,
-// and AES-256 (revisions 2–6) are supported. Document.Encrypted reports the
-// presence of an /Encrypt dictionary; a decrypted document retains its file key
-// and re-encrypts on Write so it round-trips byte-for-byte. Document.RemoveEncryption
-// drops the encryption so Write emits plaintext. A document whose scheme or
-// password could not be handled stays encrypted (Document.Locked reports this)
-// and is written back unchanged as a lossless passthrough. Write regenerates the
+// when the (empty or supplied) user or owner password is correct: RC4 and
+// AES-128 at revisions 2-4, and AES-256 at revision 6. Revision 5 is a
+// deprecated draft and is rejected. Document.Encrypted reports the presence of
+// an /Encrypt dictionary; a decrypted document retains its file key and
+// re-encrypts on Write, so the object model round-trips — though the bytes do
+// not, because AES draws a fresh random initialisation vector per object on
+// every write. Document.RemoveEncryption drops the encryption so Write emits
+// plaintext. A document whose scheme or password could not be handled stays
+// encrypted (Document.Locked reports this) and is written back unchanged as a
+// lossless passthrough. Write regenerates the
 // on-disk layout, emitting a cross-reference stream when the source used one and
 // a traditional cross-reference table otherwise.
 //
