@@ -60,6 +60,9 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
+	if doc.Locked() {
+		return fmt.Errorf("could not read %s: it is encrypted (supply -password)", fs.Arg(0))
+	}
 	errs := pdf0.ValidatePDFABytes(doc, lvl, data)
 	if len(errs) == 0 {
 		fmt.Printf("%s: no violations found for PDF/A-%s\n", fs.Arg(0), *level)
@@ -85,6 +88,9 @@ func cmdDecrypt(args []string) error {
 	if !doc.Encrypted {
 		return fmt.Errorf("%s is not encrypted", fs.Arg(0))
 	}
+	if doc.Locked() {
+		return fmt.Errorf("could not decrypt %s: wrong password or unsupported encryption", fs.Arg(0))
+	}
 	doc.RemoveEncryption()
 	return writeDoc(doc, fs.Arg(1))
 }
@@ -97,6 +103,9 @@ func cmdEncrypt(args []string) error {
 	if fs.NArg() != 2 {
 		return fmt.Errorf("usage: pdf0 encrypt -user PW [-owner PW] <in> <out>")
 	}
+	if *user == "" && *owner == "" {
+		return fmt.Errorf("encrypt requires -user (and optionally -owner)")
+	}
 	ownerPw := *owner
 	if ownerPw == "" {
 		ownerPw = *user
@@ -104,6 +113,9 @@ func cmdEncrypt(args []string) error {
 	doc, err := readDoc(fs.Arg(0), "")
 	if err != nil {
 		return err
+	}
+	if doc.Encrypted {
+		return fmt.Errorf("%s is already encrypted; decrypt it first", fs.Arg(0))
 	}
 	if err := doc.SetEncryption(*user, ownerPw); err != nil {
 		return err
@@ -121,6 +133,9 @@ func cmdExtract(args []string) error {
 	doc, err := readDoc(fs.Arg(0), *pw)
 	if err != nil {
 		return err
+	}
+	if doc.Locked() {
+		return fmt.Errorf("could not read %s: it is encrypted (supply -password)", fs.Arg(0))
 	}
 	fmt.Print(doc.ExtractText())
 	return nil
@@ -159,10 +174,18 @@ func cmdMerge(args []string) error {
 	if err != nil {
 		return err
 	}
+	if merged.Encrypted {
+		return fmt.Errorf("%s is encrypted; decrypt it before merging", fs.Arg(1))
+	}
 	for _, in := range fs.Args()[2:] {
 		next, err := readDoc(in, "")
 		if err != nil {
 			return err
+		}
+		// Copying an encrypted source's ciphertext streams into the plaintext
+		// merged document would corrupt it; require decrypted inputs.
+		if next.Encrypted {
+			return fmt.Errorf("%s is encrypted; decrypt it before merging", in)
 		}
 		merged.AppendPages(next)
 	}
@@ -179,6 +202,9 @@ func cmdUA(args []string) error {
 	doc, err := readDoc(fs.Arg(0), *pw)
 	if err != nil {
 		return err
+	}
+	if doc.Locked() {
+		return fmt.Errorf("could not read %s: it is encrypted (supply -password)", fs.Arg(0))
 	}
 	v := pdf0.ValidatePDFUA(doc)
 	if len(v) == 0 {

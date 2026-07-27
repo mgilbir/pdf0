@@ -17,6 +17,12 @@ import (
 // existing encryption. Write then enciphers every string and stream; the
 // in-memory document stays in the clear, so it remains usable afterwards.
 func (d *Document) SetEncryption(userPassword, ownerPassword string) error {
+	// Refuse to encrypt a document whose content is still ciphertext (an
+	// encrypted file we could not decrypt): enciphering it again would
+	// double-encrypt and corrupt it. The caller must decrypt it first.
+	if d.Locked() {
+		return errors.New("cannot encrypt: the document is already encrypted and was not decrypted")
+	}
 	h, dict, err := newAES256Encryption(userPassword, ownerPassword)
 	if err != nil {
 		return err
