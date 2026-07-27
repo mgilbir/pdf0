@@ -2,15 +2,24 @@
 // dependencies are the author's own pure-Go modules (formalis for EN 16931
 // invoice rules, golittlecms for ICC profiles, gopenjpeg for JPEG 2000).
 //
-// It offers four things:
+// The core is four entry points:
 //
 //   - Read parses PDF bytes into a typed object model (see Document), recovering
 //     from common malformations rather than crashing on hostile input.
 //   - Document.Write serializes the object model back to conformant PDF bytes.
 //   - ValidatePDFA and ValidatePDFABytes check a document against PDF/A
-//     conformance levels (PDF/A-1b, -2b, -3b, and -4).
+//     conformance levels: PDF/A-1a, -1b, -2a, -2b, -3a, -3b, and -4. The Level A
+//     levels are Level B plus the accessibility requirements.
 //   - NewPDFADocument (and NewPDFADocumentWithInfo) build a minimal PDF/A
 //     document.
+//
+// Built on those: encryption (ReadWithPassword, Document.SetEncryption,
+// Document.RemoveEncryption), digital signatures (Document.WriteSigned,
+// Document.VerifySignatures, Document.ValidatePAdES), extraction
+// (Document.ExtractText, Document.ExtractImages, Document.Images), page
+// operations (Document.ExtractPages, Document.AppendPages), conformance repair
+// (Document.Repair), incremental writing (Document.WriteIncremental), and nine
+// conformance validators besides PDF/A.
 //
 // # Reading and writing
 //
@@ -42,12 +51,24 @@
 // ValidatePDFABytes when you have the raw file bytes and want the byte-level
 // file-structure checks (e.g. no data after %%EOF) as well.
 //
-// The other standards follow the same shape: each validator is a free function
-// taking the *Document as its first parameter (ValidatePDFUA, ValidatePDFUA2,
-// ValidatePDFX, ValidatePDFVT, ValidatePDFR, ValidateDParts, ValidateFacturX,
-// ValidateOrderX), and every finding type satisfies the Violation interface,
-// so findings from different validators can be collected together.
+// The other PDF standards follow the same shape: each validator is a free
+// function taking the *Document as its first parameter (ValidatePDFUA,
+// ValidatePDFUA2, ValidatePDFX, ValidatePDFVT, ValidatePDFVT2, ValidatePDFR,
+// ValidateDParts), and every finding type satisfies the Violation interface, so
+// findings from different validators can be collected together. ValidateFacturX
+// and ValidateOrderX are the exception: they return a result struct whose
+// Violations are formalis.Violation values, an external type this package cannot
+// extend with the interface methods. See the Violation documentation.
 //
-// See docs/architecture.md for how bytes flow through Read, Write, and the
-// validation pipeline.
+// # Signatures
+//
+// Document.VerifySignatures reports one SignatureResult per signature. Read the
+// verdict with SignatureResult.DocumentUnmodified, which is Valid AND
+// CoversWholeDocument: Valid alone accepts a document whose content was changed
+// by a post-signing incremental update. VerifySignatures performs no trust-chain
+// check at all — use Document.VerifySignaturesWithRoots to populate TrustedChain.
+//
+// See docs/architecture.md for how bytes flow through Read and Write,
+// docs/validators.md for the validator family, and docs/signing.md for signing
+// and verification.
 package pdf0

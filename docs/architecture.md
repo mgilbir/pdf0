@@ -21,34 +21,79 @@ faithful round-tripping.
 ## Read
 
 `Read` (`document.go`) slurps the file and rebuilds the object model. It recovers
-from common malformations and, by design, **never panics** — any panic escaping
-the parse is recovered and returned as an error.
+aggressively from malformed files and, by design, **never panics** — any panic
+escaping the parse is recovered and returned as an error.
 
 ```mermaid
 flowchart TD
     A[Read bytes + size] --> B[parseHeader: version + headerOffset]
     B --> C[findStartXref: scan last 1KB]
     C --> D{xref offset valid?<br/>absolute vs header-relative probe}
-    D --> E[follow /Prev chain<br/>visited-set guards cycles]
+    D --> E["parse xref sections, follow /Prev<br/>visited-set guards cycles<br/>(recovery ladder below)"]
     E --> F[load uncompressed objects<br/>xref key is the object number]
-    F --> G[loadCompressedObjects<br/>materialize /ObjStm entries]
-    G -->|decode fails| G2[record brokenObjStms<br/>non-fatal]
-    G --> H[normalizeStructure<br/>drop XRef/ObjStm objects + their Offsets]
-    H --> I[set Encrypted from /Encrypt]
-    I --> J[(Document)]
-    F -->|parse error| X[return error]
-    E -->|first section fails| X
+    F --> G["decrypt strings + streams<br/>(standard security handler)"]
+    G --> H[loadCompressedObjects<br/>materialize /ObjStm entries]
+    H -->|decode fails| H2[record brokenObjStms<br/>non-fatal]
+    H --> I[normalizeStructure<br/>drop XRef/ObjStm objects + their Offsets]
+    I --> J[set Encrypted from /Encrypt]
+    J --> K[(Document)]
     A -.panic anywhere.-> R[recover -> error, never crash]
 ```
 
-**Recovery model.** Some defects are *soft* (recovered, the document still
-parses): a wrong or wrong-typed stream `/Length` falls back to searching for
-`endstream`; an offset-shifted cross-reference is probed absolute-vs-header-
-relative; an undecodable object stream is recorded in `brokenObjStms` and its
-objects are simply absent. Others are *hard* (abort `Read` with an error): a
-parse failure on an uncompressed object, or a broken newest cross-reference
-section. This split lets the PDF/A validator *report* a malformation instead of
-failing to open the file.
+**Decryption runs before object streams are materialized**, and the order is
+load-bearing: an `/ObjStm` container is itself an encrypted stream, but the
+objects stored inside it are *not* separately encrypted. Materializing first
+would decrypt the inner objects a second time and corrupt them.
+
+### The recovery ladder
+
+Most defects are recovered rather than fatal. A wrong or wrong-typed stream
+`/Length` falls back to searching for `endstream`; an offset-shifted
+cross-reference is probed absolute-vs-header-relative; an undecodable object
+stream is recorded in `brokenObjStms` and its objects are simply absent.
+
+The cross-reference table has the deepest recovery, because a damaged xref is the
+most common way a real-world file is broken. `Read` escalates through a ladder
+and only fails when every rung is exhausted:
+
+```mermaid
+flowchart TD
+    ST["findStartXref → offset<br/>(probe absolute vs header-relative)"] --> PS[parseXRefSection]
+    PS -->|ok| MERGE["merge section, follow /Prev<br/>visited-set guards cycles"]
+    PS -->|error| PK["precedingXrefKeyword:<br/>nearest standalone 'xref' at or before the offset<br/>(producers point INTO the table)"]
+    PK -->|reparsed| MERGE
+    PK -->|"still failing<br/>(older section)"| TOL[tolerate: keep what newer sections gave]
+    PK -->|"still failing<br/>(newest section)"| RB["rebuildXRefByScan:<br/>scan the file for 'N G obj' headers<br/>+ findTrailerByScan"]
+    RB -->|no table recoverable| ERR[return error]
+
+    MERGE --> LOAD["loadObjectsFromXref<br/>(strict: a file-supplied table is authoritative)"]
+    TOL --> LOAD
+    RB --> LOADL["loadObjectsFromXref<br/>(lenient: unparseable entries dropped —<br/>a header-shaped run inside a stream can fabricate one)"]
+
+    LOAD -->|error| RB2[rebuildXRefByScan retry, lenient]
+    RB2 -->|fails| ERR
+    RB2 --> ROOT
+    LOAD --> ROOT
+    LOADL --> OBJSTM["materializeScannedObjStms<br/>(a scanned table has no type-2 entries)"]
+    OBJSTM --> ROOT{rebuilt and no /Root?}
+
+    ROOT -->|yes| SYN["synthesize /Root from the<br/>first /Type /Catalog object"]
+    SYN -->|none found| ERR
+    ROOT -->|no| OK[(objects loaded)]
+    SYN --> OK
+```
+
+**What is actually fatal.** `Read` returns an error only when: the header or
+`startxref` cannot be found at all; the newest cross-reference section fails to
+parse *and* a full rebuild by scanning finds no usable table; a rebuilt document
+contains no `/Type /Catalog` to synthesize `/Root` from; or the input is short
+(a truncated read would otherwise look like trailing whitespace). A parse failure
+on an individual uncompressed object is fatal only for a table the file itself
+supplied — it triggers the scan-rebuild first.
+
+This depth is deliberate: it lets the PDF/A validator *report* a malformation
+instead of failing to open the file. A validator that cannot read a broken file
+cannot tell you why it is broken.
 
 ## Write
 
@@ -75,9 +120,16 @@ flowchart TD
 `Write` is idempotent: `Read → Write → Read → Write` produces byte-identical
 output (guarded by `TestWriteIsIdempotent`).
 
+`Write` regenerates rather than preserves the on-disk layout. The object model
+round-trips exactly, but object order and which objects share an `/ObjStm` are
+regenerated. To amend a file without rewriting it, use `WriteIncremental`
+(`incremental.go`), which appends a new section listing only the changed object
+numbers and leaves the original bytes untouched — this is what signature
+workflows require, since rewriting would break every existing signature.
+
 ## Validate
 
-`ValidatePDFABytes` (`pdfa.go`) runs a fixed list of ~60 check functions, then —
+`ValidatePDFABytes` (`pdfa.go`) runs a fixed list of 59 check functions, then —
 if raw bytes are supplied — the byte-level file-structure checks. Each check runs
 behind a `recover()` boundary so a bug or an adversarial structure in one check
 cannot crash the caller. Validation runs against a shallow copy of the
@@ -87,7 +139,7 @@ concurrently on the same document.
 ```mermaid
 flowchart TD
     A[ValidatePDFABytes doc, level, rawData] --> B[shallow-copy doc,<br/>install per-run cache]
-    B --> C[for each of ~60 checks]
+    B --> C[for each of 59 checks]
     C --> D[runCheck: recover panic -> 'internal' violation]
     D --> C
     C --> E{rawData != nil?}

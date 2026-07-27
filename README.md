@@ -15,20 +15,32 @@ go get github.com/mgilbir/pdf0
 - **Serialize** the object model back to PDF bytes (`Document.Write`),
   regenerating cross-reference streams and object streams where the source used
   them.
-- **Validate** against PDF/A conformance levels (`ValidatePDFA` /
-  `ValidatePDFABytes`): PDF/A-1a/1b, -2a/2b, -3a/3b, and -4; plus PDF/UA-1 and
-  PDF/UA-2 accessibility (`ValidatePDFUA` / `ValidatePDFUA2`), PDF/X
-  (`ValidatePDFX`), PDF/VT (`ValidatePDFVT` / `ValidatePDFVT2`), PDF/R
-  (`ValidatePDFR`), DPart (`ValidateDParts`), and Factur-X / Order-X container
-  checks (`ValidateFacturX` / `ValidateOrderX`). Every validator is a free
-  function taking the `*Document` first, and every finding satisfies the
-  shared `Violation` interface, so results combine across validators.
+- **Validate** against ten conformance standards:
+
+  | Standard | Entry point | Findings satisfy `Violation` |
+  |----------|-------------|------------------------------|
+  | PDF/A 1a/1b, 2a/2b, 3a/3b, 4 | `ValidatePDFA` / `ValidatePDFABytes` | yes |
+  | PDF/UA-1, PDF/UA-2 | `ValidatePDFUA` / `ValidatePDFUA2` | yes |
+  | PDF/X-1a/3/4/4p/6 | `ValidatePDFX` | yes |
+  | PDF/VT-1, PDF/VT-2 | `ValidatePDFVT` / `ValidatePDFVT2` | yes |
+  | PDF/R | `ValidatePDFR` | yes |
+  | DPart hierarchy | `ValidateDParts` | yes |
+  | Factur-X, Order-X containers | `ValidateFacturX` / `ValidateOrderX` | no — see below |
+
+  The six PDF-standard validators are free functions taking the `*Document`
+  first and returning findings that satisfy the shared `Violation` interface, so
+  results combine across validators. **Factur-X and Order-X are the exception:**
+  they return a result struct whose `Violations` are `formalis.Violation`, an
+  external type this package cannot extend — adapt them explicitly.
 - **Encrypt / decrypt** with the standard security handler — RC4, AES-128, and
   AES-256, via `ReadWithPassword`, `SetEncryption`, and `RemoveEncryption`
   (`Document.Locked` reports a file that could not be decrypted).
 - **Sign and verify** digital signatures (`WriteSigned` / `VerifySignatures`,
   CMS/PKCS#7), including PAdES B-B through B-LTA (`ValidatePAdES`), RFC 3161
-  timestamps, and CRL/OCSP revocation.
+  timestamps, and CRL/OCSP revocation. Read the verdict with
+  `SignatureResult.DocumentUnmodified()`, not `Valid` alone — `Valid` accepts a
+  document altered by a post-signing incremental update. `VerifySignatures`
+  performs no trust-chain check; use `VerifySignaturesWithRoots` for that.
 - **Extract** text (`ExtractText`) and images (`ExtractImages`, or the lazy
   `Images` iterator for bounded memory on large scan files; decoding
   DCTDecode, CCITTFax, JBIG2 and JPXDecode), **repair** common conformance
@@ -127,21 +139,26 @@ This is a young library. What works:
 
 - Object streams (`/Type /ObjStm`) and cross-reference streams, including the
   PNG/TIFF `/Predictor` filters, are read.
-- The reader recovers from common malformations (wrong stream `/Length`,
-  offset-shifted xref, broken object streams) and converts any panic into an
-  error rather than crashing on adversarial input.
+- The reader recovers from common malformations — wrong stream `/Length`,
+  offset-shifted xref, a `startxref` pointing *into* the table, broken object
+  streams, and a cross-reference section so damaged that the table is rebuilt by
+  scanning the file for object headers — and converts any panic into an error
+  rather than crashing on adversarial input. See
+  [the recovery ladder](docs/architecture.md#the-recovery-ladder) for what is
+  actually fatal.
 
 Known limitations:
 
-- **Decryption is read-only.** Files using the standard security handler are
-  decrypted on `Read` for RC4 (V1/V2), AES-128 (V4/`AESV2`), and AES-256
-  (V5/`AESV3`, R6); their strings and streams are available in the clear. `Read`
-  uses the empty password; `ReadWithPassword` accepts a user or owner password.
-  A wrong password leaves the file encrypted (`Document.Encrypted`), and `Write`
-  refuses such a document. A file that *was* decrypted round-trips: `Write`
-  re-encrypts its content with the retained key and re-emits the preserved
-  `/Encrypt`. `Document.SetEncryption` encrypts a previously-unencrypted
-  document with AES-256.
+- **A file that could not be decrypted cannot be modified.** Files using the
+  standard security handler are decrypted on `Read` for RC4 (V1/V2), AES-128
+  (V4/`AESV2`), and AES-256 (V5/`AESV3`, R6); their strings and streams are then
+  available in the clear, and such a document round-trips — `Write` re-encrypts
+  with the retained key and re-emits the preserved `/Encrypt`. `Read` uses the
+  empty password; `ReadWithPassword` accepts a user or owner password. But a
+  wrong password, or a scheme pdf0 does not implement, leaves the file encrypted
+  (`Document.Locked`): its structure parses, its strings and streams stay
+  ciphertext, and `Write` passes the original bytes through verbatim rather than
+  producing a corrupt file.
 - **`Write` regenerates, rather than preserves, the file layout.** A file read
   from a cross-reference stream is written back as one, with compressible
   objects repacked into an object stream (`/ObjStm`); a traditional-table file
@@ -150,8 +167,12 @@ Known limitations:
   preserved.
 - The PDF/A validator implements a subset of the ISO 19005 rules. Against the
   veraPDF corpus it currently reports no false positives, no missed violations,
-  and no parse errors (tracked by `TestCorpus`), but coverage beyond the corpus
-  is not guaranteed — an empty validation result is not a conformance guarantee.
+  and no parse errors (tracked by `TestCorpus`), with one known missed violation
+  in the Isartor PDF/A-1b fail suite (`corpusMaxIsartorMissed`, tracked
+  separately by `TestCorpusIsartor`). Coverage beyond the corpus is not
+  guaranteed — an empty validation result is not a conformance guarantee.
+- **No release tags yet.** The API is not frozen; `go get` resolves a
+  pseudo-version, and exported names may change until a v1 is tagged.
 
 See [`docs/audits/`](docs/audits/README.md) for the audit history (point-in-time
 findings, not a description of how the code works — for that see
