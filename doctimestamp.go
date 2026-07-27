@@ -98,11 +98,11 @@ func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, 
 	field.Set("Type", Name("Annot"))
 	field.Set("Subtype", Name("Widget"))
 	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: []byte("Timestamp1")})
+	field.Set("T", String{Value: []byte(d.freeFieldName(catalog, "Timestamp"))})
 	field.Set("V", IndirectRef{Number: tsNum})
 	field.Set("Rect", Array{Integer(0), Integer(0), Integer(0), Integer(0)})
 	field.Set("F", Integer(132))
-	field.Set("P", d.pageRef(catalog))
+	field.Set("P", IndirectRef{Number: pageNum})
 	clone.Objects[fieldNum] = &IndirectObject{Number: fieldNum, Value: field}
 
 	changed := []int{dssNum, tsNum, fieldNum}

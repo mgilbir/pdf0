@@ -251,7 +251,7 @@ func TestFreeSignatureFieldNameSkipsOrphanedField(t *testing.T) {
 	setCatalogWithFields(doc, Array{}) // an /AcroForm that lists no fields at all
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-	if got := doc.freeSignatureFieldName(cat); got != "Signature2" {
-		t.Errorf("freeSignatureFieldName = %q, want Signature2: the orphaned field already holds Signature1", got)
+	if got := doc.freeFieldName(cat, "Signature"); got != "Signature2" {
+		t.Errorf("freeFieldName = %q, want Signature2: the orphaned field already holds Signature1", got)
 	}
 }

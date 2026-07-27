@@ -219,9 +219,19 @@ fetch it yourself and call `CheckCertRevocation` directly.
   reach, so the first signature of a fresh document is `Signature1`, the second
   `Signature2`, and no two fields share a fully qualified name. Only a document
   with no `/AcroForm` at all gets a new form object. `WriteArchivalTimestamp`
-  treats the form identically for its `/Type /DocTimeStamp` field. The widget is
-  always attached to the first page, with a zero `/Rect` — signatures produced
-  here are invisible.
+  treats the form identically for its `/Type /DocTimeStamp` field, and names it
+  from the same scan with a `TimestampN` prefix: the first document time-stamp is
+  `Timestamp1`, a second `Timestamp2`. The two counters are independent — a
+  time-stamp added to a signed document is still `Timestamp1` — but neither ever
+  reuses a name already in the file.
+- **The widget goes on the first page**, with a zero `/Rect`: signatures produced
+  here are invisible. "First" means first in reading order, the page `PageList`
+  reports first, found by descending into intermediate `/Pages` nodes — a tree
+  whose pages all sit below one is signable, and a `/Kids` array mixing
+  intermediate nodes and leaves (legal under ISO 32000-2 §7.7.3.2) does not
+  confuse it. The widget's `/P` is the indirect reference to that same page
+  object (Table 166), taken from the object number the writer updates, so the
+  annotation and its `/P` cannot name different objects.
 - **A direct `/AcroForm` is promoted; a direct catalog or page is refused.**
   Storing the interactive form as a direct dictionary in the catalog is legal, so
   it is copied into a new indirect object that the (rewritten) catalog then
