@@ -49,6 +49,7 @@ hand.
 | **WTPDF / PDF/UA-2 examples** | Round-trip and robustness over complex real tagged PDF 2.0 (structure trees, associated files, MathML, role maps) | `TestWTPDFExamples` | `make wtpdf` | — | `testdata/wtpdf/*.pdf` | LaTeX Project, [tagging-project discussion 72](https://github.com/latex3/tagging-project/discussions/72), fetched from Google Drive; licences vary per file (see `sources.tsv`) |
 | **CCITT samples** | Decode oracle for the Group 3/4 fax decoder (the veraPDF corpus has no CCITT images) | `TestCCITTRealFiles` | `make ccitt` | — | `testdata/ccitt/*.pdf` | pdf.js (Apache-2.0), PyPDF4 (BSD) |
 | **JBIG2 samples** | Decode oracle for the JBIG2 decoder: generic templates, MMR, symbol/text, halftone, refinement | `TestJBIG2GenericCrossCheck`, `TestJBIG2SymbolText`, `TestJBIG2Refinement`, `TestJBIG2Halftone`, `TestJBIG2Huffman`, `TestJBIG2EdgeCases` | `make jbig2` | — | `testdata/jbig2/*.pdf` | pdf.js conformance suite, Apache-2.0 |
+| **Common Crawl PDFs** | Robustness: the parser must never panic or hang on real-world input nobody designed. Not a decode or conformance oracle — a crash hunt | `cmd/corpusprobe` via `make cc-sweep`; **no `go test` walks it** | `make cc-sweep` | — | streamed, never stored (`testdata/cc/run/`) | digitalcorpora `CC-MAIN-2021-31-PDF-UNTRUNCATED`, ~8M PDFs from Common Crawl |
 | **Factur-X / ZUGFeRD invoices** | Oracle for the Factur-X container checks | `TestValidateFacturXCorpus`, `TestValidateFacturXMutations`, `TestValidateFacturXInvoiceCorpus` | `make facturx` | — | `testdata/facturx/*.pdf` | ZUGFeRD/corpus and ZUGFeRD/mustangproject, Apache-2.0 |
 | **Cal Poly PDF/VT-1 suite** | FP=0 oracle for PDF/VT, PDF/X and DPart — conforming files must report zero violations | `TestValidatePDFVTCalPolySuite`, `TestValidateDPartsCalPolySuite`, `TestValidatePDFXCalPolySuite`, `TestDevColorScannerMatchesPDFA` | **no make target — place by hand** | — | `testdata/pdfvt/` | Cal Poly Graphic Communications PDF/VT-1 Test File Suite; copyrighted test content, not redistributable |
 | **PDFUA-Reference-Files** | FP=0 oracle for PDF/UA — conformant reference documents must report zero violations | `TestUAReferenceFilesNoFalsePositives` | **no make target — place by hand** | — | `spec/pdfua/reference-files/*.pdf` | PDFUA-Reference-Files suite from pdfa.org |
@@ -56,6 +57,17 @@ hand.
 | **ISO spec PDFs** | Guards the spec-example pipeline: the committed JSON must still be exactly what the extractors produce | `TestSpecExamplesRegenerate` (also needs `pdftotext` and `python3` on `PATH`) | **no make target — place by hand** | — | `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf`, `spec/pdf1.7/PDF32000_2008.pdf` | ISO / Adobe; copyrighted, never committed |
 
 `spec/` as a whole is gitignored, so anything you drop under it stays out of git.
+
+The Common Crawl sweep is the one entry that does not follow the fetch-then-test
+shape. There is no manifest and no local corpus: 1000-file blocks are streamed,
+probed and deleted, so a sweep of any length needs about 1.4 GB of disk rather
+than the eight million files. It is also deliberately not a `go test` — sweeping
+untrusted files is memory- and time-hostile, so it runs as a separate
+resource-capped process (`GOMEMLIMIT`, a per-file timeout) driven by
+`make cc-sweep`. Errors are expected there and are not failures: the open web
+serves genuinely broken PDFs, and roughly 0.7% is normal. A **panic or a hang**
+is the failure, and the file is quarantined as the reproduction. See
+[testdata/cc/README.md](../testdata/cc/README.md).
 
 Two datasets are the exception and *are* committed: `testdata/xmp-rng/`
 (ISO 16684 RelaxNG schemas, MIT, used by `TestXMPTablesMatchRNG`) and the
@@ -78,6 +90,7 @@ Makefile; pdf0 has no targets for it.
 | `make facturx` | Run `testdata/facturx/download.sh` to fetch the Factur-X invoices |
 | `make ccitt` | Run `testdata/ccitt/download.sh` to fetch the CCITT sample PDFs |
 | `make jbig2` | Run `testdata/jbig2/download.sh` to fetch the JBIG2 sample PDFs |
+| `make cc-sweep` | Sweep real-world Common Crawl PDFs for parser panics and hangs (`FIRST=`/`LAST=` pick the block range) |
 
 Each fetch target is guarded by a `.ok` stamp file, so re-running is a no-op.
 
