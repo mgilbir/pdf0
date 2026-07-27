@@ -25,15 +25,35 @@ func (d *Document) ExtractText() string {
 	return b.String()
 }
 
-// ExtractPageText returns the visible text of a single page dictionary.
+// ExtractPageText returns the visible text of a single page dictionary. It
+// resolves the page's /Resources through the page-tree inheritance chain and
+// recurses into invoked form XObjects, so text drawn via inherited fonts or
+// inside a form is not dropped.
 func (d *Document) ExtractPageText(page *Dictionary) string {
+	res := d.ResolveDict(inheritedPageAttr(d, page, "Resources"))
 	content := getContentStreamData(d, page.Get("Contents"))
-	if len(content) == 0 {
-		return ""
-	}
-	fonts := d.pageFontMaps(page)
-
 	var out strings.Builder
+	d.extractContentText(res, content, &out, map[*Stream]bool{}, 0)
+	return out.String()
+}
+
+// maxTextFormDepth bounds recursion through nested form XObjects.
+const maxTextFormDepth = 32
+
+// extractContentText appends the visible text of one content stream — a page or
+// a form XObject — to out. Fonts are resolved from res; a Do that invokes a form
+// XObject recurses into it with the form's own resources (audit C28). seen guards
+// cyclic form references and depth bounds nesting.
+func (d *Document) extractContentText(res *Dictionary, content []byte, out *strings.Builder, seen map[*Stream]bool, depth int) {
+	if len(content) == 0 || depth > maxTextFormDepth {
+		return
+	}
+	fonts := d.fontMapsFrom(res)
+	var xobjs *Dictionary
+	if res != nil {
+		xobjs = d.ResolveDict(res.Get("XObject"))
+	}
+
 	var curMap map[int]rune
 	curTwoByte := false
 	toks := tokenizeContent(content)
@@ -78,10 +98,22 @@ func (d *Document) ExtractPageText(page *Dictionary) string {
 			}
 		case "Td", "TD", "T*":
 			out.WriteByte('\n')
+		case "Do":
+			if xobjs != nil && len(operands) >= 1 {
+				if st, ok := d.Resolve(xobjs.Get(Name(operands[len(operands)-1].name))).(*Stream); ok {
+					if sub, _ := st.Dict.Get("Subtype").(Name); sub == "Form" && !seen[st] {
+						seen[st] = true
+						formRes := d.ResolveDict(st.Dict.Get("Resources"))
+						if formRes == nil {
+							formRes = res // a form may draw with the calling context's resources
+						}
+						d.extractContentText(formRes, decodeContentStream(d, st), out, seen, depth+1)
+					}
+				}
+			}
 		}
 		operands = operands[:0]
 	}
-	return out.String()
 }
 
 type fontText struct {
@@ -89,10 +121,9 @@ type fontText struct {
 	twoByte   bool
 }
 
-// pageFontMaps resolves the page's /Font resources to their ToUnicode maps.
-func (d *Document) pageFontMaps(page *Dictionary) map[string]fontText {
+// fontMapsFrom resolves a resource dictionary's /Font entries to their ToUnicode maps.
+func (d *Document) fontMapsFrom(res *Dictionary) map[string]fontText {
 	out := map[string]fontText{}
-	res := d.ResolveDict(page.Get("Resources"))
 	if res == nil {
 		return out
 	}
