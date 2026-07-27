@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"math/big"
 	"testing"
 	"time"
@@ -68,12 +69,6 @@ func TestVerifySignatures(t *testing.T) {
 	cert, key := testCertKey(t)
 	prefix := []byte("%PDF-2.0 ... content before the signature value ...")
 	suffix := []byte("... content after the signature value ... %%EOF")
-	const gap = 200 // placeholder /Contents region, excluded from the digest
-
-	raw := make([]byte, 0, len(prefix)+gap+len(suffix))
-	raw = append(raw, prefix...)
-	raw = append(raw, make([]byte, gap)...)
-	raw = append(raw, suffix...)
 
 	signed := append(append([]byte(nil), prefix...), suffix...)
 	cms, err := buildSignedData(cert, key, signed)
@@ -81,13 +76,22 @@ func TestVerifySignatures(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Serialize the signature the way a real file does: the /Contents value is a
+	// hex string <…> occupying the gap between the two /ByteRange segments, so the
+	// coverage check can confirm the gap is exactly the signature value.
+	hexContents := []byte("<" + hex.EncodeToString(cms) + ">")
+	raw := make([]byte, 0, len(prefix)+len(hexContents)+len(suffix))
+	raw = append(raw, prefix...)
+	raw = append(raw, hexContents...)
+	raw = append(raw, suffix...)
+
 	sig := &Dictionary{}
 	sig.Set("Type", Name("Sig"))
 	sig.Set("SubFilter", Name("adbe.pkcs7.detached"))
 	sig.Set("Contents", String{Value: cms, IsHex: true})
 	sig.Set("ByteRange", Array{
 		Integer(0), Integer(len(prefix)),
-		Integer(len(prefix) + gap), Integer(len(suffix)),
+		Integer(len(prefix) + len(hexContents)), Integer(len(suffix)),
 	})
 	doc := &Document{Objects: map[int]*IndirectObject{
 		1: {Number: 1, Value: sig},
