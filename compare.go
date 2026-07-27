@@ -41,10 +41,12 @@ func equalDepth(a, b Object, depth int) bool {
 		case Integer:
 			return av == bv
 		case Real:
-			// Cross-type numeric equality is deliberate (serializers may
-			// legally rewrite 1.0 as 1); it uses the same epsilon as
-			// Real-Real so the tolerance is consistent in every direction.
-			return realEqual(float64(av), float64(bv))
+			// Cross-type numeric equality is deliberate (serializers may legally
+			// rewrite 1.0 as 1). It uses a RELATIVE tolerance rather than the
+			// absolute Real-Real epsilon: an absolute 1e-10 is both too loose near
+			// zero (Integer(0) would equal Real(1e-11)) and too tight at large
+			// magnitudes (audit C32).
+			return intRealEqual(int64(av), float64(bv))
 		}
 		return false
 
@@ -53,7 +55,7 @@ func equalDepth(a, b Object, depth int) bool {
 		case Real:
 			return realEqual(float64(av), float64(bv))
 		case Integer:
-			return realEqual(float64(av), float64(bv))
+			return intRealEqual(int64(bv), float64(av))
 		}
 		return false
 
@@ -202,6 +204,18 @@ func realEqual(a, b float64) bool {
 		return true
 	}
 	return math.Abs(a-b) < floatEpsilon
+}
+
+// intRealEqual compares an integer to a real with a relative tolerance, so
+// equality is neither spuriously granted near zero (an absolute epsilon makes
+// Integer(0) equal Real(1e-11)) nor withheld at large magnitudes where an
+// absolute 1e-10 is far below the rounding a serializer or float64 can preserve.
+func intRealEqual(i int64, r float64) bool {
+	fi := float64(i)
+	if fi == r {
+		return true
+	}
+	return math.Abs(fi-r) <= floatEpsilon*math.Max(math.Abs(fi), math.Abs(r))
 }
 
 // DocumentEqual compares two Documents for semantic equality.
