@@ -176,6 +176,14 @@ func ParseXRefStream(stream *Stream) (*XRefTable, error) {
 		if len(indices)%2 != 0 {
 			return nil, fmt.Errorf("xref stream /Index must have an even number of elements, got %d", len(indices))
 		}
+		// A negative start-object or count would index the object table out of
+		// range; the traditional xref table already rejects this, so match it
+		// here for parity (audit C38).
+		for i := 0; i+1 < len(indices); i += 2 {
+			if indices[i] < 0 || indices[i+1] < 0 {
+				return nil, fmt.Errorf("xref stream /Index has a negative start object or count")
+			}
+		}
 	} else {
 		sizeObj := stream.Dict.Get("Size")
 		if sizeObj == nil {
