@@ -51,7 +51,7 @@ Every field of `SignatureResult`, and the exact limit of what it promises:
 | `SigningTime time.Time` | the `signing-time` *signed attribute*, if the CMS carries one | a trustworthy time: it is asserted by the signer. Zero when absent — pdf0's own signer never emits one. A real time comes from a verified time-stamp (`PAdESResult.TimestampTime`) |
 | `Revocation RevocationInfo` | status derived **only** from CRLs/OCSP responses embedded in the document's `/DSS` | any network lookup, and any answer at all when no issuer certificate or no DSS material is available (then it stays `RevocationUnknown`) |
 | `Err error` | why CMS verification failed, when it did | |
-| `Field string` | — always empty; the current code never populates it | |
+| `Field string` | the fully qualified name (ISO 32000-2 §12.7.4.2 — the `/T` chain joined with `.`) of the form field whose `/V` references this signature, e.g. `Signature1` | a name at all when no field references the signature dictionary; then it is empty |
 
 A signature can be `Valid` and still describe a different document: an
 incremental update appends a new value for an existing page after the signed
@@ -91,7 +91,7 @@ sequenceDiagram
             X-->>S: TrustedChain / ChainErr
         end
     end
-    S-->>C: []SignatureResult (map-iteration order, not stable)
+    S-->>C: []SignatureResult (ordered by signature object number)
 ```
 
 `verifyCMS` insists on a single `SignerInfo`, on signed attributes being present,
@@ -193,10 +193,11 @@ fetch it yourself and call `CheckCertRevocation` directly.
   reports `Valid == false` with `document digest does not match the signature
   (content was modified)`. That is not tampering — assess time-stamps through
   `ValidatePAdES`.
-- **Result order is not stable.** Both `VerifySignatures*` and `ValidatePAdES`
-  iterate the object map, so multi-signature documents come back in Go's
-  randomized map order. `SignatureResult.Field` and `PAdESResult.Field` are
-  always empty, so results cannot be matched to field names.
+- **Result order is by object number.** Both `VerifySignatures*` and
+  `ValidatePAdES` sort the signature dictionaries by object number, which is
+  stable across runs and meaningful: in a document signed by successive
+  incremental updates the later signature is the later object. `Field` names each
+  result, so results can also be matched by field name.
 - **Level detection is presence-based.** The catalog's `/DSS` only has to resolve
   to a dictionary, and a `/DocTimeStamp` only has to carry a `/ByteRange`;
   neither is validated. A reported `B-LTA` means "the material is there" —
@@ -208,9 +209,18 @@ fetch it yourself and call `CheckCertRevocation` directly.
   Verification accepts RSA PKCS#1 v1.5, RSASSA-PSS and ECDSA over
   SHA-256/384/512, and rejects SHA-1/MD5 digests, multiple `SignerInfo`s, and
   signatures without signed attributes.
-- **`WriteSigned` replaces the catalog `/AcroForm`** with a fresh one listing
-  only the new field (named `Signature1`), and attaches the widget to the first
-  page. Existing form fields are dropped from `/Fields`.
+- **The signature field is added to the existing form, and named for the first
+  free `SignatureN`.** An `/AcroForm` already in the catalog is updated in place:
+  the new field is appended to its `/Fields`, the signature bits are OR-ed into
+  `/SigFlags` (Table 225: bit 1 `SignaturesExist`, bit 2 `AppendOnly`), and every
+  other key — `/DA`, `/DR`, `/NeedAppearances`, `/Q` — is kept, so neither an
+  earlier signature's field nor an ordinary form field is dropped. The name scan
+  covers the whole field tree plus field-like dictionaries the tree does not
+  reach, so the first signature of a fresh document is `Signature1`, the second
+  `Signature2`, and no two fields share a fully qualified name. Only a document
+  with no `/AcroForm` at all gets a new form object. The widget is always
+  attached to the first page, with a zero `/Rect` — signatures produced here are
+  invisible.
 - **`ValidatePAdES` never checks trust** — it verifies signatures with a nil root
   store. Combine it with `VerifySignaturesWithRoots` when you need both.
 - **Encrypted documents** cannot be signed or incrementally updated at all.
