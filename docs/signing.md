@@ -218,9 +218,21 @@ fetch it yourself and call `CheckCertRevocation` directly.
   covers the whole field tree plus field-like dictionaries the tree does not
   reach, so the first signature of a fresh document is `Signature1`, the second
   `Signature2`, and no two fields share a fully qualified name. Only a document
-  with no `/AcroForm` at all gets a new form object. The widget is always
-  attached to the first page, with a zero `/Rect` — signatures produced here are
-  invisible.
+  with no `/AcroForm` at all gets a new form object. `WriteArchivalTimestamp`
+  treats the form identically for its `/Type /DocTimeStamp` field. The widget is
+  always attached to the first page, with a zero `/Rect` — signatures produced
+  here are invisible.
+- **A direct `/AcroForm` is promoted; a direct catalog or page is refused.**
+  Storing the interactive form as a direct dictionary in the catalog is legal, so
+  it is copied into a new indirect object that the (rewritten) catalog then
+  points at — it cannot be updated in place, having no object number of its own.
+  The catalog and the first page are different: signing rewrites both, and ISO
+  32000-2 §7.5.5 (trailer `/Root`) and §7.7.3.2 (page-tree `/Kids`) require both
+  to be indirect references, so a document where either is direct is malformed
+  and every writer refuses it (`the document catalog is a direct object …`, `the
+  first page is a direct object …`) rather than silently promoting a broken
+  structure — an incremental update cannot supersede an object that does not
+  exist.
 - **`ValidatePAdES` never checks trust** — it verifies signatures with a nil root
   store. Combine it with `VerifySignaturesWithRoots` when you need both.
 - **Encrypted documents** cannot be signed or incrementally updated at all.

@@ -49,6 +49,10 @@ func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, 
 	if page == nil {
 		return nil, nil, errors.New("timestamp: document has no page")
 	}
+	catNum, pageNum, err := d.signingObjNums("timestamp", catalog, page)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	clone := &Document{
 		Version:        d.Version,
@@ -110,30 +114,46 @@ func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, 
 	pageClone := page.Clone()
 	annots, _ := d.Resolve(pageClone.Get("Annots")).(Array)
 	pageClone.Set("Annots", append(append(Array{}, annots...), IndirectRef{Number: fieldNum}))
-	pageNum := d.dictObjNum(page)
 	clone.Objects[pageNum] = &IndirectObject{Number: pageNum, Value: pageClone}
 	changed = append(changed, pageNum)
 
 	// Add /DSS to the catalog, appending the field to an existing AcroForm if any.
 	catClone := catalog.Clone()
 	catClone.Set("DSS", IndirectRef{Number: dssNum})
-	if af := d.ResolveDict(catalog.Get("AcroForm")); af != nil {
-		afClone := af.Clone()
-		fields, _ := d.Resolve(afClone.Get("Fields")).(Array)
-		afClone.Set("Fields", append(append(Array{}, fields...), IndirectRef{Number: fieldNum}))
-		afNum := d.dictObjNum(af)
-		clone.Objects[afNum] = &IndirectObject{Number: afNum, Value: afClone}
-		changed = append(changed, afNum)
-	} else {
-		afNum := alloc()
-		af2 := &Dictionary{}
-		af2.Set("Fields", Array{IndirectRef{Number: fieldNum}})
-		af2.Set("SigFlags", Integer(3))
-		clone.Objects[afNum] = &IndirectObject{Number: afNum, Value: af2}
-		catClone.Set("AcroForm", IndirectRef{Number: afNum})
-		changed = append(changed, afNum)
+
+	// The interactive form, handled exactly as in withSignatureField: an existing
+	// one is extended rather than replaced, so no earlier signature's field is
+	// orphaned and no ordinary form field is dropped, and the signature bits are
+	// OR-ed into /SigFlags (Table 225) so the producer's other bits survive.
+	existingForm := d.ResolveDict(catalog.Get("AcroForm"))
+	acroForm := &Dictionary{}
+	if existingForm != nil {
+		acroForm = existingForm.Clone()
 	}
-	catNum := d.dictObjNum(catalog)
+	fields, _ := d.Resolve(acroForm.Get("Fields")).(Array)
+	acroForm.Set("Fields", append(append(Array{}, fields...), IndirectRef{Number: fieldNum}))
+	sigFlags, _ := d.Resolve(acroForm.Get("SigFlags")).(Integer)
+	acroForm.Set("SigFlags", sigFlags|3)
+
+	// Update the existing form object where there is one so the incremental
+	// update supersedes it; otherwise allocate. A form stored as a direct
+	// dictionary in the catalog is legal (ISO 32000-2 Table 29 does not require
+	// /AcroForm to be indirect) but has no object of its own to update —
+	// dictObjNum reports -1 — so it is promoted to a new indirect object and the
+	// catalog, which is rewritten here anyway, is pointed at it. Writing it under
+	// the -1 instead would emit an object with a non-positive number (§7.3.10)
+	// that the catalog does not reference.
+	formNum := -1
+	if existingForm != nil {
+		formNum = d.dictObjNum(existingForm)
+	}
+	if formNum < 0 {
+		formNum = alloc()
+		catClone.Set("AcroForm", IndirectRef{Number: formNum})
+	}
+	clone.Objects[formNum] = &IndirectObject{Number: formNum, Value: acroForm}
+	changed = append(changed, formNum)
+
 	clone.Objects[catNum] = &IndirectObject{Number: catNum, Value: catClone}
 	changed = append(changed, catNum)
 
