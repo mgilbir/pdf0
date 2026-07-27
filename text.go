@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"iter"
 	"strconv"
 	"strings"
 )
@@ -63,7 +64,6 @@ func (d *Document) extractContentText(res *Dictionary, content []byte, out *stri
 
 	var curMap map[int]rune
 	curTwoByte := false
-	toks := tokenizeContent(content)
 	var operands []contentToken
 
 	show := func(raw []byte) {
@@ -71,7 +71,7 @@ func (d *Document) extractContentText(res *Dictionary, content []byte, out *stri
 			out.WriteRune(r)
 		}
 	}
-	for _, tk := range toks {
+	for tk := range tokenizeContent(content) {
 		if tk.kind != ctOp {
 			operands = append(operands, tk)
 			continue
@@ -98,7 +98,7 @@ func (d *Document) extractContentText(res *Dictionary, content []byte, out *stri
 				case ctString:
 					show(el.str)
 				case ctNumber:
-					if el.num < -100 { // wide negative adjustment ≈ a space
+					if el.number() < -100 { // wide negative adjustment ≈ a space
 						out.WriteByte(' ')
 					}
 				}
@@ -196,77 +196,96 @@ type contentToken struct {
 	op   string
 	name string
 	str  []byte
-	num  float64
+	raw  []byte // ctNumber: the unparsed digits, sub-sliced from the content
 }
 
-// tokenizeContent splits a content stream into operand/operator tokens. It is
-// lenient: unrecognized bytes are skipped. Array and dictionary delimiters are
+// number parses a ctNumber token's value. Parsing is deferred to the consumer
+// because most consumers never look at a number: the PDF/UA content pass reads
+// only operators, names and strings, yet numbers are the most common token in a
+// content stream, so parsing every one eagerly was pure waste.
+func (t contentToken) number() float64 {
+	f, _ := strconv.ParseFloat(string(t.raw), 64)
+	return f
+}
+
+// tokenizeContent iterates the operand/operator tokens of a content stream. It
+// is lenient: unrecognized bytes are skipped. Array and dictionary delimiters are
 // surfaced so TJ arrays can be read; inline images (BI…ID…EI) are stepped over.
-func tokenizeContent(data []byte) []contentToken {
-	var toks []contentToken
-	i := 0
-	for i < len(data) {
-		c := data[i]
-		switch {
-		case isContentSpace(c):
-			i++
-		case c == '%':
-			for i < len(data) && data[i] != '\n' && data[i] != '\r' {
+//
+// Tokens are yielded one at a time rather than collected into a slice. Every
+// caller consumes them in a single forward pass, and a content stream of a real
+// document can hold tens of millions of tokens: materializing them dominated
+// PDF/UA validation, where the token slice alone accounted for ~94% of the run's
+// allocated bytes (the repeated grow-and-copy of a multi-gigabyte slice, not the
+// scan itself). Streaming makes the tokenizer allocation-free apart from the
+// string operands it must decode.
+func tokenizeContent(data []byte) iter.Seq[contentToken] {
+	return func(yield func(contentToken) bool) {
+		i := 0
+		for i < len(data) {
+			c := data[i]
+			switch {
+			case isContentWS(c):
 				i++
-			}
-		case c == '(':
-			s, ni := scanContentLiteral(data, i)
-			toks = append(toks, contentToken{kind: ctString, str: s})
-			i = ni
-		case c == '<' && i+1 < len(data) && data[i+1] == '<':
-			i += 2 // dictionary start — skip; not needed for text
-		case c == '>' && i+1 < len(data) && data[i+1] == '>':
-			i += 2
-		case c == '<':
-			s, ni := scanContentHex(data, i)
-			toks = append(toks, contentToken{kind: ctString, str: s})
-			i = ni
-		case c == '/':
-			n, ni := scanContentName(data, i)
-			toks = append(toks, contentToken{kind: ctName, name: n})
-			i = ni
-		case c == '[':
-			toks = append(toks, contentToken{kind: ctArrayStart})
-			i++
-		case c == ']':
-			toks = append(toks, contentToken{kind: ctArrayEnd})
-			i++
-		case c == '-' || c == '+' || c == '.' || (c >= '0' && c <= '9'):
-			num, ni := scanContentNumber(data, i)
-			toks = append(toks, contentToken{kind: ctNumber, num: num})
-			i = ni
-		default:
-			word, ni := scanContentWord(data, i)
-			i = ni
-			if word == "" {
+			case c == '%':
+				for i < len(data) && data[i] != '\n' && data[i] != '\r' {
+					i++
+				}
+			case c == '(':
+				s, ni := scanContentLiteral(data, i)
+				if !yield(contentToken{kind: ctString, str: s}) {
+					return
+				}
+				i = ni
+			case c == '<' && i+1 < len(data) && data[i+1] == '<':
+				i += 2 // dictionary start — skip; not needed for text
+			case c == '>' && i+1 < len(data) && data[i+1] == '>':
+				i += 2
+			case c == '<':
+				s, ni := scanContentHex(data, i)
+				if !yield(contentToken{kind: ctString, str: s}) {
+					return
+				}
+				i = ni
+			case c == '/':
+				n, ni := scanContentName(data, i)
+				if !yield(contentToken{kind: ctName, name: n}) {
+					return
+				}
+				i = ni
+			case c == '[':
+				if !yield(contentToken{kind: ctArrayStart}) {
+					return
+				}
 				i++
-				continue
+			case c == ']':
+				if !yield(contentToken{kind: ctArrayEnd}) {
+					return
+				}
+				i++
+			case c == '-' || c == '+' || c == '.' || (c >= '0' && c <= '9'):
+				raw, ni := scanContentNumberBytes(data, i)
+				if !yield(contentToken{kind: ctNumber, raw: raw}) {
+					return
+				}
+				i = ni
+			default:
+				word, ni := scanContentWord(data, i)
+				i = ni
+				if word == "" {
+					i++
+					continue
+				}
+				if word == "BI" {
+					i = skipContentInlineImage(data, i)
+					continue
+				}
+				if !yield(contentToken{kind: ctOp, op: word}) {
+					return
+				}
 			}
-			if word == "BI" {
-				i = skipContentInlineImage(data, i)
-				continue
-			}
-			toks = append(toks, contentToken{kind: ctOp, op: word})
 		}
 	}
-	return toks
-}
-
-func isContentSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == 0
-}
-
-func isContentDelimiter(c byte) bool {
-	switch c {
-	case '(', ')', '<', '>', '[', ']', '{', '}', '/', '%':
-		return true
-	}
-	return false
 }
 
 func scanContentLiteral(data []byte, i int) ([]byte, int) {
@@ -330,7 +349,7 @@ func scanContentHex(data []byte, i int) ([]byte, int) {
 	i++ // '<'
 	var digits []byte
 	for i < len(data) && data[i] != '>' {
-		if !isContentSpace(data[i]) {
+		if !isContentWS(data[i]) {
 			digits = append(digits, data[i])
 		}
 		i++
@@ -363,13 +382,15 @@ func hexNibble(c byte) byte {
 func scanContentName(data []byte, i int) (string, int) {
 	i++ // '/'
 	start := i
-	for i < len(data) && !isContentSpace(data[i]) && !isContentDelimiter(data[i]) {
+	for i < len(data) && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 		i++
 	}
 	return string(data[start:i]), i
 }
 
-func scanContentNumber(data []byte, i int) (float64, int) {
+// scanContentNumberBytes returns the numeric literal starting at i as a
+// sub-slice of data, leaving the parse to contentToken.number.
+func scanContentNumberBytes(data []byte, i int) ([]byte, int) {
 	start := i
 	if data[i] == '-' || data[i] == '+' {
 		i++
@@ -377,13 +398,12 @@ func scanContentNumber(data []byte, i int) (float64, int) {
 	for i < len(data) && ((data[i] >= '0' && data[i] <= '9') || data[i] == '.') {
 		i++
 	}
-	f, _ := strconv.ParseFloat(string(data[start:i]), 64)
-	return f, i
+	return data[start:i], i
 }
 
 func scanContentWord(data []byte, i int) (string, int) {
 	start := i
-	for i < len(data) && !isContentSpace(data[i]) && !isContentDelimiter(data[i]) {
+	for i < len(data) && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 		i++
 	}
 	return string(data[start:i]), i

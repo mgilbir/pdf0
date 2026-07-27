@@ -99,6 +99,27 @@ func BenchmarkContentHeavyValidation(b *testing.B) {
 	}
 }
 
+// BenchmarkContentHeavyUAValidation guards PDF/UA validation against the cost
+// that dominated it on real documents: not the scanning but the allocating.
+// ValidatePDFUA walks every page's content stream, and materializing those
+// tokens into a slice cost ~94% of the run's allocated bytes — 45 GB on a
+// 117 MB file — before the tokenizer became a streaming iterator. Watch the
+// B/op and allocs/op columns, not just ns/op: a regression here shows up as
+// allocations growing with content size rather than with the number of
+// operands actually kept.
+func BenchmarkContentHeavyUAValidation(b *testing.B) {
+	data := contentHeavyPDF(60)
+	doc, err := Read(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = ValidatePDFUA(doc)
+	}
+}
+
 // TestContentHeavyValidates is a light correctness anchor for the benchmark
 // fixture: the synthesized document must parse and validate without error.
 func TestContentHeavyValidates(t *testing.T) {
