@@ -172,7 +172,7 @@ func (d *Document) stencilMask(st *Stream) (data []byte, mw, mh int, hideBit byt
 	}
 	mw = intValue(d.Resolve(mk.Dict.Get("Width")))
 	mh = intValue(d.Resolve(mk.Dict.Get("Height")))
-	data = decodeContentStream(d, mk)
+	data = decodeImageSamples(mk)
 	if mw <= 0 || mh <= 0 || !sampleDataFits(data, mw, mh, 1, 1) {
 		return nil, 0, 0, 0, false
 	}
@@ -648,7 +648,7 @@ func (d *Document) decodeAlphaMask(sm *Stream) (alpha []byte, w, h int, ok bool)
 	if last == "DCTDecode" || last == "JPXDecode" {
 		return nil, 0, 0, false // decoded elsewhere; rare for a mask
 	}
-	raw := decodeContentStream(d, sm)
+	raw := decodeImageSamples(sm)
 	if !sampleDataFits(raw, w, h, 1, bpc) {
 		return nil, 0, 0, false
 	}

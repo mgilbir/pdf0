@@ -293,6 +293,12 @@ type validationCache struct {
 	fontUsage      map[*Dictionary]*fontTextUsage // memoized collectFontTextUsage
 	fontUsageValid bool
 
+	// Parsed type-4 (PostScript calculator) function programs. A tint
+	// transform is evaluated per image pixel; without this memo each
+	// evaluation re-decoded and re-parsed the program stream, turning a
+	// small image into minutes of work (sweep #13).
+	psProgs map[*Stream]psProgEntry
+
 	// Per-content-stream memoization for the executed-content walk. A stream
 	// shared by many containers (e.g. one content stream referenced by
 	// thousands of pages) is tokenized only once instead of once per container.
