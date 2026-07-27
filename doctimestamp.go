@@ -5,7 +5,6 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/hex"
-	"errors"
 	"io"
 	"time"
 )
@@ -41,15 +40,7 @@ func (d *Document) WriteArchivalTimestamp(w io.Writer, original []byte, certs []
 // withArchivalTimestamp returns a clone with a DSS and a document time-stamp field
 // added, and the list of changed object numbers for the incremental update.
 func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, []int, error) {
-	catalog := d.ResolveDict(d.Trailer.Get("Root"))
-	if catalog == nil {
-		return nil, nil, errors.New("timestamp: document has no catalog")
-	}
-	page := d.firstPage(catalog)
-	if page == nil {
-		return nil, nil, errors.New("timestamp: document has no page")
-	}
-	catNum, pageNum, err := d.signingObjNums("timestamp", catalog, page)
+	catalog, page, catNum, pageNum, err := d.signingTarget("timestamp")
 	if err != nil {
 		return nil, nil, err
 	}
