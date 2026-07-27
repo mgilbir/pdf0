@@ -85,7 +85,7 @@ Workflow when your change moves the counts:
 For validators other than PDF/A (PDF/UA, PDF/X, PDF/VT, DPart, Factur-X) see
 [docs/validators.md](docs/validators.md); for signatures see
 `signatures.go` and `pades.go`, for image codecs
-[docs/images.md](docs/images.md), and for the CLI `cmd/pdf0`.
+[docs/images.md](docs/images.md), and for the CLI [docs/cli.md](docs/cli.md).
 
 ## Checking rule coverage
 
