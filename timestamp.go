@@ -168,6 +168,14 @@ func verifyTimestampToken(tokenDER, imprint []byte) (time.Time, *x509.Certificat
 	if err != nil {
 		return time.Time{}, cert, fmt.Errorf("time-stamp token signature: %w", err)
 	}
+	// A time-stamp authority certificate must carry the id-kp-timeStamping
+	// extended key usage (RFC 3161 2.3). Without this check any self-signed
+	// certificate would be accepted as a TSA, letting an attacker forge a
+	// document time-stamp asserting an arbitrary time and, via a covering
+	// DocTimeStamp, "seal" tampered content (audit C10).
+	if err := requireTimeStampingEKU(cert); err != nil {
+		return time.Time{}, cert, err
+	}
 	var info tstInfo
 	if _, err := asn1.Unmarshal(tstDER, &info); err != nil {
 		return time.Time{}, cert, fmt.Errorf("parsing TSTInfo: %w", err)
@@ -182,6 +190,20 @@ func verifyTimestampToken(tokenDER, imprint []byte) (time.Time, *x509.Certificat
 		return time.Time{}, cert, errors.New("time-stamp message imprint does not match the signature")
 	}
 	return info.GenTime, cert, nil
+}
+
+// requireTimeStampingEKU reports whether a certificate is usable as a TSA: it
+// must carry the id-kp-timeStamping extended key usage (RFC 3161 2.3).
+func requireTimeStampingEKU(cert *x509.Certificate) error {
+	if cert == nil {
+		return errors.New("time-stamp token has no signer certificate")
+	}
+	for _, eku := range cert.ExtKeyUsage {
+		if eku == x509.ExtKeyUsageTimeStamping {
+			return nil
+		}
+	}
+	return errors.New("time-stamp certificate lacks the id-kp-timeStamping extended key usage")
 }
 
 // extractEContent returns the eContent bytes of a CMS SignedData (the payload of

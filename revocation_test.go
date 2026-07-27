@@ -18,10 +18,17 @@ import (
 var (
 	tstOIDSHA1      = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
 	tstOIDSHA256RSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
-	tstRevTime      = time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
-	tstBase         = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	tstNotBefore    = tstBase.Add(-24 * time.Hour)
-	tstNotAfter     = tstBase.Add(365 * 24 * time.Hour)
+	// Revocation material is dated relative to the current time so it is within
+	// its validity window at verification time: CheckCertRevocation now rejects
+	// stale (expired/superseded) material (audit C13), and a live check validates
+	// freshness against the present.
+	// Truncated to whole seconds in UTC so values survive the ASN.1
+	// GeneralizedTime round-trip (which drops sub-second precision and the
+	// monotonic clock reading) for exact RevokedAt comparisons.
+	tstBase      = time.Now().Add(-24 * time.Hour).UTC().Truncate(time.Second)
+	tstRevTime   = time.Now().Add(-12 * time.Hour).UTC().Truncate(time.Second)
+	tstNotBefore = tstBase.Add(-24 * time.Hour)
+	tstNotAfter  = tstBase.Add(365 * 24 * time.Hour)
 )
 
 // caAndLeaf builds a CA certificate and a leaf certificate issued by it.
