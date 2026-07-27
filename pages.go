@@ -112,11 +112,27 @@ func (d *Document) pageRefsOf() []IndirectRef {
 // /Pages node, re-pointing /Parent and inheriting nothing.
 func appendPageInto(g *graphCopier, dst *Document, pagesNum int, srcPageRef IndirectRef) {
 	newRef := g.copyRef(srcPageRef, map[Name]bool{"Parent": true})
-	pageObj := dst.Objects[newRef.Number].Value.(*Dictionary)
+	// A source page held as a direct (inline) dictionary in /Kids has no object
+	// number, so copyRef installs a Null placeholder; skip it instead of panicking
+	// on the type assertion (audit C16).
+	iobj := dst.Objects[newRef.Number]
+	if iobj == nil {
+		return
+	}
+	pageObj, ok := iobj.Value.(*Dictionary)
+	if !ok {
+		return
+	}
 	pageObj.Set("Parent", IndirectRef{Number: pagesNum})
 
-	pages := dst.Objects[pagesNum].Value.(*Dictionary)
-	kids, _ := pages.Get("Kids").(Array)
+	pages, ok := dst.Objects[pagesNum].Value.(*Dictionary)
+	if !ok {
+		return
+	}
+	// Resolve /Kids: the destination's page tree may store it as an indirect
+	// reference to an array. Reading it directly (the previous code) yielded nil
+	// and silently dropped every existing page (audit C15).
+	kids, _ := dst.Resolve(pages.Get("Kids")).(Array)
 	pages.Set("Kids", append(append(Array{}, kids...), newRef))
 	pages.Set("Count", Integer(len(kids)+1))
 }
