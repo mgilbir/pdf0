@@ -7,10 +7,38 @@ import (
 	"testing"
 )
 
-// validCII is a minimal Cross Industry Invoice payload used to exercise the
-// container writer (the writer embeds these bytes verbatim; their EN 16931
-// validity is tested in the einvoice package).
-const validCII = `<CrossIndustryInvoice><ExchangedDocument><ID>INV-1</ID></ExchangedDocument></CrossIndustryInvoice>`
+// validCII is a minimal EN 16931-conforming Cross Industry Invoice (every
+// foundational business term present, consistent 100 + 20 = 120 totals). Since
+// ValidateFacturX runs the EN 16931 rules inline (audit C44), the round-trip
+// test needs a payload that actually passes them, not just container filler.
+const validCII = `<CrossIndustryInvoice>
+  <ExchangedDocumentContext><GuidelineSpecifiedDocumentContextParameter><ID>urn:cen.eu:en16931:2017</ID></GuidelineSpecifiedDocumentContextParameter></ExchangedDocumentContext>
+  <ExchangedDocument><ID>INV-1</ID><TypeCode>380</TypeCode><IssueDateTime><DateTimeString>20240101</DateTimeString></IssueDateTime></ExchangedDocument>
+  <SupplyChainTradeTransaction>
+    <IncludedSupplyChainTradeLineItem>
+      <AssociatedDocumentLineDocument><LineID>1</LineID></AssociatedDocumentLineDocument>
+      <SpecifiedTradeProduct><Name>Widget</Name></SpecifiedTradeProduct>
+      <SpecifiedLineTradeAgreement><NetPriceProductTradePrice><ChargeAmount>100.00</ChargeAmount></NetPriceProductTradePrice></SpecifiedLineTradeAgreement>
+      <SpecifiedLineTradeDelivery><BilledQuantity unitCode="C62">1</BilledQuantity></SpecifiedLineTradeDelivery>
+      <SpecifiedLineTradeSettlement><ApplicableTradeTax><CategoryCode>S</CategoryCode><RateApplicablePercent>20.00</RateApplicablePercent></ApplicableTradeTax><SpecifiedTradeSettlementLineMonetarySummation><LineTotalAmount>100.00</LineTotalAmount></SpecifiedTradeSettlementLineMonetarySummation></SpecifiedLineTradeSettlement>
+    </IncludedSupplyChainTradeLineItem>
+    <ApplicableHeaderTradeAgreement>
+      <SellerTradeParty><Name>Seller Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress><SpecifiedTaxRegistration><ID schemeID="VA">FR12345678</ID></SpecifiedTaxRegistration></SellerTradeParty>
+      <BuyerTradeParty><Name>Buyer Co</Name><PostalTradeAddress><CountryID>FR</CountryID></PostalTradeAddress></BuyerTradeParty>
+    </ApplicableHeaderTradeAgreement>
+    <ApplicableHeaderTradeSettlement>
+      <InvoiceCurrencyCode>EUR</InvoiceCurrencyCode>
+      <ApplicableTradeTax><CalculatedAmount>20.00</CalculatedAmount><BasisAmount>100.00</BasisAmount><CategoryCode>S</CategoryCode><RateApplicablePercent>20.00</RateApplicablePercent></ApplicableTradeTax>
+      <SpecifiedTradeSettlementHeaderMonetarySummation>
+        <LineTotalAmount>100.00</LineTotalAmount>
+        <TaxBasisTotalAmount>100.00</TaxBasisTotalAmount>
+        <TaxTotalAmount>20.00</TaxTotalAmount>
+        <GrandTotalAmount>120.00</GrandTotalAmount>
+        <DuePayableAmount>120.00</DuePayableAmount>
+      </SpecifiedTradeSettlementHeaderMonetarySummation>
+    </ApplicableHeaderTradeSettlement>
+  </SupplyChainTradeTransaction>
+</CrossIndustryInvoice>`
 
 // TestEmbedFacturXRoundTrip is the writer's core guarantee: a Factur-X document
 // built by embedding invoice XML into a PDF/A-3 base validates as a conforming

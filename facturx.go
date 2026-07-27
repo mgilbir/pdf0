@@ -10,9 +10,11 @@ import (
 // hybrid electronic invoice. A Factur-X document is a PDF/A-3 file that carries
 // a human-readable invoice and an embedded XML representation of the same
 // invoice (UN/CEFACT Cross Industry Invoice, EN 16931). This validator checks
-// the container: PDF/A-3 conformance, the embedded invoice XML attached as an
-// associated file, and the Factur-X XMP metadata that identifies it. Validating
-// the invoice XML itself against the EN 16931 business rules is a separate layer.
+// the container — PDF/A-3 conformance, the embedded invoice XML attached as an
+// associated file, and the Factur-X XMP metadata that identifies it — and then
+// runs the invoice XML through the formalis EN 16931 rule engine at the declared
+// profile, mirroring ValidateOrderX. CIUS layers (XRechnung, Peppol, NLCIUS)
+// remain the caller's choice, via the returned XML.
 //
 // The checks are calibrated against a corpus of conforming Factur-X / ZUGFeRD
 // invoices across all profiles (MINIMUM, BASIC WL, BASIC, EN 16931, EXTENDED).
@@ -29,9 +31,9 @@ var facturxXMLNames = map[string]bool{
 // /Alternative in the Factur-X spec, and /Source is used by some producers.
 var facturxRelationships = map[Name]bool{"Data": true, "Alternative": true, "Source": true}
 
-// FacturXResult is the outcome of validating a Factur-X container: the
-// violations found and, when identifiable, the declared conformance profile and
-// the embedded invoice XML (for downstream EN 16931 validation).
+// FacturXResult is the outcome of validating a Factur-X invoice: the container
+// and EN 16931 violations found and, when identifiable, the declared conformance
+// profile and the embedded invoice XML (returned for CIUS-layer validation).
 type FacturXResult struct {
 	Violations []formalis.Violation
 	Profile    formalis.Profile // "" if not identifiable
@@ -90,40 +92,48 @@ func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
 	xmp := facturxXMP(doc, cat)
 	if xmp == "" {
 		add("metadata", "document has no XMP metadata", 0)
-		return res
-	}
-	get := func(prop string) string {
-		if v := strings.TrimSpace(extractXMPValue(xmp, "fx:"+prop)); v != "" {
-			return v
-		}
-		return strings.TrimSpace(extractXMPValue(xmp, "zf:"+prop))
-	}
-	docType := get("DocumentType")
-	fileName := get("DocumentFileName")
-	version := get("Version")
-	level := get("ConformanceLevel")
-
-	if docType == "" {
-		add("metadata", "missing XMP fx:DocumentType", 0)
-	} else if docType != "INVOICE" && docType != "ORDER" {
-		add("metadata", fmt.Sprintf("XMP fx:DocumentType %q is not INVOICE", docType), 0)
-	}
-	if version == "" {
-		add("metadata", "missing XMP fx:Version", 0)
-	}
-	if fileName == "" {
-		add("metadata", "missing XMP fx:DocumentFileName", 0)
-	} else if name != "" && fileName != name {
-		add("metadata", fmt.Sprintf("XMP fx:DocumentFileName %q does not match the embedded file name %q", fileName, name), 0)
-	}
-	if level == "" {
-		add("metadata", "missing XMP fx:ConformanceLevel", 0)
-	} else if p, ok := formalis.ProfileFor(level); !ok {
-		add("metadata", fmt.Sprintf("XMP fx:ConformanceLevel %q is not a Factur-X profile", level), 0)
 	} else {
-		res.Profile = p
+		get := func(prop string) string {
+			if v := strings.TrimSpace(extractXMPValue(xmp, "fx:"+prop)); v != "" {
+				return v
+			}
+			return strings.TrimSpace(extractXMPValue(xmp, "zf:"+prop))
+		}
+		docType := get("DocumentType")
+		fileName := get("DocumentFileName")
+		version := get("Version")
+		level := get("ConformanceLevel")
+
+		// Factur-X is the invoice member of the family; an ORDER document
+		// belongs to ValidateOrderX (audit C44).
+		if docType == "" {
+			add("metadata", "missing XMP fx:DocumentType", 0)
+		} else if docType != "INVOICE" {
+			add("metadata", fmt.Sprintf("XMP fx:DocumentType %q is not INVOICE", docType), 0)
+		}
+		if version == "" {
+			add("metadata", "missing XMP fx:Version", 0)
+		}
+		if fileName == "" {
+			add("metadata", "missing XMP fx:DocumentFileName", 0)
+		} else if name != "" && fileName != name {
+			add("metadata", fmt.Sprintf("XMP fx:DocumentFileName %q does not match the embedded file name %q", fileName, name), 0)
+		}
+		if level == "" {
+			add("metadata", "missing XMP fx:ConformanceLevel", 0)
+		} else if p, ok := formalis.ProfileFor(level); !ok {
+			add("metadata", fmt.Sprintf("XMP fx:ConformanceLevel %q is not a Factur-X profile", level), 0)
+		} else {
+			res.Profile = p
+		}
 	}
 
+	// Invoice content: the embedded XML must satisfy the EN 16931 business
+	// rules at the declared profile, exactly as ValidateOrderX runs the order
+	// rules inline (audit C44).
+	if len(res.XML) > 0 {
+		res.Violations = append(res.Violations, formalis.Validate(res.XML, res.Profile)...)
+	}
 	return res
 }
 

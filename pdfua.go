@@ -25,6 +25,14 @@ func (v UAViolation) Error() string {
 // figure alternate text. It is a partial validator — a clean result means the
 // implemented checks passed, not full PDF/UA conformance.
 func ValidatePDFUA(doc *Document) []UAViolation {
+	return validatePDFUA(doc, "1")
+}
+
+// validatePDFUA runs the checks shared by PDF/UA-1 and PDF/UA-2, parameterized
+// by the pdfuaid:part the file must declare. The two UA-1-only requirements —
+// part 1 and a PDF 1.x header — are selected here by part rather than filtered
+// out of the result by message text afterwards (audit C39).
+func validatePDFUA(doc *Document, part string) []UAViolation {
 	// Install a per-run cache (page tree, decoded content, font-usage map) on a
 	// shallow copy so the original document is never mutated. Many checks walk
 	// the same structures — collectFontTextUsage alone runs in nine font checks —
@@ -66,7 +74,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	}
 
 	// 5 — the file must declare PDF/UA conformance in its XMP metadata.
-	v = append(v, doc.checkUAIdentifier(cat)...)
+	v = append(v, doc.checkUAIdentifier(cat, part)...)
 
 	// Matterhorn checkpoint 06: the document must have an XMP dc:title.
 	v = append(v, doc.checkUATitle(cat)...)
@@ -128,8 +136,11 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 	v = append(v, doc.checkUAOptionalContent(cat)...)
 	v = append(v, doc.checkUAEmbeddedFiles()...)
 
-	// 6.1 — PDF/UA-1 requires a 1.x header.
-	v = append(v, doc.checkUAHeaderVersion()...)
+	// 6.1 — PDF/UA-1 requires a 1.x header. PDF/UA-2 is defined against
+	// PDF 2.0 instead; ValidatePDFUA2 checks that itself.
+	if part == "1" {
+		v = append(v, doc.checkUAHeaderVersion()...)
+	}
 
 	// 7.1 — Suspects must not be true; 7.4.4 strong/weak; 7.9 Note IDs.
 	v = append(v, doc.checkUASuspects(cat)...)
@@ -148,11 +159,13 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 }
 
 // checkUAHeadings flags a skipped numbered-heading level (e.g. H1 followed by H3
-// without an intervening H2), walking the structure tree in document order.
+// without an intervening H2), walking the structure tree in document order. It
+// keys off the /RoleMap-resolved type, like the sibling heading checks, so a
+// custom type mapped to a numbered heading counts as one (audit C29).
 func (d *Document) checkUAHeadings(cat *Dictionary) []UAViolation {
 	var levels []int
 	for _, n := range d.structTree(cat) {
-		if st := n.rawS; len(st) == 2 && st[0] == 'H' && st[1] >= '1' && st[1] <= '6' {
+		if st := n.stdType; len(st) == 2 && st[0] == 'H' && st[1] >= '1' && st[1] <= '6' {
 			levels = append(levels, int(st[1]-'0'))
 		}
 	}
@@ -241,8 +254,9 @@ func (d *Document) checkUARoleMap(cat *Dictionary) []UAViolation {
 	return v
 }
 
-// checkUAIdentifier requires an XMP metadata stream declaring the PDF/UA part.
-func (d *Document) checkUAIdentifier(cat *Dictionary) []UAViolation {
+// checkUAIdentifier requires an XMP metadata stream declaring the given
+// PDF/UA part.
+func (d *Document) checkUAIdentifier(cat *Dictionary, want string) []UAViolation {
 	stream, ok := d.Resolve(cat.Get("Metadata")).(*Stream)
 	if !ok {
 		return []UAViolation{{"5", "document has no XMP metadata (a PDF/UA identifier is required)", 0}}
@@ -251,8 +265,8 @@ func (d *Document) checkUAIdentifier(cat *Dictionary) []UAViolation {
 	if !strings.Contains(xmp, "pdfuaid:part") {
 		return []UAViolation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
 	}
-	if part := xmpPDFUAPart(xmp); part != "" && part != "1" {
-		return []UAViolation{{"5", "pdfuaid:part must be 1 for PDF/UA-1, got " + part, 0}}
+	if part := xmpPDFUAPart(xmp); part != "" && part != want {
+		return []UAViolation{{"5", "pdfuaid:part must be " + want + " for PDF/UA-" + want + ", got " + part, 0}}
 	}
 	return d.checkUAIdentifierPrefix(xmp)
 }
