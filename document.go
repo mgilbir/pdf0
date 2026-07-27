@@ -493,7 +493,15 @@ func (d *Document) Write(w io.Writer) error {
 	for _, iobj := range writeObjects {
 		if stream, ok := iobj.Value.(*Stream); ok {
 			if ref, isRef := stream.Dict.Get("Length").(IndirectRef); isRef {
-				lengthOverrides[ref.Number] = int64(len(stream.Data))
+				n := int64(len(stream.Data))
+				// Two streams pointing their /Length at one integer object with
+				// different data lengths cannot both be represented; overriding it
+				// once per stream in map order picked a nondeterministic wrong
+				// value. Reject the malformed input instead (audit C40).
+				if prev, seen := lengthOverrides[ref.Number]; seen && prev != n {
+					return fmt.Errorf("object %d is the /Length target of two streams with different lengths (%d and %d)", ref.Number, prev, n)
+				}
+				lengthOverrides[ref.Number] = n
 			}
 		}
 	}
@@ -595,10 +603,20 @@ func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, object
 	}
 	sort.Ints(nums)
 
+	// field2 holds a type-1 entry's byte offset OR a type-2 entry's containing
+	// object-stream number, so it must be wide enough for both. Sizing it from
+	// the byte offsets alone truncated the container number when a sparse,
+	// high-numbered object stream sat in a small file, producing a corrupt xref
+	// that pointed at the wrong (or a nonexistent) object stream (audit C5).
 	var maxField2 uint64
 	for _, off := range offsets {
 		if uint64(off) > maxField2 {
 			maxField2 = uint64(off)
+		}
+	}
+	for _, e := range type2 {
+		if uint64(e[0]) > maxField2 {
+			maxField2 = uint64(e[0])
 		}
 	}
 	// field3 holds the free-list generation (65535 for the head), an object
