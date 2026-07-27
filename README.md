@@ -116,8 +116,9 @@ the PDF 1.7 / 2.0 spec-example tests (the spec examples are committed as JSON
 under `testdata/`). The round-trip tests need reference PDFs that are not
 committed; fetch them with `make refpdfs` (they self-skip when absent).
 
-For how the code is structured, see [docs/architecture.md](docs/architecture.md);
-for the corpus-ratchet workflow and how to add a rule, see
+[docs/](docs/README.md) is the documentation index: architecture, the validator
+family, signing, images, the CLI, troubleshooting, and the test data a fresh
+clone does not have. For the corpus-ratchet workflow and how to add a rule, see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## PDF/A conformance corpus
@@ -185,29 +186,26 @@ Known limitations:
   pseudo-version, and exported names may change until a v1 is tagged.
 
 See [`docs/audits/`](docs/audits/README.md) for the audit history (point-in-time
-findings, not a description of how the code works — for that see
-[docs/architecture.md](docs/architecture.md)).
+findings, not a description of how the code works — for that start at
+[docs/](docs/README.md)).
 
 ## Layout
 
-| Path | Purpose |
-|------|---------|
-| `object.go` | The `Object` interface and all PDF value types |
-| `lexer.go` / `parser.go` | Tokenizer and recursive-descent parser |
-| `serializer.go` | Object model → PDF bytes |
-| `xref.go` / `objstm.go` / `filters.go` | Cross-reference tables/streams, object streams, and predictor filters |
-| `document.go` | Full document read/write |
-| `compare.go` | Deep semantic equality |
-| `pdfa.go` | PDF/A validation engine (rule dispatch and most rules) |
-| `final_rules.go` / `content_operators.go` / `filestructure.go` | Additional PDF/A rules (catalog, content operators, byte-level structure) |
-| `fonts.go` / `fontprog.go` / `font_encodings.go` / `cff_strings.go` | Font-dictionary rules and sfnt/CFF/Type1 program parsing |
-| `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
-| `pdfa_create.go` | Minimal PDF/A document builder |
-| `crypt.go` / `crypt_encrypt.go` / `cms.go` | Standard security handler (RC4/AES decrypt & encrypt) and CMS parsing |
-| `signatures.go` / `sign.go` | Digital signature verification and signing |
-| `text.go` | Content-stream text extraction |
-| `pages.go` / `preflight.go` / `pdfua.go` | Page operations, repair, and PDF/UA checks |
-| `cmd/pdf0` | Command-line tool |
+pdf0 is one flat Go package. The subsystems, and the doc that maps each:
+
+| Subsystem | Files | Map |
+|-----------|-------|-----|
+| Core object model, parser, serializer | `object.go`, `lexer.go`, `parser.go`, `serializer.go`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
+| PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `preflight.go` | [validators.md](docs/validators.md) |
+| The other validators | `pdfua*.go`, `pdfx*.go`, `pdfvt.go`, `pdfr.go`, `dpart.go`, `facturx*.go`, `order_x.go`, `violations.go` | [validators.md](docs/validators.md) |
+| Fonts and metadata | `fonts.go`, `fontprog.go`, `font_encodings.go`, `cff_strings.go`, `xmp.go`, `xmp_schemas.go` | [validators.md](docs/validators.md) |
+| Encryption and signatures | `crypt.go`, `crypt_encrypt.go`, `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
+| Images and codecs | `imageextract.go`, `imagejpeg.go`, `imagecolor.go`, `imagemask.go`, `ccitt.go`, `mq.go`, `jbig2*.go`, `function.go`, `function_ps.go` | [images.md](docs/images.md) |
+| Text and pages | `text.go`, `pages.go` | [architecture.md](docs/architecture.md) |
+| Command-line tool | `cmd/pdf0` | [cli.md](docs/cli.md) |
+
+Every file carries a header comment saying what it owns and which spec clause it
+implements; start there.
 
 ## License
 

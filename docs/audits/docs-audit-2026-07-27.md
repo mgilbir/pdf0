@@ -26,6 +26,14 @@ post-signing incremental update").
 Severity counts: **5 High, 8 Medium, 7 Low, 1 Info** (21 findings). Three are accuracy/drift
 findings that mislead; the rest are absence, structure, or wording.
 
+**Remediation status (2026-07-27).** All 21 findings are addressed in a seven-PR stack, merged
+bottom-up: `docs/fix-inaccuracies` (D1, D2, D3, D9, D12, D14, D15, D18) → `docs/validators-map`
+(D5, D2, D21) → `docs/images-guide` (D5, D13) → `docs/testing-and-onboarding` (D7, D8, D10, D13,
+D16, D17) → `docs/cli-reference` (D4) → `docs/signing-guide` (D3, D5, D13) → 
+`docs/subsystem-map-and-headers` (D6, D19, D20, findability). Writing the fixes turned up things
+the audit had not seen — recorded inline above where they change a finding (D19 was overstated and
+is narrowed) and in *Found while fixing* below.
+
 Baseline health at audit time: `go test ./...` green (91.7 s, corpus present, exit 0); `gofmt -l .`
 clean; `go vet ./...` clean; `CGO_ENABLED=0 go build ./...` succeeds; all three examples run.
 
@@ -53,7 +61,7 @@ clean; `go vet ./...` clean; `CGO_ENABLED=0 go build ./...` succeeds; all three 
 | D16 | Low | (missing) fuzzing docs | `FuzzRead` / `FuzzRoundTrip` exist; no doc says how to run them or where the (gitignored) seed corpus lives | CONFIRMED |
 | D17 | Low | `CONTRIBUTING.md:82-86` | Explains only the false-*negative* direction of the clause match; the tool now prints "181/181 clauses matched", so the unstated caveat (a matched clause may implement 1 of N rules) is the load-bearing one | CONFIRMED |
 | D18 | Low | `README.md:151-154` | "no missed violations … (tracked by `TestCorpus`)" while `corpusMaxIsartorMissed = 1`; the Isartor suite is part of the same corpus, ratcheted by a different test | CONFIRMED |
-| D19 | Low | 63 of 64 non-test `.go` files | Open straight at `package pdf0` with no orienting header; the convention exists (`pdfx.go`, `pdfua.go`, `pdfa_levela.go` do it) but is unapplied to the most opaque files (`jbig2.go`, `imageextract.go`, `crypt.go`, `document.go`) | CONFIRMED |
+| D19 | Low | 25 non-test `.go` files, concentrated in the core | No orienting header; **the original count of 63 was wrong** (it tested only whether line 1 was a comment — 31 files carry a correct header after their imports). The real gap was the core layer: all 11 of `document.go`, `parser.go`, `lexer.go`, `serializer.go`, `object.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `compare.go`, `filters.go`, `incremental.go` | CONFIRMED (narrowed) |
 | D20 | Low | `README.md:11-40`, repo root | The Validate bullet is one nine-line sentence naming ten validators; and the README leads with `go get` while the repo has no tags and no stability statement | CONFIRMED |
 | D21 | Info | 4 locations | The "empty result ≠ conformance" caveat is stated verbatim in README, `doc.go`, and both `pdfa.go` godocs; the level list already drifted between two of them (D9) | CONFIRMED |
 
@@ -408,12 +416,16 @@ baselines support. CONFIRMED. *Direction:* "…and one known missed violation in
 fail suite (`corpusMaxIsartorMissed`)". Accuracy here is cheap and the claim is load-bearing for
 adoption.
 
-**D19 — Doc-bearing code: 63 of 64 non-test files have no orienting header.**
-The convention exists and is used well where it exists — `pdfx.go`, `pdfua.go` and `pdfa_levela.go`
-each open with a paragraph naming the standard and the approach — but the files a newcomer is most
-likely to be dropped into cold (`jbig2.go`, `imageextract.go`, `crypt.go`, `document.go`,
-`signatures.go`, `fonts.go`) begin at `package pdf0` with no statement of scope or spec reference.
-In a flat 64-file package these headers are the de-facto module boundaries. CONFIRMED.
+**D19 — Doc-bearing code: the core layer has no orienting header.**
+*The original finding overstated this and is corrected here.* The audit's check tested whether line 1
+of each file was a comment, which counts a header placed after the imports — the house style — as
+absent. Re-checking properly: 31 of the 57 candidate files already carry a correct header, and the
+image codecs are the best-documented group (11 of 12 needed nothing). The gap is real but
+concentrated: **all eleven** core object-model and file-I/O files — `document.go`, `parser.go`,
+`lexer.go`, `serializer.go`, `object.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `compare.go`,
+`filters.go`, `incremental.go` — had no orienting comment at all, and that is exactly the layer a
+newcomer is dropped into cold. In a flat 64-file package these headers are the de-facto module
+boundaries. CONFIRMED (narrowed from 63 files to 25).
 *Direction:* a 3–5 line header on the ~15 largest files: what this file owns, which spec clause or
 external format it implements, what it deliberately does not do. Highest value on the codec files,
 where the spec reference (JBIG2 = ITU-T T.88, CCITT = T.4/T.6) is the single most useful pointer.
@@ -616,6 +628,46 @@ By unblocking value.
     to make the flat package navigable while the subsystem docs are being written.
 
 ---
+
+## 6b. Found while fixing
+
+Writing the subsystem docs against the source surfaced defects the audit's read had not. Each was
+independently reproduced before being written down.
+
+**A code defect, not a documentation one — `WriteSigned` fails on realistic documents.**
+`patchSignature` (`sign.go:102`) locates the `/ByteRange` placeholder with
+`bytes.Index(data, []byte("/Contents"))`, which matches a *page's* content-stream reference before
+it reaches the signature dictionary. Any document whose pages carry content streams therefore fails
+with `signing: /ByteRange placeholder not found`. Reproduced directly: an otherwise identical
+one-page document signs cleanly without a `/Contents` entry and fails with one. The same search
+stops `WriteSignedIncremental` adding a second signature to an already-signed file, which is its
+documented purpose. `WriteArchivalTimestamp` searches forward from the `/ByteRange` placeholder and
+is unaffected. **Deliberately not fixed in the documentation stack** — it wants a regression test
+and review of its own. Documented in `docs/signing.md` and the README so nobody loses an afternoon
+to it.
+
+**Undocumented signature behaviour**, now in `docs/signing.md`: `/DocTimeStamp` fields always report
+`Valid == false` from `VerifySignatures` (the RFC 3161 token digests the TSTInfo, not the file), which
+a naive caller reads as tampering; `SignatureResult.Field` and `PAdESResult.Field` are never assigned;
+result order follows map iteration and is not stable; PAdES level detection is presence-based, so
+`B-LTA` can be reported without the timestamp verifying.
+
+**Eight CLI behaviours that contradict the tool's own usage text**, now in `docs/cli.md` — including
+`merge` accepting a single input despite a synopsis requiring two, `encrypt -owner` alone succeeding
+despite `-user` being shown as mandatory, and `repair` not checking `Locked()` as its sibling
+commands do, so it silently writes a still-encrypted passthrough and reports 0 fixes.
+
+**Two stale comments in `imageextract.go`** claiming `RunLengthDecode`/`ASCII85Decode` support;
+`applyFilter` implements only Flate, LZW and ASCIIHex, so such an image comes back `Decoded=false`
+with a nil `Encoded`. Corrected in place.
+
+**A stale header on `crypt.go`** describing the file as decryption-only after the encryption path was
+added to it. Corrected in place.
+
+**The image decode pipeline is not the shape the audit drew.** The codec branches are not symmetric
+about preceding filters (CCITT and JBIG2 reverse them, DCT and JPX do not); there is no shared
+`/ImageMask` join after the codecs; `applyImageMasks` is not a common terminal stage and cannot apply
+a colour-key `/Mask`. The diagram shipped in `docs/images.md` is the corrected one.
 
 ## 7. Open questions (maintainer-only)
 

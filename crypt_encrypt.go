@@ -8,6 +8,15 @@ import (
 	"errors"
 )
 
+// This file is the write side of the standard security handler (ISO 32000-2
+// §7.6): it arms a document for encryption on the next Write by building a
+// fresh AES-256 (V5/R6) /Encrypt dictionary — /U, /UE, /O, /OE and /Perms —
+// around a randomly generated file key. Only that one scheme is ever produced;
+// the legacy RC4 and AES-128 revisions are read-only and live in crypt.go,
+// which also performs the actual per-object enciphering. The values written
+// here are precisely what crypt.go's R6 read path re-derives and validates, so
+// the two sides have to change together.
+
 // SetEncryption configures the document to be encrypted on the next Write using
 // the standard security handler with AES-256 (V5/R6, ISO 32000-2 §7.6.4). The
 // user password opens the file for reading; the owner password additionally

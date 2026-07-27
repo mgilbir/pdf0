@@ -6,6 +6,20 @@ import (
 	"strconv"
 )
 
+// This file implements reading object streams (/Type /ObjStm, ISO 32000-2
+// 7.5.7): decoding a container, parsing its leading index of (object number,
+// offset) pairs, and materializing the objects that type-2 cross-reference
+// entries point into. It also covers the recovery path, where a rebuilt
+// cross-reference table carries no type-2 entries and every container must
+// instead be unpacked wholesale.
+//
+// Object streams are the format's compression-amplification vector, so
+// decompression is budgeted in aggregate across a single Read
+// (maxObjStmDecompressedTotal). A container that fails to decode, or that
+// exceeds the budget, is recorded in Document.brokenObjStms instead of failing
+// the read: its objects go missing, but the document still parses and the
+// defect stays reportable.
+
 // maxObjStmDecompressedTotal bounds the aggregate decompressed size of all
 // object streams materialized during a single Read. Object streams are the
 // compression-amplification vector: a small file can carry many object streams

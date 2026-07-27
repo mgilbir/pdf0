@@ -13,9 +13,12 @@ import (
 	"errors"
 )
 
-// The PDF standard security handler (ISO 32000-1 §7.6, ISO 32000-2 §7.6).
-// Decryption for a user or owner password: RC4 (V1/V2, R2–R4), AES-128
-// (V4, /AESV2), and AES-256 (V5, /AESV3, R6).
+// The PDF standard security handler (ISO 32000-1 §7.6, ISO 32000-2 §7.6), in
+// both directions: key derivation and decryption for a user or owner password,
+// and the encryption path used when a decrypted document is written back or
+// SetEncryption is called. RC4 (V1/V2, R2–R4), AES-128 (V4, /AESV2), and
+// AES-256 (V5, /AESV3, R6) are supported; crypt_encrypt.go builds the /Encrypt
+// dictionary for a newly encrypted document.
 
 // passwordPad is the 32-byte padding string (ISO 32000-1 §7.6.3.3, Algorithm 2,
 // step a). An empty user password pads to exactly this string.

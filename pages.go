@@ -1,5 +1,13 @@
 package pdf0
 
+// This file implements the page-level document API: listing a document's
+// pages, extracting a subset of them into a new document, and appending one
+// document's pages to another. All of it rests on a cycle-safe graph copier
+// that renumbers objects and remaps every indirect reference. The copy is
+// structural, not semantic: a page is re-parented onto a fresh /Pages node, so
+// attributes it inherited from its former ancestors (/Resources, /MediaBox,
+// /Rotate — ISO 32000-2 clause 7.7.3.4) are not materialised onto the copy.
+
 // PageList returns the document's page dictionaries in reading order.
 func (d *Document) PageList() []*Dictionary {
 	var pages []*Dictionary

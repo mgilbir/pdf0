@@ -11,6 +11,21 @@ import (
 	"unicode/utf8"
 )
 
+// This file is the core of the PDF/A validator: the conformance levels
+// (ISO 19005-1/-2/-3/-4, i.e. 1b/2b/3b/4, plus the entry point into Level A),
+// the ValidatePDFA/ValidatePDFABytes dispatchers, and most of the clause-6
+// rule set — file structure (6.1), graphics, colour and fonts (6.2),
+// annotations and font dictionaries (6.3), interactive forms (6.4), actions
+// (6.6) and metadata (6.7). Clause numbering differs between the parts, so a
+// check that spans levels picks its reported rule ID from the level.
+//
+// The rules are calibrated against the veraPDF corpus, which is treated as the
+// authoritative oracle wherever it disagrees with a plain reading of the
+// standard: a false positive rejects a conforming file and is far worse than a
+// missed violation. Each run installs a validationCache on a shallow copy of
+// the Document, so the checks share page-tree walks and decoded content
+// streams without touching the caller's Document or racing another run.
+
 // PDFALevel represents a PDF/A conformance level.
 type PDFALevel int
 

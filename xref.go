@@ -8,6 +8,19 @@ import (
 	"strconv"
 )
 
+// This file implements the cross-reference machinery: parsing traditional xref
+// tables (ISO 32000-2 7.5.4) and cross-reference streams (7.5.8) into one
+// XRefTable, plus the stream-decoding entry point (/Filter, /DecodeParms) the
+// rest of the reader shares. Entries are read line by line rather than as the
+// spec's fixed 20-byte records, because real files pad them inconsistently.
+//
+// It also holds the last-resort recovery for a file whose own cross-reference
+// data is unusable: rebuildXRefByScan reconstructs the table from "N G obj"
+// headers found in the raw bytes (7.3.10), and findTrailerByScan recovers the
+// newest trailer carrying /Root (7.5.6). A scanned table has no authority
+// beyond the bytes it points at — a header-shaped run inside a stream body
+// fabricates entries — so callers must load it leniently.
+
 // XRefEntry represents a single cross-reference table entry.
 type XRefEntry struct {
 	Offset        int64

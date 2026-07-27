@@ -8,6 +8,19 @@ import (
 	"strconv"
 )
 
+// This file implements whole-file I/O: the Document type, Read's pipeline over
+// the PDF file structure (header, body, cross-reference section, trailer — ISO
+// 32000-2 7.5) and Write's regeneration of that structure from the object
+// graph. Read is the package's front door for untrusted input, so it never
+// panics and it recovers aggressively: a startxref that points into the table
+// instead of at it, offsets that are header-relative rather than absolute, and
+// a cross-reference section too broken to use at all (rebuilt by scanning for
+// object headers) all still yield a document.
+//
+// Read then normalizes the file structure away — /XRef and /ObjStm objects,
+// xref-stream-only trailer keys — because Write always regenerates it. Nothing
+// that must survive a round trip may live outside the object graph.
+
 // Document represents a parsed PDF file.
 type Document struct {
 	Version string                  // e.g., "2.0"

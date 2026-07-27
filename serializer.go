@@ -8,6 +8,18 @@ import (
 	"strings"
 )
 
+// This file implements the object serializer: the byte-level writer for every
+// Object type, in the syntax of ISO 32000-2 7.3 (names hex-escaped per 7.3.5,
+// literal strings escaped, streams wrapped in stream/endstream). It emits one
+// object at a time and tracks the running byte offset the caller turns into
+// cross-reference entries; it knows nothing of file structure — the header,
+// cross-reference section and trailer belong to document.go.
+//
+// Its output must be readable by this package's own lexer, which is why a NUL
+// in a name and a non-finite Real are refused rather than approximated, and why
+// recursion is depth-capped: unlike anything the parser produces, a
+// caller-constructed object graph can be cyclic.
+
 // maxSerializeDepth bounds recursion through nested arrays/dictionaries so a
 // cyclic direct object cannot exhaust the goroutine stack (an unrecoverable
 // fatal error). The parser cannot build such cycles, but Dictionary fields are

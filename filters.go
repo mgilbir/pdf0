@@ -2,6 +2,17 @@ package pdf0
 
 import "fmt"
 
+// This file implements the stream filters of ISO 32000-2 7.4 that the Go
+// standard library does not provide: the LZWDecode decoder (7.4.4) and the
+// reversal of the /DecodeParms predictors shared by LZW and Flate (7.4.4.4) —
+// TIFF horizontal differencing and the PNG per-row filters. FlateDecode itself
+// and the /Filter dispatch live in xref.go.
+//
+// Every entry point here consumes attacker-controlled bytes: output is capped at
+// maxDecodeSize against decompression bombs, and predictor parameters are
+// range-checked before any row arithmetic, since Colors, Columns and
+// BitsPerComponent come straight from the file.
+
 // LZW special codes (ISO 32000-1 7.4.4.2).
 const (
 	lzwClearTable = 256

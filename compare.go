@@ -5,6 +5,18 @@ import (
 	"math"
 )
 
+// This file implements deep semantic equality over the object model — the
+// oracle the round-trip tests rest on. Two documents are equal when their
+// object graphs mean the same thing, not when their bytes match: key order is
+// ignored, Integer and Real compare across types (a serializer may legally
+// rewrite 1.0 as 1), and IndirectRef values compare by number alone, since
+// Equal has no Document and deliberately never resolves a reference.
+//
+// Dictionary comparison is a one-to-one matching of entries rather than a key
+// lookup, so duplicate keys keep exact multiset semantics; candidates are
+// grouped by key to keep that matching linear. Recursion is depth-capped: a
+// programmatically constructed object graph can be cyclic.
+
 // maxCompareDepth bounds recursion through nested arrays/dictionaries so that a
 // cyclic direct object (constructable programmatically, since Dictionary fields
 // are exported) cannot exhaust the goroutine stack — an unrecoverable fatal

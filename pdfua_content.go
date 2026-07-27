@@ -1,5 +1,12 @@
 package pdf0
 
+// This file owns the content-stream side of PDF/UA validation (ISO 14289-1
+// 7.1/7.18/7.20): text must sit in a tagged or /Artifact marked-content
+// sequence, the two kinds must not nest in one another, a form XObject holding
+// an /MCID may be painted only once, and an OBJR-reached annotation must sit
+// under the structure type its subtype implies. Each stream is tokenized once
+// and the derived facts cached, since several checks read the same content.
+
 // checkUARealContent implements Matterhorn checkpoint 01-005: on every page,
 // real content (text) must appear inside a marked-content sequence — either
 // tagged (linked to the structure tree) or an Artifact. Text drawn outside any

@@ -10,6 +10,14 @@ import (
 // restrictions on inline and image XObjects, and file-trailer identifier
 // validity. Grounded in ISO 32000-1 8.9.5 (images), 8.9.7 (inline images),
 // 14.4 (file identifiers) and the ISO 19005 clause-6 prohibitions.
+//
+// It has since collected more rules of the same kind: PDF/A-4 trigger events
+// (6.6.3), ActualText Private Use Area values (6.2.10.8), Type 5 halftone
+// components (6.2.5), embedded PDF/A files (6.9, validated by re-reading the
+// embedded bytes under an embeddedDepth guard) and the inherited-page-XObject
+// rule (6.2.2). Several are scoped to executed content — only halftones
+// reached through an applied ExtGState, only XObjects actually drawn — because
+// the corpus passes conforming files that carry unused non-conforming ones.
 
 // checkProhibitedCatalogEntries flags document-level features prohibited by
 // PDF/A-4: alternate presentations, page presentation steps, and the

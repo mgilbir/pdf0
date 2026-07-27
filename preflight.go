@@ -2,6 +2,19 @@ package pdf0
 
 import "crypto/rand"
 
+// This file implements preflight repair: the write side of PDF/A conformance,
+// as opposed to the validators that only report. It removes the document-level
+// constructs ISO 19005 forbids outright — encryption (6.1.3), catalog, page
+// and annotation additional-action dictionaries (6.6) — and synthesizes the
+// required file identifier (6.1.3, ISO 32000-1 14.4).
+//
+// The scope is deliberately narrow. Every fix here is information-free: it
+// deletes something forbidden or supplies a value the standard lets the
+// producer choose, so it can never turn a conforming document into a
+// non-conforming one. Failures that need information the file does not carry —
+// a missing font program, device colour with no output intent — are left to
+// the caller and to ValidatePDFA. Do not add a fix that has to guess.
+
 // RepairAction records one fix applied by Repair.
 type RepairAction struct {
 	Description string

@@ -11,6 +11,15 @@ import (
 	"github.com/mgilbir/gopenjpeg"
 )
 
+// This file owns image extraction: the ExtractImages/Images API, the traversal
+// that reaches image XObjects through page resources, form XObjects and
+// annotation appearance streams, and the dispatch from a stream's filter chain
+// to a decoder (ISO 32000-2 clause 8.9). The codecs live elsewhere — ccitt.go,
+// jbig2*.go, imagejpeg.go, imagecolor.go, imagemask.go — only the JPXDecode
+// bridge to gopenjpeg is here; an image no codec can render yields the raw
+// encoded bytes and a Note rather than an error, so one bad image never aborts
+// the walk. The per-codec support table is below, before ExtractedImage.
+
 // decodeJPX decodes a JPEG 2000 (JPXDecode) codestream or JP2 container to a
 // standard-library image using gopenjpeg, a pure-Go port of OpenJPEG. It returns
 // nil for inputs it cannot render (decode error, ICC-only colour, sub-sampled or
@@ -195,9 +204,9 @@ func jpxComponentsToImage(img *gopenjpeg.Image, smaskInData int) image.Image {
 	return rgba
 }
 
-// This file extracts the raster images embedded in a PDF's pages. For each image
-// XObject it reports the image geometry and, where the codec is one Go can decode
-// without a large bespoke implementation, the decoded pixels:
+// Per-codec support. For each image XObject the extractor reports the geometry
+// and, where the codec is one Go can decode without a large bespoke
+// implementation, the decoded pixels:
 //
 //   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
 //   - raw, FlateDecode, LZWDecode,
