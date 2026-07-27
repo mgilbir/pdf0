@@ -26,7 +26,12 @@ const (
 
 // PAdESResult reports the PAdES assessment of one signature.
 type PAdESResult struct {
-	Field            string     // signature field name, if any
+	// Field is the fully qualified name of the signature field whose /V
+	// references this signature, exactly as SignatureResult.Field: the /T
+	// partial names of the field and its ancestors joined with "." (ISO 32000-2
+	// §12.7.4.2). It is empty when no field references the signature, or when no
+	// field in the chain carries a /T.
+	Field            string
 	SubFilter        string     // the signature /SubFilter
 	IsPAdES          bool       // uses a PAdES sub-filter
 	Level            PAdESLevel // baseline level reached (PAdESNone if not PAdES)
@@ -40,7 +45,8 @@ type PAdESResult struct {
 }
 
 // ValidatePAdES assesses every signature in the document for PAdES conformance
-// against the original file bytes.
+// against the original file bytes. Results are ordered by the object number of
+// the signature dictionary, the same deterministic order VerifySignatures uses.
 func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 	// Document-level long-term material: a catalog /DSS holds validation data
 	// (certificates, OCSP, CRLs); a document timestamp (/Type /DocTimeStamp)
@@ -65,20 +71,15 @@ func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 	// time-stamp, protected by the time-stamp rather than the signature.
 	sealed := d.coveringDocTimestamp(raw)
 
+	// Document time-stamps are assessed as long-term material, not as approval
+	// signatures, so they are excluded here.
+	sigs := d.documentSignatures(false)
+	names := d.signatureFieldNames(sigs)
 	var out []PAdESResult
-	for _, iobj := range d.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
-		if !ok || dict.Get("ByteRange") == nil || dict.Get("Contents") == nil {
-			continue
-		}
-		t, _ := dict.Get("Type").(Name)
-		if t == "DocTimeStamp" {
-			continue // assessed as long-term material, not an approval signature
-		}
-		if t != "" && t != "Sig" {
-			continue
-		}
-		out = append(out, d.assessPAdES(dict, raw, hasDSS, hasDocTimestamp, sealed))
+	for _, s := range sigs {
+		res := d.assessPAdES(s.dict, raw, hasDSS, hasDocTimestamp, sealed)
+		res.Field = names[s.num]
+		out = append(out, res)
 	}
 	return out
 }
