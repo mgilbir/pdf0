@@ -167,14 +167,11 @@ genuine PDF/A-4 divergences:
 - **No implementation limits.** `checkImplementationLimits` returns `nil` at A-4:
   PDF 2.0 abolished the Annex C limits and ISO 19005-4 has no such clause.
 - **XMP property validation deliberately off.** `checkXMPProperties`
-  (`xmp_schemas.go`) returns `nil` at A-4, and its comment is emphatic that this
-  is a decision, not a TODO: the corpus proves A-4 tolerates non-conforming XMP
-  property values — `PDF_A-4/6.1.5/…6-1-5-t02-pass-a.pdf` carries `xmp:CreateDate
-  = "D:20221116191452+00'00"`, a PDF date string rather than ISO 8601, and still
-  passes, so enabling the 1b/2b/3b checks at A-4 false-positives on conformant
-  files. A-4 XMP is governed by well-formedness and UTF-8 instead
-  (`checkXMPWellFormed`). *Do not "implement" A-4 property-value validation
-  without corpus evidence that veraPDF wants it.*
+  (`xmp_schemas.go`) returns `nil` at A-4. This is a decision, not a TODO —
+  enabling the 1b/2b/3b property checks at A-4 false-positives on conformant
+  corpus files. The evidence, and the warning not to "implement" it, are in
+  [xmp.md](xmp.md#pdfa-4-deliberately-skips-property-value-validation), which owns this
+  decision.
 
 A-4 also has conformance flavours. `pdfaConformanceFlag(doc)` (`final_rules.go`)
 reads `pdfaid:conformance` from the XMP: `F` and `E` both relax the document-level
