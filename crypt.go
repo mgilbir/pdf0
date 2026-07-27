@@ -652,10 +652,24 @@ func encInt(doc *Document, o Object) int {
 	return 0
 }
 
+// Locked reports whether the document carried encryption that could not be
+// removed: it has an /Encrypt dictionary but no usable security handler, because
+// the supplied password was wrong or the scheme is unsupported. Its strings and
+// streams are still ciphertext.
+//
+// Encrypted alone does not distinguish this from a successfully decrypted file
+// (both keep Encrypted true). Callers that intend to read content, validate,
+// extract, or re-encrypt should check Locked first: on a locked document
+// RemoveEncryption is a no-op, ExtractText and the validators see ciphertext,
+// and SetEncryption/Write refuse.
+func (d *Document) Locked() bool {
+	return d.Encrypted && d.security == nil
+}
+
 // RemoveEncryption drops encryption from a document that was decrypted on Read,
 // so a subsequent Write emits it in the clear. It clears the security handler
 // and removes /Encrypt from the trailer (and the object graph). It has no
-// effect on a document whose content could not be decrypted.
+// effect on a document whose content could not be decrypted (see Locked).
 func (d *Document) RemoveEncryption() {
 	if d.security == nil {
 		return
