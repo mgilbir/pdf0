@@ -15,7 +15,10 @@ import (
 // standard-library image using gopenjpeg, a pure-Go port of OpenJPEG. It returns
 // nil for inputs it cannot render (decode error, ICC-only colour, sub-sampled or
 // >16-bit components) so the caller can fall back to the raw bytes.
-func decodeJPX(data []byte) image.Image {
+// smaskInData is the image dictionary's /SMaskInData value, which governs
+// whether an opacity channel packaged in the codestream is used (see
+// jpxComponentsToImage).
+func decodeJPX(data []byte, smaskInData int) image.Image {
 	img, err := gopenjpeg.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil
@@ -28,13 +31,25 @@ func decodeJPX(data []byte) image.Image {
 	}
 	// ToStandard declines sub-sampled or many-component images; assemble them from
 	// the component data, upsampling each to the largest component's grid.
-	return jpxComponentsToImage(img)
+	return jpxComponentsToImage(img, smaskInData)
 }
 
 // jpxComponentsToImage builds a grayscale or RGB image from a decoded JPEG 2000
 // image's components, nearest-neighbour upsampling any sub-sampled component to
 // the largest component's dimensions and scaling each sample to 8 bits.
-func jpxComponentsToImage(img *gopenjpeg.Image) image.Image {
+//
+// Channel roles follow the specs rather than position alone. An opacity
+// channel is the one the codestream's channel-definition (cdef) box flags
+// (ISO 15444-1, surfaced as Component.Alpha), or — for a codestream without
+// cdef that carries one channel more than its colour space needs (the shape
+// real-world grey+extra files take) — the trailing extra channel. Whether
+// that opacity channel is USED is the image dictionary's /SMaskInData
+// (ISO 32000-2, Table 87): 0 (the default) means encoded soft-mask
+// information "shall be ignored", so only the colour channels render; 1 means
+// the samples carry an opacity channel (rendered into the alpha of an NRGBA);
+// 2 means the colour channels are premultiplied with the opacity channel
+// (rendered as a premultiplied-alpha RGBA).
+func jpxComponentsToImage(img *gopenjpeg.Image, smaskInData int) image.Image {
 	nc := img.NumComponents()
 	if nc == 0 {
 		return nil
@@ -81,43 +96,100 @@ func jpxComponentsToImage(img *gopenjpeg.Image) image.Image {
 		}
 		return uint8(v)
 	}
-	if nc == 1 {
-		g := image.NewGray(image.Rect(0, 0, refW, refH))
-		c := img.Component(0)
-		for y := 0; y < refH; y++ {
-			for x := 0; x < refW; x++ {
-				g.Pix[y*refW+x] = at(c, x, y)
-			}
+	// Identify the opacity channel: the cdef-flagged component, or — with no
+	// cdef box — the trailing extra channel of a grey+extra pair (the layout
+	// the sweep-13 files carry; ISO 15444-1 leaves an unflagged extra channel
+	// undefined, and two-channel greyscale is the only unambiguous case).
+	alphaIdx := -1
+	for i := 0; i < nc; i++ {
+		if img.Component(i).Alpha != 0 {
+			alphaIdx = i
+			break
 		}
-		return g
 	}
-	if nc == 2 {
-		// Grayscale plus an opacity channel — real-world 2-component JPEG 2000
-		// files crashed here when the code assumed at least 3 components
-		// (sweep #13, index out of range).
-		c0, ca := img.Component(0), img.Component(1)
+	if alphaIdx < 0 && nc == 2 {
+		alphaIdx = 1
+	}
+	var colour []gopenjpeg.Component
+	for i := 0; i < nc; i++ {
+		if i != alphaIdx {
+			colour = append(colour, img.Component(i))
+		}
+	}
+	// /SMaskInData 0: encoded soft-mask information shall be ignored
+	// (ISO 32000-2, Table 87) — only the colour channels render.
+	useAlpha := alphaIdx >= 0 && smaskInData > 0
+	ca := gopenjpeg.Component{}
+	if useAlpha {
+		ca = img.Component(alphaIdx)
+	}
+
+	if len(colour) == 1 {
+		c := colour[0]
+		if !useAlpha {
+			g := image.NewGray(image.Rect(0, 0, refW, refH))
+			for y := 0; y < refH; y++ {
+				for x := 0; x < refW; x++ {
+					g.Pix[y*refW+x] = at(c, x, y)
+				}
+			}
+			return g
+		}
+		if smaskInData == 2 {
+			// Colour samples are premultiplied with the opacity channel —
+			// exactly Go's alpha-premultiplied RGBA representation.
+			rgba := image.NewRGBA(image.Rect(0, 0, refW, refH))
+			for y := 0; y < refH; y++ {
+				for x := 0; x < refW; x++ {
+					i := rgba.PixOffset(x, y)
+					g := at(c, x, y)
+					rgba.Pix[i], rgba.Pix[i+1], rgba.Pix[i+2] = g, g, g
+					rgba.Pix[i+3] = at(ca, x, y)
+				}
+			}
+			return rgba
+		}
 		rgba := image.NewNRGBA(image.Rect(0, 0, refW, refH))
 		for y := 0; y < refH; y++ {
 			for x := 0; x < refW; x++ {
 				i := rgba.PixOffset(x, y)
-				g := at(c0, x, y)
-				rgba.Pix[i] = g
-				rgba.Pix[i+1] = g
-				rgba.Pix[i+2] = g
+				g := at(c, x, y)
+				rgba.Pix[i], rgba.Pix[i+1], rgba.Pix[i+2] = g, g, g
 				rgba.Pix[i+3] = at(ca, x, y)
 			}
 		}
 		return rgba
 	}
-	c0, c1, c2 := img.Component(0), img.Component(1), img.Component(2)
+	if len(colour) < 3 {
+		return nil // no unambiguous colour layout
+	}
+	c0, c1, c2 := colour[0], colour[1], colour[2]
+	set := func(px []byte, i, x, y int) {
+		px[i] = at(c0, x, y)
+		px[i+1] = at(c1, x, y)
+		px[i+2] = at(c2, x, y)
+	}
+	if useAlpha && smaskInData == 2 {
+		rgba := image.NewRGBA(image.Rect(0, 0, refW, refH))
+		for y := 0; y < refH; y++ {
+			for x := 0; x < refW; x++ {
+				i := rgba.PixOffset(x, y)
+				set(rgba.Pix, i, x, y)
+				rgba.Pix[i+3] = at(ca, x, y)
+			}
+		}
+		return rgba
+	}
 	rgba := image.NewNRGBA(image.Rect(0, 0, refW, refH))
 	for y := 0; y < refH; y++ {
 		for x := 0; x < refW; x++ {
 			i := rgba.PixOffset(x, y)
-			rgba.Pix[i] = at(c0, x, y)
-			rgba.Pix[i+1] = at(c1, x, y)
-			rgba.Pix[i+2] = at(c2, x, y)
-			rgba.Pix[i+3] = 0xff
+			set(rgba.Pix, i, x, y)
+			if useAlpha {
+				rgba.Pix[i+3] = at(ca, x, y)
+			} else {
+				rgba.Pix[i+3] = 0xff
+			}
 		}
 	}
 	return rgba
@@ -337,7 +409,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		}
 		d.renderBilevelSamples(st, &img, samples, "unsupported JBIG2 sample layout")
 	case "JPXDecode":
-		if m := decodeJPX(st.Data); m != nil {
+		if m := decodeJPX(st.Data, intValue(d.Resolve(st.Dict.Get("SMaskInData")))); m != nil {
 			img.Image, img.Decoded = d.applyImageMasks(st, m), true
 			break
 		}
