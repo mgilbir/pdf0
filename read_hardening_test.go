@@ -91,3 +91,40 @@ func TestXrefNegativeStartObj(t *testing.T) {
 		t.Fatalf("expected an error for a negative subsection start, got nil")
 	}
 }
+
+// TestReadObjectZeroInUse: real-world files mark cross-reference entry 0 as
+// in-use with a "0 0 obj" body (Common Crawl sweep #13). Object number 0 is
+// the reserved free-list head (ISO 32000-1 7.5.4), so the definition is
+// ignored on Read — and the document then writes and round-trips instead of
+// Write refusing the reserved number.
+func TestReadObjectZeroInUse(t *testing.T) {
+	body := "%PDF-1.7\n"
+	zeroAt := len(body)
+	body += "0 0 obj\n<< /Bogus true >>\nendobj\n"
+	oneAt := len(body)
+	body += "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+	twoAt := len(body)
+	body += "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+	xrefAt := len(body)
+	xref := fmt.Sprintf("xref\n0 3\n%010d 00000 n \n%010d 00000 n \n%010d 00000 n \ntrailer\n<< /Root 1 0 R /Size 3 >>\n", zeroAt, oneAt, twoAt)
+	pdf := body + xref + fmt.Sprintf("startxref\n%d\n%%%%EOF\n", xrefAt)
+
+	doc, err := Read(bytes.NewReader([]byte(pdf)), int64(len(pdf)))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if _, ok := doc.Objects[0]; ok {
+		t.Fatal("the reserved object number 0 was loaded into the model")
+	}
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatalf("Write refused a document read from a file with an in-use entry 0: %v", err)
+	}
+	rt, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("re-Read: %v", err)
+	}
+	if !DocumentEqual(doc, rt) {
+		t.Error("round trip lost content")
+	}
+}

@@ -52,10 +52,19 @@ func jpxComponentsToImage(img *gopenjpeg.Image) image.Image {
 		return nil
 	}
 	// at returns component c's sample covering reference pixel (rx,ry), level-
-	// shifted, scaled to 8 bits and clamped.
+	// shifted, scaled to 8 bits and clamped. A component with no samples (or a
+	// short Data slice from a damaged codestream) reads as 0 rather than
+	// panicking — this runs on untrusted input.
 	at := func(c gopenjpeg.Component, rx, ry int) uint8 {
+		if c.W == 0 || c.H == 0 {
+			return 0
+		}
 		cx, cy := rx*int(c.W)/refW, ry*int(c.H)/refH
-		v := c.Data[cy*int(c.W)+cx]
+		idx := cy*int(c.W) + cx
+		if idx < 0 || idx >= len(c.Data) {
+			return 0
+		}
+		v := c.Data[idx]
 		if c.Sgnd {
 			v += 1 << (c.Prec - 1)
 		}
@@ -80,6 +89,24 @@ func jpxComponentsToImage(img *gopenjpeg.Image) image.Image {
 			}
 		}
 		return g
+	}
+	if nc == 2 {
+		// Grayscale plus an opacity channel — real-world 2-component JPEG 2000
+		// files crashed here when the code assumed at least 3 components
+		// (sweep #13, index out of range).
+		c0, ca := img.Component(0), img.Component(1)
+		rgba := image.NewNRGBA(image.Rect(0, 0, refW, refH))
+		for y := 0; y < refH; y++ {
+			for x := 0; x < refW; x++ {
+				i := rgba.PixOffset(x, y)
+				g := at(c0, x, y)
+				rgba.Pix[i] = g
+				rgba.Pix[i+1] = g
+				rgba.Pix[i+2] = g
+				rgba.Pix[i+3] = at(ca, x, y)
+			}
+		}
+		return rgba
 	}
 	c0, c1, c2 := img.Component(0), img.Component(1), img.Component(2)
 	rgba := image.NewNRGBA(image.Rect(0, 0, refW, refH))
@@ -125,6 +152,18 @@ type ExtractedImage struct {
 // decoded when the codec is one this package handles. Form XObjects are followed
 // into their own resources, so images nested inside forms are found too.
 func (d *Document) ExtractImages() []ExtractedImage {
+	// Install a per-run cache on a shallow copy, as the validators do: a tint
+	// transform evaluates per pixel, and without the cache each evaluation
+	// re-decoded the function stream (and re-parsed a type-4 program) — a
+	// sub-megabyte image took minutes (sweep #13).
+	if d.valCache == nil {
+		runDoc := *d
+		runDoc.valCache = &validationCache{
+			pages:   make(map[int][]pageInfo),
+			content: make(map[*Stream][]byte),
+		}
+		d = &runDoc
+	}
 	cat := getCatalog(d)
 	if cat == nil {
 		return nil
@@ -269,13 +308,25 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		img.Note = "JPXDecode not decoded; raw bytes provided"
 	default:
 		// No filter, or a general-purpose filter chain (Flate/LZW/RunLength/ASCII):
-		// decodeContentStream reverses the chain to raw samples, which
-		// buildImage renders through the colour space, bit depth, /Decode and
-		// masks (image masks keep their own 1-bit stencil rendering).
-		raw := decodeContentStream(d, st)
-		d.renderSamples(st, &img, raw, "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
+		// reverse the chain to raw samples, which buildImage renders through the
+		// colour space, bit depth, /Decode and masks (image masks keep their own
+		// 1-bit stencil rendering).
+		d.renderSamples(st, &img, decodeImageSamples(st), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
 	}
 	return img
+}
+
+// decodeImageSamples reverses a sample stream's filter chain WITHOUT the run
+// cache (unlike decodeContentStream): image-sized sample data is used once,
+// and retaining it in the cache for the whole run — or charging it against
+// the shared content budget — would bloat memory and starve the small shared
+// streams (tint functions, palettes) the cache exists for. The same 64MB
+// per-stream bound applies.
+func decodeImageSamples(st *Stream) []byte {
+	if decoded, err := decodeStreamData(st); err == nil && len(decoded) <= maxContentStreamSize {
+		return decoded
+	}
+	return nil
 }
 
 // renderSamples turns decoded image samples into an image.Image, applying the

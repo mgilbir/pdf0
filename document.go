@@ -200,6 +200,14 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 		if entry.Free || entry.Compressed {
 			continue
 		}
+		if num == 0 {
+			// Object number 0 is the free-list head (ISO 32000-1 7.5.4) and can
+			// never be an in-use object; "0 0 R" is a null reference by
+			// definition. Real-world files mark 0 in use (and carry a "0 0 obj"
+			// body); ignore the definition like other malformed constructs
+			// rather than loading an object Write must then refuse (sweep #13).
+			continue
+		}
 		if _, exists := doc.Objects[num]; exists {
 			continue // already loaded (e.g., xref stream)
 		}

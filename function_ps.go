@@ -67,9 +67,33 @@ func (d *Document) evalType4(stream *Stream, dict *Dictionary, x []float64) ([]f
 	return out, true
 }
 
+// psProgEntry is a memoized psProgram result.
+type psProgEntry struct {
+	items []psItem
+	ok    bool
+}
+
 // psProgram tokenizes and parses the decoded stream into the body of the outer
-// { } procedure.
+// { } procedure. The result is memoized in the per-run cache when one is
+// installed: tint transforms evaluate once per image pixel, and re-decoding
+// and re-parsing the program stream each time made a small image take minutes.
 func (d *Document) psProgram(stream *Stream) ([]psItem, bool) {
+	if c := d.valCache; c != nil {
+		if e, hit := c.psProgs[stream]; hit {
+			return e.items, e.ok
+		}
+	}
+	items, ok := d.parsePSProgram(stream)
+	if c := d.valCache; c != nil {
+		if c.psProgs == nil {
+			c.psProgs = make(map[*Stream]psProgEntry)
+		}
+		c.psProgs[stream] = psProgEntry{items, ok}
+	}
+	return items, ok
+}
+
+func (d *Document) parsePSProgram(stream *Stream) ([]psItem, bool) {
 	data := decodeContentStream(d, stream)
 	toks := psTokenize(data)
 	items, rest, ok := psParseProc(toks)

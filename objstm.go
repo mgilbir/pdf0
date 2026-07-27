@@ -110,6 +110,11 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 		if entry.Free || !entry.Compressed {
 			continue
 		}
+		if num == 0 {
+			// Object number 0 is the free-list head and can never be an in-use
+			// object; see the same skip in the uncompressed load loop.
+			continue
+		}
 		if _, exists := d.Objects[num]; exists {
 			continue
 		}
