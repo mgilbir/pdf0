@@ -245,12 +245,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			img.Note = "CCITTFaxDecode failed: " + err.Error()
 			break
 		}
-		if m, ok := samplesToImage(samples, img.Width, img.Height, 1, "DeviceGray"); ok {
-			img.Image, img.Decoded = d.applyImageMasks(st, m), true
-		} else {
-			img.Encoded = samples
-			img.Note = "unsupported CCITT sample layout"
-		}
+		d.renderBilevelSamples(st, &img, samples, "unsupported CCITT sample layout")
 	case "JBIG2Decode":
 		encoded, globals, ok := jbig2EncodedAndGlobals(d, st)
 		if !ok {
@@ -264,12 +259,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			img.Note = "JBIG2Decode not decoded (" + err.Error() + "); the raw encoded bytes are provided"
 			break
 		}
-		if m, ok := samplesToImage(samples, img.Width, img.Height, 1, "DeviceGray"); ok {
-			img.Image, img.Decoded = d.applyImageMasks(st, m), true
-		} else {
-			img.Encoded = samples
-			img.Note = "unsupported JBIG2 sample layout"
-		}
+		d.renderBilevelSamples(st, &img, samples, "unsupported JBIG2 sample layout")
 	case "JPXDecode":
 		if m := decodeJPX(st.Data); m != nil {
 			img.Image, img.Decoded = d.applyImageMasks(st, m), true
@@ -283,21 +273,50 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		// buildImage renders through the colour space, bit depth, /Decode and
 		// masks (image masks keep their own 1-bit stencil rendering).
 		raw := decodeContentStream(d, st)
-		var m image.Image
-		var ok bool
-		if img.ColorSpace == "ImageMask" {
-			m, ok = imageMaskToImage(d, st, raw, img.Width, img.Height)
-		} else {
-			m, ok = d.buildImage(st, raw, img.Width, img.Height, img.BitsPerComponent)
-		}
-		if ok {
-			img.Image, img.Decoded = m, true
-		} else {
-			img.Encoded = raw
-			img.Note = "unsupported sample layout (colour space " + img.ColorSpace + ", " + strconv.Itoa(img.BitsPerComponent) + " bpc)"
-		}
+		d.renderSamples(st, &img, raw, "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
 	}
 	return img
+}
+
+// renderSamples turns decoded image samples into an image.Image, applying the
+// same colour space, bit depth, /Decode, and mask handling regardless of which
+// codec produced the samples. An /ImageMask goes through the stencil path;
+// everything else through buildImage, which also composites the stencil /Mask and
+// soft /SMask. It is used by the general-purpose branch.
+func (d *Document) renderSamples(st *Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
+	var m image.Image
+	var ok bool
+	if img.ColorSpace == "ImageMask" {
+		m, ok = imageMaskToImage(d, st, samples, img.Width, img.Height)
+	} else {
+		m, ok = d.buildImage(st, samples, img.Width, img.Height, img.BitsPerComponent)
+	}
+	if ok {
+		img.Image, img.Decoded = m, true
+	} else {
+		img.Encoded = samples
+		img.Note = unsupportedNote
+	}
+}
+
+// renderBilevelSamples renders the 1-bpp samples a CCITT/JBIG2 codec produced.
+// The common case (a plain DeviceGray image with no /Decode) keeps the fast,
+// byte- and type-identical DeviceGray path. Only when the image is an /ImageMask,
+// or carries a /Decode that inverts polarity, does it route through the shared
+// mask/decode-aware path — which the codec branches previously bypassed, so an
+// image mask rendered as an opaque raster and a /Decode [1 0] was ignored
+// (audit C30).
+func (d *Document) renderBilevelSamples(st *Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
+	if img.ColorSpace == "ImageMask" || d.Resolve(st.Dict.Get("Decode")) != nil {
+		d.renderSamples(st, img, samples, unsupportedNote)
+		return
+	}
+	if m, ok := samplesToImage(samples, img.Width, img.Height, 1, "DeviceGray"); ok {
+		img.Image, img.Decoded = d.applyImageMasks(st, m), true
+	} else {
+		img.Encoded = samples
+		img.Note = unsupportedNote
+	}
 }
 
 // ccittEncodedAndParams returns the CCITT-encoded bytes for an image XObject —
