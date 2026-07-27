@@ -764,7 +764,8 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 
-	errs = append(errs, errsPageLevel...)
+	// errsPageLevel is already the seed of errs (above); the page-level errors are
+	// not re-appended here or they would be reported twice (audit C23).
 	return errs
 }
 
@@ -1049,6 +1050,18 @@ func checkNoLZW(doc *Document, level PDFALevel) []ValidationError {
 				Rule:    filterClause(level),
 				Level:   level,
 				Message: "stream must not use /LZWDecode filter",
+				Object:  num,
+			})
+		}
+		// JPXDecode (JPEG 2000) is a PDF 1.5 filter and is not permitted in
+		// PDF/A-1, which is based on PDF 1.4. It is a standard filter at 2b/3b/4,
+		// so isStandardFilter accepts it there; forbid it explicitly at PDF/A-1
+		// (audit C17).
+		if level == PDFA1b && hasFilter(stream, "JPXDecode") {
+			errs = append(errs, ValidationError{
+				Rule:    filterClause(level),
+				Level:   level,
+				Message: "stream must not use /JPXDecode filter (not permitted in PDF/A-1)",
 				Object:  num,
 			})
 		}
