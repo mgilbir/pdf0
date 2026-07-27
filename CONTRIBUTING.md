@@ -72,13 +72,13 @@ Workflow when your change moves the counts:
 1. Write a `func(*Document, PDFALevel) []ValidationError` (or reuse a byte-level
    signature) and add it to the `checks` slice in `ValidatePDFABytes` (`pdfa.go`).
    Group it with related rules by file — see the table in
-   [docs/architecture.md](docs/architecture.md#where-the-rules-live).
+   [docs/validators.md](docs/validators.md#where-the-rules-live).
 2. Resolve indirect references before type-asserting (`doc.Resolve` /
    `resolveName`): a value behind an indirect reference must not evade the rule.
 3. Guard every recursion with a visited-set and every `arr[0]` with a length
    check — the validator processes untrusted files and must not panic or hang.
 4. Respect the executed-content model where the rule is about *used* resources
-   (see architecture.md).
+   (see [validators.md](docs/validators.md) and [ADR 0004](docs/adr/0004-executed-content-model.md)).
 5. Add a unit test, then run `make test-corpus` and follow the ratchet workflow
    above.
 

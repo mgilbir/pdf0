@@ -7,6 +7,11 @@ Start from the question you have.
 | Decide whether to use pdf0, or find an entry point | [../README.md](../README.md) |
 | Understand how a PDF becomes a `Document`, and back | [architecture.md](architecture.md) |
 | Pick a validator, or add a rule to one | [validators.md](validators.md) |
+| Add or debug a PDF/A rule | [pdfa.md](pdfa.md) |
+| Work on accessibility (PDF/UA) checking | [pdfua.md](pdfua.md) |
+| Understand a font finding, or touch font parsing | [fonts.md](fonts.md) |
+| Work on XMP metadata or a conformance declaration | [xmp.md](xmp.md) |
+| Read, write or debug encrypted files | [encryption.md](encryption.md) |
 | Sign a PDF, or decide whether a signature can be trusted | [signing.md](signing.md) |
 | Pull images out of a PDF, or fix a codec | [images.md](images.md) |
 | Use the `cmd/pdf0` dev tool | [cli.md](cli.md) |
@@ -34,6 +39,23 @@ read, because that is the question with a wrong answer that compiles.
 
 **[images.md](images.md)** — reference plus explanation. The extraction API and
 its memory contract, the codec dispatch, the resource budgets.
+
+**[pdfa.md](pdfa.md)** — explanation. Inside the PDF/A engine: the anatomy of a
+rule, what the 59 dispatched checks actually cover, the per-run cache, and how
+one rule body serves four levels.
+
+**[pdfua.md](pdfua.md)** — explanation. The structure tree, the UA rule
+families, table-grid reconstruction, and how much a clean result is worth.
+
+**[fonts.md](fonts.md)** — explanation. Font types and what each requires,
+font-program parsing, encodings and CMaps, and the empty-vs-missing-glyph trap.
+
+**[xmp.md](xmp.md)** — explanation. Packet parsing and encodings, the
+conformance declarations every standard writes there, and schema validation.
+
+**[encryption.md](encryption.md)** — reference plus explanation. `Encrypted` vs
+`Locked()`, what is supported, key derivation, and what is honestly not
+guaranteed.
 
 **[cli.md](cli.md)** — reference for `cmd/pdf0`, a small command-line front end
 used mainly for poking at files during development. pdf0 is a library first; this

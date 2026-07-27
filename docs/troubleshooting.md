@@ -22,7 +22,7 @@ unusable, not merely malformed.** In practice you will see one of:
 | `startxref offset N outside file (size M)` | The pointer lands past the end of the file — usually a truncated download. |
 | `rebuilt cross-reference table found no document catalog` | The scan-rebuild ran and recovered objects, but none is a `/Type /Catalog`, so there is no document to hand back. |
 | `parsing object N at offset M: …` | An individual object failed to parse *and* the scan-rebuild retry also failed. |
-| `encryption: …` | The `/Encrypt` dictionary itself is malformed. See below — a *wrong password* does not produce this. |
+| `encryption: …` | Reserved for a malformed `/Encrypt` dictionary, but **currently unreachable**: `buildStdSecurityHandler` returns a nil handler and a nil error on every failure path, so a malformed `/Encrypt` yields a `Locked()` document rather than an error. See [encryption.md](encryption.md). |
 | `recovered from panic while reading PDF: …` | A bug. `Read` converts panics into errors so a hostile file cannot crash your process, but please report it (and see [testing.md](testing.md#fuzzing) — the fuzzers exist for exactly this). |
 
 ## `short read: got N of M bytes`

@@ -10,6 +10,11 @@ Each subsystem built on that core has its own map:
 | Subsystem | Doc |
 |-----------|-----|
 | The validator family (PDF/A, PDF/UA, PDF/X, PDF/VT, PDF/R, DPart, Factur-X) | [validators.md](validators.md) |
+| Inside the PDF/A rule engine | [pdfa.md](pdfa.md) |
+| PDF/UA accessibility validation | [pdfua.md](pdfua.md) |
+| Fonts and font programs | [fonts.md](fonts.md) |
+| XMP metadata | [xmp.md](xmp.md) |
+| Encryption (standard security handler) | [encryption.md](encryption.md) |
 | Signing, verification, PAdES, timestamps, revocation | [signing.md](signing.md) |
 | Image extraction and the codec stack | [images.md](images.md) |
 | `cmd/pdf0`, the command-line dev aid | [cli.md](cli.md) |

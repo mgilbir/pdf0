@@ -296,8 +296,11 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 
 // validationCache memoizes traversals for one ValidatePDFABytes run. It is
 // installed at the start of a run and dropped at the end, so documents may
-// be mutated freely between validations. Validating the same Document from
-// multiple goroutines concurrently is not supported.
+// be mutated freely between validations. The cache lives on a shallow copy of
+// the Document, never on the caller's, so validating the same Document from
+// several goroutines at once is safe — TestValidateConcurrentSameDoc asserts it
+// under -race. (An earlier revision installed the cache on the caller's document
+// and this comment said concurrency was unsupported.)
 type validationCache struct {
 	pages           map[int][]pageInfo // page-tree object number -> pages
 	content         map[*Stream][]byte // decoded content streams
