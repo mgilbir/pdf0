@@ -98,6 +98,55 @@ func nextIntToken(l *Lexer) (int, error) {
 	return v, nil
 }
 
+// materializeScannedObjStms loads the contents of every /Type /ObjStm
+// container present in doc.Objects. It backs cross-reference rebuild (see
+// rebuildXRefByScan): a scanned table carries no type-2 entries, so the
+// objects inside object streams are recovered from the containers themselves.
+// Numbers already defined win — a top-level definition found by the scan is
+// newer or equal in authority to a compressed one — and a container that does
+// not decode is recorded in brokenObjStms exactly like the normal path. The
+// same aggregate decompression budget applies.
+func (d *Document) materializeScannedObjStms() {
+	var containers []int
+	for num, iobj := range d.Objects {
+		if st, ok := iobj.Value.(*Stream); ok {
+			if t, _ := st.Dict.Get("Type").(Name); t == "ObjStm" {
+				containers = append(containers, num)
+			}
+		}
+	}
+	sort.Ints(containers) // deterministic order, like loadCompressedObjects
+	var decompressed int64
+	for _, cnum := range containers {
+		st := d.Objects[cnum].Value.(*Stream)
+		if decompressed >= maxObjStmDecompressedTotal {
+			d.brokenObjStms = append(d.brokenObjStms, cnum)
+			continue
+		}
+		data, index, first, err := parseObjStmIndex(st)
+		if err != nil {
+			d.brokenObjStms = append(d.brokenObjStms, cnum)
+			continue
+		}
+		decompressed += int64(len(data))
+		for _, ie := range index {
+			if ie.Number <= 0 {
+				continue
+			}
+			if _, exists := d.Objects[ie.Number]; exists {
+				continue
+			}
+			parser := NewParser(data)
+			parser.Lexer().SetPosition(int64(first + ie.Offset))
+			obj, err := parser.ParseObject()
+			if err != nil {
+				continue // drop just this object; the container index may lie
+			}
+			d.Objects[ie.Number] = &IndirectObject{Number: ie.Number, Value: obj}
+		}
+	}
+}
+
 // loadCompressedObjects materializes objects stored in object streams
 // (type-2 xref entries) into doc.Objects. Container streams must already be
 // loaded; each container is decoded and indexed once regardless of how many
