@@ -45,17 +45,19 @@ func buildTwoObjStmPDF(t *testing.T, fillerBytes int) []byte {
 	// Object 2: the xref stream, W [1 3 1], objects 0..8.
 	xrefStart := buf.Len()
 	off[2] = xrefStart
-	type3 := func(a int, b int, c int) []byte { return []byte{byte(a), byte(b >> 16), byte(b >> 8), byte(b), byte(c)} }
+	type3 := func(a int, b int, c int) []byte {
+		return []byte{byte(a), byte(b >> 16), byte(b >> 8), byte(b), byte(c)}
+	}
 	entries := [][]byte{
-		type3(0, 0, 255),      // 0 free
-		type3(1, off[1], 0),   // 1 ObjStm A
-		type3(1, off[2], 0),   // 2 xref
-		type3(1, off[3], 0),   // 3 catalog
-		type3(1, off[4], 0),   // 4 pages
-		type3(1, off[5], 0),   // 5 page
-		type3(2, 1, 0),        // 6 in stream 1, index 0
-		type3(1, off[7], 0),   // 7 ObjStm B
-		type3(2, 7, 0),        // 8 in stream 7, index 0
+		type3(0, 0, 255),    // 0 free
+		type3(1, off[1], 0), // 1 ObjStm A
+		type3(1, off[2], 0), // 2 xref
+		type3(1, off[3], 0), // 3 catalog
+		type3(1, off[4], 0), // 4 pages
+		type3(1, off[5], 0), // 5 page
+		type3(2, 1, 0),      // 6 in stream 1, index 0
+		type3(1, off[7], 0), // 7 ObjStm B
+		type3(2, 7, 0),      // 8 in stream 7, index 0
 	}
 	var raw bytes.Buffer
 	for _, e := range entries {

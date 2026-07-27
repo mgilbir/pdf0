@@ -78,14 +78,15 @@ func main() {
 	doc.Objects[10] = &pdf.IndirectObject{Number: 10, Generation: 0, Value: fontDescriptor}
 	doc.Objects[11] = &pdf.IndirectObject{Number: 11, Generation: 0, Value: fontFile}
 
-	// Validate before writing
-	errs := pdf.ValidatePDFA(doc, pdf.PDFA4)
-	if len(errs) > 0 {
-		fmt.Fprintf(os.Stderr, "PDF/A-4 validation errors:\n")
+	// Validate and report. The embedded font program here is a one-byte
+	// placeholder, not a real font, so the font-embedding checks fire — this demo
+	// shows the builder and validator APIs, not a fully conformant file. The
+	// findings are informational; the document is still written.
+	if errs := pdf.ValidatePDFA(doc, pdf.PDFA4); len(errs) > 0 {
+		fmt.Printf("validation reported %d issue(s) (expected: the demo font is a placeholder):\n", len(errs))
 		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "  %v\n", e)
+			fmt.Printf("  %v\n", e)
 		}
-		os.Exit(1)
 	}
 
 	// Write the document
@@ -101,8 +102,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Note: this demonstrates the builder API. The embedded font program and
-	// ICC profile are placeholders, so the result is not a fully valid PDF/A
-	// file — validate real output with veraPDF.
+	// Note: this demonstrates the builder API. The OutputIntent ICC profile is a
+	// real sRGB profile, but the embedded font program is a placeholder, so the
+	// result is not a fully valid PDF/A file — validate real output with veraPDF.
 	fmt.Println("wrote output.pdf (PDF/A-4 builder demo; not veraPDF-validated)")
 }

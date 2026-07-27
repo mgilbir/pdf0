@@ -431,10 +431,11 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 
 // Write serializes the document to the writer in PDF format.
 //
-// Encrypted documents are refused: their string and stream contents are
-// still in encrypted form (decryption is not implemented), so writing them
-// without the original cross-reference layout would produce a file no
-// reader could decrypt.
+// A document decrypted on Read is re-encrypted with its retained key so it
+// round-trips. A document that could not be decrypted (Document.Locked) is
+// written back verbatim as a lossless passthrough under its preserved /Encrypt.
+// Write regenerates the cross-reference section, emitting a cross-reference
+// stream when the source used one and a traditional table otherwise.
 func (d *Document) Write(w io.Writer) error {
 	// An encrypted document with a security handler (decrypted on Read) is
 	// re-encrypted below with the retained key. Without a handler (an unsupported

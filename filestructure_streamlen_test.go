@@ -59,8 +59,8 @@ func TestAllDelimitedKeywordsEquivalence(t *testing.T) {
 // end of file every time; a real 27 MB file with ~40k such streams spent >80 s in
 // this one check. With the single-pass precompute the whole validation stays fast.
 func TestCheckStreamLengthNoQuadraticScan(t *testing.T) {
-	const n = 25000        // stream objects
-	const dataLen = 500    // bytes per stream
+	const n = 25000     // stream objects
+	const dataLen = 500 // bytes per stream
 	body := bytes.Repeat([]byte("A"), dataLen)
 
 	var buf bytes.Buffer

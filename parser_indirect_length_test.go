@@ -127,9 +127,9 @@ func TestIntegerObjectValue(t *testing.T) {
 	}
 	ok("9 0 obj 12 endobj", 12)
 	ok("100 5 obj 0", 0)
-	bad("9 0 obj << /A 1 >>")     // composite value, not an integer
-	bad("9 0 obj [1 2 3]")        // array value
-	bad("9 0 obj -3 endobj")      // negative length
-	bad("9 0 R")                  // reference, not an object definition
-	bad("<< /Length 1 >>")        // not an indirect object at all
+	bad("9 0 obj << /A 1 >>") // composite value, not an integer
+	bad("9 0 obj [1 2 3]")    // array value
+	bad("9 0 obj -3 endobj")  // negative length
+	bad("9 0 R")              // reference, not an object definition
+	bad("<< /Length 1 >>")    // not an indirect object at all
 }

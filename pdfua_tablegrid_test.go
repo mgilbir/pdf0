@@ -112,7 +112,7 @@ func TestGridDefectsSpanBomb(t *testing.T) {
 		rows []tableRow
 	}{
 		// A single cell claiming a two-billion-column span.
-		{"colspan", []tableRow{{cell(1, 1 << 31)}, {cell(1, 1), cell(1, 1)}}},
+		{"colspan", []tableRow{{cell(1, 1<<31)}, {cell(1, 1), cell(1, 1)}}},
 		// A single cell claiming a two-billion-row span.
 		{"rowspan", []tableRow{{cell(1<<31, 1)}, {cell(1, 1)}}},
 		// Near-int-max spans must not overflow the budget arithmetic.
@@ -121,7 +121,7 @@ func TestGridDefectsSpanBomb(t *testing.T) {
 		{"cumulative", func() []tableRow {
 			rows := make([]tableRow, 100)
 			for i := range rows {
-				rows[i] = tableRow{cell(1, 1 << 20)}
+				rows[i] = tableRow{cell(1, 1<<20)}
 			}
 			return rows
 		}()},

@@ -128,10 +128,16 @@ func TestValidatePDFXViolations(t *testing.T) {
 		{"missing DestOutputProfile", func(d *Document) { objDict(d, 4).Delete("DestOutputProfile") }, "output-intent", "embedded ICC"},
 		{"trapped unknown", func(d *Document) { objDict(d, 11).Set("Trapped", Name("Unknown")) }, "trapped", "True or False"},
 		{"trapped absent", func(d *Document) { objDict(d, 11).Delete("Trapped") }, "trapped", "True or False"},
-		{"both trim and art", func(d *Document) { objDict(d, 3).Set("ArtBox", Array{Integer(10), Integer(10), Integer(602), Integer(782)}) }, "page-box", "both TrimBox and ArtBox"},
+		{"both trim and art", func(d *Document) {
+			objDict(d, 3).Set("ArtBox", Array{Integer(10), Integer(10), Integer(602), Integer(782)})
+		}, "page-box", "both TrimBox and ArtBox"},
 		{"neither trim nor art", func(d *Document) { objDict(d, 3).Delete("TrimBox") }, "page-box", "neither TrimBox nor ArtBox"},
-		{"trim outside media", func(d *Document) { objDict(d, 3).Set("TrimBox", Array{Integer(-5), Integer(10), Integer(602), Integer(782)}) }, "page-box", "not within the MediaBox"},
-		{"bleed outside media", func(d *Document) { objDict(d, 3).Set("BleedBox", Array{Integer(-5), Integer(-5), Integer(700), Integer(800)}) }, "page-box", "BleedBox is not within"},
+		{"trim outside media", func(d *Document) {
+			objDict(d, 3).Set("TrimBox", Array{Integer(-5), Integer(10), Integer(602), Integer(782)})
+		}, "page-box", "not within the MediaBox"},
+		{"bleed outside media", func(d *Document) {
+			objDict(d, 3).Set("BleedBox", Array{Integer(-5), Integer(-5), Integer(700), Integer(800)})
+		}, "page-box", "BleedBox is not within"},
 		{"font not embedded", func(d *Document) { objDict(d, 8).Delete("FontFile2") }, "font-embedding", "not embedded"},
 		{"device rgb uncovered", func(d *Document) {
 			// Paint with DeviceRGB (rg) under a CMYK-only output intent, no DefaultRGB.

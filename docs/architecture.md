@@ -53,19 +53,23 @@ failing to open the file.
 ## Write
 
 `Document.Write` (`document.go`) regenerates a clean file. It refuses documents
-it cannot faithfully serialize, and it rewrites cross-reference-stream inputs as
-a traditional table.
+it cannot faithfully serialize, re-encrypts a document decrypted on Read (and
+writes a still-locked one back verbatim), and regenerates the cross-reference
+section in the same form the source used — a cross-reference stream, or a
+traditional table.
 
 ```mermaid
 flowchart TD
-    A[Document.Write] --> B{Encrypted,<br/>in-use object 0,<br/>or brokenObjStms?}
+    A[Document.Write] --> B{locked encryption,<br/>in-use object 0,<br/>or brokenObjStms?}
     B -->|yes| X[return error]
-    B -->|no| C[compute indirect /Length overrides]
+    B -->|no| C[compute indirect /Length overrides<br/>re-encrypt if a handler is retained]
     C --> D[write header + binary comment]
     D --> E[write objects sorted by number<br/>rewrite stale /Length targets]
-    E --> F[write traditional xref<br/>20-byte entries, compact subsections]
-    F --> G[write trailer + /Size]
-    G --> H[startxref + %%EOF]
+    E --> F{source used<br/>an xref stream?}
+    F -->|yes| G1[write xref stream]
+    F -->|no| G2[write traditional xref<br/>20-byte entries]
+    G1 --> H[trailer / startxref + %%EOF]
+    G2 --> H
 ```
 
 `Write` is idempotent: `Read → Write → Read → Write` produces byte-identical
@@ -73,7 +77,7 @@ output (guarded by `TestWriteIsIdempotent`).
 
 ## Validate
 
-`ValidatePDFABytes` (`pdfa.go`) runs a fixed list of ~50 check functions, then —
+`ValidatePDFABytes` (`pdfa.go`) runs a fixed list of ~60 check functions, then —
 if raw bytes are supplied — the byte-level file-structure checks. Each check runs
 behind a `recover()` boundary so a bug or an adversarial structure in one check
 cannot crash the caller. Validation runs against a shallow copy of the
@@ -83,7 +87,7 @@ concurrently on the same document.
 ```mermaid
 flowchart TD
     A[ValidatePDFABytes doc, level, rawData] --> B[shallow-copy doc,<br/>install per-run cache]
-    B --> C[for each of ~50 checks]
+    B --> C[for each of ~60 checks]
     C --> D[runCheck: recover panic -> 'internal' violation]
     D --> C
     C --> E{rawData != nil?}

@@ -1,5 +1,6 @@
-// Package pdf0 is a dependency-free PDF 2.0 parser, serializer, and PDF/A
-// validator.
+// Package pdf0 is a PDF 2.0 parser, serializer, and PDF/A validator. Its only
+// dependencies are the author's own pure-Go modules (formalis for EN 16931
+// invoice rules, golittlecms for ICC profiles, gopenjpeg for JPEG 2000).
 //
 // It offers four things:
 //
@@ -24,9 +25,10 @@
 // presence of an /Encrypt dictionary; a decrypted document retains its file key
 // and re-encrypts on Write so it round-trips byte-for-byte. Document.RemoveEncryption
 // drops the encryption so Write emits plaintext. A document whose scheme or
-// password could not be handled stays encrypted and is written back unchanged as
-// a lossless passthrough. Write always emits a traditional cross-reference table,
-// regenerating the on-disk layout.
+// password could not be handled stays encrypted (Document.Locked reports this)
+// and is written back unchanged as a lossless passthrough. Write regenerates the
+// on-disk layout, emitting a cross-reference stream when the source used one and
+// a traditional cross-reference table otherwise.
 //
 // # Validating
 //
