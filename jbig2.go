@@ -37,7 +37,35 @@ type jbBitmap struct {
 	pix  []byte
 }
 
+// JBIG2 decode budgets. Segment headers declare bitmap dimensions independently
+// of how much coded data follows, so a tiny malicious stream can otherwise ask
+// for an enormous bitmap: newJBBitmap would attempt the allocation and
+// decodeGenericInto would loop width*height times (the MQ decoder keeps yielding
+// bits past the end of input, so a truncated stream does not stop it early).
+//
+//   - maxJBIG2Pixels bounds any single bitmap, capping both the allocation and
+//     the per-region decode loop.
+//   - maxJBIG2TotalPixels bounds the sum of all bitmap areas decoded from one
+//     stream, so a file packing many retained region/dictionary segments cannot
+//     exhaust memory even though each fits under the per-bitmap cap.
+//   - maxJBIG2GrayCells bounds a halftone grid, whose area is amplified by the
+//     bit-plane count and an int-per-cell buffer.
+const (
+	maxJBIG2Pixels      = 1 << 26 // 64 Mpx per bitmap
+	maxJBIG2TotalPixels = 1 << 28 // 256 Mpx across the whole stream
+	maxJBIG2GrayCells   = 1 << 20 // halftone grid cells
+)
+
+// errJBIG2Budget is panicked by newJBBitmap on an over-budget allocation and
+// recovered at the decodeJBIG2 boundary. Using a panic keeps the single
+// allocation choke point authoritative: every bitmap flows through newJBBitmap,
+// so no allocation site can be missed, while genuine bugs still propagate.
+var errJBIG2Budget = errors.New("jbig2: bitmap exceeds pixel budget")
+
 func newJBBitmap(w, h int, fill byte) *jbBitmap {
+	if w < 0 || h < 0 || int64(w)*int64(h) > maxJBIG2Pixels {
+		panic(errJBIG2Budget)
+	}
 	b := &jbBitmap{w: w, h: h, pix: make([]byte, w*h)}
 	if fill != 0 {
 		for i := range b.pix {
@@ -45,6 +73,25 @@ func newJBBitmap(w, h int, fill byte) *jbBitmap {
 		}
 	}
 	return b
+}
+
+// reserve charges the area w*h against the stream-wide pixel budget, returning
+// an error once the cumulative decoded area would exceed maxJBIG2TotalPixels or
+// a single area exceeds maxJBIG2Pixels. Decoder methods call it after reading a
+// region's or dictionary's declared dimensions, before allocating.
+func (d *jbig2Decoder) reserve(w, h int) error {
+	if w < 0 || h < 0 {
+		return errJBIG2Unsupported
+	}
+	area := int64(w) * int64(h)
+	if area > maxJBIG2Pixels {
+		return errJBIG2Unsupported
+	}
+	d.allocPixels += area
+	if d.allocPixels > maxJBIG2TotalPixels {
+		return errJBIG2Unsupported
+	}
+	return nil
 }
 
 func (b *jbBitmap) get(x, y int) byte {
@@ -110,11 +157,31 @@ func (r *jbReader) s8() (int, bool) {
 
 // decodeJBIG2 decodes a JBIG2 image (globals + page stream) into packed 1-bpp
 // rows in the PDF convention (0 = black), sized to width x height.
-func decodeJBIG2(globals, data []byte, width, height int) ([]byte, error) {
+func decodeJBIG2(globals, data []byte, width, height int) (out []byte, err error) {
 	if width <= 0 || height <= 0 || width > 1<<20 || height > 1<<20 {
 		return nil, errJBIG2Unsupported
 	}
+	if int64(width)*int64(height) > maxJBIG2Pixels {
+		return nil, errJBIG2Unsupported
+	}
+	// A bitmap allocation over budget panics with errJBIG2Budget from the single
+	// newJBBitmap choke point; convert it to a clean decode error here. Any other
+	// panic is a genuine bug and is re-raised.
+	defer func() {
+		if r := recover(); r != nil {
+			if r == errJBIG2Budget {
+				out, err = nil, errJBIG2Unsupported
+				return
+			}
+			panic(r)
+		}
+	}()
 	d := &jbig2Decoder{imgW: width, imgH: height}
+	// Account the page canvas once; region and dictionary segments add their own
+	// areas as they are decoded.
+	if err := d.reserve(width, height); err != nil {
+		return nil, err
+	}
 	if len(globals) > 0 {
 		segs, err := parseJBIG2Segments(globals)
 		if err != nil {
@@ -157,13 +224,14 @@ func (b *jbBitmap) packPDF() []byte {
 }
 
 type jbig2Decoder struct {
-	imgW, imgH int
-	page       *jbBitmap
-	symbols    map[uint32][]*jbBitmap // exported symbols per symbol-dict segment
-	patterns   map[uint32][]*jbBitmap // patterns per pattern-dict segment
-	huffTables map[uint32]*huffTable  // custom Huffman tables per table segment
-	symCtx     map[uint32]*symbolCtx  // retained coding contexts per symbol-dict segment
-	intermrgn  map[uint32]*jbBitmap   // intermediate region results (types 36/40) keyed by segment
+	imgW, imgH  int
+	allocPixels int64 // cumulative decoded bitmap area, bounded by reserve
+	page        *jbBitmap
+	symbols     map[uint32][]*jbBitmap // exported symbols per symbol-dict segment
+	patterns    map[uint32][]*jbBitmap // patterns per pattern-dict segment
+	huffTables  map[uint32]*huffTable  // custom Huffman tables per table segment
+	symCtx      map[uint32]*symbolCtx  // retained coding contexts per symbol-dict segment
+	intermrgn   map[uint32]*jbBitmap   // intermediate region results (types 36/40) keyed by segment
 }
 
 // symbolCtx holds the generic (GB) and refinement (GR) arithmetic coding
@@ -414,6 +482,9 @@ func (d *jbig2Decoder) readGenericRegion(seg jbSegment) error {
 	if !ok {
 		return errJBIG2Unsupported
 	}
+	if err := d.reserve(ri.w, ri.h); err != nil {
+		return err
+	}
 	flags, ok := r.u8()
 	if !ok {
 		return errJBIG2Unsupported
@@ -519,6 +590,9 @@ func (d *jbig2Decoder) readRefinementRegion(seg jbSegment) error {
 	ri, ok := readRegionInfo(r)
 	if !ok {
 		return errJBIG2Unsupported
+	}
+	if err := d.reserve(ri.w, ri.h); err != nil {
+		return err
 	}
 	flags, ok := r.u8()
 	if !ok {
