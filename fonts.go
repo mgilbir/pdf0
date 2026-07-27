@@ -1701,6 +1701,11 @@ func cidToGID(doc *Document, desc *Dictionary, cid int) (int, bool) {
 	return cid, true
 }
 
+// maxCIDRange bounds the number of CIDs a single /W range entry may span. CIDs
+// are 16-bit, so a well-formed range covers at most the whole CID space; this
+// matches the ceiling the ToUnicode and CMap scanners already apply.
+const maxCIDRange = 65536
+
 // parseCIDWidths parses a CIDFont /W array into CID -> width.
 func parseCIDWidths(doc *Document, wObj Object) map[int]float64 {
 	out := make(map[int]float64)
@@ -1722,8 +1727,15 @@ func parseCIDWidths(doc *Document, wObj Object) map[int]float64 {
 			if i+2 < len(arr) {
 				cLast := intVal(doc.Resolve(arr[i+1]))
 				w := numVal(doc.Resolve(arr[i+2]))
-				for cid := c; cid <= cLast; cid++ {
-					out[cid] = w
+				// A hostile /W like [0 2000000000 500] would otherwise drive
+				// ~2e9 map inserts — a memory/CPU DoS reached before any render
+				// gate, since parseCIDWidths runs unconditionally in
+				// checkCIDFontConsistency. Bound the span to the 16-bit CID
+				// ceiling and skip inverted or over-wide ranges (audit C1).
+				if c >= 0 && cLast >= c && cLast-c < maxCIDRange {
+					for cid := c; cid <= cLast; cid++ {
+						out[cid] = w
+					}
 				}
 				i += 3
 				continue
