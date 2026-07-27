@@ -48,8 +48,11 @@ go get github.com/mgilbir/pdf0
 - **Write incrementally** (`WriteIncremental`) and **build** a minimal
   conformant PDF/A document (`NewPDFADocument`).
 
-A command-line tool (`cmd/pdf0`) wraps these: `info`, `validate`, `ua`,
-`decrypt`, `encrypt`, `extract`, `repair`, and `merge`.
+A command-line tool (`cmd/pdf0`) exposes a deliberately small slice of the
+above — `info`, `validate`, `ua`, `decrypt`, `encrypt`, `extract`, `repair` and
+`merge` — with exit codes that distinguish "this file has violations" from "the
+run failed". Signing, PDF/X, PDF/VT, PDF/R, DPart, Factur-X, PDF/A Level A,
+PDF/UA-2 and image extraction are library-only. See [docs/cli.md](docs/cli.md).
 
 ## Quick start
 
