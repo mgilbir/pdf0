@@ -142,13 +142,14 @@ func TestPAdESLevelDetection(t *testing.T) {
 // verified time-stamp.
 func TestPAdESBTTimestamp(t *testing.T) {
 	cert, key := testCertKey(t)
+	tsaCert, tsaKey := testTSACertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := doc.WriteSignedTimestamped(&buf, cert, key, cert, key); err != nil {
+	if err := doc.WriteSignedTimestamped(&buf, cert, key, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteSignedTimestamped: %v", err)
 	}
 	out := buf.Bytes()
@@ -183,13 +184,14 @@ func TestPAdESBTTimestamp(t *testing.T) {
 // its original signature still valid.
 func TestPAdESBLTA(t *testing.T) {
 	cert, key := testCertKey(t)
+	tsaCert, tsaKey := testTSACertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var b1 bytes.Buffer
-	if err := doc.WriteSignedTimestamped(&b1, cert, key, cert, key); err != nil {
+	if err := doc.WriteSignedTimestamped(&b1, cert, key, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteSignedTimestamped: %v", err)
 	}
 	o1 := b1.Bytes()
@@ -199,7 +201,7 @@ func TestPAdESBLTA(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, o1, []*x509.Certificate{cert}, cert, key); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, o1, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	o2 := b2.Bytes()

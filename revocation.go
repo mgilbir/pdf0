@@ -62,6 +62,24 @@ func CheckCertRevocation(cert, issuer *x509.Certificate, crls, ocsps [][]byte) R
 	return RevocationInfo{}
 }
 
+// revocationClockSkew tolerates modest clock differences when checking the
+// validity window of revocation material.
+const revocationClockSkew = 5 * time.Minute
+
+// revocationFresh reports whether revocation material with the given thisUpdate
+// and (optional) nextUpdate is currently within its validity window. A zero
+// nextUpdate means the material carries no expiry.
+func revocationFresh(thisUpdate, nextUpdate time.Time) bool {
+	now := time.Now()
+	if !thisUpdate.IsZero() && thisUpdate.After(now.Add(revocationClockSkew)) {
+		return false // not yet in force
+	}
+	if !nextUpdate.IsZero() && now.After(nextUpdate.Add(revocationClockSkew)) {
+		return false // expired or superseded
+	}
+	return true
+}
+
 // revocationFromCRL checks cert against a CRL (DER) that must be signed by issuer.
 // A missing or mis-signed CRL yields (unknown, false); a valid CRL yields a
 // definite good/revoked verdict.
@@ -71,6 +89,12 @@ func revocationFromCRL(cert, issuer *x509.Certificate, der []byte) (RevocationIn
 		return RevocationInfo{}, false
 	}
 	if crl.CheckSignatureFrom(issuer) != nil {
+		return RevocationInfo{}, false
+	}
+	// A CRL that is not yet in force or whose next update has passed is not
+	// authoritative: an expired or superseded CRL replayed in the DSS could
+	// otherwise mask a revocation published after it (audit C13).
+	if !revocationFresh(crl.ThisUpdate, crl.NextUpdate) {
 		return RevocationInfo{}, false
 	}
 	for _, e := range crl.RevokedCertificateEntries {
@@ -156,6 +180,12 @@ func revocationFromOCSP(cert, issuer *x509.Certificate, der []byte) (RevocationI
 	for _, sr := range rd.Responses {
 		if !matchesCertID(cert, issuer, sr.CertID) {
 			continue
+		}
+		// A response outside its validity window (not yet in force, or past its
+		// nextUpdate) is not authoritative — a stale "good" captured before a
+		// later revocation must not be honoured (audit C13).
+		if !revocationFresh(sr.ThisUpdate, sr.NextUpdate) {
+			return RevocationInfo{}, false
 		}
 		switch {
 		case sr.CertStatus.Class == 2 && sr.CertStatus.Tag == 0: // good
