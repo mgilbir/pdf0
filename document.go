@@ -135,10 +135,24 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 
 		sectionTable, sectionTrailer, err := parseXRefSection(data, sectionOffset, doc)
 		if err != nil {
-			if first {
-				return nil, err
+			// Recovery: the startxref value "shall [give] the byte offset ...
+			// to the beginning of the xref keyword in the last cross-reference
+			// section" (ISO 32000-2, 7.5.5). Real-world files violate this by
+			// pointing a few dozen bytes INTO the table's entries instead
+			// (Common Crawl sweep #13: consistently 55-57 bytes past the
+			// keyword), which reads as an integer and mis-dispatches to the
+			// xref-stream branch. Relocate to the spec-mandated target: the
+			// nearest standalone "xref" keyword at or before the offset.
+			if rec := precedingXrefKeyword(data, sectionOffset); rec >= 0 && !visitedXref[rec] {
+				visitedXref[rec] = true
+				sectionTable, sectionTrailer, err = parseXRefSection(data, rec, doc)
 			}
-			break // tolerate a broken older section
+			if err != nil {
+				if first {
+					return nil, err
+				}
+				break // tolerate a broken older section
+			}
 		}
 		// Merge: newer sections take precedence over older ones.
 		for num, entry := range sectionTable.Entries {
@@ -795,6 +809,43 @@ func (d *Document) ResolveDict(obj Object) *Dictionary {
 		return dict
 	}
 	return nil
+}
+
+// precedingXrefKeyword returns the offset of the last standalone "xref"
+// keyword at or before off, searching a bounded window, or -1. It is the
+// recovery target for a startxref (or /Prev) value that violates ISO 32000-2,
+// 7.5.5 — which requires the offset of "the beginning of the xref keyword" —
+// by pointing into the table instead. A match preceded by a letter (e.g. the
+// tail of "startxref") is not a keyword.
+func precedingXrefKeyword(data []byte, off int64) int64 {
+	const window = 1024
+	lo := off - window
+	if lo < 0 {
+		lo = 0
+	}
+	hi := off + 4
+	if hi > int64(len(data)) {
+		hi = int64(len(data))
+	}
+	if lo >= hi {
+		return -1
+	}
+	region := data[lo:hi]
+	for {
+		i := bytes.LastIndex(region, []byte("xref"))
+		if i < 0 {
+			return -1
+		}
+		abs := lo + int64(i)
+		if abs == 0 || !isLetterByte(data[abs-1]) {
+			return abs
+		}
+		region = region[:i]
+	}
+}
+
+func isLetterByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // xrefLooksValid reports whether a cross-reference section plausibly begins at
