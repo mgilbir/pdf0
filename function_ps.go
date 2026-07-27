@@ -43,7 +43,8 @@ func (d *Document) evalType4(stream *Stream, dict *Dictionary, x []float64) ([]f
 	for _, v := range x {
 		st = append(st, psVal{num: v})
 	}
-	st, ok = psExec(prog, st, 0)
+	steps := 0
+	st, ok = psExec(prog, st, 0, &steps)
 	if !ok || len(st) < n {
 		return nil, false
 	}
@@ -142,13 +143,25 @@ func psTokenize(data []byte) []string {
 	return toks
 }
 
-// psExec executes program items against the operand stack.
-func psExec(items []psItem, st []psVal, depth int) ([]psVal, bool) {
+// maxPSSteps bounds the total number of operators a type-4 (PostScript
+// calculator) function may execute in one evaluation. The depth and stack caps
+// alone do not stop an if/ifelse program that fans out to exponentially many
+// operators while staying shallow and small-stacked; since a tint function runs
+// once per pixel over an image, an unbounded program is a CPU DoS (audit C21).
+const maxPSSteps = 1 << 20
+
+// psExec executes program items against the operand stack. steps accumulates the
+// operator count across the whole (recursive) evaluation and bounds total work.
+func psExec(items []psItem, st []psVal, depth int, steps *int) ([]psVal, bool) {
 	if depth > maxFunctionDepth {
 		return nil, false
 	}
 	const maxStack = 4096
 	for _, it := range items {
+		*steps++
+		if *steps > maxPSSteps {
+			return nil, false
+		}
 		if len(st) > maxStack {
 			return nil, false
 		}
@@ -159,7 +172,7 @@ func psExec(items []psItem, st []psVal, depth int) ([]psVal, bool) {
 			st = append(st, psVal{isProc: true, proc: it.proc})
 		default:
 			var ok bool
-			st, ok = psApply(it.op, st, depth)
+			st, ok = psApply(it.op, st, depth, steps)
 			if !ok {
 				return nil, false
 			}
@@ -169,7 +182,7 @@ func psExec(items []psItem, st []psVal, depth int) ([]psVal, bool) {
 }
 
 // psApply executes a single operator.
-func psApply(op string, st []psVal, depth int) ([]psVal, bool) {
+func psApply(op string, st []psVal, depth int, steps *int) ([]psVal, bool) {
 	// Helpers for popping numbers and booleans.
 	popNum := func() (float64, bool) {
 		if len(st) == 0 {
@@ -431,7 +444,7 @@ func psApply(op string, st []psVal, depth int) ([]psVal, bool) {
 		st = st[:len(st)-2]
 		if condV.bl {
 			var ok bool
-			st, ok = psExec(procV.proc, st, depth+1)
+			st, ok = psExec(procV.proc, st, depth+1, steps)
 			if !ok {
 				return nil, false
 			}
@@ -449,9 +462,9 @@ func psApply(op string, st []psVal, depth int) ([]psVal, bool) {
 		st = st[:len(st)-3]
 		var ok bool
 		if condV.bl {
-			st, ok = psExec(proc1.proc, st, depth+1)
+			st, ok = psExec(proc1.proc, st, depth+1, steps)
 		} else {
-			st, ok = psExec(proc2.proc, st, depth+1)
+			st, ok = psExec(proc2.proc, st, depth+1, steps)
 		}
 		if !ok {
 			return nil, false

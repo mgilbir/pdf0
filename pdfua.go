@@ -378,6 +378,11 @@ func (d *Document) checkUARoleMapIntegrity(cat *Dictionary) []UAViolation {
 		return nil
 	}
 	var v []UAViolation
+	// Bound the total chain-following work. Get is O(1) once the dictionary is
+	// indexed, so this loop is at worst O(n^2) over a crafted /RoleMap; the cap
+	// keeps that from being a CPU DoS on a large map while never triggering on a
+	// real one (audit C20).
+	work := 0
 	for _, key := range roleMap.Keys {
 		if standardStructTypes[key] {
 			v = append(v, UAViolation{"7.1", "/RoleMap remaps standard structure type <" + string(key) + ">", 0})
@@ -386,6 +391,10 @@ func (d *Document) checkUARoleMapIntegrity(cat *Dictionary) []UAViolation {
 		seen := map[Name]bool{key: true}
 		cur := key
 		for {
+			work++
+			if work > maxRoleMapWork {
+				return v
+			}
 			next, ok := d.Resolve(roleMap.Get(cur)).(Name)
 			if !ok || next == "" {
 				break
@@ -400,6 +409,10 @@ func (d *Document) checkUARoleMapIntegrity(cat *Dictionary) []UAViolation {
 	}
 	return v
 }
+
+// maxRoleMapWork bounds the total number of /RoleMap chain-follow steps across
+// all keys, so a crafted role map cannot drive super-linear validation work.
+const maxRoleMapWork = 1 << 20
 
 // checkUASecurity flags an encrypted document that lacks a /P entry or whose
 // permissions disable text extraction for accessibility (Matterhorn 26-001/002).

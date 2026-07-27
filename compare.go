@@ -165,11 +165,21 @@ func dictionaryEqualDepth(a, b *Dictionary, depth int) bool {
 	// e.g. {A:1, A:1} would compare equal to {A:1, B:99}, and {A:1, A:2} would
 	// not compare equal to itself (audit C26). Equal lengths plus a full
 	// one-to-one matching is correct multiset equality.
+	//
+	// Group b's slots by key so the candidates for each of a's keys are only the
+	// same-key slots, not all of b: a dictionary with distinct keys then compares
+	// in linear time instead of O(n^2), which a crafted large tint-transform dict
+	// otherwise exploited (audit C22). Duplicate keys keep exact multiset
+	// semantics (their slots share a candidate list).
+	bByKey := make(map[Name][]int, len(b.Keys))
+	for j, k := range b.Keys {
+		bByKey[k] = append(bByKey[k], j)
+	}
 	used := make([]bool, len(b.Keys))
 	for i, key := range a.Keys {
 		matched := false
-		for j, bKey := range b.Keys {
-			if used[j] || bKey != key {
+		for _, j := range bByKey[key] {
+			if used[j] {
 				continue
 			}
 			if equalDepth(a.Values[i], b.Values[j], depth+1) {
