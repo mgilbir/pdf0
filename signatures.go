@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
@@ -296,6 +298,16 @@ func verifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certi
 	if _, e := asn1.Unmarshal(ci.Content.Bytes, &sd); e != nil {
 		return nil, nil, signingTime, fmt.Errorf("parsing SignedData: %w", e)
 	}
+	// The eContentType declared in EncapContentInfo is what the content-type
+	// signed attribute must equal (id-data for a detached document signature,
+	// id-ct-TSTInfo for a time-stamp token, etc.).
+	var eci struct {
+		ContentType asn1.ObjectIdentifier
+		Content     asn1.RawValue `asn1:"optional,explicit,tag:0"`
+	}
+	if _, e := asn1.Unmarshal(sd.EncapContentInfo.FullBytes, &eci); e != nil {
+		return nil, nil, signingTime, fmt.Errorf("parsing EncapContentInfo: %w", e)
+	}
 	if len(sd.SignerInfos) != 1 {
 		return nil, nil, signingTime, fmt.Errorf("expected exactly one SignerInfo, got %d", len(sd.SignerInfos))
 	}
@@ -316,6 +328,12 @@ func verifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certi
 	if !ok {
 		return cert, certs, signingTime, errors.New("unsupported digest algorithm")
 	}
+	if hashFn == crypto.SHA1 || hashFn == crypto.MD5 {
+		// SHA-1 and MD5 are collision-broken; reject them as the signature digest
+		// (they remain acceptable for the OCSP CertID issuer hashes, which are not
+		// a signature) (audit C36).
+		return cert, certs, signingTime, errors.New("weak signature digest algorithm (SHA-1/MD5) is not accepted")
+	}
 	h := hashFn.New()
 	h.Write(content)
 	contentDigest := h.Sum(nil)
@@ -332,13 +350,25 @@ func verifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certi
 	if !ok || !bytes.Equal(md, contentDigest) {
 		return cert, certs, signingTime, errors.New("document digest does not match the signature (content was modified)")
 	}
+	// RFC 5652 §11.1: when signed attributes are present, a content-type
+	// attribute equal to the SignedData's eContentType must be among them.
+	if !signedContentTypeIs(si.SignedAttrs.Bytes, eci.ContentType) {
+		return cert, certs, signingTime, errors.New("signed content-type attribute is missing or does not match the eContentType")
+	}
+	// CAdES/ESS: when a signing-certificate attribute is present it must bind THIS
+	// signer certificate (its hash), not merely exist. pdf0 advertises checking
+	// the CAdES certificate binding, so enforce it rather than only noting its
+	// presence (audit C14).
+	if err := checkESSCertBinding(si.SignedAttrs.Bytes, cert); err != nil {
+		return cert, certs, signingTime, err
+	}
 
 	// The signature is computed over the DER of the signed attributes encoded as
 	// an explicit SET OF; in the SignerInfo they carry the [0] IMPLICIT tag, so
 	// re-tag the first byte to 0x31 (SET) before verifying.
 	signedDER := append([]byte(nil), si.SignedAttrs.FullBytes...)
 	signedDER[0] = 0x31
-	sigAlgo, ok := signatureAlgorithm(cert.PublicKeyAlgorithm.String(), hashFn)
+	sigAlgo, ok := resolveSignatureAlgorithm(si.SignatureAlgo.Algorithm, cert.PublicKeyAlgorithm.String(), hashFn)
 	if !ok {
 		return cert, certs, signingTime, errors.New("unsupported signature algorithm")
 	}
@@ -346,6 +376,101 @@ func verifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certi
 		return cert, certs, signingTime, fmt.Errorf("signature does not verify: %w", err)
 	}
 	return cert, certs, signingTime, nil
+}
+
+// oidRSAPSS is the RSASSA-PSS signature algorithm identifier (RFC 4055).
+var oidRSAPSS = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 10}
+
+// essCertID is RFC 5035 ESSCertID (v1, SHA-1 hash); issuerSerial is optional and
+// omitted here.
+type essCertID struct {
+	CertHash []byte
+}
+
+// signingCertificateV1 is RFC 5035 SigningCertificate (the policies field
+// omitted).
+type signingCertificateV1 struct {
+	Certs []essCertID
+}
+
+// signedContentTypeIs reports whether the signed attributes carry a content-type
+// attribute equal to want.
+func signedContentTypeIs(setBytes []byte, want asn1.ObjectIdentifier) bool {
+	rest := setBytes
+	for len(rest) > 0 {
+		var a attribute
+		var err error
+		rest, err = asn1.Unmarshal(rest, &a)
+		if err != nil {
+			return false
+		}
+		if a.Type.Equal(oidContentType) {
+			var oid asn1.ObjectIdentifier
+			if _, err := asn1.Unmarshal(a.Values.Bytes, &oid); err != nil {
+				return false
+			}
+			return oid.Equal(want)
+		}
+	}
+	return false
+}
+
+// checkESSCertBinding validates the ESS signing-certificate attribute, if
+// present, against cert: the attribute's certificate hash must equal the hash of
+// cert. Absence is permitted here (requiring it is a PAdES-baseline policy); a
+// present-but-mismatched attribute is a hard failure.
+func checkESSCertBinding(setBytes []byte, cert *x509.Certificate) error {
+	rest := setBytes
+	for len(rest) > 0 {
+		var a attribute
+		var err error
+		rest, err = asn1.Unmarshal(rest, &a)
+		if err != nil {
+			return nil
+		}
+		switch {
+		case a.Type.Equal(oidSigningCertificateV2):
+			var sc signingCertificateV2
+			if _, err := asn1.Unmarshal(a.Values.Bytes, &sc); err != nil || len(sc.Certs) == 0 {
+				return errors.New("malformed signing-certificate-v2 attribute")
+			}
+			sum := sha256.Sum256(cert.Raw)
+			if !bytes.Equal(sc.Certs[0].CertHash, sum[:]) {
+				return errors.New("signing-certificate-v2 does not match the signer certificate")
+			}
+			return nil
+		case a.Type.Equal(oidSigningCertificate):
+			var sc signingCertificateV1
+			if _, err := asn1.Unmarshal(a.Values.Bytes, &sc); err != nil || len(sc.Certs) == 0 {
+				return errors.New("malformed signing-certificate attribute")
+			}
+			sum := sha1.Sum(cert.Raw)
+			if !bytes.Equal(sc.Certs[0].CertHash, sum[:]) {
+				return errors.New("signing-certificate does not match the signer certificate")
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// resolveSignatureAlgorithm maps the SignerInfo's signature-algorithm OID and the
+// digest to an x509.SignatureAlgorithm. RSASSA-PSS is honoured (rather than being
+// forced to PKCS#1 v1.5, which made a valid PSS signature falsely fail to verify,
+// audit C36); otherwise it falls back to the public-key-algorithm mapping.
+func resolveSignatureAlgorithm(sigOID asn1.ObjectIdentifier, pubAlgo string, hash crypto.Hash) (x509.SignatureAlgorithm, bool) {
+	if sigOID.Equal(oidRSAPSS) {
+		switch hash {
+		case crypto.SHA256:
+			return x509.SHA256WithRSAPSS, true
+		case crypto.SHA384:
+			return x509.SHA384WithRSAPSS, true
+		case crypto.SHA512:
+			return x509.SHA512WithRSAPSS, true
+		}
+		return 0, false
+	}
+	return signatureAlgorithm(pubAlgo, hash)
 }
 
 // signingTimeFromAttrs extracts the signing-time signed attribute, or the zero
