@@ -9,7 +9,7 @@ Start from the question you have.
 | Pick a validator, or add a rule to one | [validators.md](validators.md) |
 | Sign a PDF, or decide whether a signature can be trusted | [signing.md](signing.md) |
 | Pull images out of a PDF, or fix a codec | [images.md](images.md) |
-| Use the `pdf0` command, or script around its exit codes | [cli.md](cli.md) |
+| Use the `cmd/pdf0` dev tool | [cli.md](cli.md) |
 | Work out why something failed | [troubleshooting.md](troubleshooting.md) |
 | Run the tests that a fresh clone skips | [testing.md](testing.md) |
 | Contribute a change | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
@@ -35,9 +35,11 @@ read, because that is the question with a wrong answer that compiles.
 **[images.md](images.md)** — reference plus explanation. The extraction API and
 its memory contract, the codec dispatch, the resource budgets.
 
-**[cli.md](cli.md)** — reference. Every command, flag and exit code of
-`cmd/pdf0`, with real captured output, and an explicit list of what the CLI does
-not expose.
+**[cli.md](cli.md)** — reference for `cmd/pdf0`, a small command-line front end
+used mainly for poking at files during development. pdf0 is a library first; this
+tool is not the supported surface and reaches only a fraction of the API. The doc
+records every command, flag and exit code with real captured output, and what the
+tool does not expose.
 
 **[troubleshooting.md](troubleshooting.md)** — how-to, organised by symptom.
 

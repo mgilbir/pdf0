@@ -1,5 +1,10 @@
 # The `pdf0` command-line tool
 
+**pdf0 is a library.** `cmd/pdf0` is a small command-line front end over it, useful for
+poking at files during development and for shell-scriptable checks, but it is not the
+supported surface and it reaches only a fraction of the API — if you are choosing between
+the two, use the library. This page documents the tool as it actually behaves.
+
 `cmd/pdf0` is a thin front end over a deliberately small slice of the pdf0 library:
 inspecting structure, running the PDF/A and PDF/UA-1 validators, adding or removing
 standard-security encryption, extracting plain text, applying the document-level PDF/A

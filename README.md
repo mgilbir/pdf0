@@ -48,12 +48,6 @@ go get github.com/mgilbir/pdf0
 - **Write incrementally** (`WriteIncremental`) and **build** a minimal
   conformant PDF/A document (`NewPDFADocument`).
 
-A command-line tool (`cmd/pdf0`) exposes a deliberately small slice of the
-above — `info`, `validate`, `ua`, `decrypt`, `encrypt`, `extract`, `repair` and
-`merge` — with exit codes that distinguish "this file has violations" from "the
-run failed". Signing, PDF/X, PDF/VT, PDF/R, DPart, Factur-X, PDF/A Level A,
-PDF/UA-2 and image extraction are library-only. See [docs/cli.md](docs/cli.md).
-
 ## Quick start
 
 Read, inspect, and re-serialize a PDF:
@@ -117,9 +111,14 @@ under `testdata/`). The round-trip tests need reference PDFs that are not
 committed; fetch them with `make refpdfs` (they self-skip when absent).
 
 [docs/](docs/README.md) is the documentation index: architecture, the validator
-family, signing, images, the CLI, troubleshooting, and the test data a fresh
-clone does not have. For the corpus-ratchet workflow and how to add a rule, see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+family, signing, images, fonts, XMP, encryption, troubleshooting, and the test
+data a fresh clone does not have. For the corpus-ratchet workflow and how to add
+a rule, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+`cmd/pdf0` is a small command-line front end used mainly for poking at files
+during development — `go run ./cmd/pdf0 -h`. pdf0 is a library first, and the
+tool reaches only a fraction of the API; it is documented in
+[docs/cli.md](docs/cli.md) but is not the supported surface.
 
 ## PDF/A conformance corpus
 
@@ -196,7 +195,7 @@ pdf0 is one flat Go package. The subsystems, and the doc that maps each:
 | Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | godoc + [troubleshooting.md](docs/troubleshooting.md#encrypted-files) — no subsystem doc yet |
 | Images and codecs | `imageextract.go`, `imagejpeg.go`, `imagecolor.go`, `imagemask.go`, `ccitt.go`, `mq.go`, `jbig2*.go`, `function.go`, `function_ps.go` | [images.md](docs/images.md) |
 | Text and pages | `text.go`, `pages.go` | [architecture.md](docs/architecture.md) |
-| Command-line tool | `cmd/pdf0` | [cli.md](docs/cli.md) |
+| Command-line front end (dev aid, not the supported surface) | `cmd/pdf0` | [cli.md](docs/cli.md) |
 
 Every file carries a header comment saying what it owns and which spec clause it
 implements; start there.
