@@ -30,6 +30,17 @@ func NewPDFADocumentWithInfo(level PDFALevel, title, author string) *Document {
 	catalog.Set("Pages", IndirectRef{Number: 2})
 	catalog.Set("Metadata", IndirectRef{Number: 3})
 	catalog.Set("OutputIntents", Array{IndirectRef{Number: 4}})
+	if level.isA() {
+		// A Level A file is a Tagged PDF with a logical structure tree. The empty
+		// page tree carries no content, so a minimal marked, empty structure tree
+		// satisfies the structural requirement (audit C19).
+		markInfo := &Dictionary{}
+		markInfo.Set("Marked", Boolean(true))
+		catalog.Set("MarkInfo", markInfo)
+		structTreeRoot := &Dictionary{}
+		structTreeRoot.Set("Type", Name("StructTreeRoot"))
+		catalog.Set("StructTreeRoot", structTreeRoot)
+	}
 
 	// Object 2: Pages (empty page tree)
 	pages := &Dictionary{}
@@ -87,41 +98,37 @@ func NewPDFADocumentWithInfo(level PDFALevel, title, author string) *Document {
 }
 
 func pdfaVersion(level PDFALevel) string {
-	switch level {
+	switch level.baseB() {
 	case PDFA1b:
 		return "1.4"
 	case PDFA2b, PDFA3b:
 		return "1.7"
-	case PDFA4:
-		return "2.0"
 	default:
 		return "2.0"
 	}
 }
 
 func pdfaPart(level PDFALevel) int {
-	switch level {
+	switch level.baseB() {
 	case PDFA1b:
 		return 1
 	case PDFA2b:
 		return 2
 	case PDFA3b:
 		return 3
-	case PDFA4:
-		return 4
 	default:
 		return 4
 	}
 }
 
 func pdfaConformance(level PDFALevel) string {
-	switch level {
-	case PDFA1b, PDFA2b, PDFA3b:
-		return "B"
-	case PDFA4:
+	switch {
+	case level.isA():
+		return "A"
+	case level == PDFA4:
 		return "" // PDF/A-4 has no conformance level
 	default:
-		return ""
+		return "B"
 	}
 }
 
@@ -221,8 +228,8 @@ func DefaultSRGBProfile() []byte {
 // real colour-management engine.
 func sRGBProfile(level PDFALevel) []byte {
 	version := 4.3
-	if level == PDFA1b {
-		version = 2.1
+	if level.baseB() == PDFA1b {
+		version = 2.1 // PDF/A-1 is based on PDF 1.4, which allows only ICC v2
 	}
 	data, err := buildSRGBProfile(version)
 	if err != nil {

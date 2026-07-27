@@ -2142,9 +2142,12 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 	xmp := decodeXMPToUTF8(decodeContentStream(doc, stream))
 	var errs []ValidationError
 
-	// Check pdfaid namespace URI
+	// Check pdfaid namespace URI. XML allows either quote style around the value,
+	// so accept both — matching only double quotes falsely flagged a legal
+	// single-quoted declaration (audit C33).
 	if strings.Contains(xmp, "pdfaid:") {
-		if !strings.Contains(xmp, `xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"`) {
+		const ns = "http://www.aiim.org/pdfa/ns/id/"
+		if !strings.Contains(xmp, `xmlns:pdfaid="`+ns+`"`) && !strings.Contains(xmp, `xmlns:pdfaid='`+ns+`'`) {
 			errs = append(errs, ValidationError{
 				Rule:    metadataClause("version", level),
 				Level:   level,

@@ -921,23 +921,28 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 	}
 
 	// Canonical prefix rule, checked on the raw packet text because XML
-	// parsing resolves prefixes away.
+	// parsing resolves prefixes away. XML permits either quote style around an
+	// attribute value, so match both — otherwise a single-quoted xmlns
+	// declaration evades the rule (audit C33).
 	for uri, want := range canonicalXMPPrefixes {
-		for rest := xmp; ; {
-			i := strings.Index(rest, `="`+uri+`"`)
-			if i < 0 {
-				break
+		for _, quote := range []string{`"`, `'`} {
+			needle := "=" + quote + uri + quote
+			for rest := xmp; ; {
+				i := strings.Index(rest, needle)
+				if i < 0 {
+					break
+				}
+				// Walk back over the prefix to the "xmlns:" marker.
+				j := i
+				for j > 0 && rest[j-1] != ':' && rest[j-1] != ' ' && rest[j-1] != '\t' && rest[j-1] != '\n' {
+					j--
+				}
+				prefix := rest[j:i]
+				if j > 6 && rest[j-1] == ':' && strings.HasSuffix(rest[:j-1], "xmlns") && prefix != want {
+					report("extension schema namespace %s must use prefix %q, found %q", uri, want, prefix)
+				}
+				rest = rest[i+1:]
 			}
-			// Walk back over the prefix to the "xmlns:" marker.
-			j := i
-			for j > 0 && rest[j-1] != ':' && rest[j-1] != ' ' && rest[j-1] != '\t' && rest[j-1] != '\n' {
-				j--
-			}
-			prefix := rest[j:i]
-			if j > 6 && rest[j-1] == ':' && strings.HasSuffix(rest[:j-1], "xmlns") && prefix != want {
-				report("extension schema namespace %s must use prefix %q, found %q", uri, want, prefix)
-			}
-			rest = rest[i+1:]
 		}
 	}
 
