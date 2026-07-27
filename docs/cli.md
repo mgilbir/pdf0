@@ -294,8 +294,8 @@ Two encryption nuances the CLI flattens: `decrypt` is exactly `RemoveEncryption(
 `Write()` on a document unlocked at `Read` time — it cannot keep an `/Encrypt` dictionary
 while changing passwords; and `encrypt`'s `SetEncryption(user, owner)` exposes no
 permission bits, algorithm, or key-length choice (that is the library's full signature too).
-The README's claim that the CLI "wraps" the library's feature list is an overstatement: it
-wraps eight entry points and none of the rest.
+In short, the tool wraps eight entry points and none of the rest — which is why the README
+presents it as a development aid rather than the library's surface.
 
 ## Edge cases and surprises
 
