@@ -162,6 +162,13 @@ Known limitations:
   (`Document.Locked`): its structure parses, its strings and streams stay
   ciphertext, and `Write` passes the original bytes through verbatim rather than
   producing a corrupt file.
+- **`WriteSigned` currently fails on documents whose pages have content
+  streams.** The `/ByteRange` placeholder is located with a plain byte search
+  for `/Contents`, which finds a page's content-stream reference first, so
+  signing returns `signing: /ByteRange placeholder not found`. The same search
+  makes `WriteSignedIncremental` unable to add a second signature to an
+  already-signed file. Verification, `ValidatePAdES` and `WriteArchivalTimestamp`
+  are unaffected. See [docs/signing.md](docs/signing.md#limitations-and-edge-cases).
 - **`Write` regenerates, rather than preserves, the file layout.** A file read
   from a cross-reference stream is written back as one, with compressible
   objects repacked into an object stream (`/ObjStm`); a traditional-table file

@@ -169,7 +169,7 @@ baseline verdict. For trust, `VerifySignatures` builds no chain at all — you m
 call `VerifySignaturesWithRoots(raw, roots)` and check `TrustedChain` / `ChainErr`,
 which are reported separately and never affect `Valid`. For long-term validation
 (PAdES B-T through B-LTA, timestamps, revocation) see
-the `SignatureResult` godoc in `signatures.go`.
+[docs/signing.md](signing.md).
 
 ## An image came back with `Decoded=false`
 

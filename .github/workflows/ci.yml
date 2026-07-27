@@ -44,3 +44,4 @@ jobs:
           test -s output.pdf
           rm output.pdf
           go run ./examples/extract_images
+          go run ./examples/sign_verify
