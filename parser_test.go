@@ -328,22 +328,24 @@ func TestParseIndirectObject(t *testing.T) {
 	}
 }
 
-func TestParseIndirectObjectViaParseObject(t *testing.T) {
+// ParseObject parses values and references, not object DEFINITIONS: an
+// "N G obj … endobj" only ever reaches it in a value position (array element or
+// dictionary value), where it is malformed and rejected (audit C31). A top-level
+// definition is parsed via ParseIndirectObject.
+func TestParseObjectRejectsDefinition(t *testing.T) {
 	input := "1 0 obj\n42\nendobj"
-	p := NewParser([]byte(input))
-	obj, err := p.ParseObject()
+	if _, err := NewParser([]byte(input)).ParseObject(); err == nil {
+		t.Error("ParseObject must reject an indirect object definition (use ParseIndirectObject)")
+	}
+	obj, err := NewParser([]byte(input)).ParseIndirectObject()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ParseIndirectObject: %v", err)
 	}
-	iobj, ok := obj.(*IndirectObject)
-	if !ok {
-		t.Fatalf("expected *IndirectObject, got %T", obj)
+	if obj.Number != 1 || obj.Generation != 0 {
+		t.Errorf("expected 1 0 obj, got %d %d obj", obj.Number, obj.Generation)
 	}
-	if iobj.Number != 1 || iobj.Generation != 0 {
-		t.Errorf("expected 1 0 obj, got %d %d obj", iobj.Number, iobj.Generation)
-	}
-	if i, ok := iobj.Value.(Integer); !ok || int64(i) != 42 {
-		t.Errorf("expected Integer 42, got %v", iobj.Value)
+	if i, ok := obj.Value.(Integer); !ok || int64(i) != 42 {
+		t.Errorf("expected Integer 42, got %v", obj.Value)
 	}
 }
 

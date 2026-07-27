@@ -175,8 +175,13 @@ func (p *Parser) parseIntegerOrRef(tok Token) (Object, error) {
 		}
 
 		if tok3.Type == TokenObj {
-			// N G obj → indirect object definition
-			return p.ParseIndirectObject()
+			// "N G obj" is an indirect object DEFINITION, valid only at the top
+			// level, where ParseIndirectObject consumes it. Reaching it here means
+			// it appeared as a nested value — an array element or dictionary value —
+			// which is malformed; reject it rather than build a surprising
+			// *IndirectObject into the object graph that Resolve, the serializer,
+			// and the validators do not expect for a nested value (audit C31).
+			return nil, fmt.Errorf("unexpected indirect object definition at offset %d (nested 'N G obj')", tok3.Offset)
 		}
 	}
 
