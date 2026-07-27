@@ -1269,11 +1269,16 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 
 // objNumForDict returns the object number under which dict is stored, or 0 if
 // it is a direct dictionary with no indirect identity.
+// objNumForDict returns the object number whose value is dict, or 0 when dict has
+// no indirect identity. It delegates to the cached (*Document).dictObjNum so that
+// the many per-font / per-halftone lookups in a validation run share one reverse
+// index instead of each rescanning the whole object table — which was quadratic
+// on a document with hundreds of thousands of objects (audit C34). The 0-on-miss
+// convention here matches the "unknown object" sentinel used in
+// ValidationError.Object; dictObjNum itself reports -1 on miss.
 func objNumForDict(doc *Document, dict *Dictionary) int {
-	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*Dictionary); ok && d == dict {
-			return num
-		}
+	if n := doc.dictObjNum(dict); n >= 0 {
+		return n
 	}
 	return 0
 }

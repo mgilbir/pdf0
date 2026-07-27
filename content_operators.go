@@ -288,7 +288,11 @@ var builtinColorSpaceName = map[string]bool{
 	"DeviceGray": true, "DeviceRGB": true, "DeviceCMYK": true, "Pattern": true,
 }
 
-// resolveObjNum returns the object number of an indirect reference, or 0.
+// resolveObjNum returns the object number carried by an indirect reference, or 0
+// for a direct object (which has no indirect identity). This is reference-number
+// extraction, distinct from (*Document).dictObjNum / objNumForDict, which scan
+// the object table for a dictionary's identity; callers that already hold the
+// reference use this to avoid the scan.
 func resolveObjNum(doc *Document, o Object) int {
 	if ref, ok := o.(IndirectRef); ok {
 		return ref.Number

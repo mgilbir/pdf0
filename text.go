@@ -351,21 +351,14 @@ func scanContentWord(data []byte, i int) (string, int) {
 	return string(data[start:i]), i
 }
 
-// skipInlineImage steps past a BI…ID…EI inline image.
+// skipContentInlineImage steps past a BI…ID…EI inline image, given i positioned
+// just after the BI operator. It delegates to skipInlineImage — the single,
+// robust skipper — which parses the parameter dictionary and honors a declared
+// /L (or /Length) so binary sample data that happens to contain the bytes "EI"
+// does not truncate the image early and spew the rest as bogus tokens (audit
+// C35; the previous whitespace-delimited-EI search ignored /L).
 func skipContentInlineImage(data []byte, i int) int {
-	if idx := indexKeyword(data, i, "EI"); idx >= 0 {
-		return idx + 2
-	}
-	return len(data)
-}
-
-func indexKeyword(data []byte, from int, kw string) int {
-	for i := from; i+len(kw) <= len(data); i++ {
-		if string(data[i:i+len(kw)]) == kw &&
-			(i == 0 || isContentSpace(data[i-1])) &&
-			(i+len(kw) == len(data) || isContentSpace(data[i+len(kw)])) {
-			return i
-		}
-	}
-	return -1
+	pos := i
+	skipInlineImage(data, &pos)
+	return pos
 }
