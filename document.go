@@ -584,9 +584,22 @@ func (d *Document) Write(w io.Writer) error {
 	}
 	// Object number 0 is reserved as the free-list head (ISO 32000-1 7.5.4); it
 	// cannot be represented as an in-use object. Refuse rather than silently
-	// dropping it from the written file (audit C16).
+	// dropping it from the written file (audit C16). A negative number is not
+	// representable at all — ISO 32000-2 §7.3.10 makes the object number a
+	// positive integer — and can only come from a caller (or a bug) writing into
+	// Objects under an index that is not an object number, so it is refused here
+	// too rather than emitted as a "-1 0 obj" no reader should accept.
 	if _, ok := d.Objects[0]; ok {
 		return fmt.Errorf("object number 0 is reserved and cannot be written")
+	}
+	worst := 0
+	for num := range d.Objects {
+		if num < worst {
+			worst = num
+		}
+	}
+	if worst < 0 {
+		return fmt.Errorf("object number %d is not a valid object number (ISO 32000-2 7.3.10 requires a positive integer)", worst)
 	}
 	// A broken object stream left some objects unmaterialised during Read; the
 	// document may reference them, so writing would emit dangling references

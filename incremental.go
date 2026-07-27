@@ -33,6 +33,15 @@ func (d *Document) WriteIncremental(w io.Writer, original []byte, changed []int)
 	if len(changed) == 0 {
 		return errors.New("incremental update with no changed objects")
 	}
+	// Object numbers are positive integers (ISO 32000-2 §7.3.10); 0 is reserved
+	// as the free-list head. Either would be written into the appended body and
+	// its xref subsection as a well-formed-looking but invalid entry, so refuse
+	// rather than produce a file no conforming reader should accept.
+	for _, num := range changed {
+		if num <= 0 {
+			return fmt.Errorf("incremental: %d is not a valid object number (ISO 32000-2 7.3.10 requires a positive integer)", num)
+		}
+	}
 	prevXref, err := findStartXref(original)
 	if err != nil {
 		return fmt.Errorf("incremental: locating the original startxref: %w", err)

@@ -217,6 +217,10 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 	if page == nil {
 		return nil, nil, errors.New("signing: document has no page to attach the signature to")
 	}
+	catNum, pageNum, err := d.signingObjNums("signing", catalog, page)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	clone := &Document{
 		Version:        d.Version,
@@ -261,7 +265,6 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 	pageClone := page.Clone()
 	annots, _ := d.Resolve(pageClone.Get("Annots")).(Array)
 	pageClone.Set("Annots", append(append(Array{}, annots...), IndirectRef{Number: fieldNum}))
-	pageNum := d.dictObjNum(page)
 	clone.Objects[pageNum] = &IndirectObject{Number: pageNum, Value: pageClone}
 
 	changed := []int{sigNum, fieldNum, pageNum}
@@ -301,7 +304,6 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 		clone.Objects[formNum] = &IndirectObject{Number: formNum, Value: acroForm}
 		catClone := catalog.Clone()
 		catClone.Set("AcroForm", IndirectRef{Number: formNum})
-		catNum := d.dictObjNum(catalog)
 		clone.Objects[catNum] = &IndirectObject{Number: catNum, Value: catClone}
 		changed = append(changed, formNum, catNum)
 	}
@@ -412,6 +414,36 @@ func (d *Document) pageRef(catalog *Dictionary) Object {
 		return kids[0]
 	}
 	return Null{}
+}
+
+// signingObjNums reports the object numbers of the document catalog and of the
+// page a signature or document time-stamp widget is attached to, refusing a
+// document in which either is a direct object. what names the caller ("signing",
+// "timestamp") for the error message.
+//
+// Both dictionaries are rewritten when a field is added — the page gains the
+// widget in its /Annots, the catalog gains an /AcroForm reference or a /DSS —
+// and an object with no number of its own cannot be rewritten: an incremental
+// update supersedes objects by number, so there would be nothing to supersede
+// and the new value would be dropped on the floor (or, worse, written under the
+// -1 that dictObjNum reports on a miss). The alternative to refusing is to
+// promote the structure to a fresh indirect object, which is what happens to a
+// direct /AcroForm below — but that is right there only because a direct
+// /AcroForm is legal and only the catalog points at it. A direct catalog or page
+// is malformed: ISO 32000-2 §7.5.5 requires the trailer /Root to be an indirect
+// reference and §7.7.3.2 requires every page-tree /Kids entry to be one. Rather
+// than silently repair a broken file — and change the identity of a structure
+// other objects may already reference — signing reports it.
+func (d *Document) signingObjNums(what string, catalog, page *Dictionary) (catNum, pageNum int, err error) {
+	catNum = d.dictObjNum(catalog)
+	if catNum < 0 {
+		return 0, 0, fmt.Errorf("%s: the document catalog is a direct object, so it cannot be updated; ISO 32000-2 §7.5.5 requires the trailer /Root to be an indirect reference", what)
+	}
+	pageNum = d.dictObjNum(page)
+	if pageNum < 0 {
+		return 0, 0, fmt.Errorf("%s: the first page is a direct object, so it cannot be updated; ISO 32000-2 §7.7.3.2 requires the page tree's /Kids entries to be indirect references", what)
+	}
+	return catNum, pageNum, nil
 }
 
 // dictObjNum finds the object number whose value is the given dictionary. During
