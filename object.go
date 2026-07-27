@@ -2,6 +2,18 @@ package pdf0
 
 import "fmt"
 
+// This file defines the object model of ISO 32000-2 7.3: the Object interface
+// and every value type a PDF document is built from. It is data only — no
+// parsing, no serialization, no document-level resolution of references.
+//
+// Two representation choices are load-bearing for round-tripping. Dictionary
+// holds parallel key and value slices rather than a map, so key order is
+// preserved and duplicate keys stay representable; String.IsHex records which of
+// the two syntactic forms a string arrived in. Dictionary's lookup index is a
+// lazily built cache owned by that Dictionary: copying a Dictionary by value and
+// then mutating both copies is unsupported, exactly as it already is for the
+// shared Keys/Values backing arrays.
+
 // Object is the interface all PDF objects implement.
 type Object interface {
 	pdfObject() // marker method

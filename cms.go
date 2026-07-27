@@ -2,6 +2,14 @@ package pdf0
 
 import "encoding/asn1"
 
+// This file is a deliberately shallow reader of CMS/PKCS#7 SignedData
+// (RFC 5652), covering only the structural questions PDF/A signature validation
+// asks of a /Contents blob — is it SignedData at all, does it embed a
+// certificate, how many SignerInfos does it hold — without verifying anything.
+// Cryptographic verification lives in signatures.go. Parsing never fails
+// loudly: an adbe.x509.rsa_sha1 signature stores a bare signature value rather
+// than CMS, so "not SignedData" is an ordinary answer here, not an error.
+
 // cmsSignedData summarizes the parts of a PKCS#7/CMS SignedData blob (RFC 5652)
 // that PDF/A signature validation cares about.
 type cmsSignedData struct {

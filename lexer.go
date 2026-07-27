@@ -6,6 +6,17 @@ import (
 	"io"
 )
 
+// This file implements the tokenizer: the byte-level scanner over an in-memory
+// PDF that yields the tokens the parser consumes — numbers, names, literal and
+// hex strings, delimiters and the structural keywords (ISO 32000-2 7.2 lexical
+// conventions, 7.3 object syntax). It builds no objects and does no look-ahead;
+// the parser owns both.
+//
+// It runs directly on untrusted bytes, and a bad byte offset drops it into the
+// middle of binary stream data, so whitespace and comment skipping is bounded by
+// maxTokenGap: without that bound a stray '%' inside a stream reads as a comment
+// running to end of file, making parsing quadratic in the file size.
+
 // TokenType identifies the type of a lexer token.
 type TokenType int
 

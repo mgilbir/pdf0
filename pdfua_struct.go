@@ -1,5 +1,13 @@
 package pdf0
 
+// This file owns the structure-tree side of PDF/UA validation: element
+// parent/child nesting (ISO 14289-1 7.2), Table/L/TOC container
+// well-formedness (ISO 32000-1 14.8.4.3), heading strength (7.4.4), Note
+// identifiers (7.9), /Suspects, and the UA-1 header version. Types are
+// compared only after /RoleMap resolution, and the tree is flattened once per
+// run into a cached pre-order list so each check iterates that rather than
+// re-descending the tree.
+
 // Structure-element nesting constraints from the veraPDF PDF/UA-1 profile
 // (clause 7.2). allowedParents maps a child type to the parent types that may
 // contain it; allowedChildren maps a parent type to the only child types it may

@@ -6,6 +6,19 @@ import (
 	"sort"
 )
 
+// This file implements the write side of object streams (ISO 32000-2 7.5.7):
+// packing eligible objects into /Type /ObjStm containers and deciding which
+// objects may be packed at all. It runs only when a document is written back
+// with a cross-reference stream; a traditional table means no packing.
+//
+// The exclusions carry the weight. Streams and non-zero generations cannot be
+// packed by the format; the /Encrypt dictionary and everything reachable from
+// it must not be, because the security handler consults them while reading,
+// before object streams are materialized; and an indirect /Length target has to
+// stay individually addressable so Write can correct its value after encryption
+// changes the data length. Containers are split to stay under a size the reader
+// will still accept.
+
 // objStmMaxRaw bounds one object stream's decompressed (index + bodies) size.
 // A reader caps flate output at maxDecodeSize (100 MB), so a container whose
 // decompressed size exceeds that would be written but rejected on the next read,

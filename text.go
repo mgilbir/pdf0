@@ -5,6 +5,13 @@ import (
 	"strings"
 )
 
+// This file implements text extraction: the visible text of a whole document
+// or of a single page, decoded through each font's ToUnicode CMap (ISO 32000-2
+// clause 9.10.3) and recursing into invoked form XObjects. It carries its own
+// lenient content-stream tokenizer, distinct from the validator's, because
+// extraction must survive a malformed stream rather than diagnose it. There is
+// no layout model, so the output is approximate rather than faithful.
+
 // ExtractText returns the visible text of every page in reading order, pages
 // separated by a form feed. Text is decoded through each font's ToUnicode CMap;
 // glyphs without a ToUnicode mapping are dropped. Layout is approximate: line

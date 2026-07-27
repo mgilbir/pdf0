@@ -8,6 +8,15 @@ import (
 	"sort"
 )
 
+// This file implements incremental update (ISO 32000-2 7.5.6): appending a new
+// body, cross-reference section and trailer to a file rather than rewriting it.
+// The original bytes are copied verbatim and never re-serialized, which is the
+// entire point — it is what keeps an existing digital signature over them valid
+// and lets the update be undone by truncation.
+//
+// The appended section is always a traditional table chaining back through
+// /Prev, whatever kind the original used; encrypted documents are refused.
+
 // WriteIncremental writes an incremental update: the original file bytes verbatim
 // followed by only the objects listed in changed, a new cross-reference section
 // whose /Prev chains back to the original, and a new trailer. The original bytes

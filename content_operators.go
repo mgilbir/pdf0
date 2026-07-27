@@ -2,6 +2,20 @@ package pdf0
 
 import "fmt"
 
+// This file implements the PDF/A rules that are decided by reading content
+// streams: the operator whitelist and rendering-intent operand (ISO 19005
+// 6.2.2 over ISO 32000-1 Annex A Table A.1), resolution of named resources
+// invoked by Do/sh/gs/cs/CS/Tf, the prohibition on drawn PostScript XObjects
+// (6.2.5 at PDF/A-1, 6.2.9 later), the Annex C operand limits (6.1.12 /
+// 6.1.13) and the PDF/A-4 ICC profile-identity rule (6.2.4.2).
+//
+// All of it follows the executed-content model: only content that actually
+// reaches the page is scanned — page /Contents, annotation appearance streams,
+// visibly rendered Type 3 glyph procedures, and the form XObjects and tiling
+// patterns those invoke by name. A stream that nothing invokes cannot violate
+// a rendering rule, and the corpus contains conforming files that rely on
+// this (an undefined operator inside an uninvoked form must not be reported).
+
 // contentOperators is the set of operators permitted in PDF content streams
 // (ISO 32000-1 Annex A, Table A.1). PDF/A forbids any operator outside this
 // set, even inside a BX/EX compatibility section. PDF 2.0 (ISO 32000-2)

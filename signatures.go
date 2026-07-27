@@ -16,6 +16,19 @@ import (
 	"time"
 )
 
+// This file verifies PDF digital signatures (ISO 32000-2 §12.8): it assembles
+// the bytes named by the signature's /ByteRange, checks them against the
+// CMS/PKCS#7 SignedData in /Contents (RFC 5652, plus the ESS/CAdES signed
+// attributes PAdES relies on), and verifies the signature with the embedded
+// certificate. It also holds the SignedData encoder the signing path uses, so
+// producing and verifying share one model of the structure.
+//
+// Two things must stay front of mind. Everything decoded here is
+// attacker-controlled DER from an untrusted file, so each step fails closed
+// rather than trusting a field. And a cryptographically valid signature is not
+// the same claim as an unmodified document: the digest says nothing about bytes
+// outside the signed range, so coverage is established separately.
+
 // SignatureResult reports the outcome of verifying one signature field.
 //
 // Valid and CoversWholeDocument are independent and must both be consulted:

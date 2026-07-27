@@ -10,6 +10,19 @@ import (
 	"io"
 )
 
+// This file produces signed PDFs (ISO 32000-2 §12.8). Signing is inherently a
+// two-pass operation: a signature field is added with placeholder /ByteRange
+// and a fixed-size hex /Contents, the document is serialized, and only then are
+// the real offsets patched in and /Contents filled with the detached CMS built
+// in signatures.go — the offsets cannot be known before the bytes exist.
+//
+// The patching is byte-exact by necessity. /ByteRange must leave exactly one
+// gap and that gap must be exactly the /Contents hex string, or a verifier will
+// find file bytes that no signature covers. Adding a signature to a document
+// that already has one must go through the incremental path, which appends the
+// new objects and reproduces the earlier bytes verbatim; a full rewrite would
+// invalidate the existing signature.
+
 // sigContentsBytes is the reserved size of the /Contents placeholder (the CMS
 // signature is hex-encoded into it). Ample for an RSA-2048 or ECDSA signature
 // plus the certificate chain.

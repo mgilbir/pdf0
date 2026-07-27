@@ -6,6 +6,20 @@ import (
 	"strconv"
 )
 
+// This file implements the recursive-descent parser that turns lexer tokens
+// into Object values, including the three-token look-ahead that separates
+// "N G R" (indirect reference) from "N G obj" (object definition) and from a
+// plain integer. Stream-body extraction (ISO 32000-1 7.3.8.1) is the delicate
+// part: a declared /Length is trusted only when endstream really follows it, an
+// indirect /Length is resolved through the cross-reference table when the caller
+// supplies a resolver, and only failing both does the code fall back to
+// searching for the endstream keyword — a search that over-reads pathologically
+// on binary data.
+//
+// Input is untrusted: recursion is depth-capped (maxParseDepth), and large
+// dictionaries switch to a name index so duplicate-key elimination stays off an
+// O(n^2) path.
+
 // maxParseDepth bounds recursion through nested arrays and dictionaries so that
 // adversarial input (e.g. millions of nested '[') cannot exhaust the goroutine
 // stack, which would abort the process uncatchably. Real PDFs nest only a
