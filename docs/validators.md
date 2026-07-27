@@ -21,7 +21,7 @@ and does not promise, or before adding a rule.
 | Order-X container | `ValidateOrderX(doc, raw)` | `OrderXResult` | **no** — see below |
 
 Signature and PAdES assessment are `*Document` methods with their own result
-types; see `signatures.go` and `pades.go`.
+types; see [signing.md](signing.md).
 
 ```mermaid
 flowchart TD
