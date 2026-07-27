@@ -27,8 +27,15 @@ func ValidatePDFUA2(d *Document) []UAViolation {
 	out := validatePDFUA(d, "2")
 
 	// PDF/UA-2 is defined against PDF 2.0.
-	if maj, _, ok := parsePDFVersion(d.Version); ok && maj != 2 {
-		out = append(out, UAViolation{"4", fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %s", d.Version), 0})
-	}
+	out = append(out, runUACheck(func() []UAViolation {
+		if maj, _, ok := parsePDFVersion(d.Version); ok && maj != 2 {
+			return []UAViolation{{"4", fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %s", d.Version), 0}}
+		}
+		return nil
+	})...)
+
+	// validatePDFUA sorted its own findings; re-sort now that the UA-2 rule has
+	// appended to them (audit C27).
+	sortViolations(out)
 	return out
 }

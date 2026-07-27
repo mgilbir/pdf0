@@ -58,11 +58,19 @@ type OrderXResult struct {
 }
 
 // ValidateOrderX checks whether doc is a conforming Order-X order container.
-func ValidateOrderX(doc *Document, rawData []byte) OrderXResult {
-	var res OrderXResult
+func ValidateOrderX(doc *Document, rawData []byte) (res OrderXResult) {
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, formalis.Violation{Rule: rule, Message: msg, Object: obj})
 	}
+
+	// One recover boundary at the entry point, and a deterministic order on the
+	// way out — as in ValidateFacturX, whose structure this mirrors (audit C27).
+	defer func() {
+		if r := recover(); r != nil {
+			add(internalRule, internalMessage(r), 0)
+		}
+		sortFormalisViolations(res.Violations)
+	}()
 
 	// An Order-X file shall be PDF/A-3 (validated at level B; the A-vs-B
 	// conformance-letter difference is suppressed, as for Factur-X).

@@ -7,18 +7,20 @@ promise, or before adding a rule.
 Every validator is **read-only**: each installs its per-run cache on a shallow
 copy, so the caller's document is never mutated and the same document can be
 validated concurrently (`TestValidateConcurrentSameDoc`, `TestUAValidationCacheIsolation`).
-Two properties are **PDF/A-only**, and it is worth knowing which:
 
-- **Panic safety.** Only the PDF/A engine runs its checks behind `runCheck`'s
-  `recover()` boundary. `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`,
-  `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`,
-  `ValidateFacturX` and `ValidateOrderX` call their checks directly, so a bug or
-  an adversarial structure panics into the caller. Wrap them yourself if you
-  validate untrusted files. (Tracked as C27 in the 2026-07-26 codebase audit.)
-- **Deterministic order.** `ValidatePDFABytes` sorts by rule, object and message
-  before returning. The others return findings in discovery order, and several
-  iterate `Document.Objects` — a Go map — so their order varies between runs.
-  Sort before diffing or snapshotting.
+Two further properties hold across the family:
+
+- **Panic safety.** Every check runs behind a `recover()` boundary — `runCheck`
+  for PDF/A, the helpers in `validator_guard.go` for the rest. A check that
+  panics on hostile input is reported as a finding with the rule `internal`
+  rather than crashing the caller, and findings collected before the panic
+  survive. The honest limit, the same one `runCheck` has always carried: a stack
+  overflow from unbounded recursion is *not* recoverable, so those are prevented
+  at their source instead. (This closed C27 from the 2026-07-26 codebase audit;
+  before that, only PDF/A had a boundary.)
+- **Deterministic order.** Every validator sorts its findings by rule, then
+  object, then message before returning, so results are stable across runs and
+  safe to diff or snapshot.
 
 ## Pick an entry point
 

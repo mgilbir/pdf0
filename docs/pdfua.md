@@ -257,13 +257,10 @@ Shared machinery lives outside these files: `collectFontTextUsage` and the
 - **`/Headers` is not checked at all** — the `TH`/`TD` association array has no
   rule. `Scope` is checked for presence only, never for a valid value, and an
   `/ID` exempts a `TH` from needing either.
-- **No `recover()` boundary.** Unlike `ValidatePDFABytes`, which wraps every
-  check in `runCheck`, `validatePDFUA` calls its checks directly — a panic in a
-  UA check propagates to the caller — see the note in
-  [validators.md](validators.md), and C27 in the 2026-07-26 codebase audit.
-- **Findings are not sorted.** They come back in check order, and checks that
-  iterate `d.Objects` (annotations, embedded files) inherit Go's map ordering, so
-  order within those families varies run to run. `ValidatePDFABytes` sorts.
+- **A panic is contained, but a stack overflow is not.** Every UA check now runs
+  behind a `recover()` boundary and a panic is reported as an `internal` finding
+  (this closed C27). Unbounded recursion that overflows the stack remains fatal
+  and is guarded at the source instead — see [validators.md](validators.md).
 - **Two font rules are narrowed on purpose:** the `/CIDSet` arm of 7.21.4.2 is
   skipped unless `CIDToGIDMap` is `Identity`, and the simple-font `.notdef` case
   of 7.21.8 is unimplemented — both documented in-source as false-positive

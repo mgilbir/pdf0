@@ -43,11 +43,25 @@ type FacturXResult struct {
 
 // ValidateFacturX checks whether doc is a conforming Factur-X invoice container.
 // rawData is the original file bytes, needed for the PDF/A-3 byte-level checks.
-func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
-	var res FacturXResult
+func ValidateFacturX(doc *Document, rawData []byte) (res FacturXResult) {
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, formalis.Violation{Rule: rule, Message: msg, Object: obj})
 	}
+
+	// The container checks are one straight-line sequence rather than a list of
+	// independent checks, so they get a single recover boundary at the entry
+	// point: a panic on hostile input (here or in the embedded XML rule engine)
+	// becomes an "internal" finding instead of crashing the caller, and the
+	// findings reported before it are kept in the named result (audit C27). The
+	// deferred sort also runs on the normal path: the PDF/A-3 findings this
+	// composes are sorted, but the container ones are appended after, and the
+	// XML rule engine has its own order.
+	defer func() {
+		if r := recover(); r != nil {
+			add(internalRule, internalMessage(r), 0)
+		}
+		sortFormalisViolations(res.Violations)
+	}()
 
 	// A Factur-X file shall be PDF/A-3. pdf0 validates at level B; PDF/A-3 also
 	// permits level A (which only adds tagging), so the sole A-vs-B difference

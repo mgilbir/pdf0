@@ -35,18 +35,34 @@ func (v DPartViolation) Error() string {
 // (14.12.3), /NodeNameList depth (Table 408), and DPM key/value constraints
 // (14.12.4.2).
 func ValidateDParts(doc *Document) []DPartViolation {
-	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-	if cat == nil {
-		return nil
-	}
-	rootRef := cat.Get("DPartRoot")
-	if rootRef == nil {
-		return nil // no document part hierarchy; the feature is optional
-	}
-
 	var out []DPartViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, DPartViolation{Rule: rule, Message: msg, Object: obj})
+	}
+
+	// The hierarchy walk is one traversal rather than a list of independent
+	// checks, so it gets a single recover boundary at the entry point: a panic
+	// on hostile input becomes an "internal" finding instead of crashing the
+	// caller, and the findings reported before it are kept (audit C27).
+	runGuardedCheck(add, func() { validateDPartHierarchy(doc, add) })
+
+	// The walk visits map-ordered structures, so the output order is otherwise
+	// nondeterministic; sort for stable, diffable reports.
+	sortViolations(out)
+	return out
+}
+
+// validateDPartHierarchy runs the ISO 32000-2 14.12 checks, reporting through
+// add. It is the body of ValidateDParts, split out so the panic boundary and
+// the result ordering live in one place.
+func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) {
+	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
+	if cat == nil {
+		return
+	}
+	rootRef := cat.Get("DPartRoot")
+	if rootRef == nil {
+		return // no document part hierarchy; the feature is optional
 	}
 
 	// 14.12.2: the catalog /DPartRoot shall be an indirect reference to a
@@ -54,7 +70,7 @@ func ValidateDParts(doc *Document) []DPartViolation {
 	rootDict := doc.ResolveDict(rootRef)
 	if rootDict == nil {
 		add("14.12.2", "catalog /DPartRoot does not resolve to a dictionary", refNum(rootRef))
-		return out
+		return
 	}
 	rootDictNum := refNum(rootRef)
 	if t, ok := rootDict.Get("Type").(Name); ok && t != "DPartRoot" {
@@ -65,11 +81,11 @@ func ValidateDParts(doc *Document) []DPartViolation {
 	nodeRef := rootDict.Get("DPartRootNode")
 	if nodeRef == nil {
 		add("14.12.4.1", "DPartRoot is missing the required /DPartRootNode entry", rootDictNum)
-		return out
+		return
 	}
 	if doc.ResolveDict(nodeRef) == nil {
 		add("14.12.4.1", "DPartRoot /DPartRootNode does not resolve to a dictionary", rootDictNum)
-		return out
+		return
 	}
 
 	// Map each page object number to its reading-order index so leaf ranges can
@@ -239,8 +255,6 @@ func ValidateDParts(doc *Document) []DPartViolation {
 			}
 		}
 	}
-
-	return out
 }
 
 // validateDPM checks a document part metadata dictionary against ISO 32000-2

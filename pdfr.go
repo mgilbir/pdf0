@@ -60,31 +60,48 @@ func ValidatePDFR(d *Document) []PDFRViolation {
 		out = append(out, PDFRViolation{Rule: rule, Message: msg, Object: obj})
 	}
 
-	if d.Encrypted || d.Trailer.Get("Encrypt") != nil {
-		add("encryption", "a PDF/R file shall not be encrypted", 0)
-	}
-	if maj, _, ok := parsePDFVersion(d.Version); ok && maj != 2 {
-		add("version", fmt.Sprintf("PDF/R is defined for PDF 2.0; file declares %s", d.Version), 0)
-	}
+	// Every check runs under a recover boundary, so a panic on hostile input
+	// becomes an "internal" finding instead of crashing the caller, and one bad
+	// check (or one bad page) does not discard the others' findings (audit C27).
+	run := func(check func()) { runGuardedCheck(add, check) }
+
+	run(func() {
+		if d.Encrypted || d.Trailer.Get("Encrypt") != nil {
+			add("encryption", "a PDF/R file shall not be encrypted", 0)
+		}
+		if maj, _, ok := parsePDFVersion(d.Version); ok && maj != 2 {
+			add("version", fmt.Sprintf("PDF/R is defined for PDF 2.0; file declares %s", d.Version), 0)
+		}
+	})
 
 	cat := getCatalog(d)
 	if cat == nil {
 		add("structure", "document has no catalog", 0)
+		sortViolations(out)
 		return out
 	}
-	if xmp := documentXMP(d); xmp == "" {
-		add("metadata", "a PDF/R file requires an XMP metadata stream", 0)
-	} else if !strings.Contains(strings.ToLower(xmp), "pdf/r") && !strings.Contains(strings.ToLower(xmp), "pdfr") {
-		add("identification", "the XMP metadata does not identify the file as PDF/R", 0)
+	run(func() {
+		if xmp := documentXMP(d); xmp == "" {
+			add("metadata", "a PDF/R file requires an XMP metadata stream", 0)
+		} else if !strings.Contains(strings.ToLower(xmp), "pdf/r") && !strings.Contains(strings.ToLower(xmp), "pdfr") {
+			add("identification", "the XMP metadata does not identify the file as PDF/R", 0)
+		}
+	})
+
+	var pages []pageInfo
+	run(func() {
+		pages = collectPages(d, cat.Get("Pages"))
+		if len(pages) == 0 {
+			add("structure", "a PDF/R file shall have at least one page", 0)
+		}
+	})
+	for _, page := range pages {
+		run(func() { d.checkPDFRPage(page.dict, page.objNum, add) })
 	}
 
-	pages := collectPages(d, cat.Get("Pages"))
-	if len(pages) == 0 {
-		add("structure", "a PDF/R file shall have at least one page", 0)
-	}
-	for _, page := range pages {
-		d.checkPDFRPage(page.dict, page.objNum, add)
-	}
+	// The checks iterate map-ordered doc.Objects, so their concatenated output
+	// order is nondeterministic; sort for stable, diffable reports.
+	sortViolations(out)
 	return out
 }
 
