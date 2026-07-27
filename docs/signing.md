@@ -81,7 +81,7 @@ sequenceDiagram
         Note right of S: CoversWholeDocument requires exactly two segments,<br/>the first at offset 0, the second ending at EOF,<br/>and the single gap == the /Contents window (audit C12)
         S->>M: verifyCMS(/Contents, concatenated signed bytes)
         M-->>S: signer cert, embedded certs, signing time, error
-        Note right of M: digest, content-type and ESS binding checked;<br/>SHA-1/MD5 rejected. On error the result stops<br/>here: no revocation, no chain
+        Note right of M: digest, content-type and ESS binding checked,<br/>SHA-1/MD5 rejected. On error the result stops<br/>here — no revocation, no chain
         opt an issuer is found in the CMS or DSS /Certs, and the DSS holds material
             S->>R: CheckCertRevocation(cert, issuer, crls, ocsps)
             R-->>S: RevocationInfo
