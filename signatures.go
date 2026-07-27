@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -39,7 +40,19 @@ import (
 // rendered content changes (CoversWholeDocument == false). Use DocumentUnmodified
 // for the combined "signed and nothing was changed" verdict.
 type SignatureResult struct {
-	Field               string         // signature field name, if any
+	// Field is the FULLY QUALIFIED name of the signature field whose /V
+	// references this signature dictionary: the field's own /T partial name
+	// prefixed by the /T of every ancestor field, joined with "." (ISO 32000-2
+	// §12.7.4.2). The qualified name is what identifies a field uniquely in a
+	// document — a partial name is only unique among its siblings — so it is
+	// what a caller can display, log, or look the field up by. For the common
+	// flat form (a top-level field, as pdf0's own signing produces) it is just
+	// the partial name, e.g. "Signature1".
+	//
+	// It is empty when nothing names the signature: a bare signature dictionary
+	// that no field's /V points at, or a field chain in which neither the field
+	// nor any of its ancestors carries a /T.
+	Field               string
 	SignerCommonName    string         // Subject CN of the signing certificate
 	CoversWholeDocument bool           // the /ByteRange covers the whole file except the /Contents window
 	Valid               bool           // the signed bytes are intact and the signature verifies
@@ -105,19 +118,233 @@ func (d *Document) VerifySignatures(raw []byte) []SignatureResult {
 // intermediates), validating at the current time. The chain outcome is reported
 // in TrustedChain / ChainErr and does not affect Valid, which remains a statement
 // about the cryptographic integrity of the signed content.
+//
+// Results are ordered by the object number of the signature dictionary, which is
+// stable across runs (the objects are held in a map, whose iteration order is
+// not) and meaningful: in a document signed by successive incremental updates the
+// later signature is the later object.
 func (d *Document) VerifySignaturesWithRoots(raw []byte, roots *x509.CertPool) []SignatureResult {
+	sigs := d.documentSignatures(true)
+	names := d.signatureFieldNames(sigs)
 	var results []SignatureResult
-	for _, iobj := range d.Objects {
+	for _, s := range sigs {
+		res := d.verifyOneSignature(s.dict, raw, roots)
+		res.Field = names[s.num]
+		results = append(results, res)
+	}
+	return results
+}
+
+// signatureEntry is a signature dictionary together with the number of the
+// indirect object holding it.
+type signatureEntry struct {
+	num  int
+	dict *Dictionary
+}
+
+// documentSignatures returns the document's signature dictionaries — those
+// carrying both /ByteRange and /Contents, with a /Type of /Sig, /DocTimeStamp or
+// absent — ordered by object number, so every caller reports its results in the
+// same deterministic order rather than in Go map order.
+func (d *Document) documentSignatures(includeDocTimestamps bool) []signatureEntry {
+	nums := make([]int, 0, len(d.Objects))
+	for num := range d.Objects {
+		nums = append(nums, num)
+	}
+	sort.Ints(nums)
+	var out []signatureEntry
+	for _, num := range nums {
+		iobj := d.Objects[num]
+		if iobj == nil {
+			continue
+		}
 		dict, ok := iobj.Value.(*Dictionary)
 		if !ok || dict.Get("ByteRange") == nil || dict.Get("Contents") == nil {
 			continue
 		}
-		if t, _ := dict.Get("Type").(Name); t != "" && t != "Sig" && t != "DocTimeStamp" {
+		switch t, _ := dict.Get("Type").(Name); t {
+		case "", "Sig":
+		case "DocTimeStamp":
+			if !includeDocTimestamps {
+				continue
+			}
+		default:
 			continue
 		}
-		results = append(results, d.verifyOneSignature(dict, raw, roots))
+		out = append(out, signatureEntry{num: num, dict: dict})
 	}
-	return results
+	return out
+}
+
+// maxFieldTreeDepth caps the field-hierarchy walks below, so a /Kids or /Parent
+// chain in an untrusted document cannot drive unbounded recursion.
+const maxFieldTreeDepth = 64
+
+// signatureFieldNames maps the object number of each signature dictionary in
+// sigs to the fully qualified name (see SignatureResult.Field) of the form field
+// whose /V references it. Signatures no field points at are absent from the map.
+//
+// The interactive form's field tree is the authoritative source: walking it from
+// the catalog's /AcroForm /Fields downwards yields each field's ancestors, hence
+// its qualified name. Fields that no /AcroForm reaches (a widget attached only to
+// a page, which producers do emit) are picked up by a second pass over the
+// objects, reconstructing the ancestry from the field's own /Parent chain.
+func (d *Document) signatureFieldNames(sigs []signatureEntry) map[int]string {
+	if len(sigs) == 0 {
+		return nil
+	}
+	want := make(map[int]bool, len(sigs))
+	for _, s := range sigs {
+		want[s.num] = true
+	}
+	names := make(map[int]string, len(sigs))
+
+	if cat := getCatalog(d); cat != nil {
+		if form := d.ResolveDict(cat.Get("AcroForm")); form != nil {
+			fields, _ := d.Resolve(form.Get("Fields")).(Array)
+			seen := map[int]bool{}
+			for _, f := range fields {
+				d.collectFieldNames(f, "", seen, want, names, 0)
+			}
+		}
+	}
+	if len(names) == len(want) {
+		return names
+	}
+	// Second pass, in object-number order so the outcome does not depend on map
+	// iteration: any dictionary whose /V references a still-unnamed signature and
+	// that carries a name of its own somewhere up its /Parent chain.
+	nums := make([]int, 0, len(d.Objects))
+	for num := range d.Objects {
+		nums = append(nums, num)
+	}
+	sort.Ints(nums)
+	for _, num := range nums {
+		iobj := d.Objects[num]
+		if iobj == nil {
+			continue
+		}
+		fd, ok := iobj.Value.(*Dictionary)
+		if !ok || want[num] {
+			continue // not a dictionary, or the signature dictionary itself
+		}
+		v := fd.Get("V")
+		if v == nil {
+			continue
+		}
+		target := d.refObjNum(v)
+		if !want[target] {
+			continue
+		}
+		if _, done := names[target]; done {
+			continue
+		}
+		names[target] = d.qualifiedFieldName(fd)
+	}
+	return names
+}
+
+// collectFieldNames walks one branch of the field tree, accumulating the
+// qualified-name prefix, and records the name of every field whose /V references
+// a wanted signature dictionary.
+func (d *Document) collectFieldNames(node Object, prefix string, seen map[int]bool, want map[int]bool, names map[int]string, depth int) {
+	if depth > maxFieldTreeDepth {
+		return
+	}
+	if ref, ok := node.(IndirectRef); ok {
+		if seen[ref.Number] {
+			return // already visited: a cyclic or shared /Kids entry
+		}
+		seen[ref.Number] = true
+	}
+	fd := d.ResolveDict(node)
+	if fd == nil {
+		return
+	}
+	name := joinFieldName(prefix, d.fieldPartialName(fd))
+	if v := fd.Get("V"); v != nil {
+		if target := d.refObjNum(v); want[target] {
+			if _, done := names[target]; !done {
+				names[target] = name
+			}
+		}
+	}
+	kids, _ := d.Resolve(fd.Get("Kids")).(Array)
+	for _, k := range kids {
+		d.collectFieldNames(k, name, seen, want, names, depth+1)
+	}
+}
+
+// qualifiedFieldName builds a field's fully qualified name from its own /T and
+// those of its ancestors, following /Parent upwards.
+func (d *Document) qualifiedFieldName(field *Dictionary) string {
+	var parts []string
+	seen := map[*Dictionary]bool{}
+	for node, depth := field, 0; node != nil && depth <= maxFieldTreeDepth; depth++ {
+		if seen[node] {
+			break // cyclic /Parent chain
+		}
+		seen[node] = true
+		if part := d.fieldPartialName(node); part != "" {
+			parts = append(parts, part)
+		}
+		node = d.ResolveDict(node.Get("Parent"))
+	}
+	// parts is leaf-first; the qualified name reads root-first.
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+	return strings.Join(parts, ".")
+}
+
+// fieldPartialName returns a field's /T decoded to UTF-8 (it is a PDF text
+// string, so possibly UTF-16), or "" when it has none.
+func (d *Document) fieldPartialName(field *Dictionary) string {
+	t, ok := d.Resolve(field.Get("T")).(String)
+	if !ok {
+		return ""
+	}
+	return decodePDFTextString(t.Value)
+}
+
+// joinFieldName appends a partial name to a qualified-name prefix. A field with
+// no /T contributes nothing to the name of its descendants.
+func joinFieldName(prefix, part string) string {
+	switch {
+	case part == "":
+		return prefix
+	case prefix == "":
+		return part
+	}
+	return prefix + "." + part
+}
+
+// refObjNum returns the number of the object an entry refers to: the referenced
+// number for an indirect reference (following reference chains, as Resolve does),
+// or the holding object's number for a direct dictionary. It returns -1 when the
+// object has no indirect identity. Identity must be compared this way rather than
+// by pointer, because /V is normally an indirect reference to the signature
+// dictionary and not the dictionary itself.
+func (d *Document) refObjNum(o Object) int {
+	for hops := 0; hops < 64; hops++ {
+		ref, ok := o.(IndirectRef)
+		if !ok {
+			break
+		}
+		iobj := d.Objects[ref.Number]
+		if iobj == nil {
+			return ref.Number
+		}
+		if next, isRef := iobj.Value.(IndirectRef); isRef {
+			o = next
+			continue
+		}
+		return ref.Number
+	}
+	if dict, ok := o.(*Dictionary); ok {
+		return d.dictObjNum(dict)
+	}
+	return -1
 }
 
 func (d *Document) verifyOneSignature(sig *Dictionary, raw []byte, roots *x509.CertPool) SignatureResult {
