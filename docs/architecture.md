@@ -10,6 +10,7 @@ Each subsystem built on that core has its own map:
 | Subsystem | Doc |
 |-----------|-----|
 | The validator family (PDF/A, PDF/UA, PDF/X, PDF/VT, PDF/R, DPart, Factur-X) | [validators.md](validators.md) |
+| Image extraction and the codec stack | [images.md](images.md) |
 | Decisions that keep coming up | [adr/](adr/README.md) |
 
 ## The object model
