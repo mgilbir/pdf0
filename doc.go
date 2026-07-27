@@ -63,6 +63,12 @@
 // Violations are formalis.Violation values, an external type this package cannot
 // extend with the interface methods. See the Violation documentation.
 //
+// Every validator returns its findings in a deterministic order (by rule, then
+// object, then message) and runs its checks under a recover boundary: a check
+// that panics on hostile input is reported as a finding whose rule is
+// "internal" rather than crashing the caller. A stack overflow from unbounded
+// recursion is fatal and is not recoverable; those are prevented at the source.
+//
 // # Signatures
 //
 // Document.VerifySignatures reports one SignatureResult per signature. Read the

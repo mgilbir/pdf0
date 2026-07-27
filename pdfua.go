@@ -53,9 +53,115 @@ func validatePDFUA(doc *Document, part string) []UAViolation {
 	}
 	var v []UAViolation
 
+	// Every check runs under a recover boundary, so a panic on hostile input
+	// becomes an "internal" finding instead of crashing the caller, and one bad
+	// check does not discard its siblings' findings (audit C27).
+	run := func(check func() []UAViolation) { v = append(v, runUACheck(check)...) }
+	runCat := func(check func(*Dictionary) []UAViolation) {
+		run(func() []UAViolation { return check(cat) })
+	}
+
+	// 7.1 — tagged PDF, structure tree, shown title; 7.2 — default language.
+	runCat(doc.checkUACatalogBasics)
+
+	// 5 — the file must declare PDF/UA conformance in its XMP metadata.
+	run(func() []UAViolation { return doc.checkUAIdentifier(cat, part) })
+
+	// Matterhorn checkpoint 06: the document must have an XMP dc:title.
+	runCat(doc.checkUATitle)
+
+	// 7.21 — every font used for rendering must be embedded.
+	run(doc.checkUAFonts)
+	run(doc.checkUAFontDicts)
+	run(doc.checkUACMaps)
+	run(doc.checkUACMapWMode)
+	run(doc.checkUACIDSystemInfo)
+	run(doc.checkUAToUnicodeValues)
+	run(doc.checkUAFontSubsetGlyphs)
+	run(doc.checkUANotdefCID)
+
+	// 7.2 — text must map to Unicode (Matterhorn 10-001).
+	run(doc.checkUACharMapping)
+
+	// 7.18.3 — pages with annotations must use structure tab order.
+	run(doc.checkUATabOrder)
+
+	// 7.1 — structure types must be standard or mapped via /RoleMap.
+	runCat(doc.checkUARoleMap)
+	runCat(doc.checkUARoleMapIntegrity)
+	runCat(doc.checkUAStructParent)
+
+	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile.
+	runCat(doc.checkUAStructNesting)
+	runCat(doc.checkUATableListStructure)
+	runCat(doc.checkUATableGrid)
+	runCat(doc.checkUATableTHScope)
+
+	// 7.4 — heading levels must not be skipped; start at H1; one <H> per node.
+	runCat(doc.checkUAHeadings)
+	runCat(doc.checkUAOneHPerNode)
+
+	// 7.16 — encryption must not disable accessibility (Matterhorn 26).
+	run(doc.checkUASecurity)
+
+	// 7.18.2 — forbidden annotation subtypes (Matterhorn 28-007).
+	run(doc.checkUAAnnotations)
+
+	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
+	runCat(doc.checkUAXFA)
+
+	// 7.18.1 — a form field description belongs on the field, not its widgets.
+	runCat(doc.checkUAFieldDescription)
+
+	// 7.18.6.2 — media clip data dictionaries need /CT and /Alt.
+	run(doc.checkUAMediaClips)
+
+	// 7.20 — reference XObjects are forbidden; tagged forms painted once.
+	run(doc.checkUAReferenceXObjects)
+	run(doc.checkUAFormXObjectMCID)
+
+	// 7.2 — any present /Lang must be a valid BCP 47 tag.
+	runCat(doc.checkUALang)
+
+	// 7.10 — optional-content config; 7.11 — embedded-file specifications.
+	runCat(doc.checkUAOptionalContent)
+	run(doc.checkUAEmbeddedFiles)
+
+	// 6.1 — PDF/UA-1 requires a 1.x header. PDF/UA-2 is defined against
+	// PDF 2.0 instead; ValidatePDFUA2 checks that itself.
+	if part == "1" {
+		run(doc.checkUAHeaderVersion)
+	}
+
+	// 7.1 — Suspects must not be true; 7.4.4 strong/weak; 7.9 Note IDs.
+	runCat(doc.checkUASuspects)
+	runCat(doc.checkUAStrongWeak)
+	runCat(doc.checkUANotes)
+
+	// 7.1 — real content must be tagged or marked as an artifact (Matterhorn 01).
+	runCat(doc.checkUARealContent)
+
+	// 7.18 — annotation must sit under the right structure element (28-010/011).
+	runCat(doc.checkUAAnnotStructType)
+
+	// 7.3 — every figure needs alternate text.
+	runCat(doc.checkFigureAlt)
+
+	// The checks iterate map-ordered doc.Objects, so their concatenated output
+	// order is nondeterministic; sort for stable, diffable reports.
+	sortViolations(v)
+	return v
+}
+
+// checkUACatalogBasics covers the catalog-level PDF/UA requirements: the file
+// must be tagged (7.1) with a structure tree, specify a default natural
+// language (7.2), and display its title in the window title bar (7.1).
+func (d *Document) checkUACatalogBasics(cat *Dictionary) []UAViolation {
+	var v []UAViolation
+
 	// 7.1 — the file must be a tagged PDF.
-	mark := doc.ResolveDict(cat.Get("MarkInfo"))
-	if mark == nil || !doc.isTrue(mark.Get("Marked")) {
+	mark := d.ResolveDict(cat.Get("MarkInfo"))
+	if mark == nil || !d.isTrue(mark.Get("Marked")) {
 		v = append(v, UAViolation{"7.1", "document is not marked as tagged (/MarkInfo << /Marked true >>)", 0})
 	}
 	if cat.Get("StructTreeRoot") == nil {
@@ -63,98 +169,15 @@ func validatePDFUA(doc *Document, part string) []UAViolation {
 	}
 
 	// 7.2 — a default natural language must be set.
-	if s, _ := doc.Resolve(cat.Get("Lang")).(String); len(s.Value) == 0 {
+	if s, _ := d.Resolve(cat.Get("Lang")).(String); len(s.Value) == 0 {
 		v = append(v, UAViolation{"7.2", "document does not specify a default language (catalog /Lang)", 0})
 	}
 
 	// 7.1 — the document title must be shown in the window title bar.
-	vp := doc.ResolveDict(cat.Get("ViewerPreferences"))
-	if vp == nil || !doc.isTrue(vp.Get("DisplayDocTitle")) {
+	vp := d.ResolveDict(cat.Get("ViewerPreferences"))
+	if vp == nil || !d.isTrue(vp.Get("DisplayDocTitle")) {
 		v = append(v, UAViolation{"7.1", "/ViewerPreferences /DisplayDocTitle must be true", 0})
 	}
-
-	// 5 — the file must declare PDF/UA conformance in its XMP metadata.
-	v = append(v, doc.checkUAIdentifier(cat, part)...)
-
-	// Matterhorn checkpoint 06: the document must have an XMP dc:title.
-	v = append(v, doc.checkUATitle(cat)...)
-
-	// 7.21 — every font used for rendering must be embedded.
-	v = append(v, doc.checkUAFonts()...)
-	v = append(v, doc.checkUAFontDicts()...)
-	v = append(v, doc.checkUACMaps()...)
-	v = append(v, doc.checkUACMapWMode()...)
-	v = append(v, doc.checkUACIDSystemInfo()...)
-	v = append(v, doc.checkUAToUnicodeValues()...)
-	v = append(v, doc.checkUAFontSubsetGlyphs()...)
-	v = append(v, doc.checkUANotdefCID()...)
-
-	// 7.2 — text must map to Unicode (Matterhorn 10-001).
-	v = append(v, doc.checkUACharMapping()...)
-
-	// 7.18.3 — pages with annotations must use structure tab order.
-	v = append(v, doc.checkUATabOrder()...)
-
-	// 7.1 — structure types must be standard or mapped via /RoleMap.
-	v = append(v, doc.checkUARoleMap(cat)...)
-	v = append(v, doc.checkUARoleMapIntegrity(cat)...)
-	v = append(v, doc.checkUAStructParent(cat)...)
-
-	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile.
-	v = append(v, doc.checkUAStructNesting(cat)...)
-	v = append(v, doc.checkUATableListStructure(cat)...)
-	v = append(v, doc.checkUATableGrid(cat)...)
-	v = append(v, doc.checkUATableTHScope(cat)...)
-
-	// 7.4 — heading levels must not be skipped; start at H1; one <H> per node.
-	v = append(v, doc.checkUAHeadings(cat)...)
-	v = append(v, doc.checkUAOneHPerNode(cat)...)
-
-	// 7.16 — encryption must not disable accessibility (Matterhorn 26).
-	v = append(v, doc.checkUASecurity()...)
-
-	// 7.18.2 — forbidden annotation subtypes (Matterhorn 28-007).
-	v = append(v, doc.checkUAAnnotations()...)
-
-	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
-	v = append(v, doc.checkUAXFA(cat)...)
-
-	// 7.18.1 — a form field description belongs on the field, not its widgets.
-	v = append(v, doc.checkUAFieldDescription(cat)...)
-
-	// 7.18.6.2 — media clip data dictionaries need /CT and /Alt.
-	v = append(v, doc.checkUAMediaClips()...)
-
-	// 7.20 — reference XObjects are forbidden; tagged forms painted once.
-	v = append(v, doc.checkUAReferenceXObjects()...)
-	v = append(v, doc.checkUAFormXObjectMCID()...)
-
-	// 7.2 — any present /Lang must be a valid BCP 47 tag.
-	v = append(v, doc.checkUALang(cat)...)
-
-	// 7.10 — optional-content config; 7.11 — embedded-file specifications.
-	v = append(v, doc.checkUAOptionalContent(cat)...)
-	v = append(v, doc.checkUAEmbeddedFiles()...)
-
-	// 6.1 — PDF/UA-1 requires a 1.x header. PDF/UA-2 is defined against
-	// PDF 2.0 instead; ValidatePDFUA2 checks that itself.
-	if part == "1" {
-		v = append(v, doc.checkUAHeaderVersion()...)
-	}
-
-	// 7.1 — Suspects must not be true; 7.4.4 strong/weak; 7.9 Note IDs.
-	v = append(v, doc.checkUASuspects(cat)...)
-	v = append(v, doc.checkUAStrongWeak(cat)...)
-	v = append(v, doc.checkUANotes(cat)...)
-
-	// 7.1 — real content must be tagged or marked as an artifact (Matterhorn 01).
-	v = append(v, doc.checkUARealContent(cat)...)
-
-	// 7.18 — annotation must sit under the right structure element (28-010/011).
-	v = append(v, doc.checkUAAnnotStructType(cat)...)
-
-	// 7.3 — every figure needs alternate text.
-	v = append(v, doc.checkFigureAlt(cat)...)
 	return v
 }
 

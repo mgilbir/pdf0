@@ -107,37 +107,47 @@ func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
 		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
 	}
 
-	// Encryption is forbidden (ISO 15930-7 6.1): a PDF/X file must be readable
-	// without a decryption key.
-	if doc.Encrypted || doc.Trailer.Get("Encrypt") != nil {
-		add("encryption", "a PDF/X file shall not be encrypted", 0)
-	}
+	// Every check runs under a recover boundary, so a panic on hostile input
+	// becomes an "internal" finding instead of crashing the caller, and one bad
+	// check does not discard its siblings' findings (audit C27).
+	run := func(check func()) { runGuardedCheck(add, check) }
 
-	// Version: each PDF/X level is defined for a specific PDF version. PDF/X-1a
-	// and -3 for PDF 1.3/1.4, PDF/X-4/-4p for 1.6, PDF/X-6 for PDF 2.0. A newer
-	// version than the level allows is out of scope.
-	if maj, min, ok := parsePDFVersion(doc.Version); ok {
-		maxMinor, pdf2 := level.versionBound()
-		if pdf2 {
-			if maj != 2 {
-				add("version", fmt.Sprintf("%s is defined for PDF 2.0; file declares %s", level, doc.Version), 0)
-			}
-		} else if maj != 1 || min > maxMinor {
-			add("version", fmt.Sprintf("%s is defined for PDF 1.%d; file declares %s", level, maxMinor, doc.Version), 0)
+	run(func() {
+		// Encryption is forbidden (ISO 15930-7 6.1): a PDF/X file must be readable
+		// without a decryption key.
+		if doc.Encrypted || doc.Trailer.Get("Encrypt") != nil {
+			add("encryption", "a PDF/X file shall not be encrypted", 0)
 		}
-	}
 
-	pdfxCheckIdentification(doc, level, add)
-	pdfxCheckOutputIntent(doc, level, add)
-	pdfxCheckTrapped(doc, add)
-	pdfxCheckPageBoxes(doc, add)
-	pdfxCheckFontsEmbedded(doc, add)
-	pdfxCheckDeviceColor(doc, add)
-	pdfxCheckForbidden(doc, add)
+		// Version: each PDF/X level is defined for a specific PDF version. PDF/X-1a
+		// and -3 for PDF 1.3/1.4, PDF/X-4/-4p for 1.6, PDF/X-6 for PDF 2.0. A newer
+		// version than the level allows is out of scope.
+		if maj, min, ok := parsePDFVersion(doc.Version); ok {
+			maxMinor, pdf2 := level.versionBound()
+			if pdf2 {
+				if maj != 2 {
+					add("version", fmt.Sprintf("%s is defined for PDF 2.0; file declares %s", level, doc.Version), 0)
+				}
+			} else if maj != 1 || min > maxMinor {
+				add("version", fmt.Sprintf("%s is defined for PDF 1.%d; file declares %s", level, maxMinor, doc.Version), 0)
+			}
+		}
+	})
+
+	run(func() { pdfxCheckIdentification(doc, level, add) })
+	run(func() { pdfxCheckOutputIntent(doc, level, add) })
+	run(func() { pdfxCheckTrapped(doc, add) })
+	run(func() { pdfxCheckPageBoxes(doc, add) })
+	run(func() { pdfxCheckFontsEmbedded(doc, add) })
+	run(func() { pdfxCheckDeviceColor(doc, add) })
+	run(func() { pdfxCheckForbidden(doc, add) })
 	if level.noTransparency() {
-		pdfxCheckNoTransparency(doc, add)
+		run(func() { pdfxCheckNoTransparency(doc, add) })
 	}
 
+	// The checks iterate map-ordered doc.Objects, so their concatenated output
+	// order is nondeterministic; sort for stable, diffable reports.
+	sortViolations(out)
 	return out
 }
 

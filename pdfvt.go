@@ -54,41 +54,56 @@ func validatePDFVTImpl(doc *Document, versionPrefix string, allowRefXObjects boo
 		out = append(out, PDFVTViolation{Rule: rule, Message: msg, Object: obj})
 	}
 
+	// Every check runs under a recover boundary, so a panic on hostile input
+	// becomes an "internal" finding instead of crashing the caller, and one bad
+	// check does not discard its siblings' findings (audit C27).
+	run := func(check func()) { runGuardedCheck(add, check) }
+
 	// A PDF/VT file shall be a conforming PDF/X file (ISO 16612-2 6.1): PDF/X-4
 	// for PDF/VT-1, PDF/X-5 for PDF/VT-2. For PDF/VT-2 the reference-XObject
 	// prohibition (a PDF/X-4-only rule that PDF/X-5 lifts) is dropped.
-	for _, v := range ValidatePDFX(doc, PDFX4) {
-		if allowRefXObjects && v.Rule == "forbidden" && strings.Contains(v.Message, "reference XObjects") {
-			continue
+	run(func() {
+		for _, v := range ValidatePDFX(doc, PDFX4) {
+			if allowRefXObjects && v.Rule == "forbidden" && strings.Contains(v.Message, "reference XObjects") {
+				continue
+			}
+			add("pdfx-4/"+v.Rule, v.Message, v.Object)
 		}
-		add("pdfx-4/"+v.Rule, v.Message, v.Object)
-	}
+	})
+
+	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 
 	// Identification: the XMP pdfvtid:GTS_PDFVTVersion property shall be present
 	// and identify the requested PDF/VT version (ISO 16612-2 6.2).
-	claimed := ""
-	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-	if cat != nil {
-		if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
-			xmp := decodeXMPToUTF8(decodeContentStream(doc, ms))
-			claimed = strings.TrimSpace(extractXMPValue(xmp, "pdfvtid:GTS_PDFVTVersion"))
+	run(func() {
+		claimed := ""
+		if cat != nil {
+			if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
+				xmp := decodeXMPToUTF8(decodeContentStream(doc, ms))
+				claimed = strings.TrimSpace(extractXMPValue(xmp, "pdfvtid:GTS_PDFVTVersion"))
+			}
 		}
-	}
-	switch {
-	case claimed == "":
-		add("identification", "file is not identified as PDF/VT (no XMP pdfvtid:GTS_PDFVTVersion)", 0)
-	case !strings.HasPrefix(claimed, versionPrefix):
-		add("identification", fmt.Sprintf("GTS_PDFVTVersion %q does not identify %s", claimed, versionPrefix), 0)
-	}
+		switch {
+		case claimed == "":
+			add("identification", "file is not identified as PDF/VT (no XMP pdfvtid:GTS_PDFVTVersion)", 0)
+		case !strings.HasPrefix(claimed, versionPrefix):
+			add("identification", fmt.Sprintf("GTS_PDFVTVersion %q does not identify %s", claimed, versionPrefix), 0)
+		}
+	})
 
 	// A document part hierarchy is required (ISO 16612-2 6.3): its leaves define
 	// the record structure PDF/VT exists to convey.
-	if cat == nil || cat.Get("DPartRoot") == nil {
-		add("dpart", "PDF/VT requires a document part hierarchy (catalog /DPartRoot)", 0)
-	}
-	for _, v := range ValidateDParts(doc) {
-		add("dpart/"+v.Rule, v.Message, v.Object)
-	}
+	run(func() {
+		if cat == nil || cat.Get("DPartRoot") == nil {
+			add("dpart", "PDF/VT requires a document part hierarchy (catalog /DPartRoot)", 0)
+		}
+		for _, v := range ValidateDParts(doc) {
+			add("dpart/"+v.Rule, v.Message, v.Object)
+		}
+	})
 
+	// The checks iterate map-ordered doc.Objects, so their concatenated output
+	// order is nondeterministic; sort for stable, diffable reports.
+	sortViolations(out)
 	return out
 }
