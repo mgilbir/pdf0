@@ -579,14 +579,12 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 		// CMap legality (9.7.5.2): the Encoding must be a predefined CMap
 		// name or an embedded CMap stream.
 		var cmapStreamInfo *Dictionary
-		var cmapStream *Stream
 		switch enc := doc.Resolve(encObj).(type) {
 		case Name:
 			if _, ok := predefinedCMaps[string(enc)]; !ok {
 				bad("cmap", "Type0 font Encoding CMap /%s is neither embedded nor predefined (ISO 32000, Table 118)", string(enc))
 			}
 		case *Stream:
-			cmapStream = enc
 			cmapStreamInfo = doc.ResolveDict(enc.Dict.Get("CIDSystemInfo"))
 			// WMode in the stream dictionary must agree with the CMap
 			// content (9.7.5.3).
@@ -616,8 +614,9 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 		}
 
 		// CIDSystemInfo compatibility (9.7.4.2/19005 6.x.11.3.1): the
-		// CIDFont's Registry/Ordering must match the CMap's, and the
-		// CIDFont Supplement must not be less than the CMap's.
+		// CIDFont's Registry/Ordering must match the CMap's, and — from
+		// ISO 19005-2 on — the CIDFont Supplement must not exceed the
+		// CMap's.
 		if desc != nil {
 			cidInfo := doc.ResolveDict(desc.Get("CIDSystemInfo"))
 			var cmReg, cmOrd string
@@ -645,10 +644,17 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 				if ord != cmOrd {
 					bad("cidSystemInfo", "CIDFont CIDSystemInfo Ordering %q does not match the CMap's %q", ord, cmOrd)
 				}
-				// The corpus pins the direction: a CIDFont Supplement
-				// GREATER than the CMap's fails (the CMap cannot address
-				// the extra glyphs); a smaller one passes.
-				if cmapStream != nil {
+				// The Supplement relationship is a part-2-and-later rule:
+				// ISO 19005-2 6.2.11.3.1 adds "the value of the Supplement
+				// key ... of the CIDFont shall be less than or equal to
+				// the Supplement key ... of the CMap", which ISO 19005-1
+				// 6.3.3.1 does not require (it constrains Registry and
+				// Ordering only). Applying it at PDF/A-1 false-positives on
+				// PDF_A-1a 6-3-8-t01-pass-f, which pairs a Supplement-3
+				// CIDFont with the Supplement-2 Adobe-Japan1-2 CMap and is a
+				// pass file; the veraPDF profiles agree — "Supplement"
+				// appears in PDFA-2*/3*/4* but in neither 1A nor 1B.
+				if level != PDFA1b && cmapStreamInfo != nil {
 					if supp, ok := doc.Resolve(cidInfo.Get("Supplement")).(Integer); ok && supp > cmSupp {
 						bad("cidSystemInfo", "CIDFont CIDSystemInfo Supplement %d is greater than the CMap's %d", int(supp), int(cmSupp))
 					}
@@ -1205,6 +1211,37 @@ func simpleFontCodeToName(doc *Document, fontDict *Dictionary, symbolic bool) ma
 	return table
 }
 
+// simpleFontBaseEncodingModelled reports whether the base encoding under the
+// table simpleFontCodeToName builds is one this package actually has a table
+// for. When it is not — a symbolic font whose base is the font program's own
+// built-in encoding, or a predefined encoding outside Annex D.2 such as
+// MacExpertEncoding — a code absent from the table means "unknown", not
+// "unencoded": only the Differences entries are trustworthy. When it is,
+// absence is real and the code selects .notdef (ISO 32000-1, 9.6.6.4).
+func simpleFontBaseEncodingModelled(doc *Document, fontDict *Dictionary, symbolic bool) bool {
+	modelled := func(n Name) bool {
+		switch n {
+		case "WinAnsiEncoding", "MacRomanEncoding", "StandardEncoding":
+			return true
+		}
+		return false
+	}
+	switch enc := doc.Resolve(fontDict.Get("Encoding")).(type) {
+	case Name:
+		return modelled(enc)
+	case *Dictionary:
+		if base, ok := doc.Resolve(enc.Get("BaseEncoding")).(Name); ok {
+			return modelled(base)
+		}
+		// No BaseEncoding: a non-symbolic font falls back to
+		// StandardEncoding, a symbolic one to its built-in encoding.
+		return !symbolic
+	case nil:
+		return !symbolic
+	}
+	return false
+}
+
 // --- glyph-name to Unicode (for TrueType cmap lookup) ---
 
 // glyphNameToRune maps a glyph name to a Unicode code point for the common
@@ -1327,6 +1364,7 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 		}
 	}
 	enc := simpleFontCodeToName(doc, fontDict, symbolic)
+	baseEncodingModelled := simpleFontBaseEncodingModelled(doc, fontDict, symbolic)
 	firstChar := intVal(doc.Resolve(fontDict.Get("FirstChar")))
 	widths, _ := doc.Resolve(fontDict.Get("Widths")).(Array)
 	missingWidth := 0.0
@@ -1360,7 +1398,19 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 			progW, haveProg := simpleGlyphWidth(fp, subtype, symbolic, code, name)
 			glyphExists := simpleGlyphExists(fp, subtype, symbolic, code, name)
 
-			if renders && !glyphExists {
+			// A Type 1/CFF code with no glyph name is only evidence of a
+			// missing glyph when the base encoding is one this package
+			// models; otherwise the name comes from the font program's
+			// built-in encoding, which is not parsed here, and reporting
+			// the glyph absent asserts a fact not in evidence. That
+			// false-positives on the conforming corpus files PDF_A-1a
+			// 6-3-8-t01-pass-b (/MacExpertEncoding) and -pass-e (symbolic,
+			// no /Encoding), whose /CharSet lists the very glyph reported
+			// missing. TrueType is unaffected: its codes go through the
+			// program's cmap, not a glyph name.
+			codeMapped := subtype == "TrueType" || name != "" || baseEncodingModelled
+
+			if renders && codeMapped && !glyphExists {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (code %d)", string(subtype), code))
 			}
 			// A .notdef reference is prohibited even in invisible text
