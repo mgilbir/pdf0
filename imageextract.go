@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"iter"
 	"strconv"
 
 	"github.com/mgilbir/gopenjpeg"
@@ -151,7 +152,32 @@ type ExtractedImage struct {
 // ExtractImages returns every image XObject drawn from the document's pages, each
 // decoded when the codec is one this package handles. Form XObjects are followed
 // into their own resources, so images nested inside forms are found too.
+//
+// Every decoded image is held in the returned slice at once; on a large scan
+// document that is unbounded memory. Use Images to iterate lazily with at most
+// one decoded image live at a time.
 func (d *Document) ExtractImages() []ExtractedImage {
+	var out []ExtractedImage
+	d.walkImages(func(im ExtractedImage) bool {
+		out = append(out, im)
+		return true
+	})
+	return out
+}
+
+// Images returns an iterator over the image XObjects drawn from the document's
+// pages, in the same order ExtractImages reports them. Each image is decoded
+// only as it is yielded, so — unlike ExtractImages, which materializes every
+// decoded image at once — iteration keeps at most one decoded image live at a
+// time (unless the caller retains them), and breaking out of the loop skips
+// the remaining decode work entirely.
+func (d *Document) Images() iter.Seq[ExtractedImage] {
+	return d.walkImages
+}
+
+// walkImages drives the image traversal, calling yield for each image until it
+// returns false.
+func (d *Document) walkImages(yield func(ExtractedImage) bool) {
 	// Install a per-run cache on a shallow copy, as the validators do: a tint
 	// transform evaluates per pixel, and without the cache each evaluation
 	// re-decoded the function stream (and re-parsed a type-4 program) — a
@@ -166,12 +192,13 @@ func (d *Document) ExtractImages() []ExtractedImage {
 	}
 	cat := getCatalog(d)
 	if cat == nil {
-		return nil
+		return
 	}
-	var out []ExtractedImage
 	seen := map[int]bool{}
 	for _, pg := range collectPages(d, cat.Get("Pages")) {
-		d.collectImagesFrom(resolveResources(d, pg.dict), seen, 0, &out)
+		if !d.collectImagesFrom(resolveResources(d, pg.dict), seen, 0, yield) {
+			return
+		}
 		// Annotation appearance streams (/Annots -> /AP) are form XObjects with
 		// their own resources, a common home for images (stamps, form fields).
 		if annots, ok := d.Resolve(pg.dict.Get("Annots")).(Array); ok {
@@ -185,45 +212,50 @@ func (d *Document) ExtractImages() []ExtractedImage {
 					continue
 				}
 				for _, entry := range ap.Values {
-					d.collectAppearanceImages(entry, seen, &out)
+					if !d.collectAppearanceImages(entry, seen, yield) {
+						return
+					}
 				}
 			}
 		}
 	}
-	return out
 }
 
 // collectAppearanceImages walks an annotation appearance entry (/N, /D or /R),
 // which is either a form-XObject stream or a subdictionary of appearance states
-// (each value a stream), following each into its resources.
-func (d *Document) collectAppearanceImages(entry Object, seen map[int]bool, out *[]ExtractedImage) {
+// (each value a stream), following each into its resources. It returns false
+// once yield does.
+func (d *Document) collectAppearanceImages(entry Object, seen map[int]bool, yield func(ExtractedImage) bool) bool {
 	switch v := d.Resolve(entry).(type) {
 	case *Stream:
 		if num := refNum(entry); num > 0 {
 			if seen[num] {
-				return
+				return true
 			}
 			seen[num] = true
 		}
-		d.collectImagesFrom(d.ResolveDict(v.Dict.Get("Resources")), seen, 1, out)
+		return d.collectImagesFrom(d.ResolveDict(v.Dict.Get("Resources")), seen, 1, yield)
 	case *Dictionary:
 		for _, state := range v.Values {
-			d.collectAppearanceImages(state, seen, out)
+			if !d.collectAppearanceImages(state, seen, yield) {
+				return false
+			}
 		}
 	}
+	return true
 }
 
 // collectImagesFrom walks a resource dictionary's /XObject entries, extracting
 // image XObjects and recursing into form XObjects' own resources. seen guards
 // against revisiting a shared or self-referential XObject; depth bounds runaway
-// recursion.
-func (d *Document) collectImagesFrom(res *Dictionary, seen map[int]bool, depth int, out *[]ExtractedImage) {
+// recursion. It returns false once yield does.
+func (d *Document) collectImagesFrom(res *Dictionary, seen map[int]bool, depth int, yield func(ExtractedImage) bool) bool {
 	if res == nil || depth > 16 {
-		return
+		return true
 	}
 	xobjs := d.ResolveDict(res.Get("XObject"))
 	if xobjs == nil {
-		return
+		return true
 	}
 	for i := range xobjs.Keys {
 		ref := xobjs.Values[i]
@@ -239,11 +271,16 @@ func (d *Document) collectImagesFrom(res *Dictionary, seen map[int]bool, depth i
 		}
 		switch sub, _ := st.Dict.Get("Subtype").(Name); sub {
 		case "Image":
-			*out = append(*out, d.extractImage(st, refNum(ref)))
+			if !yield(d.extractImage(st, refNum(ref))) {
+				return false
+			}
 		case "Form":
-			d.collectImagesFrom(d.ResolveDict(st.Dict.Get("Resources")), seen, depth+1, out)
+			if !d.collectImagesFrom(d.ResolveDict(st.Dict.Get("Resources")), seen, depth+1, yield) {
+				return false
+			}
 		}
 	}
+	return true
 }
 
 func (d *Document) extractImage(st *Stream, num int) ExtractedImage {

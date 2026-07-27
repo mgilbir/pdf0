@@ -29,7 +29,8 @@ go get github.com/mgilbir/pdf0
 - **Sign and verify** digital signatures (`WriteSigned` / `VerifySignatures`,
   CMS/PKCS#7), including PAdES B-B through B-LTA (`ValidatePAdES`), RFC 3161
   timestamps, and CRL/OCSP revocation.
-- **Extract** text (`ExtractText`) and images (`ExtractImages`, decoding
+- **Extract** text (`ExtractText`) and images (`ExtractImages`, or the lazy
+  `Images` iterator for bounded memory on large scan files; decoding
   DCTDecode, CCITTFax, JBIG2 and JPXDecode), **repair** common conformance
   failures (`Repair`), and **manipulate pages** (`ExtractPages`, `AppendPages`).
 - **Write incrementally** (`WriteIncremental`) and **build** a minimal
