@@ -1272,6 +1272,26 @@ const (
 	// namespace prefix is undeclared; 2 after the linearized-file /ID
 	// consistency rule; 1 after the byte-level stream /Length check.)
 	corpusMaxIsartorMissed = 1
+
+	// Level A baselines (TestCorpusLevelA). The PDF_A-1a / PDF_A-2a suites
+	// declare pdfaid:conformance A, so they are only measured meaningfully
+	// when validated at PDF/A-1a / PDF/A-2a — see the comment on
+	// TestCorpusLevelA for why validating them at Level B measures nothing.
+	//
+	// Pass files wrongly rejected at Level A. Like corpusMaxFalsePositives,
+	// this is the hard invariant: never raise it.
+	corpusMaxLevelAFalsePositives = 0
+	// Fail files not flagged at Level A. These are a known COVERAGE GAP, not
+	// a target: the Level A rule families pdf0 implements (Tagged PDF /
+	// StructTreeRoot, catalog /Lang syntax, pdfaid:conformance) do not cover
+	// Unicode character maps (ISO 19005-1 6.3.8 — when a ToUnicode entry is
+	// mandatory), ActualText for Private Use Area code points (-2 6.2.11.7.3),
+	// structure-type RoleMap validity (6.8.3.4 / 6.7.3.4), or a language
+	// identifier carried on a structure element or marked-content property
+	// list rather than the catalog (6.8.4 / 6.7.4). Drive them down as those
+	// rules land; each drop locks in a newly covered Level A requirement.
+	corpusMaxLevelA1aMissed = 9
+	corpusMaxLevelA2aMissed = 9
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
@@ -1421,6 +1441,13 @@ func TestCorpusConformanceSuites(t *testing.T) {
 		// that false-positive by design, so they remain untracked.
 		checkPassFP bool
 	}{
+		// The 1a/2a rows validate Level A files at Level B. Every file in
+		// those suites declares pdfaid:conformance A, which the Level B
+		// pipeline rejects outright, so their fail files are all "caught"
+		// on that one finding and missed=0 here is an artifact rather than
+		// detection. They are kept as a cheap regression net (a change that
+		// broke the conformance rule would show up), but the meaningful
+		// measurement of these suites is TestCorpusLevelA.
 		{"PDF_A-1a", PDFA1b, 0, false},
 		{"PDF_A-2a", PDFA2b, 0, false},
 		{"PDF_A-2u", PDFA2b, 0, false},
@@ -1474,6 +1501,97 @@ func TestCorpusConformanceSuites(t *testing.T) {
 		}
 		if s.checkPassFP && falsePositives > 0 {
 			t.Errorf("%s: false positives %d exceed baseline 0 (regression)", s.dir, falsePositives)
+		}
+		if parseErrors > 0 {
+			t.Errorf("%s: parse errors %d exceed baseline 0 (regression)", s.dir, parseErrors)
+		}
+	}
+}
+
+// TestCorpusLevelA ratchets the PDF/A Level A conformance suites at their own
+// conformance level, which is the only level at which they measure anything.
+//
+// TestCorpusConformanceSuites walks PDF_A-1a and PDF_A-2a at PDFA1b/PDFA2b.
+// Every file in those suites declares pdfaid:conformance A, and the Level B
+// pipeline requires B — so at Level B every fail file is flagged for that one
+// unrelated reason (missed=0 is guaranteed, not earned) and every pass file is
+// a false positive (which is why that test has checkPassFP disabled for them).
+// Validating at PDFA1a/PDFA2a drops that finding and puts validatePDFALevelA
+// and its checks under measurement for the first time.
+//
+// Like TestCorpus this is a ratchet: it fails only when a count gets worse.
+// falsePositives is the hard invariant at 0 — a Level A pass file is a
+// conforming document and rejecting it means a rule is wrong.
+func TestCorpusLevelA(t *testing.T) {
+	corpusDir := os.Getenv("VERAPDF_CORPUS")
+	if corpusDir == "" {
+		corpusDir = "testdata/verapdf-corpus"
+	}
+	if _, err := os.Stat(corpusDir); os.IsNotExist(err) {
+		t.Skip("veraPDF corpus not found; run `make corpus` to download")
+	}
+
+	suites := []struct {
+		dir       string
+		level     PDFALevel
+		maxMissed int
+	}{
+		{"PDF_A-1a", PDFA1a, corpusMaxLevelA1aMissed},
+		{"PDF_A-2a", PDFA2a, corpusMaxLevelA2aMissed},
+	}
+
+	for _, s := range suites {
+		root := filepath.Join(corpusDir, s.dir)
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue
+		}
+		var pass, fail, missed, falsePositives, parseErrors int
+		var fpFiles, missedFiles []string
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
+				return nil
+			}
+			base := filepath.Base(path)
+			isPass := strings.Contains(base, "-pass-")
+			isFail := strings.Contains(base, "-fail-")
+			if !isPass && !isFail {
+				return nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil
+			}
+			doc, e := Read(bytes.NewReader(data), int64(len(data)))
+			if e != nil {
+				parseErrors++
+				return nil
+			}
+			errs := ValidatePDFABytes(doc, s.level, data)
+			if isPass {
+				pass++
+				if len(errs) > 0 {
+					falsePositives++
+					fpFiles = append(fpFiles, base+" :: "+errs[0].Error())
+				}
+				return nil
+			}
+			fail++
+			if len(errs) == 0 {
+				missed++
+				missedFiles = append(missedFiles, base)
+			}
+			return nil
+		})
+		t.Logf("%-10s @ %-8v : pass=%d fail=%d missed=%d falsePositives=%d parseErrors=%d",
+			s.dir, s.level, pass, fail, missed, falsePositives, parseErrors)
+
+		if falsePositives > corpusMaxLevelAFalsePositives {
+			t.Errorf("%s: false positives %d exceed baseline %d (regression). Offending pass files:\n  %s",
+				s.dir, falsePositives, corpusMaxLevelAFalsePositives, strings.Join(fpFiles, "\n  "))
+		}
+		if missed > s.maxMissed {
+			t.Errorf("%s: missed %d exceed baseline %d (detection regressed):\n  %s",
+				s.dir, missed, s.maxMissed, strings.Join(missedFiles, "\n  "))
 		}
 		if parseErrors > 0 {
 			t.Errorf("%s: parse errors %d exceed baseline 0 (regression)", s.dir, parseErrors)

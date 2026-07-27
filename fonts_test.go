@@ -82,6 +82,48 @@ func TestSimpleFontEncodingDifferences(t *testing.T) {
 	}
 }
 
+// TestSimpleFontBaseEncodingModelled pins which encodings the glyph-coverage
+// rule may reason about. A code absent from the code→name table only proves
+// the glyph is unreachable when the base encoding is one of the Annex D.2
+// tables; otherwise the base is the font program's built-in encoding, which is
+// not parsed, and the rule must stay silent (corpus PDF_A-1a 6-3-8-t01-pass-b
+// and -pass-e).
+func TestSimpleFontBaseEncodingModelled(t *testing.T) {
+	doc := &Document{Objects: map[int]*IndirectObject{}}
+	mk := func(enc Object) *Dictionary {
+		f := &Dictionary{}
+		if enc != nil {
+			f.Set("Encoding", enc)
+		}
+		return f
+	}
+	diffOnly := &Dictionary{}
+	diffOnly.Set("Differences", Array{Integer(65), Name("Alpha")})
+	winBase := &Dictionary{}
+	winBase.Set("BaseEncoding", Name("WinAnsiEncoding"))
+
+	cases := []struct {
+		name     string
+		enc      Object
+		symbolic bool
+		want     bool
+	}{
+		{"WinAnsi", Name("WinAnsiEncoding"), false, true},
+		{"MacRoman", Name("MacRomanEncoding"), false, true},
+		{"MacExpert", Name("MacExpertEncoding"), false, false},
+		{"none, non-symbolic", nil, false, true},
+		{"none, symbolic", nil, true, false},
+		{"Differences only, non-symbolic", diffOnly, false, true},
+		{"Differences only, symbolic", diffOnly, true, false},
+		{"BaseEncoding wins for a symbolic font", winBase, true, true},
+	}
+	for _, c := range cases {
+		if got := simpleFontBaseEncodingModelled(doc, mk(c.enc), c.symbolic); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestCharSetParsing_Numbers(t *testing.T) {
 	// Names may be adjacent without separators other than '/'.
 	got := parseCharSet("/one/two/three")
@@ -190,6 +232,48 @@ func TestCIDToGIDMapRule(t *testing.T) {
 	doc, font, u = mkFont(Name("Identity"))
 	if hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
 		t.Error("Identity CIDToGIDMap must pass")
+	}
+}
+
+// The CIDSystemInfo Supplement relationship is a part-2-and-later requirement.
+// ISO 19005-2 6.2.11.3.1 adds "the value of the Supplement key ... of the
+// CIDFont shall be less than or equal to the Supplement key ... of the CMap";
+// ISO 19005-1 6.3.3.1 constrains Registry and Ordering only, and applying the
+// Supplement rule there false-positives on the conforming corpus file
+// PDF_A-1a 6-3-8-t01-pass-f.
+func TestCIDSystemInfoSupplementIsPart2AndLater(t *testing.T) {
+	mkFont := func(cmapSup, cidSup int) (*Document, *Dictionary, *fontTextUsage) {
+		doc := &Document{Objects: map[int]*IndirectObject{}}
+		si := func(sup int) *Dictionary {
+			d := &Dictionary{}
+			d.Set("Registry", String{Value: []byte("Adobe")})
+			d.Set("Ordering", String{Value: []byte("Japan1")})
+			d.Set("Supplement", Integer(sup))
+			return d
+		}
+		desc := &Dictionary{}
+		desc.Set("Subtype", Name("CIDFontType0"))
+		desc.Set("CIDSystemInfo", si(cidSup))
+		doc.Objects[7] = &IndirectObject{Number: 7, Value: desc}
+		cmap := &Stream{Dict: Dictionary{}}
+		cmap.Dict.Set("CIDSystemInfo", si(cmapSup))
+		font := &Dictionary{}
+		font.Set("Subtype", Name("Type0"))
+		font.Set("Encoding", cmap)
+		font.Set("DescendantFonts", Array{IndirectRef{Number: 7}})
+		return doc, font, &fontTextUsage{objNum: 9, modes: map[int]bool{0: true}}
+	}
+	doc, font, u := mkFont(2, 3)
+	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.1") {
+		t.Error("CIDFont Supplement exceeding the CMap's must be flagged at PDF/A-2")
+	}
+	doc, font, u = mkFont(2, 3)
+	if hasRuleErr(checkOneFontDict(doc, PDFA1b, "6.3", font, u), "6.3.3.1") {
+		t.Error("Supplement relationship must not be enforced at PDF/A-1")
+	}
+	doc, font, u = mkFont(3, 2)
+	if hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.1") {
+		t.Error("a CIDFont Supplement below the CMap's must pass")
 	}
 }
 
