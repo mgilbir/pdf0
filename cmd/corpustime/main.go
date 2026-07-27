@@ -27,6 +27,10 @@ func stage(name string, budget time.Duration, fn func()) bool {
 }
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: corpustime <file.pdf> [file.pdf ...]")
+		os.Exit(2)
+	}
 	for _, path := range os.Args[1:] {
 		fi, _ := os.Stat(path)
 		fmt.Printf("%s (%d MB)\n", path, fi.Size()/(1024*1024))
