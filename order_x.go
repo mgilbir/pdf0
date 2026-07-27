@@ -58,7 +58,7 @@ type OrderXResult struct {
 }
 
 // ValidateOrderX checks whether doc is a conforming Order-X order container.
-func (doc *Document) ValidateOrderX(rawData []byte) OrderXResult {
+func ValidateOrderX(doc *Document, rawData []byte) OrderXResult {
 	var res OrderXResult
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, formalis.Violation{Rule: rule, Message: msg, Object: obj})

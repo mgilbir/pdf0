@@ -20,7 +20,9 @@ go get github.com/mgilbir/pdf0
   PDF/UA-2 accessibility (`ValidatePDFUA` / `ValidatePDFUA2`), PDF/X
   (`ValidatePDFX`), PDF/VT (`ValidatePDFVT` / `ValidatePDFVT2`), PDF/R
   (`ValidatePDFR`), DPart (`ValidateDParts`), and Factur-X / Order-X container
-  checks (`ValidateFacturX` / `ValidateOrderX`).
+  checks (`ValidateFacturX` / `ValidateOrderX`). Every validator is a free
+  function taking the `*Document` first, and every finding satisfies the
+  shared `Violation` interface, so results combine across validators.
 - **Encrypt / decrypt** with the standard security handler — RC4, AES-128, and
   AES-256, via `ReadWithPassword`, `SetEncryption`, and `RemoveEncryption`
   (`Document.Locked` reports a file that could not be decrypted).

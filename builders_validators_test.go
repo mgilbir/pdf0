@@ -121,7 +121,7 @@ func TestUAPartParameterized(t *testing.T) {
 	if !uaHas(ua1, "PDF 1.x header") {
 		t.Errorf("PDF/UA-1 validation of a PDF 2.0 file should demand a 1.x header; got %v", ua1)
 	}
-	for _, e := range d.ValidatePDFUA2() {
+	for _, e := range ValidatePDFUA2(d) {
 		if strings.Contains(e.Message, "must be 1") || strings.Contains(e.Message, "PDF 1.x") {
 			t.Errorf("UA-1-specific finding leaked into ValidatePDFUA2: %v", e)
 		}

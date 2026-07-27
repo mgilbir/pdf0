@@ -42,6 +42,12 @@
 // ValidatePDFABytes when you have the raw file bytes and want the byte-level
 // file-structure checks (e.g. no data after %%EOF) as well.
 //
+// The other standards follow the same shape: each validator is a free function
+// taking the *Document as its first parameter (ValidatePDFUA, ValidatePDFUA2,
+// ValidatePDFX, ValidatePDFVT, ValidatePDFR, ValidateDParts, ValidateFacturX,
+// ValidateOrderX), and every finding type satisfies the Violation interface,
+// so findings from different validators can be collected together.
+//
 // See docs/architecture.md for how bytes flow through Read, Write, and the
 // validation pipeline.
 package pdf0
