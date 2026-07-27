@@ -107,54 +107,102 @@ func (d *Document) WriteSignedIncremental(w io.Writer, original []byte, cert *x5
 	return err
 }
 
-// patchSignature fills the /ByteRange and /Contents placeholders in serialized
-// output: it locates the /Contents placeholder, patches /ByteRange in place,
-// signs the covered bytes, and writes the CMS into /Contents. It works on both a
-// full rewrite and an incremental update.
-func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error) {
-	ci := bytes.Index(data, []byte("/Contents"))
-	if ci < 0 {
-		return nil, errors.New("signing: /Contents not found in output")
+// sigSlots are the byte offsets patchSignature and patchDocTimestamp fill in:
+// the /ByteRange placeholder digits, and the /Contents hex string including its
+// enclosing angle brackets.
+type sigSlots struct {
+	byteRange     int // start of the /ByteRange placeholder
+	contentsStart int // the '<' opening /Contents
+	contentsEnd   int // one past the '>' closing /Contents
+}
+
+// findSigSlots locates the placeholders of the one signature dictionary that is
+// still unfilled, so the caller can patch it in place. what names the caller in
+// error messages ("signing", "timestamp").
+//
+// It anchors on the /ByteRange placeholder and only then searches forward for
+// /Contents. Anchoring the other way round — taking the first /Contents in the
+// file — is wrong, because a page's content-stream reference (/Contents 5 0 R)
+// precedes the signature dictionary in essentially every real document, so the
+// search landed on the page and signing failed outright. The placeholder is a
+// unique 34-byte literal, and it is unique in a stronger sense than "appears
+// once": an already-filled signature carries real offsets there, so this finds
+// only the dictionary being signed now and leaves an earlier signature alone.
+// The scan runs backwards because in an incremental update the new signature is
+// appended after the preserved original bytes.
+func findSigSlots(data []byte, what string) (sigSlots, error) {
+	var s sigSlots
+	pi := bytes.LastIndex(data, []byte(byteRangePlaceholder))
+	if pi < 0 {
+		return s, fmt.Errorf("%s: /ByteRange placeholder not found", what)
 	}
+	ci := bytes.Index(data[pi:], []byte("/Contents"))
+	if ci < 0 {
+		return s, fmt.Errorf("%s: /Contents not found after the /ByteRange placeholder", what)
+	}
+	ci += pi
 	lt := bytes.IndexByte(data[ci:], '<')
 	if lt < 0 {
-		return nil, errors.New("signing: /Contents value not found")
+		return s, fmt.Errorf("%s: /Contents value not found", what)
 	}
 	contentsStart := ci + lt
 	gt := bytes.IndexByte(data[contentsStart:], '>')
 	if gt < 0 {
-		return nil, errors.New("signing: /Contents not terminated")
+		return s, fmt.Errorf("%s: /Contents not terminated", what)
 	}
-	contentsEnd := contentsStart + gt + 1
+	return sigSlots{byteRange: pi, contentsStart: contentsStart, contentsEnd: contentsStart + gt + 1}, nil
+}
 
-	len1 := contentsStart
-	start2, len2 := contentsEnd, len(data)-contentsEnd
-
+// fillByteRange patches the real /ByteRange over the placeholder and returns the
+// bytes it covers: everything except the /Contents hex window. The two segments
+// must leave exactly one gap, and that gap must be exactly /Contents, or a
+// verifier finds file bytes no signature covers.
+func fillByteRange(data []byte, s sigSlots, what string) ([]byte, error) {
+	len1 := s.contentsStart
+	start2, len2 := s.contentsEnd, len(data)-s.contentsEnd
 	real := fmt.Sprintf("0 %010d %010d %010d", len1, start2, len2)
 	if len(real) != len(byteRangePlaceholder) {
-		return nil, errors.New("signing: /ByteRange width mismatch")
+		return nil, fmt.Errorf("%s: /ByteRange width mismatch", what)
 	}
-	pi := bytes.Index(data, []byte(byteRangePlaceholder))
-	if pi < 0 || pi > contentsStart {
-		return nil, errors.New("signing: /ByteRange placeholder not found")
-	}
-	copy(data[pi:pi+len(real)], real)
+	copy(data[s.byteRange:s.byteRange+len(real)], real)
+	return append(append([]byte(nil), data[:len1]...), data[start2:start2+len2]...), nil
+}
 
-	signed := append(append([]byte(nil), data[:len1]...), data[start2:start2+len2]...)
+// fillContents writes hex into the reserved /Contents window, zero-padding the
+// remainder.
+func fillContents(data []byte, s sigSlots, hexValue, what string) error {
+	room := s.contentsEnd - 1 - (s.contentsStart + 1)
+	if len(hexValue) > room {
+		return fmt.Errorf("%s: signature (%d hex) exceeds reserved space (%d)", what, len(hexValue), room)
+	}
+	region := data[s.contentsStart+1 : s.contentsEnd-1]
+	for i := range region {
+		region[i] = '0'
+	}
+	copy(region, hexValue)
+	return nil
+}
+
+// patchSignature fills the /ByteRange and /Contents placeholders in serialized
+// output: it locates the placeholders, patches /ByteRange in place, signs the
+// covered bytes, and writes the CMS into /Contents. It works on both a full
+// rewrite and an incremental update.
+func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error) {
+	slots, err := findSigSlots(data, "signing")
+	if err != nil {
+		return nil, err
+	}
+	signed, err := fillByteRange(data, slots, "signing")
+	if err != nil {
+		return nil, err
+	}
 	cms, err := buildSignedDataFull(cert, key, signed, tsaCert, tsaKey)
 	if err != nil {
 		return nil, err
 	}
-	hexSig := hex.EncodeToString(cms)
-	room := contentsEnd - 1 - (contentsStart + 1)
-	if len(hexSig) > room {
-		return nil, fmt.Errorf("signing: signature (%d hex) exceeds reserved space (%d)", len(hexSig), room)
+	if err := fillContents(data, slots, hex.EncodeToString(cms), "signing"); err != nil {
+		return nil, err
 	}
-	region := data[contentsStart+1 : contentsEnd-1]
-	for i := range region {
-		region[i] = '0'
-	}
-	copy(region, hexSig)
 	return data, nil
 }
 
