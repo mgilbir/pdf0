@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"time"
 )
@@ -146,48 +145,20 @@ func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, 
 // placeholder (the one still carrying the /ByteRange placeholder), leaving an
 // earlier, already-filled signature untouched.
 func patchDocTimestamp(data []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error) {
-	pi := bytes.Index(data, []byte(byteRangePlaceholder))
-	if pi < 0 {
-		return nil, errors.New("timestamp: /ByteRange placeholder not found")
+	slots, err := findSigSlots(data, "timestamp")
+	if err != nil {
+		return nil, err
 	}
-	ci := bytes.Index(data[pi:], []byte("/Contents"))
-	if ci < 0 {
-		return nil, errors.New("timestamp: /Contents not found after placeholder")
+	signed, err := fillByteRange(data, slots, "timestamp")
+	if err != nil {
+		return nil, err
 	}
-	ci += pi
-	lt := bytes.IndexByte(data[ci:], '<')
-	if lt < 0 {
-		return nil, errors.New("timestamp: /Contents value not found")
-	}
-	contentsStart := ci + lt
-	gt := bytes.IndexByte(data[contentsStart:], '>')
-	if gt < 0 {
-		return nil, errors.New("timestamp: /Contents not terminated")
-	}
-	contentsEnd := contentsStart + gt + 1
-
-	len1 := contentsStart
-	start2, len2 := contentsEnd, len(data)-contentsEnd
-	real := fmt.Sprintf("0 %010d %010d %010d", len1, start2, len2)
-	if len(real) != len(byteRangePlaceholder) {
-		return nil, errors.New("timestamp: /ByteRange width mismatch")
-	}
-	copy(data[pi:pi+len(real)], real)
-
-	signed := append(append([]byte(nil), data[:len1]...), data[start2:start2+len2]...)
 	token, err := buildTimestampToken(signed, tsaCert, tsaKey, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
-	hexTok := hex.EncodeToString(token)
-	room := contentsEnd - 1 - (contentsStart + 1)
-	if len(hexTok) > room {
-		return nil, fmt.Errorf("timestamp: token (%d hex) exceeds reserved space (%d)", len(hexTok), room)
+	if err := fillContents(data, slots, hex.EncodeToString(token), "timestamp"); err != nil {
+		return nil, err
 	}
-	region := data[contentsStart+1 : contentsEnd-1]
-	for i := range region {
-		region[i] = '0'
-	}
-	copy(region, hexTok)
 	return data, nil
 }

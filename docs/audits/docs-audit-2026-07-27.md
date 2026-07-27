@@ -642,9 +642,13 @@ with `signing: /ByteRange placeholder not found`. Reproduced directly: an otherw
 one-page document signs cleanly without a `/Contents` entry and fails with one. The same search
 stops `WriteSignedIncremental` adding a second signature to an already-signed file, which is its
 documented purpose. `WriteArchivalTimestamp` searches forward from the `/ByteRange` placeholder and
-is unaffected. **Deliberately not fixed in the documentation stack** — it wants a regression test
-and review of its own. Documented in `docs/signing.md` and the README so nobody loses an afternoon
-to it.
+is unaffected. **Fixed** in a follow-up PR on top of the stack, after the maintainer asked for it:
+`findSigSlots` now anchors on the still-unfilled `/ByteRange` placeholder and searches forward for
+`/Contents`, and the same helper is shared with the document-time-stamp path, which had the correct
+pattern already — the bug existed because the two copies had diverged. Three regression tests were
+added and were confirmed to fail against the old code. The gap that let it live is worth recording:
+`buildMinimalPDF`, the fixture every signing test used, builds a page with no content stream, so the
+suite never met a page `/Contents` reference.
 
 **Undocumented signature behaviour**, now in `docs/signing.md`: `/DocTimeStamp` fields always report
 `Valid == false` from `VerifySignatures` (the RFC 3161 token digests the TSTInfo, not the file), which

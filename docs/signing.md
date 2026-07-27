@@ -178,13 +178,15 @@ fetch it yourself and call `CheckCertRevocation` directly.
 
 ## Limitations and edge cases
 
-- **Signing fails when a literal `/Contents` precedes the signature dictionary
-  in the output.** The placeholder is found with a plain byte search, so
-  `WriteSigned`/`WriteSignedIncremental` return `signing: /ByteRange placeholder
-  not found` for any document whose pages have content streams, and for any
-  already-signed file — so the incremental signer cannot currently add a second
-  signature. (`WriteArchivalTimestamp` searches forward from the `/ByteRange`
-  placeholder instead and is unaffected.)
+- **The signature placeholder is found by anchoring on `/ByteRange`, not on
+  `/Contents`.** Worth knowing if you touch `patchSignature`: a page's
+  `/Contents 4 0 R` precedes the signature dictionary in essentially every real
+  document, and an earlier signature's `/Contents` is a filled hex blob, so the
+  first `/Contents` in the file is never the right target. `findSigSlots` locates
+  the unique, still-unfilled `/ByteRange` placeholder — which a filled signature
+  no longer carries — and searches forward from there. Signing a document with
+  page content, and adding a second signature to an already-signed file, are both
+  covered by regression tests in `sign_contents_test.go`.
 - **Document time-stamps come back invalid from `VerifySignatures`.** A
   `/DocTimeStamp` field is included in the results, but its CMS is an RFC 3161
   token whose message digest is over the TSTInfo, not over the file, so it always
