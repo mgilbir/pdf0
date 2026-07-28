@@ -28,15 +28,29 @@ func (u *devUse) or(o devUse) {
 // computed without rescanning shared content.
 type devColorScanner struct {
 	doc        *Document
-	memo       map[*Stream]devUse   // stream -> escaping usage (forms include group masking)
-	inProg     map[*Stream]bool     // recursion guard for cyclic form/pattern references
-	inProgDict map[*Dictionary]bool // recursion guard for cyclic Type3-font container references
+	memo       map[devMemoKey]devUse // (stream, group masking) -> escaping usage
+	inProg     map[*Stream]bool      // recursion guard for cyclic form/pattern references
+	inProgDict map[*Dictionary]bool  // recursion guard for cyclic Type3-font container references
+}
+
+// devMemoKey identifies a memoised streamEscape result. The escaping usage of a
+// stream is a property of the stream alone *for a fixed applyGroup*: one and the
+// same form XObject reached with Do has its transparency group applied and
+// reached as an annotation appearance or a tiling pattern does not. Keying on
+// the stream alone let whichever call came first answer for both — an isolated
+// calibrated group that should have covered the form's DeviceRGB was skipped
+// when the appearance-stream visit cached the unmasked value first, and the page
+// was then accused of "DeviceRGB used without a matching OutputIntent,
+// DefaultRGB or covering group colour space". applyGroup belongs in the key.
+type devMemoKey struct {
+	st         *Stream
+	applyGroup bool
 }
 
 func newDevColorScanner(doc *Document) *devColorScanner {
 	return &devColorScanner{
 		doc:        doc,
-		memo:       map[*Stream]devUse{},
+		memo:       map[devMemoKey]devUse{},
 		inProg:     map[*Stream]bool{},
 		inProgDict: map[*Dictionary]bool{},
 	}
@@ -201,7 +215,8 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 // group /CS is applied: a device group /CS is itself usage, and an isolated
 // calibrated group /CS covers matching device usage within the form.
 func (s *devColorScanner) streamEscape(st *Stream, applyGroup bool) devUse {
-	if u, ok := s.memo[st]; ok {
+	key := devMemoKey{st: st, applyGroup: applyGroup}
+	if u, ok := s.memo[key]; ok {
 		return u
 	}
 	if s.inProg[st] {
@@ -231,6 +246,6 @@ func (s *devColorScanner) streamEscape(st *Stream, applyGroup bool) devUse {
 	}
 
 	delete(s.inProg, st)
-	s.memo[st] = u
+	s.memo[key] = u
 	return u
 }

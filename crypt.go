@@ -11,6 +11,7 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"errors"
+	"slices"
 )
 
 // The PDF standard security handler (ISO 32000-1 §7.6, ISO 32000-2 §7.6), in
@@ -48,6 +49,19 @@ type stdSecurityHandler struct {
 	strMethod       cryptMethod // strings
 	encryptMetadata bool
 	encryptObjNum   int // object number of the /Encrypt dict, or -1 if inline
+
+	// failedObjects collects the object numbers whose AES ciphertext this
+	// handler could not decrypt (see decrypt). decryptDocument drains it into
+	// Document.decryptFailures once the walk is over.
+	failedObjects map[int]bool
+}
+
+// noteDecryptFailure records that an object's ciphertext did not decrypt.
+func (h *stdSecurityHandler) noteDecryptFailure(num int) {
+	if h.failedObjects == nil {
+		h.failedObjects = map[int]bool{}
+	}
+	h.failedObjects[num] = true
 }
 
 // buildStdSecurityHandler parses the trailer's /Encrypt dictionary and derives
@@ -388,6 +402,21 @@ func (h *stdSecurityHandler) objectKey(num, gen int, aesv2 bool) []byte {
 
 // decrypt returns the plaintext of data encrypted for object (num, gen) under
 // the given method. Unrecognised or Identity methods return data unchanged.
+//
+// An AES blob that does not decrypt — a short or unaligned blob, or one whose
+// PKCS#7 padding does not validate — yields nil, and the object number is
+// recorded on the handler for decryptDocument to hand to the document.
+// Returning the ciphertext unchanged, as this did, is the one answer that
+// cannot be right: the file key is known good by then (a wrong password never
+// reaches here — buildStdSecurityHandler returns no handler and the document
+// reports Locked), so the failure means the blob is corrupt or was never
+// encrypted, and either way the bytes are not the plaintext. Handing them on
+// dressed as plaintext puts high-entropy noise into a string or a stream body,
+// where it reads as a /Title, a content stream, an XMP packet or a font
+// program — exactly the "silently wrong" class the package refuses to produce,
+// and the shape in which a caller ends up validating noise. nil is at least
+// honestly empty, and the recorded failure makes Write refuse rather than
+// re-encrypt the blank.
 func (h *stdSecurityHandler) decrypt(data []byte, num, gen int, method cryptMethod) []byte {
 	switch method {
 	case cryptRC4:
@@ -399,13 +428,19 @@ func (h *stdSecurityHandler) decrypt(data []byte, num, gen int, method cryptMeth
 		c.XORKeyStream(out, data)
 		return out
 	case cryptAESV2:
-		if out, err := aesCBCDecrypt(h.objectKey(num, gen, true), data); err == nil {
-			return out
+		out, err := aesCBCDecrypt(h.objectKey(num, gen, true), data)
+		if err != nil {
+			h.noteDecryptFailure(num)
+			return nil
 		}
+		return out
 	case cryptAESV3:
-		if out, err := aesCBCDecrypt(h.fileKey, data); err == nil {
-			return out
+		out, err := aesCBCDecrypt(h.fileKey, data)
+		if err != nil {
+			h.noteDecryptFailure(num)
+			return nil
 		}
+		return out
 	}
 	return data
 }
@@ -660,6 +695,17 @@ func (h *stdSecurityHandler) decryptDocument(doc *Document) {
 			iobj.Value = h.decryptStringValue(v, num, gen)
 			doc.Objects[num] = iobj
 		}
+	}
+
+	// Objects whose ciphertext did not decrypt are now empty rather than noise
+	// (see decrypt). Record them on the document: the content is unrecoverable,
+	// so a write must refuse rather than emit the blanks.
+	if len(h.failedObjects) > 0 {
+		doc.decryptFailures = doc.decryptFailures[:0]
+		for num := range h.failedObjects {
+			doc.decryptFailures = append(doc.decryptFailures, num)
+		}
+		slices.Sort(doc.decryptFailures)
 	}
 }
 

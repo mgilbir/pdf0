@@ -256,21 +256,19 @@ func (d *Document) checkUARoleMap(cat *Dictionary) []UAViolation {
 		return nil
 	}
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
-	mapped := func(t Name) bool {
-		if standardStructTypes[t] {
-			return true
-		}
-		if roleMap == nil {
-			return false
-		}
-		to, _ := d.Resolve(roleMap.Get(t)).(Name)
-		return standardStructTypes[to]
-	}
 	var v []UAViolation
-	reported := map[Name]bool{}
+	// One verdict per distinct type: resolveRoleMapChain walks a chain, so
+	// re-deciding a repeated type would redo that walk on every element.
+	decided := map[Name]bool{}
 	for _, n := range d.structTree(cat) {
-		if st := n.rawS; st != "" && !mapped(st) && !reported[st] {
-			reported[st] = true
+		st := n.rawS
+		if st == "" || decided[st] {
+			continue
+		}
+		decided[st] = true
+		// A budget trip leaves the mapping unknown; only a completed walk that
+		// found no standard type is evidence of a violation.
+		if _, mapped, complete := d.resolveRoleMapChain(st, roleMap); !mapped && complete {
 			v = append(v, UAViolation{"7.1", "structure type /" + string(st) + " is neither standard nor mapped in /RoleMap", 0})
 		}
 	}

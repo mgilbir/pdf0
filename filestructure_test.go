@@ -73,6 +73,53 @@ func TestIndirectObjectSyntax(t *testing.T) {
 	}
 }
 
+// TestIndirectObjectHeaderWhitespaceRun covers an object whose recorded offset
+// points at white space some way ahead of the header. The rule (ISO 19005-2
+// 6.1.9) is about the byte immediately before the object number, so the header
+// has to be located first, however long the run; a fixed eight-byte skip either
+// left the object unchecked or, when the byte eight in was a space, reported
+// "indirect object number is not preceded by an EOL marker" against a header
+// that was EOL-preceded.
+func TestIndirectObjectHeaderWhitespaceRun(t *testing.T) {
+	const eol = "indirect object number is not preceded by an EOL marker"
+	// The offset points at the start of the white-space run; the run is longer
+	// than eight bytes and the header itself sits right after an EOL.
+	build := func(body string, off int64) []ValidationError {
+		doc := &Document{
+			Objects: map[int]*IndirectObject{1: {Number: 1, Value: Integer(42)}},
+			Offsets: map[int]int64{1: off},
+		}
+		return checkIndirectObjectSyntax(doc, PDFA2b, []byte(body))
+	}
+	has := func(errs []ValidationError, msg string) bool {
+		for _, e := range errs {
+			if e.Message == msg {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Conformant: ten spaces of padding, then a newline, then the header. The
+	// offset points at the first pad byte.
+	body := "%bin\n" + "          " + "\n1 0 obj\n42\nendobj\n"
+	if errs := build(body, 5); has(errs, eol) {
+		t.Errorf("EOL-preceded header behind a long white-space run wrongly flagged: %v", errs)
+	}
+	// Non-conformant, same run length: the header is preceded by a space, so the
+	// finding is real and must survive the longer scan.
+	bad := "%bin\n" + "\n         " + " 1 0 obj\n42\nendobj\n"
+	if errs := build(bad, 5); !has(errs, eol) {
+		t.Errorf("space-preceded header behind a long white-space run not flagged: %v", errs)
+	}
+	// The rest of the layout checks must apply to the located header too, not
+	// be skipped because the scan ran out of budget before reaching it.
+	dbl := "%bin\n" + "          " + "\n1  0 obj\n42\nendobj\n"
+	if errs := build(dbl, 5); !has(errs, "object number and generation number are not separated by a single white-space character") {
+		t.Errorf("layout check skipped for a header behind a long white-space run: %v", errs)
+	}
+}
+
 // Cross-reference table format.
 func TestXRefTableFormat(t *testing.T) {
 	entry := "0000000000 65535 f\r\n0000000009 00000 n\r\n"

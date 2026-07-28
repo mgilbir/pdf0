@@ -181,9 +181,23 @@ func checkOneObjectSyntax(raw []byte, off, regionEnd int64, num int, add func(st
 	// Cross-reference offsets sometimes point at the EOL/white space just
 	// before the object number rather than at the first digit; advance to
 	// the digit so the layout checks apply to the real object header.
+	//
+	// The scan is bounded by the object's own region, not by a byte count. The
+	// rule (ISO 19005-1 6.1.8, -2 6.1.9, -4 6.1.8: "the object number and
+	// endobj keyword shall each be preceded by an EOL marker") is a statement
+	// about the byte immediately before the header, so the header has to be
+	// found wherever the offset left it. The eight-byte cap it replaces stopped
+	// mid-white-space on any object preceded by a longer run: the object then
+	// went unchecked, and when the byte eight in happened to be a space or tab
+	// the check reported "indirect object number is not preceded by an EOL
+	// marker" against a header that was in fact EOL-preceded.
+	limit := int(min64(regionEnd, int64(len(raw))))
 	p := int(off)
-	for p < len(raw) && isPDFWhite(raw[p]) && p < int(off)+8 {
+	for p < limit && isPDFWhite(raw[p]) {
 		p++
+	}
+	if p >= limit || !isDigit(raw[p]) {
+		return // not a numeric object header; skip
 	}
 	// Object number preceded by an EOL marker.
 	if p > 0 && !isEOLByte(raw[p-1]) {
@@ -193,9 +207,6 @@ func checkOneObjectSyntax(raw []byte, off, regionEnd int64, num int, add func(st
 	q := p
 	for q < len(raw) && isDigit(raw[q]) {
 		q++
-	}
-	if q == p {
-		return // not a numeric object header; skip
 	}
 	// exactly one white-space
 	if q >= len(raw) || !isPDFWhite(raw[q]) {

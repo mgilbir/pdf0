@@ -173,7 +173,13 @@ Private DICT's `nominalWidthX`, defaulting to `defaultWidthX`.
 `/FontMatrix`, finds `eexec`, decodes the hex form when the payload starts with
 four hex digits, decrypts with r=55665, then walks `/CharStrings` decrypting
 each charstring with r=4330 (skipping `lenIV` bytes) and taking the width from
-`hsbw` or `sbw`.
+`hsbw` or `sbw`. The walk stops at the standalone `end` token that closes the
+CharStrings dictionary (`type1CharStringsEnd`, Type 1 Font Format 10.3), read
+from the byte stream after each entry's `ND`/`|-`. It is not a test on the glyph
+*name*: `endash`, `enfilledcircbullet` and `endescender` are ordinary glyphs, and
+breaking on a name containing "end" truncated the glyph list at the first one, so
+every glyph defined after it read as missing from a font that in fact defines
+them (`TestType1CharStringsEndTerminator`).
 
 **Widths are always normalised to 1/1000 text-space units**, because that is
 what `/Widths` and `/W` are in: sfnt scales by `1000 / unitsPerEm`, CFF and

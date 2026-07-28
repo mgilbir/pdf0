@@ -1,6 +1,9 @@
 package pdf0
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestUAStructNesting flags a misplaced table cell and accepts a well-formed
 // table structure.
@@ -140,5 +143,114 @@ func TestUANotes(t *testing.T) {
 	}
 	if d := mk("a", "b"); len(d.checkUANotes(d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
 		t.Error("unique Note IDs wrongly flagged")
+	}
+}
+
+// roleMapChainDoc builds a document whose structure tree is
+// StructTreeRoot -> MyTable -> MyRow -> TD, with the custom types reaching their
+// standard types through the supplied /RoleMap.
+func roleMapChainDoc(roleMap *Dictionary) *Document {
+	doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
+	elem := func(num int, s Name, kids Array) {
+		d := &Dictionary{}
+		d.Set("S", s)
+		if kids != nil {
+			d.Set("K", kids)
+		}
+		doc.Objects[num] = &IndirectObject{Number: num, Value: d}
+	}
+	elem(12, "TD", nil)
+	elem(11, "MyRow", Array{IndirectRef{Number: 12}})
+	elem(10, "MyTable", Array{IndirectRef{Number: 11}})
+
+	root := &Dictionary{}
+	root.Set("Type", Name("StructTreeRoot"))
+	root.Set("K", IndirectRef{Number: 10})
+	root.Set("RoleMap", roleMap)
+	doc.Objects[2] = &IndirectObject{Number: 2, Value: root}
+	cat := &Dictionary{}
+	cat.Set("Type", Name("Catalog"))
+	cat.Set("StructTreeRoot", IndirectRef{Number: 2})
+	doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
+	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	doc.valCache = &validationCache{}
+	return doc
+}
+
+// TestRoleMapChainResolves pins that /RoleMap resolution follows a chain rather
+// than a single hop. A role map may reach a standard type through intermediate
+// custom types (MyPara -> Para -> P is legal, ISO 32000-1 14.7.3), and stopping
+// after one hop declared the type unmapped: it fired 7.1 "neither standard nor
+// mapped in /RoleMap" and then, because every dependent rule saw the raw type,
+// a spray of 7.2 nesting findings on a conformant tree.
+func TestRoleMapChainResolves(t *testing.T) {
+	// MyTable -> TableBase -> Table and MyRow -> RowBase -> TR: two hops each.
+	rm := &Dictionary{}
+	rm.Set("MyTable", Name("TableBase"))
+	rm.Set("TableBase", Name("Table"))
+	rm.Set("MyRow", Name("RowBase"))
+	rm.Set("RowBase", Name("TR"))
+	doc := roleMapChainDoc(rm)
+	cat := doc.ResolveDict(IndirectRef{Number: 1})
+
+	if v := doc.checkUARoleMap(cat); len(v) != 0 {
+		t.Errorf("two-step /RoleMap chain reported as unmapped: %+v", v)
+	}
+	if got := doc.standardStructType(doc.ResolveDict(IndirectRef{Number: 10}), rm); got != "Table" {
+		t.Errorf("standardStructType(MyTable) = %q, want Table", got)
+	}
+	if got := doc.standardStructType(doc.ResolveDict(IndirectRef{Number: 11}), rm); got != "TR" {
+		t.Errorf("standardStructType(MyRow) = %q, want TR", got)
+	}
+	// The nesting rules see Table -> TR -> TD, so a conformant tree is clean.
+	if v := doc.checkUAStructNesting(cat); len(v) != 0 {
+		t.Errorf("nesting findings on a tree whose types resolve through a chain: %+v", v)
+	}
+}
+
+// TestRoleMapChainTerminates requires a cyclic role map to end the walk and
+// still report the types as unmapped: following chains must not trade a
+// single-hop false positive for a hang.
+func TestRoleMapChainTerminates(t *testing.T) {
+	rm := &Dictionary{}
+	rm.Set("MyTable", Name("MyRow"))
+	rm.Set("MyRow", Name("MyTable")) // a two-key cycle reaching no standard type
+	doc := roleMapChainDoc(rm)
+	cat := doc.ResolveDict(IndirectRef{Number: 1})
+
+	done := make(chan []UAViolation, 1)
+	go func() { done <- doc.checkUARoleMap(cat) }()
+	select {
+	case v := <-done:
+		if len(v) != 2 {
+			t.Errorf("cyclic /RoleMap: got %d findings, want one per unmapped type: %+v", len(v), v)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("checkUARoleMap did not terminate on a cyclic /RoleMap")
+	}
+	// A type mapping to itself is a cycle of length one.
+	self := &Dictionary{}
+	self.Set("MyTable", Name("MyTable"))
+	sdoc := roleMapChainDoc(self)
+	if got := sdoc.standardStructType(sdoc.ResolveDict(IndirectRef{Number: 10}), self); got != "MyTable" {
+		t.Errorf("self-mapping type resolved to %q, want the raw type back", got)
+	}
+}
+
+// TestRoleMapChainBudgetDeclines pins the incomplete-result rule for this walk:
+// when the /RoleMap step budget stops the chain the mapping is unknown, so the
+// checker declines to report "neither standard nor mapped" rather than
+// manufacturing a finding out of a truncated answer.
+func TestRoleMapChainBudgetDeclines(t *testing.T) {
+	rm := &Dictionary{}
+	rm.Set("MyTable", Name("TableBase"))
+	rm.Set("TableBase", Name("Table"))
+	rm.Set("MyRow", Name("RowBase"))
+	rm.Set("RowBase", Name("TR"))
+	doc := roleMapChainDoc(rm)
+	doc.limits.roleMapSteps = 1 // room for the first hop only
+	cat := doc.ResolveDict(IndirectRef{Number: 1})
+	if v := doc.checkUARoleMap(cat); len(v) != 0 {
+		t.Errorf("budget trip manufactured a role-map finding: %+v", v)
 	}
 }

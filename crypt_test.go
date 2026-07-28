@@ -94,6 +94,111 @@ func TestDecryptRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAESDecryptFailureIsNotPlaintext pins what happens when AES decryption
+// fails under a key that is known good. A wrong password never reaches decrypt
+// — buildStdSecurityHandler returns no handler and the document reports Locked
+// — so a padding failure here means the blob is corrupt or was never encrypted.
+// Returning it unchanged, as this used to, dressed high-entropy ciphertext as a
+// /Title, a content stream or an XMP packet and handed it to the parser and
+// every validator: noise presented as content. The value is emptied instead,
+// the object number recorded, and Write refuses rather than committing the
+// blank to a file.
+func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
+	key := bytes.Repeat([]byte{0x11}, 32)
+	h := &stdSecurityHandler{
+		v: 5, r: 6, keyLen: 32, fileKey: key,
+		stmMethod: cryptAESV3, strMethod: cryptAESV3,
+		encryptMetadata: true, encryptObjNum: -1,
+	}
+	// A 32-byte blob (IV + one block) that does not decrypt: AES is
+	// deterministic, so this is a fixed input, but assert it rather than assume.
+	bad := make([]byte, 32)
+	for i := range bad {
+		bad[i] = byte(i)
+	}
+	if _, err := aesCBCDecrypt(key, bad); err == nil {
+		t.Fatal("fixture does not exercise the failure: the blob decrypts cleanly")
+	}
+
+	st := &Stream{Dict: Dictionary{}, Data: append([]byte(nil), bad...)}
+	st.Dict.Set("Length", Integer(len(bad)))
+	cat := &Dictionary{}
+	cat.Set("Type", Name("Catalog"))
+	cat.Set("Title", String{Value: append([]byte(nil), bad...)})
+	doc := &Document{
+		Objects: map[int]*IndirectObject{
+			1: {Number: 1, Value: cat},
+			4: {Number: 4, Value: st},
+		},
+		Trailer:   Dictionary{},
+		Encrypted: true,
+		security:  h,
+	}
+	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+
+	h.decryptDocument(doc)
+
+	if bytes.Equal(st.Data, bad) {
+		t.Error("stream ciphertext was handed on unchanged as plaintext")
+	}
+	if len(st.Data) != 0 {
+		t.Errorf("undecryptable stream data = %x, want empty", st.Data)
+	}
+	if s, _ := cat.Get("Title").(String); bytes.Equal(s.Value, bad) {
+		t.Error("string ciphertext was handed on unchanged as plaintext")
+	}
+	want := []int{1, 4}
+	if len(doc.decryptFailures) != len(want) {
+		t.Fatalf("decryptFailures = %v, want %v", doc.decryptFailures, want)
+	}
+	for i, n := range want {
+		if doc.decryptFailures[i] != n {
+			t.Fatalf("decryptFailures = %v, want %v (sorted)", doc.decryptFailures, want)
+		}
+	}
+
+	// The content is unrecoverable, so writing would replace it with blanks.
+	err := doc.Write(&bytes.Buffer{})
+	if err == nil {
+		t.Fatal("Write accepted a document whose objects could not be decrypted")
+	}
+	if !strings.Contains(err.Error(), "could not be decrypted") {
+		t.Errorf("refusal message = %q, want it to name the failed decrypt", err)
+	}
+}
+
+// TestDecryptSuccessRecordsNoFailure is the other half: a document that
+// decrypts cleanly must record nothing, so the Write refusal above cannot fire
+// on a good file.
+func TestDecryptSuccessRecordsNoFailure(t *testing.T) {
+	key := bytes.Repeat([]byte{0x22}, 32)
+	h := &stdSecurityHandler{
+		v: 5, r: 6, keyLen: 32, fileKey: key,
+		stmMethod: cryptAESV3, strMethod: cryptAESV3,
+		encryptMetadata: true, encryptObjNum: -1,
+	}
+	plain := []byte("a page's worth of content")
+	ct, err := aesCBCEncrypt(key, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &Stream{Dict: Dictionary{}, Data: ct}
+	st.Dict.Set("Length", Integer(len(ct)))
+	doc := &Document{
+		Objects:   map[int]*IndirectObject{4: {Number: 4, Value: st}},
+		Trailer:   Dictionary{},
+		Encrypted: true,
+		security:  h,
+	}
+	h.decryptDocument(doc)
+	if !bytes.Equal(st.Data, plain) {
+		t.Errorf("stream data = %q, want %q", st.Data, plain)
+	}
+	if len(doc.decryptFailures) != 0 {
+		t.Errorf("clean decrypt recorded failures %v", doc.decryptFailures)
+	}
+}
+
 func findCorpusFile(root, sub string) string {
 	var found string
 	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {

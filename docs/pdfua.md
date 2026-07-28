@@ -41,10 +41,20 @@ Guards on untrusted input, all verified in source. **Cycles:** every walk
 `collectTableRows`, `checkUAFieldDescription`) dedupes on `IndirectRef.Number`,
 so a `/K` pointing back at an ancestor terminates —
 `TestStructTreeFlatten` builds exactly that and asserts the visit list.
-**`/RoleMap` chains:** `checkUARoleMapIntegrity` follows each key's mapping chain
-to detect a cycle and caps *total* chain-following at `WithMaxRoleMapSteps` (2^20
-steps), since `Dictionary.Get` is linear and an adversarial role map was an
-O(N³) CPU sink (audit C20). **Mutation:** `validatePDFUA` installs the cache on a
+**`/RoleMap` chains:** a role map may reach a standard type through intermediate
+custom types (`MyPara → Para → P`), so both users of the map follow chains rather
+than a single hop. `checkUARoleMapIntegrity` walks each key's chain to detect a
+cycle; `resolveRoleMapChain` (`pdfua_struct.go`) walks it to resolve a type, and
+is what `standardStructType` and `checkUARoleMap` are built on. Both are bounded
+by a seen-set, so a cyclic map terminates, and by `WithMaxRoleMapSteps` (2^20
+steps) — `checkUARoleMapIntegrity` capping its *total* work across keys and
+`resolveRoleMapChain` capping one chain — since `Dictionary.Get` is linear and an
+adversarial role map was an O(N³) CPU sink (audit C20). `resolveRoleMapChain`
+also reports whether it ran to completion: on a budget trip the mapping is
+unknown, so `checkUARoleMap` declines to report *"neither standard nor mapped"*
+rather than manufacturing a finding from a truncated walk
+(`TestRoleMapChainResolves`, `TestRoleMapChainTerminates`,
+`TestRoleMapChainBudgetDeclines`). **Mutation:** `validatePDFUA` installs the cache on a
 **shallow copy** of the `Document`, so the caller's document is never touched
 (`TestUAValidationCacheIsolation`).
 
