@@ -668,13 +668,13 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 			start := i
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 				i++
-				if i-start > 256 {
-					break
-				}
 			}
 			if i == start {
 				i++ // unhandled delimiter (e.g. stray ')'): guarantee progress
 				continue
+			}
+			if i-start > maxContentTokenLen {
+				continue // binary run, not a token; see scanStreamForDeviceOps
 			}
 			if i-start == 2 && data[start] == 'B' && data[start+1] == 'I' {
 				skipInlineImage(data, &i)

@@ -48,6 +48,18 @@ type fontProgram struct {
 	cidGIDs map[int]bool
 	// widthByCID gives advance widths by CID for CID-keyed CFF.
 	widthByCID map[int]float64
+
+	// cmapPartial reports that a cmap subtable stopped short of its own end
+	// because the work budget (maxCmapFormat4Work) ran out, so the maps above
+	// are missing mappings the font really declares. A consumer must not read
+	// "this code is absent from the cmap" as "this code has no glyph" when it
+	// is set — that is audit C46's false positive with a different cause: a
+	// truncated cmap makes trueTypeGID answer "glyph 0" authoritatively, and a
+	// conformant font is then reported as undefined-glyph / .notdef.
+	//
+	// The sfnt parser has no Document in scope, so it cannot report the trip
+	// itself; loadFontProgram, which does, forwards it (see noteLimit).
+	cmapPartial bool
 }
 
 // --- sfnt (TrueType / OpenType) ---
@@ -193,11 +205,14 @@ func parseSFNT(data []byte) *fontProgram {
 			sub := cmap[off:]
 			switch {
 			case plat == 3 && enc == 1:
-				if m := parseCmapSubtable(sub); m != nil {
+				m, partial := parseCmapSubtable(sub)
+				fp.cmapPartial = fp.cmapPartial || partial
+				if m != nil {
 					fp.cmap = m
 				}
 			case plat == 3 && enc == 0:
-				m := parseCmapSubtable(sub)
+				m, partial := parseCmapSubtable(sub)
+				fp.cmapPartial = fp.cmapPartial || partial
 				if m == nil {
 					continue // unreadable: leave the cmap unset, not empty
 				}
@@ -206,7 +221,8 @@ func parseSFNT(data []byte) *fontProgram {
 					fp.symbolCmap[uint16(r)] = gid
 				}
 			case plat == 1 && enc == 0:
-				m := parseCmapSubtable(sub)
+				m, partial := parseCmapSubtable(sub)
+				fp.cmapPartial = fp.cmapPartial || partial
 				if m == nil {
 					continue
 				}
@@ -227,12 +243,19 @@ func parseSFNT(data []byte) *fontProgram {
 // truncated past use): callers treat a non-nil cmap as authoritative, so an
 // empty map would claim the font maps no character at all, which reads as
 // "every code is .notdef" rather than "unknown".
-func parseCmapSubtable(b []byte) map[rune]int {
+//
+// The second result reports that the work budget stopped the parse before the
+// subtable's own end, so the returned map is a prefix of the font's real
+// coverage. It is separate from the nil result because the mappings that were
+// read are still usable — a code the map does resolve resolves correctly — but
+// a code it does *not* resolve is unknown rather than absent, and no rule may
+// assert against it. Without this the budget reproduced audit C46 exactly.
+func parseCmapSubtable(b []byte) (map[rune]int, bool) {
 	out := make(map[rune]int)
 	switch be16(b, 0) {
 	case 0:
 		if len(b) < 262 {
-			return nil
+			return nil, false
 		}
 		for c := 0; c < 256; c++ {
 			if gid := int(b[6+c]); gid != 0 {
@@ -242,7 +265,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 	case 4:
 		segX2 := be16(b, 6)
 		if segX2 == 0 || len(b) < 16+4*segX2 {
-			return nil
+			return nil, false
 		}
 		endBase := 14
 		startBase := endBase + segX2 + 2
@@ -274,7 +297,10 @@ func parseCmapSubtable(b []byte) map[rune]int {
 			// segment beginning at code 0 (audit C46).
 			for c := start; c <= end; c++ {
 				if work++; work > maxCmapFormat4Work {
-					return out
+					// Partial, and it says so: the caller marks the font
+					// program so no rule reads a missing mapping as a
+					// missing glyph.
+					return out, true
 				}
 				var gid int
 				if rangeOff == 0 {
@@ -296,7 +322,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		first := be16(b, 6)
 		count := be16(b, 8)
 		if len(b) < 10+2*count {
-			return nil
+			return nil, false
 		}
 		// Character codes are 16-bit, so a first+count that runs past 0xFFFF
 		// is malformed. Recording those entries would be worse than dropping
@@ -311,9 +337,9 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		// Formats 2, 8, 10, 12, 13 and 14 are not parsed. Format 12 in
 		// particular carries the supra-BMP coverage of a (3,10) subtable,
 		// which the caller does not select.
-		return nil
+		return nil, false
 	}
-	return out
+	return out, false
 }
 
 // --- CFF ---

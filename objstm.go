@@ -135,6 +135,7 @@ func (d *Document) materializeScannedObjStms() {
 		st := d.Objects[cnum].Value.(*Stream)
 		if decompressed >= maxObjStmDecompressedTotal {
 			d.brokenObjStms = append(d.brokenObjStms, cnum)
+			d.noteReadLimit(limitObjStmTotal, fmt.Sprintf("object stream %d was not unpacked: this read has already decompressed %d bytes of object streams; its objects are missing from the document, so any finding of the form \"X is absent\" may be a consequence of that", cnum, decompressed), cnum)
 			continue
 		}
 		data, index, first, err := parseObjStmIndex(st)
@@ -209,6 +210,7 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 		// undecodable one) to bound the parser's work and memory.
 		if decompressed >= maxObjStmDecompressedTotal {
 			d.brokenObjStms = append(d.brokenObjStms, containerNum)
+			d.noteReadLimit(limitObjStmTotal, fmt.Sprintf("object stream %d was not unpacked: this read has already decompressed %d bytes of object streams; its objects are missing from the document, so any finding of the form \"X is absent\" may be a consequence of that", containerNum, decompressed), containerNum)
 			continue
 		}
 		// A corrupt object stream (e.g. undecodable data) makes only its own

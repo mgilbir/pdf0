@@ -49,6 +49,7 @@ func ValidatePDFVT2(doc *Document) []PDFVTViolation {
 }
 
 func validatePDFVTImpl(doc *Document, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
+	doc = beginRun(doc)
 	var out []PDFVTViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFVTViolation{Rule: rule, Message: msg, Object: obj})
@@ -67,6 +68,12 @@ func validatePDFVTImpl(doc *Document, versionPrefix string, allowRefXObjects boo
 			if allowRefXObjects && v.Rule == "forbidden" && strings.Contains(v.Message, "reference XObjects") {
 				continue
 			}
+			if v.Rule == limitRule {
+				// The nested run shares this run's recorder, so its guard
+				// trips are reported once, by the flush below — not prefixed
+				// as if they were a PDF/X conformance finding.
+				continue
+			}
 			add("pdfx-4/"+v.Rule, v.Message, v.Object)
 		}
 	})
@@ -79,7 +86,7 @@ func validatePDFVTImpl(doc *Document, versionPrefix string, allowRefXObjects boo
 		claimed := ""
 		if cat != nil {
 			if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
-				xmp := decodeXMPToUTF8(decodeContentStream(doc, ms))
+				xmp := xmpText(doc, ms)
 				claimed = strings.TrimSpace(extractXMPValue(xmp, "pdfvtid:GTS_PDFVTVersion"))
 			}
 		}
@@ -98,9 +105,16 @@ func validatePDFVTImpl(doc *Document, versionPrefix string, allowRefXObjects boo
 			add("dpart", "PDF/VT requires a document part hierarchy (catalog /DPartRoot)", 0)
 		}
 		for _, v := range ValidateDParts(doc) {
+			if v.Rule == limitRule {
+				continue // reported once by the flush below
+			}
 			add("dpart/"+v.Rule, v.Message, v.Object)
 		}
 	})
+
+	// Guard trips are reported under their own rule, not as conformance
+	// failures (see limits.go).
+	reportLimits(doc, add)
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.

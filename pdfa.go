@@ -260,10 +260,7 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 	// structures, and without the cache each content stream inflated up to three
 	// times per page and the page tree was collected in ~8 checks.
 	runDoc := *doc
-	runDoc.valCache = &validationCache{
-		pages:   make(map[int][]pageInfo),
-		content: make(map[*Stream][]byte),
-	}
+	runDoc.valCache = newValidationCache()
 	doc = &runDoc
 
 	for _, check := range checks {
@@ -278,6 +275,12 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkStreamLengthBytes(doc, level, rawData) })...)
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkSignatureByteRange(doc, level, rawData) })...)
 	}
+
+	// Any resource guard that tripped during the run (or while the file was
+	// read) is reported under the "limit" rule: the checks that depended on the
+	// truncated result declined to assert, so the result is "unknown", not
+	// "conformant". See limits.go.
+	errs = append(errs, limitValidationErrors(doc, level)...)
 
 	// Checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.
@@ -328,6 +331,11 @@ type validationCache struct {
 
 	structTree      []structNode // flattened pre-order struct-tree nodes
 	structTreeValid bool
+
+	// limits collects the resource guards that tripped during this run, so a
+	// check that declines to assert because its input was truncated still says
+	// so. See limits.go; always non-nil when built by newValidationCache.
+	limits *limitRecorder
 }
 
 // --- File structure checks (6.1) ---
@@ -2163,7 +2171,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		return nil
 	}
 
-	xmp := decodeXMPToUTF8(decodeContentStream(doc, stream))
+	xmp := xmpText(doc, stream)
 	var errs []ValidationError
 
 	// Check pdfaid namespace URI. XML allows either quote style around the value,
@@ -2908,7 +2916,7 @@ func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	xmp := decodeXMPToUTF8(decodeContentStream(doc, stream))
+	xmp := xmpText(doc, stream)
 
 	var errs []ValidationError
 
@@ -4910,6 +4918,21 @@ func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGr
 	}
 }
 
+// maxContentTokenLen is the longest run of non-delimiter bytes the content
+// tokenizers will hand to a caller as a token. Every PDF operator is at most
+// three characters and no keyword operand comes close to this, so a longer run
+// is binary data that a delimiter never terminated — most often the sample
+// bytes of an inline image whose EI was not found.
+//
+// The scanners drop such a run whole. They used to stop reading at the cap and
+// let the scan re-enter mid-run, which manufactured tokens out of binary: a
+// 300-byte run whose 257th byte was 'k' produced a one-byte "k" operator and
+// with it "DeviceCMYK used without matching OutputIntent or DefaultCMYK", and
+// an alphabetic fragment produced "content stream contains an operator not
+// defined in ISO 32000" — findings the complete token never supports. Reading
+// the run to its end costs the same single linear pass the chunked version did.
+const maxContentTokenLen = 256
+
 // maxContentStreamSize is the maximum decoded content stream size we'll scan.
 // Larger streams are skipped to bound memory on hostile input. The previous
 // 1 MB cap (and Flate-only, no-filter-array decoding) silently hid ordinary
@@ -4948,7 +4971,45 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		// decision is stable across the several checks that walk the same page.
 		if c.contentBytes >= maxDecodedContentTotal {
 			c.content[stream] = nil
+			noteLimit(doc, limitContentTotal, fmt.Sprintf("this run has already decoded %d bytes of content; the remaining content streams were not decoded, so no content-driven rule was applied to them", c.contentBytes), 0)
 			return nil
+		}
+	}
+	var data []byte
+	decoded, err := decodeStreamData(stream)
+	switch {
+	case err == nil && len(decoded) <= maxContentStreamSize:
+		data = decoded
+	case err == nil:
+		// It decoded, but it is too large to hold and tokenize. Every
+		// content-driven rule — device colour, the operator whitelist, tagging,
+		// font usage — now sees nothing from this stream. That is the failure
+		// the old 1 MB cap caused silently; at least say so.
+		noteLimit(doc, limitContentStream, fmt.Sprintf("a content stream decodes to %d bytes, over the %d-byte scanning limit; it was not scanned", len(decoded), maxContentStreamSize), 0)
+	}
+	if c := doc.valCache; c != nil {
+		c.content[stream] = data
+		c.contentBytes += int64(len(data))
+	}
+	return data
+}
+
+// decodeMetadataStream decodes an XMP metadata stream. It is deliberately not
+// subject to the aggregate content budget: /Metadata is the document's own
+// identification, and a validator that cannot read it must conclude nothing,
+// not "this file is unidentified". Under the shared budget a flate-bombed
+// document — whose page content exhausts maxDecodedContentTotal before the
+// identification checks run — had its XMP read as empty, and the rules then
+// emitted "metadata must contain pdfaid:part", "Info /Title present but XMP
+// dc:title missing" and "an embedded PDF file is not compliant with PDF/A"
+// against a file that declares all of them. A document has one metadata stream
+// and it is still bounded per stream by maxContentStreamSize, so exempting it
+// from the aggregate does not unbound the run; the bytes are still charged, so
+// they still count against genuinely unbounded content.
+func decodeMetadataStream(doc *Document, stream *Stream) []byte {
+	if c := doc.valCache; c != nil {
+		if data, ok := c.content[stream]; ok {
+			return data
 		}
 	}
 	var data []byte
@@ -4960,6 +5021,13 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		c.contentBytes += int64(len(data))
 	}
 	return data
+}
+
+// xmpText decodes an XMP packet to UTF-8 text. Every XMP consumer goes through
+// it so no site can route the document's identification back through the
+// content budget.
+func xmpText(doc *Document, stream *Stream) string {
+	return decodeXMPToUTF8(decodeMetadataStream(doc, stream))
 }
 
 // scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
@@ -5098,10 +5166,15 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 		start := i
 		for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 			i++
-			// Safety: cap token length to avoid scanning huge binary data
-			if i-start > 256 {
-				break
-			}
+		}
+		// A run longer than this is binary data, not a token: no PDF operator
+		// or operand keyword is anywhere near this long. Discarding it whole is
+		// what matters — cutting it at the cap and letting the scan re-enter
+		// mid-run turns the tail into further "tokens", and a fragment of
+		// binary read as an operator is a violation the file does not commit
+		// (a stray 'k'/'g' fragment reads as DeviceCMYK/DeviceGray use).
+		if i-start > maxContentTokenLen {
+			continue
 		}
 
 		tokLen := i - start
@@ -5345,14 +5418,14 @@ func forEachContentToken(data []byte, fn func(tok []byte, isName bool)) {
 			start := i
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 				i++
-				if i-start > 256 { // cap runaway binary tokens
-					break
-				}
 			}
 			if i == start {
 				// Defensive: an unhandled delimiter yields no progress; skip it.
 				i++
 				continue
+			}
+			if i-start > maxContentTokenLen {
+				continue // binary run, not a token; see scanStreamForDeviceOps
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {

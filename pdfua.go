@@ -38,18 +38,13 @@ func validatePDFUA(doc *Document, part string) []UAViolation {
 	// the same structures — collectFontTextUsage alone runs in nine font checks —
 	// and without the cache a large document's content was decoded and tokenized
 	// dozens of times, making validation quadratic in practice.
-	if doc.valCache == nil {
-		runDoc := *doc
-		runDoc.valCache = &validationCache{
-			pages:   make(map[int][]pageInfo),
-			content: make(map[*Stream][]byte),
-		}
-		doc = &runDoc
-	}
+	doc = beginRun(doc)
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
-		return []UAViolation{{"7.1", "document has no catalog", 0}}
+		// Even here the guard trips are reported: "no catalog" is exactly the
+		// kind of finding a read-time truncation can manufacture.
+		return append([]UAViolation{{"7.1", "document has no catalog", 0}}, limitUAViolations(doc)...)
 	}
 	var v []UAViolation
 
@@ -146,6 +141,11 @@ func validatePDFUA(doc *Document, part string) []UAViolation {
 
 	// 7.3 — every figure needs alternate text.
 	runCat(doc.checkFigureAlt)
+
+	// Resource guards that tripped during the run (or while the file was read)
+	// are reported under the "limit" clause, so a caller can tell "a check could
+	// not be completed" from "the file is non-conforming". See limits.go.
+	v = append(v, limitUAViolations(doc)...)
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.
@@ -284,7 +284,7 @@ func (d *Document) checkUAIdentifier(cat *Dictionary, want string) []UAViolation
 	if !ok {
 		return []UAViolation{{"5", "document has no XMP metadata (a PDF/UA identifier is required)", 0}}
 	}
-	xmp := decodeXMPToUTF8(decodeContentStream(d, stream))
+	xmp := xmpText(d, stream)
 	if !strings.Contains(xmp, "pdfuaid:part") {
 		return []UAViolation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
 	}
@@ -430,6 +430,10 @@ func (d *Document) checkUARoleMapIntegrity(cat *Dictionary) []UAViolation {
 		for {
 			work++
 			if work > maxRoleMapWork {
+				// Every key not yet examined goes unchecked, including the
+				// cheap standard-type test, so the remaining keys are
+				// unknown rather than clean.
+				noteLimit(d, limitRoleMapWork, fmt.Sprintf("following the /RoleMap chains cost more than %d steps; the remaining keys were not checked for standard-type remapping or cycles", maxRoleMapWork), 0)
 				return v
 			}
 			next, ok := d.Resolve(roleMap.Get(cur)).(Name)
@@ -1205,7 +1209,7 @@ func (d *Document) checkUATitle(cat *Dictionary) []UAViolation {
 	if !ok {
 		return nil // absence of metadata is already reported by the identifier check
 	}
-	if !strings.Contains(decodeXMPToUTF8(decodeContentStream(d, stream)), "dc:title") {
+	if !strings.Contains(xmpText(d, stream), "dc:title") {
 		return []UAViolation{{"7.1", "XMP metadata has no document title (dc:title)", 0}}
 	}
 	return nil
