@@ -319,13 +319,15 @@ func resolveObjNum(doc *Document, o Object) int {
 // -2/-3 6.1.13). The real magnitude and string-length limits differ by
 // part; the integer limit (2^31-1) is universal.
 func checkContentStreamLimits(doc *Document, level PDFALevel, lim implLimits, errs *[]ValidationError) {
-	seen := map[string]bool{}
+	// One example per distinct message, attributed to the lowest object number
+	// that produced it — collectContentStreamData returns a map, so the first
+	// stream to breach a limit varies from run to run.
+	// Flushed from a defer so that findings made before a panic still reach the
+	// caller, as they did when add appended to *errs directly.
+	var found exampleFindings
+	defer func() { *errs = append(*errs, found.errs...) }()
 	add := func(msg string, obj int) {
-		if seen[msg] {
-			return
-		}
-		seen[msg] = true
-		*errs = append(*errs, ValidationError{Rule: lim.rule, Level: level, Message: msg, Object: obj})
+		found.add(ValidationError{Rule: lim.rule, Level: level, Message: msg, Object: obj})
 	}
 	for num, data := range collectContentStreamData(doc) {
 		forEachContentItem(data, func(kind contentItemKind, payload []byte) {

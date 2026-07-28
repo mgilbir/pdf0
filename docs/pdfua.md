@@ -126,6 +126,14 @@ opened inside a tagged ancestor is 01-003, and tagged content opened inside an
 artifact ancestor is 01-004. `TestUARealContent` pins all three plus the
 `/OC`-wrapping case that must stay clean.
 
+`tokenizeContent` yields tokens one at a time (an `iter.Seq`) rather than
+returning a slice of them, and the analysis keeps no operand buffer — only the
+three facts a `BDC`/`BMC` actually consults. The two are the same point: a real
+document's page can hold millions of operands, none of which any rule reads back,
+and materializing them cost more than the whole scan. On a 117 MB file the token
+slice alone was 45 GB of allocation, about 94% of the run's total;
+`BenchmarkContentHeavyUAValidation` watches `allocs/op` for the regression.
+
 The tie back to the structure tree is `checkUAFormXObjectMCID` (7.20): a form
 XObject whose decoded bytes contain the `/MCID` token is tagged content, and
 tagged content must map one-to-one onto structure, so painting it twice is a

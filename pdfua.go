@@ -760,25 +760,44 @@ func (d *Document) checkType1CharSet(fontDict *Dictionary) []UAViolation {
 	listed := parseCharSet(string(cs.Value))
 	num := d.dictObjNum(fontDict)
 	var v []UAViolation
+	// Both directions report ONE glyph as the example, not the whole set. The
+	// glyph named must be the lexicographically smallest offender rather than
+	// whichever the loop meets first: fp.glyphNames and listed are Go maps, and
+	// Go randomises map iteration order on every run, so "first" named a
+	// different glyph each time the same font was validated and the message
+	// churned between otherwise identical runs. String order is a total order
+	// over glyph names, so the choice below is reproducible — that is
+	// load-bearing (reports are diffed run against run), not incidental.
+	//
+	// The minimum is tracked in one pass rather than by sorting: these maps hold
+	// one entry per glyph in an untrusted, attacker-sized embedded font program,
+	// and sorting them would allocate a slice as large as the font.
+
 	// Forward: every glyph in the program must be listed in /CharSet.
+	unlisted := ""
 	for name := range fp.glyphNames {
 		if name == ".notdef" || name == "" {
 			continue
 		}
-		if !listed[name] {
-			v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + name + " present in the embedded font program", num})
-			break
+		if !listed[name] && (unlisted == "" || name < unlisted) {
+			unlisted = name
 		}
 	}
+	if unlisted != "" {
+		v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + unlisted + " present in the embedded font program", num})
+	}
 	// Reverse: /CharSet must not list a glyph absent from the program.
+	absent := ""
 	for name := range listed {
 		if name == ".notdef" || name == "" {
 			continue
 		}
-		if !fp.glyphNames[name] {
-			v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet lists glyph " + name + " that is not present in the embedded font program", num})
-			break
+		if !fp.glyphNames[name] && (absent == "" || name < absent) {
+			absent = name
 		}
+	}
+	if absent != "" {
+		v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet lists glyph " + absent + " that is not present in the embedded font program", num})
 	}
 	return v
 }

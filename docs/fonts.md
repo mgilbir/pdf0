@@ -112,10 +112,36 @@ flowchart TD
 **sfnt (`parseSFNT`).** Accepts tag `0x00010000`, `true` or `OTTO`. Reads `head`
 for `unitsPerEm` and the loca format flag, `maxp` for `numGlyphs`, `hhea` +
 `hmtx` for advance widths, `loca` + `glyf` for outline extents, and `cmap` for
-code→GID: `(3,1)` into `cmap`, `(3,0)` into `symbolCmap` (queried with the
-`0xF000` prefix first), `(1,0)` into `macCmap`. `cmapSubtableCount` is kept
-because ISO 19005-1 6.3.7 requires a symbolic TrueType font to declare exactly
-one subtable.
+code→GID: the best Unicode subtable into `cmap`, `(3,0)` into `symbolCmap`
+(queried with the `0xF000` prefix first), `(1,0)` into `macCmap`.
+`cmapSubtableCount` is kept because ISO 19005-1 6.3.7 requires a symbolic
+TrueType font to declare exactly one subtable.
+
+**Which Unicode subtable wins** (`unicodeCmapRank`). A font may carry several, so
+the choice is ranked rather than "last one seen": `(3,10)` Windows full
+repertoire, then `(3,1)` Windows BMP, then `(0,4)`/`(0,6)` Unicode full
+repertoire, then any other `(0,x)`. `(3,10)` outranks `(3,1)` because it is a
+superset that reaches past the BMP; the Windows platform outranks the Unicode
+platform at equal coverage because ISO 32000-1 9.6.6.4 describes code→GID in
+terms of the Windows subtables, and because that keeps the choice unchanged for
+every font whose subtables are the `(3,1)`/`(3,0)`/`(1,0)` trio. Equal ranks
+resolve to the later subtable, as the un-ranked code always did. An unreadable
+higher-ranked subtable never displaces a readable lower-ranked one — nor does a
+higher-ranked one that is perfectly well formed but maps nothing, which amounts
+to the same thing and is why "maps nothing" is folded into "unreadable" below.
+
+**Subtable formats.** 0 (byte table), 4 (segment mapping), 6 (trimmed table) and
+12 (segmented coverage) are parsed; formats 2, 8, 10, 13 and 14 are not. Format
+12 is the only one whose keys can exceed `0xFFFF`, and in practice it is where a
+`(3,10)`/`(0,4)` subtable's supra-BMP coverage lives. An unparseable subtable —
+unknown format, truncated body, a declared `length`/`nGroups` the buffer cannot
+back — yields `nil`, never an empty map: `trueTypeGID` treats a non-nil `cmap` as
+authoritative, so an empty one would read as "every code is `.notdef`" instead of
+"unknown". So does a subtable that parses cleanly and maps nothing at all, which
+is not a theoretical shape: sixteen bytes of format-12 header declaring
+`nGroups` 0, a lone `0xFFFF` format-4 sentinel, or a table whose every group
+lies outside Unicode all reach the end of the parse holding no mapping.
+`FuzzCmapSubtable` found the last of those, and pins the invariant.
 
 **Empty glyph is not missing glyph.** This distinction is the trap, and it is
 why two parallel arrays exist. `glyphPresent[gid]` means the loca entry is
@@ -263,6 +289,14 @@ but a hang or an OOM is not something `recover` catches.
 - **cmap format 4 total work** (`maxCmapFormat4Work = 1 << 18`) — a valid
   subtable partitions the BMP in ~65536 iterations, a hostile one with many
   full-range segments is O(segments × 65535) (audit C10).
+- **cmap format 12 total work** (`maxCmapFormat12Work = 1 << 18`) — `nGroups` is
+  a `uint32` and one group may span the whole of Unicode (0x110000 codes), so the
+  expansion is entirely font-controlled. The budget charges one unit per group
+  *and* one per code, which bounds the group loop as well as the map; on trip the
+  partial map is returned, as in format 4. `1 << 18` is four times the 65535
+  glyphs an sfnt can hold, so no honest font comes near it. `nGroups` is also
+  checked against the bytes actually present, and a group is skipped when
+  inverted or when it starts past U+10FFFF.
 - **`bfrange` span** (`hi - lo < 65536`), **section-marker overlap** (the
   `lo > hi` continue), and **CIDSet membership without materialisation**
   (`cidSet` tests bits in place) — all described above.
@@ -279,10 +313,12 @@ but a hang or an OOM is not something `recover` catches.
 - **Non-Identity CMaps are not decoded.** Glyph coverage, `.notdef` and width
   consistency are evaluated only for `Identity-H`/`Identity-V`; a Type 0 font
   with a predefined CJK CMap is checked at the dictionary level only.
-- **cmap format 4 drops a segment starting at code 0** — the inner condition is
-  `c <= end && c != 0`, so `start == 0` never executes the body (audit C46).
-  Only formats 0, 4 and 6 are parsed at all, so a font whose only Unicode
-  subtable is format 12 yields an empty `cmap`.
+- **cmap formats 2, 8, 10, 13 and 14 are not parsed** — a font whose only
+  Unicode subtable is one of those has no `cmap` at all (`nil`, so the lookup
+  falls through to the Mac and symbol tables rather than reporting `.notdef`).
+  Format 14 in particular means variation sequences are invisible. Format 12's
+  groups are read as written: they are required to be sorted and non-overlapping,
+  and neither is enforced — an overlap resolves to the last group.
 - **CFF local/global subrs are parsed but unused** (`_ = localSubrs`), so a
   width expressed only through a subroutine call is not recovered; Expert
   charsets (ids 1 and 2) fall back to identity SIDs. **No standard-14 metrics**,

@@ -263,25 +263,30 @@ func buildFontEvents(data []byte) []fontEvent {
 		return nil
 	}
 	var events []fontEvent
-	var lastName, lastNumber string
+	// lastName/lastNumber hold the raw operand bytes, which forEachContentItem
+	// reports as sub-slices of data. Converting them to strings on arrival cost
+	// one allocation per token — 87% of the whole PDF/UA run's allocations, since
+	// numbers are by far the most common token and only the rare Tr ever reads
+	// one. The conversion now happens where the value is consumed.
+	var lastName, lastNumber []byte
 	var pending [][]byte
 	forEachContentItem(data, func(kind contentItemKind, payload []byte) {
 		switch kind {
 		case itemName:
-			lastName = string(payload)
+			lastName = payload
 		case itemNumber:
-			lastNumber = string(payload)
+			lastNumber = payload
 		case itemString:
 			pending = append(pending, append([]byte(nil), payload...))
 		case itemOperator:
 			switch string(payload) {
 			case "Tf":
-				events = append(events, fontEvent{kind: evTf, name: lastName})
+				events = append(events, fontEvent{kind: evTf, name: string(lastName)})
 				pending = nil
 			case "Tr":
 				m := 0
-				if lastNumber != "" {
-					fmt.Sscanf(lastNumber, "%d", &m)
+				if len(lastNumber) > 0 {
+					fmt.Sscanf(string(lastNumber), "%d", &m)
 				}
 				events = append(events, fontEvent{kind: evTr, mode: m})
 				pending = nil
@@ -424,31 +429,47 @@ func collectTextFromContainer(doc *Document, container *Dictionary, data []byte,
 		}
 	}
 
-	// Recurse into executed forms and patterns.
+	// Recurse into executed forms and patterns. Resolve the candidates first:
+	// learning *which* of them the content executes costs a full pass over the
+	// stream, and a container with no form XObject and no tiling pattern in
+	// scope — a page whose /XObject holds nothing but images, say — has nothing
+	// to recurse into, so that pass would answer a question nobody asks.
 	if res == nil {
 		return
 	}
-	used := doc.contentUsedNamesCached(data, key)
+	type candidate struct {
+		name   string
+		stream *Stream
+	}
+	var forms, patterns []candidate
 	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
 		for i, name := range xobjDict.Keys {
-			if !used.xobjects[string(name)] {
-				continue
-			}
 			if s, ok := doc.Resolve(xobjDict.Values[i]).(*Stream); ok {
 				if st, _ := s.Dict.Get("Subtype").(Name); st == "Form" {
-					collectTextFromContainer(doc, &s.Dict, decodeContentStream(doc, s), s, usage, seen, applied)
+					forms = append(forms, candidate{string(name), s})
 				}
 			}
 		}
 	}
 	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
 		for i, name := range patDict.Keys {
-			if !used.patterns[string(name)] {
-				continue
-			}
 			if s, ok := doc.Resolve(patDict.Values[i]).(*Stream); ok {
-				collectTextFromContainer(doc, &s.Dict, decodeContentStream(doc, s), s, usage, seen, applied)
+				patterns = append(patterns, candidate{string(name), s})
 			}
+		}
+	}
+	if len(forms) == 0 && len(patterns) == 0 {
+		return
+	}
+	used := doc.contentUsedNamesCached(data, key)
+	for _, c := range forms {
+		if used.xobjects[c.name] {
+			collectTextFromContainer(doc, &c.stream.Dict, decodeContentStream(doc, c.stream), c.stream, usage, seen, applied)
+		}
+	}
+	for _, c := range patterns {
+		if used.patterns[c.name] {
+			collectTextFromContainer(doc, &c.stream.Dict, decodeContentStream(doc, c.stream), c.stream, usage, seen, applied)
 		}
 	}
 }

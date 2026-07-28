@@ -66,15 +66,11 @@ func checkImageIntentAndInterpolate(doc *Document, level PDFALevel) []Validation
 	case PDFA2b, PDFA3b:
 		interpRule, intentRule = "6.2.8", "6.2.6"
 	}
-	var errs []ValidationError
-	seen := map[string]bool{}
+	// One example per distinct rule and message, attributed to the lowest object
+	// number that produced it — both loops below iterate maps.
+	var found exampleFindings
 	add := func(rule, msg string, obj int) {
-		key := rule + msg
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		found.add(ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	// Image XObject /Intent (Interpolate on image XObjects is already
@@ -104,7 +100,7 @@ func checkImageIntentAndInterpolate(doc *Document, level PDFALevel) []Validation
 			}
 		}
 	}
-	return errs
+	return found.errs
 }
 
 // checkFileTrailerID validates the file identifier: when present, /ID shall
@@ -289,14 +285,11 @@ func checkActualTextPUA(doc *Document, level PDFALevel) []ValidationError {
 	if level != PDFA4 {
 		return nil
 	}
-	var errs []ValidationError
-	seen := map[string]bool{}
+	// One example per distinct message, attributed to the lowest object number
+	// that produced it — both loops below iterate maps.
+	var found exampleFindings
 	add := func(msg string, obj int) {
-		if seen[msg] {
-			return
-		}
-		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: "6.2.10.8", Level: level, Message: msg, Object: obj})
+		found.add(ValidationError{Rule: "6.2.10.8", Level: level, Message: msg, Object: obj})
 	}
 
 	// Structure element (and any) dictionaries carrying /ActualText.
@@ -317,7 +310,7 @@ func checkActualTextPUA(doc *Document, level PDFALevel) []ValidationError {
 			}
 		}
 	}
-	return errs
+	return found.errs
 }
 
 // contentActualTexts extracts the (decoded) value of every /ActualText entry
