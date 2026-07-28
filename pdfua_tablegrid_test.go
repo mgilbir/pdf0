@@ -21,37 +21,37 @@ func TestGridDefects(t *testing.T) {
 
 	// A clean 2x2 grid.
 	clean := []tableRow{{cell(1, 1), cell(1, 1)}, {cell(1, 1), cell(1, 1)}}
-	if v := gridDefects(clean); len(v) != 0 {
+	if v := gridDefects(clean, defaultMaxTableGridFills); len(v) != 0 {
 		t.Errorf("clean 2x2 grid flagged: %v", v)
 	}
 
 	// A clean grid with a valid rowspan (col 0 spans both rows).
 	spanOK := []tableRow{{cell(2, 1), cell(1, 1)}, {cell(1, 1)}}
-	if v := gridDefects(spanOK); len(v) != 0 {
+	if v := gridDefects(spanOK, defaultMaxTableGridFills); len(v) != 0 {
 		t.Errorf("valid rowspan grid flagged: %v", v)
 	}
 
 	// A clean grid with a valid colspan header row.
 	colspanOK := []tableRow{{cell(1, 2)}, {cell(1, 1), cell(1, 1)}}
-	if v := gridDefects(colspanOK); len(v) != 0 {
+	if v := gridDefects(colspanOK, defaultMaxTableGridFills); len(v) != 0 {
 		t.Errorf("valid colspan grid flagged: %v", v)
 	}
 
 	// RowSpan extends beyond the table (3 rows, cell claims 5).
 	oob := []tableRow{{cell(5, 1), cell(1, 1)}, {cell(1, 1)}, {cell(1, 1)}}
-	if !has(gridDefects(oob), "beyond the last row") {
+	if !has(gridDefects(oob, defaultMaxTableGridFills), "beyond the last row") {
 		t.Error("out-of-bounds rowspan not flagged")
 	}
 
 	// A hole: second row is short, leaving an empty grid cell.
 	hole := []tableRow{{cell(1, 1), cell(1, 1)}, {cell(1, 1)}}
-	if !has(gridDefects(hole), "empty") {
+	if !has(gridDefects(hole, defaultMaxTableGridFills), "empty") {
 		t.Error("grid hole not flagged")
 	}
 
 	// A colspan that widens one row past the other creates a hole.
 	wide := []tableRow{{cell(1, 3)}, {cell(1, 1), cell(1, 1)}}
-	if !has(gridDefects(wide), "empty") {
+	if !has(gridDefects(wide, defaultMaxTableGridFills), "empty") {
 		t.Error("inconsistent width not flagged")
 	}
 }
@@ -77,7 +77,7 @@ func TestGridDefectsSparseHuge(t *testing.T) {
 	}
 
 	start := time.Now()
-	got := gridDefects(holed)
+	got := gridDefects(holed, defaultMaxTableGridFills)
 	if el := time.Since(start); el > 3*time.Second {
 		t.Fatalf("gridDefects took %v on a %dx%d sparse table; expected O(rows)", el, nRows, width)
 	}
@@ -97,7 +97,7 @@ func TestGridDefectsSparseHuge(t *testing.T) {
 	for r := range full {
 		full[r] = tableRow{cell(1, 1)}
 	}
-	if v := gridDefects(full); len(v) != 0 {
+	if v := gridDefects(full, defaultMaxTableGridFills); len(v) != 0 {
 		t.Errorf("tall single-column table flagged: %v", v)
 	}
 }
@@ -132,7 +132,7 @@ func TestGridDefectsSpanBomb(t *testing.T) {
 	// the point is bounded-vs-unbounded, not a precise time.
 	for _, tc := range cases {
 		done := make(chan int, 1)
-		go func() { done <- len(gridDefects(tc.rows)) }()
+		go func() { done <- len(gridDefects(tc.rows, defaultMaxTableGridFills)) }()
 		select {
 		case <-done:
 		case <-time.After(25 * time.Second):
@@ -143,7 +143,7 @@ func TestGridDefectsSpanBomb(t *testing.T) {
 	// A table just under the budget is still laid out normally (not treated as
 	// oversize): two full rows of a modest width report no defect.
 	small := []tableRow{{cell(1, 3)}, {cell(1, 1), cell(1, 1), cell(1, 1)}}
-	if v := gridDefects(small); len(v) != 0 {
+	if v := gridDefects(small, defaultMaxTableGridFills); len(v) != 0 {
 		t.Errorf("well-formed small table flagged: %v", v)
 	}
 }

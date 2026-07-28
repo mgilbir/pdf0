@@ -752,7 +752,7 @@ func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
 	if xmp == "" {
 		return nil
 	}
-	props, err := parseXMPProperties([]byte(xmp))
+	props, err := parseXMPProperties([]byte(xmp), doc.lim().xmpPacketBytes)
 	if err != nil {
 		return nil // malformed XML is checked elsewhere
 	}
@@ -1131,7 +1131,7 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	raw, err := decodeStreamData(stream)
+	raw, err := decodeStreamData(stream, doc.lim())
 	if err != nil {
 		raw = stream.Data
 	}

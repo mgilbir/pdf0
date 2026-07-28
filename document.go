@@ -48,6 +48,11 @@ type Document struct {
 	// (see checkEmbeddedPDFA); it is 0 for a top-level document.
 	embeddedDepth int
 
+	// limits holds the resource limits resolved from the Option values passed to
+	// Read. Read through (*Document).lim(), never directly: the zero value means
+	// "defaults", so a hand-built &Document{...} behaves like one Read produced.
+	limits limits
+
 	// brokenObjStms lists object-stream container numbers whose contents could
 	// not be decoded during Read. The document parses without them so that
 	// validation can report the defect (see checkStreamLength / objstm rules).
@@ -74,16 +79,19 @@ type Document struct {
 // password; use ReadWithPassword to supply a user or owner password. A file
 // that cannot be decrypted is still parsed structurally, with its strings and
 // streams left encrypted (see Document.Encrypted).
-func Read(r io.ReaderAt, size int64) (*Document, error) {
-	return readDocument(r, size, "")
+// Resource limits default to values safe for untrusted input; pass With* options
+// to change them. The resolved limits are stored on the returned Document, so
+// every validator and extractor that runs on it inherits the same configuration.
+func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
+	return readDocument(r, size, "", resolveLimits(opts))
 }
 
 // ReadWithPassword is Read with a user or owner password for an encrypted file.
-func ReadWithPassword(r io.ReaderAt, size int64, password string) (*Document, error) {
-	return readDocument(r, size, password)
+func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
+	return readDocument(r, size, password, resolveLimits(opts))
 }
 
-func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, err error) {
+func readDocument(r io.ReaderAt, size int64, password string, lim limits) (doc *Document, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			doc = nil
@@ -103,6 +111,7 @@ func readDocument(r io.ReaderAt, size int64, password string) (doc *Document, er
 
 	doc = &Document{
 		Objects: make(map[int]*IndirectObject),
+		limits:  lim,
 	}
 
 	// 1. Find header to extract version and header offset

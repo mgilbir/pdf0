@@ -28,6 +28,25 @@
 //	var out bytes.Buffer
 //	err = doc.Write(&out)
 //
+// # Resource limits
+//
+// pdf0 parses untrusted input, so every unbounded loop and every allocation
+// sized by a number the file supplies is capped. The defaults are safe for
+// hostile input and no real file measured across the veraPDF corpus or a
+// 978-file Common Crawl sample comes within 2x of any of them, so a caller who
+// configures nothing needs to do nothing.
+//
+// Eleven of those caps are settable per document, as variadic Option values on
+// Read (see WithMaxDecodedStreamBytes and the other With* functions). They
+// resolve once and are stored on the Document, so validation and extraction
+// inherit whatever Read was given, and two documents read with different limits
+// never interfere:
+//
+//	doc, err := pdf0.Read(r, size,
+//		pdf0.WithMaxDecodedStreamBytes(8<<20),
+//		pdf0.WithMaxDecodedContentBytes(64<<20),
+//	)
+//
 // Encrypted files using the standard security handler are decrypted on Read
 // when the (empty or supplied) user or owner password is correct: RC4 and
 // AES-128 at revisions 2-4, and AES-256 at revision 6. Revision 5 is a

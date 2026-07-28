@@ -840,7 +840,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 			continue
 		}
 		// Decompress and check ICC profile header
-		data, err := decodeStreamData(profStream)
+		data, err := decodeStreamData(profStream, doc.lim())
 		if err != nil {
 			// Only treat a decode failure as a violation when we actually
 			// support every filter on the stream. A legal profile encoded with
@@ -4401,7 +4401,7 @@ func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMY
 		}
 
 		// Decompress the profile data to read the ICC header
-		profileData := getICCProfileData(stream)
+		profileData := getICCProfileData(stream, doc.lim())
 		if len(profileData) < 20 {
 			// Can't read profile header; assume it covers both spaces
 			// to avoid false positives.
@@ -4428,16 +4428,22 @@ func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMY
 	return
 }
 
-// maxICCProfileSize is the maximum size for a decoded ICC profile (2 MB).
-const maxICCProfileSize = 2 << 20
-
 // getICCProfileData returns the decompressed ICC profile data from a stream.
-// Returns the raw stream data if no filter or decoding fails.
-// Limits decoded size to maxICCProfileSize to prevent decompression bombs.
-func getICCProfileData(stream *Stream) []byte {
+// Returns the raw stream data if no filter or decoding fails. The decoded size
+// is bounded to prevent decompression bombs; the default is
+// defaultMaxICCProfileBytes and a caller can change it with
+// WithMaxICCProfileBytes.
+//
+// The default was raised from 2 MiB to 8 MiB: the largest real profile measured
+// across the veraPDF corpus and a 978-file Common Crawl sample is 1,829,093
+// bytes — 87% of the old cap, i.e. one slightly fatter profile away from
+// silently dropping the ICC rules for that file. Unlike the XMP packet bound,
+// the cost here is linear (a profile is read once and scanned, not expanded),
+// so headroom is cheap.
+func getICCProfileData(stream *Stream, lim limits) []byte {
 	filter := stream.Dict.Get("Filter")
 	if filter == nil {
-		if len(stream.Data) > maxICCProfileSize {
+		if len(stream.Data) > lim.iccProfileBytes {
 			return nil
 		}
 		return stream.Data
@@ -4461,12 +4467,12 @@ func getICCProfileData(stream *Stream) []byte {
 	}
 	defer r.Close()
 
-	limited := io.LimitReader(r, maxICCProfileSize+1)
+	limited := io.LimitReader(r, int64(lim.iccProfileBytes)+1)
 	decoded, err := io.ReadAll(limited)
 	if err != nil {
 		return nil
 	}
-	if len(decoded) > maxICCProfileSize {
+	if len(decoded) > lim.iccProfileBytes {
 		return nil
 	}
 	return decoded
@@ -4910,49 +4916,49 @@ func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGr
 	}
 }
 
-// maxContentStreamSize is the maximum decoded content stream size we'll scan.
-// Larger streams are skipped to bound memory on hostile input. The previous
-// 1 MB cap (and Flate-only, no-filter-array decoding) silently hid ordinary
-// content from every scanner — an oversize or [/FlateDecode]-wrapped stream
-// full of DeviceRGB validated clean.
-const maxContentStreamSize = 64 << 20 // 64 MB
-
-// maxDecodedContentTotal bounds the aggregate size of decoded content that one
-// validation run will materialize. The per-stream cap (maxContentStreamSize)
-// stops a single stream from exploding, but a small file can carry many content
-// streams that each decompress near that cap (a flate bomb): 100 pages whose
-// contents each inflate to ~60 MB is a ~12 MB file that would otherwise decode
-// and tokenize ~6 GB of content, driving validation past 9 GB of memory. Once
-// this budget is reached, further content streams are treated as undecodable
-// (nil), so they are neither decoded nor tokenized and the work stays bounded.
-// Real documents decode far less than this, so the budget never affects their
-// validation; it only truncates pathologically amplified input. 512 MB is well
-// above any conformant file observed in the corpus. It is a var (not a const)
-// so tests can lower it to exercise the budget without materializing gigabytes.
-var maxDecodedContentTotal int64 = 512 << 20 // 512 MB
+// The maximum decoded content stream size we'll scan defaults to
+// defaultMaxContentStreamBytes; a caller can change it with
+// WithMaxContentStreamBytes. Larger streams are skipped to bound memory on
+// hostile input. The previous 1 MB cap (and Flate-only, no-filter-array
+// decoding) silently hid ordinary content from every scanner — an oversize or
+// [/FlateDecode]-wrapped stream full of DeviceRGB validated clean.
+//
+// The aggregate size of decoded content that one validation run will
+// materialize defaults to defaultMaxDecodedContentBytes
+// (WithMaxDecodedContentBytes). The per-stream cap stops a single stream from
+// exploding, but a small file can carry many content streams that each
+// decompress near that cap (a flate bomb): 100 pages whose contents each inflate
+// to ~60 MB is a ~12 MB file that would otherwise decode and tokenize ~6 GB of
+// content, driving validation past 9 GB of memory. Once this budget is reached,
+// further content streams are treated as undecodable (nil), so they are neither
+// decoded nor tokenized and the work stays bounded. Real documents decode far
+// less than this, so the budget never affects their validation; it only
+// truncates pathologically amplified input — the heaviest document measured
+// across the veraPDF corpus and a Common Crawl sample needs 218 MB.
 
 // decodeContentStream decodes a stream for content scanning through the full
 // filter pipeline (filter arrays, ASCIIHex, predictors). Results are
 // memoized per validation run: several checks re-decode the same page
 // contents. Returns nil if the stream cannot be decoded, or if the run's
-// aggregate decoded-content budget (maxDecodedContentTotal) is exhausted.
+// aggregate decoded-content budget is exhausted.
 func decodeContentStream(doc *Document, stream *Stream) []byte {
+	lim := doc.lim()
 	if c := doc.valCache; c != nil {
 		if data, ok := c.content[stream]; ok {
 			return data
 		}
-		// Aggregate budget: once this run has decoded maxDecodedContentTotal
+		// Aggregate budget: once this run has decoded the configured number of
 		// bytes of content, treat further content streams as undecodable and do
 		// not decode (or tokenize) them. This bounds the memory a flate-bomb
 		// document can force. Undecodable is negatively cached below, so the
 		// decision is stable across the several checks that walk the same page.
-		if c.contentBytes >= maxDecodedContentTotal {
+		if c.contentBytes >= lim.decodedContentBytes {
 			c.content[stream] = nil
 			return nil
 		}
 	}
 	var data []byte
-	if decoded, err := decodeStreamData(stream); err == nil && len(decoded) <= maxContentStreamSize {
+	if decoded, err := decodeStreamData(stream, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
 		data = decoded
 	}
 	if c := doc.valCache; c != nil {
@@ -5578,7 +5584,7 @@ func checkICCBasedProfiles(doc *Document, level PDFALevel) []ValidationError {
 		}
 
 		// Decompress profile data to check ICC header
-		profileData := getICCProfileData(stream)
+		profileData := getICCProfileData(stream, doc.lim())
 
 		// Check ICC profile header if data is available
 		if len(profileData) >= 20 {
@@ -6349,8 +6355,8 @@ func sameICCProfile(doc *Document, a, b *Stream) bool {
 	if a == b {
 		return true
 	}
-	da := getICCProfileData(a)
-	db := getICCProfileData(b)
+	da := getICCProfileData(a, doc.lim())
+	db := getICCProfileData(b, doc.lim())
 	if len(da) == 0 || len(da) != len(db) {
 		return false
 	}

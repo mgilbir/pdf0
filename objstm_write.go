@@ -19,16 +19,16 @@ import (
 // changes the data length. Containers are split to stay under a size the reader
 // will still accept.
 
-// objStmMaxRaw bounds one object stream's decompressed (index + bodies) size.
-// A reader caps flate output at maxDecodeSize (100 MB), so a container whose
-// decompressed size exceeds that would be written but rejected on the next read,
-// silently losing every object it holds. Keeping each container well under the
-// cap lets buildWriteSet split a large object set across several containers that
-// all round-trip. Half the cap leaves generous margin for the index header.
+// One object stream's decompressed (index + bodies) size is bounded by
+// limits.objStmMaxRaw. A reader caps flate output at the decoded-stream limit,
+// so a container whose decompressed size exceeds that would be written but
+// rejected on the next read, silently losing every object it holds. Keeping each
+// container well under the cap lets buildWriteSet split a large object set
+// across several containers that all round-trip.
 //
-// It is a var, not a const, only so tests can lower it to exercise the split
-// without constructing a 100 MB document.
-var objStmMaxRaw = maxDecodeSize / 2
+// It derives from the reader's cap rather than being configured separately, so
+// a document written with WithMaxDecodedStreamBytes stays readable under the
+// same configuration; see limits.objStmMaxRaw.
 
 // buildObjectStream packs the given non-stream objects, whose plaintext bodies
 // are supplied pre-serialized in bodies, into a /Type /ObjStm container numbered
@@ -135,12 +135,13 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 		bodies[num] = buf.Bytes()
 	}
 
-	// Group objects into chunks whose decompressed size stays under objStmMaxRaw,
+	// Group objects into chunks whose decompressed size stays under objStmMax,
 	// emitting one container per chunk. This keeps every written container
-	// readable (see objStmMaxRaw); a small object set yields a single container,
-	// preserving the previous output byte-for-byte. An object whose body alone
-	// exceeds the budget cannot be packed safely, so it is left as an individual
-	// indirect object.
+	// readable (see limits.objStmMaxRaw); a small object set yields a single
+	// container, preserving the previous output byte-for-byte. An object whose
+	// body alone exceeds the budget cannot be packed safely, so it is left as an
+	// individual indirect object.
+	objStmMax := d.lim().objStmMaxRaw()
 	out := make(map[int]*IndirectObject, len(d.Objects)+4)
 	for num, iobj := range d.Objects {
 		out[num] = iobj
@@ -167,10 +168,10 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 		// Each object costs its body plus a newline and an index entry
 		// ("objnum offset ", at most ~24 bytes for realistic numbers).
 		cost := len(bodies[num]) + 1 + 24
-		if len(bodies[num]) >= objStmMaxRaw {
+		if len(bodies[num]) >= objStmMax {
 			continue // too large to pack; stays an individual object
 		}
-		if chunkBytes+cost >= objStmMaxRaw {
+		if chunkBytes+cost >= objStmMax {
 			flush()
 		}
 		chunk = append(chunk, num)

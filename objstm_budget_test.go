@@ -100,11 +100,7 @@ func TestObjStmDecompressionBudget(t *testing.T) {
 	// (container 1) still loads because the budget is only consulted before a
 	// stream is decoded (it starts at zero), but it exhausts the budget, so the
 	// second stream (container 7) is skipped.
-	saved := maxObjStmDecompressedTotal
-	maxObjStmDecompressedTotal = filler / 2
-	defer func() { maxObjStmDecompressedTotal = saved }()
-
-	doc2, err := Read(bytes.NewReader(pdf), int64(len(pdf)))
+	doc2, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxObjectStreamBytes(int64(filler/2)))
 	if err != nil {
 		t.Fatalf("read with lowered budget: %v", err)
 	}

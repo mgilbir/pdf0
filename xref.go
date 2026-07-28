@@ -140,7 +140,15 @@ func ParseXRefTable(data []byte, pos int64) (*XRefTable, error) {
 }
 
 // ParseXRefStream parses a cross-reference stream.
-func ParseXRefStream(stream *Stream) (*XRefTable, error) {
+//
+// Resource limits default to values safe for untrusted input; pass With*
+// options to change them. (*Document) supplies its own resolved limits when it
+// calls this during Read, so a document read with options keeps them here.
+func ParseXRefStream(stream *Stream, opts ...Option) (*XRefTable, error) {
+	return parseXRefStream(stream, resolveLimits(opts))
+}
+
+func parseXRefStream(stream *Stream, lim limits) (*XRefTable, error) {
 	table := &XRefTable{
 		Entries: make(map[int]XRefEntry),
 	}
@@ -210,7 +218,7 @@ func ParseXRefStream(stream *Stream) (*XRefTable, error) {
 	}
 
 	// Decompress stream data
-	streamData, err := decodeStreamData(stream)
+	streamData, err := decodeStreamData(stream, lim)
 	if err != nil {
 		return nil, fmt.Errorf("decoding xref stream data: %w", err)
 	}
@@ -279,7 +287,7 @@ func readField(data []byte, width int) int {
 
 // decodeStreamData decompresses stream data based on the /Filter and
 // /DecodeParms entries.
-func decodeStreamData(stream *Stream) ([]byte, error) {
+func decodeStreamData(stream *Stream, lim limits) ([]byte, error) {
 	filter := stream.Dict.Get("Filter")
 	if filter == nil {
 		// No filter, return raw data
@@ -302,7 +310,7 @@ func decodeStreamData(stream *Stream) ([]byte, error) {
 				return nil, fmt.Errorf("filter array element is not a Name")
 			}
 			var err error
-			data, err = applyFilter(fname, data, parmsDictAt(parms, i))
+			data, err = applyFilter(fname, data, parmsDictAt(parms, i), lim)
 			if err != nil {
 				return nil, err
 			}
@@ -310,13 +318,13 @@ func decodeStreamData(stream *Stream) ([]byte, error) {
 		return data, nil
 	}
 
-	return applyFilter(filterName, stream.Data, parmsDictAt(parms, 0))
+	return applyFilter(filterName, stream.Data, parmsDictAt(parms, 0), lim)
 }
 
-func applyFilter(name Name, data []byte, parms *Dictionary) ([]byte, error) {
+func applyFilter(name Name, data []byte, parms *Dictionary, lim limits) ([]byte, error) {
 	switch name {
 	case "FlateDecode":
-		decoded, err := flateDecode(data)
+		decoded, err := flateDecode(data, lim)
 		if err != nil {
 			return nil, err
 		}
@@ -328,7 +336,7 @@ func applyFilter(name Name, data []byte, parms *Dictionary) ([]byte, error) {
 				early = int(e)
 			}
 		}
-		decoded, err := lzwDecode(data, early)
+		decoded, err := lzwDecode(data, early, lim)
 		if err != nil {
 			return nil, err
 		}
@@ -392,9 +400,10 @@ func predictorSupported(p predictorParms) bool {
 	return false
 }
 
-// maxDecodeSize is the maximum size of decompressed stream data (100 MB).
-// This prevents decompression bombs from consuming excessive memory.
-const maxDecodeSize = 100 << 20
+// The maximum size of decompressed stream data defaults to
+// defaultMaxDecodedStreamBytes; a caller can change it with
+// WithMaxDecodedStreamBytes. This prevents decompression bombs from consuming
+// excessive memory.
 
 // flateEncode zlib-compresses data (the inverse of flateDecode) for writing a
 // FlateDecode stream such as a cross-reference stream.
@@ -406,20 +415,21 @@ func flateEncode(data []byte) []byte {
 	return buf.Bytes()
 }
 
-func flateDecode(data []byte) ([]byte, error) {
+func flateDecode(data []byte, lim limits) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("zlib: %w", err)
 	}
 	defer r.Close()
 
-	limited := io.LimitReader(r, maxDecodeSize+1)
+	maxDecode := lim.decodedStreamBytes
+	limited := io.LimitReader(r, int64(maxDecode)+1)
 	decoded, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("zlib decompress: %w", err)
 	}
-	if len(decoded) > maxDecodeSize {
-		return nil, fmt.Errorf("decompressed data exceeds maximum size (%d bytes)", maxDecodeSize)
+	if len(decoded) > maxDecode {
+		return nil, fmt.Errorf("decompressed data exceeds maximum size (%d bytes)", maxDecode)
 	}
 	return decoded, nil
 }

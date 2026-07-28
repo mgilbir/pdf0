@@ -87,7 +87,7 @@ func TestImagesIteratorMatchesExtract(t *testing.T) {
 func TestImagesIteratorLazy(t *testing.T) {
 	// A ~40k-operator program EXECUTED per pixel of a 200x200 image if the
 	// image is decoded: ~1.6G psExec steps, well over the bound. Breaking
-	// early must avoid all of it. (Stays under maxPSSteps per evaluation.)
+	// early must avoid all of it. (Stays under the PostScript step budget per evaluation.)
 	var b []byte
 	b = append(b, "{ pop 0 0 1"...)
 	for i := 0; i < 20000; i++ {
