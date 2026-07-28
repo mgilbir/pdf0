@@ -173,10 +173,10 @@ func TestDecodedStreamLimitIsEnforced(t *testing.T) {
 	buf.Write(flateEncode(payload))
 
 	lim := resolveLimits([]Option{WithMaxDecodedStreamBytes(64 << 10)})
-	if _, err := flateDecode(buf.Bytes(), lim); err == nil {
+	if _, err := flateDecode(canceler{}, buf.Bytes(), lim); err == nil {
 		t.Error("expected the lowered decoded-stream cap to reject a 256 KiB payload")
 	}
-	if got, err := flateDecode(buf.Bytes(), defaultLimits()); err != nil {
+	if got, err := flateDecode(canceler{}, buf.Bytes(), defaultLimits()); err != nil {
 		t.Errorf("default limits should accept the same payload: %v", err)
 	} else if len(got) != len(payload) {
 		t.Errorf("decoded %d bytes, want %d", len(got), len(payload))

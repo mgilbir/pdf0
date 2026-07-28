@@ -48,7 +48,7 @@ func (d *Document) contentFacts(content []byte, key *Stream) *streamContentFacts
 			}
 		}
 	}
-	f := buildContentFacts(content)
+	f := buildContentFacts(d.canceler(), content)
 	if key != nil {
 		if c := d.valCache; c != nil {
 			if c.streamFacts == nil {
@@ -60,7 +60,7 @@ func (d *Document) contentFacts(content []byte, key *Stream) *streamContentFacts
 	return f
 }
 
-func buildContentFacts(content []byte) *streamContentFacts {
+func buildContentFacts(cancel canceler, content []byte) *streamContentFacts {
 	f := &streamContentFacts{}
 	if len(content) == 0 {
 		return f
@@ -102,7 +102,7 @@ func buildContentFacts(content []byte) *streamContentFacts {
 	artifactTag := false // the first operand is the name /Artifact
 	mcidProp := false    // some operand is the name /MCID
 	var lastName string  // most recent name operand (for the Do-operator target)
-	for tk := range tokenizeContent(content) {
+	for tk := range tokenizeContent(cancel, content) {
 		if tk.kind != ctOp {
 			if tk.kind == ctName {
 				lastName = tk.name

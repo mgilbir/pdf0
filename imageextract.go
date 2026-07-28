@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -239,12 +240,40 @@ type ExtractedImage struct {
 // document that is unbounded memory. Use Images to iterate lazily with at most
 // one decoded image live at a time.
 func (d *Document) ExtractImages() []ExtractedImage {
-	var out []ExtractedImage
-	d.walkImages(func(im ExtractedImage) bool {
-		out = append(out, im)
-		return true
-	})
+	out, _ := d.extractImages(canceler{})
 	return out
+}
+
+// ExtractImagesContext is ExtractImages with cancellation.
+//
+// It returns the images extracted before the cancellation and an error wrapping
+// ctx.Err(), for the reason ExtractTextContext does: extraction has no finding
+// channel, so a short slice returned bare would be indistinguishable from a
+// document with fewer images. The error is nil exactly when every image was
+// reached.
+//
+// Cancellation is checked between images, so it takes effect after at most one
+// image decode. A single very large image is therefore not interruptible; that
+// residual is bounded by the codec budgets rather than by the context. See
+// cancel.go.
+//
+// There is deliberately no context variant of Images: an iterator is already
+// cancellable by breaking out of the range loop, and because each image is
+// decoded only as it is yielded, breaking after image N skips exactly the work
+// a context checked between images would have skipped.
+func (d *Document) ExtractImagesContext(ctx context.Context) ([]ExtractedImage, error) {
+	return d.extractImages(newCanceler(ctx))
+}
+
+func (d *Document) extractImages(cancel canceler) ([]ExtractedImage, error) {
+	var out []ExtractedImage
+	d.walkImagesCancel(cancel, func(im ExtractedImage) bool {
+		// Keep the image first, then stop: it is already decoded, and throwing
+		// away finished work is not what cancellation is for.
+		out = append(out, im)
+		return !cancel.stopped()
+	})
+	return out, cancel.stopErr("extracting images")
 }
 
 // Images returns an iterator over the image XObjects drawn from the document's
@@ -260,17 +289,28 @@ func (d *Document) Images() iter.Seq[ExtractedImage] {
 // walkImages drives the image traversal, calling yield for each image until it
 // returns false.
 func (d *Document) walkImages(yield func(ExtractedImage) bool) {
+	d.walkImagesCancel(canceler{}, yield)
+}
+
+func (d *Document) walkImagesCancel(cancel canceler, yield func(ExtractedImage) bool) {
 	// Install a per-run cache on a shallow copy, as the validators do: a tint
 	// transform evaluates per pixel, and without the cache each evaluation
 	// re-decoded the function stream (and re-parsed a type-4 program) — a
-	// sub-megabyte image took minutes (sweep #13).
-	d = beginRun(d)
+	// sub-megabyte image took minutes (sweep #13). The cache also carries the
+	// cancellation signal, so the traversals it shares with the validators stop
+	// on the same terms.
+	d = beginRunCancel(d, cancel)
 	cat := getCatalog(d)
 	if cat == nil {
 		return
 	}
 	seen := map[int]bool{}
 	for _, pg := range collectPages(d, cat.Get("Pages")) {
+		// Per page, on top of the per-image check the yield wrapper applies:
+		// a page whose resources hold no images still costs a resource walk.
+		if cancel.stopped() {
+			return
+		}
 		if !d.collectImagesFrom(resolveResources(d, pg.dict), seen, 0, yield) {
 			return
 		}
@@ -423,7 +463,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		// only ones applyFilter reverses): reverse the chain to raw samples, which
 		// buildImage renders through the colour space, bit depth, /Decode and masks
 		// (image masks keep their own 1-bit stencil rendering).
-		d.renderSamples(st, &img, decodeImageSamples(st, d.lim()), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
+		d.renderSamples(st, &img, decodeImageSamples(d.canceler(), st, d.lim()), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
 	}
 	return img
 }
@@ -434,8 +474,8 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 // the shared content budget — would bloat memory and starve the small shared
 // streams (tint functions, palettes) the cache exists for. The same 64MB
 // per-stream bound applies.
-func decodeImageSamples(st *Stream, lim limits) []byte {
-	if decoded, err := decodeStreamData(st, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
+func decodeImageSamples(cancel canceler, st *Stream, lim limits) []byte {
+	if decoded, err := decodeStreamData(cancel, st, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
 		return decoded
 	}
 	return nil
@@ -496,7 +536,7 @@ func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded 
 
 	encoded = st.Data
 	for i := 0; i < last; i++ {
-		out, err := applyFilter(filters[i], encoded, parmsDictAt(parms, i), d.lim())
+		out, err := applyFilter(d.canceler(), filters[i], encoded, parmsDictAt(parms, i), d.lim())
 		if err != nil {
 			return nil, params, false
 		}
@@ -539,7 +579,7 @@ func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, o
 
 	encoded = st.Data
 	for i := 0; i < last; i++ {
-		out, err := applyFilter(filters[i], encoded, parmsDictAt(parms, i), d.lim())
+		out, err := applyFilter(d.canceler(), filters[i], encoded, parmsDictAt(parms, i), d.lim())
 		if err != nil {
 			return nil, nil, false
 		}
@@ -548,7 +588,7 @@ func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, o
 
 	if cp := parmsDictAt(parms, last); cp != nil {
 		if gs, ok := d.Resolve(cp.Get("JBIG2Globals")).(*Stream); ok {
-			if data, err := decodeStreamData(gs, d.lim()); err == nil {
+			if data, err := decodeStreamData(d.canceler(), gs, d.lim()); err == nil {
 				globals = data
 			}
 		}

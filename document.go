@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"sort"
@@ -98,21 +99,45 @@ type Document struct {
 // to change them. The resolved limits are stored on the returned Document, so
 // every validator and extractor that runs on it inherits the same configuration.
 func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(r, size, "", resolveLimits(opts))
+	return readDocument(canceler{}, r, size, "", resolveLimits(opts))
 }
 
 // ReadWithPassword is Read with a user or owner password for an encrypted file.
 func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(r, size, password, resolveLimits(opts))
+	return readDocument(canceler{}, r, size, password, resolveLimits(opts))
 }
 
-func readDocument(r io.ReaderAt, size int64, password string, lim limits) (doc *Document, err error) {
+// ReadContext is Read with cancellation. Parsing is not usually the expensive
+// half — a 71 MB file parses in about 100 ms — but its cost is set by the file:
+// a small file can carry half a gigabyte of object streams to decompress, and
+// a cross-reference section too broken to use is rebuilt by scanning the whole
+// file. Those are the cases a caller with a deadline needs to be able to stop.
+//
+// A cancelled read returns a nil Document and an error wrapping ctx.Err(), so
+// errors.Is(err, context.Canceled) and errors.Is(err, context.DeadlineExceeded)
+// both work. It never returns a partial Document: a document missing an
+// arbitrary subset of its objects is indistinguishable from one whose file
+// genuinely lacks them, and every validator would then report the absence as a
+// conformance failure. See cancel.go.
+func ReadContext(ctx context.Context, r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
+	return readDocument(newCanceler(ctx), r, size, "", resolveLimits(opts))
+}
+
+// ReadWithPasswordContext is ReadWithPassword with cancellation; see ReadContext.
+func ReadWithPasswordContext(ctx context.Context, r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
+	return readDocument(newCanceler(ctx), r, size, password, resolveLimits(opts))
+}
+
+func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, lim limits) (doc *Document, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			doc = nil
 			err = fmt.Errorf("recovered from panic while reading PDF: %v", rec)
 		}
 	}()
+	if err := cancel.stopErr("reading PDF"); err != nil {
+		return nil, err
+	}
 	data := make([]byte, size)
 	n, err := r.ReadAt(data, 0)
 	if err != nil && err != io.EOF {
@@ -168,12 +193,16 @@ func readDocument(r io.ReaderAt, size int64, password string, lim limits) (doc *
 	rebuilt := false // the table was reconstructed by scanning (load leniently)
 	var firstErr error
 	for {
+		// One iteration per incremental update; a file can carry thousands.
+		if err := cancel.stopErr("reading PDF cross-reference chain"); err != nil {
+			return nil, err
+		}
 		if visitedXref[sectionOffset] {
 			break // cycle in the /Prev chain
 		}
 		visitedXref[sectionOffset] = true
 
-		sectionTable, sectionTrailer, err := parseXRefSection(data, sectionOffset, doc)
+		sectionTable, sectionTrailer, err := parseXRefSection(cancel, data, sectionOffset, doc)
 		if err != nil {
 			// Recovery: the startxref value "shall [give] the byte offset ...
 			// to the beginning of the xref keyword in the last cross-reference
@@ -185,7 +214,7 @@ func readDocument(r io.ReaderAt, size int64, password string, lim limits) (doc *
 			// nearest standalone "xref" keyword at or before the offset.
 			if rec := precedingXrefKeyword(data, sectionOffset); rec >= 0 && !visitedXref[rec] {
 				visitedXref[rec] = true
-				sectionTable, sectionTrailer, err = parseXRefSection(data, rec, doc)
+				sectionTable, sectionTrailer, err = parseXRefSection(cancel, data, rec, doc)
 			}
 			if err != nil {
 				if first {
@@ -243,14 +272,20 @@ func readDocument(r io.ReaderAt, size int64, password string, lim limits) (doc *
 	if rebuilt {
 		effAdjust = 0 // scanned offsets are absolute by construction
 	}
-	if err := doc.loadObjectsFromXref(data, size, xrefTable, effAdjust, rebuilt); err != nil {
+	if err := doc.loadObjectsFromXref(cancel, data, size, xrefTable, effAdjust, rebuilt); err != nil {
+		// A cancellation is not a "this table is broken" signal, so it must not
+		// trigger the (whole-file) rebuild-and-retry: that would do more work in
+		// response to being told to stop.
+		if cerr := cancel.stopErr("reading PDF objects"); cerr != nil {
+			return nil, cerr
+		}
 		t := rebuildXRefByScan(data)
 		if t == nil {
 			return nil, err
 		}
 		xrefTable, rebuilt = t, true
 		doc.Objects = make(map[int]*IndirectObject)
-		if err2 := doc.loadObjectsFromXref(data, size, xrefTable, 0, true); err2 != nil {
+		if err2 := doc.loadObjectsFromXref(cancel, data, size, xrefTable, 0, true); err2 != nil {
 			return nil, err
 		}
 	}
@@ -296,14 +331,16 @@ func readDocument(r io.ReaderAt, size int64, password string, lim limits) (doc *
 
 	// 5. Materialize objects stored in object streams (type-2 entries). The
 	// containers themselves were loaded as ordinary objects in step 4.
-	if err := doc.loadCompressedObjects(xrefTable); err != nil {
+	if err := doc.loadCompressedObjects(cancel, xrefTable); err != nil {
 		return nil, err
 	}
 	// A rebuilt table has no type-2 entries — the scan sees only what is at
 	// the byte level — so objects living inside /Type /ObjStm containers
 	// would be missing. Materialize every container's objects directly.
 	if rebuilt {
-		doc.materializeScannedObjStms()
+		if err := doc.materializeScannedObjStms(cancel); err != nil {
+			return nil, err
+		}
 	}
 
 	// 6. Drop file-structure artifacts so the document holds only content.
@@ -319,7 +356,7 @@ func readDocument(r io.ReaderAt, size int64, password string, lim limits) (doc *
 // (used for tables reconstructed by rebuildXRefByScan) an entry whose offset
 // is out of range or whose bytes do not parse is dropped rather than failing
 // the read: a scanned entry has no authority beyond the bytes it points at.
-func (doc *Document) loadObjectsFromXref(data []byte, size int64, xrefTable *XRefTable, adjust int64, lenient bool) error {
+func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int64, xrefTable *XRefTable, adjust int64, lenient bool) error {
 	doc.Offsets = make(map[int]int64)
 	lexer := NewLexer(data)
 	// parsedByOffset caches the object parsed at each byte offset. A malformed
@@ -353,6 +390,12 @@ func (doc *Document) loadObjectsFromXref(data []byte, size int64, xrefTable *XRe
 		return NewParserFromLexer(lx).integerObjectValue()
 	}
 	for num, entry := range xrefTable.Entries {
+		// Per object: the unit of work here is one object parse, which for a
+		// stream is bounded by the per-stream decode cap, so cancellation takes
+		// effect after at most one such parse.
+		if err := cancel.stopErr("reading PDF objects"); err != nil {
+			return err
+		}
 		if entry.Free || entry.Compressed {
 			continue
 		}
@@ -440,7 +483,7 @@ func (d *Document) normalizeStructure() {
 // followed by its trailer, or an xref stream) at the given absolute offset.
 // For xref streams the stream dictionary doubles as the trailer, and the
 // stream object itself is recorded in doc.Objects.
-func parseXRefSection(data []byte, offset int64, doc *Document) (*XRefTable, *Dictionary, error) {
+func parseXRefSection(cancel canceler, data []byte, offset int64, doc *Document) (*XRefTable, *Dictionary, error) {
 	lexer := NewLexer(data)
 	lexer.SetPosition(offset)
 	tok, err := lexer.NextToken()
@@ -472,7 +515,15 @@ func parseXRefSection(data []byte, offset int64, doc *Document) (*XRefTable, *Di
 		if !ok {
 			return nil, nil, fmt.Errorf("xref stream object is not a stream")
 		}
-		table, err := ParseXRefStream(stream)
+		// defaultLimits() rather than doc.lim() reproduces exactly what
+		// ParseXRefStream(stream) did here before the canceler was threaded
+		// through. That is a pre-existing gap — a caller who lowers
+		// WithMaxDecodedStreamBytes does not get it applied to the file's own
+		// cross-reference stream, though parseXRefStream's doc comment says
+		// otherwise — and it is left alone deliberately: fixing it changes what
+		// a configured limit does, which belongs in its own change with its own
+		// corpus verification.
+		table, err := parseXRefStream(cancel, stream, defaultLimits())
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing xref stream: %w", err)
 		}
@@ -581,7 +632,25 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 // written back verbatim as a lossless passthrough under its preserved /Encrypt.
 // Write regenerates the cross-reference section, emitting a cross-reference
 // stream when the source used one and a traditional table otherwise.
-func (d *Document) Write(w io.Writer) error {
+func (d *Document) Write(w io.Writer) error { return d.write(canceler{}, w) }
+
+// WriteContext is Write with cancellation.
+//
+// Writing is usually fast, but its cost is the document's, not the caller's: a
+// malformed cross-reference table can make one large stream reachable from
+// thousands of object numbers, and the resulting output is legitimately
+// enormous. cmd/corpusprobe streams exactly that case to io.Discard.
+//
+// A cancelled write returns an error wrapping ctx.Err(). Whatever had already
+// been written stays written — an io.Writer cannot be rewound — so the output
+// is a truncated file, and the returned error is the only thing that says so.
+// A caller that must not leave a partial file behind should write to a
+// temporary and rename on success. See cancel.go.
+func (d *Document) WriteContext(ctx context.Context, w io.Writer) error {
+	return d.write(newCanceler(ctx), w)
+}
+
+func (d *Document) write(cancel canceler, w io.Writer) error {
 	// An encrypted document with a security handler (decrypted on Read) is
 	// re-encrypted below with the retained key. Without a handler (an unsupported
 	// scheme or a non-empty password) the content is still in its original
@@ -690,6 +759,12 @@ func (d *Document) Write(w io.Writer) error {
 	// 3. Write objects and record offsets
 	offsets := make(map[int]int64)
 	for _, num := range objNums {
+		// Per object: one iteration serializes (and, when re-encrypting, encrypts)
+		// a single object, so cancellation takes effect after at most one object's
+		// worth of output.
+		if err := cancel.stopErr("writing PDF"); err != nil {
+			return err
+		}
 		offsets[num] = s.Offset()
 		iobj := writeObjects[num]
 		if newLen, ok := lengthOverrides[num]; ok {

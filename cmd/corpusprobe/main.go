@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -31,11 +32,29 @@ const perFileTimeout = 30 * time.Second
 
 // probe reads one file under panic recovery and a timeout. A panic or a timeout
 // is a parser bug.
+//
+// The timeout is expressed as a context deadline that pdf0 itself observes, not
+// only as a select on the result channel. The two do different jobs and both are
+// needed:
+//
+//   - The context stops the work. Before pdf0 had context variants this loop
+//     abandoned the goroutine on timeout and the work carried on burning a core
+//     and holding its memory until it finished on its own — with eight workers
+//     and a 25-second file, a real leak, and the concrete reason cancellation
+//     was added to the library.
+//   - The select still bounds the wait, because a hang pdf0 does not check for
+//     cancellation in would otherwise block this worker forever, and detecting
+//     exactly that is what this program is for. A timeout that the context did
+//     not resolve is therefore a stronger signal than it used to be: it means
+//     the work did not stop when told to, not merely that it was slow.
 func probe(path string) outcome {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return outcome{"readfail", err.Error(), path}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), perFileTimeout)
+	defer cancel()
+
 	type r struct{ kind, detail string }
 	ch := make(chan r, 1)
 	go func() {
@@ -44,8 +63,12 @@ func probe(path string) outcome {
 				ch <- r{"panic", fmt.Sprintf("%v\n%s", rec, topFrames(debug.Stack()))}
 			}
 		}()
-		doc, e := pdf0.Read(bytes.NewReader(data), int64(len(data)))
+		doc, e := pdf0.ReadContext(ctx, bytes.NewReader(data), int64(len(data)))
 		if e != nil {
+			if ctx.Err() != nil {
+				ch <- r{"timeout", "cancelled during read"}
+				return
+			}
 			ch <- r{"error", e.Error()}
 			return
 		}
@@ -58,17 +81,34 @@ func probe(path string) outcome {
 		// buffering it would OOM the probe on otherwise-handled input. A real
 		// consumer writes to a streaming io.Writer, so this matches real usage
 		// while still exercising the serializer.
-		_ = doc.Write(io.Discard)
-		_ = pdf0.ValidatePDFUA(doc)
+		_ = doc.WriteContext(ctx, io.Discard)
+		_ = pdf0.ValidatePDFUAContext(ctx, doc)
+		if ctx.Err() != nil {
+			ch <- r{"timeout", "cancelled during validation"}
+			return
+		}
 		ch <- r{"ok", ""}
 	}()
 	select {
 	case res := <-ch:
 		return outcome{res.kind, res.detail, path}
-	case <-time.After(perFileTimeout):
-		return outcome{"timeout", "", path}
+	case <-ctx.Done():
+		// The deadline fired and pdf0 did not return within the grace period
+		// below, so the work is genuinely stuck rather than merely slow.
+		select {
+		case res := <-ch:
+			return outcome{res.kind, res.detail, path}
+		case <-time.After(unresponsiveGrace):
+			return outcome{"timeout", "did not stop when cancelled", path}
+		}
 	}
 }
+
+// unresponsiveGrace is how long a cancelled probe is given to wind down before
+// it is declared stuck. Cancellation is checked at coarse boundaries — per
+// check, per page, per stream, per megabyte scanned — so a second is orders of
+// magnitude more than a responsive run needs.
+const unresponsiveGrace = time.Second
 
 // topFrames extracts the first few pdf0 stack frames from a panic stack.
 func topFrames(stack []byte) string {

@@ -26,10 +26,22 @@ const (
 // forEachContentItem tokenizes a decoded content stream like
 // forEachContentToken, additionally reporting decoded string operands and
 // distinguishing numbers from operators.
-func forEachContentItem(data []byte, fn func(kind contentItemKind, payload []byte)) {
+//
+// The scan stops when cancel fires. Together with forEachContentToken this is
+// about two thirds of a large document's validation time, which is why the
+// check is gated on the scan position — one comparison per token, the poll
+// itself once per cancelScanBytes. See cancel.go.
+func forEachContentItem(cancel canceler, data []byte, fn func(kind contentItemKind, payload []byte)) {
 	n := len(data)
 	i := 0
+	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
 	for i < n {
+		if i >= nextCancelCheck {
+			if cancel.stopped() {
+				return
+			}
+			nextCancelCheck = i + cancelScanBytes
+		}
 		for i < n && isContentWS(data[i]) {
 			i++
 		}
@@ -258,7 +270,7 @@ type fontEvent struct {
 // (it depends on the container's resources); everything captured here — the
 // operand names, render modes, and shown string bytes — is a pure function of
 // the stream contents.
-func buildFontEvents(data []byte) []fontEvent {
+func buildFontEvents(cancel canceler, data []byte) []fontEvent {
 	if data == nil {
 		return nil
 	}
@@ -270,7 +282,7 @@ func buildFontEvents(data []byte) []fontEvent {
 	// one. The conversion now happens where the value is consumed.
 	var lastName, lastNumber []byte
 	var pending [][]byte
-	forEachContentItem(data, func(kind contentItemKind, payload []byte) {
+	forEachContentItem(cancel, data, func(kind contentItemKind, payload []byte) {
 		switch kind {
 		case itemName:
 			lastName = payload
@@ -310,7 +322,7 @@ func (d *Document) contentFontEvents(data []byte, key *Stream) []fontEvent {
 			if ev, ok := c.fontEvents[key]; ok {
 				return ev
 			}
-			ev := buildFontEvents(data)
+			ev := buildFontEvents(d.canceler(), data)
 			if c.fontEvents == nil {
 				c.fontEvents = make(map[*Stream][]fontEvent)
 			}
@@ -318,7 +330,7 @@ func (d *Document) contentFontEvents(data []byte, key *Stream) []fontEvent {
 			return ev
 		}
 	}
-	return buildFontEvents(data)
+	return buildFontEvents(d.canceler(), data)
 }
 
 // contentUsedNamesCached returns contentUsedNames(data), memoized per content
@@ -329,7 +341,7 @@ func (d *Document) contentUsedNamesCached(data []byte, key *Stream) usedResource
 			if u, ok := c.usedNames[key]; ok {
 				return u
 			}
-			u := contentUsedNames(data)
+			u := contentUsedNames(d.canceler(), data)
 			if c.usedNames == nil {
 				c.usedNames = make(map[*Stream]usedResourceNames)
 			}
@@ -337,7 +349,7 @@ func (d *Document) contentUsedNamesCached(data []byte, key *Stream) usedResource
 			return u
 		}
 	}
-	return contentUsedNames(data)
+	return contentUsedNames(d.canceler(), data)
 }
 
 // contentBytesAndKey resolves a container's content reference to its decoded
@@ -1881,7 +1893,7 @@ func type3GlyphWidth(doc *Document, cp *Stream) (float64, bool) {
 	var nums []float64
 	found := false
 	var w float64
-	forEachContentItem(data, func(kind contentItemKind, payload []byte) {
+	forEachContentItem(doc.canceler(), data, func(kind contentItemKind, payload []byte) {
 		if found {
 			return
 		}

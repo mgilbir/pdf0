@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -35,7 +36,13 @@ func (v PDFVTViolation) Error() string {
 // conforming PDF/X-4 file, identified as PDF/VT-1, with a document part
 // hierarchy.
 func ValidatePDFVT(doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(doc, "PDF/VT-1", false)
+	return validatePDFVTImpl(canceler{}, doc, "PDF/VT-1", false)
+}
+
+// ValidatePDFVTContext is ValidatePDFVT with cancellation; a cancelled run
+// reports itself under the rule "limit" (see cancel.go).
+func ValidatePDFVTContext(ctx context.Context, doc *Document) []PDFVTViolation {
+	return validatePDFVTImpl(newCanceler(ctx), doc, "PDF/VT-1", false)
 }
 
 // ValidatePDFVT2 checks whether doc conforms to PDF/VT-2 (ISO 16612-2). PDF/VT-2
@@ -45,11 +52,17 @@ func ValidatePDFVT(doc *Document) []PDFVTViolation {
 // reference-XObject prohibition relaxed — the PDF/X-5-specific external-reference
 // rules are not asserted.
 func ValidatePDFVT2(doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(doc, "PDF/VT-2", true)
+	return validatePDFVTImpl(canceler{}, doc, "PDF/VT-2", true)
 }
 
-func validatePDFVTImpl(doc *Document, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
-	doc = beginRun(doc)
+// ValidatePDFVT2Context is ValidatePDFVT2 with cancellation; a cancelled run
+// reports itself under the rule "limit" (see cancel.go).
+func ValidatePDFVT2Context(ctx context.Context, doc *Document) []PDFVTViolation {
+	return validatePDFVTImpl(newCanceler(ctx), doc, "PDF/VT-2", true)
+}
+
+func validatePDFVTImpl(cancel canceler, doc *Document, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
+	doc = beginRunCancel(doc, cancel)
 	var out []PDFVTViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFVTViolation{Rule: rule, Message: msg, Object: obj})
@@ -57,8 +70,14 @@ func validatePDFVTImpl(doc *Document, versionPrefix string, allowRefXObjects boo
 
 	// Every check runs under a recover boundary, so a panic on hostile input
 	// becomes an "internal" finding instead of crashing the caller, and one bad
-	// check does not discard its siblings' findings (audit C27).
-	run := func(check func()) { runGuardedCheck(add, check) }
+	// check does not discard its siblings' findings (audit C27). It is also the
+	// coarse cancellation boundary (cancel.go).
+	run := func(check func()) {
+		if doc.stopped() {
+			return
+		}
+		runGuardedCheck(add, check)
+	}
 
 	// A PDF/VT file shall be a conforming PDF/X file (ISO 16612-2 6.1): PDF/X-4
 	// for PDF/VT-1, PDF/X-5 for PDF/VT-2. For PDF/VT-2 the reference-XObject

@@ -218,3 +218,111 @@ reserved rule identifier `"limit"`, which `IsCheckerFinding` distinguishes from 
 real non-conformance; the message names the guard and says whether the bound it
 hit was pdf0's default or one the caller set. [limits.md](limits.md) classifies
 every guard in the package on exactly this axis.
+
+## Cancellation
+
+A limit answers "how much may one document cost me". It does not answer "I need
+an answer within five seconds, whatever it costs". That is what a
+`context.Context` is for, and `cancel.go` is where it lives.
+
+The motivating case was pdf0's own `cmd/corpusprobe`, which ran each file in a
+goroutine and gave up on it with `select`/`time.After`. Giving up on a goroutine
+is not stopping it: the work carried on burning a core and holding its memory
+until it finished by itself. With eight workers and a 25-second file that is
+real leakage, and there was nothing a caller could do about it.
+
+### The shape: `…Context` variants, not an option
+
+pdf0 already has variadic functional options, so `WithContext(ctx)` was
+available and would have been the smaller change. It was rejected:
+
+- An `Option` is *stored*. Options resolve into a struct that lives on the
+  `Document` and is inherited by every later call — the right lifetime for a
+  limit ("what this document may cost") and the wrong one for a context ("how
+  long this operation may take"). A context captured at `Read` would still
+  govern a validation started minutes later. This is the case the Go
+  documentation has in mind when it says not to store a `Context` in a struct.
+- It would hide cancellation from the call site. `ValidatePDFA(doc, level)`
+  would be cancellable or not depending on an argument to a `Read` twenty lines
+  earlier.
+
+So `ctx` is an explicit first parameter, and the two mechanisms stay separate.
+Every original signature is unchanged.
+
+### Which entry points have one
+
+The line is **cost proportional to the document's content** — bytes, pages,
+images — rather than to a bounded structural count.
+
+| Has a `…Context` variant | Deliberately does not | Why not |
+|---|---|---|
+| `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `Equal`, `DocumentEqual` | Structural lookups; microseconds. |
+| `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
+| All nine validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`) | `ValidateFacturX`, `ValidateOrderX` | The cost is the XML rule engine in `formalis`, which takes no context; a variant here would advertise cancellation pdf0 cannot deliver. |
+| `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. |
+| | `Images` | An iterator is already cancellable by `break`, and because each image is decoded only as it is yielded, breaking after image N skips exactly what a context checked between images would have. |
+| | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Bounded by the signature count (single digits), and each signature's crypto is bounded. |
+
+### Where the check happens, and what latency that buys
+
+`ctx.Err()` in the innermost loop is not free: `forEachContentItem` and
+`forEachContentToken` are together about two thirds of a large document's
+validation time. The check is therefore layered, coarsest first:
+
+| Boundary | Unit of work between checks | Implied latency |
+|---|---|---|
+| Per check | one of ~50 PDF/A or ~45 PDF/UA checks | seconds on a large file — never sufficient alone |
+| Per page / per content stream / per embedded PDF | one stream's scan | tens of ms |
+| Per `cancelScanBytes` (1 MiB) inside the three token scanners | ~1 MiB tokenized | ~10 ms |
+| Per `cancelReadChunk` (1 MiB) inside flate and LZW decoding | ~1 MiB inflated | ~10 ms |
+| Per object in `Read`'s load loops and `Write`'s emit loop | one object | sub-ms |
+
+The scanner check is gated on the scan position, not on a token counter: one
+comparison of the loop index against a local `int` per token, with the poll
+itself once per megabyte. The poll is a non-blocking receive on a `ctx.Done()`
+channel hoisted at construction, because both `Done` and `Err` take the
+context's mutex on a cancellable context; a run that cannot be cancelled has a
+nil channel, so the `default` case is taken.
+
+The scanners do **not** branch on "is this cancellable" to skip the bookkeeping,
+and that is deliberate. The obvious version — set the gate past the end of the
+data when the signal can never fire, so the comparison never succeeds — added
+two statements to `tokenizeContent`'s loop and pushed its inline cost from under
+the compiler's 800-node budget to 805. The range-over-func closure then stopped
+being inlined into its consumers, and PDF/UA validation of a 71 MB file slowed
+by 5% — far more than the one nil-channel poll per megabyte it was avoiding.
+The lesson generalises: in these loops, check `go build -gcflags=-m=2` for
+"function too complex" before trusting a wall-clock measurement. With the
+smaller version, PDF/A and PDF/UA on that file are indistinguishable from the
+pre-cancellation code (PDF/A 10.24 s vs 10.57 s, PDF/UA 2.70 s vs 2.76 s;
+medians of six runs, the difference within run-to-run noise).
+
+Measured on a 71 MB, 1256-page real-world file whose full PDF/A validation takes
+10.7 s: **cancellation takes effect in about 60 ms**, and an already-cancelled
+context returns in about 10 µs. The decompression layer was worth having — with
+only the scanner checks in place the same measurement was 903 ms, essentially
+all of it one 100 MB stream inflating uninterruptibly.
+
+### What a cancelled run returns
+
+The same thing a tripped resource guard returns, through the same machinery: a
+finding under the rule identifier `"limit"`, which `IsCheckerFinding` reports as
+a checker finding. The reasoning of [limits.md](limits.md) transfers unchanged —
+the checker stopped before it had seen everything, so the honest answer is
+"unknown", not "conformant" — and routing cancellation through `runLimitTrips`
+gives all nine validators the finding without any of them learning a second
+mechanism.
+
+The findings gathered before the cancellation are kept. They are true, just
+incomplete. What cannot happen is an empty result: **a cancelled validation
+never looks like a clean bill of health**, so a caller testing `len(result) == 0`
+gets "not clean" and a caller filtering with `IsCheckerFinding` gets "unknown".
+
+`Read`, `Write`, `ExtractTextContext` and `ExtractImagesContext` instead return
+an error wrapping `ctx.Err()` — the "loud" class of [limits.md](limits.md) —
+because they have no finding channel. `ReadContext` returns a nil `Document`
+rather than a partial one: a document missing an arbitrary subset of its objects
+is indistinguishable from one whose file genuinely lacks them, and every
+validator would then report the absence as a conformance failure. The extractors
+return their partial result *and* the error, because discarding the work would
+be as dishonest as presenting it as complete.

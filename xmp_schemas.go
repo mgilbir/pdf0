@@ -1131,7 +1131,7 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	raw, err := decodeStreamData(stream, doc.lim())
+	raw, err := decodeStreamData(doc.canceler(), stream, doc.lim())
 	if err != nil {
 		raw = stream.Data
 	}

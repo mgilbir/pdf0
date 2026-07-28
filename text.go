@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"iter"
 	"strconv"
 	"strings"
@@ -19,29 +20,63 @@ import (
 // breaks follow the text-positioning operators and wide inter-glyph gaps become
 // spaces.
 func (d *Document) ExtractText() string {
+	text, _ := d.extractText(canceler{})
+	return text
+}
+
+// ExtractTextContext is ExtractText with cancellation.
+//
+// It returns the text extracted before the cancellation *and* an error wrapping
+// ctx.Err(). Both, because either alone would be a lie: discarding the text
+// throws away work the caller paid for, and returning it bare would present a
+// truncated document as a whole one. Extraction has no finding channel — the
+// mechanism the validators use to say "this result is incomplete" (see
+// cancel.go and docs/limits.md) — so the error is the only place that fact can
+// live, and a caller who ignores it gets a silently short document.
+//
+// The error is nil exactly when the extraction ran to completion.
+func (d *Document) ExtractTextContext(ctx context.Context) (string, error) {
+	return d.extractText(newCanceler(ctx))
+}
+
+func (d *Document) extractText(cancel canceler) (string, error) {
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
-		return ""
+		return "", cancel.stopErr("extracting text")
 	}
 	var b strings.Builder
 	for i, pg := range collectPages(d, catalog.Get("Pages")) {
+		// Per page: the coarse boundary. Within a page the tokenizer stops every
+		// cancelScanBytes, so a single enormous page is interruptible too.
+		if err := cancel.stopErr("extracting text"); err != nil {
+			return b.String(), err
+		}
 		if i > 0 {
 			b.WriteByte('\f')
 		}
-		b.WriteString(d.ExtractPageText(pg.dict))
+		b.WriteString(d.extractPageText(cancel, pg.dict))
 	}
-	return b.String()
+	return b.String(), cancel.stopErr("extracting text")
 }
 
 // ExtractPageText returns the visible text of a single page dictionary. It
 // resolves the page's /Resources through the page-tree inheritance chain and
 // recurses into invoked form XObjects, so text drawn via inherited fonts or
 // inside a form is not dropped.
+//
+// There is deliberately no ExtractPageTextContext: one page is the unit of work,
+// and a caller extracting several pages already has a loop of its own to check
+// a context in. Adding a variant here would move that check inside a call that
+// does one page's work either way.
 func (d *Document) ExtractPageText(page *Dictionary) string {
+	return d.extractPageText(canceler{}, page)
+}
+
+func (d *Document) extractPageText(cancel canceler, page *Dictionary) string {
 	res := d.ResolveDict(inheritedPageAttr(d, page, "Resources"))
 	content := getContentStreamData(d, page.Get("Contents"))
 	var out strings.Builder
-	d.extractContentText(res, content, &out, map[*Stream]bool{}, 0)
+	d.extractContentText(cancel, res, content, &out, map[*Stream]bool{}, 0)
 	return out.String()
 }
 
@@ -52,7 +87,7 @@ const maxTextFormDepth = 32
 // a form XObject — to out. Fonts are resolved from res; a Do that invokes a form
 // XObject recurses into it with the form's own resources (audit C28). seen guards
 // cyclic form references and depth bounds nesting.
-func (d *Document) extractContentText(res *Dictionary, content []byte, out *strings.Builder, seen map[*Stream]bool, depth int) {
+func (d *Document) extractContentText(cancel canceler, res *Dictionary, content []byte, out *strings.Builder, seen map[*Stream]bool, depth int) {
 	if len(content) == 0 || depth > maxTextFormDepth {
 		return
 	}
@@ -71,7 +106,7 @@ func (d *Document) extractContentText(res *Dictionary, content []byte, out *stri
 			out.WriteRune(r)
 		}
 	}
-	for tk := range tokenizeContent(content) {
+	for tk := range tokenizeContent(cancel, content) {
 		if tk.kind != ctOp {
 			operands = append(operands, tk)
 			continue
@@ -114,7 +149,7 @@ func (d *Document) extractContentText(res *Dictionary, content []byte, out *stri
 						if formRes == nil {
 							formRes = res // a form may draw with the calling context's resources
 						}
-						d.extractContentText(formRes, decodeContentStream(d, st), out, seen, depth+1)
+						d.extractContentText(cancel, formRes, decodeContentStream(d, st), out, seen, depth+1)
 					}
 				}
 			}
@@ -219,10 +254,21 @@ func (t contentToken) number() float64 {
 // allocated bytes (the repeated grow-and-copy of a multi-gigabyte slice, not the
 // scan itself). Streaming makes the tokenizer allocation-free apart from the
 // string operands it must decode.
-func tokenizeContent(data []byte) iter.Seq[contentToken] {
+//
+// The scan stops when cancel fires, checked every cancelScanBytes of input; see
+// cancel.go for why the check is gated on the scan position rather than run per
+// token.
+func tokenizeContent(cancel canceler, data []byte) iter.Seq[contentToken] {
 	return func(yield func(contentToken) bool) {
 		i := 0
+		nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
 		for i < len(data) {
+			if i >= nextCancelCheck {
+				if cancel.stopped() {
+					return
+				}
+				nextCancelCheck = i + cancelScanBytes
+			}
 			c := data[i]
 			switch {
 			case isContentWS(c):

@@ -122,7 +122,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 
 	var local, nested devUse
 	if data != nil {
-		r, cc, g := scanStreamForDeviceOps(data)
+		r, cc, g := scanStreamForDeviceOps(s.doc.canceler(), data)
 		local.rgb, local.cmyk, local.gray = r, cc, g
 	}
 	used := s.doc.contentUsedNamesCached(data, key)
@@ -189,7 +189,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 						for _, cpv := range cp.Values {
 							if st, ok := s.doc.Resolve(cpv).(*Stream); ok {
 								if d := decodeContentStream(s.doc, st); d != nil {
-									r, cc, g := scanStreamForDeviceOps(d)
+									r, cc, g := scanStreamForDeviceOps(s.doc.canceler(), d)
 									nested.rgb = nested.rgb || r
 									nested.cmyk = nested.cmyk || cc
 									nested.gray = nested.gray || g

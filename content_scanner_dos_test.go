@@ -29,8 +29,8 @@ func TestContentScannersTerminateOnStrayParen(t *testing.T) {
 	}
 	for _, in := range inputs {
 		in := in
-		run("forEachContentItem", func() { forEachContentItem(in, func(contentItemKind, []byte) {}) })
-		run("forEachContentToken", func() { forEachContentToken(in, func([]byte, bool) {}) })
-		run("contentUsedNames", func() { contentUsedNames(in) })
+		run("forEachContentItem", func() { forEachContentItem(canceler{}, in, func(contentItemKind, []byte) {}) })
+		run("forEachContentToken", func() { forEachContentToken(canceler{}, in, func([]byte, bool) {}) })
+		run("contentUsedNames", func() { contentUsedNames(canceler{}, in) })
 	}
 }

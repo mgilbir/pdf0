@@ -723,12 +723,20 @@ func collectContentStreamData(doc *Document) map[int][]byte {
 	catalog := getCatalog(doc)
 	if catalog != nil {
 		for _, page := range collectPages(doc, catalog.Get("Pages")) {
+			// Per page and, below, per stream: one iteration inflates one
+			// content stream, bounded by the per-stream decode cap (cancel.go).
+			if doc.stopped() {
+				return out
+			}
 			if data := getContentStreamData(doc, page.dict.Get("Contents")); data != nil {
 				out[page.objNum] = data
 			}
 		}
 	}
 	for num, iobj := range doc.Objects {
+		if doc.stopped() {
+			return out
+		}
 		s, ok := iobj.Value.(*Stream)
 		if !ok {
 			continue

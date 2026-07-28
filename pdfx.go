@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -102,11 +103,22 @@ func (v PDFXViolation) Error() string {
 // ValidatePDFX checks whether doc conforms to the given PDF/X level. An empty
 // result means no violations were found.
 func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
+	return validatePDFX(canceler{}, doc, level)
+}
+
+// ValidatePDFXContext is ValidatePDFX with cancellation; a cancelled run reports
+// itself under the rule "limit" (see cancel.go).
+func ValidatePDFXContext(ctx context.Context, doc *Document, level PDFXLevel) []PDFXViolation {
+	return validatePDFX(newCanceler(ctx), doc, level)
+}
+
+func validatePDFX(cancel canceler, doc *Document, level PDFXLevel) []PDFXViolation {
 	// Run against a shallow copy carrying the per-run cache, as the PDF/A and
 	// PDF/UA validators do: it memoizes the traversals this validator shares
-	// with them, applies the same aggregate content budget, and gives the
-	// resource guards somewhere to report a trip (see limits.go).
-	doc = beginRun(doc)
+	// with them, applies the same aggregate content budget, carries the
+	// cancellation signal, and gives the resource guards somewhere to report a
+	// trip (see limits.go).
+	doc = beginRunCancel(doc, cancel)
 	var out []PDFXViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
@@ -114,8 +126,14 @@ func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
 
 	// Every check runs under a recover boundary, so a panic on hostile input
 	// becomes an "internal" finding instead of crashing the caller, and one bad
-	// check does not discard its siblings' findings (audit C27).
-	run := func(check func()) { runGuardedCheck(add, check) }
+	// check does not discard its siblings' findings (audit C27). It is also the
+	// coarse cancellation boundary (cancel.go).
+	run := func(check func()) {
+		if doc.stopped() {
+			return
+		}
+		runGuardedCheck(add, check)
+	}
 
 	run(func() {
 		// Encryption is forbidden (ISO 15930-7 6.1): a PDF/X file must be readable

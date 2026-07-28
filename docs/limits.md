@@ -68,6 +68,36 @@ A `limit` finding fires on no file in the veraPDF corpus. If you see one, the
 input is adversarial or a budget needs revisiting — it is never a statement
 about conformance.
 
+### The one non-guard that reports here: cancellation
+
+A caller's `context.Context` ending a run is not a resource guard, but it
+produces exactly the same event — *the checker stopped before it had seen
+everything* — and so calls for exactly the same honesty. It is therefore
+reported through this mechanism, under the same `"limit"` rule, with the guard
+identifier `context-canceled`:
+
+> the run was cancelled before it finished (context-canceled): context deadline
+> exceeded; the checks that had not yet run were skipped, so this file is
+> neither confirmed conformant nor non-conformant
+
+Giving it its own rule identifier would have meant every caller that already
+distinguishes "the file is bad" from "pdf0 could not finish" learning a second
+way to spell the second one. Instead `IsCheckerFinding` covers it for free, and
+the trip is derived in `runLimitTrips` — one place, so none of the nine
+validators can forget it.
+
+The property this buys is the important one: **a cancelled validation never
+returns an empty result.** A caller testing `len(result) == 0` for "conformant"
+gets "not conformant"; a caller filtering with `IsCheckerFinding` gets
+"unknown". Neither gets a clean bill of health from a run that did not look.
+
+The reach table below extends: `Read` and `Write` report cancellation as a
+returned error (the loud class), and `ExtractTextContext` /
+`ExtractImagesContext` return their partial result alongside one — which is why
+they exist as separate signatures rather than as `Context` variants returning
+the bare value. `docs/architecture.md` covers the API shape and the check
+granularity; `cancel.go` carries the design record.
+
 ### What the mechanism reaches, honestly
 
 | Reached | Not reached |
@@ -75,6 +105,7 @@ about conformance.
 | All PDF/A, PDF/UA, PDF/UA-2, PDF/X, PDF/VT, PDF/R and DPart checks (each installs or joins a run). | The lexer and parser (`maxTokenGap`, `maxParseDepth`): they take bytes, not a `*Document`, and threading state through them for a guard that already surfaces as a parse error would be ceremony, not reach. |
 | Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures already surface per image in `ExtractedImage.Note`; text truncation surfaces as missing text. |
 | Font-program guards, forwarded from the parsed program. | `Equal` / `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
+| Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error. |
 
 ## The inventory
 

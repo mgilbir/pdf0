@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -41,6 +42,13 @@ import (
 // recovered panic) it names the *checker*, not the document: "6.2.11.4.1" says
 // the file is wrong, "limit" says pdf0 stopped short and therefore cannot say
 // whether the file is right.
+//
+// A cancelled run reports itself here too (limitCanceled). A caller's deadline
+// is not a resource guard, but it produces exactly the same event — the checker
+// stopped before it had seen everything — and so calls for exactly the same
+// honesty. Giving it its own rule identifier would have meant every caller that
+// already distinguishes "the file is bad" from "pdf0 could not finish" learning
+// a second way to spell the second one. See cancel.go.
 const limitRule = "limit"
 
 // IsCheckerFinding reports whether a finding describes a problem in the checker
@@ -83,6 +91,13 @@ const (
 	limitContentStream = "content-stream-size"       // limits.contentStreamBytes, WithMaxContentStreamBytes — pdfa.go
 	limitContentTotal  = "decoded-content-total"     // limits.decodedContentBytes, WithMaxDecodedContentBytes — pdfa.go
 	limitObjStmTotal   = "objstm-decompressed-total" // limits.objectStreamBytes, WithMaxObjectStreamBytes — objstm.go
+
+	// limitCanceled is not a resource guard: it is the caller's context ending
+	// the run (cancel.go). It is listed among the guards because it is reported
+	// through the same recorder and under the same rule, so that a caller
+	// filtering on IsCheckerFinding — or keying on the guard name in the message
+	// — needs no new case for it.
+	limitCanceled = "context-canceled"
 )
 
 // limitBound renders the bound a guard tripped on, saying whether it is the
@@ -111,6 +126,12 @@ type limitTrip struct {
 }
 
 func (t limitTrip) message() string {
+	if t.guard == limitCanceled {
+		// Deliberately worded so that it cannot be read as a statement about the
+		// file. A cancelled run's findings are true but partial, and the absence
+		// of a finding says nothing at all.
+		return fmt.Sprintf("the run was cancelled before it finished (%s): %s; the checks that had not yet run were skipped, so this file is neither confirmed conformant nor non-conformant", t.guard, t.detail)
+	}
 	return fmt.Sprintf("resource limit reached (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
 }
 
@@ -233,6 +254,14 @@ func runLimitTrips(doc *Document) []limitTrip {
 	if doc.valCache != nil {
 		out = append(out, doc.valCache.limits.snapshot()...)
 	}
+	// A cancelled run is the same event as a tripped guard and is reported the
+	// same way (cancel.go). It is derived here rather than recorded by whichever
+	// loop noticed first, because the context is authoritative and every
+	// validator already funnels its report through this one function: one line
+	// here gives all seven of them the finding, and none of them can forget it.
+	if err := doc.canceler().err(); err != nil {
+		out = append(out, limitTrip{guard: limitCanceled, detail: err.Error()})
+	}
 	return out
 }
 
@@ -263,27 +292,45 @@ func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
 }
 
 // newValidationCache builds the per-run cache, including the limit recorder
-// every guard reports through. The three (now seven) call sites that start a
-// run share it so a new per-run field cannot be initialized in one and
-// forgotten in another.
-func newValidationCache() *validationCache {
+// every guard reports through and the cancellation signal every loop consults.
+// The three (now seven) call sites that start a run share it so a new per-run
+// field cannot be initialized in one and forgotten in another.
+func newValidationCache(cancel canceler) *validationCache {
 	return &validationCache{
 		pages:   make(map[int][]pageInfo),
 		content: make(map[*Stream][]byte),
 		limits:  &limitRecorder{},
+		cancel:  cancel,
 	}
 }
 
-// beginRun returns the Document a validation run should work against: a shallow
-// copy carrying a fresh per-run cache, so the caller's Document is never
+// beginRun starts a run that cannot be cancelled. It is what the non-Context
+// entry points call, so they behave exactly as they did before contexts
+// existed.
+func beginRun(doc *Document) *Document { return beginRunCancel(doc, canceler{}) }
+
+// beginRunContext starts a run governed by ctx. Every Context entry point goes
+// through here.
+func beginRunContext(ctx context.Context, doc *Document) *Document {
+	return beginRunCancel(doc, newCanceler(ctx))
+}
+
+// beginRunCancel returns the Document a validation run should work against: a
+// shallow copy carrying a fresh per-run cache, so the caller's Document is never
 // mutated and the same Document can be validated from several goroutines at
 // once. An already-installed cache is kept, so a nested check joins the run in
-// progress rather than starting a second one.
-func beginRun(doc *Document) *Document {
+// progress rather than starting a second one — and inherits its cancellation
+// signal along with its memoized traversals, which is why a cancelled outer run
+// also stops the embedded-PDF/A validation it started (checkEmbeddedPDFA).
+//
+// The cache is the only place a context is held, and its lifetime is exactly
+// the run's: the shallow copy is discarded when the validator returns, so the
+// caller's Document never ends up owning one (see cancel.go).
+func beginRunCancel(doc *Document, cancel canceler) *Document {
 	if doc == nil || doc.valCache != nil {
 		return doc
 	}
 	runDoc := *doc
-	runDoc.valCache = newValidationCache()
+	runDoc.valCache = newValidationCache(cancel)
 	return &runDoc
 }

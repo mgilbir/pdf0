@@ -10,7 +10,7 @@ func TestContentFactsSinglePass(t *testing.T) {
 	// /Im1 Do paints an XObject; the two Tj outside any BDC/BMC are untagged
 	// real content; the tagged run is fine.
 	content := []byte("/Im1 Do (untagged) Tj /P << /MCID 0 >> BDC (ok) Tj EMC (also untagged) Tj")
-	f := buildContentFacts(content)
+	f := buildContentFacts(canceler{}, content)
 
 	if len(f.doNames) != 1 || f.doNames[0] != "Im1" {
 		t.Errorf("doNames = %v, want [Im1]", f.doNames)

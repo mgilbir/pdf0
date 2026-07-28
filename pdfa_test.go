@@ -2210,19 +2210,19 @@ func TestQNestingIgnoresStrings(t *testing.T) {
 		content.WriteString("q ")
 	}
 	content.WriteString(") Tj ET\nq Q\n")
-	if d := qNestingMaxDepth(content.Bytes()); d != 1 {
+	if d := qNestingMaxDepth(canceler{}, content.Bytes()); d != 1 {
 		t.Errorf("expected depth 1 (string content ignored), got %d", d)
 	}
 
 	// Real nesting still counts, including with delimiters after operators.
 	real := []byte("q q q(x)Tj Q Q Q")
-	if d := qNestingMaxDepth(real); d != 3 {
+	if d := qNestingMaxDepth(canceler{}, real); d != 3 {
 		t.Errorf("expected depth 3, got %d", d)
 	}
 
 	// Inline image binary containing 'q' bytes is skipped.
 	img := []byte("q BI /W 1 /H 1 ID q q q q\x00\xff EI Q")
-	if d := qNestingMaxDepth(img); d != 1 {
+	if d := qNestingMaxDepth(canceler{}, img); d != 1 {
 		t.Errorf("expected depth 1 (inline image ignored), got %d", d)
 	}
 }

@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -55,10 +56,21 @@ var pdfrTextOrVectorOps = map[string]bool{
 
 // ValidatePDFR checks a document against the PDF/R structural profile.
 func ValidatePDFR(d *Document) []PDFRViolation {
+	return validatePDFR(canceler{}, d)
+}
+
+// ValidatePDFRContext is ValidatePDFR with cancellation; a cancelled run reports
+// itself under the rule "limit" (see cancel.go).
+func ValidatePDFRContext(ctx context.Context, d *Document) []PDFRViolation {
+	return validatePDFR(newCanceler(ctx), d)
+}
+
+func validatePDFR(cancel canceler, d *Document) []PDFRViolation {
 	// Run against a shallow copy carrying the per-run cache (see beginRun): it
-	// memoizes the shared traversals, applies the aggregate content budget, and
-	// gives the resource guards somewhere to report a trip (limits.go).
-	d = beginRun(d)
+	// memoizes the shared traversals, applies the aggregate content budget,
+	// carries the cancellation signal, and gives the resource guards somewhere to
+	// report a trip (limits.go).
+	d = beginRunCancel(d, cancel)
 	var out []PDFRViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFRViolation{Rule: rule, Message: msg, Object: obj})
@@ -67,7 +79,13 @@ func ValidatePDFR(d *Document) []PDFRViolation {
 	// Every check runs under a recover boundary, so a panic on hostile input
 	// becomes an "internal" finding instead of crashing the caller, and one bad
 	// check (or one bad page) does not discard the others' findings (audit C27).
-	run := func(check func()) { runGuardedCheck(add, check) }
+	// It is also the coarse cancellation boundary (cancel.go).
+	run := func(check func()) {
+		if d.stopped() {
+			return
+		}
+		runGuardedCheck(add, check)
+	}
 
 	run(func() {
 		if d.Encrypted || d.Trailer.Get("Encrypt") != nil {
@@ -118,7 +136,7 @@ func (d *Document) checkPDFRPage(page *Dictionary, objNum int, add func(rule, ms
 	// The page content must draw raster images only — no text or vector marks.
 	data := getContentStreamData(d, page.Get("Contents"))
 	flagged := map[string]bool{}
-	forEachContentToken(data, func(tok []byte, isName bool) {
+	forEachContentToken(d.canceler(), data, func(tok []byte, isName bool) {
 		if isName {
 			return
 		}
