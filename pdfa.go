@@ -2437,9 +2437,19 @@ func collectAllExtGState(doc *Document) []extGStateEntry {
 		}
 	}
 
-	// Scan all objects for Resources dicts (pages, Form XObjects, Type3 fonts)
-	for num, iobj := range doc.Objects {
-		switch v := iobj.Value.(type) {
+	// Scan all objects for Resources dicts (pages, Form XObjects, Type3 fonts).
+	//
+	// In ascending object-number order, not doc.Objects map order. A graphics
+	// state written as a DIRECT dictionary takes its object number from the
+	// container that reached it (fallbackObjNum), and one /Resources object is
+	// routinely shared by many pages — so the same *Dictionary is offered by
+	// several containers and seen keeps only the first. Which container that was
+	// came from Go's randomised map iteration, so a /CA or /SMask violation on a
+	// shared graphics state reported a different object number on every run over
+	// the same file. Lowest container object number is a total order, so it is
+	// reproducible; that is load-bearing, since reports are diffed run to run.
+	for _, num := range sortedObjectNums(doc) {
+		switch v := doc.Objects[num].Value.(type) {
 		case *Dictionary:
 			resRef := v.Get("Resources")
 			if resRef != nil {

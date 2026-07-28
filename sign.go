@@ -494,12 +494,23 @@ func (d *Document) signingTarget(what string) (catalog, page *Dictionary, catNum
 // many per-font and per-cell lookups do not each scan the whole object table
 // (which is quadratic on large documents — hundreds of thousands of objects).
 func (d *Document) dictObjNum(target *Dictionary) int {
+	// Two cross-reference slots may point at the same bytes, in which case Read
+	// stores one parsed value under both object numbers (see parsedByOffset), so
+	// a *Dictionary can be the value of more than one object. Both loops below
+	// therefore answer with the LOWEST such number rather than with whichever
+	// one the range happens to reach first: d.Objects is a Go map and Go
+	// randomises its iteration order per run, so "first" would put a different
+	// object number in a validator's report on each run over the same file.
+	// Numeric order is a total order, so this answer is reproducible — which is
+	// load-bearing, as reports are diffed run against run.
 	if c := d.valCache; c != nil {
 		if c.dictNum == nil {
 			c.dictNum = make(map[*Dictionary]int, len(d.Objects))
 			for num, iobj := range d.Objects {
 				if dp, ok := iobj.Value.(*Dictionary); ok {
-					c.dictNum[dp] = num
+					if prev, dup := c.dictNum[dp]; !dup || num < prev {
+						c.dictNum[dp] = num
+					}
 				}
 			}
 		}
@@ -508,10 +519,13 @@ func (d *Document) dictObjNum(target *Dictionary) int {
 		}
 		return -1
 	}
+	best := -1
 	for num, iobj := range d.Objects {
 		if dp, ok := iobj.Value.(*Dictionary); ok && dp == target {
-			return num
+			if best < 0 || num < best {
+				best = num
+			}
 		}
 	}
-	return -1
+	return best
 }
