@@ -94,3 +94,7 @@ testdata/nlcius/
 
 # Agent worktrees created by tooling under .claude/; never part of the repo.
 .claude/worktrees/
+
+# Common Crawl robustness sweep: streamed blocks, probe binary, logs and the
+# quarantined reproductions. The sweep script is committed; none of this is.
+testdata/cc/run/
