@@ -5532,12 +5532,34 @@ func inlineImageDeclaredLength(params []byte) (int, bool) {
 	return 0, false
 }
 
+// contentByteClass classifies a byte for content-stream scanning. These two
+// predicates sit in the innermost loop of every content walker in the package
+// and are called once per byte of every decoded content stream — hundreds of
+// millions of times on a large document — so they read a single table rather
+// than run a chain of comparisons. The two classes share one 256-byte table to
+// keep the pair in one cache line's worth of memory, since the walkers almost
+// always test both.
+const (
+	ctbWS byte = 1 << iota
+	ctbDelim
+)
+
+var contentByteClass = func() (t [256]byte) {
+	for _, b := range []byte{' ', '\t', '\n', '\r', '\x00', '\x0c'} {
+		t[b] |= ctbWS
+	}
+	for _, b := range []byte("()<>[]{}/%") {
+		t[b] |= ctbDelim
+	}
+	return t
+}()
+
 func isContentWS(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\x00' || b == '\x0c'
+	return contentByteClass[b]&ctbWS != 0
 }
 
 func isContentDelim(b byte) bool {
-	return b == '(' || b == ')' || b == '<' || b == '>' || b == '[' || b == ']' || b == '{' || b == '}' || b == '/' || b == '%'
+	return contentByteClass[b]&ctbDelim != 0
 }
 
 // --- ICCBased color space checks (6.2.4.2) ---

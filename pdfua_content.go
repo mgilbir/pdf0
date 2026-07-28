@@ -91,23 +91,38 @@ func buildContentFacts(content []byte) *streamContentFacts {
 		}
 		return false
 	}
-	var operands []contentToken
-	var lastName string // most recent name operand (for the Do-operator target)
-	for _, tk := range tokenizeContent(content) {
+	// Only three things about an operator's operands matter here, so they are
+	// tracked as the tokens stream past rather than buffered into a slice: is
+	// the first operand the name /Artifact, is any operand the name /MCID, and
+	// what was the most recent name operand (the Do target — which, unlike the
+	// other two, deliberately carries across operators). Buffering every operand
+	// meant copying a token struct for the great majority of tokens in the
+	// stream, none of which is ever read back.
+	firstOperand := true
+	artifactTag := false // the first operand is the name /Artifact
+	mcidProp := false    // some operand is the name /MCID
+	var lastName string  // most recent name operand (for the Do-operator target)
+	for tk := range tokenizeContent(content) {
 		if tk.kind != ctOp {
-			operands = append(operands, tk)
 			if tk.kind == ctName {
 				lastName = tk.name
+				if firstOperand && tk.name == "Artifact" {
+					artifactTag = true
+				}
+				if tk.name == "MCID" {
+					mcidProp = true
+				}
 			}
+			firstOperand = false
 			continue
 		}
 		switch tk.op {
 		case "BDC", "BMC":
 			kind := mcTransparent
 			switch {
-			case len(operands) > 0 && operands[0].kind == ctName && operands[0].name == "Artifact":
+			case artifactTag:
 				kind = mcArtifact
-			case operandsHaveName(operands, "MCID"):
+			case mcidProp:
 				kind = mcTagged
 			}
 			if kind == mcArtifact && hasAncestor(mcTagged) {
@@ -128,7 +143,7 @@ func buildContentFacts(content []byte) *streamContentFacts {
 		case "Do":
 			f.doNames = append(f.doNames, lastName)
 		}
-		operands = operands[:0]
+		firstOperand, artifactTag, mcidProp = true, false, false
 	}
 	return f
 }
@@ -246,15 +261,6 @@ func sortedInts(m map[int]bool) []int {
 		}
 	}
 	return out
-}
-
-func operandsHaveName(operands []contentToken, name string) bool {
-	for _, o := range operands {
-		if o.kind == ctName && o.name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // checkUAAnnotStructType correlates annotations with the structure tree via OBJR
