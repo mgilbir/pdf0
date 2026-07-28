@@ -264,14 +264,7 @@ func (d *Document) walkImages(yield func(ExtractedImage) bool) {
 	// transform evaluates per pixel, and without the cache each evaluation
 	// re-decoded the function stream (and re-parsed a type-4 program) — a
 	// sub-megabyte image took minutes (sweep #13).
-	if d.valCache == nil {
-		runDoc := *d
-		runDoc.valCache = &validationCache{
-			pages:   make(map[int][]pageInfo),
-			content: make(map[*Stream][]byte),
-		}
-		d = &runDoc
-	}
+	d = beginRun(d)
 	cat := getCatalog(d)
 	if cat == nil {
 		return

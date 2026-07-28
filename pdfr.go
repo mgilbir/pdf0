@@ -55,6 +55,10 @@ var pdfrTextOrVectorOps = map[string]bool{
 
 // ValidatePDFR checks a document against the PDF/R structural profile.
 func ValidatePDFR(d *Document) []PDFRViolation {
+	// Run against a shallow copy carrying the per-run cache (see beginRun): it
+	// memoizes the shared traversals, applies the aggregate content budget, and
+	// gives the resource guards somewhere to report a trip (limits.go).
+	d = beginRun(d)
 	var out []PDFRViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFRViolation{Rule: rule, Message: msg, Object: obj})
@@ -77,6 +81,7 @@ func ValidatePDFR(d *Document) []PDFRViolation {
 	cat := getCatalog(d)
 	if cat == nil {
 		add("structure", "document has no catalog", 0)
+		reportLimits(d, add)
 		sortViolations(out)
 		return out
 	}
@@ -98,6 +103,10 @@ func ValidatePDFR(d *Document) []PDFRViolation {
 	for _, page := range pages {
 		run(func() { d.checkPDFRPage(page.dict, page.objNum, add) })
 	}
+
+	// Guard trips are reported under their own rule, not as conformance
+	// failures (see limits.go).
+	reportLimits(d, add)
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.

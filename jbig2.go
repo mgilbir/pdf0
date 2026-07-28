@@ -658,6 +658,15 @@ func decodeGenericMMR(data []byte, w, h int) (*jbBitmap, error) {
 		return nil, err
 	}
 	stride := (w + 7) / 8
+	// decodeCCITT stops early when the data runs out — its row loop breaks on
+	// eof and still returns a nil error — so packed may hold fewer than h rows.
+	// Indexing it as if it held all h panics with a slice-bounds runtime error,
+	// and that panic is not errJBIG2Budget, so decodeJBIG2's recover re-raises
+	// it and it escapes ExtractImages to the caller. A short decode is a
+	// truncated image, which is a decode failure to report, not a crash.
+	if len(packed) < h*stride {
+		return nil, errJBIG2Unsupported
+	}
 	bmp := newJBBitmap(w, h, 0)
 	for y := 0; y < h; y++ {
 		row := packed[y*stride:]

@@ -52,7 +52,7 @@ func TestCmapFormat4Budget(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		parseCmapSubtable(b)
+		_, _ = parseCmapSubtable(b)
 		close(done)
 	}()
 	select {
@@ -88,7 +88,7 @@ func buildCmapFormat4(segs [][3]int) []byte {
 // code is 0 contributes its mappings; a bogus wrap guard used to drop the whole
 // segment (audit C46).
 func TestCmapFormat4SegmentStartingAtZero(t *testing.T) {
-	m := parseCmapSubtable(buildCmapFormat4([][3]int{
+	m, _ := parseCmapSubtable(buildCmapFormat4([][3]int{
 		{0x0000, 0x0002, 100},
 		{0x0041, 0x0042, 200},
 		{0xFFFF, 0xFFFF, 1}, // sentinel, maps nothing
@@ -107,7 +107,7 @@ func TestCmapFormat4SegmentStartingAtZero(t *testing.T) {
 // TestCmapFormat4TerminalSegment ensures a segment that runs up to 0xFFFF maps
 // its last code and still terminates.
 func TestCmapFormat4TerminalSegment(t *testing.T) {
-	m := parseCmapSubtable(buildCmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}))
+	m, _ := parseCmapSubtable(buildCmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}))
 	if m[0xFFFE] != 0x7FFE || m[0xFFFF] != 0x7FFF {
 		t.Errorf("terminal segment: got %v, want U+FFFE->0x7FFE, U+FFFF->0x7FFF", m)
 	}
@@ -116,7 +116,7 @@ func TestCmapFormat4TerminalSegment(t *testing.T) {
 // TestCmapFormat4InvertedSegment ensures a malformed segment with start > end is
 // skipped without disturbing the segments around it.
 func TestCmapFormat4InvertedSegment(t *testing.T) {
-	m := parseCmapSubtable(buildCmapFormat4([][3]int{
+	m, _ := parseCmapSubtable(buildCmapFormat4([][3]int{
 		{0x0050, 0x0040, 300}, // inverted
 		{0x0041, 0x0041, 200},
 	}))
@@ -132,11 +132,11 @@ func TestCmapUnsupportedFormatIsNil(t *testing.T) {
 	for _, format := range []int{2, 13, 14} {
 		sub := make([]byte, 64)
 		sub[0], sub[1] = byte(format>>8), byte(format)
-		if m := parseCmapSubtable(sub); m != nil {
+		if m, _ := parseCmapSubtable(sub); m != nil {
 			t.Errorf("format %d subtable: got %v, want nil", format, m)
 		}
 	}
-	if m := parseCmapSubtable(make([]byte, 100)); m != nil {
+	if m, _ := parseCmapSubtable(make([]byte, 100)); m != nil {
 		t.Errorf("truncated format 0 subtable: got %v, want nil", m)
 	}
 }
@@ -161,7 +161,7 @@ func buildCmapFormat12(groups [][3]uint32) []byte {
 // including a group starting at code 0 (the class of bug behind audit C46) and
 // one whose glyph ids start at 0.
 func TestCmapFormat12Groups(t *testing.T) {
-	m := parseCmapSubtable(buildCmapFormat12([][3]uint32{
+	m, _ := parseCmapSubtable(buildCmapFormat12([][3]uint32{
 		{0x0000, 0x0002, 100},
 		{0x0041, 0x0043, 200},
 		{0x0100, 0x0100, 0}, // maps to .notdef: recorded as no mapping at all
@@ -180,7 +180,7 @@ func TestCmapFormat12Groups(t *testing.T) {
 // TestCmapFormat12Astral ensures a group crossing out of the BMP keeps its
 // supra-BMP code points: reaching those is the whole point of format 12.
 func TestCmapFormat12Astral(t *testing.T) {
-	m := parseCmapSubtable(buildCmapFormat12([][3]uint32{
+	m, _ := parseCmapSubtable(buildCmapFormat12([][3]uint32{
 		{0xFFFE, 0x10001, 900},
 		{0x1F600, 0x1F601, 1000},
 	}))
@@ -228,7 +228,8 @@ func TestCmapFormat12Budget(t *testing.T) {
 		done := make(chan int, 1)
 		start := time.Now()
 		go func() {
-			done <- len(parseCmapSubtable(b))
+			mm, _ := parseCmapSubtable(b)
+			done <- len(mm)
 		}()
 		select {
 		case n := <-done:
@@ -270,7 +271,7 @@ func TestCmapFormat12Truncated(t *testing.T) {
 		}(),
 	}
 	for name, b := range cases {
-		if m := parseCmapSubtable(b); m != nil {
+		if m, _ := parseCmapSubtable(b); m != nil {
 			t.Errorf("%s: got %v, want nil", name, m)
 		}
 	}
@@ -280,7 +281,7 @@ func TestCmapFormat12Truncated(t *testing.T) {
 // disturbing its neighbours, and that a glyph id beyond the 16-bit range is not
 // recorded as if it named a glyph.
 func TestCmapFormat12MalformedGroups(t *testing.T) {
-	m := parseCmapSubtable(buildCmapFormat12([][3]uint32{
+	m, _ := parseCmapSubtable(buildCmapFormat12([][3]uint32{
 		{0x0050, 0x0040, 300},     // inverted
 		{0x110000, 0x110002, 400}, // past the end of Unicode
 		{0x0060, 0x0060, 0x10000}, // glyph id wider than 16 bits
@@ -401,7 +402,7 @@ func buildCmapFormat6(first int, gids []int) []byte {
 // when the caller narrows the map to uint16.
 func TestCmapFormat6PastBMP(t *testing.T) {
 	// firstCode 0xFFFE with four entries runs to 0x10001.
-	m := parseCmapSubtable(buildCmapFormat6(0xFFFE, []int{7, 8, 9, 10}))
+	m, _ := parseCmapSubtable(buildCmapFormat6(0xFFFE, []int{7, 8, 9, 10}))
 	if len(m) != 2 || m[0xFFFE] != 7 || m[0xFFFF] != 8 {
 		t.Errorf("format 6 past the BMP: got %v, want only U+FFFE->7 and U+FFFF->8", m)
 	}
@@ -436,7 +437,7 @@ func TestCmapMappingNothingIsNil(t *testing.T) {
 		}()),
 	}
 	for name, b := range cases {
-		if m := parseCmapSubtable(b); m != nil {
+		if m, _ := parseCmapSubtable(b); m != nil {
 			t.Errorf("%s: got a non-nil map with %d entries, want nil", name, len(m))
 		}
 	}

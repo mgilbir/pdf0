@@ -71,7 +71,7 @@ func documentXMP(doc *Document) string {
 	if !ok {
 		return ""
 	}
-	return decodeXMPToUTF8(decodeContentStream(doc, stream))
+	return xmpText(doc, stream)
 }
 
 // checkLevelAConformance verifies the XMP declares Level A conformance

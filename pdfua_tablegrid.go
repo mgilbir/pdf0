@@ -1,5 +1,7 @@
 package pdf0
 
+import "strconv"
+
 // Table-grid analysis for PDF/UA structure validation. A table's TR/TH/TD
 // elements, together with their RowSpan/ColSpan table attributes, are laid out
 // on a grid exactly as a renderer would. Definite structural defects — a span
@@ -72,7 +74,11 @@ func (d *Document) checkUATableGrid(cat *Dictionary) []UAViolation {
 			continue
 		}
 		if rows := d.collectTableRows(n.elem, roleMap); len(rows) > 0 {
-			v = append(v, gridDefects(rows)...)
+			defects, complete := gridDefects(rows)
+			if !complete {
+				noteLimit(d, limitGridFills, "a table's RowSpan/ColSpan values imply more than "+strconv.Itoa(maxGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.dictObjNum(n.elem))
+			}
+			v = append(v, defects...)
 		}
 	}
 	return v
@@ -174,8 +180,10 @@ func (d *Document) tableAttrDicts(cell *Dictionary) []*Dictionary {
 	return out
 }
 
-// gridDefects lays the rows onto a grid and reports definite defects.
-func gridDefects(rows []tableRow) []UAViolation {
+// gridDefects lays the rows onto a grid and reports definite defects. The
+// second result reports that maxGridFills stopped the layout, so "no defects"
+// means "not determined" rather than "clean".
+func gridDefects(rows []tableRow) ([]UAViolation, bool) {
 	nRows := len(rows)
 	// occupied[r] is the set of columns already filled in row r (by a cell in
 	// this or an earlier row via a row span).
@@ -234,8 +242,11 @@ func gridDefects(rows []tableRow) []UAViolation {
 	}
 	if oversize {
 		// Too large to lay out within the work budget; report no grid defects
-		// rather than hang or fabricate a result on adversarial input.
-		return nil
+		// rather than hang or fabricate a result on adversarial input. The
+		// defects already found (outOfRows, overlap) are discarded with the
+		// rest: they were computed against a grid this function abandoned, and
+		// half a layout is not evidence. The caller reports the trip instead.
+		return nil, false
 	}
 
 	// A hole exists if, after placement, some row does not fill the full grid
@@ -268,5 +279,5 @@ func gridDefects(rows []tableRow) []UAViolation {
 	if hole {
 		v = append(v, UAViolation{"7.2", "table rows do not all span the same number of columns (a grid cell is empty)", 0})
 	}
-	return v
+	return v, true
 }

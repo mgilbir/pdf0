@@ -259,7 +259,15 @@ func FuzzCmapSubtable(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		checkCmapInvariants(t, "parseCmapSubtable", parseCmapSubtable(data), false)
+		m, partial := parseCmapSubtable(data)
+		checkCmapInvariants(t, "parseCmapSubtable", m, false)
+		// A partial result is only meaningful alongside a map: reporting "this
+		// is a prefix" while returning nothing would leave a consumer unable to
+		// tell "truncated" from "unreadable", which is the distinction the flag
+		// exists to draw.
+		if partial && m == nil {
+			t.Fatalf("parseCmapSubtable reported partial with a nil map")
+		}
 	})
 }
 

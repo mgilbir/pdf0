@@ -86,15 +86,15 @@ func forEachContentItem(data []byte, fn func(kind contentItemKind, payload []byt
 			numeric := data[i] >= '0' && data[i] <= '9' || data[i] == '+' || data[i] == '-' || data[i] == '.'
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 				i++
-				if !numeric && i-start > 256 {
-					break
-				}
 			}
 			if i == start {
 				// Defensive: an unhandled delimiter would yield no token and no
 				// progress. Skip it so the scan can never stall.
 				i++
 				continue
+			}
+			if !numeric && i-start > maxContentTokenLen {
+				continue // binary run, not a keyword; see scanStreamForDeviceOps
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
@@ -1133,12 +1133,12 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile")).(*Stream); ok {
 		if data := decodeContentStream(doc, s); data != nil {
-			return parseType1(data)
+			return noteFontProgramLimits(doc, parseType1(data))
 		}
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile2")).(*Stream); ok {
 		if data := decodeContentStream(doc, s); data != nil {
-			return parseSFNT(data)
+			return noteFontProgramLimits(doc, parseSFNT(data))
 		}
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile3")).(*Stream); ok {
@@ -1146,14 +1146,24 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 			subtype, _ := s.Dict.Get("Subtype").(Name)
 			if subtype == "OpenType" {
 				if fp := parseSFNTCFF(data); fp != nil {
-					return fp
+					return noteFontProgramLimits(doc, fp)
 				}
-				return parseSFNT(data)
+				return noteFontProgramLimits(doc, parseSFNT(data))
 			}
-			return parseCFF(data)
+			return noteFontProgramLimits(doc, parseCFF(data))
 		}
 	}
 	return nil
+}
+
+// noteFontProgramLimits reports the guard trips the font-program parsers
+// recorded on the program itself. The parsers take raw bytes and have no
+// Document in scope, so this is where a trip re-enters the run's recorder.
+func noteFontProgramLimits(doc *Document, fp *fontProgram) *fontProgram {
+	if fp != nil && fp.cmapPartial {
+		noteLimit(doc, limitCmapWork, "an embedded font's cmap subtable was too large to read completely; the glyph-coverage and .notdef checks for that font were skipped rather than run against a partial character map", 0)
+	}
+	return fp
 }
 
 // parseSFNTCFF returns the CFF-table font program of an OpenType/CFF font,
@@ -1431,12 +1441,26 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 			// program's cmap, not a glyph name.
 			codeMapped := subtype == "TrueType" || name != "" || baseEncodingModelled
 
+			// A code that the cmap does not resolve is only evidence of a
+			// missing glyph when the cmap is complete. When the work budget
+			// truncated it (fp.cmapPartial) the code is *unknown*, and
+			// trueTypeGID's "non-nil cmap is authoritative" contract would
+			// otherwise turn every unread mapping into glyph 0 — audit C46's
+			// false positive, reached through the budget instead of the
+			// dropped-segment bug.
+			if fp.cmapPartial && subtype == "TrueType" {
+				codeMapped = false
+			}
+
 			if renders && codeMapped && !glyphExists {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (code %d)", string(subtype), code))
 			}
 			// A .notdef reference is prohibited even in invisible text
 			// (rendering mode 3), so this is not gated on visible rendering.
-			if isNotdefGlyph(fp, subtype, symbolic, code, name) {
+			// It is gated on the cmap being complete for the same reason as
+			// the glyph rule above: a truncated cmap resolves an unread code
+			// to gid 0, which reads as .notdef.
+			if !(fp.cmapPartial && subtype == "TrueType") && isNotdefGlyph(fp, subtype, symbolic, code, name) {
 				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(subtype)))
 			}
 
@@ -1467,7 +1491,10 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 	if v := doc.Resolve(desc.Get("DW")); v != nil {
 		dw = numVal(v)
 	}
-	wMap := parseCIDWidths(doc, desc.Get("W"))
+	wMap, wComplete := parseCIDWidths(doc, desc.Get("W"))
+	if !wComplete {
+		noteLimit(doc, limitCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %d CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", maxCIDRange), u.objNum)
+	}
 
 	var errs []ValidationError
 	reported := map[string]bool{}
@@ -1512,11 +1539,11 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(cidSub)))
 			}
 
-			pdfW := dw
+			pdfW, havePDF := dw, wComplete
 			if w, ok := wMap[cid]; ok {
-				pdfW = w
+				pdfW, havePDF = w, true
 			}
-			if renders && haveProg && absf(pdfW-progW) > glyphWidthTolerance {
+			if renders && havePDF && haveProg && absf(pdfW-progW) > glyphWidthTolerance {
 				report("width", fmt.Sprintf("width information for glyphs used for rendering is inconsistent in %s font", string(cidSub)))
 			}
 		}
@@ -1777,13 +1804,23 @@ func cidToGID(doc *Document, desc *Dictionary, cid int) (int, bool) {
 // matches the ceiling the ToUnicode and CMap scanners already apply.
 const maxCIDRange = 65536
 
-// parseCIDWidths parses a CIDFont /W array into CID -> width.
-func parseCIDWidths(doc *Document, wObj Object) map[int]float64 {
+// parseCIDWidths parses a CIDFont /W array into CID -> width. The second result
+// reports that maxCIDRange dropped at least one range entry, so the map is
+// missing widths the file does declare.
+//
+// This distinction is load-bearing. A missing entry is not "this CID has no
+// declared width" — the caller's fallback for that is /DW, default 1000 — and
+// comparing a defaulted 1000 against the font program's real advance emits
+// "width information for glyphs used for rendering is inconsistent", a
+// violation the file does not commit. Incomplete has to be distinguishable
+// from absent.
+func parseCIDWidths(doc *Document, wObj Object) (map[int]float64, bool) {
 	out := make(map[int]float64)
 	arr, ok := doc.Resolve(wObj).(Array)
 	if !ok {
-		return out
+		return out, false
 	}
+	complete := true
 	i := 0
 	for i < len(arr) {
 		c := intVal(doc.Resolve(arr[i]))
@@ -1803,7 +1840,13 @@ func parseCIDWidths(doc *Document, wObj Object) map[int]float64 {
 				// gate, since parseCIDWidths runs unconditionally in
 				// checkCIDFontConsistency. Bound the span to the 16-bit CID
 				// ceiling and skip inverted or over-wide ranges (audit C1).
-				if c >= 0 && cLast >= c && cLast-c < maxCIDRange {
+				switch {
+				case c < 0 || cLast < c:
+					// Malformed, not over-budget: an inverted or negative
+					// range declares nothing, so nothing is missing.
+				case cLast-c >= maxCIDRange:
+					complete = false
+				default:
 					for cid := c; cid <= cLast; cid++ {
 						out[cid] = w
 					}
@@ -1814,7 +1857,7 @@ func parseCIDWidths(doc *Document, wObj Object) map[int]float64 {
 		}
 		i++
 	}
-	return out
+	return out, complete
 }
 
 // parseFontMatrix reads a Type 3 /FontMatrix (default [0.001 0 0 0.001 0 0]).

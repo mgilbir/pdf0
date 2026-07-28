@@ -48,6 +48,18 @@ type fontProgram struct {
 	cidGIDs map[int]bool
 	// widthByCID gives advance widths by CID for CID-keyed CFF.
 	widthByCID map[int]float64
+	// cmapPartial reports that a cmap subtable stopped short of its own end
+	// because a work budget (maxCmapFormat4Work, maxCmapFormat12Work) ran out,
+	// so the maps above are missing mappings the font really declares. A
+	// consumer must not read "this code is absent from the cmap" as "this code
+	// has no glyph" when it is set — that is audit C46's false positive with a
+	// different cause: a truncated cmap makes trueTypeGID answer "glyph 0"
+	// authoritatively, and a conformant font is then reported as
+	// undefined-glyph / .notdef.
+	//
+	// The sfnt parser has no Document in scope, so it cannot report the trip
+	// itself; loadFontProgram, which does, forwards it (see noteLimit).
+	cmapPartial bool
 }
 
 // --- sfnt (TrueType / OpenType) ---
@@ -202,24 +214,30 @@ func parseSFNT(data []byte) *fontProgram {
 				if rank < bestRank {
 					continue
 				}
-				if m := parseCmapSubtable(sub); m != nil {
+				m, partial := parseCmapSubtable(sub)
+				if m != nil {
 					fp.cmap = m
 					bestRank = rank
+					// The chosen cmap's partialness is what matters; a
+					// discarded lower-ranked subtable's is not.
+					fp.cmapPartial = partial
 				}
 			case plat == 3 && enc == 0:
-				m := parseCmapSubtable(sub)
+				m, partial := parseCmapSubtable(sub)
 				if m == nil {
 					continue // unreadable: leave the cmap unset, not empty
 				}
+				fp.cmapPartial = fp.cmapPartial || partial
 				fp.symbolCmap = make(map[uint16]int, len(m))
 				for r, gid := range m {
 					fp.symbolCmap[uint16(r)] = gid
 				}
 			case plat == 1 && enc == 0:
-				m := parseCmapSubtable(sub)
+				m, partial := parseCmapSubtable(sub)
 				if m == nil {
 					continue
 				}
+				fp.cmapPartial = fp.cmapPartial || partial
 				fp.macCmap = make(map[byte]int, len(m))
 				for r, gid := range m {
 					if r <= 0xFF {
@@ -287,12 +305,19 @@ func cmapResult(out map[rune]int) map[rune]int {
 // truncated past use, or one that maps nothing at all): callers treat a non-nil
 // cmap as authoritative, so an empty map would claim the font maps no character
 // at all, which reads as "every code is .notdef" rather than "unknown".
-func parseCmapSubtable(b []byte) map[rune]int {
+//
+// The second result reports that a work budget stopped the parse before the
+// subtable's own end, so the returned map is a prefix of the font's real
+// coverage. It is separate from the nil result because the mappings that were
+// read are still correct — a code the map resolves resolves rightly — but a code
+// it does not resolve is unknown rather than absent, and no rule may assert
+// against it. Without this the budget reproduces audit C46 exactly.
+func parseCmapSubtable(b []byte) (map[rune]int, bool) {
 	out := make(map[rune]int)
 	switch be16(b, 0) {
 	case 0:
 		if len(b) < 262 {
-			return nil
+			return nil, false
 		}
 		for c := 0; c < 256; c++ {
 			if gid := int(b[6+c]); gid != 0 {
@@ -302,7 +327,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 	case 4:
 		segX2 := be16(b, 6)
 		if segX2 == 0 || len(b) < 16+4*segX2 {
-			return nil
+			return nil, false
 		}
 		endBase := 14
 		startBase := endBase + segX2 + 2
@@ -333,7 +358,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 			// segment beginning at code 0 (audit C46).
 			for c := start; c <= end; c++ {
 				if work++; work > maxCmapFormat4Work {
-					return cmapResult(out)
+					return cmapResult(out), len(out) > 0
 				}
 				var gid int
 				if rangeOff == 0 {
@@ -355,7 +380,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		first := be16(b, 6)
 		count := be16(b, 8)
 		if len(b) < 10+2*count {
-			return nil
+			return nil, false
 		}
 		// Character codes are 16-bit, so a first+count that runs past 0xFFFF
 		// is malformed. Recording those entries would be worse than dropping
@@ -373,18 +398,18 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		// so its keys really can exceed 0xFFFF.
 		const unicodeMaxRune = 0x10FFFF
 		if len(b) < 16 {
-			return nil
+			return nil, false
 		}
 		length := be32(b, 4)
 		if length < 16 || uint64(length) > uint64(len(b)) {
-			return nil
+			return nil, false
 		}
 		b = b[:length]
 		nGroups := be32(b, 12)
 		// nGroups is a uint32: a table may claim four billion groups it does
 		// not carry. Trust the bytes, not the count.
 		if uint64(nGroups)*12 > uint64(len(b)-16) {
-			return nil
+			return nil, false
 		}
 		// Every group is charged at least one unit of work, so this budget
 		// bounds the group loop as well as the expansion. A single group may
@@ -396,7 +421,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		work := 0
 		for g := 0; g < int(nGroups); g++ {
 			if work++; work > maxCmapFormat12Work {
-				return cmapResult(out)
+				return cmapResult(out), len(out) > 0
 			}
 			p := 16 + 12*g
 			start := be32(b, p)
@@ -419,7 +444,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 			}
 			for c := start; ; c++ {
 				if work++; work > maxCmapFormat12Work {
-					return cmapResult(out)
+					return cmapResult(out), len(out) > 0
 				}
 				gid := uint64(startGID) + uint64(c-start)
 				// Glyph indices are 16-bit; anything wider is malformed and
@@ -434,9 +459,9 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		}
 	default:
 		// Formats 2, 8, 10, 13 and 14 are not parsed.
-		return nil
+		return nil, false
 	}
-	return cmapResult(out)
+	return cmapResult(out), false
 }
 
 // --- CFF ---

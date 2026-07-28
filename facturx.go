@@ -196,5 +196,5 @@ func facturxXMP(doc *Document, cat *Dictionary) string {
 	if !ok {
 		return ""
 	}
-	return decodeXMPToUTF8(decodeContentStream(doc, ms))
+	return xmpText(doc, ms)
 }
