@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -105,6 +106,19 @@ func ValidatePDFA(doc *Document, level PDFALevel) []ValidationError {
 	return ValidatePDFABytes(doc, level, nil)
 }
 
+// ValidatePDFAContext is ValidatePDFA with cancellation. Validating a large
+// document is the package's longest-running operation, so this is the variant a
+// caller under a deadline should use.
+//
+// When ctx ends the run stops and returns the findings gathered so far plus one
+// under the rule "limit" recording the cancellation, which IsCheckerFinding
+// reports as a checker finding. A cancelled run therefore never looks like a
+// clean bill of health: an empty result is impossible, and the caller can tell
+// "no violations found" apart from "pdf0 did not get to look". See cancel.go.
+func ValidatePDFAContext(ctx context.Context, doc *Document, level PDFALevel) []ValidationError {
+	return ValidatePDFABytesContext(ctx, doc, level, nil)
+}
+
 // runCheck runs one validation check, converting a panic into a reported
 // violation instead of letting it crash the caller. The validator processes
 // untrusted files, so a bug (or an adversarial structure) in one check must not
@@ -136,11 +150,21 @@ func runByteCheck(level PDFALevel, check func() []ValidationError) (out []Valida
 // result means no implemented check fired, not a guarantee of full conformance
 // (the validator covers a subset of ISO 19005).
 func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []ValidationError {
+	return validatePDFABytes(canceler{}, doc, level, rawData)
+}
+
+// ValidatePDFABytesContext is ValidatePDFABytes with cancellation; see
+// ValidatePDFAContext for how a cancelled run reports itself.
+func ValidatePDFABytesContext(ctx context.Context, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
+	return validatePDFABytes(newCanceler(ctx), doc, level, rawData)
+}
+
+func validatePDFABytes(cancel canceler, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
 	// Level A conformance is Level B plus the accessibility requirements; it is
 	// validated by running the Level B checks and adding the Level A rule
 	// families (see validatePDFALevelA).
 	if level.isA() {
-		return validatePDFALevelA(doc, level, rawData)
+		return validatePDFALevelA(cancel, doc, level, rawData)
 	}
 
 	var errs []ValidationError
@@ -260,15 +284,23 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 	// structures, and without the cache each content stream inflated up to three
 	// times per page and the page tree was collected in ~8 checks.
 	runDoc := *doc
-	runDoc.valCache = newValidationCache()
+	runDoc.valCache = newValidationCache(cancel)
 	doc = &runDoc
 
+	// The check list is the coarsest cancellation boundary: a cancelled run
+	// abandons every check it has not started. It is not the only one — the
+	// traversals inside a check consult the same signal per page, per content
+	// stream and per megabyte scanned — because a single check over a large
+	// document is itself seconds of work. See cancel.go.
 	for _, check := range checks {
+		if doc.stopped() {
+			break
+		}
 		errs = append(errs, runCheck(doc, level, check)...)
 	}
 
 	// Byte-level checks (require raw file data)
-	if rawData != nil {
+	if rawData != nil && !doc.stopped() {
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkNoDataAfterEOF(rawData, level) })...)
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkFileStructureBytes(doc, level, rawData) })...)
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkLinearizedTrailerID(rawData, level) })...)
@@ -336,6 +368,12 @@ type validationCache struct {
 	// check that declines to assert because its input was truncated still says
 	// so. See limits.go; always non-nil when built by newValidationCache.
 	limits *limitRecorder
+
+	// cancel is the caller's cancellation signal for this run, or the
+	// never-cancelling zero value. It lives here — on state whose lifetime is
+	// exactly one run — rather than on the caller's Document, which outlives the
+	// operation. See cancel.go.
+	cancel canceler
 }
 
 // --- File structure checks (6.1) ---
@@ -848,7 +886,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 			continue
 		}
 		// Decompress and check ICC profile header
-		data, err := decodeStreamData(profStream, doc.lim())
+		data, err := decodeStreamData(doc.canceler(), profStream, doc.lim())
 		if err != nil {
 			// Only treat a decode failure as a violation when we actually
 			// support every filter on the stream. A legal profile encoded with
@@ -4221,7 +4259,7 @@ func checkQNestingDepth(doc *Document, level PDFALevel, rule string, errs *[]Val
 	const maxQDepth = 28
 
 	report := func(data []byte, objNum int) {
-		if d := qNestingMaxDepth(data); d > maxQDepth {
+		if d := qNestingMaxDepth(doc.canceler(), data); d > maxQDepth {
 			*errs = append(*errs, ValidationError{
 				Rule:    rule,
 				Level:   level,
@@ -4257,9 +4295,9 @@ func checkQNestingDepth(doc *Document, level PDFALevel, rule string, errs *[]Val
 // qNestingMaxDepth computes the maximum q/Q nesting depth of a decoded
 // content stream using a real operator tokenizer, so 'q' bytes inside string
 // literals, comments, names, or inline-image binary data do not count.
-func qNestingMaxDepth(data []byte) int {
+func qNestingMaxDepth(cancel canceler, data []byte) int {
 	depth, maxDepth := 0, 0
-	forEachContentOperator(data, func(op []byte) {
+	forEachContentOperator(cancel, data, func(op []byte) {
 		if len(op) != 1 {
 			return
 		}
@@ -4711,7 +4749,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 	}()
 
 	if data != nil {
-		r, c, g := scanStreamForDeviceOps(data)
+		r, c, g := scanStreamForDeviceOps(doc.canceler(), data)
 		localRGB = localRGB || r
 		localCMYK = localCMYK || c
 		localGray = localGray || g
@@ -4864,7 +4902,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 							if cpStream, ok := cpObj.(*Stream); ok {
 								data := decodeContentStream(doc, cpStream)
 								if data != nil {
-									r, c, g := scanStreamForDeviceOps(data)
+									r, c, g := scanStreamForDeviceOps(doc.canceler(), data)
 									*usesRGB = *usesRGB || r
 									*usesCMYK = *usesCMYK || c
 									*usesGray = *usesGray || g
@@ -5002,7 +5040,7 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		}
 	}
 	var data []byte
-	decoded, err := decodeStreamData(stream, lim)
+	decoded, err := decodeStreamData(doc.canceler(), stream, lim)
 	switch {
 	case err == nil && len(decoded) <= lim.contentStreamBytes:
 		data = decoded
@@ -5040,7 +5078,7 @@ func decodeMetadataStream(doc *Document, stream *Stream) []byte {
 	}
 	lim := doc.lim()
 	var data []byte
-	if decoded, err := decodeStreamData(stream, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
+	if decoded, err := decodeStreamData(doc.canceler(), stream, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
 		data = decoded
 	}
 	if c := doc.valCache; c != nil {
@@ -5067,7 +5105,7 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 		if data == nil {
 			return
 		}
-		r, c, g := scanStreamForDeviceOps(data)
+		r, c, g := scanStreamForDeviceOps(doc.canceler(), data)
 		usesRGB = usesRGB || r
 		usesCMYK = usesCMYK || c
 		usesGray = usesGray || g
@@ -5079,7 +5117,7 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 				if data == nil {
 					continue
 				}
-				r, c, g := scanStreamForDeviceOps(data)
+				r, c, g := scanStreamForDeviceOps(doc.canceler(), data)
 				usesRGB = usesRGB || r
 				usesCMYK = usesCMYK || c
 				usesGray = usesGray || g
@@ -5092,7 +5130,10 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 // scanStreamForDeviceOps scans decoded content stream bytes for device color operators.
 // Uses a simple tokenizer that handles inline images (BI/ID/EI) to avoid
 // scanning binary image data.
-func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
+//
+// The scan stops when cancel fires, checked every cancelScanBytes of input
+// like the other content scanners; see cancel.go.
+func scanStreamForDeviceOps(cancel canceler, data []byte) (usesRGB, usesCMYK, usesGray bool) {
 	n := len(data)
 	var lastName string
 	sawColorOp := false
@@ -5108,7 +5149,14 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 	// An operator token is an alphabetic sequence preceded by whitespace (or BOF)
 	// and followed by whitespace, delimiter, or EOF.
 	i := 0
+	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
 	for i < n {
+		if i >= nextCancelCheck {
+			if cancel.stopped() {
+				return
+			}
+			nextCancelCheck = i + cancelScanBytes
+		}
 		// Skip whitespace
 		for i < n && isContentWS(data[i]) {
 			i++
@@ -5372,8 +5420,8 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 // dictionary marker, array/procedure delimiter, comment, or name). String
 // literals, comments, and inline-image binary data (BI ... ID <binary> EI)
 // are skipped, so operator bytes occurring inside them are never reported.
-func forEachContentOperator(data []byte, fn func(op []byte)) {
-	forEachContentToken(data, func(tok []byte, isName bool) {
+func forEachContentOperator(cancel canceler, data []byte, fn func(op []byte)) {
+	forEachContentToken(cancel, data, func(tok []byte, isName bool) {
 		if !isName {
 			fn(tok)
 		}
@@ -5383,10 +5431,21 @@ func forEachContentOperator(data []byte, fn func(op []byte)) {
 // forEachContentToken is forEachContentOperator's core walker; it also
 // reports name tokens (without the leading slash) so callers can associate
 // operand names with the operators that consume them.
-func forEachContentToken(data []byte, fn func(tok []byte, isName bool)) {
+//
+// The scan stops when cancel fires, checked every cancelScanBytes of input;
+// see cancel.go for why the check is gated on the scan position rather than
+// run per token.
+func forEachContentToken(cancel canceler, data []byte, fn func(tok []byte, isName bool)) {
 	n := len(data)
 	i := 0
+	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
 	for i < n {
+		if i >= nextCancelCheck {
+			if cancel.stopped() {
+				return
+			}
+			nextCancelCheck = i + cancelScanBytes
+		}
 		for i < n && isContentWS(data[i]) {
 			i++
 		}
@@ -5475,14 +5534,14 @@ type usedResourceNames struct {
 	shadings map[string]bool
 }
 
-func contentUsedNames(data []byte) usedResourceNames {
+func contentUsedNames(cancel canceler, data []byte) usedResourceNames {
 	u := usedResourceNames{
 		xobjects: make(map[string]bool),
 		patterns: make(map[string]bool),
 		shadings: make(map[string]bool),
 	}
 	var lastName string
-	forEachContentToken(data, func(tok []byte, isName bool) {
+	forEachContentToken(cancel, data, func(tok []byte, isName bool) {
 		if isName {
 			lastName = string(tok)
 			return
@@ -6393,14 +6452,14 @@ type contentColorUsage struct {
 	paintsStroke bool
 }
 
-func scanContentColorUsage(data []byte) contentColorUsage {
+func scanContentColorUsage(cancel canceler, data []byte) contentColorUsage {
 	u := contentColorUsage{
 		fillCS:   make(map[string]bool),
 		strokeCS: make(map[string]bool),
 		gsNames:  make(map[string]bool),
 	}
 	var lastName string
-	forEachContentToken(data, func(tok []byte, isName bool) {
+	forEachContentToken(cancel, data, func(tok []byte, isName bool) {
 		if isName {
 			lastName = string(tok)
 			return
@@ -6524,7 +6583,7 @@ func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
 		if data == nil {
 			continue
 		}
-		usage := scanContentColorUsage(data)
+		usage := scanContentColorUsage(doc.canceler(), data)
 
 		// Accumulated overprint state from applied ExtGStates.
 		opm1, opFill, opStroke := false, false, false

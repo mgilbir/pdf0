@@ -93,6 +93,23 @@ an empty result means "nothing I check flagged this," not a guarantee of full
 conformance. Use `ValidatePDFABytes` when you have the raw file bytes and want
 the additional byte-level checks (e.g. no data after `%%EOF`).
 
+Under a deadline, use the `…Context` variants — `ReadContext`,
+`Document.WriteContext`, `ValidatePDFAContext`, `ValidatePDFUAContext`,
+`Document.ExtractTextContext` and the rest:
+
+```go
+ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+defer cancel()
+errs := pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA4)
+```
+
+A cancelled validation returns the findings it had gathered plus one under the
+rule `"limit"`, so it can never be mistaken for a clean result; `Read`, `Write`
+and the extractors return an error wrapping `ctx.Err()` instead. Every original
+signature is unchanged. See
+[docs/architecture.md](docs/architecture.md#cancellation) for which entry points
+have a variant, why, and the measured cancellation latency.
+
 See [`examples/`](examples/) for runnable programs (`simple_pdf`, `simple_pdf17`,
 `simple_pdfa`); run one with `go run ./examples/simple_pdfa`.
 

@@ -1,6 +1,9 @@
 package pdf0
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // This file validates PDF/UA-2 (ISO 14289-2:2024), the PDF 2.0 accessibility
 // standard succeeding PDF/UA-1. PDF/UA-2 shares most of PDF/UA-1's requirements
@@ -20,11 +23,21 @@ import "fmt"
 // ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the UAViolation
 // type; clause identifiers follow ISO 14289-2.
 func ValidatePDFUA2(d *Document) []UAViolation {
+	return validatePDFUA2(canceler{}, d)
+}
+
+// ValidatePDFUA2Context is ValidatePDFUA2 with cancellation; see
+// ValidatePDFUAContext for how a cancelled run reports itself.
+func ValidatePDFUA2Context(ctx context.Context, d *Document) []UAViolation {
+	return validatePDFUA2(newCanceler(ctx), d)
+}
+
+func validatePDFUA2(cancel canceler, d *Document) []UAViolation {
 	// The shared checks (tagging, structure tree, default language, displayed
 	// title, Unicode mapping, artifacts, headings), parameterized for part 2 so
 	// the identification rule requires pdfuaid:part 2 and the UA-1 header rule
 	// is not run at all.
-	out := validatePDFUA(d, "2")
+	out := validatePDFUA(cancel, d, "2")
 
 	// PDF/UA-2 is defined against PDF 2.0.
 	out = append(out, runUACheck(func() []UAViolation {

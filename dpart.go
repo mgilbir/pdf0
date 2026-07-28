@@ -1,6 +1,9 @@
 package pdf0
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // This file implements the document part (DPart) hierarchy defined in
 // ISO 32000-2:2020 clause 14.12. The DPart tree partitions a document's pages
@@ -35,7 +38,17 @@ func (v DPartViolation) Error() string {
 // (14.12.3), /NodeNameList depth (Table 408), and DPM key/value constraints
 // (14.12.4.2).
 func ValidateDParts(doc *Document) []DPartViolation {
-	doc = beginRun(doc)
+	return validateDParts(canceler{}, doc)
+}
+
+// ValidateDPartsContext is ValidateDParts with cancellation; a cancelled run
+// reports itself under the rule "limit" (see cancel.go).
+func ValidateDPartsContext(ctx context.Context, doc *Document) []DPartViolation {
+	return validateDParts(newCanceler(ctx), doc)
+}
+
+func validateDParts(cancel canceler, doc *Document) []DPartViolation {
+	doc = beginRunCancel(doc, cancel)
 	var out []DPartViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, DPartViolation{Rule: rule, Message: msg, Object: obj})
@@ -44,8 +57,14 @@ func ValidateDParts(doc *Document) []DPartViolation {
 	// The hierarchy walk is one traversal rather than a list of independent
 	// checks, so it gets a single recover boundary at the entry point: a panic
 	// on hostile input becomes an "internal" finding instead of crashing the
-	// caller, and the findings reported before it are kept (audit C27).
-	runGuardedCheck(add, func() { validateDPartHierarchy(doc, add) })
+	// caller, and the findings reported before it are kept (audit C27). Being one
+	// traversal, it is also the whole of this validator's cancellation
+	// granularity: an already-cancelled run skips it, and a run cancelled during
+	// it completes the walk. The walk is bounded by the page and DPart counts and
+	// reads no content, so that is bounded work, not an open-ended wait.
+	if !doc.stopped() {
+		runGuardedCheck(add, func() { validateDPartHierarchy(doc, add) })
+	}
 
 	// The walk visits map-ordered structures, so the output order is otherwise
 	// nondeterministic; sort for stable, diffable reports.

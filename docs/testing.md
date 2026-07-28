@@ -192,6 +192,21 @@ return an error instead.
   successful parse. Panics and timeouts are reported as bugs; a per-file log of
   every non-ok outcome goes to `$TMPDIR/corpusprobe-failures.tsv`.
   `go run ./cmd/corpusprobe <dir> [workers]` (default 8 workers).
+
+  The timeout is a `context.Context` deadline that pdf0 observes
+  (`ReadContext` / `WriteContext` / `ValidatePDFUAContext`), *and* a `select` on
+  the result channel. Both are needed and they do different jobs. The context
+  stops the work: before pdf0 had cancellation this loop abandoned the goroutine
+  and it kept burning a core and holding its memory until it finished on its own
+  — with eight workers and a 25-second file, a real leak, and the concrete
+  motivation for [the cancellation
+  design](architecture.md#cancellation). The `select` still bounds the wait,
+  because a hang pdf0 does not check for cancellation in would block the worker
+  forever, and finding exactly that is what this program is for. A `timeout`
+  outcome is therefore a stronger signal than it used to be: the work did not
+  stop when told to, not merely that it was slow. Measured: two quarantined
+  real-world files needing ~14 s and ~25 s, probed with the timeout lowered to
+  300 ms, complete the whole run in 0.42 s wall and 0.53 s of CPU.
 - **`cmd/corpustime`** — times each parse stage of one PDF with a generous budget
   (`Read` 180 s, `PageCount` 60 s, `Write` 180 s, `ValidatePDFUA` 180 s), to
   distinguish a truly-hanging stage from a merely slow huge file.

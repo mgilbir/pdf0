@@ -53,6 +53,38 @@
 // this file conformant?" should read such a finding as "unknown", never as a
 // failure.
 //
+// # Cancellation
+//
+// The work a document can cost is set by the document, not by the caller: a
+// 71 MB, 1256-page file takes about ten seconds to validate. The long-running
+// entry points therefore have Context variants — ReadContext,
+// ReadWithPasswordContext, Document.WriteContext, ValidatePDFAContext,
+// ValidatePDFABytesContext, ValidatePDFUAContext, ValidatePDFUA2Context,
+// ValidatePDFXContext, ValidatePDFVTContext, ValidatePDFVT2Context,
+// ValidatePDFRContext, ValidateDPartsContext, Document.ExtractTextContext and
+// Document.ExtractImagesContext:
+//
+//	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+//	defer cancel()
+//	for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA4) { ... }
+//
+// A context is a first parameter rather than a With* Option deliberately. An
+// Option is stored on the Document and inherited by every later call, which is
+// the wrong lifetime for a context and would make cancellation invisible at the
+// call site; limits describe what a document may cost, contexts describe how
+// long an operation may take. Every original signature is unchanged, and an
+// entry point whose cost is bounded rather than document-scale — ExtractPageText
+// (one page), Images (an iterator the caller can break out of),
+// Document.VerifySignatures — deliberately has no variant.
+//
+// A cancelled validation returns the findings it had gathered plus one under the
+// rule "limit", the same channel a tripped resource cap uses, so a cancelled run
+// can never be mistaken for a clean bill of health. Read, Write and the
+// extractors have no finding channel, so they return an error wrapping
+// ctx.Err() instead. Cancellation is checked at coarse boundaries — per check,
+// per page, per content stream, per megabyte scanned or decompressed — which on
+// that 71 MB file takes effect within about 60 ms.
+//
 // Encrypted files using the standard security handler are decrypted on Read
 // when the (empty or supplied) user or owner password is correct: RC4 and
 // AES-128 at revisions 2-4, and AES-256 at revision 6. Revision 5 is a

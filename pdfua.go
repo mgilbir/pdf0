@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -25,20 +26,29 @@ func (v UAViolation) Error() string {
 // figure alternate text. It is a partial validator — a clean result means the
 // implemented checks passed, not full PDF/UA conformance.
 func ValidatePDFUA(doc *Document) []UAViolation {
-	return validatePDFUA(doc, "1")
+	return validatePDFUA(canceler{}, doc, "1")
+}
+
+// ValidatePDFUAContext is ValidatePDFUA with cancellation. When ctx ends the run
+// stops and returns the findings gathered so far plus one under the clause
+// "limit" recording the cancellation, which IsCheckerFinding reports as a
+// checker finding — so a cancelled run cannot be mistaken for a clean one. See
+// cancel.go.
+func ValidatePDFUAContext(ctx context.Context, doc *Document) []UAViolation {
+	return validatePDFUA(newCanceler(ctx), doc, "1")
 }
 
 // validatePDFUA runs the checks shared by PDF/UA-1 and PDF/UA-2, parameterized
 // by the pdfuaid:part the file must declare. The two UA-1-only requirements —
 // part 1 and a PDF 1.x header — are selected here by part rather than filtered
 // out of the result by message text afterwards (audit C39).
-func validatePDFUA(doc *Document, part string) []UAViolation {
+func validatePDFUA(cancel canceler, doc *Document, part string) []UAViolation {
 	// Install a per-run cache (page tree, decoded content, font-usage map) on a
 	// shallow copy so the original document is never mutated. Many checks walk
 	// the same structures — collectFontTextUsage alone runs in nine font checks —
 	// and without the cache a large document's content was decoded and tokenized
 	// dozens of times, making validation quadratic in practice.
-	doc = beginRun(doc)
+	doc = beginRunCancel(doc, cancel)
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
@@ -50,8 +60,16 @@ func validatePDFUA(doc *Document, part string) []UAViolation {
 
 	// Every check runs under a recover boundary, so a panic on hostile input
 	// becomes an "internal" finding instead of crashing the caller, and one bad
-	// check does not discard its siblings' findings (audit C27).
-	run := func(check func() []UAViolation) { v = append(v, runUACheck(check)...) }
+	// check does not discard its siblings' findings (audit C27). The same wrapper
+	// is the coarse cancellation boundary: a cancelled run skips every check it
+	// has not started, and the traversals inside a check stop at their own finer
+	// boundaries (cancel.go).
+	run := func(check func() []UAViolation) {
+		if doc.stopped() {
+			return
+		}
+		v = append(v, runUACheck(check)...)
+	}
 	runCat := func(check func(*Dictionary) []UAViolation) {
 		run(func() []UAViolation { return check(cat) })
 	}

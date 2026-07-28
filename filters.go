@@ -26,7 +26,7 @@ const (
 //
 // Output is capped (see WithMaxDecodedStreamBytes) to bound memory on hostile
 // input.
-func lzwDecode(data []byte, earlyChange int, lim limits) ([]byte, error) {
+func lzwDecode(cancel canceler, data []byte, earlyChange int, lim limits) ([]byte, error) {
 	if earlyChange != 0 && earlyChange != 1 {
 		return nil, fmt.Errorf("LZW: invalid EarlyChange %d", earlyChange)
 	}
@@ -62,7 +62,21 @@ func lzwDecode(data []byte, earlyChange int, lim limits) ([]byte, error) {
 		return int(bitBuf>>uint(bitCnt)) & ((1 << uint(codeWidth)) - 1), true
 	}
 
+	// The decode stops when cancel fires, checked every cancelReadChunk bytes of
+	// output — the same granularity flate gets through cancelReader, expressed
+	// against the output here because LZW's cost tracks what it produces, not
+	// what it consumes (cancel.go).
+	nextCancelCheck := lim.decodedStreamBytes + 1 // never reached when cancel cannot fire
+	if cancel.cancellable() {
+		nextCancelCheck = 0
+	}
 	for {
+		if len(out) >= nextCancelCheck {
+			if err := cancel.stopErr("decoding LZW stream"); err != nil {
+				return nil, err
+			}
+			nextCancelCheck = len(out) + cancelReadChunk
+		}
 		code, ok := nextCode()
 		if !ok {
 			break

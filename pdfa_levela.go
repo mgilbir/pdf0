@@ -13,12 +13,12 @@ import (
 // which pdf0 already validates.
 
 // validatePDFALevelA validates a Level A conformance level (1a/2a/3a).
-func validatePDFALevelA(doc *Document, level PDFALevel, rawData []byte) []ValidationError {
+func validatePDFALevelA(cancel canceler, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
 	// All Level B requirements apply, so run the Level B pipeline and adopt its
 	// findings at this level. The Level B pipeline requires pdfaid:conformance
 	// "B"; at Level A it must be "A", so that one Level B finding is dropped and
 	// re-checked below.
-	base := ValidatePDFABytes(doc, level.baseB(), rawData)
+	base := validatePDFABytes(cancel, doc, level.baseB(), rawData)
 	errs := make([]ValidationError, 0, len(base))
 	for _, e := range base {
 		if strings.Contains(e.Message, "pdfaid:conformance must be B") {
@@ -31,9 +31,16 @@ func validatePDFALevelA(doc *Document, level PDFALevel, rawData []byte) []Valida
 	// Run the Level A checks through runCheck like every Level B check, so a
 	// panic on hostile input becomes a reported "internal" finding rather than
 	// crashing the caller — the asymmetry runCheck exists to prevent (audit C27).
-	errs = append(errs, runCheck(doc, level, checkLevelAConformance)...)
-	errs = append(errs, runCheck(doc, level, checkLevelAStructure)...)
-	errs = append(errs, runCheck(doc, level, checkLevelALanguage)...)
+	// A cancelled run abandons the ones it has not started; the finding that
+	// says so is already in base, carried over by the loop above.
+	for _, check := range []func(*Document, PDFALevel) []ValidationError{
+		checkLevelAConformance, checkLevelAStructure, checkLevelALanguage,
+	} {
+		if cancel.stopped() {
+			break
+		}
+		errs = append(errs, runCheck(doc, level, check)...)
+	}
 	return errs
 }
 

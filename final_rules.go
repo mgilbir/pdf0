@@ -425,7 +425,7 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 			return
 		}
 		used := doc.contentUsedNamesCached(data, key)
-		gsNames := scanContentColorUsage(data).gsNames
+		gsNames := scanContentColorUsage(doc.canceler(), data).gsNames
 		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
 			for i, key := range gsDict.Keys {
 				if !gsNames[string(key)] {
@@ -477,6 +477,11 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 	}
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
+		// One iteration can run a whole nested validation, so this is a
+		// cancellation boundary in its own right (cancel.go).
+		if doc.stopped() {
+			break
+		}
 		dict, ok := iobj.Value.(*Dictionary)
 		if !ok {
 			continue
@@ -495,11 +500,11 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
 				continue
 			}
-			data, err := decodeStreamData(stream, doc.lim())
+			data, err := decodeStreamData(doc.canceler(), stream, doc.lim())
 			if err != nil || len(data) == 0 {
 				continue
 			}
-			if !embeddedPDFACompliant(data) {
+			if !embeddedPDFACompliant(doc.canceler(), data) {
 				errs = append(errs, ValidationError{Rule: "6.9", Level: level,
 					Message: "an embedded PDF file is not compliant with PDF/A", Object: num})
 			}
@@ -535,8 +540,16 @@ func isPDFMIME(subtype Object) bool {
 
 // embeddedPDFACompliant reports whether embedded PDF bytes parse as a PDF/A
 // document and validate against their own declared conformance level.
-func embeddedPDFACompliant(data []byte) bool {
-	edoc, err := Read(bytes.NewReader(data), int64(len(data)))
+//
+// The outer run's cancellation signal is carried into the nested read and
+// validation: this is a whole second document's worth of work, and it is the
+// one place where cancelling would otherwise have no effect for the length of
+// an entire validation. A cancelled nested run reports "not compliant", which
+// looks like a finding — but the outer run's own cancellation finding is
+// present alongside it and marks the whole result as incomplete, so the caller
+// is not misled (cancel.go).
+func embeddedPDFACompliant(cancel canceler, data []byte) bool {
+	edoc, err := readDocument(cancel, bytes.NewReader(data), int64(len(data)), "", defaultLimits())
 	if err != nil {
 		return false
 	}
@@ -545,7 +558,7 @@ func embeddedPDFACompliant(data []byte) bool {
 		return false // an embedded PDF that is not PDF/A at all
 	}
 	edoc.embeddedDepth = 1
-	return len(ValidatePDFABytes(edoc, elevel, data)) == 0
+	return len(validatePDFABytes(cancel, edoc, elevel, data)) == 0
 }
 
 // declaredPDFALevel reads the PDF/A conformance level a document claims via

@@ -171,7 +171,10 @@ func collectAppearanceStreams(doc *Document) []appearanceStream {
 // walkExecutedContent validates a content stream and recurses into the form
 // XObjects and tiling patterns it actually invokes.
 func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key *Stream, objNum int, seen map[*Dictionary]bool, add func(string, int)) {
-	if container == nil || seen[container] {
+	// One invocation scans one content stream and recurses into the forms and
+	// patterns it draws, so this is the per-stream cancellation boundary of the
+	// executed-content model (cancel.go).
+	if container == nil || seen[container] || doc.stopped() {
 		return
 	}
 	seen[container] = true
@@ -223,7 +226,7 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key 
 // rendering intents, and unresolved named resource references.
 func checkContentTokens(data []byte, res *Dictionary, doc *Document, objNum int, add func(string, int)) {
 	var lastName string
-	forEachContentToken(data, func(tok []byte, isName bool) {
+	forEachContentToken(doc.canceler(), data, func(tok []byte, isName bool) {
 		if isName {
 			lastName = string(tok)
 			return
@@ -330,7 +333,7 @@ func checkContentStreamLimits(doc *Document, level PDFALevel, lim implLimits, er
 		found.add(ValidationError{Rule: lim.rule, Level: level, Message: msg, Object: obj})
 	}
 	for num, data := range collectContentStreamData(doc) {
-		forEachContentItem(data, func(kind contentItemKind, payload []byte) {
+		forEachContentItem(doc.canceler(), data, func(kind contentItemKind, payload []byte) {
 			switch kind {
 			case itemNumber:
 				checkContentNumberLimit(string(payload), lim, num, add)
@@ -456,7 +459,7 @@ func walkICCIdentity(doc *Document, container *Dictionary, data []byte, key *Str
 	if res == nil {
 		return
 	}
-	usage := scanContentColorUsage(data)
+	usage := scanContentColorUsage(doc.canceler(), data)
 	csDict := doc.ResolveDict(res.Get("ColorSpace"))
 	checkName := func(name string) {
 		if csDict == nil {

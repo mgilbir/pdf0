@@ -41,7 +41,7 @@ func TestParseObjStmIndex(t *testing.T) {
 		6: "42",
 	}, []int{4, 5, 6}, true)
 
-	data, entries, first, err := parseObjStmIndex(stream, defaultLimits())
+	data, entries, first, err := parseObjStmIndex(canceler{}, stream, defaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestParseObjStmIndexRejectsBadDict(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stream := makeObjStm(t, map[int]string{4: "42"}, []int{4}, false)
 			tc.mutig(stream)
-			if _, _, _, err := parseObjStmIndex(stream, defaultLimits()); err == nil {
+			if _, _, _, err := parseObjStmIndex(canceler{}, stream, defaultLimits()); err == nil {
 				t.Error("expected error")
 			}
 		})
@@ -182,7 +182,7 @@ func TestReadObjStmXrefIndexMismatch(t *testing.T) {
 	table := &XRefTable{Entries: map[int]XRefEntry{
 		5: {Compressed: true, StreamObjNum: 1, IndexInStream: 0}, // index 0 holds obj 4
 	}}
-	if err := doc.loadCompressedObjects(table); err == nil {
+	if err := doc.loadCompressedObjects(canceler{}, table); err == nil {
 		t.Error("expected error on index/object-number mismatch")
 	}
 }
@@ -192,7 +192,7 @@ func TestReadObjStmMissingContainer(t *testing.T) {
 	table := &XRefTable{Entries: map[int]XRefEntry{
 		5: {Compressed: true, StreamObjNum: 9, IndexInStream: 0},
 	}}
-	if err := doc.loadCompressedObjects(table); err == nil {
+	if err := doc.loadCompressedObjects(canceler{}, table); err == nil {
 		t.Error("expected error on missing container")
 	}
 }
