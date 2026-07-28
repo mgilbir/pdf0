@@ -260,10 +260,7 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 	// structures, and without the cache each content stream inflated up to three
 	// times per page and the page tree was collected in ~8 checks.
 	runDoc := *doc
-	runDoc.valCache = &validationCache{
-		pages:   make(map[int][]pageInfo),
-		content: make(map[*Stream][]byte),
-	}
+	runDoc.valCache = newValidationCache()
 	doc = &runDoc
 
 	for _, check := range checks {
@@ -278,6 +275,12 @@ func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []Validat
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkStreamLengthBytes(doc, level, rawData) })...)
 		errs = append(errs, runByteCheck(level, func() []ValidationError { return checkSignatureByteRange(doc, level, rawData) })...)
 	}
+
+	// Any resource guard that tripped during the run (or while the file was
+	// read) is reported under the "limit" rule: the checks that depended on the
+	// truncated result declined to assert, so the result is "unknown", not
+	// "conformant". See limits.go.
+	errs = append(errs, limitValidationErrors(doc, level)...)
 
 	// Checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.
@@ -328,6 +331,11 @@ type validationCache struct {
 
 	structTree      []structNode // flattened pre-order struct-tree nodes
 	structTreeValid bool
+
+	// limits collects the resource guards that tripped during this run, so a
+	// check that declines to assert because its input was truncated still says
+	// so. See limits.go; always non-nil when built by newValidationCache.
+	limits *limitRecorder
 }
 
 // --- File structure checks (6.1) ---
@@ -2163,7 +2171,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		return nil
 	}
 
-	xmp := decodeXMPToUTF8(decodeContentStream(doc, stream))
+	xmp := xmpText(doc, stream)
 	var errs []ValidationError
 
 	// Check pdfaid namespace URI. XML allows either quote style around the value,
@@ -2437,9 +2445,19 @@ func collectAllExtGState(doc *Document) []extGStateEntry {
 		}
 	}
 
-	// Scan all objects for Resources dicts (pages, Form XObjects, Type3 fonts)
-	for num, iobj := range doc.Objects {
-		switch v := iobj.Value.(type) {
+	// Scan all objects for Resources dicts (pages, Form XObjects, Type3 fonts).
+	//
+	// In ascending object-number order, not doc.Objects map order. A graphics
+	// state written as a DIRECT dictionary takes its object number from the
+	// container that reached it (fallbackObjNum), and one /Resources object is
+	// routinely shared by many pages — so the same *Dictionary is offered by
+	// several containers and seen keeps only the first. Which container that was
+	// came from Go's randomised map iteration, so a /CA or /SMask violation on a
+	// shared graphics state reported a different object number on every run over
+	// the same file. Lowest container object number is a total order, so it is
+	// reproducible; that is load-bearing, since reports are diffed run to run.
+	for _, num := range sortedObjectNums(doc) {
+		switch v := doc.Objects[num].Value.(type) {
 		case *Dictionary:
 			resRef := v.Get("Resources")
 			if resRef != nil {
@@ -2908,7 +2926,7 @@ func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	xmp := decodeXMPToUTF8(decodeContentStream(doc, stream))
+	xmp := xmpText(doc, stream)
 
 	var errs []ValidationError
 
@@ -4916,12 +4934,35 @@ func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGr
 	}
 }
 
+// maxContentTokenLen is the longest run of non-delimiter bytes the content
+// tokenizers will hand to a caller as a token. Every PDF operator is at most
+// three characters and no keyword operand comes close to this, so a longer run
+// is binary data that a delimiter never terminated — most often the sample
+// bytes of an inline image whose EI was not found.
+//
+// The scanners drop such a run whole. They used to stop reading at the cap and
+// let the scan re-enter mid-run, which manufactured tokens out of binary: a
+// 300-byte run whose 257th byte was 'k' produced a one-byte "k" operator and
+// with it "DeviceCMYK used without matching OutputIntent or DefaultCMYK", and
+// an alphabetic fragment produced "content stream contains an operator not
+// defined in ISO 32000" — findings the complete token never supports. Reading
+// the run to its end costs the same single linear pass the chunked version did.
+//
+// This one is not configurable, and deliberately: it is not a resource ceiling
+// a caller might want to spend more on but a statement about what a PDF token
+// can be. Moving it would change which byte runs count as operators, i.e. what
+// the tokenizer means, not how much of it runs.
+const maxContentTokenLen = 256
+
 // The maximum decoded content stream size we'll scan defaults to
 // defaultMaxContentStreamBytes; a caller can change it with
 // WithMaxContentStreamBytes. Larger streams are skipped to bound memory on
 // hostile input. The previous 1 MB cap (and Flate-only, no-filter-array
 // decoding) silently hid ordinary content from every scanner — an oversize or
-// [/FlateDecode]-wrapped stream full of DeviceRGB validated clean.
+// [/FlateDecode]-wrapped stream full of DeviceRGB validated clean. A stream
+// skipped for this reason is reported (limitContentStream): every
+// content-driven rule then sees nothing from it, which is the failure the old
+// cap caused silently.
 //
 // The aggregate size of decoded content that one validation run will
 // materialize defaults to defaultMaxDecodedContentBytes
@@ -4934,7 +4975,9 @@ func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGr
 // decoded nor tokenized and the work stays bounded. Real documents decode far
 // less than this, so the budget never affects their validation; it only
 // truncates pathologically amplified input — the heaviest document measured
-// across the veraPDF corpus and a Common Crawl sample needs 218 MB.
+// across the veraPDF corpus and a Common Crawl sample needs 218 MB. Exhausting
+// it is reported too (limitContentTotal), because from there on "the content
+// does not do X" is no longer something this run can say.
 
 // decodeContentStream decodes a stream for content scanning through the full
 // filter pipeline (filter arrays, ASCIIHex, predictors). Results are
@@ -4954,9 +4997,48 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		// decision is stable across the several checks that walk the same page.
 		if c.contentBytes >= lim.decodedContentBytes {
 			c.content[stream] = nil
+			noteLimit(doc, limitContentTotal, fmt.Sprintf("this run has already decoded %d bytes of content, reaching the %s-byte budget for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", c.contentBytes, limitBound(lim.decodedContentBytes, defaultMaxDecodedContentBytes)), 0)
 			return nil
 		}
 	}
+	var data []byte
+	decoded, err := decodeStreamData(stream, lim)
+	switch {
+	case err == nil && len(decoded) <= lim.contentStreamBytes:
+		data = decoded
+	case err == nil:
+		// It decoded, but it is too large to hold and tokenize. Every
+		// content-driven rule — device colour, the operator whitelist, tagging,
+		// font usage — now sees nothing from this stream. That is the failure
+		// the old 1 MB cap caused silently; at least say so.
+		noteLimit(doc, limitContentStream, fmt.Sprintf("a content stream decodes to %d bytes, over the %s-byte scanning limit; it was not scanned", len(decoded), limitBound(int64(lim.contentStreamBytes), defaultMaxContentStreamBytes)), 0)
+	}
+	if c := doc.valCache; c != nil {
+		c.content[stream] = data
+		c.contentBytes += int64(len(data))
+	}
+	return data
+}
+
+// decodeMetadataStream decodes an XMP metadata stream. It is deliberately not
+// subject to the aggregate content budget: /Metadata is the document's own
+// identification, and a validator that cannot read it must conclude nothing,
+// not "this file is unidentified". Under the shared budget a flate-bombed
+// document — whose page content exhausts the aggregate content budget before
+// the identification checks run — had its XMP read as empty, and the rules then
+// emitted "metadata must contain pdfaid:part", "Info /Title present but XMP
+// dc:title missing" and "an embedded PDF file is not compliant with PDF/A"
+// against a file that declares all of them. A document has one metadata stream
+// and it is still bounded per stream by the content-stream cap, so exempting it
+// from the aggregate does not unbound the run; the bytes are still charged, so
+// they still count against genuinely unbounded content.
+func decodeMetadataStream(doc *Document, stream *Stream) []byte {
+	if c := doc.valCache; c != nil {
+		if data, ok := c.content[stream]; ok {
+			return data
+		}
+	}
+	lim := doc.lim()
 	var data []byte
 	if decoded, err := decodeStreamData(stream, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
 		data = decoded
@@ -4966,6 +5048,13 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		c.contentBytes += int64(len(data))
 	}
 	return data
+}
+
+// xmpText decodes an XMP packet to UTF-8 text. Every XMP consumer goes through
+// it so no site can route the document's identification back through the
+// content budget.
+func xmpText(doc *Document, stream *Stream) string {
+	return decodeXMPToUTF8(decodeMetadataStream(doc, stream))
 }
 
 // scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
@@ -5104,10 +5193,15 @@ func scanStreamForDeviceOps(data []byte) (usesRGB, usesCMYK, usesGray bool) {
 		start := i
 		for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 			i++
-			// Safety: cap token length to avoid scanning huge binary data
-			if i-start > 256 {
-				break
-			}
+		}
+		// A run longer than this is binary data, not a token: no PDF operator
+		// or operand keyword is anywhere near this long. Discarding it whole is
+		// what matters — cutting it at the cap and letting the scan re-enter
+		// mid-run turns the tail into further "tokens", and a fragment of
+		// binary read as an operator is a violation the file does not commit
+		// (a stray 'k'/'g' fragment reads as DeviceCMYK/DeviceGray use).
+		if i-start > maxContentTokenLen {
+			continue
 		}
 
 		tokLen := i - start
@@ -5351,14 +5445,14 @@ func forEachContentToken(data []byte, fn func(tok []byte, isName bool)) {
 			start := i
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 				i++
-				if i-start > 256 { // cap runaway binary tokens
-					break
-				}
 			}
 			if i == start {
 				// Defensive: an unhandled delimiter yields no progress; skip it.
 				i++
 				continue
+			}
+			if i-start > maxContentTokenLen {
+				continue // binary run, not a token; see scanStreamForDeviceOps
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
@@ -5528,12 +5622,34 @@ func inlineImageDeclaredLength(params []byte) (int, bool) {
 	return 0, false
 }
 
+// contentByteClass classifies a byte for content-stream scanning. These two
+// predicates sit in the innermost loop of every content walker in the package
+// and are called once per byte of every decoded content stream — hundreds of
+// millions of times on a large document — so they read a single table rather
+// than run a chain of comparisons. The two classes share one 256-byte table to
+// keep the pair in one cache line's worth of memory, since the walkers almost
+// always test both.
+const (
+	ctbWS byte = 1 << iota
+	ctbDelim
+)
+
+var contentByteClass = func() (t [256]byte) {
+	for _, b := range []byte{' ', '\t', '\n', '\r', '\x00', '\x0c'} {
+		t[b] |= ctbWS
+	}
+	for _, b := range []byte("()<>[]{}/%") {
+		t[b] |= ctbDelim
+	}
+	return t
+}()
+
 func isContentWS(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\x00' || b == '\x0c'
+	return contentByteClass[b]&ctbWS != 0
 }
 
 func isContentDelim(b byte) bool {
-	return b == '(' || b == ')' || b == '<' || b == '>' || b == '[' || b == ']' || b == '{' || b == '}' || b == '/' || b == '%'
+	return contentByteClass[b]&ctbDelim != 0
 }
 
 // --- ICCBased color space checks (6.2.4.2) ---

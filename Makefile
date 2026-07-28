@@ -1,4 +1,4 @@
-.PHONY: test check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -104,6 +104,21 @@ $(FACTURX_DIR)/.ok: $(FACTURX_DIR)/sources.tsv $(FACTURX_DIR)/download.sh
 
 clean-facturx:
 	rm -f $(FACTURX_DIR)/*.pdf $(FACTURX_DIR)/.ok
+
+# Sweep real-world PDFs from the Common Crawl untruncated extraction for parser
+# panics and hangs — the one oracle here made of input nobody designed. Blocks
+# are streamed and deleted, so this needs ~1.4 GB of disk, not the corpus.
+# Override the range: make cc-sweep FIRST=100 LAST=199
+FIRST ?= 4200
+LAST  ?= 4203
+
+cc-sweep:
+	mkdir -p testdata/cc/run
+	go build -o testdata/cc/run/corpusprobe ./cmd/corpusprobe
+	testdata/cc/sweep.sh $(FIRST) $(LAST)
+
+clean-cc:
+	rm -rf testdata/cc/run
 
 # Real-world CCITTFaxDecode sample PDFs (pdf.js Apache-2.0, PyPDF4 BSD) used as
 # the decode oracle for the Group 3/4 fax decoder. Downloaded into

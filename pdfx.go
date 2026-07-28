@@ -102,6 +102,11 @@ func (v PDFXViolation) Error() string {
 // ValidatePDFX checks whether doc conforms to the given PDF/X level. An empty
 // result means no violations were found.
 func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
+	// Run against a shallow copy carrying the per-run cache, as the PDF/A and
+	// PDF/UA validators do: it memoizes the traversals this validator shares
+	// with them, applies the same aggregate content budget, and gives the
+	// resource guards somewhere to report a trip (see limits.go).
+	doc = beginRun(doc)
 	var out []PDFXViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
@@ -147,6 +152,10 @@ func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.
+	// Guard trips are reported under their own rule, not as conformance
+	// failures (see limits.go).
+	reportLimits(doc, add)
+
 	sortViolations(out)
 	return out
 }
@@ -333,7 +342,7 @@ func pdfxCheckIdentification(doc *Document, level PDFXLevel, add func(rule, msg 
 	claimed := ""
 	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
 		if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
-			xmp := decodeXMPToUTF8(decodeContentStream(doc, ms))
+			xmp := xmpText(doc, ms)
 			claimed = strings.TrimSpace(extractXMPValue(xmp, "pdfxid:GTS_PDFXVersion"))
 			if claimed == "" {
 				claimed = strings.TrimSpace(extractXMPValue(xmp, "GTS_PDFXVersion"))

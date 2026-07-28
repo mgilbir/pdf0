@@ -15,6 +15,7 @@ Start from the question you have.
 | Sign a PDF, or decide whether a signature can be trusted | [signing.md](signing.md) |
 | Pull images out of a PDF, or fix a codec | [images.md](images.md) |
 | Use the `cmd/pdf0` dev tool | [cli.md](cli.md) |
+| Understand what happens when a resource guard trips | [limits.md](limits.md) |
 | Work out why something failed | [troubleshooting.md](troubleshooting.md) |
 | Run the tests that a fresh clone skips | [testing.md](testing.md) |
 | Contribute a change | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
@@ -56,6 +57,13 @@ conformance declarations every standard writes there, and schema validation.
 **[encryption.md](encryption.md)** — reference plus explanation. `Encrypted` vs
 `Locked()`, what is supported, key derivation, and what is honestly not
 guaranteed.
+
+**[limits.md](limits.md)** — reference plus explanation. Every resource guard
+in the package, classified loud / silently lossy / silently wrong, what each
+truncated value feeds into, and the one mechanism that reports a trip. Eleven of
+those guards are configurable; the options are in
+[architecture.md](architecture.md#resource-limits) and the design record behind
+them in [proposals/configurable-limits.md](proposals/configurable-limits.md).
 
 **[cli.md](cli.md)** — reference for `cmd/pdf0`, a small command-line front end
 used mainly for poking at files during development. pdf0 is a library first; this

@@ -42,7 +42,7 @@ Guards on untrusted input, all verified in source. **Cycles:** every walk
 so a `/K` pointing back at an ancestor terminates —
 `TestStructTreeFlatten` builds exactly that and asserts the visit list.
 **`/RoleMap` chains:** `checkUARoleMapIntegrity` follows each key's mapping chain
-to detect a cycle and caps *total* chain-following at `maxRoleMapWork` (2^20
+to detect a cycle and caps *total* chain-following at `WithMaxRoleMapSteps` (2^20
 steps), since `Dictionary.Get` is linear and an adversarial role map was an
 O(N³) CPU sink (audit C20). **Mutation:** `validatePDFUA` installs the cache on a
 **shallow copy** of the `Document`, so the caller's document is never touched
@@ -126,6 +126,14 @@ opened inside a tagged ancestor is 01-003, and tagged content opened inside an
 artifact ancestor is 01-004. `TestUARealContent` pins all three plus the
 `/OC`-wrapping case that must stay clean.
 
+`tokenizeContent` yields tokens one at a time (an `iter.Seq`) rather than
+returning a slice of them, and the analysis keeps no operand buffer — only the
+three facts a `BDC`/`BMC` actually consults. The two are the same point: a real
+document's page can hold millions of operands, none of which any rule reads back,
+and materializing them cost more than the whole scan. On a 117 MB file the token
+slice alone was 45 GB of allocation, about 94% of the run's total;
+`BenchmarkContentHeavyUAValidation` watches `allocs/op` for the regression.
+
 The tie back to the structure tree is `checkUAFormXObjectMCID` (7.20): a form
 XObject whose decoded bytes contain the `/MCID` token is tagged content, and
 tagged content must map one-to-one onto structure, so painting it twice is a
@@ -164,13 +172,13 @@ flowchart TD
     P --> D1["RowSpan exceeds the rows remaining<br/>→ 'extends beyond the last row'"]
     P --> D2["slot already occupied<br/>→ 'cells overlap'"]
     P --> D3["some row fills fewer columns than<br/>the widest row → 'a grid cell is empty'"]
-    P --> BUD{"filled slots over maxGridFills<br/>— 2^24 ?"}
+    P --> BUD{"filled slots over `WithMaxTableGridFills`<br/>— 2^24 ?"}
     BUD -->|yes| STOP["report nothing — bounded, not fabricated"]
 ```
 
 Two design points are deliberate and tested. **Only unambiguous defects are
 reported**, so a well-formed table never raises a false positive. **The layout is
-budgeted:** `maxGridFills` counts *actually filled* slots, not the nominal
+budgeted:** `WithMaxTableGridFills` counts *actually filled* slots, not the nominal
 rows × columns area, so a genuinely large sparse table is unaffected while a cell
 claiming a two-billion-column span trips the budget and the table is skipped
 rather than laid out. `TestGridDefectsSpanBomb` throws four shapes at it (huge

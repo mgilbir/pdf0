@@ -290,7 +290,7 @@ func TestParseCIDWidths(t *testing.T) {
 	doc := &Document{Objects: map[int]*IndirectObject{}}
 	// [ 1 [100 200] 5 7 300 ]  -> CID1=100, CID2=200, CID5..7=300
 	w := Array{Integer(1), Array{Integer(100), Integer(200)}, Integer(5), Integer(7), Integer(300)}
-	m := parseCIDWidths(doc, w)
+	m, _ := parseCIDWidths(doc, w)
 	if m[1] != 100 || m[2] != 200 || m[5] != 300 || m[7] != 300 {
 		t.Errorf("CID width parse wrong: %v", m)
 	}

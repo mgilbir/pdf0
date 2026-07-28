@@ -4,6 +4,12 @@
 behind it; the code is in `limits.go`, and `docs/architecture.md#resource-limits`
 is the user-facing description.
 
+§6 of this document recommended a second, independent piece of work: making a
+limit trip *observable*. That has since been built too, in `limits_report.go`,
+and is documented in [docs/limits.md](../limits.md). Where this document says
+that trips are still silent, read §6 — it has been updated to record what was
+built rather than what was proposed.
+
 pdf0 carries roughly seventy hardcoded resource guards. Every one is a fixed
 number chosen by whoever added it, usually in response to a specific hostile
 file. That is the right default posture for a library that parses untrusted
@@ -41,9 +47,13 @@ Four package-level `var`s existed *only* so tests could lower them
 `objStmMaxRaw`). All four are gone: those tests now go through the public option
 path, which is a better test than mutating a global.
 
-**Not** in scope, and deliberately untouched: what happens when a limit fires.
-Trips are still silent where they were silent. That is tracked separately — see
-§6, which is a recommendation, not a description of the code.
+**Not** in scope for *this* change: what happens when a limit fires. That was
+built separately, and landed alongside it — `limits_report.go`, the `"limit"`
+rule identifier, `IsCheckerFinding`, and the false positives that observability
+exposed. See §6 and [docs/limits.md](../limits.md). The two halves meet in one
+place only: a trip message names the bound that fired and says whether it was
+pdf0's default or a value the caller chose (`limitBound`), because those call
+for different responses.
 
 ---
 
@@ -577,22 +587,32 @@ attribution.
 
 ## 6. Separately: silent limits should be observable
 
+**Status: built.** This section is kept as the argument that motivated the work;
+[docs/limits.md](../limits.md) is the description of what exists. The shape
+chosen was the second of the two below — a distinguished class of finding — and
+building it turned up four false positives that no amount of tunability would
+have fixed, which is the strongest evidence for the argument that follows.
+
 This recommendation is **independent of tunability** and should not be folded
 into the options work. It applies whether or not a limit is ever exposed.
 
 Several limits do not fail loudly. They skip, truncate, or return a partial
 result, and validation then continues and reports a clean verdict:
 
+(The left column names each limit as it was called when this was written; the
+option that now configures it is in parentheses, and the guard identifier a trip
+is reported under, where one is, is in [docs/limits.md](../limits.md).)
+
 | limit | what silently happens |
 |-------|----------------------|
-| `maxContentStreamSize` | stream is not scanned at all |
-| `maxDecodedContentTotal` | remaining content treated as undecodable |
-| `maxCmapFormat4Work` | character map **truncated** mid-parse |
-| `maxRoleMapWork` | partial `/RoleMap` result |
-| `maxGridFills` | **all** table-grid defects suppressed for that table |
-| `maxICCProfileSize` | returns nil; ICC rules drop out |
-| `xmpPropertyMaxBytes` | property checks skipped entirely |
-| `maxJBIG2*` | image reported as unsupported |
+| `maxContentStreamSize` (`WithMaxContentStreamBytes`) | stream is not scanned at all |
+| `maxDecodedContentTotal` (`WithMaxDecodedContentBytes`) | remaining content treated as undecodable |
+| `maxCmapFormat4Work` (`WithMaxCmapWork`) | character map **truncated** mid-parse |
+| `maxRoleMapWork` (`WithMaxRoleMapSteps`) | partial `/RoleMap` result |
+| `maxGridFills` (`WithMaxTableGridFills`) | **all** table-grid defects suppressed for that table |
+| `maxICCProfileSize` (`WithMaxICCProfileBytes`) | returns nil; ICC rules drop out |
+| `xmpPropertyMaxBytes` (`WithMaxXMPPacketBytes`) | property checks skipped entirely |
+| `maxJBIG2*` (not exposed) | image reported as unsupported |
 
 A validator that stops checking and still says "conformant" is worse than one
 that errors, because the caller has no way to know the difference between "this
@@ -621,6 +641,16 @@ existing `ValidationError` / `UAViolation` types:
 The second is more honest and more invasive. Either way the requirement is that
 a caller can distinguish *checked and clean* from *not checked*, and that the
 budget which stopped it is named.
+
+**What was built:** the second, in the shape the existing types already
+supported. A trip becomes an ordinary finding under the reserved rule identifier
+`"limit"` (a sibling of `"internal"`, used for a recovered panic), so it flows
+through every validator's existing return type with no new API surface;
+`IsCheckerFinding` is the exported predicate that separates the two reserved
+identifiers from real conformance findings. The message names the guard and the
+bound it tripped on. The mechanism is `limits_report.go`; the per-guard
+classification, including the guards deliberately left silent and why, is in
+[docs/limits.md](../limits.md).
 
 Note the interaction with §5: once a limit is both tunable and observable, a
 caller who hits one has a diagnosis **and** a remedy. Observability without
@@ -786,6 +816,11 @@ supported and tested, and the four `var`s that existed only for test overrides
 are gone, their tests moved to the public option path. `context.Context` as a
 config carrier — silent degradation of a security control.
 
-**Still open, deliberately out of scope:** §6, making silent limit trips
-observable. Nothing in this change alters what happens when a limit fires.
-Cancellation via `context.Context` (§8) remains its own proposal.
+**Since built, separately:** §6, making silent limit trips observable —
+`limits_report.go`, the `"limit"` rule, `IsCheckerFinding`, and the four false
+positives that finding them exposed. Nothing in *this* change altered what
+happens when a limit fires; that change did. See
+[docs/limits.md](../limits.md).
+
+**Still open, deliberately out of scope:** cancellation via `context.Context`
+(§8) remains its own proposal.

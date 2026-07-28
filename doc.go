@@ -47,6 +47,12 @@
 //		pdf0.WithMaxDecodedContentBytes(64<<20),
 //	)
 //
+// When a cap does stop a check, the validators say so rather than guess: the
+// trip is reported as a finding under the rule identifier "limit", which
+// IsCheckerFinding separates from a real non-conformance. A caller asking "is
+// this file conformant?" should read such a finding as "unknown", never as a
+// failure.
+//
 // Encrypted files using the standard security handler are decrypted on Read
 // when the (empty or supplied) user or owner password is correct: RC4 and
 // AES-128 at revisions 2-4, and AES-256 at revision 6. Revision 5 is a

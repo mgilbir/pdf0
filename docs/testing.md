@@ -49,6 +49,7 @@ hand.
 | **WTPDF / PDF/UA-2 examples** | Round-trip and robustness over complex real tagged PDF 2.0 (structure trees, associated files, MathML, role maps) | `TestWTPDFExamples` | `make wtpdf` | — | `testdata/wtpdf/*.pdf` | LaTeX Project, [tagging-project discussion 72](https://github.com/latex3/tagging-project/discussions/72), fetched from Google Drive; licences vary per file (see `sources.tsv`) |
 | **CCITT samples** | Decode oracle for the Group 3/4 fax decoder (the veraPDF corpus has no CCITT images) | `TestCCITTRealFiles` | `make ccitt` | — | `testdata/ccitt/*.pdf` | pdf.js (Apache-2.0), PyPDF4 (BSD) |
 | **JBIG2 samples** | Decode oracle for the JBIG2 decoder: generic templates, MMR, symbol/text, halftone, refinement | `TestJBIG2GenericCrossCheck`, `TestJBIG2SymbolText`, `TestJBIG2Refinement`, `TestJBIG2Halftone`, `TestJBIG2Huffman`, `TestJBIG2EdgeCases` | `make jbig2` | — | `testdata/jbig2/*.pdf` | pdf.js conformance suite, Apache-2.0 |
+| **Common Crawl PDFs** | Robustness: the parser must never panic or hang on real-world input nobody designed. Not a decode or conformance oracle — a crash hunt | `cmd/corpusprobe` via `make cc-sweep`; **no `go test` walks it** | `make cc-sweep` | — | streamed, never stored (`testdata/cc/run/`) | digitalcorpora `CC-MAIN-2021-31-PDF-UNTRUNCATED`, ~8M PDFs from Common Crawl |
 | **Factur-X / ZUGFeRD invoices** | Oracle for the Factur-X container checks | `TestValidateFacturXCorpus`, `TestValidateFacturXMutations`, `TestValidateFacturXInvoiceCorpus` | `make facturx` | — | `testdata/facturx/*.pdf` | ZUGFeRD/corpus and ZUGFeRD/mustangproject, Apache-2.0 |
 | **Cal Poly PDF/VT-1 suite** | FP=0 oracle for PDF/VT, PDF/X and DPart — conforming files must report zero violations | `TestValidatePDFVTCalPolySuite`, `TestValidateDPartsCalPolySuite`, `TestValidatePDFXCalPolySuite`, `TestDevColorScannerMatchesPDFA` | **no make target — place by hand** | — | `testdata/pdfvt/` | Cal Poly Graphic Communications PDF/VT-1 Test File Suite; copyrighted test content, not redistributable |
 | **PDFUA-Reference-Files** | FP=0 oracle for PDF/UA — conformant reference documents must report zero violations | `TestUAReferenceFilesNoFalsePositives` | **no make target — place by hand** | — | `spec/pdfua/reference-files/*.pdf` | PDFUA-Reference-Files suite from pdfa.org |
@@ -56,6 +57,17 @@ hand.
 | **ISO spec PDFs** | Guards the spec-example pipeline: the committed JSON must still be exactly what the extractors produce | `TestSpecExamplesRegenerate` (also needs `pdftotext` and `python3` on `PATH`) | **no make target — place by hand** | — | `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf`, `spec/pdf1.7/PDF32000_2008.pdf` | ISO / Adobe; copyrighted, never committed |
 
 `spec/` as a whole is gitignored, so anything you drop under it stays out of git.
+
+The Common Crawl sweep is the one entry that does not follow the fetch-then-test
+shape. There is no manifest and no local corpus: 1000-file blocks are streamed,
+probed and deleted, so a sweep of any length needs about 1.4 GB of disk rather
+than the eight million files. It is also deliberately not a `go test` — sweeping
+untrusted files is memory- and time-hostile, so it runs as a separate
+resource-capped process (`GOMEMLIMIT`, a per-file timeout) driven by
+`make cc-sweep`. Errors are expected there and are not failures: the open web
+serves genuinely broken PDFs, and roughly 0.7% is normal. A **panic or a hang**
+is the failure, and the file is quarantined as the reproduction. See
+[testdata/cc/README.md](../testdata/cc/README.md).
 
 Two datasets are the exception and *are* committed: `testdata/xmp-rng/`
 (ISO 16684 RelaxNG schemas, MIT, used by `TestXMPTablesMatchRNG`) and the
@@ -78,6 +90,7 @@ Makefile; pdf0 has no targets for it.
 | `make facturx` | Run `testdata/facturx/download.sh` to fetch the Factur-X invoices |
 | `make ccitt` | Run `testdata/ccitt/download.sh` to fetch the CCITT sample PDFs |
 | `make jbig2` | Run `testdata/jbig2/download.sh` to fetch the JBIG2 sample PDFs |
+| `make cc-sweep` | Sweep real-world Common Crawl PDFs for parser panics and hangs (`FIRST=`/`LAST=` pick the block range) |
 
 Each fetch target is guarded by a `.ok` stamp file, so re-running is a no-op.
 
@@ -99,8 +112,10 @@ script). There is no `clean-refpdfs` or `clean-profiles`; remove those by hand.
 
 ## Fuzzing
 
-Two fuzz targets live in `fuzz_test.go`. Neither runs under a plain `go test`
+Four fuzz targets live in `fuzz_test.go`. None runs under a plain `go test`
 beyond replaying its seed corpus.
+
+Two take a whole file:
 
 - **`FuzzRead`** — `Read` must never panic on arbitrary input, and any document it
   returns must survive every validator (`ValidatePDFUA`, `ValidatePDFABytes` at
@@ -111,17 +126,51 @@ beyond replaying its seed corpus.
   cleanly and losslessly: the output must re-parse, must leave no object stream
   undecodable, and must not drop objects.
 
+Two go straight at the TrueType `cmap` parser, which reads attacker-controlled
+binary out of an embedded font program. The whole-file targets reach it only
+through a valid-enough PDF carrying a valid-enough sfnt carrying a cmap table,
+which no random mutation assembles — so in practice they never exercise it at
+all:
+
+- **`FuzzCmapSubtable`** — `parseCmapSubtable` on raw subtable bytes, the deep
+  target. Beyond "does not panic" it asserts the invariants the work budgets and
+  the recent fixes exist to hold: the returned map never exceeds the cmap work
+  budget the target parses at (`defaultMaxCmapWork`, the default behind
+  `WithMaxCmapWork`) however many groups the table claims; an unreadable subtable — or one that maps nothing — returns nil rather
+  than an empty non-nil map (`trueTypeGID` treats a non-nil cmap as
+  authoritative, so an empty one reads as "every code is `.notdef`" and produces
+  font-wide false findings); and every key is a Unicode code point mapping to a
+  glyph index in 1..0xFFFF, never 0. Seeded from the builders behind the
+  hand-written cmap tests: each supported format, the budget-tripping tables, the
+  truncated and malformed variants, and formats 2/13/14, which are not parsed.
+- **`FuzzSFNTCmap`** — `parseSFNT`, the smallest entry point that exercises
+  subtable *selection*. The (3,10) > (3,1) > (0,x) ranking runs on
+  attacker-supplied platform ids, encoding ids and offsets and decides which
+  subtable becomes the font's authoritative cmap; whichever it picks must satisfy
+  the same invariants, and the derived symbol and Mac maps must carry only real
+  glyph indices. Seeded from multi-subtable fonts built by
+  `buildSFNTWithCmapSubtables`.
+
+Neither cmap target asserts a wall-clock bound: inside a fuzz target that is a
+flake, since workers run in parallel under load and seed replay runs under
+`-race`. Bounded work is asserted through the size of the returned map instead;
+the timing assertions stay in `TestCmapFormat4Budget` and
+`TestCmapFormat12Budget`, where the input is fixed.
+
 Run them one at a time (Go allows only one fuzz target per invocation):
 
 ```
 go test -run=NONE -fuzz=FuzzRead -fuzztime=5m
 go test -run=NONE -fuzz=FuzzRoundTrip -fuzztime=5m
+go test -run=NONE -fuzz=FuzzCmapSubtable -fuzztime=90s
+go test -run=NONE -fuzz=FuzzSFNTCmap -fuzztime=90s
 ```
 
-Both are seeded from the two structural builders, their AES-256-encrypted forms
-(so the fuzzer explores the decrypt/re-encrypt paths), a few degenerate headers,
-and any reference PDFs present under `testdata/pdf20examples/` — so
-`make refpdfs` first gives the fuzzer a much better starting corpus.
+The two whole-file targets are seeded from the two structural builders, their
+AES-256-encrypted forms (so the fuzzer explores the decrypt/re-encrypt paths), a
+few degenerate headers, and any reference PDFs present under
+`testdata/pdf20examples/` — so `make refpdfs` first gives them a much better
+starting corpus.
 
 **Where the corpus lands.** The generated corpus lives in the Go build cache
 (`$(go env GOCACHE)/fuzz`); a crashing input is written to

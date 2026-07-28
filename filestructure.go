@@ -109,6 +109,21 @@ func min2(a, b int) int {
 // isEOLByte reports whether b is a PDF end-of-line marker byte.
 func isEOLByte(b byte) bool { return b == '\n' || b == '\r' }
 
+// recordLowestObjAt records num as the object living at byte offset off, keeping
+// the lowest number when several objects share one offset. Two cross-reference
+// slots may point at the same bytes (Read stores the parsed value under both
+// numbers, see parsedByOffset), and the byte-level rules below identify an
+// object by its offset — so a finding in that shared region would otherwise be
+// attributed to whichever number doc.Offsets, a Go map with randomised
+// iteration order, happened to yield first, changing the report between runs
+// over the same file. Numeric order is a total order, so this is reproducible.
+func recordLowestObjAt(offToNum map[int64]int, off int64, num int) {
+	if prev, dup := offToNum[off]; dup && prev <= num {
+		return
+	}
+	offToNum[off] = num
+}
+
 // isPDFWhite reports whether b is PDF white space.
 func isPDFWhite(b byte) bool {
 	return b == 0 || b == '\t' || b == '\n' || b == '\f' || b == '\r' || b == ' '
@@ -134,7 +149,7 @@ func checkIndirectObjectSyntax(doc *Document, level PDFALevel, raw []byte) []Val
 			continue // dropped structural object
 		}
 		offs = append(offs, off)
-		offToNum[off] = num
+		recordLowestObjAt(offToNum, off, num)
 	}
 	sortInt64(offs)
 
@@ -295,14 +310,11 @@ func checkNameUTF8(doc *Document, level PDFALevel) []ValidationError {
 	if level == PDFA4 {
 		rule = "6.1.7"
 	}
-	var errs []ValidationError
-	seen := map[string]bool{}
+	// One example per distinct message, attributed to the lowest object number
+	// that produced it — the objects are reached in doc.Objects map order.
+	var found exampleFindings
 	add := func(msg string, obj int) {
-		if seen[msg] {
-			return
-		}
-		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		found.add(ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	for num, iobj := range doc.Objects {
@@ -313,7 +325,7 @@ func checkNameUTF8(doc *Document, level PDFALevel) []ValidationError {
 			}
 		}
 	}
-	return errs
+	return found.errs
 }
 
 // walkColorantUTF8 descends an object's structure (bounded depth, without
@@ -586,7 +598,7 @@ func checkHexStringFormat(doc *Document, level PDFALevel, raw []byte) []Validati
 	for num, off := range doc.Offsets {
 		if _, ok := doc.Objects[num]; ok {
 			offs = append(offs, off)
-			offToNum[off] = num
+			recordLowestObjAt(offToNum, off, num)
 		}
 	}
 	sortInt64(offs)
@@ -668,13 +680,13 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 			start := i
 			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
 				i++
-				if i-start > 256 {
-					break
-				}
 			}
 			if i == start {
 				i++ // unhandled delimiter (e.g. stray ')'): guarantee progress
 				continue
+			}
+			if i-start > maxContentTokenLen {
+				continue // binary run, not a token; see scanStreamForDeviceOps
 			}
 			if i-start == 2 && data[start] == 'B' && data[start+1] == 'I' {
 				skipInlineImage(data, &i)
@@ -872,7 +884,7 @@ func checkStreamKeywordFormat(doc *Document, level PDFALevel, raw []byte) []Vali
 		}
 		if _, ok := iobj.Value.(*Stream); ok {
 			offs = append(offs, off)
-			offToNum[off] = num
+			recordLowestObjAt(offToNum, off, num)
 		}
 	}
 	sortInt64(offs)
@@ -947,22 +959,19 @@ func checkInlineImageIntent(doc *Document, level PDFALevel) []ValidationError {
 	} else if level == PDFA1b {
 		rule = "6.2.4"
 	}
-	var errs []ValidationError
-	seen := map[string]bool{}
+	// One example per distinct message, attributed to the lowest object number
+	// that produced it — collectContentStreamData returns a map.
+	var found exampleFindings
 	for num, data := range collectContentStreamData(doc) {
 		for _, intent := range inlineImageIntents(data) {
 			if standardRenderingIntents[intent] {
 				continue
 			}
-			msg := "inline image /Intent uses a non-standard rendering intent"
-			if seen[msg] {
-				continue
-			}
-			seen[msg] = true
-			errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: num})
+			found.add(ValidationError{Rule: rule, Level: level,
+				Message: "inline image /Intent uses a non-standard rendering intent", Object: num})
 		}
 	}
-	return errs
+	return found.errs
 }
 
 // inlineImageIntents extracts the /Intent value of every inline image.
@@ -1039,14 +1048,11 @@ func checkInlineImageFilters(doc *Document, level PDFALevel) []ValidationError {
 	} else if level == PDFA1b {
 		rule = "6.1.7"
 	}
-	var errs []ValidationError
-	seen := map[string]bool{}
+	// One example per distinct message, attributed to the lowest object number
+	// that produced it — collectContentStreamData returns a map.
+	var found exampleFindings
 	add := func(msg string, obj int) {
-		if seen[msg] {
-			return
-		}
-		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		found.add(ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	for num, data := range collectContentStreamData(doc) {
@@ -1061,7 +1067,7 @@ func checkInlineImageFilters(doc *Document, level PDFALevel) []ValidationError {
 			}
 		}
 	}
-	return errs
+	return found.errs
 }
 
 // inlineImageFilters extracts the /F (or /Filter) filter name(s) of every

@@ -26,8 +26,18 @@ package pdf0
 // travels by value and is never mutated after resolution, validating one
 // Document from several goroutines stays safe.
 //
-// See docs/proposals/configurable-limits.md for the design record, including
-// which limits are deliberately not configurable and the threading cost that
+// This file answers "what is a limit"; limits_report.go answers "what happens
+// when one trips" — the recorder every guard reports through, the "limit" rule
+// identifier a trip is reported under, and IsCheckerFinding. The two are
+// deliberately separate: this half is public API that changes when a knob is
+// added, that half is checker-honesty machinery that changes when a guard
+// learns to speak. Only the trip messages join them, and only to say whether
+// the bound that fired was the default or one the caller chose.
+//
+// See docs/limits.md for the per-guard classification (which guards are
+// configurable, which report a trip, which are structural) and
+// docs/proposals/configurable-limits.md for the design record, including which
+// limits are deliberately not configurable and the threading cost that
 // justified leaving each one internal.
 
 // Option configures a resource limit. Callers do not construct one directly;
@@ -234,9 +244,17 @@ func WithMaxPostScriptSteps(n int) Option {
 	return optionFunc(func(l *limits) { l.postScriptSteps = n })
 }
 
-// WithMaxCmapWork caps the work spent expanding a TrueType cmap format 4
-// subtable (default 1<<18). A hostile subtable can declare segments whose
-// combined character ranges cover the whole code space many times over.
+// WithMaxCmapWork caps the work spent expanding one TrueType cmap subtable of
+// an expanding format — 4 or 12 — (default 1<<18). A hostile subtable can
+// declare segments or groups whose combined character ranges cover the whole
+// code space many times over.
+//
+// A subtable the budget stops is returned as a *prefix* of the font's real
+// coverage, marked partial, and the checks that would otherwise read a missing
+// mapping as "this code has no glyph" decline instead and report the trip (see
+// limits_report.go). Lowering this therefore costs coverage of the
+// glyph-presence rules on large fonts; it never turns them into false
+// positives.
 func WithMaxCmapWork(n int) Option {
 	return optionFunc(func(l *limits) { l.cmapWork = n })
 }

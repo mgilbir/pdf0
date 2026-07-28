@@ -186,7 +186,7 @@ goroutines stays safe — the property package-level `var`s would have lost.
 | `WithMaxRoleMapSteps` | 1<<20 | `/RoleMap` chain-follow steps per PDF/UA check |
 | `WithMaxTableGridFills` | 1<<24 | grid slots filled for one PDF/UA table |
 | `WithMaxPostScriptSteps` | 1<<20 | operators one type-4 function evaluation may run |
-| `WithMaxCmapWork` | 1<<18 | work spent expanding a TrueType cmap format 4 subtable |
+| `WithMaxCmapWork` | 1<<18 | work spent expanding one TrueType cmap subtable of format 4 or 12 |
 
 Defaults are evidence-based where the evidence exists: the figures come from
 measuring the veraPDF corpus (2,907 files) and a 978-file Common Crawl sample.
@@ -209,3 +209,12 @@ The JBIG2 pixel budgets and the lexer's token-gap bound are also internal, for
 threading cost rather than principle;
 [proposals/configurable-limits.md](proposals/configurable-limits.md) records the
 measurement behind each decision.
+
+Configuring a limit is only half the story: a caller also has to be able to tell
+that one fired. A guard that trips leaves a check with an incomplete result, and
+the rule the package follows is that **no check may assert a violation on the
+basis of one**. Instead the trip is reported as its own finding under the
+reserved rule identifier `"limit"`, which `IsCheckerFinding` distinguishes from a
+real non-conformance; the message names the guard and says whether the bound it
+hit was pdf0's default or one the caller set. [limits.md](limits.md) classifies
+every guard in the package on exactly this axis.

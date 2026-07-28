@@ -74,6 +74,59 @@ func sortViolations[T Violation](v []T) {
 	})
 }
 
+// sortedObjectNums returns every object number in doc.Objects in ascending
+// order. Checks that must be reproducible iterate it instead of ranging the map
+// directly: Go randomises map iteration order on every run, so any check whose
+// output depends on WHICH object it reaches first — rather than on the set of
+// objects it reaches — reported a different object number each time the same
+// file was validated. Ascending object number is a total order, so it does not.
+//
+// Only the checks that are order-sensitive pay for the sort; the many checks
+// that emit one finding per object and are sorted afterwards keep ranging the
+// map directly.
+func sortedObjectNums(doc *Document) []int {
+	nums := make([]int, 0, len(doc.Objects))
+	for num := range doc.Objects {
+		nums = append(nums, num)
+	}
+	sort.Ints(nums)
+	return nums
+}
+
+// exampleFindings collects at most one ValidationError per distinct rule and
+// message. Several rules report a single representative example rather than
+// every occurrence, and their candidates arrive from a range over doc.Objects,
+// doc.Offsets or collectContentStreamData — Go maps, whose iteration order is
+// randomised on every run. Keeping whichever candidate the range happened to
+// yield first therefore named a different object each time the same file was
+// validated. Keeping the numerically smallest object number instead is a total
+// order over the candidates, so the report is reproducible. The choice is
+// load-bearing, not incidental: reports are diffed run against run.
+//
+// Emission order is deliberately not part of the contract — ValidatePDFABytes
+// sorts the concatenated findings before returning them.
+type exampleFindings struct {
+	idx  map[string]int // rule+message -> index into errs
+	errs []ValidationError
+}
+
+// add records e, or — when a finding with the same rule and message is already
+// held — lowers that finding's object number to e's when e's is smaller.
+func (f *exampleFindings) add(e ValidationError) {
+	key := e.Rule + "\x00" + e.Message
+	if i, ok := f.idx[key]; ok {
+		if e.Object < f.errs[i].Object {
+			f.errs[i].Object = e.Object
+		}
+		return
+	}
+	if f.idx == nil {
+		f.idx = make(map[string]int)
+	}
+	f.idx[key] = len(f.errs)
+	f.errs = append(f.errs, e)
+}
+
 // sortFormalisViolations is sortViolations for the Factur-X / Order-X findings,
 // which use the external formalis.Violation type and so cannot satisfy the
 // Violation interface this package defines.

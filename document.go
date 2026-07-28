@@ -58,6 +58,14 @@ type Document struct {
 	// validation can report the defect (see checkStreamLength / objstm rules).
 	brokenObjStms []int
 
+	// readLimits records the resource guards that tripped while this file was
+	// read — the same idea as brokenObjStms, generalized (see limits.go). Read
+	// happens before any validation run exists, so a read-time trip has nowhere
+	// else to live; every validator merges these into its report. It is written
+	// only during Read and read-only afterwards, which is what keeps validation
+	// (which runs on a shallow copy sharing this pointer) non-mutating.
+	readLimits *limitRecorder
+
 	// security holds the standard security handler when an encrypted file was
 	// decrypted on Read. It retains the file key and parameters so the same
 	// encryption can be reproduced on Write. nil for unencrypted documents (or
@@ -110,8 +118,9 @@ func readDocument(r io.ReaderAt, size int64, password string, lim limits) (doc *
 	}
 
 	doc = &Document{
-		Objects: make(map[int]*IndirectObject),
-		limits:  lim,
+		Objects:    make(map[int]*IndirectObject),
+		limits:     lim,
+		readLimits: &limitRecorder{},
 	}
 
 	// 1. Find header to extract version and header offset

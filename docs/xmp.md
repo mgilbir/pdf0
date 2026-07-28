@@ -19,7 +19,7 @@ flowchart TD
     S["catalog /Metadata stream"] --> F["decodeContentStream<br/>— applies /Filter, e.g. FlateDecode"]
     F --> E["decodeXMPToUTF8<br/>UTF-8 / UTF-16 / UTF-32, BOM or not"]
     E --> W["xmpWellFormed — streaming<br/>well-formed? properly namespaced rdf:RDF?"]
-    E --> C{"packet ≤ xmpPropertyMaxBytes?"}
+    E --> C{"packet ≤ `WithMaxXMPPacketBytes`?"}
     C -->|no| SKIP["no properties checked<br/>— never a violation"]
     C -->|yes| T["parseXMLTree + parseXMPProperties<br/>→ []xmpProperty"]
     T --> P["per-level schema check<br/>predefinedXMPSchemas + extension declarations"]

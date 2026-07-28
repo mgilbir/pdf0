@@ -33,6 +33,17 @@ func (d *Document) WriteIncremental(w io.Writer, original []byte, changed []int)
 	if len(changed) == 0 {
 		return errors.New("incremental update with no changed objects")
 	}
+	// Some objects never made it into d.Objects: an object stream failed to
+	// decode, or the aggregate decompression budget stopped it being unpacked.
+	// Write refuses such a document (audit C19) because the /Size and the object
+	// graph it writes are computed from an incomplete set; the incremental path
+	// computes /Size the same way and must refuse for the same reason. It did
+	// not, which made a budget trip during Read a silent data defect in the
+	// written file — the one write path where a limit was ignored rather than
+	// reported.
+	if len(d.brokenObjStms) > 0 {
+		return fmt.Errorf("incremental: %d object stream(s) failed to decode on read, so some objects are missing", len(d.brokenObjStms))
+	}
 	// Object numbers are positive integers (ISO 32000-2 §7.3.10); 0 is reserved
 	// as the free-list head. Either would be written into the appended body and
 	// its xref subsection as a well-formed-looking but invalid entry, so refuse

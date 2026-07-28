@@ -35,6 +35,7 @@ func (v DPartViolation) Error() string {
 // (14.12.3), /NodeNameList depth (Table 408), and DPM key/value constraints
 // (14.12.4.2).
 func ValidateDParts(doc *Document) []DPartViolation {
+	doc = beginRun(doc)
 	var out []DPartViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, DPartViolation{Rule: rule, Message: msg, Object: obj})
@@ -48,6 +49,10 @@ func ValidateDParts(doc *Document) []DPartViolation {
 
 	// The walk visits map-ordered structures, so the output order is otherwise
 	// nondeterministic; sort for stable, diffable reports.
+	// Guard trips are reported under their own rule, not as conformance
+	// failures (see limits.go).
+	reportLimits(doc, add)
+
 	sortViolations(out)
 	return out
 }
