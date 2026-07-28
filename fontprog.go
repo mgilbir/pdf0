@@ -1001,12 +1001,48 @@ func parseType1(data []byte) *fontProgram {
 		}
 		fp.glyphNames[name] = true
 		rest = rest[j+csLen:]
-		if strings.Contains(name, "end") {
+		if type1CharStringsEnd(rest) {
 			break
 		}
 	}
 	delete(fp.glyphNames, "")
 	return fp
+}
+
+// type1CharStringsEnd reports whether the bytes following a CharStrings entry's
+// charstring data close the dictionary. A Type 1 CharStrings dictionary
+// (Adobe's Type 1 Font Format, 10.3) ends with a standalone "end" token after
+// the last entry's ND (or |-) token:
+//
+//	/A 45 RD ~~~~~ ND
+//	end
+//
+// so the terminator is a PostScript token in the byte stream, never a glyph
+// name. Testing the glyph name for "end" instead truncated the glyph list at the
+// first font defining endash (or enfilledcircbullet, or any other name
+// containing "end"), which then read as a font that does not define the glyphs
+// it was asked to render.
+//
+// It reads the ND token and the one after it; a dictionary that omits ND
+// terminates on the first token, which is why both positions are compared.
+func type1CharStringsEnd(b []byte) bool {
+	i := 0
+	for k := 0; k < 2; k++ {
+		for i < len(b) && isWhitespace(b[i]) {
+			i++
+		}
+		start := i
+		for i < len(b) && !isWhitespace(b[i]) && b[i] != '/' {
+			i++
+		}
+		if string(b[start:i]) == "end" {
+			return true
+		}
+		if start == i {
+			return false // a '/' (the next entry) or the data ran out
+		}
+	}
+	return false
 }
 
 func indexAfter(b []byte, c byte) int {

@@ -90,7 +90,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | `parseCmapSubtable` nil-on-unreadable | `fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
-| sfnt/CFF/Type1 structural bails (`return nil`) | `fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged (see *Left deliberately*). |
+| sfnt/CFF/Type1 structural bails (`return nil`) | `fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
 
 ### Content scanning
 
@@ -109,7 +109,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
 | table grid fills (`WithMaxTableGridFills`) | `pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
-| `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. Type resolution uses a separate, uncapped lookup, so no finding is manufactured. | Reported as `rolemap-work`. |
+| `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua.go`, `pdfua_struct.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. | Reported as `rolemap-work`. Type resolution (`resolveRoleMapChain`) shares the same budget and returns a completeness flag; on a trip `checkUARoleMap` declines rather than reporting *"neither standard nor mapped"*. |
 | `maxFieldTreeDepth` (64) | `signatures.go`, `sign.go` | Silently lossy | Truncates a reported `SignatureResult.Field` name; never flips `Valid` or `CoversWholeDocument`. | Unchanged. |
 | `maxPageTreeDepth` (64) | `sign.go` | Loud | `signingTarget` refuses. | Unchanged. |
 | Struct-tree / table-row seen-sets | `pdfua_struct.go`, `pdfua_tablegrid.go` | Silently lossy on well-formed input | An element reachable twice is not a valid structure tree, so these only bite malformed files. | Unchanged (see *Left deliberately*). |
@@ -124,7 +124,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | `maxCompareDepth` (1000) | `compare.go` | Silently wrong *by construction* | Beyond the cap two objects are declared **not equal**. Documented as such; no validator rule compares structures that deep. |
 | `maxTokenGap` (1 MiB) | `lexer.go` | Loud-ish | The lexer parks and the parser fails on the next token. Not reachable by the recorder (see *reach*, above). |
 | object-stream decompression budget (`WithMaxObjectStreamBytes`) | `objstm.go` | Silently wrong *in aggregate* | The container's objects go missing from `doc.Objects`. PDF/A reports the container (6.1.6/6.1.7), but every other validator then resolves those objects to `nil`, which is indistinguishable from "absent": *"document does not specify a default language"*, *"encrypted document has no /P permissions entry"*, *"annotation has no alternate description"*, *"a DPart reference does not resolve to a dictionary"*. Now reported as `objstm-decompressed-total` in every validator, so the cascade is attributable. |
-| `Document.Resolve` 64-hop cap | `document.go` | Silently wrong in principle | Returns `nil`, indistinguishable from "key absent". A 64-hop reference chain does not occur in real files; the same `nil` arriving from the objstm budget is what actually bites, and that is now reported. See *Left deliberately*. |
+| `Document.Resolve` 64-hop cap | `document.go` | Silently wrong in principle | Returns `nil`, indistinguishable from "key absent". A 64-hop reference chain does not occur in real files (measured: 0); the same `nil` arriving from the objstm budget is what actually bites, and that is now reported. See *Left deliberately*. |
 | `WriteIncremental` vs `brokenObjStms` | `incremental.go` | Was **silently wrong** | It computed `/Size` from an incomplete object set and wrote the file without a word — the only write path that did not refuse. Now refuses, as `Write` already did. |
 
 ### Image codecs
@@ -144,33 +144,90 @@ panic is not `errJBIG2Budget`, so `decodeJBIG2`'s recover re-raised it and it
 escaped `ExtractImages` to the caller. A short decode is now a reported decode
 failure.
 
-## Found and deliberately left
+## Found alongside, and since fixed
 
-These are real, but they are not resource limits — fixing them belongs in
-separate work with its own corpus verification.
+These were found while auditing the limits above. None of them is a resource
+limit — they are ordinary defects that happened to surface in the same reading —
+so they were parked for separate work with its own corpus verification. That
+work is done; each is recorded here with the rule it was really breaking. Every
+ratchet was unchanged by the five together: corpus `pass=776 fail=1278
+falsePositives=0 missed=0 parseErrors=0`, Isartor `missed=1`, Level A 9/9,
+Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
 
-- **`standardStructType` follows exactly one `/RoleMap` hop** (`pdfua_struct.go`).
-  A legal two-step chain (`MyPara → Para → P`) does not resolve, producing
-  *"structure type /X is neither standard nor mapped in /RoleMap"* and a spray
-  of nesting findings. A modelling gap, not a budget.
-- **`fontprog.go`'s Type 1 CharStrings loop breaks on `strings.Contains(name,
-  "end")`** after a *successful* glyph parse, so a font defining `endash`
-  truncates its glyph list there. A parsing bug; the sibling check twelve lines
-  up correctly uses `HasPrefix`.
-- **`devColorScanner.memo` is keyed on `*Stream` but not on `applyGroup`**
-  (`pdfx_color.go`), so a stream reached first without group masking caches a
-  value the group would have masked → *"DeviceRGB used without a matching
-  OutputIntent, DefaultRGB or covering group colour space"*. A memoization bug.
-- **`filestructure.go`'s 8-byte whitespace skip** ahead of an object header can
-  emit *"indirect object number is not preceded by an EOL marker"* for an object
-  preceded by more than eight white bytes.
+- **`standardStructType` followed exactly one `/RoleMap` hop**
+  (`pdfua_struct.go`). A role map may reach a standard type through intermediate
+  custom types — `MyPara → Para → P` is legal (ISO 32000-1 14.7.3) — and one hop
+  declared the type unmapped, firing *"structure type /X is neither standard nor
+  mapped in /RoleMap"* and then, because every dependent rule saw the raw type, a
+  spray of 7.2 nesting findings on a conformant tree. **Fixed:**
+  `resolveRoleMapChain` follows the chain, reusing the `WithMaxRoleMapSteps`
+  budget rather than inventing a second knob, with a seen-set so a cyclic map
+  terminates. It returns a completeness flag, so a budget trip declines the
+  finding instead of manufacturing one (the rule at the top of this document).
+- **`fontprog.go`'s Type 1 CharStrings loop broke on
+  `strings.Contains(name, "end")`** after a *successful* glyph parse, truncating
+  the glyph list at the first font defining `endash` (or
+  `enfilledcircbullet`, or `endescender`). **Fixed:** `type1CharStringsEnd`
+  detects what actually closes the dictionary — the standalone `end` token after
+  the entry's `ND`/`|-` (Type 1 Font Format 10.3) — read from the byte stream,
+  not from a glyph name.
+- **`devColorScanner.memo` was keyed on `*Stream` but not on `applyGroup`**
+  (`pdfx_color.go`), so whichever visit came first answered for both: a form
+  whose isolated calibrated group covers its `DeviceRGB` was reported unmasked
+  once an appearance-stream visit had cached the raw value → *"DeviceRGB used
+  without a matching OutputIntent, DefaultRGB or covering group colour space"*.
+  **Fixed:** the memo key is `(stream, applyGroup)`.
+- **`filestructure.go`'s 8-byte white-space skip** ahead of an object header.
+  The rule (ISO 19005-1 6.1.8, -2 6.1.9, -4 6.1.8) is *"the object number … shall
+  be preceded by an EOL marker"* — a statement about the byte before the header,
+  which therefore has to be located wherever the recorded offset left it. A byte
+  count is the wrong shape for that: a longer run left the object unchecked, and
+  when the byte eight in was a space it accused an EOL-preceded header. **Fixed:**
+  the skip runs to the header, bounded by the object's own region.
+- **`crypt.go`'s `decrypt` returned the ciphertext unchanged** when AES padding
+  validation failed. By then the file key is known good (a wrong password never
+  reaches `decrypt` — it leaves the document `Locked()`), so the failure means
+  corrupt or never-encrypted data, and the bytes are not the plaintext: passing
+  them on put high-entropy noise where a `/Title`, a content stream or an XMP
+  packet was expected, which is exactly how a caller ends up validating noise.
+  **Fixed:** the value is emptied, the object number recorded in
+  `Document.decryptFailures`, and `Write` refuses — the same loud answer it
+  already gives for an undecodable object stream. The one place the old
+  behaviour was written down (`crypt_signature_test.go`'s note that under AES a
+  wrongly-decrypted `/Contents` "survives by accident") is an explanation of why
+  that test uses RC4, not an expectation of it; the exemption it guards is by
+  key, and unaffected.
+
+## Left deliberately
+
+Two of the defects found alongside were judged not worth fixing. Both were
+re-examined when the five above were fixed, with measurements over the 2907-file
+corpus; both verdicts stand.
+
 - **Struct-tree and table-row `seen`-set dedup** can drop a subtree and make
-  `checkUAHeadings`' consecutive-level comparison report a skipped level. Only
-  reachable on a structure tree that is already invalid (an element with two
-  parents), so it cannot fire on a conformant file.
-- **`crypt.go`'s `decrypt` returns the ciphertext unchanged** when AES padding
-  validation fails, handing garbage to the parser rather than reporting a failed
-  decrypt.
-- **`Document.Resolve`'s 64-hop cap** returning a bare `nil`. Making "unknown"
-  distinguishable from "absent" at that level would touch every rule in the
-  package; the trips that actually produce the cascade are reported instead.
+  `checkUAHeadings`' consecutive-level comparison report a skipped level. It
+  takes an element reachable twice through `/K` to trigger, and that is an
+  element with two parents, which contradicts the single `/P` every structure
+  element carries (ISO 32000-1 14.7.2, Table 323) — the hierarchy is a tree.
+  Measured: of the 588 corpus files with a structure tree, **0** have any node
+  reachable twice. The narrower cases are harmless anyway: `collectTableRows`
+  allocates its seen-set per table, so a `TR` shared between two tables is
+  unaffected, and a shared OBJR, MCR or MCID node carries no `/S` and no
+  subtree, so dropping the second visit loses nothing any rule reads. The
+  residual effect is a spurious extra finding on a file that is already reported
+  invalid — never a false positive on a conformant one.
+- **`Document.Resolve`'s 64-hop cap** returning a bare `nil`. The stronger
+  argument is not the cost of a fix but that the conflation is already the
+  spec's own: *"An indirect reference to an undefined object shall not be
+  considered an error by a conforming reader; it shall be treated as a reference
+  to the null object"* (ISO 32000-1 7.3.10). Every rule in the package is
+  written against that, correctly, so `nil` meaning "absent" is load-bearing;
+  distinguishing a *third* state, "unknown", would have to be threaded through
+  all of them. And the cap is not reached: across all 2907 corpus files —
+  including every adversarial veraPDF and Isartor fail file — the longest
+  reference chain measured is **0** hops (no object's value is itself an
+  indirect reference), against a bound of 64. The `nil` that actually produces a
+  cascade is the one from the object-stream budget, and that is reported. If a
+  file ever does reach the cap, the fix is to swap the hop count for a visited
+  set so that only a genuine cycle yields `nil` — not to give every rule a third
+  state.

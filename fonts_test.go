@@ -387,3 +387,55 @@ func TestCMapEmbeddedAt1b(t *testing.T) {
 		t.Errorf("Identity-H wrongly flagged at 1b: %d", got)
 	}
 }
+
+// TestType1CharStringsEndTerminator pins what ends a Type 1 CharStrings
+// dictionary. It ends with a standalone "end" token after the last entry (Adobe
+// Type 1 Font Format 10.3), never with a glyph whose name contains "end" —
+// endash is an ordinary glyph in the standard encoding, and so are
+// enfilledcircbullet and endescender. Breaking on the name truncated the glyph
+// list at the first such entry, so every glyph defined after it read as missing
+// from the program: the font then drew "does not define a glyph referenced for
+// rendering" and /CharSet findings on a font that defines everything it claims.
+func TestType1CharStringsEndTerminator(t *testing.T) {
+	names := []string{"A", "endash", "enfilledcircbullet", "B", "quoteright"}
+	fp := parseType1(type1Program(names))
+	if fp == nil {
+		t.Fatal("parseType1 returned nil for a well-formed program")
+	}
+	for _, n := range names {
+		if !fp.glyphNames[n] {
+			t.Errorf("glyph %q missing from the parsed program (glyphs: %v)", n, fp.glyphNames)
+		}
+	}
+	if len(fp.glyphNames) != len(names) {
+		t.Errorf("parsed %d glyphs, want %d: %v", len(fp.glyphNames), len(names), fp.glyphNames)
+	}
+
+	// The terminator itself still stops the scan: a program whose CharStrings
+	// dictionary is followed by more PostScript must not absorb it as glyphs.
+	if fp := parseType1(type1Program([]string{"A", "B"})); fp == nil || len(fp.glyphNames) != 2 {
+		t.Errorf("trailing PostScript after the closing end token leaked into the glyph list: %v", fp)
+	}
+}
+
+// TestType1CharStringsEnd covers the terminator predicate directly, including
+// the ND-less shape and the boundary cases a substring test gets wrong.
+func TestType1CharStringsEnd(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{" ND\nend\nend\nmark currentfile closefile\n", true},
+		{" |-\n end ", true},
+		{"\nend\n", true},              // no ND token
+		{" ND\n/endash 45 RD ", false}, // the next entry is a glyph named endash
+		{" ND\n/enfilledcircbullet 9 RD", false},
+		{" ND\n", false},       // data ran out
+		{" ND\nendobj", false}, // a longer token that merely starts with end
+	}
+	for _, c := range cases {
+		if got := type1CharStringsEnd([]byte(c.in)); got != c.want {
+			t.Errorf("type1CharStringsEnd(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}

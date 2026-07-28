@@ -1,5 +1,7 @@
 package pdf0
 
+import "fmt"
+
 // This file owns the structure-tree side of PDF/UA validation: element
 // parent/child nesting (ISO 14289-1 7.2), Table/L/TOC container
 // well-formedness (ISO 32000-1 14.8.4.3), heading strength (7.4.4), Note
@@ -41,13 +43,69 @@ var uaAllowedChildren = map[Name]map[Name]bool{
 // flags if non-standard).
 func (d *Document) standardStructType(elem *Dictionary, roleMap *Dictionary) Name {
 	s, _ := elem.Get("S").(Name)
-	if standardStructTypes[s] || roleMap == nil {
-		return s
+	t, _, _ := d.resolveRoleMapChain(s, roleMap)
+	return t
+}
+
+// resolveRoleMapChain follows the /RoleMap mapping from a structure type until
+// it reaches a standard type. ISO 32000-1 14.7.3 (Table 323, /RoleMap) maps a
+// type to "the standard structure type" it is equivalent to, and a role map may
+// reach one through intermediate custom types: MyPara -> Para -> P is a legal
+// two-step chain, and stopping after a single hop declared MyPara unmapped —
+// which fired "structure type /MyPara is neither standard nor mapped in
+// /RoleMap" and then, because every dependent check saw the raw type instead of
+// P, a spray of 7.2 nesting findings on a conformant file.
+//
+// The walk is bounded twice over. A seen-set ends a cyclic map (which
+// checkUARoleMapIntegrity reports separately) rather than looping, and the total
+// hops are capped by the same /RoleMap step budget that check uses
+// (WithMaxRoleMapSteps) rather than a second knob of its own.
+//
+// It returns the standard type reached (or the input type when none is), whether
+// one was reached, and whether the walk ran to completion. A budget trip leaves
+// the answer unknown, so a caller must not report "neither standard nor mapped"
+// on that basis — the rule the package follows for every truncated structure.
+func (d *Document) resolveRoleMapChain(s Name, roleMap *Dictionary) (std Name, mapped, complete bool) {
+	if standardStructTypes[s] || roleMap == nil || s == "" {
+		return s, standardStructTypes[s], true
 	}
-	if to, _ := d.Resolve(roleMap.Get(s)).(Name); standardStructTypes[to] {
-		return to
+	budget := d.lim().roleMapSteps
+	// The first hop needs no seen-set: "already standard" and "one hop to a
+	// standard type" are the shapes essentially every file has, and this runs
+	// once per structure element, so it must not allocate for them.
+	if budget < 1 {
+		d.noteRoleMapChainLimit()
+		return s, false, false
 	}
-	return s
+	next, ok := d.Resolve(roleMap.Get(s)).(Name)
+	if !ok || next == "" || next == s {
+		return s, false, true
+	}
+	if standardStructTypes[next] {
+		return next, true, true
+	}
+	// A genuine chain: now a seen-set earns its allocation.
+	seen := map[Name]bool{s: true, next: true}
+	cur := next
+	for steps := 1; steps < budget; steps++ {
+		next, ok := d.Resolve(roleMap.Get(cur)).(Name)
+		if !ok || next == "" || seen[next] {
+			return s, false, true // the chain ends, or closes on itself
+		}
+		if standardStructTypes[next] {
+			return next, true, true
+		}
+		seen[next] = true
+		cur = next
+	}
+	d.noteRoleMapChainLimit()
+	return s, false, false
+}
+
+func (d *Document) noteRoleMapChainLimit() {
+	noteLimit(d, limitRoleMapWork, fmt.Sprintf(
+		"following one /RoleMap chain to a standard structure type cost more than %s steps; the type could not be resolved",
+		limitBound(int64(d.lim().roleMapSteps), defaultMaxRoleMapSteps)), 0)
 }
 
 // checkUAStructNesting enforces the structure-element parent/child constraints

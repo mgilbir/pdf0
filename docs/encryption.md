@@ -42,7 +42,8 @@ document is written back verbatim rather than corrupted, and must still decrypt
 afterwards with the real password (`TestEncryptedPassthroughRoundTrip`). The
 passthrough refuses in exactly two cases (unresolvable `/Encrypt`, undecodable
 object streams), both in
-[troubleshooting.md](troubleshooting.md#encrypted-files).
+[troubleshooting.md](troubleshooting.md#encrypted-files). A *decrypted* document
+has a third refusal: an object whose ciphertext did not decrypt (see below).
 
 - `SetEncryption(userPw, ownerPw)` encrypts a previously-unencrypted document and
   **only ever produces AES-256 (V5/R6)** — the legacy revisions are read-only. It
@@ -126,7 +127,19 @@ its per-object variation comes from the random IV instead. AES payloads are
 `16-byte IV ‖ CBC ciphertext` with PKCS#7 padding, and decryption **validates
 every padding byte**, not just the length byte (audit C37): trusting the length
 alone lets crafted ciphertext be silently mis-truncated into a wrong plaintext.
-A failed AES decrypt returns the input unchanged rather than erroring.
+
+**A failed AES decrypt yields an empty value, not the ciphertext.** By the time
+`decrypt` runs the file key is known good — a wrong password never gets here, it
+leaves the document `Locked()` — so a padding failure means the blob is corrupt
+or was never encrypted. Handing it back unchanged (the old behaviour) dressed
+high-entropy ciphertext as a `/Title`, a content stream, an XMP packet or a font
+program and passed it to the parser and every validator, which is how a caller
+ends up validating noise. The string or stream body is emptied instead, the
+object number is recorded in `Document.decryptFailures`, and `Write` refuses
+with *"object(s) … could not be decrypted on read, so their content is
+missing"* — the same loud answer `Write` already gives for an undecodable object
+stream, and preferable to committing the blanks to a file
+(`TestAESDecryptFailureIsNotPlaintext`, `TestDecryptSuccessRecordsNoFailure`).
 
 ```mermaid
 flowchart TD

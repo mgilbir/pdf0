@@ -58,6 +58,13 @@ type Document struct {
 	// validation can report the defect (see checkStreamLength / objstm rules).
 	brokenObjStms []int
 
+	// decryptFailures lists the object numbers whose ciphertext did not decrypt
+	// under a known-good file key — corrupt AES data, or data that was never
+	// encrypted (see stdSecurityHandler.decrypt). Their strings and stream
+	// bodies are empty rather than noise, so the content is unrecoverable and
+	// Write refuses, exactly as it does for brokenObjStms.
+	decryptFailures []int
+
 	// readLimits records the resource guards that tripped while this file was
 	// read — the same idea as brokenObjStms, generalized (see limits.go). Read
 	// happens before any validation run exists, so a read-time trip has nowhere
@@ -624,6 +631,11 @@ func (d *Document) Write(w io.Writer) error {
 	// (audit C19).
 	if len(d.brokenObjStms) > 0 {
 		return fmt.Errorf("cannot write: %d object stream(s) failed to decode on read, so some objects are missing", len(d.brokenObjStms))
+	}
+	// Objects whose ciphertext did not decrypt hold nothing; writing them would
+	// silently replace their content with empty values.
+	if len(d.decryptFailures) > 0 {
+		return fmt.Errorf("cannot write: object(s) %v could not be decrypted on read, so their content is missing", d.decryptFailures)
 	}
 
 	s := NewSerializer(w)
