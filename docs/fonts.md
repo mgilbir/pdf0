@@ -303,6 +303,31 @@ Two of these are configurable per document; see
   glyphs an sfnt can hold, so no honest font comes near it. `nGroups` is also
   checked against the bytes actually present, and a group is skipped when
   inverted or when it starts past U+10FFFF.
+
+### Why formats 4 and 12 share one budget
+
+They were separate constants (`maxCmapFormat4Work`, `maxCmapFormat12Work`), both
+`1 << 18`, and were collapsed into the single `WithMaxCmapWork`. The obvious
+objection is that format 12 can address sixteen times as many code points as
+format 4 — the whole of Unicode rather than the BMP — so it might warrant more
+room.
+
+Measured against the veraPDF corpus, it does not. Across **358 embedded cmaps the
+largest holds 4,985 entries — 1.9% of the budget**, leaving roughly 52x headroom,
+and the ceiling is set by the font rather than the format: an sfnt holds at most
+65,535 glyphs, so a font mapping more than `1 << 18` code points is mapping four
+codes to every glyph it has.
+
+Splitting the knob would also expose the wrong thing. A caller can reason about
+"how much work may one font cost me"; they cannot reason about "how much work may
+the format-12 subtable cost me", because which format a font uses is an internal
+detail of the font, not a property of the document they are validating. The unit
+the budget counts — one per group and one per code — is format-agnostic, and the
+budget bounds a single subtable rather than the whole table, so a font carrying
+several does not have them compete.
+
+If a real font is ever found that needs different room per format, the split is
+a second field and a second option; nothing here forecloses it.
 - **`bfrange` span** (`hi - lo < 65536`), **section-marker overlap** (the
   `lo > hi` continue), and **CIDSet membership without materialisation**
   (`cidSet` tests bits in place) — all described above.
