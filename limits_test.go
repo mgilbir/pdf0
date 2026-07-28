@@ -182,3 +182,45 @@ func TestDecodedStreamLimitIsEnforced(t *testing.T) {
 		t.Errorf("decoded %d bytes, want %d", len(got), len(payload))
 	}
 }
+
+// The document's resolved limits must reach the file's *own* cross-reference
+// stream. It is a Flate stream the file controls like any other, so a caller who
+// lowered the decompression-bomb ceiling for untrusted uploads has to get that
+// ceiling applied here too; parseXRefSection used to hand parseXRefStream a
+// fresh defaultLimits(), silently bypassing the caller's configuration.
+//
+// Nothing changes under the defaults: doc.lim() is then defaultLimits() field
+// for field, and the largest cross-reference stream measured across the veraPDF
+// corpus, the Cal Poly PDF/VT suite, the WTPDF set, the Factur-X invoices and
+// the PDF 2.0 reference files decodes to 430,350 bytes — 0.4% of the 100 MB
+// default, with none above 1 MiB.
+func TestXRefStreamHonoursConfiguredDecodeLimit(t *testing.T) {
+	doc := &Document{
+		Objects:        map[int]*IndirectObject{},
+		usedXRefStream: true, // makes Write emit a cross-reference stream
+		Version:        "2.0",
+	}
+	catalog := &Dictionary{}
+	catalog.Set("Type", Name("Catalog"))
+	catalog.Set("Pages", IndirectRef{Number: 2})
+	pages := &Dictionary{}
+	pages.Set("Type", Name("Pages"))
+	pages.Set("Kids", Array{})
+	pages.Set("Count", Integer(0))
+	doc.Objects[1] = &IndirectObject{Number: 1, Value: catalog}
+	doc.Objects[2] = &IndirectObject{Number: 2, Value: pages}
+	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	data := buf.Bytes()
+
+	if _, err := Read(bytes.NewReader(data), int64(len(data))); err != nil {
+		t.Fatalf("default limits should read this document: %v", err)
+	}
+	if _, err := Read(bytes.NewReader(data), int64(len(data)), WithMaxDecodedStreamBytes(4)); err == nil {
+		t.Error("a 4-byte decoded-stream cap must not be bypassed for the file's own cross-reference stream")
+	}
+}

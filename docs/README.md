@@ -16,6 +16,8 @@ Start from the question you have.
 | Pull images out of a PDF, or fix a codec | [images.md](images.md) |
 | Use the `cmd/pdf0` dev tool | [cli.md](cli.md) |
 | Understand what happens when a resource guard trips | [limits.md](limits.md) |
+| Cap what one untrusted document may cost | [architecture.md](architecture.md#resource-limits) |
+| Stop work under a deadline, and know what a cancelled run returns | [architecture.md](architecture.md#cancellation) |
 | Work out why something failed | [troubleshooting.md](troubleshooting.md) |
 | Run the tests that a fresh clone skips | [testing.md](testing.md) |
 | Contribute a change | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
@@ -60,10 +62,12 @@ guaranteed.
 
 **[limits.md](limits.md)** — reference plus explanation. Every resource guard
 in the package, classified loud / silently lossy / silently wrong, what each
-truncated value feeds into, and the one mechanism that reports a trip. Eleven of
+truncated value feeds into, and the one mechanism that reports a trip — the
+reserved `limit` rule, which a cancelled run reports through too. Eleven of
 those guards are configurable; the options are in
-[architecture.md](architecture.md#resource-limits) and the design record behind
-them in [proposals/configurable-limits.md](proposals/configurable-limits.md).
+[architecture.md](architecture.md#resource-limits), cancellation is in
+[architecture.md](architecture.md#cancellation), and the design record behind
+both is [proposals/configurable-limits.md](proposals/configurable-limits.md).
 
 **[cli.md](cli.md)** — reference for `cmd/pdf0`, a small command-line front end
 used mainly for poking at files during development. pdf0 is a library first; this

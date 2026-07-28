@@ -234,8 +234,10 @@ touch one.
   unchanged, so nothing external is loaded either.
 - **No explicit nesting-depth cap.** `parseXMLTree` is iterative, but
   `parseXMPValue`/`parseXMPFields` recurse once per nesting level, so the size
-  cap is the only bound on depth — adequate at 2 MiB, and the guard to revisit
-  if that cap is ever raised.
+  cap is the only bound on depth. That cap has since moved — 2 MiB to the 4 MiB
+  default above, and `WithMaxXMPPacketBytes` lets a caller raise it further — so
+  this is the guard to revisit before raising it again, not one that was left
+  behind by the last raise.
 
 Regression tests: `TestXMPLargePacketBounded` (cap lowered to 4 KiB: property
 extraction refused, well-formedness still clean) and `TestXMPManyElementsFast`

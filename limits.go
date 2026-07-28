@@ -19,12 +19,20 @@ package pdf0
 // simply "the option was never called" — there is no ambiguous value to
 // document, and adding a knob later is purely additive.
 //
-// Values are resolved once at the public entry point (Read, ReadWithPassword,
-// ParseXRefStream) into the unexported limits struct below, stored on the
-// Document, and passed explicitly to the code that enforces them. Validation and
-// extraction therefore inherit whatever Read was given. Because the struct
-// travels by value and is never mutated after resolution, validating one
-// Document from several goroutines stays safe.
+// Values are resolved once at the public entry point — Read, ReadWithPassword,
+// their Context variants, and ParseXRefStream — into the unexported limits
+// struct below, stored on the Document, and passed explicitly to the code that
+// enforces them. Validation and extraction therefore inherit whatever Read was
+// given, including the file's own cross-reference streams and any PDF embedded
+// in it. Because the struct travels by value and is never mutated after
+// resolution, validating one Document from several goroutines stays safe.
+//
+// No other exported entry point takes options, and that is not an oversight:
+// the validators and extractors read the configuration off the Document they
+// are given, and the remaining constructors (ParseXRefTable, NewLexer,
+// NewParser, NewSerializer) enforce only limits that were deliberately left
+// internal — the depth caps and the lexer's token gap. See
+// docs/proposals/configurable-limits.md §5, Group D.
 //
 // This file answers "what is a limit"; limits_report.go answers "what happens
 // when one trips" — the recorder every guard reports through, the "limit" rule
@@ -41,9 +49,10 @@ package pdf0
 // justified leaving each one internal.
 
 // Option configures a resource limit. Callers do not construct one directly;
-// they call a With* function. Options are accepted by Read, ReadWithPassword and
-// ParseXRefStream, and the resolved values are inherited by every validator and
-// extractor that runs on the resulting Document.
+// they call a With* function. Options are accepted by Read, ReadWithPassword,
+// ReadContext, ReadWithPasswordContext and ParseXRefStream, and the resolved
+// values are inherited by every validator and extractor that runs on the
+// resulting Document.
 type Option interface {
 	apply(*limits)
 }

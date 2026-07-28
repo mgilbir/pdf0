@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -124,10 +123,15 @@ func ValidatePDFAContext(ctx context.Context, doc *Document, level PDFALevel) []
 // untrusted files, so a bug (or an adversarial structure) in one check must not
 // take down the whole process. Stack overflows from unbounded recursion are
 // fatal and cannot be recovered here; those are prevented at their source.
+//
+// The rule identifier and the message come from validator_guard.go, which the
+// other validators' equivalents also use: "internal" is a reserved identifier
+// naming the checker rather than the document (IsCheckerFinding), so every
+// boundary in the package has to spell it the same way.
 func runCheck(doc *Document, level PDFALevel, check func(*Document, PDFALevel) []ValidationError) (out []ValidationError) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []ValidationError{{Rule: "internal", Level: level, Message: fmt.Sprintf("internal validator error: %v", r)}}
+			out = []ValidationError{{Rule: internalRule, Level: level, Message: internalMessage(r)}}
 		}
 	}()
 	return check(doc, level)
@@ -138,7 +142,7 @@ func runCheck(doc *Document, level PDFALevel, check func(*Document, PDFALevel) [
 func runByteCheck(level PDFALevel, check func() []ValidationError) (out []ValidationError) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []ValidationError{{Rule: "internal", Level: level, Message: fmt.Sprintf("internal validator error: %v", r)}}
+			out = []ValidationError{{Rule: internalRule, Level: level, Message: internalMessage(r)}}
 		}
 	}()
 	return check()
@@ -315,16 +319,10 @@ func validatePDFABytes(cancel canceler, doc *Document, level PDFALevel, rawData 
 	errs = append(errs, limitValidationErrors(doc, level)...)
 
 	// Checks iterate map-ordered doc.Objects, so their concatenated output
-	// order is nondeterministic; sort for stable, diffable reports.
-	sort.Slice(errs, func(i, j int) bool {
-		if errs[i].Rule != errs[j].Rule {
-			return errs[i].Rule < errs[j].Rule
-		}
-		if errs[i].Object != errs[j].Object {
-			return errs[i].Object < errs[j].Object
-		}
-		return errs[i].Message < errs[j].Message
-	})
+	// order is nondeterministic; sort for stable, diffable reports. The shared
+	// helper is the one every other validator uses, so "by rule, then object,
+	// then message" has a single implementation rather than one per validator.
+	sortViolations(errs)
 
 	return errs
 }

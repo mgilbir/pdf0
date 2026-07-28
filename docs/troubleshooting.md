@@ -125,8 +125,54 @@ errs := pdf0.ValidatePDFABytes(doc, pdf0.PDFA4, data)
 **`[… internal] internal validator error: …`** means a check panicked and was
 recovered so the rest could run. It is a bug in pdf0, not in your file.
 
+**`[… limit] resource limit reached (…)`** is the same kind of finding: it says
+pdf0 stopped short, not that your file is wrong. The message names the guard
+that tripped and whether the bound was pdf0's default or one you configured. So
+is **`[… limit] the run was cancelled before it finished (context-canceled)`**,
+which is what a `…Context` variant returns when your deadline expired.
+
+`IsCheckerFinding` is the predicate for both reserved identifiers — filter with
+it before deciding whether a file is conformant, because a checker finding means
+**unknown**, not *failed*:
+
+```go
+var real []pdf0.Violation
+for _, e := range pdf0.ValidatePDFABytes(doc, pdf0.PDFA4, data) {
+	if !pdf0.IsCheckerFinding(e) {
+		real = append(real, e)
+	}
+}
+```
+
+Neither fires on any file in the veraPDF corpus. If you see one, either the
+input is adversarial or a bound needs revisiting — [limits.md](limits.md) says
+which guard is which and how to raise it.
+
 Finally: validating a `Locked()` document validates ciphertext. Check
 `doc.Locked()` first.
+
+## Validation is taking too long
+
+Cost is set by the document, not by you: a 71 MB, 1256-page file takes about ten
+seconds to validate, and a hostile one can sit at the resource ceilings for
+longer. Two independent levers, and they answer different questions.
+
+- **"This must not cost more than X."** Lower the limits at `Read` time —
+  `pdf0.Read(r, size, pdf0.WithMaxDecodedStreamBytes(8<<20))` and the other
+  `With*` options. The resolved values are stored on the `Document`, so every
+  later validation and extraction inherits them. See
+  [architecture.md](architecture.md#resource-limits).
+- **"I need an answer within X seconds, whatever it costs."** Use the `…Context`
+  variants: `ValidatePDFAContext`, `ReadContext`, `ExtractTextContext` and the
+  rest. A cancelled validation returns the findings it had gathered plus a
+  `limit` finding recording the cancellation, so it can never be mistaken for a
+  clean result; `Read`, `Write` and the extractors return an error wrapping
+  `ctx.Err()`. Cancellation takes effect within about 60 ms on that 71 MB file.
+  See [architecture.md](architecture.md#cancellation).
+
+Abandoning the goroutine is not a third option — the work carries on burning a
+core and holding its memory until it finishes by itself. That case is exactly
+what the context variants exist for.
 
 ## `0 fix(es) applied` / violations remain after repair
 

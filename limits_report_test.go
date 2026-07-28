@@ -509,3 +509,137 @@ func TestJBIG2ShortMMRDoesNotPanic(t *testing.T) {
 		t.Error("a 16-row decode of a 64-row region must be reported as a failure, not returned as an image")
 	}
 }
+
+// embeddedPDFAFixture returns the bytes of a minimal PDF/A-4 document carrying
+// two pages, each with its own short content stream, plus an outer document that
+// embeds those bytes as an application/pdf attachment.
+//
+// Two content streams rather than one is what makes the fixture useful: the
+// aggregate content budget is charged as streams are decoded, so a second
+// distinct stream is what a lowered WithMaxDecodedContentBytes can stop. The
+// per-stream cap is deliberately *not* the guard used here — it also bounds the
+// metadata stream, so lowering it makes the embedded document unidentifiable
+// rather than incompletely validated, which is a different path.
+func embeddedPDFAFixture(t *testing.T, lim limits) (inner []byte, outer *Document) {
+	t.Helper()
+
+	doc := NewPDFADocument(PDFA4)
+	next := 1
+	for n := range doc.Objects {
+		if n >= next {
+			next = n + 1
+		}
+	}
+	var kids Array
+	for i := 0; i < 2; i++ {
+		// Distinct bytes so the two streams are distinct objects, not one shared
+		// stream the per-run cache would answer once for.
+		content := &Stream{Dict: Dictionary{}, Data: []byte("q Q % " + strings.Repeat("x", i+1))}
+		content.Dict.Set("Length", Integer(len(content.Data)))
+		contentNum := next
+		doc.Objects[contentNum] = &IndirectObject{Number: contentNum, Value: content}
+		next++
+		page := &Dictionary{}
+		page.Set("Type", Name("Page"))
+		page.Set("Parent", IndirectRef{Number: 2})
+		page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
+		page.Set("Resources", &Dictionary{})
+		page.Set("Contents", IndirectRef{Number: contentNum})
+		doc.Objects[next] = &IndirectObject{Number: next, Value: page}
+		kids = append(kids, IndirectRef{Number: next})
+		next++
+	}
+	if pd := doc.ResolveDict(doc.ResolveDict(doc.Trailer.Get("Root")).Get("Pages")); pd != nil {
+		pd.Set("Kids", kids)
+		pd.Set("Count", Integer(len(kids)))
+	}
+
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatalf("writing the inner document: %v", err)
+	}
+	inner = buf.Bytes()
+
+	ef := &Stream{Dict: Dictionary{}, Data: append([]byte(nil), inner...)}
+	ef.Dict.Set("Type", Name("EmbeddedFile"))
+	ef.Dict.Set("Subtype", Name("application/pdf"))
+	ef.Dict.Set("Length", Integer(len(ef.Data)))
+	fsEF := &Dictionary{}
+	fsEF.Set("F", IndirectRef{Number: 2})
+	fs := &Dictionary{}
+	fs.Set("Type", Name("Filespec"))
+	fs.Set("EF", fsEF)
+
+	outer = &Document{
+		Objects: map[int]*IndirectObject{
+			1: {Number: 1, Value: fs},
+			2: {Number: 2, Value: ef},
+		},
+		Version: "2.0",
+		limits:  lim,
+	}
+	return inner, outer
+}
+
+// TestEmbeddedPDFAIncompleteIsNotNonConformance is the rule at the top of this
+// file applied to clause 6.9. checkEmbeddedPDFA used to treat any non-empty
+// result from the nested validation as "this embedded file is not PDF/A" — so a
+// guard trip or a recovered panic *inside* the embedded document, which says
+// only that pdf0 could not finish, became a conformance finding against the
+// outer file. It also read the embedded bytes under defaultLimits() rather than
+// the outer document's, so a caller's configured ceiling did not reach the one
+// place a hostile file gets a whole second document validated.
+func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
+	innerBytes, _ := embeddedPDFAFixture(t, defaultLimits())
+
+	// Under the defaults the nested run completes, so its verdict is real...
+	if compliant, complete := embeddedPDFACompliant(canceler{}, innerBytes, defaultLimits()); !complete {
+		t.Fatal("the nested validation should complete under the default limits")
+	} else if !compliant {
+		t.Error("a PDF/A-4 document embedded in another should be reported compliant")
+	}
+	// ...and a file that genuinely is not PDF/A is still condemned, completely.
+	// The rule must decline only when pdf0 could not look, never when it did.
+	if compliant, complete := embeddedPDFACompliant(canceler{}, []byte("not a PDF at all"), defaultLimits()); compliant || !complete {
+		t.Errorf("non-PDF bytes: compliant=%v complete=%v, want false/true", compliant, complete)
+	}
+
+	// The nested read and validation inherit the outer document's limits, so a
+	// cap the embedded document cannot be validated under withholds the verdict
+	// rather than turning it into a 6.9 finding.
+	strict := resolveLimits([]Option{WithMaxDecodedContentBytes(1)})
+	if _, complete := embeddedPDFACompliant(canceler{}, innerBytes, strict); complete {
+		t.Error("a nested run that reported a checker finding must be reported as incomplete")
+	}
+
+	// The same rule reaches the two exits that never see a nested finding at
+	// all, because the nested run did not get far enough to produce one. A
+	// lowered per-stream cap leaves the embedded document's own metadata
+	// undecodable, so declaredPDFALevel reports "not PDF/A" for a file that may
+	// well be one. That is the checker's doing, not the file's, and it must
+	// withhold rather than condemn.
+	noMeta := resolveLimits([]Option{WithMaxContentStreamBytes(1)})
+	if compliant, complete := embeddedPDFACompliant(canceler{}, innerBytes, noMeta); compliant || complete {
+		t.Errorf("metadata undecodable under a lowered cap: compliant=%v complete=%v, want false/false",
+			compliant, complete)
+	}
+
+	// End to end: no 6.9 finding, and the incompleteness reported under the
+	// "limit" rule naming the embedded-pdfa guard.
+	_, outer := embeddedPDFAFixture(t, strict)
+	run := beginRun(outer)
+	for _, e := range checkEmbeddedPDFA(run, PDFA4) {
+		if e.Rule == "6.9" {
+			t.Errorf("6.9 asserted on the strength of an incomplete nested run: %s", e.Message)
+		}
+	}
+	reported := false
+	for _, e := range limitValidationErrors(run, PDFA4) {
+		if e.Rule == limitRule && strings.Contains(e.Message, limitEmbeddedPDFA) {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Errorf("the declined check must be reported as a %q finding naming %q", limitRule, limitEmbeddedPDFA)
+	}
+}

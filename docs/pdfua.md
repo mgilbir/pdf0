@@ -191,7 +191,11 @@ reported**, so a well-formed table never raises a false positive. **The layout i
 budgeted:** `WithMaxTableGridFills` counts *actually filled* slots, not the nominal
 rows × columns area, so a genuinely large sparse table is unaffected while a cell
 claiming a two-billion-column span trips the budget and the table is skipped
-rather than laid out. `TestGridDefectsSpanBomb` throws four shapes at it (huge
+rather than laid out — and the trip is reported, as `table-grid-fills` under the
+reserved clause `limit`, so "no grid defects" cannot be read as "clean" when the
+grid was never built ([limits.md](limits.md)). The `/RoleMap` step budget
+(`rolemap-work`) and a cancelled `ValidatePDFUAContext` run report through the
+same clause. `TestGridDefectsSpanBomb` throws four shapes at it (huge
 ColSpan, huge RowSpan, near-int-max spans that must not overflow the budget
 arithmetic, and many moderate cells that cumulatively blow it) and requires a
 return within 25 s. `TestGridDefectsSparseHuge` builds 60 000 × 30 000 and

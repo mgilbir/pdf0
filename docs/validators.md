@@ -8,7 +8,7 @@ Every validator is **read-only**: each installs its per-run cache on a shallow
 copy, so the caller's document is never mutated and the same document can be
 validated concurrently (`TestValidateConcurrentSameDoc`, `TestUAValidationCacheIsolation`).
 
-Two further properties hold across the family:
+Three further properties hold across the family:
 
 - **Panic safety.** Every check runs behind a `recover()` boundary — `runCheck`
   for PDF/A, the helpers in `validator_guard.go` for the rest. A check that
@@ -19,23 +19,48 @@ Two further properties hold across the family:
   at their source instead. (This closed C27 from the 2026-07-26 codebase audit;
   before that, only PDF/A had a boundary.)
 - **Deterministic order.** Every validator sorts its findings by rule, then
-  object, then message before returning, so results are stable across runs and
-  safe to diff or snapshot.
+  object, then message before returning — through the one shared
+  `sortViolations`, on every return path including the early ones — so results
+  are stable across runs and safe to diff or snapshot.
+- **A checker that stops early says so.** A tripped resource guard, a recovered
+  panic and a cancelled context are all reported as findings under a *reserved*
+  rule identifier — `limit` or `internal` — which `IsCheckerFinding` separates
+  from a real non-conformance. The findings gathered before the stop are kept,
+  and the result is never empty, so a run that did not finish looking can never
+  be read as a clean bill of health. Treat such a finding as **unknown**, not as
+  a failure. See [limits.md](limits.md) for the classification and
+  [architecture.md](architecture.md#cancellation) for the `…Context` variants.
+
+```go
+var real []pdf0.Violation
+for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA2b) {
+	if !pdf0.IsCheckerFinding(e) {
+		real = append(real, e)
+	}
+}
+```
 
 ## Pick an entry point
 
-| Standard | Entry point | Returns | Findings satisfy `Violation` |
-|----------|-------------|---------|------------------------------|
-| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]ValidationError` | yes |
-| PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]UAViolation` | yes |
-| PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]UAViolation` | yes |
-| PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]PDFXViolation` | yes |
-| PDF/VT-1 (ISO 16612-2) | `ValidatePDFVT(doc)` | `[]PDFVTViolation` | yes |
-| PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]PDFVTViolation` | yes |
-| PDF/R | `ValidatePDFR(doc)` | `[]PDFRViolation` | yes |
-| DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]DPartViolation` | yes |
-| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `FacturXResult` | **no** — see below |
-| Order-X container | `ValidateOrderX(doc, raw)` | `OrderXResult` | **no** — see below |
+| Standard | Entry point | Returns | Findings satisfy `Violation` | `…Context` variant |
+|----------|-------------|---------|------------------------------|--------------------|
+| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]ValidationError` | yes | yes (both) |
+| PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]UAViolation` | yes | yes |
+| PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]UAViolation` | yes | yes |
+| PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]PDFXViolation` | yes | yes |
+| PDF/VT-1 (ISO 16612-2) | `ValidatePDFVT(doc)` | `[]PDFVTViolation` | yes | yes |
+| PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]PDFVTViolation` | yes | yes |
+| PDF/R | `ValidatePDFR(doc)` | `[]PDFRViolation` | yes | yes |
+| DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]DPartViolation` | yes | yes |
+| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `FacturXResult` | **no** — see below | **no** — same reason |
+| Order-X container | `ValidateOrderX(doc, raw)` | `OrderXResult` | **no** — see below | **no** — same reason |
+
+The last column is not a coincidence: the nine validators whose findings satisfy
+`Violation` are exactly the nine with a `…Context` variant. Cancellation is
+reported *as a finding* under the reserved rule `limit`, so an entry point that
+cannot carry a finding `IsCheckerFinding` can classify has no honest way to
+report a cancelled run — see
+[architecture.md](architecture.md#which-entry-points-have-one).
 
 Signature and PAdES assessment are `*Document` methods with their own result
 types; see [signing.md](signing.md).

@@ -4,11 +4,17 @@
 behind it; the code is in `limits.go`, and `docs/architecture.md#resource-limits`
 is the user-facing description.
 
-§6 of this document recommended a second, independent piece of work: making a
-limit trip *observable*. That has since been built too, in `limits_report.go`,
-and is documented in [docs/limits.md](../limits.md). Where this document says
-that trips are still silent, read §6 — it has been updated to record what was
-built rather than what was proposed.
+Two pieces of work this document scoped *out* have since been built, and both
+sections are updated to record what exists rather than what was proposed:
+
+- §6 recommended making a limit trip **observable**. Built, in
+  `limits_report.go` and documented in [docs/limits.md](../limits.md). Where
+  this document says trips are still silent, read §6.
+- §8 recorded **cancellation** as a real gap for a separate proposal. Built, in
+  `cancel.go` and documented in
+  [docs/architecture.md](../architecture.md#cancellation). It needed no new
+  reporting mechanism, because §6 had already built the honest channel: a
+  cancelled run reports itself under the same `"limit"` rule.
 
 pdf0 carries roughly seventy hardcoded resource guards. Every one is a fixed
 number chosen by whoever added it, usually in response to a specific hostile
@@ -35,7 +41,8 @@ The measurements throughout come from the veraPDF corpus (2,907 files) and a
 - `Option`, `limits`, `resolveLimits`, `defaultLimits` and the eleven `With*`
   functions in `limits.go`.
 - `Read`, `ReadWithPassword` and `ParseXRefStream` gained `opts ...Option`.
-  Every existing call site compiles and behaves unchanged.
+  Every existing call site compiles and behaves unchanged. (`ReadContext` and
+  `ReadWithPasswordContext`, added later by §8's work, take them too.)
 - `Document.limits`, read through `(*Document).lim()`.
 - Two defaults raised (§4); nine limits left internal with the cost that
   justified each (§5, Group D).
@@ -47,7 +54,7 @@ Four package-level `var`s existed *only* so tests could lower them
 `objStmMaxRaw`). All four are gone: those tests now go through the public option
 path, which is a better test than mutating a global.
 
-**Not** in scope for *this* change: what happens when a limit fires. That was
+**Not** in scope for *this* change: what happens when a limit trips. That was
 built separately, and landed alongside it — `limits_report.go`, the `"limit"`
 rule identifier, `IsCheckerFinding`, and the false positives that observability
 exposed. See §6 and [docs/limits.md](../limits.md). The two halves meet in one
@@ -445,7 +452,7 @@ func WithMaxICCProfileBytes(n int) Option         // → 8 MiB after §4
 func WithMaxXMPPacketBytes(n int) Option          // → 4 MiB after §4
 func WithMaxTableGridFills(n int64) Option        // 1<<24  — PDF/UA grid slots
 func WithMaxPostScriptSteps(n int) Option         // 1<<20  — type-4 function operators
-func WithMaxCmapFormat4Work(n int) Option         // 1<<18  — cmap segment expansions
+func WithMaxCmapWork(n int) Option                // 1<<18  — cmap segment expansions
 ```
 
 Two of these deserve a note.
@@ -461,7 +468,12 @@ materially.
 **`maxCmapFormat4Work` is two hops but a straight line.** `parseCmapSubtable` ←
 `parseSFNT` ← `loadFontProgram(doc, fd)`, one call site each. This is the
 limit whose failure mode is silent truncation of a font's character map (see
-§6), which is an argument for reaching it even at two hops.
+§6), which is an argument for reaching it even at two hops. It shipped as
+`WithMaxCmapWork`, not `WithMaxCmapFormat4Work`: the format-4 and format-12
+budgets were collapsed into one on the measurement in
+[fonts.md](../fonts.md#why-formats-4-and-12-share-one-budget), so the option —
+and the `cmap-work` guard identifier a trip is reported under — names the work,
+not one of the two formats that charge it.
 
 ### Group C — the decode chain. **Built.**
 
@@ -711,11 +723,17 @@ mode impossible rather than merely discouraged.
 Please do not re-propose it without new information; the tradeoff is recorded
 above in full.
 
-### For cancellation: a real gap, out of scope here
+### For cancellation: a real gap — since closed
 
-pdf0 currently offers a caller **no way to stop work in progress**. The evidence
-is in the project's own tooling — `cmd/corpusprobe` needs a per-file timeout and
-the best it can do is:
+**Status: built.** This section is kept as the argument that scoped it out of
+*this* change; the design record is `cancel.go`, the user-facing description is
+[architecture.md](../architecture.md#cancellation), and what a cancelled run
+reports is in [limits.md](../limits.md). Every prediction below held, and the
+one open API question is answered at the end.
+
+pdf0 offered a caller, when this was written, **no way to stop work in
+progress**. The evidence is in the project's own tooling — `cmd/corpusprobe`
+needs a per-file timeout and the best it could do was:
 
 ```go
 select {
@@ -749,6 +767,37 @@ magnitude apart in surface:
 
 Recommend tracking it as its own proposal.
 
+**What was built, against those four predictions.** `cancel.go`, and a `…Context`
+variant of every entry point whose cost is the document's — fourteen of them.
+
+- *No single chain:* correct. The signal rides on the per-run `validationCache`
+  (`limits_report.go`) so a check deep in unexported code reads it off the
+  `*Document`; `Read` and `Write`, which have no run, thread a `canceler`
+  parameter down their loops instead.
+- *The API question:* answered `…Context` variants, not `WithContext(ctx)`. An
+  `Option` is *stored* on the `Document` and inherited by every later call, which
+  is the right lifetime for a limit and the wrong one for a context, and it would
+  make cancellation invisible at the call site. So the two mechanisms stay
+  separate, exactly as §2's decisive objection to transport (b) implied they
+  would: **a limit says what this document may cost, a context says how long this
+  operation may take.**
+- *The hot-loop cost:* real, and N was chosen as a byte count rather than an
+  iteration count — `cancelScanBytes`, 1 MiB of scan position, plus
+  `cancelReadChunk` inside flate and LZW. On a 71 MB file cancellation takes
+  effect in ~60 ms with PDF/A and PDF/UA timings indistinguishable from before.
+- *Reporting:* a cancelled run is the same event as a tripped guard — the
+  checker stopped before it had seen everything — so it is reported through §6's
+  machinery, under the same `"limit"` rule with the guard identifier
+  `context-canceled`. This is why the two halves of this document turned out to
+  be three: §5 made the ceilings settable, §6 made a trip visible, and
+  cancellation needed nothing new because §6 had already built the honest channel.
+
+The one entry-point asymmetry it left: `ValidateFacturX` and `ValidateOrderX`
+have no variant, because their findings are `formalis.Violation` values that
+`IsCheckerFinding` cannot classify, so there is nowhere honest to report the
+cancellation. Recorded in
+[architecture.md](../architecture.md#which-entry-points-have-one).
+
 ---
 
 ## 9. Summary — as built
@@ -781,7 +830,11 @@ The falsified "largest in the veraPDF corpus is 66 KB — orders of magnitude
 above any legitimate packet" comment in `xmp.go` is struck and replaced with the
 measured Common Crawl figure.
 
-**Eleven options**, grouped by what it cost to reach the enforcement site:
+**Eleven options**, grouped by what it cost to reach the enforcement site. The
+defaults below are the ones this change shipped with; `limits.go` is the source
+of truth for what they are *now*, and
+[architecture.md](../architecture.md#resource-limits) is the user-facing table.
+The column that belongs to this document is the last one.
 
 | option | default | group |
 |--------|---------|-------|
@@ -819,8 +872,18 @@ config carrier — silent degradation of a security control.
 **Since built, separately:** §6, making silent limit trips observable —
 `limits_report.go`, the `"limit"` rule, `IsCheckerFinding`, and the four false
 positives that finding them exposed. Nothing in *this* change altered what
-happens when a limit fires; that change did. See
+happens when a limit trips; that change did. See
 [docs/limits.md](../limits.md).
 
-**Still open, deliberately out of scope:** cancellation via `context.Context`
-(§8) remains its own proposal.
+**Since built, separately again:** cancellation via `context.Context` (§8), which
+this document scoped out. It is `cancel.go` plus a `…Context` variant of every
+document-scale entry point, and it needed no new reporting mechanism: a cancelled
+run is reported through §6's `"limit"` rule, under the guard identifier
+`context-canceled`. The `Option`-vs-`ctx`-parameter question was decided the same
+way §2 decided transport — a limit is configuration with the lifetime of a
+document, a context is the lifetime of one operation — so the two stay separate.
+See [architecture.md](../architecture.md#cancellation).
+
+**Still open:** nothing from this document. The two knobs left internal on cost
+(the JBIG2 trio, `maxTokenGap`) are to be revisited only if a real file is
+reported that they reject.

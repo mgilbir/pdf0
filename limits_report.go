@@ -84,13 +84,14 @@ func IsCheckerFinding(v Violation) bool {
 // caller can move: a trip on a lowered bound is the caller's own configuration
 // answering back, and the message says so (see limitBound).
 const (
-	limitCmapWork      = "cmap-format4-work"         // limits.cmapWork, WithMaxCmapWork — fontprog.go
+	limitCmapWork      = "cmap-work"                 // limits.cmapWork, WithMaxCmapWork — fontprog.go
 	limitCIDWidthRange = "cid-width-range"           // limits.cidRangeSpan, WithMaxCIDRangeSpan — fonts.go
 	limitRoleMapWork   = "rolemap-work"              // limits.roleMapSteps, WithMaxRoleMapSteps — pdfua.go
 	limitGridFills     = "table-grid-fills"          // limits.tableGridFills, WithMaxTableGridFills — pdfua_tablegrid.go
 	limitContentStream = "content-stream-size"       // limits.contentStreamBytes, WithMaxContentStreamBytes — pdfa.go
 	limitContentTotal  = "decoded-content-total"     // limits.decodedContentBytes, WithMaxDecodedContentBytes — pdfa.go
 	limitObjStmTotal   = "objstm-decompressed-total" // limits.objectStreamBytes, WithMaxObjectStreamBytes — objstm.go
+	limitEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own — final_rules.go, see checkEmbeddedPDFA
 
 	// limitCanceled is not a resource guard: it is the caller's context ending
 	// the run (cancel.go). It is listed among the guards because it is reported
@@ -98,6 +99,12 @@ const (
 	// filtering on IsCheckerFinding — or keying on the guard name in the message
 	// — needs no new case for it.
 	limitCanceled = "context-canceled"
+
+	// limitReportOverflow is the recorder speaking about itself: the synthetic
+	// trip snapshot emits when maxRecordedLimitTrips has dropped distinct trips.
+	// It is a guard identifier like the rest so that a caller keying on the name
+	// sees the report's own truncation in the same shape as the ones it reports.
+	limitReportOverflow = "limit-report"
 )
 
 // limitBound renders the bound a guard tripped on, saying whether it is the
@@ -193,7 +200,7 @@ func (r *limitRecorder) snapshot() []limitTrip {
 	copy(out, r.trips)
 	if r.dropped > 0 {
 		out = append(out, limitTrip{
-			guard:  "limit-report",
+			guard:  limitReportOverflow,
 			detail: fmt.Sprintf("%d further distinct guard trips were not reported individually", r.dropped),
 		})
 	}
@@ -258,7 +265,7 @@ func runLimitTrips(doc *Document) []limitTrip {
 	// same way (cancel.go). It is derived here rather than recorded by whichever
 	// loop noticed first, because the context is authoritative and every
 	// validator already funnels its report through this one function: one line
-	// here gives all seven of them the finding, and none of them can forget it.
+	// here gives all nine of them the finding, and none of them can forget it.
 	if err := doc.canceler().err(); err != nil {
 		out = append(out, limitTrip{guard: limitCanceled, detail: err.Error()})
 	}
