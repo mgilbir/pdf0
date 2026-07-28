@@ -51,7 +51,7 @@ func TestCmapFormat4Budget(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		parseCmapSubtable(b)
+		parseCmapSubtable(b, defaultMaxCmapWork)
 		close(done)
 	}()
 	select {
@@ -91,7 +91,7 @@ func TestCmapFormat4SegmentStartingAtZero(t *testing.T) {
 		{0x0000, 0x0002, 100},
 		{0x0041, 0x0042, 200},
 		{0xFFFF, 0xFFFF, 1}, // sentinel, maps nothing
-	}))
+	}), defaultMaxCmapWork)
 	want := map[rune]int{0: 100, 1: 101, 2: 102, 0x41: 0x41 + 200, 0x42: 0x42 + 200}
 	for r, gid := range want {
 		if m[r] != gid {
@@ -106,7 +106,7 @@ func TestCmapFormat4SegmentStartingAtZero(t *testing.T) {
 // TestCmapFormat4TerminalSegment ensures a segment that runs up to 0xFFFF maps
 // its last code and still terminates.
 func TestCmapFormat4TerminalSegment(t *testing.T) {
-	m := parseCmapSubtable(buildCmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}))
+	m := parseCmapSubtable(buildCmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}), defaultMaxCmapWork)
 	if m[0xFFFE] != 0x7FFE || m[0xFFFF] != 0x7FFF {
 		t.Errorf("terminal segment: got %v, want U+FFFE->0x7FFE, U+FFFF->0x7FFF", m)
 	}
@@ -118,7 +118,7 @@ func TestCmapFormat4InvertedSegment(t *testing.T) {
 	m := parseCmapSubtable(buildCmapFormat4([][3]int{
 		{0x0050, 0x0040, 300}, // inverted
 		{0x0041, 0x0041, 200},
-	}))
+	}), defaultMaxCmapWork)
 	if len(m) != 1 || m[0x41] != 0x41+200 {
 		t.Errorf("inverted segment: got %v, want only U+0041", m)
 	}
@@ -130,10 +130,10 @@ func TestCmapFormat4InvertedSegment(t *testing.T) {
 func TestCmapUnsupportedFormatIsNil(t *testing.T) {
 	fmt12 := make([]byte, 16+12) // header + one group
 	fmt12[1] = 12                // format
-	if m := parseCmapSubtable(fmt12); m != nil {
+	if m := parseCmapSubtable(fmt12, defaultMaxCmapWork); m != nil {
 		t.Errorf("format 12 subtable: got %v, want nil", m)
 	}
-	if m := parseCmapSubtable(make([]byte, 100)); m != nil {
+	if m := parseCmapSubtable(make([]byte, 100), defaultMaxCmapWork); m != nil {
 		t.Errorf("truncated format 0 subtable: got %v, want nil", m)
 	}
 }
@@ -151,7 +151,7 @@ func TestCmapFormat6PastBMP(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		put16(10+2*i, 7+i)
 	}
-	m := parseCmapSubtable(b)
+	m := parseCmapSubtable(b, defaultMaxCmapWork)
 	if len(m) != 2 || m[0xFFFE] != 7 || m[0xFFFF] != 8 {
 		t.Errorf("format 6 past the BMP: got %v, want only U+FFFE->7 and U+FFFF->8", m)
 	}

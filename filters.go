@@ -24,8 +24,9 @@ const (
 // 12 bits, MSB-first; earlyChange (default 1, the PDF default) bumps the code
 // width one entry early, matching the TIFF-style encoders PDF producers use.
 //
-// Output is capped at maxDecodeSize to bound memory on hostile input.
-func lzwDecode(data []byte, earlyChange int) ([]byte, error) {
+// Output is capped (see WithMaxDecodedStreamBytes) to bound memory on hostile
+// input.
+func lzwDecode(data []byte, earlyChange int, lim limits) ([]byte, error) {
 	if earlyChange != 0 && earlyChange != 1 {
 		return nil, fmt.Errorf("LZW: invalid EarlyChange %d", earlyChange)
 	}
@@ -87,8 +88,8 @@ func lzwDecode(data []byte, earlyChange int) ([]byte, error) {
 		}
 
 		out = append(out, entry...)
-		if len(out) > maxDecodeSize {
-			return nil, fmt.Errorf("LZW: decompressed data exceeds maximum size (%d bytes)", maxDecodeSize)
+		if len(out) > lim.decodedStreamBytes {
+			return nil, fmt.Errorf("LZW: decompressed data exceeds maximum size (%d bytes)", lim.decodedStreamBytes)
 		}
 
 		if prev != nil {

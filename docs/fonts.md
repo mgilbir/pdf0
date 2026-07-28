@@ -256,11 +256,14 @@ Font findings are also produced outside these files: `checkFontsEmbedded` and
 Each exists because a crafted file reached it. Checks run behind `recover()`,
 but a hang or an OOM is not something `recover` catches.
 
-- **`/W` range span** (`maxCIDRange = 65536`) — `parseCIDWidths` skips inverted
+Two of these are configurable per document; see
+[architecture.md](architecture.md#resource-limits).
+
+- **`/W` range span** (`WithMaxCIDRangeSpan`, default 65536) — `parseCIDWidths` skips inverted
   and over-wide ranges. `[0 2000000000 500]` would drive ~2e9 map inserts, and
   it runs *before* the visible-render gate, so merely selecting a Type 0 font
   with `Tf` triggered it (audit C1, `fonts_wrange_test.go`).
-- **cmap format 4 total work** (`maxCmapFormat4Work = 1 << 18`) — a valid
+- **cmap format 4 total work** (`WithMaxCmapWork`, default `1 << 18`) — a valid
   subtable partitions the BMP in ~65536 iterations, a hostile one with many
   full-range segments is O(segments × 65535) (audit C10).
 - **`bfrange` span** (`hi - lo < 65536`), **section-marker overlap** (the

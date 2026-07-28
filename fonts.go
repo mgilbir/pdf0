@@ -1117,7 +1117,7 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile2")).(*Stream); ok {
 		if data := decodeContentStream(doc, s); data != nil {
-			return parseSFNT(data)
+			return parseSFNT(data, doc.lim().cmapWork)
 		}
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile3")).(*Stream); ok {
@@ -1127,7 +1127,7 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 				if fp := parseSFNTCFF(data); fp != nil {
 					return fp
 				}
-				return parseSFNT(data)
+				return parseSFNT(data, doc.lim().cmapWork)
 			}
 			return parseCFF(data)
 		}
@@ -1751,10 +1751,10 @@ func cidToGID(doc *Document, desc *Dictionary, cid int) (int, bool) {
 	return cid, true
 }
 
-// maxCIDRange bounds the number of CIDs a single /W range entry may span. CIDs
+// The number of CIDs a single /W range entry may span defaults to
+// defaultMaxCIDRangeSpan; a caller can change it with WithMaxCIDRangeSpan. CIDs
 // are 16-bit, so a well-formed range covers at most the whole CID space; this
 // matches the ceiling the ToUnicode and CMap scanners already apply.
-const maxCIDRange = 65536
 
 // parseCIDWidths parses a CIDFont /W array into CID -> width.
 func parseCIDWidths(doc *Document, wObj Object) map[int]float64 {
@@ -1782,7 +1782,7 @@ func parseCIDWidths(doc *Document, wObj Object) map[int]float64 {
 				// gate, since parseCIDWidths runs unconditionally in
 				// checkCIDFontConsistency. Bound the span to the 16-bit CID
 				// ceiling and skip inverted or over-wide ranges (audit C1).
-				if c >= 0 && cLast >= c && cLast-c < maxCIDRange {
+				if c >= 0 && cLast >= c && cLast-c < doc.lim().cidRangeSpan {
 					for cid := c; cid <= cLast; cid++ {
 						out[cid] = w
 					}

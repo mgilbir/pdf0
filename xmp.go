@@ -85,17 +85,24 @@ type xmlNode struct {
 	Text     string
 }
 
-// xmpPropertyMaxBytes caps the size of an XMP packet that parseXMPProperties
-// will build a node tree for. Building the tree is O(n²): a large packet
-// produces hundreds of thousands of nodes, and its incremental construction
-// (millions of small allocations from streaming tokens) triggers thousands of
-// GC cycles, each rescanning the ever-growing live tree. A 14 MB packet took
-// ~37 s. Real-world XMP is tiny — the largest in the veraPDF corpus is 66 KB —
-// so this bound is orders of magnitude above any legitimate packet, and the
-// property checks are simply skipped for a pathological one (well-formedness is
-// still validated by streaming; see xmpWellFormed). It is a var, not a const,
-// so a test can lower it without a multi-megabyte fixture.
-var xmpPropertyMaxBytes = 2 << 20 // 2 MiB
+// The default bound on an XMP packet that parseXMPProperties will build a node
+// tree for is defaultMaxXMPPacketBytes; a caller can change it with
+// WithMaxXMPPacketBytes. Building the tree is O(n²): a large packet produces
+// hundreds of thousands of nodes, and its incremental construction (millions of
+// small allocations from streaming tokens) triggers thousands of GC cycles, each
+// rescanning the ever-growing live tree. A 14 MB packet took ~37 s.
+//
+// The default was 2 MiB, justified by "the largest in the veraPDF corpus is
+// 66 KB — orders of magnitude above any legitimate packet". Measuring a
+// 978-file Common Crawl sample falsified that: the largest real packet there is
+// 1,639,865 bytes, 25x the corpus maximum and 78% of the old cap. The
+// conformance corpus is not a guide to the real-world tail.
+//
+// It is now 4 MiB rather than 8: because the cost is quadratic the worst case
+// runs roughly 3 s at 4 MiB but about 12 s at 8 MiB, so the extra headroom is
+// not worth what it would cost on a hostile packet. A pathological packet has
+// only its property checks skipped; well-formedness is still validated by
+// streaming (see xmpWellFormed).
 
 // xmpWellFormed streams an XMP packet and reports whether it is well-formed XML
 // and whether it contains a properly namespaced rdf:RDF element, WITHOUT
@@ -195,11 +202,11 @@ func isNamespaceDecl(a xml.Attr) bool {
 
 // parseXMPProperties extracts all top-level properties from every
 // rdf:Description block in the packet.
-func parseXMPProperties(data []byte) ([]xmpProperty, error) {
+func parseXMPProperties(data []byte, maxPacketBytes int) ([]xmpProperty, error) {
 	// Bound the O(n²) tree build; a pathologically large packet is not parsed
 	// for properties (the caller treats this as "no properties to check", not a
 	// violation — its well-formedness is validated separately by streaming).
-	if len(data) > xmpPropertyMaxBytes {
+	if len(data) > maxPacketBytes {
 		return nil, fmt.Errorf("XMP packet too large to parse for properties (%d bytes)", len(data))
 	}
 	root, err := parseXMLTree(data)

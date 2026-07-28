@@ -11,17 +11,17 @@ import (
 func TestPSStepBudget(t *testing.T) {
 	prog := []psItem{{isNum: true, num: 1}, {isNum: true, num: 2}, {op: "add"}}
 
-	steps := 0
-	if _, ok := psExec(prog, nil, 0, &steps); !ok {
+	budget := psBudget{max: defaultMaxPostScriptSteps}
+	if _, ok := psExec(prog, nil, 0, &budget); !ok {
 		t.Fatal("a simple program should execute")
 	}
-	if steps != 3 {
-		t.Fatalf("step count = %d, want 3", steps)
+	if budget.steps != 3 {
+		t.Fatalf("step count = %d, want 3", budget.steps)
 	}
 
 	// Once the budget is spent, even a tiny program is aborted.
-	steps = maxPSSteps
-	if _, ok := psExec(prog, nil, 0, &steps); ok {
+	budget.steps = budget.max
+	if _, ok := psExec(prog, nil, 0, &budget); ok {
 		t.Fatal("a program exceeding the step budget must be aborted")
 	}
 }

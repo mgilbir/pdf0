@@ -1,0 +1,8 @@
+=== blocks 5100-5101 ===
+files=2000 ok=1986 error=14 panic=0 timeout=0
+
+=== error groups ===
+8 startxref not found
+6 PDF header not found
+
+=== quarantined — panics and hangs are bugs ===

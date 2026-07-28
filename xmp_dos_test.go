@@ -87,9 +87,7 @@ func TestXMPStreamingMatchesTree(t *testing.T) {
 // property-parse cap lowered, the property extraction is skipped while the
 // streaming well-formedness check still passes.
 func TestXMPLargePacketBounded(t *testing.T) {
-	orig := xmpPropertyMaxBytes
-	xmpPropertyMaxBytes = 4 << 10 // 4 KiB, for the test
-	defer func() { xmpPropertyMaxBytes = orig }()
+	const capBytes = 4 << 10 // 4 KiB, for the test
 
 	var b strings.Builder
 	for i := 0; b.Len() < 64<<10; i++ { // 64 KiB of valid properties, well over the cap
@@ -97,10 +95,13 @@ func TestXMPLargePacketBounded(t *testing.T) {
 	}
 	xmp := validXMP(b.String())
 	doc := docWithXMP([]byte(xmp))
+	// Lower the cap for this document only, through the public option, so the
+	// whole check pipeline sees it (not just the direct call below).
+	doc.limits = resolveLimits([]Option{WithMaxXMPPacketBytes(capBytes)})
 
 	// Property extraction is skipped (capped), reported as an error the caller
 	// turns into "no properties to check" — never a violation.
-	if _, err := parseXMPProperties([]byte(xmp)); err == nil {
+	if _, err := parseXMPProperties([]byte(xmp), capBytes); err == nil {
 		t.Error("expected parseXMPProperties to refuse the oversized packet")
 	}
 	// Well-formedness still validated by streaming, with no false positive.

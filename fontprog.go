@@ -101,7 +101,7 @@ func markComposite(g []byte, numGlyphs int, out []bool) {
 // be16 as signed for the numberOfContours check.
 
 // parseSFNT parses a TrueType/OpenType font program.
-func parseSFNT(data []byte) *fontProgram {
+func parseSFNT(data []byte, maxCmapWork int) *fontProgram {
 	if len(data) < 12 {
 		return nil
 	}
@@ -193,11 +193,11 @@ func parseSFNT(data []byte) *fontProgram {
 			sub := cmap[off:]
 			switch {
 			case plat == 3 && enc == 1:
-				if m := parseCmapSubtable(sub); m != nil {
+				if m := parseCmapSubtable(sub, maxCmapWork); m != nil {
 					fp.cmap = m
 				}
 			case plat == 3 && enc == 0:
-				m := parseCmapSubtable(sub)
+				m := parseCmapSubtable(sub, maxCmapWork)
 				if m == nil {
 					continue // unreadable: leave the cmap unset, not empty
 				}
@@ -206,7 +206,7 @@ func parseSFNT(data []byte) *fontProgram {
 					fp.symbolCmap[uint16(r)] = gid
 				}
 			case plat == 1 && enc == 0:
-				m := parseCmapSubtable(sub)
+				m := parseCmapSubtable(sub, maxCmapWork)
 				if m == nil {
 					continue
 				}
@@ -227,7 +227,7 @@ func parseSFNT(data []byte) *fontProgram {
 // truncated past use): callers treat a non-nil cmap as authoritative, so an
 // empty map would claim the font maps no character at all, which reads as
 // "every code is .notdef" rather than "unknown".
-func parseCmapSubtable(b []byte) map[rune]int {
+func parseCmapSubtable(b []byte, maxWork int) map[rune]int {
 	out := make(map[rune]int)
 	switch be16(b, 0) {
 	case 0:
@@ -252,7 +252,6 @@ func parseCmapSubtable(b []byte) map[rune]int {
 		// than ~65536 inner iterations. A hostile table with many segments each
 		// spanning the whole range is O(segments x 65535) — seconds to minutes
 		// of CPU on an untrusted font. Bound the total work (audit C10).
-		const maxCmapFormat4Work = 1 << 18
 		work := 0
 		for s := 0; s < segX2; s += 2 {
 			end := be16(b, endBase+s)
@@ -273,7 +272,7 @@ func parseCmapSubtable(b []byte) map[rune]int {
 			// nothing and, being false on entry, dropped every mapping of a
 			// segment beginning at code 0 (audit C46).
 			for c := start; c <= end; c++ {
-				if work++; work > maxCmapFormat4Work {
+				if work++; work > maxWork {
 					return out
 				}
 				var gid int

@@ -7,11 +7,11 @@ package pdf0
 // span the same number of columns (a hole) — are reported. Only unambiguous
 // defects are flagged so a well-formed table never raises a false positive.
 
-// maxGridFills bounds the number of grid slots gridDefects will fill for one
-// table. It caps the work a pathological table (huge RowSpan/ColSpan values)
-// can force. It counts actually-filled slots, so a large but sparse table is
-// unaffected; the largest real tables observed fill well under a million.
-const maxGridFills = 1 << 24 // 16,777,216
+// The number of grid slots gridDefects will fill for one table defaults to
+// defaultMaxTableGridFills; a caller can change it with WithMaxTableGridFills.
+// It caps the work a pathological table (huge RowSpan/ColSpan values) can force.
+// It counts actually-filled slots, so a large but sparse table is unaffected;
+// the largest real tables observed fill well under a million.
 
 // tableCell is one TH/TD with its resolved span.
 type tableCell struct {
@@ -72,7 +72,7 @@ func (d *Document) checkUATableGrid(cat *Dictionary) []UAViolation {
 			continue
 		}
 		if rows := d.collectTableRows(n.elem, roleMap); len(rows) > 0 {
-			v = append(v, gridDefects(rows)...)
+			v = append(v, gridDefects(rows, d.lim().tableGridFills)...)
 		}
 	}
 	return v
@@ -174,8 +174,9 @@ func (d *Document) tableAttrDicts(cell *Dictionary) []*Dictionary {
 	return out
 }
 
-// gridDefects lays the rows onto a grid and reports definite defects.
-func gridDefects(rows []tableRow) []UAViolation {
+// gridDefects lays the rows onto a grid and reports definite defects. maxFills
+// bounds the number of slots it will fill; see WithMaxTableGridFills.
+func gridDefects(rows []tableRow, maxFills int64) []UAViolation {
 	nRows := len(rows)
 	// occupied[r] is the set of columns already filled in row r (by a cell in
 	// this or an earlier row via a row span).
@@ -188,7 +189,7 @@ func gridDefects(rows []tableRow) []UAViolation {
 	outOfRows := false
 
 	// Total grid slots filled so far. Bound it: a table whose spans imply more
-	// than maxGridFills occupied slots — e.g. a single cell with a multi-million
+	// than maxFills occupied slots — e.g. a single cell with a multi-million
 	// ColSpan, or many such cells — is pathological and is not laid out, so a
 	// small degenerate table cannot force billions of map writes. This counts
 	// actually-filled slots (not the nominal rows×cols area), so a genuinely
@@ -214,7 +215,7 @@ func gridDefects(rows []tableRow) []UAViolation {
 			cs := cell.colSpan
 			// Would filling this cell (er×cs slots) exceed the budget? The
 			// division keeps the comparison from overflowing on a huge span.
-			if er > 0 && cs > 0 && int64(er) > (maxGridFills-fills)/int64(cs) {
+			if er > 0 && cs > 0 && int64(er) > (maxFills-fills)/int64(cs) {
 				oversize = true
 				break
 			}

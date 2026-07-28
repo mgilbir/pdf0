@@ -15,28 +15,19 @@ import (
 //
 // Object streams are the format's compression-amplification vector, so
 // decompression is budgeted in aggregate across a single Read
-// (maxObjStmDecompressedTotal). A container that fails to decode, or that
+// (see WithMaxObjectStreamBytes). A container that fails to decode, or that
 // exceeds the budget, is recorded in Document.brokenObjStms instead of failing
 // the read: its objects go missing, but the document still parses and the
 // defect stays reportable.
 
-// maxObjStmDecompressedTotal bounds the aggregate decompressed size of all
-// object streams materialized during a single Read. Object streams are the
-// compression-amplification vector: a small file can carry many object streams
-// that decompress to hundreds of megabytes of small objects (e.g. arrays of
-// hundreds of millions of elements), and parsing them all builds a pointer-heavy
-// object graph that makes garbage collection dominate — turning a 20 MB file
-// into ~30 s and multiple gigabytes of memory. Content streams are already
-// bounded per stream (maxContentStreamSize); this bounds object streams in
-// aggregate. The limit is generous: no realistic document has half a gigabyte
-// of decompressed object-stream data (that would be a multi-gigabyte file), so
-// only pathological amplification is affected. Object streams beyond the budget
-// are recorded as broken, exactly like an undecodable one — their objects are
-// simply unavailable and validation can report the defect.
-//
-// It is a var, not a const, only so tests can lower it to exercise the budget
-// without constructing a half-gigabyte fixture.
-var maxObjStmDecompressedTotal int64 = 512 << 20 // 512 MB
+// The aggregate decompressed size of all object streams materialized during a
+// single Read defaults to defaultMaxObjectStreamBytes; a caller can change it
+// with WithMaxObjectStreamBytes. Object streams are the compression-
+// amplification vector: a small file can carry many object streams that
+// decompress to hundreds of megabytes of small objects (e.g. arrays of
+// references), which the parser then materializes as live objects. The heaviest
+// real document measured across the veraPDF corpus and a Common Crawl sample
+// needs 9 MB.
 
 // objStmEntry is one (object number, byte offset) pair from an object
 // stream's leading index. Offsets are relative to /First.
@@ -49,7 +40,7 @@ type objStmEntry struct {
 // 7.5.7) and parses its leading index of N (object number, offset) pairs.
 // It returns the decoded data alongside the index so callers can parse
 // individual objects without decoding twice.
-func parseObjStmIndex(stream *Stream) (data []byte, entries []objStmEntry, first int, err error) {
+func parseObjStmIndex(stream *Stream, lim limits) (data []byte, entries []objStmEntry, first int, err error) {
 	if t, ok := stream.Dict.Get("Type").(Name); ok && t != "ObjStm" {
 		return nil, nil, 0, fmt.Errorf("not an object stream: /Type /%s", t)
 	}
@@ -62,7 +53,7 @@ func parseObjStmIndex(stream *Stream) (data []byte, entries []objStmEntry, first
 		return nil, nil, 0, fmt.Errorf("object stream /First missing or invalid")
 	}
 
-	data, err = decodeStreamData(stream)
+	data, err = decodeStreamData(stream, lim)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("decoding object stream: %w", err)
 	}
@@ -130,14 +121,15 @@ func (d *Document) materializeScannedObjStms() {
 		}
 	}
 	sort.Ints(containers) // deterministic order, like loadCompressedObjects
+	objStmBudget := d.lim().objectStreamBytes
 	var decompressed int64
 	for _, cnum := range containers {
 		st := d.Objects[cnum].Value.(*Stream)
-		if decompressed >= maxObjStmDecompressedTotal {
+		if decompressed >= objStmBudget {
 			d.brokenObjStms = append(d.brokenObjStms, cnum)
 			continue
 		}
-		data, index, first, err := parseObjStmIndex(st)
+		data, index, first, err := parseObjStmIndex(st, d.lim())
 		if err != nil {
 			d.brokenObjStms = append(d.brokenObjStms, cnum)
 			continue
@@ -193,6 +185,7 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 	}
 	sort.Ints(containers)
 
+	objStmBudget := d.lim().objectStreamBytes
 	var decompressed int64
 	for _, containerNum := range containers {
 		objNums := byContainer[containerNum]
@@ -207,7 +200,7 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 		// Once the aggregate decompressed object-stream budget is exhausted,
 		// stop materializing further streams (recorded as broken, like an
 		// undecodable one) to bound the parser's work and memory.
-		if decompressed >= maxObjStmDecompressedTotal {
+		if decompressed >= objStmBudget {
 			d.brokenObjStms = append(d.brokenObjStms, containerNum)
 			continue
 		}
@@ -215,7 +208,7 @@ func (d *Document) loadCompressedObjects(table *XRefTable) error {
 		// objects unavailable; recording it lets validation report the defect
 		// while the rest of the document is still parsed rather than aborting
 		// the whole read.
-		data, index, first, err := parseObjStmIndex(stream)
+		data, index, first, err := parseObjStmIndex(stream, d.lim())
 		if err != nil {
 			d.brokenObjStms = append(d.brokenObjStms, containerNum)
 			continue
