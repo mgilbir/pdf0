@@ -19,7 +19,7 @@ flowchart TD
     S["catalog /Metadata stream"] --> F["decodeContentStream<br/>— applies /Filter, e.g. FlateDecode"]
     F --> E["decodeXMPToUTF8<br/>UTF-8 / UTF-16 / UTF-32, BOM or not"]
     E --> W["xmpWellFormed — streaming<br/>well-formed? properly namespaced rdf:RDF?"]
-    E --> C{"packet ≤ xmpPropertyMaxBytes?"}
+    E --> C{"packet ≤ `WithMaxXMPPacketBytes`?"}
     C -->|no| SKIP["no properties checked<br/>— never a violation"]
     C -->|yes| T["parseXMLTree + parseXMPProperties<br/>→ []xmpProperty"]
     T --> P["per-level schema check<br/>predefinedXMPSchemas + extension declarations"]
@@ -209,14 +209,19 @@ vendored but pdf0 has no predefined `pdfuaid` table, so the test skips it.
 XMP arrives from untrusted files, and the validator is often the first thing to
 touch one.
 
-- **`xmpPropertyMaxBytes` = 2 MiB** (a `var`, so tests can lower it). Building
-  the node tree is O(n²) in practice: a large packet yields hundreds of
-  thousands of nodes whose incremental construction triggers thousands of GC
-  cycles, each rescanning the growing live tree — a 14 MB packet took ~37 s.
-  The largest packet in the veraPDF corpus is 66 KB, so the bound sits orders
-  of magnitude above anything legitimate. Over the cap `parseXMPProperties`
-  errors and callers treat it as "no properties to check" — **never** a
-  violation, so a large valid file is not failed.
+- **XMP packet size** (`WithMaxXMPPacketBytes`, default 4 MiB). Building the
+  node tree is O(n²) in practice: a large packet yields hundreds of thousands of
+  nodes whose incremental construction triggers thousands of GC cycles, each
+  rescanning the growing live tree — a 14 MB packet took ~37 s. Over the cap
+  `parseXMPProperties` errors and callers treat it as "no properties to check" —
+  **never** a violation, so a large valid file is not failed.
+
+  The default was 2 MiB, justified by the largest packet in the veraPDF corpus
+  being 66 KB. A 978-file Common Crawl sample falsified that: the largest real
+  packet there is 1,639,865 bytes — 25x the corpus maximum, and 78% of the old
+  cap. It is now 4 MiB rather than 8 because the cost is quadratic: the worst
+  case runs roughly 3 s at 4 MiB but about 12 s at 8 MiB. Raise it with the
+  option if you have packets that need it and can afford the time.
 - **Streaming well-formedness.** `xmpWellFormed` answers "well-formed?" and
   "has a properly namespaced `rdf:RDF`?" from the token stream with no tree, so
   it stays O(n) and those two rules still apply to a packet too big to analyse

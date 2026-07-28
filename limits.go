@@ -1,262 +1,260 @@
 package pdf0
 
-import (
-	"fmt"
-	"sort"
-	"sync"
-)
+// Configurable resource limits.
+//
+// pdf0 parses untrusted input, so nearly every unbounded loop and every
+// allocation sized by a number the file supplies is capped. Those caps are the
+// package's defaults and they are chosen to be safe: a caller who configures
+// nothing gets exactly the behaviour pdf0 has always had.
+//
+// A fixed number cannot be right for every caller, though. A batch converter on
+// a workstation and a public upload endpoint want genuinely different answers to
+// "how much may one untrusted document cost me", and no default satisfies both.
+// The options below let a caller say which they are.
+//
+// The shape is variadic functional options rather than an exported struct,
+// because for a limit the zero value is meaningful: Limits{MaxDecodeBytes: 0}
+// reads equally naturally as "no cap at all" and as "give me the default", and
+// the caller cannot tell from the type which they get. With options, "unset" is
+// simply "the option was never called" — there is no ambiguous value to
+// document, and adding a knob later is purely additive.
+//
+// Values are resolved once at the public entry point (Read, ReadWithPassword,
+// ParseXRefStream) into the unexported limits struct below, stored on the
+// Document, and passed explicitly to the code that enforces them. Validation and
+// extraction therefore inherit whatever Read was given. Because the struct
+// travels by value and is never mutated after resolution, validating one
+// Document from several goroutines stays safe.
+//
+// This file answers "what is a limit"; limits_report.go answers "what happens
+// when one trips" — the recorder every guard reports through, the "limit" rule
+// identifier a trip is reported under, and IsCheckerFinding. The two are
+// deliberately separate: this half is public API that changes when a knob is
+// added, that half is checker-honesty machinery that changes when a guard
+// learns to speak. Only the trip messages join them, and only to say whether
+// the bound that fired was the default or one the caller chose.
+//
+// See docs/limits.md for the per-guard classification (which guards are
+// configurable, which report a trip, which are structural) and
+// docs/proposals/configurable-limits.md for the design record, including which
+// limits are deliberately not configurable and the threading cost that
+// justified leaving each one internal.
 
-// This file gives every resource guard in the package one way to say "I
-// stopped short". The package processes untrusted files, so ~70 guards cap the
-// work a hostile document can force: work budgets, depth caps, size ceilings,
-// hop counters. A guard that trips leaves the checker with an *incomplete*
-// picture, and there are only three honest things to do with that:
-//
-//   - fail loudly (a returned error) — always safe;
-//   - decline to assert, and say so — what this file is for;
-//   - assert anyway — never safe, and the source of the worst class of bug in
-//     a validator: a false positive, where the library accuses a conformant
-//     file on the strength of a truncated intermediate result. Audit C46 (a
-//     dropped cmap segment made every affected code resolve to "glyph 0", so a
-//     good font was reported as referencing .notdef) and the empty-cmap defect
-//     found by fuzzing are both exactly this shape.
-//
-// The rule the codebase now follows is: **a check must never assert a
-// violation on the basis of an incomplete result.** When a guard truncates a
-// structure, the structure is made self-describing (partial), the consumer
-// declines the dependent check, and the trip itself is reported here — under
-// its own rule identifier, so a caller can tell "pdf0 could not finish" apart
-// from "this file is non-conforming".
-//
-// docs/limits.md carries the full per-guard classification.
-
-// limitRule is the rule (clause) identifier carried by every finding that
-// reports a resource-guard trip. Like internalRule ("internal", used for a
-// recovered panic) it names the *checker*, not the document: "6.2.11.4.1" says
-// the file is wrong, "limit" says pdf0 stopped short and therefore cannot say
-// whether the file is right.
-const limitRule = "limit"
-
-// IsCheckerFinding reports whether a finding describes a problem in the checker
-// rather than a non-conformance of the document. Two rule identifiers are
-// reserved for this: "internal" (a check panicked and was recovered) and
-// "limit" (a resource guard tripped, so a check could not be completed). A
-// caller that wants "is this file conformant?" should treat a checker finding
-// as "unknown", not as a failure:
-//
-//	var real []pdf0.Violation
-//	for _, e := range pdf0.ValidatePDFA(doc, pdf0.PDFA2b) {
-//		if !pdf0.IsCheckerFinding(e) {
-//			real = append(real, e)
-//		}
-//	}
-//
-// Neither kind fires on any file in the veraPDF corpus; both mean the input is
-// adversarial or the checker has a bug.
-func IsCheckerFinding(v Violation) bool {
-	switch v.RuleID() {
-	case limitRule, internalRule:
-		return true
-	}
-	return false
+// Option configures a resource limit. Callers do not construct one directly;
+// they call a With* function. Options are accepted by Read, ReadWithPassword and
+// ParseXRefStream, and the resolved values are inherited by every validator and
+// extractor that runs on the resulting Document.
+type Option interface {
+	apply(*limits)
 }
 
-// Guard identifiers. These are stable strings: they appear in the message of a
-// "limit" finding, so a caller can key on the specific guard. They are named
-// after the constant that bounds the work, not after the rule that was skipped
-// — one guard can cost several rules.
+type optionFunc func(*limits)
+
+func (f optionFunc) apply(l *limits) { f(l) }
+
+// Default values for every configurable limit. These are the values in force
+// when a caller passes no options.
 const (
-	limitCmapWork      = "cmap-format4-work"         // maxCmapFormat4Work, fontprog.go
-	limitCIDWidthRange = "cid-width-range"           // maxCIDRange, fonts.go
-	limitRoleMapWork   = "rolemap-work"              // maxRoleMapWork, pdfua.go
-	limitGridFills     = "table-grid-fills"          // maxGridFills, pdfua_tablegrid.go
-	limitContentStream = "content-stream-size"       // maxContentStreamSize, pdfa.go
-	limitContentTotal  = "decoded-content-total"     // maxDecodedContentTotal, pdfa.go
-	limitObjStmTotal   = "objstm-decompressed-total" // maxObjStmDecompressedTotal, objstm.go
+	defaultMaxDecodedStreamBytes  = 100 << 20 // 100 MB
+	defaultMaxDecodedContentBytes = 512 << 20 // 512 MB
+	defaultMaxObjectStreamBytes   = 512 << 20 // 512 MB
+	defaultMaxContentStreamBytes  = 64 << 20  // 64 MB
+	defaultMaxICCProfileBytes     = 8 << 20   // 8 MiB
+	defaultMaxXMPPacketBytes      = 4 << 20   // 4 MiB
+	defaultMaxCIDRangeSpan        = 65536
+	defaultMaxRoleMapSteps        = 1 << 20
+	defaultMaxTableGridFills      = 1 << 24
+	defaultMaxPostScriptSteps     = 1 << 20
+	defaultMaxCmapWork            = 1 << 18
 )
 
-// limitTrip is one guard trip: which guard, what it left incomplete, and the
-// object the incompleteness attaches to (0 when it is document-wide).
-type limitTrip struct {
-	guard  string
-	detail string
-	obj    int
+// limits is the resolved configuration. It is never exported and never
+// constructed by a caller — only by resolveLimits — so it is free to use
+// zero-means-default internally without the ambiguity that made an exported
+// struct a bad idea.
+type limits struct {
+	decodedStreamBytes  int
+	decodedContentBytes int64
+	objectStreamBytes   int64
+	contentStreamBytes  int
+	iccProfileBytes     int
+	xmpPacketBytes      int
+	cidRangeSpan        int
+	roleMapSteps        int
+	tableGridFills      int64
+	postScriptSteps     int
+	cmapWork            int
 }
 
-func (t limitTrip) message() string {
-	return fmt.Sprintf("resource limit reached (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
-}
-
-// maxRecordedLimitTrips bounds the recorder itself. A file crafted to trip a
-// guard once per object would otherwise turn the *report* into the resource
-// exhaustion the guards exist to prevent. Distinct trips beyond the cap are
-// counted, not stored, and reported in aggregate.
-const maxRecordedLimitTrips = 64
-
-// limitRecorder collects the guard trips of one run. The zero value is usable
-// and a nil *limitRecorder discards, so a guard can report unconditionally
-// without knowing whether anything is listening.
-//
-// The mutex is not there because validation is concurrent — a run is
-// single-goroutine, and each run gets its own recorder on its own shallow copy
-// of the Document (see validationCache) — but because the recorder is the one
-// piece of per-run state that guards write to from arbitrary depth, and a
-// future parallel check must not turn that into a data race.
-type limitRecorder struct {
-	mu      sync.Mutex
-	seen    map[limitTrip]bool
-	trips   []limitTrip
-	dropped int
-}
-
-// note records a trip, ignoring repeats of one already recorded. guard is one
-// of the limit* identifiers above; detail says, in the file's terms, what was
-// left incomplete.
-func (r *limitRecorder) note(guard, detail string, obj int) {
-	if r == nil {
-		return
-	}
-	t := limitTrip{guard: guard, detail: detail, obj: obj}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.seen[t] {
-		return
-	}
-	if len(r.trips) >= maxRecordedLimitTrips {
-		r.dropped++
-		return
-	}
-	if r.seen == nil {
-		r.seen = make(map[limitTrip]bool)
-	}
-	r.seen[t] = true
-	r.trips = append(r.trips, t)
-}
-
-// snapshot returns the recorded trips in a deterministic order, plus a synthetic
-// trip standing for any that were dropped by maxRecordedLimitTrips.
-func (r *limitRecorder) snapshot() []limitTrip {
-	if r == nil {
-		return nil
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]limitTrip, len(r.trips))
-	copy(out, r.trips)
-	if r.dropped > 0 {
-		out = append(out, limitTrip{
-			guard:  "limit-report",
-			detail: fmt.Sprintf("%d further distinct guard trips were not reported individually", r.dropped),
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].guard != out[j].guard {
-			return out[i].guard < out[j].guard
+// resolveLimits applies options over the zero struct and fills in defaults.
+func resolveLimits(opts []Option) limits {
+	var l limits
+	for _, o := range opts {
+		if o != nil {
+			o.apply(&l)
 		}
-		if out[i].obj != out[j].obj {
-			return out[i].obj < out[j].obj
-		}
-		return out[i].detail < out[j].detail
-	})
-	return out
+	}
+	return l.withDefaults()
 }
 
-// noteReadLimit records a guard trip that happened while the file was being
-// read, when there is no validation run to attach it to. Every validator merges
-// these into its report (runLimitTrips).
-func (d *Document) noteReadLimit(guard, detail string, obj int) {
+// defaultLimits is the configuration a caller who passes no options gets.
+func defaultLimits() limits { return limits{}.withDefaults() }
+
+// withDefaults fills any unset (zero) field with its default. It is idempotent,
+// so it is safe to apply to an already-resolved struct — which is what lets a
+// hand-built Document (whose limits field is the zero value) behave exactly like
+// one produced by Read.
+func (l limits) withDefaults() limits {
+	if l.decodedStreamBytes == 0 {
+		l.decodedStreamBytes = defaultMaxDecodedStreamBytes
+	}
+	if l.decodedContentBytes == 0 {
+		l.decodedContentBytes = defaultMaxDecodedContentBytes
+	}
+	if l.objectStreamBytes == 0 {
+		l.objectStreamBytes = defaultMaxObjectStreamBytes
+	}
+	if l.contentStreamBytes == 0 {
+		l.contentStreamBytes = defaultMaxContentStreamBytes
+	}
+	if l.iccProfileBytes == 0 {
+		l.iccProfileBytes = defaultMaxICCProfileBytes
+	}
+	if l.xmpPacketBytes == 0 {
+		l.xmpPacketBytes = defaultMaxXMPPacketBytes
+	}
+	if l.cidRangeSpan == 0 {
+		l.cidRangeSpan = defaultMaxCIDRangeSpan
+	}
+	if l.roleMapSteps == 0 {
+		l.roleMapSteps = defaultMaxRoleMapSteps
+	}
+	if l.tableGridFills == 0 {
+		l.tableGridFills = defaultMaxTableGridFills
+	}
+	if l.postScriptSteps == 0 {
+		l.postScriptSteps = defaultMaxPostScriptSteps
+	}
+	if l.cmapWork == 0 {
+		l.cmapWork = defaultMaxCmapWork
+	}
+	return l
+}
+
+// objStmMaxRaw bounds one object stream's decompressed (index + bodies) size on
+// the write side. It derives from the decoded-stream cap rather than being its
+// own knob: a container whose decompressed size exceeds what the reader accepts
+// would be written and then rejected on the next read, silently losing every
+// object it holds. Setting the two independently is how that happens, so the
+// writer follows the reader by construction. Half the cap leaves generous margin
+// for the index header.
+func (l limits) objStmMaxRaw() int { return l.decodedStreamBytes / 2 }
+
+// lim returns the resolved limits for a document. Reading through this accessor
+// rather than the field directly means a hand-built &Document{...}, whose limits
+// field is the zero value, behaves exactly like one produced by Read.
+func (d *Document) lim() limits {
 	if d == nil {
-		return
+		return defaultLimits()
 	}
-	if d.readLimits == nil {
-		d.readLimits = &limitRecorder{}
-	}
-	d.readLimits.note(guard, detail, obj)
+	return d.limits.withDefaults()
 }
 
-// noteLimit reports a guard trip against the run doc belongs to. It is a no-op
-// when no run is in progress (no per-run cache installed), which is why a guard
-// deep in unexported code can call it unconditionally.
+// WithMaxDecodedStreamBytes caps the decompressed size of any single stream
+// (default 100 MB). This is the decompression-bomb ceiling and applies to every
+// FlateDecode and LZWDecode stream in the file; lowering it is the main lever
+// for a service accepting untrusted uploads. The largest legitimate stream
+// measured across the veraPDF corpus and a 978-file Common Crawl sample is
+// 29 MB, so values below about 32 MB will start rejecting real documents.
 //
-// Guards with no *Document in scope at all — the sfnt/CFF parsers, the lexer —
-// cannot use this. Those record the trip on the value they return instead (see
-// fontProgram.cmapPartial), and whoever loads that value, which does have a
-// Document, forwards it here (noteFontProgramLimits).
-func noteLimit(doc *Document, guard, detail string, obj int) {
-	if doc == nil || doc.valCache == nil {
-		return
-	}
-	doc.valCache.limits.note(guard, detail, obj)
+// The write-side object-stream cap derives from this value, so lowering it also
+// makes Write emit smaller object-stream containers that the same configuration
+// can read back.
+func WithMaxDecodedStreamBytes(n int) Option {
+	return optionFunc(func(l *limits) { l.decodedStreamBytes = n })
 }
 
-// runLimitTrips returns every trip that belongs in this run's report: those the
-// run itself recorded, plus those recorded while the file was read.
+// WithMaxDecodedContentBytes caps the total decoded content one validation run
+// will materialize (default 512 MB). The per-stream cap stops a single stream
+// exploding; this is the only bound on a whole run, and so the knob for "one
+// upload must not exhaust my process". The heaviest real document measured
+// needs 218 MB.
+func WithMaxDecodedContentBytes(n int64) Option {
+	return optionFunc(func(l *limits) { l.decodedContentBytes = n })
+}
+
+// WithMaxObjectStreamBytes caps the aggregate decompressed size of all object
+// streams in one document (default 512 MB). Object streams are the other
+// compression-amplification path into a document: a small file can carry many
+// containers that each inflate near the per-stream cap. The heaviest real
+// document measured needs 9 MB.
+func WithMaxObjectStreamBytes(n int64) Option {
+	return optionFunc(func(l *limits) { l.objectStreamBytes = n })
+}
+
+// WithMaxContentStreamBytes caps the decoded size of a single content stream or
+// image sample buffer that will be scanned (default 64 MB). Larger streams are
+// skipped. The largest real content stream measured is 29 MB.
+func WithMaxContentStreamBytes(n int) Option {
+	return optionFunc(func(l *limits) { l.contentStreamBytes = n })
+}
+
+// WithMaxICCProfileBytes caps the decoded size of an ICC profile (default
+// 8 MiB). The largest real profile measured is 1.8 MB.
+func WithMaxICCProfileBytes(n int) Option {
+	return optionFunc(func(l *limits) { l.iccProfileBytes = n })
+}
+
+// WithMaxXMPPacketBytes caps the size of an XMP packet that the property checks
+// will build a node tree for (default 4 MiB). Larger packets are still checked
+// for well-formedness, which streams; only the property-value rules are skipped.
 //
-// Read-time trips live on the Document because there is no run to attach them
-// to yet; validation only ever reads them, so a run stays non-mutating for the
-// caller (a run writes solely to its own per-run recorder).
-func runLimitTrips(doc *Document) []limitTrip {
-	if doc == nil {
-		return nil
-	}
-	var out []limitTrip
-	if doc.readLimits != nil {
-		out = append(out, doc.readLimits.snapshot()...)
-	}
-	if doc.valCache != nil {
-		out = append(out, doc.valCache.limits.snapshot()...)
-	}
-	return out
+// Raising this is more expensive than it looks: tree construction is O(n²), so
+// the worst case grows quadratically — roughly 3 s at the 4 MiB default and 12 s
+// at 8 MiB. The largest real packet measured is 1.6 MB.
+func WithMaxXMPPacketBytes(n int) Option {
+	return optionFunc(func(l *limits) { l.xmpPacketBytes = n })
 }
 
-// limitValidationErrors renders this run's trips as PDF/A findings.
-func limitValidationErrors(doc *Document, level PDFALevel) []ValidationError {
-	var out []ValidationError
-	for _, t := range runLimitTrips(doc) {
-		out = append(out, ValidationError{Rule: limitRule, Level: level, Message: t.message(), Object: t.obj})
-	}
-	return out
+// WithMaxCIDRangeSpan caps the number of CIDs a single /W range entry may span
+// (default 65536, the size of the CID space). Without it a range such as
+// [0 2000000000 500] would ask for two billion map insertions.
+func WithMaxCIDRangeSpan(n int) Option {
+	return optionFunc(func(l *limits) { l.cidRangeSpan = n })
 }
 
-// limitUAViolations renders this run's trips as PDF/UA findings.
-func limitUAViolations(doc *Document) []UAViolation {
-	var out []UAViolation
-	for _, t := range runLimitTrips(doc) {
-		out = append(out, UAViolation{limitRule, t.message(), t.obj})
-	}
-	return out
+// WithMaxRoleMapSteps caps the total /RoleMap chain-follow steps across one
+// PDF/UA structure-type check (default 1<<20), bounding a quadratic blowup on a
+// large hostile role map.
+func WithMaxRoleMapSteps(n int) Option {
+	return optionFunc(func(l *limits) { l.roleMapSteps = n })
 }
 
-// reportLimits renders this run's trips through the add(rule, msg, obj)
-// callback the PDF/X, PDF/VT, PDF/R and DPart validators report through.
-func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
-	for _, t := range runLimitTrips(doc) {
-		add(limitRule, t.message(), t.obj)
-	}
+// WithMaxTableGridFills caps the number of grid slots the PDF/UA table checks
+// will fill for one table (default 1<<24), bounding a cell whose /RowSpan and
+// /ColSpan claim a multi-million-slot area.
+func WithMaxTableGridFills(n int64) Option {
+	return optionFunc(func(l *limits) { l.tableGridFills = n })
 }
 
-// newValidationCache builds the per-run cache, including the limit recorder
-// every guard reports through. The three (now seven) call sites that start a
-// run share it so a new per-run field cannot be initialized in one and
-// forgotten in another.
-func newValidationCache() *validationCache {
-	return &validationCache{
-		pages:   make(map[int][]pageInfo),
-		content: make(map[*Stream][]byte),
-		limits:  &limitRecorder{},
-	}
+// WithMaxPostScriptSteps caps the total operators one type-4 (PostScript
+// calculator) function evaluation may execute (default 1<<20), bounding a
+// function whose loops would otherwise not terminate usefully.
+func WithMaxPostScriptSteps(n int) Option {
+	return optionFunc(func(l *limits) { l.postScriptSteps = n })
 }
 
-// beginRun returns the Document a validation run should work against: a shallow
-// copy carrying a fresh per-run cache, so the caller's Document is never
-// mutated and the same Document can be validated from several goroutines at
-// once. An already-installed cache is kept, so a nested check joins the run in
-// progress rather than starting a second one.
-func beginRun(doc *Document) *Document {
-	if doc == nil || doc.valCache != nil {
-		return doc
-	}
-	runDoc := *doc
-	runDoc.valCache = newValidationCache()
-	return &runDoc
+// WithMaxCmapWork caps the work spent expanding one TrueType cmap subtable of
+// an expanding format — 4 or 12 — (default 1<<18). A hostile subtable can
+// declare segments or groups whose combined character ranges cover the whole
+// code space many times over.
+//
+// A subtable the budget stops is returned as a *prefix* of the font's real
+// coverage, marked partial, and the checks that would otherwise read a missing
+// mapping as "this code has no glyph" decline instead and report the trip (see
+// limits_report.go). Lowering this therefore costs coverage of the
+// glyph-presence rules on large fonts; it never turns them into false
+// positives.
+func WithMaxCmapWork(n int) Option {
+	return optionFunc(func(l *limits) { l.cmapWork = n })
 }

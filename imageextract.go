@@ -423,7 +423,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 		// only ones applyFilter reverses): reverse the chain to raw samples, which
 		// buildImage renders through the colour space, bit depth, /Decode and masks
 		// (image masks keep their own 1-bit stencil rendering).
-		d.renderSamples(st, &img, decodeImageSamples(st), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
+		d.renderSamples(st, &img, decodeImageSamples(st, d.lim()), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
 	}
 	return img
 }
@@ -434,8 +434,8 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 // the shared content budget — would bloat memory and starve the small shared
 // streams (tint functions, palettes) the cache exists for. The same 64MB
 // per-stream bound applies.
-func decodeImageSamples(st *Stream) []byte {
-	if decoded, err := decodeStreamData(st); err == nil && len(decoded) <= maxContentStreamSize {
+func decodeImageSamples(st *Stream, lim limits) []byte {
+	if decoded, err := decodeStreamData(st, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
 		return decoded
 	}
 	return nil
@@ -496,7 +496,7 @@ func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded 
 
 	encoded = st.Data
 	for i := 0; i < last; i++ {
-		out, err := applyFilter(filters[i], encoded, parmsDictAt(parms, i))
+		out, err := applyFilter(filters[i], encoded, parmsDictAt(parms, i), d.lim())
 		if err != nil {
 			return nil, params, false
 		}
@@ -539,7 +539,7 @@ func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, o
 
 	encoded = st.Data
 	for i := 0; i < last; i++ {
-		out, err := applyFilter(filters[i], encoded, parmsDictAt(parms, i))
+		out, err := applyFilter(filters[i], encoded, parmsDictAt(parms, i), d.lim())
 		if err != nil {
 			return nil, nil, false
 		}
@@ -548,7 +548,7 @@ func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, o
 
 	if cp := parmsDictAt(parms, last); cp != nil {
 		if gs, ok := d.Resolve(cp.Get("JBIG2Globals")).(*Stream); ok {
-			if data, err := decodeStreamData(gs); err == nil {
+			if data, err := decodeStreamData(gs, d.lim()); err == nil {
 				globals = data
 			}
 		}

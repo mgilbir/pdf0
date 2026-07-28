@@ -315,7 +315,7 @@ func pdfxOutputIntentCoverage(doc *Document, cat *Dictionary) (rgb, cmyk, gray b
 			}
 			continue
 		}
-		data := getICCProfileData(stream)
+		data := getICCProfileData(stream, doc.lim())
 		if len(data) < 20 {
 			rgb, cmyk = true, true
 			continue

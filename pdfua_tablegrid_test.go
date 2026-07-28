@@ -9,11 +9,12 @@ import (
 // cell is a test helper for a (rowSpan, colSpan) cell.
 func cell(rs, cs int) tableCell { return tableCell{rowSpan: rs, colSpan: cs} }
 
-// mustGrid lays out rows and fails if the work budget stopped the layout, so a
-// test asserting "no defects" cannot silently be asserting "not determined".
+// mustGrid lays out rows at the default budget and fails if the work budget
+// stopped the layout, so a test asserting "no defects" cannot silently be
+// asserting "not determined".
 func mustGrid(t *testing.T, rows []tableRow) []UAViolation {
 	t.Helper()
-	v, complete := gridDefects(rows)
+	v, complete := gridDefects(rows, defaultMaxTableGridFills)
 	if !complete {
 		t.Fatalf("gridDefects hit the work budget; the result is not determined")
 	}
@@ -143,7 +144,7 @@ func TestGridDefectsSpanBomb(t *testing.T) {
 	// the point is bounded-vs-unbounded, not a precise time.
 	for _, tc := range cases {
 		done := make(chan int, 1)
-		go func() { v, _ := gridDefects(tc.rows); done <- len(v) }()
+		go func() { v, _ := gridDefects(tc.rows, defaultMaxTableGridFills); done <- len(v) }()
 		select {
 		case <-done:
 		case <-time.After(25 * time.Second):

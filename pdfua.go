@@ -429,11 +429,11 @@ func (d *Document) checkUARoleMapIntegrity(cat *Dictionary) []UAViolation {
 		cur := key
 		for {
 			work++
-			if work > maxRoleMapWork {
+			if work > d.lim().roleMapSteps {
 				// Every key not yet examined goes unchecked, including the
 				// cheap standard-type test, so the remaining keys are
 				// unknown rather than clean.
-				noteLimit(d, limitRoleMapWork, fmt.Sprintf("following the /RoleMap chains cost more than %d steps; the remaining keys were not checked for standard-type remapping or cycles", maxRoleMapWork), 0)
+				noteLimit(d, limitRoleMapWork, fmt.Sprintf("following the /RoleMap chains cost more than %s steps; the remaining keys were not checked for standard-type remapping or cycles", limitBound(int64(d.lim().roleMapSteps), defaultMaxRoleMapSteps)), 0)
 				return v
 			}
 			next, ok := d.Resolve(roleMap.Get(cur)).(Name)
@@ -451,9 +451,9 @@ func (d *Document) checkUARoleMapIntegrity(cat *Dictionary) []UAViolation {
 	return v
 }
 
-// maxRoleMapWork bounds the total number of /RoleMap chain-follow steps across
-// all keys, so a crafted role map cannot drive super-linear validation work.
-const maxRoleMapWork = 1 << 20
+// The total number of /RoleMap chain-follow steps across all keys defaults to
+// defaultMaxRoleMapSteps; a caller can change it with WithMaxRoleMapSteps. The
+// bound stops a crafted role map driving super-linear validation work.
 
 // checkUASecurity flags an encrypted document that lacks a /P entry or whose
 // permissions disable text extraction for accessibility (Matterhorn 26-001/002).

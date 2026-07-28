@@ -1,5 +1,17 @@
 # Resource limits and what a trip means
 
+Two documents cover resource limits, because there are two questions.
+[docs/proposals/configurable-limits.md](proposals/configurable-limits.md)
+answers *what a limit is* — the eleven `With*` options, the defaults, the
+measurements behind them, and which limits were deliberately left internal. This
+one answers *what happens when a limit trips*. The code splits the same way:
+`limits.go` and `limits_report.go`.
+
+The two meet in one place. Eleven of the guards below are configurable, so a
+trip may be pdf0's own ceiling or the caller's; the trip message says which
+(`limitBound`), because "you hit the cap you set" and "you hit our default" call
+for different responses.
+
 pdf0 reads untrusted files, so roughly seventy places in the package cap the
 work a document can force: work budgets, depth caps, size ceilings, hop
 counters, seen-sets. Every one of them can *trip*, and when it does the checker
@@ -40,7 +52,7 @@ preference:
 
 ## Reporting: the `limit` rule
 
-`limits.go` holds one mechanism. A `limitRecorder` lives on the per-run
+`limits_report.go` holds one mechanism. A `limitRecorder` lives on the per-run
 `validationCache`; any guard with a `*Document` in scope calls `noteLimit`,
 which is a no-op when no run is in progress. Guards with no `*Document` at all
 (the sfnt/CFF parsers) record the trip on the value they return, and whoever
@@ -73,8 +85,8 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| `maxCmapFormat4Work` | `fontprog.go` | **Silently wrong** | `trueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `fontProgram.cmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-format4-work`. |
-| `maxCIDRange` | `fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Fixed. `parseCIDWidths` reports completeness; the width rule declines; trip reported as `cid-width-range`. |
+| cmap work budget (`WithMaxCmapWork`) | `fontprog.go` | **Silently wrong** | `trueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `fontProgram.cmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-format4-work`. |
+| CID `/W` range span (`WithMaxCIDRangeSpan`) | `fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Fixed. `parseCIDWidths` reports completeness; the width rule declines; trip reported as `cid-width-range`. |
 | `parseCmapSubtable` nil-on-unreadable | `fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
@@ -84,20 +96,20 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| `maxDecodedContentTotal` applied to `/Metadata` | `pdfa.go` | **Silently wrong** | Every identification rule: *"metadata must contain pdfaid:part"*, *"pdfaid:conformance must be B, got \"\""*, *"Info /Title present but XMP dc:title missing"*, *"file is not identified as PDF/X"*, *"an embedded PDF file is not compliant with PDF/A"* | Fixed. `decodeMetadataStream` / `xmpText` decode the document's own identification outside the aggregate budget. |
-| 256-byte token cap (four tokenizers) | `pdfa.go`, `fonts.go`, `filestructure.go` | **Silently wrong** | The cap cut a run and the scan re-entered mid-run, so a binary tail became tokens: a one-byte `k`/`g` fragment → *"DeviceCMYK used without matching OutputIntent or DefaultCMYK"*; an alphabetic fragment → *"content stream contains an operator not defined in ISO 32000"* | Fixed. `maxContentTokenLen`; an over-long run is discarded whole (same single linear pass). |
-| `maxContentStreamSize` | `pdfa.go` | Silently lossy | Every content-driven rule sees nothing from the stream. This is the failure the old 1 MB cap caused. | Reported as `content-stream-size`. |
-| `maxDecodedContentTotal` (content proper) | `pdfa.go` | Silently lossy | Same, for every stream after the budget. | Reported as `decoded-content-total`. |
+| aggregate content budget (`WithMaxDecodedContentBytes`) applied to `/Metadata` | `pdfa.go` | **Silently wrong** | Every identification rule: *"metadata must contain pdfaid:part"*, *"pdfaid:conformance must be B, got \"\""*, *"Info /Title present but XMP dc:title missing"*, *"file is not identified as PDF/X"*, *"an embedded PDF file is not compliant with PDF/A"* | Fixed. `decodeMetadataStream` / `xmpText` decode the document's own identification outside the aggregate budget. |
+| 256-byte token cap, not configurable (four tokenizers) | `pdfa.go`, `fonts.go`, `filestructure.go` | **Silently wrong** | The cap cut a run and the scan re-entered mid-run, so a binary tail became tokens: a one-byte `k`/`g` fragment → *"DeviceCMYK used without matching OutputIntent or DefaultCMYK"*; an alphabetic fragment → *"content stream contains an operator not defined in ISO 32000"* | Fixed. `maxContentTokenLen`; an over-long run is discarded whole (same single linear pass). |
+| per-stream content cap (`WithMaxContentStreamBytes`) | `pdfa.go` | Silently lossy | Every content-driven rule sees nothing from the stream. This is the failure the old 1 MB cap caused. | Reported as `content-stream-size`. |
+| aggregate content budget (`WithMaxDecodedContentBytes`), content proper | `pdfa.go` | Silently lossy | Same, for every stream after the budget. | Reported as `decoded-content-total`. |
 | `maxQDepth` (28) | `pdfa.go` | Loud | It *is* the rule (implementation limit), not a work cap. | Unchanged. |
-| `maxICCProfileSize` | `pdfa.go` | Silently lossy, fail-open by design | `getOutputIntentCoverage` sets `hasRGB=hasCMYK=true` on an unreadable profile precisely to avoid a false positive. | Unchanged. |
+| ICC profile size (`WithMaxICCProfileBytes`) | `pdfa.go` | Silently lossy, fail-open by design | `getOutputIntentCoverage` sets `hasRGB=hasCMYK=true` on an unreadable profile precisely to avoid a false positive. | Unchanged. |
 | Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Unchanged. |
 
 ### Structure and PDF/UA
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| `maxGridFills` | `pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
-| `maxRoleMapWork` | `pdfua.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. Type resolution uses a separate, uncapped lookup, so no finding is manufactured. | Reported as `rolemap-work`. |
+| table grid fills (`WithMaxTableGridFills`) | `pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
+| `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. Type resolution uses a separate, uncapped lookup, so no finding is manufactured. | Reported as `rolemap-work`. |
 | `maxFieldTreeDepth` (64) | `signatures.go`, `sign.go` | Silently lossy | Truncates a reported `SignatureResult.Field` name; never flips `Valid` or `CoversWholeDocument`. | Unchanged. |
 | `maxPageTreeDepth` (64) | `sign.go` | Loud | `signingTarget` refuses. | Unchanged. |
 | Struct-tree / table-row seen-sets | `pdfua_struct.go`, `pdfua_tablegrid.go` | Silently lossy on well-formed input | An element reachable twice is not a valid structure tree, so these only bite malformed files. | Unchanged (see *Left deliberately*). |
@@ -107,11 +119,11 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | Guard | File | Class | Notes |
 | --- | --- | --- | --- |
 | `maxParseDepth` (1000) | `parser.go` | Loud | A hard error. In lenient (rebuilt-xref) mode the caller drops the object instead — see the objstm row. |
-| `maxDecodeSize` (100 MB) | `xref.go` | Loud | A hard error out of `flateDecode`. |
+| decoded-stream cap (`WithMaxDecodedStreamBytes`, default 100 MB) | `xref.go` | Loud | A hard error out of `flateDecode`. Being loud, it needs no trip report; the write-side `objStmMaxRaw` derives from it so a container pdf0 writes is one the same configuration can read back. |
 | `maxSerializeDepth` (1000) | `serializer.go` | Loud | A hard error; guards an unrecoverable stack overflow. |
 | `maxCompareDepth` (1000) | `compare.go` | Silently wrong *by construction* | Beyond the cap two objects are declared **not equal**. Documented as such; no validator rule compares structures that deep. |
 | `maxTokenGap` (1 MiB) | `lexer.go` | Loud-ish | The lexer parks and the parser fails on the next token. Not reachable by the recorder (see *reach*, above). |
-| `maxObjStmDecompressedTotal` | `objstm.go` | Silently wrong *in aggregate* | The container's objects go missing from `doc.Objects`. PDF/A reports the container (6.1.6/6.1.7), but every other validator then resolves those objects to `nil`, which is indistinguishable from "absent": *"document does not specify a default language"*, *"encrypted document has no /P permissions entry"*, *"annotation has no alternate description"*, *"a DPart reference does not resolve to a dictionary"*. Now reported as `objstm-decompressed-total` in every validator, so the cascade is attributable. |
+| object-stream decompression budget (`WithMaxObjectStreamBytes`) | `objstm.go` | Silently wrong *in aggregate* | The container's objects go missing from `doc.Objects`. PDF/A reports the container (6.1.6/6.1.7), but every other validator then resolves those objects to `nil`, which is indistinguishable from "absent": *"document does not specify a default language"*, *"encrypted document has no /P permissions entry"*, *"annotation has no alternate description"*, *"a DPart reference does not resolve to a dictionary"*. Now reported as `objstm-decompressed-total` in every validator, so the cascade is attributable. |
 | `Document.Resolve` 64-hop cap | `document.go` | Silently wrong in principle | Returns `nil`, indistinguishable from "key absent". A 64-hop reference chain does not occur in real files; the same `nil` arriving from the objstm budget is what actually bites, and that is now reported. See *Left deliberately*. |
 | `WriteIncremental` vs `brokenObjStms` | `incremental.go` | Was **silently wrong** | It computed `/Size` from an incomplete object set and wrote the file without a word — the only write path that did not refuse. Now refuses, as `Write` already did. |
 

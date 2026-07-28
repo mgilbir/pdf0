@@ -40,7 +40,7 @@ func TestDecodeContentStreamBudget(t *testing.T) {
 	}
 
 	// Simulate the run having reached the budget.
-	doc.valCache.contentBytes = maxDecodedContentTotal
+	doc.valCache.contentBytes = doc.lim().decodedContentBytes
 	s2 := makeFlateContentStream(1 << 20)
 	if got := decodeContentStream(doc, s2); got != nil {
 		t.Fatalf("over budget: decoded %d bytes, want nil (budget must skip decoding)", len(got))
@@ -61,12 +61,10 @@ func TestContentBombBoundedValidation(t *testing.T) {
 	const nPages = 200
 	const perPage = 8 << 20 // 8 MB decoded per page → ~1.6 GB total content
 	// Lower the budget to 16 MB so only ~2 streams are processed; total content
-	// is ~100x the budget, so a regression (no budget) does far more work.
-	defer func(orig int64) { maxDecodedContentTotal = orig }(maxDecodedContentTotal)
-	maxDecodedContentTotal = 16 << 20
-
+	// is ~100x the budget, so a regression (no budget) does far more work. This
+	// also exercises the public option path end to end.
 	pdf := buildContentBombPDF(t, nPages, perPage)
-	doc, err := Read(bytes.NewReader(pdf), int64(len(pdf)))
+	doc, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxDecodedContentBytes(16<<20))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

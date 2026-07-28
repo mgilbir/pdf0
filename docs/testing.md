@@ -134,9 +134,9 @@ all:
 
 - **`FuzzCmapSubtable`** — `parseCmapSubtable` on raw subtable bytes, the deep
   target. Beyond "does not panic" it asserts the invariants the work budgets and
-  the recent fixes exist to hold: the returned map never exceeds
-  `maxCmapFormat4Work`/`maxCmapFormat12Work` however many groups the table
-  claims; an unreadable subtable — or one that maps nothing — returns nil rather
+  the recent fixes exist to hold: the returned map never exceeds the cmap work
+  budget the target parses at (`defaultMaxCmapWork`, the default behind
+  `WithMaxCmapWork`) however many groups the table claims; an unreadable subtable — or one that maps nothing — returns nil rather
   than an empty non-nil map (`trueTypeGID` treats a non-nil cmap as
   authoritative, so an empty one reads as "every code is `.notdef`" and produces
   font-wide false findings); and every key is a Unicode code point mapping to a

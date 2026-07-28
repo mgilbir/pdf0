@@ -1138,7 +1138,7 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile2")).(*Stream); ok {
 		if data := decodeContentStream(doc, s); data != nil {
-			return noteFontProgramLimits(doc, parseSFNT(data))
+			return noteFontProgramLimits(doc, parseSFNT(data, doc.lim().cmapWork))
 		}
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile3")).(*Stream); ok {
@@ -1148,7 +1148,7 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 				if fp := parseSFNTCFF(data); fp != nil {
 					return noteFontProgramLimits(doc, fp)
 				}
-				return noteFontProgramLimits(doc, parseSFNT(data))
+				return noteFontProgramLimits(doc, parseSFNT(data, doc.lim().cmapWork))
 			}
 			return noteFontProgramLimits(doc, parseCFF(data))
 		}
@@ -1161,7 +1161,7 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 // Document in scope, so this is where a trip re-enters the run's recorder.
 func noteFontProgramLimits(doc *Document, fp *fontProgram) *fontProgram {
 	if fp != nil && fp.cmapPartial {
-		noteLimit(doc, limitCmapWork, "an embedded font's cmap subtable was too large to read completely; the glyph-coverage and .notdef checks for that font were skipped rather than run against a partial character map", 0)
+		noteLimit(doc, limitCmapWork, fmt.Sprintf("an embedded font's cmap subtable needed more than %s units of expansion work to read completely; the glyph-coverage and .notdef checks for that font were skipped rather than run against a partial character map", limitBound(int64(doc.lim().cmapWork), defaultMaxCmapWork)), 0)
 	}
 	return fp
 }
@@ -1493,7 +1493,7 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 	}
 	wMap, wComplete := parseCIDWidths(doc, desc.Get("W"))
 	if !wComplete {
-		noteLimit(doc, limitCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %d CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", maxCIDRange), u.objNum)
+		noteLimit(doc, limitCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", limitBound(int64(doc.lim().cidRangeSpan), defaultMaxCIDRangeSpan)), u.objNum)
 	}
 
 	var errs []ValidationError
@@ -1799,14 +1799,14 @@ func cidToGID(doc *Document, desc *Dictionary, cid int) (int, bool) {
 	return cid, true
 }
 
-// maxCIDRange bounds the number of CIDs a single /W range entry may span. CIDs
+// The number of CIDs a single /W range entry may span defaults to
+// defaultMaxCIDRangeSpan; a caller can change it with WithMaxCIDRangeSpan. CIDs
 // are 16-bit, so a well-formed range covers at most the whole CID space; this
 // matches the ceiling the ToUnicode and CMap scanners already apply.
-const maxCIDRange = 65536
 
 // parseCIDWidths parses a CIDFont /W array into CID -> width. The second result
-// reports that maxCIDRange dropped at least one range entry, so the map is
-// missing widths the file does declare.
+// reports that the CID-range span limit dropped at least one range entry, so
+// the map is missing widths the file does declare.
 //
 // This distinction is load-bearing. A missing entry is not "this CID has no
 // declared width" — the caller's fallback for that is /DW, default 1000 — and
@@ -1844,7 +1844,7 @@ func parseCIDWidths(doc *Document, wObj Object) (map[int]float64, bool) {
 				case c < 0 || cLast < c:
 					// Malformed, not over-budget: an inverted or negative
 					// range declares nothing, so nothing is missing.
-				case cLast-c >= maxCIDRange:
+				case cLast-c >= doc.lim().cidRangeSpan:
 					complete = false
 				default:
 					for cid := c; cid <= cLast; cid++ {

@@ -183,7 +183,7 @@ each tied to an observed failure:
   ≤ 2^20 referred segments.
 - **Type-4 function work budget** (`function_ps.go`). A tint transform is
   evaluated once per pixel, so an unbounded program is a CPU denial of service.
-  `maxPSSteps` (2^20 operators per evaluation) bounds it; depth and stack caps
+  `WithMaxPostScriptSteps` (2^20 operators per evaluation) bounds it; depth and stack caps
   alone do not, because an `if`/`ifelse` program can fan out to exponentially
   many operators while staying shallow. `maxFunctionDepth` (32) bounds type-3
   stitching recursion.

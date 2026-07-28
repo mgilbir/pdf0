@@ -52,7 +52,7 @@ func TestCmapFormat4Budget(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		_, _ = parseCmapSubtable(b)
+		_, _ = parseCmapSubtable(b, defaultMaxCmapWork)
 		close(done)
 	}()
 	select {
@@ -92,7 +92,7 @@ func TestCmapFormat4SegmentStartingAtZero(t *testing.T) {
 		{0x0000, 0x0002, 100},
 		{0x0041, 0x0042, 200},
 		{0xFFFF, 0xFFFF, 1}, // sentinel, maps nothing
-	}))
+	}), defaultMaxCmapWork)
 	want := map[rune]int{0: 100, 1: 101, 2: 102, 0x41: 0x41 + 200, 0x42: 0x42 + 200}
 	for r, gid := range want {
 		if m[r] != gid {
@@ -107,7 +107,7 @@ func TestCmapFormat4SegmentStartingAtZero(t *testing.T) {
 // TestCmapFormat4TerminalSegment ensures a segment that runs up to 0xFFFF maps
 // its last code and still terminates.
 func TestCmapFormat4TerminalSegment(t *testing.T) {
-	m, _ := parseCmapSubtable(buildCmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}))
+	m, _ := parseCmapSubtable(buildCmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}), defaultMaxCmapWork)
 	if m[0xFFFE] != 0x7FFE || m[0xFFFF] != 0x7FFF {
 		t.Errorf("terminal segment: got %v, want U+FFFE->0x7FFE, U+FFFF->0x7FFF", m)
 	}
@@ -119,7 +119,7 @@ func TestCmapFormat4InvertedSegment(t *testing.T) {
 	m, _ := parseCmapSubtable(buildCmapFormat4([][3]int{
 		{0x0050, 0x0040, 300}, // inverted
 		{0x0041, 0x0041, 200},
-	}))
+	}), defaultMaxCmapWork)
 	if len(m) != 1 || m[0x41] != 0x41+200 {
 		t.Errorf("inverted segment: got %v, want only U+0041", m)
 	}
@@ -132,11 +132,11 @@ func TestCmapUnsupportedFormatIsNil(t *testing.T) {
 	for _, format := range []int{2, 13, 14} {
 		sub := make([]byte, 64)
 		sub[0], sub[1] = byte(format>>8), byte(format)
-		if m, _ := parseCmapSubtable(sub); m != nil {
+		if m, _ := parseCmapSubtable(sub, defaultMaxCmapWork); m != nil {
 			t.Errorf("format %d subtable: got %v, want nil", format, m)
 		}
 	}
-	if m, _ := parseCmapSubtable(make([]byte, 100)); m != nil {
+	if m, _ := parseCmapSubtable(make([]byte, 100), defaultMaxCmapWork); m != nil {
 		t.Errorf("truncated format 0 subtable: got %v, want nil", m)
 	}
 }
@@ -165,7 +165,7 @@ func TestCmapFormat12Groups(t *testing.T) {
 		{0x0000, 0x0002, 100},
 		{0x0041, 0x0043, 200},
 		{0x0100, 0x0100, 0}, // maps to .notdef: recorded as no mapping at all
-	}))
+	}), defaultMaxCmapWork)
 	want := map[rune]int{0: 100, 1: 101, 2: 102, 0x41: 200, 0x42: 201, 0x43: 202}
 	for r, gid := range want {
 		if m[r] != gid {
@@ -183,7 +183,7 @@ func TestCmapFormat12Astral(t *testing.T) {
 	m, _ := parseCmapSubtable(buildCmapFormat12([][3]uint32{
 		{0xFFFE, 0x10001, 900},
 		{0x1F600, 0x1F601, 1000},
-	}))
+	}), defaultMaxCmapWork)
 	want := map[rune]int{
 		0xFFFE: 900, 0xFFFF: 901, 0x10000: 902, 0x10001: 903,
 		0x1F600: 1000, 0x1F601: 1001,
@@ -228,7 +228,7 @@ func TestCmapFormat12Budget(t *testing.T) {
 		done := make(chan int, 1)
 		start := time.Now()
 		go func() {
-			mm, _ := parseCmapSubtable(b)
+			mm, _ := parseCmapSubtable(b, defaultMaxCmapWork)
 			done <- len(mm)
 		}()
 		select {
@@ -271,7 +271,7 @@ func TestCmapFormat12Truncated(t *testing.T) {
 		}(),
 	}
 	for name, b := range cases {
-		if m, _ := parseCmapSubtable(b); m != nil {
+		if m, _ := parseCmapSubtable(b, defaultMaxCmapWork); m != nil {
 			t.Errorf("%s: got %v, want nil", name, m)
 		}
 	}
@@ -286,7 +286,7 @@ func TestCmapFormat12MalformedGroups(t *testing.T) {
 		{0x110000, 0x110002, 400}, // past the end of Unicode
 		{0x0060, 0x0060, 0x10000}, // glyph id wider than 16 bits
 		{0x0041, 0x0041, 200},
-	}))
+	}), defaultMaxCmapWork)
 	if len(m) != 1 || m[0x41] != 200 {
 		t.Errorf("malformed groups: got %v, want only U+0041->200", m)
 	}
@@ -331,7 +331,7 @@ func TestCmapSubtablePreference(t *testing.T) {
 		{{3, 1, bmp}, {3, 10, full}},
 		{{3, 10, full}, {3, 1, bmp}},
 	} {
-		fp := parseSFNT(buildSFNTWithCmapSubtables(order))
+		fp := parseSFNT(buildSFNTWithCmapSubtables(order), defaultMaxCmapWork)
 		if fp == nil {
 			t.Fatalf("parseSFNT returned nil")
 		}
@@ -348,7 +348,7 @@ func TestCmapSubtablePreference(t *testing.T) {
 	fp := parseSFNT(buildSFNTWithCmapSubtables([]sub{
 		{1, 0, buildCmapFormat4([][3]int{{0x0041, 0x0041, 1}})},
 		{3, 1, bmp},
-	}))
+	}), defaultMaxCmapWork)
 	if fp.cmap[0x41] != 100 {
 		t.Errorf("(3,1)-only font: cmap[U+0041] = %d, want 100", fp.cmap[0x41])
 	}
@@ -358,13 +358,13 @@ func TestCmapSubtablePreference(t *testing.T) {
 	fp = parseSFNT(buildSFNTWithCmapSubtables([]sub{
 		{3, 1, bmp},
 		{3, 10, make([]byte, 16)}, // format 0 in a (3,10) slot, truncated
-	}))
+	}), defaultMaxCmapWork)
 	if fp.cmap[0x41] != 100 {
 		t.Errorf("unreadable (3,10): cmap[U+0041] = %d, want the (3,1) mapping 100", fp.cmap[0x41])
 	}
 
 	// A Unicode-platform subtable is used when there is no Windows one.
-	fp = parseSFNT(buildSFNTWithCmapSubtables([]sub{{0, 4, full}}))
+	fp = parseSFNT(buildSFNTWithCmapSubtables([]sub{{0, 4, full}}), defaultMaxCmapWork)
 	if fp.cmap[0x1F600] != 600 {
 		t.Errorf("(0,4) subtable ignored: %v", fp.cmap)
 	}
@@ -402,7 +402,7 @@ func buildCmapFormat6(first int, gids []int) []byte {
 // when the caller narrows the map to uint16.
 func TestCmapFormat6PastBMP(t *testing.T) {
 	// firstCode 0xFFFE with four entries runs to 0x10001.
-	m, _ := parseCmapSubtable(buildCmapFormat6(0xFFFE, []int{7, 8, 9, 10}))
+	m, _ := parseCmapSubtable(buildCmapFormat6(0xFFFE, []int{7, 8, 9, 10}), defaultMaxCmapWork)
 	if len(m) != 2 || m[0xFFFE] != 7 || m[0xFFFF] != 8 {
 		t.Errorf("format 6 past the BMP: got %v, want only U+FFFE->7 and U+FFFF->8", m)
 	}
@@ -437,7 +437,7 @@ func TestCmapMappingNothingIsNil(t *testing.T) {
 		}()),
 	}
 	for name, b := range cases {
-		if m, _ := parseCmapSubtable(b); m != nil {
+		if m, _ := parseCmapSubtable(b, defaultMaxCmapWork); m != nil {
 			t.Errorf("%s: got a non-nil map with %d entries, want nil", name, len(m))
 		}
 	}
@@ -456,7 +456,7 @@ func TestCmapEmptySubtableDoesNotDisplace(t *testing.T) {
 	fp := parseSFNT(buildSFNTWithCmapSubtables([]sub{
 		{3, 1, bmp},
 		{3, 10, buildCmapFormat12(nil)}, // well formed, maps nothing
-	}))
+	}), defaultMaxCmapWork)
 	if fp.cmap[0x41] != 100 {
 		t.Errorf("empty (3,10): cmap[U+0041] = %d, want the (3,1) mapping 100", fp.cmap[0x41])
 	}

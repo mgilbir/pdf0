@@ -7,24 +7,29 @@ import (
 
 // TestObjectStreamSplitBudget guards that Write never packs more objects into a
 // single object stream than a reader will decompress. A reader caps flate output
-// at maxDecodeSize; a container whose decompressed size exceeds that is written
-// but rejected on the next Read, silently losing every object it holds. Write
-// must therefore split a large object set across several containers, each under
-// objStmMaxRaw, so the whole document survives Read -> Write -> Read.
+// at the decoded-stream limit; a container whose decompressed size exceeds that
+// is written but rejected on the next Read, silently losing every object it
+// holds. Write must therefore split a large object set across several
+// containers, each under limits.objStmMaxRaw, so the whole document survives
+// Read -> Write -> Read.
 //
-// The test lowers objStmMaxRaw so a modest set of objects forces a split without
-// building a 100 MB document; it then asserts every object round-trips, more
-// than one container was emitted, and no container decompresses beyond the cap.
+// The write-side cap derives from the reader's, so lowering the reader's cap via
+// WithMaxDecodedStreamBytes lowers both together — which is the property that
+// keeps writer and reader consistent. The test uses that to force a split
+// without building a 100 MB document; it then asserts every object round-trips,
+// more than one container was emitted, and no container decompresses beyond the
+// cap.
 func TestObjectStreamSplitBudget(t *testing.T) {
-	saved := objStmMaxRaw
-	objStmMaxRaw = 4096 // small enough that a few padded objects need several containers
-	defer func() { objStmMaxRaw = saved }()
+	// 8192 makes objStmMaxRaw 4096 — small enough that a few padded objects need
+	// several containers.
+	lim := resolveLimits([]Option{WithMaxDecodedStreamBytes(8192)})
 
 	const n = 200
 	doc := &Document{
 		Objects:        make(map[int]*IndirectObject, n+2),
 		usedXRefStream: true, // triggers object-stream packing on Write
 		Version:        "2.0",
+		limits:         lim,
 	}
 	catalog := &Dictionary{}
 	catalog.Set("Type", Name("Catalog"))
@@ -58,12 +63,12 @@ func TestObjectStreamSplitBudget(t *testing.T) {
 	}
 	for cnum := range containers {
 		st := writeSet[cnum].Value.(*Stream)
-		raw, err := decodeStreamData(st)
+		raw, err := decodeStreamData(st, lim)
 		if err != nil {
 			t.Fatalf("container %d: decode: %v", cnum, err)
 		}
-		if len(raw) >= maxDecodeSize {
-			t.Errorf("container %d decompresses to %d bytes, at/over the reader cap %d", cnum, len(raw), maxDecodeSize)
+		if len(raw) >= lim.decodedStreamBytes {
+			t.Errorf("container %d decompresses to %d bytes, at/over the reader cap %d", cnum, len(raw), lim.decodedStreamBytes)
 		}
 	}
 

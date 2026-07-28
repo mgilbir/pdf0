@@ -115,7 +115,7 @@ thousands of objects). `ValidatePDFABytes` therefore installs a `validationCache
   scan of `doc.Objects` can never see (audit A9); `dictNum` — the `*Dictionary` →
   object number reverse index behind `dictObjNum` / `objNumForDict`
 - `content` — `*Stream` → decoded bytes, under an aggregate 512 MB budget
-  (`maxDecodedContentTotal`) that negatively caches once exhausted, bounding what
+  (`WithMaxDecodedContentBytes`) that negatively caches once exhausted, bounding what
   a flate bomb can force
 - `fontUsage`, `fontEvents`, `usedNames`, `streamFacts` — per-stream results of
   the executed-content walk; `psProgs` — parsed type-4 PostScript programs (a tint
@@ -271,8 +271,8 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
   `TestCorpusConformanceSuites` only `PDF_A-4f`/`PDF_A-4e` assert FP=0 on their
   pass files; the a/u/UA pass files are minimal per-clause fixtures that
   false-positive by design.
-- **Content decoding is budgeted.** A stream over `maxContentStreamSize` (64 MB)
-  decoded, or any stream once the run has spent `maxDecodedContentTotal` (512 MB),
+- **Content decoding is budgeted.** A stream over `WithMaxContentStreamBytes` (64 MB)
+  decoded, or any stream once the run has spent `WithMaxDecodedContentBytes` (512 MB),
   yields `nil` — indistinguishable from "undecodable". A rule reading `nil` content
   as "clean" silently under-reports on a hostile file; treat it as "unknown".
 - **Rule IDs are load-bearing.** `TestRuleCoverage` greps non-test source for

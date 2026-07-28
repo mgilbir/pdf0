@@ -282,14 +282,20 @@ Font findings are also produced outside these files: `checkFontsEmbedded` and
 Each exists because a crafted file reached it. Checks run behind `recover()`,
 but a hang or an OOM is not something `recover` catches.
 
-- **`/W` range span** (`maxCIDRange = 65536`) — `parseCIDWidths` skips inverted
+Two of these are configurable per document; see
+[architecture.md](architecture.md#resource-limits).
+
+- **`/W` range span** (`WithMaxCIDRangeSpan`, default 65536) — `parseCIDWidths` skips inverted
   and over-wide ranges. `[0 2000000000 500]` would drive ~2e9 map inserts, and
   it runs *before* the visible-render gate, so merely selecting a Type 0 font
   with `Tf` triggered it (audit C1, `fonts_wrange_test.go`).
-- **cmap format 4 total work** (`maxCmapFormat4Work = 1 << 18`) — a valid
+- **cmap format 4 total work** (`WithMaxCmapWork`, default `1 << 18`) — a valid
   subtable partitions the BMP in ~65536 iterations, a hostile one with many
-  full-range segments is O(segments × 65535) (audit C10).
-- **cmap format 12 total work** (`maxCmapFormat12Work = 1 << 18`) — `nGroups` is
+  full-range segments is O(segments × 65535) (audit C10). On trip the partial
+  map is returned and marked partial (`fontProgram.cmapPartial`), the glyph rules
+  decline, and the trip is reported — see [limits.md](limits.md).
+- **cmap format 12 total work** (the same `WithMaxCmapWork` budget, charged
+  per subtable) — `nGroups` is
   a `uint32` and one group may span the whole of Unicode (0x110000 codes), so the
   expansion is entirely font-controlled. The budget charges one unit per group
   *and* one per code, which bounds the group loop as well as the map; on trip the

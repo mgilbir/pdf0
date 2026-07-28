@@ -164,10 +164,9 @@ func checkCmapInvariants(t *testing.T, what string, m map[rune]int, emptyAllowed
 	if len(m) == 0 && !emptyAllowed {
 		t.Fatalf("%s: returned an empty non-nil map; unreadable subtables must return nil", what)
 	}
-	budget := maxCmapFormat4Work
-	if maxCmapFormat12Work > budget {
-		budget = maxCmapFormat12Work
-	}
+	// Formats 4 and 12 share one configurable budget (WithMaxCmapWork); these
+	// targets always parse at the default, so that is the bound to assert.
+	budget := defaultMaxCmapWork
 	if len(m) > budget {
 		t.Fatalf("%s: %d entries exceeds the work budget of %d", what, len(m), budget)
 	}
@@ -259,7 +258,7 @@ func FuzzCmapSubtable(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		m, partial := parseCmapSubtable(data)
+		m, partial := parseCmapSubtable(data, defaultMaxCmapWork)
 		checkCmapInvariants(t, "parseCmapSubtable", m, false)
 		// A partial result is only meaningful alongside a map: reporting "this
 		// is a prefix" while returning nothing would leave a consumer unable to
@@ -317,7 +316,7 @@ func FuzzSFNTCmap(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		fp := parseSFNT(data)
+		fp := parseSFNT(data, defaultMaxCmapWork)
 		if fp == nil {
 			return
 		}

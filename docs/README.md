@@ -60,7 +60,10 @@ guaranteed.
 
 **[limits.md](limits.md)** — reference plus explanation. Every resource guard
 in the package, classified loud / silently lossy / silently wrong, what each
-truncated value feeds into, and the one mechanism that reports a trip.
+truncated value feeds into, and the one mechanism that reports a trip. Eleven of
+those guards are configurable; the options are in
+[architecture.md](architecture.md#resource-limits) and the design record behind
+them in [proposals/configurable-limits.md](proposals/configurable-limits.md).
 
 **[cli.md](cli.md)** — reference for `cmd/pdf0`, a small command-line front end
 used mainly for poking at files during development. pdf0 is a library first; this

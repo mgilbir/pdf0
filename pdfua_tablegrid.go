@@ -1,7 +1,5 @@
 package pdf0
 
-import "strconv"
-
 // Table-grid analysis for PDF/UA structure validation. A table's TR/TH/TD
 // elements, together with their RowSpan/ColSpan table attributes, are laid out
 // on a grid exactly as a renderer would. Definite structural defects — a span
@@ -9,11 +7,11 @@ import "strconv"
 // span the same number of columns (a hole) — are reported. Only unambiguous
 // defects are flagged so a well-formed table never raises a false positive.
 
-// maxGridFills bounds the number of grid slots gridDefects will fill for one
-// table. It caps the work a pathological table (huge RowSpan/ColSpan values)
-// can force. It counts actually-filled slots, so a large but sparse table is
-// unaffected; the largest real tables observed fill well under a million.
-const maxGridFills = 1 << 24 // 16,777,216
+// The number of grid slots gridDefects will fill for one table defaults to
+// defaultMaxTableGridFills; a caller can change it with WithMaxTableGridFills.
+// It caps the work a pathological table (huge RowSpan/ColSpan values) can force.
+// It counts actually-filled slots, so a large but sparse table is unaffected;
+// the largest real tables observed fill well under a million.
 
 // tableCell is one TH/TD with its resolved span.
 type tableCell struct {
@@ -74,9 +72,10 @@ func (d *Document) checkUATableGrid(cat *Dictionary) []UAViolation {
 			continue
 		}
 		if rows := d.collectTableRows(n.elem, roleMap); len(rows) > 0 {
-			defects, complete := gridDefects(rows)
+			maxFills := d.lim().tableGridFills
+			defects, complete := gridDefects(rows, maxFills)
 			if !complete {
-				noteLimit(d, limitGridFills, "a table's RowSpan/ColSpan values imply more than "+strconv.Itoa(maxGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.dictObjNum(n.elem))
+				noteLimit(d, limitGridFills, "a table's RowSpan/ColSpan values imply more than "+limitBound(maxFills, defaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.dictObjNum(n.elem))
 			}
 			v = append(v, defects...)
 		}
@@ -180,10 +179,11 @@ func (d *Document) tableAttrDicts(cell *Dictionary) []*Dictionary {
 	return out
 }
 
-// gridDefects lays the rows onto a grid and reports definite defects. The
-// second result reports that maxGridFills stopped the layout, so "no defects"
-// means "not determined" rather than "clean".
-func gridDefects(rows []tableRow) ([]UAViolation, bool) {
+// gridDefects lays the rows onto a grid and reports definite defects. maxFills
+// bounds the number of slots it will fill; see WithMaxTableGridFills. The
+// second result reports that maxFills stopped the layout, so "no defects" means
+// "not determined" rather than "clean".
+func gridDefects(rows []tableRow, maxFills int64) ([]UAViolation, bool) {
 	nRows := len(rows)
 	// occupied[r] is the set of columns already filled in row r (by a cell in
 	// this or an earlier row via a row span).
@@ -196,7 +196,7 @@ func gridDefects(rows []tableRow) ([]UAViolation, bool) {
 	outOfRows := false
 
 	// Total grid slots filled so far. Bound it: a table whose spans imply more
-	// than maxGridFills occupied slots — e.g. a single cell with a multi-million
+	// than maxFills occupied slots — e.g. a single cell with a multi-million
 	// ColSpan, or many such cells — is pathological and is not laid out, so a
 	// small degenerate table cannot force billions of map writes. This counts
 	// actually-filled slots (not the nominal rows×cols area), so a genuinely
@@ -222,7 +222,7 @@ func gridDefects(rows []tableRow) ([]UAViolation, bool) {
 			cs := cell.colSpan
 			// Would filling this cell (er×cs slots) exceed the budget? The
 			// division keeps the comparison from overflowing on a huge span.
-			if er > 0 && cs > 0 && int64(er) > (maxGridFills-fills)/int64(cs) {
+			if er > 0 && cs > 0 && int64(er) > (maxFills-fills)/int64(cs) {
 				oversize = true
 				break
 			}

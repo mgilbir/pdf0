@@ -148,3 +148,73 @@ Validation reads the object model and reports findings; it never mutates the
 document. Ten standards are supported and the PDF/A engine has its own dispatch,
 executed-content model and rule-file map — all of that lives in
 [validators.md](validators.md).
+
+## Resource limits
+
+pdf0 parses untrusted input, so every unbounded loop and every allocation sized
+by a number the file supplies is capped. Those caps are defaults chosen to be
+safe: **a caller who configures nothing gets exactly the behaviour pdf0 has
+always had.**
+
+A fixed number cannot be right for every caller, though. A batch converter on a
+workstation and a public upload endpoint want genuinely different answers to
+"how much may one untrusted document cost me". Eleven limits are therefore
+settable per document, as variadic options on `Read`:
+
+```go
+doc, err := pdf0.Read(r, size,
+	pdf0.WithMaxDecodedStreamBytes(8<<20),   // stricter bomb ceiling
+	pdf0.WithMaxDecodedContentBytes(64<<20), // stricter whole-run budget
+)
+```
+
+`Option` values resolve once at the entry point into an unexported struct that
+is stored on the `Document`, so every validator and extractor run on that
+document inherits the same configuration. The struct travels by value and is
+never mutated after resolution, so validating one `Document` from several
+goroutines stays safe — the property package-level `var`s would have lost.
+
+| Option | Default | Bounds |
+|--------|---------|--------|
+| `WithMaxDecodedStreamBytes` | 100 MB | decompressed size of any one stream — the bomb ceiling |
+| `WithMaxDecodedContentBytes` | 512 MB | total content decoded by one validation run |
+| `WithMaxObjectStreamBytes` | 512 MB | total decompressed `/ObjStm` in one document |
+| `WithMaxContentStreamBytes` | 64 MB | one content stream or image sample buffer |
+| `WithMaxICCProfileBytes` | 8 MiB | a decoded ICC profile |
+| `WithMaxXMPPacketBytes` | 4 MiB | an XMP packet the property checks build a tree for |
+| `WithMaxCIDRangeSpan` | 65536 | CIDs one `/W` range entry may span |
+| `WithMaxRoleMapSteps` | 1<<20 | `/RoleMap` chain-follow steps per PDF/UA check |
+| `WithMaxTableGridFills` | 1<<24 | grid slots filled for one PDF/UA table |
+| `WithMaxPostScriptSteps` | 1<<20 | operators one type-4 function evaluation may run |
+| `WithMaxCmapWork` | 1<<18 | work spent expanding one TrueType cmap subtable of format 4 or 12 |
+
+Defaults are evidence-based where the evidence exists: the figures come from
+measuring the veraPDF corpus (2,907 files) and a 978-file Common Crawl sample.
+No real file in either comes within 2x of any of these.
+
+Two things are deliberately *not* knobs:
+
+- **The write-side object-stream cap derives from `WithMaxDecodedStreamBytes`**
+  rather than being settable on its own. A container the writer emits but the
+  reader then refuses loses every object it holds, and setting the two
+  independently is exactly how that happens. The writer follows the reader by
+  construction.
+- **Depth caps** (`maxParseDepth`, `maxPageTreeDepth`, the serializer and
+  compare depths, the 64-hop `Resolve` bound) stay internal. They guard against
+  exhausting the goroutine stack, which is an *uncatchable* fatal error, so
+  raising one trades a clean error for a process abort. No real file comes close:
+  the deepest object nesting measured is 6 of 1000, the deepest page tree 4 of 64.
+
+The JBIG2 pixel budgets and the lexer's token-gap bound are also internal, for
+threading cost rather than principle;
+[proposals/configurable-limits.md](proposals/configurable-limits.md) records the
+measurement behind each decision.
+
+Configuring a limit is only half the story: a caller also has to be able to tell
+that one fired. A guard that trips leaves a check with an incomplete result, and
+the rule the package follows is that **no check may assert a violation on the
+basis of one**. Instead the trip is reported as its own finding under the
+reserved rule identifier `"limit"`, which `IsCheckerFinding` distinguishes from a
+real non-conformance; the message names the guard and says whether the bound it
+hit was pdf0's default or one the caller set. [limits.md](limits.md) classifies
+every guard in the package on exactly this axis.
