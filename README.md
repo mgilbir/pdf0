@@ -25,13 +25,15 @@ go get github.com/mgilbir/pdf0
   | PDF/VT-1, PDF/VT-2 | `ValidatePDFVT` / `ValidatePDFVT2` | yes |
   | PDF/R | `ValidatePDFR` | yes |
   | DPart hierarchy | `ValidateDParts` | yes |
-  | Factur-X, Order-X containers | `ValidateFacturX` / `ValidateOrderX` | no — see below |
+  | Factur-X, Order-X containers | `ValidateFacturX` / `ValidateOrderX` | yes — in a result struct, see below |
 
   The six PDF-standard validators are free functions taking the `*Document`
   first and returning findings that satisfy the shared `Violation` interface, so
-  results combine across validators. **Factur-X and Order-X are the exception:**
-  they return a result struct whose `Violations` are `formalis.Violation`, an
-  external type this package cannot extend — adapt them explicitly.
+  results combine across validators. Factur-X and Order-X return a result
+  *struct* rather than a slice, because they also carry the extracted invoice
+  XML, the conformance level the container declared, and what the invoice rule
+  engine did not evaluate — but `res.Violations` holds `FacturXViolation` /
+  `OrderXViolation`, which satisfy `Violation` like every other finding type.
 - **Encrypt / decrypt** with the standard security handler — RC4, AES-128, and
   AES-256, via `ReadWithPassword`, `SetEncryption`, and `RemoveEncryption`
   (`Document.Locked` reports a file that could not be decrypted).

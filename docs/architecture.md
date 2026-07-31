@@ -263,17 +263,31 @@ images — rather than to a bounded structural count.
 |---|---|---|
 | `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
 | `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
-| All nine validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`) | `ValidateFacturX`, `ValidateOrderX` | Not on cost — these two *are* document-scale, since each runs a full PDF/A-3 validation. It is that their findings are `formalis.Violation` values, which cannot satisfy `pdf0.Violation` and so are outside `IsCheckerFinding`. A cancelled run would have no way to say "pdf0 stopped early" that a caller could tell apart from a conformance failure, which is the whole guarantee below. (The invoice half is the `formalis` rule engine, which takes no context either.) A caller under a deadline can validate the PDF/A-3 base with `ValidatePDFABytesContext` first. |
+| All eleven validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `FacturXViolation` / `OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
 | `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. |
 | | `Images` | An iterator is already cancellable by `break`, and because each image is decoded only as it is yielded, breaking after image N skips exactly what a context checked between images would have. |
 | | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Bounded by the signature count (single digits), and each signature's crypto is bounded. |
 
 The rule that falls out of the third row is worth stating on its own: **an entry
 point gets a `…Context` variant only if it has somewhere honest to report the
-cancellation.** For the nine validators that is a finding under the reserved
+cancellation.** For the eleven validators that is a finding under the reserved
 rule `limit`; for `Read` and `Write` it is a returned error; for the two
 extractors it is a partial result *plus* an error. Nothing is given a variant
 that would have to swallow the fact.
+
+`ValidateFacturX` and `ValidateOrderX` are the one place that rule has to hold
+across a module boundary. `formalis.RuleLimit` and pdf0's `limitRule` are both
+the string `"limit"`, deliberately, so a caller draining one mixed slice of
+container and invoice findings has one name to look for; the adoption seam
+(`adoptInvoiceFindings`) therefore takes the rule engine's identifiers verbatim,
+exactly as `adoptPDFAFindings` passes the reserved ones through unprefixed. A
+`pdfa-3/limit` — or an `invoice/limit` — would be invisible to a caller keying on
+`limit`, which is the single failure the reserved identifier exists to prevent.
+
+The two halves each report a cancellation they saw, in their own words. Neither
+covers the container checks between them, nor a container with no embedded XML to
+hand over, so the entry point polls once on the way out and speaks only when
+neither half has (`reportCancellation`).
 
 ### Where the check happens, and what latency that buys
 

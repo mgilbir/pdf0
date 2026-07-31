@@ -61,7 +61,8 @@
 // ReadWithPasswordContext, Document.WriteContext, ValidatePDFAContext,
 // ValidatePDFABytesContext, ValidatePDFUAContext, ValidatePDFUA2Context,
 // ValidatePDFXContext, ValidatePDFVTContext, ValidatePDFVT2Context,
-// ValidatePDFRContext, ValidateDPartsContext, Document.ExtractTextContext and
+// ValidatePDFRContext, ValidateDPartsContext, ValidateFacturXContext,
+// ValidateOrderXContext, Document.ExtractTextContext and
 // Document.ExtractImagesContext:
 //
 //	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -76,9 +77,12 @@
 // entry point whose cost is bounded rather than document-scale — ExtractPageText
 // (one page), Images (an iterator the caller can break out of),
 // Document.VerifySignatures — deliberately has no variant. ValidateFacturX and
-// ValidateOrderX have none for a different reason: their findings are
-// formalis.Violation values, which IsCheckerFinding cannot classify, so a
-// cancelled run could not be distinguished from a conformance failure. See
+// ValidateOrderX had none until formalis v0.2.0, for reasons that have both
+// lapsed: their findings were formalis.Violation values, which IsCheckerFinding
+// could not classify, and the invoice half of the work was a rule engine that
+// took no context. The findings are now this package's own types and the engine
+// takes a context, so both halves of a Factur-X validation are cancellable and a
+// cancelled run reports the reserved "limit" rule like every other. See
 // docs/architecture.md#cancellation for the full table.
 //
 // A cancelled validation returns the findings it had gathered plus one under the
@@ -120,9 +124,11 @@
 // ValidatePDFUA2, ValidatePDFX, ValidatePDFVT, ValidatePDFVT2, ValidatePDFR,
 // ValidateDParts), and every finding type satisfies the Violation interface, so
 // findings from different validators can be collected together. ValidateFacturX
-// and ValidateOrderX are the exception: they return a result struct whose
-// Violations are formalis.Violation values, an external type this package cannot
-// extend with the interface methods. See the Violation documentation.
+// and ValidateOrderX differ only in shape: they return a result struct, because
+// they also carry the extracted invoice XML, the conformance level and what the
+// invoice rule engine did not evaluate, but the findings inside it are
+// FacturXViolation and OrderXViolation values and satisfy Violation like the
+// rest. See the Violation documentation.
 //
 // Every validator returns its findings in a deterministic order (by rule, then
 // object, then message) and runs its checks under a recover boundary: a check

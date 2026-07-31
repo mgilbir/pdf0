@@ -2,10 +2,10 @@ package pdf0
 
 // Violation is the common face of every validator finding. Each validator
 // keeps its own concrete type — ValidationError (PDF/A), UAViolation (PDF/UA),
-// PDFXViolation, PDFVTViolation, PDFRViolation, DPartViolation — with the
-// fields and Error formatting of its standard, but all of them satisfy this
-// interface, so findings from different validators can be collected, filtered
-// and reported together:
+// PDFXViolation, PDFVTViolation, PDFRViolation, DPartViolation,
+// FacturXViolation, OrderXViolation — with the fields and Error formatting of
+// its standard, but all of them satisfy this interface, so findings from
+// different validators can be collected, filtered and reported together:
 //
 //	var all []pdf0.Violation
 //	for _, e := range pdf0.ValidatePDFA(doc, pdf0.PDFA2b) {
@@ -15,8 +15,15 @@ package pdf0
 //		all = append(all, e)
 //	}
 //
-// (The Factur-X and Order-X results carry formalis.Violation values, an
-// external type this package cannot extend.)
+// There is no longer an exception. The Factur-X and Order-X validators return a
+// result struct rather than a slice, because they carry the extracted invoice
+// XML and its coverage alongside the findings, but the findings themselves are
+// FacturXViolation and OrderXViolation values and satisfy this interface like
+// any other. They used to hold formalis.Violation, an external type this package
+// could not extend, which also put them outside IsCheckerFinding — so a
+// cancelled or panicking run had no way to say "pdf0 stopped early" that a
+// caller could tell apart from a conformance failure. That is why those two
+// validators had no Context variant, and why they have one now.
 type Violation interface {
 	error
 	// RuleID returns the identifier of the violated rule — an ISO clause like
@@ -64,6 +71,21 @@ func (v DPartViolation) RuleID() string { return v.Rule }
 // ObjectNum returns the anchoring object number, 0 if N/A.
 func (v DPartViolation) ObjectNum() int { return v.Object }
 
+// RuleID returns the Factur-X container rule identifier, or the identifier the
+// invoice rule engine minted for an adopted finding. It is unique only within
+// FacturXViolation.Source, which names the authority.
+func (v FacturXViolation) RuleID() string { return v.Rule }
+
+// ObjectNum returns the anchoring object number, 0 if N/A.
+func (v FacturXViolation) ObjectNum() int { return v.Object }
+
+// RuleID returns the Order-X container rule identifier, or the identifier the
+// order rule engine minted for an adopted finding.
+func (v OrderXViolation) RuleID() string { return v.Rule }
+
+// ObjectNum returns the anchoring object number, 0 if N/A.
+func (v OrderXViolation) ObjectNum() int { return v.Object }
+
 // Every finding type satisfies Violation.
 var _ = []Violation{
 	ValidationError{},
@@ -72,4 +94,6 @@ var _ = []Violation{
 	PDFVTViolation{},
 	PDFRViolation{},
 	DPartViolation{},
+	FacturXViolation{},
+	OrderXViolation{},
 }

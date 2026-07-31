@@ -52,15 +52,18 @@ for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA2b) {
 | PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]PDFVTViolation` | yes | yes |
 | PDF/R | `ValidatePDFR(doc)` | `[]PDFRViolation` | yes | yes |
 | DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]DPartViolation` | yes | yes |
-| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `FacturXResult` | **no** — see below | **no** — same reason |
-| Order-X container | `ValidateOrderX(doc, raw)` | `OrderXResult` | **no** — see below | **no** — same reason |
+| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `FacturXResult` | yes (`FacturXViolation`) | yes |
+| Order-X container | `ValidateOrderX(doc, raw)` | `OrderXResult` | yes (`OrderXViolation`) | yes |
 
-The last column is not a coincidence: the nine validators whose findings satisfy
-`Violation` are exactly the nine with a `…Context` variant. Cancellation is
-reported *as a finding* under the reserved rule `limit`, so an entry point that
-cannot carry a finding `IsCheckerFinding` can classify has no honest way to
+The last two columns move together, and that is not a coincidence: cancellation
+is reported *as a finding* under the reserved rule `limit`, so an entry point
+that cannot carry a finding `IsCheckerFinding` can classify has no honest way to
 report a cancelled run — see
-[architecture.md](architecture.md#which-entry-points-have-one).
+[architecture.md](architecture.md#which-entry-points-have-one). The two invoice
+containers were the standing exception on both counts until `formalis` v0.2.0:
+their findings were `formalis.Violation`, an external type this package could not
+extend, and the invoice half of the work was a rule engine that took no context.
+Both have lapsed, so both columns say yes.
 
 Signature and PAdES assessment are `*Document` methods with their own result
 types; see [signing.md](signing.md).
@@ -78,19 +81,19 @@ flowchart TD
         DP["ValidateDParts<br/>→ []DPartViolation"]
     end
 
-    subgraph invoice["Invoice containers — result structs, findings are formalis.Violation"]
-        FX["ValidateFacturX(doc, raw)<br/>→ FacturXResult{Violations, Profile, XMLName, XML}"]
-        OX["ValidateOrderX(doc, raw)<br/>→ OrderXResult{Violations, Profile, XMLName, XML}"]
+    subgraph invoice["Invoice containers — result structs, findings satisfy pdf0.Violation"]
+        FX["ValidateFacturX(doc, raw)<br/>→ FacturXResult{Violations, InvoiceWarnings,<br/>Profile, CIUS, XMLName, XML,<br/>InvoiceNotEvaluated, InvoiceComplete}"]
+        OX["ValidateOrderX(doc, raw)<br/>→ OrderXResult{Violations, OrderWarnings,<br/>Profile, XMLName, XML,<br/>OrderNotEvaluated, OrderComplete}"]
     end
 
     Doc --> pdfstd
     Doc --> invoice
 
     pdfstd --> V["[]pdf0.Violation<br/>RuleID() + ObjectNum()<br/>— combinable across standards"]
-    invoice -. "NOT convertible: formalis.Violation<br/>has no ObjectNum()" .-> V
+    invoice --> V
 ```
 
-### Combining findings — and the one exception
+### Combining findings
 
 The six PDF-standard validators keep their own concrete finding types but all
 satisfy `pdf0.Violation` (`error` + `RuleID()` + `ObjectNum()`), so a
@@ -106,22 +109,48 @@ for _, e := range pdf0.ValidatePDFUA(doc) {
 }
 ```
 
-**Factur-X and Order-X are the exception.** They return a result *struct*, not a
-slice, and its `Violations` field holds `formalis.Violation` — a type owned by
-`github.com/mgilbir/formalis`, which this package cannot extend with the
-interface methods. The values carry `Rule`, `Message` and `Object` fields, so
-adapt them explicitly if you need one combined list:
+Factur-X and Order-X return a result *struct* rather than a slice, because a
+container validation answers more than "what is wrong": it also yields the
+extracted invoice XML, the conformance level the container declared, and what
+the invoice rule engine did not evaluate. The findings inside it are ordinary
+`pdf0.Violation` values and append like the rest:
 
 ```go
 res := pdf0.ValidateFacturX(doc, raw)
 for _, v := range res.Violations {
-	fmt.Printf("[Factur-X %s] object %d: %s\n", v.Rule, v.Object, v.Message)
+	all = append(all, v)
 }
 ```
 
+They carry one field the PDF-standard findings do not: `Source`, the authority
+that defines the rule. It is the zero `formalis.Source` on pdf0's own container
+findings and names the rule's author on a finding adopted from the invoice rule
+engine, because a rule identifier such as `BR-01` is unique within its authority
+and not outside it.
+
+Three fields on the result are worth reading together:
+
+- `Violations` is the verdict: pdf0's container findings, the PDF/A-3 base's,
+  and the invoice engine's **fatal** findings.
+- `InvoiceWarnings` is the invoice engine's **advisory** findings — CEN flags
+  1,168 of the two EN 16931 syntax bindings' assertions `warning`, and a
+  conforming Factur-X EXTENDED invoice trips dozens by design, since carrying
+  more than the EN 16931 core is what EXTENDED is *for*. `pdf0.Violation` has no
+  severity, so folding these into `Violations` would make them indistinguishable
+  from a PDF/A-3 failure in any combined report.
+- `InvoiceNotEvaluated` / `InvoiceComplete` say what the rule set that ran does
+  **not** implement. "No findings" and "no findings, and here is what nobody
+  looked at" are different answers, and this is the second one. They are not
+  turned into findings: every rule set has gaps, so a finding per gap would fire
+  on every invoice ever validated.
+
 The EN 16931 / CIUS *invoice-content* rules live in `formalis`; pdf0 validates
 the PDF container (PDF/A-3 conformance, the embedded-file relationship, the XMP
-declaration) and hands the extracted XML over. See
+declaration) and hands the extracted XML over. Which rule set that XML is run
+through follows what the container declared: a Factur-X profile routes to the
+EN 16931 core at that profile, a CIUS conformance level (`XRECHNUNG`) routes to
+the rule set the invoice itself declares in BT-24, and a level that names neither
+is a `metadata` finding rather than a guess. See
 [ADR 0002](adr/0002-formalis-extraction.md).
 
 ## What an empty result means

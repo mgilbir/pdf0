@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"context"
 	"github.com/mgilbir/formalis"
 	"os"
 	"path/filepath"
@@ -11,47 +12,91 @@ import (
 
 const validOrderXML = `<SCRDMCCBDACIOMessageStructure>
 <ExchangedDocument><ID>ORD-1</ID><TypeCode>220</TypeCode>
-<IssueDateTime><DateTimeString>20240115</DateTimeString></IssueDateTime></ExchangedDocument>
+<IssueDateTime><DateTimeString format="102">20240115</DateTimeString></IssueDateTime></ExchangedDocument>
 <SupplyChainTradeTransaction><ApplicableHeaderTradeAgreement>
 <BuyerTradeParty><Name>Buyer Ltd</Name></BuyerTradeParty>
 <SellerTradeParty><Name>Seller Ltd</Name></SellerTradeParty>
 </ApplicableHeaderTradeAgreement></SupplyChainTradeTransaction></SCRDMCCBDACIOMessageStructure>`
 
 func TestValidateOrderXDocumentValid(t *testing.T) {
-	if v := formalis.ValidateOrderXML([]byte(validOrderXML)); len(v) != 0 {
-		t.Errorf("valid order flagged: %v", v)
+	rep, err := formalis.ValidateOrderXML(context.Background(), []byte(validOrderXML))
+	if err != nil {
+		t.Fatalf("valid order could not be read: %v", err)
+	}
+	if len(rep.Violations) != 0 {
+		t.Errorf("valid order flagged: %v", rep.Violations)
+	}
+	// The order rule engine checks five head terms out of the whole Order-X
+	// document rule set, so even a clean order is neither Complete nor
+	// Conformant. Pinning it here is what stops a later reading of "no findings"
+	// as "conforming order".
+	if rep.Complete() {
+		t.Error("the Order-X rule set has a published gap; a run over it cannot be complete")
+	}
+	if len(rep.NotEvaluated) == 0 {
+		t.Error("a run that cannot be complete must name what it did not evaluate")
 	}
 }
 
 func TestValidateOrderXDocumentViolations(t *testing.T) {
+	// The identifiers are formalis's own (ORDER-*, ORDER-root); it renamed them
+	// out of CEN's BR-O-* numbering, which EN 16931 had already taken for the
+	// "not subject to VAT" category family.
 	cases := []struct{ name, remove, rule string }{
-		{"not an order", "SCRDMCCBDACIOMessageStructure", "order-xml"},
-		{"no order number", "<ID>ORD-1</ID>", "BR-O-01"},
-		{"no issue date", "<IssueDateTime><DateTimeString>20240115</DateTimeString></IssueDateTime>", "BR-O-02"},
-		{"no type code", "<TypeCode>220</TypeCode>", "BR-O-03"},
-		{"no buyer", "<BuyerTradeParty><Name>Buyer Ltd</Name></BuyerTradeParty>", "BR-O-04"},
-		{"no seller", "<SellerTradeParty><Name>Seller Ltd</Name></SellerTradeParty>", "BR-O-05"},
+		{"no order number", "<ID>ORD-1</ID>", "ORDER-01"},
+		{"no issue date", `<IssueDateTime><DateTimeString format="102">20240115</DateTimeString></IssueDateTime>`, "ORDER-02"},
+		{"no type code", "<TypeCode>220</TypeCode>", "ORDER-03"},
+		{"no buyer", "<BuyerTradeParty><Name>Buyer Ltd</Name></BuyerTradeParty>", "ORDER-04"},
+		{"no seller", "<SellerTradeParty><Name>Seller Ltd</Name></SellerTradeParty>", "ORDER-05"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			broken := strings.Replace(validOrderXML, tc.remove, "", 1)
-			v := formalis.ValidateOrderXML([]byte(broken))
+			rep, err := formalis.ValidateOrderXML(context.Background(), []byte(broken))
+			if err != nil {
+				t.Fatalf("expected a finding, got a read error: %v", err)
+			}
 			found := false
-			for _, e := range v {
+			for _, e := range rep.Violations {
 				if e.Rule == tc.rule {
 					found = true
 				}
 			}
 			if !found {
-				t.Errorf("expected %s; got %v", tc.rule, v)
+				t.Errorf("expected %s; got %v", tc.rule, rep.Violations)
 			}
 		})
 	}
 	// A non-order type code is rejected.
 	badType := strings.Replace(validOrderXML, "<TypeCode>220</TypeCode>", "<TypeCode>380</TypeCode>", 1)
-	v := formalis.ValidateOrderXML([]byte(badType))
-	if len(v) == 0 || v[0].Rule != "BR-O-03" {
-		t.Errorf("invoice type code 380 should be rejected for an order; got %v", v)
+	rep, err := formalis.ValidateOrderXML(context.Background(), []byte(badType))
+	if err != nil {
+		t.Fatalf("expected a finding, got a read error: %v", err)
+	}
+	if len(rep.Violations) == 0 || rep.Violations[0].Rule != "ORDER-03" {
+		t.Errorf("invoice type code 380 should be rejected for an order; got %v", rep.Violations)
+	}
+}
+
+// TestValidateOrderXMLWrongRootIsAFinding pins the half of the old "not an
+// order" case that is still a finding. formalis v0.2.0 split what used to be one
+// answer in two: a well-formed document with the wrong root is ORDER-root, a
+// definite statement about the document; input that is not XML at all is an
+// error, because there is no document to make a finding about.
+func TestValidateOrderXMLWrongRootIsAFinding(t *testing.T) {
+	invoice := strings.ReplaceAll(validOrderXML, "SCRDMCCBDACIOMessageStructure", "CrossIndustryInvoice")
+	rep, err := formalis.ValidateOrderXML(context.Background(), []byte(invoice))
+	if err != nil {
+		t.Fatalf("a well-formed non-order is a finding, not a read error: %v", err)
+	}
+	found := false
+	for _, v := range rep.Violations {
+		if v.Rule == formalis.RuleRoot || v.Rule == "ORDER-root" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a root finding for a Cross Industry Invoice; got %v", rep.Violations)
 	}
 }
 
