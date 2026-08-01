@@ -223,14 +223,20 @@ findings, not a description of how the code works — for that start at
 
 ## Layout
 
-pdf0 is one flat Go package. The subsystems, and the doc that maps each:
+The public API is the root `pdf0` package. Underneath it, self-contained pieces
+live in packages of their own: `object` and `syntax` carry public API and are
+regular packages, whose types the root package aliases so `pdf0.Dictionary` and
+`object.Dictionary` are one type; `internal/` holds implementation whose API is
+not meant for callers. Everything else is still in the root package.
+
+The subsystems, and the doc that maps each:
 
 | Subsystem | Files | Map |
 |-----------|-------|-----|
-| Core object model, parser, serializer | `object/`, `lexer.go`, `parser.go`, `serializer.go`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
+| Core object model, parser, serializer | `object/`, `syntax/`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
 | PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
 | The other validators | `pdfua*.go`, `pdfx*.go`, `pdfvt.go`, `pdfr.go`, `dpart.go`, `facturx*.go`, `order_x.go`, `violations.go` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
-| Fonts | `fonts.go`, `fontprog.go`, `font_encodings.go`, `cff_strings.go` | [fonts.md](docs/fonts.md) |
+| Fonts | `fonts.go`, `internal/font/` | [fonts.md](docs/fonts.md) |
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
 | Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | [encryption.md](docs/encryption.md) |

@@ -31,7 +31,7 @@ There are only three honest things to do with an incomplete result.
 | **Silently wrong** | The truncated result is then used *as if complete*. | **False positives** — the library accuses a conformant file. |
 
 The third class is the dangerous one, and it is not hypothetical. Audit C46: a
-format-4 cmap segment starting at code 0 was dropped, and because `trueTypeGID`
+format-4 cmap segment starting at code 0 was dropped, and because `font.TrueTypeGID`
 treats a non-nil cmap as authoritative, every affected code resolved to "glyph
 0" — firing *"does not define a glyph referenced for rendering"* and *"references
 the .notdef glyph"* on a font that was fine. The empty-map defect found by
@@ -49,8 +49,8 @@ When a guard truncates a structure, one of three things must happen, in order of
 preference:
 
 1. the structure is made self-describing (partial), and the consumer declines
-   the dependent check — the `parseCmapSubtable` nil-vs-empty contract is this
-   idea, and `fontProgram.cmapPartial` / `parseCIDWidths`' second result extend
+   the dependent check — the `font.ParseCmapSubtable` nil-vs-empty contract is this
+   idea, and `font.Program.CmapPartial` / `parseCIDWidths`' second result extend
    it;
 2. the consumer skips the dependent check because the input is known-partial;
 3. the trip is reported as its own finding rather than the downstream one.
@@ -160,12 +160,12 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| cmap work budget (`WithMaxCmapWork`) | `fontprog.go` | **Silently wrong** | `trueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `fontProgram.cmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
+| cmap work budget (`WithMaxCmapWork`) | `internal/font/fontprog.go` | **Silently wrong** | `font.TrueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `font.Program.CmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
 | CID `/W` range span (`WithMaxCIDRangeSpan`) | `fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Fixed. `parseCIDWidths` reports completeness; the width rule declines; trip reported as `cid-width-range`. |
-| `parseCmapSubtable` nil-on-unreadable | `fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
+| `font.ParseCmapSubtable` nil-on-unreadable | `internal/font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
-| sfnt/CFF/Type1 structural bails (`return nil`) | `fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
+| sfnt/CFF/Type1 structural bails (`return nil`) | `internal/font/fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
 
 ### Content scanning
 
@@ -195,11 +195,11 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 | Guard | File | Class | Notes |
 | --- | --- | --- | --- |
-| `maxParseDepth` (1000) | `parser.go` | Loud | A hard error. In lenient (rebuilt-xref) mode the caller drops the object instead — see the objstm row. |
+| `maxParseDepth` (1000) | `syntax/parser.go` | Loud | A hard error. In lenient (rebuilt-xref) mode the caller drops the object instead — see the objstm row. |
 | decoded-stream cap (`WithMaxDecodedStreamBytes`, default 100 MB) | `xref.go` | Loud | A hard error out of `flateDecode`. Being loud, it needs no trip report; the write-side `objStmMaxRaw` derives from it so a container pdf0 writes is one the same configuration can read back. |
-| `maxSerializeDepth` (1000) | `serializer.go` | Loud | A hard error; guards an unrecoverable stack overflow. |
+| `maxSerializeDepth` (1000) | `syntax/serializer.go` | Loud | A hard error; guards an unrecoverable stack overflow. |
 | `maxCompareDepth` (1000) | `compare.go` | Silently wrong *by construction* | Beyond the cap two objects are declared **not equal**. Documented as such; no validator rule compares structures that deep. |
-| `maxTokenGap` (1 MiB) | `lexer.go` | Loud-ish | The lexer parks and the parser fails on the next token. Not reachable by the recorder (see *reach*, above). |
+| `maxTokenGap` (1 MiB) | `syntax/lexer.go` | Loud-ish | The lexer parks and the parser fails on the next token. Not reachable by the recorder (see *reach*, above). |
 | object-stream decompression budget (`WithMaxObjectStreamBytes`) | `objstm.go` | Silently wrong *in aggregate* | The container's objects go missing from `doc.Objects`. PDF/A reports the container (6.1.6/6.1.7), but every other validator then resolves those objects to `nil`, which is indistinguishable from "absent": *"document does not specify a default language"*, *"encrypted document has no /P permissions entry"*, *"annotation has no alternate description"*, *"a DPart reference does not resolve to a dictionary"*. Now reported as `objstm-decompressed-total` in every validator, so the cascade is attributable. |
 | `Document.Resolve` 64-hop cap | `document.go` | Silently wrong in principle | Returns `nil`, indistinguishable from "key absent". A 64-hop reference chain does not occur in real files (measured: 0); the same `nil` arriving from the objstm budget is what actually bites, and that is now reported. See *Left deliberately*. |
 | `WriteIncremental` vs `brokenObjStms` | `incremental.go` | Was **silently wrong** | It computed `/Size` from an incomplete object set and wrote the file without a word — the only write path that did not refuse. Now refuses, as `Write` already did. |
@@ -249,7 +249,7 @@ Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
   budget rather than inventing a second knob, with a seen-set so a cyclic map
   terminates. It returns a completeness flag, so a budget trip declines the
   finding instead of manufacturing one (the rule at the top of this document).
-- **`fontprog.go`'s Type 1 CharStrings loop broke on
+- **`internal/font/fontprog.go`'s Type 1 CharStrings loop broke on
   `strings.Contains(name, "end")`** after a *successful* glyph parse, truncating
   the glyph list at the first font defining `endash` (or
   `enfilledcircbullet`, or `endescender`). **Fixed:** `type1CharStringsEnd`

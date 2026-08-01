@@ -227,7 +227,7 @@ They are grouped across files by concern:
 | `final_rules.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects |
 | `content_operators.go` | Content-stream operator whitelist, named resources |
 | `filestructure.go` | Byte-level structure rules over the raw file (`Document.Offsets`) |
-| `fonts.go` / `fontprog.go` / `font_encodings.go` / `cff_strings.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
+| `fonts.go` / `internal/font/fontprog.go` / `internal/font/font_encodings.go` / `internal/font/cff_strings.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
 | `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
 | `function.go` / `function_ps.go` | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
 

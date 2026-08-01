@@ -132,18 +132,18 @@ through a valid-enough PDF carrying a valid-enough sfnt carrying a cmap table,
 which no random mutation assembles — so in practice they never exercise it at
 all:
 
-- **`FuzzCmapSubtable`** — `parseCmapSubtable` on raw subtable bytes, the deep
+- **`FuzzCmapSubtable`** — `font.ParseCmapSubtable` on raw subtable bytes, the deep
   target. Beyond "does not panic" it asserts the invariants the work budgets and
   the recent fixes exist to hold: the returned map never exceeds the cmap work
   budget the target parses at (`defaultMaxCmapWork`, the default behind
   `WithMaxCmapWork`) however many groups the table claims; an unreadable subtable — or one that maps nothing — returns nil rather
-  than an empty non-nil map (`trueTypeGID` treats a non-nil cmap as
+  than an empty non-nil map (`font.TrueTypeGID` treats a non-nil cmap as
   authoritative, so an empty one reads as "every code is `.notdef`" and produces
   font-wide false findings); and every key is a Unicode code point mapping to a
   glyph index in 1..0xFFFF, never 0. Seeded from the builders behind the
   hand-written cmap tests: each supported format, the budget-tripping tables, the
   truncated and malformed variants, and formats 2/13/14, which are not parsed.
-- **`FuzzSFNTCmap`** — `parseSFNT`, the smallest entry point that exercises
+- **`FuzzSFNTCmap`** — `font.ParseSFNT`, the smallest entry point that exercises
   subtable *selection*. The (3,10) > (3,1) > (0,x) ranking runs on
   attacker-supplied platform ids, encoding ids and offsets and decides which
   subtable becomes the font's authoritative cmap; whichever it picks must satisfy

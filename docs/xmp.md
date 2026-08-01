@@ -247,7 +247,7 @@ bypassed).
 ## Maintenance and limitations
 
 The schema tables are **hand-written** from the XMP specifications — not
-generated, unlike `cff_strings.go` and `font_encodings.go`. To change one: edit
+generated, unlike `internal/font/cff_strings.go` and `internal/font/font_encodings.go`. To change one: edit
 the table in `xmp_schemas.go`, run `TestXMPTablesMatchRNG`, add an
 `xmpRNGAllowlist` entry *with a rationale* only when pdf0 is deliberately
 spec-correct against the RNG, then re-run the corpus ratchet — the corpus, not
