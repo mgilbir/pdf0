@@ -1,8 +1,7 @@
 package pdf0
 
 import (
-	"fmt"
-	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"sort"
 	"strings"
 
@@ -18,42 +17,13 @@ import (
 // the same idea adapted to the other validators' finding types and to the
 // `add(rule, msg, obj)` reporting style they share.
 
-// internalRule is the rule (or clause) identifier a validator reports when one
-// of its own checks panicked. It marks a finding as "the validator broke", not
-// "the file is non-conforming", so a caller can tell the two apart.
-const internalRule = "internal"
-
-// internalMessage formats the message of an internal-error finding.
-func internalMessage(r any) string {
-	return fmt.Sprintf("internal validator error: %v", r)
-}
-
-// runGuardedCheck runs one check of a validator that reports its findings
-// through an add callback, converting a panic into a reported finding instead
-// of letting it crash the caller. The validators process untrusted files, so a
-// bug (or an adversarial structure) in one check must not take down the whole
-// process — the rationale runCheck records for PDF/A.
-//
-// Findings the check already reported before panicking are kept: add appends to
-// the caller's slice as the check runs. Stack overflows from unbounded
-// recursion are fatal and cannot be recovered here; those are prevented at
-// their source (see the seen-set in devColorScanner, audit C3).
-func runGuardedCheck(add func(rule, msg string, obj int), check func()) {
-	defer func() {
-		if r := recover(); r != nil {
-			add(internalRule, internalMessage(r), 0)
-		}
-	}()
-	check()
-}
-
-// runUACheck is runGuardedCheck for the PDF/UA checks, which return their
+// runUACheck is finding.Guarded for the PDF/UA checks, which return their
 // findings rather than reporting them through a callback. A panicking check
 // loses its own findings but not those of its siblings.
 func runUACheck(check func() []UAViolation) (out []UAViolation) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []UAViolation{{Clause: internalRule, Message: internalMessage(r)}}
+			out = []UAViolation{{Clause: finding.InternalRule, Message: finding.InternalMessage(r)}}
 		}
 	}()
 	return check()
@@ -75,7 +45,7 @@ func runUACheck(check func() []UAViolation) (out []UAViolation) {
 func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs []ValidationError) {
 	for _, e := range errs {
 		switch {
-		case e.Rule == internalRule || e.Rule == limitRule:
+		case e.Rule == finding.InternalRule || e.Rule == finding.LimitRule:
 			add(e.Rule, e.Message, e.Object)
 		case e.Rule == "6.6.4" && strings.Contains(e.Message, "pdfaid:conformance"):
 			// Not a container finding.
@@ -83,23 +53,6 @@ func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs 
 			add(prefix+e.Rule, e.Message, e.Object)
 		}
 	}
-}
-
-// sortViolations orders findings by rule, then object, then message, the order
-// ValidatePDFABytes returns its violations in. The checks iterate map-ordered
-// doc.Objects, so their concatenated output order is otherwise nondeterministic
-// (audit C27). Error() is used as the last key because it embeds the message
-// behind a prefix that is constant for a given rule and object.
-func sortViolations[T Violation](v []T) {
-	sort.Slice(v, func(i, j int) bool {
-		if a, b := v[i].RuleID(), v[j].RuleID(); a != b {
-			return a < b
-		}
-		if a, b := v[i].ObjectNum(), v[j].ObjectNum(); a != b {
-			return a < b
-		}
-		return v[i].Error() < v[j].Error()
-	})
 }
 
 // sortedObjectNums returns every object number in doc.Objects in ascending
@@ -200,31 +153,4 @@ func adoptInvoiceFindings(adopt func(v formalis.Violation, advisory bool), rep f
 	for _, v := range rep.Violations {
 		adopt(v, v.Severity == formalis.SeverityWarning)
 	}
-}
-
-// reportCancellation adds the "limit" finding a cancelled container validation
-// owes its caller, unless one is already present.
-//
-// ValidateFacturX and ValidateOrderX compose two rule engines, and each reports
-// a cancellation it saw itself: the PDF/A-3 validation through its own limit
-// recorder (adopted bare, see adoptPDFAFindings), the invoice rule engine
-// through formalis.RuleLimit, which is the same identifier. Neither covers the
-// container checks that run between them, and neither runs at all for a
-// container with no embedded XML to hand over — so a run cancelled in those
-// windows would return findings that read as a verdict on a document nobody
-// finished looking at. Polling once on the way out closes them.
-//
-// The existing-finding test is what keeps one cancellation to one finding:
-// whichever half noticed first has already said it, in the same words.
-func reportCancellation[T Violation](cancel core.Canceler, v []T, add func(rule, msg string, obj int)) {
-	err := cancel.Err()
-	if err == nil {
-		return
-	}
-	for _, e := range v {
-		if e.RuleID() == limitRule {
-			return
-		}
-	}
-	add(limitRule, core.NewTrip(core.GuardCanceled, err.Error(), 0).Message(), 0)
 }

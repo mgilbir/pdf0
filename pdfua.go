@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"strings"
 )
 
@@ -58,7 +59,7 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []UAViolati
 		// return is sorted like the normal one — every exit of every validator
 		// returns findings in the same order.
 		out := append([]UAViolation{{"7.1", "document has no catalog", 0}}, limitUAViolations(doc)...)
-		sortViolations(out)
+		finding.Sort(out)
 		return out
 	}
 	var v []UAViolation
@@ -176,7 +177,7 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []UAViolati
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.
-	sortViolations(v)
+	finding.Sort(v)
 	return v
 }
 

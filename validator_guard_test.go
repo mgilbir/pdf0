@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/finding"
 	"reflect"
 	"strings"
 	"testing"
@@ -80,12 +81,12 @@ func TestValidatorPanicContainment(t *testing.T) {
 				// that namespace the PDF/A-3 findings they adopt: "internal" is
 				// a reserved checker identifier, not a rule in either namespace,
 				// so adoptPDFAFindings passes it through unprefixed.
-				if r == internalRule {
+				if r == finding.InternalRule {
 					found = true
 				}
 			}
 			if !found {
-				t.Errorf("no %q finding reported; the panic was swallowed rather than contained (got %v)", internalRule, rules)
+				t.Errorf("no %q finding reported; the panic was swallowed rather than contained (got %v)", finding.InternalRule, rules)
 			}
 		})
 	}
@@ -99,20 +100,20 @@ func TestGuardHelpersReportPanics(t *testing.T) {
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
 	}
-	runGuardedCheck(add, func() {
+	finding.Guarded(add, func() {
 		add("version", "reported before the panic", 3)
 		panic("boom")
 	})
-	if len(out) != 2 || out[0].Rule != "version" || out[1].Rule != internalRule {
-		t.Fatalf("runGuardedCheck: got %v, want the pre-panic finding plus an %q one", out, internalRule)
+	if len(out) != 2 || out[0].Rule != "version" || out[1].Rule != finding.InternalRule {
+		t.Fatalf("finding.Guarded: got %v, want the pre-panic finding plus an %q one", out, finding.InternalRule)
 	}
 	if !strings.Contains(out[1].Message, "boom") {
-		t.Errorf("runGuardedCheck: message %q does not carry the panic value", out[1].Message)
+		t.Errorf("finding.Guarded: message %q does not carry the panic value", out[1].Message)
 	}
 
 	ua := runUACheck(func() []UAViolation { panic("bang") })
-	if len(ua) != 1 || ua[0].Clause != internalRule {
-		t.Fatalf("runUACheck: got %v, want one %q finding", ua, internalRule)
+	if len(ua) != 1 || ua[0].Clause != finding.InternalRule {
+		t.Fatalf("runUACheck: got %v, want one %q finding", ua, finding.InternalRule)
 	}
 	if !strings.Contains(ua[0].Message, "bang") {
 		t.Errorf("runUACheck: message %q does not carry the panic value", ua[0].Message)
@@ -134,11 +135,11 @@ func TestAdoptPDFAFindingsKeepsReservedRulesBare(t *testing.T) {
 	}
 	adoptPDFAFindings(add, "pdfa-3/", []ValidationError{
 		{Rule: "6.1.2", Message: "a real PDF/A rule"},
-		{Rule: limitRule, Message: "a guard tripped"},
-		{Rule: internalRule, Message: "a check panicked"},
+		{Rule: finding.LimitRule, Message: "a guard tripped"},
+		{Rule: finding.InternalRule, Message: "a check panicked"},
 	})
 
-	want := []string{"pdfa-3/6.1.2", limitRule, internalRule}
+	want := []string{"pdfa-3/6.1.2", finding.LimitRule, finding.InternalRule}
 	if len(out) != len(want) {
 		t.Fatalf("got %d findings, want %d: %v", len(out), len(want), out)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
@@ -86,7 +87,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 		if d.stopped() {
 			return
 		}
-		runGuardedCheck(add, check)
+		finding.Guarded(add, check)
 	}
 
 	run(func() {
@@ -102,7 +103,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 	if cat == nil {
 		add("structure", "document has no catalog", 0)
 		reportLimits(d, add)
-		sortViolations(out)
+		finding.Sort(out)
 		return out
 	}
 	run(func() {
@@ -130,7 +131,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.
-	sortViolations(out)
+	finding.Sort(out)
 	return out
 }
 

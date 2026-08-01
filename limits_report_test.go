@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/internal/font"
 	"strings"
 	"testing"
@@ -394,7 +395,7 @@ func TestObjStmBudgetTripIsReported(t *testing.T) {
 	errs := ValidatePDFA(doc, PDFA2b)
 	var trip *ValidationError
 	for i := range errs {
-		if errs[i].Rule == limitRule {
+		if errs[i].Rule == finding.LimitRule {
 			trip = &errs[i]
 		}
 	}
@@ -411,7 +412,7 @@ func TestObjStmBudgetTripIsReported(t *testing.T) {
 	// Every validator that reports through the shared mechanism sees it.
 	uaHas := false
 	for _, v := range ValidatePDFUA(doc) {
-		if v.Clause == limitRule {
+		if v.Clause == finding.LimitRule {
 			uaHas = true
 		}
 	}
@@ -420,7 +421,7 @@ func TestObjStmBudgetTripIsReported(t *testing.T) {
 	}
 	xHas := false
 	for _, v := range ValidatePDFX(doc, PDFX4) {
-		if v.Rule == limitRule {
+		if v.Rule == finding.LimitRule {
 			xHas = true
 		}
 	}
@@ -615,11 +616,11 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	}
 	reported := false
 	for _, e := range limitValidationErrors(run, PDFA4) {
-		if e.Rule == limitRule && strings.Contains(e.Message, limitEmbeddedPDFA) {
+		if e.Rule == finding.LimitRule && strings.Contains(e.Message, limitEmbeddedPDFA) {
 			reported = true
 		}
 	}
 	if !reported {
-		t.Errorf("the declined check must be reported as a %q finding naming %q", limitRule, limitEmbeddedPDFA)
+		t.Errorf("the declined check must be reported as a %q finding naming %q", finding.LimitRule, limitEmbeddedPDFA)
 	}
 }

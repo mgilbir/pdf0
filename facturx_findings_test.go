@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"strings"
 	"testing"
 
@@ -113,14 +114,14 @@ func TestUnreadableOrderXMLIsNotACleanResult(t *testing.T) {
 
 // TestAdoptedLimitFindingIsACheckerFinding pins the shared reserved identifier
 // across the module seam. formalis reports a cancelled or budget-stopped run as
-// RuleLimit, pdf0 reports its own guards as limitRule, and the two are the same
+// RuleLimit, pdf0 reports its own guards as finding.LimitRule, and the two are the same
 // string on purpose — so an adopted limit finding must come out the far side of
 // adoptInvoiceFindings still recognised by IsCheckerFinding. A prefix, a rename
 // or a namespace on either side turns "the checker stopped" into "the invoice is
 // bad" for every caller filtering the mixed slice.
 func TestAdoptedLimitFindingIsACheckerFinding(t *testing.T) {
-	if formalis.RuleLimit != limitRule {
-		t.Fatalf("the two modules must spell the reserved rule alike: %q vs %q", formalis.RuleLimit, limitRule)
+	if formalis.RuleLimit != finding.LimitRule {
+		t.Fatalf("the two modules must spell the reserved rule alike: %q vs %q", formalis.RuleLimit, finding.LimitRule)
 	}
 	rep := formalis.Report{Violations: []formalis.Violation{
 		{Source: formalis.SourceChecker, Rule: formalis.RuleLimit, Severity: formalis.SeverityFatal, Message: "the run was cancelled"},
@@ -138,9 +139,9 @@ func TestAdoptedLimitFindingIsACheckerFinding(t *testing.T) {
 		fatal = append(fatal, f)
 	}, rep)
 
-	limit, ok := findRule(fatal, limitRule)
+	limit, ok := findRule(fatal, finding.LimitRule)
 	if !ok {
-		t.Fatalf("the adopted findings must keep the bare %q identifier; got %v", limitRule, fatal)
+		t.Fatalf("the adopted findings must keep the bare %q identifier; got %v", finding.LimitRule, fatal)
 	}
 	if !IsCheckerFinding(limit) {
 		t.Errorf("IsCheckerFinding must recognise the adopted limit finding %q", limit.RuleID())
@@ -193,9 +194,9 @@ func TestCancelledFacturXIsNeverClean(t *testing.T) {
 			if len(v) == 0 {
 				t.Fatal("a cancelled run must never return an empty result")
 			}
-			limit, ok := findRule(v, limitRule)
+			limit, ok := findRule(v, finding.LimitRule)
 			if !ok {
-				t.Fatalf("a cancelled run must report a %q finding; got %v", limitRule, v)
+				t.Fatalf("a cancelled run must report a %q finding; got %v", finding.LimitRule, v)
 			}
 			if !IsCheckerFinding(limit) {
 				t.Errorf("%q must be a checker finding", limit.RuleID())
@@ -206,7 +207,7 @@ func TestCancelledFacturXIsNeverClean(t *testing.T) {
 			// own poll, which only speaks when nobody else has.
 			seen := map[string]bool{}
 			for _, e := range v {
-				if e.RuleID() != limitRule {
+				if e.RuleID() != finding.LimitRule {
 					continue
 				}
 				if seen[e.Error()] {
@@ -234,21 +235,21 @@ func TestReportCancellationOnlySpeaksWhenNobodyElseHas(t *testing.T) {
 	}
 
 	// Nobody has spoken: the poll owes the caller the finding.
-	reportCancellation(c, out, add)
-	if len(out) != 1 || out[0].Rule != limitRule {
+	finding.ReportCancellation(c, out, add)
+	if len(out) != 1 || out[0].Rule != finding.LimitRule {
 		t.Fatalf("a cancelled run with no finding must get one; got %v", out)
 	}
 	if !IsCheckerFinding(out[0]) {
 		t.Error("the cancellation finding must be a checker finding")
 	}
 	// A half has already spoken: the poll adds nothing.
-	reportCancellation(c, out, add)
+	finding.ReportCancellation(c, out, add)
 	if len(out) != 1 {
 		t.Errorf("the poll must not repeat a cancellation already reported; got %v", out)
 	}
 	// A live context says nothing at all.
 	out = nil
-	reportCancellation(core.NewCanceler(context.Background()), out, add)
+	finding.ReportCancellation(core.NewCanceler(context.Background()), out, add)
 	if len(out) != 0 {
 		t.Errorf("a run that was not cancelled must report nothing; got %v", out)
 	}

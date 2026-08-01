@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -65,7 +66,7 @@ func validateDParts(cancel core.Canceler, doc *Document) []DPartViolation {
 	// it completes the walk. The walk is bounded by the page and DPart counts and
 	// reads no content, so that is bounded work, not an open-ended wait.
 	if !doc.stopped() {
-		runGuardedCheck(add, func() { validateDPartHierarchy(doc, add) })
+		finding.Guarded(add, func() { validateDPartHierarchy(doc, add) })
 	}
 
 	// The walk visits map-ordered structures, so the output order is otherwise
@@ -74,7 +75,7 @@ func validateDParts(cancel core.Canceler, doc *Document) []DPartViolation {
 	// failures (see limits.go).
 	reportLimits(doc, add)
 
-	sortViolations(out)
+	finding.Sort(out)
 	return out
 }
 

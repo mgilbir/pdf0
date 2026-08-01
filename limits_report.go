@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 )
 
 // Reporting a resource guard that stopped short.
@@ -34,20 +35,6 @@ import (
 //
 // docs/limits.md carries the full per-guard classification.
 
-// limitRule is the rule (clause) identifier carried by every finding that
-// reports a resource-guard trip. Like internalRule ("internal", used for a
-// recovered panic) it names the *checker*, not the document: "6.2.11.4.1" says
-// the file is wrong, "limit" says pdf0 stopped short and therefore cannot say
-// whether the file is right.
-//
-// A cancelled run reports itself here too (limitCanceled). A caller's deadline
-// is not a resource guard, but it produces exactly the same event — the checker
-// stopped before it had seen everything — and so calls for exactly the same
-// honesty. Giving it its own rule identifier would have meant every caller that
-// already distinguishes "the file is bad" from "pdf0 could not finish" learning
-// a second way to spell the second one. See cancel.go.
-const limitRule = "limit"
-
 // IsCheckerFinding reports whether a finding describes a problem in the checker
 // rather than a non-conformance of the document. Two rule identifiers are
 // reserved for this: "internal" (a check panicked and was recovered) and
@@ -66,7 +53,7 @@ const limitRule = "limit"
 // adversarial or the checker has a bug.
 func IsCheckerFinding(v Violation) bool {
 	switch v.RuleID() {
-	case limitRule, internalRule:
+	case finding.LimitRule, finding.InternalRule:
 		return true
 	}
 	return false
@@ -151,7 +138,7 @@ func runLimitTrips(doc *Document) []core.Trip {
 func limitValidationErrors(doc *Document, level PDFALevel) []ValidationError {
 	var out []ValidationError
 	for _, t := range runLimitTrips(doc) {
-		out = append(out, ValidationError{Rule: limitRule, Level: level, Message: t.Message(), Object: t.Obj})
+		out = append(out, ValidationError{Rule: finding.LimitRule, Level: level, Message: t.Message(), Object: t.Obj})
 	}
 	return out
 }
@@ -160,7 +147,7 @@ func limitValidationErrors(doc *Document, level PDFALevel) []ValidationError {
 func limitUAViolations(doc *Document) []UAViolation {
 	var out []UAViolation
 	for _, t := range runLimitTrips(doc) {
-		out = append(out, UAViolation{limitRule, t.Message(), t.Obj})
+		out = append(out, UAViolation{finding.LimitRule, t.Message(), t.Obj})
 	}
 	return out
 }
@@ -169,7 +156,7 @@ func limitUAViolations(doc *Document) []UAViolation {
 // callback the PDF/X, PDF/VT, PDF/R and DPart validators report through.
 func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
 	for _, t := range runLimitTrips(doc) {
-		add(limitRule, t.Message(), t.Obj)
+		add(finding.LimitRule, t.Message(), t.Obj)
 	}
 }
 

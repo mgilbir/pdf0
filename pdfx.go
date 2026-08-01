@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
@@ -134,7 +135,7 @@ func validatePDFX(cancel core.Canceler, doc *Document, level PDFXLevel) []PDFXVi
 		if doc.stopped() {
 			return
 		}
-		runGuardedCheck(add, check)
+		finding.Guarded(add, check)
 	}
 
 	run(func() {
@@ -176,7 +177,7 @@ func validatePDFX(cancel core.Canceler, doc *Document, level PDFXLevel) []PDFXVi
 	// failures (see limits.go).
 	reportLimits(doc, add)
 
-	sortViolations(out)
+	finding.Sort(out)
 	return out
 }
 

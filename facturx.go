@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 
@@ -211,16 +212,16 @@ func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) 
 	// becomes an "internal" finding instead of crashing the caller, and the
 	// findings reported before it are kept in the named result (audit C27). The
 	// deferred tail also runs on the normal path: it owes the caller the
-	// cancellation finding neither half may have reported (reportCancellation),
+	// cancellation finding neither half may have reported (finding.ReportCancellation),
 	// and a deterministic order, since the PDF/A-3 findings this composes are
 	// sorted but the container ones are appended after and the rule engine has
 	// an order of its own.
 	defer func() {
 		if r := recover(); r != nil {
-			add(internalRule, internalMessage(r), 0)
+			add(finding.InternalRule, finding.InternalMessage(r), 0)
 		}
-		reportCancellation(cancel, res.Violations, add)
-		sortViolations(res.Violations)
+		finding.ReportCancellation(cancel, res.Violations, add)
+		finding.Sort(res.Violations)
 	}()
 
 	// A Factur-X file shall be PDF/A-3, so the PDF/A-3 findings are adopted under

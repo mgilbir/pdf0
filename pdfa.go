@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"io"
 	"math"
 	"strings"
@@ -132,7 +133,7 @@ func ValidatePDFAContext(ctx context.Context, doc *Document, level PDFALevel) []
 func runCheck(doc *Document, level PDFALevel, check func(*Document, PDFALevel) []ValidationError) (out []ValidationError) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []ValidationError{{Rule: internalRule, Level: level, Message: internalMessage(r)}}
+			out = []ValidationError{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
 		}
 	}()
 	return check(doc, level)
@@ -143,7 +144,7 @@ func runCheck(doc *Document, level PDFALevel, check func(*Document, PDFALevel) [
 func runByteCheck(level PDFALevel, check func() []ValidationError) (out []ValidationError) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []ValidationError{{Rule: internalRule, Level: level, Message: internalMessage(r)}}
+			out = []ValidationError{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
 		}
 	}()
 	return check()
@@ -323,7 +324,7 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level PDFALevel, raw
 	// order is nondeterministic; sort for stable, diffable reports. The shared
 	// helper is the one every other validator uses, so "by rule, then object,
 	// then message" has a single implementation rather than one per validator.
-	sortViolations(errs)
+	finding.Sort(errs)
 
 	return errs
 }

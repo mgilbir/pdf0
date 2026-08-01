@@ -3,6 +3,7 @@ package pdf0
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"strings"
 )
 
@@ -47,7 +48,7 @@ func validatePDFALevelA(cancel core.Canceler, doc *Document, level PDFALevel, ra
 	// families have appended to them, so Level A returns findings in the same
 	// "by rule, then object, then message" order every other validator promises
 	// (validatePDFUA2 does the same for its extra rule).
-	sortViolations(errs)
+	finding.Sort(errs)
 	return errs
 }
 

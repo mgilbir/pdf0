@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 
@@ -152,10 +153,10 @@ func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) (
 	// ValidateFacturXContext, whose structure this mirrors (audit C27).
 	defer func() {
 		if r := recover(); r != nil {
-			add(internalRule, internalMessage(r), 0)
+			add(finding.InternalRule, finding.InternalMessage(r), 0)
 		}
-		reportCancellation(cancel, res.Violations, add)
-		sortViolations(res.Violations)
+		finding.ReportCancellation(cancel, res.Violations, add)
+		finding.Sort(res.Violations)
 	}()
 
 	// An Order-X file shall be PDF/A-3, adopted exactly as for Factur-X.

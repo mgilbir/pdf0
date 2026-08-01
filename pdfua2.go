@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 )
 
 // This file validates PDF/UA-2 (ISO 14289-2:2024), the PDF 2.0 accessibility
@@ -50,6 +51,6 @@ func validatePDFUA2(cancel core.Canceler, d *Document) []UAViolation {
 
 	// validatePDFUA sorted its own findings; re-sort now that the UA-2 rule has
 	// appended to them (audit C27).
-	sortViolations(out)
+	finding.Sort(out)
 	return out
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"strings"
 )
 
@@ -74,7 +75,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 		if doc.stopped() {
 			return
 		}
-		runGuardedCheck(add, check)
+		finding.Guarded(add, check)
 	}
 
 	// A PDF/VT file shall be a conforming PDF/X file (ISO 16612-2 6.1): PDF/X-4
@@ -85,7 +86,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 			if allowRefXObjects && v.Rule == "forbidden" && strings.Contains(v.Message, "reference XObjects") {
 				continue
 			}
-			if v.Rule == limitRule {
+			if v.Rule == finding.LimitRule {
 				// The nested run shares this run's recorder, so its guard
 				// trips are reported once, by the flush below — not prefixed
 				// as if they were a PDF/X conformance finding.
@@ -122,7 +123,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 			add("dpart", "PDF/VT requires a document part hierarchy (catalog /DPartRoot)", 0)
 		}
 		for _, v := range ValidateDParts(doc) {
-			if v.Rule == limitRule {
+			if v.Rule == finding.LimitRule {
 				continue // reported once by the flush below
 			}
 			add("dpart/"+v.Rule, v.Message, v.Object)
@@ -135,6 +136,6 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.
-	sortViolations(out)
+	finding.Sort(out)
 	return out
 }
