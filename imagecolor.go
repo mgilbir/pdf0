@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/color"
@@ -46,7 +47,7 @@ func (cs *imgColorSpace) toRGB16Comps(c []float64) (r, g, b uint16) {
 // buildImage converts an image XObject's decoded samples to an image, applying
 // the colour space, bit depth, /Decode array and soft mask. ok is false for a
 // layout it cannot render.
-func buildImage(d *Document, st *Stream, raw []byte, w, h, bpc int) (image.Image, bool) {
+func buildImage(d core.View, st *Stream, raw []byte, w, h, bpc int) (image.Image, bool) {
 	if w <= 0 || h <= 0 || bpc <= 0 {
 		return nil, false
 	}
@@ -106,7 +107,7 @@ func buildImage(d *Document, st *Stream, raw []byte, w, h, bpc int) (image.Image
 // preserving the full sample precision that an 8-bit *image.NRGBA would discard.
 // It mirrors the 8-bit path but keeps colour arithmetic in floats down to a
 // 16-bit clamp so a DeviceGray sample of 0xFFFF yields R=0xFFFF, 0x8000 ~ 0x8000.
-func buildImage16(d *Document, st *Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, bool) {
+func buildImage16(d core.View, st *Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, bool) {
 	im := image.NewNRGBA64(image.Rect(0, 0, w, h))
 	sr := sampleReader{data: raw, bpc: 16, w: w, ncomp: cs.ncomp}
 	comps := make([]float64, cs.ncomp)
@@ -140,7 +141,7 @@ func buildImage16(d *Document, st *Stream, raw []byte, w, h int, cs *imgColorSpa
 
 // colorKeyMask returns the /Mask colour-key range array [min1 max1 …] when
 // present and well-formed for ncomp components, else nil.
-func colorKeyMask(d *Document, st *Stream, ncomp int) []int {
+func colorKeyMask(d core.View, st *Stream, ncomp int) []int {
 	arr, ok := d.Resolve(st.Dict.Get("Mask")).(Array)
 	if !ok || len(arr) != 2*ncomp {
 		return nil
@@ -166,14 +167,14 @@ func inColorKey(samples, ranges []int) bool {
 // stencilMask decodes a stencil /Mask (a 1-bit image XObject) into its packed
 // rows plus the sample value that marks a pixel hidden. ok is false when there
 // is no usable stencil mask. /Decode [1 0] inverts which sample hides.
-func stencilMask(d *Document, st *Stream) (data []byte, mw, mh int, hideBit byte, ok bool) {
+func stencilMask(d core.View, st *Stream) (data []byte, mw, mh int, hideBit byte, ok bool) {
 	mk, ok := d.Resolve(st.Dict.Get("Mask")).(*Stream)
 	if !ok {
 		return nil, 0, 0, 0, false
 	}
 	mw = object.Int(d.Resolve(mk.Dict.Get("Width")))
 	mh = object.Int(d.Resolve(mk.Dict.Get("Height")))
-	data = decodeImageSamples(d.canceler(), mk, d.lim())
+	data = decodeImageSamples(d.Cancel, mk, d.Limits)
 	if mw <= 0 || mh <= 0 || !sampleDataFits(data, mw, mh, 1, 1) {
 		return nil, 0, 0, 0, false
 	}
@@ -186,7 +187,7 @@ func stencilMask(d *Document, st *Stream) (data []byte, mw, mh int, hideBit byte
 
 // applyStencilMask applies a stencil /Mask (a 1-bit image XObject): samples of 1
 // mark pixels to hide, so those become transparent. /Decode [1 0] inverts it.
-func applyStencilMask(d *Document, st *Stream, im *image.NRGBA) {
+func applyStencilMask(d core.View, st *Stream, im *image.NRGBA) {
 	data, mw, mh, hideBit, ok := stencilMask(d, st)
 	if !ok {
 		return
@@ -206,7 +207,7 @@ func applyStencilMask(d *Document, st *Stream, im *image.NRGBA) {
 }
 
 // applyStencilMask64 is the *image.NRGBA64 counterpart of applyStencilMask.
-func applyStencilMask64(d *Document, st *Stream, im *image.NRGBA64) {
+func applyStencilMask64(d core.View, st *Stream, im *image.NRGBA64) {
 	data, mw, mh, hideBit, ok := stencilMask(d, st)
 	if !ok {
 		return
@@ -306,7 +307,7 @@ func sampleDataFits(data []byte, w, h, ncomp, bpc int) bool {
 
 // resolveColorSpace resolves a PDF colour-space object to an imgColorSpace, or
 // (nil,false) for one this decoder cannot render.
-func resolveColorSpace(d *Document, obj Object) (*imgColorSpace, bool) {
+func resolveColorSpace(d core.View, obj Object) (*imgColorSpace, bool) {
 	switch cs := d.Resolve(obj).(type) {
 	case Name:
 		return deviceColorSpace(string(cs))
@@ -362,7 +363,7 @@ func deviceColorSpace(name string) (*imgColorSpace, bool) {
 // iccBasedColorSpace renders an ICCBased space by its component count (/N): 1 as
 // grayscale, 3 as RGB, 4 as CMYK, matching the profile's device class. A
 // present /Alternate is used when /N is absent or unusual.
-func iccBasedColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
+func iccBasedColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 	if len(cs) < 2 {
 		return nil, false
 	}
@@ -386,7 +387,7 @@ func iccBasedColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
 
 // indexedColorSpace resolves [/Indexed base hival lookup] into a palette lookup
 // over its base colour space.
-func indexedColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
+func indexedColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 	if len(cs) < 4 {
 		return nil, false
 	}
@@ -403,7 +404,7 @@ func indexedColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
 	case String:
 		lookup = t.Value
 	case *Stream:
-		lookup = decodeContentStream(d, t)
+		lookup = d.Content(t)
 	default:
 		return nil, false
 	}
@@ -422,7 +423,7 @@ func indexedColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
 
 // separationColorSpace resolves [/Separation name altSpace tintFn]: one tint
 // component fed through tintFn into the alternate space.
-func separationColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
+func separationColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 	if len(cs) < 4 {
 		return nil, false
 	}
@@ -431,7 +432,7 @@ func separationColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
 
 // deviceNColorSpace resolves [/DeviceN names altSpace tintFn]: len(names) tint
 // components fed through tintFn into the alternate space.
-func deviceNColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
+func deviceNColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 	if len(cs) < 4 {
 		return nil, false
 	}
@@ -446,14 +447,14 @@ func deviceNColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
 // runs the tint-transform function into the alternate space's toRGB. It refuses
 // the space if the tint function does not evaluate for a probe input, so callers
 // fall back to the raw bytes rather than render garbage.
-func tintColorSpace(d *Document, ncomp int, altObj, tintFn Object) (*imgColorSpace, bool) {
+func tintColorSpace(d core.View, ncomp int, altObj, tintFn Object) (*imgColorSpace, bool) {
 	alt, ok := resolveColorSpace(d, altObj)
 	if !ok || alt.indexed {
 		return nil, false
 	}
 	// Verify the tint function evaluates to the alternate space's arity.
 	probe := make([]float64, ncomp)
-	altComps, ok := d.view().EvalFunction(tintFn, probe)
+	altComps, ok := d.EvalFunction(tintFn, probe)
 	if !ok || len(altComps) != alt.ncomp {
 		return nil, false
 	}
@@ -467,7 +468,7 @@ func tintColorSpace(d *Document, ncomp int, altObj, tintFn Object) (*imgColorSpa
 		alt:    alt,
 		decode: decode,
 		toRGB: func(c []float64) (uint8, uint8, uint8) {
-			comps, ok := d.view().EvalFunction(tintFn, c)
+			comps, ok := d.EvalFunction(tintFn, c)
 			if !ok || len(comps) != alt.ncomp {
 				return 0, 0, 0
 			}
@@ -478,7 +479,7 @@ func tintColorSpace(d *Document, ncomp int, altObj, tintFn Object) (*imgColorSpa
 
 // labColorSpace resolves a [/Lab dict] space; toRGB converts CIE L*a*b* (D50) to
 // sRGB.
-func labColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
+func labColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 	wp := [3]float64{0.9642, 1.0, 0.8249} // D50, the usual Lab reference white
 	amin, amax, bmin, bmax := -100.0, 100.0, -100.0, 100.0
 	if len(cs) >= 2 {
@@ -573,7 +574,7 @@ func clamp16(v float64) uint16 {
 // imageDecode returns the effective /Decode array (min,max per component). It
 // uses an explicit /Decode when present, else the colour-space default — which
 // for an Indexed space is [0, 2^bpc-1] so a sample is used directly as an index.
-func imageDecode(d *Document, st *Stream, cs *imgColorSpace, bpc int) []float64 {
+func imageDecode(d core.View, st *Stream, cs *imgColorSpace, bpc int) []float64 {
 	def := cs.decode
 	if cs.indexed {
 		def = []float64{0, float64(int(1)<<uint(bpc) - 1)}
@@ -590,7 +591,7 @@ func imageDecode(d *Document, st *Stream, cs *imgColorSpace, bpc int) []float64 
 
 // applySoftMask composites a /SMask (a DeviceGray image giving per-pixel alpha)
 // onto im, nearest-neighbour scaling the mask to the image's dimensions.
-func applySoftMask(d *Document, st *Stream, im *image.NRGBA) {
+func applySoftMask(d core.View, st *Stream, im *image.NRGBA) {
 	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*Stream)
 	if !ok {
 		return
@@ -612,7 +613,7 @@ func applySoftMask(d *Document, st *Stream, im *image.NRGBA) {
 
 // applySoftMask64 is the *image.NRGBA64 counterpart of applySoftMask. The mask
 // carries one alpha byte per pixel, promoted to 16 bits (byte*257).
-func applySoftMask64(d *Document, st *Stream, im *image.NRGBA64) {
+func applySoftMask64(d core.View, st *Stream, im *image.NRGBA64) {
 	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*Stream)
 	if !ok {
 		return
@@ -634,14 +635,14 @@ func applySoftMask64(d *Document, st *Stream, im *image.NRGBA64) {
 }
 
 // decodeAlphaMask decodes a soft-mask image XObject to one alpha byte per pixel.
-func decodeAlphaMask(d *Document, sm *Stream) (alpha []byte, w, h int, ok bool) {
+func decodeAlphaMask(d core.View, sm *Stream) (alpha []byte, w, h int, ok bool) {
 	w = object.Int(d.Resolve(sm.Dict.Get("Width")))
 	h = object.Int(d.Resolve(sm.Dict.Get("Height")))
 	bpc := object.Int(d.Resolve(sm.Dict.Get("BitsPerComponent")))
 	if w <= 0 || h <= 0 || bpc <= 0 {
 		return nil, 0, 0, false
 	}
-	filters := streamFilters(d, sm)
+	filters := d.StreamFilters(sm)
 	last := ""
 	if len(filters) > 0 {
 		last = string(filters[len(filters)-1])
@@ -649,7 +650,7 @@ func decodeAlphaMask(d *Document, sm *Stream) (alpha []byte, w, h int, ok bool) 
 	if last == "DCTDecode" || last == "JPXDecode" {
 		return nil, 0, 0, false // decoded elsewhere; rare for a mask
 	}
-	raw := decodeImageSamples(d.canceler(), sm, d.lim())
+	raw := decodeImageSamples(d.Cancel, sm, d.Limits)
 	if !sampleDataFits(raw, w, h, 1, bpc) {
 		return nil, 0, 0, false
 	}

@@ -306,19 +306,27 @@ func walkImagesCancel(d *Document, cancel core.Canceler, yield func(ExtractedIma
 	// sub-megabyte image took minutes (sweep #13). The cache also carries the
 	// cancellation signal, so the traversals it shares with the validators stop
 	// on the same terms.
-	d = beginRunCancel(d, cancel)
-	cat := getCatalog(d)
+	//
+	// This is the boundary: everything below it reads the document through a
+	// view and never names Document.
+	walkImagesView(beginRunCancel(d, cancel).view(), yield)
+}
+
+// walkImagesView drives the traversal over a view: every page's resources, then
+// every annotation appearance stream, yielding each image once.
+func walkImagesView(d core.View, yield func(ExtractedImage) bool) {
+	cat := d.Catalog()
 	if cat == nil {
 		return
 	}
 	seen := map[int]bool{}
-	for _, pg := range collectPages(d, cat.Get("Pages")) {
+	for _, pg := range d.Pages(cat.Get("Pages")) {
 		// Per page, on top of the per-image check the yield wrapper applies:
 		// a page whose resources hold no images still costs a resource walk.
-		if cancel.Stopped() {
+		if d.Cancel.Stopped() {
 			return
 		}
-		if !collectImagesFrom(d, resolveResources(d, pg.Dict), seen, 0, yield) {
+		if !collectImagesFrom(d, d.Resources(pg.Dict), seen, 0, yield) {
 			return
 		}
 		// Annotation appearance streams (/Annots -> /AP) are form XObjects with
@@ -347,7 +355,7 @@ func walkImagesCancel(d *Document, cancel core.Canceler, yield func(ExtractedIma
 // which is either a form-XObject stream or a subdictionary of appearance states
 // (each value a stream), following each into its resources. It returns false
 // once yield does.
-func collectAppearanceImages(d *Document, entry Object, seen map[int]bool, yield func(ExtractedImage) bool) bool {
+func collectAppearanceImages(d core.View, entry Object, seen map[int]bool, yield func(ExtractedImage) bool) bool {
 	switch v := d.Resolve(entry).(type) {
 	case *Stream:
 		if num := refNum(entry); num > 0 {
@@ -371,7 +379,7 @@ func collectAppearanceImages(d *Document, entry Object, seen map[int]bool, yield
 // image XObjects and recursing into form XObjects' own resources. seen guards
 // against revisiting a shared or self-referential XObject; depth bounds runaway
 // recursion. It returns false once yield does.
-func collectImagesFrom(d *Document, res *Dictionary, seen map[int]bool, depth int, yield func(ExtractedImage) bool) bool {
+func collectImagesFrom(d core.View, res *Dictionary, seen map[int]bool, depth int, yield func(ExtractedImage) bool) bool {
 	if res == nil || depth > 16 {
 		return true
 	}
@@ -405,7 +413,7 @@ func collectImagesFrom(d *Document, res *Dictionary, seen map[int]bool, depth in
 	return true
 }
 
-func extractImage(d *Document, st *Stream, num int) ExtractedImage {
+func extractImage(d core.View, st *Stream, num int) ExtractedImage {
 	img := ExtractedImage{
 		ObjNum:           num,
 		Width:            object.Int(d.Resolve(st.Dict.Get("Width"))),
@@ -417,7 +425,7 @@ func extractImage(d *Document, st *Stream, num int) ExtractedImage {
 		img.ColorSpace = "ImageMask"
 		img.BitsPerComponent = 1
 	}
-	filters := streamFilters(d, st)
+	filters := d.StreamFilters(st)
 	if len(filters) > 0 {
 		img.Filter = string(filters[len(filters)-1])
 	}
@@ -470,7 +478,7 @@ func extractImage(d *Document, st *Stream, num int) ExtractedImage {
 		// only ones applyFilter reverses): reverse the chain to raw samples, which
 		// buildImage renders through the colour space, bit depth, /Decode and masks
 		// (image masks keep their own 1-bit stencil rendering).
-		renderSamples(d, st, &img, decodeImageSamples(d.canceler(), st, d.lim()), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
+		renderSamples(d, st, &img, decodeImageSamples(d.Cancel, st, d.Limits), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
 	}
 	return img
 }
@@ -493,7 +501,7 @@ func decodeImageSamples(cancel core.Canceler, st *Stream, lim core.Limits) []byt
 // codec produced the samples. An /ImageMask goes through the stencil path;
 // everything else through buildImage, which also composites the stencil /Mask and
 // soft /SMask. It is used by the general-purpose branch.
-func renderSamples(d *Document, st *Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
+func renderSamples(d core.View, st *Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
 	var m image.Image
 	var ok bool
 	if img.ColorSpace == "ImageMask" {
@@ -516,7 +524,7 @@ func renderSamples(d *Document, st *Stream, img *ExtractedImage, samples []byte,
 // mask/decode-aware path — which the codec branches previously bypassed, so an
 // image mask rendered as an opaque raster and a /Decode [1 0] was ignored
 // (audit C30).
-func renderBilevelSamples(d *Document, st *Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
+func renderBilevelSamples(d core.View, st *Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
 	if img.ColorSpace == "ImageMask" || d.Resolve(st.Dict.Get("Decode")) != nil {
 		renderSamples(d, st, img, samples, unsupportedNote)
 		return
@@ -533,8 +541,8 @@ func renderBilevelSamples(d *Document, st *Stream, img *ExtractedImage, samples 
 // reversing any general-purpose filters (Flate/LZW/ASCIIHex) that precede the
 // CCITTFaxDecode codec in the filter chain — together with the /DecodeParms that
 // steer the fax decoder. ok is false when a preceding filter cannot be reversed.
-func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded []byte, params ccitt.Params, ok bool) {
-	filters := streamFilters(d, st)
+func ccittEncodedAndParams(d core.View, st *Stream, width, height int) (encoded []byte, params ccitt.Params, ok bool) {
+	filters := d.StreamFilters(st)
 	if len(filters) == 0 {
 		return nil, params, false
 	}
@@ -543,7 +551,7 @@ func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded 
 
 	encoded = st.Data
 	for i := 0; i < last; i++ {
-		out, err := core.ApplyFilter(d.canceler(), filters[i], encoded, core.ParmsDictAt(parms, i), d.lim())
+		out, err := core.ApplyFilter(d.Cancel, filters[i], encoded, core.ParmsDictAt(parms, i), d.Limits)
 		if err != nil {
 			return nil, params, false
 		}
@@ -576,8 +584,8 @@ func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded 
 // (reversing any general-purpose filters that precede JBIG2Decode) and the
 // decoded /JBIG2Globals shared-segment stream when present. ok is false when a
 // preceding filter cannot be reversed.
-func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, ok bool) {
-	filters := streamFilters(d, st)
+func jbig2EncodedAndGlobals(d core.View, st *Stream) (encoded, globals []byte, ok bool) {
+	filters := d.StreamFilters(st)
 	if len(filters) == 0 {
 		return nil, nil, false
 	}
@@ -586,7 +594,7 @@ func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, o
 
 	encoded = st.Data
 	for i := 0; i < last; i++ {
-		out, err := core.ApplyFilter(d.canceler(), filters[i], encoded, core.ParmsDictAt(parms, i), d.lim())
+		out, err := core.ApplyFilter(d.Cancel, filters[i], encoded, core.ParmsDictAt(parms, i), d.Limits)
 		if err != nil {
 			return nil, nil, false
 		}
@@ -595,7 +603,7 @@ func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, o
 
 	if cp := core.ParmsDictAt(parms, last); cp != nil {
 		if gs, ok := d.Resolve(cp.Get("JBIG2Globals")).(*Stream); ok {
-			if data, err := core.DecodeStreamData(d.canceler(), gs, d.lim()); err == nil {
+			if data, err := core.DecodeStreamData(d.Cancel, gs, d.Limits); err == nil {
 				globals = data
 			}
 		}
@@ -660,7 +668,7 @@ func samplesToImage(data []byte, w, h, bpc int, cs string) (image.Image, bool) {
 
 // colorSpaceName returns a best-effort colour space name: a direct name, or the
 // leading name of an array space (e.g. ICCBased, Indexed).
-func colorSpaceName(d *Document, obj Object) string {
+func colorSpaceName(d core.View, obj Object) string {
 	switch cs := d.Resolve(obj).(type) {
 	case Name:
 		return string(cs)
@@ -677,7 +685,7 @@ func colorSpaceName(d *Document, obj Object) string {
 // imageMaskToImage renders a 1-bit stencil mask (/ImageMask true): samples select
 // where the fill colour would paint. It is rendered as black where painted, white
 // elsewhere; /Decode [1 0] inverts which bit paints.
-func imageMaskToImage(d *Document, st *Stream, data []byte, w, h int) (image.Image, bool) {
+func imageMaskToImage(d core.View, st *Stream, data []byte, w, h int) (image.Image, bool) {
 	if w <= 0 || h <= 0 || !sampleDataFits(data, w, h, 1, 1) {
 		return nil, false
 	}

@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"image"
 	"image/draw"
 )
@@ -19,7 +20,7 @@ import (
 // applyImageMasks applies a stencil /Mask and/or a soft /SMask to a codec-
 // decoded image. It returns m unchanged when neither is present; otherwise it
 // returns a fresh *image.NRGBA with the alpha channel composited in.
-func applyImageMasks(d *Document, st *Stream, m image.Image) image.Image {
+func applyImageMasks(d core.View, st *Stream, m image.Image) image.Image {
 	if m == nil {
 		return m
 	}

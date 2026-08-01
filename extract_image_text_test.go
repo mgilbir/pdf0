@@ -118,7 +118,7 @@ func TestBilevelDecodeInversion(t *testing.T) {
 	}
 	pixel := func(st *Stream) uint32 {
 		img := &ExtractedImage{Width: 1, Height: 1, ColorSpace: "DeviceGray", BitsPerComponent: 1}
-		renderBilevelSamples(doc, st, img, []byte{0x80}, "unsupported") // sample bit = 1
+		renderBilevelSamples(doc.view(), st, img, []byte{0x80}, "unsupported") // sample bit = 1
 		if !img.Decoded || img.Image == nil {
 			t.Fatal("bilevel samples should decode")
 		}
