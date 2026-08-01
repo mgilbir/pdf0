@@ -100,13 +100,13 @@ func (d *Document) WriteIncremental(w io.Writer, original []byte, changed []int)
 	trailer.Set("Size", Integer(maxObj+1))
 	trailer.Set("Prev", Integer(prevXref))
 	trailer.Delete("XRefStm") // this update is a traditional section
-	if err := s.writeString("trailer\n"); err != nil {
+	if err := s.WriteString("trailer\n"); err != nil {
 		return err
 	}
-	if err := s.writeDictionary(trailer); err != nil {
+	if err := s.WriteDictionary(trailer); err != nil {
 		return err
 	}
-	if err := s.writeString(fmt.Sprintf("\nstartxref\n%d\n%%%%EOF\n", xrefOffset)); err != nil {
+	if err := s.WriteString(fmt.Sprintf("\nstartxref\n%d\n%%%%EOF\n", xrefOffset)); err != nil {
 		return err
 	}
 
@@ -117,7 +117,7 @@ func (d *Document) WriteIncremental(w io.Writer, original []byte, changed []int)
 // writeIncrementalXRef writes a traditional xref section covering only the given
 // object numbers, in contiguous subsections.
 func writeIncrementalXRef(s *Serializer, nums []int, offsets map[int]int64, free map[int]bool, objects map[int]*IndirectObject) error {
-	if err := s.writeString("xref\n"); err != nil {
+	if err := s.WriteString("xref\n"); err != nil {
 		return err
 	}
 	entry := func(num int) string {
@@ -135,11 +135,11 @@ func writeIncrementalXRef(s *Serializer, nums []int, offsets map[int]int64, free
 		for j+1 < len(nums) && nums[j+1] == nums[j]+1 {
 			j++
 		}
-		if err := s.writeString(fmt.Sprintf("%d %d\n", nums[i], j-i+1)); err != nil {
+		if err := s.WriteString(fmt.Sprintf("%d %d\n", nums[i], j-i+1)); err != nil {
 			return err
 		}
 		for k := i; k <= j; k++ {
-			if err := s.writeString(entry(nums[k])); err != nil {
+			if err := s.WriteString(entry(nums[k])); err != nil {
 				return err
 			}
 		}

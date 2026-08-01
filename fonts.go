@@ -3,6 +3,7 @@ package pdf0
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/font"
+	"github.com/mgilbir/pdf0/syntax"
 	"strings"
 	"unicode"
 )
@@ -1978,7 +1979,7 @@ func parseCharSet(s string) map[string]bool {
 		}
 		s = s[i+1:]
 		end := 0
-		for end < len(s) && s[end] != '/' && !isWhitespace(s[end]) {
+		for end < len(s) && s[end] != '/' && !syntax.IsWhitespace(s[end]) {
 			end++
 		}
 		if end > 0 {

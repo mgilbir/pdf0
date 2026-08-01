@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"github.com/mgilbir/pdf0/syntax"
 	"io"
 	"strconv"
 )
@@ -45,7 +46,7 @@ func ParseXRefTable(data []byte, pos int64) (*XRefTable, error) {
 
 	for {
 		// Skip whitespace
-		for pos < int64(len(data)) && isWhitespace(data[pos]) {
+		for pos < int64(len(data)) && syntax.IsWhitespace(data[pos]) {
 			pos++
 		}
 		if pos >= int64(len(data)) {
@@ -441,12 +442,12 @@ func asciiHexDecode(data []byte) ([]byte, error) {
 		if b == '>' {
 			break
 		}
-		if isWhitespace(b) {
+		if syntax.IsWhitespace(b) {
 			continue
 		}
 		hexDigits = append(hexDigits, b)
 	}
-	return decodeHex(hexDigits)
+	return syntax.DecodeHex(hexDigits)
 }
 
 // splitFields splits a string by whitespace into non-empty fields.
@@ -454,7 +455,7 @@ func splitFields(s string) []string {
 	var fields []string
 	start := -1
 	for i := 0; i < len(s); i++ {
-		if isWhitespace(s[i]) {
+		if syntax.IsWhitespace(s[i]) {
 			if start >= 0 {
 				fields = append(fields, s[start:i])
 				start = -1
@@ -495,16 +496,16 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 		i = pos + 3
 		// The keyword must be delimited on both sides ("endobj" has 'd'
 		// before; "objx" has a regular character after).
-		if pos+3 < len(data) && !isWhitespace(data[pos+3]) && !isDelimiter(data[pos+3]) {
+		if pos+3 < len(data) && !syntax.IsWhitespace(data[pos+3]) && !syntax.IsDelimiter(data[pos+3]) {
 			continue
 		}
-		if pos == 0 || !isWhitespace(data[pos-1]) {
+		if pos == 0 || !syntax.IsWhitespace(data[pos-1]) {
 			continue
 		}
 		// Backtrack over: whitespace, generation digits, whitespace, object
 		// number digits.
 		k := pos - 1
-		for k >= 0 && isWhitespace(data[k]) {
+		for k >= 0 && syntax.IsWhitespace(data[k]) {
 			k--
 		}
 		genEnd := k + 1
@@ -515,10 +516,10 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 		if genStart == genEnd || genEnd-genStart > 5 {
 			continue
 		}
-		if k < 0 || !isWhitespace(data[k]) {
+		if k < 0 || !syntax.IsWhitespace(data[k]) {
 			continue
 		}
-		for k >= 0 && isWhitespace(data[k]) {
+		for k >= 0 && syntax.IsWhitespace(data[k]) {
 			k--
 		}
 		numEnd := k + 1
@@ -531,7 +532,7 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 		}
 		// The object number must itself be delimited (start of file,
 		// whitespace or a delimiter before it).
-		if numStart > 0 && !isWhitespace(data[numStart-1]) && !isDelimiter(data[numStart-1]) {
+		if numStart > 0 && !syntax.IsWhitespace(data[numStart-1]) && !syntax.IsDelimiter(data[numStart-1]) {
 			continue
 		}
 		num, err1 := strconv.Atoi(string(data[numStart:numEnd]))
@@ -563,10 +564,10 @@ func findTrailerByScan(data []byte) *Dictionary {
 		}
 		pos := i + j
 		i = pos + 7
-		if pos > 0 && !isWhitespace(data[pos-1]) && !isDelimiter(data[pos-1]) {
+		if pos > 0 && !syntax.IsWhitespace(data[pos-1]) && !syntax.IsDelimiter(data[pos-1]) {
 			continue
 		}
-		if pos+7 < len(data) && !isWhitespace(data[pos+7]) && !isDelimiter(data[pos+7]) {
+		if pos+7 < len(data) && !syntax.IsWhitespace(data[pos+7]) && !syntax.IsDelimiter(data[pos+7]) {
 			continue
 		}
 		lx := NewLexer(data)

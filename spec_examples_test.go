@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/mgilbir/pdf0/syntax"
 	"os"
 	"regexp"
 	"strings"
@@ -474,7 +475,7 @@ func tryParseXref(t *testing.T, content string) {
 
 	data := []byte(content)
 	pos := int64(idx + len("xref"))
-	for pos < int64(len(data)) && isWhitespace(data[pos]) {
+	for pos < int64(len(data)) && syntax.IsWhitespace(data[pos]) {
 		pos++
 	}
 

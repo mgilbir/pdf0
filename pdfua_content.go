@@ -1,5 +1,9 @@
 package pdf0
 
+import (
+	"github.com/mgilbir/pdf0/syntax"
+)
+
 // This file owns the content-stream side of PDF/UA validation (ISO 14289-1
 // 7.1/7.18/7.20): text must sit in a tagged or /Artifact marked-content
 // sequence, the two kinds must not nest in one another, a form XObject holding
@@ -230,7 +234,7 @@ func bytesContainsToken(data []byte, tok string) bool {
 			return false
 		}
 		end := i + j + len(tok)
-		if end >= len(data) || isWhitespace(data[end]) || isContentDelim(data[end]) {
+		if end >= len(data) || syntax.IsWhitespace(data[end]) || isContentDelim(data[end]) {
 			return true
 		}
 		i = i + j + 1

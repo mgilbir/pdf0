@@ -2,25 +2,26 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/syntax"
 	"testing"
 )
 
 func TestEndstreamFollowsAt(t *testing.T) {
 	// data = "<DATA>\nendstream", the data region is bytes [0,4).
 	d := []byte("ABCD\nendstream")
-	if !endstreamFollowsAt(d, 4) {
+	if !syntax.EndstreamFollowsAt(d, 4) {
 		t.Error("endstream after one EOL not recognized")
 	}
-	if !endstreamFollowsAt([]byte("ABCDendstream"), 4) {
+	if !syntax.EndstreamFollowsAt([]byte("ABCDendstream"), 4) {
 		t.Error("endstream with no EOL not recognized")
 	}
-	if !endstreamFollowsAt([]byte("ABCD\r\n\r\nendstream"), 4) {
+	if !syntax.EndstreamFollowsAt([]byte("ABCD\r\n\r\nendstream"), 4) {
 		t.Error("endstream after extra whitespace not recognized")
 	}
-	if endstreamFollowsAt(d, 2) {
+	if syntax.EndstreamFollowsAt(d, 2) {
 		t.Error("wrong offset (mid-data) must not match")
 	}
-	if endstreamFollowsAt(d, 100) {
+	if syntax.EndstreamFollowsAt(d, 100) {
 		t.Error("out-of-range offset must not match")
 	}
 }

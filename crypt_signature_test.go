@@ -140,7 +140,7 @@ func appendClearSignature(t *testing.T, enc []byte, cert *x509.Certificate, key 
 	trailer.Set("Size", Integer(sigNum+1))
 	trailer.Set("Prev", Integer(prevXref))
 	s := NewSerializer(&out)
-	if err := s.writeDictionary(trailer); err != nil {
+	if err := s.WriteDictionary(trailer); err != nil {
 		t.Fatal(err)
 	}
 	fmt.Fprintf(&out, "\nstartxref\n%d\n%%%%EOF\n", xrefOff)

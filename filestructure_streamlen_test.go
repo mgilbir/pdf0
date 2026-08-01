@@ -3,12 +3,13 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/syntax"
 	"testing"
 	"time"
 )
 
 // TestAllDelimitedKeywordsEquivalence pins allDelimitedKeywords +
-// firstKeywordAtOrAfter to the same results a per-position findDelimitedKeyword
+// firstKeywordAtOrAfter to the same results a per-position syntax.FindDelimitedKeyword
 // scan produces. checkStreamLengthBytes relies on that equivalence to replace a
 // per-object forward scan (O(objects × filesize)) with a one-pass precompute and
 // a binary search, so any drift here would change validation output.
@@ -20,10 +21,10 @@ func TestAllDelimitedKeywordsEquivalence(t *testing.T) {
 	for _, kw := range []string{"stream", "endobj", "endstream"} {
 		for _, ws := range []bool{true, false} {
 			got := allDelimitedKeywords(data, kw, ws)
-			// Reference: repeatedly call findDelimitedKeyword advancing past each hit.
+			// Reference: repeatedly call syntax.FindDelimitedKeyword advancing past each hit.
 			var want []int64
 			for pos := int64(0); ; {
-				at := findDelimitedKeyword(data, pos, kw, ws)
+				at := syntax.FindDelimitedKeyword(data, pos, kw, ws)
 				if at < 0 {
 					break
 				}
@@ -33,19 +34,19 @@ func TestAllDelimitedKeywordsEquivalence(t *testing.T) {
 			if fmt.Sprint(got) != fmt.Sprint(want) {
 				t.Errorf("allDelimitedKeywords(%q, ws=%v) = %v, want %v", kw, ws, got, want)
 			}
-			// firstKeywordAtOrAfter must match findDelimitedKeyword at every search
+			// firstKeywordAtOrAfter must match syntax.FindDelimitedKeyword at every search
 			// start, except the degenerate case where the start sits exactly on a
-			// keyword that lacks leading whitespace: findDelimitedKeyword accepts it
+			// keyword that lacks leading whitespace: syntax.FindDelimitedKeyword accepts it
 			// via its `at == start` clause. That never happens in checkStreamLengthBytes
 			// (a search always starts at an "N G obj" offset, a digit — never on a
 			// keyword), so the precompute deliberately omits it.
 			for pos := int64(0); pos <= int64(len(data)); pos++ {
-				b := findDelimitedKeyword(data, pos, kw, ws)
-				if ws && b == pos && pos > 0 && !isWhitespace(data[pos-1]) {
+				b := syntax.FindDelimitedKeyword(data, pos, kw, ws)
+				if ws && b == pos && pos > 0 && !syntax.IsWhitespace(data[pos-1]) {
 					continue // the `at == start` special case, irrelevant to real usage
 				}
 				if a := firstKeywordAtOrAfter(got, pos); a != b {
-					t.Fatalf("%q ws=%v pos=%d: firstKeywordAtOrAfter=%d findDelimitedKeyword=%d", kw, ws, pos, a, b)
+					t.Fatalf("%q ws=%v pos=%d: firstKeywordAtOrAfter=%d syntax.FindDelimitedKeyword=%d", kw, ws, pos, a, b)
 				}
 			}
 		}

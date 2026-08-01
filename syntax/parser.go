@@ -1,8 +1,9 @@
-package pdf0
+package syntax
 
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"strconv"
 )
 
@@ -33,13 +34,13 @@ type Parser struct {
 	bufLen int
 	depth  int // current nesting depth (arrays/dictionaries)
 
-	// resolveLength, when set, resolves an indirect stream /Length reference to
+	// ResolveLength, when set, resolves an indirect stream /Length reference to
 	// its integer value (typically via the cross-reference table). It lets
 	// parseStream honour a forward-referenced /Length instead of falling back to
 	// the endstream search, which can catastrophically over-read (see
 	// parseStream). It returns false when the reference cannot be resolved to a
 	// plain non-negative integer, in which case the search fallback is used.
-	resolveLength func(ref IndirectRef) (int64, bool)
+	ResolveLength func(ref object.IndirectRef) (int64, bool)
 }
 
 // NewParser creates a new Parser for the given data.
@@ -91,7 +92,7 @@ func (p *Parser) consumeToken() {
 }
 
 // ParseObject parses any PDF object from the token stream.
-func (p *Parser) ParseObject() (Object, error) {
+func (p *Parser) ParseObject() (object.Object, error) {
 	p.depth++
 	defer func() { p.depth-- }()
 	if p.depth > maxParseDepth {
@@ -106,7 +107,7 @@ func (p *Parser) ParseObject() (Object, error) {
 	switch tok.Type {
 	case TokenBoolean:
 		p.consumeToken()
-		return Boolean(string(tok.Value) == "true"), nil
+		return object.Boolean(string(tok.Value) == "true"), nil
 
 	case TokenInteger:
 		// Look ahead for "N G R" (indirect ref) or "N G obj" (indirect obj)
@@ -118,7 +119,7 @@ func (p *Parser) ParseObject() (Object, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid real %q at offset %d: %w", tok.Value, tok.Offset, err)
 		}
-		return Real(val), nil
+		return object.Real(val), nil
 
 	case TokenString:
 		p.consumeToken()
@@ -129,11 +130,11 @@ func (p *Parser) ParseObject() (Object, error) {
 		if tok.Offset >= 0 && tok.Offset < int64(len(p.lexer.data)) {
 			isHex = p.lexer.data[tok.Offset] == '<'
 		}
-		return String{Value: tok.Value, IsHex: isHex}, nil
+		return object.String{Value: tok.Value, IsHex: isHex}, nil
 
 	case TokenName:
 		p.consumeToken()
-		return Name(tok.Value), nil
+		return object.Name(tok.Value), nil
 
 	case TokenArrayStart:
 		return p.parseArray()
@@ -143,7 +144,7 @@ func (p *Parser) ParseObject() (Object, error) {
 
 	case TokenNull:
 		p.consumeToken()
-		return Null{}, nil
+		return object.Null{}, nil
 
 	case TokenEOF:
 		return nil, fmt.Errorf("unexpected end of input")
@@ -158,7 +159,7 @@ func (p *Parser) ParseObject() (Object, error) {
 // returns an error for malformed input (clean end of input is TokenEOF), and
 // swallowing it here would silently drop the diagnostic while the lexer has
 // already advanced past the bad bytes.
-func (p *Parser) parseIntegerOrRef(tok Token) (Object, error) {
+func (p *Parser) parseIntegerOrRef(tok Token) (object.Object, error) {
 	// Try to look ahead for "N G R" or "N G obj"
 	tok2, err := p.peekToken(1)
 	if err != nil {
@@ -185,7 +186,7 @@ func (p *Parser) parseIntegerOrRef(tok Token) (Object, error) {
 			if err != nil {
 				return nil, err
 			}
-			return IndirectRef{Number: num, Generation: gen}, nil
+			return object.IndirectRef{Number: num, Generation: gen}, nil
 		}
 
 		if tok3.Type == TokenObj {
@@ -204,12 +205,12 @@ func (p *Parser) parseIntegerOrRef(tok Token) (Object, error) {
 	return p.toInteger(tok)
 }
 
-func (p *Parser) toInteger(tok Token) (Integer, error) {
+func (p *Parser) toInteger(tok Token) (object.Integer, error) {
 	val, err := strconv.ParseInt(string(tok.Value), 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid integer %q at offset %d: %w", tok.Value, tok.Offset, err)
 	}
-	return Integer(val), nil
+	return object.Integer(val), nil
 }
 
 // toObjectNumber parses an object or generation number, rejecting values that
@@ -226,14 +227,14 @@ func (p *Parser) toObjectNumber(tok Token) (int, error) {
 	return val, nil
 }
 
-// integerObjectValue reads an indirect object of the exact shape
+// IntegerObjectValue reads an indirect object of the exact shape
 // "N G obj <integer>" and returns its non-negative integer value. It is used to
 // resolve an indirect stream /Length without parsing an arbitrarily large
 // value: it reads only four tokens and never recurses, so an adversarial
 // /Length pointing at a huge composite object costs nothing. It returns false
 // unless the four tokens are exactly integer, integer, 'obj', integer with a
 // non-negative value.
-func (p *Parser) integerObjectValue() (int64, bool) {
+func (p *Parser) IntegerObjectValue() (int64, bool) {
 	var toks [4]Token
 	for i := range toks {
 		t, err := p.nextToken()
@@ -254,9 +255,9 @@ func (p *Parser) integerObjectValue() (int64, bool) {
 }
 
 // parseArray parses a PDF array: [ obj1 obj2 ... ]
-func (p *Parser) parseArray() (Object, error) {
+func (p *Parser) parseArray() (object.Object, error) {
 	p.consumeToken() // consume '['
-	var items Array
+	var items object.Array
 
 	for {
 		tok, err := p.peekToken(0)
@@ -287,13 +288,13 @@ func (p *Parser) parseArray() (Object, error) {
 const dictIndexThreshold = 64
 
 // parseDictOrStream parses a dictionary, and if followed by 'stream', parses it as a Stream.
-func (p *Parser) parseDictOrStream() (Object, error) {
+func (p *Parser) parseDictOrStream() (object.Object, error) {
 	p.consumeToken() // consume '<<'
-	dict := Dictionary{}
+	dict := object.Dictionary{}
 	// index maps a key to its slot in dict once the dictionary grows past
 	// dictIndexThreshold, so duplicate-key handling stays O(1) instead of a
 	// linear scan per key. It is nil (and unused) for small dictionaries.
-	var index map[Name]int
+	var index map[object.Name]int
 
 	for {
 		tok, err := p.peekToken(0)
@@ -313,7 +314,7 @@ func (p *Parser) parseDictOrStream() (Object, error) {
 			return nil, fmt.Errorf("expected name key in dictionary, got %v at offset %d", tok.Type, tok.Offset)
 		}
 		p.consumeToken()
-		key := Name(tok.Value)
+		key := object.Name(tok.Value)
 
 		// Value
 		val, err := p.ParseObject()
@@ -335,7 +336,7 @@ func (p *Parser) parseDictOrStream() (Object, error) {
 		} else {
 			dict.Set(key, val)
 			if len(dict.Keys) >= dictIndexThreshold {
-				index = make(map[Name]int, len(dict.Keys)*2)
+				index = make(map[object.Name]int, len(dict.Keys)*2)
 				for i, k := range dict.Keys {
 					index[k] = i
 				}
@@ -357,7 +358,7 @@ func (p *Parser) parseDictOrStream() (Object, error) {
 }
 
 // parseStream parses stream data after the dictionary has been parsed.
-func (p *Parser) parseStream(dict Dictionary) (Object, error) {
+func (p *Parser) parseStream(dict object.Dictionary) (object.Object, error) {
 	p.consumeToken() // consume 'stream'
 
 	// After 'stream' keyword, there must be a single EOL marker (\r\n or \n)
@@ -396,9 +397,9 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 	var length int64
 
 	switch l := lengthObj.(type) {
-	case Integer:
+	case object.Integer:
 		length = int64(l)
-	case IndirectRef:
+	case object.IndirectRef:
 		// Length is an indirect reference to an integer object defined
 		// elsewhere in the file (often a forward reference). Resolve it through
 		// the cross-reference table when a resolver is available; this is what
@@ -412,8 +413,8 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 		// If resolution fails, or the resolved length does not actually place
 		// endstream where expected, the search fallback below still runs.
 		length = -1
-		if p.resolveLength != nil {
-			if n, ok := p.resolveLength(l); ok {
+		if p.ResolveLength != nil {
+			if n, ok := p.ResolveLength(l); ok {
 				length = n
 			}
 		}
@@ -434,7 +435,7 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 	// reader must recover from (ISO 32000-1 7.3.8.1, NOTE 2) — fall back to
 	// locating endstream by search. The resulting Stream.Data then reflects
 	// the true byte count, letting the validator flag the mismatch.
-	if length >= 0 && endstreamFollowsAt(p.lexer.data, pos+length) {
+	if length >= 0 && EndstreamFollowsAt(p.lexer.data, pos+length) {
 		endPos := pos + length
 		data = make([]byte, length)
 		copy(data, p.lexer.data[pos:endPos])
@@ -449,7 +450,7 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 		// that follows binary data and slurp forward to a distant one — an
 		// O(n^2) over-read across many streams (a 55 MB file with streams
 		// sharing one wrong /Length expanded to 6.3 GB of stream data on read).
-		endPos := findDelimitedKeyword(p.lexer.data, pos, "endstream", false)
+		endPos := FindDelimitedKeyword(p.lexer.data, pos, "endstream", false)
 		if endPos < 0 {
 			return nil, fmt.Errorf("could not find endstream marker")
 		}
@@ -478,10 +479,10 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 		return nil, fmt.Errorf("expected endstream, got %v at offset %d", tok.Type, tok.Offset)
 	}
 
-	return &Stream{Dict: dict, Data: data}, nil
+	return &object.Stream{Dict: dict, Data: data}, nil
 }
 
-// findDelimitedKeyword returns the offset of the first occurrence of keyword
+// FindDelimitedKeyword returns the offset of the first occurrence of keyword
 // at or after start that stands alone as a token: followed by a non-regular
 // character or end of input, and — when requireLeadingWS is set — preceded by
 // whitespace (or at start). Returns -1 if none exists.
@@ -493,7 +494,7 @@ func (p *Parser) parseStream(dict Dictionary) (Object, error) {
 // Callers scanning file structure for the "stream"/"endobj" keywords pass true:
 // those keywords are whitespace-delimited, and it is what lets the "stream"
 // search avoid matching the trailing "stream" inside "endstream".
-func findDelimitedKeyword(data []byte, start int64, keyword string, requireLeadingWS bool) int64 {
+func FindDelimitedKeyword(data []byte, start int64, keyword string, requireLeadingWS bool) int64 {
 	marker := []byte(keyword)
 	for from := start; from < int64(len(data)); {
 		idx := bytes.Index(data[from:], marker)
@@ -502,8 +503,8 @@ func findDelimitedKeyword(data []byte, start int64, keyword string, requireLeadi
 		}
 		at := from + int64(idx)
 		end := at + int64(len(marker))
-		beforeOK := !requireLeadingWS || at == start || isWhitespace(data[at-1])
-		afterOK := end >= int64(len(data)) || !isRegular(data[end])
+		beforeOK := !requireLeadingWS || at == start || IsWhitespace(data[at-1])
+		afterOK := end >= int64(len(data)) || !IsRegular(data[end])
 		if beforeOK && afterOK {
 			return at
 		}
@@ -513,7 +514,7 @@ func findDelimitedKeyword(data []byte, start int64, keyword string, requireLeadi
 }
 
 // ParseIndirectObject parses an indirect object definition: N G obj ... endobj
-func (p *Parser) ParseIndirectObject() (*IndirectObject, error) {
+func (p *Parser) ParseIndirectObject() (*object.IndirectObject, error) {
 	numTok, err := p.nextToken()
 	if err != nil {
 		return nil, err
@@ -559,17 +560,17 @@ func (p *Parser) ParseIndirectObject() (*IndirectObject, error) {
 		return nil, fmt.Errorf("expected 'endobj', got %v at offset %d", endTok.Type, endTok.Offset)
 	}
 
-	return &IndirectObject{
+	return &object.IndirectObject{
 		Number:     num,
 		Generation: gen,
 		Value:      value,
 	}, nil
 }
 
-// endstreamFollowsAt reports whether the endstream keyword appears at offset
+// EndstreamFollowsAt reports whether the endstream keyword appears at offset
 // off, allowing a single optional EOL marker of whitespace before it. Used to
 // decide whether a declared stream Length can be trusted.
-func endstreamFollowsAt(data []byte, off int64) bool {
+func EndstreamFollowsAt(data []byte, off int64) bool {
 	n := int64(len(data))
 	if off < 0 || off > n {
 		return false
@@ -579,7 +580,7 @@ func endstreamFollowsAt(data []byte, off int64) bool {
 	// keyword (a correct stream has exactly one EOL, but some writers add
 	// more); a genuinely wrong Length lands on non-whitespace, non-keyword
 	// bytes and is rejected.
-	for i < n && isWhitespace(data[i]) {
+	for i < n && IsWhitespace(data[i]) {
 		i++
 	}
 	marker := []byte("endstream")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/syntax"
 	"io"
 	"sort"
 	"strconv"
@@ -387,7 +388,7 @@ func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int6
 		}
 		lx := NewLexer(data)
 		lx.SetPosition(lo)
-		return NewParserFromLexer(lx).integerObjectValue()
+		return NewParserFromLexer(lx).IntegerObjectValue()
 	}
 	for num, entry := range xrefTable.Entries {
 		// Per object: the unit of work here is one object parse, which for a
@@ -430,7 +431,7 @@ func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int6
 		}
 		lexer.SetPosition(off)
 		parser := NewParserFromLexer(lexer)
-		parser.resolveLength = resolveLen
+		parser.ResolveLength = resolveLen
 		iobj, err := parser.ParseIndirectObject()
 		if err != nil {
 			if lenient {
@@ -584,7 +585,7 @@ func findStartXref(data []byte) (int64, error) {
 
 	// Skip "startxref" and whitespace to get the offset value
 	pos := idx + len("startxref")
-	for pos < len(tail) && isWhitespace(tail[pos]) {
+	for pos < len(tail) && syntax.IsWhitespace(tail[pos]) {
 		pos++
 	}
 
@@ -751,7 +752,7 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 		version = "2.0"
 	}
 	header := fmt.Sprintf("%%PDF-%s\n%%\x80\x80\x80\x80\n", version)
-	if err := s.writeString(header); err != nil {
+	if err := s.WriteString(header); err != nil {
 		return err
 	}
 
@@ -807,19 +808,19 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 		// (Dictionary shares its backing slices on a plain struct copy).
 		trailer := d.Trailer.Clone()
 		trailer.Set("Size", Integer(maxObj+1))
-		if err := s.writeString("trailer\n"); err != nil {
+		if err := s.WriteString("trailer\n"); err != nil {
 			return err
 		}
-		if err := s.writeDictionary(trailer); err != nil {
+		if err := s.WriteDictionary(trailer); err != nil {
 			return err
 		}
-		if err := s.writeString("\n"); err != nil {
+		if err := s.WriteString("\n"); err != nil {
 			return err
 		}
 	}
 
 	// 5. Write startxref
-	if err := s.writeString(fmt.Sprintf("startxref\n%d\n%%%%EOF\n", xrefOffset)); err != nil {
+	if err := s.WriteString(fmt.Sprintf("startxref\n%d\n%%%%EOF\n", xrefOffset)); err != nil {
 		return err
 	}
 
@@ -948,7 +949,7 @@ func byteWidth(v uint64) int {
 // would then have to be maintained. The only free entry is the list head
 // (object 0, generation 65535, next-free 0: the canonical empty list).
 func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject) error {
-	if err := s.writeString("xref\n"); err != nil {
+	if err := s.WriteString("xref\n"); err != nil {
 		return err
 	}
 
@@ -972,11 +973,11 @@ func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects
 	// objects numbered from 1 up continue it.
 	section := []int{0}
 	flush := func() error {
-		if err := s.writeString(fmt.Sprintf("%d %d\n", section[0], len(section))); err != nil {
+		if err := s.WriteString(fmt.Sprintf("%d %d\n", section[0], len(section))); err != nil {
 			return err
 		}
 		for _, num := range section {
-			if err := s.writeString(entryLine(num)); err != nil {
+			if err := s.WriteString(entryLine(num)); err != nil {
 				return err
 			}
 		}
@@ -1078,7 +1079,7 @@ func xrefLooksValid(data []byte, off int64) bool {
 		return false
 	}
 	i := off
-	for i < int64(len(data)) && isWhitespace(data[i]) {
+	for i < int64(len(data)) && syntax.IsWhitespace(data[i]) {
 		i++
 	}
 	rest := data[i:]

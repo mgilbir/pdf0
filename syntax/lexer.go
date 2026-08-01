@@ -1,4 +1,4 @@
-package pdf0
+package syntax
 
 import (
 	"bytes"
@@ -156,8 +156,8 @@ func (l *Lexer) advance() byte {
 	return b
 }
 
-// isWhitespace returns true for PDF whitespace characters (Table 1 in PDF spec).
-func isWhitespace(b byte) bool {
+// IsWhitespace returns true for PDF whitespace characters (Table 1 in PDF spec).
+func IsWhitespace(b byte) bool {
 	switch b {
 	case 0, '\t', '\n', '\f', '\r', ' ':
 		return true
@@ -165,8 +165,8 @@ func isWhitespace(b byte) bool {
 	return false
 }
 
-// isDelimiter returns true for PDF delimiter characters.
-func isDelimiter(b byte) bool {
+// IsDelimiter returns true for PDF delimiter characters.
+func IsDelimiter(b byte) bool {
 	switch b {
 	case '(', ')', '<', '>', '[', ']', '{', '}', '/', '%':
 		return true
@@ -174,9 +174,9 @@ func isDelimiter(b byte) bool {
 	return false
 }
 
-// isRegular returns true if b is not whitespace and not a delimiter.
-func isRegular(b byte) bool {
-	return !isWhitespace(b) && !isDelimiter(b)
+// IsRegular returns true if b is not whitespace and not a delimiter.
+func IsRegular(b byte) bool {
+	return !IsWhitespace(b) && !IsDelimiter(b)
 }
 
 // skipWhitespaceAndComments skips whitespace and comments.
@@ -197,7 +197,7 @@ func (l *Lexer) skipWhitespaceAndComments() {
 			return
 		}
 		b := l.peek()
-		if isWhitespace(b) {
+		if IsWhitespace(b) {
 			l.advance()
 			continue
 		}
@@ -351,7 +351,7 @@ func (l *Lexer) scanHexString(offset int64) (Token, error) {
 		b := l.advance()
 		if b == '>' {
 			// Decode hex digits
-			decoded, err := decodeHex(hexDigits)
+			decoded, err := DecodeHex(hexDigits)
 			if err != nil {
 				return Token{}, fmt.Errorf("invalid hex string at offset %d: %w", offset, err)
 			}
@@ -361,7 +361,7 @@ func (l *Lexer) scanHexString(offset int64) (Token, error) {
 				Offset: offset,
 			}, nil
 		}
-		if isWhitespace(b) {
+		if IsWhitespace(b) {
 			continue // ignore whitespace in hex strings
 		}
 		hexDigits = append(hexDigits, b)
@@ -370,9 +370,9 @@ func (l *Lexer) scanHexString(offset int64) (Token, error) {
 	return Token{}, fmt.Errorf("unterminated hex string starting at offset %d", offset)
 }
 
-// decodeHex decodes hex digit bytes into a byte slice.
+// DecodeHex decodes hex digit bytes into a byte slice.
 // If odd number of digits, a trailing 0 is assumed.
-func decodeHex(digits []byte) ([]byte, error) {
+func DecodeHex(digits []byte) ([]byte, error) {
 	if len(digits)%2 != 0 {
 		digits = append(digits, '0')
 	}
@@ -410,7 +410,7 @@ func (l *Lexer) scanName(offset int64) (Token, error) {
 
 	for !l.atEnd() {
 		b := l.peek()
-		if isWhitespace(b) || isDelimiter(b) {
+		if IsWhitespace(b) || IsDelimiter(b) {
 			break
 		}
 		l.advance()
@@ -483,7 +483,7 @@ func (l *Lexer) scanNumber(offset int64) (Token, error) {
 // scanKeyword scans a keyword token (regular characters until whitespace/delimiter).
 func (l *Lexer) scanKeyword(offset int64) (Token, error) {
 	start := l.pos
-	for !l.atEnd() && isRegular(l.peek()) {
+	for !l.atEnd() && IsRegular(l.peek()) {
 		l.advance()
 	}
 

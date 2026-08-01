@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/syntax"
 	"slices"
 	"sort"
 	"unicode/utf8"
@@ -283,8 +284,8 @@ func lastIndexToken(b []byte, kw string) int {
 		if !bytes.Equal(b[i:i+len(k)], k) {
 			continue
 		}
-		before := i == 0 || !isRegular(b[i-1])
-		after := i+len(k) >= len(b) || !isRegular(b[i+len(k)])
+		before := i == 0 || !syntax.IsRegular(b[i-1])
+		after := i+len(k) >= len(b) || !syntax.IsRegular(b[i+len(k)])
 		if before && after {
 			return i
 		}
@@ -444,10 +445,10 @@ func checkXRefTableFormat(doc *Document, level PDFALevel, raw []byte) []Validati
 		if !bytes.Equal(raw[i:i+4], []byte("xref")) {
 			continue
 		}
-		if i > 0 && isRegular(raw[i-1]) {
+		if i > 0 && syntax.IsRegular(raw[i-1]) {
 			continue // startxref or similar
 		}
-		if i+4 >= len(raw) || isRegular(raw[i+4]) {
+		if i+4 >= len(raw) || syntax.IsRegular(raw[i+4]) {
 			continue // xref stream object header etc.
 		}
 		validateXRefSectionFormat(raw, i+4, add)
@@ -860,8 +861,8 @@ func indexToken(b []byte, kw string) int {
 		if !bytes.Equal(b[i:i+len(k)], k) {
 			continue
 		}
-		before := i == 0 || !isRegular(b[i-1])
-		after := i+len(k) >= len(b) || !isRegular(b[i+len(k)])
+		before := i == 0 || !syntax.IsRegular(b[i-1])
+		after := i+len(k) >= len(b) || !syntax.IsRegular(b[i+len(k)])
 		if before && after {
 			return i
 		}
@@ -1342,7 +1343,7 @@ func checkStreamLengthBytes(doc *Document, level PDFALevel, raw []byte) []Valida
 // allDelimitedKeywords returns, in ascending order, every offset where keyword
 // occurs as a delimited token in data: preceded by whitespace (when
 // requireLeadingWS) and followed by a non-regular byte or end of input — the
-// same match findDelimitedKeyword makes, collected in a single O(filesize) pass
+// same match syntax.FindDelimitedKeyword makes, collected in a single O(filesize) pass
 // so callers can binary-search instead of re-scanning per object.
 func allDelimitedKeywords(data []byte, keyword string, requireLeadingWS bool) []int64 {
 	marker := []byte(keyword)
@@ -1354,8 +1355,8 @@ func allDelimitedKeywords(data []byte, keyword string, requireLeadingWS bool) []
 		}
 		at := from + idx
 		end := at + len(marker)
-		beforeOK := !requireLeadingWS || at == 0 || isWhitespace(data[at-1])
-		afterOK := end >= len(data) || !isRegular(data[end])
+		beforeOK := !requireLeadingWS || at == 0 || syntax.IsWhitespace(data[at-1])
+		afterOK := end >= len(data) || !syntax.IsRegular(data[end])
 		if beforeOK && afterOK {
 			out = append(out, int64(at))
 		}
@@ -1401,7 +1402,7 @@ func streamByteExtent(data []byte, objStart int64, streamKW, endobjKW []int64) (
 		return 0, 0, false
 	}
 	j := endobj - 1
-	for j >= ds && isWhitespace(data[j]) {
+	for j >= ds && syntax.IsWhitespace(data[j]) {
 		j--
 	}
 	if j-8 < ds || string(data[j-8:j+1]) != "endstream" {

@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/syntax"
 	"testing"
 )
 
@@ -101,16 +102,16 @@ func TestParseNoLengthEndstreamNoOverread(t *testing.T) {
 func TestFindDelimitedKeyword(t *testing.T) {
 	// endstream directly after a binary byte: found only in relaxed mode.
 	d := []byte("\x01endstream\n")
-	if got := findDelimitedKeyword(d, 0, "endstream", false); got != 1 {
+	if got := syntax.FindDelimitedKeyword(d, 0, "endstream", false); got != 1 {
 		t.Errorf("relaxed endstream search = %d, want 1", got)
 	}
-	if got := findDelimitedKeyword(d, 0, "endstream", true); got != -1 {
+	if got := syntax.FindDelimitedKeyword(d, 0, "endstream", true); got != -1 {
 		t.Errorf("strict search should reject non-whitespace-preceded keyword, got %d", got)
 	}
 	// The strict "stream" search must not match the trailing "stream" in
 	// "endstream" (preceded by 'd'), but must find a real whitespace-delimited one.
 	s := []byte("endstream\n stream\n")
-	if got := findDelimitedKeyword(s, 0, "stream", true); got != 11 {
+	if got := syntax.FindDelimitedKeyword(s, 0, "stream", true); got != 11 {
 		t.Errorf("strict stream search = %d, want 11 (the standalone keyword)", got)
 	}
 }

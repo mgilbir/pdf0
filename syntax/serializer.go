@@ -1,7 +1,8 @@
-package pdf0
+package syntax
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"io"
 	"math"
 	"strconv"
@@ -49,12 +50,12 @@ func (s *Serializer) write(data []byte) error {
 	return err
 }
 
-func (s *Serializer) writeString(str string) error {
+func (s *Serializer) WriteString(str string) error {
 	return s.write([]byte(str))
 }
 
 // WriteObject writes any PDF object to the output.
-func (s *Serializer) WriteObject(obj Object) error {
+func (s *Serializer) WriteObject(obj object.Object) error {
 	if s.depth > maxSerializeDepth {
 		return fmt.Errorf("maximum nesting depth %d exceeded (cyclic object graph?)", maxSerializeDepth)
 	}
@@ -62,54 +63,54 @@ func (s *Serializer) WriteObject(obj Object) error {
 	defer func() { s.depth-- }()
 
 	switch v := obj.(type) {
-	case Boolean:
+	case object.Boolean:
 		return s.writeBoolean(v)
-	case Integer:
+	case object.Integer:
 		return s.writeInteger(v)
-	case Real:
+	case object.Real:
 		return s.writeReal(v)
-	case String:
+	case object.String:
 		return s.writeStringObj(v)
-	case Name:
+	case object.Name:
 		return s.writeName(v)
-	case Array:
+	case object.Array:
 		return s.writeArray(v)
-	case *Dictionary:
+	case *object.Dictionary:
 		if v == nil {
 			return fmt.Errorf("cannot serialize a nil *Dictionary")
 		}
-		return s.writeDictionary(v)
-	case *Stream:
+		return s.WriteDictionary(v)
+	case *object.Stream:
 		if v == nil {
 			return fmt.Errorf("cannot serialize a nil *Stream")
 		}
 		return s.writeStream(v)
-	case Null:
-		return s.writeString("null")
-	case *IndirectObject:
+	case object.Null:
+		return s.WriteString("null")
+	case *object.IndirectObject:
 		if v == nil {
 			return fmt.Errorf("cannot serialize a nil *IndirectObject")
 		}
 		return s.WriteIndirectObject(v)
-	case IndirectRef:
+	case object.IndirectRef:
 		return s.writeIndirectRef(v)
 	default:
 		return fmt.Errorf("unsupported object type: %T", obj)
 	}
 }
 
-func (s *Serializer) writeBoolean(b Boolean) error {
+func (s *Serializer) writeBoolean(b object.Boolean) error {
 	if b {
-		return s.writeString("true")
+		return s.WriteString("true")
 	}
-	return s.writeString("false")
+	return s.WriteString("false")
 }
 
-func (s *Serializer) writeInteger(i Integer) error {
-	return s.writeString(strconv.FormatInt(int64(i), 10))
+func (s *Serializer) writeInteger(i object.Integer) error {
+	return s.WriteString(strconv.FormatInt(int64(i), 10))
 }
 
-func (s *Serializer) writeReal(r Real) error {
+func (s *Serializer) writeReal(r object.Real) error {
 	f := float64(r)
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return fmt.Errorf("cannot serialize non-finite real %v as a PDF number", f)
@@ -119,10 +120,10 @@ func (s *Serializer) writeReal(r Real) error {
 	if !strings.Contains(str, ".") {
 		str += ".0"
 	}
-	return s.writeString(str)
+	return s.WriteString(str)
 }
 
-func (s *Serializer) writeStringObj(str String) error {
+func (s *Serializer) writeStringObj(str object.String) error {
 	if str.IsHex {
 		return s.writeHexString(str.Value)
 	}
@@ -130,41 +131,41 @@ func (s *Serializer) writeStringObj(str String) error {
 }
 
 func (s *Serializer) writeLiteralString(data []byte) error {
-	if err := s.writeString("("); err != nil {
+	if err := s.WriteString("("); err != nil {
 		return err
 	}
 	for _, b := range data {
 		switch b {
 		case '\\':
-			if err := s.writeString("\\\\"); err != nil {
+			if err := s.WriteString("\\\\"); err != nil {
 				return err
 			}
 		case '(':
-			if err := s.writeString("\\("); err != nil {
+			if err := s.WriteString("\\("); err != nil {
 				return err
 			}
 		case ')':
-			if err := s.writeString("\\)"); err != nil {
+			if err := s.WriteString("\\)"); err != nil {
 				return err
 			}
 		case '\r':
-			if err := s.writeString("\\r"); err != nil {
+			if err := s.WriteString("\\r"); err != nil {
 				return err
 			}
 		case '\n':
-			if err := s.writeString("\\n"); err != nil {
+			if err := s.WriteString("\\n"); err != nil {
 				return err
 			}
 		case '\t':
-			if err := s.writeString("\\t"); err != nil {
+			if err := s.WriteString("\\t"); err != nil {
 				return err
 			}
 		case '\b':
-			if err := s.writeString("\\b"); err != nil {
+			if err := s.WriteString("\\b"); err != nil {
 				return err
 			}
 		case '\f':
-			if err := s.writeString("\\f"); err != nil {
+			if err := s.WriteString("\\f"); err != nil {
 				return err
 			}
 		default:
@@ -173,23 +174,23 @@ func (s *Serializer) writeLiteralString(data []byte) error {
 			}
 		}
 	}
-	return s.writeString(")")
+	return s.WriteString(")")
 }
 
 func (s *Serializer) writeHexString(data []byte) error {
-	if err := s.writeString("<"); err != nil {
+	if err := s.WriteString("<"); err != nil {
 		return err
 	}
 	for _, b := range data {
-		if err := s.writeString(fmt.Sprintf("%02X", b)); err != nil {
+		if err := s.WriteString(fmt.Sprintf("%02X", b)); err != nil {
 			return err
 		}
 	}
-	return s.writeString(">")
+	return s.WriteString(">")
 }
 
-func (s *Serializer) writeName(n Name) error {
-	if err := s.writeString("/"); err != nil {
+func (s *Serializer) writeName(n object.Name) error {
+	if err := s.WriteString("/"); err != nil {
 		return err
 	}
 	for i := 0; i < len(n); i++ {
@@ -202,8 +203,8 @@ func (s *Serializer) writeName(n Name) error {
 		}
 		// Escape characters that must be hex-encoded in names:
 		// - non-printable, whitespace, delimiters, #
-		if b < '!' || b > '~' || isDelimiter(b) || b == '#' {
-			if err := s.writeString(fmt.Sprintf("#%02X", b)); err != nil {
+		if b < '!' || b > '~' || IsDelimiter(b) || b == '#' {
+			if err := s.WriteString(fmt.Sprintf("#%02X", b)); err != nil {
 				return err
 			}
 		} else {
@@ -215,13 +216,13 @@ func (s *Serializer) writeName(n Name) error {
 	return nil
 }
 
-func (s *Serializer) writeArray(arr Array) error {
-	if err := s.writeString("["); err != nil {
+func (s *Serializer) writeArray(arr object.Array) error {
+	if err := s.WriteString("["); err != nil {
 		return err
 	}
 	for i, obj := range arr {
 		if i > 0 {
-			if err := s.writeString(" "); err != nil {
+			if err := s.WriteString(" "); err != nil {
 				return err
 			}
 		}
@@ -229,64 +230,64 @@ func (s *Serializer) writeArray(arr Array) error {
 			return err
 		}
 	}
-	return s.writeString("]")
+	return s.WriteString("]")
 }
 
-func (s *Serializer) writeDictionary(dict *Dictionary) error {
-	if err := s.writeString("<<"); err != nil {
+func (s *Serializer) WriteDictionary(dict *object.Dictionary) error {
+	if err := s.WriteString("<<"); err != nil {
 		return err
 	}
 	for i, key := range dict.Keys {
-		if err := s.writeString(" "); err != nil {
+		if err := s.WriteString(" "); err != nil {
 			return err
 		}
 		if err := s.writeName(key); err != nil {
 			return err
 		}
-		if err := s.writeString(" "); err != nil {
+		if err := s.WriteString(" "); err != nil {
 			return err
 		}
 		if err := s.WriteObject(dict.Values[i]); err != nil {
 			return err
 		}
 	}
-	return s.writeString(" >>")
+	return s.WriteString(" >>")
 }
 
-func (s *Serializer) writeStream(stream *Stream) error {
+func (s *Serializer) writeStream(stream *object.Stream) error {
 	// Update Length in a copy so we don't mutate the caller's stream dictionary
 	// (Dictionary shares its backing slices on a plain struct copy). Preserve an
 	// indirect /Length (which points at a separate length object) rather than
 	// shadowing it with an inline value; only synthesize /Length when it's
 	// absent or already inline.
 	dict := stream.Dict.Clone()
-	if _, isRef := dict.Get("Length").(IndirectRef); !isRef {
-		dict.Set("Length", Integer(len(stream.Data)))
+	if _, isRef := dict.Get("Length").(object.IndirectRef); !isRef {
+		dict.Set("Length", object.Integer(len(stream.Data)))
 	}
 
-	if err := s.writeDictionary(dict); err != nil {
+	if err := s.WriteDictionary(dict); err != nil {
 		return err
 	}
-	if err := s.writeString("\nstream\r\n"); err != nil {
+	if err := s.WriteString("\nstream\r\n"); err != nil {
 		return err
 	}
 	if err := s.write(stream.Data); err != nil {
 		return err
 	}
-	return s.writeString("\nendstream")
+	return s.WriteString("\nendstream")
 }
 
 // WriteIndirectObject writes an indirect object definition to the output.
-func (s *Serializer) WriteIndirectObject(obj *IndirectObject) error {
-	if err := s.writeString(fmt.Sprintf("%d %d obj\n", obj.Number, obj.Generation)); err != nil {
+func (s *Serializer) WriteIndirectObject(obj *object.IndirectObject) error {
+	if err := s.WriteString(fmt.Sprintf("%d %d obj\n", obj.Number, obj.Generation)); err != nil {
 		return err
 	}
 	if err := s.WriteObject(obj.Value); err != nil {
 		return err
 	}
-	return s.writeString("\nendobj\n")
+	return s.WriteString("\nendobj\n")
 }
 
-func (s *Serializer) writeIndirectRef(ref IndirectRef) error {
-	return s.writeString(fmt.Sprintf("%d %d R", ref.Number, ref.Generation))
+func (s *Serializer) writeIndirectRef(ref object.IndirectRef) error {
+	return s.WriteString(fmt.Sprintf("%d %d R", ref.Number, ref.Generation))
 }
