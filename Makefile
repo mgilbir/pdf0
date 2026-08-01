@@ -17,6 +17,28 @@ WTPDF_DIR := testdata/wtpdf
 # a coverage reference; not committed.
 PROFILES_DIR := spec/verapdf-profiles
 
+# Pinned corpus revisions.
+#
+# The ratchet baselines in pdfa_test.go and arlington_test.go are measurements of
+# specific documents, so the corpora are fetched at a fixed commit rather than at
+# whatever their default branch holds today. Two things follow: a corpus that
+# gains or loses a file upstream cannot silently move a baseline, and CI's cache
+# key is stable, so the fetch happens once instead of on every run. Override to
+# try a newer revision, then update the baselines it moves in the same change.
+VERAPDF_CORPUS_REF ?= 49de56cd987929932c9e4fbbbe67d052bf44ef83
+ARLINGTON_REF      ?= 3a7cde314d083e4c6d78d6782334b7409d3889f7
+REFPDF_REF         ?= c20f2c17bfcc4baab7cfe62e70fae64caf14d5fa
+
+# shallow_at fetches exactly one commit of one repository: no history, no other
+# branches. $(1) directory, $(2) URL, $(3) commit.
+define shallow_at
+	rm -rf $(1)
+	git init -q $(1)
+	git -C $(1) remote add origin $(2)
+	git -C $(1) fetch -q --depth 1 origin $(3)
+	git -C $(1) checkout -q FETCH_HEAD
+endef
+
 test:
 	go test ./...
 
@@ -41,13 +63,13 @@ check-mermaid:
 refpdfs: $(REFPDF_DIR)/.ok
 
 $(REFPDF_DIR)/.ok:
-	git clone --depth 1 https://github.com/pdf-association/pdf20examples $(REFPDF_DIR)
+	$(call shallow_at,$(REFPDF_DIR),https://github.com/pdf-association/pdf20examples,$(REFPDF_REF))
 	touch $@
 
 corpus: $(CORPUS_DIR)/.ok
 
 $(CORPUS_DIR)/.ok:
-	git clone --depth 1 https://github.com/veraPDF/veraPDF-corpus $(CORPUS_DIR)
+	$(call shallow_at,$(CORPUS_DIR),https://github.com/veraPDF/veraPDF-corpus,$(VERAPDF_CORPUS_REF))
 	touch $@
 
 test-corpus: corpus
@@ -73,7 +95,7 @@ $(WTPDF_DIR)/.ok: $(WTPDF_DIR)/sources.tsv $(WTPDF_DIR)/download.sh
 arlington: $(ARLINGTON_DIR)/.ok
 
 $(ARLINGTON_DIR)/.ok:
-	git clone --depth 1 https://github.com/pdf-association/arlington-pdf-model $(ARLINGTON_DIR)
+	$(call shallow_at,$(ARLINGTON_DIR),https://github.com/pdf-association/arlington-pdf-model,$(ARLINGTON_REF))
 	touch $@
 
 # Check pdf0's parser/serializer represent objects faithfully against the
