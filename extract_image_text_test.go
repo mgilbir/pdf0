@@ -103,33 +103,3 @@ func TestExtractTextInheritedResources(t *testing.T) {
 // /Decode array is honored. Without /Decode the fast path renders sample bit 1 as
 // white; with /Decode [1 0] the polarity inverts to black — which the codec
 // branches previously ignored.
-func TestBilevelDecodeInversion(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}}
-	mk := func(decode Object) *Stream {
-		st := &Stream{}
-		st.Dict.Set("Width", Integer(1))
-		st.Dict.Set("Height", Integer(1))
-		st.Dict.Set("BitsPerComponent", Integer(1))
-		st.Dict.Set("ColorSpace", Name("DeviceGray"))
-		if decode != nil {
-			st.Dict.Set("Decode", decode)
-		}
-		return st
-	}
-	pixel := func(st *Stream) uint32 {
-		img := &ExtractedImage{Width: 1, Height: 1, ColorSpace: "DeviceGray", BitsPerComponent: 1}
-		renderBilevelSamples(doc.view(), st, img, []byte{0x80}, "unsupported") // sample bit = 1
-		if !img.Decoded || img.Image == nil {
-			t.Fatal("bilevel samples should decode")
-		}
-		r, _, _, _ := img.Image.At(0, 0).RGBA()
-		return r >> 8
-	}
-
-	if got := pixel(mk(nil)); got != 255 {
-		t.Errorf("plain bilevel: pixel = %d, want 255 (white)", got)
-	}
-	if got := pixel(mk(Array{Integer(1), Integer(0)})); got != 0 {
-		t.Errorf("/Decode [1 0]: pixel = %d, want 0 (inverted to black)", got)
-	}
-}

@@ -265,3 +265,12 @@ func Float(obj Object) float64 {
 	}
 	return 0
 }
+
+// RefNum returns the object number of an indirect reference, or 0 for any other
+// object (including a direct value).
+func RefNum(o Object) int {
+	if r, ok := o.(IndirectRef); ok {
+		return r.Number
+	}
+	return 0
+}

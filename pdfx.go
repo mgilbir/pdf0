@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
 
@@ -412,7 +413,7 @@ func pdfxCheckOutputIntent(doc *Document, level PDFXLevel, add func(rule, msg st
 		}
 		found = true
 		if oci, ok := oi.Get("OutputConditionIdentifier").(String); !ok || len(oci.Value) == 0 {
-			add("output-intent", "GTS_PDFX output intent lacks a non-empty /OutputConditionIdentifier", refNum(e))
+			add("output-intent", "GTS_PDFX output intent lacks a non-empty /OutputConditionIdentifier", object.RefNum(e))
 		}
 		prof := oi.Get("DestOutputProfile")
 		if _, ok := doc.Resolve(prof).(*Stream); ok {
@@ -420,9 +421,9 @@ func pdfxCheckOutputIntent(doc *Document, level PDFXLevel, add func(rule, msg st
 		} else if level != PDFX4p {
 			// Only PDF/X-4p permits an external reference; every other level
 			// requires the ICC profile embedded.
-			add("output-intent", fmt.Sprintf("%s requires an embedded ICC /DestOutputProfile in the GTS_PDFX output intent", level), refNum(e))
+			add("output-intent", fmt.Sprintf("%s requires an embedded ICC /DestOutputProfile in the GTS_PDFX output intent", level), object.RefNum(e))
 		} else if oi.Get("DestOutputProfileRef") == nil {
-			add("output-intent", "PDF/X-4p output intent has neither an embedded /DestOutputProfile nor a /DestOutputProfileRef", refNum(e))
+			add("output-intent", "PDF/X-4p output intent has neither an embedded /DestOutputProfile nor a /DestOutputProfileRef", object.RefNum(e))
 		}
 	}
 	if !found {
@@ -430,7 +431,7 @@ func pdfxCheckOutputIntent(doc *Document, level PDFXLevel, add func(rule, msg st
 	}
 	// ISO 15930-7 6.2: all GTS_PDFX intents shall reference the same profile.
 	for i := 1; i < len(profiles); i++ {
-		if refNum(profiles[i]) != refNum(profiles[0]) {
+		if object.RefNum(profiles[i]) != object.RefNum(profiles[0]) {
 			add("output-intent", "multiple GTS_PDFX output intents reference different destination profiles", 0)
 			break
 		}
@@ -516,7 +517,7 @@ func pdfxCheckFontsEmbedded(doc *Document, add func(rule, msg string, obj int)) 
 				seenFont[fd] = true
 				if !fontIsEmbedded(doc, fd) {
 					name, _ := fd.Get("BaseFont").(Name)
-					add("font-embedding", fmt.Sprintf("font /%s (resource /%s) is not embedded", name, fonts.Keys[i]), refNum(ref))
+					add("font-embedding", fmt.Sprintf("font /%s (resource /%s) is not embedded", name, fonts.Keys[i]), object.RefNum(ref))
 				}
 			}
 		}

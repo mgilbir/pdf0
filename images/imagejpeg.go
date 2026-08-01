@@ -1,4 +1,4 @@
-package pdf0
+package images
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
@@ -18,8 +18,8 @@ import (
 
 // jpegDecodeArray reads the image XObject's /Decode array as a slice of floats,
 // or nil when the key is absent or malformed.
-func jpegDecodeArray(d core.View, st *Stream) []float64 {
-	arr, ok := d.Resolve(st.Dict.Get("Decode")).(Array)
+func jpegDecodeArray(d core.View, st *object.Stream) []float64 {
+	arr, ok := d.Resolve(st.Dict.Get("Decode")).(object.Array)
 	if !ok || len(arr) == 0 {
 		return nil
 	}

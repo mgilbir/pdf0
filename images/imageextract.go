@@ -1,14 +1,12 @@
-package pdf0
+package images
 
 import (
 	"bytes"
-	"context"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/color"
 	"image/jpeg"
-	"iter"
 	"strconv"
 
 	"github.com/mgilbir/gopenjpeg"
@@ -239,82 +237,14 @@ type ExtractedImage struct {
 	Note             string      // why the image was not decoded, when applicable
 }
 
-// ExtractImages returns every image XObject drawn from the document's pages, each
-// decoded when the codec is one this package handles. Form XObjects are followed
-// into their own resources, so images nested inside forms are found too.
+// Walk yields every image XObject reachable from the document's pages: each
+// page's resources, the form XObjects nested in them, and every annotation
+// appearance stream. Each image is yielded once; yield returning false stops
+// the traversal.
 //
-// Every decoded image is held in the returned slice at once; on a large scan
-// document that is unbounded memory. Use Images to iterate lazily with at most
-// one decoded image live at a time.
-func (d *Document) ExtractImages() []ExtractedImage {
-	out, _ := extractImages(d, core.Canceler{})
-	return out
-}
-
-// ExtractImagesContext is ExtractImages with cancellation.
-//
-// It returns the images extracted before the cancellation and an error wrapping
-// ctx.Err(), for the reason ExtractTextContext does: extraction has no finding
-// channel, so a short slice returned bare would be indistinguishable from a
-// document with fewer images. The error is nil exactly when every image was
-// reached.
-//
-// Cancellation is checked between images, so it takes effect after at most one
-// image decode. A single very large image is therefore not interruptible; that
-// residual is bounded by the codec budgets rather than by the context. See
-// cancel.go.
-//
-// There is deliberately no context variant of Images: an iterator is already
-// cancellable by breaking out of the range loop, and because each image is
-// decoded only as it is yielded, breaking after image N skips exactly the work
-// a context checked between images would have skipped.
-func (d *Document) ExtractImagesContext(ctx context.Context) ([]ExtractedImage, error) {
-	return extractImages(d, core.NewCanceler(ctx))
-}
-
-func extractImages(d *Document, cancel core.Canceler) ([]ExtractedImage, error) {
-	var out []ExtractedImage
-	walkImagesCancel(d, cancel, func(im ExtractedImage) bool {
-		// Keep the image first, then stop: it is already decoded, and throwing
-		// away finished work is not what cancellation is for.
-		out = append(out, im)
-		return !cancel.Stopped()
-	})
-	return out, cancel.StopErr("extracting images")
-}
-
-// Images returns an iterator over the image XObjects drawn from the document's
-// pages, in the same order ExtractImages reports them. Each image is decoded
-// only as it is yielded, so — unlike ExtractImages, which materializes every
-// decoded image at once — iteration keeps at most one decoded image live at a
-// time (unless the caller retains them), and breaking out of the loop skips
-// the remaining decode work entirely.
-func (d *Document) Images() iter.Seq[ExtractedImage] {
-	return func(yield func(ExtractedImage) bool) { walkImages(d, yield) }
-}
-
-// walkImages drives the image traversal, calling yield for each image until it
-// returns false.
-func walkImages(d *Document, yield func(ExtractedImage) bool) {
-	walkImagesCancel(d, core.Canceler{}, yield)
-}
-
-func walkImagesCancel(d *Document, cancel core.Canceler, yield func(ExtractedImage) bool) {
-	// Install a per-run cache on a shallow copy, as the validators do: a tint
-	// transform evaluates per pixel, and without the cache each evaluation
-	// re-decoded the function stream (and re-parsed a type-4 program) — a
-	// sub-megabyte image took minutes (sweep #13). The cache also carries the
-	// cancellation signal, so the traversals it shares with the validators stop
-	// on the same terms.
-	//
-	// This is the boundary: everything below it reads the document through a
-	// view and never names Document.
-	walkImagesView(beginRunCancel(d, cancel).view(), yield)
-}
-
-// walkImagesView drives the traversal over a view: every page's resources, then
-// every annotation appearance stream, yielding each image once.
-func walkImagesView(d core.View, yield func(ExtractedImage) bool) {
+// It takes a view rather than a document so that this package never names the
+// root package's central type. The caller starts the run and builds the view.
+func Walk(d core.View, yield func(ExtractedImage) bool) {
 	cat := d.Catalog()
 	if cat == nil {
 		return
@@ -331,7 +261,7 @@ func walkImagesView(d core.View, yield func(ExtractedImage) bool) {
 		}
 		// Annotation appearance streams (/Annots -> /AP) are form XObjects with
 		// their own resources, a common home for images (stamps, form fields).
-		if annots, ok := d.Resolve(pg.Dict.Get("Annots")).(Array); ok {
+		if annots, ok := d.Resolve(pg.Dict.Get("Annots")).(object.Array); ok {
 			for _, a := range annots {
 				ad := d.ResolveDict(a)
 				if ad == nil {
@@ -355,17 +285,17 @@ func walkImagesView(d core.View, yield func(ExtractedImage) bool) {
 // which is either a form-XObject stream or a subdictionary of appearance states
 // (each value a stream), following each into its resources. It returns false
 // once yield does.
-func collectAppearanceImages(d core.View, entry Object, seen map[int]bool, yield func(ExtractedImage) bool) bool {
+func collectAppearanceImages(d core.View, entry object.Object, seen map[int]bool, yield func(ExtractedImage) bool) bool {
 	switch v := d.Resolve(entry).(type) {
-	case *Stream:
-		if num := refNum(entry); num > 0 {
+	case *object.Stream:
+		if num := object.RefNum(entry); num > 0 {
 			if seen[num] {
 				return true
 			}
 			seen[num] = true
 		}
 		return collectImagesFrom(d, d.ResolveDict(v.Dict.Get("Resources")), seen, 1, yield)
-	case *Dictionary:
+	case *object.Dictionary:
 		for _, state := range v.Values {
 			if !collectAppearanceImages(d, state, seen, yield) {
 				return false
@@ -379,7 +309,7 @@ func collectAppearanceImages(d core.View, entry Object, seen map[int]bool, yield
 // image XObjects and recursing into form XObjects' own resources. seen guards
 // against revisiting a shared or self-referential XObject; depth bounds runaway
 // recursion. It returns false once yield does.
-func collectImagesFrom(d core.View, res *Dictionary, seen map[int]bool, depth int, yield func(ExtractedImage) bool) bool {
+func collectImagesFrom(d core.View, res *object.Dictionary, seen map[int]bool, depth int, yield func(ExtractedImage) bool) bool {
 	if res == nil || depth > 16 {
 		return true
 	}
@@ -389,19 +319,19 @@ func collectImagesFrom(d core.View, res *Dictionary, seen map[int]bool, depth in
 	}
 	for i := range xobjs.Keys {
 		ref := xobjs.Values[i]
-		st, ok := d.Resolve(ref).(*Stream)
+		st, ok := d.Resolve(ref).(*object.Stream)
 		if !ok {
 			continue
 		}
-		if num := refNum(ref); num > 0 {
+		if num := object.RefNum(ref); num > 0 {
 			if seen[num] {
 				continue
 			}
 			seen[num] = true
 		}
-		switch sub, _ := st.Dict.Get("Subtype").(Name); sub {
+		switch sub, _ := st.Dict.Get("Subtype").(object.Name); sub {
 		case "Image":
-			if !yield(extractImage(d, st, refNum(ref))) {
+			if !yield(extractImage(d, st, object.RefNum(ref))) {
 				return false
 			}
 		case "Form":
@@ -413,7 +343,7 @@ func collectImagesFrom(d core.View, res *Dictionary, seen map[int]bool, depth in
 	return true
 }
 
-func extractImage(d core.View, st *Stream, num int) ExtractedImage {
+func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 	img := ExtractedImage{
 		ObjNum:           num,
 		Width:            object.Int(d.Resolve(st.Dict.Get("Width"))),
@@ -421,7 +351,7 @@ func extractImage(d core.View, st *Stream, num int) ExtractedImage {
 		BitsPerComponent: object.Int(d.Resolve(st.Dict.Get("BitsPerComponent"))),
 		ColorSpace:       colorSpaceName(d, st.Dict.Get("ColorSpace")),
 	}
-	if b, _ := d.Resolve(st.Dict.Get("ImageMask")).(Boolean); bool(b) {
+	if b, _ := d.Resolve(st.Dict.Get("ImageMask")).(object.Boolean); bool(b) {
 		img.ColorSpace = "ImageMask"
 		img.BitsPerComponent = 1
 	}
@@ -489,7 +419,7 @@ func extractImage(d core.View, st *Stream, num int) ExtractedImage {
 // the shared content budget — would bloat memory and starve the small shared
 // streams (tint functions, palettes) the cache exists for. The same 64MB
 // per-stream bound applies.
-func decodeImageSamples(cancel core.Canceler, st *Stream, lim core.Limits) []byte {
+func decodeImageSamples(cancel core.Canceler, st *object.Stream, lim core.Limits) []byte {
 	if decoded, err := core.DecodeStreamData(cancel, st, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
 		return decoded
 	}
@@ -501,7 +431,7 @@ func decodeImageSamples(cancel core.Canceler, st *Stream, lim core.Limits) []byt
 // codec produced the samples. An /ImageMask goes through the stencil path;
 // everything else through buildImage, which also composites the stencil /Mask and
 // soft /SMask. It is used by the general-purpose branch.
-func renderSamples(d core.View, st *Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
+func renderSamples(d core.View, st *object.Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
 	var m image.Image
 	var ok bool
 	if img.ColorSpace == "ImageMask" {
@@ -524,7 +454,7 @@ func renderSamples(d core.View, st *Stream, img *ExtractedImage, samples []byte,
 // mask/decode-aware path — which the codec branches previously bypassed, so an
 // image mask rendered as an opaque raster and a /Decode [1 0] was ignored
 // (audit C30).
-func renderBilevelSamples(d core.View, st *Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
+func renderBilevelSamples(d core.View, st *object.Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
 	if img.ColorSpace == "ImageMask" || d.Resolve(st.Dict.Get("Decode")) != nil {
 		renderSamples(d, st, img, samples, unsupportedNote)
 		return
@@ -541,7 +471,7 @@ func renderBilevelSamples(d core.View, st *Stream, img *ExtractedImage, samples 
 // reversing any general-purpose filters (Flate/LZW/ASCIIHex) that precede the
 // CCITTFaxDecode codec in the filter chain — together with the /DecodeParms that
 // steer the fax decoder. ok is false when a preceding filter cannot be reversed.
-func ccittEncodedAndParams(d core.View, st *Stream, width, height int) (encoded []byte, params ccitt.Params, ok bool) {
+func ccittEncodedAndParams(d core.View, st *object.Stream, width, height int) (encoded []byte, params ccitt.Params, ok bool) {
 	filters := d.StreamFilters(st)
 	if len(filters) == 0 {
 		return nil, params, false
@@ -561,16 +491,16 @@ func ccittEncodedAndParams(d core.View, st *Stream, width, height int) (encoded 
 	cp := core.ParmsDictAt(parms, last)
 	k, columns, rows, byteAlign := 0, 1728, height, false
 	if cp != nil {
-		if v, kOK := d.Resolve(cp.Get("K")).(Integer); kOK {
+		if v, kOK := d.Resolve(cp.Get("K")).(object.Integer); kOK {
 			k = int(v)
 		}
-		if v, cOK := d.Resolve(cp.Get("Columns")).(Integer); cOK {
+		if v, cOK := d.Resolve(cp.Get("Columns")).(object.Integer); cOK {
 			columns = int(v)
 		}
-		if v, rOK := d.Resolve(cp.Get("Rows")).(Integer); rOK && int(v) > 0 {
+		if v, rOK := d.Resolve(cp.Get("Rows")).(object.Integer); rOK && int(v) > 0 {
 			rows = int(v)
 		}
-		if b, aOK := d.Resolve(cp.Get("EncodedByteAlign")).(Boolean); aOK {
+		if b, aOK := d.Resolve(cp.Get("EncodedByteAlign")).(object.Boolean); aOK {
 			byteAlign = bool(b)
 		}
 	}
@@ -584,7 +514,7 @@ func ccittEncodedAndParams(d core.View, st *Stream, width, height int) (encoded 
 // (reversing any general-purpose filters that precede JBIG2Decode) and the
 // decoded /JBIG2Globals shared-segment stream when present. ok is false when a
 // preceding filter cannot be reversed.
-func jbig2EncodedAndGlobals(d core.View, st *Stream) (encoded, globals []byte, ok bool) {
+func jbig2EncodedAndGlobals(d core.View, st *object.Stream) (encoded, globals []byte, ok bool) {
 	filters := d.StreamFilters(st)
 	if len(filters) == 0 {
 		return nil, nil, false
@@ -602,7 +532,7 @@ func jbig2EncodedAndGlobals(d core.View, st *Stream) (encoded, globals []byte, o
 	}
 
 	if cp := core.ParmsDictAt(parms, last); cp != nil {
-		if gs, ok := d.Resolve(cp.Get("JBIG2Globals")).(*Stream); ok {
+		if gs, ok := d.Resolve(cp.Get("JBIG2Globals")).(*object.Stream); ok {
 			if data, err := core.DecodeStreamData(d.Cancel, gs, d.Limits); err == nil {
 				globals = data
 			}
@@ -668,13 +598,13 @@ func samplesToImage(data []byte, w, h, bpc int, cs string) (image.Image, bool) {
 
 // colorSpaceName returns a best-effort colour space name: a direct name, or the
 // leading name of an array space (e.g. ICCBased, Indexed).
-func colorSpaceName(d core.View, obj Object) string {
+func colorSpaceName(d core.View, obj object.Object) string {
 	switch cs := d.Resolve(obj).(type) {
-	case Name:
+	case object.Name:
 		return string(cs)
-	case Array:
+	case object.Array:
 		if len(cs) > 0 {
-			if n, ok := d.Resolve(cs[0]).(Name); ok {
+			if n, ok := d.Resolve(cs[0]).(object.Name); ok {
 				return string(n)
 			}
 		}
@@ -685,12 +615,12 @@ func colorSpaceName(d core.View, obj Object) string {
 // imageMaskToImage renders a 1-bit stencil mask (/ImageMask true): samples select
 // where the fill colour would paint. It is rendered as black where painted, white
 // elsewhere; /Decode [1 0] inverts which bit paints.
-func imageMaskToImage(d core.View, st *Stream, data []byte, w, h int) (image.Image, bool) {
+func imageMaskToImage(d core.View, st *object.Stream, data []byte, w, h int) (image.Image, bool) {
 	if w <= 0 || h <= 0 || !sampleDataFits(data, w, h, 1, 1) {
 		return nil, false
 	}
 	paintBit := byte(0) // default /Decode [0 1]: a 0 sample paints
-	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && object.Float(d.Resolve(arr[0])) == 1 {
+	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(object.Array); ok && len(arr) == 2 && object.Float(d.Resolve(arr[0])) == 1 {
 		paintBit = 1
 	}
 	stride := (w + 7) / 8

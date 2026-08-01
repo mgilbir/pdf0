@@ -104,11 +104,4 @@ func TestExtractImages(t *testing.T) {
 	if decoded != 3 { // JPEG + raw gray + raw RGB; not CCITT
 		t.Errorf("expected 3 decoded images, got %d", decoded)
 	}
-
-	// Verify the RGB sample layout decodes.
-	if m, ok := samplesToImage([]byte{255, 0, 0, 0, 255, 0}, 1, 2, 8, "DeviceRGB"); !ok {
-		t.Error("RGB samples should decode")
-	} else if r, _, _, _ := m.At(0, 0).RGBA(); r>>8 != 255 {
-		t.Error("RGB pixel wrong")
-	}
 }

@@ -1,7 +1,8 @@
-package pdf0
+package images
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/draw"
 )
@@ -12,22 +13,22 @@ import (
 // on the raw/Flate sample path; the codec paths hand back an opaque image, so
 // applyImageMasks composites the alpha after the fact.
 //
-// Colour-key masking (/Mask as an Array) is deliberately NOT handled here: it
+// Colour-key masking (/Mask as an object.Array) is deliberately NOT handled here: it
 // tests the ORIGINAL per-component sample values against a range, and those
 // samples are gone once a lossy/opaque codec has produced an image.Image. Only
-// a stencil /Mask (a *Stream) and a soft /SMask can be applied post-codec.
+// a stencil /Mask (a *object.Stream) and a soft /SMask can be applied post-codec.
 
 // applyImageMasks applies a stencil /Mask and/or a soft /SMask to a codec-
 // decoded image. It returns m unchanged when neither is present; otherwise it
 // returns a fresh *image.NRGBA with the alpha channel composited in.
-func applyImageMasks(d core.View, st *Stream, m image.Image) image.Image {
+func applyImageMasks(d core.View, st *object.Stream, m image.Image) image.Image {
 	if m == nil {
 		return m
 	}
-	_, hasSMask := d.Resolve(st.Dict.Get("SMask")).(*Stream)
-	stencil, hasStencil := d.Resolve(st.Dict.Get("Mask")).(*Stream)
+	_, hasSMask := d.Resolve(st.Dict.Get("SMask")).(*object.Stream)
+	stencil, hasStencil := d.Resolve(st.Dict.Get("Mask")).(*object.Stream)
 	if !hasSMask && !hasStencil {
-		// A colour-key /Mask (an Array) cannot be applied without the original
+		// A colour-key /Mask (an object.Array) cannot be applied without the original
 		// samples, so an image carrying only that is left opaque.
 		return m
 	}

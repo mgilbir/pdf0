@@ -3,6 +3,7 @@ package pdf0
 import (
 	"fmt"
 	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/object"
 	"time"
 )
 
@@ -83,7 +84,7 @@ func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, ti
 	md := &Stream{Dict: Dictionary{}, Data: facturxXMPPacket(profile, "INVOICE", title)}
 	md.Dict.Set("Type", Name("Metadata"))
 	md.Dict.Set("Subtype", Name("XML"))
-	if n := refNum(cat.Get("Metadata")); n != 0 {
+	if n := object.RefNum(cat.Get("Metadata")); n != 0 {
 		doc.Objects[n] = &IndirectObject{Number: n, Value: md}
 	} else {
 		cat.Set("Metadata", IndirectRef{Number: newObj(md)})

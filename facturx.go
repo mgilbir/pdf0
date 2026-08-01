@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 
 	"github.com/mgilbir/formalis"
@@ -373,7 +374,7 @@ func findFacturXAttachment(doc *Document, cat *Dictionary) (*Dictionary, string,
 		}
 		name := facturxFileSpecName(doc, fs)
 		if facturxXMLNames[strings.ToLower(name)] {
-			return fs, name, refNum(e)
+			return fs, name, object.RefNum(e)
 		}
 	}
 	return nil, "", 0

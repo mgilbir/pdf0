@@ -1,4 +1,4 @@
-package pdf0
+package images
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
@@ -23,7 +23,7 @@ type imgColorSpace struct {
 	hival   int
 	lookup  []byte // indexed: base.ncomp bytes per palette entry
 	base    *imgColorSpace
-	tintFn  Object                            // Separation/DeviceN: tint-transform function
+	tintFn  object.Object                     // Separation/DeviceN: tint-transform function
 	alt     *imgColorSpace                    // Separation/DeviceN: alternate colour space
 	decode  []float64                         // default /Decode (min,max per component)
 	toRGB   func(c []float64) (r, g, b uint8) // c holds ncomp values already mapped through /Decode
@@ -47,7 +47,7 @@ func (cs *imgColorSpace) toRGB16Comps(c []float64) (r, g, b uint16) {
 // buildImage converts an image XObject's decoded samples to an image, applying
 // the colour space, bit depth, /Decode array and soft mask. ok is false for a
 // layout it cannot render.
-func buildImage(d core.View, st *Stream, raw []byte, w, h, bpc int) (image.Image, bool) {
+func buildImage(d core.View, st *object.Stream, raw []byte, w, h, bpc int) (image.Image, bool) {
 	if w <= 0 || h <= 0 || bpc <= 0 {
 		return nil, false
 	}
@@ -107,7 +107,7 @@ func buildImage(d core.View, st *Stream, raw []byte, w, h, bpc int) (image.Image
 // preserving the full sample precision that an 8-bit *image.NRGBA would discard.
 // It mirrors the 8-bit path but keeps colour arithmetic in floats down to a
 // 16-bit clamp so a DeviceGray sample of 0xFFFF yields R=0xFFFF, 0x8000 ~ 0x8000.
-func buildImage16(d core.View, st *Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, bool) {
+func buildImage16(d core.View, st *object.Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, bool) {
 	im := image.NewNRGBA64(image.Rect(0, 0, w, h))
 	sr := sampleReader{data: raw, bpc: 16, w: w, ncomp: cs.ncomp}
 	comps := make([]float64, cs.ncomp)
@@ -141,8 +141,8 @@ func buildImage16(d core.View, st *Stream, raw []byte, w, h int, cs *imgColorSpa
 
 // colorKeyMask returns the /Mask colour-key range array [min1 max1 …] when
 // present and well-formed for ncomp components, else nil.
-func colorKeyMask(d core.View, st *Stream, ncomp int) []int {
-	arr, ok := d.Resolve(st.Dict.Get("Mask")).(Array)
+func colorKeyMask(d core.View, st *object.Stream, ncomp int) []int {
+	arr, ok := d.Resolve(st.Dict.Get("Mask")).(object.Array)
 	if !ok || len(arr) != 2*ncomp {
 		return nil
 	}
@@ -167,8 +167,8 @@ func inColorKey(samples, ranges []int) bool {
 // stencilMask decodes a stencil /Mask (a 1-bit image XObject) into its packed
 // rows plus the sample value that marks a pixel hidden. ok is false when there
 // is no usable stencil mask. /Decode [1 0] inverts which sample hides.
-func stencilMask(d core.View, st *Stream) (data []byte, mw, mh int, hideBit byte, ok bool) {
-	mk, ok := d.Resolve(st.Dict.Get("Mask")).(*Stream)
+func stencilMask(d core.View, st *object.Stream) (data []byte, mw, mh int, hideBit byte, ok bool) {
+	mk, ok := d.Resolve(st.Dict.Get("Mask")).(*object.Stream)
 	if !ok {
 		return nil, 0, 0, 0, false
 	}
@@ -179,7 +179,7 @@ func stencilMask(d core.View, st *Stream) (data []byte, mw, mh int, hideBit byte
 		return nil, 0, 0, 0, false
 	}
 	hideBit = byte(1) // default /Decode [0 1]: a 1 sample hides
-	if arr, ok := d.Resolve(mk.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && object.Float(d.Resolve(arr[0])) == 1 {
+	if arr, ok := d.Resolve(mk.Dict.Get("Decode")).(object.Array); ok && len(arr) == 2 && object.Float(d.Resolve(arr[0])) == 1 {
 		hideBit = 0
 	}
 	return data, mw, mh, hideBit, true
@@ -187,7 +187,7 @@ func stencilMask(d core.View, st *Stream) (data []byte, mw, mh int, hideBit byte
 
 // applyStencilMask applies a stencil /Mask (a 1-bit image XObject): samples of 1
 // mark pixels to hide, so those become transparent. /Decode [1 0] inverts it.
-func applyStencilMask(d core.View, st *Stream, im *image.NRGBA) {
+func applyStencilMask(d core.View, st *object.Stream, im *image.NRGBA) {
 	data, mw, mh, hideBit, ok := stencilMask(d, st)
 	if !ok {
 		return
@@ -207,7 +207,7 @@ func applyStencilMask(d core.View, st *Stream, im *image.NRGBA) {
 }
 
 // applyStencilMask64 is the *image.NRGBA64 counterpart of applyStencilMask.
-func applyStencilMask64(d core.View, st *Stream, im *image.NRGBA64) {
+func applyStencilMask64(d core.View, st *object.Stream, im *image.NRGBA64) {
 	data, mw, mh, hideBit, ok := stencilMask(d, st)
 	if !ok {
 		return
@@ -307,15 +307,15 @@ func sampleDataFits(data []byte, w, h, ncomp, bpc int) bool {
 
 // resolveColorSpace resolves a PDF colour-space object to an imgColorSpace, or
 // (nil,false) for one this decoder cannot render.
-func resolveColorSpace(d core.View, obj Object) (*imgColorSpace, bool) {
+func resolveColorSpace(d core.View, obj object.Object) (*imgColorSpace, bool) {
 	switch cs := d.Resolve(obj).(type) {
-	case Name:
+	case object.Name:
 		return deviceColorSpace(string(cs))
-	case Array:
+	case object.Array:
 		if len(cs) == 0 {
 			return nil, false
 		}
-		head, _ := d.Resolve(cs[0]).(Name)
+		head, _ := d.Resolve(cs[0]).(object.Name)
 		switch head {
 		case "ICCBased":
 			return iccBasedColorSpace(d, cs)
@@ -363,11 +363,11 @@ func deviceColorSpace(name string) (*imgColorSpace, bool) {
 // iccBasedColorSpace renders an ICCBased space by its component count (/N): 1 as
 // grayscale, 3 as RGB, 4 as CMYK, matching the profile's device class. A
 // present /Alternate is used when /N is absent or unusual.
-func iccBasedColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
+func iccBasedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 	if len(cs) < 2 {
 		return nil, false
 	}
-	st, ok := d.Resolve(cs[1]).(*Stream)
+	st, ok := d.Resolve(cs[1]).(*object.Stream)
 	if !ok {
 		return nil, false
 	}
@@ -387,7 +387,7 @@ func iccBasedColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 
 // indexedColorSpace resolves [/Indexed base hival lookup] into a palette lookup
 // over its base colour space.
-func indexedColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
+func indexedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 	if len(cs) < 4 {
 		return nil, false
 	}
@@ -401,9 +401,9 @@ func indexedColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 	}
 	var lookup []byte
 	switch t := d.Resolve(cs[3]).(type) {
-	case String:
+	case object.String:
 		lookup = t.Value
-	case *Stream:
+	case *object.Stream:
 		lookup = d.Content(t)
 	default:
 		return nil, false
@@ -423,7 +423,7 @@ func indexedColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 
 // separationColorSpace resolves [/Separation name altSpace tintFn]: one tint
 // component fed through tintFn into the alternate space.
-func separationColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
+func separationColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 	if len(cs) < 4 {
 		return nil, false
 	}
@@ -432,11 +432,11 @@ func separationColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 
 // deviceNColorSpace resolves [/DeviceN names altSpace tintFn]: len(names) tint
 // components fed through tintFn into the alternate space.
-func deviceNColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
+func deviceNColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 	if len(cs) < 4 {
 		return nil, false
 	}
-	names, ok := d.Resolve(cs[1]).(Array)
+	names, ok := d.Resolve(cs[1]).(object.Array)
 	if !ok || len(names) == 0 {
 		return nil, false
 	}
@@ -447,7 +447,7 @@ func deviceNColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
 // runs the tint-transform function into the alternate space's toRGB. It refuses
 // the space if the tint function does not evaluate for a probe input, so callers
 // fall back to the raw bytes rather than render garbage.
-func tintColorSpace(d core.View, ncomp int, altObj, tintFn Object) (*imgColorSpace, bool) {
+func tintColorSpace(d core.View, ncomp int, altObj, tintFn object.Object) (*imgColorSpace, bool) {
 	alt, ok := resolveColorSpace(d, altObj)
 	if !ok || alt.indexed {
 		return nil, false
@@ -479,17 +479,17 @@ func tintColorSpace(d core.View, ncomp int, altObj, tintFn Object) (*imgColorSpa
 
 // labColorSpace resolves a [/Lab dict] space; toRGB converts CIE L*a*b* (D50) to
 // sRGB.
-func labColorSpace(d core.View, cs Array) (*imgColorSpace, bool) {
+func labColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 	wp := [3]float64{0.9642, 1.0, 0.8249} // D50, the usual Lab reference white
 	amin, amax, bmin, bmax := -100.0, 100.0, -100.0, 100.0
 	if len(cs) >= 2 {
 		if dict := d.ResolveDict(cs[1]); dict != nil {
-			if arr, ok := d.Resolve(dict.Get("WhitePoint")).(Array); ok && len(arr) == 3 {
+			if arr, ok := d.Resolve(dict.Get("WhitePoint")).(object.Array); ok && len(arr) == 3 {
 				for i := 0; i < 3; i++ {
 					wp[i] = object.Float(d.Resolve(arr[i]))
 				}
 			}
-			if arr, ok := d.Resolve(dict.Get("Range")).(Array); ok && len(arr) == 4 {
+			if arr, ok := d.Resolve(dict.Get("Range")).(object.Array); ok && len(arr) == 4 {
 				amin, amax = object.Float(d.Resolve(arr[0])), object.Float(d.Resolve(arr[1]))
 				bmin, bmax = object.Float(d.Resolve(arr[2])), object.Float(d.Resolve(arr[3]))
 			}
@@ -574,12 +574,12 @@ func clamp16(v float64) uint16 {
 // imageDecode returns the effective /Decode array (min,max per component). It
 // uses an explicit /Decode when present, else the colour-space default — which
 // for an Indexed space is [0, 2^bpc-1] so a sample is used directly as an index.
-func imageDecode(d core.View, st *Stream, cs *imgColorSpace, bpc int) []float64 {
+func imageDecode(d core.View, st *object.Stream, cs *imgColorSpace, bpc int) []float64 {
 	def := cs.decode
 	if cs.indexed {
 		def = []float64{0, float64(int(1)<<uint(bpc) - 1)}
 	}
-	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(Array); ok && len(arr) == len(def) {
+	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(object.Array); ok && len(arr) == len(def) {
 		out := make([]float64, len(arr))
 		for i := range arr {
 			out[i] = object.Float(d.Resolve(arr[i]))
@@ -591,8 +591,8 @@ func imageDecode(d core.View, st *Stream, cs *imgColorSpace, bpc int) []float64 
 
 // applySoftMask composites a /SMask (a DeviceGray image giving per-pixel alpha)
 // onto im, nearest-neighbour scaling the mask to the image's dimensions.
-func applySoftMask(d core.View, st *Stream, im *image.NRGBA) {
-	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*Stream)
+func applySoftMask(d core.View, st *object.Stream, im *image.NRGBA) {
+	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*object.Stream)
 	if !ok {
 		return
 	}
@@ -613,8 +613,8 @@ func applySoftMask(d core.View, st *Stream, im *image.NRGBA) {
 
 // applySoftMask64 is the *image.NRGBA64 counterpart of applySoftMask. The mask
 // carries one alpha byte per pixel, promoted to 16 bits (byte*257).
-func applySoftMask64(d core.View, st *Stream, im *image.NRGBA64) {
-	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*Stream)
+func applySoftMask64(d core.View, st *object.Stream, im *image.NRGBA64) {
+	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*object.Stream)
 	if !ok {
 		return
 	}
@@ -635,7 +635,7 @@ func applySoftMask64(d core.View, st *Stream, im *image.NRGBA64) {
 }
 
 // decodeAlphaMask decodes a soft-mask image XObject to one alpha byte per pixel.
-func decodeAlphaMask(d core.View, sm *Stream) (alpha []byte, w, h int, ok bool) {
+func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, ok bool) {
 	w = object.Int(d.Resolve(sm.Dict.Get("Width")))
 	h = object.Int(d.Resolve(sm.Dict.Get("Height")))
 	bpc := object.Int(d.Resolve(sm.Dict.Get("BitsPerComponent")))
@@ -655,7 +655,7 @@ func decodeAlphaMask(d core.View, sm *Stream) (alpha []byte, w, h int, ok bool) 
 		return nil, 0, 0, false
 	}
 	dec := []float64{0, 1}
-	if arr, ok := d.Resolve(sm.Dict.Get("Decode")).(Array); ok && len(arr) == 2 {
+	if arr, ok := d.Resolve(sm.Dict.Get("Decode")).(object.Array); ok && len(arr) == 2 {
 		dec[0], dec[1] = object.Float(d.Resolve(arr[0])), object.Float(d.Resolve(arr[1]))
 	}
 	maxval := float64(int(1)<<uint(bpc) - 1)

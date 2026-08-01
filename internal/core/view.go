@@ -31,7 +31,17 @@ type View struct {
 	Trailer *object.Dictionary
 	// Version is the header version, "1.7" or "2.0".
 	Version string
-	// Limits is the resolved resource budget for this document.
+	// Limits is the resolved resource budget for this document — resolved, not
+	// raw. Document.view fills it through Document.lim, which applies the
+	// defaults.
+	//
+	// This differs from Limits elsewhere in the package, where the zero value
+	// means "give me the defaults". Here the zero value is a budget of zero, and
+	// a View built by hand without setting it refuses to decode anything while
+	// reporting no error. Callers that read v.Limits directly would not be
+	// protected by resolving it inside this type's methods, so the contract is
+	// stated rather than half-defended: set it, or build the View from a
+	// Document.
 	Limits Limits
 	// Cancel is this operation's cancellation signal, or the zero value when the
 	// operation cannot be cancelled.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
 
@@ -163,7 +164,7 @@ func (d *Document) checkPDFRPage(page *Dictionary, objNum int, add func(rule, ms
 		if !ok {
 			continue
 		}
-		xnum := refNum(xobjs.Values[i])
+		xnum := object.RefNum(xobjs.Values[i])
 		sub, _ := st.Dict.Get("Subtype").(Name)
 		if sub != "Image" {
 			add("raster-only", fmt.Sprintf("XObject /%s is not an image (/Subtype %q); a PDF/R page shall use image XObjects only", key, sub), xnum)

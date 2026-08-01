@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 )
 
 // This file implements the document part (DPart) hierarchy defined in
@@ -94,10 +95,10 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 	// DPartRoot dictionary.
 	rootDict := doc.ResolveDict(rootRef)
 	if rootDict == nil {
-		add("14.12.2", "catalog /DPartRoot does not resolve to a dictionary", refNum(rootRef))
+		add("14.12.2", "catalog /DPartRoot does not resolve to a dictionary", object.RefNum(rootRef))
 		return
 	}
-	rootDictNum := refNum(rootRef)
+	rootDictNum := object.RefNum(rootRef)
 	if t, ok := rootDict.Get("Type").(Name); ok && t != "DPartRoot" {
 		add("14.12.4.1", fmt.Sprintf("DPartRoot /Type shall be /DPartRoot, got /%s", t), rootDictNum)
 	}
@@ -133,7 +134,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 
 	var walk func(ref Object, expectedParent, depth int)
 	walk = func(ref Object, expectedParent, depth int) {
-		num := refNum(ref)
+		num := object.RefNum(ref)
 		node := doc.ResolveDict(ref)
 		if node == nil {
 			add("14.12.2", "a DPart reference does not resolve to a dictionary", num)
@@ -160,7 +161,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 		parent := node.Get("Parent")
 		if parent == nil {
 			add("14.12.4.1", "DPart is missing the required /Parent entry", num)
-		} else if pn := refNum(parent); pn != expectedParent {
+		} else if pn := object.RefNum(parent); pn != expectedParent {
 			add("14.12.2", "DPart /Parent does not reference its actual parent node", num)
 		}
 
@@ -192,13 +193,13 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 		default:
 			// Leaf node: /Start (and optional /End) delimit a page range.
 			lf := leaf{objNum: num}
-			si, ok := pageIndex[refNum(start)]
+			si, ok := pageIndex[object.RefNum(start)]
 			if !ok {
 				add("14.12.3", "DPart /Start does not reference a page object", num)
 			} else {
 				lf.startIdx, lf.endIdx, lf.ok = si, si, true
 				if endRef := node.Get("End"); endRef != nil {
-					ei, ok := pageIndex[refNum(endRef)]
+					ei, ok := pageIndex[object.RefNum(endRef)]
 					if !ok {
 						add("14.12.3", "DPart /End does not reference a page object", num)
 						lf.ok = false
@@ -254,7 +255,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 			continue
 		}
 		for i := lf.startIdx; i <= lf.endIdx && i < len(pages); i++ {
-			if bp := pages[i].Dict.Get("DPart"); bp != nil && refNum(bp) != lf.objNum {
+			if bp := pages[i].Dict.Get("DPart"); bp != nil && object.RefNum(bp) != lf.objNum {
 				add("14.12.3", "page /DPart does not reference the DPart leaf whose range contains it", pages[i].ObjNum)
 			}
 		}
@@ -320,15 +321,6 @@ func validateDPMValue(doc *Document, v Object, objNum int, seen map[*Dictionary]
 	default:
 		add("14.12.4.2", fmt.Sprintf("DPM value of type %T is not permitted (only string, array, dictionary, boolean, integer, real)", val), objNum)
 	}
-}
-
-// refNum returns the object number of an indirect reference, or 0 for any other
-// object (including a direct value).
-func refNum(o Object) int {
-	if r, ok := o.(IndirectRef); ok {
-		return r.Number
-	}
-	return 0
 }
 
 // isXMLNameToken reports whether s is a valid XML Name: a first character that

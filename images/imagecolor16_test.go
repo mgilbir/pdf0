@@ -1,6 +1,7 @@
-package pdf0
+package images
 
 import (
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"testing"
 )
@@ -94,7 +95,7 @@ func TestBuildImage16SoftMask(t *testing.T) {
 func TestBuildImage16StencilMask(t *testing.T) {
 	base := imageXObject(2, 1, 16, "DeviceGray", "", []byte{0x40, 0x00, 0xC0, 0x00})
 	mk := imageXObject(2, 1, 1, "", "", []byte{0b10000000}) // pixel0 hidden, pixel1 shown
-	mk.Dict.Set("ImageMask", Boolean(true))
+	mk.Dict.Set("ImageMask", object.Boolean(true))
 	base.Dict.Set("Mask", mk)
 	m := mustBuild(t, base, 2, 1, 16)
 	if _, _, _, a := rgba16(t, m, 0, 0); a != 0 {
@@ -109,9 +110,9 @@ func TestBuildImage16Indexed(t *testing.T) {
 	// Indexed over DeviceRGB with a 16-bit index sample. 8-bit palette entries
 	// promote losslessly to 16-bit (0xFF -> 0xFFFF).
 	st := imageXObject(2, 1, 16, "", "", []byte{0x00, 0x00, 0x00, 0x01})
-	st.Dict.Set("ColorSpace", Array{
-		Name("Indexed"), Name("DeviceRGB"), Integer(1),
-		String{Value: []byte{255, 0, 0, 0, 255, 0}},
+	st.Dict.Set("ColorSpace", object.Array{
+		object.Name("Indexed"), object.Name("DeviceRGB"), object.Integer(1),
+		object.String{Value: []byte{255, 0, 0, 0, 255, 0}},
 	})
 	m := mustBuild(t, st, 2, 1, 16)
 	if r, g, b, _ := rgba16(t, m, 0, 0); r != 0xFFFF || g != 0 || b != 0 {

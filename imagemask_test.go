@@ -9,6 +9,15 @@ import (
 )
 
 // jpegBytes encodes a solid-grey WxH image as JPEG.
+// rgb8 is repeated from the images package's colour tests: a test helper
+// cannot cross a package boundary.
+// rgb8 returns the 8-bit RGBA of a pixel.
+func rgb8(t *testing.T, m image.Image, x, y int) (r, g, b, a uint8) {
+	t.Helper()
+	rr, gg, bb, aa := m.At(x, y).RGBA()
+	return uint8(rr >> 8), uint8(gg >> 8), uint8(bb >> 8), uint8(aa >> 8)
+}
+
 func jpegBytes(t *testing.T, w, h int, gray byte) []byte {
 	t.Helper()
 	src := image.NewGray(image.Rect(0, 0, w, h))
@@ -115,34 +124,3 @@ func TestMaskColorKeyIgnoredForCodec(t *testing.T) {
 }
 
 // TestApplyImageMasks exercises applyImageMasks directly on a hand-built RGBA.
-func TestApplyImageMasks(t *testing.T) {
-	// A 2x1 opaque RGBA base.
-	src := image.NewRGBA(image.Rect(0, 0, 2, 1))
-	src.Set(0, 0, color.RGBA{R: 10, G: 20, B: 30, A: 255})
-	src.Set(1, 0, color.RGBA{R: 40, G: 50, B: 60, A: 255})
-
-	st := imageXObject(2, 1, 8, "DeviceRGB", "DCTDecode", nil)
-	sm := imageXObject(2, 1, 8, "DeviceGray", "", []byte{0, 128})
-	st.Dict.Set("SMask", sm)
-
-	d := &Document{}
-	out := applyImageMasks(d.view(), st, src)
-	nrgba, ok := out.(*image.NRGBA)
-	if !ok {
-		t.Fatalf("expected *image.NRGBA, got %T", out)
-	}
-	// Colour is preserved exactly (no codec involved here); alpha from SMask.
-	// Read the NRGBA pixels directly: .RGBA() would premultiply by alpha.
-	if p := nrgbaPix(nrgba, 0, 0); p != [4]byte{10, 20, 30, 0} {
-		t.Errorf("pixel0 = %v, want [10 20 30 0]", p)
-	}
-	if p := nrgbaPix(nrgba, 1, 0); p != [4]byte{40, 50, 60, 128} {
-		t.Errorf("pixel1 = %v, want [40 50 60 128]", p)
-	}
-
-	// With no mask keys, the image is returned unchanged.
-	plain := imageXObject(2, 1, 8, "DeviceRGB", "DCTDecode", nil)
-	if got := applyImageMasks(d.view(), plain, src); got != image.Image(src) {
-		t.Errorf("no-mask image should be returned unchanged")
-	}
-}
