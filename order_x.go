@@ -58,6 +58,10 @@ type OrderXResult struct {
 }
 
 // ValidateOrderX checks whether doc is a conforming Order-X order container.
+//
+// It has no Context variant, for the reason ValidateFacturX records: the result
+// carries formalis.Violation values, which IsCheckerFinding cannot classify, so
+// a cancelled run could not be told apart from a conformance failure.
 func ValidateOrderX(doc *Document, rawData []byte) (res OrderXResult) {
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, formalis.Violation{Rule: rule, Message: msg, Object: obj})
@@ -72,14 +76,8 @@ func ValidateOrderX(doc *Document, rawData []byte) (res OrderXResult) {
 		sortFormalisViolations(res.Violations)
 	}()
 
-	// An Order-X file shall be PDF/A-3 (validated at level B; the A-vs-B
-	// conformance-letter difference is suppressed, as for Factur-X).
-	for _, e := range ValidatePDFABytes(doc, PDFA3b, rawData) {
-		if e.Rule == "6.6.4" && strings.Contains(e.Message, "pdfaid:conformance") {
-			continue
-		}
-		add("pdfa-3/"+e.Rule, e.Message, e.Object)
-	}
+	// An Order-X file shall be PDF/A-3, adopted exactly as for Factur-X.
+	adoptPDFAFindings(add, "pdfa-3/", ValidatePDFABytes(doc, PDFA3b, rawData))
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {

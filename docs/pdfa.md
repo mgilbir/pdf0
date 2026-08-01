@@ -275,6 +275,12 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
   decoded, or any stream once the run has spent `WithMaxDecodedContentBytes` (512 MB),
   yields `nil` — indistinguishable from "undecodable". A rule reading `nil` content
   as "clean" silently under-reports on a hostile file; treat it as "unknown".
+  Both trips *are* reported, under the reserved rule `limit`
+  (`content-stream-size`, `decoded-content-total`) — see
+  [limits.md](limits.md). `limit` and `internal` are the two rule identifiers a
+  new check must never reuse: they name the checker, not the document, and
+  `IsCheckerFinding` is the caller's way to tell the two apart. A cancelled
+  `ValidatePDFAContext` run reports itself the same way.
 - **Rule IDs are load-bearing.** `TestRuleCoverage` greps non-test source for
   quoted `6.x.y` literals, so renaming or inlining a clause string can break the
   coverage ratchet even when the rule still works. (Related sentinel asymmetry:

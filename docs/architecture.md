@@ -159,7 +159,8 @@ always had.**
 A fixed number cannot be right for every caller, though. A batch converter on a
 workstation and a public upload endpoint want genuinely different answers to
 "how much may one untrusted document cost me". Eleven limits are therefore
-settable per document, as variadic options on `Read`:
+settable per document, as variadic options on `Read`, `ReadWithPassword`, their
+`…Context` variants and `ParseXRefStream`:
 
 ```go
 doc, err := pdf0.Read(r, size,
@@ -170,9 +171,13 @@ doc, err := pdf0.Read(r, size,
 
 `Option` values resolve once at the entry point into an unexported struct that
 is stored on the `Document`, so every validator and extractor run on that
-document inherits the same configuration. The struct travels by value and is
-never mutated after resolution, so validating one `Document` from several
-goroutines stays safe — the property package-level `var`s would have lost.
+document inherits the same configuration. "Everything" is meant literally: the
+file's own cross-reference streams during `Read`, and any PDF embedded in it
+that PDF/A-4 clause 6.9 sends pdf0 back into. Both are Flate streams the file
+controls, so both answer to the caller's ceiling rather than to pdf0's default.
+The struct travels by value and is never mutated after resolution, so validating
+one `Document` from several goroutines stays safe — the property package-level
+`var`s would have lost.
 
 | Option | Default | Bounds |
 |--------|---------|--------|
@@ -256,12 +261,19 @@ images — rather than to a bounded structural count.
 
 | Has a `…Context` variant | Deliberately does not | Why not |
 |---|---|---|
-| `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `Equal`, `DocumentEqual` | Structural lookups; microseconds. |
+| `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
 | `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
-| All nine validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`) | `ValidateFacturX`, `ValidateOrderX` | The cost is the XML rule engine in `formalis`, which takes no context; a variant here would advertise cancellation pdf0 cannot deliver. |
+| All nine validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`) | `ValidateFacturX`, `ValidateOrderX` | Not on cost — these two *are* document-scale, since each runs a full PDF/A-3 validation. It is that their findings are `formalis.Violation` values, which cannot satisfy `pdf0.Violation` and so are outside `IsCheckerFinding`. A cancelled run would have no way to say "pdf0 stopped early" that a caller could tell apart from a conformance failure, which is the whole guarantee below. (The invoice half is the `formalis` rule engine, which takes no context either.) A caller under a deadline can validate the PDF/A-3 base with `ValidatePDFABytesContext` first. |
 | `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. |
 | | `Images` | An iterator is already cancellable by `break`, and because each image is decoded only as it is yielded, breaking after image N skips exactly what a context checked between images would have. |
 | | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Bounded by the signature count (single digits), and each signature's crypto is bounded. |
+
+The rule that falls out of the third row is worth stating on its own: **an entry
+point gets a `…Context` variant only if it has somewhere honest to report the
+cancellation.** For the nine validators that is a finding under the reserved
+rule `limit`; for `Read` and `Write` it is a returned error; for the two
+extractors it is a partial result *plus* an error. Nothing is given a variant
+that would have to swallow the fact.
 
 ### Where the check happens, and what latency that buys
 

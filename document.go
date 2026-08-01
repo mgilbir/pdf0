@@ -515,15 +515,21 @@ func parseXRefSection(cancel canceler, data []byte, offset int64, doc *Document)
 		if !ok {
 			return nil, nil, fmt.Errorf("xref stream object is not a stream")
 		}
-		// defaultLimits() rather than doc.lim() reproduces exactly what
-		// ParseXRefStream(stream) did here before the canceler was threaded
-		// through. That is a pre-existing gap — a caller who lowers
-		// WithMaxDecodedStreamBytes does not get it applied to the file's own
-		// cross-reference stream, though parseXRefStream's doc comment says
-		// otherwise — and it is left alone deliberately: fixing it changes what
-		// a configured limit does, which belongs in its own change with its own
-		// corpus verification.
-		table, err := parseXRefStream(cancel, stream, defaultLimits())
+		// The document's own resolved limits, not defaultLimits(): a
+		// cross-reference stream is a Flate stream the file controls like any
+		// other, so a caller who lowered WithMaxDecodedStreamBytes for untrusted
+		// uploads has to get that ceiling here too. doc.limits is populated
+		// before the cross-reference chain is walked, so the value is available.
+		//
+		// This costs nothing under the defaults, which is the only configuration
+		// the corpus exercises: doc.lim() is then defaultLimits() field for
+		// field. Measured across 3,102 files (the veraPDF corpus, the Cal Poly
+		// PDF/VT suite, the WTPDF set, the Factur-X invoices and the PDF 2.0
+		// reference files), 930 cross-reference stream sections decode to at most
+		// 430,350 bytes — 0.4% of the 100 MB default, and none above 1 MiB. A
+		// caller has to go two orders of magnitude below the default before this
+		// bound is what stops their read.
+		table, err := parseXRefStream(cancel, stream, doc.lim())
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing xref stream: %w", err)
 		}

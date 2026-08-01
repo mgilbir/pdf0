@@ -504,7 +504,18 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 			if err != nil || len(data) == 0 {
 				continue
 			}
-			if !embeddedPDFACompliant(doc.canceler(), data) {
+			compliant, complete := embeddedPDFACompliant(doc.canceler(), data, doc.lim())
+			if !complete {
+				// The nested run reported a checker finding of its own — a guard
+				// tripped inside it, a check panicked, or the shared context
+				// ended. Counting that as "not compliant" would be the package's
+				// central mistake: asserting a violation on the strength of an
+				// incomplete result (limits_report.go). Decline, and report the
+				// incompleteness under "limit" so it is attributable.
+				noteLimit(doc, limitEmbeddedPDFA, "an embedded PDF file could not be validated to completion, so its PDF/A conformance (6.9) was neither confirmed nor denied", num)
+				continue
+			}
+			if !compliant {
 				errs = append(errs, ValidationError{Rule: "6.9", Level: level,
 					Message: "an embedded PDF file is not compliant with PDF/A", Object: num})
 			}
@@ -539,26 +550,58 @@ func isPDFMIME(subtype Object) bool {
 }
 
 // embeddedPDFACompliant reports whether embedded PDF bytes parse as a PDF/A
-// document and validate against their own declared conformance level.
+// document and validate against their own declared conformance level, and
+// whether that verdict is one pdf0 actually reached.
 //
-// The outer run's cancellation signal is carried into the nested read and
-// validation: this is a whole second document's worth of work, and it is the
-// one place where cancelling would otherwise have no effect for the length of
-// an entire validation. A cancelled nested run reports "not compliant", which
-// looks like a finding — but the outer run's own cancellation finding is
-// present alongside it and marks the whole result as incomplete, so the caller
-// is not misled (cancel.go).
-func embeddedPDFACompliant(cancel canceler, data []byte) bool {
-	edoc, err := readDocument(cancel, bytes.NewReader(data), int64(len(data)), "", defaultLimits())
+// The outer run's cancellation signal *and* its resolved limits are carried
+// into the nested read and validation. Both for the same reason: this is a
+// whole second document's worth of work on bytes the outer file supplied, so a
+// caller's deadline and a caller's ceilings have to govern it exactly as they
+// govern the outer document. Threading only the context would leave the one
+// place a hostile file can spend an unconfigured budget.
+//
+// The second result is false when the verdict is not one pdf0 reached: the
+// nested run produced a checker finding — "limit" or "internal"
+// (IsCheckerFinding) — or it never got that far because the checker itself
+// refused. Folding either into the boolean would report "not compliant" for a
+// file pdf0 merely failed to finish reading, which is the false positive
+// limits_report.go exists to prevent; the caller declines the 6.9 finding and
+// reports the incompleteness instead.
+//
+// The two early exits deserve their own note. "This did not read" and "this
+// declares no PDF/A level" are statements about the bytes — unless the checker
+// is what refused, which happens when the shared context ended, or when a
+// ceiling the caller lowered is what the embedded document ran into. Neither
+// cause is recoverable from the error (the decode chain reports over-limit as
+// an ordinary error, with no sentinel), so when either is possible the verdict
+// is withheld rather than guessed. Under the defaults — every caller who
+// configures nothing, and the whole corpus — that condition is false and both
+// exits behave exactly as they always have.
+func embeddedPDFACompliant(cancel canceler, data []byte, lim limits) (compliant, complete bool) {
+	// True when a failure below could be the checker's doing rather than the
+	// file's, and so must not be reported as non-conformance.
+	checkerMayHaveRefused := cancel.err() != nil || lim != defaultLimits()
+
+	edoc, err := readDocument(cancel, bytes.NewReader(data), int64(len(data)), "", lim)
 	if err != nil {
-		return false
+		return false, !checkerMayHaveRefused
 	}
 	elevel, ok := declaredPDFALevel(edoc)
 	if !ok {
-		return false // an embedded PDF that is not PDF/A at all
+		// An embedded PDF that is not PDF/A at all — or whose own metadata
+		// stream the caller's lowered per-stream cap declined to decode.
+		return false, !checkerMayHaveRefused
 	}
 	edoc.embeddedDepth = 1
-	return len(validatePDFABytes(cancel, edoc, elevel, data)) == 0
+	compliant, complete = true, true
+	for _, e := range validatePDFABytes(cancel, edoc, elevel, data) {
+		if IsCheckerFinding(e) {
+			complete = false
+			continue
+		}
+		compliant = false
+	}
+	return compliant, complete
 }
 
 // declaredPDFALevel reads the PDF/A conformance level a document claims via

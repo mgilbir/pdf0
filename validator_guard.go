@@ -3,6 +3,7 @@ package pdf0
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/mgilbir/formalis"
 )
@@ -55,6 +56,32 @@ func runUACheck(check func() []UAViolation) (out []UAViolation) {
 		}
 	}()
 	return check()
+}
+
+// adoptPDFAFindings replays the findings of a composed PDF/A validation through
+// an add callback, namespacing each rule under prefix. ValidateFacturX and
+// ValidateOrderX use it to fold their PDF/A-3 base into a container report.
+//
+// The two reserved checker identifiers keep their bare names. "internal" and
+// "limit" say that *pdf0* could not finish rather than that the document is
+// wrong (see IsCheckerFinding), and a wrapper that renamed them to
+// "pdfa-3/limit" would leave a caller of the composed validator with no
+// documented spelling for that distinction. The prefix exists to keep two rule
+// *namespaces* from colliding, and these two identifiers belong to neither.
+//
+// The A-vs-B conformance-letter finding is dropped: pdf0 validates at level B,
+// and PDF/A-3 also permits level A, which only adds tagging.
+func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs []ValidationError) {
+	for _, e := range errs {
+		switch {
+		case e.Rule == internalRule || e.Rule == limitRule:
+			add(e.Rule, e.Message, e.Object)
+		case e.Rule == "6.6.4" && strings.Contains(e.Message, "pdfaid:conformance"):
+			// Not a container finding.
+		default:
+			add(prefix+e.Rule, e.Message, e.Object)
+		}
+	}
 }
 
 // sortViolations orders findings by rule, then object, then message, the order

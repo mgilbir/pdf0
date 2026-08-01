@@ -53,8 +53,12 @@ func validatePDFUA(cancel canceler, doc *Document, part string) []UAViolation {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		// Even here the guard trips are reported: "no catalog" is exactly the
-		// kind of finding a read-time truncation can manufacture.
-		return append([]UAViolation{{"7.1", "document has no catalog", 0}}, limitUAViolations(doc)...)
+		// kind of finding a read-time truncation can manufacture. This early
+		// return is sorted like the normal one — every exit of every validator
+		// returns findings in the same order.
+		out := append([]UAViolation{{"7.1", "document has no catalog", 0}}, limitUAViolations(doc)...)
+		sortViolations(out)
+		return out
 	}
 	var v []UAViolation
 

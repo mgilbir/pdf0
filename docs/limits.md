@@ -1,11 +1,16 @@
 # Resource limits and what a trip means
 
-Two documents cover resource limits, because there are two questions.
-[docs/proposals/configurable-limits.md](proposals/configurable-limits.md)
-answers *what a limit is* — the eleven `With*` options, the defaults, the
-measurements behind them, and which limits were deliberately left internal. This
-one answers *what happens when a limit trips*. The code splits the same way:
-`limits.go` and `limits_report.go`.
+Three documents cover resource limits, because there are three questions, and
+each has exactly one home:
+
+| Question | Read | Code |
+| --- | --- | --- |
+| *How do I cap what a document costs?* — the eleven `With*` options, the defaults, which entry points take them | [architecture.md](architecture.md#resource-limits) | `limits.go` |
+| *What happens when a limit trips?* — the `limit` rule, `IsCheckerFinding`, the per-guard classification | this document | `limits_report.go` |
+| *Why is it shaped this way?* — the measurements, the rejected alternatives, which limits were deliberately left internal | [proposals/configurable-limits.md](proposals/configurable-limits.md) | — |
+
+The defaults are stated in `limits.go`, which is the source of truth; the tables
+elsewhere restate them for a reader who is already there.
 
 The two meet in one place. Eleven of the guards below are configurable, so a
 trip may be pdf0's own ceiling or the caller's; the trip message says which
@@ -68,6 +73,15 @@ A `limit` finding fires on no file in the veraPDF corpus. If you see one, the
 input is adversarial or a budget needs revisiting — it is never a statement
 about conformance.
 
+Each finding names the guard that tripped, in a stable lower-case identifier a
+caller can key on — the `limit*` constants in `limits_report.go`, named after
+the bound rather than after the rule that was skipped, since one guard can cost
+several rules. The recorder is itself bounded (`maxRecordedLimitTrips`, 64), so
+a file crafted to trip a guard once per object cannot turn the *report* into the
+exhaustion the guards prevent; distinct trips past the cap are counted and
+reported in aggregate under `limit-report`, which is a guard identifier like the
+rest so that nothing has to special-case it.
+
 ### The one non-guard that reports here: cancellation
 
 A caller's `context.Context` ending a run is not a resource guard, but it
@@ -104,7 +118,8 @@ granularity; `cancel.go` carries the design record.
 | --- | --- |
 | All PDF/A, PDF/UA, PDF/UA-2, PDF/X, PDF/VT, PDF/R and DPart checks (each installs or joins a run). | The lexer and parser (`maxTokenGap`, `maxParseDepth`): they take bytes, not a `*Document`, and threading state through them for a guard that already surfaces as a parse error would be ceremony, not reach. |
 | Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures already surface per image in `ExtractedImage.Note`; text truncation surfaces as missing text. |
-| Font-program guards, forwarded from the parsed program. | `Equal` / `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
+| Font-program guards, forwarded from the parsed program. | `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
+| Nested embedded-PDF/A validation (6.9), as `embedded-pdfa`. | `Equal` / `DocumentEqual`: they return a `bool`, so there is nowhere to say "too deep to tell". `maxCompareDepth` is *silently wrong by construction* (see the parsing table) and stays that way; no validator rule compares structures that deep. |
 | Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error. |
 
 ## The inventory
@@ -116,7 +131,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| cmap work budget (`WithMaxCmapWork`) | `fontprog.go` | **Silently wrong** | `trueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `fontProgram.cmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-format4-work`. |
+| cmap work budget (`WithMaxCmapWork`) | `fontprog.go` | **Silently wrong** | `trueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `fontProgram.cmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
 | CID `/W` range span (`WithMaxCIDRangeSpan`) | `fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Fixed. `parseCIDWidths` reports completeness; the width rule declines; trip reported as `cid-width-range`. |
 | `parseCmapSubtable` nil-on-unreadable | `fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
@@ -133,6 +148,8 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | aggregate content budget (`WithMaxDecodedContentBytes`), content proper | `pdfa.go` | Silently lossy | Same, for every stream after the budget. | Reported as `decoded-content-total`. |
 | `maxQDepth` (28) | `pdfa.go` | Loud | It *is* the rule (implementation limit), not a work cap. | Unchanged. |
 | ICC profile size (`WithMaxICCProfileBytes`) | `pdfa.go` | Silently lossy, fail-open by design | `getOutputIntentCoverage` sets `hasRGB=hasCMYK=true` on an unreadable profile precisely to avoid a false positive. | Unchanged. |
+| XMP packet size (`WithMaxXMPPacketBytes`) | `xmp.go`, `xmp_schemas.go` | Silently lossy, fail-open by design | `parseXMPProperties` errors over the cap and `checkXMPProperties` reads that as "no properties to check" — **never** a violation, so an oversized valid packet is not failed. Well-formedness still runs: `xmpWellFormed` is O(n) over the token stream and needs no tree. | Unchanged. The two rules that survive the cap are the two a caller most needs, and the skipped ones are value checks that cannot fire without a tree. |
+| embedded PDF/A validation (no bound of its own) | `final_rules.go` | Was **silently wrong** | `checkEmbeddedPDFA` treated *any* non-empty result from the nested validation as non-conformance, so a guard trip or a recovered panic inside the embedded document became *"an embedded PDF file is not compliant with PDF/A"* (6.9). | Fixed. `embeddedPDFACompliant` returns completeness alongside the verdict; a nested `IsCheckerFinding` declines the 6.9 finding and reports `embedded-pdfa` instead. The nested read and validation now also inherit the outer document's resolved limits rather than the defaults — the one place a hostile file could otherwise spend a whole second document's budget unconfigured. Because that makes a *lowered* ceiling a possible cause of "did not read" and "declares no level", those two exits also withhold the verdict whenever the limits in force are not the defaults, which is fail-open (a missed finding, never a manufactured one). Under the defaults nothing changes. |
 | Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Unchanged. |
 
 ### Structure and PDF/UA
@@ -161,12 +178,20 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 ### Image codecs
 
 Every guard in `jbig2*.go`, `ccitt.go`, `mq.go`, `imagejpeg.go`, `imagemask.go`,
-`imagecolor.go` and `filters.go` is at worst a false negative **for the
-extraction API**. No PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a decoded
-pixel: the image rules read dictionary keys (`/Alternates`, `/Interpolate`,
-`/OPI`, `/SMask`, `/Filter`, `/ColorSpace`) and `checkCSForDevice` judges colour
-from `/ColorSpace` alone. A budget trip surfaces as `ExtractedImage.Note`, not
-as a finding.
+`imagecolor.go`, `function_ps.go` and `filters.go` is at worst a false negative
+**for the extraction API**. No PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a
+decoded pixel: the image rules read dictionary keys (`/Alternates`,
+`/Interpolate`, `/OPI`, `/SMask`, `/Filter`, `/ColorSpace`) and
+`checkCSForDevice` judges colour from `/ColorSpace` alone. A budget trip
+surfaces as `ExtractedImage.Note`, not as a finding.
+
+`function_ps.go` is in this list because of who calls it, not where it lives.
+The type-4 (PostScript calculator) work budget — `WithMaxPostScriptSteps`, the
+eleventh configurable limit — bounds `psExec`, and `evalFunction` is reached only
+from `imagecolor.go`'s tint-transform rendering. The PDF/A tint-transform rule
+compares function *objects* (`Equal`), it never evaluates one, so a trip costs
+pixel fidelity and no finding. This is why the budget reports no trip: there is
+no rule to decline.
 
 One exception, now fixed: `decodeGenericMMR` indexed `decodeCCITT`'s output as if
 it held every row. `decodeCCITT` stops early when its data runs out and still

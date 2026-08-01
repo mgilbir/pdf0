@@ -28,6 +28,17 @@ decoded image is live, and breaking out of the loop skips the remaining decode
 work entirely (`TestImagesIteratorLazy` pins that). Prefer `Images` for any file
 you did not produce yourself.
 
+Under a deadline, `ExtractImagesContext(ctx)` returns the images gathered before
+the cancellation **and** an error wrapping `ctx.Err()` — both, because a short
+slice returned bare is indistinguishable from a document with fewer images, and
+extraction has no finding channel to say otherwise. The error is nil exactly when
+every image was reached; the check is between images, so a single very large
+image is not interruptible. There is deliberately no context variant of `Images`:
+an iterator is already cancellable by `break`, and since each image is decoded
+only as it is yielded, breaking after image N skips exactly what a context check
+between images would have. See
+[architecture.md](architecture.md#cancellation).
+
 Each yielded value is an `ExtractedImage`:
 
 | Field | Meaning |
@@ -166,7 +177,14 @@ survives; everything else on the sample path renders to `*image.NRGBA`.
 
 These decoders parse attacker-controlled input, and several of them can be told
 to do far more work than the input's size suggests. The guards are deliberate,
-each tied to an observed failure:
+each tied to an observed failure.
+
+None of them reports a `limit` finding, and that is a consequence of the API
+rather than an omission: extraction returns no findings, so a trip surfaces per
+image in `ExtractedImage.Note` and `Decoded=false`. It is also why no validator
+is affected — no PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a decoded
+pixel. [limits.md](limits.md) classifies these guards on that axis, and records
+why the JBIG2 trio was left un-configurable while the type-4 budget was not.
 
 - **JBIG2 pixel budgets** (`jbig2.go`). Segment headers declare bitmap
   dimensions independently of how much coded data follows, and the MQ decoder

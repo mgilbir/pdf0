@@ -32,9 +32,6 @@ func (v PDFVTViolation) Error() string {
 // requires conformance to the PDF/X-4 base profile, a valid document part
 // hierarchy, and PDF/VT-1 identification in XMP. An empty result means no
 // violations were found.
-// ValidatePDFVT checks whether doc conforms to PDF/VT-1 (ISO 16612-2): a
-// conforming PDF/X-4 file, identified as PDF/VT-1, with a document part
-// hierarchy.
 func ValidatePDFVT(doc *Document) []PDFVTViolation {
 	return validatePDFVTImpl(canceler{}, doc, "PDF/VT-1", false)
 }

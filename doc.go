@@ -37,10 +37,10 @@
 // configures nothing needs to do nothing.
 //
 // Eleven of those caps are settable per document, as variadic Option values on
-// Read (see WithMaxDecodedStreamBytes and the other With* functions). They
-// resolve once and are stored on the Document, so validation and extraction
-// inherit whatever Read was given, and two documents read with different limits
-// never interfere:
+// Read, ReadWithPassword, their Context variants and ParseXRefStream (see
+// WithMaxDecodedStreamBytes and the other With* functions). They resolve once
+// and are stored on the Document, so validation and extraction inherit whatever
+// Read was given, and two documents read with different limits never interfere:
 //
 //	doc, err := pdf0.Read(r, size,
 //		pdf0.WithMaxDecodedStreamBytes(8<<20),
@@ -75,7 +75,11 @@
 // long an operation may take. Every original signature is unchanged, and an
 // entry point whose cost is bounded rather than document-scale — ExtractPageText
 // (one page), Images (an iterator the caller can break out of),
-// Document.VerifySignatures — deliberately has no variant.
+// Document.VerifySignatures — deliberately has no variant. ValidateFacturX and
+// ValidateOrderX have none for a different reason: their findings are
+// formalis.Violation values, which IsCheckerFinding cannot classify, so a
+// cancelled run could not be distinguished from a conformance failure. See
+// docs/architecture.md#cancellation for the full table.
 //
 // A cancelled validation returns the findings it had gathered plus one under the
 // rule "limit", the same channel a tripped resource cap uses, so a cancelled run

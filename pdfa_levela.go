@@ -41,6 +41,12 @@ func validatePDFALevelA(cancel canceler, doc *Document, level PDFALevel, rawData
 		}
 		errs = append(errs, runCheck(doc, level, check)...)
 	}
+
+	// validatePDFABytes sorted the Level B findings; re-sort now that the Level A
+	// families have appended to them, so Level A returns findings in the same
+	// "by rule, then object, then message" order every other validator promises
+	// (validatePDFUA2 does the same for its extra rule).
+	sortViolations(errs)
 	return errs
 }
 

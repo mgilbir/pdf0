@@ -93,6 +93,24 @@ an empty result means "nothing I check flagged this," not a guarantee of full
 conformance. Use `ValidatePDFABytes` when you have the raw file bytes and want
 the additional byte-level checks (e.g. no data after `%%EOF`).
 
+For untrusted input, every unbounded loop and every file-sized allocation is
+already capped, and eleven of those caps are settable per document as options on
+`Read`:
+
+```go
+doc, err := pdf0.Read(r, size,
+	pdf0.WithMaxDecodedStreamBytes(8<<20),   // stricter decompression-bomb ceiling
+	pdf0.WithMaxDecodedContentBytes(64<<20), // stricter whole-run content budget
+)
+```
+
+They resolve once and are stored on the `Document`, so every later validation and
+extraction inherits them. When a cap does stop a check, the trip is reported as a
+finding under the rule `"limit"` rather than guessed at — `IsCheckerFinding`
+separates that from a real non-conformance, and it means **unknown**, never
+*failed*. See [docs/limits.md](docs/limits.md) and
+[docs/architecture.md](docs/architecture.md#resource-limits).
+
 Under a deadline, use the `…Context` variants — `ReadContext`,
 `Document.WriteContext`, `ValidatePDFAContext`, `ValidatePDFUAContext`,
 `Document.ExtractTextContext` and the rest:

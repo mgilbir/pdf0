@@ -43,6 +43,17 @@ type FacturXResult struct {
 
 // ValidateFacturX checks whether doc is a conforming Factur-X invoice container.
 // rawData is the original file bytes, needed for the PDF/A-3 byte-level checks.
+//
+// Unlike the nine PDF-standard validators this one has no Context variant, and
+// the reason is the result type rather than the cost. FacturXResult carries
+// formalis.Violation values, which cannot satisfy this package's Violation
+// interface (see the Violation documentation) and so are outside
+// IsCheckerFinding. A cancelled run therefore has no way to say "pdf0 stopped
+// early" that a caller can tell apart from a conformance failure, which is the
+// one property the cancellation design guarantees everywhere else (cancel.go).
+// The second reason is that the invoice half of the work is the formalis rule
+// engine, which takes no context. A caller who needs a deadline should validate
+// the container's PDF/A-3 base with ValidatePDFABytesContext first.
 func ValidateFacturX(doc *Document, rawData []byte) (res FacturXResult) {
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, formalis.Violation{Rule: rule, Message: msg, Object: obj})
@@ -63,15 +74,10 @@ func ValidateFacturX(doc *Document, rawData []byte) (res FacturXResult) {
 		sortFormalisViolations(res.Violations)
 	}()
 
-	// A Factur-X file shall be PDF/A-3. pdf0 validates at level B; PDF/A-3 also
-	// permits level A (which only adds tagging), so the sole A-vs-B difference
-	// pdf0 reports — the pdfaid:conformance letter — is suppressed here.
-	for _, e := range ValidatePDFABytes(doc, PDFA3b, rawData) {
-		if e.Rule == "6.6.4" && strings.Contains(e.Message, "pdfaid:conformance") {
-			continue
-		}
-		add("pdfa-3/"+e.Rule, e.Message, e.Object)
-	}
+	// A Factur-X file shall be PDF/A-3, so the PDF/A-3 findings are adopted under
+	// a "pdfa-3/" namespace — except the reserved checker identifiers, which keep
+	// their names (adoptPDFAFindings).
+	adoptPDFAFindings(add, "pdfa-3/", ValidatePDFABytes(doc, PDFA3b, rawData))
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
