@@ -124,11 +124,11 @@ func (d *Document) VerifySignatures(raw []byte) []SignatureResult {
 // not) and meaningful: in a document signed by successive incremental updates the
 // later signature is the later object.
 func (d *Document) VerifySignaturesWithRoots(raw []byte, roots *x509.CertPool) []SignatureResult {
-	sigs := d.documentSignatures(true)
-	names := d.signatureFieldNames(sigs)
+	sigs := documentSignatures(d, true)
+	names := signatureFieldNames(d, sigs)
 	var results []SignatureResult
 	for _, s := range sigs {
-		res := d.verifyOneSignature(s.dict, raw, roots)
+		res := verifyOneSignature(d, s.dict, raw, roots)
 		res.Field = names[s.num]
 		results = append(results, res)
 	}
@@ -146,7 +146,7 @@ type signatureEntry struct {
 // carrying both /ByteRange and /Contents, with a /Type of /Sig, /DocTimeStamp or
 // absent — ordered by object number, so every caller reports its results in the
 // same deterministic order rather than in Go map order.
-func (d *Document) documentSignatures(includeDocTimestamps bool) []signatureEntry {
+func documentSignatures(d *Document, includeDocTimestamps bool) []signatureEntry {
 	nums := make([]int, 0, len(d.Objects))
 	for num := range d.Objects {
 		nums = append(nums, num)
@@ -189,7 +189,7 @@ const maxFieldTreeDepth = 64
 // its qualified name. Fields that no /AcroForm reaches (a widget attached only to
 // a page, which producers do emit) are picked up by a second pass over the
 // objects, reconstructing the ancestry from the field's own /Parent chain.
-func (d *Document) signatureFieldNames(sigs []signatureEntry) map[int]string {
+func signatureFieldNames(d *Document, sigs []signatureEntry) map[int]string {
 	if len(sigs) == 0 {
 		return nil
 	}
@@ -204,7 +204,7 @@ func (d *Document) signatureFieldNames(sigs []signatureEntry) map[int]string {
 			fields, _ := d.Resolve(form.Get("Fields")).(Array)
 			seen := map[int]bool{}
 			for _, f := range fields {
-				d.collectFieldNames(f, "", seen, want, names, 0)
+				collectFieldNames(d, f, "", seen, want, names, 0)
 			}
 		}
 	}
@@ -232,14 +232,14 @@ func (d *Document) signatureFieldNames(sigs []signatureEntry) map[int]string {
 		if v == nil {
 			continue
 		}
-		target := d.refObjNum(v)
+		target := refObjNum(d, v)
 		if !want[target] {
 			continue
 		}
 		if _, done := names[target]; done {
 			continue
 		}
-		names[target] = d.qualifiedFieldName(fd)
+		names[target] = qualifiedFieldName(d, fd)
 	}
 	return names
 }
@@ -247,7 +247,7 @@ func (d *Document) signatureFieldNames(sigs []signatureEntry) map[int]string {
 // collectFieldNames walks one branch of the field tree, accumulating the
 // qualified-name prefix, and records the name of every field whose /V references
 // a wanted signature dictionary.
-func (d *Document) collectFieldNames(node Object, prefix string, seen map[int]bool, want map[int]bool, names map[int]string, depth int) {
+func collectFieldNames(d *Document, node Object, prefix string, seen map[int]bool, want map[int]bool, names map[int]string, depth int) {
 	if depth > maxFieldTreeDepth {
 		return
 	}
@@ -261,9 +261,9 @@ func (d *Document) collectFieldNames(node Object, prefix string, seen map[int]bo
 	if fd == nil {
 		return
 	}
-	name := joinFieldName(prefix, d.fieldPartialName(fd))
+	name := joinFieldName(prefix, fieldPartialName(d, fd))
 	if v := fd.Get("V"); v != nil {
-		if target := d.refObjNum(v); want[target] {
+		if target := refObjNum(d, v); want[target] {
 			if _, done := names[target]; !done {
 				names[target] = name
 			}
@@ -271,13 +271,13 @@ func (d *Document) collectFieldNames(node Object, prefix string, seen map[int]bo
 	}
 	kids, _ := d.Resolve(fd.Get("Kids")).(Array)
 	for _, k := range kids {
-		d.collectFieldNames(k, name, seen, want, names, depth+1)
+		collectFieldNames(d, k, name, seen, want, names, depth+1)
 	}
 }
 
 // qualifiedFieldName builds a field's fully qualified name from its own /T and
 // those of its ancestors, following /Parent upwards.
-func (d *Document) qualifiedFieldName(field *Dictionary) string {
+func qualifiedFieldName(d *Document, field *Dictionary) string {
 	var parts []string
 	seen := map[*Dictionary]bool{}
 	for node, depth := field, 0; node != nil && depth <= maxFieldTreeDepth; depth++ {
@@ -285,7 +285,7 @@ func (d *Document) qualifiedFieldName(field *Dictionary) string {
 			break // cyclic /Parent chain
 		}
 		seen[node] = true
-		if part := d.fieldPartialName(node); part != "" {
+		if part := fieldPartialName(d, node); part != "" {
 			parts = append(parts, part)
 		}
 		node = d.ResolveDict(node.Get("Parent"))
@@ -299,7 +299,7 @@ func (d *Document) qualifiedFieldName(field *Dictionary) string {
 
 // fieldPartialName returns a field's /T decoded to UTF-8 (it is a PDF text
 // string, so possibly UTF-16), or "" when it has none.
-func (d *Document) fieldPartialName(field *Dictionary) string {
+func fieldPartialName(d *Document, field *Dictionary) string {
 	t, ok := d.Resolve(field.Get("T")).(String)
 	if !ok {
 		return ""
@@ -325,7 +325,7 @@ func joinFieldName(prefix, part string) string {
 // object has no indirect identity. Identity must be compared this way rather than
 // by pointer, because /V is normally an indirect reference to the signature
 // dictionary and not the dictionary itself.
-func (d *Document) refObjNum(o Object) int {
+func refObjNum(d *Document, o Object) int {
 	for hops := 0; hops < 64; hops++ {
 		ref, ok := o.(IndirectRef)
 		if !ok {
@@ -342,12 +342,12 @@ func (d *Document) refObjNum(o Object) int {
 		return ref.Number
 	}
 	if dict, ok := o.(*Dictionary); ok {
-		return d.dictObjNum(dict)
+		return dictObjNum(d, dict)
 	}
 	return -1
 }
 
-func (d *Document) verifyOneSignature(sig *Dictionary, raw []byte, roots *x509.CertPool) SignatureResult {
+func verifyOneSignature(d *Document, sig *Dictionary, raw []byte, roots *x509.CertPool) SignatureResult {
 	var res SignatureResult
 	contents, _ := d.Resolve(sig.Get("Contents")).(String)
 

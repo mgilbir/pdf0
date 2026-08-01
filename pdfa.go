@@ -1358,7 +1358,7 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 // convention here matches the "unknown object" sentinel used in
 // ValidationError.Object; dictObjNum itself reports -1 on miss.
 func objNumForDict(doc *Document, dict *Dictionary) int {
-	if n := doc.dictObjNum(dict); n >= 0 {
+	if n := dictObjNum(doc, dict); n >= 0 {
 		return n
 	}
 	return 0

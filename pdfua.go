@@ -625,12 +625,12 @@ func checkOneUACIDSystemInfo(d *Document, fontDict *Dictionary) []UAViolation {
 		return nil
 	}
 	if gotReg != wantReg || gotOrd != wantOrd {
-		return []UAViolation{{"7.21.3.1", "CIDFont CIDSystemInfo (" + gotReg + "-" + gotOrd + ") does not match the CMap (" + wantReg + "-" + wantOrd + ")", d.dictObjNum(fontDict)}}
+		return []UAViolation{{"7.21.3.1", "CIDFont CIDSystemInfo (" + gotReg + "-" + gotOrd + ") does not match the CMap (" + wantReg + "-" + wantOrd + ")", dictObjNum(d, fontDict)}}
 	}
 	// The CIDFont's Supplement must not exceed the CMap's (a CMap of a lower
 	// supplement cannot address CIDs introduced by a higher one).
 	if gotSup, ok := cidSupplement(d, cid); ok && haveWantSup && gotSup > wantSup {
-		return []UAViolation{{"7.21.3.1", fmt.Sprintf("CIDFont CIDSystemInfo Supplement %d exceeds the CMap Supplement %d", gotSup, wantSup), d.dictObjNum(fontDict)}}
+		return []UAViolation{{"7.21.3.1", fmt.Sprintf("CIDFont CIDSystemInfo Supplement %d exceeds the CMap Supplement %d", gotSup, wantSup), dictObjNum(d, fontDict)}}
 	}
 	return nil
 }
@@ -675,7 +675,7 @@ func checkUACMapWMode(d *Document) []UAViolation {
 			dictWM = int(w)
 		}
 		if inner, found := cmapInnerWMode(decodeContentStream(d, s)); found && inner != dictWM {
-			v = append(v, UAViolation{"7.21.3.3", fmt.Sprintf("embedded CMap /WMode %d does not match the WMode %d declared in the CMap stream", dictWM, inner), d.dictObjNum(fontDict)})
+			v = append(v, UAViolation{"7.21.3.3", fmt.Sprintf("embedded CMap /WMode %d does not match the WMode %d declared in the CMap stream", dictWM, inner), dictObjNum(d, fontDict)})
 		}
 	}
 	return v
@@ -711,7 +711,7 @@ func checkOneUACMap(d *Document, fontDict *Dictionary) []UAViolation {
 	if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
 		return nil
 	}
-	num := d.dictObjNum(fontDict)
+	num := dictObjNum(d, fontDict)
 	switch enc := d.Resolve(fontDict.Get("Encoding")).(type) {
 	case Name:
 		if !isPredefinedCMap(enc) {
@@ -733,7 +733,7 @@ func checkUAToUnicodeValues(d *Document) []UAViolation {
 	for fontDict := range collectFontTextUsage(d) {
 		if tu, ok := d.Resolve(fontDict.Get("ToUnicode")).(*Stream); ok {
 			if hasForbiddenUnicodeTargets(d, tu) {
-				v = append(v, UAViolation{"7.21.7", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)", d.dictObjNum(fontDict)})
+				v = append(v, UAViolation{"7.21.7", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)", dictObjNum(d, fontDict)})
 			}
 		}
 	}
@@ -782,7 +782,7 @@ func checkType1CharSet(d *Document, fontDict *Dictionary) []UAViolation {
 		return nil
 	}
 	listed := parseCharSet(string(cs.Value))
-	num := d.dictObjNum(fontDict)
+	num := dictObjNum(d, fontDict)
 	var v []UAViolation
 	// Both directions report ONE glyph as the example, not the whole set. The
 	// glyph named must be the lexicographically smallest offender rather than
@@ -867,7 +867,7 @@ func checkCIDFontCIDSet(d *Document, fontDict *Dictionary) []UAViolation {
 			continue // outline serves only as a composite component
 		}
 		if !present.has(gid) {
-			return []UAViolation{{"7.21.4.2", "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", d.dictObjNum(fontDict)}}
+			return []UAViolation{{"7.21.4.2", "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", dictObjNum(d, fontDict)}}
 		}
 	}
 	return nil
@@ -900,7 +900,7 @@ func checkUANotdefCID(d *Document) []UAViolation {
 			}
 		}
 		if found {
-			v = append(v, UAViolation{"7.21.8", "a text-showing operator references the .notdef glyph (CID 0)", d.dictObjNum(fontDict)})
+			v = append(v, UAViolation{"7.21.8", "a text-showing operator references the .notdef glyph (CID 0)", dictObjNum(d, fontDict)})
 		}
 	}
 	return v
@@ -1190,7 +1190,7 @@ func checkUAFieldDescription(d *Document, cat *Dictionary) []UAViolation {
 				kt, _ := d.Resolve(kd.Get("T")).(String)
 				ktu, _ := d.Resolve(kd.Get("TU")).(String)
 				if st == "Widget" && len(kt.Value) == 0 && len(ktu.Value) > 0 {
-					v = append(v, UAViolation{"7.18.1", "form field has no /TU; its accessible description is misplaced on a widget annotation", d.dictObjNum(fd)})
+					v = append(v, UAViolation{"7.18.1", "form field has no /TU; its accessible description is misplaced on a widget annotation", dictObjNum(d, fd)})
 					break
 				}
 			}
@@ -1277,7 +1277,7 @@ func checkUAFonts(d *Document) []UAViolation {
 			}
 		}
 		if !embedded {
-			v = append(v, UAViolation{"7.21.4.1", "font used for rendering is not embedded", d.dictObjNum(fontDict)})
+			v = append(v, UAViolation{"7.21.4.1", "font used for rendering is not embedded", dictObjNum(d, fontDict)})
 		}
 	}
 	return v
@@ -1297,7 +1297,7 @@ func checkUACharMapping(d *Document) []UAViolation {
 			continue
 		}
 		if enc, _ := d.Resolve(fontDict.Get("Encoding")).(Name); enc == "Identity-H" || enc == "Identity-V" {
-			v = append(v, UAViolation{"7.2", "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", d.dictObjNum(fontDict)})
+			v = append(v, UAViolation{"7.2", "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", dictObjNum(d, fontDict)})
 		}
 	}
 	return v
@@ -1321,7 +1321,7 @@ func checkUAFontDicts(d *Document) []UAViolation {
 func checkOneUAFontDict(d *Document, fontDict *Dictionary) []UAViolation {
 	var v []UAViolation
 	st, _ := fontDict.Get("Subtype").(Name)
-	num := d.dictObjNum(fontDict)
+	num := dictObjNum(d, fontDict)
 	switch st {
 	case "Type0":
 		df, _ := d.Resolve(fontDict.Get("DescendantFonts")).(Array)

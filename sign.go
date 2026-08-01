@@ -42,7 +42,7 @@ func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.S
 	if d.Encrypted || d.security != nil {
 		return errors.New("cannot sign an encrypted document")
 	}
-	signedDoc, _, err := d.withSignatureField()
+	signedDoc, _, err := withSignatureField(d)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func (d *Document) WriteSignedTimestamped(w io.Writer, cert *x509.Certificate, k
 	if d.Encrypted || d.security != nil {
 		return errors.New("cannot sign an encrypted document")
 	}
-	signedDoc, _, err := d.withSignatureField()
+	signedDoc, _, err := withSignatureField(d)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func (d *Document) WriteSignedIncremental(w io.Writer, original []byte, cert *x5
 	if d.Encrypted || d.security != nil {
 		return errors.New("cannot sign an encrypted document")
 	}
-	signedDoc, changed, err := d.withSignatureField()
+	signedDoc, changed, err := withSignatureField(d)
 	if err != nil {
 		return err
 	}
@@ -208,8 +208,8 @@ func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer, tsaC
 
 // withSignatureField returns a copy of the document with a signature field, its
 // AcroForm entry, and a placeholder /Sig dictionary added.
-func (d *Document) withSignatureField() (*Document, []int, error) {
-	catalog, page, catNum, pageNum, err := d.signingTarget("signing")
+func withSignatureField(d *Document) (*Document, []int, error) {
+	catalog, page, catNum, pageNum, err := signingTarget(d, "signing")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -243,7 +243,7 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 	field.Set("Type", Name("Annot"))
 	field.Set("Subtype", Name("Widget"))
 	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: []byte(d.freeFieldName(catalog, "Signature"))})
+	field.Set("T", String{Value: []byte(freeFieldName(d, catalog, "Signature"))})
 	field.Set("V", IndirectRef{Number: sigNum})
 	field.Set("Rect", Array{Integer(0), Integer(0), Integer(0), Integer(0)})
 	field.Set("F", Integer(132)) // Print | Locked
@@ -286,7 +286,7 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 	// of its own to update, so it is promoted to an indirect object.
 	formNum := -1
 	if existingForm != nil {
-		formNum = d.dictObjNum(existingForm)
+		formNum = dictObjNum(d, existingForm)
 	}
 	if formNum >= 0 {
 		clone.Objects[formNum] = &IndirectObject{Number: formNum, Value: acroForm}
@@ -316,8 +316,8 @@ func (d *Document) withSignatureField() (*Document, []int, error) {
 // them apart. The counters are per prefix and the scan is over every name in
 // use, so a time-stamp added to an already-signed document is unaffected by the
 // signature's number and vice versa.
-func (d *Document) freeFieldName(catalog *Dictionary, prefix string) string {
-	used := d.usedFieldNames(catalog)
+func freeFieldName(d *Document, catalog *Dictionary, prefix string) string {
+	used := usedFieldNames(d, catalog)
 	for i := 1; ; i++ {
 		name := fmt.Sprintf("%s%d", prefix, i)
 		if !used[name] {
@@ -332,14 +332,14 @@ func (d *Document) freeFieldName(catalog *Dictionary, prefix string) string {
 // orphaned from /Fields — producers do emit page-only widgets, and pdf0 itself
 // did before the form was preserved — and reusing such a name would still be a
 // duplicate. Over-collecting is harmless here: it only skips a number.
-func (d *Document) usedFieldNames(catalog *Dictionary) map[string]bool {
+func usedFieldNames(d *Document, catalog *Dictionary) map[string]bool {
 	used := map[string]bool{}
 	if catalog != nil {
 		if form := d.ResolveDict(catalog.Get("AcroForm")); form != nil {
 			fields, _ := d.Resolve(form.Get("Fields")).(Array)
 			seen := map[int]bool{}
 			for _, f := range fields {
-				d.collectUsedFieldNames(f, "", seen, used, 0)
+				collectUsedFieldNames(d, f, "", seen, used, 0)
 			}
 		}
 	}
@@ -354,7 +354,7 @@ func (d *Document) usedFieldNames(catalog *Dictionary) map[string]bool {
 		if fd.Get("FT") == nil && fd.Get("V") == nil {
 			continue // not a form field
 		}
-		if name := d.qualifiedFieldName(fd); name != "" {
+		if name := qualifiedFieldName(d, fd); name != "" {
 			used[name] = true
 		}
 	}
@@ -364,7 +364,7 @@ func (d *Document) usedFieldNames(catalog *Dictionary) map[string]bool {
 // collectUsedFieldNames walks one branch of the field tree, recording the
 // qualified name of every node. Depth-capped and cycle-guarded like the naming
 // walk in signatures.go: the document may be untrusted.
-func (d *Document) collectUsedFieldNames(node Object, prefix string, seen map[int]bool, used map[string]bool, depth int) {
+func collectUsedFieldNames(d *Document, node Object, prefix string, seen map[int]bool, used map[string]bool, depth int) {
 	if depth > maxFieldTreeDepth {
 		return
 	}
@@ -378,13 +378,13 @@ func (d *Document) collectUsedFieldNames(node Object, prefix string, seen map[in
 	if fd == nil {
 		return
 	}
-	name := joinFieldName(prefix, d.fieldPartialName(fd))
+	name := joinFieldName(prefix, fieldPartialName(d, fd))
 	if name != "" {
 		used[name] = true
 	}
 	kids, _ := d.Resolve(fd.Get("Kids")).(Array)
 	for _, k := range kids {
-		d.collectUsedFieldNames(k, name, seen, used, depth+1)
+		collectUsedFieldNames(d, k, name, seen, used, depth+1)
 	}
 }
 
@@ -412,12 +412,12 @@ const maxPageTreeDepth = 64
 // objects. A separate helper that re-walked the tree for the reference is what
 // made them disagree: it returned the root's first /Kids entry whether or not
 // that entry was a page, and pointed /P at an intermediate /Pages node.
-func (d *Document) firstPage(catalog *Dictionary) *Dictionary {
-	return d.firstPageIn(catalog.Get("Pages"), map[int]bool{}, 0)
+func firstPage(d *Document, catalog *Dictionary) *Dictionary {
+	return firstPageIn(d, catalog.Get("Pages"), map[int]bool{}, 0)
 }
 
 // firstPageIn returns the first leaf page of the subtree rooted at node.
-func (d *Document) firstPageIn(node Object, seen map[int]bool, depth int) *Dictionary {
+func firstPageIn(d *Document, node Object, seen map[int]bool, depth int) *Dictionary {
 	if depth > maxPageTreeDepth {
 		return nil
 	}
@@ -439,7 +439,7 @@ func (d *Document) firstPageIn(node Object, seen map[int]bool, depth int) *Dicti
 	}
 	kids, _ := d.Resolve(dict.Get("Kids")).(Array)
 	for _, kid := range kids {
-		if pg := d.firstPageIn(kid, seen, depth+1); pg != nil {
+		if pg := firstPageIn(d, kid, seen, depth+1); pg != nil {
 			return pg
 		}
 	}
@@ -469,20 +469,20 @@ func (d *Document) firstPageIn(node Object, seen map[int]bool, depth int) *Dicti
 // reference and §7.7.3.2 requires every page-tree /Kids entry to be one. Rather
 // than silently repair a broken file — and change the identity of a structure
 // other objects may already reference — signing reports it.
-func (d *Document) signingTarget(what string) (catalog, page *Dictionary, catNum, pageNum int, err error) {
+func signingTarget(d *Document, what string) (catalog, page *Dictionary, catNum, pageNum int, err error) {
 	catalog = d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
 		return nil, nil, 0, 0, fmt.Errorf("%s: document has no catalog", what)
 	}
-	page = d.firstPage(catalog)
+	page = firstPage(d, catalog)
 	if page == nil {
 		return nil, nil, 0, 0, fmt.Errorf("%s: document has no page to attach the field to", what)
 	}
-	catNum = d.dictObjNum(catalog)
+	catNum = dictObjNum(d, catalog)
 	if catNum < 0 {
 		return nil, nil, 0, 0, fmt.Errorf("%s: the document catalog is a direct object, so it cannot be updated; ISO 32000-2 §7.5.5 requires the trailer /Root to be an indirect reference", what)
 	}
-	pageNum = d.dictObjNum(page)
+	pageNum = dictObjNum(d, page)
 	if pageNum < 0 {
 		return nil, nil, 0, 0, fmt.Errorf("%s: the first page is a direct object, so it cannot be updated; ISO 32000-2 §7.7.3.2 requires the page tree's /Kids entries to be indirect references", what)
 	}
@@ -493,7 +493,7 @@ func (d *Document) signingTarget(what string) (catalog, page *Dictionary, catNum
 // a validation run a reverse index is built once in the cache and reused, so the
 // many per-font and per-cell lookups do not each scan the whole object table
 // (which is quadratic on large documents — hundreds of thousands of objects).
-func (d *Document) dictObjNum(target *Dictionary) int {
+func dictObjNum(d *Document, target *Dictionary) int {
 	// Two cross-reference slots may point at the same bytes, in which case Read
 	// stores one parsed value under both object numbers (see parsedByOffset), so
 	// a *Dictionary can be the value of more than one object. Both loops below

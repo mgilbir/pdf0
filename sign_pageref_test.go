@@ -200,7 +200,7 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 				if len(pages) == 0 {
 					t.Fatal("the produced document has no pages")
 				}
-				if first := signed.dictObjNum(pages[0]); first != pRef.Number {
+				if first := dictObjNum(signed, pages[0]); first != pRef.Number {
 					t.Errorf("the widget is on page object %d, want the first page in reading order (object %d)", pRef.Number, first)
 				}
 			})
@@ -253,7 +253,7 @@ func TestFirstPageStopsOnACyclicPageTree(t *testing.T) {
 	d.Objects[3] = &IndirectObject{Number: 3, Value: inner}
 	d.Trailer.Set("Root", IndirectRef{Number: 1})
 
-	if pg := d.firstPage(cat); pg != nil {
+	if pg := firstPage(d, cat); pg != nil {
 		t.Errorf("firstPage on a cyclic, page-less tree = %v, want nil", pg)
 	}
 }

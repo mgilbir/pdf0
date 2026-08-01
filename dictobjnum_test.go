@@ -15,20 +15,20 @@ func TestDictObjNumCacheConsistency(t *testing.T) {
 	}
 	// Without a cache: linear scan.
 	for i, d := range dicts {
-		if got := doc.dictObjNum(d); got != i {
+		if got := dictObjNum(doc, d); got != i {
 			t.Fatalf("uncached dictObjNum = %d, want %d", got, i)
 		}
 	}
 	// With a cache: reverse index. Must agree.
 	doc.valCache = &validationCache{}
 	for i, d := range dicts {
-		if got := doc.dictObjNum(d); got != i {
+		if got := dictObjNum(doc, d); got != i {
 			t.Fatalf("cached dictObjNum = %d, want %d", got, i)
 		}
 	}
 	// An unknown dictionary yields -1 under both paths.
 	stray := &Dictionary{}
-	if got := doc.dictObjNum(stray); got != -1 {
+	if got := dictObjNum(doc, stray); got != -1 {
 		t.Errorf("cached dictObjNum(unknown) = %d, want -1", got)
 	}
 }

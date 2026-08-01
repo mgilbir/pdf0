@@ -40,7 +40,7 @@ func checkUATableTHScope(d *Document, cat *Dictionary) []UAViolation {
 		if cellHasScope(d, el) || el.Get("ID") != nil {
 			return
 		}
-		num := d.dictObjNum(el)
+		num := dictObjNum(d, el)
 		if !reported[num] {
 			reported[num] = true
 			v = append(v, UAViolation{"7.5", "table header cell (TH) has neither a Scope attribute nor an /ID", num})
@@ -75,7 +75,7 @@ func checkUATableGrid(d *Document, cat *Dictionary) []UAViolation {
 			maxFills := d.lim().tableGridFills
 			defects, complete := gridDefects(rows, maxFills)
 			if !complete {
-				noteLimit(d, limitGridFills, "a table's RowSpan/ColSpan values imply more than "+limitBound(maxFills, defaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.dictObjNum(n.elem))
+				noteLimit(d, limitGridFills, "a table's RowSpan/ColSpan values imply more than "+limitBound(maxFills, defaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", dictObjNum(d, n.elem))
 			}
 			v = append(v, defects...)
 		}

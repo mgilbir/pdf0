@@ -89,7 +89,7 @@ func TestStructTreeFlatten(t *testing.T) {
 	// walkStructElems must visit exactly the /S nodes, in the same order.
 	var walked []int
 	walkStructElems(doc, cat, func(e *Dictionary, _ Name) {
-		walked = append(walked, doc.dictObjNum(e))
+		walked = append(walked, dictObjNum(doc, e))
 	})
 	if len(walked) != len(wantOrder) {
 		t.Fatalf("walkStructElems visited %d, want %d", len(walked), len(wantOrder))

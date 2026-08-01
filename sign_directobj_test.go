@@ -148,7 +148,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	if form == nil {
 		t.Fatal("catalog /AcroForm does not resolve")
 	}
-	if d2.dictObjNum(form) < 0 {
+	if dictObjNum(d2, form) < 0 {
 		t.Error("the form the catalog points at is still not an indirect object")
 	}
 	// The promoted form must be the original, extended: the pre-existing field
@@ -171,7 +171,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	}
 	// The whole point of the exercise: the archival time-stamp must verify over
 	// the produced bytes.
-	if !d2.coveringDocTimestamp(out) {
+	if !coveringDocTimestamp(d2, out) {
 		t.Error("the archival time-stamp does not verify over the file it seals")
 	}
 }

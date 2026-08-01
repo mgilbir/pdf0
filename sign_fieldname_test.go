@@ -59,7 +59,7 @@ func allFieldNames(t *testing.T, d *Document) []string {
 		if !ok || (fd.Get("FT") == nil && fd.Get("V") == nil) {
 			continue
 		}
-		if n := d.qualifiedFieldName(fd); n != "" {
+		if n := qualifiedFieldName(d, fd); n != "" {
 			names = append(names, n)
 		}
 	}
@@ -122,7 +122,7 @@ func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
 	if res[0].Field != "Timestamp1" || res[1].Field != "Timestamp2" {
 		t.Errorf("result fields = [%q %q], want [Timestamp1 Timestamp2]", res[0].Field, res[1].Field)
 	}
-	if !d2.coveringDocTimestamp(o2) {
+	if !coveringDocTimestamp(d2, o2) {
 		t.Error("the outermost archival time-stamp does not verify over the file it seals")
 	}
 }

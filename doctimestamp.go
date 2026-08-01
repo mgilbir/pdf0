@@ -21,7 +21,7 @@ import (
 // must be the bytes the document was read from. The document should already carry
 // a B-T signature for the result to reach B-LTA.
 func (d *Document) WriteArchivalTimestamp(w io.Writer, original []byte, certs []*x509.Certificate, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
-	doc, changed, err := d.withArchivalTimestamp(certs)
+	doc, changed, err := withArchivalTimestamp(d, certs)
 	if err != nil {
 		return err
 	}
@@ -39,8 +39,8 @@ func (d *Document) WriteArchivalTimestamp(w io.Writer, original []byte, certs []
 
 // withArchivalTimestamp returns a clone with a DSS and a document time-stamp field
 // added, and the list of changed object numbers for the incremental update.
-func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, []int, error) {
-	catalog, page, catNum, pageNum, err := d.signingTarget("timestamp")
+func withArchivalTimestamp(d *Document, certs []*x509.Certificate) (*Document, []int, error) {
+	catalog, page, catNum, pageNum, err := signingTarget(d, "timestamp")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -89,7 +89,7 @@ func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, 
 	field.Set("Type", Name("Annot"))
 	field.Set("Subtype", Name("Widget"))
 	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: []byte(d.freeFieldName(catalog, "Timestamp"))})
+	field.Set("T", String{Value: []byte(freeFieldName(d, catalog, "Timestamp"))})
 	field.Set("V", IndirectRef{Number: tsNum})
 	field.Set("Rect", Array{Integer(0), Integer(0), Integer(0), Integer(0)})
 	field.Set("F", Integer(132))
@@ -136,7 +136,7 @@ func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, 
 	// that the catalog does not reference.
 	formNum := -1
 	if existingForm != nil {
-		formNum = d.dictObjNum(existingForm)
+		formNum = dictObjNum(d, existingForm)
 	}
 	if formNum < 0 {
 		formNum = alloc()

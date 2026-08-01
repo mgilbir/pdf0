@@ -69,15 +69,15 @@ func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 	// an approval signature that only covers its own (earlier) revision is still
 	// PAdES-conformant — the trailing bytes are the DSS and the document
 	// time-stamp, protected by the time-stamp rather than the signature.
-	sealed := d.coveringDocTimestamp(raw)
+	sealed := coveringDocTimestamp(d, raw)
 
 	// Document time-stamps are assessed as long-term material, not as approval
 	// signatures, so they are excluded here.
-	sigs := d.documentSignatures(false)
-	names := d.signatureFieldNames(sigs)
+	sigs := documentSignatures(d, false)
+	names := signatureFieldNames(d, sigs)
 	var out []PAdESResult
 	for _, s := range sigs {
-		res := d.assessPAdES(s.dict, raw, hasDSS, hasDocTimestamp, sealed)
+		res := assessPAdES(d, s.dict, raw, hasDSS, hasDocTimestamp, sealed)
 		res.Field = names[s.num]
 		out = append(out, res)
 	}
@@ -87,7 +87,7 @@ func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 // coveringDocTimestamp reports whether the document carries a document time-stamp
 // (/Type /DocTimeStamp) whose /ByteRange covers the whole file and whose RFC 3161
 // token verifies over those bytes.
-func (d *Document) coveringDocTimestamp(raw []byte) bool {
+func coveringDocTimestamp(d *Document, raw []byte) bool {
 	for _, iobj := range d.Objects {
 		dict, ok := iobj.Value.(*Dictionary)
 		if !ok {
@@ -120,13 +120,13 @@ func (d *Document) coveringDocTimestamp(raw []byte) bool {
 	return false
 }
 
-func (d *Document) assessPAdES(sig *Dictionary, raw []byte, hasDSS, hasDocTimestamp, sealed bool) PAdESResult {
+func assessPAdES(d *Document, sig *Dictionary, raw []byte, hasDSS, hasDocTimestamp, sealed bool) PAdESResult {
 	var res PAdESResult
 	sub, _ := sig.Get("SubFilter").(Name)
 	res.SubFilter = string(sub)
 
 	// Reuse the CMS verification for cryptographic validity and signer identity.
-	v := d.verifyOneSignature(sig, raw, nil)
+	v := verifyOneSignature(d, sig, raw, nil)
 	res.Valid = v.Valid
 	res.CoversDocument = v.CoversWholeDocument
 	res.SignerCommonName = v.SignerCommonName

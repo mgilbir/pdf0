@@ -171,7 +171,7 @@ func (d *Document) AppendPages(other *Document) {
 	if pages == nil {
 		return
 	}
-	pagesNum := d.dictObjNum(pages)
+	pagesNum := dictObjNum(d, pages)
 	max := 0
 	for num := range d.Objects {
 		if num > max {
