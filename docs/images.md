@@ -125,10 +125,10 @@ not abort the walk.
 
 | File | Owns | Spec |
 |---|---|---|
-| `imageextract.go` | Page/form/annotation traversal, `ExtractedImage`, codec dispatch, `/JBIG2Globals` and CCITT `/DecodeParms` plumbing, JPEG 2000 component assembly | ISO 32000-2 §8.9 (image XObjects), Table 87 (`/SMaskInData`) |
-| `imagejpeg.go` | Applies a PDF `/Decode` array to `image/jpeg` output — mainly inverted CMYK (`[1 0 1 0 1 0 1 0]`) | ITU-T T.81 / ISO 10918-1 |
-| `imagemask.go` | Post-codec `/SMask` and stencil `/Mask` compositing | ISO 32000-2 §8.9.6 |
-| `imagecolor.go` | Colour-space resolution and sample → pixel rendering: device spaces, CalGray/CalRGB, Lab, ICCBased, Indexed, Separation/DeviceN, `/Decode`, 8- and 16-bit output, colour-key/stencil/soft masks | ISO 32000-2 §8.6 |
+| `images/imageextract.go` | Page/form/annotation traversal, `ExtractedImage`, codec dispatch, `/JBIG2Globals` and CCITT `/DecodeParms` plumbing, JPEG 2000 component assembly | ISO 32000-2 §8.9 (image XObjects), Table 87 (`/SMaskInData`) |
+| `images/imagejpeg.go` | Applies a PDF `/Decode` array to `image/jpeg` output — mainly inverted CMYK (`[1 0 1 0 1 0 1 0]`) | ITU-T T.81 / ISO 10918-1 |
+| `images/imagemask.go` | Post-codec `/SMask` and stencil `/Mask` compositing | ISO 32000-2 §8.9.6 |
+| `images/imagecolor.go` | Colour-space resolution and sample → pixel rendering: device spaces, CalGray/CalRGB, Lab, ICCBased, Indexed, Separation/DeviceN, `/Decode`, 8- and 16-bit output, colour-key/stencil/soft masks | ISO 32000-2 §8.6 |
 | `internal/ccitt/ccitt.go` | Group 3 1-D, Group 3 2-D and Group 4 fax decoding; run-code and mode tries; the bit reader shared with JBIG2's MMR path | ITU-T T.4 (Group 3), ITU-T T.6 (Group 4) |
 | `internal/jbig2/mq.go` | MQ adaptive binary arithmetic decoder and the Qe estimation table | ITU-T T.88 Annex E (same coder as JPEG 2000) |
 | `internal/jbig2/jbig2.go` | Embedded segment parsing, page info, generic regions (arithmetic + MMR, unknown-length), compositing, the pixel budgets | ISO/IEC 14492 / ITU-T T.88 §6.2, §7, Annex D.3 |

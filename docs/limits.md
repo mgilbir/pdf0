@@ -206,8 +206,8 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 ### Image codecs
 
-Every guard in `internal/jbig2`, `internal/ccitt`, `imagejpeg.go`, `imagemask.go`,
-`imagecolor.go`, `internal/core` (PDF functions, stream filters) is at worst a false negative
+Every guard in `internal/jbig2`, `internal/ccitt`, `images/`,
+`images/`, `internal/core` (PDF functions, stream filters) is at worst a false negative
 **for the extraction API**. No PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a
 decoded pixel: the image rules read dictionary keys (`/Alternates`,
 `/Interpolate`, `/OPI`, `/SMask`, `/Filter`, `/ColorSpace`) and
@@ -217,7 +217,7 @@ surfaces as `ExtractedImage.Note`, not as a finding.
 The type-4 budget is in this list because of who calls it, not where it lives.
 The type-4 (PostScript calculator) work budget — `WithMaxPostScriptSteps`, the
 eleventh configurable limit — bounds `psExec`, and `evalFunction` is reached only
-from `imagecolor.go`'s tint-transform rendering. The PDF/A tint-transform rule
+from `images/imagecolor.go`'s tint-transform rendering. The PDF/A tint-transform rule
 compares function *objects* (`Equal`), it never evaluates one, so a trip costs
 pixel fidelity and no finding. This is why the budget reports no trip: there is
 no rule to decline.
