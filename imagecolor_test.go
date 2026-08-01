@@ -14,7 +14,7 @@ func rgb8(t *testing.T, m image.Image, x, y int) (r, g, b, a uint8) {
 
 func mustBuild(t *testing.T, st *Stream, w, h, bpc int) image.Image {
 	t.Helper()
-	m, ok := (&Document{}).buildImage(st, st.Data, w, h, bpc)
+	m, ok := buildImage((&Document{}), st, st.Data, w, h, bpc)
 	if !ok {
 		t.Fatalf("buildImage failed")
 	}
@@ -198,7 +198,7 @@ func TestBuildImageSeparationFallsBack(t *testing.T) {
 	// declines rendering, so callers fall back to the raw bytes.
 	st := imageXObject(1, 1, 8, "", "", []byte{128})
 	st.Dict.Set("ColorSpace", Array{Name("Separation"), Name("Spot"), Name("DeviceGray"), Integer(0)})
-	if _, ok := (&Document{}).buildImage(st, st.Data, 1, 1, 8); ok {
+	if _, ok := buildImage((&Document{}), st, st.Data, 1, 1, 8); ok {
 		t.Error("Separation with unusable tint should not be rendered")
 	}
 }

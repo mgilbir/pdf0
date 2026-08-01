@@ -17,11 +17,11 @@ const maxFunctionDepth = 32
 // input vector in, returning the output vector. ok is false for a function it
 // cannot evaluate or malformed input. Inputs are clamped to /Domain and outputs
 // to /Range.
-func (d *Document) evalFunction(fn Object, in []float64) (out []float64, ok bool) {
-	return d.evalFunctionDepth(fn, in, 0)
+func evalFunction(d *Document, fn Object, in []float64) (out []float64, ok bool) {
+	return evalFunctionDepth(d, fn, in, 0)
 }
 
-func (d *Document) evalFunctionDepth(fn Object, in []float64, depth int) ([]float64, bool) {
+func evalFunctionDepth(d *Document, fn Object, in []float64, depth int) ([]float64, bool) {
 	if depth > maxFunctionDepth {
 		return nil, false
 	}
@@ -38,7 +38,7 @@ func (d *Document) evalFunctionDepth(fn Object, in []float64, depth int) ([]floa
 		return nil, false
 	}
 
-	domain := d.floatArray(dict.Get("Domain"))
+	domain := floatArray(d, dict.Get("Domain"))
 	// Clamp inputs to Domain when present.
 	x := make([]float64, len(in))
 	copy(x, in)
@@ -52,19 +52,19 @@ func (d *Document) evalFunctionDepth(fn Object, in []float64, depth int) ([]floa
 	var ok bool
 	switch intValue(d.Resolve(dict.Get("FunctionType"))) {
 	case 2:
-		out, ok = d.evalType2(dict, x)
+		out, ok = evalType2(d, dict, x)
 	case 3:
-		out, ok = d.evalType3(dict, domain, x, depth)
+		out, ok = evalType3(d, dict, domain, x, depth)
 	case 0:
 		if stream == nil {
 			return nil, false
 		}
-		out, ok = d.evalType0(stream, dict, domain, x)
+		out, ok = evalType0(d, stream, dict, domain, x)
 	case 4:
 		if stream == nil {
 			return nil, false
 		}
-		out, ok = d.evalType4(stream, dict, x)
+		out, ok = evalType4(d, stream, dict, x)
 	default:
 		return nil, false
 	}
@@ -72,7 +72,7 @@ func (d *Document) evalFunctionDepth(fn Object, in []float64, depth int) ([]floa
 		return nil, false
 	}
 	// Clamp outputs to /Range when present.
-	if rng := d.floatArray(dict.Get("Range")); len(rng) >= 2*len(out) {
+	if rng := floatArray(d, dict.Get("Range")); len(rng) >= 2*len(out) {
 		for i := range out {
 			out[i] = clampRange(out[i], rng[2*i], rng[2*i+1])
 		}
@@ -82,13 +82,13 @@ func (d *Document) evalFunctionDepth(fn Object, in []float64, depth int) ([]floa
 
 // evalType2 evaluates an exponential interpolation function: out[i] = C0[i] +
 // x^N * (C1[i]-C0[i]) over a single input.
-func (d *Document) evalType2(dict *Dictionary, x []float64) ([]float64, bool) {
+func evalType2(d *Document, dict *Dictionary, x []float64) ([]float64, bool) {
 	if len(x) != 1 {
 		return nil, false
 	}
 	n := floatValue(d.Resolve(dict.Get("N")))
-	c0 := d.floatArray(dict.Get("C0"))
-	c1 := d.floatArray(dict.Get("C1"))
+	c0 := floatArray(d, dict.Get("C0"))
+	c1 := floatArray(d, dict.Get("C1"))
 	if c0 == nil {
 		c0 = []float64{0}
 	}
@@ -111,7 +111,7 @@ func (d *Document) evalType2(dict *Dictionary, x []float64) ([]float64, bool) {
 
 // evalType3 evaluates a stitching function: it selects a subfunction for the
 // single input by /Bounds, remaps the input through /Encode and recurses.
-func (d *Document) evalType3(dict *Dictionary, domain []float64, x []float64, depth int) ([]float64, bool) {
+func evalType3(d *Document, dict *Dictionary, domain []float64, x []float64, depth int) ([]float64, bool) {
 	if len(x) != 1 || len(domain) < 2 {
 		return nil, false
 	}
@@ -119,8 +119,8 @@ func (d *Document) evalType3(dict *Dictionary, domain []float64, x []float64, de
 	if !ok || len(funcs) == 0 {
 		return nil, false
 	}
-	bounds := d.floatArray(dict.Get("Bounds"))
-	encode := d.floatArray(dict.Get("Encode"))
+	bounds := floatArray(d, dict.Get("Bounds"))
+	encode := floatArray(d, dict.Get("Encode"))
 	k := len(funcs)
 	if len(bounds) != k-1 || len(encode) != 2*k {
 		return nil, false
@@ -143,17 +143,17 @@ func (d *Document) evalType3(dict *Dictionary, domain []float64, x []float64, de
 		hi = bounds[i]
 	}
 	e := interpolate(xv, lo, hi, encode[2*i], encode[2*i+1])
-	return d.evalFunctionDepth(funcs[i], []float64{e}, depth+1)
+	return evalFunctionDepth(d, funcs[i], []float64{e}, depth+1)
 }
 
 // evalType0 evaluates a sampled function by multilinear interpolation over the
 // sample grid.
-func (d *Document) evalType0(stream *Stream, dict *Dictionary, domain []float64, x []float64) ([]float64, bool) {
+func evalType0(d *Document, stream *Stream, dict *Dictionary, domain []float64, x []float64) ([]float64, bool) {
 	m := len(domain) / 2
 	if m == 0 || len(x) != m {
 		return nil, false
 	}
-	rng := d.floatArray(dict.Get("Range"))
+	rng := floatArray(d, dict.Get("Range"))
 	n := len(rng) / 2
 	if n == 0 {
 		return nil, false
@@ -177,7 +177,7 @@ func (d *Document) evalType0(stream *Stream, dict *Dictionary, domain []float64,
 	default:
 		return nil, false
 	}
-	encode := d.floatArray(dict.Get("Encode"))
+	encode := floatArray(d, dict.Get("Encode"))
 	if encode == nil {
 		encode = make([]float64, 2*m)
 		for i := 0; i < m; i++ {
@@ -188,7 +188,7 @@ func (d *Document) evalType0(stream *Stream, dict *Dictionary, domain []float64,
 	if len(encode) != 2*m {
 		return nil, false
 	}
-	decode := d.floatArray(dict.Get("Decode"))
+	decode := floatArray(d, dict.Get("Decode"))
 	if decode == nil {
 		decode = rng
 	}
@@ -288,7 +288,7 @@ func clampRange(v, lo, hi float64) float64 {
 }
 
 // floatArray resolves obj to an Array of numbers, or nil.
-func (d *Document) floatArray(obj Object) []float64 {
+func floatArray(d *Document, obj Object) []float64 {
 	arr, ok := d.Resolve(obj).(Array)
 	if !ok {
 		return nil

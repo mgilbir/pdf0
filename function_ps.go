@@ -29,12 +29,12 @@ type psVal struct {
 }
 
 // evalType4 evaluates a PostScript calculator function.
-func (d *Document) evalType4(stream *Stream, dict *Dictionary, x []float64) ([]float64, bool) {
-	prog, ok := d.psProgram(stream)
+func evalType4(d *Document, stream *Stream, dict *Dictionary, x []float64) ([]float64, bool) {
+	prog, ok := psProgram(d, stream)
 	if !ok {
 		return nil, false
 	}
-	rng := d.floatArray(dict.Get("Range"))
+	rng := floatArray(d, dict.Get("Range"))
 	n := len(rng) / 2
 	if n == 0 {
 		return nil, false
@@ -77,13 +77,13 @@ type psProgEntry struct {
 // { } procedure. The result is memoized in the per-run cache when one is
 // installed: tint transforms evaluate once per image pixel, and re-decoding
 // and re-parsing the program stream each time made a small image take minutes.
-func (d *Document) psProgram(stream *Stream) ([]psItem, bool) {
+func psProgram(d *Document, stream *Stream) ([]psItem, bool) {
 	if c := d.valCache; c != nil {
 		if e, hit := c.psProgs[stream]; hit {
 			return e.items, e.ok
 		}
 	}
-	items, ok := d.parsePSProgram(stream)
+	items, ok := parsePSProgram(d, stream)
 	if c := d.valCache; c != nil {
 		if c.psProgs == nil {
 			c.psProgs = make(map[*Stream]psProgEntry)
@@ -93,7 +93,7 @@ func (d *Document) psProgram(stream *Stream) ([]psItem, bool) {
 	return items, ok
 }
 
-func (d *Document) parsePSProgram(stream *Stream) ([]psItem, bool) {
+func parsePSProgram(d *Document, stream *Stream) ([]psItem, bool) {
 	data := decodeContentStream(d, stream)
 	toks := psTokenize(data)
 	items, rest, ok := psParseProc(toks)

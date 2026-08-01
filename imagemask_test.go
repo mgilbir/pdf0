@@ -126,7 +126,7 @@ func TestApplyImageMasks(t *testing.T) {
 	st.Dict.Set("SMask", sm)
 
 	d := &Document{}
-	out := d.applyImageMasks(st, src)
+	out := applyImageMasks(d, st, src)
 	nrgba, ok := out.(*image.NRGBA)
 	if !ok {
 		t.Fatalf("expected *image.NRGBA, got %T", out)
@@ -142,7 +142,7 @@ func TestApplyImageMasks(t *testing.T) {
 
 	// With no mask keys, the image is returned unchanged.
 	plain := imageXObject(2, 1, 8, "DeviceRGB", "DCTDecode", nil)
-	if got := d.applyImageMasks(plain, src); got != image.Image(src) {
+	if got := applyImageMasks(d, plain, src); got != image.Image(src) {
 		t.Errorf("no-mask image should be returned unchanged")
 	}
 }

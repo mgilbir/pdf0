@@ -19,7 +19,7 @@ import (
 // applyImageMasks applies a stencil /Mask and/or a soft /SMask to a codec-
 // decoded image. It returns m unchanged when neither is present; otherwise it
 // returns a fresh *image.NRGBA with the alpha channel composited in.
-func (d *Document) applyImageMasks(st *Stream, m image.Image) image.Image {
+func applyImageMasks(d *Document, st *Stream, m image.Image) image.Image {
 	if m == nil {
 		return m
 	}
@@ -39,10 +39,10 @@ func (d *Document) applyImageMasks(st *Stream, m image.Image) image.Image {
 
 	if hasStencil {
 		_ = stencil
-		d.applyStencilMask(st, im)
+		applyStencilMask(d, st, im)
 	}
 	if hasSMask {
-		d.applySoftMask(st, im)
+		applySoftMask(d, st, im)
 	}
 	return im
 }
