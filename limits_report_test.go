@@ -483,32 +483,10 @@ func TestIncrementalRefusesMissingObjects(t *testing.T) {
 }
 
 // --- a limit whose truncated result was indexed as if complete ---
-
-// TestJBIG2ShortMMRDoesNotPanic pins the one place where ignoring a truncation
-// was not a wrong finding but a crash: decodeCCITT stops early and returns a
-// nil error when its data runs out, and decodeGenericMMR indexed the short
-// result as if it held every row. The resulting slice-bounds panic is not
-// errJBIG2Budget, so decodeJBIG2's recover re-raised it and it escaped
-// ExtractImages to the caller.
 //
-// Before the fix this failed with:
-//
-//	decodeGenericMMR panicked on a short CCITT decode: runtime error: index
-//	out of range [0] with length 0
-func TestJBIG2ShortMMRDoesNotPanic(t *testing.T) {
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("decodeGenericMMR panicked on a short CCITT decode: %v", r)
-		}
-	}()
-	// In Group 4 a single 1 bit is a V0 code, which against an all-white
-	// reference line completes one all-white row. Sixteen of them decode
-	// sixteen rows of a region declared to be 64 rows tall, and decodeCCITT
-	// returns that short result with a nil error.
-	if _, err := decodeGenericMMR([]byte{0xFF, 0xFF}, 64, 64); err == nil {
-		t.Error("a 16-row decode of a 64-row region must be reported as a failure, not returned as an image")
-	}
-}
+// TestJBIG2ShortMMRDoesNotPanic covered that case — a short ccitt.Decode result
+// indexed by decodeGenericMMR as if complete. It calls the decoder directly, so
+// it moved to internal/jbig2 with the decoder itself.
 
 // embeddedPDFAFixture returns the bytes of a minimal PDF/A-4 document carrying
 // two pages, each with its own short content stream, plus an outer document that

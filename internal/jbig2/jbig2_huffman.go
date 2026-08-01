@@ -1,4 +1,4 @@
-package pdf0
+package jbig2
 
 // JBIG2 Huffman coding (ISO/IEC 14492 Annex B). As an alternative to arithmetic
 // coding, symbol dictionaries and text regions may code their integer parameters

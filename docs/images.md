@@ -82,8 +82,8 @@ flowchart TD
     E["ExtractImages() → []ExtractedImage<br/>Images() → iter.Seq (one image live at a time)"] --> W["walk pages → inherited /Resources → /XObject<br/>form XObjects recursed (depth ≤ 16);<br/>annotation /AP appearance streams too;<br/>each object number yielded once"]
     W --> F{"img.Filter = LAST name in the /Filter chain"}
     F -->|DCTDecode| J["image/jpeg on Stream.Data<br/>then imagejpeg.go applies /Decode<br/>(CMYK stays *image.CMYK)"]
-    F -->|CCITTFaxDecode| CC["preceding Flate/LZW/ASCIIHex reversed,<br/>ccitt.go decodes T.4/T.6 → 1-bpp samples"]
-    F -->|JBIG2Decode| JB["preceding filters reversed + /JBIG2Globals decoded,<br/>jbig2*.go: generic/refinement/symbol-text/halftone<br/>over mq.go → 1-bpp samples"]
+    F -->|CCITTFaxDecode| CC["preceding Flate/LZW/ASCIIHex reversed,<br/>internal/ccitt decodes T.4/T.6 → 1-bpp samples"]
+    F -->|JBIG2Decode| JB["preceding filters reversed + /JBIG2Globals decoded,<br/>internal/jbig2: generic/refinement/symbol-text/halftone<br/>over its MQ coder → 1-bpp samples"]
     F -->|JPXDecode| JP["gopenjpeg on Stream.Data<br/>(/SMaskInData only steers the<br/>component-assembly fallback)"]
     F -->|"no filter / Flate / LZW / ASCIIHex"| RAW["decodeImageSamples: whole chain reversed,<br/>64 MB cap, no run cache → raw samples"]
     CC --> BL{"/ImageMask true, or a /Decode present?"}
@@ -129,14 +129,14 @@ not abort the walk.
 | `imagejpeg.go` | Applies a PDF `/Decode` array to `image/jpeg` output — mainly inverted CMYK (`[1 0 1 0 1 0 1 0]`) | ITU-T T.81 / ISO 10918-1 |
 | `imagemask.go` | Post-codec `/SMask` and stencil `/Mask` compositing | ISO 32000-2 §8.9.6 |
 | `imagecolor.go` | Colour-space resolution and sample → pixel rendering: device spaces, CalGray/CalRGB, Lab, ICCBased, Indexed, Separation/DeviceN, `/Decode`, 8- and 16-bit output, colour-key/stencil/soft masks | ISO 32000-2 §8.6 |
-| `ccitt.go` | Group 3 1-D, Group 3 2-D and Group 4 fax decoding; run-code and mode tries; the bit reader shared with JBIG2's MMR path | ITU-T T.4 (Group 3), ITU-T T.6 (Group 4) |
-| `mq.go` | MQ adaptive binary arithmetic decoder and the Qe estimation table | ITU-T T.88 Annex E (same coder as JPEG 2000) |
-| `jbig2.go` | Embedded segment parsing, page info, generic regions (arithmetic + MMR, unknown-length), compositing, the pixel budgets | ISO/IEC 14492 / ITU-T T.88 §6.2, §7, Annex D.3 |
-| `jbig2_symbol.go` | Symbol dictionaries and text regions (arithmetic), integer decoding `IADH`/`IADW`/`IAEX`/…, `IAID`, aggregation, symbol placement | T.88 §6.4, §6.5, Annex A |
-| `jbig2_refine.go` | Generic refinement regions, shared by standalone regions, `SBREFINE` and `SDREFAGG` | T.88 §6.3 |
-| `jbig2_halftone.go` | Pattern dictionaries and halftone regions; Gray-coded bitplane greyscale decoding (arithmetic and MMR) | T.88 §6.6, §6.7, Annex C.5 |
-| `jbig2_huffman.go` | Huffman bit reader, table representation, canonical code assignment, the fifteen standard tables | T.88 Annex B |
-| `jbig2_huffcode.go` | The `SDHUFF`/`SBHUFF` symbol and text paths, custom table segments (type 53), uncompressed collective bitmaps | T.88 Annex B.2, §6.4, §6.5 |
+| `internal/ccitt/ccitt.go` | Group 3 1-D, Group 3 2-D and Group 4 fax decoding; run-code and mode tries; the bit reader shared with JBIG2's MMR path | ITU-T T.4 (Group 3), ITU-T T.6 (Group 4) |
+| `internal/jbig2/mq.go` | MQ adaptive binary arithmetic decoder and the Qe estimation table | ITU-T T.88 Annex E (same coder as JPEG 2000) |
+| `internal/jbig2/jbig2.go` | Embedded segment parsing, page info, generic regions (arithmetic + MMR, unknown-length), compositing, the pixel budgets | ISO/IEC 14492 / ITU-T T.88 §6.2, §7, Annex D.3 |
+| `internal/jbig2/jbig2_symbol.go` | Symbol dictionaries and text regions (arithmetic), integer decoding `IADH`/`IADW`/`IAEX`/…, `IAID`, aggregation, symbol placement | T.88 §6.4, §6.5, Annex A |
+| `internal/jbig2/jbig2_refine.go` | Generic refinement regions, shared by standalone regions, `SBREFINE` and `SDREFAGG` | T.88 §6.3 |
+| `internal/jbig2/jbig2_halftone.go` | Pattern dictionaries and halftone regions; Gray-coded bitplane greyscale decoding (arithmetic and MMR) | T.88 §6.6, §6.7, Annex C.5 |
+| `internal/jbig2/jbig2_huffman.go` | Huffman bit reader, table representation, canonical code assignment, the fifteen standard tables | T.88 Annex B |
+| `internal/jbig2/jbig2_huffcode.go` | The `SDHUFF`/`SBHUFF` symbol and text paths, custom table segments (type 53), uncompressed collective bitmaps | T.88 Annex B.2, §6.4, §6.5 |
 | `function.go` | PDF function evaluation: type 0 sampled, type 2 exponential, type 3 stitching | ISO 32000-1 §7.10 |
 | `function_ps.go` | Type 4 PostScript calculator functions: tokenizer, parser, interpreter | ISO 32000-1 §7.10.5 |
 | `github.com/mgilbir/gopenjpeg` | JPEG 2000 decoding (external module, pure-Go OpenJPEG port) | ISO/IEC 15444-1 |
@@ -186,7 +186,7 @@ is affected — no PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a decoded
 pixel. [limits.md](limits.md) classifies these guards on that axis, and records
 why the JBIG2 trio was left un-configurable while the type-4 budget was not.
 
-- **JBIG2 pixel budgets** (`jbig2.go`). Segment headers declare bitmap
+- **JBIG2 pixel budgets** (`internal/jbig2/jbig2.go`). Segment headers declare bitmap
   dimensions independently of how much coded data follows, and the MQ decoder
   keeps yielding bits past end-of-input, so a truncated stream does not stop a
   decode loop early. `maxJBIG2Pixels` (2^26) bounds any single bitmap;
@@ -233,7 +233,7 @@ why the JBIG2 trio was left un-configurable while the type-4 budget was not.
   back undecoded. `/SMaskInData` is honoured only in the component-assembly
   fallback used for sub-sampled or extra-channel codestreams.
 - CCITT `/BlackIs1` does not change the emitted samples (see the reasoning in
-  `ccitt.go`); `/EndOfLine` and `/DamagedRowsBeforeError` are not read.
+  `internal/ccitt`); `/EndOfLine` and `/DamagedRowsBeforeError` are not read.
 - A colour-key `/Mask` (an array) cannot be applied to a codec-decoded image —
   it tests original per-component sample values, which a lossy codec has
   discarded — so such an image is left opaque.

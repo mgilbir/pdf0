@@ -1,4 +1,4 @@
-package pdf0
+package jbig2
 
 // JBIG2 generic refinement region decoding (ISO/IEC 14492 §6.3). Refinement
 // re-decodes a bitmap using a reference bitmap (a previously decoded version, or

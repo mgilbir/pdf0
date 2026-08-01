@@ -1,4 +1,4 @@
-package pdf0
+package jbig2
 
 // JBIG2 pattern dictionaries and halftone regions (ISO/IEC 14492 §6.6, §6.7).
 // A pattern dictionary is a set of fixed-size bitmaps representing grey levels;

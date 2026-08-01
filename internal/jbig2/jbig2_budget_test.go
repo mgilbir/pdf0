@@ -1,4 +1,4 @@
-package pdf0
+package jbig2
 
 import "testing"
 
@@ -60,7 +60,7 @@ func TestDecodeJBIG2RejectsHugeRegion(t *testing.T) {
 		0x00, // external combination op flags
 		0x00, // generic region flags (arithmetic, template 0)
 	}
-	if _, err := decodeJBIG2(nil, seg, 8, 8); err == nil {
-		t.Fatal("decodeJBIG2 accepted a generic region declaring a 2^40-pixel bitmap")
+	if _, err := Decode(nil, seg, 8, 8); err == nil {
+		t.Fatal("Decode accepted a generic region declaring a 2^40-pixel bitmap")
 	}
 }

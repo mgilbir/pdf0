@@ -1,4 +1,4 @@
-package pdf0
+package jbig2
 
 // Huffman-coded JBIG2 symbol dictionaries and text regions (SDHUFF / SBHUFF).
 // These mirror the arithmetic paths in jbig2_symbol.go but read integer

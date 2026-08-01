@@ -1,4 +1,4 @@
-package pdf0
+package jbig2
 
 // JBIG2 symbol dictionaries and text regions (ISO/IEC 14492 §6.4, §6.5). A
 // symbol dictionary decodes a set of small bitmaps (the marks on a scanned page,

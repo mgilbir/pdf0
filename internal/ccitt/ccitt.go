@@ -1,4 +1,4 @@
-package pdf0
+package ccitt
 
 import "errors"
 
@@ -22,18 +22,28 @@ import "errors"
 // it does not change this output — the decoded image is always emitted 0=black so
 // it renders directly as a DeviceGray sample stream.
 
-// ccittParams carries the CCITTFaxDecode /DecodeParms that steer the decoder.
-type ccittParams struct {
+// Params carries the CCITTFaxDecode /DecodeParms that steer the decoder.
+type Params struct {
 	k         int  // /K: <0 Group 4, 0 Group 3 1-D, >0 Group 3 2-D
 	columns   int  // /Columns: pixels per row (default 1728)
 	rows      int  // /Rows: number of rows (0 = decode until end of data)
 	byteAlign bool // /EncodedByteAlign: each row starts on a byte boundary
 }
 
+// NewParams builds the decoder parameters from the four /DecodeParms values.
+//
+// The fields stay unexported and are set through this constructor so that the
+// zero Params remains meaningful — Decode reads it as "Group 4, 1728 columns,
+// decode until the data runs out" — and cannot be left half-initialised by a
+// caller in another package.
+func NewParams(k, columns, rows int, byteAlign bool) Params {
+	return Params{k: k, columns: columns, rows: rows, byteAlign: byteAlign}
+}
+
 var errCCITTData = errors.New("ccitt: malformed fax data")
 
-// decodeCCITT decodes a CCITT Group 3/4 stream into packed 1-bpp rows.
-func decodeCCITT(data []byte, p ccittParams) ([]byte, error) {
+// Decode decodes a CCITT Group 3/4 stream into packed 1-bpp rows.
+func Decode(data []byte, p Params) ([]byte, error) {
 	cols := p.columns
 	if cols <= 0 {
 		cols = 1728
@@ -46,7 +56,7 @@ func decodeCCITT(data []byte, p ccittParams) ([]byte, error) {
 		maxRows = 1 << 20 // decode until the data runs out, but keep it bounded
 	}
 
-	br := &ccittBitReader{data: data}
+	br := &BitReader{data: data}
 	stride := (cols + 7) / 8
 	var out []byte
 	ref := []int{} // reference line changing elements; empty = all white
@@ -73,7 +83,7 @@ func decodeCCITT(data []byte, p ccittParams) ([]byte, error) {
 		var err error
 		switch {
 		case p.k < 0:
-			cur, err = decode2DLine(br, ref, cols)
+			cur, err = Decode2DLine(br, ref, cols)
 		case p.k == 0:
 			cur, err = decode1DLine(br, cols)
 		default: // K > 0: a mode bit selects 1-D (1) or 2-D (0)
@@ -83,7 +93,7 @@ func decodeCCITT(data []byte, p ccittParams) ([]byte, error) {
 			} else if bit == 1 {
 				cur, err = decode1DLine(br, cols)
 			} else {
-				cur, err = decode2DLine(br, ref, cols)
+				cur, err = Decode2DLine(br, ref, cols)
 			}
 		}
 		if err != nil {
@@ -103,7 +113,7 @@ func decodeCCITT(data []byte, p ccittParams) ([]byte, error) {
 
 // decode1DLine decodes one modified-Huffman (Group 3 1-D) line into its changing
 // elements: the pixel positions at which the colour flips, starting from white.
-func decode1DLine(br *ccittBitReader, cols int) ([]int, error) {
+func decode1DLine(br *BitReader, cols int) ([]int, error) {
 	var changes []int
 	pos, color := 0, 0 // colour 0 = white, 1 = black
 	for pos < cols {
@@ -121,9 +131,9 @@ func decode1DLine(br *ccittBitReader, cols int) ([]int, error) {
 	return changes, nil
 }
 
-// decode2DLine decodes one two-dimensional (READ) line relative to ref, the
+// Decode2DLine decodes one two-dimensional (READ) line relative to ref, the
 // changing elements of the line above. Shared by Group 4 and Group 3 2-D lines.
-func decode2DLine(br *ccittBitReader, ref []int, cols int) ([]int, error) {
+func Decode2DLine(br *BitReader, ref []int, cols int) ([]int, error) {
 	var cur []int
 	a0, color := -1, 0
 	for a0 < cols {
@@ -219,7 +229,7 @@ func packCCITTRow(changes []int, cols, stride int) []byte {
 
 // decodeRun reads one complete run of the given colour: zero or more make-up
 // codes (multiples of 64) followed by one terminating code (0..63).
-func decodeRun(br *ccittBitReader, color int) (int, error) {
+func decodeRun(br *BitReader, color int) (int, error) {
 	total := 0
 	for {
 		run, err := readRunCode(br, color)
@@ -245,12 +255,20 @@ func clampInt(v, lo, hi int) int {
 
 // --- bit reader ------------------------------------------------------------
 
-type ccittBitReader struct {
+type BitReader struct {
 	data []byte
 	pos  int // bit offset from the start of data
 }
 
-func (b *ccittBitReader) bit() (int, bool) {
+// NewBitReader returns a reader positioned at the first bit of data. It exists
+// for the JBIG2 decoder, whose generic regions are MMR-coded and so are read
+// with the same T.6 two-dimensional machinery as a Group 4 fax; see
+// Decode2DLine.
+func NewBitReader(data []byte) *BitReader {
+	return &BitReader{data: data}
+}
+
+func (b *BitReader) bit() (int, bool) {
 	if b.pos >= len(b.data)*8 {
 		return 0, false
 	}
@@ -260,11 +278,11 @@ func (b *ccittBitReader) bit() (int, bool) {
 	return int(b.data[byteIdx]>>bitIdx) & 1, true
 }
 
-func (b *ccittBitReader) eof() bool {
+func (b *BitReader) eof() bool {
 	return b.pos >= len(b.data)*8
 }
 
-func (b *ccittBitReader) align() {
+func (b *BitReader) align() {
 	if r := b.pos % 8; r != 0 {
 		b.pos += 8 - r
 	}
@@ -273,7 +291,7 @@ func (b *ccittBitReader) align() {
 // consumeEOFB consumes the Group-4 end-of-facsimile-block marker (two EOL codes,
 // 000000000001000000000001) that terminates each MMR bitmap. Nothing is consumed
 // if the marker is absent.
-func (b *ccittBitReader) consumeEOFB() {
+func (b *BitReader) consumeEOFB() {
 	save := b.pos
 	if b.consumeEOL() && b.consumeEOL() {
 		return
@@ -281,10 +299,22 @@ func (b *ccittBitReader) consumeEOFB() {
 	b.pos = save
 }
 
+// EndPlane finishes one MMR plane and leaves the reader at the first bit of the
+// next: it consumes the terminating EOFB, if present, then byte-aligns.
+//
+// JBIG2 codes an MMR grayscale image (T.88 Annex C.5) as a run of planes in one
+// shared bit stream, each terminated this way, so the two steps are only ever
+// meaningful together. Exposing them as one operation keeps the reader's
+// bit-level primitives unexported.
+func (b *BitReader) EndPlane() {
+	b.consumeEOFB()
+	b.align()
+}
+
 // skipEOLs consumes any run of consecutive end-of-line codes (000000000001) at
 // the current position. It reports whether two or more were seen back to back,
 // which is the Group 3/4 end-of-block marker.
-func (b *ccittBitReader) skipEOLs() (endOfBlock bool) {
+func (b *BitReader) skipEOLs() (endOfBlock bool) {
 	count := 0
 	for {
 		save := b.pos
@@ -300,7 +330,7 @@ func (b *ccittBitReader) skipEOLs() (endOfBlock bool) {
 // consumeEOL reads a single EOL code (eleven 0 bits then a 1) if present at the
 // current position, returning whether one was consumed. Leading fill bits (extra
 // zeros) before the terminating 1 are tolerated.
-func (b *ccittBitReader) consumeEOL() bool {
+func (b *BitReader) consumeEOL() bool {
 	save := b.pos
 	zeros := 0
 	for {
@@ -325,7 +355,7 @@ func (b *ccittBitReader) consumeEOL() bool {
 // --- code tables -----------------------------------------------------------
 
 // Two-dimensional coding modes (T.6 Table 1 / T.4 Table 4). The vertical modes
-// are kept contiguous (V0, VR1..3, VL1..3) so decode2DLine can range-test them.
+// are kept contiguous (V0, VR1..3, VL1..3) so Decode2DLine can range-test them.
 const (
 	modePass = iota
 	modeHoriz
@@ -379,7 +409,7 @@ func buildCCITTTree(codes []ccittCode) *ccittNode {
 }
 
 // matchCode walks the trie consuming bits until it reaches a leaf.
-func matchCode(br *ccittBitReader, root *ccittNode) (int, bool) {
+func matchCode(br *BitReader, root *ccittNode) (int, bool) {
 	n := root
 	for i := 0; i < 24; i++ { // bounded: no CCITT code exceeds ~14 bits
 		bit, ok := br.bit()
@@ -397,7 +427,7 @@ func matchCode(br *ccittBitReader, root *ccittNode) (int, bool) {
 	return 0, false
 }
 
-func readRunCode(br *ccittBitReader, color int) (int, error) {
+func readRunCode(br *BitReader, color int) (int, error) {
 	tree := whiteRunTree
 	if color == 1 {
 		tree = blackRunTree
@@ -409,7 +439,7 @@ func readRunCode(br *ccittBitReader, color int) (int, error) {
 	return v, nil
 }
 
-func readMode(br *ccittBitReader) (int, error) {
+func readMode(br *BitReader) (int, error) {
 	v, ok := matchCode(br, modeTree)
 	if !ok {
 		return 0, errCCITTData

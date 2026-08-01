@@ -234,7 +234,7 @@ pdf0 is one flat Go package. The subsystems, and the doc that maps each:
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
 | Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | [encryption.md](docs/encryption.md) |
-| Images and codecs | `imageextract.go`, `imagejpeg.go`, `imagecolor.go`, `imagemask.go`, `ccitt.go`, `mq.go`, `jbig2*.go`, `function.go`, `function_ps.go` | [images.md](docs/images.md) |
+| Images and codecs | `imageextract.go`, `imagejpeg.go`, `imagecolor.go`, `imagemask.go`, `internal/ccitt`, `internal/jbig2`, `function.go`, `function_ps.go` | [images.md](docs/images.md) |
 | Text and pages | `text.go`, `pages.go` | [architecture.md](docs/architecture.md) |
 | Command-line front end (dev aid, not the supported surface) | `cmd/pdf0` | [cli.md](docs/cli.md) |
 

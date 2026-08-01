@@ -1,9 +1,11 @@
-package pdf0
+package jbig2
 
 import (
 	"encoding/binary"
 	"errors"
 	"sort"
+
+	"github.com/mgilbir/pdf0/internal/ccitt"
 )
 
 // This file decodes the JBIG2 bilevel image codec (ISO/IEC 14492 / ITU-T T.88)
@@ -57,7 +59,7 @@ const (
 )
 
 // errJBIG2Budget is panicked by newJBBitmap on an over-budget allocation and
-// recovered at the decodeJBIG2 boundary. Using a panic keeps the single
+// recovered at the Decode boundary. Using a panic keeps the single
 // allocation choke point authoritative: every bitmap flows through newJBBitmap,
 // so no allocation site can be missed, while genuine bugs still propagate.
 var errJBIG2Budget = errors.New("jbig2: bitmap exceeds pixel budget")
@@ -155,9 +157,9 @@ func (r *jbReader) s8() (int, bool) {
 	return int(int8(v)), ok
 }
 
-// decodeJBIG2 decodes a JBIG2 image (globals + page stream) into packed 1-bpp
+// Decode decodes a JBIG2 image (globals + page stream) into packed 1-bpp
 // rows in the PDF convention (0 = black), sized to width x height.
-func decodeJBIG2(globals, data []byte, width, height int) (out []byte, err error) {
+func Decode(globals, data []byte, width, height int) (out []byte, err error) {
 	if width <= 0 || height <= 0 || width > 1<<20 || height > 1<<20 {
 		return nil, errJBIG2Unsupported
 	}
@@ -653,15 +655,15 @@ type atPixel struct{ x, y int }
 // the CCITT decoder. Its packed output (0 = black) is expanded to the internal
 // one-byte-per-pixel form (1 = black).
 func decodeGenericMMR(data []byte, w, h int) (*jbBitmap, error) {
-	packed, err := decodeCCITT(data, ccittParams{k: -1, columns: w, rows: h})
+	packed, err := ccitt.Decode(data, ccitt.NewParams(-1, w, h, false))
 	if err != nil {
 		return nil, err
 	}
 	stride := (w + 7) / 8
-	// decodeCCITT stops early when the data runs out — its row loop breaks on
+	// ccitt.Decode stops early when the data runs out — its row loop breaks on
 	// eof and still returns a nil error — so packed may hold fewer than h rows.
 	// Indexing it as if it held all h panics with a slice-bounds runtime error,
-	// and that panic is not errJBIG2Budget, so decodeJBIG2's recover re-raises
+	// and that panic is not errJBIG2Budget, so Decode's recover re-raises
 	// it and it escapes ExtractImages to the caller. A short decode is a
 	// truncated image, which is a decode failure to report, not a crash.
 	if len(packed) < h*stride {
@@ -684,11 +686,11 @@ func decodeGenericMMR(data []byte, w, h int) (*jbBitmap, error) {
 // plane, and an MMR grayscale image (T.88 Annex C.5) as a run of planes each
 // terminated by an EOFB and byte-aligned, so the same reader must span them all.
 type mmrPlaneReader struct {
-	br *ccittBitReader
+	br *ccitt.BitReader
 }
 
 func newMMRPlaneReader(data []byte) *mmrPlaneReader {
-	return &mmrPlaneReader{br: &ccittBitReader{data: data}}
+	return &mmrPlaneReader{br: ccitt.NewBitReader(data)}
 }
 
 // plane decodes one w x h Group-4 bitmap (1 = black), then, when eofb is set,
@@ -698,7 +700,7 @@ func (m *mmrPlaneReader) plane(w, h int, eofb bool) (*jbBitmap, error) {
 	bmp := newJBBitmap(w, h, 0)
 	ref := []int{}
 	for row := 0; row < h; row++ {
-		cur, err := decode2DLine(m.br, ref, w)
+		cur, err := ccitt.Decode2DLine(m.br, ref, w)
 		if err != nil {
 			return nil, err
 		}
@@ -722,8 +724,7 @@ func (m *mmrPlaneReader) plane(w, h int, eofb bool) (*jbBitmap, error) {
 		ref = cur
 	}
 	if eofb {
-		m.br.consumeEOFB()
-		m.br.align()
+		m.br.EndPlane()
 	}
 	return bmp, nil
 }

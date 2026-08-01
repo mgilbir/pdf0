@@ -1,4 +1,4 @@
-package pdf0
+package jbig2
 
 // MQ arithmetic decoder (ISO/IEC 14492 / ITU-T T.88 Annex E, identical to the
 // JPEG 2000 / JBIG coder). It decodes a binary decision given an adaptive

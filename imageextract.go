@@ -10,16 +10,20 @@ import (
 	"strconv"
 
 	"github.com/mgilbir/gopenjpeg"
+
+	"github.com/mgilbir/pdf0/internal/ccitt"
+	"github.com/mgilbir/pdf0/internal/jbig2"
 )
 
 // This file owns image extraction: the ExtractImages/Images API, the traversal
 // that reaches image XObjects through page resources, form XObjects and
 // annotation appearance streams, and the dispatch from a stream's filter chain
-// to a decoder (ISO 32000-2 clause 8.9). The codecs live elsewhere — ccitt.go,
-// jbig2*.go, imagejpeg.go, imagecolor.go, imagemask.go — only the JPXDecode
-// bridge to gopenjpeg is here; an image no codec can render yields the raw
-// encoded bytes and a Note rather than an error, so one bad image never aborts
-// the walk. The per-codec support table is below, before ExtractedImage.
+// to a decoder (ISO 32000-2 clause 8.9). The codecs live elsewhere —
+// internal/ccitt, internal/jbig2, imagejpeg.go, imagecolor.go, imagemask.go —
+// only the JPXDecode bridge to gopenjpeg is here; an image no codec can render
+// yields the raw encoded bytes and a Note rather than an error, so one bad
+// image never aborts the walk. The per-codec support table is below, before
+// ExtractedImage.
 
 // decodeJPX decodes a JPEG 2000 (JPXDecode) codestream or JP2 container to a
 // standard-library image using gopenjpeg, a pure-Go port of OpenJPEG. It returns
@@ -212,9 +216,10 @@ func jpxComponentsToImage(img *gopenjpeg.Image, smaskInData int) image.Image {
 //   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
 //   - raw, FlateDecode, LZWDecode,
 //     ASCIIHexDecode                     -> decoded from the sample bytes
-//   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in ccitt.go codec
+//   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in internal/ccitt
+//     codec
 //   - JBIG2Decode                       -> generic, symbol/text, refinement and
-//     halftone regions (arithmetic and Huffman) decoded by jbig2.go
+//     halftone regions (arithmetic and Huffman) decoded by internal/jbig2
 //   - JPXDecode                         -> JPEG 2000 decoded by gopenjpeg, a
 //     pure-Go port of the OpenJPEG reference codec
 
@@ -430,7 +435,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			img.Note = "CCITTFaxDecode preceding filter chain could not be reversed; the raw encoded bytes are provided"
 			break
 		}
-		samples, err := decodeCCITT(encoded, params)
+		samples, err := ccitt.Decode(encoded, params)
 		if err != nil {
 			img.Encoded = st.Data
 			img.Note = "CCITTFaxDecode failed: " + err.Error()
@@ -444,7 +449,7 @@ func (d *Document) extractImage(st *Stream, num int) ExtractedImage {
 			img.Note = "JBIG2Decode preceding filter chain could not be reversed; the raw encoded bytes are provided"
 			break
 		}
-		samples, err := decodeJBIG2(globals, encoded, img.Width, img.Height)
+		samples, err := jbig2.Decode(globals, encoded, img.Width, img.Height)
 		if err != nil {
 			img.Encoded = st.Data
 			img.Note = "JBIG2Decode not decoded (" + err.Error() + "); the raw encoded bytes are provided"
@@ -526,7 +531,7 @@ func (d *Document) renderBilevelSamples(st *Stream, img *ExtractedImage, samples
 // reversing any general-purpose filters (Flate/LZW/ASCIIHex) that precede the
 // CCITTFaxDecode codec in the filter chain — together with the /DecodeParms that
 // steer the fax decoder. ok is false when a preceding filter cannot be reversed.
-func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded []byte, params ccittParams, ok bool) {
+func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded []byte, params ccitt.Params, ok bool) {
 	filters := streamFilters(d, st)
 	if len(filters) == 0 {
 		return nil, params, false
@@ -544,25 +549,25 @@ func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded 
 	}
 
 	cp := parmsDictAt(parms, last)
-	params = ccittParams{columns: 1728, rows: height, k: 0}
+	k, columns, rows, byteAlign := 0, 1728, height, false
 	if cp != nil {
 		if v, kOK := d.Resolve(cp.Get("K")).(Integer); kOK {
-			params.k = int(v)
+			k = int(v)
 		}
 		if v, cOK := d.Resolve(cp.Get("Columns")).(Integer); cOK {
-			params.columns = int(v)
+			columns = int(v)
 		}
 		if v, rOK := d.Resolve(cp.Get("Rows")).(Integer); rOK && int(v) > 0 {
-			params.rows = int(v)
+			rows = int(v)
 		}
 		if b, aOK := d.Resolve(cp.Get("EncodedByteAlign")).(Boolean); aOK {
-			params.byteAlign = bool(b)
+			byteAlign = bool(b)
 		}
 	}
-	if params.columns <= 0 {
-		params.columns = width
+	if columns <= 0 {
+		columns = width
 	}
-	return encoded, params, true
+	return encoded, ccitt.NewParams(k, columns, rows, byteAlign), true
 }
 
 // jbig2EncodedAndGlobals returns the JBIG2-encoded bytes for an image XObject

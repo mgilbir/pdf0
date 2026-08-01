@@ -206,7 +206,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 ### Image codecs
 
-Every guard in `jbig2*.go`, `ccitt.go`, `mq.go`, `imagejpeg.go`, `imagemask.go`,
+Every guard in `internal/jbig2`, `internal/ccitt`, `imagejpeg.go`, `imagemask.go`,
 `imagecolor.go`, `function_ps.go` and `filters.go` is at worst a false negative
 **for the extraction API**. No PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a
 decoded pixel: the image rules read dictionary keys (`/Alternates`,

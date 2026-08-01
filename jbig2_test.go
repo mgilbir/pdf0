@@ -306,10 +306,3 @@ func TestJBIG2EdgeCases(t *testing.T) {
 		}
 	}
 }
-
-// TestJBIG2Malformed rejects garbage without panicking.
-func TestJBIG2Malformed(t *testing.T) {
-	if _, err := decodeJBIG2(nil, []byte{0, 0, 0, 0, 0x30, 0x00, 0x01}, 8, 8); err == nil {
-		t.Error("expected an error on malformed JBIG2 data")
-	}
-}
