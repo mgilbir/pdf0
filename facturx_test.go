@@ -130,15 +130,21 @@ func containerFindings(res FacturXResult) []FacturXViolation {
 //     are what CEN's CII-DT-031 reported before, now reported by Factur-X's own
 //     data model, which is evidence the samples carry them rather than that the
 //     rule is misscoped.
-//   - the four official XRECHNUNG samples (1 each): PEPPOL-EN16931-R001/R010/
-//     R020, the Peppol rules the XRechnung artefact merges.
+//   - official_XRECHNUNG_Betriebskostenabrechnung (3): PEPPOL-EN16931-R001/R010/
+//     R020, the Peppol rules the XRechnung artefact merges. It is the only one of
+//     the four XRECHNUNG samples counted here; the other three draw advisory
+//     findings, which are reported separately as InvoiceWarnings.
 //
 // So this is no longer a seam artefact to be argued away. It says FNFE's own
 // published samples depart from FNFE's own published data model at the two
-// leanest tiers. formalis's Factur-X corpus holds 2 MINIMUM and 3 BASIC
-// documents against 25 EXTENDED, so its oracle does not cover this ground;
-// pdf0's does, which is why it surfaces here. Reported upstream rather than
-// suppressed.
+// leanest tiers.
+//
+// Upstream now says the same. The four lean-tier documents were contributed to
+// formalis (its testdata/facturx/extracted) and are pinned there as an
+// expected-failure table naming every rule, the node it fires at, and a checked
+// reason — so these two ratchets describe the same documents from either side of
+// the module boundary and should move together. A change here that formalis did
+// not make is the interesting case.
 //
 // The number is pinned so that a change on either side of the seam is visible.
 // Lower it when formalis narrows the scope; investigate any increase.
