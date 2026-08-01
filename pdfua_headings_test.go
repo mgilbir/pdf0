@@ -24,7 +24,7 @@ func TestUAHeadingSkip(t *testing.T) {
 		return doc
 	}
 	has74 := func(doc *Document) bool {
-		for _, e := range doc.checkUAHeadings(doc.ResolveDict(doc.Trailer.Get("Root"))) {
+		for _, e := range checkUAHeadings(doc, doc.ResolveDict(doc.Trailer.Get("Root"))) {
 			if e.Clause == "7.4" {
 				return true
 			}

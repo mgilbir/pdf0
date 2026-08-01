@@ -36,17 +36,17 @@ func TestUATableTHScope(t *testing.T) {
 	}
 	// No scope, no ID -> flagged.
 	d, cat := mk("", false)
-	if len(d.checkUATableTHScope(cat)) == 0 {
+	if len(checkUATableTHScope(d, cat)) == 0 {
 		t.Error("TH without Scope or ID not flagged")
 	}
 	// Scope present -> clean.
 	d, cat = mk("Column", false)
-	if len(d.checkUATableTHScope(cat)) != 0 {
+	if len(checkUATableTHScope(d, cat)) != 0 {
 		t.Error("TH with Scope wrongly flagged")
 	}
 	// ID present (no scope) -> clean.
 	d, cat = mk("", true)
-	if len(d.checkUATableTHScope(cat)) != 0 {
+	if len(checkUATableTHScope(d, cat)) != 0 {
 		t.Error("TH with ID wrongly flagged")
 	}
 }

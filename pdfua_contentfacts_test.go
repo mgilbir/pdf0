@@ -69,8 +69,8 @@ func TestContentFactsCacheShared(t *testing.T) {
 	doc := &rd
 
 	// Both checks run against the same page content stream.
-	mcid := doc.checkUAFormXObjectMCID()
-	real := doc.checkUARealContent(cat)
+	mcid := checkUAFormXObjectMCID(doc)
+	real := checkUARealContent(doc, cat)
 
 	if len(mcid) != 1 || mcid[0].Clause != "7.20" {
 		t.Errorf("expected one 7.20 violation for the twice-painted tagged form, got %v", mcid)

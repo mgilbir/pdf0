@@ -19,14 +19,14 @@ func TestUAPrinterMark(t *testing.T) {
 		doc.Objects[5] = &IndirectObject{Number: 5, Value: a}
 		return doc
 	}
-	if !hasUAClause(mk(true).checkUAAnnotations(), "7.18.8") {
+	if !hasUAClause(checkUAAnnotations(mk(true)), "7.18.8") {
 		t.Error("tagged PrinterMark not flagged")
 	}
-	if hasUAClause(mk(false).checkUAAnnotations(), "7.18.8") {
+	if hasUAClause(checkUAAnnotations(mk(false)), "7.18.8") {
 		t.Error("artifact PrinterMark wrongly flagged")
 	}
 	// An untagged PrinterMark must not be flagged by the general tagging rule.
-	if hasUAClause(mk(false).checkUAAnnotations(), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(mk(false)), "7.18.1") {
 		t.Error("PrinterMark wrongly subjected to the tagging rule")
 	}
 }
@@ -64,13 +64,13 @@ func TestUAMediaClips(t *testing.T) {
 		}
 		return false
 	}
-	if !has(mk(false, true).checkUAMediaClips()) {
+	if !has(checkUAMediaClips(mk(false, true))) {
 		t.Error("media clip missing /CT not flagged")
 	}
-	if !has(mk(true, false).checkUAMediaClips()) {
+	if !has(checkUAMediaClips(mk(true, false))) {
 		t.Error("media clip missing /Alt not flagged")
 	}
-	if has(mk(true, true).checkUAMediaClips()) {
+	if has(checkUAMediaClips(mk(true, true))) {
 		t.Error("complete media clip wrongly flagged")
 	}
 }
@@ -93,11 +93,11 @@ func TestUAMediaClipEmptyAlt(t *testing.T) {
 		return doc
 	}
 	empty := Array{String{Value: []byte("")}, String{Value: []byte("")}}
-	if !hasUAClause(mk(empty).checkUAMediaClips(), "7.18.6.2") {
+	if !hasUAClause(checkUAMediaClips(mk(empty)), "7.18.6.2") {
 		t.Error("empty /Alt not flagged")
 	}
 	good := Array{String{Value: []byte("")}, String{Value: []byte("a video")}}
-	if hasUAClause(mk(good).checkUAMediaClips(), "7.18.6.2") {
+	if hasUAClause(checkUAMediaClips(mk(good)), "7.18.6.2") {
 		t.Error("media clip with alt text wrongly flagged")
 	}
 }

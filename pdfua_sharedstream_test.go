@@ -118,7 +118,7 @@ func TestRealContentSharedStreamMemo(t *testing.T) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 
 	done := make(chan []UAViolation, 1)
-	go func() { done <- doc.checkUARealContent(cat) }()
+	go func() { done <- checkUARealContent(doc, cat) }()
 	var v []UAViolation
 	select {
 	case v = <-done:

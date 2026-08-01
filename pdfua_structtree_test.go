@@ -47,7 +47,7 @@ func TestStructTreeFlatten(t *testing.T) {
 
 	// Install a validation cache so structTree memoizes.
 	doc.valCache = &validationCache{}
-	nodes := doc.structTree(cat)
+	nodes := structTree(doc, cat)
 
 	// Expected pre-order object numbers: Document(1), Sect(10), H1(20), P(21),
 	// MyPara(11) [P(21) already seen -> not revisited], Div(12) [Sect(10) already
@@ -82,13 +82,13 @@ func TestStructTreeFlatten(t *testing.T) {
 	}
 
 	// Memoization: a second call returns the identical backing slice.
-	if again := doc.structTree(cat); &again[0] != &nodes[0] {
+	if again := structTree(doc, cat); &again[0] != &nodes[0] {
 		t.Error("structTree not memoized (returned a fresh slice)")
 	}
 
 	// walkStructElems must visit exactly the /S nodes, in the same order.
 	var walked []int
-	doc.walkStructElems(cat, func(e *Dictionary, _ Name) {
+	walkStructElems(doc, cat, func(e *Dictionary, _ Name) {
 		walked = append(walked, doc.dictObjNum(e))
 	})
 	if len(walked) != len(wantOrder) {

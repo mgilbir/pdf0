@@ -45,7 +45,7 @@ func TestUACIDFontCIDSetNonSubset(t *testing.T) {
 	if isSubsetFont(f) {
 		t.Fatal("Arial should not be a subset font")
 	}
-	if v := doc.checkCIDFontCIDSet(f); len(v) != 0 {
+	if v := checkCIDFontCIDSet(doc, f); len(v) != 0 {
 		t.Errorf("non-CIDFontType2 font wrongly flagged: %v", v)
 	}
 }

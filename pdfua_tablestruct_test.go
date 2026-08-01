@@ -56,7 +56,7 @@ func TestUATableStructure(t *testing.T) {
 	}
 	for _, c := range cases {
 		doc, cat := buildContainer(c.container, c.kids...)
-		v := doc.checkUATableListStructure(cat)
+		v := checkUATableListStructure(doc, cat)
 		got := ""
 		if len(v) > 0 {
 			got = v[0].Message

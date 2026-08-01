@@ -16,11 +16,11 @@ package pdf0
 // BDC/BMC…EMC. (The Artifact/tagged *mis-nesting* conditions 01-003/01-004 need
 // to distinguish structure-linked BDC from /OC and property-less BDC, which a
 // plain depth count cannot; they are left to the structure-correlation pass.)
-func (d *Document) checkUARealContent(cat *Dictionary) []UAViolation {
+func checkUARealContent(d *Document, cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	for _, pg := range collectPages(d, cat.Get("Pages")) {
 		data, key := d.contentBytesAndKey(pg.dict.Get("Contents"))
-		for _, msg := range d.contentFacts(data, key).realMsgs {
+		for _, msg := range contentFacts(d, data, key).realMsgs {
 			v = append(v, UAViolation{"7.1", msg, pg.objNum})
 		}
 	}
@@ -40,7 +40,7 @@ type streamContentFacts struct {
 
 // contentFacts returns the streamContentFacts for content, memoized per content
 // stream (key) when a validation cache is present.
-func (d *Document) contentFacts(content []byte, key *Stream) *streamContentFacts {
+func contentFacts(d *Document, content []byte, key *Stream) *streamContentFacts {
 	if key != nil {
 		if c := d.valCache; c != nil {
 			if f, ok := c.streamFacts[key]; ok {
@@ -152,7 +152,7 @@ func buildContentFacts(cancel canceler, content []byte) *streamContentFacts {
 // (contains an /MCID marked-content sequence) must be painted at most once. If
 // it is invoked by more than one Do operator, a single structure element would
 // map to several renderings, breaking the one-to-one structure/content mapping.
-func (d *Document) checkUAFormXObjectMCID() []UAViolation {
+func checkUAFormXObjectMCID(d *Document) []UAViolation {
 	mcidForm := map[int]bool{}
 	for num, iobj := range d.Objects {
 		s, ok := iobj.Value.(*Stream)
@@ -189,7 +189,7 @@ func (d *Document) checkUAFormXObjectMCID() []UAViolation {
 				name2num[string(k)] = ref.Number
 			}
 		}
-		for _, name := range d.contentFacts(content, key).doNames {
+		for _, name := range contentFacts(d, content, key).doNames {
 			if n, ok := name2num[name]; ok {
 				doCount[n]++
 			}
@@ -268,7 +268,7 @@ func sortedInts(m map[int]bool) []int {
 // enclosing structure element: a Widget must sit under <Form>, a Link under
 // <Link>, and any other annotation under <Annot> (Matterhorn 28-002/010/011).
 // Annotations not reachable through an OBJR are left to the tagging check.
-func (d *Document) checkUAAnnotStructType(cat *Dictionary) []UAViolation {
+func checkUAAnnotStructType(d *Document, cat *Dictionary) []UAViolation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil

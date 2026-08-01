@@ -27,14 +27,14 @@ func TestUALang(t *testing.T) {
 		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
 		return doc
 	}
-	if d := mk("1-pt"); len(d.checkUALang(d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
+	if d := mk("1-pt"); len(checkUALang(d, d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
 		t.Error("invalid catalog /Lang not flagged")
 	}
-	if d := mk("en-US"); len(d.checkUALang(d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
+	if d := mk("en-US"); len(checkUALang(d, d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
 		t.Error("valid catalog /Lang wrongly flagged")
 	}
 	// Absent /Lang is not this check's concern (a separate rule requires it).
-	if d := mk(""); len(d.checkUALang(d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
+	if d := mk(""); len(checkUALang(d, d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
 		t.Error("absent /Lang wrongly flagged by BCP-47 check")
 	}
 }

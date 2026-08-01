@@ -121,7 +121,7 @@ func checkLevelAStructure(doc *Document, level PDFALevel) []ValidationError {
 	}
 	var errs []ValidationError
 	mark := doc.ResolveDict(cat.Get("MarkInfo"))
-	if mark == nil || !doc.isTrue(mark.Get("Marked")) {
+	if mark == nil || !isTrue(doc, mark.Get("Marked")) {
 		errs = append(errs, ValidationError{
 			Rule:    levelAClause("structure", level),
 			Level:   level,

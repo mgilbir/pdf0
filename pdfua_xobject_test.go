@@ -15,10 +15,10 @@ func TestUAReferenceXObjects(t *testing.T) {
 		doc.Objects[7] = &IndirectObject{Number: 7, Value: s}
 		return doc
 	}
-	if len(mk(true).checkUAReferenceXObjects()) == 0 {
+	if len(checkUAReferenceXObjects(mk(true))) == 0 {
 		t.Error("reference XObject not flagged")
 	}
-	if len(mk(false).checkUAReferenceXObjects()) != 0 {
+	if len(checkUAReferenceXObjects(mk(false))) != 0 {
 		t.Error("plain Form XObject wrongly flagged")
 	}
 }

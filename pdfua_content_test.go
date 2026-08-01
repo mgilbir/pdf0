@@ -28,31 +28,31 @@ func TestUARealContent(t *testing.T) {
 	cat := func(doc *Document) *Dictionary { return doc.ResolveDict(doc.Trailer.Get("Root")) }
 
 	untagged := mk("BT /F1 12 Tf (hello) Tj ET")
-	if len(untagged.checkUARealContent(cat(untagged))) == 0 {
+	if len(checkUARealContent(untagged, cat(untagged))) == 0 {
 		t.Error("untagged page text not flagged")
 	}
 	tagged := mk("/P BDC BT /F1 12 Tf (hello) Tj ET EMC")
-	if len(tagged.checkUARealContent(cat(tagged))) != 0 {
+	if len(checkUARealContent(tagged, cat(tagged))) != 0 {
 		t.Error("tagged page text should be clean")
 	}
 	artifact := mk("/Artifact BMC BT (deco) Tj ET EMC")
-	if len(artifact.checkUARealContent(cat(artifact))) != 0 {
+	if len(checkUARealContent(artifact, cat(artifact))) != 0 {
 		t.Error("artifact page text should be clean")
 	}
 
 	// Artifact nested inside tagged content (01-003).
 	artInTag := mk("/P <</MCID 0>> BDC /Artifact BMC (x) Tj EMC EMC")
-	if len(artInTag.checkUARealContent(cat(artInTag))) == 0 {
+	if len(checkUARealContent(artInTag, cat(artInTag))) == 0 {
 		t.Error("artifact nested in tagged content not flagged")
 	}
 	// Tagged content nested inside an artifact (01-004).
 	tagInArt := mk("/Artifact BMC /P <</MCID 0>> BDC (x) Tj EMC EMC")
-	if len(tagInArt.checkUARealContent(cat(tagInArt))) == 0 {
+	if len(checkUARealContent(tagInArt, cat(tagInArt))) == 0 {
 		t.Error("tagged content nested in an artifact not flagged")
 	}
 	// Optional content (/OC) around tagged content is transparent (no violation).
 	ocWrap := mk("/OC /MC0 BDC /P <</MCID 0>> BDC (x) Tj EMC EMC")
-	if len(ocWrap.checkUARealContent(cat(ocWrap))) != 0 {
+	if len(checkUARealContent(ocWrap, cat(ocWrap))) != 0 {
 		t.Error("/OC-wrapped tagged content should be clean")
 	}
 }
@@ -88,11 +88,11 @@ func TestUAAnnotStructType(t *testing.T) {
 		return doc
 	}
 	bad := mk("P") // widget under <P>, not <Form>
-	if len(bad.checkUAAnnotStructType(bad.ResolveDict(bad.Trailer.Get("Root")))) == 0 {
+	if len(checkUAAnnotStructType(bad, bad.ResolveDict(bad.Trailer.Get("Root")))) == 0 {
 		t.Error("widget under <P> not flagged")
 	}
 	good := mk("Form")
-	if len(good.checkUAAnnotStructType(good.ResolveDict(good.Trailer.Get("Root")))) != 0 {
+	if len(checkUAAnnotStructType(good, good.ResolveDict(good.Trailer.Get("Root")))) != 0 {
 		t.Error("widget under <Form> should be clean")
 	}
 }

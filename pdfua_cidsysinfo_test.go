@@ -28,7 +28,7 @@ func TestUACIDSystemInfo(t *testing.T) {
 		return doc
 	}
 	check := func(doc *Document) []UAViolation {
-		return doc.checkOneUACIDSystemInfo(doc.Objects[10].Value.(*Dictionary))
+		return checkOneUACIDSystemInfo(doc, doc.Objects[10].Value.(*Dictionary))
 	}
 	if len(check(mk("Adobe", "Korea1", "adobe", "Korea1"))) == 0 {
 		t.Error("Registry case mismatch not flagged")
@@ -66,7 +66,7 @@ func TestUACIDSupplement(t *testing.T) {
 		return doc
 	}
 	check := func(doc *Document) []UAViolation {
-		return doc.checkOneUACIDSystemInfo(doc.Objects[10].Value.(*Dictionary))
+		return checkOneUACIDSystemInfo(doc, doc.Objects[10].Value.(*Dictionary))
 	}
 	if len(check(mk(2, 3))) == 0 {
 		t.Error("CIDFont Supplement exceeding CMap not flagged")

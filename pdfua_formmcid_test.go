@@ -33,10 +33,10 @@ func TestUAFormXObjectMCID(t *testing.T) {
 		doc.Trailer.Set("Root", IndirectRef{Number: 1})
 		return doc
 	}
-	if len(mk("/Fm0 Do /Fm0 Do").checkUAFormXObjectMCID()) == 0 {
+	if len(checkUAFormXObjectMCID(mk("/Fm0 Do /Fm0 Do"))) == 0 {
 		t.Error("tagged form painted twice not flagged")
 	}
-	if v := mk("/Fm0 Do").checkUAFormXObjectMCID(); len(v) != 0 {
+	if v := checkUAFormXObjectMCID(mk("/Fm0 Do")); len(v) != 0 {
 		t.Errorf("tagged form painted once wrongly flagged: %v", v)
 	}
 }

@@ -30,14 +30,14 @@ type tableRow []tableCell
 // pass files give every TH a Scope, others give every TH an /ID), which is why
 // an /ID exempts a TH that has no Scope — the boundary an earlier Scope-only
 // rule got wrong.
-func (d *Document) checkUATableTHScope(cat *Dictionary) []UAViolation {
+func checkUATableTHScope(d *Document, cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	reported := map[int]bool{}
-	d.walkStructElems(cat, func(el *Dictionary, t Name) {
+	walkStructElems(d, cat, func(el *Dictionary, t Name) {
 		if t != "TH" {
 			return
 		}
-		if d.cellHasScope(el) || el.Get("ID") != nil {
+		if cellHasScope(d, el) || el.Get("ID") != nil {
 			return
 		}
 		num := d.dictObjNum(el)
@@ -50,8 +50,8 @@ func (d *Document) checkUATableTHScope(cat *Dictionary) []UAViolation {
 }
 
 // cellHasScope reports whether a cell carries a /Scope in a Table attribute.
-func (d *Document) cellHasScope(cell *Dictionary) bool {
-	for _, ad := range d.tableAttrDicts(cell) {
+func cellHasScope(d *Document, cell *Dictionary) bool {
+	for _, ad := range tableAttrDicts(d, cell) {
 		if ad.Get("Scope") != nil {
 			return true
 		}
@@ -60,18 +60,18 @@ func (d *Document) cellHasScope(cell *Dictionary) bool {
 }
 
 // checkUATableGrid lays out every Table's cells and reports grid defects (7.2).
-func (d *Document) checkUATableGrid(cat *Dictionary) []UAViolation {
+func checkUATableGrid(d *Document, cat *Dictionary) []UAViolation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
 	}
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
 	var v []UAViolation
-	for _, n := range d.structTree(cat) {
+	for _, n := range structTree(d, cat) {
 		if n.stdType != "Table" {
 			continue
 		}
-		if rows := d.collectTableRows(n.elem, roleMap); len(rows) > 0 {
+		if rows := collectTableRows(d, n.elem, roleMap); len(rows) > 0 {
 			maxFills := d.lim().tableGridFills
 			defects, complete := gridDefects(rows, maxFills)
 			if !complete {
@@ -85,7 +85,7 @@ func (d *Document) checkUATableGrid(cat *Dictionary) []UAViolation {
 
 // collectTableRows returns the table's rows in document order, descending
 // through THead/TBody/TFoot row groups (but not into nested tables).
-func (d *Document) collectTableRows(table *Dictionary, roleMap *Dictionary) []tableRow {
+func collectTableRows(d *Document, table *Dictionary, roleMap *Dictionary) []tableRow {
 	var rows []tableRow
 	var visit func(node Object, top bool)
 	seen := map[int]bool{}
@@ -105,21 +105,21 @@ func (d *Document) collectTableRows(table *Dictionary, roleMap *Dictionary) []ta
 			}
 			return
 		}
-		t := d.standardStructType(elem, roleMap)
+		t := standardStructType(d, elem, roleMap)
 		if !top && t == "Table" {
 			return // nested table handled separately
 		}
 		switch t {
 		case "TR":
-			rows = append(rows, d.collectRowCells(elem, roleMap))
+			rows = append(rows, collectRowCells(d, elem, roleMap))
 			return
 		case "THead", "TBody", "TFoot":
-			for _, kid := range d.structKids(elem) {
+			for _, kid := range structKids(d, elem) {
 				visit(kid, false)
 			}
 			return
 		}
-		for _, kid := range d.structKids(elem) {
+		for _, kid := range structKids(d, elem) {
 			visit(kid, false)
 		}
 	}
@@ -128,26 +128,26 @@ func (d *Document) collectTableRows(table *Dictionary, roleMap *Dictionary) []ta
 }
 
 // collectRowCells returns the TH/TD cells of a TR with their spans.
-func (d *Document) collectRowCells(tr *Dictionary, roleMap *Dictionary) tableRow {
+func collectRowCells(d *Document, tr *Dictionary, roleMap *Dictionary) tableRow {
 	var cells tableRow
-	for _, kid := range d.structKids(tr) {
+	for _, kid := range structKids(d, tr) {
 		c := d.ResolveDict(kid)
 		if c == nil {
 			continue
 		}
-		t := d.standardStructType(c, roleMap)
+		t := standardStructType(d, c, roleMap)
 		if t != "TH" && t != "TD" {
 			continue
 		}
-		cells = append(cells, tableCell{rowSpan: d.cellSpan(c, "RowSpan"), colSpan: d.cellSpan(c, "ColSpan")})
+		cells = append(cells, tableCell{rowSpan: cellSpan(d, c, "RowSpan"), colSpan: cellSpan(d, c, "ColSpan")})
 	}
 	return cells
 }
 
 // cellSpan reads a RowSpan/ColSpan value from a cell's /A table attribute,
 // defaulting to 1. A non-positive value is treated as 1.
-func (d *Document) cellSpan(cell *Dictionary, key Name) int {
-	for _, ad := range d.tableAttrDicts(cell) {
+func cellSpan(d *Document, cell *Dictionary, key Name) int {
+	for _, ad := range tableAttrDicts(d, cell) {
 		if n, ok := d.Resolve(ad.Get(key)).(Integer); ok {
 			if n < 1 {
 				return 1
@@ -160,7 +160,7 @@ func (d *Document) cellSpan(cell *Dictionary, key Name) int {
 
 // tableAttrDicts returns a cell's attribute dictionaries whose owner (/O) is
 // Table.
-func (d *Document) tableAttrDicts(cell *Dictionary) []*Dictionary {
+func tableAttrDicts(d *Document, cell *Dictionary) []*Dictionary {
 	var out []*Dictionary
 	switch a := d.Resolve(cell.Get("A")).(type) {
 	case *Dictionary:

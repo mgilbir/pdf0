@@ -14,20 +14,20 @@ func TestUAOptionalContent(t *testing.T) {
 	}
 	// No /Name -> flagged.
 	noName := &Dictionary{}
-	if len(doc.checkUAOptionalContent(mk(noName))) == 0 {
+	if len(checkUAOptionalContent(doc, mk(noName))) == 0 {
 		t.Error("OC config without /Name not flagged")
 	}
 	// /AS present -> flagged.
 	withAS := &Dictionary{}
 	withAS.Set("Name", String{Value: []byte("Default")})
 	withAS.Set("AS", Array{})
-	if len(doc.checkUAOptionalContent(mk(withAS))) == 0 {
+	if len(checkUAOptionalContent(doc, mk(withAS))) == 0 {
 		t.Error("OC config with /AS not flagged")
 	}
 	// Proper config -> clean.
 	good := &Dictionary{}
 	good.Set("Name", String{Value: []byte("Default")})
-	if v := doc.checkUAOptionalContent(mk(good)); len(v) != 0 {
+	if v := checkUAOptionalContent(doc, mk(good)); len(v) != 0 {
 		t.Errorf("well-formed OC config flagged: %v", v)
 	}
 }
@@ -48,13 +48,13 @@ func TestUAEmbeddedFiles(t *testing.T) {
 		doc.Objects[5] = &IndirectObject{Number: 5, Value: fs}
 		return doc
 	}
-	if len(mk(false, false).checkUAEmbeddedFiles()) == 0 {
+	if len(checkUAEmbeddedFiles(mk(false, false))) == 0 {
 		t.Error("embedded filespec missing /F and /UF not flagged")
 	}
-	if len(mk(true, false).checkUAEmbeddedFiles()) == 0 {
+	if len(checkUAEmbeddedFiles(mk(true, false))) == 0 {
 		t.Error("embedded filespec missing /UF not flagged")
 	}
-	if v := mk(true, true).checkUAEmbeddedFiles(); len(v) != 0 {
+	if v := checkUAEmbeddedFiles(mk(true, true)); len(v) != 0 {
 		t.Errorf("embedded filespec with /F and /UF flagged: %v", v)
 	}
 }
