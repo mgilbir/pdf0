@@ -1006,33 +1006,12 @@ func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects
 // Returns the object unchanged if it is not an IndirectRef, and nil if any
 // target in the chain does not exist or the chain cycles.
 func (d *Document) Resolve(obj Object) Object {
-	// A bounded hop count doubles as the cycle guard without allocating a
-	// visited set on this hot path; real files chain a handful of hops at
-	// most, so exceeding the bound means a reference cycle or garbage.
-	for hops := 0; hops < 64; hops++ {
-		ref, ok := obj.(IndirectRef)
-		if !ok {
-			return obj
-		}
-		iobj, exists := d.Objects[ref.Number]
-		if !exists {
-			return nil
-		}
-		obj = iobj.Value
-	}
-	return nil
+	return d.graph().Resolve(obj)
 }
 
 // ResolveDict resolves obj and type-asserts to *Dictionary.
 func (d *Document) ResolveDict(obj Object) *Dictionary {
-	v := d.Resolve(obj)
-	if v == nil {
-		return nil
-	}
-	if dict, ok := v.(*Dictionary); ok {
-		return dict
-	}
-	return nil
+	return d.graph().ResolveDict(obj)
 }
 
 // precedingXrefKeyword returns the offset of the last standalone "xref"
@@ -1096,4 +1075,31 @@ func xrefLooksValid(data []byte, off int64) bool {
 		return bytes.Contains(window, []byte("obj"))
 	}
 	return false
+}
+
+// graph returns the object-graph half of the view: what resolving a reference
+// needs, and nothing else.
+//
+// Resolve is the hottest path in the package — a validation run makes hundreds
+// of thousands of calls — and the full view resolves the limits on the way,
+// which fills eleven fields. None of that is read while chasing a reference, so
+// graph exists to keep it off that path while still leaving one implementation
+// of the walk itself.
+func (d *Document) graph() core.View {
+	return core.View{Objects: d.Objects, Trailer: &d.Trailer}
+}
+
+// view returns the read-only view of this document that the packages below the
+// root package take in place of a *Document. It is built per call rather than
+// cached: a Document may be mutated between operations, and a stale view would
+// resolve against the object map it was built from.
+//
+// The run state travels with it when there is one, so a trip a subsystem records
+// through the view lands in the same recorder the validators report from.
+func (d *Document) view() core.View {
+	v := core.View{Version: d.Version, Objects: d.Objects, Trailer: &d.Trailer, Limits: d.lim(), Cancel: d.canceler()}
+	if d.valCache != nil {
+		v.Run = d.valCache.run.shared
+	}
+	return v
 }

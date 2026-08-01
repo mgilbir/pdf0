@@ -178,14 +178,16 @@ func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
 // The three (now seven) call sites that start a run share it so a new per-run
 // field cannot be initialized in one and forgotten in another.
 func newValidationCache(cancel core.Canceler) *validationCache {
+	rec := &core.Recorder{}
 	return &validationCache{
 		pdfa: pdfaCache{
 			pages:   make(map[int][]pageInfo),
 			content: make(map[*Stream][]byte),
 		},
 		run: runState{
-			limits: &core.Recorder{},
+			limits: rec,
 			cancel: cancel,
+			shared: &core.Run{Trips: rec},
 		},
 	}
 }

@@ -405,6 +405,14 @@ type runState struct {
 	// exactly one run — rather than on the caller's Document, which outlives the
 	// operation. See cancel.go.
 	cancel core.Canceler
+
+	// shared is the run state handed to the packages below this one, through
+	// Document.view. It is built once per run and reused, not rebuilt per view:
+	// a View is copied by value and shares its Run pointer, so a fresh Run per
+	// call would fork the memo tables it will come to hold. That failure is
+	// invisible in the output — the answers stay right — and shows up only as
+	// repeated work.
+	shared *core.Run
 }
 
 // --- File structure checks (6.1) ---
@@ -561,11 +569,7 @@ func checkNoDataAfterEOF(rawData []byte, level PDFALevel) []ValidationError {
 // --- Catalog checks ---
 
 func getCatalog(doc *Document) *Dictionary {
-	rootRef := doc.Trailer.Get("Root")
-	if rootRef == nil {
-		return nil
-	}
-	return doc.ResolveDict(rootRef)
+	return doc.graph().Catalog()
 }
 
 // Rule 6.7.2.1-1: Catalog requires Metadata stream with Type/Metadata, Subtype/XML, no Filter.
