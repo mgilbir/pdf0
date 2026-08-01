@@ -55,7 +55,7 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 		if i > 0 {
 			b.WriteByte('\f')
 		}
-		b.WriteString(d.extractPageText(cancel, pg.dict))
+		b.WriteString(d.extractPageText(cancel, pg.Dict))
 	}
 	return b.String(), cancel.StopErr("extracting text")
 }

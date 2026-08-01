@@ -180,14 +180,10 @@ func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
 func newValidationCache(cancel core.Canceler) *validationCache {
 	rec := &core.Recorder{}
 	return &validationCache{
-		pdfa: pdfaCache{
-			pages:   make(map[int][]pageInfo),
-			content: make(map[*Stream][]byte),
-		},
 		run: runState{
 			limits: rec,
 			cancel: cancel,
-			shared: &core.Run{Trips: rec},
+			shared: core.NewRun(rec),
 		},
 	}
 }

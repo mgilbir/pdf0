@@ -729,8 +729,8 @@ func collectContentStreamData(doc *Document) map[int][]byte {
 			if doc.stopped() {
 				return out
 			}
-			if data := getContentStreamData(doc, page.dict.Get("Contents")); data != nil {
-				out[page.objNum] = data
+			if data := getContentStreamData(doc, page.Dict.Get("Contents")); data != nil {
+				out[page.ObjNum] = data
 			}
 		}
 	}

@@ -1,6 +1,10 @@
 package core
 
-import "github.com/mgilbir/pdf0/object"
+import (
+	"strconv"
+
+	"github.com/mgilbir/pdf0/object"
+)
 
 // View is what a subsystem needs in order to read a document: the object graph,
 // enough of the file's identity to judge it, the budget it must stay inside, and
@@ -47,6 +51,36 @@ type View struct {
 type Run struct {
 	// Trips collects the guard trips of this operation. May be nil.
 	Trips *Recorder
+
+	// pages memoizes the flattened page tree per page-tree node, and content the
+	// decoded bytes of each content stream, with contentBytes charging the
+	// aggregate decode budget across the whole operation.
+	//
+	// These are document services rather than any one subsystem's: the page walk
+	// and the decoded content feed PDF/A, PDF/UA and image extraction alike, and
+	// the aggregate budget only means anything if all of them charge the same
+	// counter.
+	pages        map[int][]PageInfo
+	content      map[*object.Stream][]byte
+	contentBytes int64
+}
+
+// NewRun builds the per-operation state. The memo tables are made here so that
+// every entry point that starts an operation gets them, rather than each having
+// to remember.
+func NewRun(trips *Recorder) *Run {
+	return &Run{
+		Trips:   trips,
+		pages:   make(map[int][]PageInfo),
+		content: make(map[*object.Stream][]byte),
+	}
+}
+
+// PageInfo is one page of the flattened page tree: the page dictionary and the
+// object number it was reached through (0 for a direct dictionary).
+type PageInfo struct {
+	Dict   *object.Dictionary
+	ObjNum int
 }
 
 // Resolve follows an indirect reference to the object it names, chasing
@@ -107,4 +141,163 @@ func (v View) Note(guard, detail string, obj int) {
 		return
 	}
 	v.Run.Trips.Note(guard, detail, obj)
+}
+
+// Guard identifiers for the two budgets this file charges. The rest live with
+// the guards that raise them, in the root package; these two are here because
+// Content is what trips them.
+const (
+	GuardContentStream = "content-stream-size"   // Limits.ContentStreamBytes, WithMaxContentStreamBytes
+	GuardContentTotal  = "decoded-content-total" // Limits.DecodedContentBytes, WithMaxDecodedContentBytes
+)
+
+// Pages returns the page tree under ref flattened into document order,
+// memoized per page-tree node for the operation.
+//
+// A page tree is a graph the file controls, so the walk carries a visited set:
+// a /Kids cycle would otherwise recurse until the stack ran out.
+func (v View) Pages(ref object.Object) []PageInfo {
+	iref, isRef := ref.(object.IndirectRef)
+	if v.Run != nil && isRef {
+		if pages, ok := v.Run.pages[iref.Number]; ok {
+			return pages
+		}
+	}
+	var pages []PageInfo
+	v.collectPages(ref, &pages, make(map[int]bool))
+	if v.Run != nil && isRef {
+		v.Run.pages[iref.Number] = pages
+	}
+	return pages
+}
+
+func (v View) collectPages(ref object.Object, pages *[]PageInfo, seen map[int]bool) {
+	objNum := 0
+	if iref, ok := ref.(object.IndirectRef); ok {
+		objNum = iref.Number
+		if seen[objNum] {
+			return // cycle in the page tree
+		}
+		seen[objNum] = true
+	}
+	node := v.ResolveDict(ref)
+	if node == nil {
+		return
+	}
+	switch nodeType, _ := node.Get("Type").(object.Name); nodeType {
+	case "Pages":
+		if kids, ok := v.Resolve(node.Get("Kids")).(object.Array); ok {
+			for _, kid := range kids {
+				v.collectPages(kid, pages, seen)
+			}
+		}
+	case "Page":
+		*pages = append(*pages, PageInfo{Dict: node, ObjNum: objNum})
+	}
+}
+
+// Resources returns a page's resource dictionary, following the /Parent chain
+// when the page does not carry one itself.
+func (v View) Resources(page *object.Dictionary) *object.Dictionary {
+	return v.ResolveDict(v.InheritedPageAttr(page, "Resources"))
+}
+
+// InheritedPageAttr looks up an inheritable page attribute — /Resources,
+// /MediaBox, /CropBox, /Rotate — walking up the /Parent chain when the page
+// does not define it. Pages routinely inherit these from their Pages node,
+// which a direct Get misses entirely.
+func (v View) InheritedPageAttr(page *object.Dictionary, key object.Name) object.Object {
+	node := page
+	for hops := 0; node != nil && hops < 64; hops++ {
+		if got := node.Get(key); got != nil {
+			return got
+		}
+		node = v.ResolveDict(node.Get("Parent"))
+	}
+	return nil
+}
+
+// Content returns a content stream's decoded bytes, memoized for the operation
+// and charged against two budgets.
+//
+// A stream over the per-stream scanning limit, and every stream once the
+// aggregate has been spent, decode to nil — and the nil is cached, so the
+// decision is stable across the several checks that walk the same page rather
+// than being re-taken as the budget moves. Both refusals are reported, because
+// a check that sees nothing here must not conclude the file contains nothing.
+func (v View) Content(stream *object.Stream) []byte {
+	if v.Run != nil {
+		if data, ok := v.Run.content[stream]; ok {
+			return data
+		}
+		if v.Run.contentBytes >= v.Limits.DecodedContentBytes {
+			v.Run.content[stream] = nil
+			v.Note(GuardContentTotal, "this run has already decoded "+itoa(v.Run.contentBytes)+" bytes of content, reaching the "+LimitBound(v.Limits.DecodedContentBytes, DefaultMaxDecodedContentBytes)+"-byte budget for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", 0)
+			return nil
+		}
+	}
+	var data []byte
+	decoded, err := DecodeStreamData(v.Cancel, stream, v.Limits)
+	switch {
+	case err == nil && len(decoded) <= v.Limits.ContentStreamBytes:
+		data = decoded
+	case err == nil:
+		v.Note(GuardContentStream, "a content stream decodes to "+itoa(int64(len(decoded)))+" bytes, over the "+LimitBound(int64(v.Limits.ContentStreamBytes), DefaultMaxContentStreamBytes)+"-byte scanning limit; it was not scanned", 0)
+	}
+	if v.Run != nil {
+		v.Run.content[stream] = data
+		v.Run.contentBytes += int64(len(data))
+	}
+	return data
+}
+
+// StreamFilters returns a stream's /Filter chain as a list of names, whether it
+// was written as a single name or an array.
+func (v View) StreamFilters(st *object.Stream) []object.Name {
+	switch f := v.Resolve(st.Dict.Get("Filter")).(type) {
+	case object.Name:
+		return []object.Name{f}
+	case object.Array:
+		var out []object.Name
+		for _, e := range f {
+			if n, ok := v.Resolve(e).(object.Name); ok {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// MetadataContent decodes a metadata stream, sharing Content's memo but exempt
+// from the aggregate budget.
+//
+// The exemption is deliberate. /Metadata is the document's own identification,
+// and a checker that cannot read it must conclude nothing rather than "this
+// file is unidentified". Under the shared budget a flate-bombed document — whose
+// page content exhausts the aggregate before the identification checks run — had
+// its XMP read as empty, and the rules then reported a missing pdfaid:part, a
+// missing dc:title and a non-compliant embedded file against a document that
+// declares all three.
+//
+// It is still bounded per stream by the scanning limit, and the bytes are still
+// charged, so the exemption does not unbound the operation: it only stops one
+// stream being refused because of what other streams already cost.
+func (v View) MetadataContent(stream *object.Stream) []byte {
+	if v.Run != nil {
+		if data, ok := v.Run.content[stream]; ok {
+			return data
+		}
+	}
+	var data []byte
+	if decoded, err := DecodeStreamData(v.Cancel, stream, v.Limits); err == nil && len(decoded) <= v.Limits.ContentStreamBytes {
+		data = decoded
+	}
+	if v.Run != nil {
+		v.Run.content[stream] = data
+		v.Run.contentBytes += int64(len(data))
+	}
+	return data
 }

@@ -189,14 +189,14 @@ func pdfxCheckNoTransparency(doc *Document, add func(rule, msg string, obj int))
 		return
 	}
 	for _, page := range collectPages(doc, cat.Get("Pages")) {
-		if grp := doc.ResolveDict(page.dict.Get("Group")); grp != nil {
+		if grp := doc.ResolveDict(page.Dict.Get("Group")); grp != nil {
 			if s, _ := grp.Get("S").(Name); s == "Transparency" {
-				add("transparency", "a page transparency group is not permitted in this PDF/X level", page.objNum)
+				add("transparency", "a page transparency group is not permitted in this PDF/X level", page.ObjNum)
 				continue
 			}
 		}
-		if pageUsesTransparency(doc, page.dict) {
-			add("transparency", "transparency (soft mask, blend mode or alpha) is not permitted in this PDF/X level", page.objNum)
+		if pageUsesTransparency(doc, page.Dict) {
+			add("transparency", "transparency (soft mask, blend mode or alpha) is not permitted in this PDF/X level", page.ObjNum)
 		}
 	}
 }
@@ -296,16 +296,16 @@ func pdfxCheckDeviceColor(doc *Document, add func(rule, msg string, obj int)) {
 	oiRGB, oiCMYK, oiGray := pdfxOutputIntentCoverage(doc, cat)
 	sc := newDevColorScanner(doc)
 	for _, page := range collectPages(doc, cat.Get("Pages")) {
-		u := sc.pageDeviceUse(page.dict)
-		groupRGB, groupCMYK, _ := getGroupCSCoverage(doc, page.dict)
+		u := sc.pageDeviceUse(page.Dict)
+		groupRGB, groupCMYK, _ := getGroupCSCoverage(doc, page.Dict)
 		if u.rgb && !oiRGB && !groupRGB {
-			add("color", "DeviceRGB used without a matching OutputIntent, DefaultRGB or covering group colour space", page.objNum)
+			add("color", "DeviceRGB used without a matching OutputIntent, DefaultRGB or covering group colour space", page.ObjNum)
 		}
 		if u.cmyk && !oiCMYK && !groupCMYK {
-			add("color", "DeviceCMYK used without a matching OutputIntent, DefaultCMYK or covering group colour space", page.objNum)
+			add("color", "DeviceCMYK used without a matching OutputIntent, DefaultCMYK or covering group colour space", page.ObjNum)
 		}
 		if u.gray && !oiRGB && !oiCMYK && !oiGray {
-			add("color", "DeviceGray used without any OutputIntent or DefaultGray", page.objNum)
+			add("color", "DeviceGray used without any OutputIntent or DefaultGray", page.ObjNum)
 		}
 	}
 }
@@ -459,32 +459,32 @@ func pdfxCheckTrapped(doc *Document, add func(rule, msg string, obj int)) {
 // within the MediaBox.
 func pdfxCheckPageBoxes(doc *Document, add func(rule, msg string, obj int)) {
 	for _, pg := range collectPages(doc, doc.catalogPages()) {
-		media, hasMedia := pdfxRect(doc, inheritedPageAttr(doc, pg.dict, "MediaBox"))
+		media, hasMedia := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "MediaBox"))
 		if !hasMedia {
-			add("page-box", "page has no MediaBox", pg.objNum)
+			add("page-box", "page has no MediaBox", pg.ObjNum)
 			continue
 		}
-		trim, hasTrim := pdfxRect(doc, inheritedPageAttr(doc, pg.dict, "TrimBox"))
-		art, hasArt := pdfxRect(doc, inheritedPageAttr(doc, pg.dict, "ArtBox"))
+		trim, hasTrim := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "TrimBox"))
+		art, hasArt := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "ArtBox"))
 		switch {
 		case hasTrim && hasArt:
-			add("page-box", "page has both TrimBox and ArtBox; exactly one is permitted", pg.objNum)
+			add("page-box", "page has both TrimBox and ArtBox; exactly one is permitted", pg.ObjNum)
 		case !hasTrim && !hasArt:
-			add("page-box", "page has neither TrimBox nor ArtBox", pg.objNum)
+			add("page-box", "page has neither TrimBox nor ArtBox", pg.ObjNum)
 		}
 		finished, hasFinished := trim, hasTrim
 		if hasArt {
 			finished, hasFinished = art, true
 		}
 		if hasFinished && !rectContains(media, finished) {
-			add("page-box", "page TrimBox/ArtBox is not within the MediaBox", pg.objNum)
+			add("page-box", "page TrimBox/ArtBox is not within the MediaBox", pg.ObjNum)
 		}
-		if bleed, ok := pdfxRect(doc, inheritedPageAttr(doc, pg.dict, "BleedBox")); ok {
+		if bleed, ok := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "BleedBox")); ok {
 			if !rectContains(media, bleed) {
-				add("page-box", "page BleedBox is not within the MediaBox", pg.objNum)
+				add("page-box", "page BleedBox is not within the MediaBox", pg.ObjNum)
 			}
 			if hasFinished && !rectContains(bleed, finished) {
-				add("page-box", "page BleedBox does not contain the TrimBox/ArtBox", pg.objNum)
+				add("page-box", "page BleedBox does not contain the TrimBox/ArtBox", pg.ObjNum)
 			}
 		}
 	}
@@ -536,7 +536,7 @@ func pdfxCheckFontsEmbedded(doc *Document, add func(rule, msg string, obj int)) 
 		}
 	}
 	for _, pg := range collectPages(doc, doc.catalogPages()) {
-		scan(resolveResources(doc, pg.dict), 0)
+		scan(resolveResources(doc, pg.Dict), 0)
 	}
 }
 

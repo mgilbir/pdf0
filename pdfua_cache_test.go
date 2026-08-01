@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 )
 
@@ -36,7 +37,7 @@ func TestFontUsageCacheMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	uncached := collectFontTextUsage(doc)
-	doc.valCache = &validationCache{pdfa: pdfaCache{pages: map[int][]pageInfo{}, content: map[*Stream][]byte{}}}
+	doc.valCache = newValidationCache(core.Canceler{})
 	first := collectFontTextUsage(doc)
 	second := collectFontTextUsage(doc)
 	if len(uncached) != len(first) || len(first) != len(second) {

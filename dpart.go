@@ -118,7 +118,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 	pages := collectPages(doc, doc.catalogPages())
 	pageIndex := make(map[int]int, len(pages))
 	for i, pg := range pages {
-		pageIndex[pg.objNum] = i
+		pageIndex[pg.ObjNum] = i
 	}
 
 	type leaf struct {
@@ -241,9 +241,9 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 	for i, c := range covered {
 		switch {
 		case c == 0:
-			add("14.12.2", "page is not included in any DPart leaf range", pages[i].objNum)
+			add("14.12.2", "page is not included in any DPart leaf range", pages[i].ObjNum)
 		case c > 1:
-			add("14.12.2", "page is included in more than one DPart leaf range", pages[i].objNum)
+			add("14.12.2", "page is included in more than one DPart leaf range", pages[i].ObjNum)
 		}
 	}
 
@@ -254,8 +254,8 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 			continue
 		}
 		for i := lf.startIdx; i <= lf.endIdx && i < len(pages); i++ {
-			if bp := pages[i].dict.Get("DPart"); bp != nil && refNum(bp) != lf.objNum {
-				add("14.12.3", "page /DPart does not reference the DPart leaf whose range contains it", pages[i].objNum)
+			if bp := pages[i].Dict.Get("DPart"); bp != nil && refNum(bp) != lf.objNum {
+				add("14.12.3", "page /DPart does not reference the DPart leaf whose range contains it", pages[i].ObjNum)
 			}
 		}
 	}

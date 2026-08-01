@@ -46,10 +46,10 @@ func checkProhibitedCatalogEntries(doc *Document, level PDFALevel) []ValidationE
 		}
 	}
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		if page.dict.Get("PresSteps") != nil {
+		if page.Dict.Get("PresSteps") != nil {
 			errs = append(errs, ValidationError{Rule: "6.11", Level: level,
 				Message: "page dictionary must not contain /PresSteps (presentation steps)",
-				Object:  page.objNum})
+				Object:  page.ObjNum})
 		}
 	}
 	return errs
@@ -248,7 +248,7 @@ func checkA4TriggerEvents(doc *Document, level PDFALevel) []ValidationError {
 	}
 	report(doc.ResolveDict(catalog.Get("AA")), 0)
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		report(doc.ResolveDict(page.dict.Get("AA")), page.objNum)
+		report(doc.ResolveDict(page.Dict.Get("AA")), page.ObjNum)
 	}
 	for num, iobj := range doc.Objects {
 		if d, ok := iobj.Value.(*Dictionary); ok && isAnnotation(d) {
@@ -456,8 +456,8 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 		}
 	}
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
-		walk(page.dict, data, key)
+		data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
+		walk(page.Dict, data, key)
 	}
 	return out
 }
@@ -667,7 +667,7 @@ func checkInheritedPageXObject(doc *Document, level PDFALevel) []ValidationError
 	}
 	var errs []ValidationError
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
+		data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
 		if data == nil {
 			continue
 		}
@@ -676,7 +676,7 @@ func checkInheritedPageXObject(doc *Document, level PDFALevel) []ValidationError
 			continue
 		}
 		var ownXObj *Dictionary
-		if own := doc.ResolveDict(page.dict.Get("Resources")); own != nil {
+		if own := doc.ResolveDict(page.Dict.Get("Resources")); own != nil {
 			ownXObj = doc.ResolveDict(own.Get("XObject"))
 		}
 		reported := false
@@ -686,7 +686,7 @@ func checkInheritedPageXObject(doc *Document, level PDFALevel) []ValidationError
 					reported = true
 					errs = append(errs, ValidationError{Rule: "6.2.2", Level: level,
 						Message: "page content draws an XObject that is inherited from a Pages node rather than present in the page's own resource dictionary",
-						Object:  page.objNum})
+						Object:  page.ObjNum})
 				}
 			}
 		}

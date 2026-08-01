@@ -317,12 +317,12 @@ func walkImagesCancel(d *Document, cancel core.Canceler, yield func(ExtractedIma
 		if cancel.Stopped() {
 			return
 		}
-		if !collectImagesFrom(d, resolveResources(d, pg.dict), seen, 0, yield) {
+		if !collectImagesFrom(d, resolveResources(d, pg.Dict), seen, 0, yield) {
 			return
 		}
 		// Annotation appearance streams (/Annots -> /AP) are form XObjects with
 		// their own resources, a common home for images (stamps, form fields).
-		if annots, ok := d.Resolve(pg.dict.Get("Annots")).(Array); ok {
+		if annots, ok := d.Resolve(pg.Dict.Get("Annots")).(Array); ok {
 			for _, a := range annots {
 				ad := d.ResolveDict(a)
 				if ad == nil {

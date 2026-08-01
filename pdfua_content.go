@@ -24,9 +24,9 @@ import (
 func checkUARealContent(d *Document, cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	for _, pg := range collectPages(d, cat.Get("Pages")) {
-		data, key := d.contentBytesAndKey(pg.dict.Get("Contents"))
+		data, key := d.contentBytesAndKey(pg.Dict.Get("Contents"))
 		for _, msg := range contentFacts(d, data, key).realMsgs {
-			v = append(v, UAViolation{"7.1", msg, pg.objNum})
+			v = append(v, UAViolation{"7.1", msg, pg.ObjNum})
 		}
 	}
 	return v
@@ -202,8 +202,8 @@ func checkUAFormXObjectMCID(d *Document) []UAViolation {
 	}
 	// Page content sources.
 	for _, pg := range collectPages(d, d.catalogPages()) {
-		data, key := d.contentBytesAndKey(pg.dict.Get("Contents"))
-		countDo(data, key, d.ResolveDict(pg.dict.Get("Resources")))
+		data, key := d.contentBytesAndKey(pg.Dict.Get("Contents"))
+		countDo(data, key, d.ResolveDict(pg.Dict.Get("Resources")))
 	}
 	// Form XObject content sources (a form may invoke another form).
 	for _, iobj := range d.Objects {

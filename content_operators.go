@@ -91,8 +91,8 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 	// corpus passes an UnknownOperator in an uninvoked form).
 	seenContainer := map[*Dictionary]bool{}
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
-		walkExecutedContent(doc, page.dict, data, key, page.objNum, seenContainer, add)
+		data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
+		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, seenContainer, add)
 	}
 
 	// Annotation appearance streams (their /AP /N) are executed content too:
@@ -419,12 +419,12 @@ func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
 		// PDF/A-4 permits page-level output intents; prefer the page's own.
 		oiProfile := catalogOI
-		if p := pdfaOutputIntentProfile(doc, page.dict); p != nil {
+		if p := pdfaOutputIntentProfile(doc, page.Dict); p != nil {
 			oiProfile = p
 		}
-		data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
-		blend := groupBlendProfile(doc, page.dict)
-		walkICCIdentity(doc, page.dict, data, key, page.objNum, oiProfile, blend, seenC, add)
+		data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
+		blend := groupBlendProfile(doc, page.Dict)
+		walkICCIdentity(doc, page.Dict, data, key, page.ObjNum, oiProfile, blend, seenC, add)
 	}
 	return errs
 }

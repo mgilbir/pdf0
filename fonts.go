@@ -236,8 +236,8 @@ func collectFontTextUsage(doc *Document) map[*Dictionary]*fontTextUsage {
 		seen := make(map[*Dictionary]bool)
 		applied := make(map[sfKey]bool)
 		for _, page := range collectPages(doc, catalog.Get("Pages")) {
-			data, key := doc.contentBytesAndKey(page.dict.Get("Contents"))
-			collectTextFromContainer(doc, page.dict, data, key, usage, seen, applied)
+			data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
+			collectTextFromContainer(doc, page.Dict, data, key, usage, seen, applied)
 		}
 	}
 	if c := doc.valCache; c != nil {

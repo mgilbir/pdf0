@@ -264,12 +264,12 @@ var standardStructTypes = map[Name]bool{
 func checkUATabOrder(d *Document) []UAViolation {
 	var v []UAViolation
 	for _, pg := range collectPages(d, d.catalogPages()) {
-		annots, _ := d.Resolve(pg.dict.Get("Annots")).(Array)
+		annots, _ := d.Resolve(pg.Dict.Get("Annots")).(Array)
 		if len(annots) == 0 {
 			continue
 		}
-		if tabs, _ := d.Resolve(pg.dict.Get("Tabs")).(Name); tabs != "S" {
-			v = append(v, UAViolation{"7.18.3", "page with annotations must set /Tabs /S (structure tab order)", pg.objNum})
+		if tabs, _ := d.Resolve(pg.Dict.Get("Tabs")).(Name); tabs != "S" {
+			v = append(v, UAViolation{"7.18.3", "page with annotations must set /Tabs /S (structure tab order)", pg.ObjNum})
 		}
 	}
 	return v

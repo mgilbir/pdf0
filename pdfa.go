@@ -354,9 +354,6 @@ type validationCache struct {
 // pdfaCache is the PDF/A engine's memoized traversals: the page tree, decoded
 // content streams and the executed-content walk's per-stream skeletons.
 type pdfaCache struct {
-	pages           map[int][]pageInfo // page-tree object number -> pages
-	content         map[*Stream][]byte // decoded content streams
-	contentBytes    int64              // total bytes retained in content (bounded, see decodeContentStream)
 	directAnnots    []annotOccurrence
 	hasDirectAnnots bool
 
@@ -709,7 +706,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 	if level == PDFA4 {
 		pages := collectPages(doc, catalog.Get("Pages"))
 		for _, page := range pages {
-			pageOIRef := page.dict.Get("OutputIntents")
+			pageOIRef := page.Dict.Get("OutputIntents")
 			if pageOIRef == nil {
 				continue
 			}
@@ -729,7 +726,7 @@ func checkOutputIntents(doc *Document, level PDFALevel) []ValidationError {
 						Rule:    colourClause("outputIntent", level),
 						Level:   level,
 						Message: fmt.Sprintf("page OutputIntents[%d] must have /S /GTS_PDFA1, got /%s", j, string(sName)),
-						Object:  page.objNum,
+						Object:  page.ObjNum,
 					})
 				}
 			}
@@ -1034,12 +1031,12 @@ func checkNoCatalogAA(doc *Document, level PDFALevel) []ValidationError {
 	// Page dictionaries are equally forbidden from carrying /AA at 1b/2b/3b
 	// (ISO 19005-2, 6.6.2); previously only the catalog was checked.
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		if page.dict.Get("AA") != nil {
+		if page.Dict.Get("AA") != nil {
 			errs = append(errs, ValidationError{
 				Rule:    annotActionClause("catalogAA", level),
 				Level:   level,
 				Message: "page dictionary must not contain /AA (additional actions)",
-				Object:  page.objNum,
+				Object:  page.ObjNum,
 			})
 		}
 	}
@@ -1598,13 +1595,13 @@ func collectDirectAnnotations(doc *Document) []annotOccurrence {
 	}
 	var out []annotOccurrence
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		annots, ok := doc.Resolve(page.dict.Get("Annots")).(Array)
+		annots, ok := doc.Resolve(page.Dict.Get("Annots")).(Array)
 		if !ok {
 			continue
 		}
 		for _, el := range annots {
 			if dict, ok := el.(*Dictionary); ok {
-				out = append(out, annotOccurrence{dict: dict, num: page.objNum})
+				out = append(out, annotOccurrence{dict: dict, num: page.ObjNum})
 			}
 		}
 	}
@@ -2391,7 +2388,7 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 	if catalog != nil {
 		pages := collectPages(doc, catalog.Get("Pages"))
 		for _, page := range pages {
-			groupRef := page.dict.Get("Group")
+			groupRef := page.Dict.Get("Group")
 			if groupRef == nil {
 				continue
 			}
@@ -2405,7 +2402,7 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 					Rule:    "6.4",
 					Level:   level,
 					Message: "page must not have /Group with /S /Transparency (PDF/A-1b forbids transparency)",
-					Object:  page.objNum,
+					Object:  page.ObjNum,
 				})
 			}
 		}
@@ -2418,7 +2415,7 @@ func checkNoTransparency(doc *Document, level PDFALevel) []ValidationError {
 	if catalog != nil {
 		seen := map[*Dictionary]bool{}
 		for _, page := range collectPages(doc, catalog.Get("Pages")) {
-			find1bTransparencyXObjects(doc, page.dict, level, seen, &errs)
+			find1bTransparencyXObjects(doc, page.Dict, level, seen, &errs)
 		}
 	}
 
@@ -3296,21 +3293,21 @@ func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError
 
 	pages := collectPages(doc, pagesRef)
 	for _, page := range pages {
-		if !pageUsesTransparency(doc, page.dict) {
+		if !pageUsesTransparency(doc, page.Dict) {
 			continue
 		}
 
-		groupRef := page.dict.Get("Group")
+		groupRef := page.Dict.Get("Group")
 		if groupRef == nil {
 			// Check if the requirement can be relaxed
-			if transparencyGroupNotRequired(doc, catalog, page.dict, level) {
+			if transparencyGroupNotRequired(doc, catalog, page.Dict, level) {
 				continue
 			}
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
 				Level:   level,
 				Message: "page using transparency must have /Group with /S /Transparency",
-				Object:  page.objNum,
+				Object:  page.ObjNum,
 			})
 			continue
 		}
@@ -3325,18 +3322,18 @@ func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError
 				Rule:    "6.2.4",
 				Level:   level,
 				Message: "page /Group must have /S /Transparency",
-				Object:  page.objNum,
+				Object:  page.ObjNum,
 			})
 			continue
 		}
 		if groupDict.Get("CS") == nil {
 			// For PDF/A-4, OutputIntents can provide the blending CS implicitly
-			if !transparencyGroupNotRequired(doc, catalog, page.dict, level) {
+			if !transparencyGroupNotRequired(doc, catalog, page.Dict, level) {
 				errs = append(errs, ValidationError{
 					Rule:    "6.2.4",
 					Level:   level,
 					Message: "page transparency group must have /CS (color space)",
-					Object:  page.objNum,
+					Object:  page.ObjNum,
 				})
 			}
 		}
@@ -3717,51 +3714,12 @@ func extGStateUsesTransparency(doc *Document, res *Dictionary) bool {
 	return false
 }
 
-type pageInfo struct {
-	dict   *Dictionary
-	objNum int
-}
+// PageInfo is the flattened page-tree entry, defined in internal/core because
+// the page walk that produces it is a document service rather than a PDF/A one.
+type PageInfo = core.PageInfo
 
-func collectPages(doc *Document, pageTreeRef Object) []pageInfo {
-	c := doc.valCache
-	ref, isRef := pageTreeRef.(IndirectRef)
-	if c != nil && isRef {
-		if pages, ok := c.pdfa.pages[ref.Number]; ok {
-			return pages
-		}
-	}
-	var pages []pageInfo
-	collectPagesRecursive(doc, pageTreeRef, &pages, make(map[int]bool))
-	if c != nil && isRef {
-		c.pdfa.pages[ref.Number] = pages
-	}
-	return pages
-}
-
-func collectPagesRecursive(doc *Document, ref Object, pages *[]pageInfo, seen map[int]bool) {
-	objNum := 0
-	if iref, ok := ref.(IndirectRef); ok {
-		objNum = iref.Number
-		if seen[objNum] {
-			return // cycle in the page tree
-		}
-		seen[objNum] = true
-	}
-	node := doc.ResolveDict(ref)
-	if node == nil {
-		return
-	}
-	nodeType, _ := node.Get("Type").(Name)
-	if nodeType == "Pages" {
-		kidsObj := doc.Resolve(node.Get("Kids"))
-		if kids, ok := kidsObj.(Array); ok {
-			for _, kid := range kids {
-				collectPagesRecursive(doc, kid, pages, seen)
-			}
-		}
-	} else if nodeType == "Page" {
-		*pages = append(*pages, pageInfo{dict: node, objNum: objNum})
-	}
+func collectPages(doc *Document, pageTreeRef Object) []PageInfo {
+	return doc.view().Pages(pageTreeRef)
 }
 
 // --- Embedded files check (MR-4) ---
@@ -4248,9 +4206,9 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 			case "MediaBox", "CropBox":
 				// Inheritable attributes: a page without its own entry
 				// takes its Pages ancestor's.
-				boxObj = doc.Resolve(inheritedPageAttr(doc, page.dict, boxKey))
+				boxObj = doc.Resolve(inheritedPageAttr(doc, page.Dict, boxKey))
 			default:
-				boxObj = doc.Resolve(page.dict.Get(boxKey))
+				boxObj = doc.Resolve(page.Dict.Get(boxKey))
 			}
 			if boxObj == nil {
 				continue
@@ -4281,7 +4239,7 @@ func checkPageSizeLimits(doc *Document, level PDFALevel, errs *[]ValidationError
 					Rule:    "6.1.13",
 					Level:   level,
 					Message: fmt.Sprintf("page %s dimensions %.0fx%.0f out of range [3, 14400]", boxKey, width, height),
-					Object:  page.objNum,
+					Object:  page.ObjNum,
 				})
 			}
 		}
@@ -4317,12 +4275,12 @@ func checkQNestingDepth(doc *Document, level PDFALevel, rule string, errs *[]Val
 		return
 	}
 	for _, page := range collectPages(doc, pagesRef) {
-		contentsRef := page.dict.Get("Contents")
+		contentsRef := page.Dict.Get("Contents")
 		if contentsRef == nil {
 			continue
 		}
 		if data := getContentStreamData(doc, contentsRef); data != nil {
-			report(data, page.objNum)
+			report(data, page.ObjNum)
 		}
 	}
 }
@@ -4399,7 +4357,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		// For PDF/A-4, also check page-level OutputIntents
 		pageRGB, pageCMYK, pageGray := hasRGBIntent, hasCMYKIntent, hasGrayIntent
 		if level == PDFA4 {
-			prgb, pcmyk, pgray := getOutputIntentCoverage(doc, page.dict)
+			prgb, pcmyk, pgray := getOutputIntentCoverage(doc, page.Dict)
 			pageRGB = pageRGB || prgb
 			pageCMYK = pageCMYK || pcmyk
 			pageGray = pageGray || pgray
@@ -4409,20 +4367,20 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		// spaces are applied inside the scan, per resource scope: a page-
 		// level DefaultCMYK does not cover DeviceCMYK inside a pattern with
 		// its own resources, and the corpus fails exactly that.
-		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page.dict)
+		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page.Dict)
 
 		// The page's transparency /Group /CS covers type-matched DeviceRGB
 		// and DeviceCMYK, but NOT DeviceGray: the corpus passes DeviceRGB
 		// under an ICCBased RGB page group yet fails DeviceGray under an
 		// ICCBased Gray one.
-		groupRGB, groupCMYK, _ := getGroupCSCoverage(doc, page.dict)
+		groupRGB, groupCMYK, _ := getGroupCSCoverage(doc, page.Dict)
 
 		if usesRGB && !pageRGB && !groupRGB {
 			errs = append(errs, ValidationError{
 				Rule:    colourClause("deviceColour", level),
 				Level:   level,
 				Message: "DeviceRGB used without matching OutputIntent or DefaultRGB",
-				Object:  page.objNum,
+				Object:  page.ObjNum,
 			})
 		}
 
@@ -4431,7 +4389,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 				Rule:    colourClause("deviceColour", level),
 				Level:   level,
 				Message: "DeviceCMYK used without matching OutputIntent or DefaultCMYK",
-				Object:  page.objNum,
+				Object:  page.ObjNum,
 			})
 		}
 
@@ -4441,7 +4399,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 				Rule:    colourClause("deviceColour", level),
 				Level:   level,
 				Message: "DeviceGray used without matching OutputIntent or DefaultGray",
-				Object:  page.objNum,
+				Object:  page.ObjNum,
 			})
 		}
 	}
@@ -4658,7 +4616,7 @@ func classifyCalibratedCS(doc *Document, csObj Object) (coversRGB, coversCMYK, c
 
 // resolveResources resolves a page's Resources dictionary.
 func resolveResources(doc *Document, page *Dictionary) *Dictionary {
-	return doc.ResolveDict(inheritedPageAttr(doc, page, "Resources"))
+	return doc.view().Resources(page)
 }
 
 // inheritedPageAttr looks up an inheritable page attribute (Resources,
@@ -4666,14 +4624,7 @@ func resolveResources(doc *Document, page *Dictionary) *Dictionary {
 // itself does not define it — pages routinely inherit these from their
 // Pages node, which the direct Get missed entirely.
 func inheritedPageAttr(doc *Document, page *Dictionary, key Name) Object {
-	node := page
-	for hops := 0; node != nil && hops < 64; hops++ {
-		if v := node.Get(key); v != nil {
-			return v
-		}
-		node = doc.ResolveDict(node.Get("Parent"))
-	}
-	return nil
+	return doc.view().InheritedPageAttr(page, key)
 }
 
 // scanPageForDeviceCS checks if a page uses device color spaces.
@@ -5058,39 +5009,7 @@ const maxContentTokenLen = 256
 // contents. Returns nil if the stream cannot be decoded, or if the run's
 // aggregate decoded-content budget is exhausted.
 func decodeContentStream(doc *Document, stream *Stream) []byte {
-	lim := doc.lim()
-	if c := doc.valCache; c != nil {
-		if data, ok := c.pdfa.content[stream]; ok {
-			return data
-		}
-		// Aggregate budget: once this run has decoded the configured number of
-		// bytes of content, treat further content streams as undecodable and do
-		// not decode (or tokenize) them. This bounds the memory a flate-bomb
-		// document can force. Undecodable is negatively cached below, so the
-		// decision is stable across the several checks that walk the same page.
-		if c.pdfa.contentBytes >= lim.DecodedContentBytes {
-			c.pdfa.content[stream] = nil
-			noteLimit(doc, limitContentTotal, fmt.Sprintf("this run has already decoded %d bytes of content, reaching the %s-byte budget for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", c.pdfa.contentBytes, core.LimitBound(lim.DecodedContentBytes, core.DefaultMaxDecodedContentBytes)), 0)
-			return nil
-		}
-	}
-	var data []byte
-	decoded, err := core.DecodeStreamData(doc.canceler(), stream, lim)
-	switch {
-	case err == nil && len(decoded) <= lim.ContentStreamBytes:
-		data = decoded
-	case err == nil:
-		// It decoded, but it is too large to hold and tokenize. Every
-		// content-driven rule — device colour, the operator whitelist, tagging,
-		// font usage — now sees nothing from this stream. That is the failure
-		// the old 1 MB cap caused silently; at least say so.
-		noteLimit(doc, limitContentStream, fmt.Sprintf("a content stream decodes to %d bytes, over the %s-byte scanning limit; it was not scanned", len(decoded), core.LimitBound(int64(lim.ContentStreamBytes), core.DefaultMaxContentStreamBytes)), 0)
-	}
-	if c := doc.valCache; c != nil {
-		c.pdfa.content[stream] = data
-		c.pdfa.contentBytes += int64(len(data))
-	}
-	return data
+	return doc.view().Content(stream)
 }
 
 // decodeMetadataStream decodes an XMP metadata stream. It is deliberately not
@@ -5106,21 +5025,7 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 // from the aggregate does not unbound the run; the bytes are still charged, so
 // they still count against genuinely unbounded content.
 func decodeMetadataStream(doc *Document, stream *Stream) []byte {
-	if c := doc.valCache; c != nil {
-		if data, ok := c.pdfa.content[stream]; ok {
-			return data
-		}
-	}
-	lim := doc.lim()
-	var data []byte
-	if decoded, err := core.DecodeStreamData(doc.canceler(), stream, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
-		data = decoded
-	}
-	if c := doc.valCache; c != nil {
-		c.pdfa.content[stream] = data
-		c.pdfa.contentBytes += int64(len(data))
-	}
-	return data
+	return doc.view().MetadataContent(stream)
 }
 
 // xmpText decodes an XMP packet to UTF-8 text. Every XMP consumer goes through
@@ -6610,11 +6515,11 @@ func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
 
 	var errs []ValidationError
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		res := resolveResources(doc, page.dict)
+		res := resolveResources(doc, page.Dict)
 		if res == nil {
 			continue
 		}
-		data := getContentStreamData(doc, page.dict.Get("Contents"))
+		data := getContentStreamData(doc, page.Dict.Get("Contents"))
 		if data == nil {
 			continue
 		}
@@ -6661,7 +6566,7 @@ func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
 						Rule:    colourClause("iccBased", level),
 						Level:   level,
 						Message: "overprint mode must not be 1 when an ICCBased CMYK colour space is used with overprinting",
-						Object:  page.objNum,
+						Object:  page.ObjNum,
 					})
 				}
 			}

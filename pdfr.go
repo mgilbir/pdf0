@@ -112,7 +112,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 		}
 	})
 
-	var pages []pageInfo
+	var pages []PageInfo
 	run(func() {
 		pages = collectPages(d, cat.Get("Pages"))
 		if len(pages) == 0 {
@@ -120,7 +120,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 		}
 	})
 	for _, page := range pages {
-		run(func() { d.checkPDFRPage(page.dict, page.objNum, add) })
+		run(func() { d.checkPDFRPage(page.Dict, page.ObjNum, add) })
 	}
 
 	// Guard trips are reported under their own rule, not as conformance
@@ -180,17 +180,5 @@ func (d *Document) checkPDFRPage(page *Dictionary, objNum int, add func(rule, ms
 // streamFilters returns a stream's filter names (/Filter may be a single name or
 // an array).
 func streamFilters(d *Document, st *Stream) []Name {
-	switch f := d.Resolve(st.Dict.Get("Filter")).(type) {
-	case Name:
-		return []Name{f}
-	case Array:
-		var out []Name
-		for _, e := range f {
-			if n, ok := d.Resolve(e).(Name); ok {
-				out = append(out, n)
-			}
-		}
-		return out
-	}
-	return nil
+	return d.view().StreamFilters(st)
 }

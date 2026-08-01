@@ -12,7 +12,7 @@ package pdf0
 func (d *Document) PageList() []*Dictionary {
 	var pages []*Dictionary
 	for _, pg := range collectPages(d, d.catalogPages()) {
-		pages = append(pages, pg.dict)
+		pages = append(pages, pg.Dict)
 	}
 	return pages
 }
@@ -111,7 +111,7 @@ func newDocWithPageTree(version string) (*Document, int, int) {
 func (d *Document) pageRefsOf() []IndirectRef {
 	var refs []IndirectRef
 	for _, pg := range collectPages(d, d.catalogPages()) {
-		refs = append(refs, IndirectRef{Number: pg.objNum})
+		refs = append(refs, IndirectRef{Number: pg.ObjNum})
 	}
 	return refs
 }

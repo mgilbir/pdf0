@@ -55,13 +55,13 @@ func TestDevColorScannerMatchesPDFA(t *testing.T) {
 			sc := newDevColorScanner(doc)
 			for _, pg := range collectPages(doc, cat.Get("Pages")) {
 				pages++
-				wantR, wantC, wantG := scanPageForDeviceCS(doc, pg.dict)
-				got := sc.pageDeviceUse(pg.dict)
+				wantR, wantC, wantG := scanPageForDeviceCS(doc, pg.Dict)
+				got := sc.pageDeviceUse(pg.Dict)
 				if got.rgb != wantR || got.cmyk != wantC || got.gray != wantG {
 					mismatches++
 					if mismatches <= 10 {
 						t.Errorf("%s obj %d: scanPageForDeviceCS=(R%v C%v G%v) memoised=(R%v C%v G%v)",
-							filepath.Base(f), pg.objNum, wantR, wantC, wantG, got.rgb, got.cmyk, got.gray)
+							filepath.Base(f), pg.ObjNum, wantR, wantC, wantG, got.rgb, got.cmyk, got.gray)
 					}
 				}
 			}

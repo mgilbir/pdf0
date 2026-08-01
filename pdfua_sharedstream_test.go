@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 	"time"
 )
@@ -64,12 +65,7 @@ func TestFontUsageSharedStreamDedup(t *testing.T) {
 	const nPages = 20000
 	doc := buildSharedStreamDoc(nPages)
 	rd := *doc
-	rd.valCache = &validationCache{
-		pdfa: pdfaCache{
-			pages:   map[int][]pageInfo{},
-			content: map[*Stream][]byte{},
-		},
-	}
+	rd.valCache = newValidationCache(core.Canceler{})
 	doc = &rd
 
 	done := make(chan map[*Dictionary]*fontTextUsage, 1)
@@ -112,12 +108,7 @@ func TestRealContentSharedStreamMemo(t *testing.T) {
 	const nPages = 20000
 	doc := buildSharedStreamDoc(nPages)
 	rd := *doc
-	rd.valCache = &validationCache{
-		pdfa: pdfaCache{
-			pages:   map[int][]pageInfo{},
-			content: map[*Stream][]byte{},
-		},
-	}
+	rd.valCache = newValidationCache(core.Canceler{})
 	doc = &rd
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 

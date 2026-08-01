@@ -68,7 +68,7 @@ func TestContentFactsCacheShared(t *testing.T) {
 	d.Trailer.Set("Root", IndirectRef{Number: 1})
 
 	rd := *d
-	rd.valCache = &validationCache{pdfa: pdfaCache{pages: map[int][]pageInfo{}, content: map[*Stream][]byte{}}}
+	rd.valCache = newValidationCache(core.Canceler{})
 	doc := &rd
 
 	// Both checks run against the same page content stream.
