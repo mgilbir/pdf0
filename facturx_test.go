@@ -148,7 +148,24 @@ func containerFindings(res FacturXResult) []FacturXViolation {
 //
 // The number is pinned so that a change on either side of the seam is visible.
 // Lower it when formalis narrows the scope; investigate any increase.
-const facturxInvoiceRuleFindings = 5
+// It is a table keyed by document rather than a total, because the corpus is not
+// one fixed set: a CI checkout has the 16 documents of sources.tsv, while a
+// developer's tree also holds the 59 unpacked from the FNFE specification
+// bundle, which is not redistributable and has no fetch target. A total would
+// mean one number for two corpora, and the smaller one would have to assert
+// nothing to stay true. Per document, every checkout asserts everything it can
+// see, and the count of a document it does not have is simply not consulted.
+//
+// Absent from the table means zero. Both directions are checked, and the
+// vanishing case is the more dangerous: a document that stops drawing a finding
+// means a rule that is present, reachable and now inert.
+var facturxInvoiceRuleFindings = map[string]int{
+	"fnfe_BASIC.pdf":       14,
+	"fnfe_MINIMUM.pdf":     5,
+	"fnfe_MINIMUM_UE.pdf":  5,
+	"intarsys_MINIMUM.pdf": 1,
+	"official_XRECHNUNG_Betriebskostenabrechnung_fx.pdf": 3,
+}
 
 // TestValidateFacturXCorpus is the FP=0 oracle for the half pdf0 owns: every
 // conforming Factur-X / ZUGFeRD invoice (all profiles) must validate with no
@@ -168,7 +185,8 @@ func TestValidateFacturXCorpus(t *testing.T) {
 	sort.Strings(files)
 	seenProfiles := map[formalis.Profile]bool{}
 	seenCIUS := map[formalis.CIUS]bool{}
-	conforming, invoiceRuleFiles := 0, 0
+	conforming := 0
+	invoiceFindings := map[string]int{}
 	for _, f := range files {
 		name := filepath.Base(f)
 		data, err := os.ReadFile(f)
@@ -196,8 +214,8 @@ func TestValidateFacturXCorpus(t *testing.T) {
 			t.Errorf("%s: expected 0 container violations on a conforming invoice, got %d (first: %s)",
 				name, len(container), container[0])
 		}
-		if len(res.Violations) > len(container) {
-			invoiceRuleFiles++
+		if n := len(res.Violations) - len(container); n > 0 {
+			invoiceFindings[name] = n
 		}
 		// The level names exactly one of the two things it can name: a
 		// data-richness profile, or a CIUS ("XRECHNUNG", which four of these files
@@ -222,13 +240,33 @@ func TestValidateFacturXCorpus(t *testing.T) {
 	if len(seenProfiles) < 3 {
 		t.Errorf("expected the corpus to cover several profiles, saw %d", len(seenProfiles))
 	}
-	if len(seenCIUS) == 0 {
-		t.Error("expected the corpus to cover at least one CIUS conformance level")
+	// Only the fuller corpus carries a CIUS-declaring document; sources.tsv has
+	// none, so this asserts that routing works where there is something to route
+	// rather than that every checkout has one.
+	if len(seenCIUS) == 0 && facturxCorpusHasCIUS(files) {
+		t.Error("the corpus carries a CIUS conformance level that was not detected")
 	}
-	if invoiceRuleFiles != facturxInvoiceRuleFindings {
-		t.Errorf("invoice rule engine reported findings on %d files, ratchet is %d",
-			invoiceRuleFiles, facturxInvoiceRuleFindings)
+	for _, f := range files {
+		name := filepath.Base(f)
+		got, want := invoiceFindings[name], facturxInvoiceRuleFindings[name]
+		if got != want {
+			t.Errorf("%s: invoice rule engine reported %d fatal findings, expected %d",
+				name, got, want)
+		}
 	}
+}
+
+// facturxCorpusHasCIUS reports whether the corpus holds a document whose
+// conformance level names a CIUS rather than a data-richness profile. The four
+// XRechnung samples come from the specification bundle, so a checkout with only
+// sources.tsv has none.
+func facturxCorpusHasCIUS(files []string) bool {
+	for _, f := range files {
+		if strings.Contains(strings.ToUpper(filepath.Base(f)), "XRECHNUNG") {
+			return true
+		}
+	}
+	return false
 }
 
 // TestValidateFacturXMutations takes a conforming invoice and confirms the
