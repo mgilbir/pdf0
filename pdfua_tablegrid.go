@@ -1,5 +1,9 @@
 package pdf0
 
+import (
+	"github.com/mgilbir/pdf0/internal/core"
+)
+
 // Table-grid analysis for PDF/UA structure validation. A table's TR/TH/TD
 // elements, together with their RowSpan/ColSpan table attributes, are laid out
 // on a grid exactly as a renderer would. Definite structural defects — a span
@@ -72,10 +76,10 @@ func checkUATableGrid(d *Document, cat *Dictionary) []UAViolation {
 			continue
 		}
 		if rows := collectTableRows(d, n.elem, roleMap); len(rows) > 0 {
-			maxFills := d.lim().tableGridFills
+			maxFills := d.lim().TableGridFills
 			defects, complete := gridDefects(rows, maxFills)
 			if !complete {
-				noteLimit(d, limitGridFills, "a table's RowSpan/ColSpan values imply more than "+limitBound(maxFills, defaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", dictObjNum(d, n.elem))
+				noteLimit(d, limitGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", dictObjNum(d, n.elem))
 			}
 			v = append(v, defects...)
 		}

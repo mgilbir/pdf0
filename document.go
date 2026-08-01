@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/syntax"
 	"io"
 	"sort"
@@ -53,7 +54,7 @@ type Document struct {
 	// limits holds the resource limits resolved from the Option values passed to
 	// Read. Read through (*Document).lim(), never directly: the zero value means
 	// "defaults", so a hand-built &Document{...} behaves like one Read produced.
-	limits limits
+	limits core.Limits
 
 	// brokenObjStms lists object-stream container numbers whose contents could
 	// not be decoded during Read. The document parses without them so that
@@ -73,7 +74,7 @@ type Document struct {
 	// else to live; every validator merges these into its report. It is written
 	// only during Read and read-only afterwards, which is what keeps validation
 	// (which runs on a shallow copy sharing this pointer) non-mutating.
-	readLimits *limitRecorder
+	readLimits *core.Recorder
 
 	// security holds the standard security handler when an encrypted file was
 	// decrypted on Read. It retains the file key and parameters so the same
@@ -100,12 +101,12 @@ type Document struct {
 // to change them. The resolved limits are stored on the returned Document, so
 // every validator and extractor that runs on it inherits the same configuration.
 func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(canceler{}, r, size, "", resolveLimits(opts))
+	return readDocument(core.Canceler{}, r, size, "", resolveLimits(opts))
 }
 
 // ReadWithPassword is Read with a user or owner password for an encrypted file.
 func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(canceler{}, r, size, password, resolveLimits(opts))
+	return readDocument(core.Canceler{}, r, size, password, resolveLimits(opts))
 }
 
 // ReadContext is Read with cancellation. Parsing is not usually the expensive
@@ -121,22 +122,22 @@ func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option
 // genuinely lacks them, and every validator would then report the absence as a
 // conformance failure. See cancel.go.
 func ReadContext(ctx context.Context, r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(newCanceler(ctx), r, size, "", resolveLimits(opts))
+	return readDocument(core.NewCanceler(ctx), r, size, "", resolveLimits(opts))
 }
 
 // ReadWithPasswordContext is ReadWithPassword with cancellation; see ReadContext.
 func ReadWithPasswordContext(ctx context.Context, r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(newCanceler(ctx), r, size, password, resolveLimits(opts))
+	return readDocument(core.NewCanceler(ctx), r, size, password, resolveLimits(opts))
 }
 
-func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, lim limits) (doc *Document, err error) {
+func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password string, lim core.Limits) (doc *Document, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			doc = nil
 			err = fmt.Errorf("recovered from panic while reading PDF: %v", rec)
 		}
 	}()
-	if err := cancel.stopErr("reading PDF"); err != nil {
+	if err := cancel.StopErr("reading PDF"); err != nil {
 		return nil, err
 	}
 	data := make([]byte, size)
@@ -153,7 +154,7 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 	doc = &Document{
 		Objects:    make(map[int]*IndirectObject),
 		limits:     lim,
-		readLimits: &limitRecorder{},
+		readLimits: &core.Recorder{},
 	}
 
 	// 1. Find header to extract version and header offset
@@ -195,7 +196,7 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 	var firstErr error
 	for {
 		// One iteration per incremental update; a file can carry thousands.
-		if err := cancel.stopErr("reading PDF cross-reference chain"); err != nil {
+		if err := cancel.StopErr("reading PDF cross-reference chain"); err != nil {
 			return nil, err
 		}
 		if visitedXref[sectionOffset] {
@@ -277,7 +278,7 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 		// A cancellation is not a "this table is broken" signal, so it must not
 		// trigger the (whole-file) rebuild-and-retry: that would do more work in
 		// response to being told to stop.
-		if cerr := cancel.stopErr("reading PDF objects"); cerr != nil {
+		if cerr := cancel.StopErr("reading PDF objects"); cerr != nil {
 			return nil, cerr
 		}
 		t := rebuildXRefByScan(data)
@@ -357,7 +358,7 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 // (used for tables reconstructed by rebuildXRefByScan) an entry whose offset
 // is out of range or whose bytes do not parse is dropped rather than failing
 // the read: a scanned entry has no authority beyond the bytes it points at.
-func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int64, xrefTable *XRefTable, adjust int64, lenient bool) error {
+func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size int64, xrefTable *XRefTable, adjust int64, lenient bool) error {
 	doc.Offsets = make(map[int]int64)
 	lexer := NewLexer(data)
 	// parsedByOffset caches the object parsed at each byte offset. A malformed
@@ -394,7 +395,7 @@ func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int6
 		// Per object: the unit of work here is one object parse, which for a
 		// stream is bounded by the per-stream decode cap, so cancellation takes
 		// effect after at most one such parse.
-		if err := cancel.stopErr("reading PDF objects"); err != nil {
+		if err := cancel.StopErr("reading PDF objects"); err != nil {
 			return err
 		}
 		if entry.Free || entry.Compressed {
@@ -484,7 +485,7 @@ func (d *Document) normalizeStructure() {
 // followed by its trailer, or an xref stream) at the given absolute offset.
 // For xref streams the stream dictionary doubles as the trailer, and the
 // stream object itself is recorded in doc.Objects.
-func parseXRefSection(cancel canceler, data []byte, offset int64, doc *Document) (*XRefTable, *Dictionary, error) {
+func parseXRefSection(cancel core.Canceler, data []byte, offset int64, doc *Document) (*XRefTable, *Dictionary, error) {
 	lexer := NewLexer(data)
 	lexer.SetPosition(offset)
 	tok, err := lexer.NextToken()
@@ -639,7 +640,7 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 // written back verbatim as a lossless passthrough under its preserved /Encrypt.
 // Write regenerates the cross-reference section, emitting a cross-reference
 // stream when the source used one and a traditional table otherwise.
-func (d *Document) Write(w io.Writer) error { return d.write(canceler{}, w) }
+func (d *Document) Write(w io.Writer) error { return d.write(core.Canceler{}, w) }
 
 // WriteContext is Write with cancellation.
 //
@@ -654,10 +655,10 @@ func (d *Document) Write(w io.Writer) error { return d.write(canceler{}, w) }
 // A caller that must not leave a partial file behind should write to a
 // temporary and rename on success. See cancel.go.
 func (d *Document) WriteContext(ctx context.Context, w io.Writer) error {
-	return d.write(newCanceler(ctx), w)
+	return d.write(core.NewCanceler(ctx), w)
 }
 
-func (d *Document) write(cancel canceler, w io.Writer) error {
+func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// An encrypted document with a security handler (decrypted on Read) is
 	// re-encrypted below with the retained key. Without a handler (an unsupported
 	// scheme or a non-empty password) the content is still in its original
@@ -769,7 +770,7 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 		// Per object: one iteration serializes (and, when re-encrypting, encrypts)
 		// a single object, so cancellation takes effect after at most one object's
 		// worth of output.
-		if err := cancel.stopErr("writing PDF"); err != nil {
+		if err := cancel.StopErr("writing PDF"); err != nil {
 			return err
 		}
 		offsets[num] = s.Offset()

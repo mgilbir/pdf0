@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/font"
 	"github.com/mgilbir/pdf0/syntax"
 	"strings"
@@ -33,16 +34,16 @@ const (
 // about two thirds of a large document's validation time, which is why the
 // check is gated on the scan position — one comparison per token, the poll
 // itself once per cancelScanBytes. See cancel.go.
-func forEachContentItem(cancel canceler, data []byte, fn func(kind contentItemKind, payload []byte)) {
+func forEachContentItem(cancel core.Canceler, data []byte, fn func(kind contentItemKind, payload []byte)) {
 	n := len(data)
 	i := 0
 	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
 	for i < n {
 		if i >= nextCancelCheck {
-			if cancel.stopped() {
+			if cancel.Stopped() {
 				return
 			}
-			nextCancelCheck = i + cancelScanBytes
+			nextCancelCheck = i + core.CancelScanBytes
 		}
 		for i < n && isContentWS(data[i]) {
 			i++
@@ -272,7 +273,7 @@ type fontEvent struct {
 // (it depends on the container's resources); everything captured here — the
 // operand names, render modes, and shown string bytes — is a pure function of
 // the stream contents.
-func buildFontEvents(cancel canceler, data []byte) []fontEvent {
+func buildFontEvents(cancel core.Canceler, data []byte) []fontEvent {
 	if data == nil {
 		return nil
 	}
@@ -1152,7 +1153,7 @@ func loadFontProgram(doc *Document, fd *Dictionary) *font.Program {
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile2")).(*Stream); ok {
 		if data := decodeContentStream(doc, s); data != nil {
-			return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.lim().cmapWork))
+			return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.lim().CmapWork))
 		}
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile3")).(*Stream); ok {
@@ -1162,7 +1163,7 @@ func loadFontProgram(doc *Document, fd *Dictionary) *font.Program {
 				if fp := parseSFNTCFF(data); fp != nil {
 					return noteFontProgramLimits(doc, fp)
 				}
-				return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.lim().cmapWork))
+				return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.lim().CmapWork))
 			}
 			return noteFontProgramLimits(doc, font.ParseCFF(data))
 		}
@@ -1175,7 +1176,7 @@ func loadFontProgram(doc *Document, fd *Dictionary) *font.Program {
 // Document in scope, so this is where a trip re-enters the run's recorder.
 func noteFontProgramLimits(doc *Document, fp *font.Program) *font.Program {
 	if fp != nil && fp.CmapPartial {
-		noteLimit(doc, limitCmapWork, fmt.Sprintf("an embedded font's cmap subtable needed more than %s units of expansion work to read completely; the glyph-coverage and .notdef checks for that font were skipped rather than run against a partial character map", limitBound(int64(doc.lim().cmapWork), defaultMaxCmapWork)), 0)
+		noteLimit(doc, limitCmapWork, fmt.Sprintf("an embedded font's cmap subtable needed more than %s units of expansion work to read completely; the glyph-coverage and .notdef checks for that font were skipped rather than run against a partial character map", core.LimitBound(int64(doc.lim().CmapWork), core.DefaultMaxCmapWork)), 0)
 	}
 	return fp
 }
@@ -1466,7 +1467,7 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 	}
 	wMap, wComplete := parseCIDWidths(doc, desc.Get("W"))
 	if !wComplete {
-		noteLimit(doc, limitCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", limitBound(int64(doc.lim().cidRangeSpan), defaultMaxCIDRangeSpan)), u.objNum)
+		noteLimit(doc, limitCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", core.LimitBound(int64(doc.lim().CIDRangeSpan), core.DefaultMaxCIDRangeSpan)), u.objNum)
 	}
 
 	var errs []ValidationError
@@ -1771,7 +1772,7 @@ func parseCIDWidths(doc *Document, wObj Object) (map[int]float64, bool) {
 				case c < 0 || cLast < c:
 					// Malformed, not over-budget: an inverted or negative
 					// range declares nothing, so nothing is missing.
-				case cLast-c >= doc.lim().cidRangeSpan:
+				case cLast-c >= doc.lim().CIDRangeSpan:
 					complete = false
 				default:
 					for cid := c; cid <= cLast; cid++ {

@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 )
 
 // This file implements the document part (DPart) hierarchy defined in
@@ -38,16 +39,16 @@ func (v DPartViolation) Error() string {
 // (14.12.3), /NodeNameList depth (Table 408), and DPM key/value constraints
 // (14.12.4.2).
 func ValidateDParts(doc *Document) []DPartViolation {
-	return validateDParts(canceler{}, doc)
+	return validateDParts(core.Canceler{}, doc)
 }
 
 // ValidateDPartsContext is ValidateDParts with cancellation; a cancelled run
 // reports itself under the rule "limit" (see cancel.go).
 func ValidateDPartsContext(ctx context.Context, doc *Document) []DPartViolation {
-	return validateDParts(newCanceler(ctx), doc)
+	return validateDParts(core.NewCanceler(ctx), doc)
 }
 
-func validateDParts(cancel canceler, doc *Document) []DPartViolation {
+func validateDParts(cancel core.Canceler, doc *Document) []DPartViolation {
 	doc = beginRunCancel(doc, cancel)
 	var out []DPartViolation
 	add := func(rule, msg string, obj int) {

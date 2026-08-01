@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 )
 
@@ -186,7 +187,7 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 			}
 			// The content stream must still inflate — proof it decrypted correctly.
 			if st, ok := back.Objects[4].Value.(*Stream); ok {
-				if _, err := decodeStreamData(canceler{}, st, defaultLimits()); err != nil {
+				if _, err := decodeStreamData(core.Canceler{}, st, core.DefaultLimits()); err != nil {
 					t.Errorf("content stream does not inflate after round-trip: %v", err)
 				}
 			}

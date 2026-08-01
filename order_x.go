@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 
 	"github.com/mgilbir/formalis"
@@ -132,7 +133,7 @@ func ValidateOrderX(doc *Document, rawData []byte) OrderXResult {
 // cancelled run reports a "limit" finding rather than an empty result, exactly
 // as ValidateFacturXContext does and for the same reasons.
 func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) (res OrderXResult) {
-	cancel := newCanceler(ctx)
+	cancel := core.NewCanceler(ctx)
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, OrderXViolation{Rule: rule, Message: msg, Object: obj})
 	}

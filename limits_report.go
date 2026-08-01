@@ -2,10 +2,7 @@ package pdf0
 
 import (
 	"context"
-	"fmt"
-	"sort"
-	"strconv"
-	"sync"
+	"github.com/mgilbir/pdf0/internal/core"
 )
 
 // Reporting a resource guard that stopped short.
@@ -92,129 +89,7 @@ const (
 	limitContentTotal  = "decoded-content-total"     // limits.decodedContentBytes, WithMaxDecodedContentBytes — pdfa.go
 	limitObjStmTotal   = "objstm-decompressed-total" // limits.objectStreamBytes, WithMaxObjectStreamBytes — objstm.go
 	limitEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own — final_rules.go, see checkEmbeddedPDFA
-
-	// limitCanceled is not a resource guard: it is the caller's context ending
-	// the run (cancel.go). It is listed among the guards because it is reported
-	// through the same recorder and under the same rule, so that a caller
-	// filtering on IsCheckerFinding — or keying on the guard name in the message
-	// — needs no new case for it.
-	limitCanceled = "context-canceled"
-
-	// limitReportOverflow is the recorder speaking about itself: the synthetic
-	// trip snapshot emits when maxRecordedLimitTrips has dropped distinct trips.
-	// It is a guard identifier like the rest so that a caller keying on the name
-	// sees the report's own truncation in the same shape as the ones it reports.
-	limitReportOverflow = "limit-report"
 )
-
-// limitBound renders the bound a guard tripped on, saying whether it is the
-// package default or a value the caller chose. "you hit the 8 MiB cap you set"
-// and "you hit our 8 MiB default" call for different responses — the first is a
-// configuration decision to revisit, the second a report that pdf0's own
-// ceiling was too low for this file — and a message that gives only the number
-// cannot tell them apart.
-//
-// A caller who configures a limit to exactly its default is described as having
-// the default. That is the one case the comparison gets wrong, and it costs
-// nothing: the advice either message leads to is the same.
-func limitBound(effective, def int64) string {
-	if effective == def {
-		return strconv.FormatInt(effective, 10) + " (pdf0's default)"
-	}
-	return strconv.FormatInt(effective, 10) + " (configured by the caller)"
-}
-
-// limitTrip is one guard trip: which guard, what it left incomplete, and the
-// object the incompleteness attaches to (0 when it is document-wide).
-type limitTrip struct {
-	guard  string
-	detail string
-	obj    int
-}
-
-func (t limitTrip) message() string {
-	if t.guard == limitCanceled {
-		// Deliberately worded so that it cannot be read as a statement about the
-		// file. A cancelled run's findings are true but partial, and the absence
-		// of a finding says nothing at all.
-		return fmt.Sprintf("the run was cancelled before it finished (%s): %s; the checks that had not yet run were skipped, so this file is neither confirmed conformant nor non-conformant", t.guard, t.detail)
-	}
-	return fmt.Sprintf("resource limit reached (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
-}
-
-// maxRecordedLimitTrips bounds the recorder itself. A file crafted to trip a
-// guard once per object would otherwise turn the *report* into the resource
-// exhaustion the guards exist to prevent. Distinct trips beyond the cap are
-// counted, not stored, and reported in aggregate.
-const maxRecordedLimitTrips = 64
-
-// limitRecorder collects the guard trips of one run. The zero value is usable
-// and a nil *limitRecorder discards, so a guard can report unconditionally
-// without knowing whether anything is listening.
-//
-// The mutex is not there because validation is concurrent — a run is
-// single-goroutine, and each run gets its own recorder on its own shallow copy
-// of the Document (see validationCache) — but because the recorder is the one
-// piece of per-run state that guards write to from arbitrary depth, and a
-// future parallel check must not turn that into a data race.
-type limitRecorder struct {
-	mu      sync.Mutex
-	seen    map[limitTrip]bool
-	trips   []limitTrip
-	dropped int
-}
-
-// note records a trip, ignoring repeats of one already recorded. guard is one
-// of the limit* identifiers above; detail says, in the file's terms, what was
-// left incomplete.
-func (r *limitRecorder) note(guard, detail string, obj int) {
-	if r == nil {
-		return
-	}
-	t := limitTrip{guard: guard, detail: detail, obj: obj}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.seen[t] {
-		return
-	}
-	if len(r.trips) >= maxRecordedLimitTrips {
-		r.dropped++
-		return
-	}
-	if r.seen == nil {
-		r.seen = make(map[limitTrip]bool)
-	}
-	r.seen[t] = true
-	r.trips = append(r.trips, t)
-}
-
-// snapshot returns the recorded trips in a deterministic order, plus a synthetic
-// trip standing for any that were dropped by maxRecordedLimitTrips.
-func (r *limitRecorder) snapshot() []limitTrip {
-	if r == nil {
-		return nil
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]limitTrip, len(r.trips))
-	copy(out, r.trips)
-	if r.dropped > 0 {
-		out = append(out, limitTrip{
-			guard:  limitReportOverflow,
-			detail: fmt.Sprintf("%d further distinct guard trips were not reported individually", r.dropped),
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].guard != out[j].guard {
-			return out[i].guard < out[j].guard
-		}
-		if out[i].obj != out[j].obj {
-			return out[i].obj < out[j].obj
-		}
-		return out[i].detail < out[j].detail
-	})
-	return out
-}
 
 // noteReadLimit records a guard trip that happened while the file was being
 // read, when there is no validation run to attach it to. Every validator merges
@@ -224,9 +99,9 @@ func (d *Document) noteReadLimit(guard, detail string, obj int) {
 		return
 	}
 	if d.readLimits == nil {
-		d.readLimits = &limitRecorder{}
+		d.readLimits = &core.Recorder{}
 	}
-	d.readLimits.note(guard, detail, obj)
+	d.readLimits.Note(guard, detail, obj)
 }
 
 // noteLimit reports a guard trip against the run doc belongs to. It is a no-op
@@ -241,7 +116,7 @@ func noteLimit(doc *Document, guard, detail string, obj int) {
 	if doc == nil || doc.valCache == nil {
 		return
 	}
-	doc.valCache.run.limits.note(guard, detail, obj)
+	doc.valCache.run.limits.Note(guard, detail, obj)
 }
 
 // runLimitTrips returns every trip that belongs in this run's report: those the
@@ -250,24 +125,24 @@ func noteLimit(doc *Document, guard, detail string, obj int) {
 // Read-time trips live on the Document because there is no run to attach them
 // to yet; validation only ever reads them, so a run stays non-mutating for the
 // caller (a run writes solely to its own per-run recorder).
-func runLimitTrips(doc *Document) []limitTrip {
+func runLimitTrips(doc *Document) []core.Trip {
 	if doc == nil {
 		return nil
 	}
-	var out []limitTrip
+	var out []core.Trip
 	if doc.readLimits != nil {
-		out = append(out, doc.readLimits.snapshot()...)
+		out = append(out, doc.readLimits.Snapshot()...)
 	}
 	if doc.valCache != nil {
-		out = append(out, doc.valCache.run.limits.snapshot()...)
+		out = append(out, doc.valCache.run.limits.Snapshot()...)
 	}
 	// A cancelled run is the same event as a tripped guard and is reported the
 	// same way (cancel.go). It is derived here rather than recorded by whichever
 	// loop noticed first, because the context is authoritative and every
 	// validator already funnels its report through this one function: one line
 	// here gives all nine of them the finding, and none of them can forget it.
-	if err := doc.canceler().err(); err != nil {
-		out = append(out, limitTrip{guard: limitCanceled, detail: err.Error()})
+	if err := doc.canceler().Err(); err != nil {
+		out = append(out, core.NewTrip(core.GuardCanceled, err.Error(), 0))
 	}
 	return out
 }
@@ -276,7 +151,7 @@ func runLimitTrips(doc *Document) []limitTrip {
 func limitValidationErrors(doc *Document, level PDFALevel) []ValidationError {
 	var out []ValidationError
 	for _, t := range runLimitTrips(doc) {
-		out = append(out, ValidationError{Rule: limitRule, Level: level, Message: t.message(), Object: t.obj})
+		out = append(out, ValidationError{Rule: limitRule, Level: level, Message: t.Message(), Object: t.Obj})
 	}
 	return out
 }
@@ -285,7 +160,7 @@ func limitValidationErrors(doc *Document, level PDFALevel) []ValidationError {
 func limitUAViolations(doc *Document) []UAViolation {
 	var out []UAViolation
 	for _, t := range runLimitTrips(doc) {
-		out = append(out, UAViolation{limitRule, t.message(), t.obj})
+		out = append(out, UAViolation{limitRule, t.Message(), t.Obj})
 	}
 	return out
 }
@@ -294,7 +169,7 @@ func limitUAViolations(doc *Document) []UAViolation {
 // callback the PDF/X, PDF/VT, PDF/R and DPart validators report through.
 func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
 	for _, t := range runLimitTrips(doc) {
-		add(limitRule, t.message(), t.obj)
+		add(limitRule, t.Message(), t.Obj)
 	}
 }
 
@@ -302,14 +177,14 @@ func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
 // every guard reports through and the cancellation signal every loop consults.
 // The three (now seven) call sites that start a run share it so a new per-run
 // field cannot be initialized in one and forgotten in another.
-func newValidationCache(cancel canceler) *validationCache {
+func newValidationCache(cancel core.Canceler) *validationCache {
 	return &validationCache{
 		pdfa: pdfaCache{
 			pages:   make(map[int][]pageInfo),
 			content: make(map[*Stream][]byte),
 		},
 		run: runState{
-			limits: &limitRecorder{},
+			limits: &core.Recorder{},
 			cancel: cancel,
 		},
 	}
@@ -318,12 +193,12 @@ func newValidationCache(cancel canceler) *validationCache {
 // beginRun starts a run that cannot be cancelled. It is what the non-Context
 // entry points call, so they behave exactly as they did before contexts
 // existed.
-func beginRun(doc *Document) *Document { return beginRunCancel(doc, canceler{}) }
+func beginRun(doc *Document) *Document { return beginRunCancel(doc, core.Canceler{}) }
 
 // beginRunContext starts a run governed by ctx. Every Context entry point goes
 // through here.
 func beginRunContext(ctx context.Context, doc *Document) *Document {
-	return beginRunCancel(doc, newCanceler(ctx))
+	return beginRunCancel(doc, core.NewCanceler(ctx))
 }
 
 // beginRunCancel returns the Document a validation run should work against: a
@@ -337,7 +212,7 @@ func beginRunContext(ctx context.Context, doc *Document) *Document {
 // The cache is the only place a context is held, and its lifetime is exactly
 // the run's: the shallow copy is discarded when the validator returns, so the
 // caller's Document never ends up owning one (see cancel.go).
-func beginRunCancel(doc *Document, cancel canceler) *Document {
+func beginRunCancel(doc *Document, cancel core.Canceler) *Document {
 	if doc == nil || doc.valCache != nil {
 		return doc
 	}

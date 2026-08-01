@@ -1,6 +1,9 @@
 package pdf0
 
-import "testing"
+import (
+	"github.com/mgilbir/pdf0/internal/core"
+	"testing"
+)
 
 // TestContentFactsSinglePass verifies that one tokenizeContent pass extracts
 // both the real-content (7.1) messages and the Do-operator name sequence the
@@ -10,7 +13,7 @@ func TestContentFactsSinglePass(t *testing.T) {
 	// /Im1 Do paints an XObject; the two Tj outside any BDC/BMC are untagged
 	// real content; the tagged run is fine.
 	content := []byte("/Im1 Do (untagged) Tj /P << /MCID 0 >> BDC (ok) Tj EMC (also untagged) Tj")
-	f := buildContentFacts(canceler{}, content)
+	f := buildContentFacts(core.Canceler{}, content)
 
 	if len(f.doNames) != 1 || f.doNames[0] != "Im1" {
 		t.Errorf("doNames = %v, want [Im1]", f.doNames)

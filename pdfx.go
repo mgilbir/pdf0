@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 )
 
@@ -103,16 +104,16 @@ func (v PDFXViolation) Error() string {
 // ValidatePDFX checks whether doc conforms to the given PDF/X level. An empty
 // result means no violations were found.
 func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
-	return validatePDFX(canceler{}, doc, level)
+	return validatePDFX(core.Canceler{}, doc, level)
 }
 
 // ValidatePDFXContext is ValidatePDFX with cancellation; a cancelled run reports
 // itself under the rule "limit" (see cancel.go).
 func ValidatePDFXContext(ctx context.Context, doc *Document, level PDFXLevel) []PDFXViolation {
-	return validatePDFX(newCanceler(ctx), doc, level)
+	return validatePDFX(core.NewCanceler(ctx), doc, level)
 }
 
-func validatePDFX(cancel canceler, doc *Document, level PDFXLevel) []PDFXViolation {
+func validatePDFX(cancel core.Canceler, doc *Document, level PDFXLevel) []PDFXViolation {
 	// Run against a shallow copy carrying the per-run cache, as the PDF/A and
 	// PDF/UA validators do: it memoizes the traversals this validator shares
 	// with them, applies the same aggregate content budget, carries the

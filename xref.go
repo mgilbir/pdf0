@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/syntax"
 	"io"
 	"strconv"
@@ -146,10 +147,10 @@ func ParseXRefTable(data []byte, pos int64) (*XRefTable, error) {
 // options to change them. (*Document) supplies its own resolved limits when it
 // calls this during Read, so a document read with options keeps them here.
 func ParseXRefStream(stream *Stream, opts ...Option) (*XRefTable, error) {
-	return parseXRefStream(canceler{}, stream, resolveLimits(opts))
+	return parseXRefStream(core.Canceler{}, stream, resolveLimits(opts))
 }
 
-func parseXRefStream(cancel canceler, stream *Stream, lim limits) (*XRefTable, error) {
+func parseXRefStream(cancel core.Canceler, stream *Stream, lim core.Limits) (*XRefTable, error) {
 	table := &XRefTable{
 		Entries: make(map[int]XRefEntry),
 	}
@@ -288,7 +289,7 @@ func readField(data []byte, width int) int {
 
 // decodeStreamData decompresses stream data based on the /Filter and
 // /DecodeParms entries.
-func decodeStreamData(cancel canceler, stream *Stream, lim limits) ([]byte, error) {
+func decodeStreamData(cancel core.Canceler, stream *Stream, lim core.Limits) ([]byte, error) {
 	filter := stream.Dict.Get("Filter")
 	if filter == nil {
 		// No filter, return raw data
@@ -322,7 +323,7 @@ func decodeStreamData(cancel canceler, stream *Stream, lim limits) ([]byte, erro
 	return applyFilter(cancel, filterName, stream.Data, parmsDictAt(parms, 0), lim)
 }
 
-func applyFilter(cancel canceler, name Name, data []byte, parms *Dictionary, lim limits) ([]byte, error) {
+func applyFilter(cancel core.Canceler, name Name, data []byte, parms *Dictionary, lim core.Limits) ([]byte, error) {
 	switch name {
 	case "FlateDecode":
 		decoded, err := flateDecode(cancel, data, lim)
@@ -416,16 +417,16 @@ func flateEncode(data []byte) []byte {
 	return buf.Bytes()
 }
 
-func flateDecode(cancel canceler, data []byte, lim limits) ([]byte, error) {
+func flateDecode(cancel core.Canceler, data []byte, lim core.Limits) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("zlib: %w", err)
 	}
 	defer r.Close()
 
-	maxDecode := lim.decodedStreamBytes
+	maxDecode := lim.DecodedStreamBytes
 	limited := io.LimitReader(r, int64(maxDecode)+1)
-	decoded, err := io.ReadAll(cancelReader(cancel, limited))
+	decoded, err := io.ReadAll(core.CancelReader(cancel, limited))
 	if err != nil {
 		return nil, fmt.Errorf("zlib decompress: %w", err)
 	}

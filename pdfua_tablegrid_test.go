@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ func cell(rs, cs int) tableCell { return tableCell{rowSpan: rs, colSpan: cs} }
 // asserting "not determined".
 func mustGrid(t *testing.T, rows []tableRow) []UAViolation {
 	t.Helper()
-	v, complete := gridDefects(rows, defaultMaxTableGridFills)
+	v, complete := gridDefects(rows, core.DefaultMaxTableGridFills)
 	if !complete {
 		t.Fatalf("gridDefects hit the work budget; the result is not determined")
 	}
@@ -144,7 +145,7 @@ func TestGridDefectsSpanBomb(t *testing.T) {
 	// the point is bounded-vs-unbounded, not a precise time.
 	for _, tc := range cases {
 		done := make(chan int, 1)
-		go func() { v, _ := gridDefects(tc.rows, defaultMaxTableGridFills); done <- len(v) }()
+		go func() { v, _ := gridDefects(tc.rows, core.DefaultMaxTableGridFills); done <- len(v) }()
 		select {
 		case <-done:
 		case <-time.After(25 * time.Second):

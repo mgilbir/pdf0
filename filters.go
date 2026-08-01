@@ -1,6 +1,9 @@
 package pdf0
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
+)
 
 // This file implements the stream filters of ISO 32000-2 7.4 that the Go
 // standard library does not provide: the LZWDecode decoder (7.4.4) and the
@@ -26,7 +29,7 @@ const (
 //
 // Output is capped (see WithMaxDecodedStreamBytes) to bound memory on hostile
 // input.
-func lzwDecode(cancel canceler, data []byte, earlyChange int, lim limits) ([]byte, error) {
+func lzwDecode(cancel core.Canceler, data []byte, earlyChange int, lim core.Limits) ([]byte, error) {
 	if earlyChange != 0 && earlyChange != 1 {
 		return nil, fmt.Errorf("LZW: invalid EarlyChange %d", earlyChange)
 	}
@@ -66,16 +69,16 @@ func lzwDecode(cancel canceler, data []byte, earlyChange int, lim limits) ([]byt
 	// output — the same granularity flate gets through cancelReader, expressed
 	// against the output here because LZW's cost tracks what it produces, not
 	// what it consumes (cancel.go).
-	nextCancelCheck := lim.decodedStreamBytes + 1 // never reached when cancel cannot fire
-	if cancel.cancellable() {
+	nextCancelCheck := lim.DecodedStreamBytes + 1 // never reached when cancel cannot fire
+	if cancel.Cancellable() {
 		nextCancelCheck = 0
 	}
 	for {
 		if len(out) >= nextCancelCheck {
-			if err := cancel.stopErr("decoding LZW stream"); err != nil {
+			if err := cancel.StopErr("decoding LZW stream"); err != nil {
 				return nil, err
 			}
-			nextCancelCheck = len(out) + cancelReadChunk
+			nextCancelCheck = len(out) + core.CancelReadChunk
 		}
 		code, ok := nextCode()
 		if !ok {
@@ -102,8 +105,8 @@ func lzwDecode(cancel canceler, data []byte, earlyChange int, lim limits) ([]byt
 		}
 
 		out = append(out, entry...)
-		if len(out) > lim.decodedStreamBytes {
-			return nil, fmt.Errorf("LZW: decompressed data exceeds maximum size (%d bytes)", lim.decodedStreamBytes)
+		if len(out) > lim.DecodedStreamBytes {
+			return nil, fmt.Errorf("LZW: decompressed data exceeds maximum size (%d bytes)", lim.DecodedStreamBytes)
 		}
 
 		if prev != nil {

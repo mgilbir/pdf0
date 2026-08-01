@@ -1,6 +1,9 @@
 package pdf0
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
+)
 
 // This file owns the structure-tree side of PDF/UA validation: element
 // parent/child nesting (ISO 14289-1 7.2), Table/L/TOC container
@@ -69,7 +72,7 @@ func resolveRoleMapChain(d *Document, s Name, roleMap *Dictionary) (std Name, ma
 	if standardStructTypes[s] || roleMap == nil || s == "" {
 		return s, standardStructTypes[s], true
 	}
-	budget := d.lim().roleMapSteps
+	budget := d.lim().RoleMapSteps
 	// The first hop needs no seen-set: "already standard" and "one hop to a
 	// standard type" are the shapes essentially every file has, and this runs
 	// once per structure element, so it must not allocate for them.
@@ -105,7 +108,7 @@ func resolveRoleMapChain(d *Document, s Name, roleMap *Dictionary) (std Name, ma
 func noteRoleMapChainLimit(d *Document) {
 	noteLimit(d, limitRoleMapWork, fmt.Sprintf(
 		"following one /RoleMap chain to a standard structure type cost more than %s steps; the type could not be resolved",
-		limitBound(int64(d.lim().roleMapSteps), defaultMaxRoleMapSteps)), 0)
+		core.LimitBound(int64(d.lim().RoleMapSteps), core.DefaultMaxRoleMapSteps)), 0)
 }
 
 // checkUAStructNesting enforces the structure-element parent/child constraints

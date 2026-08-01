@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 )
 
@@ -33,13 +34,13 @@ func (v PDFVTViolation) Error() string {
 // hierarchy, and PDF/VT-1 identification in XMP. An empty result means no
 // violations were found.
 func ValidatePDFVT(doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(canceler{}, doc, "PDF/VT-1", false)
+	return validatePDFVTImpl(core.Canceler{}, doc, "PDF/VT-1", false)
 }
 
 // ValidatePDFVTContext is ValidatePDFVT with cancellation; a cancelled run
 // reports itself under the rule "limit" (see cancel.go).
 func ValidatePDFVTContext(ctx context.Context, doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(newCanceler(ctx), doc, "PDF/VT-1", false)
+	return validatePDFVTImpl(core.NewCanceler(ctx), doc, "PDF/VT-1", false)
 }
 
 // ValidatePDFVT2 checks whether doc conforms to PDF/VT-2 (ISO 16612-2). PDF/VT-2
@@ -49,16 +50,16 @@ func ValidatePDFVTContext(ctx context.Context, doc *Document) []PDFVTViolation {
 // reference-XObject prohibition relaxed — the PDF/X-5-specific external-reference
 // rules are not asserted.
 func ValidatePDFVT2(doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(canceler{}, doc, "PDF/VT-2", true)
+	return validatePDFVTImpl(core.Canceler{}, doc, "PDF/VT-2", true)
 }
 
 // ValidatePDFVT2Context is ValidatePDFVT2 with cancellation; a cancelled run
 // reports itself under the rule "limit" (see cancel.go).
 func ValidatePDFVT2Context(ctx context.Context, doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(newCanceler(ctx), doc, "PDF/VT-2", true)
+	return validatePDFVTImpl(core.NewCanceler(ctx), doc, "PDF/VT-2", true)
 }
 
-func validatePDFVTImpl(cancel canceler, doc *Document, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
+func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
 	doc = beginRunCancel(doc, cancel)
 	var out []PDFVTViolation
 	add := func(rule, msg string, obj int) {

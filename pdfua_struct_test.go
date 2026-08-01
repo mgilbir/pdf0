@@ -248,7 +248,7 @@ func TestRoleMapChainBudgetDeclines(t *testing.T) {
 	rm.Set("MyRow", Name("RowBase"))
 	rm.Set("RowBase", Name("TR"))
 	doc := roleMapChainDoc(rm)
-	doc.limits.roleMapSteps = 1 // room for the first hop only
+	doc.limits.RoleMapSteps = 1 // room for the first hop only
 	cat := doc.ResolveDict(IndirectRef{Number: 1})
 	if v := checkUARoleMap(doc, cat); len(v) != 0 {
 		t.Errorf("budget trip manufactured a role-map finding: %+v", v)

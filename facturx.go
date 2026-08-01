@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 
 	"github.com/mgilbir/formalis"
@@ -190,7 +191,7 @@ func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
 // name to look for across container and invoice findings alike. What cannot
 // happen is an empty result: a cancelled validation never looks clean.
 func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) (res FacturXResult) {
-	cancel := newCanceler(ctx)
+	cancel := core.NewCanceler(ctx)
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, FacturXViolation{Rule: rule, Message: msg, Object: obj})
 	}

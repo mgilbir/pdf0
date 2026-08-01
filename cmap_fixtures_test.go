@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"encoding/binary"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 
 	"github.com/mgilbir/pdf0/internal/font"
@@ -81,7 +82,7 @@ func TestCmapEmptySubtableDoesNotDisplace(t *testing.T) {
 	fp := font.ParseSFNT(buildSFNTWithCmapSubtables([]sub{
 		{3, 1, bmp},
 		{3, 10, buildCmapFormat12(nil)}, // well formed, maps nothing
-	}), defaultMaxCmapWork)
+	}), core.DefaultMaxCmapWork)
 	if fp.Cmap[0x41] != 100 {
 		t.Errorf("empty (3,10): cmap[U+0041] = %d, want the (3,1) mapping 100", fp.Cmap[0x41])
 	}

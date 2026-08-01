@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/font"
 	"strings"
 	"testing"
@@ -92,7 +93,7 @@ func budgetBustingCmap() []byte {
 }
 
 func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
-	m, partial := font.ParseCmapSubtable(budgetBustingCmap(), defaultMaxCmapWork)
+	m, partial := font.ParseCmapSubtable(budgetBustingCmap(), core.DefaultMaxCmapWork)
 	if !partial {
 		t.Fatal("the work budget did not trip; the fixture no longer exercises it")
 	}
@@ -156,8 +157,8 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 	}
 
 	// The trip is not silently swallowed either.
-	trips := doc.valCache.run.limits.snapshot()
-	if len(trips) == 0 || trips[0].guard != limitCmapWork {
+	trips := doc.valCache.run.limits.Snapshot()
+	if len(trips) == 0 || trips[0].Guard() != limitCmapWork {
 		t.Errorf("cmap work-budget trip was not reported: %v", trips)
 	}
 }
@@ -244,7 +245,7 @@ func TestCIDWidthBudgetDoesNotReportWidthMismatch(t *testing.T) {
 	if len(bad) > 0 {
 		t.Errorf("width rule fired on a font whose /W was dropped by the range budget: %v", bad)
 	}
-	if trips := doc.valCache.run.limits.snapshot(); len(trips) == 0 || trips[0].guard != limitCIDWidthRange {
+	if trips := doc.valCache.run.limits.Snapshot(); len(trips) == 0 || trips[0].Guard() != limitCIDWidthRange {
 		t.Errorf("/W range budget trip was not reported: %v", trips)
 	}
 }
@@ -334,7 +335,7 @@ func TestOverlongTokenIsNotAnOperator(t *testing.T) {
 	run := append(bytes.Repeat([]byte("A"), 514), []byte("k")...)
 	data := append([]byte("q "), run...)
 	data = append(data, []byte(" Q")...)
-	rgb, cmyk, gray := scanStreamForDeviceOps(canceler{}, data)
+	rgb, cmyk, gray := scanStreamForDeviceOps(core.Canceler{}, data)
 	if cmyk || rgb {
 		t.Errorf("a %d-byte binary run was tokenized into colour operators: rgb=%v cmyk=%v gray=%v", len(run), rgb, cmyk, gray)
 	}
@@ -342,7 +343,7 @@ func TestOverlongTokenIsNotAnOperator(t *testing.T) {
 	// The tokenizer used by the operator whitelist must not manufacture an
 	// operator out of the tail either.
 	var ops []string
-	forEachContentToken(canceler{}, data, func(tok []byte, isName bool) {
+	forEachContentToken(core.Canceler{}, data, func(tok []byte, isName bool) {
 		if !isName {
 			ops = append(ops, string(tok))
 		}
@@ -361,7 +362,7 @@ func TestOverlongTokenIsNotAnOperator(t *testing.T) {
 // already correct; what was missing was any way for a caller to know.
 func TestGridBudgetSaysItDidNotFinish(t *testing.T) {
 	bomb := []tableRow{{cell(1, 1<<25)}}
-	v, complete := gridDefects(bomb, defaultMaxTableGridFills)
+	v, complete := gridDefects(bomb, core.DefaultMaxTableGridFills)
 	if complete {
 		t.Fatal("the grid work budget did not trip; the fixture no longer exercises it")
 	}
@@ -369,7 +370,7 @@ func TestGridBudgetSaysItDidNotFinish(t *testing.T) {
 		t.Errorf("an abandoned layout must not report defects: %v", v)
 	}
 	ok := []tableRow{{cell(1, 1), cell(1, 1)}, {cell(1, 1), cell(1, 1)}}
-	if _, complete := gridDefects(ok, defaultMaxTableGridFills); !complete {
+	if _, complete := gridDefects(ok, core.DefaultMaxTableGridFills); !complete {
 		t.Error("an ordinary table must lay out within the budget")
 	}
 	// A lowered budget trips where the default would not: the same table is
@@ -431,23 +432,23 @@ func TestObjStmBudgetTripIsReported(t *testing.T) {
 // TestLimitRecorderIsBounded pins that the report cannot itself become the
 // resource exhaustion the guards exist to prevent.
 func TestLimitRecorderIsBounded(t *testing.T) {
-	r := &limitRecorder{}
-	for i := 0; i < 10*maxRecordedLimitTrips; i++ {
-		r.note(limitContentStream, "distinct detail", i)
+	r := &core.Recorder{}
+	for i := 0; i < 10*core.MaxRecordedTrips; i++ {
+		r.Note(limitContentStream, "distinct detail", i)
 	}
-	trips := r.snapshot()
-	if len(trips) != maxRecordedLimitTrips+1 { // +1 for the aggregate
-		t.Fatalf("recorder kept %d trips, want %d plus one aggregate", len(trips), maxRecordedLimitTrips)
+	trips := r.Snapshot()
+	if len(trips) != core.MaxRecordedTrips+1 { // +1 for the aggregate
+		t.Fatalf("recorder kept %d trips, want %d plus one aggregate", len(trips), core.MaxRecordedTrips)
 	}
-	if !hasMessage([]string{trips[len(trips)-1].message()}, "further distinct guard trips") {
-		t.Errorf("dropped trips were not accounted for: %q", trips[len(trips)-1].message())
+	if !hasMessage([]string{trips[len(trips)-1].Message()}, "further distinct guard trips") {
+		t.Errorf("dropped trips were not accounted for: %q", trips[len(trips)-1].Message())
 	}
 	// Repeats of an identical trip collapse.
-	r2 := &limitRecorder{}
+	r2 := &core.Recorder{}
 	for i := 0; i < 100; i++ {
-		r2.note(limitGridFills, "same", 1)
+		r2.Note(limitGridFills, "same", 1)
 	}
-	if got := len(r2.snapshot()); got != 1 {
+	if got := len(r2.Snapshot()); got != 1 {
 		t.Errorf("identical trips were not deduplicated: %d", got)
 	}
 }
@@ -499,7 +500,7 @@ func TestIncrementalRefusesMissingObjects(t *testing.T) {
 // per-stream cap is deliberately *not* the guard used here — it also bounds the
 // metadata stream, so lowering it makes the embedded document unidentifiable
 // rather than incompletely validated, which is a different path.
-func embeddedPDFAFixture(t *testing.T, lim limits) (inner []byte, outer *Document) {
+func embeddedPDFAFixture(t *testing.T, lim core.Limits) (inner []byte, outer *Document) {
 	t.Helper()
 
 	doc := NewPDFADocument(PDFA4)
@@ -569,17 +570,17 @@ func embeddedPDFAFixture(t *testing.T, lim limits) (inner []byte, outer *Documen
 // the outer document's, so a caller's configured ceiling did not reach the one
 // place a hostile file gets a whole second document validated.
 func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
-	innerBytes, _ := embeddedPDFAFixture(t, defaultLimits())
+	innerBytes, _ := embeddedPDFAFixture(t, core.DefaultLimits())
 
 	// Under the defaults the nested run completes, so its verdict is real...
-	if compliant, complete := embeddedPDFACompliant(canceler{}, innerBytes, defaultLimits()); !complete {
+	if compliant, complete := embeddedPDFACompliant(core.Canceler{}, innerBytes, core.DefaultLimits()); !complete {
 		t.Fatal("the nested validation should complete under the default limits")
 	} else if !compliant {
 		t.Error("a PDF/A-4 document embedded in another should be reported compliant")
 	}
 	// ...and a file that genuinely is not PDF/A is still condemned, completely.
 	// The rule must decline only when pdf0 could not look, never when it did.
-	if compliant, complete := embeddedPDFACompliant(canceler{}, []byte("not a PDF at all"), defaultLimits()); compliant || !complete {
+	if compliant, complete := embeddedPDFACompliant(core.Canceler{}, []byte("not a PDF at all"), core.DefaultLimits()); compliant || !complete {
 		t.Errorf("non-PDF bytes: compliant=%v complete=%v, want false/true", compliant, complete)
 	}
 
@@ -587,7 +588,7 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	// cap the embedded document cannot be validated under withholds the verdict
 	// rather than turning it into a 6.9 finding.
 	strict := resolveLimits([]Option{WithMaxDecodedContentBytes(1)})
-	if _, complete := embeddedPDFACompliant(canceler{}, innerBytes, strict); complete {
+	if _, complete := embeddedPDFACompliant(core.Canceler{}, innerBytes, strict); complete {
 		t.Error("a nested run that reported a checker finding must be reported as incomplete")
 	}
 
@@ -598,7 +599,7 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	// well be one. That is the checker's doing, not the file's, and it must
 	// withhold rather than condemn.
 	noMeta := resolveLimits([]Option{WithMaxContentStreamBytes(1)})
-	if compliant, complete := embeddedPDFACompliant(canceler{}, innerBytes, noMeta); compliant || complete {
+	if compliant, complete := embeddedPDFACompliant(core.Canceler{}, innerBytes, noMeta); compliant || complete {
 		t.Errorf("metadata undecodable under a lowered cap: compliant=%v complete=%v, want false/false",
 			compliant, complete)
 	}

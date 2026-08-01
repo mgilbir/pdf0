@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 )
 
@@ -56,16 +57,16 @@ var pdfrTextOrVectorOps = map[string]bool{
 
 // ValidatePDFR checks a document against the PDF/R structural profile.
 func ValidatePDFR(d *Document) []PDFRViolation {
-	return validatePDFR(canceler{}, d)
+	return validatePDFR(core.Canceler{}, d)
 }
 
 // ValidatePDFRContext is ValidatePDFR with cancellation; a cancelled run reports
 // itself under the rule "limit" (see cancel.go).
 func ValidatePDFRContext(ctx context.Context, d *Document) []PDFRViolation {
-	return validatePDFR(newCanceler(ctx), d)
+	return validatePDFR(core.NewCanceler(ctx), d)
 }
 
-func validatePDFR(cancel canceler, d *Document) []PDFRViolation {
+func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 	// Run against a shallow copy carrying the per-run cache (see beginRun): it
 	// memoizes the shared traversals, applies the aggregate content budget,
 	// carries the cancellation signal, and gives the resource guards somewhere to

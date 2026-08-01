@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 )
 
@@ -13,7 +14,7 @@ import (
 // which pdf0 already validates.
 
 // validatePDFALevelA validates a Level A conformance level (1a/2a/3a).
-func validatePDFALevelA(cancel canceler, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
+func validatePDFALevelA(cancel core.Canceler, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
 	// All Level B requirements apply, so run the Level B pipeline and adopt its
 	// findings at this level. The Level B pipeline requires pdfaid:conformance
 	// "B"; at Level A it must be "A", so that one Level B finding is dropped and
@@ -36,7 +37,7 @@ func validatePDFALevelA(cancel canceler, doc *Document, level PDFALevel, rawData
 	for _, check := range []func(*Document, PDFALevel) []ValidationError{
 		checkLevelAConformance, checkLevelAStructure, checkLevelALanguage,
 	} {
-		if cancel.stopped() {
+		if cancel.Stopped() {
 			break
 		}
 		errs = append(errs, runCheck(doc, level, check)...)

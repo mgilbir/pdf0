@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"context"
+	"github.com/mgilbir/pdf0/internal/core"
 	"iter"
 	"strconv"
 	"strings"
@@ -20,7 +21,7 @@ import (
 // breaks follow the text-positioning operators and wide inter-glyph gaps become
 // spaces.
 func (d *Document) ExtractText() string {
-	text, _ := d.extractText(canceler{})
+	text, _ := d.extractText(core.Canceler{})
 	return text
 }
 
@@ -36,19 +37,19 @@ func (d *Document) ExtractText() string {
 //
 // The error is nil exactly when the extraction ran to completion.
 func (d *Document) ExtractTextContext(ctx context.Context) (string, error) {
-	return d.extractText(newCanceler(ctx))
+	return d.extractText(core.NewCanceler(ctx))
 }
 
-func (d *Document) extractText(cancel canceler) (string, error) {
+func (d *Document) extractText(cancel core.Canceler) (string, error) {
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
-		return "", cancel.stopErr("extracting text")
+		return "", cancel.StopErr("extracting text")
 	}
 	var b strings.Builder
 	for i, pg := range collectPages(d, catalog.Get("Pages")) {
 		// Per page: the coarse boundary. Within a page the tokenizer stops every
 		// cancelScanBytes, so a single enormous page is interruptible too.
-		if err := cancel.stopErr("extracting text"); err != nil {
+		if err := cancel.StopErr("extracting text"); err != nil {
 			return b.String(), err
 		}
 		if i > 0 {
@@ -56,7 +57,7 @@ func (d *Document) extractText(cancel canceler) (string, error) {
 		}
 		b.WriteString(d.extractPageText(cancel, pg.dict))
 	}
-	return b.String(), cancel.stopErr("extracting text")
+	return b.String(), cancel.StopErr("extracting text")
 }
 
 // ExtractPageText returns the visible text of a single page dictionary. It
@@ -69,10 +70,10 @@ func (d *Document) extractText(cancel canceler) (string, error) {
 // a context in. Adding a variant here would move that check inside a call that
 // does one page's work either way.
 func (d *Document) ExtractPageText(page *Dictionary) string {
-	return d.extractPageText(canceler{}, page)
+	return d.extractPageText(core.Canceler{}, page)
 }
 
-func (d *Document) extractPageText(cancel canceler, page *Dictionary) string {
+func (d *Document) extractPageText(cancel core.Canceler, page *Dictionary) string {
 	res := d.ResolveDict(inheritedPageAttr(d, page, "Resources"))
 	content := getContentStreamData(d, page.Get("Contents"))
 	var out strings.Builder
@@ -87,7 +88,7 @@ const maxTextFormDepth = 32
 // a form XObject — to out. Fonts are resolved from res; a Do that invokes a form
 // XObject recurses into it with the form's own resources (audit C28). seen guards
 // cyclic form references and depth bounds nesting.
-func (d *Document) extractContentText(cancel canceler, res *Dictionary, content []byte, out *strings.Builder, seen map[*Stream]bool, depth int) {
+func (d *Document) extractContentText(cancel core.Canceler, res *Dictionary, content []byte, out *strings.Builder, seen map[*Stream]bool, depth int) {
 	if len(content) == 0 || depth > maxTextFormDepth {
 		return
 	}
@@ -258,16 +259,16 @@ func (t contentToken) number() float64 {
 // The scan stops when cancel fires, checked every cancelScanBytes of input; see
 // cancel.go for why the check is gated on the scan position rather than run per
 // token.
-func tokenizeContent(cancel canceler, data []byte) iter.Seq[contentToken] {
+func tokenizeContent(cancel core.Canceler, data []byte) iter.Seq[contentToken] {
 	return func(yield func(contentToken) bool) {
 		i := 0
 		nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
 		for i < len(data) {
 			if i >= nextCancelCheck {
-				if cancel.stopped() {
+				if cancel.Stopped() {
 					return
 				}
-				nextCancelCheck = i + cancelScanBytes
+				nextCancelCheck = i + core.CancelScanBytes
 			}
 			c := data[i]
 			switch {

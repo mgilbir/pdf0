@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"math"
 	"strings"
 	"testing"
@@ -65,7 +66,7 @@ func TestObjStmHugeNPanic(t *testing.T) {
 	s.Dict.Set("N", Integer(math.MaxInt64))
 	s.Dict.Set("First", Integer(8))
 	noPanic(t, "objstm huge N", func() {
-		if _, _, _, err := parseObjStmIndex(canceler{}, s, defaultLimits()); err == nil {
+		if _, _, _, err := parseObjStmIndex(core.Canceler{}, s, core.DefaultLimits()); err == nil {
 			t.Fatalf("expected an error for an absurd /N, got nil")
 		}
 	})

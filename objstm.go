@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"sort"
 	"strconv"
 )
@@ -40,7 +41,7 @@ type objStmEntry struct {
 // 7.5.7) and parses its leading index of N (object number, offset) pairs.
 // It returns the decoded data alongside the index so callers can parse
 // individual objects without decoding twice.
-func parseObjStmIndex(cancel canceler, stream *Stream, lim limits) (data []byte, entries []objStmEntry, first int, err error) {
+func parseObjStmIndex(cancel core.Canceler, stream *Stream, lim core.Limits) (data []byte, entries []objStmEntry, first int, err error) {
 	if t, ok := stream.Dict.Get("Type").(Name); ok && t != "ObjStm" {
 		return nil, nil, 0, fmt.Errorf("not an object stream: /Type /%s", t)
 	}
@@ -114,7 +115,7 @@ func nextIntToken(l *Lexer) (int, error) {
 //
 // The only error it returns is a cancellation: a container that fails is
 // recorded, not reported, which is the point of the recovery path.
-func (d *Document) materializeScannedObjStms(cancel canceler) error {
+func (d *Document) materializeScannedObjStms(cancel core.Canceler) error {
 	var containers []int
 	for num, iobj := range d.Objects {
 		if st, ok := iobj.Value.(*Stream); ok {
@@ -124,18 +125,18 @@ func (d *Document) materializeScannedObjStms(cancel canceler) error {
 		}
 	}
 	sort.Ints(containers) // deterministic order, like loadCompressedObjects
-	objStmBudget := d.lim().objectStreamBytes
+	objStmBudget := d.lim().ObjectStreamBytes
 	var decompressed int64
 	for _, cnum := range containers {
 		// Per container, as in loadCompressedObjects: one iteration decompresses
 		// one object stream (cancel.go).
-		if err := cancel.stopErr("reading PDF object streams"); err != nil {
+		if err := cancel.StopErr("reading PDF object streams"); err != nil {
 			return err
 		}
 		st := d.Objects[cnum].Value.(*Stream)
 		if decompressed >= objStmBudget {
 			d.brokenObjStms = append(d.brokenObjStms, cnum)
-			d.noteReadLimit(limitObjStmTotal, fmt.Sprintf("object stream %d was not unpacked: this read has already decompressed %d bytes of object streams, reaching the %s-byte budget for one read; its objects are missing from the document, so any finding of the form \"X is absent\" may be a consequence of that", cnum, decompressed, limitBound(objStmBudget, defaultMaxObjectStreamBytes)), cnum)
+			d.noteReadLimit(limitObjStmTotal, fmt.Sprintf("object stream %d was not unpacked: this read has already decompressed %d bytes of object streams, reaching the %s-byte budget for one read; its objects are missing from the document, so any finding of the form \"X is absent\" may be a consequence of that", cnum, decompressed, core.LimitBound(objStmBudget, core.DefaultMaxObjectStreamBytes)), cnum)
 			continue
 		}
 		data, index, first, err := parseObjStmIndex(cancel, st, d.lim())
@@ -167,7 +168,7 @@ func (d *Document) materializeScannedObjStms(cancel canceler) error {
 // (type-2 xref entries) into doc.Objects. Container streams must already be
 // loaded; each container is decoded and indexed once regardless of how many
 // of its objects are referenced.
-func (d *Document) loadCompressedObjects(cancel canceler, table *XRefTable) error {
+func (d *Document) loadCompressedObjects(cancel core.Canceler, table *XRefTable) error {
 	// Group requested object numbers by container so each object stream is
 	// decoded exactly once.
 	byContainer := make(map[int][]int)
@@ -195,14 +196,14 @@ func (d *Document) loadCompressedObjects(cancel canceler, table *XRefTable) erro
 	}
 	sort.Ints(containers)
 
-	objStmBudget := d.lim().objectStreamBytes
+	objStmBudget := d.lim().ObjectStreamBytes
 	var decompressed int64
 	for _, containerNum := range containers {
 		// Per container: one iteration decompresses at most one object stream,
 		// which the per-stream cap already bounds. This is the other unbounded
 		// loop in a read (the uncompressed object load is the first), and the one
 		// that can decompress half a gigabyte from a small file.
-		if err := cancel.stopErr("reading PDF object streams"); err != nil {
+		if err := cancel.StopErr("reading PDF object streams"); err != nil {
 			return err
 		}
 		objNums := byContainer[containerNum]
@@ -219,7 +220,7 @@ func (d *Document) loadCompressedObjects(cancel canceler, table *XRefTable) erro
 		// undecodable one) to bound the parser's work and memory.
 		if decompressed >= objStmBudget {
 			d.brokenObjStms = append(d.brokenObjStms, containerNum)
-			d.noteReadLimit(limitObjStmTotal, fmt.Sprintf("object stream %d was not unpacked: this read has already decompressed %d bytes of object streams, reaching the %s-byte budget for one read; its objects are missing from the document, so any finding of the form \"X is absent\" may be a consequence of that", containerNum, decompressed, limitBound(objStmBudget, defaultMaxObjectStreamBytes)), containerNum)
+			d.noteReadLimit(limitObjStmTotal, fmt.Sprintf("object stream %d was not unpacked: this read has already decompressed %d bytes of object streams, reaching the %s-byte budget for one read; its objects are missing from the document, so any finding of the form \"X is absent\" may be a consequence of that", containerNum, decompressed, core.LimitBound(objStmBudget, core.DefaultMaxObjectStreamBytes)), containerNum)
 			continue
 		}
 		// A corrupt object stream (e.g. undecodable data) makes only its own

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 )
 
@@ -577,10 +578,10 @@ func isPDFMIME(subtype Object) bool {
 // is withheld rather than guessed. Under the defaults — every caller who
 // configures nothing, and the whole corpus — that condition is false and both
 // exits behave exactly as they always have.
-func embeddedPDFACompliant(cancel canceler, data []byte, lim limits) (compliant, complete bool) {
+func embeddedPDFACompliant(cancel core.Canceler, data []byte, lim core.Limits) (compliant, complete bool) {
 	// True when a failure below could be the checker's doing rather than the
 	// file's, and so must not be reported as non-conformance.
-	checkerMayHaveRefused := cancel.err() != nil || lim != defaultLimits()
+	checkerMayHaveRefused := cancel.Err() != nil || lim != core.DefaultLimits()
 
 	edoc, err := readDocument(cancel, bytes.NewReader(data), int64(len(data)), "", lim)
 	if err != nil {

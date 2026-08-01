@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 )
 
@@ -63,12 +64,12 @@ func TestObjectStreamSplitBudget(t *testing.T) {
 	}
 	for cnum := range containers {
 		st := writeSet[cnum].Value.(*Stream)
-		raw, err := decodeStreamData(canceler{}, st, lim)
+		raw, err := decodeStreamData(core.Canceler{}, st, lim)
 		if err != nil {
 			t.Fatalf("container %d: decode: %v", cnum, err)
 		}
-		if len(raw) >= lim.decodedStreamBytes {
-			t.Errorf("container %d decompresses to %d bytes, at/over the reader cap %d", cnum, len(raw), lim.decodedStreamBytes)
+		if len(raw) >= lim.DecodedStreamBytes {
+			t.Errorf("container %d decompresses to %d bytes, at/over the reader cap %d", cnum, len(raw), lim.DecodedStreamBytes)
 		}
 	}
 

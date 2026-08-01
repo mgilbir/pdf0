@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"context"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 	"testing"
 
@@ -225,7 +226,7 @@ func TestCancelledFacturXIsNeverClean(t *testing.T) {
 func TestReportCancellationOnlySpeaksWhenNobodyElseHas(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	c := newCanceler(ctx)
+	c := core.NewCanceler(ctx)
 
 	var out []FacturXViolation
 	add := func(rule, msg string, obj int) {
@@ -247,7 +248,7 @@ func TestReportCancellationOnlySpeaksWhenNobodyElseHas(t *testing.T) {
 	}
 	// A live context says nothing at all.
 	out = nil
-	reportCancellation(newCanceler(context.Background()), out, add)
+	reportCancellation(core.NewCanceler(context.Background()), out, add)
 	if len(out) != 0 {
 		t.Errorf("a run that was not cancelled must report nothing; got %v", out)
 	}

@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/syntax"
 )
 
@@ -64,7 +65,7 @@ func contentFacts(d *Document, content []byte, key *Stream) *streamContentFacts 
 	return f
 }
 
-func buildContentFacts(cancel canceler, content []byte) *streamContentFacts {
+func buildContentFacts(cancel core.Canceler, content []byte) *streamContentFacts {
 	f := &streamContentFacts{}
 	if len(content) == 0 {
 		return f

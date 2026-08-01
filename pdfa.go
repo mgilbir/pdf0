@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"io"
 	"math"
 	"strings"
@@ -154,16 +155,16 @@ func runByteCheck(level PDFALevel, check func() []ValidationError) (out []Valida
 // result means no implemented check fired, not a guarantee of full conformance
 // (the validator covers a subset of ISO 19005).
 func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []ValidationError {
-	return validatePDFABytes(canceler{}, doc, level, rawData)
+	return validatePDFABytes(core.Canceler{}, doc, level, rawData)
 }
 
 // ValidatePDFABytesContext is ValidatePDFABytes with cancellation; see
 // ValidatePDFAContext for how a cancelled run reports itself.
 func ValidatePDFABytesContext(ctx context.Context, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
-	return validatePDFABytes(newCanceler(ctx), doc, level, rawData)
+	return validatePDFABytes(core.NewCanceler(ctx), doc, level, rawData)
 }
 
-func validatePDFABytes(cancel canceler, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
+func validatePDFABytes(cancel core.Canceler, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
 	// Level A conformance is Level B plus the accessibility requirements; it is
 	// validated by running the Level B checks and adding the Level A rule
 	// families (see validatePDFALevelA).
@@ -397,13 +398,13 @@ type runState struct {
 	// limits collects the resource guards that tripped during this run, so a
 	// check that declines to assert because its input was truncated still says
 	// so. See limits.go; always non-nil when built by newValidationCache.
-	limits *limitRecorder
+	limits *core.Recorder
 
 	// cancel is the caller's cancellation signal for this run, or the
 	// never-cancelling zero value. It lives here — on state whose lifetime is
 	// exactly one run — rather than on the caller's Document, which outlives the
 	// operation. See cancel.go.
-	cancel canceler
+	cancel core.Canceler
 }
 
 // --- File structure checks (6.1) ---
@@ -4325,7 +4326,7 @@ func checkQNestingDepth(doc *Document, level PDFALevel, rule string, errs *[]Val
 // qNestingMaxDepth computes the maximum q/Q nesting depth of a decoded
 // content stream using a real operator tokenizer, so 'q' bytes inside string
 // literals, comments, names, or inline-image binary data do not count.
-func qNestingMaxDepth(cancel canceler, data []byte) int {
+func qNestingMaxDepth(cancel core.Canceler, data []byte) int {
 	depth, maxDepth := 0, 0
 	forEachContentOperator(cancel, data, func(op []byte) {
 		if len(op) != 1 {
@@ -4526,10 +4527,10 @@ func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMY
 // silently dropping the ICC rules for that file. Unlike the XMP packet bound,
 // the cost here is linear (a profile is read once and scanned, not expanded),
 // so headroom is cheap.
-func getICCProfileData(stream *Stream, lim limits) []byte {
+func getICCProfileData(stream *Stream, lim core.Limits) []byte {
 	filter := stream.Dict.Get("Filter")
 	if filter == nil {
-		if len(stream.Data) > lim.iccProfileBytes {
+		if len(stream.Data) > lim.ICCProfileBytes {
 			return nil
 		}
 		return stream.Data
@@ -4553,12 +4554,12 @@ func getICCProfileData(stream *Stream, lim limits) []byte {
 	}
 	defer r.Close()
 
-	limited := io.LimitReader(r, int64(lim.iccProfileBytes)+1)
+	limited := io.LimitReader(r, int64(lim.ICCProfileBytes)+1)
 	decoded, err := io.ReadAll(limited)
 	if err != nil {
 		return nil
 	}
-	if len(decoded) > lim.iccProfileBytes {
+	if len(decoded) > lim.ICCProfileBytes {
 		return nil
 	}
 	return decoded
@@ -5063,23 +5064,23 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		// not decode (or tokenize) them. This bounds the memory a flate-bomb
 		// document can force. Undecodable is negatively cached below, so the
 		// decision is stable across the several checks that walk the same page.
-		if c.pdfa.contentBytes >= lim.decodedContentBytes {
+		if c.pdfa.contentBytes >= lim.DecodedContentBytes {
 			c.pdfa.content[stream] = nil
-			noteLimit(doc, limitContentTotal, fmt.Sprintf("this run has already decoded %d bytes of content, reaching the %s-byte budget for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", c.pdfa.contentBytes, limitBound(lim.decodedContentBytes, defaultMaxDecodedContentBytes)), 0)
+			noteLimit(doc, limitContentTotal, fmt.Sprintf("this run has already decoded %d bytes of content, reaching the %s-byte budget for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", c.pdfa.contentBytes, core.LimitBound(lim.DecodedContentBytes, core.DefaultMaxDecodedContentBytes)), 0)
 			return nil
 		}
 	}
 	var data []byte
 	decoded, err := decodeStreamData(doc.canceler(), stream, lim)
 	switch {
-	case err == nil && len(decoded) <= lim.contentStreamBytes:
+	case err == nil && len(decoded) <= lim.ContentStreamBytes:
 		data = decoded
 	case err == nil:
 		// It decoded, but it is too large to hold and tokenize. Every
 		// content-driven rule — device colour, the operator whitelist, tagging,
 		// font usage — now sees nothing from this stream. That is the failure
 		// the old 1 MB cap caused silently; at least say so.
-		noteLimit(doc, limitContentStream, fmt.Sprintf("a content stream decodes to %d bytes, over the %s-byte scanning limit; it was not scanned", len(decoded), limitBound(int64(lim.contentStreamBytes), defaultMaxContentStreamBytes)), 0)
+		noteLimit(doc, limitContentStream, fmt.Sprintf("a content stream decodes to %d bytes, over the %s-byte scanning limit; it was not scanned", len(decoded), core.LimitBound(int64(lim.ContentStreamBytes), core.DefaultMaxContentStreamBytes)), 0)
 	}
 	if c := doc.valCache; c != nil {
 		c.pdfa.content[stream] = data
@@ -5108,7 +5109,7 @@ func decodeMetadataStream(doc *Document, stream *Stream) []byte {
 	}
 	lim := doc.lim()
 	var data []byte
-	if decoded, err := decodeStreamData(doc.canceler(), stream, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
+	if decoded, err := decodeStreamData(doc.canceler(), stream, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
 		data = decoded
 	}
 	if c := doc.valCache; c != nil {
@@ -5163,7 +5164,7 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 //
 // The scan stops when cancel fires, checked every cancelScanBytes of input
 // like the other content scanners; see cancel.go.
-func scanStreamForDeviceOps(cancel canceler, data []byte) (usesRGB, usesCMYK, usesGray bool) {
+func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMYK, usesGray bool) {
 	n := len(data)
 	var lastName string
 	sawColorOp := false
@@ -5182,10 +5183,10 @@ func scanStreamForDeviceOps(cancel canceler, data []byte) (usesRGB, usesCMYK, us
 	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
 	for i < n {
 		if i >= nextCancelCheck {
-			if cancel.stopped() {
+			if cancel.Stopped() {
 				return
 			}
-			nextCancelCheck = i + cancelScanBytes
+			nextCancelCheck = i + core.CancelScanBytes
 		}
 		// Skip whitespace
 		for i < n && isContentWS(data[i]) {
@@ -5450,7 +5451,7 @@ func scanStreamForDeviceOps(cancel canceler, data []byte) (usesRGB, usesCMYK, us
 // dictionary marker, array/procedure delimiter, comment, or name). String
 // literals, comments, and inline-image binary data (BI ... ID <binary> EI)
 // are skipped, so operator bytes occurring inside them are never reported.
-func forEachContentOperator(cancel canceler, data []byte, fn func(op []byte)) {
+func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte)) {
 	forEachContentToken(cancel, data, func(tok []byte, isName bool) {
 		if !isName {
 			fn(tok)
@@ -5465,16 +5466,16 @@ func forEachContentOperator(cancel canceler, data []byte, fn func(op []byte)) {
 // The scan stops when cancel fires, checked every cancelScanBytes of input;
 // see cancel.go for why the check is gated on the scan position rather than
 // run per token.
-func forEachContentToken(cancel canceler, data []byte, fn func(tok []byte, isName bool)) {
+func forEachContentToken(cancel core.Canceler, data []byte, fn func(tok []byte, isName bool)) {
 	n := len(data)
 	i := 0
 	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
 	for i < n {
 		if i >= nextCancelCheck {
-			if cancel.stopped() {
+			if cancel.Stopped() {
 				return
 			}
-			nextCancelCheck = i + cancelScanBytes
+			nextCancelCheck = i + core.CancelScanBytes
 		}
 		for i < n && isContentWS(data[i]) {
 			i++
@@ -5564,7 +5565,7 @@ type usedResourceNames struct {
 	shadings map[string]bool
 }
 
-func contentUsedNames(cancel canceler, data []byte) usedResourceNames {
+func contentUsedNames(cancel core.Canceler, data []byte) usedResourceNames {
 	u := usedResourceNames{
 		xobjects: make(map[string]bool),
 		patterns: make(map[string]bool),
@@ -6482,7 +6483,7 @@ type contentColorUsage struct {
 	paintsStroke bool
 }
 
-func scanContentColorUsage(cancel canceler, data []byte) contentColorUsage {
+func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage {
 	u := contentColorUsage{
 		fillCS:   make(map[string]bool),
 		strokeCS: make(map[string]bool),

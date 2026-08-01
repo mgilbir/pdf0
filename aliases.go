@@ -1,6 +1,8 @@
 package pdf0
 
-import "github.com/mgilbir/pdf0/object"
+import (
+	"github.com/mgilbir/pdf0/object"
+)
 
 // The ISO 32000-2 7.3 object model lives in the object subpackage. It is data
 // only — no parsing, no serialization, no document-level reference resolution —

@@ -141,7 +141,7 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 	// container, preserving the previous output byte-for-byte. An object whose
 	// body alone exceeds the budget cannot be packed safely, so it is left as an
 	// individual indirect object.
-	objStmMax := d.lim().objStmMaxRaw()
+	objStmMax := d.lim().ObjStmMaxRaw()
 	out := make(map[int]*IndirectObject, len(d.Objects)+4)
 	for num, iobj := range d.Objects {
 		out[num] = iobj

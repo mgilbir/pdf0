@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 )
 
 // This file validates PDF/UA-2 (ISO 14289-2:2024), the PDF 2.0 accessibility
@@ -23,16 +24,16 @@ import (
 // ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the UAViolation
 // type; clause identifiers follow ISO 14289-2.
 func ValidatePDFUA2(d *Document) []UAViolation {
-	return validatePDFUA2(canceler{}, d)
+	return validatePDFUA2(core.Canceler{}, d)
 }
 
 // ValidatePDFUA2Context is ValidatePDFUA2 with cancellation; see
 // ValidatePDFUAContext for how a cancelled run reports itself.
 func ValidatePDFUA2Context(ctx context.Context, d *Document) []UAViolation {
-	return validatePDFUA2(newCanceler(ctx), d)
+	return validatePDFUA2(core.NewCanceler(ctx), d)
 }
 
-func validatePDFUA2(cancel canceler, d *Document) []UAViolation {
+func validatePDFUA2(cancel core.Canceler, d *Document) []UAViolation {
 	// The shared checks (tagging, structure tree, default language, displayed
 	// title, Unicode mapping, artifacts, headings), parameterized for part 2 so
 	// the identification rule requires pdfuaid:part 2 and the UA-1 header rule

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 	"testing"
 )
@@ -34,7 +35,7 @@ func TestParseXMPPropertyForms(t *testing.T) {
 			</xmpMM:DerivedFrom>
 		</rdf:Description>`)
 
-	props, err := parseXMPProperties([]byte(xmp), defaultMaxXMPPacketBytes)
+	props, err := parseXMPProperties([]byte(xmp), core.DefaultMaxXMPPacketBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +274,7 @@ func TestExtensionFieldUndeclaredType(t *testing.T) {
 </rdf:li></rdf:Seq></pdfaSchema:valueType>
 </rdf:li></rdf:Bag></pdfaExtension:schemas>
 </rdf:Description></rdf:RDF></x:xmpmeta>`
-	props, err := parseXMPProperties([]byte(xmp), defaultMaxXMPPacketBytes)
+	props, err := parseXMPProperties([]byte(xmp), core.DefaultMaxXMPPacketBytes)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

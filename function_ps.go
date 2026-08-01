@@ -43,7 +43,7 @@ func evalType4(d *Document, stream *Stream, dict *Dictionary, x []float64) ([]fl
 	for _, v := range x {
 		st = append(st, psVal{num: v})
 	}
-	budget := psBudget{max: d.lim().postScriptSteps}
+	budget := psBudget{max: d.lim().PostScriptSteps}
 	st, ok = psExec(prog, st, 0, &budget)
 	if !ok || len(st) < n {
 		return nil, false

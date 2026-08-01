@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"context"
+	"github.com/mgilbir/pdf0/internal/core"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -245,7 +246,7 @@ type ExtractedImage struct {
 // document that is unbounded memory. Use Images to iterate lazily with at most
 // one decoded image live at a time.
 func (d *Document) ExtractImages() []ExtractedImage {
-	out, _ := extractImages(d, canceler{})
+	out, _ := extractImages(d, core.Canceler{})
 	return out
 }
 
@@ -267,18 +268,18 @@ func (d *Document) ExtractImages() []ExtractedImage {
 // decoded only as it is yielded, breaking after image N skips exactly the work
 // a context checked between images would have skipped.
 func (d *Document) ExtractImagesContext(ctx context.Context) ([]ExtractedImage, error) {
-	return extractImages(d, newCanceler(ctx))
+	return extractImages(d, core.NewCanceler(ctx))
 }
 
-func extractImages(d *Document, cancel canceler) ([]ExtractedImage, error) {
+func extractImages(d *Document, cancel core.Canceler) ([]ExtractedImage, error) {
 	var out []ExtractedImage
 	walkImagesCancel(d, cancel, func(im ExtractedImage) bool {
 		// Keep the image first, then stop: it is already decoded, and throwing
 		// away finished work is not what cancellation is for.
 		out = append(out, im)
-		return !cancel.stopped()
+		return !cancel.Stopped()
 	})
-	return out, cancel.stopErr("extracting images")
+	return out, cancel.StopErr("extracting images")
 }
 
 // Images returns an iterator over the image XObjects drawn from the document's
@@ -294,10 +295,10 @@ func (d *Document) Images() iter.Seq[ExtractedImage] {
 // walkImages drives the image traversal, calling yield for each image until it
 // returns false.
 func walkImages(d *Document, yield func(ExtractedImage) bool) {
-	walkImagesCancel(d, canceler{}, yield)
+	walkImagesCancel(d, core.Canceler{}, yield)
 }
 
-func walkImagesCancel(d *Document, cancel canceler, yield func(ExtractedImage) bool) {
+func walkImagesCancel(d *Document, cancel core.Canceler, yield func(ExtractedImage) bool) {
 	// Install a per-run cache on a shallow copy, as the validators do: a tint
 	// transform evaluates per pixel, and without the cache each evaluation
 	// re-decoded the function stream (and re-parsed a type-4 program) — a
@@ -313,7 +314,7 @@ func walkImagesCancel(d *Document, cancel canceler, yield func(ExtractedImage) b
 	for _, pg := range collectPages(d, cat.Get("Pages")) {
 		// Per page, on top of the per-image check the yield wrapper applies:
 		// a page whose resources hold no images still costs a resource walk.
-		if cancel.stopped() {
+		if cancel.Stopped() {
 			return
 		}
 		if !collectImagesFrom(d, resolveResources(d, pg.dict), seen, 0, yield) {
@@ -479,8 +480,8 @@ func extractImage(d *Document, st *Stream, num int) ExtractedImage {
 // the shared content budget — would bloat memory and starve the small shared
 // streams (tint functions, palettes) the cache exists for. The same 64MB
 // per-stream bound applies.
-func decodeImageSamples(cancel canceler, st *Stream, lim limits) []byte {
-	if decoded, err := decodeStreamData(cancel, st, lim); err == nil && len(decoded) <= lim.contentStreamBytes {
+func decodeImageSamples(cancel core.Canceler, st *Stream, lim core.Limits) []byte {
+	if decoded, err := decodeStreamData(cancel, st, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
 		return decoded
 	}
 	return nil

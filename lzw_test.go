@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"compress/lzw"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 )
 
@@ -32,7 +33,7 @@ func TestLZWDecodeRoundTrip(t *testing.T) {
 		}
 		w.Close()
 
-		got, err := lzwDecode(canceler{}, buf.Bytes(), 0, defaultLimits())
+		got, err := lzwDecode(core.Canceler{}, buf.Bytes(), 0, core.DefaultLimits())
 		if err != nil {
 			t.Fatalf("case %d: decode: %v", i, err)
 		}
@@ -47,7 +48,7 @@ func TestLZWDecodeRoundTrip(t *testing.T) {
 func TestLZWSpecVector(t *testing.T) {
 	encoded := []byte{0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01}
 	want := []byte{0x2D, 0x2D, 0x2D, 0x2D, 0x2D, 0x41, 0x2D, 0x2D, 0x2D, 0x42}
-	got, err := lzwDecode(canceler{}, encoded, 1, defaultLimits())
+	got, err := lzwDecode(core.Canceler{}, encoded, 1, core.DefaultLimits())
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestLZWStreamDecoded(t *testing.T) {
 	parms.Set("EarlyChange", Integer(0))
 	s.Dict.Set("DecodeParms", parms)
 
-	got, err := decodeStreamData(canceler{}, s, defaultLimits())
+	got, err := decodeStreamData(core.Canceler{}, s, core.DefaultLimits())
 	if err != nil {
 		t.Fatalf("decodeStreamData: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestLZWInvalidCode(t *testing.T) {
 			t.Fatalf("lzwDecode panicked: %v", r)
 		}
 	}()
-	if _, err := lzwDecode(canceler{}, []byte{0xFF, 0xFF, 0xFF, 0xFF}, 1, defaultLimits()); err == nil {
+	if _, err := lzwDecode(core.Canceler{}, []byte{0xFF, 0xFF, 0xFF, 0xFF}, 1, core.DefaultLimits()); err == nil {
 		t.Logf("no error (acceptable); must not panic")
 	}
 }

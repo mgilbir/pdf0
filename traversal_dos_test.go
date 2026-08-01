@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 	"time"
 )
@@ -29,7 +30,7 @@ func directDict(n int) *Dictionary {
 func TestPSStepBudget(t *testing.T) {
 	prog := []psItem{{isNum: true, num: 1}, {isNum: true, num: 2}, {op: "add"}}
 
-	budget := psBudget{max: defaultMaxPostScriptSteps}
+	budget := psBudget{max: core.DefaultMaxPostScriptSteps}
 	if _, ok := psExec(prog, nil, 0, &budget); !ok {
 		t.Fatal("a simple program should execute")
 	}

@@ -40,7 +40,7 @@ func TestDecodeContentStreamBudget(t *testing.T) {
 	}
 
 	// Simulate the run having reached the budget.
-	doc.valCache.pdfa.contentBytes = doc.lim().decodedContentBytes
+	doc.valCache.pdfa.contentBytes = doc.lim().DecodedContentBytes
 	s2 := makeFlateContentStream(1 << 20)
 	if got := decodeContentStream(doc, s2); got != nil {
 		t.Fatalf("over budget: decoded %d bytes, want nil (budget must skip decoding)", len(got))

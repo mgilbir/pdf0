@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/mgilbir/pdf0/internal/core"
 	"io"
 	"os"
 	"runtime"
@@ -94,7 +95,7 @@ func cancelledCtx() context.Context {
 // the package's own IsCheckerFinding predicate.
 func hasCancelFinding[T Violation](v []T) bool {
 	for _, e := range v {
-		if e.RuleID() == limitRule && strings.Contains(e.Error(), limitCanceled) && IsCheckerFinding(e) {
+		if e.RuleID() == limitRule && strings.Contains(e.Error(), core.GuardCanceled) && IsCheckerFinding(e) {
 			return true
 		}
 	}
@@ -273,7 +274,7 @@ func assertNotClean[T Violation](t *testing.T, name string, v []T) {
 	}
 	sawCancel, real := false, 0
 	for _, e := range v {
-		if e.RuleID() == limitRule && strings.Contains(e.Error(), limitCanceled) {
+		if e.RuleID() == limitRule && strings.Contains(e.Error(), core.GuardCanceled) {
 			sawCancel = true
 		}
 		if !IsCheckerFinding(e) {
@@ -281,7 +282,7 @@ func assertNotClean[T Violation](t *testing.T, name string, v []T) {
 		}
 	}
 	if !sawCancel {
-		t.Errorf("%s: cancelled run reported no %q finding naming %q", name, limitRule, limitCanceled)
+		t.Errorf("%s: cancelled run reported no %q finding naming %q", name, limitRule, core.GuardCanceled)
 	}
 	if real != 0 {
 		t.Errorf("%s: cancelled run reported %d non-checker findings; no check ran, so it cannot have found any", name, real)

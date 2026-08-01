@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"sort"
 	"strings"
 
@@ -215,8 +216,8 @@ func adoptInvoiceFindings(adopt func(v formalis.Violation, advisory bool), rep f
 //
 // The existing-finding test is what keeps one cancellation to one finding:
 // whichever half noticed first has already said it, in the same words.
-func reportCancellation[T Violation](cancel canceler, v []T, add func(rule, msg string, obj int)) {
-	err := cancel.err()
+func reportCancellation[T Violation](cancel core.Canceler, v []T, add func(rule, msg string, obj int)) {
+	err := cancel.Err()
 	if err == nil {
 		return
 	}
@@ -225,5 +226,5 @@ func reportCancellation[T Violation](cancel canceler, v []T, add func(rule, msg 
 			return
 		}
 	}
-	add(limitRule, limitTrip{guard: limitCanceled, detail: err.Error()}.message(), 0)
+	add(limitRule, core.NewTrip(core.GuardCanceled, err.Error(), 0).Message(), 0)
 }

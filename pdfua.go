@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 )
 
@@ -26,7 +27,7 @@ func (v UAViolation) Error() string {
 // figure alternate text. It is a partial validator — a clean result means the
 // implemented checks passed, not full PDF/UA conformance.
 func ValidatePDFUA(doc *Document) []UAViolation {
-	return validatePDFUA(canceler{}, doc, "1")
+	return validatePDFUA(core.Canceler{}, doc, "1")
 }
 
 // ValidatePDFUAContext is ValidatePDFUA with cancellation. When ctx ends the run
@@ -35,14 +36,14 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 // checker finding — so a cancelled run cannot be mistaken for a clean one. See
 // cancel.go.
 func ValidatePDFUAContext(ctx context.Context, doc *Document) []UAViolation {
-	return validatePDFUA(newCanceler(ctx), doc, "1")
+	return validatePDFUA(core.NewCanceler(ctx), doc, "1")
 }
 
 // validatePDFUA runs the checks shared by PDF/UA-1 and PDF/UA-2, parameterized
 // by the pdfuaid:part the file must declare. The two UA-1-only requirements —
 // part 1 and a PDF 1.x header — are selected here by part rather than filtered
 // out of the result by message text afterwards (audit C39).
-func validatePDFUA(cancel canceler, doc *Document, part string) []UAViolation {
+func validatePDFUA(cancel core.Canceler, doc *Document, part string) []UAViolation {
 	// Install a per-run cache (page tree, decoded content, font-usage map) on a
 	// shallow copy so the original document is never mutated. Many checks walk
 	// the same structures — collectFontTextUsage alone runs in nine font checks —
@@ -453,11 +454,11 @@ func checkUARoleMapIntegrity(d *Document, cat *Dictionary) []UAViolation {
 		cur := key
 		for {
 			work++
-			if work > d.lim().roleMapSteps {
+			if work > d.lim().RoleMapSteps {
 				// Every key not yet examined goes unchecked, including the
 				// cheap standard-type test, so the remaining keys are
 				// unknown rather than clean.
-				noteLimit(d, limitRoleMapWork, fmt.Sprintf("following the /RoleMap chains cost more than %s steps; the remaining keys were not checked for standard-type remapping or cycles", limitBound(int64(d.lim().roleMapSteps), defaultMaxRoleMapSteps)), 0)
+				noteLimit(d, limitRoleMapWork, fmt.Sprintf("following the /RoleMap chains cost more than %s steps; the remaining keys were not checked for standard-type remapping or cycles", core.LimitBound(int64(d.lim().RoleMapSteps), core.DefaultMaxRoleMapSteps)), 0)
 				return v
 			}
 			next, ok := d.Resolve(roleMap.Get(cur)).(Name)
