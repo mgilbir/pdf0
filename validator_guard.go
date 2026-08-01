@@ -154,17 +154,76 @@ func (f *exampleFindings) add(e ValidationError) {
 	f.errs = append(f.errs, e)
 }
 
-// sortFormalisViolations is sortViolations for the Factur-X / Order-X findings,
-// which use the external formalis.Violation type and so cannot satisfy the
-// Violation interface this package defines.
-func sortFormalisViolations(v []formalis.Violation) {
-	sort.Slice(v, func(i, j int) bool {
-		if v[i].Rule != v[j].Rule {
-			return v[i].Rule < v[j].Rule
+// adoptInvoiceFindings replays the findings of a formalis Report through an
+// adopt callback, so ValidateFacturX and ValidateOrderX can carry them in their
+// own finding type alongside the container findings they made themselves.
+//
+// Unlike the PDF/A-3 findings adoptPDFAFindings folds in, these keep their rule
+// identifiers verbatim, with no namespace prefix. There is nothing to
+// disambiguate: formalis mints its identifiers in its own space (EN 16931's
+// BR-*, Order-X's ORDER-*, and the reserved "limit", "profile" and "root"),
+// pdf0's container identifiers are "structure", "attachment", "metadata" and the
+// unreadable-XML rules, and the two sets are disjoint. What a prefix would have
+// stood in for — which authority wrote the rule — is carried as data instead, in
+// FacturXViolation.Source, where a caller can key on it rather than parse it out
+// of a string.
+//
+// Two consequences of adopting verbatim are the point rather than a side effect:
+//
+//   - formalis.RuleLimit is "limit", the identifier pdf0 reserves for the same
+//     event, so a cancelled or budget-stopped rule engine reaches the caller as a
+//     finding IsCheckerFinding recognises, with no special case here. That is the
+//     property adoptPDFAFindings has to preserve by hand for the PDF/A-3 half,
+//     and the reason both halves must spell it the same way.
+//   - formalis.RuleProfile ("profile") is deliberately not folded into that set,
+//     although formalis.IsCheckerViolation covers it. It reports that the profile
+//     pdf0 passed is not one formalis implements, and pdf0 only ever passes one
+//     it read out of the container's XMP — so the finding arises exactly when
+//     fx:ConformanceLevel is missing or unrecognised, which is a defect in the
+//     document that pdf0 has already reported as a "metadata" finding of its own.
+//     It is not a report that pdf0 stopped early, and classifying it as one would
+//     hide a real container defect from a caller counting non-conformances.
+//
+// The advisory flag is what keeps the two halves of the report from being
+// conflated. The rule engine reports findings at two severities its authorities
+// published — CEN flags 1,168 of the two EN 16931 syntax bindings' assertions
+// warning rather than fatal, and a conforming Factur-X EXTENDED invoice trips
+// dozens of them by design, since they hold a document down to the EN 16931 core
+// subset of CII. Those are not non-conformances and must not land in Violations:
+// pdf0's Violation interface carries no severity, so a warning folded into that
+// slice would be indistinguishable from a PDF/A-3 failure the moment a caller
+// appended it to a mixed report — the reclassification the severity exists to
+// prevent, one level up. They are kept, in a field of their own, because
+// discarding them would throw away the only reading anyone has of those rules.
+func adoptInvoiceFindings(adopt func(v formalis.Violation, advisory bool), rep formalis.Report) {
+	for _, v := range rep.Violations {
+		adopt(v, v.Severity == formalis.SeverityWarning)
+	}
+}
+
+// reportCancellation adds the "limit" finding a cancelled container validation
+// owes its caller, unless one is already present.
+//
+// ValidateFacturX and ValidateOrderX compose two rule engines, and each reports
+// a cancellation it saw itself: the PDF/A-3 validation through its own limit
+// recorder (adopted bare, see adoptPDFAFindings), the invoice rule engine
+// through formalis.RuleLimit, which is the same identifier. Neither covers the
+// container checks that run between them, and neither runs at all for a
+// container with no embedded XML to hand over — so a run cancelled in those
+// windows would return findings that read as a verdict on a document nobody
+// finished looking at. Polling once on the way out closes them.
+//
+// The existing-finding test is what keeps one cancellation to one finding:
+// whichever half noticed first has already said it, in the same words.
+func reportCancellation[T Violation](cancel canceler, v []T, add func(rule, msg string, obj int)) {
+	err := cancel.err()
+	if err == nil {
+		return
+	}
+	for _, e := range v {
+		if e.RuleID() == limitRule {
+			return
 		}
-		if v[i].Object != v[j].Object {
-			return v[i].Object < v[j].Object
-		}
-		return v[i].Message < v[j].Message
-	})
+	}
+	add(limitRule, limitTrip{guard: limitCanceled, detail: err.Error()}.message(), 0)
 }

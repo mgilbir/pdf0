@@ -121,6 +121,35 @@ granularity; `cancel.go` carries the design record.
 | Font-program guards, forwarded from the parsed program. | `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
 | Nested embedded-PDF/A validation (6.9), as `embedded-pdfa`. | `Equal` / `DocumentEqual`: they return a `bool`, so there is nowhere to say "too deep to tell". `maxCompareDepth` is *silently wrong by construction* (see the parsing table) and stays that way; no validator rule compares structures that deep. |
 | Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error. |
+| `ValidateFacturXContext` / `ValidateOrderXContext`, on **both** sides of the module seam — see below. | The `Is*` detection predicates in `formalis`: they return a `bool`, which has no room to say "the run stopped", so a context there could only lie. They are bounded by that module's own limits instead. |
+
+### Across the `formalis` seam
+
+The two invoice containers compose two rule engines, and both honour the same
+mechanism. pdf0's half reports a trip under `limitRule`; `formalis` reports one
+under `formalis.RuleLimit`, and the two constants are the same string
+**deliberately**, so a caller draining `res.Violations` for "the checker stopped"
+has one name to look for rather than two.
+
+The consequence that is easy to get wrong: the PDF/A-3 findings this path
+composes are prefixed `pdfa-3/` and the invoice engine's are adopted verbatim,
+but a reserved checker identifier is passed through **unprefixed** either way. A
+`pdfa-3/limit` — or an `invoice/limit` — is invisible to a caller keying on
+`limit`, which is the one failure the reserved identifier exists to prevent.
+`TestAdoptPDFAFindingsKeepsReservedRulesBare` and
+`TestAdoptedLimitFindingIsACheckerFinding` pin each half.
+
+`formalis.RuleProfile` (`"profile"`) is *not* folded into `IsCheckerFinding`,
+although that module's own predicate covers it. pdf0 only ever passes a profile
+it read out of the container's XMP, so the finding arises exactly when
+`fx:ConformanceLevel` names nothing pdf0 could route — a container defect pdf0
+has already reported as a `metadata` finding, not a report that pdf0 stopped.
+
+`formalis` carries its own guards for the reason this package does: it parses
+untrusted XML. Its inventory is short (`formalis/limits.go`) — a nesting cap that
+replaced a *fatal* stack overflow, which is unrecoverable and so could never have
+been caught by the `recover()` pdf0 wraps `ValidateFacturX` in; an element-count
+cap; and a work budget on the VAT breakdown sums.
 
 ## The inventory
 
