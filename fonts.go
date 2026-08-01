@@ -225,8 +225,8 @@ type fontTextUsage struct {
 // collectFontTextUsage walks every page's executed content (including form
 // XObjects and tiling patterns) and records which fonts show which text.
 func collectFontTextUsage(doc *Document) map[*Dictionary]*fontTextUsage {
-	if c := doc.valCache; c != nil && c.fontUsageValid {
-		return c.fontUsage
+	if c := doc.valCache; c != nil && c.pdfa.fontUsageValid {
+		return c.pdfa.fontUsage
 	}
 	usage := make(map[*Dictionary]*fontTextUsage)
 	if catalog := getCatalog(doc); catalog != nil {
@@ -238,8 +238,8 @@ func collectFontTextUsage(doc *Document) map[*Dictionary]*fontTextUsage {
 		}
 	}
 	if c := doc.valCache; c != nil {
-		c.fontUsage = usage
-		c.fontUsageValid = true
+		c.pdfa.fontUsage = usage
+		c.pdfa.fontUsageValid = true
 	}
 	return usage
 }
@@ -319,14 +319,14 @@ func buildFontEvents(cancel canceler, data []byte) []fontEvent {
 func (d *Document) contentFontEvents(data []byte, key *Stream) []fontEvent {
 	if key != nil {
 		if c := d.valCache; c != nil {
-			if ev, ok := c.fontEvents[key]; ok {
+			if ev, ok := c.pdfa.fontEvents[key]; ok {
 				return ev
 			}
 			ev := buildFontEvents(d.canceler(), data)
-			if c.fontEvents == nil {
-				c.fontEvents = make(map[*Stream][]fontEvent)
+			if c.pdfa.fontEvents == nil {
+				c.pdfa.fontEvents = make(map[*Stream][]fontEvent)
 			}
-			c.fontEvents[key] = ev
+			c.pdfa.fontEvents[key] = ev
 			return ev
 		}
 	}
@@ -338,14 +338,14 @@ func (d *Document) contentFontEvents(data []byte, key *Stream) []fontEvent {
 func (d *Document) contentUsedNamesCached(data []byte, key *Stream) usedResourceNames {
 	if key != nil {
 		if c := d.valCache; c != nil {
-			if u, ok := c.usedNames[key]; ok {
+			if u, ok := c.pdfa.usedNames[key]; ok {
 				return u
 			}
 			u := contentUsedNames(d.canceler(), data)
-			if c.usedNames == nil {
-				c.usedNames = make(map[*Stream]usedResourceNames)
+			if c.pdfa.usedNames == nil {
+				c.pdfa.usedNames = make(map[*Stream]usedResourceNames)
 			}
-			c.usedNames[key] = u
+			c.pdfa.usedNames[key] = u
 			return u
 		}
 	}

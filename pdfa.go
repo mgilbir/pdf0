@@ -334,7 +334,25 @@ func validatePDFABytes(cancel canceler, doc *Document, level PDFALevel, rawData 
 // several goroutines at once is safe — TestValidateConcurrentSameDoc asserts it
 // under -race. (An earlier revision installed the cache on the caller's document
 // and this comment said concurrency was unsupported.)
+// The memo slots are grouped by the subsystem that owns them rather than held
+// in one flat struct. That is not cosmetic: of the sixteen slots this struct
+// used to hold flat, fifteen were touched by exactly one subsystem, so what
+// looked like shared state was really a box of private caches. Naming the owner
+// makes each group travel with its subsystem when that subsystem moves to its
+// own package, and makes it a compile error — rather than a silent new coupling —
+// for one subsystem to start reading another's memo.
+//
+// Only run, below, is genuinely shared.
 type validationCache struct {
+	pdfa  pdfaCache
+	pdfua pdfuaCache
+	image imageCache
+	run   runState
+}
+
+// pdfaCache is the PDF/A engine's memoized traversals: the page tree, decoded
+// content streams and the executed-content walk's per-stream skeletons.
+type pdfaCache struct {
 	pages           map[int][]pageInfo // page-tree object number -> pages
 	content         map[*Stream][]byte // decoded content streams
 	contentBytes    int64              // total bytes retained in content (bounded, see decodeContentStream)
@@ -344,23 +362,37 @@ type validationCache struct {
 	fontUsage      map[*Dictionary]*fontTextUsage // memoized collectFontTextUsage
 	fontUsageValid bool
 
-	// Parsed type-4 (PostScript calculator) function programs. A tint
-	// transform is evaluated per image pixel; without this memo each
-	// evaluation re-decoded and re-parsed the program stream, turning a
-	// small image into minutes of work (sweep #13).
-	psProgs map[*Stream]psProgEntry
-
 	// Per-content-stream memoization for the executed-content walk. A stream
 	// shared by many containers (e.g. one content stream referenced by
 	// thousands of pages) is tokenized only once instead of once per container.
-	fontEvents  map[*Stream][]fontEvent         // stream -> replayable font-usage skeleton
-	usedNames   map[*Stream]usedResourceNames   // stream -> invoked XObject/pattern names
-	streamFacts map[*Stream]*streamContentFacts // stream -> real-content messages + Do names
+	fontEvents map[*Stream][]fontEvent       // stream -> replayable font-usage skeleton
+	usedNames  map[*Stream]usedResourceNames // stream -> invoked XObject/pattern names
+}
 
-	dictNum map[*Dictionary]int // reverse index: dictionary value -> object number
+// pdfuaCache is the PDF/UA engine's: the flattened structure tree and the
+// per-stream real-content facts.
+type pdfuaCache struct {
+	streamFacts map[*Stream]*streamContentFacts // stream -> real-content messages + Do names
 
 	structTree      []structNode // flattened pre-order struct-tree nodes
 	structTreeValid bool
+}
+
+// imageCache holds parsed type-4 (PostScript calculator) function programs. A
+// tint transform is evaluated per image pixel; without this memo each evaluation
+// re-decoded and re-parsed the program stream, turning a small image into
+// minutes of work (sweep #13).
+type imageCache struct {
+	psProgs map[*Stream]psProgEntry
+}
+
+// runState is the part that is genuinely shared, because it belongs to the run
+// rather than to any one subsystem.
+type runState struct {
+	// dictNum is a reverse index, dictionary value -> object number, backing
+	// dictObjNum. It is here rather than under a subsystem because that helper
+	// has callers in the page tree, PDF/A, PDF/UA and signing.
+	dictNum map[*Dictionary]int
 
 	// limits collects the resource guards that tripped during this run, so a
 	// check that declines to assert because its input was truncated still says
@@ -1552,8 +1584,8 @@ type annotOccurrence struct {
 // doc.Objects scans the annotation checks start from can never see them
 // (audit A9); every annotation check runs over this list as well.
 func collectDirectAnnotations(doc *Document) []annotOccurrence {
-	if c := doc.valCache; c != nil && c.hasDirectAnnots {
-		return c.directAnnots
+	if c := doc.valCache; c != nil && c.pdfa.hasDirectAnnots {
+		return c.pdfa.directAnnots
 	}
 	catalog := getCatalog(doc)
 	if catalog == nil {
@@ -1572,8 +1604,8 @@ func collectDirectAnnotations(doc *Document) []annotOccurrence {
 		}
 	}
 	if c := doc.valCache; c != nil {
-		c.directAnnots = out
-		c.hasDirectAnnots = true
+		c.pdfa.directAnnots = out
+		c.pdfa.hasDirectAnnots = true
 	}
 	return out
 }
@@ -3689,14 +3721,14 @@ func collectPages(doc *Document, pageTreeRef Object) []pageInfo {
 	c := doc.valCache
 	ref, isRef := pageTreeRef.(IndirectRef)
 	if c != nil && isRef {
-		if pages, ok := c.pages[ref.Number]; ok {
+		if pages, ok := c.pdfa.pages[ref.Number]; ok {
 			return pages
 		}
 	}
 	var pages []pageInfo
 	collectPagesRecursive(doc, pageTreeRef, &pages, make(map[int]bool))
 	if c != nil && isRef {
-		c.pages[ref.Number] = pages
+		c.pdfa.pages[ref.Number] = pages
 	}
 	return pages
 }
@@ -5023,7 +5055,7 @@ const maxContentTokenLen = 256
 func decodeContentStream(doc *Document, stream *Stream) []byte {
 	lim := doc.lim()
 	if c := doc.valCache; c != nil {
-		if data, ok := c.content[stream]; ok {
+		if data, ok := c.pdfa.content[stream]; ok {
 			return data
 		}
 		// Aggregate budget: once this run has decoded the configured number of
@@ -5031,9 +5063,9 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		// not decode (or tokenize) them. This bounds the memory a flate-bomb
 		// document can force. Undecodable is negatively cached below, so the
 		// decision is stable across the several checks that walk the same page.
-		if c.contentBytes >= lim.decodedContentBytes {
-			c.content[stream] = nil
-			noteLimit(doc, limitContentTotal, fmt.Sprintf("this run has already decoded %d bytes of content, reaching the %s-byte budget for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", c.contentBytes, limitBound(lim.decodedContentBytes, defaultMaxDecodedContentBytes)), 0)
+		if c.pdfa.contentBytes >= lim.decodedContentBytes {
+			c.pdfa.content[stream] = nil
+			noteLimit(doc, limitContentTotal, fmt.Sprintf("this run has already decoded %d bytes of content, reaching the %s-byte budget for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", c.pdfa.contentBytes, limitBound(lim.decodedContentBytes, defaultMaxDecodedContentBytes)), 0)
 			return nil
 		}
 	}
@@ -5050,8 +5082,8 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		noteLimit(doc, limitContentStream, fmt.Sprintf("a content stream decodes to %d bytes, over the %s-byte scanning limit; it was not scanned", len(decoded), limitBound(int64(lim.contentStreamBytes), defaultMaxContentStreamBytes)), 0)
 	}
 	if c := doc.valCache; c != nil {
-		c.content[stream] = data
-		c.contentBytes += int64(len(data))
+		c.pdfa.content[stream] = data
+		c.pdfa.contentBytes += int64(len(data))
 	}
 	return data
 }
@@ -5070,7 +5102,7 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 // they still count against genuinely unbounded content.
 func decodeMetadataStream(doc *Document, stream *Stream) []byte {
 	if c := doc.valCache; c != nil {
-		if data, ok := c.content[stream]; ok {
+		if data, ok := c.pdfa.content[stream]; ok {
 			return data
 		}
 	}
@@ -5080,8 +5112,8 @@ func decodeMetadataStream(doc *Document, stream *Stream) []byte {
 		data = decoded
 	}
 	if c := doc.valCache; c != nil {
-		c.content[stream] = data
-		c.contentBytes += int64(len(data))
+		c.pdfa.content[stream] = data
+		c.pdfa.contentBytes += int64(len(data))
 	}
 	return data
 }

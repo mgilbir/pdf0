@@ -313,13 +313,13 @@ type structNode struct {
 // dict reachable through /K is visited (indirect refs deduped for cycle safety),
 // arrays are descended transparently, and both /S and non-/S dicts are recorded.
 func structTree(d *Document, cat *Dictionary) []structNode {
-	if c := d.valCache; c != nil && c.structTreeValid {
-		return c.structTree
+	if c := d.valCache; c != nil && c.pdfua.structTreeValid {
+		return c.pdfua.structTree
 	}
 	nodes := buildStructTree(d, cat)
 	if c := d.valCache; c != nil {
-		c.structTree = nodes
-		c.structTreeValid = true
+		c.pdfua.structTree = nodes
+		c.pdfua.structTreeValid = true
 	}
 	return nodes
 }

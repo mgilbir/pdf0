@@ -240,7 +240,7 @@ func (d *Document) canceler() canceler {
 	if d == nil || d.valCache == nil {
 		return canceler{}
 	}
-	return d.valCache.cancel
+	return d.valCache.run.cancel
 }
 
 // stopped reports whether the validation run d belongs to has been cancelled.

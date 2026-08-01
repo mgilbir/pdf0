@@ -79,16 +79,16 @@ type psProgEntry struct {
 // and re-parsing the program stream each time made a small image take minutes.
 func psProgram(d *Document, stream *Stream) ([]psItem, bool) {
 	if c := d.valCache; c != nil {
-		if e, hit := c.psProgs[stream]; hit {
+		if e, hit := c.image.psProgs[stream]; hit {
 			return e.items, e.ok
 		}
 	}
 	items, ok := parsePSProgram(d, stream)
 	if c := d.valCache; c != nil {
-		if c.psProgs == nil {
-			c.psProgs = make(map[*Stream]psProgEntry)
+		if c.image.psProgs == nil {
+			c.image.psProgs = make(map[*Stream]psProgEntry)
 		}
-		c.psProgs[stream] = psProgEntry{items, ok}
+		c.image.psProgs[stream] = psProgEntry{items, ok}
 	}
 	return items, ok
 }

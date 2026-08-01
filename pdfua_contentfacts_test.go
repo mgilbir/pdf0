@@ -65,7 +65,7 @@ func TestContentFactsCacheShared(t *testing.T) {
 	d.Trailer.Set("Root", IndirectRef{Number: 1})
 
 	rd := *d
-	rd.valCache = &validationCache{pages: map[int][]pageInfo{}, content: map[*Stream][]byte{}}
+	rd.valCache = &validationCache{pdfa: pdfaCache{pages: map[int][]pageInfo{}, content: map[*Stream][]byte{}}}
 	doc := &rd
 
 	// Both checks run against the same page content stream.
@@ -79,10 +79,10 @@ func TestContentFactsCacheShared(t *testing.T) {
 		t.Errorf("expected one real-content violation on page 11, got %v", real)
 	}
 	// The page content stream was tokenized once and cached for both checks.
-	if _, ok := doc.valCache.streamFacts[pageContent]; !ok {
+	if _, ok := doc.valCache.pdfua.streamFacts[pageContent]; !ok {
 		t.Error("page content stream facts not cached")
 	}
-	if n := len(doc.valCache.streamFacts[pageContent].doNames); n != 2 {
+	if n := len(doc.valCache.pdfua.streamFacts[pageContent].doNames); n != 2 {
 		t.Errorf("page doNames = %d, want 2 (two Do operators)", n)
 	}
 }

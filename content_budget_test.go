@@ -28,19 +28,19 @@ func makeFlateContentStream(decodedLen int) *Stream {
 // cannot force unbounded decode+tokenize work. Under the budget behaviour is
 // unchanged.
 func TestDecodeContentStreamBudget(t *testing.T) {
-	doc := &Document{valCache: &validationCache{content: make(map[*Stream][]byte)}}
+	doc := &Document{valCache: &validationCache{pdfa: pdfaCache{content: make(map[*Stream][]byte)}}}
 
 	// A ~1 MB content stream decodes fine while under budget.
 	s1 := makeFlateContentStream(1 << 20)
 	if got := decodeContentStream(doc, s1); len(got) != 1<<20 {
 		t.Fatalf("under budget: decoded %d bytes, want %d", len(got), 1<<20)
 	}
-	if doc.valCache.contentBytes != 1<<20 {
-		t.Fatalf("contentBytes = %d, want %d", doc.valCache.contentBytes, 1<<20)
+	if doc.valCache.pdfa.contentBytes != 1<<20 {
+		t.Fatalf("contentBytes = %d, want %d", doc.valCache.pdfa.contentBytes, 1<<20)
 	}
 
 	// Simulate the run having reached the budget.
-	doc.valCache.contentBytes = doc.lim().decodedContentBytes
+	doc.valCache.pdfa.contentBytes = doc.lim().decodedContentBytes
 	s2 := makeFlateContentStream(1 << 20)
 	if got := decodeContentStream(doc, s2); got != nil {
 		t.Fatalf("over budget: decoded %d bytes, want nil (budget must skip decoding)", len(got))

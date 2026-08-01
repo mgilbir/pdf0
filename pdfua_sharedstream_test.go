@@ -65,8 +65,10 @@ func TestFontUsageSharedStreamDedup(t *testing.T) {
 	doc := buildSharedStreamDoc(nPages)
 	rd := *doc
 	rd.valCache = &validationCache{
-		pages:   map[int][]pageInfo{},
-		content: map[*Stream][]byte{},
+		pdfa: pdfaCache{
+			pages:   map[int][]pageInfo{},
+			content: map[*Stream][]byte{},
+		},
 	}
 	doc = &rd
 
@@ -98,7 +100,7 @@ func TestFontUsageSharedStreamDedup(t *testing.T) {
 		t.Error("render mode 0 not recorded")
 	}
 	// The single shared stream should have been tokenized once.
-	if n := len(doc.valCache.fontEvents); n != 1 {
+	if n := len(doc.valCache.pdfa.fontEvents); n != 1 {
 		t.Errorf("fontEvents cache holds %d streams, want 1", n)
 	}
 }
@@ -111,8 +113,10 @@ func TestRealContentSharedStreamMemo(t *testing.T) {
 	doc := buildSharedStreamDoc(nPages)
 	rd := *doc
 	rd.valCache = &validationCache{
-		pages:   map[int][]pageInfo{},
-		content: map[*Stream][]byte{},
+		pdfa: pdfaCache{
+			pages:   map[int][]pageInfo{},
+			content: map[*Stream][]byte{},
+		},
 	}
 	doc = &rd
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
@@ -142,7 +146,7 @@ func TestRealContentSharedStreamMemo(t *testing.T) {
 		t.Errorf("violations cover %d distinct pages, want %d", len(objs), nPages)
 	}
 	// The shared stream was analyzed once and cached.
-	if n := len(doc.valCache.streamFacts); n != 1 {
+	if n := len(doc.valCache.pdfua.streamFacts); n != 1 {
 		t.Errorf("streamFacts cache holds %d streams, want 1", n)
 	}
 }

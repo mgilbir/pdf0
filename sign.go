@@ -504,17 +504,17 @@ func dictObjNum(d *Document, target *Dictionary) int {
 	// Numeric order is a total order, so this answer is reproducible — which is
 	// load-bearing, as reports are diffed run against run.
 	if c := d.valCache; c != nil {
-		if c.dictNum == nil {
-			c.dictNum = make(map[*Dictionary]int, len(d.Objects))
+		if c.run.dictNum == nil {
+			c.run.dictNum = make(map[*Dictionary]int, len(d.Objects))
 			for num, iobj := range d.Objects {
 				if dp, ok := iobj.Value.(*Dictionary); ok {
-					if prev, dup := c.dictNum[dp]; !dup || num < prev {
-						c.dictNum[dp] = num
+					if prev, dup := c.run.dictNum[dp]; !dup || num < prev {
+						c.run.dictNum[dp] = num
 					}
 				}
 			}
 		}
-		if n, ok := c.dictNum[target]; ok {
+		if n, ok := c.run.dictNum[target]; ok {
 			return n
 		}
 		return -1

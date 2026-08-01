@@ -43,7 +43,7 @@ type streamContentFacts struct {
 func contentFacts(d *Document, content []byte, key *Stream) *streamContentFacts {
 	if key != nil {
 		if c := d.valCache; c != nil {
-			if f, ok := c.streamFacts[key]; ok {
+			if f, ok := c.pdfua.streamFacts[key]; ok {
 				return f
 			}
 		}
@@ -51,10 +51,10 @@ func contentFacts(d *Document, content []byte, key *Stream) *streamContentFacts 
 	f := buildContentFacts(d.canceler(), content)
 	if key != nil {
 		if c := d.valCache; c != nil {
-			if c.streamFacts == nil {
-				c.streamFacts = make(map[*Stream]*streamContentFacts)
+			if c.pdfua.streamFacts == nil {
+				c.pdfua.streamFacts = make(map[*Stream]*streamContentFacts)
 			}
-			c.streamFacts[key] = f
+			c.pdfua.streamFacts[key] = f
 		}
 	}
 	return f

@@ -241,7 +241,7 @@ func noteLimit(doc *Document, guard, detail string, obj int) {
 	if doc == nil || doc.valCache == nil {
 		return
 	}
-	doc.valCache.limits.note(guard, detail, obj)
+	doc.valCache.run.limits.note(guard, detail, obj)
 }
 
 // runLimitTrips returns every trip that belongs in this run's report: those the
@@ -259,7 +259,7 @@ func runLimitTrips(doc *Document) []limitTrip {
 		out = append(out, doc.readLimits.snapshot()...)
 	}
 	if doc.valCache != nil {
-		out = append(out, doc.valCache.limits.snapshot()...)
+		out = append(out, doc.valCache.run.limits.snapshot()...)
 	}
 	// A cancelled run is the same event as a tripped guard and is reported the
 	// same way (cancel.go). It is derived here rather than recorded by whichever
@@ -304,10 +304,14 @@ func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
 // field cannot be initialized in one and forgotten in another.
 func newValidationCache(cancel canceler) *validationCache {
 	return &validationCache{
-		pages:   make(map[int][]pageInfo),
-		content: make(map[*Stream][]byte),
-		limits:  &limitRecorder{},
-		cancel:  cancel,
+		pdfa: pdfaCache{
+			pages:   make(map[int][]pageInfo),
+			content: make(map[*Stream][]byte),
+		},
+		run: runState{
+			limits: &limitRecorder{},
+			cancel: cancel,
+		},
 	}
 }
 
