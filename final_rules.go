@@ -337,7 +337,7 @@ func contentActualTexts(data []byte) [][]byte {
 				continue
 			}
 			if i < n && data[i] == '(' {
-				str, next := decodeContentLiteralString(data, i)
+				str, next := core.DecodeContentLiteralString(data, i)
 				out = append(out, str)
 				i = next
 				continue
@@ -425,7 +425,7 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 		if res == nil {
 			return
 		}
-		used := doc.contentUsedNamesCached(data, key)
+		used := doc.view().ContentUsedNamesCached(data, key)
 		gsNames := scanContentColorUsage(doc.canceler(), data).gsNames
 		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
 			for i, key := range gsDict.Keys {
@@ -444,7 +444,7 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 		}
 		if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
 			for i, key := range xobj.Keys {
-				if !used.xobjects[string(key)] {
+				if !used.XObjects[string(key)] {
 					continue
 				}
 				if s, ok := doc.Resolve(xobj.Values[i]).(*Stream); ok {
@@ -456,7 +456,7 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 		}
 	}
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
+		data, key := doc.view().ContentBytesAndKey(page.Dict.Get("Contents"))
 		walk(page.Dict, data, key)
 	}
 	return out
@@ -667,12 +667,12 @@ func checkInheritedPageXObject(doc *Document, level PDFALevel) []ValidationError
 	}
 	var errs []ValidationError
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
+		data, key := doc.view().ContentBytesAndKey(page.Dict.Get("Contents"))
 		if data == nil {
 			continue
 		}
-		used := doc.contentUsedNamesCached(data, key)
-		if len(used.xobjects) == 0 {
+		used := doc.view().ContentUsedNamesCached(data, key)
+		if len(used.XObjects) == 0 {
 			continue
 		}
 		var ownXObj *Dictionary
@@ -680,7 +680,7 @@ func checkInheritedPageXObject(doc *Document, level PDFALevel) []ValidationError
 			ownXObj = doc.ResolveDict(own.Get("XObject"))
 		}
 		reported := false
-		for name := range used.xobjects {
+		for name := range used.XObjects {
 			if ownXObj == nil || ownXObj.Get(Name(name)) == nil {
 				if !reported {
 					reported = true

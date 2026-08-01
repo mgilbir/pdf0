@@ -36,10 +36,10 @@ func TestFontUsageCacheMatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uncached := collectFontTextUsage(doc)
+	uncached := core.CollectFontTextUsage(doc.view())
 	doc.valCache = newValidationCache(core.Canceler{})
-	first := collectFontTextUsage(doc)
-	second := collectFontTextUsage(doc)
+	first := core.CollectFontTextUsage(doc.view())
+	second := core.CollectFontTextUsage(doc.view())
 	if len(uncached) != len(first) || len(first) != len(second) {
 		t.Errorf("font usage size mismatch: uncached=%d first=%d second=%d", len(uncached), len(first), len(second))
 	}

@@ -1,26 +1,27 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/font"
 	"testing"
 )
 
 func TestPredefinedCMapTable(t *testing.T) {
 	// Spot-check ISO 32000-1 Table 118 entries and their implied CIDSystemInfo.
-	cases := map[string]predefinedCMapInfo{
-		"Identity-H":     {"Adobe", "Identity"},
-		"UniGB-UTF16-H":  {"Adobe", "GB1"},
-		"UniJIS-UCS2-H":  {"Adobe", "Japan1"},
-		"UniKS-UCS2-H":   {"Adobe", "Korea1"},
-		"UniCNS-UTF16-V": {"Adobe", "CNS1"},
+	cases := map[string]core.PredefinedCMapInfo{
+		"Identity-H":     {Registry: "Adobe", Ordering: "Identity"},
+		"UniGB-UTF16-H":  {Registry: "Adobe", Ordering: "GB1"},
+		"UniJIS-UCS2-H":  {Registry: "Adobe", Ordering: "Japan1"},
+		"UniKS-UCS2-H":   {Registry: "Adobe", Ordering: "Korea1"},
+		"UniCNS-UTF16-V": {Registry: "Adobe", Ordering: "CNS1"},
 	}
 	for name, want := range cases {
-		got, ok := predefinedCMaps[name]
+		got, ok := core.PredefinedCMaps[name]
 		if !ok || got != want {
 			t.Errorf("%s: got %v ok=%v, want %v", name, got, ok, want)
 		}
 	}
-	if _, ok := predefinedCMaps["Bogus-CMap"]; ok {
+	if _, ok := core.PredefinedCMaps["Bogus-CMap"]; ok {
 		t.Error("unlisted CMap must not be predefined")
 	}
 }
@@ -58,7 +59,7 @@ func TestGlyphNameToRune(t *testing.T) {
 }
 
 func TestParseCharSet(t *testing.T) {
-	got := parseCharSet("/space/A/quoteright/period")
+	got := core.ParseCharSet("/space/A/quoteright/period")
 	for _, n := range []string{"space", "A", "quoteright", "period"} {
 		if !got[n] {
 			t.Errorf("CharSet missing %q", n)
@@ -129,7 +130,7 @@ func TestSimpleFontBaseEncodingModelled(t *testing.T) {
 
 func TestCharSetParsing_Numbers(t *testing.T) {
 	// Names may be adjacent without separators other than '/'.
-	got := parseCharSet("/one/two/three")
+	got := core.ParseCharSet("/one/two/three")
 	if !got["one"] || !got["two"] || !got["three"] {
 		t.Errorf("adjacency parse failed: %v", got)
 	}
@@ -137,7 +138,7 @@ func TestCharSetParsing_Numbers(t *testing.T) {
 
 // checkTrueTypeEncoding via crafted dictionaries (ISO 32000-1 9.6.6.4).
 func TestTrueTypeEncodingRules(t *testing.T) {
-	mk := func(symbolic bool, enc Object) (*Document, *Dictionary, *fontTextUsage) {
+	mk := func(symbolic bool, enc Object) (*Document, *Dictionary, *core.FontTextUsage) {
 		doc := &Document{Objects: map[int]*IndirectObject{}}
 		fd := &Dictionary{}
 		flags := 32 // nonsymbolic
@@ -152,7 +153,7 @@ func TestTrueTypeEncodingRules(t *testing.T) {
 		if enc != nil {
 			font.Set("Encoding", enc)
 		}
-		return doc, font, &fontTextUsage{objNum: 9, modes: map[int]bool{}}
+		return doc, font, &core.FontTextUsage{ObjNum: 9, Modes: map[int]bool{}}
 	}
 
 	// Symbolic + Encoding present -> error.
@@ -194,22 +195,22 @@ func TestToUnicodeForbiddenValues(t *testing.T) {
 		return doc, s
 	}
 	doc, s := mk("beginbfchar <0041> <0000> endbfchar")
-	if !hasForbiddenUnicodeTargets(doc, s) {
+	if !core.HasForbiddenUnicodeTargets(doc.view(), s) {
 		t.Error("bfchar mapping to U+0000 must be detected")
 	}
 	doc, s = mk("beginbfrange <0041> <0043> <FEFF> endbfrange")
-	if !hasForbiddenUnicodeTargets(doc, s) {
+	if !core.HasForbiddenUnicodeTargets(doc.view(), s) {
 		t.Error("bfrange mapping to U+FEFF must be detected")
 	}
 	doc, s = mk("beginbfchar <0041> <0041> endbfchar")
-	if hasForbiddenUnicodeTargets(doc, s) {
+	if core.HasForbiddenUnicodeTargets(doc.view(), s) {
 		t.Error("valid ToUnicode must not be flagged")
 	}
 }
 
 // CIDToGIDMap requirement for embedded CIDFontType2 (ISO 32000-1 9.7.4.2).
 func TestCIDToGIDMapRule(t *testing.T) {
-	mkFont := func(cidToGID Object) (*Document, *Dictionary, *fontTextUsage) {
+	mkFont := func(cidToGID Object) (*Document, *Dictionary, *core.FontTextUsage) {
 		doc := &Document{Objects: map[int]*IndirectObject{}}
 		desc := &Dictionary{}
 		desc.Set("Subtype", Name("CIDFontType2"))
@@ -222,7 +223,7 @@ func TestCIDToGIDMapRule(t *testing.T) {
 		font.Set("Subtype", Name("Type0"))
 		font.Set("Encoding", Name("Identity-H"))
 		font.Set("DescendantFonts", Array{IndirectRef{Number: 7}})
-		return doc, font, &fontTextUsage{objNum: 9, modes: map[int]bool{0: true}}
+		return doc, font, &core.FontTextUsage{ObjNum: 9, Modes: map[int]bool{0: true}}
 	}
 	doc, font, u := mkFont(nil)
 	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
@@ -245,7 +246,7 @@ func TestCIDToGIDMapRule(t *testing.T) {
 // Supplement rule there false-positives on the conforming corpus file
 // PDF_A-1a 6-3-8-t01-pass-f.
 func TestCIDSystemInfoSupplementIsPart2AndLater(t *testing.T) {
-	mkFont := func(cmapSup, cidSup int) (*Document, *Dictionary, *fontTextUsage) {
+	mkFont := func(cmapSup, cidSup int) (*Document, *Dictionary, *core.FontTextUsage) {
 		doc := &Document{Objects: map[int]*IndirectObject{}}
 		si := func(sup int) *Dictionary {
 			d := &Dictionary{}
@@ -264,7 +265,7 @@ func TestCIDSystemInfoSupplementIsPart2AndLater(t *testing.T) {
 		font.Set("Subtype", Name("Type0"))
 		font.Set("Encoding", cmap)
 		font.Set("DescendantFonts", Array{IndirectRef{Number: 7}})
-		return doc, font, &fontTextUsage{objNum: 9, modes: map[int]bool{0: true}}
+		return doc, font, &core.FontTextUsage{ObjNum: 9, Modes: map[int]bool{0: true}}
 	}
 	doc, font, u := mkFont(2, 3)
 	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.1") {
@@ -312,7 +313,7 @@ func TestTrueTypeEncodingAt1b(t *testing.T) {
 	font.Set("FontDescriptor", fd)
 	font.Set("Encoding", Name("WinAnsiEncoding")) // forbidden on a symbolic TT font
 	doc := &Document{Objects: map[int]*IndirectObject{1: {Number: 1, Value: font}}}
-	u := &fontTextUsage{objNum: 1}
+	u := &core.FontTextUsage{ObjNum: 1}
 	if got := len(checkTrueTypeEncoding(doc, PDFA1b, "6.3", font, u)); got == 0 {
 		t.Error("symbolic TrueType /Encoding not flagged at 1b")
 	}
@@ -337,8 +338,8 @@ func TestDamagedFontProgramFlagged(t *testing.T) {
 		9: {Number: 9, Value: &Stream{Dict: Dictionary{}, Data: []byte("not a font program")}},
 	}}
 	// A usage that renders visible text.
-	u := &fontTextUsage{objNum: 1, strings: [][]byte{[]byte("Hi")}, modes: map[int]bool{0: true}}
-	if loadFontProgram(doc, fd) != nil {
+	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{[]byte("Hi")}, Modes: map[int]bool{0: true}}
+	if core.LoadFontProgram(doc.view(), fd) != nil {
 		t.Skip("garbage stream unexpectedly parsed as a font program")
 	}
 	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd, u)); got == 0 {

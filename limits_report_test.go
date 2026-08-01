@@ -141,11 +141,11 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 	}}
 	doc = beginRun(doc)
 
-	if fp := loadFontProgram(doc, fd); fp == nil || !fp.CmapPartial {
+	if fp := core.LoadFontProgram(doc.view(), fd); fp == nil || !fp.CmapPartial {
 		t.Fatalf("fixture wrong: font program parsed=%v, cmapPartial=%v", fp != nil, fp != nil && fp.CmapPartial)
 	}
 
-	u := &fontTextUsage{objNum: 1, strings: [][]byte{[]byte("A")}, modes: map[int]bool{0: true}}
+	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{[]byte("A")}, Modes: map[int]bool{0: true}}
 	msgs := errMessages(checkSimpleFontConsistency(doc, PDFA1b, "6.3", font, u))
 	var bad []string
 	for _, m := range msgs {
@@ -235,7 +235,7 @@ func TestCIDWidthBudgetDoesNotReportWidthMismatch(t *testing.T) {
 	}}
 	doc = beginRun(doc)
 
-	u := &fontTextUsage{objNum: 1, strings: [][]byte{{0x00, 0x01}}, modes: map[int]bool{0: true}}
+	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0x00, 0x01}}, Modes: map[int]bool{0: true}}
 	msgs := errMessages(checkCIDFontConsistency(doc, PDFA1b, "6.3", font, u))
 	var bad []string
 	for _, m := range msgs {
@@ -344,14 +344,14 @@ func TestOverlongTokenIsNotAnOperator(t *testing.T) {
 	// The tokenizer used by the operator whitelist must not manufacture an
 	// operator out of the tail either.
 	var ops []string
-	forEachContentToken(core.Canceler{}, data, func(tok []byte, isName bool) {
+	core.ForEachContentToken(core.Canceler{}, data, func(tok []byte, isName bool) {
 		if !isName {
 			ops = append(ops, string(tok))
 		}
 	})
 	for _, op := range ops {
 		if op != "q" && op != "Q" {
-			t.Errorf("forEachContentToken produced %q from an over-long binary run", op)
+			t.Errorf("core.ForEachContentToken produced %q from an over-long binary run", op)
 		}
 	}
 }

@@ -73,7 +73,7 @@ func (d *Document) ExtractPageText(page *Dictionary) string {
 
 func (d *Document) extractPageText(cancel core.Canceler, page *Dictionary) string {
 	res := d.ResolveDict(inheritedPageAttr(d, page, "Resources"))
-	content := getContentStreamData(d, page.Get("Contents"))
+	content := core.ContentStreamData(d.view(), page.Get("Contents"))
 	var out strings.Builder
 	d.extractContentText(cancel, res, content, &out, map[*Stream]bool{}, 0)
 	return out.String()

@@ -698,7 +698,7 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 				i++ // unhandled delimiter (e.g. stray ')'): guarantee progress
 				continue
 			}
-			if i-start > maxContentTokenLen {
+			if i-start > core.MaxContentTokenLen {
 				continue // binary run, not a token; see scanStreamForDeviceOps
 			}
 			if i-start == 2 && data[start] == 'B' && data[start+1] == 'I' {
@@ -730,7 +730,7 @@ func collectContentStreamData(doc *Document) map[int][]byte {
 			if doc.stopped() {
 				return out
 			}
-			if data := getContentStreamData(doc, page.Dict.Get("Contents")); data != nil {
+			if data := core.ContentStreamData(doc.view(), page.Dict.Get("Contents")); data != nil {
 				out[page.ObjNum] = data
 			}
 		}

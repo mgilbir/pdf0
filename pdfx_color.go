@@ -63,7 +63,7 @@ func (s *devColorScanner) pageDeviceUse(page *Dictionary) devUse {
 	var data []byte
 	var key *Stream
 	if c := page.Get("Contents"); c != nil {
-		data, key = s.doc.contentBytesAndKey(c)
+		data, key = s.doc.view().ContentBytesAndKey(c)
 	}
 	u := s.container(page, data, key)
 
@@ -125,7 +125,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 		r, cc, g := scanStreamForDeviceOps(s.doc.canceler(), data)
 		local.rgb, local.cmyk, local.gray = r, cc, g
 	}
-	used := s.doc.contentUsedNamesCached(data, key)
+	used := s.doc.view().ContentUsedNamesCached(data, key)
 
 	res := resolveResources(s.doc, c)
 	if res != nil {
@@ -136,7 +136,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 		}
 		if xo := s.doc.ResolveDict(res.Get("XObject")); xo != nil {
 			for i, k := range xo.Keys {
-				if !used.xobjects[string(k)] {
+				if !used.XObjects[string(k)] {
 					continue
 				}
 				st, ok := s.doc.Resolve(xo.Values[i]).(*Stream)
@@ -152,7 +152,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 		}
 		if sh := s.doc.ResolveDict(res.Get("Shading")); sh != nil {
 			for i, k := range sh.Keys {
-				if !used.shadings[string(k)] {
+				if !used.Shadings[string(k)] {
 					continue
 				}
 				if sd := s.doc.ResolveDict(sh.Values[i]); sd != nil {
@@ -164,7 +164,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 		}
 		if pat := s.doc.ResolveDict(res.Get("Pattern")); pat != nil {
 			for i, k := range pat.Keys {
-				if !used.patterns[string(k)] {
+				if !used.Patterns[string(k)] {
 					continue
 				}
 				switch v := s.doc.Resolve(pat.Values[i]).(type) {

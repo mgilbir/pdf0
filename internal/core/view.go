@@ -79,6 +79,14 @@ type Run struct {
 	// evaluation re-decoded and re-parsed the program stream, turning a small
 	// image into minutes of work.
 	psProgs map[*object.Stream]psProgEntry
+
+	// Font usage: which fonts the document shows text in, and the per-stream
+	// skeletons the walk replays. PDF/A and PDF/UA both consume these, which is
+	// why they are here rather than under either.
+	fontUsage      map[*object.Dictionary]*FontTextUsage
+	fontUsageValid bool
+	fontEvents     map[*object.Stream][]FontEvent
+	usedNames      map[*object.Stream]UsedResourceNames
 }
 
 // NewRun builds the per-operation state. The memo tables are made here so that
@@ -86,10 +94,12 @@ type Run struct {
 // to remember.
 func NewRun(trips *Recorder) *Run {
 	return &Run{
-		Trips:   trips,
-		pages:   make(map[int][]PageInfo),
-		content: make(map[*object.Stream][]byte),
-		psProgs: make(map[*object.Stream]psProgEntry),
+		Trips:      trips,
+		pages:      make(map[int][]PageInfo),
+		content:    make(map[*object.Stream][]byte),
+		psProgs:    make(map[*object.Stream]psProgEntry),
+		fontEvents: make(map[*object.Stream][]FontEvent),
+		usedNames:  make(map[*object.Stream]UsedResourceNames),
 	}
 }
 
@@ -166,6 +176,7 @@ func (v View) Note(guard, detail string, obj int) {
 const (
 	GuardContentStream = "content-stream-size"   // Limits.ContentStreamBytes, WithMaxContentStreamBytes
 	GuardContentTotal  = "decoded-content-total" // Limits.DecodedContentBytes, WithMaxDecodedContentBytes
+	GuardCmapWork      = "cmap-work"             // Limits.CmapWork, WithMaxCmapWork
 )
 
 // Pages returns the page tree under ref flattened into document order,
@@ -317,4 +328,15 @@ func (v View) MetadataContent(stream *object.Stream) []byte {
 		v.Run.contentBytes += int64(len(data))
 	}
 	return data
+}
+
+// FontEventsMemoSize reports how many content streams the font-usage walk has
+// tokenized. It exists for the test that pins the sharing: a stream referenced
+// by thousands of pages must be tokenized once, and the only way to see that
+// from outside is to count what the memo holds.
+func (r *Run) FontEventsMemoSize() int {
+	if r == nil {
+		return 0
+	}
+	return len(r.fontEvents)
 }

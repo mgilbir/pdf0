@@ -1,5 +1,7 @@
 package pdf0
 
+import "github.com/mgilbir/pdf0/internal/core"
+
 import "fmt"
 
 // This file implements the PDF/A rules that are decided by reading content
@@ -91,7 +93,7 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 	// corpus passes an UnknownOperator in an uninvoked form).
 	seenContainer := map[*Dictionary]bool{}
 	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
+		data, key := doc.view().ContentBytesAndKey(page.Dict.Get("Contents"))
 		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, seenContainer, add)
 	}
 
@@ -108,7 +110,7 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 	// must resolve in the Type 3 font's own /Resources — not inherited from
 	// the page (ISO 19005 6.2.2; a glyph proc that references a colour space
 	// present only in the page resources is invalid).
-	for fontDict, u := range collectFontTextUsage(doc) {
+	for fontDict, u := range core.CollectFontTextUsage(doc.view()) {
 		if st, _ := fontDict.Get("Subtype").(Name); st != "Type3" || !rendersVisibly(u) {
 			continue
 		}
@@ -120,7 +122,7 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 		for _, cpVal := range cps.Values {
 			if cp, ok := doc.Resolve(cpVal).(*Stream); ok {
 				if cpData := decodeContentStream(doc, cp); cpData != nil {
-					checkContentTokens(cpData, res, doc, u.objNum, add)
+					checkContentTokens(cpData, res, doc, u.ObjNum, add)
 				}
 			}
 		}
@@ -185,10 +187,10 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key 
 	if res == nil {
 		return
 	}
-	used := doc.contentUsedNamesCached(data, key)
+	used := doc.view().ContentUsedNamesCached(data, key)
 	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
 		for i, key := range xobj.Keys {
-			if !used.xobjects[string(key)] {
+			if !used.XObjects[string(key)] {
 				continue
 			}
 			if s, ok := doc.Resolve(xobj.Values[i]).(*Stream); ok {
@@ -212,7 +214,7 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key 
 	}
 	if pat := doc.ResolveDict(res.Get("Pattern")); pat != nil {
 		for i, key := range pat.Keys {
-			if !used.patterns[string(key)] {
+			if !used.Patterns[string(key)] {
 				continue
 			}
 			if s, ok := doc.Resolve(pat.Values[i]).(*Stream); ok {
@@ -226,7 +228,7 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key 
 // rendering intents, and unresolved named resource references.
 func checkContentTokens(data []byte, res *Dictionary, doc *Document, objNum int, add func(string, int)) {
 	var lastName string
-	forEachContentToken(doc.canceler(), data, func(tok []byte, isName bool) {
+	core.ForEachContentToken(doc.canceler(), data, func(tok []byte, isName bool) {
 		if isName {
 			lastName = string(tok)
 			return
@@ -333,11 +335,11 @@ func checkContentStreamLimits(doc *Document, level PDFALevel, lim implLimits, er
 		found.add(ValidationError{Rule: lim.rule, Level: level, Message: msg, Object: obj})
 	}
 	for num, data := range collectContentStreamData(doc) {
-		forEachContentItem(doc.canceler(), data, func(kind contentItemKind, payload []byte) {
+		core.ForEachContentItem(doc.canceler(), data, func(kind core.ContentItemKind, payload []byte) {
 			switch kind {
-			case itemNumber:
+			case core.ItemNumber:
 				checkContentNumberLimit(string(payload), lim, num, add)
-			case itemString:
+			case core.ItemString:
 				if len(payload) > lim.stringLen {
 					add(fmt.Sprintf("a content-stream string of %d bytes exceeds the maximum length %d", len(payload), lim.stringLen), num)
 				}
@@ -422,7 +424,7 @@ func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
 		if p := pdfaOutputIntentProfile(doc, page.Dict); p != nil {
 			oiProfile = p
 		}
-		data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
+		data, key := doc.view().ContentBytesAndKey(page.Dict.Get("Contents"))
 		blend := groupBlendProfile(doc, page.Dict)
 		walkICCIdentity(doc, page.Dict, data, key, page.ObjNum, oiProfile, blend, seenC, add)
 	}
@@ -485,10 +487,10 @@ func walkICCIdentity(doc *Document, container *Dictionary, data []byte, key *Str
 
 	// Recurse into invoked form XObjects, updating the blending profile when
 	// the form is an isolated transparency group.
-	used := doc.contentUsedNamesCached(data, key)
+	used := doc.view().ContentUsedNamesCached(data, key)
 	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
 		for i, xkey := range xobj.Keys {
-			if !used.xobjects[string(xkey)] {
+			if !used.XObjects[string(xkey)] {
 				continue
 			}
 			s, ok := doc.Resolve(xobj.Values[i]).(*Stream)

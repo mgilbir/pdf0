@@ -137,9 +137,9 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 
 func (d *Document) checkPDFRPage(page *Dictionary, objNum int, add func(rule, msg string, obj int)) {
 	// The page content must draw raster images only — no text or vector marks.
-	data := getContentStreamData(d, page.Get("Contents"))
+	data := core.ContentStreamData(d.view(), page.Get("Contents"))
 	flagged := map[string]bool{}
-	forEachContentToken(d.canceler(), data, func(tok []byte, isName bool) {
+	core.ForEachContentToken(d.canceler(), data, func(tok []byte, isName bool) {
 		if isName {
 			return
 		}

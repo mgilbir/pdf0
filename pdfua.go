@@ -47,7 +47,7 @@ func ValidatePDFUAContext(ctx context.Context, doc *Document) []UAViolation {
 func validatePDFUA(cancel core.Canceler, doc *Document, part string) []UAViolation {
 	// Install a per-run cache (page tree, decoded content, font-usage map) on a
 	// shallow copy so the original document is never mutated. Many checks walk
-	// the same structures — collectFontTextUsage alone runs in nine font checks —
+	// the same structures — core.CollectFontTextUsage alone runs in nine font checks —
 	// and without the cache a large document's content was decoded and tokenized
 	// dozens of times, making validation quadratic in practice.
 	doc = beginRunCancel(doc, cancel)
@@ -560,9 +560,9 @@ func checkUAAnnotations(d *Document) []UAViolation {
 }
 
 // isPredefinedCMap reports whether name is a predefined CMap from ISO 32000-1,
-// 9.7.5.2, Table 118 (the predefinedCMaps table, which includes Identity-H/V).
+// 9.7.5.2, Table 118 (the core.PredefinedCMaps table, which includes Identity-H/V).
 func isPredefinedCMap(name Name) bool {
-	_, ok := predefinedCMaps[string(name)]
+	_, ok := core.PredefinedCMaps[string(name)]
 	return ok
 }
 
@@ -571,7 +571,7 @@ func isPredefinedCMap(name Name) bool {
 // predefined CMap (7.21.3.3). Only fonts used for rendering are considered.
 func checkUACMaps(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict := range collectFontTextUsage(d) {
+	for fontDict := range core.CollectFontTextUsage(d.view()) {
 		v = append(v, checkOneUACMap(d, fontDict)...)
 	}
 	return v
@@ -583,7 +583,7 @@ func checkUACMaps(d *Document) []UAViolation {
 // Registry and Ordering.
 func checkUACIDSystemInfo(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict := range collectFontTextUsage(d) {
+	for fontDict := range core.CollectFontTextUsage(d.view()) {
 		v = append(v, checkOneUACIDSystemInfo(d, fontDict)...)
 	}
 	return v
@@ -600,7 +600,7 @@ func checkOneUACIDSystemInfo(d *Document, fontDict *Dictionary) []UAViolation {
 		if enc == "Identity-H" || enc == "Identity-V" {
 			return nil
 		}
-		info, ok := predefinedCMaps[string(enc)]
+		info, ok := core.PredefinedCMaps[string(enc)]
 		if !ok {
 			return nil
 		}
@@ -664,7 +664,7 @@ func cidSystemInfo(d *Document, dict *Dictionary) (string, string) {
 // rule). Only Type 0 fonts used for rendering are considered.
 func checkUACMapWMode(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict := range collectFontTextUsage(d) {
+	for fontDict := range core.CollectFontTextUsage(d.view()) {
 		if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
 			continue
 		}
@@ -732,9 +732,9 @@ func checkOneUACMap(d *Document, fontDict *Dictionary) []UAViolation {
 // carry no usable text meaning (7.21.7).
 func checkUAToUnicodeValues(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict := range collectFontTextUsage(d) {
+	for fontDict := range core.CollectFontTextUsage(d.view()) {
 		if tu, ok := d.Resolve(fontDict.Get("ToUnicode")).(*Stream); ok {
-			if hasForbiddenUnicodeTargets(d, tu) {
+			if core.HasForbiddenUnicodeTargets(d.view(), tu) {
 				v = append(v, UAViolation{"7.21.7", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)", dictObjNum(d, fontDict)})
 			}
 		}
@@ -754,7 +754,7 @@ func checkUAToUnicodeValues(d *Document) []UAViolation {
 // comparison raises false positives on well-formed files.
 func checkUAFontSubsetGlyphs(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict := range collectFontTextUsage(d) {
+	for fontDict := range core.CollectFontTextUsage(d.view()) {
 		if !isSubsetFont(fontDict) {
 			continue
 		}
@@ -779,11 +779,11 @@ func checkType1CharSet(d *Document, fontDict *Dictionary) []UAViolation {
 	if !ok {
 		return nil
 	}
-	fp := loadFontProgram(d, fd)
+	fp := core.LoadFontProgram(d.view(), fd)
 	if fp == nil || fp.GlyphNames == nil {
 		return nil
 	}
-	listed := parseCharSet(string(cs.Value))
+	listed := core.ParseCharSet(string(cs.Value))
 	num := dictObjNum(d, fontDict)
 	var v []UAViolation
 	// Both directions report ONE glyph as the example, not the whole set. The
@@ -836,7 +836,7 @@ func checkType1CharSet(d *Document, fontDict *Dictionary) []UAViolation {
 // /CIDSet does not list it. Only the Identity CIDToGIDMap case (CID == GID) is
 // handled; a mapping stream would need inversion and is left alone.
 func checkCIDFontCIDSet(d *Document, fontDict *Dictionary) []UAViolation {
-	desc := type0Descendant(d, fontDict)
+	desc := core.Type0Descendant(d.view(), fontDict)
 	if desc == nil {
 		return nil
 	}
@@ -852,15 +852,15 @@ func checkCIDFontCIDSet(d *Document, fontDict *Dictionary) []UAViolation {
 	if fd == nil {
 		return nil
 	}
-	cidSet, ok := d.Resolve(fd.Get("CIDSet")).(*Stream)
+	cidSetStream, ok := d.Resolve(fd.Get("CIDSet")).(*Stream)
 	if !ok {
 		return nil
 	}
-	fp := loadFontProgram(d, fd)
+	fp := core.LoadFontProgram(d.view(), fd)
 	if fp == nil || fp.GlyphNonEmpty == nil {
 		return nil
 	}
-	present := decodeCIDSet(d, cidSet)
+	present := core.DecodeCIDSet(d.view(), cidSetStream)
 	for gid, nonEmpty := range fp.GlyphNonEmpty {
 		if !nonEmpty || gid == 0 {
 			continue
@@ -868,7 +868,7 @@ func checkCIDFontCIDSet(d *Document, fontDict *Dictionary) []UAViolation {
 		if gid < len(fp.ComponentGID) && fp.ComponentGID[gid] {
 			continue // outline serves only as a composite component
 		}
-		if !present.has(gid) {
+		if !present.Has(gid) {
 			return []UAViolation{{"7.21.4.2", "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", dictObjNum(d, fontDict)}}
 		}
 	}
@@ -883,18 +883,18 @@ func checkCIDFontCIDSet(d *Document, fontDict *Dictionary) []UAViolation {
 // lookup failure is indistinguishable from a genuine .notdef reference.
 func checkUANotdefCID(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict, u := range collectFontTextUsage(d) {
+	for fontDict, u := range core.CollectFontTextUsage(d.view()) {
 		if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
 			continue
 		}
-		if !isIdentityEncoding(d, fontDict) {
+		if !core.IsIdentityEncoding(d.view(), fontDict) {
 			continue
 		}
 		if u == nil {
 			continue
 		}
 		found := false
-		for _, s := range u.strings {
+		for _, s := range u.Strings {
 			for i := 0; i+1 < len(s); i += 2 {
 				if int(s[i])<<8|int(s[i+1]) == 0 {
 					found = true
@@ -1265,7 +1265,7 @@ func checkUATitle(d *Document, cat *Dictionary) []UAViolation {
 // font dictionaries are not false-flagged.
 func checkUAFonts(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict := range collectFontTextUsage(d) {
+	for fontDict := range core.CollectFontTextUsage(d.view()) {
 		st, _ := fontDict.Get("Subtype").(Name)
 		if st == "Type3" {
 			continue // procedural glyphs, no font program
@@ -1291,7 +1291,7 @@ func checkUAFonts(d *Document) []UAViolation {
 // CIDs with no defined Unicode mapping (Matterhorn 10-001).
 func checkUACharMapping(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict := range collectFontTextUsage(d) {
+	for fontDict := range core.CollectFontTextUsage(d.view()) {
 		if fontDict.Get("ToUnicode") != nil {
 			continue
 		}
@@ -1312,7 +1312,7 @@ func checkUACharMapping(d *Document) []UAViolation {
 //     non-symbolic one must use MacRomanEncoding or WinAnsiEncoding.
 func checkUAFontDicts(d *Document) []UAViolation {
 	var v []UAViolation
-	for fontDict := range collectFontTextUsage(d) {
+	for fontDict := range core.CollectFontTextUsage(d.view()) {
 		v = append(v, checkOneUAFontDict(d, fontDict)...)
 	}
 	return v

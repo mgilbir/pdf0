@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/font"
-	"github.com/mgilbir/pdf0/syntax"
 	"strings"
 	"unicode"
 )
@@ -16,177 +15,10 @@ import (
 
 // --- content walking: text usage per font ---
 
-// contentItemKind classifies items reported by forEachContentItem.
-type contentItemKind int
+// core.ContentItemKind classifies items reported by core.ForEachContentItem.
 
-const (
-	itemOperator contentItemKind = iota
-	itemName
-	itemString
-	itemNumber
-)
-
-// forEachContentItem tokenizes a decoded content stream like
-// forEachContentToken, additionally reporting decoded string operands and
-// distinguishing numbers from operators.
-//
-// The scan stops when cancel fires. Together with forEachContentToken this is
-// about two thirds of a large document's validation time, which is why the
-// check is gated on the scan position — one comparison per token, the poll
-// itself once per cancelScanBytes. See cancel.go.
-func forEachContentItem(cancel core.Canceler, data []byte, fn func(kind contentItemKind, payload []byte)) {
-	n := len(data)
-	i := 0
-	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
-	for i < n {
-		if i >= nextCancelCheck {
-			if cancel.Stopped() {
-				return
-			}
-			nextCancelCheck = i + core.CancelScanBytes
-		}
-		for i < n && core.IsContentWS(data[i]) {
-			i++
-		}
-		if i >= n {
-			return
-		}
-		switch b := data[i]; {
-		case b == '%':
-			for i < n && data[i] != '\n' && data[i] != '\r' {
-				i++
-			}
-		case b == '(':
-			str, next := decodeContentLiteralString(data, i)
-			fn(itemString, str)
-			i = next
-		case b == '<':
-			i++
-			if i < n && data[i] == '<' {
-				i++ // <<
-			} else {
-				start := i
-				for i < n && data[i] != '>' {
-					i++
-				}
-				fn(itemString, decodeHexBytes(data[start:i]))
-				if i < n {
-					i++
-				}
-			}
-		case b == '>':
-			i++
-			if i < n && data[i] == '>' {
-				i++
-			}
-		case b == '[' || b == ']' || b == '{' || b == '}' || b == ')':
-			// A stray ')' (unbalanced by any '(') is not the start of a token;
-			// consume it so the scan always advances. Without this, a content
-			// stream with an unmatched ')' — e.g. leaked inline-image sample
-			// data — spins forever, since ')' is a delimiter the default token
-			// scan below cannot consume (a parser DoS on untrusted input).
-			i++
-		case b == '/':
-			i++
-			start := i
-			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-				i++
-			}
-			fn(itemName, data[start:i])
-		default:
-			start := i
-			// Numeric tokens may be arbitrarily long (Annex C allows huge
-			// precision); read them whole. Non-numeric keyword tokens are
-			// capped to bound scanning over stray binary data.
-			numeric := data[i] >= '0' && data[i] <= '9' || data[i] == '+' || data[i] == '-' || data[i] == '.'
-			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-				i++
-			}
-			if i == start {
-				// Defensive: an unhandled delimiter would yield no token and no
-				// progress. Skip it so the scan can never stall.
-				i++
-				continue
-			}
-			if !numeric && i-start > maxContentTokenLen {
-				continue // binary run, not a keyword; see scanStreamForDeviceOps
-			}
-			tok := data[start:i]
-			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
-				core.SkipInlineImage(data, &i)
-				continue
-			}
-			if numeric {
-				fn(itemNumber, tok)
-				continue
-			}
-			fn(itemOperator, tok)
-		}
-	}
-}
-
-// decodeContentLiteralString decodes a (...) string starting at open paren;
+// core.DecodeContentLiteralString decodes a (...) string starting at open paren;
 // returns the decoded bytes and the index just past the closing paren.
-func decodeContentLiteralString(data []byte, i int) ([]byte, int) {
-	n := len(data)
-	var out []byte
-	depth := 1
-	i++
-	for i < n && depth > 0 {
-		c := data[i]
-		switch c {
-		case '\\':
-			i++
-			if i >= n {
-				break
-			}
-			e := data[i]
-			switch e {
-			case 'n':
-				out = append(out, '\n')
-			case 'r':
-				out = append(out, '\r')
-			case 't':
-				out = append(out, '\t')
-			case 'b':
-				out = append(out, '\b')
-			case 'f':
-				out = append(out, '\f')
-			case '\n': // line continuation
-			case '\r':
-				if i+1 < n && data[i+1] == '\n' {
-					i++
-				}
-			default:
-				if e >= '0' && e <= '7' {
-					v := int(e - '0')
-					for k := 0; k < 2 && i+1 < n && data[i+1] >= '0' && data[i+1] <= '7'; k++ {
-						i++
-						v = v<<3 | int(data[i]-'0')
-					}
-					out = append(out, byte(v))
-				} else {
-					out = append(out, e)
-				}
-			}
-			i++
-		case '(':
-			depth++
-			out = append(out, c)
-			i++
-		case ')':
-			depth--
-			if depth > 0 {
-				out = append(out, c)
-			}
-			i++
-		default:
-			out = append(out, c)
-			i++
-		}
-	}
-	return out, i
-}
 
 // decodeHexBytes decodes hex-string content (whitespace tolerated, odd
 // length padded with 0).
@@ -217,325 +49,7 @@ func decodeHexBytes(b []byte) []byte {
 	return out
 }
 
-// fontTextUsage aggregates the text shown with one font dictionary.
-type fontTextUsage struct {
-	fontDict *Dictionary
-	objNum   int      // font object number (0 if direct)
-	strings  [][]byte // raw shown string bytes
-	modes    map[int]bool
-}
-
-// collectFontTextUsage walks every page's executed content (including form
-// XObjects and tiling patterns) and records which fonts show which text.
-func collectFontTextUsage(doc *Document) map[*Dictionary]*fontTextUsage {
-	if c := doc.valCache; c != nil && c.pdfa.fontUsageValid {
-		return c.pdfa.fontUsage
-	}
-	usage := make(map[*Dictionary]*fontTextUsage)
-	if catalog := getCatalog(doc); catalog != nil {
-		seen := make(map[*Dictionary]bool)
-		applied := make(map[sfKey]bool)
-		for _, page := range collectPages(doc, catalog.Get("Pages")) {
-			data, key := doc.contentBytesAndKey(page.Dict.Get("Contents"))
-			collectTextFromContainer(doc, page.Dict, data, key, usage, seen, applied)
-		}
-	}
-	if c := doc.valCache; c != nil {
-		c.pdfa.fontUsage = usage
-		c.pdfa.fontUsageValid = true
-	}
-	return usage
-}
-
-// fontEventKind classifies the replayable events extracted from a content
-// stream by buildFontEvents.
-type fontEventKind uint8
-
-const (
-	evTf   fontEventKind = iota // select the font named by `name`
-	evTr                        // set the text rendering mode to `mode`
-	evShow                      // show `strings` with the current font/mode
-)
-
-// fontEvent is one entry in a content stream's font-usage skeleton: the
-// container-independent result of tokenizing the stream once. Replaying the
-// skeleton against a container's resources reproduces exactly what a direct
-// walk would attribute to each font, without re-tokenizing the bytes.
-type fontEvent struct {
-	kind    fontEventKind
-	name    string   // evTf: the operand name of the Tf operator
-	mode    int      // evTr: the text rendering mode
-	strings [][]byte // evShow: the strings pending at the show operator
-}
-
-// buildFontEvents tokenizes a decoded content stream once into a replayable
-// list of font events. Font-name resolution is deliberately deferred to replay
-// (it depends on the container's resources); everything captured here — the
-// operand names, render modes, and shown string bytes — is a pure function of
-// the stream contents.
-func buildFontEvents(cancel core.Canceler, data []byte) []fontEvent {
-	if data == nil {
-		return nil
-	}
-	var events []fontEvent
-	// lastName/lastNumber hold the raw operand bytes, which forEachContentItem
-	// reports as sub-slices of data. Converting them to strings on arrival cost
-	// one allocation per token — 87% of the whole PDF/UA run's allocations, since
-	// numbers are by far the most common token and only the rare Tr ever reads
-	// one. The conversion now happens where the value is consumed.
-	var lastName, lastNumber []byte
-	var pending [][]byte
-	forEachContentItem(cancel, data, func(kind contentItemKind, payload []byte) {
-		switch kind {
-		case itemName:
-			lastName = payload
-		case itemNumber:
-			lastNumber = payload
-		case itemString:
-			pending = append(pending, append([]byte(nil), payload...))
-		case itemOperator:
-			switch string(payload) {
-			case "Tf":
-				events = append(events, fontEvent{kind: evTf, name: string(lastName)})
-				pending = nil
-			case "Tr":
-				m := 0
-				if len(lastNumber) > 0 {
-					fmt.Sscanf(string(lastNumber), "%d", &m)
-				}
-				events = append(events, fontEvent{kind: evTr, mode: m})
-				pending = nil
-			case "Tj", "TJ", "'", "\"":
-				events = append(events, fontEvent{kind: evShow, strings: pending})
-				pending = nil
-			default:
-				pending = nil
-			}
-		}
-	})
-	return events
-}
-
-// contentFontEvents returns the font-usage skeleton for data, memoized per
-// content stream (key) when a validation cache is present so a stream shared by
-// many containers is tokenized only once.
-func (d *Document) contentFontEvents(data []byte, key *Stream) []fontEvent {
-	if key != nil {
-		if c := d.valCache; c != nil {
-			if ev, ok := c.pdfa.fontEvents[key]; ok {
-				return ev
-			}
-			ev := buildFontEvents(d.canceler(), data)
-			if c.pdfa.fontEvents == nil {
-				c.pdfa.fontEvents = make(map[*Stream][]fontEvent)
-			}
-			c.pdfa.fontEvents[key] = ev
-			return ev
-		}
-	}
-	return buildFontEvents(d.canceler(), data)
-}
-
-// contentUsedNamesCached returns contentUsedNames(data), memoized per content
-// stream (key) when a validation cache is present.
-func (d *Document) contentUsedNamesCached(data []byte, key *Stream) usedResourceNames {
-	if key != nil {
-		if c := d.valCache; c != nil {
-			if u, ok := c.pdfa.usedNames[key]; ok {
-				return u
-			}
-			u := contentUsedNames(d.canceler(), data)
-			if c.pdfa.usedNames == nil {
-				c.pdfa.usedNames = make(map[*Stream]usedResourceNames)
-			}
-			c.pdfa.usedNames[key] = u
-			return u
-		}
-	}
-	return contentUsedNames(d.canceler(), data)
-}
-
-// contentBytesAndKey resolves a container's content reference to its decoded
-// bytes and, when the reference is a single stream, that stream (usable as a
-// per-stream memoization key). Array contents are container-specific
-// concatenations and get no key.
-func (d *Document) contentBytesAndKey(ref Object) ([]byte, *Stream) {
-	data := getContentStreamData(d, ref)
-	if s, ok := d.Resolve(ref).(*Stream); ok {
-		return data, s
-	}
-	return data, nil
-}
-
-// sfKey identifies a (content stream, /Font resource dictionary) pair. A
-// container's font attribution is fully determined by this pair, so two
-// containers sharing both produce byte-identical contributions to the usage
-// map — the second and later are skipped (see collectTextFromContainer). This
-// is what stops a document that references one content stream from thousands of
-// pages from re-attributing, and re-accumulating, the same shown text per page.
-type sfKey struct {
-	stream  *Stream
-	fontRes *Dictionary
-}
-
-// collectTextFromContainer attributes the text shown in a container's content
-// (key identifies the single backing stream, if any) to the fonts it selects,
-// then recurses into the form XObjects and tiling patterns it actually invokes.
-// Tokenization is memoized per stream via key, and the font attribution is
-// skipped when an identical (stream, /Font) pair was already processed, so
-// content shared across many containers is handled once rather than per
-// container.
-func collectTextFromContainer(doc *Document, container *Dictionary, data []byte, key *Stream, usage map[*Dictionary]*fontTextUsage, seen map[*Dictionary]bool, applied map[sfKey]bool) {
-	if container == nil || seen[container] {
-		return
-	}
-	seen[container] = true
-	res := resolveResources(doc, container)
-
-	fontRes := (*Dictionary)(nil)
-	if res != nil {
-		fontRes = doc.ResolveDict(res.Get("Font"))
-	}
-	fontFor := func(name string) (*Dictionary, int) {
-		if fontRes == nil {
-			return nil, 0
-		}
-		ref := fontRes.Get(Name(name))
-		objNum := 0
-		if ir, ok := ref.(IndirectRef); ok {
-			objNum = ir.Number
-		}
-		return doc.ResolveDict(ref), objNum
-	}
-
-	// Replay the stream's font-usage skeleton against this container's fonts,
-	// unless an identical (stream, /Font) pair already contributed the same
-	// attribution — its shown text is already recorded.
-	if res != nil {
-		sk := sfKey{key, fontRes}
-		if key == nil || !applied[sk] {
-			if key != nil {
-				applied[sk] = true
-			}
-			var curFont *fontTextUsage
-			mode := 0
-			for _, ev := range doc.contentFontEvents(data, key) {
-				switch ev.kind {
-				case evTf:
-					if dict, num := fontFor(ev.name); dict != nil {
-						u := usage[dict]
-						if u == nil {
-							u = &fontTextUsage{fontDict: dict, objNum: num, modes: make(map[int]bool)}
-							usage[dict] = u
-						}
-						curFont = u
-					} else {
-						curFont = nil
-					}
-				case evTr:
-					mode = ev.mode
-				case evShow:
-					if curFont != nil {
-						curFont.strings = append(curFont.strings, ev.strings...)
-						curFont.modes[mode] = true
-					}
-				}
-			}
-		}
-	}
-
-	// Recurse into executed forms and patterns. Resolve the candidates first:
-	// learning *which* of them the content executes costs a full pass over the
-	// stream, and a container with no form XObject and no tiling pattern in
-	// scope — a page whose /XObject holds nothing but images, say — has nothing
-	// to recurse into, so that pass would answer a question nobody asks.
-	if res == nil {
-		return
-	}
-	type candidate struct {
-		name   string
-		stream *Stream
-	}
-	var forms, patterns []candidate
-	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
-		for i, name := range xobjDict.Keys {
-			if s, ok := doc.Resolve(xobjDict.Values[i]).(*Stream); ok {
-				if st, _ := s.Dict.Get("Subtype").(Name); st == "Form" {
-					forms = append(forms, candidate{string(name), s})
-				}
-			}
-		}
-	}
-	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
-		for i, name := range patDict.Keys {
-			if s, ok := doc.Resolve(patDict.Values[i]).(*Stream); ok {
-				patterns = append(patterns, candidate{string(name), s})
-			}
-		}
-	}
-	if len(forms) == 0 && len(patterns) == 0 {
-		return
-	}
-	used := doc.contentUsedNamesCached(data, key)
-	for _, c := range forms {
-		if used.xobjects[c.name] {
-			collectTextFromContainer(doc, &c.stream.Dict, decodeContentStream(doc, c.stream), c.stream, usage, seen, applied)
-		}
-	}
-	for _, c := range patterns {
-		if used.patterns[c.name] {
-			collectTextFromContainer(doc, &c.stream.Dict, decodeContentStream(doc, c.stream), c.stream, usage, seen, applied)
-		}
-	}
-}
-
 // --- predefined CMaps (ISO 32000-1, 9.7.5.2, Table 118) ---
-
-// predefinedCMapInfo carries the CIDSystemInfo a predefined CMap implies.
-type predefinedCMapInfo struct {
-	Registry string
-	Ordering string
-}
-
-var predefinedCMaps = map[string]predefinedCMapInfo{
-	// Chinese (simplified) — Adobe-GB1
-	"GB-EUC-H": {"Adobe", "GB1"}, "GB-EUC-V": {"Adobe", "GB1"},
-	"GBpc-EUC-H": {"Adobe", "GB1"}, "GBpc-EUC-V": {"Adobe", "GB1"},
-	"GBK-EUC-H": {"Adobe", "GB1"}, "GBK-EUC-V": {"Adobe", "GB1"},
-	"GBKp-EUC-H": {"Adobe", "GB1"}, "GBKp-EUC-V": {"Adobe", "GB1"},
-	"GBK2K-H": {"Adobe", "GB1"}, "GBK2K-V": {"Adobe", "GB1"},
-	"UniGB-UCS2-H": {"Adobe", "GB1"}, "UniGB-UCS2-V": {"Adobe", "GB1"},
-	"UniGB-UTF16-H": {"Adobe", "GB1"}, "UniGB-UTF16-V": {"Adobe", "GB1"},
-	// Chinese (traditional) — Adobe-CNS1
-	"B5pc-H": {"Adobe", "CNS1"}, "B5pc-V": {"Adobe", "CNS1"},
-	"HKscs-B5-H": {"Adobe", "CNS1"}, "HKscs-B5-V": {"Adobe", "CNS1"},
-	"ETen-B5-H": {"Adobe", "CNS1"}, "ETen-B5-V": {"Adobe", "CNS1"},
-	"ETenms-B5-H": {"Adobe", "CNS1"}, "ETenms-B5-V": {"Adobe", "CNS1"},
-	"CNS-EUC-H": {"Adobe", "CNS1"}, "CNS-EUC-V": {"Adobe", "CNS1"},
-	"UniCNS-UCS2-H": {"Adobe", "CNS1"}, "UniCNS-UCS2-V": {"Adobe", "CNS1"},
-	"UniCNS-UTF16-H": {"Adobe", "CNS1"}, "UniCNS-UTF16-V": {"Adobe", "CNS1"},
-	// Japanese — Adobe-Japan1
-	"83pv-RKSJ-H": {"Adobe", "Japan1"},
-	"90ms-RKSJ-H": {"Adobe", "Japan1"}, "90ms-RKSJ-V": {"Adobe", "Japan1"},
-	"90msp-RKSJ-H": {"Adobe", "Japan1"}, "90msp-RKSJ-V": {"Adobe", "Japan1"},
-	"90pv-RKSJ-H": {"Adobe", "Japan1"},
-	"Add-RKSJ-H":  {"Adobe", "Japan1"}, "Add-RKSJ-V": {"Adobe", "Japan1"},
-	"EUC-H": {"Adobe", "Japan1"}, "EUC-V": {"Adobe", "Japan1"},
-	"Ext-RKSJ-H": {"Adobe", "Japan1"}, "Ext-RKSJ-V": {"Adobe", "Japan1"},
-	"H": {"Adobe", "Japan1"}, "V": {"Adobe", "Japan1"},
-	"UniJIS-UCS2-H": {"Adobe", "Japan1"}, "UniJIS-UCS2-V": {"Adobe", "Japan1"},
-	"UniJIS-UCS2-HW-H": {"Adobe", "Japan1"}, "UniJIS-UCS2-HW-V": {"Adobe", "Japan1"},
-	"UniJIS-UTF16-H": {"Adobe", "Japan1"}, "UniJIS-UTF16-V": {"Adobe", "Japan1"},
-	// Korean — Adobe-Korea1
-	"KSC-EUC-H": {"Adobe", "Korea1"}, "KSC-EUC-V": {"Adobe", "Korea1"},
-	"KSCms-UHC-H": {"Adobe", "Korea1"}, "KSCms-UHC-V": {"Adobe", "Korea1"},
-	"KSCms-UHC-HW-H": {"Adobe", "Korea1"}, "KSCms-UHC-HW-V": {"Adobe", "Korea1"},
-	"KSCpc-EUC-H":  {"Adobe", "Korea1"},
-	"UniKS-UCS2-H": {"Adobe", "Korea1"}, "UniKS-UCS2-V": {"Adobe", "Korea1"},
-	"UniKS-UTF16-H": {"Adobe", "Korea1"}, "UniKS-UTF16-V": {"Adobe", "Korea1"},
-	// Identity
-	"Identity-H": {"Adobe", "Identity"}, "Identity-V": {"Adobe", "Identity"},
-}
 
 // --- dictionary-level font checks ---
 
@@ -545,7 +59,7 @@ func checkFontDictionaries(doc *Document, level PDFALevel) []ValidationError {
 	rule := fontRule(level)
 	var errs []ValidationError
 
-	usage := collectFontTextUsage(doc)
+	usage := core.CollectFontTextUsage(doc.view())
 	for fontDict, u := range usage {
 		errs = append(errs, checkOneFontDict(doc, level, rule, fontDict, u)...)
 	}
@@ -596,20 +110,20 @@ func fontClause(concept string, level PDFALevel) string {
 	}
 }
 
-func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
+func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *core.FontTextUsage) []ValidationError {
 	var errs []ValidationError
 	bad := func(concept, format string, args ...interface{}) {
 		errs = append(errs, ValidationError{
 			Rule:    fontClause(concept, level),
 			Level:   level,
 			Message: fmt.Sprintf(format, args...),
-			Object:  u.objNum,
+			Object:  u.ObjNum,
 		})
 	}
 	subtype, _ := fontDict.Get("Subtype").(Name)
 
 	if subtype == "Type0" {
-		desc := type0Descendant(doc, fontDict)
+		desc := core.Type0Descendant(doc.view(), fontDict)
 		encObj := fontDict.Get("Encoding")
 
 		// CMap legality (9.7.5.2): the Encoding must be a predefined CMap
@@ -617,7 +131,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 		var cmapStreamInfo *Dictionary
 		switch enc := doc.Resolve(encObj).(type) {
 		case Name:
-			if _, ok := predefinedCMaps[string(enc)]; !ok {
+			if _, ok := core.PredefinedCMaps[string(enc)]; !ok {
 				bad("cmap", "Type0 font Encoding CMap /%s is neither embedded nor predefined (ISO 32000, Table 118)", string(enc))
 			}
 		case *Stream:
@@ -634,7 +148,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			// non-predefined name is not permitted.
 			switch uc := doc.Resolve(enc.Dict.Get("UseCMap")).(type) {
 			case Name:
-				if _, ok := predefinedCMaps[string(uc)]; !ok {
+				if _, ok := core.PredefinedCMaps[string(uc)]; !ok {
 					bad("cmap", "embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", string(uc))
 				}
 			case *Stream:
@@ -643,7 +157,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			// The usecmap operator in the CMap body must likewise name a
 			// predefined CMap.
 			if refName, found := cmapUseCMap(doc, enc); found {
-				if _, ok := predefinedCMaps[refName]; !ok {
+				if _, ok := core.PredefinedCMaps[refName]; !ok {
 					bad("cmap", "embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", refName)
 				}
 			}
@@ -659,7 +173,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			var cmSupp Integer
 			haveCMapInfo := false
 			if name, ok := doc.Resolve(encObj).(Name); ok {
-				if info, ok := predefinedCMaps[string(name)]; ok && info.Registry != "" {
+				if info, ok := core.PredefinedCMaps[string(name)]; ok && info.Registry != "" {
 					cmReg, cmOrd = info.Registry, info.Ordering
 					haveCMapInfo = string(name) != "Identity-H" && string(name) != "Identity-V"
 				}
@@ -701,8 +215,8 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			// CIDFont shall carry CIDToGIDMap as a stream or /Identity;
 			// PDF/A requires the entry. Text rendered invisibly (mode 3
 			// only) is exempt — the corpus passes such a font at 1b.
-			onlyInvisible := len(u.modes) > 0
-			for m := range u.modes {
+			onlyInvisible := len(u.Modes) > 0
+			for m := range u.Modes {
 				if m != 3 {
 					onlyInvisible = false
 				}
@@ -732,7 +246,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 	// ToUnicode values (A-4): no mapping may target U+0000, U+FEFF, U+FFFE.
 	if level == PDFA4 {
 		if tu, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*Stream); ok {
-			if hasForbiddenUnicodeTargets(doc, tu) {
+			if core.HasForbiddenUnicodeTargets(doc.view(), tu) {
 				bad("toUnicode", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)")
 			}
 		}
@@ -742,14 +256,6 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 	errs = append(errs, checkFontProgramConsistency(doc, level, rule, fontDict, u)...)
 
 	return errs
-}
-
-func type0Descendant(doc *Document, fontDict *Dictionary) *Dictionary {
-	arr, ok := doc.Resolve(fontDict.Get("DescendantFonts")).(Array)
-	if !ok || len(arr) == 0 {
-		return nil
-	}
-	return doc.ResolveDict(arr[0])
 }
 
 func pdfTextString(doc *Document, v Object) string {
@@ -800,60 +306,6 @@ func cmapUseCMap(doc *Document, stream *Stream) (string, bool) {
 	return name, name != ""
 }
 
-// hasForbiddenUnicodeTargets scans a ToUnicode CMap for mappings to U+0000,
-// U+FEFF, or U+FFFE in bfchar/bfrange destinations.
-func hasForbiddenUnicodeTargets(doc *Document, stream *Stream) bool {
-	data := decodeContentStream(doc, stream)
-	if data == nil {
-		return false
-	}
-	s := string(data)
-	scanSection := func(begin, end string, dstIndex int) bool {
-		rest := s
-		for {
-			b := strings.Index(rest, begin)
-			if b < 0 {
-				return false
-			}
-			e := strings.Index(rest[b:], end)
-			if e < 0 {
-				return false
-			}
-			section := rest[b+len(begin) : b+e]
-			// Collect hex strings in order; every dstIndex-th (per group)
-			// is a destination.
-			var hexes []string
-			for {
-				lt := strings.IndexByte(section, '<')
-				if lt < 0 {
-					break
-				}
-				gt := strings.IndexByte(section[lt:], '>')
-				if gt < 0 {
-					break
-				}
-				hexes = append(hexes, section[lt+1:lt+gt])
-				section = section[lt+gt+1:]
-			}
-			group := dstIndex + 1
-			for i := dstIndex; i < len(hexes); i += group {
-				h := strings.TrimSpace(hexes[i])
-				for len(h) >= 4 {
-					switch strings.ToLower(h[:4]) {
-					case "0000", "feff", "fffe":
-						return true
-					}
-					h = h[4:]
-				}
-			}
-			rest = rest[b+e+len(end):]
-		}
-	}
-	// bfchar: <src> <dst> pairs; bfrange: <lo> <hi> <dst> triples.
-	return scanSection("beginbfchar", "endbfchar", 1) ||
-		scanSection("beginbfrange", "endbfrange", 2)
-}
-
 // checkTrueTypeEncoding enforces the PDF/A TrueType encoding rules
 // (ISO 19005-2/-3, 6.2.11.6; -4, 6.2.10.6; grounded in ISO 32000-1,
 // 9.6.6.4): a symbolic TrueType font shall have no Encoding entry; a
@@ -889,7 +341,7 @@ func checkCMapEmbedded(doc *Document, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func checkTrueTypeEncoding(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
+func checkTrueTypeEncoding(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *core.FontTextUsage) []ValidationError {
 	rule = fontClause("encoding", level) // 6.3.7 / 6.2.11.6 / 6.2.10.6
 	var errs []ValidationError
 	bad := func(format string, args ...interface{}) {
@@ -897,7 +349,7 @@ func checkTrueTypeEncoding(doc *Document, level PDFALevel, rule string, fontDict
 			Rule:    rule,
 			Level:   level,
 			Message: fmt.Sprintf(format, args...),
-			Object:  u.objNum,
+			Object:  u.ObjNum,
 		})
 	}
 
@@ -1140,70 +592,6 @@ var aglNames = map[string]bool{
 
 // --- font program loading ---
 
-// loadFontProgram parses the embedded font program of a descriptor, or nil
-// when none is embedded or it cannot be parsed.
-func loadFontProgram(doc *Document, fd *Dictionary) *font.Program {
-	if fd == nil {
-		return nil
-	}
-	if s, ok := doc.Resolve(fd.Get("FontFile")).(*Stream); ok {
-		if data := decodeContentStream(doc, s); data != nil {
-			return noteFontProgramLimits(doc, font.ParseType1(data))
-		}
-	}
-	if s, ok := doc.Resolve(fd.Get("FontFile2")).(*Stream); ok {
-		if data := decodeContentStream(doc, s); data != nil {
-			return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.lim().CmapWork))
-		}
-	}
-	if s, ok := doc.Resolve(fd.Get("FontFile3")).(*Stream); ok {
-		if data := decodeContentStream(doc, s); data != nil {
-			subtype, _ := s.Dict.Get("Subtype").(Name)
-			if subtype == "OpenType" {
-				if fp := parseSFNTCFF(data); fp != nil {
-					return noteFontProgramLimits(doc, fp)
-				}
-				return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.lim().CmapWork))
-			}
-			return noteFontProgramLimits(doc, font.ParseCFF(data))
-		}
-	}
-	return nil
-}
-
-// noteFontProgramLimits reports the guard trips the font-program parsers
-// recorded on the program itself. The parsers take raw bytes and have no
-// Document in scope, so this is where a trip re-enters the run's recorder.
-func noteFontProgramLimits(doc *Document, fp *font.Program) *font.Program {
-	if fp != nil && fp.CmapPartial {
-		noteLimit(doc, limitCmapWork, fmt.Sprintf("an embedded font's cmap subtable needed more than %s units of expansion work to read completely; the glyph-coverage and .notdef checks for that font were skipped rather than run against a partial character map", core.LimitBound(int64(doc.lim().CmapWork), core.DefaultMaxCmapWork)), 0)
-	}
-	return fp
-}
-
-// parseSFNTCFF returns the CFF-table font program of an OpenType/CFF font,
-// falling back to the sfnt view when there is no CFF table.
-func parseSFNTCFF(data []byte) *font.Program {
-	if len(data) < 12 || font.Be32(data, 0) != 0x4F54544F { // 'OTTO'
-		return nil
-	}
-	numTables := font.Be16(data, 4)
-	for i := 0; i < numTables; i++ {
-		rec := 12 + 16*i
-		if rec+16 > len(data) {
-			return nil
-		}
-		if string(data[rec:rec+4]) == "CFF " {
-			off := font.Be32(data, rec+8)
-			length := font.Be32(data, rec+12)
-			if uint64(off)+uint64(length) <= uint64(len(data)) {
-				return font.ParseCFF(data[off : off+length])
-			}
-		}
-	}
-	return nil
-}
-
 // --- simple font encoding (code -> glyph name) ---
 
 // simpleFontCodeToName builds the character-code to glyph-name table for a
@@ -1298,7 +686,7 @@ const glyphWidthTolerance = 1.0 // 1/1000 text-space units
 // the font-dictionary width matches the embedded program's advance width
 // (ISO 19005 font-metrics rule), the glyph is present in the program
 // (embedding-completeness rule), and no shown glyph is .notdef.
-func checkFontProgramConsistency(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
+func checkFontProgramConsistency(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *core.FontTextUsage) []ValidationError {
 	subtype, _ := fontDict.Get("Subtype").(Name)
 	if subtype == "Type3" {
 		return checkType3Widths(doc, level, rule, fontDict, u)
@@ -1316,7 +704,7 @@ func checkFontProgramConsistency(doc *Document, level PDFALevel, rule string, fo
 // program at all), and only when a FontFile is present (a missing program is
 // the separate embedding rule). Across the corpus, every valid embedded program
 // parses, so this raises no false positive.
-func damagedFontProgramError(doc *Document, level PDFALevel, rule string, fontDict, fd *Dictionary, u *fontTextUsage) []ValidationError {
+func damagedFontProgramError(doc *Document, level PDFALevel, rule string, fontDict, fd *Dictionary, u *core.FontTextUsage) []ValidationError {
 	if fd == nil || !rendersVisibly(u) || !hasEmbeddedFontProgram(doc, fd) {
 		return nil
 	}
@@ -1325,7 +713,7 @@ func damagedFontProgramError(doc *Document, level PDFALevel, rule string, fontDi
 		Rule:    fontClause("embed", level),
 		Level:   level,
 		Message: fmt.Sprintf("embedded %s font program is damaged and could not be parsed", string(subtype)),
-		Object:  u.objNum,
+		Object:  u.ObjNum,
 	}}
 }
 
@@ -1355,9 +743,9 @@ func fontKindClause(kind string, level PDFALevel) string {
 	return fontClause("general", level)
 }
 
-func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
+func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *core.FontTextUsage) []ValidationError {
 	fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
-	fp := loadFontProgram(doc, fd)
+	fp := core.LoadFontProgram(doc.view(), fd)
 	if fp == nil {
 		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
 	}
@@ -1384,7 +772,7 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 			return
 		}
 		reported[kind] = true
-		errs = append(errs, ValidationError{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.objNum})
+		errs = append(errs, ValidationError{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.ObjNum})
 	}
 
 	// ISO 19005-1 6.3.7: a symbolic TrueType font's embedded program shall
@@ -1395,7 +783,7 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 	}
 
 	renders := rendersVisibly(u)
-	for _, s := range u.strings {
+	for _, s := range u.Strings {
 		for _, code := range s {
 			name := enc[code]
 
@@ -1448,18 +836,18 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 	return errs
 }
 
-func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
-	desc := type0Descendant(doc, fontDict)
+func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *core.FontTextUsage) []ValidationError {
+	desc := core.Type0Descendant(doc.view(), fontDict)
 	if desc == nil {
 		return nil
 	}
 	fd := doc.ResolveDict(desc.Get("FontDescriptor"))
-	fp := loadFontProgram(doc, fd)
+	fp := core.LoadFontProgram(doc.view(), fd)
 	if fp == nil {
 		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
 	}
 	cidSub, _ := desc.Get("Subtype").(Name)
-	identity := isIdentityEncoding(doc, fontDict)
+	identity := core.IsIdentityEncoding(doc.view(), fontDict)
 
 	dw := 1000.0
 	if v := doc.Resolve(desc.Get("DW")); v != nil {
@@ -1467,7 +855,7 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 	}
 	wMap, wComplete := parseCIDWidths(doc, desc.Get("W"))
 	if !wComplete {
-		noteLimit(doc, limitCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", core.LimitBound(int64(doc.lim().CIDRangeSpan), core.DefaultMaxCIDRangeSpan)), u.objNum)
+		noteLimit(doc, limitCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", core.LimitBound(int64(doc.lim().CIDRangeSpan), core.DefaultMaxCIDRangeSpan)), u.ObjNum)
 	}
 
 	var errs []ValidationError
@@ -1477,12 +865,12 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 			return
 		}
 		reported[kind] = true
-		errs = append(errs, ValidationError{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.objNum})
+		errs = append(errs, ValidationError{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.ObjNum})
 	}
 	renders := rendersVisibly(u)
 	toUni := parseToUnicodeMap(doc, fontDict)
 
-	for _, s := range u.strings {
+	for _, s := range u.Strings {
 		if !identity {
 			continue // only Identity CID decoding is handled precisely
 		}
@@ -1525,7 +913,7 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 	return errs
 }
 
-func checkType3Widths(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *fontTextUsage) []ValidationError {
+func checkType3Widths(doc *Document, level PDFALevel, rule string, fontDict *Dictionary, u *core.FontTextUsage) []ValidationError {
 	// A Type 3 glyph's advance is the w operand of its d0/d1 operator in the
 	// CharProc, transformed by the FontMatrix; it must match the Widths
 	// array (ISO 32000-1, 9.6.5 / 9.10). Compare in glyph space.
@@ -1543,7 +931,7 @@ func checkType3Widths(doc *Document, level PDFALevel, rule string, fontDict *Dic
 
 	var errs []ValidationError
 	reported := false
-	for _, s := range u.strings {
+	for _, s := range u.Strings {
 		for _, code := range s {
 			name := enc[code]
 			cp, ok := doc.Resolve(charProcs.Get(Name(name))).(*Stream)
@@ -1564,7 +952,7 @@ func checkType3Widths(doc *Document, level PDFALevel, rule string, fontDict *Dic
 			if absf(pdfW-progW) > glyphWidthTolerance && !reported {
 				reported = true
 				errs = append(errs, ValidationError{Rule: fontClause("width", level), Level: level,
-					Message: "width information for glyphs used for rendering is inconsistent in Type3 font", Object: u.objNum})
+					Message: "width information for glyphs used for rendering is inconsistent in Type3 font", Object: u.ObjNum})
 			}
 		}
 	}
@@ -1600,11 +988,11 @@ func absf(x float64) float64 {
 // rendersVisibly reports whether the font showed text in any mode other than
 // 3 (invisible) or 7 (clip only) — modes where glyph shape/coverage is not
 // actually painted.
-func rendersVisibly(u *fontTextUsage) bool {
-	if len(u.modes) == 0 {
+func rendersVisibly(u *core.FontTextUsage) bool {
+	if len(u.Modes) == 0 {
 		return true
 	}
-	for m := range u.modes {
+	for m := range u.Modes {
 		if m != 3 && m != 7 {
 			return true
 		}
@@ -1660,14 +1048,6 @@ func isNotdefGlyph(fp *font.Program, subtype Name, symbolic bool, code byte, nam
 	if subtype == "TrueType" {
 		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
 		return ok && gid == 0
-	}
-	return false
-}
-
-// isIdentityEncoding reports whether a Type0 font uses Identity-H/V.
-func isIdentityEncoding(doc *Document, fontDict *Dictionary) bool {
-	if n, ok := doc.Resolve(fontDict.Get("Encoding")).(Name); ok {
-		return n == "Identity-H" || n == "Identity-V"
 	}
 	return false
 }
@@ -1809,14 +1189,14 @@ func type3GlyphWidth(doc *Document, cp *Stream) (float64, bool) {
 	var nums []float64
 	found := false
 	var w float64
-	forEachContentItem(doc.canceler(), data, func(kind contentItemKind, payload []byte) {
+	core.ForEachContentItem(doc.canceler(), data, func(kind core.ContentItemKind, payload []byte) {
 		if found {
 			return
 		}
 		switch kind {
-		case itemNumber:
+		case core.ItemNumber:
 			nums = append(nums, numVal(parseNumberToken(payload)))
-		case itemOperator:
+		case core.ItemOperator:
 			switch string(payload) {
 			case "d0", "d1":
 				if len(nums) >= 1 {
@@ -1882,7 +1262,7 @@ func checkFontSubsetCompleteness(doc *Document, level PDFALevel) []ValidationErr
 	rule := subsetRule(level)
 	var errs []ValidationError
 
-	for fontDict, u := range collectFontTextUsage(doc) {
+	for fontDict, u := range core.CollectFontTextUsage(doc.view()) {
 		subtype, _ := fontDict.Get("Subtype").(Name)
 		switch subtype {
 		case "Type1", "MMType1":
@@ -1894,7 +1274,7 @@ func checkFontSubsetCompleteness(doc *Document, level PDFALevel) []ValidationErr
 			if !ok {
 				continue
 			}
-			listed := parseCharSet(string(cs.Value))
+			listed := core.ParseCharSet(string(cs.Value))
 			symbolic := descriptorSymbolic(doc, fd)
 			enc := simpleFontCodeToName(doc, fontDict, symbolic)
 			if usedGlyphMissing(u, enc, listed) {
@@ -1902,11 +1282,11 @@ func checkFontSubsetCompleteness(doc *Document, level PDFALevel) []ValidationErr
 					Rule:    rule,
 					Level:   level,
 					Message: "FontDescriptor CharSet does not list all glyph names used for rendering",
-					Object:  u.objNum,
+					Object:  u.ObjNum,
 				})
 			}
 		case "Type0":
-			desc := type0Descendant(doc, fontDict)
+			desc := core.Type0Descendant(doc.view(), fontDict)
 			if desc == nil {
 				continue
 			}
@@ -1914,19 +1294,19 @@ func checkFontSubsetCompleteness(doc *Document, level PDFALevel) []ValidationErr
 			if fd == nil {
 				continue
 			}
-			cidSet, ok := doc.Resolve(fd.Get("CIDSet")).(*Stream)
+			cidSetStream, ok := doc.Resolve(fd.Get("CIDSet")).(*Stream)
 			if !ok {
 				continue
 			}
-			if !isIdentityEncoding(doc, fontDict) {
+			if !core.IsIdentityEncoding(doc.view(), fontDict) {
 				continue
 			}
-			present := decodeCIDSet(doc, cidSet)
+			present := core.DecodeCIDSet(doc.view(), cidSetStream)
 			missing := false
-			for _, s := range u.strings {
+			for _, s := range u.Strings {
 				for i := 0; i+1 < len(s); i += 2 {
 					cid := int(s[i])<<8 | int(s[i+1])
-					if cid != 0 && !present.has(cid) {
+					if cid != 0 && !present.Has(cid) {
 						missing = true
 					}
 				}
@@ -1936,7 +1316,7 @@ func checkFontSubsetCompleteness(doc *Document, level PDFALevel) []ValidationErr
 					Rule:    rule,
 					Level:   level,
 					Message: "FontDescriptor CIDSet does not list all CIDs used for rendering",
-					Object:  u.objNum,
+					Object:  u.ObjNum,
 				})
 			}
 		}
@@ -1954,8 +1334,8 @@ func descriptorSymbolic(doc *Document, fd *Dictionary) bool {
 
 // usedGlyphMissing reports whether any shown glyph name is absent from the
 // listed CharSet names.
-func usedGlyphMissing(u *fontTextUsage, enc map[byte]string, listed map[string]bool) bool {
-	for _, s := range u.strings {
+func usedGlyphMissing(u *core.FontTextUsage, enc map[byte]string, listed map[string]bool) bool {
+	for _, s := range u.Strings {
 		for _, code := range s {
 			name := enc[code]
 			if name == "" || name == ".notdef" {
@@ -1967,57 +1347,6 @@ func usedGlyphMissing(u *fontTextUsage, enc map[byte]string, listed map[string]b
 		}
 	}
 	return false
-}
-
-// parseCharSet parses a Type 1 /CharSet string ("/name1/name2/...") into a
-// set of glyph names.
-func parseCharSet(s string) map[string]bool {
-	out := make(map[string]bool)
-	for {
-		i := strings.IndexByte(s, '/')
-		if i < 0 {
-			break
-		}
-		s = s[i+1:]
-		end := 0
-		for end < len(s) && s[end] != '/' && !syntax.IsWhitespace(s[end]) {
-			end++
-		}
-		if end > 0 {
-			out[s[:end]] = true
-		}
-		s = s[end:]
-	}
-	return out
-}
-
-// cidSet is a decoded CIDSet stream: bit i (MSB-first within each byte) set
-// means CID i is present. Membership is tested directly against the bytes, so a
-// large — or maliciously inflated — CIDSet costs nothing beyond the bounded
-// decode. Materialising a set of every present CID could be hundreds of millions
-// of map entries (a 64 MB CIDSet holds 512 M bits), which a crafted file used to
-// turn into ~70s of validation.
-type cidSet []byte
-
-// has reports whether CID i is marked present.
-func (c cidSet) has(i int) bool {
-	b := i / 8
-	return b >= 0 && b < len(c) && c[b]&(0x80>>(uint(i)%8)) != 0
-}
-
-// empty reports whether no CID is marked present (an absent or all-zero set).
-func (c cidSet) empty() bool {
-	for _, b := range c {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
-}
-
-// decodeCIDSet decodes a CIDSet stream into a cidSet for membership testing.
-func decodeCIDSet(doc *Document, s *Stream) cidSet {
-	return cidSet(decodeContentStream(doc, s))
 }
 
 // checkCMapCIDLimit verifies that no character identifier defined by an
@@ -2150,14 +1479,14 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		return nil
 	}
 	var errs []ValidationError
-	for fontDict, u := range collectFontTextUsage(doc) {
+	for fontDict, u := range core.CollectFontTextUsage(doc.view()) {
 		if st, _ := fontDict.Get("Subtype").(Name); st != "Type0" {
 			continue
 		}
 		if !rendersVisibly(u) {
 			continue // invisible text is exempt
 		}
-		desc := type0Descendant(doc, fontDict)
+		desc := core.Type0Descendant(doc.view(), fontDict)
 		if desc == nil {
 			continue
 		}
@@ -2165,15 +1494,15 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		if fd == nil {
 			continue
 		}
-		cidSet, ok := doc.Resolve(fd.Get("CIDSet")).(*Stream)
+		cidSetStream, ok := doc.Resolve(fd.Get("CIDSet")).(*Stream)
 		if !ok {
 			continue // presence is checked by checkFontSubsets
 		}
-		fp := loadFontProgram(doc, fd)
+		fp := core.LoadFontProgram(doc.view(), fd)
 		if fp == nil {
 			continue
 		}
-		present := decodeCIDSet(doc, cidSet)
+		present := core.DecodeCIDSet(doc.view(), cidSetStream)
 		num := 0
 		if ir, ok := fontDict.Get("DescendantFonts").(Array); ok && len(ir) > 0 {
 			num = resolveObjNum(doc, ir[0])
@@ -2183,7 +1512,7 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		// emptiness is not reliably decidable from the program alone —
 		// CIDToGIDMap Identity fonts legitimately omit unused CIDs — so only
 		// emptiness is flagged here.)
-		if present.empty() && fp.NumGlyphs > 1 {
+		if present.Empty() && fp.NumGlyphs > 1 {
 			errs = append(errs, ValidationError{Rule: "6.3.5", Level: level,
 				Message: "CIDFont subset FontDescriptor contains an empty CIDSet stream", Object: num})
 			continue
@@ -2196,7 +1525,7 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		if fp.CIDGIDs != nil {
 			// CFF CIDFont: the charset enumerates the CIDs actually present.
 			for cid := range fp.CIDGIDs {
-				if cid != 0 && !present.has(cid) {
+				if cid != 0 && !present.Has(cid) {
 					missing = true
 					break
 				}
@@ -2205,7 +1534,7 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 			// CIDFontType2 with an Identity map: CID == glyph index, so every
 			// present (non-empty) glyph must be listed.
 			for gid, ne := range fp.GlyphNonEmpty {
-				if ne && !present.has(gid) {
+				if ne && !present.Has(gid) {
 					missing = true
 					break
 				}

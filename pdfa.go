@@ -356,15 +356,6 @@ type validationCache struct {
 type pdfaCache struct {
 	directAnnots    []annotOccurrence
 	hasDirectAnnots bool
-
-	fontUsage      map[*Dictionary]*fontTextUsage // memoized collectFontTextUsage
-	fontUsageValid bool
-
-	// Per-content-stream memoization for the executed-content walk. A stream
-	// shared by many containers (e.g. one content stream referenced by
-	// thousands of pages) is tokenized only once instead of once per container.
-	fontEvents map[*Stream][]fontEvent       // stream -> replayable font-usage skeleton
-	usedNames  map[*Stream]usedResourceNames // stream -> invoked XObject/pattern names
 }
 
 // pdfuaCache is the PDF/UA engine's: the flattened structure tree and the
@@ -1344,7 +1335,7 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 	// A font used only for invisible text (rendering mode 3/7) is not
 	// "used for rendering" and need not be embedded (the corpus passes an
 	// unembedded Type1 shown in mode 3).
-	usage := collectFontTextUsage(doc)
+	usage := core.CollectFontTextUsage(doc.view())
 	exemptInvisible := make(map[*Dictionary]bool)
 	for d, u := range usage {
 		if !rendersVisibly(u) {
@@ -4271,7 +4262,7 @@ func checkQNestingDepth(doc *Document, level PDFALevel, rule string, errs *[]Val
 		if contentsRef == nil {
 			continue
 		}
-		if data := getContentStreamData(doc, contentsRef); data != nil {
+		if data := core.ContentStreamData(doc.view(), contentsRef); data != nil {
 			report(data, page.ObjNum)
 		}
 	}
@@ -4299,30 +4290,6 @@ func qNestingMaxDepth(cancel core.Canceler, data []byte) int {
 		}
 	})
 	return maxDepth
-}
-
-// getContentStreamData extracts and concatenates content stream data.
-// Handles both single stream references and arrays of stream references.
-func getContentStreamData(doc *Document, contentsRef Object) []byte {
-	resolved := doc.Resolve(contentsRef)
-	switch v := resolved.(type) {
-	case *Stream:
-		return decodeContentStream(doc, v)
-	case Array:
-		var result []byte
-		for _, elem := range v {
-			streamObj := doc.Resolve(elem)
-			if stream, ok := streamObj.(*Stream); ok {
-				data := decodeContentStream(doc, stream)
-				if data != nil {
-					result = append(result, ' ')
-					result = append(result, data...)
-				}
-			}
-		}
-		return result
-	}
-	return nil
 }
 
 // --- Device color space checks (6.2.3/6.2.4) ---
@@ -4694,7 +4661,7 @@ func scanResourcesForDeviceCS(doc *Document, container *Dictionary, seen map[*Di
 	var data []byte
 	var key *Stream
 	if contentsRef := container.Get("Contents"); contentsRef != nil {
-		data, key = doc.contentBytesAndKey(contentsRef)
+		data, key = doc.view().ContentBytesAndKey(contentsRef)
 	}
 	scanContainerForDeviceCS(doc, container, data, key, seen, usesRGB, usesCMYK, usesGray)
 }
@@ -4732,7 +4699,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 		localCMYK = localCMYK || c
 		localGray = localGray || g
 	}
-	used := doc.contentUsedNamesCached(data, key)
+	used := doc.view().ContentUsedNamesCached(data, key)
 
 	res := resolveResources(doc, container)
 	if res == nil {
@@ -4756,7 +4723,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 		xobjDict := doc.ResolveDict(xobjRef)
 		if xobjDict != nil {
 			for i, key := range xobjDict.Keys {
-				if !used.xobjects[string(key)] {
+				if !used.XObjects[string(key)] {
 					continue
 				}
 				resolved := doc.Resolve(xobjDict.Values[i])
@@ -4815,7 +4782,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 		shadingDict := doc.ResolveDict(shadingRef)
 		if shadingDict != nil {
 			for i, key := range shadingDict.Keys {
-				if !used.shadings[string(key)] {
+				if !used.Shadings[string(key)] {
 					continue
 				}
 				val := shadingDict.Values[i]
@@ -4839,7 +4806,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 		patDict := doc.ResolveDict(patRef)
 		if patDict != nil {
 			for i, key := range patDict.Keys {
-				if !used.patterns[string(key)] {
+				if !used.Patterns[string(key)] {
 					continue
 				}
 				obj := doc.Resolve(patDict.Values[i])
@@ -4949,26 +4916,6 @@ func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGr
 		}
 	}
 }
-
-// maxContentTokenLen is the longest run of non-delimiter bytes the content
-// tokenizers will hand to a caller as a token. Every PDF operator is at most
-// three characters and no keyword operand comes close to this, so a longer run
-// is binary data that a delimiter never terminated — most often the sample
-// bytes of an inline image whose EI was not found.
-//
-// The scanners drop such a run whole. They used to stop reading at the cap and
-// let the scan re-enter mid-run, which manufactured tokens out of binary: a
-// 300-byte run whose 257th byte was 'k' produced a one-byte "k" operator and
-// with it "DeviceCMYK used without matching OutputIntent or DefaultCMYK", and
-// an alphabetic fragment produced "content stream contains an operator not
-// defined in ISO 32000" — findings the complete token never supports. Reading
-// the run to its end costs the same single linear pass the chunked version did.
-//
-// This one is not configurable, and deliberately: it is not a resource ceiling
-// a caller might want to spend more on but a statement about what a PDF token
-// can be. Moving it would change which byte runs count as operators, i.e. what
-// the tokenizer means, not how much of it runs.
-const maxContentTokenLen = 256
 
 // The maximum decoded content stream size we'll scan defaults to
 // defaultMaxContentStreamBytes; a caller can change it with
@@ -5180,7 +5127,7 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 		// mid-run turns the tail into further "tokens", and a fragment of
 		// binary read as an operator is a violation the file does not commit
 		// (a stray 'k'/'g' fragment reads as DeviceCMYK/DeviceGray use).
-		if i-start > maxContentTokenLen {
+		if i-start > core.MaxContentTokenLen {
 			continue
 		}
 
@@ -5353,144 +5300,11 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 // literals, comments, and inline-image binary data (BI ... ID <binary> EI)
 // are skipped, so operator bytes occurring inside them are never reported.
 func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte)) {
-	forEachContentToken(cancel, data, func(tok []byte, isName bool) {
+	core.ForEachContentToken(cancel, data, func(tok []byte, isName bool) {
 		if !isName {
 			fn(tok)
 		}
 	})
-}
-
-// forEachContentToken is forEachContentOperator's core walker; it also
-// reports name tokens (without the leading slash) so callers can associate
-// operand names with the operators that consume them.
-//
-// The scan stops when cancel fires, checked every cancelScanBytes of input;
-// see cancel.go for why the check is gated on the scan position rather than
-// run per token.
-func forEachContentToken(cancel core.Canceler, data []byte, fn func(tok []byte, isName bool)) {
-	n := len(data)
-	i := 0
-	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
-	for i < n {
-		if i >= nextCancelCheck {
-			if cancel.Stopped() {
-				return
-			}
-			nextCancelCheck = i + core.CancelScanBytes
-		}
-		for i < n && core.IsContentWS(data[i]) {
-			i++
-		}
-		if i >= n {
-			return
-		}
-		switch b := data[i]; {
-		case b == '%': // comment to end of line
-			for i < n && data[i] != '\n' && data[i] != '\r' {
-				i++
-			}
-		case b == '(': // string literal with escapes and balanced parens
-			depth := 1
-			i++
-			for i < n && depth > 0 {
-				switch data[i] {
-				case '\\':
-					i++ // skip escaped char
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
-				i++
-			}
-		case b == '<':
-			i++
-			if i < n && data[i] == '<' {
-				i++ // <<
-			} else { // hex string
-				for i < n && data[i] != '>' {
-					i++
-				}
-				if i < n {
-					i++
-				}
-			}
-		case b == '>':
-			i++
-			if i < n && data[i] == '>' {
-				i++
-			}
-		case b == '[' || b == ']' || b == '{' || b == '}' || b == ')':
-			// A stray ')' is a delimiter, not a token start; consume it so the
-			// scan always advances (an unmatched ')' would otherwise spin
-			// forever — a DoS on untrusted content).
-			i++
-		case b == '/':
-			i++
-			start := i
-			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-				i++
-			}
-			fn(data[start:i], true)
-		default:
-			start := i
-			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-				i++
-			}
-			if i == start {
-				// Defensive: an unhandled delimiter yields no progress; skip it.
-				i++
-				continue
-			}
-			if i-start > maxContentTokenLen {
-				continue // binary run, not a token; see scanStreamForDeviceOps
-			}
-			tok := data[start:i]
-			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
-				core.SkipInlineImage(data, &i)
-				continue
-			}
-			fn(tok, false)
-		}
-	}
-}
-
-// usedResourceNames records which named resources a content stream actually
-// executes. Device colour (and other content-level properties) only matter
-// on executed content: a form XObject that is referenced in /XObject but
-// never invoked with Do does not contribute (the corpus passes a DeviceCMYK
-// form that no content stream draws).
-type usedResourceNames struct {
-	xobjects map[string]bool
-	patterns map[string]bool
-	shadings map[string]bool
-}
-
-func contentUsedNames(cancel core.Canceler, data []byte) usedResourceNames {
-	u := usedResourceNames{
-		xobjects: make(map[string]bool),
-		patterns: make(map[string]bool),
-		shadings: make(map[string]bool),
-	}
-	var lastName string
-	forEachContentToken(cancel, data, func(tok []byte, isName bool) {
-		if isName {
-			lastName = string(tok)
-			return
-		}
-		switch string(tok) {
-		case "Do":
-			u.xobjects[lastName] = true
-		case "sh":
-			u.shadings[lastName] = true
-		case "scn", "SCN":
-			// A pattern is set by name; non-pattern scn uses numeric
-			// operands, in which case lastName is stale — over-recording is
-			// harmless (it only widens the scan).
-			u.patterns[lastName] = true
-		}
-	})
-	return u
 }
 
 // --- ICCBased color space checks (6.2.4.2) ---
@@ -6241,7 +6055,7 @@ func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage 
 		gsNames:  make(map[string]bool),
 	}
 	var lastName string
-	forEachContentToken(cancel, data, func(tok []byte, isName bool) {
+	core.ForEachContentToken(cancel, data, func(tok []byte, isName bool) {
 		if isName {
 			lastName = string(tok)
 			return
@@ -6361,7 +6175,7 @@ func checkICCBasedUsageRules(doc *Document, level PDFALevel) []ValidationError {
 		if res == nil {
 			continue
 		}
-		data := getContentStreamData(doc, page.Dict.Get("Contents"))
+		data := core.ContentStreamData(doc.view(), page.Dict.Get("Contents"))
 		if data == nil {
 			continue
 		}

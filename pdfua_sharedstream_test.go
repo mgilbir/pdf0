@@ -68,16 +68,16 @@ func TestFontUsageSharedStreamDedup(t *testing.T) {
 	rd.valCache = newValidationCache(core.Canceler{})
 	doc = &rd
 
-	done := make(chan map[*Dictionary]*fontTextUsage, 1)
+	done := make(chan map[*Dictionary]*core.FontTextUsage, 1)
 	start := time.Now()
-	go func() { done <- collectFontTextUsage(doc) }()
-	var usage map[*Dictionary]*fontTextUsage
+	go func() { done <- core.CollectFontTextUsage(doc.view()) }()
+	var usage map[*Dictionary]*core.FontTextUsage
 	select {
 	case usage = <-done:
 	case <-time.After(30 * time.Second):
-		t.Fatalf("collectFontTextUsage did not finish within 30s on a %d-page shared-stream doc", nPages)
+		t.Fatalf("core.CollectFontTextUsage did not finish within 30s on a %d-page shared-stream doc", nPages)
 	}
-	t.Logf("collectFontTextUsage over %d pages took %v", nPages, time.Since(start))
+	t.Logf("core.CollectFontTextUsage over %d pages took %v", nPages, time.Since(start))
 
 	font := doc.ResolveDict(IndirectRef{Number: 50})
 	u := usage[font]
@@ -86,17 +86,17 @@ func TestFontUsageSharedStreamDedup(t *testing.T) {
 	}
 	// The stream shows two strings; deduped across all pages that is exactly two,
 	// not two per page.
-	if len(u.strings) != 2 {
-		t.Errorf("font usage has %d strings, want 2 (dedup across shared pages)", len(u.strings))
+	if len(u.Strings) != 2 {
+		t.Errorf("font usage has %d strings, want 2 (dedup across shared pages)", len(u.Strings))
 	}
-	if got := string(u.strings[0]) + string(u.strings[1]); got != "ABCD" {
+	if got := string(u.Strings[0]) + string(u.Strings[1]); got != "ABCD" {
 		t.Errorf("shown strings = %q, want AB+CD", got)
 	}
-	if !u.modes[0] {
+	if !u.Modes[0] {
 		t.Error("render mode 0 not recorded")
 	}
 	// The single shared stream should have been tokenized once.
-	if n := len(doc.valCache.pdfa.fontEvents); n != 1 {
+	if n := doc.view().Run.FontEventsMemoSize(); n != 1 {
 		t.Errorf("fontEvents cache holds %d streams, want 1", n)
 	}
 }
