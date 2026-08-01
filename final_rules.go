@@ -501,7 +501,7 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
 				continue
 			}
-			data, err := decodeStreamData(doc.canceler(), stream, doc.lim())
+			data, err := core.DecodeStreamData(doc.canceler(), stream, doc.lim())
 			if err != nil || len(data) == 0 {
 				continue
 			}

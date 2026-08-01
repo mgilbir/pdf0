@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 )
 
@@ -1131,7 +1132,7 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	raw, err := decodeStreamData(doc.canceler(), stream, doc.lim())
+	raw, err := core.DecodeStreamData(doc.canceler(), stream, doc.lim())
 	if err != nil {
 		raw = stream.Data
 	}

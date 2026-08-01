@@ -10,6 +10,16 @@ import (
 
 // jpegWithDecode builds a document holding a single DCTDecode image XObject with
 // the given /Decode array, extracts it, and returns the decoded image.
+// abs is a local helper: the one in the filters code moved to internal/core with
+// the Paeth predictor that needed it, and exporting it from there to serve a
+// test comparison would put an integer utility in a filter package's API.
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 func jpegWithDecode(t *testing.T, w, h, bpc int, cs string, jb []byte, decode Array) image.Image {
 	t.Helper()
 	st := imageXObject(w, h, bpc, cs, "DCTDecode", jb)

@@ -917,7 +917,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 			continue
 		}
 		// Decompress and check ICC profile header
-		data, err := decodeStreamData(doc.canceler(), profStream, doc.lim())
+		data, err := core.DecodeStreamData(doc.canceler(), profStream, doc.lim())
 		if err != nil {
 			// Only treat a decode failure as a violation when we actually
 			// support every filter on the stream. A legal profile encoded with
@@ -5071,7 +5071,7 @@ func decodeContentStream(doc *Document, stream *Stream) []byte {
 		}
 	}
 	var data []byte
-	decoded, err := decodeStreamData(doc.canceler(), stream, lim)
+	decoded, err := core.DecodeStreamData(doc.canceler(), stream, lim)
 	switch {
 	case err == nil && len(decoded) <= lim.ContentStreamBytes:
 		data = decoded
@@ -5109,7 +5109,7 @@ func decodeMetadataStream(doc *Document, stream *Stream) []byte {
 	}
 	lim := doc.lim()
 	var data []byte
-	if decoded, err := decodeStreamData(doc.canceler(), stream, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
+	if decoded, err := core.DecodeStreamData(doc.canceler(), stream, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
 		data = decoded
 	}
 	if c := doc.valCache; c != nil {

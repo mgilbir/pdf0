@@ -1,8 +1,12 @@
-package pdf0
+package core
 
 import (
+	"bytes"
+	"compress/zlib"
 	"fmt"
-	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
+	"io"
 )
 
 // This file implements the stream filters of ISO 32000-2 7.4 that the Go
@@ -23,13 +27,13 @@ const (
 	lzwFirstCode  = 258
 )
 
-// lzwDecode reverses the PDF LZWDecode filter. Codes are variable width, 9 to
+// LZWDecode reverses the PDF LZWDecode filter. Codes are variable width, 9 to
 // 12 bits, MSB-first; earlyChange (default 1, the PDF default) bumps the code
 // width one entry early, matching the TIFF-style encoders PDF producers use.
 //
 // Output is capped (see WithMaxDecodedStreamBytes) to bound memory on hostile
 // input.
-func lzwDecode(cancel core.Canceler, data []byte, earlyChange int, lim core.Limits) ([]byte, error) {
+func LZWDecode(cancel Canceler, data []byte, earlyChange int, lim Limits) ([]byte, error) {
 	if earlyChange != 0 && earlyChange != 1 {
 		return nil, fmt.Errorf("LZW: invalid EarlyChange %d", earlyChange)
 	}
@@ -78,7 +82,7 @@ func lzwDecode(cancel core.Canceler, data []byte, earlyChange int, lim core.Limi
 			if err := cancel.StopErr("decoding LZW stream"); err != nil {
 				return nil, err
 			}
-			nextCancelCheck = len(out) + core.CancelReadChunk
+			nextCancelCheck = len(out) + CancelReadChunk
 		}
 		code, ok := nextCode()
 		if !ok {
@@ -125,28 +129,28 @@ func lzwDecode(cancel core.Canceler, data []byte, earlyChange int, lim core.Limi
 	return out, nil
 }
 
-// predictorParms holds the /DecodeParms values that drive predictor reversal
+// PredictorParms holds the /DecodeParms values that drive predictor reversal
 // (ISO 32000-2:2020, 7.4.4.4 "LZW and Flate predictor functions").
-type predictorParms struct {
+type PredictorParms struct {
 	Predictor        int
 	Colors           int
 	BitsPerComponent int
 	Columns          int
 }
 
-// parmsDictAt returns the decode-parms dictionary for the i-th filter in the
+// ParmsDictAt returns the decode-parms dictionary for the i-th filter in the
 // chain, or nil if there is none. parms is the raw /DecodeParms value: a
 // dictionary (single filter) or an array parallel to the /Filter array, whose
 // elements are dictionaries or null.
-func parmsDictAt(parms Object, i int) *Dictionary {
+func ParmsDictAt(parms object.Object, i int) *object.Dictionary {
 	switch p := parms.(type) {
-	case *Dictionary:
+	case *object.Dictionary:
 		if i == 0 {
 			return p
 		}
-	case Array:
+	case object.Array:
 		if i < len(p) {
-			if d, ok := p[i].(*Dictionary); ok {
+			if d, ok := p[i].(*object.Dictionary); ok {
 				return d
 			}
 		}
@@ -154,16 +158,16 @@ func parmsDictAt(parms Object, i int) *Dictionary {
 	return nil
 }
 
-// predictorFromDict extracts predictor parameters from a decode-parms
+// PredictorFromDict extracts predictor parameters from a decode-parms
 // dictionary, applying the spec defaults (Predictor 1, Colors 1,
 // BitsPerComponent 8, Columns 1).
-func predictorFromDict(d *Dictionary) predictorParms {
-	p := predictorParms{Predictor: 1, Colors: 1, BitsPerComponent: 8, Columns: 1}
+func PredictorFromDict(d *object.Dictionary) PredictorParms {
+	p := PredictorParms{Predictor: 1, Colors: 1, BitsPerComponent: 8, Columns: 1}
 	if d == nil {
 		return p
 	}
-	getInt := func(key Name, def int) int {
-		if v, ok := d.Get(key).(Integer); ok {
+	getInt := func(key object.Name, def int) int {
+		if v, ok := d.Get(key).(object.Integer); ok {
 			return int(v)
 		}
 		return def
@@ -175,10 +179,10 @@ func predictorFromDict(d *Dictionary) predictorParms {
 	return p
 }
 
-// applyPredictor reverses the predictor transformation on decoded filter
+// ApplyPredictor reverses the predictor transformation on decoded filter
 // output. Predictor 1 is the identity, 2 is TIFF horizontal differencing,
 // and 10-15 are the PNG filters (the per-row filter byte decides which).
-func applyPredictor(data []byte, p predictorParms) ([]byte, error) {
+func ApplyPredictor(data []byte, p PredictorParms) ([]byte, error) {
 	switch {
 	case p.Predictor == 1:
 		return data, nil
@@ -191,7 +195,7 @@ func applyPredictor(data []byte, p predictorParms) ([]byte, error) {
 	}
 }
 
-func (p predictorParms) validate() error {
+func (p PredictorParms) validate() error {
 	if p.Colors < 1 || p.Columns < 1 {
 		return fmt.Errorf("invalid predictor parameters: Colors=%d Columns=%d", p.Colors, p.Columns)
 	}
@@ -208,13 +212,13 @@ func (p predictorParms) validate() error {
 }
 
 // rowLength returns the number of bytes in one row of predictor output.
-func (p predictorParms) rowLength() int {
+func (p PredictorParms) rowLength() int {
 	return (p.Colors*p.BitsPerComponent*p.Columns + 7) / 8
 }
 
 // bytesPerPixel returns the byte distance between corresponding samples of
 // adjacent pixels, as used by the PNG filters (minimum 1).
-func (p predictorParms) bytesPerPixel() int {
+func (p PredictorParms) bytesPerPixel() int {
 	bpp := p.Colors * p.BitsPerComponent / 8
 	if bpp < 1 {
 		bpp = 1
@@ -226,7 +230,7 @@ func (p predictorParms) bytesPerPixel() int {
 // Only 8- and 16-bit components are supported; sub-byte components are rare
 // in practice and rejected so callers can distinguish "unsupported" from
 // "corrupt".
-func applyTIFFPredictor(data []byte, p predictorParms) ([]byte, error) {
+func applyTIFFPredictor(data []byte, p PredictorParms) ([]byte, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
@@ -261,7 +265,7 @@ func applyTIFFPredictor(data []byte, p predictorParms) ([]byte, error) {
 // applyPNGPredictor reverses the PNG filters (predictors 10-15). Each row is
 // prefixed with one filter-type byte; the Predictor value only declares that
 // PNG filtering is in use.
-func applyPNGPredictor(data []byte, p predictorParms) ([]byte, error) {
+func applyPNGPredictor(data []byte, p PredictorParms) ([]byte, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
@@ -332,4 +336,101 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// DecodeStreamData decompresses stream data based on the /Filter and
+// /DecodeParms entries.
+func DecodeStreamData(cancel Canceler, stream *object.Stream, lim Limits) ([]byte, error) {
+	filter := stream.Dict.Get("Filter")
+	if filter == nil {
+		// No filter, return raw data
+		return stream.Data, nil
+	}
+	parms := stream.Dict.Get("DecodeParms")
+
+	filterName, ok := filter.(object.Name)
+	if !ok {
+		// Could be an array of filters
+		filterArr, ok := filter.(object.Array)
+		if !ok {
+			return nil, fmt.Errorf("unsupported filter type: %T", filter)
+		}
+		// Apply filters in order
+		data := stream.Data
+		for i, f := range filterArr {
+			fname, ok := f.(object.Name)
+			if !ok {
+				return nil, fmt.Errorf("filter array element is not a Name")
+			}
+			var err error
+			data, err = ApplyFilter(cancel, fname, data, ParmsDictAt(parms, i), lim)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return data, nil
+	}
+
+	return ApplyFilter(cancel, filterName, stream.Data, ParmsDictAt(parms, 0), lim)
+}
+
+func ApplyFilter(cancel Canceler, name object.Name, data []byte, parms *object.Dictionary, lim Limits) ([]byte, error) {
+	switch name {
+	case "FlateDecode":
+		decoded, err := FlateDecode(cancel, data, lim)
+		if err != nil {
+			return nil, err
+		}
+		return ApplyPredictor(decoded, PredictorFromDict(parms))
+	case "LZWDecode":
+		early := 1
+		if parms != nil {
+			if e, ok := parms.Get("EarlyChange").(object.Integer); ok {
+				early = int(e)
+			}
+		}
+		decoded, err := LZWDecode(cancel, data, early, lim)
+		if err != nil {
+			return nil, err
+		}
+		return ApplyPredictor(decoded, PredictorFromDict(parms))
+	case "ASCIIHexDecode":
+		return asciiHexDecode(data)
+	default:
+		return nil, fmt.Errorf("unsupported filter: %s", name)
+	}
+}
+
+func FlateDecode(cancel Canceler, data []byte, lim Limits) ([]byte, error) {
+	r, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("zlib: %w", err)
+	}
+	defer r.Close()
+
+	maxDecode := lim.DecodedStreamBytes
+	limited := io.LimitReader(r, int64(maxDecode)+1)
+	decoded, err := io.ReadAll(CancelReader(cancel, limited))
+	if err != nil {
+		return nil, fmt.Errorf("zlib decompress: %w", err)
+	}
+	if len(decoded) > maxDecode {
+		return nil, fmt.Errorf("decompressed data exceeds maximum size (%d bytes)", maxDecode)
+	}
+	return decoded, nil
+}
+
+func asciiHexDecode(data []byte) ([]byte, error) {
+	// Filter out whitespace and stop at '>'
+	var hexDigits []byte
+	for _, b := range data {
+		if b == '>' {
+			break
+		}
+		if syntax.IsWhitespace(b) {
+			continue
+		}
+		hexDigits = append(hexDigits, b)
+	}
+	return syntax.DecodeHex(hexDigits)
 }

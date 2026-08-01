@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/syntax"
-	"io"
 	"strconv"
 )
 
@@ -220,7 +219,7 @@ func parseXRefStream(cancel core.Canceler, stream *Stream, lim core.Limits) (*XR
 	}
 
 	// Decompress stream data
-	streamData, err := decodeStreamData(cancel, stream, lim)
+	streamData, err := core.DecodeStreamData(cancel, stream, lim)
 	if err != nil {
 		return nil, fmt.Errorf("decoding xref stream data: %w", err)
 	}
@@ -287,69 +286,6 @@ func readField(data []byte, width int) int {
 	return val
 }
 
-// decodeStreamData decompresses stream data based on the /Filter and
-// /DecodeParms entries.
-func decodeStreamData(cancel core.Canceler, stream *Stream, lim core.Limits) ([]byte, error) {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		// No filter, return raw data
-		return stream.Data, nil
-	}
-	parms := stream.Dict.Get("DecodeParms")
-
-	filterName, ok := filter.(Name)
-	if !ok {
-		// Could be an array of filters
-		filterArr, ok := filter.(Array)
-		if !ok {
-			return nil, fmt.Errorf("unsupported filter type: %T", filter)
-		}
-		// Apply filters in order
-		data := stream.Data
-		for i, f := range filterArr {
-			fname, ok := f.(Name)
-			if !ok {
-				return nil, fmt.Errorf("filter array element is not a Name")
-			}
-			var err error
-			data, err = applyFilter(cancel, fname, data, parmsDictAt(parms, i), lim)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return data, nil
-	}
-
-	return applyFilter(cancel, filterName, stream.Data, parmsDictAt(parms, 0), lim)
-}
-
-func applyFilter(cancel core.Canceler, name Name, data []byte, parms *Dictionary, lim core.Limits) ([]byte, error) {
-	switch name {
-	case "FlateDecode":
-		decoded, err := flateDecode(cancel, data, lim)
-		if err != nil {
-			return nil, err
-		}
-		return applyPredictor(decoded, predictorFromDict(parms))
-	case "LZWDecode":
-		early := 1
-		if parms != nil {
-			if e, ok := parms.Get("EarlyChange").(Integer); ok {
-				early = int(e)
-			}
-		}
-		decoded, err := lzwDecode(cancel, data, early, lim)
-		if err != nil {
-			return nil, err
-		}
-		return applyPredictor(decoded, predictorFromDict(parms))
-	case "ASCIIHexDecode":
-		return asciiHexDecode(data)
-	default:
-		return nil, fmt.Errorf("unsupported filter: %s", name)
-	}
-}
-
 // isSupportedFilter reports whether applyFilter can decode the named filter.
 func isSupportedFilter(name Name) bool {
 	switch name {
@@ -371,14 +307,14 @@ func streamFiltersSupported(stream *Stream) bool {
 	parms := stream.Dict.Get("DecodeParms")
 	switch f := filter.(type) {
 	case Name:
-		return isSupportedFilter(f) && predictorSupported(predictorFromDict(parmsDictAt(parms, 0)))
+		return isSupportedFilter(f) && predictorSupported(core.PredictorFromDict(core.ParmsDictAt(parms, 0)))
 	case Array:
 		for i, e := range f {
 			name, ok := e.(Name)
 			if !ok || !isSupportedFilter(name) {
 				return false
 			}
-			if !predictorSupported(predictorFromDict(parmsDictAt(parms, i))) {
+			if !predictorSupported(core.PredictorFromDict(core.ParmsDictAt(parms, i))) {
 				return false
 			}
 		}
@@ -390,7 +326,7 @@ func streamFiltersSupported(stream *Stream) bool {
 // predictorSupported reports whether applyPredictor can reverse the given
 // predictor parameters. TIFF horizontal differencing with sub-byte components
 // is the one legal-but-unimplemented combination.
-func predictorSupported(p predictorParms) bool {
+func predictorSupported(p core.PredictorParms) bool {
 	switch {
 	case p.Predictor == 1:
 		return true
@@ -415,40 +351,6 @@ func flateEncode(data []byte) []byte {
 	w.Write(data)
 	w.Close()
 	return buf.Bytes()
-}
-
-func flateDecode(cancel core.Canceler, data []byte, lim core.Limits) ([]byte, error) {
-	r, err := zlib.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("zlib: %w", err)
-	}
-	defer r.Close()
-
-	maxDecode := lim.DecodedStreamBytes
-	limited := io.LimitReader(r, int64(maxDecode)+1)
-	decoded, err := io.ReadAll(core.CancelReader(cancel, limited))
-	if err != nil {
-		return nil, fmt.Errorf("zlib decompress: %w", err)
-	}
-	if len(decoded) > maxDecode {
-		return nil, fmt.Errorf("decompressed data exceeds maximum size (%d bytes)", maxDecode)
-	}
-	return decoded, nil
-}
-
-func asciiHexDecode(data []byte) ([]byte, error) {
-	// Filter out whitespace and stop at '>'
-	var hexDigits []byte
-	for _, b := range data {
-		if b == '>' {
-			break
-		}
-		if syntax.IsWhitespace(b) {
-			continue
-		}
-		hexDigits = append(hexDigits, b)
-	}
-	return syntax.DecodeHex(hexDigits)
 }
 
 // splitFields splits a string by whitespace into non-empty fields.

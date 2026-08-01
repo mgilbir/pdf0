@@ -481,7 +481,7 @@ func extractImage(d *Document, st *Stream, num int) ExtractedImage {
 // streams (tint functions, palettes) the cache exists for. The same 64MB
 // per-stream bound applies.
 func decodeImageSamples(cancel core.Canceler, st *Stream, lim core.Limits) []byte {
-	if decoded, err := decodeStreamData(cancel, st, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
+	if decoded, err := core.DecodeStreamData(cancel, st, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
 		return decoded
 	}
 	return nil
@@ -542,14 +542,14 @@ func ccittEncodedAndParams(d *Document, st *Stream, width, height int) (encoded 
 
 	encoded = st.Data
 	for i := 0; i < last; i++ {
-		out, err := applyFilter(d.canceler(), filters[i], encoded, parmsDictAt(parms, i), d.lim())
+		out, err := core.ApplyFilter(d.canceler(), filters[i], encoded, core.ParmsDictAt(parms, i), d.lim())
 		if err != nil {
 			return nil, params, false
 		}
 		encoded = out
 	}
 
-	cp := parmsDictAt(parms, last)
+	cp := core.ParmsDictAt(parms, last)
 	k, columns, rows, byteAlign := 0, 1728, height, false
 	if cp != nil {
 		if v, kOK := d.Resolve(cp.Get("K")).(Integer); kOK {
@@ -585,16 +585,16 @@ func jbig2EncodedAndGlobals(d *Document, st *Stream) (encoded, globals []byte, o
 
 	encoded = st.Data
 	for i := 0; i < last; i++ {
-		out, err := applyFilter(d.canceler(), filters[i], encoded, parmsDictAt(parms, i), d.lim())
+		out, err := core.ApplyFilter(d.canceler(), filters[i], encoded, core.ParmsDictAt(parms, i), d.lim())
 		if err != nil {
 			return nil, nil, false
 		}
 		encoded = out
 	}
 
-	if cp := parmsDictAt(parms, last); cp != nil {
+	if cp := core.ParmsDictAt(parms, last); cp != nil {
 		if gs, ok := d.Resolve(cp.Get("JBIG2Globals")).(*Stream); ok {
-			if data, err := decodeStreamData(d.canceler(), gs, d.lim()); err == nil {
+			if data, err := core.DecodeStreamData(d.canceler(), gs, d.lim()); err == nil {
 				globals = data
 			}
 		}

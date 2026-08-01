@@ -60,7 +60,7 @@ func TestParseStreamKeywordTrailingWhitespace(t *testing.T) {
 		t.Fatalf("stream data length %d, want %d; first bytes %x (whitespace absorbed?)", len(st.Data), len(flate), st.Data[:min(6, len(st.Data))])
 	}
 	// It must decode through its filter.
-	dec, err := decodeStreamData(core.Canceler{}, st, core.DefaultLimits())
+	dec, err := core.DecodeStreamData(core.Canceler{}, st, core.DefaultLimits())
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}

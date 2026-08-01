@@ -54,7 +54,7 @@ func parseObjStmIndex(cancel core.Canceler, stream *Stream, lim core.Limits) (da
 		return nil, nil, 0, fmt.Errorf("object stream /First missing or invalid")
 	}
 
-	data, err = decodeStreamData(cancel, stream, lim)
+	data, err = core.DecodeStreamData(cancel, stream, lim)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("decoding object stream: %w", err)
 	}
