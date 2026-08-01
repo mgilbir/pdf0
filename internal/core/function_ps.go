@@ -1,6 +1,7 @@
-package pdf0
+package core
 
 import (
+	"github.com/mgilbir/pdf0/object"
 	"math"
 	"strconv"
 )
@@ -29,7 +30,7 @@ type psVal struct {
 }
 
 // evalType4 evaluates a PostScript calculator function.
-func evalType4(d *Document, stream *Stream, dict *Dictionary, x []float64) ([]float64, bool) {
+func evalType4(d View, stream *object.Stream, dict *object.Dictionary, x []float64) ([]float64, bool) {
 	prog, ok := psProgram(d, stream)
 	if !ok {
 		return nil, false
@@ -43,7 +44,7 @@ func evalType4(d *Document, stream *Stream, dict *Dictionary, x []float64) ([]fl
 	for _, v := range x {
 		st = append(st, psVal{num: v})
 	}
-	budget := psBudget{max: d.lim().PostScriptSteps}
+	budget := psBudget{max: d.Limits.PostScriptSteps}
 	st, ok = psExec(prog, st, 0, &budget)
 	if !ok || len(st) < n {
 		return nil, false
@@ -77,24 +78,24 @@ type psProgEntry struct {
 // { } procedure. The result is memoized in the per-run cache when one is
 // installed: tint transforms evaluate once per image pixel, and re-decoding
 // and re-parsing the program stream each time made a small image take minutes.
-func psProgram(d *Document, stream *Stream) ([]psItem, bool) {
-	if c := d.valCache; c != nil {
-		if e, hit := c.image.psProgs[stream]; hit {
+func psProgram(d View, stream *object.Stream) ([]psItem, bool) {
+	if c := d.Run; c != nil {
+		if e, hit := c.psProgs[stream]; hit {
 			return e.items, e.ok
 		}
 	}
 	items, ok := parsePSProgram(d, stream)
-	if c := d.valCache; c != nil {
-		if c.image.psProgs == nil {
-			c.image.psProgs = make(map[*Stream]psProgEntry)
+	if c := d.Run; c != nil {
+		if c.psProgs == nil {
+			c.psProgs = make(map[*object.Stream]psProgEntry)
 		}
-		c.image.psProgs[stream] = psProgEntry{items, ok}
+		c.psProgs[stream] = psProgEntry{items, ok}
 	}
 	return items, ok
 }
 
-func parsePSProgram(d *Document, stream *Stream) ([]psItem, bool) {
-	data := decodeContentStream(d, stream)
+func parsePSProgram(d View, stream *object.Stream) ([]psItem, bool) {
+	data := d.Content(stream)
 	toks := psTokenize(data)
 	items, rest, ok := psParseProc(toks)
 	if !ok || len(rest) != 0 {

@@ -242,3 +242,26 @@ func (ref IndirectRef) String() string {
 func (obj IndirectObject) String() string {
 	return fmt.Sprintf("%d %d obj", obj.Number, obj.Generation)
 }
+
+// Int and Float coerce a numeric object to a Go number, returning 0 for
+// anything that is not an Integer or a Real. PDF is loose about which of the
+// two a number arrives as — a /Width may be either — so nearly every consumer
+// wants the value and not the distinction.
+func Int(obj Object) int {
+	switch n := obj.(type) {
+	case Integer:
+		return int(n)
+	case Real:
+		return int(n)
+	}
+	return 0
+}
+func Float(obj Object) float64 {
+	switch n := obj.(type) {
+	case Integer:
+		return float64(n)
+	case Real:
+		return float64(n)
+	}
+	return 0
+}

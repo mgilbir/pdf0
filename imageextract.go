@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -407,9 +408,9 @@ func collectImagesFrom(d *Document, res *Dictionary, seen map[int]bool, depth in
 func extractImage(d *Document, st *Stream, num int) ExtractedImage {
 	img := ExtractedImage{
 		ObjNum:           num,
-		Width:            intValue(d.Resolve(st.Dict.Get("Width"))),
-		Height:           intValue(d.Resolve(st.Dict.Get("Height"))),
-		BitsPerComponent: intValue(d.Resolve(st.Dict.Get("BitsPerComponent"))),
+		Width:            object.Int(d.Resolve(st.Dict.Get("Width"))),
+		Height:           object.Int(d.Resolve(st.Dict.Get("Height"))),
+		BitsPerComponent: object.Int(d.Resolve(st.Dict.Get("BitsPerComponent"))),
 		ColorSpace:       colorSpaceName(d, st.Dict.Get("ColorSpace")),
 	}
 	if b, _ := d.Resolve(st.Dict.Get("ImageMask")).(Boolean); bool(b) {
@@ -458,7 +459,7 @@ func extractImage(d *Document, st *Stream, num int) ExtractedImage {
 		}
 		renderBilevelSamples(d, st, &img, samples, "unsupported JBIG2 sample layout")
 	case "JPXDecode":
-		if m := decodeJPX(st.Data, intValue(d.Resolve(st.Dict.Get("SMaskInData")))); m != nil {
+		if m := decodeJPX(st.Data, object.Int(d.Resolve(st.Dict.Get("SMaskInData")))); m != nil {
 			img.Image, img.Decoded = applyImageMasks(d, st, m), true
 			break
 		}
@@ -673,26 +674,6 @@ func colorSpaceName(d *Document, obj Object) string {
 	return ""
 }
 
-func intValue(obj Object) int {
-	switch n := obj.(type) {
-	case Integer:
-		return int(n)
-	case Real:
-		return int(n)
-	}
-	return 0
-}
-
-func floatValue(obj Object) float64 {
-	switch n := obj.(type) {
-	case Integer:
-		return float64(n)
-	case Real:
-		return float64(n)
-	}
-	return 0
-}
-
 // imageMaskToImage renders a 1-bit stencil mask (/ImageMask true): samples select
 // where the fill colour would paint. It is rendered as black where painted, white
 // elsewhere; /Decode [1 0] inverts which bit paints.
@@ -701,7 +682,7 @@ func imageMaskToImage(d *Document, st *Stream, data []byte, w, h int) (image.Ima
 		return nil, false
 	}
 	paintBit := byte(0) // default /Decode [0 1]: a 0 sample paints
-	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && floatValue(d.Resolve(arr[0])) == 1 {
+	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && object.Float(d.Resolve(arr[0])) == 1 {
 		paintBit = 1
 	}
 	stride := (w + 7) / 8

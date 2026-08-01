@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/color"
 	"math"
@@ -146,7 +147,7 @@ func colorKeyMask(d *Document, st *Stream, ncomp int) []int {
 	}
 	out := make([]int, len(arr))
 	for i := range arr {
-		out[i] = intValue(d.Resolve(arr[i]))
+		out[i] = object.Int(d.Resolve(arr[i]))
 	}
 	return out
 }
@@ -170,14 +171,14 @@ func stencilMask(d *Document, st *Stream) (data []byte, mw, mh int, hideBit byte
 	if !ok {
 		return nil, 0, 0, 0, false
 	}
-	mw = intValue(d.Resolve(mk.Dict.Get("Width")))
-	mh = intValue(d.Resolve(mk.Dict.Get("Height")))
+	mw = object.Int(d.Resolve(mk.Dict.Get("Width")))
+	mh = object.Int(d.Resolve(mk.Dict.Get("Height")))
 	data = decodeImageSamples(d.canceler(), mk, d.lim())
 	if mw <= 0 || mh <= 0 || !sampleDataFits(data, mw, mh, 1, 1) {
 		return nil, 0, 0, 0, false
 	}
 	hideBit = byte(1) // default /Decode [0 1]: a 1 sample hides
-	if arr, ok := d.Resolve(mk.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && floatValue(d.Resolve(arr[0])) == 1 {
+	if arr, ok := d.Resolve(mk.Dict.Get("Decode")).(Array); ok && len(arr) == 2 && object.Float(d.Resolve(arr[0])) == 1 {
 		hideBit = 0
 	}
 	return data, mw, mh, hideBit, true
@@ -369,7 +370,7 @@ func iccBasedColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
 	if !ok {
 		return nil, false
 	}
-	switch intValue(d.Resolve(st.Dict.Get("N"))) {
+	switch object.Int(d.Resolve(st.Dict.Get("N"))) {
 	case 1:
 		return deviceColorSpace("DeviceGray")
 	case 3:
@@ -393,7 +394,7 @@ func indexedColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
 	if !ok || base.indexed {
 		return nil, false
 	}
-	hival := intValue(d.Resolve(cs[2]))
+	hival := object.Int(d.Resolve(cs[2]))
 	if hival < 0 || hival > 65535 {
 		return nil, false
 	}
@@ -452,7 +453,7 @@ func tintColorSpace(d *Document, ncomp int, altObj, tintFn Object) (*imgColorSpa
 	}
 	// Verify the tint function evaluates to the alternate space's arity.
 	probe := make([]float64, ncomp)
-	altComps, ok := evalFunction(d, tintFn, probe)
+	altComps, ok := d.view().EvalFunction(tintFn, probe)
 	if !ok || len(altComps) != alt.ncomp {
 		return nil, false
 	}
@@ -466,7 +467,7 @@ func tintColorSpace(d *Document, ncomp int, altObj, tintFn Object) (*imgColorSpa
 		alt:    alt,
 		decode: decode,
 		toRGB: func(c []float64) (uint8, uint8, uint8) {
-			comps, ok := evalFunction(d, tintFn, c)
+			comps, ok := d.view().EvalFunction(tintFn, c)
 			if !ok || len(comps) != alt.ncomp {
 				return 0, 0, 0
 			}
@@ -484,12 +485,12 @@ func labColorSpace(d *Document, cs Array) (*imgColorSpace, bool) {
 		if dict := d.ResolveDict(cs[1]); dict != nil {
 			if arr, ok := d.Resolve(dict.Get("WhitePoint")).(Array); ok && len(arr) == 3 {
 				for i := 0; i < 3; i++ {
-					wp[i] = floatValue(d.Resolve(arr[i]))
+					wp[i] = object.Float(d.Resolve(arr[i]))
 				}
 			}
 			if arr, ok := d.Resolve(dict.Get("Range")).(Array); ok && len(arr) == 4 {
-				amin, amax = floatValue(d.Resolve(arr[0])), floatValue(d.Resolve(arr[1]))
-				bmin, bmax = floatValue(d.Resolve(arr[2])), floatValue(d.Resolve(arr[3]))
+				amin, amax = object.Float(d.Resolve(arr[0])), object.Float(d.Resolve(arr[1]))
+				bmin, bmax = object.Float(d.Resolve(arr[2])), object.Float(d.Resolve(arr[3]))
 			}
 		}
 	}
@@ -580,7 +581,7 @@ func imageDecode(d *Document, st *Stream, cs *imgColorSpace, bpc int) []float64 
 	if arr, ok := d.Resolve(st.Dict.Get("Decode")).(Array); ok && len(arr) == len(def) {
 		out := make([]float64, len(arr))
 		for i := range arr {
-			out[i] = floatValue(d.Resolve(arr[i]))
+			out[i] = object.Float(d.Resolve(arr[i]))
 		}
 		return out
 	}
@@ -634,9 +635,9 @@ func applySoftMask64(d *Document, st *Stream, im *image.NRGBA64) {
 
 // decodeAlphaMask decodes a soft-mask image XObject to one alpha byte per pixel.
 func decodeAlphaMask(d *Document, sm *Stream) (alpha []byte, w, h int, ok bool) {
-	w = intValue(d.Resolve(sm.Dict.Get("Width")))
-	h = intValue(d.Resolve(sm.Dict.Get("Height")))
-	bpc := intValue(d.Resolve(sm.Dict.Get("BitsPerComponent")))
+	w = object.Int(d.Resolve(sm.Dict.Get("Width")))
+	h = object.Int(d.Resolve(sm.Dict.Get("Height")))
+	bpc := object.Int(d.Resolve(sm.Dict.Get("BitsPerComponent")))
 	if w <= 0 || h <= 0 || bpc <= 0 {
 		return nil, 0, 0, false
 	}
@@ -654,7 +655,7 @@ func decodeAlphaMask(d *Document, sm *Stream) (alpha []byte, w, h int, ok bool) 
 	}
 	dec := []float64{0, 1}
 	if arr, ok := d.Resolve(sm.Dict.Get("Decode")).(Array); ok && len(arr) == 2 {
-		dec[0], dec[1] = floatValue(d.Resolve(arr[0])), floatValue(d.Resolve(arr[1]))
+		dec[0], dec[1] = object.Float(d.Resolve(arr[0])), object.Float(d.Resolve(arr[1]))
 	}
 	maxval := float64(int(1)<<uint(bpc) - 1)
 	alpha = make([]byte, w*h)

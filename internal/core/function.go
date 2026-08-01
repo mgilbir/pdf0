@@ -1,6 +1,7 @@
-package pdf0
+package core
 
 import (
+	"github.com/mgilbir/pdf0/object"
 	"math"
 )
 
@@ -17,21 +18,24 @@ const maxFunctionDepth = 32
 // input vector in, returning the output vector. ok is false for a function it
 // cannot evaluate or malformed input. Inputs are clamped to /Domain and outputs
 // to /Range.
-func evalFunction(d *Document, fn Object, in []float64) (out []float64, ok bool) {
+// EvalFunction evaluates a PDF function (ISO 32000-2 7.10) — a dictionary or a
+// stream — for the given inputs, returning ok=false when the object is not a
+// function this package can evaluate.
+func (d View) EvalFunction(fn object.Object, in []float64) (out []float64, ok bool) {
 	return evalFunctionDepth(d, fn, in, 0)
 }
 
-func evalFunctionDepth(d *Document, fn Object, in []float64, depth int) ([]float64, bool) {
+func evalFunctionDepth(d View, fn object.Object, in []float64, depth int) ([]float64, bool) {
 	if depth > maxFunctionDepth {
 		return nil, false
 	}
 	resolved := d.Resolve(fn)
-	var dict *Dictionary
-	var stream *Stream
+	var dict *object.Dictionary
+	var stream *object.Stream
 	switch v := resolved.(type) {
-	case *Dictionary:
+	case *object.Dictionary:
 		dict = v
-	case *Stream:
+	case *object.Stream:
 		stream = v
 		dict = &v.Dict
 	default:
@@ -50,7 +54,7 @@ func evalFunctionDepth(d *Document, fn Object, in []float64, depth int) ([]float
 
 	var out []float64
 	var ok bool
-	switch intValue(d.Resolve(dict.Get("FunctionType"))) {
+	switch object.Int(d.Resolve(dict.Get("FunctionType"))) {
 	case 2:
 		out, ok = evalType2(d, dict, x)
 	case 3:
@@ -82,11 +86,11 @@ func evalFunctionDepth(d *Document, fn Object, in []float64, depth int) ([]float
 
 // evalType2 evaluates an exponential interpolation function: out[i] = C0[i] +
 // x^N * (C1[i]-C0[i]) over a single input.
-func evalType2(d *Document, dict *Dictionary, x []float64) ([]float64, bool) {
+func evalType2(d View, dict *object.Dictionary, x []float64) ([]float64, bool) {
 	if len(x) != 1 {
 		return nil, false
 	}
-	n := floatValue(d.Resolve(dict.Get("N")))
+	n := object.Float(d.Resolve(dict.Get("N")))
 	c0 := floatArray(d, dict.Get("C0"))
 	c1 := floatArray(d, dict.Get("C1"))
 	if c0 == nil {
@@ -111,11 +115,11 @@ func evalType2(d *Document, dict *Dictionary, x []float64) ([]float64, bool) {
 
 // evalType3 evaluates a stitching function: it selects a subfunction for the
 // single input by /Bounds, remaps the input through /Encode and recurses.
-func evalType3(d *Document, dict *Dictionary, domain []float64, x []float64, depth int) ([]float64, bool) {
+func evalType3(d View, dict *object.Dictionary, domain []float64, x []float64, depth int) ([]float64, bool) {
 	if len(x) != 1 || len(domain) < 2 {
 		return nil, false
 	}
-	funcs, ok := d.Resolve(dict.Get("Functions")).(Array)
+	funcs, ok := d.Resolve(dict.Get("Functions")).(object.Array)
 	if !ok || len(funcs) == 0 {
 		return nil, false
 	}
@@ -148,7 +152,7 @@ func evalType3(d *Document, dict *Dictionary, domain []float64, x []float64, dep
 
 // evalType0 evaluates a sampled function by multilinear interpolation over the
 // sample grid.
-func evalType0(d *Document, stream *Stream, dict *Dictionary, domain []float64, x []float64) ([]float64, bool) {
+func evalType0(d View, stream *object.Stream, dict *object.Dictionary, domain []float64, x []float64) ([]float64, bool) {
 	m := len(domain) / 2
 	if m == 0 || len(x) != m {
 		return nil, false
@@ -158,20 +162,20 @@ func evalType0(d *Document, stream *Stream, dict *Dictionary, domain []float64, 
 	if n == 0 {
 		return nil, false
 	}
-	sizeArr, ok := d.Resolve(dict.Get("Size")).(Array)
+	sizeArr, ok := d.Resolve(dict.Get("Size")).(object.Array)
 	if !ok || len(sizeArr) != m {
 		return nil, false
 	}
 	size := make([]int, m)
 	total := 1
 	for i := range size {
-		size[i] = intValue(d.Resolve(sizeArr[i]))
+		size[i] = object.Int(d.Resolve(sizeArr[i]))
 		if size[i] < 1 {
 			return nil, false
 		}
 		total *= size[i]
 	}
-	bps := intValue(d.Resolve(dict.Get("BitsPerSample")))
+	bps := object.Int(d.Resolve(dict.Get("BitsPerSample")))
 	switch bps {
 	case 1, 2, 4, 8, 12, 16, 24, 32:
 	default:
@@ -195,7 +199,7 @@ func evalType0(d *Document, stream *Stream, dict *Dictionary, domain []float64, 
 	if len(decode) != 2*n {
 		return nil, false
 	}
-	data := decodeContentStream(d, stream)
+	data := d.Content(stream)
 	// Guard against a sample table that does not hold every grid sample.
 	needBits := int64(total) * int64(n) * int64(bps)
 	if int64(len(data))*8 < needBits {
@@ -287,15 +291,15 @@ func clampRange(v, lo, hi float64) float64 {
 	return v
 }
 
-// floatArray resolves obj to an Array of numbers, or nil.
-func floatArray(d *Document, obj Object) []float64 {
-	arr, ok := d.Resolve(obj).(Array)
+// floatArray resolves obj to an object.Array of numbers, or nil.
+func floatArray(d View, obj object.Object) []float64 {
+	arr, ok := d.Resolve(obj).(object.Array)
 	if !ok {
 		return nil
 	}
 	out := make([]float64, len(arr))
 	for i := range arr {
-		out[i] = floatValue(d.Resolve(arr[i]))
+		out[i] = object.Float(d.Resolve(arr[i]))
 	}
 	return out
 }

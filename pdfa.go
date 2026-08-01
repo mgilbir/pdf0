@@ -347,7 +347,6 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level PDFALevel, raw
 type validationCache struct {
 	pdfa  pdfaCache
 	pdfua pdfuaCache
-	image imageCache
 	run   runState
 }
 
@@ -374,14 +373,6 @@ type pdfuaCache struct {
 
 	structTree      []structNode // flattened pre-order struct-tree nodes
 	structTreeValid bool
-}
-
-// imageCache holds parsed type-4 (PostScript calculator) function programs. A
-// tint transform is evaluated per image pixel; without this memo each evaluation
-// re-decoded and re-parsed the program stream, turning a small image into
-// minutes of work (sweep #13).
-type imageCache struct {
-	psProgs map[*Stream]psProgEntry
 }
 
 // runState is the part that is genuinely shared, because it belongs to the run

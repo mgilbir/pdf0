@@ -63,6 +63,12 @@ type Run struct {
 	pages        map[int][]PageInfo
 	content      map[*object.Stream][]byte
 	contentBytes int64
+
+	// psProgs memoizes parsed type-4 (PostScript calculator) function programs.
+	// A tint transform is evaluated once per image pixel, and without this each
+	// evaluation re-decoded and re-parsed the program stream, turning a small
+	// image into minutes of work.
+	psProgs map[*object.Stream]psProgEntry
 }
 
 // NewRun builds the per-operation state. The memo tables are made here so that
@@ -73,6 +79,7 @@ func NewRun(trips *Recorder) *Run {
 		Trips:   trips,
 		pages:   make(map[int][]PageInfo),
 		content: make(map[*object.Stream][]byte),
+		psProgs: make(map[*object.Stream]psProgEntry),
 	}
 }
 

@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/color"
 	"math"
@@ -23,7 +24,7 @@ func jpegDecodeArray(d *Document, st *Stream) []float64 {
 	}
 	out := make([]float64, len(arr))
 	for i, v := range arr {
-		out[i] = floatValue(d.Resolve(v))
+		out[i] = object.Float(d.Resolve(v))
 	}
 	return out
 }
