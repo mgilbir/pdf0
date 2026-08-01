@@ -1,6 +1,8 @@
 package pdf0
 
-import "testing"
+import (
+	"testing"
+)
 
 // TestUACharMapping flags a Type0/Identity font used for text without a
 // ToUnicode CMap, and clears it once ToUnicode is present.

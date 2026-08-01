@@ -1,6 +1,8 @@
-package pdf0
+package font
 
-import "testing"
+import (
+	"testing"
+)
 
 // The CFF standard-strings table and the Annex D encoding tables were
 // transcribed from their specifications by hand: unlike the spec-example JSON
@@ -51,13 +53,13 @@ func TestEncodingTablesDisagreeWhereTheyShould(t *testing.T) {
 		code  byte
 		want  string
 	}{
-		{"standard", standardEncodingNames, 39, "quoteright"},
-		{"standard", standardEncodingNames, 96, "quoteleft"},
-		{"winansi", winAnsiEncodingNames, 39, "quotesingle"},
-		{"winansi", winAnsiEncodingNames, 96, "grave"},
-		{"winansi", winAnsiEncodingNames, 128, "Euro"},
-		{"macroman", macRomanEncodingNames, 39, "quotesingle"},
-		{"macroman", macRomanEncodingNames, 96, "grave"},
+		{"standard", StandardEncodingNames, 39, "quoteright"},
+		{"standard", StandardEncodingNames, 96, "quoteleft"},
+		{"winansi", WinAnsiEncodingNames, 39, "quotesingle"},
+		{"winansi", WinAnsiEncodingNames, 96, "grave"},
+		{"winansi", WinAnsiEncodingNames, 128, "Euro"},
+		{"macroman", MacRomanEncodingNames, 39, "quotesingle"},
+		{"macroman", MacRomanEncodingNames, 96, "grave"},
 	} {
 		if got := tc.table[tc.code]; got != tc.want {
 			t.Errorf("%sEncodingNames[%d] = %q, want %q", tc.name, tc.code, got, tc.want)
@@ -70,9 +72,9 @@ func TestEncodingTablesDisagreeWhereTheyShould(t *testing.T) {
 		name  string
 		table map[byte]string
 	}{
-		{"standard", standardEncodingNames},
-		{"winansi", winAnsiEncodingNames},
-		{"macroman", macRomanEncodingNames},
+		{"standard", StandardEncodingNames},
+		{"winansi", WinAnsiEncodingNames},
+		{"macroman", MacRomanEncodingNames},
 	} {
 		for code, want := range map[byte]string{
 			32: "space", 48: "zero", 65: "A", 90: "Z", 97: "a", 122: "z",

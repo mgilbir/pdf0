@@ -1,6 +1,8 @@
 package pdf0
 
-import "testing"
+import (
+	"testing"
+)
 
 // TestUANotdefCID flags a Type0/Identity font that shows CID 0 (.notdef) and
 // clears when only non-zero CIDs are shown.

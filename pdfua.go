@@ -778,7 +778,7 @@ func checkType1CharSet(d *Document, fontDict *Dictionary) []UAViolation {
 		return nil
 	}
 	fp := loadFontProgram(d, fd)
-	if fp == nil || fp.glyphNames == nil {
+	if fp == nil || fp.GlyphNames == nil {
 		return nil
 	}
 	listed := parseCharSet(string(cs.Value))
@@ -799,7 +799,7 @@ func checkType1CharSet(d *Document, fontDict *Dictionary) []UAViolation {
 
 	// Forward: every glyph in the program must be listed in /CharSet.
 	unlisted := ""
-	for name := range fp.glyphNames {
+	for name := range fp.GlyphNames {
 		if name == ".notdef" || name == "" {
 			continue
 		}
@@ -816,7 +816,7 @@ func checkType1CharSet(d *Document, fontDict *Dictionary) []UAViolation {
 		if name == ".notdef" || name == "" {
 			continue
 		}
-		if !fp.glyphNames[name] && (absent == "" || name < absent) {
+		if !fp.GlyphNames[name] && (absent == "" || name < absent) {
 			absent = name
 		}
 	}
@@ -855,15 +855,15 @@ func checkCIDFontCIDSet(d *Document, fontDict *Dictionary) []UAViolation {
 		return nil
 	}
 	fp := loadFontProgram(d, fd)
-	if fp == nil || fp.glyphNonEmpty == nil {
+	if fp == nil || fp.GlyphNonEmpty == nil {
 		return nil
 	}
 	present := decodeCIDSet(d, cidSet)
-	for gid, nonEmpty := range fp.glyphNonEmpty {
+	for gid, nonEmpty := range fp.GlyphNonEmpty {
 		if !nonEmpty || gid == 0 {
 			continue
 		}
-		if gid < len(fp.componentGID) && fp.componentGID[gid] {
+		if gid < len(fp.ComponentGID) && fp.ComponentGID[gid] {
 			continue // outline serves only as a composite component
 		}
 		if !present.has(gid) {

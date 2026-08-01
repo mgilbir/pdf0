@@ -1,6 +1,9 @@
 package pdf0
 
-import "testing"
+import (
+	"github.com/mgilbir/pdf0/internal/font"
+	"testing"
+)
 
 // TestMarkComposite verifies that a composite glyph's component indices are
 // recorded, and that a simple glyph records nothing.
@@ -16,7 +19,7 @@ func TestMarkComposite(t *testing.T) {
 		0x00, 0x00, 0x00, 0x00, // arg1, arg2 (words)
 	}
 	out := make([]bool, 100)
-	markComposite(composite, 100, out)
+	font.MarkComposite(composite, 100, out)
 	if !out[42] {
 		t.Error("composite component glyph 42 not recorded")
 	}
@@ -27,7 +30,7 @@ func TestMarkComposite(t *testing.T) {
 	// A simple glyph (numberOfContours >= 0) records nothing.
 	simple := []byte{0x00, 0x02, 0, 0, 0, 0, 0, 0, 0, 0}
 	out2 := make([]bool, 100)
-	markComposite(simple, 100, out2)
+	font.MarkComposite(simple, 100, out2)
 	for i, b := range out2 {
 		if b {
 			t.Errorf("simple glyph wrongly recorded component %d", i)

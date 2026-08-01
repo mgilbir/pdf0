@@ -1,4 +1,4 @@
-package pdf0
+package font
 
 // cffStandardStrings is the 391 predefined CFF strings (Adobe Technical Note
 // #5176, Appendix A), indexed by SID. Transcribed by hand — there is no

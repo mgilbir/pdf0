@@ -1,4 +1,4 @@
-package pdf0
+package font
 
 // Character-code to glyph-name tables for the standard Latin-text encodings,
 // transcribed from ISO 32000-1 Annex D.2 (spec/pdf1.7, gitignored). Unlike the
@@ -7,7 +7,7 @@ package pdf0
 // codes where the encodings deliberately disagree, which is what a bad edit or a
 // shift would break.
 
-var standardEncodingNames = map[byte]string{
+var StandardEncodingNames = map[byte]string{
 	32:  "space",
 	33:  "exclam",
 	34:  "quotedbl",
@@ -159,7 +159,7 @@ var standardEncodingNames = map[byte]string{
 	251: "germandbls",
 }
 
-var macRomanEncodingNames = map[byte]string{
+var MacRomanEncodingNames = map[byte]string{
 	32:  "space",
 	33:  "exclam",
 	34:  "quotedbl",
@@ -369,7 +369,7 @@ var macRomanEncodingNames = map[byte]string{
 	255: "caron",
 }
 
-var winAnsiEncodingNames = map[byte]string{
+var WinAnsiEncodingNames = map[byte]string{
 	32:  "space",
 	33:  "exclam",
 	34:  "quotedbl",

@@ -206,7 +206,7 @@ func TestFuncType4IfElse(t *testing.T) {
 	dom := []Object{Real(0), Real(1)}
 	rng := []Object{Real(0), Real(100)}
 
-	// if: x > 0.5 -> push 1 else leave 0. Program: x dup 0.5 gt { pop 1 } if
+	// if: x > 0.5 -> push 1 else leave 0. font.Program: x dup 0.5 gt { pop 1 } if
 	prog := "{ dup 0.5 gt { pop 1 } if }"
 	out, ok := evalFunction(d, psFunc(prog, dom, rng), []float64{0.8})
 	wantOut(t, out, ok, 1)

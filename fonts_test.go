@@ -1,6 +1,9 @@
 package pdf0
 
-import "testing"
+import (
+	"github.com/mgilbir/pdf0/internal/font"
+	"testing"
+)
 
 func TestPredefinedCMapTable(t *testing.T) {
 	// Spot-check ISO 32000-1 Table 118 entries and their implied CIDSystemInfo.
@@ -47,9 +50,9 @@ func TestGlyphNameToRune(t *testing.T) {
 		{"custom", 0xE9, 0xE9},  // Latin-1 high range by code
 	}
 	for _, c := range cases {
-		got, ok := glyphNameToRune(c.name, c.code)
+		got, ok := font.GlyphNameToRune(c.name, c.code)
 		if !ok || got != c.want {
-			t.Errorf("glyphNameToRune(%q,%d)=%v,%v want %v", c.name, c.code, got, ok, c.want)
+			t.Errorf("font.GlyphNameToRune(%q,%d)=%v,%v want %v", c.name, c.code, got, ok, c.want)
 		}
 	}
 }
@@ -352,8 +355,8 @@ func TestDamagedFontProgramFlagged(t *testing.T) {
 // TestSymbolicTrueTypeSingleCmap ensures a symbolic TrueType font with more
 // than one cmap subtable is flagged (ISO 19005-1 6.3.7).
 func TestSymbolicTrueTypeSingleCmap(t *testing.T) {
-	fp := &fontProgram{cmapSubtableCount: 2}
-	if !(fp.cmapSubtableCount > 0 && fp.cmapSubtableCount != 1) {
+	fp := &font.Program{CmapSubtableCount: 2}
+	if !(fp.CmapSubtableCount > 0 && fp.CmapSubtableCount != 1) {
 		t.Fatal("test premise wrong")
 	}
 	// One subtable is fine; two is not; zero (non-sfnt) is exempt.
@@ -398,22 +401,22 @@ func TestCMapEmbeddedAt1b(t *testing.T) {
 // rendering" and /CharSet findings on a font that defines everything it claims.
 func TestType1CharStringsEndTerminator(t *testing.T) {
 	names := []string{"A", "endash", "enfilledcircbullet", "B", "quoteright"}
-	fp := parseType1(type1Program(names))
+	fp := font.ParseType1(type1Program(names))
 	if fp == nil {
 		t.Fatal("parseType1 returned nil for a well-formed program")
 	}
 	for _, n := range names {
-		if !fp.glyphNames[n] {
-			t.Errorf("glyph %q missing from the parsed program (glyphs: %v)", n, fp.glyphNames)
+		if !fp.GlyphNames[n] {
+			t.Errorf("glyph %q missing from the parsed program (glyphs: %v)", n, fp.GlyphNames)
 		}
 	}
-	if len(fp.glyphNames) != len(names) {
-		t.Errorf("parsed %d glyphs, want %d: %v", len(fp.glyphNames), len(names), fp.glyphNames)
+	if len(fp.GlyphNames) != len(names) {
+		t.Errorf("parsed %d glyphs, want %d: %v", len(fp.GlyphNames), len(names), fp.GlyphNames)
 	}
 
 	// The terminator itself still stops the scan: a program whose CharStrings
 	// dictionary is followed by more PostScript must not absorb it as glyphs.
-	if fp := parseType1(type1Program([]string{"A", "B"})); fp == nil || len(fp.glyphNames) != 2 {
+	if fp := font.ParseType1(type1Program([]string{"A", "B"})); fp == nil || len(fp.GlyphNames) != 2 {
 		t.Errorf("trailing PostScript after the closing end token leaked into the glyph list: %v", fp)
 	}
 }
@@ -434,8 +437,8 @@ func TestType1CharStringsEnd(t *testing.T) {
 		{" ND\nendobj", false}, // a longer token that merely starts with end
 	}
 	for _, c := range cases {
-		if got := type1CharStringsEnd([]byte(c.in)); got != c.want {
-			t.Errorf("type1CharStringsEnd(%q) = %v, want %v", c.in, got, c.want)
+		if got := font.Type1CharStringsEnd([]byte(c.in)); got != c.want {
+			t.Errorf("font.Type1CharStringsEnd(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/font"
 	"strings"
 	"unicode"
 )
@@ -735,7 +736,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 		}
 	}
 
-	// Program-level checks: metrics, glyph coverage, and .notdef references.
+	// font.Program-level checks: metrics, glyph coverage, and .notdef references.
 	errs = append(errs, checkFontProgramConsistency(doc, level, rule, fontDict, u)...)
 
 	return errs
@@ -1139,18 +1140,18 @@ var aglNames = map[string]bool{
 
 // loadFontProgram parses the embedded font program of a descriptor, or nil
 // when none is embedded or it cannot be parsed.
-func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
+func loadFontProgram(doc *Document, fd *Dictionary) *font.Program {
 	if fd == nil {
 		return nil
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile")).(*Stream); ok {
 		if data := decodeContentStream(doc, s); data != nil {
-			return noteFontProgramLimits(doc, parseType1(data))
+			return noteFontProgramLimits(doc, font.ParseType1(data))
 		}
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile2")).(*Stream); ok {
 		if data := decodeContentStream(doc, s); data != nil {
-			return noteFontProgramLimits(doc, parseSFNT(data, doc.lim().cmapWork))
+			return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.lim().cmapWork))
 		}
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile3")).(*Stream); ok {
@@ -1160,9 +1161,9 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 				if fp := parseSFNTCFF(data); fp != nil {
 					return noteFontProgramLimits(doc, fp)
 				}
-				return noteFontProgramLimits(doc, parseSFNT(data, doc.lim().cmapWork))
+				return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.lim().cmapWork))
 			}
-			return noteFontProgramLimits(doc, parseCFF(data))
+			return noteFontProgramLimits(doc, font.ParseCFF(data))
 		}
 	}
 	return nil
@@ -1171,8 +1172,8 @@ func loadFontProgram(doc *Document, fd *Dictionary) *fontProgram {
 // noteFontProgramLimits reports the guard trips the font-program parsers
 // recorded on the program itself. The parsers take raw bytes and have no
 // Document in scope, so this is where a trip re-enters the run's recorder.
-func noteFontProgramLimits(doc *Document, fp *fontProgram) *fontProgram {
-	if fp != nil && fp.cmapPartial {
+func noteFontProgramLimits(doc *Document, fp *font.Program) *font.Program {
+	if fp != nil && fp.CmapPartial {
 		noteLimit(doc, limitCmapWork, fmt.Sprintf("an embedded font's cmap subtable needed more than %s units of expansion work to read completely; the glyph-coverage and .notdef checks for that font were skipped rather than run against a partial character map", limitBound(int64(doc.lim().cmapWork), defaultMaxCmapWork)), 0)
 	}
 	return fp
@@ -1180,21 +1181,21 @@ func noteFontProgramLimits(doc *Document, fp *fontProgram) *fontProgram {
 
 // parseSFNTCFF returns the CFF-table font program of an OpenType/CFF font,
 // falling back to the sfnt view when there is no CFF table.
-func parseSFNTCFF(data []byte) *fontProgram {
-	if len(data) < 12 || be32(data, 0) != 0x4F54544F { // 'OTTO'
+func parseSFNTCFF(data []byte) *font.Program {
+	if len(data) < 12 || font.Be32(data, 0) != 0x4F54544F { // 'OTTO'
 		return nil
 	}
-	numTables := be16(data, 4)
+	numTables := font.Be16(data, 4)
 	for i := 0; i < numTables; i++ {
 		rec := 12 + 16*i
 		if rec+16 > len(data) {
 			return nil
 		}
 		if string(data[rec:rec+4]) == "CFF " {
-			off := be32(data, rec+8)
-			length := be32(data, rec+12)
+			off := font.Be32(data, rec+8)
+			length := font.Be32(data, rec+12)
 			if uint64(off)+uint64(length) <= uint64(len(data)) {
-				return parseCFF(data[off : off+length])
+				return font.ParseCFF(data[off : off+length])
 			}
 		}
 	}
@@ -1212,11 +1213,11 @@ func simpleFontCodeToName(doc *Document, fontDict *Dictionary, symbolic bool) ma
 		var src map[byte]string
 		switch name {
 		case "WinAnsiEncoding":
-			src = winAnsiEncodingNames
+			src = font.WinAnsiEncodingNames
 		case "MacRomanEncoding":
-			src = macRomanEncodingNames
+			src = font.MacRomanEncodingNames
 		case "StandardEncoding":
-			src = standardEncodingNames
+			src = font.StandardEncodingNames
 		}
 		for c, n := range src {
 			table[c] = n
@@ -1286,47 +1287,6 @@ func simpleFontBaseEncodingModelled(doc *Document, fontDict *Dictionary, symboli
 }
 
 // --- glyph-name to Unicode (for TrueType cmap lookup) ---
-
-// glyphNameToRune maps a glyph name to a Unicode code point for the common
-// cases needed by TrueType (3,1) cmap lookup: the uniXXXX/uXXXX conventions
-// and the ASCII range, where the standard Latin encodings are identity.
-func glyphNameToRune(name string, code byte) (rune, bool) {
-	if strings.HasPrefix(name, "uni") && len(name) == 7 {
-		if v, ok := parseHexN(name[3:]); ok {
-			return rune(v), true
-		}
-	}
-	if strings.HasPrefix(name, "u") && len(name) >= 5 && len(name) <= 7 {
-		if v, ok := parseHexN(name[1:]); ok {
-			return rune(v), true
-		}
-	}
-	// ASCII and Latin-1 high range: the standard Latin encodings are
-	// identity there (0x80-0x9F differ, but those are rare in practice and
-	// handled by the uni/u name forms above).
-	if (code >= 0x20 && code <= 0x7E) || code >= 0xA0 {
-		return rune(code), true
-	}
-	return 0, false
-}
-
-func parseHexN(s string) (int, bool) {
-	v := 0
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= '0' && c <= '9':
-			v = v<<4 | int(c-'0')
-		case c >= 'A' && c <= 'F':
-			v = v<<4 | int(c-'A'+10)
-		case c >= 'a' && c <= 'f':
-			v = v<<4 | int(c-'a'+10)
-		default:
-			return 0, false
-		}
-	}
-	return v, true
-}
 
 // --- program consistency: metrics, glyph coverage, .notdef ---
 
@@ -1428,8 +1388,8 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 	// ISO 19005-1 6.3.7: a symbolic TrueType font's embedded program shall
 	// contain exactly one cmap subtable. (cmapSubtableCount is 0 for a
 	// non-sfnt program, which this rule does not apply to.)
-	if subtype == "TrueType" && symbolic && fp.cmapSubtableCount > 0 && fp.cmapSubtableCount != 1 {
-		report("cmap", fmt.Sprintf("symbolic TrueType font must have exactly one cmap subtable, found %d", fp.cmapSubtableCount))
+	if subtype == "TrueType" && symbolic && fp.CmapSubtableCount > 0 && fp.CmapSubtableCount != 1 {
+		report("cmap", fmt.Sprintf("symbolic TrueType font must have exactly one cmap subtable, found %d", fp.CmapSubtableCount))
 	}
 
 	renders := rendersVisibly(u)
@@ -1437,7 +1397,7 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 		for _, code := range s {
 			name := enc[code]
 
-			// Program advance width for this code.
+			// font.Program advance width for this code.
 			progW, haveProg := simpleGlyphWidth(fp, subtype, symbolic, code, name)
 			glyphExists := simpleGlyphExists(fp, subtype, symbolic, code, name)
 
@@ -1456,11 +1416,11 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 			// A code that the cmap does not resolve is only evidence of a
 			// missing glyph when the cmap is complete. When the work budget
 			// truncated it (fp.cmapPartial) the code is *unknown*, and
-			// trueTypeGID's "non-nil cmap is authoritative" contract would
+			// font.TrueTypeGID's "non-nil cmap is authoritative" contract would
 			// otherwise turn every unread mapping into glyph 0 — audit C46's
 			// false positive, reached through the budget instead of the
 			// dropped-segment bug.
-			if fp.cmapPartial && subtype == "TrueType" {
+			if fp.CmapPartial && subtype == "TrueType" {
 				codeMapped = false
 			}
 
@@ -1472,7 +1432,7 @@ func checkSimpleFontConsistency(doc *Document, level PDFALevel, rule string, fon
 			// It is gated on the cmap being complete for the same reason as
 			// the glyph rule above: a truncated cmap resolves an unread code
 			// to gid 0, which reads as .notdef.
-			if !(fp.cmapPartial && subtype == "TrueType") && isNotdefGlyph(fp, subtype, symbolic, code, name) {
+			if !(fp.CmapPartial && subtype == "TrueType") && isNotdefGlyph(fp, subtype, symbolic, code, name) {
 				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(subtype)))
 			}
 
@@ -1538,8 +1498,8 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 
 			if renders && !exists {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
-			} else if renders && exists && cidSub == "CIDFontType2" && fp.glyphNonEmpty != nil &&
-				cid < len(fp.glyphNonEmpty) && !fp.glyphNonEmpty[cid] {
+			} else if renders && exists && cidSub == "CIDFontType2" && fp.GlyphNonEmpty != nil &&
+				cid < len(fp.GlyphNonEmpty) && !fp.GlyphNonEmpty[cid] {
 				// A subset must embed an outline for every rendered glyph; an
 				// empty glyf entry is acceptable only for a whitespace
 				// character (ISO 19005 6.2.11.4.1/6.2.10.4.1).
@@ -1664,88 +1624,42 @@ func simpleDeclaredWidth(widths Array, firstChar int, code byte, missingWidth fl
 }
 
 // simpleGlyphWidth returns the embedded program's advance width for a code.
-func simpleGlyphWidth(fp *fontProgram, subtype Name, symbolic bool, code byte, name string) (float64, bool) {
+func simpleGlyphWidth(fp *font.Program, subtype Name, symbolic bool, code byte, name string) (float64, bool) {
 	if subtype == "TrueType" {
-		gid, ok := trueTypeGID(fp, symbolic, code, name)
-		if !ok || gid >= len(fp.widthByGID) {
+		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		if !ok || gid >= len(fp.WidthByGID) {
 			return 0, false
 		}
-		return fp.widthByGID[gid], true
+		return fp.WidthByGID[gid], true
 	}
 	// Type1 / MMType1 / CFF: by glyph name.
 	if name == "" {
 		return 0, false
 	}
-	w, ok := fp.widthByName[name]
+	w, ok := fp.WidthByName[name]
 	return w, ok
 }
 
-func simpleGlyphExists(fp *fontProgram, subtype Name, symbolic bool, code byte, name string) bool {
+func simpleGlyphExists(fp *font.Program, subtype Name, symbolic bool, code byte, name string) bool {
 	if subtype == "TrueType" {
-		gid, ok := trueTypeGID(fp, symbolic, code, name)
-		return ok && gid > 0 && gid < fp.numGlyphs
+		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		return ok && gid > 0 && gid < fp.NumGlyphs
 	}
 	if name == "" {
 		return false
 	}
-	return fp.glyphNames[name]
+	return fp.GlyphNames[name]
 }
 
-func isNotdefGlyph(fp *fontProgram, subtype Name, symbolic bool, code byte, name string) bool {
+func isNotdefGlyph(fp *font.Program, subtype Name, symbolic bool, code byte, name string) bool {
 	if name == ".notdef" {
 		return true
 	}
 	if subtype == "TrueType" {
-		gid, ok := trueTypeGID(fp, symbolic, code, name)
+		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
 		return ok && gid == 0
 	}
 	return false
-}
-
-// trueTypeGID maps a character code to a glyph index using the font's cmap
-// subtables, following ISO 32000-1, 9.6.6.4.
-func trueTypeGID(fp *fontProgram, symbolic bool, code byte, name string) (int, bool) {
-	if symbolic {
-		if fp.symbolCmap != nil {
-			if gid, ok := fp.symbolCmap[0xF000|uint16(code)]; ok {
-				return gid, true
-			}
-			if gid, ok := fp.symbolCmap[uint16(code)]; ok {
-				return gid, true
-			}
-		}
-		if fp.macCmap != nil {
-			if gid, ok := fp.macCmap[code]; ok {
-				return gid, true
-			}
-		}
-		return 0, false
-	}
-	// A non-symbolic code with no glyph name (undefined in the Encoding)
-	// renders the .notdef glyph (ISO 32000-1 9.6.6.4).
-	if name == "" {
-		return 0, true
-	}
-	if fp.cmap != nil {
-		if r, ok := glyphNameToRune(name, code); ok {
-			if gid, ok := fp.cmap[r]; ok {
-				return gid, true
-			}
-		}
-		// A named code absent from the (3,1) cmap maps to no glyph.
-		return 0, true
-	}
-	if fp.macCmap != nil {
-		if gid, ok := fp.macCmap[code]; ok {
-			return gid, true
-		}
-	}
-	if fp.symbolCmap != nil {
-		if gid, ok := fp.symbolCmap[0xF000|uint16(code)]; ok {
-			return gid, true
-		}
-	}
-	return 0, false
 }
 
 // isIdentityEncoding reports whether a Type0 font uses Identity-H/V.
@@ -1757,39 +1671,39 @@ func isIdentityEncoding(doc *Document, fontDict *Dictionary) bool {
 }
 
 // cidGlyphWidth returns a CID's advance from the embedded CIDFont program.
-func cidGlyphWidth(fp *fontProgram, desc *Dictionary, doc *Document, cidSub Name, cid int) (float64, bool) {
+func cidGlyphWidth(fp *font.Program, desc *Dictionary, doc *Document, cidSub Name, cid int) (float64, bool) {
 	if cidSub == "CIDFontType2" {
 		gid, ok := cidToGID(doc, desc, cid)
-		if !ok || gid >= len(fp.widthByGID) {
+		if !ok || gid >= len(fp.WidthByGID) {
 			return 0, false
 		}
-		return fp.widthByGID[gid], true
+		return fp.WidthByGID[gid], true
 	}
 	// CIDFontType0 (CFF): CID-keyed by CID, or GID==CID for non-CID CFF.
-	if fp.widthByCID != nil {
-		w, ok := fp.widthByCID[cid]
+	if fp.WidthByCID != nil {
+		w, ok := fp.WidthByCID[cid]
 		return w, ok
 	}
-	if cid < len(fp.widthByGID) {
-		return fp.widthByGID[cid], true
+	if cid < len(fp.WidthByGID) {
+		return fp.WidthByGID[cid], true
 	}
 	return 0, false
 }
 
-func cidGlyphExists(fp *fontProgram, cidSub Name, cid int) bool {
+func cidGlyphExists(fp *font.Program, cidSub Name, cid int) bool {
 	if cidSub == "CIDFontType2" {
-		if cid <= 0 || cid >= fp.numGlyphs {
+		if cid <= 0 || cid >= fp.NumGlyphs {
 			return false
 		}
-		if fp.glyphPresent != nil {
-			return fp.glyphPresent[cid]
+		if fp.GlyphPresent != nil {
+			return fp.GlyphPresent[cid]
 		}
 		return true
 	}
-	if fp.cidGIDs != nil {
-		return fp.cidGIDs[cid]
+	if fp.CIDGIDs != nil {
+		return fp.CIDGIDs[cid]
 	}
-	return cid > 0 && cid < fp.numGlyphs
+	return cid > 0 && cid < fp.NumGlyphs
 }
 
 // cidToGID resolves a CID to a glyph index via the CIDToGIDMap (name Identity
@@ -1922,7 +1836,7 @@ func parseNumberToken(b []byte) Object {
 	s := string(b)
 	if strings.ContainsAny(s, ".eE") {
 		var f float64
-		fmt_Sscan(s, &f)
+		font.ParseFloat(s, &f)
 		return Real(f)
 	}
 	neg := false
@@ -2202,7 +2116,7 @@ func hexVal4(s string) int {
 	if s == "" {
 		return -1
 	}
-	v, ok := parseHexN(s)
+	v, ok := font.ParseHexN(s)
 	if !ok {
 		return -1
 	}
@@ -2267,7 +2181,7 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		// emptiness is not reliably decidable from the program alone —
 		// CIDToGIDMap Identity fonts legitimately omit unused CIDs — so only
 		// emptiness is flagged here.)
-		if present.empty() && fp.numGlyphs > 1 {
+		if present.empty() && fp.NumGlyphs > 1 {
 			errs = append(errs, ValidationError{Rule: "6.3.5", Level: level,
 				Message: "CIDFont subset FontDescriptor contains an empty CIDSet stream", Object: num})
 			continue
@@ -2277,18 +2191,18 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 		// equals the glyph index, so a present (non-empty) glyph whose bit is
 		// clear is a violation. Empty glyphs are not counted as present.
 		missing := false
-		if fp.cidGIDs != nil {
+		if fp.CIDGIDs != nil {
 			// CFF CIDFont: the charset enumerates the CIDs actually present.
-			for cid := range fp.cidGIDs {
+			for cid := range fp.CIDGIDs {
 				if cid != 0 && !present.has(cid) {
 					missing = true
 					break
 				}
 			}
-		} else if cgm, _ := doc.Resolve(desc.Get("CIDToGIDMap")).(Name); (cgm == "Identity" || cgm == "") && fp.glyphNonEmpty != nil {
+		} else if cgm, _ := doc.Resolve(desc.Get("CIDToGIDMap")).(Name); (cgm == "Identity" || cgm == "") && fp.GlyphNonEmpty != nil {
 			// CIDFontType2 with an Identity map: CID == glyph index, so every
 			// present (non-empty) glyph must be listed.
-			for gid, ne := range fp.glyphNonEmpty {
+			for gid, ne := range fp.GlyphNonEmpty {
 				if ne && !present.has(gid) {
 					missing = true
 					break
@@ -2369,7 +2283,7 @@ func firstRuneFromHex(tok string) rune {
 	if len(tok) > 4 {
 		tok = tok[:4]
 	}
-	if v, ok := parseHexN(tok); ok {
+	if v, ok := font.ParseHexN(tok); ok {
 		return rune(v)
 	}
 	return 0

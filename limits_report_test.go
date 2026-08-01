@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/mgilbir/pdf0/internal/font"
 	"strings"
 	"testing"
 )
@@ -91,7 +92,7 @@ func budgetBustingCmap() []byte {
 }
 
 func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
-	m, partial := parseCmapSubtable(budgetBustingCmap(), defaultMaxCmapWork)
+	m, partial := font.ParseCmapSubtable(budgetBustingCmap(), defaultMaxCmapWork)
 	if !partial {
 		t.Fatal("the work budget did not trip; the fixture no longer exercises it")
 	}
@@ -104,7 +105,7 @@ func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
 }
 
 // TestCmapWorkBudgetDoesNotCondemnGlyphs is the false positive itself: with the
-// budget tripped, trueTypeGID's "a non-nil cmap is authoritative" contract turns
+// budget tripped, font.TrueTypeGID's "a non-nil cmap is authoritative" contract turns
 // every unread mapping into glyph 0, so a conformant font is reported as not
 // defining a glyph it does define, and as referencing .notdef.
 //
@@ -138,8 +139,8 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 	}}
 	doc = beginRun(doc)
 
-	if fp := loadFontProgram(doc, fd); fp == nil || !fp.cmapPartial {
-		t.Fatalf("fixture wrong: font program parsed=%v, cmapPartial=%v", fp != nil, fp != nil && fp.cmapPartial)
+	if fp := loadFontProgram(doc, fd); fp == nil || !fp.CmapPartial {
+		t.Fatalf("fixture wrong: font program parsed=%v, cmapPartial=%v", fp != nil, fp != nil && fp.CmapPartial)
 	}
 
 	u := &fontTextUsage{objNum: 1, strings: [][]byte{[]byte("A")}, modes: map[int]bool{0: true}}
