@@ -137,8 +137,8 @@ not abort the walk.
 | `internal/jbig2/jbig2_halftone.go` | Pattern dictionaries and halftone regions; Gray-coded bitplane greyscale decoding (arithmetic and MMR) | T.88 §6.6, §6.7, Annex C.5 |
 | `internal/jbig2/jbig2_huffman.go` | Huffman bit reader, table representation, canonical code assignment, the fifteen standard tables | T.88 Annex B |
 | `internal/jbig2/jbig2_huffcode.go` | The `SDHUFF`/`SBHUFF` symbol and text paths, custom table segments (type 53), uncompressed collective bitmaps | T.88 Annex B.2, §6.4, §6.5 |
-| `function.go` | PDF function evaluation: type 0 sampled, type 2 exponential, type 3 stitching | ISO 32000-1 §7.10 |
-| `function_ps.go` | Type 4 PostScript calculator functions: tokenizer, parser, interpreter | ISO 32000-1 §7.10.5 |
+| `internal/core/function.go` | PDF function evaluation: type 0 sampled, type 2 exponential, type 3 stitching | ISO 32000-1 §7.10 |
+| `internal/core/function_ps.go` | Type 4 PostScript calculator functions: tokenizer, parser, interpreter | ISO 32000-1 §7.10.5 |
 | `github.com/mgilbir/gopenjpeg` | JPEG 2000 decoding (external module, pure-Go OpenJPEG port) | ISO/IEC 15444-1 |
 
 Unit tests are self-contained; the CCITT and JBIG2 decoders are additionally
@@ -162,10 +162,10 @@ rows, maps each through the effective `/Decode` array, and calls `toRGB`.
   `[0, 2^bpc-1]`) and converts the entry through the base space.
 - `Separation` and `DeviceN` carry one or *n* tint components that must be run
   through a **tint transform function** into an alternate space. That is where
-  `function.go` comes in: `evalFunction` dispatches on `/FunctionType` — 0
+  `internal/core/function.go` comes in: `View.EvalFunction` dispatches on `/FunctionType` — 0
   sampled (multilinear interpolation over the sample grid), 2 exponential, 3
   stitching (selects a subfunction by `/Bounds` and recurses), 4 a PostScript
-  calculator program (`function_ps.go`). Inputs are clamped to `/Domain`,
+  calculator program (`internal/core/function_ps.go`). Inputs are clamped to `/Domain`,
   outputs to `/Range`. A tint space is accepted only if a probe evaluation
   succeeds with the alternate space's arity; otherwise `buildImage` declines the
   image rather than render garbage.
@@ -199,7 +199,7 @@ why the JBIG2 trio was left un-configurable while the type-4 budget was not.
   grid, amplified by the bitplane count plus an int per cell. Segment-level caps
   back these up: regions ≤ 2^20 per side, symbols ≤ 2^16, ≤ 2^24 text instances,
   ≤ 2^20 referred segments.
-- **Type-4 function work budget** (`function_ps.go`). A tint transform is
+- **Type-4 function work budget** (`internal/core/function_ps.go`). A tint transform is
   evaluated once per pixel, so an unbounded program is a CPU denial of service.
   `WithMaxPostScriptSteps` (2^20 operators per evaluation) bounds it; depth and stack caps
   alone do not, because an `if`/`ifelse` program can fan out to exponentially

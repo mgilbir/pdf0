@@ -229,7 +229,7 @@ They are grouped across files by concern:
 | `filestructure.go` | Byte-level structure rules over the raw file (`Document.Offsets`) |
 | `fonts.go` / `internal/font/fontprog.go` / `internal/font/font_encodings.go` / `internal/font/cff_strings.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
 | `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
-| `function.go` / `function_ps.go` | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
+| `internal/core` (PDF functions) | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
 
 The other standards each own their file(s): `pdfua.go`, `pdfua_content.go`,
 `pdfua_struct.go`, `pdfua_tablegrid.go`, `pdfua2.go`, `pdfx.go`, `pdfx_color.go`,
