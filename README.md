@@ -227,7 +227,7 @@ pdf0 is one flat Go package. The subsystems, and the doc that maps each:
 
 | Subsystem | Files | Map |
 |-----------|-------|-----|
-| Core object model, parser, serializer | `object.go`, `lexer.go`, `parser.go`, `serializer.go`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
+| Core object model, parser, serializer | `object/`, `lexer.go`, `parser.go`, `serializer.go`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
 | PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
 | The other validators | `pdfua*.go`, `pdfx*.go`, `pdfvt.go`, `pdfr.go`, `dpart.go`, `facturx*.go`, `order_x.go`, `violations.go` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
 | Fonts | `fonts.go`, `fontprog.go`, `font_encodings.go`, `cff_strings.go` | [fonts.md](docs/fonts.md) |

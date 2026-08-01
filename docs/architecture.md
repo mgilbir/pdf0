@@ -24,9 +24,11 @@ Each subsystem built on that core has its own map:
 
 ## The object model
 
-Every PDF value implements the `Object` interface (`object.go`): `Boolean`,
-`Integer`, `Real`, `String`, `Name`, `Array`, `Dictionary`, `Stream`, `Null`,
-`IndirectObject`, `IndirectRef`. A `Document` holds `Objects` (object number →
+Every PDF value implements the `Object` interface (defined in the `object`
+package and aliased into the root package, so `pdf0.Dictionary` and
+`object.Dictionary` are the same type): `Boolean`, `Integer`, `Real`, `String`,
+`Name`, `Array`, `Dictionary`, `Stream`, `Null`, `IndirectObject`,
+`IndirectRef`. A `Document` holds `Objects` (object number →
 `IndirectObject`), the `Trailer` dictionary, and — after `Read` — `Offsets`
 (object number → absolute byte offset, used by the byte-level validation rules).
 `Dictionary` uses parallel `Keys`/`Values` slices to preserve key order for

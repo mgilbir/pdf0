@@ -1,9 +1,27 @@
 package pdf0
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
+
+// directDict builds an n-key dictionary by populating Keys/Values directly,
+// bypassing Set — whose linear existence scan is O(n^2) over n appends — so the
+// cost measured below is the comparison's and not the builder's.
+//
+// The object package's own index tests have an identical helper. It is repeated
+// rather than shared because a test helper cannot cross a package boundary
+// without being exported into the object package's public surface, and this
+// guard is over dictionaryEqual, which lives here.
+func directDict(n int) *Dictionary {
+	d := &Dictionary{Keys: make([]Name, n), Values: make([]Object, n)}
+	for i := 0; i < n; i++ {
+		d.Keys[i] = Name(fmt.Sprintf("K%d", i))
+		d.Values[i] = Integer(i)
+	}
+	return d
+}
 
 // TestPSStepBudget is the C21 guard: a type-4 PostScript program's total
 // operator count is bounded, so an if/ifelse fan-out cannot run unbounded work

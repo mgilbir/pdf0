@@ -1,10 +1,13 @@
-package pdf0
-
-import "fmt"
-
-// This file defines the object model of ISO 32000-2 7.3: the Object interface
-// and every value type a PDF document is built from. It is data only — no
-// parsing, no serialization, no document-level resolution of references.
+// Package object defines the PDF object model of ISO 32000-2 7.3: the Object
+// interface and every value type a PDF document is built from.
+//
+// It is data only — no parsing, no serialization, no document-level resolution
+// of references — and it depends on nothing else in this module, which is what
+// let it be the first package split out of the flat root package.
+//
+// Every type here is aliased from the root pdf0 package, so pdf0.Dictionary and
+// object.Dictionary are the same type: values pass between the two without
+// conversion and either name may be used. The canonical documentation is here.
 //
 // Two representation choices are load-bearing for round-tripping. Dictionary
 // holds parallel key and value slices rather than a map, so key order is
@@ -13,6 +16,9 @@ import "fmt"
 // lazily built cache owned by that Dictionary: copying a Dictionary by value and
 // then mutating both copies is unsupported, exactly as it already is for the
 // shared Keys/Values backing arrays.
+package object
+
+import "fmt"
 
 // Object is the interface all PDF objects implement.
 type Object interface {

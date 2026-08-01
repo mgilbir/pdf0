@@ -1,4 +1,4 @@
-package pdf0
+package object
 
 import (
 	"fmt"
