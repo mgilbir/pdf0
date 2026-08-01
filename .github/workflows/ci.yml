@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# One run per ref. A force-push supersedes the run it interrupted rather than
+# racing it, which keeps two jobs from fetching the same corpora at once.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
@@ -31,7 +37,8 @@ jobs:
         run: go build ./...
 
       - name: test
-        # The conformance corpora are not vendored; corpus-gated tests skip.
+        # No corpus here on purpose: this job is the fast signal, and the
+        # corpus-gated tests self-skip. The corpus job below runs them.
         run: go test ./... -count=1
 
       - name: doc links resolve
@@ -57,3 +64,72 @@ jobs:
           rm output.pdf
           go run ./examples/extract_images
           go run ./examples/sign_verify
+
+  # The conformance ratchets: corpus FP=0/missed=0, Isartor, Level A, the
+  # whole-corpus parse sweep, the Arlington structural oracle and the Factur-X
+  # container oracle. Every one is a measurement of specific documents, and none
+  # of them ran in CI before — a change that moved falsePositives off zero went
+  # green, because the tests self-skip when their data is absent.
+  #
+  # It is a separate job so a cache miss cannot delay the fast signal above.
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      # Keyed on the pinned revisions in the Makefile and on the download
+      # manifest, so the key changes only when the corpus is meant to. A hit
+      # makes no request to any upstream host at all; a miss costs one shallow
+      # fetch of one commit per repository.
+      - name: restore corpora
+        id: corpora
+        uses: actions/cache@v4
+        with:
+          path: |
+            testdata/verapdf-corpus
+            testdata/arlington-pdf-model
+            testdata/pdf20examples
+            testdata/facturx
+          key: corpora-${{ hashFiles('Makefile', 'testdata/facturx/sources.tsv') }}
+
+      - name: fetch corpora
+        if: steps.corpora.outputs.cache-hit != 'true'
+        run: make corpus arlington refpdfs facturx
+
+      # A half-finished fetch must be red, not green. The corpus-gated tests skip
+      # when their directory is empty, and a skip reads as a pass: this repository
+      # has twice had a test report zero files and succeed — once from a symlinked
+      # corpus root that defeated filepath.Walk, once from a worktree that never
+      # had the data. Counting here is what stops that becoming a silent hole.
+      - name: corpora are present and complete
+        run: |
+          set -eu
+          check() {
+            n=$(find "$1" -name "$2" -type f 2>/dev/null | wc -l)
+            if [ "$n" -lt "$3" ]; then
+              echo "$1: found $n $2 files, expected at least $3 — fetch incomplete"
+              exit 1
+            fi
+            printf '%-32s %6d %s\n' "$1" "$n" "$2"
+          }
+          check testdata/verapdf-corpus          '*.pdf' 2800
+          # tsv/2.0 specifically: the model ships a directory per PDF version and
+          # the oracle reads 2.0, so counting every .tsv would let a fetch that
+          # got only the older versions pass.
+          check testdata/arlington-pdf-model/tsv/2.0 '*.tsv' 600
+          check testdata/pdf20examples           '*.pdf'    7
+          # The Factur-X corpus is exactly its manifest: the other documents in a
+          # developer's tree come from the FNFE specification bundle, which is not
+          # redistributable and has no fetch target. Comparing against the manifest
+          # rather than a fixed number keeps the two from drifting apart.
+          want=$(grep -cvE '^[[:space:]]*(#|$)' testdata/facturx/sources.tsv)
+          check testdata/facturx                 '*.pdf' "$want"
+
+      - name: conformance ratchets
+        env:
+          VERAPDF_CORPUS: testdata/verapdf-corpus
+        run: go test ./... -count=1
