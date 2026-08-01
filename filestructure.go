@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/syntax"
 	"slices"
 	"sort"
@@ -649,7 +650,7 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 	i := 0
 	for i < n {
 		switch b := data[i]; {
-		case isContentWS(b):
+		case core.IsContentWS(b):
 			i++
 		case b == '%':
 			for i < n && data[i] != '\n' && data[i] != '\r' {
@@ -690,7 +691,7 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 			i++
 		default:
 			start := i
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 				i++
 			}
 			if i == start {
@@ -701,7 +702,7 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 				continue // binary run, not a token; see scanStreamForDeviceOps
 			}
 			if i-start == 2 && data[start] == 'B' && data[start+1] == 'I' {
-				skipInlineImage(data, &i)
+				core.SkipInlineImage(data, &i)
 			}
 		}
 	}
@@ -1001,8 +1002,8 @@ func inlineImageIntents(data []byte) []string {
 	i := 0
 	for i < n {
 		if data[i] == 'B' && i+1 < n && data[i+1] == 'I' &&
-			(i == 0 || isContentWS(data[i-1]) || isContentDelim(data[i-1])) &&
-			(i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2])) {
+			(i == 0 || core.IsContentWS(data[i-1]) || core.IsContentDelim(data[i-1])) &&
+			(i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2])) {
 			i += 2
 			if v := inlineImageDictValue(data, &i, "Intent"); v != "" {
 				out = append(out, v)
@@ -1023,14 +1024,14 @@ func inlineImageDictValue(data []byte, pos *int, key string) string {
 	readName := func() string {
 		i++
 		start := i
-		for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+		for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 			i++
 		}
 		return string(data[start:i])
 	}
 	for i < n {
 		switch b := data[i]; {
-		case isContentWS(b):
+		case core.IsContentWS(b):
 			i++
 		case b == '/':
 			name := readName()
@@ -1042,11 +1043,11 @@ func inlineImageDictValue(data []byte, pos *int, key string) string {
 			}
 		case b == 'I' && i+1 < n && data[i+1] == 'D':
 			*pos = i + 2
-			skipInlineImage(data, pos)
+			core.SkipInlineImage(data, pos)
 			return value
 		default:
 			start := i
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 				i++
 			}
 			if i == start {
@@ -1099,8 +1100,8 @@ func inlineImageFilters(data []byte) [][]string {
 	for i < n {
 		// Find a BI token at a boundary.
 		if data[i] == 'B' && i+1 < n && data[i+1] == 'I' &&
-			(i == 0 || isContentWS(data[i-1]) || isContentDelim(data[i-1])) &&
-			(i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2])) {
+			(i == 0 || core.IsContentWS(data[i-1]) || core.IsContentDelim(data[i-1])) &&
+			(i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2])) {
 			i += 2
 			filters := parseInlineImageFilter(data, &i) // advances past ID
 			if filters != nil {
@@ -1123,14 +1124,14 @@ func parseInlineImageFilter(data []byte, pos *int) []string {
 	readName := func() string {
 		i++ // past '/'
 		start := i
-		for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+		for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 			i++
 		}
 		return string(data[start:i])
 	}
 	for i < n {
 		switch b := data[i]; {
-		case isContentWS(b):
+		case core.IsContentWS(b):
 			i++
 		case b == '/':
 			name := readName()
@@ -1157,12 +1158,12 @@ func parseInlineImageFilter(data []byte, pos *int) []string {
 			}
 		case b == 'I' && i+1 < n && data[i+1] == 'D':
 			*pos = i + 2
-			skipInlineImage(data, pos)
+			core.SkipInlineImage(data, pos)
 			return filters
 		default:
 			// numbers, booleans, etc. — a value clears any pending key.
 			start := i
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 				i++
 			}
 			if i == start {

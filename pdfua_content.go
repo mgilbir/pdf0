@@ -33,7 +33,7 @@ func checkUARealContent(d *Document, cat *Dictionary) []UAViolation {
 }
 
 // streamContentFacts holds the facts several UA checks derive from a single
-// tokenizeContent pass over one content stream: the real-content (7.1)
+// core.TokenizeContent pass over one content stream: the real-content (7.1)
 // violation messages and, for the form-XObject-painting rule (7.20), the
 // sequence of XObject names invoked by Do operators. Both depend only on the
 // stream bytes, so a stream shared by many containers — or examined by more
@@ -107,21 +107,21 @@ func buildContentFacts(cancel core.Canceler, content []byte) *streamContentFacts
 	artifactTag := false // the first operand is the name /Artifact
 	mcidProp := false    // some operand is the name /MCID
 	var lastName string  // most recent name operand (for the Do-operator target)
-	for tk := range tokenizeContent(cancel, content) {
-		if tk.kind != ctOp {
-			if tk.kind == ctName {
-				lastName = tk.name
-				if firstOperand && tk.name == "Artifact" {
+	for tk := range core.TokenizeContent(cancel, content) {
+		if tk.Kind != core.KindOp {
+			if tk.Kind == core.KindName {
+				lastName = tk.Name
+				if firstOperand && tk.Name == "Artifact" {
 					artifactTag = true
 				}
-				if tk.name == "MCID" {
+				if tk.Name == "MCID" {
 					mcidProp = true
 				}
 			}
 			firstOperand = false
 			continue
 		}
-		switch tk.op {
+		switch tk.Op {
 		case "BDC", "BMC":
 			kind := mcTransparent
 			switch {
@@ -235,7 +235,7 @@ func bytesContainsToken(data []byte, tok string) bool {
 			return false
 		}
 		end := i + j + len(tok)
-		if end >= len(data) || syntax.IsWhitespace(data[end]) || isContentDelim(data[end]) {
+		if end >= len(data) || syntax.IsWhitespace(data[end]) || core.IsContentDelim(data[end]) {
 			return true
 		}
 		i = i + j + 1

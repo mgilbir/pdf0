@@ -45,7 +45,7 @@ func forEachContentItem(cancel core.Canceler, data []byte, fn func(kind contentI
 			}
 			nextCancelCheck = i + core.CancelScanBytes
 		}
-		for i < n && isContentWS(data[i]) {
+		for i < n && core.IsContentWS(data[i]) {
 			i++
 		}
 		if i >= n {
@@ -89,7 +89,7 @@ func forEachContentItem(cancel core.Canceler, data []byte, fn func(kind contentI
 		case b == '/':
 			i++
 			start := i
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 				i++
 			}
 			fn(itemName, data[start:i])
@@ -99,7 +99,7 @@ func forEachContentItem(cancel core.Canceler, data []byte, fn func(kind contentI
 			// precision); read them whole. Non-numeric keyword tokens are
 			// capped to bound scanning over stray binary data.
 			numeric := data[i] >= '0' && data[i] <= '9' || data[i] == '+' || data[i] == '-' || data[i] == '.'
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 				i++
 			}
 			if i == start {
@@ -113,7 +113,7 @@ func forEachContentItem(cancel core.Canceler, data []byte, fn func(kind contentI
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
-				skipInlineImage(data, &i)
+				core.SkipInlineImage(data, &i)
 				continue
 			}
 			if numeric {

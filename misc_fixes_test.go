@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 )
 
@@ -54,9 +55,9 @@ func TestInlineImageHonorsLength(t *testing.T) {
 	content = append(content, []byte("EI Q")...) // the real EI
 	pos := len("BI")                             // start skip at the BI-consumed position simulated below
 
-	// Drive skipInlineImage from just after "BI".
+	// Drive core.SkipInlineImage from just after "BI".
 	p := 2
-	skipInlineImage(content, &p)
+	core.SkipInlineImage(content, &p)
 	rest := string(content[p:])
 	if rest != " Q" {
 		t.Errorf("after inline image, remaining = %q, want %q (false EI in data mis-detected?)", rest, " Q")

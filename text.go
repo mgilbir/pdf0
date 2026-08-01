@@ -3,8 +3,6 @@ package pdf0
 import (
 	"context"
 	"github.com/mgilbir/pdf0/internal/core"
-	"iter"
-	"strconv"
 	"strings"
 )
 
@@ -100,41 +98,41 @@ func (d *Document) extractContentText(cancel core.Canceler, res *Dictionary, con
 
 	var curMap map[int]rune
 	curTwoByte := false
-	var operands []contentToken
+	var operands []core.ContentToken
 
 	show := func(raw []byte) {
 		for _, r := range decodeShown(raw, curMap, curTwoByte) {
 			out.WriteRune(r)
 		}
 	}
-	for tk := range tokenizeContent(cancel, content) {
-		if tk.kind != ctOp {
+	for tk := range core.TokenizeContent(cancel, content) {
+		if tk.Kind != core.KindOp {
 			operands = append(operands, tk)
 			continue
 		}
-		switch tk.op {
+		switch tk.Op {
 		case "Tf":
 			if len(operands) >= 1 {
-				if f, ok := fonts[operands[0].name]; ok {
+				if f, ok := fonts[operands[0].Name]; ok {
 					curMap, curTwoByte = f.toUnicode, f.twoByte
 				} else {
 					curMap, curTwoByte = nil, false
 				}
 			}
 		case "Tj", "'", "\"":
-			if tk.op != "Tj" {
+			if tk.Op != "Tj" {
 				out.WriteByte('\n')
 			}
 			if len(operands) >= 1 {
-				show(operands[len(operands)-1].str)
+				show(operands[len(operands)-1].Str)
 			}
 		case "TJ":
 			for _, el := range operands {
-				switch el.kind {
-				case ctString:
-					show(el.str)
-				case ctNumber:
-					if el.number() < -100 { // wide negative adjustment ≈ a space
+				switch el.Kind {
+				case core.KindString:
+					show(el.Str)
+				case core.KindNumber:
+					if el.Number() < -100 { // wide negative adjustment ≈ a space
 						out.WriteByte(' ')
 					}
 				}
@@ -143,7 +141,7 @@ func (d *Document) extractContentText(cancel core.Canceler, res *Dictionary, con
 			out.WriteByte('\n')
 		case "Do":
 			if xobjs != nil && len(operands) >= 1 {
-				if st, ok := d.Resolve(xobjs.Get(Name(operands[len(operands)-1].name))).(*Stream); ok {
+				if st, ok := d.Resolve(xobjs.Get(Name(operands[len(operands)-1].Name))).(*Stream); ok {
 					if sub, _ := st.Dict.Get("Subtype").(Name); sub == "Form" && !seen[st] {
 						seen[st] = true
 						formRes := d.ResolveDict(st.Dict.Get("Resources"))
@@ -215,255 +213,3 @@ func decodeShown(raw []byte, toUnicode map[int]rune, twoByte bool) []rune {
 }
 
 // --- content-stream tokenizer ---
-
-type ctKind int
-
-const (
-	ctOp ctKind = iota
-	ctNumber
-	ctString
-	ctName
-	ctArrayStart
-	ctArrayEnd
-)
-
-type contentToken struct {
-	kind ctKind
-	op   string
-	name string
-	str  []byte
-	raw  []byte // ctNumber: the unparsed digits, sub-sliced from the content
-}
-
-// number parses a ctNumber token's value. Parsing is deferred to the consumer
-// because most consumers never look at a number: the PDF/UA content pass reads
-// only operators, names and strings, yet numbers are the most common token in a
-// content stream, so parsing every one eagerly was pure waste.
-func (t contentToken) number() float64 {
-	f, _ := strconv.ParseFloat(string(t.raw), 64)
-	return f
-}
-
-// tokenizeContent iterates the operand/operator tokens of a content stream. It
-// is lenient: unrecognized bytes are skipped. Array and dictionary delimiters are
-// surfaced so TJ arrays can be read; inline images (BI…ID…EI) are stepped over.
-//
-// Tokens are yielded one at a time rather than collected into a slice. Every
-// caller consumes them in a single forward pass, and a content stream of a real
-// document can hold tens of millions of tokens: materializing them dominated
-// PDF/UA validation, where the token slice alone accounted for ~94% of the run's
-// allocated bytes (the repeated grow-and-copy of a multi-gigabyte slice, not the
-// scan itself). Streaming makes the tokenizer allocation-free apart from the
-// string operands it must decode.
-//
-// The scan stops when cancel fires, checked every cancelScanBytes of input; see
-// cancel.go for why the check is gated on the scan position rather than run per
-// token.
-func tokenizeContent(cancel core.Canceler, data []byte) iter.Seq[contentToken] {
-	return func(yield func(contentToken) bool) {
-		i := 0
-		nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
-		for i < len(data) {
-			if i >= nextCancelCheck {
-				if cancel.Stopped() {
-					return
-				}
-				nextCancelCheck = i + core.CancelScanBytes
-			}
-			c := data[i]
-			switch {
-			case isContentWS(c):
-				i++
-			case c == '%':
-				for i < len(data) && data[i] != '\n' && data[i] != '\r' {
-					i++
-				}
-			case c == '(':
-				s, ni := scanContentLiteral(data, i)
-				if !yield(contentToken{kind: ctString, str: s}) {
-					return
-				}
-				i = ni
-			case c == '<' && i+1 < len(data) && data[i+1] == '<':
-				i += 2 // dictionary start — skip; not needed for text
-			case c == '>' && i+1 < len(data) && data[i+1] == '>':
-				i += 2
-			case c == '<':
-				s, ni := scanContentHex(data, i)
-				if !yield(contentToken{kind: ctString, str: s}) {
-					return
-				}
-				i = ni
-			case c == '/':
-				n, ni := scanContentName(data, i)
-				if !yield(contentToken{kind: ctName, name: n}) {
-					return
-				}
-				i = ni
-			case c == '[':
-				if !yield(contentToken{kind: ctArrayStart}) {
-					return
-				}
-				i++
-			case c == ']':
-				if !yield(contentToken{kind: ctArrayEnd}) {
-					return
-				}
-				i++
-			case c == '-' || c == '+' || c == '.' || (c >= '0' && c <= '9'):
-				raw, ni := scanContentNumberBytes(data, i)
-				if !yield(contentToken{kind: ctNumber, raw: raw}) {
-					return
-				}
-				i = ni
-			default:
-				word, ni := scanContentWord(data, i)
-				i = ni
-				if word == "" {
-					i++
-					continue
-				}
-				if word == "BI" {
-					i = skipContentInlineImage(data, i)
-					continue
-				}
-				if !yield(contentToken{kind: ctOp, op: word}) {
-					return
-				}
-			}
-		}
-	}
-}
-
-func scanContentLiteral(data []byte, i int) ([]byte, int) {
-	i++ // '('
-	var out []byte
-	depth := 1
-	for i < len(data) {
-		c := data[i]
-		switch c {
-		case '\\':
-			i++
-			if i >= len(data) {
-				return out, i
-			}
-			switch e := data[i]; e {
-			case 'n':
-				out = append(out, '\n')
-			case 'r':
-				out = append(out, '\r')
-			case 't':
-				out = append(out, '\t')
-			case 'b':
-				out = append(out, '\b')
-			case 'f':
-				out = append(out, '\f')
-			case '(', ')', '\\':
-				out = append(out, e)
-			default:
-				if e >= '0' && e <= '7' {
-					v := 0
-					for k := 0; k < 3 && i < len(data) && data[i] >= '0' && data[i] <= '7'; k++ {
-						v = v*8 + int(data[i]-'0')
-						i++
-					}
-					out = append(out, byte(v))
-					continue
-				}
-				out = append(out, e)
-			}
-			i++
-		case '(':
-			depth++
-			out = append(out, c)
-			i++
-		case ')':
-			depth--
-			if depth == 0 {
-				return out, i + 1
-			}
-			out = append(out, c)
-			i++
-		default:
-			out = append(out, c)
-			i++
-		}
-	}
-	return out, i
-}
-
-func scanContentHex(data []byte, i int) ([]byte, int) {
-	i++ // '<'
-	var digits []byte
-	for i < len(data) && data[i] != '>' {
-		if !isContentWS(data[i]) {
-			digits = append(digits, data[i])
-		}
-		i++
-	}
-	if i < len(data) {
-		i++ // '>'
-	}
-	if len(digits)%2 == 1 {
-		digits = append(digits, '0')
-	}
-	out := make([]byte, len(digits)/2)
-	for k := 0; k < len(out); k++ {
-		out[k] = hexNibble(digits[2*k])<<4 | hexNibble(digits[2*k+1])
-	}
-	return out, i
-}
-
-func hexNibble(c byte) byte {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0'
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10
-	}
-	return 0
-}
-
-func scanContentName(data []byte, i int) (string, int) {
-	i++ // '/'
-	start := i
-	for i < len(data) && !isContentWS(data[i]) && !isContentDelim(data[i]) {
-		i++
-	}
-	return string(data[start:i]), i
-}
-
-// scanContentNumberBytes returns the numeric literal starting at i as a
-// sub-slice of data, leaving the parse to contentToken.number.
-func scanContentNumberBytes(data []byte, i int) ([]byte, int) {
-	start := i
-	if data[i] == '-' || data[i] == '+' {
-		i++
-	}
-	for i < len(data) && ((data[i] >= '0' && data[i] <= '9') || data[i] == '.') {
-		i++
-	}
-	return data[start:i], i
-}
-
-func scanContentWord(data []byte, i int) (string, int) {
-	start := i
-	for i < len(data) && !isContentWS(data[i]) && !isContentDelim(data[i]) {
-		i++
-	}
-	return string(data[start:i]), i
-}
-
-// skipContentInlineImage steps past a BI…ID…EI inline image, given i positioned
-// just after the BI operator. It delegates to skipInlineImage — the single,
-// robust skipper — which parses the parameter dictionary and honors a declared
-// /L (or /Length) so binary sample data that happens to contain the bytes "EI"
-// does not truncate the image early and spew the rest as bogus tokens (audit
-// C35; the previous whitespace-delimited-EI search ignored /L).
-func skipContentInlineImage(data []byte, i int) int {
-	pos := i
-	skipInlineImage(data, &pos)
-	return pos
-}

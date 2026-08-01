@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 	"testing"
 )
@@ -45,7 +46,7 @@ func TestSkipContentInlineImageHonorsLength(t *testing.T) {
 	data := b.Bytes()
 
 	// Called with i just past the "BI" operator, matching the tokenizer.
-	end := skipContentInlineImage(data, 2)
+	end := core.SkipContentInlineImage(data, 2)
 
 	rest := strings.TrimSpace(string(data[end:]))
 	if rest != "Q" {

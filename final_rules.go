@@ -138,8 +138,8 @@ func inlineImageEntries(data []byte) []map[string]string {
 	i := 0
 	for i < n {
 		if data[i] == 'B' && i+1 < n && data[i+1] == 'I' &&
-			(i == 0 || isContentWS(data[i-1]) || isContentDelim(data[i-1])) &&
-			(i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2])) {
+			(i == 0 || core.IsContentWS(data[i-1]) || core.IsContentDelim(data[i-1])) &&
+			(i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2])) {
 			i += 2
 			out = append(out, parseInlineDictEntries(data, &i))
 			continue
@@ -163,19 +163,19 @@ func parseInlineDictEntries(data []byte, pos *int) map[string]string {
 			i++
 			start = i
 		}
-		for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+		for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 			i++
 		}
 		return string(data[start:i])
 	}
 	for i < n {
 		switch b := data[i]; {
-		case isContentWS(b):
+		case core.IsContentWS(b):
 			i++
 		case b == 'I' && i+1 < n && data[i+1] == 'D' &&
-			(i+2 >= n || isContentWS(data[i+2])):
+			(i+2 >= n || core.IsContentWS(data[i+2])):
 			*pos = i + 2
-			skipInlineImage(data, pos)
+			core.SkipInlineImage(data, pos)
 			return entries
 		case b == '/':
 			name := readToken()
@@ -324,7 +324,7 @@ func contentActualTexts(data []byte) [][]byte {
 		// Find "/ActualText" as a name token.
 		if data[i] == '/' && i+11 <= n && string(data[i+1:i+11]) == "ActualText" {
 			i += 11
-			for i < n && isContentWS(data[i]) {
+			for i < n && core.IsContentWS(data[i]) {
 				i++
 			}
 			if i < n && data[i] == '<' {

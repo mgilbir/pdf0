@@ -5089,7 +5089,7 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 			nextCancelCheck = i + core.CancelScanBytes
 		}
 		// Skip whitespace
-		for i < n && isContentWS(data[i]) {
+		for i < n && core.IsContentWS(data[i]) {
 			i++
 		}
 		if i >= n {
@@ -5161,7 +5161,7 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 		if b == '/' {
 			i++
 			nameStart := i
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 				i++
 			}
 			lastName = string(data[nameStart:i])
@@ -5170,7 +5170,7 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 
 		// Read a token
 		start := i
-		for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+		for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 			i++
 		}
 		// A run longer than this is binary data, not a token: no PDF operator
@@ -5205,7 +5205,7 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 			foundID := false
 			for i < n && !foundID {
 				// Skip whitespace
-				for i < n && isContentWS(data[i]) {
+				for i < n && core.IsContentWS(data[i]) {
 					i++
 				}
 				if i >= n {
@@ -5213,10 +5213,10 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 				}
 				// Check for ID token (end of inline image dict)
 				if data[i] == 'I' && i+1 < n && data[i+1] == 'D' &&
-					(i+2 >= n || isContentWS(data[i+2])) {
+					(i+2 >= n || core.IsContentWS(data[i+2])) {
 					i += 2
 					// Skip one whitespace byte after ID
-					if i < n && isContentWS(data[i]) {
+					if i < n && core.IsContentWS(data[i]) {
 						i++
 					}
 					foundID = true
@@ -5227,21 +5227,21 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 					// Read name
 					keyStart := i + 1
 					i++
-					for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+					for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 						i++
 					}
 					key := string(data[keyStart:i])
 					// If key is CS or ColorSpace, check the next value
 					if key == "CS" || key == "ColorSpace" {
 						// Skip whitespace
-						for i < n && isContentWS(data[i]) {
+						for i < n && core.IsContentWS(data[i]) {
 							i++
 						}
 						// Read value - could be /Name or /abbreviation
 						if i < n && data[i] == '/' {
 							valStart := i + 1
 							i++
-							for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+							for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 								i++
 							}
 							csVal := string(data[valStart:i])
@@ -5262,7 +5262,7 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 						data[i] == '<' || data[i] == '>' {
 						i++ // skip single delimiter
 					} else {
-						for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+						for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 							i++
 						}
 					}
@@ -5276,8 +5276,8 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 			if foundID {
 				for i < n {
 					if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
-						atBoundary := (i == 0 || isContentWS(data[i-1]))
-						endBoundary := (i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2]))
+						atBoundary := (i == 0 || core.IsContentWS(data[i-1]))
+						endBoundary := (i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2]))
 						if atBoundary && endBoundary {
 							i += 2
 							break
@@ -5292,14 +5292,14 @@ func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMY
 		// Handle ID token outside of BI context (shouldn't happen, but be safe)
 		if tokLen == 2 && data[start] == 'I' && data[start+1] == 'D' {
 			// Skip one whitespace byte after ID
-			if i < n && isContentWS(data[i]) {
+			if i < n && core.IsContentWS(data[i]) {
 				i++
 			}
 			// Scan for EI at word boundary
 			for i < n {
 				if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
-					atBoundary := (i == 0 || isContentWS(data[i-1]))
-					endBoundary := (i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2]))
+					atBoundary := (i == 0 || core.IsContentWS(data[i-1]))
+					endBoundary := (i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2]))
 					if atBoundary && endBoundary {
 						i += 2
 						break
@@ -5377,7 +5377,7 @@ func forEachContentToken(cancel core.Canceler, data []byte, fn func(tok []byte, 
 			}
 			nextCancelCheck = i + core.CancelScanBytes
 		}
-		for i < n && isContentWS(data[i]) {
+		for i < n && core.IsContentWS(data[i]) {
 			i++
 		}
 		if i >= n {
@@ -5427,13 +5427,13 @@ func forEachContentToken(cancel core.Canceler, data []byte, fn func(tok []byte, 
 		case b == '/':
 			i++
 			start := i
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 				i++
 			}
 			fn(data[start:i], true)
 		default:
 			start := i
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
+			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
 				i++
 			}
 			if i == start {
@@ -5446,7 +5446,7 @@ func forEachContentToken(cancel core.Canceler, data []byte, fn func(tok []byte, 
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
-				skipInlineImage(data, &i)
+				core.SkipInlineImage(data, &i)
 				continue
 			}
 			fn(tok, false)
@@ -5490,156 +5490,6 @@ func contentUsedNames(cancel core.Canceler, data []byte) usedResourceNames {
 		}
 	})
 	return u
-}
-
-// skipInlineImage advances *pos past an inline image: the parameter
-// dictionary tokens up to ID, then binary data until a whitespace-delimited
-// EI token.
-func skipInlineImage(data []byte, pos *int) {
-	n := len(data)
-	i := *pos
-	paramStart := i
-	// Scan tokens until the ID keyword that starts the binary section.
-	for i < n {
-		for i < n && isContentWS(data[i]) {
-			i++
-		}
-		if i >= n {
-			break
-		}
-		if data[i] == 'I' && i+1 < n && data[i+1] == 'D' && (i+2 >= n || isContentWS(data[i+2])) {
-			i += 2
-			if i < n && isContentWS(data[i]) {
-				i++ // single whitespace after ID
-			}
-			break
-		}
-		prev := i
-		if isContentDelim(data[i]) {
-			i++
-			if data[prev] == '(' { // string value inside the param dict
-				depth := 1
-				for i < n && depth > 0 {
-					switch data[i] {
-					case '\\':
-						i++
-					case '(':
-						depth++
-					case ')':
-						depth--
-					}
-					i++
-				}
-			}
-		} else {
-			for i < n && !isContentWS(data[i]) && !isContentDelim(data[i]) {
-				i++
-			}
-		}
-		if i == prev {
-			i++
-		}
-	}
-	// Inline-image sample data is arbitrary binary and can contain the bytes
-	// "EI" by chance, which the boundary search below would mistake for the end
-	// (spewing the rest of the image as bogus operators/hex strings). When the
-	// dictionary declares /L (or /Length), skip exactly that many bytes and
-	// confirm EI follows; only fall back to the search if it is absent or
-	// inconsistent, so behaviour never regresses (audit C25).
-	binaryStart := i
-	if declLen, ok := inlineImageDeclaredLength(data[paramStart:binaryStart]); ok {
-		end := binaryStart + declLen
-		if end <= n {
-			j := end
-			for j < n && isContentWS(data[j]) {
-				j++
-			}
-			if j+1 < n && data[j] == 'E' && data[j+1] == 'I' &&
-				(j+2 >= n || isContentWS(data[j+2]) || isContentDelim(data[j+2])) {
-				*pos = j + 2
-				return
-			}
-		}
-	}
-
-	// Skip binary data until EI at a token boundary.
-	for i < n {
-		if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
-			atBoundary := i == 0 || isContentWS(data[i-1])
-			endBoundary := i+2 >= n || isContentWS(data[i+2]) || isContentDelim(data[i+2])
-			if atBoundary && endBoundary {
-				i += 2
-				break
-			}
-		}
-		i++
-	}
-	*pos = i
-}
-
-// inlineImageDeclaredLength extracts the /L (or /Length) value from an inline
-// image's parameter region, if present. It reports the declared byte count of
-// the binary sample data.
-func inlineImageDeclaredLength(params []byte) (int, bool) {
-	for i := 0; i < len(params); i++ {
-		if params[i] != '/' {
-			continue
-		}
-		// Read the key name.
-		j := i + 1
-		for j < len(params) && !isContentWS(params[j]) && !isContentDelim(params[j]) {
-			j++
-		}
-		key := string(params[i+1 : j])
-		if key != "L" && key != "Length" {
-			continue
-		}
-		// Skip whitespace to the value.
-		for j < len(params) && isContentWS(params[j]) {
-			j++
-		}
-		start := j
-		v := 0
-		for j < len(params) && params[j] >= '0' && params[j] <= '9' {
-			v = v*10 + int(params[j]-'0')
-			j++
-		}
-		if j == start {
-			continue
-		}
-		return v, true
-	}
-	return 0, false
-}
-
-// contentByteClass classifies a byte for content-stream scanning. These two
-// predicates sit in the innermost loop of every content walker in the package
-// and are called once per byte of every decoded content stream — hundreds of
-// millions of times on a large document — so they read a single table rather
-// than run a chain of comparisons. The two classes share one 256-byte table to
-// keep the pair in one cache line's worth of memory, since the walkers almost
-// always test both.
-const (
-	ctbWS byte = 1 << iota
-	ctbDelim
-)
-
-var contentByteClass = func() (t [256]byte) {
-	for _, b := range []byte{' ', '\t', '\n', '\r', '\x00', '\x0c'} {
-		t[b] |= ctbWS
-	}
-	for _, b := range []byte("()<>[]{}/%") {
-		t[b] |= ctbDelim
-	}
-	return t
-}()
-
-func isContentWS(b byte) bool {
-	return contentByteClass[b]&ctbWS != 0
-}
-
-func isContentDelim(b byte) bool {
-	return contentByteClass[b]&ctbDelim != 0
 }
 
 // --- ICCBased color space checks (6.2.4.2) ---

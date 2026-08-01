@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestContentFactsSinglePass verifies that one tokenizeContent pass extracts
+// TestContentFactsSinglePass verifies that one core.TokenizeContent pass extracts
 // both the real-content (7.1) messages and the Do-operator name sequence the
 // form-XObject-painting check needs — the two facts that were previously two
 // separate passes over the same bytes.
