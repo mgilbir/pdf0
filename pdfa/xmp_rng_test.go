@@ -1,4 +1,4 @@
-package pdf0
+package pdfa
 
 import (
 	"encoding/xml"
@@ -440,16 +440,16 @@ func typesEquivalent(a, b rngType) bool { return a == b }
 // xmpRNGAllowlist records deliberate, understood deviations, each verified in
 // the ISO 16684 / EXIF / PDF-A cross-check. Key is "<nsURI>/<prop>".
 var xmpRNGAllowlist = map[string]string{
-	// xmp:Rating is a closed choice of Real in ISO 16684-1 (−1, 0..5); pdf0 uses
-	// Real. The ceztko RNG types it Integer at A-2/3 (and even flags its own
-	// uncertainty with a CHECK-ME comment), Real at A-4. pdf0 is spec-correct.
+	// xmp:Rating is a closed choice of object.Real in ISO 16684-1 (−1, 0..5); pdf0 uses
+	// object.Real. The ceztko RNG types it object.Integer at A-2/3 (and even flags its own
+	// uncertainty with a CHECK-ME comment), object.Real at A-4. pdf0 is spec-correct.
 	nsXMPBasic + "/Rating": "ISO 16684-1: Rating is Real; RNG A-2/3 Integer is a questioned simplification",
 	// exif:GPSDestDistance is RATIONAL per the EXIF spec; pdf0 uses Rational. The
 	// RNG relaxes it to Text (accept-anything). pdf0 is the stricter, correct one.
 	nsEXIF + "/GPSDestDistance": "EXIF spec: RATIONAL; RNG relaxes to Text",
 	// pdfaid:part / :rev are positive integers per PDF/A; pdf0 validates them as
-	// Integer. The RNG models them as a closed choice of the string values
-	// "1".."4"; pdf0's Integer typing is spec-aligned.
+	// object.Integer. The RNG models them as a closed choice of the string values
+	// "1".."4"; pdf0's object.Integer typing is spec-aligned.
 	nsPDFAID + "/part": "PDF/A: part is an integer; RNG uses a closed string choice",
 	nsPDFAID + "/rev":  "PDF/A: rev is an integer; RNG uses a string",
 }

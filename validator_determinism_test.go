@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/fonttest"
 	"strings"
 	"testing"
 )
@@ -27,37 +28,6 @@ const determinismReps = 64
 // map-order-driven choice is overwhelmingly unlikely to agree across all
 // determinismReps runs.
 const charSetDeterminismGlyphs = 64
-
-// type1Program builds a minimal Type 1 font program defining exactly the named
-// glyphs, in the eexec-encrypted form parseType1 expects. Only the glyph names
-// matter to the /CharSet rule, so the charstrings are filler.
-func type1Program(names []string) []byte {
-	var priv strings.Builder
-	// lenIV 0 keeps the filler charstrings from needing a decryption prefix.
-	priv.WriteString("dup /Private 8 dict dup begin\n/lenIV 0 def\n")
-	// No dict count after /CharStrings: parseType1 treats a name followed by a
-	// number as a charstring entry, so a count would register "CharStrings"
-	// itself as a glyph.
-	priv.WriteString("2 index /CharStrings dict dup begin\n")
-	for _, n := range names {
-		// "/name len RD <len bytes> ND"
-		priv.WriteString("/" + n + " 1 RD \x8b ND\n")
-	}
-	priv.WriteString("end\nend\nmark currentfile closefile\n")
-
-	// eexec encryption is the inverse of eexecDecrypt(data, 55665, 4): four
-	// leading pad bytes are consumed by the decryptor's discard.
-	plain := append([]byte("pad!"), priv.String()...)
-	var r uint16 = 55665
-	const c1, c2 = 52845, 22719
-	enc := make([]byte, 0, len(plain))
-	for _, p := range plain {
-		c := p ^ byte(r>>8)
-		r = (uint16(c)+r)*c1 + c2
-		enc = append(enc, c)
-	}
-	return append([]byte("%!PS-AdobeFont-1.0\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\ncurrentfile eexec\n"), enc...)
-}
 
 // charSetDeterminismDoc builds a document whose single rendered, subset Type 1
 // font breaches BOTH directions of clause 7.21.4.2 many times over: the
@@ -115,7 +85,7 @@ func charSetDeterminismDoc(nGlyphs int) *Document {
 	fd.Set("FontFile", IndirectRef{Number: 7})
 	put(6, fd)
 
-	put(7, &Stream{Data: type1Program(present)})
+	put(7, &Stream{Data: fonttest.Type1Program(present)})
 
 	doc.Trailer.Set("Root", IndirectRef{Number: 1})
 	return doc
@@ -203,36 +173,5 @@ func TestValidatePDFUAOutputIsStableAcrossRuns(t *testing.T) {
 		if got := render(); got != want {
 			t.Fatalf("ValidatePDFUA run %d differs from run 0.\n--- run 0 ---\n%s--- run %d ---\n%s", i, want, i, got)
 		}
-	}
-}
-
-// TestExampleFindingsPicksLowestObject covers the other half of the class: rules
-// that report one example object number rather than one example name. The
-// candidates reach exampleFindings in doc.Objects / collectContentStreamData map
-// order, so the finding must keep the smallest object number regardless of the
-// order in which candidates are offered.
-func TestExampleFindingsPicksLowestObject(t *testing.T) {
-	mk := func(order []int) []ValidationError {
-		var f exampleFindings
-		for _, n := range order {
-			f.add(ValidationError{Rule: "6.1.8", Level: PDFA4, Message: "same message", Object: n})
-		}
-		return f.errs
-	}
-	for _, order := range [][]int{{7, 3, 9}, {3, 7, 9}, {9, 7, 3}} {
-		got := mk(order)
-		if len(got) != 1 {
-			t.Fatalf("order %v: expected one deduplicated finding, got %d", order, len(got))
-		}
-		if got[0].Object != 3 {
-			t.Errorf("order %v: expected the lowest object number 3, got %d", order, got[0].Object)
-		}
-	}
-	// A different message is a different example and is kept separately.
-	var f exampleFindings
-	f.add(ValidationError{Rule: "6.1.8", Message: "a", Object: 5})
-	f.add(ValidationError{Rule: "6.1.8", Message: "b", Object: 4})
-	if len(f.errs) != 2 {
-		t.Errorf("distinct messages must not be deduplicated: got %d findings", len(f.errs))
 	}
 }

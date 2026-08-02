@@ -2,6 +2,7 @@ package font
 
 import (
 	"encoding/binary"
+	"github.com/mgilbir/pdf0/internal/fonttest"
 	"testing"
 	"time"
 )
@@ -46,7 +47,7 @@ func TestCmapFormat4Budget(t *testing.T) {
 // buildCmapFormat4 assembles a format-4 cmap subtable from {startCode, endCode,
 // idDelta} segments, with idRangeOffset zero throughout (glyph = code + delta).
 func TestCmapFormat4SegmentStartingAtZero(t *testing.T) {
-	m, _ := ParseCmapSubtable(buildCmapFormat4([][3]int{
+	m, _ := ParseCmapSubtable(fonttest.CmapFormat4([][3]int{
 		{0x0000, 0x0002, 100},
 		{0x0041, 0x0042, 200},
 		{0xFFFF, 0xFFFF, 1}, // sentinel, maps nothing
@@ -65,7 +66,7 @@ func TestCmapFormat4SegmentStartingAtZero(t *testing.T) {
 // TestCmapFormat4TerminalSegment ensures a segment that runs up to 0xFFFF maps
 // its last code and still terminates.
 func TestCmapFormat4TerminalSegment(t *testing.T) {
-	m, _ := ParseCmapSubtable(buildCmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}), generousCmapWork)
+	m, _ := ParseCmapSubtable(fonttest.CmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}), generousCmapWork)
 	if m[0xFFFE] != 0x7FFE || m[0xFFFF] != 0x7FFF {
 		t.Errorf("terminal segment: got %v, want U+FFFE->0x7FFE, U+FFFF->0x7FFF", m)
 	}
@@ -74,7 +75,7 @@ func TestCmapFormat4TerminalSegment(t *testing.T) {
 // TestCmapFormat4InvertedSegment ensures a malformed segment with start > end is
 // skipped without disturbing the segments around it.
 func TestCmapFormat4InvertedSegment(t *testing.T) {
-	m, _ := ParseCmapSubtable(buildCmapFormat4([][3]int{
+	m, _ := ParseCmapSubtable(fonttest.CmapFormat4([][3]int{
 		{0x0050, 0x0040, 300}, // inverted
 		{0x0041, 0x0041, 200},
 	}), generousCmapWork)
@@ -102,7 +103,7 @@ func TestCmapUnsupportedFormatIsNil(t *testing.T) {
 // buildCmapFormat12 assembles a format-12 (segmented coverage) cmap subtable
 // from {startCharCode, endCharCode, startGlyphID} groups.
 func TestCmapFormat12Groups(t *testing.T) {
-	m, _ := ParseCmapSubtable(buildCmapFormat12([][3]uint32{
+	m, _ := ParseCmapSubtable(fonttest.CmapFormat12([][3]uint32{
 		{0x0000, 0x0002, 100},
 		{0x0041, 0x0043, 200},
 		{0x0100, 0x0100, 0}, // maps to .notdef: recorded as no mapping at all
@@ -121,7 +122,7 @@ func TestCmapFormat12Groups(t *testing.T) {
 // TestCmapFormat12Astral ensures a group crossing out of the BMP keeps its
 // supra-BMP code points: reaching those is the whole point of format 12.
 func TestCmapFormat12Astral(t *testing.T) {
-	m, _ := ParseCmapSubtable(buildCmapFormat12([][3]uint32{
+	m, _ := ParseCmapSubtable(fonttest.CmapFormat12([][3]uint32{
 		{0xFFFE, 0x10001, 900},
 		{0x1F600, 0x1F601, 1000},
 	}), generousCmapWork)
@@ -165,7 +166,7 @@ func TestCmapFormat12Budget(t *testing.T) {
 		{"disjoint groups covering Unicode", disjoint},
 		{"overlapping full-range groups", overlapping},
 	} {
-		b := buildCmapFormat12(tc.groups)
+		b := fonttest.CmapFormat12(tc.groups)
 		done := make(chan int, 1)
 		start := time.Now()
 		go func() {
@@ -191,7 +192,7 @@ func TestCmapFormat12Budget(t *testing.T) {
 // bytes) than it carries is refused outright rather than half-read: a partial
 // map read as authoritative turns unmapped codes into .notdef findings.
 func TestCmapFormat12Truncated(t *testing.T) {
-	full := buildCmapFormat12([][3]uint32{{0x41, 0x42, 7}})
+	full := fonttest.CmapFormat12([][3]uint32{{0x41, 0x42, 7}})
 	cases := map[string][]byte{
 		"body cut off":   full[:len(full)-4],
 		"header cut off": full[:12],
@@ -222,7 +223,7 @@ func TestCmapFormat12Truncated(t *testing.T) {
 // disturbing its neighbours, and that a glyph id beyond the 16-bit range is not
 // recorded as if it named a glyph.
 func TestCmapFormat12MalformedGroups(t *testing.T) {
-	m, _ := ParseCmapSubtable(buildCmapFormat12([][3]uint32{
+	m, _ := ParseCmapSubtable(fonttest.CmapFormat12([][3]uint32{
 		{0x0050, 0x0040, 300},     // inverted
 		{0x110000, 0x110002, 400}, // past the end of Unicode
 		{0x0060, 0x0060, 0x10000}, // glyph id wider than 16 bits
@@ -236,18 +237,15 @@ func TestCmapFormat12MalformedGroups(t *testing.T) {
 // buildSFNTWithCmapSubtables wraps cmap subtables, each tagged with its
 // (platform, encoding), into a minimal sfnt font carrying only a cmap table.
 func TestCmapSubtablePreference(t *testing.T) {
-	type sub = struct {
-		plat, enc int
-		data      []byte
-	}
-	bmp := buildCmapFormat4([][3]int{{0x0041, 0x0041, 100 - 0x41}, {0xFFFF, 0xFFFF, 1}})
-	full := buildCmapFormat12([][3]uint32{{0x0041, 0x0041, 500}, {0x1F600, 0x1F600, 600}})
+	type sub = fonttest.CmapSub
+	bmp := fonttest.CmapFormat4([][3]int{{0x0041, 0x0041, 100 - 0x41}, {0xFFFF, 0xFFFF, 1}})
+	full := fonttest.CmapFormat12([][3]uint32{{0x0041, 0x0041, 500}, {0x1F600, 0x1F600, 600}})
 
 	for _, order := range [][]sub{
-		{{3, 1, bmp}, {3, 10, full}},
-		{{3, 10, full}, {3, 1, bmp}},
+		{{Plat: 3, Enc: 1, Data: bmp}, {Plat: 3, Enc: 10, Data: full}},
+		{{Plat: 3, Enc: 10, Data: full}, {Plat: 3, Enc: 1, Data: bmp}},
 	} {
-		fp := ParseSFNT(buildSFNTWithCmapSubtables(order), generousCmapWork)
+		fp := ParseSFNT(fonttest.SFNTWithCmapSubtables(order), generousCmapWork)
 		if fp == nil {
 			t.Fatalf("parseSFNT returned nil")
 		}
@@ -261,9 +259,9 @@ func TestCmapSubtablePreference(t *testing.T) {
 
 	// A font with only the historically handled subtables must resolve through
 	// the same one as before: (3,1), never the Mac or symbol table.
-	fp := ParseSFNT(buildSFNTWithCmapSubtables([]sub{
-		{1, 0, buildCmapFormat4([][3]int{{0x0041, 0x0041, 1}})},
-		{3, 1, bmp},
+	fp := ParseSFNT(fonttest.SFNTWithCmapSubtables([]sub{
+		{Plat: 1, Enc: 0, Data: fonttest.CmapFormat4([][3]int{{0x0041, 0x0041, 1}})},
+		{Plat: 3, Enc: 1, Data: bmp},
 	}), generousCmapWork)
 	if fp.Cmap[0x41] != 100 {
 		t.Errorf("(3,1)-only font: cmap[U+0041] = %d, want 100", fp.Cmap[0x41])
@@ -271,16 +269,16 @@ func TestCmapSubtablePreference(t *testing.T) {
 
 	// An unreadable preferred subtable must not displace a readable lesser one,
 	// and must not leave an empty map behind.
-	fp = ParseSFNT(buildSFNTWithCmapSubtables([]sub{
-		{3, 1, bmp},
-		{3, 10, make([]byte, 16)}, // format 0 in a (3,10) slot, truncated
+	fp = ParseSFNT(fonttest.SFNTWithCmapSubtables([]sub{
+		{Plat: 3, Enc: 1, Data: bmp},
+		{Plat: 3, Enc: 10, Data: make([]byte, 16)}, // format 0 in a (3,10) slot, truncated
 	}), generousCmapWork)
 	if fp.Cmap[0x41] != 100 {
 		t.Errorf("unreadable (3,10): cmap[U+0041] = %d, want the (3,1) mapping 100", fp.Cmap[0x41])
 	}
 
 	// A Unicode-platform subtable is used when there is no Windows one.
-	fp = ParseSFNT(buildSFNTWithCmapSubtables([]sub{{0, 4, full}}), generousCmapWork)
+	fp = ParseSFNT(fonttest.SFNTWithCmapSubtables([]sub{{Plat: 0, Enc: 4, Data: full}}), generousCmapWork)
 	if fp.Cmap[0x1F600] != 600 {
 		t.Errorf("(0,4) subtable ignored: %v", fp.Cmap)
 	}
@@ -304,19 +302,19 @@ func TestCmapFormat6PastBMP(t *testing.T) {
 func TestCmapMappingNothingIsNil(t *testing.T) {
 	cases := map[string][]byte{
 		// A 16-byte format-12 header declaring no groups at all.
-		"format 12, nGroups 0": buildCmapFormat12(nil),
+		"format 12, nGroups 0": fonttest.CmapFormat12(nil),
 		// The sentinel segment a conformant format-4 table always ends with,
 		// alone: it maps nothing by definition.
-		"format 4, sentinel only": buildCmapFormat4([][3]int{{0xFFFF, 0xFFFF, 1}}),
+		"format 4, sentinel only": fonttest.CmapFormat4([][3]int{{0xFFFF, 0xFFFF, 1}}),
 		"format 0, all .notdef":   buildCmapFormat0(nil),
 		"format 6, no entries":    buildCmapFormat6(0x41, nil),
 		// What the fuzzer actually minimised to: one group lying wholly outside
 		// Unicode, so every mapping in it is skipped.
-		"format 12, sole group outside Unicode": buildCmapFormat12([][3]uint32{{0x30303030, 0x30303030, 0x30303030}}),
+		"format 12, sole group outside Unicode": fonttest.CmapFormat12([][3]uint32{{0x30303030, 0x30303030, 0x30303030}}),
 		// Budget exhaustion with nothing recorded: every group's glyph ids are
 		// wider than 16 bits, so no mapping survives, and the loop gives up on
 		// the work cap rather than on the end of the table.
-		"format 12, budget spent on out-of-range glyphs": buildCmapFormat12(func() [][3]uint32 {
+		"format 12, budget spent on out-of-range glyphs": fonttest.CmapFormat12(func() [][3]uint32 {
 			g := make([][3]uint32, 64)
 			for i := range g {
 				g[i] = [3]uint32{0, 0x10FFFF, 0x10000}
@@ -334,67 +332,6 @@ func TestCmapMappingNothingIsNil(t *testing.T) {
 // TestOffsetsMatchObjects ensures normalizeStructure prunes doc.Offsets in
 // lockstep with doc.Objects, so the byte-level checks never key on a removed
 // object (audit C9).
-
-func buildCmapFormat4(segs [][3]int) []byte {
-	segX2 := len(segs) * 2
-	b := make([]byte, 16+4*segX2)
-	put16 := func(off, v int) { b[off] = byte(v >> 8); b[off+1] = byte(v) }
-	put16(0, 4)      // format
-	put16(2, len(b)) // length
-	put16(6, segX2)  // segCountX2
-	endBase := 14
-	startBase := endBase + segX2 + 2
-	deltaBase := startBase + segX2
-	rangeBase := deltaBase + segX2
-	for i, seg := range segs {
-		put16(startBase+2*i, seg[0])
-		put16(endBase+2*i, seg[1])
-		put16(deltaBase+2*i, seg[2]&0xFFFF)
-		put16(rangeBase+2*i, 0)
-	}
-	return b
-}
-
-// TestCmapFormat4SegmentStartingAtZero ensures a format-4 segment whose start
-// code is 0 contributes its mappings; a bogus wrap guard used to drop the whole
-// segment (audit C46).
-func buildCmapFormat12(groups [][3]uint32) []byte {
-	b := make([]byte, 16+12*len(groups))
-	b[1] = 12                                               // format
-	binary.BigEndian.PutUint32(b[4:], uint32(len(b)))       // length
-	binary.BigEndian.PutUint32(b[12:], uint32(len(groups))) // nGroups
-	for i, g := range groups {
-		p := 16 + 12*i
-		binary.BigEndian.PutUint32(b[p:], g[0])
-		binary.BigEndian.PutUint32(b[p+4:], g[1])
-		binary.BigEndian.PutUint32(b[p+8:], g[2])
-	}
-	return b
-}
-
-// TestCmapFormat12Groups covers an ordinary multi-group format-12 subtable,
-// including a group starting at code 0 (the class of bug behind audit C46) and
-// one whose glyph ids start at 0.
-func buildSFNTWithCmapSubtables(subs []struct {
-	plat, enc int
-	data      []byte
-}) []byte {
-	cmap := make([]byte, 4+8*len(subs))
-	binary.BigEndian.PutUint16(cmap[2:], uint16(len(subs)))
-	for i, s := range subs {
-		binary.BigEndian.PutUint16(cmap[4+8*i:], uint16(s.plat))
-		binary.BigEndian.PutUint16(cmap[4+8*i+2:], uint16(s.enc))
-		binary.BigEndian.PutUint32(cmap[4+8*i+4:], uint32(len(cmap)))
-		cmap = append(cmap, s.data...)
-	}
-	font := make([]byte, 12+16)
-	binary.BigEndian.PutUint32(font, 0x00010000) // sfnt version 1.0
-	binary.BigEndian.PutUint16(font[4:], 1)      // numTables
-	copy(font[12:], "cmap")                      // tag
-	binary.BigEndian.PutUint32(font[12+8:], 28)  // offset
-	binary.BigEndian.PutUint32(font[12+12:], uint32(len(cmap)))
-	return append(font, cmap...)
-}
 
 // TestCmapSubtablePreference ensures a font carrying both a (3,10) full
 // repertoire subtable and a (3,1) BMP one resolves through the (3,10) superset,

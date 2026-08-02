@@ -1,7 +1,8 @@
-package pdf0
+package pdfa
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 )
@@ -59,25 +60,25 @@ func TestXMPSingleQuotedAttributes(t *testing.T) {
 // TestA4ConformanceFE ensures pdfaid:conformance F/E is accepted at part 4 but
 // other values are still rejected (audit C23).
 func TestA4ConformanceFE(t *testing.T) {
-	mk := func(conf string) *Document {
+	mk := func(conf string) core.View {
 		xmp := `<?xpacket?><rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" pdfaid:part="4" pdfaid:rev="2020"`
 		if conf != "" {
 			xmp += ` pdfaid:conformance="` + conf + `"`
 		}
 		xmp += `/>`
-		meta := &Stream{Dict: Dictionary{}, Data: []byte(xmp)}
-		meta.Dict.Set("Type", Name("Metadata"))
-		cat := &Dictionary{}
-		cat.Set("Type", Name("Catalog"))
-		cat.Set("Metadata", IndirectRef{Number: 2})
-		return &Document{Version: "2.0", Objects: map[int]*IndirectObject{
+		meta := &object.Stream{Dict: object.Dictionary{}, Data: []byte(xmp)}
+		meta.Dict.Set("Type", object.Name("Metadata"))
+		cat := &object.Dictionary{}
+		cat.Set("Type", object.Name("Catalog"))
+		cat.Set("Metadata", object.IndirectRef{Number: 2})
+		return mkV(core.View{Version: "2.0", Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: cat},
 			2: {Number: 2, Value: meta},
-		}, Trailer: dictWith("Root", IndirectRef{Number: 1})}
+		}, Trailer: ptrDict(dictWith("Root", object.IndirectRef{Number: 1}))})
 	}
-	confErrs := func(doc *Document) int {
+	confErrs := func(doc core.View) int {
 		n := 0
-		for _, e := range checkMetadataVersion(doc.view(), PDFA4) {
+		for _, e := range checkMetadataVersion(doc, PDFA4) {
 			if e.Rule == "6.7.3" && strings.Contains(e.Message, "conformance") {
 				n++
 			}
@@ -101,25 +102,25 @@ func TestA4ConformanceFE(t *testing.T) {
 // TestXMPPacketHeaderAt1b ensures the xpacket bytes/encoding-attribute and
 // well-formedness rules apply at PDF/A-1b (ISO 19005-1 6.7.5 / 6.7.9).
 func TestXMPPacketHeaderAt1b(t *testing.T) {
-	mk := func(xmp string) *Document {
-		meta := &Stream{Dict: Dictionary{}, Data: []byte(xmp)}
-		meta.Dict.Set("Type", Name("Metadata"))
-		cat := &Dictionary{}
-		cat.Set("Type", Name("Catalog"))
-		cat.Set("Metadata", IndirectRef{Number: 2})
-		return &Document{Version: "1.7", Objects: map[int]*IndirectObject{
+	mk := func(xmp string) core.View {
+		meta := &object.Stream{Dict: object.Dictionary{}, Data: []byte(xmp)}
+		meta.Dict.Set("Type", object.Name("Metadata"))
+		cat := &object.Dictionary{}
+		cat.Set("Type", object.Name("Catalog"))
+		cat.Set("Metadata", object.IndirectRef{Number: 2})
+		return mkV(core.View{Version: "1.7", Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: cat},
 			2: {Number: 2, Value: meta},
-		}, Trailer: dictWith("Root", IndirectRef{Number: 1})}
+		}, Trailer: ptrDict(dictWith("Root", object.IndirectRef{Number: 1}))})
 	}
 	wf := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"></rdf:RDF></x:xmpmeta>`
-	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" bytes="47"?>`+wf).view(), PDFA1b)); got == 0 {
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" bytes="47"?>`+wf), PDFA1b)); got == 0 {
 		t.Error("xpacket bytes attribute not flagged at 1b")
 	}
-	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" encoding="UTF-8"?>`+wf).view(), PDFA1b)); got == 0 {
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" encoding="UTF-8"?>`+wf), PDFA1b)); got == 0 {
 		t.Error("xpacket encoding attribute not flagged at 1b")
 	}
-	if got := len(checkXMPWellFormed(mk(`<?xpacket begin=""?>`+wf).view(), PDFA1b)); got != 0 {
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin=""?>`+wf), PDFA1b)); got != 0 {
 		t.Errorf("clean XMP flagged at 1b: %d", got)
 	}
 }

@@ -1,9 +1,10 @@
-package pdf0
+package pdfa
 
 import (
 	"bytes"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
 	"slices"
 	"sort"
@@ -201,7 +202,7 @@ func checkOneObjectSyntax(raw []byte, off, regionEnd int64, num int, add func(st
 	if p >= limit || !isDigit(raw[p]) {
 		return // not a numeric object header; skip
 	}
-	// Object number preceded by an EOL marker.
+	// object.Object number preceded by an EOL marker.
 	if p > 0 && !isEOLByte(raw[p-1]) {
 		add("indirect object number is not preceded by an EOL marker", num)
 	}
@@ -333,7 +334,7 @@ func checkNameUTF8(doc core.View, level PDFALevel) []ValidationError {
 	for num, iobj := range doc.Objects {
 		walkColorantUTF8(doc, iobj.Value, num, add, 0)
 		if level == PDFA4 {
-			if d, ok := iobj.Value.(*Dictionary); ok {
+			if d, ok := iobj.Value.(*object.Dictionary); ok {
 				checkA4NameUTF8(doc, d, num, add)
 			}
 		}
@@ -344,21 +345,21 @@ func checkNameUTF8(doc core.View, level PDFALevel) []ValidationError {
 // walkColorantUTF8 descends an object's structure (bounded depth, without
 // following indirect references, which are visited as their own objects)
 // checking every Separation/DeviceN colour-space array's colorant names.
-func walkColorantUTF8(doc core.View, obj Object, num int, add func(string, int), depth int) {
+func walkColorantUTF8(doc core.View, obj object.Object, num int, add func(string, int), depth int) {
 	if depth > 12 {
 		return
 	}
 	switch v := obj.(type) {
-	case Array:
+	case object.Array:
 		checkColorantArrayUTF8(doc, v, num, add)
 		for _, e := range v {
 			walkColorantUTF8(doc, e, num, add, depth+1)
 		}
-	case *Dictionary:
+	case *object.Dictionary:
 		for _, val := range v.Values {
 			walkColorantUTF8(doc, val, num, add, depth+1)
 		}
-	case *Stream:
+	case *object.Stream:
 		for _, val := range v.Dict.Values {
 			walkColorantUTF8(doc, val, num, add, depth+1)
 		}
@@ -367,20 +368,20 @@ func walkColorantUTF8(doc core.View, obj Object, num int, add func(string, int),
 
 // checkColorantArrayUTF8 checks a Separation/DeviceN colour-space array's
 // colorant name(s).
-func checkColorantArrayUTF8(doc core.View, arr Array, num int, add func(string, int)) {
+func checkColorantArrayUTF8(doc core.View, arr object.Array, num int, add func(string, int)) {
 	if len(arr) < 2 {
 		return
 	}
-	csType, _ := arr[0].(Name)
+	csType, _ := arr[0].(object.Name)
 	switch csType {
 	case "Separation":
-		if name, ok := arr[1].(Name); ok && !validUTF8Name(name) {
+		if name, ok := arr[1].(object.Name); ok && !validUTF8Name(name) {
 			add("the colorant name in a Separation colour space is not a valid UTF-8 string", num)
 		}
 	case "DeviceN":
-		if names, ok := doc.Resolve(arr[1]).(Array); ok {
+		if names, ok := doc.Resolve(arr[1]).(object.Array); ok {
 			for _, el := range names {
-				if name, ok := el.(Name); ok && !validUTF8Name(name) {
+				if name, ok := el.(object.Name); ok && !validUTF8Name(name) {
 					add("the colorant name in a DeviceN colour space is not a valid UTF-8 string", num)
 				}
 			}
@@ -390,15 +391,15 @@ func checkColorantArrayUTF8(doc core.View, arr Array, num int, add func(string, 
 
 // checkA4NameUTF8 checks the additional PDF/A-4 name categories: font names,
 // structure element type names, and RoleMap names.
-func checkA4NameUTF8(doc core.View, dict *Dictionary, num int, add func(string, int)) {
-	if t, _ := dict.Get("Type").(Name); t == "Font" {
-		if bf, ok := dict.Get("BaseFont").(Name); ok && !validUTF8Name(bf) {
+func checkA4NameUTF8(doc core.View, dict *object.Dictionary, num int, add func(string, int)) {
+	if t, _ := dict.Get("Type").(object.Name); t == "Font" {
+		if bf, ok := dict.Get("BaseFont").(object.Name); ok && !validUTF8Name(bf) {
 			add("the font name is not a valid UTF-8 string", num)
 		}
 	}
 	// Structure element type name.
-	if t, _ := dict.Get("Type").(Name); t == "StructElem" {
-		if s, ok := dict.Get("S").(Name); ok && !validUTF8Name(s) {
+	if t, _ := dict.Get("Type").(object.Name); t == "StructElem" {
+		if s, ok := dict.Get("S").(object.Name); ok && !validUTF8Name(s) {
 			add("the structure type name is not a valid UTF-8 string", num)
 		}
 	}
@@ -408,7 +409,7 @@ func checkA4NameUTF8(doc core.View, dict *Dictionary, num int, add func(string, 
 			if !validUTF8Name(key) {
 				add("the structure type name in RoleMap is not a valid UTF-8 string", num)
 			}
-			if val, ok := rm.Values[i].(Name); ok && !validUTF8Name(val) {
+			if val, ok := rm.Values[i].(object.Name); ok && !validUTF8Name(val) {
 				add("the structure type name in RoleMap is not a valid UTF-8 string", num)
 			}
 		}
@@ -416,7 +417,7 @@ func checkA4NameUTF8(doc core.View, dict *Dictionary, num int, add func(string, 
 }
 
 // validUTF8Name reports whether a name's bytes form valid UTF-8.
-func validUTF8Name(n Name) bool {
+func validUTF8Name(n object.Name) bool {
 	return utf8Valid([]byte(n))
 }
 
@@ -586,7 +587,7 @@ func consumeSingleEOL(raw []byte, p int) int {
 // checkHexStringFormat verifies that every hexadecimal string object contains
 // only hexadecimal digits and white space, and an even number of them
 // (PDF/A forbids the implicit trailing-zero padding of an odd-length hex
-// string). Object bodies are tokenised up to the stream keyword so binary
+// string). object.Object bodies are tokenised up to the stream keyword so binary
 // stream data is never misread as a hex string.
 func checkHexStringFormat(doc core.View, level PDFALevel, raw []byte) []ValidationError {
 	if doc.Offsets == nil {
@@ -631,7 +632,7 @@ func checkHexStringFormat(doc core.View, level PDFALevel, raw []byte) []Validati
 		})
 	}
 
-	// String objects also occur as operands inside content streams; scan the
+	// object.String objects also occur as operands inside content streams; scan the
 	// decoded content of pages, form XObjects, and tiling patterns with a
 	// content-aware tokenizer that skips inline-image binary data.
 	for num, cs := range collectContentStreamData(doc) {
@@ -739,11 +740,11 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 		if doc.Cancel.Stopped() {
 			return out
 		}
-		s, ok := iobj.Value.(*Stream)
+		s, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
-		subtype, _ := s.Dict.Get("Subtype").(Name)
+		subtype, _ := s.Dict.Get("Subtype").(object.Name)
 		isContent := subtype == "Form" || s.Dict.Get("PatternType") != nil
 		if !isContent {
 			continue
@@ -756,11 +757,11 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 	// Subtype/PatternType marker, so the loop above misses them. Pull them from
 	// each Type3 font's /CharProcs (audit C27).
 	for _, iobj := range doc.Objects {
-		fd, ok := iobj.Value.(*Dictionary)
+		fd, ok := iobj.Value.(*object.Dictionary)
 		if !ok {
 			continue
 		}
-		if st, _ := fd.Get("Subtype").(Name); st != "Type3" {
+		if st, _ := fd.Get("Subtype").(object.Name); st != "Type3" {
 			continue
 		}
 		cp := doc.ResolveDict(fd.Get("CharProcs"))
@@ -775,7 +776,7 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 			if _, done := out[num]; done {
 				continue
 			}
-			if s, ok := doc.Resolve(val).(*Stream); ok {
+			if s, ok := doc.Resolve(val).(*object.Stream); ok {
 				if data := doc.Content(s); data != nil {
 					out[num] = data
 				}
@@ -903,7 +904,7 @@ func checkStreamKeywordFormat(doc core.View, level PDFALevel, raw []byte) []Vali
 		if !ok {
 			continue
 		}
-		if _, ok := iobj.Value.(*Stream); ok {
+		if _, ok := iobj.Value.(*object.Stream); ok {
 			offs = append(offs, off)
 			recordLowestObjAt(offToNum, off, num)
 		}
@@ -1179,7 +1180,7 @@ func parseInlineImageFilter(data []byte, pos *int) []string {
 // checkStreamLength enforces that a stream's /Length entry equals the actual
 // number of bytes between the stream and endstream keywords (ISO 19005-1
 // 6.1.7, -2/-3 6.1.7, -4 6.1.6; ISO 32000-1 7.3.8.2). The parser recovers a
-// stream with an incorrect Length by locating endstream, so Stream.Data holds
+// stream with an incorrect Length by locating endstream, so object.Stream.Data holds
 // the true byte count and a divergence from the declared value is a mismatch.
 func checkStreamLength(doc core.View, level PDFALevel) []ValidationError {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
@@ -1191,11 +1192,11 @@ func checkStreamLength(doc core.View, level PDFALevel) []ValidationError {
 	}
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		s, ok := iobj.Value.(*Stream)
+		s, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
-		length, ok := doc.Resolve(s.Dict.Get("Length")).(Integer)
+		length, ok := doc.Resolve(s.Dict.Get("Length")).(object.Integer)
 		if !ok {
 			continue // absent or unresolvable Length is a separate rule
 		}
@@ -1262,12 +1263,12 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 		if err != nil {
 			continue
 		}
-		d, ok := obj.(*Dictionary)
+		d, ok := obj.(*object.Dictionary)
 		if !ok {
 			continue
 		}
-		if arr, ok := d.Get("ID").(Array); ok && len(arr) >= 1 {
-			if s, ok := arr[0].(String); ok {
+		if arr, ok := d.Get("ID").(object.Array); ok && len(arr) >= 1 {
+			if s, ok := arr[0].(object.String); ok {
 				ids = append(ids, append([]byte(nil), s.Value...))
 			}
 		}
@@ -1278,7 +1279,7 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 // checkStreamLengthBytes verifies each uncompressed stream's /Length against the
 // byte extent measured from the raw file (ISO 32000-1 7.3.8.2; PDF/A 6.1.7 /
 // 6.1.6). The parser recovers from a wrong /Length by searching for endstream,
-// so the in-memory Stream.Data can mask the defect; this measures the file
+// so the in-memory object.Stream.Data can mask the defect; this measures the file
 // directly.
 //
 // Two spec facts make the measurement unambiguous and false-positive-free:
@@ -1312,11 +1313,11 @@ func checkStreamLengthBytes(doc core.View, level PDFALevel, raw []byte) []Valida
 		if iobj == nil {
 			continue
 		}
-		s, ok := iobj.Value.(*Stream)
+		s, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
-		declared, ok := doc.Resolve(s.Dict.Get("Length")).(Integer)
+		declared, ok := doc.Resolve(s.Dict.Get("Length")).(object.Integer)
 		if !ok {
 			continue
 		}

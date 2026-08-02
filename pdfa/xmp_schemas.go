@@ -1,8 +1,9 @@
-package pdf0
+package pdfa
 
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
 
@@ -683,7 +684,7 @@ func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 func declaredTypeToPropType(vt string) (xmpPropType, bool) {
 	vt = strings.TrimSpace(vt)
 	lower := strings.ToLower(vt)
-	// Array prefixes: "Bag Text", "Seq Integer", "Alt Text", "Lang Alt".
+	// object.Array prefixes: "Bag Text", "Seq Integer", "Alt Text", "Lang Alt".
 	if lower == "lang alt" {
 		return tLangAlt(), true
 	}
@@ -745,7 +746,7 @@ func checkXMPProperties(doc core.View, level PDFALevel) []ValidationError {
 	if catalog == nil {
 		return nil
 	}
-	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*Stream)
+	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream)
 	if !ok {
 		return nil
 	}
@@ -1128,7 +1129,7 @@ func checkXMPWellFormed(doc core.View, level PDFALevel) []ValidationError {
 	if catalog == nil {
 		return nil
 	}
-	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*Stream)
+	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream)
 	if !ok {
 		return nil
 	}
@@ -1155,7 +1156,7 @@ func checkXMPWellFormed(doc core.View, level PDFALevel) []ValidationError {
 
 	xmp := core.DecodeXMPToUTF8(raw)
 	if xmp != "" {
-		// Stream the packet rather than building a node tree: well-formedness and
+		// object.Stream the packet rather than building a node tree: well-formedness and
 		// the presence of a properly namespaced rdf:RDF element are all that is
 		// needed here, and streaming stays linear on an adversarially large
 		// packet that would make tree-building blow up (see xmpPropertyMaxBytes).

@@ -1,8 +1,7 @@
-package pdf0
+package pdfa
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
@@ -76,12 +75,12 @@ func (l PDFALevel) String() string {
 	}
 }
 
-// isA reports whether l is a Level A (accessible) conformance level.
-func (l PDFALevel) isA() bool { return l == PDFA1a || l == PDFA2a || l == PDFA3a }
+// IsA reports whether l is a Level A (accessible) conformance level.
+func (l PDFALevel) IsA() bool { return l == PDFA1a || l == PDFA2a || l == PDFA3a }
 
-// baseB returns the Level B conformance level whose requirements a Level A level
+// BaseB returns the Level B conformance level whose requirements a Level A level
 // includes (1a→1b, 2a→2b, 3a→3b); for a non-A level it returns the level itself.
-func (l PDFALevel) baseB() PDFALevel {
+func (l PDFALevel) BaseB() PDFALevel {
 	switch l {
 	case PDFA1a:
 		return PDFA1b
@@ -101,34 +100,17 @@ type ValidationError struct {
 	Object  int // object number, 0 if N/A
 }
 
+// RuleID returns the ISO 19005 clause identifier.
+func (e ValidationError) RuleID() string { return e.Rule }
+
+// ObjectNum returns the anchoring object number, 0 if N/A.
+func (e ValidationError) ObjectNum() int { return e.Object }
+
 func (e ValidationError) Error() string {
 	if e.Object != 0 {
 		return fmt.Sprintf("[%s %s] object %d: %s", e.Level, e.Rule, e.Object, e.Message)
 	}
 	return fmt.Sprintf("[%s %s] %s", e.Level, e.Rule, e.Message)
-}
-
-// ValidatePDFA checks doc against the implemented rules for the given PDF/A
-// level and returns the violations found. An empty result means "none of the
-// implemented checks fired", not a guarantee of full conformance: the validator
-// covers a subset of ISO 19005 (see the package README). Because it takes no
-// raw bytes, it also skips every byte-level file-structure rule — use
-// ValidatePDFABytes when you have the file bytes and want those too.
-func ValidatePDFA(doc *Document, level PDFALevel) []ValidationError {
-	return ValidatePDFABytes(doc, level, nil)
-}
-
-// ValidatePDFAContext is ValidatePDFA with cancellation. Validating a large
-// document is the package's longest-running operation, so this is the variant a
-// caller under a deadline should use.
-//
-// When ctx ends the run stops and returns the findings gathered so far plus one
-// under the rule "limit" recording the cancellation, which IsCheckerFinding
-// reports as a checker finding. A cancelled run therefore never looks like a
-// clean bill of health: an empty result is impossible, and the caller can tell
-// "no violations found" apart from "pdf0 did not get to look". See cancel.go.
-func ValidatePDFAContext(ctx context.Context, doc *Document, level PDFALevel) []ValidationError {
-	return ValidatePDFABytesContext(ctx, doc, level, nil)
 }
 
 // runCheck runs one validation check, converting a panic into a reported
@@ -161,55 +143,13 @@ func runByteCheck(level PDFALevel, check func() []ValidationError) (out []Valida
 	return check()
 }
 
-// ValidatePDFABytes checks doc against the implemented rules for the given
-// PDF/A level and returns the violations found. If rawData is non-nil, the
-// byte-level file-structure rules run too (e.g. no data after %%EOF). An empty
-// result means no implemented check fired, not a guarantee of full conformance
-// (the validator covers a subset of ISO 19005).
-func ValidatePDFABytes(doc *Document, level PDFALevel, rawData []byte) []ValidationError {
-	return validatePDFABytes(core.Canceler{}, doc, level, rawData)
-}
-
-// ValidatePDFABytesContext is ValidatePDFABytes with cancellation; see
-// ValidatePDFAContext for how a cancelled run reports itself.
-func ValidatePDFABytesContext(ctx context.Context, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
-	return validatePDFABytes(core.NewCanceler(ctx), doc, level, rawData)
-}
-
-func validatePDFABytes(cancel core.Canceler, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
-	// Validate against a shallow copy of the Document so the per-run cache is
-	// installed on the copy, never on the caller's. The copy shares the
-	// (read-only during validation) Objects/Trailer/Offsets, so this is cheap,
-	// and it lets a caller validate one Document concurrently — across
-	// goroutines and at several levels at once — without a data race.
-	//
-	// This is the boundary: everything below reads a view.
-	runDoc := *doc
-	runDoc.valCache = newValidationCache(cancel)
-	v := runDoc.view()
-
-	// The recursive embedded-file check needs the parser, which the checks
-	// themselves do not depend on; hand it in for this run.
-	SetEmbeddedChecker(v, embeddedPDFACompliant)
-
-	errs := validatePDFAView(v, level, rawData)
-
-	// Any resource guard that tripped during the run (or while the file was
-	// read) is reported under the "limit" rule: the checks that depended on the
-	// truncated result declined to assert, so the result is "unknown", not
-	// "conformant". Read-time trips live on the Document, so this is here.
-	errs = append(errs, limitValidationErrors(&runDoc, level)...)
-	finding.Sort(errs)
-	return errs
-}
-
-// validatePDFAView runs the PDF/A pipeline over a view.
-func validatePDFAView(doc core.View, level PDFALevel, rawData []byte) []ValidationError {
+// ValidateView runs the PDF/A pipeline over a view.
+func ValidateView(doc core.View, level PDFALevel, rawData []byte) []ValidationError {
 	// Level A conformance is Level B plus the accessibility requirements; it is
 	// validated by running the Level B checks and adding the Level A rule
 	// families (see validatePDFALevelA).
-	if level.isA() {
-		return validatePDFALevelA(doc, level, rawData)
+	if level.IsA() {
+		return ValidateLevelAView(doc, level, rawData)
 	}
 
 	var errs []ValidationError
@@ -304,9 +244,9 @@ func validatePDFAView(doc core.View, level PDFALevel, rawData []byte) []Validati
 		checkEmbeddedPDFA,
 		// Inherited page XObject (6.2.2)
 		checkInheritedPageXObject,
-		// Stream /Length correctness (6.1.6/6.1.7)
+		// object.Stream /Length correctness (6.1.6/6.1.7)
 		checkStreamLength,
-		// Object stream decodability (6.1.6/6.1.7)
+		// object.Object stream decodability (6.1.6/6.1.7)
 		checkObjectStreamDecodable,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
@@ -367,7 +307,7 @@ func checkFileID(doc core.View, level PDFALevel) []ValidationError {
 			Message: "trailer must contain /ID array",
 		}}
 	}
-	arr, ok := idObj.(Array)
+	arr, ok := idObj.(object.Array)
 	if !ok {
 		return []ValidationError{{
 			Rule:    "6.1.3",
@@ -383,7 +323,7 @@ func checkFileID(doc core.View, level PDFALevel) []ValidationError {
 		}}
 	}
 	for i, elem := range arr {
-		if _, ok := elem.(String); !ok {
+		if _, ok := elem.(object.String); !ok {
 			return []ValidationError{{
 				Rule:    "6.1.3",
 				Level:   level,
@@ -496,7 +436,7 @@ func checkNoDataAfterEOF(rawData []byte, level PDFALevel) []ValidationError {
 
 // --- Catalog checks ---
 
-func getCatalog(doc core.View) *Dictionary {
+func getCatalog(doc core.View) *object.Dictionary {
 	return doc.Catalog()
 }
 
@@ -529,7 +469,7 @@ func checkMetadataStream(doc core.View, level PDFALevel) []ValidationError {
 		}}
 	}
 
-	stream, ok := metaObj.(*Stream)
+	stream, ok := metaObj.(*object.Stream)
 	if !ok {
 		return []ValidationError{{
 			Rule:    "6.7.2",
@@ -540,7 +480,7 @@ func checkMetadataStream(doc core.View, level PDFALevel) []ValidationError {
 
 	var errs []ValidationError
 
-	if t := stream.Dict.Get("Type"); t == nil || t != Name("Metadata") {
+	if t := stream.Dict.Get("Type"); t == nil || t != object.Name("Metadata") {
 		errs = append(errs, ValidationError{
 			Rule:    "6.7.2",
 			Level:   level,
@@ -548,7 +488,7 @@ func checkMetadataStream(doc core.View, level PDFALevel) []ValidationError {
 		})
 	}
 
-	if st := stream.Dict.Get("Subtype"); st == nil || st != Name("XML") {
+	if st := stream.Dict.Get("Subtype"); st == nil || st != object.Name("XML") {
 		errs = append(errs, ValidationError{
 			Rule:    "6.7.2",
 			Level:   level,
@@ -642,7 +582,7 @@ func checkOutputIntents(doc core.View, level PDFALevel) []ValidationError {
 				continue
 			}
 			pageOIObj := doc.Resolve(pageOIRef)
-			pageOIArr, ok := pageOIObj.(Array)
+			pageOIArr, ok := pageOIObj.(object.Array)
 			if !ok || len(pageOIArr) == 0 {
 				continue
 			}
@@ -678,7 +618,7 @@ func checkOutputIntents(doc core.View, level PDFALevel) []ValidationError {
 		})
 	}
 
-	arr, ok := oiObj.(Array)
+	arr, ok := oiObj.(object.Array)
 	if !ok {
 		return append(errsPageLevel, ValidationError{
 			Rule:    colourClause("outputIntent", level),
@@ -714,7 +654,7 @@ func checkOutputIntents(doc core.View, level PDFALevel) []ValidationError {
 			continue
 		}
 
-		if _, ok := s.(Name); !ok {
+		if _, ok := s.(object.Name); !ok {
 			errs = append(errs, ValidationError{
 				Rule:    colourClause("outputIntent", level),
 				Level:   level,
@@ -755,7 +695,7 @@ func checkOutputIntents(doc core.View, level PDFALevel) []ValidationError {
 	// DestOutputProfile must reference the same object — the spec covers
 	// every intent, not only the GTS_PDFA1 ones.
 	if len(arr) > 1 {
-		var profileRefs []Object
+		var profileRefs []object.Object
 		for _, elem := range arr {
 			dict := doc.ResolveDict(elem)
 			if dict == nil {
@@ -766,8 +706,8 @@ func checkOutputIntents(doc core.View, level PDFALevel) []ValidationError {
 			}
 		}
 		for j := 1; j < len(profileRefs); j++ {
-			ref0, ok0 := profileRefs[0].(IndirectRef)
-			refJ, okJ := profileRefs[j].(IndirectRef)
+			ref0, ok0 := profileRefs[0].(object.IndirectRef)
+			refJ, okJ := profileRefs[j].(object.IndirectRef)
 			if ok0 && okJ {
 				if ref0.Number != refJ.Number {
 					errs = append(errs, ValidationError{
@@ -814,7 +754,7 @@ func checkOutputIntentProfile(doc core.View, level PDFALevel) []ValidationError 
 	}
 
 	oiObj := doc.Resolve(oiRef)
-	arr, ok := oiObj.(Array)
+	arr, ok := oiObj.(object.Array)
 	if !ok || len(arr) == 0 {
 		return nil
 	}
@@ -830,7 +770,7 @@ func checkOutputIntentProfile(doc core.View, level PDFALevel) []ValidationError 
 			continue
 		}
 		profObj := doc.Resolve(profRef)
-		profStream, ok := profObj.(*Stream)
+		profStream, ok := profObj.(*object.Stream)
 		if !ok {
 			continue
 		}
@@ -844,7 +784,7 @@ func checkOutputIntentProfile(doc core.View, level PDFALevel) []ValidationError 
 			})
 			continue
 		}
-		nVal, ok := nObj.(Integer)
+		nVal, ok := nObj.(object.Integer)
 		if !ok {
 			continue
 		}
@@ -1025,22 +965,22 @@ func checkPermsDict(doc core.View, level PDFALevel) []ValidationError {
 	// DigestLocation/DigestMethod/DigestValue keys in its signature reference
 	// dictionaries (ISO 19005-2, 6.1.12).
 	if sigDict := doc.ResolveDict(permsDict.Get("DocMDP")); sigDict != nil {
-		refArr, ok := doc.Resolve(sigDict.Get("Reference")).(Array)
+		refArr, ok := doc.Resolve(sigDict.Get("Reference")).(object.Array)
 		if !ok {
-			if a, isArr := sigDict.Get("Reference").(Array); isArr {
+			if a, isArr := sigDict.Get("Reference").(object.Array); isArr {
 				refArr = a
 			}
 		}
 		for _, el := range refArr {
 			refDict := doc.ResolveDict(el)
 			if refDict == nil {
-				if d, isDict := el.(*Dictionary); isDict {
+				if d, isDict := el.(*object.Dictionary); isDict {
 					refDict = d
 				} else {
 					continue
 				}
 			}
-			for _, forbidden := range []Name{"DigestLocation", "DigestMethod", "DigestValue"} {
+			for _, forbidden := range []object.Name{"DigestLocation", "DigestMethod", "DigestValue"} {
 				if refDict.Get(forbidden) != nil {
 					errs = append(errs, ValidationError{
 						Rule:    "6.1.12",
@@ -1054,7 +994,7 @@ func checkPermsDict(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-// --- Stream checks (6.1.6) ---
+// --- object.Stream checks (6.1.6) ---
 
 // filterClause returns the stream-filter rule's ISO clause for the level: only
 // the standard filters (Table 6) are permitted, so LZWDecode and any
@@ -1074,7 +1014,7 @@ func filterClause(level PDFALevel) string {
 func checkNoLZW(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
@@ -1122,7 +1062,7 @@ func checkSignatureByteRange(doc core.View, level PDFALevel, raw []byte) []Valid
 	}
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
+		dict, ok := iobj.Value.(*object.Dictionary)
 		if !ok {
 			continue
 		}
@@ -1132,14 +1072,14 @@ func checkSignatureByteRange(doc core.View, level PDFALevel, raw []byte) []Valid
 		if brObj == nil || dict.Get("Contents") == nil {
 			continue
 		}
-		if t, _ := dict.Get("Type").(Name); t != "" && t != "Sig" && t != "DocTimeStamp" {
+		if t, _ := dict.Get("Type").(object.Name); t != "" && t != "Sig" && t != "DocTimeStamp" {
 			continue
 		}
 
 		bad := func(msg string) {
 			errs = append(errs, ValidationError{Rule: "6.4.3", Level: level, Message: msg, Object: num})
 		}
-		br, ok := doc.Resolve(brObj).(Array)
+		br, ok := doc.Resolve(brObj).(object.Array)
 		if !ok || len(br) != 4 {
 			bad("signature /ByteRange must be an array of four integers")
 			continue
@@ -1147,7 +1087,7 @@ func checkSignatureByteRange(doc core.View, level PDFALevel, raw []byte) []Valid
 		var v [4]int64
 		malformed := false
 		for i, e := range br {
-			n, ok := doc.Resolve(e).(Integer)
+			n, ok := doc.Resolve(e).(object.Integer)
 			if !ok {
 				malformed = true
 				break
@@ -1178,7 +1118,7 @@ func checkSignatureByteRange(doc core.View, level PDFALevel, raw []byte) []Valid
 		// certificate and hold exactly one SignerInfo. Only applies when the blob
 		// parses as CMS SignedData — an adbe.x509.rsa_sha1 signature stores a raw
 		// value and its certificate in /Cert instead.
-		if c, ok := doc.Resolve(dict.Get("Contents")).(String); ok {
+		if c, ok := doc.Resolve(dict.Get("Contents")).(object.String); ok {
 			if info := core.ParseCMSSignedData(c.Value); info.Parsed {
 				if !info.HasCertificate {
 					bad("signature PKCS#7 data must contain the signing certificate")
@@ -1192,7 +1132,7 @@ func checkSignatureByteRange(doc core.View, level PDFALevel, raw []byte) []Valid
 	return errs
 }
 
-func isStandardFilter(name Name) bool {
+func isStandardFilter(name object.Name) bool {
 	switch name {
 	case "ASCIIHexDecode", "ASCII85Decode", "LZWDecode", "FlateDecode",
 		"RunLengthDecode", "CCITTFaxDecode", "JBIG2Decode", "DCTDecode",
@@ -1202,19 +1142,19 @@ func isStandardFilter(name Name) bool {
 	return false
 }
 
-func getNonStandardFilter(stream *Stream) string {
+func getNonStandardFilter(stream *object.Stream) string {
 	f := stream.Dict.Get("Filter")
 	if f == nil {
 		return ""
 	}
-	if name, ok := f.(Name); ok {
+	if name, ok := f.(object.Name); ok {
 		if !isStandardFilter(name) {
 			return string(name)
 		}
 	}
-	if arr, ok := f.(Array); ok {
+	if arr, ok := f.(object.Array); ok {
 		for _, elem := range arr {
-			if name, ok := elem.(Name); ok && !isStandardFilter(name) {
+			if name, ok := elem.(object.Name); ok && !isStandardFilter(name) {
 				return string(name)
 			}
 		}
@@ -1222,17 +1162,17 @@ func getNonStandardFilter(stream *Stream) string {
 	return ""
 }
 
-func hasFilter(stream *Stream, filterName string) bool {
+func hasFilter(stream *object.Stream, filterName string) bool {
 	f := stream.Dict.Get("Filter")
 	if f == nil {
 		return false
 	}
-	if name, ok := f.(Name); ok {
+	if name, ok := f.(object.Name); ok {
 		return string(name) == filterName
 	}
-	if arr, ok := f.(Array); ok {
+	if arr, ok := f.(object.Array); ok {
 		for _, elem := range arr {
-			if name, ok := elem.(Name); ok && string(name) == filterName {
+			if name, ok := elem.(object.Name); ok && string(name) == filterName {
 				return true
 			}
 		}
@@ -1240,15 +1180,15 @@ func hasFilter(stream *Stream, filterName string) bool {
 	return false
 }
 
-// Rule 6.1.6.1-2: Stream dict cannot contain F, FFilter, or FDecodeParms.
+// Rule 6.1.6.1-2: object.Stream dict cannot contain F, FFilter, or FDecodeParms.
 func checkNoExternalStreams(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
-		for _, key := range []Name{"F", "FFilter", "FDecodeParms"} {
+		for _, key := range []object.Name{"F", "FFilter", "FDecodeParms"} {
 			if stream.Dict.Get(key) != nil {
 				errs = append(errs, ValidationError{
 					Rule:    "6.1.6",
@@ -1284,7 +1224,7 @@ func checkFontsEmbedded(doc core.View, level PDFALevel) []ValidationError {
 	// "used for rendering" and need not be embedded (the corpus passes an
 	// unembedded Type1 shown in mode 3).
 	usage := core.CollectFontTextUsage(doc)
-	exemptInvisible := make(map[*Dictionary]bool)
+	exemptInvisible := make(map[*object.Dictionary]bool)
 	for d, u := range usage {
 		if !rendersVisibly(u) {
 			exemptInvisible[d] = true
@@ -1295,7 +1235,7 @@ func checkFontsEmbedded(doc core.View, level PDFALevel) []ValidationError {
 	// glyph procedures never appear in the page-tree /Resources that
 	// collectFonts walks, so they would escape the embedding rule. Include the
 	// executed-content fonts too (audit C21), deduped by dictionary pointer.
-	checked := make(map[*Dictionary]bool, len(fonts))
+	checked := make(map[*object.Dictionary]bool, len(fonts))
 	for objNum, fontDict := range fonts {
 		checked[fontDict] = true
 		if exemptInvisible[fontDict] {
@@ -1322,7 +1262,7 @@ func checkFontsEmbedded(doc core.View, level PDFALevel) []ValidationError {
 // on a document with hundreds of thousands of objects (audit C34). The 0-on-miss
 // convention here matches the "unknown object" sentinel used in
 // ValidationError.Object; dictObjNum itself reports -1 on miss.
-func objNumForDict(doc core.View, dict *Dictionary) int {
+func objNumForDict(doc core.View, dict *object.Dictionary) int {
 	if n := doc.DictObjNum(dict); n >= 0 {
 		return n
 	}
@@ -1331,14 +1271,14 @@ func objNumForDict(doc core.View, dict *Dictionary) int {
 
 // fontObjNum returns the object number of a font dictionary, or 0 if it is a
 // direct dictionary with no indirect identity.
-func fontObjNum(doc core.View, fontDict *Dictionary) int {
+func fontObjNum(doc core.View, fontDict *object.Dictionary) int {
 	return objNumForDict(doc, fontDict)
 }
 
 // checkOneFontEmbedded applies the 6.2.10 embedding rule to a single font
 // dictionary.
-func checkOneFontEmbedded(doc core.View, fontDict *Dictionary, objNum int, level PDFALevel) []ValidationError {
-	subtypeName, _ := fontDict.Get("Subtype").(Name)
+func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int, level PDFALevel) []ValidationError {
+	subtypeName, _ := fontDict.Get("Subtype").(object.Name)
 
 	// Type3 fonts define their glyphs with content streams, so they carry no
 	// font program to embed. Type0 (composite) fonts DO require embedding —
@@ -1350,7 +1290,7 @@ func checkOneFontEmbedded(doc core.View, fontDict *Dictionary, objNum int, level
 	fdRef := fontDict.Get("FontDescriptor")
 	if fdRef == nil {
 		// Composite fonts (Type0): check the descendant CIDFont's descriptor
-		if dfArr, ok := doc.Resolve(fontDict.Get("DescendantFonts")).(Array); ok && len(dfArr) > 0 {
+		if dfArr, ok := doc.Resolve(fontDict.Get("DescendantFonts")).(object.Array); ok && len(dfArr) > 0 {
 			if cidFont := doc.ResolveDict(dfArr[0]); cidFont != nil {
 				fdRef = cidFont.Get("FontDescriptor")
 			}
@@ -1378,13 +1318,13 @@ func checkOneFontEmbedded(doc core.View, fontDict *Dictionary, objNum int, level
 
 	// The FontFile entry must resolve to an actual stream: the corpus
 	// fails a descriptor whose FontFile3 references a missing object.
-	for _, key := range []Name{"FontFile", "FontFile2", "FontFile3"} {
-		if _, ok := doc.Resolve(fd.Get(key)).(*Stream); ok {
+	for _, key := range []object.Name{"FontFile", "FontFile2", "FontFile3"} {
+		if _, ok := doc.Resolve(fd.Get(key)).(*object.Stream); ok {
 			return nil
 		}
 	}
 	baseFontName := ""
-	if bn, ok := fontDict.Get("BaseFont").(Name); ok {
+	if bn, ok := fontDict.Get("BaseFont").(object.Name); ok {
 		baseFontName = string(bn)
 	}
 	return []ValidationError{{
@@ -1395,14 +1335,14 @@ func checkOneFontEmbedded(doc core.View, fontDict *Dictionary, objNum int, level
 	}}
 }
 
-func collectFonts(doc core.View, pageTreeRef Object) map[int]*Dictionary {
-	fonts := make(map[int]*Dictionary)
+func collectFonts(doc core.View, pageTreeRef object.Object) map[int]*object.Dictionary {
+	fonts := make(map[int]*object.Dictionary)
 	collectFontsRecursive(doc, pageTreeRef, fonts, make(map[int]bool))
 	return fonts
 }
 
-func collectFontsRecursive(doc core.View, ref Object, fonts map[int]*Dictionary, seen map[int]bool) {
-	if r, ok := ref.(IndirectRef); ok {
+func collectFontsRecursive(doc core.View, ref object.Object, fonts map[int]*object.Dictionary, seen map[int]bool) {
+	if r, ok := ref.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle in the page tree
 		}
@@ -1413,11 +1353,11 @@ func collectFontsRecursive(doc core.View, ref Object, fonts map[int]*Dictionary,
 		return
 	}
 
-	nodeType, _ := node.Get("Type").(Name)
+	nodeType, _ := node.Get("Type").(object.Name)
 
 	if nodeType == "Pages" {
 		kidsObj := doc.Resolve(node.Get("Kids"))
-		if kids, ok := kidsObj.(Array); ok {
+		if kids, ok := kidsObj.(object.Array); ok {
 			for _, kid := range kids {
 				collectFontsRecursive(doc, kid, fonts, seen)
 			}
@@ -1428,7 +1368,7 @@ func collectFontsRecursive(doc core.View, ref Object, fonts map[int]*Dictionary,
 	}
 }
 
-func collectFontsFromResources(doc core.View, pageOrPages *Dictionary, fonts map[int]*Dictionary) {
+func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fonts map[int]*object.Dictionary) {
 	resRef := pageOrPages.Get("Resources")
 	if resRef == nil {
 		return
@@ -1449,7 +1389,7 @@ func collectFontsFromResources(doc core.View, pageOrPages *Dictionary, fonts map
 
 	for _, fontRef := range fontDict.Values {
 		objNum := 0
-		if iref, ok := fontRef.(IndirectRef); ok {
+		if iref, ok := fontRef.(object.IndirectRef); ok {
 			objNum = iref.Number
 		}
 
@@ -1468,7 +1408,7 @@ func collectFontsFromResources(doc core.View, pageOrPages *Dictionary, fonts map
 
 // Allowed annotation subtypes per PDF/A level.
 // Rule 6.3.1-1.
-var allowedAnnotSubtypes = map[PDFALevel]map[Name]bool{
+var allowedAnnotSubtypes = map[PDFALevel]map[object.Name]bool{
 	PDFA4: {
 		"Text": true, "Link": true, "FreeText": true, "Line": true,
 		"Square": true, "Circle": true, "Polygon": true, "PolyLine": true,
@@ -1484,7 +1424,7 @@ var allowedAnnotSubtypes = map[PDFALevel]map[Name]bool{
 
 func init() {
 	// PDF/A-2b/3b allowed subtypes (per ISO 19005-2/3 clause 6.5.1)
-	pdfa2bAnnots := map[Name]bool{
+	pdfa2bAnnots := map[object.Name]bool{
 		"Text": true, "Link": true, "FreeText": true, "Line": true,
 		"Square": true, "Circle": true, "Polygon": true, "PolyLine": true,
 		"Highlight": true, "Underline": true, "Squiggly": true, "StrikeOut": true,
@@ -1496,7 +1436,7 @@ func init() {
 	allowedAnnotSubtypes[PDFA3b] = pdfa2bAnnots
 
 	// PDF/A-1b allowed subtypes (per ISO 19005-1 clause 6.5.1)
-	allowedAnnotSubtypes[PDFA1b] = map[Name]bool{
+	allowedAnnotSubtypes[PDFA1b] = map[object.Name]bool{
 		"Text": true, "Link": true, "FreeText": true, "Line": true,
 		"Square": true, "Circle": true, "Highlight": true, "Underline": true,
 		"Squiggly": true, "StrikeOut": true, "Stamp": true, "Ink": true,
@@ -1508,7 +1448,7 @@ func init() {
 // used for error attribution: the annotation's own number, or the owning
 // page's number when the annotation is a direct dictionary inside /Annots.
 type annotOccurrence struct {
-	dict *Dictionary
+	dict *object.Dictionary
 	num  int
 }
 
@@ -1526,12 +1466,12 @@ func collectDirectAnnotations(doc core.View) []annotOccurrence {
 	}
 	var out []annotOccurrence
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
-		annots, ok := doc.Resolve(page.Dict.Get("Annots")).(Array)
+		annots, ok := doc.Resolve(page.Dict.Get("Annots")).(object.Array)
 		if !ok {
 			continue
 		}
 		for _, el := range annots {
-			if dict, ok := el.(*Dictionary); ok {
+			if dict, ok := el.(*object.Dictionary); ok {
 				out = append(out, annotOccurrence{dict: dict, num: page.ObjNum})
 			}
 		}
@@ -1544,11 +1484,11 @@ func collectDirectAnnotations(doc core.View) []annotOccurrence {
 }
 
 // resolveName resolves obj (following an indirect reference) and returns it as
-// a Name. Rules must resolve before type-asserting: a value placed behind an
+// a object.Name. Rules must resolve before type-asserting: a value placed behind an
 // indirect reference — e.g. /Subtype 12 0 R — would otherwise silently evade
 // the check (audit C12).
-func resolveName(doc core.View, obj Object) (Name, bool) {
-	n, ok := doc.Resolve(obj).(Name)
+func resolveName(doc core.View, obj object.Object) (object.Name, bool) {
+	n, ok := doc.Resolve(obj).(object.Name)
 	return n, ok
 }
 
@@ -1559,14 +1499,14 @@ func checkAnnotationSubtypes(doc core.View, level PDFALevel) []ValidationError {
 	}
 	// PDF/A-4e permits 3D and RichMedia annotations (they carry the embedded
 	// 3D/multimedia content that "e" stands for); plain PDF/A-4 forbids them.
-	extra := map[Name]bool{}
+	extra := map[object.Name]bool{}
 	if level == PDFA4 && pdfaConformanceFlag(doc) == "E" {
 		extra["3D"] = true
 		extra["RichMedia"] = true
 	}
 
 	var errs []ValidationError
-	check := func(dict *Dictionary, num int) {
+	check := func(dict *object.Dictionary, num int) {
 		st, ok := resolveName(doc, dict.Get("Subtype"))
 		if !ok {
 			return
@@ -1581,7 +1521,7 @@ func checkAnnotationSubtypes(doc core.View, level PDFALevel) []ValidationError {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(dict) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -1592,11 +1532,11 @@ func checkAnnotationSubtypes(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // annotOpacity returns an annotation /CA value as a float, if it is numeric.
-func annotOpacity(v Object) (float64, bool) {
+func annotOpacity(v object.Object) (float64, bool) {
 	switch n := v.(type) {
-	case Integer:
+	case object.Integer:
 		return float64(n), true
-	case Real:
+	case object.Real:
 		return float64(n), true
 	}
 	return 0, false
@@ -1606,7 +1546,7 @@ func annotOpacity(v Object) (float64, bool) {
 // Hidden/Invisible/ToggleNoView/NoView clear.
 func checkAnnotationFlags(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
-	check := func(dict *Dictionary, num int) {
+	check := func(dict *object.Dictionary, num int) {
 		// 6.5.3: at PDF/A-1, an annotation's /CA (constant opacity) must be 1.0
 		// — annotation transparency is not permitted. This applies to every
 		// annotation subtype, so it precedes the Popup exemption below.
@@ -1622,7 +1562,7 @@ func checkAnnotationFlags(doc core.View, level PDFALevel) []ValidationError {
 		}
 
 		// Popup annotations are exempt from F requirement
-		st, _ := dict.Get("Subtype").(Name)
+		st, _ := dict.Get("Subtype").(object.Name)
 		if st == "Popup" {
 			return
 		}
@@ -1637,7 +1577,7 @@ func checkAnnotationFlags(doc core.View, level PDFALevel) []ValidationError {
 			})
 			return
 		}
-		flags, ok := doc.Resolve(fObj).(Integer)
+		flags, ok := doc.Resolve(fObj).(object.Integer)
 		if !ok {
 			return
 		}
@@ -1692,7 +1632,7 @@ func checkAnnotationFlags(doc core.View, level PDFALevel) []ValidationError {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(dict) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -1705,8 +1645,8 @@ func checkAnnotationFlags(doc core.View, level PDFALevel) []ValidationError {
 // Rule 6.3.3-1: Annotations need AP except Popup, Link, Projection, and zero-area rects.
 func checkAnnotationAppearance(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
-	check := func(dict *Dictionary, num int) {
-		st, _ := dict.Get("Subtype").(Name)
+	check := func(dict *object.Dictionary, num int) {
+		st, _ := dict.Get("Subtype").(object.Name)
 
 		// Exempt subtypes
 		if st == "Popup" || st == "Link" || st == "Projection" {
@@ -1758,7 +1698,7 @@ func checkAnnotationAppearance(doc core.View, level PDFALevel) []ValidationError
 		// For a Widget of button field type (FT Btn), the N appearance shall
 		// be a sub-dictionary of appearance states, not a single stream.
 		if st == "Widget" && annotFieldType(doc, dict) == "Btn" {
-			if _, ok := doc.Resolve(apDict.Get("N")).(*Dictionary); !ok {
+			if _, ok := doc.Resolve(apDict.Get("N")).(*object.Dictionary); !ok {
 				errs = append(errs, ValidationError{
 					Rule:    annotActionClause("appearance", level),
 					Level:   level,
@@ -1769,7 +1709,7 @@ func checkAnnotationAppearance(doc core.View, level PDFALevel) []ValidationError
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(dict) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -1781,10 +1721,10 @@ func checkAnnotationAppearance(doc core.View, level PDFALevel) []ValidationError
 
 // annotFieldType returns the form field type (FT) governing a widget
 // annotation: its own FT, or an inherited one from its /Parent field chain.
-func annotFieldType(doc core.View, dict *Dictionary) Name {
+func annotFieldType(doc core.View, dict *object.Dictionary) object.Name {
 	node := dict
 	for hops := 0; node != nil && hops < 32; hops++ {
-		if ft, ok := node.Get("FT").(Name); ok {
+		if ft, ok := node.Get("FT").(object.Name); ok {
 			return ft
 		}
 		node = doc.ResolveDict(node.Get("Parent"))
@@ -1792,17 +1732,17 @@ func annotFieldType(doc core.View, dict *Dictionary) Name {
 	return ""
 }
 
-func isZeroAreaRect(obj Object) bool {
-	arr, ok := obj.(Array)
+func isZeroAreaRect(obj object.Object) bool {
+	arr, ok := obj.(object.Array)
 	if !ok || len(arr) != 4 {
 		return false
 	}
 	vals := make([]float64, 4)
 	for i, elem := range arr {
 		switch v := elem.(type) {
-		case Integer:
+		case object.Integer:
 			vals[i] = float64(v)
-		case Real:
+		case object.Real:
 			vals[i] = float64(v)
 		default:
 			return false
@@ -1817,8 +1757,8 @@ func isZeroAreaRect(obj Object) bool {
 // Rule 6.4.1-1: Widget annotation cannot contain A key.
 func checkWidgetNoAction(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
-	check := func(dict *Dictionary, num int) {
-		st, _ := dict.Get("Subtype").(Name)
+	check := func(dict *object.Dictionary, num int) {
+		st, _ := dict.Get("Subtype").(object.Name)
 		if st != "Widget" {
 			return
 		}
@@ -1832,7 +1772,7 @@ func checkWidgetNoAction(doc core.View, level PDFALevel) []ValidationError {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok {
 			check(dict, num)
 		}
 	}
@@ -1884,7 +1824,7 @@ func checkNeedAppearances(doc core.View, level PDFALevel) []ValidationError {
 	if na == nil {
 		return nil
 	}
-	if b, ok := na.(Boolean); ok && bool(b) {
+	if b, ok := na.(object.Boolean); ok && bool(b) {
 		return []ValidationError{{
 			Rule:    "6.4.1",
 			Level:   level,
@@ -1898,9 +1838,9 @@ func checkNeedAppearances(doc core.View, level PDFALevel) []ValidationError {
 
 // Forbidden action types by level per ISO 19005.
 // Rule 6.6.1-1.
-func isForbiddenAction(s Name, level PDFALevel, conformance string) bool {
+func isForbiddenAction(s object.Name, level PDFALevel, conformance string) bool {
 	// Universally forbidden across all PDF/A levels:
-	universallyForbidden := map[Name]bool{
+	universallyForbidden := map[object.Name]bool{
 		"Launch":     true,
 		"Sound":      true,
 		"Movie":      true,
@@ -1917,7 +1857,7 @@ func isForbiddenAction(s Name, level PDFALevel, conformance string) bool {
 	switch level {
 	case PDFA1b, PDFA2b, PDFA3b:
 		// Additionally forbidden in parts 1-3:
-		forbidden123 := map[Name]bool{
+		forbidden123 := map[object.Name]bool{
 			"JavaScript":  true,
 			"SetOCGState": true,
 			"GoTo3DView":  true,
@@ -1933,7 +1873,7 @@ func isForbiddenAction(s Name, level PDFALevel, conformance string) bool {
 		if conformance == "E" {
 			return s == "SetState" || s == "NOP"
 		}
-		forbidden4 := map[Name]bool{
+		forbidden4 := map[object.Name]bool{
 			"SetOCGState": true,
 			"GoTo3DView":  true,
 			"SetState":    true,
@@ -1965,7 +1905,7 @@ func checkNoForbiddenActions(doc core.View, level PDFALevel) []ValidationError {
 
 	// Check all objects for /A and action dictionaries
 	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
+		dict, ok := iobj.Value.(*object.Dictionary)
 		if !ok {
 			continue
 		}
@@ -1976,9 +1916,9 @@ func checkNoForbiddenActions(doc core.View, level PDFALevel) []ValidationError {
 		}
 
 		// Check if the object itself is an action dict (has /S and /Type=Action or no /Type)
-		if s, ok := dict.Get("S").(Name); ok {
+		if s, ok := dict.Get("S").(object.Name); ok {
 			typeObj := dict.Get("Type")
-			isAction := typeObj == nil || typeObj == Name("Action")
+			isAction := typeObj == nil || typeObj == object.Name("Action")
 			if isAction && isForbiddenAction(s, level, conformance) {
 				errs = append(errs, ValidationError{
 					Rule:    annotActionClause("forbidden", level),
@@ -1994,7 +1934,7 @@ func checkNoForbiddenActions(doc core.View, level PDFALevel) []ValidationError {
 	// to the object scan above. Check their direct /A actions explicitly (an
 	// indirect /A resolves to a top-level object the scan already covers).
 	for _, a := range collectDirectAnnotations(doc) {
-		if actionDict, ok := a.dict.Get("A").(*Dictionary); ok {
+		if actionDict, ok := a.dict.Get("A").(*object.Dictionary); ok {
 			errs = append(errs, checkActionObject(doc, actionDict, a.num, level, conformance)...)
 		}
 	}
@@ -2002,16 +1942,16 @@ func checkNoForbiddenActions(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func checkActionObject(doc core.View, ref Object, objNum int, level PDFALevel, conformance string) []ValidationError {
+func checkActionObject(doc core.View, ref object.Object, objNum int, level PDFALevel, conformance string) []ValidationError {
 	var errs []ValidationError
-	checkActionChain(doc, ref, objNum, level, conformance, &errs, make(map[*Dictionary]bool))
+	checkActionChain(doc, ref, objNum, level, conformance, &errs, make(map[*object.Dictionary]bool))
 	return errs
 }
 
 // checkActionChain validates one action dictionary and follows its /Next
 // entry (a single action or an array of actions), which previous versions
 // ignored entirely — a legal action whose /Next launches JavaScript passed.
-func checkActionChain(doc core.View, ref Object, objNum int, level PDFALevel, conformance string, errs *[]ValidationError, seen map[*Dictionary]bool) {
+func checkActionChain(doc core.View, ref object.Object, objNum int, level PDFALevel, conformance string, errs *[]ValidationError, seen map[*object.Dictionary]bool) {
 	// ref might be an action dict or an array (for OpenAction destination)
 	actionDict := doc.ResolveDict(ref)
 	if actionDict == nil || seen[actionDict] {
@@ -2019,7 +1959,7 @@ func checkActionChain(doc core.View, ref Object, objNum int, level PDFALevel, co
 	}
 	seen[actionDict] = true
 
-	if s, ok := actionDict.Get("S").(Name); ok && isForbiddenAction(s, level, conformance) {
+	if s, ok := actionDict.Get("S").(object.Name); ok && isForbiddenAction(s, level, conformance) {
 		*errs = append(*errs, ValidationError{
 			Rule:    annotActionClause("forbidden", level),
 			Level:   level,
@@ -2029,9 +1969,9 @@ func checkActionChain(doc core.View, ref Object, objNum int, level PDFALevel, co
 	}
 
 	switch next := doc.Resolve(actionDict.Get("Next")).(type) {
-	case *Dictionary:
+	case *object.Dictionary:
 		checkActionChain(doc, next, objNum, level, conformance, errs, seen)
-	case Array:
+	case object.Array:
 		for _, el := range next {
 			checkActionChain(doc, el, objNum, level, conformance, errs, seen)
 		}
@@ -2048,7 +1988,7 @@ func checkNamedActions(doc core.View, level PDFALevel) []ValidationError {
 	}
 
 	var errs []ValidationError
-	check := func(dict *Dictionary, num int) {
+	check := func(dict *object.Dictionary, num int) {
 		s, _ := resolveName(doc, dict.Get("S"))
 		if s != "Named" {
 			return
@@ -2067,14 +2007,14 @@ func checkNamedActions(doc core.View, level PDFALevel) []ValidationError {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok {
 			check(dict, num)
 		}
 	}
 	// Direct annotations may carry direct action dictionaries that never
 	// appear as top-level objects (an indirect /A is already covered above).
 	for _, a := range collectDirectAnnotations(doc) {
-		if actionDict, ok := a.dict.Get("A").(*Dictionary); ok {
+		if actionDict, ok := a.dict.Get("A").(*object.Dictionary); ok {
 			check(actionDict, a.num)
 		}
 	}
@@ -2093,7 +2033,7 @@ func checkAnnotationAA(doc core.View, level PDFALevel) []ValidationError {
 	// ISO 19005-1 6.5.3 / 19005-2 6.3.3: an annotation dictionary shall not
 	// contain the AA key — for ANY annotation, not only widgets/form fields.
 	var errs []ValidationError
-	check := func(dict *Dictionary, num int) {
+	check := func(dict *object.Dictionary, num int) {
 		if dict.Get("AA") != nil {
 			errs = append(errs, ValidationError{
 				Rule:    "6.6.3",
@@ -2104,7 +2044,7 @@ func checkAnnotationAA(doc core.View, level PDFALevel) []ValidationError {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && (core.IsAnnotation(dict) || isWidgetOrField(dict)) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && (core.IsAnnotation(dict) || isWidgetOrField(dict)) {
 			check(dict, num)
 		}
 	}
@@ -2117,8 +2057,8 @@ func checkAnnotationAA(doc core.View, level PDFALevel) []ValidationError {
 // isWidgetOrField reports whether dict is a widget annotation or an interactive
 // form field, which the /AA prohibition also covers and which need not carry
 // the /Rect that core.IsAnnotation looks for.
-func isWidgetOrField(dict *Dictionary) bool {
-	if st, ok := dict.Get("Subtype").(Name); ok && st == "Widget" {
+func isWidgetOrField(dict *object.Dictionary) bool {
+	if st, ok := dict.Get("Subtype").(object.Name); ok && st == "Widget" {
 		return true
 	}
 	return dict.Get("FT") != nil
@@ -2167,7 +2107,7 @@ func checkMetadataVersion(doc core.View, level PDFALevel) []ValidationError {
 		return nil
 	}
 
-	stream, ok := metaObj.(*Stream)
+	stream, ok := metaObj.(*object.Stream)
 	if !ok {
 		return nil
 	}
@@ -2300,7 +2240,7 @@ func checkNoTransparency(doc core.View, level PDFALevel) []ValidationError {
 			if groupDict == nil {
 				continue
 			}
-			s, _ := groupDict.Get("S").(Name)
+			s, _ := groupDict.Get("S").(object.Name)
 			if s == "Transparency" {
 				errs = append(errs, ValidationError{
 					Rule:    "6.4",
@@ -2317,7 +2257,7 @@ func checkNoTransparency(doc core.View, level PDFALevel) []ValidationError {
 	// graphics-state parameter, so walk page resources for the XObject-level
 	// signals too.
 	if catalog != nil {
-		seen := map[*Dictionary]bool{}
+		seen := map[*object.Dictionary]bool{}
 		for _, page := range doc.Pages(catalog.Get("Pages")) {
 			find1bTransparencyXObjects(doc, page.Dict, level, seen, &errs)
 		}
@@ -2330,7 +2270,7 @@ func checkNoTransparency(doc core.View, level PDFALevel) []ValidationError {
 
 		smask := gs.Get("SMask")
 		if smask != nil {
-			if n, ok := smask.(Name); ok && n == "None" {
+			if n, ok := smask.(object.Name); ok && n == "None" {
 				// acceptable
 			} else {
 				errs = append(errs, ValidationError{
@@ -2344,7 +2284,7 @@ func checkNoTransparency(doc core.View, level PDFALevel) []ValidationError {
 
 		bm := gs.Get("BM")
 		if bm != nil {
-			if n, ok := bm.(Name); ok {
+			if n, ok := bm.(object.Name); ok {
 				if n != "Normal" && n != "Compatible" {
 					errs = append(errs, ValidationError{
 						Rule:    "6.4",
@@ -2356,14 +2296,14 @@ func checkNoTransparency(doc core.View, level PDFALevel) []ValidationError {
 			}
 		}
 
-		for _, key := range []Name{"CA", "ca"} {
+		for _, key := range []object.Name{"CA", "ca"} {
 			v := gs.Get(key)
 			if v != nil {
 				val := 1.0
 				switch tv := v.(type) {
-				case Real:
+				case object.Real:
 					val = float64(tv)
-				case Integer:
+				case object.Integer:
 					val = float64(tv)
 				}
 				if math.Abs(val-1.0) > 1e-6 {
@@ -2382,7 +2322,7 @@ func checkNoTransparency(doc core.View, level PDFALevel) []ValidationError {
 
 // extGStateEntry holds a resolved ExtGState dictionary and its source object number.
 type extGStateEntry struct {
-	dict   *Dictionary
+	dict   *object.Dictionary
 	objNum int
 }
 
@@ -2390,10 +2330,10 @@ type extGStateEntry struct {
 // in all pages, Form XObjects, and Type3 fonts. This avoids relying on the optional
 // /Type key which many ExtGState objects don't have.
 func collectAllExtGState(doc core.View) []extGStateEntry {
-	seen := make(map[*Dictionary]bool)
+	seen := make(map[*object.Dictionary]bool)
 	var entries []extGStateEntry
 
-	addFromResources := func(res *Dictionary, fallbackObjNum int) {
+	addFromResources := func(res *object.Dictionary, fallbackObjNum int) {
 		gsRef := res.Get("ExtGState")
 		if gsRef == nil {
 			return
@@ -2404,7 +2344,7 @@ func collectAllExtGState(doc core.View) []extGStateEntry {
 		}
 		for _, val := range gsDict.Values {
 			objNum := fallbackObjNum
-			if iref, ok := val.(IndirectRef); ok {
+			if iref, ok := val.(object.IndirectRef); ok {
 				objNum = iref.Number
 			}
 			gs := doc.ResolveDict(val)
@@ -2424,7 +2364,7 @@ func collectAllExtGState(doc core.View) []extGStateEntry {
 	// In ascending object-number order, not doc.Objects map order. A graphics
 	// state written as a DIRECT dictionary takes its object number from the
 	// container that reached it (fallbackObjNum), and one /Resources object is
-	// routinely shared by many pages — so the same *Dictionary is offered by
+	// routinely shared by many pages — so the same *object.Dictionary is offered by
 	// several containers and seen keeps only the first. Which container that was
 	// came from Go's randomised map iteration, so a /CA or /SMask violation on a
 	// shared graphics state reported a different object number on every run over
@@ -2432,7 +2372,7 @@ func collectAllExtGState(doc core.View) []extGStateEntry {
 	// reproducible; that is load-bearing, since reports are diffed run to run.
 	for _, num := range doc.SortedObjectNums() {
 		switch v := doc.Objects[num].Value.(type) {
-		case *Dictionary:
+		case *object.Dictionary:
 			resRef := v.Get("Resources")
 			if resRef != nil {
 				res := doc.ResolveDict(resRef)
@@ -2440,7 +2380,7 @@ func collectAllExtGState(doc core.View) []extGStateEntry {
 					addFromResources(res, num)
 				}
 			}
-		case *Stream:
+		case *object.Stream:
 			resRef := v.Dict.Get("Resources")
 			if resRef != nil {
 				res := doc.ResolveDict(resRef)
@@ -2483,11 +2423,11 @@ func imageClause(concept string, level PDFALevel) string {
 func checkNoAlternateImages(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
-		if st, ok := stream.Dict.Get("Subtype").(Name); ok && st == "Image" {
+		if st, ok := stream.Dict.Get("Subtype").(object.Name); ok && st == "Image" {
 			if stream.Dict.Get("Alternates") != nil {
 				errs = append(errs, ValidationError{
 					Rule:    imageClause("image", level),
@@ -2505,14 +2445,14 @@ func checkNoAlternateImages(doc core.View, level PDFALevel) []ValidationError {
 func checkInterpolate(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
-		if st, ok := stream.Dict.Get("Subtype").(Name); ok && st == "Image" {
+		if st, ok := stream.Dict.Get("Subtype").(object.Name); ok && st == "Image" {
 			interpObj := stream.Dict.Get("Interpolate")
 			if interpObj != nil {
-				if b, ok := interpObj.(Boolean); ok && bool(b) {
+				if b, ok := interpObj.(object.Boolean); ok && bool(b) {
 					errs = append(errs, ValidationError{
 						Rule:    imageClause("image", level),
 						Level:   level,
@@ -2554,11 +2494,11 @@ func xobjectClause(concept string, level PDFALevel) string {
 func checkNoOPI(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
-		st, ok := stream.Dict.Get("Subtype").(Name)
+		st, ok := stream.Dict.Get("Subtype").(object.Name)
 		if !ok {
 			continue
 		}
@@ -2604,7 +2544,7 @@ func checkCatalogVersion(doc core.View, level PDFALevel) []ValidationError {
 		return nil
 	}
 
-	vName, ok := versionObj.(Name)
+	vName, ok := versionObj.(object.Name)
 	if !ok {
 		return []ValidationError{{
 			Rule:    "6.1.12",
@@ -2649,8 +2589,8 @@ func checkFontSubsets(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 
 	for objNum, fontDict := range fonts {
-		subtype, _ := fontDict.Get("Subtype").(Name)
-		baseFont, _ := fontDict.Get("BaseFont").(Name)
+		subtype, _ := fontDict.Get("Subtype").(object.Name)
+		baseFont, _ := fontDict.Get("BaseFont").(object.Name)
 
 		// Check if it's a subset font (XXXXXX+ prefix)
 		baseFontStr := string(baseFont)
@@ -2685,7 +2625,7 @@ func checkFontSubsets(doc core.View, level PDFALevel) []ValidationError {
 				continue
 			}
 			dfObj := doc.Resolve(dfRef)
-			dfArr, ok := dfObj.(Array)
+			dfArr, ok := dfObj.(object.Array)
 			if !ok || len(dfArr) == 0 {
 				continue
 			}
@@ -2712,7 +2652,7 @@ func checkFontSubsets(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func getFontDescriptor(doc core.View, fontDict *Dictionary) *Dictionary {
+func getFontDescriptor(doc core.View, fontDict *object.Dictionary) *object.Dictionary {
 	fdRef := fontDict.Get("FontDescriptor")
 	if fdRef == nil {
 		return nil
@@ -2751,7 +2691,7 @@ func checkExtGState(doc core.View, level PDFALevel) []ValidationError {
 
 		// /TR2 must be /Default if present
 		if tr2 := dict.Get("TR2"); tr2 != nil {
-			if n, ok := tr2.(Name); !ok || n != "Default" {
+			if n, ok := tr2.(object.Name); !ok || n != "Default" {
 				errs = append(errs, ValidationError{
 					Rule:    rule,
 					Level:   level,
@@ -2780,7 +2720,7 @@ func checkExtGState(doc core.View, level PDFALevel) []ValidationError {
 			})
 		}
 		// /RI, when present, must be a standard rendering intent (all levels).
-		if ri, ok := doc.Resolve(dict.Get("RI")).(Name); ok && !standardRenderingIntents[string(ri)] {
+		if ri, ok := doc.Resolve(dict.Get("RI")).(object.Name); ok && !standardRenderingIntents[string(ri)] {
 			errs = append(errs, ValidationError{
 				Rule:    rule,
 				Level:   level,
@@ -2798,7 +2738,7 @@ func checkExtGState(doc core.View, level PDFALevel) []ValidationError {
 		// forbidden wholesale by checkNoTransparency.
 		if level != PDFA1b {
 			if bm := dict.Get("BM"); bm != nil {
-				if n, ok := bm.(Name); ok {
+				if n, ok := bm.(object.Name); ok {
 					if !isValidBlendMode(n) {
 						errs = append(errs, ValidationError{
 							Rule:    rule,
@@ -2815,7 +2755,7 @@ func checkExtGState(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // isValidBlendMode returns true if the name is one of the standard PDF blend modes.
-func isValidBlendMode(bm Name) bool {
+func isValidBlendMode(bm object.Name) bool {
 	switch bm {
 	case "Normal", "Compatible", "Multiply", "Screen", "Overlay",
 		"Darken", "Lighten", "ColorDodge", "ColorBurn",
@@ -2826,14 +2766,14 @@ func isValidBlendMode(bm Name) bool {
 	return false
 }
 
-func checkHalftoneErrors(doc core.View, htRef Object, objNum int, level PDFALevel, rule string, errs *[]ValidationError) {
+func checkHalftoneErrors(doc core.View, htRef object.Object, objNum int, level PDFALevel, rule string, errs *[]ValidationError) {
 	htDict := doc.ResolveDict(htRef)
 	if htDict == nil {
 		return
 	}
 
 	if htType := htDict.Get("HalftoneType"); htType != nil {
-		if intVal, ok := htType.(Integer); ok {
+		if intVal, ok := htType.(object.Integer); ok {
 			if intVal != 1 && intVal != 5 {
 				*errs = append(*errs, ValidationError{
 					Rule:    rule,
@@ -2896,7 +2836,7 @@ func checkInfoXMPConsistency(doc core.View, level PDFALevel) []ValidationError {
 	if metaObj == nil {
 		return nil
 	}
-	stream, ok := metaObj.(*Stream)
+	stream, ok := metaObj.(*object.Stream)
 	if !ok {
 		return nil
 	}
@@ -2920,17 +2860,17 @@ func checkInfoXMPConsistency(doc core.View, level PDFALevel) []ValidationError {
 	}
 
 	for _, p := range pairs {
-		raw := infoDict.Get(Name(p.infoKey))
+		raw := infoDict.Get(object.Name(p.infoKey))
 		if raw == nil {
 			continue
 		}
 		// An Info entry that is an indirect object must resolve to a string
 		// (ISO 19005-1 6.7.3): a non-string value is itself a violation.
 		resolved := doc.Resolve(raw)
-		if _, isNull := resolved.(Null); isNull || resolved == nil {
+		if _, isNull := resolved.(object.Null); isNull || resolved == nil {
 			continue // an indirect null value is equivalent to absence
 		}
-		strVal, isStr := resolved.(String)
+		strVal, isStr := resolved.(object.String)
 		if !isStr {
 			errs = append(errs, ValidationError{
 				Rule:    "6.7.3",
@@ -2996,12 +2936,12 @@ func checkInfoXMPConsistency(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func getInfoString(info *Dictionary, key string) string {
-	obj := info.Get(Name(key))
+func getInfoString(info *object.Dictionary, key string) string {
+	obj := info.Get(object.Name(key))
 	if obj == nil {
 		return ""
 	}
-	if s, ok := obj.(String); ok {
+	if s, ok := obj.(object.String); ok {
 		return core.DecodePDFTextString(s.Value)
 	}
 	return ""
@@ -3191,7 +3131,7 @@ func checkTransparencyBlending(doc core.View, level PDFALevel) []ValidationError
 			continue
 		}
 
-		s, _ := groupDict.Get("S").(Name)
+		s, _ := groupDict.Get("S").(object.Name)
 		if s != "Transparency" {
 			errs = append(errs, ValidationError{
 				Rule:    "6.2.4",
@@ -3220,7 +3160,7 @@ func checkTransparencyBlending(doc core.View, level PDFALevel) []ValidationError
 // transparencyGroupNotRequired checks if the transparency /Group requirement
 // can be relaxed for a page. For PDF/A-4, OutputIntents provide implicit
 // blending CS. For PDF/A-2b/3b, DefaultCS coverage can substitute.
-func transparencyGroupNotRequired(doc core.View, catalog *Dictionary, page *Dictionary, level PDFALevel) bool {
+func transparencyGroupNotRequired(doc core.View, catalog *object.Dictionary, page *object.Dictionary, level PDFALevel) bool {
 	if level == PDFA4 {
 		// PDF/A-4: page-level or catalog-level OutputIntents provide blending CS
 		catalogRGB, catalogCMYK, catalogGray := getOutputIntentCoverage(doc, catalog)
@@ -3240,7 +3180,7 @@ func transparencyGroupNotRequired(doc core.View, catalog *Dictionary, page *Dict
 
 		// DefaultCS entries cover device CS usage
 		hasDefRGB, hasDefCMYK, hasDefGray := core.DefaultColorSpaces(doc, page)
-		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page)
+		usesRGB, usesCMYK, usesGray := core.PageDeviceColourUse(doc, page)
 		allCovered := true
 		if usesRGB && !hasDefRGB {
 			allCovered = false
@@ -3265,7 +3205,7 @@ func transparencyGroupNotRequired(doc core.View, catalog *Dictionary, page *Dict
 // soft masks and form transparency groups. Unlike resourcesUseTransparency
 // (tuned for the 2b+ blending-group question, which treats a self-contained
 // form group as not propagating), presence alone is a violation here.
-func find1bTransparencyXObjects(doc core.View, container *Dictionary, level PDFALevel, seen map[*Dictionary]bool, errs *[]ValidationError) {
+func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, level PDFALevel, seen map[*object.Dictionary]bool, errs *[]ValidationError) {
 	if seen[container] {
 		return
 	}
@@ -3278,15 +3218,15 @@ func find1bTransparencyXObjects(doc core.View, container *Dictionary, level PDFA
 
 	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
 		for i, val := range xobjDict.Values {
-			stream, ok := doc.Resolve(val).(*Stream)
+			stream, ok := doc.Resolve(val).(*object.Stream)
 			if !ok {
 				continue
 			}
 			num := resolveObjNum(doc, val)
-			switch subtype, _ := stream.Dict.Get("Subtype").(Name); subtype {
+			switch subtype, _ := stream.Dict.Get("Subtype").(object.Name); subtype {
 			case "Image":
 				if sm := stream.Dict.Get("SMask"); sm != nil {
-					if n, ok := sm.(Name); !ok || n != "None" {
+					if n, ok := sm.(object.Name); !ok || n != "None" {
 						*errs = append(*errs, ValidationError{
 							Rule:    "6.4",
 							Level:   level,
@@ -3297,7 +3237,7 @@ func find1bTransparencyXObjects(doc core.View, container *Dictionary, level PDFA
 				}
 			case "Form":
 				if g := doc.ResolveDict(stream.Dict.Get("Group")); g != nil {
-					if s, _ := g.Get("S").(Name); s == "Transparency" {
+					if s, _ := g.Get("S").(object.Name); s == "Transparency" {
 						*errs = append(*errs, ValidationError{
 							Rule:    "6.4",
 							Level:   level,
@@ -3314,7 +3254,7 @@ func find1bTransparencyXObjects(doc core.View, container *Dictionary, level PDFA
 
 	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
 		for _, val := range patDict.Values {
-			if stream, ok := doc.Resolve(val).(*Stream); ok {
+			if stream, ok := doc.Resolve(val).(*object.Stream); ok {
 				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs)
 			}
 		}
@@ -3323,7 +3263,7 @@ func find1bTransparencyXObjects(doc core.View, container *Dictionary, level PDFA
 	if fontDict := doc.ResolveDict(res.Get("Font")); fontDict != nil {
 		for _, val := range fontDict.Values {
 			if fd := doc.ResolveDict(val); fd != nil {
-				if st, _ := fd.Get("Subtype").(Name); st == "Type3" {
+				if st, _ := fd.Get("Subtype").(object.Name); st == "Type3" {
 					find1bTransparencyXObjects(doc, fd, level, seen, errs)
 				}
 			}
@@ -3331,11 +3271,7 @@ func find1bTransparencyXObjects(doc core.View, container *Dictionary, level PDFA
 	}
 }
 
-// PageInfo is the flattened page-tree entry, defined in internal/core because
-// the page walk that produces it is a document service rather than a PDF/A one.
-type PageInfo = core.PageInfo
-
-func collectPages(doc core.View, pageTreeRef Object) []PageInfo {
+func collectPages(doc core.View, pageTreeRef object.Object) []core.PageInfo {
 	return doc.Pages(pageTreeRef)
 }
 
@@ -3349,7 +3285,7 @@ func checkEmbeddedFiles(doc core.View, level PDFALevel) []ValidationError {
 	if level == PDFA1b {
 		var errs []ValidationError
 		for num, iobj := range doc.Objects {
-			if dict, ok := iobj.Value.(*Dictionary); ok && dict.Get("EF") != nil {
+			if dict, ok := iobj.Value.(*object.Dictionary); ok && dict.Get("EF") != nil {
 				errs = append(errs, ValidationError{
 					Rule:    "6.1.11",
 					Level:   level,
@@ -3383,7 +3319,7 @@ func checkEmbeddedFiles(doc core.View, level PDFALevel) []ValidationError {
 	return checkEmbeddedFileSpecs(doc, level, catalog)
 }
 
-func checkEmbeddedFileSpecs(doc core.View, level PDFALevel, catalog *Dictionary) []ValidationError {
+func checkEmbeddedFileSpecs(doc core.View, level PDFALevel, catalog *object.Dictionary) []ValidationError {
 	var errs []ValidationError
 
 	// Embedded-file rules live in clause 6.8 for 19005-2/-3 and 6.9 for
@@ -3414,13 +3350,13 @@ func checkEmbeddedFileSpecs(doc core.View, level PDFALevel, catalog *Dictionary)
 	}
 
 	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
+		dict, ok := iobj.Value.(*object.Dictionary)
 		if !ok {
 			continue
 		}
 		// A file specification is not required to carry /Type /Filespec;
 		// anything holding an /EF is acting as one.
-		t, hasType := dict.Get("Type").(Name)
+		t, hasType := dict.Get("Type").(object.Name)
 		isFilespec := (hasType && t == "Filespec") || dict.Get("EF") != nil
 		if !isFilespec {
 			continue
@@ -3457,7 +3393,7 @@ func checkEmbeddedFileSpecs(doc core.View, level PDFALevel, catalog *Dictionary)
 		if level == PDFA3b || level == PDFA4 {
 			if efDict := doc.ResolveDict(dict.Get("EF")); efDict != nil {
 				for _, val := range efDict.Values {
-					stream, ok := doc.Resolve(val).(*Stream)
+					stream, ok := doc.Resolve(val).(*object.Stream)
 					if !ok {
 						continue
 					}
@@ -3469,7 +3405,7 @@ func checkEmbeddedFileSpecs(doc core.View, level PDFALevel, catalog *Dictionary)
 							Message: "embedded file stream must have /Subtype (MIME type)",
 							Object:  num,
 						})
-					} else if name, ok := st.(Name); ok {
+					} else if name, ok := st.(object.Name); ok {
 						if !strings.Contains(string(name), "/") {
 							errs = append(errs, ValidationError{
 								Rule:    rule,
@@ -3489,14 +3425,14 @@ func checkEmbeddedFileSpecs(doc core.View, level PDFALevel, catalog *Dictionary)
 
 // documentHasEmbeddedFiles reports whether the catalog's Names tree declares
 // EmbeddedFiles or any object carries an /EF file specification.
-func documentHasEmbeddedFiles(doc core.View, catalog *Dictionary) bool {
+func documentHasEmbeddedFiles(doc core.View, catalog *object.Dictionary) bool {
 	if namesDict := doc.ResolveDict(catalog.Get("Names")); namesDict != nil {
 		if namesDict.Get("EmbeddedFiles") != nil {
 			return true
 		}
 	}
 	for _, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && dict.Get("EF") != nil {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && dict.Get("EF") != nil {
 			return true
 		}
 	}
@@ -3509,12 +3445,12 @@ func documentHasAF(doc core.View) bool {
 		return true
 	}
 	for _, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok {
 			if dict.Get("AF") != nil {
 				return true
 			}
 		}
-		if stream, ok := iobj.Value.(*Stream); ok {
+		if stream, ok := iobj.Value.(*object.Stream); ok {
 			if stream.Dict.Get("AF") != nil {
 				return true
 			}
@@ -3577,15 +3513,15 @@ func checkOptionalContent(doc core.View, level PDFALevel) []ValidationError {
 	if ocgsRef == nil {
 		return errs
 	}
-	ocgsArr, ok := doc.Resolve(ocgsRef).(Array)
+	ocgsArr, ok := doc.Resolve(ocgsRef).(object.Array)
 	if !ok {
 		return errs
 	}
 
 	names := make(map[string]bool)
-	configs := []Object{dRef}
+	configs := []object.Object{dRef}
 	if configsRef := ocpDict.Get("Configs"); configsRef != nil {
-		if arr, ok := doc.Resolve(configsRef).(Array); ok {
+		if arr, ok := doc.Resolve(configsRef).(object.Array); ok {
 			configs = append(configs, arr...)
 			// Every configuration dictionary in /Configs must carry a /Name
 			// (ISO 19005-2/-3 6.9, -4 6.10).
@@ -3606,7 +3542,7 @@ func checkOptionalContent(doc core.View, level PDFALevel) []ValidationError {
 			continue
 		}
 		if nameObj := cfgDict.Get("Name"); nameObj != nil {
-			if s, ok := nameObj.(String); ok {
+			if s, ok := nameObj.(object.String); ok {
 				n := string(s.Value)
 				if names[n] {
 					errs = append(errs, ValidationError{
@@ -3623,12 +3559,12 @@ func checkOptionalContent(doc core.View, level PDFALevel) []ValidationError {
 	// Check /Order references all OCGs
 	orderRef := dDict.Get("Order")
 	if orderRef != nil {
-		orderArr, ok := doc.Resolve(orderRef).(Array)
+		orderArr, ok := doc.Resolve(orderRef).(object.Array)
 		if ok {
 			referencedOCGs := make(map[int]bool)
 			collectOCGRefs(orderArr, referencedOCGs)
 			for _, ocgRef := range ocgsArr {
-				if iref, ok := ocgRef.(IndirectRef); ok {
+				if iref, ok := ocgRef.(object.IndirectRef); ok {
 					if !referencedOCGs[iref.Number] {
 						errs = append(errs, ValidationError{
 							Rule:    ocRule,
@@ -3644,12 +3580,12 @@ func checkOptionalContent(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func collectOCGRefs(arr Array, refs map[int]bool) {
+func collectOCGRefs(arr object.Array, refs map[int]bool) {
 	for _, item := range arr {
-		if iref, ok := item.(IndirectRef); ok {
+		if iref, ok := item.(object.IndirectRef); ok {
 			refs[iref.Number] = true
 		}
-		if subArr, ok := item.(Array); ok {
+		if subArr, ok := item.(object.Array); ok {
 			collectOCGRefs(subArr, refs)
 		}
 	}
@@ -3714,13 +3650,13 @@ func checkImplementationLimits(doc core.View, level PDFALevel) []ValidationError
 	return errs
 }
 
-func checkObjectLimits(obj Object, objNum int, level PDFALevel, lim implLimits, depth int, errs *[]ValidationError) {
+func checkObjectLimits(obj object.Object, objNum int, level PDFALevel, lim implLimits, depth int, errs *[]ValidationError) {
 	if obj == nil {
 		return
 	}
 
 	switch v := obj.(type) {
-	case Name:
+	case object.Name:
 		if len(string(v)) > lim.nameLen {
 			*errs = append(*errs, ValidationError{
 				Rule:    lim.rule,
@@ -3729,7 +3665,7 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, lim implLimits, 
 				Object:  objNum,
 			})
 		}
-	case String:
+	case object.String:
 		if len(v.Value) > lim.stringLen {
 			*errs = append(*errs, ValidationError{
 				Rule:    lim.rule,
@@ -3738,7 +3674,7 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, lim implLimits, 
 				Object:  objNum,
 			})
 		}
-	case Integer:
+	case object.Integer:
 		i := int64(v)
 		if i < -2147483648 || i > 2147483647 {
 			*errs = append(*errs, ValidationError{
@@ -3748,7 +3684,7 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, lim implLimits, 
 				Object:  objNum,
 			})
 		}
-	case Real:
+	case object.Real:
 		if math.Abs(float64(v)) > lim.realLimit {
 			*errs = append(*errs, ValidationError{
 				Rule:    lim.rule,
@@ -3757,7 +3693,7 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, lim implLimits, 
 				Object:  objNum,
 			})
 		}
-	case *Dictionary:
+	case *object.Dictionary:
 		if depth > lim.nesting {
 			*errs = append(*errs, ValidationError{
 				Rule:    lim.rule,
@@ -3779,7 +3715,7 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, lim implLimits, 
 			checkObjectLimits(key, objNum, level, lim, depth+1, errs)
 			checkObjectLimits(v.Values[i], objNum, level, lim, depth+1, errs)
 		}
-	case Array:
+	case object.Array:
 		if depth > lim.nesting {
 			*errs = append(*errs, ValidationError{
 				Rule:    lim.rule,
@@ -3800,7 +3736,7 @@ func checkObjectLimits(obj Object, objNum int, level PDFALevel, lim implLimits, 
 		for _, elem := range v {
 			checkObjectLimits(elem, objNum, level, lim, depth+1, errs)
 		}
-	case *Stream:
+	case *object.Stream:
 		checkObjectLimits(&v.Dict, objNum, level, lim, depth, errs)
 	}
 }
@@ -3817,8 +3753,8 @@ func checkPageSizeLimits(doc core.View, level PDFALevel, errs *[]ValidationError
 
 	pages := doc.Pages(pagesRef)
 	for _, page := range pages {
-		for _, boxKey := range []Name{"MediaBox", "CropBox", "BleedBox", "TrimBox", "ArtBox"} {
-			var boxObj Object
+		for _, boxKey := range []object.Name{"MediaBox", "CropBox", "BleedBox", "TrimBox", "ArtBox"} {
+			var boxObj object.Object
 			switch boxKey {
 			case "MediaBox", "CropBox":
 				// Inheritable attributes: a page without its own entry
@@ -3830,7 +3766,7 @@ func checkPageSizeLimits(doc core.View, level PDFALevel, errs *[]ValidationError
 			if boxObj == nil {
 				continue
 			}
-			arr, ok := boxObj.(Array)
+			arr, ok := boxObj.(object.Array)
 			if !ok || len(arr) != 4 {
 				continue
 			}
@@ -3838,9 +3774,9 @@ func checkPageSizeLimits(doc core.View, level PDFALevel, errs *[]ValidationError
 			valid := true
 			for i, elem := range arr {
 				switch ev := elem.(type) {
-				case Integer:
+				case object.Integer:
 					vals[i] = float64(ev)
-				case Real:
+				case object.Real:
 					vals[i] = float64(ev)
 				default:
 					valid = false
@@ -3960,7 +3896,7 @@ func checkDeviceColorSpaces(doc core.View, level PDFALevel) []ValidationError {
 		// spaces are applied inside the scan, per resource scope: a page-
 		// level DefaultCMYK does not cover DeviceCMYK inside a pattern with
 		// its own resources, and the corpus fails exactly that.
-		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page.Dict)
+		usesRGB, usesCMYK, usesGray := core.PageDeviceColourUse(doc, page.Dict)
 
 		// The page's transparency /Group /CS covers type-matched DeviceRGB
 		// and DeviceCMYK, but NOT DeviceGray: the corpus passes DeviceRGB
@@ -4002,13 +3938,13 @@ func checkDeviceColorSpaces(doc core.View, level PDFALevel) []ValidationError {
 
 // getOutputIntentCoverage checks OutputIntents for DestOutputProfile and
 // returns which color space types are covered (RGB, CMYK).
-func getOutputIntentCoverage(doc core.View, catalog *Dictionary) (hasRGB, hasCMYK, hasGray bool) {
+func getOutputIntentCoverage(doc core.View, catalog *object.Dictionary) (hasRGB, hasCMYK, hasGray bool) {
 	oiRef := catalog.Get("OutputIntents")
 	if oiRef == nil {
 		return
 	}
 	oiObj := doc.Resolve(oiRef)
-	arr, ok := oiObj.(Array)
+	arr, ok := oiObj.(object.Array)
 	if !ok || len(arr) == 0 {
 		return
 	}
@@ -4021,7 +3957,7 @@ func getOutputIntentCoverage(doc core.View, catalog *Dictionary) (hasRGB, hasCMY
 		// Only the PDF/A output intent counts: device colour backed solely
 		// by e.g. a PDF/X intent is a violation (the corpus fails a
 		// DeviceRGB file whose only intent is GTS_PDFX).
-		if s, _ := dict.Get("S").(Name); s != "GTS_PDFA1" {
+		if s, _ := dict.Get("S").(object.Name); s != "GTS_PDFA1" {
 			continue
 		}
 		profileRef := dict.Get("DestOutputProfile")
@@ -4037,7 +3973,7 @@ func getOutputIntentCoverage(doc core.View, catalog *Dictionary) (hasRGB, hasCMY
 			continue
 		}
 		profileObj := doc.Resolve(profileRef)
-		stream, ok := profileObj.(*Stream)
+		stream, ok := profileObj.(*object.Stream)
 		if !ok {
 			continue
 		}
@@ -4071,7 +4007,7 @@ func getOutputIntentCoverage(doc core.View, catalog *Dictionary) (hasRGB, hasCMY
 }
 
 // resolveResources resolves a page's Resources dictionary.
-func resolveResources(doc core.View, page *Dictionary) *Dictionary {
+func resolveResources(doc core.View, page *object.Dictionary) *object.Dictionary {
 	return doc.Resources(page)
 }
 
@@ -4079,341 +4015,22 @@ func resolveResources(doc core.View, page *Dictionary) *Dictionary {
 // MediaBox, CropBox, Rotate), walking up the /Parent chain when the page
 // itself does not define it — pages routinely inherit these from their
 // Pages node, which the direct Get missed entirely.
-func inheritedPageAttr(doc core.View, page *Dictionary, key Name) Object {
+func inheritedPageAttr(doc core.View, page *object.Dictionary, key object.Name) object.Object {
 	return doc.InheritedPageAttr(page, key)
 }
 
-// scanPageForDeviceCS checks if a page uses device color spaces.
-// It scans Image XObjects, Form XObjects, and content streams.
-func scanPageForDeviceCS(doc core.View, page *Dictionary) (usesRGB, usesCMYK, usesGray bool) {
-	seen := make(map[*Dictionary]bool)
-	scanResourcesForDeviceCS(doc, page, seen, &usesRGB, &usesCMYK, &usesGray)
-
-	// Also scan annotation appearance streams
-	annotsRef := page.Get("Annots")
-	if annotsRef != nil {
-		annotsObj := doc.Resolve(annotsRef)
-		if annotsArr, ok := annotsObj.(Array); ok {
-			for _, annotRef := range annotsArr {
-				annotDict := doc.ResolveDict(annotRef)
-				if annotDict == nil {
-					continue
-				}
-				ap := annotDict.Get("AP")
-				if ap == nil {
-					continue
-				}
-				apDict := doc.ResolveDict(ap)
-				if apDict == nil {
-					continue
-				}
-				for _, apKey := range []Name{"N", "R", "D"} {
-					apEntry := apDict.Get(apKey)
-					if apEntry == nil {
-						continue
-					}
-					apObj := doc.Resolve(apEntry)
-					switch v := apObj.(type) {
-					case *Stream:
-						scanContentStreamForDeviceCS(doc, v, seen, &usesRGB, &usesCMYK, &usesGray)
-					case *Dictionary:
-						for _, stateVal := range v.Values {
-							if s, ok := doc.Resolve(stateVal).(*Stream); ok {
-								scanContentStreamForDeviceCS(doc, s, seen, &usesRGB, &usesCMYK, &usesGray)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Check transparency group CS on page itself
-	if groupRef := page.Get("Group"); groupRef != nil {
-		groupDict := doc.ResolveDict(groupRef)
-		if groupDict != nil {
-			core.CheckCSForDevice(doc, groupDict.Get("CS"), &usesRGB, &usesCMYK, &usesGray)
-		}
-	}
-
-	return
-}
-
-// scanContentStreamForDeviceCS scans a content-bearing stream — a form
-// XObject, tiling pattern, or appearance stream. Unlike pages, whose content
-// lives behind /Contents, these carry their operators in the stream body
-// itself (ISO 32000-1, 7.8.2), which the resources walk alone never read: a
-// form with '1 0 0 rg' and no resources scanned as clean.
-func scanContentStreamForDeviceCS(doc core.View, stream *Stream, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
-	if seen[&stream.Dict] {
-		return
-	}
-	scanContainerForDeviceCS(doc, &stream.Dict, doc.Content(stream), stream, seen, usesRGB, usesCMYK, usesGray)
-}
-
-func scanResourcesForDeviceCS(doc core.View, container *Dictionary, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
-	if seen[container] {
-		return
-	}
-	var data []byte
-	var key *Stream
-	if contentsRef := container.Get("Contents"); contentsRef != nil {
-		data, key = doc.ContentBytesAndKey(contentsRef)
-	}
-	scanContainerForDeviceCS(doc, container, data, key, seen, usesRGB, usesCMYK, usesGray)
-}
-
-// scanContainerForDeviceCS scans one content container — a page (content
-// behind /Contents), a form XObject, tiling pattern, or appearance stream
-// (content in the stream body, passed as data) — for device colour usage.
-//
-// Only EXECUTED resources count: a form XObject or pattern that is listed in
-// the resource dictionary but never invoked by a Do/scn/sh operator does not
-// contribute (the corpus passes a DeviceCMYK form that no content stream
-// draws), so the resource walks below are gated on the names the content
-// actually uses.
-func scanContainerForDeviceCS(doc core.View, container *Dictionary, data []byte, key *Stream, seen map[*Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
-	if seen[container] {
-		return
-	}
-	seen[container] = true
-
-	// Device usage selected in THIS container's scope; masked by the
-	// container's own Default* colour spaces before propagating (ISO
-	// 32000-1, 8.6.5.6: DefaultRGB/DefaultCMYK/DefaultGray in the resource
-	// dictionary substitute for device spaces selected in that scope).
-	var localRGB, localCMYK, localGray bool
-	defer func() {
-		dR, dC, dG := core.DefaultColorSpaces(doc, container)
-		*usesRGB = *usesRGB || (localRGB && !dR)
-		*usesCMYK = *usesCMYK || (localCMYK && !dC)
-		*usesGray = *usesGray || (localGray && !dG)
-	}()
-
-	if data != nil {
-		r, c, g := core.ScanStreamForDeviceOps(doc.Cancel, data)
-		localRGB = localRGB || r
-		localCMYK = localCMYK || c
-		localGray = localGray || g
-	}
-	used := doc.ContentUsedNamesCached(data, key)
-
-	res := doc.Resources(container)
-	if res == nil {
-		return
-	}
-
-	// Check ColorSpace dict for device CS references (including Indexed bases)
-	csRef := res.Get("ColorSpace")
-	if csRef != nil {
-		csDict := doc.ResolveDict(csRef)
-		if csDict != nil {
-			for _, val := range csDict.Values {
-				core.CheckCSForDevice(doc, val, &localRGB, &localCMYK, &localGray)
-			}
-		}
-	}
-
-	// Check XObject resources actually invoked with Do
-	xobjRef := res.Get("XObject")
-	if xobjRef != nil {
-		xobjDict := doc.ResolveDict(xobjRef)
-		if xobjDict != nil {
-			for i, key := range xobjDict.Keys {
-				if !used.XObjects[string(key)] {
-					continue
-				}
-				resolved := doc.Resolve(xobjDict.Values[i])
-				stream, ok := resolved.(*Stream)
-				if !ok {
-					continue
-				}
-				subtype, _ := stream.Dict.Get("Subtype").(Name)
-				if subtype == "Form" {
-					// Scan the Form XObject (its own content stream plus its
-					// resources) separately, so the Form's Group /CS coverage
-					// applies before propagating to the parent.
-					var formRGB, formCMYK, formGray bool
-					scanContentStreamForDeviceCS(doc, stream, seen, &formRGB, &formCMYK, &formGray)
-					// Check transparency group CS
-					if groupRef := stream.Dict.Get("Group"); groupRef != nil {
-						groupDict := doc.ResolveDict(groupRef)
-						if groupDict != nil {
-							// Group /CS being a device CS is itself device usage
-							core.CheckCSForDevice(doc, groupDict.Get("CS"), &formRGB, &formCMYK, &formGray)
-							// A calibrated Group /CS covers device CS within
-							// the Form only when the group is ISOLATED: a
-							// non-isolated group composites against the
-							// backdrop, and the corpus fails DeviceRGB in a
-							// non-isolated CalRGB group.
-							isolated, _ := doc.Resolve(groupDict.Get("I")).(Boolean)
-							if csObj := groupDict.Get("CS"); csObj != nil && bool(isolated) {
-								gRGB, gCMYK, gGray := core.ClassifyCalibratedCS(doc, csObj)
-								if gRGB {
-									formRGB = false
-								}
-								if gCMYK {
-									formCMYK = false
-								}
-								if gGray {
-									formGray = false
-								}
-							}
-						}
-					}
-					// Propagate only uncovered device CS to parent
-					*usesRGB = *usesRGB || formRGB
-					*usesCMYK = *usesCMYK || formCMYK
-					*usesGray = *usesGray || formGray
-				} else {
-					// Image XObject - check ColorSpace
-					core.CheckCSForDevice(doc, stream.Dict.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
-				}
-			}
-		}
-	}
-
-	// Check Shading resources painted with sh
-	shadingRef := res.Get("Shading")
-	if shadingRef != nil {
-		shadingDict := doc.ResolveDict(shadingRef)
-		if shadingDict != nil {
-			for i, key := range shadingDict.Keys {
-				if !used.Shadings[string(key)] {
-					continue
-				}
-				val := shadingDict.Values[i]
-				sd := doc.ResolveDict(val)
-				if sd == nil {
-					// Could be a stream (type 4-7 shadings)
-					if s, ok := doc.Resolve(val).(*Stream); ok {
-						core.CheckCSForDevice(doc, s.Dict.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
-					}
-					continue
-				}
-				core.CheckCSForDevice(doc, sd.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
-			}
-		}
-	}
-
-	// Check Pattern resources set with scn/SCN (tiling patterns have
-	// content streams; shading patterns carry a /Shading)
-	patRef := res.Get("Pattern")
-	if patRef != nil {
-		patDict := doc.ResolveDict(patRef)
-		if patDict != nil {
-			for i, key := range patDict.Keys {
-				if !used.Patterns[string(key)] {
-					continue
-				}
-				obj := doc.Resolve(patDict.Values[i])
-				switch v := obj.(type) {
-				case *Stream:
-					// Tiling pattern: its body is a content stream.
-					scanContentStreamForDeviceCS(doc, v, seen, usesRGB, usesCMYK, usesGray)
-				case *Dictionary:
-					// Shading pattern.
-					if sd := doc.ResolveDict(v.Get("Shading")); sd != nil {
-						core.CheckCSForDevice(doc, sd.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
-					}
-				}
-			}
-		}
-	}
-
-	// Check Type3 font CharProcs
-	fontRef := res.Get("Font")
-	if fontRef != nil {
-		fontDict := doc.ResolveDict(fontRef)
-		if fontDict != nil {
-			for _, val := range fontDict.Values {
-				fd := doc.ResolveDict(val)
-				if fd == nil {
-					continue
-				}
-				subtype, _ := fd.Get("Subtype").(Name)
-				if subtype == "Type3" {
-					// Recurse into Type3 font resources
-					scanResourcesForDeviceCS(doc, fd, seen, usesRGB, usesCMYK, usesGray)
-					// Also scan CharProc streams
-					cpRef := fd.Get("CharProcs")
-					cpDict := doc.ResolveDict(cpRef)
-					if cpDict != nil {
-						for _, cpVal := range cpDict.Values {
-							cpObj := doc.Resolve(cpVal)
-							if cpStream, ok := cpObj.(*Stream); ok {
-								data := doc.Content(cpStream)
-								if data != nil {
-									r, c, g := core.ScanStreamForDeviceOps(doc.Cancel, data)
-									*usesRGB = *usesRGB || r
-									*usesCMYK = *usesCMYK || c
-									*usesGray = *usesGray || g
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-// The maximum decoded content stream size we'll scan defaults to
-// defaultMaxContentStreamBytes; a caller can change it with
-// WithMaxContentStreamBytes. Larger streams are skipped to bound memory on
-// hostile input. The previous 1 MB cap (and Flate-only, no-filter-array
-// decoding) silently hid ordinary content from every scanner — an oversize or
-// [/FlateDecode]-wrapped stream full of DeviceRGB validated clean. A stream
-// skipped for this reason is reported (limitContentStream): every
-// content-driven rule then sees nothing from it, which is the failure the old
-// cap caused silently.
-//
-// The aggregate size of decoded content that one validation run will
-// materialize defaults to defaultMaxDecodedContentBytes
-// (WithMaxDecodedContentBytes). The per-stream cap stops a single stream from
-// exploding, but a small file can carry many content streams that each
-// decompress near that cap (a flate bomb): 100 pages whose contents each inflate
-// to ~60 MB is a ~12 MB file that would otherwise decode and tokenize ~6 GB of
-// content, driving validation past 9 GB of memory. Once this budget is reached,
-// further content streams are treated as undecodable (nil), so they are neither
-// decoded nor tokenized and the work stays bounded. Real documents decode far
-// less than this, so the budget never affects their validation; it only
-// truncates pathologically amplified input — the heaviest document measured
-// across the veraPDF corpus and a Common Crawl sample needs 218 MB. Exhausting
-// it is reported too (limitContentTotal), because from there on "the content
-// does not do X" is no longer something this run can say.
-
-// decodeContentStream decodes a stream for content scanning through the full
-// filter pipeline (filter arrays, ASCIIHex, predictors). Results are
-// memoized per validation run: several checks re-decode the same page
-// contents. Returns nil if the stream cannot be decoded, or if the run's
-// aggregate decoded-content budget is exhausted.
-func decodeContentStream(doc core.View, stream *Stream) []byte {
-	return doc.Content(stream)
-}
-
-// decodeMetadataStream decodes an XMP metadata stream. It is deliberately not
-// subject to the aggregate content budget: /Metadata is the document's own
-// identification, and a validator that cannot read it must conclude nothing,
-// not "this file is unidentified". Under the shared budget a flate-bombed
-// document — whose page content exhausts the aggregate content budget before
-// the identification checks run — had its XMP read as empty, and the rules then
-// emitted "metadata must contain pdfaid:part", "Info /Title present but XMP
-// dc:title missing" and "an embedded PDF file is not compliant with PDF/A"
-// against a file that declares all of them. A document has one metadata stream
-// and it is still bounded per stream by the content-stream cap, so exempting it
 // from the aggregate does not unbound the run; the bytes are still charged, so
 // they still count against genuinely unbounded content.
-func decodeMetadataStream(doc core.View, stream *Stream) []byte {
+func decodeMetadataStream(doc core.View, stream *object.Stream) []byte {
 	return doc.MetadataContent(stream)
 }
 
 // scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
 // for device color operators (rg/RG, k/K, g/G).
-func scanContentsForDeviceOps(doc core.View, contentsRef Object) (usesRGB, usesCMYK, usesGray bool) {
+func scanContentsForDeviceOps(doc core.View, contentsRef object.Object) (usesRGB, usesCMYK, usesGray bool) {
 	resolved := doc.Resolve(contentsRef)
 	switch v := resolved.(type) {
-	case *Stream:
+	case *object.Stream:
 		data := doc.Content(v)
 		if data == nil {
 			return
@@ -4422,10 +4039,10 @@ func scanContentsForDeviceOps(doc core.View, contentsRef Object) (usesRGB, usesC
 		usesRGB = usesRGB || r
 		usesCMYK = usesCMYK || c
 		usesGray = usesGray || g
-	case Array:
+	case object.Array:
 		for _, elem := range v {
 			streamObj := doc.Resolve(elem)
-			if s, ok := streamObj.(*Stream); ok {
+			if s, ok := streamObj.(*object.Stream); ok {
 				data := doc.Content(s)
 				if data == nil {
 					continue
@@ -4442,7 +4059,7 @@ func scanContentsForDeviceOps(doc core.View, contentsRef Object) (usesRGB, usesC
 
 // forEachContentOperator tokenizes a decoded content stream and calls fn for
 // each operator-position token (anything that is not a string, hex string,
-// dictionary marker, array/procedure delimiter, comment, or name). String
+// dictionary marker, array/procedure delimiter, comment, or name). object.String
 // literals, comments, and inline-image binary data (BI ... ID <binary> EI)
 // are skipped, so operator bytes occurring inside them are never reported.
 func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte)) {
@@ -4460,7 +4077,7 @@ func checkICCBasedProfiles(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 
 	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
@@ -4474,7 +4091,7 @@ func checkICCBasedProfiles(doc core.View, level PDFALevel) []ValidationError {
 		// Structural stream types also carry an integer /N with a different
 		// meaning (an object stream's /N is its object count); they are never
 		// ICC profiles.
-		if t, ok := stream.Dict.Get("Type").(Name); ok && (t == "ObjStm" || t == "XRef") {
+		if t, ok := stream.Dict.Get("Type").(object.Name); ok && (t == "ObjStm" || t == "XRef") {
 			continue
 		}
 
@@ -4483,7 +4100,7 @@ func checkICCBasedProfiles(doc core.View, level PDFALevel) []ValidationError {
 		// specific to ICC profile streams.
 		nVal := 0
 		switch v := nObj.(type) {
-		case Integer:
+		case object.Integer:
 			nVal = int(v)
 		default:
 			continue
@@ -4556,12 +4173,12 @@ func checkSeparationDeviceN(doc core.View, level PDFALevel) []ValidationError {
 	var errs []ValidationError
 
 	// Track tint transform references by colorant name for consistency check
-	tintTransforms := make(map[Name]sepColorantSeen) // colorant name → first seen definition
+	tintTransforms := make(map[object.Name]sepColorantSeen) // colorant name → first seen definition
 
 	// Scan all objects for color space arrays used in Resources
 	for num, iobj := range doc.Objects {
-		dict, isDict := iobj.Value.(*Dictionary)
-		stream, isStream := iobj.Value.(*Stream)
+		dict, isDict := iobj.Value.(*object.Dictionary)
+		stream, isStream := iobj.Value.(*object.Stream)
 
 		// Check dictionary Resources/ColorSpace
 		if isDict {
@@ -4571,7 +4188,7 @@ func checkSeparationDeviceN(doc core.View, level PDFALevel) []ValidationError {
 			// is not a top-level object, so this scan would never visit its
 			// /ColorSpace entries; descend explicitly. Indirect Resources
 			// are separate objects and are visited by the loop itself.
-			if resDict, ok := dict.Get("Resources").(*Dictionary); ok {
+			if resDict, ok := dict.Get("Resources").(*object.Dictionary); ok {
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
 				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
@@ -4584,7 +4201,7 @@ func checkSeparationDeviceN(doc core.View, level PDFALevel) []ValidationError {
 			}
 			// Also check direct Resources in Form XObjects (indirect ones
 			// are visited as top-level objects).
-			if resDict, ok := stream.Dict.Get("Resources").(*Dictionary); ok {
+			if resDict, ok := stream.Dict.Get("Resources").(*object.Dictionary); ok {
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
 				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
@@ -4600,11 +4217,11 @@ func checkSeparationDeviceN(doc core.View, level PDFALevel) []ValidationError {
 // colorant name, for the same-tint-transform/same-alternate consistency rule.
 type sepColorantSeen struct {
 	objNum int
-	tint   Object
-	alt    Object
+	tint   object.Object
+	alt    object.Object
 }
 
-func collectTintTransforms(doc core.View, dict *Dictionary, tintTransforms map[Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
+func collectTintTransforms(doc core.View, dict *object.Dictionary, tintTransforms map[object.Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
 	csRef := dict.Get("ColorSpace")
 	if csRef == nil {
 		return
@@ -4621,27 +4238,27 @@ func collectTintTransforms(doc core.View, dict *Dictionary, tintTransforms map[N
 // collectSeparationConsistency records a Separation definition (top-level or
 // inside a DeviceN/NChannel Colorants dictionary) and flags same-name
 // definitions whose tint transform or alternate space differ.
-func collectSeparationConsistency(doc core.View, val Object, tintTransforms map[Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
+func collectSeparationConsistency(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
 	collectSeparationConsistencySeen(doc, val, tintTransforms, objNum, level, errs, make(map[int]bool))
 }
 
-func collectSeparationConsistencySeen(doc core.View, val Object, tintTransforms map[Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
 	// Guard against a DeviceN whose /Colorants entry cycles back to itself: a
 	// self-referential colorant would otherwise recurse until the goroutine
 	// stack overflows (an unrecoverable fatal error), like the other
 	// colour-space walkers this thread a visited-set keyed on object number.
-	if ref, ok := val.(IndirectRef); ok {
+	if ref, ok := val.(object.IndirectRef); ok {
 		if seen[ref.Number] {
 			return
 		}
 		seen[ref.Number] = true
 	}
 	resolved := doc.Resolve(val)
-	arr, ok := resolved.(Array)
+	arr, ok := resolved.(object.Array)
 	if !ok || len(arr) == 0 {
 		return
 	}
-	csType, _ := arr[0].(Name)
+	csType, _ := arr[0].(object.Name)
 
 	// Separations inside a DeviceN attributes' Colorants dictionary join
 	// the same consistency pool (the corpus flags NChannel colorants with
@@ -4660,11 +4277,11 @@ func collectSeparationConsistencySeen(doc core.View, val Object, tintTransforms 
 	if csType != "Separation" || len(arr) < 4 {
 		return
 	}
-	colorantName, ok := arr[1].(Name)
+	colorantName, ok := arr[1].(object.Name)
 	if !ok {
 		return
 	}
-	tintRef, isRef := arr[3].(IndirectRef)
+	tintRef, isRef := arr[3].(object.IndirectRef)
 	if !isRef {
 		return
 	}
@@ -4694,7 +4311,7 @@ func collectSeparationConsistencySeen(doc core.View, val Object, tintTransforms 
 	}
 }
 
-func checkDictForSepDeviceN(doc core.View, dict *Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkDictForSepDeviceN(doc core.View, dict *object.Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
 	csRef := dict.Get("ColorSpace")
 	if csRef == nil {
 		return
@@ -4708,24 +4325,24 @@ func checkDictForSepDeviceN(doc core.View, dict *Dictionary, objNum int, level P
 	}
 }
 
-func checkColorSpaceValue(doc core.View, csObj Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkColorSpaceValue(doc core.View, csObj object.Object, objNum int, level PDFALevel, errs *[]ValidationError) {
 	checkColorSpaceValueSeen(doc, csObj, objNum, level, errs, make(map[int]bool))
 }
 
-func checkColorSpaceValueSeen(doc core.View, csObj Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
-	if r, ok := csObj.(IndirectRef); ok {
+func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+	if r, ok := csObj.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle through an indirect color-space reference
 		}
 		seen[r.Number] = true
 	}
 	resolved := doc.Resolve(csObj)
-	arr, ok := resolved.(Array)
+	arr, ok := resolved.(object.Array)
 	if !ok || len(arr) < 2 {
 		return
 	}
 
-	csType, ok := arr[0].(Name)
+	csType, ok := arr[0].(object.Name)
 	if !ok {
 		return
 	}
@@ -4754,7 +4371,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj Object, objNum int, level PDF
 			return
 		}
 		// Check colorant name is not None for PDF/A-2b+ (it's reserved)
-		if name, ok := arr[1].(Name); ok && name == "None" {
+		if name, ok := arr[1].(object.Name); ok && name == "None" {
 			// "None" is a special name in PDF 2.0 only
 			if level != PDFA4 {
 				*errs = append(*errs, ValidationError{
@@ -4799,7 +4416,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj Object, objNum int, level PDF
 			maxColorants = 32
 		}
 		if maxColorants > 0 {
-			if namesArr, ok := doc.Resolve(arr[1]).(Array); ok && len(namesArr) > maxColorants {
+			if namesArr, ok := doc.Resolve(arr[1]).(object.Array); ok && len(namesArr) > maxColorants {
 				*errs = append(*errs, ValidationError{
 					Rule:    rule,
 					Level:   level,
@@ -4810,7 +4427,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj Object, objNum int, level PDF
 		}
 
 		// Get colorant names from the DeviceN array
-		namesArr, namesOk := doc.Resolve(arr[1]).(Array)
+		namesArr, namesOk := doc.Resolve(arr[1]).(object.Array)
 
 		// Spot colorants require a Colorants dictionary with their
 		// definitions (ISO 19005-2/-3/-4, 6.2.4.4); process colour names
@@ -4818,7 +4435,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj Object, objNum int, level PDF
 		if level != PDFA1b && namesOk {
 			hasSpot := false
 			for _, nameObj := range namesArr {
-				if name, ok := nameObj.(Name); ok && !isProcessColorant(name) {
+				if name, ok := nameObj.(object.Name); ok && !isProcessColorant(name) {
 					hasSpot = true
 					break
 				}
@@ -4852,7 +4469,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj Object, objNum int, level PDF
 						// Check that each DeviceN colorant name has an entry in Colorants dict
 						if namesOk {
 							for _, nameObj := range namesArr {
-								if name, ok := nameObj.(Name); ok {
+								if name, ok := nameObj.(object.Name); ok {
 									if colorantsDict.Get(name) == nil {
 										rule := "6.2.4"
 										if level == PDFA1b {
@@ -4883,7 +4500,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj Object, objNum int, level PDF
 // CalRGB, or Lab colour space against ISO 32000-1 Tables 63-65: WhitePoint
 // is required with Xw, Zw positive and Yw exactly 1.0; BlackPoint components
 // must be non-negative; a Lab Range must be four numbers with min <= max.
-func checkCIEDictParams(doc core.View, family string, dict *Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkCIEDictParams(doc core.View, family string, dict *object.Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
 	rule := "6.2.4"
 	if level == PDFA1b {
 		rule = "6.2.3"
@@ -4896,17 +4513,17 @@ func checkCIEDictParams(doc core.View, family string, dict *Dictionary, objNum i
 			Object:  objNum,
 		})
 	}
-	nums := func(v Object) ([]float64, bool) {
-		arr, ok := doc.Resolve(v).(Array)
+	nums := func(v object.Object) ([]float64, bool) {
+		arr, ok := doc.Resolve(v).(object.Array)
 		if !ok {
 			return nil, false
 		}
 		out := make([]float64, 0, len(arr))
 		for _, el := range arr {
 			switch n := doc.Resolve(el).(type) {
-			case Integer:
+			case object.Integer:
 				out = append(out, float64(n))
-			case Real:
+			case object.Real:
 				out = append(out, float64(n))
 			default:
 				return nil, false
@@ -4946,9 +4563,9 @@ func checkCIEDictParams(doc core.View, family string, dict *Dictionary, objNum i
 		if g := dict.Get("Gamma"); g != nil {
 			gv, isNum := 0.0, false
 			switch n := doc.Resolve(g).(type) {
-			case Integer:
+			case object.Integer:
 				gv, isNum = float64(n), true
-			case Real:
+			case object.Real:
 				gv, isNum = float64(n), true
 			}
 			if !isNum || gv <= 0 {
@@ -4960,7 +4577,7 @@ func checkCIEDictParams(doc core.View, family string, dict *Dictionary, objNum i
 
 // isProcessColorant reports whether a DeviceN colorant name refers to a
 // process colour (or the reserved names), which needs no Colorants entry.
-func isProcessColorant(name Name) bool {
+func isProcessColorant(name object.Name) bool {
 	switch name {
 	case "Cyan", "Magenta", "Yellow", "Black", "None", "All":
 		return true
@@ -4972,12 +4589,12 @@ func isProcessColorant(name Name) bool {
 // is not a restricted space. For PDF/A-1b, device CS alternates are always forbidden
 // (must be CIE-based). For 2b/3b/4, device alternates are handled by checkDeviceColorSpaces
 // which verifies OutputIntent coverage.
-func checkAlternateCS(doc core.View, altCS Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkAlternateCS(doc core.View, altCS object.Object, objNum int, level PDFALevel, errs *[]ValidationError) {
 	checkAlternateCSSeen(doc, altCS, objNum, level, errs, make(map[int]bool))
 }
 
-func checkAlternateCSSeen(doc core.View, altCS Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
-	if r, ok := altCS.(IndirectRef); ok {
+func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+	if r, ok := altCS.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle through an indirect alternate color-space reference
 		}
@@ -4985,7 +4602,7 @@ func checkAlternateCSSeen(doc core.View, altCS Object, objNum int, level PDFALev
 	}
 	resolved := doc.Resolve(altCS)
 
-	if n, ok := resolved.(Name); ok {
+	if n, ok := resolved.(object.Name); ok {
 		switch n {
 		case "DeviceRGB", "DeviceCMYK", "DeviceGray":
 			// For PDF/A-1b: a device alternate follows the same rule as
@@ -5031,8 +4648,8 @@ func checkAlternateCSSeen(doc core.View, altCS Object, objNum int, level PDFALev
 	}
 
 	// If it's an array, recurse to check for nested Separation/DeviceN
-	if arr, ok := resolved.(Array); ok && len(arr) >= 2 {
-		if csType, ok := arr[0].(Name); ok {
+	if arr, ok := resolved.(object.Array); ok && len(arr) >= 2 {
+		if csType, ok := arr[0].(object.Name); ok {
 			if csType == "Separation" || csType == "DeviceN" {
 				// Nested Separation/DeviceN - check their alternates too
 				if len(arr) >= 3 {
@@ -5098,34 +4715,34 @@ func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage 
 
 // iccCMYKProfile returns the profile stream when csVal is an ICCBased colour
 // space with N=4, nil otherwise.
-func iccCMYKProfile(doc core.View, csVal Object) *Stream {
-	arr, ok := doc.Resolve(csVal).(Array)
+func iccCMYKProfile(doc core.View, csVal object.Object) *object.Stream {
+	arr, ok := doc.Resolve(csVal).(object.Array)
 	if !ok || len(arr) < 2 {
 		return nil
 	}
-	if n, _ := arr[0].(Name); n != "ICCBased" {
+	if n, _ := arr[0].(object.Name); n != "ICCBased" {
 		return nil
 	}
-	stream, ok := doc.Resolve(arr[1]).(*Stream)
+	stream, ok := doc.Resolve(arr[1]).(*object.Stream)
 	if !ok {
 		return nil
 	}
-	if n, ok := stream.Dict.Get("N").(Integer); !ok || n != 4 {
+	if n, ok := stream.Dict.Get("N").(object.Integer); !ok || n != 4 {
 		return nil
 	}
 	return stream
 }
 
 // iccProfileStream returns the profile stream of any ICCBased colour space.
-func iccProfileStream(doc core.View, csVal Object) *Stream {
-	arr, ok := doc.Resolve(csVal).(Array)
+func iccProfileStream(doc core.View, csVal object.Object) *object.Stream {
+	arr, ok := doc.Resolve(csVal).(object.Array)
 	if !ok || len(arr) < 2 {
 		return nil
 	}
-	if n, _ := arr[0].(Name); n != "ICCBased" {
+	if n, _ := arr[0].(object.Name); n != "ICCBased" {
 		return nil
 	}
-	stream, _ := doc.Resolve(arr[1]).(*Stream)
+	stream, _ := doc.Resolve(arr[1]).(*object.Stream)
 	return stream
 }
 
@@ -5133,7 +4750,7 @@ func iccProfileStream(doc core.View, csVal Object) *Stream {
 // the same object, or byte-identical data after zeroing the Profile ID field
 // (ICC header bytes 84-99), which is what distinguishes an original from a
 // copy whose MD5 was filled in.
-func sameICCProfile(doc core.View, a, b *Stream) bool {
+func sameICCProfile(doc core.View, a, b *object.Stream) bool {
 	if a == nil || b == nil {
 		return false
 	}
@@ -5206,11 +4823,11 @@ func checkICCBasedUsageRules(doc core.View, level PDFALevel) []ValidationError {
 				if gs == nil {
 					continue
 				}
-				if v, ok := gs.Get("OPM").(Integer); ok && v == 1 {
+				if v, ok := gs.Get("OPM").(object.Integer); ok && v == 1 {
 					opm1 = true
 				}
-				strokeSet, strokeIsSet := gs.Get("OP").(Boolean)
-				fillSet, fillIsSet := gs.Get("op").(Boolean)
+				strokeSet, strokeIsSet := gs.Get("OP").(object.Boolean)
+				fillSet, fillIsSet := gs.Get("op").(object.Boolean)
 				if strokeIsSet && bool(strokeSet) {
 					opStroke = true
 				}
@@ -5226,7 +4843,7 @@ func checkICCBasedUsageRules(doc core.View, level PDFALevel) []ValidationError {
 			continue
 		}
 		checkOne := func(name string, stroke bool) {
-			csVal := csDict.Get(Name(name))
+			csVal := csDict.Get(object.Name(name))
 			if csVal == nil {
 				return
 			}
@@ -5340,7 +4957,7 @@ func checkJPXImages(doc core.View, level PDFALevel) []ValidationError {
 
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok || !hasFilter(stream, "JPXDecode") {
 			continue
 		}
@@ -5403,4 +5020,38 @@ func allZero(b []byte) bool {
 		}
 	}
 	return true
+}
+
+// exampleFindings collects at most one ValidationError per distinct rule and
+// message. Several rules report a single representative example rather than
+// every occurrence, and their candidates arrive from a range over doc.Objects,
+// doc.Offsets or collectContentStreamData — Go maps, whose iteration order is
+// randomised on every run. Keeping whichever candidate the range happened to
+// yield first therefore named a different object each time the same file was
+// validated. Keeping the numerically smallest object number instead is a total
+// order over the candidates, so the report is reproducible. The choice is
+// load-bearing, not incidental: reports are diffed run against run.
+//
+// Emission order is deliberately not part of the contract — ValidatePDFABytes
+// sorts the concatenated findings before returning them.
+type exampleFindings struct {
+	idx  map[string]int // rule+message -> index into errs
+	errs []ValidationError
+}
+
+// add records e, or — when a finding with the same rule and message is already
+// held — lowers that finding's object number to e's when e's is smaller.
+func (f *exampleFindings) add(e ValidationError) {
+	key := e.Rule + "\x00" + e.Message
+	if i, ok := f.idx[key]; ok {
+		if e.Object < f.errs[i].Object {
+			f.errs[i].Object = e.Object
+		}
+		return
+	}
+	if f.idx == nil {
+		f.idx = make(map[string]int)
+	}
+	f.idx[key] = len(f.errs)
+	f.errs = append(f.errs, e)
 }

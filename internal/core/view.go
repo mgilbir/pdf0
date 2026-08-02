@@ -231,17 +231,19 @@ func (v View) Note(guard, detail string, obj int) {
 	v.Run.Trips.Note(guard, detail, obj)
 }
 
-// Guard identifiers for the two budgets this file charges. The rest live with
-// the guards that raise them, in the root package; these two are here because
-// Content is what trips them.
+// Guard identifiers: the stable strings that name which budget stopped a check.
+// They live here, in the package the budgets themselves live in, so that every
+// package that raises one and every test that asserts on one names the same
+// constant rather than repeating the string.
 const (
-	GuardContentStream = "content-stream-size"   // Limits.ContentStreamBytes, WithMaxContentStreamBytes
-	GuardContentTotal  = "decoded-content-total" // Limits.DecodedContentBytes, WithMaxDecodedContentBytes
-	GuardCmapWork      = "cmap-work"             // Limits.CmapWork, WithMaxCmapWork
-	GuardGridFills     = "table-grid-fills"      // Limits.TableGridFills, WithMaxTableGridFills
-	GuardRoleMapWork   = "rolemap-work"          // Limits.RoleMapSteps, WithMaxRoleMapSteps
-	GuardCIDWidthRange = "cid-width-range"       // Limits.CIDRangeSpan, WithMaxCIDRangeSpan
-	GuardEmbeddedPDFA  = "embedded-pdfa"         // no bound of its own; the recursive embedded check
+	GuardContentStream = "content-stream-size"       // Limits.ContentStreamBytes, WithMaxContentStreamBytes
+	GuardContentTotal  = "decoded-content-total"     // Limits.DecodedContentBytes, WithMaxDecodedContentBytes
+	GuardCmapWork      = "cmap-work"                 // Limits.CmapWork, WithMaxCmapWork
+	GuardGridFills     = "table-grid-fills"          // Limits.TableGridFills, WithMaxTableGridFills
+	GuardRoleMapWork   = "rolemap-work"              // Limits.RoleMapSteps, WithMaxRoleMapSteps
+	GuardCIDWidthRange = "cid-width-range"           // Limits.CIDRangeSpan, WithMaxCIDRangeSpan
+	GuardEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own; the recursive embedded check
+	GuardObjStmTotal   = "objstm-decompressed-total" // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes
 )
 
 // Pages returns the page tree under ref flattened into document order,

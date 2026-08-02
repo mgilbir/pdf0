@@ -1,8 +1,9 @@
-package pdf0
+package pdfa
 
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 )
@@ -11,23 +12,23 @@ import (
 // reverse-dictionary-lookup helpers agree, with objNumForDict keeping its
 // 0-on-miss convention (for ValidationError.Object) while dictObjNum reports -1.
 func TestObjNumForDictParity(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}}
-	font := &Dictionary{}
-	font.Set("Type", Name("Font"))
-	doc.Objects[7] = &IndirectObject{Number: 7, Value: font}
+	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{}})
+	font := &object.Dictionary{}
+	font.Set("Type", object.Name("Font"))
+	doc.Objects[7] = &object.IndirectObject{Number: 7, Value: font}
 
-	if got := objNumForDict(doc.view(), font); got != 7 {
+	if got := objNumForDict(doc, font); got != 7 {
 		t.Fatalf("objNumForDict(font) = %d, want 7", got)
 	}
-	if got := doc.view().DictObjNum(font); got != 7 {
+	if got := doc.DictObjNum(font); got != 7 {
 		t.Fatalf("dictObjNum(font) = %d, want 7", got)
 	}
 
-	orphan := &Dictionary{} // never installed as an indirect object
-	if got := objNumForDict(doc.view(), orphan); got != 0 {
+	orphan := &object.Dictionary{} // never installed as an indirect object
+	if got := objNumForDict(doc, orphan); got != 0 {
 		t.Fatalf("objNumForDict(orphan) = %d, want 0 (unknown-object sentinel)", got)
 	}
-	if got := doc.view().DictObjNum(orphan); got != -1 {
+	if got := doc.DictObjNum(orphan); got != -1 {
 		t.Fatalf("dictObjNum(orphan) = %d, want -1", got)
 	}
 }

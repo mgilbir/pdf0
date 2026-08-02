@@ -1,4 +1,6 @@
-package pdf0
+package pdfa
+
+import "github.com/mgilbir/pdf0/object"
 
 import "github.com/mgilbir/pdf0/internal/core"
 
@@ -91,7 +93,7 @@ func checkContentStreamOperators(doc core.View, level PDFALevel) []ValidationErr
 	// Only EXECUTED content is validated: an operator inside a form XObject
 	// that no content stream invokes does not appear on the page (the
 	// corpus passes an UnknownOperator in an uninvoked form).
-	seenContainer := map[*Dictionary]bool{}
+	seenContainer := map[*object.Dictionary]bool{}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
 		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, seenContainer, add)
@@ -111,7 +113,7 @@ func checkContentStreamOperators(doc core.View, level PDFALevel) []ValidationErr
 	// the page (ISO 19005 6.2.2; a glyph proc that references a colour space
 	// present only in the page resources is invalid).
 	for fontDict, u := range core.CollectFontTextUsage(doc) {
-		if st, _ := fontDict.Get("Subtype").(Name); st != "Type3" || !rendersVisibly(u) {
+		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type3" || !rendersVisibly(u) {
 			continue
 		}
 		res := doc.ResolveDict(fontDict.Get("Resources"))
@@ -120,7 +122,7 @@ func checkContentStreamOperators(doc core.View, level PDFALevel) []ValidationErr
 			continue
 		}
 		for _, cpVal := range cps.Values {
-			if cp, ok := doc.Resolve(cpVal).(*Stream); ok {
+			if cp, ok := doc.Resolve(cpVal).(*object.Stream); ok {
 				if cpData := doc.Content(cp); cpData != nil {
 					checkContentTokens(cpData, res, doc, u.ObjNum, add)
 				}
@@ -133,7 +135,7 @@ func checkContentStreamOperators(doc core.View, level PDFALevel) []ValidationErr
 // appearanceStream pairs an annotation appearance stream with the object number
 // to attribute its violations to.
 type appearanceStream struct {
-	stream *Stream
+	stream *object.Stream
 	objNum int
 }
 
@@ -142,25 +144,25 @@ type appearanceStream struct {
 // sub-dictionary of appearance-state streams.
 func collectAppearanceStreams(doc core.View) []appearanceStream {
 	var out []appearanceStream
-	add := func(n Object, objNum int) {
+	add := func(n object.Object, objNum int) {
 		switch v := doc.Resolve(n).(type) {
-		case *Stream:
+		case *object.Stream:
 			out = append(out, appearanceStream{stream: v, objNum: objNum})
-		case *Dictionary:
+		case *object.Dictionary:
 			for _, sv := range v.Values {
-				if s, ok := doc.Resolve(sv).(*Stream); ok {
+				if s, ok := doc.Resolve(sv).(*object.Stream); ok {
 					out = append(out, appearanceStream{stream: s, objNum: objNum})
 				}
 			}
 		}
 	}
-	visit := func(annot *Dictionary, num int) {
+	visit := func(annot *object.Dictionary, num int) {
 		if ap := doc.ResolveDict(annot.Get("AP")); ap != nil {
 			add(ap.Get("N"), num)
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(dict) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(dict) {
 			visit(dict, num)
 		}
 	}
@@ -172,7 +174,7 @@ func collectAppearanceStreams(doc core.View) []appearanceStream {
 
 // walkExecutedContent validates a content stream and recurses into the form
 // XObjects and tiling patterns it actually invokes.
-func walkExecutedContent(doc core.View, container *Dictionary, data []byte, key *Stream, objNum int, seen map[*Dictionary]bool, add func(string, int)) {
+func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, seen map[*object.Dictionary]bool, add func(string, int)) {
 	// One invocation scans one content stream and recurses into the forms and
 	// patterns it draws, so this is the per-stream cancellation boundary of the
 	// executed-content model (cancel.go).
@@ -193,15 +195,15 @@ func walkExecutedContent(doc core.View, container *Dictionary, data []byte, key 
 			if !used.XObjects[string(key)] {
 				continue
 			}
-			if s, ok := doc.Resolve(xobj.Values[i]).(*Stream); ok {
-				st, _ := s.Dict.Get("Subtype").(Name)
+			if s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream); ok {
+				st, _ := s.Dict.Get("Subtype").(object.Name)
 				xnum := resolveObjNum(doc, xobj.Values[i])
 				// A PostScript XObject that is actually drawn is prohibited
 				// (ISO 19005-1 6.2.5, -2/-3/-4 6.2.9).
 				if st == "PS" {
 					add("a drawn PostScript XObject is not permitted", xnum)
 				} else if st == "Form" {
-					if s2, _ := s.Dict.Get("Subtype2").(Name); s2 == "PS" {
+					if s2, _ := s.Dict.Get("Subtype2").(object.Name); s2 == "PS" {
 						add("a drawn form XObject has /Subtype2 /PS (PostScript)", xnum)
 					}
 					if s.Dict.Get("PS") != nil {
@@ -217,7 +219,7 @@ func walkExecutedContent(doc core.View, container *Dictionary, data []byte, key 
 			if !used.Patterns[string(key)] {
 				continue
 			}
-			if s, ok := doc.Resolve(pat.Values[i]).(*Stream); ok {
+			if s, ok := doc.Resolve(pat.Values[i]).(*object.Stream); ok {
 				walkExecutedContent(doc, &s.Dict, doc.Content(s), s, i, seen, add)
 			}
 		}
@@ -226,7 +228,7 @@ func walkExecutedContent(doc core.View, container *Dictionary, data []byte, key 
 
 // checkContentTokens scans one content stream for undefined operators, custom
 // rendering intents, and unresolved named resource references.
-func checkContentTokens(data []byte, res *Dictionary, doc core.View, objNum int, add func(string, int)) {
+func checkContentTokens(data []byte, res *object.Dictionary, doc core.View, objNum int, add func(string, int)) {
 	var lastName string
 	core.ForEachContentToken(doc.Cancel, data, func(tok []byte, isName bool) {
 		if isName {
@@ -287,18 +289,18 @@ func isContentOperand(s string) bool {
 
 // namedResourcePresent reports whether a named resource of the given category
 // exists in the resource dictionary.
-func namedResourcePresent(doc core.View, res *Dictionary, category, name string) bool {
+func namedResourcePresent(doc core.View, res *object.Dictionary, category, name string) bool {
 	if name == "" {
 		return true // no name captured; do not flag
 	}
 	if res == nil {
 		return false
 	}
-	sub := doc.ResolveDict(res.Get(Name(category)))
+	sub := doc.ResolveDict(res.Get(object.Name(category)))
 	if sub == nil {
 		return false
 	}
-	return sub.Get(Name(name)) != nil
+	return sub.Get(object.Name(name)) != nil
 }
 
 // builtinColorSpaceName lists the colour-space names selectable with cs/CS
@@ -312,8 +314,8 @@ var builtinColorSpaceName = map[string]bool{
 // extraction, distinct from (*Document).dictObjNum / objNumForDict, which scan
 // the object table for a dictionary's identity; callers that already hold the
 // reference use this to avoid the scan.
-func resolveObjNum(doc core.View, o Object) int {
-	if ref, ok := o.(IndirectRef); ok {
+func resolveObjNum(doc core.View, o object.Object) int {
+	if ref, ok := o.(object.IndirectRef); ok {
 		return ref.Number
 	}
 	return 0
@@ -417,7 +419,7 @@ func checkICCProfileIdentity(doc core.View, level PDFALevel) []ValidationError {
 		seen[msg] = true
 		errs = append(errs, ValidationError{Rule: "6.2.4.2", Level: level, Message: msg, Object: obj})
 	}
-	seenC := map[*Dictionary]bool{}
+	seenC := map[*object.Dictionary]bool{}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		// PDF/A-4 permits page-level output intents; prefer the page's own.
 		oiProfile := catalogOI
@@ -433,8 +435,8 @@ func checkICCProfileIdentity(doc core.View, level PDFALevel) []ValidationError {
 
 // pdfaOutputIntentProfile returns the DestOutputProfile of a dictionary's
 // GTS_PDFA1 output intent, or nil.
-func pdfaOutputIntentProfile(doc core.View, container *Dictionary) *Stream {
-	arr, ok := doc.Resolve(container.Get("OutputIntents")).(Array)
+func pdfaOutputIntentProfile(doc core.View, container *object.Dictionary) *object.Stream {
+	arr, ok := doc.Resolve(container.Get("OutputIntents")).(object.Array)
 	if !ok {
 		return nil
 	}
@@ -443,8 +445,8 @@ func pdfaOutputIntentProfile(doc core.View, container *Dictionary) *Stream {
 		if d == nil {
 			continue
 		}
-		if s, _ := d.Get("S").(Name); s == "GTS_PDFA1" {
-			if p, ok := doc.Resolve(d.Get("DestOutputProfile")).(*Stream); ok {
+		if s, _ := d.Get("S").(object.Name); s == "GTS_PDFA1" {
+			if p, ok := doc.Resolve(d.Get("DestOutputProfile")).(*object.Stream); ok {
 				return p
 			}
 		}
@@ -452,7 +454,7 @@ func pdfaOutputIntentProfile(doc core.View, container *Dictionary) *Stream {
 	return nil
 }
 
-func walkICCIdentity(doc core.View, container *Dictionary, data []byte, key *Stream, objNum int, oi, blend *Stream, seen map[*Dictionary]bool, add func(string, int)) {
+func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, oi, blend *object.Stream, seen map[*object.Dictionary]bool, add func(string, int)) {
 	if container == nil || seen[container] || data == nil {
 		return
 	}
@@ -467,7 +469,7 @@ func walkICCIdentity(doc core.View, container *Dictionary, data []byte, key *Str
 		if csDict == nil {
 			return
 		}
-		prof := renderedICCCMYKProfile(doc, csDict.Get(Name(name)))
+		prof := renderedICCCMYKProfile(doc, csDict.Get(object.Name(name)))
 		if prof == nil {
 			return
 		}
@@ -493,11 +495,11 @@ func walkICCIdentity(doc core.View, container *Dictionary, data []byte, key *Str
 			if !used.XObjects[string(xkey)] {
 				continue
 			}
-			s, ok := doc.Resolve(xobj.Values[i]).(*Stream)
+			s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream)
 			if !ok {
 				continue
 			}
-			if st, _ := s.Dict.Get("Subtype").(Name); st != "Form" {
+			if st, _ := s.Dict.Get("Subtype").(object.Name); st != "Form" {
 				continue
 			}
 			childBlend := blend
@@ -511,7 +513,7 @@ func walkICCIdentity(doc core.View, container *Dictionary, data []byte, key *Str
 
 // groupBlendProfile returns the ICC profile of a container's transparency
 // group blending colour space, or nil.
-func groupBlendProfile(doc core.View, container *Dictionary) *Stream {
+func groupBlendProfile(doc core.View, container *object.Dictionary) *object.Stream {
 	if g := doc.ResolveDict(container.Get("Group")); g != nil {
 		return iccProfileStream(doc, g.Get("CS"))
 	}
@@ -521,15 +523,15 @@ func groupBlendProfile(doc core.View, container *Dictionary) *Stream {
 // renderedICCCMYKProfile returns the ICCBased CMYK profile a colour space
 // renders through: the space itself, or the ICCBased CMYK alternate of a
 // Separation or DeviceN space.
-func renderedICCCMYKProfile(doc core.View, csVal Object) *Stream {
+func renderedICCCMYKProfile(doc core.View, csVal object.Object) *object.Stream {
 	if p := iccCMYKProfile(doc, csVal); p != nil {
 		return p
 	}
-	arr, ok := doc.Resolve(csVal).(Array)
+	arr, ok := doc.Resolve(csVal).(object.Array)
 	if !ok || len(arr) < 3 {
 		return nil
 	}
-	if n, _ := arr[0].(Name); n == "Separation" || n == "DeviceN" {
+	if n, _ := arr[0].(object.Name); n == "Separation" || n == "DeviceN" {
 		return iccCMYKProfile(doc, arr[2])
 	}
 	return nil

@@ -27,33 +27,6 @@ func TestEmptyArrayColorSpaceNoPanic(t *testing.T) {
 	_ = ValidatePDFABytes(doc, PDFA2b, nil)
 }
 
-// TestSelfReferentialDeviceNTerminates ensures a cyclic DeviceN /Colorants does
-// not recurse forever (audit C4). It runs collectSeparationConsistency directly
-// since a stack overflow is fatal and cannot be caught by recover.
-func TestSelfReferentialDeviceNTerminates(t *testing.T) {
-	// obj 10: [ /DeviceN [/A] /DeviceRGB <tint> << /Colorants << /A 10 0 R >> >> ]
-	devN := Array{
-		Name("DeviceN"),
-		Array{Name("A")},
-		Name("DeviceRGB"),
-		IndirectRef{Number: 99},
-		IndirectRef{Number: 11},
-	}
-	attrs := &Dictionary{}
-	colorants := &Dictionary{}
-	colorants.Set("A", IndirectRef{Number: 10}) // cycle back to the DeviceN array
-	attrs.Set("Colorants", colorants)
-	doc := &Document{Objects: map[int]*IndirectObject{
-		10: {Number: 10, Value: devN},
-		11: {Number: 11, Value: attrs},
-		99: {Number: 99, Value: Null{}},
-	}}
-	tt := map[Name]sepColorantSeen{}
-	var errs []ValidationError
-	// Must return; if the cycle guard is missing this overflows the stack.
-	collectSeparationConsistency(doc.view(), IndirectRef{Number: 10}, tt, 10, PDFA2b, &errs)
-}
-
 // TestEqualCyclicNoOverflow ensures Equal on a cyclic direct dictionary returns
 // rather than overflowing the stack (audit C15).
 func TestEqualCyclicNoOverflow(t *testing.T) {

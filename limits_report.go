@@ -62,10 +62,10 @@ func IsCheckerFinding(v Violation) bool { return finding.IsCheckerFinding(v) }
 // caller can move: a trip on a lowered bound is the caller's own configuration
 // answering back, and the message says so (see limitBound).
 const (
-	limitCmapWork      = "cmap-work"                 // limits.cmapWork, WithMaxCmapWork — fontprog.go
-	limitContentStream = "content-stream-size"       // limits.contentStreamBytes, WithMaxContentStreamBytes — pdfa.go
-	limitContentTotal  = "decoded-content-total"     // limits.decodedContentBytes, WithMaxDecodedContentBytes — pdfa.go
-	limitObjStmTotal   = "objstm-decompressed-total" // limits.objectStreamBytes, WithMaxObjectStreamBytes — objstm.go
+	limitCmapWork      = core.GuardCmapWork      // Limits.CmapWork, WithMaxCmapWork — internal/font
+	limitContentStream = core.GuardContentStream // Limits.ContentStreamBytes, WithMaxContentStreamBytes — pdfa
+	limitContentTotal  = core.GuardContentTotal  // Limits.DecodedContentBytes, WithMaxDecodedContentBytes — pdfa
+	limitObjStmTotal   = core.GuardObjStmTotal   // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes — objstm.go
 )
 
 // noteReadLimit records a guard trip that happened while the file was being

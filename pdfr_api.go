@@ -74,7 +74,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 		}
 	})
 
-	var pages []PageInfo
+	var pages []core.PageInfo
 	run(func() {
 		pages = v.view().Pages(cat.Get("Pages"))
 		if len(pages) == 0 {

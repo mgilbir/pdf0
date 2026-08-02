@@ -2,10 +2,10 @@ package pdf0
 
 import (
 	"bytes"
-	"encoding/binary"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/internal/font"
+	"github.com/mgilbir/pdf0/internal/fonttest"
 	"strings"
 	"testing"
 )
@@ -22,15 +22,6 @@ import (
 
 // --- helpers ---
 
-func hasMessage(msgs []string, sub string) bool {
-	for _, m := range msgs {
-		if strings.Contains(m, sub) {
-			return true
-		}
-	}
-	return false
-}
-
 func errMessages(errs []ValidationError) []string {
 	out := make([]string, len(errs))
 	for i, e := range errs {
@@ -38,43 +29,6 @@ func errMessages(errs []ValidationError) []string {
 	}
 	return out
 }
-
-// sfntTable is one table of a synthetic sfnt font program.
-type sfntTable struct {
-	tag  string
-	data []byte
-}
-
-// buildTestSFNT assembles a minimal TrueType font program from the given
-// tables. Only the table directory has to be right for parseSFNT.
-func buildTestSFNT(tables []sfntTable) []byte {
-	n := len(tables)
-	dir := make([]byte, 12+16*n)
-	binary.BigEndian.PutUint32(dir[0:], 0x00010000)
-	binary.BigEndian.PutUint16(dir[4:], uint16(n))
-	body := []byte{}
-	off := len(dir)
-	for i, t := range tables {
-		rec := 12 + 16*i
-		copy(dir[rec:], t.tag)
-		binary.BigEndian.PutUint32(dir[rec+8:], uint32(off+len(body)))
-		binary.BigEndian.PutUint32(dir[rec+12:], uint32(len(t.data)))
-		body = append(body, t.data...)
-	}
-	return append(dir, body...)
-}
-
-// cmapTable wraps one subtable as a (3,1) Windows Unicode cmap table.
-func cmapTable(sub []byte) []byte {
-	hdr := make([]byte, 12)
-	binary.BigEndian.PutUint16(hdr[2:], 1) // one subtable
-	binary.BigEndian.PutUint16(hdr[4:], 3) // platform 3
-	binary.BigEndian.PutUint16(hdr[6:], 1) // encoding 1
-	binary.BigEndian.PutUint32(hdr[8:], 12)
-	return append(hdr, sub...)
-}
-
-// --- the cmap work budget (limits.cmapWork, WithMaxCmapWork) ---
 
 // budgetBustingCmap builds a format-4 subtable whose segments cost more work
 // than defaultMaxCmapWork allows. The first five segments each span the whole
@@ -90,7 +44,16 @@ func budgetBustingCmap() []byte {
 	}
 	segs = append(segs, [3]int{0x0041, 0x0041, 100})
 	segs = append(segs, [3]int{0xFFFF, 0xFFFF, 1}) // sentinel
-	return buildCmapFormat4(segs)
+	return fonttest.CmapFormat4(segs)
+}
+
+func hasMessage(msgs []string, sub string) bool {
+	for _, m := range msgs {
+		if strings.Contains(m, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
@@ -105,153 +68,6 @@ func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
 		t.Fatal("fixture wrong: code 0x41 was mapped, so nothing is missing")
 	}
 }
-
-// TestCmapWorkBudgetDoesNotCondemnGlyphs is the false positive itself: with the
-// budget tripped, font.TrueTypeGID's "a non-nil cmap is authoritative" contract turns
-// every unread mapping into glyph 0, so a conformant font is reported as not
-// defining a glyph it does define, and as referencing .notdef.
-//
-// Before the fix this failed with:
-//
-//	glyph-coverage rules fired on a font whose cmap was truncated by the work
-//	budget: [embedded TrueType font does not define a glyph referenced for
-//	rendering (code 65) text showing operator references the .notdef glyph in
-//	TrueType font]
-func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
-	head := make([]byte, 54)
-	binary.BigEndian.PutUint16(head[18:], 1000) // unitsPerEm
-	maxp := make([]byte, 6)
-	binary.BigEndian.PutUint16(maxp[4:], 300) // numGlyphs
-	prog := buildTestSFNT([]sfntTable{
-		{"head", head},
-		{"maxp", maxp},
-		{"cmap", cmapTable(budgetBustingCmap())},
-	})
-
-	fd := &Dictionary{}
-	fd.Set("Flags", Integer(32)) // non-symbolic: codes go through the (3,1) cmap
-	fd.Set("FontFile2", IndirectRef{Number: 9})
-	font := &Dictionary{}
-	font.Set("Subtype", Name("TrueType"))
-	font.Set("Encoding", Name("WinAnsiEncoding"))
-	font.Set("FontDescriptor", fd)
-	doc := &Document{Objects: map[int]*IndirectObject{
-		1: {Number: 1, Value: font},
-		9: {Number: 9, Value: &Stream{Dict: Dictionary{}, Data: prog}},
-	}}
-	doc = beginRun(doc)
-
-	if fp := core.LoadFontProgram(doc.view(), fd); fp == nil || !fp.CmapPartial {
-		t.Fatalf("fixture wrong: font program parsed=%v, cmapPartial=%v", fp != nil, fp != nil && fp.CmapPartial)
-	}
-
-	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{[]byte("A")}, Modes: map[int]bool{0: true}}
-	msgs := errMessages(checkSimpleFontConsistency(doc.view(), PDFA1b, "6.3", font, u))
-	var bad []string
-	for _, m := range msgs {
-		if strings.Contains(m, "does not define a glyph") || strings.Contains(m, ".notdef") {
-			bad = append(bad, m)
-		}
-	}
-	if len(bad) > 0 {
-		t.Errorf("glyph-coverage rules fired on a font whose cmap was truncated by the work budget: %v", bad)
-	}
-
-	// The trip is not silently swallowed either.
-	trips := doc.valCache.run.limits.Snapshot()
-	if len(trips) == 0 || trips[0].Guard() != limitCmapWork {
-		t.Errorf("cmap work-budget trip was not reported: %v", trips)
-	}
-}
-
-// --- the CID /W range span limit (limits.cidRangeSpan, WithMaxCIDRangeSpan) ---
-
-// TestCIDWidthRangeBudgetReportsPartial pins the parse-level contract: an
-// over-wide /W range is dropped, and the map says so rather than looking like a
-// font that simply declares no width for those CIDs.
-func TestCIDWidthRangeBudgetReportsPartial(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}}
-	if _, complete := parseCIDWidths(doc.view(), Array{Integer(0), Integer(2_000_000_000), Real(500)}); complete {
-		t.Error("an over-wide /W range was dropped but the map claims to be complete")
-	}
-	// A malformed (inverted) range declares nothing, so nothing is missing.
-	if _, complete := parseCIDWidths(doc.view(), Array{Integer(100), Integer(10), Real(500)}); !complete {
-		t.Error("an inverted /W range is malformed input, not a budget trip")
-	}
-	if _, complete := parseCIDWidths(doc.view(), Array{Integer(0), Integer(65535), Real(500)}); !complete {
-		t.Error("a full-CID-space /W range fits the budget and must count as complete")
-	}
-}
-
-// TestCIDWidthBudgetDoesNotReportWidthMismatch is the false positive: with the
-// range dropped, every CID in it falls back to /DW (default 1000) and is then
-// compared against the font program's real advance, emitting "width information
-// ... is inconsistent" against a file whose /W says exactly the right thing.
-//
-// Before the fix this failed with:
-//
-//	width rule fired on a font whose /W was dropped by the range budget:
-//	[width information for glyphs used for rendering is inconsistent in
-//	CIDFontType2 font]
-func TestCIDWidthBudgetDoesNotReportWidthMismatch(t *testing.T) {
-	// A CIDFontType2 program whose glyph 1 advances 500 units.
-	head := make([]byte, 54)
-	binary.BigEndian.PutUint16(head[18:], 1000)
-	maxp := make([]byte, 6)
-	binary.BigEndian.PutUint16(maxp[4:], 4)
-	hhea := make([]byte, 36)
-	binary.BigEndian.PutUint16(hhea[34:], 4) // numberOfHMetrics
-	hmtx := make([]byte, 16)
-	for gid := 0; gid < 4; gid++ {
-		binary.BigEndian.PutUint16(hmtx[4*gid:], 500)
-	}
-	loca := make([]byte, 2*(4+1))
-	for i := range loca {
-		loca[i] = 0
-	}
-	glyf := make([]byte, 0)
-	prog := buildTestSFNT([]sfntTable{
-		{"head", head}, {"maxp", maxp}, {"hhea", hhea}, {"hmtx", hmtx},
-		{"loca", loca}, {"glyf", glyf},
-	})
-
-	fd := &Dictionary{}
-	fd.Set("Flags", Integer(4))
-	fd.Set("FontFile2", IndirectRef{Number: 9})
-	desc := &Dictionary{}
-	desc.Set("Subtype", Name("CIDFontType2"))
-	desc.Set("FontDescriptor", fd)
-	desc.Set("CIDToGIDMap", Name("Identity"))
-	// The file declares width 500 for every CID — correctly — but as one range
-	// wider than the guard will expand.
-	desc.Set("W", Array{Integer(0), Integer(2_000_000_000), Real(500)})
-	font := &Dictionary{}
-	font.Set("Subtype", Name("Type0"))
-	font.Set("Encoding", Name("Identity-H"))
-	font.Set("DescendantFonts", Array{desc})
-	doc := &Document{Objects: map[int]*IndirectObject{
-		1: {Number: 1, Value: font},
-		9: {Number: 9, Value: &Stream{Dict: Dictionary{}, Data: prog}},
-	}}
-	doc = beginRun(doc)
-
-	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0x00, 0x01}}, Modes: map[int]bool{0: true}}
-	msgs := errMessages(checkCIDFontConsistency(doc.view(), PDFA1b, "6.3", font, u))
-	var bad []string
-	for _, m := range msgs {
-		if strings.Contains(m, "width information") {
-			bad = append(bad, m)
-		}
-	}
-	if len(bad) > 0 {
-		t.Errorf("width rule fired on a font whose /W was dropped by the range budget: %v", bad)
-	}
-	if trips := doc.valCache.run.limits.Snapshot(); len(trips) == 0 || trips[0].Guard() != core.GuardCIDWidthRange {
-		t.Errorf("/W range budget trip was not reported: %v", trips)
-	}
-}
-
-// --- the aggregate content budget vs. the document's own identification ---
 
 // TestMetadataSurvivesContentBudget is the widest false positive of the set: the
 // /Metadata stream used to be decoded through the same budget as page content,
@@ -582,14 +398,15 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	// End to end: no 6.9 finding, and the incompleteness reported under the
 	// "limit" rule naming the embedded-pdfa guard.
 	_, outer := embeddedPDFAFixture(t, strict)
-	run := beginRun(outer)
-	for _, e := range checkEmbeddedPDFA(run.view(), PDFA4) {
+	// Through the public entry point: checkEmbeddedPDFA is a pdfa internal, and
+	// what this pins is the finding the caller sees, not the call that made it.
+	for _, e := range ValidatePDFA(outer, PDFA4) {
 		if e.Rule == "6.9" {
 			t.Errorf("6.9 asserted on the strength of an incomplete nested run: %s", e.Message)
 		}
 	}
 	reported := false
-	for _, e := range limitValidationErrors(run, PDFA4) {
+	for _, e := range ValidatePDFA(outer, PDFA4) {
 		if e.Rule == finding.LimitRule && strings.Contains(e.Message, core.GuardEmbeddedPDFA) {
 			reported = true
 		}

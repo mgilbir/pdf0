@@ -1,8 +1,9 @@
-package pdf0
+package pdfa
 
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -47,14 +48,14 @@ func TestIndirectObjectSyntax(t *testing.T) {
 	build := func(body string) []ValidationError {
 		off := int64(bytes.Index([]byte(body), []byte(" 0 obj")) - bytes.LastIndexByte([]byte(body[:bytes.Index([]byte(body), []byte(" 0 obj"))]), '\n'))
 		_ = off
-		doc := &Document{
-			Objects: map[int]*IndirectObject{1: {Number: 1, Value: Integer(1)}},
+		doc := mkV(core.View{
+			Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: object.Integer(1)}},
 			Offsets: map[int]int64{},
-		}
-		// Object header starts right after the first newline.
+		})
+		// object.Object header starts right after the first newline.
 		nl := bytes.IndexByte([]byte(body), '\n')
 		doc.Offsets[1] = int64(nl + 1)
-		return checkIndirectObjectSyntax(doc.view(), PDFA2b, []byte(body))
+		return checkIndirectObjectSyntax(doc, PDFA2b, []byte(body))
 	}
 	// Valid.
 	if hasRuleMsg(build("%bin\n1 0 obj\n42\nendobj\n"), "6.1.9") {
@@ -86,11 +87,11 @@ func TestIndirectObjectHeaderWhitespaceRun(t *testing.T) {
 	// The offset points at the start of the white-space run; the run is longer
 	// than eight bytes and the header itself sits right after an EOL.
 	build := func(body string, off int64) []ValidationError {
-		doc := &Document{
-			Objects: map[int]*IndirectObject{1: {Number: 1, Value: Integer(42)}},
+		doc := mkV(core.View{
+			Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: object.Integer(42)}},
 			Offsets: map[int]int64{1: off},
-		}
-		return checkIndirectObjectSyntax(doc.view(), PDFA2b, []byte(body))
+		})
+		return checkIndirectObjectSyntax(doc, PDFA2b, []byte(body))
 	}
 	has := func(errs []ValidationError, msg string) bool {
 		for _, e := range errs {
@@ -195,7 +196,7 @@ func TestInlineImageFilters(t *testing.T) {
 	if len(f) != 1 || f[0][0] != "LZW" {
 		t.Errorf("LZW filter not extracted: %v", f)
 	}
-	// Array form.
+	// object.Array form.
 	f = inlineImageFilters([]byte("BI /W 1 /F [/AHx /LZW] ID xx EI"))
 	if len(f) != 1 || len(f[0]) != 2 || f[0][1] != "LZW" {
 		t.Errorf("array filter not extracted: %v", f)
@@ -208,20 +209,20 @@ func TestInlineImageFilters(t *testing.T) {
 }
 
 func TestNameUTF8(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{
-		1: {Number: 1, Value: Array{Name("Separation"), Name("Spot\xff\xfe"), Name("DeviceCMYK"), IndirectRef{Number: 9}}},
-	}}
-	if !hasRuleMsg(checkNameUTF8(doc.view(), PDFA2b), "6.1.8") {
+	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
+		1: {Number: 1, Value: object.Array{object.Name("Separation"), object.Name("Spot\xff\xfe"), object.Name("DeviceCMYK"), object.IndirectRef{Number: 9}}},
+	}})
+	if !hasRuleMsg(checkNameUTF8(doc, PDFA2b), "6.1.8") {
 		t.Error("invalid-UTF8 Separation colorant not flagged")
 	}
-	doc2 := &Document{Objects: map[int]*IndirectObject{
-		1: {Number: 1, Value: Array{Name("Separation"), Name("Spot"), Name("DeviceCMYK"), IndirectRef{Number: 9}}},
-	}}
-	if hasRuleMsg(checkNameUTF8(doc2.view(), PDFA2b), "6.1.8") {
+	doc2 := mkV(core.View{Objects: map[int]*object.IndirectObject{
+		1: {Number: 1, Value: object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceCMYK"), object.IndirectRef{Number: 9}}},
+	}})
+	if hasRuleMsg(checkNameUTF8(doc2, PDFA2b), "6.1.8") {
 		t.Error("valid colorant flagged")
 	}
 	// PDF/A-1 has no UTF-8 name rule.
-	if len(checkNameUTF8(doc.view(), PDFA1b)) != 0 {
+	if len(checkNameUTF8(doc, PDFA1b)) != 0 {
 		t.Error("UTF-8 name rule must not apply at PDF/A-1")
 	}
 }
@@ -251,19 +252,19 @@ func TestLinearizedTrailerIDMismatch(t *testing.T) {
 // endstream is flagged, while a correct length (EOL excluded, CR-vs-CRLF
 // tolerated) is not (ISO 32000-1 7.3.8.2; Isartor 6.1.7-t03).
 func TestStreamLengthBytes(t *testing.T) {
-	// Object body: "stream\nABCD\nendstream" — 4 data bytes, then a \n EOL that
+	// object.Object body: "stream\nABCD\nendstream" — 4 data bytes, then a \n EOL that
 	// must not be counted, so the only valid /Length is 4.
 	run := func(length int) int {
 		raw := []byte("%PDF-1.4\n1 0 obj\n<< /Length 0 >>\nstream\nABCD\nendstream\nendobj\n")
 		off := int64(bytesIndexStr(raw, "1 0 obj"))
-		s := &Stream{Dict: Dictionary{}, Data: []byte("ABCD")}
-		s.Dict.Set("Length", Integer(length))
-		doc := &Document{
-			Objects: map[int]*IndirectObject{1: {Number: 1, Value: s}},
+		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte("ABCD")}
+		s.Dict.Set("Length", object.Integer(length))
+		doc := mkV(core.View{
+			Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: s}},
 			Offsets: map[int]int64{1: off},
-		}
+		})
 		n := 0
-		for _, e := range checkStreamLengthBytes(doc.view(), PDFA1b, raw) {
+		for _, e := range checkStreamLengthBytes(doc, PDFA1b, raw) {
 			if e.Rule == "6.1.7" {
 				n++
 			}

@@ -2,6 +2,7 @@ package font
 
 import (
 	"encoding/binary"
+	"github.com/mgilbir/pdf0/internal/fonttest"
 	"testing"
 )
 
@@ -52,7 +53,7 @@ func cmapSubtableSeeds() [][]byte {
 		wideSegs = append(wideSegs, [3]int{1, 0xFFFE, 0})
 	}
 
-	format12 := buildCmapFormat12([][3]uint32{{0x41, 0x42, 7}})
+	format12 := fonttest.CmapFormat12([][3]uint32{{0x41, 0x42, 7}})
 	overstated := append([]byte(nil), format12...)
 	binary.BigEndian.PutUint32(overstated[12:], 1<<20) // nGroups it does not carry
 	longLength := append([]byte(nil), format12...)
@@ -65,23 +66,23 @@ func cmapSubtableSeeds() [][]byte {
 		make([]byte, 100),
 		// Format 4: segment at code 0, terminal segment, inverted segment,
 		// sentinel alone, and the budget-tripper.
-		buildCmapFormat4([][3]int{{0x0000, 0x0002, 100}, {0x0041, 0x0042, 200}, {0xFFFF, 0xFFFF, 1}}),
-		buildCmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}),
-		buildCmapFormat4([][3]int{{0x0050, 0x0040, 300}, {0x0041, 0x0041, 200}}),
-		buildCmapFormat4([][3]int{{0xFFFF, 0xFFFF, 1}}),
-		buildCmapFormat4(wideSegs),
+		fonttest.CmapFormat4([][3]int{{0x0000, 0x0002, 100}, {0x0041, 0x0042, 200}, {0xFFFF, 0xFFFF, 1}}),
+		fonttest.CmapFormat4([][3]int{{0xFFFE, 0xFFFF, 0x8000}}),
+		fonttest.CmapFormat4([][3]int{{0x0050, 0x0040, 300}, {0x0041, 0x0041, 200}}),
+		fonttest.CmapFormat4([][3]int{{0xFFFF, 0xFFFF, 1}}),
+		fonttest.CmapFormat4(wideSegs),
 		// Format 6: trimmed table, and one running past the BMP.
 		buildCmapFormat6(0x41, []int{7, 8, 9}),
 		buildCmapFormat6(0xFFFE, []int{7, 8, 9, 10}),
 		// Format 12: ordinary groups, astral groups, malformed groups, the two
 		// budget-trippers, an empty table, and the truncated variants.
 		format12,
-		buildCmapFormat12([][3]uint32{{0x0000, 0x0002, 100}, {0x0041, 0x0043, 200}, {0x0100, 0x0100, 0}}),
-		buildCmapFormat12([][3]uint32{{0xFFFE, 0x10001, 900}, {0x1F600, 0x1F601, 1000}}),
-		buildCmapFormat12([][3]uint32{{0x50, 0x40, 300}, {0x110000, 0x110002, 400}, {0x60, 0x60, 0x10000}, {0x41, 0x41, 200}}),
-		buildCmapFormat12(wideOpen),
-		buildCmapFormat12(overlapping),
-		buildCmapFormat12(nil), // maps nothing: the FuzzCmapSubtable finding
+		fonttest.CmapFormat12([][3]uint32{{0x0000, 0x0002, 100}, {0x0041, 0x0043, 200}, {0x0100, 0x0100, 0}}),
+		fonttest.CmapFormat12([][3]uint32{{0xFFFE, 0x10001, 900}, {0x1F600, 0x1F601, 1000}}),
+		fonttest.CmapFormat12([][3]uint32{{0x50, 0x40, 300}, {0x110000, 0x110002, 400}, {0x60, 0x60, 0x10000}, {0x41, 0x41, 200}}),
+		fonttest.CmapFormat12(wideOpen),
+		fonttest.CmapFormat12(overlapping),
+		fonttest.CmapFormat12(nil), // maps nothing: the FuzzCmapSubtable finding
 		// The same finding as the fuzzer minimised it, kept verbatim because
 		// testdata/fuzz is gitignored and this is the only place the regression
 		// can live: one group, [0x30303030, 0x30303030] → 0x30303030, entirely
@@ -124,30 +125,27 @@ func FuzzCmapSubtable(f *testing.F) {
 // sfntCmapSeeds returns fonts carrying several cmap subtables at once, so the
 // fuzzer starts from inputs where subtable ranking actually has a choice to make.
 func sfntCmapSeeds() [][]byte {
-	type sub = struct {
-		plat, enc int
-		data      []byte
-	}
-	bmp := buildCmapFormat4([][3]int{{0x0041, 0x0041, 100 - 0x41}, {0xFFFF, 0xFFFF, 1}})
-	full := buildCmapFormat12([][3]uint32{{0x0041, 0x0041, 500}, {0x1F600, 0x1F600, 600}})
+	type sub = fonttest.CmapSub
+	bmp := fonttest.CmapFormat4([][3]int{{0x0041, 0x0041, 100 - 0x41}, {0xFFFF, 0xFFFF, 1}})
+	full := fonttest.CmapFormat12([][3]uint32{{0x0041, 0x0041, 500}, {0x1F600, 0x1F600, 600}})
 	mac := buildCmapFormat0(map[byte]byte{0x41: 9})
-	symbol := buildCmapFormat4([][3]int{{0xF041, 0xF041, 12}, {0xFFFF, 0xFFFF, 1}})
+	symbol := fonttest.CmapFormat4([][3]int{{0xF041, 0xF041, 12}, {0xFFFF, 0xFFFF, 1}})
 
 	var seeds [][]byte
 	for _, subs := range [][]sub{
-		{{3, 1, bmp}, {3, 10, full}},
-		{{3, 10, full}, {3, 1, bmp}},
-		{{1, 0, mac}, {3, 1, bmp}},
-		{{3, 0, symbol}, {1, 0, mac}},
-		{{0, 4, full}},
-		{{0, 0, bmp}, {0, 6, full}, {3, 1, bmp}},
-		{{3, 1, bmp}, {3, 10, make([]byte, 16)}},       // unreadable preferred subtable
-		{{3, 1, bmp}, {3, 10, buildCmapFormat12(nil)}}, // preferred subtable maps nothing
-		{{3, 10, buildCmapFormat12(nil)}, {3, 1, bmp}}, // …in the other order
-		{{3, 1, bmp}, {3, 10, bmp}, {0, 3, mac}, {1, 0, mac}},
+		{{Plat: 3, Enc: 1, Data: bmp}, {Plat: 3, Enc: 10, Data: full}},
+		{{Plat: 3, Enc: 10, Data: full}, {Plat: 3, Enc: 1, Data: bmp}},
+		{{Plat: 1, Enc: 0, Data: mac}, {Plat: 3, Enc: 1, Data: bmp}},
+		{{Plat: 3, Enc: 0, Data: symbol}, {Plat: 1, Enc: 0, Data: mac}},
+		{{Plat: 0, Enc: 4, Data: full}},
+		{{Plat: 0, Enc: 0, Data: bmp}, {Plat: 0, Enc: 6, Data: full}, {Plat: 3, Enc: 1, Data: bmp}},
+		{{Plat: 3, Enc: 1, Data: bmp}, {Plat: 3, Enc: 10, Data: make([]byte, 16)}},           // unreadable preferred subtable
+		{{Plat: 3, Enc: 1, Data: bmp}, {Plat: 3, Enc: 10, Data: fonttest.CmapFormat12(nil)}}, // preferred subtable maps nothing
+		{{Plat: 3, Enc: 10, Data: fonttest.CmapFormat12(nil)}, {Plat: 3, Enc: 1, Data: bmp}}, // …in the other order
+		{{Plat: 3, Enc: 1, Data: bmp}, {Plat: 3, Enc: 10, Data: bmp}, {Plat: 0, Enc: 3, Data: mac}, {Plat: 1, Enc: 0, Data: mac}},
 		nil,
 	} {
-		seeds = append(seeds, buildSFNTWithCmapSubtables(subs))
+		seeds = append(seeds, fonttest.SFNTWithCmapSubtables(subs))
 	}
 	// Not an sfnt at all, and a header claiming tables it does not carry.
 	seeds = append(seeds, []byte("%PDF-2.0\n"), []byte{0, 1, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0})

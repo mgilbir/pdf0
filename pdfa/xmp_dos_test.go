@@ -1,7 +1,9 @@
-package pdf0
+package pdfa
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 	"time"
@@ -9,19 +11,19 @@ import (
 
 // docWithXMP builds a minimal document carrying the given XMP packet as the
 // catalog's /Metadata stream (stored raw, no filter).
-func docWithXMP(xmp []byte) *Document {
-	ms := &Stream{Dict: Dictionary{}, Data: xmp}
-	ms.Dict.Set("Type", Name("Metadata"))
-	ms.Dict.Set("Subtype", Name("XML"))
-	ms.Dict.Set("Length", Integer(len(xmp)))
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "1.7"}
-	d.Objects[2] = &IndirectObject{Number: 2, Value: ms}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Metadata", IndirectRef{Number: 2})
-	d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+func docWithXMP(xmp []byte) core.View {
+	ms := &object.Stream{Dict: object.Dictionary{}, Data: xmp}
+	ms.Dict.Set("Type", object.Name("Metadata"))
+	ms.Dict.Set("Subtype", object.Name("XML"))
+	ms.Dict.Set("Length", object.Integer(len(xmp)))
+	d := mkViewVersion(map[int]*object.IndirectObject{}, object.Dictionary{}, "1.7")
+	d.Objects[2] = &object.IndirectObject{Number: 2, Value: ms}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Metadata", object.IndirectRef{Number: 2})
+	d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	*d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 	return d
 }
 
@@ -95,9 +97,10 @@ func TestXMPLargePacketBounded(t *testing.T) {
 	}
 	xmp := validXMP(b.String())
 	doc := docWithXMP([]byte(xmp))
-	// Lower the cap for this document only, through the public option, so the
-	// whole check pipeline sees it (not just the direct call below).
-	doc.limits = resolveLimits([]Option{WithMaxXMPPacketBytes(capBytes)})
+	// Lower the cap on this view only, so the whole check pipeline sees it
+	// (not just the direct call below). The root package's public option
+	// resolves to exactly this field.
+	doc.Limits.XMPPacketBytes = capBytes
 
 	// Property extraction is skipped (capped), reported as an error the caller
 	// turns into "no properties to check" — never a violation.
@@ -105,11 +108,11 @@ func TestXMPLargePacketBounded(t *testing.T) {
 		t.Error("expected parseXMPProperties to refuse the oversized packet")
 	}
 	// Well-formedness still validated by streaming, with no false positive.
-	for _, e := range checkXMPWellFormed(doc.view(), PDFA1b) {
+	for _, e := range checkXMPWellFormed(doc, PDFA1b) {
 		t.Errorf("unexpected well-formedness violation on a valid large packet: %s", e.Message)
 	}
 	// The property check must not flag anything on the capped packet.
-	if errs := checkXMPProperties(doc.view(), PDFA1b); len(errs) != 0 {
+	if errs := checkXMPProperties(doc, PDFA1b); len(errs) != 0 {
 		t.Errorf("unexpected property violations on a capped packet: %v", errs)
 	}
 }
@@ -127,8 +130,8 @@ func TestXMPManyElementsFast(t *testing.T) {
 	xmp := validXMP(b.String())
 	doc := docWithXMP([]byte(xmp))
 	start := time.Now()
-	_ = checkXMPWellFormed(doc.view(), PDFA1b)
-	_ = checkXMPProperties(doc.view(), PDFA1b)
+	_ = checkXMPWellFormed(doc, PDFA1b)
+	_ = checkXMPProperties(doc, PDFA1b)
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("XMP checks on a many-element packet took %v; expected sub-second", d)
 	}

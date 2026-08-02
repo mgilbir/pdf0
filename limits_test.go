@@ -171,7 +171,7 @@ func TestLimitsArePerDocument(t *testing.T) {
 func TestDecodedStreamLimitIsEnforced(t *testing.T) {
 	payload := bytes.Repeat([]byte("A"), 256<<10)
 	var buf bytes.Buffer
-	buf.Write(flateEncode(payload))
+	buf.Write(core.FlateEncode(payload))
 
 	lim := resolveLimits([]Option{WithMaxDecodedStreamBytes(64 << 10)})
 	if _, err := core.FlateDecode(core.Canceler{}, buf.Bytes(), lim); err == nil {

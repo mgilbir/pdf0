@@ -1,9 +1,10 @@
-package pdf0
+package pdfa
 
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
 
@@ -14,13 +15,13 @@ import (
 // tagged-structure and language checks mirror the PDF/UA logic (ISO 14289),
 // which pdf0 already validates.
 
-// validatePDFALevelA validates a Level A conformance level (1a/2a/3a).
-func validatePDFALevelA(doc core.View, level PDFALevel, rawData []byte) []ValidationError {
+// ValidateLevelAView validates a Level A conformance level (1a/2a/3a).
+func ValidateLevelAView(doc core.View, level PDFALevel, rawData []byte) []ValidationError {
 	// All Level B requirements apply, so run the Level B pipeline and adopt its
 	// findings at this level. The Level B pipeline requires pdfaid:conformance
 	// "B"; at Level A it must be "A", so that one Level B finding is dropped and
 	// re-checked below.
-	base := validatePDFAView(doc, level.baseB(), rawData)
+	base := ValidateView(doc, level.BaseB(), rawData)
 	errs := make([]ValidationError, 0, len(base))
 	for _, e := range base {
 		if strings.Contains(e.Message, "pdfaid:conformance must be B") {
@@ -139,7 +140,7 @@ func checkLevelALanguage(doc core.View, level PDFALevel) []ValidationError {
 	if cat == nil {
 		return nil
 	}
-	if s, ok := doc.Resolve(cat.Get("Lang")).(String); ok && len(s.Value) > 0 {
+	if s, ok := doc.Resolve(cat.Get("Lang")).(object.String); ok && len(s.Value) > 0 {
 		// /Lang is a PDF text string: it may be UTF-16BE (with a BOM) or
 		// PDFDocEncoded, so decode it before checking the language-tag syntax.
 		lang := core.DecodePDFTextString(s.Value)

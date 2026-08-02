@@ -1,8 +1,9 @@
-package pdf0
+package pdfa
 
 import (
 	"crypto/md5"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"time"
 
 	lcms2 "github.com/mgilbir/golittlecms"
@@ -21,97 +22,90 @@ import (
 // later parts get v4. Anything produced here must pass pdf0's own validator —
 // the round trip through ValidatePDFA is what keeps the two sides honest.
 
-// NewPDFADocument creates a minimal valid PDF/A document for the given level.
-// The document has an empty page tree and passes ValidatePDFA.
-func NewPDFADocument(level PDFALevel) *Document {
-	return NewPDFADocumentWithInfo(level, "", "")
-}
-
-// NewPDFADocumentWithInfo is NewPDFADocument with the document title and
-// author embedded in the generated XMP metadata.
-func NewPDFADocumentWithInfo(level PDFALevel, title, author string) *Document {
+// Skeleton returns the minimal five-object graph a conforming PDF/A file needs
+// — catalog, page tree, XMP metadata, output intent, ICC profile — with the
+// trailer and the header version that part is defined against.
+//
+// It returns the graph rather than a Document so that both sides can use it:
+// NewPDFADocumentWithInfo wraps it into one, and this package's own tests wrap
+// it into a view without needing the document type at all.
+func Skeleton(level PDFALevel, title, author string) (map[int]*object.IndirectObject, object.Dictionary, string) {
 	version := pdfaVersion(level)
 
 	// Generate file ID
 	now := time.Now().Format(time.RFC3339Nano)
 	hash := md5.Sum([]byte("pdf0-pdfa-" + now))
-	fileID := String{Value: hash[:], IsHex: true}
+	fileID := object.String{Value: hash[:], IsHex: true}
 
-	// Object 1: Catalog
-	catalog := &Dictionary{}
-	catalog.Set("Type", Name("Catalog"))
-	catalog.Set("Pages", IndirectRef{Number: 2})
-	catalog.Set("Metadata", IndirectRef{Number: 3})
-	catalog.Set("OutputIntents", Array{IndirectRef{Number: 4}})
-	if level.isA() {
+	// object.Object 1: Catalog
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("Pages", object.IndirectRef{Number: 2})
+	catalog.Set("Metadata", object.IndirectRef{Number: 3})
+	catalog.Set("OutputIntents", object.Array{object.IndirectRef{Number: 4}})
+	if level.IsA() {
 		// A Level A file is a Tagged PDF with a logical structure tree. The empty
 		// page tree carries no content, so a minimal marked, empty structure tree
 		// satisfies the structural requirement (audit C19).
-		markInfo := &Dictionary{}
-		markInfo.Set("Marked", Boolean(true))
+		markInfo := &object.Dictionary{}
+		markInfo.Set("Marked", object.Boolean(true))
 		catalog.Set("MarkInfo", markInfo)
-		structTreeRoot := &Dictionary{}
-		structTreeRoot.Set("Type", Name("StructTreeRoot"))
+		structTreeRoot := &object.Dictionary{}
+		structTreeRoot.Set("Type", object.Name("StructTreeRoot"))
 		catalog.Set("StructTreeRoot", structTreeRoot)
 	}
 
-	// Object 2: Pages (empty page tree)
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", Array{})
-	pages.Set("Count", Integer(0))
+	// object.Object 2: Pages (empty page tree)
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{})
+	pages.Set("Count", object.Integer(0))
 
-	// Object 3: Metadata stream (XMP, unfiltered)
+	// object.Object 3: Metadata stream (XMP, unfiltered)
 	xmpData := GenerateXMPMetadata(level, title, author)
-	metaStream := &Stream{
-		Dict: Dictionary{},
+	metaStream := &object.Stream{
+		Dict: object.Dictionary{},
 		Data: xmpData,
 	}
-	metaStream.Dict.Set("Type", Name("Metadata"))
-	metaStream.Dict.Set("Subtype", Name("XML"))
-	metaStream.Dict.Set("Length", Integer(len(xmpData)))
+	metaStream.Dict.Set("Type", object.Name("Metadata"))
+	metaStream.Dict.Set("Subtype", object.Name("XML"))
+	metaStream.Dict.Set("Length", object.Integer(len(xmpData)))
 
-	// Object 4: OutputIntent dictionary
-	outputIntent := &Dictionary{}
-	outputIntent.Set("Type", Name("OutputIntent"))
-	outputIntent.Set("S", Name("GTS_PDFA1"))
-	outputIntent.Set("OutputConditionIdentifier", String{Value: []byte("sRGB IEC61966-2.1")})
-	outputIntent.Set("RegistryName", String{Value: []byte("http://www.color.org")})
-	outputIntent.Set("Info", String{Value: []byte("sRGB IEC61966-2.1")})
-	outputIntent.Set("DestOutputProfile", IndirectRef{Number: 5})
+	// object.Object 4: OutputIntent dictionary
+	outputIntent := &object.Dictionary{}
+	outputIntent.Set("Type", object.Name("OutputIntent"))
+	outputIntent.Set("S", object.Name("GTS_PDFA1"))
+	outputIntent.Set("OutputConditionIdentifier", object.String{Value: []byte("sRGB IEC61966-2.1")})
+	outputIntent.Set("RegistryName", object.String{Value: []byte("http://www.color.org")})
+	outputIntent.Set("Info", object.String{Value: []byte("sRGB IEC61966-2.1")})
+	outputIntent.Set("DestOutputProfile", object.IndirectRef{Number: 5})
 
-	// Object 5: ICC profile stream
+	// object.Object 5: ICC profile stream
 	iccData := sRGBProfile(level)
-	iccStream := &Stream{
-		Dict: Dictionary{},
+	iccStream := &object.Stream{
+		Dict: object.Dictionary{},
 		Data: iccData,
 	}
-	iccStream.Dict.Set("N", Integer(3)) // 3-component (RGB)
-	iccStream.Dict.Set("Length", Integer(len(iccData)))
+	iccStream.Dict.Set("N", object.Integer(3)) // 3-component (RGB)
+	iccStream.Dict.Set("Length", object.Integer(len(iccData)))
 
-	doc := &Document{
-		Version: version,
-		Objects: map[int]*IndirectObject{
+	return map[int]*object.IndirectObject{
 			1: {Number: 1, Generation: 0, Value: catalog},
 			2: {Number: 2, Generation: 0, Value: pages},
 			3: {Number: 3, Generation: 0, Value: metaStream},
 			4: {Number: 4, Generation: 0, Value: outputIntent},
 			5: {Number: 5, Generation: 0, Value: iccStream},
-		},
-		Trailer: Dictionary{
-			Keys: []Name{"Root", "ID"},
-			Values: []Object{
-				IndirectRef{Number: 1},
-				Array{fileID, fileID},
+		}, object.Dictionary{
+			Keys: []object.Name{"Root", "ID"},
+			Values: []object.Object{
+				object.IndirectRef{Number: 1},
+				object.Array{fileID, fileID},
 			},
-		},
-	}
-
-	return doc
+		}, version
 }
 
 func pdfaVersion(level PDFALevel) string {
-	switch level.baseB() {
+	switch level.BaseB() {
 	case PDFA1b:
 		return "1.4"
 	case PDFA2b, PDFA3b:
@@ -122,7 +116,7 @@ func pdfaVersion(level PDFALevel) string {
 }
 
 func pdfaPart(level PDFALevel) int {
-	switch level.baseB() {
+	switch level.BaseB() {
 	case PDFA1b:
 		return 1
 	case PDFA2b:
@@ -136,7 +130,7 @@ func pdfaPart(level PDFALevel) int {
 
 func pdfaConformance(level PDFALevel) string {
 	switch {
-	case level.isA():
+	case level.IsA():
 		return "A"
 	case level == PDFA4:
 		return "" // PDF/A-4 has no conformance level
@@ -157,7 +151,7 @@ func GenerateXMPMetadata(level PDFALevel, title, author string) []byte {
         <rdf:Alt>
           <rdf:li xml:lang="x-default">%s</rdf:li>
         </rdf:Alt>
-      </dc:title>`, xmlEscape(title))
+      </dc:title>`, XMLEscape(title))
 	}
 
 	authorXMP := ""
@@ -167,7 +161,7 @@ func GenerateXMPMetadata(level PDFALevel, title, author string) []byte {
         <rdf:Seq>
           <rdf:li>%s</rdf:li>
         </rdf:Seq>
-      </dc:creator>`, xmlEscape(author))
+      </dc:creator>`, XMLEscape(author))
 	}
 
 	conformanceXMP := ""
@@ -199,7 +193,7 @@ func GenerateXMPMetadata(level PDFALevel, title, author string) []byte {
 	return []byte(xmp)
 }
 
-func xmlEscape(s string) string {
+func XMLEscape(s string) string {
 	var result []byte
 	for _, b := range []byte(s) {
 		switch b {
@@ -241,7 +235,7 @@ func DefaultSRGBProfile() []byte {
 // real colour-management engine.
 func sRGBProfile(level PDFALevel) []byte {
 	version := 4.3
-	if level.baseB() == PDFA1b {
+	if level.BaseB() == PDFA1b {
 		version = 2.1 // PDF/A-1 is based on PDF 1.4, which allows only ICC v2
 	}
 	data, err := buildSRGBProfile(version)

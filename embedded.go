@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/pdfa"
 
 	"github.com/mgilbir/pdf0/internal/finding"
 
@@ -49,7 +50,7 @@ func embeddedPDFACompliant(cancel core.Canceler, data []byte, lim core.Limits) (
 	if err != nil {
 		return false, !checkerMayHaveRefused
 	}
-	elevel, ok := declaredPDFALevel(edoc.view())
+	elevel, ok := pdfa.DeclaredLevel(edoc.view())
 	if !ok {
 		// An embedded PDF that is not PDF/A at all — or whose own metadata
 		// stream the caller's lowered per-stream cap declined to decode.
@@ -65,33 +66,4 @@ func embeddedPDFACompliant(cancel core.Canceler, data []byte, lim core.Limits) (
 		compliant = false
 	}
 	return compliant, complete
-}
-
-// declaredPDFALevel reads the PDF/A conformance level a document claims via
-// its XMP pdfaid:part / pdfaid:conformance identifiers.
-func declaredPDFALevel(doc core.View) (PDFALevel, bool) {
-	catalog := doc.Catalog()
-	if catalog == nil {
-		return 0, false
-	}
-	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*Stream)
-	if !ok {
-		return 0, false
-	}
-	xmp := doc.XMPText(stream)
-	part := core.ExtractXMPValue(xmp, "pdfaid:part")
-	if part == "" {
-		part = extractXMPAttr(xmp, "pdfaid:part")
-	}
-	switch part {
-	case "1":
-		return PDFA1b, true
-	case "2":
-		return PDFA2b, true
-	case "3":
-		return PDFA3b, true
-	case "4":
-		return PDFA4, true
-	}
-	return 0, false
 }

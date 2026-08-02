@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"sort"
 )
 
@@ -50,7 +51,7 @@ func buildObjectStream(nums []int, bodies map[int][]byte, objStmNum int) (*Indir
 	}
 	first := header.Len()
 	raw := append(append([]byte(nil), header.Bytes()...), body.Bytes()...)
-	encoded := flateEncode(raw)
+	encoded := core.FlateEncode(raw)
 
 	dict := &Dictionary{}
 	dict.Set("Type", Name("ObjStm"))

@@ -46,40 +46,6 @@ func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs 
 	}
 }
 
-// exampleFindings collects at most one ValidationError per distinct rule and
-// message. Several rules report a single representative example rather than
-// every occurrence, and their candidates arrive from a range over doc.Objects,
-// doc.Offsets or collectContentStreamData — Go maps, whose iteration order is
-// randomised on every run. Keeping whichever candidate the range happened to
-// yield first therefore named a different object each time the same file was
-// validated. Keeping the numerically smallest object number instead is a total
-// order over the candidates, so the report is reproducible. The choice is
-// load-bearing, not incidental: reports are diffed run against run.
-//
-// Emission order is deliberately not part of the contract — ValidatePDFABytes
-// sorts the concatenated findings before returning them.
-type exampleFindings struct {
-	idx  map[string]int // rule+message -> index into errs
-	errs []ValidationError
-}
-
-// add records e, or — when a finding with the same rule and message is already
-// held — lowers that finding's object number to e's when e's is smaller.
-func (f *exampleFindings) add(e ValidationError) {
-	key := e.Rule + "\x00" + e.Message
-	if i, ok := f.idx[key]; ok {
-		if e.Object < f.errs[i].Object {
-			f.errs[i].Object = e.Object
-		}
-		return
-	}
-	if f.idx == nil {
-		f.idx = make(map[string]int)
-	}
-	f.idx[key] = len(f.errs)
-	f.errs = append(f.errs, e)
-}
-
 // adoptInvoiceFindings replays the findings of a formalis Report through an
 // adopt callback, so ValidateFacturX and ValidateOrderX can carry them in their
 // own finding type alongside the container findings they made themselves.

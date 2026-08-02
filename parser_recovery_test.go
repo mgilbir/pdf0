@@ -1,7 +1,6 @@
 package pdf0
 
 import (
-	"bytes"
 	"github.com/mgilbir/pdf0/syntax"
 	"testing"
 )
@@ -38,35 +37,5 @@ func TestXrefLooksValid(t *testing.T) {
 	}
 	if xrefLooksValid([]byte("xref"), 100) {
 		t.Error("out-of-range offset must be false")
-	}
-}
-
-func TestCheckStreamLength(t *testing.T) {
-	mk := func(declared, actual int) *Document {
-		data := bytes.Repeat([]byte("x"), actual)
-		s := &Stream{Dict: Dictionary{}, Data: data}
-		s.Dict.Set("Length", Integer(declared))
-		return &Document{Objects: map[int]*IndirectObject{
-			7: {Number: 7, Value: s},
-		}}
-	}
-	if hasRuleMsg(checkStreamLength(mk(10, 10).view(), PDFA4), "6.1.6.1") {
-		t.Error("matching Length must not be flagged")
-	}
-	if !hasRuleMsg(checkStreamLength(mk(10, 8).view(), PDFA4), "6.1.6.1") {
-		t.Error("mismatched Length must be flagged at A-4")
-	}
-	if !hasRuleMsg(checkStreamLength(mk(10, 8).view(), PDFA2b), "6.1.7.1") {
-		t.Error("mismatched Length must be flagged at 2b with rule 6.1.7")
-	}
-}
-
-func TestBrokenObjStmFlagged(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}, brokenObjStms: []int{4}}
-	if !hasRuleMsg(checkObjectStreamDecodable(doc.view(), PDFA4), "6.1.6") {
-		t.Error("broken object stream must be flagged")
-	}
-	if len(checkObjectStreamDecodable((&Document{}).view(), PDFA4)) != 0 {
-		t.Error("no broken streams must produce no errors")
 	}
 }

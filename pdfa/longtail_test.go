@@ -1,6 +1,8 @@
-package pdf0
+package pdfa
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 )
@@ -74,59 +76,59 @@ func TestXMPIsUTF8(t *testing.T) {
 }
 
 func TestSameICCProfile(t *testing.T) {
-	mk := func(id byte) *Stream {
+	mk := func(id byte) *object.Stream {
 		data := make([]byte, 128)
 		data[16] = 'C' // colour space marker area (irrelevant here)
 		for i := 84; i < 100; i++ {
 			data[i] = id
 		}
-		s := &Stream{Dict: Dictionary{}, Data: data}
-		s.Dict.Set("Length", Integer(len(data)))
+		s := &object.Stream{Dict: object.Dictionary{}, Data: data}
+		s.Dict.Set("Length", object.Integer(len(data)))
 		return s
 	}
-	doc := &Document{Objects: map[int]*IndirectObject{}}
+	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
 	a, b := mk(1), mk(1)
-	if !sameICCProfile(doc.view(), a, b) {
+	if !sameICCProfile(doc, a, b) {
 		t.Error("equal non-zero Profile IDs must be the same")
 	}
 	c := mk(2)
-	if sameICCProfile(doc.view(), a, c) {
+	if sameICCProfile(doc, a, c) {
 		t.Error("different non-zero Profile IDs must differ")
 	}
 	// One zero ID: fall back to content comparison (both zeroed -> equal).
 	z1, z2 := mk(0), mk(0)
-	if !sameICCProfile(doc.view(), z1, z2) {
+	if !sameICCProfile(doc, z1, z2) {
 		t.Error("zero-ID identical content must be the same")
 	}
 }
 
 func TestColorantUTF8Nested(t *testing.T) {
 	// DeviceN colorant with invalid UTF-8, nested in Resources/ColorSpace.
-	deviceN := Array{Name("DeviceN"), Array{Name("Cyan\xc2")}, Name("DeviceCMYK"), IndirectRef{Number: 9}}
-	csDict := &Dictionary{}
+	deviceN := object.Array{object.Name("DeviceN"), object.Array{object.Name("Cyan\xc2")}, object.Name("DeviceCMYK"), object.IndirectRef{Number: 9}}
+	csDict := &object.Dictionary{}
 	csDict.Set("CS0", deviceN)
-	res := &Dictionary{}
+	res := &object.Dictionary{}
 	res.Set("ColorSpace", csDict)
-	page := &Dictionary{}
-	page.Set("Type", Name("Page"))
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
 	page.Set("Resources", res)
-	doc := &Document{Objects: map[int]*IndirectObject{
+	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
 		1: {Number: 1, Value: page},
-	}}
-	if !hasRuleMsg(checkNameUTF8(doc.view(), PDFA2b), "6.1.8") {
+	}})
+	if !hasRuleMsg(checkNameUTF8(doc, PDFA2b), "6.1.8") {
 		t.Error("nested invalid-UTF8 colorant must be flagged")
 	}
 }
 
 func TestAnnotFieldType(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}}
-	parent := &Dictionary{}
-	parent.Set("FT", Name("Btn"))
-	doc.Objects[5] = &IndirectObject{Number: 5, Value: parent}
-	widget := &Dictionary{}
-	widget.Set("Subtype", Name("Widget"))
-	widget.Set("Parent", IndirectRef{Number: 5})
-	if got := annotFieldType(doc.view(), widget); got != "Btn" {
+	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	parent := &object.Dictionary{}
+	parent.Set("FT", object.Name("Btn"))
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: parent}
+	widget := &object.Dictionary{}
+	widget.Set("Subtype", object.Name("Widget"))
+	widget.Set("Parent", object.IndirectRef{Number: 5})
+	if got := annotFieldType(doc, widget); got != "Btn" {
 		t.Errorf("inherited FT: got %q", got)
 	}
 }

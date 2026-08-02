@@ -79,8 +79,10 @@ func TestGeneratedDocPassesOutputIntentProfileCheck(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: reparse: %v", lvl, err)
 		}
-		for _, e := range checkOutputIntentProfile(rd.view(), lvl) {
-			t.Errorf("%v: output-intent profile violation: %s", lvl, e.Error())
+		// Through the public entry point: what this pins is the finding the
+		// caller sees, and a freshly built document must raise none at all.
+		for _, e := range ValidatePDFA(rd, lvl) {
+			t.Errorf("%v: violation on a freshly built document: %s", lvl, e.Error())
 		}
 	}
 }

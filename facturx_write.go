@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/mgilbir/formalis"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"time"
 )
 
@@ -117,7 +118,7 @@ func facturxXMPPacket(profile formalis.Profile, docType, title string) []byte {
 		titleBlock = fmt.Sprintf(`
     <rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" rdf:about="">
       <dc:title><rdf:Alt><rdf:li xml:lang="x-default">%s</rdf:li></rdf:Alt></dc:title>
-    </rdf:Description>`, xmlEscape(title))
+    </rdf:Description>`, pdfa.XMLEscape(title))
 	}
 	return []byte(fmt.Sprintf(`<?xpacket begin="%s" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -173,5 +174,5 @@ func facturxXMPPacket(profile formalis.Profile, docType, title string) []byte {
     </rdf:Description>
   </rdf:RDF>
 </x:xmpmeta>
-<?xpacket end="w"?>`, "\uFEFF", titleBlock, xmlEscape(docType), facturxFileName, string(profile)))
+<?xpacket end="w"?>`, "\uFEFF", titleBlock, pdfa.XMLEscape(docType), facturxFileName, string(profile)))
 }

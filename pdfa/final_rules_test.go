@@ -1,84 +1,85 @@
-package pdf0
+package pdfa
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
 func TestProhibitedCatalogEntries(t *testing.T) {
-	mk := func(setup func(cat *Dictionary, doc *Document)) *Document {
-		doc := NewPDFADocument(PDFA4)
+	mk := func(setup func(cat *object.Dictionary, doc core.View)) core.View {
+		doc := mkPDFAView(PDFA4)
 		cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 		setup(cat, doc)
 		return doc
 	}
-	if !hasRuleMsg(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
-		c.Set("Requirements", Array{})
-	}).view(), PDFA4), "6.12") {
+	if !hasRuleMsg(checkProhibitedCatalogEntries(mk(func(c *object.Dictionary, d core.View) {
+		c.Set("Requirements", object.Array{})
+	}), PDFA4), "6.12") {
 		t.Error("Requirements must be flagged")
 	}
-	if !hasRuleMsg(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
-		names := &Dictionary{}
-		names.Set("AlternatePresentations", &Dictionary{})
+	if !hasRuleMsg(checkProhibitedCatalogEntries(mk(func(c *object.Dictionary, d core.View) {
+		names := &object.Dictionary{}
+		names.Set("AlternatePresentations", &object.Dictionary{})
 		c.Set("Names", names)
-	}).view(), PDFA4), "6.11") {
+	}), PDFA4), "6.11") {
 		t.Error("AlternatePresentations must be flagged")
 	}
 	// Clean A-4 document passes.
-	if len(checkProhibitedCatalogEntries(NewPDFADocument(PDFA4).view(), PDFA4)) != 0 {
+	if len(checkProhibitedCatalogEntries(mkPDFAView(PDFA4), PDFA4)) != 0 {
 		t.Error("clean document flagged")
 	}
 	// The /Requirements (6.12) prohibition is PDF/A-4 only; it must not fire at
 	// 2b. A t.Skip here would let a level-gating regression pass silently.
-	if got := len(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
-		c.Set("Requirements", Array{})
-	}).view(), PDFA2b)); got != 0 {
+	if got := len(checkProhibitedCatalogEntries(mk(func(c *object.Dictionary, d core.View) {
+		c.Set("Requirements", object.Array{})
+	}), PDFA2b)); got != 0 {
 		t.Errorf("6.12 /Requirements must not be flagged at PDF/A-2b, got %d errors", got)
 	}
 	// 6.11 (AlternatePresentations / PresSteps) DOES apply at 2b and 3b.
 	for _, lvl := range []PDFALevel{PDFA2b, PDFA3b} {
-		altDoc := mk(func(c *Dictionary, d *Document) {
-			names := &Dictionary{}
-			names.Set("AlternatePresentations", &Dictionary{})
+		altDoc := mk(func(c *object.Dictionary, d core.View) {
+			names := &object.Dictionary{}
+			names.Set("AlternatePresentations", &object.Dictionary{})
 			c.Set("Names", names)
 		})
-		if !hasRuleMsg(checkProhibitedCatalogEntries(altDoc.view(), lvl), "6.11") {
+		if !hasRuleMsg(checkProhibitedCatalogEntries(altDoc, lvl), "6.11") {
 			t.Errorf("AlternatePresentations must be flagged at %s", lvl)
 		}
 	}
 	// 1b does not use these clauses.
-	if got := len(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
-		names := &Dictionary{}
-		names.Set("AlternatePresentations", &Dictionary{})
+	if got := len(checkProhibitedCatalogEntries(mk(func(c *object.Dictionary, d core.View) {
+		names := &object.Dictionary{}
+		names.Set("AlternatePresentations", &object.Dictionary{})
 		c.Set("Names", names)
-	}).view(), PDFA1b)); got != 0 {
+	}), PDFA1b)); got != 0 {
 		t.Errorf("6.11 must not be applied at PDF/A-1b, got %d errors", got)
 	}
 }
 
 func TestFileTrailerID(t *testing.T) {
-	mk := func(id Object) *Document {
-		doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
+	mk := func(id object.Object) core.View {
+		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
 		if id != nil {
 			doc.Trailer.Set("ID", id)
 		}
 		return doc
 	}
 	// Two non-empty strings: valid.
-	valid := Array{String{Value: []byte("0123456789abcdef")}, String{Value: []byte("fedcba9876543210")}}
-	if hasRuleMsg(checkFileTrailerID(mk(valid).view(), PDFA2b), "6.1.3") {
+	valid := object.Array{object.String{Value: []byte("0123456789abcdef")}, object.String{Value: []byte("fedcba9876543210")}}
+	if hasRuleMsg(checkFileTrailerID(mk(valid), PDFA2b), "6.1.3") {
 		t.Error("valid ID flagged")
 	}
 	// Empty strings.
-	if !hasRuleMsg(checkFileTrailerID(mk(Array{String{}, String{}}).view(), PDFA2b), "6.1.3") {
+	if !hasRuleMsg(checkFileTrailerID(mk(object.Array{object.String{}, object.String{}}), PDFA2b), "6.1.3") {
 		t.Error("empty ID strings not flagged")
 	}
 	// Wrong length.
-	if !hasRuleMsg(checkFileTrailerID(mk(Array{String{Value: []byte("x")}}).view(), PDFA2b), "6.1.3") {
+	if !hasRuleMsg(checkFileTrailerID(mk(object.Array{object.String{Value: []byte("x")}}), PDFA2b), "6.1.3") {
 		t.Error("single-element ID not flagged")
 	}
 	// Absent: no error.
-	if len(checkFileTrailerID(mk(nil).view(), PDFA2b)) != 0 {
+	if len(checkFileTrailerID(mk(nil), PDFA2b)) != 0 {
 		t.Error("absent ID must not be flagged")
 	}
 }
@@ -95,12 +96,12 @@ func TestInlineImageEntries(t *testing.T) {
 }
 
 func TestForbiddenAAEvents(t *testing.T) {
-	for _, k := range []Name{"WS", "O", "C", "PV", "DP"} {
+	for _, k := range []object.Name{"WS", "O", "C", "PV", "DP"} {
 		if !forbiddenAAEvents[k] {
 			t.Errorf("%s should be forbidden", k)
 		}
 	}
-	for _, k := range []Name{"E", "X", "D", "U", "Fo", "Bl", "PI"} {
+	for _, k := range []object.Name{"E", "X", "D", "U", "Fo", "Bl", "PI"} {
 		if forbiddenAAEvents[k] {
 			t.Errorf("%s should be permitted", k)
 		}
@@ -108,21 +109,21 @@ func TestForbiddenAAEvents(t *testing.T) {
 }
 
 func TestA4TriggerEvents(t *testing.T) {
-	doc := NewPDFADocument(PDFA4)
+	doc := mkPDFAView(PDFA4)
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-	aa := &Dictionary{}
-	aa.Set("WS", &Dictionary{})
+	aa := &object.Dictionary{}
+	aa.Set("WS", &object.Dictionary{})
 	cat.Set("AA", aa)
-	if !hasRuleMsg(checkA4TriggerEvents(doc.view(), PDFA4), "6.6.3") {
+	if !hasRuleMsg(checkA4TriggerEvents(doc, PDFA4), "6.6.3") {
 		t.Error("catalog AA/WS must be flagged")
 	}
 	// Interaction-only AA passes.
-	doc2 := NewPDFADocument(PDFA4)
+	doc2 := mkPDFAView(PDFA4)
 	cat2 := doc2.ResolveDict(doc2.Trailer.Get("Root"))
-	aa2 := &Dictionary{}
-	aa2.Set("Fo", &Dictionary{})
+	aa2 := &object.Dictionary{}
+	aa2.Set("Fo", &object.Dictionary{})
 	cat2.Set("AA", aa2)
-	if hasRuleMsg(checkA4TriggerEvents(doc2.view(), PDFA4), "6.6.3") {
+	if hasRuleMsg(checkA4TriggerEvents(doc2, PDFA4), "6.6.3") {
 		t.Error("interaction-only catalog AA must pass")
 	}
 }
@@ -151,47 +152,47 @@ func TestContentActualTexts(t *testing.T) {
 }
 
 func TestType5HalftoneTransferFunction(t *testing.T) {
-	mk := func(colorant string, hasTF bool) *Document {
-		doc := NewPDFADocument(PDFA4)
-		comp := &Dictionary{}
-		comp.Set("HalftoneType", Integer(1))
+	mk := func(colorant string, hasTF bool) core.View {
+		doc := mkPDFAView(PDFA4)
+		comp := &object.Dictionary{}
+		comp.Set("HalftoneType", object.Integer(1))
 		if hasTF {
-			comp.Set("TransferFunction", Name("Identity"))
+			comp.Set("TransferFunction", object.Name("Identity"))
 		}
-		ht := &Dictionary{}
-		ht.Set("Type", Name("Halftone"))
-		ht.Set("HalftoneType", Integer(5))
-		ht.Set(Name(colorant), comp)
-		doc.Objects[30] = &IndirectObject{Number: 30, Value: ht}
-		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
-		gs.Set("HT", IndirectRef{Number: 30})
-		gsDict := &Dictionary{}
+		ht := &object.Dictionary{}
+		ht.Set("Type", object.Name("Halftone"))
+		ht.Set("HalftoneType", object.Integer(5))
+		ht.Set(object.Name(colorant), comp)
+		doc.Objects[30] = &object.IndirectObject{Number: 30, Value: ht}
+		gs := &object.Dictionary{}
+		gs.Set("Type", object.Name("ExtGState"))
+		gs.Set("HT", object.IndirectRef{Number: 30})
+		gsDict := &object.Dictionary{}
 		gsDict.Set("GS0", gs)
-		res := &Dictionary{}
+		res := &object.Dictionary{}
 		res.Set("ExtGState", gsDict)
 		page := addTestPage(doc)
-		s := &Stream{Dict: Dictionary{}, Data: []byte("/GS0 gs")}
-		s.Dict.Set("Length", Integer(7))
-		doc.Objects[21] = &IndirectObject{Number: 21, Value: s}
-		page.Set("Contents", IndirectRef{Number: 21})
+		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte("/GS0 gs")}
+		s.Dict.Set("Length", object.Integer(7))
+		doc.Objects[21] = &object.IndirectObject{Number: 21, Value: s}
+		page.Set("Contents", object.IndirectRef{Number: 21})
 		page.Set("Resources", res)
 		return doc
 	}
 	// Primary colorant with TransferFunction: fail.
-	if !hasRuleMsg(checkType5Halftones(mk("Cyan", true).view(), PDFA4), "6.2.5") {
+	if !hasRuleMsg(checkType5Halftones(mk("Cyan", true), PDFA4), "6.2.5") {
 		t.Error("primary colorant with TransferFunction must be flagged")
 	}
 	// Primary colorant without: pass.
-	if hasRuleMsg(checkType5Halftones(mk("Cyan", false).view(), PDFA4), "6.2.5") {
+	if hasRuleMsg(checkType5Halftones(mk("Cyan", false), PDFA4), "6.2.5") {
 		t.Error("primary colorant without TransferFunction must pass")
 	}
 	// Non-primary colorant without TransferFunction: fail.
-	if !hasRuleMsg(checkType5Halftones(mk("Red", false).view(), PDFA4), "6.2.5") {
+	if !hasRuleMsg(checkType5Halftones(mk("Red", false), PDFA4), "6.2.5") {
 		t.Error("non-primary colorant without TransferFunction must be flagged")
 	}
 	// Non-primary with: pass.
-	if hasRuleMsg(checkType5Halftones(mk("Red", true).view(), PDFA4), "6.2.5") {
+	if hasRuleMsg(checkType5Halftones(mk("Red", true), PDFA4), "6.2.5") {
 		t.Error("non-primary colorant with TransferFunction must pass")
 	}
 }
@@ -208,49 +209,49 @@ func TestInfoAuthorMultiEntry(t *testing.T) {
 }
 
 func TestIsPDFMIME(t *testing.T) {
-	if !isPDFMIME(Name("application/pdf")) {
+	if !isPDFMIME(object.Name("application/pdf")) {
 		t.Error("application/pdf not recognized")
 	}
-	if isPDFMIME(Name("text/plain")) || isPDFMIME(Integer(1)) || isPDFMIME(nil) {
+	if isPDFMIME(object.Name("text/plain")) || isPDFMIME(object.Integer(1)) || isPDFMIME(nil) {
 		t.Error("non-pdf MIME wrongly recognized")
 	}
 }
 
 func TestDeclaredPDFALevel(t *testing.T) {
-	mk := func(xmp string) *Document {
-		doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-		cat := &Dictionary{}
-		cat.Set("Type", Name("Catalog"))
-		s := &Stream{Dict: Dictionary{}, Data: []byte(xmp)}
-		s.Dict.Set("Length", Integer(len(xmp)))
-		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-		doc.Objects[2] = &IndirectObject{Number: 2, Value: s}
-		cat.Set("Metadata", IndirectRef{Number: 2})
-		doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	mk := func(xmp string) core.View {
+		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		cat := &object.Dictionary{}
+		cat.Set("Type", object.Name("Catalog"))
+		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte(xmp)}
+		s.Dict.Set("Length", object.Integer(len(xmp)))
+		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+		doc.Objects[2] = &object.IndirectObject{Number: 2, Value: s}
+		cat.Set("Metadata", object.IndirectRef{Number: 2})
+		doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 		return doc
 	}
 	// Attribute form.
-	if lvl, ok := declaredPDFALevel(mk(`<rdf:Description pdfaid:part="4" pdfaid:conformance="B"/>`).view()); !ok || lvl != PDFA4 {
+	if lvl, ok := DeclaredLevel(mk(`<rdf:Description pdfaid:part="4" pdfaid:conformance="B"/>`)); !ok || lvl != PDFA4 {
 		t.Errorf("part=4 attr: got %v %v", lvl, ok)
 	}
 	// Element form.
-	if lvl, ok := declaredPDFALevel(mk(`<pdfaid:part>2</pdfaid:part>`).view()); !ok || lvl != PDFA2b {
+	if lvl, ok := DeclaredLevel(mk(`<pdfaid:part>2</pdfaid:part>`)); !ok || lvl != PDFA2b {
 		t.Errorf("part=2 elem: got %v %v", lvl, ok)
 	}
 	// No pdfaid: not PDF/A.
-	if _, ok := declaredPDFALevel(mk(`<rdf:Description/>`).view()); ok {
+	if _, ok := DeclaredLevel(mk(`<rdf:Description/>`)); ok {
 		t.Error("document without pdfaid must not be PDF/A")
 	}
 }
 
 func TestExtractXMPAttr(t *testing.T) {
-	if got := extractXMPAttr(`x pdfaid:part="4" y`, "pdfaid:part"); got != "4" {
+	if got := ExtractXMPAttr(`x pdfaid:part="4" y`, "pdfaid:part"); got != "4" {
 		t.Errorf("double-quote attr: %q", got)
 	}
-	if got := extractXMPAttr(`x pdfaid:part='3' y`, "pdfaid:part"); got != "3" {
+	if got := ExtractXMPAttr(`x pdfaid:part='3' y`, "pdfaid:part"); got != "3" {
 		t.Errorf("single-quote attr: %q", got)
 	}
-	if got := extractXMPAttr(`x y`, "pdfaid:part"); got != "" {
+	if got := ExtractXMPAttr(`x y`, "pdfaid:part"); got != "" {
 		t.Errorf("missing attr should be empty: %q", got)
 	}
 }
@@ -258,13 +259,13 @@ func TestExtractXMPAttr(t *testing.T) {
 func TestParseToUnicodeMapSpaceless(t *testing.T) {
 	// bfrange with no separators between <hhhh> tokens (real-world format).
 	cmap := "begincmap\n2 beginbfrange\n<0003><0003><0020>\n<0028><0028><0048>\nendbfrange\nendcmap"
-	doc := &Document{Objects: map[int]*IndirectObject{}}
-	s := &Stream{Dict: Dictionary{}, Data: []byte(cmap)}
-	s.Dict.Set("Length", Integer(len(cmap)))
-	doc.Objects[1] = &IndirectObject{Number: 1, Value: s}
-	fontDict := &Dictionary{}
-	fontDict.Set("ToUnicode", IndirectRef{Number: 1})
-	m := doc.view().ParseToUnicodeMap(fontDict)
+	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	s := &object.Stream{Dict: object.Dictionary{}, Data: []byte(cmap)}
+	s.Dict.Set("Length", object.Integer(len(cmap)))
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: s}
+	fontDict := &object.Dictionary{}
+	fontDict.Set("ToUnicode", object.IndirectRef{Number: 1})
+	m := doc.ParseToUnicodeMap(fontDict)
 	if m[3] != 0x20 || m[0x28] != 0x48 {
 		t.Errorf("bfrange parse wrong: %v", m)
 	}
@@ -279,13 +280,13 @@ func TestParseToUnicodeMapMalformed(t *testing.T) {
 		"beginbfchar", "endbfchar beginbfchar", "beginbfrangeendbfrange",
 		"beginbfchar<00", "beginbfrange<0><1><2>", "",
 	} {
-		doc := &Document{Objects: map[int]*IndirectObject{}}
-		s := &Stream{Dict: Dictionary{}, Data: []byte(bad)}
-		s.Dict.Set("Length", Integer(len(bad)))
-		doc.Objects[1] = &IndirectObject{Number: 1, Value: s}
-		fontDict := &Dictionary{}
-		fontDict.Set("ToUnicode", IndirectRef{Number: 1})
-		_ = doc.view().ParseToUnicodeMap(fontDict) // just must not panic
+		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte(bad)}
+		s.Dict.Set("Length", object.Integer(len(bad)))
+		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: s}
+		fontDict := &object.Dictionary{}
+		fontDict.Set("ToUnicode", object.IndirectRef{Number: 1})
+		_ = doc.ParseToUnicodeMap(fontDict) // just must not panic
 	}
 }
 
@@ -303,42 +304,42 @@ func TestAngleTokens(t *testing.T) {
 }
 
 func TestInheritedPageXObject(t *testing.T) {
-	mk := func(pageHasOwn bool) *Document {
-		doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-		xo := &Dictionary{}
-		xo.Set("X0", IndirectRef{Number: 90})
-		page := &Dictionary{}
-		page.Set("Type", Name("Page"))
-		page.Set("Parent", IndirectRef{Number: 2})
-		page.Set("Contents", IndirectRef{Number: 91})
+	mk := func(pageHasOwn bool) core.View {
+		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		xo := &object.Dictionary{}
+		xo.Set("X0", object.IndirectRef{Number: 90})
+		page := &object.Dictionary{}
+		page.Set("Type", object.Name("Page"))
+		page.Set("Parent", object.IndirectRef{Number: 2})
+		page.Set("Contents", object.IndirectRef{Number: 91})
 		if pageHasOwn {
-			ownRes := &Dictionary{}
+			ownRes := &object.Dictionary{}
 			ownRes.Set("XObject", xo)
 			page.Set("Resources", ownRes)
 		}
-		pagesRes := &Dictionary{}
+		pagesRes := &object.Dictionary{}
 		pagesRes.Set("XObject", xo)
-		pages := &Dictionary{}
-		pages.Set("Type", Name("Pages"))
-		pages.Set("Kids", Array{IndirectRef{Number: 3}})
-		pages.Set("Count", Integer(1))
+		pages := &object.Dictionary{}
+		pages.Set("Type", object.Name("Pages"))
+		pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+		pages.Set("Count", object.Integer(1))
 		pages.Set("Resources", pagesRes)
-		cat := &Dictionary{}
-		cat.Set("Type", Name("Catalog"))
-		cat.Set("Pages", IndirectRef{Number: 2})
-		c := &Stream{Dict: Dictionary{}, Data: []byte("/X0 Do")}
-		c.Dict.Set("Length", Integer(6))
-		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-		doc.Objects[2] = &IndirectObject{Number: 2, Value: pages}
-		doc.Objects[3] = &IndirectObject{Number: 3, Value: page}
-		doc.Objects[91] = &IndirectObject{Number: 91, Value: c}
-		doc.Trailer.Set("Root", IndirectRef{Number: 1})
+		cat := &object.Dictionary{}
+		cat.Set("Type", object.Name("Catalog"))
+		cat.Set("Pages", object.IndirectRef{Number: 2})
+		c := &object.Stream{Dict: object.Dictionary{}, Data: []byte("/X0 Do")}
+		c.Dict.Set("Length", object.Integer(6))
+		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+		doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
+		doc.Objects[3] = &object.IndirectObject{Number: 3, Value: page}
+		doc.Objects[91] = &object.IndirectObject{Number: 91, Value: c}
+		doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 		return doc
 	}
-	if !hasRuleMsg(checkInheritedPageXObject(mk(false).view(), PDFA4), "6.2.2") {
+	if !hasRuleMsg(checkInheritedPageXObject(mk(false), PDFA4), "6.2.2") {
 		t.Error("inherited page XObject must be flagged")
 	}
-	if hasRuleMsg(checkInheritedPageXObject(mk(true).view(), PDFA4), "6.2.2") {
+	if hasRuleMsg(checkInheritedPageXObject(mk(true), PDFA4), "6.2.2") {
 		t.Error("page with own XObject resource must pass")
 	}
 }
@@ -347,7 +348,7 @@ func TestInheritedPageXObject(t *testing.T) {
 // annotations and 3D/multimedia actions that plain PDF/A-4 forbids.
 func TestA4EConformanceRelaxations(t *testing.T) {
 	// isForbiddenAction: SetOCGState/GoTo3DView allowed only at conformance E.
-	for _, act := range []Name{"SetOCGState", "GoTo3DView"} {
+	for _, act := range []object.Name{"SetOCGState", "GoTo3DView"} {
 		if !isForbiddenAction(act, PDFA4, "") {
 			t.Errorf("plain PDF/A-4 should forbid /%s", act)
 		}

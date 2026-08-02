@@ -434,3 +434,13 @@ func asciiHexDecode(data []byte) ([]byte, error) {
 	}
 	return syntax.DecodeHex(hexDigits)
 }
+
+// FlateEncode zlib-compresses data (the inverse of FlateDecode) for writing a
+// FlateDecode stream such as a cross-reference stream.
+func FlateEncode(data []byte) []byte {
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	w.Write(data)
+	w.Close()
+	return buf.Bytes()
+}

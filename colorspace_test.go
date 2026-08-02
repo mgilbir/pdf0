@@ -100,44 +100,6 @@ func TestDefaultColorSpaceScope(t *testing.T) {
 	}
 }
 
-// ISO 32000-1 Tables 63-65: CIE colour space parameter validation.
-func TestCIEColorSpaceParams(t *testing.T) {
-	check := func(family string, params *Dictionary) []ValidationError {
-		doc := NewPDFADocument(PDFA2b)
-		var errs []ValidationError
-		checkColorSpaceValue(doc.view(), Array{Name(family), params}, 0, PDFA2b, &errs)
-		return errs
-	}
-	wp := func(x, y, z float64) Array { return Array{Real(x), Real(y), Real(z)} }
-
-	missing := &Dictionary{}
-	if len(check("CalRGB", missing)) == 0 {
-		t.Error("missing WhitePoint must be flagged")
-	}
-	badY := &Dictionary{}
-	badY.Set("WhitePoint", wp(0.95, 0.9, 1.09))
-	if len(check("CalGray", badY)) == 0 {
-		t.Error("WhitePoint Yw != 1.0 must be flagged")
-	}
-	negBP := &Dictionary{}
-	negBP.Set("WhitePoint", wp(0.95, 1.0, 1.09))
-	negBP.Set("BlackPoint", Array{Real(-0.1), Real(0), Real(0)})
-	if len(check("Lab", negBP)) == 0 {
-		t.Error("negative BlackPoint must be flagged")
-	}
-	badRange := &Dictionary{}
-	badRange.Set("WhitePoint", wp(0.95, 1.0, 1.09))
-	badRange.Set("Range", Array{Integer(100), Integer(-100), Integer(-100), Integer(100)})
-	if len(check("Lab", badRange)) == 0 {
-		t.Error("Lab Range with min > max must be flagged")
-	}
-	good := &Dictionary{}
-	good.Set("WhitePoint", wp(0.9505, 1.0, 1.089))
-	if errs := check("CalRGB", good); len(errs) != 0 {
-		t.Errorf("valid CalRGB dict must pass, got %v", errs)
-	}
-}
-
 // Overprint mode 1 with an ICCBased CMYK space and overprinting on.
 func TestICCCMYKOverprint(t *testing.T) {
 	build := func(op bool, paint string) *Document {
@@ -240,22 +202,5 @@ func TestDeviceAlternateNeedsCoverage(t *testing.T) {
 	pageWithContent(doc, "/CS0 cs 1 sc 0 0 5 5 re f", res)
 	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.2.4.3") {
 		t.Error("DeviceCMYK alternate without CMYK intent must be flagged")
-	}
-}
-
-// DeviceN with spot colorants requires a Colorants dictionary at 2b+.
-func TestDeviceNSpotNeedsColorants(t *testing.T) {
-	doc := NewPDFADocument(PDFA2b)
-	var errs []ValidationError
-	deviceN := Array{Name("DeviceN"), Array{Name("Spot1")}, Array{Name("ICCBased"), IndirectRef{Number: 5}}, IndirectRef{Number: 5}}
-	checkColorSpaceValue(doc.view(), deviceN, 0, PDFA2b, &errs)
-	found := false
-	for _, e := range errs {
-		if e.Message == "DeviceN color space with spot colorants must have a Colorants dictionary" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("spot DeviceN without Colorants dict must be flagged, got %v", errs)
 	}
 }

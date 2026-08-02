@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 // TestDevColorScannerMatchesPDFA is the correctness guard for the memoised
 // device-colour scanner: for every page it must return exactly what the trusted
-// PDF/A scanPageForDeviceCS returns. The two implementations share only the leaf
+// PDF/A core.PageDeviceColourUse returns. The two implementations share only the leaf
 // primitives, so this pins them together — a divergence in the fast path would
 // fail here. It runs over the veraPDF corpus when present (the widest variety of
 // real colour usage) and always over any Cal Poly PDF/VT files, and skips when
@@ -57,12 +58,12 @@ func TestDevColorScannerMatchesPDFA(t *testing.T) {
 			sc := pdfx.NewDevColorScanner(doc.view())
 			for _, pg := range doc.view().Pages(cat.Get("Pages")) {
 				pages++
-				wantR, wantC, wantG := scanPageForDeviceCS(doc.view(), pg.Dict)
+				wantR, wantC, wantG := core.PageDeviceColourUse(doc.view(), pg.Dict)
 				got := sc.PageDeviceUse(pg.Dict)
 				if got.RGB != wantR || got.CMYK != wantC || got.Gray != wantG {
 					mismatches++
 					if mismatches <= 10 {
-						t.Errorf("%s obj %d: scanPageForDeviceCS=(R%v C%v G%v) memoised=(R%v C%v G%v)",
+						t.Errorf("%s obj %d: core.PageDeviceColourUse=(R%v C%v G%v) memoised=(R%v C%v G%v)",
 							filepath.Base(f), pg.ObjNum, wantR, wantC, wantG, got.RGB, got.CMYK, got.Gray)
 					}
 				}
@@ -123,8 +124,8 @@ func TestDevColorScannerGroupMemoKey(t *testing.T) {
 	put(14, page2)
 
 	// The trusted PDF/A scanner is the oracle for both pages.
-	wantR1, _, _ := scanPageForDeviceCS(doc.view(), page1)
-	wantR2, _, _ := scanPageForDeviceCS(doc.view(), page2)
+	wantR1, _, _ := core.PageDeviceColourUse(doc.view(), page1)
+	wantR2, _, _ := core.PageDeviceColourUse(doc.view(), page2)
 	if !wantR1 || wantR2 {
 		t.Fatalf("fixture does not exercise the bug: appearance page RGB=%v (want true), Do page RGB=%v (want false)", wantR1, wantR2)
 	}

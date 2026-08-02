@@ -1,7 +1,8 @@
-package pdf0
+package pdfa
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
 
@@ -104,14 +105,14 @@ func checkImageIntentAndInterpolate(doc core.View, level PDFALevel) []Validation
 	// Image XObject /Intent (Interpolate on image XObjects is already
 	// checked by checkInterpolate).
 	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
-		if st, _ := stream.Dict.Get("Subtype").(Name); st != "Image" {
+		if st, _ := stream.Dict.Get("Subtype").(object.Name); st != "Image" {
 			continue
 		}
-		if intent, ok := doc.Resolve(stream.Dict.Get("Intent")).(Name); ok && !standardRenderingIntents[string(intent)] {
+		if intent, ok := doc.Resolve(stream.Dict.Get("Intent")).(object.Name); ok && !standardRenderingIntents[string(intent)] {
 			add(intentRule, "an image dictionary uses a non-standard rendering intent", num)
 		}
 	}
@@ -140,11 +141,11 @@ func checkFileTrailerID(doc core.View, level PDFALevel) []ValidationError {
 	if idObj == nil {
 		return nil
 	}
-	arr, ok := doc.Resolve(idObj).(Array)
+	arr, ok := doc.Resolve(idObj).(object.Array)
 	valid := ok && len(arr) == 2
 	if valid {
 		for _, el := range arr {
-			s, ok := el.(String)
+			s, ok := el.(object.String)
 			if !ok || len(s.Value) == 0 {
 				valid = false
 			}
@@ -213,7 +214,7 @@ func parseInlineDictEntries(data []byte, pos *int) map[string]string {
 				pendingKey = ""
 			}
 		case b == '[':
-			// Array value: record it opaquely and skip to ']'.
+			// object.Array value: record it opaquely and skip to ']'.
 			i++
 			for i < n && data[i] != ']' {
 				i++
@@ -245,7 +246,7 @@ func parseInlineDictEntries(data []byte, pos *int) map[string]string {
 // PDF/A-4 (ISO 19005-4 6.6.3): document lifecycle events (WC/WS/DS/WP/DP),
 // page navigation (O/C), and page-triggered annotation events (PO/PC/PV).
 // User-interaction events (E, X, D, U, Fo, Bl, PI) remain permitted.
-var forbiddenAAEvents = map[Name]bool{
+var forbiddenAAEvents = map[object.Name]bool{
 	"WC": true, "WS": true, "DS": true, "WP": true, "DP": true,
 	"O": true, "C": true, "PO": true, "PC": true, "PV": true,
 }
@@ -261,7 +262,7 @@ func checkA4TriggerEvents(doc core.View, level PDFALevel) []ValidationError {
 		return nil
 	}
 	var errs []ValidationError
-	report := func(aa *Dictionary, num int) {
+	report := func(aa *object.Dictionary, num int) {
 		if aa == nil {
 			return
 		}
@@ -278,7 +279,7 @@ func checkA4TriggerEvents(doc core.View, level PDFALevel) []ValidationError {
 		report(doc.ResolveDict(page.Dict.Get("AA")), page.ObjNum)
 	}
 	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(d) {
+		if d, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(d) {
 			report(doc.ResolveDict(d.Get("AA")), num)
 		}
 	}
@@ -322,8 +323,8 @@ func checkActualTextPUA(doc core.View, level PDFALevel) []ValidationError {
 
 	// Structure element (and any) dictionaries carrying /ActualText.
 	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*Dictionary); ok {
-			if s, ok := d.Get("ActualText").(String); ok && stringHasPUA(s.Value) {
+		if d, ok := iobj.Value.(*object.Dictionary); ok {
+			if s, ok := d.Get("ActualText").(object.String); ok && stringHasPUA(s.Value) {
 				add("an ActualText entry in a dictionary contains a Unicode Private Use Area value", num)
 			}
 		}
@@ -378,12 +379,12 @@ func contentActualTexts(data []byte) [][]byte {
 // primaryColorants are the process colorants whose Type 5 halftone
 // component must NOT carry a TransferFunction. A component for any other
 // (non-primary) colorant must carry one, so its output can be mapped.
-var primaryColorants = map[Name]bool{
+var primaryColorants = map[object.Name]bool{
 	"Cyan": true, "Magenta": true, "Yellow": true, "Black": true, "Gray": true,
 }
 
 // halftoneReserved are the non-colorant keys of a Type 5 halftone dictionary.
-var halftoneReserved = map[Name]bool{"Type": true, "HalftoneType": true, "HalftoneName": true}
+var halftoneReserved = map[object.Name]bool{"Type": true, "HalftoneType": true, "HalftoneName": true}
 
 // checkType5Halftones validates the TransferFunction usage in Type 5
 // (multi-component) halftone dictionaries (ISO 19005-2/-4 6.2.5): a component
@@ -407,7 +408,7 @@ func checkType5Halftones(doc core.View, level PDFALevel) []ValidationError {
 	// corpus passes an unused Type 5 halftone with RGB colorants and a
 	// TransferFunction).
 	for _, d := range collectAppliedHalftones(doc) {
-		if ht, _ := doc.Resolve(d.Get("HalftoneType")).(Integer); ht != 5 {
+		if ht, _ := doc.Resolve(d.Get("HalftoneType")).(object.Integer); ht != 5 {
 			continue
 		}
 		num := objNumForDict(doc, d)
@@ -434,16 +435,16 @@ func checkType5Halftones(doc core.View, level PDFALevel) []ValidationError {
 
 // collectAppliedHalftones returns every halftone dictionary referenced by the
 // /HT entry of an ExtGState that is applied (via gs) in executed content.
-func collectAppliedHalftones(doc core.View) []*Dictionary {
+func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
-	var out []*Dictionary
-	seenHT := map[*Dictionary]bool{}
-	seenC := map[*Dictionary]bool{}
-	var walk func(container *Dictionary, data []byte, key *Stream)
-	walk = func(container *Dictionary, data []byte, key *Stream) {
+	var out []*object.Dictionary
+	seenHT := map[*object.Dictionary]bool{}
+	seenC := map[*object.Dictionary]bool{}
+	var walk func(container *object.Dictionary, data []byte, key *object.Stream)
+	walk = func(container *object.Dictionary, data []byte, key *object.Stream) {
 		if container == nil || seenC[container] || data == nil {
 			return
 		}
@@ -474,8 +475,8 @@ func collectAppliedHalftones(doc core.View) []*Dictionary {
 				if !used.XObjects[string(key)] {
 					continue
 				}
-				if s, ok := doc.Resolve(xobj.Values[i]).(*Stream); ok {
-					if st, _ := s.Dict.Get("Subtype").(Name); st == "Form" {
+				if s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream); ok {
+					if st, _ := s.Dict.Get("Subtype").(object.Name); st == "Form" {
 						walk(&s.Dict, doc.Content(s), s)
 					}
 				}
@@ -510,7 +511,7 @@ func checkEmbeddedPDFA(doc core.View, level PDFALevel) []ValidationError {
 		if doc.Cancel.Stopped() {
 			break
 		}
-		dict, ok := iobj.Value.(*Dictionary)
+		dict, ok := iobj.Value.(*object.Dictionary)
 		if !ok {
 			continue
 		}
@@ -519,7 +520,7 @@ func checkEmbeddedPDFA(doc core.View, level PDFALevel) []ValidationError {
 			continue
 		}
 		for _, val := range efDict.Values {
-			stream, ok := doc.Resolve(val).(*Stream)
+			stream, ok := doc.Resolve(val).(*object.Stream)
 			if !ok {
 				continue
 			}
@@ -559,7 +560,7 @@ func pdfaConformanceFlag(doc core.View) string {
 	if catalog == nil {
 		return ""
 	}
-	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*Stream)
+	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream)
 	if !ok {
 		return ""
 	}
@@ -567,18 +568,18 @@ func pdfaConformanceFlag(doc core.View) string {
 	if v := core.ExtractXMPValue(xmp, "pdfaid:conformance"); v != "" {
 		return strings.ToUpper(v)
 	}
-	return strings.ToUpper(extractXMPAttr(xmp, "pdfaid:conformance"))
+	return strings.ToUpper(ExtractXMPAttr(xmp, "pdfaid:conformance"))
 }
 
 // isPDFMIME reports whether a stream /Subtype names the application/pdf MIME
 // type (stored as the name /application#2Fpdf).
-func isPDFMIME(subtype Object) bool {
-	n, ok := subtype.(Name)
+func isPDFMIME(subtype object.Object) bool {
+	n, ok := subtype.(object.Name)
 	return ok && string(n) == "application/pdf"
 }
 
-// extractXMPAttr reads an attribute-form XMP value (key="value").
-func extractXMPAttr(xmp, key string) string {
+// ExtractXMPAttr reads an attribute-form XMP value (key="value").
+func ExtractXMPAttr(xmp, key string) string {
 	i := strings.Index(xmp, key+"=")
 	if i < 0 {
 		return ""
@@ -618,13 +619,13 @@ func checkInheritedPageXObject(doc core.View, level PDFALevel) []ValidationError
 		if len(used.XObjects) == 0 {
 			continue
 		}
-		var ownXObj *Dictionary
+		var ownXObj *object.Dictionary
 		if own := doc.ResolveDict(page.Dict.Get("Resources")); own != nil {
 			ownXObj = doc.ResolveDict(own.Get("XObject"))
 		}
 		reported := false
 		for name := range used.XObjects {
-			if ownXObj == nil || ownXObj.Get(Name(name)) == nil {
+			if ownXObj == nil || ownXObj.Get(object.Name(name)) == nil {
 				if !reported {
 					reported = true
 					errs = append(errs, ValidationError{Rule: "6.2.2", Level: level,

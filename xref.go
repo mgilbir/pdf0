@@ -2,7 +2,6 @@ package pdf0
 
 import (
 	"bytes"
-	"compress/zlib"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/syntax"
@@ -290,16 +289,6 @@ func readField(data []byte, width int) int {
 // defaultMaxDecodedStreamBytes; a caller can change it with
 // WithMaxDecodedStreamBytes. This prevents decompression bombs from consuming
 // excessive memory.
-
-// flateEncode zlib-compresses data (the inverse of flateDecode) for writing a
-// FlateDecode stream such as a cross-reference stream.
-func flateEncode(data []byte) []byte {
-	var buf bytes.Buffer
-	w := zlib.NewWriter(&buf)
-	w.Write(data)
-	w.Close()
-	return buf.Bytes()
-}
 
 // splitFields splits a string by whitespace into non-empty fields.
 func splitFields(s string) []string {

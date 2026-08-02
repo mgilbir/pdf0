@@ -41,7 +41,7 @@ func encMatrixDoc(usedXRefStream, withMetadata bool) *Document {
 
 	// A FlateDecode content stream: after a round-trip it must still inflate,
 	// which only holds if it was decrypted correctly.
-	content := flateEncode([]byte("BT /F1 12 Tf 72 720 Td (round-trip sentinel) Tj ET"))
+	content := core.FlateEncode([]byte("BT /F1 12 Tf 72 720 Td (round-trip sentinel) Tj ET"))
 	cs := &Dictionary{}
 	cs.Set("Length", Integer(len(content)))
 	cs.Set("Filter", Name("FlateDecode"))

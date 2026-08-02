@@ -928,7 +928,7 @@ func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, object
 	dict.Set("Size", Integer(xrefObjNum+1))
 	dict.Set("W", Array{Integer(w[0]), Integer(w[1]), Integer(w[2])})
 	dict.Set("Index", index)
-	encoded := flateEncode(body.Bytes())
+	encoded := core.FlateEncode(body.Bytes())
 	dict.Set("Filter", Name("FlateDecode"))
 	dict.Set("Length", Integer(len(encoded)))
 
