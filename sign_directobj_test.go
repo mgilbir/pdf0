@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/x509"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/sign"
 	"regexp"
 	"sort"
 	"strings"
@@ -118,8 +120,8 @@ func finishTestPDF(buf *bytes.Buffer, offs []int, trailerFmt string) []byte {
 // nothing caught it. The form must be promoted to a real object instead, with
 // the catalog pointed at it.
 func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
-	cert, _ := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, _ := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	base := buildPDFWithDirectForm()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
@@ -171,7 +173,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	}
 	// The whole point of the exercise: the archival time-stamp must verify over
 	// the produced bytes.
-	if !coveringDocTimestamp(d2, out) {
+	if !sign.CoveringDocTimestamp(d2.view(), out) {
 		t.Error("the archival time-stamp does not verify over the file it seals")
 	}
 }
@@ -181,8 +183,8 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 // time-stamp then extends the promoted object. Both signature fields must end up
 // in the one form, and the approval signature must stay valid.
 func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	base := buildPDFWithDirectForm()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
@@ -225,7 +227,7 @@ func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
 // TestSignPromotesDirectAcroForm is the same case on the signing side, where the
 // promotion already existed: it guards the two paths staying consistent.
 func TestSignPromotesDirectAcroForm(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildPDFWithDirectForm()
 
 	for _, tc := range []struct {
@@ -278,8 +280,8 @@ func TestSignPromotesDirectAcroForm(t *testing.T) {
 // -1 was used as an object number instead, silently producing an invalid file.
 // A clear error is the answer, identically in both signing files.
 func TestSigningRefusesDirectCatalogOrPage(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	for _, doc := range []struct {
 		name string

@@ -3,6 +3,8 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/sign"
 	"sort"
 	"testing"
 )
@@ -62,7 +64,7 @@ func formFields(t *testing.T, d *Document) []string {
 		if fd == nil {
 			t.Fatalf("/Fields entry %v does not resolve to a dictionary", f)
 		}
-		names = append(names, fieldPartialName(d, fd))
+		names = append(names, sign.FieldPartialName(d.view(), fd))
 	}
 	return names
 }
@@ -78,7 +80,7 @@ func formFields(t *testing.T, d *Document) []string {
 // signature's field was orphaned: a viewer enumerating the form saw one
 // signature where the file holds two.
 func TestSecondSignatureFieldIsDistinct(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 
 	base := buildPDFWithPageContents()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
@@ -147,7 +149,7 @@ func TestSecondSignatureFieldIsDistinct(t *testing.T) {
 // field (ISO 32000-2 Table 225: bit 1 SignaturesExist, bit 2 AppendOnly) so the
 // signature bits are OR-ed in rather than overwriting what is there.
 func TestSigningPreservesExistingForm(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildPDFWithFormField()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
@@ -207,7 +209,7 @@ func TestSigningPreservesExistingForm(t *testing.T) {
 // object the incremental xref never mentions, the appended update would not take
 // effect and the re-read form would still show one field.
 func TestSignIncrementalPreservesExistingForm(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	original := buildPDFWithFormField()
 	doc, err := Read(bytes.NewReader(original), int64(len(original)))
 	if err != nil {

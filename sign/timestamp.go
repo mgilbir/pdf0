@@ -1,4 +1,4 @@
-package pdf0
+package sign
 
 import (
 	"crypto"
@@ -44,7 +44,7 @@ var oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
 // buildTimestampToken issues a time-stamp token over imprint (the bytes to be
 // time-stamped, typically a signature value) signed by the TSA key, asserting
 // genTime. It is the local-TSA path used for B-T/B-LTA signing and tests.
-func buildTimestampToken(imprint []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer, genTime time.Time) ([]byte, error) {
+func BuildTimestampToken(imprint []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer, genTime time.Time) ([]byte, error) {
 	h := crypto.SHA256.New()
 	h.Write(imprint)
 	info := tstInfo{
@@ -164,7 +164,7 @@ func verifyTimestampToken(tokenDER, imprint []byte) (time.Time, *x509.Certificat
 		return time.Time{}, nil, err
 	}
 	// Verify the TSA's signature over the TSTInfo.
-	cert, _, _, err := verifyCMS(tokenDER, tstDER)
+	cert, _, _, err := VerifyCMS(tokenDER, tstDER)
 	if err != nil {
 		return time.Time{}, cert, fmt.Errorf("time-stamp token signature: %w", err)
 	}

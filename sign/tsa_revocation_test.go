@@ -1,6 +1,7 @@
-package pdf0
+package sign
 
 import (
+	"github.com/mgilbir/pdf0/internal/signtest"
 	"testing"
 	"time"
 )
@@ -13,8 +14,8 @@ func TestTimestampRequiresTimeStampingEKU(t *testing.T) {
 	imprint := []byte("the bytes being time-stamped")
 
 	// A general (non-TSA) certificate must be rejected as a TSA.
-	badCert, badKey := testCertKey(t)
-	token, err := buildTimestampToken(imprint, badCert, badKey, time.Now())
+	badCert, badKey := signtest.CertKey(t)
+	token, err := BuildTimestampToken(imprint, badCert, badKey, time.Now())
 	if err != nil {
 		t.Fatalf("buildTimestampToken: %v", err)
 	}
@@ -23,8 +24,8 @@ func TestTimestampRequiresTimeStampingEKU(t *testing.T) {
 	}
 
 	// A certificate carrying the timeStamping EKU is accepted.
-	tsaCert, tsaKey := testTSACertKey(t)
-	good, err := buildTimestampToken(imprint, tsaCert, tsaKey, time.Now())
+	tsaCert, tsaKey := signtest.TSACertKey(t)
+	good, err := BuildTimestampToken(imprint, tsaCert, tsaKey, time.Now())
 	if err != nil {
 		t.Fatalf("buildTimestampToken (TSA): %v", err)
 	}

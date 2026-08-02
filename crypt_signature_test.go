@@ -9,6 +9,8 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/sign"
 	"strings"
 	"testing"
 )
@@ -173,7 +175,7 @@ func rawContentsWindow(t *testing.T, file []byte) []byte {
 // /Contents exemption the crypt layer decrypted the signature value, so
 // verification failed with "not a CMS SignedData" on a perfectly good file.
 func TestEncryptedSignedFileVerifies(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	doc := rc4EncryptedDoc(t)
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {
@@ -188,7 +190,7 @@ func TestEncryptedSignedFileVerifies(t *testing.T) {
 	lt := ci + bytes.IndexByte(file[ci:], '<')
 	gt := lt + bytes.IndexByte(file[lt:], '>')
 	signedBytes := append(append([]byte(nil), file[:lt]...), file[gt+1:]...)
-	if _, _, _, err := verifyCMS(bytes.TrimRight(rawContents, "\x00"), signedBytes); err != nil {
+	if _, _, _, err := sign.VerifyCMS(bytes.TrimRight(rawContents, "\x00"), signedBytes); err != nil {
 		t.Fatalf("control: the raw file bytes should carry a valid signature: %v", err)
 	}
 
@@ -232,7 +234,7 @@ func TestEncryptedSignedFileVerifies(t *testing.T) {
 // signed document must leave the signature value in the clear (7.6.2), not
 // encipher it into a file no verifier could read.
 func TestWriteEncryptedSignedKeepsContentsClear(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {

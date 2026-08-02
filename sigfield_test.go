@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/hex"
+	"github.com/mgilbir/pdf0/internal/signtest"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ import (
 // references the signature dictionary, so both the CMS verification and the
 // PAdES assessment must name it.
 func TestSignedDocumentReportsFieldName(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
@@ -217,8 +218,8 @@ func TestSignatureResultOrderIsByObjectNumber(t *testing.T) {
 // reports them in object-number order, which here is the order they were
 // written.
 func TestTwoRealSignaturesOrderAndNames(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {

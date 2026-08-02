@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/hex"
+	"github.com/mgilbir/pdf0/sign"
 	"io"
 	"time"
 )
@@ -164,7 +165,7 @@ func patchDocTimestamp(data []byte, tsaCert *x509.Certificate, tsaKey crypto.Sig
 	if err != nil {
 		return nil, err
 	}
-	token, err := buildTimestampToken(signed, tsaCert, tsaKey, time.Now().UTC())
+	token, err := sign.BuildTimestampToken(signed, tsaCert, tsaKey, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

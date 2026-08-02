@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/signtest"
 	"testing"
 )
 
@@ -46,7 +47,7 @@ func buildPDFWithPageContents() []byte {
 // reference first, so signing any realistic document failed with
 // "signing: /ByteRange placeholder not found".
 func TestSignDocumentWithPageContents(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildPDFWithPageContents()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
@@ -90,7 +91,7 @@ func TestSignDocumentWithPageContents(t *testing.T) {
 // TestSignIncrementalWithPageContents covers the same anchor bug on the
 // incremental path, which is the one that must work for real files.
 func TestSignIncrementalWithPageContents(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	original := buildPDFWithPageContents()
 	doc, err := Read(bytes.NewReader(original), int64(len(original)))
 	if err != nil {
@@ -124,7 +125,7 @@ func TestSignIncrementalWithPageContents(t *testing.T) {
 // WriteSignedIncremental's documented purpose is exactly this: add a signature
 // without invalidating one already present.
 func TestSignIncrementalSecondSignature(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 
 	base := buildPDFWithPageContents()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))

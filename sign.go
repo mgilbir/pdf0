@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/mgilbir/pdf0/sign"
 	"io"
 )
 
@@ -196,7 +197,7 @@ func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer, tsaC
 	if err != nil {
 		return nil, err
 	}
-	cms, err := buildSignedDataFull(cert, key, signed, tsaCert, tsaKey)
+	cms, err := sign.BuildSignedDataFull(cert, key, signed, tsaCert, tsaKey)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +355,7 @@ func usedFieldNames(d *Document, catalog *Dictionary) map[string]bool {
 		if fd.Get("FT") == nil && fd.Get("V") == nil {
 			continue // not a form field
 		}
-		if name := qualifiedFieldName(d, fd); name != "" {
+		if name := sign.QualifiedFieldName(d.view(), fd); name != "" {
 			used[name] = true
 		}
 	}
@@ -365,7 +366,7 @@ func usedFieldNames(d *Document, catalog *Dictionary) map[string]bool {
 // qualified name of every node. Depth-capped and cycle-guarded like the naming
 // walk in signatures.go: the document may be untrusted.
 func collectUsedFieldNames(d *Document, node Object, prefix string, seen map[int]bool, used map[string]bool, depth int) {
-	if depth > maxFieldTreeDepth {
+	if depth > sign.MaxFieldTreeDepth {
 		return
 	}
 	if ref, ok := node.(IndirectRef); ok {
@@ -378,7 +379,7 @@ func collectUsedFieldNames(d *Document, node Object, prefix string, seen map[int
 	if fd == nil {
 		return
 	}
-	name := joinFieldName(prefix, fieldPartialName(d, fd))
+	name := sign.JoinFieldName(prefix, sign.FieldPartialName(d.view(), fd))
 	if name != "" {
 		used[name] = true
 	}

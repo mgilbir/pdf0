@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/signtest"
 	"testing"
 )
 
@@ -138,8 +139,8 @@ func pageCarryingAnnot(t *testing.T, d *Document, annotNum int) int {
 // object, and that object must be the page whose /Annots carries the widget.
 // Everything is asserted on the re-read output, not on internal state.
 func TestWidgetPageAndPRefAgree(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	writers := []struct {
 		name  string
@@ -213,7 +214,7 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 // is signable at all. Before, firstPage found no /Type /Page among the root's
 // kids and every writer refused the document.
 func TestSignDocumentWithNestedPageTree(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildPDFWithNestedPagesOnly()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {

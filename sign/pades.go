@@ -1,7 +1,9 @@
-package pdf0
+package sign
 
 import (
 	"encoding/asn1"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"time"
 )
 
@@ -47,18 +49,18 @@ type PAdESResult struct {
 // ValidatePAdES assesses every signature in the document for PAdES conformance
 // against the original file bytes. Results are ordered by the object number of
 // the signature dictionary, the same deterministic order VerifySignatures uses.
-func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
+func ValidatePAdES(d core.View, raw []byte) []PAdESResult {
 	// Document-level long-term material: a catalog /DSS holds validation data
 	// (certificates, OCSP, CRLs); a document timestamp (/Type /DocTimeStamp)
 	// archives it for the B-LTA level.
 	hasDSS := false
-	if cat := d.view().Catalog(); cat != nil {
+	if cat := d.Catalog(); cat != nil {
 		hasDSS = d.ResolveDict(cat.Get("DSS")) != nil
 	}
 	hasDocTimestamp := false
 	for _, iobj := range d.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok {
-			if t, _ := dict.Get("Type").(Name); t == "DocTimeStamp" && dict.Get("ByteRange") != nil {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok {
+			if t, _ := dict.Get("Type").(object.Name); t == "DocTimeStamp" && dict.Get("ByteRange") != nil {
 				hasDocTimestamp = true
 			}
 		}
@@ -69,7 +71,7 @@ func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 	// an approval signature that only covers its own (earlier) revision is still
 	// PAdES-conformant — the trailing bytes are the DSS and the document
 	// time-stamp, protected by the time-stamp rather than the signature.
-	sealed := coveringDocTimestamp(d, raw)
+	sealed := CoveringDocTimestamp(d, raw)
 
 	// Document time-stamps are assessed as long-term material, not as approval
 	// signatures, so they are excluded here.
@@ -84,23 +86,28 @@ func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 	return out
 }
 
-// coveringDocTimestamp reports whether the document carries a document time-stamp
+// CoveringDocTimestamp reports whether the document carries a document time-stamp
 // (/Type /DocTimeStamp) whose /ByteRange covers the whole file and whose RFC 3161
 // token verifies over those bytes.
-func coveringDocTimestamp(d *Document, raw []byte) bool {
+// CoveringDocTimestamp reports whether the document carries a document
+// time-stamp whose /ByteRange covers the whole of raw and whose token verifies
+// over those bytes. That is what makes a signature PAdES B-LTA: the outermost
+// seal has to be over the file as it now stands, not over some earlier state of
+// it.
+func CoveringDocTimestamp(d core.View, raw []byte) bool {
 	for _, iobj := range d.Objects {
-		dict, ok := iobj.Value.(*Dictionary)
+		dict, ok := iobj.Value.(*object.Dictionary)
 		if !ok {
 			continue
 		}
-		if t, _ := dict.Get("Type").(Name); t != "DocTimeStamp" {
+		if t, _ := dict.Get("Type").(object.Name); t != "DocTimeStamp" {
 			continue
 		}
 		segs, covers, ok := byteRangeSegments(d, dict.Get("ByteRange"), int64(len(raw)))
 		if !ok || !covers {
 			continue
 		}
-		contents, _ := d.Resolve(dict.Get("Contents")).(String)
+		contents, _ := d.Resolve(dict.Get("Contents")).(object.String)
 		signed := make([]byte, 0, len(raw))
 		bad := false
 		for _, s := range segs {
@@ -120,9 +127,9 @@ func coveringDocTimestamp(d *Document, raw []byte) bool {
 	return false
 }
 
-func assessPAdES(d *Document, sig *Dictionary, raw []byte, hasDSS, hasDocTimestamp, sealed bool) PAdESResult {
+func assessPAdES(d core.View, sig *object.Dictionary, raw []byte, hasDSS, hasDocTimestamp, sealed bool) PAdESResult {
 	var res PAdESResult
-	sub, _ := sig.Get("SubFilter").(Name)
+	sub, _ := sig.Get("SubFilter").(object.Name)
 	res.SubFilter = string(sub)
 
 	// Reuse the CMS verification for cryptographic validity and signer identity.
@@ -154,7 +161,7 @@ func assessPAdES(d *Document, sig *Dictionary, raw []byte, hasDSS, hasDocTimesta
 		res.Issues = append(res.Issues, "the /ByteRange does not cover the whole document")
 	}
 
-	contents, _ := d.Resolve(sig.Get("Contents")).(String)
+	contents, _ := d.Resolve(sig.Get("Contents")).(object.String)
 	hasSigningCert, hasSigTimestamp := cmsPAdESFacts(contents.Value)
 	if !hasSigningCert {
 		res.Issues = append(res.Issues, "the CMS lacks a signing-certificate attribute (required for CAdES-BES)")

@@ -1,10 +1,12 @@
-package pdf0
+package sign
 
 import (
 	"bytes"
 	"crypto"
 	"crypto/x509"
 	"encoding/asn1"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"math/big"
 	"time"
 )
@@ -307,8 +309,8 @@ func issuerOf(cert *x509.Certificate, certs []*x509.Certificate) *x509.Certifica
 
 // DSSRevocationMaterial returns the CRLs and OCSP responses (DER) stored in the
 // document's DSS (Document Security Store), decoded through their stream filters.
-func (d *Document) DSSRevocationMaterial() (crls, ocsps [][]byte) {
-	cat := d.view().Catalog()
+func DSSRevocationMaterial(d core.View) (crls, ocsps [][]byte) {
+	cat := d.Catalog()
 	if cat == nil {
 		return nil, nil
 	}
@@ -316,12 +318,12 @@ func (d *Document) DSSRevocationMaterial() (crls, ocsps [][]byte) {
 	if dss == nil {
 		return nil, nil
 	}
-	collect := func(key Name) [][]byte {
+	collect := func(key object.Name) [][]byte {
 		var out [][]byte
-		arr, _ := d.Resolve(dss.Get(key)).(Array)
+		arr, _ := d.Resolve(dss.Get(key)).(object.Array)
 		for _, ref := range arr {
-			if st, ok := d.Resolve(ref).(*Stream); ok {
-				out = append(out, d.view().Content(st))
+			if st, ok := d.Resolve(ref).(*object.Stream); ok {
+				out = append(out, d.Content(st))
 			}
 		}
 		return out
@@ -331,8 +333,8 @@ func (d *Document) DSSRevocationMaterial() (crls, ocsps [][]byte) {
 
 // DSSCerts returns the certificates stored in the document's DSS /Certs (the
 // chain material a long-term signature carries).
-func (d *Document) DSSCerts() []*x509.Certificate {
-	cat := d.view().Catalog()
+func DSSCerts(d core.View) []*x509.Certificate {
+	cat := d.Catalog()
 	if cat == nil {
 		return nil
 	}
@@ -341,10 +343,10 @@ func (d *Document) DSSCerts() []*x509.Certificate {
 		return nil
 	}
 	var out []*x509.Certificate
-	arr, _ := d.Resolve(dss.Get("Certs")).(Array)
+	arr, _ := d.Resolve(dss.Get("Certs")).(object.Array)
 	for _, ref := range arr {
-		if st, ok := d.Resolve(ref).(*Stream); ok {
-			if c, err := x509.ParseCertificate(d.view().Content(st)); err == nil {
+		if st, ok := d.Resolve(ref).(*object.Stream); ok {
+			if c, err := x509.ParseCertificate(d.Content(st)); err == nil {
 				out = append(out, c)
 			}
 		}

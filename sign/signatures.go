@@ -1,4 +1,4 @@
-package pdf0
+package sign
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"math/big"
 	"sort"
 	"strings"
@@ -109,8 +110,8 @@ type signingCertificateV2 struct {
 // modified after signing — an incremental update can change the rendered content
 // while leaving the signed range intact. Combine Valid with CoversWholeDocument
 // (see SignatureResult.DocumentUnmodified).
-func (d *Document) VerifySignatures(raw []byte) []SignatureResult {
-	return d.VerifySignaturesWithRoots(raw, nil)
+func VerifySignatures(d core.View, raw []byte) []SignatureResult {
+	return VerifySignaturesWithRoots(d, raw, nil)
 }
 
 // VerifySignaturesWithRoots verifies every signature as VerifySignatures does and,
@@ -124,7 +125,7 @@ func (d *Document) VerifySignatures(raw []byte) []SignatureResult {
 // stable across runs (the objects are held in a map, whose iteration order is
 // not) and meaningful: in a document signed by successive incremental updates the
 // later signature is the later object.
-func (d *Document) VerifySignaturesWithRoots(raw []byte, roots *x509.CertPool) []SignatureResult {
+func VerifySignaturesWithRoots(d core.View, raw []byte, roots *x509.CertPool) []SignatureResult {
 	sigs := documentSignatures(d, true)
 	names := signatureFieldNames(d, sigs)
 	var results []SignatureResult
@@ -140,14 +141,14 @@ func (d *Document) VerifySignaturesWithRoots(raw []byte, roots *x509.CertPool) [
 // indirect object holding it.
 type signatureEntry struct {
 	num  int
-	dict *Dictionary
+	dict *object.Dictionary
 }
 
 // documentSignatures returns the document's signature dictionaries — those
 // carrying both /ByteRange and /Contents, with a /Type of /Sig, /DocTimeStamp or
 // absent — ordered by object number, so every caller reports its results in the
 // same deterministic order rather than in Go map order.
-func documentSignatures(d *Document, includeDocTimestamps bool) []signatureEntry {
+func documentSignatures(d core.View, includeDocTimestamps bool) []signatureEntry {
 	nums := make([]int, 0, len(d.Objects))
 	for num := range d.Objects {
 		nums = append(nums, num)
@@ -159,11 +160,11 @@ func documentSignatures(d *Document, includeDocTimestamps bool) []signatureEntry
 		if iobj == nil {
 			continue
 		}
-		dict, ok := iobj.Value.(*Dictionary)
+		dict, ok := iobj.Value.(*object.Dictionary)
 		if !ok || dict.Get("ByteRange") == nil || dict.Get("Contents") == nil {
 			continue
 		}
-		switch t, _ := dict.Get("Type").(Name); t {
+		switch t, _ := dict.Get("Type").(object.Name); t {
 		case "", "Sig":
 		case "DocTimeStamp":
 			if !includeDocTimestamps {
@@ -177,9 +178,9 @@ func documentSignatures(d *Document, includeDocTimestamps bool) []signatureEntry
 	return out
 }
 
-// maxFieldTreeDepth caps the field-hierarchy walks below, so a /Kids or /Parent
+// MaxFieldTreeDepth caps the field-hierarchy walks below, so a /Kids or /Parent
 // chain in an untrusted document cannot drive unbounded recursion.
-const maxFieldTreeDepth = 64
+const MaxFieldTreeDepth = 64
 
 // signatureFieldNames maps the object number of each signature dictionary in
 // sigs to the fully qualified name (see SignatureResult.Field) of the form field
@@ -190,7 +191,7 @@ const maxFieldTreeDepth = 64
 // its qualified name. Fields that no /AcroForm reaches (a widget attached only to
 // a page, which producers do emit) are picked up by a second pass over the
 // objects, reconstructing the ancestry from the field's own /Parent chain.
-func signatureFieldNames(d *Document, sigs []signatureEntry) map[int]string {
+func signatureFieldNames(d core.View, sigs []signatureEntry) map[int]string {
 	if len(sigs) == 0 {
 		return nil
 	}
@@ -200,9 +201,9 @@ func signatureFieldNames(d *Document, sigs []signatureEntry) map[int]string {
 	}
 	names := make(map[int]string, len(sigs))
 
-	if cat := d.view().Catalog(); cat != nil {
+	if cat := d.Catalog(); cat != nil {
 		if form := d.ResolveDict(cat.Get("AcroForm")); form != nil {
-			fields, _ := d.Resolve(form.Get("Fields")).(Array)
+			fields, _ := d.Resolve(form.Get("Fields")).(object.Array)
 			seen := map[int]bool{}
 			for _, f := range fields {
 				collectFieldNames(d, f, "", seen, want, names, 0)
@@ -225,7 +226,7 @@ func signatureFieldNames(d *Document, sigs []signatureEntry) map[int]string {
 		if iobj == nil {
 			continue
 		}
-		fd, ok := iobj.Value.(*Dictionary)
+		fd, ok := iobj.Value.(*object.Dictionary)
 		if !ok || want[num] {
 			continue // not a dictionary, or the signature dictionary itself
 		}
@@ -240,7 +241,7 @@ func signatureFieldNames(d *Document, sigs []signatureEntry) map[int]string {
 		if _, done := names[target]; done {
 			continue
 		}
-		names[target] = qualifiedFieldName(d, fd)
+		names[target] = QualifiedFieldName(d, fd)
 	}
 	return names
 }
@@ -248,11 +249,11 @@ func signatureFieldNames(d *Document, sigs []signatureEntry) map[int]string {
 // collectFieldNames walks one branch of the field tree, accumulating the
 // qualified-name prefix, and records the name of every field whose /V references
 // a wanted signature dictionary.
-func collectFieldNames(d *Document, node Object, prefix string, seen map[int]bool, want map[int]bool, names map[int]string, depth int) {
-	if depth > maxFieldTreeDepth {
+func collectFieldNames(d core.View, node object.Object, prefix string, seen map[int]bool, want map[int]bool, names map[int]string, depth int) {
+	if depth > MaxFieldTreeDepth {
 		return
 	}
-	if ref, ok := node.(IndirectRef); ok {
+	if ref, ok := node.(object.IndirectRef); ok {
 		if seen[ref.Number] {
 			return // already visited: a cyclic or shared /Kids entry
 		}
@@ -262,7 +263,7 @@ func collectFieldNames(d *Document, node Object, prefix string, seen map[int]boo
 	if fd == nil {
 		return
 	}
-	name := joinFieldName(prefix, fieldPartialName(d, fd))
+	name := JoinFieldName(prefix, FieldPartialName(d, fd))
 	if v := fd.Get("V"); v != nil {
 		if target := refObjNum(d, v); want[target] {
 			if _, done := names[target]; !done {
@@ -270,23 +271,23 @@ func collectFieldNames(d *Document, node Object, prefix string, seen map[int]boo
 			}
 		}
 	}
-	kids, _ := d.Resolve(fd.Get("Kids")).(Array)
+	kids, _ := d.Resolve(fd.Get("Kids")).(object.Array)
 	for _, k := range kids {
 		collectFieldNames(d, k, name, seen, want, names, depth+1)
 	}
 }
 
-// qualifiedFieldName builds a field's fully qualified name from its own /T and
+// QualifiedFieldName builds a field's fully qualified name from its own /T and
 // those of its ancestors, following /Parent upwards.
-func qualifiedFieldName(d *Document, field *Dictionary) string {
+func QualifiedFieldName(d core.View, field *object.Dictionary) string {
 	var parts []string
-	seen := map[*Dictionary]bool{}
-	for node, depth := field, 0; node != nil && depth <= maxFieldTreeDepth; depth++ {
+	seen := map[*object.Dictionary]bool{}
+	for node, depth := field, 0; node != nil && depth <= MaxFieldTreeDepth; depth++ {
 		if seen[node] {
 			break // cyclic /Parent chain
 		}
 		seen[node] = true
-		if part := fieldPartialName(d, node); part != "" {
+		if part := FieldPartialName(d, node); part != "" {
 			parts = append(parts, part)
 		}
 		node = d.ResolveDict(node.Get("Parent"))
@@ -298,19 +299,19 @@ func qualifiedFieldName(d *Document, field *Dictionary) string {
 	return strings.Join(parts, ".")
 }
 
-// fieldPartialName returns a field's /T decoded to UTF-8 (it is a PDF text
+// FieldPartialName returns a field's /T decoded to UTF-8 (it is a PDF text
 // string, so possibly UTF-16), or "" when it has none.
-func fieldPartialName(d *Document, field *Dictionary) string {
-	t, ok := d.Resolve(field.Get("T")).(String)
+func FieldPartialName(d core.View, field *object.Dictionary) string {
+	t, ok := d.Resolve(field.Get("T")).(object.String)
 	if !ok {
 		return ""
 	}
 	return core.DecodePDFTextString(t.Value)
 }
 
-// joinFieldName appends a partial name to a qualified-name prefix. A field with
+// JoinFieldName appends a partial name to a qualified-name prefix. A field with
 // no /T contributes nothing to the name of its descendants.
-func joinFieldName(prefix, part string) string {
+func JoinFieldName(prefix, part string) string {
 	switch {
 	case part == "":
 		return prefix
@@ -326,9 +327,9 @@ func joinFieldName(prefix, part string) string {
 // object has no indirect identity. Identity must be compared this way rather than
 // by pointer, because /V is normally an indirect reference to the signature
 // dictionary and not the dictionary itself.
-func refObjNum(d *Document, o Object) int {
+func refObjNum(d core.View, o object.Object) int {
 	for hops := 0; hops < 64; hops++ {
-		ref, ok := o.(IndirectRef)
+		ref, ok := o.(object.IndirectRef)
 		if !ok {
 			break
 		}
@@ -336,21 +337,21 @@ func refObjNum(d *Document, o Object) int {
 		if iobj == nil {
 			return ref.Number
 		}
-		if next, isRef := iobj.Value.(IndirectRef); isRef {
+		if next, isRef := iobj.Value.(object.IndirectRef); isRef {
 			o = next
 			continue
 		}
 		return ref.Number
 	}
-	if dict, ok := o.(*Dictionary); ok {
-		return d.view().DictObjNum(dict)
+	if dict, ok := o.(*object.Dictionary); ok {
+		return d.DictObjNum(dict)
 	}
 	return -1
 }
 
-func verifyOneSignature(d *Document, sig *Dictionary, raw []byte, roots *x509.CertPool) SignatureResult {
+func verifyOneSignature(d core.View, sig *object.Dictionary, raw []byte, roots *x509.CertPool) SignatureResult {
 	var res SignatureResult
-	contents, _ := d.Resolve(sig.Get("Contents")).(String)
+	contents, _ := d.Resolve(sig.Get("Contents")).(object.String)
 
 	segments, covers, ok := byteRangeSegments(d, sig.Get("ByteRange"), int64(len(raw)))
 	if !ok {
@@ -373,7 +374,7 @@ func verifyOneSignature(d *Document, sig *Dictionary, raw []byte, roots *x509.Ce
 		signed = append(signed, raw[s[0]:s[0]+s[1]]...)
 	}
 
-	cert, certs, signingTime, err := verifyCMS(contents.Value, signed)
+	cert, certs, signingTime, err := VerifyCMS(contents.Value, signed)
 	if cert != nil {
 		res.SignerCommonName = cert.Subject.CommonName
 	}
@@ -386,8 +387,8 @@ func verifyOneSignature(d *Document, sig *Dictionary, raw []byte, roots *x509.Ce
 
 	// Revocation status from the document's own long-term validation material
 	// (DSS). The issuer certificate is sought in the CMS and the DSS /Certs.
-	if issuer := issuerOf(cert, append(certs, d.DSSCerts()...)); issuer != nil {
-		crls, ocsps := d.DSSRevocationMaterial()
+	if issuer := issuerOf(cert, append(certs, DSSCerts(d)...)); issuer != nil {
+		crls, ocsps := DSSRevocationMaterial(d)
 		if len(crls) > 0 || len(ocsps) > 0 {
 			res.Revocation = CheckCertRevocation(cert, issuer, crls, ocsps)
 		}
@@ -431,14 +432,14 @@ func chainTrusted(cert *x509.Certificate, certs []*x509.Certificate, roots *x509
 
 // byteRangeSegments returns the [start,length] pairs of a /ByteRange and whether
 // they reach the end of the file.
-func byteRangeSegments(d *Document, obj Object, fileLen int64) (segs [][2]int64, covers, ok bool) {
-	arr, isArr := d.Resolve(obj).(Array)
+func byteRangeSegments(d core.View, obj object.Object, fileLen int64) (segs [][2]int64, covers, ok bool) {
+	arr, isArr := d.Resolve(obj).(object.Array)
 	if !isArr || len(arr) == 0 || len(arr)%2 != 0 {
 		return nil, false, false
 	}
 	vals := make([]int64, len(arr))
 	for i, e := range arr {
-		n, isInt := d.Resolve(e).(Integer)
+		n, isInt := d.Resolve(e).(object.Integer)
 		if !isInt {
 			return nil, false, false
 		}
@@ -517,10 +518,14 @@ type attribute struct {
 	Values asn1.RawValue `asn1:"set"`
 }
 
-// verifyCMS verifies a detached CMS SignedData blob over content. It returns the
+// VerifyCMS verifies a detached CMS SignedData blob over content. It returns the
 // signer certificate, every certificate embedded in the CMS (for chain building)
 // and the signing-time attribute, or an error if the signature does not verify.
-func verifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certificate, signingTime time.Time, err error) {
+// VerifyCMS verifies a CMS SignedData blob over the given content and returns
+// the signer certificate, the certificates the blob carried, and the claimed
+// signing time. It does not establish trust — chainTrusted does that — and a
+// nil error means only that the signature is cryptographically sound.
+func VerifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certificate, signingTime time.Time, err error) {
 	var ci struct {
 		ContentType asn1.ObjectIdentifier
 		Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
@@ -800,14 +805,14 @@ func signatureAlgorithm(pubAlgo string, hash crypto.Hash) (x509.SignatureAlgorit
 // over content, signed by key with cert embedded. SHA-256 with the key's
 // algorithm.
 func buildSignedData(cert *x509.Certificate, key crypto.Signer, content []byte) ([]byte, error) {
-	return buildSignedDataFull(cert, key, content, nil, nil)
+	return BuildSignedDataFull(cert, key, content, nil, nil)
 }
 
 // buildSignedDataFull builds a detached CMS SignedData over content. When a TSA
 // certificate and key are supplied it also embeds an RFC 3161 signature time-
 // stamp over the signature value as an unsigned attribute, producing a PAdES-B-T
 // signature.
-func buildSignedDataFull(cert *x509.Certificate, key crypto.Signer, content []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error) {
+func BuildSignedDataFull(cert *x509.Certificate, key crypto.Signer, content []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error) {
 	hashFn := crypto.SHA256
 	h := hashFn.New()
 	h.Write(content)
@@ -865,7 +870,7 @@ func buildSignedDataFull(cert *x509.Certificate, key crypto.Signer, content []by
 	// attribute.
 	var unsignedAttrs asn1.RawValue
 	if tsaCert != nil && tsaKey != nil {
-		token, err := buildTimestampToken(sig, tsaCert, tsaKey, time.Now())
+		token, err := BuildTimestampToken(sig, tsaCert, tsaKey, time.Now())
 		if err != nil {
 			return nil, err
 		}

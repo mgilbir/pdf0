@@ -1,4 +1,4 @@
-package pdf0
+package sign
 
 import "encoding/asn1"
 

@@ -22,6 +22,11 @@ type tContentInfo struct {
 	Content     tSignedData `asn1:"explicit,tag:0"`
 }
 
+// oidSignedData is RFC 5652 id-signedData. The fixture names it here rather
+// than reaching into the sign package: what it builds is a synthetic /Contents
+// blob for the PDF/A rule to reject, not a signature anything will verify.
+var oidSignedData = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
+
 // buildCMS marshals a DER CMS SignedData with the requested certificate presence
 // and SignerInfo count.
 func buildCMS(t *testing.T, hasCert bool, nSigners int) []byte {
