@@ -22,6 +22,72 @@ Each subsystem built on that core has its own map:
 | Symptom-first troubleshooting | [troubleshooting.md](troubleshooting.md) |
 | Decisions that keep coming up | [adr/](adr/README.md) |
 
+## Packages
+
+pdf0 was one flat package. It is now a core plus one package per subsystem, and
+the split follows two rules.
+
+**The public API stays in the root package.** Every name a caller writes —
+`pdf0.Read`, `pdf0.Document`, `pdf0.ValidatePDFA`, `pdf0.Dictionary` — is still
+declared there, as a method, a wrapper, or a type alias. A type alias *is* the
+same type, so a value passes between `pdf0` and its subpackage without
+conversion and keeps every method it had. Nothing a caller wrote before the
+split needs changing.
+
+**A subsystem is a regular package if it carries public API, `internal/` if it
+does not.** The distinction is not stylistic. Aliasing a type into an `internal`
+package renders in godoc as a bare `type X = core.X` with the fields and methods
+gone and nothing to click through to, because the target cannot be imported. For
+a type whose methods *are* the documented API that erases the documentation. So
+`object`, `syntax`, `pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`, `images`,
+`sign` and `facturx` are importable; `internal/core`, `internal/font`,
+`internal/crypt`, `internal/finding` and the codec packages are not.
+
+| Package | Holds |
+|---------|-------|
+| `object` | The ISO 32000-2 7.3 value types. Data only — no parsing, no resolution. |
+| `syntax` | Lexer, parser, serializer: bytes ↔ objects, one object at a time. |
+| `pdfa` | The PDF/A rules, level model, XMP machinery and document builder. |
+| `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart` | One validator each, with its finding type. |
+| `sign` | Signature verification: CMS, PAdES, revocation, time-stamp tokens. |
+| `facturx` | The Factur-X and Order-X containers, and the invoice embedder. |
+| `images` | Image extraction. |
+| `internal/core` | What every subsystem needs: the view, resolution, filters, content scanning, limits. |
+| `internal/crypt` | The standard security handler. No public API of its own. |
+| `internal/font` | Font-program parsing (sfnt, CFF, Type 1). |
+| `internal/finding` | The panic boundary, the reserved rule identifiers, deterministic ordering. |
+| `internal/fonttest`, `internal/signtest` | Fixtures shared by tests in packages that cannot share a `_test.go`. |
+
+### `core.View`: the document seen from below
+
+A subsystem needs the object graph, the trailer, the version, the resolved
+limits and the cancellation signal — not the `Document` type, which is the
+public facade and must stay at the top. `core.View` is that value: everything
+below the API boundary reads one, and `Document.view()` is where the boundary
+is.
+
+It carries a `*core.Run` for per-operation state, so the memo tables a
+validation builds are private to that run and two concurrent validations of the
+same document cannot see each other's.
+
+### Handing work back across the boundary
+
+Two rules need something the root package has and their own package must not
+depend on: the PDF/A embedded-file rule needs the *reader*, and the Factur-X
+container needs the PDF/A-3 verdict, which needs the reader and the read-time
+limit report. Neither is a package-level variable. The caller installs the
+function on the run — `pdfa.SetEmbeddedChecker`, `facturx.SetPDFAChecker` — so
+nothing is shared between concurrent operations, and the default when none is
+installed *declines to answer* rather than guessing: "pdf0 could not tell" must
+never reach a caller as "the document is wrong."
+
+### Findings and the `Violation` interface
+
+`pdf0.Violation` is declared in the root package, where it is consumed. The
+finding types are declared in their own packages and satisfy it structurally, by
+carrying `Error`, `RuleID` and `ObjectNum` — so no validator package imports its
+own caller.
+
 ## The object model
 
 Every PDF value implements the `Object` interface (defined in the `object`
