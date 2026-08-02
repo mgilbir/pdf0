@@ -41,12 +41,6 @@ func (e ValidationError) RuleID() string { return e.Rule }
 // ObjectNum returns the anchoring object number, 0 if N/A.
 func (e ValidationError) ObjectNum() int { return e.Object }
 
-// RuleID returns the ISO 14289 clause identifier.
-func (v UAViolation) RuleID() string { return v.Clause }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v UAViolation) ObjectNum() int { return v.Object }
-
 // RuleID returns the PDF/X rule identifier.
 func (v PDFXViolation) RuleID() string { return v.Rule }
 

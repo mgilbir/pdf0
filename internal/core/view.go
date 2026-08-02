@@ -217,6 +217,8 @@ const (
 	GuardContentStream = "content-stream-size"   // Limits.ContentStreamBytes, WithMaxContentStreamBytes
 	GuardContentTotal  = "decoded-content-total" // Limits.DecodedContentBytes, WithMaxDecodedContentBytes
 	GuardCmapWork      = "cmap-work"             // Limits.CmapWork, WithMaxCmapWork
+	GuardGridFills     = "table-grid-fills"      // Limits.TableGridFills, WithMaxTableGridFills
+	GuardRoleMapWork   = "rolemap-work"          // Limits.RoleMapSteps, WithMaxRoleMapSteps
 )
 
 // Pages returns the page tree under ref flattened into document order,

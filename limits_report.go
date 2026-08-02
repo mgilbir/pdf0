@@ -70,8 +70,6 @@ func IsCheckerFinding(v Violation) bool {
 const (
 	limitCmapWork      = "cmap-work"                 // limits.cmapWork, WithMaxCmapWork — fontprog.go
 	limitCIDWidthRange = "cid-width-range"           // limits.cidRangeSpan, WithMaxCIDRangeSpan — fonts.go
-	limitRoleMapWork   = "rolemap-work"              // limits.roleMapSteps, WithMaxRoleMapSteps — pdfua.go
-	limitGridFills     = "table-grid-fills"          // limits.tableGridFills, WithMaxTableGridFills — pdfua_tablegrid.go
 	limitContentStream = "content-stream-size"       // limits.contentStreamBytes, WithMaxContentStreamBytes — pdfa.go
 	limitContentTotal  = "decoded-content-total"     // limits.decodedContentBytes, WithMaxDecodedContentBytes — pdfa.go
 	limitObjStmTotal   = "objstm-decompressed-total" // limits.objectStreamBytes, WithMaxObjectStreamBytes — objstm.go
@@ -147,7 +145,7 @@ func limitValidationErrors(doc *Document, level PDFALevel) []ValidationError {
 func limitUAViolations(doc *Document) []UAViolation {
 	var out []UAViolation
 	for _, t := range runLimitTrips(doc) {
-		out = append(out, UAViolation{finding.LimitRule, t.Message(), t.Obj})
+		out = append(out, UAViolation{Clause: finding.LimitRule, Message: t.Message(), Object: t.Obj})
 	}
 	return out
 }

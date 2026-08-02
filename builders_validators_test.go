@@ -84,21 +84,6 @@ func TestCanonicalPrefixSingleQuote(t *testing.T) {
 	}
 }
 
-// TestUAHeadingsRoleMapResolved is the C29 guard: the heading-level rules key
-// off the /RoleMap-resolved type, like the sibling heading checks, so a level
-// skip through custom types (Titre1→H1, Titre3→H3) is caught.
-func TestUAHeadingsRoleMapResolved(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}}
-	cat := headingDoc(doc, Array{heading(doc, 10, "Titre1"), heading(doc, 11, "Titre3")})
-	roleMap := &Dictionary{}
-	roleMap.Set("Titre1", Name("H1"))
-	roleMap.Set("Titre3", Name("H3"))
-	doc.ResolveDict(cat.Get("StructTreeRoot")).Set("RoleMap", roleMap)
-	if !hasUAClause(checkUAHeadings(doc.view(), cat), "7.4") {
-		t.Error("role-mapped heading skip (Titre1=H1 followed by Titre3=H3) was not flagged")
-	}
-}
-
 // TestUAPartParameterized is the C39 guard: the shared UA validator selects the
 // part-specific requirements structurally (no message-text filtering), so the
 // UA-1 entry point demands part 1 and a 1.x header on a UA-2 file, while the

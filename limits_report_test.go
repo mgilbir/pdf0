@@ -356,32 +356,6 @@ func TestOverlongTokenIsNotAnOperator(t *testing.T) {
 	}
 }
 
-// --- the table-grid work budget ---
-
-// TestGridBudgetSaysItDidNotFinish pins that an abandoned layout is reported as
-// not determined rather than as a clean table. The suppression itself was
-// already correct; what was missing was any way for a caller to know.
-func TestGridBudgetSaysItDidNotFinish(t *testing.T) {
-	bomb := []tableRow{{cell(1, 1<<25)}}
-	v, complete := gridDefects(bomb, core.DefaultMaxTableGridFills)
-	if complete {
-		t.Fatal("the grid work budget did not trip; the fixture no longer exercises it")
-	}
-	if len(v) != 0 {
-		t.Errorf("an abandoned layout must not report defects: %v", v)
-	}
-	ok := []tableRow{{cell(1, 1), cell(1, 1)}, {cell(1, 1), cell(1, 1)}}
-	if _, complete := gridDefects(ok, core.DefaultMaxTableGridFills); !complete {
-		t.Error("an ordinary table must lay out within the budget")
-	}
-	// A lowered budget trips where the default would not: the same table is
-	// "not determined" rather than clean, which is what makes the trip report
-	// worth having for a caller who tightened the knob.
-	if _, complete := gridDefects(ok, 2); complete {
-		t.Error("a budget of 2 slots must not lay out a four-cell table")
-	}
-}
-
 // --- read-time trips reach the validators ---
 
 // TestObjStmBudgetTripIsReported pins the one read-time guard the mechanism can
@@ -447,7 +421,7 @@ func TestLimitRecorderIsBounded(t *testing.T) {
 	// Repeats of an identical trip collapse.
 	r2 := &core.Recorder{}
 	for i := 0; i < 100; i++ {
-		r2.Note(limitGridFills, "same", 1)
+		r2.Note(core.GuardGridFills, "same", 1)
 	}
 	if got := len(r2.Snapshot()); got != 1 {
 		t.Errorf("identical trips were not deduplicated: %d", got)

@@ -20,14 +20,6 @@ import (
 // runUACheck is finding.Guarded for the PDF/UA checks, which return their
 // findings rather than reporting them through a callback. A panicking check
 // loses its own findings but not those of its siblings.
-func runUACheck(check func() []UAViolation) (out []UAViolation) {
-	defer func() {
-		if r := recover(); r != nil {
-			out = []UAViolation{{Clause: finding.InternalRule, Message: finding.InternalMessage(r)}}
-		}
-	}()
-	return check()
-}
 
 // adoptPDFAFindings replays the findings of a composed PDF/A validation through
 // an add callback, namespacing each rule under prefix. ValidateFacturX and

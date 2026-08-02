@@ -123,7 +123,7 @@ func checkLevelAStructure(doc *Document, level PDFALevel) []ValidationError {
 	}
 	var errs []ValidationError
 	mark := doc.ResolveDict(cat.Get("MarkInfo"))
-	if mark == nil || !isTrue(doc.view(), mark.Get("Marked")) {
+	if mark == nil || !doc.view().IsTrue(mark.Get("Marked")) {
 		errs = append(errs, ValidationError{
 			Rule:    levelAClause("structure", level),
 			Level:   level,
@@ -156,7 +156,7 @@ func checkLevelALanguage(doc *Document, level PDFALevel) []ValidationError {
 		// /Lang is a PDF text string: it may be UTF-16BE (with a BOM) or
 		// PDFDocEncoded, so decode it before checking the language-tag syntax.
 		lang := decodePDFTextString(s.Value)
-		if !validBCP47(lang) {
+		if !core.ValidBCP47(lang) {
 			return []ValidationError{{
 				Rule:    levelAClause("language", level),
 				Level:   level,

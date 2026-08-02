@@ -92,34 +92,6 @@ func TestValidatorPanicContainment(t *testing.T) {
 	}
 }
 
-// TestGuardHelpersReportPanics pins the two boundary helpers themselves: the
-// panic value reaches the finding, and findings already reported before the
-// panic survive it.
-func TestGuardHelpersReportPanics(t *testing.T) {
-	var out []PDFXViolation
-	add := func(rule, msg string, obj int) {
-		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
-	}
-	finding.Guarded(add, func() {
-		add("version", "reported before the panic", 3)
-		panic("boom")
-	})
-	if len(out) != 2 || out[0].Rule != "version" || out[1].Rule != finding.InternalRule {
-		t.Fatalf("finding.Guarded: got %v, want the pre-panic finding plus an %q one", out, finding.InternalRule)
-	}
-	if !strings.Contains(out[1].Message, "boom") {
-		t.Errorf("finding.Guarded: message %q does not carry the panic value", out[1].Message)
-	}
-
-	ua := runUACheck(func() []UAViolation { panic("bang") })
-	if len(ua) != 1 || ua[0].Clause != finding.InternalRule {
-		t.Fatalf("runUACheck: got %v, want one %q finding", ua, finding.InternalRule)
-	}
-	if !strings.Contains(ua[0].Message, "bang") {
-		t.Errorf("runUACheck: message %q does not carry the panic value", ua[0].Message)
-	}
-}
-
 // TestAdoptPDFAFindingsKeepsReservedRulesBare pins the exception in
 // adoptPDFAFindings. ValidateFacturX and ValidateOrderX namespace the PDF/A-3
 // findings they adopt so that container rules cannot collide with invoice
@@ -281,4 +253,26 @@ func violatingDoc() *Document {
 	cat.Set("Pages", pagesRef)
 	doc.Trailer.Set("Root", add(cat))
 	return doc
+}
+
+// TestGuardedReportsPanicsOverAValidatorType pins finding.Guarded against a real
+// finding type: the panic value reaches the finding, and findings already
+// reported before the panic survive it. The finding package tests the same
+// boundary over a minimal type; this checks it through one of the concrete
+// types the validators actually report.
+func TestGuardedReportsPanicsOverAValidatorType(t *testing.T) {
+	var out []PDFXViolation
+	add := func(rule, msg string, obj int) {
+		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
+	}
+	finding.Guarded(add, func() {
+		add("version", "reported before the panic", 3)
+		panic("boom")
+	})
+	if len(out) != 2 || out[0].Rule != "version" || out[1].Rule != finding.InternalRule {
+		t.Fatalf("finding.Guarded: got %v, want the pre-panic finding plus an %q one", out, finding.InternalRule)
+	}
+	if !strings.Contains(out[1].Message, "boom") {
+		t.Errorf("finding.Guarded: message %q does not carry the panic value", out[1].Message)
+	}
 }

@@ -212,3 +212,50 @@ func (d View) CatalogPages() object.Object {
 	}
 	return nil
 }
+
+// validBCP47 reports whether tag is a syntactically well-formed BCP 47 (RFC
+// 5646) language tag. It validates the subtag structure rather than a registry:
+// a non-empty primary language of 2–8 letters (or an x-/i- private/grandfathered
+// singleton), followed by subtags of 1–8 alphanumerics each.
+func ValidBCP47(tag string) bool {
+	subs := strings.Split(tag, "-")
+	first := subs[0]
+	if len(first) == 1 {
+		if first != "x" && first != "i" && first != "X" && first != "I" {
+			return false // a lone singleton cannot be the primary language
+		}
+	} else if len(first) < 2 || len(first) > 8 || !allAlpha(first) {
+		return false
+	}
+	for _, s := range subs[1:] {
+		if len(s) < 1 || len(s) > 8 || !allAlnum(s) {
+			return false
+		}
+	}
+	return true
+}
+
+func (d View) IsTrue(o object.Object) bool {
+	b, ok := d.Resolve(o).(object.Boolean)
+	return ok && bool(b)
+}
+
+func allAlpha(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+func allAlnum(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
+}
