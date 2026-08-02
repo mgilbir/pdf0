@@ -80,7 +80,7 @@ func TestLZWStreamDecoded(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Errorf("decoded %q, want %q", got, payload)
 	}
-	if !isSupportedFilter("LZWDecode") {
+	if !core.IsSupportedFilter("LZWDecode") {
 		t.Errorf("LZWDecode should report as supported")
 	}
 }

@@ -838,7 +838,7 @@ func checkOutputIntentProfile(doc *Document, level PDFALevel) []ValidationError 
 			// support every filter on the stream. A legal profile encoded with
 			// a filter we don't decode (e.g. ASCII85Decode, RunLengthDecode, or
 			// a filter array) must not produce a false positive.
-			if streamFiltersSupported(profStream) {
+			if core.StreamFiltersSupported(profStream) {
 				errs = append(errs, ValidationError{
 					Rule:    colourClause("outputIntent", level),
 					Level:   level,
@@ -2413,7 +2413,7 @@ func collectAllExtGState(doc *Document) []extGStateEntry {
 	// shared graphics state reported a different object number on every run over
 	// the same file. Lowest container object number is a total order, so it is
 	// reproducible; that is load-bearing, since reports are diffed run to run.
-	for _, num := range sortedObjectNums(doc) {
+	for _, num := range doc.view().SortedObjectNums() {
 		switch v := doc.Objects[num].Value.(type) {
 		case *Dictionary:
 			resRef := v.Get("Resources")

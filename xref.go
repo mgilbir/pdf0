@@ -286,58 +286,6 @@ func readField(data []byte, width int) int {
 	return val
 }
 
-// isSupportedFilter reports whether applyFilter can decode the named filter.
-func isSupportedFilter(name Name) bool {
-	switch name {
-	case "FlateDecode", "LZWDecode", "ASCIIHexDecode":
-		return true
-	}
-	return false
-}
-
-// streamFiltersSupported reports whether every filter on the stream is one that
-// decodeStreamData can actually apply. Callers use this to tell "we could not
-// inspect this stream" apart from "this stream is corrupt": a decode failure on
-// an unsupported-but-legal filter must not be reported as a violation.
-func streamFiltersSupported(stream *Stream) bool {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		return true
-	}
-	parms := stream.Dict.Get("DecodeParms")
-	switch f := filter.(type) {
-	case Name:
-		return isSupportedFilter(f) && predictorSupported(core.PredictorFromDict(core.ParmsDictAt(parms, 0)))
-	case Array:
-		for i, e := range f {
-			name, ok := e.(Name)
-			if !ok || !isSupportedFilter(name) {
-				return false
-			}
-			if !predictorSupported(core.PredictorFromDict(core.ParmsDictAt(parms, i))) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// predictorSupported reports whether applyPredictor can reverse the given
-// predictor parameters. TIFF horizontal differencing with sub-byte components
-// is the one legal-but-unimplemented combination.
-func predictorSupported(p core.PredictorParms) bool {
-	switch {
-	case p.Predictor == 1:
-		return true
-	case p.Predictor == 2:
-		return p.BitsPerComponent == 8 || p.BitsPerComponent == 16
-	case p.Predictor >= 10 && p.Predictor <= 15:
-		return true
-	}
-	return false
-}
-
 // The maximum size of decompressed stream data defaults to
 // defaultMaxDecodedStreamBytes; a caller can change it with
 // WithMaxDecodedStreamBytes. This prevents decompression bombs from consuming

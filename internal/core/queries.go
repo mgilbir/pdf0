@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/font"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -405,4 +406,75 @@ func FirstRuneFromHex(tok string) rune {
 		return rune(v)
 	}
 	return 0
+}
+
+// sortedObjectNums returns every object number in doc.Objects in ascending
+// order. Checks that must be reproducible iterate it instead of ranging the map
+// directly: Go randomises map iteration order on every run, so any check whose
+// output depends on WHICH object it reaches first — rather than on the set of
+// objects it reaches — reported a different object number each time the same
+// file was validated. Ascending object number is a total order, so it does not.
+//
+// Only the checks that are order-sensitive pay for the sort; the many checks
+// that emit one finding per object and are sorted afterwards keep ranging the
+// map directly.
+func (doc View) SortedObjectNums() []int {
+	nums := make([]int, 0, len(doc.Objects))
+	for num := range doc.Objects {
+		nums = append(nums, num)
+	}
+	sort.Ints(nums)
+	return nums
+}
+
+// streamFiltersSupported reports whether every filter on the stream is one that
+// decodeStreamData can actually apply. Callers use this to tell "we could not
+// inspect this stream" apart from "this stream is corrupt": a decode failure on
+// an unsupported-but-legal filter must not be reported as a violation.
+func StreamFiltersSupported(stream *object.Stream) bool {
+	filter := stream.Dict.Get("Filter")
+	if filter == nil {
+		return true
+	}
+	parms := stream.Dict.Get("DecodeParms")
+	switch f := filter.(type) {
+	case object.Name:
+		return IsSupportedFilter(f) && predictorSupported(PredictorFromDict(ParmsDictAt(parms, 0)))
+	case object.Array:
+		for i, e := range f {
+			name, ok := e.(object.Name)
+			if !ok || !IsSupportedFilter(name) {
+				return false
+			}
+			if !predictorSupported(PredictorFromDict(ParmsDictAt(parms, i))) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// IsSupportedFilter reports whether applyFilter can decode the named filter.
+func IsSupportedFilter(name object.Name) bool {
+	switch name {
+	case "FlateDecode", "LZWDecode", "ASCIIHexDecode":
+		return true
+	}
+	return false
+}
+
+// predictorSupported reports whether applyPredictor can reverse the given
+// predictor parameters. TIFF horizontal differencing with sub-byte components
+// is the one legal-but-unimplemented combination.
+func predictorSupported(p PredictorParms) bool {
+	switch {
+	case p.Predictor == 1:
+		return true
+	case p.Predictor == 2:
+		return p.BitsPerComponent == 8 || p.BitsPerComponent == 16
+	case p.Predictor >= 10 && p.Predictor <= 15:
+		return true
+	}
+	return false
 }

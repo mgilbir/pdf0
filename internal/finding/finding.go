@@ -106,3 +106,15 @@ func ReportCancellation[T V](cancel core.Canceler, v []T, add func(rule, msg str
 	}
 	add(LimitRule, core.NewTrip(core.GuardCanceled, err.Error(), 0).Message(), 0)
 }
+
+// IsCheckerFinding reports whether a finding describes a problem in the checker
+// rather than a non-conformance of the document — a recovered panic, or a
+// resource guard that stopped a check short. A caller asking "is this file
+// conformant?" should read either as "unknown", not as a failure.
+func IsCheckerFinding(v V) bool {
+	switch v.RuleID() {
+	case LimitRule, InternalRule:
+		return true
+	}
+	return false
+}

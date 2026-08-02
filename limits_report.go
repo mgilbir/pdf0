@@ -51,13 +51,7 @@ import (
 //
 // Neither kind fires on any file in the veraPDF corpus; both mean the input is
 // adversarial or the checker has a bug.
-func IsCheckerFinding(v Violation) bool {
-	switch v.RuleID() {
-	case finding.LimitRule, finding.InternalRule:
-		return true
-	}
-	return false
-}
+func IsCheckerFinding(v Violation) bool { return finding.IsCheckerFinding(v) }
 
 // Guard identifiers. These are stable strings: they appear in the message of a
 // "limit" finding, so a caller can key on the specific guard. They are named

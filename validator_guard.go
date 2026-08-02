@@ -2,7 +2,6 @@ package pdf0
 
 import (
 	"github.com/mgilbir/pdf0/internal/finding"
-	"sort"
 	"strings"
 
 	"github.com/mgilbir/formalis"
@@ -45,25 +44,6 @@ func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs 
 			add(prefix+e.Rule, e.Message, e.Object)
 		}
 	}
-}
-
-// sortedObjectNums returns every object number in doc.Objects in ascending
-// order. Checks that must be reproducible iterate it instead of ranging the map
-// directly: Go randomises map iteration order on every run, so any check whose
-// output depends on WHICH object it reaches first — rather than on the set of
-// objects it reaches — reported a different object number each time the same
-// file was validated. Ascending object number is a total order, so it does not.
-//
-// Only the checks that are order-sensitive pay for the sort; the many checks
-// that emit one finding per object and are sorted afterwards keep ranging the
-// map directly.
-func sortedObjectNums(doc *Document) []int {
-	nums := make([]int, 0, len(doc.Objects))
-	for num := range doc.Objects {
-		nums = append(nums, num)
-	}
-	sort.Ints(nums)
-	return nums
 }
 
 // exampleFindings collects at most one ValidationError per distinct rule and
