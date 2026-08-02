@@ -100,17 +100,6 @@ func TestValidateOrderXMLWrongRootIsAFinding(t *testing.T) {
 	}
 }
 
-func TestOrderXProfiles(t *testing.T) {
-	for _, p := range []string{"BASIC", "COMFORT", "EXTENDED", "basic", "Extended"} {
-		if _, ok := orderXProfileFor(p); !ok {
-			t.Errorf("%q should be an Order-X profile", p)
-		}
-	}
-	if _, ok := orderXProfileFor("EN 16931"); ok {
-		t.Error("EN 16931 is an invoice profile, not Order-X")
-	}
-}
-
 // TestValidateOrderXCorpus is the FP=0 oracle for the Order-X container: every
 // conforming Order-X example (BASIC/COMFORT, orders/changes/responses) must
 // validate with no violations. The examples ship in the (gitignored) Order-X

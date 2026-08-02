@@ -1,4 +1,4 @@
-package pdf0
+package facturx
 
 import (
 	"context"
@@ -34,7 +34,7 @@ var facturxXMLNames = map[string]bool{
 
 // The invoice file is associated with the document; the relationship is /Data or
 // /Alternative in the Factur-X spec, and /Source is used by some producers.
-var facturxRelationships = map[Name]bool{"Data": true, "Alternative": true, "Source": true}
+var facturxRelationships = map[object.Name]bool{"Data": true, "Alternative": true, "Source": true}
 
 // FacturXViolation is one finding of the Factur-X container validator: either a
 // departure from a container rule pdf0 checks itself, or one adopted from the
@@ -44,7 +44,7 @@ var facturxRelationships = map[Name]bool{"Data": true, "Alternative": true, "Sou
 // one report. pdf0's findings anchor to a PDF object; the invoice engine's
 // anchor to a business term in an XML document and name the authority that wrote
 // the rule. Until formalis v0.2.0 this validator carried formalis.Violation
-// values directly, borrowing that type's Object field for PDF object numbers,
+// values directly, borrowing that type's object.Object field for PDF object numbers,
 // which made Factur-X and Order-X the only findings in this package that could
 // not satisfy Violation — the exception the package documentation had to keep
 // explaining. Both halves now arrive in a type pdf0 owns, so they combine with
@@ -175,8 +175,8 @@ type FacturXResult struct {
 // rawData is the original file bytes, needed for the PDF/A-3 byte-level checks.
 //
 // It is ValidateFacturXContext with a background context.
-func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
-	return ValidateFacturXContext(context.Background(), doc, rawData)
+func Validate(doc core.View, rawData []byte) FacturXResult {
+	return ValidateContext(context.Background(), doc, rawData)
 }
 
 // ValidateFacturXContext is ValidateFacturX with cancellation.
@@ -192,7 +192,7 @@ func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
 // same identifier for the same event, so a caller draining Violations has one
 // name to look for across container and invoice findings alike. What cannot
 // happen is an empty result: a cancelled validation never looks clean.
-func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) (res FacturXResult) {
+func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res FacturXResult) {
 	cancel := core.NewCanceler(ctx)
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, FacturXViolation{Rule: rule, Message: msg, Object: obj})
@@ -227,7 +227,7 @@ func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) 
 	// A Factur-X file shall be PDF/A-3, so the PDF/A-3 findings are adopted under
 	// a "pdfa-3/" namespace — except the reserved checker identifiers, which keep
 	// their names (adoptPDFAFindings).
-	adoptPDFAFindings(add, "pdfa-3/", ValidatePDFABytesContext(ctx, doc, PDFA3b, rawData))
+	adoptPDFAFindings(add, "pdfa-3/", pdfaFindings(doc))
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
@@ -236,18 +236,18 @@ func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) 
 	}
 
 	// Locate the embedded invoice XML as an associated file (/AF).
-	fs, name, num := findFacturXAttachment(doc, cat)
+	fs, name, num := FindAttachment(doc, cat)
 	if fs == nil {
 		add("attachment", "no embedded invoice XML (factur-x.xml or zugferd-invoice.xml) is present as an associated file", 0)
 	} else {
 		res.XMLName = name
-		if rel, ok := fs.Get("AFRelationship").(Name); !ok || !facturxRelationships[rel] {
+		if rel, ok := fs.Get("AFRelationship").(object.Name); !ok || !facturxRelationships[rel] {
 			add("attachment", "the invoice XML /AFRelationship shall be /Data, /Alternative or /Source", num)
 		}
 		if ef := doc.ResolveDict(fs.Get("EF")); ef != nil {
-			if st, ok := doc.Resolve(ef.Get("F")).(*Stream); ok {
-				res.XML = doc.view().Content(st)
-				if sub, _ := st.Dict.Get("Subtype").(Name); !facturxIsXMLSubtype(sub) {
+			if st, ok := doc.Resolve(ef.Get("F")).(*object.Stream); ok {
+				res.XML = doc.Content(st)
+				if sub, _ := st.Dict.Get("Subtype").(object.Name); !facturxIsXMLSubtype(sub) {
 					add("attachment", fmt.Sprintf("the invoice embedded-file /Subtype should be text/xml, got /%s", sub), num)
 				}
 			} else {
@@ -309,9 +309,9 @@ func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) 
 
 	// Invoice content: the embedded XML must satisfy the EN 16931 business
 	// rules at the declared profile, exactly as ValidateOrderX runs the order
-	// rules inline (audit C44). See validateInvoiceXML for which rule set runs.
+	// rules inline (audit C44). See ValidateInvoiceXML for which rule set runs.
 	if len(res.XML) > 0 {
-		rep, err := res.validateInvoiceXML(ctx)
+		rep, err := res.ValidateInvoiceXML(ctx)
 		if err != nil {
 			// The error means the attachment could not be read as XML at all, and
 			// the Report returned with it is the zero Report. Dropping it would
@@ -328,11 +328,16 @@ func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) 
 	return res
 }
 
-// validateInvoiceXML runs the extracted invoice XML through the rule set the
-// container declared. It is a method on the result rather than a step inside
-// ValidateFacturXContext so that a caller — or a test — reading res.XML can
-// reproduce exactly the run whose findings res.Violations holds, instead of
-// guessing the entry point from res.Profile and getting a different rule set.
+// ValidateInvoiceXML runs the extracted invoice XML through the rule set the
+// container declared, and returns the rule engine's own report. It is a method
+// on the result rather than a step inside ValidateContext so that a caller —
+// or a test — reading res.XML can reproduce exactly the run whose findings
+// res.Violations holds, instead of guessing the entry point from res.Profile
+// and getting a different rule set.
+//
+// The findings are already in res.Violations and res.InvoiceWarnings; what the
+// report adds is everything the projection drops, such as which rule families
+// were not evaluated and the engine's own view of whether the run was complete.
 //
 // Which rule set runs follows what the container actually declared, and the
 // three cases are three different claims:
@@ -353,18 +358,18 @@ func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) 
 //     checked; substituting EN 16931 would run a rule set the document never
 //     claimed and report the result as if it had. pdf0 has already reported the
 //     container defect that got here, as a "metadata" finding.
-func (res FacturXResult) validateInvoiceXML(ctx context.Context) (formalis.Report, error) {
+func (res FacturXResult) ValidateInvoiceXML(ctx context.Context) (formalis.Report, error) {
 	if res.Profile == "" && res.CIUS != formalis.CIUSNone {
 		return formalis.ValidateCIUS(ctx, res.XML)
 	}
 	return formalis.Validate(ctx, res.XML, res.Profile)
 }
 
-// findFacturXAttachment returns the file specification for the embedded invoice
+// FindAttachment returns the file specification for the embedded invoice
 // XML (located via the catalog /AF associated-files array), its decoded file
 // name, and its object number.
-func findFacturXAttachment(doc *Document, cat *Dictionary) (*Dictionary, string, int) {
-	af, ok := doc.Resolve(cat.Get("AF")).(Array)
+func FindAttachment(doc core.View, cat *object.Dictionary) (*object.Dictionary, string, int) {
+	af, ok := doc.Resolve(cat.Get("AF")).(object.Array)
 	if !ok {
 		return nil, "", 0
 	}
@@ -383,9 +388,9 @@ func findFacturXAttachment(doc *Document, cat *Dictionary) (*Dictionary, string,
 
 // facturxFileSpecName returns a file specification's name, preferring the
 // Unicode /UF entry (decoded from its UTF-16 or PDFDoc encoding) over /F.
-func facturxFileSpecName(doc *Document, fs *Dictionary) string {
-	for _, key := range []Name{"UF", "F"} {
-		if s, ok := doc.Resolve(fs.Get(key)).(String); ok {
+func facturxFileSpecName(doc core.View, fs *object.Dictionary) string {
+	for _, key := range []object.Name{"UF", "F"} {
+		if s, ok := doc.Resolve(fs.Get(key)).(object.String); ok {
 			if name := core.DecodePDFTextString(s.Value); name != "" {
 				return name
 			}
@@ -394,16 +399,16 @@ func facturxFileSpecName(doc *Document, fs *Dictionary) string {
 	return ""
 }
 
-func facturxIsXMLSubtype(sub Name) bool {
+func facturxIsXMLSubtype(sub object.Name) bool {
 	s := strings.ToLower(string(sub))
 	return s == "text/xml" || s == "application/xml"
 }
 
 // facturxXMP returns the document's decoded XMP metadata packet, or "".
-func facturxXMP(doc *Document, cat *Dictionary) string {
-	ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream)
+func facturxXMP(doc core.View, cat *object.Dictionary) string {
+	ms, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream)
 	if !ok {
 		return ""
 	}
-	return doc.view().XMPText(ms)
+	return doc.XMPText(ms)
 }

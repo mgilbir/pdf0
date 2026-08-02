@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/facturx"
 	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 	"testing"
@@ -117,7 +118,7 @@ func TestEmbedFacturXUnknownProfile(t *testing.T) {
 // TestFacturXXMPPacket checks the generated metadata declares the fx extension
 // schema and the Factur-X properties for the profile.
 func TestFacturXXMPPacket(t *testing.T) {
-	xmp := string(facturxXMPPacket(formalis.ProfileBasic, "INVOICE", "Some & Title"))
+	xmp := string(facturx.XMPPacket(formalis.ProfileBasic, "INVOICE", "Some & Title"))
 	for _, want := range []string{
 		"<pdfaid:part>3</pdfaid:part>",
 		"urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#",
@@ -134,7 +135,7 @@ func TestFacturXXMPPacket(t *testing.T) {
 }
 
 func TestEncodeUTF16BE(t *testing.T) {
-	got := encodeUTF16BE("factur-x.xml")
+	got := facturx.EncodeUTF16BE("factur-x.xml")
 	if got[0] != 0xFE || got[1] != 0xFF {
 		t.Fatal("missing UTF-16BE byte-order mark")
 	}

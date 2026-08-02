@@ -1,8 +1,9 @@
-package pdf0
+package facturx
 
 import (
 	"fmt"
 	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 	"time"
@@ -14,12 +15,12 @@ import (
 // The XMP includes the PDF/A extension schema that declares the fx: namespace,
 // as PDF/A requires for a custom metadata schema.
 
-// EmbedFacturX embeds the CII invoice XML into doc as the associated file
+// Embed embeds the CII invoice XML into doc as the associated file
 // factur-x.xml and writes the Factur-X metadata for the given profile. doc must
 // be a valid PDF/A-3 document (for example from NewPDFADocument(PDFA3b)); the
 // result is a Factur-X container that ValidateFacturX accepts after a round
 // trip. title, when non-empty, is recorded as the document title in the XMP.
-func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, title string) error {
+func Embed(doc core.View, invoiceXML []byte, profile formalis.Profile, title string) error {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return fmt.Errorf("document has no catalog")
@@ -34,61 +35,61 @@ func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, ti
 			next = n + 1
 		}
 	}
-	newObj := func(v Object) int {
+	newObj := func(v object.Object) int {
 		n := next
 		next++
-		doc.Objects[n] = &IndirectObject{Number: n, Value: v}
+		doc.Objects[n] = &object.IndirectObject{Number: n, Value: v}
 		return n
 	}
 
 	modDate := "D:" + time.Now().UTC().Format("20060102150405") + "+00'00'"
 
 	// Embedded file stream holding the invoice XML.
-	ef := &Stream{Dict: Dictionary{}, Data: append([]byte(nil), invoiceXML...)}
-	ef.Dict.Set("Type", Name("EmbeddedFile"))
-	ef.Dict.Set("Subtype", Name("text/xml"))
-	params := &Dictionary{}
-	params.Set("ModDate", String{Value: []byte(modDate)})
-	params.Set("Size", Integer(len(invoiceXML)))
+	ef := &object.Stream{Dict: object.Dictionary{}, Data: append([]byte(nil), invoiceXML...)}
+	ef.Dict.Set("Type", object.Name("EmbeddedFile"))
+	ef.Dict.Set("Subtype", object.Name("text/xml"))
+	params := &object.Dictionary{}
+	params.Set("ModDate", object.String{Value: []byte(modDate)})
+	params.Set("Size", object.Integer(len(invoiceXML)))
 	ef.Dict.Set("Params", params)
 	efNum := newObj(ef)
 
 	// File specification associating the embedded XML with the document.
-	efEntry := &Dictionary{}
-	efEntry.Set("F", IndirectRef{Number: efNum})
-	efEntry.Set("UF", IndirectRef{Number: efNum})
-	fs := &Dictionary{}
-	fs.Set("Type", Name("Filespec"))
-	fs.Set("F", String{Value: []byte(facturxFileName)})
-	fs.Set("UF", String{Value: encodeUTF16BE(facturxFileName)})
-	fs.Set("AFRelationship", Name("Data"))
-	fs.Set("Desc", String{Value: []byte("Factur-X XML invoice")})
+	efEntry := &object.Dictionary{}
+	efEntry.Set("F", object.IndirectRef{Number: efNum})
+	efEntry.Set("UF", object.IndirectRef{Number: efNum})
+	fs := &object.Dictionary{}
+	fs.Set("Type", object.Name("Filespec"))
+	fs.Set("F", object.String{Value: []byte(facturxFileName)})
+	fs.Set("UF", object.String{Value: EncodeUTF16BE(facturxFileName)})
+	fs.Set("AFRelationship", object.Name("Data"))
+	fs.Set("Desc", object.String{Value: []byte("Factur-X XML invoice")})
 	fs.Set("EF", efEntry)
 	fsNum := newObj(fs)
 
 	// Catalog /AF associated-files array.
-	af, _ := doc.Resolve(cat.Get("AF")).(Array)
-	cat.Set("AF", append(af, IndirectRef{Number: fsNum}))
+	af, _ := doc.Resolve(cat.Get("AF")).(object.Array)
+	cat.Set("AF", append(af, object.IndirectRef{Number: fsNum}))
 
 	// EmbeddedFiles name tree.
 	names := doc.ResolveDict(cat.Get("Names"))
 	if names == nil {
-		names = &Dictionary{}
-		cat.Set("Names", IndirectRef{Number: newObj(names)})
+		names = &object.Dictionary{}
+		cat.Set("Names", object.IndirectRef{Number: newObj(names)})
 	}
-	efTree := &Dictionary{}
-	efTree.Set("Names", Array{String{Value: []byte(facturxFileName)}, IndirectRef{Number: fsNum}})
-	names.Set("EmbeddedFiles", IndirectRef{Number: newObj(efTree)})
+	efTree := &object.Dictionary{}
+	efTree.Set("Names", object.Array{object.String{Value: []byte(facturxFileName)}, object.IndirectRef{Number: fsNum}})
+	names.Set("EmbeddedFiles", object.IndirectRef{Number: newObj(efTree)})
 
 	// Factur-X XMP metadata, reusing the existing metadata object number when
 	// present so no orphan stream is left behind.
-	md := &Stream{Dict: Dictionary{}, Data: facturxXMPPacket(profile, "INVOICE", title)}
-	md.Dict.Set("Type", Name("Metadata"))
-	md.Dict.Set("Subtype", Name("XML"))
+	md := &object.Stream{Dict: object.Dictionary{}, Data: XMPPacket(profile, "INVOICE", title)}
+	md.Dict.Set("Type", object.Name("Metadata"))
+	md.Dict.Set("Subtype", object.Name("XML"))
 	if n := object.RefNum(cat.Get("Metadata")); n != 0 {
-		doc.Objects[n] = &IndirectObject{Number: n, Value: md}
+		doc.Objects[n] = &object.IndirectObject{Number: n, Value: md}
 	} else {
-		cat.Set("Metadata", IndirectRef{Number: newObj(md)})
+		cat.Set("Metadata", object.IndirectRef{Number: newObj(md)})
 	}
 
 	return nil
@@ -96,9 +97,9 @@ func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, ti
 
 const facturxFileName = "factur-x.xml"
 
-// encodeUTF16BE encodes s as a PDF text string: a UTF-16BE byte-order mark
+// EncodeUTF16BE encodes s as a PDF text string: a UTF-16BE byte-order mark
 // followed by big-endian code units (used for Unicode file-spec /UF names).
-func encodeUTF16BE(s string) []byte {
+func EncodeUTF16BE(s string) []byte {
 	out := []byte{0xFE, 0xFF}
 	for _, r := range s {
 		if r > 0xFFFF {
@@ -109,10 +110,10 @@ func encodeUTF16BE(s string) []byte {
 	return out
 }
 
-// facturxXMPPacket builds the Factur-X XMP metadata packet: PDF/A-3
+// XMPPacket builds the Factur-X XMP metadata packet: PDF/A-3
 // identification, an optional document title, the PDF/A extension schema that
 // declares the fx: namespace, and the Factur-X properties.
-func facturxXMPPacket(profile formalis.Profile, docType, title string) []byte {
+func XMPPacket(profile formalis.Profile, docType, title string) []byte {
 	titleBlock := ""
 	if title != "" {
 		titleBlock = fmt.Sprintf(`

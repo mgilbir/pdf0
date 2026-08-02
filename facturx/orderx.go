@@ -1,4 +1,4 @@
-package pdf0
+package facturx
 
 import (
 	"context"
@@ -126,15 +126,15 @@ type OrderXResult struct {
 // ValidateOrderX checks whether doc is a conforming Order-X order container.
 //
 // It is ValidateOrderXContext with a background context.
-func ValidateOrderX(doc *Document, rawData []byte) OrderXResult {
-	return ValidateOrderXContext(context.Background(), doc, rawData)
+func ValidateOrder(doc core.View, rawData []byte) OrderXResult {
+	return ValidateOrderContext(context.Background(), doc, rawData)
 }
 
 // ValidateOrderXContext is ValidateOrderX with cancellation. Both halves of the
 // work honour ctx — the PDF/A-3 container validation and the order rules — and a
 // cancelled run reports a "limit" finding rather than an empty result, exactly
 // as ValidateFacturXContext does and for the same reasons.
-func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) (res OrderXResult) {
+func ValidateOrderContext(ctx context.Context, doc core.View, rawData []byte) (res OrderXResult) {
 	cancel := core.NewCanceler(ctx)
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, OrderXViolation{Rule: rule, Message: msg, Object: obj})
@@ -160,7 +160,7 @@ func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) (
 	}()
 
 	// An Order-X file shall be PDF/A-3, adopted exactly as for Factur-X.
-	adoptPDFAFindings(add, "pdfa-3/", ValidatePDFABytesContext(ctx, doc, PDFA3b, rawData))
+	adoptPDFAFindings(add, "pdfa-3/", pdfaFindings(doc))
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
@@ -174,13 +174,13 @@ func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) (
 		add("attachment", "no embedded order XML (order-x.xml) is present as an associated file", 0)
 	} else {
 		res.XMLName = name
-		if rel, ok := fs.Get("AFRelationship").(Name); !ok || !facturxRelationships[rel] {
+		if rel, ok := fs.Get("AFRelationship").(object.Name); !ok || !facturxRelationships[rel] {
 			add("attachment", "the order XML /AFRelationship shall be /Data, /Alternative or /Source", num)
 		}
 		if ef := doc.ResolveDict(fs.Get("EF")); ef != nil {
-			if st, ok := doc.Resolve(ef.Get("F")).(*Stream); ok {
-				res.XML = doc.view().Content(st)
-				if sub, _ := st.Dict.Get("Subtype").(Name); !facturxIsXMLSubtype(sub) {
+			if st, ok := doc.Resolve(ef.Get("F")).(*object.Stream); ok {
+				res.XML = doc.Content(st)
+				if sub, _ := st.Dict.Get("Subtype").(object.Name); !facturxIsXMLSubtype(sub) {
 					add("attachment", fmt.Sprintf("the order embedded-file /Subtype should be text/xml, got /%s", sub), num)
 				}
 			} else {
@@ -239,8 +239,8 @@ func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) (
 }
 
 // findOrderXAttachment returns the file specification for the embedded order XML.
-func findOrderXAttachment(doc *Document, cat *Dictionary) (*Dictionary, string, int) {
-	af, ok := doc.Resolve(cat.Get("AF")).(Array)
+func findOrderXAttachment(doc core.View, cat *object.Dictionary) (*object.Dictionary, string, int) {
+	af, ok := doc.Resolve(cat.Get("AF")).(object.Array)
 	if !ok {
 		return nil, "", 0
 	}

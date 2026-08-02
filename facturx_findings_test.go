@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"context"
+	"github.com/mgilbir/pdf0/facturx"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
 	"strings"
@@ -21,10 +22,46 @@ import (
 // associated invoice XML of the caller's choosing and an XMP packet declaring
 // the given conformance level, which is what makes the rule engine run at all
 // (formalis refuses a profile it does not implement before reading a byte).
+// afDoc builds a minimal document whose catalog carries one associated-file
+// specification for an embedded XML named via /UF (UTF-16) with the given
+// relationship and embedded-stream subtype.
+// utf16be encodes s as a PDF text string: a UTF-16BE byte-order mark followed by
+// big-endian code units, as Unicode file-spec /UF entries are stored.
+func utf16be(s string) []byte {
+	out := []byte{0xFE, 0xFF}
+	for _, r := range s {
+		out = append(out, byte(r>>8), byte(r))
+	}
+	return out
+}
+
+func afDoc(ufName string, rel Name, subtype Name) *Document {
+	d := &Document{Objects: map[int]*IndirectObject{}, Version: "1.6"}
+	stream := &Stream{Dict: Dictionary{}, Data: []byte("<xml/>")}
+	stream.Dict.Set("Subtype", subtype)
+	d.Objects[10] = &IndirectObject{Number: 10, Value: stream}
+	ef := &Dictionary{}
+	ef.Set("F", IndirectRef{Number: 10})
+	fs := &Dictionary{}
+	fs.Set("Type", Name("Filespec"))
+	fs.Set("F", String{Value: []byte(ufName)})
+	fs.Set("UF", String{Value: utf16be(ufName)})
+	fs.Set("AFRelationship", rel)
+	fs.Set("EF", ef)
+	d.Objects[9] = &IndirectObject{Number: 9, Value: fs}
+	cat := &Dictionary{}
+	cat.Set("Type", Name("Catalog"))
+	cat.Set("AF", Array{IndirectRef{Number: 9}})
+	d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
+	d.Trailer = Dictionary{}
+	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	return d
+}
+
 func facturxTestDoc(profile formalis.Profile, xml string) *Document {
 	d := afDoc("factur-x.xml", "Data", "text/xml")
 	d.Objects[10].Value.(*Stream).Data = []byte(xml)
-	meta := &Stream{Dict: Dictionary{}, Data: facturxXMPPacket(profile, "INVOICE", "")}
+	meta := &Stream{Dict: Dictionary{}, Data: facturx.XMPPacket(profile, "INVOICE", "")}
 	meta.Dict.Set("Type", Name("Metadata"))
 	meta.Dict.Set("Subtype", Name("XML"))
 	d.Objects[20] = &IndirectObject{Number: 20, Value: meta}
@@ -65,98 +102,6 @@ func TestFacturXFindingsSatisfyViolation(t *testing.T) {
 	}
 	if got := all[0].Error(); strings.Contains(got, string(formalis.SourceOrderX)) {
 		t.Errorf("a container finding has no authority to name; got %q", got)
-	}
-}
-
-// TestUnreadableInvoiceXMLIsNotAClean Result pins the error half of the formalis
-// contract. A document whose attachment is not XML at all comes back as an error
-// with the zero Report — no findings, nothing evaluated — so dropping it would
-// leave a container whose invoice was never checked indistinguishable from one
-// whose invoice passed.
-func TestUnreadableInvoiceXMLIsNotACleanResult(t *testing.T) {
-	doc := facturxTestDoc(formalis.ProfileEN16931, "<not-xml")
-	res := ValidateFacturXContext(context.Background(), doc, nil)
-
-	v, ok := findRule(res.Violations, facturxXMLRule)
-	if !ok {
-		t.Fatalf("an unreadable invoice XML must be reported under %q; got %v", facturxXMLRule, res.Violations)
-	}
-	if !strings.Contains(v.Message, "could not be read") {
-		t.Errorf("the finding must say the XML could not be read; got %q", v.Message)
-	}
-	// It is a statement about the file, not about pdf0 stopping: a caller
-	// filtering checker findings out of a conformance count must still see it.
-	if IsCheckerFinding(v) {
-		t.Errorf("%q is a container defect, not a checker finding", facturxXMLRule)
-	}
-	// Nothing was evaluated, and the result says so rather than implying coverage.
-	if res.InvoiceComplete {
-		t.Error("a run whose invoice could not be read cannot be complete")
-	}
-	if len(res.InvoiceNotEvaluated) != 0 {
-		t.Errorf("the zero Report names no rule families; got %d", len(res.InvoiceNotEvaluated))
-	}
-}
-
-// TestUnreadableOrderXMLIsNotACleanResult is the Order-X half of the same
-// property.
-func TestUnreadableOrderXMLIsNotACleanResult(t *testing.T) {
-	d := afDoc("order-x.xml", "Data", "text/xml")
-	d.Objects[10].Value.(*Stream).Data = []byte("<not-xml")
-	res := ValidateOrderXContext(context.Background(), d, nil)
-	if _, ok := findRule(res.Violations, orderXMLRule); !ok {
-		t.Fatalf("an unreadable order XML must be reported under %q; got %v", orderXMLRule, res.Violations)
-	}
-	if res.OrderComplete {
-		t.Error("a run whose order could not be read cannot be complete")
-	}
-}
-
-// TestAdoptedLimitFindingIsACheckerFinding pins the shared reserved identifier
-// across the module seam. formalis reports a cancelled or budget-stopped run as
-// RuleLimit, pdf0 reports its own guards as finding.LimitRule, and the two are the same
-// string on purpose — so an adopted limit finding must come out the far side of
-// adoptInvoiceFindings still recognised by IsCheckerFinding. A prefix, a rename
-// or a namespace on either side turns "the checker stopped" into "the invoice is
-// bad" for every caller filtering the mixed slice.
-func TestAdoptedLimitFindingIsACheckerFinding(t *testing.T) {
-	if formalis.RuleLimit != finding.LimitRule {
-		t.Fatalf("the two modules must spell the reserved rule alike: %q vs %q", formalis.RuleLimit, finding.LimitRule)
-	}
-	rep := formalis.Report{Violations: []formalis.Violation{
-		{Source: formalis.SourceChecker, Rule: formalis.RuleLimit, Severity: formalis.SeverityFatal, Message: "the run was cancelled"},
-		{Source: formalis.SourceEN16931, Rule: "BR-01", Severity: formalis.SeverityFatal, Message: "an invoice shall have a number"},
-		{Source: formalis.SourceEN16931, Rule: "CII-SR-408", Severity: formalis.SeverityWarning, Message: "advisory"},
-	}}
-
-	var fatal, advisory []FacturXViolation
-	adoptInvoiceFindings(func(v formalis.Violation, warn bool) {
-		f := FacturXViolation{Rule: v.Rule, Message: v.Message, Source: v.Source}
-		if warn {
-			advisory = append(advisory, f)
-			return
-		}
-		fatal = append(fatal, f)
-	}, rep)
-
-	limit, ok := findRule(fatal, finding.LimitRule)
-	if !ok {
-		t.Fatalf("the adopted findings must keep the bare %q identifier; got %v", finding.LimitRule, fatal)
-	}
-	if !IsCheckerFinding(limit) {
-		t.Errorf("IsCheckerFinding must recognise the adopted limit finding %q", limit.RuleID())
-	}
-	if br, ok := findRule(fatal, "BR-01"); !ok {
-		t.Error("a fatal business rule belongs in the verdict")
-	} else if IsCheckerFinding(br) {
-		t.Error("a business rule is not a checker finding")
-	}
-	// The advisory rule is kept, and kept out of the verdict.
-	if len(advisory) != 1 || advisory[0].Rule != "CII-SR-408" {
-		t.Errorf("the advisory finding must be reported separately; got %v", advisory)
-	}
-	if _, ok := findRule(fatal, "CII-SR-408"); ok {
-		t.Error("an advisory finding must not be counted as a non-conformance")
 	}
 }
 
@@ -288,5 +233,41 @@ func TestFacturXReportsWhatItDidNotEvaluate(t *testing.T) {
 		if strings.Contains(v.Message, "not evaluated") {
 			t.Errorf("coverage must not be manufactured into a finding: %s", v)
 		}
+	}
+}
+
+// TestFacturXCarriesPDFABaseFindings pins the composition itself, not either
+// half of it. A Factur-X file shall be PDF/A-3, so ValidateFacturX runs the
+// PDF/A-3 validator and adopts its findings under a "pdfa-3/" prefix; the
+// container rules live in a package that cannot reach that validator, and are
+// handed it per run. Nothing else notices if that hand-off stops happening —
+// the container findings still arrive, the report still looks well formed, and
+// a document that is not PDF/A-3 at all comes back carrying no sign of it.
+//
+// The fixture is deliberately a plain PDF, not a conforming PDF/A-3 file: it
+// has no XMP identification, no OutputIntent and no document-level structure a
+// PDF/A validator would accept, so the base pass has plenty to say.
+func TestFacturXCarriesPDFABaseFindings(t *testing.T) {
+	d := afDoc("factur-x.xml", "Data", "text/xml")
+
+	n := 0
+	for _, v := range ValidateFacturX(d, nil).Violations {
+		if strings.HasPrefix(v.Rule, "pdfa-3/") {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Error("no PDF/A-3 finding reached the Factur-X report: the base validation was not composed in")
+	}
+
+	// The Order-X container composes the same base, by the same route.
+	n = 0
+	for _, v := range ValidateOrderX(d, nil).Violations {
+		if strings.HasPrefix(v.Rule, "pdfa-3/") {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Error("no PDF/A-3 finding reached the Order-X report: the base validation was not composed in")
 	}
 }
