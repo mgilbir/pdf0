@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/pdfx"
 )
 
 // TestDevColorScannerMatchesPDFA is the correctness guard for the memoised
@@ -48,20 +50,20 @@ func TestDevColorScannerMatchesPDFA(t *testing.T) {
 			if err != nil {
 				return
 			}
-			cat := getCatalog(doc)
+			cat := doc.view().Catalog()
 			if cat == nil {
 				return
 			}
-			sc := newDevColorScanner(doc)
-			for _, pg := range collectPages(doc, cat.Get("Pages")) {
+			sc := pdfx.NewDevColorScanner(doc.view())
+			for _, pg := range doc.view().Pages(cat.Get("Pages")) {
 				pages++
 				wantR, wantC, wantG := scanPageForDeviceCS(doc, pg.Dict)
-				got := sc.pageDeviceUse(pg.Dict)
-				if got.rgb != wantR || got.cmyk != wantC || got.gray != wantG {
+				got := sc.PageDeviceUse(pg.Dict)
+				if got.RGB != wantR || got.CMYK != wantC || got.Gray != wantG {
 					mismatches++
 					if mismatches <= 10 {
 						t.Errorf("%s obj %d: scanPageForDeviceCS=(R%v C%v G%v) memoised=(R%v C%v G%v)",
-							filepath.Base(f), pg.ObjNum, wantR, wantC, wantG, got.rgb, got.cmyk, got.gray)
+							filepath.Base(f), pg.ObjNum, wantR, wantC, wantG, got.RGB, got.CMYK, got.Gray)
 					}
 				}
 			}
@@ -129,20 +131,20 @@ func TestDevColorScannerGroupMemoKey(t *testing.T) {
 
 	// One scanner, appearance stream first: that visit must not answer for the
 	// group-masked one.
-	sc := newDevColorScanner(doc)
-	if got := sc.pageDeviceUse(page1); got.rgb != wantR1 {
-		t.Errorf("appearance-stream page: rgb=%v, want %v", got.rgb, wantR1)
+	sc := pdfx.NewDevColorScanner(doc.view())
+	if got := sc.PageDeviceUse(page1); got.RGB != wantR1 {
+		t.Errorf("appearance-stream page: rgb=%v, want %v", got.RGB, wantR1)
 	}
-	if got := sc.pageDeviceUse(page2); got.rgb != wantR2 {
-		t.Errorf("page invoking the same form with Do: rgb=%v, want %v (the memo answered for the wrong applyGroup)", got.rgb, wantR2)
+	if got := sc.PageDeviceUse(page2); got.RGB != wantR2 {
+		t.Errorf("page invoking the same form with Do: rgb=%v, want %v (the memo answered for the wrong applyGroup)", got.RGB, wantR2)
 	}
 
 	// And the reverse order, so neither visit is privileged.
-	sc = newDevColorScanner(doc)
-	if got := sc.pageDeviceUse(page2); got.rgb != wantR2 {
-		t.Errorf("Do page first: rgb=%v, want %v", got.rgb, wantR2)
+	sc = pdfx.NewDevColorScanner(doc.view())
+	if got := sc.PageDeviceUse(page2); got.RGB != wantR2 {
+		t.Errorf("Do page first: rgb=%v, want %v", got.RGB, wantR2)
 	}
-	if got := sc.pageDeviceUse(page1); got.rgb != wantR1 {
-		t.Errorf("appearance-stream page second: rgb=%v, want %v", got.rgb, wantR1)
+	if got := sc.PageDeviceUse(page1); got.RGB != wantR1 {
+		t.Errorf("appearance-stream page second: rgb=%v, want %v", got.RGB, wantR1)
 	}
 }

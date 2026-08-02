@@ -1,7 +1,6 @@
-package pdf0
+package pdfx
 
 import (
-	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
@@ -96,6 +95,12 @@ type PDFXViolation struct {
 	Object  int // object number the violation anchors to, 0 if N/A
 }
 
+// RuleID returns the PDF/X rule identifier.
+func (v PDFXViolation) RuleID() string { return v.Rule }
+
+// ObjectNum returns the anchoring object number, 0 if N/A.
+func (v PDFXViolation) ObjectNum() int { return v.Object }
+
 func (v PDFXViolation) Error() string {
 	if v.Object != 0 {
 		return fmt.Sprintf("PDF/X %s: %s (object %d)", v.Rule, v.Message, v.Object)
@@ -103,101 +108,23 @@ func (v PDFXViolation) Error() string {
 	return fmt.Sprintf("PDF/X %s: %s", v.Rule, v.Message)
 }
 
-// ValidatePDFX checks whether doc conforms to the given PDF/X level. An empty
-// result means no violations were found.
-func ValidatePDFX(doc *Document, level PDFXLevel) []PDFXViolation {
-	return validatePDFX(core.Canceler{}, doc, level)
-}
-
-// ValidatePDFXContext is ValidatePDFX with cancellation; a cancelled run reports
-// itself under the rule "limit" (see cancel.go).
-func ValidatePDFXContext(ctx context.Context, doc *Document, level PDFXLevel) []PDFXViolation {
-	return validatePDFX(core.NewCanceler(ctx), doc, level)
-}
-
-func validatePDFX(cancel core.Canceler, doc *Document, level PDFXLevel) []PDFXViolation {
-	// Run against a shallow copy carrying the per-run cache, as the PDF/A and
-	// PDF/UA validators do: it memoizes the traversals this validator shares
-	// with them, applies the same aggregate content budget, carries the
-	// cancellation signal, and gives the resource guards somewhere to report a
-	// trip (see limits.go).
-	doc = beginRunCancel(doc, cancel)
-	var out []PDFXViolation
-	add := func(rule, msg string, obj int) {
-		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
-	}
-
-	// Every check runs under a recover boundary, so a panic on hostile input
-	// becomes an "internal" finding instead of crashing the caller, and one bad
-	// check does not discard its siblings' findings (audit C27). It is also the
-	// coarse cancellation boundary (cancel.go).
-	run := func(check func()) {
-		if doc.stopped() {
-			return
-		}
-		finding.Guarded(add, check)
-	}
-
-	run(func() {
-		// Encryption is forbidden (ISO 15930-7 6.1): a PDF/X file must be readable
-		// without a decryption key.
-		if doc.Encrypted || doc.Trailer.Get("Encrypt") != nil {
-			add("encryption", "a PDF/X file shall not be encrypted", 0)
-		}
-
-		// Version: each PDF/X level is defined for a specific PDF version. PDF/X-1a
-		// and -3 for PDF 1.3/1.4, PDF/X-4/-4p for 1.6, PDF/X-6 for PDF 2.0. A newer
-		// version than the level allows is out of scope.
-		if maj, min, ok := core.ParsePDFVersion(doc.Version); ok {
-			maxMinor, pdf2 := level.versionBound()
-			if pdf2 {
-				if maj != 2 {
-					add("version", fmt.Sprintf("%s is defined for PDF 2.0; file declares %s", level, doc.Version), 0)
-				}
-			} else if maj != 1 || min > maxMinor {
-				add("version", fmt.Sprintf("%s is defined for PDF 1.%d; file declares %s", level, maxMinor, doc.Version), 0)
-			}
-		}
-	})
-
-	run(func() { pdfxCheckIdentification(doc, level, add) })
-	run(func() { pdfxCheckOutputIntent(doc, level, add) })
-	run(func() { pdfxCheckTrapped(doc, add) })
-	run(func() { pdfxCheckPageBoxes(doc, add) })
-	run(func() { pdfxCheckFontsEmbedded(doc, add) })
-	run(func() { pdfxCheckDeviceColor(doc, add) })
-	run(func() { pdfxCheckForbidden(doc, add) })
-	if level.noTransparency() {
-		run(func() { pdfxCheckNoTransparency(doc, add) })
-	}
-
-	// The checks iterate map-ordered doc.Objects, so their concatenated output
-	// order is nondeterministic; sort for stable, diffable reports.
-	// Guard trips are reported under their own rule, not as conformance
-	// failures (see limits.go).
-	reportLimits(doc, add)
-
-	finding.Sort(out)
-	return out
-}
-
 // pdfxCheckNoTransparency flags any use of the transparency imaging model, which
 // PDF/X-1a and PDF/X-3 predate: a page transparency group, or transparency in a
 // page's own ExtGState resources (soft mask, non-normal blend mode, or alpha
 // other than fully opaque).
-func pdfxCheckNoTransparency(doc *Document, add func(rule, msg string, obj int)) {
+func pdfxCheckNoTransparency(doc core.View, add func(rule, msg string, obj int)) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return
 	}
-	for _, page := range collectPages(doc, cat.Get("Pages")) {
+	for _, page := range doc.Pages(cat.Get("Pages")) {
 		if grp := doc.ResolveDict(page.Dict.Get("Group")); grp != nil {
-			if s, _ := grp.Get("S").(Name); s == "Transparency" {
+			if s, _ := grp.Get("S").(object.Name); s == "Transparency" {
 				add("transparency", "a page transparency group is not permitted in this PDF/X level", page.ObjNum)
 				continue
 			}
 		}
-		if core.PageUsesTransparency(doc.view(), page.Dict) {
+		if core.PageUsesTransparency(doc, page.Dict) {
 			add("transparency", "transparency (soft mask, blend mode or alpha) is not permitted in this PDF/X level", page.ObjNum)
 		}
 	}
@@ -208,12 +135,12 @@ func pdfxCheckNoTransparency(doc *Document, add func(rule, msg string, obj int))
 // reference (external-content) XObjects, alternate images, non-identity transfer
 // functions, and multimedia annotations. It walks the object list once, so it
 // stays fast regardless of page count.
-func pdfxCheckForbidden(doc *Document, add func(rule, msg string, obj int)) {
+func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int)) {
 	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
 		if cat.Get("AA") != nil {
 			add("forbidden", "the document catalog shall not carry additional actions (/AA)", 0)
 		}
-		if d, ok := doc.Resolve(cat.Get("OpenAction")).(*Dictionary); ok && d.Get("S") != nil {
+		if d, ok := doc.Resolve(cat.Get("OpenAction")).(*object.Dictionary); ok && d.Get("S") != nil {
 			add("forbidden", "the document catalog shall not carry an /OpenAction action", 0)
 		}
 		if names := doc.ResolveDict(cat.Get("Names")); names != nil && names.Get("JavaScript") != nil {
@@ -222,22 +149,22 @@ func pdfxCheckForbidden(doc *Document, add func(rule, msg string, obj int)) {
 	}
 
 	for num, iobj := range doc.Objects {
-		var d *Dictionary
+		var d *object.Dictionary
 		switch v := iobj.Value.(type) {
-		case *Dictionary:
+		case *object.Dictionary:
 			d = v
-		case *Stream:
+		case *object.Stream:
 			d = &v.Dict
 		}
 		if d == nil {
 			continue
 		}
-		sub, _ := d.Get("Subtype").(Name)
+		sub, _ := d.Get("Subtype").(object.Name)
 
 		if d.Get("OPI") != nil {
 			add("forbidden", "OPI (Open Prepress Interface) proxies are not permitted", num)
 		}
-		if s, _ := d.Get("S").(Name); s == "JavaScript" {
+		if s, _ := d.Get("S").(object.Name); s == "JavaScript" {
 			add("forbidden", "JavaScript actions are not permitted", num)
 		}
 		switch sub {
@@ -254,8 +181,8 @@ func pdfxCheckForbidden(doc *Document, add func(rule, msg string, obj int)) {
 		case "Movie", "Sound", "Screen", "FileAttachment":
 			add("forbidden", fmt.Sprintf("annotation subtype /%s is not permitted", sub), num)
 		}
-		if t, _ := d.Get("Type").(Name); t == "ExtGState" {
-			for _, k := range []Name{"TR", "TR2"} {
+		if t, _ := d.Get("Type").(object.Name); t == "ExtGState" {
+			for _, k := range []object.Name{"TR", "TR2"} {
 				if tr := d.Get(k); tr != nil && !pdfxTransferIsIdentity(doc, tr) {
 					add("forbidden", fmt.Sprintf("a transfer function (ExtGState /%s) is not permitted", k), num)
 				}
@@ -267,13 +194,13 @@ func pdfxCheckForbidden(doc *Document, add func(rule, msg string, obj int)) {
 // pdfxTransferIsIdentity reports whether a transfer-function value is the benign
 // /Identity or /Default (or an array of those, one per colorant), as opposed to
 // an actual function that PDF/X-4 forbids.
-func pdfxTransferIsIdentity(doc *Document, o Object) bool {
+func pdfxTransferIsIdentity(doc core.View, o object.Object) bool {
 	switch v := doc.Resolve(o).(type) {
-	case Name:
+	case object.Name:
 		return v == "Identity" || v == "Default"
-	case Array:
+	case object.Array:
 		for _, e := range v {
-			n, ok := doc.Resolve(e).(Name)
+			n, ok := doc.Resolve(e).(object.Name)
 			if !ok || (n != "Identity" && n != "Default") {
 				return false
 			}
@@ -290,23 +217,23 @@ func pdfxTransferIsIdentity(doc *Document, o Object) bool {
 // 6.2, PDF Reference device-colour rules). It uses a memoised scan so the
 // per-page content walk stays fast on PDF/VT files that reuse content across
 // very many pages.
-func pdfxCheckDeviceColor(doc *Document, add func(rule, msg string, obj int)) {
+func pdfxCheckDeviceColor(doc core.View, add func(rule, msg string, obj int)) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return
 	}
 	oiRGB, oiCMYK, oiGray := pdfxOutputIntentCoverage(doc, cat)
-	sc := newDevColorScanner(doc)
-	for _, page := range collectPages(doc, cat.Get("Pages")) {
-		u := sc.pageDeviceUse(page.Dict)
-		groupRGB, groupCMYK, _ := core.GroupCSCoverage(doc.view(), page.Dict)
-		if u.rgb && !oiRGB && !groupRGB {
+	sc := NewDevColorScanner(doc)
+	for _, page := range doc.Pages(cat.Get("Pages")) {
+		u := sc.PageDeviceUse(page.Dict)
+		groupRGB, groupCMYK, _ := core.GroupCSCoverage(doc, page.Dict)
+		if u.RGB && !oiRGB && !groupRGB {
 			add("color", "DeviceRGB used without a matching OutputIntent, DefaultRGB or covering group colour space", page.ObjNum)
 		}
-		if u.cmyk && !oiCMYK && !groupCMYK {
+		if u.CMYK && !oiCMYK && !groupCMYK {
 			add("color", "DeviceCMYK used without a matching OutputIntent, DefaultCMYK or covering group colour space", page.ObjNum)
 		}
-		if u.gray && !oiRGB && !oiCMYK && !oiGray {
+		if u.Gray && !oiRGB && !oiCMYK && !oiGray {
 			add("color", "DeviceGray used without any OutputIntent or DefaultGray", page.ObjNum)
 		}
 	}
@@ -316,8 +243,8 @@ func pdfxCheckDeviceColor(doc *Document, add func(rule, msg string, obj int)) {
 // output intent's ICC destination profile covers, read from the profile's
 // colour-space signature. An intent with an OutputConditionIdentifier but no
 // embedded profile is treated conservatively as covering RGB and CMYK.
-func pdfxOutputIntentCoverage(doc *Document, cat *Dictionary) (rgb, cmyk, gray bool) {
-	arr, ok := doc.Resolve(cat.Get("OutputIntents")).(Array)
+func pdfxOutputIntentCoverage(doc core.View, cat *object.Dictionary) (rgb, cmyk, gray bool) {
+	arr, ok := doc.Resolve(cat.Get("OutputIntents")).(object.Array)
 	if !ok {
 		return
 	}
@@ -326,17 +253,17 @@ func pdfxOutputIntentCoverage(doc *Document, cat *Dictionary) (rgb, cmyk, gray b
 		if oi == nil {
 			continue
 		}
-		if s, _ := oi.Get("S").(Name); s != "GTS_PDFX" {
+		if s, _ := oi.Get("S").(object.Name); s != "GTS_PDFX" {
 			continue
 		}
-		stream, ok := doc.Resolve(oi.Get("DestOutputProfile")).(*Stream)
+		stream, ok := doc.Resolve(oi.Get("DestOutputProfile")).(*object.Stream)
 		if !ok {
 			if oi.Get("OutputConditionIdentifier") != nil {
 				rgb, cmyk = true, true
 			}
 			continue
 		}
-		data := core.ICCProfileData(stream, doc.lim())
+		data := core.ICCProfileData(stream, doc.Limits)
 		if len(data) < 20 {
 			rgb, cmyk = true, true
 			continue
@@ -359,11 +286,11 @@ func pdfxOutputIntentCoverage(doc *Document, cat *Dictionary) (rgb, cmyk, gray b
 // level. PDF/X-4 records the identifier in XMP (pdfxid:GTS_PDFXVersion); the
 // Info dictionary /GTS_PDFXVersion, used by older PDF/X versions, is accepted as
 // a fallback.
-func pdfxCheckIdentification(doc *Document, level PDFXLevel, add func(rule, msg string, obj int)) {
+func pdfxCheckIdentification(doc core.View, level PDFXLevel, add func(rule, msg string, obj int)) {
 	claimed := ""
 	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
-		if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
-			xmp := doc.view().XMPText(ms)
+		if ms, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream); ok {
+			xmp := doc.XMPText(ms)
 			claimed = strings.TrimSpace(core.ExtractXMPValue(xmp, "pdfxid:GTS_PDFXVersion"))
 			if claimed == "" {
 				claimed = strings.TrimSpace(core.ExtractXMPValue(xmp, "GTS_PDFXVersion"))
@@ -372,7 +299,7 @@ func pdfxCheckIdentification(doc *Document, level PDFXLevel, add func(rule, msg 
 	}
 	if claimed == "" {
 		if info := doc.ResolveDict(doc.Trailer.Get("Info")); info != nil {
-			if s, ok := info.Get("GTS_PDFXVersion").(String); ok {
+			if s, ok := info.Get("GTS_PDFXVersion").(object.String); ok {
 				claimed = strings.TrimSpace(string(s.Value))
 			}
 		}
@@ -392,32 +319,32 @@ func pdfxCheckIdentification(doc *Document, level PDFXLevel, add func(rule, msg 
 // profile (ISO 15930-7 6.2). A GTS_PDFX intent with an OutputConditionIdentifier
 // is required; PDF/X-4 requires the profile embedded (DestOutputProfile), while
 // PDF/X-4p also accepts an external reference.
-func pdfxCheckOutputIntent(doc *Document, level PDFXLevel, add func(rule, msg string, obj int)) {
+func pdfxCheckOutputIntent(doc core.View, level PDFXLevel, add func(rule, msg string, obj int)) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return
 	}
-	arr, ok := doc.Resolve(cat.Get("OutputIntents")).(Array)
+	arr, ok := doc.Resolve(cat.Get("OutputIntents")).(object.Array)
 	if !ok || len(arr) == 0 {
 		add("output-intent", "a PDF/X file requires a catalog /OutputIntents array with a GTS_PDFX intent", 0)
 		return
 	}
-	var profiles []Object
+	var profiles []object.Object
 	found := false
 	for _, e := range arr {
 		oi := doc.ResolveDict(e)
 		if oi == nil {
 			continue
 		}
-		if s, _ := oi.Get("S").(Name); s != "GTS_PDFX" {
+		if s, _ := oi.Get("S").(object.Name); s != "GTS_PDFX" {
 			continue
 		}
 		found = true
-		if oci, ok := oi.Get("OutputConditionIdentifier").(String); !ok || len(oci.Value) == 0 {
+		if oci, ok := oi.Get("OutputConditionIdentifier").(object.String); !ok || len(oci.Value) == 0 {
 			add("output-intent", "GTS_PDFX output intent lacks a non-empty /OutputConditionIdentifier", object.RefNum(e))
 		}
 		prof := oi.Get("DestOutputProfile")
-		if _, ok := doc.Resolve(prof).(*Stream); ok {
+		if _, ok := doc.Resolve(prof).(*object.Stream); ok {
 			profiles = append(profiles, prof)
 		} else if level != PDFX4p {
 			// Only PDF/X-4p permits an external reference; every other level
@@ -441,13 +368,13 @@ func pdfxCheckOutputIntent(doc *Document, level PDFXLevel, add func(rule, msg st
 
 // pdfxCheckTrapped verifies the Info /Trapped flag is present and definite
 // (ISO 15930-7 6.3): it shall be True or False, not Unknown or absent.
-func pdfxCheckTrapped(doc *Document, add func(rule, msg string, obj int)) {
+func pdfxCheckTrapped(doc core.View, add func(rule, msg string, obj int)) {
 	info := doc.ResolveDict(doc.Trailer.Get("Info"))
 	if info == nil {
 		add("trapped", "Info dictionary with a definite /Trapped value is required", 0)
 		return
 	}
-	switch t, _ := info.Get("Trapped").(Name); t {
+	switch t, _ := info.Get("Trapped").(object.Name); t {
 	case "True", "False":
 		// definite, as required
 	default:
@@ -459,15 +386,15 @@ func pdfxCheckTrapped(doc *Document, add func(rule, msg string, obj int)) {
 // MediaBox; exactly one of TrimBox or ArtBox defines the finished-page area and
 // lies within the MediaBox; a BleedBox, if present, contains that area and lies
 // within the MediaBox.
-func pdfxCheckPageBoxes(doc *Document, add func(rule, msg string, obj int)) {
-	for _, pg := range collectPages(doc, doc.view().CatalogPages()) {
-		media, hasMedia := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "MediaBox"))
+func pdfxCheckPageBoxes(doc core.View, add func(rule, msg string, obj int)) {
+	for _, pg := range doc.Pages(doc.CatalogPages()) {
+		media, hasMedia := pdfxRect(doc, doc.InheritedPageAttr(pg.Dict, "MediaBox"))
 		if !hasMedia {
 			add("page-box", "page has no MediaBox", pg.ObjNum)
 			continue
 		}
-		trim, hasTrim := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "TrimBox"))
-		art, hasArt := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "ArtBox"))
+		trim, hasTrim := pdfxRect(doc, doc.InheritedPageAttr(pg.Dict, "TrimBox"))
+		art, hasArt := pdfxRect(doc, doc.InheritedPageAttr(pg.Dict, "ArtBox"))
 		switch {
 		case hasTrim && hasArt:
 			add("page-box", "page has both TrimBox and ArtBox; exactly one is permitted", pg.ObjNum)
@@ -481,7 +408,7 @@ func pdfxCheckPageBoxes(doc *Document, add func(rule, msg string, obj int)) {
 		if hasFinished && !rectContains(media, finished) {
 			add("page-box", "page TrimBox/ArtBox is not within the MediaBox", pg.ObjNum)
 		}
-		if bleed, ok := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "BleedBox")); ok {
+		if bleed, ok := pdfxRect(doc, doc.InheritedPageAttr(pg.Dict, "BleedBox")); ok {
 			if !rectContains(media, bleed) {
 				add("page-box", "page BleedBox is not within the MediaBox", pg.ObjNum)
 			}
@@ -500,11 +427,11 @@ func pdfxCheckPageBoxes(doc *Document, add func(rule, msg string, obj int)) {
 // count (a PDF/VT file may reuse one resource set across hundreds of thousands
 // of pages). Fonts reachable only from an AcroForm's default resources are not
 // page content and are correctly excluded.
-func pdfxCheckFontsEmbedded(doc *Document, add func(rule, msg string, obj int)) {
-	seenRes := map[*Dictionary]bool{}
-	seenFont := map[*Dictionary]bool{}
-	var scan func(res *Dictionary, depth int)
-	scan = func(res *Dictionary, depth int) {
+func pdfxCheckFontsEmbedded(doc core.View, add func(rule, msg string, obj int)) {
+	seenRes := map[*object.Dictionary]bool{}
+	seenFont := map[*object.Dictionary]bool{}
+	var scan func(res *object.Dictionary, depth int)
+	scan = func(res *object.Dictionary, depth int) {
 		if res == nil || depth > 32 || seenRes[res] {
 			return
 		}
@@ -517,40 +444,40 @@ func pdfxCheckFontsEmbedded(doc *Document, add func(rule, msg string, obj int)) 
 				}
 				seenFont[fd] = true
 				if !fontIsEmbedded(doc, fd) {
-					name, _ := fd.Get("BaseFont").(Name)
+					name, _ := fd.Get("BaseFont").(object.Name)
 					add("font-embedding", fmt.Sprintf("font /%s (resource /%s) is not embedded", name, fonts.Keys[i]), object.RefNum(ref))
 				}
 			}
 		}
-		for _, key := range []Name{"XObject", "Pattern"} {
+		for _, key := range []object.Name{"XObject", "Pattern"} {
 			sub := doc.ResolveDict(res.Get(key))
 			if sub == nil {
 				continue
 			}
 			for _, ref := range sub.Values {
 				switch v := doc.Resolve(ref).(type) {
-				case *Stream:
+				case *object.Stream:
 					scan(doc.ResolveDict(v.Dict.Get("Resources")), depth+1)
-				case *Dictionary:
+				case *object.Dictionary:
 					scan(doc.ResolveDict(v.Get("Resources")), depth+1)
 				}
 			}
 		}
 	}
-	for _, pg := range collectPages(doc, doc.view().CatalogPages()) {
-		scan(resolveResources(doc, pg.Dict), 0)
+	for _, pg := range doc.Pages(doc.CatalogPages()) {
+		scan(doc.Resources(pg.Dict), 0)
 	}
 }
 
 // fontIsEmbedded reports whether a font's program is embedded. A Type 0
 // composite font carries its program on the descendant CIDFont; a Type 3 font
 // defines glyphs with content streams and has no program to embed.
-func fontIsEmbedded(doc *Document, font *Dictionary) bool {
-	switch sub, _ := font.Get("Subtype").(Name); sub {
+func fontIsEmbedded(doc core.View, font *object.Dictionary) bool {
+	switch sub, _ := font.Get("Subtype").(object.Name); sub {
 	case "Type3":
 		return true
 	case "Type0":
-		df, ok := doc.Resolve(font.Get("DescendantFonts")).(Array)
+		df, ok := doc.Resolve(font.Get("DescendantFonts")).(object.Array)
 		if !ok || len(df) == 0 {
 			return false
 		}
@@ -566,12 +493,12 @@ func fontIsEmbedded(doc *Document, font *Dictionary) bool {
 
 // fontDescriptorEmbedded reports whether a font descriptor carries an embedded
 // font program.
-func fontDescriptorEmbedded(doc *Document, fd *Dictionary) bool {
+func fontDescriptorEmbedded(doc core.View, fd *object.Dictionary) bool {
 	if fd == nil {
 		return false
 	}
-	for _, key := range []Name{"FontFile", "FontFile2", "FontFile3"} {
-		if _, ok := doc.Resolve(fd.Get(key)).(*Stream); ok {
+	for _, key := range []object.Name{"FontFile", "FontFile2", "FontFile3"} {
+		if _, ok := doc.Resolve(fd.Get(key)).(*object.Stream); ok {
 			return true
 		}
 	}
@@ -580,8 +507,8 @@ func fontDescriptorEmbedded(doc *Document, fd *Dictionary) bool {
 
 // pdfxRect parses a PDF rectangle (an array of four numbers) into normalised
 // [llx, lly, urx, ury] coordinates.
-func pdfxRect(doc *Document, o Object) ([4]float64, bool) {
-	arr, ok := doc.Resolve(o).(Array)
+func pdfxRect(doc core.View, o object.Object) ([4]float64, bool) {
+	arr, ok := doc.Resolve(o).(object.Array)
 	if !ok || len(arr) != 4 {
 		return [4]float64{}, false
 	}
@@ -602,11 +529,11 @@ func pdfxRect(doc *Document, o Object) ([4]float64, bool) {
 	return r, true
 }
 
-func pdfxNum(o Object) (float64, bool) {
+func pdfxNum(o object.Object) (float64, bool) {
 	switch v := o.(type) {
-	case Integer:
+	case object.Integer:
 		return float64(v), true
-	case Real:
+	case object.Real:
 		return float64(v), true
 	}
 	return 0, false
@@ -618,4 +545,64 @@ func rectContains(outer, inner [4]float64) bool {
 	const eps = 1e-3
 	return inner[0] >= outer[0]-eps && inner[1] >= outer[1]-eps &&
 		inner[2] <= outer[2]+eps && inner[3] <= outer[3]+eps
+}
+
+// ValidateView runs the PDF/X checks over a view. The caller starts the run,
+// builds the view, and reports the guards that tripped while the file was read.
+func ValidateView(v core.View, level PDFXLevel) []PDFXViolation {
+	var out []PDFXViolation
+	add := func(rule, msg string, obj int) {
+		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
+	}
+
+	// Every check runs under a recover boundary, so a panic on hostile input
+	// becomes an "internal" finding instead of crashing the caller, and one bad
+	// check does not discard its siblings' findings (audit C27). It is also the
+	// coarse cancellation boundary (cancel.go).
+	run := func(check func()) {
+		if v.Cancel.Stopped() {
+			return
+		}
+		finding.Guarded(add, check)
+	}
+
+	run(func() {
+		// Encryption is forbidden (ISO 15930-7 6.1): a PDF/X file must be readable
+		// without a decryption key.
+		if v.Encrypted || v.Trailer.Get("Encrypt") != nil {
+			add("encryption", "a PDF/X file shall not be encrypted", 0)
+		}
+
+		// Version: each PDF/X level is defined for a specific PDF version. PDF/X-1a
+		// and -3 for PDF 1.3/1.4, PDF/X-4/-4p for 1.6, PDF/X-6 for PDF 2.0. A newer
+		// version than the level allows is out of scope.
+		if maj, min, ok := core.ParsePDFVersion(v.Version); ok {
+			maxMinor, pdf2 := level.versionBound()
+			if pdf2 {
+				if maj != 2 {
+					add("version", fmt.Sprintf("%s is defined for PDF 2.0; file declares %s", level, v.Version), 0)
+				}
+			} else if maj != 1 || min > maxMinor {
+				add("version", fmt.Sprintf("%s is defined for PDF 1.%d; file declares %s", level, maxMinor, v.Version), 0)
+			}
+		}
+	})
+
+	run(func() { pdfxCheckIdentification(v, level, add) })
+	run(func() { pdfxCheckOutputIntent(v, level, add) })
+	run(func() { pdfxCheckTrapped(v, add) })
+	run(func() { pdfxCheckPageBoxes(v, add) })
+	run(func() { pdfxCheckFontsEmbedded(v, add) })
+	run(func() { pdfxCheckDeviceColor(v, add) })
+	run(func() { pdfxCheckForbidden(v, add) })
+	if level.noTransparency() {
+		run(func() { pdfxCheckNoTransparency(v, add) })
+	}
+
+	// The checks iterate map-ordered v.Objects, so their concatenated output
+	// order is nondeterministic; sort for stable, diffable reports.
+	// Guard trips are reported under their own rule, not as conformance
+	// failures (see limits.go).
+
+	return out
 }
