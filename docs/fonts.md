@@ -281,7 +281,7 @@ CIDs whose glyphs exist only as padding or composite components.
 
 Font findings are also produced outside these files: `checkFontsEmbedded` and
 `checkFontSubsets` live in `pdfa.go`, the clause-7.21 PDF/UA font family in
-`pdfua.go`, and `pdfxCheckFontsEmbedded` in `pdfx.go`.
+`pdfua/pdfua.go`, and `pdfxCheckFontsEmbedded` in `pdfx/pdfx.go`.
 
 ## DoS guards
 

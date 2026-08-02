@@ -22,9 +22,9 @@ of three things: another structure element, an integer **MCID** naming a
 marked-content sequence in a page's content stream, or an **OBJR** dictionary
 pointing at an object (in practice an annotation). `/RoleMap` on the structure
 tree root maps non-standard types onto the ISO 32000 standard set, which
-`standardStructTypes` in `pdfua.go` enumerates (Table 333/337).
+`standardStructTypes` in `pdfua/pdfua.go` enumerates (Table 333/337).
 
-`pdfua_struct.go` builds this once per run. `buildStructTree` walks `/K`
+`pdfua/pdfua_struct.go` builds this once per run. `buildStructTree` walks `/K`
 depth-first, descending transparently through arrays, and flattens the tree into
 a pre-order `[]structNode`. Each node records the element dictionary, its object
 number (`-1` when reached directly), `rawS` (the type **as written**), `stdType`
@@ -44,7 +44,7 @@ so a `/K` pointing back at an ancestor terminates —
 **`/RoleMap` chains:** a role map may reach a standard type through intermediate
 custom types (`MyPara → Para → P`), so both users of the map follow chains rather
 than a single hop. `checkUARoleMapIntegrity` walks each key's chain to detect a
-cycle; `resolveRoleMapChain` (`pdfua_struct.go`) walks it to resolve a type, and
+cycle; `resolveRoleMapChain` (`pdfua/pdfua_struct.go`) walks it to resolve a type, and
 is what `standardStructType` and `checkUARoleMap` are built on. Both are bounded
 by a seen-set, so a cyclic map terminates, and by `WithMaxRoleMapSteps` (2^20
 steps) — `checkUARoleMapIntegrity` capping its *total* work across keys and
@@ -80,7 +80,7 @@ flowchart TD
 ## The rule families
 
 Every family below is dispatched from the single `validatePDFUA(doc, part)`
-function in `pdfua.go`. The clause column is the string the finding carries in
+function in `pdfua/pdfua.go`. The clause column is the string the finding carries in
 `UAViolation.Clause`; a few cite the Matterhorn Protocol checkpoint that pins the
 rule, noted in the source comments.
 
@@ -120,7 +120,7 @@ one before doing anything else; nine font checks consume it.
 
 ## Content-level checking
 
-`pdfua_content.go` is the only place UA validation reads page content streams.
+`pdfua/pdfua_content.go` is the only place UA validation reads page content streams.
 It tokenizes each stream once (`tokenizeContent`) and derives a
 `streamContentFacts` — memoized per `*Stream` in `valCache.streamFacts` — holding
 the distinct real-content violation messages and the sequence of XObject names in
@@ -159,7 +159,7 @@ classified by shape, not matched to the tree.
 
 ## Table grids
 
-`pdfua_tablegrid.go` reconstructs a table's logical grid, because the defects
+`pdfua/pdfua_tablegrid.go` reconstructs a table's logical grid, because the defects
 PDF/UA cares about are invisible to a tree walk. A walk can tell you a `TD` sits
 under a `TR` under a `Table`; it cannot tell you row 2 has a hole, because
 whether row 2 is complete depends on `/RowSpan` values declared in row 1 and on
@@ -211,7 +211,7 @@ Only the *presence* of `Scope` is checked, not its value.
 
 ## PDF/UA-2
 
-`pdfua2.go` is 34 lines and does two things: it calls `validatePDFUA(d, "2")`,
+`pdfua/pdfua2.go` is 34 lines and does two things: it calls `validatePDFUA(d, "2")`,
 and it flags a file whose header major version is not 2. Parameterizing by `part`
 (rather than post-filtering findings by message text, as an earlier version did —
 audit C39) is what makes the identification rule demand `pdfuaid:part 2` and
@@ -260,11 +260,11 @@ tabulated in [testing.md](testing.md).
 
 | File | Owns | Governing clauses |
 |---|---|---|
-| `pdfua.go` | `UAViolation`, `ValidatePDFUA`, the `validatePDFUA(doc, part)` dispatch, and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, language, headings, figures | 5, 6.1, 7.1–7.4, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x |
-| `pdfua_struct.go` | The flattened `structTree` model and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version | 7.1, 7.2, 7.4.4, 7.9, 6.1 (and ISO 32000-1 14.8.4.3) |
-| `pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
-| `pdfua_tablegrid.go` | `TH` identifiability and the table grid reconstruction | 7.2, 7.5 |
-| `pdfua2.go` | `ValidatePDFUA2` — the part-2 identification and PDF 2.0 version rules over the shared checks | ISO 14289-2 clause 4 and the shared clauses |
+| `pdfua/pdfua.go` | `UAViolation`, `ValidatePDFUA`, the `validatePDFUA(doc, part)` dispatch, and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, language, headings, figures | 5, 6.1, 7.1–7.4, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x |
+| `pdfua/pdfua_struct.go` | The flattened `structTree` model and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version | 7.1, 7.2, 7.4.4, 7.9, 6.1 (and ISO 32000-1 14.8.4.3) |
+| `pdfua/pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
+| `pdfua/pdfua_tablegrid.go` | `TH` identifiability and the table grid reconstruction | 7.2, 7.5 |
+| `pdfua/pdfua2.go` | `ValidatePDFUA2` — the part-2 identification and PDF 2.0 version rules over the shared checks | ISO 14289-2 clause 4 and the shared clauses |
 
 Shared machinery lives outside these files: `collectFontTextUsage` and the
 `validationCache` in `pdfa.go`, `tokenizeContent` in the content-operator layer,

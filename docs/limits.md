@@ -179,17 +179,17 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | ICC profile size (`WithMaxICCProfileBytes`) | `pdfa.go` | Silently lossy, fail-open by design | `getOutputIntentCoverage` sets `hasRGB=hasCMYK=true` on an unreadable profile precisely to avoid a false positive. | Unchanged. |
 | XMP packet size (`WithMaxXMPPacketBytes`) | `xmp.go`, `xmp_schemas.go` | Silently lossy, fail-open by design | `parseXMPProperties` errors over the cap and `checkXMPProperties` reads that as "no properties to check" — **never** a violation, so an oversized valid packet is not failed. Well-formedness still runs: `xmpWellFormed` is O(n) over the token stream and needs no tree. | Unchanged. The two rules that survive the cap are the two a caller most needs, and the skipped ones are value checks that cannot fire without a tree. |
 | embedded PDF/A validation (no bound of its own) | `final_rules.go` | Was **silently wrong** | `checkEmbeddedPDFA` treated *any* non-empty result from the nested validation as non-conformance, so a guard trip or a recovered panic inside the embedded document became *"an embedded PDF file is not compliant with PDF/A"* (6.9). | Fixed. `embeddedPDFACompliant` returns completeness alongside the verdict; a nested `IsCheckerFinding` declines the 6.9 finding and reports `embedded-pdfa` instead. The nested read and validation now also inherit the outer document's resolved limits rather than the defaults — the one place a hostile file could otherwise spend a whole second document's budget unconfigured. Because that makes a *lowered* ceiling a possible cause of "did not read" and "declares no level", those two exits also withhold the verdict whenever the limits in force are not the defaults, which is fail-open (a missed finding, never a manufactured one). Under the defaults nothing changes. |
-| Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Unchanged. |
+| Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx/pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Unchanged. |
 
 ### Structure and PDF/UA
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| table grid fills (`WithMaxTableGridFills`) | `pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
-| `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua.go`, `pdfua_struct.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. | Reported as `rolemap-work`. Type resolution (`resolveRoleMapChain`) shares the same budget and returns a completeness flag; on a trip `checkUARoleMap` declines rather than reporting *"neither standard nor mapped"*. |
+| table grid fills (`WithMaxTableGridFills`) | `pdfua/pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
+| `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua/pdfua.go`, `pdfua/pdfua_struct.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. | Reported as `rolemap-work`. Type resolution (`resolveRoleMapChain`) shares the same budget and returns a completeness flag; on a trip `checkUARoleMap` declines rather than reporting *"neither standard nor mapped"*. |
 | `maxFieldTreeDepth` (64) | `signatures.go`, `sign.go` | Silently lossy | Truncates a reported `SignatureResult.Field` name; never flips `Valid` or `CoversWholeDocument`. | Unchanged. |
 | `maxPageTreeDepth` (64) | `sign.go` | Loud | `signingTarget` refuses. | Unchanged. |
-| Struct-tree / table-row seen-sets | `pdfua_struct.go`, `pdfua_tablegrid.go` | Silently lossy on well-formed input | An element reachable twice is not a valid structure tree, so these only bite malformed files. | Unchanged (see *Left deliberately*). |
+| Struct-tree / table-row seen-sets | `pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go` | Silently lossy on well-formed input | An element reachable twice is not a valid structure tree, so these only bite malformed files. | Unchanged (see *Left deliberately*). |
 
 ### Parsing and file structure
 
@@ -240,7 +240,7 @@ falsePositives=0 missed=0 parseErrors=0`, Isartor `missed=1`, Level A 9/9,
 Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
 
 - **`standardStructType` followed exactly one `/RoleMap` hop**
-  (`pdfua_struct.go`). A role map may reach a standard type through intermediate
+  (`pdfua/pdfua_struct.go`). A role map may reach a standard type through intermediate
   custom types — `MyPara → Para → P` is legal (ISO 32000-1 14.7.3) — and one hop
   declared the type unmapped, firing *"structure type /X is neither standard nor
   mapped in /RoleMap"* and then, because every dependent rule saw the raw type, a
@@ -257,7 +257,7 @@ Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
   the entry's `ND`/`|-` (Type 1 Font Format 10.3) — read from the byte stream,
   not from a glyph name.
 - **`devColorScanner.memo` was keyed on `*Stream` but not on `applyGroup`**
-  (`pdfx_color.go`), so whichever visit came first answered for both: a form
+  (`pdfx/pdfx_color.go`), so whichever visit came first answered for both: a form
   whose isolated calibrated group covers its `DeviceRGB` was reported unmasked
   once an appearance-stream visit had cached the raw value → *"DeviceRGB used
   without a matching OutputIntent, DefaultRGB or covering group colour space"*.

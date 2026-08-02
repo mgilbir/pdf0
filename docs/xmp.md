@@ -96,7 +96,7 @@ through `normalizePDFDate` / `normalizeXMPDate` so `+00:00` and `Z` agree.
 | Standard | Property read | Notes |
 |---|---|---|
 | PDF/A | `pdfaid:part`, `pdfaid:conformance`, `pdfaid:rev` | ns `http://www.aiim.org/pdfa/ns/id/`, verified when any `pdfaid:` appears. `conformance` must be `B` at 1b/2b/3b; at A-4 it must be absent, `F` or `E`, and `rev` must be `2020`. The schema table also knows `amd` and `corr` (`corr` is dropped at 1b). |
-| PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid`, checked via `xmpBindsPrefixTo` (`pdfua.go`). |
+| PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid`, checked via `xmpBindsPrefixTo` (`pdfua/pdfua.go`). |
 | PDF/X | `pdfxid:GTS_PDFXVersion` | bare `GTS_PDFXVersion` accepted as a fallback, and Info `/GTS_PDFXVersion` for the older parts. |
 | PDF/VT | `pdfvtid:GTS_PDFVTVersion` | XMP only — no Info fallback. |
 | Factur-X / ZUGFeRD | `fx:DocumentType`, `fx:Version`, `fx:DocumentFileName`, `fx:ConformanceLevel` | `zf:` is accepted as the ZUGFeRD-era equivalent. |

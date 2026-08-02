@@ -223,19 +223,35 @@ findings, not a description of how the code works — for that start at
 
 ## Layout
 
-The public API is the root `pdf0` package. Underneath it, self-contained pieces
-live in packages of their own: `object` and `syntax` carry public API and are
-regular packages, whose types the root package aliases so `pdf0.Dictionary` and
-`object.Dictionary` are one type; `internal/` holds implementation whose API is
-not meant for callers. Everything else is still in the root package.
+The public API is the root `pdf0` package, and it is the only package most
+callers name. Underneath it:
+
+- **Regular packages** for pieces that carry public API — `object`, `syntax`,
+  `images`, and one per validator (`pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`).
+  The root package aliases their types, so `pdf0.Dictionary` and
+  `object.Dictionary` are one type and `pdf0.UAViolation` is
+  `pdfua.UAViolation`. They are regular rather than internal because aliasing a
+  type into `internal/` renders it in godoc with its fields and methods gone and
+  nothing the reader may follow.
+- **`internal/`** for implementation whose API is not meant for callers:
+  `core` (the document seen from below — see below), `finding` (the shared
+  validator harness), `font`, `ccitt`, `jbig2`.
+
+A subsystem does not name `Document`. It takes a `core.View`: the object graph,
+the trailer, what `Read` found in the file, the resolved budget, the
+cancellation signal, and a per-run state for memos. `Document` stays at the top
+as the facade — a method must be declared in the package that declares its type,
+and `Document`'s twenty-eight exported methods are the public API, so it cannot
+move below the packages that would need it. Passing a view *down* keeps the
+dependency arrows pointing one way.
 
 The subsystems, and the doc that maps each:
 
 | Subsystem | Files | Map |
 |-----------|-------|-----|
 | Core object model, parser, serializer | `object/`, `syntax/`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
-| PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
-| The other validators | `pdfua*.go`, `pdfx*.go`, `pdfvt.go`, `pdfr.go`, `dpart.go`, `facturx*.go`, `order_x.go`, `violations.go` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
+| PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `embedded.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
+| The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/` with their `*_api.go` boundaries in root, `facturx*.go`, `order_x.go`, `violations.go`, `internal/finding` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
 | Fonts | `fonts.go`, `internal/font/` | [fonts.md](docs/fonts.md) |
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
