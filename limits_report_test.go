@@ -246,7 +246,7 @@ func TestCIDWidthBudgetDoesNotReportWidthMismatch(t *testing.T) {
 	if len(bad) > 0 {
 		t.Errorf("width rule fired on a font whose /W was dropped by the range budget: %v", bad)
 	}
-	if trips := doc.valCache.run.limits.Snapshot(); len(trips) == 0 || trips[0].Guard() != limitCIDWidthRange {
+	if trips := doc.valCache.run.limits.Snapshot(); len(trips) == 0 || trips[0].Guard() != core.GuardCIDWidthRange {
 		t.Errorf("/W range budget trip was not reported: %v", trips)
 	}
 }
@@ -590,11 +590,11 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	}
 	reported := false
 	for _, e := range limitValidationErrors(run, PDFA4) {
-		if e.Rule == finding.LimitRule && strings.Contains(e.Message, limitEmbeddedPDFA) {
+		if e.Rule == finding.LimitRule && strings.Contains(e.Message, core.GuardEmbeddedPDFA) {
 			reported = true
 		}
 	}
 	if !reported {
-		t.Errorf("the declined check must be reported as a %q finding naming %q", finding.LimitRule, limitEmbeddedPDFA)
+		t.Errorf("the declined check must be reported as a %q finding naming %q", finding.LimitRule, core.GuardEmbeddedPDFA)
 	}
 }

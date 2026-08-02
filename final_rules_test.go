@@ -230,15 +230,15 @@ func TestDeclaredPDFALevel(t *testing.T) {
 		return doc
 	}
 	// Attribute form.
-	if lvl, ok := declaredPDFALevel(mk(`<rdf:Description pdfaid:part="4" pdfaid:conformance="B"/>`)); !ok || lvl != PDFA4 {
+	if lvl, ok := declaredPDFALevel(mk(`<rdf:Description pdfaid:part="4" pdfaid:conformance="B"/>`).view()); !ok || lvl != PDFA4 {
 		t.Errorf("part=4 attr: got %v %v", lvl, ok)
 	}
 	// Element form.
-	if lvl, ok := declaredPDFALevel(mk(`<pdfaid:part>2</pdfaid:part>`)); !ok || lvl != PDFA2b {
+	if lvl, ok := declaredPDFALevel(mk(`<pdfaid:part>2</pdfaid:part>`).view()); !ok || lvl != PDFA2b {
 		t.Errorf("part=2 elem: got %v %v", lvl, ok)
 	}
 	// No pdfaid: not PDF/A.
-	if _, ok := declaredPDFALevel(mk(`<rdf:Description/>`)); ok {
+	if _, ok := declaredPDFALevel(mk(`<rdf:Description/>`).view()); ok {
 		t.Error("document without pdfaid must not be PDF/A")
 	}
 }

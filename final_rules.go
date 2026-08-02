@@ -1,7 +1,6 @@
 package pdf0
 
 import (
-	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 )
@@ -23,6 +22,34 @@ import (
 // checkProhibitedCatalogEntries flags document-level features prohibited by
 // PDF/A-4: alternate presentations, page presentation steps, and the
 // Requirements dictionary (ISO 19005-4 6.11, 6.12).
+
+// EmbeddedChecker reports whether embedded PDF bytes are a conforming PDF/A
+// file, and whether the check ran to completion. Reading a whole document out
+// of a byte slice needs the parser, which these checks deliberately do not
+// depend on, so the caller hands one in per run.
+type EmbeddedChecker func(cancel core.Canceler, data []byte, lim core.Limits) (compliant, complete bool)
+
+type embeddedSlot struct{}
+
+type embeddedHolder struct{ check EmbeddedChecker }
+
+// SetEmbeddedChecker installs the recursive embedded-file check for this run.
+// It is per run rather than a package-level variable so that nothing is shared
+// between concurrent validations.
+func SetEmbeddedChecker(v core.View, f EmbeddedChecker) {
+	core.Slot[embeddedHolder](v.Run, embeddedSlot{}).check = f
+}
+
+// embeddedChecker returns the run's checker, or one that declines to answer.
+// Declining is the safe default: "we could not tell" must not be reported as
+// "the embedded file is not PDF/A".
+func embeddedChecker(v core.View) EmbeddedChecker {
+	if h := core.Slot[embeddedHolder](v.Run, embeddedSlot{}); h.check != nil {
+		return h.check
+	}
+	return func(core.Canceler, []byte, core.Limits) (bool, bool) { return false, false }
+}
+
 func checkProhibitedCatalogEntries(doc core.View, level PDFALevel) []ValidationError {
 	if level == PDFA1b {
 		return nil // 6.11 / 6.12 are clauses of ISO 19005 parts 2 and later
@@ -505,7 +532,7 @@ func checkEmbeddedPDFA(doc core.View, level PDFALevel) []ValidationError {
 			if err != nil || len(data) == 0 {
 				continue
 			}
-			compliant, complete := embeddedPDFACompliant(doc.Cancel, data, doc.Limits)
+			compliant, complete := embeddedChecker(doc)(doc.Cancel, data, doc.Limits)
 			if !complete {
 				// The nested run reported a checker finding of its own — a guard
 				// tripped inside it, a check panicked, or the shared context
@@ -513,7 +540,7 @@ func checkEmbeddedPDFA(doc core.View, level PDFALevel) []ValidationError {
 				// central mistake: asserting a violation on the strength of an
 				// incomplete result (limits_report.go). Decline, and report the
 				// incompleteness under "limit" so it is attributable.
-				doc.Note(limitEmbeddedPDFA, "an embedded PDF file could not be validated to completion, so its PDF/A conformance (6.9) was neither confirmed nor denied", num)
+				doc.Note(core.GuardEmbeddedPDFA, "an embedded PDF file could not be validated to completion, so its PDF/A conformance (6.9) was neither confirmed nor denied", num)
 				continue
 			}
 			if !compliant {
@@ -548,90 +575,6 @@ func pdfaConformanceFlag(doc core.View) string {
 func isPDFMIME(subtype Object) bool {
 	n, ok := subtype.(Name)
 	return ok && string(n) == "application/pdf"
-}
-
-// embeddedPDFACompliant reports whether embedded PDF bytes parse as a PDF/A
-// document and validate against their own declared conformance level, and
-// whether that verdict is one pdf0 actually reached.
-//
-// The outer run's cancellation signal *and* its resolved limits are carried
-// into the nested read and validation. Both for the same reason: this is a
-// whole second document's worth of work on bytes the outer file supplied, so a
-// caller's deadline and a caller's ceilings have to govern it exactly as they
-// govern the outer document. Threading only the context would leave the one
-// place a hostile file can spend an unconfigured budget.
-//
-// The second result is false when the verdict is not one pdf0 reached: the
-// nested run produced a checker finding — "limit" or "internal"
-// (IsCheckerFinding) — or it never got that far because the checker itself
-// refused. Folding either into the boolean would report "not compliant" for a
-// file pdf0 merely failed to finish reading, which is the false positive
-// limits_report.go exists to prevent; the caller declines the 6.9 finding and
-// reports the incompleteness instead.
-//
-// The two early exits deserve their own note. "This did not read" and "this
-// declares no PDF/A level" are statements about the bytes — unless the checker
-// is what refused, which happens when the shared context ended, or when a
-// ceiling the caller lowered is what the embedded document ran into. Neither
-// cause is recoverable from the error (the decode chain reports over-limit as
-// an ordinary error, with no sentinel), so when either is possible the verdict
-// is withheld rather than guessed. Under the defaults — every caller who
-// configures nothing, and the whole corpus — that condition is false and both
-// exits behave exactly as they always have.
-func embeddedPDFACompliant(cancel core.Canceler, data []byte, lim core.Limits) (compliant, complete bool) {
-	// True when a failure below could be the checker's doing rather than the
-	// file's, and so must not be reported as non-conformance.
-	checkerMayHaveRefused := cancel.Err() != nil || lim != core.DefaultLimits()
-
-	edoc, err := readDocument(cancel, bytes.NewReader(data), int64(len(data)), "", lim)
-	if err != nil {
-		return false, !checkerMayHaveRefused
-	}
-	elevel, ok := declaredPDFALevel(edoc)
-	if !ok {
-		// An embedded PDF that is not PDF/A at all — or whose own metadata
-		// stream the caller's lowered per-stream cap declined to decode.
-		return false, !checkerMayHaveRefused
-	}
-	edoc.embeddedDepth = 1
-	compliant, complete = true, true
-	for _, e := range validatePDFABytes(cancel, edoc, elevel, data) {
-		if IsCheckerFinding(e) {
-			complete = false
-			continue
-		}
-		compliant = false
-	}
-	return compliant, complete
-}
-
-// declaredPDFALevel reads the PDF/A conformance level a document claims via
-// its XMP pdfaid:part / pdfaid:conformance identifiers.
-func declaredPDFALevel(doc *Document) (PDFALevel, bool) {
-	catalog := doc.view().Catalog()
-	if catalog == nil {
-		return 0, false
-	}
-	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*Stream)
-	if !ok {
-		return 0, false
-	}
-	xmp := doc.view().XMPText(stream)
-	part := core.ExtractXMPValue(xmp, "pdfaid:part")
-	if part == "" {
-		part = extractXMPAttr(xmp, "pdfaid:part")
-	}
-	switch part {
-	case "1":
-		return PDFA1b, true
-	case "2":
-		return PDFA2b, true
-	case "3":
-		return PDFA3b, true
-	case "4":
-		return PDFA4, true
-	}
-	return 0, false
 }
 
 // extractXMPAttr reads an attribute-form XMP value (key="value").

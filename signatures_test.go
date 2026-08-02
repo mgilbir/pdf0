@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"github.com/mgilbir/pdf0/internal/core"
 	"math/big"
 	"testing"
 	"time"
@@ -72,7 +73,7 @@ func TestCMSRoundTrip(t *testing.T) {
 		t.Fatalf("buildSignedData: %v", err)
 	}
 	// The blob must parse as CMS with a certificate and one SignerInfo.
-	if info := parseCMSSignedData(cms); !info.parsed || !info.hasCertificate || info.signerInfoCount != 1 {
+	if info := core.ParseCMSSignedData(cms); !info.Parsed || !info.HasCertificate || info.SignerInfoCount != 1 {
 		t.Fatalf("built CMS is malformed: %+v", info)
 	}
 	signer, _, _, err := verifyCMS(cms, content)

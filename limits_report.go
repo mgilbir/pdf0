@@ -63,11 +63,9 @@ func IsCheckerFinding(v Violation) bool { return finding.IsCheckerFinding(v) }
 // answering back, and the message says so (see limitBound).
 const (
 	limitCmapWork      = "cmap-work"                 // limits.cmapWork, WithMaxCmapWork — fontprog.go
-	limitCIDWidthRange = "cid-width-range"           // limits.cidRangeSpan, WithMaxCIDRangeSpan — fonts.go
 	limitContentStream = "content-stream-size"       // limits.contentStreamBytes, WithMaxContentStreamBytes — pdfa.go
 	limitContentTotal  = "decoded-content-total"     // limits.decodedContentBytes, WithMaxDecodedContentBytes — pdfa.go
 	limitObjStmTotal   = "objstm-decompressed-total" // limits.objectStreamBytes, WithMaxObjectStreamBytes — objstm.go
-	limitEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own — final_rules.go, see checkEmbeddedPDFA
 )
 
 // noteReadLimit records a guard trip that happened while the file was being

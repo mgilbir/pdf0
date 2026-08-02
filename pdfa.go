@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/object"
 	"math"
 	"strings"
 )
@@ -185,8 +186,13 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level PDFALevel, raw
 	// This is the boundary: everything below reads a view.
 	runDoc := *doc
 	runDoc.valCache = newValidationCache(cancel)
+	v := runDoc.view()
 
-	errs := validatePDFAView(runDoc.view(), level, rawData)
+	// The recursive embedded-file check needs the parser, which the checks
+	// themselves do not depend on; hand it in for this run.
+	SetEmbeddedChecker(v, embeddedPDFACompliant)
+
+	errs := validatePDFAView(v, level, rawData)
 
 	// Any resource guard that tripped during the run (or while the file was
 	// read) is reported under the "limit" rule: the checks that depended on the
@@ -1173,12 +1179,12 @@ func checkSignatureByteRange(doc core.View, level PDFALevel, raw []byte) []Valid
 		// parses as CMS SignedData — an adbe.x509.rsa_sha1 signature stores a raw
 		// value and its certificate in /Cert instead.
 		if c, ok := doc.Resolve(dict.Get("Contents")).(String); ok {
-			if info := parseCMSSignedData(c.Value); info.parsed {
-				if !info.hasCertificate {
+			if info := core.ParseCMSSignedData(c.Value); info.Parsed {
+				if !info.HasCertificate {
 					bad("signature PKCS#7 data must contain the signing certificate")
 				}
-				if info.signerInfoCount != 1 {
-					bad(fmt.Sprintf("signature PKCS#7 data must contain exactly one SignerInfo, found %d", info.signerInfoCount))
+				if info.SignerInfoCount != 1 {
+					bad(fmt.Sprintf("signature PKCS#7 data must contain exactly one SignerInfo, found %d", info.SignerInfoCount))
 				}
 			}
 		}
@@ -4666,7 +4672,7 @@ func collectSeparationConsistencySeen(doc core.View, val Object, tintTransforms 
 		// Different objects may still hold identical content, which is
 		// conformant: the rule requires the SAME tint transform and
 		// alternate space, and veraPDF accepts equal-by-content duplicates.
-		sameTint := prev.objNum == tintRef.Number || Equal(doc.Resolve(prev.tint), doc.Resolve(tintRef))
+		sameTint := prev.objNum == tintRef.Number || object.Equal(doc.Resolve(prev.tint), doc.Resolve(tintRef))
 		if !sameTint {
 			*errs = append(*errs, ValidationError{
 				Rule:    colourClause("spot", level),
@@ -4675,7 +4681,7 @@ func collectSeparationConsistencySeen(doc core.View, val Object, tintTransforms 
 				Object:  objNum,
 			})
 		}
-		if !Equal(doc.Resolve(prev.alt), doc.Resolve(arr[2])) {
+		if !object.Equal(doc.Resolve(prev.alt), doc.Resolve(arr[2])) {
 			*errs = append(*errs, ValidationError{
 				Rule:    colourClause("spot", level),
 				Level:   level,

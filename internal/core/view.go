@@ -240,6 +240,8 @@ const (
 	GuardCmapWork      = "cmap-work"             // Limits.CmapWork, WithMaxCmapWork
 	GuardGridFills     = "table-grid-fills"      // Limits.TableGridFills, WithMaxTableGridFills
 	GuardRoleMapWork   = "rolemap-work"          // Limits.RoleMapSteps, WithMaxRoleMapSteps
+	GuardCIDWidthRange = "cid-width-range"       // Limits.CIDRangeSpan, WithMaxCIDRangeSpan
+	GuardEmbeddedPDFA  = "embedded-pdfa"         // no bound of its own; the recursive embedded check
 )
 
 // Pages returns the page tree under ref flattened into document order,

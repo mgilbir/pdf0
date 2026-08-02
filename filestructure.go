@@ -1256,7 +1256,7 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 		}
 		at := i + idx
 		i = at + 7
-		p := NewParser(raw)
+		p := syntax.NewParser(raw)
 		p.Lexer().SetPosition(int64(at + 7))
 		obj, err := p.ParseObject()
 		if err != nil {

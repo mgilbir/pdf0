@@ -855,7 +855,7 @@ func checkCIDFontConsistency(doc core.View, level PDFALevel, rule string, fontDi
 	}
 	wMap, wComplete := parseCIDWidths(doc, desc.Get("W"))
 	if !wComplete {
-		doc.Note(limitCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", core.LimitBound(int64(doc.Limits.CIDRangeSpan), core.DefaultMaxCIDRangeSpan)), u.ObjNum)
+		doc.Note(core.GuardCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", core.LimitBound(int64(doc.Limits.CIDRangeSpan), core.DefaultMaxCIDRangeSpan)), u.ObjNum)
 	}
 
 	var errs []ValidationError

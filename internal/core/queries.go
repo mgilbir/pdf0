@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/asn1"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/font"
 	"sort"
@@ -478,3 +479,54 @@ func predictorSupported(p PredictorParms) bool {
 	}
 	return false
 }
+
+type CMSSignedData struct {
+	Parsed          bool // the bytes are a well-formed SignedData ContentInfo
+	HasCertificate  bool // the certificates field carries at least one certificate
+	SignerInfoCount int  // number of SignerInfo entries
+}
+
+// parseCMSSignedData decodes a DER-encoded CMS/PKCS#7 SignedData structure far
+// enough to report whether it embeds a signing certificate and how many
+// SignerInfos it contains. It never errors: a blob that is not SignedData (or is
+// truncated) simply comes back with parsed=false, since the raw signature bytes
+// of an adbe.x509.rsa_sha1 signature are not CMS.
+func ParseCMSSignedData(der []byte) CMSSignedData {
+	// ContentInfo ::= SEQUENCE { contentType OID, content [0] EXPLICIT ANY }
+	var ci struct {
+		ContentType asn1.ObjectIdentifier
+		Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
+	}
+	if _, err := asn1.Unmarshal(der, &ci); err != nil {
+		return CMSSignedData{}
+	}
+	if !ci.ContentType.Equal(oidSignedData) || len(ci.Content.Bytes) == 0 {
+		return CMSSignedData{}
+	}
+
+	// SignedData ::= SEQUENCE {
+	//   version, digestAlgorithms SET, encapContentInfo SEQUENCE,
+	//   certificates [0] IMPLICIT OPTIONAL, crls [1] IMPLICIT OPTIONAL,
+	//   signerInfos SET OF SignerInfo }
+	var sd struct {
+		Version          int
+		DigestAlgorithms asn1.RawValue
+		EncapContentInfo asn1.RawValue
+		Certificates     asn1.RawValue   `asn1:"optional,tag:0"`
+		CRLs             asn1.RawValue   `asn1:"optional,tag:1"`
+		SignerInfos      []asn1.RawValue `asn1:"set"`
+	}
+	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
+		return CMSSignedData{}
+	}
+	return CMSSignedData{
+		Parsed:          true,
+		HasCertificate:  len(sd.Certificates.Bytes) > 0,
+		SignerInfoCount: len(sd.SignerInfos),
+	}
+}
+
+// oidSignedData is id-signedData (RFC 5652 §5.1): 1.2.840.113549.1.7.2.
+// oidSignedData is the CMS SignedData content type (RFC 5652). The signing
+// code has its own copy; an OID assigned in 1997 is not going to drift.
+var oidSignedData = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
