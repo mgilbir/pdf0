@@ -200,7 +200,7 @@ func signatureFieldNames(d *Document, sigs []signatureEntry) map[int]string {
 	}
 	names := make(map[int]string, len(sigs))
 
-	if cat := getCatalog(d.view()); cat != nil {
+	if cat := d.view().Catalog(); cat != nil {
 		if form := d.ResolveDict(cat.Get("AcroForm")); form != nil {
 			fields, _ := d.Resolve(form.Get("Fields")).(Array)
 			seen := map[int]bool{}

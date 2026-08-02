@@ -37,7 +37,7 @@ func TestReadNegativeXrefOffset(t *testing.T) {
 		if err != nil {
 			t.Fatalf("rebuild should recover the crafted file: %v", err)
 		}
-		if getCatalog(doc.view()) == nil {
+		if doc.view().Catalog() == nil {
 			t.Fatalf("catalog not recovered")
 		}
 	})
@@ -182,7 +182,7 @@ func TestStartxrefFarFromTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rebuild should recover the file: %v", err)
 	}
-	if getCatalog(doc.view()) == nil {
+	if doc.view().Catalog() == nil {
 		t.Fatal("catalog not recovered")
 	}
 }

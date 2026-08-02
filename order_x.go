@@ -179,7 +179,7 @@ func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) (
 		}
 		if ef := doc.ResolveDict(fs.Get("EF")); ef != nil {
 			if st, ok := doc.Resolve(ef.Get("F")).(*Stream); ok {
-				res.XML = decodeContentStream(doc.view(), st)
+				res.XML = doc.view().Content(st)
 				if sub, _ := st.Dict.Get("Subtype").(Name); !facturxIsXMLSubtype(sub) {
 					add("attachment", fmt.Sprintf("the order embedded-file /Subtype should be text/xml, got /%s", sub), num)
 				}

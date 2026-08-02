@@ -26,7 +26,7 @@ func TestGeneratedICCProfileIsReal(t *testing.T) {
 		doc := NewPDFADocument(tc.level)
 
 		// Locate the OutputIntent's DestOutputProfile stream.
-		catalog := getCatalog(doc.view())
+		catalog := doc.view().Catalog()
 		oi := doc.ResolveDict(catalog.Get("OutputIntents").(Array)[0])
 		prof, ok := doc.Resolve(oi.Get("DestOutputProfile")).(*Stream)
 		if !ok {

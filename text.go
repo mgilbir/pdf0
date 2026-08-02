@@ -44,7 +44,7 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 		return "", cancel.StopErr("extracting text")
 	}
 	var b strings.Builder
-	for i, pg := range collectPages(d.view(), catalog.Get("Pages")) {
+	for i, pg := range d.view().Pages(catalog.Get("Pages")) {
 		// Per page: the coarse boundary. Within a page the tokenizer stops every
 		// cancelScanBytes, so a single enormous page is interruptible too.
 		if err := cancel.StopErr("extracting text"); err != nil {
@@ -72,7 +72,7 @@ func (d *Document) ExtractPageText(page *Dictionary) string {
 }
 
 func (d *Document) extractPageText(cancel core.Canceler, page *Dictionary) string {
-	res := d.ResolveDict(inheritedPageAttr(d.view(), page, "Resources"))
+	res := d.ResolveDict(d.view().InheritedPageAttr(page, "Resources"))
 	content := core.ContentStreamData(d.view(), page.Get("Contents"))
 	var out strings.Builder
 	d.extractContentText(cancel, res, content, &out, map[*Stream]bool{}, 0)
@@ -148,7 +148,7 @@ func (d *Document) extractContentText(cancel core.Canceler, res *Dictionary, con
 						if formRes == nil {
 							formRes = res // a form may draw with the calling context's resources
 						}
-						d.extractContentText(cancel, formRes, decodeContentStream(d.view(), st), out, seen, depth+1)
+						d.extractContentText(cancel, formRes, d.view().Content(st), out, seen, depth+1)
 					}
 				}
 			}
