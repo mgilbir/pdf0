@@ -6,6 +6,7 @@ import (
 	"crypto/rc4"
 	"encoding/hex"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/crypt"
 	"testing"
 )
 
@@ -22,8 +23,8 @@ func buildAliasedEncryptDictPDF(t *testing.T, userPw, ownerPw, producer string) 
 	const keyLen = 16
 	id := []byte("0123456789ABCDEF")
 	p := int32(-3904)
-	userPad := padPassword(userPw)
-	ownerPad := padPassword(ownerPw)
+	userPad := crypt.PadPassword(userPw)
+	ownerPad := crypt.PadPassword(ownerPw)
 
 	ok := md5.Sum(ownerPad)
 	okey := ok[:]
@@ -33,17 +34,17 @@ func buildAliasedEncryptDictPDF(t *testing.T, userPw, ownerPw, producer string) 
 	}
 	oEntry := rc4Cascade(okey[:keyLen], userPad, seq(0, 19))
 
-	h := &stdSecurityHandler{r: 3, keyLen: keyLen, encryptMetadata: true}
-	h.deriveKeyR234(userPad, oEntry, p, id)
+	h := &crypt.Handler{R: 3, KeyLen: keyLen, EncryptMetadata: true}
+	h.DeriveKeyR234(userPad, oEntry, p, id)
 
 	m := md5.New()
-	m.Write(passwordPad)
+	m.Write(crypt.PasswordPad)
 	m.Write(id)
-	uVal := rc4Cascade(h.fileKey, m.Sum(nil), seq(0, 19))
+	uVal := rc4Cascade(h.FileKey, m.Sum(nil), seq(0, 19))
 	uEntry := make([]byte, 32)
 	copy(uEntry, uVal)
 
-	c, _ := rc4.NewCipher(h.objectKey(1, 0, false))
+	c, _ := rc4.NewCipher(h.ObjectKey(1, 0, false))
 	encProducer := make([]byte, len(producer))
 	c.XORKeyStream(encProducer, []byte(producer))
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/rc4"
+	"github.com/mgilbir/pdf0/internal/crypt"
 	"io"
 	"os"
 	"path/filepath"
@@ -74,22 +75,22 @@ func TestDecryptCorpusFiles(t *testing.T) {
 // TestDecryptRoundTrip exercises the per-object key derivation and ciphers
 // without the corpus: encrypt known plaintext, then confirm decrypt recovers it.
 func TestDecryptRoundTrip(t *testing.T) {
-	h := &stdSecurityHandler{v: 4, r: 4, keyLen: 16, fileKey: bytes.Repeat([]byte{0xAB}, 16)}
+	h := &crypt.Handler{V: 4, R: 4, KeyLen: 16, FileKey: bytes.Repeat([]byte{0xAB}, 16)}
 	plain := []byte("The quick brown fox jumps over the lazy dog.")
 
-	rc4Key := h.objectKey(7, 0, false)
+	rc4Key := h.ObjectKey(7, 0, false)
 	c, _ := rc4.NewCipher(rc4Key)
 	enc := make([]byte, len(plain))
 	c.XORKeyStream(enc, plain)
-	if got := h.decrypt(enc, 7, 0, cryptRC4); !bytes.Equal(got, plain) {
+	if got := h.Decrypt(enc, 7, 0, crypt.RC4); !bytes.Equal(got, plain) {
 		t.Errorf("RC4 round-trip: got %q", got)
 	}
 
-	aesEnc, err := aesCBCEncrypt(h.objectKey(7, 0, true), plain)
+	aesEnc, err := crypt.AESCBCEncrypt(h.ObjectKey(7, 0, true), plain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := h.decrypt(aesEnc, 7, 0, cryptAESV2); !bytes.Equal(got, plain) {
+	if got := h.Decrypt(aesEnc, 7, 0, crypt.AESV2); !bytes.Equal(got, plain) {
 		t.Errorf("AES-128 round-trip: got %q", got)
 	}
 }
@@ -105,10 +106,10 @@ func TestDecryptRoundTrip(t *testing.T) {
 // blank to a file.
 func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	key := bytes.Repeat([]byte{0x11}, 32)
-	h := &stdSecurityHandler{
-		v: 5, r: 6, keyLen: 32, fileKey: key,
-		stmMethod: cryptAESV3, strMethod: cryptAESV3,
-		encryptMetadata: true, encryptObjNum: -1,
+	h := &crypt.Handler{
+		V: 5, R: 6, KeyLen: 32, FileKey: key,
+		StmMethod: crypt.AESV3, StrMethod: crypt.AESV3,
+		EncryptMetadata: true, EncryptObjNum: -1,
 	}
 	// A 32-byte blob (IV + one block) that does not decrypt: AES is
 	// deterministic, so this is a fixed input, but assert it rather than assume.
@@ -116,7 +117,7 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	for i := range bad {
 		bad[i] = byte(i)
 	}
-	if _, err := aesCBCDecrypt(key, bad); err == nil {
+	if _, err := crypt.AESCBCDecrypt(key, bad); err == nil {
 		t.Fatal("fixture does not exercise the failure: the blob decrypts cleanly")
 	}
 
@@ -136,7 +137,7 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	}
 	doc.Trailer.Set("Root", IndirectRef{Number: 1})
 
-	h.decryptDocument(doc)
+	doc.decryptFailures = h.DecryptDocument(doc.graph())
 
 	if bytes.Equal(st.Data, bad) {
 		t.Error("stream ciphertext was handed on unchanged as plaintext")
@@ -172,13 +173,13 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 // on a good file.
 func TestDecryptSuccessRecordsNoFailure(t *testing.T) {
 	key := bytes.Repeat([]byte{0x22}, 32)
-	h := &stdSecurityHandler{
-		v: 5, r: 6, keyLen: 32, fileKey: key,
-		stmMethod: cryptAESV3, strMethod: cryptAESV3,
-		encryptMetadata: true, encryptObjNum: -1,
+	h := &crypt.Handler{
+		V: 5, R: 6, KeyLen: 32, FileKey: key,
+		StmMethod: crypt.AESV3, StrMethod: crypt.AESV3,
+		EncryptMetadata: true, EncryptObjNum: -1,
 	}
 	plain := []byte("a page's worth of content")
-	ct, err := aesCBCEncrypt(key, plain)
+	ct, err := crypt.AESCBCEncrypt(key, plain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +191,7 @@ func TestDecryptSuccessRecordsNoFailure(t *testing.T) {
 		Encrypted: true,
 		security:  h,
 	}
-	h.decryptDocument(doc)
+	doc.decryptFailures = h.DecryptDocument(doc.graph())
 	if !bytes.Equal(st.Data, plain) {
 		t.Errorf("stream data = %q, want %q", st.Data, plain)
 	}

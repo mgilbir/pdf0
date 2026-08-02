@@ -3,6 +3,7 @@ package pdf0
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"github.com/mgilbir/pdf0/internal/crypt"
 	"testing"
 )
 
@@ -23,8 +24,8 @@ func TestAESRejectsInvalidPadding(t *testing.T) {
 	bad[aes.BlockSize-1] = byte(aes.BlockSize)
 	ct := make([]byte, aes.BlockSize)
 	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ct, bad)
-	if _, err := aesCBCDecrypt(key, append(append([]byte{}, iv...), ct...)); err == nil {
-		t.Fatal("aesCBCDecrypt accepted invalid PKCS#7 padding")
+	if _, err := crypt.AESCBCDecrypt(key, append(append([]byte{}, iv...), ct...)); err == nil {
+		t.Fatal("crypt.AESCBCDecrypt accepted invalid PKCS#7 padding")
 	}
 
 	// A full block of 0x10 is valid padding (an all-padding block); it decrypts to
@@ -35,7 +36,7 @@ func TestAESRejectsInvalidPadding(t *testing.T) {
 	}
 	ct2 := make([]byte, aes.BlockSize)
 	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ct2, good)
-	out, err := aesCBCDecrypt(key, append(append([]byte{}, iv...), ct2...))
+	out, err := crypt.AESCBCDecrypt(key, append(append([]byte{}, iv...), ct2...))
 	if err != nil {
 		t.Fatalf("valid padding rejected: %v", err)
 	}

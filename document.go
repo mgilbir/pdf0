@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/syntax"
 	"io"
 	"sort"
@@ -80,7 +81,7 @@ type Document struct {
 	// decrypted on Read. It retains the file key and parameters so the same
 	// encryption can be reproduced on Write. nil for unencrypted documents (or
 	// for a scheme decryption does not support).
-	security *stdSecurityHandler
+	security *crypt.Handler
 
 	// usedXRefStream records that the file's primary cross-reference section was
 	// a cross-reference stream (/Type /XRef) rather than a traditional table, so
@@ -321,12 +322,12 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	// runs before object streams are materialized: an /ObjStm container is an
 	// encrypted stream, but the objects inside it are not separately encrypted.
 	if doc.Trailer.Get("Encrypt") != nil {
-		h, err := buildStdSecurityHandler(doc, password)
+		h, err := crypt.Open(doc.graph(), password)
 		if err != nil {
 			return nil, fmt.Errorf("encryption: %w", err)
 		}
 		if h != nil {
-			h.decryptDocument(doc)
+			doc.decryptFailures = h.DecryptDocument(doc.graph())
 			doc.security = h
 		}
 	}
@@ -722,7 +723,7 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// and /ID remain in the trailer and are written as-is.
 	writeObjects, xrefType2 := d.buildWriteSet()
 	if d.security != nil {
-		writeObjects = d.security.encryptCopy(writeObjects)
+		writeObjects = d.security.EncryptCopy(writeObjects)
 	}
 
 	// A stale indirect /Length (its target integer object not updated after a

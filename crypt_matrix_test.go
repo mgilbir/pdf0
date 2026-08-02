@@ -146,7 +146,7 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 			// Keep the handler (used by Write) and the dictionary (used by Read)
 			// consistent, as any real producer does: the metadata stream is left
 			// in the clear on both sides.
-			d.security.encryptMetadata = false
+			d.security.EncryptMetadata = false
 			d.ResolveDict(d.Trailer.Get("Encrypt")).Set("EncryptMetadata", Boolean(false))
 		}},
 		{"indirect-cf/encrypted-metadata", true, true, func(d *Document) { makeIndirect(d, "CF") }},

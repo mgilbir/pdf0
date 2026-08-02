@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/sign"
 	"strings"
@@ -46,25 +47,25 @@ func rc4EncryptedDoc(t *testing.T) *Document {
 	}
 	const perm = -1
 
-	h := &stdSecurityHandler{v: 2, r: 3, keyLen: 16, encryptMetadata: true,
-		stmMethod: cryptRC4, strMethod: cryptRC4}
-	h.deriveKeyR234(padPassword(""), o, perm, id)
+	h := &crypt.Handler{V: 2, R: 3, KeyLen: 16, EncryptMetadata: true,
+		StmMethod: crypt.RC4, StrMethod: crypt.RC4}
+	h.DeriveKeyR234(crypt.PadPassword(""), o, perm, id)
 
 	// /U for the empty user password (ISO 32000-1 Algorithm 5), the inverse of
 	// the userKeyValid check the reader runs.
 	sum := md5.New()
-	sum.Write(passwordPad)
+	sum.Write(crypt.PasswordPad)
 	sum.Write(id)
 	u := sum.Sum(nil)
-	c, err := rc4.NewCipher(h.fileKey)
+	c, err := rc4.NewCipher(h.FileKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.XORKeyStream(u, u)
 	for i := 1; i <= 19; i++ {
-		key := make([]byte, len(h.fileKey))
+		key := make([]byte, len(h.FileKey))
 		for j := range key {
-			key[j] = h.fileKey[j] ^ byte(i)
+			key[j] = h.FileKey[j] ^ byte(i)
 		}
 		c, err := rc4.NewCipher(key)
 		if err != nil {
@@ -91,7 +92,7 @@ func rc4EncryptedDoc(t *testing.T) *Document {
 	}
 	encNum := maxObj + 1
 	doc.Objects[encNum] = &IndirectObject{Number: encNum, Value: enc}
-	h.encryptObjNum = encNum
+	h.EncryptObjNum = encNum
 	doc.security = h
 	doc.Encrypted = true
 	tr := doc.Trailer.Clone()
@@ -323,8 +324,8 @@ func TestEncryptionExemptionIsNarrow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isSignatureDict(tc.dict()); got != tc.want {
-				t.Fatalf("isSignatureDict = %v, want %v", got, tc.want)
+			if got := crypt.IsSignatureDict(tc.dict()); got != tc.want {
+				t.Fatalf("crypt.IsSignatureDict = %v, want %v", got, tc.want)
 			}
 			// Cross-check the behaviour the predicate gates: /Contents survives
 			// decryption exactly when the dictionary is a signature.
@@ -333,7 +334,7 @@ func TestEncryptionExemptionIsNarrow(t *testing.T) {
 			if !isString {
 				return
 			}
-			rc4EncryptedDoc(t).security.decryptDictStrings(d, 3, 0)
+			rc4EncryptedDoc(t).security.DecryptDictStrings(d, 3, 0)
 			after, _ := d.Get("Contents").(String)
 			if same := bytes.Equal(before.Value, after.Value); same != tc.want {
 				t.Fatalf("/Contents preserved = %v, want %v", same, tc.want)

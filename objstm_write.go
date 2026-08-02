@@ -84,7 +84,7 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 
 	encNum := -1
 	if d.security != nil {
-		encNum = d.security.encryptObjNum
+		encNum = d.security.EncryptObjNum
 	}
 	// Objects reachable from the /Encrypt dictionary (e.g. an indirectly
 	// referenced /CF crypt-filter dictionary) must never be packed into an
