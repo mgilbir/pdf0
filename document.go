@@ -1097,7 +1097,7 @@ func (d *Document) graph() core.View {
 // The run state travels with it when there is one, so a trip a subsystem records
 // through the view lands in the same recorder the validators report from.
 func (d *Document) view() core.View {
-	v := core.View{Version: d.Version, Objects: d.Objects, Trailer: &d.Trailer, Limits: d.lim(), Cancel: d.canceler()}
+	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Objects: d.Objects, Trailer: &d.Trailer, Limits: d.lim(), Cancel: d.canceler()}
 	if d.valCache != nil {
 		v.Run = d.valCache.run.shared
 	}

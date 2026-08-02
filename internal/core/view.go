@@ -31,6 +31,10 @@ type View struct {
 	Trailer *object.Dictionary
 	// Version is the header version, "1.7" or "2.0".
 	Version string
+	// Encrypted reports whether the file carried an /Encrypt dictionary. It is
+	// the flag, not a question about whether the content is currently readable:
+	// a file decrypted on Read keeps it set.
+	Encrypted bool
 	// Limits is the resolved resource budget for this document — resolved, not
 	// raw. Document.view fills it through Document.lim, which applies the
 	// defaults.

@@ -76,23 +76,10 @@ func levelAClause(concept string, level PDFALevel) string {
 	return "6.8"
 }
 
-// documentXMP returns the document's decoded XMP metadata packet, or "".
-func documentXMP(doc *Document) string {
-	cat := getCatalog(doc)
-	if cat == nil {
-		return ""
-	}
-	stream, ok := doc.Resolve(cat.Get("Metadata")).(*Stream)
-	if !ok {
-		return ""
-	}
-	return doc.view().XMPText(stream)
-}
-
 // checkLevelAConformance verifies the XMP declares Level A conformance
 // (pdfaid:conformance = "A").
 func checkLevelAConformance(doc *Document, level PDFALevel) []ValidationError {
-	xmp := documentXMP(doc)
+	xmp := doc.view().DocumentXMP()
 	if xmp == "" {
 		return nil // a missing metadata stream is reported by the Level B checks
 	}

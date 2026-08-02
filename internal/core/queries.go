@@ -259,3 +259,16 @@ func allAlnum(s string) bool {
 	}
 	return true
 }
+
+// DocumentXMP returns the document's decoded XMP metadata packet, or "".
+func (doc View) DocumentXMP() string {
+	cat := doc.Catalog()
+	if cat == nil {
+		return ""
+	}
+	stream, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream)
+	if !ok {
+		return ""
+	}
+	return doc.XMPText(stream)
+}
