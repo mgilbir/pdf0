@@ -90,7 +90,7 @@ func checkLevelAConformance(doc *Document, level PDFALevel) []ValidationError {
 			Message: "metadata must declare pdfaid:conformance A for Level A",
 		}}
 	}
-	if conf := extractXMPValue(xmp, "pdfaid:conformance"); conf != "A" {
+	if conf := core.ExtractXMPValue(xmp, "pdfaid:conformance"); conf != "A" {
 		return []ValidationError{{
 			Rule:    levelAClause("conformance", level),
 			Level:   level,

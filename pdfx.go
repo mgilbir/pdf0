@@ -197,7 +197,7 @@ func pdfxCheckNoTransparency(doc *Document, add func(rule, msg string, obj int))
 				continue
 			}
 		}
-		if pageUsesTransparency(doc, page.Dict) {
+		if core.PageUsesTransparency(doc.view(), page.Dict) {
 			add("transparency", "transparency (soft mask, blend mode or alpha) is not permitted in this PDF/X level", page.ObjNum)
 		}
 	}
@@ -299,7 +299,7 @@ func pdfxCheckDeviceColor(doc *Document, add func(rule, msg string, obj int)) {
 	sc := newDevColorScanner(doc)
 	for _, page := range collectPages(doc, cat.Get("Pages")) {
 		u := sc.pageDeviceUse(page.Dict)
-		groupRGB, groupCMYK, _ := getGroupCSCoverage(doc, page.Dict)
+		groupRGB, groupCMYK, _ := core.GroupCSCoverage(doc.view(), page.Dict)
 		if u.rgb && !oiRGB && !groupRGB {
 			add("color", "DeviceRGB used without a matching OutputIntent, DefaultRGB or covering group colour space", page.ObjNum)
 		}
@@ -336,7 +336,7 @@ func pdfxOutputIntentCoverage(doc *Document, cat *Dictionary) (rgb, cmyk, gray b
 			}
 			continue
 		}
-		data := getICCProfileData(stream, doc.lim())
+		data := core.ICCProfileData(stream, doc.lim())
 		if len(data) < 20 {
 			rgb, cmyk = true, true
 			continue
@@ -364,9 +364,9 @@ func pdfxCheckIdentification(doc *Document, level PDFXLevel, add func(rule, msg 
 	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
 		if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
 			xmp := doc.view().XMPText(ms)
-			claimed = strings.TrimSpace(extractXMPValue(xmp, "pdfxid:GTS_PDFXVersion"))
+			claimed = strings.TrimSpace(core.ExtractXMPValue(xmp, "pdfxid:GTS_PDFXVersion"))
 			if claimed == "" {
-				claimed = strings.TrimSpace(extractXMPValue(xmp, "GTS_PDFXVersion"))
+				claimed = strings.TrimSpace(core.ExtractXMPValue(xmp, "GTS_PDFXVersion"))
 			}
 		}
 	}

@@ -2,12 +2,10 @@ package pdf0
 
 import (
 	"bytes"
-	"compress/zlib"
 	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
-	"io"
 	"math"
 	"strings"
 )
@@ -2242,7 +2240,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		expectedPart = "4"
 	}
 
-	part := extractXMPValue(xmp, "pdfaid:part")
+	part := core.ExtractXMPValue(xmp, "pdfaid:part")
 	if part == "" {
 		errs = append(errs, ValidationError{
 			Rule:    metadataClause("version", level),
@@ -2260,7 +2258,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 	// Check pdfaid:conformance
 	switch level {
 	case PDFA1b, PDFA2b, PDFA3b:
-		conf := extractXMPValue(xmp, "pdfaid:conformance")
+		conf := core.ExtractXMPValue(xmp, "pdfaid:conformance")
 		if conf != "B" {
 			errs = append(errs, ValidationError{
 				Rule:    metadataClause("version", level),
@@ -2273,7 +2271,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		// (A-4e) are valid — a compliant 4f/4e file (e.g. an embedded one) must
 		// not be rejected for carrying it (audit C23).
 		if xmpHasKey(xmp, "pdfaid:conformance") {
-			conf := extractXMPValue(xmp, "pdfaid:conformance")
+			conf := core.ExtractXMPValue(xmp, "pdfaid:conformance")
 			if conf != "F" && conf != "E" {
 				errs = append(errs, ValidationError{
 					Rule:    metadataClause("version", level),
@@ -2284,7 +2282,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		}
 
 		// Check pdfaid:rev must be "2020" for PDF/A-4
-		rev := extractXMPValue(xmp, "pdfaid:rev")
+		rev := core.ExtractXMPValue(xmp, "pdfaid:rev")
 		if rev == "" {
 			errs = append(errs, ValidationError{
 				Rule:    metadataClause("version", level),
@@ -2315,33 +2313,6 @@ func xmpHasKey(xmp, key string) bool {
 		return true
 	}
 	return false
-}
-
-// extractXMPValue extracts a simple value from XMP for a given key.
-// Handles both <key>value</key> and key="value" attribute forms.
-func extractXMPValue(xmp, key string) string {
-	// Try element form: <key>value</key>
-	openTag := "<" + key + ">"
-	closeTag := "</" + key + ">"
-	if idx := strings.Index(xmp, openTag); idx >= 0 {
-		start := idx + len(openTag)
-		if end := strings.Index(xmp[start:], closeTag); end >= 0 {
-			return strings.TrimSpace(xmp[start : start+end])
-		}
-	}
-
-	// Try attribute form: key="value" or key='value' (both legal XML).
-	for _, q := range []byte{'"', '\''} {
-		attrPrefix := key + "=" + string(q)
-		if idx := strings.Index(xmp, attrPrefix); idx >= 0 {
-			start := idx + len(attrPrefix)
-			if end := bytes.IndexByte([]byte(xmp[start:]), q); end >= 0 {
-				return xmp[start : start+end]
-			}
-		}
-	}
-
-	return ""
 }
 
 // --- Transparency checks (PDFA-1b only) ---
@@ -3025,7 +2996,7 @@ func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
 		if p.isList {
 			xmpVal = extractXMPListValue(xmp, p.xmpKey)
 		} else {
-			xmpVal = extractXMPValue(xmp, p.xmpKey)
+			xmpVal = core.ExtractXMPValue(xmp, p.xmpKey)
 		}
 
 		if xmpVal == "" {
@@ -3126,7 +3097,7 @@ func extractXMPListValue(xmp, key string) string {
 	closeTag := "</" + key + ">"
 	idx := strings.Index(xmp, openTag)
 	if idx < 0 {
-		return extractXMPValue(xmp, key)
+		return core.ExtractXMPValue(xmp, key)
 	}
 	start := idx + len(openTag)
 	endIdx := strings.Index(xmp[start:], closeTag)
@@ -3263,7 +3234,7 @@ func checkTransparencyBlending(doc *Document, level PDFALevel) []ValidationError
 
 	pages := collectPages(doc, pagesRef)
 	for _, page := range pages {
-		if !pageUsesTransparency(doc, page.Dict) {
+		if !core.PageUsesTransparency(doc.view(), page.Dict) {
 			continue
 		}
 
@@ -3334,7 +3305,7 @@ func transparencyGroupNotRequired(doc *Document, catalog *Dictionary, page *Dict
 		}
 
 		// DefaultCS entries cover device CS usage
-		hasDefRGB, hasDefCMYK, hasDefGray := getDefaultColorSpaces(doc, page)
+		hasDefRGB, hasDefCMYK, hasDefGray := core.DefaultColorSpaces(doc.view(), page)
 		usesRGB, usesCMYK, usesGray := scanPageForDeviceCS(doc, page)
 		allCovered := true
 		if usesRGB && !hasDefRGB {
@@ -3351,118 +3322,6 @@ func transparencyGroupNotRequired(doc *Document, catalog *Dictionary, page *Dict
 		}
 	}
 
-	return false
-}
-
-// pageUsesTransparency checks if a page's resources reference transparency features.
-// It checks ExtGState entries for CA/ca != 1.0, BM != Normal/Compatible, and SMask != None,
-// and also recurses into Form XObjects and Type3 font resources.
-func pageUsesTransparency(doc *Document, page *Dictionary) bool {
-	// A page with a transparency Group is itself a transparency feature
-	if groupRef := page.Get("Group"); groupRef != nil {
-		groupDict := doc.ResolveDict(groupRef)
-		if groupDict != nil {
-			s, _ := groupDict.Get("S").(Name)
-			if s == "Transparency" {
-				return true
-			}
-		}
-	}
-
-	seen := make(map[*Dictionary]bool)
-	if resourcesUseTransparency(doc, page, seen) {
-		return true
-	}
-	// Check annotations on this page for transparency features
-	annotsRef := page.Get("Annots")
-	if annotsRef == nil {
-		return false
-	}
-	annotsObj := doc.Resolve(annotsRef)
-	annotsArr, ok := annotsObj.(Array)
-	if !ok {
-		return false
-	}
-	for _, annotRef := range annotsArr {
-		annotDict := doc.ResolveDict(annotRef)
-		if annotDict == nil {
-			continue
-		}
-		// Check /BM on annotation itself
-		if bm := annotDict.Get("BM"); bm != nil {
-			if n, ok := bm.(Name); ok && n != "Normal" && n != "Compatible" {
-				return true
-			}
-		}
-		// Check /CA or /ca on annotation
-		for _, key := range []Name{"CA", "ca"} {
-			if v := annotDict.Get(key); v != nil {
-				fval := 1.0
-				switch tv := v.(type) {
-				case Real:
-					fval = float64(tv)
-				case Integer:
-					fval = float64(tv)
-				}
-				if math.Abs(fval-1.0) > 1e-6 {
-					return true
-				}
-			}
-		}
-		// Check appearance streams for transparency
-		ap := annotDict.Get("AP")
-		if ap == nil {
-			continue
-		}
-		apDict := doc.ResolveDict(ap)
-		if apDict == nil {
-			continue
-		}
-		// Check N, R, D appearance entries
-		for _, apKey := range []Name{"N", "R", "D"} {
-			apEntry := apDict.Get(apKey)
-			if apEntry == nil {
-				continue
-			}
-			// Could be a stream directly or a dict of states
-			apObj := doc.Resolve(apEntry)
-			switch v := apObj.(type) {
-			case *Stream:
-				if resourcesUseTransparency(doc, &v.Dict, seen) {
-					return true
-				}
-				// Check if the appearance stream has its own transparency group
-				if v.Dict.Get("Group") != nil {
-					groupDict := doc.ResolveDict(v.Dict.Get("Group"))
-					if groupDict != nil {
-						s, _ := groupDict.Get("S").(Name)
-						if s == "Transparency" {
-							return true
-						}
-					}
-				}
-			case *Dictionary:
-				// Dict of appearance states (e.g., /N << /Yes 12 0 R /Off 13 0 R >>)
-				for _, stateVal := range v.Values {
-					stateObj := doc.Resolve(stateVal)
-					if stateStream, ok := stateObj.(*Stream); ok {
-						if resourcesUseTransparency(doc, &stateStream.Dict, seen) {
-							return true
-						}
-						if stateStream.Dict.Get("Group") != nil {
-							groupDict := doc.ResolveDict(stateStream.Dict.Get("Group"))
-							if groupDict != nil {
-								s, _ := groupDict.Get("S").(Name)
-								if s == "Transparency" {
-									return true
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
 	return false
 }
 
@@ -3536,152 +3395,6 @@ func find1bTransparencyXObjects(doc *Document, container *Dictionary, level PDFA
 			}
 		}
 	}
-}
-
-func resourcesUseTransparency(doc *Document, container *Dictionary, seen map[*Dictionary]bool) bool {
-	if seen[container] {
-		return false
-	}
-	seen[container] = true
-
-	resRef := container.Get("Resources")
-	if resRef == nil {
-		return false
-	}
-	res := doc.ResolveDict(resRef)
-	if res == nil {
-		return false
-	}
-
-	// Check ExtGState resources for transparency indicators
-	if extGStateUsesTransparency(doc, res) {
-		return true
-	}
-
-	// Recurse into Form XObjects
-	xobjRef := res.Get("XObject")
-	if xobjRef != nil {
-		xobjDict := doc.ResolveDict(xobjRef)
-		if xobjDict != nil {
-			for _, val := range xobjDict.Values {
-				obj := doc.Resolve(val)
-				stream, ok := obj.(*Stream)
-				if !ok {
-					continue
-				}
-				subtype, _ := stream.Dict.Get("Subtype").(Name)
-				if subtype == "Form" {
-					// If the Form XObject has its own transparency Group,
-					// it manages its own compositing - don't propagate to page level.
-					if stream.Dict.Get("Group") != nil {
-						groupDict := doc.ResolveDict(stream.Dict.Get("Group"))
-						if groupDict != nil {
-							s, _ := groupDict.Get("S").(Name)
-							if s == "Transparency" {
-								continue // self-contained transparency group
-							}
-						}
-					}
-					// Recurse into Form XObject Resources
-					if resourcesUseTransparency(doc, &stream.Dict, seen) {
-						return true
-					}
-				} else if subtype == "Image" {
-					// Image XObjects with /SMask use transparency
-					if stream.Dict.Get("SMask") != nil {
-						return true
-					}
-				}
-			}
-		}
-	}
-
-	// Recurse into Type3 font resources
-	fontRef := res.Get("Font")
-	if fontRef != nil {
-		fontDict := doc.ResolveDict(fontRef)
-		if fontDict != nil {
-			for _, val := range fontDict.Values {
-				fd := doc.ResolveDict(val)
-				if fd == nil {
-					continue
-				}
-				subtype, _ := fd.Get("Subtype").(Name)
-				if subtype == "Type3" {
-					if resourcesUseTransparency(doc, fd, seen) {
-						return true
-					}
-				}
-			}
-		}
-	}
-
-	// Recurse into tiling patterns
-	patRef := res.Get("Pattern")
-	if patRef != nil {
-		patDict := doc.ResolveDict(patRef)
-		if patDict != nil {
-			for _, val := range patDict.Values {
-				obj := doc.Resolve(val)
-				stream, ok := obj.(*Stream)
-				if !ok {
-					continue
-				}
-				// Tiling patterns (PatternType 1) have their own Resources
-				if resourcesUseTransparency(doc, &stream.Dict, seen) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-func extGStateUsesTransparency(doc *Document, res *Dictionary) bool {
-	gsRef := res.Get("ExtGState")
-	if gsRef == nil {
-		return false
-	}
-	gsDict := doc.ResolveDict(gsRef)
-	if gsDict == nil {
-		return false
-	}
-	for _, val := range gsDict.Values {
-		gs := doc.ResolveDict(val)
-		if gs == nil {
-			continue
-		}
-		// Check CA/ca for non-opaque values
-		for _, key := range []Name{"CA", "ca"} {
-			v := gs.Get(key)
-			if v != nil {
-				fval := 1.0
-				switch tv := v.(type) {
-				case Real:
-					fval = float64(tv)
-				case Integer:
-					fval = float64(tv)
-				}
-				if math.Abs(fval-1.0) > 1e-6 {
-					return true
-				}
-			}
-		}
-		// Non-Normal blend modes are transparency features
-		if bm := gs.Get("BM"); bm != nil {
-			if n, ok := bm.(Name); ok && n != "Normal" && n != "Compatible" {
-				return true
-			}
-		}
-		// Check SMask for non-None values
-		if smask := gs.Get("SMask"); smask != nil {
-			if n, ok := smask.(Name); !ok || n != "None" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // PageInfo is the flattened page-tree entry, defined in internal/core because
@@ -4319,7 +4032,7 @@ func checkDeviceColorSpaces(doc *Document, level PDFALevel) []ValidationError {
 		// and DeviceCMYK, but NOT DeviceGray: the corpus passes DeviceRGB
 		// under an ICCBased RGB page group yet fails DeviceGray under an
 		// ICCBased Gray one.
-		groupRGB, groupCMYK, _ := getGroupCSCoverage(doc, page.Dict)
+		groupRGB, groupCMYK, _ := core.GroupCSCoverage(doc.view(), page.Dict)
 
 		if usesRGB && !pageRGB && !groupRGB {
 			errs = append(errs, ValidationError{
@@ -4396,7 +4109,7 @@ func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMY
 		}
 
 		// Decompress the profile data to read the ICC header
-		profileData := getICCProfileData(stream, doc.lim())
+		profileData := core.ICCProfileData(stream, doc.lim())
 		if len(profileData) < 20 {
 			// Can't read profile header; assume it covers both spaces
 			// to avoid false positives.
@@ -4419,143 +4132,6 @@ func getOutputIntentCoverage(doc *Document, catalog *Dictionary) (hasRGB, hasCMY
 			hasRGB = true
 			hasCMYK = true
 		}
-	}
-	return
-}
-
-// getICCProfileData returns the decompressed ICC profile data from a stream.
-// Returns the raw stream data if no filter or decoding fails. The decoded size
-// is bounded to prevent decompression bombs; the default is
-// defaultMaxICCProfileBytes and a caller can change it with
-// WithMaxICCProfileBytes.
-//
-// The default was raised from 2 MiB to 8 MiB: the largest real profile measured
-// across the veraPDF corpus and a 978-file Common Crawl sample is 1,829,093
-// bytes — 87% of the old cap, i.e. one slightly fatter profile away from
-// silently dropping the ICC rules for that file. Unlike the XMP packet bound,
-// the cost here is linear (a profile is read once and scanned, not expanded),
-// so headroom is cheap.
-func getICCProfileData(stream *Stream, lim core.Limits) []byte {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		if len(stream.Data) > lim.ICCProfileBytes {
-			return nil
-		}
-		return stream.Data
-	}
-
-	filterName, ok := filter.(Name)
-	if !ok {
-		return nil
-	}
-	if filterName != "FlateDecode" {
-		return nil
-	}
-
-	if len(stream.Data) == 0 {
-		return nil
-	}
-
-	r, err := zlib.NewReader(bytes.NewReader(stream.Data))
-	if err != nil {
-		return nil
-	}
-	defer r.Close()
-
-	limited := io.LimitReader(r, int64(lim.ICCProfileBytes)+1)
-	decoded, err := io.ReadAll(limited)
-	if err != nil {
-		return nil
-	}
-	if len(decoded) > lim.ICCProfileBytes {
-		return nil
-	}
-	return decoded
-}
-
-// getDefaultColorSpaces checks if a page defines DefaultRGB, DefaultCMYK, or DefaultGray
-// in its Resources/ColorSpace dictionary.
-func getDefaultColorSpaces(doc *Document, page *Dictionary) (hasRGB, hasCMYK, hasGray bool) {
-	res := resolveResources(doc, page)
-	if res == nil {
-		return
-	}
-	csRef := res.Get("ColorSpace")
-	if csRef == nil {
-		return
-	}
-	csDict := doc.ResolveDict(csRef)
-	if csDict == nil {
-		return
-	}
-	for _, key := range csDict.Keys {
-		switch key {
-		case "DefaultRGB":
-			hasRGB = true
-		case "DefaultCMYK":
-			hasCMYK = true
-		case "DefaultGray":
-			hasGray = true
-		}
-	}
-	return
-}
-
-// getGroupCSCoverage checks if a page's transparency group /CS provides
-// implicit color space coverage for device color spaces. An ICCBased CS
-// with N=3 covers DeviceRGB, N=4 covers DeviceCMYK, N=1 covers DeviceGray.
-// CalRGB covers DeviceRGB, CalGray covers DeviceGray.
-func getGroupCSCoverage(doc *Document, page *Dictionary) (hasRGB, hasCMYK, hasGray bool) {
-	groupRef := page.Get("Group")
-	if groupRef == nil {
-		return
-	}
-	groupDict := doc.ResolveDict(groupRef)
-	if groupDict == nil {
-		return
-	}
-	csObj := groupDict.Get("CS")
-	if csObj == nil {
-		return
-	}
-	return classifyCalibratedCS(doc, csObj)
-}
-
-// classifyCalibratedCS determines what device color spaces a calibrated
-// color space provides coverage for. Returns false for all if the CS is
-// a device color space (DeviceRGB/CMYK/Gray).
-func classifyCalibratedCS(doc *Document, csObj Object) (coversRGB, coversCMYK, coversGray bool) {
-	resolved := doc.Resolve(csObj)
-	// Direct device CS names don't provide coverage
-	if _, ok := resolved.(Name); ok {
-		return
-	}
-	arr, ok := resolved.(Array)
-	if !ok || len(arr) < 2 {
-		return
-	}
-	csType, _ := arr[0].(Name)
-	switch csType {
-	case "ICCBased":
-		profileObj := doc.Resolve(arr[1])
-		if stream, ok := profileObj.(*Stream); ok {
-			if nObj := stream.Dict.Get("N"); nObj != nil {
-				if n, ok := nObj.(Integer); ok {
-					switch int(n) {
-					case 1:
-						coversGray = true
-					case 3:
-						coversRGB = true
-					case 4:
-						coversCMYK = true
-					}
-				}
-			}
-		}
-	case "CalRGB":
-		coversRGB = true
-	case "CalGray":
-		coversGray = true
 	}
 	return
 }
@@ -4622,7 +4198,7 @@ func scanPageForDeviceCS(doc *Document, page *Dictionary) (usesRGB, usesCMYK, us
 	if groupRef := page.Get("Group"); groupRef != nil {
 		groupDict := doc.ResolveDict(groupRef)
 		if groupDict != nil {
-			checkCSForDevice(doc, groupDict.Get("CS"), &usesRGB, &usesCMYK, &usesGray)
+			core.CheckCSForDevice(doc.view(), groupDict.Get("CS"), &usesRGB, &usesCMYK, &usesGray)
 		}
 	}
 
@@ -4674,14 +4250,14 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 	// dictionary substitute for device spaces selected in that scope).
 	var localRGB, localCMYK, localGray bool
 	defer func() {
-		dR, dC, dG := getDefaultColorSpaces(doc, container)
+		dR, dC, dG := core.DefaultColorSpaces(doc.view(), container)
 		*usesRGB = *usesRGB || (localRGB && !dR)
 		*usesCMYK = *usesCMYK || (localCMYK && !dC)
 		*usesGray = *usesGray || (localGray && !dG)
 	}()
 
 	if data != nil {
-		r, c, g := scanStreamForDeviceOps(doc.canceler(), data)
+		r, c, g := core.ScanStreamForDeviceOps(doc.canceler(), data)
 		localRGB = localRGB || r
 		localCMYK = localCMYK || c
 		localGray = localGray || g
@@ -4699,7 +4275,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 		csDict := doc.ResolveDict(csRef)
 		if csDict != nil {
 			for _, val := range csDict.Values {
-				checkCSForDevice(doc, val, &localRGB, &localCMYK, &localGray)
+				core.CheckCSForDevice(doc.view(), val, &localRGB, &localCMYK, &localGray)
 			}
 		}
 	}
@@ -4730,7 +4306,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 						groupDict := doc.ResolveDict(groupRef)
 						if groupDict != nil {
 							// Group /CS being a device CS is itself device usage
-							checkCSForDevice(doc, groupDict.Get("CS"), &formRGB, &formCMYK, &formGray)
+							core.CheckCSForDevice(doc.view(), groupDict.Get("CS"), &formRGB, &formCMYK, &formGray)
 							// A calibrated Group /CS covers device CS within
 							// the Form only when the group is ISOLATED: a
 							// non-isolated group composites against the
@@ -4738,7 +4314,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 							// non-isolated CalRGB group.
 							isolated, _ := doc.Resolve(groupDict.Get("I")).(Boolean)
 							if csObj := groupDict.Get("CS"); csObj != nil && bool(isolated) {
-								gRGB, gCMYK, gGray := classifyCalibratedCS(doc, csObj)
+								gRGB, gCMYK, gGray := core.ClassifyCalibratedCS(doc.view(), csObj)
 								if gRGB {
 									formRGB = false
 								}
@@ -4757,7 +4333,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 					*usesGray = *usesGray || formGray
 				} else {
 					// Image XObject - check ColorSpace
-					checkCSForDevice(doc, stream.Dict.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
+					core.CheckCSForDevice(doc.view(), stream.Dict.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
 				}
 			}
 		}
@@ -4777,11 +4353,11 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 				if sd == nil {
 					// Could be a stream (type 4-7 shadings)
 					if s, ok := doc.Resolve(val).(*Stream); ok {
-						checkCSForDevice(doc, s.Dict.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
+						core.CheckCSForDevice(doc.view(), s.Dict.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
 					}
 					continue
 				}
-				checkCSForDevice(doc, sd.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
+				core.CheckCSForDevice(doc.view(), sd.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
 			}
 		}
 	}
@@ -4804,7 +4380,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 				case *Dictionary:
 					// Shading pattern.
 					if sd := doc.ResolveDict(v.Get("Shading")); sd != nil {
-						checkCSForDevice(doc, sd.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
+						core.CheckCSForDevice(doc.view(), sd.Get("ColorSpace"), &localRGB, &localCMYK, &localGray)
 					}
 				}
 			}
@@ -4834,7 +4410,7 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 							if cpStream, ok := cpObj.(*Stream); ok {
 								data := decodeContentStream(doc, cpStream)
 								if data != nil {
-									r, c, g := scanStreamForDeviceOps(doc.canceler(), data)
+									r, c, g := core.ScanStreamForDeviceOps(doc.canceler(), data)
 									*usesRGB = *usesRGB || r
 									*usesCMYK = *usesCMYK || c
 									*usesGray = *usesGray || g
@@ -4843,62 +4419,6 @@ func scanContainerForDeviceCS(doc *Document, container *Dictionary, data []byte,
 						}
 					}
 				}
-			}
-		}
-	}
-}
-
-// checkCSForDevice checks if a color space value is or contains a device color space.
-// Handles direct names, arrays (Indexed, Separation, DeviceN, Pattern with base).
-func checkCSForDevice(doc *Document, csObj Object, usesRGB, usesCMYK, usesGray *bool) {
-	checkCSForDeviceSeen(doc, csObj, usesRGB, usesCMYK, usesGray, make(map[int]bool))
-}
-
-func checkCSForDeviceSeen(doc *Document, csObj Object, usesRGB, usesCMYK, usesGray *bool, seen map[int]bool) {
-	if csObj == nil {
-		return
-	}
-	if r, ok := csObj.(IndirectRef); ok {
-		if seen[r.Number] {
-			return // cycle through an indirect color-space reference
-		}
-		seen[r.Number] = true
-	}
-	resolved := doc.Resolve(csObj)
-	if n, ok := resolved.(Name); ok {
-		switch n {
-		case "DeviceRGB":
-			*usesRGB = true
-		case "DeviceCMYK":
-			*usesCMYK = true
-		case "DeviceGray":
-			*usesGray = true
-		}
-		return
-	}
-	if arr, ok := resolved.(Array); ok && len(arr) >= 2 {
-		csType, _ := arr[0].(Name)
-		switch csType {
-		case "Indexed":
-			// [/Indexed base hival lookup] - check base
-			if len(arr) >= 2 {
-				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen)
-			}
-		case "Separation":
-			// A device alternate needs OutputIntent coverage like direct
-			// device colour: the corpus fails a Separation with a
-			// DeviceCMYK alternate absent a CMYK PDF/A intent.
-			if len(arr) >= 3 {
-				checkCSForDeviceSeen(doc, arr[2], usesRGB, usesCMYK, usesGray, seen)
-			}
-		case "DeviceN":
-			if len(arr) >= 3 {
-				checkCSForDeviceSeen(doc, arr[2], usesRGB, usesCMYK, usesGray, seen)
-			}
-		case "Pattern":
-			// [/Pattern underlyingCS] - check underlying
-			if len(arr) >= 2 {
-				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen)
 			}
 		}
 	}
@@ -4964,7 +4484,7 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 		if data == nil {
 			return
 		}
-		r, c, g := scanStreamForDeviceOps(doc.canceler(), data)
+		r, c, g := core.ScanStreamForDeviceOps(doc.canceler(), data)
 		usesRGB = usesRGB || r
 		usesCMYK = usesCMYK || c
 		usesGray = usesGray || g
@@ -4976,298 +4496,10 @@ func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesC
 				if data == nil {
 					continue
 				}
-				r, c, g := scanStreamForDeviceOps(doc.canceler(), data)
+				r, c, g := core.ScanStreamForDeviceOps(doc.canceler(), data)
 				usesRGB = usesRGB || r
 				usesCMYK = usesCMYK || c
 				usesGray = usesGray || g
-			}
-		}
-	}
-	return
-}
-
-// scanStreamForDeviceOps scans decoded content stream bytes for device color operators.
-// Uses a simple tokenizer that handles inline images (BI/ID/EI) to avoid
-// scanning binary image data.
-//
-// The scan stops when cancel fires, checked every cancelScanBytes of input
-// like the other content scanners; see cancel.go.
-func scanStreamForDeviceOps(cancel core.Canceler, data []byte) (usesRGB, usesCMYK, usesGray bool) {
-	n := len(data)
-	var lastName string
-	sawColorOp := false
-	paints := false
-	defer func() {
-		// Painting without ever selecting a colour uses the initial colour:
-		// DeviceGray black (ISO 32000-1, 8.4.1).
-		if paints && !sawColorOp {
-			usesGray = true
-		}
-	}()
-	// Scan for operators at word boundaries.
-	// An operator token is an alphabetic sequence preceded by whitespace (or BOF)
-	// and followed by whitespace, delimiter, or EOF.
-	i := 0
-	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
-	for i < n {
-		if i >= nextCancelCheck {
-			if cancel.Stopped() {
-				return
-			}
-			nextCancelCheck = i + core.CancelScanBytes
-		}
-		// Skip whitespace
-		for i < n && core.IsContentWS(data[i]) {
-			i++
-		}
-		if i >= n {
-			break
-		}
-
-		b := data[i]
-
-		// Skip comments
-		if b == '%' {
-			for i < n && data[i] != '\n' && data[i] != '\r' {
-				i++
-			}
-			continue
-		}
-
-		// Skip string literals (...)
-		if b == '(' {
-			depth := 1
-			i++
-			for i < n && depth > 0 {
-				if data[i] == '\\' {
-					i++ // skip escape char
-					if i >= n {
-						break
-					}
-				} else if data[i] == '(' {
-					depth++
-				} else if data[i] == ')' {
-					depth--
-				}
-				i++
-			}
-			continue
-		}
-
-		// Skip hex strings and dict markers
-		if b == '<' {
-			i++
-			if i < n && data[i] == '<' {
-				i++ // <<
-			} else {
-				for i < n && data[i] != '>' {
-					i++
-				}
-				if i < n {
-					i++
-				}
-			}
-			continue
-		}
-		if b == '>' {
-			i++
-			if i < n && data[i] == '>' {
-				i++
-			}
-			continue
-		}
-
-		// Skip array/proc delimiters, and a stray ')' (a delimiter that would
-		// otherwise stall the token scan below on untrusted content).
-		if b == '[' || b == ']' || b == '{' || b == '}' || b == ')' {
-			i++
-			continue
-		}
-
-		// PDF names (/Name): remember the last one seen, so a following
-		// cs/CS operator can be checked for direct device selection.
-		if b == '/' {
-			i++
-			nameStart := i
-			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-				i++
-			}
-			lastName = string(data[nameStart:i])
-			continue
-		}
-
-		// Read a token
-		start := i
-		for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-			i++
-		}
-		// A run longer than this is binary data, not a token: no PDF operator
-		// or operand keyword is anywhere near this long. Discarding it whole is
-		// what matters — cutting it at the cap and letting the scan re-enter
-		// mid-run turns the tail into further "tokens", and a fragment of
-		// binary read as an operator is a violation the file does not commit
-		// (a stray 'k'/'g' fragment reads as DeviceCMYK/DeviceGray use).
-		if i-start > core.MaxContentTokenLen {
-			continue
-		}
-
-		tokLen := i - start
-
-		// Skip names (start with /)
-		if tokLen > 0 && data[start] == '/' {
-			continue
-		}
-
-		switch string(data[start:i]) {
-		case "rg", "RG", "g", "G", "k", "K", "cs", "CS", "sc", "scn", "SC", "SCN":
-			sawColorOp = true
-		case "f", "F", "f*", "S", "s", "B", "B*", "b", "b*", "Tj", "TJ", "'", "\"", "sh":
-			paints = true
-		}
-
-		// Handle inline images: BI <dict> ID <binary> EI
-		// Check for BI (begin inline image), parse dict for CS, then skip binary
-		if tokLen == 2 && data[start] == 'B' && data[start+1] == 'I' {
-			// Parse inline image dict until ID token
-			// Look for /CS or /ColorSpace keys with device CS values
-			foundID := false
-			for i < n && !foundID {
-				// Skip whitespace
-				for i < n && core.IsContentWS(data[i]) {
-					i++
-				}
-				if i >= n {
-					break
-				}
-				// Check for ID token (end of inline image dict)
-				if data[i] == 'I' && i+1 < n && data[i+1] == 'D' &&
-					(i+2 >= n || core.IsContentWS(data[i+2])) {
-					i += 2
-					// Skip one whitespace byte after ID
-					if i < n && core.IsContentWS(data[i]) {
-						i++
-					}
-					foundID = true
-					break
-				}
-				// Read key or value token
-				if data[i] == '/' {
-					// Read name
-					keyStart := i + 1
-					i++
-					for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-						i++
-					}
-					key := string(data[keyStart:i])
-					// If key is CS or ColorSpace, check the next value
-					if key == "CS" || key == "ColorSpace" {
-						// Skip whitespace
-						for i < n && core.IsContentWS(data[i]) {
-							i++
-						}
-						// Read value - could be /Name or /abbreviation
-						if i < n && data[i] == '/' {
-							valStart := i + 1
-							i++
-							for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-								i++
-							}
-							csVal := string(data[valStart:i])
-							switch csVal {
-							case "RGB", "DeviceRGB":
-								usesRGB = true
-							case "CMYK", "DeviceCMYK":
-								usesCMYK = true
-							case "G", "DeviceGray":
-								usesGray = true
-							}
-						}
-					}
-				} else {
-					// Skip non-name token (numbers, arrays, etc.)
-					prev := i
-					if data[i] == '[' || data[i] == ']' || data[i] == '(' || data[i] == ')' ||
-						data[i] == '<' || data[i] == '>' {
-						i++ // skip single delimiter
-					} else {
-						for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-							i++
-						}
-					}
-					// Safety: if no progress, advance by 1
-					if i == prev {
-						i++
-					}
-				}
-			}
-			// Now skip binary data until EI at word boundary
-			if foundID {
-				for i < n {
-					if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
-						atBoundary := (i == 0 || core.IsContentWS(data[i-1]))
-						endBoundary := (i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2]))
-						if atBoundary && endBoundary {
-							i += 2
-							break
-						}
-					}
-					i++
-				}
-			}
-			continue
-		}
-
-		// Handle ID token outside of BI context (shouldn't happen, but be safe)
-		if tokLen == 2 && data[start] == 'I' && data[start+1] == 'D' {
-			// Skip one whitespace byte after ID
-			if i < n && core.IsContentWS(data[i]) {
-				i++
-			}
-			// Scan for EI at word boundary
-			for i < n {
-				if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
-					atBoundary := (i == 0 || core.IsContentWS(data[i-1]))
-					endBoundary := (i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2]))
-					if atBoundary && endBoundary {
-						i += 2
-						break
-					}
-				}
-				i++
-			}
-			continue
-		}
-
-		// Check for device color operators (only short alphabetic tokens)
-		if tokLen == 2 {
-			if data[start] == 'r' && data[start+1] == 'g' {
-				usesRGB = true
-			} else if data[start] == 'R' && data[start+1] == 'G' {
-				usesRGB = true
-			} else if (data[start] == 'c' && data[start+1] == 's') ||
-				(data[start] == 'C' && data[start+1] == 'S') {
-				// Direct device selection: /DeviceRGB cs (etc.). Named
-				// resource selections (/CS0 cs) are covered by the
-				// resource-dictionary walk.
-				switch lastName {
-				case "DeviceRGB":
-					usesRGB = true
-				case "DeviceCMYK":
-					usesCMYK = true
-				case "DeviceGray":
-					usesGray = true
-				}
-			}
-		} else if tokLen == 1 {
-			switch data[start] {
-			case 'g':
-				usesGray = true
-			case 'G':
-				usesGray = true
-			case 'k':
-				usesCMYK = true
-			case 'K':
-				usesCMYK = true
 			}
 		}
 	}
@@ -5335,7 +4567,7 @@ func checkICCBasedProfiles(doc *Document, level PDFALevel) []ValidationError {
 		}
 
 		// Decompress profile data to check ICC header
-		profileData := getICCProfileData(stream, doc.lim())
+		profileData := core.ICCProfileData(stream, doc.lim())
 
 		// Check ICC profile header if data is available
 		if len(profileData) >= 20 {
@@ -5849,7 +5081,7 @@ func checkAlternateCSSeen(doc *Document, altCS Object, objNum int, level PDFALev
 				}
 			}
 			// For 2b/3b/4: device alternates require OutputIntent coverage,
-			// which is checked by checkDeviceColorSpaces via checkCSForDevice.
+			// which is checked by checkDeviceColorSpaces via core.CheckCSForDevice.
 		case "Pattern":
 			rule := "6.2.4"
 			if level == PDFA1b {
@@ -5974,8 +5206,8 @@ func sameICCProfile(doc *Document, a, b *Stream) bool {
 	if a == b {
 		return true
 	}
-	da := getICCProfileData(a, doc.lim())
-	db := getICCProfileData(b, doc.lim())
+	da := core.ICCProfileData(a, doc.lim())
+	db := core.ICCProfileData(b, doc.lim())
 	if len(da) == 0 || len(da) != len(db) {
 		return false
 	}

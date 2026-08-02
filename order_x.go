@@ -197,10 +197,10 @@ func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) (
 		add("metadata", "document has no XMP metadata", 0)
 	} else {
 		get := func(prop string) string {
-			if v := strings.TrimSpace(extractXMPValue(xmp, "fx:"+prop)); v != "" {
+			if v := strings.TrimSpace(core.ExtractXMPValue(xmp, "fx:"+prop)); v != "" {
 				return v
 			}
-			return strings.TrimSpace(extractXMPValue(xmp, "zf:"+prop))
+			return strings.TrimSpace(core.ExtractXMPValue(xmp, "zf:"+prop))
 		}
 		if dt := get("DocumentType"); dt == "" {
 			add("metadata", "missing XMP fx:DocumentType", 0)

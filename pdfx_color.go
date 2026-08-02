@@ -1,5 +1,9 @@
 package pdf0
 
+import (
+	"github.com/mgilbir/pdf0/internal/core"
+)
+
 // Device-colour analysis for PDF/X, built for PDF/VT scale. The PDF/A validator
 // determines per page which device colour families (DeviceRGB/CMYK/Gray) are
 // used and left uncovered by a Default* colour space in scope
@@ -96,7 +100,7 @@ func (s *devColorScanner) pageDeviceUse(page *Dictionary) devUse {
 	// The page's own transparency group /CS being a device space is usage.
 	if g := s.doc.ResolveDict(page.Get("Group")); g != nil {
 		var gu devUse
-		checkCSForDevice(s.doc, g.Get("CS"), &gu.rgb, &gu.cmyk, &gu.gray)
+		core.CheckCSForDevice(s.doc.view(), g.Get("CS"), &gu.rgb, &gu.cmyk, &gu.gray)
 		u.or(gu)
 	}
 	return u
@@ -122,7 +126,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 
 	var local, nested devUse
 	if data != nil {
-		r, cc, g := scanStreamForDeviceOps(s.doc.canceler(), data)
+		r, cc, g := core.ScanStreamForDeviceOps(s.doc.canceler(), data)
 		local.rgb, local.cmyk, local.gray = r, cc, g
 	}
 	used := s.doc.view().ContentUsedNamesCached(data, key)
@@ -131,7 +135,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 	if res != nil {
 		if cs := s.doc.ResolveDict(res.Get("ColorSpace")); cs != nil {
 			for _, v := range cs.Values {
-				checkCSForDevice(s.doc, v, &local.rgb, &local.cmyk, &local.gray)
+				core.CheckCSForDevice(s.doc.view(), v, &local.rgb, &local.cmyk, &local.gray)
 			}
 		}
 		if xo := s.doc.ResolveDict(res.Get("XObject")); xo != nil {
@@ -146,7 +150,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 				if sub, _ := st.Dict.Get("Subtype").(Name); sub == "Form" {
 					nested.or(s.streamEscape(st, true))
 				} else {
-					checkCSForDevice(s.doc, st.Dict.Get("ColorSpace"), &local.rgb, &local.cmyk, &local.gray)
+					core.CheckCSForDevice(s.doc.view(), st.Dict.Get("ColorSpace"), &local.rgb, &local.cmyk, &local.gray)
 				}
 			}
 		}
@@ -156,9 +160,9 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 					continue
 				}
 				if sd := s.doc.ResolveDict(sh.Values[i]); sd != nil {
-					checkCSForDevice(s.doc, sd.Get("ColorSpace"), &local.rgb, &local.cmyk, &local.gray)
+					core.CheckCSForDevice(s.doc.view(), sd.Get("ColorSpace"), &local.rgb, &local.cmyk, &local.gray)
 				} else if st, ok := s.doc.Resolve(sh.Values[i]).(*Stream); ok {
-					checkCSForDevice(s.doc, st.Dict.Get("ColorSpace"), &local.rgb, &local.cmyk, &local.gray)
+					core.CheckCSForDevice(s.doc.view(), st.Dict.Get("ColorSpace"), &local.rgb, &local.cmyk, &local.gray)
 				}
 			}
 		}
@@ -172,7 +176,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 					nested.or(s.streamEscape(v, false)) // tiling pattern: no group masking
 				case *Dictionary:
 					if sd := s.doc.ResolveDict(v.Get("Shading")); sd != nil {
-						checkCSForDevice(s.doc, sd.Get("ColorSpace"), &local.rgb, &local.cmyk, &local.gray)
+						core.CheckCSForDevice(s.doc.view(), sd.Get("ColorSpace"), &local.rgb, &local.cmyk, &local.gray)
 					}
 				}
 			}
@@ -189,7 +193,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 						for _, cpv := range cp.Values {
 							if st, ok := s.doc.Resolve(cpv).(*Stream); ok {
 								if d := decodeContentStream(s.doc, st); d != nil {
-									r, cc, g := scanStreamForDeviceOps(s.doc.canceler(), d)
+									r, cc, g := core.ScanStreamForDeviceOps(s.doc.canceler(), d)
 									nested.rgb = nested.rgb || r
 									nested.cmyk = nested.cmyk || cc
 									nested.gray = nested.gray || g
@@ -202,7 +206,7 @@ func (s *devColorScanner) container(c *Dictionary, data []byte, key *Stream) dev
 		}
 	}
 
-	dR, dC, dG := getDefaultColorSpaces(s.doc, c)
+	dR, dC, dG := core.DefaultColorSpaces(s.doc.view(), c)
 	local.rgb = local.rgb && !dR
 	local.cmyk = local.cmyk && !dC
 	local.gray = local.gray && !dG
@@ -227,10 +231,10 @@ func (s *devColorScanner) streamEscape(st *Stream, applyGroup bool) devUse {
 	u := s.container(&st.Dict, decodeContentStream(s.doc, st), st)
 	if applyGroup {
 		if g := s.doc.ResolveDict(st.Dict.Get("Group")); g != nil {
-			checkCSForDevice(s.doc, g.Get("CS"), &u.rgb, &u.cmyk, &u.gray)
+			core.CheckCSForDevice(s.doc.view(), g.Get("CS"), &u.rgb, &u.cmyk, &u.gray)
 			if iso, _ := s.doc.Resolve(g.Get("I")).(Boolean); bool(iso) {
 				if cs := g.Get("CS"); cs != nil {
-					gR, gC, gG := classifyCalibratedCS(s.doc, cs)
+					gR, gC, gG := core.ClassifyCalibratedCS(s.doc.view(), cs)
 					if gR {
 						u.rgb = false
 					}

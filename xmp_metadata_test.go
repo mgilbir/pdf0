@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 	"testing"
 )
@@ -47,7 +48,7 @@ func TestXMPIsUTF8BOMless(t *testing.T) {
 // like double-quoted ones (audit C32).
 func TestXMPSingleQuotedAttributes(t *testing.T) {
 	xmp := `<rdf:Description pdfaid:part='2' pdfaid:conformance='B'/>`
-	if got := extractXMPValue(xmp, "pdfaid:part"); got != "2" {
+	if got := core.ExtractXMPValue(xmp, "pdfaid:part"); got != "2" {
 		t.Errorf("single-quoted pdfaid:part = %q, want 2", got)
 	}
 	if !xmpHasKey(xmp, "pdfaid:conformance") {

@@ -537,7 +537,7 @@ func pdfaConformanceFlag(doc *Document) string {
 		return ""
 	}
 	xmp := doc.view().XMPText(stream)
-	if v := extractXMPValue(xmp, "pdfaid:conformance"); v != "" {
+	if v := core.ExtractXMPValue(xmp, "pdfaid:conformance"); v != "" {
 		return strings.ToUpper(v)
 	}
 	return strings.ToUpper(extractXMPAttr(xmp, "pdfaid:conformance"))
@@ -617,7 +617,7 @@ func declaredPDFALevel(doc *Document) (PDFALevel, bool) {
 		return 0, false
 	}
 	xmp := doc.view().XMPText(stream)
-	part := extractXMPValue(xmp, "pdfaid:part")
+	part := core.ExtractXMPValue(xmp, "pdfaid:part")
 	if part == "" {
 		part = extractXMPAttr(xmp, "pdfaid:part")
 	}

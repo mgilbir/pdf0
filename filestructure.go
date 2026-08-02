@@ -699,7 +699,7 @@ func scanContentHexStrings(data []byte, fn func(content []byte)) {
 				continue
 			}
 			if i-start > core.MaxContentTokenLen {
-				continue // binary run, not a token; see scanStreamForDeviceOps
+				continue // binary run, not a token; see core.ScanStreamForDeviceOps
 			}
 			if i-start == 2 && data[start] == 'B' && data[start+1] == 'I' {
 				core.SkipInlineImage(data, &i)

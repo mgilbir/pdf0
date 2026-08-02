@@ -1210,16 +1210,16 @@ func TestExtractXMPValue(t *testing.T) {
       <pdfaid:rev>2020</pdfaid:rev>
       pdfaid:conformance="B"`
 
-	if v := extractXMPValue(xmp, "pdfaid:part"); v != "4" {
+	if v := core.ExtractXMPValue(xmp, "pdfaid:part"); v != "4" {
 		t.Errorf("part = %q, want 4", v)
 	}
-	if v := extractXMPValue(xmp, "pdfaid:rev"); v != "2020" {
+	if v := core.ExtractXMPValue(xmp, "pdfaid:rev"); v != "2020" {
 		t.Errorf("rev = %q, want 2020", v)
 	}
-	if v := extractXMPValue(xmp, "pdfaid:conformance"); v != "B" {
+	if v := core.ExtractXMPValue(xmp, "pdfaid:conformance"); v != "B" {
 		t.Errorf("conformance = %q, want B", v)
 	}
-	if v := extractXMPValue(xmp, "pdfaid:nonexistent"); v != "" {
+	if v := core.ExtractXMPValue(xmp, "pdfaid:nonexistent"); v != "" {
 		t.Errorf("nonexistent = %q, want empty", v)
 	}
 }

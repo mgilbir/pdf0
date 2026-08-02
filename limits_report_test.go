@@ -336,7 +336,7 @@ func TestOverlongTokenIsNotAnOperator(t *testing.T) {
 	run := append(bytes.Repeat([]byte("A"), 514), []byte("k")...)
 	data := append([]byte("q "), run...)
 	data = append(data, []byte(" Q")...)
-	rgb, cmyk, gray := scanStreamForDeviceOps(core.Canceler{}, data)
+	rgb, cmyk, gray := core.ScanStreamForDeviceOps(core.Canceler{}, data)
 	if cmyk || rgb {
 		t.Errorf("a %d-byte binary run was tokenized into colour operators: rgb=%v cmyk=%v gray=%v", len(run), rgb, cmyk, gray)
 	}
