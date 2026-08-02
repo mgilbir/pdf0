@@ -3,6 +3,7 @@ package dpart
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -302,4 +303,20 @@ func isXMLNameToken(s string) bool {
 		}
 	}
 	return true
+}
+
+// ValidateView runs the hierarchy checks over a view and returns the findings.
+// It exists for PDF/VT, which requires a conforming document-part hierarchy and
+// adopts these findings under its own prefix; the root package's ValidateDParts
+// adds the read-time guard trips on top.
+func ValidateView(v core.View) []DPartViolation {
+	var out []DPartViolation
+	add := func(rule, msg string, obj int) {
+		out = append(out, DPartViolation{Rule: rule, Message: msg, Object: obj})
+	}
+	if !v.Cancel.Stopped() {
+		finding.Guarded(add, func() { ValidateHierarchy(v, add) })
+	}
+	finding.Sort(out)
+	return out
 }

@@ -41,12 +41,6 @@ func (e ValidationError) RuleID() string { return e.Rule }
 // ObjectNum returns the anchoring object number, 0 if N/A.
 func (e ValidationError) ObjectNum() int { return e.Object }
 
-// RuleID returns the PDF/VT rule identifier.
-func (v PDFVTViolation) RuleID() string { return v.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v PDFVTViolation) ObjectNum() int { return v.Object }
-
 // RuleID returns the Factur-X container rule identifier, or the identifier the
 // invoice rule engine minted for an adopted finding. It is unique only within
 // FacturXViolation.Source, which names the authority.

@@ -1,10 +1,12 @@
-package pdf0
+package pdfvt
 
 import (
-	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/dpart"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfx"
 	"strings"
 )
 
@@ -23,6 +25,12 @@ type PDFVTViolation struct {
 	Object  int // object number the violation anchors to, 0 if N/A
 }
 
+// RuleID returns the PDF/VT rule identifier.
+func (v PDFVTViolation) RuleID() string { return v.Rule }
+
+// ObjectNum returns the anchoring object number, 0 if N/A.
+func (v PDFVTViolation) ObjectNum() int { return v.Object }
+
 func (v PDFVTViolation) Error() string {
 	if v.Object != 0 {
 		return fmt.Sprintf("PDF/VT-1 %s: %s (object %d)", v.Rule, v.Message, v.Object)
@@ -30,38 +38,10 @@ func (v PDFVTViolation) Error() string {
 	return fmt.Sprintf("PDF/VT-1 %s: %s", v.Rule, v.Message)
 }
 
-// ValidatePDFVT checks whether doc conforms to PDF/VT-1 (ISO 16612-2). It
-// requires conformance to the PDF/X-4 base profile, a valid document part
-// hierarchy, and PDF/VT-1 identification in XMP. An empty result means no
-// violations were found.
-func ValidatePDFVT(doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(core.Canceler{}, doc, "PDF/VT-1", false)
-}
-
-// ValidatePDFVTContext is ValidatePDFVT with cancellation; a cancelled run
-// reports itself under the rule "limit" (see cancel.go).
-func ValidatePDFVTContext(ctx context.Context, doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(core.NewCanceler(ctx), doc, "PDF/VT-1", false)
-}
-
-// ValidatePDFVT2 checks whether doc conforms to PDF/VT-2 (ISO 16612-2). PDF/VT-2
-// is based on PDF/X-5 rather than PDF/X-4, so it additionally permits externally
-// referenced content (reference XObjects); it is otherwise validated like
-// PDF/VT-1. pdf0 has no PDF/X-5 validator, so the PDF/X-4 base is used with the
-// reference-XObject prohibition relaxed — the PDF/X-5-specific external-reference
-// rules are not asserted.
-func ValidatePDFVT2(doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(core.Canceler{}, doc, "PDF/VT-2", true)
-}
-
-// ValidatePDFVT2Context is ValidatePDFVT2 with cancellation; a cancelled run
-// reports itself under the rule "limit" (see cancel.go).
-func ValidatePDFVT2Context(ctx context.Context, doc *Document) []PDFVTViolation {
-	return validatePDFVTImpl(core.NewCanceler(ctx), doc, "PDF/VT-2", true)
-}
-
-func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
-	doc = beginRunCancel(doc, cancel)
+// ValidateView runs the PDF/VT checks over a view. versionPrefix is the
+// pdfvtid:GTS_PDFVTVersion the file must declare, and allowRefXObjects lifts
+// the reference-XObject prohibition for PDF/VT-2.
+func ValidateView(doc core.View, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
 	var out []PDFVTViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFVTViolation{Rule: rule, Message: msg, Object: obj})
@@ -72,7 +52,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 	// check does not discard its siblings' findings (audit C27). It is also the
 	// coarse cancellation boundary (cancel.go).
 	run := func(check func()) {
-		if doc.stopped() {
+		if doc.Cancel.Stopped() {
 			return
 		}
 		finding.Guarded(add, check)
@@ -82,7 +62,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 	// for PDF/VT-1, PDF/X-5 for PDF/VT-2. For PDF/VT-2 the reference-XObject
 	// prohibition (a PDF/X-4-only rule that PDF/X-5 lifts) is dropped.
 	run(func() {
-		for _, v := range ValidatePDFX(doc, PDFX4) {
+		for _, v := range pdfx.ValidateView(doc, pdfx.PDFX4) {
 			if allowRefXObjects && v.Rule == "forbidden" && strings.Contains(v.Message, "reference XObjects") {
 				continue
 			}
@@ -103,8 +83,8 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 	run(func() {
 		claimed := ""
 		if cat != nil {
-			if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
-				xmp := doc.view().XMPText(ms)
+			if ms, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream); ok {
+				xmp := doc.XMPText(ms)
 				claimed = strings.TrimSpace(core.ExtractXMPValue(xmp, "pdfvtid:GTS_PDFVTVersion"))
 			}
 		}
@@ -122,7 +102,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 		if cat == nil || cat.Get("DPartRoot") == nil {
 			add("dpart", "PDF/VT requires a document part hierarchy (catalog /DPartRoot)", 0)
 		}
-		for _, v := range ValidateDParts(doc) {
+		for _, v := range dpart.ValidateView(doc) {
 			if v.Rule == finding.LimitRule {
 				continue // reported once by the flush below
 			}
@@ -132,7 +112,6 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 
 	// Guard trips are reported under their own rule, not as conformance
 	// failures (see limits.go).
-	reportLimits(doc, add)
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.
