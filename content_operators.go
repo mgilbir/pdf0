@@ -160,7 +160,7 @@ func collectAppearanceStreams(doc *Document) []appearanceStream {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
+		if dict, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(dict) {
 			visit(dict, num)
 		}
 	}

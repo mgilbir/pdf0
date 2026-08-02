@@ -34,7 +34,7 @@ type tableRow []tableCell
 // pass files give every TH a Scope, others give every TH an /ID), which is why
 // an /ID exempts a TH that has no Scope — the boundary an earlier Scope-only
 // rule got wrong.
-func checkUATableTHScope(d *Document, cat *Dictionary) []UAViolation {
+func checkUATableTHScope(d core.View, cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	reported := map[int]bool{}
 	walkStructElems(d, cat, func(el *Dictionary, t Name) {
@@ -44,7 +44,7 @@ func checkUATableTHScope(d *Document, cat *Dictionary) []UAViolation {
 		if cellHasScope(d, el) || el.Get("ID") != nil {
 			return
 		}
-		num := dictObjNum(d, el)
+		num := d.DictObjNum(el)
 		if !reported[num] {
 			reported[num] = true
 			v = append(v, UAViolation{"7.5", "table header cell (TH) has neither a Scope attribute nor an /ID", num})
@@ -54,7 +54,7 @@ func checkUATableTHScope(d *Document, cat *Dictionary) []UAViolation {
 }
 
 // cellHasScope reports whether a cell carries a /Scope in a Table attribute.
-func cellHasScope(d *Document, cell *Dictionary) bool {
+func cellHasScope(d core.View, cell *Dictionary) bool {
 	for _, ad := range tableAttrDicts(d, cell) {
 		if ad.Get("Scope") != nil {
 			return true
@@ -64,7 +64,7 @@ func cellHasScope(d *Document, cell *Dictionary) bool {
 }
 
 // checkUATableGrid lays out every Table's cells and reports grid defects (7.2).
-func checkUATableGrid(d *Document, cat *Dictionary) []UAViolation {
+func checkUATableGrid(d core.View, cat *Dictionary) []UAViolation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
@@ -76,10 +76,10 @@ func checkUATableGrid(d *Document, cat *Dictionary) []UAViolation {
 			continue
 		}
 		if rows := collectTableRows(d, n.elem, roleMap); len(rows) > 0 {
-			maxFills := d.lim().TableGridFills
+			maxFills := d.Limits.TableGridFills
 			defects, complete := gridDefects(rows, maxFills)
 			if !complete {
-				noteLimit(d, limitGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", dictObjNum(d, n.elem))
+				d.Note(limitGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.DictObjNum(n.elem))
 			}
 			v = append(v, defects...)
 		}
@@ -89,7 +89,7 @@ func checkUATableGrid(d *Document, cat *Dictionary) []UAViolation {
 
 // collectTableRows returns the table's rows in document order, descending
 // through THead/TBody/TFoot row groups (but not into nested tables).
-func collectTableRows(d *Document, table *Dictionary, roleMap *Dictionary) []tableRow {
+func collectTableRows(d core.View, table *Dictionary, roleMap *Dictionary) []tableRow {
 	var rows []tableRow
 	var visit func(node Object, top bool)
 	seen := map[int]bool{}
@@ -132,7 +132,7 @@ func collectTableRows(d *Document, table *Dictionary, roleMap *Dictionary) []tab
 }
 
 // collectRowCells returns the TH/TD cells of a TR with their spans.
-func collectRowCells(d *Document, tr *Dictionary, roleMap *Dictionary) tableRow {
+func collectRowCells(d core.View, tr *Dictionary, roleMap *Dictionary) tableRow {
 	var cells tableRow
 	for _, kid := range structKids(d, tr) {
 		c := d.ResolveDict(kid)
@@ -150,7 +150,7 @@ func collectRowCells(d *Document, tr *Dictionary, roleMap *Dictionary) tableRow 
 
 // cellSpan reads a RowSpan/ColSpan value from a cell's /A table attribute,
 // defaulting to 1. A non-positive value is treated as 1.
-func cellSpan(d *Document, cell *Dictionary, key Name) int {
+func cellSpan(d core.View, cell *Dictionary, key Name) int {
 	for _, ad := range tableAttrDicts(d, cell) {
 		if n, ok := d.Resolve(ad.Get(key)).(Integer); ok {
 			if n < 1 {
@@ -164,7 +164,7 @@ func cellSpan(d *Document, cell *Dictionary, key Name) int {
 
 // tableAttrDicts returns a cell's attribute dictionaries whose owner (/O) is
 // Table.
-func tableAttrDicts(d *Document, cell *Dictionary) []*Dictionary {
+func tableAttrDicts(d core.View, cell *Dictionary) []*Dictionary {
 	var out []*Dictionary
 	switch a := d.Resolve(cell.Get("A")).(type) {
 	case *Dictionary:

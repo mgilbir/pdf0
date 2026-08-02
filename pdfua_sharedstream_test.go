@@ -113,7 +113,7 @@ func TestRealContentSharedStreamMemo(t *testing.T) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 
 	done := make(chan []UAViolation, 1)
-	go func() { done <- checkUARealContent(doc, cat) }()
+	go func() { done <- checkUARealContent(doc.view(), cat) }()
 	var v []UAViolation
 	select {
 	case v = <-done:
@@ -137,7 +137,7 @@ func TestRealContentSharedStreamMemo(t *testing.T) {
 		t.Errorf("violations cover %d distinct pages, want %d", len(objs), nPages)
 	}
 	// The shared stream was analyzed once and cached.
-	if n := len(doc.valCache.pdfua.streamFacts); n != 1 {
+	if n := len(uaMemo(doc.view()).streamFacts); n != 1 {
 		t.Errorf("streamFacts cache holds %d streams, want 1", n)
 	}
 }

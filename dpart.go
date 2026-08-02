@@ -117,7 +117,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 
 	// Map each page object number to its reading-order index so leaf ranges can
 	// be checked against the page tree.
-	pages := collectPages(doc, doc.catalogPages())
+	pages := collectPages(doc, doc.view().CatalogPages())
 	pageIndex := make(map[int]int, len(pages))
 	for i, pg := range pages {
 		pageIndex[pg.ObjNum] = i

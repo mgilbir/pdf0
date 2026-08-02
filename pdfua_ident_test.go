@@ -36,10 +36,10 @@ func TestUAStructParent(t *testing.T) {
 		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
 		return doc
 	}
-	if d := mk(false); len(checkUAStructParent(d, d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
+	if d := mk(false); len(checkUAStructParent(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
 		t.Error("structure element without /P not flagged")
 	}
-	if d := mk(true); len(checkUAStructParent(d, d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
+	if d := mk(true); len(checkUAStructParent(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
 		t.Error("structure element with /P wrongly flagged")
 	}
 }
@@ -59,20 +59,20 @@ func TestUARoleMapIntegrity(t *testing.T) {
 	// Remapping a standard type is flagged.
 	remap := &Dictionary{}
 	remap.Set("H1", Name("P"))
-	if d := mk(remap); len(checkUARoleMapIntegrity(d, d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
+	if d := mk(remap); len(checkUARoleMapIntegrity(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
 		t.Error("remapped standard type not flagged")
 	}
 	// A circular mapping is flagged.
 	circ := &Dictionary{}
 	circ.Set("Foo", Name("Bar"))
 	circ.Set("Bar", Name("Foo"))
-	if d := mk(circ); len(checkUARoleMapIntegrity(d, d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
+	if d := mk(circ); len(checkUARoleMapIntegrity(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
 		t.Error("circular mapping not flagged")
 	}
 	// A clean custom mapping is accepted.
 	ok := &Dictionary{}
 	ok.Set("MyHeading", Name("H1"))
-	if d := mk(ok); len(checkUARoleMapIntegrity(d, d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
+	if d := mk(ok); len(checkUARoleMapIntegrity(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
 		t.Error("clean role map wrongly flagged")
 	}
 }

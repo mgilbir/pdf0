@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 	"time"
 )
@@ -40,11 +41,11 @@ func TestUAStructNesting(t *testing.T) {
 		return doc
 	}
 	bad := mk(false)
-	if len(checkUAStructNesting(bad, bad.ResolveDict(bad.Trailer.Get("Root")))) == 0 {
+	if len(checkUAStructNesting(bad.view(), bad.ResolveDict(bad.Trailer.Get("Root")))) == 0 {
 		t.Error("TD directly under Table not flagged")
 	}
 	good := mk(true)
-	if v := checkUAStructNesting(good, good.ResolveDict(good.Trailer.Get("Root"))); len(v) != 0 {
+	if v := checkUAStructNesting(good.view(), good.ResolveDict(good.Trailer.Get("Root"))); len(v) != 0 {
 		t.Errorf("well-formed table flagged: %v", v)
 	}
 }
@@ -52,11 +53,11 @@ func TestUAStructNesting(t *testing.T) {
 // TestUAHeaderVersion flags a 2.0 header and accepts a 1.x one.
 func TestUAHeaderVersion(t *testing.T) {
 	d := &Document{Version: "2.0"}
-	if len(checkUAHeaderVersion(d)) == 0 {
+	if len(checkUAHeaderVersion(d.view())) == 0 {
 		t.Error("2.0 header not flagged for PDF/UA-1")
 	}
 	d.Version = "1.7"
-	if len(checkUAHeaderVersion(d)) != 0 {
+	if len(checkUAHeaderVersion(d.view())) != 0 {
 		t.Error("1.7 header wrongly flagged")
 	}
 }
@@ -68,11 +69,11 @@ func TestUASuspects(t *testing.T) {
 	mark := &Dictionary{}
 	mark.Set("Suspects", Boolean(true))
 	cat.Set("MarkInfo", mark)
-	if len(checkUASuspects(doc, cat)) == 0 {
+	if len(checkUASuspects(doc.view(), cat)) == 0 {
 		t.Error("Suspects true not flagged")
 	}
 	mark.Set("Suspects", Boolean(false))
-	if len(checkUASuspects(doc, cat)) != 0 {
+	if len(checkUASuspects(doc.view(), cat)) != 0 {
 		t.Error("Suspects false wrongly flagged")
 	}
 }
@@ -99,13 +100,13 @@ func TestUAStrongWeak(t *testing.T) {
 		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
 		return doc
 	}
-	if d := mk("H", "H1"); len(checkUAStrongWeak(d, d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
+	if d := mk("H", "H1"); len(checkUAStrongWeak(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
 		t.Error("mixed H/H1 not flagged")
 	}
-	if d := mk("H1", "H2"); len(checkUAStrongWeak(d, d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
+	if d := mk("H1", "H2"); len(checkUAStrongWeak(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
 		t.Error("pure strong structure wrongly flagged")
 	}
-	if d := mk("H", "H"); len(checkUAStrongWeak(d, d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
+	if d := mk("H", "H"); len(checkUAStrongWeak(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
 		t.Error("pure weak structure wrongly flagged")
 	}
 }
@@ -135,13 +136,13 @@ func TestUANotes(t *testing.T) {
 		doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
 		return doc
 	}
-	if d := mk(""); len(checkUANotes(d, d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
+	if d := mk(""); len(checkUANotes(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
 		t.Error("Note without ID not flagged")
 	}
-	if d := mk("a", "a"); len(checkUANotes(d, d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
+	if d := mk("a", "a"); len(checkUANotes(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) == 0 {
 		t.Error("duplicate Note ID not flagged")
 	}
-	if d := mk("a", "b"); len(checkUANotes(d, d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
+	if d := mk("a", "b"); len(checkUANotes(d.view(), d.ResolveDict(IndirectRef{Number: 1}))) != 0 {
 		t.Error("unique Note IDs wrongly flagged")
 	}
 }
@@ -173,7 +174,7 @@ func roleMapChainDoc(roleMap *Dictionary) *Document {
 	cat.Set("StructTreeRoot", IndirectRef{Number: 2})
 	doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
 	doc.Trailer.Set("Root", IndirectRef{Number: 1})
-	doc.valCache = &validationCache{}
+	doc.valCache = newValidationCache(core.Canceler{})
 	return doc
 }
 
@@ -193,17 +194,17 @@ func TestRoleMapChainResolves(t *testing.T) {
 	doc := roleMapChainDoc(rm)
 	cat := doc.ResolveDict(IndirectRef{Number: 1})
 
-	if v := checkUARoleMap(doc, cat); len(v) != 0 {
+	if v := checkUARoleMap(doc.view(), cat); len(v) != 0 {
 		t.Errorf("two-step /RoleMap chain reported as unmapped: %+v", v)
 	}
-	if got := standardStructType(doc, doc.ResolveDict(IndirectRef{Number: 10}), rm); got != "Table" {
+	if got := standardStructType(doc.view(), doc.ResolveDict(IndirectRef{Number: 10}), rm); got != "Table" {
 		t.Errorf("standardStructType(MyTable) = %q, want Table", got)
 	}
-	if got := standardStructType(doc, doc.ResolveDict(IndirectRef{Number: 11}), rm); got != "TR" {
+	if got := standardStructType(doc.view(), doc.ResolveDict(IndirectRef{Number: 11}), rm); got != "TR" {
 		t.Errorf("standardStructType(MyRow) = %q, want TR", got)
 	}
 	// The nesting rules see Table -> TR -> TD, so a conformant tree is clean.
-	if v := checkUAStructNesting(doc, cat); len(v) != 0 {
+	if v := checkUAStructNesting(doc.view(), cat); len(v) != 0 {
 		t.Errorf("nesting findings on a tree whose types resolve through a chain: %+v", v)
 	}
 }
@@ -219,7 +220,7 @@ func TestRoleMapChainTerminates(t *testing.T) {
 	cat := doc.ResolveDict(IndirectRef{Number: 1})
 
 	done := make(chan []UAViolation, 1)
-	go func() { done <- checkUARoleMap(doc, cat) }()
+	go func() { done <- checkUARoleMap(doc.view(), cat) }()
 	select {
 	case v := <-done:
 		if len(v) != 2 {
@@ -232,7 +233,7 @@ func TestRoleMapChainTerminates(t *testing.T) {
 	self := &Dictionary{}
 	self.Set("MyTable", Name("MyTable"))
 	sdoc := roleMapChainDoc(self)
-	if got := standardStructType(sdoc, sdoc.ResolveDict(IndirectRef{Number: 10}), self); got != "MyTable" {
+	if got := standardStructType(sdoc.view(), sdoc.ResolveDict(IndirectRef{Number: 10}), self); got != "MyTable" {
 		t.Errorf("self-mapping type resolved to %q, want the raw type back", got)
 	}
 }
@@ -250,7 +251,7 @@ func TestRoleMapChainBudgetDeclines(t *testing.T) {
 	doc := roleMapChainDoc(rm)
 	doc.limits.RoleMapSteps = 1 // room for the first hop only
 	cat := doc.ResolveDict(IndirectRef{Number: 1})
-	if v := checkUARoleMap(doc, cat); len(v) != 0 {
+	if v := checkUARoleMap(doc.view(), cat); len(v) != 0 {
 		t.Errorf("budget trip manufactured a role-map finding: %+v", v)
 	}
 }

@@ -135,7 +135,7 @@ func xmpWellFormed(data []byte) (wellFormed, hasRDF bool) {
 // parseXMLTree parses an XML document into an xmlNode tree.
 func parseXMLTree(data []byte) (*xmlNode, error) {
 	dec := xml.NewDecoder(bytes.NewReader(data))
-	// XMP is UTF-8 by the time we get here (decodeXMPToUTF8); some packets
+	// XMP is UTF-8 by the time we get here (core.DecodeXMPToUTF8); some packets
 	// still carry an encoding declaration.
 	dec.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
 		return input, nil

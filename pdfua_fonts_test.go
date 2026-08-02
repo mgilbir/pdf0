@@ -10,7 +10,7 @@ func TestUAFontDicts(t *testing.T) {
 		doc := &Document{Objects: map[int]*IndirectObject{}}
 		f := build(doc)
 		doc.Objects[10] = &IndirectObject{Number: 10, Value: f}
-		return checkOneUAFontDict(doc, f)
+		return checkOneUAFontDict(doc.view(), f)
 	}
 
 	// CIDFontType2 embedded, no CIDToGIDMap -> flagged.
@@ -104,7 +104,7 @@ func TestUACIDToGIDMapValue(t *testing.T) {
 		return doc
 	}
 	check := func(doc *Document) []UAViolation {
-		return checkOneUAFontDict(doc, doc.Objects[10].Value.(*Dictionary))
+		return checkOneUAFontDict(doc.view(), doc.Objects[10].Value.(*Dictionary))
 	}
 	if !hasUAClause(check(mk(Name("NoIdentity"))), "7.21.3.2") {
 		t.Error("CIDToGIDMap /NoIdentity not flagged")

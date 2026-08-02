@@ -72,8 +72,8 @@ func TestContentFactsCacheShared(t *testing.T) {
 	doc := &rd
 
 	// Both checks run against the same page content stream.
-	mcid := checkUAFormXObjectMCID(doc)
-	real := checkUARealContent(doc, cat)
+	mcid := checkUAFormXObjectMCID(doc.view())
+	real := checkUARealContent(doc.view(), cat)
 
 	if len(mcid) != 1 || mcid[0].Clause != "7.20" {
 		t.Errorf("expected one 7.20 violation for the twice-painted tagged form, got %v", mcid)
@@ -82,10 +82,10 @@ func TestContentFactsCacheShared(t *testing.T) {
 		t.Errorf("expected one real-content violation on page 11, got %v", real)
 	}
 	// The page content stream was tokenized once and cached for both checks.
-	if _, ok := doc.valCache.pdfua.streamFacts[pageContent]; !ok {
+	if _, ok := uaMemo(doc.view()).streamFacts[pageContent]; !ok {
 		t.Error("page content stream facts not cached")
 	}
-	if n := len(doc.valCache.pdfua.streamFacts[pageContent].doNames); n != 2 {
+	if n := len(uaMemo(doc.view()).streamFacts[pageContent].doNames); n != 2 {
 		t.Errorf("page doNames = %d, want 2 (two Do operators)", n)
 	}
 }

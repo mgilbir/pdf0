@@ -23,7 +23,7 @@ func TestUAXFACompressed(t *testing.T) {
 	cat := &Dictionary{}
 	cat.Set("AcroForm", form)
 
-	if len(checkUAXFA(doc, cat)) == 0 {
+	if len(checkUAXFA(doc.view(), cat)) == 0 {
 		t.Error("dynamicRender in a compressed XFA packet not detected")
 	}
 
@@ -35,7 +35,7 @@ func TestUAXFACompressed(t *testing.T) {
 	pkt2 := &Stream{Dict: Dictionary{}, Data: zbuf2.Bytes()}
 	pkt2.Dict.Set("Filter", Name("FlateDecode"))
 	form.Set("XFA", Array{String{Value: []byte("config")}, pkt2})
-	if len(checkUAXFA(doc, cat)) != 0 {
+	if len(checkUAXFA(doc.view(), cat)) != 0 {
 		t.Error("static XFA wrongly flagged")
 	}
 }

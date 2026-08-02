@@ -44,7 +44,7 @@ var uaAllowedChildren = map[Name]map[Name]bool{
 // standardStructType resolves a structure element's type through /RoleMap to a
 // standard type, or returns the element's own /S (which the role-map check
 // flags if non-standard).
-func standardStructType(d *Document, elem *Dictionary, roleMap *Dictionary) Name {
+func standardStructType(d core.View, elem *Dictionary, roleMap *Dictionary) Name {
 	s, _ := elem.Get("S").(Name)
 	t, _, _ := resolveRoleMapChain(d, s, roleMap)
 	return t
@@ -68,11 +68,11 @@ func standardStructType(d *Document, elem *Dictionary, roleMap *Dictionary) Name
 // one was reached, and whether the walk ran to completion. A budget trip leaves
 // the answer unknown, so a caller must not report "neither standard nor mapped"
 // on that basis — the rule the package follows for every truncated structure.
-func resolveRoleMapChain(d *Document, s Name, roleMap *Dictionary) (std Name, mapped, complete bool) {
+func resolveRoleMapChain(d core.View, s Name, roleMap *Dictionary) (std Name, mapped, complete bool) {
 	if standardStructTypes[s] || roleMap == nil || s == "" {
 		return s, standardStructTypes[s], true
 	}
-	budget := d.lim().RoleMapSteps
+	budget := d.Limits.RoleMapSteps
 	// The first hop needs no seen-set: "already standard" and "one hop to a
 	// standard type" are the shapes essentially every file has, and this runs
 	// once per structure element, so it must not allocate for them.
@@ -105,15 +105,15 @@ func resolveRoleMapChain(d *Document, s Name, roleMap *Dictionary) (std Name, ma
 	return s, false, false
 }
 
-func noteRoleMapChainLimit(d *Document) {
-	noteLimit(d, limitRoleMapWork, fmt.Sprintf(
+func noteRoleMapChainLimit(d core.View) {
+	d.Note(limitRoleMapWork, fmt.Sprintf(
 		"following one /RoleMap chain to a standard structure type cost more than %s steps; the type could not be resolved",
-		core.LimitBound(int64(d.lim().RoleMapSteps), core.DefaultMaxRoleMapSteps)), 0)
+		core.LimitBound(int64(d.Limits.RoleMapSteps), core.DefaultMaxRoleMapSteps)), 0)
 }
 
 // checkUAStructNesting enforces the structure-element parent/child constraints
 // (tables, lists, table of contents) from the PDF/UA profile.
-func checkUAStructNesting(d *Document, cat *Dictionary) []UAViolation {
+func checkUAStructNesting(d core.View, cat *Dictionary) []UAViolation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
@@ -168,7 +168,7 @@ func checkUAStructNesting(d *Document, cat *Dictionary) []UAViolation {
 }
 
 // structKids returns the /K children of an element as a slice of objects.
-func structKids(d *Document, elem *Dictionary) []Object {
+func structKids(d core.View, elem *Dictionary) []Object {
 	k := elem.Get("K")
 	if k == nil {
 		return nil
@@ -184,7 +184,7 @@ func structKids(d *Document, elem *Dictionary) []Object {
 // typing (UA profile / ISO 32000-1 14.8.4.3): at most one Caption/THead/TFoot,
 // a THead or TFoot requires a TBody, and a Caption must sit in the permitted
 // position (first-or-last for a Table, first for a List or TOC).
-func checkUATableListStructure(d *Document, cat *Dictionary) []UAViolation {
+func checkUATableListStructure(d core.View, cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	for _, n := range structTree(d, cat) {
 		kids := n.childTypes
@@ -258,7 +258,7 @@ func firstIndexName(names []Name, want Name) int {
 
 // childStructTypes returns the resolved standard types of an element's
 // structure-element children (ignoring marked-content and object references).
-func childStructTypes(d *Document, elem *Dictionary, roleMap *Dictionary) []Name {
+func childStructTypes(d core.View, elem *Dictionary, roleMap *Dictionary) []Name {
 	var out []Name
 	for _, kid := range structKids(d, elem) {
 		child := d.ResolveDict(kid)
@@ -315,19 +315,19 @@ type structNode struct {
 // validation cache. The traversal matches the historical per-check walk: every
 // dict reachable through /K is visited (indirect refs deduped for cycle safety),
 // arrays are descended transparently, and both /S and non-/S dicts are recorded.
-func structTree(d *Document, cat *Dictionary) []structNode {
-	if c := d.valCache; c != nil && c.pdfua.structTreeValid {
-		return c.pdfua.structTree
+func structTree(d core.View, cat *Dictionary) []structNode {
+	if c := uaMemo(d); true && c.structTreeValid {
+		return c.structTree
 	}
 	nodes := buildStructTree(d, cat)
-	if c := d.valCache; c != nil {
-		c.pdfua.structTree = nodes
-		c.pdfua.structTreeValid = true
+	if c := uaMemo(d); true {
+		c.structTree = nodes
+		c.structTreeValid = true
 	}
 	return nodes
 }
 
-func buildStructTree(d *Document, cat *Dictionary) []structNode {
+func buildStructTree(d core.View, cat *Dictionary) []structNode {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
@@ -385,7 +385,7 @@ func buildStructTree(d *Document, cat *Dictionary) []structNode {
 
 // walkStructElems invokes fn for every structure element (with an /S type) in
 // the tree, passing its role-map-resolved standard type.
-func walkStructElems(d *Document, cat *Dictionary, fn func(elem *Dictionary, stdType Name)) {
+func walkStructElems(d core.View, cat *Dictionary, fn func(elem *Dictionary, stdType Name)) {
 	for _, n := range structTree(d, cat) {
 		if n.hasS {
 			fn(n.elem, n.stdType)
@@ -395,7 +395,7 @@ func walkStructElems(d *Document, cat *Dictionary, fn func(elem *Dictionary, std
 
 // checkUAHeaderVersion: PDF/UA-1 is defined against PDF 1.7, so the header must
 // declare a 1.n version.
-func checkUAHeaderVersion(d *Document) []UAViolation {
+func checkUAHeaderVersion(d core.View) []UAViolation {
 	if len(d.Version) >= 2 && d.Version[0] == '1' && d.Version[1] == '.' {
 		return nil
 	}
@@ -404,7 +404,7 @@ func checkUAHeaderVersion(d *Document) []UAViolation {
 
 // checkUASuspects: a MarkInfo /Suspects value of true means the tagging may be
 // unreliable and is not permitted.
-func checkUASuspects(d *Document, cat *Dictionary) []UAViolation {
+func checkUASuspects(d core.View, cat *Dictionary) []UAViolation {
 	if mark := d.ResolveDict(cat.Get("MarkInfo")); mark != nil && isTrue(d, mark.Get("Suspects")) {
 		return []UAViolation{{"7.1", "/MarkInfo /Suspects must not be true", 0}}
 	}
@@ -413,7 +413,7 @@ func checkUASuspects(d *Document, cat *Dictionary) []UAViolation {
 
 // checkUAStrongWeak: a document must be either strongly structured (H1–H6) or
 // weakly structured (H), not both (7.4.4).
-func checkUAStrongWeak(d *Document, cat *Dictionary) []UAViolation {
+func checkUAStrongWeak(d core.View, cat *Dictionary) []UAViolation {
 	var hasH, hasHn bool
 	walkStructElems(d, cat, func(_ *Dictionary, t Name) {
 		switch {
@@ -430,7 +430,7 @@ func checkUAStrongWeak(d *Document, cat *Dictionary) []UAViolation {
 }
 
 // checkUANotes: every Note structure element must carry a unique /ID (7.9).
-func checkUANotes(d *Document, cat *Dictionary) []UAViolation {
+func checkUANotes(d core.View, cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	ids := map[string]bool{}
 	walkStructElems(d, cat, func(elem *Dictionary, t Name) {

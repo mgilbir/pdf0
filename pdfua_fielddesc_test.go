@@ -39,22 +39,22 @@ func TestUAFieldDescription(t *testing.T) {
 
 	// Field has no TU, pure widget kid carries TU -> flagged.
 	d := mk("", widget("", "btn1"))
-	if len(checkUAFieldDescription(d, root(d))) == 0 {
+	if len(checkUAFieldDescription(d.view(), root(d))) == 0 {
 		t.Error("misplaced widget /TU not flagged")
 	}
 	// Field supplies its own TU -> clean.
 	d = mk("button1", widget("", ""))
-	if len(checkUAFieldDescription(d, root(d))) != 0 {
+	if len(checkUAFieldDescription(d.view(), root(d))) != 0 {
 		t.Error("field with /TU wrongly flagged")
 	}
 	// Widget kid is itself a named sub-field (has /T) -> exempt.
 	d = mk("", widget("text2", "desc"))
-	if len(checkUAFieldDescription(d, root(d))) != 0 {
+	if len(checkUAFieldDescription(d.view(), root(d))) != 0 {
 		t.Error("sub-field widget wrongly flagged")
 	}
 	// Widget kid without TU -> clean.
 	d = mk("", widget("", ""))
-	if len(checkUAFieldDescription(d, root(d))) != 0 {
+	if len(checkUAFieldDescription(d.view(), root(d))) != 0 {
 		t.Error("widget without TU wrongly flagged")
 	}
 }

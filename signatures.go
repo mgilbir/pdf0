@@ -342,7 +342,7 @@ func refObjNum(d *Document, o Object) int {
 		return ref.Number
 	}
 	if dict, ok := o.(*Dictionary); ok {
-		return dictObjNum(d, dict)
+		return d.view().DictObjNum(dict)
 	}
 	return -1
 }

@@ -11,7 +11,7 @@ package pdf0
 // PageList returns the document's page dictionaries in reading order.
 func (d *Document) PageList() []*Dictionary {
 	var pages []*Dictionary
-	for _, pg := range collectPages(d, d.catalogPages()) {
+	for _, pg := range collectPages(d, d.view().CatalogPages()) {
 		pages = append(pages, pg.Dict)
 	}
 	return pages
@@ -110,7 +110,7 @@ func newDocWithPageTree(version string) (*Document, int, int) {
 // pageRefsOf returns the indirect references to each page in the document.
 func (d *Document) pageRefsOf() []IndirectRef {
 	var refs []IndirectRef
-	for _, pg := range collectPages(d, d.catalogPages()) {
+	for _, pg := range collectPages(d, d.view().CatalogPages()) {
 		refs = append(refs, IndirectRef{Number: pg.ObjNum})
 	}
 	return refs
@@ -171,7 +171,7 @@ func (d *Document) AppendPages(other *Document) {
 	if pages == nil {
 		return
 	}
-	pagesNum := dictObjNum(d, pages)
+	pagesNum := d.view().DictObjNum(pages)
 	max := 0
 	for num := range d.Objects {
 		if num > max {

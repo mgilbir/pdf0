@@ -21,10 +21,34 @@ import (
 // BDC/BMC…EMC. (The Artifact/tagged *mis-nesting* conditions 01-003/01-004 need
 // to distinguish structure-linked BDC from /OC and property-less BDC, which a
 // plain depth count cannot; they are left to the structure-correlation pass.)
-func checkUARealContent(d *Document, cat *Dictionary) []UAViolation {
+// uaCache is the PDF/UA engine's memo for one run: the flattened structure tree
+// and the per-stream real-content facts. It is reached through core.Slot rather
+// than held on the shared run state, because nothing else reads it and the core
+// package should not have to name these types.
+type uaCache struct {
+	streamFacts map[*Stream]*streamContentFacts // stream -> real-content messages + Do names
+
+	structTree      []structNode // flattened pre-order struct-tree nodes
+	structTreeValid bool
+}
+
+// uaSlot keys uaCache. An unexported empty struct cannot collide with another
+// package's key.
+type uaSlot struct{}
+
+// uaMemo returns this run's PDF/UA memo.
+func uaMemo(d core.View) *uaCache {
+	c := core.Slot[uaCache](d.Run, uaSlot{})
+	if c.streamFacts == nil {
+		c.streamFacts = map[*Stream]*streamContentFacts{}
+	}
+	return c
+}
+
+func checkUARealContent(d core.View, cat *Dictionary) []UAViolation {
 	var v []UAViolation
-	for _, pg := range collectPages(d, cat.Get("Pages")) {
-		data, key := d.view().ContentBytesAndKey(pg.Dict.Get("Contents"))
+	for _, pg := range d.Pages(cat.Get("Pages")) {
+		data, key := d.ContentBytesAndKey(pg.Dict.Get("Contents"))
 		for _, msg := range contentFacts(d, data, key).realMsgs {
 			v = append(v, UAViolation{"7.1", msg, pg.ObjNum})
 		}
@@ -45,21 +69,21 @@ type streamContentFacts struct {
 
 // contentFacts returns the streamContentFacts for content, memoized per content
 // stream (key) when a validation cache is present.
-func contentFacts(d *Document, content []byte, key *Stream) *streamContentFacts {
+func contentFacts(d core.View, content []byte, key *Stream) *streamContentFacts {
 	if key != nil {
-		if c := d.valCache; c != nil {
-			if f, ok := c.pdfua.streamFacts[key]; ok {
+		if c := uaMemo(d); true {
+			if f, ok := c.streamFacts[key]; ok {
 				return f
 			}
 		}
 	}
-	f := buildContentFacts(d.canceler(), content)
+	f := buildContentFacts(d.Cancel, content)
 	if key != nil {
-		if c := d.valCache; c != nil {
-			if c.pdfua.streamFacts == nil {
-				c.pdfua.streamFacts = make(map[*Stream]*streamContentFacts)
+		if c := uaMemo(d); true {
+			if c.streamFacts == nil {
+				c.streamFacts = make(map[*Stream]*streamContentFacts)
 			}
-			c.pdfua.streamFacts[key] = f
+			c.streamFacts[key] = f
 		}
 	}
 	return f
@@ -157,7 +181,7 @@ func buildContentFacts(cancel core.Canceler, content []byte) *streamContentFacts
 // (contains an /MCID marked-content sequence) must be painted at most once. If
 // it is invoked by more than one Do operator, a single structure element would
 // map to several renderings, breaking the one-to-one structure/content mapping.
-func checkUAFormXObjectMCID(d *Document) []UAViolation {
+func checkUAFormXObjectMCID(d core.View) []UAViolation {
 	mcidForm := map[int]bool{}
 	for num, iobj := range d.Objects {
 		s, ok := iobj.Value.(*Stream)
@@ -167,7 +191,7 @@ func checkUAFormXObjectMCID(d *Document) []UAViolation {
 		if st, _ := s.Dict.Get("Subtype").(Name); st != "Form" {
 			continue
 		}
-		if bytesContainsToken(decodeContentStream(d, s), "/MCID") {
+		if bytesContainsToken(d.Content(s), "/MCID") {
 			mcidForm[num] = true
 		}
 	}
@@ -201,8 +225,8 @@ func checkUAFormXObjectMCID(d *Document) []UAViolation {
 		}
 	}
 	// Page content sources.
-	for _, pg := range collectPages(d, d.catalogPages()) {
-		data, key := d.view().ContentBytesAndKey(pg.Dict.Get("Contents"))
+	for _, pg := range d.Pages(d.CatalogPages()) {
+		data, key := d.ContentBytesAndKey(pg.Dict.Get("Contents"))
 		countDo(data, key, d.ResolveDict(pg.Dict.Get("Resources")))
 	}
 	// Form XObject content sources (a form may invoke another form).
@@ -214,7 +238,7 @@ func checkUAFormXObjectMCID(d *Document) []UAViolation {
 		if st, _ := s.Dict.Get("Subtype").(Name); st != "Form" {
 			continue
 		}
-		countDo(decodeContentStream(d, s), s, d.ResolveDict(s.Dict.Get("Resources")))
+		countDo(d.Content(s), s, d.ResolveDict(s.Dict.Get("Resources")))
 	}
 
 	var v []UAViolation
@@ -273,7 +297,7 @@ func sortedInts(m map[int]bool) []int {
 // enclosing structure element: a Widget must sit under <Form>, a Link under
 // <Link>, and any other annotation under <Annot> (Matterhorn 28-002/010/011).
 // Annotations not reachable through an OBJR are left to the tagging check.
-func checkUAAnnotStructType(d *Document, cat *Dictionary) []UAViolation {
+func checkUAAnnotStructType(d core.View, cat *Dictionary) []UAViolation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
@@ -321,7 +345,7 @@ func checkUAAnnotStructType(d *Document, cat *Dictionary) []UAViolation {
 	var v []UAViolation
 	for num, iobj := range d.Objects {
 		a, ok := iobj.Value.(*Dictionary)
-		if !ok || !isAnnotation(a) {
+		if !ok || !core.IsAnnotation(a) {
 			continue
 		}
 		st, _ := a.Get("Subtype").(Name)

@@ -10,7 +10,6 @@ import (
 	"io"
 	"math"
 	"strings"
-	"unicode/utf8"
 )
 
 // This file is the core of the PDF/A validator: the conformance levels
@@ -346,9 +345,8 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level PDFALevel, raw
 //
 // Only run, below, is genuinely shared.
 type validationCache struct {
-	pdfa  pdfaCache
-	pdfua pdfuaCache
-	run   runState
+	pdfa pdfaCache
+	run  runState
 }
 
 // pdfaCache is the PDF/A engine's memoized traversals: the page tree, decoded
@@ -358,23 +356,9 @@ type pdfaCache struct {
 	hasDirectAnnots bool
 }
 
-// pdfuaCache is the PDF/UA engine's: the flattened structure tree and the
-// per-stream real-content facts.
-type pdfuaCache struct {
-	streamFacts map[*Stream]*streamContentFacts // stream -> real-content messages + Do names
-
-	structTree      []structNode // flattened pre-order struct-tree nodes
-	structTreeValid bool
-}
-
 // runState is the part that is genuinely shared, because it belongs to the run
 // rather than to any one subsystem.
 type runState struct {
-	// dictNum is a reverse index, dictionary value -> object number, backing
-	// dictObjNum. It is here rather than under a subsystem because that helper
-	// has callers in the page tree, PDF/A, PDF/UA and signing.
-	dictNum map[*Dictionary]int
-
 	// limits collects the resource guards that tripped during this run, so a
 	// check that declines to assert because its input was truncated still says
 	// so. See limits.go; always non-nil when built by newValidationCache.
@@ -387,7 +371,10 @@ type runState struct {
 	cancel core.Canceler
 
 	// shared is the run state handed to the packages below this one, through
-	// Document.view. It is built once per run and reused, not rebuilt per view:
+	// Document.view. Always build a validationCache with newValidationCache: a
+	// hand-built one leaves this nil, and a nil Run makes core.Slot hand back a
+	// fresh memo on every call — correct answers, no memoization, and nothing
+	// says so. It is built once per run and reused, not rebuilt per view:
 	// a View is copied by value and shares its Run pointer, so a fresh Run per
 	// call would fork the memo tables it will come to hold. That failure is
 	// invisible in the output — the answers stay right — and shows up only as
@@ -1375,7 +1362,7 @@ func checkFontsEmbedded(doc *Document, level PDFALevel) []ValidationError {
 // convention here matches the "unknown object" sentinel used in
 // ValidationError.Object; dictObjNum itself reports -1 on miss.
 func objNumForDict(doc *Document, dict *Dictionary) int {
-	if n := dictObjNum(doc, dict); n >= 0 {
+	if n := doc.view().DictObjNum(dict); n >= 0 {
 		return n
 	}
 	return 0
@@ -1633,7 +1620,7 @@ func checkAnnotationSubtypes(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
+		if dict, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -1744,7 +1731,7 @@ func checkAnnotationFlags(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
+		if dict, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -1821,7 +1808,7 @@ func checkAnnotationAppearance(doc *Document, level PDFALevel) []ValidationError
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && isAnnotation(dict) {
+		if dict, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -2156,7 +2143,7 @@ func checkAnnotationAA(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*Dictionary); ok && (isAnnotation(dict) || isWidgetOrField(dict)) {
+		if dict, ok := iobj.Value.(*Dictionary); ok && (core.IsAnnotation(dict) || isWidgetOrField(dict)) {
 			check(dict, num)
 		}
 	}
@@ -2168,7 +2155,7 @@ func checkAnnotationAA(doc *Document, level PDFALevel) []ValidationError {
 
 // isWidgetOrField reports whether dict is a widget annotation or an interactive
 // form field, which the /AA prohibition also covers and which need not carry
-// the /Rect that isAnnotation looks for.
+// the /Rect that core.IsAnnotation looks for.
 func isWidgetOrField(dict *Dictionary) bool {
 	if st, ok := dict.Get("Subtype").(Name); ok && st == "Widget" {
 		return true
@@ -2224,7 +2211,7 @@ func checkMetadataVersion(doc *Document, level PDFALevel) []ValidationError {
 		return nil
 	}
 
-	xmp := xmpText(doc, stream)
+	xmp := doc.view().XMPText(stream)
 	var errs []ValidationError
 
 	// Check pdfaid namespace URI. XML allows either quote style around the value,
@@ -2979,7 +2966,7 @@ func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	xmp := xmpText(doc, stream)
+	xmp := doc.view().XMPText(stream)
 
 	var errs []ValidationError
 
@@ -4967,13 +4954,6 @@ func decodeMetadataStream(doc *Document, stream *Stream) []byte {
 	return doc.view().MetadataContent(stream)
 }
 
-// xmpText decodes an XMP packet to UTF-8 text. Every XMP consumer goes through
-// it so no site can route the document's identification back through the
-// content budget.
-func xmpText(doc *Document, stream *Stream) string {
-	return decodeXMPToUTF8(decodeMetadataStream(doc, stream))
-}
-
 // scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
 // for device color operators (rg/RG, k/K, g/G).
 func scanContentsForDeviceOps(doc *Document, contentsRef Object) (usesRGB, usesCMYK, usesGray bool) {
@@ -5899,139 +5879,7 @@ func checkAlternateCSSeen(doc *Document, altCS Object, objNum int, level PDFALev
 
 // --- XMP encoding helpers (FP-2) ---
 
-func decodeXMPToUTF8(data []byte) string {
-	if len(data) == 0 {
-		return ""
-	}
-
-	// Check for BOM
-	if len(data) >= 4 {
-		// UTF-32 BE BOM: 00 00 FE FF
-		if data[0] == 0x00 && data[1] == 0x00 && data[2] == 0xFE && data[3] == 0xFF {
-			return decodeUTF32(data[4:], true)
-		}
-		// UTF-32 LE BOM: FF FE 00 00
-		if data[0] == 0xFF && data[1] == 0xFE && data[2] == 0x00 && data[3] == 0x00 {
-			return decodeUTF32(data[4:], false)
-		}
-	}
-	if len(data) >= 2 {
-		// UTF-16 BE BOM: FE FF
-		if data[0] == 0xFE && data[1] == 0xFF {
-			return decodeUTF16(data[2:], true)
-		}
-		// UTF-16 LE BOM: FF FE
-		if data[0] == 0xFF && data[1] == 0xFE {
-			return decodeUTF16(data[2:], false)
-		}
-	}
-
-	// UTF-8 BOM: EF BB BF - just skip it
-	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
-		return string(data[3:])
-	}
-
-	// Heuristic: detect encoding without BOM (check UTF-32 before UTF-16)
-	if len(data) >= 4 {
-		// UTF-32 BE: 00 00 00 xx
-		if data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] != 0x00 {
-			return decodeUTF32(data, true)
-		}
-		// UTF-32 LE: xx 00 00 00
-		if data[0] != 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x00 {
-			return decodeUTF32(data, false)
-		}
-		// UTF-16 BE: 00 xx
-		if data[0] == 0x00 && data[1] != 0x00 {
-			return decodeUTF16(data, true)
-		}
-		// UTF-16 LE: xx 00
-		if data[0] != 0x00 && data[1] == 0x00 {
-			return decodeUTF16(data, false)
-		}
-	}
-
-	return string(data)
-}
-
-func decodeUTF16(data []byte, bigEndian bool) string {
-	if len(data) < 2 {
-		return ""
-	}
-	var buf []byte
-	for i := 0; i+1 < len(data); i += 2 {
-		var codeUnit uint16
-		if bigEndian {
-			codeUnit = uint16(data[i])<<8 | uint16(data[i+1])
-		} else {
-			codeUnit = uint16(data[i+1])<<8 | uint16(data[i])
-		}
-
-		// Handle surrogate pairs
-		if codeUnit >= 0xD800 && codeUnit <= 0xDBFF {
-			if i+3 < len(data) {
-				var low uint16
-				if bigEndian {
-					low = uint16(data[i+2])<<8 | uint16(data[i+3])
-				} else {
-					low = uint16(data[i+3])<<8 | uint16(data[i+2])
-				}
-				if low >= 0xDC00 && low <= 0xDFFF {
-					r := rune(0x10000 + (rune(codeUnit-0xD800)<<10 | rune(low-0xDC00)))
-					var tmp [4]byte
-					n := utf8.EncodeRune(tmp[:], r)
-					buf = append(buf, tmp[:n]...)
-					i += 2
-					continue
-				}
-			}
-			buf = append(buf, 0xEF, 0xBF, 0xBD) // replacement char
-			continue
-		}
-
-		var tmp [4]byte
-		n := utf8.EncodeRune(tmp[:], rune(codeUnit))
-		buf = append(buf, tmp[:n]...)
-	}
-	return string(buf)
-}
-
-func decodeUTF32(data []byte, bigEndian bool) string {
-	if len(data) < 4 {
-		return ""
-	}
-	var buf []byte
-	for i := 0; i+3 < len(data); i += 4 {
-		var codePoint uint32
-		if bigEndian {
-			codePoint = uint32(data[i])<<24 | uint32(data[i+1])<<16 | uint32(data[i+2])<<8 | uint32(data[i+3])
-		} else {
-			codePoint = uint32(data[i+3])<<24 | uint32(data[i+2])<<16 | uint32(data[i+1])<<8 | uint32(data[i])
-		}
-
-		r := rune(codePoint)
-		if !utf8.ValidRune(r) {
-			r = 0xFFFD
-		}
-		var tmp [4]byte
-		n := utf8.EncodeRune(tmp[:], r)
-		buf = append(buf, tmp[:n]...)
-	}
-	return string(buf)
-}
-
 // --- helpers ---
-
-func isAnnotation(dict *Dictionary) bool {
-	if t, ok := dict.Get("Type").(Name); ok && t == "Annot" {
-		return true
-	}
-	// Also detect annotations by Subtype + Rect (some PDFs omit /Type)
-	if _, ok := dict.Get("Subtype").(Name); ok && dict.Get("Rect") != nil {
-		return true
-	}
-	return false
-}
 
 // --- ICCBased overprint and profile-identity rules (6.2.4.2 at 2b+/A-4) ---
 

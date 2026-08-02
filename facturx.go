@@ -405,5 +405,5 @@ func facturxXMP(doc *Document, cat *Dictionary) string {
 	if !ok {
 		return ""
 	}
-	return xmpText(doc, ms)
+	return doc.view().XMPText(ms)
 }

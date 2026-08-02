@@ -17,19 +17,19 @@ func TestUAWidgetDescription(t *testing.T) {
 	}
 	// No TU, no Alt -> flagged.
 	doc, _ := base()
-	if !hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if !hasUAClause(checkUAAnnotations(doc.view()), "7.18.1") {
 		t.Error("Widget without TU/Alt not flagged")
 	}
 	// Empty TU still counts as missing.
 	doc, w := base()
 	w.Set("TU", String{Value: []byte("")})
-	if !hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if !hasUAClause(checkUAAnnotations(doc.view()), "7.18.1") {
 		t.Error("Widget with empty TU not flagged")
 	}
 	// Non-empty TU -> clean.
 	doc, w = base()
 	w.Set("TU", String{Value: []byte("Your name")})
-	if hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(doc.view()), "7.18.1") {
 		t.Error("Widget with TU wrongly flagged")
 	}
 	// TU inherited from the parent field -> clean.
@@ -38,13 +38,13 @@ func TestUAWidgetDescription(t *testing.T) {
 	parent.Set("TU", String{Value: []byte("Inherited")})
 	doc.Objects[6] = &IndirectObject{Number: 6, Value: parent}
 	w.Set("Parent", IndirectRef{Number: 6})
-	if hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(doc.view()), "7.18.1") {
 		t.Error("Widget with inherited TU wrongly flagged")
 	}
 	// Alt instead of TU -> clean.
 	doc, w = base()
 	w.Set("Alt", String{Value: []byte("alt")})
-	if hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(doc.view()), "7.18.1") {
 		t.Error("Widget with Alt wrongly flagged")
 	}
 }

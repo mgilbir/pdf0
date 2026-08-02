@@ -19,19 +19,19 @@ func TestUASecurity(t *testing.T) {
 	doc.Trailer.Set("Encrypt", IndirectRef{Number: 9})
 
 	// No /P entry → violation.
-	if !hasUAClause(checkUASecurity(doc), "7.16") {
+	if !hasUAClause(checkUASecurity(doc.view()), "7.16") {
 		t.Error("missing /P not flagged")
 	}
 	// /P with bit 10 clear → violation.
 	enc.Set("P", Integer(-44)) // bit 10 (0x200) clear in this value's low bits
 	if p := int32(-44); uint32(p)&0x200 == 0 {
-		if !hasUAClause(checkUASecurity(doc), "7.16") {
+		if !hasUAClause(checkUASecurity(doc.view()), "7.16") {
 			t.Error("accessibility-disabled /P not flagged")
 		}
 	}
 	// /P with bit 10 set → clean.
 	enc.Set("P", Integer(int32(-1))) // all bits set
-	if hasUAClause(checkUASecurity(doc), "7.16") {
+	if hasUAClause(checkUASecurity(doc.view()), "7.16") {
 		t.Error("permissive /P should not be flagged")
 	}
 }
@@ -43,12 +43,12 @@ func TestUATrapNet(t *testing.T) {
 	a.Set("Type", Name("Annot"))
 	a.Set("Subtype", Name("TrapNet"))
 	doc.Objects[5] = &IndirectObject{Number: 5, Value: a}
-	if !hasUAClause(checkUAAnnotations(doc), "7.18.2") {
+	if !hasUAClause(checkUAAnnotations(doc.view()), "7.18.2") {
 		t.Error("TrapNet annotation not flagged")
 	}
 	// A hidden TrapNet is exempt.
 	a.Set("F", Integer(2))
-	if hasUAClause(checkUAAnnotations(doc), "7.18.2") {
+	if hasUAClause(checkUAAnnotations(doc.view()), "7.18.2") {
 		t.Error("hidden annotation should be exempt")
 	}
 }
@@ -61,18 +61,18 @@ func TestUAAnnotationTagged(t *testing.T) {
 	a.Set("Type", Name("Annot"))
 	a.Set("Subtype", Name("Text"))
 	doc.Objects[5] = &IndirectObject{Number: 5, Value: a}
-	if !hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if !hasUAClause(checkUAAnnotations(doc.view()), "7.18.1") {
 		t.Error("untagged annotation not flagged")
 	}
 	a.Set("StructParent", Integer(0))
 	a.Set("Contents", String{Value: []byte("a note")}) // 7.18.1 also needs a description
-	if hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(doc.view()), "7.18.1") {
 		t.Error("tagged annotation with a description should be clean")
 	}
 	// Hidden annotations are exempt even without /StructParent.
 	a.Delete("StructParent")
 	a.Set("F", Integer(2))
-	if hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(doc.view()), "7.18.1") {
 		t.Error("hidden annotation should be exempt from tagging")
 	}
 }
@@ -85,11 +85,11 @@ func TestUALinkAltText(t *testing.T) {
 	a.Set("Subtype", Name("Link"))
 	a.Set("StructParent", Integer(0)) // tagged, so only the alt-text rule applies
 	doc.Objects[5] = &IndirectObject{Number: 5, Value: a}
-	if !hasUAClause(checkUAAnnotations(doc), "7.18.5") {
+	if !hasUAClause(checkUAAnnotations(doc.view()), "7.18.5") {
 		t.Error("Link without /Contents not flagged")
 	}
 	a.Set("Contents", String{Value: []byte("go to the next section")})
-	if hasUAClause(checkUAAnnotations(doc), "7.18.5") {
+	if hasUAClause(checkUAAnnotations(doc.view()), "7.18.5") {
 		t.Error("Link with /Contents should be clean")
 	}
 }

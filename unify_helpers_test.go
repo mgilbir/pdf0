@@ -19,7 +19,7 @@ func TestObjNumForDictParity(t *testing.T) {
 	if got := objNumForDict(doc, font); got != 7 {
 		t.Fatalf("objNumForDict(font) = %d, want 7", got)
 	}
-	if got := dictObjNum(doc, font); got != 7 {
+	if got := doc.view().DictObjNum(font); got != 7 {
 		t.Fatalf("dictObjNum(font) = %d, want 7", got)
 	}
 
@@ -27,7 +27,7 @@ func TestObjNumForDictParity(t *testing.T) {
 	if got := objNumForDict(doc, orphan); got != 0 {
 		t.Fatalf("objNumForDict(orphan) = %d, want 0 (unknown-object sentinel)", got)
 	}
-	if got := dictObjNum(doc, orphan); got != -1 {
+	if got := doc.view().DictObjNum(orphan); got != -1 {
 		t.Fatalf("dictObjNum(orphan) = %d, want -1", got)
 	}
 }

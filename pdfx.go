@@ -148,7 +148,7 @@ func validatePDFX(cancel core.Canceler, doc *Document, level PDFXLevel) []PDFXVi
 		// Version: each PDF/X level is defined for a specific PDF version. PDF/X-1a
 		// and -3 for PDF 1.3/1.4, PDF/X-4/-4p for 1.6, PDF/X-6 for PDF 2.0. A newer
 		// version than the level allows is out of scope.
-		if maj, min, ok := parsePDFVersion(doc.Version); ok {
+		if maj, min, ok := core.ParsePDFVersion(doc.Version); ok {
 			maxMinor, pdf2 := level.versionBound()
 			if pdf2 {
 				if maj != 2 {
@@ -363,7 +363,7 @@ func pdfxCheckIdentification(doc *Document, level PDFXLevel, add func(rule, msg 
 	claimed := ""
 	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
 		if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
-			xmp := xmpText(doc, ms)
+			xmp := doc.view().XMPText(ms)
 			claimed = strings.TrimSpace(extractXMPValue(xmp, "pdfxid:GTS_PDFXVersion"))
 			if claimed == "" {
 				claimed = strings.TrimSpace(extractXMPValue(xmp, "GTS_PDFXVersion"))
@@ -460,7 +460,7 @@ func pdfxCheckTrapped(doc *Document, add func(rule, msg string, obj int)) {
 // lies within the MediaBox; a BleedBox, if present, contains that area and lies
 // within the MediaBox.
 func pdfxCheckPageBoxes(doc *Document, add func(rule, msg string, obj int)) {
-	for _, pg := range collectPages(doc, doc.catalogPages()) {
+	for _, pg := range collectPages(doc, doc.view().CatalogPages()) {
 		media, hasMedia := pdfxRect(doc, inheritedPageAttr(doc, pg.Dict, "MediaBox"))
 		if !hasMedia {
 			add("page-box", "page has no MediaBox", pg.ObjNum)
@@ -537,7 +537,7 @@ func pdfxCheckFontsEmbedded(doc *Document, add func(rule, msg string, obj int)) 
 			}
 		}
 	}
-	for _, pg := range collectPages(doc, doc.catalogPages()) {
+	for _, pg := range collectPages(doc, doc.view().CatalogPages()) {
 		scan(resolveResources(doc, pg.Dict), 0)
 	}
 }
@@ -618,16 +618,4 @@ func rectContains(outer, inner [4]float64) bool {
 	const eps = 1e-3
 	return inner[0] >= outer[0]-eps && inner[1] >= outer[1]-eps &&
 		inner[2] <= outer[2]+eps && inner[3] <= outer[3]+eps
-}
-
-// parsePDFVersion splits a "1.6"-style version string into major and minor.
-func parsePDFVersion(v string) (major, minor int, ok bool) {
-	dot := strings.IndexByte(v, '.')
-	if dot <= 0 || dot == len(v)-1 {
-		return 0, 0, false
-	}
-	if _, err := fmt.Sscanf(v, "%d.%d", &major, &minor); err != nil {
-		return 0, 0, false
-	}
-	return major, minor, true
 }

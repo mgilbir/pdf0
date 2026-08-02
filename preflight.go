@@ -1,6 +1,9 @@
 package pdf0
 
-import "crypto/rand"
+import (
+	"crypto/rand"
+	"github.com/mgilbir/pdf0/internal/core"
+)
 
 // This file implements preflight repair: the write side of PDF/A conformance,
 // as opposed to the validators that only report. It removes the document-level
@@ -49,14 +52,14 @@ func (d *Document) Repair(level PDFALevel) []RepairAction {
 	}
 
 	// Additional-actions dictionaries are forbidden on pages and annotations too.
-	for _, pg := range collectPages(d, d.catalogPages()) {
+	for _, pg := range collectPages(d, d.view().CatalogPages()) {
 		if pg.Dict.Get("AA") != nil {
 			pg.Dict.Delete("AA")
 			add("removed page additional-actions (/AA)")
 		}
 	}
 	for _, iobj := range d.Objects {
-		if a, ok := iobj.Value.(*Dictionary); ok && isAnnotation(a) && a.Get("AA") != nil {
+		if a, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(a) && a.Get("AA") != nil {
 			a.Delete("AA")
 			add("removed annotation additional-actions (/AA)")
 		}
@@ -74,12 +77,4 @@ func (d *Document) Repair(level PDFALevel) []RepairAction {
 	}
 
 	return actions
-}
-
-// catalogPages returns the catalog's /Pages reference, or nil.
-func (d *Document) catalogPages() Object {
-	if cat := d.ResolveDict(d.Trailer.Get("Root")); cat != nil {
-		return cat.Get("Pages")
-	}
-	return nil
 }

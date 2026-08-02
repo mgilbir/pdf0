@@ -148,7 +148,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	if form == nil {
 		t.Fatal("catalog /AcroForm does not resolve")
 	}
-	if dictObjNum(d2, form) < 0 {
+	if d2.view().DictObjNum(form) < 0 {
 		t.Error("the form the catalog points at is still not an indirect object")
 	}
 	// The promoted form must be the original, extended: the pre-existing field

@@ -251,7 +251,7 @@ func checkA4TriggerEvents(doc *Document, level PDFALevel) []ValidationError {
 		report(doc.ResolveDict(page.Dict.Get("AA")), page.ObjNum)
 	}
 	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*Dictionary); ok && isAnnotation(d) {
+		if d, ok := iobj.Value.(*Dictionary); ok && core.IsAnnotation(d) {
 			report(doc.ResolveDict(d.Get("AA")), num)
 		}
 	}
@@ -536,7 +536,7 @@ func pdfaConformanceFlag(doc *Document) string {
 	if !ok {
 		return ""
 	}
-	xmp := xmpText(doc, stream)
+	xmp := doc.view().XMPText(stream)
 	if v := extractXMPValue(xmp, "pdfaid:conformance"); v != "" {
 		return strings.ToUpper(v)
 	}
@@ -616,7 +616,7 @@ func declaredPDFALevel(doc *Document) (PDFALevel, bool) {
 	if !ok {
 		return 0, false
 	}
-	xmp := xmpText(doc, stream)
+	xmp := doc.view().XMPText(stream)
 	part := extractXMPValue(xmp, "pdfaid:part")
 	if part == "" {
 		part = extractXMPAttr(xmp, "pdfaid:part")

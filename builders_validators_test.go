@@ -94,7 +94,7 @@ func TestUAHeadingsRoleMapResolved(t *testing.T) {
 	roleMap.Set("Titre1", Name("H1"))
 	roleMap.Set("Titre3", Name("H3"))
 	doc.ResolveDict(cat.Get("StructTreeRoot")).Set("RoleMap", roleMap)
-	if !hasUAClause(checkUAHeadings(doc, cat), "7.4") {
+	if !hasUAClause(checkUAHeadings(doc.view(), cat), "7.4") {
 		t.Error("role-mapped heading skip (Titre1=H1 followed by Titre3=H3) was not flagged")
 	}
 }

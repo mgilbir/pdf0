@@ -200,7 +200,7 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 				if len(pages) == 0 {
 					t.Fatal("the produced document has no pages")
 				}
-				if first := dictObjNum(signed, pages[0]); first != pRef.Number {
+				if first := signed.view().DictObjNum(pages[0]); first != pRef.Number {
 					t.Errorf("the widget is on page object %d, want the first page in reading order (object %d)", pRef.Number, first)
 				}
 			})

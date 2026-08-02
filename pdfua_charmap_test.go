@@ -40,10 +40,10 @@ func TestUACharMapping(t *testing.T) {
 		doc.Trailer.Set("Root", IndirectRef{Number: 1})
 		return doc
 	}
-	if len(checkUACharMapping(mk(false))) == 0 {
+	if len(checkUACharMapping(mk(false).view())) == 0 {
 		t.Error("Identity font without ToUnicode not flagged")
 	}
-	if len(checkUACharMapping(mk(true))) != 0 {
+	if len(checkUACharMapping(mk(true).view())) != 0 {
 		t.Error("Identity font with ToUnicode should be clean")
 	}
 }

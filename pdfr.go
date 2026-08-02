@@ -94,7 +94,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 		if d.Encrypted || d.Trailer.Get("Encrypt") != nil {
 			add("encryption", "a PDF/R file shall not be encrypted", 0)
 		}
-		if maj, _, ok := parsePDFVersion(d.Version); ok && maj != 2 {
+		if maj, _, ok := core.ParsePDFVersion(d.Version); ok && maj != 2 {
 			add("version", fmt.Sprintf("PDF/R is defined for PDF 2.0; file declares %s", d.Version), 0)
 		}
 	})

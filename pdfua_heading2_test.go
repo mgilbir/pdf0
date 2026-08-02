@@ -30,12 +30,12 @@ func headingDoc(doc *Document, k Object) *Dictionary {
 func TestUAFirstHeadingH1(t *testing.T) {
 	doc := &Document{Objects: map[int]*IndirectObject{}}
 	cat := headingDoc(doc, Array{heading(doc, 10, "H2"), heading(doc, 11, "H3")})
-	if !hasUAClause(checkUAHeadings(doc, cat), "7.4.2") {
+	if !hasUAClause(checkUAHeadings(doc.view(), cat), "7.4.2") {
 		t.Error("first heading H2 not flagged")
 	}
 	doc = &Document{Objects: map[int]*IndirectObject{}}
 	cat = headingDoc(doc, Array{heading(doc, 10, "H1"), heading(doc, 11, "H2")})
-	if hasUAClause(checkUAHeadings(doc, cat), "7.4.2") {
+	if hasUAClause(checkUAHeadings(doc.view(), cat), "7.4.2") {
 		t.Error("first heading H1 wrongly flagged")
 	}
 }
@@ -45,13 +45,13 @@ func TestUAOneHPerNode(t *testing.T) {
 	doc := &Document{Objects: map[int]*IndirectObject{}}
 	sect := heading(doc, 12, "Sect", heading(doc, 10, "H"), heading(doc, 11, "H"))
 	cat := headingDoc(doc, sect)
-	if !hasUAClause(checkUAOneHPerNode(doc, cat), "7.4.4") {
+	if !hasUAClause(checkUAOneHPerNode(doc.view(), cat), "7.4.4") {
 		t.Error("two H children under one node not flagged")
 	}
 	doc = &Document{Objects: map[int]*IndirectObject{}}
 	single := heading(doc, 12, "Sect", heading(doc, 10, "H"))
 	cat = headingDoc(doc, single)
-	if hasUAClause(checkUAOneHPerNode(doc, cat), "7.4.4") {
+	if hasUAClause(checkUAOneHPerNode(doc.view(), cat), "7.4.4") {
 		t.Error("single H child wrongly flagged")
 	}
 }

@@ -749,7 +749,7 @@ func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	xmp := xmpText(doc, stream)
+	xmp := doc.view().XMPText(stream)
 	if xmp == "" {
 		return nil
 	}
@@ -1153,7 +1153,7 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 		errs = append(errs, ValidationError{Rule: attrRule, Level: level, Message: "the XMP packet is not encoded as UTF-8"})
 	}
 
-	xmp := decodeXMPToUTF8(raw)
+	xmp := core.DecodeXMPToUTF8(raw)
 	if xmp != "" {
 		// Stream the packet rather than building a node tree: well-formedness and
 		// the presence of a properly namespaced rdf:RDF element are all that is
@@ -1177,7 +1177,7 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 // extractXPacketHeader returns the text of the leading "<?xpacket ... ?>"
 // processing instruction, or "".
 func extractXPacketHeader(raw []byte) string {
-	s := decodeXMPToUTF8(raw)
+	s := core.DecodeXMPToUTF8(raw)
 	i := strings.Index(s, "<?xpacket")
 	if i < 0 {
 		return ""

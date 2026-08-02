@@ -1698,7 +1698,7 @@ func TestCorpus(t *testing.T) {
 func TestDecodeXMPToUTF8(t *testing.T) {
 	t.Run("plain UTF-8", func(t *testing.T) {
 		data := []byte("<pdfaid:part>4</pdfaid:part>")
-		got := decodeXMPToUTF8(data)
+		got := core.DecodeXMPToUTF8(data)
 		if !strings.Contains(got, "pdfaid:part") {
 			t.Errorf("expected pdfaid:part in output, got %q", got)
 		}
@@ -1706,7 +1706,7 @@ func TestDecodeXMPToUTF8(t *testing.T) {
 
 	t.Run("UTF-8 with BOM", func(t *testing.T) {
 		data := append([]byte{0xEF, 0xBB, 0xBF}, []byte("<pdfaid:part>4</pdfaid:part>")...)
-		got := decodeXMPToUTF8(data)
+		got := core.DecodeXMPToUTF8(data)
 		if !strings.Contains(got, "pdfaid:part") {
 			t.Errorf("expected pdfaid:part in output, got %q", got)
 		}
@@ -1720,7 +1720,7 @@ func TestDecodeXMPToUTF8(t *testing.T) {
 		for _, c := range []byte(src) {
 			utf16be = append(utf16be, 0x00, c)
 		}
-		got := decodeXMPToUTF8(utf16be)
+		got := core.DecodeXMPToUTF8(utf16be)
 		if !strings.Contains(got, "pdfaid:part") {
 			t.Errorf("expected pdfaid:part in decoded UTF-16 BE, got %q", got)
 		}
@@ -1733,14 +1733,14 @@ func TestDecodeXMPToUTF8(t *testing.T) {
 		for _, c := range []byte(src) {
 			utf16le = append(utf16le, c, 0x00)
 		}
-		got := decodeXMPToUTF8(utf16le)
+		got := core.DecodeXMPToUTF8(utf16le)
 		if !strings.Contains(got, "pdfaid:part") {
 			t.Errorf("expected pdfaid:part in decoded UTF-16 LE, got %q", got)
 		}
 	})
 
 	t.Run("empty", func(t *testing.T) {
-		got := decodeXMPToUTF8(nil)
+		got := core.DecodeXMPToUTF8(nil)
 		if got != "" {
 			t.Errorf("expected empty string, got %q", got)
 		}

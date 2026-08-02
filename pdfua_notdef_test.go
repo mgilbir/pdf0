@@ -36,10 +36,10 @@ func TestUANotdefCID(t *testing.T) {
 		doc.Trailer.Set("Root", IndirectRef{Number: 1})
 		return doc
 	}
-	if len(checkUANotdefCID(mk("BT /F1 12 Tf <0000> Tj ET"))) == 0 {
+	if len(checkUANotdefCID(mk("BT /F1 12 Tf <0000> Tj ET").view())) == 0 {
 		t.Error("shown CID 0 (.notdef) not flagged")
 	}
-	if len(checkUANotdefCID(mk("BT /F1 12 Tf <00010002> Tj ET"))) != 0 {
+	if len(checkUANotdefCID(mk("BT /F1 12 Tf <00010002> Tj ET").view())) != 0 {
 		t.Error("non-zero CIDs wrongly flagged")
 	}
 }

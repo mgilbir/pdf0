@@ -43,7 +43,7 @@ func validatePDFUA2(cancel core.Canceler, d *Document) []UAViolation {
 
 	// PDF/UA-2 is defined against PDF 2.0.
 	out = append(out, runUACheck(func() []UAViolation {
-		if maj, _, ok := parsePDFVersion(d.Version); ok && maj != 2 {
+		if maj, _, ok := core.ParsePDFVersion(d.Version); ok && maj != 2 {
 			return []UAViolation{{"4", fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %s", d.Version), 0}}
 		}
 		return nil

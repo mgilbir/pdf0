@@ -87,6 +87,45 @@ type Run struct {
 	fontUsageValid bool
 	fontEvents     map[*object.Stream][]FontEvent
 	usedNames      map[*object.Stream]UsedResourceNames
+
+	// dictNum is a reverse index, dictionary value -> object number, backing
+	// DictObjNum. It answers with the lowest number when a dictionary is the
+	// value of more than one object, so a report is reproducible.
+	dictNum map[*object.Dictionary]int
+
+	// slots holds per-subsystem memos, keyed by a type the subsystem owns. See
+	// Slot.
+	slots map[any]any
+}
+
+// Slot returns the run's memo of type T, creating it on first use.
+//
+// It exists so that a subsystem can memoize across one operation without this
+// package having to name its types. The memos above — pages, content, fonts —
+// are here because several subsystems share them; a memo only one subsystem
+// reads belongs to that subsystem, and this is how it keeps it while still
+// living exactly as long as the run does.
+//
+// key identifies the slot and is conventionally an empty struct type declared
+// by the caller, which makes collisions impossible: two packages cannot name
+// the same unexported type.
+//
+// Outside a run — a nil Run — every call returns a fresh T. Callers therefore
+// get correct answers and no memoization, which is what they got before this
+// existed.
+func Slot[T any](r *Run, key any) *T {
+	if r == nil {
+		return new(T)
+	}
+	if v, ok := r.slots[key]; ok {
+		return v.(*T)
+	}
+	p := new(T)
+	if r.slots == nil {
+		r.slots = map[any]any{}
+	}
+	r.slots[key] = p
+	return p
 }
 
 // NewRun builds the per-operation state. The memo tables are made here so that
@@ -100,6 +139,7 @@ func NewRun(trips *Recorder) *Run {
 		psProgs:    make(map[*object.Stream]psProgEntry),
 		fontEvents: make(map[*object.Stream][]FontEvent),
 		usedNames:  make(map[*object.Stream]UsedResourceNames),
+		slots:      map[any]any{},
 	}
 }
 

@@ -104,7 +104,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 		claimed := ""
 		if cat != nil {
 			if ms, ok := doc.Resolve(cat.Get("Metadata")).(*Stream); ok {
-				xmp := xmpText(doc, ms)
+				xmp := doc.view().XMPText(ms)
 				claimed = strings.TrimSpace(extractXMPValue(xmp, "pdfvtid:GTS_PDFVTVersion"))
 			}
 		}

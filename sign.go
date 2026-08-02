@@ -286,7 +286,7 @@ func withSignatureField(d *Document) (*Document, []int, error) {
 	// of its own to update, so it is promoted to an indirect object.
 	formNum := -1
 	if existingForm != nil {
-		formNum = dictObjNum(d, existingForm)
+		formNum = d.view().DictObjNum(existingForm)
 	}
 	if formNum >= 0 {
 		clone.Objects[formNum] = &IndirectObject{Number: formNum, Value: acroForm}
@@ -478,54 +478,13 @@ func signingTarget(d *Document, what string) (catalog, page *Dictionary, catNum,
 	if page == nil {
 		return nil, nil, 0, 0, fmt.Errorf("%s: document has no page to attach the field to", what)
 	}
-	catNum = dictObjNum(d, catalog)
+	catNum = d.view().DictObjNum(catalog)
 	if catNum < 0 {
 		return nil, nil, 0, 0, fmt.Errorf("%s: the document catalog is a direct object, so it cannot be updated; ISO 32000-2 §7.5.5 requires the trailer /Root to be an indirect reference", what)
 	}
-	pageNum = dictObjNum(d, page)
+	pageNum = d.view().DictObjNum(page)
 	if pageNum < 0 {
 		return nil, nil, 0, 0, fmt.Errorf("%s: the first page is a direct object, so it cannot be updated; ISO 32000-2 §7.7.3.2 requires the page tree's /Kids entries to be indirect references", what)
 	}
 	return catalog, page, catNum, pageNum, nil
-}
-
-// dictObjNum finds the object number whose value is the given dictionary. During
-// a validation run a reverse index is built once in the cache and reused, so the
-// many per-font and per-cell lookups do not each scan the whole object table
-// (which is quadratic on large documents — hundreds of thousands of objects).
-func dictObjNum(d *Document, target *Dictionary) int {
-	// Two cross-reference slots may point at the same bytes, in which case Read
-	// stores one parsed value under both object numbers (see parsedByOffset), so
-	// a *Dictionary can be the value of more than one object. Both loops below
-	// therefore answer with the LOWEST such number rather than with whichever
-	// one the range happens to reach first: d.Objects is a Go map and Go
-	// randomises its iteration order per run, so "first" would put a different
-	// object number in a validator's report on each run over the same file.
-	// Numeric order is a total order, so this answer is reproducible — which is
-	// load-bearing, as reports are diffed run against run.
-	if c := d.valCache; c != nil {
-		if c.run.dictNum == nil {
-			c.run.dictNum = make(map[*Dictionary]int, len(d.Objects))
-			for num, iobj := range d.Objects {
-				if dp, ok := iobj.Value.(*Dictionary); ok {
-					if prev, dup := c.run.dictNum[dp]; !dup || num < prev {
-						c.run.dictNum[dp] = num
-					}
-				}
-			}
-		}
-		if n, ok := c.run.dictNum[target]; ok {
-			return n
-		}
-		return -1
-	}
-	best := -1
-	for num, iobj := range d.Objects {
-		if dp, ok := iobj.Value.(*Dictionary); ok && dp == target {
-			if best < 0 || num < best {
-				best = num
-			}
-		}
-	}
-	return best
 }

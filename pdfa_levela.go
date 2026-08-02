@@ -86,7 +86,7 @@ func documentXMP(doc *Document) string {
 	if !ok {
 		return ""
 	}
-	return xmpText(doc, stream)
+	return doc.view().XMPText(stream)
 }
 
 // checkLevelAConformance verifies the XMP declares Level A conformance
@@ -123,7 +123,7 @@ func checkLevelAStructure(doc *Document, level PDFALevel) []ValidationError {
 	}
 	var errs []ValidationError
 	mark := doc.ResolveDict(cat.Get("MarkInfo"))
-	if mark == nil || !isTrue(doc, mark.Get("Marked")) {
+	if mark == nil || !isTrue(doc.view(), mark.Get("Marked")) {
 		errs = append(errs, ValidationError{
 			Rule:    levelAClause("structure", level),
 			Level:   level,

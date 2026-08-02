@@ -1,6 +1,9 @@
 package pdf0
 
-import "testing"
+import (
+	"github.com/mgilbir/pdf0/internal/core"
+	"testing"
+)
 
 // TestStructTreeFlatten checks that the cached flattened structure tree visits
 // every reachable structure element exactly once — descending through arrays
@@ -46,8 +49,8 @@ func TestStructTreeFlatten(t *testing.T) {
 	doc.Trailer.Set("Root", IndirectRef{Number: 3})
 
 	// Install a validation cache so structTree memoizes.
-	doc.valCache = &validationCache{}
-	nodes := structTree(doc, cat)
+	doc.valCache = newValidationCache(core.Canceler{})
+	nodes := structTree(doc.view(), cat)
 
 	// Expected pre-order object numbers: Document(1), Sect(10), H1(20), P(21),
 	// MyPara(11) [P(21) already seen -> not revisited], Div(12) [Sect(10) already
@@ -82,14 +85,14 @@ func TestStructTreeFlatten(t *testing.T) {
 	}
 
 	// Memoization: a second call returns the identical backing slice.
-	if again := structTree(doc, cat); &again[0] != &nodes[0] {
+	if again := structTree(doc.view(), cat); &again[0] != &nodes[0] {
 		t.Error("structTree not memoized (returned a fresh slice)")
 	}
 
 	// walkStructElems must visit exactly the /S nodes, in the same order.
 	var walked []int
-	walkStructElems(doc, cat, func(e *Dictionary, _ Name) {
-		walked = append(walked, dictObjNum(doc, e))
+	walkStructElems(doc.view(), cat, func(e *Dictionary, _ Name) {
+		walked = append(walked, doc.view().DictObjNum(e))
 	})
 	if len(walked) != len(wantOrder) {
 		t.Fatalf("walkStructElems visited %d, want %d", len(walked), len(wantOrder))

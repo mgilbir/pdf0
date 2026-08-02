@@ -136,7 +136,7 @@ func withArchivalTimestamp(d *Document, certs []*x509.Certificate) (*Document, [
 	// that the catalog does not reference.
 	formNum := -1
 	if existingForm != nil {
-		formNum = dictObjNum(d, existingForm)
+		formNum = d.view().DictObjNum(existingForm)
 	}
 	if formNum < 0 {
 		formNum = alloc()
