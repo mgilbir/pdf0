@@ -2,9 +2,10 @@ package pdf0
 
 import (
 	"bytes"
-	"testing"
-
 	lcms2 "github.com/mgilbir/golittlecms"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
+	"testing"
 )
 
 // TestGeneratedICCProfileIsReal verifies that the OutputIntent ICC profile
@@ -14,21 +15,21 @@ import (
 // each PDF/A level permits (ICC v2 for PDF/A-1's PDF 1.4, ICC v4 otherwise).
 func TestGeneratedICCProfileIsReal(t *testing.T) {
 	cases := []struct {
-		level     PDFALevel
+		level     pdfa.Level
 		wantMajor byte
 	}{
-		{PDFA1b, 2},
-		{PDFA2b, 4},
-		{PDFA3b, 4},
-		{PDFA4, 4},
+		{pdfa.PDFA1b, 2},
+		{pdfa.PDFA2b, 4},
+		{pdfa.PDFA3b, 4},
+		{pdfa.PDFA4, 4},
 	}
 	for _, tc := range cases {
 		doc := NewPDFADocument(tc.level)
 
 		// Locate the OutputIntent's DestOutputProfile stream.
 		catalog := doc.view().Catalog()
-		oi := doc.ResolveDict(catalog.Get("OutputIntents").(Array)[0])
-		prof, ok := doc.Resolve(oi.Get("DestOutputProfile")).(*Stream)
+		oi := doc.ResolveDict(catalog.Get("OutputIntents").(object.Array)[0])
+		prof, ok := doc.Resolve(oi.Get("DestOutputProfile")).(*object.Stream)
 		if !ok {
 			t.Fatalf("%v: DestOutputProfile is not a stream", tc.level)
 		}
@@ -47,7 +48,7 @@ func TestGeneratedICCProfileIsReal(t *testing.T) {
 		if data[8] != tc.wantMajor {
 			t.Errorf("%v: ICC major version = %d, want %d", tc.level, data[8], tc.wantMajor)
 		}
-		if n, _ := prof.Dict.Get("N").(Integer); int(n) != 3 {
+		if n, _ := prof.Dict.Get("N").(object.Integer); int(n) != 3 {
 			t.Errorf("%v: /N = %d, want 3", tc.level, n)
 		}
 
@@ -69,7 +70,7 @@ func TestGeneratedICCProfileIsReal(t *testing.T) {
 // violations at its own level — the check that the former stub was never
 // exercised against (audit C29).
 func TestGeneratedDocPassesOutputIntentProfileCheck(t *testing.T) {
-	for _, lvl := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
+	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		doc := NewPDFADocumentWithInfo(lvl, "T", "A")
 		var buf bytes.Buffer
 		if err := doc.Write(&buf); err != nil {

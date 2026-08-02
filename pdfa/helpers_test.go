@@ -27,7 +27,7 @@ func mkView(objs map[int]*object.IndirectObject, trailer object.Dictionary) core
 
 // mkPDFAView is mkView over the minimal conforming skeleton for a level — the
 // same object graph NewPDFADocument wraps into a Document.
-func mkPDFAView(level PDFALevel) core.View {
+func mkPDFAView(level Level) core.View {
 	objs, trailer, version := Skeleton(level, "", "")
 	v := mkView(objs, trailer)
 	v.Version = version

@@ -2,37 +2,39 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"testing"
 )
 
 // TestEmptyArrayColorSpaceNoPanic ensures an empty-array colour space is
 // handled without panicking the validator (audit C3).
 func TestEmptyArrayColorSpaceNoPanic(t *testing.T) {
-	cs := &Dictionary{}
-	cs.Set("CS0", Array{}) // empty-array colour space
-	res := &Dictionary{}
+	cs := &object.Dictionary{}
+	cs.Set("CS0", object.Array{}) // empty-array colour space
+	res := &object.Dictionary{}
 	res.Set("ColorSpace", cs)
-	page := &Dictionary{}
-	page.Set("Type", Name("Page"))
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
 	page.Set("Resources", res)
-	doc := &Document{Version: "2.0", Objects: map[int]*IndirectObject{
+	doc := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{
 		1: {Number: 1, Value: page},
-	}, Trailer: Dictionary{}}
+	}, Trailer: object.Dictionary{}}
 
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("ValidatePDFABytes panicked on empty-array colour space: %v", r)
 		}
 	}()
-	_ = ValidatePDFABytes(doc, PDFA2b, nil)
+	_ = ValidatePDFABytes(doc, pdfa.PDFA2b, nil)
 }
 
 // TestEqualCyclicNoOverflow ensures Equal on a cyclic direct dictionary returns
 // rather than overflowing the stack (audit C15).
 func TestEqualCyclicNoOverflow(t *testing.T) {
-	d := &Dictionary{}
+	d := &object.Dictionary{}
 	d.Set("Self", d)
-	d2 := &Dictionary{}
+	d2 := &object.Dictionary{}
 	d2.Set("Self", d2)
 	_ = Equal(d, d2) // must return (false), not crash
 }
@@ -40,7 +42,7 @@ func TestEqualCyclicNoOverflow(t *testing.T) {
 // TestSerializeCyclicErrors ensures WriteObject on a cyclic graph returns an
 // error rather than overflowing the stack (audit C15).
 func TestSerializeCyclicErrors(t *testing.T) {
-	d := &Dictionary{}
+	d := &object.Dictionary{}
 	d.Set("Self", d)
 	var buf bytes.Buffer
 	if err := NewSerializer(&buf).WriteObject(d); err == nil {
@@ -55,8 +57,8 @@ func TestTypedNilNoPanic(t *testing.T) {
 			t.Fatalf("typed-nil handling panicked: %v", r)
 		}
 	}()
-	var nilDict *Dictionary
-	_ = Equal(nilDict, &Dictionary{})
+	var nilDict *object.Dictionary
+	_ = Equal(nilDict, &object.Dictionary{})
 	_ = Equal(nilDict, nilDict)
 	var buf bytes.Buffer
 	if err := NewSerializer(&buf).WriteObject(nilDict); err == nil {

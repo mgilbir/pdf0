@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 	"math/big"
 	"testing"
 )
@@ -17,15 +19,15 @@ func TestCheckCertRevocation(t *testing.T) {
 	revoked := signtest.MakeCRL(t, ca, caKey, []*x509.Certificate{leaf})
 
 	// OCSP is consulted first; a good OCSP wins even if a CRL would say revoked.
-	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, [][]byte{good}); info.Status != RevocationGood || info.Source != "OCSP" {
+	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, [][]byte{good}); info.Status != sign.RevocationGood || info.Source != "OCSP" {
 		t.Errorf("expected OCSP good to win: %+v", info)
 	}
 	// CRL is used when no OCSP is available.
-	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, nil); info.Status != RevocationRevoked || info.Source != "CRL" {
+	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, nil); info.Status != sign.RevocationRevoked || info.Source != "CRL" {
 		t.Errorf("expected CRL revoked: %+v", info)
 	}
 	// No material -> unknown.
-	if info := CheckCertRevocation(leaf, ca, nil, nil); info.Status != RevocationUnknown {
+	if info := CheckCertRevocation(leaf, ca, nil, nil); info.Status != sign.RevocationUnknown {
 		t.Errorf("expected unknown with no material: %+v", info)
 	}
 }
@@ -35,26 +37,26 @@ func TestDSSRevocationMaterial(t *testing.T) {
 	crl := signtest.MakeCRL(t, ca, caKey, []*x509.Certificate{leaf})
 	ocsp := signtest.MakeOCSP(t, leaf, ca, caKey, "good")
 
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "2.0"}
-	set := func(n int, v Object) { d.Objects[n] = &IndirectObject{Number: n, Value: v} }
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("DSS", IndirectRef{Number: 2})
+	d := &Document{Objects: map[int]*object.IndirectObject{}, Version: "2.0"}
+	set := func(n int, v object.Object) { d.Objects[n] = &object.IndirectObject{Number: n, Value: v} }
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("DSS", object.IndirectRef{Number: 2})
 	set(1, cat)
-	dss := &Dictionary{}
-	dss.Set("CRLs", Array{IndirectRef{Number: 3}})
-	dss.Set("OCSPs", Array{IndirectRef{Number: 4}})
+	dss := &object.Dictionary{}
+	dss.Set("CRLs", object.Array{object.IndirectRef{Number: 3}})
+	dss.Set("OCSPs", object.Array{object.IndirectRef{Number: 4}})
 	set(2, dss)
-	set(3, &Stream{Dict: Dictionary{}, Data: crl})
-	set(4, &Stream{Dict: Dictionary{}, Data: ocsp})
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	set(3, &object.Stream{Dict: object.Dictionary{}, Data: crl})
+	set(4, &object.Stream{Dict: object.Dictionary{}, Data: ocsp})
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	crls, ocsps := d.DSSRevocationMaterial()
 	if len(crls) != 1 || len(ocsps) != 1 {
 		t.Fatalf("DSS material: got %d CRLs, %d OCSPs", len(crls), len(ocsps))
 	}
-	if info := CheckCertRevocation(leaf, ca, crls, ocsps); info.Status != RevocationGood {
+	if info := CheckCertRevocation(leaf, ca, crls, ocsps); info.Status != sign.RevocationGood {
 		t.Errorf("DSS-driven revocation check: %+v", info)
 	}
 }
@@ -94,7 +96,7 @@ func TestSignatureRevocationFromDSS(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	inject := func(status string) []SignatureResult {
+	inject := func(status string) []sign.Result {
 		maxN := 0
 		for n := range signed.Objects {
 			if n > maxN {
@@ -102,17 +104,17 @@ func TestSignatureRevocationFromDSS(t *testing.T) {
 			}
 		}
 		caNum, matNum, dssNum := maxN+1, maxN+2, maxN+3
-		signed.Objects[caNum] = &IndirectObject{Number: caNum, Value: &Stream{Dict: Dictionary{}, Data: ca.Raw}}
+		signed.Objects[caNum] = &object.IndirectObject{Number: caNum, Value: &object.Stream{Dict: object.Dictionary{}, Data: ca.Raw}}
 		var revoked []*x509.Certificate
 		if status == "revoked" {
 			revoked = []*x509.Certificate{leaf}
 		}
-		signed.Objects[matNum] = &IndirectObject{Number: matNum, Value: &Stream{Dict: Dictionary{}, Data: signtest.MakeCRL(t, ca, caKey, revoked)}}
-		dss := &Dictionary{}
-		dss.Set("Certs", Array{IndirectRef{Number: caNum}})
-		dss.Set("CRLs", Array{IndirectRef{Number: matNum}})
-		signed.Objects[dssNum] = &IndirectObject{Number: dssNum, Value: dss}
-		signed.ResolveDict(signed.Trailer.Get("Root")).Set("DSS", IndirectRef{Number: dssNum})
+		signed.Objects[matNum] = &object.IndirectObject{Number: matNum, Value: &object.Stream{Dict: object.Dictionary{}, Data: signtest.MakeCRL(t, ca, caKey, revoked)}}
+		dss := &object.Dictionary{}
+		dss.Set("Certs", object.Array{object.IndirectRef{Number: caNum}})
+		dss.Set("CRLs", object.Array{object.IndirectRef{Number: matNum}})
+		signed.Objects[dssNum] = &object.IndirectObject{Number: dssNum, Value: dss}
+		signed.ResolveDict(signed.Trailer.Get("Root")).Set("DSS", object.IndirectRef{Number: dssNum})
 		return signed.VerifySignatures(out)
 	}
 
@@ -120,12 +122,12 @@ func TestSignatureRevocationFromDSS(t *testing.T) {
 	if len(res) != 1 || !res[0].Valid {
 		t.Fatalf("signature should still verify: %+v", res)
 	}
-	if res[0].Revocation.Status != RevocationRevoked || res[0].Revocation.Source != "CRL" {
+	if res[0].Revocation.Status != sign.RevocationRevoked || res[0].Revocation.Source != "CRL" {
 		t.Errorf("expected the signer to be reported revoked, got %+v", res[0].Revocation)
 	}
 
 	res = inject("good")
-	if res[0].Revocation.Status != RevocationGood {
+	if res[0].Revocation.Status != sign.RevocationGood {
 		t.Errorf("expected the signer to be reported good, got %+v", res[0].Revocation)
 	}
 }

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 )
@@ -36,15 +37,15 @@ func TestParseDictLargeDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	got, ok := obj.(*Dictionary)
+	got, ok := obj.(*object.Dictionary)
 	if !ok {
 		t.Fatalf("parsed %T, want *Dictionary", obj)
 	}
 
 	// Reference dictionary built purely with Set (the pre-fix behavior).
-	ref := &Dictionary{}
+	ref := &object.Dictionary{}
 	for _, e := range seq {
-		ref.Set(Name(e.k), Integer(e.v))
+		ref.Set(object.Name(e.k), object.Integer(e.v))
 	}
 
 	if len(got.Keys) != len(ref.Keys) {
@@ -59,13 +60,13 @@ func TestParseDictLargeDedup(t *testing.T) {
 		}
 	}
 	// Spot-check the deduped values directly.
-	if got.Get("K5") != Integer(5000) {
+	if got.Get("K5") != object.Integer(5000) {
 		t.Errorf("K5 = %v, want 5000 (last value)", got.Get("K5"))
 	}
-	if got.Get("K150") != Integer(150000) {
+	if got.Get("K150") != object.Integer(150000) {
 		t.Errorf("K150 = %v, want 150000 (last value)", got.Get("K150"))
 	}
-	if got.Get("K42") != Integer(42) {
+	if got.Get("K42") != object.Integer(42) {
 		t.Errorf("K42 = %v, want 42", got.Get("K42"))
 	}
 }

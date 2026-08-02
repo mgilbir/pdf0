@@ -127,7 +127,7 @@
 // and ValidateOrderX differ only in shape: they return a result struct, because
 // they also carry the extracted invoice XML, the conformance level and what the
 // invoice rule engine did not evaluate, but the findings inside it are
-// FacturXViolation and OrderXViolation values and satisfy Violation like the
+// facturx.Violation and OrderXViolation values and satisfy Violation like the
 // rest. See the Violation documentation.
 //
 // Every validator returns its findings in a deterministic order (by rule, then
@@ -138,8 +138,8 @@
 //
 // # Signatures
 //
-// Document.VerifySignatures reports one SignatureResult per signature. Read the
-// verdict with SignatureResult.DocumentUnmodified, which is Valid AND
+// Document.VerifySignatures reports one sign.Result per signature. Read the
+// verdict with sign.Result.DocumentUnmodified, which is Valid AND
 // CoversWholeDocument: Valid alone accepts a document whose content was changed
 // by a post-signing incremental update. VerifySignatures performs no trust-chain
 // check at all — use Document.VerifySignaturesWithRoots to populate TrustedChain.

@@ -1,62 +1,66 @@
 package pdf0
 
-import "testing"
+import (
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfr"
+	"testing"
+)
 
 // buildPDFRDoc builds a minimal conformant PDF/R document: a PDF 2.0 file with
 // one page whose content draws a single FlateDecode image XObject, and an XMP
 // packet identifying it as PDF/R.
 func buildPDFRDoc() *Document {
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "2.0"}
-	set := func(n int, v Object) { d.Objects[n] = &IndirectObject{Number: n, Value: v} }
+	d := &Document{Objects: map[int]*object.IndirectObject{}, Version: "2.0"}
+	set := func(n int, v object.Object) { d.Objects[n] = &object.IndirectObject{Number: n, Value: v} }
 
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	cat.Set("Metadata", IndirectRef{Number: 6})
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	cat.Set("Metadata", object.IndirectRef{Number: 6})
 	set(1, cat)
 
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", Array{IndirectRef{Number: 3}})
-	pages.Set("Count", Integer(1))
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+	pages.Set("Count", object.Integer(1))
 	set(2, pages)
 
-	page := &Dictionary{}
-	page.Set("Type", Name("Page"))
-	page.Set("Parent", IndirectRef{Number: 2})
-	page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-	page.Set("Contents", IndirectRef{Number: 4})
-	res := &Dictionary{}
-	xo := &Dictionary{}
-	xo.Set("Im0", IndirectRef{Number: 5})
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+	page.Set("Contents", object.IndirectRef{Number: 4})
+	res := &object.Dictionary{}
+	xo := &object.Dictionary{}
+	xo.Set("Im0", object.IndirectRef{Number: 5})
 	res.Set("XObject", xo)
 	page.Set("Resources", res)
 	set(3, page)
 
-	set(4, &Stream{Dict: Dictionary{}, Data: []byte("q 612 0 0 792 0 0 cm /Im0 Do Q")})
+	set(4, &object.Stream{Dict: object.Dictionary{}, Data: []byte("q 612 0 0 792 0 0 cm /Im0 Do Q")})
 
-	img := &Dictionary{}
-	img.Set("Type", Name("XObject"))
-	img.Set("Subtype", Name("Image"))
-	img.Set("Width", Integer(2))
-	img.Set("Height", Integer(2))
-	img.Set("Filter", Name("FlateDecode"))
-	set(5, &Stream{Dict: *img, Data: []byte{0x78, 0x9c, 0x00}})
+	img := &object.Dictionary{}
+	img.Set("Type", object.Name("XObject"))
+	img.Set("Subtype", object.Name("Image"))
+	img.Set("Width", object.Integer(2))
+	img.Set("Height", object.Integer(2))
+	img.Set("Filter", object.Name("FlateDecode"))
+	set(5, &object.Stream{Dict: *img, Data: []byte{0x78, 0x9c, 0x00}})
 
 	xmp := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
 		`<rdf:Description xmlns:pdfr="http://www.iso.org/pdf/r/">` +
 		`<pdfr:conformance>PDF/R-1</pdfr:conformance></rdf:Description></rdf:RDF></x:xmpmeta>`
-	md := &Dictionary{}
-	md.Set("Type", Name("Metadata"))
-	md.Set("Subtype", Name("XML"))
-	set(6, &Stream{Dict: *md, Data: []byte(xmp)})
+	md := &object.Dictionary{}
+	md.Set("Type", object.Name("Metadata"))
+	md.Set("Subtype", object.Name("XML"))
+	set(6, &object.Stream{Dict: *md, Data: []byte(xmp)})
 
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 	return d
 }
 
-func hasPDFRRule(errs []PDFRViolation, rule string) bool {
+func hasPDFRRule(errs []pdfr.Violation, rule string) bool {
 	for _, e := range errs {
 		if e.Rule == rule {
 			return true
@@ -78,16 +82,16 @@ func TestValidatePDFRViolations(t *testing.T) {
 		rule   string
 	}{
 		{"text operator", func(d *Document) {
-			d.Objects[4].Value.(*Stream).Data = []byte("BT /F0 12 Tf (hi) Tj ET q /Im0 Do Q")
+			d.Objects[4].Value.(*object.Stream).Data = []byte("BT /F0 12 Tf (hi) Tj ET q /Im0 Do Q")
 		}, "raster-only"},
 		{"vector fill", func(d *Document) {
-			d.Objects[4].Value.(*Stream).Data = []byte("0 0 100 100 re f")
+			d.Objects[4].Value.(*object.Stream).Data = []byte("0 0 100 100 re f")
 		}, "raster-only"},
 		{"form XObject", func(d *Document) {
-			d.Objects[5].Value.(*Stream).Dict.Set("Subtype", Name("Form"))
+			d.Objects[5].Value.(*object.Stream).Dict.Set("Subtype", object.Name("Form"))
 		}, "raster-only"},
 		{"forbidden image filter", func(d *Document) {
-			d.Objects[5].Value.(*Stream).Dict.Set("Filter", Name("ASCII85Decode"))
+			d.Objects[5].Value.(*object.Stream).Dict.Set("Filter", object.Name("ASCII85Decode"))
 		}, "image-filter"},
 		{"encrypted", func(d *Document) {
 			d.Encrypted = true
@@ -99,7 +103,7 @@ func TestValidatePDFRViolations(t *testing.T) {
 			d.ResolveDict(d.Trailer.Get("Root")).Delete("Metadata")
 		}, "metadata"},
 		{"not identified as PDF/R", func(d *Document) {
-			d.Objects[6].Value.(*Stream).Data = []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"></x:xmpmeta>`)
+			d.Objects[6].Value.(*object.Stream).Data = []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"></x:xmpmeta>`)
 		}, "identification"},
 	}
 	for _, tc := range cases {

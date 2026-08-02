@@ -35,8 +35,8 @@ type tableRow []tableCell
 // pass files give every TH a Scope, others give every TH an /ID), which is why
 // an /ID exempts a TH that has no Scope — the boundary an earlier Scope-only
 // rule got wrong.
-func checkUATableTHScope(d core.View, cat *object.Dictionary) []UAViolation {
-	var v []UAViolation
+func checkUATableTHScope(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
 	reported := map[int]bool{}
 	walkStructElems(d, cat, func(el *object.Dictionary, t object.Name) {
 		if t != "TH" {
@@ -48,7 +48,7 @@ func checkUATableTHScope(d core.View, cat *object.Dictionary) []UAViolation {
 		num := d.DictObjNum(el)
 		if !reported[num] {
 			reported[num] = true
-			v = append(v, UAViolation{"7.5", "table header cell (TH) has neither a Scope attribute nor an /ID", num})
+			v = append(v, Violation{"7.5", "table header cell (TH) has neither a Scope attribute nor an /ID", num})
 		}
 	})
 	return v
@@ -65,13 +65,13 @@ func cellHasScope(d core.View, cell *object.Dictionary) bool {
 }
 
 // checkUATableGrid lays out every Table's cells and reports grid defects (7.2).
-func checkUATableGrid(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUATableGrid(d core.View, cat *object.Dictionary) []Violation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
 	}
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
-	var v []UAViolation
+	var v []Violation
 	for _, n := range structTree(d, cat) {
 		if n.stdType != "Table" {
 			continue
@@ -188,7 +188,7 @@ func tableAttrDicts(d core.View, cell *object.Dictionary) []*object.Dictionary {
 // bounds the number of slots it will fill; see WithMaxTableGridFills. The
 // second result reports that maxFills stopped the layout, so "no defects" means
 // "not determined" rather than "clean".
-func gridDefects(rows []tableRow, maxFills int64) ([]UAViolation, bool) {
+func gridDefects(rows []tableRow, maxFills int64) ([]Violation, bool) {
 	nRows := len(rows)
 	// occupied[r] is the set of columns already filled in row r (by a cell in
 	// this or an earlier row via a row span).
@@ -274,15 +274,15 @@ func gridDefects(rows []tableRow, maxFills int64) ([]UAViolation, bool) {
 		}
 	}
 
-	var v []UAViolation
+	var v []Violation
 	if outOfRows {
-		v = append(v, UAViolation{"7.2", "a table cell's RowSpan extends beyond the last row of the table", 0})
+		v = append(v, Violation{"7.2", "a table cell's RowSpan extends beyond the last row of the table", 0})
 	}
 	if overlap {
-		v = append(v, UAViolation{"7.2", "table cells overlap on the grid (inconsistent RowSpan/ColSpan)", 0})
+		v = append(v, Violation{"7.2", "table cells overlap on the grid (inconsistent RowSpan/ColSpan)", 0})
 	}
 	if hole {
-		v = append(v, UAViolation{"7.2", "table rows do not all span the same number of columns (a grid cell is empty)", 0})
+		v = append(v, Violation{"7.2", "table rows do not all span the same number of columns (a grid cell is empty)", 0})
 	}
 	return v, true
 }

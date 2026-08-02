@@ -14,15 +14,12 @@ import (
 // builds that view, and appends the findings that can only be made from the
 // Document — the resource guards that tripped while the file was read.
 
-// UAViolation is a PDF/UA (ISO 14289) accessibility conformance failure.
-type UAViolation = pdfua.UAViolation
-
 // ValidatePDFUA checks a document against the foundational PDF/UA-1 (ISO
 // 14289-1) requirements: the document must be tagged, carry a structure tree
 // and a default language, be configured to display its title, and give every
 // figure alternate text. It is a partial validator — a clean result means the
 // implemented checks passed, not full PDF/UA conformance.
-func ValidatePDFUA(doc *Document) []UAViolation {
+func ValidatePDFUA(doc *Document) []pdfua.Violation {
 	return validatePDFUA(core.Canceler{}, doc, "1")
 }
 
@@ -31,7 +28,7 @@ func ValidatePDFUA(doc *Document) []UAViolation {
 // "limit" recording the cancellation, which IsCheckerFinding reports as a
 // checker finding — so a cancelled run cannot be mistaken for a clean one. See
 // cancel.go.
-func ValidatePDFUAContext(ctx context.Context, doc *Document) []UAViolation {
+func ValidatePDFUAContext(ctx context.Context, doc *Document) []pdfua.Violation {
 	return validatePDFUA(core.NewCanceler(ctx), doc, "1")
 }
 
@@ -39,7 +36,7 @@ func ValidatePDFUAContext(ctx context.Context, doc *Document) []UAViolation {
 // by the pdfuaid:part the file must declare. The two UA-1-only requirements —
 // part 1 and a PDF 1.x header — are selected here by part rather than filtered
 // out of the result by message text afterwards (audit C39).
-func validatePDFUA(cancel core.Canceler, doc *Document, part string) []UAViolation {
+func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Violation {
 	// Install a per-run cache (page tree, decoded content, font-usage map) on a
 	// shallow copy so the original document is never mutated. Many checks walk
 	// the same structures — core.CollectFontTextUsage alone runs in nine font
@@ -59,18 +56,18 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []UAViolati
 	return v
 }
 
-// ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the UAViolation
+// ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the pdfua.Violation
 // type; clause identifiers follow ISO 14289-2.
-func ValidatePDFUA2(d *Document) []UAViolation {
+func ValidatePDFUA2(d *Document) []pdfua.Violation {
 	return validatePDFUA2(core.Canceler{}, d)
 }
 
 // ValidatePDFUA2Context is ValidatePDFUA2 with cancellation; see
 // ValidatePDFUAContext for how a cancelled run reports itself.
-func ValidatePDFUA2Context(ctx context.Context, d *Document) []UAViolation {
+func ValidatePDFUA2Context(ctx context.Context, d *Document) []pdfua.Violation {
 	return validatePDFUA2(core.NewCanceler(ctx), d)
 }
-func validatePDFUA2(cancel core.Canceler, d *Document) []UAViolation {
+func validatePDFUA2(cancel core.Canceler, d *Document) []pdfua.Violation {
 	// The shared checks (tagging, structure tree, default language, displayed
 	// title, Unicode mapping, artifacts, headings), parameterized for part 2 so
 	// the identification rule requires pdfuaid:part 2 and the UA-1 header rule
@@ -78,9 +75,9 @@ func validatePDFUA2(cancel core.Canceler, d *Document) []UAViolation {
 	out := validatePDFUA(cancel, d, "2")
 
 	// PDF/UA-2 is defined against PDF 2.0.
-	out = append(out, pdfua.RunCheck(func() []UAViolation {
+	out = append(out, pdfua.RunCheck(func() []pdfua.Violation {
 		if maj, _, ok := core.ParsePDFVersion(d.Version); ok && maj != 2 {
-			return []UAViolation{{Clause: "4", Message: fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %s", d.Version), Object: 0}}
+			return []pdfua.Violation{{Clause: "4", Message: fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %s", d.Version), Object: 0}}
 		}
 		return nil
 	})...)

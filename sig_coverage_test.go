@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/sign"
 	"testing"
 )
 
@@ -15,7 +16,7 @@ func TestDocumentUnmodifiedCombinesVerdicts(t *testing.T) {
 		{false, false, false},
 	}
 	for _, c := range cases {
-		got := SignatureResult{Valid: c.valid, CoversWholeDocument: c.covers}.DocumentUnmodified()
+		got := sign.Result{Valid: c.valid, CoversWholeDocument: c.covers}.DocumentUnmodified()
 		if got != c.want {
 			t.Errorf("DocumentUnmodified(Valid=%v,Covers=%v) = %v, want %v", c.valid, c.covers, got, c.want)
 		}

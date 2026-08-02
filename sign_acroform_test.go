@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/sign"
 	"sort"
 	"testing"
@@ -57,7 +58,7 @@ func formFields(t *testing.T, d *Document) []string {
 	if form == nil {
 		t.Fatal("signed document has no /AcroForm")
 	}
-	fields, _ := d.Resolve(form.Get("Fields")).(Array)
+	fields, _ := d.Resolve(form.Get("Fields")).(object.Array)
 	names := make([]string, 0, len(fields))
 	for _, f := range fields {
 		fd := d.ResolveDict(f)
@@ -74,7 +75,7 @@ func formFields(t *testing.T, d *Document) []string {
 //
 // The field name was hardcoded to "Signature1", so signing twice produced two
 // fields with the same fully qualified name — non-conformant (ISO 32000-2
-// §12.7.4.2 requires uniqueness) and enough to make SignatureResult.Field
+// §12.7.4.2 requires uniqueness) and enough to make sign.Result.Field
 // useless for telling two signatures apart. And the catalog's /AcroForm was
 // replaced by a fresh dictionary listing only the new field, so the first
 // signature's field was orphaned: a viewer enumerating the form saw one
@@ -178,19 +179,19 @@ func TestSigningPreservesExistingForm(t *testing.T) {
 	}
 	// The signature bits are added to the existing value (4|3 == 7); an assign
 	// would report 3 and silently clear a bit the producer set.
-	if flags, _ := signed.Resolve(form.Get("SigFlags")).(Integer); flags != 7 {
+	if flags, _ := signed.Resolve(form.Get("SigFlags")).(object.Integer); flags != 7 {
 		t.Errorf("/SigFlags = %v, want 7 (existing 4 OR the signature bits 3)", flags)
 	}
-	if da, _ := signed.Resolve(form.Get("DA")).(String); string(da.Value) != "/Helv 0 Tf 0 g" {
+	if da, _ := signed.Resolve(form.Get("DA")).(object.String); string(da.Value) != "/Helv 0 Tf 0 g" {
 		t.Errorf("/DA = %q, want the form's default appearance to survive", da.Value)
 	}
 	if signed.ResolveDict(form.Get("DR")) == nil {
 		t.Error("/DR dropped from the form")
 	}
-	if na, _ := signed.Resolve(form.Get("NeedAppearances")).(Boolean); !bool(na) {
+	if na, _ := signed.Resolve(form.Get("NeedAppearances")).(object.Boolean); !bool(na) {
 		t.Error("/NeedAppearances dropped from the form")
 	}
-	if q, _ := signed.Resolve(form.Get("Q")).(Integer); q != 1 {
+	if q, _ := signed.Resolve(form.Get("Q")).(object.Integer); q != 1 {
 		t.Errorf("/Q = %v, want 1", q)
 	}
 
@@ -245,12 +246,12 @@ func TestSignIncrementalPreservesExistingForm(t *testing.T) {
 // common) still occupies its name.
 func TestFreeSignatureFieldNameSkipsOrphanedField(t *testing.T) {
 	doc, _ := sigFieldTestDoc(10)
-	orphan := &Dictionary{}
-	orphan.Set("FT", Name("Sig"))
-	orphan.Set("T", String{Value: []byte("Signature1")})
-	orphan.Set("V", IndirectRef{Number: 10})
-	doc.Objects[5] = &IndirectObject{Number: 5, Value: orphan}
-	setCatalogWithFields(doc, Array{}) // an /AcroForm that lists no fields at all
+	orphan := &object.Dictionary{}
+	orphan.Set("FT", object.Name("Sig"))
+	orphan.Set("T", object.String{Value: []byte("Signature1")})
+	orphan.Set("V", object.IndirectRef{Number: 10})
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: orphan}
+	setCatalogWithFields(doc, object.Array{}) // an /AcroForm that lists no fields at all
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if got := freeFieldName(doc, cat, "Signature"); got != "Signature2" {

@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/object"
 	"math"
 	"testing"
 )
@@ -24,37 +25,37 @@ func wantOut(t *testing.T, got []float64, ok bool, want ...float64) {
 
 // funcDoc wraps a function object in a Document so streams can be decoded.
 func funcDoc() *Document {
-	return &Document{Objects: map[int]*IndirectObject{}, Version: "2.0"}
+	return &Document{Objects: map[int]*object.IndirectObject{}, Version: "2.0"}
 }
 
 func TestFuncType2(t *testing.T) {
 	d := funcDoc()
-	fn := &Dictionary{}
-	fn.Set("FunctionType", Integer(2))
-	fn.Set("Domain", Array{Real(0), Real(1)})
-	fn.Set("C0", Array{Real(0), Real(0), Real(0)})
-	fn.Set("C1", Array{Real(1), Real(0.5), Real(0)})
-	fn.Set("N", Real(1))
+	fn := &object.Dictionary{}
+	fn.Set("FunctionType", object.Integer(2))
+	fn.Set("Domain", object.Array{object.Real(0), object.Real(1)})
+	fn.Set("C0", object.Array{object.Real(0), object.Real(0), object.Real(0)})
+	fn.Set("C1", object.Array{object.Real(1), object.Real(0.5), object.Real(0)})
+	fn.Set("N", object.Real(1))
 
 	// Linear (N=1) midpoint.
 	out, ok := d.view().EvalFunction(fn, []float64{0.5})
 	wantOut(t, out, ok, 0.5, 0.25, 0)
 
 	// N=2 squares the interpolation parameter.
-	fn.Set("N", Real(2))
+	fn.Set("N", object.Real(2))
 	out, ok = d.view().EvalFunction(fn, []float64{0.5})
 	wantOut(t, out, ok, 0.25, 0.125, 0)
 
 	// Input clamped to Domain: x=2 -> clamped to 1 -> C1.
-	fn.Set("N", Real(1))
+	fn.Set("N", object.Real(1))
 	out, ok = d.view().EvalFunction(fn, []float64{2})
 	wantOut(t, out, ok, 1, 0.5, 0)
 
 	// Defaults: no C0/C1 -> [0]..[1], single output.
-	fn2 := &Dictionary{}
-	fn2.Set("FunctionType", Integer(2))
-	fn2.Set("Domain", Array{Real(0), Real(1)})
-	fn2.Set("N", Real(1))
+	fn2 := &object.Dictionary{}
+	fn2.Set("FunctionType", object.Integer(2))
+	fn2.Set("Domain", object.Array{object.Real(0), object.Real(1)})
+	fn2.Set("N", object.Real(1))
 	out, ok = d.view().EvalFunction(fn2, []float64{0.3})
 	wantOut(t, out, ok, 0.3)
 }
@@ -64,26 +65,26 @@ func TestFuncType3Stitching(t *testing.T) {
 	// Two subfunctions over [0,1] split at 0.5.
 	// Segment 0: maps [0,0.5] via Encode [0,1] into a type-2 that outputs x.
 	// Segment 1: constant 10 (type-2 with C0=C1=10).
-	sub0 := &Dictionary{}
-	sub0.Set("FunctionType", Integer(2))
-	sub0.Set("Domain", Array{Real(0), Real(1)})
-	sub0.Set("C0", Array{Real(0)})
-	sub0.Set("C1", Array{Real(1)})
-	sub0.Set("N", Real(1))
+	sub0 := &object.Dictionary{}
+	sub0.Set("FunctionType", object.Integer(2))
+	sub0.Set("Domain", object.Array{object.Real(0), object.Real(1)})
+	sub0.Set("C0", object.Array{object.Real(0)})
+	sub0.Set("C1", object.Array{object.Real(1)})
+	sub0.Set("N", object.Real(1))
 
-	sub1 := &Dictionary{}
-	sub1.Set("FunctionType", Integer(2))
-	sub1.Set("Domain", Array{Real(0), Real(1)})
-	sub1.Set("C0", Array{Real(10)})
-	sub1.Set("C1", Array{Real(10)})
-	sub1.Set("N", Real(1))
+	sub1 := &object.Dictionary{}
+	sub1.Set("FunctionType", object.Integer(2))
+	sub1.Set("Domain", object.Array{object.Real(0), object.Real(1)})
+	sub1.Set("C0", object.Array{object.Real(10)})
+	sub1.Set("C1", object.Array{object.Real(10)})
+	sub1.Set("N", object.Real(1))
 
-	fn := &Dictionary{}
-	fn.Set("FunctionType", Integer(3))
-	fn.Set("Domain", Array{Real(0), Real(1)})
-	fn.Set("Functions", Array{sub0, sub1})
-	fn.Set("Bounds", Array{Real(0.5)})
-	fn.Set("Encode", Array{Real(0), Real(1), Real(0), Real(1)})
+	fn := &object.Dictionary{}
+	fn.Set("FunctionType", object.Integer(3))
+	fn.Set("Domain", object.Array{object.Real(0), object.Real(1)})
+	fn.Set("Functions", object.Array{sub0, sub1})
+	fn.Set("Bounds", object.Array{object.Real(0.5)})
+	fn.Set("Encode", object.Array{object.Real(0), object.Real(1), object.Real(0), object.Real(1)})
 
 	// x=0.25 in segment 0: encoded from [0,0.5] to [0,1] -> 0.5 -> sub0 -> 0.5.
 	out, ok := d.view().EvalFunction(fn, []float64{0.25})
@@ -107,12 +108,12 @@ func TestFuncType0Sampled(t *testing.T) {
 	// 1 input, 1 output, Size=3 samples: values 0, 128, 255 at grid 0,1,2.
 	// 8-bit samples, Domain [0,1], Range [0,1], Encode default [0,2],
 	// Decode default = Range.
-	st := &Stream{Dict: Dictionary{}, Data: []byte{0, 128, 255}}
-	st.Dict.Set("FunctionType", Integer(0))
-	st.Dict.Set("Domain", Array{Real(0), Real(1)})
-	st.Dict.Set("Range", Array{Real(0), Real(1)})
-	st.Dict.Set("Size", Array{Integer(3)})
-	st.Dict.Set("BitsPerSample", Integer(8))
+	st := &object.Stream{Dict: object.Dictionary{}, Data: []byte{0, 128, 255}}
+	st.Dict.Set("FunctionType", object.Integer(0))
+	st.Dict.Set("Domain", object.Array{object.Real(0), object.Real(1)})
+	st.Dict.Set("Range", object.Array{object.Real(0), object.Real(1)})
+	st.Dict.Set("Size", object.Array{object.Integer(3)})
+	st.Dict.Set("BitsPerSample", object.Integer(8))
 
 	// At the grid points.
 	out, ok := d.view().EvalFunction(st, []float64{0})
@@ -132,12 +133,12 @@ func TestFuncType0TwoInput(t *testing.T) {
 	// 2 inputs, 1 output, Size [2,2] -> 4 samples. Bilinear over the unit square.
 	// grid(0,0)=0, grid(1,0)=255, grid(0,1)=0, grid(1,1)=255.
 	// Sample order: first input varies fastest: [g00, g10, g01, g11].
-	st := &Stream{Dict: Dictionary{}, Data: []byte{0, 255, 0, 255}}
-	st.Dict.Set("FunctionType", Integer(0))
-	st.Dict.Set("Domain", Array{Real(0), Real(1), Real(0), Real(1)})
-	st.Dict.Set("Range", Array{Real(0), Real(1)})
-	st.Dict.Set("Size", Array{Integer(2), Integer(2)})
-	st.Dict.Set("BitsPerSample", Integer(8))
+	st := &object.Stream{Dict: object.Dictionary{}, Data: []byte{0, 255, 0, 255}}
+	st.Dict.Set("FunctionType", object.Integer(0))
+	st.Dict.Set("Domain", object.Array{object.Real(0), object.Real(1), object.Real(0), object.Real(1)})
+	st.Dict.Set("Range", object.Array{object.Real(0), object.Real(1)})
+	st.Dict.Set("Size", object.Array{object.Integer(2), object.Integer(2)})
+	st.Dict.Set("BitsPerSample", object.Integer(8))
 
 	// Output depends only on the first input.
 	out, ok := d.view().EvalFunction(st, []float64{0.5, 0.7})
@@ -150,18 +151,18 @@ func TestFuncType0TwoInput(t *testing.T) {
 
 // psFunc builds a type-4 function stream from a program string with the given
 // input Domain and output Range.
-func psFunc(program string, domain, rng []Object) *Stream {
-	st := &Stream{Dict: Dictionary{}, Data: []byte(program)}
-	st.Dict.Set("FunctionType", Integer(4))
-	st.Dict.Set("Domain", Array(domain))
-	st.Dict.Set("Range", Array(rng))
+func psFunc(program string, domain, rng []object.Object) *object.Stream {
+	st := &object.Stream{Dict: object.Dictionary{}, Data: []byte(program)}
+	st.Dict.Set("FunctionType", object.Integer(4))
+	st.Dict.Set("Domain", object.Array(domain))
+	st.Dict.Set("Range", object.Array(rng))
 	return st
 }
 
 func TestFuncType4Arithmetic(t *testing.T) {
 	d := funcDoc()
-	dom := []Object{Real(0), Real(1)}
-	rng := []Object{Real(-10), Real(10)}
+	dom := []object.Object{object.Real(0), object.Real(1)}
+	rng := []object.Object{object.Real(-10), object.Real(10)}
 
 	// add
 	out, ok := d.view().EvalFunction(psFunc("{ 2 3 add }", dom, rng), []float64{0})
@@ -182,8 +183,8 @@ func TestFuncType4Arithmetic(t *testing.T) {
 
 func TestFuncType4Transcendental(t *testing.T) {
 	d := funcDoc()
-	dom := []Object{Real(0), Real(1)}
-	rng := []Object{Real(-10), Real(10)}
+	dom := []object.Object{object.Real(0), object.Real(1)}
+	rng := []object.Object{object.Real(-10), object.Real(10)}
 	// sin(90 deg) = 1
 	out, ok := d.view().EvalFunction(psFunc("{ pop 90 sin }", dom, rng), []float64{0})
 	wantOut(t, out, ok, 1)
@@ -197,14 +198,14 @@ func TestFuncType4Transcendental(t *testing.T) {
 	out, ok = d.view().EvalFunction(psFunc("{ pop 2.718281828 ln }", dom, rng), []float64{0})
 	wantOut(t, out, ok, 1)
 	// atan(1,1) = 45
-	out, ok = d.view().EvalFunction(psFunc("{ pop 1 1 atan }", dom, []Object{Real(0), Real(360)}), []float64{0})
+	out, ok = d.view().EvalFunction(psFunc("{ pop 1 1 atan }", dom, []object.Object{object.Real(0), object.Real(360)}), []float64{0})
 	wantOut(t, out, ok, 45)
 }
 
 func TestFuncType4IfElse(t *testing.T) {
 	d := funcDoc()
-	dom := []Object{Real(0), Real(1)}
-	rng := []Object{Real(0), Real(100)}
+	dom := []object.Object{object.Real(0), object.Real(1)}
+	rng := []object.Object{object.Real(0), object.Real(100)}
 
 	// if: x > 0.5 -> push 1 else leave 0. font.Program: x dup 0.5 gt { pop 1 } if
 	prog := "{ dup 0.5 gt { pop 1 } if }"
@@ -223,8 +224,8 @@ func TestFuncType4IfElse(t *testing.T) {
 
 func TestFuncType4StackOps(t *testing.T) {
 	d := funcDoc()
-	dom := []Object{Real(0), Real(1), Real(0), Real(1), Real(0), Real(1)}
-	rng := []Object{Real(0), Real(1), Real(0), Real(1), Real(0), Real(1)}
+	dom := []object.Object{object.Real(0), object.Real(1), object.Real(0), object.Real(1), object.Real(0), object.Real(1)}
+	rng := []object.Object{object.Real(0), object.Real(1), object.Real(0), object.Real(1), object.Real(0), object.Real(1)}
 
 	// exch swaps two inputs -> outputs (b, a) then keep both, drop the third.
 	// inputs a,b,c ; want to output c,b,a using roll: 3 -1 roll then done? Let's
@@ -236,21 +237,21 @@ func TestFuncType4StackOps(t *testing.T) {
 	// index: copy the 2nd-from-top. inputs a,b,c ; 2 index pushes a.
 	// stack a b c -> a b c a ; drop to 3 outputs by popping? Range has 3 outputs;
 	// keep last 3: b c a.
-	out, ok = d.view().EvalFunction(psFunc("{ 2 index exch pop exch pop }", dom, []Object{Real(0), Real(1)}), []float64{0.1, 0.2, 0.3})
+	out, ok = d.view().EvalFunction(psFunc("{ 2 index exch pop exch pop }", dom, []object.Object{object.Real(0), object.Real(1)}), []float64{0.1, 0.2, 0.3})
 	// 2 index -> a b c a ; exch -> a b a c ; pop -> a b a ; exch -> a a b ; pop -> a a
 	// top output = a = 0.1
 	wantOut(t, out, ok, 0.1)
 
 	// copy: dup top 2. a b 2 copy -> a b a b, output last 2 -> a b.
-	out, ok = d.view().EvalFunction(psFunc("{ pop 2 copy add }", []Object{Real(0), Real(1), Real(0), Real(1), Real(0), Real(1)}, []Object{Real(0), Real(2), Real(0), Real(2), Real(0), Real(2)}), []float64{0.1, 0.2, 0.3})
+	out, ok = d.view().EvalFunction(psFunc("{ pop 2 copy add }", []object.Object{object.Real(0), object.Real(1), object.Real(0), object.Real(1), object.Real(0), object.Real(1)}, []object.Object{object.Real(0), object.Real(2), object.Real(0), object.Real(2), object.Real(0), object.Real(2)}), []float64{0.1, 0.2, 0.3})
 	// pop -> a b (0.1,0.2) ; 2 copy -> a b a b ; add -> a b (a+b) => 0.1,0.2,0.3
 	wantOut(t, out, ok, 0.1, 0.2, 0.3)
 }
 
 func TestFuncType4Comparison(t *testing.T) {
 	d := funcDoc()
-	dom := []Object{Real(0), Real(10)}
-	rng := []Object{Real(0), Real(1)}
+	dom := []object.Object{object.Real(0), object.Real(10)}
+	rng := []object.Object{object.Real(0), object.Real(1)}
 	// eq
 	out, ok := d.view().EvalFunction(psFunc("{ 5 eq { 1 } { 0 } ifelse }", dom, rng), []float64{5})
 	wantOut(t, out, ok, 1)
@@ -261,33 +262,33 @@ func TestFuncType4Comparison(t *testing.T) {
 	out, ok = d.view().EvalFunction(psFunc("{ pop false not { 1 } { 0 } ifelse }", dom, rng), []float64{0})
 	wantOut(t, out, ok, 1)
 	// bitshift: 1 << 3 = 8, clamped to Range [0,10]
-	out, ok = d.view().EvalFunction(psFunc("{ pop 1 3 bitshift }", dom, []Object{Real(0), Real(10)}), []float64{0})
+	out, ok = d.view().EvalFunction(psFunc("{ pop 1 3 bitshift }", dom, []object.Object{object.Real(0), object.Real(10)}), []float64{0})
 	wantOut(t, out, ok, 8)
 }
 
 func TestFuncMalformed(t *testing.T) {
 	d := funcDoc()
 	// Unknown function type.
-	fn := &Dictionary{}
-	fn.Set("FunctionType", Integer(9))
-	fn.Set("Domain", Array{Real(0), Real(1)})
+	fn := &object.Dictionary{}
+	fn.Set("FunctionType", object.Integer(9))
+	fn.Set("Domain", object.Array{object.Real(0), object.Real(1)})
 	if _, ok := d.view().EvalFunction(fn, []float64{0.5}); ok {
 		t.Error("unknown FunctionType should fail")
 	}
 	// Not a dict/stream.
-	if _, ok := d.view().EvalFunction(Integer(3), []float64{0}); ok {
+	if _, ok := d.view().EvalFunction(object.Integer(3), []float64{0}); ok {
 		t.Error("non-function object should fail")
 	}
 	// Type 4 with unbalanced braces.
-	if _, ok := d.view().EvalFunction(psFunc("{ 1 2 add", []Object{Real(0), Real(1)}, []Object{Real(0), Real(1)}), []float64{0}); ok {
+	if _, ok := d.view().EvalFunction(psFunc("{ 1 2 add", []object.Object{object.Real(0), object.Real(1)}, []object.Object{object.Real(0), object.Real(1)}), []float64{0}); ok {
 		t.Error("unterminated program should fail")
 	}
 	// Type 4 with unknown operator.
-	if _, ok := d.view().EvalFunction(psFunc("{ pop bogus }", []Object{Real(0), Real(1)}, []Object{Real(0), Real(1)}), []float64{0}); ok {
+	if _, ok := d.view().EvalFunction(psFunc("{ pop bogus }", []object.Object{object.Real(0), object.Real(1)}, []object.Object{object.Real(0), object.Real(1)}), []float64{0}); ok {
 		t.Error("unknown operator should fail")
 	}
 	// Type 4 division by zero.
-	if _, ok := d.view().EvalFunction(psFunc("{ pop 1 0 div }", []Object{Real(0), Real(1)}, []Object{Real(0), Real(1)}), []float64{0}); ok {
+	if _, ok := d.view().EvalFunction(psFunc("{ pop 1 0 div }", []object.Object{object.Real(0), object.Real(1)}, []object.Object{object.Real(0), object.Real(1)}), []float64{0}); ok {
 		t.Error("division by zero should fail")
 	}
 }

@@ -25,11 +25,11 @@ import (
 // the Document, so the checks share page-tree walks and decoded content
 // streams without touching the caller's Document or racing another run.
 
-// PDFALevel represents a PDF/A conformance level.
-type PDFALevel int
+// Level represents a PDF/A conformance level.
+type Level int
 
 const (
-	PDFA1b PDFALevel = iota
+	PDFA1b Level = iota
 	PDFA2b
 	PDFA3b
 	PDFA4
@@ -54,7 +54,7 @@ type pdfaSlot struct{}
 
 func pdfaMemo(d core.View) *pdfaMemoCache { return core.Slot[pdfaMemoCache](d.Run, pdfaSlot{}) }
 
-func (l PDFALevel) String() string {
+func (l Level) String() string {
 	switch l {
 	case PDFA1b:
 		return "PDF/A-1b"
@@ -76,11 +76,11 @@ func (l PDFALevel) String() string {
 }
 
 // IsA reports whether l is a Level A (accessible) conformance level.
-func (l PDFALevel) IsA() bool { return l == PDFA1a || l == PDFA2a || l == PDFA3a }
+func (l Level) IsA() bool { return l == PDFA1a || l == PDFA2a || l == PDFA3a }
 
 // BaseB returns the Level B conformance level whose requirements a Level A level
 // includes (1a→1b, 2a→2b, 3a→3b); for a non-A level it returns the level itself.
-func (l PDFALevel) BaseB() PDFALevel {
+func (l Level) BaseB() Level {
 	switch l {
 	case PDFA1a:
 		return PDFA1b
@@ -94,8 +94,8 @@ func (l PDFALevel) BaseB() PDFALevel {
 
 // ValidationError describes a single PDF/A conformance violation.
 type ValidationError struct {
-	Rule    string    // e.g., "6.1.3" (ISO 19005 clause)
-	Level   PDFALevel // the level that requires this rule
+	Rule    string // e.g., "6.1.3" (ISO 19005 clause)
+	Level   Level  // the level that requires this rule
 	Message string
 	Object  int // object number, 0 if N/A
 }
@@ -123,7 +123,7 @@ func (e ValidationError) Error() string {
 // other validators' equivalents also use: "internal" is a reserved identifier
 // naming the checker rather than the document (IsCheckerFinding), so every
 // boundary in the package has to spell it the same way.
-func runCheck(doc core.View, level PDFALevel, check func(core.View, PDFALevel) []ValidationError) (out []ValidationError) {
+func runCheck(doc core.View, level Level, check func(core.View, Level) []ValidationError) (out []ValidationError) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = []ValidationError{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
@@ -134,7 +134,7 @@ func runCheck(doc core.View, level PDFALevel, check func(core.View, PDFALevel) [
 
 // runByteCheck is runCheck for the byte-level checks, which have a different
 // signature.
-func runByteCheck(level PDFALevel, check func() []ValidationError) (out []ValidationError) {
+func runByteCheck(level Level, check func() []ValidationError) (out []ValidationError) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = []ValidationError{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
@@ -144,7 +144,7 @@ func runByteCheck(level PDFALevel, check func() []ValidationError) (out []Valida
 }
 
 // ValidateView runs the PDF/A pipeline over a view.
-func ValidateView(doc core.View, level PDFALevel, rawData []byte) []ValidationError {
+func ValidateView(doc core.View, level Level, rawData []byte) []ValidationError {
 	// Level A conformance is Level B plus the accessibility requirements; it is
 	// validated by running the Level B checks and adding the Level A rule
 	// families (see validatePDFALevelA).
@@ -154,7 +154,7 @@ func ValidateView(doc core.View, level PDFALevel, rawData []byte) []ValidationEr
 
 	var errs []ValidationError
 
-	checks := []func(core.View, PDFALevel) []ValidationError{
+	checks := []func(core.View, Level) []ValidationError{
 		// File structure (6.1)
 		checkNoEncrypt,
 		checkFileID,
@@ -244,9 +244,9 @@ func ValidateView(doc core.View, level PDFALevel, rawData []byte) []ValidationEr
 		checkEmbeddedPDFA,
 		// Inherited page XObject (6.2.2)
 		checkInheritedPageXObject,
-		// object.Stream /Length correctness (6.1.6/6.1.7)
+		// Stream /Length correctness (6.1.6/6.1.7)
 		checkStreamLength,
-		// object.Object stream decodability (6.1.6/6.1.7)
+		// Object stream decodability (6.1.6/6.1.7)
 		checkObjectStreamDecodable,
 		// Subset CharSet/CIDSet completeness (6.3.5 / 6.2.11.4.2)
 		checkFontSubsetCompleteness,
@@ -286,7 +286,7 @@ func ValidateView(doc core.View, level PDFALevel, rawData []byte) []ValidationEr
 // --- File structure checks (6.1) ---
 
 // Rule 6.1.3-2: Encrypt key must not be present in trailer dictionary.
-func checkNoEncrypt(doc core.View, level PDFALevel) []ValidationError {
+func checkNoEncrypt(doc core.View, level Level) []ValidationError {
 	if doc.Trailer.Get("Encrypt") != nil {
 		return []ValidationError{{
 			Rule:    "6.1.3",
@@ -298,7 +298,7 @@ func checkNoEncrypt(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.1.3-1: Document trailer must contain non-empty ID entry.
-func checkFileID(doc core.View, level PDFALevel) []ValidationError {
+func checkFileID(doc core.View, level Level) []ValidationError {
 	idObj := doc.Trailer.Get("ID")
 	if idObj == nil {
 		return []ValidationError{{
@@ -335,7 +335,7 @@ func checkFileID(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.1.2-1: File header version must match level.
-func checkHeader(doc core.View, level PDFALevel) []ValidationError {
+func checkHeader(doc core.View, level Level) []ValidationError {
 	switch level {
 	case PDFA1b:
 		// The 19005-1 header rule is about format, not version: the veraPDF
@@ -366,7 +366,7 @@ func checkHeader(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rules 6.1.3-4, 6.1.3-5: Info key requires PieceInfo; Info may only contain ModDate.
-func checkTrailerInfo(doc core.View, level PDFALevel) []ValidationError {
+func checkTrailerInfo(doc core.View, level Level) []ValidationError {
 	if level != PDFA4 {
 		return nil // only applies to PDF/A-4
 	}
@@ -406,7 +406,7 @@ func checkTrailerInfo(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.1.3-3: No data after the last %%EOF marker.
-func checkNoDataAfterEOF(rawData []byte, level PDFALevel) []ValidationError {
+func checkNoDataAfterEOF(rawData []byte, level Level) []ValidationError {
 	eofMarker := []byte("%%EOF")
 	idx := bytes.LastIndex(rawData, eofMarker)
 	if idx < 0 {
@@ -441,7 +441,7 @@ func getCatalog(doc core.View) *object.Dictionary {
 }
 
 // Rule 6.7.2.1-1: Catalog requires Metadata stream with Type/Metadata, Subtype/XML, no Filter.
-func checkMetadataStream(doc core.View, level PDFALevel) []ValidationError {
+func checkMetadataStream(doc core.View, level Level) []ValidationError {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return []ValidationError{{
@@ -515,7 +515,7 @@ func checkMetadataStream(doc core.View, level PDFALevel) []ValidationError {
 // colourClause returns the ISO clause for a colour-rule concept at the given
 // level. Colour is under 6.2.3.x in ISO 19005-1 but 6.2.4.x in parts 2/3/4, and
 // output intents move from 6.2.2 to 6.2.3; clauses follow the veraPDF profiles.
-func colourClause(concept string, level PDFALevel) string {
+func colourClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"outputIntent": {"6.2.2", "6.2.3", "6.2.3"},
@@ -541,7 +541,7 @@ func colourClause(concept string, level PDFALevel) string {
 // the given level. These rules move between clause trees per part (annotations:
 // 6.5.x in part 1, 6.3.x/6.4.x in parts 2/3/4; actions: 6.6.x in parts 1/4,
 // 6.5.x in parts 2/3); clauses follow the veraPDF profiles.
-func annotActionClause(concept string, level PDFALevel) string {
+func annotActionClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"subtype":    {"6.5.2", "6.3.1", "6.3.1"},
@@ -565,7 +565,7 @@ func annotActionClause(concept string, level PDFALevel) string {
 	}
 }
 
-func checkOutputIntents(doc core.View, level PDFALevel) []ValidationError {
+func checkOutputIntents(doc core.View, level Level) []ValidationError {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -742,7 +742,7 @@ func checkOutputIntents(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func checkOutputIntentProfile(doc core.View, level PDFALevel) []ValidationError {
+func checkOutputIntentProfile(doc core.View, level Level) []ValidationError {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -883,7 +883,7 @@ func checkOutputIntentProfile(doc core.View, level PDFALevel) []ValidationError 
 	return errs
 }
 
-func checkNoCatalogAA(doc core.View, level PDFALevel) []ValidationError {
+func checkNoCatalogAA(doc core.View, level Level) []ValidationError {
 	if level == PDFA4 {
 		return nil // PDF/A-4 does not restrict /AA in catalog
 	}
@@ -914,7 +914,7 @@ func checkNoCatalogAA(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func checkNoOCProperties(doc core.View, level PDFALevel) []ValidationError {
+func checkNoOCProperties(doc core.View, level Level) []ValidationError {
 	if level != PDFA1b {
 		return nil
 	}
@@ -933,7 +933,7 @@ func checkNoOCProperties(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.1.12: Perms dictionary may only contain UR3 and DocMDP keys.
-func checkPermsDict(doc core.View, level PDFALevel) []ValidationError {
+func checkPermsDict(doc core.View, level Level) []ValidationError {
 	if level == PDFA1b {
 		return nil // PDF/A-1b doesn't have Perms rules
 	}
@@ -994,12 +994,12 @@ func checkPermsDict(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-// --- object.Stream checks (6.1.6) ---
+// --- Stream checks (6.1.6) ---
 
 // filterClause returns the stream-filter rule's ISO clause for the level: only
 // the standard filters (Table 6) are permitted, so LZWDecode and any
 // non-standard name are rejected. ISO 19005-1 6.1.10; -2/-3 6.1.7.2; -4 6.1.6.2.
-func filterClause(level PDFALevel) string {
+func filterClause(level Level) string {
 	switch level {
 	case PDFA1b:
 		return "6.1.10"
@@ -1011,7 +1011,7 @@ func filterClause(level PDFALevel) string {
 }
 
 // Rule: only the standard stream filters may be used; LZWDecode is prohibited.
-func checkNoLZW(doc core.View, level PDFALevel) []ValidationError {
+func checkNoLZW(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
@@ -1056,7 +1056,7 @@ func checkNoLZW(doc core.View, level PDFALevel) []ValidationError {
 // start at byte 0 and its two covered segments plus the excluded /Contents gap
 // must span to the end of the file. Works from the raw bytes; only the single
 // gap (the signature value) may be uncovered.
-func checkSignatureByteRange(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+func checkSignatureByteRange(doc core.View, level Level, raw []byte) []ValidationError {
 	if level != PDFA2b && level != PDFA3b {
 		return nil
 	}
@@ -1180,8 +1180,8 @@ func hasFilter(stream *object.Stream, filterName string) bool {
 	return false
 }
 
-// Rule 6.1.6.1-2: object.Stream dict cannot contain F, FFilter, or FDecodeParms.
-func checkNoExternalStreams(doc core.View, level PDFALevel) []ValidationError {
+// Rule 6.1.6.1-2: Stream dict cannot contain F, FFilter, or FDecodeParms.
+func checkNoExternalStreams(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
@@ -1205,7 +1205,7 @@ func checkNoExternalStreams(doc core.View, level PDFALevel) []ValidationError {
 // --- Font checks (6.2.10) ---
 
 // Rule 6.2.10.4.1-1: Font programs must be embedded.
-func checkFontsEmbedded(doc core.View, level PDFALevel) []ValidationError {
+func checkFontsEmbedded(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 
 	catalog := doc.Catalog()
@@ -1277,7 +1277,7 @@ func fontObjNum(doc core.View, fontDict *object.Dictionary) int {
 
 // checkOneFontEmbedded applies the 6.2.10 embedding rule to a single font
 // dictionary.
-func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int, level PDFALevel) []ValidationError {
+func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int, level Level) []ValidationError {
 	subtypeName, _ := fontDict.Get("Subtype").(object.Name)
 
 	// Type3 fonts define their glyphs with content streams, so they carry no
@@ -1408,7 +1408,7 @@ func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fo
 
 // Allowed annotation subtypes per PDF/A level.
 // Rule 6.3.1-1.
-var allowedAnnotSubtypes = map[PDFALevel]map[object.Name]bool{
+var allowedAnnotSubtypes = map[Level]map[object.Name]bool{
 	PDFA4: {
 		"Text": true, "Link": true, "FreeText": true, "Line": true,
 		"Square": true, "Circle": true, "Polygon": true, "PolyLine": true,
@@ -1484,7 +1484,7 @@ func collectDirectAnnotations(doc core.View) []annotOccurrence {
 }
 
 // resolveName resolves obj (following an indirect reference) and returns it as
-// a object.Name. Rules must resolve before type-asserting: a value placed behind an
+// a Name. Rules must resolve before type-asserting: a value placed behind an
 // indirect reference — e.g. /Subtype 12 0 R — would otherwise silently evade
 // the check (audit C12).
 func resolveName(doc core.View, obj object.Object) (object.Name, bool) {
@@ -1492,7 +1492,7 @@ func resolveName(doc core.View, obj object.Object) (object.Name, bool) {
 	return n, ok
 }
 
-func checkAnnotationSubtypes(doc core.View, level PDFALevel) []ValidationError {
+func checkAnnotationSubtypes(doc core.View, level Level) []ValidationError {
 	allowed, ok := allowedAnnotSubtypes[level]
 	if !ok {
 		return nil
@@ -1544,7 +1544,7 @@ func annotOpacity(v object.Object) (float64, bool) {
 
 // Rule 6.3.2-1/2: Non-Popup annotations require F key; flags must have Print set,
 // Hidden/Invisible/ToggleNoView/NoView clear.
-func checkAnnotationFlags(doc core.View, level PDFALevel) []ValidationError {
+func checkAnnotationFlags(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 	check := func(dict *object.Dictionary, num int) {
 		// 6.5.3: at PDF/A-1, an annotation's /CA (constant opacity) must be 1.0
@@ -1643,7 +1643,7 @@ func checkAnnotationFlags(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.3.3-1: Annotations need AP except Popup, Link, Projection, and zero-area rects.
-func checkAnnotationAppearance(doc core.View, level PDFALevel) []ValidationError {
+func checkAnnotationAppearance(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 	check := func(dict *object.Dictionary, num int) {
 		st, _ := dict.Get("Subtype").(object.Name)
@@ -1755,7 +1755,7 @@ func isZeroAreaRect(obj object.Object) bool {
 // --- Interactive forms (6.4) ---
 
 // Rule 6.4.1-1: Widget annotation cannot contain A key.
-func checkWidgetNoAction(doc core.View, level PDFALevel) []ValidationError {
+func checkWidgetNoAction(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 	check := func(dict *object.Dictionary, num int) {
 		st, _ := dict.Get("Subtype").(object.Name)
@@ -1783,7 +1783,7 @@ func checkWidgetNoAction(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.4.2-1: AcroForm dictionary cannot contain XFA key.
-func checkNoXFA(doc core.View, level PDFALevel) []ValidationError {
+func checkNoXFA(doc core.View, level Level) []ValidationError {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -1807,7 +1807,7 @@ func checkNoXFA(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.4.1-2: NeedAppearances flag must be absent or false.
-func checkNeedAppearances(doc core.View, level PDFALevel) []ValidationError {
+func checkNeedAppearances(doc core.View, level Level) []ValidationError {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -1838,7 +1838,7 @@ func checkNeedAppearances(doc core.View, level PDFALevel) []ValidationError {
 
 // Forbidden action types by level per ISO 19005.
 // Rule 6.6.1-1.
-func isForbiddenAction(s object.Name, level PDFALevel, conformance string) bool {
+func isForbiddenAction(s object.Name, level Level, conformance string) bool {
 	// Universally forbidden across all PDF/A levels:
 	universallyForbidden := map[object.Name]bool{
 		"Launch":     true,
@@ -1884,7 +1884,7 @@ func isForbiddenAction(s object.Name, level PDFALevel, conformance string) bool 
 	return false
 }
 
-func checkNoForbiddenActions(doc core.View, level PDFALevel) []ValidationError {
+func checkNoForbiddenActions(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 
 	// PDF/A-4e relaxes a couple of 3D/multimedia actions; the conformance flag
@@ -1942,7 +1942,7 @@ func checkNoForbiddenActions(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func checkActionObject(doc core.View, ref object.Object, objNum int, level PDFALevel, conformance string) []ValidationError {
+func checkActionObject(doc core.View, ref object.Object, objNum int, level Level, conformance string) []ValidationError {
 	var errs []ValidationError
 	checkActionChain(doc, ref, objNum, level, conformance, &errs, make(map[*object.Dictionary]bool))
 	return errs
@@ -1951,7 +1951,7 @@ func checkActionObject(doc core.View, ref object.Object, objNum int, level PDFAL
 // checkActionChain validates one action dictionary and follows its /Next
 // entry (a single action or an array of actions), which previous versions
 // ignored entirely — a legal action whose /Next launches JavaScript passed.
-func checkActionChain(doc core.View, ref object.Object, objNum int, level PDFALevel, conformance string, errs *[]ValidationError, seen map[*object.Dictionary]bool) {
+func checkActionChain(doc core.View, ref object.Object, objNum int, level Level, conformance string, errs *[]ValidationError, seen map[*object.Dictionary]bool) {
 	// ref might be an action dict or an array (for OpenAction destination)
 	actionDict := doc.ResolveDict(ref)
 	if actionDict == nil || seen[actionDict] {
@@ -1979,7 +1979,7 @@ func checkActionChain(doc core.View, ref object.Object, objNum int, level PDFALe
 }
 
 // Rule 6.6.1-2: Named actions limited to NextPage, PrevPage, FirstPage, LastPage.
-func checkNamedActions(doc core.View, level PDFALevel) []ValidationError {
+func checkNamedActions(doc core.View, level Level) []ValidationError {
 	allowedNames := map[string]bool{
 		"NextPage":  true,
 		"PrevPage":  true,
@@ -2025,7 +2025,7 @@ func checkNamedActions(doc core.View, level PDFALevel) []ValidationError {
 // For PDF/A-1b/2b/3b: no /AA on widgets or form fields.
 // For PDF/A-4: AA allowed on widgets/form fields (trigger events).
 // Non-widget AA (doc/page/annot) keys restricted to: E, X, D, U, Fo, Bl.
-func checkAnnotationAA(doc core.View, level PDFALevel) []ValidationError {
+func checkAnnotationAA(doc core.View, level Level) []ValidationError {
 	if level == PDFA4 {
 		return nil // PDF/A-4 gates trigger events per-event; see checkA4TriggerEvents
 	}
@@ -2070,7 +2070,7 @@ func isWidgetOrField(dict *object.Dictionary) bool {
 // metadataClause returns the ISO clause for a metadata-rule concept at the
 // given level. Metadata requirements are numbered differently per part (ISO
 // 19005-1 6.7.x; -2/-3 6.6.x; -4 6.7.x); clauses follow the veraPDF profiles.
-func metadataClause(concept string, level PDFALevel) string {
+func metadataClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"version":       {"6.7.11", "6.6.4", "6.7.3"},
@@ -2091,7 +2091,7 @@ func metadataClause(concept string, level PDFALevel) string {
 	}
 }
 
-func checkMetadataVersion(doc core.View, level PDFALevel) []ValidationError {
+func checkMetadataVersion(doc core.View, level Level) []ValidationError {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -2220,7 +2220,7 @@ func xmpHasKey(xmp, key string) bool {
 
 // --- Transparency checks (PDFA-1b only) ---
 
-func checkNoTransparency(doc core.View, level PDFALevel) []ValidationError {
+func checkNoTransparency(doc core.View, level Level) []ValidationError {
 	if level != PDFA1b {
 		return nil
 	}
@@ -2400,7 +2400,7 @@ func collectAllExtGState(doc core.View) []extGStateEntry {
 // imageClause returns the ISO clause for an image/XObject-rule concept at the
 // given level. Images are 6.2.4 in ISO 19005-1, 6.2.8.x in parts 2/3, and
 // 6.2.7.x in part 4; clauses follow the veraPDF profiles.
-func imageClause(concept string, level PDFALevel) string {
+func imageClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"image": {"6.2.4", "6.2.8", "6.2.7.1"},
@@ -2420,7 +2420,7 @@ func imageClause(concept string, level PDFALevel) string {
 	}
 }
 
-func checkNoAlternateImages(doc core.View, level PDFALevel) []ValidationError {
+func checkNoAlternateImages(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
@@ -2442,7 +2442,7 @@ func checkNoAlternateImages(doc core.View, level PDFALevel) []ValidationError {
 }
 
 // Rule 6.2.7.1-3: Interpolate must be false.
-func checkInterpolate(doc core.View, level PDFALevel) []ValidationError {
+func checkInterpolate(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
@@ -2471,7 +2471,7 @@ func checkInterpolate(doc core.View, level PDFALevel) []ValidationError {
 // level. A form XObject must not carry OPI/Subtype2/PS, and reference XObjects
 // (a /Ref key) are forbidden outright. ISO 19005-1 6.2.4/6.2.6; -2/-3 6.2.9;
 // -4 6.2.8.1/6.2.8.2. Clauses follow the veraPDF profiles.
-func xobjectClause(concept string, level PDFALevel) string {
+func xobjectClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"formMisc": {"6.2.4", "6.2.9", "6.2.8.1"}, // OPI / Subtype2 / PS on a form
@@ -2491,7 +2491,7 @@ func xobjectClause(concept string, level PDFALevel) string {
 	}
 }
 
-func checkNoOPI(doc core.View, level PDFALevel) []ValidationError {
+func checkNoOPI(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
@@ -2529,7 +2529,7 @@ func checkNoOPI(doc core.View, level PDFALevel) []ValidationError {
 // --- Catalog version check (MR-3) ---
 
 // Rule 6.1.12: PDF/A-4 catalog /Version must match pattern 2.N.
-func checkCatalogVersion(doc core.View, level PDFALevel) []ValidationError {
+func checkCatalogVersion(doc core.View, level Level) []ValidationError {
 	if level != PDFA4 {
 		return nil
 	}
@@ -2568,7 +2568,7 @@ func checkCatalogVersion(doc core.View, level PDFALevel) []ValidationError {
 // --- Font subset checks (MR-8) ---
 
 // Rule 6.2.10: PDF/A-1b subset fonts must have CharSet or CIDSet.
-func checkFontSubsets(doc core.View, level PDFALevel) []ValidationError {
+func checkFontSubsets(doc core.View, level Level) []ValidationError {
 	// CharSet/CIDSet PRESENCE is only required by 19005-1: the veraPDF
 	// corpus passes a PDF/A-2 subset CIDFont without /CIDSet (Part 2 only
 	// constrains the sets when present).
@@ -2663,7 +2663,7 @@ func getFontDescriptor(doc core.View, fontDict *object.Dictionary) *object.Dicti
 // --- ExtGState checks (MR-1) ---
 
 // Rule 6.2.5: ExtGState forbidden keys for PDF/A-2b/3b/4.
-func checkExtGState(doc core.View, level PDFALevel) []ValidationError {
+func checkExtGState(doc core.View, level Level) []ValidationError {
 	// ISO 19005-1 clause 6.2.8 carries the same TR/TR2 prohibitions as
 	// 19005-2 clause 6.2.5; previously the whole check was skipped at 1b
 	// with a comment claiming checkNoTransparency covered it, which never
@@ -2766,7 +2766,7 @@ func isValidBlendMode(bm object.Name) bool {
 	return false
 }
 
-func checkHalftoneErrors(doc core.View, htRef object.Object, objNum int, level PDFALevel, rule string, errs *[]ValidationError) {
+func checkHalftoneErrors(doc core.View, htRef object.Object, objNum int, level Level, rule string, errs *[]ValidationError) {
 	htDict := doc.ResolveDict(htRef)
 	if htDict == nil {
 		return
@@ -2807,7 +2807,7 @@ func checkHalftoneErrors(doc core.View, htRef object.Object, objNum int, level P
 // --- Info/XMP consistency check (MR-6) ---
 
 // Rule 6.7.3: PDF/A-1b requires Info dict and XMP metadata to be consistent.
-func checkInfoXMPConsistency(doc core.View, level PDFALevel) []ValidationError {
+func checkInfoXMPConsistency(doc core.View, level Level) []ValidationError {
 	// Info<->XMP consistency is a 19005-1 (6.7.3) requirement only: the
 	// veraPDF corpus passes PDF/A-2 files whose Info entries deliberately
 	// differ from their XMP counterparts (Part 2 deprecates Info instead).
@@ -3089,7 +3089,7 @@ func normalizeXMPDate(s string) string {
 // --- Transparency blending check (MR-2) ---
 
 // Rule 6.2.4: Pages using transparency must have proper blending color space.
-func checkTransparencyBlending(doc core.View, level PDFALevel) []ValidationError {
+func checkTransparencyBlending(doc core.View, level Level) []ValidationError {
 	if level == PDFA1b {
 		return nil // PDF/A-1b prohibits transparency entirely
 	}
@@ -3160,7 +3160,7 @@ func checkTransparencyBlending(doc core.View, level PDFALevel) []ValidationError
 // transparencyGroupNotRequired checks if the transparency /Group requirement
 // can be relaxed for a page. For PDF/A-4, OutputIntents provide implicit
 // blending CS. For PDF/A-2b/3b, DefaultCS coverage can substitute.
-func transparencyGroupNotRequired(doc core.View, catalog *object.Dictionary, page *object.Dictionary, level PDFALevel) bool {
+func transparencyGroupNotRequired(doc core.View, catalog *object.Dictionary, page *object.Dictionary, level Level) bool {
 	if level == PDFA4 {
 		// PDF/A-4: page-level or catalog-level OutputIntents provide blending CS
 		catalogRGB, catalogCMYK, catalogGray := getOutputIntentCoverage(doc, catalog)
@@ -3205,7 +3205,7 @@ func transparencyGroupNotRequired(doc core.View, catalog *object.Dictionary, pag
 // soft masks and form transparency groups. Unlike resourcesUseTransparency
 // (tuned for the 2b+ blending-group question, which treats a self-contained
 // form group as not propagating), presence alone is a violation here.
-func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, level PDFALevel, seen map[*object.Dictionary]bool, errs *[]ValidationError) {
+func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, level Level, seen map[*object.Dictionary]bool, errs *[]ValidationError) {
 	if seen[container] {
 		return
 	}
@@ -3278,7 +3278,7 @@ func collectPages(doc core.View, pageTreeRef object.Object) []core.PageInfo {
 // --- Embedded files check (MR-4) ---
 
 // Rule 6.1.12: Embedded file restrictions.
-func checkEmbeddedFiles(doc core.View, level PDFALevel) []ValidationError {
+func checkEmbeddedFiles(doc core.View, level Level) []ValidationError {
 	// PDF/A-1 (ISO 19005-1, 6.1.11) forbids embedded files outright: no
 	// file specification may carry /EF, wherever it lives — not only in the
 	// catalog's Names tree.
@@ -3319,7 +3319,7 @@ func checkEmbeddedFiles(doc core.View, level PDFALevel) []ValidationError {
 	return checkEmbeddedFileSpecs(doc, level, catalog)
 }
 
-func checkEmbeddedFileSpecs(doc core.View, level PDFALevel, catalog *object.Dictionary) []ValidationError {
+func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictionary) []ValidationError {
 	var errs []ValidationError
 
 	// Embedded-file rules live in clause 6.8 for 19005-2/-3 and 6.9 for
@@ -3462,7 +3462,7 @@ func documentHasAF(doc core.View) bool {
 // --- Optional content check (MR-5) ---
 
 // Rule 6.1.13: Optional content requirements for PDF/A-4.
-func checkOptionalContent(doc core.View, level PDFALevel) []ValidationError {
+func checkOptionalContent(doc core.View, level Level) []ValidationError {
 	// Optional-content configuration rules are 19005-2/-3 clause 6.9 and
 	// 19005-4 clause 6.10. PDF/A-1 forbids optional content wholesale
 	// (checkNoOCProperties).
@@ -3607,7 +3607,7 @@ type implLimits struct {
 	realLimit float64
 }
 
-func checkImplementationLimits(doc core.View, level PDFALevel) []ValidationError {
+func checkImplementationLimits(doc core.View, level Level) []ValidationError {
 	if level == PDFA4 {
 		// PDF 2.0 (ISO 32000-2) abolished the Annex C limits; ISO 19005-4
 		// has no implementation-limits clause.
@@ -3650,7 +3650,7 @@ func checkImplementationLimits(doc core.View, level PDFALevel) []ValidationError
 	return errs
 }
 
-func checkObjectLimits(obj object.Object, objNum int, level PDFALevel, lim implLimits, depth int, errs *[]ValidationError) {
+func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimits, depth int, errs *[]ValidationError) {
 	if obj == nil {
 		return
 	}
@@ -3741,7 +3741,7 @@ func checkObjectLimits(obj object.Object, objNum int, level PDFALevel, lim implL
 	}
 }
 
-func checkPageSizeLimits(doc core.View, level PDFALevel, errs *[]ValidationError) {
+func checkPageSizeLimits(doc core.View, level Level, errs *[]ValidationError) {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return
@@ -3801,7 +3801,7 @@ func checkPageSizeLimits(doc core.View, level PDFALevel, errs *[]ValidationError
 
 // checkQNestingDepth checks that q/Q nesting depth in content streams
 // does not exceed 28 levels (PDF/A implementation limit).
-func checkQNestingDepth(doc core.View, level PDFALevel, rule string, errs *[]ValidationError) {
+func checkQNestingDepth(doc core.View, level Level, rule string, errs *[]ValidationError) {
 	const maxQDepth = 28
 
 	report := func(data []byte, objNum int) {
@@ -3866,7 +3866,7 @@ func qNestingMaxDepth(cancel core.Canceler, data []byte) int {
 
 // Rule 6.2.3.3/6.2.4.3: Device color spaces (DeviceRGB, DeviceCMYK, DeviceGray)
 // require either a default color space mapping or a matching OutputIntent.
-func checkDeviceColorSpaces(doc core.View, level PDFALevel) []ValidationError {
+func checkDeviceColorSpaces(doc core.View, level Level) []ValidationError {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -4059,7 +4059,7 @@ func scanContentsForDeviceOps(doc core.View, contentsRef object.Object) (usesRGB
 
 // forEachContentOperator tokenizes a decoded content stream and calls fn for
 // each operator-position token (anything that is not a string, hex string,
-// dictionary marker, array/procedure delimiter, comment, or name). object.String
+// dictionary marker, array/procedure delimiter, comment, or name). String
 // literals, comments, and inline-image binary data (BI ... ID <binary> EI)
 // are skipped, so operator bytes occurring inside them are never reported.
 func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte)) {
@@ -4073,7 +4073,7 @@ func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte
 // --- ICCBased color space checks (6.2.4.2) ---
 
 // Rule 6.2.4.2: ICCBased color spaces must reference valid ICC profiles.
-func checkICCBasedProfiles(doc core.View, level PDFALevel) []ValidationError {
+func checkICCBasedProfiles(doc core.View, level Level) []ValidationError {
 	var errs []ValidationError
 
 	for num, iobj := range doc.Objects {
@@ -4168,7 +4168,7 @@ func checkICCBasedProfiles(doc core.View, level PDFALevel) []ValidationError {
 // --- Separation/DeviceN checks (6.2.4.4) ---
 
 // Rule 6.2.4.4 / 6.2.3.4: Separation and DeviceN color space restrictions.
-func checkSeparationDeviceN(doc core.View, level PDFALevel) []ValidationError {
+func checkSeparationDeviceN(doc core.View, level Level) []ValidationError {
 
 	var errs []ValidationError
 
@@ -4221,7 +4221,7 @@ type sepColorantSeen struct {
 	alt    object.Object
 }
 
-func collectTintTransforms(doc core.View, dict *object.Dictionary, tintTransforms map[object.Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
+func collectTintTransforms(doc core.View, dict *object.Dictionary, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]ValidationError) {
 	csRef := dict.Get("ColorSpace")
 	if csRef == nil {
 		return
@@ -4238,11 +4238,11 @@ func collectTintTransforms(doc core.View, dict *object.Dictionary, tintTransform
 // collectSeparationConsistency records a Separation definition (top-level or
 // inside a DeviceN/NChannel Colorants dictionary) and flags same-name
 // definitions whose tint transform or alternate space differ.
-func collectSeparationConsistency(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError) {
+func collectSeparationConsistency(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]ValidationError) {
 	collectSeparationConsistencySeen(doc, val, tintTransforms, objNum, level, errs, make(map[int]bool))
 }
 
-func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]ValidationError, seen map[int]bool) {
 	// Guard against a DeviceN whose /Colorants entry cycles back to itself: a
 	// self-referential colorant would otherwise recurse until the goroutine
 	// stack overflows (an unrecoverable fatal error), like the other
@@ -4311,7 +4311,7 @@ func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTran
 	}
 }
 
-func checkDictForSepDeviceN(doc core.View, dict *object.Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkDictForSepDeviceN(doc core.View, dict *object.Dictionary, objNum int, level Level, errs *[]ValidationError) {
 	csRef := dict.Get("ColorSpace")
 	if csRef == nil {
 		return
@@ -4325,11 +4325,11 @@ func checkDictForSepDeviceN(doc core.View, dict *object.Dictionary, objNum int, 
 	}
 }
 
-func checkColorSpaceValue(doc core.View, csObj object.Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkColorSpaceValue(doc core.View, csObj object.Object, objNum int, level Level, errs *[]ValidationError) {
 	checkColorSpaceValueSeen(doc, csObj, objNum, level, errs, make(map[int]bool))
 }
 
-func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, level Level, errs *[]ValidationError, seen map[int]bool) {
 	if r, ok := csObj.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle through an indirect color-space reference
@@ -4500,7 +4500,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 // CalRGB, or Lab colour space against ISO 32000-1 Tables 63-65: WhitePoint
 // is required with Xw, Zw positive and Yw exactly 1.0; BlackPoint components
 // must be non-negative; a Lab Range must be four numbers with min <= max.
-func checkCIEDictParams(doc core.View, family string, dict *object.Dictionary, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkCIEDictParams(doc core.View, family string, dict *object.Dictionary, objNum int, level Level, errs *[]ValidationError) {
 	rule := "6.2.4"
 	if level == PDFA1b {
 		rule = "6.2.3"
@@ -4589,11 +4589,11 @@ func isProcessColorant(name object.Name) bool {
 // is not a restricted space. For PDF/A-1b, device CS alternates are always forbidden
 // (must be CIE-based). For 2b/3b/4, device alternates are handled by checkDeviceColorSpaces
 // which verifies OutputIntent coverage.
-func checkAlternateCS(doc core.View, altCS object.Object, objNum int, level PDFALevel, errs *[]ValidationError) {
+func checkAlternateCS(doc core.View, altCS object.Object, objNum int, level Level, errs *[]ValidationError) {
 	checkAlternateCSSeen(doc, altCS, objNum, level, errs, make(map[int]bool))
 }
 
-func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level PDFALevel, errs *[]ValidationError, seen map[int]bool) {
+func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level Level, errs *[]ValidationError, seen map[int]bool) {
 	if r, ok := altCS.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle through an indirect alternate color-space reference
@@ -4791,7 +4791,7 @@ func sameICCProfile(doc core.View, a, b *object.Stream) bool {
 //     for rendering shall not embed the same profile as the current PDF/A
 //     output intent or the current transparency blending colour space — the
 //     device colour operators exist for exactly that case.
-func checkICCBasedUsageRules(doc core.View, level PDFALevel) []ValidationError {
+func checkICCBasedUsageRules(doc core.View, level Level) []ValidationError {
 	if level == PDFA1b {
 		return nil
 	}
@@ -4949,7 +4949,7 @@ func parseJP2Header(data []byte) jp2Info {
 // restrictions: 1/3/4 colour channels, bit depth 1-38, colour-specification
 // method 1-3, permitted enumerated colour spaces, and a single authoritative
 // colour specification when several are present.
-func checkJPXImages(doc core.View, level PDFALevel) []ValidationError {
+func checkJPXImages(doc core.View, level Level) []ValidationError {
 	if level == PDFA1b {
 		return nil // JPXDecode is forbidden outright at PDF/A-1 (6.1.10)
 	}

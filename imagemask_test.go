@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -40,9 +42,9 @@ func nrgbaPix(m *image.NRGBA, x, y int) [4]byte {
 }
 
 // extractFirst extracts the single named image from a one-image doc.
-func extractFirst(t *testing.T, st *Stream) ExtractedImage {
+func extractFirst(t *testing.T, st *object.Stream) images.ExtractedImage {
 	t.Helper()
-	d := imageDoc(map[string]*Stream{"Img": st})
+	d := imageDoc(map[string]*object.Stream{"Img": st})
 	imgs := d.ExtractImages()
 	if len(imgs) != 1 {
 		t.Fatalf("expected 1 image, got %d", len(imgs))
@@ -81,7 +83,7 @@ func TestMaskDCTSoftMask(t *testing.T) {
 func TestMaskDCTStencilMask(t *testing.T) {
 	base := imageXObject(2, 1, 8, "DeviceGray", "DCTDecode", jpegBytes(t, 2, 1, 200))
 	mk := imageXObject(2, 1, 1, "", "", []byte{0b10000000}) // pixel0=1 hides, pixel1=0 shows
-	mk.Dict.Set("ImageMask", Boolean(true))
+	mk.Dict.Set("ImageMask", object.Boolean(true))
 	base.Dict.Set("Mask", mk)
 
 	im := extractFirst(t, base)
@@ -116,7 +118,7 @@ func TestMaskDCTNoMaskUnchanged(t *testing.T) {
 // is skipped (raw samples unavailable), leaving the image opaque and unchanged.
 func TestMaskColorKeyIgnoredForCodec(t *testing.T) {
 	base := imageXObject(2, 1, 8, "DeviceGray", "DCTDecode", jpegBytes(t, 2, 1, 128))
-	base.Dict.Set("Mask", Array{Integer(0), Integer(255)}) // colour-key range
+	base.Dict.Set("Mask", object.Array{object.Integer(0), object.Integer(255)}) // colour-key range
 	im := extractFirst(t, base)
 	if _, isNRGBA := im.Image.(*image.NRGBA); isNRGBA {
 		t.Errorf("colour-key /Mask on a codec image should be ignored (no NRGBA conversion)")

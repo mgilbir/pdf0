@@ -35,15 +35,15 @@ go get github.com/mgilbir/pdf0
   results combine across validators. Factur-X and Order-X return a result
   *struct* rather than a slice, because they also carry the extracted invoice
   XML, the conformance level the container declared, and what the invoice rule
-  engine did not evaluate — but `res.Violations` holds `FacturXViolation` /
-  `OrderXViolation`, which satisfy `Violation` like every other finding type.
+  engine did not evaluate — but `res.Violations` holds `facturx.Violation` /
+  `facturx.OrderXViolation`, which satisfy `Violation` like every other finding type.
 - **Encrypt / decrypt** with the standard security handler — RC4, AES-128, and
   AES-256, via `ReadWithPassword`, `SetEncryption`, and `RemoveEncryption`
   (`Document.Locked` reports a file that could not be decrypted).
 - **Sign and verify** digital signatures (`WriteSigned` / `VerifySignatures`,
   CMS/PKCS#7), including PAdES B-B through B-LTA (`ValidatePAdES`), RFC 3161
   timestamps, and CRL/OCSP revocation. Read the verdict with
-  `SignatureResult.DocumentUnmodified()`, not `Valid` alone — `Valid` accepts a
+  `sign.Result.DocumentUnmodified()`, not `Valid` alone — `Valid` accepts a
   document altered by a post-signing incremental update. `VerifySignatures`
   performs no trust-chain check; use `VerifySignaturesWithRoots` for that.
 - **Extract** text (`ExtractText`) and images (`ExtractImages`, or the lazy
@@ -86,7 +86,7 @@ func main() {
 Validate against a PDF/A level:
 
 ```go
-errs := pdf0.ValidatePDFA(doc, pdf0.PDFA4)
+errs := pdf0.ValidatePDFA(doc, pdfa.PDFA4)
 for _, e := range errs {
 	fmt.Println(e) // e.g. [PDF/A-4 6.2.10] object 12: font ... must be embedded
 }
@@ -123,7 +123,7 @@ Under a deadline, use the `…Context` variants — `ReadContext`,
 ```go
 ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 defer cancel()
-errs := pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA4)
+errs := pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA4)
 ```
 
 A cancelled validation returns the findings it had gathered plus one under the
@@ -223,19 +223,21 @@ findings, not a description of how the code works — for that start at
 
 ## Layout
 
-The public API is the root `pdf0` package, and it is the only package most
-callers name. Underneath it:
+The entry points are in the root `pdf0` package — `Read`, `Document`, and one
+validator function per standard. The types they work in are declared in
+subpackages and named from there, so a caller that builds an object graph or
+inspects a finding imports the package that owns it. Underneath the root:
 
-- **Regular packages** for pieces that carry public API — `object`, `syntax`,
-  `images`, and one per validator (`pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`).
-  The root package aliases their types, so `pdf0.Dictionary` and
-  `object.Dictionary` are one type and `pdf0.UAViolation` is
-  `pdfua.UAViolation`. They are regular rather than internal because aliasing a
-  type into `internal/` renders it in godoc with its fields and methods gone and
-  nothing the reader may follow.
+- **Regular packages** for pieces that carry public API — `object` (the value
+  types), `syntax` (lexer, parser, serializer), `images`, `sign`, `facturx`, and
+  one per validator (`pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`). Each
+  type is declared in exactly one place and named from there: a dictionary is
+  `object.Dictionary`, a PDF/UA finding is `pdfua.Violation`, a conformance
+  level is `pdfa.PDFA2b`. The root package does not re-export them.
 - **`internal/`** for implementation whose API is not meant for callers:
   `core` (the document seen from below — see below), `finding` (the shared
-  validator harness), `font`, `ccitt`, `jbig2`.
+  validator harness), `crypt` (the standard security handler, reached only
+  through `Document`), `font`, `ccitt`, `jbig2`.
 
 A subsystem does not name `Document`. It takes a `core.View`: the object graph,
 the trailer, what `Read` found in the file, the resolved budget, the

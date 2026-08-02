@@ -2,13 +2,13 @@ package pdf0
 
 import (
 	"context"
+	"github.com/mgilbir/formalis"
 	"github.com/mgilbir/pdf0/facturx"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
-
-	"github.com/mgilbir/formalis"
 )
 
 // This file pins the properties the Factur-X / Order-X containers acquired when
@@ -35,38 +35,38 @@ func utf16be(s string) []byte {
 	return out
 }
 
-func afDoc(ufName string, rel Name, subtype Name) *Document {
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "1.6"}
-	stream := &Stream{Dict: Dictionary{}, Data: []byte("<xml/>")}
+func afDoc(ufName string, rel object.Name, subtype object.Name) *Document {
+	d := &Document{Objects: map[int]*object.IndirectObject{}, Version: "1.6"}
+	stream := &object.Stream{Dict: object.Dictionary{}, Data: []byte("<xml/>")}
 	stream.Dict.Set("Subtype", subtype)
-	d.Objects[10] = &IndirectObject{Number: 10, Value: stream}
-	ef := &Dictionary{}
-	ef.Set("F", IndirectRef{Number: 10})
-	fs := &Dictionary{}
-	fs.Set("Type", Name("Filespec"))
-	fs.Set("F", String{Value: []byte(ufName)})
-	fs.Set("UF", String{Value: utf16be(ufName)})
+	d.Objects[10] = &object.IndirectObject{Number: 10, Value: stream}
+	ef := &object.Dictionary{}
+	ef.Set("F", object.IndirectRef{Number: 10})
+	fs := &object.Dictionary{}
+	fs.Set("Type", object.Name("Filespec"))
+	fs.Set("F", object.String{Value: []byte(ufName)})
+	fs.Set("UF", object.String{Value: utf16be(ufName)})
 	fs.Set("AFRelationship", rel)
 	fs.Set("EF", ef)
-	d.Objects[9] = &IndirectObject{Number: 9, Value: fs}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("AF", Array{IndirectRef{Number: 9}})
-	d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	d.Objects[9] = &object.IndirectObject{Number: 9, Value: fs}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("AF", object.Array{object.IndirectRef{Number: 9}})
+	d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 	return d
 }
 
 func facturxTestDoc(profile formalis.Profile, xml string) *Document {
 	d := afDoc("factur-x.xml", "Data", "text/xml")
-	d.Objects[10].Value.(*Stream).Data = []byte(xml)
-	meta := &Stream{Dict: Dictionary{}, Data: facturx.XMPPacket(profile, "INVOICE", "")}
-	meta.Dict.Set("Type", Name("Metadata"))
-	meta.Dict.Set("Subtype", Name("XML"))
-	d.Objects[20] = &IndirectObject{Number: 20, Value: meta}
+	d.Objects[10].Value.(*object.Stream).Data = []byte(xml)
+	meta := &object.Stream{Dict: object.Dictionary{}, Data: facturx.XMPPacket(profile, "INVOICE", "")}
+	meta.Dict.Set("Type", object.Name("Metadata"))
+	meta.Dict.Set("Subtype", object.Name("XML"))
+	d.Objects[20] = &object.IndirectObject{Number: 20, Value: meta}
 	cat := d.ResolveDict(d.Trailer.Get("Root"))
-	cat.Set("Metadata", IndirectRef{Number: 20})
+	cat.Set("Metadata", object.IndirectRef{Number: 20})
 	return d
 }
 
@@ -87,8 +87,8 @@ func findRule[T Violation](v []T, rule string) (T, bool) {
 // only the fatal half is ever put in Violations (adoptInvoiceFindings).
 func TestFacturXFindingsSatisfyViolation(t *testing.T) {
 	var all []Violation
-	all = append(all, FacturXViolation{Rule: "attachment", Message: "m", Object: 7})
-	all = append(all, OrderXViolation{Rule: "ORDER-01", Message: "m", Source: formalis.SourceOrderX})
+	all = append(all, facturx.Violation{Rule: "attachment", Message: "m", Object: 7})
+	all = append(all, facturx.OrderXViolation{Rule: "ORDER-01", Message: "m", Source: formalis.SourceOrderX})
 	if all[0].RuleID() != "attachment" || all[0].ObjectNum() != 7 {
 		t.Errorf("FacturXViolation does not report its rule and object: %q/%d", all[0].RuleID(), all[0].ObjectNum())
 	}
@@ -126,7 +126,7 @@ func TestCancelledFacturXIsNeverClean(t *testing.T) {
 		}},
 		{"ValidateOrderX", func() []Violation {
 			d := afDoc("order-x.xml", "Data", "text/xml")
-			d.Objects[10].Value.(*Stream).Data = []byte(validOrderXML)
+			d.Objects[10].Value.(*object.Stream).Data = []byte(validOrderXML)
 			var out []Violation
 			for _, v := range ValidateOrderXContext(ctx, d, nil).Violations {
 				out = append(out, v)
@@ -174,9 +174,9 @@ func TestReportCancellationOnlySpeaksWhenNobodyElseHas(t *testing.T) {
 	cancel()
 	c := core.NewCanceler(ctx)
 
-	var out []FacturXViolation
+	var out []facturx.Violation
 	add := func(rule, msg string, obj int) {
-		out = append(out, FacturXViolation{Rule: rule, Message: msg, Object: obj})
+		out = append(out, facturx.Violation{Rule: rule, Message: msg, Object: obj})
 	}
 
 	// Nobody has spoken: the poll owes the caller the finding.
@@ -210,7 +210,7 @@ func TestFacturXReportsWhatItDidNotEvaluate(t *testing.T) {
 	// The Order-X rule engine checks five head terms out of a whole document rule
 	// set, so it always has a published gap to name.
 	d := afDoc("order-x.xml", "Data", "text/xml")
-	d.Objects[10].Value.(*Stream).Data = []byte(validOrderXML)
+	d.Objects[10].Value.(*object.Stream).Data = []byte(validOrderXML)
 	res := ValidateOrderXContext(context.Background(), d, nil)
 
 	if len(res.OrderNotEvaluated) == 0 {

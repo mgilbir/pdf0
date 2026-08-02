@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
 	"testing"
@@ -104,7 +105,7 @@ func TestReadSimplePDF(t *testing.T) {
 
 	t.Logf("Document has %d objects", len(doc.Objects))
 	for num, obj := range doc.Objects {
-		dict, ok := obj.Value.(*Dictionary)
+		dict, ok := obj.Value.(*object.Dictionary)
 		if ok {
 			typeVal := dict.Get("Type")
 			if typeVal != nil {

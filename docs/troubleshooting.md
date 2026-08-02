@@ -96,7 +96,7 @@ object number 0 is reserved and cannot be written
 
 ## Validation reported violations
 
-A `ValidationError` prints as `[LEVEL CLAUSE] object N: message`, e.g.
+A `pdfa.ValidationError` prints as `[LEVEL CLAUSE] object N: message`, e.g.
 
 ```
 [PDF/A-4 6.2.10] object 12: font ... must be embedded
@@ -119,7 +119,7 @@ raw file and cannot be recovered from the object model. If you read the file int
 a `[]byte` anyway, always pass it:
 
 ```go
-errs := pdf0.ValidatePDFABytes(doc, pdf0.PDFA4, data)
+errs := pdf0.ValidatePDFABytes(doc, pdfa.PDFA4, data)
 ```
 
 **`[… internal] internal validator error: …`** means a check panicked and was
@@ -137,7 +137,7 @@ it before deciding whether a file is conformant, because a checker finding means
 
 ```go
 var real []pdf0.Violation
-for _, e := range pdf0.ValidatePDFABytes(doc, pdf0.PDFA4, data) {
+for _, e := range pdf0.ValidatePDFABytes(doc, pdfa.PDFA4, data) {
 	if !pdf0.IsCheckerFinding(e) {
 		real = append(real, e)
 	}
@@ -200,7 +200,7 @@ none of those document-level defects were present, not that the file is clean.
 
 ## A signature says `Valid` but you should not trust it yet
 
-`SignatureResult.Valid` means only that the bytes *inside* the signed
+`sign.Result.Valid` means only that the bytes *inside* the signed
 `/ByteRange` are intact and were signed by the embedded certificate's key. It
 says nothing about bytes outside that range, and nothing about whether the
 certificate is trustworthy. From the godoc:

@@ -15,21 +15,21 @@ import (
 // tree. The checks here are grounded in Tables 408 and 409 and the connectivity
 // rules of 14.12.2 and 14.12.3; they operate on the parsed object model.
 
-// DPartViolation reports a way in which a document's DPart hierarchy departs
+// Violation reports a way in which a document's DPart hierarchy departs
 // from ISO 32000-2 clause 14.12.
-type DPartViolation struct {
+type Violation struct {
 	Rule    string // ISO 32000-2 subclause, e.g. "14.12.2"
 	Message string
 	Object  int // object number the violation is anchored to, 0 if N/A
 }
 
 // RuleID returns the ISO 32000-2 DPart subclause.
-func (v DPartViolation) RuleID() string { return v.Rule }
+func (v Violation) RuleID() string { return v.Rule }
 
 // ObjectNum returns the anchoring object number, 0 if N/A.
-func (v DPartViolation) ObjectNum() int { return v.Object }
+func (v Violation) ObjectNum() int { return v.Object }
 
-func (v DPartViolation) Error() string {
+func (v Violation) Error() string {
 	if v.Object != 0 {
 		return fmt.Sprintf("DPart %s: %s (object %d)", v.Rule, v.Message, v.Object)
 	}
@@ -309,10 +309,10 @@ func isXMLNameToken(s string) bool {
 // It exists for PDF/VT, which requires a conforming document-part hierarchy and
 // adopts these findings under its own prefix; the root package's ValidateDParts
 // adds the read-time guard trips on top.
-func ValidateView(v core.View) []DPartViolation {
-	var out []DPartViolation
+func ValidateView(v core.View) []Violation {
+	var out []Violation
 	add := func(rule, msg string, obj int) {
-		out = append(out, DPartViolation{Rule: rule, Message: msg, Object: obj})
+		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})
 	}
 	if !v.Cancel.Stopped() {
 		finding.Guarded(add, func() { ValidateHierarchy(v, add) })

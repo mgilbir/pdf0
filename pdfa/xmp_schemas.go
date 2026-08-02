@@ -431,7 +431,7 @@ var xmpIdentQualProperties = map[string]xmpPropType{
 }
 
 // predefinedXMPSchemas returns the predefined schema tables for a level.
-func predefinedXMPSchemas(level PDFALevel) map[string]map[string]xmpPropType {
+func predefinedXMPSchemas(level Level) map[string]map[string]xmpPropType {
 	schemas := map[string]map[string]xmpPropType{
 		nsDC:        xmpDCProperties,
 		nsXMPBasic:  xmpBasicProperties,
@@ -728,7 +728,7 @@ func simpleDeclaredSyntax(lower string) (xmpSyntax, bool) {
 
 // checkXMPProperties validates every XMP property against the predefined
 // schema tables (or the packet's extension schema declarations).
-func checkXMPProperties(doc core.View, level PDFALevel) []ValidationError {
+func checkXMPProperties(doc core.View, level Level) []ValidationError {
 	// PDF/A-4 (ISO 19005-4) does NOT apply the strict per-property value-form
 	// validation that 1b/2b/3b do. This is deliberate, not a TODO: the veraPDF
 	// corpus proves A-4 tolerates non-conforming XMP property values — e.g.
@@ -832,7 +832,7 @@ func checkXMPProperties(doc core.View, level PDFALevel) []ValidationError {
 
 // checkXMPValueForm verifies a property value has the expected structural
 // form and simple-value syntax.
-func checkXMPValueForm(p xmpProperty, pt xmpPropType, rule string, level PDFALevel) []ValidationError {
+func checkXMPValueForm(p xmpProperty, pt xmpPropType, rule string, level Level) []ValidationError {
 	var errs []ValidationError
 	bad := func(format string, args ...interface{}) {
 		errs = append(errs, ValidationError{
@@ -912,7 +912,7 @@ var standardXMPValueTypes = map[string]bool{
 	"LayerGroup": true, "Frame": true, "CuePointParam": true,
 }
 
-func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, level PDFALevel) []ValidationError {
+func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, level Level) []ValidationError {
 	var errs []ValidationError
 	report := func(format string, args ...interface{}) {
 		errs = append(errs, ValidationError{
@@ -1113,7 +1113,7 @@ func extensionTypeFields(props []xmpProperty) map[string]map[string]bool {
 // -4 6.7.2.1): the xpacket processing instruction must not carry a bytes or
 // encoding attribute, the packet must be well-formed XML, and (PDF/A-4) it
 // must be encoded as UTF-8.
-func checkXMPWellFormed(doc core.View, level PDFALevel) []ValidationError {
+func checkXMPWellFormed(doc core.View, level Level) []ValidationError {
 	// The rule numbers differ by part, but the requirements — no bytes/encoding
 	// attribute on the xpacket header, and a well-formed XMP packet — apply from
 	// PDF/A-1 onward (ISO 19005-1 6.7.5 / 6.7.9). PDF/A-1 was previously skipped
@@ -1156,7 +1156,7 @@ func checkXMPWellFormed(doc core.View, level PDFALevel) []ValidationError {
 
 	xmp := core.DecodeXMPToUTF8(raw)
 	if xmp != "" {
-		// object.Stream the packet rather than building a node tree: well-formedness and
+		// Stream the packet rather than building a node tree: well-formedness and
 		// the presence of a properly namespaced rdf:RDF element are all that is
 		// needed here, and streaming stays linear on an adversarially large
 		// packet that would make tree-building blow up (see xmpPropertyMaxBytes).

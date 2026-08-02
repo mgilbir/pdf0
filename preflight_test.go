@@ -2,12 +2,14 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"os"
 	"strings"
 	"testing"
 )
 
-func countEncryptViolations(errs []ValidationError) int {
+func countEncryptViolations(errs []pdfa.ValidationError) int {
 	n := 0
 	for _, e := range errs {
 		if strings.Contains(e.Message, "/Encrypt") {
@@ -26,10 +28,10 @@ func TestRepairCatalogAA(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-	cat.Set("AA", &Dictionary{})
+	cat.Set("AA", &object.Dictionary{})
 
 	before := 0
-	for _, e := range ValidatePDFA(doc, PDFA2b) {
+	for _, e := range ValidatePDFA(doc, pdfa.PDFA2b) {
 		if strings.Contains(e.Message, "catalog") && strings.Contains(e.Message, "/AA") {
 			before++
 		}
@@ -37,11 +39,11 @@ func TestRepairCatalogAA(t *testing.T) {
 	if before == 0 {
 		t.Fatal("expected a catalog /AA violation before repair")
 	}
-	actions := doc.Repair(PDFA2b)
+	actions := doc.Repair(pdfa.PDFA2b)
 	if len(actions) == 0 {
 		t.Error("Repair reported no actions")
 	}
-	for _, e := range ValidatePDFA(doc, PDFA2b) {
+	for _, e := range ValidatePDFA(doc, pdfa.PDFA2b) {
 		if strings.Contains(e.Message, "catalog") && strings.Contains(e.Message, "/AA") {
 			t.Error("catalog /AA violation still present after repair")
 		}
@@ -73,11 +75,11 @@ func TestRepairEncryption(t *testing.T) {
 	if doc.security == nil {
 		t.Skip("file did not decrypt")
 	}
-	if countEncryptViolations(ValidatePDFA(doc, PDFA2b)) == 0 {
+	if countEncryptViolations(ValidatePDFA(doc, pdfa.PDFA2b)) == 0 {
 		t.Fatal("expected an /Encrypt violation before repair")
 	}
-	doc.Repair(PDFA2b)
-	if n := countEncryptViolations(ValidatePDFA(doc, PDFA2b)); n != 0 {
+	doc.Repair(pdfa.PDFA2b)
+	if n := countEncryptViolations(ValidatePDFA(doc, pdfa.PDFA2b)); n != 0 {
 		t.Errorf("%d /Encrypt violation(s) remain after repair", n)
 	}
 	// A repaired document must be writable (no longer refused as encrypted).

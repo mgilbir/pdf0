@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/sign"
 	"regexp"
 	"sort"
@@ -143,7 +144,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	if cat == nil {
 		t.Fatal("no catalog")
 	}
-	if _, ok := cat.Get("AcroForm").(IndirectRef); !ok {
+	if _, ok := cat.Get("AcroForm").(object.IndirectRef); !ok {
 		t.Errorf("catalog /AcroForm = %#v, want an indirect reference to the promoted form", cat.Get("AcroForm"))
 	}
 	form := d2.ResolveDict(cat.Get("AcroForm"))
@@ -162,7 +163,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("form fields = %v, want %v", got, want)
 	}
-	if flags, _ := d2.Resolve(form.Get("SigFlags")).(Integer); flags != 7 {
+	if flags, _ := d2.Resolve(form.Get("SigFlags")).(object.Integer); flags != 7 {
 		t.Errorf("/SigFlags = %v, want 7 (4 preserved | 3 set)", flags)
 	}
 	if form.Get("DA") == nil || form.Get("NeedAppearances") == nil {
@@ -219,7 +220,7 @@ func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("form fields = %v, want %v", got, want)
 	}
-	if res := d2.ValidatePAdES(out); len(res) != 1 || res[0].Level != PAdESBLTA || !res[0].Valid {
+	if res := d2.ValidatePAdES(out); len(res) != 1 || res[0].Level != sign.PAdESBLTA || !res[0].Valid {
 		t.Errorf("expected one valid B-LTA signature, got %+v", res)
 	}
 }
@@ -256,7 +257,7 @@ func TestSignPromotesDirectAcroForm(t *testing.T) {
 				t.Fatalf("re-read: %v", err)
 			}
 			cat := signed.ResolveDict(signed.Trailer.Get("Root"))
-			if _, ok := cat.Get("AcroForm").(IndirectRef); !ok {
+			if _, ok := cat.Get("AcroForm").(object.IndirectRef); !ok {
 				t.Errorf("catalog /AcroForm = %#v, want an indirect reference", cat.Get("AcroForm"))
 			}
 			got := formFields(t, signed)
@@ -335,18 +336,18 @@ func TestSigningRefusesDirectCatalogOrPage(t *testing.T) {
 // both writers.
 func TestWriteRefusesNonPositiveObjectNumber(t *testing.T) {
 	newDoc := func() *Document {
-		d := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-		cat := &Dictionary{}
-		cat.Set("Type", Name("Catalog"))
-		d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-		d.Trailer.Set("Root", IndirectRef{Number: 1})
+		d := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
+		cat := &object.Dictionary{}
+		cat.Set("Type", object.Name("Catalog"))
+		d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+		d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 		return d
 	}
 
 	d := newDoc()
-	stray := &Dictionary{}
-	stray.Set("Type", Name("Bogus"))
-	d.Objects[-1] = &IndirectObject{Number: -1, Value: stray}
+	stray := &object.Dictionary{}
+	stray.Set("Type", object.Name("Bogus"))
+	d.Objects[-1] = &object.IndirectObject{Number: -1, Value: stray}
 	var buf bytes.Buffer
 	if err := d.Write(&buf); err == nil {
 		t.Errorf("Write accepted object number -1 and produced %d bytes", buf.Len())
@@ -359,7 +360,7 @@ func TestWriteRefusesNonPositiveObjectNumber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inc.Objects[-1] = &IndirectObject{Number: -1, Value: stray}
+	inc.Objects[-1] = &object.IndirectObject{Number: -1, Value: stray}
 	for _, changed := range [][]int{{-1}, {0}, {1, -1}} {
 		var b bytes.Buffer
 		if err := inc.WriteIncremental(&b, base, changed); err == nil {

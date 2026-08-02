@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 	"io"
 	"sort"
 )
@@ -97,8 +99,8 @@ func (d *Document) WriteIncremental(w io.Writer, original []byte, changed []int)
 		}
 	}
 	trailer := d.Trailer.Clone()
-	trailer.Set("Size", Integer(maxObj+1))
-	trailer.Set("Prev", Integer(prevXref))
+	trailer.Set("Size", object.Integer(maxObj+1))
+	trailer.Set("Prev", object.Integer(prevXref))
 	trailer.Delete("XRefStm") // this update is a traditional section
 	if err := s.WriteString("trailer\n"); err != nil {
 		return err
@@ -116,7 +118,7 @@ func (d *Document) WriteIncremental(w io.Writer, original []byte, changed []int)
 
 // writeIncrementalXRef writes a traditional xref section covering only the given
 // object numbers, in contiguous subsections.
-func writeIncrementalXRef(s *Serializer, nums []int, offsets map[int]int64, free map[int]bool, objects map[int]*IndirectObject) error {
+func writeIncrementalXRef(s *syntax.Serializer, nums []int, offsets map[int]int64, free map[int]bool, objects map[int]*object.IndirectObject) error {
 	if err := s.WriteString("xref\n"); err != nil {
 		return err
 	}

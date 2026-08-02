@@ -3,6 +3,8 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"sync"
 	"testing"
 )
@@ -119,7 +121,7 @@ func TestReadWithoutOptionsIsUnchanged(t *testing.T) {
 	if got := doc.lim(); got != core.DefaultLimits() {
 		t.Errorf("Read with no options: %+v, want defaults %+v", got, core.DefaultLimits())
 	}
-	if _, err := ParseXRefStream(&Stream{Dict: Dictionary{}}); err == nil {
+	if _, err := ParseXRefStream(&object.Stream{Dict: object.Dictionary{}}); err == nil {
 		t.Error("ParseXRefStream with no options should still reject a stream with no /W")
 	}
 }
@@ -141,7 +143,7 @@ func TestLimitsSafeUnderConcurrentValidation(t *testing.T) {
 			if got := doc.lim().DecodedContentBytes; got != 32<<20 {
 				t.Errorf("concurrent read of limits = %d, want %d", got, int64(32<<20))
 			}
-			_ = ValidatePDFA(doc, PDFA1b)
+			_ = ValidatePDFA(doc, pdfa.PDFA1b)
 		}()
 	}
 	wg.Wait()
@@ -197,20 +199,20 @@ func TestDecodedStreamLimitIsEnforced(t *testing.T) {
 // default, with none above 1 MiB.
 func TestXRefStreamHonoursConfiguredDecodeLimit(t *testing.T) {
 	doc := &Document{
-		Objects:        map[int]*IndirectObject{},
+		Objects:        map[int]*object.IndirectObject{},
 		usedXRefStream: true, // makes Write emit a cross-reference stream
 		Version:        "2.0",
 	}
-	catalog := &Dictionary{}
-	catalog.Set("Type", Name("Catalog"))
-	catalog.Set("Pages", IndirectRef{Number: 2})
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", Array{})
-	pages.Set("Count", Integer(0))
-	doc.Objects[1] = &IndirectObject{Number: 1, Value: catalog}
-	doc.Objects[2] = &IndirectObject{Number: 2, Value: pages}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("Pages", object.IndirectRef{Number: 2})
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{})
+	pages.Set("Count", object.Integer(0))
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: catalog}
+	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {

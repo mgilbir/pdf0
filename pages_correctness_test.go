@@ -2,30 +2,31 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
 // TestAppendPagesIndirectKids is the C15 guard: appending onto a page tree whose
 // /Kids is an indirect reference (legal) must not discard the existing pages.
 func TestAppendPagesIndirectKids(t *testing.T) {
-	dst := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", IndirectRef{Number: 10}) // /Kids is an indirect array
-	pages.Set("Count", Integer(1))
-	page1 := &Dictionary{}
-	page1.Set("Type", Name("Page"))
-	page1.Set("Parent", IndirectRef{Number: 2})
-	page1.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-	dst.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	dst.Objects[2] = &IndirectObject{Number: 2, Value: pages}
-	dst.Objects[3] = &IndirectObject{Number: 3, Value: page1}
-	dst.Objects[10] = &IndirectObject{Number: 10, Value: Array{IndirectRef{Number: 3}}}
-	dst.Trailer = Dictionary{}
-	dst.Trailer.Set("Root", IndirectRef{Number: 1})
+	dst := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.IndirectRef{Number: 10}) // /Kids is an indirect array
+	pages.Set("Count", object.Integer(1))
+	page1 := &object.Dictionary{}
+	page1.Set("Type", object.Name("Page"))
+	page1.Set("Parent", object.IndirectRef{Number: 2})
+	page1.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+	dst.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	dst.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
+	dst.Objects[3] = &object.IndirectObject{Number: 3, Value: page1}
+	dst.Objects[10] = &object.IndirectObject{Number: 10, Value: object.Array{object.IndirectRef{Number: 3}}}
+	dst.Trailer = object.Dictionary{}
+	dst.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	if got := dst.PageCount(); got != 1 {
 		t.Fatalf("precondition: %d pages, want 1", got)
@@ -46,20 +47,20 @@ func TestAppendPagesIndirectKids(t *testing.T) {
 // dictionary in /Kids — which the parser accepts — must not panic ExtractPages
 // or AppendPages.
 func TestInlinePageNoPanic(t *testing.T) {
-	doc := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	inline := &Dictionary{}
-	inline.Set("Type", Name("Page"))
-	pages.Set("Kids", Array{inline}) // a direct-dict page, no object number
-	pages.Set("Count", Integer(1))
-	doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	doc.Objects[2] = &IndirectObject{Number: 2, Value: pages}
-	doc.Trailer = Dictionary{}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	doc := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	inline := &object.Dictionary{}
+	inline.Set("Type", object.Name("Page"))
+	pages.Set("Kids", object.Array{inline}) // a direct-dict page, no object number
+	pages.Set("Count", object.Integer(1))
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
+	doc.Trailer = object.Dictionary{}
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	// Neither call may panic.
 	_, _ = doc.ExtractPages([]int{0})

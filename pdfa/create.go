@@ -29,7 +29,7 @@ import (
 // It returns the graph rather than a Document so that both sides can use it:
 // NewPDFADocumentWithInfo wraps it into one, and this package's own tests wrap
 // it into a view without needing the document type at all.
-func Skeleton(level PDFALevel, title, author string) (map[int]*object.IndirectObject, object.Dictionary, string) {
+func Skeleton(level Level, title, author string) (map[int]*object.IndirectObject, object.Dictionary, string) {
 	version := pdfaVersion(level)
 
 	// Generate file ID
@@ -37,7 +37,7 @@ func Skeleton(level PDFALevel, title, author string) (map[int]*object.IndirectOb
 	hash := md5.Sum([]byte("pdf0-pdfa-" + now))
 	fileID := object.String{Value: hash[:], IsHex: true}
 
-	// object.Object 1: Catalog
+	// Object 1: Catalog
 	catalog := &object.Dictionary{}
 	catalog.Set("Type", object.Name("Catalog"))
 	catalog.Set("Pages", object.IndirectRef{Number: 2})
@@ -55,13 +55,13 @@ func Skeleton(level PDFALevel, title, author string) (map[int]*object.IndirectOb
 		catalog.Set("StructTreeRoot", structTreeRoot)
 	}
 
-	// object.Object 2: Pages (empty page tree)
+	// Object 2: Pages (empty page tree)
 	pages := &object.Dictionary{}
 	pages.Set("Type", object.Name("Pages"))
 	pages.Set("Kids", object.Array{})
 	pages.Set("Count", object.Integer(0))
 
-	// object.Object 3: Metadata stream (XMP, unfiltered)
+	// Object 3: Metadata stream (XMP, unfiltered)
 	xmpData := GenerateXMPMetadata(level, title, author)
 	metaStream := &object.Stream{
 		Dict: object.Dictionary{},
@@ -71,7 +71,7 @@ func Skeleton(level PDFALevel, title, author string) (map[int]*object.IndirectOb
 	metaStream.Dict.Set("Subtype", object.Name("XML"))
 	metaStream.Dict.Set("Length", object.Integer(len(xmpData)))
 
-	// object.Object 4: OutputIntent dictionary
+	// Object 4: OutputIntent dictionary
 	outputIntent := &object.Dictionary{}
 	outputIntent.Set("Type", object.Name("OutputIntent"))
 	outputIntent.Set("S", object.Name("GTS_PDFA1"))
@@ -80,7 +80,7 @@ func Skeleton(level PDFALevel, title, author string) (map[int]*object.IndirectOb
 	outputIntent.Set("Info", object.String{Value: []byte("sRGB IEC61966-2.1")})
 	outputIntent.Set("DestOutputProfile", object.IndirectRef{Number: 5})
 
-	// object.Object 5: ICC profile stream
+	// Object 5: ICC profile stream
 	iccData := sRGBProfile(level)
 	iccStream := &object.Stream{
 		Dict: object.Dictionary{},
@@ -104,7 +104,7 @@ func Skeleton(level PDFALevel, title, author string) (map[int]*object.IndirectOb
 		}, version
 }
 
-func pdfaVersion(level PDFALevel) string {
+func pdfaVersion(level Level) string {
 	switch level.BaseB() {
 	case PDFA1b:
 		return "1.4"
@@ -115,7 +115,7 @@ func pdfaVersion(level PDFALevel) string {
 	}
 }
 
-func pdfaPart(level PDFALevel) int {
+func pdfaPart(level Level) int {
 	switch level.BaseB() {
 	case PDFA1b:
 		return 1
@@ -128,7 +128,7 @@ func pdfaPart(level PDFALevel) int {
 	}
 }
 
-func pdfaConformance(level PDFALevel) string {
+func pdfaConformance(level Level) string {
 	switch {
 	case level.IsA():
 		return "A"
@@ -140,7 +140,7 @@ func pdfaConformance(level PDFALevel) string {
 }
 
 // GenerateXMPMetadata creates XMP metadata bytes for the given PDF/A level.
-func GenerateXMPMetadata(level PDFALevel, title, author string) []byte {
+func GenerateXMPMetadata(level Level, title, author string) []byte {
 	part := pdfaPart(level)
 	conformance := pdfaConformance(level)
 
@@ -233,7 +233,7 @@ func DefaultSRGBProfile() []byte {
 // ICC v2.1 profile; PDF/A-2/3/4 target PDF 1.7/2.0 and receive the compact ICC
 // v4 profile. Both are genuine profiles emitted by — and re-readable through — a
 // real colour-management engine.
-func sRGBProfile(level PDFALevel) []byte {
+func sRGBProfile(level Level) []byte {
 	version := 4.3
 	if level.BaseB() == PDFA1b {
 		version = 2.1 // PDF/A-1 is based on PDF 1.4, which allows only ICC v2

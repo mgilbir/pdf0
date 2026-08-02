@@ -56,7 +56,7 @@ func decodeHexBytes(b []byte) []byte {
 
 // checkFontDictionaries validates Type0/CIDFont/CMap dictionary consistency,
 // TrueType encodings, ToUnicode values, and embedding of rendered fonts.
-func checkFontDictionaries(doc core.View, level PDFALevel) []ValidationError {
+func checkFontDictionaries(doc core.View, level Level) []ValidationError {
 	rule := fontRule(level)
 	var errs []ValidationError
 
@@ -67,7 +67,7 @@ func checkFontDictionaries(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func fontRule(level PDFALevel) string {
+func fontRule(level Level) string {
 	switch level {
 	case PDFA1b:
 		return "6.3"
@@ -82,7 +82,7 @@ func fontRule(level PDFALevel) string {
 // (ISO 19005-1 6.3.x; -2/-3 6.2.11.x; -4 6.2.10.x), so a single fontRule parent
 // clause mis-cites the rule in the reported error. Clauses follow the veraPDF
 // validation profiles.
-func fontClause(concept string, level PDFALevel) string {
+func fontClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"general":       {"6.3.2", "6.2.11.2", "6.2.10.2"},
@@ -111,7 +111,7 @@ func fontClause(concept string, level PDFALevel) string {
 	}
 }
 
-func checkOneFontDict(doc core.View, level PDFALevel, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
+func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
 	var errs []ValidationError
 	bad := func(concept, format string, args ...interface{}) {
 		errs = append(errs, ValidationError{
@@ -253,7 +253,7 @@ func checkOneFontDict(doc core.View, level PDFALevel, rule string, fontDict *obj
 		}
 	}
 
-	// font.Program-level checks: metrics, glyph coverage, and .notdef references.
+	// Program-level checks: metrics, glyph coverage, and .notdef references.
 	errs = append(errs, checkFontProgramConsistency(doc, level, rule, fontDict, u)...)
 
 	return errs
@@ -294,7 +294,7 @@ func cmapUseCMap(doc core.View, stream *object.Stream) (string, bool) {
 	if idx < 0 {
 		return "", false
 	}
-	// Walk back to the /object.Name operand.
+	// Walk back to the /Name operand.
 	head := strings.TrimRight(s[:idx], " \t\r\n")
 	slash := strings.LastIndexByte(head, '/')
 	if slash < 0 {
@@ -317,7 +317,7 @@ func cmapUseCMap(doc core.View, stream *object.Stream) (string, bool) {
 // a Type 0 font other than Identity-H/Identity-V shall be embedded (given as a
 // stream), not referenced by a predefined name. Parts 2 and later permit
 // predefined CMaps by name, so this is a PDF/A-1-only rule.
-func checkCMapEmbedded(doc core.View, level PDFALevel) []ValidationError {
+func checkCMapEmbedded(doc core.View, level Level) []ValidationError {
 	if level != PDFA1b {
 		return nil
 	}
@@ -342,7 +342,7 @@ func checkCMapEmbedded(doc core.View, level PDFALevel) []ValidationError {
 	return errs
 }
 
-func checkTrueTypeEncoding(doc core.View, level PDFALevel, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
+func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
 	rule = fontClause("encoding", level) // 6.3.7 / 6.2.11.6 / 6.2.10.6
 	var errs []ValidationError
 	bad := func(format string, args ...interface{}) {
@@ -687,7 +687,7 @@ const glyphWidthTolerance = 1.0 // 1/1000 text-space units
 // the font-dictionary width matches the embedded program's advance width
 // (ISO 19005 font-metrics rule), the glyph is present in the program
 // (embedding-completeness rule), and no shown glyph is .notdef.
-func checkFontProgramConsistency(doc core.View, level PDFALevel, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
+func checkFontProgramConsistency(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
 	subtype, _ := fontDict.Get("Subtype").(object.Name)
 	if subtype == "Type3" {
 		return checkType3Widths(doc, level, rule, fontDict, u)
@@ -705,7 +705,7 @@ func checkFontProgramConsistency(doc core.View, level PDFALevel, rule string, fo
 // program at all), and only when a FontFile is present (a missing program is
 // the separate embedding rule). Across the corpus, every valid embedded program
 // parses, so this raises no false positive.
-func damagedFontProgramError(doc core.View, level PDFALevel, rule string, fontDict, fd *object.Dictionary, u *core.FontTextUsage) []ValidationError {
+func damagedFontProgramError(doc core.View, level Level, rule string, fontDict, fd *object.Dictionary, u *core.FontTextUsage) []ValidationError {
 	if fd == nil || !rendersVisibly(u) || !hasEmbeddedFontProgram(doc, fd) {
 		return nil
 	}
@@ -730,7 +730,7 @@ func hasEmbeddedFontProgram(doc core.View, fd *object.Dictionary) bool {
 }
 
 // fontKindClause maps a report "kind" to its ISO clause for the level.
-func fontKindClause(kind string, level PDFALevel) string {
+func fontKindClause(kind string, level Level) string {
 	switch kind {
 	case "glyph":
 		return fontClause("glyphs", level)
@@ -744,7 +744,7 @@ func fontKindClause(kind string, level PDFALevel) string {
 	return fontClause("general", level)
 }
 
-func checkSimpleFontConsistency(doc core.View, level PDFALevel, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
+func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
 	fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
 	fp := core.LoadFontProgram(doc, fd)
 	if fp == nil {
@@ -788,7 +788,7 @@ func checkSimpleFontConsistency(doc core.View, level PDFALevel, rule string, fon
 		for _, code := range s {
 			name := enc[code]
 
-			// font.Program advance width for this code.
+			// Program advance width for this code.
 			progW, haveProg := simpleGlyphWidth(fp, subtype, symbolic, code, name)
 			glyphExists := simpleGlyphExists(fp, subtype, symbolic, code, name)
 
@@ -837,7 +837,7 @@ func checkSimpleFontConsistency(doc core.View, level PDFALevel, rule string, fon
 	return errs
 }
 
-func checkCIDFontConsistency(doc core.View, level PDFALevel, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
+func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
 	desc := core.Type0Descendant(doc, fontDict)
 	if desc == nil {
 		return nil
@@ -914,7 +914,7 @@ func checkCIDFontConsistency(doc core.View, level PDFALevel, rule string, fontDi
 	return errs
 }
 
-func checkType3Widths(doc core.View, level PDFALevel, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
+func checkType3Widths(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []ValidationError {
 	// A Type 3 glyph's advance is the w operand of its d0/d1 operator in the
 	// CharProc, transformed by the FontMatrix; it must match the Widths
 	// array (ISO 32000-1, 9.6.5 / 9.10). Compare in glyph space.
@@ -1245,7 +1245,7 @@ func parseNumberToken(b []byte) object.Object {
 
 // subsetRule returns the clause a subset-embedding violation is reported
 // under: 19005-1 6.3.5, 19005-2/-3 6.2.11.4.2, 19005-4 6.2.10.4.2.
-func subsetRule(level PDFALevel) string {
+func subsetRule(level Level) string {
 	switch level {
 	case PDFA1b:
 		return "6.3.5"
@@ -1259,7 +1259,7 @@ func subsetRule(level PDFALevel) string {
 // CharSet (Type1) or CIDSet (CIDFont), when present, lists every glyph or
 // CID actually used for rendering (ISO 19005-1 6.3.5, -2/-3 6.2.11.4.2).
 // An empty or partial set omitting a shown glyph is a violation.
-func checkFontSubsetCompleteness(doc core.View, level PDFALevel) []ValidationError {
+func checkFontSubsetCompleteness(doc core.View, level Level) []ValidationError {
 	rule := subsetRule(level)
 	var errs []ValidationError
 
@@ -1353,7 +1353,7 @@ func usedGlyphMissing(u *core.FontTextUsage, enc map[byte]string, listed map[str
 // checkCMapCIDLimit verifies that no character identifier defined by an
 // embedded CMap exceeds 65535 (ISO 19005-1 6.1.12, -2/-3 6.1.13; the CID is
 // a 16-bit value per ISO 32000-1 9.7.4).
-func checkCMapCIDLimit(doc core.View, level PDFALevel) []ValidationError {
+func checkCMapCIDLimit(doc core.View, level Level) []ValidationError {
 	if level == PDFA4 {
 		return nil // PDF/A-4 has no implementation-limits clause
 	}
@@ -1457,7 +1457,7 @@ func atoiSafe(s string) int {
 // and enumerate every CID whose glyph is present in the embedded font
 // program. (PDF/A-2/-3 only require the CIDSet to cover the CIDs actually
 // used for rendering, handled by checkFontSubsetCompleteness.)
-func checkCIDSetProgramComplete(doc core.View, level PDFALevel) []ValidationError {
+func checkCIDSetProgramComplete(doc core.View, level Level) []ValidationError {
 	if level != PDFA1b {
 		return nil
 	}

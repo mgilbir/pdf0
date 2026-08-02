@@ -12,9 +12,6 @@ import (
 // document through a core.View; this is the boundary that starts the run and
 // reports the guards that tripped while the file was read.
 
-// DPartViolation is a document-part hierarchy conformance failure.
-type DPartViolation = dpart.DPartViolation
-
 // ValidateDParts checks a document's DPart hierarchy against ISO 32000-2 clause
 // 14.12. A document without a /DPartRoot in its catalog has no hierarchy and is
 // reported as valid (nil), since the structure is optional. The checks cover:
@@ -24,21 +21,21 @@ type DPartViolation = dpart.DPartViolation
 // exactly once in page-tree order (14.12.2/14.12.3), page /DPart back-references
 // (14.12.3), /NodeNameList depth (Table 408), and DPM key/value constraints
 // (14.12.4.2).
-func ValidateDParts(doc *Document) []DPartViolation {
+func ValidateDParts(doc *Document) []dpart.Violation {
 	return validateDParts(core.Canceler{}, doc)
 }
 
 // ValidateDPartsContext is ValidateDParts with cancellation; a cancelled run
 // reports itself under the rule "limit" (see cancel.go).
-func ValidateDPartsContext(ctx context.Context, doc *Document) []DPartViolation {
+func ValidateDPartsContext(ctx context.Context, doc *Document) []dpart.Violation {
 	return validateDParts(core.NewCanceler(ctx), doc)
 }
-func validateDParts(cancel core.Canceler, doc *Document) []DPartViolation {
+func validateDParts(cancel core.Canceler, doc *Document) []dpart.Violation {
 	rd := beginRunCancel(doc, cancel)
 	v := rd
-	var out []DPartViolation
+	var out []dpart.Violation
 	add := func(rule, msg string, obj int) {
-		out = append(out, DPartViolation{Rule: rule, Message: msg, Object: obj})
+		out = append(out, dpart.Violation{Rule: rule, Message: msg, Object: obj})
 	}
 
 	// The hierarchy walk is one traversal rather than a list of independent

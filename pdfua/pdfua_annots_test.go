@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func hasUAClause(v []UAViolation, clause string) bool {
+func hasUAClause(v []Violation, clause string) bool {
 	for _, e := range v {
 		if e.Clause == clause {
 			return true
@@ -103,7 +103,7 @@ func TestUALinkAltText(t *testing.T) {
 // yields one internal finding carrying the panic value, rather than taking the
 // run down or vanishing.
 func TestRunCheckReportsPanics(t *testing.T) {
-	ua := RunCheck(func() []UAViolation { panic("bang") })
+	ua := RunCheck(func() []Violation { panic("bang") })
 	if len(ua) != 1 || ua[0].Clause != finding.InternalRule {
 		t.Fatalf("RunCheck: got %v, want one %q finding", ua, finding.InternalRule)
 	}

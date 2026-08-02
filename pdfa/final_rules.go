@@ -51,7 +51,7 @@ func embeddedChecker(v core.View) EmbeddedChecker {
 	return func(core.Canceler, []byte, core.Limits) (bool, bool) { return false, false }
 }
 
-func checkProhibitedCatalogEntries(doc core.View, level PDFALevel) []ValidationError {
+func checkProhibitedCatalogEntries(doc core.View, level Level) []ValidationError {
 	if level == PDFA1b {
 		return nil // 6.11 / 6.12 are clauses of ISO 19005 parts 2 and later
 	}
@@ -86,7 +86,7 @@ func checkProhibitedCatalogEntries(doc core.View, level PDFALevel) []ValidationE
 // checkImageIntentAndInterpolate flags Image XObjects and inline images that
 // carry Interpolate/true or a non-standard rendering intent (ISO 19005-2
 // 6.2.4/6.2.6, -4 6.2.7/6.2.9; ISO 32000-1 8.9.5.2, 8.9.5.4).
-func checkImageIntentAndInterpolate(doc core.View, level PDFALevel) []ValidationError {
+func checkImageIntentAndInterpolate(doc core.View, level Level) []ValidationError {
 	interpRule := "6.2.7"
 	intentRule := "6.2.9"
 	switch level {
@@ -135,7 +135,7 @@ func checkImageIntentAndInterpolate(doc core.View, level PDFALevel) []Validation
 // checkFileTrailerID validates the file identifier: when present, /ID shall
 // be an array of exactly two non-empty byte strings (ISO 32000-1 14.4,
 // ISO 19005-2 6.1.3).
-func checkFileTrailerID(doc core.View, level PDFALevel) []ValidationError {
+func checkFileTrailerID(doc core.View, level Level) []ValidationError {
 	rule := "6.1.3"
 	idObj := doc.Trailer.Get("ID")
 	if idObj == nil {
@@ -214,7 +214,7 @@ func parseInlineDictEntries(data []byte, pos *int) map[string]string {
 				pendingKey = ""
 			}
 		case b == '[':
-			// object.Array value: record it opaquely and skip to ']'.
+			// Array value: record it opaquely and skip to ']'.
 			i++
 			for i < n && data[i] != ']' {
 				i++
@@ -253,7 +253,7 @@ var forbiddenAAEvents = map[object.Name]bool{
 
 // checkA4TriggerEvents flags AA dictionaries — on the catalog, pages, or
 // annotations — that define a forbidden trigger event.
-func checkA4TriggerEvents(doc core.View, level PDFALevel) []ValidationError {
+func checkA4TriggerEvents(doc core.View, level Level) []ValidationError {
 	if level != PDFA4 {
 		return nil
 	}
@@ -310,7 +310,7 @@ func stringHasPUA(b []byte) bool {
 // checkActualTextPUA enforces ISO 19005-4 6.2.10.8: an ActualText entry — in
 // a structure element dictionary or a marked-content property list — must not
 // contain Unicode Private Use Area values, which have no defined meaning.
-func checkActualTextPUA(doc core.View, level PDFALevel) []ValidationError {
+func checkActualTextPUA(doc core.View, level Level) []ValidationError {
 	if level != PDFA4 {
 		return nil
 	}
@@ -390,7 +390,7 @@ var halftoneReserved = map[object.Name]bool{"Type": true, "HalftoneType": true, 
 // (multi-component) halftone dictionaries (ISO 19005-2/-4 6.2.5): a component
 // for a process (primary) colorant must not contain a TransferFunction, and
 // a component for a non-primary colorant must contain one.
-func checkType5Halftones(doc core.View, level PDFALevel) []ValidationError {
+func checkType5Halftones(doc core.View, level Level) []ValidationError {
 	if level == PDFA1b {
 		return nil // 1b forbids transparency/halftone features via other rules
 	}
@@ -494,7 +494,7 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 // subtype is application/pdf shall itself be a valid PDF/A document. Each
 // such file is decoded and validated one level deep (a depth guard prevents
 // unbounded recursion).
-func checkEmbeddedPDFA(doc core.View, level PDFALevel) []ValidationError {
+func checkEmbeddedPDFA(doc core.View, level Level) []ValidationError {
 	if level != PDFA4 || doc.EmbeddedDepth > 0 {
 		return nil
 	}
@@ -604,7 +604,7 @@ func ExtractXMPAttr(xmp, key string) string {
 // inherited from a /Pages tree node (ISO 19005-2 6.2.2, -4 6.2.2). Resource
 // inheritance in general remains permitted; only a rendered XObject that is
 // resolved solely through inheritance is rejected.
-func checkInheritedPageXObject(doc core.View, level PDFALevel) []ValidationError {
+func checkInheritedPageXObject(doc core.View, level Level) []ValidationError {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil

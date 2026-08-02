@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/pdfa"
 	"testing"
 	"time"
 )
@@ -50,7 +51,7 @@ func TestCheckStreamLengthNoQuadraticScan(t *testing.T) {
 
 	start := time.Now()
 	done := make(chan struct{}, 1)
-	go func() { _ = ValidatePDFABytes(doc, PDFA4, raw); done <- struct{}{} }()
+	go func() { _ = ValidatePDFABytes(doc, pdfa.PDFA4, raw); done <- struct{}{} }()
 	select {
 	case <-done:
 	case <-time.After(40 * time.Second):

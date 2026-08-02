@@ -7,7 +7,7 @@ import (
 
 // DeclaredLevel reads the PDF/A conformance level a document claims via
 // its XMP pdfaid:part / pdfaid:conformance identifiers.
-func DeclaredLevel(doc core.View) (PDFALevel, bool) {
+func DeclaredLevel(doc core.View) (Level, bool) {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return 0, false

@@ -13,6 +13,7 @@ import (
 	"os"
 
 	pdf "github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/object"
 )
 
 const imgW, imgH = 8, 8
@@ -56,46 +57,46 @@ func flate(data []byte) []byte {
 }
 
 // imageXObject builds an image XObject stream. filter is "" for raw samples.
-func imageXObject(cs pdf.Name, filter pdf.Name, data []byte) *pdf.Stream {
-	d := pdf.Dictionary{}
-	d.Set("Type", pdf.Name("XObject"))
-	d.Set("Subtype", pdf.Name("Image"))
-	d.Set("Width", pdf.Integer(imgW))
-	d.Set("Height", pdf.Integer(imgH))
-	d.Set("BitsPerComponent", pdf.Integer(8))
+func imageXObject(cs object.Name, filter object.Name, data []byte) *object.Stream {
+	d := object.Dictionary{}
+	d.Set("Type", object.Name("XObject"))
+	d.Set("Subtype", object.Name("Image"))
+	d.Set("Width", object.Integer(imgW))
+	d.Set("Height", object.Integer(imgH))
+	d.Set("BitsPerComponent", object.Integer(8))
 	d.Set("ColorSpace", cs)
 	if filter != "" {
 		d.Set("Filter", filter)
 	}
-	return &pdf.Stream{Dict: d, Data: data}
+	return &object.Stream{Dict: d, Data: data}
 }
 
 // buildDoc assembles a one-page document whose content stream draws both images.
 func buildDoc() *pdf.Document {
-	catalog := &pdf.Dictionary{}
-	catalog.Set("Type", pdf.Name("Catalog"))
-	catalog.Set("Pages", pdf.IndirectRef{Number: 2})
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("Pages", object.IndirectRef{Number: 2})
 
-	pages := &pdf.Dictionary{}
-	pages.Set("Type", pdf.Name("Pages"))
-	pages.Set("Kids", pdf.Array{pdf.IndirectRef{Number: 3}})
-	pages.Set("Count", pdf.Integer(1))
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+	pages.Set("Count", object.Integer(1))
 
-	page := &pdf.Dictionary{}
-	page.Set("Type", pdf.Name("Page"))
-	page.Set("Parent", pdf.IndirectRef{Number: 2})
-	page.Set("MediaBox", pdf.Array{pdf.Integer(0), pdf.Integer(0), pdf.Integer(200), pdf.Integer(200)})
-	page.Set("Contents", pdf.IndirectRef{Number: 4})
-	page.Set("Resources", pdf.IndirectRef{Number: 5})
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(200), object.Integer(200)})
+	page.Set("Contents", object.IndirectRef{Number: 4})
+	page.Set("Resources", object.IndirectRef{Number: 5})
 
 	// Both images are painted with Do, each scaled to a 64pt square.
 	content := []byte("q 64 0 0 64 20 110 cm /ImRGB Do Q\nq 64 0 0 64 20 20 cm /ImGray Do Q\n")
-	contentStream := &pdf.Stream{Dict: pdf.Dictionary{}, Data: content}
+	contentStream := &object.Stream{Dict: object.Dictionary{}, Data: content}
 
-	xobjects := &pdf.Dictionary{}
-	xobjects.Set("ImRGB", pdf.IndirectRef{Number: 6})
-	xobjects.Set("ImGray", pdf.IndirectRef{Number: 7})
-	resources := &pdf.Dictionary{}
+	xobjects := &object.Dictionary{}
+	xobjects.Set("ImRGB", object.IndirectRef{Number: 6})
+	xobjects.Set("ImGray", object.IndirectRef{Number: 7})
+	resources := &object.Dictionary{}
 	resources.Set("XObject", xobjects)
 
 	// One Flate-compressed colour image and one uncompressed grayscale image, so
@@ -105,7 +106,7 @@ func buildDoc() *pdf.Document {
 
 	return &pdf.Document{
 		Version: "2.0",
-		Objects: map[int]*pdf.IndirectObject{
+		Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: catalog},
 			2: {Number: 2, Value: pages},
 			3: {Number: 3, Value: page},
@@ -114,9 +115,9 @@ func buildDoc() *pdf.Document {
 			6: {Number: 6, Value: rgbImage},
 			7: {Number: 7, Value: grayImage},
 		},
-		Trailer: pdf.Dictionary{
-			Keys:   []pdf.Name{"Root"},
-			Values: []pdf.Object{pdf.IndirectRef{Number: 1}},
+		Trailer: object.Dictionary{
+			Keys:   []object.Name{"Root"},
+			Values: []object.Object{object.IndirectRef{Number: 1}},
 		},
 	}
 }

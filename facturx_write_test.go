@@ -5,6 +5,7 @@ import (
 	"github.com/mgilbir/formalis"
 	"github.com/mgilbir/pdf0/facturx"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/pdfa"
 	"strings"
 	"testing"
 )
@@ -78,7 +79,7 @@ func TestEmbedFacturXRoundTrip(t *testing.T) {
 		formalis.ProfileMinimum, formalis.ProfileBasicWL, formalis.ProfileBasic, formalis.ProfileEN16931, formalis.ProfileExtended,
 	} {
 		t.Run(string(profile), func(t *testing.T) {
-			doc := NewPDFADocument(PDFA3b)
+			doc := NewPDFADocument(pdfa.PDFA3b)
 			if err := EmbedFacturX(doc, []byte(ciiForProfile(profile)), profile, "Invoice INV-1"); err != nil {
 				t.Fatalf("EmbedFacturX: %v", err)
 			}
@@ -109,7 +110,7 @@ func TestEmbedFacturXRoundTrip(t *testing.T) {
 }
 
 func TestEmbedFacturXUnknownProfile(t *testing.T) {
-	doc := NewPDFADocument(PDFA3b)
+	doc := NewPDFADocument(pdfa.PDFA3b)
 	if err := EmbedFacturX(doc, []byte(validCII), formalis.Profile("BOGUS"), ""); err == nil {
 		t.Error("expected an error for an unknown profile")
 	}

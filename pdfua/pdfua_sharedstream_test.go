@@ -107,9 +107,9 @@ func TestRealContentSharedStreamMemo(t *testing.T) {
 	doc := buildSharedStreamDoc(nPages)
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 
-	done := make(chan []UAViolation, 1)
+	done := make(chan []Violation, 1)
 	go func() { done <- checkUARealContent(doc, cat) }()
-	var v []UAViolation
+	var v []Violation
 	select {
 	case v = <-done:
 	case <-time.After(30 * time.Second):

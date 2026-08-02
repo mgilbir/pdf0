@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,8 +42,8 @@ func TestEncryptedPassthroughRoundTrip(t *testing.T) {
 	if dec.security == nil {
 		t.Fatal("passthrough output does not decrypt with the correct password")
 	}
-	cat, _ := dec.Objects[1].Value.(*Dictionary)
-	if s, _ := cat.Get("Producer").(String); string(s.Value) != producer {
+	cat, _ := dec.Objects[1].Value.(*object.Dictionary)
+	if s, _ := cat.Get("Producer").(object.String); string(s.Value) != producer {
 		t.Errorf("/Producer after passthrough = %q, want %q", s.Value, producer)
 	}
 
@@ -56,8 +57,8 @@ func TestEncryptedPassthroughRoundTrip(t *testing.T) {
 	}
 
 	// Write must not have mutated the in-memory ciphertext.
-	cat0, _ := doc.Objects[1].Value.(*Dictionary)
-	if s, _ := cat0.Get("Producer").(String); string(s.Value) == producer {
+	cat0, _ := doc.Objects[1].Value.(*object.Dictionary)
+	if s, _ := cat0.Get("Producer").(object.String); string(s.Value) == producer {
 		t.Error("passthrough Write decrypted/mutated the in-memory model")
 	}
 }
@@ -70,19 +71,19 @@ func TestEncryptedPassthroughRoundTrip(t *testing.T) {
 func TestEncryptedPassthroughRefusesIncompleteModel(t *testing.T) {
 	// A resolvable /Encrypt dictionary (object 9) so the passthrough reaches the
 	// incomplete-model check rather than the unresolvable-/Encrypt refusal.
-	encDict := &Dictionary{}
-	encDict.Set("Filter", Name("Standard"))
+	encDict := &object.Dictionary{}
+	encDict.Set("Filter", object.Name("Standard"))
 	d := &Document{
-		Objects: map[int]*IndirectObject{
-			1: {Number: 1, Value: &Dictionary{}},
+		Objects: map[int]*object.IndirectObject{
+			1: {Number: 1, Value: &object.Dictionary{}},
 			9: {Number: 9, Value: encDict},
 		},
 		Encrypted:     true,
 		brokenObjStms: []int{5},
 	}
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
-	d.Trailer.Set("Encrypt", IndirectRef{Number: 9})
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
+	d.Trailer.Set("Encrypt", object.IndirectRef{Number: 9})
 	var buf bytes.Buffer
 	err := d.Write(&buf)
 	if err == nil {

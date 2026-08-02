@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -107,8 +108,8 @@ func TestReadWithPassword(t *testing.T) {
 	data := buildRC4R3EncryptedPDF(t, "sesame", "overlord", producer)
 
 	got := func(doc *Document) string {
-		d, _ := doc.Objects[1].Value.(*Dictionary)
-		s, _ := d.Get("Producer").(String)
+		d, _ := doc.Objects[1].Value.(*object.Dictionary)
+		s, _ := d.Get("Producer").(object.String)
 		return string(s.Value)
 	}
 

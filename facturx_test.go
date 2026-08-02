@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"github.com/mgilbir/formalis"
 	"github.com/mgilbir/pdf0/facturx"
+	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,8 +15,8 @@ import (
 // containerFindings returns the findings pdf0 itself made — its container rules
 // and the PDF/A-3 base — as opposed to those adopted from the invoice rule
 // engine, which carry that engine's Source.
-func containerFindings(res FacturXResult) []FacturXViolation {
-	var out []FacturXViolation
+func containerFindings(res facturx.Result) []facturx.Violation {
+	var out []facturx.Violation
 	for _, v := range res.Violations {
 		if v.Source == formalis.SourceNone {
 			out = append(out, v)
@@ -201,7 +202,7 @@ func TestValidateFacturXMutations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hasViolation := func(res FacturXResult, rule, substr string) bool {
+	hasViolation := func(res facturx.Result, rule, substr string) bool {
 		for _, v := range res.Violations {
 			if v.Rule == rule && strings.Contains(v.Message, substr) {
 				return true
@@ -221,7 +222,7 @@ func TestValidateFacturXMutations(t *testing.T) {
 		{"bad AFRelationship", func(doc *Document) {
 			cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 			fs, _, _ := facturx.FindAttachment(doc.view(), cat)
-			fs.Set("AFRelationship", Name("Unspecified"))
+			fs.Set("AFRelationship", object.Name("Unspecified"))
 		}, "attachment", "AFRelationship"},
 	}
 	for _, tc := range cases {

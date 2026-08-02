@@ -23,7 +23,7 @@ import (
 
 // Equal reports whether two objects are deeply equal, comparing an Integer and
 // a Real that hold the same number as equal.
-func Equal(a, b Object) bool { return object.Equal(a, b) }
+func Equal(a, b object.Object) bool { return object.Equal(a, b) }
 
 // DocumentEqual compares two Documents for semantic equality.
 func DocumentEqual(a, b *Document) bool {

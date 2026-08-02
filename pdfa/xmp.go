@@ -12,7 +12,7 @@ import (
 // validation (ISO 19005-1, 6.7.9 "Properties"; ISO 19005-2/-3, 6.6.2.3
 // "Schemas"). Properties in predefined schemas must exist in the schema and
 // carry the schema's value form (simple/Bag/Seq/LangAlt/structure, plus
-// simple-value syntax like object.Integer or Rational); properties in any other
+// simple-value syntax like Integer or Rational); properties in any other
 // namespace must be declared by an embedded PDF/A extension schema.
 
 // RDF and XMP container namespaces.

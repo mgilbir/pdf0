@@ -19,20 +19,20 @@ import (
 // encryption, no transparency) conservatively and does not assert full ISO 23504
 // conformance. The XMP PDF/R identification is checked leniently.
 
-// PDFRViolation reports a departure from the PDF/R structural profile.
-type PDFRViolation struct {
+// Violation reports a departure from the PDF/R structural profile.
+type Violation struct {
 	Rule    string
 	Message string
 	Object  int
 }
 
 // RuleID returns the PDF/R rule identifier.
-func (v PDFRViolation) RuleID() string { return v.Rule }
+func (v Violation) RuleID() string { return v.Rule }
 
 // ObjectNum returns the anchoring object number, 0 if N/A.
-func (v PDFRViolation) ObjectNum() int { return v.Object }
+func (v Violation) ObjectNum() int { return v.Object }
 
-func (v PDFRViolation) Error() string {
+func (v Violation) Error() string {
 	if v.Object != 0 {
 		return fmt.Sprintf("PDF/R %s: %s (object %d)", v.Rule, v.Message, v.Object)
 	}

@@ -37,7 +37,7 @@ func TestProhibitedCatalogEntries(t *testing.T) {
 		t.Errorf("6.12 /Requirements must not be flagged at PDF/A-2b, got %d errors", got)
 	}
 	// 6.11 (AlternatePresentations / PresSteps) DOES apply at 2b and 3b.
-	for _, lvl := range []PDFALevel{PDFA2b, PDFA3b} {
+	for _, lvl := range []Level{PDFA2b, PDFA3b} {
 		altDoc := mk(func(c *object.Dictionary, d core.View) {
 			names := &object.Dictionary{}
 			names.Set("AlternatePresentations", &object.Dictionary{})

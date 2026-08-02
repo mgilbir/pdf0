@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"sort"
 )
 
@@ -39,7 +40,7 @@ import (
 // The layout matches parseObjStmIndex: a leading index of N "objnum offset"
 // pairs, then the object bodies; /First is the byte length of the index and each
 // offset is relative to it.
-func buildObjectStream(nums []int, bodies map[int][]byte, objStmNum int) (*IndirectObject, map[int]int) {
+func buildObjectStream(nums []int, bodies map[int][]byte, objStmNum int) (*object.IndirectObject, map[int]int) {
 	sort.Ints(nums)
 	var header, body bytes.Buffer
 	index := make(map[int]int, len(nums))
@@ -53,13 +54,13 @@ func buildObjectStream(nums []int, bodies map[int][]byte, objStmNum int) (*Indir
 	raw := append(append([]byte(nil), header.Bytes()...), body.Bytes()...)
 	encoded := core.FlateEncode(raw)
 
-	dict := &Dictionary{}
-	dict.Set("Type", Name("ObjStm"))
-	dict.Set("N", Integer(len(nums)))
-	dict.Set("First", Integer(first))
-	dict.Set("Filter", Name("FlateDecode"))
-	dict.Set("Length", Integer(len(encoded)))
-	return &IndirectObject{Number: objStmNum, Value: &Stream{Dict: *dict, Data: encoded}}, index
+	dict := &object.Dictionary{}
+	dict.Set("Type", object.Name("ObjStm"))
+	dict.Set("N", object.Integer(len(nums)))
+	dict.Set("First", object.Integer(first))
+	dict.Set("Filter", object.Name("FlateDecode"))
+	dict.Set("Length", object.Integer(len(encoded)))
+	return &object.IndirectObject{Number: objStmNum, Value: &object.Stream{Dict: *dict, Data: encoded}}, index
 }
 
 // buildWriteSet returns the objects Write should serialize. When regenerating a
@@ -69,7 +70,7 @@ func buildObjectStream(nums []int, bodies map[int][]byte, objStmNum int) (*Indir
 // unchanged with a nil map.
 //
 // It never mutates d.Objects: packing builds a fresh map.
-func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
+func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]int) {
 	if !d.usedXRefStream {
 		return d.Objects, nil
 	}
@@ -98,8 +99,8 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 	// correct its value after (possibly length-changing) encryption.
 	lengthTargets := map[int]bool{}
 	for _, iobj := range d.Objects {
-		if st, ok := iobj.Value.(*Stream); ok {
-			if ref, ok := st.Dict.Get("Length").(IndirectRef); ok {
+		if st, ok := iobj.Value.(*object.Stream); ok {
+			if ref, ok := st.Dict.Get("Length").(object.IndirectRef); ok {
 				lengthTargets[ref.Number] = true
 			}
 		}
@@ -117,7 +118,7 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 		if num == encNum || encReachable[num] || iobj.Generation != 0 || lengthTargets[num] {
 			continue
 		}
-		if _, isStream := iobj.Value.(*Stream); isStream {
+		if _, isStream := iobj.Value.(*object.Stream); isStream {
 			continue
 		}
 		packable = append(packable, num)
@@ -143,7 +144,7 @@ func (d *Document) buildWriteSet() (map[int]*IndirectObject, map[int][2]int) {
 	// body alone exceeds the budget cannot be packed safely, so it is left as an
 	// individual indirect object.
 	objStmMax := d.lim().ObjStmMaxRaw()
-	out := make(map[int]*IndirectObject, len(d.Objects)+4)
+	out := make(map[int]*object.IndirectObject, len(d.Objects)+4)
 	for num, iobj := range d.Objects {
 		out[num] = iobj
 	}
@@ -199,23 +200,23 @@ func (d *Document) encryptReachable() map[int]bool {
 	}
 	reachable := map[int]bool{}
 	var stack []int
-	var walk func(o Object)
-	walk = func(o Object) {
+	var walk func(o object.Object)
+	walk = func(o object.Object) {
 		switch v := o.(type) {
-		case IndirectRef:
+		case object.IndirectRef:
 			if !reachable[v.Number] {
 				reachable[v.Number] = true
 				stack = append(stack, v.Number)
 			}
-		case *Dictionary:
+		case *object.Dictionary:
 			for _, val := range v.Values {
 				walk(val)
 			}
-		case Array:
+		case object.Array:
 			for _, e := range v {
 				walk(e)
 			}
-		case *Stream:
+		case *object.Stream:
 			for _, val := range v.Dict.Values {
 				walk(val)
 			}

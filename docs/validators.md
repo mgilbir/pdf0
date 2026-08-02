@@ -33,7 +33,7 @@ Three further properties hold across the family:
 
 ```go
 var real []pdf0.Violation
-for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA2b) {
+for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA2b) {
 	if !pdf0.IsCheckerFinding(e) {
 		real = append(real, e)
 	}
@@ -44,16 +44,16 @@ for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA2b) {
 
 | Standard | Entry point | Returns | Findings satisfy `Violation` | `…Context` variant |
 |----------|-------------|---------|------------------------------|--------------------|
-| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]ValidationError` | yes | yes (both) |
-| PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]UAViolation` | yes | yes |
-| PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]UAViolation` | yes | yes |
-| PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]PDFXViolation` | yes | yes |
-| PDF/VT-1 (ISO 16612-2) | `ValidatePDFVT(doc)` | `[]PDFVTViolation` | yes | yes |
-| PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]PDFVTViolation` | yes | yes |
-| PDF/R | `ValidatePDFR(doc)` | `[]PDFRViolation` | yes | yes |
-| DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]DPartViolation` | yes | yes |
-| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `FacturXResult` | yes (`FacturXViolation`) | yes |
-| Order-X container | `ValidateOrderX(doc, raw)` | `OrderXResult` | yes (`OrderXViolation`) | yes |
+| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]pdfa.ValidationError` | yes | yes (both) |
+| PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]pdfua.Violation` | yes | yes |
+| PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]pdfua.Violation` | yes | yes |
+| PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]pdfx.Violation` | yes | yes |
+| PDF/VT-1 (ISO 16612-2) | `ValidatePDFVT(doc)` | `[]pdfvt.Violation` | yes | yes |
+| PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]pdfvt.Violation` | yes | yes |
+| PDF/R | `ValidatePDFR(doc)` | `[]pdfr.Violation` | yes | yes |
+| DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]dpart.Violation` | yes | yes |
+| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `facturx.Result` | yes (`facturx.Violation`) | yes |
+| Order-X container | `ValidateOrderX(doc, raw)` | `facturx.OrderXResult` | yes (`facturx.OrderXViolation`) | yes |
 
 The last two columns move together, and that is not a coincidence: cancellation
 is reported *as a finding* under the reserved rule `limit`, so an entry point
@@ -73,17 +73,17 @@ flowchart TD
     Doc[("*Document")]
 
     subgraph pdfstd["PDF-standard validators — free functions, findings satisfy pdf0.Violation"]
-        A["ValidatePDFA / ValidatePDFABytes<br/>→ []ValidationError"]
-        UA["ValidatePDFUA / ValidatePDFUA2<br/>→ []UAViolation"]
-        X["ValidatePDFX<br/>→ []PDFXViolation"]
-        VT["ValidatePDFVT / ValidatePDFVT2<br/>→ []PDFVTViolation"]
-        R["ValidatePDFR<br/>→ []PDFRViolation"]
-        DP["ValidateDParts<br/>→ []DPartViolation"]
+        A["ValidatePDFA / ValidatePDFABytes<br/>→ []pdfa.ValidationError"]
+        UA["ValidatePDFUA / ValidatePDFUA2<br/>→ []pdfua.Violation"]
+        X["ValidatePDFX<br/>→ []pdfx.Violation"]
+        VT["ValidatePDFVT / ValidatePDFVT2<br/>→ []pdfvt.Violation"]
+        R["ValidatePDFR<br/>→ []pdfr.Violation"]
+        DP["ValidateDParts<br/>→ []dpart.Violation"]
     end
 
     subgraph invoice["Invoice containers — result structs, findings satisfy pdf0.Violation"]
-        FX["ValidateFacturX(doc, raw)<br/>→ FacturXResult{Violations, InvoiceWarnings,<br/>Profile, CIUS, XMLName, XML,<br/>InvoiceNotEvaluated, InvoiceComplete}"]
-        OX["ValidateOrderX(doc, raw)<br/>→ OrderXResult{Violations, OrderWarnings,<br/>Profile, XMLName, XML,<br/>OrderNotEvaluated, OrderComplete}"]
+        FX["ValidateFacturX(doc, raw)<br/>→ facturx.Result{Violations, InvoiceWarnings,<br/>Profile, CIUS, XMLName, XML,<br/>InvoiceNotEvaluated, InvoiceComplete}"]
+        OX["ValidateOrderX(doc, raw)<br/>→ facturx.OrderXResult{Violations, OrderWarnings,<br/>Profile, XMLName, XML,<br/>OrderNotEvaluated, OrderComplete}"]
     end
 
     Doc --> pdfstd
@@ -101,7 +101,7 @@ multi-standard report is a plain append:
 
 ```go
 var all []pdf0.Violation
-for _, e := range pdf0.ValidatePDFA(doc, pdf0.PDFA2b) {
+for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA2b) {
 	all = append(all, e)
 }
 for _, e := range pdf0.ValidatePDFUA(doc) {

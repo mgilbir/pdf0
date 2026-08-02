@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -29,17 +30,17 @@ func TestParseXRefStreamWithPredictor(t *testing.T) {
 	zw.Write(raw)
 	zw.Close()
 
-	dict := Dictionary{}
-	dict.Set("Type", Name("XRef"))
-	dict.Set("Size", Integer(3))
-	dict.Set("W", Array{Integer(1), Integer(2), Integer(1)})
-	dict.Set("Filter", Name("FlateDecode"))
-	parms := &Dictionary{}
-	parms.Set("Predictor", Integer(12))
-	parms.Set("Columns", Integer(4))
+	dict := object.Dictionary{}
+	dict.Set("Type", object.Name("XRef"))
+	dict.Set("Size", object.Integer(3))
+	dict.Set("W", object.Array{object.Integer(1), object.Integer(2), object.Integer(1)})
+	dict.Set("Filter", object.Name("FlateDecode"))
+	parms := &object.Dictionary{}
+	parms.Set("Predictor", object.Integer(12))
+	parms.Set("Columns", object.Integer(4))
 	dict.Set("DecodeParms", parms)
 
-	table, err := ParseXRefStream(&Stream{Dict: dict, Data: buf.Bytes()})
+	table, err := ParseXRefStream(&object.Stream{Dict: dict, Data: buf.Bytes()})
 	if err != nil {
 		t.Fatal(err)
 	}

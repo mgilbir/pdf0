@@ -74,7 +74,7 @@ var standardRenderingIntents = map[string]bool{
 // operators defined in ISO 32000 (6.2.2), that the ri operator's operand is
 // a standard rendering intent, and that named XObject/resource references
 // resolve within the associated resource dictionary.
-func checkContentStreamOperators(doc core.View, level PDFALevel) []ValidationError {
+func checkContentStreamOperators(doc core.View, level Level) []ValidationError {
 	rule := "6.2.2"
 	var errs []ValidationError
 	seen := map[string]bool{}
@@ -325,7 +325,7 @@ func resolveObjNum(doc core.View, o object.Object) int {
 // numeric and string operands within content streams (ISO 19005-1 6.1.12,
 // -2/-3 6.1.13). The real magnitude and string-length limits differ by
 // part; the integer limit (2^31-1) is universal.
-func checkContentStreamLimits(doc core.View, level PDFALevel, lim implLimits, errs *[]ValidationError) {
+func checkContentStreamLimits(doc core.View, level Level, lim implLimits, errs *[]ValidationError) {
 	// One example per distinct message, attributed to the lowest object number
 	// that produced it — collectContentStreamData returns a map, so the first
 	// stream to breach a limit varies from run to run.
@@ -400,7 +400,7 @@ func checkContentNumberLimit(s string, lim implLimits, objNum int, add func(stri
 // same ICC profile as the PDF/A output intent or the current transparency
 // blending colour space. Content is followed through invoked form XObjects,
 // carrying the enclosing group's blending profile.
-func checkICCProfileIdentity(doc core.View, level PDFALevel) []ValidationError {
+func checkICCProfileIdentity(doc core.View, level Level) []ValidationError {
 	if level != PDFA4 {
 		return nil
 	}

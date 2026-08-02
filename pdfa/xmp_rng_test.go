@@ -328,7 +328,7 @@ func TestXMPTablesMatchRNG(t *testing.T) {
 	}
 
 	levels := []struct {
-		lvl PDFALevel
+		lvl Level
 		n   int
 	}{{PDFA1b, 1}, {PDFA2b, 2}}
 

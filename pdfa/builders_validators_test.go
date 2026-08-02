@@ -8,7 +8,7 @@ import (
 // TestPDFAPartConformanceLevelA pins the per-level builder metadata.
 func TestPDFAPartConformanceLevelA(t *testing.T) {
 	cases := []struct {
-		level PDFALevel
+		level Level
 		part  int
 		conf  string
 		ver   string

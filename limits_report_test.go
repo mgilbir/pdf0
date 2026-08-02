@@ -6,6 +6,9 @@ import (
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/internal/font"
 	"github.com/mgilbir/pdf0/internal/fonttest"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/pdfx"
 	"strings"
 	"testing"
 )
@@ -22,7 +25,7 @@ import (
 
 // --- helpers ---
 
-func errMessages(errs []ValidationError) []string {
+func errMessages(errs []pdfa.ValidationError) []string {
 	out := make([]string, len(errs))
 	for i, e := range errs {
 		out[i] = e.Message
@@ -80,7 +83,7 @@ func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
 //	content budget starved /Metadata: [metadata must contain pdfaid:part
 //	pdfaid:conformance must be B, got ""]
 func TestMetadataSurvivesContentBudget(t *testing.T) {
-	doc := NewPDFADocument(PDFA2b)
+	doc := NewPDFADocument(pdfa.PDFA2b)
 	// Give it one page whose content stream is big enough to exhaust a lowered
 	// budget before the identification checks run. The content paints nothing,
 	// so the page adds no findings of its own.
@@ -92,25 +95,25 @@ func TestMetadataSurvivesContentBudget(t *testing.T) {
 	}
 	pagesRef := doc.ResolveDict(doc.Trailer.Get("Root")).Get("Pages")
 	pages := doc.ResolveDict(pagesRef)
-	var kids Array
+	var kids object.Array
 	for i := 0; i < 2; i++ {
 		contentNum, pageNum := num+1+2*i, num+2+2*i
-		doc.Objects[contentNum] = &IndirectObject{Number: contentNum, Value: &Stream{
-			Dict: Dictionary{}, Data: bytes.Repeat([]byte("q Q\n"), 4096+i),
+		doc.Objects[contentNum] = &object.IndirectObject{Number: contentNum, Value: &object.Stream{
+			Dict: object.Dictionary{}, Data: bytes.Repeat([]byte("q Q\n"), 4096+i),
 		}}
-		page := &Dictionary{}
-		page.Set("Type", Name("Page"))
+		page := &object.Dictionary{}
+		page.Set("Type", object.Name("Page"))
 		page.Set("Parent", pagesRef)
-		page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-		page.Set("Resources", &Dictionary{})
-		page.Set("Contents", IndirectRef{Number: contentNum})
-		doc.Objects[pageNum] = &IndirectObject{Number: pageNum, Value: page}
-		kids = append(kids, IndirectRef{Number: pageNum})
+		page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+		page.Set("Resources", &object.Dictionary{})
+		page.Set("Contents", object.IndirectRef{Number: contentNum})
+		doc.Objects[pageNum] = &object.IndirectObject{Number: pageNum, Value: page}
+		kids = append(kids, object.IndirectRef{Number: pageNum})
 	}
 	pages.Set("Kids", kids)
-	pages.Set("Count", Integer(len(kids)))
+	pages.Set("Count", object.Integer(len(kids)))
 
-	if base := ValidatePDFA(doc, PDFA2b); len(base) > 0 {
+	if base := ValidatePDFA(doc, pdfa.PDFA2b); len(base) > 0 {
 		t.Fatalf("fixture is not conformant before the budget is lowered: %v", errMessages(base))
 	}
 
@@ -120,7 +123,7 @@ func TestMetadataSurvivesContentBudget(t *testing.T) {
 	// test, which is what the package-level var it replaced could not promise.
 	doc.limits = resolveLimits([]Option{WithMaxDecodedContentBytes(100)})
 
-	msgs := errMessages(ValidatePDFA(doc, PDFA2b))
+	msgs := errMessages(ValidatePDFA(doc, pdfa.PDFA2b))
 	var bad []string
 	for _, m := range msgs {
 		if strings.Contains(m, "pdfaid") || strings.Contains(m, "XMP dc:title") {
@@ -179,11 +182,11 @@ func TestOverlongTokenIsNotAnOperator(t *testing.T) {
 // object-stream decompression budget ran out. Every "X is absent" finding on
 // such a file is suspect, so the trip is reported alongside them.
 func TestObjStmBudgetTripIsReported(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
+	doc := &Document{Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
 	doc.noteReadLimit(limitObjStmTotal, "object stream 7 was not unpacked", 7)
 
-	errs := ValidatePDFA(doc, PDFA2b)
-	var trip *ValidationError
+	errs := ValidatePDFA(doc, pdfa.PDFA2b)
+	var trip *pdfa.ValidationError
 	for i := range errs {
 		if errs[i].Rule == finding.LimitRule {
 			trip = &errs[i]
@@ -210,7 +213,7 @@ func TestObjStmBudgetTripIsReported(t *testing.T) {
 		t.Error("a read-time guard trip did not reach the PDF/UA report")
 	}
 	xHas := false
-	for _, v := range ValidatePDFX(doc, PDFX4) {
+	for _, v := range ValidatePDFX(doc, pdfx.PDFX4) {
 		if v.Rule == finding.LimitRule {
 			xHas = true
 		}
@@ -256,7 +259,7 @@ func TestLimitRecorderIsBounded(t *testing.T) {
 //	WriteIncremental accepted a document with 1 unmaterialised object stream(s)
 func TestIncrementalRefusesMissingObjects(t *testing.T) {
 	var buf bytes.Buffer
-	doc := NewPDFADocument(PDFA2b)
+	doc := NewPDFADocument(pdfa.PDFA2b)
 	if err := doc.Write(&buf); err != nil {
 		t.Fatalf("writing: %v", err)
 	}
@@ -294,35 +297,35 @@ func TestIncrementalRefusesMissingObjects(t *testing.T) {
 func embeddedPDFAFixture(t *testing.T, lim core.Limits) (inner []byte, outer *Document) {
 	t.Helper()
 
-	doc := NewPDFADocument(PDFA4)
+	doc := NewPDFADocument(pdfa.PDFA4)
 	next := 1
 	for n := range doc.Objects {
 		if n >= next {
 			next = n + 1
 		}
 	}
-	var kids Array
+	var kids object.Array
 	for i := 0; i < 2; i++ {
 		// Distinct bytes so the two streams are distinct objects, not one shared
 		// stream the per-run cache would answer once for.
-		content := &Stream{Dict: Dictionary{}, Data: []byte("q Q % " + strings.Repeat("x", i+1))}
-		content.Dict.Set("Length", Integer(len(content.Data)))
+		content := &object.Stream{Dict: object.Dictionary{}, Data: []byte("q Q % " + strings.Repeat("x", i+1))}
+		content.Dict.Set("Length", object.Integer(len(content.Data)))
 		contentNum := next
-		doc.Objects[contentNum] = &IndirectObject{Number: contentNum, Value: content}
+		doc.Objects[contentNum] = &object.IndirectObject{Number: contentNum, Value: content}
 		next++
-		page := &Dictionary{}
-		page.Set("Type", Name("Page"))
-		page.Set("Parent", IndirectRef{Number: 2})
-		page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-		page.Set("Resources", &Dictionary{})
-		page.Set("Contents", IndirectRef{Number: contentNum})
-		doc.Objects[next] = &IndirectObject{Number: next, Value: page}
-		kids = append(kids, IndirectRef{Number: next})
+		page := &object.Dictionary{}
+		page.Set("Type", object.Name("Page"))
+		page.Set("Parent", object.IndirectRef{Number: 2})
+		page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+		page.Set("Resources", &object.Dictionary{})
+		page.Set("Contents", object.IndirectRef{Number: contentNum})
+		doc.Objects[next] = &object.IndirectObject{Number: next, Value: page}
+		kids = append(kids, object.IndirectRef{Number: next})
 		next++
 	}
 	if pd := doc.ResolveDict(doc.ResolveDict(doc.Trailer.Get("Root")).Get("Pages")); pd != nil {
 		pd.Set("Kids", kids)
-		pd.Set("Count", Integer(len(kids)))
+		pd.Set("Count", object.Integer(len(kids)))
 	}
 
 	var buf bytes.Buffer
@@ -331,18 +334,18 @@ func embeddedPDFAFixture(t *testing.T, lim core.Limits) (inner []byte, outer *Do
 	}
 	inner = buf.Bytes()
 
-	ef := &Stream{Dict: Dictionary{}, Data: append([]byte(nil), inner...)}
-	ef.Dict.Set("Type", Name("EmbeddedFile"))
-	ef.Dict.Set("Subtype", Name("application/pdf"))
-	ef.Dict.Set("Length", Integer(len(ef.Data)))
-	fsEF := &Dictionary{}
-	fsEF.Set("F", IndirectRef{Number: 2})
-	fs := &Dictionary{}
-	fs.Set("Type", Name("Filespec"))
+	ef := &object.Stream{Dict: object.Dictionary{}, Data: append([]byte(nil), inner...)}
+	ef.Dict.Set("Type", object.Name("EmbeddedFile"))
+	ef.Dict.Set("Subtype", object.Name("application/pdf"))
+	ef.Dict.Set("Length", object.Integer(len(ef.Data)))
+	fsEF := &object.Dictionary{}
+	fsEF.Set("F", object.IndirectRef{Number: 2})
+	fs := &object.Dictionary{}
+	fs.Set("Type", object.Name("Filespec"))
 	fs.Set("EF", fsEF)
 
 	outer = &Document{
-		Objects: map[int]*IndirectObject{
+		Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: fs},
 			2: {Number: 2, Value: ef},
 		},
@@ -400,13 +403,13 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	_, outer := embeddedPDFAFixture(t, strict)
 	// Through the public entry point: checkEmbeddedPDFA is a pdfa internal, and
 	// what this pins is the finding the caller sees, not the call that made it.
-	for _, e := range ValidatePDFA(outer, PDFA4) {
+	for _, e := range ValidatePDFA(outer, pdfa.PDFA4) {
 		if e.Rule == "6.9" {
 			t.Errorf("6.9 asserted on the strength of an incomplete nested run: %s", e.Message)
 		}
 	}
 	reported := false
-	for _, e := range ValidatePDFA(outer, PDFA4) {
+	for _, e := range ValidatePDFA(outer, pdfa.PDFA4) {
 		if e.Rule == finding.LimitRule && strings.Contains(e.Message, core.GuardEmbeddedPDFA) {
 			reported = true
 		}

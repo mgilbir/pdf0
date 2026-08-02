@@ -81,7 +81,7 @@ flowchart TD
 
 Every family below is dispatched from the single `validatePDFUA(doc, part)`
 function in `pdfua/pdfua.go`. The clause column is the string the finding carries in
-`UAViolation.Clause`; a few cite the Matterhorn Protocol checkpoint that pins the
+`pdfua.Violation.Clause`; a few cite the Matterhorn Protocol checkpoint that pins the
 rule, noted in the source comments.
 
 | Family | Clause(s) | Checks | What actually fires |
@@ -215,7 +215,7 @@ Only the *presence* of `Scope` is checked, not its value.
 and it flags a file whose header major version is not 2. Parameterizing by `part`
 (rather than post-filtering findings by message text, as an earlier version did —
 audit C39) is what makes the identification rule demand `pdfuaid:part 2` and
-makes the UA-1 `1.x`-header rule not run at all. Findings reuse `UAViolation`,
+makes the UA-1 `1.x`-header rule not run at all. Findings reuse `pdfua.Violation`,
 but the `Clause` strings are ISO 14289-**2** identifiers while `Error()` still
 prefixes `[PDF/UA-1 …]` — read the clause against the standard you invoked.
 
@@ -260,7 +260,7 @@ tabulated in [testing.md](testing.md).
 
 | File | Owns | Governing clauses |
 |---|---|---|
-| `pdfua/pdfua.go` | `UAViolation`, `ValidatePDFUA`, the `validatePDFUA(doc, part)` dispatch, and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, language, headings, figures | 5, 6.1, 7.1–7.4, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x |
+| `pdfua/pdfua.go` | `pdfua.Violation`, `ValidatePDFUA`, the `validatePDFUA(doc, part)` dispatch, and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, language, headings, figures | 5, 6.1, 7.1–7.4, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x |
 | `pdfua/pdfua_struct.go` | The flattened `structTree` model and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version | 7.1, 7.2, 7.4.4, 7.9, 6.1 (and ISO 32000-1 14.8.4.3) |
 | `pdfua/pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
 | `pdfua/pdfua_tablegrid.go` | `TH` identifiability and the table grid reconstruction | 7.2, 7.5 |

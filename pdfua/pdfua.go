@@ -8,36 +8,36 @@ import (
 	"strings"
 )
 
-// UAViolation is a PDF/UA-1 (ISO 14289-1) accessibility conformance failure.
-type UAViolation struct {
+// Violation is a PDF/UA-1 (ISO 14289-1) accessibility conformance failure.
+type Violation struct {
 	Clause  string // ISO 14289-1 clause
 	Message string
 	Object  int
 }
 
 // RuleID returns the ISO 14289 clause identifier.
-func (v UAViolation) RuleID() string { return v.Clause }
+func (v Violation) RuleID() string { return v.Clause }
 
 // ObjectNum returns the anchoring object number, 0 if N/A.
-func (v UAViolation) ObjectNum() int { return v.Object }
+func (v Violation) ObjectNum() int { return v.Object }
 
-func (v UAViolation) Error() string {
+func (v Violation) Error() string {
 	if v.Object != 0 {
 		return fmt.Sprintf("[PDF/UA-1 %s] object %d: %s", v.Clause, v.Object, v.Message)
 	}
 	return fmt.Sprintf("[PDF/UA-1 %s] %s", v.Clause, v.Message)
 }
 
-func ValidateView(doc core.View, part string) []UAViolation {
+func ValidateView(doc core.View, part string) []Violation {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		// Even here the guard trips are reported: "no catalog" is exactly the
 		// kind of finding a read-time truncation can manufacture. This early
 		// return is sorted like the normal one — every exit of every validator
 		// returns findings in the same order.
-		return []UAViolation{{"7.1", "document has no catalog", 0}}
+		return []Violation{{"7.1", "document has no catalog", 0}}
 	}
-	var v []UAViolation
+	var v []Violation
 
 	// Every check runs under a recover boundary, so a panic on hostile input
 	// becomes an "internal" finding instead of crashing the caller, and one bad
@@ -49,21 +49,21 @@ func ValidateView(doc core.View, part string) []UAViolation {
 	// The checks take the document as their first parameter rather than being
 	// methods on it, so these two adapters bind it once here instead of at
 	// every call site.
-	run := func(check func(core.View) []UAViolation) {
+	run := func(check func(core.View) []Violation) {
 		if doc.Cancel.Stopped() {
 			return
 		}
-		v = append(v, RunCheck(func() []UAViolation { return check(doc) })...)
+		v = append(v, RunCheck(func() []Violation { return check(doc) })...)
 	}
-	runCat := func(check func(core.View, *object.Dictionary) []UAViolation) {
-		run(func(d core.View) []UAViolation { return check(d, cat) })
+	runCat := func(check func(core.View, *object.Dictionary) []Violation) {
+		run(func(d core.View) []Violation { return check(d, cat) })
 	}
 
 	// 7.1 — tagged PDF, structure tree, shown title; 7.2 — default language.
 	runCat(checkUACatalogBasics)
 
 	// 5 — the file must declare PDF/UA conformance in its XMP metadata.
-	run(func(d core.View) []UAViolation { return checkUAIdentifier(d, cat, part) })
+	run(func(d core.View) []Violation { return checkUAIdentifier(d, cat, part) })
 
 	// Matterhorn checkpoint 06: the document must have an XMP dc:title.
 	runCat(checkUATitle)
@@ -153,27 +153,27 @@ func ValidateView(doc core.View, part string) []UAViolation {
 // checkUACatalogBasics covers the catalog-level PDF/UA requirements: the file
 // must be tagged (7.1) with a structure tree, specify a default natural
 // language (7.2), and display its title in the window title bar (7.1).
-func checkUACatalogBasics(d core.View, cat *object.Dictionary) []UAViolation {
-	var v []UAViolation
+func checkUACatalogBasics(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
 
 	// 7.1 — the file must be a tagged PDF.
 	mark := d.ResolveDict(cat.Get("MarkInfo"))
 	if mark == nil || !d.IsTrue(mark.Get("Marked")) {
-		v = append(v, UAViolation{"7.1", "document is not marked as tagged (/MarkInfo << /Marked true >>)", 0})
+		v = append(v, Violation{"7.1", "document is not marked as tagged (/MarkInfo << /Marked true >>)", 0})
 	}
 	if cat.Get("StructTreeRoot") == nil {
-		v = append(v, UAViolation{"7.1", "document has no structure tree (/StructTreeRoot)", 0})
+		v = append(v, Violation{"7.1", "document has no structure tree (/StructTreeRoot)", 0})
 	}
 
 	// 7.2 — a default natural language must be set.
 	if s, _ := d.Resolve(cat.Get("Lang")).(object.String); len(s.Value) == 0 {
-		v = append(v, UAViolation{"7.2", "document does not specify a default language (catalog /Lang)", 0})
+		v = append(v, Violation{"7.2", "document does not specify a default language (catalog /Lang)", 0})
 	}
 
 	// 7.1 — the document title must be shown in the window title bar.
 	vp := d.ResolveDict(cat.Get("ViewerPreferences"))
 	if vp == nil || !d.IsTrue(vp.Get("DisplayDocTitle")) {
-		v = append(v, UAViolation{"7.1", "/ViewerPreferences /DisplayDocTitle must be true", 0})
+		v = append(v, Violation{"7.1", "/ViewerPreferences /DisplayDocTitle must be true", 0})
 	}
 	return v
 }
@@ -182,7 +182,7 @@ func checkUACatalogBasics(d core.View, cat *object.Dictionary) []UAViolation {
 // without an intervening H2), walking the structure tree in document order. It
 // keys off the /RoleMap-resolved type, like the sibling heading checks, so a
 // custom type mapped to a numbered heading counts as one (audit C29).
-func checkUAHeadings(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUAHeadings(d core.View, cat *object.Dictionary) []Violation {
 	var levels []int
 	for _, n := range structTree(d, cat) {
 		if st := n.stdType; len(st) == 2 && st[0] == 'H' && st[1] >= '1' && st[1] <= '6' {
@@ -190,15 +190,15 @@ func checkUAHeadings(d core.View, cat *object.Dictionary) []UAViolation {
 		}
 	}
 
-	var v []UAViolation
+	var v []Violation
 	// 7.4.2: a strongly structured document's first numbered heading must be H1.
 	if len(levels) > 0 && levels[0] != 1 {
-		v = append(v, UAViolation{"7.4.2", fmt.Sprintf("first heading is H%d; a strongly structured document must start at H1", levels[0]), 0})
+		v = append(v, Violation{"7.4.2", fmt.Sprintf("first heading is H%d; a strongly structured document must start at H1", levels[0]), 0})
 	}
 	prev := 0
 	for _, lvl := range levels {
 		if prev != 0 && lvl > prev+1 {
-			v = append(v, UAViolation{"7.4", fmt.Sprintf("heading level H%d follows H%d, skipping a level", lvl, prev), 0})
+			v = append(v, Violation{"7.4", fmt.Sprintf("heading level H%d follows H%d, skipping a level", lvl, prev), 0})
 		}
 		prev = lvl
 	}
@@ -207,11 +207,11 @@ func checkUAHeadings(d core.View, cat *object.Dictionary) []UAViolation {
 
 // checkUAOneHPerNode enforces 7.4.4: in a weakly structured document each
 // structure node may contain at most one child <H> heading.
-func checkUAOneHPerNode(d core.View, cat *object.Dictionary) []UAViolation {
-	var v []UAViolation
+func checkUAOneHPerNode(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
 	for _, n := range structTree(d, cat) {
 		if countName(n.childTypes, "H") > 1 {
-			v = append(v, UAViolation{"7.4.4", "a structure node contains more than one child <H> heading", 0})
+			v = append(v, Violation{"7.4.4", "a structure node contains more than one child <H> heading", 0})
 		}
 	}
 	return v
@@ -231,15 +231,15 @@ var standardStructTypes = map[object.Name]bool{
 }
 
 // checkUATabOrder requires structure tab order on pages that carry annotations.
-func checkUATabOrder(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUATabOrder(d core.View) []Violation {
+	var v []Violation
 	for _, pg := range d.Pages(d.CatalogPages()) {
 		annots, _ := d.Resolve(pg.Dict.Get("Annots")).(object.Array)
 		if len(annots) == 0 {
 			continue
 		}
 		if tabs, _ := d.Resolve(pg.Dict.Get("Tabs")).(object.Name); tabs != "S" {
-			v = append(v, UAViolation{"7.18.3", "page with annotations must set /Tabs /S (structure tab order)", pg.ObjNum})
+			v = append(v, Violation{"7.18.3", "page with annotations must set /Tabs /S (structure tab order)", pg.ObjNum})
 		}
 	}
 	return v
@@ -247,13 +247,13 @@ func checkUATabOrder(d core.View) []UAViolation {
 
 // checkUARoleMap flags structure element types that are neither standard nor
 // mapped to a standard type through the structure tree's /RoleMap.
-func checkUARoleMap(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUARoleMap(d core.View, cat *object.Dictionary) []Violation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
 	}
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
-	var v []UAViolation
+	var v []Violation
 	// One verdict per distinct type: resolveRoleMapChain walks a chain, so
 	// re-deciding a repeated type would redo that walk on every element.
 	decided := map[object.Name]bool{}
@@ -266,7 +266,7 @@ func checkUARoleMap(d core.View, cat *object.Dictionary) []UAViolation {
 		// A budget trip leaves the mapping unknown; only a completed walk that
 		// found no standard type is evidence of a violation.
 		if _, mapped, complete := resolveRoleMapChain(d, st, roleMap); !mapped && complete {
-			v = append(v, UAViolation{"7.1", "structure type /" + string(st) + " is neither standard nor mapped in /RoleMap", 0})
+			v = append(v, Violation{"7.1", "structure type /" + string(st) + " is neither standard nor mapped in /RoleMap", 0})
 		}
 	}
 	return v
@@ -274,17 +274,17 @@ func checkUARoleMap(d core.View, cat *object.Dictionary) []UAViolation {
 
 // checkUAIdentifier requires an XMP metadata stream declaring the given
 // PDF/UA part.
-func checkUAIdentifier(d core.View, cat *object.Dictionary, want string) []UAViolation {
+func checkUAIdentifier(d core.View, cat *object.Dictionary, want string) []Violation {
 	stream, ok := d.Resolve(cat.Get("Metadata")).(*object.Stream)
 	if !ok {
-		return []UAViolation{{"5", "document has no XMP metadata (a PDF/UA identifier is required)", 0}}
+		return []Violation{{"5", "document has no XMP metadata (a PDF/UA identifier is required)", 0}}
 	}
 	xmp := d.XMPText(stream)
 	if !strings.Contains(xmp, "pdfuaid:part") {
-		return []UAViolation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
+		return []Violation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
 	}
 	if part := xmpPDFUAPart(xmp); part != "" && part != want {
-		return []UAViolation{{"5", "pdfuaid:part must be " + want + " for PDF/UA-" + want + ", got " + part, 0}}
+		return []Violation{{"5", "pdfuaid:part must be " + want + " for PDF/UA-" + want + ", got " + part, 0}}
 	}
 	return checkUAIdentifierPrefix(d, xmp)
 }
@@ -296,15 +296,15 @@ const pdfuaidNamespaceURI = "http://www.aiim.org/pdfua/ns/id/"
 // amd, corr) that is written with a namespace prefix other than the required
 // "pdfuaid" (clause 5). It considers only prefixes bound to the PDF/UA-id
 // namespace URI, so an unrelated element named amd/corr elsewhere is ignored.
-func checkUAIdentifierPrefix(d core.View, xmp string) []UAViolation {
-	var v []UAViolation
+func checkUAIdentifierPrefix(d core.View, xmp string) []Violation {
+	var v []Violation
 	for _, prop := range []string{"part", "amd", "corr"} {
 		for _, prefix := range xmpElementPrefixes(xmp, prop) {
 			if prefix == "pdfuaid" || prefix == "" {
 				continue
 			}
 			if xmpBindsPrefixTo(xmp, prefix, pdfuaidNamespaceURI) {
-				v = append(v, UAViolation{"5", "PDF/UA identification property '" + prop + "' uses namespace prefix '" + prefix + "', must be 'pdfuaid'", 0})
+				v = append(v, Violation{"5", "PDF/UA identification property '" + prop + "' uses namespace prefix '" + prefix + "', must be 'pdfuaid'", 0})
 			}
 		}
 	}
@@ -388,11 +388,11 @@ func xmpPDFUAPart(xmp string) string {
 
 // checkUAStructParent flags a structure element that lacks the required /P
 // (parent) entry (7.1, ISO 32000-1 14.7.2 Table 323).
-func checkUAStructParent(d core.View, cat *object.Dictionary) []UAViolation {
-	var v []UAViolation
+func checkUAStructParent(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
 	walkStructElems(d, cat, func(elem *object.Dictionary, t object.Name) {
 		if elem.Get("P") == nil {
-			v = append(v, UAViolation{"7.1", "structure element <" + string(t) + "> has no /P (parent) entry", 0})
+			v = append(v, Violation{"7.1", "structure element <" + string(t) + "> has no /P (parent) entry", 0})
 		}
 	})
 	return v
@@ -400,7 +400,7 @@ func checkUAStructParent(d core.View, cat *object.Dictionary) []UAViolation {
 
 // checkUARoleMapIntegrity flags a /RoleMap that remaps a standard structure type
 // or contains a circular mapping (7.1).
-func checkUARoleMapIntegrity(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUARoleMapIntegrity(d core.View, cat *object.Dictionary) []Violation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
@@ -409,7 +409,7 @@ func checkUARoleMapIntegrity(d core.View, cat *object.Dictionary) []UAViolation 
 	if roleMap == nil {
 		return nil
 	}
-	var v []UAViolation
+	var v []Violation
 	// Bound the total chain-following work. Get is O(1) once the dictionary is
 	// indexed, so this loop is at worst O(n^2) over a crafted /RoleMap; the cap
 	// keeps that from being a CPU DoS on a large map while never triggering on a
@@ -417,7 +417,7 @@ func checkUARoleMapIntegrity(d core.View, cat *object.Dictionary) []UAViolation 
 	work := 0
 	for _, key := range roleMap.Keys {
 		if standardStructTypes[key] {
-			v = append(v, UAViolation{"7.1", "/RoleMap remaps standard structure type <" + string(key) + ">", 0})
+			v = append(v, Violation{"7.1", "/RoleMap remaps standard structure type <" + string(key) + ">", 0})
 		}
 		// Follow the mapping chain from key; a repeat is a cycle.
 		seen := map[object.Name]bool{key: true}
@@ -436,7 +436,7 @@ func checkUARoleMapIntegrity(d core.View, cat *object.Dictionary) []UAViolation 
 				break
 			}
 			if seen[next] {
-				v = append(v, UAViolation{"7.1", "/RoleMap contains a circular mapping involving <" + string(key) + ">", 0})
+				v = append(v, Violation{"7.1", "/RoleMap contains a circular mapping involving <" + string(key) + ">", 0})
 				break
 			}
 			seen[next] = true
@@ -452,25 +452,25 @@ func checkUARoleMapIntegrity(d core.View, cat *object.Dictionary) []UAViolation 
 
 // checkUASecurity flags an encrypted document that lacks a /P entry or whose
 // permissions disable text extraction for accessibility (Matterhorn 26-001/002).
-func checkUASecurity(d core.View) []UAViolation {
+func checkUASecurity(d core.View) []Violation {
 	enc := d.ResolveDict(d.Trailer.Get("Encrypt"))
 	if enc == nil {
 		return nil
 	}
 	p, ok := d.Resolve(enc.Get("P")).(object.Integer)
 	if !ok {
-		return []UAViolation{{"7.16", "encrypted document has no /P permissions entry", 0}}
+		return []Violation{{"7.16", "encrypted document has no /P permissions entry", 0}}
 	}
 	if uint32(int32(p))&0x200 == 0 { // bit position 10: extract for accessibility
-		return []UAViolation{{"7.16", "encryption disables text extraction for accessibility (permission bit 10)", 0}}
+		return []Violation{{"7.16", "encryption disables text extraction for accessibility (permission bit 10)", 0}}
 	}
 	return nil
 }
 
 // checkUAAnnotations flags forbidden annotation subtypes. Hidden and Popup
 // annotations are exempt from checkpoint 28.
-func checkUAAnnotations(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUAAnnotations(d core.View) []Violation {
+	var v []Violation
 	for num, iobj := range d.Objects {
 		a, ok := iobj.Value.(*object.Dictionary)
 		if !ok || !core.IsAnnotation(a) {
@@ -484,12 +484,12 @@ func checkUAAnnotations(d core.View) []UAViolation {
 			continue // hidden
 		}
 		if st == "TrapNet" {
-			v = append(v, UAViolation{"7.18.2", "TrapNet annotations are not permitted", num})
+			v = append(v, Violation{"7.18.2", "TrapNet annotations are not permitted", num})
 		}
 		// 28-012: a Link annotation needs an alternate description in /Contents.
 		if st == "Link" {
 			if c, _ := d.Resolve(a.Get("Contents")).(object.String); len(c.Value) == 0 {
-				v = append(v, UAViolation{"7.18.5", "Link annotation has no alternate description (/Contents)", num})
+				v = append(v, Violation{"7.18.5", "Link annotation has no alternate description (/Contents)", num})
 			}
 		}
 		// 7.18.1: a form-field Widget must have a non-empty field description /TU
@@ -497,7 +497,7 @@ func checkUAAnnotations(d core.View) []UAViolation {
 		if st == "Widget" {
 			alt, _ := d.Resolve(a.Get("Alt")).(object.String)
 			if len(effectiveFieldTU(d, a)) == 0 && len(alt.Value) == 0 {
-				v = append(v, UAViolation{"7.18.1", "form-field Widget has neither a field description (/TU) nor an /Alt", num})
+				v = append(v, Violation{"7.18.1", "form-field Widget has neither a field description (/TU) nor an /Alt", num})
 			}
 		}
 		// 7.18.1: every other visible annotation (not a Widget, which has its own
@@ -507,14 +507,14 @@ func checkUAAnnotations(d core.View) []UAViolation {
 			c, _ := d.Resolve(a.Get("Contents")).(object.String)
 			alt, _ := d.Resolve(a.Get("Alt")).(object.String)
 			if len(c.Value) == 0 && len(alt.Value) == 0 {
-				v = append(v, UAViolation{"7.18.1", "annotation of subtype /" + string(st) + " has no alternate description (/Contents or /Alt)", num})
+				v = append(v, Violation{"7.18.1", "annotation of subtype /" + string(st) + " has no alternate description (/Contents or /Alt)", num})
 			}
 		}
 		// 7.18.8: a PrinterMark is an incidental artifact and must NOT be tagged;
 		// a visible one carrying a /StructParent is a violation.
 		if st == "PrinterMark" {
 			if a.Get("StructParent") != nil {
-				v = append(v, UAViolation{"7.18.8", "PrinterMark annotation must be an artifact, not tagged (has /StructParent)", num})
+				v = append(v, Violation{"7.18.8", "PrinterMark annotation must be an artifact, not tagged (has /StructParent)", num})
 			}
 			continue
 		}
@@ -522,7 +522,7 @@ func checkUAAnnotations(d core.View) []UAViolation {
 		// structure tree — it carries a /StructParent linking it to a structure
 		// element. (Hidden and Popup annotations were already skipped above.)
 		if a.Get("StructParent") == nil {
-			v = append(v, UAViolation{"7.18.1", "annotation is not tagged (no /StructParent linking it to the structure tree)", num})
+			v = append(v, Violation{"7.18.1", "annotation is not tagged (no /StructParent linking it to the structure tree)", num})
 		}
 	}
 	return v
@@ -538,8 +538,8 @@ func isPredefinedCMap(name object.Name) bool {
 // checkUACMaps enforces that a Type 0 font's CMap is either predefined (Table
 // 118) or embedded, and that an embedded CMap's /UseCMap references only a
 // predefined CMap (7.21.3.3). Only fonts used for rendering are considered.
-func checkUACMaps(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUACMaps(d core.View) []Violation {
+	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
 		v = append(v, checkOneUACMap(d, fontDict)...)
 	}
@@ -550,15 +550,15 @@ func checkUACMaps(d core.View) []UAViolation {
 // matches the Registry and Ordering implied by its CMap encoding (7.21.3.1).
 // Identity encodings are exempt; the check runs only when both sides declare a
 // Registry and Ordering.
-func checkUACIDSystemInfo(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUACIDSystemInfo(d core.View) []Violation {
+	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
 		v = append(v, checkOneUACIDSystemInfo(d, fontDict)...)
 	}
 	return v
 }
 
-func checkOneUACIDSystemInfo(d core.View, fontDict *object.Dictionary) []UAViolation {
+func checkOneUACIDSystemInfo(d core.View, fontDict *object.Dictionary) []Violation {
 	if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
 		return nil
 	}
@@ -596,12 +596,12 @@ func checkOneUACIDSystemInfo(d core.View, fontDict *object.Dictionary) []UAViola
 		return nil
 	}
 	if gotReg != wantReg || gotOrd != wantOrd {
-		return []UAViolation{{"7.21.3.1", "CIDFont CIDSystemInfo (" + gotReg + "-" + gotOrd + ") does not match the CMap (" + wantReg + "-" + wantOrd + ")", d.DictObjNum(fontDict)}}
+		return []Violation{{"7.21.3.1", "CIDFont CIDSystemInfo (" + gotReg + "-" + gotOrd + ") does not match the CMap (" + wantReg + "-" + wantOrd + ")", d.DictObjNum(fontDict)}}
 	}
 	// The CIDFont's Supplement must not exceed the CMap's (a CMap of a lower
 	// supplement cannot address CIDs introduced by a higher one).
 	if gotSup, ok := cidSupplement(d, cid); ok && haveWantSup && gotSup > wantSup {
-		return []UAViolation{{"7.21.3.1", fmt.Sprintf("CIDFont CIDSystemInfo Supplement %d exceeds the CMap Supplement %d", gotSup, wantSup), d.DictObjNum(fontDict)}}
+		return []Violation{{"7.21.3.1", fmt.Sprintf("CIDFont CIDSystemInfo Supplement %d exceeds the CMap Supplement %d", gotSup, wantSup), d.DictObjNum(fontDict)}}
 	}
 	return nil
 }
@@ -631,8 +631,8 @@ func cidSystemInfo(d core.View, dict *object.Dictionary) (string, string) {
 // checkUACMapWMode enforces that an embedded CMap's /WMode dictionary entry
 // matches the WMode declared inside the CMap stream itself (7.21.3.3, CMapFile
 // rule). Only Type 0 fonts used for rendering are considered.
-func checkUACMapWMode(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUACMapWMode(d core.View) []Violation {
+	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
 		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
 			continue
@@ -646,7 +646,7 @@ func checkUACMapWMode(d core.View) []UAViolation {
 			dictWM = int(w)
 		}
 		if inner, found := cmapInnerWMode(d.Content(s)); found && inner != dictWM {
-			v = append(v, UAViolation{"7.21.3.3", fmt.Sprintf("embedded CMap /WMode %d does not match the WMode %d declared in the CMap stream", dictWM, inner), d.DictObjNum(fontDict)})
+			v = append(v, Violation{"7.21.3.3", fmt.Sprintf("embedded CMap /WMode %d does not match the WMode %d declared in the CMap stream", dictWM, inner), d.DictObjNum(fontDict)})
 		}
 	}
 	return v
@@ -678,7 +678,7 @@ func cmapInnerWMode(data []byte) (int, bool) {
 	return n, true
 }
 
-func checkOneUACMap(d core.View, fontDict *object.Dictionary) []UAViolation {
+func checkOneUACMap(d core.View, fontDict *object.Dictionary) []Violation {
 	if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
 		return nil
 	}
@@ -686,11 +686,11 @@ func checkOneUACMap(d core.View, fontDict *object.Dictionary) []UAViolation {
 	switch enc := d.Resolve(fontDict.Get("Encoding")).(type) {
 	case object.Name:
 		if !isPredefinedCMap(enc) {
-			return []UAViolation{{"7.21.3.3", "Type 0 font uses CMap /" + string(enc) + ", which is neither predefined nor embedded", num}}
+			return []Violation{{"7.21.3.3", "Type 0 font uses CMap /" + string(enc) + ", which is neither predefined nor embedded", num}}
 		}
 	case *object.Stream:
 		if use, ok := enc.Dict.Get("UseCMap").(object.Name); ok && !isPredefinedCMap(use) {
-			return []UAViolation{{"7.21.3.3", "embedded CMap references non-predefined CMap /" + string(use) + " via /UseCMap", num}}
+			return []Violation{{"7.21.3.3", "embedded CMap references non-predefined CMap /" + string(use) + " via /UseCMap", num}}
 		}
 	}
 	return nil
@@ -699,12 +699,12 @@ func checkOneUACMap(d core.View, fontDict *object.Dictionary) []UAViolation {
 // checkUAToUnicodeValues flags a rendered font whose ToUnicode CMap maps any
 // character code to a forbidden Unicode value (U+0000, U+FEFF, or U+FFFE), which
 // carry no usable text meaning (7.21.7).
-func checkUAToUnicodeValues(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUAToUnicodeValues(d core.View) []Violation {
+	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
 		if tu, ok := d.Resolve(fontDict.Get("ToUnicode")).(*object.Stream); ok {
 			if core.HasForbiddenUnicodeTargets(d, tu) {
-				v = append(v, UAViolation{"7.21.7", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)", d.DictObjNum(fontDict)})
+				v = append(v, Violation{"7.21.7", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)", d.DictObjNum(fontDict)})
 			}
 		}
 	}
@@ -721,8 +721,8 @@ func checkUAToUnicodeValues(d core.View) []UAViolation {
 // subset CIDFont's embedded program routinely contains padded/present glyphs
 // that a conformant /CIDSet does not enumerate, so a program-vs-CIDSet
 // comparison raises false positives on well-formed files.
-func checkUAFontSubsetGlyphs(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUAFontSubsetGlyphs(d core.View) []Violation {
+	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
 		if !isSubsetFont(fontDict) {
 			continue
@@ -739,7 +739,7 @@ func checkUAFontSubsetGlyphs(d core.View) []UAViolation {
 
 // checkType1CharSet verifies a subset Type 1 font's /CharSet lists exactly the
 // glyph names present in the embedded program.
-func checkType1CharSet(d core.View, fontDict *object.Dictionary) []UAViolation {
+func checkType1CharSet(d core.View, fontDict *object.Dictionary) []Violation {
 	fd := d.ResolveDict(fontDict.Get("FontDescriptor"))
 	if fd == nil {
 		return nil
@@ -754,7 +754,7 @@ func checkType1CharSet(d core.View, fontDict *object.Dictionary) []UAViolation {
 	}
 	listed := core.ParseCharSet(string(cs.Value))
 	num := d.DictObjNum(fontDict)
-	var v []UAViolation
+	var v []Violation
 	// Both directions report ONE glyph as the example, not the whole set. The
 	// glyph named must be the lexicographically smallest offender rather than
 	// whichever the loop meets first: fp.glyphNames and listed are Go maps, and
@@ -779,7 +779,7 @@ func checkType1CharSet(d core.View, fontDict *object.Dictionary) []UAViolation {
 		}
 	}
 	if unlisted != "" {
-		v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + unlisted + " present in the embedded font program", num})
+		v = append(v, Violation{"7.21.4.2", "FontDescriptor /CharSet does not list glyph " + unlisted + " present in the embedded font program", num})
 	}
 	// Reverse: /CharSet must not list a glyph absent from the program.
 	absent := ""
@@ -792,7 +792,7 @@ func checkType1CharSet(d core.View, fontDict *object.Dictionary) []UAViolation {
 		}
 	}
 	if absent != "" {
-		v = append(v, UAViolation{"7.21.4.2", "FontDescriptor /CharSet lists glyph " + absent + " that is not present in the embedded font program", num})
+		v = append(v, Violation{"7.21.4.2", "FontDescriptor /CharSet lists glyph " + absent + " that is not present in the embedded font program", num})
 	}
 	return v
 }
@@ -804,7 +804,7 @@ func checkType1CharSet(d core.View, fontDict *object.Dictionary) []UAViolation {
 // outline as a building block but is not a directly mapped CID, so a conformant
 // /CIDSet does not list it. Only the Identity CIDToGIDMap case (CID == GID) is
 // handled; a mapping stream would need inversion and is left alone.
-func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []UAViolation {
+func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []Violation {
 	desc := core.Type0Descendant(d, fontDict)
 	if desc == nil {
 		return nil
@@ -838,7 +838,7 @@ func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []UAViolation 
 			continue // outline serves only as a composite component
 		}
 		if !present.Has(gid) {
-			return []UAViolation{{"7.21.4.2", "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", d.DictObjNum(fontDict)}}
+			return []Violation{{"7.21.4.2", "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", d.DictObjNum(fontDict)}}
 		}
 	}
 	return nil
@@ -850,8 +850,8 @@ func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []UAViolation 
 // signal that needs no font-program lookup. The simple-font .notdef case is not
 // handled here because it can only be resolved through the font program, where a
 // lookup failure is indistinguishable from a genuine .notdef reference.
-func checkUANotdefCID(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUANotdefCID(d core.View) []Violation {
+	var v []Violation
 	for fontDict, u := range core.CollectFontTextUsage(d) {
 		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
 			continue
@@ -871,7 +871,7 @@ func checkUANotdefCID(d core.View) []UAViolation {
 			}
 		}
 		if found {
-			v = append(v, UAViolation{"7.21.8", "a text-showing operator references the .notdef glyph (CID 0)", d.DictObjNum(fontDict)})
+			v = append(v, Violation{"7.21.8", "a text-showing operator references the .notdef glyph (CID 0)", d.DictObjNum(fontDict)})
 		}
 	}
 	return v
@@ -895,8 +895,8 @@ func isSubsetFont(fontDict *object.Dictionary) bool {
 // checkUAReferenceXObjects flags reference XObjects — Form XObjects carrying a
 // /Ref entry, which import content from an external file — which PDF/UA forbids
 // (7.20).
-func checkUAReferenceXObjects(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUAReferenceXObjects(d core.View) []Violation {
+	var v []Violation
 	walkAllDicts(d, func(dict *object.Dictionary, num int) {
 		if st, _ := dict.Get("Subtype").(object.Name); st != "Form" {
 			return
@@ -905,7 +905,7 @@ func checkUAReferenceXObjects(d core.View) []UAViolation {
 			return
 		}
 		if dict.Get("Ref") != nil {
-			v = append(v, UAViolation{"7.20", "reference XObject (Form XObject with /Ref) is not permitted", num})
+			v = append(v, Violation{"7.20", "reference XObject (Form XObject with /Ref) is not permitted", num})
 		}
 	})
 	return v
@@ -915,19 +915,19 @@ func checkUAReferenceXObjects(d core.View) []UAViolation {
 // to carry both the /CT (content type) and /Alt (alternate text) keys
 // (7.18.6.2). Media clips are typically inline dictionaries nested inside a
 // Screen annotation's Rendition action, so the whole object graph is walked.
-func checkUAMediaClips(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUAMediaClips(d core.View) []Violation {
+	var v []Violation
 	walkAllDicts(d, func(mc *object.Dictionary, num int) {
 		if t, _ := mc.Get("Type").(object.Name); t != "MediaClip" {
 			return
 		}
 		if mc.Get("CT") == nil {
-			v = append(v, UAViolation{"7.18.6.2", "media clip data dictionary has no /CT (content type)", num})
+			v = append(v, Violation{"7.18.6.2", "media clip data dictionary has no /CT (content type)", num})
 		}
 		if mc.Get("Alt") == nil {
-			v = append(v, UAViolation{"7.18.6.2", "media clip data dictionary has no /Alt (alternate text)", num})
+			v = append(v, Violation{"7.18.6.2", "media clip data dictionary has no /Alt (alternate text)", num})
 		} else if !altArrayHasText(d, mc.Get("Alt")) {
-			v = append(v, UAViolation{"7.18.6.2", "media clip data dictionary /Alt is empty", num})
+			v = append(v, Violation{"7.18.6.2", "media clip data dictionary /Alt is empty", num})
 		}
 	})
 	return v
@@ -999,14 +999,14 @@ func walkAllDicts(d core.View, fn func(dict *object.Dictionary, objNum int)) {
 // structure element — is a syntactically valid BCP 47 language tag (7.2, CosLang
 // rule of the UA profile). An empty /Lang is permitted (it defers to an
 // ancestor); a present but malformed tag is not.
-func checkUALang(d core.View, cat *object.Dictionary) []UAViolation {
-	var v []UAViolation
+func checkUALang(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
 	if s, ok := d.Resolve(cat.Get("Lang")).(object.String); ok && len(s.Value) > 0 && !core.ValidBCP47(string(s.Value)) {
-		v = append(v, UAViolation{"7.2", "catalog /Lang " + quote(string(s.Value)) + " is not a valid language identifier", 0})
+		v = append(v, Violation{"7.2", "catalog /Lang " + quote(string(s.Value)) + " is not a valid language identifier", 0})
 	}
 	walkStructElems(d, cat, func(elem *object.Dictionary, _ object.Name) {
 		if s, ok := d.Resolve(elem.Get("Lang")).(object.String); ok && len(s.Value) > 0 && !core.ValidBCP47(string(s.Value)) {
-			v = append(v, UAViolation{"7.2", "structure element /Lang " + quote(string(s.Value)) + " is not a valid language identifier", 0})
+			v = append(v, Violation{"7.2", "structure element /Lang " + quote(string(s.Value)) + " is not a valid language identifier", 0})
 		}
 	})
 	return v
@@ -1018,21 +1018,21 @@ func quote(s string) string { return "\"" + s + "\"" }
 // requirements (7.10): every OC configuration dictionary — the /D default and
 // each entry of /Configs — must carry a non-empty /Name and must not contain an
 // /AS key (which would make visibility depend on usage/state).
-func checkUAOptionalContent(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUAOptionalContent(d core.View, cat *object.Dictionary) []Violation {
 	ocp := d.ResolveDict(cat.Get("OCProperties"))
 	if ocp == nil {
 		return nil
 	}
-	var v []UAViolation
+	var v []Violation
 	check := func(cfg *object.Dictionary) {
 		if cfg == nil {
 			return
 		}
 		if name, _ := d.Resolve(cfg.Get("Name")).(object.String); len(name.Value) == 0 {
-			v = append(v, UAViolation{"7.10", "optional-content configuration dictionary has no non-empty /Name", 0})
+			v = append(v, Violation{"7.10", "optional-content configuration dictionary has no non-empty /Name", 0})
 		}
 		if cfg.Get("AS") != nil {
-			v = append(v, UAViolation{"7.10", "optional-content configuration dictionary must not contain an /AS key", 0})
+			v = append(v, Violation{"7.10", "optional-content configuration dictionary must not contain an /AS key", 0})
 		}
 	}
 	check(d.ResolveDict(ocp.Get("D")))
@@ -1046,8 +1046,8 @@ func checkUAOptionalContent(d core.View, cat *object.Dictionary) []UAViolation {
 
 // checkUAEmbeddedFiles requires every embedded-file specification (a file spec
 // with an /EF entry) to carry non-empty /F and /UF file names (7.11).
-func checkUAEmbeddedFiles(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUAEmbeddedFiles(d core.View) []Violation {
+	var v []Violation
 	for num, iobj := range d.Objects {
 		fs, ok := iobj.Value.(*object.Dictionary)
 		if !ok || fs.Get("EF") == nil {
@@ -1059,7 +1059,7 @@ func checkUAEmbeddedFiles(d core.View) []UAViolation {
 		f, _ := d.Resolve(fs.Get("F")).(object.String)
 		uf, _ := d.Resolve(fs.Get("UF")).(object.String)
 		if len(f.Value) == 0 || len(uf.Value) == 0 {
-			v = append(v, UAViolation{"7.11", "embedded-file specification must have non-empty /F and /UF keys", num})
+			v = append(v, Violation{"7.11", "embedded-file specification must have non-empty /F and /UF keys", num})
 		}
 	}
 	return v
@@ -1087,12 +1087,12 @@ func effectiveFieldTU(d core.View, a *object.Dictionary) []byte {
 // (a /Widget with no /T, i.e. not itself a named sub-field) carries a /TU, the
 // description is misplaced. A widget child that is a named sub-field (has /T) is
 // exempt, as is a field that supplies its own /TU.
-func checkUAFieldDescription(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUAFieldDescription(d core.View, cat *object.Dictionary) []Violation {
 	form := d.ResolveDict(cat.Get("AcroForm"))
 	if form == nil {
 		return nil
 	}
-	var v []UAViolation
+	var v []Violation
 	seen := map[int]bool{}
 	var walk func(node object.Object)
 	walk = func(node object.Object) {
@@ -1119,7 +1119,7 @@ func checkUAFieldDescription(d core.View, cat *object.Dictionary) []UAViolation 
 				kt, _ := d.Resolve(kd.Get("T")).(object.String)
 				ktu, _ := d.Resolve(kd.Get("TU")).(object.String)
 				if st == "Widget" && len(kt.Value) == 0 && len(ktu.Value) > 0 {
-					v = append(v, UAViolation{"7.18.1", "form field has no /TU; its accessible description is misplaced on a widget annotation", d.DictObjNum(fd)})
+					v = append(v, Violation{"7.18.1", "form field has no /TU; its accessible description is misplaced on a widget annotation", d.DictObjNum(fd)})
 					break
 				}
 			}
@@ -1138,7 +1138,7 @@ func checkUAFieldDescription(d core.View, cat *object.Dictionary) []UAViolation 
 
 // checkUAXFA flags a dynamic XFA form (dynamicRender = required), which PDF/UA
 // forbids (Matterhorn 25-001).
-func checkUAXFA(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUAXFA(d core.View, cat *object.Dictionary) []Violation {
 	form := d.ResolveDict(cat.Get("AcroForm"))
 	if form == nil {
 		return nil
@@ -1155,7 +1155,7 @@ func checkUAXFA(d core.View, cat *object.Dictionary) []UAViolation {
 		}
 	}
 	if dynamicXFARequired(xfa) {
-		return []UAViolation{{"7.15", "dynamic XFA forms are not permitted (dynamicRender required)", 0}}
+		return []Violation{{"7.15", "dynamic XFA forms are not permitted (dynamicRender required)", 0}}
 	}
 	return nil
 }
@@ -1176,13 +1176,13 @@ func bytesIndexFold(b []byte, sub string) int {
 // checkUATitle requires the XMP metadata to carry a document title (dc:title),
 // which together with /DisplayDocTitle makes assistive tools announce the title
 // rather than the file name (Matterhorn checkpoint 06).
-func checkUATitle(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUATitle(d core.View, cat *object.Dictionary) []Violation {
 	stream, ok := d.Resolve(cat.Get("Metadata")).(*object.Stream)
 	if !ok {
 		return nil // absence of metadata is already reported by the identifier check
 	}
 	if !strings.Contains(d.XMPText(stream), "dc:title") {
-		return []UAViolation{{"7.1", "XMP metadata has no document title (dc:title)", 0}}
+		return []Violation{{"7.1", "XMP metadata has no document title (dc:title)", 0}}
 	}
 	return nil
 }
@@ -1190,8 +1190,8 @@ func checkUATitle(d core.View, cat *object.Dictionary) []UAViolation {
 // checkUAFonts flags fonts used for rendering but not embedded. It considers
 // only fonts actually shown (the executed-content model), so unused or invisible
 // font dictionaries are not false-flagged.
-func checkUAFonts(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUAFonts(d core.View) []Violation {
+	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
 		st, _ := fontDict.Get("Subtype").(object.Name)
 		if st == "Type3" {
@@ -1206,7 +1206,7 @@ func checkUAFonts(d core.View) []UAViolation {
 			}
 		}
 		if !embedded {
-			v = append(v, UAViolation{"7.21.4.1", "font used for rendering is not embedded", d.DictObjNum(fontDict)})
+			v = append(v, Violation{"7.21.4.1", "font used for rendering is not embedded", d.DictObjNum(fontDict)})
 		}
 	}
 	return v
@@ -1216,8 +1216,8 @@ func checkUAFonts(d core.View) []UAViolation {
 // be mapped to Unicode. The clear, false-positive-free case: a composite
 // (Type0) font with Identity encoding and no ToUnicode CMap — its codes are
 // CIDs with no defined Unicode mapping (Matterhorn 10-001).
-func checkUACharMapping(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUACharMapping(d core.View) []Violation {
+	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
 		if fontDict.Get("ToUnicode") != nil {
 			continue
@@ -1226,7 +1226,7 @@ func checkUACharMapping(d core.View) []UAViolation {
 			continue
 		}
 		if enc, _ := d.Resolve(fontDict.Get("Encoding")).(object.Name); enc == "Identity-H" || enc == "Identity-V" {
-			v = append(v, UAViolation{"7.2", "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", d.DictObjNum(fontDict)})
+			v = append(v, Violation{"7.2", "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", d.DictObjNum(fontDict)})
 		}
 	}
 	return v
@@ -1237,8 +1237,8 @@ func checkUACharMapping(d core.View) []UAViolation {
 //   - 7.21.3.2 an embedded CIDFontType2 must carry a /CIDToGIDMap;
 //   - 7.21.6   a symbolic TrueType font must not have an /Encoding entry, and a
 //     non-symbolic one must use MacRomanEncoding or WinAnsiEncoding.
-func checkUAFontDicts(d core.View) []UAViolation {
-	var v []UAViolation
+func checkUAFontDicts(d core.View) []Violation {
+	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
 		v = append(v, checkOneUAFontDict(d, fontDict)...)
 	}
@@ -1247,8 +1247,8 @@ func checkUAFontDicts(d core.View) []UAViolation {
 
 // checkOneUAFontDict applies the dictionary-level clause 7.21 rules to a single
 // font dictionary.
-func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []UAViolation {
-	var v []UAViolation
+func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []Violation {
+	var v []Violation
 	st, _ := fontDict.Get("Subtype").(object.Name)
 	num := d.DictObjNum(fontDict)
 	switch st {
@@ -1263,12 +1263,12 @@ func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []UAViolation 
 		}
 		cst, _ := cid.Get("Subtype").(object.Name)
 		if cst == "CIDFontType2" && fontProgramEmbedded(d, cid) && cid.Get("CIDToGIDMap") == nil {
-			v = append(v, UAViolation{"7.21.3.2", "embedded CIDFontType2 font has no /CIDToGIDMap", num})
+			v = append(v, Violation{"7.21.3.2", "embedded CIDFontType2 font has no /CIDToGIDMap", num})
 		}
 		// /CIDToGIDMap, when it is a name, must be exactly "Identity"; any other
 		// name (e.g. "NoIdentity" or empty) is invalid (ISO 32000-1 9.7.4.3).
 		if m, ok := d.Resolve(cid.Get("CIDToGIDMap")).(object.Name); ok && m != "Identity" {
-			v = append(v, UAViolation{"7.21.3.2", "/CIDToGIDMap name value must be Identity, got /" + string(m), num})
+			v = append(v, Violation{"7.21.3.2", "/CIDToGIDMap name value must be Identity, got /" + string(m), num})
 		}
 	case "TrueType":
 		symbolic := fontIsSymbolic(d, fontDict)
@@ -1276,7 +1276,7 @@ func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []UAViolation 
 		if symbolic {
 			if enc != nil {
 				if _, isNull := enc.(object.Null); !isNull {
-					v = append(v, UAViolation{"7.21.6", "symbolic TrueType font must not contain an /Encoding entry", num})
+					v = append(v, Violation{"7.21.6", "symbolic TrueType font must not contain an /Encoding entry", num})
 				}
 			}
 			return v
@@ -1286,7 +1286,7 @@ func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []UAViolation 
 			base, _ = ed.Get("BaseEncoding").(object.Name)
 		}
 		if base != "MacRomanEncoding" && base != "WinAnsiEncoding" {
-			v = append(v, UAViolation{"7.21.6", "non-symbolic TrueType font must use MacRomanEncoding or WinAnsiEncoding", num})
+			v = append(v, Violation{"7.21.6", "non-symbolic TrueType font must use MacRomanEncoding or WinAnsiEncoding", num})
 		}
 	}
 	return v
@@ -1313,8 +1313,8 @@ func fontProgramEmbedded(d core.View, font *object.Dictionary) bool {
 
 // checkFigureAlt walks the structure tree and flags Figure elements that carry
 // neither /Alt nor /ActualText.
-func checkFigureAlt(d core.View, cat *object.Dictionary) []UAViolation {
-	var v []UAViolation
+func checkFigureAlt(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
 	for _, n := range structTree(d, cat) {
 		if n.rawS != "Figure" {
 			continue
@@ -1322,16 +1322,16 @@ func checkFigureAlt(d core.View, cat *object.Dictionary) []UAViolation {
 		alt, _ := d.Resolve(n.elem.Get("Alt")).(object.String)
 		actual, _ := d.Resolve(n.elem.Get("ActualText")).(object.String)
 		if len(alt.Value) == 0 && len(actual.Value) == 0 {
-			v = append(v, UAViolation{"7.3", "figure structure element has no non-empty alternate text (/Alt or /ActualText)", 0})
+			v = append(v, Violation{"7.3", "figure structure element has no non-empty alternate text (/Alt or /ActualText)", 0})
 		}
 	}
 	return v
 }
 
-func RunCheck(check func() []UAViolation) (out []UAViolation) {
+func RunCheck(check func() []Violation) (out []Violation) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []UAViolation{{Clause: finding.InternalRule, Message: finding.InternalMessage(r)}}
+			out = []Violation{{Clause: finding.InternalRule, Message: finding.InternalMessage(r)}}
 		}
 	}()
 	return check()

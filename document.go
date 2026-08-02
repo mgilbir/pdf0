@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
 	"io"
 	"sort"
@@ -27,9 +28,9 @@ import (
 
 // Document represents a parsed PDF file.
 type Document struct {
-	Version string                  // e.g., "2.0"
-	Objects map[int]*IndirectObject // object number → object
-	Trailer Dictionary
+	Version string                         // e.g., "2.0"
+	Objects map[int]*object.IndirectObject // object number → object
+	Trailer object.Dictionary
 	// Encrypted reports whether the file carried an /Encrypt dictionary.
 	// Standard-security-handler files with the empty user password are decrypted
 	// on Read (RC4, AES-128, and AES-256); their strings and streams are then in
@@ -153,7 +154,7 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	}
 
 	doc = &Document{
-		Objects:    make(map[int]*IndirectObject),
+		Objects:    make(map[int]*object.IndirectObject),
 		limits:     lim,
 		readLimits: &core.Recorder{},
 	}
@@ -249,12 +250,12 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		}
 		if first {
 			doc.Trailer = *sectionTrailer
-			if t, _ := sectionTrailer.Get("Type").(Name); t == "XRef" {
+			if t, _ := sectionTrailer.Get("Type").(object.Name); t == "XRef" {
 				doc.usedXRefStream = true
 			}
 			first = false
 		}
-		prevOffset, ok := sectionTrailer.Get("Prev").(Integer)
+		prevOffset, ok := sectionTrailer.Get("Prev").(object.Integer)
 		if !ok {
 			break
 		}
@@ -287,7 +288,7 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 			return nil, err
 		}
 		xrefTable, rebuilt = t, true
-		doc.Objects = make(map[int]*IndirectObject)
+		doc.Objects = make(map[int]*object.IndirectObject)
 		if err2 := doc.loadObjectsFromXref(cancel, data, size, xrefTable, 0, true); err2 != nil {
 			return nil, err
 		}
@@ -303,9 +304,9 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		}
 		sort.Ints(nums)
 		for _, num := range nums {
-			if d, ok := doc.Objects[num].Value.(*Dictionary); ok {
-				if t, _ := d.Get("Type").(Name); t == "Catalog" {
-					doc.Trailer.Set("Root", IndirectRef{Number: num})
+			if d, ok := doc.Objects[num].Value.(*object.Dictionary); ok {
+				if t, _ := d.Get("Type").(object.Name); t == "Catalog" {
+					doc.Trailer.Set("Root", object.IndirectRef{Number: num})
 					break
 				}
 			}
@@ -371,7 +372,7 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 	// once bounds the work to the file's real content. Parsing identical bytes
 	// always yields an identical object, so the shared value is correct; the
 	// per-number wrapper still carries the authoritative object number.
-	parsedByOffset := make(map[int64]*IndirectObject)
+	parsedByOffset := make(map[int64]*object.IndirectObject)
 	// resolveLen resolves an indirect stream /Length by seeking to the length
 	// object via the cross-reference table and reading its integer value. This
 	// lets a stream with a (frequently forward-referenced) indirect /Length be
@@ -379,7 +380,7 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 	// can over-read pathologically when binary data ends in a non-whitespace
 	// byte (see parseStream). A fresh parser with no resolver is used so a
 	// length object cannot itself trigger recursive length resolution.
-	resolveLen := func(ref IndirectRef) (int64, bool) {
+	resolveLen := func(ref object.IndirectRef) (int64, bool) {
 		ent, ok := xrefTable.Entries[ref.Number]
 		if !ok || ent.Free || ent.Compressed {
 			return 0, false
@@ -428,7 +429,7 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 		if prev, ok := parsedByOffset[off]; ok {
 			// Same bytes already parsed under another number: reuse the value
 			// rather than re-parsing (and re-allocating any stream data).
-			doc.Objects[num] = &IndirectObject{Number: num, Generation: prev.Generation, Value: prev.Value}
+			doc.Objects[num] = &object.IndirectObject{Number: num, Generation: prev.Generation, Value: prev.Value}
 			continue
 		}
 		lexer.SetPosition(off)
@@ -463,8 +464,8 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 // regenerates the cross-reference structure and /Size, so nothing is lost.
 func (d *Document) normalizeStructure() {
 	for num, iobj := range d.Objects {
-		if stream, ok := iobj.Value.(*Stream); ok {
-			if t, ok := stream.Dict.Get("Type").(Name); ok && (t == "XRef" || t == "ObjStm") {
+		if stream, ok := iobj.Value.(*object.Stream); ok {
+			if t, ok := stream.Dict.Get("Type").(object.Name); ok && (t == "XRef" || t == "ObjStm") {
 				delete(d.Objects, num)
 				// Drop the byte offset too: leaving it in d.Offsets makes the
 				// byte-level file-structure checks treat the removed object's
@@ -476,7 +477,7 @@ func (d *Document) normalizeStructure() {
 		}
 	}
 	trailer := d.Trailer.Clone()
-	for _, key := range []Name{"Type", "W", "Index", "Filter", "DecodeParms", "Length", "Prev", "XRefStm", "Size"} {
+	for _, key := range []object.Name{"Type", "W", "Index", "Filter", "DecodeParms", "Length", "Prev", "XRefStm", "Size"} {
 		trailer.Delete(key)
 	}
 	d.Trailer = *trailer
@@ -486,7 +487,7 @@ func (d *Document) normalizeStructure() {
 // followed by its trailer, or an xref stream) at the given absolute offset.
 // For xref streams the stream dictionary doubles as the trailer, and the
 // stream object itself is recorded in doc.Objects.
-func parseXRefSection(cancel core.Canceler, data []byte, offset int64, doc *Document) (*XRefTable, *Dictionary, error) {
+func parseXRefSection(cancel core.Canceler, data []byte, offset int64, doc *Document) (*XRefTable, *object.Dictionary, error) {
 	lexer := NewLexer(data)
 	lexer.SetPosition(offset)
 	tok, err := lexer.NextToken()
@@ -495,7 +496,7 @@ func parseXRefSection(cancel core.Canceler, data []byte, offset int64, doc *Docu
 	}
 
 	switch tok.Type {
-	case TokenXref:
+	case syntax.TokenXref:
 		table, err := ParseXRefTable(data, lexer.Position())
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing xref table: %w", err)
@@ -506,7 +507,7 @@ func parseXRefSection(cancel core.Canceler, data []byte, offset int64, doc *Docu
 		}
 		return table, trailer, nil
 
-	case TokenInteger:
+	case syntax.TokenInteger:
 		// Xref stream: the xref is an indirect object containing a stream
 		lexer.SetPosition(offset)
 		parser := NewParserFromLexer(lexer)
@@ -514,7 +515,7 @@ func parseXRefSection(cancel core.Canceler, data []byte, offset int64, doc *Docu
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing xref stream object: %w", err)
 		}
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			return nil, nil, fmt.Errorf("xref stream object is not a stream")
 		}
@@ -609,7 +610,7 @@ func findStartXref(data []byte) (int64, error) {
 }
 
 // findTrailer finds and parses the trailer dictionary after xref entries.
-func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
+func findTrailer(data []byte, afterPos int64) (*object.Dictionary, error) {
 	// Search for "trailer" keyword after the given position
 	searchData := data[afterPos:]
 	idx := bytes.Index(searchData, []byte("trailer"))
@@ -626,7 +627,7 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 		return nil, fmt.Errorf("parsing trailer dictionary: %w", err)
 	}
 
-	dict, ok := obj.(*Dictionary)
+	dict, ok := obj.(*object.Dictionary)
 	if !ok {
 		return nil, fmt.Errorf("trailer value is not a dictionary, got %T", obj)
 	}
@@ -733,8 +734,8 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// after encryption, since AES padding changes the length (audit C8).
 	lengthOverrides := make(map[int]int64)
 	for _, iobj := range writeObjects {
-		if stream, ok := iobj.Value.(*Stream); ok {
-			if ref, isRef := stream.Dict.Get("Length").(IndirectRef); isRef {
+		if stream, ok := iobj.Value.(*object.Stream); ok {
+			if ref, isRef := stream.Dict.Get("Length").(object.IndirectRef); isRef {
 				n := int64(len(stream.Data))
 				// Two streams pointing their /Length at one integer object with
 				// different data lengths cannot both be represented; overriding it
@@ -777,9 +778,9 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 		offsets[num] = s.Offset()
 		iobj := writeObjects[num]
 		if newLen, ok := lengthOverrides[num]; ok {
-			if _, isInt := iobj.Value.(Integer); isInt {
+			if _, isInt := iobj.Value.(object.Integer); isInt {
 				// Emit the corrected length without mutating the caller's object.
-				iobj = &IndirectObject{Number: iobj.Number, Generation: iobj.Generation, Value: Integer(newLen)}
+				iobj = &object.IndirectObject{Number: iobj.Number, Generation: iobj.Generation, Value: object.Integer(newLen)}
 			}
 		}
 		if err := s.WriteIndirectObject(iobj); err != nil {
@@ -809,7 +810,7 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 		// Clone so setting Size doesn't mutate the caller's Document.Trailer
 		// (Dictionary shares its backing slices on a plain struct copy).
 		trailer := d.Trailer.Clone()
-		trailer.Set("Size", Integer(maxObj+1))
+		trailer.Set("Size", object.Integer(maxObj+1))
 		if err := s.WriteString("trailer\n"); err != nil {
 			return err
 		}
@@ -833,7 +834,7 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 // object numbered xrefObjNum (which lands at the current serializer offset, so
 // its own entry points there). Trailer keys (/Root, /Info, /ID, /Encrypt) carry
 // into the stream dictionary. The binary entries are FlateDecode-compressed.
-func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject, type2 map[int][2]int, trailer *Dictionary, xrefObjNum int) error {
+func writeXRefStream(s *syntax.Serializer, objNums []int, offsets map[int]int64, objects map[int]*object.IndirectObject, type2 map[int][2]int, trailer *object.Dictionary, xrefObjNum int) error {
 	offsets[xrefObjNum] = s.Offset()
 
 	// Entry set: the free-list head (object 0), every written object (including
@@ -914,26 +915,26 @@ func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, object
 	}
 
 	// /Index: [start count ...] over contiguous runs of object numbers.
-	var index Array
+	var index object.Array
 	for i := 0; i < len(nums); {
 		j := i
 		for j+1 < len(nums) && nums[j+1] == nums[j]+1 {
 			j++
 		}
-		index = append(index, Integer(nums[i]), Integer(j-i+1))
+		index = append(index, object.Integer(nums[i]), object.Integer(j-i+1))
 		i = j + 1
 	}
 
 	dict := trailer.Clone()
-	dict.Set("Type", Name("XRef"))
-	dict.Set("Size", Integer(xrefObjNum+1))
-	dict.Set("W", Array{Integer(w[0]), Integer(w[1]), Integer(w[2])})
+	dict.Set("Type", object.Name("XRef"))
+	dict.Set("Size", object.Integer(xrefObjNum+1))
+	dict.Set("W", object.Array{object.Integer(w[0]), object.Integer(w[1]), object.Integer(w[2])})
 	dict.Set("Index", index)
 	encoded := core.FlateEncode(body.Bytes())
-	dict.Set("Filter", Name("FlateDecode"))
-	dict.Set("Length", Integer(len(encoded)))
+	dict.Set("Filter", object.Name("FlateDecode"))
+	dict.Set("Length", object.Integer(len(encoded)))
 
-	return s.WriteIndirectObject(&IndirectObject{Number: xrefObjNum, Value: &Stream{Dict: *dict, Data: encoded}})
+	return s.WriteIndirectObject(&object.IndirectObject{Number: xrefObjNum, Value: &object.Stream{Dict: *dict, Data: encoded}})
 }
 
 // byteWidth returns the number of bytes needed to hold v (at least 1).
@@ -950,7 +951,7 @@ func byteWidth(v uint64) int {
 // balloon the table with fabricated free entries whose free-list linkage
 // would then have to be maintained. The only free entry is the list head
 // (object 0, generation 65535, next-free 0: the canonical empty list).
-func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject) error {
+func writeXRefTable(s *syntax.Serializer, objNums []int, offsets map[int]int64, objects map[int]*object.IndirectObject) error {
 	if err := s.WriteString("xref\n"); err != nil {
 		return err
 	}
@@ -1006,12 +1007,12 @@ func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects
 // references (a legal indirect object whose value is itself a reference).
 // Returns the object unchanged if it is not an IndirectRef, and nil if any
 // target in the chain does not exist or the chain cycles.
-func (d *Document) Resolve(obj Object) Object {
+func (d *Document) Resolve(obj object.Object) object.Object {
 	return d.graph().Resolve(obj)
 }
 
 // ResolveDict resolves obj and type-asserts to *Dictionary.
-func (d *Document) ResolveDict(obj Object) *Dictionary {
+func (d *Document) ResolveDict(obj object.Object) *object.Dictionary {
 	return d.graph().ResolveDict(obj)
 }
 

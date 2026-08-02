@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/pdfx"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,10 +62,10 @@ func fuzzReferencePDFs() []string {
 func exercise(doc *Document, data []byte) {
 	_ = doc.PageCount()
 	_ = ValidatePDFUA(doc)
-	for _, lvl := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
+	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		_ = ValidatePDFABytes(doc, lvl, data)
 	}
-	_ = ValidatePDFX(doc, PDFX4)
+	_ = ValidatePDFX(doc, pdfx.PDFX4)
 	_ = ValidatePDFVT(doc)
 	_ = ValidateDParts(doc)
 	if fx := ValidateFacturX(doc, data); len(fx.XML) > 0 {

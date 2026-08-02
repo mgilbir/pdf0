@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -20,13 +21,13 @@ func abs(x int) int {
 	return x
 }
 
-func jpegWithDecode(t *testing.T, w, h, bpc int, cs string, jb []byte, decode Array) image.Image {
+func jpegWithDecode(t *testing.T, w, h, bpc int, cs string, jb []byte, decode object.Array) image.Image {
 	t.Helper()
 	st := imageXObject(w, h, bpc, cs, "DCTDecode", jb)
 	if decode != nil {
 		st.Dict.Set("Decode", decode)
 	}
-	d := imageDoc(map[string]*Stream{"Jpeg": st})
+	d := imageDoc(map[string]*object.Stream{"Jpeg": st})
 	imgs := d.ExtractImages()
 	if len(imgs) != 1 {
 		t.Fatalf("expected 1 image, got %d", len(imgs))
@@ -58,7 +59,7 @@ func TestJPEGDecodeInvertGray(t *testing.T) {
 	}
 
 	ctrl := jpegWithDecode(t, 8, 8, 8, "DeviceGray", jb.Bytes(), nil)
-	inv := jpegWithDecode(t, 8, 8, 8, "DeviceGray", jb.Bytes(), Array{Integer(1), Integer(0)})
+	inv := jpegWithDecode(t, 8, 8, 8, "DeviceGray", jb.Bytes(), object.Array{object.Integer(1), object.Integer(0)})
 
 	for y := 0; y < 8; y++ {
 		for x := 0; x < 8; x++ {
@@ -87,7 +88,7 @@ func TestJPEGDecodeInvertRGB(t *testing.T) {
 
 	ctrl := jpegWithDecode(t, 8, 8, 8, "DeviceRGB", jb.Bytes(), nil)
 	inv := jpegWithDecode(t, 8, 8, 8, "DeviceRGB", jb.Bytes(),
-		Array{Integer(1), Integer(0), Integer(1), Integer(0), Integer(1), Integer(0)})
+		object.Array{object.Integer(1), object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1), object.Integer(0)})
 
 	for y := 0; y < 8; y++ {
 		for x := 0; x < 8; x++ {
@@ -118,7 +119,7 @@ func TestJPEGDecodeIdentityUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := jpegWithDecode(t, 4, 4, 8, "DeviceGray", jb.Bytes(), nil)
-	ident := jpegWithDecode(t, 4, 4, 8, "DeviceGray", jb.Bytes(), Array{Integer(0), Integer(1)})
+	ident := jpegWithDecode(t, 4, 4, 8, "DeviceGray", jb.Bytes(), object.Array{object.Integer(0), object.Integer(1)})
 	if _, ok := ident.(*image.Gray); !ok {
 		t.Fatalf("identity /Decode should leave *image.Gray unchanged, got %T", ident)
 	}

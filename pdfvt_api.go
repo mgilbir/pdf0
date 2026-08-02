@@ -12,20 +12,17 @@ import (
 // through a core.View; this is the boundary that starts the run and reports the
 // guards that tripped while the file was read.
 
-// PDFVTViolation is a PDF/VT conformance failure.
-type PDFVTViolation = pdfvt.PDFVTViolation
-
 // ValidatePDFVT checks whether doc conforms to PDF/VT-1 (ISO 16612-2). It
 // requires conformance to the PDF/X-4 base profile, a valid document part
 // hierarchy, and PDF/VT-1 identification in XMP. An empty result means no
 // violations were found.
-func ValidatePDFVT(doc *Document) []PDFVTViolation {
+func ValidatePDFVT(doc *Document) []pdfvt.Violation {
 	return validatePDFVTImpl(core.Canceler{}, doc, "PDF/VT-1", false)
 }
 
 // ValidatePDFVTContext is ValidatePDFVT with cancellation; a cancelled run
 // reports itself under the rule "limit" (see cancel.go).
-func ValidatePDFVTContext(ctx context.Context, doc *Document) []PDFVTViolation {
+func ValidatePDFVTContext(ctx context.Context, doc *Document) []pdfvt.Violation {
 	return validatePDFVTImpl(core.NewCanceler(ctx), doc, "PDF/VT-1", false)
 }
 
@@ -35,17 +32,17 @@ func ValidatePDFVTContext(ctx context.Context, doc *Document) []PDFVTViolation {
 // PDF/VT-1. pdf0 has no PDF/X-5 validator, so the PDF/X-4 base is used with the
 // reference-XObject prohibition relaxed — the PDF/X-5-specific external-reference
 // rules are not asserted.
-func ValidatePDFVT2(doc *Document) []PDFVTViolation {
+func ValidatePDFVT2(doc *Document) []pdfvt.Violation {
 	return validatePDFVTImpl(core.Canceler{}, doc, "PDF/VT-2", true)
 }
 
 // ValidatePDFVT2Context is ValidatePDFVT2 with cancellation; a cancelled run
 // reports itself under the rule "limit" (see cancel.go).
-func ValidatePDFVT2Context(ctx context.Context, doc *Document) []PDFVTViolation {
+func ValidatePDFVT2Context(ctx context.Context, doc *Document) []pdfvt.Violation {
 	return validatePDFVTImpl(core.NewCanceler(ctx), doc, "PDF/VT-2", true)
 }
 
-func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
+func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string, allowRefXObjects bool) []pdfvt.Violation {
 	// This is the boundary: the checks below read a view.
 	rd := beginRunCancel(doc, cancel)
 	out := pdfvt.ValidateView(rd.view(), versionPrefix, allowRefXObjects)
@@ -53,7 +50,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, versionPrefix string
 	// Guard trips are reported under their own rule; read-time trips live on
 	// the Document, so this is here.
 	add := func(rule, msg string, obj int) {
-		out = append(out, PDFVTViolation{Rule: rule, Message: msg, Object: obj})
+		out = append(out, pdfvt.Violation{Rule: rule, Message: msg, Object: obj})
 	}
 	reportLimits(rd, add)
 	finding.Sort(out)

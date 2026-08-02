@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/sign"
 	"sort"
 	"strings"
@@ -21,7 +22,7 @@ import (
 // time-stamp added to a document that already had a "Timestamp1" field
 // collided with it. The signing path had already grown a free-name scan;
 // the time-stamp path did not use it. Duplicate names are not only invalid —
-// they defeat SignatureResult.Field and PAdESResult.Field, whose whole job is
+// they defeat sign.Result.Field and sign.PAdESResult.Field, whose whole job is
 // to say which field a result belongs to.
 
 // buildPDFWithNamedField builds a one-page document carrying a single
@@ -57,7 +58,7 @@ func allFieldNames(t *testing.T, d *Document) []string {
 	t.Helper()
 	var names []string
 	for _, iobj := range d.Objects {
-		fd, ok := iobj.Value.(*Dictionary)
+		fd, ok := iobj.Value.(*object.Dictionary)
 		if !ok || (fd.Get("FT") == nil && fd.Get("V") == nil) {
 			continue
 		}
@@ -198,7 +199,7 @@ func TestSignatureThenTimestampNames(t *testing.T) {
 	if strings.Join(got, ",") != "Signature1,Timestamp1" {
 		t.Errorf("/AcroForm /Fields = %v, want [Signature1 Timestamp1]", got)
 	}
-	if res := d2.ValidatePAdES(o2); len(res) != 1 || res[0].Field != "Signature1" || res[0].Level != PAdESBLTA {
+	if res := d2.ValidatePAdES(o2); len(res) != 1 || res[0].Field != "Signature1" || res[0].Level != sign.PAdESBLTA {
 		t.Errorf("ValidatePAdES = %+v, want one B-LTA result for Signature1", res)
 	}
 }

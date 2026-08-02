@@ -46,12 +46,12 @@ func uaMemo(d core.View) *uaCache {
 	return c
 }
 
-func checkUARealContent(d core.View, cat *object.Dictionary) []UAViolation {
-	var v []UAViolation
+func checkUARealContent(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
 	for _, pg := range d.Pages(cat.Get("Pages")) {
 		data, key := d.ContentBytesAndKey(pg.Dict.Get("Contents"))
 		for _, msg := range contentFacts(d, data, key).realMsgs {
-			v = append(v, UAViolation{"7.1", msg, pg.ObjNum})
+			v = append(v, Violation{"7.1", msg, pg.ObjNum})
 		}
 	}
 	return v
@@ -182,7 +182,7 @@ func buildContentFacts(cancel core.Canceler, content []byte) *streamContentFacts
 // (contains an /MCID marked-content sequence) must be painted at most once. If
 // it is invoked by more than one Do operator, a single structure element would
 // map to several renderings, breaking the one-to-one structure/content mapping.
-func checkUAFormXObjectMCID(d core.View) []UAViolation {
+func checkUAFormXObjectMCID(d core.View) []Violation {
 	mcidForm := map[int]bool{}
 	for num, iobj := range d.Objects {
 		s, ok := iobj.Value.(*object.Stream)
@@ -242,10 +242,10 @@ func checkUAFormXObjectMCID(d core.View) []UAViolation {
 		countDo(d.Content(s), s, d.ResolveDict(s.Dict.Get("Resources")))
 	}
 
-	var v []UAViolation
+	var v []Violation
 	for _, num := range sortedInts(mcidForm) {
 		if doCount[num] > 1 {
-			v = append(v, UAViolation{"7.20", "a form XObject containing marked content (/MCID) is painted by more than one Do operator", num})
+			v = append(v, Violation{"7.20", "a form XObject containing marked content (/MCID) is painted by more than one Do operator", num})
 		}
 	}
 	return v
@@ -298,7 +298,7 @@ func sortedInts(m map[int]bool) []int {
 // enclosing structure element: a Widget must sit under <Form>, a Link under
 // <Link>, and any other annotation under <Annot> (Matterhorn 28-002/010/011).
 // Annotations not reachable through an OBJR are left to the tagging check.
-func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []UAViolation {
+func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
 		return nil
@@ -343,7 +343,7 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []UAViolation {
 	}
 	walk(root.Get("K"), "")
 
-	var v []UAViolation
+	var v []Violation
 	for num, iobj := range d.Objects {
 		a, ok := iobj.Value.(*object.Dictionary)
 		if !ok || !core.IsAnnotation(a) {
@@ -368,7 +368,7 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []UAViolation {
 			want = "Link"
 		}
 		if parent != want {
-			v = append(v, UAViolation{"7.18.1", "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", num})
+			v = append(v, Violation{"7.18.1", "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", num})
 		}
 	}
 	return v

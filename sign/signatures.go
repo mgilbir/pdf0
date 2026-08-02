@@ -32,7 +32,7 @@ import (
 // the same claim as an unmodified document: the digest says nothing about bytes
 // outside the signed range, so coverage is established separately.
 
-// SignatureResult reports the outcome of verifying one signature field.
+// Result reports the outcome of verifying one signature field.
 //
 // Valid and CoversWholeDocument are independent and must both be consulted:
 // Valid says the bytes inside the signed /ByteRange are intact and were signed
@@ -41,7 +41,7 @@ import (
 // update — the original signed range stays intact (Valid == true) while the
 // rendered content changes (CoversWholeDocument == false). Use DocumentUnmodified
 // for the combined "signed and nothing was changed" verdict.
-type SignatureResult struct {
+type Result struct {
 	// Field is the FULLY QUALIFIED name of the signature field whose /V
 	// references this signature dictionary: the field's own /T partial name
 	// prefixed by the /T of every ancestor field, joined with "." (ISO 32000-2
@@ -69,7 +69,7 @@ type SignatureResult struct {
 // cryptographically verifies AND it covers the whole document, so nothing was
 // changed after signing. Callers that read only Valid accept a document whose
 // content was altered by a post-signing incremental update; prefer this.
-func (r SignatureResult) DocumentUnmodified() bool {
+func (r Result) DocumentUnmodified() bool {
 	return r.Valid && r.CoversWholeDocument
 }
 
@@ -109,8 +109,8 @@ type signingCertificateV2 struct {
 // certificate's private key. It does NOT by itself mean the document was not
 // modified after signing — an incremental update can change the rendered content
 // while leaving the signed range intact. Combine Valid with CoversWholeDocument
-// (see SignatureResult.DocumentUnmodified).
-func VerifySignatures(d core.View, raw []byte) []SignatureResult {
+// (see Result.DocumentUnmodified).
+func VerifySignatures(d core.View, raw []byte) []Result {
 	return VerifySignaturesWithRoots(d, raw, nil)
 }
 
@@ -125,10 +125,10 @@ func VerifySignatures(d core.View, raw []byte) []SignatureResult {
 // stable across runs (the objects are held in a map, whose iteration order is
 // not) and meaningful: in a document signed by successive incremental updates the
 // later signature is the later object.
-func VerifySignaturesWithRoots(d core.View, raw []byte, roots *x509.CertPool) []SignatureResult {
+func VerifySignaturesWithRoots(d core.View, raw []byte, roots *x509.CertPool) []Result {
 	sigs := documentSignatures(d, true)
 	names := signatureFieldNames(d, sigs)
-	var results []SignatureResult
+	var results []Result
 	for _, s := range sigs {
 		res := verifyOneSignature(d, s.dict, raw, roots)
 		res.Field = names[s.num]
@@ -183,7 +183,7 @@ func documentSignatures(d core.View, includeDocTimestamps bool) []signatureEntry
 const MaxFieldTreeDepth = 64
 
 // signatureFieldNames maps the object number of each signature dictionary in
-// sigs to the fully qualified name (see SignatureResult.Field) of the form field
+// sigs to the fully qualified name (see Result.Field) of the form field
 // whose /V references it. Signatures no field points at are absent from the map.
 //
 // The interactive form's field tree is the authoritative source: walking it from
@@ -349,8 +349,8 @@ func refObjNum(d core.View, o object.Object) int {
 	return -1
 }
 
-func verifyOneSignature(d core.View, sig *object.Dictionary, raw []byte, roots *x509.CertPool) SignatureResult {
-	var res SignatureResult
+func verifyOneSignature(d core.View, sig *object.Dictionary, raw []byte, roots *x509.CertPool) Result {
+	var res Result
 	contents, _ := d.Resolve(sig.Get("Contents")).(object.String)
 
 	segments, covers, ok := byteRangeSegments(d, sig.Get("ByteRange"), int64(len(raw)))

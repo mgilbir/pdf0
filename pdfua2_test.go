@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfua"
 	"strings"
 	"testing"
 )
@@ -18,16 +20,16 @@ func buildUA2Doc(t *testing.T) *Document {
 	}
 	doc.Version = "2.0"
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-	cat.Set("Lang", String{Value: []byte("en-US")})
-	cat.Set("MarkInfo", &Dictionary{Keys: []Name{"Marked"}, Values: []Object{Boolean(true)}})
-	cat.Set("ViewerPreferences", &Dictionary{Keys: []Name{"DisplayDocTitle"}, Values: []Object{Boolean(true)}})
-	structRoot := &Dictionary{}
-	structRoot.Set("Type", Name("StructTreeRoot"))
-	doc.Objects[99] = &IndirectObject{Number: 99, Value: structRoot}
-	cat.Set("StructTreeRoot", IndirectRef{Number: 99})
-	meta := &Stream{Dict: Dictionary{}, Data: []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="2"><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Test</dc:title></rdf:Description></rdf:RDF></x:xmpmeta>`)}
-	doc.Objects[98] = &IndirectObject{Number: 98, Value: meta}
-	cat.Set("Metadata", IndirectRef{Number: 98})
+	cat.Set("Lang", object.String{Value: []byte("en-US")})
+	cat.Set("MarkInfo", &object.Dictionary{Keys: []object.Name{"Marked"}, Values: []object.Object{object.Boolean(true)}})
+	cat.Set("ViewerPreferences", &object.Dictionary{Keys: []object.Name{"DisplayDocTitle"}, Values: []object.Object{object.Boolean(true)}})
+	structRoot := &object.Dictionary{}
+	structRoot.Set("Type", object.Name("StructTreeRoot"))
+	doc.Objects[99] = &object.IndirectObject{Number: 99, Value: structRoot}
+	cat.Set("StructTreeRoot", object.IndirectRef{Number: 99})
+	meta := &object.Stream{Dict: object.Dictionary{}, Data: []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="2"><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Test</dc:title></rdf:Description></rdf:RDF></x:xmpmeta>`)}
+	doc.Objects[98] = &object.IndirectObject{Number: 98, Value: meta}
+	cat.Set("Metadata", object.IndirectRef{Number: 98})
 	return doc
 }
 
@@ -38,7 +40,7 @@ func TestValidatePDFUA2Valid(t *testing.T) {
 }
 
 func TestValidatePDFUA2Violations(t *testing.T) {
-	uaHas := func(v []UAViolation, substr string) bool {
+	uaHas := func(v []pdfua.Violation, substr string) bool {
 		for _, e := range v {
 			if strings.Contains(e.Message, substr) {
 				return true
@@ -49,7 +51,7 @@ func TestValidatePDFUA2Violations(t *testing.T) {
 
 	// pdfuaid:part 1 is wrong for PDF/UA-2.
 	d := buildUA2Doc(t)
-	d.Objects[98].Value.(*Stream).Data = bytes.Replace(d.Objects[98].Value.(*Stream).Data, []byte(`pdfuaid:part="2"`), []byte(`pdfuaid:part="1"`), 1)
+	d.Objects[98].Value.(*object.Stream).Data = bytes.Replace(d.Objects[98].Value.(*object.Stream).Data, []byte(`pdfuaid:part="2"`), []byte(`pdfuaid:part="1"`), 1)
 	if v := ValidatePDFUA2(d); !uaHas(v, "pdfuaid:part must be 2") {
 		t.Errorf("part 1 should be rejected for PDF/UA-2; got %v", v)
 	}

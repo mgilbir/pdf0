@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"encoding/asn1"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"strings"
 	"testing"
 )
@@ -57,17 +59,17 @@ func buildCMS(t *testing.T, hasCert bool, nSigners int) []byte {
 func TestValidatePDFA_SignaturePKCS7(t *testing.T) {
 	raw := make([]byte, 1000)
 	mk := func(contents []byte) *Document {
-		doc := NewPDFADocument(PDFA2b)
-		sig := &Dictionary{}
-		sig.Set("Type", Name("Sig"))
-		sig.Set("SubFilter", Name("adbe.pkcs7.detached"))
-		sig.Set("Contents", String{Value: contents, IsHex: true})
-		sig.Set("ByteRange", Array{Integer(0), Integer(400), Integer(600), Integer(400)}) // covers 1000
-		doc.Objects[20] = &IndirectObject{Number: 20, Value: sig}
+		doc := NewPDFADocument(pdfa.PDFA2b)
+		sig := &object.Dictionary{}
+		sig.Set("Type", object.Name("Sig"))
+		sig.Set("SubFilter", object.Name("adbe.pkcs7.detached"))
+		sig.Set("Contents", object.String{Value: contents, IsHex: true})
+		sig.Set("ByteRange", object.Array{object.Integer(0), object.Integer(400), object.Integer(600), object.Integer(400)}) // covers 1000
+		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: sig}
 		return doc
 	}
 	flaggedPKCS7 := func(contents []byte) bool {
-		for _, e := range ValidatePDFABytes(mk(contents), PDFA2b, raw) {
+		for _, e := range ValidatePDFABytes(mk(contents), pdfa.PDFA2b, raw) {
 			if e.Rule == "6.4.3" && strings.Contains(e.Message, "PKCS#7") {
 				return true
 			}

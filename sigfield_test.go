@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -56,30 +57,30 @@ func TestSignedDocumentReportsFieldName(t *testing.T) {
 // are reported regardless of the verification verdict.
 func sigFieldTestDoc(sigNums ...int) (*Document, []byte) {
 	raw := []byte("%PDF-2.0 signature placeholder <00> %%EOF")
-	doc := &Document{Objects: map[int]*IndirectObject{}}
+	doc := &Document{Objects: map[int]*object.IndirectObject{}}
 	for _, num := range sigNums {
-		sig := &Dictionary{}
-		sig.Set("Type", Name("Sig"))
-		sig.Set("SubFilter", Name("ETSI.CAdES.detached"))
-		sig.Set("Contents", String{Value: []byte{0x00}, IsHex: true})
-		sig.Set("ByteRange", Array{Integer(0), Integer(31), Integer(35), Integer(len(raw) - 35)})
-		doc.Objects[num] = &IndirectObject{Number: num, Value: sig}
+		sig := &object.Dictionary{}
+		sig.Set("Type", object.Name("Sig"))
+		sig.Set("SubFilter", object.Name("ETSI.CAdES.detached"))
+		sig.Set("Contents", object.String{Value: []byte{0x00}, IsHex: true})
+		sig.Set("ByteRange", object.Array{object.Integer(0), object.Integer(31), object.Integer(35), object.Integer(len(raw) - 35)})
+		doc.Objects[num] = &object.IndirectObject{Number: num, Value: sig}
 	}
 	return doc, raw
 }
 
 // setCatalogWithFields gives doc a catalog (object 1) whose /AcroForm (object 2)
 // lists the given field references.
-func setCatalogWithFields(doc *Document, fields Array) {
-	form := &Dictionary{}
+func setCatalogWithFields(doc *Document, fields object.Array) {
+	form := &object.Dictionary{}
 	form.Set("Fields", fields)
-	form.Set("SigFlags", Integer(3))
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("AcroForm", IndirectRef{Number: 2})
-	doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	doc.Objects[2] = &IndirectObject{Number: 2, Value: form}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	form.Set("SigFlags", object.Integer(3))
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("AcroForm", object.IndirectRef{Number: 2})
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: form}
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 }
 
 // TestSignatureFieldFullyQualifiedName pins the naming rule for a field that is
@@ -88,21 +89,21 @@ func setCatalogWithFields(doc *Document, fields Array) {
 func TestSignatureFieldFullyQualifiedName(t *testing.T) {
 	doc, raw := sigFieldTestDoc(10)
 
-	child := &Dictionary{}
-	child.Set("Type", Name("Annot"))
-	child.Set("Subtype", Name("Widget"))
-	child.Set("FT", Name("Sig"))
-	child.Set("T", String{Value: []byte("Countersign")})
-	child.Set("V", IndirectRef{Number: 10})
-	child.Set("Parent", IndirectRef{Number: 4})
-	doc.Objects[5] = &IndirectObject{Number: 5, Value: child}
+	child := &object.Dictionary{}
+	child.Set("Type", object.Name("Annot"))
+	child.Set("Subtype", object.Name("Widget"))
+	child.Set("FT", object.Name("Sig"))
+	child.Set("T", object.String{Value: []byte("Countersign")})
+	child.Set("V", object.IndirectRef{Number: 10})
+	child.Set("Parent", object.IndirectRef{Number: 4})
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: child}
 
-	parent := &Dictionary{}
-	parent.Set("T", String{Value: []byte("Approvals")})
-	parent.Set("Kids", Array{IndirectRef{Number: 5}})
-	doc.Objects[4] = &IndirectObject{Number: 4, Value: parent}
+	parent := &object.Dictionary{}
+	parent.Set("T", object.String{Value: []byte("Approvals")})
+	parent.Set("Kids", object.Array{object.IndirectRef{Number: 5}})
+	doc.Objects[4] = &object.IndirectObject{Number: 4, Value: parent}
 
-	setCatalogWithFields(doc, Array{IndirectRef{Number: 4}})
+	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 4}})
 
 	res := doc.VerifySignatures(raw)
 	if len(res) != 1 {
@@ -126,14 +127,14 @@ func TestSignatureFieldFullyQualifiedName(t *testing.T) {
 func TestSignatureFieldFromPageOnlyWidget(t *testing.T) {
 	doc, raw := sigFieldTestDoc(10)
 
-	field := &Dictionary{}
-	field.Set("Type", Name("Annot"))
-	field.Set("Subtype", Name("Widget"))
-	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: []byte("Orphan")})
-	field.Set("V", IndirectRef{Number: 10})
-	doc.Objects[5] = &IndirectObject{Number: 5, Value: field}
-	setCatalogWithFields(doc, Array{}) // an AcroForm that lists no fields at all
+	field := &object.Dictionary{}
+	field.Set("Type", object.Name("Annot"))
+	field.Set("Subtype", object.Name("Widget"))
+	field.Set("FT", object.Name("Sig"))
+	field.Set("T", object.String{Value: []byte("Orphan")})
+	field.Set("V", object.IndirectRef{Number: 10})
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: field}
+	setCatalogWithFields(doc, object.Array{}) // an AcroForm that lists no fields at all
 
 	res := doc.VerifySignatures(raw)
 	if len(res) != 1 {
@@ -164,25 +165,25 @@ func TestBareSignatureHasNoFieldName(t *testing.T) {
 func TestSignatureResultOrderIsByObjectNumber(t *testing.T) {
 	doc, raw := sigFieldTestDoc(11, 20)
 
-	first := &Dictionary{}
-	first.Set("FT", Name("Sig"))
-	first.Set("T", String{Value: []byte("Zulu")})
-	first.Set("V", IndirectRef{Number: 11})
-	doc.Objects[12] = &IndirectObject{Number: 12, Value: first}
+	first := &object.Dictionary{}
+	first.Set("FT", object.Name("Sig"))
+	first.Set("T", object.String{Value: []byte("Zulu")})
+	first.Set("V", object.IndirectRef{Number: 11})
+	doc.Objects[12] = &object.IndirectObject{Number: 12, Value: first}
 
-	second := &Dictionary{}
-	second.Set("FT", Name("Sig"))
-	second.Set("T", String{Value: []byte("Alpha")})
-	second.Set("V", IndirectRef{Number: 20})
-	doc.Objects[21] = &IndirectObject{Number: 21, Value: second}
+	second := &object.Dictionary{}
+	second.Set("FT", object.Name("Sig"))
+	second.Set("T", object.String{Value: []byte("Alpha")})
+	second.Set("V", object.IndirectRef{Number: 20})
+	doc.Objects[21] = &object.IndirectObject{Number: 21, Value: second}
 
-	setCatalogWithFields(doc, Array{IndirectRef{Number: 21}, IndirectRef{Number: 12}})
+	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 21}, object.IndirectRef{Number: 12}})
 
 	// Give the two signatures distinguishable verdicts as well, so the order is
 	// pinned by something other than the field name: object 11 gets a malformed
 	// /ByteRange, object 20 keeps a well-formed one.
-	sig11 := doc.Objects[11].Value.(*Dictionary)
-	sig11.Set("ByteRange", Array{Name("bogus")})
+	sig11 := doc.Objects[11].Value.(*object.Dictionary)
+	sig11.Set("ByteRange", object.Array{object.Name("bogus")})
 
 	wantNames := []string{"Zulu", "Alpha"} // objects 11 then 20
 	wantErrs := []string{"malformed /ByteRange", "not a CMS SignedData"}
@@ -274,14 +275,14 @@ func TestSignatureFieldNameIndirectValue(t *testing.T) {
 	doc, raw := sigFieldTestDoc(10)
 	// Object 7 is an indirect reference to the signature dictionary; the field's
 	// /V points at object 7, so resolving the chain is required.
-	doc.Objects[7] = &IndirectObject{Number: 7, Value: IndirectRef{Number: 10}}
+	doc.Objects[7] = &object.IndirectObject{Number: 7, Value: object.IndirectRef{Number: 10}}
 
-	field := &Dictionary{}
-	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: []byte("Indirect")})
-	field.Set("V", IndirectRef{Number: 7})
-	doc.Objects[5] = &IndirectObject{Number: 5, Value: field}
-	setCatalogWithFields(doc, Array{IndirectRef{Number: 5}})
+	field := &object.Dictionary{}
+	field.Set("FT", object.Name("Sig"))
+	field.Set("T", object.String{Value: []byte("Indirect")})
+	field.Set("V", object.IndirectRef{Number: 7})
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: field}
+	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 5}})
 
 	res := doc.VerifySignatures(raw)
 	if len(res) != 1 {
@@ -298,20 +299,20 @@ func TestSignatureFieldNameIndirectValue(t *testing.T) {
 func TestSignatureFieldCyclicHierarchy(t *testing.T) {
 	doc, raw := sigFieldTestDoc(10)
 
-	a := &Dictionary{}
-	a.Set("T", String{Value: []byte("A")})
-	a.Set("Kids", Array{IndirectRef{Number: 6}})
-	a.Set("Parent", IndirectRef{Number: 6})
-	doc.Objects[5] = &IndirectObject{Number: 5, Value: a}
+	a := &object.Dictionary{}
+	a.Set("T", object.String{Value: []byte("A")})
+	a.Set("Kids", object.Array{object.IndirectRef{Number: 6}})
+	a.Set("Parent", object.IndirectRef{Number: 6})
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
 
-	b := &Dictionary{}
-	b.Set("T", String{Value: []byte("B")})
-	b.Set("Kids", Array{IndirectRef{Number: 5}})
-	b.Set("Parent", IndirectRef{Number: 5})
-	b.Set("V", IndirectRef{Number: 10})
-	doc.Objects[6] = &IndirectObject{Number: 6, Value: b}
+	b := &object.Dictionary{}
+	b.Set("T", object.String{Value: []byte("B")})
+	b.Set("Kids", object.Array{object.IndirectRef{Number: 5}})
+	b.Set("Parent", object.IndirectRef{Number: 5})
+	b.Set("V", object.IndirectRef{Number: 10})
+	doc.Objects[6] = &object.IndirectObject{Number: 6, Value: b}
 
-	setCatalogWithFields(doc, Array{IndirectRef{Number: 5}})
+	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 5}})
 
 	res := doc.VerifySignatures(raw)
 	if len(res) != 1 {
@@ -330,12 +331,12 @@ func TestSignatureFieldNameUTF16(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	field := &Dictionary{}
-	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: utf16Name})
-	field.Set("V", IndirectRef{Number: 10})
-	doc.Objects[5] = &IndirectObject{Number: 5, Value: field}
-	setCatalogWithFields(doc, Array{IndirectRef{Number: 5}})
+	field := &object.Dictionary{}
+	field.Set("FT", object.Name("Sig"))
+	field.Set("T", object.String{Value: utf16Name})
+	field.Set("V", object.IndirectRef{Number: 10})
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: field}
+	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 5}})
 
 	res := doc.VerifySignatures(raw)
 	if len(res) != 1 {

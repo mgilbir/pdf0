@@ -54,7 +54,7 @@ func TestMetadataFilterOnlyForbiddenInPDFA1(t *testing.T) {
 	if !has(checkMetadataStream(doc, PDFA1b), "must not have /Filter") {
 		t.Error("PDF/A-1b: a compressed metadata stream must be flagged")
 	}
-	for _, lvl := range []PDFALevel{PDFA2b, PDFA3b, PDFA4} {
+	for _, lvl := range []Level{PDFA2b, PDFA3b, PDFA4} {
 		if has(checkMetadataStream(doc, lvl), "must not have /Filter") {
 			t.Errorf("%v: a compressed metadata stream must NOT be flagged (allowed since PDF/A-2)", lvl)
 		}

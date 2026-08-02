@@ -36,7 +36,7 @@ var facturxXMLNames = map[string]bool{
 // /Alternative in the Factur-X spec, and /Source is used by some producers.
 var facturxRelationships = map[object.Name]bool{"Data": true, "Alternative": true, "Source": true}
 
-// FacturXViolation is one finding of the Factur-X container validator: either a
+// Violation is one finding of the Factur-X container validator: either a
 // departure from a container rule pdf0 checks itself, or one adopted from the
 // EN 16931 rule engine the embedded invoice XML is run through.
 //
@@ -44,12 +44,12 @@ var facturxRelationships = map[object.Name]bool{"Data": true, "Alternative": tru
 // one report. pdf0's findings anchor to a PDF object; the invoice engine's
 // anchor to a business term in an XML document and name the authority that wrote
 // the rule. Until formalis v0.2.0 this validator carried formalis.Violation
-// values directly, borrowing that type's object.Object field for PDF object numbers,
+// values directly, borrowing that type's Object field for PDF object numbers,
 // which made Factur-X and Order-X the only findings in this package that could
 // not satisfy Violation — the exception the package documentation had to keep
 // explaining. Both halves now arrive in a type pdf0 owns, so they combine with
 // every other validator's findings and IsCheckerFinding applies to them.
-type FacturXViolation struct {
+type Violation struct {
 	// Rule is the identifier of the rule that was broken. pdf0's own container
 	// rules are "structure", "attachment", "metadata" and "invoice-xml"; the
 	// PDF/A-3 base's are ISO 19005 clauses under a "pdfa-3/" prefix; the invoice
@@ -81,7 +81,7 @@ type FacturXViolation struct {
 // the field for the reason formalis gives for putting it in its own: a rule
 // identifier is unique within its authority and not outside it, so a logged
 // finding that omits the authority is not identified.
-func (v FacturXViolation) Error() string {
+func (v Violation) Error() string {
 	who := "Factur-X"
 	if v.Source != formalis.SourceNone {
 		who = "Factur-X " + string(v.Source)
@@ -106,16 +106,16 @@ func (v FacturXViolation) Error() string {
 // what the identifier says.
 const facturxXMLRule = "invoice-xml"
 
-// FacturXResult is the outcome of validating a Factur-X invoice: the container
+// Result is the outcome of validating a Factur-X invoice: the container
 // and EN 16931 violations found and, when identifiable, the declared conformance
 // profile and the embedded invoice XML (returned for CIUS-layer validation).
-type FacturXResult struct {
+type Result struct {
 	// Violations is every non-conformance: pdf0's container findings, the PDF/A-3
 	// base's, and the invoice rule engine's fatal ones — the findings whose
 	// authority rejects a document for breaking them, plus that engine's
 	// statements about its own run. An empty slice is the clean answer, as it is
 	// for every other validator in this package.
-	Violations []FacturXViolation
+	Violations []Violation
 
 	// InvoiceWarnings is the advisory findings of the invoice rule engine: rules
 	// their authority reports without rejecting the document, above all the CEN
@@ -124,7 +124,7 @@ type FacturXResult struct {
 	// those by design — carrying more than the core is what EXTENDED is for — so
 	// they are reported beside the verdict rather than inside it. See
 	// adoptInvoiceFindings for why they are neither dropped nor merged.
-	InvoiceWarnings []FacturXViolation
+	InvoiceWarnings []Violation
 
 	Profile formalis.Profile // "" if not identifiable
 	// CIUS is the Core Invoice Usage Specification the XMP names, when the
@@ -175,7 +175,7 @@ type FacturXResult struct {
 // rawData is the original file bytes, needed for the PDF/A-3 byte-level checks.
 //
 // It is ValidateFacturXContext with a background context.
-func Validate(doc core.View, rawData []byte) FacturXResult {
+func Validate(doc core.View, rawData []byte) Result {
 	return ValidateContext(context.Background(), doc, rawData)
 }
 
@@ -192,13 +192,13 @@ func Validate(doc core.View, rawData []byte) FacturXResult {
 // same identifier for the same event, so a caller draining Violations has one
 // name to look for across container and invoice findings alike. What cannot
 // happen is an empty result: a cancelled validation never looks clean.
-func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res FacturXResult) {
+func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res Result) {
 	cancel := core.NewCanceler(ctx)
 	add := func(rule, msg string, obj int) {
-		res.Violations = append(res.Violations, FacturXViolation{Rule: rule, Message: msg, Object: obj})
+		res.Violations = append(res.Violations, Violation{Rule: rule, Message: msg, Object: obj})
 	}
 	adopt := func(v formalis.Violation, advisory bool) {
-		f := FacturXViolation{Rule: v.Rule, Message: v.Message, Source: v.Source}
+		f := Violation{Rule: v.Rule, Message: v.Message, Source: v.Source}
 		if advisory {
 			res.InvoiceWarnings = append(res.InvoiceWarnings, f)
 			return
@@ -358,7 +358,7 @@ func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res Fa
 //     checked; substituting EN 16931 would run a rule set the document never
 //     claimed and report the result as if it had. pdf0 has already reported the
 //     container defect that got here, as a "metadata" finding.
-func (res FacturXResult) ValidateInvoiceXML(ctx context.Context) (formalis.Report, error) {
+func (res Result) ValidateInvoiceXML(ctx context.Context) (formalis.Report, error) {
 	if res.Profile == "" && res.CIUS != formalis.CIUSNone {
 		return formalis.ValidateCIUS(ctx, res.XML)
 	}

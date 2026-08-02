@@ -15,9 +15,9 @@ import (
 // and no predicate recognises — which hides exactly the event these identifiers
 // exist to make visible.
 func TestAdoptPDFAFindingsKeepsReservedRulesBare(t *testing.T) {
-	var out []FacturXViolation
+	var out []Violation
 	add := func(rule, msg string, obj int) {
-		out = append(out, FacturXViolation{Rule: rule, Message: msg, Object: obj})
+		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})
 	}
 	adoptPDFAFindings(add, "pdfa-3/", []pdfa.ValidationError{
 		{Rule: "6.1.2", Message: "a real PDF/A rule"},

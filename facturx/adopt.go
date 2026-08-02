@@ -58,7 +58,7 @@ func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs 
 // pdf0's container identifiers are "structure", "attachment", "metadata" and the
 // unreadable-XML rules, and the two sets are disjoint. What a prefix would have
 // stood in for — which authority wrote the rule — is carried as data instead, in
-// FacturXViolation.Source, where a caller can key on it rather than parse it out
+// Violation.Source, where a caller can key on it rather than parse it out
 // of a string.
 //
 // Two consequences of adopting verbatim are the point rather than a side effect:

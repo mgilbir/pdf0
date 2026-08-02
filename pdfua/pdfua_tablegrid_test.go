@@ -13,7 +13,7 @@ func cell(rs, cs int) tableCell { return tableCell{rowSpan: rs, colSpan: cs} }
 // mustGrid lays out rows at the default budget and fails if the work budget
 // stopped the layout, so a test asserting "no defects" cannot silently be
 // asserting "not determined".
-func mustGrid(t *testing.T, rows []tableRow) []UAViolation {
+func mustGrid(t *testing.T, rows []tableRow) []Violation {
 	t.Helper()
 	v, complete := gridDefects(rows, core.DefaultMaxTableGridFills)
 	if !complete {
@@ -23,7 +23,7 @@ func mustGrid(t *testing.T, rows []tableRow) []UAViolation {
 }
 
 func TestGridDefects(t *testing.T) {
-	has := func(vs []UAViolation, sub string) bool {
+	has := func(vs []Violation, sub string) bool {
 		for _, e := range vs {
 			if strings.Contains(e.Message, sub) {
 				return true

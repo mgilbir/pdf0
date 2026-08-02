@@ -3,6 +3,8 @@ package pdf0
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 	"sort"
 	"strconv"
 )
@@ -41,15 +43,15 @@ type objStmEntry struct {
 // 7.5.7) and parses its leading index of N (object number, offset) pairs.
 // It returns the decoded data alongside the index so callers can parse
 // individual objects without decoding twice.
-func parseObjStmIndex(cancel core.Canceler, stream *Stream, lim core.Limits) (data []byte, entries []objStmEntry, first int, err error) {
-	if t, ok := stream.Dict.Get("Type").(Name); ok && t != "ObjStm" {
+func parseObjStmIndex(cancel core.Canceler, stream *object.Stream, lim core.Limits) (data []byte, entries []objStmEntry, first int, err error) {
+	if t, ok := stream.Dict.Get("Type").(object.Name); ok && t != "ObjStm" {
 		return nil, nil, 0, fmt.Errorf("not an object stream: /Type /%s", t)
 	}
-	n, ok := stream.Dict.Get("N").(Integer)
+	n, ok := stream.Dict.Get("N").(object.Integer)
 	if !ok || n < 0 {
 		return nil, nil, 0, fmt.Errorf("object stream /N missing or invalid")
 	}
-	firstInt, ok := stream.Dict.Get("First").(Integer)
+	firstInt, ok := stream.Dict.Get("First").(object.Integer)
 	if !ok || firstInt < 0 {
 		return nil, nil, 0, fmt.Errorf("object stream /First missing or invalid")
 	}
@@ -89,12 +91,12 @@ func parseObjStmIndex(cancel core.Canceler, stream *Stream, lim core.Limits) (da
 }
 
 // nextIntToken reads one integer token from the lexer.
-func nextIntToken(l *Lexer) (int, error) {
+func nextIntToken(l *syntax.Lexer) (int, error) {
 	tok, err := l.NextToken()
 	if err != nil {
 		return 0, err
 	}
-	if tok.Type != TokenInteger {
+	if tok.Type != syntax.TokenInteger {
 		return 0, fmt.Errorf("expected integer, got %v", tok.Type)
 	}
 	v, err := strconv.Atoi(string(tok.Value))
@@ -118,8 +120,8 @@ func nextIntToken(l *Lexer) (int, error) {
 func (d *Document) materializeScannedObjStms(cancel core.Canceler) error {
 	var containers []int
 	for num, iobj := range d.Objects {
-		if st, ok := iobj.Value.(*Stream); ok {
-			if t, _ := st.Dict.Get("Type").(Name); t == "ObjStm" {
+		if st, ok := iobj.Value.(*object.Stream); ok {
+			if t, _ := st.Dict.Get("Type").(object.Name); t == "ObjStm" {
 				containers = append(containers, num)
 			}
 		}
@@ -133,7 +135,7 @@ func (d *Document) materializeScannedObjStms(cancel core.Canceler) error {
 		if err := cancel.StopErr("reading PDF object streams"); err != nil {
 			return err
 		}
-		st := d.Objects[cnum].Value.(*Stream)
+		st := d.Objects[cnum].Value.(*object.Stream)
 		if decompressed >= objStmBudget {
 			d.brokenObjStms = append(d.brokenObjStms, cnum)
 			d.noteReadLimit(limitObjStmTotal, fmt.Sprintf("object stream %d was not unpacked: this read has already decompressed %d bytes of object streams, reaching the %s-byte budget for one read; its objects are missing from the document, so any finding of the form \"X is absent\" may be a consequence of that", cnum, decompressed, core.LimitBound(objStmBudget, core.DefaultMaxObjectStreamBytes)), cnum)
@@ -158,7 +160,7 @@ func (d *Document) materializeScannedObjStms(cancel core.Canceler) error {
 			if err != nil {
 				continue // drop just this object; the container index may lie
 			}
-			d.Objects[ie.Number] = &IndirectObject{Number: ie.Number, Value: obj}
+			d.Objects[ie.Number] = &object.IndirectObject{Number: ie.Number, Value: obj}
 		}
 	}
 	return nil
@@ -211,7 +213,7 @@ func (d *Document) loadCompressedObjects(cancel core.Canceler, table *XRefTable)
 		if !ok {
 			return fmt.Errorf("object stream %d referenced by xref but not present", containerNum)
 		}
-		stream, ok := container.Value.(*Stream)
+		stream, ok := container.Value.(*object.Stream)
 		if !ok {
 			return fmt.Errorf("object stream %d is not a stream", containerNum)
 		}
@@ -250,7 +252,7 @@ func (d *Document) loadCompressedObjects(cancel core.Canceler, table *XRefTable)
 				return fmt.Errorf("parsing object %d in object stream %d: %w", num, containerNum, err)
 			}
 			// Objects in an object stream always have generation 0.
-			d.Objects[num] = &IndirectObject{Number: num, Value: obj}
+			d.Objects[num] = &object.IndirectObject{Number: num, Value: obj}
 		}
 	}
 	return nil

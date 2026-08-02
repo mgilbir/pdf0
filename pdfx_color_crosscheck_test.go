@@ -3,12 +3,12 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfx"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/mgilbir/pdf0/pdfx"
 )
 
 // TestDevColorScannerMatchesPDFA is the correctness guard for the memoised
@@ -82,45 +82,45 @@ func TestDevColorScannerMatchesPDFA(t *testing.T) {
 // the raw value — "DeviceRGB used without a matching OutputIntent, DefaultRGB or
 // covering group colour space" against a page whose colour was in fact covered.
 func TestDevColorScannerGroupMemoKey(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-	put := func(num int, v Object) { doc.Objects[num] = &IndirectObject{Number: num, Value: v} }
+	doc := &Document{Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
+	put := func(num int, v object.Object) { doc.Objects[num] = &object.IndirectObject{Number: num, Value: v} }
 
 	// The shared form: DeviceRGB inside, wrapped in an isolated CalRGB group.
-	form := &Stream{Dict: Dictionary{}, Data: []byte("1 0 0 rg 0 0 10 10 re f\n")}
-	form.Dict.Set("Type", Name("XObject"))
-	form.Dict.Set("Subtype", Name("Form"))
-	form.Dict.Set("Length", Integer(len(form.Data)))
-	group := &Dictionary{}
-	group.Set("S", Name("Transparency"))
-	group.Set("CS", Array{Name("CalRGB"), &Dictionary{}})
-	group.Set("I", Boolean(true))
+	form := &object.Stream{Dict: object.Dictionary{}, Data: []byte("1 0 0 rg 0 0 10 10 re f\n")}
+	form.Dict.Set("Type", object.Name("XObject"))
+	form.Dict.Set("Subtype", object.Name("Form"))
+	form.Dict.Set("Length", object.Integer(len(form.Data)))
+	group := &object.Dictionary{}
+	group.Set("S", object.Name("Transparency"))
+	group.Set("CS", object.Array{object.Name("CalRGB"), &object.Dictionary{}})
+	group.Set("I", object.Boolean(true))
 	form.Dict.Set("Group", group)
 	put(10, form)
 
 	// Page 1 reaches the form as an annotation appearance: no group masking.
-	annot := &Dictionary{}
-	annot.Set("Type", Name("Annot"))
-	ap := &Dictionary{}
-	ap.Set("N", IndirectRef{Number: 10})
+	annot := &object.Dictionary{}
+	annot.Set("Type", object.Name("Annot"))
+	ap := &object.Dictionary{}
+	ap.Set("N", object.IndirectRef{Number: 10})
 	annot.Set("AP", ap)
 	put(11, annot)
-	page1 := &Dictionary{}
-	page1.Set("Type", Name("Page"))
-	page1.Set("Annots", Array{IndirectRef{Number: 11}})
+	page1 := &object.Dictionary{}
+	page1.Set("Type", object.Name("Page"))
+	page1.Set("Annots", object.Array{object.IndirectRef{Number: 11}})
 	put(12, page1)
 
 	// Page 2 invokes the very same stream with Do: the group applies.
-	content := &Stream{Dict: Dictionary{}, Data: []byte("q /X1 Do Q\n")}
-	content.Dict.Set("Length", Integer(len(content.Data)))
+	content := &object.Stream{Dict: object.Dictionary{}, Data: []byte("q /X1 Do Q\n")}
+	content.Dict.Set("Length", object.Integer(len(content.Data)))
 	put(13, content)
-	xo := &Dictionary{}
-	xo.Set("X1", IndirectRef{Number: 10})
-	res := &Dictionary{}
+	xo := &object.Dictionary{}
+	xo.Set("X1", object.IndirectRef{Number: 10})
+	res := &object.Dictionary{}
 	res.Set("XObject", xo)
-	page2 := &Dictionary{}
-	page2.Set("Type", Name("Page"))
+	page2 := &object.Dictionary{}
+	page2.Set("Type", object.Name("Page"))
 	page2.Set("Resources", res)
-	page2.Set("Contents", IndirectRef{Number: 13})
+	page2.Set("Contents", object.IndirectRef{Number: 13})
 	put(14, page2)
 
 	// The trusted PDF/A scanner is the oracle for both pages.

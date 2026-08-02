@@ -98,9 +98,9 @@ func TestAdoptedLimitFindingIsACheckerFinding(t *testing.T) {
 		{Source: formalis.SourceEN16931, Rule: "CII-SR-408", Severity: formalis.SeverityWarning, Message: "advisory"},
 	}}
 
-	var fatal, advisory []FacturXViolation
+	var fatal, advisory []Violation
 	adoptInvoiceFindings(func(v formalis.Violation, warn bool) {
-		f := FacturXViolation{Rule: v.Rule, Message: v.Message, Source: v.Source}
+		f := Violation{Rule: v.Rule, Message: v.Message, Source: v.Source}
 		if warn {
 			advisory = append(advisory, f)
 			return

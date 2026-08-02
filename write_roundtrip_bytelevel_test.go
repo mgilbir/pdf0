@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/pdfa"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,7 +16,7 @@ import (
 // stale /Length, a malformed xref, or a duplicate/dangling object would surface
 // here even though DocumentEqual still passed.
 func TestBuilderWriteValidatesClean(t *testing.T) {
-	for _, lvl := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
+	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		doc := NewPDFADocumentWithInfo(lvl, "Title", "Author")
 		var buf bytes.Buffer
 		if err := doc.Write(&buf); err != nil {
@@ -41,8 +42,8 @@ func TestBuilderWriteValidatesClean(t *testing.T) {
 // single round-trip's DocumentEqual holds.
 func TestWriteIsIdempotent(t *testing.T) {
 	docs := map[string]*Document{
-		"builder-2b": NewPDFADocumentWithInfo(PDFA2b, "T", "A"),
-		"builder-4":  NewPDFADocument(PDFA4),
+		"builder-2b": NewPDFADocumentWithInfo(pdfa.PDFA2b, "T", "A"),
+		"builder-4":  NewPDFADocument(pdfa.PDFA4),
 	}
 	files, _ := filepath.Glob("testdata/pdf20examples/*.pdf")
 	for _, f := range files {

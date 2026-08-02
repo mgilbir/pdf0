@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
+	"github.com/mgilbir/pdf0/object"
 	"io"
 	"os"
 	"path/filepath"
@@ -34,13 +35,13 @@ func TestReEncryptRoundTrip(t *testing.T) {
 	if doc2.security == nil {
 		t.Fatal("re-written file is not encrypted")
 	}
-	d, _ := doc2.Objects[1].Value.(*Dictionary)
-	if s, _ := d.Get("Producer").(String); string(s.Value) != producer {
+	d, _ := doc2.Objects[1].Value.(*object.Dictionary)
+	if s, _ := d.Get("Producer").(object.String); string(s.Value) != producer {
 		t.Errorf("/Producer after round-trip = %q, want %q", s.Value, producer)
 	}
 	// The in-memory plaintext must be untouched by Write.
-	d0, _ := doc.Objects[1].Value.(*Dictionary)
-	if s, _ := d0.Get("Producer").(String); string(s.Value) != producer {
+	d0, _ := doc.Objects[1].Value.(*object.Dictionary)
+	if s, _ := d0.Get("Producer").(object.String); string(s.Value) != producer {
 		t.Errorf("Write mutated the in-memory plaintext: %q", s.Value)
 	}
 
@@ -100,11 +101,11 @@ func TestReEncryptCorpusRoundTrip(t *testing.T) {
 			}
 			checked := 0
 			for _, iobj := range doc2.Objects {
-				s, ok := iobj.Value.(*Stream)
+				s, ok := iobj.Value.(*object.Stream)
 				if !ok {
 					continue
 				}
-				if f, _ := s.Dict.Get("Filter").(Name); f != "FlateDecode" {
+				if f, _ := s.Dict.Get("Filter").(object.Name); f != "FlateDecode" {
 					continue
 				}
 				zr, err := zlib.NewReader(bytes.NewReader(s.Data))

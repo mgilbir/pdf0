@@ -3,7 +3,7 @@
 // signal, and the recorder a tripped guard reports through.
 //
 // It is deliberately the *mechanism* only. What happens to a trip afterwards —
-// turning it into a ValidationError or a UAViolation, deciding which rule
+// turning it into a ValidationError or a pdfua.Violation, deciding which rule
 // identifier it carries, filtering it with IsCheckerFinding — stays in the root
 // package, because that is where findings are defined. Splitting the two is what
 // lets a subsystem enforce a budget without depending on the validator that

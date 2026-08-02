@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"os"
 	"path/filepath"
@@ -17,13 +18,13 @@ import (
 // hand-off to samplesToImage.
 func TestExtractCCITTImage(t *testing.T) {
 	st := imageXObject(8, 1, 1, "DeviceGray", "CCITTFaxDecode", []byte{0x26, 0xAE})
-	parms := &Dictionary{}
-	parms.Set("K", Integer(-1))
-	parms.Set("Columns", Integer(8))
-	parms.Set("Rows", Integer(1))
+	parms := &object.Dictionary{}
+	parms.Set("K", object.Integer(-1))
+	parms.Set("Columns", object.Integer(8))
+	parms.Set("Rows", object.Integer(1))
 	st.Dict.Set("DecodeParms", parms)
 
-	doc := imageDoc(map[string]*Stream{"Im0": st})
+	doc := imageDoc(map[string]*object.Stream{"Im0": st})
 	imgs := doc.ExtractImages()
 	if len(imgs) != 1 {
 		t.Fatalf("got %d images, want 1", len(imgs))

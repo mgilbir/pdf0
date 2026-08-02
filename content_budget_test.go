@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
 )
@@ -39,16 +40,16 @@ func TestContentBombBoundedValidation(t *testing.T) {
 // makeFlateContentStream is repeated here from the core package's own copy:
 // a test helper cannot cross a package boundary, and the document-level bomb
 // test below belongs in this package.
-func makeFlateContentStream(decodedLen int) *Stream {
+func makeFlateContentStream(decodedLen int) *object.Stream {
 	raw := bytes.Repeat([]byte("0 0 0 rg\n"), decodedLen/9+1)[:decodedLen]
 	var zb bytes.Buffer
 	zw := zlib.NewWriter(&zb)
 	zw.Write(raw)
 	zw.Close()
-	d := &Dictionary{}
-	d.Set("Length", Integer(zb.Len()))
-	d.Set("Filter", Name("FlateDecode"))
-	return &Stream{Dict: *d, Data: zb.Bytes()}
+	d := &object.Dictionary{}
+	d.Set("Length", object.Integer(zb.Len()))
+	d.Set("Filter", object.Name("FlateDecode"))
+	return &object.Stream{Dict: *d, Data: zb.Bytes()}
 }
 
 // buildContentBombPDF assembles a PDF with npages pages, each /Contents a

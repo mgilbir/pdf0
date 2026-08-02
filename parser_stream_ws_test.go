@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -51,7 +52,7 @@ func TestParseStreamKeywordTrailingWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	st, ok := doc.Objects[4].Value.(*Stream)
+	st, ok := doc.Objects[4].Value.(*object.Stream)
 	if !ok {
 		t.Fatalf("object 4 is %T, want *Stream", doc.Objects[4].Value)
 	}
@@ -68,7 +69,7 @@ func TestParseStreamKeywordTrailingWhitespace(t *testing.T) {
 		t.Fatalf("decoded %q, want %q", dec, payload)
 	}
 	// /Length must be preserved and the round-trip stable.
-	if got, _ := st.Dict.Get("Length").(Integer); int(got) != len(flate) {
+	if got, _ := st.Dict.Get("Length").(object.Integer); int(got) != len(flate) {
 		t.Errorf("/Length = %v, want %d", got, len(flate))
 	}
 	var out bytes.Buffer

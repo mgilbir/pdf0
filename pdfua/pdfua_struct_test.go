@@ -219,7 +219,7 @@ func TestRoleMapChainTerminates(t *testing.T) {
 	doc := roleMapChainDoc(rm)
 	cat := doc.ResolveDict(object.IndirectRef{Number: 1})
 
-	done := make(chan []UAViolation, 1)
+	done := make(chan []Violation, 1)
 	go func() { done <- checkUARoleMap(doc, cat) }()
 	select {
 	case v := <-done:

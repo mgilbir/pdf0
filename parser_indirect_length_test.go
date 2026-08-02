@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -86,7 +87,7 @@ func TestParseIndirectLengthNoOverread(t *testing.T) {
 	total := 0
 	found := 0
 	for _, io := range doc.Objects {
-		st, ok := io.Value.(*Stream)
+		st, ok := io.Value.(*object.Stream)
 		if !ok {
 			continue
 		}

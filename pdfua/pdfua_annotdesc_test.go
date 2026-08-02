@@ -25,7 +25,7 @@ func TestUAAnnotDescription(t *testing.T) {
 		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
 		return doc
 	}
-	hasDesc := func(vs []UAViolation) bool {
+	hasDesc := func(vs []Violation) bool {
 		for _, e := range vs {
 			if strings.Contains(e.Message, "alternate description (/Contents or /Alt)") {
 				return true

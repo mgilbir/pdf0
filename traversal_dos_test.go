@@ -15,11 +15,11 @@ import (
 // rather than shared because a test helper cannot cross a package boundary
 // without being exported into the object package's public surface, and this
 // guard is over dictionaryEqual, which lives here.
-func directDict(n int) *Dictionary {
-	d := &Dictionary{Keys: make([]Name, n), Values: make([]Object, n)}
+func directDict(n int) *object.Dictionary {
+	d := &object.Dictionary{Keys: make([]object.Name, n), Values: make([]object.Object, n)}
 	for i := 0; i < n; i++ {
-		d.Keys[i] = Name(fmt.Sprintf("K%d", i))
-		d.Values[i] = Integer(i)
+		d.Keys[i] = object.Name(fmt.Sprintf("K%d", i))
+		d.Values[i] = object.Integer(i)
 	}
 	return d
 }
@@ -39,13 +39,13 @@ func TestDictionaryEqualLinear(t *testing.T) {
 	}
 
 	// Duplicate-key multiset semantics (audit C26) must survive the change.
-	dup12 := &Dictionary{Keys: []Name{"A", "A"}, Values: []Object{Integer(1), Integer(2)}}
-	dup12b := &Dictionary{Keys: []Name{"A", "A"}, Values: []Object{Integer(1), Integer(2)}}
+	dup12 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
+	dup12b := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
 	if !object.DictionaryEqual(dup12, dup12b) {
 		t.Error("{A:1, A:2} should equal itself")
 	}
-	dup11 := &Dictionary{Keys: []Name{"A", "A"}, Values: []Object{Integer(1), Integer(1)}}
-	ab := &Dictionary{Keys: []Name{"A", "B"}, Values: []Object{Integer(1), Integer(99)}}
+	dup11 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(1)}}
+	ab := &object.Dictionary{Keys: []object.Name{"A", "B"}, Values: []object.Object{object.Integer(1), object.Integer(99)}}
 	if object.DictionaryEqual(dup11, ab) {
 		t.Error("{A:1, A:1} must not equal {A:1, B:99}")
 	}

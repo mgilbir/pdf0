@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/lzw"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -66,11 +67,11 @@ func TestLZWStreamDecoded(t *testing.T) {
 	w.Write(payload)
 	w.Close()
 
-	s := &Stream{Dict: Dictionary{}, Data: buf.Bytes()}
-	s.Dict.Set("Filter", Name("LZWDecode"))
+	s := &object.Stream{Dict: object.Dictionary{}, Data: buf.Bytes()}
+	s.Dict.Set("Filter", object.Name("LZWDecode"))
 	// EarlyChange 0 to match Go's encoder.
-	parms := &Dictionary{}
-	parms.Set("EarlyChange", Integer(0))
+	parms := &object.Dictionary{}
+	parms.Set("EarlyChange", object.Integer(0))
 	s.Dict.Set("DecodeParms", parms)
 
 	got, err := core.DecodeStreamData(core.Canceler{}, s, core.DefaultLimits())

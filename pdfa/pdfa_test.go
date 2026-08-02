@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewPDFADocument(t *testing.T) {
-	for _, level := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
+	for _, level := range []Level{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
 			doc := mkPDFAView(level)
 			if len(doc.Objects) == 0 {
@@ -40,7 +40,7 @@ func TestNewPDFADocument(t *testing.T) {
 
 func TestValidatePDFA_LZW(t *testing.T) {
 	t.Run("all levels reject LZW", func(t *testing.T) {
-		for _, level := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
+		for _, level := range []Level{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
 			t.Run(level.String(), func(t *testing.T) {
 				doc := mkPDFAView(level)
 				stream := &object.Stream{Dict: object.Dictionary{}, Data: []byte("test")}
@@ -60,7 +60,7 @@ func TestValidatePDFA_LZW(t *testing.T) {
 func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 	forbidden := []struct {
 		subtype object.Name
-		level   PDFALevel
+		level   Level
 	}{
 		{"Movie", PDFA4},
 		{"Sound", PDFA4},
@@ -541,7 +541,7 @@ func TestValidatePDFA_HeaderEarlyVersionsAllowed(t *testing.T) {
 // A14: implementation limits are 6.1.12 at A-1, 6.1.13 at A-2/3, absent at A-4.
 func TestValidatePDFA_ImplementationLimitLevels(t *testing.T) {
 	longName := object.Name(strings.Repeat("x", 200))
-	mk := func(level PDFALevel) core.View {
+	mk := func(level Level) core.View {
 		doc := mkPDFAView(level)
 		d := &object.Dictionary{}
 		d.Set("K", longName)

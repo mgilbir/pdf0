@@ -3,8 +3,8 @@ package pdf0
 import (
 	"crypto/rand"
 	"errors"
-
 	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
 )
 
 // Encryption, from the document's side. The standard security handler itself
@@ -40,20 +40,20 @@ func (d *Document) SetEncryption(userPassword, ownerPassword string) error {
 		}
 	}
 	encNum := maxObj + 1
-	d.Objects[encNum] = &IndirectObject{Number: encNum, Value: dict}
+	d.Objects[encNum] = &object.IndirectObject{Number: encNum, Value: dict}
 	h.EncryptObjNum = encNum
 	d.security = h
 	d.Encrypted = true
 
 	trailer := d.Trailer.Clone()
-	trailer.Set("Encrypt", IndirectRef{Number: encNum})
+	trailer.Set("Encrypt", object.IndirectRef{Number: encNum})
 	// A file identifier is expected in an encrypted document; add one if absent.
 	if trailer.Get("ID") == nil {
 		id := make([]byte, 16)
 		if _, err := rand.Read(id); err != nil {
 			return err
 		}
-		trailer.Set("ID", Array{String{Value: id}, String{Value: append([]byte(nil), id...)}})
+		trailer.Set("ID", object.Array{object.String{Value: id}, object.String{Value: append([]byte(nil), id...)}})
 	}
 	d.Trailer = *trailer
 	return nil

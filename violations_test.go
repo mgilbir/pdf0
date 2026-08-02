@@ -2,6 +2,12 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/dpart"
+	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/pdfr"
+	"github.com/mgilbir/pdf0/pdfua"
+	"github.com/mgilbir/pdf0/pdfvt"
+	"github.com/mgilbir/pdf0/pdfx"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,12 +19,12 @@ import (
 // can be combined.
 func TestViolationInterface(t *testing.T) {
 	cases := []Violation{
-		ValidationError{Rule: "6.1.3", Level: PDFA2b, Message: "m", Object: 7},
-		UAViolation{Clause: "7.4.2", Message: "m", Object: 7},
-		PDFXViolation{Rule: "output-intent", Message: "m", Object: 7},
-		PDFVTViolation{Rule: "dpart/one", Message: "m", Object: 7},
-		PDFRViolation{Rule: "version", Message: "m", Object: 7},
-		DPartViolation{Rule: "14.12.2", Message: "m", Object: 7},
+		pdfa.ValidationError{Rule: "6.1.3", Level: pdfa.PDFA2b, Message: "m", Object: 7},
+		pdfua.Violation{Clause: "7.4.2", Message: "m", Object: 7},
+		pdfx.Violation{Rule: "output-intent", Message: "m", Object: 7},
+		pdfvt.Violation{Rule: "dpart/one", Message: "m", Object: 7},
+		pdfr.Violation{Rule: "version", Message: "m", Object: 7},
+		dpart.Violation{Rule: "14.12.2", Message: "m", Object: 7},
 	}
 	for _, v := range cases {
 		if v.RuleID() == "" {
@@ -42,7 +48,7 @@ func TestViolationsCombine(t *testing.T) {
 		t.Fatal(err)
 	}
 	var all []Violation
-	for _, e := range ValidatePDFA(doc, PDFA2b) {
+	for _, e := range ValidatePDFA(doc, pdfa.PDFA2b) {
 		all = append(all, e)
 	}
 	for _, e := range ValidatePDFUA(doc) {

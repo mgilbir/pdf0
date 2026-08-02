@@ -5,6 +5,7 @@ import (
 	"os"
 
 	pdf "github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/object"
 )
 
 func main() {
@@ -14,46 +15,46 @@ func main() {
 	// Build the document object graph bottom-up.
 
 	// Object 1: Catalog
-	catalog := &pdf.Dictionary{}
-	catalog.Set("Type", pdf.Name("Catalog"))
-	catalog.Set("Pages", pdf.IndirectRef{Number: 2})
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("Pages", object.IndirectRef{Number: 2})
 
 	// Object 2: Pages
-	pages := &pdf.Dictionary{}
-	pages.Set("Type", pdf.Name("Pages"))
-	pages.Set("Kids", pdf.Array{pdf.IndirectRef{Number: 3}})
-	pages.Set("Count", pdf.Integer(1))
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+	pages.Set("Count", object.Integer(1))
 
 	// Object 3: Page
-	page := &pdf.Dictionary{}
-	page.Set("Type", pdf.Name("Page"))
-	page.Set("Parent", pdf.IndirectRef{Number: 2})
-	page.Set("MediaBox", pdf.Array{pdf.Integer(0), pdf.Integer(0), pdf.Integer(612), pdf.Integer(792)})
-	page.Set("Contents", pdf.IndirectRef{Number: 4})
-	page.Set("Resources", pdf.IndirectRef{Number: 5})
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+	page.Set("Contents", object.IndirectRef{Number: 4})
+	page.Set("Resources", object.IndirectRef{Number: 5})
 
 	// Object 4: Content stream
-	streamDict := pdf.Dictionary{}
-	contentStream := &pdf.Stream{
+	streamDict := object.Dictionary{}
+	contentStream := &object.Stream{
 		Dict: streamDict,
 		Data: content,
 	}
 
 	// Object 5: Resources
-	fontRef := &pdf.Dictionary{}
-	fontRef.Set("F1", pdf.IndirectRef{Number: 6})
-	resources := &pdf.Dictionary{}
+	fontRef := &object.Dictionary{}
+	fontRef.Set("F1", object.IndirectRef{Number: 6})
+	resources := &object.Dictionary{}
 	resources.Set("Font", fontRef)
 
 	// Object 6: Font
-	font := &pdf.Dictionary{}
-	font.Set("Type", pdf.Name("Font"))
-	font.Set("Subtype", pdf.Name("Type1"))
-	font.Set("BaseFont", pdf.Name("Helvetica"))
+	font := &object.Dictionary{}
+	font.Set("Type", object.Name("Font"))
+	font.Set("Subtype", object.Name("Type1"))
+	font.Set("BaseFont", object.Name("Helvetica"))
 
 	doc := &pdf.Document{
 		Version: "1.7",
-		Objects: map[int]*pdf.IndirectObject{
+		Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Generation: 0, Value: catalog},
 			2: {Number: 2, Generation: 0, Value: pages},
 			3: {Number: 3, Generation: 0, Value: page},
@@ -61,9 +62,9 @@ func main() {
 			5: {Number: 5, Generation: 0, Value: resources},
 			6: {Number: 6, Generation: 0, Value: font},
 		},
-		Trailer: pdf.Dictionary{
-			Keys:   []pdf.Name{"Root"},
-			Values: []pdf.Object{pdf.IndirectRef{Number: 1}},
+		Trailer: object.Dictionary{
+			Keys:   []object.Name{"Root"},
+			Values: []object.Object{object.IndirectRef{Number: 1}},
 		},
 	}
 

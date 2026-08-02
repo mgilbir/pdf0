@@ -58,7 +58,7 @@ func TestUAMediaClips(t *testing.T) {
 		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: annot}
 		return doc
 	}
-	has := func(vs []UAViolation) bool {
+	has := func(vs []Violation) bool {
 		for _, e := range vs {
 			if strings.HasPrefix(e.Clause, "7.18.6.2") {
 				return true

@@ -27,21 +27,20 @@ Each subsystem built on that core has its own map:
 pdf0 was one flat package. It is now a core plus one package per subsystem, and
 the split follows two rules.
 
-**The public API stays in the root package.** Every name a caller writes —
-`pdf0.Read`, `pdf0.Document`, `pdf0.ValidatePDFA`, `pdf0.Dictionary` — is still
-declared there, as a method, a wrapper, or a type alias. A type alias *is* the
-same type, so a value passes between `pdf0` and its subpackage without
-conversion and keeps every method it had. Nothing a caller wrote before the
-split needs changing.
+**Each type is declared in exactly one place, and named from there.** A
+dictionary is `object.Dictionary`, a PDF/A finding is `pdfa.ValidationError`, a
+conformance level is `pdfa.PDFA2b`. The root package holds the entry points —
+`Read`, `Document` and its methods, one validator function per standard — and
+re-exports nothing. A caller that builds an object graph or reads a finding
+imports the package that owns the type.
 
 **A subsystem is a regular package if it carries public API, `internal/` if it
-does not.** The distinction is not stylistic. Aliasing a type into an `internal`
-package renders in godoc as a bare `type X = core.X` with the fields and methods
-gone and nothing to click through to, because the target cannot be imported. For
-a type whose methods *are* the documented API that erases the documentation. So
-`object`, `syntax`, `pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`, `images`,
-`sign` and `facturx` are importable; `internal/core`, `internal/font`,
-`internal/crypt`, `internal/finding` and the codec packages are not.
+does not.** `internal/crypt` is the clear case of the second: its whole exported
+surface exists so the reader, the writer and the white-box tests can reach it,
+and no caller ever names it — every entry point is a `Document` method. The
+distinction matters for godoc too: an `internal` package's names cannot be
+linked to from outside, so anything a caller must read about has to live in a
+regular package.
 
 | Package | Holds |
 |---------|-------|
@@ -90,9 +89,7 @@ own caller.
 
 ## The object model
 
-Every PDF value implements the `Object` interface (defined in the `object`
-package and aliased into the root package, so `pdf0.Dictionary` and
-`object.Dictionary` are the same type): `Boolean`, `Integer`, `Real`, `String`,
+Every PDF value implements the `object.Object` interface: `Boolean`, `Integer`, `Real`, `String`,
 `Name`, `Array`, `Dictionary`, `Stream`, `Null`, `IndirectObject`,
 `IndirectRef`. A `Document` holds `Objects` (object number →
 `IndirectObject`), the `Trailer` dictionary, and — after `Read` — `Offsets`
@@ -331,7 +328,7 @@ images — rather than to a bounded structural count.
 |---|---|---|
 | `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
 | `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
-| All eleven validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `FacturXViolation` / `OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
+| All eleven validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `facturx.Violation` / `facturx.OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
 | `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. |
 | | `Images` | An iterator is already cancellable by `break`, and because each image is decoded only as it is yielded, breaking after image N skips exactly what a context checked between images would have. |
 | | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Bounded by the signature count (single digits), and each signature's crypto is bounded. |

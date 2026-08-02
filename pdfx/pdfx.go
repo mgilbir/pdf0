@@ -21,12 +21,12 @@ import (
 // work; the pieces here are the ones that can be verified false-positive-free
 // against the valid corpus today.
 
-// PDFXLevel identifies a PDF/X conformance level.
-type PDFXLevel int
+// Level identifies a PDF/X conformance level.
+type Level int
 
 const (
 	// PDFX4 is PDF/X-4 with an embedded ICC destination profile (ISO 15930-7).
-	PDFX4 PDFXLevel = iota
+	PDFX4 Level = iota
 	// PDFX4p is PDF/X-4p, which permits an externally referenced destination
 	// profile instead of an embedded one.
 	PDFX4p
@@ -40,7 +40,7 @@ const (
 	PDFX6
 )
 
-func (l PDFXLevel) String() string {
+func (l Level) String() string {
 	switch l {
 	case PDFX4:
 		return "PDF/X-4"
@@ -58,7 +58,7 @@ func (l PDFXLevel) String() string {
 }
 
 // pdfxVersionPrefix is the GTS_PDFXVersion identifier prefix a level requires.
-func (l PDFXLevel) pdfxVersionPrefix() string {
+func (l Level) pdfxVersionPrefix() string {
 	switch l {
 	case PDFX1a:
 		return "PDF/X-1a"
@@ -73,11 +73,11 @@ func (l PDFXLevel) pdfxVersionPrefix() string {
 
 // noTransparency reports whether the level forbids transparency (PDF/X-1a and
 // PDF/X-3 predate the transparency imaging model; PDF/X-4 and -6 permit it).
-func (l PDFXLevel) noTransparency() bool { return l == PDFX1a || l == PDFX3 }
+func (l Level) noTransparency() bool { return l == PDFX1a || l == PDFX3 }
 
 // maxPDFMinor returns the highest PDF 1.x minor version the level is defined
 // for, and whether the level is a PDF 2.0 level.
-func (l PDFXLevel) versionBound() (maxMinor int, pdf2 bool) {
+func (l Level) versionBound() (maxMinor int, pdf2 bool) {
 	switch l {
 	case PDFX1a, PDFX3:
 		return 4, false
@@ -88,20 +88,20 @@ func (l PDFXLevel) versionBound() (maxMinor int, pdf2 bool) {
 	}
 }
 
-// PDFXViolation reports a way in which a document departs from a PDF/X level.
-type PDFXViolation struct {
+// Violation reports a way in which a document departs from a PDF/X level.
+type Violation struct {
 	Rule    string // short rule identifier, e.g. "output-intent"
 	Message string
 	Object  int // object number the violation anchors to, 0 if N/A
 }
 
 // RuleID returns the PDF/X rule identifier.
-func (v PDFXViolation) RuleID() string { return v.Rule }
+func (v Violation) RuleID() string { return v.Rule }
 
 // ObjectNum returns the anchoring object number, 0 if N/A.
-func (v PDFXViolation) ObjectNum() int { return v.Object }
+func (v Violation) ObjectNum() int { return v.Object }
 
-func (v PDFXViolation) Error() string {
+func (v Violation) Error() string {
 	if v.Object != 0 {
 		return fmt.Sprintf("PDF/X %s: %s (object %d)", v.Rule, v.Message, v.Object)
 	}
@@ -286,7 +286,7 @@ func pdfxOutputIntentCoverage(doc core.View, cat *object.Dictionary) (rgb, cmyk,
 // level. PDF/X-4 records the identifier in XMP (pdfxid:GTS_PDFXVersion); the
 // Info dictionary /GTS_PDFXVersion, used by older PDF/X versions, is accepted as
 // a fallback.
-func pdfxCheckIdentification(doc core.View, level PDFXLevel, add func(rule, msg string, obj int)) {
+func pdfxCheckIdentification(doc core.View, level Level, add func(rule, msg string, obj int)) {
 	claimed := ""
 	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
 		if ms, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream); ok {
@@ -319,7 +319,7 @@ func pdfxCheckIdentification(doc core.View, level PDFXLevel, add func(rule, msg 
 // profile (ISO 15930-7 6.2). A GTS_PDFX intent with an OutputConditionIdentifier
 // is required; PDF/X-4 requires the profile embedded (DestOutputProfile), while
 // PDF/X-4p also accepts an external reference.
-func pdfxCheckOutputIntent(doc core.View, level PDFXLevel, add func(rule, msg string, obj int)) {
+func pdfxCheckOutputIntent(doc core.View, level Level, add func(rule, msg string, obj int)) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return
@@ -549,10 +549,10 @@ func rectContains(outer, inner [4]float64) bool {
 
 // ValidateView runs the PDF/X checks over a view. The caller starts the run,
 // builds the view, and reports the guards that tripped while the file was read.
-func ValidateView(v core.View, level PDFXLevel) []PDFXViolation {
-	var out []PDFXViolation
+func ValidateView(v core.View, level Level) []Violation {
+	var out []Violation
 	add := func(rule, msg string, obj int) {
-		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
+		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})
 	}
 
 	// Every check runs under a recover boundary, so a panic on hostile input

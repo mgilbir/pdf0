@@ -10,7 +10,7 @@ import (
 func TestUAFontDicts(t *testing.T) {
 	// Build a document holding one font dictionary (object 10) plus its
 	// descendant/descriptor, and run the per-font check directly.
-	run := func(build func(doc core.View) *object.Dictionary) []UAViolation {
+	run := func(build func(doc core.View) *object.Dictionary) []Violation {
 		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
 		f := build(doc)
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: f}
@@ -107,7 +107,7 @@ func TestUACIDToGIDMapValue(t *testing.T) {
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: f}
 		return doc
 	}
-	check := func(doc core.View) []UAViolation {
+	check := func(doc core.View) []Violation {
 		return checkOneUAFontDict(doc, doc.Objects[10].Value.(*object.Dictionary))
 	}
 	if !hasUAClause(check(mk(object.Name("NoIdentity"))), "7.21.3.2") {

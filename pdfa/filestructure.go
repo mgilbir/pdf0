@@ -17,7 +17,7 @@ import (
 // and Annex C / 6.1.7 implementation limits.
 
 // checkFileStructureBytes runs every raw-byte file-structure check.
-func checkFileStructureBytes(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+func checkFileStructureBytes(doc core.View, level Level, raw []byte) []ValidationError {
 	if raw == nil {
 		return nil
 	}
@@ -38,7 +38,7 @@ func checkFileStructureBytes(doc core.View, level PDFALevel, raw []byte) []Valid
 // be "%PDF-" followed by a single-digit major, ".", single-digit minor and a
 // single EOL marker, and be immediately followed by a comment line whose
 // first four bytes after "%" are all binary (>= 128).
-func checkFileHeaderBytes(level PDFALevel, raw []byte) []ValidationError {
+func checkFileHeaderBytes(level Level, raw []byte) []ValidationError {
 	rule := "6.1.2"
 	bad := func(msg string) []ValidationError {
 		return []ValidationError{{Rule: rule, Level: level, Message: msg}}
@@ -138,7 +138,7 @@ func isPDFWhite(b byte) bool {
 // the object number preceded by an EOL marker, the obj keyword followed by
 // an EOL marker, and the endobj keyword preceded and followed by an EOL
 // marker (with no extra spaces).
-func checkIndirectObjectSyntax(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+func checkIndirectObjectSyntax(doc core.View, level Level, raw []byte) []ValidationError {
 	if doc.Offsets == nil {
 		return nil
 	}
@@ -202,7 +202,7 @@ func checkOneObjectSyntax(raw []byte, off, regionEnd int64, num int, add func(st
 	if p >= limit || !isDigit(raw[p]) {
 		return // not a numeric object header; skip
 	}
-	// object.Object number preceded by an EOL marker.
+	// Object number preceded by an EOL marker.
 	if p > 0 && !isEOLByte(raw[p-1]) {
 		add("indirect object number is not preceded by an EOL marker", num)
 	}
@@ -268,7 +268,7 @@ func checkOneObjectSyntax(raw []byte, off, regionEnd int64, num int, add func(st
 	}
 }
 
-func indirectRule(level PDFALevel) string {
+func indirectRule(level Level) string {
 	if level == PDFA1b {
 		return "6.1.8"
 	}
@@ -316,7 +316,7 @@ func min64(a, b int64) int64 {
 // Separation/DeviceN colorant names at every level, plus font names,
 // structure type names and RoleMap names at PDF/A-4 (PDF 2.0, where names
 // are defined as UTF-8, ISO 32000-2 7.3.5).
-func checkNameUTF8(doc core.View, level PDFALevel) []ValidationError {
+func checkNameUTF8(doc core.View, level Level) []ValidationError {
 	if level == PDFA1b {
 		return nil // PDF/A-1 predates the UTF-8 name requirement
 	}
@@ -429,7 +429,7 @@ func utf8Valid(b []byte) bool { return utf8.Valid(b) }
 // cross-reference table: the xref keyword followed by a single EOL, each
 // subsection header "start count" separated by exactly one space, and each
 // entry line in the fixed 20-byte form.
-func checkXRefTableFormat(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+func checkXRefTableFormat(doc core.View, level Level, raw []byte) []ValidationError {
 	rule := "6.1.4"
 	var errs []ValidationError
 	seen := map[string]bool{}
@@ -587,9 +587,9 @@ func consumeSingleEOL(raw []byte, p int) int {
 // checkHexStringFormat verifies that every hexadecimal string object contains
 // only hexadecimal digits and white space, and an even number of them
 // (PDF/A forbids the implicit trailing-zero padding of an odd-length hex
-// string). object.Object bodies are tokenised up to the stream keyword so binary
+// string). Object bodies are tokenised up to the stream keyword so binary
 // stream data is never misread as a hex string.
-func checkHexStringFormat(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+func checkHexStringFormat(doc core.View, level Level, raw []byte) []ValidationError {
 	if doc.Offsets == nil {
 		return nil
 	}
@@ -632,7 +632,7 @@ func checkHexStringFormat(doc core.View, level PDFALevel, raw []byte) []Validati
 		})
 	}
 
-	// object.String objects also occur as operands inside content streams; scan the
+	// String objects also occur as operands inside content streams; scan the
 	// decoded content of pages, form XObjects, and tiling patterns with a
 	// content-aware tokenizer that skips inline-image binary data.
 	for num, cs := range collectContentStreamData(doc) {
@@ -877,7 +877,7 @@ func indexToken(b []byte, kw string) int {
 // checkStreamKeywordFormat verifies that the stream keyword is followed by
 // CRLF or a single LF (not a bare CR, and with no extra white space before
 // the EOL), and that endstream is preceded by an EOL marker.
-func checkStreamKeywordFormat(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+func checkStreamKeywordFormat(doc core.View, level Level, raw []byte) []ValidationError {
 	if doc.Offsets == nil {
 		return nil
 	}
@@ -974,7 +974,7 @@ var inlineLZWNames = map[string]bool{"LZW": true, "LZWDecode": true}
 // checkInlineImageIntent verifies that an inline image /Intent entry, when
 // present, names a standard rendering intent (ISO 19005-2 6.2.6, -4 6.2.9;
 // ISO 32000-1 8.6.5.8).
-func checkInlineImageIntent(doc core.View, level PDFALevel) []ValidationError {
+func checkInlineImageIntent(doc core.View, level Level) []ValidationError {
 	rule := "6.2.6"
 	if level == PDFA4 {
 		rule = "6.2.9"
@@ -1063,7 +1063,7 @@ func inlineImageDictValue(data []byte, pos *int, key string) string {
 
 // checkInlineImageFilters verifies that every inline image's /F (Filter)
 // entry uses only permitted filters and never LZW.
-func checkInlineImageFilters(doc core.View, level PDFALevel) []ValidationError {
+func checkInlineImageFilters(doc core.View, level Level) []ValidationError {
 	rule := "6.1.10"
 	if level == PDFA4 {
 		rule = "6.1.9"
@@ -1182,7 +1182,7 @@ func parseInlineImageFilter(data []byte, pos *int) []string {
 // 6.1.7, -2/-3 6.1.7, -4 6.1.6; ISO 32000-1 7.3.8.2). The parser recovers a
 // stream with an incorrect Length by locating endstream, so object.Stream.Data holds
 // the true byte count and a divergence from the declared value is a mismatch.
-func checkStreamLength(doc core.View, level PDFALevel) []ValidationError {
+func checkStreamLength(doc core.View, level Level) []ValidationError {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
 	switch level {
 	case PDFA4:
@@ -1212,7 +1212,7 @@ func checkStreamLength(doc core.View, level PDFALevel) []ValidationError {
 // checkObjectStreamDecodable flags an object stream whose compressed contents
 // could not be decoded (ISO 32000-1 7.5.7, 7.3.8): such a stream is malformed,
 // and the objects it should provide are unavailable.
-func checkObjectStreamDecodable(doc core.View, level PDFALevel) []ValidationError {
+func checkObjectStreamDecodable(doc core.View, level Level) []ValidationError {
 	rule := "6.1.7"
 	if level == PDFA4 {
 		rule = "6.1.6"
@@ -1231,7 +1231,7 @@ func checkObjectStreamDecodable(doc core.View, level PDFALevel) []ValidationErro
 // the traditional trailers a linearized PDF/A-1 file uses. Gated on
 // /Linearized: a non-linearized incremental-update file legitimately carries
 // several trailers, and comparing them there produced a false positive.
-func checkLinearizedTrailerID(raw []byte, level PDFALevel) []ValidationError {
+func checkLinearizedTrailerID(raw []byte, level Level) []ValidationError {
 	if !bytes.Contains(raw, []byte("/Linearized")) {
 		return nil
 	}
@@ -1291,7 +1291,7 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 //     length is therefore valid within [raw-eol, raw-1] when an EOL is present
 //     (raw exactly when none is), and only a length outside that range — such as
 //     one that wrongly includes the whole EOL — is a violation.
-func checkStreamLengthBytes(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []ValidationError {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
 	switch level {
 	case PDFA4:

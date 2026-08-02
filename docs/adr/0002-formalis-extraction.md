@@ -25,14 +25,14 @@ and hand it to formalis for the invoice rules.
 
 ## Consequences
 
-- The seam is visible in the API, but it is no longer a wart. `FacturXResult`
-  and `OrderXResult` used to carry `[]formalis.Violation`, an external type pdf0
+- The seam is visible in the API, but it is no longer a wart. `facturx.Result`
+  and `facturx.OrderXResult` used to carry `[]formalis.Violation`, an external type pdf0
   cannot extend, so those findings did **not** satisfy `pdf0.Violation` the way
   every other validator's do, and callers who wanted one combined list had to
   adapt them (documentation audit finding D2). formalis v0.2.0 removed that
   type's `Object` field — which pdf0 had been borrowing for PDF object numbers,
   always a smell — and pdf0 now has finding types of its own,
-  `FacturXViolation` and `OrderXViolation`. They satisfy `pdf0.Violation`, so
+  `facturx.Violation` and `facturx.OrderXViolation`. They satisfy `pdf0.Violation`, so
   `IsCheckerFinding` applies to them and both entry points could finally get a
   `…Context` variant.
 - The seam is where two rule namespaces meet, and both modules pay for it. Each

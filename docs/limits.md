@@ -187,7 +187,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | --- | --- | --- | --- | --- |
 | table grid fills (`WithMaxTableGridFills`) | `pdfua/pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
 | `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua/pdfua.go`, `pdfua/pdfua_struct.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. | Reported as `rolemap-work`. Type resolution (`resolveRoleMapChain`) shares the same budget and returns a completeness flag; on a trip `checkUARoleMap` declines rather than reporting *"neither standard nor mapped"*. |
-| `maxFieldTreeDepth` (64) | `signatures.go`, `sign.go` | Silently lossy | Truncates a reported `SignatureResult.Field` name; never flips `Valid` or `CoversWholeDocument`. | Unchanged. |
+| `maxFieldTreeDepth` (64) | `signatures.go`, `sign.go` | Silently lossy | Truncates a reported `sign.Result.Field` name; never flips `Valid` or `CoversWholeDocument`. | Unchanged. |
 | `maxPageTreeDepth` (64) | `sign.go` | Loud | `signingTarget` refuses. | Unchanged. |
 | Struct-tree / table-row seen-sets | `pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go` | Silently lossy on well-formed input | An element reachable twice is not a valid structure tree, so these only bite malformed files. | Unchanged (see *Left deliberately*). |
 

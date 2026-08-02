@@ -1,6 +1,8 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
 )
@@ -9,53 +11,53 @@ import (
 // gray image and the expensive tint-transform image from the DoS test (large
 // only in decode work, not bytes).
 func buildTwoImageDoc(expensiveProg string, w, h int) *Document {
-	doc := &Document{Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-	set := func(num int, v Object) IndirectRef {
-		doc.Objects[num] = &IndirectObject{Number: num, Value: v}
-		return IndirectRef{Number: num}
+	doc := &Document{Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
+	set := func(num int, v object.Object) object.IndirectRef {
+		doc.Objects[num] = &object.IndirectObject{Number: num, Value: v}
+		return object.IndirectRef{Number: num}
 	}
-	small := Dictionary{}
-	small.Set("Type", Name("XObject"))
-	small.Set("Subtype", Name("Image"))
-	small.Set("Width", Integer(1))
-	small.Set("Height", Integer(1))
-	small.Set("BitsPerComponent", Integer(8))
-	small.Set("ColorSpace", Name("DeviceGray"))
-	small.Set("Length", Integer(1))
-	smallRef := set(6, &Stream{Dict: small, Data: []byte{0x80}})
+	small := object.Dictionary{}
+	small.Set("Type", object.Name("XObject"))
+	small.Set("Subtype", object.Name("Image"))
+	small.Set("Width", object.Integer(1))
+	small.Set("Height", object.Integer(1))
+	small.Set("BitsPerComponent", object.Integer(8))
+	small.Set("ColorSpace", object.Name("DeviceGray"))
+	small.Set("Length", object.Integer(1))
+	smallRef := set(6, &object.Stream{Dict: small, Data: []byte{0x80}})
 
-	fnDict := Dictionary{}
-	fnDict.Set("FunctionType", Integer(4))
-	fnDict.Set("Domain", Array{Integer(0), Integer(1)})
-	fnDict.Set("Range", Array{Integer(0), Integer(1), Integer(0), Integer(1), Integer(0), Integer(1)})
-	fnDict.Set("Length", Integer(len(expensiveProg)))
-	fnRef := set(4, &Stream{Dict: fnDict, Data: []byte(expensiveProg)})
-	big := Dictionary{}
-	big.Set("Type", Name("XObject"))
-	big.Set("Subtype", Name("Image"))
-	big.Set("Width", Integer(w))
-	big.Set("Height", Integer(h))
-	big.Set("BitsPerComponent", Integer(8))
-	big.Set("ColorSpace", Array{Name("Separation"), Name("Spot"), Name("DeviceRGB"), fnRef})
-	big.Set("Length", Integer(w*h))
-	bigRef := set(5, &Stream{Dict: big, Data: make([]byte, w*h)})
+	fnDict := object.Dictionary{}
+	fnDict.Set("FunctionType", object.Integer(4))
+	fnDict.Set("Domain", object.Array{object.Integer(0), object.Integer(1)})
+	fnDict.Set("Range", object.Array{object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1)})
+	fnDict.Set("Length", object.Integer(len(expensiveProg)))
+	fnRef := set(4, &object.Stream{Dict: fnDict, Data: []byte(expensiveProg)})
+	big := object.Dictionary{}
+	big.Set("Type", object.Name("XObject"))
+	big.Set("Subtype", object.Name("Image"))
+	big.Set("Width", object.Integer(w))
+	big.Set("Height", object.Integer(h))
+	big.Set("BitsPerComponent", object.Integer(8))
+	big.Set("ColorSpace", object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceRGB"), fnRef})
+	big.Set("Length", object.Integer(w*h))
+	bigRef := set(5, &object.Stream{Dict: big, Data: make([]byte, w*h)})
 
-	xobj := &Dictionary{}
+	xobj := &object.Dictionary{}
 	xobj.Set("ImA", smallRef)
 	xobj.Set("ImB", bigRef)
-	res := &Dictionary{}
+	res := &object.Dictionary{}
 	res.Set("XObject", xobj)
-	page := &Dictionary{}
-	page.Set("Type", Name("Page"))
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
 	page.Set("Resources", res)
 	pageRef := set(3, page)
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", Array{pageRef})
-	pages.Set("Count", Integer(1))
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{pageRef})
+	pages.Set("Count", object.Integer(1))
 	pagesRef := set(2, pages)
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
 	cat.Set("Pages", pagesRef)
 	doc.Trailer.Set("Root", set(1, cat))
 	return doc
@@ -66,7 +68,7 @@ func buildTwoImageDoc(expensiveProg string, w, h int) *Document {
 func TestImagesIteratorMatchesExtract(t *testing.T) {
 	doc := buildTwoImageDoc("{ pop 0 0 1 }", 4, 4)
 	eager := doc.ExtractImages()
-	var lazy []ExtractedImage
+	var lazy []images.ExtractedImage
 	for im := range doc.Images() {
 		lazy = append(lazy, im)
 	}

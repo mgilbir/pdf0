@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/sign"
 	"strings"
 	"testing"
@@ -75,14 +76,14 @@ func rc4EncryptedDoc(t *testing.T) *Document {
 	}
 	u = append(u, make([]byte, 16)...) // 32 bytes: the value plus arbitrary padding
 
-	enc := &Dictionary{}
-	enc.Set("Filter", Name("Standard"))
-	enc.Set("V", Integer(2))
-	enc.Set("R", Integer(3))
-	enc.Set("Length", Integer(128))
-	enc.Set("O", String{Value: o, IsHex: true})
-	enc.Set("U", String{Value: u, IsHex: true})
-	enc.Set("P", Integer(perm))
+	enc := &object.Dictionary{}
+	enc.Set("Filter", object.Name("Standard"))
+	enc.Set("V", object.Integer(2))
+	enc.Set("R", object.Integer(3))
+	enc.Set("Length", object.Integer(128))
+	enc.Set("O", object.String{Value: o, IsHex: true})
+	enc.Set("U", object.String{Value: u, IsHex: true})
+	enc.Set("P", object.Integer(perm))
 
 	maxObj := 0
 	for num := range doc.Objects {
@@ -91,13 +92,13 @@ func rc4EncryptedDoc(t *testing.T) *Document {
 		}
 	}
 	encNum := maxObj + 1
-	doc.Objects[encNum] = &IndirectObject{Number: encNum, Value: enc}
+	doc.Objects[encNum] = &object.IndirectObject{Number: encNum, Value: enc}
 	h.EncryptObjNum = encNum
 	doc.security = h
 	doc.Encrypted = true
 	tr := doc.Trailer.Clone()
-	tr.Set("Encrypt", IndirectRef{Number: encNum})
-	tr.Set("ID", Array{String{Value: id, IsHex: true}, String{Value: append([]byte(nil), id...), IsHex: true}})
+	tr.Set("Encrypt", object.IndirectRef{Number: encNum})
+	tr.Set("ID", object.Array{object.String{Value: id, IsHex: true}, object.String{Value: append([]byte(nil), id...), IsHex: true}})
 	doc.Trailer = *tr
 	return doc
 }
@@ -140,8 +141,8 @@ func appendClearSignature(t *testing.T, enc []byte, cert *x509.Certificate, key 
 	fmt.Fprintf(&out, "%d 1\n%010d 00000 n \r\n", sigNum, sigOff)
 	out.WriteString("trailer\n")
 	trailer := edoc.Trailer.Clone()
-	trailer.Set("Size", Integer(sigNum+1))
-	trailer.Set("Prev", Integer(prevXref))
+	trailer.Set("Size", object.Integer(sigNum+1))
+	trailer.Set("Prev", object.Integer(prevXref))
 	s := NewSerializer(&out)
 	if err := s.WriteDictionary(trailer); err != nil {
 		t.Fatal(err)
@@ -204,12 +205,12 @@ func TestEncryptedSignedFileVerifies(t *testing.T) {
 	}
 	var found bool
 	for _, iobj := range got.Objects {
-		d, ok := iobj.Value.(*Dictionary)
+		d, ok := iobj.Value.(*object.Dictionary)
 		if !ok || d.Get("ByteRange") == nil {
 			continue
 		}
 		found = true
-		c, _ := d.Get("Contents").(String)
+		c, _ := d.Get("Contents").(object.String)
 		if !bytes.Equal(c.Value, rawContents) {
 			t.Fatalf("the signature value was transformed on read: file has %x…, document has %x…",
 				rawContents[:16], c.Value[:16])
@@ -260,8 +261,8 @@ func TestWriteEncryptedSignedKeepsContentsClear(t *testing.T) {
 
 	var plain []byte
 	for _, iobj := range sdoc.Objects {
-		if d, ok := iobj.Value.(*Dictionary); ok && d.Get("ByteRange") != nil {
-			c, _ := d.Get("Contents").(String)
+		if d, ok := iobj.Value.(*object.Dictionary); ok && d.Get("ByteRange") != nil {
+			c, _ := d.Get("Contents").(object.String)
 			plain = c.Value
 		}
 	}
@@ -279,46 +280,46 @@ func TestWriteEncryptedSignedKeepsContentsClear(t *testing.T) {
 func TestEncryptionExemptionIsNarrow(t *testing.T) {
 	cases := []struct {
 		name string
-		dict func() *Dictionary
+		dict func() *object.Dictionary
 		want bool
 	}{
-		{"signature", func() *Dictionary {
-			d := &Dictionary{}
-			d.Set("Type", Name("Sig"))
-			d.Set("ByteRange", Array{Integer(0), Integer(1), Integer(2), Integer(3)})
-			d.Set("Contents", String{Value: []byte("cms"), IsHex: true})
+		{"signature", func() *object.Dictionary {
+			d := &object.Dictionary{}
+			d.Set("Type", object.Name("Sig"))
+			d.Set("ByteRange", object.Array{object.Integer(0), object.Integer(1), object.Integer(2), object.Integer(3)})
+			d.Set("Contents", object.String{Value: []byte("cms"), IsHex: true})
 			return d
 		}, true},
-		{"doc-timestamp", func() *Dictionary {
-			d := &Dictionary{}
-			d.Set("Type", Name("DocTimeStamp"))
-			d.Set("ByteRange", Array{Integer(0), Integer(1), Integer(2), Integer(3)})
-			d.Set("Contents", String{Value: []byte("tst"), IsHex: true})
+		{"doc-timestamp", func() *object.Dictionary {
+			d := &object.Dictionary{}
+			d.Set("Type", object.Name("DocTimeStamp"))
+			d.Set("ByteRange", object.Array{object.Integer(0), object.Integer(1), object.Integer(2), object.Integer(3)})
+			d.Set("Contents", object.String{Value: []byte("tst"), IsHex: true})
 			return d
 		}, true},
-		{"untyped-signature", func() *Dictionary {
-			d := &Dictionary{}
-			d.Set("ByteRange", Array{Integer(0), Integer(1), Integer(2), Integer(3)})
-			d.Set("Contents", String{Value: []byte("cms"), IsHex: true})
+		{"untyped-signature", func() *object.Dictionary {
+			d := &object.Dictionary{}
+			d.Set("ByteRange", object.Array{object.Integer(0), object.Integer(1), object.Integer(2), object.Integer(3)})
+			d.Set("Contents", object.String{Value: []byte("cms"), IsHex: true})
 			return d
 		}, true},
-		{"annotation-with-byterange", func() *Dictionary {
-			d := &Dictionary{}
-			d.Set("Type", Name("Annot"))
-			d.Set("ByteRange", Array{Integer(0), Integer(1), Integer(2), Integer(3)})
-			d.Set("Contents", String{Value: []byte("note text")})
+		{"annotation-with-byterange", func() *object.Dictionary {
+			d := &object.Dictionary{}
+			d.Set("Type", object.Name("Annot"))
+			d.Set("ByteRange", object.Array{object.Integer(0), object.Integer(1), object.Integer(2), object.Integer(3)})
+			d.Set("Contents", object.String{Value: []byte("note text")})
 			return d
 		}, false},
-		{"page-contents", func() *Dictionary {
-			d := &Dictionary{}
-			d.Set("Type", Name("Page"))
-			d.Set("Contents", IndirectRef{Number: 7})
+		{"page-contents", func() *object.Dictionary {
+			d := &object.Dictionary{}
+			d.Set("Type", object.Name("Page"))
+			d.Set("Contents", object.IndirectRef{Number: 7})
 			return d
 		}, false},
-		{"no-byterange", func() *Dictionary {
-			d := &Dictionary{}
-			d.Set("Type", Name("Sig"))
-			d.Set("Contents", String{Value: []byte("cms"), IsHex: true})
+		{"no-byterange", func() *object.Dictionary {
+			d := &object.Dictionary{}
+			d.Set("Type", object.Name("Sig"))
+			d.Set("Contents", object.String{Value: []byte("cms"), IsHex: true})
 			return d
 		}, false},
 	}
@@ -330,12 +331,12 @@ func TestEncryptionExemptionIsNarrow(t *testing.T) {
 			// Cross-check the behaviour the predicate gates: /Contents survives
 			// decryption exactly when the dictionary is a signature.
 			d := tc.dict()
-			before, isString := d.Get("Contents").(String)
+			before, isString := d.Get("Contents").(object.String)
 			if !isString {
 				return
 			}
 			rc4EncryptedDoc(t).security.DecryptDictStrings(d, 3, 0)
-			after, _ := d.Get("Contents").(String)
+			after, _ := d.Get("Contents").(object.String)
 			if same := bytes.Equal(before.Value, after.Value); same != tc.want {
 				t.Fatalf("/Contents preserved = %v, want %v", same, tc.want)
 			}
@@ -354,8 +355,8 @@ func TestTrailerIDNotDecrypted(t *testing.T) {
 		if err := doc.SetEncryption("", ""); err != nil {
 			t.Fatal(err)
 		}
-		want, _ := doc.Trailer.Get("ID").(Array)
-		w0, _ := want[0].(String)
+		want, _ := doc.Trailer.Get("ID").(object.Array)
+		w0, _ := want[0].(object.String)
 		var buf bytes.Buffer
 		if err := doc.Write(&buf); err != nil {
 			t.Fatal(err)
@@ -368,11 +369,11 @@ func TestTrailerIDNotDecrypted(t *testing.T) {
 		if back.security == nil {
 			t.Fatalf("xref stream %v: the file did not decrypt", xrefStream)
 		}
-		got, _ := back.Trailer.Get("ID").(Array)
+		got, _ := back.Trailer.Get("ID").(object.Array)
 		if len(got) != 2 {
 			t.Fatalf("xref stream %v: /ID has %d entries", xrefStream, len(got))
 		}
-		g0, _ := got[0].(String)
+		g0, _ := got[0].(object.String)
 		if !bytes.Equal(w0.Value, g0.Value) {
 			t.Errorf("xref stream %v: /ID changed across the encrypted round-trip: %x -> %x",
 				xrefStream, w0.Value, g0.Value)

@@ -56,7 +56,7 @@ var orderXDocumentTypes = map[string]bool{"ORDER": true, "ORDER_CHANGE": true, "
 // OrderXViolation is one finding of the Order-X container validator: either a
 // departure from a container rule pdf0 checks itself, or one adopted from the
 // order rule engine the embedded order XML is run through. Its fields mean what
-// FacturXViolation's mean, which documents them.
+// Violation's mean, which documents them.
 //
 // It is a type of its own rather than a shared invoice-container finding, for
 // the reason every other validator in this package has one: an Order-X is a
@@ -75,7 +75,7 @@ type OrderXViolation struct {
 	Source  formalis.Source
 }
 
-// Error renders the finding; see FacturXViolation.Error.
+// Error renders the finding; see Violation.Error.
 func (v OrderXViolation) Error() string {
 	who := "Order-X"
 	if v.Source != formalis.SourceNone {
@@ -99,7 +99,7 @@ type OrderXResult struct {
 	XML        []byte        // decoded order XML, nil if not found
 
 	// OrderWarnings is the advisory findings of the order rule engine, kept out
-	// of the verdict for the reason FacturXResult.InvoiceWarnings gives. It is
+	// of the verdict for the reason Result.InvoiceWarnings gives. It is
 	// empty today and would stay empty if this field did not exist: no authority
 	// has flagged an Order-X rule advisory, and formalis's five ORDER-* rules are
 	// all fatal by its own decision. It exists so that the split at the adoption
@@ -110,7 +110,7 @@ type OrderXResult struct {
 	OrderWarnings []OrderXViolation
 
 	// OrderNotEvaluated and OrderComplete report what the order rule engine did
-	// and did not evaluate, exactly as FacturXResult's invoice pair does; that
+	// and did not evaluate, exactly as Result's invoice pair does; that
 	// documentation applies unchanged.
 	//
 	// OrderComplete is false for every order, and will stay false until the rule

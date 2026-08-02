@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/images"
 	"image"
 	"os"
 	"path/filepath"
@@ -9,7 +10,7 @@ import (
 )
 
 // jbig2CCITTImage decodes the single JBIG2 image from a sample PDF and returns it.
-func jbig2Image(t *testing.T, path string) ExtractedImage {
+func jbig2Image(t *testing.T, path string) images.ExtractedImage {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -25,10 +26,10 @@ func jbig2Image(t *testing.T, path string) ExtractedImage {
 		}
 	}
 	t.Fatalf("%s: no JBIG2 image", filepath.Base(path))
-	return ExtractedImage{}
+	return images.ExtractedImage{}
 }
 
-func grayPixels(t *testing.T, img ExtractedImage) *image.Gray {
+func grayPixels(t *testing.T, img images.ExtractedImage) *image.Gray {
 	t.Helper()
 	g, ok := img.Image.(*image.Gray)
 	if !ok {

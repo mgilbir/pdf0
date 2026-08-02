@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 )
@@ -83,7 +84,7 @@ func TestRebuildSynthesizesRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read did not synthesize a trailer: %v", err)
 	}
-	root, ok := doc.Trailer.Get("Root").(IndirectRef)
+	root, ok := doc.Trailer.Get("Root").(object.IndirectRef)
 	if !ok || root.Number != 1 {
 		t.Fatalf("synthesized /Root = %v, want 1 0 R", doc.Trailer.Get("Root"))
 	}
@@ -103,7 +104,7 @@ func TestRebuildLastDefinitionWins(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	cat := doc.view().Catalog()
-	if v, _ := cat.Get("Version").(Name); v != "B" {
+	if v, _ := cat.Get("Version").(object.Name); v != "B" {
 		t.Errorf("catalog /Version = %q, want the later definition B", v)
 	}
 }
@@ -153,7 +154,7 @@ func TestRebuildMaterializesObjStm(t *testing.T) {
 		if !ok {
 			t.Fatalf("object %d from the scanned object stream was not materialized", num)
 		}
-		if _, ok := iobj.Value.(*Dictionary); !ok {
+		if _, ok := iobj.Value.(*object.Dictionary); !ok {
 			t.Errorf("object %d is %T, want *Dictionary", num, iobj.Value)
 		}
 	}

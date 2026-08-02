@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
 	"strconv"
 )
@@ -144,11 +145,11 @@ func ParseXRefTable(data []byte, pos int64) (*XRefTable, error) {
 // Resource limits default to values safe for untrusted input; pass With*
 // options to change them. (*Document) supplies its own resolved limits when it
 // calls this during Read, so a document read with options keeps them here.
-func ParseXRefStream(stream *Stream, opts ...Option) (*XRefTable, error) {
+func ParseXRefStream(stream *object.Stream, opts ...Option) (*XRefTable, error) {
 	return parseXRefStream(core.Canceler{}, stream, resolveLimits(opts))
 }
 
-func parseXRefStream(cancel core.Canceler, stream *Stream, lim core.Limits) (*XRefTable, error) {
+func parseXRefStream(cancel core.Canceler, stream *object.Stream, lim core.Limits) (*XRefTable, error) {
 	table := &XRefTable{
 		Entries: make(map[int]XRefEntry),
 	}
@@ -158,14 +159,14 @@ func parseXRefStream(cancel core.Canceler, stream *Stream, lim core.Limits) (*XR
 	if wObj == nil {
 		return nil, fmt.Errorf("xref stream missing /W entry")
 	}
-	wArr, ok := wObj.(Array)
+	wArr, ok := wObj.(object.Array)
 	if !ok || len(wArr) != 3 {
 		return nil, fmt.Errorf("xref stream /W must be array of 3 integers")
 	}
 
 	w := make([]int, 3)
 	for i, obj := range wArr {
-		iv, ok := obj.(Integer)
+		iv, ok := obj.(object.Integer)
 		if !ok {
 			return nil, fmt.Errorf("xref stream /W[%d] is not an integer", i)
 		}
@@ -183,12 +184,12 @@ func parseXRefStream(cancel core.Canceler, stream *Stream, lim core.Limits) (*XR
 	var indices []int
 	indexObj := stream.Dict.Get("Index")
 	if indexObj != nil {
-		indexArr, ok := indexObj.(Array)
+		indexArr, ok := indexObj.(object.Array)
 		if !ok {
 			return nil, fmt.Errorf("xref stream /Index is not an array")
 		}
 		for _, obj := range indexArr {
-			iv, ok := obj.(Integer)
+			iv, ok := obj.(object.Integer)
 			if !ok {
 				return nil, fmt.Errorf("xref stream /Index element is not an integer")
 			}
@@ -210,7 +211,7 @@ func parseXRefStream(cancel core.Canceler, stream *Stream, lim core.Limits) (*XR
 		if sizeObj == nil {
 			return nil, fmt.Errorf("xref stream missing /Size")
 		}
-		size, ok := sizeObj.(Integer)
+		size, ok := sizeObj.(object.Integer)
 		if !ok {
 			return nil, fmt.Errorf("xref stream /Size is not an integer")
 		}
@@ -395,8 +396,8 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 // "trailer" keyword and returns the last dictionary that parses and carries
 // /Root — the trailer of the newest update (7.5.6). It returns nil if none
 // qualifies.
-func findTrailerByScan(data []byte) *Dictionary {
-	var best *Dictionary
+func findTrailerByScan(data []byte) *object.Dictionary {
+	var best *object.Dictionary
 	for i := 0; ; {
 		j := bytes.Index(data[i:], []byte("trailer"))
 		if j < 0 {
@@ -416,7 +417,7 @@ func findTrailerByScan(data []byte) *Dictionary {
 		if err != nil {
 			continue
 		}
-		if d, ok := dict.(*Dictionary); ok && d.Get("Root") != nil {
+		if d, ok := dict.(*object.Dictionary); ok && d.Get("Root") != nil {
 			best = d
 		}
 	}

@@ -14,29 +14,26 @@ import (
 // through a core.View; this is the boundary that starts the run and reports the
 // guards that tripped while the file was read.
 
-// PDFRViolation is a PDF/R conformance failure.
-type PDFRViolation = pdfr.PDFRViolation
-
 // ValidatePDFR checks a document against the PDF/R structural profile.
-func ValidatePDFR(d *Document) []PDFRViolation {
+func ValidatePDFR(d *Document) []pdfr.Violation {
 	return validatePDFR(core.Canceler{}, d)
 }
 
 // ValidatePDFRContext is ValidatePDFR with cancellation; a cancelled run reports
 // itself under the rule "limit" (see cancel.go).
-func ValidatePDFRContext(ctx context.Context, d *Document) []PDFRViolation {
+func ValidatePDFRContext(ctx context.Context, d *Document) []pdfr.Violation {
 	return validatePDFR(core.NewCanceler(ctx), d)
 }
-func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
+func validatePDFR(cancel core.Canceler, d *Document) []pdfr.Violation {
 	// Run against a shallow copy carrying the per-run cache (see beginRun): it
 	// memoizes the shared traversals, applies the aggregate content budget,
 	// carries the cancellation signal, and gives the resource guards somewhere to
 	// report a trip (limits.go).
 	rd := beginRunCancel(d, cancel)
 	v := rd
-	var out []PDFRViolation
+	var out []pdfr.Violation
 	add := func(rule, msg string, obj int) {
-		out = append(out, PDFRViolation{Rule: rule, Message: msg, Object: obj})
+		out = append(out, pdfr.Violation{Rule: rule, Message: msg, Object: obj})
 	}
 
 	// Every check runs under a recover boundary, so a panic on hostile input

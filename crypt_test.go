@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"crypto/rc4"
 	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
 	"io"
 	"os"
 	"path/filepath"
@@ -48,11 +49,11 @@ func TestDecryptCorpusFiles(t *testing.T) {
 			}
 			checked := 0
 			for _, iobj := range doc.Objects {
-				s, ok := iobj.Value.(*Stream)
+				s, ok := iobj.Value.(*object.Stream)
 				if !ok {
 					continue
 				}
-				if f, _ := s.Dict.Get("Filter").(Name); f != "FlateDecode" {
+				if f, _ := s.Dict.Get("Filter").(object.Name); f != "FlateDecode" {
 					continue
 				}
 				zr, err := zlib.NewReader(bytes.NewReader(s.Data))
@@ -121,21 +122,21 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 		t.Fatal("fixture does not exercise the failure: the blob decrypts cleanly")
 	}
 
-	st := &Stream{Dict: Dictionary{}, Data: append([]byte(nil), bad...)}
-	st.Dict.Set("Length", Integer(len(bad)))
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Title", String{Value: append([]byte(nil), bad...)})
+	st := &object.Stream{Dict: object.Dictionary{}, Data: append([]byte(nil), bad...)}
+	st.Dict.Set("Length", object.Integer(len(bad)))
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Title", object.String{Value: append([]byte(nil), bad...)})
 	doc := &Document{
-		Objects: map[int]*IndirectObject{
+		Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: cat},
 			4: {Number: 4, Value: st},
 		},
-		Trailer:   Dictionary{},
+		Trailer:   object.Dictionary{},
 		Encrypted: true,
 		security:  h,
 	}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	doc.decryptFailures = h.DecryptDocument(doc.graph())
 
@@ -145,7 +146,7 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	if len(st.Data) != 0 {
 		t.Errorf("undecryptable stream data = %x, want empty", st.Data)
 	}
-	if s, _ := cat.Get("Title").(String); bytes.Equal(s.Value, bad) {
+	if s, _ := cat.Get("Title").(object.String); bytes.Equal(s.Value, bad) {
 		t.Error("string ciphertext was handed on unchanged as plaintext")
 	}
 	want := []int{1, 4}
@@ -183,11 +184,11 @@ func TestDecryptSuccessRecordsNoFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := &Stream{Dict: Dictionary{}, Data: ct}
-	st.Dict.Set("Length", Integer(len(ct)))
+	st := &object.Stream{Dict: object.Dictionary{}, Data: ct}
+	st.Dict.Set("Length", object.Integer(len(ct)))
 	doc := &Document{
-		Objects:   map[int]*IndirectObject{4: {Number: 4, Value: st}},
-		Trailer:   Dictionary{},
+		Objects:   map[int]*object.IndirectObject{4: {Number: 4, Value: st}},
+		Trailer:   object.Dictionary{},
 		Encrypted: true,
 		security:  h,
 	}

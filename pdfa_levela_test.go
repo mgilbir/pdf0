@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/pdfa"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,10 +23,10 @@ func TestLevelACorpus(t *testing.T) {
 	}
 	cases := []struct {
 		dir  string
-		a, b PDFALevel
+		a, b pdfa.Level
 	}{
-		{"PDF_A-1a", PDFA1a, PDFA1b},
-		{"PDF_A-2a", PDFA2a, PDFA2b},
+		{"PDF_A-1a", pdfa.PDFA1a, pdfa.PDFA1b},
+		{"PDF_A-2a", pdfa.PDFA2a, pdfa.PDFA2b},
 	}
 	for _, tc := range cases {
 		files, _ := filepath.Glob(filepath.Join(corpus, tc.dir, "**", "**", "*.pdf"))
@@ -65,7 +66,7 @@ func TestLevelACorpus(t *testing.T) {
 
 // TestLevelAString checks the new level constants stringify correctly.
 func TestLevelAString(t *testing.T) {
-	for lvl, want := range map[PDFALevel]string{PDFA1a: "PDF/A-1a", PDFA2a: "PDF/A-2a", PDFA3a: "PDF/A-3a"} {
+	for lvl, want := range map[pdfa.Level]string{pdfa.PDFA1a: "PDF/A-1a", pdfa.PDFA2a: "PDF/A-2a", pdfa.PDFA3a: "PDF/A-3a"} {
 		if got := lvl.String(); got != want {
 			t.Errorf("%d.String() = %q, want %q", lvl, got, want)
 		}

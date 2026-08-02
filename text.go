@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
 
@@ -67,15 +68,15 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 // and a caller extracting several pages already has a loop of its own to check
 // a context in. Adding a variant here would move that check inside a call that
 // does one page's work either way.
-func (d *Document) ExtractPageText(page *Dictionary) string {
+func (d *Document) ExtractPageText(page *object.Dictionary) string {
 	return d.extractPageText(core.Canceler{}, page)
 }
 
-func (d *Document) extractPageText(cancel core.Canceler, page *Dictionary) string {
+func (d *Document) extractPageText(cancel core.Canceler, page *object.Dictionary) string {
 	res := d.ResolveDict(d.view().InheritedPageAttr(page, "Resources"))
 	content := core.ContentStreamData(d.view(), page.Get("Contents"))
 	var out strings.Builder
-	d.extractContentText(cancel, res, content, &out, map[*Stream]bool{}, 0)
+	d.extractContentText(cancel, res, content, &out, map[*object.Stream]bool{}, 0)
 	return out.String()
 }
 
@@ -86,12 +87,12 @@ const maxTextFormDepth = 32
 // a form XObject — to out. Fonts are resolved from res; a Do that invokes a form
 // XObject recurses into it with the form's own resources (audit C28). seen guards
 // cyclic form references and depth bounds nesting.
-func (d *Document) extractContentText(cancel core.Canceler, res *Dictionary, content []byte, out *strings.Builder, seen map[*Stream]bool, depth int) {
+func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictionary, content []byte, out *strings.Builder, seen map[*object.Stream]bool, depth int) {
 	if len(content) == 0 || depth > maxTextFormDepth {
 		return
 	}
 	fonts := d.fontMapsFrom(res)
-	var xobjs *Dictionary
+	var xobjs *object.Dictionary
 	if res != nil {
 		xobjs = d.ResolveDict(res.Get("XObject"))
 	}
@@ -141,8 +142,8 @@ func (d *Document) extractContentText(cancel core.Canceler, res *Dictionary, con
 			out.WriteByte('\n')
 		case "Do":
 			if xobjs != nil && len(operands) >= 1 {
-				if st, ok := d.Resolve(xobjs.Get(Name(operands[len(operands)-1].Name))).(*Stream); ok {
-					if sub, _ := st.Dict.Get("Subtype").(Name); sub == "Form" && !seen[st] {
+				if st, ok := d.Resolve(xobjs.Get(object.Name(operands[len(operands)-1].Name))).(*object.Stream); ok {
+					if sub, _ := st.Dict.Get("Subtype").(object.Name); sub == "Form" && !seen[st] {
 						seen[st] = true
 						formRes := d.ResolveDict(st.Dict.Get("Resources"))
 						if formRes == nil {
@@ -163,7 +164,7 @@ type fontText struct {
 }
 
 // fontMapsFrom resolves a resource dictionary's /Font entries to their ToUnicode maps.
-func (d *Document) fontMapsFrom(res *Dictionary) map[string]fontText {
+func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 	out := map[string]fontText{}
 	if res == nil {
 		return out
@@ -178,7 +179,7 @@ func (d *Document) fontMapsFrom(res *Dictionary) map[string]fontText {
 			continue
 		}
 		twoByte := false
-		if st, _ := f.Get("Subtype").(Name); st == "Type0" {
+		if st, _ := f.Get("Subtype").(object.Name); st == "Type0" {
 			twoByte = true
 		}
 		out[string(name)] = fontText{toUnicode: d.view().ParseToUnicodeMap(f), twoByte: twoByte}

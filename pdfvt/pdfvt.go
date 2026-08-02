@@ -18,20 +18,20 @@ import (
 // checks with the PDF/VT-specific requirements; it is calibrated against the
 // valid Cal Poly PDF/VT-1 test suite.
 
-// PDFVTViolation reports a way in which a document departs from PDF/VT-1.
-type PDFVTViolation struct {
+// Violation reports a way in which a document departs from PDF/VT-1.
+type Violation struct {
 	Rule    string // short rule identifier, base-profile violations prefixed "pdfx-4/" or "dpart/"
 	Message string
 	Object  int // object number the violation anchors to, 0 if N/A
 }
 
 // RuleID returns the PDF/VT rule identifier.
-func (v PDFVTViolation) RuleID() string { return v.Rule }
+func (v Violation) RuleID() string { return v.Rule }
 
 // ObjectNum returns the anchoring object number, 0 if N/A.
-func (v PDFVTViolation) ObjectNum() int { return v.Object }
+func (v Violation) ObjectNum() int { return v.Object }
 
-func (v PDFVTViolation) Error() string {
+func (v Violation) Error() string {
 	if v.Object != 0 {
 		return fmt.Sprintf("PDF/VT-1 %s: %s (object %d)", v.Rule, v.Message, v.Object)
 	}
@@ -41,10 +41,10 @@ func (v PDFVTViolation) Error() string {
 // ValidateView runs the PDF/VT checks over a view. versionPrefix is the
 // pdfvtid:GTS_PDFVTVersion the file must declare, and allowRefXObjects lifts
 // the reference-XObject prohibition for PDF/VT-2.
-func ValidateView(doc core.View, versionPrefix string, allowRefXObjects bool) []PDFVTViolation {
-	var out []PDFVTViolation
+func ValidateView(doc core.View, versionPrefix string, allowRefXObjects bool) []Violation {
+	var out []Violation
 	add := func(rule, msg string, obj int) {
-		out = append(out, PDFVTViolation{Rule: rule, Message: msg, Object: obj})
+		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})
 	}
 
 	// Every check runs under a recover boundary, so a panic on hostile input

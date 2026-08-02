@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -94,13 +95,13 @@ func TestReadDuplicateOffsetEncryptDict(t *testing.T) {
 	// Objects 4 and 5 must share the parsed /Encrypt dictionary (the duplicate
 	// offset), and that dictionary's key material must be intact — a decrypt
 	// pass must not have mutated it via the alias.
-	d4, _ := doc.Objects[4].Value.(*Dictionary)
-	d5, _ := doc.Objects[5].Value.(*Dictionary)
+	d4, _ := doc.Objects[4].Value.(*object.Dictionary)
+	d5, _ := doc.Objects[5].Value.(*object.Dictionary)
 	if d4 == nil || d5 == nil || d4 != d5 {
 		t.Fatalf("expected objects 4 and 5 to share one /Encrypt dictionary (d4=%p d5=%p)", d4, d5)
 	}
-	o, _ := d4.Get("O").(String)
-	u, _ := d4.Get("U").(String)
+	o, _ := d4.Get("O").(object.String)
+	u, _ := d4.Get("U").(object.String)
 	if len(o.Value) != 32 || len(u.Value) != 32 {
 		t.Fatalf("/Encrypt /O and /U corrupted by alias decryption: len(O)=%d len(U)=%d, want 32,32", len(o.Value), len(u.Value))
 	}
@@ -120,8 +121,8 @@ func TestReadDuplicateOffsetEncryptDict(t *testing.T) {
 	if doc2.security == nil {
 		t.Fatal("rewritten file is not decryptable (alias corrupted the key material)")
 	}
-	cat, _ := doc2.Objects[1].Value.(*Dictionary)
-	if s, _ := cat.Get("Producer").(String); string(s.Value) != producer {
+	cat, _ := doc2.Objects[1].Value.(*object.Dictionary)
+	if s, _ := cat.Get("Producer").(object.String); string(s.Value) != producer {
 		t.Errorf("/Producer after round-trip = %q, want %q", s.Value, producer)
 	}
 }

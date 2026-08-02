@@ -29,7 +29,7 @@ const (
 // PAdESResult reports the PAdES assessment of one signature.
 type PAdESResult struct {
 	// Field is the fully qualified name of the signature field whose /V
-	// references this signature, exactly as SignatureResult.Field: the /T
+	// references this signature, exactly as Result.Field: the /T
 	// partial names of the field and its ancestors joined with "." (ISO 32000-2
 	// §12.7.4.2). It is empty when no field references the signature, or when no
 	// field in the chain carries a /T.

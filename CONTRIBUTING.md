@@ -69,7 +69,7 @@ Workflow when your change moves the counts:
 
 ## Adding a validation rule
 
-1. Write a `func(*Document, PDFALevel) []ValidationError` (or reuse a byte-level
+1. Write a `func(*Document, pdfa.Level) []pdfa.ValidationError` (or reuse a byte-level
    signature) and add it to the `checks` slice in `ValidatePDFABytes` (`pdfa.go`).
    Group it with related rules by file — see the table in
    [docs/validators.md](docs/validators.md#where-the-rules-live).

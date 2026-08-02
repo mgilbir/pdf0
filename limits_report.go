@@ -4,6 +4,8 @@ import (
 	"context"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/pdfua"
 )
 
 // Reporting a resource guard that stopped short.
@@ -125,19 +127,19 @@ func runLimitTrips(doc *Document) []core.Trip {
 }
 
 // limitValidationErrors renders this run's trips as PDF/A findings.
-func limitValidationErrors(doc *Document, level PDFALevel) []ValidationError {
-	var out []ValidationError
+func limitValidationErrors(doc *Document, level pdfa.Level) []pdfa.ValidationError {
+	var out []pdfa.ValidationError
 	for _, t := range runLimitTrips(doc) {
-		out = append(out, ValidationError{Rule: finding.LimitRule, Level: level, Message: t.Message(), Object: t.Obj})
+		out = append(out, pdfa.ValidationError{Rule: finding.LimitRule, Level: level, Message: t.Message(), Object: t.Obj})
 	}
 	return out
 }
 
 // limitUAViolations renders this run's trips as PDF/UA findings.
-func limitUAViolations(doc *Document) []UAViolation {
-	var out []UAViolation
+func limitUAViolations(doc *Document) []pdfua.Violation {
+	var out []pdfua.Violation
 	for _, t := range runLimitTrips(doc) {
-		out = append(out, UAViolation{Clause: finding.LimitRule, Message: t.Message(), Object: t.Obj})
+		out = append(out, pdfua.Violation{Clause: finding.LimitRule, Message: t.Message(), Object: t.Obj})
 	}
 	return out
 }

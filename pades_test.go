@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/x509"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 	"strings"
 	"testing"
 )
@@ -45,7 +47,7 @@ func TestPAdESRoundTrip(t *testing.T) {
 	if !r.Conformant {
 		t.Errorf("expected a conformant B-B signature, got issues: %v", r.Issues)
 	}
-	if r.Level != PAdESBB {
+	if r.Level != sign.PAdESBB {
 		t.Errorf("level = %q, want B-B (no timestamp/DSS present)", r.Level)
 	}
 }
@@ -105,7 +107,7 @@ func TestPAdESLegacyNotPAdES(t *testing.T) {
 	if res[0].IsPAdES {
 		t.Error("adbe.pkcs7.detached must not be reported as PAdES")
 	}
-	if res[0].Level != PAdESNone {
+	if res[0].Level != sign.PAdESNone {
 		t.Errorf("legacy signature level = %q, want none", res[0].Level)
 	}
 }
@@ -126,14 +128,14 @@ func TestPAdESLevelDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Baseline: no DSS, no timestamp -> B-B.
-	if got := signed.ValidatePAdES(out)[0].Level; got != PAdESBB {
+	if got := signed.ValidatePAdES(out)[0].Level; got != sign.PAdESBB {
 		t.Fatalf("baseline level = %q, want B-B", got)
 	}
 	// Add a catalog /DSS. Without a signature timestamp the level stays B-B
 	// (each PAdES level requires the previous), which guards the ordering.
 	cat := signed.view().Catalog()
-	cat.Set("DSS", &Dictionary{})
-	if got := signed.ValidatePAdES(out)[0].Level; got != PAdESBB {
+	cat.Set("DSS", &object.Dictionary{})
+	if got := signed.ValidatePAdES(out)[0].Level; got != sign.PAdESBB {
 		t.Errorf("DSS without a timestamp must not reach B-LT; level = %q", got)
 	}
 }
@@ -172,7 +174,7 @@ func TestPAdESBTTimestamp(t *testing.T) {
 	if r.TimestampTime.IsZero() {
 		t.Error("expected a time-stamp time")
 	}
-	if r.Level != PAdESBT {
+	if r.Level != sign.PAdESBT {
 		t.Errorf("level = %q, want B-T", r.Level)
 	}
 	if !r.Conformant {
@@ -212,9 +214,9 @@ func TestPAdESBLTA(t *testing.T) {
 		t.Fatalf("re-read: %v", err)
 	}
 	res := d2.ValidatePAdES(o2)
-	var lta *PAdESResult
+	var lta *sign.PAdESResult
 	for i := range res {
-		if res[i].Level == PAdESBLTA {
+		if res[i].Level == sign.PAdESBLTA {
 			lta = &res[i]
 		}
 	}

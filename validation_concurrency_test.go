@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/pdfa"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,10 +29,10 @@ func TestValidateConcurrentSameDoc(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for _, lvl := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
+	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		for i := 0; i < 4; i++ {
 			wg.Add(1)
-			go func(l PDFALevel) {
+			go func(l pdfa.Level) {
 				defer wg.Done()
 				ValidatePDFABytes(doc, l, b)
 			}(lvl)

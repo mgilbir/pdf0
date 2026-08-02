@@ -31,7 +31,7 @@ func TestUACIDSystemInfo(t *testing.T) {
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: f}
 		return doc
 	}
-	check := func(doc core.View) []UAViolation {
+	check := func(doc core.View) []Violation {
 		return checkOneUACIDSystemInfo(doc, doc.Objects[10].Value.(*object.Dictionary))
 	}
 	if len(check(mk("Adobe", "Korea1", "adobe", "Korea1"))) == 0 {
@@ -69,7 +69,7 @@ func TestUACIDSupplement(t *testing.T) {
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: f}
 		return doc
 	}
-	check := func(doc core.View) []UAViolation {
+	check := func(doc core.View) []Violation {
 		return checkOneUACIDSystemInfo(doc, doc.Objects[10].Value.(*object.Dictionary))
 	}
 	if len(check(mk(2, 3))) == 0 {

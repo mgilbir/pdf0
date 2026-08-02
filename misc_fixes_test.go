@@ -3,18 +3,19 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
 // TestDictionaryEqualDuplicateKeys ensures duplicate keys are compared as a
 // multiset, not by first-occurrence (audit C26).
 func TestDictionaryEqualDuplicateKeys(t *testing.T) {
-	dup11 := &Dictionary{Keys: []Name{"A", "A"}, Values: []Object{Integer(1), Integer(1)}}
-	a1b99 := &Dictionary{Keys: []Name{"A", "B"}, Values: []Object{Integer(1), Integer(99)}}
+	dup11 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(1)}}
+	a1b99 := &object.Dictionary{Keys: []object.Name{"A", "B"}, Values: []object.Object{object.Integer(1), object.Integer(99)}}
 	if Equal(dup11, a1b99) {
 		t.Errorf("{A:1,A:1} must not equal {A:1,B:99}")
 	}
-	dup12 := &Dictionary{Keys: []Name{"A", "A"}, Values: []Object{Integer(1), Integer(2)}}
+	dup12 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
 	if !Equal(dup12, dup12) {
 		t.Errorf("a dictionary with duplicate keys must equal itself")
 	}
@@ -24,7 +25,7 @@ func TestDictionaryEqualDuplicateKeys(t *testing.T) {
 // as unparseable "#00" (audit C31).
 func TestWriteNameRejectsNUL(t *testing.T) {
 	var buf bytes.Buffer
-	if err := NewSerializer(&buf).WriteObject(Name("a\x00b")); err == nil {
+	if err := NewSerializer(&buf).WriteObject(object.Name("a\x00b")); err == nil {
 		t.Errorf("expected an error serializing a name containing NUL, got nil")
 	}
 }

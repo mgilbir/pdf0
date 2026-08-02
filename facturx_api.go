@@ -14,31 +14,6 @@ import (
 // the facturx package; these are the entry points that give them a Document and
 // the PDF/A-3 base verdict they compose.
 
-// FacturXViolation is one Factur-X container finding: a rule pdf0 checks about
-// the container itself, a PDF/A-3 finding under a "pdfa-3/" prefix, or a
-// business rule adopted from the invoice rule engine.
-type FacturXViolation = facturx.FacturXViolation
-
-// FacturXResult is what ValidateFacturX found.
-type FacturXResult = facturx.FacturXResult
-
-// OrderXProfile is the Order-X conformance profile a document declares.
-type OrderXProfile = facturx.OrderXProfile
-
-// The Order-X profiles.
-const (
-	OrderXBasic    = facturx.OrderXBasic
-	OrderXComfort  = facturx.OrderXComfort
-	OrderXExtended = facturx.OrderXExtended
-)
-
-// OrderXViolation is one Order-X container finding, the Order-X counterpart of
-// FacturXViolation.
-type OrderXViolation = facturx.OrderXViolation
-
-// OrderXResult is what ValidateOrderX found.
-type OrderXResult = facturx.OrderXResult
-
 // facturxRun prepares a view for one container validation: a private per-run
 // cache, and the PDF/A-3 checker the container rules compose but cannot reach
 // on their own.
@@ -47,7 +22,7 @@ func facturxRun(ctx context.Context, doc *Document, rawData []byte) core.View {
 	runDoc.valCache = newValidationCache(core.NewCanceler(ctx))
 	v := runDoc.view()
 	facturx.SetPDFAChecker(v, func(core.View) []pdfa.ValidationError {
-		return ValidatePDFABytesContext(ctx, doc, PDFA3b, rawData)
+		return ValidatePDFABytesContext(ctx, doc, pdfa.PDFA3b, rawData)
 	})
 	return v
 }
@@ -55,7 +30,7 @@ func facturxRun(ctx context.Context, doc *Document, rawData []byte) core.View {
 // ValidateFacturX validates a Factur-X invoice container: the PDF/A-3 base, the
 // container structure, and the embedded CII invoice XML. rawData must be the
 // bytes the document was read from.
-func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
+func ValidateFacturX(doc *Document, rawData []byte) facturx.Result {
 	return ValidateFacturXContext(context.Background(), doc, rawData)
 }
 
@@ -63,18 +38,18 @@ func ValidateFacturX(doc *Document, rawData []byte) FacturXResult {
 // cancellation reach the PDF/A-3 pass and the invoice rule engine alike; a run
 // that stops early says so with a "limit" finding rather than reporting a
 // conformant document.
-func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) FacturXResult {
+func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) facturx.Result {
 	return facturx.ValidateContext(ctx, facturxRun(ctx, doc, rawData), rawData)
 }
 
 // ValidateOrderX validates an Order-X order container, the Order-X counterpart
 // of ValidateFacturX.
-func ValidateOrderX(doc *Document, rawData []byte) OrderXResult {
+func ValidateOrderX(doc *Document, rawData []byte) facturx.OrderXResult {
 	return ValidateOrderXContext(context.Background(), doc, rawData)
 }
 
 // ValidateOrderXContext is ValidateOrderX under a context.
-func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) OrderXResult {
+func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) facturx.OrderXResult {
 	return facturx.ValidateOrderContext(ctx, facturxRun(ctx, doc, rawData), rawData)
 }
 

@@ -279,7 +279,7 @@ Everything below is implemented in the library and has **no** CLI surface. Absen
 | PDF/A Level A (1a, 2a, 3a) | `PDFA1a`/`PDFA2a`/`PDFA3a` with `ValidatePDFA(Bytes)` — the constants exist; `-level` rejects those names with exit 2 |
 | Model-only PDF/A (skips clause 6.1 byte rules) | `ValidatePDFA(doc, level)` — the CLI always uses `ValidatePDFABytes` |
 | PDF/UA-2 | `ValidatePDFUA2(doc)`; `ua` only ever calls `ValidatePDFUA` (UA-1) |
-| PDF/X, PDF/VT, PDF/VT-2, PDF/R | `ValidatePDFX(doc, PDFXLevel)`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR` |
+| PDF/X, PDF/VT, PDF/VT-2, PDF/R | `ValidatePDFX(doc, pdfx.Level)`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR` |
 | DPart / document-part hierarchy | `ValidateDParts(doc)` |
 | Factur-X / ZUGFeRD, Order-X | `ValidateFacturX`, `ValidateOrderX`, `EmbedFacturX` |
 | Signature verification, PAdES | `VerifySignatures`, `VerifySignaturesWithRoots`, `ValidatePAdES(raw)`, `CheckCertRevocation`, `DSSCerts`, `DSSRevocationMaterial` |
