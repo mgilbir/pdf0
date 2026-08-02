@@ -142,7 +142,7 @@ func checkLevelALanguage(doc *Document, level PDFALevel) []ValidationError {
 	if s, ok := doc.Resolve(cat.Get("Lang")).(String); ok && len(s.Value) > 0 {
 		// /Lang is a PDF text string: it may be UTF-16BE (with a BOM) or
 		// PDFDocEncoded, so decode it before checking the language-tag syntax.
-		lang := decodePDFTextString(s.Value)
+		lang := core.DecodePDFTextString(s.Value)
 		if !core.ValidBCP47(lang) {
 			return []ValidationError{{
 				Rule:    levelAClause("language", level),

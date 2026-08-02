@@ -1,6 +1,9 @@
 package pdf0
 
-import "testing"
+import (
+	"github.com/mgilbir/pdf0/internal/core"
+	"testing"
+)
 
 func TestProhibitedCatalogEntries(t *testing.T) {
 	mk := func(setup func(cat *Dictionary, doc *Document)) *Document {
@@ -261,7 +264,7 @@ func TestParseToUnicodeMapSpaceless(t *testing.T) {
 	doc.Objects[1] = &IndirectObject{Number: 1, Value: s}
 	fontDict := &Dictionary{}
 	fontDict.Set("ToUnicode", IndirectRef{Number: 1})
-	m := parseToUnicodeMap(doc, fontDict)
+	m := doc.view().ParseToUnicodeMap(fontDict)
 	if m[3] != 0x20 || m[0x28] != 0x48 {
 		t.Errorf("bfrange parse wrong: %v", m)
 	}
@@ -282,19 +285,19 @@ func TestParseToUnicodeMapMalformed(t *testing.T) {
 		doc.Objects[1] = &IndirectObject{Number: 1, Value: s}
 		fontDict := &Dictionary{}
 		fontDict.Set("ToUnicode", IndirectRef{Number: 1})
-		_ = parseToUnicodeMap(doc, fontDict) // just must not panic
+		_ = doc.view().ParseToUnicodeMap(fontDict) // just must not panic
 	}
 }
 
 func TestAngleTokens(t *testing.T) {
-	got := angleTokens("<0003><0003><0020>")
+	got := core.AngleTokens("<0003><0003><0020>")
 	if len(got) != 3 || got[0] != "<0003>" || got[2] != "<0020>" {
 		t.Errorf("angleTokens wrong: %v", got)
 	}
-	if len(angleTokens("no tokens here")) != 0 {
+	if len(core.AngleTokens("no tokens here")) != 0 {
 		t.Error("expected no tokens")
 	}
-	if len(angleTokens("<unterminated")) != 0 {
+	if len(core.AngleTokens("<unterminated")) != 0 {
 		t.Error("unterminated must yield nothing")
 	}
 }

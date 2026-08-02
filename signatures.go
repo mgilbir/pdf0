@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"math/big"
 	"sort"
 	"strings"
@@ -304,7 +305,7 @@ func fieldPartialName(d *Document, field *Dictionary) string {
 	if !ok {
 		return ""
 	}
-	return decodePDFTextString(t.Value)
+	return core.DecodePDFTextString(t.Value)
 }
 
 // joinFieldName appends a partial name to a qualified-name prefix. A field with

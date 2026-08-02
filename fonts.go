@@ -260,7 +260,7 @@ func checkOneFontDict(doc *Document, level PDFALevel, rule string, fontDict *Dic
 
 func pdfTextString(doc *Document, v Object) string {
 	if s, ok := doc.Resolve(v).(String); ok {
-		return decodePDFTextString(s.Value)
+		return core.DecodePDFTextString(s.Value)
 	}
 	return ""
 }
@@ -868,7 +868,7 @@ func checkCIDFontConsistency(doc *Document, level PDFALevel, rule string, fontDi
 		errs = append(errs, ValidationError{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.ObjNum})
 	}
 	renders := rendersVisibly(u)
-	toUni := parseToUnicodeMap(doc, fontDict)
+	toUni := doc.view().ParseToUnicodeMap(fontDict)
 
 	for _, s := range u.Strings {
 		if !identity {
@@ -1422,8 +1422,8 @@ func maxCMapCID(data []byte) int {
 			for _, line := range strings.Split(section, "\n") {
 				fields := strings.Fields(line)
 				if isRange && len(fields) >= 3 {
-					lo := hexVal4(fields[0])
-					hi := hexVal4(fields[1])
+					lo := core.HexVal4(fields[0])
+					hi := core.HexVal4(fields[1])
 					cid := atoiSafe(fields[2])
 					if lo >= 0 && hi >= lo {
 						consider(cid + (hi - lo))
@@ -1438,20 +1438,6 @@ func maxCMapCID(data []byte) int {
 	scanRanges("begincidrange", "endcidrange", true)
 	scanRanges("begincidchar", "endcidchar", false)
 	return max
-}
-
-// hexVal4 parses a <hhhh> hex token to an int, or -1.
-func hexVal4(s string) int {
-	s = strings.TrimPrefix(s, "<")
-	s = strings.TrimSuffix(s, ">")
-	if s == "" {
-		return -1
-	}
-	v, ok := font.ParseHexN(s)
-	if !ok {
-		return -1
-	}
-	return v
 }
 
 func atoiSafe(s string) int {
@@ -1548,98 +1534,8 @@ func checkCIDSetProgramComplete(doc *Document, level PDFALevel) []ValidationErro
 	return errs
 }
 
-// parseToUnicodeMap parses a font's ToUnicode CMap into a map from character
-// code to the first Unicode scalar value it produces. Used to tell whether a
-// rendered glyph represents whitespace (ISO 32000-1 9.10.3).
-func parseToUnicodeMap(doc *Document, fontDict *Dictionary) map[int]rune {
-	s, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*Stream)
-	if !ok {
-		return nil
-	}
-	data := decodeContentStream(doc, s)
-	if data == nil {
-		return nil
-	}
-	m := map[int]rune{}
-	str := string(data)
-	scan := func(begin, end string, isRange bool) {
-		rest := str
-		for {
-			b := strings.Index(rest, begin)
-			if b < 0 {
-				return
-			}
-			e := strings.Index(rest[b:], end)
-			if e < 0 {
-				return
-			}
-			// Section body lies between the two markers. Guard against a
-			// malformed stream where end overlaps begin (low > high).
-			lo, hi := b+len(begin), b+e
-			if lo > hi {
-				rest = rest[b+e+len(end):]
-				continue
-			}
-			for _, line := range strings.Split(rest[lo:hi], "\n") {
-				// Tokens are <hhhh> groups, often with no separating space
-				// (e.g. <0003><0003><0020>).
-				f := angleTokens(line)
-				if isRange && len(f) >= 3 {
-					lo, hi, r := hexVal4(f[0]), hexVal4(f[1]), firstRuneFromHex(f[2])
-					if lo >= 0 && hi >= lo && hi-lo < 65536 && r != 0 {
-						for c := lo; c <= hi; c++ {
-							m[c] = r + rune(c-lo)
-						}
-					}
-				} else if !isRange && len(f) >= 2 {
-					if src := hexVal4(f[0]); src >= 0 {
-						if r := firstRuneFromHex(f[1]); r != 0 {
-							m[src] = r
-						}
-					}
-				}
-			}
-			rest = rest[b+e+len(end):]
-		}
-	}
-	scan("beginbfchar", "endbfchar", false)
-	scan("beginbfrange", "endbfrange", true)
-	return m
-}
-
-// firstRuneFromHex returns the first UTF-16 code unit of a <hhhh...> token as
-// a rune, or 0.
-func firstRuneFromHex(tok string) rune {
-	tok = strings.TrimPrefix(strings.TrimSuffix(tok, ">"), "<")
-	if len(tok) > 4 {
-		tok = tok[:4]
-	}
-	if v, ok := font.ParseHexN(tok); ok {
-		return rune(v)
-	}
-	return 0
-}
-
 // isGlyphWhitespace reports whether a Unicode scalar value is whitespace, for
 // which an empty (outline-less) glyph is legitimate.
 func isGlyphWhitespace(r rune) bool {
 	return unicode.IsSpace(r) || r == 0x200B || r == 0xFEFF
-}
-
-// angleTokens returns the <...> tokens in a line, each including the angle
-// brackets.
-func angleTokens(line string) []string {
-	var out []string
-	for {
-		i := strings.IndexByte(line, '<')
-		if i < 0 {
-			return out
-		}
-		j := strings.IndexByte(line[i:], '>')
-		if j < 0 {
-			return out
-		}
-		out = append(out, line[i:i+j+1])
-		line = line[i+j+1:]
-	}
 }

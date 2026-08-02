@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/internal/core"
 	"strings"
 	"testing"
 )
@@ -137,7 +138,7 @@ func TestEncodeUTF16BE(t *testing.T) {
 	if got[0] != 0xFE || got[1] != 0xFF {
 		t.Fatal("missing UTF-16BE byte-order mark")
 	}
-	if decodePDFTextString(got) != "factur-x.xml" {
-		t.Errorf("round trip failed: %q", decodePDFTextString(got))
+	if core.DecodePDFTextString(got) != "factur-x.xml" {
+		t.Errorf("round trip failed: %q", core.DecodePDFTextString(got))
 	}
 }

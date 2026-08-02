@@ -386,7 +386,7 @@ func findFacturXAttachment(doc *Document, cat *Dictionary) (*Dictionary, string,
 func facturxFileSpecName(doc *Document, fs *Dictionary) string {
 	for _, key := range []Name{"UF", "F"} {
 		if s, ok := doc.Resolve(fs.Get(key)).(String); ok {
-			if name := decodePDFTextString(s.Value); name != "" {
+			if name := core.DecodePDFTextString(s.Value); name != "" {
 				return name
 			}
 		}

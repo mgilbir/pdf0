@@ -326,60 +326,6 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level PDFALevel, raw
 	return errs
 }
 
-// validationCache memoizes traversals for one ValidatePDFABytes run. It is
-// installed at the start of a run and dropped at the end, so documents may
-// be mutated freely between validations. The cache lives on a shallow copy of
-// the Document, never on the caller's, so validating the same Document from
-// several goroutines at once is safe — TestValidateConcurrentSameDoc asserts it
-// under -race. (An earlier revision installed the cache on the caller's document
-// and this comment said concurrency was unsupported.)
-// The memo slots are grouped by the subsystem that owns them rather than held
-// in one flat struct. That is not cosmetic: of the sixteen slots this struct
-// used to hold flat, fifteen were touched by exactly one subsystem, so what
-// looked like shared state was really a box of private caches. Naming the owner
-// makes each group travel with its subsystem when that subsystem moves to its
-// own package, and makes it a compile error — rather than a silent new coupling —
-// for one subsystem to start reading another's memo.
-//
-// Only run, below, is genuinely shared.
-type validationCache struct {
-	pdfa pdfaCache
-	run  runState
-}
-
-// pdfaCache is the PDF/A engine's memoized traversals: the page tree, decoded
-// content streams and the executed-content walk's per-stream skeletons.
-type pdfaCache struct {
-	directAnnots    []annotOccurrence
-	hasDirectAnnots bool
-}
-
-// runState is the part that is genuinely shared, because it belongs to the run
-// rather than to any one subsystem.
-type runState struct {
-	// limits collects the resource guards that tripped during this run, so a
-	// check that declines to assert because its input was truncated still says
-	// so. See limits.go; always non-nil when built by newValidationCache.
-	limits *core.Recorder
-
-	// cancel is the caller's cancellation signal for this run, or the
-	// never-cancelling zero value. It lives here — on state whose lifetime is
-	// exactly one run — rather than on the caller's Document, which outlives the
-	// operation. See cancel.go.
-	cancel core.Canceler
-
-	// shared is the run state handed to the packages below this one, through
-	// Document.view. Always build a validationCache with newValidationCache: a
-	// hand-built one leaves this nil, and a nil Run makes core.Slot hand back a
-	// fresh memo on every call — correct answers, no memoization, and nothing
-	// says so. It is built once per run and reused, not rebuilt per view:
-	// a View is copied by value and shares its Run pointer, so a fresh Run per
-	// call would fork the memo tables it will come to hold. That failure is
-	// invisible in the output — the answers stay right — and shows up only as
-	// repeated work.
-	shared *core.Run
-}
-
 // --- File structure checks (6.1) ---
 
 // Rule 6.1.3-2: Encrypt key must not be present in trailer dictionary.
@@ -2976,7 +2922,7 @@ func checkInfoXMPConsistency(doc *Document, level PDFALevel) []ValidationError {
 			})
 			continue
 		}
-		infoVal := decodePDFTextString(strVal.Value)
+		infoVal := core.DecodePDFTextString(strVal.Value)
 		if infoVal == "" {
 			continue
 		}
@@ -3039,38 +2985,9 @@ func getInfoString(info *Dictionary, key string) string {
 		return ""
 	}
 	if s, ok := obj.(String); ok {
-		return decodePDFTextString(s.Value)
+		return core.DecodePDFTextString(s.Value)
 	}
 	return ""
-}
-
-// decodePDFTextString converts a PDF text string to UTF-8. Text strings are
-// either UTF-16BE with a BOM (PDF 2.0 adds UTF-8 with a BOM) or
-// PDFDocEncoded; comparing raw bytes against UTF-8 XMP values made every
-// UTF-16 Info entry "inconsistent" with its metadata counterpart.
-func decodePDFTextString(b []byte) string {
-	if len(b) >= 2 && b[0] == 0xFE && b[1] == 0xFF {
-		// UTF-16BE
-		u := b[2:]
-		var sb strings.Builder
-		for i := 0; i+1 < len(u); i += 2 {
-			r := rune(u[i])<<8 | rune(u[i+1])
-			if r >= 0xD800 && r <= 0xDBFF && i+3 < len(u) {
-				lo := rune(u[i+2])<<8 | rune(u[i+3])
-				if lo >= 0xDC00 && lo <= 0xDFFF {
-					r = 0x10000 + (r-0xD800)<<10 + (lo - 0xDC00)
-					i += 2
-				}
-			}
-			sb.WriteRune(r)
-		}
-		return sb.String()
-	}
-	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
-		return string(b[3:]) // UTF-8 with BOM (PDF 2.0)
-	}
-	// PDFDocEncoding matches ASCII in the printable range; pass through.
-	return string(b)
 }
 
 // countXMPListEntries counts the rdf:li entries inside an XMP list-valued

@@ -181,7 +181,7 @@ func (d *Document) fontMapsFrom(res *Dictionary) map[string]fontText {
 		if st, _ := f.Get("Subtype").(Name); st == "Type0" {
 			twoByte = true
 		}
-		out[string(name)] = fontText{toUnicode: parseToUnicodeMap(d, f), twoByte: twoByte}
+		out[string(name)] = fontText{toUnicode: d.view().ParseToUnicodeMap(f), twoByte: twoByte}
 	}
 	return out
 }

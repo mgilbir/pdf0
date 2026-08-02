@@ -2371,17 +2371,17 @@ func TestValidatePDFA_ExtGStateTR2At1b(t *testing.T) {
 func TestDecodePDFTextString(t *testing.T) {
 	utf16 := []byte{0xFE, 0xFF, 0x00, 'H', 0x00, 'i', 0x20, 0xAC >> 8, 0xAC & 0xFF}
 	_ = utf16
-	if got := decodePDFTextString([]byte{0xFE, 0xFF, 0x00, 'H', 0x00, 'i'}); got != "Hi" {
+	if got := core.DecodePDFTextString([]byte{0xFE, 0xFF, 0x00, 'H', 0x00, 'i'}); got != "Hi" {
 		t.Errorf("UTF-16BE decode: expected 'Hi', got %q", got)
 	}
-	if got := decodePDFTextString([]byte{0xEF, 0xBB, 0xBF, 'H', 'i'}); got != "Hi" {
+	if got := core.DecodePDFTextString([]byte{0xEF, 0xBB, 0xBF, 'H', 'i'}); got != "Hi" {
 		t.Errorf("UTF-8 BOM decode: expected 'Hi', got %q", got)
 	}
-	if got := decodePDFTextString([]byte("plain")); got != "plain" {
+	if got := core.DecodePDFTextString([]byte("plain")); got != "plain" {
 		t.Errorf("plain decode: expected 'plain', got %q", got)
 	}
 	// Surrogate pair: U+1D11E MUSICAL SYMBOL G CLEF
-	if got := decodePDFTextString([]byte{0xFE, 0xFF, 0xD8, 0x34, 0xDD, 0x1E}); got != "\U0001D11E" {
+	if got := core.DecodePDFTextString([]byte{0xFE, 0xFF, 0xD8, 0x34, 0xDD, 0x1E}); got != "\U0001D11E" {
 		t.Errorf("surrogate decode: got %q", got)
 	}
 }

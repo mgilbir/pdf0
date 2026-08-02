@@ -271,7 +271,7 @@ func isPUARune(r rune) bool {
 // stringHasPUA reports whether a decoded PDF text string contains any Private
 // Use Area code point.
 func stringHasPUA(b []byte) bool {
-	for _, r := range decodePDFTextString(b) {
+	for _, r := range core.DecodePDFTextString(b) {
 		if isPUARune(r) {
 			return true
 		}

@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/font"
 	"strings"
 	"unicode/utf8"
 
@@ -271,4 +272,137 @@ func (doc View) DocumentXMP() string {
 		return ""
 	}
 	return doc.XMPText(stream)
+}
+
+// decodePDFTextString converts a PDF text string to UTF-8. Text strings are
+// either UTF-16BE with a BOM (PDF 2.0 adds UTF-8 with a BOM) or
+// PDFDocEncoded; comparing raw bytes against UTF-8 XMP values made every
+// UTF-16 Info entry "inconsistent" with its metadata counterpart.
+func DecodePDFTextString(b []byte) string {
+	if len(b) >= 2 && b[0] == 0xFE && b[1] == 0xFF {
+		// UTF-16BE
+		u := b[2:]
+		var sb strings.Builder
+		for i := 0; i+1 < len(u); i += 2 {
+			r := rune(u[i])<<8 | rune(u[i+1])
+			if r >= 0xD800 && r <= 0xDBFF && i+3 < len(u) {
+				lo := rune(u[i+2])<<8 | rune(u[i+3])
+				if lo >= 0xDC00 && lo <= 0xDFFF {
+					r = 0x10000 + (r-0xD800)<<10 + (lo - 0xDC00)
+					i += 2
+				}
+			}
+			sb.WriteRune(r)
+		}
+		return sb.String()
+	}
+	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
+		return string(b[3:]) // UTF-8 with BOM (PDF 2.0)
+	}
+	// PDFDocEncoding matches ASCII in the printable range; pass through.
+	return string(b)
+}
+
+// parseToUnicodeMap parses a font's ToUnicode CMap into a map from character
+// code to the first Unicode scalar value it produces. Used to tell whether a
+// rendered glyph represents whitespace (ISO 32000-1 9.10.3).
+func (doc View) ParseToUnicodeMap(fontDict *object.Dictionary) map[int]rune {
+	s, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*object.Stream)
+	if !ok {
+		return nil
+	}
+	data := doc.Content(s)
+	if data == nil {
+		return nil
+	}
+	m := map[int]rune{}
+	str := string(data)
+	scan := func(begin, end string, isRange bool) {
+		rest := str
+		for {
+			b := strings.Index(rest, begin)
+			if b < 0 {
+				return
+			}
+			e := strings.Index(rest[b:], end)
+			if e < 0 {
+				return
+			}
+			// Section body lies between the two markers. Guard against a
+			// malformed stream where end overlaps begin (low > high).
+			lo, hi := b+len(begin), b+e
+			if lo > hi {
+				rest = rest[b+e+len(end):]
+				continue
+			}
+			for _, line := range strings.Split(rest[lo:hi], "\n") {
+				// Tokens are <hhhh> groups, often with no separating space
+				// (e.g. <0003><0003><0020>).
+				f := AngleTokens(line)
+				if isRange && len(f) >= 3 {
+					lo, hi, r := HexVal4(f[0]), HexVal4(f[1]), FirstRuneFromHex(f[2])
+					if lo >= 0 && hi >= lo && hi-lo < 65536 && r != 0 {
+						for c := lo; c <= hi; c++ {
+							m[c] = r + rune(c-lo)
+						}
+					}
+				} else if !isRange && len(f) >= 2 {
+					if src := HexVal4(f[0]); src >= 0 {
+						if r := FirstRuneFromHex(f[1]); r != 0 {
+							m[src] = r
+						}
+					}
+				}
+			}
+			rest = rest[b+e+len(end):]
+		}
+	}
+	scan("beginbfchar", "endbfchar", false)
+	scan("beginbfrange", "endbfrange", true)
+	return m
+}
+
+// AngleTokens returns the <...> tokens in a line, each including the angle
+// brackets.
+func AngleTokens(line string) []string {
+	var out []string
+	for {
+		i := strings.IndexByte(line, '<')
+		if i < 0 {
+			return out
+		}
+		j := strings.IndexByte(line[i:], '>')
+		if j < 0 {
+			return out
+		}
+		out = append(out, line[i:i+j+1])
+		line = line[i+j+1:]
+	}
+}
+
+// HexVal4 parses a <hhhh> hex token to an int, or -1.
+func HexVal4(s string) int {
+	s = strings.TrimPrefix(s, "<")
+	s = strings.TrimSuffix(s, ">")
+	if s == "" {
+		return -1
+	}
+	v, ok := font.ParseHexN(s)
+	if !ok {
+		return -1
+	}
+	return v
+}
+
+// FirstRuneFromHex returns the first UTF-16 code unit of a <hhhh...> token as
+// a rune, or 0.
+func FirstRuneFromHex(tok string) rune {
+	tok = strings.TrimPrefix(strings.TrimSuffix(tok, ">"), "<")
+	if len(tok) > 4 {
+		tok = tok[:4]
+	}
+	if v, ok := font.ParseHexN(tok); ok {
+		return rune(v)
+	}
+	return 0
 }
