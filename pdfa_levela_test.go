@@ -109,39 +109,39 @@ func hasMsg(errs []ValidationError, substr string) bool {
 
 func TestLevelAStructureCheck(t *testing.T) {
 	// Tagged with a structure tree: no structure finding.
-	if v := checkLevelAStructure(levelADoc(true, true, "en", "A"), PDFA1a); len(v) != 0 {
+	if v := checkLevelAStructure(levelADoc(true, true, "en", "A").view(), PDFA1a); len(v) != 0 {
 		t.Errorf("tagged document flagged: %v", v)
 	}
 	// Not marked as tagged.
-	if v := checkLevelAStructure(levelADoc(false, true, "en", "A"), PDFA1a); !hasMsg(v, "Tagged PDF") {
+	if v := checkLevelAStructure(levelADoc(false, true, "en", "A").view(), PDFA1a); !hasMsg(v, "Tagged PDF") {
 		t.Errorf("expected a Tagged-PDF finding; got %v", v)
 	}
 	// No structure tree.
-	if v := checkLevelAStructure(levelADoc(true, false, "en", "A"), PDFA1a); !hasMsg(v, "logical structure tree") {
+	if v := checkLevelAStructure(levelADoc(true, false, "en", "A").view(), PDFA1a); !hasMsg(v, "logical structure tree") {
 		t.Errorf("expected a structure-tree finding; got %v", v)
 	}
 }
 
 func TestLevelAConformanceCheck(t *testing.T) {
-	if v := checkLevelAConformance(levelADoc(true, true, "en", "A"), PDFA1a); len(v) != 0 {
+	if v := checkLevelAConformance(levelADoc(true, true, "en", "A").view(), PDFA1a); len(v) != 0 {
 		t.Errorf("conformance A flagged: %v", v)
 	}
-	if v := checkLevelAConformance(levelADoc(true, true, "en", "B"), PDFA1a); !hasMsg(v, "must be A") {
+	if v := checkLevelAConformance(levelADoc(true, true, "en", "B").view(), PDFA1a); !hasMsg(v, "must be A") {
 		t.Errorf("expected a conformance finding for B at Level A; got %v", v)
 	}
 }
 
 func TestLevelALanguageCheck(t *testing.T) {
 	// A valid tag (including a UTF-16BE-encoded one) is accepted.
-	if v := checkLevelALanguage(levelADoc(true, true, "en-GB", ""), PDFA1a); len(v) != 0 {
+	if v := checkLevelALanguage(levelADoc(true, true, "en-GB", "").view(), PDFA1a); len(v) != 0 {
 		t.Errorf("valid /Lang flagged: %v", v)
 	}
 	utf16 := append([]byte{0xFE, 0xFF}, utf16be("en-GB")[2:]...)
-	if v := checkLevelALanguage(levelADoc(true, true, string(utf16), ""), PDFA1a); len(v) != 0 {
+	if v := checkLevelALanguage(levelADoc(true, true, string(utf16), "").view(), PDFA1a); len(v) != 0 {
 		t.Errorf("valid UTF-16 /Lang flagged: %v", v)
 	}
 	// A syntactically invalid tag is flagged.
-	if v := checkLevelALanguage(levelADoc(true, true, "not a tag!", ""), PDFA1a); !hasMsg(v, "not a valid language") {
+	if v := checkLevelALanguage(levelADoc(true, true, "not a tag!", "").view(), PDFA1a); !hasMsg(v, "not a valid language") {
 		t.Errorf("expected an invalid-/Lang finding; got %v", v)
 	}
 }

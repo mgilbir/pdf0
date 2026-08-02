@@ -146,7 +146,7 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 	}
 
 	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{[]byte("A")}, Modes: map[int]bool{0: true}}
-	msgs := errMessages(checkSimpleFontConsistency(doc, PDFA1b, "6.3", font, u))
+	msgs := errMessages(checkSimpleFontConsistency(doc.view(), PDFA1b, "6.3", font, u))
 	var bad []string
 	for _, m := range msgs {
 		if strings.Contains(m, "does not define a glyph") || strings.Contains(m, ".notdef") {
@@ -171,14 +171,14 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 // font that simply declares no width for those CIDs.
 func TestCIDWidthRangeBudgetReportsPartial(t *testing.T) {
 	doc := &Document{Objects: map[int]*IndirectObject{}}
-	if _, complete := parseCIDWidths(doc, Array{Integer(0), Integer(2_000_000_000), Real(500)}); complete {
+	if _, complete := parseCIDWidths(doc.view(), Array{Integer(0), Integer(2_000_000_000), Real(500)}); complete {
 		t.Error("an over-wide /W range was dropped but the map claims to be complete")
 	}
 	// A malformed (inverted) range declares nothing, so nothing is missing.
-	if _, complete := parseCIDWidths(doc, Array{Integer(100), Integer(10), Real(500)}); !complete {
+	if _, complete := parseCIDWidths(doc.view(), Array{Integer(100), Integer(10), Real(500)}); !complete {
 		t.Error("an inverted /W range is malformed input, not a budget trip")
 	}
-	if _, complete := parseCIDWidths(doc, Array{Integer(0), Integer(65535), Real(500)}); !complete {
+	if _, complete := parseCIDWidths(doc.view(), Array{Integer(0), Integer(65535), Real(500)}); !complete {
 		t.Error("a full-CID-space /W range fits the budget and must count as complete")
 	}
 }
@@ -236,7 +236,7 @@ func TestCIDWidthBudgetDoesNotReportWidthMismatch(t *testing.T) {
 	doc = beginRun(doc)
 
 	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0x00, 0x01}}, Modes: map[int]bool{0: true}}
-	msgs := errMessages(checkCIDFontConsistency(doc, PDFA1b, "6.3", font, u))
+	msgs := errMessages(checkCIDFontConsistency(doc.view(), PDFA1b, "6.3", font, u))
 	var bad []string
 	for _, m := range msgs {
 		if strings.Contains(m, "width information") {
@@ -583,7 +583,7 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	// "limit" rule naming the embedded-pdfa guard.
 	_, outer := embeddedPDFAFixture(t, strict)
 	run := beginRun(outer)
-	for _, e := range checkEmbeddedPDFA(run, PDFA4) {
+	for _, e := range checkEmbeddedPDFA(run.view(), PDFA4) {
 		if e.Rule == "6.9" {
 			t.Errorf("6.9 asserted on the strength of an incomplete nested run: %s", e.Message)
 		}

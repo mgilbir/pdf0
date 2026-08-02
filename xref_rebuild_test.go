@@ -35,7 +35,7 @@ func TestRebuildShiftedObjectOffsets(t *testing.T) {
 	if len(doc.Objects) != 2 {
 		t.Errorf("loaded %d objects, want 2", len(doc.Objects))
 	}
-	if getCatalog(doc) == nil {
+	if getCatalog(doc.view()) == nil {
 		t.Error("catalog not reachable after rebuild")
 	}
 	var buf bytes.Buffer
@@ -65,7 +65,7 @@ func TestRebuildDeadStartxref(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read did not rebuild from a dead startxref: %v", err)
 	}
-	if len(doc.Objects) != 2 || getCatalog(doc) == nil {
+	if len(doc.Objects) != 2 || getCatalog(doc.view()) == nil {
 		t.Errorf("rebuild incomplete: %d objects", len(doc.Objects))
 	}
 }
@@ -102,7 +102,7 @@ func TestRebuildLastDefinitionWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	cat := getCatalog(doc)
+	cat := getCatalog(doc.view())
 	if v, _ := cat.Get("Version").(Name); v != "B" {
 		t.Errorf("catalog /Version = %q, want the later definition B", v)
 	}

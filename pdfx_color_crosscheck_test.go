@@ -57,7 +57,7 @@ func TestDevColorScannerMatchesPDFA(t *testing.T) {
 			sc := pdfx.NewDevColorScanner(doc.view())
 			for _, pg := range doc.view().Pages(cat.Get("Pages")) {
 				pages++
-				wantR, wantC, wantG := scanPageForDeviceCS(doc, pg.Dict)
+				wantR, wantC, wantG := scanPageForDeviceCS(doc.view(), pg.Dict)
 				got := sc.PageDeviceUse(pg.Dict)
 				if got.RGB != wantR || got.CMYK != wantC || got.Gray != wantG {
 					mismatches++
@@ -123,8 +123,8 @@ func TestDevColorScannerGroupMemoKey(t *testing.T) {
 	put(14, page2)
 
 	// The trusted PDF/A scanner is the oracle for both pages.
-	wantR1, _, _ := scanPageForDeviceCS(doc, page1)
-	wantR2, _, _ := scanPageForDeviceCS(doc, page2)
+	wantR1, _, _ := scanPageForDeviceCS(doc.view(), page1)
+	wantR2, _, _ := scanPageForDeviceCS(doc.view(), page2)
 	if !wantR1 || wantR2 {
 		t.Fatalf("fixture does not exercise the bug: appearance page RGB=%v (want true), Do page RGB=%v (want false)", wantR1, wantR2)
 	}

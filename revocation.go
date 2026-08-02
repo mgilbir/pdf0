@@ -308,7 +308,7 @@ func issuerOf(cert *x509.Certificate, certs []*x509.Certificate) *x509.Certifica
 // DSSRevocationMaterial returns the CRLs and OCSP responses (DER) stored in the
 // document's DSS (Document Security Store), decoded through their stream filters.
 func (d *Document) DSSRevocationMaterial() (crls, ocsps [][]byte) {
-	cat := getCatalog(d)
+	cat := getCatalog(d.view())
 	if cat == nil {
 		return nil, nil
 	}
@@ -321,7 +321,7 @@ func (d *Document) DSSRevocationMaterial() (crls, ocsps [][]byte) {
 		arr, _ := d.Resolve(dss.Get(key)).(Array)
 		for _, ref := range arr {
 			if st, ok := d.Resolve(ref).(*Stream); ok {
-				out = append(out, decodeContentStream(d, st))
+				out = append(out, decodeContentStream(d.view(), st))
 			}
 		}
 		return out
@@ -332,7 +332,7 @@ func (d *Document) DSSRevocationMaterial() (crls, ocsps [][]byte) {
 // DSSCerts returns the certificates stored in the document's DSS /Certs (the
 // chain material a long-term signature carries).
 func (d *Document) DSSCerts() []*x509.Certificate {
-	cat := getCatalog(d)
+	cat := getCatalog(d.view())
 	if cat == nil {
 		return nil
 	}
@@ -344,7 +344,7 @@ func (d *Document) DSSCerts() []*x509.Certificate {
 	arr, _ := d.Resolve(dss.Get("Certs")).(Array)
 	for _, ref := range arr {
 		if st, ok := d.Resolve(ref).(*Stream); ok {
-			if c, err := x509.ParseCertificate(decodeContentStream(d, st)); err == nil {
+			if c, err := x509.ParseCertificate(decodeContentStream(d.view(), st)); err == nil {
 				out = append(out, c)
 			}
 		}

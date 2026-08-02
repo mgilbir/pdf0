@@ -14,25 +14,25 @@ func TestProhibitedCatalogEntries(t *testing.T) {
 	}
 	if !hasRuleMsg(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
 		c.Set("Requirements", Array{})
-	}), PDFA4), "6.12") {
+	}).view(), PDFA4), "6.12") {
 		t.Error("Requirements must be flagged")
 	}
 	if !hasRuleMsg(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
 		names := &Dictionary{}
 		names.Set("AlternatePresentations", &Dictionary{})
 		c.Set("Names", names)
-	}), PDFA4), "6.11") {
+	}).view(), PDFA4), "6.11") {
 		t.Error("AlternatePresentations must be flagged")
 	}
 	// Clean A-4 document passes.
-	if len(checkProhibitedCatalogEntries(NewPDFADocument(PDFA4), PDFA4)) != 0 {
+	if len(checkProhibitedCatalogEntries(NewPDFADocument(PDFA4).view(), PDFA4)) != 0 {
 		t.Error("clean document flagged")
 	}
 	// The /Requirements (6.12) prohibition is PDF/A-4 only; it must not fire at
 	// 2b. A t.Skip here would let a level-gating regression pass silently.
 	if got := len(checkProhibitedCatalogEntries(mk(func(c *Dictionary, d *Document) {
 		c.Set("Requirements", Array{})
-	}), PDFA2b)); got != 0 {
+	}).view(), PDFA2b)); got != 0 {
 		t.Errorf("6.12 /Requirements must not be flagged at PDF/A-2b, got %d errors", got)
 	}
 	// 6.11 (AlternatePresentations / PresSteps) DOES apply at 2b and 3b.
@@ -42,7 +42,7 @@ func TestProhibitedCatalogEntries(t *testing.T) {
 			names.Set("AlternatePresentations", &Dictionary{})
 			c.Set("Names", names)
 		})
-		if !hasRuleMsg(checkProhibitedCatalogEntries(altDoc, lvl), "6.11") {
+		if !hasRuleMsg(checkProhibitedCatalogEntries(altDoc.view(), lvl), "6.11") {
 			t.Errorf("AlternatePresentations must be flagged at %s", lvl)
 		}
 	}
@@ -51,7 +51,7 @@ func TestProhibitedCatalogEntries(t *testing.T) {
 		names := &Dictionary{}
 		names.Set("AlternatePresentations", &Dictionary{})
 		c.Set("Names", names)
-	}), PDFA1b)); got != 0 {
+	}).view(), PDFA1b)); got != 0 {
 		t.Errorf("6.11 must not be applied at PDF/A-1b, got %d errors", got)
 	}
 }
@@ -66,19 +66,19 @@ func TestFileTrailerID(t *testing.T) {
 	}
 	// Two non-empty strings: valid.
 	valid := Array{String{Value: []byte("0123456789abcdef")}, String{Value: []byte("fedcba9876543210")}}
-	if hasRuleMsg(checkFileTrailerID(mk(valid), PDFA2b), "6.1.3") {
+	if hasRuleMsg(checkFileTrailerID(mk(valid).view(), PDFA2b), "6.1.3") {
 		t.Error("valid ID flagged")
 	}
 	// Empty strings.
-	if !hasRuleMsg(checkFileTrailerID(mk(Array{String{}, String{}}), PDFA2b), "6.1.3") {
+	if !hasRuleMsg(checkFileTrailerID(mk(Array{String{}, String{}}).view(), PDFA2b), "6.1.3") {
 		t.Error("empty ID strings not flagged")
 	}
 	// Wrong length.
-	if !hasRuleMsg(checkFileTrailerID(mk(Array{String{Value: []byte("x")}}), PDFA2b), "6.1.3") {
+	if !hasRuleMsg(checkFileTrailerID(mk(Array{String{Value: []byte("x")}}).view(), PDFA2b), "6.1.3") {
 		t.Error("single-element ID not flagged")
 	}
 	// Absent: no error.
-	if len(checkFileTrailerID(mk(nil), PDFA2b)) != 0 {
+	if len(checkFileTrailerID(mk(nil).view(), PDFA2b)) != 0 {
 		t.Error("absent ID must not be flagged")
 	}
 }
@@ -113,7 +113,7 @@ func TestA4TriggerEvents(t *testing.T) {
 	aa := &Dictionary{}
 	aa.Set("WS", &Dictionary{})
 	cat.Set("AA", aa)
-	if !hasRuleMsg(checkA4TriggerEvents(doc, PDFA4), "6.6.3") {
+	if !hasRuleMsg(checkA4TriggerEvents(doc.view(), PDFA4), "6.6.3") {
 		t.Error("catalog AA/WS must be flagged")
 	}
 	// Interaction-only AA passes.
@@ -122,7 +122,7 @@ func TestA4TriggerEvents(t *testing.T) {
 	aa2 := &Dictionary{}
 	aa2.Set("Fo", &Dictionary{})
 	cat2.Set("AA", aa2)
-	if hasRuleMsg(checkA4TriggerEvents(doc2, PDFA4), "6.6.3") {
+	if hasRuleMsg(checkA4TriggerEvents(doc2.view(), PDFA4), "6.6.3") {
 		t.Error("interaction-only catalog AA must pass")
 	}
 }
@@ -179,19 +179,19 @@ func TestType5HalftoneTransferFunction(t *testing.T) {
 		return doc
 	}
 	// Primary colorant with TransferFunction: fail.
-	if !hasRuleMsg(checkType5Halftones(mk("Cyan", true), PDFA4), "6.2.5") {
+	if !hasRuleMsg(checkType5Halftones(mk("Cyan", true).view(), PDFA4), "6.2.5") {
 		t.Error("primary colorant with TransferFunction must be flagged")
 	}
 	// Primary colorant without: pass.
-	if hasRuleMsg(checkType5Halftones(mk("Cyan", false), PDFA4), "6.2.5") {
+	if hasRuleMsg(checkType5Halftones(mk("Cyan", false).view(), PDFA4), "6.2.5") {
 		t.Error("primary colorant without TransferFunction must pass")
 	}
 	// Non-primary colorant without TransferFunction: fail.
-	if !hasRuleMsg(checkType5Halftones(mk("Red", false), PDFA4), "6.2.5") {
+	if !hasRuleMsg(checkType5Halftones(mk("Red", false).view(), PDFA4), "6.2.5") {
 		t.Error("non-primary colorant without TransferFunction must be flagged")
 	}
 	// Non-primary with: pass.
-	if hasRuleMsg(checkType5Halftones(mk("Red", true), PDFA4), "6.2.5") {
+	if hasRuleMsg(checkType5Halftones(mk("Red", true).view(), PDFA4), "6.2.5") {
 		t.Error("non-primary colorant with TransferFunction must pass")
 	}
 }
@@ -335,10 +335,10 @@ func TestInheritedPageXObject(t *testing.T) {
 		doc.Trailer.Set("Root", IndirectRef{Number: 1})
 		return doc
 	}
-	if !hasRuleMsg(checkInheritedPageXObject(mk(false), PDFA4), "6.2.2") {
+	if !hasRuleMsg(checkInheritedPageXObject(mk(false).view(), PDFA4), "6.2.2") {
 		t.Error("inherited page XObject must be flagged")
 	}
-	if hasRuleMsg(checkInheritedPageXObject(mk(true), PDFA4), "6.2.2") {
+	if hasRuleMsg(checkInheritedPageXObject(mk(true).view(), PDFA4), "6.2.2") {
 		t.Error("page with own XObject resource must pass")
 	}
 }

@@ -727,7 +727,7 @@ func simpleDeclaredSyntax(lower string) (xmpSyntax, bool) {
 
 // checkXMPProperties validates every XMP property against the predefined
 // schema tables (or the packet's extension schema declarations).
-func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
+func checkXMPProperties(doc core.View, level PDFALevel) []ValidationError {
 	// PDF/A-4 (ISO 19005-4) does NOT apply the strict per-property value-form
 	// validation that 1b/2b/3b do. This is deliberate, not a TODO: the veraPDF
 	// corpus proves A-4 tolerates non-conforming XMP property values — e.g.
@@ -741,7 +741,7 @@ func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
 	if level == PDFA4 {
 		return nil
 	}
-	catalog := getCatalog(doc)
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
@@ -749,11 +749,11 @@ func checkXMPProperties(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	xmp := doc.view().XMPText(stream)
+	xmp := doc.XMPText(stream)
 	if xmp == "" {
 		return nil
 	}
-	props, err := parseXMPProperties([]byte(xmp), doc.lim().XMPPacketBytes)
+	props, err := parseXMPProperties([]byte(xmp), doc.Limits.XMPPacketBytes)
 	if err != nil {
 		return nil // malformed XML is checked elsewhere
 	}
@@ -1112,7 +1112,7 @@ func extensionTypeFields(props []xmpProperty) map[string]map[string]bool {
 // -4 6.7.2.1): the xpacket processing instruction must not carry a bytes or
 // encoding attribute, the packet must be well-formed XML, and (PDF/A-4) it
 // must be encoded as UTF-8.
-func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
+func checkXMPWellFormed(doc core.View, level PDFALevel) []ValidationError {
 	// The rule numbers differ by part, but the requirements — no bytes/encoding
 	// attribute on the xpacket header, and a well-formed XMP packet — apply from
 	// PDF/A-1 onward (ISO 19005-1 6.7.5 / 6.7.9). PDF/A-1 was previously skipped
@@ -1124,7 +1124,7 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 	case PDFA4:
 		attrRule, wfRule = "6.7.2.1", "6.7.2.1"
 	}
-	catalog := getCatalog(doc)
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
@@ -1132,7 +1132,7 @@ func checkXMPWellFormed(doc *Document, level PDFALevel) []ValidationError {
 	if !ok {
 		return nil
 	}
-	raw, err := core.DecodeStreamData(doc.canceler(), stream, doc.lim())
+	raw, err := core.DecodeStreamData(doc.Cancel, stream, doc.Limits)
 	if err != nil {
 		raw = stream.Data
 	}

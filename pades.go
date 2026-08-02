@@ -52,7 +52,7 @@ func (d *Document) ValidatePAdES(raw []byte) []PAdESResult {
 	// (certificates, OCSP, CRLs); a document timestamp (/Type /DocTimeStamp)
 	// archives it for the B-LTA level.
 	hasDSS := false
-	if cat := getCatalog(d); cat != nil {
+	if cat := getCatalog(d.view()); cat != nil {
 		hasDSS = d.ResolveDict(cat.Get("DSS")) != nil
 	}
 	hasDocTimestamp := false

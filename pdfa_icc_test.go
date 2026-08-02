@@ -26,7 +26,7 @@ func TestGeneratedICCProfileIsReal(t *testing.T) {
 		doc := NewPDFADocument(tc.level)
 
 		// Locate the OutputIntent's DestOutputProfile stream.
-		catalog := getCatalog(doc)
+		catalog := getCatalog(doc.view())
 		oi := doc.ResolveDict(catalog.Get("OutputIntents").(Array)[0])
 		prof, ok := doc.Resolve(oi.Get("DestOutputProfile")).(*Stream)
 		if !ok {
@@ -79,7 +79,7 @@ func TestGeneratedDocPassesOutputIntentProfileCheck(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: reparse: %v", lvl, err)
 		}
-		for _, e := range checkOutputIntentProfile(rd, lvl) {
+		for _, e := range checkOutputIntentProfile(rd.view(), lvl) {
 			t.Errorf("%v: output-intent profile violation: %s", lvl, e.Error())
 		}
 	}

@@ -52,7 +52,7 @@ func (d *Document) Repair(level PDFALevel) []RepairAction {
 	}
 
 	// Additional-actions dictionaries are forbidden on pages and annotations too.
-	for _, pg := range collectPages(d, d.view().CatalogPages()) {
+	for _, pg := range collectPages(d.view(), d.view().CatalogPages()) {
 		if pg.Dict.Get("AA") != nil {
 			pg.Dict.Delete("AA")
 			add("removed page additional-actions (/AA)")

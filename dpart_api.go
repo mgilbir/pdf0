@@ -35,7 +35,7 @@ func ValidateDPartsContext(ctx context.Context, doc *Document) []DPartViolation 
 }
 func validateDParts(cancel core.Canceler, doc *Document) []DPartViolation {
 	rd := beginRunCancel(doc, cancel)
-	v := rd.view()
+	v := rd
 	var out []DPartViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, DPartViolation{Rule: rule, Message: msg, Object: obj})
@@ -49,8 +49,8 @@ func validateDParts(cancel core.Canceler, doc *Document) []DPartViolation {
 	// granularity: an already-cancelled run skips it, and a run cancelled during
 	// it completes the walk. The walk is bounded by the page and DPart counts and
 	// reads no content, so that is bounded work, not an open-ended wait.
-	if !v.Cancel.Stopped() {
-		finding.Guarded(add, func() { dpart.ValidateHierarchy(v, add) })
+	if !v.view().Cancel.Stopped() {
+		finding.Guarded(add, func() { dpart.ValidateHierarchy(v.view(), add) })
 	}
 
 	// The walk visits map-ordered structures, so the output order is otherwise

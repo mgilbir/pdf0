@@ -77,7 +77,7 @@ func TestSimpleFontEncodingDifferences(t *testing.T) {
 	enc.Set("Differences", Array{Integer(65), Name("Alpha"), Name("Beta")})
 	font.Set("Encoding", enc)
 	doc := &Document{Objects: map[int]*IndirectObject{}}
-	table := simpleFontCodeToName(doc, font, false)
+	table := simpleFontCodeToName(doc.view(), font, false)
 	if table[65] != "Alpha" || table[66] != "Beta" {
 		t.Errorf("Differences not applied: %q %q", table[65], table[66])
 	}
@@ -122,7 +122,7 @@ func TestSimpleFontBaseEncodingModelled(t *testing.T) {
 		{"BaseEncoding wins for a symbolic font", winBase, true, true},
 	}
 	for _, c := range cases {
-		if got := simpleFontBaseEncodingModelled(doc, mk(c.enc), c.symbolic); got != c.want {
+		if got := simpleFontBaseEncodingModelled(doc.view(), mk(c.enc), c.symbolic); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -158,22 +158,22 @@ func TestTrueTypeEncodingRules(t *testing.T) {
 
 	// Symbolic + Encoding present -> error.
 	doc, font, u := mk(true, Name("WinAnsiEncoding"))
-	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) == 0 {
+	if len(checkTrueTypeEncoding(doc.view(), PDFA2b, "6.2.11", font, u)) == 0 {
 		t.Error("symbolic TrueType with Encoding must be flagged")
 	}
 	// Symbolic + no Encoding -> ok.
 	doc, font, u = mk(true, nil)
-	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) != 0 {
+	if len(checkTrueTypeEncoding(doc.view(), PDFA2b, "6.2.11", font, u)) != 0 {
 		t.Error("symbolic TrueType without Encoding must pass")
 	}
 	// Nonsymbolic + WinAnsi -> ok.
 	doc, font, u = mk(false, Name("WinAnsiEncoding"))
-	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) != 0 {
+	if len(checkTrueTypeEncoding(doc.view(), PDFA2b, "6.2.11", font, u)) != 0 {
 		t.Error("nonsymbolic WinAnsi must pass")
 	}
 	// Nonsymbolic + bad base encoding name -> error.
 	doc, font, u = mk(false, Name("StandardEncoding"))
-	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) == 0 {
+	if len(checkTrueTypeEncoding(doc.view(), PDFA2b, "6.2.11", font, u)) == 0 {
 		t.Error("nonsymbolic StandardEncoding must be flagged")
 	}
 	// Nonsymbolic Encoding dict with Differences name not in AGL -> error.
@@ -181,7 +181,7 @@ func TestTrueTypeEncodingRules(t *testing.T) {
 	e.Set("BaseEncoding", Name("WinAnsiEncoding"))
 	e.Set("Differences", Array{Integer(1), Name("notAGlyphName")})
 	doc, font, u = mk(false, e)
-	if len(checkTrueTypeEncoding(doc, PDFA2b, "6.2.11", font, u)) == 0 {
+	if len(checkTrueTypeEncoding(doc.view(), PDFA2b, "6.2.11", font, u)) == 0 {
 		t.Error("Differences glyph not in AGL must be flagged")
 	}
 }
@@ -226,15 +226,15 @@ func TestCIDToGIDMapRule(t *testing.T) {
 		return doc, font, &core.FontTextUsage{ObjNum: 9, Modes: map[int]bool{0: true}}
 	}
 	doc, font, u := mkFont(nil)
-	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
+	if !hasRuleErr(checkOneFontDict(doc.view(), PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
 		t.Error("missing CIDToGIDMap must be flagged")
 	}
 	doc, font, u = mkFont(Name("Custom"))
-	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
+	if !hasRuleErr(checkOneFontDict(doc.view(), PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
 		t.Error("non-Identity CIDToGIDMap name must be flagged")
 	}
 	doc, font, u = mkFont(Name("Identity"))
-	if hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
+	if hasRuleErr(checkOneFontDict(doc.view(), PDFA2b, "6.2.11", font, u), "6.2.11.3.2") {
 		t.Error("Identity CIDToGIDMap must pass")
 	}
 }
@@ -268,15 +268,15 @@ func TestCIDSystemInfoSupplementIsPart2AndLater(t *testing.T) {
 		return doc, font, &core.FontTextUsage{ObjNum: 9, Modes: map[int]bool{0: true}}
 	}
 	doc, font, u := mkFont(2, 3)
-	if !hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.1") {
+	if !hasRuleErr(checkOneFontDict(doc.view(), PDFA2b, "6.2.11", font, u), "6.2.11.3.1") {
 		t.Error("CIDFont Supplement exceeding the CMap's must be flagged at PDF/A-2")
 	}
 	doc, font, u = mkFont(2, 3)
-	if hasRuleErr(checkOneFontDict(doc, PDFA1b, "6.3", font, u), "6.3.3.1") {
+	if hasRuleErr(checkOneFontDict(doc.view(), PDFA1b, "6.3", font, u), "6.3.3.1") {
 		t.Error("Supplement relationship must not be enforced at PDF/A-1")
 	}
 	doc, font, u = mkFont(3, 2)
-	if hasRuleErr(checkOneFontDict(doc, PDFA2b, "6.2.11", font, u), "6.2.11.3.1") {
+	if hasRuleErr(checkOneFontDict(doc.view(), PDFA2b, "6.2.11", font, u), "6.2.11.3.1") {
 		t.Error("a CIDFont Supplement below the CMap's must pass")
 	}
 }
@@ -294,7 +294,7 @@ func TestParseCIDWidths(t *testing.T) {
 	doc := &Document{Objects: map[int]*IndirectObject{}}
 	// [ 1 [100 200] 5 7 300 ]  -> CID1=100, CID2=200, CID5..7=300
 	w := Array{Integer(1), Array{Integer(100), Integer(200)}, Integer(5), Integer(7), Integer(300)}
-	m, _ := parseCIDWidths(doc, w)
+	m, _ := parseCIDWidths(doc.view(), w)
 	if m[1] != 100 || m[2] != 200 || m[5] != 300 || m[7] != 300 {
 		t.Errorf("CID width parse wrong: %v", m)
 	}
@@ -314,12 +314,12 @@ func TestTrueTypeEncodingAt1b(t *testing.T) {
 	font.Set("Encoding", Name("WinAnsiEncoding")) // forbidden on a symbolic TT font
 	doc := &Document{Objects: map[int]*IndirectObject{1: {Number: 1, Value: font}}}
 	u := &core.FontTextUsage{ObjNum: 1}
-	if got := len(checkTrueTypeEncoding(doc, PDFA1b, "6.3", font, u)); got == 0 {
+	if got := len(checkTrueTypeEncoding(doc.view(), PDFA1b, "6.3", font, u)); got == 0 {
 		t.Error("symbolic TrueType /Encoding not flagged at 1b")
 	}
 	// A non-symbolic font with WinAnsiEncoding is fine.
 	fd.Set("Flags", Integer(32))
-	if got := len(checkTrueTypeEncoding(doc, PDFA1b, "6.3", font, u)); got != 0 {
+	if got := len(checkTrueTypeEncoding(doc.view(), PDFA1b, "6.3", font, u)); got != 0 {
 		t.Errorf("non-symbolic TrueType with WinAnsiEncoding wrongly flagged at 1b: %d", got)
 	}
 }
@@ -342,13 +342,13 @@ func TestDamagedFontProgramFlagged(t *testing.T) {
 	if core.LoadFontProgram(doc.view(), fd) != nil {
 		t.Skip("garbage stream unexpectedly parsed as a font program")
 	}
-	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd, u)); got == 0 {
+	if got := len(damagedFontProgramError(doc.view(), PDFA1b, "6.3", font, fd, u)); got == 0 {
 		t.Error("damaged embedded font program not flagged for a rendered font")
 	}
 	// Not embedded -> not this rule's concern (embedding is a separate check).
 	fd2 := &Dictionary{}
 	fd2.Set("Flags", Integer(32))
-	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd2, u)); got != 0 {
+	if got := len(damagedFontProgramError(doc.view(), PDFA1b, "6.3", font, fd2, u)); got != 0 {
 		t.Errorf("non-embedded font wrongly flagged as damaged: %d", got)
 	}
 }
@@ -379,15 +379,15 @@ func TestCMapEmbeddedAt1b(t *testing.T) {
 	font.Set("Subtype", Name("Type0"))
 	font.Set("Encoding", Name("UniJIS-UCS2-H"))
 	doc := &Document{Objects: map[int]*IndirectObject{1: {Number: 1, Value: font}}}
-	if got := len(checkCMapEmbedded(doc, PDFA1b)); got == 0 {
+	if got := len(checkCMapEmbedded(doc.view(), PDFA1b)); got == 0 {
 		t.Error("named predefined CMap not flagged at 1b")
 	}
-	if got := len(checkCMapEmbedded(doc, PDFA2b)); got != 0 {
+	if got := len(checkCMapEmbedded(doc.view(), PDFA2b)); got != 0 {
 		t.Errorf("2b permits predefined CMaps by name, got %d", got)
 	}
 	// Identity is always fine.
 	font.Set("Encoding", Name("Identity-H"))
-	if got := len(checkCMapEmbedded(doc, PDFA1b)); got != 0 {
+	if got := len(checkCMapEmbedded(doc.view(), PDFA1b)); got != 0 {
 		t.Errorf("Identity-H wrongly flagged at 1b: %d", got)
 	}
 }

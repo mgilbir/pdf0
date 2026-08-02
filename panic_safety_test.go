@@ -51,7 +51,7 @@ func TestSelfReferentialDeviceNTerminates(t *testing.T) {
 	tt := map[Name]sepColorantSeen{}
 	var errs []ValidationError
 	// Must return; if the cycle guard is missing this overflows the stack.
-	collectSeparationConsistency(doc, IndirectRef{Number: 10}, tt, 10, PDFA2b, &errs)
+	collectSeparationConsistency(doc.view(), IndirectRef{Number: 10}, tt, 10, PDFA2b, &errs)
 }
 
 // TestEqualCyclicNoOverflow ensures Equal on a cyclic direct dictionary returns

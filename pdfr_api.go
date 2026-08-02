@@ -33,7 +33,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 	// carries the cancellation signal, and gives the resource guards somewhere to
 	// report a trip (limits.go).
 	rd := beginRunCancel(d, cancel)
-	v := rd.view()
+	v := rd
 	var out []PDFRViolation
 	add := func(rule, msg string, obj int) {
 		out = append(out, PDFRViolation{Rule: rule, Message: msg, Object: obj})
@@ -44,7 +44,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 	// check (or one bad page) does not discard the others' findings (audit C27).
 	// It is also the coarse cancellation boundary (cancel.go).
 	run := func(check func()) {
-		if v.Cancel.Stopped() {
+		if v.view().Cancel.Stopped() {
 			return
 		}
 		finding.Guarded(add, check)
@@ -59,7 +59,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 		}
 	})
 
-	cat := v.Catalog()
+	cat := v.view().Catalog()
 	if cat == nil {
 		add("structure", "document has no catalog", 0)
 		reportLimits(rd, add)
@@ -67,7 +67,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 		return out
 	}
 	run(func() {
-		if xmp := v.DocumentXMP(); xmp == "" {
+		if xmp := v.view().DocumentXMP(); xmp == "" {
 			add("metadata", "a PDF/R file requires an XMP metadata stream", 0)
 		} else if !strings.Contains(strings.ToLower(xmp), "pdf/r") && !strings.Contains(strings.ToLower(xmp), "pdfr") {
 			add("identification", "the XMP metadata does not identify the file as PDF/R", 0)
@@ -76,13 +76,13 @@ func validatePDFR(cancel core.Canceler, d *Document) []PDFRViolation {
 
 	var pages []PageInfo
 	run(func() {
-		pages = v.Pages(cat.Get("Pages"))
+		pages = v.view().Pages(cat.Get("Pages"))
 		if len(pages) == 0 {
 			add("structure", "a PDF/R file shall have at least one page", 0)
 		}
 	})
 	for _, page := range pages {
-		run(func() { pdfr.CheckPage(v, page.Dict, page.ObjNum, add) })
+		run(func() { pdfr.CheckPage(v.view(), page.Dict, page.ObjNum, add) })
 	}
 
 	// Guard trips are reported under their own rule, not as conformance

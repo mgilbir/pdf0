@@ -25,15 +25,7 @@ import (
 //
 // Only run, below, is genuinely shared.
 type validationCache struct {
-	pdfa pdfaCache
-	run  runState
-}
-
-// pdfaCache is the PDF/A engine's memoized traversals: the page tree, decoded
-// content streams and the executed-content walk's per-stream skeletons.
-type pdfaCache struct {
-	directAnnots    []annotOccurrence
-	hasDirectAnnots bool
+	run runState
 }
 
 // runState is the part that is genuinely shared, because it belongs to the run

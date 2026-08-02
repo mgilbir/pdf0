@@ -16,7 +16,7 @@ func TestObjNumForDictParity(t *testing.T) {
 	font.Set("Type", Name("Font"))
 	doc.Objects[7] = &IndirectObject{Number: 7, Value: font}
 
-	if got := objNumForDict(doc, font); got != 7 {
+	if got := objNumForDict(doc.view(), font); got != 7 {
 		t.Fatalf("objNumForDict(font) = %d, want 7", got)
 	}
 	if got := doc.view().DictObjNum(font); got != 7 {
@@ -24,7 +24,7 @@ func TestObjNumForDictParity(t *testing.T) {
 	}
 
 	orphan := &Dictionary{} // never installed as an indirect object
-	if got := objNumForDict(doc, orphan); got != 0 {
+	if got := objNumForDict(doc.view(), orphan); got != 0 {
 		t.Fatalf("objNumForDict(orphan) = %d, want 0 (unknown-object sentinel)", got)
 	}
 	if got := doc.view().DictObjNum(orphan); got != -1 {

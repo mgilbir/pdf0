@@ -1750,7 +1750,7 @@ func TestDecodeXMPToUTF8(t *testing.T) {
 func TestCheckCatalogVersion(t *testing.T) {
 	t.Run("no catalog version OK", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA4)
-		errs := checkCatalogVersion(doc, PDFA4)
+		errs := checkCatalogVersion(doc.view(), PDFA4)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -1760,7 +1760,7 @@ func TestCheckCatalogVersion(t *testing.T) {
 		doc := NewPDFADocument(PDFA4)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("Version", Name("2.0"))
-		errs := checkCatalogVersion(doc, PDFA4)
+		errs := checkCatalogVersion(doc.view(), PDFA4)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -1770,7 +1770,7 @@ func TestCheckCatalogVersion(t *testing.T) {
 		doc := NewPDFADocument(PDFA4)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("Version", Name("1.7"))
-		errs := checkCatalogVersion(doc, PDFA4)
+		errs := checkCatalogVersion(doc.view(), PDFA4)
 		if len(errs) == 0 {
 			t.Error("expected error for catalog version 1.7")
 		}
@@ -1778,7 +1778,7 @@ func TestCheckCatalogVersion(t *testing.T) {
 
 	t.Run("non-PDFA4 skipped", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
-		errs := checkCatalogVersion(doc, PDFA2b)
+		errs := checkCatalogVersion(doc.view(), PDFA2b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error for non-PDFA4: %v", errs[0])
 		}
@@ -1792,7 +1792,7 @@ func TestCheckExtGState(t *testing.T) {
 		gs.Set("TR", Name("Identity"))
 		addExtGStateToDoc(doc, gs)
 
-		errs := checkExtGState(doc, PDFA2b)
+		errs := checkExtGState(doc.view(), PDFA2b)
 		if len(errs) == 0 {
 			t.Error("expected error for /TR in ExtGState")
 		}
@@ -1804,7 +1804,7 @@ func TestCheckExtGState(t *testing.T) {
 		gs.Set("TR2", Name("Default"))
 		addExtGStateToDoc(doc, gs)
 
-		errs := checkExtGState(doc, PDFA2b)
+		errs := checkExtGState(doc.view(), PDFA2b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -1816,7 +1816,7 @@ func TestCheckExtGState(t *testing.T) {
 		gs.Set("TR2", Name("Identity"))
 		addExtGStateToDoc(doc, gs)
 
-		errs := checkExtGState(doc, PDFA2b)
+		errs := checkExtGState(doc.view(), PDFA2b)
 		if len(errs) == 0 {
 			t.Error("expected error for /TR2 non-Default in ExtGState")
 		}
@@ -1828,7 +1828,7 @@ func TestCheckExtGState(t *testing.T) {
 		gs.Set("TR", Name("Identity"))
 		addExtGStateToDoc(doc, gs)
 
-		errs := checkExtGState(doc, PDFA1b)
+		errs := checkExtGState(doc.view(), PDFA1b)
 		if len(errs) == 0 {
 			t.Fatal("expected /TR error at PDF/A-1b (ISO 19005-1, 6.2.8)")
 		}
@@ -1846,7 +1846,7 @@ func TestCheckEmbeddedFiles(t *testing.T) {
 		namesDict.Set("EmbeddedFiles", &Dictionary{})
 		catalog.Set("Names", namesDict)
 
-		errs := checkEmbeddedFiles(doc, PDFA1b)
+		errs := checkEmbeddedFiles(doc.view(), PDFA1b)
 		if len(errs) == 0 {
 			t.Error("expected error for EmbeddedFiles in PDF/A-1b")
 		}
@@ -1861,7 +1861,7 @@ func TestCheckEmbeddedFiles(t *testing.T) {
 		namesDict.Set("EmbeddedFiles", &Dictionary{})
 		catalog.Set("Names", namesDict)
 
-		for _, e := range checkEmbeddedFiles(doc, PDFA2b) {
+		for _, e := range checkEmbeddedFiles(doc.view(), PDFA2b) {
 			if strings.Contains(e.Message, "must not be present") {
 				t.Errorf("PDF/A-2b should allow EmbeddedFiles: %v", e)
 			}
@@ -1876,7 +1876,7 @@ func TestCheckEmbeddedFiles(t *testing.T) {
 		catalog.Set("Names", namesDict)
 		catalog.Set("AF", Array{})
 
-		errs := checkEmbeddedFiles(doc, PDFA3b)
+		errs := checkEmbeddedFiles(doc.view(), PDFA3b)
 		// Should not complain about embedded files existing
 		for _, e := range errs {
 			if strings.Contains(e.Message, "must not be present") {
@@ -1887,7 +1887,7 @@ func TestCheckEmbeddedFiles(t *testing.T) {
 
 	t.Run("no Names OK", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
-		errs := checkEmbeddedFiles(doc, PDFA1b)
+		errs := checkEmbeddedFiles(doc.view(), PDFA1b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error when no Names: %v", errs[0])
 		}
@@ -1926,7 +1926,7 @@ func TestCheckFontSubsets(t *testing.T) {
 		doc.Objects[12] = &IndirectObject{Number: 12, Value: resources}
 		doc.Objects[13] = &IndirectObject{Number: 13, Value: fd}
 
-		errs := checkFontSubsets(doc, PDFA1b)
+		errs := checkFontSubsets(doc.view(), PDFA1b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error for non-subset font: %v", errs[0])
 		}
@@ -1934,7 +1934,7 @@ func TestCheckFontSubsets(t *testing.T) {
 
 	t.Run("skipped for PDFA2b", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
-		errs := checkFontSubsets(doc, PDFA2b)
+		errs := checkFontSubsets(doc.view(), PDFA2b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -1944,7 +1944,7 @@ func TestCheckFontSubsets(t *testing.T) {
 func TestCheckImplementationLimits(t *testing.T) {
 	t.Run("normal objects OK", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
-		errs := checkImplementationLimits(doc, PDFA2b)
+		errs := checkImplementationLimits(doc.view(), PDFA2b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error for clean doc: %v", errs[0])
 		}
@@ -1957,7 +1957,7 @@ func TestCheckImplementationLimits(t *testing.T) {
 		dict.Set("Type", longName)
 		doc.Objects[10] = &IndirectObject{Number: 10, Value: dict}
 
-		errs := checkImplementationLimits(doc, PDFA2b)
+		errs := checkImplementationLimits(doc.view(), PDFA2b)
 		found := false
 		for _, e := range errs {
 			if strings.Contains(e.Message, "name length") {
@@ -1973,7 +1973,7 @@ func TestCheckImplementationLimits(t *testing.T) {
 func TestCheckOptionalContent(t *testing.T) {
 	t.Run("no OCProperties OK", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA4)
-		errs := checkOptionalContent(doc, PDFA4)
+		errs := checkOptionalContent(doc.view(), PDFA4)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -1990,7 +1990,7 @@ func TestCheckOptionalContent(t *testing.T) {
 		ocProps.Set("OCGs", ocgs)
 		catalog.Set("OCProperties", ocProps)
 
-		errs := checkOptionalContent(doc, PDFA4)
+		errs := checkOptionalContent(doc.view(), PDFA4)
 		found := false
 		for _, e := range errs {
 			if strings.Contains(e.Message, "/Name") {
@@ -2004,7 +2004,7 @@ func TestCheckOptionalContent(t *testing.T) {
 
 	t.Run("non-PDFA4 skipped", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
-		errs := checkOptionalContent(doc, PDFA2b)
+		errs := checkOptionalContent(doc.view(), PDFA2b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -2014,7 +2014,7 @@ func TestCheckOptionalContent(t *testing.T) {
 func TestCheckInfoXMPConsistency(t *testing.T) {
 	t.Run("no Info dict OK", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
-		errs := checkInfoXMPConsistency(doc, PDFA1b)
+		errs := checkInfoXMPConsistency(doc.view(), PDFA1b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -2022,7 +2022,7 @@ func TestCheckInfoXMPConsistency(t *testing.T) {
 
 	t.Run("non-PDFA1b skipped", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
-		errs := checkInfoXMPConsistency(doc, PDFA2b)
+		errs := checkInfoXMPConsistency(doc.view(), PDFA2b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -2053,7 +2053,7 @@ func TestNormalizePDFDate(t *testing.T) {
 func TestCheckTransparencyBlending(t *testing.T) {
 	t.Run("no transparency OK", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA2b)
-		errs := checkTransparencyBlending(doc, PDFA2b)
+		errs := checkTransparencyBlending(doc.view(), PDFA2b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -2061,7 +2061,7 @@ func TestCheckTransparencyBlending(t *testing.T) {
 
 	t.Run("PDFA1b skipped", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA1b)
-		errs := checkTransparencyBlending(doc, PDFA1b)
+		errs := checkTransparencyBlending(doc.view(), PDFA1b)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -2069,7 +2069,7 @@ func TestCheckTransparencyBlending(t *testing.T) {
 
 	t.Run("PDFA4 skipped", func(t *testing.T) {
 		doc := NewPDFADocument(PDFA4)
-		errs := checkTransparencyBlending(doc, PDFA4)
+		errs := checkTransparencyBlending(doc.view(), PDFA4)
 		if len(errs) > 0 {
 			t.Errorf("unexpected error: %v", errs[0])
 		}
@@ -2279,13 +2279,13 @@ func TestValidatePDFA_HeaderEarlyVersionsAllowed(t *testing.T) {
 	for _, v := range []string{"1.0", "1.3", "1.7"} {
 		doc := NewPDFADocument(PDFA2b)
 		doc.Version = v
-		if hasRule(checkHeader(doc, PDFA2b), "6.1.2") {
+		if hasRule(checkHeader(doc.view(), PDFA2b), "6.1.2") {
 			t.Errorf("header %s must be legal at PDF/A-2b", v)
 		}
 	}
 	doc := NewPDFADocument(PDFA2b)
 	doc.Version = "2.0"
-	if !hasRule(checkHeader(doc, PDFA2b), "6.1.2") {
+	if !hasRule(checkHeader(doc.view(), PDFA2b), "6.1.2") {
 		t.Error("header 2.0 must be rejected at PDF/A-2b")
 	}
 }
@@ -2300,13 +2300,13 @@ func TestValidatePDFA_ImplementationLimitLevels(t *testing.T) {
 		doc.Objects[40] = &IndirectObject{Number: 40, Value: d}
 		return doc
 	}
-	if errs := checkImplementationLimits(mk(PDFA1b), PDFA1b); !hasRule(errs, "6.1.12") {
+	if errs := checkImplementationLimits(mk(PDFA1b).view(), PDFA1b); !hasRule(errs, "6.1.12") {
 		t.Errorf("expected 6.1.12 name-length error at 1b, got %v", errs)
 	}
-	if errs := checkImplementationLimits(mk(PDFA2b), PDFA2b); !hasRule(errs, "6.1.13") {
+	if errs := checkImplementationLimits(mk(PDFA2b).view(), PDFA2b); !hasRule(errs, "6.1.13") {
 		t.Errorf("expected 6.1.13 name-length error at 2b, got %v", errs)
 	}
-	if errs := checkImplementationLimits(mk(PDFA4), PDFA4); len(errs) > 0 {
+	if errs := checkImplementationLimits(mk(PDFA4).view(), PDFA4); len(errs) > 0 {
 		t.Errorf("PDF/A-4 has no implementation limits, got %v", errs)
 	}
 
@@ -2315,7 +2315,7 @@ func TestValidatePDFA_ImplementationLimitLevels(t *testing.T) {
 	d := &Dictionary{}
 	d.Set("V", Real(40000))
 	doc.Objects[41] = &IndirectObject{Number: 41, Value: d}
-	if errs := checkImplementationLimits(doc, PDFA1b); !hasRule(errs, "6.1.12") {
+	if errs := checkImplementationLimits(doc.view(), PDFA1b); !hasRule(errs, "6.1.12") {
 		t.Errorf("expected real-magnitude error at 1b, got %v", errs)
 	}
 }
@@ -2361,7 +2361,7 @@ func TestValidatePDFA_ExtGStateTR2At1b(t *testing.T) {
 	gs := &Dictionary{}
 	gs.Set("TR2", Name("Identity"))
 	addExtGStateToDoc(doc, gs)
-	errs := checkExtGState(doc, PDFA1b)
+	errs := checkExtGState(doc.view(), PDFA1b)
 	if !hasRule(errs, "6.2.8") {
 		t.Errorf("expected 6.2.8 error for /TR2 at 1b, got %v", errs)
 	}
@@ -2394,7 +2394,7 @@ func TestValidatePDFA_EFAnywhereForbiddenAt1b(t *testing.T) {
 	fs.Set("F", String{Value: []byte("x.txt")})
 	fs.Set("EF", &Dictionary{})
 	doc.Objects[50] = &IndirectObject{Number: 50, Value: fs}
-	if !hasRule(checkEmbeddedFiles(doc, PDFA1b), "6.1.11") {
+	if !hasRule(checkEmbeddedFiles(doc.view(), PDFA1b), "6.1.11") {
 		t.Error("expected 6.1.11 error for /EF filespec at 1b")
 	}
 }
@@ -2409,7 +2409,7 @@ func TestValidatePDFA_OutputIntentRules(t *testing.T) {
 	pdfx.Set("S", Name("GTS_PDFX"))
 	pdfx.Set("OutputConditionIdentifier", String{Value: []byte("CGATS TR 001")})
 	catalog.Set("OutputIntents", Array{pdfx})
-	if hasRule(checkOutputIntents(doc, PDFA2b), "6.2.3") {
+	if hasRule(checkOutputIntents(doc.view(), PDFA2b), "6.2.3") {
 		t.Error("PDF/X-only OutputIntents must be legal")
 	}
 
@@ -2428,7 +2428,7 @@ func TestValidatePDFA_OutputIntentRules(t *testing.T) {
 	i2.Set("DestOutputProfile", IndirectRef{Number: 6})
 	doc2.Objects[6] = &IndirectObject{Number: 6, Value: &Stream{}}
 	catalog2.Set("OutputIntents", Array{i1, i2})
-	if !hasRule(checkOutputIntents(doc2, PDFA2b), "6.2.3") {
+	if !hasRule(checkOutputIntents(doc2.view(), PDFA2b), "6.2.3") {
 		t.Error("differing DestOutputProfile objects across intents must be flagged")
 	}
 }

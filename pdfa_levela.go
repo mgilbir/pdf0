@@ -15,12 +15,12 @@ import (
 // which pdf0 already validates.
 
 // validatePDFALevelA validates a Level A conformance level (1a/2a/3a).
-func validatePDFALevelA(cancel core.Canceler, doc *Document, level PDFALevel, rawData []byte) []ValidationError {
+func validatePDFALevelA(doc core.View, level PDFALevel, rawData []byte) []ValidationError {
 	// All Level B requirements apply, so run the Level B pipeline and adopt its
 	// findings at this level. The Level B pipeline requires pdfaid:conformance
 	// "B"; at Level A it must be "A", so that one Level B finding is dropped and
 	// re-checked below.
-	base := validatePDFABytes(cancel, doc, level.baseB(), rawData)
+	base := validatePDFAView(doc, level.baseB(), rawData)
 	errs := make([]ValidationError, 0, len(base))
 	for _, e := range base {
 		if strings.Contains(e.Message, "pdfaid:conformance must be B") {
@@ -35,10 +35,10 @@ func validatePDFALevelA(cancel core.Canceler, doc *Document, level PDFALevel, ra
 	// crashing the caller — the asymmetry runCheck exists to prevent (audit C27).
 	// A cancelled run abandons the ones it has not started; the finding that
 	// says so is already in base, carried over by the loop above.
-	for _, check := range []func(*Document, PDFALevel) []ValidationError{
+	for _, check := range []func(core.View, PDFALevel) []ValidationError{
 		checkLevelAConformance, checkLevelAStructure, checkLevelALanguage,
 	} {
-		if cancel.Stopped() {
+		if doc.Cancel.Stopped() {
 			break
 		}
 		errs = append(errs, runCheck(doc, level, check)...)
@@ -78,8 +78,8 @@ func levelAClause(concept string, level PDFALevel) string {
 
 // checkLevelAConformance verifies the XMP declares Level A conformance
 // (pdfaid:conformance = "A").
-func checkLevelAConformance(doc *Document, level PDFALevel) []ValidationError {
-	xmp := doc.view().DocumentXMP()
+func checkLevelAConformance(doc core.View, level PDFALevel) []ValidationError {
+	xmp := doc.DocumentXMP()
 	if xmp == "" {
 		return nil // a missing metadata stream is reported by the Level B checks
 	}
@@ -103,14 +103,14 @@ func checkLevelAConformance(doc *Document, level PDFALevel) []ValidationError {
 // checkLevelAStructure verifies the file is a Tagged PDF with a logical
 // structure tree (ISO 19005-1 6.8.2 / -2/-3 6.7.2). It mirrors the PDF/UA
 // tagged-PDF requirement.
-func checkLevelAStructure(doc *Document, level PDFALevel) []ValidationError {
-	cat := getCatalog(doc)
+func checkLevelAStructure(doc core.View, level PDFALevel) []ValidationError {
+	cat := doc.Catalog()
 	if cat == nil {
 		return nil // reported by the Level B checks
 	}
 	var errs []ValidationError
 	mark := doc.ResolveDict(cat.Get("MarkInfo"))
-	if mark == nil || !doc.view().IsTrue(mark.Get("Marked")) {
+	if mark == nil || !doc.IsTrue(mark.Get("Marked")) {
 		errs = append(errs, ValidationError{
 			Rule:    levelAClause("structure", level),
 			Level:   level,
@@ -134,8 +134,8 @@ func checkLevelAStructure(doc *Document, level PDFALevel) []ValidationError {
 // flagged — matching the Level B leniency (a valid /Lang is not otherwise
 // mandatory in Level B, so requiring one at Level A must not false-positive on
 // files that carry language on structure elements instead).
-func checkLevelALanguage(doc *Document, level PDFALevel) []ValidationError {
-	cat := getCatalog(doc)
+func checkLevelALanguage(doc core.View, level PDFALevel) []ValidationError {
+	cat := doc.Catalog()
 	if cat == nil {
 		return nil
 	}

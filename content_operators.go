@@ -72,7 +72,7 @@ var standardRenderingIntents = map[string]bool{
 // operators defined in ISO 32000 (6.2.2), that the ri operator's operand is
 // a standard rendering intent, and that named XObject/resource references
 // resolve within the associated resource dictionary.
-func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationError {
+func checkContentStreamOperators(doc core.View, level PDFALevel) []ValidationError {
 	rule := "6.2.2"
 	var errs []ValidationError
 	seen := map[string]bool{}
@@ -84,7 +84,7 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
-	catalog := getCatalog(doc)
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
@@ -92,8 +92,8 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 	// that no content stream invokes does not appear on the page (the
 	// corpus passes an UnknownOperator in an uninvoked form).
 	seenContainer := map[*Dictionary]bool{}
-	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.view().ContentBytesAndKey(page.Dict.Get("Contents"))
+	for _, page := range doc.Pages(catalog.Get("Pages")) {
+		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
 		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, seenContainer, add)
 	}
 
@@ -101,7 +101,7 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 	// an operator not defined in the PDF imaging model is equally forbidden
 	// there (ISO 19005-1 6.2.10; Isartor 6.2.10-t01-fail-c).
 	for _, ap := range collectAppearanceStreams(doc) {
-		if data := decodeContentStream(doc, ap.stream); data != nil {
+		if data := doc.Content(ap.stream); data != nil {
 			checkContentTokens(data, doc.ResolveDict(ap.stream.Dict.Get("Resources")), doc, ap.objNum, add)
 		}
 	}
@@ -110,7 +110,7 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 	// must resolve in the Type 3 font's own /Resources — not inherited from
 	// the page (ISO 19005 6.2.2; a glyph proc that references a colour space
 	// present only in the page resources is invalid).
-	for fontDict, u := range core.CollectFontTextUsage(doc.view()) {
+	for fontDict, u := range core.CollectFontTextUsage(doc) {
 		if st, _ := fontDict.Get("Subtype").(Name); st != "Type3" || !rendersVisibly(u) {
 			continue
 		}
@@ -121,7 +121,7 @@ func checkContentStreamOperators(doc *Document, level PDFALevel) []ValidationErr
 		}
 		for _, cpVal := range cps.Values {
 			if cp, ok := doc.Resolve(cpVal).(*Stream); ok {
-				if cpData := decodeContentStream(doc, cp); cpData != nil {
+				if cpData := doc.Content(cp); cpData != nil {
 					checkContentTokens(cpData, res, doc, u.ObjNum, add)
 				}
 			}
@@ -140,7 +140,7 @@ type appearanceStream struct {
 // collectAppearanceStreams gathers the normal-appearance (/AP /N) streams of
 // every annotation, following the button-widget form where /N is a
 // sub-dictionary of appearance-state streams.
-func collectAppearanceStreams(doc *Document) []appearanceStream {
+func collectAppearanceStreams(doc core.View) []appearanceStream {
 	var out []appearanceStream
 	add := func(n Object, objNum int) {
 		switch v := doc.Resolve(n).(type) {
@@ -172,22 +172,22 @@ func collectAppearanceStreams(doc *Document) []appearanceStream {
 
 // walkExecutedContent validates a content stream and recurses into the form
 // XObjects and tiling patterns it actually invokes.
-func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key *Stream, objNum int, seen map[*Dictionary]bool, add func(string, int)) {
+func walkExecutedContent(doc core.View, container *Dictionary, data []byte, key *Stream, objNum int, seen map[*Dictionary]bool, add func(string, int)) {
 	// One invocation scans one content stream and recurses into the forms and
 	// patterns it draws, so this is the per-stream cancellation boundary of the
 	// executed-content model (cancel.go).
-	if container == nil || seen[container] || doc.stopped() {
+	if container == nil || seen[container] || doc.Cancel.Stopped() {
 		return
 	}
 	seen[container] = true
-	res := resolveResources(doc, container)
+	res := doc.Resources(container)
 	if data != nil {
 		checkContentTokens(data, res, doc, objNum, add)
 	}
 	if res == nil {
 		return
 	}
-	used := doc.view().ContentUsedNamesCached(data, key)
+	used := doc.ContentUsedNamesCached(data, key)
 	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
 		for i, key := range xobj.Keys {
 			if !used.XObjects[string(key)] {
@@ -207,7 +207,7 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key 
 					if s.Dict.Get("PS") != nil {
 						add("a drawn form XObject dictionary contains a /PS entry", xnum)
 					}
-					walkExecutedContent(doc, &s.Dict, decodeContentStream(doc, s), s, xnum, seen, add)
+					walkExecutedContent(doc, &s.Dict, doc.Content(s), s, xnum, seen, add)
 				}
 			}
 		}
@@ -218,7 +218,7 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key 
 				continue
 			}
 			if s, ok := doc.Resolve(pat.Values[i]).(*Stream); ok {
-				walkExecutedContent(doc, &s.Dict, decodeContentStream(doc, s), s, i, seen, add)
+				walkExecutedContent(doc, &s.Dict, doc.Content(s), s, i, seen, add)
 			}
 		}
 	}
@@ -226,9 +226,9 @@ func walkExecutedContent(doc *Document, container *Dictionary, data []byte, key 
 
 // checkContentTokens scans one content stream for undefined operators, custom
 // rendering intents, and unresolved named resource references.
-func checkContentTokens(data []byte, res *Dictionary, doc *Document, objNum int, add func(string, int)) {
+func checkContentTokens(data []byte, res *Dictionary, doc core.View, objNum int, add func(string, int)) {
 	var lastName string
-	core.ForEachContentToken(doc.canceler(), data, func(tok []byte, isName bool) {
+	core.ForEachContentToken(doc.Cancel, data, func(tok []byte, isName bool) {
 		if isName {
 			lastName = string(tok)
 			return
@@ -287,7 +287,7 @@ func isContentOperand(s string) bool {
 
 // namedResourcePresent reports whether a named resource of the given category
 // exists in the resource dictionary.
-func namedResourcePresent(doc *Document, res *Dictionary, category, name string) bool {
+func namedResourcePresent(doc core.View, res *Dictionary, category, name string) bool {
 	if name == "" {
 		return true // no name captured; do not flag
 	}
@@ -312,7 +312,7 @@ var builtinColorSpaceName = map[string]bool{
 // extraction, distinct from (*Document).dictObjNum / objNumForDict, which scan
 // the object table for a dictionary's identity; callers that already hold the
 // reference use this to avoid the scan.
-func resolveObjNum(doc *Document, o Object) int {
+func resolveObjNum(doc core.View, o Object) int {
 	if ref, ok := o.(IndirectRef); ok {
 		return ref.Number
 	}
@@ -323,7 +323,7 @@ func resolveObjNum(doc *Document, o Object) int {
 // numeric and string operands within content streams (ISO 19005-1 6.1.12,
 // -2/-3 6.1.13). The real magnitude and string-length limits differ by
 // part; the integer limit (2^31-1) is universal.
-func checkContentStreamLimits(doc *Document, level PDFALevel, lim implLimits, errs *[]ValidationError) {
+func checkContentStreamLimits(doc core.View, level PDFALevel, lim implLimits, errs *[]ValidationError) {
 	// One example per distinct message, attributed to the lowest object number
 	// that produced it — collectContentStreamData returns a map, so the first
 	// stream to breach a limit varies from run to run.
@@ -335,7 +335,7 @@ func checkContentStreamLimits(doc *Document, level PDFALevel, lim implLimits, er
 		found.add(ValidationError{Rule: lim.rule, Level: level, Message: msg, Object: obj})
 	}
 	for num, data := range collectContentStreamData(doc) {
-		core.ForEachContentItem(doc.canceler(), data, func(kind core.ContentItemKind, payload []byte) {
+		core.ForEachContentItem(doc.Cancel, data, func(kind core.ContentItemKind, payload []byte) {
 			switch kind {
 			case core.ItemNumber:
 				checkContentNumberLimit(string(payload), lim, num, add)
@@ -398,11 +398,11 @@ func checkContentNumberLimit(s string, lim implLimits, objNum int, add func(stri
 // same ICC profile as the PDF/A output intent or the current transparency
 // blending colour space. Content is followed through invoked form XObjects,
 // carrying the enclosing group's blending profile.
-func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
+func checkICCProfileIdentity(doc core.View, level PDFALevel) []ValidationError {
 	if level != PDFA4 {
 		return nil
 	}
-	catalog := getCatalog(doc)
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
@@ -418,13 +418,13 @@ func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
 		errs = append(errs, ValidationError{Rule: "6.2.4.2", Level: level, Message: msg, Object: obj})
 	}
 	seenC := map[*Dictionary]bool{}
-	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		// PDF/A-4 permits page-level output intents; prefer the page's own.
 		oiProfile := catalogOI
 		if p := pdfaOutputIntentProfile(doc, page.Dict); p != nil {
 			oiProfile = p
 		}
-		data, key := doc.view().ContentBytesAndKey(page.Dict.Get("Contents"))
+		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
 		blend := groupBlendProfile(doc, page.Dict)
 		walkICCIdentity(doc, page.Dict, data, key, page.ObjNum, oiProfile, blend, seenC, add)
 	}
@@ -433,7 +433,7 @@ func checkICCProfileIdentity(doc *Document, level PDFALevel) []ValidationError {
 
 // pdfaOutputIntentProfile returns the DestOutputProfile of a dictionary's
 // GTS_PDFA1 output intent, or nil.
-func pdfaOutputIntentProfile(doc *Document, container *Dictionary) *Stream {
+func pdfaOutputIntentProfile(doc core.View, container *Dictionary) *Stream {
 	arr, ok := doc.Resolve(container.Get("OutputIntents")).(Array)
 	if !ok {
 		return nil
@@ -452,16 +452,16 @@ func pdfaOutputIntentProfile(doc *Document, container *Dictionary) *Stream {
 	return nil
 }
 
-func walkICCIdentity(doc *Document, container *Dictionary, data []byte, key *Stream, objNum int, oi, blend *Stream, seen map[*Dictionary]bool, add func(string, int)) {
+func walkICCIdentity(doc core.View, container *Dictionary, data []byte, key *Stream, objNum int, oi, blend *Stream, seen map[*Dictionary]bool, add func(string, int)) {
 	if container == nil || seen[container] || data == nil {
 		return
 	}
 	seen[container] = true
-	res := resolveResources(doc, container)
+	res := doc.Resources(container)
 	if res == nil {
 		return
 	}
-	usage := scanContentColorUsage(doc.canceler(), data)
+	usage := scanContentColorUsage(doc.Cancel, data)
 	csDict := doc.ResolveDict(res.Get("ColorSpace"))
 	checkName := func(name string) {
 		if csDict == nil {
@@ -487,7 +487,7 @@ func walkICCIdentity(doc *Document, container *Dictionary, data []byte, key *Str
 
 	// Recurse into invoked form XObjects, updating the blending profile when
 	// the form is an isolated transparency group.
-	used := doc.view().ContentUsedNamesCached(data, key)
+	used := doc.ContentUsedNamesCached(data, key)
 	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
 		for i, xkey := range xobj.Keys {
 			if !used.XObjects[string(xkey)] {
@@ -504,14 +504,14 @@ func walkICCIdentity(doc *Document, container *Dictionary, data []byte, key *Str
 			if gp := groupBlendProfile(doc, &s.Dict); gp != nil {
 				childBlend = gp
 			}
-			walkICCIdentity(doc, &s.Dict, decodeContentStream(doc, s), s, resolveObjNum(doc, xobj.Values[i]), oi, childBlend, seen, add)
+			walkICCIdentity(doc, &s.Dict, doc.Content(s), s, resolveObjNum(doc, xobj.Values[i]), oi, childBlend, seen, add)
 		}
 	}
 }
 
 // groupBlendProfile returns the ICC profile of a container's transparency
 // group blending colour space, or nil.
-func groupBlendProfile(doc *Document, container *Dictionary) *Stream {
+func groupBlendProfile(doc core.View, container *Dictionary) *Stream {
 	if g := doc.ResolveDict(container.Get("Group")); g != nil {
 		return iccProfileStream(doc, g.Get("CS"))
 	}
@@ -521,7 +521,7 @@ func groupBlendProfile(doc *Document, container *Dictionary) *Stream {
 // renderedICCCMYKProfile returns the ICCBased CMYK profile a colour space
 // renders through: the space itself, or the ICCBased CMYK alternate of a
 // Separation or DeviceN space.
-func renderedICCCMYKProfile(doc *Document, csVal Object) *Stream {
+func renderedICCCMYKProfile(doc core.View, csVal Object) *Stream {
 	if p := iccCMYKProfile(doc, csVal); p != nil {
 		return p
 	}

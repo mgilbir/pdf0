@@ -23,11 +23,11 @@ import (
 // checkProhibitedCatalogEntries flags document-level features prohibited by
 // PDF/A-4: alternate presentations, page presentation steps, and the
 // Requirements dictionary (ISO 19005-4 6.11, 6.12).
-func checkProhibitedCatalogEntries(doc *Document, level PDFALevel) []ValidationError {
+func checkProhibitedCatalogEntries(doc core.View, level PDFALevel) []ValidationError {
 	if level == PDFA1b {
 		return nil // 6.11 / 6.12 are clauses of ISO 19005 parts 2 and later
 	}
-	catalog := getCatalog(doc)
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
@@ -45,7 +45,7 @@ func checkProhibitedCatalogEntries(doc *Document, level PDFALevel) []ValidationE
 				Message: "document name dictionary must not contain /AlternatePresentations"})
 		}
 	}
-	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		if page.Dict.Get("PresSteps") != nil {
 			errs = append(errs, ValidationError{Rule: "6.11", Level: level,
 				Message: "page dictionary must not contain /PresSteps (presentation steps)",
@@ -58,7 +58,7 @@ func checkProhibitedCatalogEntries(doc *Document, level PDFALevel) []ValidationE
 // checkImageIntentAndInterpolate flags Image XObjects and inline images that
 // carry Interpolate/true or a non-standard rendering intent (ISO 19005-2
 // 6.2.4/6.2.6, -4 6.2.7/6.2.9; ISO 32000-1 8.9.5.2, 8.9.5.4).
-func checkImageIntentAndInterpolate(doc *Document, level PDFALevel) []ValidationError {
+func checkImageIntentAndInterpolate(doc core.View, level PDFALevel) []ValidationError {
 	interpRule := "6.2.7"
 	intentRule := "6.2.9"
 	switch level {
@@ -107,7 +107,7 @@ func checkImageIntentAndInterpolate(doc *Document, level PDFALevel) []Validation
 // checkFileTrailerID validates the file identifier: when present, /ID shall
 // be an array of exactly two non-empty byte strings (ISO 32000-1 14.4,
 // ISO 19005-2 6.1.3).
-func checkFileTrailerID(doc *Document, level PDFALevel) []ValidationError {
+func checkFileTrailerID(doc core.View, level PDFALevel) []ValidationError {
 	rule := "6.1.3"
 	idObj := doc.Trailer.Get("ID")
 	if idObj == nil {
@@ -225,11 +225,11 @@ var forbiddenAAEvents = map[Name]bool{
 
 // checkA4TriggerEvents flags AA dictionaries — on the catalog, pages, or
 // annotations — that define a forbidden trigger event.
-func checkA4TriggerEvents(doc *Document, level PDFALevel) []ValidationError {
+func checkA4TriggerEvents(doc core.View, level PDFALevel) []ValidationError {
 	if level != PDFA4 {
 		return nil
 	}
-	catalog := getCatalog(doc)
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
@@ -247,7 +247,7 @@ func checkA4TriggerEvents(doc *Document, level PDFALevel) []ValidationError {
 		}
 	}
 	report(doc.ResolveDict(catalog.Get("AA")), 0)
-	for _, page := range collectPages(doc, catalog.Get("Pages")) {
+	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		report(doc.ResolveDict(page.Dict.Get("AA")), page.ObjNum)
 	}
 	for num, iobj := range doc.Objects {
@@ -282,7 +282,7 @@ func stringHasPUA(b []byte) bool {
 // checkActualTextPUA enforces ISO 19005-4 6.2.10.8: an ActualText entry — in
 // a structure element dictionary or a marked-content property list — must not
 // contain Unicode Private Use Area values, which have no defined meaning.
-func checkActualTextPUA(doc *Document, level PDFALevel) []ValidationError {
+func checkActualTextPUA(doc core.View, level PDFALevel) []ValidationError {
 	if level != PDFA4 {
 		return nil
 	}
@@ -362,7 +362,7 @@ var halftoneReserved = map[Name]bool{"Type": true, "HalftoneType": true, "Halfto
 // (multi-component) halftone dictionaries (ISO 19005-2/-4 6.2.5): a component
 // for a process (primary) colorant must not contain a TransferFunction, and
 // a component for a non-primary colorant must contain one.
-func checkType5Halftones(doc *Document, level PDFALevel) []ValidationError {
+func checkType5Halftones(doc core.View, level PDFALevel) []ValidationError {
 	if level == PDFA1b {
 		return nil // 1b forbids transparency/halftone features via other rules
 	}
@@ -407,8 +407,8 @@ func checkType5Halftones(doc *Document, level PDFALevel) []ValidationError {
 
 // collectAppliedHalftones returns every halftone dictionary referenced by the
 // /HT entry of an ExtGState that is applied (via gs) in executed content.
-func collectAppliedHalftones(doc *Document) []*Dictionary {
-	catalog := getCatalog(doc)
+func collectAppliedHalftones(doc core.View) []*Dictionary {
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
@@ -421,12 +421,12 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 			return
 		}
 		seenC[container] = true
-		res := resolveResources(doc, container)
+		res := doc.Resources(container)
 		if res == nil {
 			return
 		}
-		used := doc.view().ContentUsedNamesCached(data, key)
-		gsNames := scanContentColorUsage(doc.canceler(), data).gsNames
+		used := doc.ContentUsedNamesCached(data, key)
+		gsNames := scanContentColorUsage(doc.Cancel, data).gsNames
 		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
 			for i, key := range gsDict.Keys {
 				if !gsNames[string(key)] {
@@ -449,14 +449,14 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 				}
 				if s, ok := doc.Resolve(xobj.Values[i]).(*Stream); ok {
 					if st, _ := s.Dict.Get("Subtype").(Name); st == "Form" {
-						walk(&s.Dict, decodeContentStream(doc, s), s)
+						walk(&s.Dict, doc.Content(s), s)
 					}
 				}
 			}
 		}
 	}
-	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.view().ContentBytesAndKey(page.Dict.Get("Contents"))
+	for _, page := range doc.Pages(catalog.Get("Pages")) {
+		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
 		walk(page.Dict, data, key)
 	}
 	return out
@@ -466,8 +466,8 @@ func collectAppliedHalftones(doc *Document) []*Dictionary {
 // subtype is application/pdf shall itself be a valid PDF/A document. Each
 // such file is decoded and validated one level deep (a depth guard prevents
 // unbounded recursion).
-func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
-	if level != PDFA4 || doc.embeddedDepth > 0 {
+func checkEmbeddedPDFA(doc core.View, level PDFALevel) []ValidationError {
+	if level != PDFA4 || doc.EmbeddedDepth > 0 {
 		return nil
 	}
 	// PDF/A-4f and PDF/A-4e permit arbitrary embedded files; plain PDF/A-4
@@ -480,7 +480,7 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 	for num, iobj := range doc.Objects {
 		// One iteration can run a whole nested validation, so this is a
 		// cancellation boundary in its own right (cancel.go).
-		if doc.stopped() {
+		if doc.Cancel.Stopped() {
 			break
 		}
 		dict, ok := iobj.Value.(*Dictionary)
@@ -501,11 +501,11 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
 				continue
 			}
-			data, err := core.DecodeStreamData(doc.canceler(), stream, doc.lim())
+			data, err := core.DecodeStreamData(doc.Cancel, stream, doc.Limits)
 			if err != nil || len(data) == 0 {
 				continue
 			}
-			compliant, complete := embeddedPDFACompliant(doc.canceler(), data, doc.lim())
+			compliant, complete := embeddedPDFACompliant(doc.Cancel, data, doc.Limits)
 			if !complete {
 				// The nested run reported a checker finding of its own — a guard
 				// tripped inside it, a check panicked, or the shared context
@@ -513,7 +513,7 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 				// central mistake: asserting a violation on the strength of an
 				// incomplete result (limits_report.go). Decline, and report the
 				// incompleteness under "limit" so it is attributable.
-				noteLimit(doc, limitEmbeddedPDFA, "an embedded PDF file could not be validated to completion, so its PDF/A conformance (6.9) was neither confirmed nor denied", num)
+				doc.Note(limitEmbeddedPDFA, "an embedded PDF file could not be validated to completion, so its PDF/A conformance (6.9) was neither confirmed nor denied", num)
 				continue
 			}
 			if !compliant {
@@ -527,8 +527,8 @@ func checkEmbeddedPDFA(doc *Document, level PDFALevel) []ValidationError {
 
 // pdfaConformanceFlag returns the document's XMP pdfaid:conformance value
 // ("F", "E", "B", "A", ...) or "" if absent.
-func pdfaConformanceFlag(doc *Document) string {
-	catalog := getCatalog(doc)
+func pdfaConformanceFlag(doc core.View) string {
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return ""
 	}
@@ -536,7 +536,7 @@ func pdfaConformanceFlag(doc *Document) string {
 	if !ok {
 		return ""
 	}
-	xmp := doc.view().XMPText(stream)
+	xmp := doc.XMPText(stream)
 	if v := core.ExtractXMPValue(xmp, "pdfaid:conformance"); v != "" {
 		return strings.ToUpper(v)
 	}
@@ -608,7 +608,7 @@ func embeddedPDFACompliant(cancel core.Canceler, data []byte, lim core.Limits) (
 // declaredPDFALevel reads the PDF/A conformance level a document claims via
 // its XMP pdfaid:part / pdfaid:conformance identifiers.
 func declaredPDFALevel(doc *Document) (PDFALevel, bool) {
-	catalog := getCatalog(doc)
+	catalog := doc.view().Catalog()
 	if catalog == nil {
 		return 0, false
 	}
@@ -660,18 +660,18 @@ func extractXMPAttr(xmp, key string) string {
 // inherited from a /Pages tree node (ISO 19005-2 6.2.2, -4 6.2.2). Resource
 // inheritance in general remains permitted; only a rendered XObject that is
 // resolved solely through inheritance is rejected.
-func checkInheritedPageXObject(doc *Document, level PDFALevel) []ValidationError {
-	catalog := getCatalog(doc)
+func checkInheritedPageXObject(doc core.View, level PDFALevel) []ValidationError {
+	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
 	var errs []ValidationError
-	for _, page := range collectPages(doc, catalog.Get("Pages")) {
-		data, key := doc.view().ContentBytesAndKey(page.Dict.Get("Contents"))
+	for _, page := range doc.Pages(catalog.Get("Pages")) {
+		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
 		if data == nil {
 			continue
 		}
-		used := doc.view().ContentUsedNamesCached(data, key)
+		used := doc.ContentUsedNamesCached(data, key)
 		if len(used.XObjects) == 0 {
 			continue
 		}

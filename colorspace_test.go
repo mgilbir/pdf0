@@ -105,7 +105,7 @@ func TestCIEColorSpaceParams(t *testing.T) {
 	check := func(family string, params *Dictionary) []ValidationError {
 		doc := NewPDFADocument(PDFA2b)
 		var errs []ValidationError
-		checkColorSpaceValue(doc, Array{Name(family), params}, 0, PDFA2b, &errs)
+		checkColorSpaceValue(doc.view(), Array{Name(family), params}, 0, PDFA2b, &errs)
 		return errs
 	}
 	wp := func(x, y, z float64) Array { return Array{Real(x), Real(y), Real(z)} }
@@ -248,7 +248,7 @@ func TestDeviceNSpotNeedsColorants(t *testing.T) {
 	doc := NewPDFADocument(PDFA2b)
 	var errs []ValidationError
 	deviceN := Array{Name("DeviceN"), Array{Name("Spot1")}, Array{Name("ICCBased"), IndirectRef{Number: 5}}, IndirectRef{Number: 5}}
-	checkColorSpaceValue(doc, deviceN, 0, PDFA2b, &errs)
+	checkColorSpaceValue(doc.view(), deviceN, 0, PDFA2b, &errs)
 	found := false
 	for _, e := range errs {
 		if e.Message == "DeviceN color space with spot colorants must have a Colorants dictionary" {

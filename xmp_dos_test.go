@@ -105,11 +105,11 @@ func TestXMPLargePacketBounded(t *testing.T) {
 		t.Error("expected parseXMPProperties to refuse the oversized packet")
 	}
 	// Well-formedness still validated by streaming, with no false positive.
-	for _, e := range checkXMPWellFormed(doc, PDFA1b) {
+	for _, e := range checkXMPWellFormed(doc.view(), PDFA1b) {
 		t.Errorf("unexpected well-formedness violation on a valid large packet: %s", e.Message)
 	}
 	// The property check must not flag anything on the capped packet.
-	if errs := checkXMPProperties(doc, PDFA1b); len(errs) != 0 {
+	if errs := checkXMPProperties(doc.view(), PDFA1b); len(errs) != 0 {
 		t.Errorf("unexpected property violations on a capped packet: %v", errs)
 	}
 }
@@ -127,8 +127,8 @@ func TestXMPManyElementsFast(t *testing.T) {
 	xmp := validXMP(b.String())
 	doc := docWithXMP([]byte(xmp))
 	start := time.Now()
-	_ = checkXMPWellFormed(doc, PDFA1b)
-	_ = checkXMPProperties(doc, PDFA1b)
+	_ = checkXMPWellFormed(doc.view(), PDFA1b)
+	_ = checkXMPProperties(doc.view(), PDFA1b)
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("XMP checks on a many-element packet took %v; expected sub-second", d)
 	}

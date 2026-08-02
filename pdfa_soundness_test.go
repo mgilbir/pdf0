@@ -21,10 +21,10 @@ func TestJPXForbiddenAtPDFA1(t *testing.T) {
 		}
 		return false
 	}
-	if !has(checkNoLZW(doc, PDFA1b)) {
+	if !has(checkNoLZW(doc.view(), PDFA1b)) {
 		t.Error("JPXDecode must be forbidden at PDF/A-1")
 	}
-	if has(checkNoLZW(doc, PDFA2b)) {
+	if has(checkNoLZW(doc.view(), PDFA2b)) {
 		t.Error("JPXDecode must be allowed at PDF/A-2")
 	}
 }
@@ -59,7 +59,7 @@ func TestPageLevelOutputIntentNotDuplicated(t *testing.T) {
 	doc.Trailer.Set("Root", IndirectRef{Number: 1})
 
 	n := 0
-	for _, e := range checkOutputIntents(doc, PDFA4) {
+	for _, e := range checkOutputIntents(doc.view(), PDFA4) {
 		if strings.Contains(e.Message, "page OutputIntents") {
 			n++
 		}

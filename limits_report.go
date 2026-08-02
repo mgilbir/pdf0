@@ -112,7 +112,7 @@ func runLimitTrips(doc *Document) []core.Trip {
 	if doc.readLimits != nil {
 		out = append(out, doc.readLimits.Snapshot()...)
 	}
-	if doc.valCache != nil {
+	if doc == nil || doc.valCache != nil {
 		out = append(out, doc.valCache.run.limits.Snapshot()...)
 	}
 	// A cancelled run is the same event as a tripped guard and is reported the
@@ -190,7 +190,7 @@ func beginRunContext(ctx context.Context, doc *Document) *Document {
 // the run's: the shallow copy is discarded when the validator returns, so the
 // caller's Document never ends up owning one (see cancel.go).
 func beginRunCancel(doc *Document, cancel core.Canceler) *Document {
-	if doc == nil || doc.valCache != nil {
+	if doc.valCache != nil {
 		return doc
 	}
 	runDoc := *doc

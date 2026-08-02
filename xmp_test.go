@@ -309,10 +309,10 @@ func TestXMPUndeclaredRDFPrefix(t *testing.T) {
 	rdfNS := `xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"`
 	bad := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF:RDF ` + rdfNS + `><rdf:Description/></RDF:RDF></x:xmpmeta>`
 	good := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF ` + rdfNS + `><rdf:Description/></rdf:RDF></x:xmpmeta>`
-	if got := len(checkXMPWellFormed(mk(bad), PDFA1b)); got == 0 {
+	if got := len(checkXMPWellFormed(mk(bad).view(), PDFA1b)); got == 0 {
 		t.Error("undeclared RDF prefix not flagged")
 	}
-	if got := len(checkXMPWellFormed(mk(good), PDFA1b)); got != 0 {
+	if got := len(checkXMPWellFormed(mk(good).view(), PDFA1b)); got != 0 {
 		t.Errorf("valid rdf:RDF wrongly flagged: %d", got)
 	}
 }

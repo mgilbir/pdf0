@@ -130,7 +130,7 @@ func TestPAdESLevelDetection(t *testing.T) {
 	}
 	// Add a catalog /DSS. Without a signature timestamp the level stays B-B
 	// (each PAdES level requires the previous), which guards the ordering.
-	cat := getCatalog(signed)
+	cat := getCatalog(signed.view())
 	cat.Set("DSS", &Dictionary{})
 	if got := signed.ValidatePAdES(out)[0].Level; got != PAdESBB {
 		t.Errorf("DSS without a timestamp must not reach B-LT; level = %q", got)

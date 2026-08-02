@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 )
 
@@ -53,7 +54,7 @@ func TestIndirectObjectSyntax(t *testing.T) {
 		// Object header starts right after the first newline.
 		nl := bytes.IndexByte([]byte(body), '\n')
 		doc.Offsets[1] = int64(nl + 1)
-		return checkIndirectObjectSyntax(doc, PDFA2b, []byte(body))
+		return checkIndirectObjectSyntax(doc.view(), PDFA2b, []byte(body))
 	}
 	// Valid.
 	if hasRuleMsg(build("%bin\n1 0 obj\n42\nendobj\n"), "6.1.9") {
@@ -89,7 +90,7 @@ func TestIndirectObjectHeaderWhitespaceRun(t *testing.T) {
 			Objects: map[int]*IndirectObject{1: {Number: 1, Value: Integer(42)}},
 			Offsets: map[int]int64{1: off},
 		}
-		return checkIndirectObjectSyntax(doc, PDFA2b, []byte(body))
+		return checkIndirectObjectSyntax(doc.view(), PDFA2b, []byte(body))
 	}
 	has := func(errs []ValidationError, msg string) bool {
 		for _, e := range errs {
@@ -124,19 +125,19 @@ func TestIndirectObjectHeaderWhitespaceRun(t *testing.T) {
 func TestXRefTableFormat(t *testing.T) {
 	entry := "0000000000 65535 f\r\n0000000009 00000 n\r\n"
 	valid := "xref\n0 2\n" + entry + "trailer\n"
-	if hasRuleMsg(checkXRefTableFormat(nil, PDFA2b, []byte("\n"+valid)), "6.1.4") {
+	if hasRuleMsg(checkXRefTableFormat(core.View{}, PDFA2b, []byte("\n"+valid)), "6.1.4") {
 		t.Error("valid xref flagged")
 	}
 	// xref keyword followed by space.
-	if !hasRuleMsg(checkXRefTableFormat(nil, PDFA2b, []byte("\nxref \n0 2\n"+entry)), "6.1.4") {
+	if !hasRuleMsg(checkXRefTableFormat(core.View{}, PDFA2b, []byte("\nxref \n0 2\n"+entry)), "6.1.4") {
 		t.Error("xref+space not flagged")
 	}
 	// Two EOLs after xref.
-	if !hasRuleMsg(checkXRefTableFormat(nil, PDFA2b, []byte("\nxref\n\n0 2\n"+entry)), "6.1.4") {
+	if !hasRuleMsg(checkXRefTableFormat(core.View{}, PDFA2b, []byte("\nxref\n\n0 2\n"+entry)), "6.1.4") {
 		t.Error("xref double-EOL not flagged")
 	}
 	// Double space in subsection header.
-	if !hasRuleMsg(checkXRefTableFormat(nil, PDFA2b, []byte("\nxref\n0  2\n"+entry)), "6.1.4") {
+	if !hasRuleMsg(checkXRefTableFormat(core.View{}, PDFA2b, []byte("\nxref\n0  2\n"+entry)), "6.1.4") {
 		t.Error("subsection double space not flagged")
 	}
 }
@@ -210,17 +211,17 @@ func TestNameUTF8(t *testing.T) {
 	doc := &Document{Objects: map[int]*IndirectObject{
 		1: {Number: 1, Value: Array{Name("Separation"), Name("Spot\xff\xfe"), Name("DeviceCMYK"), IndirectRef{Number: 9}}},
 	}}
-	if !hasRuleMsg(checkNameUTF8(doc, PDFA2b), "6.1.8") {
+	if !hasRuleMsg(checkNameUTF8(doc.view(), PDFA2b), "6.1.8") {
 		t.Error("invalid-UTF8 Separation colorant not flagged")
 	}
 	doc2 := &Document{Objects: map[int]*IndirectObject{
 		1: {Number: 1, Value: Array{Name("Separation"), Name("Spot"), Name("DeviceCMYK"), IndirectRef{Number: 9}}},
 	}}
-	if hasRuleMsg(checkNameUTF8(doc2, PDFA2b), "6.1.8") {
+	if hasRuleMsg(checkNameUTF8(doc2.view(), PDFA2b), "6.1.8") {
 		t.Error("valid colorant flagged")
 	}
 	// PDF/A-1 has no UTF-8 name rule.
-	if len(checkNameUTF8(doc, PDFA1b)) != 0 {
+	if len(checkNameUTF8(doc.view(), PDFA1b)) != 0 {
 		t.Error("UTF-8 name rule must not apply at PDF/A-1")
 	}
 }
@@ -262,7 +263,7 @@ func TestStreamLengthBytes(t *testing.T) {
 			Offsets: map[int]int64{1: off},
 		}
 		n := 0
-		for _, e := range checkStreamLengthBytes(doc, PDFA1b, raw) {
+		for _, e := range checkStreamLengthBytes(doc.view(), PDFA1b, raw) {
 			if e.Rule == "6.1.7" {
 				n++
 			}

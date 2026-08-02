@@ -77,7 +77,7 @@ func TestA4ConformanceFE(t *testing.T) {
 	}
 	confErrs := func(doc *Document) int {
 		n := 0
-		for _, e := range checkMetadataVersion(doc, PDFA4) {
+		for _, e := range checkMetadataVersion(doc.view(), PDFA4) {
 			if e.Rule == "6.7.3" && strings.Contains(e.Message, "conformance") {
 				n++
 			}
@@ -113,13 +113,13 @@ func TestXMPPacketHeaderAt1b(t *testing.T) {
 		}, Trailer: dictWith("Root", IndirectRef{Number: 1})}
 	}
 	wf := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"></rdf:RDF></x:xmpmeta>`
-	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" bytes="47"?>`+wf), PDFA1b)); got == 0 {
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" bytes="47"?>`+wf).view(), PDFA1b)); got == 0 {
 		t.Error("xpacket bytes attribute not flagged at 1b")
 	}
-	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" encoding="UTF-8"?>`+wf), PDFA1b)); got == 0 {
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" encoding="UTF-8"?>`+wf).view(), PDFA1b)); got == 0 {
 		t.Error("xpacket encoding attribute not flagged at 1b")
 	}
-	if got := len(checkXMPWellFormed(mk(`<?xpacket begin=""?>`+wf), PDFA1b)); got != 0 {
+	if got := len(checkXMPWellFormed(mk(`<?xpacket begin=""?>`+wf).view(), PDFA1b)); got != 0 {
 		t.Errorf("clean XMP flagged at 1b: %d", got)
 	}
 }

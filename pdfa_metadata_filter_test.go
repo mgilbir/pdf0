@@ -49,11 +49,11 @@ func TestMetadataFilterOnlyForbiddenInPDFA1(t *testing.T) {
 		}
 		return false
 	}
-	if !has(checkMetadataStream(doc, PDFA1b), "must not have /Filter") {
+	if !has(checkMetadataStream(doc.view(), PDFA1b), "must not have /Filter") {
 		t.Error("PDF/A-1b: a compressed metadata stream must be flagged")
 	}
 	for _, lvl := range []PDFALevel{PDFA2b, PDFA3b, PDFA4} {
-		if has(checkMetadataStream(doc, lvl), "must not have /Filter") {
+		if has(checkMetadataStream(doc.view(), lvl), "must not have /Filter") {
 			t.Errorf("%v: a compressed metadata stream must NOT be flagged (allowed since PDF/A-2)", lvl)
 		}
 	}
@@ -64,15 +64,15 @@ func TestMetadataFilterOnlyForbiddenInPDFA1(t *testing.T) {
 // missing. Before the fix these read the raw compressed bytes.
 func TestCompressedMetadataIsDecoded(t *testing.T) {
 	doc := docWithMetadata(t, pdfaXMP, true)
-	for _, e := range checkMetadataVersion(doc, PDFA3b) {
+	for _, e := range checkMetadataVersion(doc.view(), PDFA3b) {
 		if strings.Contains(e.Message, "must contain pdfaid:part") {
 			t.Fatalf("compressed metadata was not decoded: %s", e.Message)
 		}
 	}
 	// Sanity: the same XMP uncompressed yields identical results (raw == decoded).
 	plain := docWithMetadata(t, pdfaXMP, false)
-	c := checkMetadataVersion(doc, PDFA3b)
-	p := checkMetadataVersion(plain, PDFA3b)
+	c := checkMetadataVersion(doc.view(), PDFA3b)
+	p := checkMetadataVersion(plain.view(), PDFA3b)
 	if len(c) != len(p) {
 		t.Errorf("compressed vs uncompressed metadata gave different results: %d vs %d", len(c), len(p))
 	}

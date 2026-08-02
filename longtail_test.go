@@ -86,16 +86,16 @@ func TestSameICCProfile(t *testing.T) {
 	}
 	doc := &Document{Objects: map[int]*IndirectObject{}}
 	a, b := mk(1), mk(1)
-	if !sameICCProfile(doc, a, b) {
+	if !sameICCProfile(doc.view(), a, b) {
 		t.Error("equal non-zero Profile IDs must be the same")
 	}
 	c := mk(2)
-	if sameICCProfile(doc, a, c) {
+	if sameICCProfile(doc.view(), a, c) {
 		t.Error("different non-zero Profile IDs must differ")
 	}
 	// One zero ID: fall back to content comparison (both zeroed -> equal).
 	z1, z2 := mk(0), mk(0)
-	if !sameICCProfile(doc, z1, z2) {
+	if !sameICCProfile(doc.view(), z1, z2) {
 		t.Error("zero-ID identical content must be the same")
 	}
 }
@@ -113,7 +113,7 @@ func TestColorantUTF8Nested(t *testing.T) {
 	doc := &Document{Objects: map[int]*IndirectObject{
 		1: {Number: 1, Value: page},
 	}}
-	if !hasRuleMsg(checkNameUTF8(doc, PDFA2b), "6.1.8") {
+	if !hasRuleMsg(checkNameUTF8(doc.view(), PDFA2b), "6.1.8") {
 		t.Error("nested invalid-UTF8 colorant must be flagged")
 	}
 }
@@ -126,7 +126,7 @@ func TestAnnotFieldType(t *testing.T) {
 	widget := &Dictionary{}
 	widget.Set("Subtype", Name("Widget"))
 	widget.Set("Parent", IndirectRef{Number: 5})
-	if got := annotFieldType(doc, widget); got != "Btn" {
+	if got := annotFieldType(doc.view(), widget); got != "Btn" {
 		t.Errorf("inherited FT: got %q", got)
 	}
 }

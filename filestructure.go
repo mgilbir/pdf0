@@ -16,7 +16,7 @@ import (
 // and Annex C / 6.1.7 implementation limits.
 
 // checkFileStructureBytes runs every raw-byte file-structure check.
-func checkFileStructureBytes(doc *Document, level PDFALevel, raw []byte) []ValidationError {
+func checkFileStructureBytes(doc core.View, level PDFALevel, raw []byte) []ValidationError {
 	if raw == nil {
 		return nil
 	}
@@ -137,8 +137,8 @@ func isPDFWhite(b byte) bool {
 // the object number preceded by an EOL marker, the obj keyword followed by
 // an EOL marker, and the endobj keyword preceded and followed by an EOL
 // marker (with no extra spaces).
-func checkIndirectObjectSyntax(doc *Document, level PDFALevel, raw []byte) []ValidationError {
-	if doc == nil || doc.Offsets == nil {
+func checkIndirectObjectSyntax(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+	if doc.Offsets == nil {
 		return nil
 	}
 	rule := indirectRule(level)
@@ -315,7 +315,7 @@ func min64(a, b int64) int64 {
 // Separation/DeviceN colorant names at every level, plus font names,
 // structure type names and RoleMap names at PDF/A-4 (PDF 2.0, where names
 // are defined as UTF-8, ISO 32000-2 7.3.5).
-func checkNameUTF8(doc *Document, level PDFALevel) []ValidationError {
+func checkNameUTF8(doc core.View, level PDFALevel) []ValidationError {
 	if level == PDFA1b {
 		return nil // PDF/A-1 predates the UTF-8 name requirement
 	}
@@ -344,7 +344,7 @@ func checkNameUTF8(doc *Document, level PDFALevel) []ValidationError {
 // walkColorantUTF8 descends an object's structure (bounded depth, without
 // following indirect references, which are visited as their own objects)
 // checking every Separation/DeviceN colour-space array's colorant names.
-func walkColorantUTF8(doc *Document, obj Object, num int, add func(string, int), depth int) {
+func walkColorantUTF8(doc core.View, obj Object, num int, add func(string, int), depth int) {
 	if depth > 12 {
 		return
 	}
@@ -367,7 +367,7 @@ func walkColorantUTF8(doc *Document, obj Object, num int, add func(string, int),
 
 // checkColorantArrayUTF8 checks a Separation/DeviceN colour-space array's
 // colorant name(s).
-func checkColorantArrayUTF8(doc *Document, arr Array, num int, add func(string, int)) {
+func checkColorantArrayUTF8(doc core.View, arr Array, num int, add func(string, int)) {
 	if len(arr) < 2 {
 		return
 	}
@@ -390,7 +390,7 @@ func checkColorantArrayUTF8(doc *Document, arr Array, num int, add func(string, 
 
 // checkA4NameUTF8 checks the additional PDF/A-4 name categories: font names,
 // structure element type names, and RoleMap names.
-func checkA4NameUTF8(doc *Document, dict *Dictionary, num int, add func(string, int)) {
+func checkA4NameUTF8(doc core.View, dict *Dictionary, num int, add func(string, int)) {
 	if t, _ := dict.Get("Type").(Name); t == "Font" {
 		if bf, ok := dict.Get("BaseFont").(Name); ok && !validUTF8Name(bf) {
 			add("the font name is not a valid UTF-8 string", num)
@@ -428,7 +428,7 @@ func utf8Valid(b []byte) bool { return utf8.Valid(b) }
 // cross-reference table: the xref keyword followed by a single EOL, each
 // subsection header "start count" separated by exactly one space, and each
 // entry line in the fixed 20-byte form.
-func checkXRefTableFormat(doc *Document, level PDFALevel, raw []byte) []ValidationError {
+func checkXRefTableFormat(doc core.View, level PDFALevel, raw []byte) []ValidationError {
 	rule := "6.1.4"
 	var errs []ValidationError
 	seen := map[string]bool{}
@@ -588,8 +588,8 @@ func consumeSingleEOL(raw []byte, p int) int {
 // (PDF/A forbids the implicit trailing-zero padding of an odd-length hex
 // string). Object bodies are tokenised up to the stream keyword so binary
 // stream data is never misread as a hex string.
-func checkHexStringFormat(doc *Document, level PDFALevel, raw []byte) []ValidationError {
-	if doc == nil || doc.Offsets == nil {
+func checkHexStringFormat(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+	if doc.Offsets == nil {
 		return nil
 	}
 	rule := "6.1.6"
@@ -720,23 +720,23 @@ func checkOneHexString(content []byte, obj int, add func(string, int)) {
 // collectContentStreamData returns the decoded bytes of every content stream
 // (page Contents, form XObjects, tiling patterns, Type3 CharProcs), keyed by
 // object number.
-func collectContentStreamData(doc *Document) map[int][]byte {
+func collectContentStreamData(doc core.View) map[int][]byte {
 	out := make(map[int][]byte)
-	catalog := getCatalog(doc)
+	catalog := doc.Catalog()
 	if catalog != nil {
-		for _, page := range collectPages(doc, catalog.Get("Pages")) {
+		for _, page := range doc.Pages(catalog.Get("Pages")) {
 			// Per page and, below, per stream: one iteration inflates one
 			// content stream, bounded by the per-stream decode cap (cancel.go).
-			if doc.stopped() {
+			if doc.Cancel.Stopped() {
 				return out
 			}
-			if data := core.ContentStreamData(doc.view(), page.Dict.Get("Contents")); data != nil {
+			if data := core.ContentStreamData(doc, page.Dict.Get("Contents")); data != nil {
 				out[page.ObjNum] = data
 			}
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if doc.stopped() {
+		if doc.Cancel.Stopped() {
 			return out
 		}
 		s, ok := iobj.Value.(*Stream)
@@ -748,7 +748,7 @@ func collectContentStreamData(doc *Document) map[int][]byte {
 		if !isContent {
 			continue
 		}
-		if data := decodeContentStream(doc, s); data != nil {
+		if data := doc.Content(s); data != nil {
 			out[num] = data
 		}
 	}
@@ -776,7 +776,7 @@ func collectContentStreamData(doc *Document) map[int][]byte {
 				continue
 			}
 			if s, ok := doc.Resolve(val).(*Stream); ok {
-				if data := decodeContentStream(doc, s); data != nil {
+				if data := doc.Content(s); data != nil {
 					out[num] = data
 				}
 			}
@@ -876,8 +876,8 @@ func indexToken(b []byte, kw string) int {
 // checkStreamKeywordFormat verifies that the stream keyword is followed by
 // CRLF or a single LF (not a bare CR, and with no extra white space before
 // the EOL), and that endstream is preceded by an EOL marker.
-func checkStreamKeywordFormat(doc *Document, level PDFALevel, raw []byte) []ValidationError {
-	if doc == nil || doc.Offsets == nil {
+func checkStreamKeywordFormat(doc core.View, level PDFALevel, raw []byte) []ValidationError {
+	if doc.Offsets == nil {
 		return nil
 	}
 	rule := "6.1.7.1"
@@ -973,7 +973,7 @@ var inlineLZWNames = map[string]bool{"LZW": true, "LZWDecode": true}
 // checkInlineImageIntent verifies that an inline image /Intent entry, when
 // present, names a standard rendering intent (ISO 19005-2 6.2.6, -4 6.2.9;
 // ISO 32000-1 8.6.5.8).
-func checkInlineImageIntent(doc *Document, level PDFALevel) []ValidationError {
+func checkInlineImageIntent(doc core.View, level PDFALevel) []ValidationError {
 	rule := "6.2.6"
 	if level == PDFA4 {
 		rule = "6.2.9"
@@ -1062,7 +1062,7 @@ func inlineImageDictValue(data []byte, pos *int, key string) string {
 
 // checkInlineImageFilters verifies that every inline image's /F (Filter)
 // entry uses only permitted filters and never LZW.
-func checkInlineImageFilters(doc *Document, level PDFALevel) []ValidationError {
+func checkInlineImageFilters(doc core.View, level PDFALevel) []ValidationError {
 	rule := "6.1.10"
 	if level == PDFA4 {
 		rule = "6.1.9"
@@ -1181,7 +1181,7 @@ func parseInlineImageFilter(data []byte, pos *int) []string {
 // 6.1.7, -2/-3 6.1.7, -4 6.1.6; ISO 32000-1 7.3.8.2). The parser recovers a
 // stream with an incorrect Length by locating endstream, so Stream.Data holds
 // the true byte count and a divergence from the declared value is a mismatch.
-func checkStreamLength(doc *Document, level PDFALevel) []ValidationError {
+func checkStreamLength(doc core.View, level PDFALevel) []ValidationError {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
 	switch level {
 	case PDFA4:
@@ -1211,13 +1211,13 @@ func checkStreamLength(doc *Document, level PDFALevel) []ValidationError {
 // checkObjectStreamDecodable flags an object stream whose compressed contents
 // could not be decoded (ISO 32000-1 7.5.7, 7.3.8): such a stream is malformed,
 // and the objects it should provide are unavailable.
-func checkObjectStreamDecodable(doc *Document, level PDFALevel) []ValidationError {
+func checkObjectStreamDecodable(doc core.View, level PDFALevel) []ValidationError {
 	rule := "6.1.7"
 	if level == PDFA4 {
 		rule = "6.1.6"
 	}
 	var errs []ValidationError
-	for _, num := range doc.brokenObjStms {
+	for _, num := range doc.BrokenObjStms {
 		errs = append(errs, ValidationError{Rule: rule, Level: level,
 			Message: "an object stream could not be decoded (malformed stream data)", Object: num})
 	}
@@ -1290,7 +1290,7 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 //     length is therefore valid within [raw-eol, raw-1] when an EOL is present
 //     (raw exactly when none is), and only a length outside that range — such as
 //     one that wrongly includes the whole EOL — is a violation.
-func checkStreamLengthBytes(doc *Document, level PDFALevel, raw []byte) []ValidationError {
+func checkStreamLengthBytes(doc core.View, level PDFALevel, raw []byte) []ValidationError {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
 	switch level {
 	case PDFA4:
