@@ -59,12 +59,6 @@ func (v PDFRViolation) RuleID() string { return v.Rule }
 // ObjectNum returns the anchoring object number, 0 if N/A.
 func (v PDFRViolation) ObjectNum() int { return v.Object }
 
-// RuleID returns the ISO 32000-2 DPart subclause.
-func (v DPartViolation) RuleID() string { return v.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v DPartViolation) ObjectNum() int { return v.Object }
-
 // RuleID returns the Factur-X container rule identifier, or the identifier the
 // invoice rule engine minted for an adopted finding. It is unique only within
 // FacturXViolation.Source, which names the authority.

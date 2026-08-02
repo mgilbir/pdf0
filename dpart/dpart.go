@@ -1,10 +1,8 @@
-package pdf0
+package dpart
 
 import (
-	"context"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -24,6 +22,12 @@ type DPartViolation struct {
 	Object  int // object number the violation is anchored to, 0 if N/A
 }
 
+// RuleID returns the ISO 32000-2 DPart subclause.
+func (v DPartViolation) RuleID() string { return v.Rule }
+
+// ObjectNum returns the anchoring object number, 0 if N/A.
+func (v DPartViolation) ObjectNum() int { return v.Object }
+
 func (v DPartViolation) Error() string {
 	if v.Object != 0 {
 		return fmt.Sprintf("DPart %s: %s (object %d)", v.Rule, v.Message, v.Object)
@@ -31,58 +35,10 @@ func (v DPartViolation) Error() string {
 	return fmt.Sprintf("DPart %s: %s", v.Rule, v.Message)
 }
 
-// ValidateDParts checks a document's DPart hierarchy against ISO 32000-2 clause
-// 14.12. A document without a /DPartRoot in its catalog has no hierarchy and is
-// reported as valid (nil), since the structure is optional. The checks cover:
-// the DPartRoot and DPartRootNode wiring (Table 408), each node's /Type,
-// required /Parent up-link and its target (14.12.2), the exclusive /DParts vs
-// /Start+/End roles (Table 409), the leaf page ranges partitioning every page
-// exactly once in page-tree order (14.12.2/14.12.3), page /DPart back-references
-// (14.12.3), /NodeNameList depth (Table 408), and DPM key/value constraints
-// (14.12.4.2).
-func ValidateDParts(doc *Document) []DPartViolation {
-	return validateDParts(core.Canceler{}, doc)
-}
-
-// ValidateDPartsContext is ValidateDParts with cancellation; a cancelled run
-// reports itself under the rule "limit" (see cancel.go).
-func ValidateDPartsContext(ctx context.Context, doc *Document) []DPartViolation {
-	return validateDParts(core.NewCanceler(ctx), doc)
-}
-
-func validateDParts(cancel core.Canceler, doc *Document) []DPartViolation {
-	doc = beginRunCancel(doc, cancel)
-	var out []DPartViolation
-	add := func(rule, msg string, obj int) {
-		out = append(out, DPartViolation{Rule: rule, Message: msg, Object: obj})
-	}
-
-	// The hierarchy walk is one traversal rather than a list of independent
-	// checks, so it gets a single recover boundary at the entry point: a panic
-	// on hostile input becomes an "internal" finding instead of crashing the
-	// caller, and the findings reported before it are kept (audit C27). Being one
-	// traversal, it is also the whole of this validator's cancellation
-	// granularity: an already-cancelled run skips it, and a run cancelled during
-	// it completes the walk. The walk is bounded by the page and DPart counts and
-	// reads no content, so that is bounded work, not an open-ended wait.
-	if !doc.stopped() {
-		finding.Guarded(add, func() { validateDPartHierarchy(doc, add) })
-	}
-
-	// The walk visits map-ordered structures, so the output order is otherwise
-	// nondeterministic; sort for stable, diffable reports.
-	// Guard trips are reported under their own rule, not as conformance
-	// failures (see limits.go).
-	reportLimits(doc, add)
-
-	finding.Sort(out)
-	return out
-}
-
 // validateDPartHierarchy runs the ISO 32000-2 14.12 checks, reporting through
 // add. It is the body of ValidateDParts, split out so the panic boundary and
 // the result ordering live in one place.
-func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) {
+func ValidateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return
@@ -100,7 +56,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 		return
 	}
 	rootDictNum := object.RefNum(rootRef)
-	if t, ok := rootDict.Get("Type").(Name); ok && t != "DPartRoot" {
+	if t, ok := rootDict.Get("Type").(object.Name); ok && t != "DPartRoot" {
 		add("14.12.4.1", fmt.Sprintf("DPartRoot /Type shall be /DPartRoot, got /%s", t), rootDictNum)
 	}
 
@@ -117,7 +73,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 
 	// Map each page object number to its reading-order index so leaf ranges can
 	// be checked against the page tree.
-	pages := collectPages(doc, doc.view().CatalogPages())
+	pages := doc.Pages(doc.CatalogPages())
 	pageIndex := make(map[int]int, len(pages))
 	for i, pg := range pages {
 		pageIndex[pg.ObjNum] = i
@@ -133,8 +89,8 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 	visited := map[int]bool{}
 	maxDepth := 0
 
-	var walk func(ref Object, expectedParent, depth int)
-	walk = func(ref Object, expectedParent, depth int) {
+	var walk func(ref object.Object, expectedParent, depth int)
+	walk = func(ref object.Object, expectedParent, depth int) {
 		num := object.RefNum(ref)
 		node := doc.ResolveDict(ref)
 		if node == nil {
@@ -153,7 +109,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 		if depth+1 > maxDepth {
 			maxDepth = depth + 1
 		}
-		if t, ok := node.Get("Type").(Name); ok && t != "DPart" {
+		if t, ok := node.Get("Type").(object.Name); ok && t != "DPart" {
 			add("14.12.4.1", fmt.Sprintf("DPart /Type shall be /DPart, got /%s", t), num)
 		}
 
@@ -176,13 +132,13 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 			add("14.12.4.1", "DPart has neither /DParts (internal node) nor /Start (leaf node)", num)
 		case dparts != nil:
 			// Internal node: /DParts is a non-empty array of arrays of DPart refs.
-			arr, ok := doc.Resolve(dparts).(Array)
+			arr, ok := doc.Resolve(dparts).(object.Array)
 			if !ok || len(arr) == 0 {
 				add("14.12.4.1", "DPart /DParts shall be a non-empty array", num)
 				break
 			}
 			for _, elem := range arr {
-				inner, ok := doc.Resolve(elem).(Array)
+				inner, ok := doc.Resolve(elem).(object.Array)
 				if !ok {
 					add("14.12.4.1", "DPart /DParts elements shall be arrays of DPart references", num)
 					continue
@@ -217,7 +173,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 
 		// 14.12.4.2: validate the document part metadata dictionary if present.
 		if dpm := doc.ResolveDict(node.Get("DPM")); dpm != nil {
-			validateDPM(doc, dpm, num, map[*Dictionary]bool{}, add)
+			validateDPM(doc, dpm, num, map[*object.Dictionary]bool{}, add)
 		}
 	}
 	walk(nodeRef, rootDictNum, 0)
@@ -265,7 +221,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 	// Table 408: if /NodeNameList is present its length equals the number of
 	// levels in the tree, and each entry is a valid XML name token.
 	if nnl := doc.Resolve(rootDict.Get("NodeNameList")); nnl != nil {
-		arr, ok := nnl.(Array)
+		arr, ok := nnl.(object.Array)
 		if !ok {
 			add("14.12.4.1", "DPartRoot /NodeNameList shall be an array", rootDictNum)
 		} else {
@@ -273,7 +229,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 				add("14.12.4.1", fmt.Sprintf("DPartRoot /NodeNameList has %d entries but the hierarchy has %d levels", len(arr), maxDepth), rootDictNum)
 			}
 			for _, n := range arr {
-				name, ok := n.(Name)
+				name, ok := n.(object.Name)
 				if !ok {
 					add("14.12.4.1", "DPartRoot /NodeNameList entries shall be names", rootDictNum)
 				} else if !isXMLNameToken(string(name)) {
@@ -298,7 +254,7 @@ func validateDPartHierarchy(doc *Document, add func(rule, msg string, obj int)) 
 // (e.g. "77u-R2VuZGVy75i2" for a field named "Gender"); they are not literal XML
 // name tokens and validating the raw name would flag conforming files. A
 // decoded check belongs with dedicated PDF/VT-1 (ISO 16612-2) validation.
-func validateDPM(doc *Document, dpm *Dictionary, objNum int, seen map[*Dictionary]bool, add func(rule, msg string, obj int)) {
+func validateDPM(doc core.View, dpm *object.Dictionary, objNum int, seen map[*object.Dictionary]bool, add func(rule, msg string, obj int)) {
 	if seen[dpm] {
 		return
 	}
@@ -308,16 +264,16 @@ func validateDPM(doc *Document, dpm *Dictionary, objNum int, seen map[*Dictionar
 	}
 }
 
-func validateDPMValue(doc *Document, v Object, objNum int, seen map[*Dictionary]bool, add func(rule, msg string, obj int)) {
+func validateDPMValue(doc core.View, v object.Object, objNum int, seen map[*object.Dictionary]bool, add func(rule, msg string, obj int)) {
 	switch val := doc.Resolve(v).(type) {
-	case String, Boolean, Integer, Real:
+	case object.String, object.Boolean, object.Integer, object.Real:
 		// Permitted scalar value types (text string / date string / boolean /
 		// integer / real).
-	case Array:
+	case object.Array:
 		for _, e := range val {
 			validateDPMValue(doc, e, objNum, seen, add)
 		}
-	case *Dictionary:
+	case *object.Dictionary:
 		validateDPM(doc, val, objNum, seen, add)
 	default:
 		add("14.12.4.2", fmt.Sprintf("DPM value of type %T is not permitted (only string, array, dictionary, boolean, integer, real)", val), objNum)
