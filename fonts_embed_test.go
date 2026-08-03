@@ -846,3 +846,201 @@ func corpusCIDKeyedCFF(t *testing.T) []byte {
 	}
 	return found
 }
+
+// simpleFace is a synthetic face covering enough of WinAnsiEncoding to be
+// embedded as a simple font, including characters from the 0x80-0x9F band
+// where the encoding and Latin-1 disagree.
+func simpleFace(t *testing.T) *fonts.Face {
+	t.Helper()
+	var glyphs []fonttest.Glyph
+	for r := rune(' '); r <= '~'; r++ {
+		glyphs = append(glyphs, fonttest.Glyph{Rune: r, Advance: 400 + int(r)%200, HasShape: r != ' '})
+	}
+	for _, r := range []rune{'—', '“', '”', '•', 'é', 'ü'} {
+		glyphs = append(glyphs, fonttest.Glyph{Rune: r, Advance: 500, HasShape: true})
+	}
+	f, err := fonts.LoadSimple(fonttest.SFNT(fonttest.SFNTOptions{Name: "Simple-Regular", Glyphs: glyphs}))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	return f
+}
+
+// TestSimpleFontEncodesOneBytePerCharacter pins the difference from a composite
+// font. The codes of a simple font *are* the text, which is the property that
+// makes such a document searchable by a reader that consults no CMap at all.
+func TestSimpleFontEncodesOneBytePerCharacter(t *testing.T) {
+	f := simpleFace(t)
+	if !f.IsSimple() {
+		t.Fatal("LoadSimple returned a face that is not simple")
+	}
+	codes, missing := f.Encode("Hi!")
+	if missing != 0 {
+		t.Fatalf("missing = %d", missing)
+	}
+	if string(codes) != "Hi!" {
+		t.Errorf("Encode = %q, want %q: WinAnsi is ASCII here", codes, "Hi!")
+	}
+	// A character the encoding cannot name is reported, not substituted.
+	if _, missing := f.Encode("a中b"); missing != 1 {
+		t.Errorf("missing = %d, want 1", missing)
+	}
+}
+
+// TestSimpleFontValidatesAtEveryLevel is the oracle. A simple font has its own
+// shape — /FirstChar, /LastChar, /Widths indexed by code, a nonsymbolic
+// descriptor, a named encoding — and each of those is a rule the validator
+// checks, differently at different levels.
+func TestSimpleFontValidatesAtEveryLevel(t *testing.T) {
+	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
+		t.Run(level.String(), func(t *testing.T) {
+			face := simpleFace(t)
+			const text = "Hello — “world” • café"
+			codes, missing := face.Encode(text)
+			if missing != 0 {
+				t.Fatalf("%d characters outside the encoding", missing)
+			}
+			doc := NewPDFADocument(level)
+			var b content.Builder
+			b.BeginText().SetFont("F1", 14).MoveText(72, 700).ShowText(codes).EndText()
+			drawn, err := b.Bytes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fontRef, err := face.Embed(doc)
+			if err != nil {
+				t.Fatalf("embedding: %v", err)
+			}
+			attachPage(doc, drawn, fontRef)
+
+			var buf bytes.Buffer
+			if err := doc.Write(&buf); err != nil {
+				t.Fatal(err)
+			}
+			rd, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range ValidatePDFABytes(rd, level, buf.Bytes()) {
+				t.Errorf("violation: %s", e.Error())
+			}
+			// And the text reads back, including the characters whose codes lie
+			// where WinAnsiEncoding and Latin-1 disagree.
+			if got := rd.ExtractText(); !strings.Contains(got, "—") || !strings.Contains(got, "café") {
+				t.Errorf("extracted %q, which is missing the typographic characters", got)
+			}
+		})
+	}
+}
+
+// TestSimpleFontWidthsAreIndexedByCode pins the difference that is easiest to
+// get wrong. A composite font's /W is keyed by glyph index and a simple font's
+// /Widths by character code; writing one where the other belongs produces a
+// document whose every advance is some other glyph's.
+func TestSimpleFontWidthsAreIndexedByCode(t *testing.T) {
+	face := simpleFace(t)
+	face.Encode("A")
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	if _, err := face.Embed(doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, iobj := range doc.Objects {
+		d, ok := iobj.Value.(*object.Dictionary)
+		if !ok || d.Get("Subtype") != object.Name("TrueType") {
+			continue
+		}
+		first, _ := d.Get("FirstChar").(object.Integer)
+		widths, ok := d.Get("Widths").(object.Array)
+		if !ok {
+			t.Fatal("the font has no /Widths array")
+		}
+		want, _ := face.Advance('A')
+		got := object.Float(widths[int('A')-int(first)])
+		if got != want {
+			t.Errorf("/Widths for code %d ('A') = %v, want %v", 'A', got, want)
+		}
+		return
+	}
+	t.Fatal("no simple font was written")
+}
+
+// TestSimpleFontIsSubsetted pins that the narrow form still pays its way: only
+// the glyphs the document showed are carried.
+func TestSimpleFontIsSubsetted(t *testing.T) {
+	face := simpleFace(t)
+	face.Encode("A")
+	sub, err := face.Subset()
+	if err != nil {
+		t.Fatalf("subsetting: %v", err)
+	}
+	parsed := font.ParseSFNT(sub, 1<<20)
+	if parsed == nil {
+		t.Fatal("the subset did not parse")
+	}
+	kept, _ := face.GlyphIDForTest('A')
+	if !parsed.GlyphNonEmpty[kept] {
+		t.Error("the glyph that was shown lost its outline")
+	}
+	dropped, _ := face.GlyphIDForTest('Z')
+	if parsed.GlyphNonEmpty[dropped] {
+		t.Error("a glyph that was never shown kept its outline")
+	}
+}
+
+// TestLoadSimpleRefusesWhatCannotBeOne pins the check at the door. A face that
+// covers almost none of the encoding would produce a document of blanks, and
+// a CFF program is not a TrueType font however it is dressed.
+func TestLoadSimpleRefusesWhatCannotBeOne(t *testing.T) {
+	sparse := fonttest.SFNT(fonttest.SFNTOptions{
+		Name:   "Sparse",
+		Glyphs: []fonttest.Glyph{{Rune: 'A', Advance: 500, HasShape: true}},
+	})
+	if _, err := fonts.LoadSimple(sparse); err == nil {
+		t.Error("a face covering one character was accepted as a simple font")
+	}
+	if cff := corpusOpenTypeCFF(t); cff != nil {
+		if _, err := fonts.LoadSimple(cff); err == nil {
+			t.Error("a CFF program was accepted as a simple TrueType font")
+		}
+	}
+}
+
+// TestSimpleFontCarriesAToUnicodeCMap pins that the CMap is written even though
+// a simple font with a standard encoding does not strictly need one: a reader
+// could work the characters out from /Encoding, but only one that knows the
+// encoding table. Saying it outright is what makes the text extractable by
+// everything, and it is what a producer does.
+//
+// It has its own test because the extraction check cannot see it — this
+// module's own extractor reads /Encoding too, so text comes back either way.
+func TestSimpleFontCarriesAToUnicodeCMap(t *testing.T) {
+	face := simpleFace(t)
+	face.Encode("A")
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	if _, err := face.Embed(doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, iobj := range doc.Objects {
+		d, ok := iobj.Value.(*object.Dictionary)
+		if !ok || d.Get("Subtype") != object.Name("TrueType") {
+			continue
+		}
+		stream, ok := doc.Resolve(d.Get("ToUnicode")).(*object.Stream)
+		if !ok {
+			t.Fatal("the simple font carries no /ToUnicode CMap")
+		}
+		cmap, err := doc.StreamData(stream)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Code 0x41 is 'A', U+0041; the codespace is one byte.
+		if !bytes.Contains(cmap, []byte("<41> <0041>")) {
+			t.Errorf("the CMap does not map code 0x41 to U+0041:\n%s", cmap)
+		}
+		if !bytes.Contains(cmap, []byte("<00> <FF>")) {
+			t.Error("the codespace range is not the single byte a simple font uses")
+		}
+		return
+	}
+	t.Fatal("no simple font was written")
+}

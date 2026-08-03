@@ -30,6 +30,15 @@ type Page struct {
 	// is 612 × 792.
 	Width, Height float64
 
+	// Rotate turns the page clockwise when it is displayed, in degrees. It must
+	// be a multiple of 90; zero is upright.
+	//
+	// It rotates the *view*, not the content: a landscape page may be drawn
+	// upright on a portrait box and rotated, or drawn rotated on a landscape
+	// box, and the two are different files that look the same. This is the
+	// first.
+	Rotate int
+
 	// Content is the drawing. Its errors surface here, so a caller may draw
 	// without checking and find out once.
 	Content *content.Builder
@@ -62,6 +71,9 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	if p.Width <= 0 || p.Height <= 0 {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: page size %g×%g has no area", p.Width, p.Height)
 	}
+	if p.Rotate%90 != 0 {
+		return object.IndirectRef{}, fmt.Errorf("pdf0: page rotation %d is not a multiple of 90", p.Rotate)
+	}
 	resources, err := p.resources()
 	if err != nil {
 		return object.IndirectRef{}, err
@@ -87,6 +99,9 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	})
 	page.Set("Resources", resources)
 	page.Set("Contents", contentRef)
+	if p.Rotate != 0 {
+		page.Set("Rotate", object.Integer(p.Rotate))
+	}
 	pageRef := d.Add(page)
 
 	kids, _ := d.Resolve(pages.Get("Kids")).(object.Array)

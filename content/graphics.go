@@ -402,3 +402,41 @@ func isDeviceSpace(n object.Name) bool {
 	}
 	return false
 }
+
+// RenderingIntent is how a colour outside the output device's gamut is brought
+// into it (ISO 32000-2 8.6.5.8, Table 70).
+type RenderingIntent object.Name
+
+// The four intents ISO 32000 defines. A name outside these is not an intent a
+// reader recognises, and PDF/A reports one.
+const (
+	AbsoluteColorimetric RenderingIntent = "AbsoluteColorimetric"
+	RelativeColorimetric RenderingIntent = "RelativeColorimetric"
+	Saturation           RenderingIntent = "Saturation"
+	Perceptual           RenderingIntent = "Perceptual"
+)
+
+// SetRenderingIntent selects the rendering intent (ri).
+//
+// It matters wherever colour is being managed rather than merely stored — a
+// PDF/X print workflow above all — and the operand is checked here because the
+// set is closed: this module's own validator flags an intent outside it, so a
+// stream that named one could not be produced by accident.
+func (b *Builder) SetRenderingIntent(intent RenderingIntent) *Builder {
+	switch intent {
+	case AbsoluteColorimetric, RelativeColorimetric, Saturation, Perceptual:
+	default:
+		return b.fail("rendering intent %q is not one of the four ISO 32000 defines", string(intent))
+	}
+	return b.op("ri", object.Name(intent))
+}
+
+// SetFlatness sets the flatness tolerance, the largest error permitted when a
+// curve is approximated by straight segments (i). It is a number of device
+// pixels between 0 and 100, where 0 asks the device for its own default.
+func (b *Builder) SetFlatness(tolerance float64) *Builder {
+	if tolerance < 0 || tolerance > 100 {
+		return b.fail("flatness %v is outside the range 0 to 100", tolerance)
+	}
+	return b.op("i", tolerance)
+}
