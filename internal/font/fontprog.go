@@ -114,27 +114,9 @@ func MarkComposite(g []byte, numGlyphs int, out []bool) {
 
 // ParseSFNT parses a TrueType/OpenType font program.
 func ParseSFNT(data []byte, maxCmapWork int) *Program {
-	if len(data) < 12 {
+	tables := SFNTTables(data)
+	if tables == nil {
 		return nil
-	}
-	tag := Be32(data, 0)
-	if tag != 0x00010000 && tag != 0x74727565 && tag != 0x4F54544F { // 1.0, 'true', 'OTTO'
-		return nil
-	}
-	numTables := Be16(data, 4)
-	tables := make(map[string][]byte)
-	for i := 0; i < numTables; i++ {
-		rec := 12 + 16*i
-		if rec+16 > len(data) {
-			return nil
-		}
-		name := string(data[rec : rec+4])
-		off := Be32(data, rec+8)
-		length := Be32(data, rec+12)
-		if uint64(off)+uint64(length) > uint64(len(data)) {
-			continue
-		}
-		tables[name] = data[off : off+length]
 	}
 
 	fp := &Program{}
@@ -1170,4 +1152,41 @@ func extractType1FontMatrix(data []byte) float64 {
 	var f float64
 	ParseFloat(fields[0], &f)
 	return f
+}
+
+// SFNTTables reads an sfnt table directory and returns each table's bytes by
+// tag, sharing the caller's backing array. It returns nil when data is not an
+// sfnt at all or the directory itself is truncated; a single table whose extent
+// lies outside the file is dropped rather than failing the whole font, because
+// a program missing one table still answers questions about the others.
+//
+// This is the one thing a font reader and a font writer share. ParseSFNT reads
+// tables to answer validation questions; a writer rewrites them. Beyond finding
+// where a table is, they have nothing in common, and coupling them further
+// would make a subsetter's bug look like a validator's.
+func SFNTTables(data []byte) map[string][]byte {
+	if len(data) < 12 {
+		return nil
+	}
+	switch Be32(data, 0) {
+	case 0x00010000, 0x74727565, 0x4F54544F: // 1.0, 'true', 'OTTO'
+	default:
+		return nil
+	}
+	numTables := Be16(data, 4)
+	tables := make(map[string][]byte, numTables)
+	for i := 0; i < numTables; i++ {
+		rec := 12 + 16*i
+		if rec+16 > len(data) {
+			return nil
+		}
+		name := string(data[rec : rec+4])
+		off := Be32(data, rec+8)
+		length := Be32(data, rec+12)
+		if uint64(off)+uint64(length) > uint64(len(data)) {
+			continue
+		}
+		tables[name] = data[off : off+length]
+	}
+	return tables
 }

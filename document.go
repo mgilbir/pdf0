@@ -1105,3 +1105,25 @@ func (d *Document) view() core.View {
 	}
 	return v
 }
+
+// Add stores an object under the next free object number and returns a
+// reference to it. It is how a writer grows the object graph without having to
+// track numbering: font embedding, image embedding and anything else that adds
+// several linked objects at once need one allocator between them.
+//
+// The number is one past the highest in use, so it never collides with an
+// object already read from a file, and never reuses a number a previous Add
+// handed out.
+func (d *Document) Add(value object.Object) object.IndirectRef {
+	if d.Objects == nil {
+		d.Objects = map[int]*object.IndirectObject{}
+	}
+	next := 1
+	for num := range d.Objects {
+		if num >= next {
+			next = num + 1
+		}
+	}
+	d.Objects[next] = &object.IndirectObject{Number: next, Value: value}
+	return object.IndirectRef{Number: next}
+}
