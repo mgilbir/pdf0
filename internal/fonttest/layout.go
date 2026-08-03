@@ -257,3 +257,135 @@ func classDefFormat2(classes map[int]int) []byte {
 	}
 	return out
 }
+
+// Anchor is an attachment point in a glyph's own coordinate space.
+type Anchor struct{ X, Y int }
+
+// MarkAttachment describes one mark: the glyph, its class, and its own anchor.
+type MarkAttachment struct {
+	Glyph  int
+	Class  int
+	Anchor Anchor
+}
+
+// BaseAttachment describes where one base receives marks: the glyph, and an
+// anchor per mark class.
+type BaseAttachment struct {
+	Glyph   int
+	Anchors map[int]Anchor
+}
+
+// GPOSMarkToBase builds a GPOS table whose single lookup is a mark-to-base
+// attachment (type 4), under the 'mark' feature fonts conventionally use.
+//
+// kind is 4 for mark-to-base and 6 for mark-to-mark; the two have the same
+// shape and differ only in what the second coverage covers.
+func GPOSMarkToBase(kind int, marks []MarkAttachment, bases []BaseAttachment) []byte {
+	classCount := 0
+	for _, m := range marks {
+		if m.Class+1 > classCount {
+			classCount = m.Class + 1
+		}
+	}
+	if classCount == 0 {
+		classCount = 1
+	}
+
+	markGlyphs := make([]int, 0, len(marks))
+	for _, m := range marks {
+		markGlyphs = append(markGlyphs, m.Glyph)
+	}
+	sortInts(markGlyphs)
+	baseGlyphs := make([]int, 0, len(bases))
+	for _, b := range bases {
+		baseGlyphs = append(baseGlyphs, b.Glyph)
+	}
+	sortInts(baseGlyphs)
+
+	// Header: format, mark coverage, base coverage, class count, mark array,
+	// base array. The offsets are filled in as the pieces are appended.
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint16(body[0:], 1)
+	binary.BigEndian.PutUint16(body[6:], uint16(classCount))
+
+	binary.BigEndian.PutUint16(body[2:], uint16(len(body)))
+	body = append(body, coverageFormat1(markGlyphs)...)
+	binary.BigEndian.PutUint16(body[4:], uint16(len(body)))
+	body = append(body, coverageFormat1(baseGlyphs)...)
+
+	// Mark array: a class and an anchor offset per covered mark, with the
+	// anchors following it.
+	markArrayAt := len(body)
+	binary.BigEndian.PutUint16(body[8:], uint16(markArrayAt))
+	markArray := make([]byte, 2+4*len(markGlyphs))
+	binary.BigEndian.PutUint16(markArray[0:], uint16(len(markGlyphs)))
+	anchors := []byte{}
+	for i, g := range markGlyphs {
+		var m MarkAttachment
+		for _, cand := range marks {
+			if cand.Glyph == g {
+				m = cand
+				break
+			}
+		}
+		binary.BigEndian.PutUint16(markArray[2+4*i:], uint16(m.Class))
+		binary.BigEndian.PutUint16(markArray[2+4*i+2:], uint16(len(markArray)+len(anchors)))
+		anchors = append(anchors, anchorTable(m.Anchor)...)
+	}
+	body = append(body, append(markArray, anchors...)...)
+
+	// Base array: an anchor offset per class for each covered base.
+	baseArrayAt := len(body)
+	binary.BigEndian.PutUint16(body[10:], uint16(baseArrayAt))
+	baseArray := make([]byte, 2+2*len(baseGlyphs)*classCount)
+	binary.BigEndian.PutUint16(baseArray[0:], uint16(len(baseGlyphs)))
+	baseAnchors := []byte{}
+	for i, g := range baseGlyphs {
+		var b BaseAttachment
+		for _, cand := range bases {
+			if cand.Glyph == g {
+				b = cand
+				break
+			}
+		}
+		for c := 0; c < classCount; c++ {
+			a, ok := b.Anchors[c]
+			rec := 2 + (i*classCount+c)*2
+			if !ok {
+				binary.BigEndian.PutUint16(baseArray[rec:], 0) // no anchor
+				continue
+			}
+			binary.BigEndian.PutUint16(baseArray[rec:], uint16(len(baseArray)+len(baseAnchors)))
+			baseAnchors = append(baseAnchors, anchorTable(a)...)
+		}
+	}
+	body = append(body, append(baseArray, baseAnchors...)...)
+
+	return layoutTable("mark", kind, body)
+}
+
+// GPOSSingle builds a GPOS table whose lookup nudges each given glyph.
+func GPOSSingle(glyph, xPlacement, yPlacement, xAdvance int) []byte {
+	sub := make([]byte, 6+6)
+	binary.BigEndian.PutUint16(sub[0:], 1)      // posFormat 1: one value for all
+	binary.BigEndian.PutUint16(sub[4:], 0x0007) // XPlacement|YPlacement|XAdvance
+	body := append([]byte(nil), sub[:6]...)
+	covOff := len(body) + 6
+	rec := make([]byte, 6)
+	binary.BigEndian.PutUint16(rec[0:], uint16(int16(xPlacement)))
+	binary.BigEndian.PutUint16(rec[2:], uint16(int16(yPlacement)))
+	binary.BigEndian.PutUint16(rec[4:], uint16(int16(xAdvance)))
+	body = append(body, rec...)
+	binary.BigEndian.PutUint16(body[2:], uint16(covOff))
+	body = append(body, coverageFormat1([]int{glyph})...)
+	return layoutTable("kern", 1, body)
+}
+
+// anchorTable writes a format-1 anchor: the two coordinates and nothing else.
+func anchorTable(a Anchor) []byte {
+	out := make([]byte, 6)
+	binary.BigEndian.PutUint16(out[0:], 1)
+	binary.BigEndian.PutUint16(out[2:], uint16(int16(a.X)))
+	binary.BigEndian.PutUint16(out[4:], uint16(int16(a.Y)))
+	return out
+}
