@@ -192,13 +192,19 @@ func indicTakeFinalHalant(cats []indicCat, i int) (int, bool) {
 	return indicTakeHalant(cats, i)
 }
 
-// matra_group = z* M n? H?
+// matra_group = z* (M | SM? MPst) n? H?
+//
+// The modifier before the vowel sign is Gurmukhi's: the bindi is written before
+// the II sign it belongs with, and only that kind of sign admits one.
 func indicTakeMatra(cats []indicCat, i int) (int, bool) {
 	j := i
 	for j < len(cats) && indicIsJoiner(cats[j]) {
 		j++
 	}
-	if j >= len(cats) || cats[j] != catMatra {
+	if j+1 < len(cats) && indicIsModifier(cats[j]) && cats[j+1] == catMPst {
+		j++
+	}
+	if j >= len(cats) || !indicIsMatra(cats[j]) {
 		return i, false
 	}
 	j = indicTakeNukta(cats, j+1)
@@ -218,9 +224,9 @@ func indicTakeTail(cats []indicCat, i int) int {
 	if j < len(cats) && indicIsJoiner(cats[j]) {
 		j++
 	}
-	if j < len(cats) && cats[j] == catSM {
+	if j < len(cats) && indicIsModifier(cats[j]) {
 		j++
-		if j < len(cats) && cats[j] == catSM {
+		if j < len(cats) && indicIsModifier(cats[j]) {
 			j++
 		}
 		if j < len(cats) && cats[j] == catZWNJ {
