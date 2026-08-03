@@ -25,6 +25,14 @@
 // carrying .notdef alone, and every glyph the document goes on to show is one
 // the program does not define; Embed refuses that rather than writing it.
 //
+// # Shaping
+//
+// Shape applies the font's own kerning and ligatures and returns spans ready
+// for a text operator; Encode is the plain path that maps runes to glyphs one
+// at a time. Neither resolves scripts or language systems, attaches marks or
+// reorders glyphs, so text in a script that needs those — Arabic, Devanagari —
+// is not correctly set by this package. See layout.go for exactly what is read.
+//
 // # What it does not do
 //
 // It reads glyf-based (TrueType) programs. A CFF-flavoured OpenType face is
@@ -63,6 +71,8 @@ type Face struct {
 	italic     float64
 	stemV      int
 	flags      int
+
+	layout *layout // kerning and ligatures, empty when the font declares none
 
 	used map[int]bool // glyph indices this face has encoded
 }
@@ -121,6 +131,7 @@ func Load(data []byte) (*Face, error) {
 	if f.capHeight == 0 {
 		f.capHeight = f.ascent
 	}
+	f.layout = readLayout(tables)
 	f.name = postScriptName(tables["name"])
 	if f.name == "" {
 		f.name = "Embedded"

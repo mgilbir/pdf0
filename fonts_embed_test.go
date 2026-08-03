@@ -302,3 +302,82 @@ func TestEmbeddedFontOracleHasTeeth(t *testing.T) {
 		t.Error("a /W array contradicting the embedded program was not reported, so the checks above could not fail either")
 	}
 }
+
+// TestShapedTextValidatesAndKeepsItsLigature closes the loop between the three
+// pieces: shaping picks a glyph no Encode call ever named, the subsetter must
+// keep it, and the document must still be conforming. A subset that dropped the
+// ligature would leave the page blank exactly where it was.
+func TestShapedTextValidatesAndKeepsItsLigature(t *testing.T) {
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "Ligature-Regular",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'f', Advance: 300, HasShape: true},
+			{Rune: 'i', Advance: 250, HasShape: true},
+			{Rune: 'ﬁ', Advance: 520, HasShape: true},
+			{Rune: 'x', Advance: 400, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUB([]fonttest.Ligature{{Components: []int{1, 2}, Glyph: 3}}),
+		},
+	})
+	face, err := fonts.Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if !face.HasLigatures() {
+		t.Fatal("the fixture's GSUB was not read")
+	}
+
+	spans, missing := face.Shape("fix")
+	if missing != 0 {
+		t.Fatalf("%d runes missing", missing)
+	}
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	var b content.Builder
+	b.BeginText().SetFont("F1", 24).MoveText(72, 700).ShowTextAdjusted(spans...).EndText()
+	drawn, err := b.Bytes()
+	if err != nil {
+		t.Fatalf("drawing: %v", err)
+	}
+	fontRef, err := face.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding: %v", err)
+	}
+
+	stream := &object.Stream{Dict: object.Dictionary{}, Data: drawn}
+	stream.Dict.Set("Length", object.Integer(len(drawn)))
+	contentRef := doc.Add(stream)
+	fontDict := &object.Dictionary{}
+	fontDict.Set("F1", fontRef)
+	resources := &object.Dictionary{}
+	resources.Set("Font", fontDict)
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{
+		object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792),
+	})
+	page.Set("Resources", resources)
+	page.Set("Contents", contentRef)
+	pageRef := doc.Add(page)
+	pages := doc.ResolveDict(doc.ResolveDict(doc.Trailer.Get("Root")).Get("Pages"))
+	pages.Set("Kids", object.Array{pageRef})
+	pages.Set("Count", object.Integer(1))
+
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rd, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+		t.Errorf("violation on a page of shaped text: %s", e.Error())
+	}
+	// The ligature glyph reached the file with an outline.
+	if got := rd.ExtractText(); !strings.Contains(got, "ﬁ") {
+		t.Errorf("extracted %q, which does not contain the fi ligature", got)
+	}
+}

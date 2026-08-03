@@ -1,0 +1,519 @@
+package fonts
+
+import (
+	"github.com/mgilbir/pdf0/internal/font"
+)
+
+// Reading the OpenType layout tables that Latin typography needs: pair kerning
+// from GPOS, ligatures from GSUB, and the legacy kern table for fonts that
+// predate GPOS.
+//
+// # What this is not
+//
+// It is not a shaping engine. A shaping engine resolves scripts and language
+// systems, runs lookups in order with their flags honoured, handles contextual
+// and chained-contextual substitution, attaches marks, and reorders glyphs —
+// which is what Arabic, Devanagari and a dozen other scripts require to be
+// legible at all. None of that is here.
+//
+// What is here is the pair of features that make Latin text look like
+// typography rather than like a terminal: 'kern' (GPOS lookup type 2) and
+// 'liga' (GSUB lookup type 4). They are the two with by far the largest effect
+// per unit of complexity, they compose into the simple left-to-right model this
+// package already has, and — importantly — getting them wrong is visible rather
+// than silent.
+//
+// The simplification worth stating loudest is that script and language are
+// ignored: every 'kern' and 'liga' feature in the font is taken, whichever
+// script it belongs to. For a Latin face that is what a shaper would have
+// selected anyway. For a font carrying several scripts it may apply a rule
+// intended for another, which is a real limitation and the first thing to fix
+// when this grows up.
+//
+// # Bounds
+//
+// A font is untrusted input. Every table here is offset-driven and
+// self-referential, so each walk is bounded: the number of lookups, subtables,
+// pairs and ligatures a font may declare are all capped, and a malformed offset
+// truncates the walk rather than reaching outside the table.
+
+// Layout bounds. These are far above any real face — a large Latin font
+// declares a few thousand kern pairs — and exist so that a crafted font cannot
+// turn a few bytes of declaration into unbounded work.
+const (
+	maxLookups   = 512
+	maxSubtables = 256
+	maxPairs     = 1 << 18
+	maxLigatures = 1 << 14
+)
+
+// layout holds what was read out of a font's layout tables.
+type layout struct {
+	// kern maps an ordered glyph pair to the horizontal adjustment between
+	// them, in font units. Negative pulls the pair together, which is what
+	// kerning almost always does.
+	kern map[[2]int]int
+	// ligatures maps a first glyph to the substitutions that may start with it,
+	// longest first so that a greedy match prefers ffi over ff.
+	ligatures map[int][]ligature
+}
+
+// ligature is one substitution: a run of glyphs replaced by a single one.
+type ligature struct {
+	components []int // the glyphs after the first
+	glyph      int   // what they become, together with the first
+}
+
+// readLayout parses the layout tables of a font. It never fails: a table that
+// cannot be understood contributes nothing, because text set without kerning is
+// correct text set plainly, while text set from a misread table is wrong.
+func readLayout(tables map[string][]byte) *layout {
+	l := &layout{kern: map[[2]int]int{}, ligatures: map[int][]ligature{}}
+	if gpos := tables["GPOS"]; len(gpos) >= 10 {
+		l.readGPOSKerning(gpos)
+	}
+	if len(l.kern) == 0 {
+		// Only as a fallback: a font with both should be read through GPOS,
+		// which is the one a modern shaper honours.
+		l.readKernTable(tables["kern"])
+	}
+	if gsub := tables["GSUB"]; len(gsub) >= 10 {
+		l.readGSUBLigatures(gsub)
+	}
+	return l
+}
+
+// featureLookups returns the lookup-table byte slices reachable from every
+// feature with the given tag, whatever script or language declares it.
+func featureLookups(t []byte, tag string) [][]byte {
+	featureListOff := font.Be16(t, 6)
+	lookupListOff := font.Be16(t, 8)
+	if featureListOff <= 0 || lookupListOff <= 0 ||
+		featureListOff+2 > len(t) || lookupListOff+2 > len(t) {
+		return nil
+	}
+	featureList := t[featureListOff:]
+	lookupList := t[lookupListOff:]
+
+	// The lookup list, so a feature's indices can be resolved.
+	lookupCount := font.Be16(lookupList, 0)
+	if lookupCount > maxLookups {
+		lookupCount = maxLookups
+	}
+	lookups := make([][]byte, 0, lookupCount)
+	for i := 0; i < lookupCount; i++ {
+		if 2+2*i+2 > len(lookupList) {
+			break
+		}
+		off := font.Be16(lookupList, 2+2*i)
+		if off <= 0 || off >= len(lookupList) {
+			lookups = append(lookups, nil)
+			continue
+		}
+		lookups = append(lookups, lookupList[off:])
+	}
+
+	var out [][]byte
+	featureCount := font.Be16(featureList, 0)
+	if featureCount > maxLookups {
+		featureCount = maxLookups
+	}
+	for i := 0; i < featureCount; i++ {
+		rec := 2 + 6*i
+		if rec+6 > len(featureList) {
+			break
+		}
+		if string(featureList[rec:rec+4]) != tag {
+			continue
+		}
+		off := font.Be16(featureList, rec+4)
+		if off <= 0 || off+4 > len(featureList) {
+			continue
+		}
+		feature := featureList[off:]
+		n := font.Be16(feature, 2)
+		for j := 0; j < n && j < maxLookups; j++ {
+			if 4+2*j+2 > len(feature) {
+				break
+			}
+			idx := font.Be16(feature, 4+2*j)
+			if idx >= 0 && idx < len(lookups) && lookups[idx] != nil {
+				out = append(out, lookups[idx])
+			}
+		}
+	}
+	return out
+}
+
+// subtables returns a lookup's subtables, resolving the extension indirection
+// that lets a large font place them beyond the 16-bit offset range.
+func subtables(lookup []byte, extensionType int) (kind int, out [][]byte) {
+	if len(lookup) < 6 {
+		return 0, nil
+	}
+	kind = font.Be16(lookup, 0)
+	count := font.Be16(lookup, 4)
+	if count > maxSubtables {
+		count = maxSubtables
+	}
+	for i := 0; i < count; i++ {
+		if 6+2*i+2 > len(lookup) {
+			break
+		}
+		off := font.Be16(lookup, 6+2*i)
+		if off <= 0 || off >= len(lookup) {
+			continue
+		}
+		sub := lookup[off:]
+		if kind == extensionType {
+			// Extension: format(2), real lookup type(2), 32-bit offset.
+			if len(sub) < 8 {
+				continue
+			}
+			kind = font.Be16(sub, 2)
+			delta := int(font.Be32(sub, 4))
+			if delta <= 0 || delta >= len(sub) {
+				continue
+			}
+			sub = sub[delta:]
+		}
+		out = append(out, sub)
+	}
+	return kind, out
+}
+
+// readGPOSKerning reads pair adjustments from every 'kern' feature.
+func (l *layout) readGPOSKerning(gpos []byte) {
+	for _, lookup := range featureLookups(gpos, "kern") {
+		kind, subs := subtables(lookup, 9) // 9 = extension positioning
+		if kind != 2 {                     // 2 = pair adjustment
+			continue
+		}
+		for _, sub := range subs {
+			if len(sub) < 2 {
+				continue
+			}
+			switch font.Be16(sub, 0) {
+			case 1:
+				l.pairPosFormat1(sub)
+			case 2:
+				l.pairPosFormat2(sub)
+			}
+		}
+	}
+}
+
+// pairPosFormat1: an explicit list of second glyphs for each covered first
+// glyph.
+func (l *layout) pairPosFormat1(sub []byte) {
+	if len(sub) < 10 {
+		return
+	}
+	first := coverageGlyphs(sub, font.Be16(sub, 2))
+	fmt1, fmt2 := font.Be16(sub, 4), font.Be16(sub, 6)
+	// Only a horizontal advance on the first glyph is kerning; anything else in
+	// the record is a positioning this package does not apply, and it is
+	// skipped over rather than misread.
+	size1, size2 := valueSize(fmt1), valueSize(fmt2)
+	pairSetCount := font.Be16(sub, 8)
+	for i := 0; i < pairSetCount && i < len(first); i++ {
+		if 10+2*i+2 > len(sub) {
+			return
+		}
+		off := font.Be16(sub, 10+2*i)
+		if off <= 0 || off+2 > len(sub) {
+			continue
+		}
+		set := sub[off:]
+		n := font.Be16(set, 0)
+		rec := 2
+		for j := 0; j < n; j++ {
+			if rec+2+size1+size2 > len(set) || len(l.kern) >= maxPairs {
+				break
+			}
+			second := font.Be16(set, rec)
+			if adv, ok := xAdvance(set[rec+2:], fmt1); ok && adv != 0 {
+				l.kern[[2]int{first[i], second}] = adv
+			}
+			rec += 2 + size1 + size2
+		}
+	}
+}
+
+// pairPosFormat2: adjustments by class pair, which is how a large font states
+// thousands of pairs compactly.
+func (l *layout) pairPosFormat2(sub []byte) {
+	if len(sub) < 16 {
+		return
+	}
+	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	fmt1, fmt2 := font.Be16(sub, 4), font.Be16(sub, 6)
+	class1 := classDef(sub, font.Be16(sub, 8))
+	class2 := classDef(sub, font.Be16(sub, 10))
+	n1, n2 := font.Be16(sub, 12), font.Be16(sub, 14)
+	size1, size2 := valueSize(fmt1), valueSize(fmt2)
+	recSize := size1 + size2
+	if n1 <= 0 || n2 <= 0 || recSize == 0 {
+		return
+	}
+
+	// Invert class 2 once, so each first glyph costs one pass over its own
+	// class row rather than a scan of every glyph in the font.
+	byClass2 := map[int][]int{}
+	for gid, c := range class2 {
+		byClass2[c] = append(byClass2[c], gid)
+	}
+	for _, g1 := range covered {
+		c1 := class1[g1]
+		if c1 >= n1 {
+			continue
+		}
+		for c2 := 0; c2 < n2; c2++ {
+			off := 16 + (c1*n2+c2)*recSize
+			if off+recSize > len(sub) {
+				break
+			}
+			adv, ok := xAdvance(sub[off:], fmt1)
+			if !ok || adv == 0 {
+				continue
+			}
+			for _, g2 := range byClass2[c2] {
+				if len(l.kern) >= maxPairs {
+					return
+				}
+				l.kern[[2]int{g1, g2}] = adv
+			}
+		}
+	}
+}
+
+// valueSize is the byte length of a ValueRecord with the given format: two
+// bytes per bit set (ISO/IEC 14496-22, ValueFormat).
+func valueSize(format int) int {
+	n := 0
+	for b := 0; b < 8; b++ {
+		if format&(1<<b) != 0 {
+			n += 2
+		}
+	}
+	return n
+}
+
+// xAdvance reads the horizontal advance out of a ValueRecord, which is present
+// only when bit 2 of the format says so and sits after any placement fields.
+func xAdvance(rec []byte, format int) (int, bool) {
+	const xAdvanceBit = 0x0004
+	if format&xAdvanceBit == 0 {
+		return 0, false
+	}
+	off := 0
+	if format&0x0001 != 0 { // XPlacement
+		off += 2
+	}
+	if format&0x0002 != 0 { // YPlacement
+		off += 2
+	}
+	if off+2 > len(rec) {
+		return 0, false
+	}
+	return signed16(font.Be16(rec, off)), true
+}
+
+// coverageGlyphs returns the glyphs a coverage table covers, in coverage-index
+// order — which is the order the tables that use it index by.
+func coverageGlyphs(base []byte, off int) []int {
+	if off <= 0 || off+4 > len(base) {
+		return nil
+	}
+	c := base[off:]
+	switch font.Be16(c, 0) {
+	case 1:
+		n := font.Be16(c, 2)
+		out := make([]int, 0, n)
+		for i := 0; i < n; i++ {
+			if 4+2*i+2 > len(c) {
+				break
+			}
+			out = append(out, font.Be16(c, 4+2*i))
+		}
+		return out
+	case 2:
+		n := font.Be16(c, 2)
+		var out []int
+		for i := 0; i < n; i++ {
+			rec := 4 + 6*i
+			if rec+6 > len(c) {
+				break
+			}
+			start, end := font.Be16(c, rec), font.Be16(c, rec+2)
+			idx := font.Be16(c, rec+4)
+			if end < start || end-start > maxPairs {
+				continue
+			}
+			for g := start; g <= end; g++ {
+				at := idx + (g - start)
+				for len(out) <= at {
+					out = append(out, 0)
+				}
+				out[at] = g
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// classDef returns the class of each glyph a class-definition table names.
+// Glyphs it does not name are class 0, which is the specification's default and
+// the zero value here.
+func classDef(base []byte, off int) map[int]int {
+	out := map[int]int{}
+	if off <= 0 || off+4 > len(base) {
+		return out
+	}
+	c := base[off:]
+	switch font.Be16(c, 0) {
+	case 1:
+		start := font.Be16(c, 2)
+		n := font.Be16(c, 4)
+		for i := 0; i < n && i < maxPairs; i++ {
+			if 6+2*i+2 > len(c) {
+				break
+			}
+			out[start+i] = font.Be16(c, 6+2*i)
+		}
+	case 2:
+		n := font.Be16(c, 2)
+		for i := 0; i < n; i++ {
+			rec := 4 + 6*i
+			if rec+6 > len(c) {
+				break
+			}
+			from, to, class := font.Be16(c, rec), font.Be16(c, rec+2), font.Be16(c, rec+4)
+			if to < from || to-from > maxPairs {
+				continue
+			}
+			for g := from; g <= to && len(out) < maxPairs; g++ {
+				out[g] = class
+			}
+		}
+	}
+	return out
+}
+
+// readGSUBLigatures reads ligature substitutions from every 'liga' feature.
+func (l *layout) readGSUBLigatures(gsub []byte) {
+	for _, lookup := range featureLookups(gsub, "liga") {
+		kind, subs := subtables(lookup, 7) // 7 = extension substitution
+		if kind != 4 {                     // 4 = ligature substitution
+			continue
+		}
+		for _, sub := range subs {
+			l.ligatureSubst(sub)
+		}
+	}
+}
+
+func (l *layout) ligatureSubst(sub []byte) {
+	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
+		return
+	}
+	first := coverageGlyphs(sub, font.Be16(sub, 2))
+	setCount := font.Be16(sub, 4)
+	for i := 0; i < setCount && i < len(first); i++ {
+		if 6+2*i+2 > len(sub) {
+			return
+		}
+		off := font.Be16(sub, 6+2*i)
+		if off <= 0 || off+2 > len(sub) {
+			continue
+		}
+		set := sub[off:]
+		n := font.Be16(set, 0)
+		for j := 0; j < n; j++ {
+			if 2+2*j+2 > len(set) {
+				break
+			}
+			lo := font.Be16(set, 2+2*j)
+			if lo <= 0 || lo+4 > len(set) {
+				continue
+			}
+			lig := set[lo:]
+			glyph := font.Be16(lig, 0)
+			compCount := font.Be16(lig, 2)
+			if compCount < 2 || compCount > 64 {
+				continue
+			}
+			comps := make([]int, 0, compCount-1)
+			ok := true
+			for k := 0; k < compCount-1; k++ {
+				if 4+2*k+2 > len(lig) {
+					ok = false
+					break
+				}
+				comps = append(comps, font.Be16(lig, 4+2*k))
+			}
+			if !ok || len(l.ligatures) >= maxLigatures {
+				continue
+			}
+			l.ligatures[first[i]] = append(l.ligatures[first[i]], ligature{components: comps, glyph: glyph})
+		}
+	}
+	// Longest first, so a greedy match prefers ffi to ff.
+	for g, ligs := range l.ligatures {
+		sortLigaturesLongestFirst(ligs)
+		l.ligatures[g] = ligs
+	}
+}
+
+func sortLigaturesLongestFirst(ligs []ligature) {
+	for i := 1; i < len(ligs); i++ {
+		for j := i; j > 0 && len(ligs[j].components) > len(ligs[j-1].components); j-- {
+			ligs[j], ligs[j-1] = ligs[j-1], ligs[j]
+		}
+	}
+}
+
+// readKernTable reads the legacy kern table, format 0, for fonts written before
+// GPOS. Only horizontal, non-cross-stream, override-free subtables are taken;
+// the rest describe positioning this package does not apply.
+func (l *layout) readKernTable(kern []byte) {
+	if len(kern) < 4 {
+		return
+	}
+	nTables := font.Be16(kern, 2)
+	off := 4
+	for i := 0; i < nTables && i < maxSubtables; i++ {
+		if off+6 > len(kern) {
+			return
+		}
+		length := font.Be16(kern, off+2)
+		coverage := font.Be16(kern, off+4)
+		// Bit 0 horizontal, bit 1 minimum, bit 2 cross-stream, bit 3 override;
+		// format is the high byte.
+		if coverage&0x0001 != 0 && coverage&0x000E == 0 && coverage>>8 == 0 {
+			l.kernFormat0(kern[off+6:])
+		}
+		if length <= 0 {
+			return
+		}
+		off += length
+	}
+}
+
+func (l *layout) kernFormat0(t []byte) {
+	if len(t) < 8 {
+		return
+	}
+	n := font.Be16(t, 0)
+	for i := 0; i < n; i++ {
+		rec := 8 + 6*i
+		if rec+6 > len(t) || len(l.kern) >= maxPairs {
+			return
+		}
+		left, right := font.Be16(t, rec), font.Be16(t, rec+2)
+		if v := signed16(font.Be16(t, rec+4)); v != 0 {
+			l.kern[[2]int{left, right}] = v
+		}
+	}
+}
