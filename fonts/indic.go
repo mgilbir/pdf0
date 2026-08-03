@@ -58,12 +58,8 @@ import (
 //     applied where the font asks for it but no consonant is moved for it.
 //   - Inserting a dotted circle before a syllable that has no base consonant.
 //     Such a syllable is set as it stands rather than being marked as broken.
-//   - Hiding the zero-width joiner and non-joiner, and stepping over them when
-//     a lookup matches. This is not an Indic gap — no script this package sets
-//     does it — but it shows up here, because Devanagari is where those two
-//     characters are actually written: a font's rule that measures what follows
-//     a vowel sign will not see past one, and picks a plainer form than it
-//     would have. Text with no joiner in it is unaffected.
+//   - 'locl', the localised forms a font declares per language. It is applied to
+//     every other script this package sets, and an Indic run does not get it.
 //
 // # Where this runs
 //
@@ -354,19 +350,32 @@ var indicBasicFeatures = []struct {
 	{"cjct", 0},
 }
 
-// indicPresentationFeatures are applied to the whole run once every syllable is
-// in drawing order. They are what turns the reordered pieces into the shapes a
-// reader sees: the pre-, above-, below- and post-base substitutions, and the
-// form a consonant takes when its virama is drawn rather than swallowed.
-var indicPresentationFeatures = []string{"pres", "abvs", "blws", "psts", "haln"}
-
-// indicGeneralFeatures are the script-independent substitutions an Indic run
-// still takes, after everything above.
+// indicRunFeatures are applied to the whole run once every syllable is in
+// drawing order, in this order.
 //
-// 'liga' is deliberately not among them, and 'ccmp' is not either — it is
+// The first five are the presentation features: what turns the reordered pieces
+// into the shapes a reader sees — the pre-, above-, below- and post-base
+// substitutions, and the form a consonant takes when its virama is drawn rather
+// than swallowed. They are written about the joiners, so their lookups see them.
+//
+// The last three are the script-independent substitutions an Indic run still
+// takes. They are not written about joiners and step over them, as they do over
+// marks. 'liga' is deliberately not among them, and 'ccmp' is not either — it is
 // applied per syllable, before the reordering, because everything after it is
 // written against what it produces.
-var indicGeneralFeatures = []string{"rlig", "clig", "calt"}
+var indicRunFeatures = []struct {
+	tag    string
+	manual bool
+}{
+	{"pres", true},
+	{"abvs", true},
+	{"blws", true},
+	{"psts", true},
+	{"haln", true},
+	{"rlig", false},
+	{"clig", false},
+	{"calt", false},
+}
 
 // shapeIndic is the whole Indic pass: it replaces both the joining pass and the
 // default substitutions for a run it handles.
@@ -394,12 +403,24 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune) []Glyph {
 		shift += delta
 	}
 
-	for _, tag := range append(append([]string{}, indicPresentationFeatures...), indicGeneralFeatures...) {
-		if lookups := sh.l.featureLookups[tag]; len(lookups) > 0 {
-			buf = sh.applyContextual(buf, lookups)
+	// The features that see the whole run rather than one syllable. They go
+	// through applyIndicFeature rather than applyContextual so that the
+	// per-glyph record stays in step with the buffer — which is what says where
+	// the joiners are, and so what lets these lookups step over them.
+	for _, f := range indicRunFeatures {
+		lookups := sh.l.featureLookups[f.tag]
+		if len(lookups) == 0 {
+			continue
 		}
+		buf, _ = sh.applyIndicFeature(buf, &info, lookups, 0, len(buf), 0, len(buf), f.manual)
 	}
-	return buf
+
+	// The joiners have now done everything they are for: the forms they forced
+	// or forbade are made, and nothing below is written about them. What is left
+	// is a character with no shape, which must not reach the page.
+	return dropGlyphs(buf, func(i int) bool {
+		return i < len(info) && indicIsJoiner(info[i].cat)
+	})
 }
 
 // shapeIndicSyllable puts one syllable into drawing order and applies the
@@ -419,7 +440,7 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 	// like the features below, so that it cannot join one syllable to the next.
 	if lookups := sh.l.featureLookups["ccmp"]; len(lookups) > 0 {
 		var d int
-		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end)
+		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, false)
 		grow(d)
 	}
 
@@ -440,7 +461,7 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 		}
 		if f.mask == 0 {
 			var d int
-			buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end)
+			buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, true)
 			grow(d)
 			continue
 		}
@@ -458,7 +479,7 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 				hi++
 			}
 			var d int
-			buf, d = sh.applyIndicFeature(buf, info, lookups, lo, hi, lo, hi)
+			buf, d = sh.applyIndicFeature(buf, info, lookups, lo, hi, lo, hi, true)
 			grow(d)
 			lo = hi + d
 		}
@@ -473,7 +494,7 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 	if lookups := sh.l.featureLookups["init"]; len(lookups) > 0 &&
 		start < end && (*info)[start].pos == posPreM && indicWordStart(runes, textStart) {
 		var d int
-		buf, d = sh.applyIndicFeature(buf, info, lookups, start, start+1, start, end)
+		buf, d = sh.applyIndicFeature(buf, info, lookups, start, start+1, start, end, true)
 		grow(d)
 	}
 
@@ -511,15 +532,35 @@ func indicWordStart(runes []rune, at int) bool {
 // keeps a ligature declared for the half forms from swallowing the base that
 // happens to follow them.
 //
+// manual says the feature wants the join controls visible to its input rather
+// than stepped over — true of every feature the Indic model names, and false of
+// 'ccmp' and of the general substitutions, which are not written about joiners
+// at all. See ignorable.go.
+//
 // The per-glyph record is kept in step as lookups change the buffer's length:
 // a ligature that swallows three glyphs into one has to swallow their three
-// records too, or every position after it would describe the wrong glyph.
-func (sh shaper) applyIndicFeature(buf []Glyph, info *[]indicInfo, lookups []int, from, to, floor, ceil int) ([]Glyph, int) {
+// records too, or every position after it would describe the wrong glyph. It is
+// also what says where the joiners are, since a face commonly gives them the
+// same glyph as the space.
+func (sh shaper) applyIndicFeature(buf []Glyph, info *[]indicInfo, lookups []int, from, to, floor, ceil int, manual bool) ([]Glyph, int) {
 	total, step := 0, 0
 	sh.onResize = func(at, d int) {
 		*info = respliceIndicInfo(*info, at, d)
 		step += d
 	}
+	sh.joinerAt = func(at int) joinerKind {
+		if at < 0 || at >= len(*info) {
+			return notJoiner
+		}
+		switch (*info)[at].cat {
+		case catZWJ:
+			return joinerZWJ
+		case catZWNJ:
+			return joinerZWNJ
+		}
+		return notJoiner
+	}
+	sh.manualJoiners = manual
 	sh.floor = floor
 	for _, idx := range lookups {
 		for i := from; i < to; {
@@ -584,7 +625,7 @@ func (sh shaper) wouldSubstitute(lookups []int, gids []int) bool {
 	if len(gids) == 0 {
 		return false
 	}
-	sh.floor, sh.limit, sh.onResize = 0, 0, nil
+	sh.floor, sh.limit, sh.onResize, sh.joinerAt = 0, 0, nil, nil
 	for _, idx := range lookups {
 		probe := make([]Glyph, len(gids))
 		for i, g := range gids {

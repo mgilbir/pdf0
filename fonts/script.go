@@ -314,6 +314,22 @@ type shaper struct {
 	// step with a buffer that ligatures and decompositions are reshaping under
 	// it. Nothing else needs it, and it is nil everywhere else.
 	onResize func(at, delta int)
+
+	// joinerAt, when set, says whether a join control stands at a buffer
+	// position, so that a lookup can step over one — see ignorable.go. It is a
+	// function of the position rather than of the glyph because a face commonly
+	// gives a join control the same glyph as the space.
+	//
+	// A nil one means no position holds a joiner, which is true of every run
+	// this package shapes outside the Indic pass: there the joiners are taken
+	// out before any lookup runs.
+	joinerAt func(at int) joinerKind
+
+	// manualJoiners says the feature being applied asked to see the join
+	// controls in its input rather than have them stepped over. The Indic
+	// features do, because a joiner is written precisely to force or forbid the
+	// forms they make.
+	manualJoiners bool
 }
 
 // resized reports a change in the buffer's length at a position, for a caller
