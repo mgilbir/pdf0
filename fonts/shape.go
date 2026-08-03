@@ -29,6 +29,12 @@ func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 	if len(glyphs) == 0 {
 		return nil, missing
 	}
+	return f.shapeGlyphs(glyphs), missing
+}
+
+// shapeGlyphs turns a glyph run into spans: ligatures first, then kerning, then
+// the codes and displacements a text operator takes.
+func (f *Face) shapeGlyphs(glyphs []int) []content.TextSpan {
 	glyphs = f.applyLigatures(glyphs)
 
 	var (
@@ -37,7 +43,7 @@ func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 		prev = -1
 	)
 	for _, gid := range glyphs {
-		if prev >= 0 {
+		if prev >= 0 && !f.layout.ignores(f.layout.kernFlags, gid) {
 			if k, ok := f.layout.kern[[2]int{prev, gid}]; ok && k != 0 {
 				// Flush what has accumulated, then the displacement. The sign
 				// flips: a negative kern closes the gap, and TJ subtracts.
@@ -48,12 +54,17 @@ func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 		}
 		run = append(run, byte(gid>>8), byte(gid))
 		f.used[gid] = true
-		prev = gid
+		// A glyph the kerning lookup ignores does not become the left half of
+		// the next pair either: the pair is between the glyphs either side of
+		// it, which is the whole point of the flag.
+		if !f.layout.ignores(f.layout.kernFlags, gid) {
+			prev = gid
+		}
 	}
 	if len(run) > 0 {
 		out = append(out, content.TextSpan{Codes: run})
 	}
-	return out, missing
+	return out
 }
 
 // MeasureShaped is the width of a shaped string at the given size, in
@@ -66,11 +77,13 @@ func (f *Face) MeasureShaped(s string, size float64) float64 {
 	var total float64
 	prev := -1
 	for _, gid := range glyphs {
-		if prev >= 0 {
+		if prev >= 0 && !f.layout.ignores(f.layout.kernFlags, gid) {
 			total += f.scale(f.layout.kern[[2]int{prev, gid}])
 		}
 		total += f.advanceGID(gid)
-		prev = gid
+		if !f.layout.ignores(f.layout.kernFlags, gid) {
+			prev = gid
+		}
 	}
 	return total * size / 1000
 }
@@ -136,3 +149,50 @@ func (f *Face) HasKerning() bool { return len(f.layout.kern) > 0 }
 // HasLigatures reports whether the font carries ligature substitutions this
 // package could read.
 func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
+
+// ShapeWith is Shape with additional OpenType features applied by name — the
+// one-for-one substitutions a font offers and a caller must ask for, such as
+// "smcp" for small capitals or "onum" for oldstyle figures.
+//
+// They are opt-in because they are not corrections: a font's 'smcp' is right
+// only where small capitals were wanted, and applying it by default would
+// change text nobody asked to change. 'liga' and kerning are applied either
+// way, being what the font says its letters should look like when set normally.
+//
+// A feature the font does not declare is silently no-op — asking for small
+// capitals from a face that has none should set the text plainly, not fail.
+// Features returns what a face actually offers.
+func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan, missing int) {
+	glyphs, missing := f.glyphRun(s)
+	for _, tag := range features {
+		table := f.layout.single[tag]
+		if table == nil {
+			continue
+		}
+		for i, gid := range glyphs {
+			if to, ok := table[gid]; ok {
+				glyphs[i] = to
+			}
+		}
+	}
+	return f.shapeGlyphs(glyphs), missing
+}
+
+// Features lists the substitution features this face offers by name, sorted.
+// A caller can present them, or check one before asking for it.
+func (f *Face) Features() []string {
+	out := make([]string, 0, len(f.layout.single))
+	for tag := range f.layout.single {
+		out = append(out, tag)
+	}
+	sortStrings(out)
+	return out
+}
+
+func sortStrings(a []string) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j] < a[j-1]; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
+}

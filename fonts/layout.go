@@ -16,12 +16,30 @@ import (
 // which is what Arabic, Devanagari and a dozen other scripts require to be
 // legible at all. None of that is here.
 //
-// What is here is the pair of features that make Latin text look like
-// typography rather than like a terminal: 'kern' (GPOS lookup type 2) and
-// 'liga' (GSUB lookup type 4). They are the two with by far the largest effect
-// per unit of complexity, they compose into the simple left-to-right model this
-// package already has, and — importantly — getting them wrong is visible rather
-// than silent.
+// What is here:
+//
+//   - 'kern', GPOS lookup type 2, both pair formats, and the legacy kern table.
+//   - 'liga', GSUB lookup type 4.
+//   - Every single substitution the font declares, GSUB lookup type 1, keyed by
+//     feature tag and applied only when a caller names one (ShapeWith).
+//   - GDEF glyph classes and the lookup flags that use them, so that a lookup
+//     declaring it ignores marks does.
+//
+// What is not, and what each absence costs:
+//
+//   - Contextual and chained-contextual substitution (GSUB 5, 6). Features that
+//     depend on surroundings — 'calt' above all — do nothing.
+//   - Mark attachment (GPOS 4, 5, 6) and cursive attachment (GPOS 3). Accents
+//     are placed at their nominal advance rather than over the letter they
+//     belong to, which is visibly wrong in any script that uses them heavily.
+//   - Script-specific processing: Arabic joining forms, Indic reordering. Those
+//     scripts are not correctly set by this package, and text in them should be
+//     shaped elsewhere and passed in as glyph indices.
+//
+// The remaining simplification is that script and language are ignored: every
+// feature is taken whichever script declares it. For a Latin face that is what
+// a shaper would have selected; for a font carrying several scripts it may
+// apply a rule meant for another.
 //
 // The simplification worth stating loudest is that script and language are
 // ignored: every 'kern' and 'liga' feature in the font is taken, whichever
@@ -49,6 +67,17 @@ const (
 
 // layout holds what was read out of a font's layout tables.
 type layout struct {
+	// glyphClass is GDEF's classification of each glyph: 1 base, 2 ligature,
+	// 3 mark, 4 component. A glyph GDEF does not name is class 0, unknown.
+	glyphClass map[int]int
+	// kernFlags and substFlags are the lookup flags of the lookups the kerning
+	// and the substitutions came from, so that shaping can skip the glyphs
+	// those lookups are declared to ignore.
+	kernFlags  int
+	substFlags int
+	// markAttach is GDEF's mark attachment class per glyph, used by the
+	// MarkAttachmentType field of a lookup flag.
+	markAttach map[int]int
 	// kern maps an ordered glyph pair to the horizontal adjustment between
 	// them, in font units. Negative pulls the pair together, which is what
 	// kerning almost always does.
@@ -56,6 +85,68 @@ type layout struct {
 	// ligatures maps a first glyph to the substitutions that may start with it,
 	// longest first so that a greedy match prefers ffi over ff.
 	ligatures map[int][]ligature
+	// single holds one-for-one substitutions per feature tag: small capitals,
+	// oldstyle figures and the rest. They are read for every feature the font
+	// declares, and applied only when a caller asks for that feature by name.
+	single map[string]map[int]int
+}
+
+// Lookup flags (ISO/IEC 14496-22, LookupFlag). The high byte is a mark
+// attachment class rather than a flag, and is handled separately.
+const (
+	flagIgnoreBaseGlyphs = 0x0002
+	flagIgnoreLigatures  = 0x0004
+	flagIgnoreMarks      = 0x0008
+	flagMarkAttachType   = 0xFF00
+)
+
+// Glyph classes as GDEF defines them.
+const (
+	classBase      = 1
+	classLigature  = 2
+	classMark      = 3
+	classComponent = 4
+)
+
+// ignores reports whether a lookup with the given flags skips a glyph.
+//
+// This is the correctness fix these flags exist for. A kerning lookup almost
+// always declares that it ignores marks, because the pair it means to adjust is
+// two base letters — and an accent written between them must not break it.
+// Reading the pairs and not the flag kerns "A" and "V" but not "Ä" and "V",
+// which is a difference a reader sees.
+func (l *layout) ignores(flags, gid int) bool {
+	class := l.glyphClass[gid]
+	switch {
+	case flags&flagIgnoreMarks != 0 && class == classMark:
+		return true
+	case flags&flagIgnoreBaseGlyphs != 0 && class == classBase:
+		return true
+	case flags&flagIgnoreLigatures != 0 && class == classLigature:
+		return true
+	}
+	// A mark attachment class in the high byte narrows the rule to marks of one
+	// class; marks of any other are skipped.
+	if attach := (flags & flagMarkAttachType) >> 8; attach != 0 && class == classMark {
+		return l.markAttach[gid] != attach
+	}
+	return false
+}
+
+// readGDEF reads the glyph classification, which is what makes a lookup flag
+// mean anything: without it there is no way to know which glyphs are marks.
+func (l *layout) readGDEF(gdef []byte) {
+	if len(gdef) < 12 {
+		return
+	}
+	if off := font.Be16(gdef, 4); off > 0 && off < len(gdef) {
+		for gid, class := range classDef(gdef, off) {
+			l.glyphClass[gid] = class
+		}
+	}
+	if off := font.Be16(gdef, 10); off > 0 && off < len(gdef) {
+		l.markAttach = classDef(gdef, off)
+	}
 }
 
 // ligature is one substitution: a run of glyphs replaced by a single one.
@@ -68,7 +159,13 @@ type ligature struct {
 // cannot be understood contributes nothing, because text set without kerning is
 // correct text set plainly, while text set from a misread table is wrong.
 func readLayout(tables map[string][]byte) *layout {
-	l := &layout{kern: map[[2]int]int{}, ligatures: map[int][]ligature{}}
+	l := &layout{
+		kern:       map[[2]int]int{},
+		ligatures:  map[int][]ligature{},
+		glyphClass: map[int]int{},
+		single:     map[string]map[int]int{},
+	}
+	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
 		l.readGPOSKerning(gpos)
 	}
@@ -79,6 +176,7 @@ func readLayout(tables map[string][]byte) *layout {
 	}
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
 		l.readGSUBLigatures(gsub)
+		l.readSingleSubstitutions(gsub)
 	}
 	return l
 }
@@ -147,11 +245,12 @@ func featureLookups(t []byte, tag string) [][]byte {
 
 // subtables returns a lookup's subtables, resolving the extension indirection
 // that lets a large font place them beyond the 16-bit offset range.
-func subtables(lookup []byte, extensionType int) (kind int, out [][]byte) {
+func subtables(lookup []byte, extensionType int) (kind, flags int, out [][]byte) {
 	if len(lookup) < 6 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	kind = font.Be16(lookup, 0)
+	flags = font.Be16(lookup, 2)
 	count := font.Be16(lookup, 4)
 	if count > maxSubtables {
 		count = maxSubtables
@@ -179,16 +278,17 @@ func subtables(lookup []byte, extensionType int) (kind int, out [][]byte) {
 		}
 		out = append(out, sub)
 	}
-	return kind, out
+	return kind, flags, out
 }
 
 // readGPOSKerning reads pair adjustments from every 'kern' feature.
 func (l *layout) readGPOSKerning(gpos []byte) {
 	for _, lookup := range featureLookups(gpos, "kern") {
-		kind, subs := subtables(lookup, 9) // 9 = extension positioning
-		if kind != 2 {                     // 2 = pair adjustment
+		kind, flags, subs := subtables(lookup, 9) // 9 = extension positioning
+		if kind != 2 {                            // 2 = pair adjustment
 			continue
 		}
+		l.kernFlags |= flags
 		for _, sub := range subs {
 			if len(sub) < 2 {
 				continue
@@ -404,10 +504,11 @@ func classDef(base []byte, off int) map[int]int {
 // readGSUBLigatures reads ligature substitutions from every 'liga' feature.
 func (l *layout) readGSUBLigatures(gsub []byte) {
 	for _, lookup := range featureLookups(gsub, "liga") {
-		kind, subs := subtables(lookup, 7) // 7 = extension substitution
-		if kind != 4 {                     // 4 = ligature substitution
+		kind, flags, subs := subtables(lookup, 7) // 7 = extension substitution
+		if kind != 4 {                            // 4 = ligature substitution
 			continue
 		}
+		l.substFlags |= flags
 		for _, sub := range subs {
 			l.ligatureSubst(sub)
 		}
@@ -515,5 +616,82 @@ func (l *layout) kernFormat0(t []byte) {
 		if v := signed16(font.Be16(t, rec+4)); v != 0 {
 			l.kern[[2]int{left, right}] = v
 		}
+	}
+}
+
+// readSingleSubstitutions reads the one-for-one substitutions of every feature
+// the font declares, keyed by tag.
+//
+// They are read eagerly and applied only on request. A font's 'smcp' turns
+// letters into small capitals and its 'onum' turns lining figures into oldstyle
+// ones; both are correct only when a caller asks for them, so unlike 'liga'
+// they cannot be applied by default. Reading them all costs one pass and means
+// ShapeWith needs no second one.
+func (l *layout) readSingleSubstitutions(gsub []byte) {
+	if len(gsub) < 10 {
+		return
+	}
+	featureListOff := font.Be16(gsub, 6)
+	if featureListOff <= 0 || featureListOff+2 > len(gsub) {
+		return
+	}
+	featureList := gsub[featureListOff:]
+	count := font.Be16(featureList, 0)
+	if count > maxLookups {
+		count = maxLookups
+	}
+	seen := map[string]bool{}
+	for i := 0; i < count; i++ {
+		rec := 2 + 6*i
+		if rec+6 > len(featureList) {
+			break
+		}
+		tag := string(featureList[rec : rec+4])
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		for _, lookup := range featureLookups(gsub, tag) {
+			kind, flags, subs := subtables(lookup, 7)
+			if kind != 1 { // 1 = single substitution
+				continue
+			}
+			l.substFlags |= flags
+			for _, sub := range subs {
+				l.singleSubst(tag, sub)
+			}
+		}
+	}
+}
+
+// singleSubst reads one single-substitution subtable. Format 1 shifts every
+// covered glyph by a constant; format 2 lists a replacement for each.
+func (l *layout) singleSubst(tag string, sub []byte) {
+	if len(sub) < 6 {
+		return
+	}
+	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	if l.single[tag] == nil {
+		l.single[tag] = map[int]int{}
+	}
+	switch font.Be16(sub, 0) {
+	case 1:
+		delta := signed16(font.Be16(sub, 4))
+		for _, gid := range covered {
+			if to := gid + delta; to >= 0 && to < 0xFFFF {
+				l.single[tag][gid] = to
+			}
+		}
+	case 2:
+		n := font.Be16(sub, 4)
+		for i := 0; i < n && i < len(covered); i++ {
+			if 6+2*i+2 > len(sub) {
+				break
+			}
+			l.single[tag][covered[i]] = font.Be16(sub, 6+2*i)
+		}
+	}
+	if len(l.single[tag]) == 0 {
+		delete(l.single, tag)
 	}
 }
