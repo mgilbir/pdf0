@@ -106,6 +106,14 @@ func devaSingle(tag string, from, to []int) devaFeature {
 // FeatureList is written in.
 func devaFace(t *testing.T, features ...devaFeature) *Face {
 	t.Helper()
+	return devaFaceIn(t, "dev2", features...)
+}
+
+// devaFaceIn is devaFace with the script tag named, so that a test can build the
+// same font as a first-generation one — a font carrying only 'deva' was written
+// before 'dev2' existed and means the older rules.
+func devaFaceIn(t *testing.T, tag string, features ...devaFeature) *Face {
+	t.Helper()
 	sorted := append([]devaFeature(nil), features...)
 	for i := 1; i < len(sorted); i++ {
 		for j := i; j > 0 && sorted[j].tag < sorted[j-1].tag; j-- {
@@ -128,7 +136,7 @@ func devaFace(t *testing.T, features ...devaFeature) *Face {
 		Glyphs: devaGlyphs(),
 		Extra: map[string][]byte{
 			"GSUB": fonttest.GSUBTable(lookups, list, map[string]fonttest.Script{
-				"dev2": {Required: fonttest.NoFeature, Features: selected},
+				tag:    {Required: fonttest.NoFeature, Features: selected},
 				"DFLT": {Required: fonttest.NoFeature},
 			}),
 		},
@@ -185,6 +193,17 @@ func devaBlwf() devaFeature {
 	return devaLigatures("blwf", fonttest.Ligature{
 		Components: []int{gidVirama, gidDRa}, Glyph: gidRakar,
 	})
+}
+
+// devaBlwfPre declares below-base forms for two consonants, written
+// consonant-first as a first-generation font writes them. Ra is one of them and
+// an ordinary consonant is the other, which is what tells the two generations'
+// pre-base rules apart: the older asks only Ra for its below-base form.
+func devaBlwfPre() devaFeature {
+	return devaLigatures("blwf",
+		fonttest.Ligature{Components: []int{gidDRa, gidVirama}, Glyph: gidRakar},
+		fonttest.Ligature{Components: []int{gidDTa, gidVirama}, Glyph: gidKaKa},
+	)
 }
 
 func devaAkhn() devaFeature {
@@ -853,6 +872,111 @@ func TestBundledFaceSetsAWord(t *testing.T) {
 	}
 	if glyphs[0].Cluster != 0 {
 		t.Errorf("the first glyph has cluster %d, want 0", glyphs[0].Cluster)
+	}
+}
+
+// The two generations of the Devanagari rules.
+//
+// A font declares its rules under a script tag, and for Devanagari there are
+// two: 'dev2' for the second-generation specification and 'deva' for the one
+// that came before it. The tag is the only thing that says which rules the font
+// was written against, and the two disagree in ways a reader sees.
+//
+// Every expectation below was checked against HarfBuzz shaping these same
+// fixture bytes under each tag.
+
+// TestTheScriptTagSaysWhichRulesTheFontMeans pins how the question is asked. It
+// is asked of the font, not of the text, and answered by the same walk that
+// selects the font's features — so the rules applied are the rules of the table
+// they came from.
+func TestTheScriptTagSaysWhichRulesTheFontMeans(t *testing.T) {
+	cfg := indicConfigs["dev2"]
+	deva := scriptOf(devKa)
+
+	if f := devaFaceIn(t, "dev2", devaHalf()); f.indicOldSpec(cfg, deva) {
+		t.Error("a font declaring 'dev2' was taken for a first-generation one")
+	}
+	if f := devaFaceIn(t, "deva", devaHalf()); !f.indicOldSpec(cfg, deva) {
+		t.Error("a font declaring only 'deva' was taken for a second-generation one")
+	}
+	// A font that declares nothing for the script falls back to the default
+	// table, which is not a second-generation declaration.
+	if f := devaFaceIn(t, "latn", devaHalf()); !f.indicOldSpec(cfg, deva) {
+		t.Error("a font declaring nothing for Devanagari should get the older rules")
+	}
+}
+
+// TestOldSpecMovesThePostBaseVirama is the first of the two disagreements. The
+// first-generation rules expected the shaper to put a post-base virama after the
+// last consonant, and fonts written against them declare their conjunct lookups
+// in that order; leaving it where it stands sets those conjuncts as loose
+// letters with a virama showing between them.
+func TestOldSpecMovesThePostBaseVirama(t *testing.T) {
+	features := []devaFeature{devaBlwf(), devaHalf(), devaRphf(), devaCjct()}
+	new2 := devaFaceIn(t, "dev2", features...)
+	old := devaFaceIn(t, "deva", features...)
+
+	for _, tc := range []struct {
+		s                string
+		wantNew, wantOld []int
+	}{
+		// त्र् — the virama after the Ra moves past it, so the font's
+		// virama-then-Ra below-base rule no longer matches and the Ra stays a
+		// letter with two viramas after it.
+		{str(devTa, devVirama, devRa, devVirama),
+			[]int{gidDTa, gidRakar, gidVirama}, []int{gidDTa, gidDRa, gidVirama, gidVirama}},
+		{str(devTa, devVirama, devRa),
+			[]int{gidDTa, gidRakar}, []int{gidDTa, gidDRa, gidVirama}},
+		{str(devTa, devVirama, devRa, devVirama, devKa),
+			[]int{gidDTa, gidRakar, gidVirama, gidDKa},
+			[]int{gidTaHalf, gidDRa, gidVirama, gidDKa}},
+	} {
+		wantGIDs(t, shapedGIDs(t, new2, tc.s), tc.wantNew, tc.s+" under dev2")
+		wantGIDs(t, shapedGIDs(t, old, tc.s), tc.wantOld, tc.s+" under deva")
+	}
+}
+
+// TestOldSpecAsksOnlyRaForAPreBaseBelowForm is the second. Under the
+// second-generation rules every consonant before the base is asked for its
+// below-base form; under the first-generation ones only the vattu — a Ra bound
+// to what follows by a virama — is, and the rest take their half forms instead.
+func TestOldSpecAsksOnlyRaForAPreBaseBelowForm(t *testing.T) {
+	features := []devaFeature{devaBlwfPre(), devaHalf()}
+	new2 := devaFaceIn(t, "dev2", features...)
+	old := devaFaceIn(t, "deva", features...)
+
+	// An ordinary consonant: below-base form under the new rules, half form
+	// under the old.
+	s := str(devTa, devVirama, devKa)
+	wantGIDs(t, shapedGIDs(t, new2, s), []int{gidKaKa, gidDKa}, s+" under dev2")
+	wantGIDs(t, shapedGIDs(t, old, s), []int{gidTaHalf, gidDKa}, s+" under deva")
+
+	// Ra is the exception both generations agree on, and the one the eyelash
+	// rule exists to restore: it takes its below-base form under either.
+	s = str(devRa, devVirama, devKa)
+	wantGIDs(t, shapedGIDs(t, new2, s), []int{gidRakar, gidDKa}, s+" under dev2")
+	wantGIDs(t, shapedGIDs(t, old, s), []int{gidRakar, gidDKa}, s+" under deva")
+}
+
+// TestTheTwoGenerationsAgreeWhereTheyShould keeps the two tests above from
+// meaning only "something changed". Most of Devanagari is the same under either
+// specification, and a shaper that read the tag and then diverged everywhere
+// would pass a test that only ever looked for a difference.
+func TestTheTwoGenerationsAgreeWhereTheyShould(t *testing.T) {
+	features := []devaFeature{devaBlwf(), devaHalf(), devaRphf(), devaCjct()}
+	new2 := devaFaceIn(t, "dev2", features...)
+	old := devaFaceIn(t, "deva", features...)
+
+	for _, s := range []string{
+		str(devKa, devIMatra),
+		str(devRa, devVirama, devKa),
+		str(devKa, devVirama, devTa),
+		str(devRa, devVirama, devKa, devVirama, devTa),
+		str(devRa, devVirama, 0x200D, devKa, devVirama, devTa),
+		str(devKa, devAAMatra, devAnusvara),
+	} {
+		a, b := shapedGIDs(t, new2, s), shapedGIDs(t, old, s)
+		wantGIDs(t, b, a, s+" under deva, which should match dev2 here")
 	}
 }
 

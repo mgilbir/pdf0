@@ -47,17 +47,21 @@ import (
 // shallow pass over nine scripts would be wrong in each of them in a way only a
 // reader of that script would catch. One script done properly is worth more.
 //
+// Both generations of the Devanagari rules are covered. A script that has two
+// OpenType specifications has two tags, and the tag a font declares its rules
+// under says which of the two it was written against — see indicOldSpec.
+//
 // Within Devanagari, these are not done:
 //
-//   - The first-generation 'deva' rules. A font declaring only the old tag is
-//     shaped by the Indic2 model anyway. The two differ chiefly in where the
-//     half-forms feature may apply and in the old spec's expectation that the
-//     shaper move a post-base virama; a font written for the old spec alone may
-//     therefore set some conjuncts differently than its author intended.
 //   - Pre-base-reordering Ra ('pref'). Devanagari has none; the feature is
 //     applied where the font asks for it but no consonant is moved for it.
 //   - 'locl', the localised forms a font declares per language. It is applied to
 //     every other script this package sets, and an Indic run does not get it.
+//   - Asking the font about a consonant *with* surrounding context, which the
+//     first-generation rules allow and the second do not. The question is always
+//     put as a bare pair of glyphs, so a font that states its below-base or
+//     post-base forms only as a contextual rule is read as stating none — its
+//     conjuncts then come out as loose letters rather than in the wrong place.
 //
 // # Where this runs
 //
@@ -141,6 +145,70 @@ const (
 	dottedCircle = 0x25CC
 )
 
+// indicBlwfMode says which consonants a font's below-base forms feature is for.
+type indicBlwfMode uint8
+
+const (
+	// blwfPreAndPost: below-base forms are asked for on both sides of the base.
+	blwfPreAndPost indicBlwfMode = iota
+	// blwfPostOnly: only after it.
+	blwfPostOnly
+)
+
+// indicConfig is what one script states about its own reordering: the two
+// characters the rules name directly, and the ways its behaviour differs from
+// the others'.
+//
+// The model is shared; the data is not. Keeping the data here rather than in the
+// code is what lets a second script be added by stating what it does rather than
+// by branching on which script it is.
+type indicConfig struct {
+	// tag is the script's second-generation OpenType tag, which is how a config
+	// is found: it is the first tag the script selects, so a run finds its
+	// config without this file naming an index into the generated script table.
+	tag string
+	// ra is the consonant that can become a reph, and virama the character the
+	// font's conjunct rules are written against. Both are plain letters by every
+	// Unicode property they have, so both can only be named.
+	ra, virama rune
+	// hasOldSpec says the script had a first-generation OpenType specification,
+	// and so that a font declaring the older of its two tags means the older
+	// rules. A script with only one specification never does.
+	hasOldSpec bool
+	// blwfMode says which consonants 'blwf' is asked for.
+	blwfMode indicBlwfMode
+	// doubleHalantBlocksMove says a virama already standing after the last
+	// consonant stops the first-generation post-base virama move. Reports
+	// differ script by script, so only the one known to want it says so.
+	doubleHalantBlocksMove bool
+	// hasEyelashRa says the script's first-generation rules ask for a below-base
+	// form of a pre-base Ra.
+	hasEyelashRa bool
+}
+
+// indicConfigs is every script this file reorders, by its second-generation tag.
+var indicConfigs = map[string]*indicConfig{
+	"dev2": {
+		tag: "dev2", ra: 0x0930, virama: 0x094D,
+		hasOldSpec: true, blwfMode: blwfPreAndPost, hasEyelashRa: true,
+	},
+}
+
+// indicConfigFor reports the reordering model for a run's script, or nil for a
+// script this file does not reorder.
+//
+// It asks the script's OpenType tags rather than naming an index into the
+// generated script table, so that each script is identified by the tag a font
+// declares its rules under.
+func indicConfigFor(script uint16) *indicConfig {
+	for _, tag := range scriptTags(script) {
+		if c, ok := indicConfigs[tag]; ok {
+			return c
+		}
+	}
+	return nil
+}
+
 // maxIndicSyllable bounds how many characters one syllable may hold.
 //
 // The reordering sorts a syllable by insertion, which is quadratic, and the
@@ -153,17 +221,30 @@ const (
 const maxIndicSyllable = 64
 
 // reordersIndic reports whether a run in this script is reordered here.
+func reordersIndic(script uint16) bool { return indicConfigFor(script) != nil }
+
+// indicOldSpec reports whether the font means the first-generation rules for
+// this script.
 //
-// It asks the script's OpenType tags rather than naming an index into the
-// generated script table, so that the one script this covers is identified by
-// the tag a font declares its Devanagari rules under.
-func reordersIndic(script uint16) bool {
-	for _, tag := range scriptTags(script) {
-		if tag == "dev2" {
-			return true
-		}
+// A script that has two OpenType specifications has two tags, and the tag a font
+// declares its rules under says which of the two it was written against: a font
+// carrying only 'deva' was written before 'dev2' existed. The difference is not
+// cosmetic — the two disagree about where the reph goes and about which
+// consonants the below-base forms feature is for — so a font written for the
+// older rules and shaped by the newer ones sets some conjuncts differently from
+// the way its author drew them.
+//
+// The question is asked of the font rather than of the text, and asked the same
+// way feature selection asks it, so that the rules applied are the rules of the
+// script table they came from. A font that declares nothing for the script falls
+// back to the default table, which is not a second-generation declaration and so
+// means the older rules — the same reading every other shaper takes.
+func (f *Face) indicOldSpec(cfg *indicConfig, script uint16) bool {
+	if !cfg.hasOldSpec {
+		return false
 	}
-	return false
+	tag := f.chosenScriptTag(script)
+	return len(tag) != 4 || tag[3] != '2'
 }
 
 // indicProperties reports a character's shaping category and where it sits.
@@ -377,7 +458,7 @@ var indicRunFeatures = []struct {
 
 // shapeIndic is the whole Indic pass: it replaces both the joining pass and the
 // default substitutions for a run it handles.
-func (sh shaper) shapeIndic(buf []Glyph, runes []rune) []Glyph {
+func (sh shaper) shapeIndic(buf []Glyph, runes []rune, plan *indicPlan) []Glyph {
 	info := make([]indicInfo, len(runes))
 	cats := make([]indicCat, len(runes))
 	for i, r := range runes {
@@ -390,7 +471,6 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune) []Glyph {
 	// order and the shift carried along, rather than their bounds recorded up
 	// front and then found to be stale.
 	shift := 0
-	places := sh.indicPositions()
 	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
 	for _, syl := range indicSyllables(cats) {
 		if syl.kind == sylNonIndic || syl.kind == sylSymbol {
@@ -403,7 +483,7 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune) []Glyph {
 			shift++
 		}
 		var delta int
-		buf, delta = sh.shapeIndicSyllable(buf, &info, runes, places, syl.start, start, end)
+		buf, delta = sh.shapeIndicSyllable(buf, &info, runes, plan, syl.start, start, end)
 		shift += delta
 	}
 
@@ -476,7 +556,7 @@ func (sh shaper) insertDottedCircle(buf []Glyph, info []indicInfo, start, end, g
 // textStart is where the syllable begins in the original characters, which the
 // word-initial rule below needs and the buffer can no longer say.
 func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune,
-	places *indicPositions, textStart, start, end int) ([]Glyph, int) {
+	plan *indicPlan, textStart, start, end int) ([]Glyph, int) {
 
 	total := 0
 	grow := func(d int) { total += d; end += d }
@@ -493,12 +573,12 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 	// Which consonants the font draws below or after the base, which is what
 	// the base search needs and only the font can say. It has to come after
 	// 'ccmp', because a consonant that rule composed is the one to ask about.
-	places.refine(buf, *info, start, end)
+	plan.refine(buf, *info, start, end)
 
 	// The base index it reports is not kept: the font may ligate the base away
 	// while the features below run, so the final reordering finds it again from
 	// the positions rather than from a remembered number.
-	sh.indicInitialReorder(buf, *info, start, end)
+	sh.indicInitialReorder(buf, *info, plan, start, end)
 
 	for _, f := range indicBasicFeatures {
 		lookups := sh.l.featureLookups[f.tag]
@@ -690,10 +770,12 @@ func (sh shaper) wouldSubstitute(lookups []int, gids []int) bool {
 	return false
 }
 
-// indicPositions answers, for one consonant, whether the font draws it below
-// the base, after it, or as a base in its own right.
+// indicPlan is what one run of one script needs that neither the text nor the
+// shared model can say: the script's own data, which generation of the
+// specification this font was written against, and what the font answers when
+// asked about a consonant.
 //
-// The base search turns on that question and cannot answer it from the
+// The last of those is what the base search turns on and cannot decide from the
 // characters. In त्र — Ta, virama, Ra — the Ra is an ordinary consonant by
 // every Unicode property it has, and yet a Devanagari font draws it as a stroke
 // under the Ta, which makes the *Ta* the base. What settles it is whether the
@@ -702,29 +784,34 @@ func (sh shaper) wouldSubstitute(lookups []int, gids []int) bool {
 //
 // The answers are cached because they are properties of the font, and a page of
 // Devanagari asks about the same forty consonants over and over.
-type indicPositions struct {
-	sh               shaper
-	virama           int
-	haveVirama       bool
-	blwf, pstf, pref []int
-	cache            map[int]indicPos
+type indicPlan struct {
+	sh                     shaper
+	cfg                    *indicConfig
+	oldSpec                bool
+	virama                 int
+	haveVirama             bool
+	blwf, pstf, pref, vatu []int
+	cache                  map[int]indicPos
 }
 
-func (sh shaper) indicPositions() *indicPositions {
-	p := &indicPositions{
-		sh:    sh,
-		blwf:  sh.l.featureLookups["blwf"],
-		pstf:  sh.l.featureLookups["pstf"],
-		pref:  sh.l.featureLookups["pref"],
-		cache: map[int]indicPos{},
+func (sh shaper) indicPlan(cfg *indicConfig, oldSpec bool) *indicPlan {
+	p := &indicPlan{
+		sh:      sh,
+		cfg:     cfg,
+		oldSpec: oldSpec,
+		blwf:    sh.l.featureLookups["blwf"],
+		pstf:    sh.l.featureLookups["pstf"],
+		pref:    sh.l.featureLookups["pref"],
+		vatu:    sh.l.featureLookups["vatu"],
+		cache:   map[int]indicPos{},
 	}
-	p.virama, p.haveVirama = sh.f.GlyphID(devanagariVirama)
+	p.virama, p.haveVirama = sh.f.GlyphID(cfg.virama)
 	return p
 }
 
 // refine replaces the place of every consonant in a stretch of the buffer with
 // what the font says about it.
-func (p *indicPositions) refine(buf []Glyph, info []indicInfo, start, end int) {
+func (p *indicPlan) refine(buf []Glyph, info []indicInfo, start, end int) {
 	if !p.haveVirama || len(p.blwf)+len(p.pstf)+len(p.pref) == 0 {
 		return
 	}
@@ -736,7 +823,7 @@ func (p *indicPositions) refine(buf []Glyph, info []indicInfo, start, end int) {
 	}
 }
 
-func (p *indicPositions) of(gid int) indicPos {
+func (p *indicPlan) of(gid int) indicPos {
 	if pos, ok := p.cache[gid]; ok {
 		return pos
 	}
@@ -748,9 +835,13 @@ func (p *indicPositions) of(gid int) indicPos {
 		return p.sh.wouldSubstitute(lookups, []int{p.virama, gid}) ||
 			p.sh.wouldSubstitute(lookups, []int{gid, p.virama})
 	}
+	// 'vatu' is asked alongside 'blwf' because it is the other way a font says
+	// "this consonant is drawn under the base": the vattu is a below-base Ra, and
+	// a font that declares its below-base forms only under 'vatu' means the same
+	// thing about them.
 	pos := posBaseC
 	switch {
-	case covers(p.blwf):
+	case covers(p.blwf), covers(p.vatu):
 		pos = posBelowC
 	case covers(p.pstf), covers(p.pref):
 		pos = posPostC
@@ -769,7 +860,7 @@ func (p *indicPositions) of(gid int) indicPos {
 // the font's rules have run, moves *glyphs* — by then the Ra may be one stroke
 // and three consonants may be one conjunct, and where those go depends on what
 // the font actually made.
-func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, start, end int) int {
+func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicPlan, start, end int) int {
 	if start >= end {
 		return end
 	}
@@ -851,6 +942,39 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, start, end i
 		info[start].pos = posRaToBecomeReph
 	}
 
+	// The first-generation rules expected the shaper to move a post-base virama
+	// to after the last consonant, and fonts written against them declare their
+	// conjunct lookups in that order. Leaving it where it stands sets those
+	// conjuncts as loose letters with a visible virama between them.
+	//
+	// Reports differ on whether a virama already sitting after the last consonant
+	// suppresses the move. It is known to for Kannada and known not to for
+	// Devanagari, Bengali and Malayalam, so only the script known to want it is
+	// given it, and the rest move unconditionally.
+	if plan.oldSpec {
+		for i := base + 1; i < end; i++ {
+			if info[i].cat != catHalant {
+				continue
+			}
+			j := end - 1
+			for ; j > i; j-- {
+				if indicIsBaseCandidate(info[j].cat) ||
+					(plan.cfg.doubleHalantBlocksMove && info[j].cat == catHalant) {
+					break
+				}
+			}
+			if info[j].cat != catHalant && j > i {
+				moved := info[i]
+				copy(info[i:j], info[i+1:j+1])
+				info[j] = moved
+				g := buf[i]
+				copy(buf[i:j], buf[i+1:j+1])
+				buf[j] = g
+			}
+			break
+		}
+	}
+
 	// A virama, a nukta or a joiner has no place of its own: it belongs to the
 	// character before it and has to move with it, or the sort below would
 	// strand it among glyphs it says nothing about.
@@ -902,15 +1026,42 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, start, end i
 	// Which feature is for which glyph. The reph is made from the front of the
 	// syllable; the half and below-base forms from the consonants before the
 	// base; the below-, above- and post-base forms from those after it.
+	//
+	// Whether the consonants *before* the base are asked for a below-base form
+	// is the other half of what the two generations disagree about. The
+	// first-generation rules asked for it only after the base; a script whose
+	// second-generation rules also say so states blwfPostOnly.
+	preBase := maskHalf
+	if !plan.oldSpec && plan.cfg.blwfMode == blwfPreAndPost {
+		preBase |= maskBlwf
+	}
 	for i := start; i < end && info[i].pos == posRaToBecomeReph; i++ {
 		info[i].mask |= maskRphf
 	}
 	for i := start; i < base; i++ {
-		info[i].mask |= maskHalf | maskBlwf
+		info[i].mask |= preBase
 	}
 	for i := base + 1; i < end; i++ {
 		info[i].mask |= maskBlwf | maskAbvf | maskPstf
 	}
+
+	// The eyelash Ra, which only the first-generation Devanagari rules produce.
+	// Their below-base forms feature is stated as applying to consonants that
+	// follow the base — "the exception is vattu, which may appear below half
+	// forms as well as below the base glyph", and Ra is exactly that exception,
+	// so a Ra bound by a virama before the base is asked for its below-base form
+	// too. A joiner after the virama is the way to ask for the eyelash instead,
+	// and is left alone.
+	if plan.oldSpec && plan.cfg.hasEyelashRa {
+		for i := start; i+1 < base; i++ {
+			if info[i].cat == catRa && info[i+1].cat == catHalant &&
+				(i+2 == base || info[i+2].cat != catZWJ) {
+				info[i].mask |= maskBlwf
+				info[i+1].mask |= maskBlwf
+			}
+		}
+	}
+
 	// A non-joiner asks for the letters around it *not* to be joined, which for
 	// Devanagari means the half form is not to be made.
 	for i := start + 1; i < end; i++ {
