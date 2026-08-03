@@ -316,6 +316,130 @@ func TestContextualRuleMayInvokeALigature(t *testing.T) {
 	wantGIDs(t, shapedGIDs(t, f, "dbc"), []int{gidD, gidB, gidC}, "dbc")
 }
 
+// TestMultipleSubstitutionDecomposesAGlyph is what 'ccmp' is usually written
+// with: one glyph becomes several, so that the rules after it have the pieces
+// they are written against.
+func TestMultipleSubstitutionDecomposesAGlyph(t *testing.T) {
+	f := contextFace(t, []fonttest.Lookup{{
+		Type:      2,
+		Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{{gidBalt, gidCalt}})},
+	}}, nil)
+
+	wantGIDs(t, shapedGIDs(t, f, "abc"), []int{gidA, gidBalt, gidCalt, gidC}, "abc")
+
+	// Both pieces stand for the one character, so both carry its cluster —
+	// which is what maps a click on either back to the same place in the text.
+	//
+	// The text begins with a two-byte character deliberately. A cluster is a
+	// byte offset, and in ASCII that is also the glyph's index in the buffer, so
+	// a fixture without one cannot tell the two apart — and confusing them is
+	// the mistake worth catching, since it makes every cluster in a non-ASCII
+	// run point at the wrong character.
+	const text = "́bc" // U+0301 occupies bytes 0-1, so 'b' begins at byte 2
+	glyphs, _ := f.ShapeGlyphs(text)
+	if len(glyphs) != 4 {
+		t.Fatalf("got %d glyphs, want 4", len(glyphs))
+	}
+	for i := 1; i <= 2; i++ {
+		if glyphs[i].Cluster != 2 {
+			t.Errorf("piece %d has cluster %d, want 2 — the byte offset of the character it came from",
+				i-1, glyphs[i].Cluster)
+		}
+	}
+	if glyphs[3].Cluster != 3 {
+		t.Errorf("the glyph after the decomposition has cluster %d, want 3", glyphs[3].Cluster)
+	}
+	// Each piece advances by its own width, not by what it replaced.
+	if glyphs[1].XAdvance != advBalt {
+		t.Errorf("the first piece advances %v, want %d", glyphs[1].XAdvance, advBalt)
+	}
+}
+
+// TestAlternateSubstitutionTakesTheFontsFirstChoice pins the default. A lookup
+// reached through a feature that is simply on has no one to ask which alternate
+// is wanted, and the font lists its own preference first.
+func TestAlternateSubstitutionTakesTheFontsFirstChoice(t *testing.T) {
+	f := contextFace(t, []fonttest.Lookup{{
+		Type:      3,
+		Subtables: [][]byte{fonttest.AlternateSubst([]int{gidB}, [][]int{{gidBalt, gidCalt}})},
+	}}, nil)
+	wantGIDs(t, shapedGIDs(t, f, "b"), []int{gidBalt}, "b")
+}
+
+// TestPositionsFollowAGrowingBuffer is the bookkeeping a rule with more than one
+// lookup depends on.
+//
+// The rule matches three glyphs and names two lookups. The first decomposes the
+// glyph at position 0, which pushes everything after it along by one; the second
+// is aimed at position 2, and would land on the wrong glyph if the positions
+// were the ones remembered when the rule matched.
+func TestPositionsFollowAGrowingBuffer(t *testing.T) {
+	rule := fonttest.SequenceContext1(map[int][]fonttest.ContextRule{
+		gidB: {{
+			Input:   []int{gidB, gidC, gidD},
+			Lookups: []fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: 2, Lookup: 1}},
+		}},
+	})
+	f := contextFace(t, []fonttest.Lookup{
+		{Type: 2, Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{{gidBalt, gidB}})}},
+		{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidD}, []int{gidA})}},
+		{Type: 5, Subtables: [][]byte{rule}},
+	}, nil)
+
+	// b becomes two glyphs, and the d — now at position 3, not 2 — becomes a.
+	wantGIDs(t, shapedGIDs(t, f, "bcd"), []int{gidBalt, gidB, gidC, gidA}, "bcd")
+}
+
+// TestPositionsFollowAShrinkingBuffer is the same in the other direction, and
+// the more dangerous one: a stale index here points past the end of the buffer.
+func TestPositionsFollowAShrinkingBuffer(t *testing.T) {
+	rule := fonttest.SequenceContext1(map[int][]fonttest.ContextRule{
+		gidB: {{
+			Input:   []int{gidB, gidC, gidD},
+			Lookups: []fonttest.SeqLookup{{At: 0, Lookup: 0}, {At: 2, Lookup: 1}},
+		}},
+	})
+	f := contextFace(t, []fonttest.Lookup{
+		{Type: 4, Subtables: [][]byte{fonttest.LigatureSubst([]fonttest.Ligature{
+			{Components: []int{gidB, gidC}, Glyph: gidBalt},
+		})}},
+		{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{gidD}, []int{gidA})}},
+		{Type: 5, Subtables: [][]byte{rule}},
+	}, nil)
+
+	// b and c ligate, so the d moves from position 2 to position 1.
+	wantGIDs(t, shapedGIDs(t, f, "bcd"), []int{gidBalt, gidA}, "bcd")
+}
+
+// TestDecompositionLengthIsBounded pins that one glyph cannot be made to become
+// an unbounded number of them. A font is untrusted input, and a sequence long
+// enough to matter is malformed — a real decomposition is two or three glyphs.
+func TestDecompositionLengthIsBounded(t *testing.T) {
+	huge := make([]int, maxSubstitutionLength+1)
+	for i := range huge {
+		huge[i] = gidBalt
+	}
+	f := contextFace(t, []fonttest.Lookup{{
+		Type:      2,
+		Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{huge})},
+	}}, nil)
+	wantGIDs(t, shapedGIDs(t, f, "b"), []int{gidB}, "b")
+
+	// One glyph under the bound is applied, so the bound is a bound and not a
+	// refusal to decompose at all.
+	ok := make([]int, maxSubstitutionLength)
+	for i := range ok {
+		ok[i] = gidBalt
+	}
+	g := contextFace(t, []fonttest.Lookup{{
+		Type:      2,
+		Subtables: [][]byte{fonttest.MultipleSubst([]int{gidB}, [][]int{ok})},
+	}}, nil)
+	if got := shapedGIDs(t, g, "b"); len(got) != maxSubstitutionLength {
+		t.Errorf("a sequence at the bound produced %d glyphs, want %d", len(got), maxSubstitutionLength)
+	}
+}
+
 // TestContextualRecursionIsBounded is the safety property. A font may describe a
 // lookup that invokes itself, and nothing in the format forbids it; the depth
 // bound is what turns that from a hang into a rule that stops applying.

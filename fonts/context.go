@@ -72,6 +72,28 @@ func (f *Face) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph) {
 				buf[at].XAdvance = f.advanceGID(gid)
 				return 1, buf
 			}
+		case 2:
+			// One glyph becomes several: a decomposition, which is what 'ccmp'
+			// is usually written with. They share the original's cluster —
+			// several glyphs standing for one character is exactly the case
+			// clusters exist to record.
+			if reps, ok := multipleSubstAt(sub, buf[at].GID); ok && len(reps) > 0 {
+				out := make([]Glyph, 0, len(buf)+len(reps)-1)
+				out = append(out, buf[:at]...)
+				for _, gid := range reps {
+					out = append(out, Glyph{
+						GID: gid, Cluster: buf[at].Cluster, XAdvance: f.advanceGID(gid),
+					})
+				}
+				out = append(out, buf[at+1:]...)
+				return len(reps), out
+			}
+		case 3:
+			if gid, ok := alternateSubstAt(sub, buf[at].GID); ok {
+				buf[at].GID = gid
+				buf[at].XAdvance = f.advanceGID(gid)
+				return 1, buf
+			}
 		case 4:
 			if n, gid, ok := f.ligatureAt(sub, buf, at, lk.flags); ok {
 				out := append(buf[:at:at], Glyph{
@@ -117,6 +139,63 @@ func singleSubstAt(sub []byte, gid int) (int, bool) {
 		return font.Be16(sub, 6+2*i), true
 	}
 	return 0, false
+}
+
+// multipleSubstAt reads a type 2 subtable and reports the glyphs that replace
+// one, if it covers it.
+func multipleSubstAt(sub []byte, gid int) ([]int, bool) {
+	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
+		return nil, false
+	}
+	i, ok := coverageIndex(sub, font.Be16(sub, 2), gid)
+	if !ok || i >= font.Be16(sub, 4) || 6+2*i+2 > len(sub) {
+		return nil, false
+	}
+	off := font.Be16(sub, 6+2*i)
+	if off <= 0 || off+2 > len(sub) {
+		return nil, false
+	}
+	seq := sub[off:]
+	n := font.Be16(seq, 0)
+	// A sequence long enough to be a decompression bomb is malformed; a real
+	// one is two or three glyphs.
+	if n < 0 || n > maxSubstitutionLength || 2+2*n > len(seq) {
+		return nil, false
+	}
+	out := make([]int, n)
+	for k := range out {
+		out[k] = font.Be16(seq, 2+2*k)
+	}
+	return out, true
+}
+
+// maxSubstitutionLength bounds what one glyph may become. A decomposition is a
+// handful of glyphs; a font declaring thousands is describing an attack, and
+// nothing stops it from doing so at every position in a run.
+const maxSubstitutionLength = 64
+
+// alternateSubstAt reads a type 3 subtable, which offers a choice of glyphs.
+//
+// The first is taken. Choosing among them is what 'aalt' is for and what a
+// caller asks for by name; a lookup reached through a default feature has no
+// one to ask, and the font lists its own preference first.
+func alternateSubstAt(sub []byte, gid int) (int, bool) {
+	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
+		return 0, false
+	}
+	i, ok := coverageIndex(sub, font.Be16(sub, 2), gid)
+	if !ok || i >= font.Be16(sub, 4) || 6+2*i+2 > len(sub) {
+		return 0, false
+	}
+	off := font.Be16(sub, 6+2*i)
+	if off <= 0 || off+4 > len(sub) {
+		return 0, false
+	}
+	set := sub[off:]
+	if font.Be16(set, 0) < 1 {
+		return 0, false
+	}
+	return font.Be16(set, 2), true
 }
 
 // ligatureAt reads a type 4 subtable and reports the ligature starting at a
@@ -536,11 +615,18 @@ func (f *Face) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (in
 }
 
 // runRecords applies the lookups a matched rule names, each at the position it
-// names, and reports how many input glyphs the rule consumed.
+// names, and reports how many glyphs of the buffer the rule accounted for.
 //
 // The positions are those of the *matched* glyphs, so a record naming index two
 // means the third thing the rule matched — not the third glyph in the buffer,
 // which may differ when the lookup skips marks.
+//
+// A rule may name several lookups, and one of them may change the buffer's
+// length: a ligature makes it shorter, a decomposition longer. Every position
+// after the one that changed then moves, and a later record aimed at a
+// remembered index would land on the wrong glyph — or past the end. So the
+// positions are carried forward rather than read once, which is the whole
+// reason this takes the slice rather than the buffer offsets.
 func (f *Face) runRecords(base []byte, at, count int, positions []int, buf []Glyph, depth int) (int, []Glyph, bool) {
 	consumed := len(positions)
 	for i := 0; i < count; i++ {
@@ -553,16 +639,24 @@ func (f *Face) runRecords(base []byte, at, count int, positions []int, buf []Gly
 		if seqIndex < 0 || seqIndex >= len(positions) {
 			continue
 		}
+		target := positions[seqIndex]
 		before := len(buf)
-		_, out := f.applyGSUBAt(lookupIndex, buf, positions[seqIndex], depth+1)
+		_, out := f.applyGSUBAt(lookupIndex, buf, target, depth+1)
 		buf = out
-		// A nested lookup may have shortened the buffer; the rule then consumes
-		// correspondingly fewer glyphs, since some of what it matched is gone.
-		if shrunk := before - len(buf); shrunk > 0 {
-			consumed -= shrunk
-			if consumed < 1 {
-				consumed = 1
+
+		delta := len(buf) - before
+		if delta == 0 {
+			continue
+		}
+		for k := range positions {
+			if positions[k] > target {
+				positions[k] += delta
 			}
+		}
+		// The rule now covers correspondingly more or fewer glyphs, which is
+		// what tells the caller where to resume.
+		if consumed += delta; consumed < 1 {
+			consumed = 1
 		}
 	}
 	return consumed, buf, true
