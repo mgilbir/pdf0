@@ -309,9 +309,6 @@ func indicConfigFor(script uint16) *indicConfig {
 // is nowhere near this.
 const maxIndicSyllable = 64
 
-// reordersIndic reports whether a run in this script is reordered here.
-func reordersIndic(script uint16) bool { return indicConfigFor(script) != nil }
-
 // indicOldSpec reports whether the font means the first-generation rules for
 // this script.
 //
