@@ -1134,17 +1134,16 @@ const (
 	// Pass files wrongly rejected at Level A. Like corpusMaxFalsePositives,
 	// this is the hard invariant: never raise it.
 	corpusMaxLevelAFalsePositives = 0
-	// Fail files not flagged at Level A. These are a known COVERAGE GAP, not
-	// a target: the Level A rule families pdf0 implements (Tagged PDF /
-	// StructTreeRoot, catalog /Lang syntax, pdfaid:conformance) do not cover
-	// Unicode character maps (ISO 19005-1 6.3.8 — when a ToUnicode entry is
-	// mandatory), ActualText for Private Use Area code points (-2 6.2.11.7.3),
-	// structure-type RoleMap validity (6.8.3.4 / 6.7.3.4), or a language
-	// identifier carried on a structure element or marked-content property
-	// list rather than the catalog (6.8.4 / 6.7.4). Drive them down as those
-	// rules land; each drop locks in a newly covered Level A requirement.
-	corpusMaxLevelA1aMissed = 9
-	corpusMaxLevelA2aMissed = 9
+	// Fail files not flagged at Level A. Both suites are fully detected: every
+	// rule family they exercise is implemented — Tagged PDF / StructTreeRoot,
+	// untagged page content (6.8.3.2 / 6.7.3.2), structure types and role-map
+	// cycles (6.8.3.4 / 6.7.3.4), the language-identifier syntax wherever /Lang
+	// is written (6.8.4 / 6.7.4), the Unicode character map requirement
+	// (6.3.8 / 6.2.11.7.2) and, at parts 2/3, ActualText for Private Use Area
+	// code points (6.2.11.7.3). At zero these are no longer a coverage report
+	// but a regression guard: a rule that stops firing shows up here.
+	corpusMaxLevelA1aMissed = 0
+	corpusMaxLevelA2aMissed = 0
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
