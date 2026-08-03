@@ -287,6 +287,7 @@ func TestEveryOperatorIsOneISO32000Defines(t *testing.T) {
 		Concat(1, 0, 0, 1, 10, 10).Translate(5, 5).Scale(2, 2).
 		SetLineWidth(2).SetLineCap(RoundCap).SetLineJoin(BevelJoin).SetMiterLimit(4).
 		SetDash([]float64{3, 2}, 1).SetExtGState("GS0").
+		SetRenderingIntent(Perceptual).SetFlatness(1).
 		SetGray(0.5).SetStrokeGray(0.2).
 		SetRGB(1, 0, 0).SetStrokeRGB(0, 1, 0).
 		SetCMYK(0, 0, 0, 1).SetStrokeCMYK(1, 0, 0, 0).
@@ -303,7 +304,8 @@ func TestEveryOperatorIsOneISO32000Defines(t *testing.T) {
 		Rect(0, 0, 3, 3).ClipEvenOdd().EndPath().
 		Shading("Sh0").Draw("Im0").
 		BeginMarked("Artifact").EndMarked().
-		BeginMarkedProperties("Span", "MC0").EndMarked()
+		BeginMarkedProperties("Span", "MC0").EndMarked().
+		MarkPoint("Anchor").MarkPointProperties("Anchor", "MC1")
 	b.BeginText().
 		SetFont("F1", 12).SetCharSpacing(0.5).SetWordSpacing(1).SetHorizontalScale(90).
 		SetLeading(14).SetRise(2).SetTextRenderMode(FillText).
@@ -384,5 +386,49 @@ func TestOperatorOracleHasTeeth(t *testing.T) {
 	})
 	if !found {
 		t.Error("the tokenizer did not surface an undefined operator, so the check could never fire")
+	}
+}
+
+// TestRenderingIntentIsOneOfFour pins the closed set. The operand is a name a
+// reader must recognise, and this module's own validator flags one it does not
+// — so a stream naming a private intent could not be produced by accident.
+func TestRenderingIntentIsOneOfFour(t *testing.T) {
+	var b Builder
+	b.SetRenderingIntent("Perceptual")
+	if b.Err() != nil {
+		t.Fatalf("a defined intent was refused: %v", b.Err())
+	}
+	var bad Builder
+	bad.SetRenderingIntent("Photographic")
+	if bad.Err() == nil {
+		t.Error("an intent outside the four was accepted")
+	}
+}
+
+// TestFlatnessIsBounded pins the operand range ISO 32000 gives it.
+func TestFlatnessIsBounded(t *testing.T) {
+	for _, v := range []float64{-1, 101} {
+		var b Builder
+		b.SetFlatness(v)
+		if b.Err() == nil {
+			t.Errorf("flatness %v was accepted", v)
+		}
+	}
+	var ok Builder
+	ok.SetFlatness(0) // 0 asks the device for its own default
+	if ok.Err() != nil {
+		t.Errorf("flatness 0 was refused: %v", ok.Err())
+	}
+}
+
+// TestMarkPointsRecordTheirProperties pins that a marked point's properties
+// reach the resource bookkeeping, as a marked sequence's do.
+func TestMarkPointsRecordTheirProperties(t *testing.T) {
+	var b Builder
+	b.MarkPoint("Anchor").MarkPointProperties("Anchor", "MC7")
+	mustBytes(t, &b)
+	res := b.Resources().Properties
+	if len(res) != 1 || res[0] != "MC7" {
+		t.Errorf("Properties = %v, want [MC7]", res)
 	}
 }

@@ -42,6 +42,14 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 		// the whole mechanism.
 		return f.embedStandard(doc)
 	}
+	if f.simple {
+		if len(f.used) == 0 {
+			return object.IndirectRef{}, errors.New(
+				"fonts: Embed before any text was encoded would embed no glyphs; " +
+					"encode the document's text first, then embed")
+		}
+		return f.embedSimple(doc)
+	}
 	if f.prog.NumGlyphs == 0 {
 		return object.IndirectRef{}, errNoGlyphs
 	}
@@ -199,7 +207,20 @@ func (f *Face) toUnicodeCMap() []byte {
 		gids = append(gids, gid)
 	}
 	sort.Ints(gids)
+	pairs := make([][2]int, 0, len(gids))
+	for _, gid := range gids {
+		pairs = append(pairs, [2]int{gid, int(rev[gid])})
+	}
+	return buildToUnicodeCMap(pairs, "<0000> <FFFF>")
+}
 
+// buildToUnicodeCMap writes a ToUnicode CMap over code-to-character pairs,
+// which must be sorted by code.
+//
+// The codespace differs between the two font forms and is the caller's to
+// state: a composite font's codes are two bytes and a simple font's are one,
+// and a reader takes the range literally when splitting a shown string.
+func buildToUnicodeCMap(pairs [][2]int, codespace string) []byte {
 	var b bytes.Buffer
 	b.WriteString(`/CIDInit /ProcSet findresource begin
 12 dict begin
@@ -208,18 +229,22 @@ begincmap
 /CMapName /Adobe-Identity-UCS def
 /CMapType 2 def
 1 begincodespacerange
-<0000> <FFFF>
+` + codespace + `
 endcodespacerange
 `)
+	digits := 4
+	if len(codespace) > 0 && codespace[0] == '<' && len(codespace) < 12 {
+		digits = 2 // a single-byte codespace, written <00> <FF>
+	}
 	// bfchar sections are capped at 100 entries by the specification.
-	for start := 0; start < len(gids); start += 100 {
+	for start := 0; start < len(pairs); start += 100 {
 		end := start + 100
-		if end > len(gids) {
-			end = len(gids)
+		if end > len(pairs) {
+			end = len(pairs)
 		}
 		fmt.Fprintf(&b, "%d beginbfchar\n", end-start)
-		for _, gid := range gids[start:end] {
-			fmt.Fprintf(&b, "<%04X> <%s>\n", gid, utf16beHex(rev[gid]))
+		for _, p := range pairs[start:end] {
+			fmt.Fprintf(&b, "<%0*X> <%s>\n", digits, p[0], utf16beHex(rune(p[1])))
 		}
 		b.WriteString("endbfchar\n")
 	}

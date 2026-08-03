@@ -102,9 +102,11 @@ const (
 
 // Glyph classes as GDEF defines them.
 const (
-	classBase      = 1
-	classLigature  = 2
-	classMark      = 3
+	classBase     = 1
+	classLigature = 2
+	classMark     = 3
+	// classComponent is named for completeness: GDEF defines it, and a reader
+	// of this list should see the whole set rather than wonder what 4 means.
 	classComponent = 4
 )
 

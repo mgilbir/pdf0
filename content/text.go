@@ -219,3 +219,15 @@ func (b *Builder) BeginMarkedProperties(tag, properties object.Name) *Builder {
 
 // EndMarked closes a marked-content sequence (EMC).
 func (b *Builder) EndMarked() *Builder { return b.op("EMC") }
+
+// MarkPoint records a marked-content point: a place in the stream rather than a
+// span of it (MP). It is what an anchor, a footnote reference or a
+// cross-reference target is attached to.
+func (b *Builder) MarkPoint(tag object.Name) *Builder { return b.op("MP", tag) }
+
+// MarkPointProperties is MarkPoint with properties, named from the page's
+// /Resources /Properties (DP).
+func (b *Builder) MarkPointProperties(tag, properties object.Name) *Builder {
+	record(&b.res.Properties, properties)
+	return b.op("DP", tag, properties)
+}

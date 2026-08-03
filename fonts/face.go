@@ -78,6 +78,10 @@ type Face struct {
 	// cff reports that the outlines are CFF rather than glyf, which changes
 	// both how the program is embedded and whether it can be subsetted.
 	cff bool
+	// simple is set when the face is to be embedded as a simple font: one byte
+	// per character through WinAnsiEncoding, rather than as a composite font
+	// keyed by glyph index.
+	simple bool
 	// std is set for one of the fourteen standard faces, which has no program
 	// at all: its metrics are the ones Adobe published and its codes are
 	// WinAnsi characters rather than glyph indices.
@@ -194,6 +198,16 @@ func (f *Face) Name() string { return f.name }
 // encoding is a character encoding — the two are different kinds of number and
 // the only thing they have in common is that Encode writes them.
 func (f *Face) GlyphID(r rune) (int, bool) {
+	if f.simple {
+		code, _, ok := stdCode(r)
+		if !ok {
+			return 0, false
+		}
+		if gid, mapped := f.prog.Cmap[r]; !mapped || gid == 0 {
+			return 0, false
+		}
+		return int(code), true
+	}
 	if f.std != nil {
 		code, name, ok := stdCode(r)
 		if !ok {
@@ -214,6 +228,15 @@ func (f *Face) GlyphID(r rune) (int, bool) {
 func (f *Face) Advance(r rune) (float64, bool) {
 	if f.std != nil {
 		return f.stdAdvance(r)
+	}
+	if f.simple {
+		// The glyph is found through the character map as always; only the code
+		// that will name it differs.
+		gid, ok := f.prog.Cmap[r]
+		if !ok || gid == 0 {
+			return f.advanceGID(0), false
+		}
+		return f.advanceGID(gid), true
 	}
 	gid, ok := f.GlyphID(r)
 	if !ok {
@@ -256,6 +279,9 @@ func (f *Face) Measure(s string, size float64) float64 {
 // character, and silently dropping it would lose content. The second result
 // reports how many runes were missing so a caller that cares can react.
 func (f *Face) Encode(s string) (codes []byte, missing int) {
+	if f.simple {
+		return f.encodeSimple(s)
+	}
 	if f.std != nil {
 		// One byte per character: the codes are WinAnsi, not glyph indices.
 		// A character the encoding has no code for becomes the space, which is
@@ -480,4 +506,19 @@ func (f *Face) NumGlyphs() int {
 		return 0
 	}
 	return f.prog.NumGlyphs
+}
+
+// GlyphIDForTest returns the glyph index a character maps to in the font
+// program, whatever encoding the face will be embedded with.
+//
+// GlyphID answers a different question — the number the *content stream* will
+// carry, which for a simple font is a character code and not a glyph index — so
+// a test checking what the subsetter kept needs this one. There is no other
+// caller, and the name says so.
+func (f *Face) GlyphIDForTest(r rune) (int, bool) {
+	if f.prog == nil {
+		return 0, false
+	}
+	gid, ok := f.prog.Cmap[r]
+	return gid, ok && gid != 0
 }

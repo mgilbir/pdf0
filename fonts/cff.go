@@ -141,8 +141,7 @@ const (
 	opEncoding    = 16
 	opCharStrings = 17
 	opPrivate     = 18
-	opSubrs       = 19 // in the Private DICT, relative to it
-	opCharstringT = 1206
+	opSubrs       = 19   // in the Private DICT, relative to it
 	opROS         = 1230 // present only in a CID-keyed font
 )
 

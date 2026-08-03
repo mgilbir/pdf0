@@ -191,3 +191,37 @@ func TestOpacityIsAUsableExtGState(t *testing.T) {
 		t.Error("an alpha outside [0,1] was accepted")
 	}
 }
+
+// TestPageRotationIsAMultipleOfNinety pins the constraint and that the value
+// reaches the file. A rotation that is not a quarter turn is not something a
+// reader can apply, and one silently dropped would leave a landscape page
+// displayed portrait.
+func TestPageRotationIsAMultipleOfNinety(t *testing.T) {
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	var b content.Builder
+	b.Rect(0, 0, 10, 10).Fill()
+	ref, err := doc.AddPage(Page{Width: 595, Height: 842, Rotate: 90, Content: &b})
+	if err != nil {
+		t.Fatalf("AddPage: %v", err)
+	}
+	if got, _ := doc.ResolveDict(ref).Get("Rotate").(object.Integer); got != 90 {
+		t.Errorf("/Rotate = %v, want 90", got)
+	}
+
+	var b2 content.Builder
+	b2.Rect(0, 0, 10, 10).Fill()
+	if _, err := doc.AddPage(Page{Width: 595, Height: 842, Rotate: 45, Content: &b2}); err == nil {
+		t.Error("a rotation of 45 degrees was accepted")
+	}
+
+	// An upright page carries no /Rotate at all rather than an explicit zero.
+	var b3 content.Builder
+	b3.Rect(0, 0, 10, 10).Fill()
+	ref3, err := doc.AddPage(Page{Width: 595, Height: 842, Content: &b3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.ResolveDict(ref3).Get("Rotate") != nil {
+		t.Error("an upright page carries a /Rotate entry")
+	}
+}
