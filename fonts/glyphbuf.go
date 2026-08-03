@@ -48,9 +48,11 @@ type Glyph struct {
 func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 	var (
 		buf     []Glyph
+		runes   []rune
 		missing int
 	)
 	for i, r := range s {
+		runes = append(runes, r)
 		gid, ok := f.GlyphID(r)
 		if !ok {
 			missing++
@@ -61,6 +63,9 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 	if len(buf) == 0 {
 		return nil, missing
 	}
+	// Joining first: the joined forms are what a cursive script's ligatures and
+	// contextual rules are written against.
+	buf = f.applyJoining(buf, runes)
 	buf = f.substitute(buf)
 	f.position(buf)
 	for _, g := range buf {

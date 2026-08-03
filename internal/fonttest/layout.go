@@ -389,3 +389,95 @@ func anchorTable(a Anchor) []byte {
 	binary.BigEndian.PutUint16(out[4:], uint16(int16(a.Y)))
 	return out
 }
+
+// GSUBForms builds a GSUB table carrying one single-substitution lookup per
+// named feature, which is how a font declares the positional shapes of a
+// cursive script: 'init', 'medi' and 'fina' each map a letter to a different
+// glyph.
+//
+// The value of each entry is a pair of parallel slices, from and to.
+func GSUBForms(features map[string][2][]int) []byte {
+	tags := make([]string, 0, len(features))
+	for tag := range features {
+		tags = append(tags, tag)
+	}
+	sortStrings(tags)
+
+	var lookups [][]byte
+	for _, tag := range tags {
+		pair := features[tag]
+		lookups = append(lookups, singleSubstSubtable(pair[0], pair[1]))
+	}
+	return layoutTableMulti(tags, 1, lookups)
+}
+
+// singleSubstSubtable is a format-2 single substitution: an explicit
+// replacement for each covered glyph.
+func singleSubstSubtable(from, to []int) []byte {
+	order := append([]int(nil), from...)
+	sortInts(order)
+	at := map[int]int{}
+	for i, g := range from {
+		at[g] = to[i]
+	}
+	head := make([]byte, 6+2*len(order))
+	binary.BigEndian.PutUint16(head[0:], 2)
+	binary.BigEndian.PutUint16(head[4:], uint16(len(order)))
+	body := append([]byte(nil), head...)
+	covOff := len(body)
+	body = append(body, coverageFormat1(order)...)
+	binary.BigEndian.PutUint16(body[2:], uint16(covOff))
+	for i, g := range order {
+		binary.BigEndian.PutUint16(body[6+2*i:], uint16(at[g]))
+	}
+	return body
+}
+
+// layoutTableMulti wraps several lookups, one per feature, in the scaffolding a
+// GSUB or GPOS table needs.
+func layoutTableMulti(tags []string, lookupType int, subtables [][]byte) []byte {
+	// LookupList: one lookup per subtable.
+	lookupList := make([]byte, 2+2*len(subtables))
+	binary.BigEndian.PutUint16(lookupList[0:], uint16(len(subtables)))
+	for i, sub := range subtables {
+		lookup := make([]byte, 8)
+		binary.BigEndian.PutUint16(lookup[0:], uint16(lookupType))
+		binary.BigEndian.PutUint16(lookup[4:], 1)
+		binary.BigEndian.PutUint16(lookup[6:], 8)
+		lookup = append(lookup, sub...)
+		binary.BigEndian.PutUint16(lookupList[2+2*i:], uint16(len(lookupList)))
+		lookupList = append(lookupList, lookup...)
+	}
+
+	// FeatureList: one feature per tag, each naming its own lookup.
+	featureList := make([]byte, 2+6*len(tags))
+	binary.BigEndian.PutUint16(featureList[0:], uint16(len(tags)))
+	for i, tag := range tags {
+		feat := make([]byte, 6)
+		binary.BigEndian.PutUint16(feat[2:], 1)
+		binary.BigEndian.PutUint16(feat[4:], uint16(i))
+		rec := 2 + 6*i
+		copy(featureList[rec:], tag)
+		binary.BigEndian.PutUint16(featureList[rec+4:], uint16(len(featureList)))
+		featureList = append(featureList, feat...)
+	}
+
+	header := make([]byte, 10)
+	binary.BigEndian.PutUint32(header[0:], 0x00010000)
+	out := append([]byte(nil), header...)
+	binary.BigEndian.PutUint16(out[4:], uint16(len(out)))
+	out = append(out, 0, 0) // an empty ScriptList
+	binary.BigEndian.PutUint16(out[6:], uint16(len(out)))
+	out = append(out, featureList...)
+	binary.BigEndian.PutUint16(out[8:], uint16(len(out)))
+	out = append(out, lookupList...)
+	return out
+}
+
+func sortStrings(a []string) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j] < a[j-1]; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
+}
