@@ -32,6 +32,9 @@ type SFNTOptions struct {
 	Ascent     int    // 800 if zero, in font units
 	Descent    int    // -200 if zero, in font units (negative)
 	Glyphs     []Glyph
+	// Extra tables to include verbatim, by tag — GPOS and GSUB for the layout
+	// fixtures, and anything else a test needs to put in front of the reader.
+	Extra map[string][]byte
 }
 
 // SFNT builds a TrueType font. Glyph 0 is always .notdef, as the format
@@ -131,10 +134,14 @@ func SFNT(opts SFNTOptions) []byte {
 
 	name := nameTable(opts.Name)
 
-	return assemble(map[string][]byte{
+	all := map[string][]byte{
 		"cmap": cmap, "glyf": glyf, "head": head, "hhea": hhea, "hmtx": hmtx,
 		"loca": locaTable, "maxp": maxp, "name": name, "post": post,
-	})
+	}
+	for tag, body := range opts.Extra {
+		all[tag] = body
+	}
+	return assemble(all)
 }
 
 // SFNTCmapTable wraps one format-4 subtable in a cmap table with a single
