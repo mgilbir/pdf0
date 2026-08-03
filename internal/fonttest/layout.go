@@ -189,3 +189,71 @@ func sortInts(a []int) {
 		}
 	}
 }
+
+// GDEF builds a glyph definition table classifying the given glyphs. A glyph
+// absent from the map is left unclassified, which is what a real GDEF does for
+// glyphs whose class does not matter.
+func GDEF(classes map[int]int) []byte {
+	// Header: version 1.0, then offsets to glyph class def, attach list, lig
+	// caret list, mark attach class def.
+	hdr := make([]byte, 12)
+	binary.BigEndian.PutUint32(hdr[0:], 0x00010000)
+	body := append([]byte(nil), hdr...)
+	binary.BigEndian.PutUint16(body[4:], uint16(len(body)))
+	body = append(body, classDefFormat2(classes)...)
+	return body
+}
+
+// GPOSWithFlag is GPOS with a lookup flag set, so a test can exercise the
+// glyphs a lookup declares it ignores.
+func GPOSWithFlag(pairs []KernPair, flag int) []byte {
+	out := GPOS(pairs)
+	// The lookup sits at the end, after the LookupList count and offset; its
+	// flag is the second field of its header.
+	lookupListOff := int(binary.BigEndian.Uint16(out[8:]))
+	lookupOff := lookupListOff + int(binary.BigEndian.Uint16(out[lookupListOff+2:]))
+	binary.BigEndian.PutUint16(out[lookupOff+2:], uint16(flag))
+	return out
+}
+
+// GSUBSingle builds a GSUB table with one feature whose lookup replaces each
+// glyph in from with the one at the same position in to.
+func GSUBSingle(feature string, from, to []int) []byte {
+	order := append([]int(nil), from...)
+	sortInts(order)
+	pos := map[int]int{}
+	for i, g := range from {
+		pos[g] = to[i]
+	}
+	sub := make([]byte, 6+2*len(order))
+	binary.BigEndian.PutUint16(sub[0:], 2) // substFormat 2: explicit list
+	binary.BigEndian.PutUint16(sub[4:], uint16(len(order)))
+	body := append([]byte(nil), sub...)
+	covOff := len(body)
+	body = append(body, coverageFormat1(order)...)
+	binary.BigEndian.PutUint16(body[2:], uint16(covOff))
+	for i, g := range order {
+		binary.BigEndian.PutUint16(body[6+2*i:], uint16(pos[g]))
+	}
+	return layoutTable(feature, 1, body) // 1 = single substitution
+}
+
+// classDefFormat2 lists class ranges, one per glyph, which is the simplest
+// correct encoding for a handful of glyphs.
+func classDefFormat2(classes map[int]int) []byte {
+	gids := make([]int, 0, len(classes))
+	for g := range classes {
+		gids = append(gids, g)
+	}
+	sortInts(gids)
+	out := make([]byte, 4+6*len(gids))
+	binary.BigEndian.PutUint16(out[0:], 2)
+	binary.BigEndian.PutUint16(out[2:], uint16(len(gids)))
+	for i, g := range gids {
+		rec := 4 + 6*i
+		binary.BigEndian.PutUint16(out[rec:], uint16(g))
+		binary.BigEndian.PutUint16(out[rec+2:], uint16(g))
+		binary.BigEndian.PutUint16(out[rec+4:], uint16(classes[g]))
+	}
+	return out
+}

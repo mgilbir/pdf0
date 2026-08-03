@@ -205,3 +205,156 @@ func TestLayoutReadingSurvivesAMalformedTable(t *testing.T) {
 		f.Shape("AV") // must not panic
 	}
 }
+
+// markedFace has A V and a combining mark, a kern pair for (A,V), and a GDEF
+// classifying the mark. Glyph indices: A=1, V=2, mark=3.
+func markedFace(t *testing.T, flag int) *Face {
+	t.Helper()
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "Marked",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'A', Advance: 700, HasShape: true},
+			{Rune: 'V', Advance: 700, HasShape: true},
+			{Rune: '́', Advance: 0, HasShape: true}, // combining acute
+		},
+		Extra: map[string][]byte{
+			"GPOS": fonttest.GPOSWithFlag([]fonttest.KernPair{{Left: 1, Right: 2, Adjust: -80}}, flag),
+			"GDEF": fonttest.GDEF(map[int]int{1: 1, 2: 1, 3: 3}), // base, base, mark
+		},
+	})
+	f, err := Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	return f
+}
+
+// TestKerningSkipsMarksWhenTheLookupSaysSo is the correctness fix lookup flags
+// exist for. A kerning lookup almost always declares that it ignores marks,
+// because the pair it means to adjust is two base letters — and an accent
+// written between them must not break it. Reading the pairs and not the flag
+// kerns "AV" and not "A◌́V", which is a difference a reader sees.
+func TestKerningSkipsMarksWhenTheLookupSaysSo(t *testing.T) {
+	const ignoreMarks = 0x0008
+	f := markedFace(t, ignoreMarks)
+
+	spans, _ := f.Shape("ÁV") // A, combining acute, V
+	var adjust float64
+	for _, s := range spans {
+		if s.Adjust != 0 {
+			adjust = s.Adjust
+		}
+	}
+	if adjust != 80 {
+		t.Errorf("adjustment across a mark = %v, want 80: the lookup ignores marks", adjust)
+	}
+
+	// And the width agrees with what was drawn.
+	// A=700 + mark=0 + V=700, kern -80 → 1320/1000 em.
+	if got, want := f.MeasureShaped("ÁV", 10), 13.2; got != want {
+		t.Errorf("MeasureShaped = %v, want %v", got, want)
+	}
+}
+
+// TestKerningRespectsALookupThatDoesNotIgnoreMarks is the other direction: a
+// lookup with no flag set means what it says, and the pair really is broken by
+// anything between. Treating every lookup as mark-ignoring would be as wrong as
+// treating none as such.
+func TestKerningRespectsALookupThatDoesNotIgnoreMarks(t *testing.T) {
+	f := markedFace(t, 0)
+	spans, _ := f.Shape("ÁV")
+	for _, s := range spans {
+		if s.Adjust != 0 {
+			t.Errorf("a lookup with no flags kerned across a mark: %v", s.Adjust)
+		}
+	}
+	// Adjacent, the same pair still kerns.
+	spans, _ = f.Shape("AV")
+	var seen bool
+	for _, s := range spans {
+		if s.Adjust != 0 {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Error("the pair does not kern even when adjacent")
+	}
+}
+
+// TestShapeWithAppliesRequestedFeatures pins the opt-in features. A font's
+// small capitals are right only where small capitals were wanted, so they are
+// applied on request and not by default.
+func TestShapeWithAppliesRequestedFeatures(t *testing.T) {
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "Smallcaps",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true}, // 1
+			{Rune: 'b', Advance: 500, HasShape: true}, // 2
+			{Rune: 'A', Advance: 600, HasShape: true}, // 3 — stands in for a.sc
+			{Rune: 'B', Advance: 600, HasShape: true}, // 4 — stands in for b.sc
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBSingle("smcp", []int{1, 2}, []int{3, 4}),
+		},
+	})
+	f, err := Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if got := f.Features(); len(got) != 1 || got[0] != "smcp" {
+		t.Fatalf("Features() = %v, want [smcp]", got)
+	}
+
+	plain, _ := f.Shape("ab")
+	small, _ := f.ShapeWith("ab", "smcp")
+	if codesOf(plain) == codesOf(small) {
+		t.Error("asking for small capitals changed nothing")
+	}
+	if want := "\x00\x03\x00\x04"; codesOf(small) != want {
+		t.Errorf("small capitals produced %q, want %q", codesOf(small), want)
+	}
+	// An unknown feature is a no-op, not a failure: a caller asking a face for
+	// something it does not have should get the text set plainly.
+	none, _ := f.ShapeWith("ab", "nope")
+	if codesOf(none) != codesOf(plain) {
+		t.Error("an unrecognised feature changed the text")
+	}
+}
+
+// TestShapeWithRecordsSubstitutedGlyphs pins that a requested feature feeds the
+// subsetter, exactly as a ligature does. A small-capital glyph is one no Encode
+// call ever named.
+func TestShapeWithRecordsSubstitutedGlyphs(t *testing.T) {
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "Smallcaps",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'A', Advance: 600, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBSingle("smcp", []int{1}, []int{2}),
+		},
+	})
+	f, err := Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	f.ShapeWith("a", "smcp")
+	var found bool
+	for _, gid := range f.Used() {
+		if gid == 2 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("used glyphs are %v; the substituted glyph 2 must be among them", f.Used())
+	}
+}
+
+func codesOf(spans []content.TextSpan) string {
+	var out []byte
+	for _, s := range spans {
+		out = append(out, s.Codes...)
+	}
+	return string(out)
+}
