@@ -4,56 +4,43 @@ import (
 	"github.com/mgilbir/pdf0/internal/font"
 )
 
-// Reading the OpenType layout tables that Latin typography needs: pair kerning
-// from GPOS, ligatures from GSUB, and the legacy kern table for fonts that
-// predate GPOS.
+// Reading the OpenType layout tables: what the font says about how its glyphs
+// combine, and turning that into the substitutions and positions a run of text
+// needs.
 //
-// # What this is not
+// # What is here
 //
-// It is not a shaping engine. A shaping engine resolves scripts and language
-// systems, runs lookups in order with their flags honoured, handles contextual
-// and chained-contextual substitution, attaches marks, and reorders glyphs —
-// which is what Arabic, Devanagari and a dozen other scripts require to be
-// legible at all. None of that is here.
-//
-// What is here:
-//
-//   - 'kern', GPOS lookup type 2, both pair formats, and the legacy kern table.
-//   - 'liga', GSUB lookup type 4.
-//   - Every single substitution the font declares, GSUB lookup type 1, keyed by
-//     feature tag and applied only when a caller names one (ShapeWith).
+//   - Pair kerning: 'kern', GPOS lookup type 2, both formats, and the legacy
+//     kern table for fonts that predate GPOS.
+//   - Single positioning (GPOS 1), mark-to-base (GPOS 4) and mark-to-mark
+//     (GPOS 6), so an accent sits over the letter it belongs to and a second
+//     accent stacks on the first — see position.go.
+//   - Ligatures (GSUB 4) and single substitution (GSUB 1).
+//   - Contextual and chained-contextual substitution (GSUB 5 and 6), all six
+//     formats, which is what makes 'calt' — and any rule that depends on
+//     surroundings — do anything at all. See context.go.
+//   - Cursive joining: the positional forms Arabic and its neighbours are
+//     written in, chosen from Unicode joining types. See arabic.go.
+//   - Every single substitution the font declares, keyed by feature tag and
+//     applied only when a caller names one (ShapeWith): 'smcp', 'onum' and the
+//     rest, which change what the text says it is and so wait to be asked for.
 //   - GDEF glyph classes and the lookup flags that use them, so that a lookup
 //     declaring it ignores marks does.
 //
-// What is not, and what each absence costs:
+// # What is not, and what each absence costs
 //
-//   - Single positioning (GPOS 1), mark-to-base (GPOS 4) and mark-to-mark
-//     (GPOS 6), so an accent sits over the letter it belongs to and a second
-//     accent stacks on the first.
-//
-// What is not, and what each absence costs:
-//
-//   - Contextual and chained-contextual substitution (GSUB 5, 6). Features that
-//     depend on surroundings — 'calt' above all — do nothing.
 //   - Cursive attachment (GPOS 3), which joins the connecting strokes of a
-//     script written that way.
+//     script written that way. Joining picks the right *shapes*; this would
+//     make their entry and exit points meet exactly.
+//   - Multiple (GSUB 2) and alternate (GSUB 3) substitution. A contextual rule
+//     naming one of those lookups matches and then does nothing.
 //   - Indic reordering, and the other scripts whose characters do not appear in
 //     the order they are drawn. Text in them is not correctly set by this
 //     package and should be shaped elsewhere and passed in as glyph indices.
-//     Cursive joining, which Arabic and its neighbours need, *is* done — see
-//     arabic.go.
-//
-// The remaining simplification is that script and language are ignored: every
-// feature is taken whichever script declares it. For a Latin face that is what
-// a shaper would have selected; for a font carrying several scripts it may
-// apply a rule meant for another.
-//
-// The simplification worth stating loudest is that script and language are
-// ignored: every 'kern' and 'liga' feature in the font is taken, whichever
-// script it belongs to. For a Latin face that is what a shaper would have
-// selected anyway. For a font carrying several scripts it may apply a rule
-// intended for another, which is a real limitation and the first thing to fix
-// when this grows up.
+//   - Script and language selection: every feature is taken whichever script
+//     declares it. For a Latin face that is what a shaper would have selected
+//     anyway; for a font carrying several scripts it may apply a rule meant for
+//     another. This is the largest remaining simplification.
 //
 // # Bounds
 //
@@ -101,11 +88,23 @@ type layout struct {
 	kern map[[2]int]int
 	// ligatures maps a first glyph to the substitutions that may start with it,
 	// longest first so that a greedy match prefers ffi over ff.
+	//
+	// This serves the span path (Shape) only. The glyph path applies 'liga'
+	// through the lookup list below, which honours the lookup's flags — so an
+	// accent written between two letters does not stop them ligating.
 	ligatures map[int][]ligature
 	// single holds one-for-one substitutions per feature tag: small capitals,
 	// oldstyle figures and the rest. They are read for every feature the font
 	// declares, and applied only when a caller asks for that feature by name.
 	single map[string]map[int]int
+	// gsub is the substitution lookup list kept whole, indexed as the font
+	// indexes it. A contextual rule names a lookup by its index here and has it
+	// applied at a position, so these cannot be flattened the way the tables
+	// above are — see context.go.
+	gsub []rawLookup
+	// featureLookups maps a feature tag to the lookup indices it names, which is
+	// how a feature is turned into work to do.
+	featureLookups map[string][]int
 }
 
 // Lookup flags (ISO/IEC 14496-22, LookupFlag). The high byte is a mark
@@ -201,8 +200,92 @@ func readLayout(tables map[string][]byte) *layout {
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
 		l.readGSUBLigatures(gsub)
 		l.readSingleSubstitutions(gsub)
+		l.gsub = gsubLookups(gsub)
+		l.featureLookups = featureLookupIndices(gsub)
 	}
 	return l
+}
+
+// gsubLookups reads the substitution lookup list whole: each lookup's type, its
+// flags and its subtable bytes, at the index the font gives it.
+//
+// This is the list a contextual rule indexes into. It duplicates what the
+// flattened readers above take from the same bytes, which is deliberate: those
+// serve the common path cheaply, and a lookup that may be invoked from inside
+// another has to survive as something applicable rather than as a map entry.
+func gsubLookups(gsub []byte) []rawLookup {
+	off := font.Be16(gsub, 8)
+	if off <= 0 || off+2 > len(gsub) {
+		return nil
+	}
+	list := gsub[off:]
+	n := font.Be16(list, 0)
+	if n > maxLookups {
+		n = maxLookups
+	}
+	out := make([]rawLookup, 0, n)
+	for i := 0; i < n; i++ {
+		if 2+2*i+2 > len(list) {
+			break
+		}
+		lo := font.Be16(list, 2+2*i)
+		if lo <= 0 || lo >= len(list) {
+			// Keep the slot: a rule names a lookup by index, so the indices of
+			// the ones that follow must not shift.
+			out = append(out, rawLookup{})
+			continue
+		}
+		kind, flags, subs := subtables(list[lo:], 7)
+		out = append(out, rawLookup{kind: kind, flags: flags, subs: subs})
+	}
+	return out
+}
+
+// featureLookupIndices maps each feature tag to the lookup indices it names,
+// merging every script and language that declares the tag.
+func featureLookupIndices(t []byte) map[string][]int {
+	out := map[string][]int{}
+	off := font.Be16(t, 6)
+	if off <= 0 || off+2 > len(t) {
+		return out
+	}
+	list := t[off:]
+	n := font.Be16(list, 0)
+	if n > maxLookups {
+		n = maxLookups
+	}
+	for i := 0; i < n; i++ {
+		rec := 2 + 6*i
+		if rec+6 > len(list) {
+			break
+		}
+		tag := string(list[rec : rec+4])
+		fo := font.Be16(list, rec+4)
+		if fo <= 0 || fo+4 > len(list) {
+			continue
+		}
+		feature := list[fo:]
+		m := font.Be16(feature, 2)
+		for j := 0; j < m && j < maxLookups; j++ {
+			if 4+2*j+2 > len(feature) {
+				break
+			}
+			idx := font.Be16(feature, 4+2*j)
+			if !containsInt(out[tag], idx) {
+				out[tag] = append(out[tag], idx)
+			}
+		}
+	}
+	return out
+}
+
+func containsInt(s []int, v int) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // featureLookups returns the lookup-table byte slices reachable from every
@@ -279,6 +362,10 @@ func subtables(lookup []byte, extensionType int) (kind, flags int, out [][]byte)
 	if count > maxSubtables {
 		count = maxSubtables
 	}
+	// Whether the *lookup* is an extension has to be decided once. Reading it
+	// from kind inside the loop stops unwrapping after the first subtable, since
+	// unwrapping is what replaces kind with the real type.
+	extension := kind == extensionType
 	for i := 0; i < count; i++ {
 		if 6+2*i+2 > len(lookup) {
 			break
@@ -288,7 +375,7 @@ func subtables(lookup []byte, extensionType int) (kind, flags int, out [][]byte)
 			continue
 		}
 		sub := lookup[off:]
-		if kind == extensionType {
+		if extension {
 			// Extension: format(2), real lookup type(2), 32-bit offset.
 			if len(sub) < 8 {
 				continue

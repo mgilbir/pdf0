@@ -155,43 +155,29 @@ func MeasureGlyphs(glyphs []Glyph, size float64) float64 {
 	return total * size / 1000
 }
 
-// substitute runs the GSUB lookups over a shaped buffer: ligatures for now,
-// preserving the cluster of the first glyph of each run it replaces so that a
-// ligature still maps back to the text it came from.
+// defaultFeatures are the substitution features applied to every run, in the
+// order a shaper applies them.
+//
+// They are the ones that are not a matter of taste. 'ccmp' composes and
+// decomposes so the later rules have the glyphs they are written against;
+// 'rlig' is required by the script; 'liga' and 'clig' are the ligatures a reader
+// expects to see; 'calt' picks the variant that fits its neighbours. A font that
+// declares them means them, which is what separates these from 'smcp' or 'onum'
+// — those change what the text says it is, and wait to be asked for (ShapeWith).
+//
+// The order matters and is not alphabetical: composition before the rules that
+// read its output, required ligatures before optional ones, contextual
+// alternates last so they see the glyphs that survived.
+var defaultFeatures = []string{"ccmp", "rlig", "liga", "clig", "calt"}
+
+// substitute runs the GSUB lookups over a shaped buffer, preserving the cluster
+// of the first glyph of each run it replaces so that a ligature still maps back
+// to the text it came from.
 func (f *Face) substitute(buf []Glyph) []Glyph {
-	if len(f.layout.ligatures) == 0 {
-		return buf
-	}
-	out := make([]Glyph, 0, len(buf))
-	for i := 0; i < len(buf); {
-		matched := false
-		for _, lig := range f.layout.ligatures[buf[i].GID] {
-			if i+len(lig.components) >= len(buf) {
-				continue
-			}
-			ok := true
-			for k, comp := range lig.components {
-				if buf[i+1+k].GID != comp {
-					ok = false
-					break
-				}
-			}
-			if !ok {
-				continue
-			}
-			out = append(out, Glyph{
-				GID:      lig.glyph,
-				Cluster:  buf[i].Cluster,
-				XAdvance: f.advanceGID(lig.glyph),
-			})
-			i += 1 + len(lig.components)
-			matched = true
-			break
-		}
-		if !matched {
-			out = append(out, buf[i])
-			i++
+	for _, tag := range defaultFeatures {
+		if lookups := f.layout.featureLookups[tag]; len(lookups) > 0 {
+			buf = f.applyContextual(buf, lookups)
 		}
 	}
-	return out
+	return buf
 }
