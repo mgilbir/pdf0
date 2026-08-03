@@ -1,13 +1,11 @@
 // Command text sets a paragraph of real text on a page: it measures words,
 // breaks lines to a column width, and draws them.
 //
-// It uses Helvetica, one of the fourteen faces a PDF reader is required to
-// have, so it needs no font file and embeds nothing. That is what makes it
-// self-contained and also what makes its output *not* a conforming PDF/A: a
-// conforming document must embed every font it shows. For that, load a real
-// face with fonts.Load and embed it — the metrics, the drawing and the line
-// breaking below are identical either way, because Face answers the same
-// questions whichever kind it is.
+// It uses the bundled Noto Sans, so it needs no font file from the machine it
+// runs on and the font it shows is embedded — which is what a conforming PDF/A
+// requires. Load another with fonts.Load to swap it: the metrics, the drawing
+// and the line breaking below are identical either way, because Face answers
+// the same questions whichever face it is.
 //
 //	go run ./examples/text
 package main
@@ -39,12 +37,20 @@ const body = `Typesetting a paragraph needs one thing a font can answer and a ` 
 	`visible rather than subtle.`
 
 func main() {
-	face, err := fonts.Standard("Helvetica")
+	// The bundled face. Everything below — measuring, breaking, drawing — is
+	// the same whichever Face it is handed; this one is here so the example
+	// needs nothing from the machine it runs on and produces a file that could
+	// conform.
+	face, err := fonts.NotoSans()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "loading the face: %v\n", err)
 		os.Exit(1)
 	}
-	bold, err := fonts.Standard("Helvetica-Bold")
+	// A second face for the heading. There is one weight bundled, so this is
+	// the same outline set at a larger size rather than a bold cut — which is
+	// what the line breaking cares about anyway, since it asks the face for
+	// widths and does not know why they differ.
+	bold, err := fonts.NotoSans()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "loading the face: %v\n", err)
 		os.Exit(1)

@@ -9,10 +9,9 @@
 //
 //	go run ./examples/flavored -font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 //
-// The font is required. This repository bundles no typeface, and a conforming
-// PDF/A must embed every font it shows, so there is nothing sensible to fall
-// back to — an example that quietly picked something would be making the one
-// decision the example exists to illustrate.
+// The text is set in the bundled Noto Sans unless -font names another file. A
+// conforming PDF/A must embed every font it shows, so there is a real font here
+// either way; nothing is named and left for the reader to supply.
 package main
 
 import (
@@ -37,19 +36,9 @@ const (
 )
 
 func main() {
-	fontPath := flag.String("font", "", "a TrueType or OpenType font file to embed (required)")
+	fontPath := flag.String("font", "", "a TrueType or OpenType file to embed; the bundled Noto Sans if empty")
 	flag.Parse()
 
-	// Required, and deliberately not defaulted. This repository bundles no
-	// typeface, and reaching for one of the fourteen names the PDF format
-	// defines would embed nothing — which is legal in a plain PDF, forbidden in
-	// every PDF/A level, and not a decision an example should take quietly on a
-	// reader's behalf.
-	if *fontPath == "" {
-		fmt.Fprintln(os.Stderr, "give -font: a TrueType or OpenType file to embed.")
-		fmt.Fprintln(os.Stderr, "A conforming PDF/A must embed every font it shows, so there is nothing to fall back to.")
-		os.Exit(2)
-	}
 	face, err := loadFace(*fontPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "loading the face: %v\n", err)
@@ -185,8 +174,11 @@ func drawPage(doc *pdf.Document, face *fonts.Face) error {
 	return err
 }
 
-// loadFace loads the font to embed.
+// loadFace loads the font to embed: the bundled one unless another is named.
 func loadFace(path string) (*fonts.Face, error) {
+	if path == "" {
+		return fonts.NotoSans()
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

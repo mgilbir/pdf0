@@ -1,0 +1,74 @@
+package fonts
+
+import (
+	_ "embed"
+	"fmt"
+)
+
+// The bundled face.
+//
+// Every other way of getting a Face needs a font file from somewhere, and for a
+// document that must conform there is no way round that: PDF/A requires every
+// font a document shows to be embedded, precisely so the file renders the same
+// in fifty years. Naming one of the fourteen faces a reader is required to have
+// embeds nothing, and is therefore exactly what a conforming document may not
+// do.
+//
+// So a module that can write a conforming document with text on it has to be
+// able to produce a font, and this is it. Noto Sans, Regular, under the SIL
+// Open Font License — the licence, the copyright notice and the provenance are
+// in the notosans directory beside this file, and travel with it as that
+// licence requires.
+//
+// A document made with it carries no licence obligation of its own. OFL 1.1 is
+// explicit that the requirement to stay under the licence "does not apply to
+// any document created using the Font Software".
+
+//go:embed notosans/NotoSans-Regular.ttf
+var notoSansRegular []byte
+
+//go:embed notosans/OFL.txt
+var notoSansLicense string
+
+// NotoSans returns the bundled face, embedded as a composite font.
+//
+// This is the one to reach for. A composite font addresses glyphs by index, so
+// it can show everything the face covers — Latin, Greek and Cyrillic — and it
+// is what shaping needs: ligatures, kerning and contextual substitution are all
+// statements about glyph indices, and a simple font cannot name them.
+//
+// Each call returns a new face. A face records the glyphs it was asked to set,
+// which is what subsetting is computed from, so sharing one between documents
+// would put each document's glyphs into the other's font.
+func NotoSans() (*Face, error) {
+	f, err := Load(notoSansRegular)
+	if err != nil {
+		return nil, fmt.Errorf("fonts: the bundled Noto Sans could not be read: %w", err)
+	}
+	return f, nil
+}
+
+// NotoSansSimple returns the bundled face embedded as a simple font: one byte
+// per character, WinAnsiEncoding.
+//
+// It makes a smaller file and a simpler one, and it costs the two things a
+// simple font cannot do — anything outside WinAnsi's 224 characters of Latin,
+// and any shaping at all, because a one-byte code names nothing in the layout
+// tables. Use it for plain Latin text where size matters; use NotoSans
+// otherwise.
+func NotoSansSimple() (*Face, error) {
+	f, err := LoadSimple(notoSansRegular)
+	if err != nil {
+		return nil, fmt.Errorf("fonts: the bundled Noto Sans could not be read: %w", err)
+	}
+	return f, nil
+}
+
+// NotoSansLicense is the text of the SIL Open Font License 1.1 as it is
+// distributed with the bundled font, including the copyright line.
+//
+// It is exposed because the licence requires it to travel with the font, and a
+// program that embeds the font in something it ships may need to reproduce it —
+// in an about box, a credits file, a --licenses flag. Reading it off disk is not
+// an option for a single binary, so it is compiled in.
+func NotoSansLicense() string { return notoSansLicense }
