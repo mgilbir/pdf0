@@ -43,6 +43,9 @@ type Page struct {
 	// without checking and find out once.
 	Content *content.Builder
 
+	// Links are the annotations that make part of the page follow a reference.
+	Links []Link
+
 	// The resources the drawing named, by the name it used.
 	Fonts       map[object.Name]object.Object
 	XObjects    map[object.Name]object.Object
@@ -101,6 +104,17 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	page.Set("Contents", contentRef)
 	if p.Rotate != 0 {
 		page.Set("Rotate", object.Integer(p.Rotate))
+	}
+	if len(p.Links) > 0 {
+		annots := make(object.Array, 0, len(p.Links))
+		for i, l := range p.Links {
+			a, err := l.annotation()
+			if err != nil {
+				return object.IndirectRef{}, fmt.Errorf("link %d: %w", i, err)
+			}
+			annots = append(annots, d.Add(a))
+		}
+		page.Set("Annots", annots)
 	}
 	pageRef := d.Add(page)
 
