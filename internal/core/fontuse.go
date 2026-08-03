@@ -575,6 +575,50 @@ type ContentItemKind int
 // about two thirds of a large document's validation time, which is why the
 // check is gated on the scan position — one comparison per token, the poll
 // itself once per cancelScanBytes. See cancel.go.
+// ScanContentDict returns the index just past the >> that closes the dictionary
+// starting at i (which must be a <<). Nested dictionaries, literal strings and
+// hex strings are stepped over, so a ">>" inside "(a>>b)" does not end the scan.
+//
+// An unterminated dictionary returns len(data): a truncated content stream must
+// leave the caller at the end of the input rather than at the delimiter it was
+// looking at, which would not advance the scan. Nesting is capped for the same
+// reason every other content walk is — the input is untrusted, and a file of
+// nothing but "<<" must cost time proportional to its length, not to its depth.
+func ScanContentDict(data []byte, i int) int {
+	const maxDepth = 64
+	n := len(data)
+	depth := 0
+	for i < n {
+		switch {
+		case data[i] == '<' && i+1 < n && data[i+1] == '<':
+			depth++
+			i += 2
+			if depth > maxDepth {
+				return n
+			}
+		case data[i] == '>' && i+1 < n && data[i+1] == '>':
+			depth--
+			i += 2
+			if depth == 0 {
+				return i
+			}
+		case data[i] == '(':
+			_, i = DecodeContentLiteralString(data, i)
+		case data[i] == '<':
+			i++
+			for i < n && data[i] != '>' {
+				i++
+			}
+			if i < n {
+				i++
+			}
+		default:
+			i++
+		}
+	}
+	return n
+}
+
 func ForEachContentItem(cancel Canceler, data []byte, fn func(kind ContentItemKind, payload []byte)) {
 	n := len(data)
 	i := 0
@@ -601,19 +645,19 @@ func ForEachContentItem(cancel Canceler, data []byte, fn func(kind ContentItemKi
 			str, next := DecodeContentLiteralString(data, i)
 			fn(ItemString, str)
 			i = next
+		case b == '<' && i+1 < n && data[i+1] == '<':
+			end := ScanContentDict(data, i)
+			fn(ItemDict, data[i:end])
+			i = end
 		case b == '<':
 			i++
-			if i < n && data[i] == '<' {
-				i++ // <<
-			} else {
-				start := i
-				for i < n && data[i] != '>' {
-					i++
-				}
-				fn(ItemString, decodeHexBytes(data[start:i]))
-				if i < n {
-					i++
-				}
+			start := i
+			for i < n && data[i] != '>' {
+				i++
+			}
+			fn(ItemString, decodeHexBytes(data[start:i]))
+			if i < n {
+				i++
 			}
 		case b == '>':
 			i++
@@ -766,6 +810,12 @@ const (
 	ItemName
 	ItemString
 	ItemNumber
+	// ItemDict reports a dictionary operand — a BDC/DP property list — as the
+	// raw bytes from << to the matching >>. It is delivered whole rather than as
+	// the loose tokens between the delimiters because a property list is a PDF
+	// object: only a parser can tell /Lang's value from a name that happens to
+	// follow it. Callers that do not care simply omit the case.
+	ItemDict
 )
 
 // MaxContentTokenLen is the longest run of non-delimiter bytes the content
