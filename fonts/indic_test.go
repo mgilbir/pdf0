@@ -51,13 +51,14 @@ const (
 	gidZWNJ
 	gidZWJ
 	gidDotted
+	gidDevI
 )
 
 func devaGlyphs() []fonttest.Glyph {
 	runes := []rune{
 		devKa, devTa, devRa, devVirama, devIMatra, devAAMatra, devAnusvara, devA, devNukta,
 		0xE000, 0xE001, 0xE002, 0xE003, 0xE004, 0xE005, 0xE006,
-		' ', 0x0964, 'A', 0x200C, 0x200D, 0x25CC,
+		' ', 0x0964, 'A', 0x200C, 0x200D, 0x25CC, 0x0907,
 	}
 	out := make([]fonttest.Glyph, len(runes))
 	for i, r := range runes {
@@ -251,11 +252,15 @@ func TestIndicCategoriesAreUnicodes(t *testing.T) {
 		{devAAMatra, catMatra, posAfterSub, "the aa-sign, which is drawn after it"},
 		{devAnusvara, catSM, posSMVD, "the anusvara"},
 		{devA, catVowel, posBaseC, "an independent vowel"},
-		{devNukta, catNukta, posBelowC, "the nukta"},
+		// A nukta has no place of its own: it takes the place of the letter it
+		// follows, so the model never asks where it would sit alone.
+		{devNukta, catNukta, posEnd, "the nukta"},
 		{0x200D, catZWJ, posEnd, "a zero width joiner"},
 		{0x200C, catZWNJ, posEnd, "a zero width non-joiner"},
 		{0x25CC, catDottedCircle, posBaseC, "a dotted circle"},
-		{0x093D, catSymbol, posEnd, "the avagraha"},
+		// The avagraha takes a cluster of its own, and whatever hangs off it is
+		// drawn after it, as a syllable modifier is.
+		{0x093D, catSymbol, posSMVD, "the avagraha"},
 		{'A', catOther, posEnd, "a Latin letter, which is in no Indic category"},
 		{0x0964, catOther, posEnd, "the danda, which is punctuation and not part of a syllable"},
 	}
@@ -982,12 +987,17 @@ func TestTheTwoGenerationsAgreeWhereTheyShould(t *testing.T) {
 
 // A syllable with no base consonant.
 
-// devaFaceWithoutDottedCircle is the fixture with U+25CC taken out. It is the
-// last glyph of the list, so every other glyph index below is unchanged.
+// devaFaceWithoutDottedCircle is the fixture with U+25CC taken out. Only the
+// glyphs after it move, and no test below names one.
 func devaFaceWithoutDottedCircle(t *testing.T) *Face {
 	t.Helper()
 	glyphs := devaGlyphs()
-	glyphs = glyphs[:len(glyphs)-1]
+	for i, g := range glyphs {
+		if g.Rune == dottedCircle {
+			glyphs = append(glyphs[:i:i], glyphs[i+1:]...)
+			break
+		}
+	}
 	data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Devanagari", Glyphs: glyphs})
 	f, err := Load(data)
 	if err != nil {
@@ -1039,7 +1049,6 @@ func TestAWholeSyllableGetsNoDottedCircle(t *testing.T) {
 		str(devTa, devVirama, devKa),
 		str(devRa, devVirama, devKa),
 		str(devA),
-		str(devA, devAAMatra),
 		str(0x25CC, devAAMatra), // one written by hand is not doubled
 		str(devKa, ' ', devKa),
 		str('A'),
@@ -1051,6 +1060,34 @@ func TestAWholeSyllableGetsNoDottedCircle(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestAVowelSpeltTwiceIsShownAgainstADottedCircle is the other placeholder, and
+// a different claim: not that the syllable has no letter, but that the letter
+// and the sign together spell a vowel nobody writes. अ followed by the aa-sign
+// looks like आ; drawn as it stands, a reader would see a letter the writer did
+// not write.
+func TestAVowelSpeltTwiceIsShownAgainstADottedCircle(t *testing.T) {
+	f := devaFace(t)
+
+	s := str(devA, devAAMatra)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDevA, gidDotted, gidAAMatra}, s)
+
+	// The same vowel with a sign that spells nothing else is ordinary text.
+	s = str(devA, devAnusvara)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDevA, gidAnusvara}, s)
+
+	// A three-character entry: Ra, virama, I. The circle goes before the vowel
+	// the sequence would spell, not before the virama.
+	s = str(devRa, devVirama, 0x0907)
+	got := shapedGIDs(t, f, s)
+	if len(got) != 4 || got[2] != gidDotted {
+		t.Errorf("shaping %q gave %v; the placeholder belongs third, before the vowel", s, got)
+	}
+
+	// And a consonant with the same sign is not the sequence at all.
+	s = str(devKa, devAAMatra)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDKa, gidAAMatra}, s)
 }
 
 // TestNoDottedCircleWhenTheFaceHasNone pins that the placeholder is the font's
