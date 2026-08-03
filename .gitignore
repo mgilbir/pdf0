@@ -71,6 +71,10 @@ testdata/ccitt/.ok
 testdata/jbig2/*.pdf
 testdata/jbig2/.ok
 
+# Unicode's conformance suite for the bidirectional algorithm, UAX #9
+# (downloaded via `make bidi-tests`) — the oracle for fonts/bidi.go.
+testdata/unicode-bidi/
+
 # Factur-X example invoices (oracle) — not vendored
 testdata/facturx/*.pdf
 testdata/facturx/.ok

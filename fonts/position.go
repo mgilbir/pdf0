@@ -67,6 +67,17 @@ type cursiveAnchors struct {
 // word is read from the end this pass reaches last. Clear, the first stays and
 // the rest follow. Getting it backwards keeps every joint correct relative to
 // its neighbour and leaves the whole word sitting off the baseline.
+//
+// # Which glyph gives ground horizontally
+//
+// The joint is between the first glyph's exit and the second's entry whichever
+// way the run is drawn, but which of the two has to move is not the same. Drawn
+// left to right the first glyph is reached first, so it is cut short at its exit
+// and the second is pulled back onto it. Drawn right to left the pen reaches the
+// *second* glyph first — the run is reversed after this — so it is that one that
+// stops at its entry, and the first that is pulled back onto it. Doing it the
+// left-to-right way for a right-to-left run leaves every letter of an Arabic
+// word displaced by the width of its neighbour.
 func (sh shaper) attachCursive(buf []Glyph) {
 	l := sh.l
 	if len(l.cursive) == 0 {
@@ -89,14 +100,21 @@ func (sh shaper) attachCursive(buf []Glyph) {
 			a, okA := l.cursive[buf[prev].GID]
 			b, okB := l.cursive[buf[i].GID]
 			if okA && a.hasExit && okB && b.hasEntry {
-				// The first glyph now advances exactly to its exit point, and
-				// the second is pulled back so its entry point lands there. The
+				// The glyph the pen reaches first advances exactly to the joint,
+				// and the other is pulled back so its own anchor lands there. The
 				// offsets already in place are carried through: a glyph moved by
 				// a single adjustment joins from where it now is.
-				buf[prev].XAdvance = sh.f.scale(a.exit.x) + buf[prev].XOffset
-				d := sh.f.scale(b.entry.x) + buf[i].XOffset
-				buf[i].XAdvance -= d
-				buf[i].XOffset -= d
+				if sh.rtl {
+					d := sh.f.scale(a.exit.x) + buf[prev].XOffset
+					buf[prev].XAdvance -= d
+					buf[prev].XOffset -= d
+					buf[i].XAdvance = sh.f.scale(b.entry.x) + buf[i].XOffset
+				} else {
+					buf[prev].XAdvance = sh.f.scale(a.exit.x) + buf[prev].XOffset
+					d := sh.f.scale(b.entry.x) + buf[i].XOffset
+					buf[i].XAdvance -= d
+					buf[i].XOffset -= d
+				}
 				links = append(links, link{from: prev, to: i, dy: sh.f.scale(a.exit.y - b.entry.y)})
 			}
 		}
@@ -159,13 +177,28 @@ func (sh shaper) attachMarks(buf []Glyph) {
 			// have to be taken back off — and the base's own displacement
 			// carried along, since a base moved by a single adjustment or lifted
 			// onto a joining stroke takes its accents with it.
+			//
+			// What has to be corrected for is where the pen will be when the
+			// mark is drawn, and that depends on which way the run is drawn.
+			// Left to right the pen has passed the base and everything between
+			// them, so those advances come off. Right to left the buffer is
+			// about to be reversed and the mark will be drawn *before* its
+			// base, so the same advances are still ahead of the pen and go on
+			// rather than off. The mark's own advance is zeroed first, so that
+			// a font which gave its marks a width does not have it counted.
+			buf[i].XAdvance = 0
 			var since float64
-			for k := j; k < i; k++ {
-				since += buf[k].XAdvance
+			if sh.rtl {
+				for k := j + 1; k <= i; k++ {
+					since -= buf[k].XAdvance
+				}
+			} else {
+				for k := j; k < i; k++ {
+					since += buf[k].XAdvance
+				}
 			}
 			buf[i].XOffset = buf[j].XOffset + sh.f.scale(base.x-mark.anchor.x) - since
 			buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.anchor.y)
-			buf[i].XAdvance = 0
 			break
 		}
 	}
