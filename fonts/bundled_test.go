@@ -20,7 +20,7 @@ import (
 // leaving the licence, the version and the coverage in the README describing a
 // different font.
 func TestBundledFontIsTheFileWeDocumented(t *testing.T) {
-	const want = "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823"
+	const want = "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d"
 	sum := sha256.Sum256(notoSansRegular)
 	if got := hex.EncodeToString(sum[:]); got != want {
 		t.Errorf("the bundled font is %s, and notosans/README.md says %s.\n"+
@@ -83,6 +83,7 @@ func TestBundledFontSetsTextInEachScriptItCovers(t *testing.T) {
 		t.Errorf("the face is named %q", f.Name())
 	}
 	samples := map[string]string{
+		"Devanagari":     "नमस्ते",
 		"Latin":          "Hamburgefonstiv",
 		"Latin accented": "café naïve Ærø",
 		"Greek":          "Ωμέγα αβγδ",
@@ -260,5 +261,65 @@ func TestTheBundledFontSubsetsToWhatWasUsed(t *testing.T) {
 	// A handful of glyphs should not carry most of the file.
 	if ratio := float64(len(sub)) / float64(len(notoSansRegular)); ratio > 0.5 {
 		t.Errorf("a five-character subset kept %.0f%% of the font", ratio*100)
+	}
+}
+
+// TestBundledFontCoversTheScriptsWeClaim is the guard that was missing when this
+// bundled the wrong file.
+//
+// The first font committed here was NotoSans-Regular from the per-script
+// upstream, which carries Latin, Greek and Cyrillic and *no Devanagari at all* —
+// while Google Fonts ships a "Noto Sans" that has it. Nothing noticed, because
+// every test asked only about scripts that font happened to have. A coverage
+// claim in the README with no test behind it is a claim that rots.
+func TestBundledFontCoversTheScriptsWeClaim(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	blocks := []struct {
+		name   string
+		lo, hi rune
+	}{
+		{"Basic Latin", 0x0020, 0x007E},
+		{"Latin-1 Supplement", 0x00A0, 0x00FF},
+		{"Cyrillic", 0x0400, 0x04FF},
+		{"Devanagari", 0x0900, 0x097F},
+	}
+	for _, b := range blocks {
+		var have, total int
+		for r := b.lo; r <= b.hi; r++ {
+			total++
+			if _, ok := f.GlyphID(r); ok {
+				have++
+			}
+		}
+		if have == 0 {
+			t.Errorf("%s: the bundled font covers none of it, and notosans/README.md claims it does", b.name)
+			continue
+		}
+		// Greek is deliberately absent from this list: the face covers most of
+		// the block but not the archaic letters, so a "most of it" threshold
+		// there would be arbitrary. These four are covered in full.
+		if have != total {
+			t.Errorf("%s: %d of %d code points", b.name, have, total)
+		}
+	}
+}
+
+// TestBundledFontDeclaresTheShapingItNeeds pins that the face carries the layout
+// tables for the scripts it covers. Glyphs alone do not set Devanagari: the
+// reordering and conjunct formation are declared under the deva and dev2 script
+// tags, and a font with the glyphs and not the tables produces a row of
+// unjoined letters.
+func TestBundledFontDeclaresTheShapingItNeeds(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	for _, tag := range []string{"latn", "cyrl", "grek", "deva", "dev2"} {
+		if !f.HasScript(tag) {
+			t.Errorf("the bundled font declares no %q script in its layout tables", tag)
+		}
 	}
 }
