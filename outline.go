@@ -26,6 +26,12 @@ type OutlineItem struct {
 	// Page is the page to show when the entry is chosen.
 	Page object.IndirectRef
 
+	// To says where on that page to arrive. The zero value shows the whole
+	// page. An outline generated from headings wants AtTop with the heading's y
+	// coordinate: a contents entry that lands at the top of a long page has
+	// pointed at the page rather than at the section.
+	To Destination
+
 	// Open makes the entry's children visible when the document is first
 	// shown. It has no effect on an entry with no children.
 	Open bool
@@ -108,7 +114,11 @@ func (d *Document) writeOutlineLevel(items []OutlineItem, parent object.Indirect
 		// A destination rather than an action: an action would be subject to
 		// the restrictions PDF/A places on actions, and this is navigation
 		// rather than behaviour.
-		dict.Set("Dest", object.Array{it.Page, object.Name("Fit")})
+		dest, destErr := it.To.destination(it.Page)
+		if destErr != nil {
+			return nil, nil, 0, fmt.Errorf("outline entry %q: %w", it.Title, destErr)
+		}
+		dict.Set("Dest", dest)
 		dicts[i] = dict
 		refs[i] = d.Add(dict)
 	}

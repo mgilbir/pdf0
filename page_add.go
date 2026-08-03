@@ -46,6 +46,15 @@ type Page struct {
 	// Links are the annotations that make part of the page follow a reference.
 	Links []Link
 
+	// Group makes the page a transparency group.
+	//
+	// It matters when anything on the page is translucent or uses a blend mode.
+	// Without a group, what a translucent mark composites against is left to the
+	// reader — usually white, sometimes the paper, sometimes nothing — so the
+	// same file prints differently from how it displays. With one, the page
+	// states its own blending colour space and the result is defined.
+	Group bool
+
 	// The resources the drawing named, by the name it used.
 	Fonts       map[object.Name]object.Object
 	XObjects    map[object.Name]object.Object
@@ -104,6 +113,17 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	page.Set("Contents", contentRef)
 	if p.Rotate != 0 {
 		page.Set("Rotate", object.Integer(p.Rotate))
+	}
+	if p.Group {
+		// A page group is not isolated and not a knockout: the page composites
+		// onto whatever the reader puts behind it, which is what a page does.
+		// Naming the blending colour space is the point — it is what makes a
+		// translucent mark composite the same way everywhere.
+		group := &object.Dictionary{}
+		group.Set("Type", object.Name("Group"))
+		group.Set("S", object.Name("Transparency"))
+		group.Set("CS", object.Name("DeviceRGB"))
+		page.Set("Group", group)
 	}
 	if len(p.Links) > 0 {
 		annots := make(object.Array, 0, len(p.Links))
@@ -203,6 +223,85 @@ func Opacity(fill, stroke float64) (*object.Dictionary, error) {
 	gs.Set("Type", object.Name("ExtGState"))
 	gs.Set("ca", numberFor(fill))
 	gs.Set("CA", numberFor(stroke))
+	return gs, nil
+}
+
+// BlendMode is how a mark's colour combines with what is already beneath it
+// (ISO 32000-2 11.3.5).
+//
+// Normal simply replaces, and is what a document does without saying so. The
+// rest are what CSS calls mix-blend-mode, and the names are the same because
+// both took them from the same place.
+type BlendMode string
+
+// The separable blend modes of ISO 32000-2 Table 134, and the four
+// non-separable ones of Table 135.
+//
+// They are listed rather than accepted as free text because a reader that meets
+// a name it does not know is required to treat it as Normal — so a typo in a
+// blend mode is not an error anywhere, it is a page that quietly loses its
+// blending.
+const (
+	BlendNormal     BlendMode = "Normal"
+	BlendMultiply   BlendMode = "Multiply"
+	BlendScreen     BlendMode = "Screen"
+	BlendOverlay    BlendMode = "Overlay"
+	BlendDarken     BlendMode = "Darken"
+	BlendLighten    BlendMode = "Lighten"
+	BlendColorDodge BlendMode = "ColorDodge"
+	BlendColorBurn  BlendMode = "ColorBurn"
+	BlendHardLight  BlendMode = "HardLight"
+	BlendSoftLight  BlendMode = "SoftLight"
+	BlendDifference BlendMode = "Difference"
+	BlendExclusion  BlendMode = "Exclusion"
+
+	BlendHue        BlendMode = "Hue"
+	BlendSaturation BlendMode = "Saturation"
+	BlendColor      BlendMode = "Color"
+	BlendLuminosity BlendMode = "Luminosity"
+)
+
+var blendModes = map[BlendMode]bool{
+	BlendNormal: true, BlendMultiply: true, BlendScreen: true, BlendOverlay: true,
+	BlendDarken: true, BlendLighten: true, BlendColorDodge: true, BlendColorBurn: true,
+	BlendHardLight: true, BlendSoftLight: true, BlendDifference: true, BlendExclusion: true,
+	BlendHue: true, BlendSaturation: true, BlendColor: true, BlendLuminosity: true,
+}
+
+// Blend builds the graphics state that selects a blend mode.
+//
+// An unknown mode is refused rather than written. A reader meeting a name it
+// does not recognise falls back to Normal without complaining, so a misspelt
+// mode produces a page that silently loses its blending — which is exactly the
+// kind of fault that is noticed months later and never traced.
+func Blend(mode BlendMode) (*object.Dictionary, error) {
+	if !blendModes[mode] {
+		return nil, fmt.Errorf("pdf0: %q is not a blend mode; a reader would silently treat it as Normal", mode)
+	}
+	gs := &object.Dictionary{}
+	gs.Set("Type", object.Name("ExtGState"))
+	gs.Set("BM", object.Name(mode))
+	return gs, nil
+}
+
+// BlendWithOpacity is Blend and Opacity together, which is the common case: CSS
+// applies opacity and a blend mode to the same element, and two graphics states
+// would need two gs operators and two names for one effect.
+func BlendWithOpacity(mode BlendMode, fill, stroke float64) (*object.Dictionary, error) {
+	gs, err := Blend(mode)
+	if err != nil {
+		return nil, err
+	}
+	alpha, err := Opacity(fill, stroke)
+	if err != nil {
+		return nil, err
+	}
+	for i, key := range alpha.Keys {
+		if key == "Type" {
+			continue
+		}
+		gs.Set(key, alpha.Values[i])
+	}
 	return gs, nil
 }
 

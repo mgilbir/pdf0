@@ -64,6 +64,12 @@ type Builder struct {
 	inPath  bool // a path is under construction
 	pending bool // a clip (W/W*) awaits its painting operator
 
+	// setsColor records that the stream chose a colour or a colour space. It is
+	// not a question about the drawing but about where the drawing may be used:
+	// an uncoloured tiling pattern takes its colour from the place it is
+	// painted, and its cell is only defined if it sets none.
+	setsColor bool
+
 	res Resources
 }
 
@@ -84,6 +90,15 @@ type Resources struct {
 // Resources returns the names this stream used. The slices are in first-use
 // order and carry no duplicates.
 func (b *Builder) Resources() Resources { return b.res }
+
+// SetsColor reports whether the stream chose a colour or a colour space.
+//
+// It exists for one caller: an uncoloured tiling pattern (PaintType 2) takes
+// its colour from wherever it is painted, and ISO 32000-2 8.7.3.1 leaves the
+// result undefined if its cell sets one. Undefined means each reader picks, so
+// the file looks different in different viewers — which is exactly the kind of
+// fault that is never traced back to the pattern.
+func (b *Builder) SetsColor() bool { return b.setsColor }
 
 // Bytes returns the finished content stream, or the first error that made it
 // invalid.
@@ -147,6 +162,13 @@ func (b *Builder) op(name string, operands ...any) *Builder {
 	}
 	b.buf = append(b.buf, name...)
 	b.buf = append(b.buf, '\n')
+	switch name {
+	// Every operator that sets a colour or a colour space, recorded in one place
+	// rather than in each setter, so that a setter added later cannot forget to.
+	// An uncoloured tiling pattern is defined only when its cell sets none.
+	case "g", "G", "rg", "RG", "k", "K", "cs", "CS", "sc", "SC", "scn", "SCN":
+		b.setsColor = true
+	}
 	return b
 }
 

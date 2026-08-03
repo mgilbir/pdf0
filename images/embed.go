@@ -131,6 +131,89 @@ func EmbedJPEG(doc Allocator, jpeg []byte, width, height, components int) (objec
 	return doc.Add(xobj), nil
 }
 
+// EmbedStencil writes a one-bit image that paints the current fill colour where
+// the mask is set and leaves the page alone everywhere else (ISO 32000-2
+// 8.9.6.2).
+//
+// A stencil is not a picture, it is a shape. That makes it the right way to
+// place a monochrome mark — a bullet, a rule, an icon, a CSS mask — because it
+// is one bit per pixel rather than twenty-four, and because its colour is
+// decided where it is drawn rather than baked in, so one stencil serves every
+// colour it is ever painted in.
+//
+// A pixel counts as set when the image's alpha is at least half, or, for an
+// image with no alpha, when its luminance is below half — the dark parts of a
+// black-on-white drawing are the marks. Both thresholds are stated here rather
+// than offered as a parameter because a stencil has no middle: a pixel either
+// paints or does not, and a caller wanting control over which is which should
+// resolve it into an *image.Alpha before getting here.
+func EmbedStencil(doc Allocator, img image.Image) (object.IndirectRef, error) {
+	if img == nil {
+		return object.IndirectRef{}, errors.New("images: cannot embed a nil image")
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return object.IndirectRef{}, fmt.Errorf("images: image has no area (%dx%d)", w, h)
+	}
+	if int64(w)*int64(h) > MaxPixels {
+		return object.IndirectRef{}, fmt.Errorf("images: %dx%d exceeds the %d-pixel limit", w, h, MaxPixels)
+	}
+
+	// One bit per pixel, rows padded to a whole byte — the padding is required,
+	// and a reader takes the row stride from the width, so a packing that runs
+	// rows together shears the image diagonally.
+	stride := (w + 7) / 8
+	bits := make([]byte, stride*h)
+	useAlpha := hasAlpha(img)
+	for y := 0; y < h; y++ {
+		row := bits[y*stride:]
+		for x := 0; x < w; x++ {
+			r, g, bl, a := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+			var set bool
+			if useAlpha {
+				set = a >= 0x8000
+			} else {
+				// Rec. 601 luma, the same weighting the rest of this package
+				// uses to turn colour into grey.
+				luma := (299*uint32(r) + 587*uint32(g) + 114*uint32(bl)) / 1000
+				set = luma < 0x8000
+			}
+			if set {
+				// Bit 7 is the leftmost pixel of each byte.
+				row[x/8] |= 0x80 >> uint(x%8)
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	if _, err := zw.Write(bits); err != nil {
+		return object.IndirectRef{}, fmt.Errorf("images: compressing the stencil: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return object.IndirectRef{}, fmt.Errorf("images: compressing the stencil: %w", err)
+	}
+
+	s := &object.Stream{Dict: object.Dictionary{}, Data: buf.Bytes()}
+	s.Dict.Set("Type", object.Name("XObject"))
+	s.Dict.Set("Subtype", object.Name("Image"))
+	s.Dict.Set("Width", object.Integer(w))
+	s.Dict.Set("Height", object.Integer(h))
+	s.Dict.Set("ImageMask", object.Boolean(true))
+	s.Dict.Set("BitsPerComponent", object.Integer(1))
+	// /Decode [1 0] inverts the sense: a 1 bit paints. Without it a 0 bit
+	// paints, which is the opposite of every convention a caller brings, and the
+	// inversion is invisible until the image is looked at.
+	s.Dict.Set("Decode", object.Array{object.Integer(1), object.Integer(0)})
+	s.Dict.Set("Filter", object.Name("FlateDecode"))
+	s.Dict.Set("Length", object.Integer(len(s.Data)))
+	// No /ColorSpace: a stencil has none. Writing one is the mistake that turns
+	// a mask into a one-bit black-and-white picture, which paints white pixels
+	// white instead of leaving them alone.
+	return doc.Add(s), nil
+}
+
 // imageStream builds one Flate-compressed image XObject over raw samples.
 func imageStream(samples []byte, w, h int, space object.Name) (*object.Stream, error) {
 	var buf bytes.Buffer
