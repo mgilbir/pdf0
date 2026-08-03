@@ -2,6 +2,7 @@ package fonts
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -28,38 +29,53 @@ type Allocator interface {
 // Embed writes the face into doc and returns the reference to put in a page's
 // /Resources /Font.
 //
-// The whole program is embedded, not a subset: every glyph the font has ends up
-// in the file whether the document uses it or not. For a large face that is
-// tens of megabytes, and it is the next thing to fix.
+// Only the glyphs the face has encoded are embedded, so Embed comes after the
+// drawing that uses the font, not before it. A face embedded before anything is
+// drawn carries .notdef alone, which is correct and useless; the ordering is
+// the caller's to get right and there is no way for this package to check it.
+//
+// The name written to /BaseFont carries the six-letter subset tag ISO 32000-2
+// 9.6.4 requires, so a reader can tell two subsets of one face apart.
 func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	if f.prog.NumGlyphs == 0 {
 		return object.IndirectRef{}, errNoGlyphs
 	}
+	// Embedding before anything has been encoded produces a font carrying
+	// .notdef alone, and every glyph the document goes on to show is then one
+	// the program does not define. That is a silent mistake — the file is
+	// written, and only a validator or a reader notices — so it is refused
+	// here, where the cause is still obvious.
+	if len(f.used) == 0 {
+		return object.IndirectRef{}, errors.New(
+			"fonts: Embed before any text was encoded would embed no glyphs; " +
+				"encode the document's text first, then embed")
+	}
+
+	program, kept, err := f.subset()
+	if err != nil {
+		return object.IndirectRef{}, err
+	}
+	baseFont := object.Name(subsetTag(kept) + "+" + f.name)
 
 	// The program. /Length1 is the uncompressed length, which a reader needs to
 	// know how much of a compressed stream is font data.
-	program := &object.Stream{Dict: object.Dictionary{}, Data: f.data}
-	program.Dict.Set("Length", object.Integer(len(f.data)))
-	program.Dict.Set("Length1", object.Integer(len(f.data)))
-	programRef := doc.Add(program)
+	programStream := &object.Stream{Dict: object.Dictionary{}, Data: program}
+	programStream.Dict.Set("Length", object.Integer(len(program)))
+	programStream.Dict.Set("Length1", object.Integer(len(program)))
+	programRef := doc.Add(programStream)
 
-	// /CIDSet: one bit per CID, high bit of each byte first, set when the
-	// program has that glyph. Embedding whole means every glyph is present, and
-	// the validator checks this against the program rather than taking it on
-	// trust — so it is written from the program.
-	//
-	// It is not required for a font embedded whole, only for a subset, and
-	// writing it anyway is what makes that transition safe: when subsetting
-	// lands the /BaseFont gains a six-letter tag, /CIDSet becomes mandatory,
-	// and its contents must then list the subset's glyphs rather than the
-	// original's. This is the line that has to change with it.
-	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: f.cidSetBits()}
+	// /CIDSet: one bit per CID, high bit of each byte first, set for the glyphs
+	// the subset carries. It is mandatory now that /BaseFont is tagged as a
+	// subset, and its contents are checked against the embedded program — so it
+	// is written from the same kept set the subsetter used, not from the
+	// original font.
+	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: cidSetBits(kept, f.prog.NumGlyphs)}
 	cidSet.Dict.Set("Length", object.Integer(len(cidSet.Data)))
 	cidSetRef := doc.Add(cidSet)
 
 	descriptor := &object.Dictionary{}
 	descriptor.Set("Type", object.Name("FontDescriptor"))
-	descriptor.Set("FontName", object.Name(f.name))
+	descriptor.Set("FontName", baseFont)
 	descriptor.Set("Flags", object.Integer(f.flags))
 	descriptor.Set("FontBBox", object.Array{
 		object.Integer(int(f.scale(f.bbox[0]))), object.Integer(int(f.scale(f.bbox[1]))),
@@ -81,7 +97,7 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	cidFont := &object.Dictionary{}
 	cidFont.Set("Type", object.Name("Font"))
 	cidFont.Set("Subtype", object.Name("CIDFontType2"))
-	cidFont.Set("BaseFont", object.Name(f.name))
+	cidFont.Set("BaseFont", baseFont)
 	sysInfo := &object.Dictionary{}
 	sysInfo.Set("Registry", object.String{Value: []byte("Adobe")})
 	sysInfo.Set("Ordering", object.String{Value: []byte("Identity")})
@@ -104,7 +120,7 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	font := &object.Dictionary{}
 	font.Set("Type", object.Name("Font"))
 	font.Set("Subtype", object.Name("Type0"))
-	font.Set("BaseFont", object.Name(f.name))
+	font.Set("BaseFont", baseFont)
 	font.Set("Encoding", object.Name("Identity-H"))
 	font.Set("DescendantFonts", object.Array{cidFontRef})
 	font.Set("ToUnicode", toUnicodeRef)
@@ -112,15 +128,18 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 }
 
 // cidSetBits builds the /CIDSet bitmap: bit i, counting from the high bit of
-// byte 0, is set when the program has glyph i.
-func (f *Face) cidSetBits() []byte {
-	n := f.prog.NumGlyphs
-	bits := make([]byte, (n+7)/8)
-	for gid := 0; gid < n; gid++ {
-		if f.prog.GlyphPresent != nil && gid < len(f.prog.GlyphPresent) && !f.prog.GlyphPresent[gid] {
-			continue
+// byte 0, is set when the subset carries glyph i.
+//
+// It is written from the kept set rather than by re-reading the emitted
+// program, so that a disagreement between the two is a real defect this
+// module's validator will report rather than something rediscovered here and
+// silently papered over.
+func cidSetBits(kept []int, numGlyphs int) []byte {
+	bits := make([]byte, (numGlyphs+7)/8)
+	for _, gid := range kept {
+		if gid >= 0 && gid < numGlyphs {
+			bits[gid/8] |= 0x80 >> (gid % 8)
 		}
-		bits[gid/8] |= 0x80 >> (gid % 8)
 	}
 	return bits
 }
