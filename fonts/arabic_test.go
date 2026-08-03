@@ -162,6 +162,67 @@ func TestArabicWordTakesItsJoinedForms(t *testing.T) {
 	}
 }
 
+// joiningFaceFor is arabicFace with the positional forms declared under a
+// chosen script rather than under the default one.
+func joiningFaceFor(t *testing.T, script string) *Face {
+	t.Helper()
+	forms := map[string][2][]int{
+		"init": {{1}, {2}},
+		"medi": {{1}, {3}},
+		"fina": {{1}, {4}},
+	}
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "ArabicOneScript",
+		Glyphs: []fonttest.Glyph{
+			{Rune: beh, Advance: 500, HasShape: true},
+			{Rune: 0xE000, Advance: 300, HasShape: true},
+			{Rune: 0xE001, Advance: 250, HasShape: true},
+			{Rune: 0xE002, Advance: 400, HasShape: true},
+			{Rune: alef, Advance: 350, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			// The features are indexed in tag order: fina, init, medi. The
+			// default script is declared and selects nothing, which is what
+			// makes the font's claim narrow: these forms are for one script,
+			// and any other run is to be set plainly.
+			"GSUB": fonttest.GSUBFormsIn(forms, map[string]fonttest.Script{
+				script: {Required: fonttest.NoFeature, Features: []int{0, 1, 2}},
+				"DFLT": {Required: fonttest.NoFeature},
+			}),
+		},
+	})
+	f, err := Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	return f
+}
+
+// TestJoiningFormsBelongToTheScriptThatDeclaresThem pins that the positional
+// shapes are a claim about one script, not about the font.
+//
+// A face may carry 'init', 'medi' and 'fina' for a cursive script it covers and
+// mean them for that script alone. Applied to a run in another, they substitute
+// glyphs the font never meant to appear there — and the substitution is by
+// glyph index, so it is not stopped by the letters being different.
+func TestJoiningFormsBelongToTheScriptThatDeclaresThem(t *testing.T) {
+	word := string([]rune{beh, beh, beh})
+
+	declared := joiningFaceFor(t, "arab")
+	got := shapedGIDs(t, declared, word)
+	want := []int{2, 3, 4}
+	wantGIDs(t, got, want, word)
+
+	// The same font declaring the same forms for Latin instead: an Arabic word
+	// takes none of them, and stays a row of isolated letters.
+	elsewhere := joiningFaceFor(t, "latn")
+	if !elsewhere.HasJoiningForms() {
+		t.Fatal("the fixture is wrong: the font does carry positional forms, whatever script they are for")
+	}
+	got = shapedGIDs(t, elsewhere, word)
+	wantGIDs(t, got, []int{1, 1, 1}, word)
+}
+
 // TestUnjoinedScriptIsUntouched pins that a font with no positional forms is
 // left exactly alone, which is every font for a script that does not join.
 func TestUnjoinedScriptIsUntouched(t *testing.T) {

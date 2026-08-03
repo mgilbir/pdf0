@@ -358,3 +358,103 @@ func TestAdvanceByIndexNeverDereferencesAMissingProgram(t *testing.T) {
 		}
 	}
 }
+
+// greekFace covers three Greek letters and no Latin.
+func greekFace(t *testing.T) *Face {
+	t.Helper()
+	f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "Greek",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'α', Advance: 500, HasShape: true},
+			{Rune: 'β', Advance: 500, HasShape: true},
+			{Rune: 'γ', Advance: 500, HasShape: true},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("loading the Greek face: %v", err)
+	}
+	return f
+}
+
+// TestRunsAreCutWhereTheScriptChanges pins the other half of what a run is. A
+// face that covers two scripts would otherwise set them both in one run, and
+// one run gets one script's rules — so the Greek half would be set by whatever
+// the font declares for Latin.
+func TestRunsAreCutWhereTheScriptChanges(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading the bundled face: %v", err)
+	}
+	s := NewStack(f)
+	runs, missing := s.ShapeRuns("abc αβγ")
+	if missing != 0 {
+		t.Fatalf("%d characters could not be set", missing)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("got %d runs, want 2: one face, two scripts", len(runs))
+	}
+	if runs[0].Start != 0 {
+		t.Errorf("the first run starts at %d, want 0", runs[0].Start)
+	}
+	// The space belongs to the Latin run: it is in no script of its own and
+	// takes the one before it, so it does not become a run of its own.
+	if want := len("abc "); runs[1].Start != want {
+		t.Errorf("the second run starts at %d, want %d — the space joins the run before it",
+			runs[1].Start, want)
+	}
+	if runs[0].Face != f || runs[1].Face != f {
+		t.Error("both runs should have been set in the one face in the stack")
+	}
+}
+
+// TestScriptlessCharactersDoNotCutARun is the guard on the rule above. Digits
+// and punctuation are in no script, and a reader that cut a run at every one of
+// them would break "sections 3 and 4" into five runs and lose the kerning
+// across each join.
+func TestScriptlessCharactersDoNotCutARun(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading the bundled face: %v", err)
+	}
+	s := NewStack(f)
+	for _, text := range []string{"sections 3 and 4", "12 apples", "apples, 12"} {
+		runs, missing := s.ShapeRuns(text)
+		if missing != 0 {
+			t.Fatalf("%q: %d characters could not be set", text, missing)
+		}
+		if len(runs) != 1 {
+			t.Errorf("%q gave %d runs, want 1: it is all one script", text, len(runs))
+		}
+	}
+}
+
+// TestRunsStillCoverTheInputExactly is what the split must not break. Whatever
+// cuts a run, the runs together account for every byte of the input in order,
+// and their clusters point back into the whole string.
+func TestRunsStillCoverTheInputExactly(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading the bundled face: %v", err)
+	}
+	s := NewStack(f, latinFace(t), greekFace(t))
+	const text = "abc αβγ, 12 Москва"
+	runs, _ := s.ShapeRuns(text)
+	if len(runs) == 0 {
+		t.Fatal("no runs at all")
+	}
+	if runs[0].Start != 0 {
+		t.Errorf("the first run starts at %d, want 0", runs[0].Start)
+	}
+	for i, r := range runs {
+		if i > 0 && r.Start <= runs[i-1].Start {
+			t.Errorf("run %d starts at %d, which is not after run %d at %d",
+				i, r.Start, i-1, runs[i-1].Start)
+		}
+		for _, g := range r.Glyphs {
+			if g.Cluster < r.Start || g.Cluster >= len(text) {
+				t.Errorf("run %d has a glyph whose cluster is %d, outside [%d,%d)",
+					i, g.Cluster, r.Start, len(text))
+			}
+		}
+	}
+}

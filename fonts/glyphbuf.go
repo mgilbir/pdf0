@@ -46,6 +46,18 @@ type Glyph struct {
 // It is the full result. Shape is the same pipeline with the vertical part
 // dropped, and is enough whenever the text carries no marks.
 func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
+	return f.shapeGlyphsIn(s, runScript(s))
+}
+
+// shapeGlyphsIn is ShapeGlyphs with the run's script already decided.
+//
+// A caller that split the text into runs knows more about a run's script than
+// the run's own characters say: a stretch of digits between two Greek words is
+// Greek, and shaping it as if it were scriptless would select the font's
+// default rules where its Greek ones were meant. Stack.ShapeRuns made that
+// decision when it cut the runs, and passes it here rather than having it
+// guessed again from less.
+func (f *Face) shapeGlyphsIn(s string, script uint16) ([]Glyph, int) {
 	if !f.composite() {
 		return f.shapeByCode(s)
 	}
@@ -66,11 +78,14 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 	if len(buf) == 0 {
 		return nil, missing
 	}
+	// The run's script decides which of the font's rules apply, and everything
+	// below reads the tables through it.
+	sh := shaper{f: f, l: f.layoutFor(script)}
 	// Joining first: the joined forms are what a cursive script's ligatures and
 	// contextual rules are written against.
-	buf = f.applyJoining(buf, runes)
-	buf = f.substitute(buf)
-	f.position(buf)
+	buf = sh.applyJoining(buf, runes)
+	buf = sh.substitute(buf)
+	sh.position(buf)
 	for _, g := range buf {
 		f.used[g.GID] = true
 	}
@@ -240,10 +255,10 @@ var defaultFeatures = []string{"ccmp", "rlig", "liga", "clig", "calt"}
 // substitute runs the GSUB lookups over a shaped buffer, preserving the cluster
 // of the first glyph of each run it replaces so that a ligature still maps back
 // to the text it came from.
-func (f *Face) substitute(buf []Glyph) []Glyph {
+func (sh shaper) substitute(buf []Glyph) []Glyph {
 	for _, tag := range defaultFeatures {
-		if lookups := f.layout.featureLookups[tag]; len(lookups) > 0 {
-			buf = f.applyContextual(buf, lookups)
+		if lookups := sh.l.featureLookups[tag]; len(lookups) > 0 {
+			buf = sh.applyContextual(buf, lookups)
 		}
 	}
 	return buf

@@ -37,10 +37,10 @@ type rawLookup struct {
 //
 // A lookup may replace a run with fewer glyphs, so the position advances by
 // what the lookup consumed rather than by one.
-func (f *Face) applyContextual(buf []Glyph, lookups []int) []Glyph {
+func (sh shaper) applyContextual(buf []Glyph, lookups []int) []Glyph {
 	for _, idx := range lookups {
 		for i := 0; i < len(buf); {
-			consumed, out := f.applyGSUBAt(idx, buf, i, 0)
+			consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
 			if consumed > 0 {
 				buf = out
 				i += consumed
@@ -59,17 +59,17 @@ const maxLookupRecursion = 8
 
 // applyGSUBAt applies one GSUB lookup at a position, returning how many input
 // glyphs it consumed (zero when it did not match) and the resulting buffer.
-func (f *Face) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph) {
-	if depth > maxLookupRecursion || idx < 0 || idx >= len(f.layout.gsub) || at >= len(buf) {
+func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph) {
+	if depth > maxLookupRecursion || idx < 0 || idx >= len(sh.l.gsub) || at >= len(buf) {
 		return 0, buf
 	}
-	lk := f.layout.gsub[idx]
+	lk := sh.l.gsub[idx]
 	for _, sub := range lk.subs {
 		switch lk.kind {
 		case 1:
 			if gid, ok := singleSubstAt(sub, buf[at].GID); ok {
 				buf[at].GID = gid
-				buf[at].XAdvance = f.advanceGID(gid)
+				buf[at].XAdvance = sh.f.advanceGID(gid)
 				return 1, buf
 			}
 		case 2:
@@ -82,7 +82,7 @@ func (f *Face) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph) {
 				out = append(out, buf[:at]...)
 				for _, gid := range reps {
 					out = append(out, Glyph{
-						GID: gid, Cluster: buf[at].Cluster, XAdvance: f.advanceGID(gid),
+						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
 					})
 				}
 				out = append(out, buf[at+1:]...)
@@ -91,23 +91,23 @@ func (f *Face) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph) {
 		case 3:
 			if gid, ok := alternateSubstAt(sub, buf[at].GID); ok {
 				buf[at].GID = gid
-				buf[at].XAdvance = f.advanceGID(gid)
+				buf[at].XAdvance = sh.f.advanceGID(gid)
 				return 1, buf
 			}
 		case 4:
-			if n, gid, ok := f.ligatureAt(sub, buf, at, lk.flags); ok {
+			if n, gid, ok := sh.ligatureAt(sub, buf, at, lk.flags); ok {
 				out := append(buf[:at:at], Glyph{
-					GID: gid, Cluster: buf[at].Cluster, XAdvance: f.advanceGID(gid),
+					GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
 				})
 				out = append(out, buf[at+n:]...)
 				return 1, out
 			}
 		case 5:
-			if n, out, ok := f.sequenceContext(sub, buf, at, lk.flags, depth); ok {
+			if n, out, ok := sh.sequenceContext(sub, buf, at, lk.flags, depth); ok {
 				return n, out
 			}
 		case 6:
-			if n, out, ok := f.chainedContext(sub, buf, at, lk.flags, depth); ok {
+			if n, out, ok := sh.chainedContext(sub, buf, at, lk.flags, depth); ok {
 				return n, out
 			}
 		}
@@ -200,7 +200,7 @@ func alternateSubstAt(sub []byte, gid int) (int, bool) {
 
 // ligatureAt reads a type 4 subtable and reports the ligature starting at a
 // position, with how many glyphs it consumes.
-func (f *Face) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, bool) {
+func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, bool) {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
 		return 0, 0, false
 	}
@@ -235,7 +235,7 @@ func (f *Face) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, boo
 				matched = false
 				break
 			}
-			pos = f.nextNotIgnored(buf, pos+1, flags)
+			pos = sh.nextNotIgnored(buf, pos+1, flags)
 			if pos >= len(buf) || buf[pos].GID != font.Be16(lig, 4+2*k) {
 				matched = false
 				break
@@ -249,9 +249,9 @@ func (f *Face) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, boo
 }
 
 // nextNotIgnored is the next position a lookup with these flags looks at.
-func (f *Face) nextNotIgnored(buf []Glyph, from, flags int) int {
+func (sh shaper) nextNotIgnored(buf []Glyph, from, flags int) int {
 	for i := from; i < len(buf); i++ {
-		if !f.layout.ignores(flags, buf[i].GID) {
+		if !sh.l.ignores(flags, buf[i].GID) {
 			return i
 		}
 	}
@@ -260,14 +260,14 @@ func (f *Face) nextNotIgnored(buf []Glyph, from, flags int) int {
 
 // matched collects the positions a lookup with these flags would see, starting
 // at a position, up to n of them.
-func (f *Face) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
+func (sh shaper) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
 	out := make([]int, 0, n)
 	pos := at
 	for len(out) < n {
 		if pos >= len(buf) {
 			return nil, false
 		}
-		if !f.layout.ignores(flags, buf[pos].GID) {
+		if !sh.l.ignores(flags, buf[pos].GID) {
 			out = append(out, pos)
 		}
 		pos++
@@ -277,10 +277,10 @@ func (f *Face) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
 
 // backtrackPositions collects the positions before a position, nearest first,
 // which is the order the format stores a backtrack sequence in.
-func (f *Face) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, bool) {
+func (sh shaper) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, bool) {
 	out := make([]int, 0, n)
 	for pos := before - 1; pos >= 0 && len(out) < n; pos-- {
-		if !f.layout.ignores(flags, buf[pos].GID) {
+		if !sh.l.ignores(flags, buf[pos].GID) {
 			out = append(out, pos)
 		}
 	}
@@ -288,7 +288,7 @@ func (f *Face) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, boo
 }
 
 // sequenceContext matches a GSUB type 5 subtable and applies its lookups.
-func (f *Face) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) (int, []Glyph, bool) {
+func (sh shaper) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) (int, []Glyph, bool) {
 	if len(sub) < 4 {
 		return 0, buf, false
 	}
@@ -298,7 +298,7 @@ func (f *Face) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) (i
 		if !ok {
 			return 0, buf, false
 		}
-		return f.contextRuleSet(sub, 6, i, buf, at, flags, depth, func(item, pos int) bool {
+		return sh.contextRuleSet(sub, 6, i, buf, at, flags, depth, func(item, pos int) bool {
 			return buf[pos].GID == item
 		})
 	case 2:
@@ -309,7 +309,7 @@ func (f *Face) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) (i
 			return 0, buf, false
 		}
 		classes := classDef(sub, font.Be16(sub, 4))
-		return f.contextRuleSet(sub, 8, classes[buf[at].GID], buf, at, flags, depth, func(item, pos int) bool {
+		return sh.contextRuleSet(sub, 8, classes[buf[at].GID], buf, at, flags, depth, func(item, pos int) bool {
 			return classes[buf[pos].GID] == item
 		})
 	case 3:
@@ -318,7 +318,7 @@ func (f *Face) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) (i
 		if glyphCount < 1 || 6+2*glyphCount > len(sub) {
 			return 0, buf, false
 		}
-		positions, ok := f.matchedPositions(buf, at, glyphCount, flags)
+		positions, ok := sh.matchedPositions(buf, at, glyphCount, flags)
 		if !ok {
 			return 0, buf, false
 		}
@@ -327,14 +327,14 @@ func (f *Face) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) (i
 				return 0, buf, false
 			}
 		}
-		return f.runRecords(sub, 6+2*glyphCount, recCount, positions, buf, depth)
+		return sh.runRecords(sub, 6+2*glyphCount, recCount, positions, buf, depth)
 	}
 	return 0, buf, false
 }
 
 // contextRuleSet walks the rule sets of a format 1 or 2 sequence context, whose
 // only difference is whether a rule's items are glyphs or classes.
-func (f *Face) contextRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, flags, depth int,
+func (sh shaper) contextRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, flags, depth int,
 	match func(item, pos int) bool) (int, []Glyph, bool) {
 
 	count := font.Be16(sub, setsAt-2)
@@ -360,7 +360,7 @@ func (f *Face) contextRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, fl
 		if glyphCount < 1 || 4+2*(glyphCount-1) > len(rule) {
 			continue
 		}
-		positions, ok := f.matchedPositions(buf, at, glyphCount, flags)
+		positions, ok := sh.matchedPositions(buf, at, glyphCount, flags)
 		if !ok {
 			continue
 		}
@@ -374,14 +374,14 @@ func (f *Face) contextRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, fl
 		if !matched {
 			continue
 		}
-		return f.runRecords(rule, 4+2*(glyphCount-1), recCount, positions, buf, depth)
+		return sh.runRecords(rule, 4+2*(glyphCount-1), recCount, positions, buf, depth)
 	}
 	return 0, buf, false
 }
 
 // chainedContext matches a GSUB type 6 subtable, which also constrains what
 // comes before and after the part being replaced.
-func (f *Face) chainedContext(sub []byte, buf []Glyph, at, flags, depth int) (int, []Glyph, bool) {
+func (sh shaper) chainedContext(sub []byte, buf []Glyph, at, flags, depth int) (int, []Glyph, bool) {
 	if len(sub) < 4 {
 		return 0, buf, false
 	}
@@ -407,10 +407,10 @@ func (f *Face) chainedContext(sub []byte, buf []Glyph, at, flags, depth int) (in
 		if classes != nil {
 			index = classes[buf[at].GID]
 		}
-		return f.chainedRuleSet(sub, setsAt, index, buf, at, flags, depth,
+		return sh.chainedRuleSet(sub, setsAt, index, buf, at, flags, depth,
 			classes, backClasses, aheadClasses)
 	case 3:
-		return f.chainedFormat3(sub, buf, at, flags, depth)
+		return sh.chainedFormat3(sub, buf, at, flags, depth)
 	}
 	return 0, buf, false
 }
@@ -418,7 +418,7 @@ func (f *Face) chainedContext(sub []byte, buf []Glyph, at, flags, depth int) (in
 // chainedRuleSet walks the rule sets of a chained context in glyph or class
 // form. A rule states three sequences — what must precede, what is matched, and
 // what must follow — and the first is stored nearest-first.
-func (f *Face) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, flags, depth int,
+func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, flags, depth int,
 	classes, backClasses, aheadClasses map[int]int) (int, []Glyph, bool) {
 
 	count := font.Be16(sub, setsAt-2)
@@ -497,7 +497,7 @@ func (f *Face) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, fl
 			continue
 		}
 
-		positions, ok := f.matchedPositions(buf, at, inputCount, flags)
+		positions, ok := sh.matchedPositions(buf, at, inputCount, flags)
 		if !ok || len(input) != inputCount-1 {
 			continue
 		}
@@ -509,7 +509,7 @@ func (f *Face) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, fl
 			}
 		}
 		if matched && len(back) > 0 {
-			bp, ok := f.backtrackPositions(buf, at, len(back), flags)
+			bp, ok := sh.backtrackPositions(buf, at, len(back), flags)
 			if !ok {
 				matched = false
 			} else {
@@ -522,7 +522,7 @@ func (f *Face) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, fl
 			}
 		}
 		if matched && len(ahead) > 0 {
-			ap, ok := f.matchedPositions(buf, positions[inputCount-1]+1, len(ahead), flags)
+			ap, ok := sh.matchedPositions(buf, positions[inputCount-1]+1, len(ahead), flags)
 			if !ok {
 				matched = false
 			} else {
@@ -537,14 +537,14 @@ func (f *Face) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, fl
 		if !matched {
 			continue
 		}
-		return f.runRecords(rule, p, recCount, positions, buf, depth)
+		return sh.runRecords(rule, p, recCount, positions, buf, depth)
 	}
 	return 0, buf, false
 }
 
 // chainedFormat3 is the coverage-based chained context, the form a modern font
 // uses most: three lists of coverage tables rather than rule sets.
-func (f *Face) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (int, []Glyph, bool) {
+func (sh shaper) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (int, []Glyph, bool) {
 	p := 2
 	readList := func() ([]int, bool) {
 		if p+2 > len(sub) {
@@ -580,7 +580,7 @@ func (f *Face) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (in
 	recCount := font.Be16(sub, p)
 	p += 2
 
-	positions, ok := f.matchedPositions(buf, at, len(input), flags)
+	positions, ok := sh.matchedPositions(buf, at, len(input), flags)
 	if !ok {
 		return 0, buf, false
 	}
@@ -590,7 +590,7 @@ func (f *Face) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (in
 		}
 	}
 	if len(back) > 0 {
-		bp, ok := f.backtrackPositions(buf, at, len(back), flags)
+		bp, ok := sh.backtrackPositions(buf, at, len(back), flags)
 		if !ok {
 			return 0, buf, false
 		}
@@ -601,7 +601,7 @@ func (f *Face) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (in
 		}
 	}
 	if len(ahead) > 0 {
-		ap, ok := f.matchedPositions(buf, positions[len(input)-1]+1, len(ahead), flags)
+		ap, ok := sh.matchedPositions(buf, positions[len(input)-1]+1, len(ahead), flags)
 		if !ok {
 			return 0, buf, false
 		}
@@ -611,7 +611,7 @@ func (f *Face) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (in
 			}
 		}
 	}
-	return f.runRecords(sub, p, recCount, positions, buf, depth)
+	return sh.runRecords(sub, p, recCount, positions, buf, depth)
 }
 
 // runRecords applies the lookups a matched rule names, each at the position it
@@ -627,7 +627,7 @@ func (f *Face) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (in
 // remembered index would land on the wrong glyph — or past the end. So the
 // positions are carried forward rather than read once, which is the whole
 // reason this takes the slice rather than the buffer offsets.
-func (f *Face) runRecords(base []byte, at, count int, positions []int, buf []Glyph, depth int) (int, []Glyph, bool) {
+func (sh shaper) runRecords(base []byte, at, count int, positions []int, buf []Glyph, depth int) (int, []Glyph, bool) {
 	consumed := len(positions)
 	for i := 0; i < count; i++ {
 		rec := at + 4*i
@@ -641,7 +641,7 @@ func (f *Face) runRecords(base []byte, at, count int, positions []int, buf []Gly
 		}
 		target := positions[seqIndex]
 		before := len(buf)
-		_, out := f.applyGSUBAt(lookupIndex, buf, target, depth+1)
+		_, out := sh.applyGSUBAt(lookupIndex, buf, target, depth+1)
 		buf = out
 
 		delta := len(buf) - before
