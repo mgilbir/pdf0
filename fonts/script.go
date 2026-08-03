@@ -134,6 +134,35 @@ func scriptFeatures(t []byte, tags []string, lang string) (featureSet, bool) {
 	return nil, false
 }
 
+// chosenScriptTag reports which of a script's tags the font's substitutions were
+// actually read under — the same tag scriptFeatures settled on, by the same walk.
+//
+// A caller needs it when the tag itself carries meaning beyond selection. The
+// Indic scripts are the case: a font declaring 'deva' rather than 'dev2' was
+// written against the first-generation specification and means its rules, and
+// nothing but the tag says so.
+//
+// A font that declares nothing this run can use gets "DFLT", the conventional
+// tag for "any script", which is what the selection fell back to.
+func (f *Face) chosenScriptTag(script uint16) string {
+	tags := scriptTags(script)
+	list := scriptList(f.layoutTables["GSUB"])
+	if len(list) == 0 {
+		return defaultScriptTags[0]
+	}
+	byTag := scriptOffsets(list)
+	for _, tag := range append(append(make([]string, 0, len(tags)+len(defaultScriptTags)), tags...), defaultScriptTags...) {
+		so, ok := byTag[tag]
+		if !ok {
+			continue
+		}
+		if _, ok := readLangSys(list[so:], f.language); ok {
+			return tag
+		}
+	}
+	return defaultScriptTags[0]
+}
+
 // scriptOffsets maps each script tag a ScriptList names to its Script table's
 // offset within the list. A tag declared twice keeps its first table, which is
 // the one a reader walking the list in order would find.
