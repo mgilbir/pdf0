@@ -9,7 +9,6 @@ import (
 
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/font"
 	"github.com/mgilbir/pdf0/internal/fonttest"
 	"github.com/mgilbir/pdf0/object"
@@ -425,7 +424,7 @@ func corpusOpenTypeCFF(t *testing.T) []byte {
 			if !ok || s.Dict.Get("Subtype") != object.Name("OpenType") {
 				continue
 			}
-			raw, err := core.DecodeStreamData(core.Canceler{}, s, core.DefaultLimits())
+			raw, err := doc.StreamData(s)
 			if err != nil || len(raw) < 4 || string(raw[:4]) != "OTTO" {
 				continue
 			}
@@ -638,7 +637,7 @@ func corpusCIDKeyedCFF(t *testing.T) []byte {
 			if !ok || s.Dict.Get("Subtype") != object.Name("CIDFontType0C") {
 				continue
 			}
-			raw, err := core.DecodeStreamData(core.Canceler{}, s, core.DefaultLimits())
+			raw, err := doc.StreamData(s)
 			if err != nil {
 				continue
 			}
