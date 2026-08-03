@@ -56,8 +56,6 @@ import (
 //     therefore set some conjuncts differently than its author intended.
 //   - Pre-base-reordering Ra ('pref'). Devanagari has none; the feature is
 //     applied where the font asks for it but no consonant is moved for it.
-//   - Inserting a dotted circle before a syllable that has no base consonant.
-//     Such a syllable is set as it stands rather than being marked as broken.
 //   - 'locl', the localised forms a font declares per language. It is applied to
 //     every other script this package sets, and an Indic run does not get it.
 //
@@ -393,11 +391,17 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune) []Glyph {
 	// front and then found to be stale.
 	shift := 0
 	places := sh.indicPositions()
+	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
 	for _, syl := range indicSyllables(cats) {
 		if syl.kind == sylNonIndic || syl.kind == sylSymbol {
 			continue
 		}
 		start, end := syl.start+shift, syl.end+shift
+		if syl.kind == sylBroken && hasDotted {
+			buf, info = sh.insertDottedCircle(buf, info, start, end, dotted)
+			end++
+			shift++
+		}
 		var delta int
 		buf, delta = sh.shapeIndicSyllable(buf, &info, runes, places, syl.start, start, end)
 		shift += delta
@@ -421,6 +425,48 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune) []Glyph {
 	return dropGlyphs(buf, func(i int) bool {
 		return i < len(info) && indicIsJoiner(info[i].cat)
 	})
+}
+
+// insertDottedCircle puts U+25CC at the front of a syllable that has no base
+// consonant of its own.
+//
+// A matra or a virama written with nothing to attach to is not text anyone
+// meant to write, but it has to be *shown* — and a mark drawn on its own floats
+// at the height it would have sat at, over nothing, where a reader cannot tell
+// it from a mark on the letter before. The dotted circle is the placeholder
+// every reader of these scripts knows: it says "a mark, and the letter it
+// belongs to is missing".
+//
+// It goes after a repha, which is written before the letter it belongs to and
+// so belongs before the placeholder too. Its own place is deliberately left at
+// the end of the syllable rather than set to the base: the font is asked which
+// consonants it draws below the base before the syllable is reordered, and the
+// dotted circle is not a consonant the font has anything to say about. The base
+// search picks it up from there.
+//
+// A face with no U+25CC cannot show one, and the caller checks that first.
+func (sh shaper) insertDottedCircle(buf []Glyph, info []indicInfo, start, end, gid int) ([]Glyph, []indicInfo) {
+	at := start
+	for at < end && at < len(info) && info[at].cat == catRepha {
+		at++
+	}
+	cluster := 0
+	switch {
+	case at < len(buf):
+		cluster = buf[at].Cluster
+	case len(buf) > 0:
+		cluster = buf[len(buf)-1].Cluster
+	}
+	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)}
+
+	buf = append(buf, Glyph{})
+	copy(buf[at+1:], buf[at:])
+	buf[at] = g
+
+	info = append(info, indicInfo{})
+	copy(info[at+1:], info[at:])
+	info[at] = indicInfo{cat: catDottedCircle, pos: posEnd}
+	return buf, info
 }
 
 // shapeIndicSyllable puts one syllable into drawing order and applies the
