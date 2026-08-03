@@ -2,11 +2,15 @@ package pdf0
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/font"
 	"github.com/mgilbir/pdf0/internal/fonttest"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
@@ -380,4 +384,273 @@ func TestShapedTextValidatesAndKeepsItsLigature(t *testing.T) {
 	if got := rd.ExtractText(); !strings.Contains(got, "ﬁ") {
 		t.Errorf("extracted %q, which does not contain the fi ligature", got)
 	}
+}
+
+// corpusOpenTypeCFF returns a real CFF-flavoured OpenType program from the
+// veraPDF corpus that this package accepts, or skips.
+//
+// It searches for one that loads rather than taking the first it finds, because
+// most CFF programs in the wild are CID-keyed and those are deliberately
+// refused: their CIDs are not glyph indices, and everything here assumes they
+// are.
+//
+// The synthetic fixtures elsewhere in this file cannot serve here: building a
+// valid CFF means emitting INDEX structures, DICT operators and Type 2
+// charstrings, which is a font compiler. Borrowing a real one from the corpus
+// is the honest alternative, and it follows what the rest of this repository
+// already does — the corpus is fetched, not vendored, so the test skips when it
+// is absent rather than failing.
+func corpusOpenTypeCFF(t *testing.T) []byte {
+	t.Helper()
+	root := "testdata/verapdf-corpus"
+	if _, err := os.Stat(root); err != nil {
+		t.Skip("veraPDF corpus not present; run `make corpus`")
+	}
+	var found []byte
+	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if found != nil || err != nil || info.IsDir() || filepath.Ext(p) != ".pdf" {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		defer func() { _ = recover() }()
+		doc, err := Read(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return nil
+		}
+		for _, iobj := range doc.Objects {
+			s, ok := iobj.Value.(*object.Stream)
+			if !ok || s.Dict.Get("Subtype") != object.Name("OpenType") {
+				continue
+			}
+			raw, err := core.DecodeStreamData(core.Canceler{}, s, core.DefaultLimits())
+			if err != nil || len(raw) < 4 || string(raw[:4]) != "OTTO" {
+				continue
+			}
+			if _, err := fonts.Load(raw); err != nil {
+				continue // CID-keyed, or otherwise not one this package takes
+			}
+			if !selfConsistentWidths(raw) {
+				continue
+			}
+			found = raw
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if found == nil {
+		t.Skip("no CFF-flavoured OpenType program found in the corpus")
+	}
+	return found
+}
+
+// selfConsistentWidths reports whether an OpenType CFF program's hmtx table and
+// its own charstring widths agree.
+//
+// They must, and in a well-made font they do — but many of the programs in this
+// corpus were extracted from files built to fail a conformance rule, and a font
+// whose two width tables contradict each other cannot be embedded conformantly
+// by anything: whichever a writer copies into /W, a reader consulting the other
+// sees a mismatch. Selecting for consistency is therefore choosing a valid
+// fixture, not tuning the test until it passes.
+func selfConsistentWidths(program []byte) bool {
+	sfnt := font.ParseSFNT(program, 1<<22)
+	cff := font.ParseCFF(font.SFNTTables(program)["CFF "])
+	if sfnt == nil || cff == nil || len(sfnt.WidthByGID) == 0 {
+		return false
+	}
+	for gid := 0; gid < sfnt.NumGlyphs && gid < len(cff.WidthByGID); gid++ {
+		if sfnt.WidthByGID[gid] != cff.WidthByGID[gid] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestOpenTypeCFFEmbedsAndValidates exercises the CFF path end to end on a real
+// font. It is the only way to know the path works: a CFF program cannot be
+// synthesised here, and an untested branch that writes a font descriptor is
+// exactly the kind of code that is wrong in a way nobody notices.
+func TestOpenTypeCFFEmbedsAndValidates(t *testing.T) {
+	program := corpusOpenTypeCFF(t)
+	face, err := fonts.Load(program)
+	if err != nil {
+		t.Fatalf("a program the helper already loaded was refused: %v", err)
+	}
+
+	// Something the font actually covers.
+	var text string
+	for r := rune('A'); r <= 'z' && len(text) < 4; r++ {
+		if _, ok := face.GlyphID(r); ok {
+			text += string(r)
+		}
+	}
+	if text == "" {
+		t.Skip("the corpus program maps none of the ASCII letters")
+	}
+	codes, missing := face.Encode(text)
+	if missing != 0 {
+		t.Fatalf("%d runes missing from a font that reported them present", missing)
+	}
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	var b content.Builder
+	b.BeginText().SetFont("F1", 18).MoveText(72, 700).ShowText(codes).EndText()
+	drawn, err := b.Bytes()
+	if err != nil {
+		t.Fatalf("drawing: %v", err)
+	}
+	fontRef, err := face.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding: %v", err)
+	}
+
+	stream := &object.Stream{Dict: object.Dictionary{}, Data: drawn}
+	stream.Dict.Set("Length", object.Integer(len(drawn)))
+	contentRef := doc.Add(stream)
+	fontDict := &object.Dictionary{}
+	fontDict.Set("F1", fontRef)
+	resources := &object.Dictionary{}
+	resources.Set("Font", fontDict)
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{
+		object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792),
+	})
+	page.Set("Resources", resources)
+	page.Set("Contents", contentRef)
+	pageRef := doc.Add(page)
+	pages := doc.ResolveDict(doc.ResolveDict(doc.Trailer.Get("Root")).Get("Pages"))
+	pages.Set("Kids", object.Array{pageRef})
+	pages.Set("Count", object.Integer(1))
+
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rd, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+		t.Errorf("violation on a page set in a CFF-flavoured OpenType face: %s", e.Error())
+	}
+
+	// The descriptor must describe what was actually written: FontFile3 with an
+	// OpenType subtype and a CIDFontType0 descendant, not the TrueType shape.
+	var sawFontFile3, sawCIDFontType0 bool
+	for _, iobj := range rd.Objects {
+		d, ok := iobj.Value.(*object.Dictionary)
+		if !ok {
+			continue
+		}
+		if d.Get("FontFile3") != nil {
+			sawFontFile3 = true
+			if d.Get("FontFile2") != nil {
+				t.Error("the descriptor carries both FontFile2 and FontFile3")
+			}
+		}
+		if d.Get("Subtype") == object.Name("CIDFontType0") {
+			sawCIDFontType0 = true
+			if d.Get("CIDToGIDMap") != nil {
+				t.Error("a CIDFontType0 descendant carries /CIDToGIDMap, which belongs to CIDFontType2")
+			}
+		}
+	}
+	if !sawFontFile3 || !sawCIDFontType0 {
+		t.Errorf("FontFile3=%v CIDFontType0=%v; the CFF path did not write its own shape",
+			sawFontFile3, sawCIDFontType0)
+	}
+}
+
+// TestCFFIsNotSubsetted pins the limit rather than letting it be discovered.
+// Subsetting CFF means rewriting a CharStrings INDEX and the subroutines it
+// calls into; until that exists an .otf is embedded whole, and saying so is
+// better than a silent size regression.
+func TestCFFIsNotSubsetted(t *testing.T) {
+	program := corpusOpenTypeCFF(t)
+	face, err := fonts.Load(program)
+	if err != nil {
+		t.Fatalf("a program the helper already loaded was refused: %v", err)
+	}
+	if _, err := face.Subset(); err == nil {
+		t.Error("Subset claimed to subset a CFF program")
+	}
+}
+
+// TestCIDKeyedCFFIsRefused pins the other half of CFF support: the fonts this
+// package will not take. A CID-keyed CFF numbers its glyphs by CID and maps CID
+// to glyph index through its charset, so the two are different numberings —
+// while everything here assumes they are the same, because Encode emits glyph
+// indices as character codes.
+//
+// Embedding one anyway produces /W keyed by one numbering and codes by the
+// other, which this module's own validator reports. Refusing is the honest
+// answer until the charset is read, and this is the test that says the refusal
+// happens rather than being an intention in a comment.
+//
+// The corpus carries CID-keyed CFF programs but none inside an OpenType
+// wrapper, so the fixture wraps a real one — writing a CID-keyed CFF from
+// scratch is a font compiler, and a synthetic one would not exercise the
+// detection that matters.
+func TestCIDKeyedCFFIsRefused(t *testing.T) {
+	cff := corpusCIDKeyedCFF(t)
+	program := fonttest.OTTO(cff, fonttest.SFNTOptions{
+		Name: "CIDKeyed",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'A', Advance: 500, HasShape: true},
+			{Rune: 'B', Advance: 500, HasShape: true},
+		},
+	})
+	if _, err := fonts.Load(program); err == nil {
+		t.Error("a CID-keyed CFF font was accepted; its CIDs are not glyph indices")
+	} else if !strings.Contains(err.Error(), "CID-keyed") {
+		t.Errorf("refused for the wrong reason: %v", err)
+	}
+}
+
+// corpusCIDKeyedCFF returns a bare CID-keyed CFF program from the corpus.
+func corpusCIDKeyedCFF(t *testing.T) []byte {
+	t.Helper()
+	root := "testdata/verapdf-corpus"
+	if _, err := os.Stat(root); err != nil {
+		t.Skip("veraPDF corpus not present; run `make corpus`")
+	}
+	var found []byte
+	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if found != nil || err != nil || info.IsDir() || filepath.Ext(p) != ".pdf" {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		defer func() { _ = recover() }()
+		doc, err := Read(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return nil
+		}
+		for _, iobj := range doc.Objects {
+			s, ok := iobj.Value.(*object.Stream)
+			if !ok || s.Dict.Get("Subtype") != object.Name("CIDFontType0C") {
+				continue
+			}
+			raw, err := core.DecodeStreamData(core.Canceler{}, s, core.DefaultLimits())
+			if err != nil {
+				continue
+			}
+			if prog := font.ParseCFF(raw); prog != nil && prog.WidthByCID != nil {
+				found = raw
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	if found == nil {
+		t.Skip("no CID-keyed CFF program found in the corpus")
+	}
+	return found
 }
