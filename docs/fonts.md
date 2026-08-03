@@ -345,6 +345,25 @@ a second field and a second option; nothing here forecloses it.
 - **Per-run memoization** — the validation cache holds the font-usage map, the
   per-stream event skeletons and the per-stream used-name sets.
 
+## Third-party data
+
+`fonts/standard14.go` is generated from the **Adobe Core 14 AFM files**. Only the
+advance widths and the font-wide metrics are taken; no outline, no font program
+and no character shape is reproduced, and no AFM file is redistributed. The Adobe
+copyright notices and the licence paragraph are retained verbatim in the header
+of the generated file, and the modification is noted there, which is what that
+licence requires. The licence is permissive: any purpose, without charge, with or
+without modification.
+
+The fourteen names — Helvetica, Times, Courier, Symbol, ZapfDingbats and the
+variants — are the identifiers ISO 32000-2 9.6.2.2 gives these faces, and are
+what a `/BaseFont` entry holds. Several are trademarks of their owners. Naming
+one in a PDF is how the format says "the face the reader already has"; this
+repository contains no typeface, and `find . -name '*.ttf' -o -name '*.otf'`
+returns nothing.
+
+Other generated tables and their sources are listed in the table above.
+
 ## Confirmed limitations
 
 - **Non-Identity CMaps are not decoded.** Glyph coverage, `.notdef` and width

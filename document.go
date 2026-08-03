@@ -697,9 +697,16 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 		return fmt.Errorf("object number 0 is reserved and cannot be written")
 	}
 	worst := 0
-	for num := range d.Objects {
+	for num, iobj := range d.Objects {
 		if num < worst {
 			worst = num
+		}
+		// A nil entry is a caller mistake — a map written into directly, or an
+		// allocation whose error went unchecked — and it is one the serializer
+		// would meet as a nil dereference several layers down. Naming it here
+		// is the difference between an error and the process ending.
+		if iobj == nil {
+			return fmt.Errorf("object %d is nil; every entry in Objects must hold an object", num)
 		}
 	}
 	if worst < 0 {
