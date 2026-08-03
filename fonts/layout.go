@@ -27,11 +27,16 @@ import (
 //
 // What is not, and what each absence costs:
 //
+//   - Single positioning (GPOS 1), mark-to-base (GPOS 4) and mark-to-mark
+//     (GPOS 6), so an accent sits over the letter it belongs to and a second
+//     accent stacks on the first.
+//
+// What is not, and what each absence costs:
+//
 //   - Contextual and chained-contextual substitution (GSUB 5, 6). Features that
 //     depend on surroundings — 'calt' above all — do nothing.
-//   - Mark attachment (GPOS 4, 5, 6) and cursive attachment (GPOS 3). Accents
-//     are placed at their nominal advance rather than over the letter they
-//     belong to, which is visibly wrong in any script that uses them heavily.
+//   - Cursive attachment (GPOS 3), which joins the connecting strokes of a
+//     script written that way.
 //   - Script-specific processing: Arabic joining forms, Indic reordering. Those
 //     scripts are not correctly set by this package, and text in them should be
 //     shaped elsewhere and passed in as glyph indices.
@@ -78,6 +83,16 @@ type layout struct {
 	// markAttach is GDEF's mark attachment class per glyph, used by the
 	// MarkAttachmentType field of a lookup flag.
 	markAttach map[int]int
+	// markFlags is the lookup flags of the attachment lookups.
+	markFlags int
+	// singlePos holds GPOS type 1 adjustments by glyph.
+	singlePos map[int]singleAdjust
+	// markAnchors holds each mark's own attachment point and class;
+	// markBases and markMarkBases hold where a base or another mark receives a
+	// mark of each class.
+	markAnchors   map[int]markAnchor
+	markBases     map[key2]anchor
+	markMarkBases map[key2]anchor
 	// kern maps an ordered glyph pair to the horizontal adjustment between
 	// them, in font units. Negative pulls the pair together, which is what
 	// kerning almost always does.
@@ -162,14 +177,19 @@ type ligature struct {
 // correct text set plainly, while text set from a misread table is wrong.
 func readLayout(tables map[string][]byte) *layout {
 	l := &layout{
-		kern:       map[[2]int]int{},
-		ligatures:  map[int][]ligature{},
-		glyphClass: map[int]int{},
-		single:     map[string]map[int]int{},
+		kern:          map[[2]int]int{},
+		ligatures:     map[int][]ligature{},
+		glyphClass:    map[int]int{},
+		single:        map[string]map[int]int{},
+		singlePos:     map[int]singleAdjust{},
+		markAnchors:   map[int]markAnchor{},
+		markBases:     map[key2]anchor{},
+		markMarkBases: map[key2]anchor{},
 	}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
 		l.readGPOSKerning(gpos)
+		l.readGPOSAttachment(gpos)
 	}
 	if len(l.kern) == 0 {
 		// Only as a fallback: a font with both should be read through GPOS,
@@ -695,5 +715,20 @@ func (l *layout) singleSubst(tag string, sub []byte) {
 	}
 	if len(l.single[tag]) == 0 {
 		delete(l.single, tag)
+	}
+}
+
+// emptyLayout is a layout that says nothing, for a face with no tables to read
+// — a standard font, whose metrics are published rather than embedded.
+func emptyLayout() *layout {
+	return &layout{
+		kern:          map[[2]int]int{},
+		ligatures:     map[int][]ligature{},
+		glyphClass:    map[int]int{},
+		single:        map[string]map[int]int{},
+		singlePos:     map[int]singleAdjust{},
+		markAnchors:   map[int]markAnchor{},
+		markBases:     map[key2]anchor{},
+		markMarkBases: map[key2]anchor{},
 	}
 }

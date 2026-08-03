@@ -67,7 +67,7 @@ func Standard(name string) (*Face, error) {
 		bbox:       m.bbox,
 		italic:     m.italic,
 		used:       map[int]bool{},
-		layout:     &layout{kern: map[[2]int]int{}, ligatures: map[int][]ligature{}, glyphClass: map[int]int{}, single: map[string]map[int]int{}},
+		layout:     emptyLayout(),
 	}
 	f.stemV = stemV(nil)
 	// Nonsymbolic, because the codes are WinAnsi characters rather than glyph
