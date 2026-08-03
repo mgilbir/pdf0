@@ -48,9 +48,10 @@ var otTagOverrides = map[string][]string{
 	"Yi":  {"yi  "},
 
 	// The Indic scripts each have a second-generation tag. A font declares it
-	// to say its rules are written for a shaper that reorders — which this
-	// package does not do — but the tag is still the one such a font declares
-	// its features under, so it is tried first and the older one after.
+	// to say its rules are written for a shaper that reorders, which the
+	// package does for Devanagari and for no other; but the tag is the one such
+	// a font declares its features under whatever the shaper can do with them,
+	// so it is tried first and the older one after.
 	"Bengali":    {"bng2", "beng"},
 	"Devanagari": {"dev2", "deva"},
 	"Gujarati":   {"gjr2", "gujr"},

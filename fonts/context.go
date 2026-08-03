@@ -86,6 +86,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 					})
 				}
 				out = append(out, buf[at+1:]...)
+				sh.resized(at, len(reps)-1)
 				return len(reps), out
 			}
 		case 3:
@@ -100,6 +101,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 					GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
 				})
 				out = append(out, buf[at+n:]...)
+				sh.resized(at, 1-n)
 				return 1, out
 			}
 		case 5:
@@ -236,7 +238,7 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, b
 				break
 			}
 			pos = sh.nextNotIgnored(buf, pos+1, flags)
-			if pos >= len(buf) || buf[pos].GID != font.Be16(lig, 4+2*k) {
+			if pos >= sh.end(buf) || buf[pos].GID != font.Be16(lig, 4+2*k) {
 				matched = false
 				break
 			}
@@ -250,21 +252,23 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, b
 
 // nextNotIgnored is the next position a lookup with these flags looks at.
 func (sh shaper) nextNotIgnored(buf []Glyph, from, flags int) int {
-	for i := from; i < len(buf); i++ {
+	end := sh.end(buf)
+	for i := from; i < end; i++ {
 		if !sh.l.ignores(flags, buf[i].GID) {
 			return i
 		}
 	}
-	return len(buf)
+	return end
 }
 
 // matched collects the positions a lookup with these flags would see, starting
 // at a position, up to n of them.
 func (sh shaper) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
 	out := make([]int, 0, n)
+	end := sh.end(buf)
 	pos := at
 	for len(out) < n {
-		if pos >= len(buf) {
+		if pos >= end {
 			return nil, false
 		}
 		if !sh.l.ignores(flags, buf[pos].GID) {
@@ -279,7 +283,7 @@ func (sh shaper) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
 // which is the order the format stores a backtrack sequence in.
 func (sh shaper) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, bool) {
 	out := make([]int, 0, n)
-	for pos := before - 1; pos >= 0 && len(out) < n; pos-- {
+	for pos := before - 1; pos >= sh.floor && len(out) < n; pos-- {
 		if !sh.l.ignores(flags, buf[pos].GID) {
 			out = append(out, pos)
 		}
