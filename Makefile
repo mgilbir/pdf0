@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc bidi-tests test-bidi clean-bidi-tests
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -169,6 +169,36 @@ $(JBIG2_DIR)/.ok: $(JBIG2_DIR)/sources.tsv $(JBIG2_DIR)/download.sh
 
 clean-jbig2:
 	rm -f $(JBIG2_DIR)/*.pdf $(JBIG2_DIR)/.ok
+
+# Unicode's own conformance suite for the bidirectional algorithm (UAX #9), used
+# as the oracle for fonts/bidi.go. BidiTest.txt is every combination of
+# bidirectional character classes up to length four; BidiCharacterTest.txt is
+# real character sequences, which is what brings the paired-bracket rule into
+# scope. Downloaded into testdata/unicode-bidi (gitignored); not committed.
+#
+# The version is pinned to the one the generated tables in fonts/bidiclass.go
+# were built from, because the two have to agree: a character whose class
+# changed between releases would be a test failure that is really a stale table.
+BIDI_DIR := testdata/unicode-bidi
+UNICODE_VERSION ?= 17.0.0
+
+bidi-tests: $(BIDI_DIR)/.ok
+
+$(BIDI_DIR)/.ok:
+	mkdir -p $(BIDI_DIR)
+	curl -fsSL -o $(BIDI_DIR)/BidiTest.txt \
+		https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd/BidiTest.txt
+	curl -fsSL -o $(BIDI_DIR)/BidiCharacterTest.txt \
+		https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd/BidiCharacterTest.txt
+	touch $@
+
+# The path is made absolute because the test's working directory is fonts/, not
+# the repository root.
+test-bidi: bidi-tests
+	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 ./fonts/
+
+clean-bidi-tests:
+	rm -rf $(BIDI_DIR)
 
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
