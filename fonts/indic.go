@@ -9,7 +9,7 @@ import (
 // they are drawn.
 //
 // Every other script this package sets is drawn in the order it is written.
-// Devanagari is not. Three things move:
+// Devanagari and its relatives are not. Three things move:
 //
 //   - A *pre-base matra*. The vowel sign ि (U+093F) is stored after the
 //     consonant it belongs to and drawn before it, so कि — ka then the i-sign —
@@ -31,37 +31,44 @@ import (
 //
 // # What is covered
 //
-// Devanagari, and Devanagari alone.
+// The nine scripts that share the model: Bengali, Devanagari, Gujarati,
+// Gurmukhi, Kannada, Malayalam, Oriya, Tamil and Telugu.
 //
-// A run whose Unicode script is Devanagari is reordered here. Every other
-// script — Bengali, Gujarati, Gurmukhi, Kannada, Malayalam, Oriya, Tamil,
-// Telugu, and the Khmer, Myanmar and Universal-Shaping-Engine scripts — is
-// *not*, and is set exactly as it was before: its characters are turned into
-// glyphs in storage order and the font's default features are applied. Text in
-// those scripts is still not correctly set by this package and should be shaped
-// elsewhere and passed in as glyph indices.
+// The model is shared; the data is not, and the data is most of the work. Each
+// script names its own virama and its own letter that can become a reph, states
+// where in the syllable that reph is drawn and what sequence asks for one, says
+// which consonants the below-base forms feature is for, and disagrees with the
+// others about how far out from the base a vowel sign is drawn. All of that is
+// in indicConfigs and indicMatraPosition, stated per script rather than branched
+// on, and a script with none of it stated is not reordered at all.
 //
-// That is a deliberate scope. The model is shared but the data is not: each
-// script states its own base-consonant rule, its own reph position and mode,
-// and its own set of characters that behave unlike their category suggests. A
-// shallow pass over nine scripts would be wrong in each of them in a way only a
-// reader of that script would catch. One script done properly is worth more.
-//
-// Both generations of the Devanagari rules are covered. A script that has two
+// Both generations of each script's rules are covered. A script that has two
 // OpenType specifications has two tags, and the tag a font declares its rules
 // under says which of the two it was written against — see indicOldSpec.
 //
-// Within Devanagari, these are not done:
+// Khmer, Myanmar and the scripts the Universal Shaping Engine covers do *not*
+// share this model, and are deliberately absent: they are set as they were
+// before, their characters turned into glyphs in storage order with the font's
+// default features applied. Text in them is not correctly set by this package
+// and should be shaped elsewhere and passed in as glyph indices. Shaping one of
+// them by these rules would be worse than leaving it, since it would move glyphs
+// by a grammar that is not theirs.
 //
-//   - Pre-base-reordering Ra ('pref'). Devanagari has none; the feature is
-//     applied where the font asks for it but no consonant is moved for it.
-//   - 'locl', the localised forms a font declares per language. It is applied to
-//     every other script this package sets, and an Indic run does not get it.
+// These are not done:
+//
+//   - Pre-base-reordering Ra ('pref'). The feature is applied where the font
+//     asks for it, and its mask is set, but no consonant is moved for it.
 //   - Asking the font about a consonant *with* surrounding context, which the
 //     first-generation rules allow and the second do not. The question is always
 //     put as a bare pair of glyphs, so a font that states its below-base or
 //     post-base forms only as a contextual rule is read as stating none — its
 //     conjuncts then come out as loose letters rather than in the wrong place.
+//   - Canonical ordering of the marks in a syllable. Unicode allows a nukta and
+//     a virama to be written in either order and says they mean the same thing;
+//     this package sets them in the order they were written, so the one order a
+//     font's rules are written against gets its conjunct and the other does not.
+//     Splitting a vowel sign into the marks it is drawn as *is* done, because
+//     the model cannot place such a sign at all while it is one character.
 //
 // # Where this runs
 //
@@ -75,7 +82,7 @@ import (
 //
 // A syllable's glyphs all take the cluster of its first character. They have to:
 // once the glyphs are in drawing order they no longer correspond one-for-one to
-// the characters, and a syllable is the smallest piece of Devanagari that can
+// the characters, and a syllable is the smallest piece of these scripts that can
 // honestly be mapped back to a position in the text.
 
 // indicCat is what a character is within a syllable — the shaping category,
@@ -157,6 +164,24 @@ const (
 	blwfPostOnly
 )
 
+// indicRephMode says how a script writes the reph — the stroke that stands for
+// a syllable-initial Ra.
+type indicRephMode uint8
+
+const (
+	// rephImplicit: any syllable-opening Ra and virama makes one, if the font
+	// has a form for the pair.
+	rephImplicit indicRephMode = iota
+	// rephExplicit: only Ra, virama and a zero-width joiner. Telugu writes a
+	// bare Ra and virama for something else, so the joiner is how a writer asks
+	// for the reph.
+	rephExplicit
+	// rephLogRepha: the script has a character of its own for the stroke, which
+	// is written where it is read — before the syllable — and drawn where the
+	// reph goes. Malayalam's chillu Ra is the one.
+	rephLogRepha
+)
+
 // indicConfig is what one script states about its own reordering: the two
 // characters the rules name directly, and the ways its behaviour differs from
 // the others'.
@@ -169,16 +194,22 @@ type indicConfig struct {
 	// is found: it is the first tag the script selects, so a run finds its
 	// config without this file naming an index into the generated script table.
 	tag string
-	// ra is the consonant that can become a reph, and virama the character the
-	// font's conjunct rules are written against. Both are plain letters by every
-	// Unicode property they have, so both can only be named.
-	ra, virama rune
+	// virama is the character the font's conjunct rules are written against, and
+	// so the one to ask those rules about. It is a plain letter by every Unicode
+	// property it has, so it can only be named. (Which letter can become a reph
+	// is named too, but per character rather than per script — see
+	// indicCatOverrides.)
+	virama rune
 	// hasOldSpec says the script had a first-generation OpenType specification,
 	// and so that a font declaring the older of its two tags means the older
 	// rules. A script with only one specification never does.
 	hasOldSpec bool
 	// blwfMode says which consonants 'blwf' is asked for.
 	blwfMode indicBlwfMode
+	// rephPos is where in the syllable the reph is drawn, and rephMode how the
+	// script writes it.
+	rephPos  indicPos
+	rephMode indicRephMode
 	// doubleHalantBlocksMove says a virama already standing after the last
 	// consonant stops the first-generation post-base virama move. Reports
 	// differ script by script, so only the one known to want it says so.
@@ -186,13 +217,69 @@ type indicConfig struct {
 	// hasEyelashRa says the script's first-generation rules ask for a below-base
 	// form of a pre-base Ra.
 	hasEyelashRa bool
+	// swapsRaHalantJoiner says the script is written with the joiner after the
+	// virama where the model expects it before, and that the two are to be
+	// swapped. Kannada is written that way often enough that every shaper
+	// accepts it.
+	swapsRaHalantJoiner bool
+	// hasHalfForms says the script draws half forms at all. Malayalam and Tamil
+	// do not: what their 'half' feature makes is a chillu or a ligated virama,
+	// which a pre-base vowel sign is drawn *after* rather than before, so
+	// there is nothing for the sign to be moved back past.
+	hasHalfForms bool
+	// skipsUnformedBelowForms says the base moves on past a below-base consonant
+	// the font declined to make a form for. Malayalam alone asks for this.
+	skipsUnformedBelowForms bool
 }
 
 // indicConfigs is every script this file reorders, by its second-generation tag.
+//
+// Every one of them had a first-generation specification, so every one reads its
+// font's tag to decide which rules the font means.
 var indicConfigs = map[string]*indicConfig{
 	"dev2": {
-		tag: "dev2", ra: 0x0930, virama: 0x094D,
-		hasOldSpec: true, blwfMode: blwfPreAndPost, hasEyelashRa: true,
+		tag: "dev2", virama: 0x094D, hasOldSpec: true,
+		rephPos: posBeforePost, rephMode: rephImplicit, blwfMode: blwfPreAndPost,
+		hasEyelashRa: true, hasHalfForms: true,
+	},
+	"bng2": {
+		tag: "bng2", virama: 0x09CD, hasOldSpec: true,
+		rephPos: posAfterSub, rephMode: rephImplicit, blwfMode: blwfPreAndPost,
+		hasHalfForms: true,
+	},
+	"gur2": {
+		tag: "gur2", virama: 0x0A4D, hasOldSpec: true,
+		rephPos: posBeforeSub, rephMode: rephImplicit, blwfMode: blwfPreAndPost,
+		hasHalfForms: true,
+	},
+	"gjr2": {
+		tag: "gjr2", virama: 0x0ACD, hasOldSpec: true,
+		rephPos: posBeforePost, rephMode: rephImplicit, blwfMode: blwfPreAndPost,
+		hasHalfForms: true,
+	},
+	"ory2": {
+		tag: "ory2", virama: 0x0B4D, hasOldSpec: true,
+		rephPos: posAfterMain, rephMode: rephImplicit, blwfMode: blwfPreAndPost,
+		hasHalfForms: true,
+	},
+	"tml2": {
+		tag: "tml2", virama: 0x0BCD, hasOldSpec: true,
+		rephPos: posAfterPost, rephMode: rephImplicit, blwfMode: blwfPreAndPost,
+	},
+	"tel2": {
+		tag: "tel2", virama: 0x0C4D, hasOldSpec: true,
+		rephPos: posAfterPost, rephMode: rephExplicit, blwfMode: blwfPostOnly,
+		hasHalfForms: true,
+	},
+	"knd2": {
+		tag: "knd2", virama: 0x0CCD, hasOldSpec: true,
+		rephPos: posAfterPost, rephMode: rephImplicit, blwfMode: blwfPostOnly,
+		hasHalfForms: true, swapsRaHalantJoiner: true, doubleHalantBlocksMove: true,
+	},
+	"mlm2": {
+		tag: "mlm2", virama: 0x0D4D, hasOldSpec: true,
+		rephPos: posAfterMain, rephMode: rephLogRepha, blwfMode: blwfPreAndPost,
+		skipsUnformedBelowForms: true,
 	},
 }
 
@@ -636,6 +723,7 @@ var indicRunFeatures = []struct {
 	{"rlig", false},
 	{"clig", false},
 	{"calt", false},
+	{"rclt", false},
 }
 
 // shapeIndic is the whole Indic pass: it replaces both the joining pass and the
@@ -646,6 +734,7 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune, plan *indicPlan) []Glyph 
 	// characters, because it is about which characters were written, and it
 	// changes the run that everything below is built from.
 	buf, runes = sh.markInvalidVowels(buf, runes)
+	buf, runes = sh.splitMatras(buf, runes)
 
 	info := make([]indicInfo, len(runes))
 	cats := make([]indicCat, len(runes))
@@ -740,6 +829,72 @@ func (sh shaper) markInvalidVowels(buf []Glyph, runes []rune) ([]Glyph, []rune) 
 	return outBuf, outRunes
 }
 
+// splitMatras replaces each vowel sign that is written as one character and
+// drawn as two or three marks by the marks it is drawn as (indicmatra.go).
+//
+// It is the shaping model's own second step, and it has to happen before
+// anything is placed: the parts of a split sign go to *different* places, one
+// before the letter and one after, so there is no single place the sign itself
+// could be given. Tamil's o-sign is the plain case — U+0BCA is one character and
+// two marks, and a shaper that kept it whole would draw the letter with both
+// marks on the same side of it.
+//
+// A sign is only taken apart when the face has a glyph for every part. A face
+// that draws the sign whole and has no glyph for one of its halves would
+// otherwise lose that half altogether, which is worse than drawing the sign
+// where the model would rather it were not.
+func (sh shaper) splitMatras(buf []Glyph, runes []rune) ([]Glyph, []rune) {
+	outBuf := make([]Glyph, 0, len(buf))
+	outRunes := make([]rune, 0, len(runes))
+	for i, r := range runes {
+		parts, ok := indicSplitMatraOf(r)
+		if !ok {
+			outBuf = append(outBuf, buf[i])
+			outRunes = append(outRunes, r)
+			continue
+		}
+		gids := make([]int, 0, len(parts))
+		for _, p := range parts {
+			gid, have := sh.f.GlyphID(p)
+			if !have {
+				gids = nil
+				break
+			}
+			gids = append(gids, gid)
+		}
+		if gids == nil {
+			outBuf = append(outBuf, buf[i])
+			outRunes = append(outRunes, r)
+			continue
+		}
+		// The parts share the sign's cluster: several glyphs standing for one
+		// character is exactly what a cluster records.
+		for k, gid := range gids {
+			outBuf = append(outBuf, Glyph{
+				GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
+			})
+			outRunes = append(outRunes, parts[k])
+		}
+	}
+	return outBuf, outRunes
+}
+
+// indicSplitMatraOf reports the marks a vowel sign is drawn as, if it is one of
+// the signs drawn as more than one.
+func indicSplitMatraOf(r rune) ([]rune, bool) {
+	i := sort.Search(len(indicSplitMatras), func(i int) bool {
+		return indicSplitMatras[i].r >= r
+	})
+	if i >= len(indicSplitMatras) || indicSplitMatras[i].r != r {
+		return nil, false
+	}
+	parts := indicSplitMatras[i].parts[:]
+	for len(parts) > 0 && parts[len(parts)-1] == 0 {
+		parts = parts[:len(parts)-1]
+	}
+	return parts, true
+}
+
 // indicInvalidClusterAt reports the length of the invalid cluster starting at a
 // position, or zero if none does.
 func indicInvalidClusterAt(runes []rune, at int) int {
@@ -823,10 +978,20 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 	total := 0
 	grow := func(d int) { total += d; end += d }
 
-	// 'ccmp' first: it composes and decomposes so that everything after it has
-	// the glyphs those rules are written against. It is applied per syllable,
-	// like the features below, so that it cannot join one syllable to the next.
-	if lookups := sh.l.featureLookups["ccmp"]; len(lookups) > 0 {
+	// 'locl' and then 'ccmp' first, in that order: the one corrects letterforms
+	// for the language, the other composes and decomposes, and everything after
+	// them is written against what they produce. A script whose letters differ
+	// from the shapes Unicode's chart shows — Odia is the case — states nearly
+	// all of that difference in 'locl', so a run that skipped it would be set in
+	// letters no reader of the language writes.
+	//
+	// They are applied per syllable, like the features below, so that neither can
+	// join one syllable to the next.
+	for _, tag := range []string{"locl", "ccmp"} {
+		lookups := sh.l.featureLookups[tag]
+		if len(lookups) == 0 {
+			continue
+		}
 		var d int
 		buf, d = sh.applyIndicFeature(buf, info, lookups, start, end, start, end, false)
 		grow(d)
@@ -873,7 +1038,7 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, runes []rune
 		}
 	}
 
-	sh.indicFinalReorder(buf, *info, start, end)
+	sh.indicFinalReorder(buf, *info, plan, start, end)
 
 	// 'init' is for a pre-base matra that opens a word — the i-sign at the
 	// start of a word is drawn differently from the same sign mid-word. What
@@ -1130,18 +1295,53 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 	hasReph := false
 	limit := start
 
+	// Kannada writes the eyelash Ra as Ra, virama, joiner where the model
+	// expects Ra, joiner, virama, and enough text does that the specification
+	// accepts it. The two are swapped so that the base search sees the sequence
+	// it is written against.
+	if plan.cfg.swapsRaHalantJoiner && start+3 <= end &&
+		info[start].cat == catRa && info[start+1].cat == catHalant &&
+		info[start+2].cat == catZWJ {
+		buf[start+1], buf[start+2] = buf[start+2], buf[start+1]
+		info[start+1], info[start+2] = info[start+2], info[start+1]
+	}
+
 	// A syllable opening with Ra + virama, with something after it, draws that
 	// Ra as a reph — provided the font has one, which only the font can say.
-	if rphf := sh.l.featureLookups["rphf"]; len(rphf) > 0 && start+3 <= end &&
-		info[start].cat == catRa && indicIsHalant(info[start+1].cat) &&
-		!indicIsJoiner(info[start+2].cat) &&
-		sh.wouldSubstitute(rphf, []int{buf[start].GID, buf[start+1].GID}) {
-		limit += 2
+	//
+	// Which sequence asks for it is the script's. Most scripts take any Ra and
+	// virama; Telugu writes that pair for something else, so a writer asks for
+	// the reph with a joiner after it and the font is asked about all three.
+	// Malayalam has a character of its own for the stroke, written before the
+	// syllable and drawn at the end of it, so there is nothing to ask the font.
+	rphf := sh.l.featureLookups["rphf"]
+	switch {
+	case plan.cfg.rephMode == rephLogRepha && info[start].cat == catRepha:
+		limit++
 		for limit < end && indicIsJoiner(info[limit].cat) {
 			limit++
 		}
 		base = start
 		hasReph = true
+
+	case len(rphf) > 0 && start+3 <= end && info[start].cat == catRa &&
+		indicIsHalant(info[start+1].cat) &&
+		(plan.cfg.rephMode == rephImplicit && !indicIsJoiner(info[start+2].cat) ||
+			plan.cfg.rephMode == rephExplicit && info[start+2].cat == catZWJ):
+
+		probe := []int{buf[start].GID, buf[start+1].GID}
+		if plan.cfg.rephMode == rephExplicit {
+			probe = append(probe, buf[start+2].GID)
+		}
+		if sh.wouldSubstitute(rphf, probe[:2]) ||
+			(plan.cfg.rephMode == rephExplicit && sh.wouldSubstitute(rphf, probe)) {
+			limit += 2
+			for limit < end && indicIsJoiner(info[limit].cat) {
+				limit++
+			}
+			base = start
+			hasReph = true
+		}
 	}
 
 	// The base is found from the end of the syllable backwards: the first
@@ -1355,7 +1555,7 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 // left in it, and a pre-base matra's on how far the half forms reach — both of
 // which are answers the font gave by substituting, or declining to substitute,
 // a moment ago.
-func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, start, end int) {
+func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPlan, start, end int) {
 	if start >= end {
 		return
 	}
@@ -1365,6 +1565,27 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, start, end int
 	base := start
 	for ; base < end; base++ {
 		if info[base].pos >= posBaseC {
+			// Malayalam draws no half forms, so a consonant the font declined to
+			// give a below-base form to is still a letter and is the base — the
+			// search moves on to it rather than stopping at what precedes it.
+			if plan.cfg.skipsUnformedBelowForms {
+				for i := base + 1; i < end; i++ {
+					for i < end && indicIsJoiner(info[i].cat) {
+						i++
+					}
+					if i == end || !indicIsHalant(info[i].cat) {
+						break
+					}
+					i++
+					for i < end && indicIsJoiner(info[i].cat) {
+						i++
+					}
+					if i < end && indicIsBaseCandidate(info[i].cat) && info[i].pos == posBelowC {
+						base = i
+						info[base].pos = posBaseC
+					}
+				}
+			}
 			if start < base && info[base].pos > posBaseC {
 				base--
 			}
@@ -1389,15 +1610,27 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, start, end int
 		if base == end {
 			newPos = base - 2
 		}
-		for newPos > start && !indicIsMatra(info[newPos].cat) && !indicIsHalant(info[newPos].cat) {
-			newPos--
-		}
-		if newPos >= start && indicIsHalant(info[newPos].cat) && info[newPos].pos != posPreM {
-			if newPos+1 < end && indicIsJoiner(info[newPos+1].cat) {
-				newPos++
+		// A script with no half forms has nothing for the sign to be moved back
+		// past: what its 'half' feature makes is a chillu or a ligated virama,
+		// and the sign is drawn after that rather than before it.
+		for plan.cfg.hasHalfForms {
+			for newPos > start && !indicIsMatra(info[newPos].cat) && !indicIsHalant(info[newPos].cat) {
+				newPos--
 			}
-		} else {
-			newPos = start // no virama survived, so nothing moves
+			if !(indicIsHalant(info[newPos].cat) && info[newPos].pos != posPreM) {
+				newPos = start // no virama survived, so nothing moves
+				break
+			}
+			// A joiner after that virama asked for the letters there to be
+			// joined, so the sign does not stop at it and the search goes on.
+			// A non-joiner is the opposite and stops it — which the syllable cut
+			// has already taken care of, a virama and a non-joiner ending a
+			// syllable, so any sign after one belongs to the next.
+			if newPos+1 < end && info[newPos+1].cat == catZWJ && newPos > start {
+				newPos--
+				continue
+			}
+			break
 		}
 		if start < newPos && info[newPos].pos != posPreM {
 			for i := newPos; i > start; i-- {
@@ -1415,48 +1648,95 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, start, end int
 	}
 
 	// The reph. It was left at the front through the substitutions, because
-	// that is where the font's rule for making it is written; it is drawn at
-	// the end of the syllable, above it.
-	if info[start].pos == posRaToBecomeReph {
-		// After the first virama still standing between the reph and the base,
-		// which is where a half form ends and the reph can sit on it.
-		newPos := start + 1
-		for newPos < base && !indicIsHalant(info[newPos].cat) {
-			newPos++
-		}
-		switch {
-		case newPos < base && indicIsHalant(info[newPos].cat):
-			if newPos+1 < base && indicIsJoiner(info[newPos+1].cat) {
-				newPos++
-			}
-		default:
-			// Otherwise immediately *before* the first post-base matra,
-			// syllable modifier or Vedic mark — an anusvara is drawn over the
-			// syllable and the reph belongs under it, and a font commonly has a
-			// single glyph for the two together which it can only make if they
-			// are in that order.
-			newPos = base + 1
-			for newPos < end && !indicAfterReph(info[newPos].pos) {
-				newPos++
-			}
-			if newPos < end {
-				newPos--
-			} else {
-				// Nothing to sit before: the end of the syllable, still inside
-				// any modifiers, which are always drawn last of all.
-				newPos = end - 1
-				for newPos > start && info[newPos].pos == posSMVD {
-					newPos--
-				}
-			}
-		}
-		if newPos > start {
+	// that is where the font's rule for making it is written; where it is drawn
+	// is each script's own answer.
+	if start+1 < end && info[start].pos == posRaToBecomeReph {
+		if newPos := indicRephPosition(info, plan, start, end, base); newPos > start {
 			if start < base && base <= newPos {
 				base--
 			}
 			rotateIndicLeft(buf, info, start, newPos)
 		}
 	}
+}
+
+// indicRephPosition reports where in a syllable the reph is drawn.
+//
+// The scripts disagree, and the disagreement is the point of the reph_pos field:
+// Oriya draws it straight after the main consonant, Bengali after the subjoined
+// forms, Gurmukhi before them, Devanagari and Gujarati before the post-base
+// forms, and Tamil, Telugu and Kannada after everything.
+//
+// The steps below are the specification's, in its order. Reading them:
+//
+//   - A script that draws the reph after everything skips straight to the last
+//     two, since no earlier place can apply to it.
+//   - Otherwise the first explicit virama still standing between the reph and
+//     the base takes it: that is where a half form ends and the reph can sit on
+//     what the half form made. This is the usual answer for a modern font.
+//   - Failing that, the script's own class decides: after the main consonant, or
+//     after the subjoined forms, whichever it states.
+//   - Failing that, the end of the syllable — but inside the modifiers, which
+//     are drawn last of all. An anusvara is drawn over the syllable and the reph
+//     belongs under it, and a font commonly has one glyph for the two together
+//     which it can only make if they are in that order.
+func indicRephPosition(info []indicInfo, plan *indicPlan, start, end, base int) int {
+	// The first virama still standing before the base. Two of the steps want it,
+	// so it is asked for once.
+	afterFirstHalant := func() (int, bool) {
+		at := start + 1
+		for at < base && !indicIsHalant(info[at].cat) {
+			at++
+		}
+		if at >= base || !indicIsHalant(info[at].cat) {
+			return 0, false
+		}
+		// A joiner after that virama belongs with it, and the reph goes past
+		// both — the joiner asked for the form the reph is to sit on.
+		if at+1 < base && indicIsJoiner(info[at+1].cat) {
+			at++
+		}
+		return at, true
+	}
+
+	if plan.cfg.rephPos != posAfterPost {
+		if at, ok := afterFirstHalant(); ok {
+			return at
+		}
+		switch plan.cfg.rephPos {
+		case posAfterMain:
+			at := base
+			for at+1 < end && info[at+1].pos <= posAfterMain {
+				at++
+			}
+			return at
+		case posAfterSub:
+			at := base
+			for at+1 < end && !indicAfterReph(info[at+1].pos) {
+				at++
+			}
+			return at
+		}
+	} else if at, ok := afterFirstHalant(); ok {
+		return at
+	}
+
+	// The end of the syllable, before the modifiers.
+	at := end - 1
+	for at > start && info[at].pos == posSMVD {
+		at--
+	}
+	// A reph that would land after a matra and its virama goes before that
+	// virama instead, so that it can combine with the matra. A plain consonant
+	// and virama are not this case.
+	if indicIsHalant(info[at].cat) {
+		for i := base + 1; i < at; i++ {
+			if indicIsMatra(info[i].cat) {
+				at--
+			}
+		}
+	}
+	return at
 }
 
 // indicAfterReph reports whether a position is one the reph must be drawn
