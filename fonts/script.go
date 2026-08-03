@@ -134,6 +134,35 @@ func scriptFeatures(t []byte, tags []string, lang string) (featureSet, bool) {
 	return nil, false
 }
 
+// chosenScriptTag reports which of a script's tags the font's substitutions were
+// actually read under — the same tag scriptFeatures settled on, by the same walk.
+//
+// A caller needs it when the tag itself carries meaning beyond selection. The
+// Indic scripts are the case: a font declaring 'deva' rather than 'dev2' was
+// written against the first-generation specification and means its rules, and
+// nothing but the tag says so.
+//
+// A font that declares nothing this run can use gets "DFLT", the conventional
+// tag for "any script", which is what the selection fell back to.
+func (f *Face) chosenScriptTag(script uint16) string {
+	tags := scriptTags(script)
+	list := scriptList(f.layoutTables["GSUB"])
+	if len(list) == 0 {
+		return defaultScriptTags[0]
+	}
+	byTag := scriptOffsets(list)
+	for _, tag := range append(append(make([]string, 0, len(tags)+len(defaultScriptTags)), tags...), defaultScriptTags...) {
+		so, ok := byTag[tag]
+		if !ok {
+			continue
+		}
+		if _, ok := readLangSys(list[so:], f.language); ok {
+			return tag
+		}
+	}
+	return defaultScriptTags[0]
+}
+
 // scriptOffsets maps each script tag a ScriptList names to its Script table's
 // offset within the list. A tag declared twice keeps its first table, which is
 // the one a reader walking the list in order would find.
@@ -321,6 +350,22 @@ type shaper struct {
 	// step with a buffer that ligatures and decompositions are reshaping under
 	// it. Nothing else needs it, and it is nil everywhere else.
 	onResize func(at, delta int)
+
+	// joinerAt, when set, says whether a join control stands at a buffer
+	// position, so that a lookup can step over one — see ignorable.go. It is a
+	// function of the position rather than of the glyph because a face commonly
+	// gives a join control the same glyph as the space.
+	//
+	// A nil one means no position holds a joiner, which is true of every run
+	// this package shapes outside the Indic pass: there the joiners are taken
+	// out before any lookup runs.
+	joinerAt func(at int) joinerKind
+
+	// manualJoiners says the feature being applied asked to see the join
+	// controls in its input rather than have them stepped over. The Indic
+	// features do, because a joiner is written precisely to force or forbid the
+	// forms they make.
+	manualJoiners bool
 }
 
 // resized reports a change in the buffer's length at a position, for a caller
