@@ -38,10 +38,27 @@ import (
 //   - Indic reordering, and the other scripts whose characters do not appear in
 //     the order they are drawn. Text in them is not correctly set by this
 //     package and should be shaped elsewhere and passed in as glyph indices.
-//   - Script and language selection: every feature is taken whichever script
-//     declares it. For a Latin face that is what a shaper would have selected
-//     anyway; for a font carrying several scripts it may apply a rule meant for
-//     another. This is the largest remaining simplification.
+//     The second-generation Indic script tags are still selected, because that
+//     is where such a font declares its features, but the reordering those
+//     features are written to follow is not done.
+//   - Choosing a language from the text. Which script a run is in is decidable
+//     from its characters; which language it is in is not — "colour" and "color"
+//     are the same letters — so the default language system is used unless a
+//     caller names one (Face.SetLanguage).
+//
+// # Script and language selection
+//
+// A font states its rules per script: a ScriptList names each script it covers,
+// each script names its language systems, and each language system names the
+// features that apply. Shaping resolves the run's script from Unicode (see
+// scripts.go), selects the features that script and language name, and reads
+// the tables from those alone — so a Greek run is not given a rule the font
+// declares only for Arabic.
+//
+// A font with no ScriptList, or one that declares nothing for the run's script
+// and no default either, falls back to taking every feature whatever declares
+// it. That is what this package did before there was any selection at all, and
+// it is the right answer for a table that says nothing about scripts.
 //
 // # Bounds
 //
@@ -58,7 +75,22 @@ const (
 	maxSubtables = 256
 	maxPairs     = 1 << 18
 	maxLigatures = 1 << 14
+	maxScripts   = 256
+	maxLangSys   = 256
 )
+
+// featureSet is the set of FeatureList indices a script and language select.
+//
+// A nil set means no selection was made — the table declares no scripts, or
+// none that matched — and every feature is taken, which is what this package
+// did before it read the ScriptList. An empty but non-nil set means the
+// selection was made and chose nothing, which is a different thing and has to
+// stay distinguishable from it.
+type featureSet map[int]bool
+
+// selects reports whether a feature at the given index in the FeatureList
+// applies.
+func (s featureSet) selects(index int) bool { return s == nil || s[index] }
 
 // layout holds what was read out of a font's layout tables.
 type layout struct {
@@ -183,15 +215,23 @@ type ligature struct {
 	glyph      int   // what they become, together with the first
 }
 
-// readLayout parses the layout tables of a font. It never fails: a table that
-// cannot be understood contributes nothing, because text set without kerning is
-// correct text set plainly, while text set from a misread table is wrong.
-func readLayout(tables map[string][]byte) *layout {
+// readPositioning parses everything GDEF, GPOS and the legacy kern table say,
+// taking the GPOS features the given selection admits.
+//
+// It is separate from the substitution half because the two are cached
+// separately, and because it is the expensive one: a large face states tens of
+// thousands of kern pairs, and it commonly states the same ones for every
+// script it covers while stating *different* substitutions for each. Reading it
+// once per script would multiply the largest table in the font by the number of
+// scripts a document sets, to no end.
+//
+// It never fails: a table that cannot be understood contributes nothing,
+// because text set without kerning is correct text set plainly, while text set
+// from a misread table is wrong.
+func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 	l := &layout{
 		kern:          map[[2]int]int{},
-		ligatures:     map[int][]ligature{},
 		glyphClass:    map[int]int{},
-		single:        map[string]map[int]int{},
 		singlePos:     map[int]singleAdjust{},
 		markAnchors:   map[int]markAnchor{},
 		markBases:     map[key2]anchor{},
@@ -200,19 +240,40 @@ func readLayout(tables map[string][]byte) *layout {
 	}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
-		l.readGPOSKerning(gpos)
-		l.readGPOSAttachment(gpos)
+		l.readGPOSKerning(gpos, sel)
+		l.readGPOSAttachment(gpos, sel)
 	}
 	if len(l.kern) == 0 {
 		// Only as a fallback: a font with both should be read through GPOS,
 		// which is the one a modern shaper honours.
 		l.readKernTable(tables["kern"])
 	}
+	return l
+}
+
+// readLayout reads the substitution tables on top of an already-read
+// positioning half, taking the GSUB features the given selection admits. The
+// selection is the FeatureList indices the run's script and language chose; a
+// nil one takes every feature, which is what a table with no ScriptList gets.
+//
+// The positioning half is copied whole and then the substitution fields are
+// reset, rather than the other way about, so that a positioning field added to
+// layout later is carried across without this having to be remembered. The maps
+// it copies are shared with every other layout built on the same half, and are
+// never written to once read.
+func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout) *layout {
+	l := new(layout)
+	*l = *pos
+	l.ligatures = map[int][]ligature{}
+	l.single = map[string]map[int]int{}
+	l.gsub = nil
+	l.featureLookups = nil
+	l.substFlags = 0
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
-		l.readGSUBLigatures(gsub)
-		l.readSingleSubstitutions(gsub)
+		l.readGSUBLigatures(gsub, gsubSel)
+		l.readSingleSubstitutions(gsub, gsubSel)
 		l.gsub = gsubLookups(gsub)
-		l.featureLookups = featureLookupIndices(gsub)
+		l.featureLookups = featureLookupIndices(gsub, gsubSel)
 	}
 	return l
 }
@@ -253,8 +314,10 @@ func gsubLookups(gsub []byte) []rawLookup {
 }
 
 // featureLookupIndices maps each feature tag to the lookup indices it names,
-// merging every script and language that declares the tag.
-func featureLookupIndices(t []byte) map[string][]int {
+// merging every feature the selection admits — which for a font that declares
+// its scripts is every one the run's script and language chose, and for one
+// that does not is every feature in the table.
+func featureLookupIndices(t []byte, sel featureSet) map[string][]int {
 	out := map[string][]int{}
 	off := font.Be16(t, 6)
 	if off <= 0 || off+2 > len(t) {
@@ -269,6 +332,9 @@ func featureLookupIndices(t []byte) map[string][]int {
 		rec := 2 + 6*i
 		if rec+6 > len(list) {
 			break
+		}
+		if !sel.selects(i) {
+			continue
 		}
 		tag := string(list[rec : rec+4])
 		fo := font.Be16(list, rec+4)
@@ -300,8 +366,12 @@ func containsInt(s []int, v int) bool {
 }
 
 // featureLookups returns the lookup-table byte slices reachable from every
-// feature with the given tag, whatever script or language declares it.
-func featureLookups(t []byte, tag string) [][]byte {
+// feature with the given tag that the selection admits.
+//
+// A tag may appear in the FeatureList many times — a face with a dozen 'locl'
+// features is ordinary, one per language it corrects letterforms for — and it
+// is the selection, not the tag, that says which of them this run gets.
+func featureLookups(t []byte, tag string, sel featureSet) [][]byte {
 	featureListOff := font.Be16(t, 6)
 	lookupListOff := font.Be16(t, 8)
 	if featureListOff <= 0 || lookupListOff <= 0 ||
@@ -339,7 +409,7 @@ func featureLookups(t []byte, tag string) [][]byte {
 		if rec+6 > len(featureList) {
 			break
 		}
-		if string(featureList[rec:rec+4]) != tag {
+		if string(featureList[rec:rec+4]) != tag || !sel.selects(i) {
 			continue
 		}
 		off := font.Be16(featureList, rec+4)
@@ -403,9 +473,10 @@ func subtables(lookup []byte, extensionType int) (kind, flags int, out [][]byte)
 	return kind, flags, out
 }
 
-// readGPOSKerning reads pair adjustments from every 'kern' feature.
-func (l *layout) readGPOSKerning(gpos []byte) {
-	for _, lookup := range featureLookups(gpos, "kern") {
+// readGPOSKerning reads pair adjustments from every 'kern' feature this run's
+// script selected.
+func (l *layout) readGPOSKerning(gpos []byte, sel featureSet) {
+	for _, lookup := range featureLookups(gpos, "kern", sel) {
 		kind, flags, subs := subtables(lookup, 9) // 9 = extension positioning
 		if kind != 2 {                            // 2 = pair adjustment
 			continue
@@ -623,9 +694,10 @@ func classDef(base []byte, off int) map[int]int {
 	return out
 }
 
-// readGSUBLigatures reads ligature substitutions from every 'liga' feature.
-func (l *layout) readGSUBLigatures(gsub []byte) {
-	for _, lookup := range featureLookups(gsub, "liga") {
+// readGSUBLigatures reads ligature substitutions from every 'liga' feature this
+// run's script selected.
+func (l *layout) readGSUBLigatures(gsub []byte, sel featureSet) {
+	for _, lookup := range featureLookups(gsub, "liga", sel) {
 		kind, flags, subs := subtables(lookup, 7) // 7 = extension substitution
 		if kind != 4 {                            // 4 = ligature substitution
 			continue
@@ -742,14 +814,14 @@ func (l *layout) kernFormat0(t []byte) {
 }
 
 // readSingleSubstitutions reads the one-for-one substitutions of every feature
-// the font declares, keyed by tag.
+// this run's script selected, keyed by tag.
 //
 // They are read eagerly and applied only on request. A font's 'smcp' turns
 // letters into small capitals and its 'onum' turns lining figures into oldstyle
 // ones; both are correct only when a caller asks for them, so unlike 'liga'
 // they cannot be applied by default. Reading them all costs one pass and means
 // ShapeWith needs no second one.
-func (l *layout) readSingleSubstitutions(gsub []byte) {
+func (l *layout) readSingleSubstitutions(gsub []byte, sel featureSet) {
 	if len(gsub) < 10 {
 		return
 	}
@@ -769,11 +841,11 @@ func (l *layout) readSingleSubstitutions(gsub []byte) {
 			break
 		}
 		tag := string(featureList[rec : rec+4])
-		if seen[tag] {
+		if seen[tag] || !sel.selects(i) {
 			continue
 		}
 		seen[tag] = true
-		for _, lookup := range featureLookups(gsub, tag) {
+		for _, lookup := range featureLookups(gsub, tag, sel) {
 			kind, flags, subs := subtables(lookup, 7)
 			if kind != 1 { // 1 = single substitution
 				continue

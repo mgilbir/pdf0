@@ -41,13 +41,13 @@ func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 	if len(glyphs) == 0 {
 		return nil, missing
 	}
-	return f.shapeGlyphs(glyphs), missing
+	return f.shaperFor(s).shapeGlyphs(glyphs), missing
 }
 
 // shapeGlyphs turns a glyph run into spans: ligatures first, then kerning, then
 // the codes and displacements a text operator takes.
-func (f *Face) shapeGlyphs(glyphs []int) []content.TextSpan {
-	glyphs = f.applyLigatures(glyphs)
+func (sh shaper) shapeGlyphs(glyphs []int) []content.TextSpan {
+	glyphs = sh.applyLigatures(glyphs)
 
 	var (
 		run  []byte
@@ -55,21 +55,21 @@ func (f *Face) shapeGlyphs(glyphs []int) []content.TextSpan {
 		prev = -1
 	)
 	for _, gid := range glyphs {
-		if prev >= 0 && !f.layout.ignores(f.layout.kernFlags, gid) {
-			if k, ok := f.layout.kern[[2]int{prev, gid}]; ok && k != 0 {
+		if prev >= 0 && !sh.l.ignores(sh.l.kernFlags, gid) {
+			if k, ok := sh.l.kern[[2]int{prev, gid}]; ok && k != 0 {
 				// Flush what has accumulated, then the displacement. The sign
 				// flips: a negative kern closes the gap, and TJ subtracts.
 				out = append(out, content.TextSpan{Codes: run})
-				out = append(out, content.TextSpan{Adjust: -f.scale(k)})
+				out = append(out, content.TextSpan{Adjust: -sh.f.scale(k)})
 				run = nil
 			}
 		}
 		run = append(run, byte(gid>>8), byte(gid))
-		f.used[gid] = true
+		sh.f.used[gid] = true
 		// A glyph the kerning lookup ignores does not become the left half of
 		// the next pair either: the pair is between the glyphs either side of
 		// it, which is the whole point of the flag.
-		if !f.layout.ignores(f.layout.kernFlags, gid) {
+		if !sh.l.ignores(sh.l.kernFlags, gid) {
 			prev = gid
 		}
 	}
@@ -92,16 +92,17 @@ func (f *Face) MeasureShaped(s string, size float64) float64 {
 		// by glyph index.
 		return f.Measure(s, size)
 	}
+	sh := f.shaperFor(s)
 	glyphs, _ := f.glyphRun(s)
-	glyphs = f.applyLigatures(glyphs)
+	glyphs = sh.applyLigatures(glyphs)
 	var total float64
 	prev := -1
 	for _, gid := range glyphs {
-		if prev >= 0 && !f.layout.ignores(f.layout.kernFlags, gid) {
-			total += f.scale(f.layout.kern[[2]int{prev, gid}])
+		if prev >= 0 && !sh.l.ignores(sh.l.kernFlags, gid) {
+			total += f.scale(sh.l.kern[[2]int{prev, gid}])
 		}
 		total += f.advanceGID(gid)
-		if !f.layout.ignores(f.layout.kernFlags, gid) {
+		if !sh.l.ignores(sh.l.kernFlags, gid) {
 			prev = gid
 		}
 	}
@@ -129,14 +130,14 @@ func (f *Face) glyphRun(s string) (glyphs []int, missing int) {
 // path (ShapeGlyphs) goes through the lookup list instead, which honours lookup
 // flags and can be invoked from a contextual rule; the two agree on plain text,
 // which is all the span path is for.
-func (f *Face) applyLigatures(glyphs []int) []int {
-	if len(f.layout.ligatures) == 0 {
+func (sh shaper) applyLigatures(glyphs []int) []int {
+	if len(sh.l.ligatures) == 0 {
 		return glyphs
 	}
 	out := make([]int, 0, len(glyphs))
 	for i := 0; i < len(glyphs); {
 		matched := false
-		for _, lig := range f.layout.ligatures[glyphs[i]] {
+		for _, lig := range sh.l.ligatures[glyphs[i]] {
 			// components are the glyphs after the first, so the run needs
 			// len(components) more glyphs to exist beyond i.
 			if i+len(lig.components) >= len(glyphs) {
@@ -188,9 +189,10 @@ func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 // capitals from a face that has none should set the text plainly, not fail.
 // Features returns what a face actually offers.
 func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan, missing int) {
+	sh := f.shaperFor(s)
 	glyphs, missing := f.glyphRun(s)
 	for _, tag := range features {
-		table := f.layout.single[tag]
+		table := sh.l.single[tag]
 		if table == nil {
 			continue
 		}
@@ -200,7 +202,7 @@ func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan
 			}
 		}
 	}
-	return f.shapeGlyphs(glyphs), missing
+	return sh.shapeGlyphs(glyphs), missing
 }
 
 // Features lists the substitution features this face offers by name, sorted.

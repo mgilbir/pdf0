@@ -144,8 +144,8 @@ func joinForms(runes []rune) []string {
 //
 // A font that declares none of the four features is left alone, which is every
 // font for a script that does not join.
-func (f *Face) applyJoining(buf []Glyph, runes []rune) []Glyph {
-	l := f.layout
+func (sh shaper) applyJoining(buf []Glyph, runes []rune) []Glyph {
+	l := sh.l
 	if len(l.single[featInitial]) == 0 && len(l.single[featMedial]) == 0 &&
 		len(l.single[featFinal]) == 0 && len(l.single[featIsolated]) == 0 {
 		return buf
@@ -163,7 +163,7 @@ func (f *Face) applyJoining(buf []Glyph, runes []rune) []Glyph {
 		}
 		if to, ok := l.single[forms[i]][buf[i].GID]; ok {
 			buf[i].GID = to
-			buf[i].XAdvance = f.advanceGID(to)
+			buf[i].XAdvance = sh.f.advanceGID(to)
 		}
 	}
 	return buf
