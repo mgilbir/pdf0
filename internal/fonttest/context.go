@@ -61,53 +61,21 @@ func GPOSLookups(lookups []Lookup, features map[string][]int) []byte {
 	return layoutLookups(lookups, features)
 }
 
+// layoutLookups builds a table whose features are named by tag, with one
+// 'DFLT' script selecting all of them. Use GSUBTable or GPOSTable where the
+// scripts are the point.
 func layoutLookups(lookups []Lookup, features map[string][]int) []byte {
-	lookupList := make([]byte, 2+2*len(lookups))
-	binary.BigEndian.PutUint16(lookupList[0:], uint16(len(lookups)))
-	for i, lk := range lookups {
-		body := make([]byte, 6+2*len(lk.Subtables))
-		binary.BigEndian.PutUint16(body[0:], uint16(lk.Type))
-		binary.BigEndian.PutUint16(body[2:], uint16(lk.Flag))
-		binary.BigEndian.PutUint16(body[4:], uint16(len(lk.Subtables)))
-		for j, sub := range lk.Subtables {
-			binary.BigEndian.PutUint16(body[6+2*j:], uint16(len(body)))
-			body = append(body, sub...)
-		}
-		binary.BigEndian.PutUint16(lookupList[2+2*i:], uint16(len(lookupList)))
-		lookupList = append(lookupList, body...)
-	}
-
 	tags := make([]string, 0, len(features))
 	for tag := range features {
 		tags = append(tags, tag)
 	}
 	sortStrings(tags)
 
-	featureList := make([]byte, 2+6*len(tags))
-	binary.BigEndian.PutUint16(featureList[0:], uint16(len(tags)))
-	for i, tag := range tags {
-		idx := features[tag]
-		feat := make([]byte, 4+2*len(idx))
-		binary.BigEndian.PutUint16(feat[2:], uint16(len(idx)))
-		for j, v := range idx {
-			binary.BigEndian.PutUint16(feat[4+2*j:], uint16(v))
-		}
-		rec := 2 + 6*i
-		copy(featureList[rec:], tag)
-		binary.BigEndian.PutUint16(featureList[rec+4:], uint16(len(featureList)))
-		featureList = append(featureList, feat...)
+	list := make([]Feature, 0, len(tags))
+	for _, tag := range tags {
+		list = append(list, Feature{Tag: tag, Lookups: features[tag]})
 	}
-
-	header := make([]byte, 10)
-	binary.BigEndian.PutUint32(header[0:], 0x00010000)
-	out := append([]byte(nil), header...)
-	binary.BigEndian.PutUint16(out[4:], uint16(len(out)))
-	out = append(out, 0, 0) // an empty ScriptList
-	binary.BigEndian.PutUint16(out[6:], uint16(len(out)))
-	out = append(out, featureList...)
-	binary.BigEndian.PutUint16(out[8:], uint16(len(out)))
-	out = append(out, lookupList...)
-	return out
+	return layoutTableFull(lookups, list, nil)
 }
 
 // SingleSubst is a lookup type 1 subtable replacing each glyph in from with the
