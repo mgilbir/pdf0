@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/mgilbir/pdf0/object"
@@ -29,8 +30,94 @@ type Link struct {
 	URI string
 
 	// Page is a reference to a page in this document, for a link within it.
-	// The view is left to the reader, which shows the whole page.
 	Page *object.IndirectRef
+
+	// To says where on that page to go. The zero value shows the whole page,
+	// which is right for a link to a chapter and wrong for a link to a
+	// paragraph — a reader that jumps to the top of a forty-page section has not
+	// answered the question the link asked.
+	To Destination
+}
+
+// Destination is where on a page a link arrives.
+//
+// The zero value is the whole page, so a Link that says nothing about it keeps
+// the behaviour it had before this existed.
+type Destination struct {
+	// Kind selects between the forms below.
+	Kind DestinationKind
+
+	// Top is the y coordinate to bring to the top of the window, for AtPosition
+	// and AtTop. It is in the page's own coordinate space, where y increases
+	// upwards — so the top of a US Letter page is 792, not 0. Getting that
+	// backwards sends every anchor to the wrong end of the page.
+	Top float64
+
+	// Left is the x coordinate to bring to the left edge, for AtPosition.
+	Left float64
+
+	// Zoom is the magnification for AtPosition. Zero means "leave it as it is",
+	// which is almost always what an anchor within a document wants: changing
+	// the reader's zoom because they followed a link is a surprise.
+	Zoom float64
+}
+
+// DestinationKind is which of the destination forms a link uses.
+type DestinationKind int
+
+const (
+	// WholePage fits the entire page in the window (/Fit). It is the zero value.
+	WholePage DestinationKind = iota
+	// AtTop brings a given y coordinate to the top of the window and leaves the
+	// horizontal position and magnification alone (/FitH). This is the right
+	// choice for an anchor in flowing text.
+	AtTop
+	// AtPosition brings a given corner to the top left and optionally sets the
+	// magnification (/XYZ).
+	AtPosition
+)
+
+// destination builds the destination array for a link into this document.
+//
+// A destination is [page /Name args…], and the argument that is omitted is
+// written as null rather than left out: the array is positional, so a shorter
+// one does not mean "leave this alone", it means a different destination.
+func (d Destination) destination(page object.IndirectRef) (object.Array, error) {
+	switch d.Kind {
+	case WholePage:
+		return object.Array{page, object.Name("Fit")}, nil
+	case AtTop:
+		if err := checkFinite("the link's destination top", d.Top); err != nil {
+			return nil, err
+		}
+		return object.Array{page, object.Name("FitH"), numberFor(d.Top)}, nil
+	case AtPosition:
+		for name, v := range map[string]float64{
+			"left": d.Left, "top": d.Top, "zoom": d.Zoom,
+		} {
+			if err := checkFinite("the link's destination "+name, v); err != nil {
+				return nil, err
+			}
+		}
+		if d.Zoom < 0 {
+			return nil, fmt.Errorf("pdf0: the link's destination zoom is %g; magnification cannot be negative", d.Zoom)
+		}
+		zoom := object.Object(object.Null{})
+		if d.Zoom != 0 {
+			// A zoom of zero and an omitted zoom mean the same thing to a reader
+			// — leave the magnification alone — and null is how that is written.
+			zoom = numberFor(d.Zoom)
+		}
+		return object.Array{page, object.Name("XYZ"), numberFor(d.Left), numberFor(d.Top), zoom}, nil
+	}
+	return nil, fmt.Errorf("pdf0: unknown link destination kind %d", d.Kind)
+}
+
+func checkFinite(what string, v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("pdf0: %s is %v, which is not a coordinate", what, v)
+	}
+	return nil
 }
 
 // annotation builds the annotation dictionary for a link.
@@ -50,6 +137,11 @@ func (l Link) annotation() (*object.Dictionary, error) {
 		return nil, fmt.Errorf("pdf0: the link names both a URI and a page; it can have one destination")
 	case l.URI == "" && l.Page == nil:
 		return nil, fmt.Errorf("pdf0: the link names no destination")
+	case l.URI != "" && l.To != (Destination{}):
+		// Where to arrive on a page is meaningless for a link that leaves the
+		// document, and silently dropping it would hide a caller's mistake about
+		// which kind of link they were building.
+		return nil, fmt.Errorf("pdf0: the link goes to a URI, so a position within a page has no meaning")
 	}
 
 	a := &object.Dictionary{}
@@ -77,7 +169,11 @@ func (l Link) annotation() (*object.Dictionary, error) {
 	// An internal link is a destination rather than an action. The two are
 	// interchangeable to a reader and not to a validator: PDF/A restricts what
 	// actions a document may carry, and a destination is not an action at all.
-	a.Set("Dest", object.Array{*l.Page, object.Name("Fit")})
+	dest, err := l.To.destination(*l.Page)
+	if err != nil {
+		return nil, err
+	}
+	a.Set("Dest", dest)
 	return a, nil
 }
 

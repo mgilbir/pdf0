@@ -1,6 +1,10 @@
 package content
 
-import "github.com/mgilbir/pdf0/object"
+import (
+	"strconv"
+
+	"github.com/mgilbir/pdf0/object"
+)
 
 // Text objects, text state, positioning and showing (ISO 32000-2 9.4), plus
 // marked content (14.6).
@@ -215,6 +219,33 @@ func (b *Builder) BeginMarked(tag object.Name) *Builder { return b.op("BMC", tag
 func (b *Builder) BeginMarkedProperties(tag, properties object.Name) *Builder {
 	record(&b.res.Properties, properties)
 	return b.op("BDC", tag, properties)
+}
+
+// BeginTagged opens a marked-content sequence carrying a marked-content
+// identifier (BDC with an inline property list).
+//
+// This is what makes a content stream taggable. A structure element says "my
+// content is identifier 4 on page 2", and this is the other end of that
+// sentence: the span of the stream that identifier names. Without it a
+// structure tree describes a document whose content it cannot point at.
+//
+// The property list is written inline rather than through the page's
+// /Resources /Properties because an identifier is not a shared resource — every
+// span has its own, and a page of a thousand paragraphs would otherwise need a
+// thousand named entries that are each used once.
+//
+// Identifiers must be unique within a page and are conventionally assigned in
+// the order the content is drawn. Nesting is allowed and is how a heading
+// inside a section is expressed; every BeginTagged needs its EndMarked.
+func (b *Builder) BeginTagged(tag object.Name, mcid int) *Builder {
+	if mcid < 0 {
+		return b.fail("marked-content identifier %d is negative", mcid)
+	}
+	var props []byte
+	props = append(props, "<</MCID "...)
+	props = strconv.AppendInt(props, int64(mcid), 10)
+	props = append(props, ">>"...)
+	return b.op("BDC", tag, props)
 }
 
 // EndMarked closes a marked-content sequence (EMC).
