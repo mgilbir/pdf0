@@ -237,6 +237,59 @@ func (f *Face) SetLanguage(tag string) { f.language = tag }
 // Language reports the language system set with SetLanguage.
 func (f *Face) Language() string { return f.language }
 
+// Scripts lists the OpenType script tags the face declares layout rules for,
+// in sorted order — "latn", "cyrl", "deva" and so on, plus "DFLT" where the
+// font names a default.
+//
+// It is the question a caller asks when assembling a fallback stack: a face may
+// have the *glyphs* for a script and none of the rules that make it legible,
+// and for Devanagari or Arabic the difference between the two is a row of
+// unjoined letters. Covers answers the first question; this answers the second.
+//
+// A face whose tables name no scripts at all returns nothing, which is not the
+// same as covering nothing: such a font's features apply to everything.
+func (f *Face) Scripts() []string {
+	seen := map[string]bool{}
+	for _, table := range []string{"GSUB", "GPOS"} {
+		for tag := range scriptOffsets(scriptList(f.layoutTables[table])) {
+			seen[tag] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for tag := range seen {
+		out = append(out, tag)
+	}
+	sortStrings(out)
+	return out
+}
+
+// HasScript reports whether the face declares layout rules for a script tag.
+func (f *Face) HasScript(tag string) bool {
+	for _, table := range []string{"GSUB", "GPOS"} {
+		if _, ok := scriptOffsets(scriptList(f.layoutTables[table]))[tag]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// scriptList is the ScriptList of a GSUB or GPOS table, which is where the
+// script tags live — the table itself only points at it.
+//
+// It returns nothing rather than the table when the offset is missing or out of
+// range, so a caller reading tags from a malformed font finds none rather than
+// reading the header as though it were a list of tags.
+func scriptList(t []byte) []byte {
+	if len(t) < 10 {
+		return nil
+	}
+	off := font.Be16(t, 4)
+	if off <= 0 || off+2 > len(t) {
+		return nil
+	}
+	return t[off:]
+}
+
 // shaper is a face together with the rules that apply to the run being shaped.
 //
 // The two are separate because a face has more than one set of rules: one per

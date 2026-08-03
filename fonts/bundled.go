@@ -15,16 +15,28 @@ import (
 // do.
 //
 // So a module that can write a conforming document with text on it has to be
-// able to produce a font, and this is it. Noto Sans, Regular, under the SIL
-// Open Font License — the licence, the copyright notice and the provenance are
-// in the notosans directory beside this file, and travel with it as that
-// licence requires.
+// able to produce a font, and this is it. Noto Sans, as Google Fonts ships it,
+// under the SIL Open Font License — the licence, the copyright notice and the
+// provenance are in the notosans directory beside this file, and travel with it
+// as that licence requires.
+//
+// # Why the variable font, and why that is not a problem
+//
+// Google Fonts ships Noto Sans as a variable font, and it is the *only* build
+// that carries Devanagari: the narrower per-script upstream this originally
+// took has Latin, Greek and Cyrillic alone. A variable font embedded whole
+// would be wrong — a PDF reader is not asked to instance one — but nothing is
+// embedded whole. Subsetting keeps the static tables and drops fvar, gvar,
+// avar, HVAR, MVAR and STAT, and in a variable font the glyf outlines *are*
+// the default instance. So what reaches a document is an ordinary static font
+// at the default weight, which for this face is Regular: the advances are
+// identical to the separately-published static Regular, glyph for glyph.
 //
 // A document made with it carries no licence obligation of its own. OFL 1.1 is
 // explicit that the requirement to stay under the licence "does not apply to
 // any document created using the Font Software".
 
-//go:embed notosans/NotoSans-Regular.ttf
+//go:embed notosans/NotoSans-Variable.ttf
 var notoSansRegular []byte
 
 //go:embed notosans/OFL.txt
