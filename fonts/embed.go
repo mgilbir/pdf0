@@ -85,10 +85,9 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	descriptor.Set("Ascent", object.Integer(int(f.scale(f.ascent))))
 	descriptor.Set("Descent", object.Integer(int(f.scale(f.descent))))
 	descriptor.Set("CapHeight", object.Integer(int(f.scale(f.capHeight))))
-	// StemV has no counterpart in an sfnt: it is a Type 1 notion that the
-	// format simply does not carry. A descriptor must have one, so this is an
-	// estimate and is documented as such rather than dressed up as measured.
-	descriptor.Set("StemV", object.Integer(80))
+	// StemV is estimated from the weight the font declares; see stemV for why
+	// it cannot be measured here and why that is acceptable.
+	descriptor.Set("StemV", object.Integer(f.stemV))
 	descriptor.Set("FontFile2", programRef)
 	descriptor.Set("CIDSet", cidSetRef)
 	descriptorRef := doc.Add(descriptor)
