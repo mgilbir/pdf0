@@ -60,11 +60,8 @@ func typesetDocAt(t *testing.T, level pdfa.Level, text string) (*Document, *font
 	doc := NewPDFADocument(level)
 	face := testFace(t)
 
-	fontRef, err := face.Embed(doc)
-	if err != nil {
-		t.Fatalf("embedding: %v", err)
-	}
-
+	// Encode first, embed last: the subset carries the glyphs the face has been
+	// asked for, so a font embedded before the text is drawn would carry none.
 	codes, missing := face.Encode(text)
 	if missing != 0 {
 		t.Fatalf("the fixture font is missing %d runes of %q", missing, text)
@@ -75,6 +72,11 @@ func typesetDocAt(t *testing.T, level pdfa.Level, text string) (*Document, *font
 	data, err := b.Bytes()
 	if err != nil {
 		t.Fatalf("drawing: %v", err)
+	}
+
+	fontRef, err := face.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding: %v", err)
 	}
 
 	stream := &object.Stream{Dict: object.Dictionary{}, Data: data}
