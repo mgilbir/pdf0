@@ -78,6 +78,10 @@ type Face struct {
 	// cff reports that the outlines are CFF rather than glyf, which changes
 	// both how the program is embedded and whether it can be subsetted.
 	cff bool
+	// std is set for one of the fourteen standard faces, which has no program
+	// at all: its metrics are the ones Adobe published and its codes are
+	// WinAnsi characters rather than glyph indices.
+	std *stdMetrics
 
 	layout *layout // kerning and ligatures, empty when the font declares none
 
@@ -182,8 +186,24 @@ func Load(data []byte) (*Face, error) {
 // Name is the font's PostScript name, which becomes /BaseFont.
 func (f *Face) Name() string { return f.name }
 
-// GlyphID maps a rune to its glyph index, reporting whether the font has one.
+// GlyphID maps a rune to the number the content stream will carry for it,
+// reporting whether the font covers it.
+//
+// For an embedded face that number is a glyph index, because the encoding is
+// Identity-H. For a standard face it is the WinAnsiEncoding byte, because the
+// encoding is a character encoding — the two are different kinds of number and
+// the only thing they have in common is that Encode writes them.
 func (f *Face) GlyphID(r rune) (int, bool) {
+	if f.std != nil {
+		code, name, ok := stdCode(r)
+		if !ok {
+			return 0, false
+		}
+		if _, has := f.std.widths[name]; !has {
+			return 0, false
+		}
+		return int(code), true
+	}
 	gid, ok := f.prog.Cmap[r]
 	return gid, ok && gid != 0
 }
@@ -192,6 +212,9 @@ func (f *Face) GlyphID(r rune) (int, bool) {
 // unit PDF text space uses. It reports whether the font maps the rune at all;
 // for one it does not, the advance is .notdef's.
 func (f *Face) Advance(r rune) (float64, bool) {
+	if f.std != nil {
+		return f.stdAdvance(r)
+	}
 	gid, ok := f.GlyphID(r)
 	if !ok {
 		return f.advanceGID(0), false
@@ -212,7 +235,12 @@ func (f *Face) advanceGID(gid int) float64 {
 func (f *Face) Measure(s string, size float64) float64 {
 	var total float64
 	for _, r := range s {
-		w, _ := f.Advance(r)
+		w, ok := f.Advance(r)
+		if !ok && f.std != nil {
+			// A character outside the encoding is set as a space, so it is a
+			// space that must be measured.
+			w, _ = f.stdAdvance(' ')
+		}
 		total += w
 	}
 	return total * size / 1000
@@ -228,6 +256,22 @@ func (f *Face) Measure(s string, size float64) float64 {
 // character, and silently dropping it would lose content. The second result
 // reports how many runes were missing so a caller that cares can react.
 func (f *Face) Encode(s string) (codes []byte, missing int) {
+	if f.std != nil {
+		// One byte per character: the codes are WinAnsi, not glyph indices.
+		// A character the encoding has no code for becomes the space, which is
+		// what a reader would show for an undefined code anyway, and the count
+		// says how many there were.
+		codes = make([]byte, 0, len(s))
+		for _, r := range s {
+			code, ok := f.GlyphID(r)
+			if !ok {
+				missing++
+				code = ' '
+			}
+			codes = append(codes, byte(code))
+		}
+		return codes, missing
+	}
 	codes = make([]byte, 0, 2*len(s))
 	for _, r := range s {
 		gid, ok := f.GlyphID(r)
@@ -429,5 +473,11 @@ func stemV(os2 []byte) int {
 }
 
 // NumGlyphs is the number of glyphs the font program declares, including
-// .notdef. It is unchanged by subsetting, which retains glyph indices.
-func (f *Face) NumGlyphs() int { return f.prog.NumGlyphs }
+// .notdef. It is unchanged by subsetting, which retains glyph indices. A
+// standard face has no program, and reports zero.
+func (f *Face) NumGlyphs() int {
+	if f.prog == nil {
+		return 0
+	}
+	return f.prog.NumGlyphs
+}

@@ -37,6 +37,11 @@ type Allocator interface {
 // The name written to /BaseFont carries the six-letter subset tag ISO 32000-2
 // 9.6.4 requires, so a reader can tell two subsets of one face apart.
 func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
+	if f.std != nil {
+		// A standard face embeds nothing: the reader has it, and naming it is
+		// the whole mechanism.
+		return f.embedStandard(doc)
+	}
 	if f.prog.NumGlyphs == 0 {
 		return object.IndirectRef{}, errNoGlyphs
 	}

@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/font"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
@@ -97,12 +98,12 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 		xobjs = d.ResolveDict(res.Get("XObject"))
 	}
 
-	var curMap map[int]rune
+	var curMap, curEncoding map[int]rune
 	curTwoByte := false
 	var operands []core.ContentToken
 
 	show := func(raw []byte) {
-		for _, r := range decodeShown(raw, curMap, curTwoByte) {
+		for _, r := range decodeShown(raw, curMap, curEncoding, curTwoByte) {
 			out.WriteRune(r)
 		}
 	}
@@ -115,9 +116,9 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 		case "Tf":
 			if len(operands) >= 1 {
 				if f, ok := fonts[operands[0].Name]; ok {
-					curMap, curTwoByte = f.toUnicode, f.twoByte
+					curMap, curEncoding, curTwoByte = f.toUnicode, f.encoding, f.twoByte
 				} else {
-					curMap, curTwoByte = nil, false
+					curMap, curEncoding, curTwoByte = nil, nil, false
 				}
 			}
 		case "Tj", "'", "\"":
@@ -160,7 +161,12 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 
 type fontText struct {
 	toUnicode map[int]rune
-	twoByte   bool
+	// encoding maps a character code to the character it stands for, built
+	// from the font's /Encoding. It is consulted when the font carries no
+	// ToUnicode entry for a code, which is the ordinary case for a simple font
+	// naming one of the standard encodings.
+	encoding map[int]rune
+	twoByte  bool
 }
 
 // fontMapsFrom resolves a resource dictionary's /Font entries to their ToUnicode maps.
@@ -182,16 +188,92 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 		if st, _ := f.Get("Subtype").(object.Name); st == "Type0" {
 			twoByte = true
 		}
-		out[string(name)] = fontText{toUnicode: d.view().ParseToUnicodeMap(f), twoByte: twoByte}
+		out[string(name)] = fontText{
+			toUnicode: d.view().ParseToUnicodeMap(f),
+			encoding:  d.simpleEncoding(f, twoByte),
+			twoByte:   twoByte,
+		}
 	}
 	return out
 }
 
+// simpleEncoding builds the code-to-character map a simple font's /Encoding
+// describes: a named base encoding, a /Differences list, or both.
+//
+// It matters most where a byte's value is least informative. WinAnsiEncoding
+// and Latin-1 agree everywhere except 0x80 to 0x9F, and that band is where the
+// curly quotes, the dashes, the bullet, the ellipsis and the euro live — so a
+// document setting a quotation mark is exactly the document the byte value gets
+// wrong.
+func (d *Document) simpleEncoding(f *object.Dictionary, twoByte bool) map[int]rune {
+	if twoByte {
+		return nil // a composite font is decoded by its CMap, not by an encoding
+	}
+	base := font.StandardEncodingNames
+	var differences object.Array
+	switch enc := d.Resolve(f.Get("Encoding")).(type) {
+	case object.Name:
+		base = baseEncodingNames(enc, base)
+	case *object.Dictionary:
+		if n, ok := d.Resolve(enc.Get("BaseEncoding")).(object.Name); ok {
+			base = baseEncodingNames(n, base)
+		}
+		differences, _ = d.Resolve(enc.Get("Differences")).(object.Array)
+	case nil:
+		// No /Encoding: the font's built-in encoding governs, which for a
+		// standard Latin face is close enough to Standard for extraction.
+	default:
+		return nil
+	}
+
+	out := make(map[int]rune, len(base)+len(differences))
+	for code, name := range base {
+		if r, ok := font.GlyphNameToRune(name, code); ok {
+			out[int(code)] = r
+		}
+	}
+	// /Differences overrides the base: a run of names beginning at each code it
+	// introduces (ISO 32000-2 9.6.5.1).
+	code := 0
+	for _, item := range differences {
+		switch v := d.Resolve(item).(type) {
+		case object.Integer:
+			code = int(v)
+		case object.Real:
+			code = int(v)
+		case object.Name:
+			if code >= 0 && code < 256 {
+				if r, ok := font.GlyphNameToRune(string(v), byte(code)); ok {
+					out[code] = r
+				} else {
+					delete(out, code) // named something unresolvable: say nothing
+				}
+			}
+			code++
+		}
+	}
+	return out
+}
+
+// baseEncodingNames resolves a base encoding name to its table, keeping the
+// current one for a name this package does not know.
+func baseEncodingNames(n object.Name, current map[byte]string) map[byte]string {
+	switch n {
+	case "WinAnsiEncoding":
+		return font.WinAnsiEncodingNames
+	case "MacRomanEncoding":
+		return font.MacRomanEncodingNames
+	case "StandardEncoding":
+		return font.StandardEncodingNames
+	}
+	return current
+}
+
 // decodeShown maps a shown byte string to runes. It prefers the font's
-// ToUnicode CMap; for a simple (single-byte) font it falls back to the byte
-// value as Latin-1 (a close approximation of WinAnsi for printable text), which
-// recovers ASCII text from the standard fonts that carry no ToUnicode map.
-func decodeShown(raw []byte, toUnicode map[int]rune, twoByte bool) []rune {
+// ToUnicode CMap, then the font's own /Encoding, and only then the byte value
+// as Latin-1 — which is right for ASCII and wrong exactly where an encoding
+// would have said so.
+func decodeShown(raw []byte, toUnicode map[int]rune, encoding map[int]rune, twoByte bool) []rune {
 	var runes []rune
 	step := 1
 	if twoByte {
@@ -203,6 +285,10 @@ func decodeShown(raw []byte, toUnicode map[int]rune, twoByte bool) []rune {
 			code = int(raw[i])<<8 | int(raw[i+1])
 		}
 		if r, ok := toUnicode[code]; ok {
+			runes = append(runes, r)
+			continue
+		}
+		if r, ok := encoding[code]; ok {
 			runes = append(runes, r)
 			continue
 		}
