@@ -60,6 +60,18 @@ func Embed(doc Allocator, img image.Image) (object.IndirectRef, error) {
 
 	gray := isGray(img)
 	samples, alpha := sampleBytes(img, gray)
+	if opaque(alpha) {
+		// A fully opaque alpha channel carries no information, and an /SMask
+		// holding one costs a whole extra image for nothing.
+		//
+		// This looks like the opposite of the colour-space rule below, which
+		// asks the image's type and not its pixels — but the two questions
+		// differ. Whether an image is greyscale is a choice the caller made and
+		// this has no business overriding. Whether it is opaque is a fact, and
+		// dropping a channel that says "no transparency anywhere" loses
+		// nothing a reader could have observed.
+		alpha = nil
+	}
 
 	space := object.Name("DeviceRGB")
 	if gray {
@@ -230,4 +242,18 @@ func hasAlpha(img image.Image) bool {
 		return true
 	}
 	return false
+}
+
+// opaque reports whether an alpha channel is entirely opaque, and so says
+// nothing an image without one would not.
+func opaque(alpha []byte) bool {
+	if alpha == nil {
+		return false // there was no channel; not the same as an opaque one
+	}
+	for _, a := range alpha {
+		if a != 0xFF {
+			return false
+		}
+	}
+	return true
 }

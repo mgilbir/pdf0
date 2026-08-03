@@ -321,3 +321,35 @@ func TestEmbedRefusesWhatItCannotWrite(t *testing.T) {
 		t.Error("an empty JPEG was accepted")
 	}
 }
+
+// TestOpaqueImageGetsNoSoftMask pins that an image with nothing transparent in
+// it does not carry an alpha channel saying so. A fully opaque /SMask is a
+// second image the size of the first, for no observable difference.
+func TestOpaqueImageGetsNoSoftMask(t *testing.T) {
+	// image.RGBA reaches the generic path and is what most Go code produces.
+	doc := drawImageDoc(t, func(a images.Allocator) (object.IndirectRef, error) {
+		return images.Embed(a, gradient(8, 8)) // every pixel A=255
+	})
+	for _, iobj := range doc.Objects {
+		if s, ok := iobj.Value.(*object.Stream); ok && s.Dict.Get("SMask") != nil {
+			t.Error("an opaque image was given a soft mask")
+		}
+	}
+
+	// And an image that really is translucent still gets one.
+	src := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	src.SetNRGBA(0, 0, color.NRGBA{R: 10, G: 20, B: 30, A: 255})
+	src.SetNRGBA(1, 0, color.NRGBA{R: 10, G: 20, B: 30, A: 64})
+	withAlpha := drawImageDoc(t, func(a images.Allocator) (object.IndirectRef, error) {
+		return images.Embed(a, src)
+	})
+	var found bool
+	for _, iobj := range withAlpha.Objects {
+		if s, ok := iobj.Value.(*object.Stream); ok && s.Dict.Get("SMask") != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a translucent image lost its soft mask")
+	}
+}
