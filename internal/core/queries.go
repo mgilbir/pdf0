@@ -6,6 +6,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/font"
 	"sort"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/mgilbir/pdf0/object"
@@ -238,6 +239,40 @@ func ValidBCP47(tag string) bool {
 	return true
 }
 
+// ValidLanguageTag reports whether tag matches the language-identifier grammar
+// a PDF /Lang entry must follow: a primary tag of 1–8 letters, then any number
+// of hyphen-separated subtags of 1–8 characters each.
+//
+// digitsInSubtags selects between the two vintages the PDF/A parts are written
+// against, and they genuinely differ. ISO 19005-1 cites PDF Reference 9.8.1,
+// hence RFC 1766, where a subtag is 1*8ALPHA — so "en-12" is not a language
+// identifier at Level 1a. ISO 19005-2 and -3 cite ISO 32000-1 14.9.2, hence
+// RFC 3066, which widened a subtag to alphanumerics — which is why the parts-2/3
+// corpus offers "ru-petr1708" as a *conforming* file. One rule for both parts
+// would have to be wrong about one of them.
+//
+// The empty string is the caller's business: /Lang is explicitly permitted to be
+// empty ("the language is unknown"), but a language *identifier* is not.
+func ValidLanguageTag(tag string, digitsInSubtags bool) bool {
+	subs := strings.Split(tag, "-")
+	if first := subs[0]; len(first) < 1 || len(first) > 8 || !allAlpha(first) {
+		return false
+	}
+	for _, s := range subs[1:] {
+		if len(s) < 1 || len(s) > 8 {
+			return false
+		}
+		if digitsInSubtags {
+			if !allAlnum(s) {
+				return false
+			}
+		} else if !allAlpha(s) {
+			return false
+		}
+	}
+	return true
+}
+
 func (d View) IsTrue(o object.Object) bool {
 	b, ok := d.Resolve(o).(object.Boolean)
 	return ok && bool(b)
@@ -362,6 +397,161 @@ func (doc View) ParseToUnicodeMap(fontDict *object.Dictionary) map[int]rune {
 	scan("beginbfchar", "endbfchar", false)
 	scan("beginbfrange", "endbfrange", true)
 	return m
+}
+
+// ParseToUnicodeRunes parses a font's ToUnicode CMap into a map from character
+// code to the full sequence of Unicode scalar values it produces.
+//
+// It is the wider sibling of ParseToUnicodeMap, which keeps only the first code
+// unit because the question it answers ("is this glyph whitespace?") never needs
+// more. The Private Use Area rule does: a destination is written as UTF-16BE, so
+// a code point above the BMP arrives as a surrogate pair, and reading only the
+// first unit reports the high surrogate D840 instead of U+10016D — a value that
+// is in no Private Use Area, on a file that is in one.
+func ParseToUnicodeRunes(doc View, fontDict *object.Dictionary) map[int][]rune {
+	s, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*object.Stream)
+	if !ok {
+		return nil
+	}
+	data := doc.Content(s)
+	if data == nil {
+		return nil
+	}
+	m := map[int][]rune{}
+	str := string(data)
+	scan := func(begin, end string, isRange bool) {
+		rest := str
+		for {
+			b := strings.Index(rest, begin)
+			if b < 0 {
+				return
+			}
+			e := strings.Index(rest[b:], end)
+			if e < 0 {
+				return
+			}
+			lo, hi := b+len(begin), b+e
+			if lo > hi {
+				rest = rest[b+e+len(end):]
+				continue
+			}
+			items := bfItems(rest[lo:hi])
+			// The entries of a section run on without regard to line breaks —
+			// "<01> <0061> <02> <0062>" on one line is six characters' worth of
+			// mapping written as one — so the body is consumed as a flat stream
+			// of operands, taken two at a time for bfchar and three for bfrange.
+			step := 2
+			if isRange {
+				step = 3
+			}
+			for i := 0; i+step <= len(items); i += step {
+				if isRange {
+					applyBFRange(m, items[i], items[i+1], items[i+2])
+				} else if src := items[i].value(); src >= 0 {
+					if rs := RunesFromHex(items[i+1].hex); len(rs) > 0 {
+						m[src] = rs
+					}
+				}
+			}
+			rest = rest[b+e+len(end):]
+		}
+	}
+	scan("beginbfchar", "endbfchar", false)
+	scan("beginbfrange", "endbfrange", true)
+	return m
+}
+
+// applyBFRange records one bfrange entry: a code range and either a single
+// destination the range increments from, or an array giving each code its own.
+func applyBFRange(m map[int][]rune, lo, hi, dst bfItem) {
+	first, last := lo.value(), hi.value()
+	if first < 0 || last < first || last-first >= 65536 {
+		return
+	}
+	if dst.isArray {
+		for i, tok := range dst.array {
+			if first+i > last {
+				return
+			}
+			if rs := RunesFromHex(tok); len(rs) > 0 {
+				m[first+i] = rs
+			}
+		}
+		return
+	}
+	rs := RunesFromHex(dst.hex)
+	if len(rs) == 0 {
+		return
+	}
+	// The destination increments across the range, and only its last code unit
+	// moves (ISO 32000-1 9.10.3).
+	for c := first; c <= last; c++ {
+		seq := append([]rune(nil), rs...)
+		seq[len(seq)-1] += rune(c - first)
+		m[c] = seq
+	}
+}
+
+// bfItem is one operand of a bfchar/bfrange section body: a <hex> token, or the
+// [ <hex> … ] array a bfrange may use to give each code its own destination.
+type bfItem struct {
+	hex     string
+	array   []string
+	isArray bool
+}
+
+func (b bfItem) value() int {
+	if b.isArray {
+		return -1
+	}
+	return HexVal4(b.hex)
+}
+
+// bfItems splits a section body into its operands. Everything that is not a hex
+// token or an array of them — the CMap's own whitespace and any stray keyword —
+// is skipped, which is what makes the scan survive the many hand-written CMaps
+// that do not lay their entries out one per line.
+func bfItems(body string) []bfItem {
+	var out []bfItem
+	for i := 0; i < len(body); {
+		switch body[i] {
+		case '<':
+			j := strings.IndexByte(body[i:], '>')
+			if j < 0 {
+				return out
+			}
+			out = append(out, bfItem{hex: body[i : i+j+1]})
+			i += j + 1
+		case '[':
+			j := strings.IndexByte(body[i:], ']')
+			if j < 0 {
+				return out
+			}
+			out = append(out, bfItem{array: AngleTokens(body[i : i+j]), isArray: true})
+			i += j + 1
+		default:
+			i++
+		}
+	}
+	return out
+}
+
+// RunesFromHex decodes a <hhhh…> token as a UTF-16BE string, pairing surrogates
+// into the scalar value they encode.
+func RunesFromHex(tok string) []rune {
+	tok = strings.TrimPrefix(strings.TrimSuffix(tok, ">"), "<")
+	var units []uint16
+	for i := 0; i+4 <= len(tok); i += 4 {
+		v, ok := font.ParseHexN(tok[i : i+4])
+		if !ok {
+			return nil
+		}
+		units = append(units, uint16(v))
+	}
+	if len(units) == 0 {
+		return nil
+	}
+	return utf16.Decode(units)
 }
 
 // AngleTokens returns the <...> tokens in a line, each including the angle
