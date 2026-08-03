@@ -28,9 +28,6 @@ import (
 // package should not have to name these types.
 type uaCache struct {
 	streamFacts map[*object.Stream]*streamContentFacts // stream -> real-content messages + Do names
-
-	structTree      []structNode // flattened pre-order struct-tree nodes
-	structTreeValid bool
 }
 
 // uaSlot keys uaCache. An unexported empty struct cannot collide with another

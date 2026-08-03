@@ -73,14 +73,14 @@ func checkUATableGrid(d core.View, cat *object.Dictionary) []Violation {
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
 	var v []Violation
 	for _, n := range structTree(d, cat) {
-		if n.stdType != "Table" {
+		if n.StdType != "Table" {
 			continue
 		}
-		if rows := collectTableRows(d, n.elem, roleMap); len(rows) > 0 {
+		if rows := collectTableRows(d, n.Elem, roleMap); len(rows) > 0 {
 			maxFills := d.Limits.TableGridFills
 			defects, complete := gridDefects(rows, maxFills)
 			if !complete {
-				d.Note(core.GuardGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.DictObjNum(n.elem))
+				d.Note(core.GuardGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.DictObjNum(n.Elem))
 			}
 			v = append(v, defects...)
 		}
