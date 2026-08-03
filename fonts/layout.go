@@ -27,6 +27,11 @@ import (
 //   - Cursive attachment (GPOS 3), which makes those forms' connecting strokes
 //     actually meet — joining picks the shapes, this places them. See
 //     position.go.
+//   - Devanagari reordering: cutting a run into syllables, finding each one's
+//     base consonant, and putting its glyphs into the order they are drawn —
+//     the pre-base vowel sign before its consonant, the reph over the end of
+//     the syllable — before applying the features an Indic font declares for
+//     each part. See indic.go and indicsyllable.go.
 //   - Every single substitution the font declares, keyed by feature tag and
 //     applied only when a caller names one (ShapeWith): 'smcp', 'onum' and the
 //     rest, which change what the text says it is and so wait to be asked for.
@@ -35,12 +40,16 @@ import (
 //
 // # What is not, and what each absence costs
 //
-//   - Indic reordering, and the other scripts whose characters do not appear in
-//     the order they are drawn. Text in them is not correctly set by this
-//     package and should be shaped elsewhere and passed in as glyph indices.
-//     The second-generation Indic script tags are still selected, because that
-//     is where such a font declares its features, but the reordering those
-//     features are written to follow is not done.
+//   - Reordering for any script other than Devanagari. Bengali, Gujarati,
+//     Gurmukhi, Kannada, Malayalam, Oriya, Tamil and Telugu share Devanagari's
+//     model but not its data — each states its own base-consonant rule, its own
+//     reph position and its own exceptions — and Khmer, Myanmar and the
+//     Universal Shaping Engine scripts do not share even the model. Their
+//     second-generation tags are still selected, because that is where such a
+//     font declares its features, but their characters are turned into glyphs
+//     in storage order. Text in them is not correctly set by this package and
+//     should be shaped elsewhere and passed in as glyph indices. indic.go says
+//     what within Devanagari is left out.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless a

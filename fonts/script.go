@@ -299,6 +299,37 @@ func scriptList(t []byte) []byte {
 type shaper struct {
 	f *Face
 	l *layout
+
+	// floor and limit bound the glyphs a lookup may look at: it may not match,
+	// or backtrack, outside [floor, limit). They exist for the Indic pass,
+	// which applies a font's features one syllable at a time — a ligature
+	// reaching into the next syllable would join glyphs the font never meant to
+	// see together. A zero limit means the whole buffer, which is what every
+	// other script gets.
+	floor, limit int
+
+	// onResize, when set, is told wherever a lookup changes the buffer's
+	// length: at which position, and by how much. The Indic pass sets it to
+	// keep its per-glyph record — categories, positions, feature masks — in
+	// step with a buffer that ligatures and decompositions are reshaping under
+	// it. Nothing else needs it, and it is nil everywhere else.
+	onResize func(at, delta int)
+}
+
+// resized reports a change in the buffer's length at a position, for a caller
+// keeping something in step with it.
+func (sh shaper) resized(at, delta int) {
+	if sh.onResize != nil && delta != 0 {
+		sh.onResize(at, delta)
+	}
+}
+
+// end is one past the last glyph a lookup may look at.
+func (sh shaper) end(buf []Glyph) int {
+	if sh.limit > 0 && sh.limit < len(buf) {
+		return sh.limit
+	}
+	return len(buf)
 }
 
 // shaperFor prepares to shape a run of text, resolving its script and selecting

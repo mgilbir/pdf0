@@ -104,7 +104,7 @@ func TestLoadingHostileBytesReportsRatherThanPanics(t *testing.T) {
 // each other, and it is the second stage that meets that.
 func exerciseFace(t *testing.T, f *Face) {
 	t.Helper()
-	const sample = "Hello — Ωμέγα 日本 ́́ ﬁ"
+	const sample = "Hello — Ωμέγα 日本 ́́ ﬁ \u0930\u094D\u0915\u094D\u0924\u093F\u0902"
 
 	noPanic(t, "Name", func() { _ = f.Name() })
 	noPanic(t, "NumGlyphs", func() { _ = f.NumGlyphs() })
@@ -163,7 +163,7 @@ func TestTheStackSurvivesDegenerateFaces(t *testing.T) {
 		"a face and a failure": NewStack(good, broken),
 	}
 	inputs := []string{
-		"", "a", "abc", "́", "á́́", "日本語",
+		"", "a", "abc", "́", "á́́", "日本語", "\u0930\u094D\u0915\u093F", "\u094D\u093F\u0902",
 		strings.Repeat("á", 500), "\x00", "�",
 	}
 	for name, s := range stacks {
@@ -175,6 +175,12 @@ func TestTheStackSurvivesDegenerateFaces(t *testing.T) {
 		noPanic(t, name+" Faces", func() { _ = s.Faces() })
 	}
 }
+
+// fuzzText carries one character of every kind the shaping paths branch on: a
+// plain letter, a ligature, an unmapped ideograph, and a Devanagari syllable
+// with a reph, a conjunct and a pre-base vowel sign — which is the only way the
+// reordering is reached at all.
+const fuzzText = "aﬁ日 \u0930\u094D\u0915\u094D\u0924\u093F\u0902"
 
 // FuzzLoadAndUse drives the whole writing pipeline on arbitrary bytes: parse,
 // shape, subset, embed. Fuzzing fails on a panic by itself, so the body only
@@ -196,6 +202,34 @@ func FuzzLoadAndUse(f *testing.F) {
 			"GDEF": fonttest.GDEF(map[int]int{1: 1}),
 		},
 	}))
+	// A Devanagari seed: the reordering reads the font too — it asks whether
+	// there is a reph for this Ra and what the below-base forms cover — so a
+	// crafted font reaches it, and only a seed declaring those features gets the
+	// fuzzer near enough to try.
+	f.Add(fonttest.SFNT(fonttest.SFNTOptions{
+		Glyphs: []fonttest.Glyph{
+			{Rune: 0x0915, Advance: 500, HasShape: true}, // ka
+			{Rune: 0x0930, Advance: 500, HasShape: true}, // ra
+			{Rune: 0x094D, Advance: 0, HasShape: true},   // virama
+			{Rune: 0x093F, Advance: 0, HasShape: true},   // the i-sign
+			{Rune: 0xE000, Advance: 200, HasShape: true}, // a reph
+		},
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBTable(
+				[]fonttest.Lookup{{Type: 4, Subtables: [][]byte{
+					fonttest.LigatureSubst([]fonttest.Ligature{
+						{Components: []int{2, 3}, Glyph: 5},
+					}),
+				}}},
+				[]fonttest.Feature{
+					{Tag: "blwf", Lookups: []int{0}},
+					{Tag: "half", Lookups: []int{0}},
+					{Tag: "rphf", Lookups: []int{0}},
+				},
+				map[string]fonttest.Script{"dev2": fonttest.AllFeatures(3)},
+			),
+		},
+	}))
 	f.Add([]byte("OTTO\x00\x00\x00\x00"))
 	f.Add([]byte{})
 
@@ -205,15 +239,15 @@ func FuzzLoadAndUse(f *testing.F) {
 			if err != nil || face == nil {
 				continue
 			}
-			_ = face.Measure("aﬁ日", 10)
-			_ = face.MeasureShaped("aﬁ日", 10)
-			_, _ = face.Encode("aﬁ日")
-			_, _ = face.Shape("aﬁ日")
-			_, _ = face.ShapeGlyphs("aﬁ日")
+			_ = face.Measure(fuzzText, 10)
+			_ = face.MeasureShaped(fuzzText, 10)
+			_, _ = face.Encode(fuzzText)
+			_, _ = face.Shape(fuzzText)
+			_, _ = face.ShapeGlyphs(fuzzText)
 
 			var b content.Builder
 			b.BeginText().SetFont("F0", 10)
-			face.DrawShaped(&b, "aﬁ日", 10)
+			face.DrawShaped(&b, fuzzText, 10)
 			b.EndText()
 			_, _ = b.Bytes()
 
