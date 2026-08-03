@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"image"
 	"image/color"
+	"image/gif"
 	imagejpeg "image/jpeg"
 	"io"
 	"testing"
@@ -218,6 +219,175 @@ func TestTransparencyBecomesAnSMask(t *testing.T) {
 	if want := []byte{255, 128, 1, 0}; !bytes.Equal(alpha, want) {
 		t.Errorf("soft mask samples = %v, want %v", alpha, want)
 	}
+}
+
+// TestPalettedTransparencySurvivesEmbedding is the case a list of "types that
+// have alpha" got wrong.
+//
+// A transparent GIF, and a PNG with a transparent palette, decode to
+// *image.Paletted — a type that carries its alpha in the palette rather than in
+// a channel, and which was not on that list. The alpha was dropped, and because
+// a fully transparent pixel is stored premultiplied, every transparent region
+// came out as opaque black. It is the single most common transparent image on
+// the web, and the failure is invisible in the dictionary and glaring on the
+// page.
+func TestPalettedTransparencySurvivesEmbedding(t *testing.T) {
+	// Encoded and decoded as a real GIF, so the test asserts against the type a
+	// decoder actually produces rather than one assembled to suit it.
+	pal := color.Palette{
+		color.NRGBA{R: 200, G: 100, B: 50, A: 255},
+		color.NRGBA{A: 0},
+	}
+	src := image.NewPaletted(image.Rect(0, 0, 2, 1), pal)
+	src.SetColorIndex(0, 0, 0)
+	src.SetColorIndex(1, 0, 1)
+
+	var encoded bytes.Buffer
+	if err := gif.Encode(&encoded, src, nil); err != nil {
+		t.Fatalf("encoding the fixture: %v", err)
+	}
+	decoded, err := gif.Decode(&encoded)
+	if err != nil {
+		t.Fatalf("decoding the fixture: %v", err)
+	}
+	if _, ok := decoded.(*image.Paletted); !ok {
+		t.Fatalf("a GIF decoded to %T; the fixture no longer covers the case it was written for", decoded)
+	}
+
+	doc := drawImageDoc(t, func(a images.Allocator) (object.IndirectRef, error) {
+		return images.Embed(a, decoded)
+	})
+
+	var colour *object.Stream
+	for _, iobj := range doc.Objects {
+		if s, ok := iobj.Value.(*object.Stream); ok && s.Dict.Get("SMask") != nil {
+			colour = s
+		}
+	}
+	if colour == nil {
+		t.Fatal("no /SMask was written: the palette's transparency was dropped")
+	}
+	maskRef, _ := colour.Dict.Get("SMask").(object.IndirectRef)
+	mask, ok := doc.Resolve(maskRef).(*object.Stream)
+	if !ok {
+		t.Fatal("/SMask does not point at a stream")
+	}
+	if got := inflate(t, mask.Data); !bytes.Equal(got, []byte{255, 0}) {
+		t.Errorf("soft mask samples = %v, want [255 0]", got)
+	}
+	// The opaque pixel keeps its colour, read through the palette rather than
+	// through the premultiplying colour interface.
+	samples := inflate(t, colour.Data)
+	if want := []byte{200, 100, 50}; !bytes.Equal(samples[:3], want) {
+		t.Errorf("the opaque pixel stored as %v, want %v", samples[:3], want)
+	}
+}
+
+// TestPalettedAlphaIsExactAtLowOpacity is the precision half. A palette holds
+// non-premultiplied colour; reading it through At premultiplies and then has to
+// divide back, which at low alpha does not round-trip.
+func TestPalettedAlphaIsExactAtLowOpacity(t *testing.T) {
+	src := image.NewPaletted(image.Rect(0, 0, 1, 1), color.Palette{
+		color.NRGBA{R: 200, G: 100, B: 50, A: 1},
+	})
+	doc := drawImageDoc(t, func(a images.Allocator) (object.IndirectRef, error) {
+		return images.Embed(a, src)
+	})
+	for _, iobj := range doc.Objects {
+		s, ok := iobj.Value.(*object.Stream)
+		if !ok || s.Dict.Get("SMask") == nil {
+			continue
+		}
+		if got := inflate(t, s.Data); !bytes.Equal(got, []byte{200, 100, 50}) {
+			t.Errorf("stored as %v, want [200 100 50]: the palette was read through At", got)
+		}
+		return
+	}
+	t.Fatal("no image with a soft mask was written")
+}
+
+// TestPalettedIndexPastTheEndOfThePaletteIsSafe pins that an image assembled by
+// hand — which is untrusted input as much as a file is — cannot read past the
+// palette.
+func TestPalettedIndexPastTheEndOfThePaletteIsSafe(t *testing.T) {
+	src := image.NewPaletted(image.Rect(0, 0, 2, 1), color.Palette{color.NRGBA{A: 255}})
+	src.Pix[1] = 7 // an index the palette does not have
+	if _, err := images.Embed(&countingAllocator{}, src); err != nil {
+		t.Fatalf("embedding: %v", err)
+	}
+}
+
+// strangeImage is an image type this package has never heard of. Go's image
+// interface is open, so a caller may pass one from anywhere — their own
+// decoder, a third-party package, a wrapper — and it is the case the alpha
+// question has to get right by default rather than by enumeration.
+type strangeImage struct{ w, h int }
+
+func (s strangeImage) ColorModel() color.Model { return color.NRGBAModel }
+func (s strangeImage) Bounds() image.Rectangle { return image.Rect(0, 0, s.w, s.h) }
+func (s strangeImage) At(x, _ int) color.Color {
+	if x == 0 {
+		return color.NRGBA{R: 200, G: 100, B: 50, A: 255}
+	}
+	return color.NRGBA{A: 0}
+}
+
+// TestUnknownImageTypeKeepsItsTransparency pins the polarity of the alpha
+// question, which is the defect underneath the paletted one.
+//
+// Asking "is this one of the types known to have alpha" is a list, and a list
+// over an open interface is never complete. Asking "is this one of the types
+// that cannot" is also a list, but being wrong about it costs a byte per pixel
+// of scratch that the opacity check then discards — rather than discarding what
+// the author drew.
+func TestUnknownImageTypeKeepsItsTransparency(t *testing.T) {
+	doc := drawImageDoc(t, func(a images.Allocator) (object.IndirectRef, error) {
+		return images.Embed(a, strangeImage{w: 2, h: 1})
+	})
+	for _, iobj := range doc.Objects {
+		s, ok := iobj.Value.(*object.Stream)
+		if !ok || s.Dict.Get("SMask") == nil {
+			continue
+		}
+		maskRef, _ := s.Dict.Get("SMask").(object.IndirectRef)
+		mask, ok := doc.Resolve(maskRef).(*object.Stream)
+		if !ok {
+			t.Fatal("/SMask does not point at a stream")
+		}
+		if got := inflate(t, mask.Data); !bytes.Equal(got, []byte{255, 0}) {
+			t.Errorf("soft mask samples = %v, want [255 0]", got)
+		}
+		return
+	}
+	t.Fatal("an image type this package does not know lost its transparency")
+}
+
+// TestFullyOpaqueUnknownTypeStillGetsNoSoftMask is the cost side of that
+// choice: assuming alpha must not add a mask to an image that has none.
+func TestFullyOpaqueUnknownTypeStillGetsNoSoftMask(t *testing.T) {
+	doc := drawImageDoc(t, func(a images.Allocator) (object.IndirectRef, error) {
+		return images.Embed(a, opaqueStrange{})
+	})
+	for _, iobj := range doc.Objects {
+		if s, ok := iobj.Value.(*object.Stream); ok && s.Dict.Get("SMask") != nil {
+			t.Fatal("an opaque image was given a soft mask")
+		}
+	}
+}
+
+type opaqueStrange struct{}
+
+func (opaqueStrange) ColorModel() color.Model { return color.NRGBAModel }
+func (opaqueStrange) Bounds() image.Rectangle { return image.Rect(0, 0, 2, 1) }
+func (opaqueStrange) At(int, int) color.Color { return color.NRGBA{R: 1, G: 2, B: 3, A: 255} }
+
+// countingAllocator is the smallest thing that satisfies images.Allocator, for
+// a test that only needs Embed to run.
+type countingAllocator struct{ n int }
+
+func (a *countingAllocator) Add(object.Object) object.IndirectRef {
+	a.n++
+	return object.IndirectRef{Number: a.n}
 }
 
 // inflate decompresses a FlateDecode stream body.

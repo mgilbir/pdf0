@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 
 	"github.com/mgilbir/pdf0/object"
 )
@@ -189,6 +190,36 @@ func sampleBytes(img image.Image, gray bool) (samples, alpha []byte) {
 			}
 		}
 		return samples, nil
+
+	case *image.Paletted:
+		// The palette is converted once and then indexed, for the same reason
+		// NRGBA has its own path: the entries are non-premultiplied and At
+		// premultiplies them, which at low alpha does not divide back. It is
+		// also the difference between converting 256 colours and converting one
+		// per pixel.
+		lut := make([]color.NRGBA, len(src.Palette))
+		for i, c := range src.Palette {
+			lut[i] = color.NRGBAModel.Convert(c).(color.NRGBA)
+		}
+		samples = make([]byte, 0, w*h*3)
+		alpha = make([]byte, 0, w*h)
+		for y := 0; y < h; y++ {
+			row := src.Pix[(y+b.Min.Y-src.Rect.Min.Y)*src.Stride:]
+			for x := 0; x < w; x++ {
+				i := int(row[x+b.Min.X-src.Rect.Min.X])
+				if i >= len(lut) {
+					// An index past the end of the palette. Go's decoders do not
+					// produce one, but an image assembled by hand can, and this
+					// runs on whatever a caller passes.
+					samples = append(samples, 0, 0, 0)
+					alpha = append(alpha, 0)
+					continue
+				}
+				samples = append(samples, lut[i].R, lut[i].G, lut[i].B)
+				alpha = append(alpha, lut[i].A)
+			}
+		}
+		return samples, alpha
 	}
 
 	comps := 3
@@ -233,15 +264,27 @@ func isGray(img image.Image) bool {
 	return false
 }
 
-// hasAlpha reports whether an image's type can carry transparency. As with
-// isGray this asks the type, not the pixels — scanning for a transparent pixel
-// would make the output depend on the content in a way a caller cannot predict.
+// hasAlpha reports whether an image may carry transparency.
+//
+// The polarity is the whole of it: the answer is yes unless the type rules it
+// out. This was written the other way round — a list of the types known to have
+// alpha — and *image.Paletted was not on it, which is the type a transparent GIF
+// or a palette PNG decodes to. Those lost their transparency silently, and
+// because the generic path leaves a fully transparent pixel at its
+// premultiplied value, the transparent areas came out opaque black.
+//
+// Being wrong in this direction costs one byte per pixel of scratch, which
+// opaque() then discards the moment it turns out to be uniform. Being wrong in
+// the other direction discards what the author drew. There is no version of
+// this list that is guaranteed complete — a caller may pass an image type from
+// anywhere — so the default has to be the safe one.
 func hasAlpha(img image.Image) bool {
 	switch img.(type) {
-	case *image.RGBA, *image.RGBA64, *image.NRGBA, *image.NRGBA64, *image.Alpha, *image.Alpha16:
-		return true
+	case *image.Gray, *image.Gray16, *image.CMYK, *image.YCbCr:
+		// These cannot represent transparency at all.
+		return false
 	}
-	return false
+	return true
 }
 
 // opaque reports whether an alpha channel is entirely opaque, and so says
