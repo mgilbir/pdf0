@@ -283,7 +283,7 @@ func TestIndicCategoriesAreUnicodes(t *testing.T) {
 func TestWhichScriptsAreReordered(t *testing.T) {
 	reordered := map[string]bool{}
 	for s := uint16(0); int(s) < len(scriptOpenTypeTags); s++ {
-		if reordersIndic(s) {
+		if indicConfigFor(s) != nil {
 			for _, tag := range scriptTags(s) {
 				reordered[tag] = true
 			}
@@ -299,7 +299,7 @@ func TestWhichScriptsAreReordered(t *testing.T) {
 			t.Errorf("%q is reordered, but this package does not cover it", tag)
 		}
 	}
-	if reordersIndic(scriptOf('A')) {
+	if indicConfigFor(scriptOf('A')) != nil {
 		t.Error("a Latin run would be reordered as Indic")
 	}
 	// Each script's config is found by its own tag, so a Bengali run cannot get
