@@ -58,13 +58,7 @@ func TestReEncryptRoundTrip(t *testing.T) {
 // decrypt on Read, re-encrypt on Write, then re-read and confirm the streams
 // still decrypt (their FlateDecode content inflates).
 func TestReEncryptCorpusRoundTrip(t *testing.T) {
-	corpus := os.Getenv("VERAPDF_CORPUS")
-	if corpus == "" {
-		corpus = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpus); err != nil {
-		t.Skip("veraPDF corpus not found; run `make corpus`")
-	}
+	corpus := corpusRoot(t)
 	cases := []struct{ name, sub string }{
 		{"RC4 V2/R3", filepath.Join("PDFA-1b", "6.1 File structure", "6.1.3 File trailer", "isartor-6-1-3-t02-fail-a")},
 		{"AES-128 V4/R4", filepath.Join("PDF_A-2b", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a")},

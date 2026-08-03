@@ -14,13 +14,7 @@ import (
 // corresponding Level B validation already reports (the Level A rule families
 // must not false-positive on conforming files). Gated on the veraPDF corpus.
 func TestLevelACorpus(t *testing.T) {
-	corpus := os.Getenv("VERAPDF_CORPUS")
-	if corpus == "" {
-		corpus = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpus); err != nil {
-		t.Skip("veraPDF corpus not found; run `make corpus`")
-	}
+	corpus := corpusRoot(t)
 	cases := []struct {
 		dir  string
 		a, b pdfa.Level

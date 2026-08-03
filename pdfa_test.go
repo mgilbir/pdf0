@@ -1152,13 +1152,7 @@ const (
 // work (PR "parser-recovery") fixed the same malformations across all suites,
 // and this guards against regressing that.
 func TestCorpusParsesEntirely(t *testing.T) {
-	corpusDir := os.Getenv("VERAPDF_CORPUS")
-	if corpusDir == "" {
-		corpusDir = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpusDir); os.IsNotExist(err) {
-		t.Skip("veraPDF corpus not found; run `make corpus` to download")
-	}
+	corpusDir := corpusRoot(t)
 	var total int
 	var failures []string
 	filepath.Walk(corpusDir, func(path string, info os.FileInfo, err error) error {
@@ -1198,14 +1192,7 @@ func TestCorpusParsesEntirely(t *testing.T) {
 // are not modelled. Baking those false positives into a baseline would lower
 // the FP=0 bar; they can join once those relaxations exist.
 func TestCorpusIsartor(t *testing.T) {
-	corpusDir := os.Getenv("VERAPDF_CORPUS")
-	if corpusDir == "" {
-		corpusDir = "testdata/verapdf-corpus"
-	}
-	root := filepath.Join(corpusDir, "Isartor test files")
-	if _, err := os.Stat(root); os.IsNotExist(err) {
-		t.Skip("veraPDF corpus not found; run `make corpus` to download")
-	}
+	root := corpusSubdir(t, "Isartor test files")
 
 	var fail, missed, fp, parseErrors int
 	var missedFiles []string
@@ -1275,13 +1262,7 @@ func TestCorpusIsartor(t *testing.T) {
 // PDF/UA is a different standard entirely). This is a regression net, not a
 // claim of 1a/2a/2u/UA conformance coverage — that needs new rule families.
 func TestCorpusConformanceSuites(t *testing.T) {
-	corpusDir := os.Getenv("VERAPDF_CORPUS")
-	if corpusDir == "" {
-		corpusDir = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpusDir); os.IsNotExist(err) {
-		t.Skip("veraPDF corpus not found; run `make corpus` to download")
-	}
+	corpusDir := corpusRoot(t)
 
 	suites := []struct {
 		dir       string
@@ -1375,13 +1356,7 @@ func TestCorpusConformanceSuites(t *testing.T) {
 // falsePositives is the hard invariant at 0 — a Level A pass file is a
 // conforming document and rejecting it means a rule is wrong.
 func TestCorpusLevelA(t *testing.T) {
-	corpusDir := os.Getenv("VERAPDF_CORPUS")
-	if corpusDir == "" {
-		corpusDir = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpusDir); os.IsNotExist(err) {
-		t.Skip("veraPDF corpus not found; run `make corpus` to download")
-	}
+	corpusDir := corpusRoot(t)
 
 	suites := []struct {
 		dir       string
@@ -1452,13 +1427,7 @@ func TestCorpusLevelA(t *testing.T) {
 }
 
 func TestCorpus(t *testing.T) {
-	corpusDir := os.Getenv("VERAPDF_CORPUS")
-	if corpusDir == "" {
-		corpusDir = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpusDir); os.IsNotExist(err) {
-		t.Skip("veraPDF corpus not found; run `make corpus` to download")
-	}
+	corpusDir := corpusRoot(t)
 
 	levels := []string{"PDF_A-4", "PDF_A-1b", "PDF_A-2b", "PDF_A-3b"}
 

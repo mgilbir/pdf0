@@ -492,13 +492,7 @@ const arlCorpusPassBaseline = 5
 // oracle independently detects the malformations those files inject.
 func TestArlingtonCorpusParserFaithful(t *testing.T) {
 	m := loadArlModel(arlModelDir(t))
-	corpus := os.Getenv("VERAPDF_CORPUS")
-	if corpus == "" {
-		corpus = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpus); os.IsNotExist(err) {
-		t.Skip("veraPDF corpus not present; run `make corpus`")
-	}
+	corpus := corpusRoot(t)
 
 	var passTotal, passWith, failWith int
 	passFindings := map[string]int{}
