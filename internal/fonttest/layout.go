@@ -68,6 +68,12 @@ func GPOS(pairs []KernPair) []byte {
 // GSUB builds a GSUB table with a single 'liga' feature whose one lookup is a
 // LigatureSubst subtable carrying the given ligatures.
 func GSUB(ligs []Ligature) []byte {
+	return layoutTable("liga", 4, LigatureSubst(ligs)) // 4 = ligature substitution
+}
+
+// LigatureSubst is the bare lookup type 4 subtable, for a caller placing it in a
+// lookup list of its own — a contextual rule invoking a ligature, say.
+func LigatureSubst(ligs []Ligature) []byte {
 	order := []int{}
 	byFirst := map[int][]Ligature{}
 	for _, l := range ligs {
@@ -113,7 +119,7 @@ func GSUB(ligs []Ligature) []byte {
 		binary.BigEndian.PutUint16(body[6+2*i:], uint16(len(body)))
 		body = append(body, set...)
 	}
-	return layoutTable("liga", 4, body) // 4 = ligature substitution
+	return body
 }
 
 func indexOfLig(ls []Ligature, want Ligature) int {

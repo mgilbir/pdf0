@@ -104,6 +104,11 @@ func (f *Face) glyphRun(s string) (glyphs []int, missing int) {
 
 // applyLigatures replaces runs of glyphs with the single glyph the font defines
 // for them, preferring the longest match so that ffi wins over ff.
+//
+// This is the span path's own ligature pass, over the flattened table. The glyph
+// path (ShapeGlyphs) goes through the lookup list instead, which honours lookup
+// flags and can be invoked from a contextual rule; the two agree on plain text,
+// which is all the span path is for.
 func (f *Face) applyLigatures(glyphs []int) []int {
 	if len(f.layout.ligatures) == 0 {
 		return glyphs
