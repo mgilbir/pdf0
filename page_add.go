@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -55,6 +56,20 @@ type Page struct {
 	// states its own blending colour space and the result is defined.
 	Group bool
 
+	// Faces are fonts to embed and name, by the name the drawing used.
+	//
+	// This is the ordinary way to put a font on a page. Embedding a face
+	// subsets it to the glyphs it was actually asked to set, so it can only
+	// happen once the drawing is finished — which makes the correct order
+	// draw, embed, then build the page, and makes embedding first produce a
+	// font containing nothing but .notdef. That is an ordering a caller has to
+	// know and cannot be reminded of.
+	//
+	// Naming the face here removes the question: the drawing is complete by the
+	// time a page is added, so this embeds it then. Use Fonts instead only for
+	// a font dictionary built some other way.
+	Faces map[object.Name]*fonts.Face
+
 	// The resources the drawing named, by the name it used.
 	Fonts       map[object.Name]object.Object
 	XObjects    map[object.Name]object.Object
@@ -85,6 +100,11 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	}
 	if p.Rotate%90 != 0 {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: page rotation %d is not a multiple of 90", p.Rotate)
+	}
+	// After the content is final, which is what makes subsetting correct, and
+	// before the resources are checked, which is what the names have to satisfy.
+	if p.Fonts, err = d.embedFaces(p.Faces, p.Fonts); err != nil {
+		return object.IndirectRef{}, err
 	}
 	resources, err := p.resources()
 	if err != nil {
@@ -142,6 +162,39 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	pages.Set("Kids", append(kids, pageRef))
 	pages.Set("Count", object.Integer(len(kids)+1))
 	return pageRef, nil
+}
+
+// embedFaces writes each named face into the document and merges the references
+// into the font map, which is what the resource dictionary is built from.
+//
+// It is called once the content stream is final: a face is subsetted to the
+// glyphs it was asked to set, so embedding it any earlier produces a font that
+// contains nothing the page uses.
+func (d *Document) embedFaces(faces map[object.Name]*fonts.Face, refs map[object.Name]object.Object) (map[object.Name]object.Object, error) {
+	if len(faces) == 0 {
+		return refs, nil
+	}
+	// A fresh map: the caller's must not gain entries it did not put there,
+	// least of all when the same Page value is used twice.
+	merged := make(map[object.Name]object.Object, len(refs)+len(faces))
+	for name, value := range refs {
+		merged[name] = value
+	}
+	for name, face := range faces {
+		if face == nil {
+			return nil, fmt.Errorf("pdf0: the face named /%s is nil", name)
+		}
+		if _, clash := merged[name]; clash {
+			return nil, fmt.Errorf(
+				"pdf0: /%s names both a face to embed and a font dictionary; it can be one of them", name)
+		}
+		ref, err := face.Embed(d)
+		if err != nil {
+			return nil, fmt.Errorf("embedding the face named /%s: %w", name, err)
+		}
+		merged[name] = ref
+	}
+	return merged, nil
 }
 
 // pageTree finds the /Pages node the catalog names, which is what a new page is

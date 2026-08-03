@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -63,6 +64,9 @@ type TilingPattern struct {
 	// Spacing chooses how a reader may adjust the step to the device's pixel
 	// grid. The zero value is the usual one; see the TilingSpacing constants.
 	Spacing TilingSpacing
+
+	// Faces are fonts to embed and name, as for Page.
+	Faces map[object.Name]*fonts.Face
 
 	// The resources the drawing named, by the name it used.
 	Fonts       map[object.Name]object.Object
@@ -143,8 +147,12 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 		return object.IndirectRef{}, fmt.Errorf("pdf0: unknown tiling spacing %d", p.Spacing)
 	}
 
+	embedded, err := d.embedFaces(p.Faces, p.Fonts)
+	if err != nil {
+		return object.IndirectRef{}, err
+	}
 	resources, err := Page{
-		Content: p.Content, Fonts: p.Fonts, XObjects: p.XObjects,
+		Content: p.Content, Fonts: embedded, XObjects: p.XObjects,
 		ExtGStates: p.ExtGStates, ColorSpaces: p.ColorSpaces, Shadings: p.Shadings,
 		Patterns: p.Patterns, Properties: p.Properties,
 	}.resources()

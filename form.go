@@ -3,6 +3,8 @@ package pdf0
 import (
 	"fmt"
 
+	"github.com/mgilbir/pdf0/fonts"
+
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
@@ -39,6 +41,9 @@ type Form struct {
 	// apply to its result as a whole rather than to each mark separately.
 	Group bool
 
+	// Faces are fonts to embed and name, as for Page.
+	Faces map[object.Name]*fonts.Face
+
 	// The resources the drawing named, by the name it used.
 	Fonts       map[object.Name]object.Object
 	XObjects    map[object.Name]object.Object
@@ -66,8 +71,12 @@ func (d *Document) AddForm(f Form) (object.IndirectRef, error) {
 		return object.IndirectRef{}, fmt.Errorf(
 			"pdf0: the form's bounding box %v has no area; everything drawn would be clipped away", f.BBox)
 	}
+	embedded, err := d.embedFaces(f.Faces, f.Fonts)
+	if err != nil {
+		return object.IndirectRef{}, err
+	}
 	resources, err := Page{
-		Content: f.Content, Fonts: f.Fonts, XObjects: f.XObjects,
+		Content: f.Content, Fonts: embedded, XObjects: f.XObjects,
 		ExtGStates: f.ExtGStates, ColorSpaces: f.ColorSpaces, Shadings: f.Shadings,
 		Patterns: f.Patterns, Properties: f.Properties,
 	}.resources()

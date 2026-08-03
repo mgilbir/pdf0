@@ -312,3 +312,49 @@ func TestEachFaceRecordsOnlyItsOwnGlyphs(t *testing.T) {
 		t.Errorf("a face that set nothing recorded %d glyphs", got)
 	}
 }
+
+// TestMeasuringAStandardFaceDoesNotAskForAWidthByIndex pins the twin of the
+// crash in the drawing path.
+//
+// MeasureShaped has to agree with Shape — a caller lays out to one and draws
+// the other — and for a face whose codes are characters that means neither
+// substitutes nor kerns. Reaching the glyph-index path instead asks a face with
+// no font program at all for a width by index.
+func TestMeasuringAStandardFaceDoesNotAskForAWidthByIndex(t *testing.T) {
+	f, err := Standard("Helvetica")
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	const text = "Hamburgefonstiv"
+	shaped := f.MeasureShaped(text, 12)
+	plain := f.Measure(text, 12)
+	if shaped != plain {
+		t.Errorf("MeasureShaped says %v and Measure says %v; for a face that neither "+
+			"substitutes nor kerns they are the same width", shaped, plain)
+	}
+	if shaped <= 0 {
+		t.Errorf("measured %v; the published metrics were not found", shaped)
+	}
+}
+
+// TestAdvanceByIndexNeverDereferencesAMissingProgram pins the guard itself.
+//
+// Every path now routes a face with no font program away before it gets here,
+// so this is the one place the guard's own contract can be stated: asked for a
+// width by glyph index, a face that has no glyphs answers zero rather than
+// crashing. It is a white-box test because the guard is not reachable through
+// the public API — which is the point of having it.
+func TestAdvanceByIndexNeverDereferencesAMissingProgram(t *testing.T) {
+	f, err := Standard("Helvetica")
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if f.prog != nil {
+		t.Fatal("the fixture is wrong: a standard face is supposed to have no program")
+	}
+	for _, gid := range []int{-1, 0, 1, 1 << 20} {
+		if got := f.advanceGID(gid); got != 0 {
+			t.Errorf("advanceGID(%d) = %v, want 0", gid, got)
+		}
+	}
+}

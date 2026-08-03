@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"github.com/mgilbir/pdf0/object"
+	"strings"
 	"time"
 
 	lcms2 "github.com/mgilbir/golittlecms"
@@ -137,6 +138,45 @@ func pdfaConformance(level Level) string {
 	default:
 		return "B"
 	}
+}
+
+// LevelFor maps a pdfaid identification — the part and conformance a document's
+// metadata claims — onto the level it names.
+//
+// It is the inverse of what Skeleton writes, and it exists so that a document
+// can be checked against its own claim rather than against a level a caller
+// remembered to pass in. The claim is in the file; asking the file is the only
+// way the two cannot drift apart.
+//
+// Conformance U (PDF/A-2u and -3u) maps to the corresponding B level. U is B
+// plus the requirement that every glyph shown maps to Unicode, and that
+// requirement is not among the implemented checks — so what comes back is the
+// part of the claim this package can actually verify, and ok is true. The
+// second return is false only for a part number that names no level at all.
+func LevelFor(part, conformance string) (Level, bool) {
+	isA := strings.EqualFold(conformance, "A")
+	switch part {
+	case "1":
+		if isA {
+			return PDFA1a, true
+		}
+		return PDFA1b, true
+	case "2":
+		if isA {
+			return PDFA2a, true
+		}
+		return PDFA2b, true
+	case "3":
+		if isA {
+			return PDFA3a, true
+		}
+		return PDFA3b, true
+	case "4":
+		// PDF/A-4 has no conformance letter; its F and E variants are
+		// distinguished elsewhere and validate under the same rules.
+		return PDFA4, true
+	}
+	return 0, false
 }
 
 // GenerateXMPMetadata creates XMP metadata bytes for the given PDF/A level.
