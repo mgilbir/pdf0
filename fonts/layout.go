@@ -21,6 +21,9 @@ import (
 //     surroundings — do anything at all. See context.go.
 //   - Cursive joining: the positional forms Arabic and its neighbours are
 //     written in, chosen from Unicode joining types. See arabic.go.
+//   - Cursive attachment (GPOS 3), which makes those forms' connecting strokes
+//     actually meet — joining picks the shapes, this places them. See
+//     position.go.
 //   - Every single substitution the font declares, keyed by feature tag and
 //     applied only when a caller names one (ShapeWith): 'smcp', 'onum' and the
 //     rest, which change what the text says it is and so wait to be asked for.
@@ -29,9 +32,6 @@ import (
 //
 // # What is not, and what each absence costs
 //
-//   - Cursive attachment (GPOS 3), which joins the connecting strokes of a
-//     script written that way. Joining picks the right *shapes*; this would
-//     make their entry and exit points meet exactly.
 //   - Multiple (GSUB 2) and alternate (GSUB 3) substitution. A contextual rule
 //     naming one of those lookups matches and then does nothing.
 //   - Indic reordering, and the other scripts whose characters do not appear in
@@ -74,6 +74,11 @@ type layout struct {
 	markAttach map[int]int
 	// markFlags is the lookup flags of the attachment lookups.
 	markFlags int
+	// cursive holds each glyph's entry and exit points, and cursFlags the flags
+	// of the lookups they came from — whose RightToLeft bit decides which end of
+	// a joined run stays on the baseline.
+	cursive   map[int]cursiveAnchors
+	cursFlags int
 	// singlePos holds GPOS type 1 adjustments by glyph.
 	singlePos map[int]singleAdjust
 	// markAnchors holds each mark's own attachment point and class;
@@ -110,6 +115,10 @@ type layout struct {
 // Lookup flags (ISO/IEC 14496-22, LookupFlag). The high byte is a mark
 // attachment class rather than a flag, and is handled separately.
 const (
+	// flagRightToLeft relates only to cursive attachment (GPOS 3): it says the
+	// *last* glyph of a joined run stays on the baseline and the earlier ones
+	// move to meet it, rather than the first.
+	flagRightToLeft      = 0x0001
 	flagIgnoreBaseGlyphs = 0x0002
 	flagIgnoreLigatures  = 0x0004
 	flagIgnoreMarks      = 0x0008
@@ -186,6 +195,7 @@ func readLayout(tables map[string][]byte) *layout {
 		markAnchors:   map[int]markAnchor{},
 		markBases:     map[key2]anchor{},
 		markMarkBases: map[key2]anchor{},
+		cursive:       map[int]cursiveAnchors{},
 	}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
@@ -819,5 +829,6 @@ func emptyLayout() *layout {
 		markAnchors:   map[int]markAnchor{},
 		markBases:     map[key2]anchor{},
 		markMarkBases: map[key2]anchor{},
+		cursive:       map[int]cursiveAnchors{},
 	}
 }

@@ -287,6 +287,12 @@ type BaseAttachment struct {
 // kind is 4 for mark-to-base and 6 for mark-to-mark; the two have the same
 // shape and differ only in what the second coverage covers.
 func GPOSMarkToBase(kind int, marks []MarkAttachment, bases []BaseAttachment) []byte {
+	return layoutTable("mark", kind, MarkAttachSubtable(marks, bases))
+}
+
+// MarkAttachSubtable is the bare mark attachment subtable, whose shape is the
+// same for mark-to-base and mark-to-mark.
+func MarkAttachSubtable(marks []MarkAttachment, bases []BaseAttachment) []byte {
 	classCount := 0
 	for _, m := range marks {
 		if m.Class+1 > classCount {
@@ -367,7 +373,67 @@ func GPOSMarkToBase(kind int, marks []MarkAttachment, bases []BaseAttachment) []
 	}
 	body = append(body, append(baseArray, baseAnchors...)...)
 
-	return layoutTable("mark", kind, body)
+	return body
+}
+
+// CursiveAnchor is a glyph's connecting stroke: where it arrives and where it
+// leaves. Either may be absent — a letter that begins a word joins forwards
+// only.
+type CursiveAnchor struct {
+	Glyph             int
+	Entry, Exit       Anchor
+	HasEntry, HasExit bool
+}
+
+// GPOSCursive builds a GPOS table whose single lookup is a cursive attachment
+// (type 3), under the 'curs' feature, with the given lookup flag — whose
+// RightToLeft bit is what decides which end of a joined run stays on the
+// baseline.
+func GPOSCursive(anchors []CursiveAnchor, flag int) []byte {
+	out := layoutTable("curs", 3, CursivePosSubtable(anchors))
+	// layoutTable writes no flag; patch the lookup's second field.
+	lookupListOff := int(binary.BigEndian.Uint16(out[8:]))
+	lookupOff := lookupListOff + int(binary.BigEndian.Uint16(out[lookupListOff+2:]))
+	binary.BigEndian.PutUint16(out[lookupOff+2:], uint16(flag))
+	return out
+}
+
+// CursivePosSubtable is the bare lookup type 3 subtable, for a caller placing it
+// in a lookup list of its own alongside other positioning.
+func CursivePosSubtable(anchors []CursiveAnchor) []byte {
+	glyphs := make([]int, 0, len(anchors))
+	for _, a := range anchors {
+		glyphs = append(glyphs, a.Glyph)
+	}
+	sortInts(glyphs)
+
+	body := make([]byte, 6+4*len(glyphs))
+	binary.BigEndian.PutUint16(body[0:], 1)
+	binary.BigEndian.PutUint16(body[4:], uint16(len(glyphs)))
+	covOff := len(body)
+	body = append(body, coverageFormat1(glyphs)...)
+	binary.BigEndian.PutUint16(body[2:], uint16(covOff))
+
+	for i, g := range glyphs {
+		var a CursiveAnchor
+		for _, cand := range anchors {
+			if cand.Glyph == g {
+				a = cand
+				break
+			}
+		}
+		rec := 6 + 4*i
+		if a.HasEntry {
+			binary.BigEndian.PutUint16(body[rec:], uint16(len(body)))
+			body = append(body, anchorTable(a.Entry)...)
+		}
+		if a.HasExit {
+			binary.BigEndian.PutUint16(body[rec+2:], uint16(len(body)))
+			body = append(body, anchorTable(a.Exit)...)
+		}
+	}
+
+	return body
 }
 
 // GPOSSingle builds a GPOS table whose lookup nudges each given glyph.

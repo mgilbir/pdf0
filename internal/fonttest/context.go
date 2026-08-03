@@ -51,6 +51,17 @@ type Lookup struct {
 // The indices are the point: a contextual subtable refers to a lookup by its
 // position in this list, so a fixture controls both ends of that reference.
 func GSUBLookups(lookups []Lookup, features map[string][]int) []byte {
+	return layoutLookups(lookups, features)
+}
+
+// GPOSLookups is the same for a positioning table. The scaffolding is identical
+// — the two tables differ only in what their lookup types mean — and a fixture
+// needs it whenever one font must carry two kinds of positioning at once.
+func GPOSLookups(lookups []Lookup, features map[string][]int) []byte {
+	return layoutLookups(lookups, features)
+}
+
+func layoutLookups(lookups []Lookup, features map[string][]int) []byte {
 	lookupList := make([]byte, 2+2*len(lookups))
 	binary.BigEndian.PutUint16(lookupList[0:], uint16(len(lookups)))
 	for i, lk := range lookups {

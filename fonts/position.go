@@ -2,8 +2,8 @@ package fonts
 
 import "github.com/mgilbir/pdf0/internal/font"
 
-// Positioning: kerning, single adjustments, and attaching marks to what they
-// belong to.
+// Positioning: kerning, single adjustments, joining glyphs to each other, and
+// attaching marks to what they belong to.
 //
 // Mark attachment is the piece the span model could not express, and the reason
 // this package now shapes into glyphs. A font states, for each mark and each
@@ -38,7 +38,82 @@ func (f *Face) position(buf []Glyph) {
 			buf[i].XAdvance += f.scale(adj.xAdvance)
 		}
 	}
+	// Cursive attachment before marks: a mark is placed relative to a base that
+	// has already been moved onto the joining stroke, and doing it the other way
+	// round leaves the accent where the letter used to be.
+	f.attachCursive(buf)
 	f.attachMarks(buf)
+}
+
+// cursiveAnchors is where a glyph's connecting stroke leaves and arrives.
+type cursiveAnchors struct {
+	entry, exit       anchor
+	hasEntry, hasExit bool
+}
+
+// attachCursive joins glyphs whose strokes are meant to connect.
+//
+// This is the other half of what a cursive script needs. Joining (arabic.go)
+// picks the right *shape* for each position; this makes the shapes actually
+// meet. The font gives each glyph an exit point and an entry point, and
+// attaching them means placing the second so its entry lands exactly on the
+// first's exit — horizontally by shortening the advance between them, and
+// vertically by lifting one off the baseline, because a joining stroke does not
+// generally leave a letter at the height it enters the next.
+//
+// Which one is lifted is what the RightToLeft lookup flag decides, and it is the
+// only thing that flag means. Set, the last glyph of a run stays put and the
+// earlier ones climb to meet it — which is what an Arabic font wants, since the
+// word is read from the end this pass reaches last. Clear, the first stays and
+// the rest follow. Getting it backwards keeps every joint correct relative to
+// its neighbour and leaves the whole word sitting off the baseline.
+func (f *Face) attachCursive(buf []Glyph) {
+	l := f.layout
+	if len(l.cursive) == 0 {
+		return
+	}
+	// A link is one joint: the two positions it connects and the height the
+	// second sits at relative to the first.
+	type link struct {
+		from, to int
+		dy       float64
+	}
+	var links []link
+
+	prev := -1
+	for i := range buf {
+		if l.ignores(l.cursFlags, buf[i].GID) {
+			continue
+		}
+		if prev >= 0 {
+			a, okA := l.cursive[buf[prev].GID]
+			b, okB := l.cursive[buf[i].GID]
+			if okA && a.hasExit && okB && b.hasEntry {
+				// The first glyph now advances exactly to its exit point, and
+				// the second is pulled back so its entry point lands there. The
+				// offsets already in place are carried through: a glyph moved by
+				// a single adjustment joins from where it now is.
+				buf[prev].XAdvance = f.scale(a.exit.x) + buf[prev].XOffset
+				d := f.scale(b.entry.x) + buf[i].XOffset
+				buf[i].XAdvance -= d
+				buf[i].XOffset -= d
+				links = append(links, link{from: prev, to: i, dy: f.scale(a.exit.y - b.entry.y)})
+			}
+		}
+		prev = i
+	}
+
+	// The heights are a chain, so they propagate from whichever end is anchored:
+	// forwards from the first glyph, or backwards from the last.
+	if l.cursFlags&flagRightToLeft != 0 {
+		for k := len(links) - 1; k >= 0; k-- {
+			buf[links[k].from].YOffset = buf[links[k].to].YOffset - links[k].dy
+		}
+		return
+	}
+	for _, ln := range links {
+		buf[ln.to].YOffset = buf[ln.from].YOffset + ln.dy
+	}
 }
 
 // attachMarks places every mark on the glyph it belongs to.
@@ -81,13 +156,15 @@ func (f *Face) attachMarks(buf []Glyph) {
 			}
 			// Place the mark so its anchor meets the base's. The pen is at the
 			// end of everything drawn since the base, so the advances between
-			// have to be taken back off.
+			// have to be taken back off — and the base's own displacement
+			// carried along, since a base moved by a single adjustment or lifted
+			// onto a joining stroke takes its accents with it.
 			var since float64
 			for k := j; k < i; k++ {
 				since += buf[k].XAdvance
 			}
-			buf[i].XOffset = f.scale(base.x-mark.anchor.x) - since
-			buf[i].YOffset = f.scale(base.y - mark.anchor.y)
+			buf[i].XOffset = buf[j].XOffset + f.scale(base.x-mark.anchor.x) - since
+			buf[i].YOffset = buf[j].YOffset + f.scale(base.y-mark.anchor.y)
 			buf[i].XAdvance = 0
 			break
 		}
@@ -119,7 +196,7 @@ type singleAdjust struct {
 }
 
 // readGPOSAttachment reads the positioning lookups beyond pair kerning: single
-// adjustments, mark-to-base and mark-to-mark.
+// adjustments, cursive attachment, mark-to-base and mark-to-mark.
 //
 // They are read from every feature the font declares rather than from a named
 // one, because attachment is not optional the way a stylistic feature is. A
@@ -135,13 +212,18 @@ func (l *layout) readGPOSAttachment(gpos []byte) {
 				switch kind {
 				case 1:
 					l.singlePosSubtable(sub)
+				case 3:
+					l.cursivePos(sub)
 				case 4:
 					l.markToBase(sub, false)
 				case 6:
 					l.markToBase(sub, true)
 				}
 			}
-			if kind == 4 || kind == 6 {
+			switch kind {
+			case 3:
+				l.cursFlags |= flags
+			case 4, 6:
 				l.markFlags |= flags
 			}
 		}
@@ -228,6 +310,33 @@ func readValueRecord(rec []byte, format int) singleAdjust {
 	out.yPlacement = take(0x0002)
 	out.xAdvance = take(0x0004)
 	return out
+}
+
+// cursivePos reads a cursive attachment subtable: an entry and an exit anchor
+// for each covered glyph, either of which may be absent — a letter that begins a
+// word has nothing to join back to.
+func (l *layout) cursivePos(sub []byte) {
+	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
+		return
+	}
+	covered := coverageGlyphs(sub, font.Be16(sub, 2))
+	n := font.Be16(sub, 4)
+	for i := 0; i < n && i < len(covered); i++ {
+		rec := 6 + 4*i
+		if rec+4 > len(sub) {
+			break
+		}
+		var c cursiveAnchors
+		if a, ok := readAnchor(sub, font.Be16(sub, rec)); ok {
+			c.entry, c.hasEntry = a, true
+		}
+		if a, ok := readAnchor(sub, font.Be16(sub, rec+2)); ok {
+			c.exit, c.hasExit = a, true
+		}
+		if c.hasEntry || c.hasExit {
+			l.cursive[covered[i]] = c
+		}
+	}
 }
 
 // markToBase reads a mark-to-base or mark-to-mark subtable. The two have the
