@@ -51,17 +51,33 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 				"encode the document's text first, then embed")
 	}
 
-	program, kept, err := f.subset()
-	if err != nil {
-		return object.IndirectRef{}, err
+	// CFF outlines are not subsetted, so the program goes in whole and the name
+	// carries no subset tag — a tagged name would claim a subset a reader could
+	// then hold to, and /CIDSet would become mandatory for a set that is simply
+	// every glyph.
+	program, kept := f.data, f.Used()
+	baseFont := object.Name(f.name)
+	if !f.cff {
+		var err error
+		program, kept, err = f.subset()
+		if err != nil {
+			return object.IndirectRef{}, err
+		}
+		baseFont = object.Name(subsetTag(kept) + "+" + f.name)
 	}
-	baseFont := object.Name(subsetTag(kept) + "+" + f.name)
 
 	// The program. /Length1 is the uncompressed length, which a reader needs to
 	// know how much of a compressed stream is font data.
 	programStream := &object.Stream{Dict: object.Dictionary{}, Data: program}
 	programStream.Dict.Set("Length", object.Integer(len(program)))
-	programStream.Dict.Set("Length1", object.Integer(len(program)))
+	if f.cff {
+		// FontFile3 carries a program whose format its /Subtype names; an
+		// OpenType wrapper keeps the tables a reader may want beside the
+		// outlines. /Length1 belongs to FontFile2 and is not written here.
+		programStream.Dict.Set("Subtype", object.Name("OpenType"))
+	} else {
+		programStream.Dict.Set("Length1", object.Integer(len(program)))
+	}
 	programRef := doc.Add(programStream)
 
 	// /CIDSet: one bit per CID, high bit of each byte first, set for the glyphs
@@ -69,9 +85,12 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// subset, and its contents are checked against the embedded program — so it
 	// is written from the same kept set the subsetter used, not from the
 	// original font.
-	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: cidSetBits(kept, f.prog.NumGlyphs)}
-	cidSet.Dict.Set("Length", object.Integer(len(cidSet.Data)))
-	cidSetRef := doc.Add(cidSet)
+	var cidSetRef object.Object
+	if !f.cff {
+		cidSet := &object.Stream{Dict: object.Dictionary{}, Data: cidSetBits(kept, f.prog.NumGlyphs)}
+		cidSet.Dict.Set("Length", object.Integer(len(cidSet.Data)))
+		cidSetRef = doc.Add(cidSet)
+	}
 
 	descriptor := &object.Dictionary{}
 	descriptor.Set("Type", object.Name("FontDescriptor"))
@@ -88,14 +107,22 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// StemV is estimated from the weight the font declares; see stemV for why
 	// it cannot be measured here and why that is acceptable.
 	descriptor.Set("StemV", object.Integer(f.stemV))
-	descriptor.Set("FontFile2", programRef)
-	descriptor.Set("CIDSet", cidSetRef)
+	if f.cff {
+		descriptor.Set("FontFile3", programRef)
+	} else {
+		descriptor.Set("FontFile2", programRef)
+		descriptor.Set("CIDSet", cidSetRef)
+	}
 	descriptorRef := doc.Add(descriptor)
 
 	defaultWidth := f.mostCommonWidth()
 	cidFont := &object.Dictionary{}
 	cidFont.Set("Type", object.Name("Font"))
-	cidFont.Set("Subtype", object.Name("CIDFontType2"))
+	if f.cff {
+		cidFont.Set("Subtype", object.Name("CIDFontType0"))
+	} else {
+		cidFont.Set("Subtype", object.Name("CIDFontType2"))
+	}
 	cidFont.Set("BaseFont", baseFont)
 	sysInfo := &object.Dictionary{}
 	sysInfo.Set("Registry", object.String{Value: []byte("Adobe")})
@@ -108,8 +135,12 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 		cidFont.Set("W", w)
 	}
 	// Identity: a CID is a glyph index, which is what Identity-H encoding
-	// already made the character codes.
-	cidFont.Set("CIDToGIDMap", object.Name("Identity"))
+	// already made the character codes. The key belongs to CIDFontType2 only —
+	// for a CFF descendant the mapping is the font program's own business
+	// (ISO 32000-2 9.7.4.2), and writing it there would be meaningless.
+	if !f.cff {
+		cidFont.Set("CIDToGIDMap", object.Name("Identity"))
+	}
 	cidFontRef := doc.Add(cidFont)
 
 	toUnicode := &object.Stream{Dict: object.Dictionary{}, Data: f.toUnicodeCMap()}

@@ -35,8 +35,14 @@
 //
 // # What it does not do
 //
-// It reads glyf-based (TrueType) programs. A CFF-flavoured OpenType face is
-// refused rather than embedded as something it is not.
+// A CFF-flavoured OpenType face (an .otf) is embedded whole: only glyf outlines
+// are subsetted. Subsetting CFF means rewriting a CharStrings INDEX and the
+// subroutine INDEXes it calls into, which is a second parser and a second
+// writer, and it is the largest piece still missing here. Until then an .otf
+// costs its full size in the file — correct, and larger than it needs to be.
+//
+// A CID-keyed CFF is refused outright. Its CIDs are not glyph indices, and
+// everything here assumes they are.
 package fonts
 
 import (
@@ -72,6 +78,10 @@ type Face struct {
 	stemV      int
 	flags      int
 
+	// cff reports that the outlines are CFF rather than glyf, which changes
+	// both how the program is embedded and whether it can be subsetted.
+	cff bool
+
 	layout *layout // kerning and ligatures, empty when the font declares none
 
 	used map[int]bool // glyph indices this face has encoded
@@ -84,11 +94,10 @@ func Load(data []byte) (*Face, error) {
 	if tables == nil {
 		return nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
 	}
-	if _, ok := tables["glyf"]; !ok {
-		// A CFF-flavoured OpenType face embeds as FontFile3/OpenType and
-		// subsets differently. Refusing is better than writing a FontFile2 that
-		// claims to hold glyf data it does not.
-		return nil, errors.New("fonts: only glyf-based (TrueType) programs are supported so far, not CFF-flavoured OpenType")
+	_, hasGlyf := tables["glyf"]
+	_, hasCFF := tables["CFF "]
+	if !hasGlyf && !hasCFF {
+		return nil, errors.New("fonts: the font carries neither glyf nor CFF outlines")
 	}
 	prog := font.ParseSFNT(data, maxCmapWork)
 	if prog == nil {
@@ -100,10 +109,33 @@ func Load(data []byte) (*Face, error) {
 	if len(prog.Cmap) == 0 {
 		return nil, errors.New("fonts: the font has no Unicode character map")
 	}
+	if !hasGlyf {
+		// The CFF table has to be parsed on its own: the sfnt reader answers
+		// questions from cmap, hmtx and maxp and never opens it, so nothing
+		// about the outlines is known until it is asked directly. (Reading
+		// prog.WidthByCID here instead would be a check that can never fire.)
+		cff := font.ParseCFF(tables["CFF "])
+		if cff == nil {
+			return nil, errors.New("fonts: the CFF table could not be parsed")
+		}
+		if cff.WidthByCID != nil {
+			// A CID-keyed CFF numbers its glyphs by CID and maps CID to glyph
+			// index through its charset — two numberings, not one. Everything
+			// here assumes they are the same: Encode emits glyph indices as
+			// character codes, and /W is written by glyph index. Embedding one
+			// anyway produces widths keyed by one numbering and codes by the
+			// other, which this module's own validator reports.
+			//
+			// Handling it means reading the charset and encoding through it.
+			// Refusing until then is the honest answer; mis-embedding is not.
+			return nil, errors.New("fonts: CID-keyed CFF fonts are not supported; their CIDs are not glyph indices")
+		}
+	}
 
 	f := &Face{
 		data:       data,
 		prog:       prog,
+		cff:        !hasGlyf,
 		unitsPerEm: 1000,
 		used:       map[int]bool{},
 	}

@@ -141,7 +141,55 @@ func SFNT(opts SFNTOptions) []byte {
 	for tag, body := range opts.Extra {
 		all[tag] = body
 	}
-	return assemble(all)
+	return assemble(0x00010000, all)
+}
+
+// OTTO wraps an existing CFF table in an OpenType container, with the metric
+// tables built from opts as SFNT builds them. There is no glyf or loca: the
+// outlines are the CFF's, which is exactly what distinguishes an .otf.
+//
+// It exists so that the CFF paths can be tested against a real CFF table — one
+// taken out of a document, since writing one means emitting INDEX structures,
+// DICTs and Type 2 charstrings — without also needing an OpenType wrapper to
+// have been written around it first.
+func OTTO(cff []byte, opts SFNTOptions) []byte {
+	if opts.Extra == nil {
+		opts.Extra = map[string][]byte{}
+	}
+	opts.Extra["CFF "] = cff
+	full := SFNT(opts)
+	tables := map[string][]byte{}
+	for _, tag := range []string{"cmap", "head", "hhea", "hmtx", "maxp", "name", "post"} {
+		if b := tableOf(full, tag); b != nil {
+			tables[tag] = b
+		}
+	}
+	tables["CFF "] = cff
+	return assemble(0x4F54544F, tables) // 'OTTO'
+}
+
+// tableOf reads one table back out of an assembled font.
+func tableOf(data []byte, tag string) []byte {
+	if len(data) < 12 {
+		return nil
+	}
+	n := int(binary.BigEndian.Uint16(data[4:]))
+	for i := 0; i < n; i++ {
+		rec := 12 + 16*i
+		if rec+16 > len(data) {
+			return nil
+		}
+		if string(data[rec:rec+4]) != tag {
+			continue
+		}
+		off := int(binary.BigEndian.Uint32(data[rec+8:]))
+		length := int(binary.BigEndian.Uint32(data[rec+12:]))
+		if off+length > len(data) {
+			return nil
+		}
+		return data[off : off+length]
+	}
+	return nil
 }
 
 // SFNTCmapTable wraps one format-4 subtable in a cmap table with a single
@@ -218,7 +266,7 @@ func nameTable(psName string) []byte {
 
 // assemble writes the table directory and the tables, with the checksums and
 // the four-byte alignment the format requires.
-func assemble(tables map[string][]byte) []byte {
+func assemble(version uint32, tables map[string][]byte) []byte {
 	tags := make([]string, 0, len(tables))
 	for t := range tables {
 		tags = append(tags, t)
@@ -233,7 +281,7 @@ func assemble(tables map[string][]byte) []byte {
 	}
 
 	dir := make([]byte, 12+16*n)
-	binary.BigEndian.PutUint32(dir[0:], 0x00010000)
+	binary.BigEndian.PutUint32(dir[0:], version)
 	binary.BigEndian.PutUint16(dir[4:], uint16(n))
 	binary.BigEndian.PutUint16(dir[6:], uint16(searchRange))
 	binary.BigEndian.PutUint16(dir[8:], uint16(entrySelector))
