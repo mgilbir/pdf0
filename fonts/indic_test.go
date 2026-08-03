@@ -273,11 +273,14 @@ func TestIndicCategoriesAreUnicodes(t *testing.T) {
 	}
 }
 
-// TestOnlyDevanagariIsReordered pins the stated scope. The other Indic scripts
-// select their second-generation tags and take their fonts' features, and are
-// deliberately not reordered — claiming otherwise in the code while shipping a
-// half-model would be worse than the gap.
-func TestOnlyDevanagariIsReordered(t *testing.T) {
+// TestWhichScriptsAreReordered pins the stated scope, in both directions: the
+// nine scripts that share this model are reordered, and nothing else is.
+//
+// The second half is the one that costs something if it goes wrong. Khmer,
+// Myanmar and the scripts the Universal Shaping Engine covers do not share the
+// model, and setting one of them by these rules would be worse than setting it
+// in storage order — it would move glyphs by a grammar that is not theirs.
+func TestWhichScriptsAreReordered(t *testing.T) {
 	reordered := map[string]bool{}
 	for s := uint16(0); int(s) < len(scriptOpenTypeTags); s++ {
 		if reordersIndic(s) {
@@ -286,19 +289,39 @@ func TestOnlyDevanagariIsReordered(t *testing.T) {
 			}
 		}
 	}
-	if !reordered["dev2"] {
-		t.Error("Devanagari is not reordered, which is the one script this package does reorder")
+	for _, tag := range []string{"dev2", "bng2", "gjr2", "gur2", "knd2", "mlm2", "ory2", "tml2", "tel2"} {
+		if !reordered[tag] {
+			t.Errorf("%q is not reordered, but this package covers it", tag)
+		}
 	}
-	for _, tag := range []string{"bng2", "gjr2", "gur2", "knd2", "mlm2", "ory2", "tml2", "tel2", "mym2", "latn", "arab"} {
+	for _, tag := range []string{"khmr", "mym2", "sinh", "tibt", "java", "bali", "latn", "arab"} {
 		if reordered[tag] {
-			t.Errorf("%q is reordered, but this package covers Devanagari alone", tag)
+			t.Errorf("%q is reordered, but this package does not cover it", tag)
 		}
 	}
 	if reordersIndic(scriptOf('A')) {
 		t.Error("a Latin run would be reordered as Indic")
 	}
-	if reordersIndic(scriptOf(0x0995)) {
-		t.Error("a Bengali run would be reordered as Devanagari, whose rules are not Bengali's")
+	// Each script's config is found by its own tag, so a Bengali run cannot get
+	// Devanagari's data.
+	if cfg := indicConfigFor(scriptOf(0x0995)); cfg == nil || cfg.tag != "bng2" {
+		t.Errorf("a Bengali run resolved to %v, not to Bengali's own rules", cfg)
+	}
+	if cfg := indicConfigFor(scriptOf(devKa)); cfg == nil || cfg.tag != "dev2" {
+		t.Errorf("a Devanagari run resolved to %v, not to Devanagari's own rules", cfg)
+	}
+	// Every config is reachable and states the tag it is filed under, so that a
+	// script added to the table cannot be silently unreachable or mislabelled.
+	for tag, cfg := range indicConfigs {
+		if cfg.tag != tag {
+			t.Errorf("the config filed under %q calls itself %q", tag, cfg.tag)
+		}
+		if cfg.virama == 0 {
+			t.Errorf("%q names no virama, so the font can be asked nothing", tag)
+		}
+		if !reordered[tag] {
+			t.Errorf("%q has a config no script selects", tag)
+		}
 	}
 }
 
