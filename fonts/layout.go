@@ -37,6 +37,10 @@ import (
 //     rest, which change what the text says it is and so wait to be asked for.
 //   - GDEF glyph classes and the lookup flags that use them, so that a lookup
 //     declaring it ignores marks does.
+//   - The zero-width joiner and non-joiner: obeyed where they are written about,
+//     stepped over by every rule that is not about them, and removed before
+//     anything is positioned or drawn. See ignorable.go, which also says which
+//     of Unicode's other default-ignorable characters are *not* handled.
 //
 // # What is not, and what each absence costs
 //

@@ -90,8 +90,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16) ([]Glyph, int) {
 		buf = sh.shapeIndic(buf, runes)
 	} else {
 		// Joining first: the joined forms are what a cursive script's ligatures
-		// and contextual rules are written against.
+		// and contextual rules are written against. The join controls have said
+		// all they have to say once it has run, and are taken out before any
+		// substitution can see them — see ignorable.go.
 		buf = sh.applyJoining(buf, runes)
+		buf = hideJoiners(buf, runes)
 		buf = sh.substitute(buf)
 	}
 	sh.position(buf)
