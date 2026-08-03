@@ -66,9 +66,16 @@ func GlyphNameToRune(name string, code byte) (rune, bool) {
 			return rune(v), true
 		}
 	}
-	// ASCII and Latin-1 high range: the standard Latin encodings are
-	// identity there (0x80-0x9F differ, but those are rare in practice and
-	// handled by the uni/u name forms above).
+	// The named glyphs of the standard Latin encodings, from Adobe's Glyph
+	// List. This is consulted before the identity rule below because the two
+	// disagree exactly where it matters: WinAnsiEncoding puts the curly quotes,
+	// the dashes, the bullet, the ellipsis and the euro between 0x80 and 0x9F,
+	// where nothing about the code implies the character.
+	if r, ok := glyphNameRunes[name]; ok {
+		return r, true
+	}
+	// ASCII and Latin-1 high range: the standard Latin encodings are identity
+	// there, which covers a font naming a glyph the list above does not.
 	if (code >= 0x20 && code <= 0x7E) || code >= 0xA0 {
 		return rune(code), true
 	}

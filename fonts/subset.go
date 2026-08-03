@@ -67,6 +67,9 @@ func (f *Face) Subset() ([]byte, error) {
 // and they must be the same set: /CIDSet describes exactly the glyphs the
 // program carries, and computing that twice is how the two come to disagree.
 func (f *Face) subset() ([]byte, []int, error) {
+	if f.std != nil {
+		return nil, nil, errors.New("fonts: a standard font has no program to subset")
+	}
 	if f.cff {
 		return f.subsetOpenTypeCFF()
 	}
