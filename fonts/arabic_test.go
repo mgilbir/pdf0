@@ -136,6 +136,11 @@ func joiningGSUB() []byte {
 // TestArabicWordTakesItsJoinedForms is the capability end to end: three letters
 // become initial, medial and final shapes, which is what makes the word legible
 // rather than a row of disconnected letters.
+//
+// The glyphs come back in the order they are drawn, and Arabic is drawn right to
+// left, so the *final* shape is emitted first and the initial one last. That is
+// not a detail of this test: emitting them the other way round draws the word
+// backwards, which is what this package did before it had a bidirectional pass.
 func TestArabicWordTakesItsJoinedForms(t *testing.T) {
 	f := arabicFace(t)
 	if !f.HasJoiningForms() {
@@ -145,13 +150,21 @@ func TestArabicWordTakesItsJoinedForms(t *testing.T) {
 	if missing != 0 {
 		t.Fatalf("%d runes missing", missing)
 	}
-	want := []int{2, 3, 4} // initial, medial, final
+	want := []int{4, 3, 2} // final, medial, initial: leftmost drawn first
 	if len(glyphs) != len(want) {
 		t.Fatalf("got %d glyphs, want %d", len(glyphs), len(want))
 	}
 	for i, g := range glyphs {
 		if g.GID != want[i] {
 			t.Errorf("position %d: glyph %d, want %d", i, g.GID, want[i])
+		}
+	}
+	// The clusters run backwards through the string, which is how a caller maps
+	// a glyph on the page back to the character it was written as. Beh is two
+	// bytes in UTF-8, so the offsets are 4, 2, 0.
+	for i, g := range glyphs {
+		if want := 2 * (len(glyphs) - 1 - i); g.Cluster != want {
+			t.Errorf("position %d came from byte %d, want %d", i, g.Cluster, want)
 		}
 	}
 	// The advances follow the shapes, not the isolated letter: a joined form is
@@ -210,7 +223,9 @@ func TestJoiningFormsBelongToTheScriptThatDeclaresThem(t *testing.T) {
 
 	declared := joiningFaceFor(t, "arab")
 	got := shapedGIDs(t, declared, word)
-	want := []int{2, 3, 4}
+	// Final, medial, initial: the shapes a joined word takes, in the order they
+	// are drawn.
+	want := []int{4, 3, 2}
 	wantGIDs(t, got, want, word)
 
 	// The same font declaring the same forms for Latin instead: an Arabic word

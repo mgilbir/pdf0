@@ -61,21 +61,34 @@ type Run struct {
 	// Face is what this piece was set in.
 	Face *Face
 
-	// Glyphs are the positioned glyphs. Their Cluster values are byte offsets
-	// into the *whole* string that was shaped, not into this run — a caller
-	// mapping a glyph back to the text should not have to know that runs exist.
+	// Glyphs are the positioned glyphs, in the order they are drawn. Their
+	// Cluster values are byte offsets into the *whole* string that was shaped,
+	// not into this run — a caller mapping a glyph back to the text should not
+	// have to know that runs exist.
 	Glyphs []Glyph
 
-	// Start is the byte offset in the input where this run begins.
+	// Start is the byte offset in the input where this run begins — where it
+	// begins in the text, that is, which in a right-to-left run is where the
+	// *last* glyph drawn came from.
 	Start int
+
+	// Level is the run's bidirectional embedding level: even runs left to
+	// right, odd right to left. A caller drawing the runs in the order they are
+	// returned does not need it; one aligning a line, or hit-testing a click
+	// back to a character, does.
+	Level int
 }
 
 // ShapeRuns sets a string across the stack, returning one run per stretch of
-// text that shares a face and a script, and the number of characters no face
-// could set.
+// text that shares a face, a script and a direction, and the number of
+// characters no face could set.
 //
-// The runs are in reading order and cover the input exactly, so drawing them in
-// order at a continuing pen position sets the text.
+// The runs are in *visual* order — the order they are drawn, left to right —
+// and cover the input exactly, so drawing them in order at a continuing pen
+// position sets the text. That is not the order they are written in whenever the
+// text is not all one direction, and neither is the order of the glyphs within a
+// right-to-left run: this is where UAX #9 is applied, and where the reversal
+// that makes Arabic and Hebrew legible happens.
 //
 // # Why script cuts a run as much as face does
 //
@@ -88,18 +101,35 @@ type Run struct {
 // Characters that are in no script of their own — a space, a digit, a comma,
 // a combining accent — take the script of what they are written among, so the
 // space in the middle of a sentence does not cut it in two.
+//
+// # And why direction cuts one too
+//
+// A run is shaped by one call into one font, and a call sets one direction: the
+// positioning pass has to know which way the pen will meet the glyphs it is
+// placing. A stretch of Latin inside a Hebrew sentence is a run of its own for
+// the same reason a stretch of Greek inside it would be.
 func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 	if len(s.faces) == 0 || text == "" {
 		return nil, 0
 	}
 
-	// One entry per base-plus-marks unit, with the face and the script it chose.
+	// The embedding levels first, because a level boundary cuts a run as surely
+	// as a change of face does, and the levels are also what puts the runs into
+	// the order they are drawn.
+	levelRuns := bidiLogicalRuns(text)
+
+	// One entry per base-plus-marks unit, with the face, script and level it
+	// chose. The unit is the atom: a level boundary is not allowed to fall
+	// between a letter and its accent, and the algorithm does not put one there
+	// — rule W1 gives a mark the direction of what it is written on.
 	type unit struct {
 		start, end int
 		face       int
 		script     uint16
+		level      int
 	}
 	var units []unit
+	lr := 0
 	for i := 0; i < len(text); {
 		base, size := utf8.DecodeRuneInString(text[i:])
 		end := i + size
@@ -110,10 +140,14 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 			}
 			end += n
 		}
+		for lr+1 < len(levelRuns) && levelRuns[lr].end <= i {
+			lr++
+		}
 		units = append(units, unit{
 			start: i, end: end,
 			face:   s.faceFor(text[i:end], base),
 			script: runScript(text[i:end]),
+			level:  levelRuns[lr].level,
 		})
 		i = end
 	}
@@ -140,27 +174,41 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 
 	var (
 		runs    []Run
+		levels  []int
 		missing int
 	)
 	for k := 0; k < len(units); {
 		j := k
-		for j < len(units) && units[j].face == units[k].face && units[j].script == units[k].script {
+		for j < len(units) && units[j].face == units[k].face &&
+			units[j].script == units[k].script && units[j].level == units[k].level {
 			j++
 		}
 		start, end := units[k].start, units[j-1].end
 		face := s.faces[units[k].face]
+		level := units[k].level
 
 		// The whole stretch goes to the face at once, so its ligatures, kerning
-		// and joining still see the run they were written for.
-		glyphs, gone := face.shapeGlyphsIn(text[start:end], units[k].script)
+		// and joining still see the run they were written for — in the order it
+		// is written, which is what those rules are stated against. The run
+		// comes back in the order it is drawn.
+		glyphs, gone := face.shapeGlyphsIn(text[start:end], units[k].script, level&1 == 1)
 		missing += gone
 		for gi := range glyphs {
 			glyphs[gi].Cluster += start
 		}
-		runs = append(runs, Run{Face: face, Glyphs: glyphs, Start: start})
+		runs = append(runs, Run{Face: face, Glyphs: glyphs, Start: start, Level: level})
+		levels = append(levels, level)
 		k = j
 	}
-	return runs, missing
+
+	// Rule L2, over whole runs. Each run's glyphs are already in the order they
+	// are drawn; this puts the runs themselves in it.
+	order := bidiVisualOrder(levels)
+	visual := make([]Run, len(runs))
+	for i, k := range order {
+		visual[i] = runs[k]
+	}
+	return visual, missing
 }
 
 // faceFor chooses the face for one base-plus-marks unit.
