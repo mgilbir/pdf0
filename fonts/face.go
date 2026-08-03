@@ -33,10 +33,12 @@
 // joins cursive forms.
 //
 // The rules applied are those the font declares for the run's own script, and
-// for the language system named by SetLanguage. What is still not done is
-// reordering, so text in a script that needs it — Devanagari and the other
-// Indic scripts — is not correctly set by this package. See layout.go for
-// exactly what is read.
+// for the language system named by SetLanguage. Devanagari is also reordered:
+// its characters are not stored in the order they are drawn, and ShapeGlyphs
+// puts them right. The other Indic scripts, and Khmer, Myanmar and the
+// Universal Shaping Engine scripts, are not reordered, so text in them is still
+// not correctly set by this package. See layout.go for exactly what is read and
+// indic.go for what the reordering covers.
 //
 // # What it does not do
 //

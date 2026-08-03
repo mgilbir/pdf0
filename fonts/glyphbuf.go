@@ -81,10 +81,19 @@ func (f *Face) shapeGlyphsIn(s string, script uint16) ([]Glyph, int) {
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
 	sh := shaper{f: f, l: f.layoutFor(script)}
-	// Joining first: the joined forms are what a cursive script's ligatures and
-	// contextual rules are written against.
-	buf = sh.applyJoining(buf, runes)
-	buf = sh.substitute(buf)
+	// A script whose characters are not in the order they are drawn is shaped
+	// whole by its own pass: the reordering decides which of the font's rules
+	// apply where, so it cannot be a step before the general substitutions and
+	// has to be the substitutions. No script both joins cursively and reorders,
+	// which is why these are alternatives rather than stages.
+	if reordersIndic(script) {
+		buf = sh.shapeIndic(buf, runes)
+	} else {
+		// Joining first: the joined forms are what a cursive script's ligatures
+		// and contextual rules are written against.
+		buf = sh.applyJoining(buf, runes)
+		buf = sh.substitute(buf)
+	}
 	sh.position(buf)
 	for _, g := range buf {
 		f.used[g.GID] = true

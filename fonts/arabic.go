@@ -13,18 +13,18 @@ import (
 // direction; putting the two together is what turns a row of disconnected
 // letterforms into writing.
 //
-// This is the one piece of script-specific shaping here, and it is worth being
-// clear about why it is the one. It is decidable from the characters alone, it
-// needs no reordering, and its absence is not subtle: Arabic set without it is
-// not merely ugly but hard to read, in a way a reader will notice immediately
-// and a developer who does not read Arabic will not.
+// It is decidable from the characters alone, it needs no reordering, and its
+// absence is not subtle: Arabic set without it is not merely ugly but hard to
+// read, in a way a reader will notice immediately and a developer who does not
+// read Arabic will not.
 //
 // # What this does not do
 //
 // It chooses forms. It does not reorder, which Indic scripts require — a vowel
 // written after a consonant may belong before it — and it does not join the
-// strokes themselves, which is cursive attachment (GPOS 3). Text in an Indic
-// script is not correctly set by this package.
+// strokes themselves, which is cursive attachment (GPOS 3). Reordering is
+// indic.go's, and the two are alternatives rather than stages: no script both
+// joins cursively and reorders.
 
 // joiningType is what a character can join to.
 type joiningType uint8
