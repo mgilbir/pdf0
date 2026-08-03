@@ -565,19 +565,212 @@ func TestOpenTypeCFFEmbedsAndValidates(t *testing.T) {
 	}
 }
 
-// TestCFFIsNotSubsetted pins the limit rather than letting it be discovered.
-// Subsetting CFF means rewriting a CharStrings INDEX and the subroutines it
-// calls into; until that exists an .otf is embedded whole, and saying so is
-// better than a silent size regression.
-func TestCFFIsNotSubsetted(t *testing.T) {
+// TestCFFSubsetIsSmallerAndStillParses pins that subsetting a CFF pays and
+// that what comes out is still a font. The structures a CFF holds are reached
+// by absolute offset, so changing the size of any one of them moves every
+// offset that names it — a subsetter that got that wrong produces bytes that
+// look plausible and parse as nothing.
+func TestCFFSubsetIsSmallerAndStillParses(t *testing.T) {
 	program := corpusOpenTypeCFF(t)
 	face, err := fonts.Load(program)
 	if err != nil {
-		t.Fatalf("a program the helper already loaded was refused: %v", err)
+		t.Fatalf("loading: %v", err)
 	}
-	if _, err := face.Subset(); err == nil {
-		t.Error("Subset claimed to subset a CFF program")
+	var text string
+	for r := rune('A'); r <= 'z' && len(text) < 3; r++ {
+		if _, ok := face.GlyphID(r); ok {
+			text += string(r)
+		}
 	}
+	if text == "" {
+		t.Skip("the corpus program maps none of the ASCII letters")
+	}
+	face.Encode(text)
+
+	sub, err := face.Subset()
+	if err != nil {
+		t.Fatalf("subsetting: %v", err)
+	}
+	if len(sub) >= len(program) {
+		t.Errorf("the subset is %d bytes against the original's %d", len(sub), len(program))
+	}
+	parsed := font.ParseSFNT(sub, 1<<22)
+	if parsed == nil {
+		t.Fatal("this module's own reader rejected the subset font")
+	}
+	if parsed.NumGlyphs != face.NumGlyphs() {
+		t.Errorf("NumGlyphs = %d, want %d unchanged: indices are retained", parsed.NumGlyphs, face.NumGlyphs())
+	}
+	cff := font.ParseCFF(font.SFNTTables(sub)["CFF "])
+	if cff == nil {
+		t.Fatal("the subsetted CFF table did not parse")
+	}
+	// The Private DICT must survive the move intact: it carries the default and
+	// nominal widths every charstring's width is expressed against, so a subset
+	// that relocated it wrongly would give every glyph a different width
+	// without changing a single charstring.
+	origPriv, err := fonts.PrivateDictForTest(font.SFNTTables(program)["CFF "])
+	if err != nil {
+		t.Fatalf("reading the original Private DICT: %v", err)
+	}
+	subPriv, err := fonts.PrivateDictForTest(font.SFNTTables(sub)["CFF "])
+	if err != nil {
+		t.Fatalf("reading the subset Private DICT: %v", err)
+	}
+	if !bytes.Equal(origPriv, subPriv) {
+		t.Errorf("the Private DICT changed across subsetting: %d bytes became %d", len(origPriv), len(subPriv))
+	}
+
+	// A kept glyph keeps its width; the widths are what /W is written from, so
+	// a subset that disturbed them would produce a document the validator
+	// rejects.
+	for _, r := range text {
+		gid, _ := face.GlyphID(r)
+		if gid >= len(cff.WidthByGID) {
+			t.Fatalf("glyph %d is missing from the subset", gid)
+		}
+		want, _ := face.Advance(r)
+		if cff.WidthByGID[gid] != want {
+			t.Errorf("glyph %d width = %v after subsetting, want %v", gid, cff.WidthByGID[gid], want)
+		}
+	}
+}
+
+// TestCFFSubsetDropsUnusedOutlines pins where the saving comes from. A dropped
+// glyph becomes a charstring of one endchar operator — a glyph that draws
+// nothing — rather than a zero-length entry, which is not a charstring at all
+// and which a renderer may reject.
+func TestCFFSubsetDropsUnusedOutlines(t *testing.T) {
+	program := corpusOpenTypeCFF(t)
+	face, err := fonts.Load(program)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	var keptRune rune
+	for r := rune('A'); r <= 'z'; r++ {
+		if _, ok := face.GlyphID(r); ok {
+			keptRune = r
+			break
+		}
+	}
+	if keptRune == 0 {
+		t.Skip("the corpus program maps none of the ASCII letters")
+	}
+	face.Encode(string(keptRune))
+	keptGID, _ := face.GlyphID(keptRune)
+
+	sub, err := face.Subset()
+	if err != nil {
+		t.Fatalf("subsetting: %v", err)
+	}
+	strings := charStringsOf(t, font.SFNTTables(sub)["CFF "])
+	if len(strings) != face.NumGlyphs() {
+		t.Fatalf("the subset holds %d charstrings, want %d", len(strings), face.NumGlyphs())
+	}
+	if len(strings[keptGID]) <= 1 {
+		t.Errorf("the kept glyph's charstring is %d bytes; its outline was dropped", len(strings[keptGID]))
+	}
+	dropped, emptied := 0, 0
+	for gid, cs := range strings {
+		if gid == 0 || gid == keptGID {
+			continue
+		}
+		dropped++
+		if len(cs) == 1 && cs[0] == 14 { // endchar
+			emptied++
+		}
+	}
+	if dropped == 0 {
+		t.Fatal("the fixture font has nothing to drop")
+	}
+	if emptied != dropped {
+		t.Errorf("%d of %d unused glyphs kept their outlines", dropped-emptied, dropped)
+	}
+}
+
+// TestCFFSubsetValidatesAtEveryLevel runs a page set in a subsetted CFF face
+// past the validator at each conformance level. The font is a subset now — its
+// /BaseFont carries a tag saying so — and the rules that apply to a subset are
+// not the same at every level.
+func TestCFFSubsetValidatesAtEveryLevel(t *testing.T) {
+	program := corpusOpenTypeCFF(t)
+	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
+		t.Run(level.String(), func(t *testing.T) {
+			face, err := fonts.Load(program)
+			if err != nil {
+				t.Fatalf("loading: %v", err)
+			}
+			var text string
+			for r := rune('A'); r <= 'z' && len(text) < 4; r++ {
+				if _, ok := face.GlyphID(r); ok {
+					text += string(r)
+				}
+			}
+			if text == "" {
+				t.Skip("the corpus program maps none of the ASCII letters")
+			}
+			codes, _ := face.Encode(text)
+
+			doc := NewPDFADocument(level)
+			var b content.Builder
+			b.BeginText().SetFont("F1", 18).MoveText(72, 700).ShowText(codes).EndText()
+			drawn, err := b.Bytes()
+			if err != nil {
+				t.Fatalf("drawing: %v", err)
+			}
+			fontRef, err := face.Embed(doc)
+			if err != nil {
+				t.Fatalf("embedding: %v", err)
+			}
+			attachPage(doc, drawn, fontRef)
+
+			var buf bytes.Buffer
+			if err := doc.Write(&buf); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			rd, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatalf("reparse: %v", err)
+			}
+			for _, e := range ValidatePDFABytes(rd, level, buf.Bytes()) {
+				t.Errorf("violation: %s", e.Error())
+			}
+		})
+	}
+}
+
+// charStringsOf pulls the CharStrings INDEX out of a CFF table, so a test can
+// look at what the subsetter actually wrote.
+func charStringsOf(t *testing.T, cff []byte) [][]byte {
+	t.Helper()
+	items, err := fonts.CharStringsForTest(cff)
+	if err != nil {
+		t.Fatalf("reading the subsetted CharStrings: %v", err)
+	}
+	return items
+}
+
+// attachPage gives doc a single page showing drawn with one font.
+func attachPage(doc *Document, drawn []byte, fontRef object.IndirectRef) {
+	stream := &object.Stream{Dict: object.Dictionary{}, Data: drawn}
+	stream.Dict.Set("Length", object.Integer(len(drawn)))
+	contentRef := doc.Add(stream)
+	fontDict := &object.Dictionary{}
+	fontDict.Set("F1", fontRef)
+	resources := &object.Dictionary{}
+	resources.Set("Font", fontDict)
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{
+		object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792),
+	})
+	page.Set("Resources", resources)
+	page.Set("Contents", contentRef)
+	pageRef := doc.Add(page)
+	pages := doc.ResolveDict(doc.ResolveDict(doc.Trailer.Get("Root")).Get("Pages"))
+	pages.Set("Kids", object.Array{pageRef})
+	pages.Set("Count", object.Integer(1))
 }
 
 // TestCIDKeyedCFFIsRefused pins the other half of CFF support: the fonts this

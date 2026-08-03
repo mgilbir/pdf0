@@ -51,20 +51,11 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 				"encode the document's text first, then embed")
 	}
 
-	// CFF outlines are not subsetted, so the program goes in whole and the name
-	// carries no subset tag — a tagged name would claim a subset a reader could
-	// then hold to, and /CIDSet would become mandatory for a set that is simply
-	// every glyph.
-	program, kept := f.data, f.Used()
-	baseFont := object.Name(f.name)
-	if !f.cff {
-		var err error
-		program, kept, err = f.subset()
-		if err != nil {
-			return object.IndirectRef{}, err
-		}
-		baseFont = object.Name(subsetTag(kept) + "+" + f.name)
+	program, kept, err := f.subset()
+	if err != nil {
+		return object.IndirectRef{}, err
 	}
+	baseFont := object.Name(subsetTag(kept) + "+" + f.name)
 
 	// The program. /Length1 is the uncompressed length, which a reader needs to
 	// know how much of a compressed stream is font data.
@@ -85,12 +76,9 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// subset, and its contents are checked against the embedded program — so it
 	// is written from the same kept set the subsetter used, not from the
 	// original font.
-	var cidSetRef object.Object
-	if !f.cff {
-		cidSet := &object.Stream{Dict: object.Dictionary{}, Data: cidSetBits(kept, f.prog.NumGlyphs)}
-		cidSet.Dict.Set("Length", object.Integer(len(cidSet.Data)))
-		cidSetRef = doc.Add(cidSet)
-	}
+	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: cidSetBits(kept, f.prog.NumGlyphs)}
+	cidSet.Dict.Set("Length", object.Integer(len(cidSet.Data)))
+	cidSetRef := doc.Add(cidSet)
 
 	descriptor := &object.Dictionary{}
 	descriptor.Set("Type", object.Name("FontDescriptor"))
@@ -111,8 +99,10 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 		descriptor.Set("FontFile3", programRef)
 	} else {
 		descriptor.Set("FontFile2", programRef)
-		descriptor.Set("CIDSet", cidSetRef)
 	}
+	// /CIDSet is required of a subset font whatever its outlines are, and both
+	// kinds are subsets here — the /BaseFont tag says so.
+	descriptor.Set("CIDSet", cidSetRef)
 	descriptorRef := doc.Add(descriptor)
 
 	defaultWidth := f.mostCommonWidth()
@@ -186,7 +176,13 @@ func cidSetBits(kept []int, numGlyphs int) []byte {
 func (f *Face) toUnicodeCMap() []byte {
 	rev := make(map[int]rune, len(f.prog.Cmap))
 	for r, gid := range f.prog.Cmap {
-		if gid == 0 {
+		if gid == 0 || forbiddenInToUnicode(r) {
+			// U+0000, U+FEFF and U+FFFE are not text: mapping a glyph to one
+			// says the character it represents is a byte-order mark or nothing
+			// at all, and PDF/A reports it. A glyph whose only cmap entry is
+			// one of these is left unmapped, which costs its extractability —
+			// the alternative costs conformance, and an unextractable glyph is
+			// the smaller loss.
 			continue
 		}
 		if prev, ok := rev[gid]; !ok || r < prev {
@@ -240,4 +236,11 @@ func utf16beHex(r rune) string {
 		return fmt.Sprintf("%04X%04X", hi, lo)
 	}
 	return fmt.Sprintf("%04X", r)
+}
+
+// forbiddenInToUnicode reports the code points a ToUnicode CMap may not map to
+// (ISO 19005-4 6.2.10.7 and its predecessors). They are not characters: two are
+// byte-order marks and one is the null.
+func forbiddenInToUnicode(r rune) bool {
+	return r == 0 || r == 0xFEFF || r == 0xFFFE
 }

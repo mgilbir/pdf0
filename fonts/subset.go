@@ -68,7 +68,7 @@ func (f *Face) Subset() ([]byte, error) {
 // program carries, and computing that twice is how the two come to disagree.
 func (f *Face) subset() ([]byte, []int, error) {
 	if f.cff {
-		return nil, nil, errors.New("fonts: CFF outlines are not subsetted; the program is embedded whole")
+		return f.subsetOpenTypeCFF()
 	}
 	tables := font.SFNTTables(f.data)
 	if tables == nil {

@@ -35,11 +35,8 @@
 //
 // # What it does not do
 //
-// A CFF-flavoured OpenType face (an .otf) is embedded whole: only glyf outlines
-// are subsetted. Subsetting CFF means rewriting a CharStrings INDEX and the
-// subroutine INDEXes it calls into, which is a second parser and a second
-// writer, and it is the largest piece still missing here. Until then an .otf
-// costs its full size in the file — correct, and larger than it needs to be.
+// Both glyf and CFF outlines are subsetted, by the same rule: glyph indices are
+// retained and a dropped glyph becomes an empty one.
 //
 // A CID-keyed CFF is refused outright. Its CIDs are not glyph indices, and
 // everything here assumes they are.
@@ -430,3 +427,7 @@ func stemV(os2 []byte) int {
 	}
 	return v
 }
+
+// NumGlyphs is the number of glyphs the font program declares, including
+// .notdef. It is unchanged by subsetting, which retains glyph indices.
+func (f *Face) NumGlyphs() int { return f.prog.NumGlyphs }
