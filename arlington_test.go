@@ -375,15 +375,51 @@ func arlValidate(m *arlModel, data []byte) (findings []string, readErr error) {
 	return v.findings, nil
 }
 
+// arlModelDir finds the Arlington grammar, and distinguishes "nobody fetched
+// it" from "somebody pointed at the wrong place".
+//
+// The difference matters more than it looks. This test is a ratchet: it asserts
+// a count of findings over a thousand documents. A skip is indistinguishable
+// from a pass in the output, so a mistyped path turns the whole oracle off
+// silently — which is exactly what happened when it was run with
+// ARLINGTON_MODEL set to the repository root instead of the tsv/2.0 directory
+// inside it. The run looked green and had checked nothing.
+//
+// So: unset and absent is a skip, because the model is fetched on demand and a
+// developer without it should still be able to run the suite. Set and wrong is
+// a failure, because somebody meant to run this and did not.
 func arlModelDir(t *testing.T) string {
-	dir := os.Getenv("ARLINGTON_MODEL")
+	const marker = "Catalog.tsv" // every version of the model has one
+
+	env := os.Getenv("ARLINGTON_MODEL")
+	dir := env
 	if dir == "" {
 		dir = "testdata/arlington-pdf-model/tsv/2.0"
 	}
-	if _, err := os.Stat(filepath.Join(dir, "Catalog.tsv")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+		return dir
+	}
+
+	// The usual mistake is naming the checkout rather than the grammar inside
+	// it. That is unambiguous, so take it rather than making someone guess.
+	if nested := filepath.Join(dir, "tsv", "2.0"); fileExists(filepath.Join(nested, marker)) {
+		return nested
+	}
+
+	if env == "" {
 		t.Skip("Arlington model not present; run `make arlington`")
 	}
-	return dir
+	t.Fatalf("ARLINGTON_MODEL is set to %q, and there is no %s there or in %s.\n"+
+		"It must name the directory holding the grammar — testdata/arlington-pdf-model/tsv/2.0 —\n"+
+		"not the checkout above it. Failing rather than skipping: this test is a ratchet,\n"+
+		"and a skip would report success having checked nothing.",
+		env, marker, filepath.Join(env, "tsv", "2.0"))
+	return ""
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // TestArlingtonParserFaithful checks that pdf0 represents known-conforming
