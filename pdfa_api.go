@@ -73,6 +73,18 @@ func ValidatePDFABytesContext(ctx context.Context, doc *Document, level pdfa.Lev
 	return validatePDFABytes(core.NewCanceler(ctx), doc, level, rawData)
 }
 func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, rawData []byte) []pdfa.Violation {
+	if doc == nil {
+		// A nil document is a caller mistake, and the useful answer is a finding
+		// rather than a panic: this is the API a caller reaches for after a
+		// failed Read, where the natural shape of the code leaves doc nil and
+		// the error unchecked. Reporting it as a checker finding means the
+		// result can never be mistaken for a clean bill of health.
+		return []pdfa.Violation{{
+			Rule:    "limit",
+			Level:   level,
+			Message: "no document to validate",
+		}}
+	}
 	// Validate against a shallow copy of the Document so the per-run cache is
 	// installed on the copy, never on the caller's. The copy shares the
 	// (read-only during validation) Objects/Trailer/Offsets, so this is cheap,

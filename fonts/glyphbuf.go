@@ -46,6 +46,9 @@ type Glyph struct {
 // It is the full result. Shape is the same pipeline with the vertical part
 // dropped, and is enough whenever the text carries no marks.
 func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
+	if !f.composite() {
+		return f.shapeByCode(s)
+	}
 	var (
 		buf     []Glyph
 		runes   []rune
@@ -72,6 +75,62 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 		f.used[g.GID] = true
 	}
 	return buf, missing
+}
+
+// shapeByCode is the shaping path for a face whose codes are characters rather
+// than glyph indices: the fourteen standard faces, and any face embedded as a
+// simple font.
+//
+// It applies no substitution and no positioning, and that is not a shortcut. A
+// one-byte code addresses at most 256 glyphs, so a ligature the font has cannot
+// generally be named at all; and every layout table is keyed by glyph index,
+// which the code is not — looking a kern pair up by code finds either nothing
+// or the wrong pair. What such a face can do correctly is one code per
+// character at the width the font publishes, and that is what this does.
+//
+// Callers get the same Glyph values either way, so Draw, Measure and the
+// fallback stack do not have to know which kind of face they were given.
+func (f *Face) shapeByCode(s string) ([]Glyph, int) {
+	var (
+		buf     []Glyph
+		missing int
+	)
+	for i, r := range s {
+		code, ok := f.GlyphID(r)
+		if !ok {
+			missing++
+			// The same substitution Encode makes: an unmapped character is set
+			// as a space, which is what a reader shows for an undefined code.
+			if space, spaceOK := f.GlyphID(' '); spaceOK {
+				code = space
+			} else {
+				code = 0
+			}
+		}
+		width, _ := f.Advance(r)
+		if !ok {
+			width, _ = f.Advance(' ')
+		}
+		buf = append(buf, Glyph{GID: code, Cluster: i, XAdvance: width})
+	}
+	for _, g := range buf {
+		f.used[g.GID] = true
+	}
+	return buf, missing
+}
+
+// nominalAdvance is how far the text-showing operator will move the pen for one
+// glyph, which is the font's own width for whatever the code names.
+//
+// For a composite face that is the width of the glyph index. For the others no
+// positioning was applied, so the advance already in the buffer *is* the font's
+// own — and asking for it by index would look the width up under a number that
+// is a character code.
+func (f *Face) nominalAdvance(g Glyph) float64 {
+	if !f.composite() {
+		return g.XAdvance
+	}
+	return f.advanceGID(g.GID)
 }
 
 // Draw paints shaped glyphs into a content stream at the given size.
@@ -122,10 +181,18 @@ func (f *Face) Draw(b *content.Builder, glyphs []Glyph, size float64) {
 			rise = g.YOffset
 		}
 		move(g.XOffset)
-		run = append(run, byte(g.GID>>8), byte(g.GID))
+		// Two bytes for a composite face, whose codes are glyph indices; one for
+		// a simple or standard face, whose codes are WinAnsi characters. Writing
+		// two where one is expected makes a reader read every pair of characters
+		// as one, which is a page of nonsense rather than a subtle shift.
+		if f.composite() {
+			run = append(run, byte(g.GID>>8), byte(g.GID))
+		} else {
+			run = append(run, byte(g.GID))
+		}
 		// The operator will advance the pen by the font's own width; the run
 		// wants to end up XAdvance further on, with the offset undone.
-		move(g.XAdvance - f.advanceGID(g.GID) - g.XOffset)
+		move(g.XAdvance - f.nominalAdvance(g) - g.XOffset)
 	}
 	flush()
 	if rise != 0 {

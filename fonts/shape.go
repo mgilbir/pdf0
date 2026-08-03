@@ -25,6 +25,18 @@ import "github.com/mgilbir/pdf0/content"
 // that normalises, not in one that does not. Shape is therefore opt-in, and
 // Encode without it stays the choice for text that must extract literally.
 func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
+	if !f.composite() {
+		// A simple or standard face encodes one byte per character, and its
+		// codes name nothing in the layout tables — so there is no shaping to
+		// do, and the honest answer is the plain encoding. Returning it as a
+		// single span keeps the shape of the result the same whichever kind of
+		// face a caller was handed.
+		codes, missing := f.Encode(s)
+		if len(codes) == 0 {
+			return nil, missing
+		}
+		return []content.TextSpan{{Codes: codes}}, missing
+	}
 	glyphs, missing := f.glyphRun(s)
 	if len(glyphs) == 0 {
 		return nil, missing
@@ -72,6 +84,14 @@ func (f *Face) shapeGlyphs(glyphs []int) []content.TextSpan {
 // it is what Shape will actually occupy — unlike Measure, which sums the runes
 // as written.
 func (f *Face) MeasureShaped(s string, size float64) float64 {
+	if !f.composite() {
+		// Nothing is substituted or kerned for a face whose codes are
+		// characters, so what Shape occupies is what Measure says. It has to
+		// agree with Shape or a caller lays out to one width and draws another
+		// — and it would otherwise ask a face with no font program for a width
+		// by glyph index.
+		return f.Measure(s, size)
+	}
 	glyphs, _ := f.glyphRun(s)
 	glyphs = f.applyLigatures(glyphs)
 	var total float64

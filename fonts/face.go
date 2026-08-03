@@ -245,8 +245,23 @@ func (f *Face) Advance(r rune) (float64, bool) {
 	return f.advanceGID(gid), true
 }
 
+// composite reports whether the face is embedded as a composite font, keyed by
+// glyph index with two-byte codes.
+//
+// It is the question the shaping paths turn on. A composite face's GlyphID
+// returns a glyph index, which is what the layout tables are keyed by and what
+// a two-byte code names. A simple or standard face's GlyphID returns a
+// *character code* instead — one byte, WinAnsi — and that number names nothing
+// in GSUB or GPOS. Shaping such a face by glyph index applies the wrong kerns
+// and writes codes of the wrong width, which is a page of scrambled text.
+func (f *Face) composite() bool { return f.std == nil && !f.simple }
+
+// advanceGID is the advance of a glyph index, in font units.
+//
+// It is only meaningful for a composite face; the guard is against a caller
+// reaching it for one of the others, where there may be no program at all.
 func (f *Face) advanceGID(gid int) float64 {
-	if gid < 0 || gid >= len(f.prog.WidthByGID) {
+	if f.prog == nil || gid < 0 || gid >= len(f.prog.WidthByGID) {
 		return 0
 	}
 	return f.prog.WidthByGID[gid]
