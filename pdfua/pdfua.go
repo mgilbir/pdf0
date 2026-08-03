@@ -185,7 +185,7 @@ func checkUACatalogBasics(d core.View, cat *object.Dictionary) []Violation {
 func checkUAHeadings(d core.View, cat *object.Dictionary) []Violation {
 	var levels []int
 	for _, n := range structTree(d, cat) {
-		if st := n.stdType; len(st) == 2 && st[0] == 'H' && st[1] >= '1' && st[1] <= '6' {
+		if st := n.StdType; len(st) == 2 && st[0] == 'H' && st[1] >= '1' && st[1] <= '6' {
 			levels = append(levels, int(st[1]-'0'))
 		}
 	}
@@ -210,24 +210,11 @@ func checkUAHeadings(d core.View, cat *object.Dictionary) []Violation {
 func checkUAOneHPerNode(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	for _, n := range structTree(d, cat) {
-		if countName(n.childTypes, "H") > 1 {
+		if countName(n.ChildTypes, "H") > 1 {
 			v = append(v, Violation{"7.4.4", "a structure node contains more than one child <H> heading", 0})
 		}
 	}
 	return v
-}
-
-// standardStructTypes are the ISO 32000 standard structure types (Table 333/337).
-var standardStructTypes = map[object.Name]bool{
-	"Document": true, "Part": true, "Art": true, "Sect": true, "Div": true,
-	"BlockQuote": true, "Caption": true, "TOC": true, "TOCI": true, "Index": true,
-	"NonStruct": true, "Private": true, "P": true, "H": true, "H1": true, "H2": true,
-	"H3": true, "H4": true, "H5": true, "H6": true, "L": true, "LI": true, "Lbl": true,
-	"LBody": true, "Table": true, "TR": true, "TH": true, "TD": true, "THead": true,
-	"TBody": true, "TFoot": true, "Span": true, "Quote": true, "Note": true,
-	"Reference": true, "BibEntry": true, "Code": true, "Link": true, "Annot": true,
-	"Ruby": true, "RB": true, "RT": true, "RP": true, "Warichu": true, "WT": true,
-	"WP": true, "Figure": true, "Formula": true, "Form": true,
 }
 
 // checkUATabOrder requires structure tab order on pages that carry annotations.
@@ -258,7 +245,7 @@ func checkUARoleMap(d core.View, cat *object.Dictionary) []Violation {
 	// re-deciding a repeated type would redo that walk on every element.
 	decided := map[object.Name]bool{}
 	for _, n := range structTree(d, cat) {
-		st := n.rawS
+		st := n.RawS
 		if st == "" || decided[st] {
 			continue
 		}
@@ -1316,11 +1303,11 @@ func fontProgramEmbedded(d core.View, font *object.Dictionary) bool {
 func checkFigureAlt(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	for _, n := range structTree(d, cat) {
-		if n.rawS != "Figure" {
+		if n.RawS != "Figure" {
 			continue
 		}
-		alt, _ := d.Resolve(n.elem.Get("Alt")).(object.String)
-		actual, _ := d.Resolve(n.elem.Get("ActualText")).(object.String)
+		alt, _ := d.Resolve(n.Elem.Get("Alt")).(object.String)
+		actual, _ := d.Resolve(n.Elem.Get("ActualText")).(object.String)
 		if len(alt.Value) == 0 && len(actual.Value) == 0 {
 			v = append(v, Violation{"7.3", "figure structure element has no non-empty alternate text (/Alt or /ActualText)", 0})
 		}

@@ -1,7 +1,6 @@
 package pdfua
 
 import (
-	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -42,74 +41,32 @@ var uaAllowedChildren = map[object.Name]map[object.Name]bool{
 	"TOC":   {"TOC": true, "TOCI": true, "Caption": true},
 }
 
-// standardStructType resolves a structure element's type through /RoleMap to a
-// standard type, or returns the element's own /S (which the role-map check
-// flags if non-standard).
+// The structure tree itself — the flattened element list, /RoleMap resolution
+// and the standard type vocabulary — lives in internal/core, because PDF/A
+// Level A asks the same tree the same questions. These are the names this
+// package reads it under.
+type structNode = core.StructNode
+
+var standardStructTypes = core.StandardStructTypes
+
 func standardStructType(d core.View, elem *object.Dictionary, roleMap *object.Dictionary) object.Name {
-	s, _ := elem.Get("S").(object.Name)
-	t, _, _ := resolveRoleMapChain(d, s, roleMap)
-	return t
+	return core.StandardStructType(d, elem, roleMap)
 }
 
-// resolveRoleMapChain follows the /RoleMap mapping from a structure type until
-// it reaches a standard type. ISO 32000-1 14.7.3 (Table 323, /RoleMap) maps a
-// type to "the standard structure type" it is equivalent to, and a role map may
-// reach one through intermediate custom types: MyPara -> Para -> P is a legal
-// two-step chain, and stopping after a single hop declared MyPara unmapped —
-// which fired "structure type /MyPara is neither standard nor mapped in
-// /RoleMap" and then, because every dependent check saw the raw type instead of
-// P, a spray of 7.2 nesting findings on a conformant file.
-//
-// The walk is bounded twice over. A seen-set ends a cyclic map (which
-// checkUARoleMapIntegrity reports separately) rather than looping, and the total
-// hops are capped by the same /RoleMap step budget that check uses
-// (WithMaxRoleMapSteps) rather than a second knob of its own.
-//
-// It returns the standard type reached (or the input type when none is), whether
-// one was reached, and whether the walk ran to completion. A budget trip leaves
-// the answer unknown, so a caller must not report "neither standard nor mapped"
-// on that basis — the rule the package follows for every truncated structure.
-func resolveRoleMapChain(d core.View, s object.Name, roleMap *object.Dictionary) (std object.Name, mapped, complete bool) {
-	if standardStructTypes[s] || roleMap == nil || s == "" {
-		return s, standardStructTypes[s], true
-	}
-	budget := d.Limits.RoleMapSteps
-	// The first hop needs no seen-set: "already standard" and "one hop to a
-	// standard type" are the shapes essentially every file has, and this runs
-	// once per structure element, so it must not allocate for them.
-	if budget < 1 {
-		noteRoleMapChainLimit(d)
-		return s, false, false
-	}
-	next, ok := d.Resolve(roleMap.Get(s)).(object.Name)
-	if !ok || next == "" || next == s {
-		return s, false, true
-	}
-	if standardStructTypes[next] {
-		return next, true, true
-	}
-	// A genuine chain: now a seen-set earns its allocation.
-	seen := map[object.Name]bool{s: true, next: true}
-	cur := next
-	for steps := 1; steps < budget; steps++ {
-		next, ok := d.Resolve(roleMap.Get(cur)).(object.Name)
-		if !ok || next == "" || seen[next] {
-			return s, false, true // the chain ends, or closes on itself
-		}
-		if standardStructTypes[next] {
-			return next, true, true
-		}
-		seen[next] = true
-		cur = next
-	}
-	noteRoleMapChainLimit(d)
-	return s, false, false
+func resolveRoleMapChain(d core.View, s object.Name, roleMap *object.Dictionary) (object.Name, bool, bool) {
+	return core.ResolveRoleMapChain(d, s, roleMap)
 }
 
-func noteRoleMapChainLimit(d core.View) {
-	d.Note(core.GuardRoleMapWork, fmt.Sprintf(
-		"following one /RoleMap chain to a standard structure type cost more than %s steps; the type could not be resolved",
-		core.LimitBound(int64(d.Limits.RoleMapSteps), core.DefaultMaxRoleMapSteps)), 0)
+func structKids(d core.View, elem *object.Dictionary) []object.Object {
+	return core.StructKids(d, elem)
+}
+
+func structTree(d core.View, cat *object.Dictionary) []structNode {
+	return core.StructTree(d, cat)
+}
+
+func walkStructElems(d core.View, cat *object.Dictionary, fn func(elem *object.Dictionary, stdType object.Name)) {
+	core.WalkStructElems(d, cat, fn)
 }
 
 // checkUAStructNesting enforces the structure-element parent/child constraints
@@ -168,18 +125,6 @@ func checkUAStructNesting(d core.View, cat *object.Dictionary) []Violation {
 	return v
 }
 
-// structKids returns the /K children of an element as a slice of objects.
-func structKids(d core.View, elem *object.Dictionary) []object.Object {
-	k := elem.Get("K")
-	if k == nil {
-		return nil
-	}
-	if arr, ok := d.Resolve(k).(object.Array); ok {
-		return []object.Object(arr)
-	}
-	return []object.Object{k}
-}
-
 // checkUATableListStructure enforces the well-formedness rules for Table, List
 // (L) and table-of-contents (TOC) containers that go beyond simple parent/child
 // typing (UA profile / ISO 32000-1 14.8.4.3): at most one Caption/THead/TFoot,
@@ -188,8 +133,8 @@ func structKids(d core.View, elem *object.Dictionary) []object.Object {
 func checkUATableListStructure(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	for _, n := range structTree(d, cat) {
-		kids := n.childTypes
-		switch n.stdType {
+		kids := n.ChildTypes
+		switch n.StdType {
 		case "Table":
 			v = append(v, tableStructErrors(kids)...)
 		case "L":
@@ -296,102 +241,6 @@ func orList(names []object.Name) string {
 		s += "<" + string(n) + ">"
 	}
 	return s
-}
-
-// structNode is one structure-tree dict node in the flattened pre-order model
-// built by structTree. It carries the fields the per-check walks need so they
-// can iterate a cached list instead of each re-descending the tree — a large
-// win on documents with hundreds of thousands of structure elements.
-type structNode struct {
-	elem       *object.Dictionary // resolved element dictionary
-	objNum     int                // object number if reached via an indirect ref, else -1
-	rawS       object.Name        // elem's /S as written (before /RoleMap resolution)
-	hasS       bool               // whether /S is present and a name
-	stdType    object.Name        // /RoleMap-resolved standard type
-	childTypes []object.Name      // resolved standard types of the /S children, in order
-}
-
-// structTree returns the document's structure tree flattened into a pre-order
-// list of dict nodes, computed once per validation run and memoized in the
-// validation cache. The traversal matches the historical per-check walk: every
-// dict reachable through /K is visited (indirect refs deduped for cycle safety),
-// arrays are descended transparently, and both /S and non-/S dicts are recorded.
-func structTree(d core.View, cat *object.Dictionary) []structNode {
-	if c := uaMemo(d); true && c.structTreeValid {
-		return c.structTree
-	}
-	nodes := buildStructTree(d, cat)
-	if c := uaMemo(d); true {
-		c.structTree = nodes
-		c.structTreeValid = true
-	}
-	return nodes
-}
-
-func buildStructTree(d core.View, cat *object.Dictionary) []structNode {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
-	roleMap := d.ResolveDict(root.Get("RoleMap"))
-	var nodes []structNode
-	seen := map[int]bool{}
-	var walk func(node object.Object)
-	walk = func(node object.Object) {
-		objNum := -1
-		if ref, ok := node.(object.IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
-			objNum = ref.Number
-		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(object.Array); ok {
-				for _, kid := range arr {
-					walk(kid)
-				}
-			}
-			return
-		}
-		rawS, hasS := elem.Get("S").(object.Name)
-		kids := structKids(d, elem)
-		var childTypes []object.Name
-		for _, kid := range kids {
-			child := d.ResolveDict(kid)
-			if child == nil {
-				continue
-			}
-			if _, ok := child.Get("S").(object.Name); !ok {
-				continue
-			}
-			childTypes = append(childTypes, standardStructType(d, child, roleMap))
-		}
-		nodes = append(nodes, structNode{
-			elem:       elem,
-			objNum:     objNum,
-			rawS:       rawS,
-			hasS:       hasS,
-			stdType:    standardStructType(d, elem, roleMap),
-			childTypes: childTypes,
-		})
-		for _, kid := range kids {
-			walk(kid)
-		}
-	}
-	walk(root.Get("K"))
-	return nodes
-}
-
-// walkStructElems invokes fn for every structure element (with an /S type) in
-// the tree, passing its role-map-resolved standard type.
-func walkStructElems(d core.View, cat *object.Dictionary, fn func(elem *object.Dictionary, stdType object.Name)) {
-	for _, n := range structTree(d, cat) {
-		if n.hasS {
-			fn(n.elem, n.stdType)
-		}
-	}
 }
 
 // checkUAHeaderVersion: PDF/UA-1 is defined against PDF 1.7, so the header must

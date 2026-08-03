@@ -59,20 +59,20 @@ func TestStructTreeFlatten(t *testing.T) {
 		t.Fatalf("visited %d nodes, want %d: %+v", len(nodes), len(wantOrder), nodes)
 	}
 	for i, want := range wantOrder {
-		if nodes[i].objNum != want {
-			t.Errorf("node %d objNum=%d, want %d", i, nodes[i].objNum, want)
+		if nodes[i].ObjNum != want {
+			t.Errorf("node %d objNum=%d, want %d", i, nodes[i].ObjNum, want)
 		}
 	}
 
 	// Role-map resolution: MyPara -> P as stdType, but rawS stays MyPara.
 	myPara := nodes[4]
-	if myPara.rawS != "MyPara" || myPara.stdType != "P" {
-		t.Errorf("MyPara node rawS=%q stdType=%q, want MyPara/P", myPara.rawS, myPara.stdType)
+	if myPara.RawS != "MyPara" || myPara.StdType != "P" {
+		t.Errorf("MyPara node rawS=%q stdType=%q, want MyPara/P", myPara.RawS, myPara.StdType)
 	}
 
 	// childTypes of the Document node (index 1): its /S children are Sect, MyPara(->P), Div.
 	docNode := nodes[0]
-	got := docNode.childTypes
+	got := docNode.ChildTypes
 	want := []object.Name{"Sect", "P", "Div"}
 	if len(got) != len(want) {
 		t.Fatalf("Document childTypes=%v, want %v", got, want)
