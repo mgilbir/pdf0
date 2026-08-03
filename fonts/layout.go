@@ -37,9 +37,11 @@ import (
 //     depend on surroundings — 'calt' above all — do nothing.
 //   - Cursive attachment (GPOS 3), which joins the connecting strokes of a
 //     script written that way.
-//   - Script-specific processing: Arabic joining forms, Indic reordering. Those
-//     scripts are not correctly set by this package, and text in them should be
-//     shaped elsewhere and passed in as glyph indices.
+//   - Indic reordering, and the other scripts whose characters do not appear in
+//     the order they are drawn. Text in them is not correctly set by this
+//     package and should be shaped elsewhere and passed in as glyph indices.
+//     Cursive joining, which Arabic and its neighbours need, *is* done — see
+//     arabic.go.
 //
 // The remaining simplification is that script and language are ignored: every
 // feature is taken whichever script declares it. For a Latin face that is what
