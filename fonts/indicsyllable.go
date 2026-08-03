@@ -21,7 +21,7 @@ package fonts
 //	cn           = c ZWJ? n?
 //	halant_group = z? H (ZWJ n?)?
 //	matra_group  = z* M n? H?
-//	syllable_tail= (z? SM SM? ZWNJ?)? (VD VD?)?
+//	syllable_tail= (z? SM SM? ZWNJ?)? VD*
 //	complex_tail = (halant_group cn)* CM? (halant_group | H ZWNJ | matra_group*) syllable_tail
 //
 //	consonant_syllable = (Repha|CS)? cn complex_tail
@@ -119,13 +119,20 @@ func indicScanSyllable(cats []indicCat, start int) indicSyllable {
 	}
 	if p < n && cats[p] == catVowel {
 		i := indicTakeNukta(cats, p+1)
-		// A joiner right after the vowel ends the syllable, unless a virama
-		// follows it — in which case the joiner opens a virama group and the
-		// syllable goes on. One character of lookahead settles it.
-		if i < n && cats[i] == catZWJ && (i+1 >= n || !indicIsHalant(cats[i+1])) {
+		// A joiner right after the vowel may end the syllable, or may open the
+		// tail and carry it on: a virama group, a matra group and the modifier
+		// tail each admit a leading joiner. The two alternatives are not
+		// disjoint, so this is the one place the cut takes the *longer* of them
+		// rather than the first that matches — which is what the grammar's
+		// scanner does everywhere, and what every other production here gets
+		// without having to say so.
+		if j := indicTakeComplexTail(cats, i); j > i {
+			return indicSyllable{start, j, sylVowel}
+		}
+		if i < n && cats[i] == catZWJ {
 			return indicSyllable{start, i + 1, sylVowel}
 		}
-		return indicSyllable{start, indicTakeComplexTail(cats, i), sylVowel}
+		return indicSyllable{start, i, sylVowel}
 	}
 
 	// broken_cluster: dependents with nothing to depend on. It still gets the
@@ -201,7 +208,11 @@ func indicTakeMatra(cats []indicCat, i int) (int, bool) {
 	return j, true
 }
 
-// syllable_tail = (z? SM SM? ZWNJ?)? (VD VD?)?
+// syllable_tail = (z? SM SM? ZWNJ?)? VD*
+//
+// The cantillation marks are a plain repetition rather than a bounded pair: a
+// Vedic line carries several over one syllable, and the syllable cap in
+// indicSyllables is what keeps the repetition from running away.
 func indicTakeTail(cats []indicCat, i int) int {
 	j := i
 	if j < len(cats) && indicIsJoiner(cats[j]) {
@@ -217,11 +228,8 @@ func indicTakeTail(cats []indicCat, i int) int {
 		}
 		i = j
 	}
-	if i < len(cats) && cats[i] == catVD {
+	for i < len(cats) && cats[i] == catVD {
 		i++
-		if i < len(cats) && cats[i] == catVD {
-			i++
-		}
 	}
 	return i
 }

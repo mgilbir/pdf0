@@ -335,6 +335,21 @@ func TestSyllablesAreCut(t *testing.T) {
 			[]rune{'A', devKa},
 			[][2]int{{0, 1}, {1, 2}}, []indicSyllableKind{sylNonIndic, sylConsonant},
 		},
+		{
+			// The one place the grammar's alternatives overlap: after an
+			// independent vowel a joiner may end the syllable or may open its
+			// tail, and the longer reading wins. Cutting here instead would
+			// leave the matra with no base of its own — a broken cluster, and a
+			// dotted circle drawn in the middle of an ordinary word.
+			"a joiner between a vowel and its matra does not end the syllable",
+			[]rune{devA, 0x200D, devAAMatra},
+			[][2]int{{0, 3}}, []indicSyllableKind{sylVowel},
+		},
+		{
+			"and the same joiner with nothing to carry on does end it",
+			[]rune{devA, 0x200D, devKa},
+			[][2]int{{0, 2}, {2, 3}}, []indicSyllableKind{sylVowel, sylConsonant},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -838,6 +853,109 @@ func TestBundledFaceSetsAWord(t *testing.T) {
 	}
 	if glyphs[0].Cluster != 0 {
 		t.Errorf("the first glyph has cluster %d, want 0", glyphs[0].Cluster)
+	}
+}
+
+// A syllable with no base consonant.
+
+// devaFaceWithoutDottedCircle is the fixture with U+25CC taken out. It is the
+// last glyph of the list, so every other glyph index below is unchanged.
+func devaFaceWithoutDottedCircle(t *testing.T) *Face {
+	t.Helper()
+	glyphs := devaGlyphs()
+	glyphs = glyphs[:len(glyphs)-1]
+	data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Devanagari", Glyphs: glyphs})
+	f, err := Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if _, ok := f.GlyphID(dottedCircle); ok {
+		t.Fatal("the fixture still has a dotted circle, so it tests nothing")
+	}
+	return f
+}
+
+// TestASyllableWithNoBaseIsShownAgainstADottedCircle is what a reader is owed
+// when the text is broken. A vowel sign or a virama written with nothing to
+// attach to would otherwise be drawn where it would have sat on a letter, over
+// nothing — indistinguishable from a mark on the letter before it. U+25CC is the
+// placeholder every reader of these scripts knows.
+func TestASyllableWithNoBaseIsShownAgainstADottedCircle(t *testing.T) {
+	f := devaFace(t)
+	for _, tc := range []struct {
+		name string
+		s    string
+		want []int
+	}{
+		{"a matra on its own", str(devAAMatra), []int{gidDotted, gidAAMatra}},
+		{"a pre-base matra on its own", str(devIMatra), []int{gidIMatra, gidDotted}},
+		{"a virama on its own", str(devVirama), []int{gidDotted, gidVirama}},
+		{"a nukta on its own", str(devNukta), []int{gidDotted, gidNukta}},
+		// A modifier ends a syllable, so the matra after it has nothing left to
+		// depend on. Two matras in a row are *not* this case — they belong to
+		// the same syllable and to the same letter.
+		{"a broken syllable after a whole one", str(devKa, devAAMatra, devAnusvara, devAAMatra),
+			[]int{gidDKa, gidAAMatra, gidAnusvara, gidDotted, gidAAMatra}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantGIDs(t, shapedGIDs(t, f, tc.s), tc.want, tc.s)
+		})
+	}
+}
+
+// TestAWholeSyllableGetsNoDottedCircle is the other half, and the one that costs
+// something if it goes wrong: a placeholder drawn inside an ordinary word is far
+// worse than none drawn at all.
+func TestAWholeSyllableGetsNoDottedCircle(t *testing.T) {
+	f := devaFace(t, devaRphf(), devaHalf())
+	for _, s := range []string{
+		str(devKa),
+		str(devKa, devIMatra),
+		str(devKa, devAAMatra, devAnusvara),
+		str(devTa, devVirama, devKa),
+		str(devRa, devVirama, devKa),
+		str(devA),
+		str(devA, devAAMatra),
+		str(0x25CC, devAAMatra), // one written by hand is not doubled
+		str(devKa, ' ', devKa),
+		str('A'),
+	} {
+		for _, g := range shapedGIDs(t, f, s) {
+			if g == gidDotted && !strings.ContainsRune(s, 0x25CC) {
+				t.Errorf("shaping %q gave %v, which shows a placeholder inside whole text",
+					s, shapedGIDs(t, f, s))
+			}
+		}
+	}
+}
+
+// TestNoDottedCircleWhenTheFaceHasNone pins that the placeholder is the font's
+// to supply. A face without U+25CC cannot show one, and inventing a substitute
+// would draw something the font never meant.
+func TestNoDottedCircleWhenTheFaceHasNone(t *testing.T) {
+	f := devaFaceWithoutDottedCircle(t)
+	s := str(devAAMatra)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidAAMatra}, s)
+}
+
+// TestBundledFaceShowsABrokenSyllable is the same claim against the real face:
+// a visarga cut off from the syllable before it by a cantillation mark is a
+// syllable of its own with no letter in it, and Noto Sans draws it on a circle.
+func TestBundledFaceShowsABrokenSyllable(t *testing.T) {
+	f := devaNoto(t)
+	circle := devaGlyph(t, f, dottedCircle)
+	s := str(0x0928, 0x0951, 0x0903) // na, udatta, visarga
+
+	glyphs, _ := f.ShapeGlyphs(s)
+	found := false
+	for _, g := range glyphs {
+		if g.GID == circle {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("shaping %q gave %v, with no placeholder; the visarga has no letter of its own",
+			s, gids(glyphs))
 	}
 }
 
