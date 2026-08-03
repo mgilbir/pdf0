@@ -463,16 +463,18 @@ func TestAttachmentTakesTheScriptsOwnLookupFlag(t *testing.T) {
 		t.Errorf("Latin: last glyph sits at 0, so nothing was lifted and the fixture proves nothing")
 	}
 
-	// Arabic: the flag is set, so the last glyph is the anchored end.
+	// Arabic: the flag is set, so the last glyph *of the word* is the anchored
+	// end. The run comes back in the order it is drawn, and Arabic is drawn
+	// right to left, so that glyph is the one at index 0 here.
 	arabic, _ := f.ShapeGlyphs("اب")
 	if len(arabic) != 2 {
 		t.Fatalf("Arabic run gave %d glyphs, want 2", len(arabic))
 	}
-	if arabic[1].YOffset != 0 {
-		t.Errorf("Arabic: last glyph sits at %v, want 0 — 'arab' declares RightToLeft", arabic[1].YOffset)
+	if arabic[0].YOffset != 0 {
+		t.Errorf("Arabic: the last letter sits at %v, want 0 — 'arab' declares RightToLeft", arabic[0].YOffset)
 	}
-	if want := float64(-(alefExitY - behEntryY)); arabic[0].YOffset != want {
-		t.Errorf("Arabic: first glyph sits at %v, want %v", arabic[0].YOffset, want)
+	if want := float64(-(alefExitY - behEntryY)); arabic[1].YOffset != want {
+		t.Errorf("Arabic: the first letter sits at %v, want %v", arabic[1].YOffset, want)
 	}
 }
 

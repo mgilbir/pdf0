@@ -40,47 +40,78 @@ type Glyph struct {
 }
 
 // ShapeGlyphs turns a string into positioned glyphs, applying everything this
-// package reads: ligatures, contextual substitution, kerning and mark
-// attachment.
+// package reads: ligatures, contextual substitution, kerning, mark attachment,
+// and the direction each part of the text runs in.
+//
+// The glyphs come back in *visual* order — the order the pen draws them, left to
+// right — so a caller can draw them as they are, at a pen that only moves
+// forward, whatever scripts the string mixes. That is not the order the string
+// is written in: Hebrew and Arabic read the other way, and a PDF text-showing
+// operator has no way to say so. bidi.go decides where each stretch belongs.
 //
 // It is the full result. Shape is the same pipeline with the vertical part
 // dropped, and is enough whenever the text carries no marks.
 func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
-	return f.shapeGlyphsIn(s, runScript(s))
+	runs := bidiVisualRuns(s)
+	if len(runs) <= 1 {
+		// One direction throughout, which is nearly all text. Shaping it whole
+		// keeps a ligature or a kern pair that spans the string, which cutting
+		// it into runs would lose.
+		rtl := len(runs) == 1 && runs[0].rtl()
+		return f.shapeGlyphsIn(s, runScript(s), rtl)
+	}
+	var (
+		out     []Glyph
+		missing int
+	)
+	for _, r := range runs {
+		piece := s[r.start:r.end]
+		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.rtl())
+		missing += gone
+		for i := range glyphs {
+			glyphs[i].Cluster += r.start
+		}
+		out = append(out, glyphs...)
+	}
+	return out, missing
 }
 
-// shapeGlyphsIn is ShapeGlyphs with the run's script already decided.
+// shapeGlyphsIn is ShapeGlyphs with the run's script and direction already
+// decided, and shapes one run rather than a whole string.
 //
 // A caller that split the text into runs knows more about a run's script than
 // the run's own characters say: a stretch of digits between two Greek words is
 // Greek, and shaping it as if it were scriptless would select the font's
 // default rules where its Greek ones were meant. Stack.ShapeRuns made that
 // decision when it cut the runs, and passes it here rather than having it
-// guessed again from less.
-func (f *Face) shapeGlyphsIn(s string, script uint16) ([]Glyph, int) {
+// guessed again from less. The same holds for direction, which is a property of
+// the whole paragraph and cannot be read off one run of it.
+func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 	if !f.composite() {
-		return f.shapeByCode(s)
+		return f.shapeByCode(s, rtl)
 	}
+	// Rule L4: a bracket in a right-to-left run is drawn as the bracket that
+	// mirrors it, and the substitution is on the character, before the font is
+	// asked for a glyph at all.
+	runes, offsets := bidiRunCharacters(s, rtl)
 	var (
 		buf     []Glyph
-		runes   []rune
 		missing int
 	)
-	for i, r := range s {
-		runes = append(runes, r)
+	for i, r := range runes {
 		gid, ok := f.GlyphID(r)
 		if !ok {
 			missing++
 			gid = 0
 		}
-		buf = append(buf, Glyph{GID: gid, Cluster: i, XAdvance: f.advanceGID(gid)})
+		buf = append(buf, Glyph{GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid)})
 	}
 	if len(buf) == 0 {
 		return nil, missing
 	}
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
-	sh := shaper{f: f, l: f.layoutFor(script)}
+	sh := shaper{f: f, l: f.layoutFor(script), rtl: rtl}
 	// A script whose characters are not in the order they are drawn is shaped
 	// whole by its own pass: the reordering decides which of the font's rules
 	// apply where, so it cannot be a step before the general substitutions and
@@ -95,6 +126,12 @@ func (f *Face) shapeGlyphsIn(s string, script uint16) ([]Glyph, int) {
 		buf = sh.substitute(buf)
 	}
 	sh.position(buf)
+	if rtl {
+		// Last, and only now. Everything above is stated by the font in terms of
+		// the order the text is written in; the pen will meet these glyphs in the
+		// other one.
+		reverseGlyphs(buf)
+	}
 	for _, g := range buf {
 		f.used[g.GID] = true
 	}
@@ -114,12 +151,13 @@ func (f *Face) shapeGlyphsIn(s string, script uint16) ([]Glyph, int) {
 //
 // Callers get the same Glyph values either way, so Draw, Measure and the
 // fallback stack do not have to know which kind of face they were given.
-func (f *Face) shapeByCode(s string) ([]Glyph, int) {
+func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
+	runes, offsets := bidiRunCharacters(s, rtl)
 	var (
 		buf     []Glyph
 		missing int
 	)
-	for i, r := range s {
+	for i, r := range runes {
 		code, ok := f.GlyphID(r)
 		if !ok {
 			missing++
@@ -135,7 +173,14 @@ func (f *Face) shapeByCode(s string) ([]Glyph, int) {
 		if !ok {
 			width, _ = f.Advance(' ')
 		}
-		buf = append(buf, Glyph{GID: code, Cluster: i, XAdvance: width})
+		buf = append(buf, Glyph{GID: code, Cluster: offsets[i], XAdvance: width})
+	}
+	if rtl {
+		// There is nothing here for the direction to interfere with — no marks,
+		// no joining, no kerning — but the run still has to come back in the
+		// order it is drawn, so that a caller need not ask which kind of face it
+		// was given.
+		reverseGlyphs(buf)
 	}
 	for _, g := range buf {
 		f.used[g.GID] = true

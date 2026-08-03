@@ -31,23 +31,47 @@ func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 		// do, and the honest answer is the plain encoding. Returning it as a
 		// single span keeps the shape of the result the same whichever kind of
 		// face a caller was handed.
+		//
+		// Direction is not applied here, and that is a stated limit rather than
+		// an oversight: a simple face encodes one byte per character through
+		// WinAnsi, which has no right-to-left script in it at all. Text that
+		// needs reordering needs a composite face to have the letters, and
+		// ShapeGlyphs is the call for it.
 		codes, missing := f.Encode(s)
 		if len(codes) == 0 {
 			return nil, missing
 		}
 		return []content.TextSpan{{Codes: codes}}, missing
 	}
-	glyphs, missing := f.glyphRun(s)
-	if len(glyphs) == 0 {
-		return nil, missing
+	var out []content.TextSpan
+	for _, run := range bidiVisualRuns(s) {
+		piece := s[run.start:run.end]
+		glyphs, gone := f.glyphRunIn(piece, run.rtl())
+		missing += gone
+		if len(glyphs) == 0 {
+			continue
+		}
+		sh := shaper{f: f, l: f.layoutFor(runScript(piece)), rtl: run.rtl()}
+		out = append(out, sh.shapeGlyphs(glyphs)...)
 	}
-	return f.shaperFor(s).shapeGlyphs(glyphs), missing
+	return out, missing
 }
 
 // shapeGlyphs turns a glyph run into spans: ligatures first, then kerning, then
 // the codes and displacements a text operator takes.
+//
+// The glyphs arrive in the order the text is written and leave in the order it
+// is drawn. Ligatures are applied before the reversal, because a font's
+// ligatures are stated over the written order; the kerning is then looked up by
+// the pair as the font states it, which for a reversed run is the pair the other
+// way round from the one the pen sees.
 func (sh shaper) shapeGlyphs(glyphs []int) []content.TextSpan {
 	glyphs = sh.applyLigatures(glyphs)
+	if sh.rtl {
+		for i, j := 0, len(glyphs)-1; i < j; i, j = i+1, j-1 {
+			glyphs[i], glyphs[j] = glyphs[j], glyphs[i]
+		}
+	}
 
 	var (
 		run  []byte
@@ -56,7 +80,7 @@ func (sh shaper) shapeGlyphs(glyphs []int) []content.TextSpan {
 	)
 	for _, gid := range glyphs {
 		if prev >= 0 && !sh.l.ignores(sh.l.kernFlags, gid) {
-			if k, ok := sh.l.kern[[2]int{prev, gid}]; ok && k != 0 {
+			if k, ok := sh.l.kern[sh.kernPair(prev, gid)]; ok && k != 0 {
 				// Flush what has accumulated, then the displacement. The sign
 				// flips: a negative kern closes the gap, and TJ subtracts.
 				out = append(out, content.TextSpan{Codes: run})
@@ -83,6 +107,12 @@ func (sh shaper) shapeGlyphs(glyphs []int) []content.TextSpan {
 // user-space units. It includes the ligature substitutions and the kerning, so
 // it is what Shape will actually occupy — unlike Measure, which sums the runes
 // as written.
+//
+// Direction does not change a width — a line occupies the same space whichever
+// way it is read — but it changes where the run boundaries fall, and a ligature
+// or a kern pair does not cross one. So the same cuts are made here as in Shape,
+// or the two would disagree on mixed text and a caller would lay out to one
+// width and draw another.
 func (f *Face) MeasureShaped(s string, size float64) float64 {
 	if !f.composite() {
 		// Nothing is substituted or kerned for a face whose codes are
@@ -92,27 +122,48 @@ func (f *Face) MeasureShaped(s string, size float64) float64 {
 		// by glyph index.
 		return f.Measure(s, size)
 	}
-	sh := f.shaperFor(s)
-	glyphs, _ := f.glyphRun(s)
-	glyphs = sh.applyLigatures(glyphs)
 	var total float64
-	prev := -1
-	for _, gid := range glyphs {
-		if prev >= 0 && !sh.l.ignores(sh.l.kernFlags, gid) {
-			total += f.scale(sh.l.kern[[2]int{prev, gid}])
-		}
-		total += f.advanceGID(gid)
-		if !sh.l.ignores(sh.l.kernFlags, gid) {
-			prev = gid
+	for _, run := range bidiVisualRuns(s) {
+		piece := s[run.start:run.end]
+		sh := shaper{f: f, l: f.layoutFor(runScript(piece)), rtl: run.rtl()}
+		glyphs, _ := f.glyphRunIn(piece, run.rtl())
+		glyphs = sh.applyLigatures(glyphs)
+		prev := -1
+		for _, gid := range glyphs {
+			if prev >= 0 && !sh.l.ignores(sh.l.kernFlags, gid) {
+				total += f.scale(sh.l.kern[[2]int{prev, gid}])
+			}
+			total += f.advanceGID(gid)
+			if !sh.l.ignores(sh.l.kernFlags, gid) {
+				prev = gid
+			}
 		}
 	}
 	return total * size / 1000
 }
 
+// kernPair names a kern pair the way the font states it: in the order the text
+// is written. A right-to-left run has been reversed by the time the pen walks
+// it, so the glyph the pen meets second is the one the font calls first.
+func (sh shaper) kernPair(prev, gid int) [2]int {
+	if sh.rtl {
+		return [2]int{gid, prev}
+	}
+	return [2]int{prev, gid}
+}
+
 // glyphRun maps runes to glyph indices, substituting .notdef for any the font
 // does not cover, exactly as Encode does.
 func (f *Face) glyphRun(s string) (glyphs []int, missing int) {
-	for _, r := range s {
+	return f.glyphRunIn(s, false)
+}
+
+// glyphRunIn is glyphRun for one run of a known direction, applying rule L4
+// where it runs right to left: a bracket in right-to-left text is drawn as the
+// bracket that mirrors it.
+func (f *Face) glyphRunIn(s string, rtl bool) (glyphs []int, missing int) {
+	runes, _ := bidiRunCharacters(s, rtl)
+	for _, r := range runes {
 		gid, ok := f.GlyphID(r)
 		if !ok {
 			missing++
@@ -189,20 +240,29 @@ func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 // capitals from a face that has none should set the text plainly, not fail.
 // Features returns what a face actually offers.
 func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan, missing int) {
-	sh := f.shaperFor(s)
-	glyphs, missing := f.glyphRun(s)
-	for _, tag := range features {
-		table := sh.l.single[tag]
-		if table == nil {
-			continue
-		}
-		for i, gid := range glyphs {
-			if to, ok := table[gid]; ok {
-				glyphs[i] = to
+	var out []content.TextSpan
+	for _, run := range bidiVisualRuns(s) {
+		piece := s[run.start:run.end]
+		sh := shaper{f: f, l: f.layoutFor(runScript(piece)), rtl: run.rtl()}
+		glyphs, gone := f.glyphRunIn(piece, run.rtl())
+		missing += gone
+		for _, tag := range features {
+			table := sh.l.single[tag]
+			if table == nil {
+				continue
+			}
+			for i, gid := range glyphs {
+				if to, ok := table[gid]; ok {
+					glyphs[i] = to
+				}
 			}
 		}
+		if len(glyphs) == 0 {
+			continue
+		}
+		out = append(out, sh.shapeGlyphs(glyphs)...)
 	}
-	return sh.shapeGlyphs(glyphs), missing
+	return out, missing
 }
 
 // Features lists the substitution features this face offers by name, sorted.

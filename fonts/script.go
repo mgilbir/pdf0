@@ -300,6 +300,13 @@ type shaper struct {
 	f *Face
 	l *layout
 
+	// rtl says the run will be drawn right to left, and is what the positioning
+	// pass needs to know. Everything before positioning works in the order the
+	// text is written and is the same either way; positioning states where a
+	// glyph sits relative to the pen, and the pen will meet the run's glyphs in
+	// the opposite order.
+	rtl bool
+
 	// floor and limit bound the glyphs a lookup may look at: it may not match,
 	// or backtrack, outside [floor, limit). They exist for the Indic pass,
 	// which applies a font's features one syllable at a time — a ligature
@@ -330,12 +337,6 @@ func (sh shaper) end(buf []Glyph) int {
 		return sh.limit
 	}
 	return len(buf)
-}
-
-// shaperFor prepares to shape a run of text, resolving its script and selecting
-// what the font declares for it.
-func (f *Face) shaperFor(s string) shaper {
-	return shaper{f: f, l: f.layoutFor(runScript(s))}
 }
 
 // layoutFor reads the font's layout tables as the given script selects them,
