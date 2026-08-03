@@ -114,6 +114,45 @@ func layoutLookups(lookups []Lookup, features map[string][]int) []byte {
 // one at the same position in to. It is what a contextual rule usually invokes.
 func SingleSubst(from, to []int) []byte { return singleSubstSubtable(from, to) }
 
+// MultipleSubst is a lookup type 2 subtable: each glyph in from becomes the
+// whole sequence at the same position in to. This is what a decomposition looks
+// like — one character's glyph split into the pieces the rest of the rules are
+// written against.
+func MultipleSubst(from []int, to [][]int) []byte {
+	order := append([]int(nil), from...)
+	sortInts(order)
+	seq := map[int][]int{}
+	for i, g := range from {
+		seq[g] = to[i]
+	}
+	body := make([]byte, 6+2*len(order))
+	binary.BigEndian.PutUint16(body[0:], 1)
+	binary.BigEndian.PutUint16(body[4:], uint16(len(order)))
+	covOff := len(body)
+	body = append(body, coverageFormat1(order)...)
+	binary.BigEndian.PutUint16(body[2:], uint16(covOff))
+	for i, g := range order {
+		glyphs := seq[g]
+		binary.BigEndian.PutUint16(body[6+2*i:], uint16(len(body)))
+		s := make([]byte, 2+2*len(glyphs))
+		binary.BigEndian.PutUint16(s[0:], uint16(len(glyphs)))
+		for k, v := range glyphs {
+			binary.BigEndian.PutUint16(s[2+2*k:], uint16(v))
+		}
+		body = append(body, s...)
+	}
+	return body
+}
+
+// AlternateSubst is a lookup type 3 subtable: each glyph in from is offered the
+// choices at the same position in alts, of which a shaper with no one to ask
+// takes the first.
+func AlternateSubst(from []int, alts [][]int) []byte {
+	// The two have the same shape on the wire — a count and a list of glyphs
+	// per covered glyph — and differ only in what the list means.
+	return MultipleSubst(from, alts)
+}
+
 // ExtensionSubst wraps a subtable in the indirection a large font uses to place
 // its subtables beyond the reach of a 16-bit offset: the lookup's own type
 // becomes 7, and each subtable states the real type and a 32-bit offset to it.

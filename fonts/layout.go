@@ -15,7 +15,10 @@ import (
 //   - Single positioning (GPOS 1), mark-to-base (GPOS 4) and mark-to-mark
 //     (GPOS 6), so an accent sits over the letter it belongs to and a second
 //     accent stacks on the first — see position.go.
-//   - Ligatures (GSUB 4) and single substitution (GSUB 1).
+//   - Substitution: single (GSUB 1), multiple (GSUB 2), alternate (GSUB 3) and
+//     ligature (GSUB 4). An alternate set is taken at its first entry, which is
+//     the font's own preference and the only answer available to a lookup no
+//     caller asked for.
 //   - Contextual and chained-contextual substitution (GSUB 5 and 6), all six
 //     formats, which is what makes 'calt' — and any rule that depends on
 //     surroundings — do anything at all. See context.go.
@@ -32,8 +35,6 @@ import (
 //
 // # What is not, and what each absence costs
 //
-//   - Multiple (GSUB 2) and alternate (GSUB 3) substitution. A contextual rule
-//     naming one of those lookups matches and then does nothing.
 //   - Indic reordering, and the other scripts whose characters do not appear in
 //     the order they are drawn. Text in them is not correctly set by this
 //     package and should be shaped elsewhere and passed in as glyph indices.
