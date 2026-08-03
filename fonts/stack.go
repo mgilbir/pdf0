@@ -71,19 +71,33 @@ type Run struct {
 }
 
 // ShapeRuns sets a string across the stack, returning one run per stretch of
-// text that shares a face, and the number of characters no face could set.
+// text that shares a face and a script, and the number of characters no face
+// could set.
 //
 // The runs are in reading order and cover the input exactly, so drawing them in
 // order at a continuing pen position sets the text.
+//
+// # Why script cuts a run as much as face does
+//
+// A font that covers several scripts states different rules for each, and the
+// rules it states for one are wrong for another: a Greek word given the
+// substitutions a font declares for Arabic is not merely unkerned but
+// misspelt. So a run is a stretch that shares both — one face, one script —
+// and each is shaped with what that font declares for that script.
+//
+// Characters that are in no script of their own — a space, a digit, a comma,
+// a combining accent — take the script of what they are written among, so the
+// space in the middle of a sentence does not cut it in two.
 func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 	if len(s.faces) == 0 || text == "" {
 		return nil, 0
 	}
 
-	// One entry per base-plus-marks unit, with the face it chose.
+	// One entry per base-plus-marks unit, with the face and the script it chose.
 	type unit struct {
 		start, end int
 		face       int
+		script     uint16
 	}
 	var units []unit
 	for i := 0; i < len(text); {
@@ -96,8 +110,32 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 			}
 			end += n
 		}
-		units = append(units, unit{start: i, end: end, face: s.faceFor(text[i:end], base)})
+		units = append(units, unit{
+			start: i, end: end,
+			face:   s.faceFor(text[i:end], base),
+			script: runScript(text[i:end]),
+		})
 		i = end
+	}
+
+	// A unit whose characters decide no script takes the one before it, and
+	// failing that the one after — so leading punctuation joins the word it
+	// introduces rather than forming a run of its own.
+	last := uint16(scriptUnknown)
+	for i := range units {
+		if decides(units[i].script) {
+			last = units[i].script
+			continue
+		}
+		units[i].script = last
+	}
+	next := uint16(scriptUnknown)
+	for i := len(units) - 1; i >= 0; i-- {
+		if decides(units[i].script) {
+			next = units[i].script
+			continue
+		}
+		units[i].script = next
 	}
 
 	var (
@@ -106,7 +144,7 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 	)
 	for k := 0; k < len(units); {
 		j := k
-		for j < len(units) && units[j].face == units[k].face {
+		for j < len(units) && units[j].face == units[k].face && units[j].script == units[k].script {
 			j++
 		}
 		start, end := units[k].start, units[j-1].end
@@ -114,7 +152,7 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 
 		// The whole stretch goes to the face at once, so its ligatures, kerning
 		// and joining still see the run they were written for.
-		glyphs, gone := face.ShapeGlyphs(text[start:end])
+		glyphs, gone := face.shapeGlyphsIn(text[start:end], units[k].script)
 		missing += gone
 		for gi := range glyphs {
 			glyphs[gi].Cluster += start

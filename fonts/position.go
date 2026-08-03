@@ -14,8 +14,8 @@ import "github.com/mgilbir/pdf0/internal/font"
 // every accent in a run piles up in the same place.
 
 // applyPositioning runs the GPOS lookups over a shaped buffer.
-func (f *Face) position(buf []Glyph) {
-	l := f.layout
+func (sh shaper) position(buf []Glyph) {
+	l := sh.l
 	// Pair kerning, which the buffer expresses as a change to the left glyph's
 	// advance. Glyphs the lookup ignores do not break a pair.
 	prev := -1
@@ -25,7 +25,7 @@ func (f *Face) position(buf []Glyph) {
 		}
 		if prev >= 0 {
 			if k, ok := l.kern[[2]int{buf[prev].GID, buf[i].GID}]; ok && k != 0 {
-				buf[prev].XAdvance += f.scale(k)
+				buf[prev].XAdvance += sh.f.scale(k)
 			}
 		}
 		prev = i
@@ -33,16 +33,16 @@ func (f *Face) position(buf []Glyph) {
 	// Single adjustments: a glyph nudged wherever it appears.
 	for i := range buf {
 		if adj, ok := l.singlePos[buf[i].GID]; ok {
-			buf[i].XOffset += f.scale(adj.xPlacement)
-			buf[i].YOffset += f.scale(adj.yPlacement)
-			buf[i].XAdvance += f.scale(adj.xAdvance)
+			buf[i].XOffset += sh.f.scale(adj.xPlacement)
+			buf[i].YOffset += sh.f.scale(adj.yPlacement)
+			buf[i].XAdvance += sh.f.scale(adj.xAdvance)
 		}
 	}
 	// Cursive attachment before marks: a mark is placed relative to a base that
 	// has already been moved onto the joining stroke, and doing it the other way
 	// round leaves the accent where the letter used to be.
-	f.attachCursive(buf)
-	f.attachMarks(buf)
+	sh.attachCursive(buf)
+	sh.attachMarks(buf)
 }
 
 // cursiveAnchors is where a glyph's connecting stroke leaves and arrives.
@@ -67,8 +67,8 @@ type cursiveAnchors struct {
 // word is read from the end this pass reaches last. Clear, the first stays and
 // the rest follow. Getting it backwards keeps every joint correct relative to
 // its neighbour and leaves the whole word sitting off the baseline.
-func (f *Face) attachCursive(buf []Glyph) {
-	l := f.layout
+func (sh shaper) attachCursive(buf []Glyph) {
+	l := sh.l
 	if len(l.cursive) == 0 {
 		return
 	}
@@ -93,11 +93,11 @@ func (f *Face) attachCursive(buf []Glyph) {
 				// the second is pulled back so its entry point lands there. The
 				// offsets already in place are carried through: a glyph moved by
 				// a single adjustment joins from where it now is.
-				buf[prev].XAdvance = f.scale(a.exit.x) + buf[prev].XOffset
-				d := f.scale(b.entry.x) + buf[i].XOffset
+				buf[prev].XAdvance = sh.f.scale(a.exit.x) + buf[prev].XOffset
+				d := sh.f.scale(b.entry.x) + buf[i].XOffset
 				buf[i].XAdvance -= d
 				buf[i].XOffset -= d
-				links = append(links, link{from: prev, to: i, dy: f.scale(a.exit.y - b.entry.y)})
+				links = append(links, link{from: prev, to: i, dy: sh.f.scale(a.exit.y - b.entry.y)})
 			}
 		}
 		prev = i
@@ -126,8 +126,8 @@ func (f *Face) attachCursive(buf []Glyph) {
 // The mark's advance is set to zero. A font gives its marks an advance of zero
 // already, but not always, and a mark that moved the pen would push the next
 // letter along by the width of an accent.
-func (f *Face) attachMarks(buf []Glyph) {
-	l := f.layout
+func (sh shaper) attachMarks(buf []Glyph) {
+	l := sh.l
 	if len(l.markAnchors) == 0 {
 		return
 	}
@@ -163,8 +163,8 @@ func (f *Face) attachMarks(buf []Glyph) {
 			for k := j; k < i; k++ {
 				since += buf[k].XAdvance
 			}
-			buf[i].XOffset = buf[j].XOffset + f.scale(base.x-mark.anchor.x) - since
-			buf[i].YOffset = buf[j].YOffset + f.scale(base.y-mark.anchor.y)
+			buf[i].XOffset = buf[j].XOffset + sh.f.scale(base.x-mark.anchor.x) - since
+			buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.anchor.y)
 			buf[i].XAdvance = 0
 			break
 		}
@@ -198,15 +198,24 @@ type singleAdjust struct {
 // readGPOSAttachment reads the positioning lookups beyond pair kerning: single
 // adjustments, cursive attachment, mark-to-base and mark-to-mark.
 //
-// They are read from every feature the font declares rather than from a named
-// one, because attachment is not optional the way a stylistic feature is. A
-// font that positions its marks through 'mark' and 'mkmk' — which is nearly all
-// of them — and another that does it through a script-specific feature should
-// both work, and applying an attachment that was not asked for cannot make text
-// worse: a mark's place is a fact about the font, not a preference.
-func (l *layout) readGPOSAttachment(gpos []byte) {
-	for _, tag := range featureTags(gpos) {
-		for _, lookup := range featureLookups(gpos, tag) {
+// They are read from every feature *tag* rather than from a named one, because
+// attachment is not optional the way a stylistic feature is. A font that
+// positions its marks through 'mark' and 'mkmk' — which is nearly all of them —
+// and another that does it through a script-specific feature such as 'abvm'
+// should both work, and applying an attachment that was not asked for cannot
+// make text worse: a mark's place is a fact about the font, not a preference.
+//
+// That argument is about tags, and it survives script selection. The same
+// argument for reading every *script* does not, and the selection is applied
+// here for one concrete reason: the lookup flags are merged. cursFlags carries
+// the RightToLeft bit, which decides which end of a joined run stays on the
+// baseline, and a font with both Latin and Arabic cursive attachment states it
+// one way for one and the other way for the other. Merging them sets a Latin
+// word's whole cursive chain from the Arabic lookup's flag — precisely the "a
+// rule meant for another script" this selection exists to stop.
+func (l *layout) readGPOSAttachment(gpos []byte, sel featureSet) {
+	for _, tag := range featureTags(gpos, sel) {
+		for _, lookup := range featureLookups(gpos, tag, sel) {
 			kind, flags, subs := subtables(lookup, 9)
 			for _, sub := range subs {
 				switch kind {
@@ -230,8 +239,9 @@ func (l *layout) readGPOSAttachment(gpos []byte) {
 	}
 }
 
-// featureTags lists every feature tag a layout table declares, in order.
-func featureTags(t []byte) []string {
+// featureTags lists every feature tag a layout table declares and the selection
+// admits, in order.
+func featureTags(t []byte, sel featureSet) []string {
 	off := font.Be16(t, 6)
 	if off <= 0 || off+2 > len(t) {
 		return nil
@@ -247,6 +257,9 @@ func featureTags(t []byte) []string {
 		rec := 2 + 6*i
 		if rec+6 > len(list) {
 			break
+		}
+		if !sel.selects(i) {
+			continue
 		}
 		tag := string(list[rec : rec+4])
 		if !seen[tag] {

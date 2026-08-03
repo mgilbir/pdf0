@@ -132,48 +132,15 @@ func indexOfLig(ls []Ligature, want Ligature) int {
 }
 
 // layoutTable wraps one lookup subtable in the ScriptList / FeatureList /
-// LookupList scaffolding a GSUB or GPOS table needs.
+// LookupList scaffolding a GSUB or GPOS table needs, under a 'DFLT' script that
+// selects the one feature — a font covering one script, which is what a fixture
+// about kerning or ligatures means to be.
 func layoutTable(feature string, lookupType int, subtable []byte) []byte {
-	// Lookup: type, flag, subtable count, one offset.
-	lookup := make([]byte, 8)
-	binary.BigEndian.PutUint16(lookup[0:], uint16(lookupType))
-	binary.BigEndian.PutUint16(lookup[4:], 1)
-	binary.BigEndian.PutUint16(lookup[6:], 8) // the subtable follows immediately
-	lookup = append(lookup, subtable...)
-
-	// LookupList: count, one offset.
-	lookupList := make([]byte, 4)
-	binary.BigEndian.PutUint16(lookupList[0:], 1)
-	binary.BigEndian.PutUint16(lookupList[2:], 4)
-	lookupList = append(lookupList, lookup...)
-
-	// Feature: featureParams, lookupIndexCount, index 0.
-	feat := make([]byte, 6)
-	binary.BigEndian.PutUint16(feat[2:], 1)
-	binary.BigEndian.PutUint16(feat[4:], 0)
-
-	// FeatureList: count, record{tag, offset}.
-	featureList := make([]byte, 8)
-	binary.BigEndian.PutUint16(featureList[0:], 1)
-	copy(featureList[2:], feature)
-	binary.BigEndian.PutUint16(featureList[6:], 8)
-	featureList = append(featureList, feat...)
-
-	// ScriptList: empty. Nothing here reads it — script and language selection
-	// is exactly what the reader does not implement — but a well-formed table
-	// has one.
-	scriptList := []byte{0, 0}
-
-	header := make([]byte, 10)
-	binary.BigEndian.PutUint32(header[0:], 0x00010000)
-	out := append([]byte(nil), header...)
-	binary.BigEndian.PutUint16(out[4:], uint16(len(out)))
-	out = append(out, scriptList...)
-	binary.BigEndian.PutUint16(out[6:], uint16(len(out)))
-	out = append(out, featureList...)
-	binary.BigEndian.PutUint16(out[8:], uint16(len(out)))
-	out = append(out, lookupList...)
-	return out
+	return layoutTableFull(
+		[]Lookup{{Type: lookupType, Subtables: [][]byte{subtable}}},
+		[]Feature{{Tag: feature, Lookups: []int{0}}},
+		nil,
+	)
 }
 
 // coverageFormat1 lists glyphs explicitly, in the ascending order the format
@@ -469,6 +436,13 @@ func anchorTable(a Anchor) []byte {
 //
 // The value of each entry is a pair of parallel slices, from and to.
 func GSUBForms(features map[string][2][]int) []byte {
+	return GSUBFormsIn(features, nil)
+}
+
+// GSUBFormsIn is GSUBForms with an explicit script list, so a fixture can say
+// that the positional forms belong to one script and not another. The features
+// are indexed in tag order, which is the order GSUBForms sorts them into.
+func GSUBFormsIn(features map[string][2][]int, scripts map[string]Script) []byte {
 	tags := make([]string, 0, len(features))
 	for tag := range features {
 		tags = append(tags, tag)
@@ -480,7 +454,7 @@ func GSUBForms(features map[string][2][]int) []byte {
 		pair := features[tag]
 		lookups = append(lookups, singleSubstSubtable(pair[0], pair[1]))
 	}
-	return layoutTableMulti(tags, 1, lookups)
+	return layoutTableMulti(tags, 1, lookups, scripts)
 }
 
 // singleSubstSubtable is a format-2 single substitution: an explicit
@@ -506,44 +480,21 @@ func singleSubstSubtable(from, to []int) []byte {
 }
 
 // layoutTableMulti wraps several lookups, one per feature, in the scaffolding a
-// GSUB or GPOS table needs.
-func layoutTableMulti(tags []string, lookupType int, subtables [][]byte) []byte {
-	// LookupList: one lookup per subtable.
-	lookupList := make([]byte, 2+2*len(subtables))
-	binary.BigEndian.PutUint16(lookupList[0:], uint16(len(subtables)))
+// GSUB or GPOS table needs, under a 'DFLT' script selecting all of them.
+//
+// scripts, when not nil, replaces that default — which is how a fixture states
+// that one script gets the positional forms and another does not. The features
+// are in the order the tags are given, so a script names them by that index.
+func layoutTableMulti(tags []string, lookupType int, subtables [][]byte, scripts map[string]Script) []byte {
+	lookups := make([]Lookup, 0, len(subtables))
+	features := make([]Feature, 0, len(tags))
 	for i, sub := range subtables {
-		lookup := make([]byte, 8)
-		binary.BigEndian.PutUint16(lookup[0:], uint16(lookupType))
-		binary.BigEndian.PutUint16(lookup[4:], 1)
-		binary.BigEndian.PutUint16(lookup[6:], 8)
-		lookup = append(lookup, sub...)
-		binary.BigEndian.PutUint16(lookupList[2+2*i:], uint16(len(lookupList)))
-		lookupList = append(lookupList, lookup...)
+		lookups = append(lookups, Lookup{Type: lookupType, Subtables: [][]byte{sub}})
+		if i < len(tags) {
+			features = append(features, Feature{Tag: tags[i], Lookups: []int{i}})
+		}
 	}
-
-	// FeatureList: one feature per tag, each naming its own lookup.
-	featureList := make([]byte, 2+6*len(tags))
-	binary.BigEndian.PutUint16(featureList[0:], uint16(len(tags)))
-	for i, tag := range tags {
-		feat := make([]byte, 6)
-		binary.BigEndian.PutUint16(feat[2:], 1)
-		binary.BigEndian.PutUint16(feat[4:], uint16(i))
-		rec := 2 + 6*i
-		copy(featureList[rec:], tag)
-		binary.BigEndian.PutUint16(featureList[rec+4:], uint16(len(featureList)))
-		featureList = append(featureList, feat...)
-	}
-
-	header := make([]byte, 10)
-	binary.BigEndian.PutUint32(header[0:], 0x00010000)
-	out := append([]byte(nil), header...)
-	binary.BigEndian.PutUint16(out[4:], uint16(len(out)))
-	out = append(out, 0, 0) // an empty ScriptList
-	binary.BigEndian.PutUint16(out[6:], uint16(len(out)))
-	out = append(out, featureList...)
-	binary.BigEndian.PutUint16(out[8:], uint16(len(out)))
-	out = append(out, lookupList...)
-	return out
+	return layoutTableFull(lookups, features, scripts)
 }
 
 func sortStrings(a []string) {

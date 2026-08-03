@@ -29,9 +29,14 @@
 //
 // Shape applies the font's own kerning and ligatures and returns spans ready
 // for a text operator; Encode is the plain path that maps runes to glyphs one
-// at a time. Neither resolves scripts or language systems, attaches marks or
-// reorders glyphs, so text in a script that needs those — Arabic, Devanagari —
-// is not correctly set by this package. See layout.go for exactly what is read.
+// at a time. ShapeGlyphs is the full pipeline, which also attaches marks and
+// joins cursive forms.
+//
+// The rules applied are those the font declares for the run's own script, and
+// for the language system named by SetLanguage. What is still not done is
+// reordering, so text in a script that needs it — Devanagari and the other
+// Indic scripts — is not correctly set by this package. See layout.go for
+// exactly what is read.
 //
 // # What it does not do
 //
@@ -60,7 +65,9 @@ const maxCmapWork = 1 << 22
 // and the bytes to embed.
 //
 // It is not safe for concurrent use. Encode records which glyphs a document
-// used, so two goroutines encoding through one Face race on that record.
+// used, so two goroutines encoding through one Face race on that record; and
+// shaping caches the font's layout tables as each script selects them, so two
+// goroutines merely *measuring* shaped text race on that cache.
 type Face struct {
 	data []byte
 	prog *font.Program
@@ -87,9 +94,39 @@ type Face struct {
 	// WinAnsi characters rather than glyph indices.
 	std *stdMetrics
 
-	layout *layout // kerning and ligatures, empty when the font declares none
+	// layout is what the font declares whatever the script — every feature in
+	// the table, taken together. It answers the questions that are about the
+	// face rather than about a run: whether it has kerning at all, which
+	// features it offers. Shaping does not use it except as the fallback for a
+	// font that declares no scripts.
+	layout *layout
+	// layoutTables are the GSUB, GPOS, GDEF and kern bytes, kept so that the
+	// layout can be read again for the script of a run; positionings and
+	// scriptLayouts cache those readings, by what each selected. language names
+	// the language system to select within a script; empty is the font's
+	// default.
+	layoutTables  map[string][]byte
+	positionings  map[string]*layout
+	scriptLayouts map[string]*layout
+	language      string
 
 	used map[int]bool // glyph indices this face has encoded
+}
+
+// layoutTableNames are the tables readLayout reads, and so the ones a face
+// keeps in order to read them again per script. The rest of the font is not
+// retained: f.data already holds it.
+var layoutTableNames = [...]string{"GSUB", "GPOS", "GDEF", "kern"}
+
+// keepLayoutTables takes the layout tables out of a parsed font.
+func keepLayoutTables(tables map[string][]byte) map[string][]byte {
+	out := make(map[string][]byte, len(layoutTableNames))
+	for _, name := range layoutTableNames {
+		if t := tables[name]; len(t) > 0 {
+			out[name] = t
+		}
+	}
+	return out
 }
 
 // Load parses an sfnt font program — TrueType or OpenType — and prepares it for
@@ -168,7 +205,13 @@ func Load(data []byte) (*Face, error) {
 	if f.capHeight == 0 {
 		f.capHeight = f.ascent
 	}
-	f.layout = readLayout(tables)
+	f.layoutTables = keepLayoutTables(tables)
+	// The unfiltered reading, and the positioning half it is built on, are the
+	// ones a font with no ScriptList falls back to, so they are cached under
+	// the key a nil selection gets rather than read a second time for it.
+	pos := readPositioning(f.layoutTables, nil)
+	f.positionings = map[string]*layout{selectionKey(nil): pos}
+	f.layout = readLayout(f.layoutTables, nil, pos)
 	f.name = postScriptName(tables["name"])
 	if f.name == "" {
 		f.name = "Embedded"
