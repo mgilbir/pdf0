@@ -117,12 +117,15 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 	// apply where, so it cannot be a step before the general substitutions and
 	// has to be the substitutions. No script both joins cursively and reorders,
 	// which is why these are alternatives rather than stages.
-	if reordersIndic(script) {
-		buf = sh.shapeIndic(buf, runes)
+	if cfg := indicConfigFor(script); cfg != nil {
+		buf = sh.shapeIndic(buf, runes, sh.indicPlan(cfg, f.indicOldSpec(cfg, script)))
 	} else {
 		// Joining first: the joined forms are what a cursive script's ligatures
-		// and contextual rules are written against.
+		// and contextual rules are written against. The join controls have said
+		// all they have to say once it has run, and are taken out before any
+		// substitution can see them — see ignorable.go.
 		buf = sh.applyJoining(buf, runes)
+		buf = hideJoiners(buf, runes)
 		buf = sh.substitute(buf)
 	}
 	sh.position(buf)

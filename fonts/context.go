@@ -237,8 +237,9 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, b
 				matched = false
 				break
 			}
-			pos = sh.nextNotIgnored(buf, pos+1, flags)
-			if pos >= sh.end(buf) || buf[pos].GID != font.Be16(lig, 4+2*k) {
+			want := font.Be16(lig, 4+2*k)
+			pos = sh.nextNotIgnored(buf, pos+1, flags, want)
+			if pos >= sh.end(buf) || buf[pos].GID != want {
 				matched = false
 				break
 			}
@@ -250,20 +251,48 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, b
 	return 0, 0, false
 }
 
-// nextNotIgnored is the next position a lookup with these flags looks at.
-func (sh shaper) nextNotIgnored(buf []Glyph, from, flags int) int {
+// nextNotIgnored is the next position a lookup with these flags looks at while
+// matching its input.
+//
+// want is the glyph the caller is about to compare against. A join control
+// standing in the way is stepped over — unless the lookup names that very glyph,
+// in which case it is what the lookup was looking for and is matched rather than
+// skipped. A face that declares a ligature over a joiner means it.
+func (sh shaper) nextNotIgnored(buf []Glyph, from, flags, want int) int {
 	end := sh.end(buf)
 	for i := from; i < end; i++ {
-		if !sh.l.ignores(flags, buf[i].GID) {
-			return i
+		if sh.l.ignores(flags, buf[i].GID) {
+			continue
 		}
+		if buf[i].GID != want && sh.stepsOverJoiner(i, false) {
+			continue
+		}
+		return i
 	}
 	return end
 }
 
-// matched collects the positions a lookup with these flags would see, starting
-// at a position, up to n of them.
+// matchedPositions collects the positions a lookup with these flags would see
+// as its input, starting at a position, up to n of them.
+//
+// Unlike the ligature walk above this cannot tell whether a joiner in the way is
+// the glyph the rule wanted: the rule's items are compared by the caller, and
+// may be classes rather than glyphs. A joiner the feature allows to be stepped
+// over is therefore always stepped over here, never matched. It costs a font's
+// contextual rule that names a joiner explicitly *and* is declared under a
+// feature that steps over joiners, which is a combination that contradicts
+// itself.
 func (sh shaper) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
+	return sh.positionsFrom(buf, at, n, flags, false)
+}
+
+// lookaheadPositions is matchedPositions for the part of a rule that says what
+// must *follow* what it replaces, which steps over joiners in every case.
+func (sh shaper) lookaheadPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
+	return sh.positionsFrom(buf, at, n, flags, true)
+}
+
+func (sh shaper) positionsFrom(buf []Glyph, at, n, flags int, context bool) ([]int, bool) {
 	out := make([]int, 0, n)
 	end := sh.end(buf)
 	pos := at
@@ -271,7 +300,7 @@ func (sh shaper) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
 		if pos >= end {
 			return nil, false
 		}
-		if !sh.l.ignores(flags, buf[pos].GID) {
+		if !sh.l.ignores(flags, buf[pos].GID) && !sh.stepsOverJoiner(pos, context) {
 			out = append(out, pos)
 		}
 		pos++
@@ -280,11 +309,12 @@ func (sh shaper) matchedPositions(buf []Glyph, at, n, flags int) ([]int, bool) {
 }
 
 // backtrackPositions collects the positions before a position, nearest first,
-// which is the order the format stores a backtrack sequence in.
+// which is the order the format stores a backtrack sequence in. It is context,
+// so it steps over joiners.
 func (sh shaper) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, bool) {
 	out := make([]int, 0, n)
 	for pos := before - 1; pos >= sh.floor && len(out) < n; pos-- {
-		if !sh.l.ignores(flags, buf[pos].GID) {
+		if !sh.l.ignores(flags, buf[pos].GID) && !sh.stepsOverJoiner(pos, true) {
 			out = append(out, pos)
 		}
 	}
@@ -526,7 +556,7 @@ func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 			}
 		}
 		if matched && len(ahead) > 0 {
-			ap, ok := sh.matchedPositions(buf, positions[inputCount-1]+1, len(ahead), flags)
+			ap, ok := sh.lookaheadPositions(buf, positions[inputCount-1]+1, len(ahead), flags)
 			if !ok {
 				matched = false
 			} else {
@@ -605,7 +635,7 @@ func (sh shaper) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (
 		}
 	}
 	if len(ahead) > 0 {
-		ap, ok := sh.matchedPositions(buf, positions[len(input)-1]+1, len(ahead), flags)
+		ap, ok := sh.lookaheadPositions(buf, positions[len(input)-1]+1, len(ahead), flags)
 		if !ok {
 			return 0, buf, false
 		}

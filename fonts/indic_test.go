@@ -51,13 +51,14 @@ const (
 	gidZWNJ
 	gidZWJ
 	gidDotted
+	gidDevI
 )
 
 func devaGlyphs() []fonttest.Glyph {
 	runes := []rune{
 		devKa, devTa, devRa, devVirama, devIMatra, devAAMatra, devAnusvara, devA, devNukta,
 		0xE000, 0xE001, 0xE002, 0xE003, 0xE004, 0xE005, 0xE006,
-		' ', 0x0964, 'A', 0x200C, 0x200D, 0x25CC,
+		' ', 0x0964, 'A', 0x200C, 0x200D, 0x25CC, 0x0907,
 	}
 	out := make([]fonttest.Glyph, len(runes))
 	for i, r := range runes {
@@ -106,6 +107,14 @@ func devaSingle(tag string, from, to []int) devaFeature {
 // FeatureList is written in.
 func devaFace(t *testing.T, features ...devaFeature) *Face {
 	t.Helper()
+	return devaFaceIn(t, "dev2", features...)
+}
+
+// devaFaceIn is devaFace with the script tag named, so that a test can build the
+// same font as a first-generation one — a font carrying only 'deva' was written
+// before 'dev2' existed and means the older rules.
+func devaFaceIn(t *testing.T, tag string, features ...devaFeature) *Face {
+	t.Helper()
 	sorted := append([]devaFeature(nil), features...)
 	for i := 1; i < len(sorted); i++ {
 		for j := i; j > 0 && sorted[j].tag < sorted[j-1].tag; j-- {
@@ -128,7 +137,7 @@ func devaFace(t *testing.T, features ...devaFeature) *Face {
 		Glyphs: devaGlyphs(),
 		Extra: map[string][]byte{
 			"GSUB": fonttest.GSUBTable(lookups, list, map[string]fonttest.Script{
-				"dev2": {Required: fonttest.NoFeature, Features: selected},
+				tag:    {Required: fonttest.NoFeature, Features: selected},
 				"DFLT": {Required: fonttest.NoFeature},
 			}),
 		},
@@ -187,6 +196,17 @@ func devaBlwf() devaFeature {
 	})
 }
 
+// devaBlwfPre declares below-base forms for two consonants, written
+// consonant-first as a first-generation font writes them. Ra is one of them and
+// an ordinary consonant is the other, which is what tells the two generations'
+// pre-base rules apart: the older asks only Ra for its below-base form.
+func devaBlwfPre() devaFeature {
+	return devaLigatures("blwf",
+		fonttest.Ligature{Components: []int{gidDRa, gidVirama}, Glyph: gidRakar},
+		fonttest.Ligature{Components: []int{gidDTa, gidVirama}, Glyph: gidKaKa},
+	)
+}
+
 func devaAkhn() devaFeature {
 	return devaLigatures("akhn", fonttest.Ligature{
 		Components: []int{gidDKa, gidDKa}, Glyph: gidKaKa,
@@ -232,11 +252,15 @@ func TestIndicCategoriesAreUnicodes(t *testing.T) {
 		{devAAMatra, catMatra, posAfterSub, "the aa-sign, which is drawn after it"},
 		{devAnusvara, catSM, posSMVD, "the anusvara"},
 		{devA, catVowel, posBaseC, "an independent vowel"},
-		{devNukta, catNukta, posBelowC, "the nukta"},
+		// A nukta has no place of its own: it takes the place of the letter it
+		// follows, so the model never asks where it would sit alone.
+		{devNukta, catNukta, posEnd, "the nukta"},
 		{0x200D, catZWJ, posEnd, "a zero width joiner"},
 		{0x200C, catZWNJ, posEnd, "a zero width non-joiner"},
 		{0x25CC, catDottedCircle, posBaseC, "a dotted circle"},
-		{0x093D, catSymbol, posEnd, "the avagraha"},
+		// The avagraha takes a cluster of its own, and whatever hangs off it is
+		// drawn after it, as a syllable modifier is.
+		{0x093D, catSymbol, posSMVD, "the avagraha"},
 		{'A', catOther, posEnd, "a Latin letter, which is in no Indic category"},
 		{0x0964, catOther, posEnd, "the danda, which is punctuation and not part of a syllable"},
 	}
@@ -249,32 +273,55 @@ func TestIndicCategoriesAreUnicodes(t *testing.T) {
 	}
 }
 
-// TestOnlyDevanagariIsReordered pins the stated scope. The other Indic scripts
-// select their second-generation tags and take their fonts' features, and are
-// deliberately not reordered — claiming otherwise in the code while shipping a
-// half-model would be worse than the gap.
-func TestOnlyDevanagariIsReordered(t *testing.T) {
+// TestWhichScriptsAreReordered pins the stated scope, in both directions: the
+// nine scripts that share this model are reordered, and nothing else is.
+//
+// The second half is the one that costs something if it goes wrong. Khmer,
+// Myanmar and the scripts the Universal Shaping Engine covers do not share the
+// model, and setting one of them by these rules would be worse than setting it
+// in storage order — it would move glyphs by a grammar that is not theirs.
+func TestWhichScriptsAreReordered(t *testing.T) {
 	reordered := map[string]bool{}
 	for s := uint16(0); int(s) < len(scriptOpenTypeTags); s++ {
-		if reordersIndic(s) {
+		if indicConfigFor(s) != nil {
 			for _, tag := range scriptTags(s) {
 				reordered[tag] = true
 			}
 		}
 	}
-	if !reordered["dev2"] {
-		t.Error("Devanagari is not reordered, which is the one script this package does reorder")
-	}
-	for _, tag := range []string{"bng2", "gjr2", "gur2", "knd2", "mlm2", "ory2", "tml2", "tel2", "mym2", "latn", "arab"} {
-		if reordered[tag] {
-			t.Errorf("%q is reordered, but this package covers Devanagari alone", tag)
+	for _, tag := range []string{"dev2", "bng2", "gjr2", "gur2", "knd2", "mlm2", "ory2", "tml2", "tel2"} {
+		if !reordered[tag] {
+			t.Errorf("%q is not reordered, but this package covers it", tag)
 		}
 	}
-	if reordersIndic(scriptOf('A')) {
+	for _, tag := range []string{"khmr", "mym2", "sinh", "tibt", "java", "bali", "latn", "arab"} {
+		if reordered[tag] {
+			t.Errorf("%q is reordered, but this package does not cover it", tag)
+		}
+	}
+	if indicConfigFor(scriptOf('A')) != nil {
 		t.Error("a Latin run would be reordered as Indic")
 	}
-	if reordersIndic(scriptOf(0x0995)) {
-		t.Error("a Bengali run would be reordered as Devanagari, whose rules are not Bengali's")
+	// Each script's config is found by its own tag, so a Bengali run cannot get
+	// Devanagari's data.
+	if cfg := indicConfigFor(scriptOf(0x0995)); cfg == nil || cfg.tag != "bng2" {
+		t.Errorf("a Bengali run resolved to %v, not to Bengali's own rules", cfg)
+	}
+	if cfg := indicConfigFor(scriptOf(devKa)); cfg == nil || cfg.tag != "dev2" {
+		t.Errorf("a Devanagari run resolved to %v, not to Devanagari's own rules", cfg)
+	}
+	// Every config is reachable and states the tag it is filed under, so that a
+	// script added to the table cannot be silently unreachable or mislabelled.
+	for tag, cfg := range indicConfigs {
+		if cfg.tag != tag {
+			t.Errorf("the config filed under %q calls itself %q", tag, cfg.tag)
+		}
+		if cfg.virama == 0 {
+			t.Errorf("%q names no virama, so the font can be asked nothing", tag)
+		}
+		if !reordered[tag] {
+			t.Errorf("%q has a config no script selects", tag)
+		}
 	}
 }
 
@@ -334,6 +381,21 @@ func TestSyllablesAreCut(t *testing.T) {
 			"a character in no Indic category is left out of every syllable",
 			[]rune{'A', devKa},
 			[][2]int{{0, 1}, {1, 2}}, []indicSyllableKind{sylNonIndic, sylConsonant},
+		},
+		{
+			// The one place the grammar's alternatives overlap: after an
+			// independent vowel a joiner may end the syllable or may open its
+			// tail, and the longer reading wins. Cutting here instead would
+			// leave the matra with no base of its own — a broken cluster, and a
+			// dotted circle drawn in the middle of an ordinary word.
+			"a joiner between a vowel and its matra does not end the syllable",
+			[]rune{devA, 0x200D, devAAMatra},
+			[][2]int{{0, 3}}, []indicSyllableKind{sylVowel},
+		},
+		{
+			"and the same joiner with nothing to carry on does end it",
+			[]rune{devA, 0x200D, devKa},
+			[][2]int{{0, 2}, {2, 3}}, []indicSyllableKind{sylVowel, sylConsonant},
 		},
 	}
 	for _, tc := range cases {
@@ -838,6 +900,246 @@ func TestBundledFaceSetsAWord(t *testing.T) {
 	}
 	if glyphs[0].Cluster != 0 {
 		t.Errorf("the first glyph has cluster %d, want 0", glyphs[0].Cluster)
+	}
+}
+
+// The two generations of the Devanagari rules.
+//
+// A font declares its rules under a script tag, and for Devanagari there are
+// two: 'dev2' for the second-generation specification and 'deva' for the one
+// that came before it. The tag is the only thing that says which rules the font
+// was written against, and the two disagree in ways a reader sees.
+//
+// Every expectation below was checked against HarfBuzz shaping these same
+// fixture bytes under each tag.
+
+// TestTheScriptTagSaysWhichRulesTheFontMeans pins how the question is asked. It
+// is asked of the font, not of the text, and answered by the same walk that
+// selects the font's features — so the rules applied are the rules of the table
+// they came from.
+func TestTheScriptTagSaysWhichRulesTheFontMeans(t *testing.T) {
+	cfg := indicConfigs["dev2"]
+	deva := scriptOf(devKa)
+
+	if f := devaFaceIn(t, "dev2", devaHalf()); f.indicOldSpec(cfg, deva) {
+		t.Error("a font declaring 'dev2' was taken for a first-generation one")
+	}
+	if f := devaFaceIn(t, "deva", devaHalf()); !f.indicOldSpec(cfg, deva) {
+		t.Error("a font declaring only 'deva' was taken for a second-generation one")
+	}
+	// A font that declares nothing for the script falls back to the default
+	// table, which is not a second-generation declaration.
+	if f := devaFaceIn(t, "latn", devaHalf()); !f.indicOldSpec(cfg, deva) {
+		t.Error("a font declaring nothing for Devanagari should get the older rules")
+	}
+}
+
+// TestOldSpecMovesThePostBaseVirama is the first of the two disagreements. The
+// first-generation rules expected the shaper to put a post-base virama after the
+// last consonant, and fonts written against them declare their conjunct lookups
+// in that order; leaving it where it stands sets those conjuncts as loose
+// letters with a virama showing between them.
+func TestOldSpecMovesThePostBaseVirama(t *testing.T) {
+	features := []devaFeature{devaBlwf(), devaHalf(), devaRphf(), devaCjct()}
+	new2 := devaFaceIn(t, "dev2", features...)
+	old := devaFaceIn(t, "deva", features...)
+
+	for _, tc := range []struct {
+		s                string
+		wantNew, wantOld []int
+	}{
+		// त्र् — the virama after the Ra moves past it, so the font's
+		// virama-then-Ra below-base rule no longer matches and the Ra stays a
+		// letter with two viramas after it.
+		{str(devTa, devVirama, devRa, devVirama),
+			[]int{gidDTa, gidRakar, gidVirama}, []int{gidDTa, gidDRa, gidVirama, gidVirama}},
+		{str(devTa, devVirama, devRa),
+			[]int{gidDTa, gidRakar}, []int{gidDTa, gidDRa, gidVirama}},
+		{str(devTa, devVirama, devRa, devVirama, devKa),
+			[]int{gidDTa, gidRakar, gidVirama, gidDKa},
+			[]int{gidTaHalf, gidDRa, gidVirama, gidDKa}},
+	} {
+		wantGIDs(t, shapedGIDs(t, new2, tc.s), tc.wantNew, tc.s+" under dev2")
+		wantGIDs(t, shapedGIDs(t, old, tc.s), tc.wantOld, tc.s+" under deva")
+	}
+}
+
+// TestOldSpecAsksOnlyRaForAPreBaseBelowForm is the second. Under the
+// second-generation rules every consonant before the base is asked for its
+// below-base form; under the first-generation ones only the vattu — a Ra bound
+// to what follows by a virama — is, and the rest take their half forms instead.
+func TestOldSpecAsksOnlyRaForAPreBaseBelowForm(t *testing.T) {
+	features := []devaFeature{devaBlwfPre(), devaHalf()}
+	new2 := devaFaceIn(t, "dev2", features...)
+	old := devaFaceIn(t, "deva", features...)
+
+	// An ordinary consonant: below-base form under the new rules, half form
+	// under the old.
+	s := str(devTa, devVirama, devKa)
+	wantGIDs(t, shapedGIDs(t, new2, s), []int{gidKaKa, gidDKa}, s+" under dev2")
+	wantGIDs(t, shapedGIDs(t, old, s), []int{gidTaHalf, gidDKa}, s+" under deva")
+
+	// Ra is the exception both generations agree on, and the one the eyelash
+	// rule exists to restore: it takes its below-base form under either.
+	s = str(devRa, devVirama, devKa)
+	wantGIDs(t, shapedGIDs(t, new2, s), []int{gidRakar, gidDKa}, s+" under dev2")
+	wantGIDs(t, shapedGIDs(t, old, s), []int{gidRakar, gidDKa}, s+" under deva")
+}
+
+// TestTheTwoGenerationsAgreeWhereTheyShould keeps the two tests above from
+// meaning only "something changed". Most of Devanagari is the same under either
+// specification, and a shaper that read the tag and then diverged everywhere
+// would pass a test that only ever looked for a difference.
+func TestTheTwoGenerationsAgreeWhereTheyShould(t *testing.T) {
+	features := []devaFeature{devaBlwf(), devaHalf(), devaRphf(), devaCjct()}
+	new2 := devaFaceIn(t, "dev2", features...)
+	old := devaFaceIn(t, "deva", features...)
+
+	for _, s := range []string{
+		str(devKa, devIMatra),
+		str(devRa, devVirama, devKa),
+		str(devKa, devVirama, devTa),
+		str(devRa, devVirama, devKa, devVirama, devTa),
+		str(devRa, devVirama, 0x200D, devKa, devVirama, devTa),
+		str(devKa, devAAMatra, devAnusvara),
+	} {
+		a, b := shapedGIDs(t, new2, s), shapedGIDs(t, old, s)
+		wantGIDs(t, b, a, s+" under deva, which should match dev2 here")
+	}
+}
+
+// A syllable with no base consonant.
+
+// devaFaceWithoutDottedCircle is the fixture with U+25CC taken out. Only the
+// glyphs after it move, and no test below names one.
+func devaFaceWithoutDottedCircle(t *testing.T) *Face {
+	t.Helper()
+	glyphs := devaGlyphs()
+	for i, g := range glyphs {
+		if g.Rune == dottedCircle {
+			glyphs = append(glyphs[:i:i], glyphs[i+1:]...)
+			break
+		}
+	}
+	data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Devanagari", Glyphs: glyphs})
+	f, err := Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if _, ok := f.GlyphID(dottedCircle); ok {
+		t.Fatal("the fixture still has a dotted circle, so it tests nothing")
+	}
+	return f
+}
+
+// TestASyllableWithNoBaseIsShownAgainstADottedCircle is what a reader is owed
+// when the text is broken. A vowel sign or a virama written with nothing to
+// attach to would otherwise be drawn where it would have sat on a letter, over
+// nothing — indistinguishable from a mark on the letter before it. U+25CC is the
+// placeholder every reader of these scripts knows.
+func TestASyllableWithNoBaseIsShownAgainstADottedCircle(t *testing.T) {
+	f := devaFace(t)
+	for _, tc := range []struct {
+		name string
+		s    string
+		want []int
+	}{
+		{"a matra on its own", str(devAAMatra), []int{gidDotted, gidAAMatra}},
+		{"a pre-base matra on its own", str(devIMatra), []int{gidIMatra, gidDotted}},
+		{"a virama on its own", str(devVirama), []int{gidDotted, gidVirama}},
+		{"a nukta on its own", str(devNukta), []int{gidDotted, gidNukta}},
+		// A modifier ends a syllable, so the matra after it has nothing left to
+		// depend on. Two matras in a row are *not* this case — they belong to
+		// the same syllable and to the same letter.
+		{"a broken syllable after a whole one", str(devKa, devAAMatra, devAnusvara, devAAMatra),
+			[]int{gidDKa, gidAAMatra, gidAnusvara, gidDotted, gidAAMatra}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantGIDs(t, shapedGIDs(t, f, tc.s), tc.want, tc.s)
+		})
+	}
+}
+
+// TestAWholeSyllableGetsNoDottedCircle is the other half, and the one that costs
+// something if it goes wrong: a placeholder drawn inside an ordinary word is far
+// worse than none drawn at all.
+func TestAWholeSyllableGetsNoDottedCircle(t *testing.T) {
+	f := devaFace(t, devaRphf(), devaHalf())
+	for _, s := range []string{
+		str(devKa),
+		str(devKa, devIMatra),
+		str(devKa, devAAMatra, devAnusvara),
+		str(devTa, devVirama, devKa),
+		str(devRa, devVirama, devKa),
+		str(devA),
+		str(0x25CC, devAAMatra), // one written by hand is not doubled
+		str(devKa, ' ', devKa),
+		str('A'),
+	} {
+		for _, g := range shapedGIDs(t, f, s) {
+			if g == gidDotted && !strings.ContainsRune(s, 0x25CC) {
+				t.Errorf("shaping %q gave %v, which shows a placeholder inside whole text",
+					s, shapedGIDs(t, f, s))
+			}
+		}
+	}
+}
+
+// TestAVowelSpeltTwiceIsShownAgainstADottedCircle is the other placeholder, and
+// a different claim: not that the syllable has no letter, but that the letter
+// and the sign together spell a vowel nobody writes. अ followed by the aa-sign
+// looks like आ; drawn as it stands, a reader would see a letter the writer did
+// not write.
+func TestAVowelSpeltTwiceIsShownAgainstADottedCircle(t *testing.T) {
+	f := devaFace(t)
+
+	s := str(devA, devAAMatra)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDevA, gidDotted, gidAAMatra}, s)
+
+	// The same vowel with a sign that spells nothing else is ordinary text.
+	s = str(devA, devAnusvara)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDevA, gidAnusvara}, s)
+
+	// A three-character entry: Ra, virama, I. The circle goes before the vowel
+	// the sequence would spell, not before the virama.
+	s = str(devRa, devVirama, 0x0907)
+	got := shapedGIDs(t, f, s)
+	if len(got) != 4 || got[2] != gidDotted {
+		t.Errorf("shaping %q gave %v; the placeholder belongs third, before the vowel", s, got)
+	}
+
+	// And a consonant with the same sign is not the sequence at all.
+	s = str(devKa, devAAMatra)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidDKa, gidAAMatra}, s)
+}
+
+// TestNoDottedCircleWhenTheFaceHasNone pins that the placeholder is the font's
+// to supply. A face without U+25CC cannot show one, and inventing a substitute
+// would draw something the font never meant.
+func TestNoDottedCircleWhenTheFaceHasNone(t *testing.T) {
+	f := devaFaceWithoutDottedCircle(t)
+	s := str(devAAMatra)
+	wantGIDs(t, shapedGIDs(t, f, s), []int{gidAAMatra}, s)
+}
+
+// TestBundledFaceShowsABrokenSyllable is the same claim against the real face:
+// a visarga cut off from the syllable before it by a cantillation mark is a
+// syllable of its own with no letter in it, and Noto Sans draws it on a circle.
+func TestBundledFaceShowsABrokenSyllable(t *testing.T) {
+	f := devaNoto(t)
+	circle := devaGlyph(t, f, dottedCircle)
+	s := str(0x0928, 0x0951, 0x0903) // na, udatta, visarga
+
+	glyphs, _ := f.ShapeGlyphs(s)
+	found := false
+	for _, g := range glyphs {
+		if g.GID == circle {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("shaping %q gave %v, with no placeholder; the visarga has no letter of its own",
+			s, gids(glyphs))
 	}
 }
 

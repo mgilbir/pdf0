@@ -27,29 +27,43 @@ import (
 //   - Cursive attachment (GPOS 3), which makes those forms' connecting strokes
 //     actually meet — joining picks the shapes, this places them. See
 //     position.go.
-//   - Devanagari reordering: cutting a run into syllables, finding each one's
-//     base consonant, and putting its glyphs into the order they are drawn —
-//     the pre-base vowel sign before its consonant, the reph over the end of
-//     the syllable — before applying the features an Indic font declares for
-//     each part. See indic.go and indicsyllable.go.
+//   - Indic reordering, for the nine scripts that share the model: cutting a run
+//     into syllables, finding each one's base consonant, and putting its glyphs
+//     into the order they are drawn — the pre-base vowel sign before its
+//     consonant, the reph over the end of the syllable — before applying the
+//     features an Indic font declares for each part. See indic.go and
+//     indicsyllable.go.
 //   - Every single substitution the font declares, keyed by feature tag and
 //     applied only when a caller names one (ShapeWith): 'smcp', 'onum' and the
 //     rest, which change what the text says it is and so wait to be asked for.
 //   - GDEF glyph classes and the lookup flags that use them, so that a lookup
 //     declaring it ignores marks does.
+//   - The zero-width joiner and non-joiner: obeyed where they are written about,
+//     stepped over by every rule that is not about them, and removed before
+//     anything is positioned or drawn. See ignorable.go, which also says which
+//     of Unicode's other default-ignorable characters are *not* handled.
 //
 // # What is not, and what each absence costs
 //
-//   - Reordering for any script other than Devanagari. Bengali, Gujarati,
-//     Gurmukhi, Kannada, Malayalam, Oriya, Tamil and Telugu share Devanagari's
-//     model but not its data — each states its own base-consonant rule, its own
-//     reph position and its own exceptions — and Khmer, Myanmar and the
-//     Universal Shaping Engine scripts do not share even the model. Their
-//     second-generation tags are still selected, because that is where such a
-//     font declares its features, but their characters are turned into glyphs
-//     in storage order. Text in them is not correctly set by this package and
-//     should be shaped elsewhere and passed in as glyph indices. indic.go says
-//     what within Devanagari is left out.
+//   - Reordering for Khmer, Myanmar and the scripts the Universal Shaping Engine
+//     covers. They do not share the Indic model, so the nine scripts indic.go
+//     handles do not reach them: their second-generation tags are still
+//     selected, because that is where such a font declares its features, but
+//     their characters are turned into glyphs in storage order. Text in them is
+//     not correctly set by this package and should be shaped elsewhere and
+//     passed in as glyph indices. indic.go says what within the nine is left out.
+//   - FeatureVariations, the GSUB and GPOS table that gives a feature different
+//     lookups for different points in a variable font's design space. A face
+//     that states a feature's lookups only there — Noto Sans Oriya states its
+//     'rclt' that way — is read as stating none, and the letterform corrections
+//     that feature carries are not applied.
+//   - 'rclt' anywhere but an Indic run. It is a required feature and every other
+//     shaper applies it generally; here only the Indic pass does, because that
+//     is where its absence was measured.
+//   - Unicode normalisation. A composed character is set as written, so a font
+//     whose rules are written against the decomposed form does not match it —
+//     except for the Indic vowel signs drawn as several marks, which indic.go
+//     splits because their parts go to different places.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless a
