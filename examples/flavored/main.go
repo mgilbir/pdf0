@@ -9,11 +9,10 @@
 //
 //	go run ./examples/flavored -font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 //
-// Without -font the text is set in Helvetica, one of the fourteen faces a
-// reader is required to have and therefore one that embeds nothing. That is
-// legal in a plain PDF and forbidden in every PDF/A level, so running without
-// it is the interesting case: the plain document saves and the conforming ones
-// are refused, by name, without the drawing code knowing any of the rules.
+// The font is required. This repository bundles no typeface, and a conforming
+// PDF/A must embed every font it shows, so there is nothing sensible to fall
+// back to — an example that quietly picked something would be making the one
+// decision the example exists to illustrate.
 package main
 
 import (
@@ -38,18 +37,23 @@ const (
 )
 
 func main() {
-	fontPath := flag.String("font", "", "a TrueType or OpenType font to embed")
+	fontPath := flag.String("font", "", "a TrueType or OpenType font file to embed (required)")
 	flag.Parse()
 
+	// Required, and deliberately not defaulted. This repository bundles no
+	// typeface, and reaching for one of the fourteen names the PDF format
+	// defines would embed nothing — which is legal in a plain PDF, forbidden in
+	// every PDF/A level, and not a decision an example should take quietly on a
+	// reader's behalf.
+	if *fontPath == "" {
+		fmt.Fprintln(os.Stderr, "give -font: a TrueType or OpenType file to embed.")
+		fmt.Fprintln(os.Stderr, "A conforming PDF/A must embed every font it shows, so there is nothing to fall back to.")
+		os.Exit(2)
+	}
 	face, err := loadFace(*fontPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "loading the face: %v\n", err)
 		os.Exit(1)
-	}
-	if face.IsStandard() {
-		fmt.Println("No -font given, so the text is set in Helvetica, which embeds nothing.")
-		fmt.Println("Every PDF/A level requires an embedded font, so those saves should be refused.")
-		fmt.Println()
 	}
 
 	// The flavour is the only thing that differs between these. The drawing is
@@ -181,11 +185,8 @@ func drawPage(doc *pdf.Document, face *fonts.Face) error {
 	return err
 }
 
-// loadFace loads the font to embed, or falls back to a standard face.
+// loadFace loads the font to embed.
 func loadFace(path string) (*fonts.Face, error) {
-	if path == "" {
-		return fonts.Standard("Helvetica")
-	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

@@ -83,10 +83,24 @@ func (f *Face) subset() ([]byte, []int, error) {
 	}
 	longLoca := binary.BigEndian.Uint16(head[50:]) == 1
 	n := f.prog.NumGlyphs
+	if n <= 0 {
+		// A font declaring no glyphs at all. Every sfnt has .notdef at index
+		// zero, so this is a malformed maxp rather than an empty font — and the
+		// subsetter would otherwise write .notdef into a slice with no room for
+		// it.
+		return nil, nil, fmt.Errorf("fonts: the font declares %d glyphs; every font has at least .notdef", n)
+	}
 
 	offsets, err := parseLoca(loca, n, longLoca)
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(offsets) < n+1 {
+		// loca holds one offset per glyph plus a terminator; the closure below
+		// reads offsets[gid+1] for every kept glyph.
+		return nil, nil, fmt.Errorf(
+			"fonts: loca holds %d offsets for %d glyphs; it needs one more than the glyph count",
+			len(offsets), n)
 	}
 
 	keep := f.keepSet(offsets, glyf, n)
