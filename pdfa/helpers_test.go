@@ -102,7 +102,7 @@ func utf16be(s string) []byte {
 	return out
 }
 
-func hasRule(errs []ValidationError, rule string) bool {
+func hasRule(errs []Violation, rule string) bool {
 	for _, e := range errs {
 		if e.Rule == rule {
 			return true
@@ -111,8 +111,8 @@ func hasRule(errs []ValidationError, rule string) bool {
 	return false
 }
 
-func filterRule(errs []ValidationError, rule string) []ValidationError {
-	var result []ValidationError
+func filterRule(errs []Violation, rule string) []Violation {
+	var result []Violation
 	for _, e := range errs {
 		if e.Rule == rule {
 			result = append(result, e)

@@ -19,7 +19,7 @@ func TestAdoptPDFAFindingsKeepsReservedRulesBare(t *testing.T) {
 	add := func(rule, msg string, obj int) {
 		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})
 	}
-	adoptPDFAFindings(add, "pdfa-3/", []pdfa.ValidationError{
+	adoptPDFAFindings(add, "pdfa-3/", []pdfa.Violation{
 		{Rule: "6.1.2", Message: "a real PDF/A rule"},
 		{Rule: finding.LimitRule, Message: "a guard tripped"},
 		{Rule: finding.InternalRule, Message: "a check panicked"},
@@ -37,7 +37,7 @@ func TestAdoptPDFAFindingsKeepsReservedRulesBare(t *testing.T) {
 	// The point of keeping them bare is that the exported predicate still
 	// recognises them after adoption.
 	for _, v := range out[1:] {
-		if !finding.IsCheckerFinding(pdfa.ValidationError{Rule: v.Rule, Message: v.Message}) {
+		if !finding.IsCheckerFinding(pdfa.Violation{Rule: v.Rule, Message: v.Message}) {
 			t.Errorf("adopted %q is no longer recognised as a checker finding", v.Rule)
 		}
 	}

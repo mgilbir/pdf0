@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func hasRuleMsg(errs []ValidationError, rule string) bool {
+func hasRuleMsg(errs []Violation, rule string) bool {
 	for _, e := range errs {
 		if e.Rule == rule {
 			return true
@@ -45,7 +45,7 @@ func TestFileHeaderBytes(t *testing.T) {
 
 // Indirect object layout via a synthetic Document with offsets.
 func TestIndirectObjectSyntax(t *testing.T) {
-	build := func(body string) []ValidationError {
+	build := func(body string) []Violation {
 		off := int64(bytes.Index([]byte(body), []byte(" 0 obj")) - bytes.LastIndexByte([]byte(body[:bytes.Index([]byte(body), []byte(" 0 obj"))]), '\n'))
 		_ = off
 		doc := mkV(core.View{
@@ -86,14 +86,14 @@ func TestIndirectObjectHeaderWhitespaceRun(t *testing.T) {
 	const eol = "indirect object number is not preceded by an EOL marker"
 	// The offset points at the start of the white-space run; the run is longer
 	// than eight bytes and the header itself sits right after an EOL.
-	build := func(body string, off int64) []ValidationError {
+	build := func(body string, off int64) []Violation {
 		doc := mkV(core.View{
 			Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: object.Integer(42)}},
 			Offsets: map[int]int64{1: off},
 		})
 		return checkIndirectObjectSyntax(doc, PDFA2b, []byte(body))
 	}
-	has := func(errs []ValidationError, msg string) bool {
+	has := func(errs []Violation, msg string) bool {
 		for _, e := range errs {
 			if e.Message == msg {
 				return true
@@ -169,10 +169,10 @@ func TestScanHexStringsSkipsDicts(t *testing.T) {
 }
 
 func TestStreamKeywordFormat(t *testing.T) {
-	build := func(region string) []ValidationError {
-		var errs []ValidationError
+	build := func(region string) []Violation {
+		var errs []Violation
 		checkOneStreamKeyword([]byte(region), 0, 1, nil, func(msg string, obj int) {
-			errs = append(errs, ValidationError{Rule: "6.1.7.1", Message: msg})
+			errs = append(errs, Violation{Rule: "6.1.7.1", Message: msg})
 		})
 		return errs
 	}

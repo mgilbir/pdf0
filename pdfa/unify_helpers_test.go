@@ -10,7 +10,7 @@ import (
 
 // TestObjNumForDictDelegatesToDictObjNum pins the C34 consolidation: the two
 // reverse-dictionary-lookup helpers agree, with objNumForDict keeping its
-// 0-on-miss convention (for ValidationError.Object) while dictObjNum reports -1.
+// 0-on-miss convention (for Violation.Object) while dictObjNum reports -1.
 func TestObjNumForDictParity(t *testing.T) {
 	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{}})
 	font := &object.Dictionary{}

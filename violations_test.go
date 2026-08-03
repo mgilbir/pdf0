@@ -19,7 +19,7 @@ import (
 // can be combined.
 func TestViolationInterface(t *testing.T) {
 	cases := []Violation{
-		pdfa.ValidationError{Rule: "6.1.3", Level: pdfa.PDFA2b, Message: "m", Object: 7},
+		pdfa.Violation{Rule: "6.1.3", Level: pdfa.PDFA2b, Message: "m", Object: 7},
 		pdfua.Violation{Clause: "7.4.2", Message: "m", Object: 7},
 		pdfx.Violation{Rule: "output-intent", Message: "m", Object: 7},
 		pdfvt.Violation{Rule: "dpart/one", Message: "m", Object: 7},

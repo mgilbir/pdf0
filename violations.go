@@ -11,7 +11,7 @@ import (
 )
 
 // Violation is the common face of every validator finding. Each validator keeps
-// its own concrete type — pdfa.ValidationError, pdfua.Violation, pdfx.Violation,
+// its own concrete type — pdfa.Violation, pdfua.Violation, pdfx.Violation,
 // pdfvt.Violation, pdfr.Violation, dpart.Violation, facturx.Violation and
 // facturx.OrderXViolation — with the fields and Error formatting of its
 // standard, but all of them satisfy this interface, so findings from
@@ -47,7 +47,7 @@ type Violation interface {
 
 // Every finding type satisfies Violation.
 var _ = []Violation{
-	pdfa.ValidationError{},
+	pdfa.Violation{},
 	pdfua.Violation{},
 	pdfx.Violation{},
 	pdfvt.Violation{},

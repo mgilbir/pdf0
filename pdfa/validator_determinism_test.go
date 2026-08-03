@@ -10,10 +10,10 @@ import (
 // order, so the finding must keep the smallest object number regardless of the
 // order in which candidates are offered.
 func TestExampleFindingsPicksLowestObject(t *testing.T) {
-	mk := func(order []int) []ValidationError {
+	mk := func(order []int) []Violation {
 		var f exampleFindings
 		for _, n := range order {
-			f.add(ValidationError{Rule: "6.1.8", Level: PDFA4, Message: "same message", Object: n})
+			f.add(Violation{Rule: "6.1.8", Level: PDFA4, Message: "same message", Object: n})
 		}
 		return f.errs
 	}
@@ -28,8 +28,8 @@ func TestExampleFindingsPicksLowestObject(t *testing.T) {
 	}
 	// A different message is a different example and is kept separately.
 	var f exampleFindings
-	f.add(ValidationError{Rule: "6.1.8", Message: "a", Object: 5})
-	f.add(ValidationError{Rule: "6.1.8", Message: "b", Object: 4})
+	f.add(Violation{Rule: "6.1.8", Message: "a", Object: 5})
+	f.add(Violation{Rule: "6.1.8", Message: "b", Object: 4})
 	if len(f.errs) != 2 {
 		t.Errorf("distinct messages must not be deduplicated: got %d findings", len(f.errs))
 	}

@@ -1025,9 +1025,9 @@ func TestValidatePDFA_CleanDocument(t *testing.T) {
 	}
 }
 
-func TestValidationErrorString(t *testing.T) {
+func TestViolationString(t *testing.T) {
 	t.Run("without object", func(t *testing.T) {
-		e := pdfa.ValidationError{Rule: "6.1.3", Level: pdfa.PDFA4, Message: "test message"}
+		e := pdfa.Violation{Rule: "6.1.3", Level: pdfa.PDFA4, Message: "test message"}
 		s := e.Error()
 		if !strings.Contains(s, "PDF/A-4") || !strings.Contains(s, "6.1.3") || !strings.Contains(s, "test message") {
 			t.Errorf("unexpected Error() output: %s", s)
@@ -1035,7 +1035,7 @@ func TestValidationErrorString(t *testing.T) {
 	})
 
 	t.Run("with object", func(t *testing.T) {
-		e := pdfa.ValidationError{Rule: "6.2.10", Level: pdfa.PDFA1b, Message: "font error", Object: 42}
+		e := pdfa.Violation{Rule: "6.2.10", Level: pdfa.PDFA1b, Message: "font error", Object: 42}
 		s := e.Error()
 		if !strings.Contains(s, "object 42") {
 			t.Errorf("expected 'object 42' in output: %s", s)
@@ -1599,7 +1599,7 @@ func TestDecodeXMPToUTF8(t *testing.T) {
 	})
 }
 
-func hasRule(errs []pdfa.ValidationError, rule string) bool {
+func hasRule(errs []pdfa.Violation, rule string) bool {
 	for _, e := range errs {
 		if e.Rule == rule {
 			return true
@@ -1608,8 +1608,8 @@ func hasRule(errs []pdfa.ValidationError, rule string) bool {
 	return false
 }
 
-func filterRule(errs []pdfa.ValidationError, rule string) []pdfa.ValidationError {
-	var result []pdfa.ValidationError
+func filterRule(errs []pdfa.Violation, rule string) []pdfa.Violation {
+	var result []pdfa.Violation
 	for _, e := range errs {
 		if e.Rule == rule {
 			result = append(result, e)

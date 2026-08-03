@@ -28,7 +28,7 @@ func dictWith(k object.Name, v object.Object) object.Dictionary {
 	return d
 }
 
-func countRule(errs []pdfa.ValidationError, rule string) int {
+func countRule(errs []pdfa.Violation, rule string) int {
 	n := 0
 	for _, e := range errs {
 		if e.Rule == rule {

@@ -126,7 +126,7 @@ func TestICCCMYKOverprint(t *testing.T) {
 	}
 	// ICC-profile validity and overprint share clause 6.2.4.2 (different tests),
 	// so match the overprint rule by its message to isolate it.
-	hasOverprint := func(errs []pdfa.ValidationError) bool {
+	hasOverprint := func(errs []pdfa.Violation) bool {
 		for _, e := range errs {
 			if e.Rule == "6.2.4.2" && strings.Contains(e.Message, "overprint") {
 				return true

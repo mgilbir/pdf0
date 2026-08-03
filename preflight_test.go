@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func countEncryptViolations(errs []pdfa.ValidationError) int {
+func countEncryptViolations(errs []pdfa.Violation) int {
 	n := 0
 	for _, e := range errs {
 		if strings.Contains(e.Message, "/Encrypt") {

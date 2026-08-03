@@ -17,11 +17,11 @@ import (
 // and Annex C / 6.1.7 implementation limits.
 
 // checkFileStructureBytes runs every raw-byte file-structure check.
-func checkFileStructureBytes(doc core.View, level Level, raw []byte) []ValidationError {
+func checkFileStructureBytes(doc core.View, level Level, raw []byte) []Violation {
 	if raw == nil {
 		return nil
 	}
-	var errs []ValidationError
+	var errs []Violation
 	errs = append(errs, checkFileHeaderBytes(level, raw)...)
 	errs = append(errs, checkIndirectObjectSyntax(doc, level, raw)...)
 	errs = append(errs, checkNameUTF8(doc, level)...)
@@ -38,10 +38,10 @@ func checkFileStructureBytes(doc core.View, level Level, raw []byte) []Validatio
 // be "%PDF-" followed by a single-digit major, ".", single-digit minor and a
 // single EOL marker, and be immediately followed by a comment line whose
 // first four bytes after "%" are all binary (>= 128).
-func checkFileHeaderBytes(level Level, raw []byte) []ValidationError {
+func checkFileHeaderBytes(level Level, raw []byte) []Violation {
 	rule := "6.1.2"
-	bad := func(msg string) []ValidationError {
-		return []ValidationError{{Rule: rule, Level: level, Message: msg}}
+	bad := func(msg string) []Violation {
+		return []Violation{{Rule: rule, Level: level, Message: msg}}
 	}
 
 	if !bytes.HasPrefix(raw, []byte("%PDF-")) {
@@ -138,7 +138,7 @@ func isPDFWhite(b byte) bool {
 // the object number preceded by an EOL marker, the obj keyword followed by
 // an EOL marker, and the endobj keyword preceded and followed by an EOL
 // marker (with no extra spaces).
-func checkIndirectObjectSyntax(doc core.View, level Level, raw []byte) []ValidationError {
+func checkIndirectObjectSyntax(doc core.View, level Level, raw []byte) []Violation {
 	if doc.Offsets == nil {
 		return nil
 	}
@@ -156,14 +156,14 @@ func checkIndirectObjectSyntax(doc core.View, level Level, raw []byte) []Validat
 	}
 	sortInt64(offs)
 
-	var errs []ValidationError
+	var errs []Violation
 	seen := map[string]bool{}
 	add := func(msg string, obj int) {
 		if seen[msg] {
 			return
 		}
 		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	for i, off := range offs {
@@ -316,7 +316,7 @@ func min64(a, b int64) int64 {
 // Separation/DeviceN colorant names at every level, plus font names,
 // structure type names and RoleMap names at PDF/A-4 (PDF 2.0, where names
 // are defined as UTF-8, ISO 32000-2 7.3.5).
-func checkNameUTF8(doc core.View, level Level) []ValidationError {
+func checkNameUTF8(doc core.View, level Level) []Violation {
 	if level == PDFA1b {
 		return nil // PDF/A-1 predates the UTF-8 name requirement
 	}
@@ -328,7 +328,7 @@ func checkNameUTF8(doc core.View, level Level) []ValidationError {
 	// that produced it — the objects are reached in doc.Objects map order.
 	var found exampleFindings
 	add := func(msg string, obj int) {
-		found.add(ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	for num, iobj := range doc.Objects {
@@ -429,16 +429,16 @@ func utf8Valid(b []byte) bool { return utf8.Valid(b) }
 // cross-reference table: the xref keyword followed by a single EOL, each
 // subsection header "start count" separated by exactly one space, and each
 // entry line in the fixed 20-byte form.
-func checkXRefTableFormat(doc core.View, level Level, raw []byte) []ValidationError {
+func checkXRefTableFormat(doc core.View, level Level, raw []byte) []Violation {
 	rule := "6.1.4"
-	var errs []ValidationError
+	var errs []Violation
 	seen := map[string]bool{}
 	add := func(msg string) {
 		if seen[msg] {
 			return
 		}
 		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg})
+		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg})
 	}
 
 	// Each delimited "xref" keyword (not "startxref", whose preceding byte
@@ -589,7 +589,7 @@ func consumeSingleEOL(raw []byte, p int) int {
 // (PDF/A forbids the implicit trailing-zero padding of an odd-length hex
 // string). Object bodies are tokenised up to the stream keyword so binary
 // stream data is never misread as a hex string.
-func checkHexStringFormat(doc core.View, level Level, raw []byte) []ValidationError {
+func checkHexStringFormat(doc core.View, level Level, raw []byte) []Violation {
 	if doc.Offsets == nil {
 		return nil
 	}
@@ -597,14 +597,14 @@ func checkHexStringFormat(doc core.View, level Level, raw []byte) []ValidationEr
 	if level == PDFA4 {
 		rule = "6.1.5"
 	}
-	var errs []ValidationError
+	var errs []Violation
 	seen := map[string]bool{}
 	add := func(msg string, obj int) {
 		if seen[msg] {
 			return
 		}
 		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	var offs []int64
@@ -877,7 +877,7 @@ func indexToken(b []byte, kw string) int {
 // checkStreamKeywordFormat verifies that the stream keyword is followed by
 // CRLF or a single LF (not a bare CR, and with no extra white space before
 // the EOL), and that endstream is preceded by an EOL marker.
-func checkStreamKeywordFormat(doc core.View, level Level, raw []byte) []ValidationError {
+func checkStreamKeywordFormat(doc core.View, level Level, raw []byte) []Violation {
 	if doc.Offsets == nil {
 		return nil
 	}
@@ -887,14 +887,14 @@ func checkStreamKeywordFormat(doc core.View, level Level, raw []byte) []Validati
 	} else if level == PDFA4 {
 		rule = "6.1.6"
 	}
-	var errs []ValidationError
+	var errs []Violation
 	seen := map[string]bool{}
 	add := func(msg string, obj int) {
 		if seen[msg] {
 			return
 		}
 		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	var offs []int64
@@ -974,7 +974,7 @@ var inlineLZWNames = map[string]bool{"LZW": true, "LZWDecode": true}
 // checkInlineImageIntent verifies that an inline image /Intent entry, when
 // present, names a standard rendering intent (ISO 19005-2 6.2.6, -4 6.2.9;
 // ISO 32000-1 8.6.5.8).
-func checkInlineImageIntent(doc core.View, level Level) []ValidationError {
+func checkInlineImageIntent(doc core.View, level Level) []Violation {
 	rule := "6.2.6"
 	if level == PDFA4 {
 		rule = "6.2.9"
@@ -989,7 +989,7 @@ func checkInlineImageIntent(doc core.View, level Level) []ValidationError {
 			if standardRenderingIntents[intent] {
 				continue
 			}
-			found.add(ValidationError{Rule: rule, Level: level,
+			found.add(Violation{Rule: rule, Level: level,
 				Message: "inline image /Intent uses a non-standard rendering intent", Object: num})
 		}
 	}
@@ -1063,7 +1063,7 @@ func inlineImageDictValue(data []byte, pos *int, key string) string {
 
 // checkInlineImageFilters verifies that every inline image's /F (Filter)
 // entry uses only permitted filters and never LZW.
-func checkInlineImageFilters(doc core.View, level Level) []ValidationError {
+func checkInlineImageFilters(doc core.View, level Level) []Violation {
 	rule := "6.1.10"
 	if level == PDFA4 {
 		rule = "6.1.9"
@@ -1074,7 +1074,7 @@ func checkInlineImageFilters(doc core.View, level Level) []ValidationError {
 	// that produced it — collectContentStreamData returns a map.
 	var found exampleFindings
 	add := func(msg string, obj int) {
-		found.add(ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	for num, data := range collectContentStreamData(doc) {
@@ -1182,7 +1182,7 @@ func parseInlineImageFilter(data []byte, pos *int) []string {
 // 6.1.7, -2/-3 6.1.7, -4 6.1.6; ISO 32000-1 7.3.8.2). The parser recovers a
 // stream with an incorrect Length by locating endstream, so object.Stream.Data holds
 // the true byte count and a divergence from the declared value is a mismatch.
-func checkStreamLength(doc core.View, level Level) []ValidationError {
+func checkStreamLength(doc core.View, level Level) []Violation {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
 	switch level {
 	case PDFA4:
@@ -1190,7 +1190,7 @@ func checkStreamLength(doc core.View, level Level) []ValidationError {
 	case PDFA2b, PDFA3b:
 		rule = "6.1.7.1"
 	}
-	var errs []ValidationError
+	var errs []Violation
 	for num, iobj := range doc.Objects {
 		s, ok := iobj.Value.(*object.Stream)
 		if !ok {
@@ -1201,7 +1201,7 @@ func checkStreamLength(doc core.View, level Level) []ValidationError {
 			continue // absent or unresolvable Length is a separate rule
 		}
 		if int(length) != len(s.Data) {
-			errs = append(errs, ValidationError{Rule: rule, Level: level,
+			errs = append(errs, Violation{Rule: rule, Level: level,
 				Message: "the value of the Length key does not match the actual number of bytes in the stream",
 				Object:  num})
 		}
@@ -1212,14 +1212,14 @@ func checkStreamLength(doc core.View, level Level) []ValidationError {
 // checkObjectStreamDecodable flags an object stream whose compressed contents
 // could not be decoded (ISO 32000-1 7.5.7, 7.3.8): such a stream is malformed,
 // and the objects it should provide are unavailable.
-func checkObjectStreamDecodable(doc core.View, level Level) []ValidationError {
+func checkObjectStreamDecodable(doc core.View, level Level) []Violation {
 	rule := "6.1.7"
 	if level == PDFA4 {
 		rule = "6.1.6"
 	}
-	var errs []ValidationError
+	var errs []Violation
 	for _, num := range doc.BrokenObjStms {
-		errs = append(errs, ValidationError{Rule: rule, Level: level,
+		errs = append(errs, Violation{Rule: rule, Level: level,
 			Message: "an object stream could not be decoded (malformed stream data)", Object: num})
 	}
 	return errs
@@ -1231,13 +1231,13 @@ func checkObjectStreamDecodable(doc core.View, level Level) []ValidationError {
 // the traditional trailers a linearized PDF/A-1 file uses. Gated on
 // /Linearized: a non-linearized incremental-update file legitimately carries
 // several trailers, and comparing them there produced a false positive.
-func checkLinearizedTrailerID(raw []byte, level Level) []ValidationError {
+func checkLinearizedTrailerID(raw []byte, level Level) []Violation {
 	if !bytes.Contains(raw, []byte("/Linearized")) {
 		return nil
 	}
 	ids := collectTrailerIDFirstElements(raw)
 	if len(ids) >= 2 && !bytes.Equal(ids[0], ids[len(ids)-1]) {
-		return []ValidationError{{
+		return []Violation{{
 			Rule:    "6.1.3",
 			Level:   level,
 			Message: "linearized file: the file identifier /ID in the first-page trailer and the last trailer differ",
@@ -1291,7 +1291,7 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 //     length is therefore valid within [raw-eol, raw-1] when an EOL is present
 //     (raw exactly when none is), and only a length outside that range — such as
 //     one that wrongly includes the whole EOL — is a violation.
-func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []ValidationError {
+func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []Violation {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
 	switch level {
 	case PDFA4:
@@ -1307,7 +1307,7 @@ func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []Validation
 	streamKW := allDelimitedKeywords(raw, "stream", true)
 	endobjKW := allDelimitedKeywords(raw, "endobj", true)
 
-	var errs []ValidationError
+	var errs []Violation
 	for num, off := range doc.Offsets {
 		iobj := doc.Objects[num]
 		if iobj == nil {
@@ -1331,7 +1331,7 @@ func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []Validation
 		}
 		lo := rawLen - eol
 		if int64(declared) < lo || int64(declared) > hi {
-			errs = append(errs, ValidationError{
+			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
 				Message: "the value of the Length key does not match the actual number of bytes in the stream",

@@ -14,8 +14,8 @@ import (
 // own Trailer is an object.Dictionary and its Objects a map of
 // *object.IndirectObject — so requiring a second import for the one group every
 // caller touches buys nothing. Nothing else is re-exported: a PDF/A finding is
-// pdfa.ValidationError, a conformance level is pdfa.PDFA2b, and each is named
-// from the package that owns it.
+// pdfa.Violation, a conformance level is pdfa.PDFA2b, and each is named from
+// the package that owns it.
 //
 // An alias is the same type, not a wrapper: pdf0.Dictionary and
 // object.Dictionary are interchangeable in every position, and every method is

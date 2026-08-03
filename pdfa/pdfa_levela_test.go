@@ -42,7 +42,7 @@ func levelADoc(marked, structTree bool, lang, conformance string) core.View {
 	return d
 }
 
-func hasMsg(errs []ValidationError, substr string) bool {
+func hasMsg(errs []Violation, substr string) bool {
 	for _, e := range errs {
 		if strings.Contains(e.Message, substr) {
 			return true

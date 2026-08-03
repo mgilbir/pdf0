@@ -283,7 +283,7 @@ func TestCIDSystemInfoSupplementIsPart2AndLater(t *testing.T) {
 	}
 }
 
-func hasRuleErr(errs []ValidationError, rule string) bool {
+func hasRuleErr(errs []Violation, rule string) bool {
 	for _, e := range errs {
 		if e.Rule == rule {
 			return true

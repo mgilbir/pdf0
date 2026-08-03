@@ -43,7 +43,7 @@ const pdfaXMP = `<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 // the PDMetadata Filter rule only in its PDF/A-1 profile.
 func TestMetadataFilterOnlyForbiddenInPDFA1(t *testing.T) {
 	doc := docWithMetadata(t, pdfaXMP, true)
-	has := func(errs []ValidationError, substr string) bool {
+	has := func(errs []Violation, substr string) bool {
 		for _, e := range errs {
 			if strings.Contains(e.Message, substr) {
 				return true

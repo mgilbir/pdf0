@@ -41,7 +41,7 @@ func NewPDFADocumentWithInfo(level pdfa.Level, title, author string) *Document {
 // covers a subset of ISO 19005 (see the package README). Because it takes no
 // raw bytes, it also skips every byte-level file-structure rule — use
 // ValidatePDFABytes when you have the file bytes and want those too.
-func ValidatePDFA(doc *Document, level pdfa.Level) []pdfa.ValidationError {
+func ValidatePDFA(doc *Document, level pdfa.Level) []pdfa.Violation {
 	return ValidatePDFABytes(doc, level, nil)
 }
 
@@ -54,7 +54,7 @@ func ValidatePDFA(doc *Document, level pdfa.Level) []pdfa.ValidationError {
 // reports as a checker finding. A cancelled run therefore never looks like a
 // clean bill of health: an empty result is impossible, and the caller can tell
 // "no violations found" apart from "pdf0 did not get to look". See cancel.go.
-func ValidatePDFAContext(ctx context.Context, doc *Document, level pdfa.Level) []pdfa.ValidationError {
+func ValidatePDFAContext(ctx context.Context, doc *Document, level pdfa.Level) []pdfa.Violation {
 	return ValidatePDFABytesContext(ctx, doc, level, nil)
 }
 
@@ -63,16 +63,16 @@ func ValidatePDFAContext(ctx context.Context, doc *Document, level pdfa.Level) [
 // byte-level file-structure rules run too (e.g. no data after %%EOF). An empty
 // result means no implemented check fired, not a guarantee of full conformance
 // (the validator covers a subset of ISO 19005).
-func ValidatePDFABytes(doc *Document, level pdfa.Level, rawData []byte) []pdfa.ValidationError {
+func ValidatePDFABytes(doc *Document, level pdfa.Level, rawData []byte) []pdfa.Violation {
 	return validatePDFABytes(core.Canceler{}, doc, level, rawData)
 }
 
 // ValidatePDFABytesContext is ValidatePDFABytes with cancellation; see
 // ValidatePDFAContext for how a cancelled run reports itself.
-func ValidatePDFABytesContext(ctx context.Context, doc *Document, level pdfa.Level, rawData []byte) []pdfa.ValidationError {
+func ValidatePDFABytesContext(ctx context.Context, doc *Document, level pdfa.Level, rawData []byte) []pdfa.Violation {
 	return validatePDFABytes(core.NewCanceler(ctx), doc, level, rawData)
 }
-func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, rawData []byte) []pdfa.ValidationError {
+func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, rawData []byte) []pdfa.Violation {
 	// Validate against a shallow copy of the Document so the per-run cache is
 	// installed on the copy, never on the caller's. The copy shares the
 	// (read-only during validation) Objects/Trailer/Offsets, so this is cheap,
@@ -94,7 +94,7 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, ra
 	// read) is reported under the "limit" rule: the checks that depended on the
 	// truncated result declined to assert, so the result is "unknown", not
 	// "conformant". Read-time trips live on the Document, so this is here.
-	errs = append(errs, limitValidationErrors(&runDoc, level)...)
+	errs = append(errs, limitPDFAViolations(&runDoc, level)...)
 	finding.Sort(errs)
 	return errs
 }

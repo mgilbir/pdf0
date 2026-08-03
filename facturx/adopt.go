@@ -34,7 +34,7 @@ import (
 //
 // The A-vs-B conformance-letter finding is dropped: pdf0 validates at level B,
 // and PDF/A-3 also permits level A, which only adds tagging.
-func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs []pdfa.ValidationError) {
+func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs []pdfa.Violation) {
 	for _, e := range errs {
 		switch {
 		case e.Rule == finding.InternalRule || e.Rule == finding.LimitRule:

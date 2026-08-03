@@ -28,7 +28,7 @@ pdf0 was one flat package. It is now a core plus one package per subsystem, and
 the split follows two rules.
 
 **Each type is declared in exactly one place, and named from there.** A
-dictionary is `object.Dictionary`, a PDF/A finding is `pdfa.ValidationError`, a
+dictionary is `object.Dictionary`, a PDF/A finding is `pdfa.Violation`, a
 conformance level is `pdfa.PDFA2b`. The root package holds the entry points —
 `Read`, `Document` and its methods, one validator function per standard — and
 re-exports nothing. A caller that builds an object graph or reads a finding

@@ -16,13 +16,13 @@ import (
 // which pdf0 already validates.
 
 // ValidateLevelAView validates a Level A conformance level (1a/2a/3a).
-func ValidateLevelAView(doc core.View, level Level, rawData []byte) []ValidationError {
+func ValidateLevelAView(doc core.View, level Level, rawData []byte) []Violation {
 	// All Level B requirements apply, so run the Level B pipeline and adopt its
 	// findings at this level. The Level B pipeline requires pdfaid:conformance
 	// "B"; at Level A it must be "A", so that one Level B finding is dropped and
 	// re-checked below.
 	base := ValidateView(doc, level.BaseB(), rawData)
-	errs := make([]ValidationError, 0, len(base))
+	errs := make([]Violation, 0, len(base))
 	for _, e := range base {
 		if strings.Contains(e.Message, "pdfaid:conformance must be B") {
 			continue
@@ -36,7 +36,7 @@ func ValidateLevelAView(doc core.View, level Level, rawData []byte) []Validation
 	// crashing the caller — the asymmetry runCheck exists to prevent (audit C27).
 	// A cancelled run abandons the ones it has not started; the finding that
 	// says so is already in base, carried over by the loop above.
-	for _, check := range []func(core.View, Level) []ValidationError{
+	for _, check := range []func(core.View, Level) []Violation{
 		checkLevelAConformance, checkLevelAStructure, checkLevelALanguage,
 	} {
 		if doc.Cancel.Stopped() {
@@ -79,20 +79,20 @@ func levelAClause(concept string, level Level) string {
 
 // checkLevelAConformance verifies the XMP declares Level A conformance
 // (pdfaid:conformance = "A").
-func checkLevelAConformance(doc core.View, level Level) []ValidationError {
+func checkLevelAConformance(doc core.View, level Level) []Violation {
 	xmp := doc.DocumentXMP()
 	if xmp == "" {
 		return nil // a missing metadata stream is reported by the Level B checks
 	}
 	if !xmpHasKey(xmp, "pdfaid:conformance") {
-		return []ValidationError{{
+		return []Violation{{
 			Rule:    levelAClause("conformance", level),
 			Level:   level,
 			Message: "metadata must declare pdfaid:conformance A for Level A",
 		}}
 	}
 	if conf := core.ExtractXMPValue(xmp, "pdfaid:conformance"); conf != "A" {
-		return []ValidationError{{
+		return []Violation{{
 			Rule:    levelAClause("conformance", level),
 			Level:   level,
 			Message: fmt.Sprintf("pdfaid:conformance must be A, got %q", conf),
@@ -104,22 +104,22 @@ func checkLevelAConformance(doc core.View, level Level) []ValidationError {
 // checkLevelAStructure verifies the file is a Tagged PDF with a logical
 // structure tree (ISO 19005-1 6.8.2 / -2/-3 6.7.2). It mirrors the PDF/UA
 // tagged-PDF requirement.
-func checkLevelAStructure(doc core.View, level Level) []ValidationError {
+func checkLevelAStructure(doc core.View, level Level) []Violation {
 	cat := doc.Catalog()
 	if cat == nil {
 		return nil // reported by the Level B checks
 	}
-	var errs []ValidationError
+	var errs []Violation
 	mark := doc.ResolveDict(cat.Get("MarkInfo"))
 	if mark == nil || !doc.IsTrue(mark.Get("Marked")) {
-		errs = append(errs, ValidationError{
+		errs = append(errs, Violation{
 			Rule:    levelAClause("structure", level),
 			Level:   level,
 			Message: "a Level A file shall be a Tagged PDF (catalog /MarkInfo << /Marked true >>)",
 		})
 	}
 	if cat.Get("StructTreeRoot") == nil {
-		errs = append(errs, ValidationError{
+		errs = append(errs, Violation{
 			Rule:    levelAClause("structure", level),
 			Level:   level,
 			Message: "a Level A file shall contain a logical structure tree (catalog /StructTreeRoot)",
@@ -135,7 +135,7 @@ func checkLevelAStructure(doc core.View, level Level) []ValidationError {
 // flagged — matching the Level B leniency (a valid /Lang is not otherwise
 // mandatory in Level B, so requiring one at Level A must not false-positive on
 // files that carry language on structure elements instead).
-func checkLevelALanguage(doc core.View, level Level) []ValidationError {
+func checkLevelALanguage(doc core.View, level Level) []Violation {
 	cat := doc.Catalog()
 	if cat == nil {
 		return nil
@@ -145,7 +145,7 @@ func checkLevelALanguage(doc core.View, level Level) []ValidationError {
 		// PDFDocEncoded, so decode it before checking the language-tag syntax.
 		lang := core.DecodePDFTextString(s.Value)
 		if !core.ValidBCP47(lang) {
-			return []ValidationError{{
+			return []Violation{{
 				Rule:    levelAClause("language", level),
 				Level:   level,
 				Message: fmt.Sprintf("catalog /Lang %q is not a valid language identifier", lang),

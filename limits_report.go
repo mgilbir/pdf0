@@ -126,11 +126,11 @@ func runLimitTrips(doc *Document) []core.Trip {
 	return out
 }
 
-// limitValidationErrors renders this run's trips as PDF/A findings.
-func limitValidationErrors(doc *Document, level pdfa.Level) []pdfa.ValidationError {
-	var out []pdfa.ValidationError
+// limitPDFAViolations renders this run's trips as PDF/A findings.
+func limitPDFAViolations(doc *Document, level pdfa.Level) []pdfa.Violation {
+	var out []pdfa.Violation
 	for _, t := range runLimitTrips(doc) {
-		out = append(out, pdfa.ValidationError{Rule: finding.LimitRule, Level: level, Message: t.Message(), Object: t.Obj})
+		out = append(out, pdfa.Violation{Rule: finding.LimitRule, Level: level, Message: t.Message(), Object: t.Obj})
 	}
 	return out
 }

@@ -21,7 +21,7 @@ func facturxRun(ctx context.Context, doc *Document, rawData []byte) core.View {
 	runDoc := *doc
 	runDoc.valCache = newValidationCache(core.NewCanceler(ctx))
 	v := runDoc.view()
-	facturx.SetPDFAChecker(v, func(core.View) []pdfa.ValidationError {
+	facturx.SetPDFAChecker(v, func(core.View) []pdfa.Violation {
 		return ValidatePDFABytesContext(ctx, doc, pdfa.PDFA3b, rawData)
 	})
 	return v

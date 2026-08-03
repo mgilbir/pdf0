@@ -25,7 +25,7 @@ import (
 
 // --- helpers ---
 
-func errMessages(errs []pdfa.ValidationError) []string {
+func errMessages(errs []pdfa.Violation) []string {
 	out := make([]string, len(errs))
 	for i, e := range errs {
 		out[i] = e.Message
@@ -186,7 +186,7 @@ func TestObjStmBudgetTripIsReported(t *testing.T) {
 	doc.noteReadLimit(limitObjStmTotal, "object stream 7 was not unpacked", 7)
 
 	errs := ValidatePDFA(doc, pdfa.PDFA2b)
-	var trip *pdfa.ValidationError
+	var trip *pdfa.Violation
 	for i := range errs {
 		if errs[i].Rule == finding.LimitRule {
 			trip = &errs[i]

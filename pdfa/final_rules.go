@@ -51,7 +51,7 @@ func embeddedChecker(v core.View) EmbeddedChecker {
 	return func(core.Canceler, []byte, core.Limits) (bool, bool) { return false, false }
 }
 
-func checkProhibitedCatalogEntries(doc core.View, level Level) []ValidationError {
+func checkProhibitedCatalogEntries(doc core.View, level Level) []Violation {
 	if level == PDFA1b {
 		return nil // 6.11 / 6.12 are clauses of ISO 19005 parts 2 and later
 	}
@@ -59,23 +59,23 @@ func checkProhibitedCatalogEntries(doc core.View, level Level) []ValidationError
 	if catalog == nil {
 		return nil
 	}
-	var errs []ValidationError
+	var errs []Violation
 	// 6.12 (embedded-file requirements) applies only to PDF/A-4.
 	if level == PDFA4 && catalog.Get("Requirements") != nil {
-		errs = append(errs, ValidationError{Rule: "6.12", Level: level,
+		errs = append(errs, Violation{Rule: "6.12", Level: level,
 			Message: "document catalog must not contain a /Requirements entry"})
 	}
 	// 6.11 forbids alternate presentations at PDF/A-2, -3, and -4 (ISO 19005-2/-3
 	// 6.11, 19005-4 6.11), not only A-4.
 	if names := doc.ResolveDict(catalog.Get("Names")); names != nil {
 		if names.Get("AlternatePresentations") != nil {
-			errs = append(errs, ValidationError{Rule: "6.11", Level: level,
+			errs = append(errs, Violation{Rule: "6.11", Level: level,
 				Message: "document name dictionary must not contain /AlternatePresentations"})
 		}
 	}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		if page.Dict.Get("PresSteps") != nil {
-			errs = append(errs, ValidationError{Rule: "6.11", Level: level,
+			errs = append(errs, Violation{Rule: "6.11", Level: level,
 				Message: "page dictionary must not contain /PresSteps (presentation steps)",
 				Object:  page.ObjNum})
 		}
@@ -86,7 +86,7 @@ func checkProhibitedCatalogEntries(doc core.View, level Level) []ValidationError
 // checkImageIntentAndInterpolate flags Image XObjects and inline images that
 // carry Interpolate/true or a non-standard rendering intent (ISO 19005-2
 // 6.2.4/6.2.6, -4 6.2.7/6.2.9; ISO 32000-1 8.9.5.2, 8.9.5.4).
-func checkImageIntentAndInterpolate(doc core.View, level Level) []ValidationError {
+func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
 	interpRule := "6.2.7"
 	intentRule := "6.2.9"
 	switch level {
@@ -99,7 +99,7 @@ func checkImageIntentAndInterpolate(doc core.View, level Level) []ValidationErro
 	// number that produced it — both loops below iterate maps.
 	var found exampleFindings
 	add := func(rule, msg string, obj int) {
-		found.add(ValidationError{Rule: rule, Level: level, Message: msg, Object: obj})
+		found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
 	// Image XObject /Intent (Interpolate on image XObjects is already
@@ -135,7 +135,7 @@ func checkImageIntentAndInterpolate(doc core.View, level Level) []ValidationErro
 // checkFileTrailerID validates the file identifier: when present, /ID shall
 // be an array of exactly two non-empty byte strings (ISO 32000-1 14.4,
 // ISO 19005-2 6.1.3).
-func checkFileTrailerID(doc core.View, level Level) []ValidationError {
+func checkFileTrailerID(doc core.View, level Level) []Violation {
 	rule := "6.1.3"
 	idObj := doc.Trailer.Get("ID")
 	if idObj == nil {
@@ -152,7 +152,7 @@ func checkFileTrailerID(doc core.View, level Level) []ValidationError {
 		}
 	}
 	if !valid {
-		return []ValidationError{{Rule: rule, Level: level,
+		return []Violation{{Rule: rule, Level: level,
 			Message: "trailer /ID must be an array of two non-empty file-identifier strings"}}
 	}
 	return nil
@@ -253,7 +253,7 @@ var forbiddenAAEvents = map[object.Name]bool{
 
 // checkA4TriggerEvents flags AA dictionaries — on the catalog, pages, or
 // annotations — that define a forbidden trigger event.
-func checkA4TriggerEvents(doc core.View, level Level) []ValidationError {
+func checkA4TriggerEvents(doc core.View, level Level) []Violation {
 	if level != PDFA4 {
 		return nil
 	}
@@ -261,14 +261,14 @@ func checkA4TriggerEvents(doc core.View, level Level) []ValidationError {
 	if catalog == nil {
 		return nil
 	}
-	var errs []ValidationError
+	var errs []Violation
 	report := func(aa *object.Dictionary, num int) {
 		if aa == nil {
 			return
 		}
 		for _, k := range aa.Keys {
 			if forbiddenAAEvents[k] {
-				errs = append(errs, ValidationError{Rule: "6.6.3", Level: level,
+				errs = append(errs, Violation{Rule: "6.6.3", Level: level,
 					Message: "an /AA dictionary must not contain the forbidden trigger event /" + string(k),
 					Object:  num})
 			}
@@ -310,7 +310,7 @@ func stringHasPUA(b []byte) bool {
 // checkActualTextPUA enforces ISO 19005-4 6.2.10.8: an ActualText entry — in
 // a structure element dictionary or a marked-content property list — must not
 // contain Unicode Private Use Area values, which have no defined meaning.
-func checkActualTextPUA(doc core.View, level Level) []ValidationError {
+func checkActualTextPUA(doc core.View, level Level) []Violation {
 	if level != PDFA4 {
 		return nil
 	}
@@ -318,7 +318,7 @@ func checkActualTextPUA(doc core.View, level Level) []ValidationError {
 	// that produced it — both loops below iterate maps.
 	var found exampleFindings
 	add := func(msg string, obj int) {
-		found.add(ValidationError{Rule: "6.2.10.8", Level: level, Message: msg, Object: obj})
+		found.add(Violation{Rule: "6.2.10.8", Level: level, Message: msg, Object: obj})
 	}
 
 	// Structure element (and any) dictionaries carrying /ActualText.
@@ -390,18 +390,18 @@ var halftoneReserved = map[object.Name]bool{"Type": true, "HalftoneType": true, 
 // (multi-component) halftone dictionaries (ISO 19005-2/-4 6.2.5): a component
 // for a process (primary) colorant must not contain a TransferFunction, and
 // a component for a non-primary colorant must contain one.
-func checkType5Halftones(doc core.View, level Level) []ValidationError {
+func checkType5Halftones(doc core.View, level Level) []Violation {
 	if level == PDFA1b {
 		return nil // 1b forbids transparency/halftone features via other rules
 	}
-	var errs []ValidationError
+	var errs []Violation
 	seen := map[string]bool{}
 	add := func(msg string, obj int) {
 		if seen[msg] {
 			return
 		}
 		seen[msg] = true
-		errs = append(errs, ValidationError{Rule: "6.2.5", Level: level, Message: msg, Object: obj})
+		errs = append(errs, Violation{Rule: "6.2.5", Level: level, Message: msg, Object: obj})
 	}
 
 	// Only halftones actually applied through a used ExtGState count (the
@@ -494,7 +494,7 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 // subtype is application/pdf shall itself be a valid PDF/A document. Each
 // such file is decoded and validated one level deep (a depth guard prevents
 // unbounded recursion).
-func checkEmbeddedPDFA(doc core.View, level Level) []ValidationError {
+func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 	if level != PDFA4 || doc.EmbeddedDepth > 0 {
 		return nil
 	}
@@ -504,7 +504,7 @@ func checkEmbeddedPDFA(doc core.View, level Level) []ValidationError {
 	if c := pdfaConformanceFlag(doc); c == "F" || c == "E" {
 		return nil
 	}
-	var errs []ValidationError
+	var errs []Violation
 	for num, iobj := range doc.Objects {
 		// One iteration can run a whole nested validation, so this is a
 		// cancellation boundary in its own right (cancel.go).
@@ -525,7 +525,7 @@ func checkEmbeddedPDFA(doc core.View, level Level) []ValidationError {
 				continue
 			}
 			if !isPDFMIME(stream.Dict.Get("Subtype")) {
-				errs = append(errs, ValidationError{Rule: "6.9", Level: level,
+				errs = append(errs, Violation{Rule: "6.9", Level: level,
 					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
 				continue
 			}
@@ -545,7 +545,7 @@ func checkEmbeddedPDFA(doc core.View, level Level) []ValidationError {
 				continue
 			}
 			if !compliant {
-				errs = append(errs, ValidationError{Rule: "6.9", Level: level,
+				errs = append(errs, Violation{Rule: "6.9", Level: level,
 					Message: "an embedded PDF file is not compliant with PDF/A", Object: num})
 			}
 		}
@@ -604,12 +604,12 @@ func ExtractXMPAttr(xmp, key string) string {
 // inherited from a /Pages tree node (ISO 19005-2 6.2.2, -4 6.2.2). Resource
 // inheritance in general remains permitted; only a rendered XObject that is
 // resolved solely through inheritance is rejected.
-func checkInheritedPageXObject(doc core.View, level Level) []ValidationError {
+func checkInheritedPageXObject(doc core.View, level Level) []Violation {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
-	var errs []ValidationError
+	var errs []Violation
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
 		if data == nil {
@@ -628,7 +628,7 @@ func checkInheritedPageXObject(doc core.View, level Level) []ValidationError {
 			if ownXObj == nil || ownXObj.Get(object.Name(name)) == nil {
 				if !reported {
 					reported = true
-					errs = append(errs, ValidationError{Rule: "6.2.2", Level: level,
+					errs = append(errs, Violation{Rule: "6.2.2", Level: level,
 						Message: "page content draws an XObject that is inherited from a Pages node rather than present in the page's own resource dictionary",
 						Object:  page.ObjNum})
 				}

@@ -28,7 +28,7 @@ func TestSelfReferentialDeviceNTerminates(t *testing.T) {
 		99: {Number: 99, Value: object.Null{}},
 	}})
 	tt := map[object.Name]sepColorantSeen{}
-	var errs []ValidationError
+	var errs []Violation
 	// Must return; if the cycle guard is missing this overflows the stack.
 	collectSeparationConsistency(doc, object.IndirectRef{Number: 10}, tt, 10, PDFA2b, &errs)
 }

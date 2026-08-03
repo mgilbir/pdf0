@@ -7,9 +7,9 @@ import (
 
 // ISO 32000-1 Tables 63-65: CIE colour space parameter validation.
 func TestCIEColorSpaceParams(t *testing.T) {
-	check := func(family string, params *object.Dictionary) []ValidationError {
+	check := func(family string, params *object.Dictionary) []Violation {
 		doc := mkPDFAView(PDFA2b)
-		var errs []ValidationError
+		var errs []Violation
 		checkColorSpaceValue(doc, object.Array{object.Name(family), params}, 0, PDFA2b, &errs)
 		return errs
 	}
@@ -48,7 +48,7 @@ func TestCIEColorSpaceParams(t *testing.T) {
 // DeviceN with spot colorants requires a Colorants dictionary at 2b+.
 func TestDeviceNSpotNeedsColorants(t *testing.T) {
 	doc := mkPDFAView(PDFA2b)
-	var errs []ValidationError
+	var errs []Violation
 	deviceN := object.Array{object.Name("DeviceN"), object.Array{object.Name("Spot1")}, object.Array{object.Name("ICCBased"), object.IndirectRef{Number: 5}}, object.IndirectRef{Number: 5}}
 	checkColorSpaceValue(doc, deviceN, 0, PDFA2b, &errs)
 	found := false

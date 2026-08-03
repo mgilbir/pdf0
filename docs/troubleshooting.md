@@ -96,7 +96,7 @@ object number 0 is reserved and cannot be written
 
 ## Validation reported violations
 
-A `pdfa.ValidationError` prints as `[LEVEL CLAUSE] object N: message`, e.g.
+A `pdfa.Violation` prints as `[LEVEL CLAUSE] object N: message`, e.g.
 
 ```
 [PDF/A-4 6.2.10] object 12: font ... must be embedded

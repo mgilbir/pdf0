@@ -4,7 +4,7 @@
 // rather than the document.
 //
 // It deliberately does not define any finding *type*. Each standard keeps its
-// own — ValidationError, pdfua.Violation, pdfx.Violation and the rest — with the
+// own — pdfa.Violation, pdfua.Violation, pdfx.Violation and the rest — with the
 // fields and the Error formatting of that standard, because a PDF/A clause and
 // a Matterhorn checkpoint are not the same thing and flattening them into one
 // struct would lose which is which.

@@ -728,7 +728,7 @@ func simpleDeclaredSyntax(lower string) (xmpSyntax, bool) {
 
 // checkXMPProperties validates every XMP property against the predefined
 // schema tables (or the packet's extension schema declarations).
-func checkXMPProperties(doc core.View, level Level) []ValidationError {
+func checkXMPProperties(doc core.View, level Level) []Violation {
 	// PDF/A-4 (ISO 19005-4) does NOT apply the strict per-property value-form
 	// validation that 1b/2b/3b do. This is deliberate, not a TODO: the veraPDF
 	// corpus proves A-4 tolerates non-conforming XMP property values — e.g.
@@ -764,7 +764,7 @@ func checkXMPProperties(doc core.View, level Level) []ValidationError {
 	schemas := predefinedXMPSchemas(level)
 	declared := extensionDeclared(props)
 
-	var errs []ValidationError
+	var errs []Violation
 	// The extension schema container itself is constrained at every level:
 	// canonical prefixes and required description fields (ISO 19005-1 6.7.8,
 	// -2/-3 6.6.2.3.3).
@@ -781,7 +781,7 @@ func checkXMPProperties(doc core.View, level Level) []ValidationError {
 		if table, isPredefined := schemas[p.NS]; isPredefined {
 			pt, known := table[p.Name]
 			if !known {
-				errs = append(errs, ValidationError{
+				errs = append(errs, Violation{
 					Rule:    rule,
 					Level:   level,
 					Message: fmt.Sprintf("XMP property %s is not defined in predefined schema %s", p.Name, p.NS),
@@ -795,7 +795,7 @@ func checkXMPProperties(doc core.View, level Level) []ValidationError {
 		if decl, ok := declared[p.NS]; ok {
 			vt, propDeclared := decl[p.Name]
 			if !propDeclared {
-				errs = append(errs, ValidationError{
+				errs = append(errs, Violation{
 					Rule:    rule,
 					Level:   level,
 					Message: fmt.Sprintf("XMP property %s in schema %s is not declared by its extension schema", p.Name, p.NS),
@@ -810,7 +810,7 @@ func checkXMPProperties(doc core.View, level Level) []ValidationError {
 				declaredFields := typeFields[vt]
 				for _, f := range p.Value.Fields {
 					if !declaredFields[f.Name] {
-						errs = append(errs, ValidationError{
+						errs = append(errs, Violation{
 							Rule:    rule,
 							Level:   level,
 							Message: fmt.Sprintf("XMP property %s: structure field %s is not declared by custom value type %s", p.Name, f.Name, vt),
@@ -821,7 +821,7 @@ func checkXMPProperties(doc core.View, level Level) []ValidationError {
 			continue
 		}
 
-		errs = append(errs, ValidationError{
+		errs = append(errs, Violation{
 			Rule:    rule,
 			Level:   level,
 			Message: fmt.Sprintf("XMP property %s uses schema %s, which is neither predefined nor declared by an extension schema", p.Name, p.NS),
@@ -832,10 +832,10 @@ func checkXMPProperties(doc core.View, level Level) []ValidationError {
 
 // checkXMPValueForm verifies a property value has the expected structural
 // form and simple-value syntax.
-func checkXMPValueForm(p xmpProperty, pt xmpPropType, rule string, level Level) []ValidationError {
-	var errs []ValidationError
+func checkXMPValueForm(p xmpProperty, pt xmpPropType, rule string, level Level) []Violation {
+	var errs []Violation
 	bad := func(format string, args ...interface{}) {
-		errs = append(errs, ValidationError{
+		errs = append(errs, Violation{
 			Rule:    rule,
 			Level:   level,
 			Message: fmt.Sprintf("XMP property %s: ", p.Name) + fmt.Sprintf(format, args...),
@@ -912,10 +912,10 @@ var standardXMPValueTypes = map[string]bool{
 	"LayerGroup": true, "Frame": true, "CuePointParam": true,
 }
 
-func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, level Level) []ValidationError {
-	var errs []ValidationError
+func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, level Level) []Violation {
+	var errs []Violation
 	report := func(format string, args ...interface{}) {
-		errs = append(errs, ValidationError{
+		errs = append(errs, Violation{
 			Rule:    rule,
 			Level:   level,
 			Message: fmt.Sprintf(format, args...),
@@ -967,7 +967,7 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 			if f.NS == ns {
 				got[f.Name] = f.Value
 				if !allowed[f.Name] {
-					errs = append(errs, ValidationError{Rule: undefinedFieldsRule, Level: level,
+					errs = append(errs, Violation{Rule: undefinedFieldsRule, Level: level,
 						Message: fmt.Sprintf("extension schema %s contains undefined field %s", what, f.Name)})
 				}
 			}
@@ -1113,7 +1113,7 @@ func extensionTypeFields(props []xmpProperty) map[string]map[string]bool {
 // -4 6.7.2.1): the xpacket processing instruction must not carry a bytes or
 // encoding attribute, the packet must be well-formed XML, and (PDF/A-4) it
 // must be encoded as UTF-8.
-func checkXMPWellFormed(doc core.View, level Level) []ValidationError {
+func checkXMPWellFormed(doc core.View, level Level) []Violation {
 	// The rule numbers differ by part, but the requirements — no bytes/encoding
 	// attribute on the xpacket header, and a well-formed XMP packet — apply from
 	// PDF/A-1 onward (ISO 19005-1 6.7.5 / 6.7.9). PDF/A-1 was previously skipped
@@ -1138,20 +1138,20 @@ func checkXMPWellFormed(doc core.View, level Level) []ValidationError {
 		raw = stream.Data
 	}
 
-	var errs []ValidationError
+	var errs []Violation
 
 	// The xpacket header processing instruction.
 	if hdr := extractXPacketHeader(raw); hdr != "" {
 		if xpacketHasAttr(hdr, "bytes") {
-			errs = append(errs, ValidationError{Rule: attrRule, Level: level, Message: "the XMP packet header must not contain a bytes attribute"})
+			errs = append(errs, Violation{Rule: attrRule, Level: level, Message: "the XMP packet header must not contain a bytes attribute"})
 		}
 		if xpacketHasAttr(hdr, "encoding") {
-			errs = append(errs, ValidationError{Rule: attrRule, Level: level, Message: "the XMP packet header must not contain an encoding attribute"})
+			errs = append(errs, Violation{Rule: attrRule, Level: level, Message: "the XMP packet header must not contain an encoding attribute"})
 		}
 	}
 
 	if level == PDFA4 && !xmpIsUTF8(raw) {
-		errs = append(errs, ValidationError{Rule: attrRule, Level: level, Message: "the XMP packet is not encoded as UTF-8"})
+		errs = append(errs, Violation{Rule: attrRule, Level: level, Message: "the XMP packet is not encoded as UTF-8"})
 	}
 
 	xmp := core.DecodeXMPToUTF8(raw)
@@ -1162,14 +1162,14 @@ func checkXMPWellFormed(doc core.View, level Level) []ValidationError {
 		// packet that would make tree-building blow up (see xmpPropertyMaxBytes).
 		wellFormed, hasRDF := xmpWellFormed([]byte(xmp))
 		if !wellFormed {
-			errs = append(errs, ValidationError{Rule: wfRule, Level: level, Message: "the XMP packet is not well-formed XML"})
+			errs = append(errs, Violation{Rule: wfRule, Level: level, Message: "the XMP packet is not well-formed XML"})
 		} else if !hasRDF {
 			// The packet is well-formed XML but carries no properly namespaced
 			// rdf:RDF element — e.g. the RDF namespace prefix is undeclared.
 			// encoding/xml resolves a declared prefix to its URI, so an
 			// undeclared <RDF:RDF> yields the raw prefix "RDF" as the namespace
 			// rather than the RDF URI (Isartor 6.7.2-t02-fail-a).
-			errs = append(errs, ValidationError{Rule: wfRule, Level: level, Message: "the XMP packet has no properly namespaced rdf:RDF element"})
+			errs = append(errs, Violation{Rule: wfRule, Level: level, Message: "the XMP packet has no properly namespaced rdf:RDF element"})
 		}
 	}
 	return errs

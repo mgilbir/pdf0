@@ -10,7 +10,7 @@ import (
 // that verdict into their own report — but reaching it needs the reader (the
 // recursive embedded-file rule) and the read-time limit report, neither of
 // which this package depends on. The caller hands one in per run.
-type PDFAChecker func(doc core.View) []pdfa.ValidationError
+type PDFAChecker func(doc core.View) []pdfa.Violation
 
 type pdfaSlot struct{}
 
@@ -26,7 +26,7 @@ func SetPDFAChecker(v core.View, f PDFAChecker) {
 // pdfaFindings runs the run's checker. With none installed it reports nothing,
 // which leaves the container findings this package makes itself — the safe
 // direction: a missing base validation must not invent PDF/A non-conformances.
-func pdfaFindings(v core.View) []pdfa.ValidationError {
+func pdfaFindings(v core.View) []pdfa.Violation {
 	if h := core.Slot[pdfaHolder](v.Run, pdfaSlot{}); h.check != nil {
 		return h.check(v)
 	}

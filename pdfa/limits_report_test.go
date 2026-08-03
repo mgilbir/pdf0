@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func errMessages(errs []ValidationError) []string {
+func errMessages(errs []Violation) []string {
 	out := make([]string, len(errs))
 	for i, e := range errs {
 		out[i] = e.Message

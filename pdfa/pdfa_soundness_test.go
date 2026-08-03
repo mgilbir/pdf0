@@ -14,7 +14,7 @@ func TestJPXForbiddenAtPDFA1(t *testing.T) {
 	st.Dict.Set("Filter", object.Name("JPXDecode"))
 	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: st}
 
-	has := func(errs []ValidationError) bool {
+	has := func(errs []Violation) bool {
 		for _, e := range errs {
 			if strings.Contains(e.Message, "JPXDecode") {
 				return true

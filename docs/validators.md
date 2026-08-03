@@ -44,7 +44,7 @@ for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA2b) {
 
 | Standard | Entry point | Returns | Findings satisfy `Violation` | `…Context` variant |
 |----------|-------------|---------|------------------------------|--------------------|
-| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]pdfa.ValidationError` | yes | yes (both) |
+| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]pdfa.Violation` | yes | yes (both) |
 | PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]pdfua.Violation` | yes | yes |
 | PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]pdfua.Violation` | yes | yes |
 | PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]pdfx.Violation` | yes | yes |
@@ -73,7 +73,7 @@ flowchart TD
     Doc[("*Document")]
 
     subgraph pdfstd["PDF-standard validators — free functions, findings satisfy pdf0.Violation"]
-        A["ValidatePDFA / ValidatePDFABytes<br/>→ []pdfa.ValidationError"]
+        A["ValidatePDFA / ValidatePDFABytes<br/>→ []pdfa.Violation"]
         UA["ValidatePDFUA / ValidatePDFUA2<br/>→ []pdfua.Violation"]
         X["ValidatePDFX<br/>→ []pdfx.Violation"]
         VT["ValidatePDFVT / ValidatePDFVT2<br/>→ []pdfvt.Violation"]
