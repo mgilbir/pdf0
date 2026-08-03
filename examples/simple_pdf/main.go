@@ -5,12 +5,31 @@ import (
 	"os"
 
 	pdf "github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/object"
 )
 
 func main() {
-	// Content stream: draw "Hello, PDF 2.0!" in Helvetica 24pt
-	content := []byte("BT\n/F1 24 Tf\n100 700 Td\n(Hello, PDF 2.0!) Tj\nET\n")
+	// Draw the page. The builder emits the operators; it also records that /F1
+	// was used, which is what the /Resources dictionary below has to define.
+	var page1 content.Builder
+	page1.BeginText().
+		SetFont("F1", 24).
+		MoveText(100, 700).
+		ShowText([]byte("Hello, PDF 2.0!")).
+		EndText()
+
+	// A red rule under the text, to show the graphics side.
+	page1.Save().
+		SetStrokeRGB(0.8, 0.1, 0.1).SetLineWidth(1.5).
+		MoveTo(100, 690).LineTo(340, 690).Stroke().
+		Restore()
+
+	drawn, err := page1.Bytes()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "drawing the page: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Build the document object graph bottom-up.
 
@@ -37,7 +56,7 @@ func main() {
 	streamDict := object.Dictionary{}
 	contentStream := &object.Stream{
 		Dict: streamDict,
-		Data: content,
+		Data: drawn,
 	}
 
 	// Object 5: Resources
