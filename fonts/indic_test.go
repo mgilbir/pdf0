@@ -671,3 +671,180 @@ func TestIndicRunSurvivesRubbish(t *testing.T) {
 		}
 	}
 }
+
+// The reordering against the face this module ships, which is the claim that
+// matters: not that a synthetic fixture behaves as its own test says, but that a
+// real Devanagari word set in a real Devanagari font comes out in the order a
+// reader reads it.
+//
+// The assertions are written against glyphs the face itself names — the Ka it
+// maps U+0915 to — rather than against glyph numbers, so they say what they mean
+// and survive the font being rebuilt.
+
+// devaNoto is the bundled face, with a plain statement of what it must be for
+// any of this to test anything.
+func devaNoto(t *testing.T) *Face {
+	t.Helper()
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading the bundled face: %v", err)
+	}
+	if !f.HasScript("dev2") && !f.HasScript("deva") {
+		t.Fatal("the bundled face declares no Devanagari rules, so nothing below tests the reordering")
+	}
+	return f
+}
+
+func devaGlyph(t *testing.T, f *Face, r rune) int {
+	t.Helper()
+	g, ok := f.GlyphID(r)
+	if !ok {
+		t.Fatalf("the bundled face has no glyph for U+%04X", r)
+	}
+	return g
+}
+
+// TestBundledFaceDrawsAMatraBeforeItsConsonant is the whole capability in one
+// line of text. कि is written ka then the i-sign; a reader sees the i-sign
+// first. A shaper that did not reorder would put the consonant first, which is
+// the one thing this cannot be mistaken for.
+func TestBundledFaceDrawsAMatraBeforeItsConsonant(t *testing.T) {
+	f := devaNoto(t)
+	ka := devaGlyph(t, f, devKa)
+
+	s := str(devKa, devIMatra)
+	glyphs, missing := f.ShapeGlyphs(s)
+	if missing != 0 {
+		t.Fatalf("shaping %q: %d characters have no glyph", s, missing)
+	}
+	if len(glyphs) != 2 {
+		t.Fatalf("shaping %q gave %d glyphs %v, want 2", s, len(glyphs), gids(glyphs))
+	}
+	if glyphs[1].GID != ka {
+		t.Errorf("shaping %q gave %v; the consonant should be the *second* glyph, %d",
+			s, gids(glyphs), ka)
+	}
+	if glyphs[0].GID == ka {
+		t.Errorf("shaping %q gave %v; the consonant was drawn first, so nothing was reordered",
+			s, gids(glyphs))
+	}
+}
+
+// TestBundledFaceDrawsARephAtTheEnd is the second reordering against the real
+// face. र्क is written ra, virama, ka; it is drawn as ka with a stroke over it,
+// and the stroke comes last.
+func TestBundledFaceDrawsARephAtTheEnd(t *testing.T) {
+	f := devaNoto(t)
+	ka := devaGlyph(t, f, devKa)
+	ra := devaGlyph(t, f, devRa)
+	virama := devaGlyph(t, f, devVirama)
+
+	s := str(devRa, devVirama, devKa)
+	glyphs, _ := f.ShapeGlyphs(s)
+	if len(glyphs) != 2 {
+		t.Fatalf("shaping %q gave %d glyphs %v, want 2: the Ra and its virama are one reph",
+			s, len(glyphs), gids(glyphs))
+	}
+	if glyphs[0].GID != ka {
+		t.Errorf("shaping %q gave %v; the consonant should come first, as glyph %d",
+			s, gids(glyphs), ka)
+	}
+	for i, g := range glyphs {
+		if g.GID == ra || g.GID == virama {
+			t.Errorf("shaping %q gave %v; glyph %d is still the plain Ra or virama, so no reph was made",
+				s, gids(glyphs), i)
+		}
+	}
+}
+
+// TestBundledFaceDrawsARephUnderAnAnusvara is the placement rule that a
+// synthetic fixture can only assert and a real font can prove. र्कं has both a
+// reph and an anusvara over the same syllable; Noto Sans has a single glyph for
+// the two together, and can only reach it if the reph was put *under* the
+// anusvara rather than after it.
+func TestBundledFaceDrawsARephUnderAnAnusvara(t *testing.T) {
+	f := devaNoto(t)
+	ka := devaGlyph(t, f, devKa)
+	anusvara := devaGlyph(t, f, devAnusvara)
+
+	s := str(devRa, devVirama, devKa, devAnusvara)
+	glyphs, _ := f.ShapeGlyphs(s)
+	if len(glyphs) != 2 {
+		t.Fatalf("shaping %q gave %d glyphs %v, want 2: the reph and the anusvara are one glyph",
+			s, len(glyphs), gids(glyphs))
+	}
+	if glyphs[0].GID != ka {
+		t.Errorf("shaping %q gave %v; the consonant should come first, as glyph %d",
+			s, gids(glyphs), ka)
+	}
+	if glyphs[1].GID == anusvara {
+		t.Errorf("shaping %q gave %v; the anusvara stands alone, so the reph was drawn after it rather than under it",
+			s, gids(glyphs))
+	}
+}
+
+// TestBundledFaceMakesAConjunct is the third reordering. क्त is three characters
+// and त्र is three; each is drawn as one compound letterform, which the font can
+// only make when its pieces are where its rules expect them.
+func TestBundledFaceMakesAConjunct(t *testing.T) {
+	f := devaNoto(t)
+	virama := devaGlyph(t, f, devVirama)
+
+	for _, tc := range []struct {
+		s    string
+		want int
+	}{
+		{str(devKa, devVirama, devTa), 2}, // a half Ka and a Ta
+		{str(devTa, devVirama, devRa), 1}, // a Ta with the Ra drawn under it
+	} {
+		glyphs, _ := f.ShapeGlyphs(tc.s)
+		if len(glyphs) != tc.want {
+			t.Errorf("shaping %q gave %d glyphs %v, want %d", tc.s, len(glyphs), gids(glyphs), tc.want)
+		}
+		for _, g := range glyphs {
+			if g.GID == virama {
+				t.Errorf("shaping %q gave %v; the virama is still drawn, so no conjunct was made",
+					tc.s, gids(glyphs))
+			}
+		}
+	}
+}
+
+// TestBundledFaceSetsAWord is the whole pipeline on ordinary text: a word with a
+// pre-base matra, a conjunct and a matra that does not move. The assertion is
+// that its clusters still walk forwards and cover the word, which is what a
+// caller mapping a glyph back to a position in the text depends on and what
+// reordering is most likely to break.
+func TestBundledFaceSetsAWord(t *testing.T) {
+	f := devaNoto(t)
+	const word = "\u0939\u093F\u0928\u094D\u0926\u0940" // हिन्दी
+
+	glyphs, missing := f.ShapeGlyphs(word)
+	if missing != 0 {
+		t.Fatalf("shaping %q: %d characters have no glyph", word, missing)
+	}
+	if len(glyphs) == 0 {
+		t.Fatalf("shaping %q gave nothing", word)
+	}
+	last := -1
+	for i, g := range glyphs {
+		if g.Cluster < last {
+			t.Fatalf("shaping %q gave clusters %v, which go backwards at %d", word, clusters(glyphs), i)
+		}
+		if g.Cluster < 0 || g.Cluster >= len(word) {
+			t.Errorf("glyph %d has cluster %d, outside the %d bytes of the word", i, g.Cluster, len(word))
+		}
+		last = g.Cluster
+	}
+	if glyphs[0].Cluster != 0 {
+		t.Errorf("the first glyph has cluster %d, want 0", glyphs[0].Cluster)
+	}
+}
+
+func gids(glyphs []Glyph) []int {
+	out := make([]int, len(glyphs))
+	for i, g := range glyphs {
+		out[i] = g.GID
+	}
+	return out
+}
