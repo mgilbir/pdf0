@@ -1,3 +1,10 @@
+// simple_pdf17 builds a one-page PDF 1.7 document with text and a little vector
+// drawing, through the content builder and AddPage.
+//
+// The font is Helvetica, one of the fourteen a reader is required to have, so
+// nothing is embedded. That is legal in a plain PDF and *not* in PDF/A, which
+// requires every font to be embedded — see the fonts package for that, and
+// simple_pdfa for a conforming document.
 package main
 
 import (
@@ -5,80 +12,61 @@ import (
 	"os"
 
 	pdf "github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/object"
 )
 
 func main() {
-	// Content stream: draw "Hello, PDF 1.7!" in Helvetica 24pt
-	content := []byte("BT\n/F1 24 Tf\n100 700 Td\n(Hello, PDF 1.7!) Tj\nET\n")
+	doc := &pdf.Document{Version: "1.7", Objects: map[int]*object.IndirectObject{}}
 
-	// Build the document object graph bottom-up.
-
-	// Object 1: Catalog
-	catalog := &object.Dictionary{}
-	catalog.Set("Type", object.Name("Catalog"))
-	catalog.Set("Pages", object.IndirectRef{Number: 2})
-
-	// Object 2: Pages
+	// A catalog and an empty page tree for AddPage to append to.
 	pages := &object.Dictionary{}
 	pages.Set("Type", object.Name("Pages"))
-	pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
-	pages.Set("Count", object.Integer(1))
+	pages.Set("Kids", object.Array{})
+	pages.Set("Count", object.Integer(0))
+	pagesRef := doc.Add(pages)
 
-	// Object 3: Page
-	page := &object.Dictionary{}
-	page.Set("Type", object.Name("Page"))
-	page.Set("Parent", object.IndirectRef{Number: 2})
-	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
-	page.Set("Contents", object.IndirectRef{Number: 4})
-	page.Set("Resources", object.IndirectRef{Number: 5})
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("Pages", pagesRef)
+	doc.Trailer.Set("Root", doc.Add(catalog))
 
-	// Object 4: Content stream
-	streamDict := object.Dictionary{}
-	contentStream := &object.Stream{
-		Dict: streamDict,
-		Data: content,
-	}
+	// One of the standard fourteen faces, referenced rather than embedded.
+	helvetica := &object.Dictionary{}
+	helvetica.Set("Type", object.Name("Font"))
+	helvetica.Set("Subtype", object.Name("Type1"))
+	helvetica.Set("BaseFont", object.Name("Helvetica"))
+	fontRef := doc.Add(helvetica)
 
-	// Object 5: Resources
-	fontRef := &object.Dictionary{}
-	fontRef.Set("F1", object.IndirectRef{Number: 6})
-	resources := &object.Dictionary{}
-	resources.Set("Font", fontRef)
+	var page content.Builder
+	page.BeginText().
+		SetFont("F1", 24).
+		MoveText(100, 700).
+		ShowText([]byte("Hello, PDF 1.7!")).
+		EndText()
+	page.Save().
+		SetStrokeRGB(0.8, 0.1, 0.1).SetLineWidth(1.5).
+		MoveTo(100, 690).LineTo(340, 690).Stroke().
+		Restore()
 
-	// Object 6: Font
-	font := &object.Dictionary{}
-	font.Set("Type", object.Name("Font"))
-	font.Set("Subtype", object.Name("Type1"))
-	font.Set("BaseFont", object.Name("Helvetica"))
-
-	doc := &pdf.Document{
-		Version: "1.7",
-		Objects: map[int]*object.IndirectObject{
-			1: {Number: 1, Generation: 0, Value: catalog},
-			2: {Number: 2, Generation: 0, Value: pages},
-			3: {Number: 3, Generation: 0, Value: page},
-			4: {Number: 4, Generation: 0, Value: contentStream},
-			5: {Number: 5, Generation: 0, Value: resources},
-			6: {Number: 6, Generation: 0, Value: font},
-		},
-		Trailer: object.Dictionary{
-			Keys:   []object.Name{"Root"},
-			Values: []object.Object{object.IndirectRef{Number: 1}},
-		},
+	if _, err := doc.AddPage(pdf.Page{
+		Width: 612, Height: 792,
+		Content: &page,
+		Fonts:   map[object.Name]object.Object{"F1": fontRef},
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "adding the page: %v\n", err)
+		os.Exit(1)
 	}
 
 	f, err := os.Create("output.pdf")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "creating the file: %v\n", err)
 		os.Exit(1)
 	}
 	defer f.Close()
-
 	if err := doc.Write(f); err != nil {
-		fmt.Fprintf(os.Stderr, "error writing PDF: %v\n", err)
+		fmt.Fprintf(os.Stderr, "writing: %v\n", err)
 		os.Exit(1)
 	}
-
 	fmt.Println("wrote output.pdf")
 }
