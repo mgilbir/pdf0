@@ -53,13 +53,7 @@ func TestRepairCatalogAA(t *testing.T) {
 // TestRepairEncryption decrypts an encrypted corpus file, repairs away the
 // encryption, and confirms the /Encrypt violation is gone.
 func TestRepairEncryption(t *testing.T) {
-	corpus := os.Getenv("VERAPDF_CORPUS")
-	if corpus == "" {
-		corpus = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpus); err != nil {
-		t.Skip("corpus not present")
-	}
+	corpus := corpusRoot(t)
 	p := findCorpusFile(corpus, "PDF_A-2b/6.1 File structure/6.1.3 File trailer/veraPDF test suite 6-1-3-t02-fail-a")
 	if p == "" {
 		t.Skip("encrypted sample not found")
