@@ -352,6 +352,17 @@ type shaper struct {
 	// it. Nothing else needs it, and it is nil everywhere else.
 	onResize func(at, delta int)
 
+	// onDelete, when set, is told that the glyph at a position has been taken
+	// out of the buffer altogether.
+	//
+	// It is separate from onResize because the two mean different things about
+	// the *record* at that position. A lookup that shortens a run has ligated
+	// what it consumed, so the record at the position survives and describes
+	// what the ligature became; a deletion leaves nothing there, so the record
+	// has to go with the glyph. Told through onResize, a deletion would keep the
+	// vanished glyph's record and hang it on whatever moved up into its place.
+	onDelete func(at int)
+
 	// joinerAt, when set, says whether a join control stands at a buffer
 	// position, so that a lookup can step over one — see ignorable.go. It is a
 	// function of the position rather than of the glyph because a face commonly
@@ -410,6 +421,13 @@ func (sh shaper) nextLigatureID() int {
 func (sh shaper) resized(at, delta int) {
 	if sh.onResize != nil && delta != 0 {
 		sh.onResize(at, delta)
+	}
+}
+
+// deleted tells a per-glyph record that the glyph at a position is gone.
+func (sh shaper) deleted(at int) {
+	if sh.onDelete != nil {
+		sh.onDelete(at)
 	}
 }
 

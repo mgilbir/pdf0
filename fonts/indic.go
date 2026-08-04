@@ -1094,6 +1094,12 @@ func (sh shaper) applyIndicFeature(buf []Glyph, info *[]indicInfo, lookups []int
 		}
 		step += d
 	}
+	sh.onDelete = func(at int) {
+		if at >= 0 && at < len(*info) {
+			*info = append((*info)[:at], (*info)[at+1:]...)
+		}
+		step--
+	}
 	sh.joinerAt = func(at int) joinerKind {
 		if at < 0 || at >= len(*info) {
 			return notJoiner
@@ -1114,13 +1120,17 @@ func (sh shaper) applyIndicFeature(buf []Glyph, info *[]indicInfo, lookups []int
 			sh.limit = ceil
 			consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
 			buf = out
-			if consumed <= 0 {
-				i++
-				continue
-			}
 			to += step
 			ceil += step
 			total += step
+			if consumed <= 0 {
+				// A lookup that consumed nothing and shortened the run took a
+				// glyph out; what followed it is now here and unexamined.
+				if step >= 0 {
+					i++
+				}
+				continue
+			}
 			i += consumed
 		}
 	}

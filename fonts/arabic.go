@@ -212,10 +212,16 @@ func (sh shaper) applyJoiningForms(buf []Glyph) []Glyph {
 					i++
 					continue
 				}
+				was := len(buf)
 				consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
+				buf = out
 				if consumed > 0 {
-					buf = out
 					i += consumed
+					continue
+				}
+				// A lookup that consumed nothing and shortened the buffer took
+				// a glyph out; what followed it is now here and unexamined.
+				if len(buf) < was {
 					continue
 				}
 				i++

@@ -45,10 +45,17 @@ type rawLookup struct {
 func (sh shaper) applyContextual(buf []Glyph, lookups []int) []Glyph {
 	for _, idx := range lookups {
 		for i := 0; i < len(buf); {
+			was := len(buf)
 			consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
+			buf = out
 			if consumed > 0 {
-				buf = out
 				i += consumed
+				continue
+			}
+			// A lookup that consumed nothing and yet shortened the buffer took
+			// a glyph out. The position is not advanced past what followed it,
+			// because what followed it is now here and has not been looked at.
+			if len(buf) < was {
 				continue
 			}
 			i++
@@ -90,7 +97,30 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			// is usually written with. They share the original's cluster —
 			// several glyphs standing for one character is exactly the case
 			// clusters exist to record.
-			if reps, ok := multipleSubstAt(sub, buf[at].GID); ok && len(reps) > 0 {
+			reps, ok := multipleSubstAt(sub, buf[at].GID)
+			// A sequence of no glyphs at all is a deletion.
+			//
+			// The format's own text forbids using this to delete a glyph, and
+			// fonts do it anyway: Noto Sans Javanese carries a placeholder mark
+			// through its rules and takes it off again with exactly this, under
+			// 'rlig'. Reading the prohibition as permission to ignore the rule
+			// leaves that placeholder on the page — a mark the font said to
+			// remove, drawn beside every letter that went through the rule.
+			//
+			// Nothing was consumed, so the caller stays where it is: what
+			// followed has moved into this place and has not been looked at.
+			if ok && len(reps) == 0 {
+				// Capped, so that append cannot write into the array the caller
+				// still holds a slice of.
+				out := append(buf[:at:at], buf[at+1:]...)
+				sh.deleted(at)
+				return 0, out
+			}
+			// The guard is what keeps the two apart. Without it this branch
+			// would take the empty sequence too and quietly do the right thing
+			// to the buffer and the wrong thing to the record beside it,
+			// reporting a ligature where a glyph was removed.
+			if ok && len(reps) > 0 {
 				out := make([]Glyph, 0, len(buf)+len(reps)-1)
 				out = append(out, buf[:at]...)
 				for _, gid := range reps {
