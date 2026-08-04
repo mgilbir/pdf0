@@ -659,36 +659,61 @@ func (n *normalizer) reorderArabicMarks(start, end int) {
 	if !n.hasArabicModifier(start, end) {
 		return
 	}
-	// What moves is the *modifier* marks, and only them. An ordinary mark of the
-	// same class stays where the canonical sort put it, because the report is
-	// about the fourteen characters that are part of how a letter is spelled and
-	// says nothing about the rest.
+	// The report states the move twice, once per class, and both statements are
+	// conditional in a way that matters:
 	//
-	// Each class in turn is moved to the front, and the front does not move
-	// after it — so the class handled last ends up first, and taking them as 220
-	// then 230 leaves a modifier written above the letter innermost.
+	//	If a sequence of ccc=230 characters begins with any MCM characters, move
+	//	the sequence of such MCM characters to the beginning of S [...]
+	//	If a sequence of ccc=220 characters begins with any MCM characters, move
+	//	the sequence of such MCM characters to the beginning of S (before any MCM
+	//	with ccc=230 [...]).
 	//
-	// None of this is safe to reason out and leave. Both halves were written the
-	// other way here — every mark of the class moved, and below innermost — and
-	// every corpus passed, because none of them writes two such marks on one
-	// letter. What settled it was asking HarfBuzz for each combination and
-	// finding the one rule all of them fit.
+	// Two things follow that a summary of the rule loses.
+	//
+	// *Begins with.* The modifier marks that move are the ones at the head of
+	// their class's run. An ordinary mark of the same class written first is not
+	// stepped over: it stops the move altogether, because what the report asks
+	// for is a prefix of the run and there is none. So a maddah followed by a
+	// hamza stays as the canonical sort left it.
+	//
+	// *Before any MCM with ccc=230.* The 220s end up in front of the 230s, so
+	// each move lands after what the previous one placed rather than in front of
+	// it — the front advances. A mark written below the letter is therefore
+	// drawn innermost, which is what "inside-out stacking" means for a script
+	// whose marks sit on both sides.
+	//
+	// None of this is safe to reason out and leave: it was written here with
+	// both of those the other way about, and every corpus passed, because none
+	// of them writes two such marks on one letter. Enumerating base + two marks
+	// over the classes the report names — 121 strings — separates the readings:
+	// HarfBuzz answers the report's order on all 35 of them whose order the font
+	// can show, and the reading here differed on 16.
+	i := start
 	for _, cc := range [...]uint8{220, 230} {
-		i := start
-		for i < end && !(arabicModifierMarks[n.out[i]] && reorderClass(n.out[i]) == cc) {
+		// The head of this class's run. The canonical sort has left the classes
+		// in ascending order, so what is before this point is of a lower class
+		// and cannot be part of it.
+		for i < end && reorderClass(n.out[i]) < cc {
 			i++
 		}
 		if i >= end {
-			continue
+			break
+		}
+		if reorderClass(n.out[i]) > cc {
+			continue // no run of this class at all
 		}
 		j := i
-		for j < end && arabicModifierMarks[n.out[j]] && reorderClass(n.out[j]) == cc {
+		for j < end && reorderClass(n.out[j]) == cc && arabicModifierMarks[n.out[j]] {
 			j++
 		}
-		if i == start {
-			continue // already there
+		if i == j {
+			continue // the run does not begin with one of the fourteen
 		}
 		n.rotateMarks(start, i, j)
+		// Past what was just placed, in both senses: the next class goes after
+		// it, and the scan resumes after the run it came from — which the move
+		// has left where it was, since only [start, j) was disturbed.
+		start, i = start+(j-i), j
 	}
 }
 
