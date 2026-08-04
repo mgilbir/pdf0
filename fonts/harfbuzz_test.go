@@ -66,10 +66,28 @@ var harfbuzzCases = []struct {
 	name string
 	// font is a path under harfbuzzDir, or empty for the bundled face.
 	font, corpus, expected string
+	// agree is how many cases must match. Zero means every one of them, which
+	// is what a script this package shapes is held to. A number is a ratchet for
+	// a script it does not shape yet: it may only go up, so the work can land in
+	// pieces without any piece being able to undo an earlier one.
+	agree int
+	// why explains a ratchet. A bare number in a test is a number nobody can
+	// judge; this says what is missing and what would remove it.
+	why string
 }{
-	{"latin", "", "corpus.txt", "expected.txt"},
-	{"arabic", "fonts/NotoSansArabic.ttf", "arabic.txt", "arabic.expected.txt"},
-	{"khmer", "fonts/NotoSansKhmer.ttf", "khmer.txt", "khmer.expected.txt"},
+	{name: "latin", corpus: "corpus.txt", expected: "expected.txt"},
+	{name: "arabic", font: "fonts/NotoSansArabic.ttf",
+		corpus: "arabic.txt", expected: "arabic.expected.txt"},
+	{name: "khmer", font: "fonts/NotoSansKhmer.ttf",
+		corpus: "khmer.txt", expected: "khmer.expected.txt"},
+	{name: "javanese", font: "fonts/NotoSansJavanese.ttf",
+		corpus: "javanese.txt", expected: "javanese.expected.txt",
+		agree: 438,
+		why: "Javanese is shaped by the Universal Shaping Engine, which this " +
+			"package does not implement. Of the 456 that differ, 359 are " +
+			"substitutions the per-syllable feature set never applies and 94 are " +
+			"glyphs left in the order they were written rather than the order " +
+			"they are drawn. Raise this as the engine lands; it may not fall."},
 }
 
 // TestShapingAgreesWithHarfBuzz compares every case in every corpus.
@@ -108,20 +126,30 @@ func TestShapingAgreesWithHarfBuzz(t *testing.T) {
 				}
 				if !same {
 					differing++
-					if differing <= 40 {
+					if differing <= 40 && tc.agree == 0 {
 						t.Errorf("%s\n  %s\n  pdf0     %s\n  harfbuzz %s",
 							describeRunes(s), why, describeGlyphs(glyphs), describeExpected(f, expected[i]))
 					}
 				}
 			}
-			if differing > 40 {
+			if differing > 40 && tc.agree == 0 {
 				t.Errorf("... and %d more", differing-40)
 			}
 			for s := range unseen {
 				t.Errorf("%s is listed as a deliberate difference but is not in the corpus", describeRunes(s))
 			}
+			agreed := len(corpus) - differing - expectedDiffs
 			t.Logf("%d of %d agree, %d deliberate differences (harfbuzz %s)",
-				len(corpus)-differing-expectedDiffs, len(corpus), expectedDiffs, header["harfbuzz"])
+				agreed, len(corpus), expectedDiffs, header["harfbuzz"])
+			if tc.agree > 0 && agreed < tc.agree {
+				t.Errorf("%d of %d agree and the baseline is %d.\n%s",
+					agreed, len(corpus), tc.agree, tc.why)
+			}
+			if tc.agree > 0 && agreed > tc.agree {
+				t.Errorf("%d of %d agree and the baseline is %d — more than it was.\n"+
+					"Raise the baseline to %d so that what has been fixed cannot come back.",
+					agreed, len(corpus), tc.agree, agreed)
+			}
 		})
 	}
 }
@@ -192,8 +220,9 @@ var deliberateDifferences = map[string]map[string]string{
 		"\u0915\U0001D173\u094D\u0937": "musical begin beam inside a Devanagari cluster",
 		"\u0915\U000E0041\u094D\u0937": "tag letter inside a Devanagari cluster",
 	},
-	"arabic": {},
-	"khmer":  {},
+	"arabic":   {},
+	"khmer":    {},
+	"javanese": {},
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.
