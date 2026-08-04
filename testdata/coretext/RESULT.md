@@ -40,3 +40,28 @@ a legitimate hyphenation point, and that a document is written once and read
 many times. Nothing here touches that. What it removes is the *other* half of
 the argument, that Unicode asks for the character to be ignored in rendering:
 Unicode asks for it not to be drawn, which every engine here does.
+
+## What changing it would take
+
+Not a flag. HarfBuzz's model is *keep, then hide*, and this package's is *drop
+first*, so the work is to move the removal from before shaping to after it.
+
+1. Stop `dropHiddenCharacters` at its two call sites in `fonts/glyphbuf.go`,
+   so the characters reach the shaper and can break a cluster.
+2. Give each of them a glyph the font can carry. A face that has no glyph for
+   U+00AD would otherwise shape it as `.notdef`, and a `.notdef` is a real glyph
+   id that a font's rules can match on — HarfBuzz substitutes an invisible glyph
+   precisely so that cannot happen. This is the step most likely to go wrong.
+3. Drop them at the end, in every path that shapes: the general one through
+   `hideJoiners`, and `indic.go`, `khmer.go`, `myanmar.go` — each of which
+   already drops the join controls this way and would widen to all ignorables —
+   and `use.go`, which has no end-of-run drop at all and needs one.
+
+The corpora do not need regenerating: `expected.txt` is HarfBuzz's answer and
+does not move. What moves is that all thirty-seven entries in
+`deliberateDifferences` should disappear, which is the test for whether the
+change is complete and correct. `deliberateDifferences` becoming empty is also
+the point of doing it — every remaining difference then means a defect.
+
+Afterwards: re-run the differential fuzzer, because ignorables reaching the
+shaper is a change every script sees and the corpora are a fixed list.
