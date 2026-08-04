@@ -659,29 +659,36 @@ func (n *normalizer) reorderArabicMarks(start, end int) {
 	if !n.hasArabicModifier(start, end) {
 		return
 	}
-	// The two classes, innermost first: below the letter, then above it.
+	// What moves is the *modifier* marks, and only them. An ordinary mark of the
+	// same class stays where the canonical sort put it, because the report is
+	// about the fourteen characters that are part of how a letter is spelled and
+	// says nothing about the rest.
+	//
+	// Each class in turn is moved to the front, and the front does not move
+	// after it — so the class handled last ends up first, and taking them as 220
+	// then 230 leaves a modifier written above the letter innermost.
+	//
+	// None of this is safe to reason out and leave. Both halves were written the
+	// other way here — every mark of the class moved, and below innermost — and
+	// every corpus passed, because none of them writes two such marks on one
+	// letter. What settled it was asking HarfBuzz for each combination and
+	// finding the one rule all of them fit.
 	for _, cc := range [...]uint8{220, 230} {
 		i := start
-		for i < end && reorderClass(n.out[i]) < cc {
+		for i < end && !(arabicModifierMarks[n.out[i]] && reorderClass(n.out[i]) == cc) {
 			i++
 		}
-		if i == end {
-			return
-		}
-		if reorderClass(n.out[i]) > cc {
+		if i >= end {
 			continue
 		}
 		j := i
-		for j < end && reorderClass(n.out[j]) == cc {
+		for j < end && arabicModifierMarks[n.out[j]] && reorderClass(n.out[j]) == cc {
 			j++
 		}
 		if i == start {
-			// Already at the front of what has not been moved yet.
-			start = j
-			continue
+			continue // already there
 		}
 		n.rotateMarks(start, i, j)
-		start += j - i
 	}
 }
 

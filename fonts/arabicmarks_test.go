@@ -16,6 +16,11 @@ import (
 //
 // Unicode states the correction in UTR #53. This is the test that it happens for
 // Arabic and, just as importantly, that it does not happen for anything else.
+//
+// Every expected order below is HarfBuzz's, measured on Noto Sans Arabic. They
+// were written by hand first, and the hand got the two-hamza case backwards —
+// which no corpus caught, because none of them writes two such marks on one
+// letter.
 
 // marksOf normalises a string and returns what came out, so a test can assert
 // on the order rather than on the glyphs a particular font would draw.
@@ -87,8 +92,13 @@ func TestAHamzaComesBeforeTheVowelInArabic(t *testing.T) {
 		},
 		{
 			[]rune{waw, fatha, hamzaAbove, hamzaBelow},
-			[]rune{waw, hamzaBelow, hamzaAbove, fatha},
-			"both hamzas: below is innermost, then above, then the vowel",
+			[]rune{waw, hamzaAbove, hamzaBelow, fatha},
+			"both hamzas: above is innermost, then below, then the vowel",
+		},
+		{
+			[]rune{waw, hamzaBelow, hamzaAbove},
+			[]rune{waw, hamzaAbove, hamzaBelow},
+			"the two hamzas written the other way round come out the same",
 		},
 		{
 			[]rune{waw, fatha, damma}, []rune{waw, fatha, damma},
