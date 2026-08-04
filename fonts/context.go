@@ -64,6 +64,13 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 		return 0, buf
 	}
 	lk := sh.l.gsub[idx]
+	// A lookup's flags say which glyphs it does not look at, and that includes
+	// the one it would start at. A rule that ignores marks does not apply *to* a
+	// mark either — the whole of its input is chosen by the flag, not just the
+	// part it steps over on the way.
+	if sh.l.ignores(lk.flags, buf[at]) {
+		return 0, buf
+	}
 	for _, sub := range lk.subs {
 		switch lk.kind {
 		case 1:
@@ -81,8 +88,11 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 				out := make([]Glyph, 0, len(buf)+len(reps)-1)
 				out = append(out, buf[:at]...)
 				for _, gid := range reps {
+					// Each part still stands for the character the whole stood
+					// for, so it is classified as that character was.
 					out = append(out, Glyph{
 						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
+						class: buf[at].class,
 					})
 				}
 				out = append(out, buf[at+1:]...)
@@ -303,7 +313,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 	// belonged to something they do not.
 	joined := false
 	for _, p := range comps[1:] {
-		if !sh.l.isMark(buf[p].GID) {
+		if !sh.l.isMark(buf[p]) {
 			joined = true
 			break
 		}
@@ -319,9 +329,17 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 
 	out := make([]Glyph, 0, len(buf)-len(comps)+1)
 	out = append(out, buf[:at]...)
+	// What the product is, for a font that classifies nothing itself. Several
+	// letters drawn as one glyph is a ligature; a letter drawn together with its
+	// own marks is still that letter, which is the same distinction the
+	// numbering above turns on.
+	class := buf[at].class
+	if joined {
+		class = classLigature
+	}
 	out = append(out, Glyph{
 		GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid),
-		lig: ligatureRef{id: id, comps: comps0},
+		lig: ligatureRef{id: id, comps: comps0}, class: class,
 	})
 
 	// Walking the components in order, so that each kept glyph is given the
@@ -359,7 +377,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 func (sh shaper) nextNotIgnored(buf []Glyph, from, flags, want int) int {
 	end := sh.end(buf)
 	for i := from; i < end; i++ {
-		if sh.l.ignores(flags, buf[i].GID) {
+		if sh.l.ignores(flags, buf[i]) {
 			continue
 		}
 		if buf[i].GID != want && sh.stepsOverJoiner(i, false) {
@@ -398,7 +416,7 @@ func (sh shaper) positionsFrom(buf []Glyph, at, n, flags int, context bool) ([]i
 		if pos >= end {
 			return nil, false
 		}
-		if !sh.l.ignores(flags, buf[pos].GID) && !sh.stepsOverJoiner(pos, context) {
+		if !sh.l.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, context) {
 			out = append(out, pos)
 		}
 		pos++
@@ -412,7 +430,7 @@ func (sh shaper) positionsFrom(buf []Glyph, at, n, flags int, context bool) ([]i
 func (sh shaper) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, bool) {
 	out := make([]int, 0, n)
 	for pos := before - 1; pos >= sh.floor && len(out) < n; pos-- {
-		if !sh.l.ignores(flags, buf[pos].GID) && !sh.stepsOverJoiner(pos, true) {
+		if !sh.l.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, true) {
 			out = append(out, pos)
 		}
 	}

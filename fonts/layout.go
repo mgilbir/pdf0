@@ -438,8 +438,8 @@ const (
 // two base letters — and an accent written between them must not break it.
 // Reading the pairs and not the flag kerns "A" and "V" but not "Ä" and "V",
 // which is a difference a reader sees.
-func (l *layout) ignores(flags, gid int) bool {
-	class := l.glyphClass[gid]
+func (l *layout) ignores(flags int, g Glyph) bool {
+	class := l.classOf(g)
 	switch {
 	case flags&flagIgnoreMarks != 0 && class == classMark:
 		return true
@@ -451,9 +451,40 @@ func (l *layout) ignores(flags, gid int) bool {
 	// A mark attachment class in the high byte narrows the rule to marks of one
 	// class; marks of any other are skipped.
 	if attach := (flags & flagMarkAttachType) >> 8; attach != 0 && class == classMark {
-		return l.markAttach[gid] != attach
+		return l.markAttach[g.GID] != attach
 	}
 	return false
+}
+
+// classOf is what a lookup flag is read against: GDEF's classification of the
+// glyph, or — for a font that declares none — what the character it came from
+// says.
+//
+// The fallback is not a nicety. Without it, a font with no GDEF glyph class
+// table has no glyph that any flag recognises, so IgnoreMarks ignores nothing:
+// "Ä" and "V" go unkerned where "A" and "V" kern, a ligature written over an
+// accent never forms, and a lookup that was written to step over marks steps
+// over nothing. Plenty of fonts declare no GDEF, and the character is the best
+// authority available when the font is silent — it is, after all, where the
+// font's own classification came from.
+//
+// GDEF wins wherever it exists, including for a glyph it does not list: a font
+// that classified its glyphs and left this one out has said something about it.
+func (l *layout) classOf(g Glyph) int {
+	if len(l.glyphClass) != 0 {
+		return l.glyphClass[g.GID]
+	}
+	return g.class
+}
+
+// classOfRune is GDEF's classification as the character itself implies it: a
+// combining mark is a mark and everything else is a base. Nothing implies
+// "ligature" — that is a fact about a glyph, and is set where one is made.
+func classOfRune(r rune) int {
+	if isCombiningMark(r) {
+		return classMark
+	}
+	return classBase
 }
 
 // readGDEF reads the glyph classification, which is what makes a lookup flag
