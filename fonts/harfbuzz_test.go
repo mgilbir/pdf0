@@ -196,7 +196,26 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 // fails, and so does one that is not in the corpus. An exception that cannot go
 // stale is a documented decision; one that can is a hole.
 //
-// # It is empty, and that is the point
+// # One entry, and what it took to earn it
+//
+// A Tibetan string whose last mark this package puts five units to the right of
+// where HarfBuzz puts it. Everything structural agrees — the same target, the
+// same lookup, the same anchors, and the same y — and the x is the attachment
+// delta measured against the target's offset at two different moments: this
+// package uses where the target stood when the mark was attached, HarfBuzz the
+// where it ended up. Neither reading gives both of HarfBuzz's numbers, which is
+// what said one of them had to be checked from outside.
+//
+// CoreText was asked, through testdata/coretext, and places the mark where this
+// package places it. Converted to the absolute position the reader sees, the
+// three answers are 427, 427 and 422: HarfBuzz is the one out of step, on a
+// string where the other two agree to the unit. The two controls beside it in
+// that file are cases all three agree on, so the harness is measuring what it
+// claims to.
+//
+// It is listed rather than fixed because there is nothing here to fix.
+//
+// # The thirty-seven that left
 //
 // It held thirty-seven: a character nothing is drawn for, written inside a
 // syllable. This package removed every such character before shaping, so the
@@ -231,7 +250,10 @@ var deliberateDifferences = map[string]map[string]string{
 	"khmer":    {},
 	"javanese": {},
 	"balinese": {},
-	"tibetan":  {},
+	"tibetan": {
+		"\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37": "a mark five units right of where HarfBuzz " +
+			"puts it, and where CoreText puts it",
+	},
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.

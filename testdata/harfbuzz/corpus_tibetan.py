@@ -32,6 +32,11 @@ for a in cons[:8]:
     for b in sub[:5]:
         words.append(a + b + vow[0])
 
+# The one string where this package and HarfBuzz differ, kept so that the
+# difference is pinned rather than merely known. CoreText agrees with this
+# package; see fonts/harfbuzz_test.go.
+words.append("".join(chr(c) for c in (0x0F52, 0x0F8F, 0x0FAD, 0x0F91, 0x0F73, 0x0F37)))
+
 seen, out = set(), []
 for w in words:
     if w and "\n" not in w and w not in seen:

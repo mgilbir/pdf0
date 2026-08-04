@@ -91,18 +91,25 @@ FONTS = [
 # nor CoreText removes it. See fonts/harfbuzz_test.go.
 #
 # An empty set is the point of the tool: every difference it reports is a defect.
-KNOWN = set()
+KNOWN = {
+    # A decision, and the only one. A Tibetan string whose last mark this
+    # package puts five units right of where HarfBuzz puts it — same target,
+    # same lookup, same anchors, same y. CoreText was asked and places it where
+    # this package does: 427, 427 and 422 in absolute terms. HarfBuzz is the one
+    # out of step. See fonts/harfbuzz_test.go.
+    "five-units-of-x",
+}
 
 def classify(text, ours, theirs):
     """Name a difference that is already understood, or None if it is new.
 
-    Nothing is, so this names nothing. It is kept because the shape of the tool
-    is "report what has not been explained", and the day something has to be
-    explained again this is where the explanation goes — with the table it needs
-    beside it, derived rather than typed. The last one it held was a hand-written
-    copy of Unicode's Default_Ignorable_Code_Point that had gone stale by two
-    characters.
+    One is, and it is named by the string itself because it is one string. The
+    table this used to hold was a hand-written copy of Unicode's
+    Default_Ignorable_Code_Point that had gone stale by two characters, so what
+    replaces it is a literal, which cannot.
     """
+    if text == "\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37":
+        return "five-units-of-x"
     return None
 
 

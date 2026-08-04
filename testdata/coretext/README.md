@@ -114,3 +114,25 @@ The third line is the question. Both agree up to the last glyph:
   is the outlier, and the right answer is to leave it alone and record why.
 
 Anything else is a third answer and more interesting than either.
+
+## What CoreText answered, the second time
+
+It agrees with this package.
+
+Converted to the absolute position a reader sees — CoreText reports where a
+glyph sits, the other two report how far it is displaced from the pen — the
+three answers for the last glyph are:
+
+| | absolute x |
+| --- | --- |
+| pdf0 | **427** |
+| CoreText | **427** |
+| HarfBuzz | 422 |
+
+Both control lines match all three engines to the unit, so the harness is
+measuring what it claims to. HarfBuzz is the one out of step, on the one string
+where the other two agree.
+
+That closes it: there is nothing to fix, and the difference is recorded in
+`deliberateDifferences` in `fonts/harfbuzz_test.go` with the string pinned in the
+Tibetan corpus, so it is checked in both directions and cannot go stale.
