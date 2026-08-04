@@ -17,10 +17,20 @@ import (
 // Unicode states the correction in UTR #53. This is the test that it happens for
 // Arabic and, just as importantly, that it does not happen for anything else.
 //
-// Every expected order below is HarfBuzz's, measured on Noto Sans Arabic. They
-// were written by hand first, and the hand got the two-hamza case backwards —
-// which no corpus caught, because none of them writes two such marks on one
-// letter.
+// Every expected order below is HarfBuzz's, measured on Noto Sans Arabic.
+//
+// They were written by hand first, and the hand got the two-hamza case
+// backwards — twice, in both directions, each time with a reason that read
+// well. No corpus caught either, because none of them writes two such marks on
+// one letter.
+//
+// What settled it was not another reading. It was enumerating base + two marks
+// over the classes the report names, 121 strings, and reading the mark order
+// back out of the glyphs HarfBuzz returns: 35 of them are order-sensitive in
+// this font, and HarfBuzz answers UTR #53's order on all 35. The same over base
+// + three marks is 721 of 1331. The report's own text — "before any MCM with
+// ccc=230" — says the same thing, and says it plainly enough that the hand
+// should not have been asked.
 
 // marksOf normalises a string and returns what came out, so a test can assert
 // on the order rather than on the glyphs a particular font would draw.
@@ -69,6 +79,10 @@ func TestAHamzaComesBeforeTheVowelInArabic(t *testing.T) {
 		fatha      = 0x064E // combining class 30
 		damma      = 0x064F // combining class 30
 		shadda     = 0x0651 // combining class 33
+		// Two marks of the classes the report names that are *not* among its
+		// fourteen, which is what the "begins with" cases below turn on.
+		maddah        = 0x0653 // combining class 230, not a modifier mark
+		subscriptAlef = 0x0656 // combining class 220, not a modifier mark
 	)
 	for _, tc := range []struct {
 		in, want []rune
@@ -92,13 +106,37 @@ func TestAHamzaComesBeforeTheVowelInArabic(t *testing.T) {
 		},
 		{
 			[]rune{waw, fatha, hamzaAbove, hamzaBelow},
-			[]rune{waw, hamzaAbove, hamzaBelow, fatha},
-			"both hamzas: above is innermost, then below, then the vowel",
+			[]rune{waw, hamzaBelow, hamzaAbove, fatha},
+			"both hamzas: below is innermost, then above, then the vowel",
 		},
 		{
 			[]rune{waw, hamzaBelow, hamzaAbove},
+			[]rune{waw, hamzaBelow, hamzaAbove},
+			"the two hamzas alone: below innermost, which canonical order already gives",
+		},
+		{
 			[]rune{waw, hamzaAbove, hamzaBelow},
-			"the two hamzas written the other way round come out the same",
+			[]rune{waw, hamzaBelow, hamzaAbove},
+			"the same two written the other way round: the same answer",
+		},
+		// The condition the report puts on the move, which nothing above reaches.
+		// It is stated as "if a sequence of ccc=230 characters *begins with* any
+		// MCM characters" — so an ordinary mark of the same class written first
+		// does not get stepped over, it stops the move altogether.
+		{
+			[]rune{waw, maddah, hamzaAbove}, []rune{waw, maddah, hamzaAbove},
+			"an ordinary mark of class 230 before the hamza: the run does not " +
+				"begin with a modifier, so nothing moves",
+		},
+		{
+			[]rune{waw, subscriptAlef, hamzaBelow}, []rune{waw, subscriptAlef, hamzaBelow},
+			"the same at class 220",
+		},
+		{
+			[]rune{waw, fatha, hamzaBelow, subscriptAlef},
+			[]rune{waw, hamzaBelow, fatha, subscriptAlef},
+			"a modifier at the head of its class and an ordinary mark behind it: " +
+				"only the modifier moves",
 		},
 		{
 			[]rune{waw, fatha, damma}, []rune{waw, fatha, damma},
