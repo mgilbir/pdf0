@@ -146,31 +146,26 @@ func (sh shaper) attachCursive(buf []Glyph) {
 // letter along by the width of an accent.
 func (sh shaper) attachMarks(buf []Glyph) {
 	l := sh.l
-	if len(l.markAnchors) == 0 {
+	if len(l.markGlyphs) == 0 {
 		return
 	}
 	for i := range buf {
-		mark, isMark := l.markAnchors[buf[i].GID]
-		if !isMark {
+		if !l.markGlyphs[buf[i].GID] {
 			continue
 		}
 		// Find what this mark attaches to, and by which table.
 		for j := i - 1; j >= 0; j-- {
 			prevIsMark := l.isMark(buf[j].GID)
-			var (
-				base  anchor
-				found bool
-			)
+			set := l.markBase
 			if prevIsMark {
-				base, found = l.markMarkBases[key2{buf[j].GID, mark.class}]
-			} else {
-				base, found = l.markBases[key2{buf[j].GID, mark.class}]
+				set = l.markMark
 			}
+			mark, base, found := attachmentFor(set, buf[i].GID, buf[j].GID)
 			if !found {
 				if prevIsMark {
 					continue // stacked marks: keep looking back for the base
 				}
-				break // a base that says nothing about this mark class
+				break // a base that says nothing about this mark
 			}
 			// Place the mark so its anchor meets the base's. The pen is at the
 			// end of everything drawn since the base, so the advances between
@@ -214,6 +209,17 @@ type key2 struct {
 	class int
 }
 
+// markAttachment is one mark-attachment subtable, kept whole: which marks it
+// covers, with the class and anchor of each, and where a base receives a mark
+// of each class. lookup is the index of the lookup it came from, which is what
+// tells subtables that are alternatives to each other from subtables that are
+// applied one after another.
+type markAttachment struct {
+	lookup int
+	marks  map[int]markAnchor
+	bases  map[key2]anchor
+}
+
 // markAnchor is a mark's own attachment point and the class it belongs to.
 // Classes let a font say that, for instance, a base's anchor for accents above
 // is not the one for cedillas below.
@@ -250,16 +256,19 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 	for _, tag := range featureTags(gpos, feats.sel) {
 		for _, lookup := range featureLookups(gpos, tag, feats) {
 			kind, flags, subs := subtables(lookup, 9)
-			for _, sub := range subs {
-				switch kind {
-				case 1:
-					l.singlePosSubtable(sub)
-				case 3:
-					l.cursivePos(sub)
-				case 4:
-					l.markToBase(sub, false)
-				case 6:
-					l.markToBase(sub, true)
+			switch kind {
+			case 4:
+				l.readMarkAttachment(subs, false)
+			case 6:
+				l.readMarkAttachment(subs, true)
+			default:
+				for _, sub := range subs {
+					switch kind {
+					case 1:
+						l.singlePosSubtable(sub)
+					case 3:
+						l.cursivePos(sub)
+					}
 				}
 			}
 			switch kind {
@@ -385,13 +394,44 @@ func (l *layout) cursivePos(sub []byte) {
 	}
 }
 
-// markToBase reads a mark-to-base or mark-to-mark subtable. The two have the
-// same shape — a mark array and an array of attachment points, one per class —
-// and differ only in what the second array is indexed by, so one reader serves
-// both.
-func (l *layout) markToBase(sub []byte, mkmk bool) {
+// readMarkAttachment reads all the subtables of one mark-to-base or
+// mark-to-mark lookup, keeping each subtable whole.
+//
+// Keeping them apart is the whole point. A mark class is a number local to the
+// subtable that declares it: Noto Sans has eighteen mark-to-base subtables, and
+// class 0 means one thing in the one that places accents over Latin letters and
+// something else entirely in each of the others. A reader that merges them into
+// one table keyed by glyph and class pairs a mark's anchor from the subtable
+// that covers the mark with a base's anchor from whichever subtable was read
+// last — an anchor written for four particular marks, applied to all two
+// hundred and fifty of them.
+//
+// The two kinds have the same shape — a mark array and an array of attachment
+// points, one per class — and differ only in what the second array is indexed
+// by, so one reader serves both.
+func (l *layout) readMarkAttachment(subs [][]byte, mkmk bool) {
+	lookup := l.markLookups
+	l.markLookups++
+	for _, sub := range subs {
+		st, ok := readMarkSubtable(sub, lookup)
+		if !ok {
+			continue
+		}
+		for gid := range st.marks {
+			l.markGlyphs[gid] = true
+		}
+		if mkmk {
+			l.markMark = append(l.markMark, st)
+		} else {
+			l.markBase = append(l.markBase, st)
+		}
+	}
+}
+
+// readMarkSubtable reads one mark-attachment subtable.
+func readMarkSubtable(sub []byte, lookup int) (markAttachment, bool) {
 	if len(sub) < 12 || font.Be16(sub, 0) != 1 {
-		return
+		return markAttachment{}, false
 	}
 	markCoverage := coverageGlyphs(sub, font.Be16(sub, 2))
 	baseCoverage := coverageGlyphs(sub, font.Be16(sub, 4))
@@ -399,7 +439,12 @@ func (l *layout) markToBase(sub []byte, mkmk bool) {
 	markArrayOff := font.Be16(sub, 8)
 	baseArrayOff := font.Be16(sub, 10)
 	if classCount <= 0 || classCount > 1024 {
-		return
+		return markAttachment{}, false
+	}
+	st := markAttachment{
+		lookup: lookup,
+		marks:  map[int]markAnchor{},
+		bases:  map[key2]anchor{},
 	}
 
 	// The mark array: a class and an anchor for each covered mark.
@@ -416,7 +461,7 @@ func (l *layout) markToBase(sub []byte, mkmk bool) {
 			if !ok || class >= classCount {
 				continue
 			}
-			l.markAnchors[markCoverage[i]] = markAnchor{class: class, anchor: a}
+			st.marks[markCoverage[i]] = markAnchor{class: class, anchor: a}
 		}
 	}
 
@@ -434,15 +479,47 @@ func (l *layout) markToBase(sub []byte, mkmk bool) {
 				if !ok {
 					continue
 				}
-				k := key2{baseCoverage[i], c}
-				if mkmk {
-					l.markMarkBases[k] = a
-				} else {
-					l.markBases[k] = a
-				}
+				st.bases[key2{baseCoverage[i], c}] = a
 			}
 		}
 	}
+	if len(st.marks) == 0 || len(st.bases) == 0 {
+		return markAttachment{}, false
+	}
+	return st, true
+}
+
+// attachmentFor finds where a mark meets a base, over a set of subtables read in
+// lookup order.
+//
+// A subtable applies only when it covers *both* — the mark, so it knows the
+// mark's class and its anchor, and that base for that class. Coverage of one
+// without the other is a subtable that has nothing to say about this pair, and
+// the search moves on.
+//
+// Which match wins follows how the lookups are applied. Within a lookup the
+// subtables are alternatives and the first that applies is the one used; across
+// lookups each runs in turn over the whole run, so a later lookup that applies
+// overwrites what an earlier one placed. Hence: last applying lookup, first
+// applying subtable within it.
+func attachmentFor(set []markAttachment, markGID, baseGID int) (mark markAnchor, base anchor, ok bool) {
+	matched := -1
+	for i := range set {
+		st := &set[i]
+		if ok && st.lookup == matched {
+			continue // this lookup already applied, by an earlier subtable
+		}
+		m, has := st.marks[markGID]
+		if !has {
+			continue
+		}
+		b, has := st.bases[key2{baseGID, m.class}]
+		if !has {
+			continue
+		}
+		mark, base, ok, matched = m, b, true, st.lookup
+	}
+	return mark, base, ok
 }
 
 // readAnchor reads an anchor table. All three formats begin with the same two
@@ -471,6 +548,5 @@ func (l *layout) isMark(gid int) bool {
 	if c, ok := l.glyphClass[gid]; ok {
 		return c == classMark
 	}
-	_, inMarkArray := l.markAnchors[gid]
-	return inMarkArray
+	return l.markGlyphs[gid]
 }

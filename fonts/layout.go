@@ -373,9 +373,16 @@ type layout struct {
 	// markAnchors holds each mark's own attachment point and class;
 	// markBases and markMarkBases hold where a base or another mark receives a
 	// mark of each class.
-	markAnchors   map[int]markAnchor
-	markBases     map[key2]anchor
-	markMarkBases map[key2]anchor
+	// markBase and markMark are the mark-attachment subtables in the order
+	// their lookups are applied, each kept whole; markGlyphs is every glyph any
+	// of them covers as a mark, which is what makes the common case — a run
+	// with no marks in it — one map lookup per glyph. markLookups counts the
+	// lookups read, so that subtables of one lookup can be told from subtables
+	// of the next.
+	markBase    []markAttachment
+	markMark    []markAttachment
+	markGlyphs  map[int]bool
+	markLookups int
 	// kern maps an ordered glyph pair to the horizontal adjustment between
 	// them, in font units. Negative pulls the pair together, which is what
 	// kerning almost always does.
@@ -486,13 +493,11 @@ type ligature struct {
 // from a misread table is wrong.
 func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 	l := &layout{
-		kern:          map[[2]int]int{},
-		glyphClass:    map[int]int{},
-		singlePos:     map[int]singleAdjust{},
-		markAnchors:   map[int]markAnchor{},
-		markBases:     map[key2]anchor{},
-		markMarkBases: map[key2]anchor{},
-		cursive:       map[int]cursiveAnchors{},
+		kern:       map[[2]int]int{},
+		glyphClass: map[int]int{},
+		singlePos:  map[int]singleAdjust{},
+		markGlyphs: map[int]bool{},
+		cursive:    map[int]cursiveAnchors{},
 	}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
@@ -1132,14 +1137,12 @@ func (l *layout) singleSubst(tag string, sub []byte) {
 // — a standard font, whose metrics are published rather than embedded.
 func emptyLayout() *layout {
 	return &layout{
-		kern:          map[[2]int]int{},
-		ligatures:     map[int][]ligature{},
-		glyphClass:    map[int]int{},
-		single:        map[string]map[int]int{},
-		singlePos:     map[int]singleAdjust{},
-		markAnchors:   map[int]markAnchor{},
-		markBases:     map[key2]anchor{},
-		markMarkBases: map[key2]anchor{},
-		cursive:       map[int]cursiveAnchors{},
+		kern:       map[[2]int]int{},
+		ligatures:  map[int][]ligature{},
+		glyphClass: map[int]int{},
+		single:     map[string]map[int]int{},
+		singlePos:  map[int]singleAdjust{},
+		markGlyphs: map[int]bool{},
+		cursive:    map[int]cursiveAnchors{},
 	}
 }
