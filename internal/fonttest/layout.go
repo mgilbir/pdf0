@@ -21,7 +21,13 @@ type Ligature struct {
 
 // GPOS builds a GPOS table with a single 'kern' feature whose one lookup is a
 // PairPos format 1 subtable carrying the given pairs.
-func GPOS(pairs []KernPair) []byte {
+func GPOS(pairs []KernPair) []byte { return GPOSPairsUnder("kern", pairs) }
+
+// GPOSPairsUnder is GPOS with the feature named, for a fixture that needs to
+// know which feature a reader took its pairs from. 'dist' is the one that
+// matters: it is where the complex scripts state their spacing, and a font may
+// declare it and no 'kern' at all.
+func GPOSPairsUnder(feature string, pairs []KernPair) []byte {
 	// Group by left glyph, which is how PairPos format 1 is organised.
 	order := []int{}
 	byLeft := map[int][]KernPair{}
@@ -62,7 +68,7 @@ func GPOS(pairs []KernPair) []byte {
 		binary.BigEndian.PutUint16(body[10+2*i:], uint16(len(body)))
 		body = append(body, set...)
 	}
-	return layoutTable("kern", 2, body) // 2 = pair adjustment
+	return layoutTable(feature, 2, body) // 2 = pair adjustment
 }
 
 // GSUB builds a GSUB table with a single 'liga' feature whose one lookup is a
