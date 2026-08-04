@@ -269,9 +269,12 @@ type singleAdjust struct {
 // word's whole cursive chain from the Arabic lookup's flag — precisely the "a
 // rule meant for another script" this selection exists to stop.
 func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
+	// One budget for every subtable this reader may take, shared across the
+	// whole table — see subtables.
+	budget := subtableBudget(gpos)
 	for _, tag := range featureTags(gpos, feats.sel) {
 		for _, lookup := range featureLookups(gpos, tag, feats) {
-			kind, flags, _, subs := subtables(lookup, 9)
+			kind, flags, _, subs := subtables(lookup, 9, &budget)
 			switch kind {
 			case 4, 5:
 				// Mark-to-base and mark-to-ligature go into one ordered set:

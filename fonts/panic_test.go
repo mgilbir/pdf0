@@ -1,6 +1,8 @@
 package fonts
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -194,6 +196,16 @@ var fuzzTexts = []string{
 	"\u1780\u17D2\u179A\u17C4\u17C7",
 	// Myanmar: a kinzi, a medial Ra and a below-base sign with a mark after it.
 	"\u1004\u103A\u1039\u1000\u103C\u102F\u1036",
+	// Javanese: a stacked pair carrying a vowel, through the universal engine.
+	"\uA98F\uA9C0\uA9A0\uA9BA",
+	// Balinese: the split vowel sign, drawn as two marks on opposite sides.
+	"\u1B13\u1B44\u1B14\u1B40",
+	// Tibetan: a consonant with a subjoined form and a vowel, which is where the
+	// mark glyph sets and the long lookup list are read.
+	"\u0F40\u0F90\u0F71\u0F72",
+	// Arabic: letters that join both ways, a hamza and a vowel, so the joining
+	// forms and the mark ordering are both reached.
+	"\u0628\u0640\u0628\u0648\u0655\u064E",
 }
 
 // FuzzLoadAndUse drives the whole writing pipeline on arbitrary bytes: parse,
@@ -246,6 +258,27 @@ func FuzzLoadAndUse(f *testing.F) {
 	}))
 	f.Add([]byte("OTTO\x00\x00\x00\x00"))
 	f.Add([]byte{})
+
+	// And the real fonts, which are the only seeds that reach most of this.
+	//
+	// A synthetic seed declares a handful of lookups and one subtable each; the
+	// fonts in testdata/harfbuzz declare up to 1190 lookups, up to 738 subtables
+	// in a single lookup, twenty mark glyph sets and every kind of contextual
+	// rule. Those are the paths where the bounds live, and a mutation of a real
+	// font arrives at them already well-formed enough to get inside — which is
+	// exactly where a reader that trusted a count would be caught.
+	//
+	// The largest is left out on purpose: it is 2 MB, and a fuzzer spends its
+	// time proportionally to the size of what it mutates.
+	for _, name := range []string{
+		"NotoSansBalinese.ttf", // 338 contextual positioning subtables
+		"NotoSansJavanese.ttf", // the universal engine's features
+		"NotoSansArabic.ttf",   // cursive joining and mark filtering
+	} {
+		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
+			f.Add(data)
+		}
+	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		for _, load := range []func([]byte) (*Face, error){Load, LoadSimple} {
