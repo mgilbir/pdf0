@@ -126,6 +126,12 @@ words += [
     "الرَّحمَن",
 ]
 
+# A character nothing is drawn for, between a letter and its mark, in a font
+# that gives that character a width. Kept so the difference is pinned rather
+# than merely known: CoreText agrees with this package and HarfBuzz does not.
+# See fonts/harfbuzz_test.go.
+words.append("".join(chr(c) for c in (0x063D, 0x061C, 0x0655)))
+
 seen, out = set(), []
 for w in words:
     if w and "\n" not in w and w not in seen:

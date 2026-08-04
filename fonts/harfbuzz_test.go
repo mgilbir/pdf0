@@ -196,7 +196,26 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 // fails, and so does one that is not in the corpus. An exception that cannot go
 // stale is a documented decision; one that can is a hole.
 //
-// # One entry, and what it took to earn it
+// # Two entries, and what each took to earn it
+//
+// Both are cases where HarfBuzz is the one out of step, and neither was called
+// that until CoreText had been asked. The harness is in testdata/coretext, and
+// each question is put to it with controls beside it that all three engines
+// already agree on, so a harness measuring the wrong thing says so before its
+// answer is believed.
+//
+// # An invisible character that the font gave a width
+//
+// Noto Sans Arabic draws nothing for U+061C ARABIC LETTER MARK and gives it a
+// glyph 600 units wide. HarfBuzz carries that glyph through positioning and
+// deletes it at the end, and the mark written after it keeps the 600 units: the
+// hamza lands at 1610 where it would otherwise land at 1010. This package
+// removes the character before shaping, so the gap is never made and the answer
+// for that string is identical to the answer without the character in it.
+//
+// CoreText's is identical too. Unicode asks for such a character not to be
+// rendered; leaving a hole the width of a letter where one was written is a
+// reading only HarfBuzz makes.
 //
 // A Tibetan string whose last mark this package puts five units to the right of
 // where HarfBuzz puts it. Everything structural agrees — the same target, the
@@ -245,8 +264,11 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 // An empty list is worth more than a documented one. It means every difference
 // this comparison reports is a defect.
 var deliberateDifferences = map[string]map[string]string{
-	"latin":    {},
-	"arabic":   {},
+	"latin": {},
+	"arabic": {
+		"\u063D\u061C\u0655": "an invisible character the font gave a width to, " +
+			"which HarfBuzz leaves a gap for and CoreText does not",
+	},
 	"khmer":    {},
 	"javanese": {},
 	"balinese": {},

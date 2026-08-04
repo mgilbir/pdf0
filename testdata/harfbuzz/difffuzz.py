@@ -98,6 +98,10 @@ KNOWN = {
     # this package does: 427, 427 and 422 in absolute terms. HarfBuzz is the one
     # out of step. See fonts/harfbuzz_test.go.
     "five-units-of-x",
+    # The other. A character nothing is drawn for, in a font that gave it a
+    # width: HarfBuzz keeps the gap when it removes the glyph, CoreText and this
+    # package close it.
+    "invisible-character-with-a-width",
 }
 
 def classify(text, ours, theirs):
@@ -110,6 +114,8 @@ def classify(text, ours, theirs):
     """
     if text == "\u0F52\u0F8F\u0FAD\u0F91\u0F73\u0F37":
         return "five-units-of-x"
+    if "\u061C" in text:
+        return "invisible-character-with-a-width"
     return None
 
 
