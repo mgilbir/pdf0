@@ -191,7 +191,7 @@ func (s *Stack) ShapeRuns(text string) ([]Run, int) {
 		// and joining still see the run they were written for — in the order it
 		// is written, which is what those rules are stated against. The run
 		// comes back in the order it is drawn.
-		glyphs, gone := face.shapeGlyphsIn(text[start:end], units[k].script, level&1 == 1)
+		glyphs, gone := face.shapeGlyphsIn(text[start:end], units[k].script, level&1 == 1, nil)
 		missing += gone
 		for gi := range glyphs {
 			glyphs[gi].Cluster += start
