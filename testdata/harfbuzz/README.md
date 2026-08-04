@@ -85,12 +85,15 @@ towards realistic prose. Prose exercises one path many times; a grid exercises
 many paths once.
 
 - **Latin** — the letter pairs that kern, every base with every common mark,
-  Greek and Cyrillic pairwise over the *whole* alphabet in both cases, the
-  Devanagari conjunct and vowel grids, ligatures formed across a skipped mark,
-  and every category of character that nothing is drawn for.
+  three marks on one letter over the whole combining-diacritical block, Greek
+  and Cyrillic pairwise over the *whole* alphabet in both cases, the Devanagari
+  conjunct and vowel grids, ligatures formed across a skipped mark, and every
+  category of character that nothing is drawn for.
 - **Arabic** — every letter in each of its four positions, every ordered pair,
   the letters that join only to the right, lam-alef in all four alef forms, the
-  vowels and the tanween and the shadda, and hamza written over and under a
+  vowels and the tanween and the shadda on every letter of the block rather than
+  the twenty-eight of the alphabet — the added letters are the ones `ccmp` splits
+  into a skeleton and marks of several kinds — and hamza written over and under a
   carrier beside a vowel, which is where the mark ordering of UTR #53 bites.
 - **Khmer** — every consonant under every other, two levels of subscript,
   subscript Ro, the pre-base and split vowels, a syllable with nothing to hang
@@ -250,17 +253,18 @@ more in positioning:
   had it taken away again. When this happens is a decision each script's model
   takes for itself: never for Indic and Khmer, before the rules for the
   universal engine and Myanmar, after them for everything else.
-One class is still open: mark-to-mark attachment, in both directions. It reaches
-backwards past a mark it finds nothing for and stacks on an earlier one — so a
-third mark written after a combining *letter*, U+0363 and up, climbs over it
-onto the first, where HarfBuzz leaves it on the base. And elsewhere it attaches
-where HarfBuzz does not at all.
+- Mark attachment ran one walk backwards, trying mark-to-mark at every mark it
+  passed and mark-to-base at the first thing that was not one. They are
+  different questions. Mark-to-base looks past any marks in the way; mark-to-mark
+  looks past exactly the glyphs *its own lookup* skips and attaches to what it
+  lands on, never past it — and the lookups' flags were being dropped at load,
+  `mergedFlags` going as far as to strip the bit that says a mark glyph set is
+  in use. So a Latin letter with three marks had the third climb over a middle
+  one nothing stacks on, and an Arabic sukun did not stack on the dots above its
+  letter, because the ring below was in the way and its lookup's mark glyph set
+  says to step over it.
 
-Stopping at the glyph immediately before is *not* the correction, which is worth
-recording because it was tried: it fixes Latin, Greek and Cyrillic and breaks
-Arabic, whose marks are preceded by the dots `ccmp` splits off the letter and
-whose mark-to-mark lookup skips them. Both directions are the same missing
-thing — each attachment lookup has to keep its own flags, so that "the glyph
-before" means "the nearest one this lookup does not skip". `markFlags` is
-computed at load and never read. It wants the same treatment pair kerning has
-just had.
+  Stopping at the glyph immediately before is *not* the correction, which is
+  worth recording because it was tried: it fixes Latin, Greek and Cyrillic and
+  breaks Arabic. Both directions are the same missing thing, and the flags are
+  it.

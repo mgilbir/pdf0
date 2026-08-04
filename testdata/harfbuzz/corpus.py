@@ -28,6 +28,20 @@ for base in "aeiounycsgzAEIOUNYCSGZ":
     words.append(base + "̣́")
     words.append(base + "̈́")
 
+# Three marks on one letter, over the whole combining-diacritical block.
+#
+# The nine above are the ones a European language writes, and every one of them
+# is in the font's mark-to-mark tables, so stacking always found something and
+# the grid never asked what happens when it does not. The block also holds the
+# combining *letters* — U+0363 and up — which nothing stacks on. A third mark
+# written after one of those must stay where the base put it rather than
+# climbing over it onto the first.
+allmarks = [chr(c) for c in range(0x0300, 0x0370)]
+for base in "aoAOЇα":
+    for m in allmarks:
+        words.append(base + "̊" + m + "̑")
+        words.append(base + m + "̑")
+
 # Greek and Cyrillic, pairwise over the alphabet — every letter against every
 # letter, in both cases.
 #
