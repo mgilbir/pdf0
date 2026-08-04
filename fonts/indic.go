@@ -46,18 +46,20 @@ import (
 // OpenType specifications has two tags, and the tag a font declares its rules
 // under says which of the two it was written against — see indicOldSpec.
 //
-// Khmer, Myanmar and the scripts the Universal Shaping Engine covers do *not*
-// share this model, and are deliberately absent: they are set as they were
-// before, their characters turned into glyphs in storage order with the font's
-// default features applied. Text in them is not correctly set by this package
-// and should be shaped elsewhere and passed in as glyph indices. Shaping one of
-// them by these rules would be worse than leaving it, since it would move glyphs
-// by a grammar that is not theirs.
+// Khmer and Myanmar do *not* share this model and are deliberately absent from
+// it. Each is its own shaper, with its own categories, its own syllable grammar
+// and its own reordering — see khmer.go and myanmar.go. Shaping either by these
+// rules would be worse than leaving it, since it would move glyphs by a grammar
+// that is not theirs.
+//
+// The scripts the Universal Shaping Engine covers are absent and have no shaper
+// of their own: they are set as they were before, their characters turned into
+// glyphs in storage order with the font's default features applied. Text in
+// them is not correctly set by this package and should be shaped elsewhere and
+// passed in as glyph indices.
 //
 // These are not done:
 //
-//   - Pre-base-reordering Ra ('pref'). The feature is applied where the font
-//     asks for it, and its mask is set, but no consonant is moved for it.
 //   - Asking the font about a consonant *with* surrounding context, which the
 //     first-generation rules allow and the second do not. The question is always
 //     put as a bare pair of glyphs, so a font that states its below-base or
@@ -112,6 +114,32 @@ const (
 	catRS                           // a register shifter
 	catMPst                         // a matra a syllable modifier may stand before
 	catSMPst                        // a modifier with no side of its own
+
+	// Khmer and Myanmar group some characters differently from the Indic
+	// model, and name groups it has none of. The categories below are theirs
+	// (khmer.go, myanmar.go); they are here because they are the same kind of
+	// statement — what a character is within its syllable — and because the
+	// per-glyph record and the feature machinery are shared.
+	//
+	// The four vowel-sign categories say which side of the letter a sign is
+	// drawn on, which those two models read off the character rather than
+	// asking the font, as the Indic one does.
+	catVAbv     // a vowel sign drawn above the letter
+	catVBlw     // one drawn below it
+	catVPre     // one drawn before it, stored after
+	catVPst     // one drawn after it
+	catRobatic  // Khmer: a mark that may stand between a letter and its subscripts
+	catXgroup   // Khmer: a mark that may stand before a vowel sign
+	catYgroup   // Khmer: a mark that may stand only at the end of a syllable
+	catAsat     // Myanmar: the asat, which kills the vowel of the letter before it
+	catMedialY  // Myanmar: medial Ya, and the Mon letters written like it
+	catMedialR  // Myanmar: medial Ra, which is drawn before the base
+	catMedialW  // Myanmar: medial Wa, and the Shan Wa
+	catMedialH  // Myanmar: medial Ha
+	catMedialL  // Myanmar: the Mon medial La
+	catPTone    // Myanmar: a Pwo or other tone mark
+	catVS       // a variation selector, which takes the place of what it follows
+	catAnusvara // Myanmar: a sign drawn over the syllable that the reordering counts
 )
 
 // indicPos is where a glyph goes within its syllable. The order of these is the
@@ -653,6 +681,16 @@ type indicInfo struct {
 	cat  indicCat
 	pos  indicPos
 	mask uint8
+	// ligated says the glyph is what a ligature substitution made of several
+	// others, and has not since been taken apart again.
+	//
+	// It is a property of the *glyph*, not of the character, and only the
+	// pre-base-reordering Ra needs it: a font may declare that consonant's
+	// pre-base form generally and then decline to make it in some context, and
+	// the only way to tell whether it declined is to look at what came out.
+	// Moving a Ra the font left as an ordinary letter would draw a plain
+	// consonant before the base.
+	ligated bool
 }
 
 // The features that apply to part of a syllable rather than to all of it. A
@@ -841,39 +879,7 @@ func (sh shaper) markInvalidVowels(buf []Glyph, runes []rune) ([]Glyph, []rune) 
 // otherwise lose that half altogether, which is worse than drawing the sign
 // where the model would rather it were not.
 func (sh shaper) splitMatras(buf []Glyph, runes []rune) ([]Glyph, []rune) {
-	outBuf := make([]Glyph, 0, len(buf))
-	outRunes := make([]rune, 0, len(runes))
-	for i, r := range runes {
-		parts, ok := indicSplitMatraOf(r)
-		if !ok {
-			outBuf = append(outBuf, buf[i])
-			outRunes = append(outRunes, r)
-			continue
-		}
-		gids := make([]int, 0, len(parts))
-		for _, p := range parts {
-			gid, have := sh.f.GlyphID(p)
-			if !have {
-				gids = nil
-				break
-			}
-			gids = append(gids, gid)
-		}
-		if gids == nil {
-			outBuf = append(outBuf, buf[i])
-			outRunes = append(outRunes, r)
-			continue
-		}
-		// The parts share the sign's cluster: several glyphs standing for one
-		// character is exactly what a cluster records.
-		for k, gid := range gids {
-			outBuf = append(outBuf, Glyph{
-				GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
-			})
-			outRunes = append(outRunes, parts[k])
-		}
-	}
-	return outBuf, outRunes
+	return sh.splitCharacters(buf, runes, indicSplitMatraOf)
 }
 
 // indicSplitMatraOf reports the marks a vowel sign is drawn as, if it is one of
@@ -944,23 +950,7 @@ func (sh shaper) insertDottedCircle(buf []Glyph, info []indicInfo, start, end, g
 	for at < end && at < len(info) && info[at].cat == catRepha {
 		at++
 	}
-	cluster := 0
-	switch {
-	case at < len(buf):
-		cluster = buf[at].Cluster
-	case len(buf) > 0:
-		cluster = buf[len(buf)-1].Cluster
-	}
-	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)}
-
-	buf = append(buf, Glyph{})
-	copy(buf[at+1:], buf[at:])
-	buf[at] = g
-
-	info = append(info, indicInfo{})
-	copy(info[at+1:], info[at:])
-	info[at] = indicInfo{cat: catDottedCircle, pos: posEnd}
-	return buf, info
+	return sh.insertGlyphAt(buf, info, at, gid, indicInfo{cat: catDottedCircle, pos: posEnd})
 }
 
 // shapeIndicSyllable puts one syllable into drawing order and applies the
@@ -1096,6 +1086,18 @@ func (sh shaper) applyIndicFeature(buf []Glyph, info *[]indicInfo, lookups []int
 	total, step := 0, 0
 	sh.onResize = func(at, d int) {
 		*info = respliceIndicInfo(*info, at, d)
+		// Which glyphs are ligatures, which the pre-base-reordering Ra turns
+		// on. A lookup that shortened the run ligated what it consumed; one
+		// that lengthened it took a glyph apart, and the pieces are not
+		// ligatures whatever the glyph they came from was.
+		switch {
+		case d < 0 && at < len(*info):
+			(*info)[at].ligated = true
+		case d > 0:
+			for k := 0; k <= d && at+k < len(*info); k++ {
+				(*info)[at+k].ligated = false
+			}
+		}
 		step += d
 	}
 	sh.joinerAt = func(at int) joinerKind {
@@ -1510,6 +1512,26 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 		info[i].mask |= maskBlwf | maskAbvf | maskPstf
 	}
 
+	// The pre-base-reordering Ra: a consonant standing *after* the base that is
+	// nonetheless drawn before it. Which consonant that is, is the font's to
+	// say and not the script's — Telugu and Kannada have one and Devanagari has
+	// none — so the question put here is whether the font's 'pref' rules cover a
+	// virama and the consonant after it, anywhere after the base. Only the first
+	// such pair in a syllable is one: a syllable has at most one base to be
+	// drawn before.
+	//
+	// Marking it is all that happens now. Whether it *moves* is settled after
+	// the feature has run, since a font may decline to make the form.
+	if len(plan.pref) > 0 && base+2 < end {
+		for i := base + 1; i+1 < end; i++ {
+			if sh.wouldSubstitute(plan.pref, []int{buf[i].GID, buf[i+1].GID}) {
+				info[i].mask |= maskPref
+				info[i+1].mask |= maskPref
+				break
+			}
+		}
+	}
+
 	// The eyelash Ra, which only the first-generation Devanagari rules produce.
 	// Their below-base forms feature is stated as applying to consonants that
 	// follow the base — "the exception is vattu, which may appear below half
@@ -1559,9 +1581,40 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPla
 
 	// The base again: the font may have ligated it into something else, so it
 	// is found from the positions rather than remembered.
+	// Whether there is still a pre-base-reordering Ra to move. The marked pair
+	// may have been marked and then not formed, and the search below is where
+	// that is found out.
+	tryPref := len(plan.pref) > 0
+
 	base := start
 	for ; base < end; base++ {
 		if info[base].pos >= posBaseC {
+			// A pair marked as a pre-base-reordering Ra that the font declined
+			// to make a form for is not one, and what stands there is an
+			// ordinary consonant — which means the base is further on than the
+			// search had it. The virama before that consonant is stepped over,
+			// since a virama is never a base.
+			if tryPref && base+1 < end {
+				for i := base + 1; i < end; i++ {
+					if info[i].mask&maskPref == 0 {
+						continue
+					}
+					if !info[i].ligated {
+						base = i
+						for base < end && indicIsHalant(info[base].cat) {
+							base++
+						}
+						if base < end {
+							info[base].pos = posBaseC
+						}
+						tryPref = false
+					}
+					break
+				}
+				if base == end {
+					break
+				}
+			}
 			// Malayalam draws no half forms, so a consonant the font declined to
 			// give a below-base form to is still a letter and is the base — the
 			// search moves on to it rather than stopping at what precedes it.
@@ -1655,6 +1708,62 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPla
 			rotateIndicLeft(buf, info, start, newPos)
 		}
 	}
+
+	// The pre-base-reordering Ra. It was left where it was written through the
+	// substitutions, because that is where the font's rule for making it is
+	// written; it is drawn before the base, in the same place a pre-base vowel
+	// sign is drawn — after the half forms, immediately before the base.
+	//
+	// It moves only if the font actually made the form. A font may declare the
+	// pre-base form for a consonant generally and block it in some context, and
+	// a Ra it left as an ordinary letter is an ordinary letter: moving it would
+	// draw a plain consonant before the base, which is not a thing the script
+	// writes.
+	if tryPref && base+1 < end {
+		for i := base + 1; i < end; i++ {
+			if info[i].mask&maskPref == 0 {
+				continue
+			}
+			if info[i].ligated {
+				newPos := base
+				// A script with no half forms has nothing for the consonant to
+				// be moved back past, exactly as for a pre-base vowel sign.
+				if plan.cfg.hasHalfForms {
+					for newPos > start && !indicIsMatra(info[newPos-1].cat) &&
+						info[newPos-1].cat != catHalant {
+						newPos--
+					}
+				}
+				// A joiner after that virama asked for the letters there to be
+				// joined, so the consonant is drawn after it.
+				if newPos > start && indicIsHalant(info[newPos-1].cat) &&
+					newPos < end && indicIsJoiner(info[newPos].cat) {
+					newPos++
+				}
+				if newPos < i {
+					rotateIndicRight(buf, info, newPos, i)
+					if newPos <= base && base < i {
+						base++
+					}
+				}
+			}
+			break
+		}
+	}
+}
+
+// rotateIndicRight moves the glyph at from back to to, shifting what lies
+// between forward by one. It is the mirror of rotateIndicLeft, and the
+// pre-base-reordering Ra is the one thing that travels this way: everything
+// else the final reordering moves is drawn later than it was written.
+func rotateIndicRight(buf []Glyph, info []indicInfo, to, from int) {
+	if to >= from || to < 0 || from >= len(buf) || from >= len(info) {
+		return
+	}
+	g, f := buf[from], info[from]
+	copy(buf[to+1:from+1], buf[to:from])
+	copy(info[to+1:from+1], info[to:from])
+	buf[to], info[to] = g, f
 }
 
 // indicRephPosition reports where in a syllable the reph is drawn.

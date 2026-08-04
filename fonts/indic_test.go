@@ -45,6 +45,7 @@ const (
 	gidKaWithI   // what 'pres' makes of a reordered i-sign and its Ka
 	gidKaKa      // a ligature of two Ka, which no real font declares
 	gidRakar     // what 'blwf' makes of a virama and Ra: a stroke under the base
+	gidRaAlt     // another form of Ra, which no conjunct rule is written about
 	gidSpace
 	gidDanda
 	gidLatinA
@@ -57,7 +58,7 @@ const (
 func devaGlyphs() []fonttest.Glyph {
 	runes := []rune{
 		devKa, devTa, devRa, devVirama, devIMatra, devAAMatra, devAnusvara, devA, devNukta,
-		0xE000, 0xE001, 0xE002, 0xE003, 0xE004, 0xE005, 0xE006,
+		0xE000, 0xE001, 0xE002, 0xE003, 0xE004, 0xE005, 0xE006, 0xE007,
 		' ', 0x0964, 'A', 0x200C, 0x200D, 0x25CC, 0x0907,
 	}
 	out := make([]fonttest.Glyph, len(runes))
