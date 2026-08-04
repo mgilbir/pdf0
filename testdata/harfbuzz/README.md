@@ -269,12 +269,46 @@ more in positioning:
   breaks Arabic. Both directions are the same missing thing, and the flags are
   it.
 
-Thirteen differences in eighteen thousand generated strings are left, all Khmer
-and Tibetan, all of them four or more marks on one base where this package
-stacks a mark deeper than HarfBuzz does. Three explanations have been ruled out
-by measurement rather than by reading: it is not the ligature-id rule
-MarkMarkPos applies, because these marks have no ligature ids; it is not the
-mark filtering set, because the mark is in it; and it is not the order the
-attachment lookups are read in, which was wrong and has been corrected without
-changing any of the thirteen. What is left to check is which anchor *class* is
-being taken when several subtables cover the same pair.
+The mark-stacking class is what is left, and it is larger than it looked. With
+nothing masked the fuzzer reports 334 differences over 644,400 strings: khmer
+217, tibetan 85, devanagari 29, and one each in arabic, balinese and javanese.
+The earlier figure of thirteen was an artifact — the tool skipped any string with
+an ignorable inside it, which hid differences that had nothing to do with
+ignorables.
+
+They are one shape: several marks on one base, where this package stacks a mark
+on the one before it and HarfBuzz leaves it on the base. The smallest case is
+
+	U+0905 U+0945 U+0955   this package  3917 at y 247
+	                       HarfBuzz      3917 at y 0, beside 3916
+
+## What has been ruled out, by measurement
+
+Three readings, each of which fitted the case that suggested it and then failed
+elsewhere. They are written down so the fourth attempt does not repeat them.
+
+- **Not the ligature rule.** MarkMarkPos matches only marks "belonging to the
+  same base, or same component of the same ligature". These marks have no
+  ligature ids, so that branch passes.
+- **Not the mark filtering set.** The lookup names set 3 and both marks are in
+  it, so nothing is skipped and the pair is covered.
+- **Not the order the attachment lookups are read in.** That was genuinely
+  wrong — feature order rather than lookup-list order — and correcting it moved
+  none of these.
+
+The lookup that would place the glyph is `abvm` lookup 11, a MarkMarkPos that
+covers the pair. Disabling `abvm` in HarfBuzz changes nothing, and disabling
+`mark` changes everything: so the placement comes from mark-to-base and lookup 11
+does not fire. *Why it does not fire is the open question.*
+
+## What to try next
+
+Not another reading of the tables — three have failed. Get HarfBuzz to say which
+lookup it applied:
+
+- `hb-shape --trace` from a HarfBuzz build with `HB_DEBUG_APPLY`, which names
+  every lookup as it is tried. uharfbuzz's message callback is not enough: it
+  reports only `start table GPOS` and `end table GPOS`.
+- Failing that, bisect the font: strip lookup 11 from a copy and see whether
+  HarfBuzz's answer changes. If it does not, the lookup was never reached and
+  the question becomes what reaches it.
