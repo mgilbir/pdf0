@@ -111,9 +111,15 @@ import (
 // capped, and a malformed offset truncates the walk rather than reaching outside
 // the table.
 
-// Layout bounds. These are far above any real face — a large Latin font
-// declares a few thousand kern pairs — and exist so that a crafted font cannot
-// turn a few bytes of declaration into unbounded work.
+// Layout bounds. They exist so that a crafted font cannot turn a few bytes of
+// declaration into unbounded work.
+//
+// Each is above any real face — but "above any real face" is a claim about
+// fonts nobody has looked at, and it was wrong once: 512 was the cap on a
+// lookup list, and Noto Serif Tibetan declares 1190 lookups. Truncating that
+// list is worse than truncating any other, because a lookup is named by *index*
+// and a contextual rule reaching past the cut silently does nothing. A third of
+// that font's Tibetan was set wrongly and nothing said so. See maxLookupList.
 const (
 	maxLookups   = 512
 	maxSubtables = 256
@@ -121,6 +127,15 @@ const (
 	maxLigatures = 1 << 14
 	maxScripts   = 256
 	maxLangSys   = 256
+	// maxLookupList bounds a lookup list, and is the format's own maximum
+	// rather than a guess at what a font might hold: the count is a uint16, so
+	// no valid font can exceed it and no valid font is ever truncated.
+	//
+	// It is not what stops a crafted one. That is the walk itself, which needs
+	// two bytes of offset per lookup present in the table and stops when they
+	// run out — so the work a font can ask for is bounded by its own size,
+	// which is the bound that means something. This is the backstop.
+	maxLookupList = 0xFFFF
 	// The FeatureVariations walk. A real face states a handful of records — Noto
 	// Sans Oriya states one — and each names a few conditions and a few
 	// substituted features.
@@ -335,10 +350,10 @@ func featureLookupList(list []byte, index int, varied featureSubst) []int {
 	}
 	feature := list[off:]
 	n := font.Be16(feature, 2)
-	if n > maxLookups {
-		n = maxLookups
+	if n > maxLookupList {
+		n = maxLookupList
 	}
-	out := make([]int, 0, n)
+	out := make([]int, 0, min(n, max(0, (len(feature)-4)/2)))
 	for j := 0; j < n; j++ {
 		if 4+2*j+2 > len(feature) {
 			break
@@ -600,10 +615,14 @@ func lookupList(gsub []byte, extension int) []rawLookup {
 	}
 	list := gsub[off:]
 	n := font.Be16(list, 0)
-	if n > maxLookups {
-		n = maxLookups
+	if n > maxLookupList {
+		n = maxLookupList
 	}
-	out := make([]rawLookup, 0, n)
+	// The capacity is what the table could actually hold — two bytes of offset
+	// each — rather than what it claims to. A font declaring sixty thousand
+	// lookups in twenty bytes gets one allocation of twenty bytes' worth, and
+	// the loop below stops when the offsets run out.
+	out := make([]rawLookup, 0, min(n, max(0, (len(list)-2)/2)))
 	for i := 0; i < n; i++ {
 		if 2+2*i+2 > len(list) {
 			break
@@ -633,8 +652,8 @@ func featureLookupIndices(t []byte, feats tableFeatures) map[string][]int {
 	}
 	list := t[off:]
 	n := font.Be16(list, 0)
-	if n > maxLookups {
-		n = maxLookups
+	if n > maxLookupList {
+		n = maxLookupList
 	}
 	for i := 0; i < n; i++ {
 		rec := 2 + 6*i
