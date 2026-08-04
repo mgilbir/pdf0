@@ -131,7 +131,12 @@ func TestTheArabicMarkOrderIsArabicsAlone(t *testing.T) {
 	}{
 		{[]rune{'o', dotBelow, grave}, "a dot below and a grave on a Latin letter"},
 		{[]rune{'o', grave, dotBelow}, "the same two the other way round"},
-		{[]rune{hebLamed, hiriq, dotBelow}, "a Hebrew point and a mark below"},
+		// A Hebrew letter carrying an Arabic hamza. Nobody writes it, and that
+		// is the point: it is the one shape of run where the *content* gate
+		// opens and only the script gate is left to stop the rule. Without a
+		// case like it this test would assert nothing once the content gate
+		// went in — and it said so.
+		{[]rune{hebLamed, hiriq, 0x0654}, "a Hebrew point and an Arabic hamza"},
 	} {
 		// The gate as the pipeline computes it: the run's own script.
 		if scriptSelects(runScript(string(tc.in)), "arab") {

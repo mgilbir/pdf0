@@ -644,6 +644,21 @@ func (n *normalizer) composeRound() ([]rune, []int) {
 // whose canonical order is the order they are drawn in — so applying this to
 // "ọ́" would stack the accent under the letter.
 func (n *normalizer) reorderArabicMarks(start, end int) {
+	// Only where one of the marks the report is *about* is present.
+	//
+	// UTR #53 names fourteen characters — the hamzas, the noon ghunna, the small
+	// high and low letters — and the reordering exists for them: they are part
+	// of how a letter is spelled rather than vowels on it, so they belong
+	// against the letter. Every other Arabic mark is ordinary and canonical
+	// order is the order it is drawn in.
+	//
+	// Applying the rotation to every run instead moves any mark of class 220 or
+	// 230 to the front, which for an ordinary pair reverses them. It passed a
+	// corpus that only ever wrote hamza — which is one of the fourteen — and a
+	// differential fuzzer found it in two minutes.
+	if !n.hasArabicModifier(start, end) {
+		return
+	}
 	// The two classes, innermost first: below the letter, then above it.
 	for _, cc := range [...]uint8{220, 230} {
 		i := start
@@ -680,4 +695,37 @@ func (n *normalizer) rotateMarks(start, mid, end int) {
 	copy(n.off[start+len(movedOff):end], n.off[start:mid])
 	copy(n.out[start:], moved)
 	copy(n.off[start:], movedOff)
+}
+
+// arabicModifierMarks are the characters UTR #53 is about: the ones whose
+// presence makes a letter's marks need reordering at all.
+//
+// They are named rather than derived because the report names them. No property
+// Unicode publishes separates them from the ordinary marks — what they have in
+// common is what they mean, not what they are.
+var arabicModifierMarks = map[rune]bool{
+	0x0654: true, // hamza above
+	0x0655: true, // hamza below
+	0x0658: true, // mark noon ghunna
+	0x06DC: true, // small high seen
+	0x06E3: true, // small low seen
+	0x06E7: true, // small high yeh
+	0x06E8: true, // small high noon
+	0x08CA: true, // small high farsi yeh
+	0x08CB: true, // small high yeh barree with two dots below
+	0x08CD: true, // small high zah
+	0x08CE: true, // large round dot above
+	0x08CF: true, // large round dot below
+	0x08D3: true, // small low waw
+	0x08F3: true, // small high waw
+}
+
+// hasArabicModifier reports whether a run of marks contains one of them.
+func (n *normalizer) hasArabicModifier(start, end int) bool {
+	for i := start; i < end && i < len(n.out); i++ {
+		if arabicModifierMarks[n.out[i]] {
+			return true
+		}
+	}
+	return false
 }

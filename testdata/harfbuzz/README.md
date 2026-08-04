@@ -153,3 +153,47 @@ keeps it until after, so the syllable breaks and the orphaned virama gets a
 dotted circle. The list is checked in both directions — an entry that starts
 agreeing fails, and so does one that is not in the corpus — so it cannot go
 stale.
+
+
+## Differential fuzzing
+
+`difffuzz.py` generates text instead of listing it, shapes it with both, and
+reports what disagrees. The corpora above are fixed lists chosen by hand; they
+are good at what they were written for and blind to everything nobody thought
+of, which is most of the state space.
+
+```sh
+PYTHON=.hbenv/bin/python make hbfuzz          # a minute
+python3 testdata/harfbuzz/difffuzz.py 600     # ten
+```
+
+It does not mutate the fonts. Random bytes produce a font neither side can read,
+and structured mutation produces one whose *correct* shaping nobody knows —
+HarfBuzz's answer would be as arbitrary as this package's. Malformed fonts are
+the Go fuzzer's job (`fonts/panic_test.go`), which asks a different question: not
+"is this right" but "does this survive".
+
+### What it took to make the output mean anything
+
+Three filters, each added because without it the report was almost entirely one
+false positive:
+
+- **A letter at the front.** A string of nothing but marks has no strong
+  direction, so the two resolve one differently — this package by running
+  UAX #9, HarfBuzz by guessing. 12,000 strings gave 241 reversals and no defect.
+- **One bidirectional class.** The Arabic-Indic digits are class AN, so a number
+  inside right-to-left text reads left to right; this package orders it that way
+  and HarfBuzz reverses it with everything else. Another 1,600 reversals.
+- **A minimiser that keeps the first character.** Shrinking a real difference
+  past its anchoring letter turns it into one of the above, so the tool would
+  "minimise" a genuine defect into a false one and report that.
+
+### What it has found
+
+- The Arabic mark reordering of UTR #53 was applied to every Arabic run rather
+  than to the runs the report is about. The corpus had only ever written hamza,
+  which is one of the fourteen characters it names, so every case passed. Two
+  minutes of fuzzing found it.
+- That the universal engine inserts no dotted circle for a cluster it cannot
+  parse, which the Indic and Khmer shapers here do. Recorded in the tool as a
+  gap rather than a decision, and it needs the engine's cluster grammar.
