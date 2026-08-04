@@ -42,6 +42,11 @@ type Glyph struct {
 	// is bookkeeping between the substitution pass and the positioning one
 	// rather than anything a caller can use.
 	lig ligatureRef
+
+	// class is what the character this glyph came from says it is — a mark or a
+	// letter — in GDEF's own numbering. It is what a lookup flag is read
+	// against when the font classifies nothing itself; see layout.classOf.
+	class int
 }
 
 // ligatureRef says what a glyph has to do with a ligature.
@@ -152,7 +157,10 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string) 
 			missing++
 			gid = 0
 		}
-		buf = append(buf, Glyph{GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid)})
+		buf = append(buf, Glyph{
+			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
+			class: classOfRune(runes[i]),
+		})
 	}
 	if len(buf) == 0 {
 		return nil, missing

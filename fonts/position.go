@@ -20,7 +20,7 @@ func (sh shaper) position(buf []Glyph) {
 	// advance. Glyphs the lookup ignores do not break a pair.
 	prev := -1
 	for i := range buf {
-		if l.ignores(l.kernFlags, buf[i].GID) {
+		if l.ignores(l.kernFlags, buf[i]) {
 			continue
 		}
 		if prev >= 0 {
@@ -93,7 +93,7 @@ func (sh shaper) attachCursive(buf []Glyph) {
 
 	prev := -1
 	for i := range buf {
-		if l.ignores(l.cursFlags, buf[i].GID) {
+		if l.ignores(l.cursFlags, buf[i]) {
 			continue
 		}
 		if prev >= 0 {
@@ -155,7 +155,7 @@ func (sh shaper) attachMarks(buf []Glyph) {
 		}
 		// Find what this mark attaches to, and by which table.
 		for j := i - 1; j >= 0; j-- {
-			prevIsMark := l.isMark(buf[j].GID)
+			prevIsMark := l.isMark(buf[j])
 			set := l.markBase
 			if prevIsMark {
 				set = l.markMark
@@ -654,9 +654,18 @@ func readAnchor(base []byte, off int) (anchor, bool) {
 // classifying them. Asking only the mark arrays gets mark-to-mark wrong: the
 // first of two stacked accents is a mark that no *mark-to-mark* array lists as
 // one, because in that lookup it is the base.
-func (l *layout) isMark(gid int) bool {
-	if c, ok := l.glyphClass[gid]; ok {
-		return c == classMark
+func (l *layout) isMark(g Glyph) bool {
+	if len(l.glyphClass) != 0 {
+		if c, ok := l.glyphClass[g.GID]; ok {
+			return c == classMark
+		}
+		return l.markGlyphs[g.GID]
 	}
-	return l.markGlyphs[gid]
+	// No GDEF at all: what the character said, falling back to the mark arrays
+	// for a glyph that came from no character of its own — one a substitution
+	// produced.
+	if g.class != 0 {
+		return g.class == classMark
+	}
+	return l.markGlyphs[g.GID]
 }
