@@ -80,13 +80,19 @@ type ligatureRef struct {
 // It is the full result. Shape is the same pipeline with the vertical part
 // dropped, and is enough whenever the text carries no marks.
 func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
+	return f.shapeGlyphsWith(s, nil)
+}
+
+// shapeGlyphsWith is ShapeGlyphs with extra features named by the caller, which
+// is what ShapeWith asks for. A nil list is the ordinary case.
+func (f *Face) shapeGlyphsWith(s string, extra []string) ([]Glyph, int) {
 	runs := bidiVisualRuns(s)
 	if len(runs) <= 1 {
 		// One direction throughout, which is nearly all text. Shaping it whole
 		// keeps a ligature or a kern pair that spans the string, which cutting
 		// it into runs would lose.
 		rtl := len(runs) == 1 && runs[0].rtl()
-		return f.shapeGlyphsIn(s, runScript(s), rtl)
+		return f.shapeGlyphsIn(s, runScript(s), rtl, extra)
 	}
 	var (
 		out     []Glyph
@@ -94,7 +100,7 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 	)
 	for _, r := range runs {
 		piece := s[r.start:r.end]
-		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.rtl())
+		glyphs, gone := f.shapeGlyphsIn(piece, runScript(piece), r.rtl(), extra)
 		missing += gone
 		for i := range glyphs {
 			glyphs[i].Cluster += r.start
@@ -114,7 +120,7 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 // decision when it cut the runs, and passes it here rather than having it
 // guessed again from less. The same holds for direction, which is a property of
 // the whole paragraph and cannot be read off one run of it.
-func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
+func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string) ([]Glyph, int) {
 	if !f.composite() {
 		return f.shapeByCode(s, rtl)
 	}
@@ -170,6 +176,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 		buf = hideJoiners(buf, runes)
 		buf = sh.substitute(buf)
 	}
+	// Features the caller asked for, after the ones every run gets. They are
+	// applied through the lookup list like any others rather than as a table of
+	// single substitutions, so a face whose small capitals are a contextual rule
+	// or a ligature gets them right.
+	buf = sh.applyNamedFeatures(buf, extra)
 	sh.position(buf)
 	if rtl {
 		// Last, and only now. Everything above is stated by the font in terms of
@@ -359,6 +370,21 @@ var defaultFeatures = []string{"ccmp", "rlig", "liga", "clig", "calt"}
 // substitute runs the GSUB lookups over a shaped buffer, preserving the cluster
 // of the first glyph of each run it replaces so that a ligature still maps back
 // to the text it came from.
+// applyNamedFeatures runs the lookups of features a caller named, in the order
+// they were named.
+//
+// A feature the font does not declare does nothing, which is the contract
+// ShapeWith states: asking a face with no small capitals for small capitals
+// should set the text plainly rather than fail.
+func (sh shaper) applyNamedFeatures(buf []Glyph, tags []string) []Glyph {
+	for _, tag := range tags {
+		if lookups := sh.l.featureLookups[tag]; len(lookups) > 0 {
+			buf = sh.applyContextual(buf, lookups)
+		}
+	}
+	return buf
+}
+
 func (sh shaper) substitute(buf []Glyph) []Glyph {
 	for _, tag := range defaultFeatures {
 		if lookups := sh.l.featureLookups[tag]; len(lookups) > 0 {

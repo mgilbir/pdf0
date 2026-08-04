@@ -24,6 +24,25 @@ import "github.com/mgilbir/pdf0/content"
 // so on), so extraction gives "ﬁ" rather than "fi" — searchable in a reader
 // that normalises, not in one that does not. Shape is therefore opt-in, and
 // Encode without it stays the choice for text that must extract literally.
+//
+// # What a text operator cannot say
+//
+// This shapes the text exactly as ShapeGlyphs does — it is the same call — and
+// then writes the result as spans. A span sequence can show codes and move the
+// pen along the line, and everything shaping decides horizontally therefore
+// survives: the kerning, the advance a contextual rule chose, the zero width of
+// a mark, and where along the line a mark sits.
+//
+// It cannot move the pen *across* the line, and one thing shaping decides needs
+// that: how far above or below the baseline a mark sits. Over the corpus in
+// testdata/harfbuzz that is 475 strings in 5911 — stacked accents, Devanagari
+// vowel signs, anything a font places vertically rather than by advance. Their
+// marks land on the baseline here.
+//
+// So: Shape for text that is a line of letters, which is most text and where
+// spans are the smaller and simpler thing to write. DrawShaped, which places
+// each glyph, for text that carries marks. MeasureShaped agrees with both,
+// because a width does not depend on the vertical.
 func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 	if !f.composite() {
 		// A simple or standard face encodes one byte per character, and its
@@ -43,181 +62,82 @@ func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 		}
 		return []content.TextSpan{{Codes: codes}}, missing
 	}
-	var out []content.TextSpan
-	for _, run := range bidiVisualRuns(s) {
-		piece := s[run.start:run.end]
-		glyphs, gone := f.glyphRunIn(piece, run.rtl())
-		missing += gone
-		if len(glyphs) == 0 {
-			continue
-		}
-		sh := shaper{f: f, l: f.layoutFor(runScript(piece)), rtl: run.rtl()}
-		out = append(out, sh.shapeGlyphs(glyphs)...)
-	}
-	return out, missing
+	glyphs, missing := f.ShapeGlyphs(s)
+	return f.spansFromGlyphs(glyphs), missing
 }
 
-// shapeGlyphs turns a glyph run into spans: ligatures first, then kerning, then
-// the codes and displacements a text operator takes.
+// spansFromGlyphs turns positioned glyphs into the spans a text operator takes.
 //
-// The glyphs arrive in the order the text is written and leave in the order it
-// is drawn. Ligatures are applied before the reversal, because a font's
-// ligatures are stated over the written order; the kerning is then looked up by
-// the pair as the font states it, which for a reversed run is the pair the other
-// way round from the one the pen sees.
-func (sh shaper) shapeGlyphs(glyphs []int) []content.TextSpan {
-	glyphs = sh.applyLigatures(glyphs)
-	if sh.rtl {
-		for i, j := 0, len(glyphs)-1; i < j; i, j = i+1, j-1 {
-			glyphs[i], glyphs[j] = glyphs[j], glyphs[i]
-		}
-	}
-
+// TJ can do two things: show codes, and move the pen. So everything shaping
+// decided horizontally comes through exactly — a kern, a contextual advance, a
+// mark's zero width, the horizontal half of where a mark sits — expressed as
+// displacements around the glyphs.
+//
+// Two of them per glyph, at most, and usually none:
+//
+//   - An offset displaces a glyph *without* moving the pen, so it is put in
+//     before the glyph and taken back out after.
+//   - The pen has moved by the advance the font's own /W array states, which is
+//     not what shaping decided, so the difference comes off.
+//
+// The two are emitted as one number where they meet, because a displacement is
+// three bytes of content stream and a page has thousands of them.
+func (f *Face) spansFromGlyphs(glyphs []Glyph) []content.TextSpan {
 	var (
-		run  []byte
-		out  []content.TextSpan
-		prev = -1
+		out []content.TextSpan
+		run []byte
 	)
-	for _, gid := range glyphs {
-		if prev >= 0 && !sh.l.ignores(sh.l.kernFlags, gid) {
-			if k, ok := sh.l.kern[sh.kernPair(prev, gid)]; ok && k != 0 {
-				// Flush what has accumulated, then the displacement. The sign
-				// flips: a negative kern closes the gap, and TJ subtracts.
-				out = append(out, content.TextSpan{Codes: run})
-				out = append(out, content.TextSpan{Adjust: -sh.f.scale(k)})
-				run = nil
-			}
-		}
-		run = append(run, byte(gid>>8), byte(gid))
-		sh.f.used[gid] = true
-		// A glyph the kerning lookup ignores does not become the left half of
-		// the next pair either: the pair is between the glyphs either side of
-		// it, which is the whole point of the flag.
-		if !sh.l.ignores(sh.l.kernFlags, gid) {
-			prev = gid
+	flush := func() {
+		if len(run) > 0 {
+			out = append(out, content.TextSpan{Codes: run})
+			run = nil
 		}
 	}
-	if len(run) > 0 {
-		out = append(out, content.TextSpan{Codes: run})
+	adjust := func(v float64) {
+		if v == 0 {
+			return
+		}
+		flush()
+		// The sign flips: a positive TJ number moves what follows *closer*.
+		out = append(out, content.TextSpan{Adjust: -v})
 	}
+	for _, g := range glyphs {
+		adjust(g.XOffset)
+		run = append(run, byte(g.GID>>8), byte(g.GID))
+		f.used[g.GID] = true
+		// Take the offset back out, and correct the font's advance to the one
+		// shaping decided. Both move the pen the other way, so they are one
+		// number.
+		adjust(g.XAdvance - f.advanceGID(g.GID) - g.XOffset)
+	}
+	flush()
 	return out
 }
 
 // MeasureShaped is the width of a shaped string at the given size, in
-// user-space units. It includes the ligature substitutions and the kerning, so
-// it is what Shape will actually occupy — unlike Measure, which sums the runes
-// as written.
+// user-space units.
 //
-// Direction does not change a width — a line occupies the same space whichever
-// way it is read — but it changes where the run boundaries fall, and a ligature
-// or a kern pair does not cross one. So the same cuts are made here as in Shape,
-// or the two would disagree on mixed text and a caller would lay out to one
-// width and draw another.
+// It is what the text will occupy on the page: the same shaping Shape and
+// DrawShaped do, measured rather than drawn. That is the whole contract, and it
+// is the reason this measures by shaping rather than by a cheaper approximation
+// of it. A layout engine measures a word to decide whether it fits the line and
+// then draws it; if the two disagree the line is filled to one width and painted
+// at another, and nothing in either call's own output shows it.
+//
+// This used to sum a flattened ligature table and a kerning map, which is most
+// of shaping and not all of it — no contextual substitution, no syllabic
+// reordering, no positioning beyond pair kerning. Over the HarfBuzz corpus that
+// was wrong for 1920 of 5911 strings, by up to 17% on a Devanagari conjunct.
 func (f *Face) MeasureShaped(s string, size float64) float64 {
 	if !f.composite() {
 		// Nothing is substituted or kerned for a face whose codes are
-		// characters, so what Shape occupies is what Measure says. It has to
-		// agree with Shape or a caller lays out to one width and draws another
-		// — and it would otherwise ask a face with no font program for a width
-		// by glyph index.
+		// characters, so what it occupies is what Measure says — and asking the
+		// shaped path would want a width by glyph index from a face that has no
+		// font program to give one.
 		return f.Measure(s, size)
 	}
-	var total float64
-	for _, run := range bidiVisualRuns(s) {
-		piece := s[run.start:run.end]
-		sh := shaper{f: f, l: f.layoutFor(runScript(piece)), rtl: run.rtl()}
-		glyphs, _ := f.glyphRunIn(piece, run.rtl())
-		glyphs = sh.applyLigatures(glyphs)
-		prev := -1
-		for _, gid := range glyphs {
-			if prev >= 0 && !sh.l.ignores(sh.l.kernFlags, gid) {
-				total += f.scale(sh.l.kern[[2]int{prev, gid}])
-			}
-			total += f.advanceGID(gid)
-			if !sh.l.ignores(sh.l.kernFlags, gid) {
-				prev = gid
-			}
-		}
-	}
-	return total * size / 1000
-}
-
-// kernPair names a kern pair the way the font states it: in the order the text
-// is written. A right-to-left run has been reversed by the time the pen walks
-// it, so the glyph the pen meets second is the one the font calls first.
-func (sh shaper) kernPair(prev, gid int) [2]int {
-	if sh.rtl {
-		return [2]int{gid, prev}
-	}
-	return [2]int{prev, gid}
-}
-
-// glyphRun maps runes to glyph indices, substituting .notdef for any the font
-// does not cover, exactly as Encode does.
-func (f *Face) glyphRun(s string) (glyphs []int, missing int) {
-	return f.glyphRunIn(s, false)
-}
-
-// glyphRunIn is glyphRun for one run of a known direction, applying rule L4
-// where it runs right to left: a bracket in right-to-left text is drawn as the
-// bracket that mirrors it.
-func (f *Face) glyphRunIn(s string, rtl bool) (glyphs []int, missing int) {
-	runes, _ := bidiRunCharacters(s, rtl)
-	for _, r := range runes {
-		if hiddenBeforeShaping(r) {
-			continue // nothing is drawn for it — see ignorable.go
-		}
-		gid, ok := f.GlyphID(r)
-		if !ok {
-			missing++
-			gid = 0
-		}
-		glyphs = append(glyphs, gid)
-	}
-	return glyphs, missing
-}
-
-// applyLigatures replaces runs of glyphs with the single glyph the font defines
-// for them, preferring the longest match so that ffi wins over ff.
-//
-// This is the span path's own ligature pass, over the flattened table. The glyph
-// path (ShapeGlyphs) goes through the lookup list instead, which honours lookup
-// flags and can be invoked from a contextual rule; the two agree on plain text,
-// which is all the span path is for.
-func (sh shaper) applyLigatures(glyphs []int) []int {
-	if len(sh.l.ligatures) == 0 {
-		return glyphs
-	}
-	out := make([]int, 0, len(glyphs))
-	for i := 0; i < len(glyphs); {
-		matched := false
-		for _, lig := range sh.l.ligatures[glyphs[i]] {
-			// components are the glyphs after the first, so the run needs
-			// len(components) more glyphs to exist beyond i.
-			if i+len(lig.components) >= len(glyphs) {
-				continue
-			}
-			ok := true
-			for k, comp := range lig.components {
-				if glyphs[i+1+k] != comp {
-					ok = false
-					break
-				}
-			}
-			if !ok {
-				continue
-			}
-			out = append(out, lig.glyph)
-			i += 1 + len(lig.components)
-			matched = true
-			break
-		}
-		if !matched {
-			out = append(out, glyphs[i])
-			i++
-		}
-	}
-	return out
+	glyphs, _ := f.ShapeGlyphs(s)
+	return MeasureGlyphs(glyphs, size)
 }
 
 // HasKerning reports whether the font carries pair kerning this package could
@@ -243,29 +163,8 @@ func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 // capitals from a face that has none should set the text plainly, not fail.
 // Features returns what a face actually offers.
 func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan, missing int) {
-	var out []content.TextSpan
-	for _, run := range bidiVisualRuns(s) {
-		piece := s[run.start:run.end]
-		sh := shaper{f: f, l: f.layoutFor(runScript(piece)), rtl: run.rtl()}
-		glyphs, gone := f.glyphRunIn(piece, run.rtl())
-		missing += gone
-		for _, tag := range features {
-			table := sh.l.single[tag]
-			if table == nil {
-				continue
-			}
-			for i, gid := range glyphs {
-				if to, ok := table[gid]; ok {
-					glyphs[i] = to
-				}
-			}
-		}
-		if len(glyphs) == 0 {
-			continue
-		}
-		out = append(out, sh.shapeGlyphs(glyphs)...)
-	}
-	return out, missing
+	glyphs, missing := f.shapeGlyphsWith(s, features)
+	return f.spansFromGlyphs(glyphs), missing
 }
 
 // Features lists the substitution features this face offers by name, sorted.
