@@ -80,62 +80,29 @@ FONTS = [
 ]
 
 # The differences that are already understood, so that a new one is visible.
-# They are keyed the way fonts/harfbuzz_test.go keys them, and this file is the
-# only other place they are named — if one is fixed there it will simply stop
-# appearing here.
 #
-# One entry, and it is a decision rather than a gap — see fonts/harfbuzz_test.go.
-# Three others have left. Two were gaps: the missing dotted circle for a broken
-# cluster, closed by the engine's cluster grammar, and the ordering of two
-# modifier marks on one letter, settled by UTR #53's own text. The third was
-# recorded as a decision — a deprecated Tibetan vowel sign after an unassigned
-# code point — and was not one: it was a reserved character being given a
-# category that broke the cluster. An entry here is meant to leave.
-KNOWN = {
-    # A character nothing is drawn for, inside a cluster: this package removes it
-    # before shaping, HarfBuzz keeps it until after.
-    "ignorable-in-cluster",
-}
-
-# Unicode's Default_Ignorable_Code_Point, derived rather than listed.
+# It is empty. There were four. Two were gaps and are fixed: the missing dotted
+# circle for a broken cluster, and the ordering of two modifier marks on one
+# letter. The third was recorded as a decision and was not one — a reserved
+# character being given a category that broke the cluster after it. The fourth
+# was a real decision, held for a long time and now reversed: a character nothing
+# is drawn for, written inside a syllable, is kept until the syllable model has
+# seen it, because Unicode does not ask for it to be removed and neither HarfBuzz
+# nor CoreText removes it. See fonts/harfbuzz_test.go.
 #
-# It was listed, by hand, and the list was missing the two Khmer inherent-vowel
-# signs — so 175 differences that are the decision above were reported as though
-# nobody had seen them before. A hand-written copy of a Unicode property is a
-# copy that rots, which is the same reason fonts/usetable.go is generated.
-#
-# The derivation is the one DerivedCoreProperties.txt states: the format
-# characters and the variation selectors, plus a fixed set Unicode calls
-# Other_Default_Ignorable_Code_Point, less the ones it takes back out. Only that
-# last set has to be written down, and it is written down in Unicode too.
-OTHER_DEFAULT_IGNORABLE = [
-    (0x034F, 0x034F), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x2065, 0x2065),
-    (0x3164, 0x3164), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0xE0000, 0xE0000),
-    (0xE0002, 0xE001F), (0xE0080, 0xE00FF), (0xE01F0, 0xE0FFF),
-]
-VARIATION_SELECTORS = [(0x180B, 0x180D), (0x180F, 0x180F), (0xFE00, 0xFE0F),
-                       (0xE0100, 0xE01EF)]
-NOT_IGNORABLE = [(0x0600, 0x0605), (0x0890, 0x0891), (0x06DD, 0x06DD),
-                 (0x070F, 0x070F), (0x08E2, 0x08E2), (0x110BD, 0x110BD),
-                 (0x110CD, 0x110CD), (0xFFF9, 0xFFFB), (0x13430, 0x13440)]
-
-
-def _in(u, table):
-    return any(lo <= u <= hi for lo, hi in table)
-
-
-def is_ignorable(ch):
-    u = ord(ch)
-    if _in(u, NOT_IGNORABLE) or unicodedata.category(ch) == "Zs":
-        return False
-    return (unicodedata.category(ch) == "Cf" or _in(u, OTHER_DEFAULT_IGNORABLE)
-            or _in(u, VARIATION_SELECTORS))
-
+# An empty set is the point of the tool: every difference it reports is a defect.
+KNOWN = set()
 
 def classify(text, ours, theirs):
-    """Name a difference that is already understood, or None if it is new."""
-    if any(is_ignorable(c) for c in text[1:-1]):
-        return "ignorable-in-cluster"
+    """Name a difference that is already understood, or None if it is new.
+
+    Nothing is, so this names nothing. It is kept because the shape of the tool
+    is "report what has not been explained", and the day something has to be
+    explained again this is where the explanation goes — with the table it needs
+    beside it, derived rather than typed. The last one it held was a hand-written
+    copy of Unicode's Default_Ignorable_Code_Point that had gone stale by two
+    characters.
+    """
     return None
 
 

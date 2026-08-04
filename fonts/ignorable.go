@@ -134,6 +134,23 @@ func hiddenBeforeShaping(r rune) bool {
 	return true
 }
 
+// hiddenAfterShaping reports whether a character is one nothing is drawn for
+// that a syllabic shaper is nevertheless handed, and so has to take back out
+// once it has done its work.
+//
+// The Hangul fillers are not among them for the reason they are excluded above:
+// they are letters and they occupy width.
+func hiddenAfterShaping(r rune) bool {
+	if !isDefaultIgnorable(r) {
+		return false
+	}
+	switch r {
+	case hangulChoseongFiller, hangulJungseongFiller, hangulFiller, halfwidthHangulFiller:
+		return false
+	}
+	return true
+}
+
 // dropHiddenCharacters removes the characters nothing is drawn for, keeping the
 // rest of a run and the offsets that map it back to the text.
 //

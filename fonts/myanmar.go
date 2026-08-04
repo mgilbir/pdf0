@@ -213,6 +213,7 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune) []Glyph {
 	cats := make([]indicCat, len(runes))
 	for i, r := range runes {
 		info[i].cat = myanmarCategory(r)
+		info[i].ignorable = hiddenAfterShaping(r)
 		cats[i] = info[i].cat
 	}
 
@@ -243,7 +244,7 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune) []Glyph {
 	}
 
 	return dropGlyphs(buf, func(i int) bool {
-		return i < len(info) && indicIsJoiner(info[i].cat)
+		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }
 

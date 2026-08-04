@@ -196,93 +196,42 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 // fails, and so does one that is not in the corpus. An exception that cannot go
 // stale is a documented decision; one that can is a hole.
 //
-// # The Latin entries: one thing, thirteen times
+// # It is empty, and that is the point
 //
-// A character nothing is drawn for, written between a consonant and its virama.
+// It held thirty-seven: a character nothing is drawn for, written inside a
+// syllable. This package removed every such character before shaping, so the
+// syllable stayed whole and the conjunct formed; HarfBuzz keeps them, so the
+// syllable breaks and the orphaned virama gets a dotted circle.
 //
-// This package removes such a character before the shaper sees it, so the
-// syllable is whole and the conjunct forms. HarfBuzz keeps it until after
-// shaping, so it breaks the syllable, and the orphaned virama gets a dotted
-// circle — the placeholder that says "this text is malformed".
+// The reason given was that Unicode "defines the property as characters that
+// should be ignored in rendering". It does not. Section 5.21 enumerates the six
+// processes such a character is to be ignored in — text segmentation, line
+// breaking, cursive joining, identifiers, searching and sorting, and display —
+// and shaping is not among them, while cursive joining is named explicitly, so
+// the list is not illustrative. What the display rule asks is that the character
+// have no glyph of its own, "although they may have an effect on the display of
+// other characters", which is satisfied by drawing nothing for it rather than by
+// removing it.
 //
-// Both readings are permitted, and that was checked rather than assumed. The
-// standard requires that such a character "not be displayed with a visible
-// fallback glyph, but instead simply not be rendered at all" — which is about
-// the character itself — and says in the same breath that these characters "may
-// affect surrounding character display". So it neither asks for them to be
-// removed before shaping nor for them to break a syllable, and nothing in it
-// settles which of the two answers below is right.
+// And nothing else agreed with this package. CoreText, asked on a Mac through
+// the harness in testdata/coretext, breaks the syllable too — for several of
+// these it emits a zero-advance glyph of its own and breaks the syllable anyway,
+// which is HarfBuzz's model reached independently. Two engines out of two.
 //
-// The choice here is the one that puts a well-formed conjunct on the page rather
-// than a dotted circle, because a document is written once and read many times
-// and a reader cannot fix the text — and because a soft hyphen inside a conjunct
-// is a legitimate hyphenation point, which the other reading makes impossible to
-// write. It is weaker for a tag character or a musical symbol, and splitting the
-// two would mean inventing a rule neither Unicode nor HarfBuzz states.
+// So the removal moved to the other side of the shaper: a syllabic run now keeps
+// them, the syllable model is allowed to be broken by them, and the shaper drops
+// them once they have said which cluster they broke. Every entry here went with
+// the change.
 //
-// What is *not* known is what CoreText and DirectWrite do; neither can be run
-// here, and this note says so rather than guessing at a majority.
+// An empty list is worth more than a documented one. It means every difference
+// this comparison reports is a defect.
 var deliberateDifferences = map[string]map[string]string{
-	"latin": {
-		"\u0915\u00AD\u094D\u0937":     "soft hyphen inside a Devanagari cluster",
-		"\u0915\u034F\u094D\u0937":     "combining grapheme joiner inside a Devanagari cluster",
-		"\u0915\u200B\u094D\u0937":     "zero width space inside a Devanagari cluster",
-		"\u0915\u200E\u094D\u0937":     "left-to-right mark inside a Devanagari cluster",
-		"\u0915\u202C\u094D\u0937":     "pop directional formatting inside a Devanagari cluster",
-		"\u0915\u2060\u094D\u0937":     "word joiner inside a Devanagari cluster",
-		"\u0915\u2064\u094D\u0937":     "invisible plus inside a Devanagari cluster",
-		"\u0915\u2069\u094D\u0937":     "pop directional isolate inside a Devanagari cluster",
-		"\u0915\uFE00\u094D\u0937":     "variation selector 1 inside a Devanagari cluster",
-		"\u0915\uFE0F\u094D\u0937":     "variation selector 16 inside a Devanagari cluster",
-		"\u0915\uFEFF\u094D\u0937":     "byte order mark inside a Devanagari cluster",
-		"\u0915\U0001D173\u094D\u0937": "musical begin beam inside a Devanagari cluster",
-		"\u0915\U000E0041\u094D\u0937": "tag letter inside a Devanagari cluster",
-	},
-	"arabic": {},
-	// The same decision as the Latin entries above, in the script where it is
-	// a rule rather than a curiosity. Every default-ignorable is removed before
-	// shaping, so none of them can break a syllable, and that holds for every
-	// script with a syllable model rather than for the thirteen Devanagari
-	// strings that happened to be the only ones written down. Two of these are
-	// Khmer's own inherent-vowel signs, which Unicode makes ignorable.
-	"khmer": {
-		"\u1780\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
-		"\u1780\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
-		"\u1780\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
-		"\u1780\u200B\u17B6": "a zero width space between a letter and its vowel",
-		"\u1781\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
-		"\u1781\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
-		"\u1781\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
-		"\u1781\u200B\u17B6": "a zero width space between a letter and its vowel",
-		"\u1782\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
-		"\u1782\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
-		"\u1782\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
-		"\u1782\u200B\u17B6": "a zero width space between a letter and its vowel",
-		"\u1783\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
-		"\u1783\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
-		"\u1783\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
-		"\u1783\u200B\u17B6": "a zero width space between a letter and its vowel",
-		"\u1784\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
-		"\u1784\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
-		"\u1784\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
-		"\u1784\u200B\u17B6": "a zero width space between a letter and its vowel",
-		"\u1785\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
-		"\u1785\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
-		"\u1785\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
-		"\u1785\u200B\u17B6": "a zero width space between a letter and its vowel",
-	},
+	"latin":    {},
+	"arabic":   {},
+	"khmer":    {},
 	"javanese": {},
 	"balinese": {},
-	// Tibetan had two, both a deprecated vowel sign written after U+0F48, which
-	// is a hole in the block. They were written down as a difference of opinion
-	// about how to decorate a letter that is not there.
-	//
-	// They were nothing of the kind. An unassigned code point was being given a
-	// category that made it break the cluster, and once the derivation stopped
-	// doing that — see the note on known in cmd/genuse — both agreed. A
-	// difference that can only be explained as a matter of taste is worth
-	// returning to.
-	"tibetan": {},
+	"tibetan":  {},
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.

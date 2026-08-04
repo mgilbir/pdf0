@@ -175,11 +175,22 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string) 
 	// See normalize.go.
 	runes, offsets = f.normalize(runes, offsets, usesSyllabicShaper(script), indicConfigFor(script) != nil,
 		scriptSelects(script, "arab"))
-	// And the characters nothing is drawn for go now: after normalisation, so
-	// that a combining grapheme joiner has already stopped what it was written
-	// to stop, and before the buffer is built, so that no rule of the font is
-	// ever asked about a glyph that will not be there. See ignorable.go.
-	runes, offsets = dropHiddenCharacters(runes, offsets)
+	// The characters nothing is drawn for, for every run but a syllabic one.
+	//
+	// Removing them here means no rule of the font is ever asked about a glyph
+	// that will not be there, and for a script whose rules are lookups that is
+	// the same answer as keeping them and having every lookup step over them,
+	// which is what HarfBuzz does. Measurement agrees: Latin, Greek, Cyrillic
+	// and Arabic differ in nothing either way.
+	//
+	// A syllable model is not a lookup and cannot step over anything. Whether
+	// such a character breaks a syllable is a question the model has to be
+	// allowed to answer, and it can only answer it if it is given the character
+	// — so a syllabic run keeps them, and the shaper that gets them drops them
+	// once they have said which cluster they broke. See ignorable.go.
+	if !usesSyllabicShaper(script) {
+		runes, offsets = dropHiddenCharacters(runes, offsets)
+	}
 	if len(runes) == 0 {
 		return nil, 0
 	}

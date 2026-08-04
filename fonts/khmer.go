@@ -209,6 +209,7 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune) []Glyph {
 	cats := make([]indicCat, len(runes))
 	for i, r := range runes {
 		info[i].cat = khmerCategory(r)
+		info[i].ignorable = hiddenAfterShaping(r)
 		cats[i] = info[i].cat
 	}
 
@@ -244,7 +245,7 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune) []Glyph {
 	// The joiners have now done everything they are for. What is left is a
 	// character with no shape, which must not reach the page.
 	return dropGlyphs(buf, func(i int) bool {
-		return i < len(info) && indicIsJoiner(info[i].cat)
+		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }
 

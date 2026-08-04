@@ -97,6 +97,9 @@ func useCategoryOf(r rune) (useCategory, usePosition) {
 type useInfo struct {
 	cat useCategory
 	pos usePosition
+	// ignorable says the character this glyph came from is one nothing is drawn
+	// for — see indicInfo, which carries it for the same reason.
+	ignorable bool
 	// ligated says the glyph is what a substitution made of several. It matters
 	// for one question only: a halant the font has ligated away is no longer a
 	// halant, so it neither stops a repha nor moves the place a pre-base vowel
@@ -564,6 +567,7 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune) []Glyph {
 	info := make([]useInfo, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = useCategoryOf(r)
+		info[i].ignorable = hiddenAfterShaping(r)
 	}
 
 	// Each cluster is shaped where it lies, and what it does to the buffer's
@@ -609,7 +613,11 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune) []Glyph {
 	if len(lookups) > 0 {
 		buf, _ = sh.applyUseFeature(buf, &info, lookups, 0, len(buf))
 	}
-	return buf
+	// What is left of a character nothing is drawn for. It has said everything
+	// it had to say — which cluster it broke — and must not reach the page.
+	return dropGlyphs(buf, func(i int) bool {
+		return i < len(info) && info[i].ignorable
+	})
 }
 
 // shapeUseCluster shapes one cluster and reports how much longer or shorter it

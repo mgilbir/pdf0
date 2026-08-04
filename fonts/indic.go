@@ -675,6 +675,11 @@ type indicInfo struct {
 	cat  indicCat
 	pos  indicPos
 	mask uint8
+	// ignorable says the character this glyph came from is one nothing is drawn
+	// for. It reaches the shaper — a syllable model has to see it to be broken
+	// by it — and must not reach the page, so it is remembered here and dropped
+	// at the end, exactly as a joiner is.
+	ignorable bool
 	// ligated says the glyph is what a ligature substitution made of several
 	// others, and has not since been taken apart again.
 	//
@@ -769,6 +774,7 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune, plan *indicPlan) []Glyph 
 	cats := make([]indicCat, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = indicProperties(r)
+		info[i].ignorable = hiddenAfterShaping(r)
 		cats[i] = info[i].cat
 	}
 
@@ -809,7 +815,7 @@ func (sh shaper) shapeIndic(buf []Glyph, runes []rune, plan *indicPlan) []Glyph 
 	// or forbade are made, and nothing below is written about them. What is left
 	// is a character with no shape, which must not reach the page.
 	return dropGlyphs(buf, func(i int) bool {
-		return i < len(info) && indicIsJoiner(info[i].cat)
+		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }
 
