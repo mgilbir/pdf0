@@ -56,12 +56,43 @@ func main() {
 	ignorable := readProperty(os.Args[4], "Default_Ignorable_Code_Point")
 	joining := readJoining(os.Args[5])
 
-	// Every character any of the inputs says something about, plus every
-	// unassigned one the derivation asks about, is answered by the same code —
-	// so the walk is over the whole code space and the ranges are merged after.
+	// A character none of the inputs names at all has no category derived from
+	// them, and is therefore Other.
+	//
+	// This is the difference between "what does the derivation say about this
+	// character" and "what does it say about every character", and what it
+	// settles is what an unassigned code point is. The published table has a row
+	// for them — Reserved, a cluster of its own — and the rule written here
+	// reached that through the word joiner, which comes to the same thing.
+	// HarfBuzz never asks: its generator walks the characters its inputs mention
+	// rather than the code space, so a reserved code point falls through to
+	// Other — and Other is a category that begins a cluster and takes marks onto
+	// it.
+	//
+	// The two readings differ over a mark written after a reserved code point,
+	// which is text that cannot be drawn either way. As Other the mark joins the
+	// empty box; as Reserved it is a cluster of its own and gets a dotted circle
+	// beside the box. The Tibetan corpus has 34 such strings — U+0F48 is a hole
+	// in the block — and HarfBuzz sets every one of them the first way.
+	//
+	// Naming a character means any input, the engine's own correction files
+	// included. HarfBuzz lets those override a value and not introduce a
+	// character, which drops some sixty letters of scripts Unicode gives no
+	// syllabic category to — Vithkuqi's among them — to Other. That part is not
+	// followed: the specification says those files exist precisely to supply
+	// data for the scripts Unicode's Indic properties do not cover, so a
+	// character they name is one the derivation knows about.
+	known := func(r rune) bool {
+		return inRanges(syllabic, r) || inRanges(positional, r) ||
+			joining[r] != "" || ignorable[r]
+	}
+
 	type answer struct{ cat, pos string }
 	answers := map[rune]answer{}
 	for r := rune(0); r <= 0x10FFFF; r++ {
+		if !known(r) {
+			continue
+		}
 		c := character{
 			r:    r,
 			isc:  valueAt(syllabic, r, "Other"),
@@ -317,6 +348,13 @@ func valueAt(rs []ranged, r rune, dflt string) string {
 		return rs[i].value
 	}
 	return dflt
+}
+
+// inRanges reports whether a file said anything at all about a character, which
+// is a different question from what it said — see the note on known in main.
+func inRanges(rs []ranged, r rune) bool {
+	i := sort.Search(len(rs), func(i int) bool { return rs[i].hi >= r })
+	return i < len(rs) && rs[i].lo <= r
 }
 
 // readRanged reads a file of "range ; value" lines, which is the shape of every

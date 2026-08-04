@@ -231,15 +231,16 @@ var deliberateDifferences = map[string]map[string]string{
 	"khmer":    {},
 	"javanese": {},
 	"balinese": {},
-	// A deprecated vowel sign written after an unassigned code point. HarfBuzz
-	// takes the sign apart; this package leaves it whole. The base is .notdef
-	// either way — U+0F48 is a hole in the Tibetan block — so what differs is
-	// how a shaper decorates a letter that is not there, and neither answer is
-	// better than the other.
-	"tibetan": {
-		"\u0F48\u0F77": "a deprecated vowel sign after an unassigned code point",
-		"\u0F48\u0F79": "the same, with the other deprecated sign",
-	},
+	// Tibetan had two, both a deprecated vowel sign written after U+0F48, which
+	// is a hole in the block. They were written down as a difference of opinion
+	// about how to decorate a letter that is not there.
+	//
+	// They were nothing of the kind. An unassigned code point was being given a
+	// category that made it break the cluster, and once the derivation stopped
+	// doing that — see the note on known in cmd/genuse — both agreed. A
+	// difference that can only be explained as a matter of taste is worth
+	// returning to.
+	"tibetan": {},
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.

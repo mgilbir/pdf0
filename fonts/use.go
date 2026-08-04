@@ -46,7 +46,7 @@ const (
 	useSM                      // a symbol modifier
 	useV                       // a dependent vowel
 	useVM                      // a vowel modifier
-	useWJ                      // a word joiner, and the unassigned code points
+	useWJ                      // a word joiner, and the ignorable code points reserved for one
 )
 
 // usePosition is which side of the letter a mark is drawn, for the categories
@@ -97,77 +97,420 @@ func useCategoryOf(r rune) (useCategory, usePosition) {
 type useInfo struct {
 	cat useCategory
 	pos usePosition
+	// ligated says the glyph is what a substitution made of several. It matters
+	// for one question only: a halant the font has ligated away is no longer a
+	// halant, so it neither stops a repha nor moves the place a pre-base vowel
+	// is sent to.
+	ligated bool
 }
 
-// useSyllable is one cluster: the stretch of glyphs that are drawn together and
-// that a font's rules are applied to as a unit.
-type useSyllable struct{ start, end int }
-
-// continuesSyllable reports whether a category can follow the base of a cluster.
+// useClusterKind is which of the grammar's productions matched a cluster.
 //
-// The engine's grammar states the tail in order — modifiers, then a stacked
-// consonant, then medials, then vowels, then vowel modifiers, then finals — and
-// a shaper that enforced that order would reject text it should merely set
-// oddly. What matters for segmentation is where the cluster *ends*, which is at
-// the first character that could begin one of its own.
-func continuesSyllable(c useCategory) bool {
-	switch c {
-	case useCM, useSUB, useN, useHN, useM, useV, useVM, useF, useFM,
-		useCGJ, useZWNJ, useRK, useSM:
+// It is not bookkeeping. Two things are decided by it: only some kinds have
+// their glyphs moved, and exactly one kind — the broken one — is what a dotted
+// circle is inserted for.
+type useClusterKind uint8
+
+const (
+	useNonCluster              useClusterKind = iota // a character in no cluster
+	useViramaTerminatedCluster                       // ends in a stacker or a reordering killer
+	useSakotTerminatedCluster                        // ends in the sakot
+	useStandardCluster                               // a base and what hangs off it
+	useNumberJoinerTerminatedCluster
+	useNumeralCluster
+	useSymbolCluster // a symbol, or anything else, carrying marks
+	useBrokenCluster // marks with no base: malformed text
+)
+
+// reorders reports whether a cluster of this kind has its glyphs moved.
+//
+// A numeral cluster and a character that is in no cluster do not: there is
+// nothing in either that is written on one side of a letter and drawn on the
+// other, which is the only thing the reordering is for.
+func (k useClusterKind) reorders() bool {
+	switch k {
+	case useViramaTerminatedCluster, useSakotTerminatedCluster, useStandardCluster,
+		useSymbolCluster, useBrokenCluster:
 		return true
 	}
 	return false
 }
 
-// stacksNext reports whether a category joins the letter after it into the same
-// cluster: a halant, an invisible stacker, or the sakot.
-func stacksNext(c useCategory) bool {
-	return c == useH || c == useIS || c == useSk || c == useHVM
+// useCluster is one cluster: the stretch of glyphs that are drawn together and
+// that a font's rules are applied to as a unit, and what it was matched as.
+type useCluster struct {
+	start, end int
+	kind       useClusterKind
 }
 
-// useSyllables cuts a run into clusters.
+// useGrammar matches the engine's cluster grammar.
 //
-// A cluster is a base and what hangs off it, optionally introduced by a repha or
-// a stacking consonant. Anything that is part of no cluster — a space, a full
-// stop, a Latin letter — is passed over, and the glyphs of it are left exactly
-// as they are.
-func useSyllables(info []useInfo) []useSyllable {
-	var out []useSyllable
-	for i := 0; i < len(info); {
-		start := i
-		// A repha or a consonant-with-stacker may come first, but only if a
-		// base follows: on its own each is just a mark.
-		if c := info[i].cat; c == useR || c == useCS {
-			if i+1 < len(info) && isUseBase(info[i+1].cat) {
-				i++
-			}
-		}
-		if !isUseBase(info[i].cat) {
-			i = start + 1
+// # Why a grammar and not a scan
+//
+// What stood here before asked, character by character, "can this continue the
+// cluster?" — which answers where a cluster ends and cannot answer whether what
+// it found is a cluster at all. Two things need that second answer. A run of
+// marks with no letter to hang off is *broken*, and a reader is told so by a
+// dotted circle; nothing else in the text says the text is malformed. And a
+// character the model calls Other is not a gap between clusters but the start of
+// one, so a symbol written between a letter and its vowel takes the vowel with
+// it rather than leaving it on the letter.
+//
+// # What it is
+//
+// The specification states the grammar as a set of productions and HarfBuzz
+// states it as a Ragel scanner; the two agree, and what is written below is one
+// method per production, each returning how far it reached. A scanner takes the
+// *longest* match and breaks a tie in favour of the alternative stated first,
+// so the alternatives are tried from the same place and compared, rather than
+// the first that matches being taken.
+type useGrammar struct {
+	info []useInfo
+	// idx maps a position in the grammar's input to a position in the run. Two
+	// kinds of character are not in it at all — see useGrammarInput.
+	idx []int
+}
+
+// useGrammarInput is the run as the grammar sees it, which is not all of it.
+//
+// The grapheme joiner and its relatives "may occur anywhere in a cluster with no
+// effect", so they are not in the grammar and must not be matched against it. A
+// zero width non-joiner is in the grammar, but only where it does something:
+// it continues the cluster before it and breaks the one after, and it does that
+// only when what follows is not a mark. Where a mark follows, it is invisible
+// here for the same reason the joiner is.
+func useGrammarInput(info []useInfo, runes []rune) []int {
+	idx := make([]int, 0, len(info))
+	for i := range info {
+		switch info[i].cat {
+		case useCGJ:
 			continue
+		case useZWNJ:
+			if next := nextUseVisible(info, runes, i+1); next >= 0 && isCombiningMark(runes[next]) {
+				continue
+			}
 		}
+		idx = append(idx, i)
+	}
+	return idx
+}
+
+// nextUseVisible is the first character at or after i that the grammar can see,
+// or -1 if there is none.
+func nextUseVisible(info []useInfo, runes []rune, i int) int {
+	for ; i < len(info) && i < len(runes); i++ {
+		if info[i].cat != useCGJ {
+			return i
+		}
+	}
+	return -1
+}
+
+func (g *useGrammar) is(i int, c useCategory) bool {
+	return i >= 0 && i < len(g.idx) && g.info[g.idx[i]].cat == c
+}
+
+func (g *useGrammar) isAt(i int, c useCategory, p usePosition) bool {
+	return g.is(i, c) && g.info[g.idx[i]].pos == p
+}
+
+// star matches zero or more, opt zero or one, of one positioned category.
+func (g *useGrammar) star(i int, c useCategory, p usePosition) int {
+	for g.isAt(i, c, p) {
 		i++
-		for i < len(info) {
-			switch {
-			case continuesSyllable(info[i].cat):
-				i++
-			case stacksNext(info[i].cat) && i+1 < len(info) && isUseBase(info[i+1].cat):
-				i += 2
-			case stacksNext(info[i].cat):
-				// A stacker with nothing to stack still belongs to the letter
-				// before it — it is what says that letter has no vowel.
-				i++
-			default:
-				out = append(out, useSyllable{start, i})
-				start = -1
-			}
-			if start < 0 {
-				break
-			}
+	}
+	return i
+}
+
+func (g *useGrammar) opt(i int, c useCategory, p usePosition) int {
+	if g.isAt(i, c, p) {
+		return i + 1
+	}
+	return i
+}
+
+// h = H | HVM | IS | Sk
+func (g *useGrammar) stacker(i int) bool {
+	return g.is(i, useH) || g.is(i, useHVM) || g.is(i, useIS) || g.is(i, useSk)
+}
+
+// consonant_modifiers = CMAbv* CMBlw* ((h B | SUB) CMAbv* CMBlw*)*
+func (g *useGrammar) consonantModifiers(i int) int {
+	i = g.star(g.star(i, useCM, usePosAbv), useCM, usePosBlw)
+	for {
+		switch {
+		case g.stacker(i) && g.is(i+1, useB):
+			i += 2
+		case g.is(i, useSUB):
+			i++
+		default:
+			return i
 		}
-		if start >= 0 {
-			out = append(out, useSyllable{start, i})
+		i = g.star(g.star(i, useCM, usePosAbv), useCM, usePosBlw)
+	}
+}
+
+// medial_consonants = MPre? MAbv? MBlw? MPst?
+func (g *useGrammar) medialConsonants(i int) int {
+	i = g.opt(i, useM, usePosPre)
+	i = g.opt(i, useM, usePosAbv)
+	i = g.opt(i, useM, usePosBlw)
+	return g.opt(i, useM, usePosPst)
+}
+
+// dependent_vowels = VPre* VAbv* VBlw* VPst* | H
+//
+// The second alternative is what makes a letter written with a bare virama a
+// *standard* cluster rather than a virama-terminated one, which is reserved for
+// the invisible stacker and the reordering killer.
+func (g *useGrammar) dependentVowels(i int) int {
+	j := g.star(i, useV, usePosPre)
+	j = g.star(j, useV, usePosAbv)
+	j = g.star(j, useV, usePosBlw)
+	j = g.star(j, useV, usePosPst)
+	if j == i && g.is(i, useH) {
+		return i + 1
+	}
+	return j
+}
+
+// vowel_modifiers = HVM? VMPre* VMAbv* VMBlw* VMPst*
+func (g *useGrammar) vowelModifiers(i int) int {
+	if g.is(i, useHVM) {
+		i++
+	}
+	i = g.star(i, useVM, usePosPre)
+	i = g.star(i, useVM, usePosAbv)
+	i = g.star(i, useVM, usePosBlw)
+	return g.star(i, useVM, usePosPst)
+}
+
+// final_consonants = FAbv* FBlw* FPst*
+func (g *useGrammar) finalConsonants(i int) int {
+	i = g.star(i, useF, usePosAbv)
+	i = g.star(i, useF, usePosBlw)
+	return g.star(i, useF, usePosPst)
+}
+
+// final_modifiers = FMAbv* FMBlw* | FMPst?
+func (g *useGrammar) finalModifiers(i int) int {
+	if j := g.star(g.star(i, useFM, usePosAbv), useFM, usePosBlw); j > i {
+		return j
+	}
+	return g.opt(i, useFM, usePosPst)
+}
+
+// complex_syllable_start = (R | CS)? (B | GB)
+func (g *useGrammar) complexSyllableStart(i int) int {
+	if g.is(i, useR) || g.is(i, useCS) {
+		i++
+	}
+	if g.is(i, useB) || g.is(i, useGB) {
+		return i + 1
+	}
+	return -1
+}
+
+// complex_syllable_middle = consonant_modifiers medial_consonants
+//
+//	dependent_vowels vowel_modifiers (Sk B)*
+func (g *useGrammar) complexSyllableMiddle(i int) int {
+	i = g.consonantModifiers(i)
+	i = g.medialConsonants(i)
+	i = g.dependentVowels(i)
+	i = g.vowelModifiers(i)
+	for g.is(i, useSk) && g.is(i+1, useB) {
+		i += 2
+	}
+	return i
+}
+
+// complex_syllable_tail = complex_syllable_middle final_consonants final_modifiers
+func (g *useGrammar) complexSyllableTail(i int) int {
+	return g.finalModifiers(g.finalConsonants(g.complexSyllableMiddle(i)))
+}
+
+// virama_terminated_cluster_tail = consonant_modifiers (IS | RK)
+func (g *useGrammar) viramaTerminatedTail(i int) int {
+	i = g.consonantModifiers(i)
+	if g.is(i, useIS) || g.is(i, useRK) {
+		return i + 1
+	}
+	return -1
+}
+
+// sakot_terminated_cluster_tail = complex_syllable_middle Sk
+func (g *useGrammar) sakotTerminatedTail(i int) int {
+	if i = g.complexSyllableMiddle(i); g.is(i, useSk) {
+		return i + 1
+	}
+	return -1
+}
+
+// number_joiner_terminated_cluster_tail = (HN N)* HN
+func (g *useGrammar) numberJoinerTail(i int) int {
+	for g.is(i, useHN) && g.is(i+1, useN) {
+		i += 2
+	}
+	if g.is(i, useHN) {
+		return i + 1
+	}
+	return -1
+}
+
+// numeral_cluster_tail = (HN N)+
+func (g *useGrammar) numeralTail(i int) int {
+	j := i
+	for g.is(j, useHN) && g.is(j+1, useN) {
+		j += 2
+	}
+	if j == i {
+		return -1
+	}
+	return j
+}
+
+// symbol_cluster_tail = SMAbv+ SMBlw* | SMBlw+
+func (g *useGrammar) symbolTail(i int) int {
+	if g.isAt(i, useSM, usePosAbv) {
+		return g.star(g.star(i, useSM, usePosAbv), useSM, usePosBlw)
+	}
+	if g.isAt(i, useSM, usePosBlw) {
+		return g.star(i, useSM, usePosBlw)
+	}
+	return -1
+}
+
+// tail = complex_syllable_tail | sakot_terminated_cluster_tail
+//
+//	| symbol_cluster_tail | virama_terminated_cluster_tail
+//
+// It can match nothing, which is what lets a symbol stand on its own.
+func (g *useGrammar) tail(i int) int {
+	return maxUse(g.complexSyllableTail(i), g.sakotTerminatedTail(i),
+		g.symbolTail(i), g.viramaTerminatedTail(i))
+}
+
+func maxUse(ns ...int) int {
+	best := -1
+	for _, n := range ns {
+		if n > best {
+			best = n
 		}
+	}
+	return best
+}
+
+// The start symbol's alternatives, in the order the specification states them.
+//
+// Order is what settles a tie, and there are ties that matter: a lone final
+// modifier written after the letter is matched both by the eighth alternative,
+// which makes it no cluster at all, and by the ninth, which would make it a
+// broken one and put a dotted circle under it. The eighth is stated first and so
+// wins, and that is the whole of why a stray one gets no placeholder.
+func (g *useGrammar) cluster(i int) (int, useClusterKind) {
+	type alternative struct {
+		end  int
+		kind useClusterKind
+		zwnj bool
+	}
+	// virama_terminated_cluster = complex_syllable_start virama_terminated_cluster_tail
+	// sakot_terminated_cluster  = complex_syllable_start sakot_terminated_cluster_tail
+	// standard_cluster          = complex_syllable_start complex_syllable_tail
+	viramaEnd, sakotEnd, standardEnd := -1, -1, -1
+	if s := g.complexSyllableStart(i); s >= 0 {
+		viramaEnd, sakotEnd, standardEnd =
+			g.viramaTerminatedTail(s), g.sakotTerminatedTail(s), g.complexSyllableTail(s)
+	}
+	// number_joiner_terminated_cluster = N number_joiner_terminated_cluster_tail
+	// numeral_cluster                  = N numeral_cluster_tail?
+	numberJoinerEnd, numeralEnd := -1, -1
+	if g.is(i, useN) {
+		numberJoinerEnd = g.numberJoinerTail(i + 1)
+		if numeralEnd = g.numeralTail(i + 1); numeralEnd < 0 {
+			numeralEnd = i + 1
+		}
+	}
+	// symbol_cluster = (O | GB) tail?
+	//
+	// The engine's Other is not a gap. Anything it has no other category for —
+	// a symbol, a full stop, a letter of another script — begins a cluster and
+	// takes a tail, and that is what keeps a mark written after one attached to
+	// it instead of drifting onto the letter before.
+	symbolEnd := -1
+	if g.is(i, useO) || g.is(i, useGB) {
+		if symbolEnd = g.tail(i + 1); symbolEnd < 0 {
+			symbolEnd = i + 1
+		}
+	}
+	// broken_cluster = R? (tail | number_joiner_terminated_cluster_tail | numeral_cluster_tail)
+	//
+	// The tail can match nothing, so the result is only a cluster if something
+	// was consumed — a production that matched no characters would leave the
+	// scan where it started.
+	brokenStart := i
+	if g.is(i, useR) {
+		brokenStart++
+	}
+	brokenEnd := maxUse(g.tail(brokenStart), g.numberJoinerTail(brokenStart),
+		g.numeralTail(brokenStart))
+	if brokenEnd <= i {
+		brokenEnd = -1
+	}
+	// FMPst on its own, and then anything at all.
+	fmPstEnd := -1
+	if g.isAt(i, useFM, usePosPst) {
+		fmPstEnd = i + 1
+	}
+	anyEnd := -1
+	if i < len(g.idx) {
+		anyEnd = i + 1
+	}
+
+	best, bestKind, bestZWNJ := -1, useNonCluster, false
+	for _, a := range []alternative{
+		{viramaEnd, useViramaTerminatedCluster, true},
+		{sakotEnd, useSakotTerminatedCluster, true},
+		{standardEnd, useStandardCluster, true},
+		{numberJoinerEnd, useNumberJoinerTerminatedCluster, true},
+		{numeralEnd, useNumeralCluster, true},
+		{symbolEnd, useSymbolCluster, true},
+		{fmPstEnd, useNonCluster, false},
+		{brokenEnd, useBrokenCluster, true},
+		{anyEnd, useNonCluster, false},
+	} {
+		if a.end > best {
+			best, bestKind, bestZWNJ = a.end, a.kind, a.zwnj
+		}
+	}
+	if best > i && bestZWNJ && g.is(best, useZWNJ) {
+		best++
+	}
+	return best, bestKind
+}
+
+// useClusters cuts a run into clusters, saying what each was matched as.
+func useClusters(info []useInfo, runes []rune) []useCluster {
+	g := &useGrammar{info: info, idx: useGrammarInput(info, runes)}
+	var out []useCluster
+	for i := 0; i < len(g.idx); {
+		end, kind := g.cluster(i)
+		// Every alternative either consumes a character or does not match, so
+		// this cannot fire — and it is here because a production that consumed
+		// nothing would not end the loop, and a hang is a worse way to find
+		// that out than a cluster of one.
+		if end <= i {
+			end, kind = i+1, useNonCluster
+		}
+		// A cluster runs to where the next one starts, so the characters the
+		// grammar cannot see are inside a cluster rather than between them:
+		// they are still glyphs, and a font's rules have to reach them.
+		last := len(info)
+		if end < len(g.idx) {
+			last = g.idx[end]
+		}
+		out = append(out, useCluster{start: g.idx[i], end: last, kind: kind})
+		i = end
 	}
 	return out
 }
@@ -183,11 +526,22 @@ func isUseBase(c useCategory) bool { return c == useB || c == useGB || c == useN
 // the typographic polish, applied to a cluster already in the order it is drawn.
 var (
 	useBasicFeatures = []string{"locl", "ccmp", "nukt", "akhn"}
-	// 'pref' is applied on its own, because what it did has to be looked at
-	// before anything else runs — see shapeUseSyllable.
+	// The reordering group, which the specification says is "applied
+	// individually in this order, rphf, pref" — each on its own, because what
+	// each did has to be read off the buffer before the next runs. See
+	// shapeUseCluster.
+	//
+	// They were applied the other way round here, and with 'rphf' among the
+	// orthographic features below. Nothing in these corpora shows it: of the
+	// three fonts this engine shapes, none states 'rphf' at all — the bundled
+	// face does, and it is Devanagari's, which goes to the Indic shaper and
+	// never reaches here. So the order of the two cannot change an answer any of
+	// them gives, and it is corrected because the specification states an order
+	// and this is it, not because anything was seen to break.
+	useRephFeature    = []string{"rphf"}
 	usePreBaseFeature = []string{"pref"}
 	useShapeFeatures  = []string{
-		"rphf", "rkrf", "abvf", "blwf", "half", "pstf", "vatu", "cjct",
+		"rkrf", "abvf", "blwf", "half", "pstf", "vatu", "cjct",
 	}
 	useFinalFeatures = []string{
 		"isol", "init", "medi", "fina", "abvs", "blws", "haln", "pres", "psts",
@@ -215,14 +569,15 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune) []Glyph {
 	// Each cluster is shaped where it lies, and what it does to the buffer's
 	// length shifts every cluster after it — so they are walked in order and the
 	// shift carried along.
+	dotted, hasDotted := sh.f.GlyphID(dottedCircle)
 	shift := 0
-	for _, syl := range useSyllables(info) {
-		start, end := syl.start+shift, syl.end+shift
+	for _, cl := range useClusters(info, runes) {
+		start, end := cl.start+shift, cl.end+shift
 		if start < 0 || end > len(buf) || start >= end {
 			continue
 		}
 		var delta int
-		buf, delta = sh.shapeUseSyllable(buf, &info, start, end)
+		buf, delta = sh.shapeUseCluster(buf, &info, start, end, cl.kind, dotted, hasDotted)
 		shift += delta
 	}
 	// The presentation features, applied in lookup order rather than feature
@@ -257,9 +612,10 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune) []Glyph {
 	return buf
 }
 
-// shapeUseSyllable shapes one cluster and reports how much longer or shorter it
+// shapeUseCluster shapes one cluster and reports how much longer or shorter it
 // left the buffer.
-func (sh shaper) shapeUseSyllable(buf []Glyph, info *[]useInfo, start, end int) ([]Glyph, int) {
+func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, start, end int,
+	kind useClusterKind, dotted int, hasDotted bool) ([]Glyph, int) {
 	total := 0
 	apply := func(tags []string) {
 		for _, tag := range tags {
@@ -273,6 +629,7 @@ func (sh shaper) shapeUseSyllable(buf []Glyph, info *[]useInfo, start, end int) 
 		}
 	}
 	apply(useBasicFeatures)
+	apply(useRephFeature)
 
 	// 'pref' is the font saying "this mark has a form that goes before the
 	// letter". Which mark it said it about is not something the categories
@@ -300,8 +657,57 @@ func (sh shaper) shapeUseSyllable(buf []Glyph, info *[]useInfo, start, end int) 
 	}
 
 	apply(useShapeFeatures)
-	reorderUseSyllable(buf, *info, start, end)
+
+	// The placeholder for a cluster that is not one.
+	//
+	// It goes in here, after the cluster's own rules have run over it and before
+	// anything is moved, which is where the engine puts it: the font's rules are
+	// written about the characters the text has, not about a glyph the shaper
+	// added, and the reordering below has to see it because it is now the base.
+	//
+	// A face without U+25CC cannot show one. Nothing is substituted for it —
+	// what the placeholder says is "this text is malformed", and a face that
+	// cannot say it should say nothing rather than something else.
+	if kind == useBrokenCluster && hasDotted {
+		// After a repha, which is written before the letter it belongs to and
+		// is part of the same malformed cluster.
+		at := start
+		for at < end && (*info)[at].cat == useR {
+			at++
+		}
+		buf, *info = sh.insertUseGlyph(buf, *info, at, dotted, useInfo{cat: useB})
+		end++
+		total++
+	}
+	if kind.reorders() {
+		reorderUseCluster(buf, *info, start, end)
+	}
 	return buf, total
+}
+
+// insertUseGlyph puts one glyph, and the record that describes it, into a buffer
+// at a position.
+//
+// The glyph takes the cluster of what it is inserted before, so that it maps
+// back to the character whose mark it is standing in for.
+func (sh shaper) insertUseGlyph(buf []Glyph, info []useInfo, at, gid int, what useInfo) ([]Glyph, []useInfo) {
+	cluster := 0
+	switch {
+	case at < len(buf):
+		cluster = buf[at].Cluster
+	case len(buf) > 0:
+		cluster = buf[len(buf)-1].Cluster
+	}
+	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)}
+
+	buf = append(buf, Glyph{})
+	copy(buf[at+1:], buf[at:])
+	buf[at] = g
+
+	info = append(info, useInfo{})
+	copy(info[at+1:], info[at:])
+	info[at] = what
+	return buf, info
 }
 
 // applyUseFeature runs one feature's lookups over one cluster, keeping the
@@ -322,7 +728,25 @@ func (sh shaper) applyUseFeatureAt(buf []Glyph, info *[]useInfo, lookups []int, 
 	total, step, first := 0, 0, -1
 	sh.onResize = func(at, d int) {
 		*info = respliceUseInfo(*info, at, d)
+		// Which glyphs a substitution made of several, which is what says a
+		// halant is no longer one. A lookup that shortened the run ligated what
+		// it consumed; one that lengthened it took a glyph apart, and no piece
+		// of it is a ligature whatever the glyph it came from was.
+		switch {
+		case d < 0 && at < len(*info):
+			(*info)[at].ligated = true
+		case d > 0:
+			for k := 0; k <= d && at+k < len(*info); k++ {
+				(*info)[at+k].ligated = false
+			}
+		}
 		step += d
+	}
+	sh.onDelete = func(at int) {
+		if at >= 0 && at < len(*info) {
+			*info = append((*info)[:at], (*info)[at+1:]...)
+		}
+		step--
 	}
 	sh.floor, sh.limit = start, end
 	for _, idx := range lookups {
@@ -337,6 +761,11 @@ func (sh shaper) applyUseFeatureAt(buf []Glyph, info *[]useInfo, lookups []int, 
 					first = i
 				}
 				i += consumed
+				continue
+			}
+			// A lookup that consumed nothing and shortened the run took a glyph
+			// out; what followed it is now here and has not been looked at.
+			if step < 0 {
 				continue
 			}
 			i++
@@ -388,29 +817,39 @@ func respliceUseInfo(info []useInfo, at, delta int) []useInfo {
 // Only the first glyph of a decomposition moves. A vowel sign the font took
 // apart has its pieces on different sides of the letter, and moving the lot
 // would take the piece that belongs after the letter round to the front.
-func reorderUseSyllable(buf []Glyph, info []useInfo, start, end int) {
+func reorderUseCluster(buf []Glyph, info []useInfo, start, end int) {
 	if start < 0 || end > len(buf) || end > len(info) || end-start < 2 {
 		return
 	}
-	// The repha, forward.
+	// The repha, forward: to just before the first glyph that is drawn after
+	// the base, or to the end of the cluster if there is none.
+	//
+	// "Drawn after the base" is a property of the glyph, not a run of letters:
+	// a medial, a vowel, a vowel modifier, a final or a final modifier is, and
+	// a consonant modifier — a nukta, say — is not, because it belongs to the
+	// letter rather than following it. Walking forward over bases and stackers
+	// instead, which is what stood here, sends the repha to the wrong side of
+	// any nukta the letter carries.
 	if info[start].cat == useR {
-		to := start
 		for i := start + 1; i < end; i++ {
-			if isUseBase(info[i].cat) || stacksNext(info[i].cat) {
-				to = i
+			post := isUsePostBase(info[i]) || isUseHalant(info[i])
+			if !post && i != end-1 {
 				continue
 			}
+			if post {
+				i--
+			}
+			if i > start {
+				rotateUse(buf, info, start, start+1, i+1)
+			}
 			break
-		}
-		if to > start {
-			rotateUse(buf, info, start, start+1, to+1)
 		}
 	}
 	// The pre-base vowels, back.
 	at := start
 	for i := start; i < end; i++ {
 		switch {
-		case stacksNext(info[i].cat):
+		case isUseHalant(info[i]):
 			// What follows the halant is the letter the vowel belongs to, so
 			// nothing before this point is a destination any more.
 			at = i + 1
@@ -424,6 +863,31 @@ func reorderUseSyllable(buf []Glyph, info []useInfo, start, end int) {
 			rotateUse(buf, info, at, i, i+1)
 		}
 	}
+}
+
+// isUsePostBase reports whether a glyph is drawn after the base: the medials,
+// the vowels, the vowel modifiers, the finals and the final modifier. It is
+// what a repha is moved in front of.
+func isUsePostBase(t useInfo) bool {
+	switch t.cat {
+	case useM, useV, useVM, useF, useFM:
+		return true
+	}
+	return false
+}
+
+// isUseHalant reports whether a glyph still joins what follows it to what
+// precedes it.
+//
+// A halant the font has ligated into something else no longer does: what it
+// made is a letter, and a letter is not a place a vowel is sent to. The sakot
+// is not one of these — it joins across a cluster boundary rather than within
+// one, and the reordering is not about it.
+func isUseHalant(t useInfo) bool {
+	if t.ligated {
+		return false
+	}
+	return t.cat == useH || t.cat == useHVM || t.cat == useIS
 }
 
 // rotateUse moves buf[mid:end] to the front of buf[start:end], keeping the order

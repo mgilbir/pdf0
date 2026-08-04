@@ -132,3 +132,175 @@ func TestTheUseTableIsSearchable(t *testing.T) {
 		}
 	}
 }
+
+// The cluster grammar.
+//
+// What the grammar answers that a scan could not is *what kind* of cluster a
+// stretch of characters is, and two things hang off that: a cluster with no base
+// is broken and gets a dotted circle, and a character the model calls Other
+// begins a cluster rather than sitting between two.
+//
+// These assert the kinds directly rather than through a font, so that a failure
+// says which production went wrong instead of which glyph moved.
+
+// useClusterOf is the grammar run over a string.
+func useClustersOf(s string) []useCluster {
+	runes := []rune(s)
+	info := make([]useInfo, len(runes))
+	for i, r := range runes {
+		info[i].cat, info[i].pos = useCategoryOf(r)
+	}
+	return useClusters(info, runes)
+}
+
+func (k useClusterKind) String() string {
+	switch k {
+	case useNonCluster:
+		return "non-cluster"
+	case useViramaTerminatedCluster:
+		return "virama-terminated"
+	case useSakotTerminatedCluster:
+		return "sakot-terminated"
+	case useStandardCluster:
+		return "standard"
+	case useNumberJoinerTerminatedCluster:
+		return "number-joiner-terminated"
+	case useNumeralCluster:
+		return "numeral"
+	case useSymbolCluster:
+		return "symbol"
+	case useBrokenCluster:
+		return "broken"
+	}
+	return "?"
+}
+
+// TestTheUseGrammarSaysWhatEachClusterIs is the grammar, stated as a test.
+func TestTheUseGrammarSaysWhatEachClusterIs(t *testing.T) {
+	const (
+		balA       = 0x1B05 // BALINESE LETTER AKARA, a base
+		balAdeg    = 0x1B44 // BALINESE ADEG ADEG, the virama
+		balRaRepa  = 0x1B3F // BALINESE VOWEL SIGN RA REPA
+		balUlu     = 0x1B36 // BALINESE VOWEL SIGN ULU, above
+		balPam     = 0x1B60 // BALINESE PAMENENG, which the engine calls Other
+		javKa      = 0xA98F // JAVANESE LETTER KA
+		javTaling  = 0xA9BA // JAVANESE VOWEL SIGN TALING, drawn before the letter
+		javPangkon = 0xA9C0
+	)
+	for _, tc := range []struct {
+		in    []rune
+		kinds []useClusterKind
+		spans [][2]int
+		why   string
+	}{
+		{
+			[]rune{balA}, []useClusterKind{useStandardCluster}, [][2]int{{0, 1}},
+			"a letter on its own",
+		},
+		{
+			[]rune{balA, balUlu}, []useClusterKind{useStandardCluster}, [][2]int{{0, 2}},
+			"a letter and a vowel above it",
+		},
+		{
+			[]rune{balUlu}, []useClusterKind{useBrokenCluster}, [][2]int{{0, 1}},
+			"a vowel with no letter: broken, and what a dotted circle is for",
+		},
+		{
+			[]rune{balA, balAdeg}, []useClusterKind{useStandardCluster}, [][2]int{{0, 2}},
+			"a letter and a bare virama, which is standard and not virama-terminated: " +
+				"that kind is for the invisible stacker and the reordering killer",
+		},
+		{
+			[]rune{balA, balAdeg, balA}, []useClusterKind{useStandardCluster}, [][2]int{{0, 3}},
+			"a virama joining two letters into one cluster",
+		},
+		// The case the fuzzer found, and the reason a scan could not answer it.
+		// Pameneng is Other, which is not a gap between clusters: it begins one
+		// and takes the vowel written after it onto itself.
+		{
+			[]rune{balA, balPam, balRaRepa},
+			[]useClusterKind{useStandardCluster, useSymbolCluster},
+			[][2]int{{0, 1}, {1, 3}},
+			"a symbol between a letter and a vowel: the vowel belongs to the symbol",
+		},
+		{
+			[]rune{balPam}, []useClusterKind{useSymbolCluster}, [][2]int{{0, 1}},
+			"a symbol on its own",
+		},
+		{
+			[]rune{javKa, javTaling}, []useClusterKind{useStandardCluster}, [][2]int{{0, 2}},
+			"a letter and a vowel written after it and drawn before it",
+		},
+		{
+			[]rune{javKa, javPangkon, javKa, javTaling},
+			[]useClusterKind{useStandardCluster}, [][2]int{{0, 4}},
+			"two letters stacked, carrying a pre-base vowel",
+		},
+		{
+			[]rune{'A'}, []useClusterKind{useSymbolCluster}, [][2]int{{0, 1}},
+			"a Latin letter, which the engine has no category for",
+		},
+	} {
+		got := useClustersOf(string(tc.in))
+		if len(got) != len(tc.kinds) {
+			t.Errorf("%s:\n  %s\n  became %d clusters, want %d (%v)",
+				tc.why, describeCodepoints(tc.in), len(got), len(tc.kinds), got)
+			continue
+		}
+		for i, cl := range got {
+			if cl.kind != tc.kinds[i] || cl.start != tc.spans[i][0] || cl.end != tc.spans[i][1] {
+				t.Errorf("%s:\n  %s\n  cluster %d is %v over [%d,%d), want %v over [%d,%d)",
+					tc.why, describeCodepoints(tc.in), i, cl.kind, cl.start, cl.end,
+					tc.kinds[i], tc.spans[i][0], tc.spans[i][1])
+			}
+		}
+	}
+}
+
+// TestABrokenUseClusterGetsADottedCircle is the other half: that the kind is
+// acted on, and that the placeholder reaches the buffer.
+//
+// It shapes with the Balinese face the corpus uses, because the question is
+// whether a glyph appears — which needs a font that has one.
+func TestABrokenUseClusterGetsADottedCircle(t *testing.T) {
+	f := harfbuzzFace(t, "fonts/NotoSansBalinese.ttf",
+		mustHarfBuzzHeader(t, "balinese.expected.txt"))
+	circle, ok := f.GlyphID(dottedCircle)
+	if !ok {
+		t.Fatal("the face has no U+25CC, so this cannot prove anything")
+	}
+	count := func(s string) (n int, total int) {
+		glyphs, _ := f.ShapeGlyphs(s)
+		for _, g := range glyphs {
+			if g.GID == circle {
+				n++
+			}
+		}
+		return n, len(glyphs)
+	}
+	for _, tc := range []struct {
+		in   string
+		want int
+		why  string
+	}{
+		{"\u1B36", 1, "a vowel sign with no letter"},
+		{"\u1B44", 1, "a virama with no letter"},
+		{"\u1B05\u1B36", 0, "the same vowel on a letter"},
+		{"\u1B05", 0, "a letter on its own"},
+		{"\u1B36\u1B36", 1, "two vowel signs, which are one broken cluster and get one"},
+		{"\u25CC\u1B36", 1, "a dotted circle written by hand is a base, and is not doubled"},
+	} {
+		if n, total := count(tc.in); n != tc.want {
+			t.Errorf("%s: %s shaped to %d glyphs with %d dotted circles, want %d",
+				tc.why, describeCodepoints([]rune(tc.in)), total, n, tc.want)
+		}
+	}
+}
+
+// mustHarfBuzzHeader reads just the header of an expectations file, so that a
+// test needing the font can check it is the one the corpus was built against.
+func mustHarfBuzzHeader(t *testing.T, name string) map[string]string {
+	t.Helper()
+	_, _, header := readHarfBuzzGolden(t, "balinese.txt", name)
+	return header
+}
