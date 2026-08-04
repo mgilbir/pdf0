@@ -18,15 +18,23 @@ import "github.com/mgilbir/pdf0/internal/font"
 // position, on demand. So the positioning lookups are also kept whole, and these
 // rules reach them by index.
 //
-// # What is not modelled
+// # A lookup named twice is applied twice, and that is correct
 //
-// A lookup that is both named by a feature *and* invoked by a rule would be
-// applied twice, and in an order this does not control: the flat passes run
-// first and these follow. In every font examined the lookups a rule names are
-// named by no feature at all — Noto Sans Khmer has fifteen such lookups and
-// every one of them is reachable only through a rule — which is what the format
-// is for. A font that did both would get the adjustment twice; that is a stated
-// limit rather than something believed impossible.
+// A lookup both named by a feature and reached from a rule is applied by each,
+// and this was written down as a limitation before it was measured. It is not
+// one: HarfBuzz does the same, on a font built to ask it — a nudge of 100 named
+// both ways moves the glyph by 200 in both implementations. The format says a
+// feature's lookups run over the text and a rule's run where it matches, and
+// nothing says the two may not be the same lookup. Noto Serif Tibetan has one.
+//
+// It is harmless for the attachments because those *set* an offset rather than
+// adding to one, so placing the same mark twice puts it in the same place.
+//
+// What is left unmodelled is the order between the flat positioning passes and
+// these: the passes run first rather than interleaving by lookup index. No font
+// examined settles it — removing every contextual positioning subtable from all
+// six leaves all 11,439 corpus answers unchanged — so it stays as it is rather
+// than being changed on a guess.
 
 // readContextualPositioning collects the type 7 and 8 lookups a selected feature
 // names, and — only if there are any — the whole positioning lookup list they
@@ -98,6 +106,10 @@ func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
 			if n := sh.pairPosAt(sub, buf, at, lk.flags); n > 0 {
 				return n
 			}
+		case 4, 6:
+			if n := sh.markAttachAt(sub, buf, at, lk.flags, lk.kind == 6); n > 0 {
+				return n
+			}
 		case 7:
 			if n, ok := sh.positioningContext(sub, buf, at, lk.flags, depth); ok {
 				return n
@@ -107,11 +119,51 @@ func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
 				return n
 			}
 		}
-		// Types 3, 4, 5 and 6 — cursive attachment and the three mark
-		// attachments — are deliberately absent. They are applied from the flat
-		// tables in position.go, over the whole run, and a nested one would have
-		// to agree with that pass about which base a mark belongs to. Reaching
-		// them from here would place a mark twice.
+		// Type 3, cursive attachment, is absent: it joins a *run* of letters
+		// onto one another, so applying it at a single position says nothing.
+		// The flat pass in position.go is where it belongs.
+	}
+	return 0
+}
+
+// markAttachAt applies a mark-to-base or mark-to-mark subtable at a position.
+//
+// A lookup reached from a rule is usually named by no feature, so its anchors
+// are in none of the flat tables and this is the only way to them. The subtable
+// is read on the spot rather than at load: a font states a handful of these and
+// reaches them rarely, and reading every mark subtable of every lookup to serve
+// the few that a rule names would be most of the cost of loading a font.
+//
+// Applying it twice is harmless — placeMark sets the offsets rather than adding
+// to them — which is what lets this coexist with the flat pass for a lookup that
+// is both named by a feature and reached from a rule. Noto Serif Tibetan has one.
+func (sh shaper) markAttachAt(sub []byte, buf []Glyph, at, flags int, mkmk bool) int {
+	st, ok := readMarkSubtable(sub, 0, false)
+	if !ok {
+		return 0
+	}
+	mark, covered := st.marks[buf[at].GID]
+	if !covered {
+		return 0
+	}
+	// Back to what this mark attaches to: for mark-to-mark the nearest mark,
+	// for mark-to-base the nearest thing that is not one.
+	for j := at - 1; j >= 0; j-- {
+		if sh.l.isMark(buf[j]) != mkmk {
+			if mkmk {
+				continue
+			}
+			break
+		}
+		base, has := st.bases[key2{buf[j].GID, mark.class}]
+		if !has {
+			if mkmk {
+				continue
+			}
+			break
+		}
+		sh.placeMark(buf, at, j, mark.anchor, base)
+		return 1
 	}
 	return 0
 }

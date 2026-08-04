@@ -249,3 +249,104 @@ func TestAPositioningRuleCannotRecurseForever(t *testing.T) {
 		t.Fatal("shaping did not finish: a cycle of positioning rules was followed to the end")
 	}
 }
+
+// What a rule may name, and what happens when it names something twice.
+//
+// Both of these were guesses in the source until they were measured against
+// HarfBuzz on a font built for the purpose, and both guesses were wrong. They
+// are asserted here because a caveat nobody has tested is worth less than no
+// caveat: it stops the next reader from checking.
+
+// TestAPositioningRuleCanNameAMarkAttachment is the defect the first guess hid.
+//
+// The source said reaching a mark attachment from a rule "would place a mark
+// twice", so types 3 to 6 were skipped. HarfBuzz places it once and correctly;
+// this package placed it not at all, leaving the mark on the baseline at the
+// pen. A lookup a rule names is usually named by no feature, so a rule is the
+// only way to its anchors.
+//
+// The values are the font's own: the base anchors at x=400 y=700, the mark at
+// x=100 y=200, and the base is 500 wide — so the mark sits at (400-100)-500 =
+// -200 and 700-200 = 500. HarfBuzz agrees.
+func TestAPositioningRuleCanNameAMarkAttachment(t *testing.T) {
+	const (
+		mkBase, mkMark = 1, 3
+		advance        = 500
+	)
+	markSub := fonttest.MarkAttachSubtable(
+		[]fonttest.MarkAttachment{{Glyph: mkMark, Class: 0, Anchor: fonttest.Anchor{X: 100, Y: 200}}},
+		[]fonttest.BaseAttachment{{Glyph: mkBase, Anchors: map[int]fonttest.Anchor{0: {X: 400, Y: 700}}}},
+	)
+	f := markRuleFace(t, []fonttest.Lookup{
+		// Named by no feature: only the rule below can reach it.
+		{Type: 4, Subtables: [][]byte{markSub}},
+		{Type: 8, Subtables: [][]byte{fonttest.ChainedContext3(
+			[][]int{{mkBase}}, [][]int{{mkMark}}, nil,
+			[]fonttest.SeqLookup{{At: 0, Lookup: 0}})}},
+	}, []int{1})
+
+	glyphs, _ := f.ShapeGlyphs("á")
+	if len(glyphs) != 2 {
+		t.Fatalf("shaped to %d glyphs, want 2", len(glyphs))
+	}
+	if glyphs[1].XOffset != -200 || glyphs[1].YOffset != 500 {
+		t.Errorf("the mark is at (%v, %v), want (-200, 500) — a rule is the only way "+
+			"to a lookup no feature names", glyphs[1].XOffset, glyphs[1].YOffset)
+	}
+}
+
+// TestALookupNamedTwiceIsAppliedTwice is the second guess, which was that a
+// lookup both named by a feature and reached from a rule would be applied twice
+// and that this would be wrong.
+//
+// It is applied twice, and that is what HarfBuzz does: measured on this very
+// font, both move the glyph by 200 where one application moves it by 100. The
+// format says a feature's lookups run over the text and a rule's run where it
+// matches, and nothing says the two may not be the same lookup.
+//
+// It is harmless for the attachments because those *set* an offset rather than
+// adding to one, which is why the test above and this one can both be true.
+func TestALookupNamedTwiceIsAppliedTwice(t *testing.T) {
+	const (
+		mkA, mkB = 1, 2
+		nudge    = 100
+	)
+	f := markRuleFace(t, []fonttest.Lookup{
+		{Type: 1, Subtables: [][]byte{fonttest.SinglePosSubtable(mkB, nudge, 0, 0)}},
+		{Type: 8, Subtables: [][]byte{fonttest.ChainedContext3(
+			[][]int{{mkA}}, [][]int{{mkB}}, nil,
+			[]fonttest.SeqLookup{{At: 0, Lookup: 0}})}},
+	}, []int{0, 1}) // the feature names the nudge *and* the rule
+
+	glyphs, _ := f.ShapeGlyphs("ab")
+	if len(glyphs) != 2 {
+		t.Fatalf("shaped to %d glyphs, want 2", len(glyphs))
+	}
+	if glyphs[1].XOffset != 2*nudge {
+		t.Errorf("the b moved by %v; the feature applies the nudge and the rule "+
+			"applies it again, so HarfBuzz and this both move it by %v",
+			glyphs[1].XOffset, float64(2*nudge))
+	}
+}
+
+// markRuleFace builds a face with the given positioning lookups, the given ones
+// named by 'kern', and a GDEF that calls glyph 3 a mark.
+func markRuleFace(t *testing.T, lookups []fonttest.Lookup, named []int) *Face {
+	t.Helper()
+	f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "MarkRule",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'b', Advance: 500, HasShape: true},
+			{Rune: 0x0301, Advance: 0, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GPOS": fonttest.GPOSLookups(lookups, map[string][]int{"kern": named}),
+			"GDEF": fonttest.GDEF(map[int]int{1: classBase, 2: classBase, 3: classMark}),
+		},
+	}))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	return f
+}

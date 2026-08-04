@@ -204,19 +204,7 @@ func (sh shaper) attachMarks(buf []Glyph) {
 			// base, so the same advances are still ahead of the pen and go on
 			// rather than off. The mark's own advance is zeroed first, so that
 			// a font which gave its marks a width does not have it counted.
-			buf[i].XAdvance = 0
-			var since float64
-			if sh.rtl {
-				for k := j + 1; k <= i; k++ {
-					since -= buf[k].XAdvance
-				}
-			} else {
-				for k := j; k < i; k++ {
-					since += buf[k].XAdvance
-				}
-			}
-			buf[i].XOffset = buf[j].XOffset + sh.f.scale(base.x-mark.anchor.x) - since
-			buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.anchor.y)
+			sh.placeMark(buf, i, j, mark.anchor, base)
 			break
 		}
 	}
@@ -684,4 +672,40 @@ func (l *layout) isMark(g Glyph) bool {
 		return g.class == classMark
 	}
 	return l.markGlyphs[g.GID]
+}
+
+// placeMark puts the mark at i against the base at j, so that their anchors
+// meet.
+//
+// The pen is at the end of everything drawn since the base, so the advances
+// between have to be taken back off — and the base's own displacement carried
+// along, since a base moved by a single adjustment or lifted onto a joining
+// stroke takes its accents with it.
+//
+// What has to be corrected for is where the pen will be when the mark is drawn,
+// and that depends on which way the run is drawn. Left to right the pen has
+// passed the base and everything between them, so those advances come off.
+// Right to left the buffer is about to be reversed and the mark will be drawn
+// *before* its base, so the same advances are still ahead of the pen and go on
+// rather than off. The mark's own advance is zeroed first, so that a font which
+// gave its marks a width does not have it counted.
+//
+// It *sets* the offsets rather than adding to them, which is what the format
+// says and what makes applying the same attachment twice harmless — a lookup
+// both named by a feature and reached from a rule places the mark in the same
+// place either time.
+func (sh shaper) placeMark(buf []Glyph, i, j int, mark, base anchor) {
+	buf[i].XAdvance = 0
+	var since float64
+	if sh.rtl {
+		for k := j + 1; k <= i; k++ {
+			since -= buf[k].XAdvance
+		}
+	} else {
+		for k := j; k < i; k++ {
+			since += buf[k].XAdvance
+		}
+	}
+	buf[i].XOffset = buf[j].XOffset + sh.f.scale(base.x-mark.x) - since
+	buf[i].YOffset = buf[j].YOffset + sh.f.scale(base.y-mark.y)
 }
