@@ -37,6 +37,34 @@ type Glyph struct {
 	// XOffset and YOffset displace the glyph from the pen without moving the
 	// pen. This is how a mark is placed over its base.
 	XOffset, YOffset float64
+
+	// lig records this glyph's part in a ligature, and is unexported because it
+	// is bookkeeping between the substitution pass and the positioning one
+	// rather than anything a caller can use.
+	lig ligatureRef
+}
+
+// ligatureRef says what a glyph has to do with a ligature.
+//
+// It exists because a mark inside a ligature has to be placed against the part
+// of it the mark belongs to. A dot written under the first f of "ffi" and a dot
+// written under the second are the same glyph attaching to the same glyph, and
+// the font gives them different anchors; the only thing that tells them apart is
+// which part of the text each came from, and that is what forming the ligature
+// is the last moment to record.
+type ligatureRef struct {
+	// id is shared by a ligature glyph and every mark that was inside it. Zero
+	// means the glyph has nothing to do with any ligature — which is also what
+	// a "ligature" of a base and its own marks gets, since that is not a
+	// ligature in the sense this is about.
+	id int
+	// comp is which part of the ligature this mark belongs to, counting from
+	// one. It is zero on the ligature glyph itself.
+	comp int
+	// comps is how many parts this glyph counts as when it becomes part of a
+	// larger ligature: one for an ordinary glyph, and its own component count
+	// for a ligature that is then joined again.
+	comps int
 }
 
 // ShapeGlyphs turns a string into positioned glyphs, applying everything this
@@ -125,7 +153,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 	}
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
-	sh := shaper{f: f, l: f.layoutFor(script), rtl: rtl}
+	sh := shaper{f: f, l: f.layoutFor(script), rtl: rtl, ligIDs: new(int)}
 	// A script whose characters are not in the order they are drawn is shaped
 	// whole by its own pass: the reordering decides which of the font's rules
 	// apply where, so it cannot be a step before the general substitutions and

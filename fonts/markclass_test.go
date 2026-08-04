@@ -215,3 +215,88 @@ func TestBundledFontPlacesMarksWhereHarfBuzzDoes(t *testing.T) {
 		}
 	}
 }
+
+// A mark written under a ligature attaches to the part of it the mark belongs
+// to.
+//
+// "ffi" is one glyph. A dot written under the first f and a dot written under
+// the second are the same mark attaching to the same glyph, and they belong in
+// quite different places — so the font does not give the ligature one anchor,
+// it gives it one per component, and the shaper has to know which component the
+// mark came from. That is GPOS type 5, and it is the reason forming a ligature
+// records which of its parts each kept glyph stood between.
+//
+// Without it a mark inside a ligature is left where it fell, at the pen — which
+// after a 946-unit ligature is most of an em to the right of where it belongs.
+
+// TestAMarkInsideALigatureAttachesToItsOwnComponent is the defect stated as a
+// test, against the bundled face.
+//
+// The offsets are HarfBuzz's. The font gives the ffi ligature component anchors
+// at x = 132, 476 and 819, the dot below has its own at x = -298, and the
+// ligature is 946 wide: 132 + 298 - 946 = -516 for a dot under the first f, and
+// 476 + 298 - 946 = -172 for one under the second. Two of the same glyph pair,
+// half an em apart, decided by nothing but which part of the text the mark came
+// from.
+func TestAMarkInsideALigatureAttachesToItsOwnComponent(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	for _, tc := range []struct {
+		text   string
+		dx, dy float64
+		why    string
+	}{
+		{"f̣fi", -516, 0, "a dot below the first f of ffi"},
+		{"ff̣i", -172, 0, "a dot below the second f of ffi"},
+		{"f́fi", -422, 229, "an acute over the first f of ffi"},
+		{"ff́i", -78, 229, "an acute over the second f of ffi"},
+		{"f̣fl", -516, 0, "a dot below the first f of ffl"},
+		{"ff̣l", -172, 0, "a dot below the second f of ffl"},
+	} {
+		glyphs, missing := f.ShapeGlyphs(tc.text)
+		if missing != 0 {
+			t.Errorf("%s: %d characters have no glyph", tc.why, missing)
+			continue
+		}
+		if len(glyphs) != 2 {
+			t.Errorf("%s: shaped to %d glyphs, want 2 — the ligature and the mark it kept",
+				tc.why, len(glyphs))
+			continue
+		}
+		if glyphs[1].XOffset != tc.dx || glyphs[1].YOffset != tc.dy {
+			extra := ""
+			if glyphs[1].XOffset == 0 && glyphs[1].YOffset == 0 {
+				extra = " — it was not attached at all"
+			}
+			t.Errorf("%s: placed at (%v, %v), HarfBuzz places it at (%v, %v)%s",
+				tc.why, glyphs[1].XOffset, glyphs[1].YOffset, tc.dx, tc.dy, extra)
+		}
+	}
+}
+
+// TestAMarkAfterALigatureGoesOnItsLastComponent pins the case the component is
+// not known for.
+//
+// A mark written after "ffi" is not inside the ligature — it came after all
+// three letters — so there is no component it belongs to, and OpenType says
+// such a mark attaches to the last one. It is the only sensible answer: a mark
+// written after "ffi" belongs to the i.
+func TestAMarkAfterALigatureGoesOnItsLastComponent(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	// Component 2 of the ffi ligature anchors at x = 819; the dot below anchors
+	// at -298; the ligature is 946 wide.
+	const wantX = 819 + 298 - 946
+	glyphs, _ := f.ShapeGlyphs("ffị")
+	if len(glyphs) != 2 {
+		t.Fatalf("shaped to %d glyphs, want 2", len(glyphs))
+	}
+	if glyphs[1].XOffset != wantX {
+		t.Errorf("a dot written after ffi is placed at %v, want %v — the last component",
+			glyphs[1].XOffset, float64(wantX))
+	}
+}

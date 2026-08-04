@@ -367,6 +367,29 @@ type shaper struct {
 	// features do, because a joiner is written precisely to force or forbid the
 	// forms they make.
 	manualJoiners bool
+
+	// ligIDs hands out the numbers that tie a ligature glyph to the marks that
+	// were inside it, so that positioning can put each mark against the part of
+	// the ligature it belongs to. It is a pointer because a shaper is copied
+	// freely — every method takes it by value — and the numbers have to stay
+	// distinct across the whole run rather than per copy.
+	//
+	// A nil one means nothing is tracking ligatures, which is what the paths
+	// that only measure get: they do not position marks, so there is nothing
+	// for the number to be used by.
+	ligIDs *int
+}
+
+// nextLigatureID hands out the next number tying a ligature to its marks.
+//
+// Zero is never handed out: it is what a glyph that has nothing to do with any
+// ligature carries, and a real ligature must not be mistaken for one.
+func (sh shaper) nextLigatureID() int {
+	if sh.ligIDs == nil {
+		return 0
+	}
+	*sh.ligIDs++
+	return *sh.ligIDs
 }
 
 // resized reports a change in the buffer's length at a position, for a caller

@@ -287,16 +287,50 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 		isComponent[p-at] = true
 	}
 
+	// A ligature of a letter and its own marks is not a ligature in the sense
+	// that matters here. Nothing was joined that a mark could belong to *part*
+	// of, so there is no component for a later mark to be placed against, and
+	// giving it a number would only make the marks inside it look like they
+	// belonged to something they do not.
+	joined := false
+	for _, p := range comps[1:] {
+		if !sh.l.isMark(buf[p].GID) {
+			joined = true
+			break
+		}
+	}
+	id, comps0 := 0, 1
+	if joined {
+		id = sh.nextLigatureID()
+		for _, p := range comps {
+			comps0 += componentsOf(buf[p])
+		}
+		comps0-- // the count started at one for the first component
+	}
+
 	out := make([]Glyph, 0, len(buf)-len(comps)+1)
 	out = append(out, buf[:at]...)
-	out = append(out, Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)})
-	kept := 0
+	out = append(out, Glyph{
+		GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid),
+		lig: ligatureRef{id: id, comps: comps0},
+	})
+
+	// Walking the components in order, so that each kept glyph is given the
+	// part of the ligature it stood between. A mark before the second component
+	// belongs to the first, and so on; a ligature made of ligatures counts each
+	// of their parts, which is why the running total is of components rather
+	// than of glyphs.
+	kept, soFar := 0, componentsOf(buf[at])
 	for i := at + 1; i <= last; i++ {
 		if isComponent[i-at] {
+			soFar += componentsOf(buf[i])
 			continue
 		}
 		g := buf[i]
 		g.Cluster = cluster
+		if id != 0 {
+			g.lig = ligatureRef{id: id, comp: soFar, comps: componentsOf(g)}
+		}
 		out = append(out, g)
 		kept++
 	}
@@ -791,4 +825,13 @@ func coverageIndex(base []byte, off, gid int) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// componentsOf is how many parts of a ligature a glyph counts as: one for an
+// ordinary glyph, and its own count for a ligature being joined again.
+func componentsOf(g Glyph) int {
+	if g.lig.comps > 1 {
+		return g.lig.comps
+	}
+	return 1
 }
