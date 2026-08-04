@@ -91,6 +91,16 @@ KNOWN = {
     # something has to decide that a Balinese musical symbol after an independent
     # vowel is not a syllable. That is why it is recorded rather than fixed here.
     "no-dotted-circle",
+    # NOT a decision. Two marks of class 220 or 230 on one letter, where UTR #53
+    # has something to say about at least one of them. The single-mark cases —
+    # which is what real Arabic writes — agree; these do not, and no rule tried
+    # here fits every one of them.
+    #
+    # It is recorded rather than guessed at again. Three hypotheses were tested
+    # against HarfBuzz and each fitted some combinations and contradicted
+    # others, which is the shape of fitting rules to observations rather than
+    # implementing a specification. Closing it needs UTR #53's own text.
+    "two-modifier-marks",
 }
 
 IGNORABLE = [
@@ -115,7 +125,19 @@ def classify(text, ours, theirs):
     # the font's and every font numbers it differently.
     if len(theirs.split()) > len(ours.split()):
         return "no-dotted-circle"
+    # Two of the marks UTR #53 orders, on one letter.
+    ordered = [c for c in text if unicodedata.combining(c) in (220, 230)]
+    if len(ordered) >= 2 and any(ord(c) in UTR53_MARKS for c in text):
+        return "two-modifier-marks"
     return None
+
+
+# The fourteen characters UTR #53 is about, mirroring arabicModifierMarks in
+# fonts/normalize.go.
+UTR53_MARKS = {
+    0x0654, 0x0655, 0x0658, 0x06DC, 0x06E3, 0x06E7, 0x06E8,
+    0x08CA, 0x08CB, 0x08CD, 0x08CE, 0x08CF, 0x08D3, 0x08F3,
+}
 
 
 def alphabet(path, ranges, rtl):
