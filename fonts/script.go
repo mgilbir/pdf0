@@ -337,6 +337,10 @@ type shaper struct {
 	// the opposite order.
 	rtl bool
 
+	// zeroMarks says when a mark's own advance is cancelled, which each script's
+	// model decides for itself — see position.go.
+	zeroMarks zeroMarkWidths
+
 	// floor and limit bound the glyphs a lookup may look at: it may not match,
 	// or backtrack, outside [floor, limit). They exist for the Indic pass,
 	// which applies a font's features one syllable at a time — a ligature

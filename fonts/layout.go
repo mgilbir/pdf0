@@ -371,10 +371,9 @@ type layout struct {
 	// glyphClass is GDEF's classification of each glyph: 1 base, 2 ligature,
 	// 3 mark, 4 component. A glyph GDEF does not name is class 0, unknown.
 	glyphClass map[int]int
-	// kernFlags and substFlags are the lookup flags of the lookups the kerning
-	// and the substitutions came from, so that shaping can skip the glyphs
-	// those lookups are declared to ignore.
-	kernFlags  int
+	// substFlags is the lookup flags of the lookups the substitutions came
+	// from, so that shaping can skip the glyphs those lookups are declared to
+	// ignore. Kerning keeps its flags per lookup — see kern.
 	substFlags int
 	// markAttach is GDEF's mark attachment class per glyph, used by the
 	// MarkAttachmentType field of a lookup flag.
@@ -404,10 +403,23 @@ type layout struct {
 	// markSets are GDEF's mark glyph sets, which a lookup names to narrow what
 	// it looks at to the marks in one of them.
 	markSets []map[int]bool
-	// kern maps an ordered glyph pair to the adjustment the font states between
-	// them, in font units. Negative advances pull the pair together, which is
-	// what kerning almost always does.
-	kern map[[2]int]pairAdjust
+	// kern is the pair-positioning lookups, in the order the font lists them.
+	//
+	// One entry per lookup rather than one table for all of them, because three
+	// things a lookup states about itself are lost by merging. Its *flags* say
+	// which glyphs it steps over, and a font states some kerning that ignores
+	// marks beside some that does not — merged, the mark-ignoring one silences
+	// every other for marks. Its *subtables* are alternatives in which the first
+	// match wins, so a pair named by two of them takes the earlier value —
+	// merged into one map the later one overwrites it. And lookups *accumulate*,
+	// which one value per pair cannot express.
+	//
+	// Noto Sans states both of the first two in one lookup: an explicit pair
+	// list giving be+TE -20 and a class table giving the same pair -40, of which
+	// only the first should apply.
+	kern []kernLookup
+	// kernPairs is how many pairs all of them hold together, against maxPairs.
+	kernPairs int
 	// ligatures maps a first glyph to the substitutions that may start with it,
 	// longest first so that a greedy match prefers ffi over ff.
 	//
@@ -579,7 +591,6 @@ type ligature struct {
 // from a misread table is wrong.
 func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 	l := &layout{
-		kern:       map[[2]int]pairAdjust{},
 		glyphClass: map[int]int{},
 		singlePos:  map[int]singleAdjust{},
 		markGlyphs: map[int]bool{},
@@ -729,11 +740,29 @@ func featureLookupIndices(t []byte, feats tableFeatures) map[string][]int {
 // features is ordinary, one per language it corrects letterforms for — and it
 // is the selection, not the tag, that says which of them this run gets.
 func featureLookups(t []byte, tag string, feats tableFeatures) [][]byte {
+	out, _ := featureLookupsIndexed(t, tag, feats)
+	return out
+}
+
+// sortInts sorts a short list of lookup indices. There are a handful of them and
+// an insertion sort keeps this file free of a dependency it needs nowhere else.
+func sortInts(a []int) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j] < a[j-1]; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
+}
+
+// featureLookupsIndexed is featureLookups, also reporting where each lookup sits
+// in the font's lookup list — which is the order the font means them to apply
+// in, and what says whether two features have named the same one.
+func featureLookupsIndexed(t []byte, tag string, feats tableFeatures) ([][]byte, []int) {
 	featureListOff := font.Be16(t, 6)
 	lookupListOff := font.Be16(t, 8)
 	if featureListOff <= 0 || lookupListOff <= 0 ||
 		featureListOff+2 > len(t) || lookupListOff+2 > len(t) {
-		return nil
+		return nil, nil
 	}
 	featureList := t[featureListOff:]
 	lookupList := t[lookupListOff:]
@@ -757,6 +786,7 @@ func featureLookups(t []byte, tag string, feats tableFeatures) [][]byte {
 	}
 
 	var out [][]byte
+	var indices []int
 	featureCount := font.Be16(featureList, 0)
 	if featureCount > maxLookups {
 		featureCount = maxLookups
@@ -772,10 +802,11 @@ func featureLookups(t []byte, tag string, feats tableFeatures) [][]byte {
 		for _, idx := range featureLookupList(featureList, i, feats.varied) {
 			if idx >= 0 && idx < len(lookups) && lookups[idx] != nil {
 				out = append(out, lookups[idx])
+				indices = append(indices, idx)
 			}
 		}
 	}
-	return out
+	return out, indices
 }
 
 // subtables returns a lookup's subtables, resolving the extension indirection
@@ -883,37 +914,80 @@ func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, mark
 // global horizontal features, beside 'kern' and 'curs'.
 var pairFeatures = [...]string{"kern", "dist"}
 
+// kernLookup is one pair-positioning lookup: the pairs it states and the flags
+// it states them under.
+type kernLookup struct {
+	flags int
+	pairs map[[2]int]pairAdjust
+}
+
+// add records a pair, and reports whether there was room for it.
+//
+// The first subtable to name a pair is the one that counts, so an entry already
+// there is left alone. A zero adjustment is still an entry: a subtable that
+// names a pair has matched, and what a later one says about it is not reached.
+func (l *layout) add(kl *kernLookup, first, second int, adj pairAdjust) bool {
+	if l.kernPairs >= maxPairs {
+		return false
+	}
+	key := [2]int{first, second}
+	if _, taken := kl.pairs[key]; taken {
+		return true
+	}
+	kl.pairs[key] = adj
+	l.kernPairs++
+	return true
+}
+
 // readGPOSPairs reads pair adjustments from every feature in pairFeatures that
 // this run's script selected.
+//
+// Each lookup is read once however many features name it — Noto Serif Tibetan
+// lists two of them under both 'kern' and 'dist' — and they are kept in
+// lookup-list order, which is the order a font means its lookups to apply in.
 func (l *layout) readGPOSPairs(gpos []byte, feats tableFeatures) {
 	// One budget for every subtable this reader may take, shared across the
 	// whole table — see subtables.
 	budget := subtableBudget(gpos)
+	var order []int
+	byIndex := map[int][]byte{}
 	for _, tag := range pairFeatures {
-		for _, lookup := range featureLookups(gpos, tag, feats) {
-			kind, flags, _, subs := subtables(lookup, 9, &budget) // 9 = extension positioning
-			if kind != 2 {                                        // 2 = pair adjustment
+		lookups, idxs := featureLookupsIndexed(gpos, tag, feats)
+		for i, lookup := range lookups {
+			if _, seen := byIndex[idxs[i]]; seen {
 				continue
 			}
-			l.kernFlags |= mergedFlags(flags)
-			for _, sub := range subs {
-				if len(sub) < 2 {
-					continue
-				}
-				switch font.Be16(sub, 0) {
-				case 1:
-					l.pairPosFormat1(sub)
-				case 2:
-					l.pairPosFormat2(sub)
-				}
+			byIndex[idxs[i]] = lookup
+			order = append(order, idxs[i])
+		}
+	}
+	sortInts(order)
+	for _, idx := range order {
+		kind, flags, _, subs := subtables(byIndex[idx], 9, &budget) // 9 = extension positioning
+		if kind != 2 {                                              // 2 = pair adjustment
+			continue
+		}
+		kl := kernLookup{flags: mergedFlags(flags), pairs: map[[2]int]pairAdjust{}}
+		for _, sub := range subs {
+			if len(sub) < 2 {
+				continue
 			}
+			switch font.Be16(sub, 0) {
+			case 1:
+				l.pairPosFormat1(&kl, sub)
+			case 2:
+				l.pairPosFormat2(&kl, sub)
+			}
+		}
+		if len(kl.pairs) > 0 {
+			l.kern = append(l.kern, kl)
 		}
 	}
 }
 
 // pairPosFormat1: an explicit list of second glyphs for each covered first
 // glyph.
-func (l *layout) pairPosFormat1(sub []byte) {
+func (l *layout) pairPosFormat1(kl *kernLookup, sub []byte) {
 	if len(sub) < 10 {
 		return
 	}
@@ -936,12 +1010,15 @@ func (l *layout) pairPosFormat1(sub []byte) {
 		n := font.Be16(set, 0)
 		rec := 2
 		for j := 0; j < n; j++ {
-			if rec+2+size1+size2 > len(set) || len(l.kern) >= maxPairs {
+			if rec+2+size1+size2 > len(set) {
 				break
 			}
+			// Recorded even when it adjusts nothing: an explicit pair is a
+			// match, and it is how a font states that a class rule later in
+			// the same lookup does not apply to this pair.
 			second := font.Be16(set, rec)
-			if adj := pairAdjustFrom(set[rec+2:], fmt1, fmt2); !adj.zero() {
-				l.kern[[2]int{first[i], second}] = adj
+			if !l.add(kl, first[i], second, pairAdjustFrom(set[rec+2:], fmt1, fmt2)) {
+				return
 			}
 			rec += 2 + size1 + size2
 		}
@@ -950,7 +1027,7 @@ func (l *layout) pairPosFormat1(sub []byte) {
 
 // pairPosFormat2: adjustments by class pair, which is how a large font states
 // thousands of pairs compactly.
-func (l *layout) pairPosFormat2(sub []byte) {
+func (l *layout) pairPosFormat2(kl *kernLookup, sub []byte) {
 	if len(sub) < 16 {
 		return
 	}
@@ -981,15 +1058,20 @@ func (l *layout) pairPosFormat2(sub []byte) {
 			if off+recSize > len(sub) {
 				break
 			}
+			// Unlike the explicit list above, a class pair that adjusts
+			// nothing is not recorded. It is a match by the specification and
+			// would block a later subtable, and holding every one of them
+			// would mean an entry for every glyph in the coverage against
+			// every class — hundreds of thousands, nearly all saying nothing.
+			// A font that states an exception states it as an explicit pair.
 			adj := pairAdjustFrom(sub[off:], fmt1, fmt2)
 			if adj.zero() {
 				continue
 			}
 			for _, g2 := range byClass2[c2] {
-				if len(l.kern) >= maxPairs {
+				if !l.add(kl, g1, g2, adj) {
 					return
 				}
-				l.kern[[2]int{g1, g2}] = adj
 			}
 		}
 	}
@@ -1263,20 +1345,30 @@ func (l *layout) readKernTable(kern []byte) {
 	}
 }
 
+// kernFormat0 reads one subtable of the legacy table into a lookup of its own.
+// It has no flags to state, so it steps over nothing.
 func (l *layout) kernFormat0(t []byte) {
 	if len(t) < 8 {
 		return
 	}
+	kl := kernLookup{pairs: map[[2]int]pairAdjust{}}
+	defer func() {
+		if len(kl.pairs) > 0 {
+			l.kern = append(l.kern, kl)
+		}
+	}()
 	n := font.Be16(t, 0)
 	for i := 0; i < n; i++ {
 		rec := 8 + 6*i
-		if rec+6 > len(t) || len(l.kern) >= maxPairs {
+		if rec+6 > len(t) {
 			return
 		}
 		left, right := font.Be16(t, rec), font.Be16(t, rec+2)
 		if v := signed16(font.Be16(t, rec+4)); v != 0 {
 			// The old 'kern' table states one number: an advance adjustment.
-			l.kern[[2]int{left, right}] = pairAdjust{firstAdvance: clamp16(v)}
+			if !l.add(&kl, left, right, pairAdjust{firstAdvance: clamp16(v)}) {
+				return
+			}
 		}
 	}
 }
@@ -1364,7 +1456,6 @@ func (l *layout) singleSubst(tag string, sub []byte) {
 // — a standard font, whose metrics are published rather than embedded.
 func emptyLayout() *layout {
 	return &layout{
-		kern:       map[[2]int]pairAdjust{},
 		ligatures:  map[int][]ligature{},
 		glyphClass: map[int]int{},
 		single:     map[string]map[int]int{},

@@ -21,8 +21,12 @@ for c in cons:
     words.append(c)
     for v in vow:
         words.append(c + v)
+# Every consonant of the first sixteen under every subjoined form, not the
+# first sixteen of those: a subjoined letter is given an advance by a
+# contextual rule that names the pair, and the pair the fuzzer found — tta with
+# subjoined tsa — is the twenty-sixth.
 for a in cons[:16]:
-    for b in sub[:16]:
+    for b in sub:
         words.append(a + b)
 for a in cons[:8]:
     for b in sub[:5]:
