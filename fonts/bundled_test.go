@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mgilbir/pdf0/content"
@@ -207,6 +208,75 @@ func TestEachCallGetsItsOwnFace(t *testing.T) {
 	first.ShapeGlyphs("Hamburgefonstiv")
 	if len(second.Used()) != 0 {
 		t.Errorf("the second face recorded %d glyphs the first one set", len(second.Used()))
+	}
+}
+
+// TestSharedFacesShapeConcurrently is the assertion the sharing has to earn.
+//
+// Reading the layout tables is nine tenths of what loading this face costs and
+// none of it depends on the document, so faces handed out by NotoSans share one
+// parse and one cache of per-script readings. Sharing a lazily-filled map across
+// goroutines is exactly how a data race is written, and the reason the cache is
+// behind a mutex rather than being two plain maps on the face.
+//
+// This test only means anything under -race, so it says so when the detector is
+// not on rather than reporting a pass it did not establish. Verified to fail:
+// with the locking removed from layoutCache, it reports a data race on the map.
+func TestSharedFacesShapeConcurrently(t *testing.T) {
+	if !raceEnabled {
+		t.Skip("only meaningful under -race")
+	}
+	// Four scripts, so the goroutines build *different* cache entries as well as
+	// racing for the same one.
+	words := []string{"Hamburgefonstiv", "Привет мир", "Ελληνικά", "नमस्ते"}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			face, err := NotoSans()
+			if err != nil {
+				t.Errorf("loading: %v", err)
+				return
+			}
+			for _, w := range words {
+				if glyphs, _ := face.ShapeGlyphs(w); len(glyphs) == 0 {
+					t.Errorf("%q shaped to nothing", w)
+				}
+			}
+			if _, err := face.Subset(); err != nil {
+				t.Errorf("subsetting: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// TestSharingTheParseDoesNotSharePastRuns pins the other half of forDocument:
+// the cache is shared *because* it holds facts about the font, and the record of
+// use is not shared because it holds facts about the document. A face that has
+// already had the cache filled by another document must still start empty.
+func TestSharingTheParseDoesNotSharePastRuns(t *testing.T) {
+	warm, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	warm.ShapeGlyphs("नमस्ते Привет Hamburgefonstiv")
+	if len(warm.Used()) == 0 {
+		t.Fatal("shaping recorded no glyphs, so this proves nothing")
+	}
+
+	fresh, err := NotoSans()
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if used := fresh.Used(); len(used) != 0 {
+		t.Fatalf("a face taken after another had shaped 3 scripts already reports %d glyphs used", len(used))
+	}
+	// And it must still shape correctly off the shared cache.
+	glyphs, missing := fresh.ShapeGlyphs("नमस्ते")
+	if len(glyphs) == 0 || missing != 0 {
+		t.Errorf("shaping off the shared cache gave %d glyphs, %d missing", len(glyphs), missing)
 	}
 }
 
