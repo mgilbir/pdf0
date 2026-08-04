@@ -239,17 +239,27 @@ func (f *Face) hasGlyph(r rune) bool {
 // It returns the slices it was given when nothing can change, which is the
 // common case and saves both the copy and the walk — see needsNormalizing.
 //
-// indic says the run is one of the nine scripts that share the Indic model, in
-// which case the run is fully decomposed rather than short-circuited, and the
-// two places that model disagrees with Unicode's own tables are honoured.
-func (f *Face) normalize(runes []rune, offsets []int, indic bool) ([]rune, []int) {
-	if !f.needsNormalizing(runes, !indic) {
+// The two flags are separate because they answer separate questions, and
+// conflating them was a real defect for the length of one merge.
+//
+// syllabic says a shaper that segments and reorders will read this run — Indic,
+// Khmer or Myanmar. Its rules are written against fully decomposed text, so the
+// short-circuit that is right for Latin must not apply.
+//
+// indicModel says the run is one of the nine scripts sharing the Indic model, in
+// which case the two places that model disagrees with Unicode's own tables are
+// honoured. Those disagreements are about Devanagari, Bengali and Tamil letters
+// and about Indic split vowel signs; none of them means anything in a Khmer or
+// Myanmar run, and applying them there would be asserting a rule of a script the
+// text is not in.
+func (f *Face) normalize(runes []rune, offsets []int, syllabic, indicModel bool) ([]rune, []int) {
+	if !f.needsNormalizing(runes, !syllabic) {
 		return runes, offsets
 	}
 	n := normalizer{
 		f:        f,
-		indic:    indic,
-		shortest: !indic,
+		indic:    indicModel,
+		shortest: !syllabic,
 		out:      make([]rune, 0, len(runes)+4),
 		off:      make([]int, 0, len(runes)+4),
 	}
@@ -318,7 +328,9 @@ type normalizer struct {
 	// than taken apart. It is the general path's setting and not the Indic one.
 	shortest bool
 	// indic says the two disagreements between the Indic model and Unicode's own
-	// tables apply — see decompose and compose below.
+	// tables apply — see decompose and compose below. It is narrower than
+	// shortest: Khmer and Myanmar are fully decomposed like the Indic scripts and
+	// share none of those disagreements.
 	indic bool
 	out   []rune
 	off   []int
@@ -347,8 +359,17 @@ func (n *normalizer) decomposeRound(runes []rune, offsets []int) bool {
 		if end < len(runes) {
 			end--
 		}
+		// Whether this stretch was left alone is a question about what came
+		// out, not about what went in. A composed character standing on its own
+		// carries no mark, so the input says "simple" — but on the syllabic path
+		// it is taken apart regardless, and returning early then would hand back
+		// a decomposition that rounds two and three never saw.
+		before, from := len(n.out), i
 		for i < end {
 			i = n.step(runes, offsets, i, n.shortest)
+		}
+		if len(n.out)-before != i-from {
+			allSimple = false
 		}
 		if i == len(runes) {
 			break

@@ -99,7 +99,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 	// each cluster's marks into canonical order. It runs before any glyph is
 	// chosen because it decides which characters the font is asked about at all.
 	// See normalize.go.
-	runes, offsets = f.normalize(runes, offsets, indicConfigFor(script) != nil)
+	runes, offsets = f.normalize(runes, offsets, usesSyllabicShaper(script), indicConfigFor(script) != nil)
 	var (
 		buf     []Glyph
 		missing int

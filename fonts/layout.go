@@ -53,13 +53,23 @@ import (
 //
 // # What is not, and what each absence costs
 //
-//   - Reordering for Khmer, Myanmar and the scripts the Universal Shaping Engine
-//     covers. They do not share the Indic model, so the nine scripts indic.go
-//     handles do not reach them: their second-generation tags are still
-//     selected, because that is where such a font declares its features, but
-//     their characters are turned into glyphs in storage order. Text in them is
-//     not correctly set by this package and should be shaped elsewhere and
-//     passed in as glyph indices. indic.go says what within the nine is left out.
+//   - Reordering for the scripts the Universal Shaping Engine covers — Tibetan,
+//     Javanese, Balinese, Buginese, Tai Tham, Cham, Sinhala and a long tail.
+//     Their tags are still selected, because that is where such a font declares
+//     its features, but their characters are turned into glyphs in storage
+//     order, so text in them is not correctly set here and should be shaped
+//     elsewhere and passed in as glyph indices.
+//
+//     The engine is not one more shaper. It needs a category table over all of
+//     Unicode whose two normative override files are not in the published
+//     sources, a record of *which* substitution produced each glyph that this
+//     package does not keep, and a joining model over syllables that interacts
+//     with Arabic joining. Half of it shipped would move glyphs by a grammar
+//     that is not theirs, which is worse than leaving them in storage order.
+//
+//     Devanagari and its eight relatives (indic.go), Khmer (khmer.go) and
+//     Myanmar (myanmar.go) *are* reordered; syllabic.go chooses between the
+//     three models, and each file says what within its own is left out.
 //   - Every point in a variable font's design space but the default one.
 //     FeatureVariations is read, and read for the coordinates in force — which
 //     are the default instance's, because nothing here instances a font: the
