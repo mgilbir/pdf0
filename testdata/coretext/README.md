@@ -172,3 +172,20 @@ its own line 2.
 
 Remember the harness reports absolute positions and a step per glyph, so the
 comparison is the running sum, not the printed number.
+
+## What CoreText answered, the third time
+
+It agrees with this package again, and exactly: line 3 came back byte-identical
+to line 2, which is to say the invisible character changed nothing.
+
+| | hamza at |
+| --- | --- |
+| pdf0 | **250** |
+| CoreText | **250** |
+| HarfBuzz | 850 |
+
+Both controls matched all three engines, so the harness was measuring what it
+claimed. HarfBuzz keeps a 600-unit hole where a character nothing is drawn for
+was written; the other two close it.
+
+Recorded in `deliberateDifferences` with the string pinned in the Arabic corpus.

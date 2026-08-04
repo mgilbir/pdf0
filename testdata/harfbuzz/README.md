@@ -295,12 +295,12 @@ HarfBuzz — see testdata/coretext. Pinned in the corpus and listed in
 `deliberateDifferences`; the fuzzer names only the exact string, so any other
 Tibetan case it reports is a different question wearing the same shape.
 
-**An ignorable in a non-syllabic run, Arabic.** `U+063D U+061C U+0655` puts the
-first mark at x 250 against HarfBuzz's 850. U+061C is a default-ignorable, and
-these are removed before shaping for every run that is not syllabic — which is
-the same answer as keeping them wherever the font's rules are lookups, and was
-measured to be so for Latin, Greek, Cyrillic and Arabic. This is the case that
-says "measured" was not "always".
+**An invisible character the font gave a width, Arabic.** `U+063D U+061C U+0655`
+puts the mark at 250 against HarfBuzz's 850, and is not a defect either:
+CoreText was asked and closes the gap as this package does. Noto Sans Arabic
+gives U+061C a glyph 600 units wide; HarfBuzz carries it through positioning and
+deletes it at the end, keeping the hole. Pinned in the corpus and listed in
+`deliberateDifferences`.
 
 **Two pre-base vowels, Devanagari.** `U+091B U+094E U+093F` comes out as
 different glyphs in a different order — 3975, 4032 against HarfBuzz's 3935,
