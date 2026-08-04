@@ -252,13 +252,14 @@ func (f *Face) hasGlyph(r rune) bool {
 // and about Indic split vowel signs; none of them means anything in a Khmer or
 // Myanmar run, and applying them there would be asserting a rule of a script the
 // text is not in.
-func (f *Face) normalize(runes []rune, offsets []int, syllabic, indicModel bool) ([]rune, []int) {
+func (f *Face) normalize(runes []rune, offsets []int, syllabic, indicModel, arabic bool) ([]rune, []int) {
 	if !f.needsNormalizing(runes, !syllabic) {
 		return runes, offsets
 	}
 	n := normalizer{
 		f:        f,
 		indic:    indicModel,
+		arabic:   arabic,
 		shortest: !syllabic,
 		out:      make([]rune, 0, len(runes)+4),
 		off:      make([]int, 0, len(runes)+4),
@@ -332,8 +333,11 @@ type normalizer struct {
 	// shortest: Khmer and Myanmar are fully decomposed like the Indic scripts and
 	// share none of those disagreements.
 	indic bool
-	out   []rune
-	off   []int
+	// arabic says the run is Arabic, so that the mark ordering the script has of
+	// its own applies on top of Unicode's — see reorderArabicMarks.
+	arabic bool
+	out    []rune
+	off    []int
 }
 
 func (n *normalizer) emit(r rune, cluster int) {
@@ -515,6 +519,9 @@ func (n *normalizer) reorderRound() {
 		}
 		if end-i <= maxCombiningMarks {
 			n.sortMarks(i, end)
+			if n.arabic {
+				n.reorderArabicMarks(i, end)
+			}
 		}
 		// The character at end has class zero, so it starts no run of its own.
 		i = end
@@ -600,4 +607,62 @@ func (n *normalizer) composeRound() ([]rune, []int) {
 		}
 	}
 	return res, resOff
+}
+
+// reorderArabicMarks applies the ordering Arabic has of its own, on top of
+// Unicode's canonical one.
+//
+// Canonical ordering sorts a letter's marks by combining class, and for Arabic
+// that puts them in an order nobody writes. A hamza is not a vowel — it is part
+// of how the letter is spelled — so it belongs against the letter, under or over
+// any vowel that is also there. Its combining class is 220 or 230, far above a
+// vowel's 27 to 34, so sorting by class alone puts it outside the vowel and the
+// two are drawn stacked the wrong way round.
+//
+// Unicode states the correction in UTR #53, the Arabic Mark Rendering algorithm,
+// and it is what every shaper does: within a letter's run of marks, the marks
+// written below the letter come first, then the marks written above it, then
+// everything else in the order the canonical sort left them.
+//
+// It is Arabic's alone and must not leak. In Latin the same two classes mean the
+// opposite thing — a dot below at 220 and an acute at 230 are ordinary marks
+// whose canonical order is the order they are drawn in — so applying this to
+// "ọ́" would stack the accent under the letter.
+func (n *normalizer) reorderArabicMarks(start, end int) {
+	// The two classes, innermost first: below the letter, then above it.
+	for _, cc := range [...]uint8{220, 230} {
+		i := start
+		for i < end && reorderClass(n.out[i]) < cc {
+			i++
+		}
+		if i == end {
+			return
+		}
+		if reorderClass(n.out[i]) > cc {
+			continue
+		}
+		j := i
+		for j < end && reorderClass(n.out[j]) == cc {
+			j++
+		}
+		if i == start {
+			// Already at the front of what has not been moved yet.
+			start = j
+			continue
+		}
+		n.rotateMarks(start, i, j)
+		start += j - i
+	}
+}
+
+// rotateMarks moves out[mid:end] to the front of out[start:end], keeping the
+// order within each part. The offsets move with the characters, because a
+// cluster says which text a glyph came from and reordering does not change that.
+func (n *normalizer) rotateMarks(start, mid, end int) {
+	moved := append([]rune(nil), n.out[mid:end]...)
+	movedOff := append([]int(nil), n.off[mid:end]...)
+	copy(n.out[start+len(moved):end], n.out[start:mid])
+	copy(n.off[start+len(movedOff):end], n.off[start:mid])
+	copy(n.out[start:], moved)
+	copy(n.off[start:], movedOff)
 }

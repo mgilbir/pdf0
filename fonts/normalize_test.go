@@ -530,7 +530,7 @@ func BenchmarkNormalizeASCII(b *testing.B) {
 	runes, offsets := bidiRunCharacters(text, false)
 	b.ReportAllocs()
 	for b.Loop() {
-		f.normalize(runes, offsets, false, false)
+		f.normalize(runes, offsets, false, false, false)
 	}
 }
 
@@ -550,7 +550,7 @@ func BenchmarkNormalizePrecomposed(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		f.normalize(runes, offsets, false, false)
+		f.normalize(runes, offsets, false, false, false)
 	}
 }
 
@@ -571,7 +571,7 @@ func BenchmarkNormalizeDecomposed(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		f.normalize(runes, offsets, false, false)
+		f.normalize(runes, offsets, false, false, false)
 	}
 }
 
