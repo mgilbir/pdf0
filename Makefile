@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc bidi-tests test-bidi clean-bidi-tests
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -199,6 +199,36 @@ test-bidi: bidi-tests
 
 clean-bidi-tests:
 	rm -rf $(BIDI_DIR)
+
+# Shaping checked against HarfBuzz.
+#
+# Unlike every other oracle here, this one is checked in: testdata/harfbuzz/
+# holds the corpus and what HarfBuzz answered for it, so the comparison runs on
+# any machine with a Go toolchain and nothing else. That matters because it has
+# to run on every change to the shaper, and an oracle that needs the right
+# Python on the machine is one that quietly stops running.
+#
+# This target is what regenerates it, and is needed only when the corpus grows,
+# the bundled font changes, or a HarfBuzz release moves an answer. It needs
+# Python with uharfbuzz:
+#
+#	python3 -m venv .hbenv && .hbenv/bin/pip install uharfbuzz
+#	PYTHON=.hbenv/bin/python make hbshaping
+#
+# Review the diff to expected.txt before committing it. A change there is
+# HarfBuzz changing its mind, and is worth understanding rather than accepting.
+HARFBUZZ_DIR := testdata/harfbuzz
+PYTHON ?= python3
+
+hbshaping:
+	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
+		fonts/notosans/NotoSans-Variable.ttf \
+		$(HARFBUZZ_DIR)/corpus.txt \
+		$(HARFBUZZ_DIR)/expected.txt
+
+test-hbshaping:
+	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 ./fonts/
 
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
