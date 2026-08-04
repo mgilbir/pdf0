@@ -690,6 +690,13 @@ func featureLookupIndices(t []byte, feats tableFeatures) map[string][]int {
 	if n > maxLookupList {
 		n = maxLookupList
 	}
+	// The duplicates are tracked in a set rather than by scanning what has been
+	// kept. Several feature records may carry the same tag and name overlapping
+	// lookups, so the scan is inside two loops — and a font with a few thousand
+	// features naming a few thousand lookups turns that into millions of
+	// comparisons. It was three quarters of the time spent reading one that the
+	// fuzzer produced.
+	seen := map[string]map[int]bool{}
 	for i := 0; i < n; i++ {
 		rec := 2 + 6*i
 		if rec+6 > len(list) {
@@ -699,22 +706,20 @@ func featureLookupIndices(t []byte, feats tableFeatures) map[string][]int {
 			continue
 		}
 		tag := string(list[rec : rec+4])
+		kept := seen[tag]
+		if kept == nil {
+			kept = map[int]bool{}
+			seen[tag] = kept
+		}
 		for _, idx := range featureLookupList(list, i, feats.varied) {
-			if !containsInt(out[tag], idx) {
-				out[tag] = append(out[tag], idx)
+			if kept[idx] {
+				continue
 			}
+			kept[idx] = true
+			out[tag] = append(out[tag], idx)
 		}
 	}
 	return out
-}
-
-func containsInt(s []int, v int) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // featureLookups returns the lookup-table byte slices reachable from every
