@@ -100,6 +100,14 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 	// chosen because it decides which characters the font is asked about at all.
 	// See normalize.go.
 	runes, offsets = f.normalize(runes, offsets, usesSyllabicShaper(script), indicConfigFor(script) != nil)
+	// And the characters nothing is drawn for go now: after normalisation, so
+	// that a combining grapheme joiner has already stopped what it was written
+	// to stop, and before the buffer is built, so that no rule of the font is
+	// ever asked about a glyph that will not be there. See ignorable.go.
+	runes, offsets = dropHiddenCharacters(runes, offsets)
+	if len(runes) == 0 {
+		return nil, 0
+	}
 	var (
 		buf     []Glyph
 		missing int
@@ -162,6 +170,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 // fallback stack do not have to know which kind of face they were given.
 func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 	runes, offsets := bidiRunCharacters(s, rtl)
+	// A simple face draws nothing for these either. It is more visible here, if
+	// anything: WinAnsi gives U+00AD a code of its own, so a soft hyphen without
+	// this reaches the page as a hyphen — and a simple face has no shaping pass
+	// later on that could take it back out.
+	runes, offsets = dropHiddenCharacters(runes, offsets)
 	var (
 		buf     []Glyph
 		missing int

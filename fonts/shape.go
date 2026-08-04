@@ -164,6 +164,9 @@ func (f *Face) glyphRun(s string) (glyphs []int, missing int) {
 func (f *Face) glyphRunIn(s string, rtl bool) (glyphs []int, missing int) {
 	runes, _ := bidiRunCharacters(s, rtl)
 	for _, r := range runes {
+		if hiddenBeforeShaping(r) {
+			continue // nothing is drawn for it — see ignorable.go
+		}
 		gid, ok := f.GlyphID(r)
 		if !ok {
 			missing++
