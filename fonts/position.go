@@ -240,64 +240,50 @@ func (sh shaper) attachMarks(buf []Glyph) {
 	if len(l.markGlyphs) == 0 {
 		return
 	}
+	// Every attachment this run will make, gathered before any of them is made,
+	// and then applied in the order the font states the lookups in.
+	//
+	// Not in buffer order, which is what this did. A mark is placed relative to
+	// where its target stands *at that moment*, and a later lookup may move the
+	// target afterwards — at which point the mark does not follow, because it
+	// was placed already. Noto Serif Tibetan does exactly that: lookup 19
+	// attaches a mark to a subjoined letter that lookup 18 has put at y -30, and
+	// lookup 21 then moves that letter to y -367. The mark stays where 19 put
+	// it. Placing every mark at the end instead reads the letter's final
+	// position and drags the mark 337 units down with it.
+	type pending struct {
+		i, at, lookup int
+		mark          markAnchor
+		base          anchor
+	}
+	var todo []pending
 	for i := range buf {
 		if !l.markGlyphs[buf[i].GID] {
 			continue
 		}
-		// The letter underneath, and then the mark this one stacks on. The two
-		// tables ask different questions and are not two attempts at one.
-		//
-		// Mark-to-base looks past any marks in the way, whatever its lookup's
-		// own flags say — the format fixes that for this table. Mark-to-mark
-		// looks past exactly the glyphs *its own lookup* skips and attaches to
-		// what it lands on, never past it.
-		//
-		// A single walk that tried mark-to-mark at every mark it passed gets
-		// both wrong, in opposite directions, and this is why it is worth the
-		// two passes. An Arabic sukun is written after the dots 'ccmp' split
-		// off the letter; its lookup names a mark glyph set holding the sukun
-		// and the dots above but not the ring below, so it steps over the ring
-		// and stacks on the dots. A Latin letter carrying three marks whose
-		// middle one is in no mark-to-mark table gets nothing from that table
-		// at all, and the third stays where the base put it rather than
-		// climbing over the middle one onto the first.
-		// Whichever of the two the font states *last* is the one that decides:
-		// a later lookup places the mark over whatever an earlier one did. That
-		// is not always the mark-to-mark one. Noto Sans states the above-mark
-		// stacking under 'abvm' and the base attachment in a later lookup, so a
-		// second mark above a Devanagari letter sits beside the first rather
-		// than on it — and HarfBuzz says the same, which is visible by turning
-		// 'mark' off and watching the stacking reappear.
-		//
-		// Applying them in a fixed order stacks it either always or never. The
-		// font is what says which, and the lookup counter is in the order the
-		// font lists them because that is the order they are read in.
-		type attach struct {
-			mark   markAnchor
-			base   anchor
-			at     int
-			lookup int
-			ok     bool
-		}
-		var onBase, onMark attach
+		// The letter underneath, and the mark this one stacks on. The two tables
+		// ask different questions and are not two attempts at one: mark-to-base
+		// looks past any marks in the way, mark-to-mark looks past exactly the
+		// glyphs its own lookup skips and attaches to what it lands on.
 		if j := prevNonMark(l, buf, i); j >= 0 {
-			onBase.at = j
-			onBase.mark, onBase.base, onBase.lookup, onBase.ok = attachmentFor(
-				l.markBase, buf[i].GID, buf[j].GID, markComponent(buf, i, j))
-		}
-		onMark.mark, onMark.base, onMark.at, onMark.lookup, onMark.ok = l.markMarkAt(buf, i)
-		first, second := onBase, onMark
-		if onBase.ok && onMark.ok && onBase.lookup > onMark.lookup {
-			first, second = onMark, onBase
-		}
-		// Both are applied, earlier first, because placeMark reads the offsets
-		// of whatever it attaches to and the later one must see what the earlier
-		// left. It *sets* the mark's own offsets, so the later one is the answer.
-		for _, a := range [...]attach{first, second} {
-			if a.ok {
-				sh.placeMark(buf, i, a.at, a.mark.anchor, a.base)
+			if mark, base, lookup, ok := attachmentFor(l.markBase, buf[i].GID,
+				buf[j].GID, markComponent(buf, i, j)); ok {
+				todo = append(todo, pending{i, j, lookup, mark, base})
 			}
 		}
+		if mark, base, at, lookup, ok := l.markMarkAt(buf, i); ok {
+			todo = append(todo, pending{i, at, lookup, mark, base})
+		}
+	}
+	// Stable, so that two attachments a font states in one lookup are still made
+	// in the order the glyphs are written in.
+	for a := 1; a < len(todo); a++ {
+		for b := a; b > 0 && todo[b].lookup < todo[b-1].lookup; b-- {
+			todo[b], todo[b-1] = todo[b-1], todo[b]
+		}
+	}
+	for _, p := range todo {
+		sh.placeMark(buf, p.i, p.at, p.mark.anchor, p.base)
 	}
 }
 
