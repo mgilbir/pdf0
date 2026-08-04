@@ -46,13 +46,17 @@ import (
 // OpenType specifications has two tags, and the tag a font declares its rules
 // under says which of the two it was written against — see indicOldSpec.
 //
-// Khmer, Myanmar and the scripts the Universal Shaping Engine covers do *not*
-// share this model, and are deliberately absent: they are set as they were
-// before, their characters turned into glyphs in storage order with the font's
-// default features applied. Text in them is not correctly set by this package
-// and should be shaped elsewhere and passed in as glyph indices. Shaping one of
-// them by these rules would be worse than leaving it, since it would move glyphs
-// by a grammar that is not theirs.
+// Khmer and Myanmar do *not* share this model and are deliberately absent from
+// it. Each is its own shaper, with its own categories, its own syllable grammar
+// and its own reordering — see khmer.go and myanmar.go. Shaping either by these
+// rules would be worse than leaving it, since it would move glyphs by a grammar
+// that is not theirs.
+//
+// The scripts the Universal Shaping Engine covers are absent and have no shaper
+// of their own: they are set as they were before, their characters turned into
+// glyphs in storage order with the font's default features applied. Text in
+// them is not correctly set by this package and should be shaped elsewhere and
+// passed in as glyph indices.
 //
 // These are not done:
 //
@@ -112,6 +116,32 @@ const (
 	catRS                           // a register shifter
 	catMPst                         // a matra a syllable modifier may stand before
 	catSMPst                        // a modifier with no side of its own
+
+	// Khmer and Myanmar group some characters differently from the Indic
+	// model, and name groups it has none of. The categories below are theirs
+	// (khmer.go, myanmar.go); they are here because they are the same kind of
+	// statement — what a character is within its syllable — and because the
+	// per-glyph record and the feature machinery are shared.
+	//
+	// The four vowel-sign categories say which side of the letter a sign is
+	// drawn on, which those two models read off the character rather than
+	// asking the font, as the Indic one does.
+	catVAbv     // a vowel sign drawn above the letter
+	catVBlw     // one drawn below it
+	catVPre     // one drawn before it, stored after
+	catVPst     // one drawn after it
+	catRobatic  // Khmer: a mark that may stand between a letter and its subscripts
+	catXgroup   // Khmer: a mark that may stand before a vowel sign
+	catYgroup   // Khmer: a mark that may stand only at the end of a syllable
+	catAsat     // Myanmar: the asat, which kills the vowel of the letter before it
+	catMedialY  // Myanmar: medial Ya, and the Mon letters written like it
+	catMedialR  // Myanmar: medial Ra, which is drawn before the base
+	catMedialW  // Myanmar: medial Wa, and the Shan Wa
+	catMedialH  // Myanmar: medial Ha
+	catMedialL  // Myanmar: the Mon medial La
+	catPTone    // Myanmar: a Pwo or other tone mark
+	catVS       // a variation selector, which takes the place of what it follows
+	catAnusvara // Myanmar: a sign drawn over the syllable that the reordering counts
 )
 
 // indicPos is where a glyph goes within its syllable. The order of these is the
@@ -841,39 +871,7 @@ func (sh shaper) markInvalidVowels(buf []Glyph, runes []rune) ([]Glyph, []rune) 
 // otherwise lose that half altogether, which is worse than drawing the sign
 // where the model would rather it were not.
 func (sh shaper) splitMatras(buf []Glyph, runes []rune) ([]Glyph, []rune) {
-	outBuf := make([]Glyph, 0, len(buf))
-	outRunes := make([]rune, 0, len(runes))
-	for i, r := range runes {
-		parts, ok := indicSplitMatraOf(r)
-		if !ok {
-			outBuf = append(outBuf, buf[i])
-			outRunes = append(outRunes, r)
-			continue
-		}
-		gids := make([]int, 0, len(parts))
-		for _, p := range parts {
-			gid, have := sh.f.GlyphID(p)
-			if !have {
-				gids = nil
-				break
-			}
-			gids = append(gids, gid)
-		}
-		if gids == nil {
-			outBuf = append(outBuf, buf[i])
-			outRunes = append(outRunes, r)
-			continue
-		}
-		// The parts share the sign's cluster: several glyphs standing for one
-		// character is exactly what a cluster records.
-		for k, gid := range gids {
-			outBuf = append(outBuf, Glyph{
-				GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
-			})
-			outRunes = append(outRunes, parts[k])
-		}
-	}
-	return outBuf, outRunes
+	return sh.splitCharacters(buf, runes, indicSplitMatraOf)
 }
 
 // indicSplitMatraOf reports the marks a vowel sign is drawn as, if it is one of
@@ -944,23 +942,7 @@ func (sh shaper) insertDottedCircle(buf []Glyph, info []indicInfo, start, end, g
 	for at < end && at < len(info) && info[at].cat == catRepha {
 		at++
 	}
-	cluster := 0
-	switch {
-	case at < len(buf):
-		cluster = buf[at].Cluster
-	case len(buf) > 0:
-		cluster = buf[len(buf)-1].Cluster
-	}
-	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)}
-
-	buf = append(buf, Glyph{})
-	copy(buf[at+1:], buf[at:])
-	buf[at] = g
-
-	info = append(info, indicInfo{})
-	copy(info[at+1:], info[at:])
-	info[at] = indicInfo{cat: catDottedCircle, pos: posEnd}
-	return buf, info
+	return sh.insertGlyphAt(buf, info, at, gid, indicInfo{cat: catDottedCircle, pos: posEnd})
 }
 
 // shapeIndicSyllable puts one syllable into drawing order and applies the
