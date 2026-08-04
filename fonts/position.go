@@ -246,9 +246,9 @@ type singleAdjust struct {
 // one way for one and the other way for the other. Merging them sets a Latin
 // word's whole cursive chain from the Arabic lookup's flag — precisely the "a
 // rule meant for another script" this selection exists to stop.
-func (l *layout) readGPOSAttachment(gpos []byte, sel featureSet) {
-	for _, tag := range featureTags(gpos, sel) {
-		for _, lookup := range featureLookups(gpos, tag, sel) {
+func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
+	for _, tag := range featureTags(gpos, feats.sel) {
+		for _, lookup := range featureLookups(gpos, tag, feats) {
 			kind, flags, subs := subtables(lookup, 9)
 			for _, sub := range subs {
 				switch kind {
