@@ -213,8 +213,7 @@ func TestScriptSelectionSurvivesMalformedScriptList(t *testing.T) {
 		l := &layout{
 			kern: map[[2]int]int{}, ligatures: map[int][]ligature{},
 			glyphClass: map[int]int{}, single: map[string]map[int]int{},
-			singlePos: map[int]singleAdjust{}, markAnchors: map[int]markAnchor{},
-			markBases: map[key2]anchor{}, markMarkBases: map[key2]anchor{},
+			singlePos: map[int]singleAdjust{}, markGlyphs: map[int]bool{},
 			cursive: map[int]cursiveAnchors{},
 		}
 		sel, _ := scriptFeatures(truncated, []string{"latn"}, "")
