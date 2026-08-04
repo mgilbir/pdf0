@@ -160,7 +160,14 @@ func (sh shaper) attachMarks(buf []Glyph) {
 			if prevIsMark {
 				set = l.markMark
 			}
-			mark, base, found := attachmentFor(set, buf[i].GID, buf[j].GID)
+			// Which part of the base this mark belongs to, if the base is a
+			// ligature and the mark came from inside it. Zero otherwise, which
+			// anchorFor reads as "the last part".
+			component := 0
+			if lig := buf[i].lig; lig.id != 0 && lig.id == buf[j].lig.id {
+				component = lig.comp
+			}
+			mark, base, found := attachmentFor(set, buf[i].GID, buf[j].GID, component)
 			if !found {
 				if prevIsMark {
 					continue // stacked marks: keep looking back for the base
@@ -217,7 +224,12 @@ type key2 struct {
 type markAttachment struct {
 	lookup int
 	marks  map[int]markAnchor
-	bases  map[key2]anchor
+	// bases is where a base receives a mark of each class: mark-to-base and
+	// mark-to-mark. components is the same for mark-to-ligature, which states
+	// one anchor per component of the ligature rather than one for the whole of
+	// it. A subtable has one or the other, never both.
+	bases      map[key2]anchor
+	components map[key2][]anchor
 }
 
 // markAnchor is a mark's own attachment point and the class it belongs to.
@@ -257,10 +269,14 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 		for _, lookup := range featureLookups(gpos, tag, feats) {
 			kind, flags, subs := subtables(lookup, 9)
 			switch kind {
-			case 4:
-				l.readMarkAttachment(subs, false)
+			case 4, 5:
+				// Mark-to-base and mark-to-ligature go into one ordered set:
+				// they are alternatives for the same mark, decided by which
+				// lookup covers the glyph the mark is attaching to, and a
+				// ligature glyph may be covered by either.
+				l.readMarkAttachment(subs, kind == 5, false)
 			case 6:
-				l.readMarkAttachment(subs, true)
+				l.readMarkAttachment(subs, false, true)
 			default:
 				for _, sub := range subs {
 					switch kind {
@@ -409,11 +425,11 @@ func (l *layout) cursivePos(sub []byte) {
 // The two kinds have the same shape — a mark array and an array of attachment
 // points, one per class — and differ only in what the second array is indexed
 // by, so one reader serves both.
-func (l *layout) readMarkAttachment(subs [][]byte, mkmk bool) {
+func (l *layout) readMarkAttachment(subs [][]byte, ligature, mkmk bool) {
 	lookup := l.markLookups
 	l.markLookups++
 	for _, sub := range subs {
-		st, ok := readMarkSubtable(sub, lookup)
+		st, ok := readMarkSubtable(sub, lookup, ligature)
 		if !ok {
 			continue
 		}
@@ -429,7 +445,7 @@ func (l *layout) readMarkAttachment(subs [][]byte, mkmk bool) {
 }
 
 // readMarkSubtable reads one mark-attachment subtable.
-func readMarkSubtable(sub []byte, lookup int) (markAttachment, bool) {
+func readMarkSubtable(sub []byte, lookup int, ligature bool) (markAttachment, bool) {
 	if len(sub) < 12 || font.Be16(sub, 0) != 1 {
 		return markAttachment{}, false
 	}
@@ -465,29 +481,100 @@ func readMarkSubtable(sub []byte, lookup int) (markAttachment, bool) {
 		}
 	}
 
-	// The base array: one anchor per class for each covered base.
-	if baseArrayOff > 0 && baseArrayOff+2 <= len(sub) {
-		ba := sub[baseArrayOff:]
-		n := font.Be16(ba, 0)
-		for i := 0; i < n && i < len(baseCoverage); i++ {
-			for c := 0; c < classCount; c++ {
-				rec := 2 + (i*classCount+c)*2
-				if rec+2 > len(ba) {
-					break
-				}
-				a, ok := readAnchor(ba, font.Be16(ba, rec))
-				if !ok {
-					continue
-				}
-				st.bases[key2{baseCoverage[i], c}] = a
-			}
-		}
+	switch {
+	case ligature:
+		readLigatureArray(sub, baseArrayOff, baseCoverage, classCount, &st)
+	default:
+		readBaseArray(sub, baseArrayOff, baseCoverage, classCount, &st)
 	}
-	if len(st.marks) == 0 || len(st.bases) == 0 {
+	if len(st.marks) == 0 || (len(st.bases) == 0 && len(st.components) == 0) {
 		return markAttachment{}, false
 	}
 	return st, true
 }
+
+// readBaseArray reads a BaseArray: one anchor per class for each covered base.
+func readBaseArray(sub []byte, off int, coverage []int, classCount int, st *markAttachment) {
+	if off <= 0 || off+2 > len(sub) {
+		return
+	}
+	ba := sub[off:]
+	n := font.Be16(ba, 0)
+	for i := 0; i < n && i < len(coverage); i++ {
+		for c := 0; c < classCount; c++ {
+			rec := 2 + (i*classCount+c)*2
+			if rec+2 > len(ba) {
+				break
+			}
+			a, ok := readAnchor(ba, font.Be16(ba, rec))
+			if !ok {
+				continue
+			}
+			st.bases[key2{coverage[i], c}] = a
+		}
+	}
+}
+
+// readLigatureArray reads a LigatureArray, which is the one thing that makes a
+// mark-to-ligature subtable different from a mark-to-base one.
+//
+// A ligature is several letters drawn as one glyph, so a mark written under it
+// has to say which of them it belongs to: a dot under the first f of "ffi" goes
+// somewhere quite different from a dot under the second. The font answers by
+// giving each ligature not one anchor per class but one per component per class,
+// and the shaper picks the component from which part of the text the mark came
+// from — which is why forming a ligature has to record that.
+func readLigatureArray(sub []byte, off int, coverage []int, classCount int, st *markAttachment) {
+	if off <= 0 || off+2 > len(sub) {
+		return
+	}
+	la := sub[off:]
+	n := font.Be16(la, 0)
+	st.components = map[key2][]anchor{}
+	for i := 0; i < n && i < len(coverage); i++ {
+		rec := 2 + 2*i
+		if rec+2 > len(la) {
+			break
+		}
+		attachOff := font.Be16(la, rec)
+		if attachOff <= 0 || attachOff+2 > len(la) {
+			continue
+		}
+		attach := la[attachOff:]
+		count := font.Be16(attach, 0)
+		// A ligature of more components than any font ever writes is malformed,
+		// and the count is a length this would otherwise allocate from.
+		if count < 1 || count > maxLigatureComponents {
+			continue
+		}
+		for c := 0; c < classCount; c++ {
+			anchors := make([]anchor, 0, count)
+			any := false
+			for comp := 0; comp < count; comp++ {
+				a, ok := readAnchor(attach, font.Be16(attach, 2+(comp*classCount+c)*2))
+				if 2+(comp*classCount+c)*2+2 > len(attach) {
+					break
+				}
+				anchors = append(anchors, a)
+				any = any || ok
+			}
+			// A class the ligature says nothing about for any component is not
+			// stored, so that attachmentFor can tell "no anchor" from "an
+			// anchor at the origin".
+			if any {
+				st.components[key2{coverage[i], c}] = anchors
+			}
+		}
+	}
+	if len(st.components) == 0 {
+		st.components = nil
+	}
+}
+
+// maxLigatureComponents bounds what a font may claim a ligature is made of. The
+// longest anybody writes is a handful; a count near the format's ceiling is an
+// allocation this would otherwise make on the strength of two untrusted bytes.
+const maxLigatureComponents = 64
 
 // attachmentFor finds where a mark meets a base, over a set of subtables read in
 // lookup order.
@@ -502,7 +589,7 @@ func readMarkSubtable(sub []byte, lookup int) (markAttachment, bool) {
 // lookups each runs in turn over the whole run, so a later lookup that applies
 // overwrites what an earlier one placed. Hence: last applying lookup, first
 // applying subtable within it.
-func attachmentFor(set []markAttachment, markGID, baseGID int) (mark markAnchor, base anchor, ok bool) {
+func attachmentFor(set []markAttachment, markGID, baseGID, component int) (mark markAnchor, base anchor, ok bool) {
 	matched := -1
 	for i := range set {
 		st := &set[i]
@@ -513,13 +600,36 @@ func attachmentFor(set []markAttachment, markGID, baseGID int) (mark markAnchor,
 		if !has {
 			continue
 		}
-		b, has := st.bases[key2{baseGID, m.class}]
+		b, has := st.anchorFor(baseGID, m.class, component)
 		if !has {
 			continue
 		}
 		mark, base, ok, matched = m, b, true, st.lookup
 	}
 	return mark, base, ok
+}
+
+// anchorFor is where this subtable says a mark of a class attaches to a glyph,
+// for a mark that came from a given component of it.
+//
+// component is 1-based and is zero for a mark that is not part of the glyph's
+// own ligature — a mark written after it, or one the glyph is not a ligature
+// for. Such a mark goes on the *last* component, which is what OpenType says and
+// is the only sensible answer: a mark written after "ffi" belongs to the i.
+func (st *markAttachment) anchorFor(gid, class, component int) (anchor, bool) {
+	if st.components == nil {
+		a, ok := st.bases[key2{gid, class}]
+		return a, ok
+	}
+	anchors, ok := st.components[key2{gid, class}]
+	if !ok || len(anchors) == 0 {
+		return anchor{}, false
+	}
+	at := len(anchors) - 1
+	if component > 0 && component <= len(anchors) {
+		at = component - 1
+	}
+	return anchors[at], true
 }
 
 // readAnchor reads an anchor table. All three formats begin with the same two
