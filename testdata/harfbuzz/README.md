@@ -51,9 +51,10 @@ The Khmer font agreed on all 2441 cases at the first run.
 | `fonts/notosans/NotoSans-Variable.ttf` | Latin, Greek, Cyrillic, Devanagari | the bundled face, embedded in this module |
 | `fonts/NotoSansArabic.ttf` | Arabic | cursive joining, which nothing else here exercises |
 | `fonts/NotoSansKhmer.ttf` | Khmer | a syllable model that draws characters out of order |
-| `fonts/NotoSansJavanese.ttf` | Javanese | the Universal Shaping Engine, which this package does not implement yet |
+| `fonts/NotoSansJavanese.ttf` | Javanese | the Universal Shaping Engine |
+| `fonts/NotoSansBalinese.ttf` | Balinese | a second script for that engine, so one cannot be overfitted to |
 
-The three extra fonts are Google's Noto builds under the SIL Open Font License
+The four extra fonts are Google's Noto builds under the SIL Open Font License
 1.1, the same licence and publisher as the bundled face, with their copyright
 notices beside them as that licence requires. Neither declares a Reserved Font
 Name. They are test data: nothing this module ships embeds them.
@@ -94,20 +95,21 @@ many paths once.
   its marks off, and the join controls.
 - **Javanese** — every aksara with every sandhangan, the pangkon grid of every
   consonant stacked under every other, and stacked pairs carrying a vowel too.
+- **Balinese** — the same shape of grid, and the split vowel signs U+1B40 and
+  U+1B41, each written as one character and drawn as two marks on opposite sides.
 
-## The one ratchet
+## Why two scripts for one engine
 
-Javanese is not shaped correctly and the test says so with a number rather than
-a pass: 438 of its 894 cases agree, and the case carries that baseline and the
-reason for it. Of the 456 that differ, 359 are substitutions the per-syllable
-feature set never applies and 94 are glyphs left in the order they were written
-rather than the order they are drawn.
+The Universal Shaping Engine claims some seventy scripts. It was written against
+Javanese and reached all 894 of its cases — at which point Balinese, its close
+relative, was wrong in 66 of 764. One script cannot tell a general model from one
+overfitted to it, and the defect that found was in code five years older than the
+engine: a vowel sign written as one character and drawn as two marks on opposite
+sides of the letter was being taken apart and then put back together.
 
-The baseline is checked in *both* directions. If it falls the test fails, which
-is the ordinary use of a ratchet. If it rises the test also fails, and says to
-raise the baseline — so a fix cannot land without being recorded, and cannot
-later be undone quietly. The other three corpora carry no baseline and must
-agree exactly.
+All five corpora must now agree exactly. The ratchet the test still supports was
+used while the engine was being written and is documented there for the next time
+something lands in pieces.
 
 ## Regenerating
 
