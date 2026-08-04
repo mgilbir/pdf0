@@ -19,6 +19,7 @@
 #
 #   python3 testdata/harfbuzz/corpus_arabic.py
 import os
+import unicodedata
 
 words = []
 
@@ -71,15 +72,36 @@ for a in alefs:
     words.append(base + lam + a + base)
 
 # Marks: each on a letter alone, each on a letter inside a word, and stacked.
+#
+# On *every* letter, not the first twelve. The first twelve are the plain ones,
+# whose skeleton carries at most dots above or dots below. A letter like teh
+# with ring is split by 'ccmp' into a skeleton, a ring below and dots above, and
+# a mark written after it has three marks in front of it — which is what asks
+# whether mark-to-mark steps over the ones its lookup's mark glyph set leaves
+# out. Nothing in the first twelve does.
 for m in marks:
     words.append(base + m)
     words.append(base + m + base)
-    for a in letters[:12]:
+    for a in letters:
         words.append(a + m)
 words.append(base + "َّ")   # shadda then fatha, the ordinary pair
 words.append(base + "َّ")   # written the other way round
 words.append(base + "ٌّ")   # shadda with a tanween
 words.append(lam + "َّ" + "ه")
+
+# Every other letter of the block, each with a mark written above it.
+#
+# The alphabet above is the twenty-eight, whose skeletons carry at most dots.
+# The block also holds the letters other languages added — teh with ring among
+# them — which 'ccmp' splits into a skeleton and two or three marks of different
+# kinds. A mark written after one of those has several in front of it, and that
+# is what asks whether mark-to-mark steps over the ones its lookup's mark glyph
+# set leaves out. It stacks on the dots above and not on the ring below.
+for a in (chr(c) for c in range(0x0620, 0x0700)):
+    if unicodedata.category(a) != "Lo":
+        continue
+    for m in ("ْ", "َ", "ّ", "ٰ"):
+        words.append(a + m)
 
 # Hamza over and under a carrier, with a vowel: the reordering case.
 for carrier in ["ا", "و", "ي"]:

@@ -244,42 +244,30 @@ func (sh shaper) attachMarks(buf []Glyph) {
 		if !l.markGlyphs[buf[i].GID] {
 			continue
 		}
-		// Find what this mark attaches to, and by which table.
+		// The letter underneath, and then the mark this one stacks on. The two
+		// tables ask different questions and are not two attempts at one.
 		//
-		// This walk is not what the format describes, and the difference is
-		// measured rather than suspected. Mark-to-mark attaches to the nearest
-		// preceding glyph *its own lookup does not skip*, and stops there; this
-		// keeps walking until some subtable covers something. Where a font
-		// writes three marks and the middle one is in no mark-to-mark table —
-		// a combining letter, U+0363 and up — the third climbs over it onto the
-		// first, and HarfBuzz leaves it where the base put it.
+		// Mark-to-base looks past any marks in the way, whatever its lookup's
+		// own flags say — the format fixes that for this table. Mark-to-mark
+		// looks past exactly the glyphs *its own lookup* skips and attaches to
+		// what it lands on, never past it.
 		//
-		// Stopping at the glyph immediately before is not the correction: an
-		// Arabic mark is preceded by the dots 'ccmp' split off the letter, which
-		// the mark-to-mark lookup skips, and stopping there loses the stacking
-		// those fonts do want. Both need each attachment lookup to keep its own
-		// flags, which is the same shape of work pair kerning has just had and
-		// is why markFlags below is computed and never read.
-		for j := i - 1; j >= 0; j-- {
-			prevIsMark := l.isMark(buf[j])
-			set := l.markBase
-			if prevIsMark {
-				set = l.markMark
+		// A single walk that tried mark-to-mark at every mark it passed gets
+		// both wrong, in opposite directions, and this is why it is worth the
+		// two passes. An Arabic sukun is written after the dots 'ccmp' split
+		// off the letter; its lookup names a mark glyph set holding the sukun
+		// and the dots above but not the ring below, so it steps over the ring
+		// and stacks on the dots. A Latin letter carrying three marks whose
+		// middle one is in no mark-to-mark table gets nothing from that table
+		// at all, and the third stays where the base put it rather than
+		// climbing over the middle one onto the first.
+		if j := prevNonMark(l, buf, i); j >= 0 {
+			if mark, base, ok := attachmentFor(l.markBase, buf[i].GID, buf[j].GID,
+				markComponent(buf, i, j)); ok {
+				sh.placeMark(buf, i, j, mark.anchor, base)
 			}
-			// Which part of the base this mark belongs to, if the base is a
-			// ligature and the mark came from inside it. Zero otherwise, which
-			// anchorFor reads as "the last part".
-			component := 0
-			if lig := buf[i].lig; lig.id != 0 && lig.id == buf[j].lig.id {
-				component = lig.comp
-			}
-			mark, base, found := attachmentFor(set, buf[i].GID, buf[j].GID, component)
-			if !found {
-				if prevIsMark {
-					continue // stacked marks: keep looking back for the base
-				}
-				break // a base that says nothing about this mark
-			}
+		}
+		if mark, base, j, ok := l.markMarkAt(buf, i); ok {
 			// Place the mark so its anchor meets the base's. The pen is at the
 			// end of everything drawn since the base, so the advances between
 			// have to be taken back off — and the base's own displacement
@@ -295,9 +283,65 @@ func (sh shaper) attachMarks(buf []Glyph) {
 			// rather than off. The mark's own advance is zeroed first, so that
 			// a font which gave its marks a width does not have it counted.
 			sh.placeMark(buf, i, j, mark.anchor, base)
-			break
 		}
 	}
+}
+
+// prevNonMark is the nearest glyph before i that is not a mark: what
+// mark-to-base attaches to.
+func prevNonMark(l *layout, buf []Glyph, i int) int {
+	for j := i - 1; j >= 0; j-- {
+		if !l.isMark(buf[j]) {
+			return j
+		}
+	}
+	return -1
+}
+
+// markComponent is which part of a ligature a mark belongs to, if the thing it
+// attaches to is one and the mark came from inside it. Zero otherwise, which
+// anchorFor reads as "the last part".
+func markComponent(buf []Glyph, i, j int) int {
+	if lig := buf[i].lig; lig.id != 0 && lig.id == buf[j].lig.id {
+		return lig.comp
+	}
+	return 0
+}
+
+// markMarkAt finds the mark that the one at i stacks on, if any.
+//
+// Each subtable looks back for itself, because which glyphs are in the way is
+// its lookup's own statement. The Ignore bits are cleared first: they are about
+// finding a *base* and would have mark-to-mark step over every mark there is,
+// which is the one thing it exists to find. What is left is the mark filtering
+// set and the mark attachment class, which are exactly the narrowing a font
+// uses to say which marks stack on which.
+func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, at int, ok bool) {
+	const ignoreFlags = flagIgnoreBaseGlyphs | flagIgnoreLigatures | flagIgnoreMarks
+	matched := -1
+	for k := range l.markMark {
+		st := &l.markMark[k]
+		if ok && st.lookup == matched {
+			continue // this lookup already applied, by an earlier subtable
+		}
+		m, has := st.marks[buf[i].GID]
+		if !has {
+			continue
+		}
+		j := i - 1
+		for j >= 0 && l.ignoresIn(st.flags&^ignoreFlags, st.markSet, buf[j]) {
+			j--
+		}
+		if j < 0 || !l.isMark(buf[j]) {
+			continue
+		}
+		b, has := st.anchorFor(buf[j].GID, m.class, markComponent(buf, i, j))
+		if !has {
+			continue
+		}
+		mark, base, at, matched, ok = m, b, j, st.lookup, true
+	}
+	return mark, base, at, ok
 }
 
 // anchor is a point in a glyph's own coordinate space, in font units.
@@ -317,7 +361,12 @@ type key2 struct {
 // applied one after another.
 type markAttachment struct {
 	lookup int
-	marks  map[int]markAnchor
+	// flags and markSet are the lookup's own, kept because mark-to-mark has to
+	// look back past exactly the glyphs *this* lookup skips — see markMarkAt.
+	// They must not go through mergedFlags, which drops the very bit that says
+	// a filtering set is in use.
+	flags, markSet int
+	marks          map[int]markAnchor
 	// bases is where a base receives a mark of each class: mark-to-base and
 	// mark-to-mark. components is the same for mark-to-ligature, which states
 	// one anchor per component of the ligature rather than one for the whole of
@@ -364,16 +413,16 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 	budget := subtableBudget(gpos)
 	for _, tag := range featureTags(gpos, feats.sel) {
 		for _, lookup := range featureLookups(gpos, tag, feats) {
-			kind, flags, _, subs := subtables(lookup, 9, &budget)
+			kind, flags, markSet, subs := subtables(lookup, 9, &budget)
 			switch kind {
 			case 4, 5:
 				// Mark-to-base and mark-to-ligature go into one ordered set:
 				// they are alternatives for the same mark, decided by which
 				// lookup covers the glyph the mark is attaching to, and a
 				// ligature glyph may be covered by either.
-				l.readMarkAttachment(subs, kind == 5, false)
+				l.readMarkAttachment(subs, flags, markSet, kind == 5, false)
 			case 6:
-				l.readMarkAttachment(subs, false, true)
+				l.readMarkAttachment(subs, flags, markSet, false, true)
 			default:
 				for _, sub := range subs {
 					switch kind {
@@ -522,7 +571,7 @@ func (l *layout) cursivePos(sub []byte) {
 // The two kinds have the same shape — a mark array and an array of attachment
 // points, one per class — and differ only in what the second array is indexed
 // by, so one reader serves both.
-func (l *layout) readMarkAttachment(subs [][]byte, ligature, mkmk bool) {
+func (l *layout) readMarkAttachment(subs [][]byte, flags, markSet int, ligature, mkmk bool) {
 	lookup := l.markLookups
 	l.markLookups++
 	for _, sub := range subs {
@@ -530,6 +579,7 @@ func (l *layout) readMarkAttachment(subs [][]byte, ligature, mkmk bool) {
 		if !ok {
 			continue
 		}
+		st.flags, st.markSet = flags, markSet
 		for gid := range st.marks {
 			l.markGlyphs[gid] = true
 		}
