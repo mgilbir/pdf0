@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping useable
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -257,6 +257,11 @@ hbshaping:
 		$(HARFBUZZ_DIR)/fonts/NotoSerifTibetan.ttf \
 		$(HARFBUZZ_DIR)/tibetan.txt \
 		$(HARFBUZZ_DIR)/tibetan.expected.txt
+
+# Differential fuzzing against HarfBuzz. Needs the same Python as hbshaping.
+hbfuzz:
+	go build -o $(HARFBUZZ_DIR)/.shapetext ./cmd/shapetext
+	SHAPETEXT=$(abspath $(HARFBUZZ_DIR)/.shapetext) $(PYTHON) $(HARFBUZZ_DIR)/difffuzz.py 60
 
 test-hbshaping:
 	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 ./fonts/

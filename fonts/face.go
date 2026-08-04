@@ -399,6 +399,13 @@ func (f *Face) Used() []int {
 	return out
 }
 
+// UnitsPerEm is the font's own coordinate grid: how many units make one em.
+//
+// A caller working in the thousandths of an em this package reports needs it
+// only to convert back — to compare against a tool that reports font units, or
+// to read a value out of the font's own tables. Almost nothing does.
+func (f *Face) UnitsPerEm() int { return f.unitsPerEm }
+
 // scale converts a value in font units to the 1/1000 em units PDF wants.
 func (f *Face) scale(v int) float64 {
 	return float64(v) * 1000 / float64(f.unitsPerEm)
