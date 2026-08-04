@@ -60,14 +60,14 @@ func TestKhmerAndMyanmarAreFullyDecomposedLikeIndic(t *testing.T) {
 	// Composed in, composed out — on both paths. Normalisation is to the
 	// font's coverage, not to NFC or NFD, and the face has this one whole.
 	for _, syllabic := range []bool{false, true} {
-		out, _ := f.normalize([]rune{composed}, []int{0}, syllabic, false)
+		out, _ := f.normalize([]rune{composed}, []int{0}, syllabic, false, false)
 		if len(out) != 1 || out[0] != composed {
 			t.Errorf("syllabic=%v: composed input gave %U, want it left composed", syllabic, out)
 		}
 	}
 	// Decomposed in, composed out — on both paths, since the face can draw it.
 	for _, syllabic := range []bool{false, true} {
-		out, _ := f.normalize([]rune{'e', 0x0301}, []int{0, 1}, syllabic, false)
+		out, _ := f.normalize([]rune{'e', 0x0301}, []int{0, 1}, syllabic, false, false)
 		if len(out) != 1 || out[0] != composed {
 			t.Errorf("syllabic=%v: decomposed input gave %U, want it recomposed", syllabic, out)
 		}
