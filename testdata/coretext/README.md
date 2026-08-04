@@ -136,3 +136,39 @@ where the other two agree.
 That closes it: there is nothing to fix, and the difference is recorded in
 `deliberateDifferences` in `fonts/harfbuzz_test.go` with the string pinned in the
 Tibetan corpus, so it is checked in both directions and cannot go stale.
+
+## The third question: does an invisible character take up room
+
+`ignorable-width.txt`, against the Arabic font.
+
+Noto Sans Arabic gives U+061C ARABIC LETTER MARK a glyph 600 units wide.
+HarfBuzz keeps that glyph through positioning and removes it at the end, and the
+mark written after it comes out 600 units further along — the gap stays. This
+package removes the character before shaping, so there is no gap: the two draw
+the hamza at 1610 and 1010 respectively.
+
+Which is right is the same question CoreText has already answered once, about
+whether such a character breaks a syllable, and it answered against this package
+that time. So it is worth asking rather than reasoning.
+
+```sh
+./shape ../harfbuzz/fonts/NotoSansArabic.ttf < ignorable-width.txt
+```
+
+Lines 1 and 2 are controls — a hamza below on two different letters, with
+nothing invisible between — and all three engines agree on both. Line 3 is the
+question, and what matters is the *gap* between the letter and the hamza:
+
+- the hamza at the same place as on line 2 — CoreText closes the gap, as this
+  package does, and there is nothing to fix.
+- the hamza 600 units further along — CoreText keeps the gap, as HarfBuzz does,
+  and removing these characters before shaping is wrong for a font that gives
+  one a width.
+
+The neatest way to read it: this package's answer for line 3 is *identical* to
+its answer for line 2, because the invisible character changes nothing.
+HarfBuzz's differs. So the question is simply whether CoreText's line 3 equals
+its own line 2.
+
+Remember the harness reports absolute positions and a step per glyph, so the
+comparison is the running sum, not the printed number.
