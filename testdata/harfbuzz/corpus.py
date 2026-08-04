@@ -28,12 +28,19 @@ for base in "aeiounycsgzAEIOUNYCSGZ":
     words.append(base + "̣́")
     words.append(base + "̈́")
 
-# Greek and Cyrillic, pairwise over the alphabet.
+# Greek and Cyrillic, pairwise over the alphabet — every letter against every
+# letter, in both cases.
+#
+# It used to pair each letter with the first fourteen, which are all lower case,
+# and "pairwise" was already what this comment claimed. Kerning is a property of
+# a pair and of nothing else, so a grid with holes in it is a test with holes in
+# it: be+TE is kerned by two subtables of one lookup that disagree, and only the
+# first should count. Nothing here reached that pair, and the fuzzer did.
 greek = "αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ"
 cyr = "абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
 for alpha in (greek, cyr):
     for a in alpha:
-        for b in alpha[:14]:
+        for b in alpha:
             words.append(a + b)
 
 # Devanagari: the full conjunct grid, vowel signs, and three-level clusters.

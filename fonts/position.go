@@ -13,18 +13,90 @@ import "github.com/mgilbir/pdf0/internal/font"
 // accent is drawn at its nominal advance: for most fonts, at the origin, so
 // every accent in a run piles up in the same place.
 
+// zeroMarkWidths says when a mark's own advance is cancelled.
+//
+// A mark is drawn on the letter before it and must not move the pen, and a font
+// gives its marks an advance of zero — usually. What differs between scripts is
+// *when* a shaper insists on it, and it is not a detail: a positioning rule may
+// give a mark an advance on purpose, and whether that survives depends on
+// whether the cancelling happens before the rules or after them.
+//
+// The specification for the universal engine says why a font would: a base glyph
+// classified as a mark, so that contextual rules can skip it, has its width put
+// back with 'dist' — "necessary because OpenType processing cancels the width
+// associated with a mark". Cancelling afterwards would take it away again.
+type zeroMarkWidths uint8
+
+const (
+	// Never: the font is trusted to have given its marks no width, and anything
+	// a rule states about one stands. Indic and Khmer.
+	zeroMarksNone zeroMarkWidths = iota
+	// Before the rules run, so that what they state about a mark survives, and
+	// the offset moves with the advance so the mark does not shift. The
+	// universal engine and Myanmar.
+	zeroMarksEarly
+	// After the rules run, discarding whatever they said about a mark's advance.
+	// Arabic, Hebrew, Thai and every script with no shaper of its own.
+	zeroMarksLate
+)
+
+// zeroMarkWidthsFor is the choice each script's model makes.
+//
+// It is per-shaper rather than universal because the shapers disagree, and the
+// disagreement is the point: a Khmer font states mark widths this must not
+// touch, and a font for the universal engine states one this must not undo.
+func zeroMarkWidthsFor(script uint16) zeroMarkWidths {
+	switch {
+	case indicConfigFor(script) != nil, isKhmerScript(script):
+		return zeroMarksNone
+	case isMyanmarScript(script), usesUniversalShaper(script):
+		return zeroMarksEarly
+	}
+	return zeroMarksLate
+}
+
+// cancelMarkWidths takes the advance off every mark.
+//
+// Done before the rules, the offset moves with the advance: the glyph is drawn
+// where it would have been, and only the pen stops moving. Done after, the
+// offsets are already whatever the rules made them and must not be touched.
+func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
+	for i := range buf {
+		if !sh.l.isMark(buf[i]) {
+			continue
+		}
+		if adjustOffsets {
+			buf[i].XOffset -= buf[i].XAdvance
+		}
+		buf[i].XAdvance = 0
+	}
+}
+
 // applyPositioning runs the GPOS lookups over a shaped buffer.
 func (sh shaper) position(buf []Glyph) {
 	l := sh.l
+	if sh.zeroMarks == zeroMarksEarly {
+		sh.cancelMarkWidths(buf, true)
+	}
 	// Pair kerning, which the buffer expresses as a change to the left glyph's
 	// advance. Glyphs the lookup ignores do not break a pair.
-	prev := -1
-	for i := range buf {
-		if l.ignores(l.kernFlags, buf[i]) {
-			continue
-		}
-		if prev >= 0 {
-			if k, ok := l.kern[[2]int{buf[prev].GID, buf[i].GID}]; ok {
+	//
+	// One pass per lookup, in the order the font lists them, because each states
+	// for itself which glyphs it steps over and because their adjustments add
+	// up. A font that kerns letters in a lookup that ignores marks and kerns a
+	// mark against its base in one that does not — Noto Serif Tibetan does — has
+	// the second silenced by the first if the two are run as one.
+	for _, kl := range l.kern {
+		prev := -1
+		for i := range buf {
+			if l.ignores(kl.flags, buf[i]) {
+				continue
+			}
+			if prev < 0 {
+				prev = i
+				continue
+			}
+			if k, ok := kl.pairs[[2]int{buf[prev].GID, buf[i].GID}]; ok {
 				// Both glyphs, and both what a record can say about each. A
 				// placement moves the glyph and an advance moves what comes
 				// after it, and a right-to-left font uses both for what a Latin
@@ -36,8 +108,8 @@ func (sh shaper) position(buf []Glyph) {
 				buf[i].YOffset += sh.f.scale(int(k.secondY))
 				buf[i].XAdvance += sh.f.scale(int(k.secondAdvance))
 			}
+			prev = i
 		}
-		prev = i
 	}
 	// Contextual rules, which name a positioning lookup to apply where a
 	// sequence occurs. They run after the flat passes rather than in lookup
@@ -59,6 +131,9 @@ func (sh shaper) position(buf []Glyph) {
 	// round leaves the accent where the letter used to be.
 	sh.attachCursive(buf)
 	sh.attachMarks(buf)
+	if sh.zeroMarks == zeroMarksLate {
+		sh.cancelMarkWidths(buf, false)
+	}
 }
 
 // cursiveAnchors is where a glyph's connecting stroke leaves and arrives.
@@ -157,9 +232,9 @@ func (sh shaper) attachCursive(buf []Glyph) {
 // two accents stack. Both are the same operation over different tables, so both
 // are done here in one pass backwards from each mark.
 //
-// The mark's advance is set to zero. A font gives its marks an advance of zero
-// already, but not always, and a mark that moved the pen would push the next
-// letter along by the width of an accent.
+// Cancelling the mark's own advance is not done here. It is a decision each
+// script's model takes for itself, and taking it here would take it for all of
+// them and at the one moment that is wrong for two — see zeroMarkWidths.
 func (sh shaper) attachMarks(buf []Glyph) {
 	l := sh.l
 	if len(l.markGlyphs) == 0 {
@@ -170,6 +245,21 @@ func (sh shaper) attachMarks(buf []Glyph) {
 			continue
 		}
 		// Find what this mark attaches to, and by which table.
+		//
+		// This walk is not what the format describes, and the difference is
+		// measured rather than suspected. Mark-to-mark attaches to the nearest
+		// preceding glyph *its own lookup does not skip*, and stops there; this
+		// keeps walking until some subtable covers something. Where a font
+		// writes three marks and the middle one is in no mark-to-mark table —
+		// a combining letter, U+0363 and up — the third climbs over it onto the
+		// first, and HarfBuzz leaves it where the base put it.
+		//
+		// Stopping at the glyph immediately before is not the correction: an
+		// Arabic mark is preceded by the dots 'ccmp' split off the letter, which
+		// the mark-to-mark lookup skips, and stopping there loses the stacking
+		// those fonts do want. Both need each attachment lookup to keep its own
+		// flags, which is the same shape of work pair kerning has just had and
+		// is why markFlags below is computed and never read.
 		for j := i - 1; j >= 0; j-- {
 			prevIsMark := l.isMark(buf[j])
 			set := l.markBase
@@ -690,15 +780,14 @@ func (l *layout) isMark(g Glyph) bool {
 // passed the base and everything between them, so those advances come off.
 // Right to left the buffer is about to be reversed and the mark will be drawn
 // *before* its base, so the same advances are still ahead of the pen and go on
-// rather than off. The mark's own advance is zeroed first, so that a font which
-// gave its marks a width does not have it counted.
+// rather than off. Whether the mark's own advance is among them is decided by
+// zeroMarkWidths, which may already have taken it off.
 //
 // It *sets* the offsets rather than adding to them, which is what the format
 // says and what makes applying the same attachment twice harmless — a lookup
 // both named by a feature and reached from a rule places the mark in the same
 // place either time.
 func (sh shaper) placeMark(buf []Glyph, i, j int, mark, base anchor) {
-	buf[i].XAdvance = 0
 	var since float64
 	if sh.rtl {
 		for k := j + 1; k <= i; k++ {

@@ -45,10 +45,21 @@ func TestKerningIsRead(t *testing.T) {
 	if !f.HasKerning() {
 		t.Fatal("the font's GPOS kern feature was not read")
 	}
-	if got := f.layout.kern[[2]int{1, 2}]; got.firstAdvance != -80 {
-		t.Errorf("kern(A,V) = %d, want -80", got)
+	// Kerning is kept per lookup, so the pair is looked for in all of them —
+	// which is also what says a pair stated in one lookup is not lost by
+	// another naming the same glyphs.
+	pair := func(a, b int) (pairAdjust, bool) {
+		for _, kl := range f.layout.kern {
+			if adj, ok := kl.pairs[[2]int{a, b}]; ok {
+				return adj, true
+			}
+		}
+		return pairAdjust{}, false
 	}
-	if _, ok := f.layout.kern[[2]int{2, 1}]; ok {
+	if got, ok := pair(1, 2); !ok || got.firstAdvance != -80 {
+		t.Errorf("kern(A,V) = %v (found %v), want -80", got.firstAdvance, ok)
+	}
+	if _, ok := pair(2, 1); ok {
 		t.Error("kerning was applied in the wrong order: (V,A) is not a declared pair")
 	}
 }
