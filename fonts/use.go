@@ -416,8 +416,12 @@ func reorderUseSyllable(buf []Glyph, info []useInfo, start, end int) {
 			at = i + 1
 		case info[i].pos == usePosPre && (info[i].cat == useV || info[i].cat == useVM) &&
 			buf[i].lig.comp == 0 && at < i:
+			// The destination does not move afterwards. A second vowel written
+			// before the letter therefore goes in front of the first, reversing
+			// the two — which is what the model says and what looked like an
+			// error worth "fixing" until HarfBuzz was asked: for a Balinese
+			// letter carrying two of them it gives the same reversal.
 			rotateUse(buf, info, at, i, i+1)
-			at++
 		}
 	}
 }
