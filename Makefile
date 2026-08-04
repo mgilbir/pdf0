@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping useable
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -250,6 +250,29 @@ hbshaping:
 
 test-hbshaping:
 	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 ./fonts/
+
+# The Universal Shaping Engine's category table.
+#
+# Derived rather than tabulated: cmd/genuse computes it from five properties
+# Unicode publishes, plus the engine's own corrections to two of them, which are
+# vendored in testdata/ms-use because nobody can derive them — see the NOTICE
+# there. A new Unicode release is therefore a re-run of this rather than a
+# re-reading of anything.
+#
+#	make useable UCD=/path/to/unpacked/ucd
+UCD ?= testdata/ucd
+
+useable:
+	go run ./cmd/genuse \
+		$(UCD)/IndicSyllabicCategory.txt \
+		$(UCD)/IndicPositionalCategory.txt \
+		$(UCD)/UnicodeData.txt \
+		$(UCD)/DerivedCoreProperties.txt \
+		$(UCD)/ArabicShaping.txt \
+		testdata/ms-use/IndicSyllabicCategory-Additional.txt \
+		testdata/ms-use/IndicPositionalCategory-Additional.txt \
+		> fonts/usetable.go
+	gofmt -w fonts/usetable.go
 
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
