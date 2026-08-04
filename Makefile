@@ -200,11 +200,17 @@ test-bidi: bidi-tests
 clean-bidi-tests:
 	rm -rf $(BIDI_DIR)
 
-# Shaping checked against HarfBuzz.
+# Shaping checked against HarfBuzz, over three fonts.
+#
+# One font cannot cover this. The bundled face has no Arabic and no Khmer, and
+# those are the two shapers with the most to get wrong; testdata/harfbuzz/fonts
+# holds Google's Noto builds for them, under the same SIL Open Font License as
+# the bundled face and with their copyright notices beside them. They are test
+# data and are embedded in nothing this module ships.
 #
 # Unlike every other oracle here, this one is checked in: testdata/harfbuzz/
-# holds the corpus and what HarfBuzz answered for it, so the comparison runs on
-# any machine with a Go toolchain and nothing else. That matters because it has
+# holds the corpora and what HarfBuzz answered for them, so the comparison runs
+# on any machine with a Go toolchain and nothing else. That matters because it has
 # to run on every change to the shaper, and an oracle that needs the right
 # Python on the machine is one that quietly stops running.
 #
@@ -222,10 +228,20 @@ PYTHON ?= python3
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
+	$(PYTHON) $(HARFBUZZ_DIR)/corpus_arabic.py
+	$(PYTHON) $(HARFBUZZ_DIR)/corpus_khmer.py
 	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
 		fonts/notosans/NotoSans-Variable.ttf \
 		$(HARFBUZZ_DIR)/corpus.txt \
 		$(HARFBUZZ_DIR)/expected.txt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
+		$(HARFBUZZ_DIR)/fonts/NotoSansArabic.ttf \
+		$(HARFBUZZ_DIR)/arabic.txt \
+		$(HARFBUZZ_DIR)/arabic.expected.txt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
+		$(HARFBUZZ_DIR)/fonts/NotoSansKhmer.ttf \
+		$(HARFBUZZ_DIR)/khmer.txt \
+		$(HARFBUZZ_DIR)/khmer.expected.txt
 
 test-hbshaping:
 	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 ./fonts/

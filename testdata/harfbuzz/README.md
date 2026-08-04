@@ -1,7 +1,7 @@
 # Shaping checked against HarfBuzz
 
-`fonts/harfbuzz_test.go` shapes every line of `corpus.txt` with the bundled face
-and compares the result against `expected.txt`, which is what HarfBuzz answered.
+`fonts/harfbuzz_test.go` shapes every line of three corpora, each with its own
+font, and compares the result against what HarfBuzz answered for it.
 
 ## Why
 
@@ -29,6 +29,34 @@ contradicted:
 Widening the corpus afterwards immediately found a fourth: marks inside a
 ligature were not attached to it at all, because GPOS type 5 was unimplemented.
 
+Adding the Arabic font found four more in the first run, with only 347 of 1188
+cases agreeing:
+
+- the positional forms were substituted *before* `ccmp`, and a real Arabic font
+  states them over the skeletons `ccmp` produces rather than over the letters —
+  so every letter was set in its isolated shape;
+- and the form a letter had been given was not carried onto the pieces `ccmp`
+  split it into, so it was lost even once the order was right;
+- pair positioning read only the advance from a ValueRecord, and a right-to-left
+  font states a kern as a placement *and* an advance;
+- U+0640 TATWEEL, the stroke that stretches a word, was treated as having no
+  positional form of its own.
+
+The Khmer font agreed on all 2441 cases at the first run.
+
+## Fonts
+
+| font | what it covers | why |
+| --- | --- | --- |
+| `fonts/notosans/NotoSans-Variable.ttf` | Latin, Greek, Cyrillic, Devanagari | the bundled face, embedded in this module |
+| `fonts/NotoSansArabic.ttf` | Arabic | cursive joining, which nothing else here exercises |
+| `fonts/NotoSansKhmer.ttf` | Khmer | a syllable model that draws characters out of order |
+
+The two extra fonts are Google's Noto builds under the SIL Open Font License
+1.1, the same licence and publisher as the bundled face, with their copyright
+notices beside them as that licence requires. Neither declares a Reserved Font
+Name. They are test data: nothing this module ships embeds them.
+
 ## Why the answers are checked in
 
 Regenerating them needs Python, `uharfbuzz` and the font. Running the comparison
@@ -36,22 +64,33 @@ needs a Go toolchain. This has to run on every change to the shaper, and an
 oracle that needs the right Python on the machine is one that quietly stops
 running.
 
-`expected.txt` is about 110 KB, which is half of `testdata/spec_examples.json`.
+The three expectation files come to about 210 KB together, and the two extra
+fonts to 1.2 MB — against the 2 MB the bundled face already costs.
 
 ## Files
 
 | file | what it is |
 | --- | --- |
-| `corpus.py` | generates `corpus.txt` |
-| `corpus.txt` | the strings, one per line |
-| `shape.py` | shapes them with HarfBuzz and writes `expected.txt` |
-| `expected.txt` | glyph, advance and offset for each, in font units |
+| `corpus.py`, `corpus_arabic.py`, `corpus_khmer.py` | generate the three corpora |
+| `corpus.txt`, `arabic.txt`, `khmer.txt` | the strings, one per line |
+| `shape.py` | shapes one corpus with one font and writes its expectations |
+| `expected.txt`, `arabic.expected.txt`, `khmer.expected.txt` | glyph, advance and offset for each, in font units |
 
-The corpus is weighted towards the places shaping decides something — the letter
-pairs that kern, the marks that attach, the Devanagari conjunct grid, ligatures
-formed across a skipped mark, the characters nothing is drawn for — rather than
+Each corpus is weighted towards the places shaping decides something rather than
 towards realistic prose. Prose exercises one path many times; a grid exercises
 many paths once.
+
+- **Latin** — the letter pairs that kern, every base with every common mark,
+  Greek and Cyrillic pairwise, the Devanagari conjunct and vowel grids,
+  ligatures formed across a skipped mark, and every category of character that
+  nothing is drawn for.
+- **Arabic** — every letter in each of its four positions, every ordered pair,
+  the letters that join only to the right, lam-alef in all four alef forms, the
+  vowels and the tanween and the shadda, and hamza written over and under a
+  carrier beside a vowel, which is where the mark ordering of UTR #53 bites.
+- **Khmer** — every consonant under every other, two levels of subscript,
+  subscript Ro, the pre-base and split vowels, a syllable with nothing to hang
+  its marks off, and the join controls.
 
 ## Regenerating
 
@@ -80,10 +119,10 @@ The right oracle for it is Unicode's own `BidiTest.txt` and
 `BidiCharacterTest.txt`, which `fonts/bidi_conformance_test.go` runs in full;
 `corpus.py` therefore leaves the right-to-left forcing controls out.
 
-**Thirteen cases that differ on purpose**, listed with their reasons in
-`deliberateDifferences` in `fonts/harfbuzz_test.go`. All thirteen are the same
-thing: a character nothing is drawn for, written between a consonant and its
-virama. This package removes it before shaping, so the conjunct forms; HarfBuzz
+**Thirteen cases that differ on purpose**, all in the Latin corpus, listed with
+their reasons in `deliberateDifferences` in `fonts/harfbuzz_test.go`. All
+thirteen are the same thing: a character nothing is drawn for, written between a
+consonant and its virama. This package removes it before shaping, so the conjunct forms; HarfBuzz
 keeps it until after, so the syllable breaks and the orphaned virama gets a
 dotted circle. The list is checked in both directions — an entry that starts
 agreeing fails, and so does one that is not in the corpus — so it cannot go
