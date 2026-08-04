@@ -261,28 +261,42 @@ func (sh shaper) attachMarks(buf []Glyph) {
 		// middle one is in no mark-to-mark table gets nothing from that table
 		// at all, and the third stays where the base put it rather than
 		// climbing over the middle one onto the first.
-		if j := prevNonMark(l, buf, i); j >= 0 {
-			if mark, base, ok := attachmentFor(l.markBase, buf[i].GID, buf[j].GID,
-				markComponent(buf, i, j)); ok {
-				sh.placeMark(buf, i, j, mark.anchor, base)
-			}
+		// Whichever of the two the font states *last* is the one that decides:
+		// a later lookup places the mark over whatever an earlier one did. That
+		// is not always the mark-to-mark one. Noto Sans states the above-mark
+		// stacking under 'abvm' and the base attachment in a later lookup, so a
+		// second mark above a Devanagari letter sits beside the first rather
+		// than on it — and HarfBuzz says the same, which is visible by turning
+		// 'mark' off and watching the stacking reappear.
+		//
+		// Applying them in a fixed order stacks it either always or never. The
+		// font is what says which, and the lookup counter is in the order the
+		// font lists them because that is the order they are read in.
+		type attach struct {
+			mark   markAnchor
+			base   anchor
+			at     int
+			lookup int
+			ok     bool
 		}
-		if mark, base, j, ok := l.markMarkAt(buf, i); ok {
-			// Place the mark so its anchor meets the base's. The pen is at the
-			// end of everything drawn since the base, so the advances between
-			// have to be taken back off — and the base's own displacement
-			// carried along, since a base moved by a single adjustment or lifted
-			// onto a joining stroke takes its accents with it.
-			//
-			// What has to be corrected for is where the pen will be when the
-			// mark is drawn, and that depends on which way the run is drawn.
-			// Left to right the pen has passed the base and everything between
-			// them, so those advances come off. Right to left the buffer is
-			// about to be reversed and the mark will be drawn *before* its
-			// base, so the same advances are still ahead of the pen and go on
-			// rather than off. The mark's own advance is zeroed first, so that
-			// a font which gave its marks a width does not have it counted.
-			sh.placeMark(buf, i, j, mark.anchor, base)
+		var onBase, onMark attach
+		if j := prevNonMark(l, buf, i); j >= 0 {
+			onBase.at = j
+			onBase.mark, onBase.base, onBase.lookup, onBase.ok = attachmentFor(
+				l.markBase, buf[i].GID, buf[j].GID, markComponent(buf, i, j))
+		}
+		onMark.mark, onMark.base, onMark.at, onMark.lookup, onMark.ok = l.markMarkAt(buf, i)
+		first, second := onBase, onMark
+		if onBase.ok && onMark.ok && onBase.lookup > onMark.lookup {
+			first, second = onMark, onBase
+		}
+		// Both are applied, earlier first, because placeMark reads the offsets
+		// of whatever it attaches to and the later one must see what the earlier
+		// left. It *sets* the mark's own offsets, so the later one is the answer.
+		for _, a := range [...]attach{first, second} {
+			if a.ok {
+				sh.placeMark(buf, i, a.at, a.mark.anchor, a.base)
+			}
 		}
 	}
 }
@@ -316,7 +330,7 @@ func markComponent(buf []Glyph, i, j int) int {
 // which is the one thing it exists to find. What is left is the mark filtering
 // set and the mark attachment class, which are exactly the narrowing a font
 // uses to say which marks stack on which.
-func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, at int, ok bool) {
+func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, at, lookup int, ok bool) {
 	const ignoreFlags = flagIgnoreBaseGlyphs | flagIgnoreLigatures | flagIgnoreMarks
 	matched := -1
 	for k := range l.markMark {
@@ -341,7 +355,7 @@ func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, a
 		}
 		mark, base, at, matched, ok = m, b, j, st.lookup, true
 	}
-	return mark, base, at, ok
+	return mark, base, at, matched, ok
 }
 
 // anchor is a point in a glyph's own coordinate space, in font units.
@@ -752,7 +766,7 @@ const maxLigatureComponents = 64
 // lookups each runs in turn over the whole run, so a later lookup that applies
 // overwrites what an earlier one placed. Hence: last applying lookup, first
 // applying subtable within it.
-func attachmentFor(set []markAttachment, markGID, baseGID, component int) (mark markAnchor, base anchor, ok bool) {
+func attachmentFor(set []markAttachment, markGID, baseGID, component int) (mark markAnchor, base anchor, lookup int, ok bool) {
 	matched := -1
 	for i := range set {
 		st := &set[i]
@@ -769,7 +783,7 @@ func attachmentFor(set []markAttachment, markGID, baseGID, component int) (mark 
 		}
 		mark, base, ok, matched = m, b, true, st.lookup
 	}
-	return mark, base, ok
+	return mark, base, matched, ok
 }
 
 // anchorFor is where this subtable says a mark of a class attaches to a glyph,
