@@ -176,11 +176,25 @@ func TestTheStackSurvivesDegenerateFaces(t *testing.T) {
 	}
 }
 
-// fuzzText carries one character of every kind the shaping paths branch on: a
-// plain letter, a ligature, an unmapped ideograph, and a Devanagari syllable
-// with a reph, a conjunct and a pre-base vowel sign — which is the only way the
-// reordering is reached at all.
-const fuzzText = "aﬁ日 \u0930\u094D\u0915\u094D\u0924\u093F\u0902"
+// fuzzTexts carry one character of every kind the shaping paths branch on.
+//
+// They are separate strings rather than one, because which of the font's rules
+// apply is decided by the *run's* script and a run takes the script of its
+// first letter that has one: a Devanagari syllable written after a Latin letter
+// is shaped as Latin, and the reordering is never reached. A shaper that is not
+// reached is not fuzzed, and each of the three is reached only by a run of its
+// own.
+var fuzzTexts = []string{
+	// A plain letter, a ligature and an unmapped ideograph.
+	"aﬁ日 ",
+	// Devanagari: a reph, a conjunct and a pre-base vowel sign.
+	"\u0930\u094D\u0915\u094D\u0924\u093F\u0902",
+	// Khmer: a subscript Ro, which moves to the front of the syllable, and a
+	// vowel sign written as one character and drawn as two.
+	"\u1780\u17D2\u179A\u17C4\u17C7",
+	// Myanmar: a kinzi, a medial Ra and a below-base sign with a mark after it.
+	"\u1004\u103A\u1039\u1000\u103C\u102F\u1036",
+}
 
 // FuzzLoadAndUse drives the whole writing pipeline on arbitrary bytes: parse,
 // shape, subset, embed. Fuzzing fails on a panic by itself, so the body only
@@ -239,17 +253,19 @@ func FuzzLoadAndUse(f *testing.F) {
 			if err != nil || face == nil {
 				continue
 			}
-			_ = face.Measure(fuzzText, 10)
-			_ = face.MeasureShaped(fuzzText, 10)
-			_, _ = face.Encode(fuzzText)
-			_, _ = face.Shape(fuzzText)
-			_, _ = face.ShapeGlyphs(fuzzText)
+			for _, text := range fuzzTexts {
+				_ = face.Measure(text, 10)
+				_ = face.MeasureShaped(text, 10)
+				_, _ = face.Encode(text)
+				_, _ = face.Shape(text)
+				_, _ = face.ShapeGlyphs(text)
 
-			var b content.Builder
-			b.BeginText().SetFont("F0", 10)
-			face.DrawShaped(&b, fuzzText, 10)
-			b.EndText()
-			_, _ = b.Bytes()
+				var b content.Builder
+				b.BeginText().SetFont("F0", 10)
+				face.DrawShaped(&b, text, 10)
+				b.EndText()
+				_, _ = b.Bytes()
+			}
 
 			_, _ = face.Subset()
 			_, _ = face.Embed(&allocator{})
