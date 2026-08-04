@@ -224,13 +224,19 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) ([]int, int,
 		}
 		lig := set[lo:]
 		compCount := font.Be16(lig, 2)
-		if compCount < 1 || compCount > 64 {
+		if compCount < 1 || compCount > maxLigatureComponents {
 			continue
 		}
 		// Match the components against the glyphs after this one, skipping
 		// those the lookup ignores.
-		comps := make([]int, 1, compCount)
-		comps[0] = at
+		//
+		// The positions are collected into an array on the stack and copied out
+		// only if the whole ligature matched. Most candidates do not — a font
+		// lists every ligature beginning with a glyph, and a run matches at most
+		// one — so allocating per candidate is allocating for the failures.
+		var found [maxLigatureComponents]int
+		found[0] = at
+		n := 1
 		pos := at
 		matched := true
 		for k := 0; k < compCount-1; k++ {
@@ -244,9 +250,12 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) ([]int, int,
 				matched = false
 				break
 			}
-			comps = append(comps, pos)
+			found[n] = pos
+			n++
 		}
 		if matched {
+			comps := make([]int, n)
+			copy(comps, found[:n])
 			return comps, font.Be16(lig, 0), true
 		}
 	}

@@ -421,6 +421,20 @@ func (f *Face) layoutFor(script uint16) *layout {
 	if len(f.layoutTables) == 0 {
 		return f.layout
 	}
+	// Which features a script selects is a fact about the font, and answering it
+	// means walking the ScriptList, reading a LangSys and building the two keys
+	// below. That was half the memory a shaped word cost, spent every time, to
+	// arrive at a cached answer — so the script itself is the first key, and the
+	// selection is worked out only when it is not yet known.
+	if l, ok := f.cache.forScript(script, f.language); ok {
+		return l
+	}
+	l := f.readLayoutFor(script)
+	f.cache.rememberScript(script, f.language, l)
+	return l
+}
+
+func (f *Face) readLayoutFor(script uint16) *layout {
 	tags := scriptTags(script)
 	gsubSel, gsubOK := scriptFeatures(f.layoutTables["GSUB"], tags, f.language)
 	gposSel, gposOK := scriptFeatures(f.layoutTables["GPOS"], tags, f.language)
@@ -467,9 +481,38 @@ func selectionKey(sel featureSet) string {
 // so the lock protects the map rather than the values in it, and is taken once
 // per distinct selection rather than per run.
 type layoutCache struct {
-	mu            sync.Mutex
+	mu sync.Mutex
+	// byScript is the first thing asked, keyed by the question a run actually
+	// arrives with. The two below are keyed by what a script *selected*, so that
+	// scripts a font treats identically — the common case, a face declaring the
+	// same features for latn, grek and cyrl — share one reading of tables that
+	// run to tens of kilobytes.
+	byScript      map[scriptKey]*layout
 	positionings  map[string]*layout
 	scriptLayouts map[string]*layout
+}
+
+// scriptKey is a run's script and the language the face was told to set it in,
+// which together are everything the selection depends on.
+type scriptKey struct {
+	script uint16
+	lang   string
+}
+
+func (c *layoutCache) forScript(script uint16, lang string) (*layout, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	l, ok := c.byScript[scriptKey{script, lang}]
+	return l, ok
+}
+
+func (c *layoutCache) rememberScript(script uint16, lang string, l *layout) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byScript == nil {
+		c.byScript = map[scriptKey]*layout{}
+	}
+	c.byScript[scriptKey{script, lang}] = l
 }
 
 func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *layout {
