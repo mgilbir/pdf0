@@ -52,6 +52,12 @@ testdata/fuzz/
 testdata/wtpdf/*.pdf
 testdata/wtpdf/.ok
 
+# Unicode's own property files, fetched into place for `make useable`, which
+# regenerates the Universal Shaping Engine's category table. Large, versioned by
+# Unicode rather than by this repository, and only needed to re-derive a table
+# that is checked in.
+testdata/ucd/
+
 # Arlington PDF Model (Apache-2.0, pdf-association) — machine-readable ISO 32000
 # object grammar; cloned via `make arlington` for the structural oracle test.
 testdata/arlington-pdf-model/
