@@ -85,9 +85,9 @@ towards realistic prose. Prose exercises one path many times; a grid exercises
 many paths once.
 
 - **Latin** — the letter pairs that kern, every base with every common mark,
-  Greek and Cyrillic pairwise, the Devanagari conjunct and vowel grids,
-  ligatures formed across a skipped mark, and every category of character that
-  nothing is drawn for.
+  Greek and Cyrillic pairwise over the *whole* alphabet in both cases, the
+  Devanagari conjunct and vowel grids, ligatures formed across a skipped mark,
+  and every category of character that nothing is drawn for.
 - **Arabic** — every letter in each of its four positions, every ordered pair,
   the letters that join only to the right, lam-alef in all four alef forms, the
   vowels and the tanween and the shadda, and hamza written over and under a
@@ -103,7 +103,8 @@ many paths once.
   needs a second sign to fire.
 - **Balinese** — the same shape of grid, and the split vowel signs U+1B40 and
   U+1B41, each written as one character and drawn as two marks on opposite sides.
-- **Tibetan** — every consonant with every vowel and every subjoined form. It is
+- **Tibetan** — every consonant with every vowel, and the first sixteen with
+  every subjoined form. It is
   here for its size rather than its script: it found a lookup list truncated at
   512 against its 1190, one lookup's subtables truncated at 256 against its 738,
   and the mark glyph sets that were not read at all. The first two were silent,
@@ -183,8 +184,7 @@ the Go fuzzer's job (`fonts/panic_test.go`), which asks a different question: no
 
 ### What it took to make the output mean anything
 
-Three filters, each added because without it the report was almost entirely one
-false positive:
+Five, each added because without it the report was mostly one false positive:
 
 - **A letter at the front.** A string of nothing but marks has no strong
   direction, so the two resolve one differently — this package by running
@@ -195,6 +195,21 @@ false positive:
 - **A minimiser that keeps the first character.** Shrinking a real difference
   past its anchoring letter turns it into one of the above, so the tool would
   "minimise" a genuine defect into a false one and report that.
+- **One script.** The bundled face was listed with all four of its scripts'
+  ranges at once, so it drew strings mixing Latin with Devanagari. HarfBuzz
+  performs no script itemization either — its caller must hand it a run of one
+  script, exactly as it must hand it one direction — so such a string is not a
+  comparison of shaping. 853 of 854 differences it reported for that font were
+  this. It is now listed once per script.
+- **Asking again after minimising.** The tool decided whether a difference was
+  already understood *before* shrinking it. Dropping a character can turn
+  something nobody has seen into something written down, so hundreds of
+  "new" differences were a recorded gap all along.
+
+And the list of characters nothing is drawn for is now derived from Unicode's
+definition rather than written out by hand. The hand-written one was missing the
+two Khmer inherent-vowel signs, so 175 differences that are the deliberate
+decision above were reported as though they were new.
 
 ### What it has found
 
@@ -220,7 +235,32 @@ false positive:
   ignored, leaving a placeholder mark on the page beside every letter that went
   through the rule.
 
-Three classes of difference are still open, all of them in mark *placement*
-rather than in clustering: a mark-to-mark attachment that HarfBuzz hangs on the
-base where this package stacks it, and a mark whose advance HarfBuzz takes from
-`dist` where this package leaves it at zero. They are what to look at next.
+Then, once those were fixed and the tool stopped mis-reporting (below), four
+more in positioning:
+
+- A lookup's pair-kerning subtables are alternatives in which the *first* match
+  wins. They were merged into one table keyed by glyph pair, so the last one
+  won: Noto Sans states be+TE as -20 in an explicit pair list and -40 in a class
+  table of the same lookup, and this package applied -40.
+- Kerning lookups were merged into one pass under one merged set of flags, so a
+  lookup that ignores marks silenced every other lookup for marks, and lookups
+  could not accumulate.
+- A mark's advance was cancelled while it was being attached — after the
+  positioning rules had run, so a rule that gave a mark an advance on purpose
+  had it taken away again. When this happens is a decision each script's model
+  takes for itself: never for Indic and Khmer, before the rules for the
+  universal engine and Myanmar, after them for everything else.
+One class is still open: mark-to-mark attachment, in both directions. It reaches
+backwards past a mark it finds nothing for and stacks on an earlier one — so a
+third mark written after a combining *letter*, U+0363 and up, climbs over it
+onto the first, where HarfBuzz leaves it on the base. And elsewhere it attaches
+where HarfBuzz does not at all.
+
+Stopping at the glyph immediately before is *not* the correction, which is worth
+recording because it was tried: it fixes Latin, Greek and Cyrillic and breaks
+Arabic, whose marks are preceded by the dots `ccmp` splits off the letter and
+whose mark-to-mark lookup skips them. Both directions are the same missing
+thing — each attachment lookup has to keep its own flags, so that "the glyph
+before" means "the nearest one this lookup does not skip". `markFlags` is
+computed at load and never read. It wants the same treatment pair kerning has
+just had.

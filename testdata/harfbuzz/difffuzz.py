@@ -52,10 +52,21 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 # assumptions rather than one shaper's behaviour.
 # The last field says whether the script is written right to left, which decides
 # which bidirectional class the generated text is drawn from.
+# The bundled face appears four times, once per script it covers, and that is
+# the point. Listing its ranges together drew strings mixing Latin with
+# Devanagari, and HarfBuzz performs no script itemization either — its caller is
+# required to hand it a run of one script, exactly as it is required to hand it
+# one direction. So a mixed-script string is not a comparison of shaping, and
+# 853 of the 854 differences it reported were that and nothing else.
 FONTS = [
-    ("bundled", os.path.join(ROOT, "fonts", "notosans", "NotoSans-Variable.ttf"),
-     [(0x0041, 0x024F), (0x0300, 0x036F), (0x0370, 0x03FF), (0x0400, 0x04FF),
-      (0x0900, 0x097F)], False),
+    ("latin", os.path.join(ROOT, "fonts", "notosans", "NotoSans-Variable.ttf"),
+     [(0x0041, 0x024F), (0x0300, 0x036F)], False),
+    ("greek", os.path.join(ROOT, "fonts", "notosans", "NotoSans-Variable.ttf"),
+     [(0x0370, 0x03FF), (0x0300, 0x036F)], False),
+    ("cyrillic", os.path.join(ROOT, "fonts", "notosans", "NotoSans-Variable.ttf"),
+     [(0x0400, 0x04FF), (0x0300, 0x036F)], False),
+    ("devanagari", os.path.join(ROOT, "fonts", "notosans", "NotoSans-Variable.ttf"),
+     [(0x0900, 0x097F)], False),
     ("arabic", os.path.join(HERE, "fonts", "NotoSansArabic.ttf"),
      [(0x0600, 0x06FF), (0x0750, 0x077F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)], True),
     ("khmer", os.path.join(HERE, "fonts", "NotoSansKhmer.ttf"),
@@ -86,15 +97,39 @@ KNOWN = {
     "ignorable-in-cluster",
 }
 
-IGNORABLE = [
-    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x180B, 0x180F),
-    (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0xFE00, 0xFE0F),
-    (0xFEFF, 0xFEFF), (0x1D173, 0x1D17A),
+# Unicode's Default_Ignorable_Code_Point, derived rather than listed.
+#
+# It was listed, by hand, and the list was missing the two Khmer inherent-vowel
+# signs — so 175 differences that are the decision above were reported as though
+# nobody had seen them before. A hand-written copy of a Unicode property is a
+# copy that rots, which is the same reason fonts/usetable.go is generated.
+#
+# The derivation is the one DerivedCoreProperties.txt states: the format
+# characters and the variation selectors, plus a fixed set Unicode calls
+# Other_Default_Ignorable_Code_Point, less the ones it takes back out. Only that
+# last set has to be written down, and it is written down in Unicode too.
+OTHER_DEFAULT_IGNORABLE = [
+    (0x034F, 0x034F), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x2065, 0x2065),
+    (0x3164, 0x3164), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0xE0000, 0xE0000),
+    (0xE0002, 0xE001F), (0xE0080, 0xE00FF), (0xE01F0, 0xE0FFF),
 ]
+VARIATION_SELECTORS = [(0x180B, 0x180D), (0x180F, 0x180F), (0xFE00, 0xFE0F),
+                       (0xE0100, 0xE01EF)]
+NOT_IGNORABLE = [(0x0600, 0x0605), (0x0890, 0x0891), (0x06DD, 0x06DD),
+                 (0x070F, 0x070F), (0x08E2, 0x08E2), (0x110BD, 0x110BD),
+                 (0x110CD, 0x110CD), (0xFFF9, 0xFFFB), (0x13430, 0x13440)]
+
+
+def _in(u, table):
+    return any(lo <= u <= hi for lo, hi in table)
 
 
 def is_ignorable(ch):
-    return any(lo <= ord(ch) <= hi for lo, hi in IGNORABLE)
+    u = ord(ch)
+    if _in(u, NOT_IGNORABLE) or unicodedata.category(ch) == "Zs":
+        return False
+    return (unicodedata.category(ch) == "Cf" or _in(u, OTHER_DEFAULT_IGNORABLE)
+            or _in(u, VARIATION_SELECTORS))
 
 
 def classify(text, ours, theirs):
