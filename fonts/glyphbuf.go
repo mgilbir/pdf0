@@ -94,6 +94,12 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 	// mirrors it, and the substitution is on the character, before the font is
 	// asked for a glyph at all.
 	runes, offsets := bidiRunCharacters(s, rtl)
+	// Then normalisation, which is about the characters too and has to see the
+	// mirrored ones: it puts the run into the spelling this face draws best and
+	// each cluster's marks into canonical order. It runs before any glyph is
+	// chosen because it decides which characters the font is asked about at all.
+	// See normalize.go.
+	runes, offsets = f.normalize(runes, offsets, indicConfigFor(script) != nil)
 	var (
 		buf     []Glyph
 		missing int

@@ -40,6 +40,10 @@ import (
 //     lookups at different points in a variable font's design space. A face may
 //     state a feature's lookups only there — Noto Sans Oriya states its 'rclt'
 //     that way — and reading it as stating none costs that feature entirely.
+//   - Normalisation: the run put into whichever spelling this face draws best —
+//     composed where the face has the composed character, decomposed where it
+//     does not — and each cluster's marks put into canonical order, so that a
+//     font's rules match text written either way. See normalize.go.
 //   - GDEF glyph classes and the lookup flags that use them, so that a lookup
 //     declaring it ignores marks does.
 //   - The zero-width joiner and non-joiner: obeyed where they are written about,
@@ -65,10 +69,11 @@ import (
 //   - 'rclt' anywhere but an Indic run. It is a required feature and every other
 //     shaper applies it generally; here only the Indic pass does, because that
 //     is where its absence was measured.
-//   - Unicode normalisation. A composed character is set as written, so a font
-//     whose rules are written against the decomposed form does not match it —
-//     except for the Indic vowel signs drawn as several marks, which indic.go
-//     splits because their parts go to different places.
+//   - The mark reordering Arabic wants on top of canonical order. Normalisation
+//     is done — a run is composed or decomposed to whatever this face draws
+//     best, and each cluster's marks are put in canonical order, see
+//     normalize.go — but a hamza written after a vowel is drawn before it by a
+//     rule that is Arabic's rather than Unicode's, and that rule is not applied.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless a
