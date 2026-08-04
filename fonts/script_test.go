@@ -219,8 +219,9 @@ func TestScriptSelectionSurvivesMalformedScriptList(t *testing.T) {
 		}
 		sel, _ := scriptFeatures(truncated, []string{"latn"}, "")
 		if len(truncated) >= 10 {
-			l.readSingleSubstitutions(truncated, sel)
-			featureLookupIndices(truncated, sel)
+			feats := tableFeatures{sel: sel, varied: readFeatureVariations(truncated)}
+			l.readSingleSubstitutions(truncated, feats)
+			featureLookupIndices(truncated, feats)
 		}
 	}
 }

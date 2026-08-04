@@ -36,6 +36,10 @@ import (
 //   - Every single substitution the font declares, keyed by feature tag and
 //     applied only when a caller names one (ShapeWith): 'smcp', 'onum' and the
 //     rest, which change what the text says it is and so wait to be asked for.
+//   - FeatureVariations, the GSUB and GPOS table that gives a feature different
+//     lookups at different points in a variable font's design space. A face may
+//     state a feature's lookups only there — Noto Sans Oriya states its 'rclt'
+//     that way — and reading it as stating none costs that feature entirely.
 //   - GDEF glyph classes and the lookup flags that use them, so that a lookup
 //     declaring it ignores marks does.
 //   - The zero-width joiner and non-joiner: obeyed where they are written about,
@@ -52,11 +56,12 @@ import (
 //     their characters are turned into glyphs in storage order. Text in them is
 //     not correctly set by this package and should be shaped elsewhere and
 //     passed in as glyph indices. indic.go says what within the nine is left out.
-//   - FeatureVariations, the GSUB and GPOS table that gives a feature different
-//     lookups for different points in a variable font's design space. A face
-//     that states a feature's lookups only there — Noto Sans Oriya states its
-//     'rclt' that way — is read as stating none, and the letterform corrections
-//     that feature carries are not applied.
+//   - Every point in a variable font's design space but the default one.
+//     FeatureVariations is read, and read for the coordinates in force — which
+//     are the default instance's, because nothing here instances a font: the
+//     subsetter drops fvar and gvar, and what reaches a document is the default
+//     instance. A record whose conditions do not cover the default is a rule for
+//     a weight this module never sets, and is not applied.
 //   - 'rclt' anywhere but an Indic run. It is a required feature and every other
 //     shaper applies it generally; here only the Indic pass does, because that
 //     is where its absence was measured.
@@ -87,8 +92,9 @@ import (
 //
 // A font is untrusted input. Every table here is offset-driven and
 // self-referential, so each walk is bounded: the number of lookups, subtables,
-// pairs and ligatures a font may declare are all capped, and a malformed offset
-// truncates the walk rather than reaching outside the table.
+// pairs, ligatures, variation records and conditions a font may declare are all
+// capped, and a malformed offset truncates the walk rather than reaching outside
+// the table.
 
 // Layout bounds. These are far above any real face — a large Latin font
 // declares a few thousand kern pairs — and exist so that a crafted font cannot
@@ -100,6 +106,12 @@ const (
 	maxLigatures = 1 << 14
 	maxScripts   = 256
 	maxLangSys   = 256
+	// The FeatureVariations walk. A real face states a handful of records — Noto
+	// Sans Oriya states one — and each names a few conditions and a few
+	// substituted features.
+	maxVariationRecords = 256
+	maxConditions       = 64
+	maxFeatureSubsts    = 256
 )
 
 // featureSet is the set of FeatureList indices a script and language select.
@@ -114,6 +126,212 @@ type featureSet map[int]bool
 // selects reports whether a feature at the given index in the FeatureList
 // applies.
 func (s featureSet) selects(index int) bool { return s == nil || s[index] }
+
+// featureSubst is the lookup list a FeatureVariations record puts in place of
+// the one a feature names for itself, keyed by FeatureList index.
+//
+// An entry present but empty is not the same as no entry: it says the record
+// gives that feature *no* lookups here, which silences a feature the FeatureList
+// declares. So every reader asks with the two-value form.
+type featureSubst map[int][]int
+
+// tableFeatures is what one layout table offers a run: the FeatureList indices
+// the run's script and language selected, and the lookup lists FeatureVariations
+// substitutes at the coordinates in force.
+//
+// The two travel together because every reader below needs both, and because
+// taking one without the other is a mistake that produces plausible output — a
+// feature applied with the wrong lookups, or a feature the run never selected.
+type tableFeatures struct {
+	sel    featureSet
+	varied featureSubst
+}
+
+// readFeatureVariations reads the FeatureVariations table: the GSUB or GPOS
+// table that gives a feature different lookups at different points in a variable
+// font's design space.
+//
+// # Which coordinates are in force
+//
+// The default instance's, on every axis. This module does not instance a
+// variable font and has no way to be asked to: the subsetter drops fvar, gvar
+// and avar, and in such a font the glyf outlines already *are* the default
+// instance, so what reaches a document is a static face at the default weight.
+//
+// In the normalized coordinate space these conditions are written in, the
+// default instance is zero on every axis by construction — fvar normalizes each
+// axis's default value to zero, and avar's segment map is required to carry
+// (0, 0) through. So the coordinates are all zero, there is nothing to read out
+// of fvar, and a condition holds exactly when its range spans zero. A record
+// stated for some other part of the design space is a rule for a weight this
+// module never sets, and applying it would set the text by the wrong rules.
+//
+// This is not only a variable-font concern. A static instance cut from a
+// variable font may keep the table, and a face may state at the default instance
+// — Noto Sans Oriya states its whole 'rclt' feature in a record that covers it —
+// exactly the case that made this worth reading.
+//
+// The first record whose conditions hold is the one that applies, and the rest
+// are not consulted: the specification makes the records an ordered search, not
+// a set to merge.
+func readFeatureVariations(t []byte) featureSubst {
+	// Version 1.1 of the table header is what carries the offset; a 1.0 header
+	// ends before it.
+	if len(t) < 14 || font.Be16(t, 0) != 1 || font.Be16(t, 2) < 1 {
+		return nil
+	}
+	off := int(font.Be32(t, 10))
+	if off <= 0 || off+8 > len(t) {
+		return nil
+	}
+	fv := t[off:]
+	if font.Be16(fv, 0) != 1 {
+		return nil
+	}
+	n := int(font.Be32(fv, 4))
+	if n > maxVariationRecords {
+		n = maxVariationRecords
+	}
+	for i := 0; i < n; i++ {
+		rec := 8 + 8*i
+		if rec+8 > len(fv) {
+			break
+		}
+		if !conditionSetHolds(fv, int(font.Be32(fv, rec))) {
+			continue
+		}
+		return featureTableSubstitution(fv, int(font.Be32(fv, rec+4)))
+	}
+	return nil
+}
+
+// conditionSetHolds reports whether every condition of a set holds at the
+// default instance.
+//
+// A null offset is the empty set, which the specification says matches
+// everywhere — a record that applies unconditionally. A set this cannot read
+// whole does not hold: half a condition set is not a weaker condition set, it is
+// no knowledge of what the record was for.
+func conditionSetHolds(fv []byte, off int) bool {
+	if off == 0 {
+		return true
+	}
+	if off < 0 || off+2 > len(fv) {
+		return false
+	}
+	cs := fv[off:]
+	n := font.Be16(cs, 0)
+	if n > maxConditions {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		if 2+4*i+4 > len(cs) {
+			return false
+		}
+		co := int(font.Be32(cs, 2+4*i))
+		if co <= 0 || co+2 > len(cs) {
+			return false
+		}
+		if !conditionHolds(cs[co:]) {
+			return false
+		}
+	}
+	return true
+}
+
+// conditionHolds reports whether one condition holds at the default instance.
+//
+// Only format 1, an axis range, is read. The formats OpenType added later state
+// a condition on a variable value, or combine other conditions with and, or and
+// not; a condition this cannot evaluate is treated as not holding, because a
+// record applied on a guess is a record applied at the wrong weight.
+//
+// The axis index is not needed. A condition's range is compared against the
+// coordinate of one axis, and every coordinate in force is zero — including, per
+// the specification, an axis index the font does not have. So the condition
+// holds exactly when its range spans zero, whichever axis it names.
+func conditionHolds(c []byte) bool {
+	if len(c) < 8 || font.Be16(c, 0) != 1 {
+		return false
+	}
+	lo := signed16(font.Be16(c, 4))
+	hi := signed16(font.Be16(c, 6))
+	return lo <= 0 && hi >= 0
+}
+
+// featureTableSubstitution reads the lookup lists a matching record substitutes,
+// by FeatureList index.
+func featureTableSubstitution(fv []byte, off int) featureSubst {
+	if off <= 0 || off+6 > len(fv) {
+		return nil
+	}
+	ts := fv[off:]
+	if font.Be16(ts, 0) != 1 {
+		return nil
+	}
+	n := font.Be16(ts, 4)
+	if n > maxFeatureSubsts {
+		n = maxFeatureSubsts
+	}
+	out := make(featureSubst, n)
+	for i := 0; i < n; i++ {
+		rec := 6 + 6*i
+		if rec+6 > len(ts) {
+			break
+		}
+		index := font.Be16(ts, rec)
+		ao := int(font.Be32(ts, rec+2))
+		if ao <= 0 || ao+4 > len(ts) {
+			continue
+		}
+		alt := ts[ao:]
+		m := font.Be16(alt, 2)
+		if m > maxLookups {
+			m = maxLookups
+		}
+		lookups := make([]int, 0, m)
+		for j := 0; j < m; j++ {
+			if 4+2*j+2 > len(alt) {
+				break
+			}
+			lookups = append(lookups, font.Be16(alt, 4+2*j))
+		}
+		out[index] = lookups
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// featureLookupList is the lookup indices one FeatureList entry names — its own,
+// unless a FeatureVariations record put another list in its place.
+func featureLookupList(list []byte, index int, varied featureSubst) []int {
+	if lookups, ok := varied[index]; ok {
+		return lookups
+	}
+	rec := 2 + 6*index
+	if rec+6 > len(list) {
+		return nil
+	}
+	off := font.Be16(list, rec+4)
+	if off <= 0 || off+4 > len(list) {
+		return nil
+	}
+	feature := list[off:]
+	n := font.Be16(feature, 2)
+	if n > maxLookups {
+		n = maxLookups
+	}
+	out := make([]int, 0, n)
+	for j := 0; j < n; j++ {
+		if 4+2*j+2 > len(feature) {
+			break
+		}
+		out = append(out, font.Be16(feature, 4+2*j))
+	}
+	return out
+}
 
 // layout holds what was read out of a font's layout tables.
 type layout struct {
@@ -263,8 +481,9 @@ func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 	}
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
-		l.readGPOSKerning(gpos, sel)
-		l.readGPOSAttachment(gpos, sel)
+		feats := tableFeatures{sel: sel, varied: readFeatureVariations(gpos)}
+		l.readGPOSKerning(gpos, feats)
+		l.readGPOSAttachment(gpos, feats)
 	}
 	if len(l.kern) == 0 {
 		// Only as a fallback: a font with both should be read through GPOS,
@@ -293,10 +512,11 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout) *layo
 	l.featureLookups = nil
 	l.substFlags = 0
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
-		l.readGSUBLigatures(gsub, gsubSel)
-		l.readSingleSubstitutions(gsub, gsubSel)
+		feats := tableFeatures{sel: gsubSel, varied: readFeatureVariations(gsub)}
+		l.readGSUBLigatures(gsub, feats)
+		l.readSingleSubstitutions(gsub, feats)
 		l.gsub = gsubLookups(gsub)
-		l.featureLookups = featureLookupIndices(gsub, gsubSel)
+		l.featureLookups = featureLookupIndices(gsub, feats)
 	}
 	return l
 }
@@ -340,7 +560,7 @@ func gsubLookups(gsub []byte) []rawLookup {
 // merging every feature the selection admits — which for a font that declares
 // its scripts is every one the run's script and language chose, and for one
 // that does not is every feature in the table.
-func featureLookupIndices(t []byte, sel featureSet) map[string][]int {
+func featureLookupIndices(t []byte, feats tableFeatures) map[string][]int {
 	out := map[string][]int{}
 	off := font.Be16(t, 6)
 	if off <= 0 || off+2 > len(t) {
@@ -356,21 +576,11 @@ func featureLookupIndices(t []byte, sel featureSet) map[string][]int {
 		if rec+6 > len(list) {
 			break
 		}
-		if !sel.selects(i) {
+		if !feats.sel.selects(i) {
 			continue
 		}
 		tag := string(list[rec : rec+4])
-		fo := font.Be16(list, rec+4)
-		if fo <= 0 || fo+4 > len(list) {
-			continue
-		}
-		feature := list[fo:]
-		m := font.Be16(feature, 2)
-		for j := 0; j < m && j < maxLookups; j++ {
-			if 4+2*j+2 > len(feature) {
-				break
-			}
-			idx := font.Be16(feature, 4+2*j)
+		for _, idx := range featureLookupList(list, i, feats.varied) {
 			if !containsInt(out[tag], idx) {
 				out[tag] = append(out[tag], idx)
 			}
@@ -394,7 +604,7 @@ func containsInt(s []int, v int) bool {
 // A tag may appear in the FeatureList many times — a face with a dozen 'locl'
 // features is ordinary, one per language it corrects letterforms for — and it
 // is the selection, not the tag, that says which of them this run gets.
-func featureLookups(t []byte, tag string, sel featureSet) [][]byte {
+func featureLookups(t []byte, tag string, feats tableFeatures) [][]byte {
 	featureListOff := font.Be16(t, 6)
 	lookupListOff := font.Be16(t, 8)
 	if featureListOff <= 0 || lookupListOff <= 0 ||
@@ -432,20 +642,10 @@ func featureLookups(t []byte, tag string, sel featureSet) [][]byte {
 		if rec+6 > len(featureList) {
 			break
 		}
-		if string(featureList[rec:rec+4]) != tag || !sel.selects(i) {
+		if string(featureList[rec:rec+4]) != tag || !feats.sel.selects(i) {
 			continue
 		}
-		off := font.Be16(featureList, rec+4)
-		if off <= 0 || off+4 > len(featureList) {
-			continue
-		}
-		feature := featureList[off:]
-		n := font.Be16(feature, 2)
-		for j := 0; j < n && j < maxLookups; j++ {
-			if 4+2*j+2 > len(feature) {
-				break
-			}
-			idx := font.Be16(feature, 4+2*j)
+		for _, idx := range featureLookupList(featureList, i, feats.varied) {
 			if idx >= 0 && idx < len(lookups) && lookups[idx] != nil {
 				out = append(out, lookups[idx])
 			}
@@ -498,8 +698,8 @@ func subtables(lookup []byte, extensionType int) (kind, flags int, out [][]byte)
 
 // readGPOSKerning reads pair adjustments from every 'kern' feature this run's
 // script selected.
-func (l *layout) readGPOSKerning(gpos []byte, sel featureSet) {
-	for _, lookup := range featureLookups(gpos, "kern", sel) {
+func (l *layout) readGPOSKerning(gpos []byte, feats tableFeatures) {
+	for _, lookup := range featureLookups(gpos, "kern", feats) {
 		kind, flags, subs := subtables(lookup, 9) // 9 = extension positioning
 		if kind != 2 {                            // 2 = pair adjustment
 			continue
@@ -719,8 +919,8 @@ func classDef(base []byte, off int) map[int]int {
 
 // readGSUBLigatures reads ligature substitutions from every 'liga' feature this
 // run's script selected.
-func (l *layout) readGSUBLigatures(gsub []byte, sel featureSet) {
-	for _, lookup := range featureLookups(gsub, "liga", sel) {
+func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
+	for _, lookup := range featureLookups(gsub, "liga", feats) {
 		kind, flags, subs := subtables(lookup, 7) // 7 = extension substitution
 		if kind != 4 {                            // 4 = ligature substitution
 			continue
@@ -844,7 +1044,7 @@ func (l *layout) kernFormat0(t []byte) {
 // ones; both are correct only when a caller asks for them, so unlike 'liga'
 // they cannot be applied by default. Reading them all costs one pass and means
 // ShapeWith needs no second one.
-func (l *layout) readSingleSubstitutions(gsub []byte, sel featureSet) {
+func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 	if len(gsub) < 10 {
 		return
 	}
@@ -864,11 +1064,11 @@ func (l *layout) readSingleSubstitutions(gsub []byte, sel featureSet) {
 			break
 		}
 		tag := string(featureList[rec : rec+4])
-		if seen[tag] || !sel.selects(i) {
+		if seen[tag] || !feats.sel.selects(i) {
 			continue
 		}
 		seen[tag] = true
-		for _, lookup := range featureLookups(gsub, tag, sel) {
+		for _, lookup := range featureLookups(gsub, tag, feats) {
 			kind, flags, subs := subtables(lookup, 7)
 			if kind != 1 { // 1 = single substitution
 				continue
