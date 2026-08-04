@@ -104,6 +104,23 @@ func isDefaultIgnorable(r rune) bool {
 // Everything else goes before the buffer is built, which is after normalisation
 // and so after U+034F COMBINING GRAPHEME JOINER has done the one thing it is
 // for: standing between two characters to stop them composing.
+//
+// # Where this differs from HarfBuzz, and why
+//
+// HarfBuzz keeps these characters through shaping and hides them at the end.
+// The two agree everywhere except one case: a character nothing is drawn for,
+// written *inside* a cluster of a syllabic script — between a consonant and its
+// virama, say. Removing it first leaves the syllable whole and the conjunct
+// forms; keeping it breaks the syllable, and the orphaned virama then gets a
+// dotted circle, the placeholder that says the text is malformed.
+//
+// Both are defensible and they differ only on malformed text. Unicode defines
+// the property as characters that "should be ignored in rendering", which is
+// what this does; HarfBuzz gives the syllable model the last word. The choice
+// here puts a well-formed conjunct on the page rather than a dotted circle,
+// because a document is written once and read many times and a reader cannot
+// fix the text. The thirteen cases where it shows are listed, with this reason,
+// in fonts/harfbuzz_test.go.
 func hiddenBeforeShaping(r rune) bool {
 	if !isDefaultIgnorable(r) {
 		return false
