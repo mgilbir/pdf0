@@ -502,7 +502,7 @@ func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 	l.readGDEF(tables["GDEF"])
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
 		feats := tableFeatures{sel: sel, varied: readFeatureVariations(gpos)}
-		l.readGPOSKerning(gpos, feats)
+		l.readGPOSPairs(gpos, feats)
 		l.readGPOSAttachment(gpos, feats)
 	}
 	if len(l.kern) == 0 {
@@ -716,24 +716,41 @@ func subtables(lookup []byte, extensionType int) (kind, flags int, out [][]byte)
 	return kind, flags, out
 }
 
-// readGPOSKerning reads pair adjustments from every 'kern' feature this run's
-// script selected.
-func (l *layout) readGPOSKerning(gpos []byte, feats tableFeatures) {
-	for _, lookup := range featureLookups(gpos, "kern", feats) {
-		kind, flags, subs := subtables(lookup, 9) // 9 = extension positioning
-		if kind != 2 {                            // 2 = pair adjustment
-			continue
-		}
-		l.kernFlags |= flags
-		for _, sub := range subs {
-			if len(sub) < 2 {
+// pairFeatures are the features whose pair adjustments this reads.
+//
+// 'kern' is the one everybody knows. 'dist' is the other, and leaving it out is
+// not a small omission: it is the feature the complex scripts state their
+// spacing under, and for a Devanagari run it is often the *only* one — Noto
+// Sans declares no 'kern' at all under deva or dev2, so a reader that asked only
+// for 'kern' got a layout with zero pairs in it and set every conjunct at its
+// nominal width. Measured against HarfBuzz, that was every Devanagari cluster
+// in the sample, out by up to 73 units of the em.
+//
+// Both are on for every script rather than for the complex ones alone, which is
+// what the feature registry says and what HarfBuzz does: 'dist' is one of its
+// global horizontal features, beside 'kern' and 'curs'.
+var pairFeatures = [...]string{"kern", "dist"}
+
+// readGPOSPairs reads pair adjustments from every feature in pairFeatures that
+// this run's script selected.
+func (l *layout) readGPOSPairs(gpos []byte, feats tableFeatures) {
+	for _, tag := range pairFeatures {
+		for _, lookup := range featureLookups(gpos, tag, feats) {
+			kind, flags, subs := subtables(lookup, 9) // 9 = extension positioning
+			if kind != 2 {                            // 2 = pair adjustment
 				continue
 			}
-			switch font.Be16(sub, 0) {
-			case 1:
-				l.pairPosFormat1(sub)
-			case 2:
-				l.pairPosFormat2(sub)
+			l.kernFlags |= flags
+			for _, sub := range subs {
+				if len(sub) < 2 {
+					continue
+				}
+				switch font.Be16(sub, 0) {
+				case 1:
+					l.pairPosFormat1(sub)
+				case 2:
+					l.pairPosFormat2(sub)
+				}
 			}
 		}
 	}
