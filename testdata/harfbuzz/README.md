@@ -282,26 +282,31 @@ on the one before it and HarfBuzz leaves it on the base. The smallest case is
 	U+0905 U+0945 U+0955   this package  3917 at y 247
 	                       HarfBuzz      3917 at y 0, beside 3916
 
-## The one that is left
+## What is left
 
-`U+0F52 U+0F8F U+0FAD U+0F91 U+0F73 U+0F37`, Tibetan: the last mark comes out at
-x -152 where HarfBuzz puts it at -157. Five units, and only in x.
+Over 421,200 generated strings the fuzzer reports 40 differences, in three
+classes. The figure of one quoted earlier was a 2,000-string sample per script
+and not the whole of it.
 
-It is narrowed as far as the tables go. Exactly one subtable covers the pair —
-lookup 19, mark anchor (-135, 0), mark2 anchor (163, 140) — so the attachment
-delta is (298, 140). HarfBuzz's answer is that: 298 against the target's x offset
-of -455 gives -157. The y agrees exactly, which says the target, the lookup and
-both anchors are read right. Only the x is out, by five, so five units are being
-added somewhere in placeMark's arithmetic rather than in what it was given.
+**Five units of x, Tibetan.** The one this section used to be about, and it is
+not a defect: CoreText was asked and places the mark where this package places
+it. Absolute positions are 427 for this package, 427 for CoreText and 422 for
+HarfBuzz — see testdata/coretext. Pinned in the corpus and listed in
+`deliberateDifferences`; the fuzzer names only the exact string, so any other
+Tibetan case it reports is a different question wearing the same shape.
 
-Ruled out: a second subtable with different anchors (there is none), and format
-3's device tables (this package reads the design coordinates and ignores the
-devices, which is what HarfBuzz does at an unhinted size).
+**An ignorable in a non-syllabic run, Arabic.** `U+063D U+061C U+0655` puts the
+first mark at x 250 against HarfBuzz's 850. U+061C is a default-ignorable, and
+these are removed before shaping for every run that is not syllabic — which is
+the same answer as keeping them wherever the font's rules are lookups, and was
+measured to be so for Latin, Greek, Cyrillic and Arabic. This is the case that
+says "measured" was not "always".
 
-What is left to compare is the advance accumulation — placeMark walks from the
-target to the mark adding advances, and HarfBuzz's propagate_attachment_offsets
-walks the same range subtracting them — against a run where those advances are
-all zero and the difference should therefore be zero.
+**Two pre-base vowels, Devanagari.** `U+091B U+094E U+093F` comes out as
+different glyphs in a different order — 3975, 4032 against HarfBuzz's 3935,
+3975. Both U+094E and U+093F are written after the consonant and drawn before
+it, and this is substitution as well as reordering, so it is not the same
+question as the two above.
 ## How to look at either
 
 The per-lookup trace is the tool, and it works from Python — the buffer is not
