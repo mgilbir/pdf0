@@ -411,34 +411,50 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 	// One budget for every subtable this reader may take, shared across the
 	// whole table — see subtables.
 	budget := subtableBudget(gpos)
+	// In lookup-list order, and each lookup read once however many features name
+	// it. Both matter: where two lookups place the same mark the *later* one is
+	// the answer, so reading them in the order the features happen to be listed
+	// in — mark, then abvm, then blwm, then mkmk — can settle it the wrong way,
+	// and reading one twice would let it settle it against itself. A font states
+	// its lookups in one list and their indices are the order it means.
+	var order []int
+	byIndex := map[int][]byte{}
 	for _, tag := range featureTags(gpos, feats.sel) {
-		for _, lookup := range featureLookups(gpos, tag, feats) {
-			kind, flags, markSet, subs := subtables(lookup, 9, &budget)
-			switch kind {
-			case 4, 5:
-				// Mark-to-base and mark-to-ligature go into one ordered set:
-				// they are alternatives for the same mark, decided by which
-				// lookup covers the glyph the mark is attaching to, and a
-				// ligature glyph may be covered by either.
-				l.readMarkAttachment(subs, flags, markSet, kind == 5, false)
-			case 6:
-				l.readMarkAttachment(subs, flags, markSet, false, true)
-			default:
-				for _, sub := range subs {
-					switch kind {
-					case 1:
-						l.singlePosSubtable(sub)
-					case 3:
-						l.cursivePos(sub)
-					}
+		lookups, idxs := featureLookupsIndexed(gpos, tag, feats)
+		for i, lookup := range lookups {
+			if _, seen := byIndex[idxs[i]]; seen {
+				continue
+			}
+			byIndex[idxs[i]] = lookup
+			order = append(order, idxs[i])
+		}
+	}
+	sortInts(order)
+	for _, idx := range order {
+		lookup := byIndex[idx]
+		kind, flags, markSet, subs := subtables(lookup, 9, &budget)
+		switch kind {
+		case 4, 5:
+			// Mark-to-base and mark-to-ligature go into one ordered set:
+			// they are alternatives for the same mark, decided by which
+			// lookup covers the glyph the mark is attaching to, and a
+			// ligature glyph may be covered by either.
+			l.readMarkAttachment(subs, flags, markSet, kind == 5, false)
+		case 6:
+			l.readMarkAttachment(subs, flags, markSet, false, true)
+		default:
+			for _, sub := range subs {
+				switch kind {
+				case 1:
+					l.singlePosSubtable(sub)
+				case 3:
+					l.cursivePos(sub)
 				}
 			}
-			switch kind {
-			case 3:
-				l.cursFlags |= mergedFlags(flags)
-			case 4, 6:
-				l.markFlags |= mergedFlags(flags)
-			}
+		}
+		switch kind {
+		case 3:
+			l.cursFlags |= mergedFlags(flags)
 		}
 	}
 }

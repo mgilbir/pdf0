@@ -268,3 +268,13 @@ more in positioning:
   worth recording because it was tried: it fixes Latin, Greek and Cyrillic and
   breaks Arabic. Both directions are the same missing thing, and the flags are
   it.
+
+Thirteen differences in eighteen thousand generated strings are left, all Khmer
+and Tibetan, all of them four or more marks on one base where this package
+stacks a mark deeper than HarfBuzz does. Three explanations have been ruled out
+by measurement rather than by reading: it is not the ligature-id rule
+MarkMarkPos applies, because these marks have no ligature ids; it is not the
+mark filtering set, because the mark is in it; and it is not the order the
+attachment lookups are read in, which was wrong and has been corrected without
+changing any of the thirteen. What is left to check is which anchor *class* is
+being taken when several subtables cover the same pair.

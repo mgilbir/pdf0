@@ -378,8 +378,6 @@ type layout struct {
 	// markAttach is GDEF's mark attachment class per glyph, used by the
 	// MarkAttachmentType field of a lookup flag.
 	markAttach map[int]int
-	// markFlags is the lookup flags of the attachment lookups.
-	markFlags int
 	// cursive holds each glyph's entry and exit points, and cursFlags the flags
 	// of the lookups they came from — whose RightToLeft bit decides which end of
 	// a joined run stays on the baseline.
