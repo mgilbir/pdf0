@@ -323,6 +323,12 @@ func (f *Face) advanceGID(gid int) float64 {
 func (f *Face) Measure(s string, size float64) float64 {
 	var total float64
 	for _, r := range s {
+		if hiddenBeforeShaping(r) {
+			// Nothing is drawn for it, so nothing is measured for it. This has
+			// to agree with what Encode emits or a caller lays out to one width
+			// and draws another — see ignorable.go.
+			continue
+		}
 		w, ok := f.Advance(r)
 		if !ok && f.std != nil {
 			// A character outside the encoding is set as a space, so it is a
@@ -354,6 +360,9 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 		// says how many there were.
 		codes = make([]byte, 0, len(s))
 		for _, r := range s {
+			if hiddenBeforeShaping(r) {
+				continue // nothing is drawn for it, so it gets no code
+			}
 			code, ok := f.GlyphID(r)
 			if !ok {
 				missing++
@@ -365,6 +374,9 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 	}
 	codes = make([]byte, 0, 2*len(s))
 	for _, r := range s {
+		if hiddenBeforeShaping(r) {
+			continue // nothing is drawn for it, so it gets no code
+		}
 		gid, ok := f.GlyphID(r)
 		if !ok {
 			missing++

@@ -27,15 +27,20 @@ package fonts
 //
 // # What is covered
 //
-// These two characters, and no others.
+// Unicode's Default_Ignorable_Code_Point property, which covers far more than
+// the two join controls: the bidirectional controls, the variation selectors,
+// the word joiner, the musical beam marks, the soft hyphen. Every one of them
+// is an instruction rather than a letter, and a font that maps one to a visible
+// glyph is not asking for it to be drawn — it is saying what it would look like
+// if it were, which is a question nobody asked.
 //
-// Unicode's Default_Ignorable_Code_Point property covers far more — the
-// bidirectional controls, the variation selectors, the soft hyphen — and every
-// one of them should be treated exactly this way. They are not: text carrying
-// one still gets whatever glyph the font happens to map it to, drawn. The two
-// join controls are singled out because they are the ones that change what the
-// font is *asked for*, which is the part that cannot be fixed by a caller
-// stripping characters before shaping.
+// Getting this wrong is not subtle. A soft hyphen is written to mark where a
+// word *may* break, and is the ordinary way HTML says so; before this was
+// handled, a run carrying one had a hyphen drawn in the middle of the word,
+// whether it broke there or not.
+//
+// The table is Unicode's (ignorabletable.go, generated). The two decisions
+// below are this package's, and are the reason the two are kept apart.
 
 // The two join controls. They are named rather than derived because what they
 // mean is particular to them: every other format character this package sees is
@@ -53,6 +58,101 @@ const (
 	notJoiner joinerKind = iota
 	joinerZWJ
 	joinerZWNJ
+)
+
+// isDefaultIgnorable reports whether Unicode says nothing should be drawn for a
+// character.
+//
+// The ranges are few and sorted, and the first of them is above almost every
+// character of ordinary text, so the common answer costs one comparison.
+func isDefaultIgnorable(r rune) bool {
+	if r < defaultIgnorableRanges[0].lo {
+		return false
+	}
+	lo, hi := 0, len(defaultIgnorableRanges)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		switch {
+		case r < defaultIgnorableRanges[mid].lo:
+			hi = mid - 1
+		case r > defaultIgnorableRanges[mid].hi:
+			lo = mid + 1
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// hiddenBeforeShaping reports whether a character is taken out before the font
+// is asked about it at all.
+//
+// Every default-ignorable is, with two sets of exceptions, and both are about
+// characters that would be *wrong* to remove rather than merely cheap to keep:
+//
+//   - The join controls. They are the two that change what the font is asked
+//     for, so they have to survive until the rules about them have run; they
+//     are taken out afterwards by hideJoiners and by the syllabic shapers. That
+//     is the whole subject of this file.
+//   - The Hangul fillers, U+115F, U+1160, U+3164 and U+FFA0. Unicode marks them
+//     default-ignorable, and they are the one part of the property a text
+//     renderer should not act on: they are letters (category Lo), used to write
+//     an incomplete syllable — a jamo with a deliberately empty slot — and they
+//     occupy width on the page. Hiding them collapses the syllable. HarfBuzz
+//     excludes them for the same reason.
+//
+// Everything else goes before the buffer is built, which is after normalisation
+// and so after U+034F COMBINING GRAPHEME JOINER has done the one thing it is
+// for: standing between two characters to stop them composing.
+func hiddenBeforeShaping(r rune) bool {
+	if !isDefaultIgnorable(r) {
+		return false
+	}
+	switch r {
+	case zeroWidthJoiner, zeroWidthNonJoiner:
+		return false
+	case hangulChoseongFiller, hangulJungseongFiller, hangulFiller, halfwidthHangulFiller:
+		return false
+	}
+	return true
+}
+
+// dropHiddenCharacters removes the characters nothing is drawn for, keeping the
+// rest of a run and the offsets that map it back to the text.
+//
+// It returns the input unchanged when there is nothing to drop, which is every
+// ordinary string: the scan is one comparison per character against the lowest
+// code point the property covers, and allocating a copy of every run to remove
+// nothing would cost more than the property is worth.
+func dropHiddenCharacters(runes []rune, offsets []int) ([]rune, []int) {
+	first := -1
+	for i, r := range runes {
+		if hiddenBeforeShaping(r) {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return runes, offsets
+	}
+	outR := append(make([]rune, 0, len(runes)-1), runes[:first]...)
+	outO := append(make([]int, 0, len(offsets)-1), offsets[:first]...)
+	for i := first + 1; i < len(runes); i++ {
+		if hiddenBeforeShaping(runes[i]) {
+			continue
+		}
+		outR = append(outR, runes[i])
+		outO = append(outO, offsets[i])
+	}
+	return outR, outO
+}
+
+// The Hangul fillers, named for the reason hiddenBeforeShaping gives.
+const (
+	hangulChoseongFiller  = 0x115F
+	hangulJungseongFiller = 0x1160
+	hangulFiller          = 0x3164
+	halfwidthHangulFiller = 0xFFA0
 )
 
 func joinerKindOf(r rune) joinerKind {
