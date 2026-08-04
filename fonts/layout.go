@@ -656,6 +656,8 @@ func lookupList(gsub []byte, extension int) []rawLookup {
 	// lookups in twenty bytes gets one allocation of twenty bytes' worth, and
 	// the loop below stops when the offsets run out.
 	out := make([]rawLookup, 0, min(n, max(0, (len(list)-2)/2)))
+	// One budget for every subtable the whole list may name — see subtables.
+	budget := subtableBudget(gsub)
 	for i := 0; i < n; i++ {
 		if 2+2*i+2 > len(list) {
 			break
@@ -667,7 +669,7 @@ func lookupList(gsub []byte, extension int) []rawLookup {
 			out = append(out, rawLookup{markSet: -1})
 			continue
 		}
-		kind, flags, markSet, subs := subtables(list[lo:], extension)
+		kind, flags, markSet, subs := subtables(list[lo:], extension, &budget)
 		out = append(out, rawLookup{kind: kind, flags: flags, markSet: markSet, subs: subs})
 	}
 	return out
@@ -773,7 +775,19 @@ func featureLookups(t []byte, tag string, feats tableFeatures) [][]byte {
 
 // subtables returns a lookup's subtables, resolving the extension indirection
 // that lets a large font place them beyond the 16-bit offset range.
-func subtables(lookup []byte, extensionType int) (kind, flags, markSet int, out [][]byte) {
+// subtableBudget is how many subtables a reader may take from one table.
+//
+// It is proportional to the table's size because that is what a well-formed
+// font's subtables cost: each is named by two bytes of offset, and the lookups
+// naming them do not overlap. A crafted font's do, which is the whole reason
+// this exists — see subtables.
+//
+// The constant on the end is so that a small table with one dense lookup is not
+// refused: a font may reasonably state seven hundred subtables in a lookup, and
+// Noto Serif Tibetan does.
+func subtableBudget(table []byte) int { return len(table)/2 + maxSubtableList }
+
+func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, markSet int, out [][]byte) {
 	if len(lookup) < 6 {
 		return 0, 0, -1, nil
 	}
@@ -794,6 +808,22 @@ func subtables(lookup []byte, extensionType int) (kind, flags, markSet int, out 
 	count := font.Be16(lookup, 4)
 	if count > maxSubtableList {
 		count = maxSubtableList
+	}
+	// And no more than the table has left to give.
+	//
+	// The per-lookup bound above is not enough on its own, and the reason is
+	// worth stating: a lookup is a slice that runs to the *end* of the table,
+	// not to the end of itself, because nothing says where one stops. So every
+	// lookup in a large font appears to have room for tens of thousands of
+	// subtables, and a crafted font declaring the maximum in each of the maximum
+	// number of lookups asks for their product — which is how a 533 KB file came
+	// to take half a minute to read. The budget is shared across the table, so
+	// the work is bounded by its size rather than by its size squared.
+	if budget != nil {
+		if count > *budget {
+			count = *budget
+		}
+		*budget -= count
 	}
 	// Whether the *lookup* is an extension has to be decided once. Reading it
 	// from kind inside the loop stops unwrapping after the first subtable, since
@@ -851,10 +881,13 @@ var pairFeatures = [...]string{"kern", "dist"}
 // readGPOSPairs reads pair adjustments from every feature in pairFeatures that
 // this run's script selected.
 func (l *layout) readGPOSPairs(gpos []byte, feats tableFeatures) {
+	// One budget for every subtable this reader may take, shared across the
+	// whole table — see subtables.
+	budget := subtableBudget(gpos)
 	for _, tag := range pairFeatures {
 		for _, lookup := range featureLookups(gpos, tag, feats) {
-			kind, flags, _, subs := subtables(lookup, 9) // 9 = extension positioning
-			if kind != 2 {                               // 2 = pair adjustment
+			kind, flags, _, subs := subtables(lookup, 9, &budget) // 9 = extension positioning
+			if kind != 2 {                                        // 2 = pair adjustment
 				continue
 			}
 			l.kernFlags |= mergedFlags(flags)
@@ -1123,9 +1156,12 @@ func classDef(base []byte, off int) map[int]int {
 // readGSUBLigatures reads ligature substitutions from every 'liga' feature this
 // run's script selected.
 func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
+	// One budget for every subtable this reader may take, shared across the
+	// whole table — see subtables.
+	budget := subtableBudget(gsub)
 	for _, lookup := range featureLookups(gsub, "liga", feats) {
-		kind, flags, _, subs := subtables(lookup, 7) // 7 = extension substitution
-		if kind != 4 {                               // 4 = ligature substitution
+		kind, flags, _, subs := subtables(lookup, 7, &budget) // 7 = extension substitution
+		if kind != 4 {                                        // 4 = ligature substitution
 			continue
 		}
 		l.substFlags |= flags
@@ -1249,6 +1285,8 @@ func (l *layout) kernFormat0(t []byte) {
 // they cannot be applied by default. Reading them all costs one pass and means
 // ShapeWith needs no second one.
 func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
+	// One budget for every subtable this reader may take — see subtables.
+	budget := subtableBudget(gsub)
 	if len(gsub) < 10 {
 		return
 	}
@@ -1273,7 +1311,7 @@ func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 		}
 		seen[tag] = true
 		for _, lookup := range featureLookups(gsub, tag, feats) {
-			kind, flags, _, subs := subtables(lookup, 7)
+			kind, flags, _, subs := subtables(lookup, 7, &budget)
 			if kind != 1 { // 1 = single substitution
 				continue
 			}

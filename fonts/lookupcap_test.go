@@ -3,6 +3,7 @@ package fonts
 import (
 	"encoding/binary"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/pdf0/internal/fonttest"
 )
@@ -155,5 +156,99 @@ func TestALookupSeesOnlyTheMarksItsSetNames(t *testing.T) {
 	}
 	if got := l.ignoresIn(mergedFlags(flags|flagIgnoreMarks), -1, Glyph{GID: inSet}); !got {
 		t.Error("mergedFlags dropped more than the set bit: IgnoreMarks must survive it")
+	}
+}
+
+// TestADenseLookupListIsBoundedByTheTable is the other side of lifting the
+// caps, and the reason a budget exists at all.
+//
+// A lookup is a slice that runs to the *end* of the table, because nothing in
+// the format says where one stops. So bounding a lookup's subtable count by
+// "the bytes available" bounds it by the bytes available in the whole table —
+// and every lookup in a large font then appears to have room for tens of
+// thousands. A font declaring the maximum in each of the maximum number of
+// lookups asks for their product.
+//
+// That is not hypothetical. The fuzzer found it in twenty-four seconds, in the
+// shape of a 533 KB file that took half a minute to read, almost all of it
+// spent appending subtable slices and collecting them again.
+//
+// The bound is a budget shared across the table, so the work is proportional to
+// its size rather than to its square. The assertion is deliberately loose: it
+// runs on shared machines and is here to catch a change in the *shape* of the
+// cost, not to measure it.
+func TestADenseLookupListIsBoundedByTheTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("timing-sensitive")
+	}
+	// Every lookup claims the format's maximum number of subtables while
+	// occupying six bytes itself. Its offset array is therefore not there — and
+	// a lookup is a slice to the end of the table, so the walk reads those
+	// "offsets" out of whatever follows, which is exactly what a crafted font
+	// does and what makes the count and the table's size multiply.
+	const (
+		lookups = 400
+		padding = 1 << 19 // half a megabyte, about the size the fuzzer found
+	)
+	body := make([]byte, 2+2*lookups)
+	binary.BigEndian.PutUint16(body, uint16(lookups))
+	for i := 0; i < lookups; i++ {
+		binary.BigEndian.PutUint16(body[2+2*i:], uint16(len(body)))
+		lk := make([]byte, 6)
+		binary.BigEndian.PutUint16(lk[0:], 1)      // a single substitution
+		binary.BigEndian.PutUint16(lk[2:], 0)      // no flags
+		binary.BigEndian.PutUint16(lk[4:], 0xFFFF) // ... in 65535 subtables
+		body = append(body, lk...)
+	}
+	// The padding is not zeros. A zero offset is rejected and costs nothing, so
+	// a table of zeros would exercise the loop and never the work; these bytes
+	// read as small valid offsets, which is what the fuzzer's input had and what
+	// makes every one of those declared subtables actually collected.
+	pad := make([]byte, padding)
+	for i := 1; i < len(pad); i += 2 {
+		pad[i] = 0x20
+	}
+	body = append(body, pad...)
+	gsub := make([]byte, 10)
+	binary.BigEndian.PutUint16(gsub[0:], 1)
+	binary.BigEndian.PutUint16(gsub[8:], 10)
+	gsub = append(gsub, body...)
+
+	done := make(chan int, 1)
+	go func() {
+		f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+			Name:   "DenseLookups",
+			Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}},
+			Extra:  map[string][]byte{"GSUB": gsub},
+		}))
+		if err != nil {
+			// Not a pass: a font that will not load proves nothing about how
+			// much work a font that does load can ask for.
+			done <- -1
+			return
+		}
+		f.ShapeGlyphs("a")
+		total := 0
+		for _, lk := range f.layout.gsub {
+			total += len(lk.subs)
+		}
+		done <- total
+	}()
+	select {
+	case total := <-done:
+		if total < 0 {
+			t.Fatal("the crafted font did not load, so this proves nothing about " +
+				"how much work one that does load can ask for")
+		}
+		// The budget is about half the table's bytes. What matters is that it is
+		// nothing like 400 x 65535, which is what the counts asked for.
+		if want := lookups * 0xFFFF / 4; total > want {
+			t.Errorf("%d subtables were read from a table declaring %d x %d; the work "+
+				"must be bounded by the table's size, not by its square",
+				total, lookups, 0xFFFF)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("reading a font that declares the maximum subtables in every lookup " +
+			"did not finish: the budget is not bounding the work")
 	}
 }
