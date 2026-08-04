@@ -205,12 +205,23 @@ func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
 // shaping, so it breaks the syllable, and the orphaned virama gets a dotted
 // circle — the placeholder that says "this text is malformed".
 //
-// Both readings are defensible and they differ only on malformed text. Unicode
-// defines the property as characters that "should be ignored in rendering",
-// which is what this package does; HarfBuzz gives the syllable model the last
-// word. The choice here is the one that puts a well-formed conjunct on the page
-// rather than a dotted circle, because a document is written once and read many
-// times, and a reader cannot fix the text.
+// Both readings are permitted, and that was checked rather than assumed. The
+// standard requires that such a character "not be displayed with a visible
+// fallback glyph, but instead simply not be rendered at all" — which is about
+// the character itself — and says in the same breath that these characters "may
+// affect surrounding character display". So it neither asks for them to be
+// removed before shaping nor for them to break a syllable, and nothing in it
+// settles which of the two answers below is right.
+//
+// The choice here is the one that puts a well-formed conjunct on the page rather
+// than a dotted circle, because a document is written once and read many times
+// and a reader cannot fix the text — and because a soft hyphen inside a conjunct
+// is a legitimate hyphenation point, which the other reading makes impossible to
+// write. It is weaker for a tag character or a musical symbol, and splitting the
+// two would mean inventing a rule neither Unicode nor HarfBuzz states.
+//
+// What is *not* known is what CoreText and DirectWrite do; neither can be run
+// here, and this note says so rather than guessing at a majority.
 var deliberateDifferences = map[string]map[string]string{
 	"latin": {
 		"\u0915\u00AD\u094D\u0937":     "soft hyphen inside a Devanagari cluster",
@@ -227,8 +238,39 @@ var deliberateDifferences = map[string]map[string]string{
 		"\u0915\U0001D173\u094D\u0937": "musical begin beam inside a Devanagari cluster",
 		"\u0915\U000E0041\u094D\u0937": "tag letter inside a Devanagari cluster",
 	},
-	"arabic":   {},
-	"khmer":    {},
+	"arabic": {},
+	// The same decision as the Latin entries above, in the script where it is
+	// a rule rather than a curiosity. Every default-ignorable is removed before
+	// shaping, so none of them can break a syllable, and that holds for every
+	// script with a syllable model rather than for the thirteen Devanagari
+	// strings that happened to be the only ones written down. Two of these are
+	// Khmer's own inherent-vowel signs, which Unicode makes ignorable.
+	"khmer": {
+		"\u1780\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
+		"\u1780\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
+		"\u1780\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
+		"\u1780\u200B\u17B6": "a zero width space between a letter and its vowel",
+		"\u1781\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
+		"\u1781\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
+		"\u1781\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
+		"\u1781\u200B\u17B6": "a zero width space between a letter and its vowel",
+		"\u1782\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
+		"\u1782\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
+		"\u1782\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
+		"\u1782\u200B\u17B6": "a zero width space between a letter and its vowel",
+		"\u1783\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
+		"\u1783\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
+		"\u1783\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
+		"\u1783\u200B\u17B6": "a zero width space between a letter and its vowel",
+		"\u1784\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
+		"\u1784\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
+		"\u1784\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
+		"\u1784\u200B\u17B6": "a zero width space between a letter and its vowel",
+		"\u1785\u17B4\u17B6": "the inherent vowel aq between a letter and its vowel",
+		"\u1785\u17B5\u17B6": "the inherent vowel aa between a letter and its vowel",
+		"\u1785\u00AD\u17B6": "a soft hyphen between a letter and its vowel",
+		"\u1785\u200B\u17B6": "a zero width space between a letter and its vowel",
+	},
 	"javanese": {},
 	"balinese": {},
 	// Tibetan had two, both a deprecated vowel sign written after U+0F48, which

@@ -93,6 +93,19 @@ words += [
     "ព្រះរាជាណាចក្រកម្ពុជា",
 ]
 
+# A character nothing is drawn for, written inside a syllable.
+#
+# This is where the one deliberate difference in this directory actually bites,
+# and until these strings existed the list of them read as thirteen Latin
+# curiosities. It is a general rule — every default-ignorable is removed before
+# shaping, so none of them can break a syllable — and it fires for every script
+# with a syllable model. The two Khmer inherent-vowel signs are ignorable, so a
+# vowel written after one keeps its letter here and gets a dotted circle from
+# HarfBuzz.
+for c in consonants[:6]:
+    for ig in ("\u17b4", "\u17b5", "\u00ad", "\u200b"):
+        words.append(c + ig + "\u17b6")
+
 seen, out = set(), []
 for w in words:
     if w and "\n" not in w and w not in seen:
