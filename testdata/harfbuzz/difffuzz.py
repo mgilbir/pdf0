@@ -72,35 +72,18 @@ FONTS = [
 # They are keyed the way fonts/harfbuzz_test.go keys them, and this file is the
 # only other place they are named — if one is fixed there it will simply stop
 # appearing here.
-# Two of these are decisions, written down with their reasons in
-# fonts/harfbuzz_test.go. The third is a gap: it is here so that the fuzzer keeps
-# showing things nobody has seen yet rather than burying them under something
-# already known, and it should be removed the moment it is fixed.
+#
+# One entry, and it is a decision rather than a gap — see fonts/harfbuzz_test.go.
+# Three others have left. Two were gaps: the missing dotted circle for a broken
+# cluster, closed by the engine's cluster grammar, and the ordering of two
+# modifier marks on one letter, settled by UTR #53's own text. The third was
+# recorded as a decision — a deprecated Tibetan vowel sign after an unassigned
+# code point — and was not one: it was a reserved character being given a
+# category that broke the cluster. An entry here is meant to leave.
 KNOWN = {
-    # A decision. A character nothing is drawn for, inside a cluster: this
-    # package removes it before shaping, HarfBuzz keeps it until after.
+    # A character nothing is drawn for, inside a cluster: this package removes it
+    # before shaping, HarfBuzz keeps it until after.
     "ignorable-in-cluster",
-    # A decision. A deprecated Tibetan vowel sign after an unassigned code point.
-    "deprecated-after-unassigned",
-    # NOT a decision. The universal engine does not insert a dotted circle for a
-    # cluster it cannot parse, and the Indic and Khmer shapers here do. Marking
-    # a syllable as malformed is how a reader is told the text is; leaving it out
-    # sets the characters as though they were fine.
-    #
-    # Closing it needs the engine's cluster *grammar*, not just its segmentation:
-    # something has to decide that a Balinese musical symbol after an independent
-    # vowel is not a syllable. That is why it is recorded rather than fixed here.
-    "no-dotted-circle",
-    # NOT a decision. Two marks of class 220 or 230 on one letter, where UTR #53
-    # has something to say about at least one of them. The single-mark cases —
-    # which is what real Arabic writes — agree; these do not, and no rule tried
-    # here fits every one of them.
-    #
-    # It is recorded rather than guessed at again. Three hypotheses were tested
-    # against HarfBuzz and each fitted some combinations and contradicted
-    # others, which is the shape of fitting rules to observations rather than
-    # implementing a specification. Closing it needs UTR #53's own text.
-    "two-modifier-marks",
 }
 
 IGNORABLE = [
@@ -118,26 +101,7 @@ def classify(text, ours, theirs):
     """Name a difference that is already understood, or None if it is new."""
     if any(is_ignorable(c) for c in text[1:-1]):
         return "ignorable-in-cluster"
-    if any(0x0F48 == ord(c) or 0x0F98 == ord(c) for c in text):
-        return "deprecated-after-unassigned"
-    # A dotted circle on one side and not the other. It is recognised by the
-    # glyph *counts* rather than by naming a glyph index, because the index is
-    # the font's and every font numbers it differently.
-    if len(theirs.split()) > len(ours.split()):
-        return "no-dotted-circle"
-    # Two of the marks UTR #53 orders, on one letter.
-    ordered = [c for c in text if unicodedata.combining(c) in (220, 230)]
-    if len(ordered) >= 2 and any(ord(c) in UTR53_MARKS for c in text):
-        return "two-modifier-marks"
     return None
-
-
-# The fourteen characters UTR #53 is about, mirroring arabicModifierMarks in
-# fonts/normalize.go.
-UTR53_MARKS = {
-    0x0654, 0x0655, 0x0658, 0x06DC, 0x06E3, 0x06E7, 0x06E8,
-    0x08CA, 0x08CB, 0x08CD, 0x08CE, 0x08CF, 0x08D3, 0x08F3,
-}
 
 
 def alphabet(path, ranges, rtl):
@@ -278,12 +242,29 @@ def main():
                 key = (name, small)
                 if key in found:
                     continue
-                found[key] = (
-                    shape_pdf0(path, [small])[0],
-                    shape_harfbuzz(face, [small])[0],
-                )
+                sa = shape_pdf0(path, [small])[0]
+                sb = shape_harfbuzz(face, [small])[0]
+                # Classified again, on the string that is actually reported.
+                #
+                # Minimising changes what the case *is*: dropping a character
+                # can turn a difference nobody has seen into one that is written
+                # down, and the first version of this only asked before
+                # minimising. So a run of a few minutes reported hundreds of
+                # "new" differences that were the recorded gap all along, which
+                # is the failure this tool exists to avoid — a report nobody can
+                # read is a report nobody reads.
+                if classify(small, sa, sb) in KNOWN:
+                    continue
+                found[key] = (sa, sb)
 
     print(f"{tried} strings over {len(loaded)} fonts, {len(found)} differences")
+    # Grouped by font, with a count per font first. The interesting number is
+    # how many *kinds* there are, and a flat list of several hundred hides it.
+    by_font = {}
+    for name, text in found:
+        by_font.setdefault(name, []).append(text)
+    if found:
+        print("\n" + "  ".join(f"{n} {len(v)}" for n, v in sorted(by_font.items())))
     for (name, text), (a, b) in sorted(found.items()):
         cps = " ".join(f"U+{ord(c):04X}" for c in text)
         print(f"\n{name}: {cps}")

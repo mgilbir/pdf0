@@ -74,10 +74,11 @@ fonts to 1.2 MB — against the 2 MB the bundled face already costs.
 
 | file | what it is |
 | --- | --- |
-| `corpus.py`, `corpus_arabic.py`, `corpus_khmer.py` | generate the three corpora |
-| `corpus.txt`, `arabic.txt`, `khmer.txt` | the strings, one per line |
+| `corpus.py`, `corpus_arabic.py`, `corpus_khmer.py`, `corpus_javanese.py`, `corpus_balinese.py`, `corpus_tibetan.py` | generate the six corpora |
+| `corpus.txt`, `arabic.txt`, `khmer.txt`, `javanese.txt`, `balinese.txt`, `tibetan.txt` | the strings, one per line |
 | `shape.py` | shapes one corpus with one font and writes its expectations |
-| `expected.txt`, `arabic.expected.txt`, `khmer.expected.txt` | glyph, advance and offset for each, in font units |
+| `*.expected.txt` | glyph, advance and offset for each, in font units |
+| `difffuzz.py` | generates text instead of listing it — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
 towards realistic prose. Prose exercises one path many times; a grid exercises
@@ -95,7 +96,11 @@ many paths once.
   subscript Ro, the pre-base and split vowels, a syllable with nothing to hang
   its marks off, and the join controls.
 - **Javanese** — every aksara with every sandhangan, the pangkon grid of every
-  consonant stacked under every other, and stacked pairs carrying a vowel too.
+  consonant stacked under every other, stacked pairs carrying a vowel too, and
+  every *pair* of sandhangan on one letter. The last is there because this font
+  carries a placeholder mark through its rules and takes it off again with a
+  substitution of no glyphs at all, and the rule that puts the placeholder there
+  needs a second sign to fire.
 - **Balinese** — the same shape of grid, and the split vowel signs U+1B40 and
   U+1B41, each written as one character and drawn as two marks on opposite sides.
 - **Tibetan** — every consonant with every vowel and every subjoined form. It is
@@ -146,7 +151,10 @@ The right oracle for it is Unicode's own `BidiTest.txt` and
 `corpus.py` therefore leaves the right-to-left forcing controls out.
 
 **Thirteen cases that differ on purpose**, all in the Latin corpus, listed with
-their reasons in `deliberateDifferences` in `fonts/harfbuzz_test.go`. All
+their reasons in `deliberateDifferences` in `fonts/harfbuzz_test.go`. Tibetan
+had two more and no longer does: they were recorded as a difference of opinion
+about how to decorate a letter that is not there, and were really a reserved
+code point being given a category that broke the cluster. All
 thirteen are the same thing: a character nothing is drawn for, written between a
 consonant and its virama. This package removes it before shaping, so the conjunct forms; HarfBuzz
 keeps it until after, so the syllable breaks and the orphaned virama gets a
@@ -194,6 +202,25 @@ false positive:
   than to the runs the report is about. The corpus had only ever written hamza,
   which is one of the fourteen characters it names, so every case passed. Two
   minutes of fuzzing found it.
+- The same reordering, once narrowed, still had both of the report's two
+  conditions the other way about: it moved a modifier mark that did not *begin*
+  its class's run, and it put the marks written above the letter inside the ones
+  written below. No corpus writes two such marks on one letter. What settled it
+  was the report's own text, checked by enumerating base + two marks over the
+  classes it names and reading the order back out of HarfBuzz's glyphs.
 - That the universal engine inserts no dotted circle for a cluster it cannot
-  parse, which the Indic and Khmer shapers here do. Recorded in the tool as a
-  gap rather than a decision, and it needs the engine's cluster grammar.
+  parse, which the Indic and Khmer shapers here do — and, with it, that a
+  character the engine calls Other is not a gap between clusters but the start of
+  one. Both needed the engine's cluster *grammar* rather than a scan, and both
+  went when it arrived.
+- That a reserved code point was being given a category that broke the cluster
+  after it, which cost 34 Tibetan strings a spurious dotted circle.
+- That a multiple substitution of *no glyphs at all* — a deletion, which the
+  format's own text forbids and Noto Sans Javanese states anyway — was being
+  ignored, leaving a placeholder mark on the page beside every letter that went
+  through the rule.
+
+Three classes of difference are still open, all of them in mark *placement*
+rather than in clustering: a mark-to-mark attachment that HarfBuzz hangs on the
+base where this package stacks it, and a mark whose advance HarfBuzz takes from
+`dist` where this package leaves it at zero. They are what to look at next.
