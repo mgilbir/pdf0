@@ -71,3 +71,46 @@ layout engine rather than a shaper — it does its own itemization, bidi and fon
 fallback — so it is the wrong instrument for measuring positions, and this asks
 it only a question it cannot be confused about: how many glyphs, and is one of
 them a dotted circle.
+
+## The second question: five units of x
+
+`offsets.txt` asks a different thing of the same harness, now that it prints
+displacements as well as advances.
+
+One Tibetan string is the last difference between this package and HarfBuzz, and
+it is five units of x on one glyph. The y agrees, the target agrees, the anchors
+agree and the lookup agrees — HarfBuzz's x is the attachment delta against the
+target's *final* offset, and this package's is the same delta against the
+target's offset *at the moment the attachment was made*. Neither model produces
+both of HarfBuzz's numbers: attaching against final positions gets the x right
+and the y wrong by 887, and attaching against intermediate positions gets the y
+right and the x wrong by 5.
+
+So before writing more code, it is worth knowing whether HarfBuzz is even the
+one to match here.
+
+```sh
+swiftc -O -o shape shape.swift
+./shape ../harfbuzz/fonts/NotoSerifTibetan.ttf < offsets.txt
+```
+
+Three lines. The first two are controls that this package and HarfBuzz already
+agree on, so if CoreText does not match them the harness is measuring something
+else and the third line says nothing:
+
+| line | expected of both |
+| --- | --- |
+| 1 | `6,704  1328,0,-614,0` |
+| 2 | `96,641  1778,0,-591,-30  1530,0,-557,-367  1322,0,-62,-102` |
+
+The third line is the question. Both agree up to the last glyph:
+
+	92,579  1442,0,-706,-294  1738,0,-375,-316  1460,0,-649,-835
+	1422,0,-455,-1181  1328,0,-596,0  1323,0,?,-154
+
+- last glyph `1323,0,-157,-154` — CoreText agrees with HarfBuzz, and this
+  package has a defect worth chasing into HarfBuzz's propagation.
+- last glyph `1323,0,-152,-154` — CoreText agrees with *this package*, HarfBuzz
+  is the outlier, and the right answer is to leave it alone and record why.
+
+Anything else is a third answer and more interesting than either.
