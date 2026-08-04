@@ -368,6 +368,12 @@ type shaper struct {
 	// forms they make.
 	manualJoiners bool
 
+	// markSet is the mark glyph set the lookup being applied names, or -1. It
+	// travels on the shaper rather than through every matcher's arguments
+	// because it belongs to the lookup, and a shaper is copied per lookup — so
+	// a nested one gets its own and cannot leak it back out.
+	markSet int
+
 	// positioning says the contextual matching below is running for GPOS rather
 	// than GSUB, so that a rule which matched applies a *positioning* lookup.
 	// The matching is identical for the two — the subtable formats are the same
@@ -569,4 +575,10 @@ func (c *layoutCache) positioningFor(key string, build func() *layout) *layout {
 	}
 	c.positionings[key] = l
 	return l
+}
+
+// ignores reports whether the lookup being applied steps over a glyph, taking
+// the mark glyph set from the lookup rather than from the caller.
+func (sh shaper) ignores(flags int, g Glyph) bool {
+	return sh.l.ignoresIn(flags, sh.markSet, g)
 }

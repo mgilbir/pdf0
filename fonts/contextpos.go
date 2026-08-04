@@ -84,7 +84,8 @@ func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
 		return 0
 	}
 	lk := sh.l.gpos[idx]
-	if sh.l.ignores(lk.flags, buf[at]) {
+	sh.markSet = lk.markSet
+	if sh.ignores(lk.flags, buf[at]) {
 		return 0
 	}
 	for _, sub := range lk.subs {

@@ -283,7 +283,7 @@ type singleAdjust struct {
 func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 	for _, tag := range featureTags(gpos, feats.sel) {
 		for _, lookup := range featureLookups(gpos, tag, feats) {
-			kind, flags, subs := subtables(lookup, 9)
+			kind, flags, _, subs := subtables(lookup, 9)
 			switch kind {
 			case 4, 5:
 				// Mark-to-base and mark-to-ligature go into one ordered set:
@@ -305,9 +305,9 @@ func (l *layout) readGPOSAttachment(gpos []byte, feats tableFeatures) {
 			}
 			switch kind {
 			case 3:
-				l.cursFlags |= flags
+				l.cursFlags |= mergedFlags(flags)
 			case 4, 6:
-				l.markFlags |= flags
+				l.markFlags |= mergedFlags(flags)
 			}
 		}
 	}

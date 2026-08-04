@@ -200,7 +200,7 @@ test-bidi: bidi-tests
 clean-bidi-tests:
 	rm -rf $(BIDI_DIR)
 
-# Shaping checked against HarfBuzz, over five fonts.
+# Shaping checked against HarfBuzz, over six fonts.
 #
 # One font cannot cover this. The bundled face has no Arabic and no Khmer, and
 # those are the two shapers with the most to get wrong; testdata/harfbuzz/fonts
@@ -232,6 +232,7 @@ hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_khmer.py
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_javanese.py
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus_balinese.py
+	$(PYTHON) $(HARFBUZZ_DIR)/corpus_tibetan.py
 	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
 		fonts/notosans/NotoSans-Variable.ttf \
 		$(HARFBUZZ_DIR)/corpus.txt \
@@ -252,6 +253,10 @@ hbshaping:
 		$(HARFBUZZ_DIR)/fonts/NotoSansBalinese.ttf \
 		$(HARFBUZZ_DIR)/balinese.txt \
 		$(HARFBUZZ_DIR)/balinese.expected.txt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
+		$(HARFBUZZ_DIR)/fonts/NotoSerifTibetan.ttf \
+		$(HARFBUZZ_DIR)/tibetan.txt \
+		$(HARFBUZZ_DIR)/tibetan.expected.txt
 
 test-hbshaping:
 	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 ./fonts/

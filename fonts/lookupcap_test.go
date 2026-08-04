@@ -104,3 +104,56 @@ func gidsOfGlyphs(gs []Glyph) []int {
 	}
 	return out
 }
+
+// TestALookupSeesOnlyTheMarksItsSetNames pins what a mark glyph set is for.
+//
+// A lookup that names one sees the marks in it and steps over every other. It is
+// a finer thing than the mark attachment class in the flags — a class partitions
+// the marks, a set is any collection of them — and a font needing two
+// overlapping groups can only say so this way. Noto Serif Tibetan states twenty
+// sets and uses them to block a ligature in one context and allow it in another.
+func TestALookupSeesOnlyTheMarksItsSetNames(t *testing.T) {
+	const (
+		base   = 1
+		inSet  = 7 // a mark the set names
+		outSet = 8 // a mark it does not
+	)
+	l := &layout{
+		glyphClass: map[int]int{base: classBase, inSet: classMark, outSet: classMark},
+		markSets:   []map[int]bool{{inSet: true}},
+	}
+	const flags = flagUseMarkFilteringSet
+	for _, tc := range []struct {
+		gid  int
+		want bool
+		why  string
+	}{
+		{inSet, false, "a mark the set names is looked at"},
+		{outSet, true, "a mark it does not name is stepped over"},
+		{base, false, "a letter is not a mark and the set says nothing about it"},
+	} {
+		if got := l.ignoresIn(flags, 0, Glyph{GID: tc.gid}); got != tc.want {
+			t.Errorf("%s: ignoresIn gave %v, want %v", tc.why, got, tc.want)
+		}
+	}
+
+	// A set index that names nothing is the dangerous case, and it is what a
+	// merged flag word would produce: there is no room in one word to say which
+	// of a feature's lookups named which set. Answering "filter by a set nobody
+	// named" as "look at every mark" would apply rules meant for a few; this
+	// answers it the other way, by looking at none — which is why the bit is
+	// dropped when flags are merged rather than carried.
+	if !l.ignoresIn(flags, -1, Glyph{GID: inSet}) {
+		t.Error("a lookup naming no set looked at a mark anyway")
+	}
+	if !l.ignoresIn(flags, 9, Glyph{GID: inSet}) {
+		t.Error("a lookup naming a set that does not exist looked at a mark anyway")
+	}
+	if got := l.ignoresIn(mergedFlags(flags), -1, Glyph{GID: inSet}); got {
+		t.Error("a merged flag word still filtered by a set, so every mark of the " +
+			"feature would be stepped over; mergedFlags must drop the bit")
+	}
+	if got := l.ignoresIn(mergedFlags(flags|flagIgnoreMarks), -1, Glyph{GID: inSet}); !got {
+		t.Error("mergedFlags dropped more than the set bit: IgnoreMarks must survive it")
+	}
+}
