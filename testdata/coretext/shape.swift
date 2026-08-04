@@ -68,11 +68,24 @@ while let line = readLine(strippingNewline: true) {
         if n == 0 { continue }
         var glyphs = [CGGlyph](repeating: 0, count: n)
         var advances = [CGSize](repeating: .zero, count: n)
+        var positions = [CGPoint](repeating: .zero, count: n)
         CTRunGetGlyphs(run, CFRangeMake(0, 0), &glyphs)
         CTRunGetAdvances(run, CFRangeMake(0, 0), &advances)
+        CTRunGetPositions(run, CFRangeMake(0, 0), &positions)
+        // CoreText reports where each glyph is placed on the line; the others
+        // report how far it is displaced from where the pen already stands. The
+        // pen is the running sum of the advances, so the displacement is the
+        // difference — which is what makes the three comparable.
+        var pen = positions.first?.x ?? 0
         for i in 0..<n {
             if glyphs[i] == circle && circle != 0 { sawCircle = true }
-            fields.append("\(glyphs[i]),\(Int(advances[i].width.rounded()))")
+            let dx = Int((positions[i].x - pen).rounded())
+            let dy = Int(positions[i].y.rounded())
+            let adv = Int(advances[i].width.rounded())
+            fields.append(dx == 0 && dy == 0
+                          ? "\(glyphs[i]),\(adv)"
+                          : "\(glyphs[i]),\(adv),\(dx),\(dy)")
+            pen += advances[i].width
         }
     }
     print(fields.joined(separator: " ")
