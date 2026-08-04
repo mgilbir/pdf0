@@ -39,6 +39,13 @@ func (sh shaper) position(buf []Glyph) {
 		}
 		prev = i
 	}
+	// Contextual rules, which name a positioning lookup to apply where a
+	// sequence occurs. They run after the flat passes rather than in lookup
+	// order — see contextpos.go for what that costs and why no font examined
+	// pays it.
+	if len(l.contextualPos) > 0 {
+		sh.applyContextualPositioning(buf)
+	}
 	// Single adjustments: a glyph nudged wherever it appears.
 	for i := range buf {
 		if adj, ok := l.singlePos[buf[i].GID]; ok {

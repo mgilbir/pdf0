@@ -368,6 +368,13 @@ type shaper struct {
 	// forms they make.
 	manualJoiners bool
 
+	// positioning says the contextual matching below is running for GPOS rather
+	// than GSUB, so that a rule which matched applies a *positioning* lookup.
+	// The matching is identical for the two — the subtable formats are the same
+	// — and only what a matched rule then does differs, which is why one set of
+	// matchers serves both.
+	positioning bool
+
 	// ligIDs hands out the numbers that tie a ligature glyph to the marks that
 	// were inside it, so that positioning can put each mark against the part of
 	// the ligature it belongs to. It is a pointer because a shaper is copied
