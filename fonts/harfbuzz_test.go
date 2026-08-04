@@ -49,77 +49,119 @@ import (
 
 const harfbuzzDir = "../testdata/harfbuzz"
 
-// TestShapingAgreesWithHarfBuzz compares every case in the corpus.
-func TestShapingAgreesWithHarfBuzz(t *testing.T) {
-	corpus, expected, header := readHarfBuzzGolden(t)
+// harfbuzzCases are the fonts compared and the corpus each is compared over.
+//
+// One font cannot cover this. The bundled face has no Arabic and no Khmer in it,
+// and those are the two shapers with the most to get wrong — cursive joining
+// picks one of four forms for every letter from its neighbours, and the Khmer
+// model draws a syllable in an order the characters are not written in. Until
+// these two arrived neither had ever been compared against anything outside this
+// repository.
+//
+// The extra fonts are Google's Noto builds under the SIL Open Font License, the
+// same licence and the same publisher as the bundled face, with their copyright
+// notices beside them as that licence requires. They are test data and are not
+// embedded in anything this package ships.
+var harfbuzzCases = []struct {
+	name string
+	// font is a path under harfbuzzDir, or empty for the bundled face.
+	font, corpus, expected string
+}{
+	{"latin", "", "corpus.txt", "expected.txt"},
+	{"arabic", "fonts/NotoSansArabic.ttf", "arabic.txt", "arabic.expected.txt"},
+	{"khmer", "fonts/NotoSansKhmer.ttf", "khmer.txt", "khmer.expected.txt"},
+}
 
-	// The answers are about one particular font. Swapping the bundled font
-	// without regenerating would leave this asserting yesterday's answers about
-	// today's glyphs, and every one of them would be about the wrong glyph
-	// index — so this is a hard stop rather than a skip.
-	sum := sha256.Sum256(notoSansRegular)
+// TestShapingAgreesWithHarfBuzz compares every case in every corpus.
+func TestShapingAgreesWithHarfBuzz(t *testing.T) {
+	for _, tc := range harfbuzzCases {
+		t.Run(tc.name, func(t *testing.T) {
+			corpus, expected, header := readHarfBuzzGolden(t, tc.corpus, tc.expected)
+			f := harfbuzzFace(t, tc.font, header)
+
+			if len(corpus) != len(expected) {
+				t.Fatalf("%d strings in %s and %d lines of expectations", len(corpus), tc.corpus, len(expected))
+			}
+			if len(corpus) == 0 {
+				t.Fatalf("%s is empty, so this proves nothing", tc.corpus)
+			}
+
+			known := deliberateDifferences[tc.name]
+			unseen := map[string]bool{}
+			for s := range known {
+				unseen[s] = true
+			}
+			var differing, expectedDiffs int
+			for i, s := range corpus {
+				glyphs, _ := f.ShapeGlyphs(s)
+				same, why := sameAsHarfBuzz(f, glyphs, expected[i])
+				if _, listed := known[s]; listed {
+					delete(unseen, s)
+					if same {
+						t.Errorf("%s is listed as a deliberate difference and now agrees with "+
+							"HarfBuzz.\nRemove it: a stale exception is a hole in this test.",
+							describeRunes(s))
+						continue
+					}
+					expectedDiffs++
+					continue
+				}
+				if !same {
+					differing++
+					if differing <= 40 {
+						t.Errorf("%s\n  %s\n  pdf0     %s\n  harfbuzz %s",
+							describeRunes(s), why, describeGlyphs(glyphs), describeExpected(f, expected[i]))
+					}
+				}
+			}
+			if differing > 40 {
+				t.Errorf("... and %d more", differing-40)
+			}
+			for s := range unseen {
+				t.Errorf("%s is listed as a deliberate difference but is not in the corpus", describeRunes(s))
+			}
+			t.Logf("%d of %d agree, %d deliberate differences (harfbuzz %s)",
+				len(corpus)-differing-expectedDiffs, len(corpus), expectedDiffs, header["harfbuzz"])
+		})
+	}
+}
+
+// harfbuzzFace loads the face a case is compared over, and refuses to run
+// against a font the expectations were not generated from.
+//
+// That is a hard stop rather than a skip: every expectation is about a glyph
+// index, so a different font would leave this asserting yesterday's answers
+// about today's glyphs and every one of them would be about the wrong glyph.
+func harfbuzzFace(t *testing.T, path string, header map[string]string) *Face {
+	t.Helper()
+	data := notoSansRegular
+	if path != "" {
+		var err error
+		data, err = os.ReadFile(filepath.Join(harfbuzzDir, path))
+		if err != nil {
+			t.Fatalf("reading the font: %v\nRun `make hbshaping` after fetching it.", err)
+		}
+	}
+	sum := sha256.Sum256(data)
 	if got, want := hex.EncodeToString(sum[:]), header["font-sha256"]; got != want {
-		t.Fatalf("the expectations were generated against font %s and the bundled font is %s.\n"+
+		t.Fatalf("the expectations were generated against font %s and this one is %s.\n"+
 			"Run `make hbshaping` to regenerate them.", want, got)
 	}
-	if len(corpus) != len(expected) {
-		t.Fatalf("%d strings in corpus.txt and %d lines of expectations", len(corpus), len(expected))
-	}
-	if len(corpus) == 0 {
-		t.Fatal("the corpus is empty, so this test proves nothing")
-	}
-
-	f, err := NotoSans()
+	f, err := Load(data)
 	if err != nil {
-		t.Fatalf("loading: %v", err)
+		t.Fatalf("loading the font: %v", err)
 	}
-
-	var differing, known int
-	unseen := map[string]bool{}
-	for s := range deliberateDifferences {
-		unseen[s] = true
-	}
-	for i, s := range corpus {
-		want := expected[i]
-		glyphs, _ := f.ShapeGlyphs(s)
-		same, why := sameAsHarfBuzz(f, glyphs, want)
-		if _, expectedToDiffer := deliberateDifferences[s]; expectedToDiffer {
-			delete(unseen, s)
-			if same {
-				t.Errorf("%s is listed as a deliberate difference and now agrees with "+
-					"HarfBuzz.\nRemove it from deliberateDifferences: a stale exception "+
-					"is a hole in this test.", describeRunes(s))
-				continue
-			}
-			known++
-			continue
-		}
-		if !same {
-			differing++
-			if differing <= 40 {
-				t.Errorf("%s\n  %s\n  pdf0     %s\n  harfbuzz %s",
-					describeRunes(s), why, describeGlyphs(glyphs), describeExpected(f, want))
-			}
-		}
-	}
-	if differing > 40 {
-		t.Errorf("... and %d more", differing-40)
-	}
-	for s := range unseen {
-		t.Errorf("%s is listed as a deliberate difference but is not in the corpus", describeRunes(s))
-	}
-	t.Logf("HarfBuzz agreement: %d of %d cases, %d deliberate differences (harfbuzz %s)",
-		len(corpus)-differing-known, len(corpus), known, header["harfbuzz"])
+	return f
 }
 
 // deliberateDifferences are the cases where this package answers something other
-// than HarfBuzz on purpose, each with the reason.
+// than HarfBuzz on purpose, per corpus, each with the reason.
 //
 // The list is checked in both directions: a case in it that agrees with HarfBuzz
 // fails, and so does one that is not in the corpus. An exception that cannot go
 // stale is a documented decision; one that can is a hole.
 //
-// # The one entry, thirteen times
+// # The Latin entries: one thing, thirteen times
 //
 // A character nothing is drawn for, written between a consonant and its virama.
 //
@@ -131,27 +173,27 @@ func TestShapingAgreesWithHarfBuzz(t *testing.T) {
 // Both readings are defensible and they differ only on malformed text. Unicode
 // defines the property as characters that "should be ignored in rendering",
 // which is what this package does; HarfBuzz gives the syllable model the last
-// word and shows the reader that something is wrong. The choice here is the one
-// that puts a well-formed conjunct on the page rather than a dotted circle,
-// because a document is written once and read many times, and a reader cannot
-// fix the text.
-//
-// Nothing else in the corpus differs. Ordinary text — an ignorable between
-// words, around a word, inside a Latin one — agrees exactly.
-var deliberateDifferences = map[string]string{
-	"\u0915\u00AD\u094D\u0937":     "soft hyphen inside a Devanagari cluster",
-	"\u0915\u034F\u094D\u0937":     "combining grapheme joiner inside a Devanagari cluster",
-	"\u0915\u200B\u094D\u0937":     "zero width space inside a Devanagari cluster",
-	"\u0915\u200E\u094D\u0937":     "left-to-right mark inside a Devanagari cluster",
-	"\u0915\u202C\u094D\u0937":     "pop directional formatting inside a Devanagari cluster",
-	"\u0915\u2060\u094D\u0937":     "word joiner inside a Devanagari cluster",
-	"\u0915\u2064\u094D\u0937":     "invisible plus inside a Devanagari cluster",
-	"\u0915\u2069\u094D\u0937":     "pop directional isolate inside a Devanagari cluster",
-	"\u0915\uFE00\u094D\u0937":     "variation selector 1 inside a Devanagari cluster",
-	"\u0915\uFE0F\u094D\u0937":     "variation selector 16 inside a Devanagari cluster",
-	"\u0915\uFEFF\u094D\u0937":     "byte order mark inside a Devanagari cluster",
-	"\u0915\U0001D173\u094D\u0937": "musical begin beam inside a Devanagari cluster",
-	"\u0915\U000E0041\u094D\u0937": "tag letter inside a Devanagari cluster",
+// word. The choice here is the one that puts a well-formed conjunct on the page
+// rather than a dotted circle, because a document is written once and read many
+// times, and a reader cannot fix the text.
+var deliberateDifferences = map[string]map[string]string{
+	"latin": {
+		"\u0915\u00AD\u094D\u0937":     "soft hyphen inside a Devanagari cluster",
+		"\u0915\u034F\u094D\u0937":     "combining grapheme joiner inside a Devanagari cluster",
+		"\u0915\u200B\u094D\u0937":     "zero width space inside a Devanagari cluster",
+		"\u0915\u200E\u094D\u0937":     "left-to-right mark inside a Devanagari cluster",
+		"\u0915\u202C\u094D\u0937":     "pop directional formatting inside a Devanagari cluster",
+		"\u0915\u2060\u094D\u0937":     "word joiner inside a Devanagari cluster",
+		"\u0915\u2064\u094D\u0937":     "invisible plus inside a Devanagari cluster",
+		"\u0915\u2069\u094D\u0937":     "pop directional isolate inside a Devanagari cluster",
+		"\u0915\uFE00\u094D\u0937":     "variation selector 1 inside a Devanagari cluster",
+		"\u0915\uFE0F\u094D\u0937":     "variation selector 16 inside a Devanagari cluster",
+		"\u0915\uFEFF\u094D\u0937":     "byte order mark inside a Devanagari cluster",
+		"\u0915\U0001D173\u094D\u0937": "musical begin beam inside a Devanagari cluster",
+		"\u0915\U000E0041\u094D\u0937": "tag letter inside a Devanagari cluster",
+	},
+	"arabic": {},
+	"khmer":  {},
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.
@@ -224,11 +266,11 @@ func sameAsHarfBuzz(f *Face, got []Glyph, want []hbGlyph) (bool, string) {
 
 // readHarfBuzzGolden reads the corpus and the expectations, together with the
 // header that says what produced them.
-func readHarfBuzzGolden(t *testing.T) (corpus []string, expected [][]hbGlyph, header map[string]string) {
+func readHarfBuzzGolden(t *testing.T, corpusName, expectedName string) (corpus []string, expected [][]hbGlyph, header map[string]string) {
 	t.Helper()
-	corpus = readNonEmptyLines(t, filepath.Join(harfbuzzDir, "corpus.txt"))
+	corpus = readNonEmptyLines(t, filepath.Join(harfbuzzDir, corpusName))
 
-	path := filepath.Join(harfbuzzDir, "expected.txt")
+	path := filepath.Join(harfbuzzDir, expectedName)
 	file, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("reading %s: %v\nRun `make hbshaping` to generate it.", path, err)

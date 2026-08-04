@@ -33,7 +33,7 @@ import (
 // corpus through both, which is what makes this more than a spot check: it is
 // five thousand strings chosen to make shaping decide something.
 func TestEveryWayOfMeasuringAgreesWithEveryWayOfDrawing(t *testing.T) {
-	corpus, _, _ := readHarfBuzzGolden(t)
+	corpus, _, _ := readHarfBuzzGolden(t, "corpus.txt", "expected.txt")
 	f, err := NotoSans()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
@@ -98,7 +98,7 @@ func (f *Face) widthOfSpans(spans []content.TextSpan, size float64) float64 {
 // different glyphs — a ligature missed here, an alternate taken there — so the
 // widths agreeing is not enough. The codes have to be the glyphs.
 func TestShapeAndShapeGlyphsProduceTheSameGlyphs(t *testing.T) {
-	corpus, _, _ := readHarfBuzzGolden(t)
+	corpus, _, _ := readHarfBuzzGolden(t, "corpus.txt", "expected.txt")
 	f, err := NotoSans()
 	if err != nil {
 		t.Fatalf("loading: %v", err)
