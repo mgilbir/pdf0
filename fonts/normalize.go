@@ -260,6 +260,7 @@ func (f *Face) normalize(runes []rune, offsets []int, syllabic, indicModel, arab
 		f:        f,
 		indic:    indicModel,
 		arabic:   arabic,
+		syllabic: syllabic,
 		shortest: !syllabic,
 		out:      make([]rune, 0, len(runes)+4),
 		off:      make([]int, 0, len(runes)+4),
@@ -328,11 +329,15 @@ type normalizer struct {
 	// shortest says a character the face already has is emitted as it is rather
 	// than taken apart. It is the general path's setting and not the Indic one.
 	shortest bool
-	// indic says the two disagreements between the Indic model and Unicode's own
-	// tables apply — see decompose and compose below. It is narrower than
-	// shortest: Khmer and Myanmar are fully decomposed like the Indic scripts and
-	// share none of those disagreements.
+	// indic says the one disagreement between the Indic model and Unicode's own
+	// tables applies — see compose below. It is narrower than shortest: Khmer,
+	// Myanmar and the scripts the universal engine covers are fully decomposed
+	// like the Indic ones and do not share it.
 	indic bool
+	// syllabic says the run is bound for a shaper that reorders, and so that a
+	// vowel sign taken apart must not be put back together. Every such shaper
+	// needs that; only Indic needs what indic covers.
+	syllabic bool
 	// arabic says the run is Arabic, so that the mark ordering the script has of
 	// its own applies on top of Unicode's — see reorderArabicMarks.
 	arabic bool
@@ -490,13 +495,23 @@ func (n *normalizer) decompose(ab rune) (a, b rune, ok bool) {
 // compose is Unicode's canonical composition, less what the Indic model keeps
 // apart and plus the one thing it wants back.
 func (n *normalizer) compose(a, b rune) (rune, bool) {
-	if n.indic {
-		// A vowel sign that was split into the marks it is drawn as must not be
-		// put back together: its parts are on different sides of the letter, and
-		// the model cannot place it whole.
+	// A vowel sign that was split into the marks it is drawn as must not be put
+	// back together: its parts go on different sides of the letter, and a model
+	// that reorders cannot place it whole. Balinese U+1B40 is the plain case —
+	// it is a taling drawn before the letter and a tedung drawn after, and
+	// composing it again leaves both on whichever side the whole one claims.
+	//
+	// This is about reordering, not about Indic: every shaper that moves a
+	// syllable's glyphs needs it. An Indic run always is one, so naming both
+	// says the same thing twice — deliberately, because the Indic flag is what
+	// the rule was first written under and a reader looking for it should find
+	// it here.
+	if n.syllabic || n.indic {
 		if _, mark := charClassOf(a); mark {
 			return 0, false
 		}
+	}
+	if n.indic {
 		// BENGALI LETTER YYA is a composition exclusion, so Unicode will not
 		// compose it — but a Bengali font draws it as one letter, and every
 		// shaper puts it back.

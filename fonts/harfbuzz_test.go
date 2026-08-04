@@ -84,6 +84,12 @@ var harfbuzzCases = []struct {
 		corpus: "khmer.txt", expected: "khmer.expected.txt"},
 	{name: "javanese", font: "fonts/NotoSansJavanese.ttf",
 		corpus: "javanese.txt", expected: "javanese.expected.txt"},
+	// A second script for the universal engine, and the reason there is one:
+	// Javanese is what the engine was written against and reached every case,
+	// while Balinese — its close relative — was wrong in 66 of 764 at that
+	// point. One script cannot tell a general model from an overfitted one.
+	{name: "balinese", font: "fonts/NotoSansBalinese.ttf",
+		corpus: "balinese.txt", expected: "balinese.expected.txt"},
 }
 
 // TestShapingAgreesWithHarfBuzz compares every case in every corpus.
@@ -219,6 +225,7 @@ var deliberateDifferences = map[string]map[string]string{
 	"arabic":   {},
 	"khmer":    {},
 	"javanese": {},
+	"balinese": {},
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.
