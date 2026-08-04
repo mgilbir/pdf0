@@ -47,6 +47,41 @@ type Glyph struct {
 	// letter — in GDEF's own numbering. It is what a lookup flag is read
 	// against when the font classifies nothing itself; see layout.classOf.
 	class int
+
+	// join is the positional form this glyph takes in a cursive script, decided
+	// from the characters either side of it before anything was substituted.
+	//
+	// It is carried on the glyph rather than worked out when it is needed
+	// because by then it cannot be: the substitutions that come first change how
+	// many glyphs there are, so nothing maps back to the characters the form was
+	// decided from. See arabic.go.
+	join joinForm
+}
+
+// joinForm is the shape a letter takes from its neighbours.
+type joinForm uint8
+
+const (
+	joinNone joinForm = iota // not a letter of a cursive script
+	joinIsolated
+	joinFinal
+	joinMedial
+	joinInitial
+)
+
+// tag is the feature a font states this form under.
+func (j joinForm) tag() string {
+	switch j {
+	case joinIsolated:
+		return featIsolated
+	case joinFinal:
+		return featFinal
+	case joinMedial:
+		return featMedial
+	case joinInitial:
+		return featInitial
+	}
+	return ""
 }
 
 // ligatureRef says what a glyph has to do with a ligature.
@@ -138,7 +173,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string) 
 	// each cluster's marks into canonical order. It runs before any glyph is
 	// chosen because it decides which characters the font is asked about at all.
 	// See normalize.go.
-	runes, offsets = f.normalize(runes, offsets, usesSyllabicShaper(script), indicConfigFor(script) != nil)
+	runes, offsets = f.normalize(runes, offsets, usesSyllabicShaper(script), indicConfigFor(script) != nil,
+		scriptSelects(script, "arab"))
 	// And the characters nothing is drawn for go now: after normalisation, so
 	// that a combining grapheme joiner has already stopped what it was written
 	// to stop, and before the buffer is built, so that no rule of the font is
@@ -176,11 +212,12 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string) 
 	if out, ok := sh.shapeSyllabic(buf, runes, script); ok {
 		buf = out
 	} else {
-		// Joining first: the joined forms are what a cursive script's ligatures
-		// and contextual rules are written against. The join controls have said
-		// all they have to say once it has run, and are taken out before any
+		// Which form each letter takes is decided now, while the glyphs still
+		// correspond to the characters it is decided from, and recorded on the
+		// glyphs so that it survives what follows. The join controls have said
+		// all they have to say once that is done, and are taken out before any
 		// substitution can see them — see ignorable.go.
-		buf = sh.applyJoining(buf, runes)
+		markJoiningForms(buf, runes)
 		buf = hideJoiners(buf, runes)
 		buf = sh.substitute(buf)
 	}
@@ -360,20 +397,31 @@ func MeasureGlyphs(glyphs []Glyph, size float64) float64 {
 	return total * size / 1000
 }
 
-// defaultFeatures are the substitution features applied to every run, in the
-// order a shaper applies them.
+// The substitution features applied to every run, in the order a shaper applies
+// them, split by where the positional forms of a cursive script go between them.
 //
 // They are the ones that are not a matter of taste. 'ccmp' composes and
 // decomposes so the later rules have the glyphs they are written against;
-// 'rlig' is required by the script; 'liga' and 'clig' are the ligatures a reader
-// expects to see; 'calt' picks the variant that fits its neighbours. A font that
-// declares them means them, which is what separates these from 'smcp' or 'onum'
-// — those change what the text says it is, and wait to be asked for (ShapeWith).
+// 'locl' is the letterform a language expects; 'rlig' is required by the script;
+// 'liga' and 'clig' are the ligatures a reader expects to see; 'calt' and 'rclt'
+// pick the variant that fits its neighbours. A font that declares them means
+// them, which is what separates these from 'smcp' or 'onum' — those change what
+// the text says it is, and wait to be asked for (ShapeWith).
 //
 // The order matters and is not alphabetical: composition before the rules that
 // read its output, required ligatures before optional ones, contextual
 // alternates last so they see the glyphs that survived.
-var defaultFeatures = []string{"ccmp", "rlig", "liga", "clig", "calt"}
+//
+// Where the forms go is the part that is easy to get wrong and expensive to get
+// wrong. They come *after* 'ccmp', because a real Arabic font does not state
+// them over the letters: Noto Sans Arabic splits every letter into a skeleton
+// and its dots in 'ccmp' and states the four forms over the skeletons. Applying
+// the forms first finds nothing, and every letter is set in its isolated shape —
+// which is legible only to someone who already knows what it should say.
+var (
+	beforeJoiningFeatures = []string{"ccmp", "locl"}
+	afterJoiningFeatures  = []string{"rlig", "rclt", "calt", "liga", "clig"}
+)
 
 // substitute runs the GSUB lookups over a shaped buffer, preserving the cluster
 // of the first glyph of each run it replaces so that a ligature still maps back
@@ -394,10 +442,7 @@ func (sh shaper) applyNamedFeatures(buf []Glyph, tags []string) []Glyph {
 }
 
 func (sh shaper) substitute(buf []Glyph) []Glyph {
-	for _, tag := range defaultFeatures {
-		if lookups := sh.l.featureLookups[tag]; len(lookups) > 0 {
-			buf = sh.applyContextual(buf, lookups)
-		}
-	}
-	return buf
+	buf = sh.applyNamedFeatures(buf, beforeJoiningFeatures)
+	buf = sh.applyJoiningForms(buf)
+	return sh.applyNamedFeatures(buf, afterJoiningFeatures)
 }

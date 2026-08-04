@@ -89,10 +89,15 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 				out = append(out, buf[:at]...)
 				for _, gid := range reps {
 					// Each part still stands for the character the whole stood
-					// for, so it is classified as that character was.
+					// for, so it is classified as that character was and takes
+					// the same positional form. The second is what makes a
+					// cursive script work at all: 'ccmp' splitting a letter into
+					// a skeleton and its dots must leave the skeleton still
+					// knowing it is the first letter of a word, because that is
+					// the glyph the font states the form over.
 					out = append(out, Glyph{
 						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
-						class: buf[at].class,
+						class: buf[at].class, join: buf[at].join,
 					})
 				}
 				out = append(out, buf[at+1:]...)
