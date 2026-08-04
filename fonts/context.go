@@ -96,13 +96,8 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 				return 1, buf
 			}
 		case 4:
-			if n, gid, ok := sh.ligatureAt(sub, buf, at, lk.flags); ok {
-				out := append(buf[:at:at], Glyph{
-					GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
-				})
-				out = append(out, buf[at+n:]...)
-				sh.resized(at, 1-n)
-				return 1, out
+			if comps, gid, ok := sh.ligatureAt(sub, buf, at, lk.flags); ok {
+				return sh.formLigature(buf, at, gid, comps)
 			}
 		case 5:
 			if n, out, ok := sh.sequenceContext(sub, buf, at, lk.flags, depth); ok {
@@ -201,18 +196,22 @@ func alternateSubstAt(sub []byte, gid int) (int, bool) {
 }
 
 // ligatureAt reads a type 4 subtable and reports the ligature starting at a
-// position, with how many glyphs it consumes.
-func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, bool) {
+// position, together with the positions of the glyphs it is made of.
+//
+// The positions rather than a count, because a lookup that ignores marks
+// matches its components *across* them and the ones in between are not part of
+// the rule. Only what the font named is replaced; formLigature keeps the rest.
+func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) ([]int, int, bool) {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
-		return 0, 0, false
+		return nil, 0, false
 	}
 	i, ok := coverageIndex(sub, font.Be16(sub, 2), buf[at].GID)
 	if !ok || i >= font.Be16(sub, 4) || 6+2*i+2 > len(sub) {
-		return 0, 0, false
+		return nil, 0, false
 	}
 	off := font.Be16(sub, 6+2*i)
 	if off <= 0 || off+2 > len(sub) {
-		return 0, 0, false
+		return nil, 0, false
 	}
 	set := sub[off:]
 	for j := 0; j < font.Be16(set, 0); j++ {
@@ -230,6 +229,8 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, b
 		}
 		// Match the components against the glyphs after this one, skipping
 		// those the lookup ignores.
+		comps := make([]int, 1, compCount)
+		comps[0] = at
 		pos := at
 		matched := true
 		for k := 0; k < compCount-1; k++ {
@@ -243,12 +244,66 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) (int, int, b
 				matched = false
 				break
 			}
+			comps = append(comps, pos)
 		}
 		if matched {
-			return pos - at + 1, font.Be16(lig, 0), true
+			return comps, font.Be16(lig, 0), true
 		}
 	}
-	return 0, 0, false
+	return nil, 0, false
+}
+
+// formLigature replaces the glyphs a ligature names with the ligature glyph,
+// keeping everything the lookup stepped over.
+//
+// The skipped glyphs are moved to after the ligature, in the order they were
+// in. They have to go somewhere — a mark cannot stay between two glyphs that
+// are now one — and after is where OpenType puts them and where a mark
+// attachment lookup will then find them, since it looks back for its base.
+//
+// All of it becomes one cluster. The ligature and the marks that were inside it
+// came from a stretch of text that can no longer be divided: the accent belongs
+// to a letter that is now half a glyph, so there is no position between them for
+// a caret to sit at, and saying otherwise would let a caller offer one.
+//
+// It reports 1 consumed, not the span. The walk continues at the glyph after
+// the ligature, which is the first thing that was kept — the next lookup gets to
+// see it, and the walk always moves, so a font whose ligature product matches
+// its own rule again cannot hold it in place.
+func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Glyph) {
+	last := comps[len(comps)-1]
+
+	// The cluster is the earliest of everything the ligature spans, kept glyphs
+	// included: it is where the indivisible stretch of text begins.
+	cluster := buf[at].Cluster
+	for i := at; i <= last; i++ {
+		if buf[i].Cluster < cluster {
+			cluster = buf[i].Cluster
+		}
+	}
+
+	isComponent := make([]bool, last-at+1)
+	for _, p := range comps {
+		isComponent[p-at] = true
+	}
+
+	out := make([]Glyph, 0, len(buf)-len(comps)+1)
+	out = append(out, buf[:at]...)
+	out = append(out, Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid)})
+	kept := 0
+	for i := at + 1; i <= last; i++ {
+		if isComponent[i-at] {
+			continue
+		}
+		g := buf[i]
+		g.Cluster = cluster
+		out = append(out, g)
+		kept++
+	}
+	out = append(out, buf[last+1:]...)
+
+	sh.resized(at, (1+kept)-(last-at+1))
+	return 1, out
 }
 
 // nextNotIgnored is the next position a lookup with these flags looks at while
