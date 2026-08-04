@@ -67,9 +67,11 @@ var harfbuzzCases = []struct {
 	// font is a path under harfbuzzDir, or empty for the bundled face.
 	font, corpus, expected string
 	// agree is how many cases must match. Zero means every one of them, which
-	// is what a script this package shapes is held to. A number is a ratchet for
-	// a script it does not shape yet: it may only go up, so the work can land in
-	// pieces without any piece being able to undo an earlier one.
+	// is what a script this package shapes is held to, and what all four are
+	// held to now. A number is a ratchet for a script it does not shape yet: it
+	// may only go up, so work can land in pieces without any piece being able to
+	// undo an earlier one — Javanese carried one at 438 while the Universal
+	// Shaping Engine was being written, and reached 894 of 894.
 	agree int
 	// why explains a ratchet. A bare number in a test is a number nobody can
 	// judge; this says what is missing and what would remove it.
@@ -81,13 +83,7 @@ var harfbuzzCases = []struct {
 	{name: "khmer", font: "fonts/NotoSansKhmer.ttf",
 		corpus: "khmer.txt", expected: "khmer.expected.txt"},
 	{name: "javanese", font: "fonts/NotoSansJavanese.ttf",
-		corpus: "javanese.txt", expected: "javanese.expected.txt",
-		agree: 438,
-		why: "Javanese is shaped by the Universal Shaping Engine, which this " +
-			"package does not implement. Of the 456 that differ, 359 are " +
-			"substitutions the per-syllable feature set never applies and 94 are " +
-			"glyphs left in the order they were written rather than the order " +
-			"they are drawn. Raise this as the engine lands; it may not fall."},
+		corpus: "javanese.txt", expected: "javanese.expected.txt"},
 }
 
 // TestShapingAgreesWithHarfBuzz compares every case in every corpus.

@@ -30,7 +30,8 @@ package fonts
 // dispatch below and the normalisation pass ask this rather than each deciding
 // for itself.
 func usesSyllabicShaper(script uint16) bool {
-	return indicConfigFor(script) != nil || isKhmerScript(script) || isMyanmarScript(script)
+	return indicConfigFor(script) != nil || isKhmerScript(script) ||
+		isMyanmarScript(script) || usesUniversalShaper(script)
 }
 
 // shapeSyllabic shapes a run by whichever syllabic model its script belongs to,
@@ -51,6 +52,9 @@ func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16) ([]Glyp
 	}
 	if isMyanmarScript(script) {
 		return sh.shapeMyanmar(buf, runes), true
+	}
+	if usesUniversalShaper(script) {
+		return sh.shapeUniversal(buf, runes), true
 	}
 	return buf, false
 }
