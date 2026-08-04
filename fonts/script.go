@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/mgilbir/pdf0/internal/font"
 )
@@ -406,23 +407,12 @@ func (f *Face) layoutFor(script uint16) *layout {
 		return f.layout
 	}
 	gsubKey, gposKey := selectionKey(gsubSel), selectionKey(gposSel)
-	if l, ok := f.scriptLayouts[gsubKey+"/"+gposKey]; ok {
-		return l
-	}
-	pos, ok := f.positionings[gposKey]
-	if !ok {
-		pos = readPositioning(f.layoutTables, gposSel)
-		if f.positionings == nil {
-			f.positionings = map[string]*layout{}
-		}
-		f.positionings[gposKey] = pos
-	}
-	l := readLayout(f.layoutTables, gsubSel, pos)
-	if f.scriptLayouts == nil {
-		f.scriptLayouts = map[string]*layout{}
-	}
-	f.scriptLayouts[gsubKey+"/"+gposKey] = l
-	return l
+	return f.cache.layoutFor(gsubKey, gposKey, func() *layout {
+		pos := f.cache.positioningFor(gposKey, func() *layout {
+			return readPositioning(f.layoutTables, gposSel)
+		})
+		return readLayout(f.layoutTables, gsubSel, pos)
+	})
 }
 
 // selectionKey names a selection, so that two scripts selecting the same
@@ -443,4 +433,67 @@ func selectionKey(sel featureSet) string {
 		b.WriteByte(',')
 	}
 	return b.String()
+}
+
+// layoutCache holds a face's readings of its own layout tables, keyed by what
+// each selection came to.
+//
+// It is guarded because faces made for separate documents share one — the
+// tables are the font's and are read the same way every time, so reading them
+// per document is waste. A layout is written only by the readers that build it,
+// so the lock protects the map rather than the values in it, and is taken once
+// per distinct selection rather than per run.
+type layoutCache struct {
+	mu            sync.Mutex
+	positionings  map[string]*layout
+	scriptLayouts map[string]*layout
+}
+
+func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *layout {
+	key := gsubKey + "/" + gposKey
+	c.mu.Lock()
+	if l, ok := c.scriptLayouts[key]; ok {
+		c.mu.Unlock()
+		return l
+	}
+	c.mu.Unlock()
+
+	// Built outside the lock: reading a large font's tables takes milliseconds,
+	// and holding the lock across it would serialise every goroutine shaping in
+	// any script. Two arriving together may both build; they build the same
+	// value from the same immutable bytes, and the first one stored wins.
+	l := build()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if existing, ok := c.scriptLayouts[key]; ok {
+		return existing
+	}
+	if c.scriptLayouts == nil {
+		c.scriptLayouts = map[string]*layout{}
+	}
+	c.scriptLayouts[key] = l
+	return l
+}
+
+func (c *layoutCache) positioningFor(key string, build func() *layout) *layout {
+	c.mu.Lock()
+	if l, ok := c.positionings[key]; ok {
+		c.mu.Unlock()
+		return l
+	}
+	c.mu.Unlock()
+
+	l := build()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if existing, ok := c.positionings[key]; ok {
+		return existing
+	}
+	if c.positionings == nil {
+		c.positionings = map[string]*layout{}
+	}
+	c.positionings[key] = l
+	return l
 }

@@ -109,10 +109,13 @@ type Face struct {
 	// scriptLayouts cache those readings, by what each selected. language names
 	// the language system to select within a script; empty is the font's
 	// default.
-	layoutTables  map[string][]byte
-	positionings  map[string]*layout
-	scriptLayouts map[string]*layout
-	language      string
+	layoutTables map[string][]byte
+	// cache holds the per-script readings. It is a pointer because faces made
+	// for separate documents share one parse and therefore share these too:
+	// what a font declares for a script does not depend on the document, and
+	// reading tens of thousands of kern pairs again per document is pure waste.
+	cache    *layoutCache
+	language string
 
 	used map[int]bool // glyph indices this face has encoded
 }
@@ -214,7 +217,7 @@ func Load(data []byte) (*Face, error) {
 	// ones a font with no ScriptList falls back to, so they are cached under
 	// the key a nil selection gets rather than read a second time for it.
 	pos := readPositioning(f.layoutTables, nil)
-	f.positionings = map[string]*layout{selectionKey(nil): pos}
+	f.cache = &layoutCache{positionings: map[string]*layout{selectionKey(nil): pos}}
 	f.layout = readLayout(f.layoutTables, nil, pos)
 	f.name = postScriptName(tables["name"])
 	if f.name == "" {
@@ -583,4 +586,33 @@ func (f *Face) GlyphIDForTest(r rune) (int, bool) {
 	}
 	gid, ok := f.prog.Cmap[r]
 	return gid, ok && gid != 0
+}
+
+// forDocument returns a face that shares this one's parsing but keeps its own
+// record of what a document used.
+//
+// The split is between what the *font* says and what a *document* did with it.
+// The program, the tables and the rules read out of them are facts about the
+// font: reading them again for a second document produces the same answer at
+// the same cost, and for a face of any size that cost is most of what loading
+// one comes to. A layout is built by its readers and never written to
+// afterwards, so sharing it is sharing a value, not a variable.
+//
+// The set of glyphs encoded is the opposite. It is what the subset is computed
+// from, so two documents sharing one would each embed a font carrying the
+// other's glyphs — and, worse, a /CIDSet describing a set neither of them has.
+// That one is always fresh.
+//
+// The per-script layout caches are fresh too. They are lazily filled, so
+// sharing them across faces would be a write from two goroutines to one map;
+// the alternative is a lock on a path taken once per script per document, and
+// the reading they save is small beside the reading forDocument already avoids.
+func (f *Face) forDocument() *Face {
+	out := *f
+	out.used = map[int]bool{}
+	// The cache is deliberately *kept*, not reset: it holds readings of the
+	// font's own tables, which no document can change. A layout is written only
+	// by its readers, so what is shared is a value; the mutex is there because
+	// the map is filled lazily, not because the layouts are mutable.
+	return &out
 }

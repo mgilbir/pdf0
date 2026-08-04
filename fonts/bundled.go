@@ -3,6 +3,7 @@ package fonts
 import (
 	_ "embed"
 	"fmt"
+	"sync"
 )
 
 // The bundled face.
@@ -53,12 +54,29 @@ var notoSansLicense string
 // which is what subsetting is computed from, so sharing one between documents
 // would put each document's glyphs into the other's font.
 func NotoSans() (*Face, error) {
-	f, err := Load(notoSansRegular)
-	if err != nil {
-		return nil, fmt.Errorf("fonts: the bundled Noto Sans could not be read: %w", err)
+	notoOnce.Do(func() { notoPrototype, notoErr = Load(notoSansRegular) })
+	if notoErr != nil {
+		return nil, fmt.Errorf("fonts: the bundled Noto Sans could not be read: %w", notoErr)
 	}
-	return f, nil
+	return notoPrototype.forDocument(), nil
 }
+
+// The parsed prototype, read once and never handed out.
+//
+// Reading this face cost 16 ms and 9.6 MB on every call, and a program that
+// writes documents calls it once per document. Nine tenths of that is reading
+// the layout tables — a face this size states some sixty thousand kern pairs —
+// and none of it depends on the document: the parsed program, the tables and
+// the rules read out of them are the same every time.
+//
+// What is *not* the same is the set of glyphs the document asked for, which is
+// what subsetting is computed from. So the parse is shared and the record of
+// use is not; see Face.forDocument.
+var (
+	notoOnce      sync.Once
+	notoPrototype *Face
+	notoErr       error
+)
 
 // NotoSansSimple returns the bundled face embedded as a simple font: one byte
 // per character, WinAnsiEncoding.
