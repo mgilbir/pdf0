@@ -45,7 +45,7 @@ func TestKerningIsRead(t *testing.T) {
 	if !f.HasKerning() {
 		t.Fatal("the font's GPOS kern feature was not read")
 	}
-	if got := f.layout.kern[[2]int{1, 2}]; got != -80 {
+	if got := f.layout.kern[[2]int{1, 2}]; got.firstAdvance != -80 {
 		t.Errorf("kern(A,V) = %d, want -80", got)
 	}
 	if _, ok := f.layout.kern[[2]int{2, 1}]; ok {

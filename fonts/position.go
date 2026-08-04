@@ -24,8 +24,17 @@ func (sh shaper) position(buf []Glyph) {
 			continue
 		}
 		if prev >= 0 {
-			if k, ok := l.kern[[2]int{buf[prev].GID, buf[i].GID}]; ok && k != 0 {
-				buf[prev].XAdvance += sh.f.scale(k)
+			if k, ok := l.kern[[2]int{buf[prev].GID, buf[i].GID}]; ok {
+				// Both glyphs, and both what a record can say about each. A
+				// placement moves the glyph and an advance moves what comes
+				// after it, and a right-to-left font uses both for what a Latin
+				// one does with the advance alone.
+				buf[prev].XOffset += sh.f.scale(int(k.firstX))
+				buf[prev].YOffset += sh.f.scale(int(k.firstY))
+				buf[prev].XAdvance += sh.f.scale(int(k.firstAdvance))
+				buf[i].XOffset += sh.f.scale(int(k.secondX))
+				buf[i].YOffset += sh.f.scale(int(k.secondY))
+				buf[i].XAdvance += sh.f.scale(int(k.secondAdvance))
 			}
 		}
 		prev = i
