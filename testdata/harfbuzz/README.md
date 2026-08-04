@@ -284,22 +284,52 @@ on the one before it and HarfBuzz leaves it on the base. The smallest case is
 
 ## What has been ruled out, by measurement
 
-Three readings, each of which fitted the case that suggested it and then failed
-elsewhere. They are written down so the fourth attempt does not repeat them.
+Four readings, each of which fitted the case that suggested it and then failed
+elsewhere. They are written down so the fifth attempt does not repeat them.
 
 - **Not the ligature rule.** MarkMarkPos matches only marks "belonging to the
   same base, or same component of the same ligature". These marks have no
   ligature ids, so that branch passes.
-- **Not the mark filtering set.** The lookup names set 3 and both marks are in
-  it, so nothing is skipped and the pair is covered.
+- **Not the mark filtering set.** Lookup 19 names set 15 and the mark, the
+  glyph before it and the one before that are all in it, so nothing is skipped.
 - **Not the order the attachment lookups are read in.** That was genuinely
   wrong — feature order rather than lookup-list order — and correcting it moved
   none of these.
+- **Not "the lookup does not fire".** It does. HarfBuzz's own trace says
+  `start lookup 19 feature 'blwm'` with no "skipped" beside it.
 
-The lookup that would place the glyph is `abvm` lookup 11, a MarkMarkPos that
-covers the pair. Disabling `abvm` in HarfBuzz changes nothing, and disabling
-`mark` changes everything: so the placement comes from mark-to-base and lookup 11
-does not fire. *Why it does not fire is the open question.*
+## What the trace says, and where it points
+
+uharfbuzz's message callback reports every lookup, which is more than it first
+appeared to — the earlier note here said it reported only the table boundaries,
+and that was a filter reading `"GPOS" in message` throwing away lines that read
+`start lookup 19 feature 'blwm'`.
+
+	python3 - <<'EOF'
+	import uharfbuzz as hb
+	...
+	b.set_message_func(lambda *a: (msgs.append(a), True)[1])
+	EOF
+
+For the Tibetan case the GPOS lookups that run, in order, are 14-17 (abvm),
+18-21 (blwm), 22-23 (dist) and 24-25 (mkmk). Lookups 18 and 19 both apply. So do
+**21, 23 and 24**, and *none of them has been examined*. Lookup 21 is a second
+MarkMarkPos with its own filtering set; 23 is a pair adjustment; 24 is the mkmk
+one already known not to cover this mark.
+
+The arithmetic says HarfBuzz's answer is the mark-to-base placement — mark anchor
+(-235, 0) against a base anchor, not either of the two mark-to-mark targets,
+whose anchors give -439 and +33 against the answer of -102. Something after
+lookup 19 puts it back on the base, and lookup 21 is the candidate nobody has
+looked at.
+
+## What to try next
+
+Dump the buffer between lookups rather than reasoning from the final positions.
+The message callback's first argument is not the buffer — that was tried and
+raised — so the shape of the callback arguments has to be established first, or
+`hb-shape --verbose` used instead, which prints the same trace with the glyph
+positions beside it.
 
 ## What to try next
 
