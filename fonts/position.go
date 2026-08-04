@@ -335,6 +335,27 @@ func (l *layout) markMarkAt(buf []Glyph, i int) (mark markAnchor, base anchor, a
 		if j < 0 || !l.isMark(buf[j]) {
 			continue
 		}
+		// Two marks stack only if they belong to the same letter: the same base,
+		// or the same component of the same ligature. A mark on the first half
+		// of a split vowel and a mark on the second are written above the same
+		// stretch of text and are not written above one another.
+		//
+		// The format does not say this — it is what every implementation does,
+		// and without it a Khmer syllable whose split vowel 'ccmp' took apart
+		// stacks a sign from one half onto a sign from the other. The exception
+		// is a mark that is *itself* a ligature, whose component is zero: it
+		// stands for the whole of what it was made from, so it matches anything.
+		id1, id2 := buf[i].lig.id, buf[j].lig.id
+		comp1, comp2 := buf[i].lig.comp, buf[j].lig.comp
+		same := false
+		if id1 == id2 {
+			same = id1 == 0 || comp1 == comp2
+		} else {
+			same = (id1 != 0 && comp1 == 0) || (id2 != 0 && comp2 == 0)
+		}
+		if !same {
+			continue
+		}
 		b, has := st.anchorFor(buf[j].GID, m.class, markComponent(buf, i, j))
 		if !has {
 			continue
