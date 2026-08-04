@@ -65,12 +65,6 @@ import (
 //     put as a bare pair of glyphs, so a font that states its below-base or
 //     post-base forms only as a contextual rule is read as stating none — its
 //     conjuncts then come out as loose letters rather than in the wrong place.
-//   - Canonical ordering of the marks in a syllable. Unicode allows a nukta and
-//     a virama to be written in either order and says they mean the same thing;
-//     this package sets them in the order they were written, so the one order a
-//     font's rules are written against gets its conjunct and the other does not.
-//     Splitting a vowel sign into the marks it is drawn as *is* done, because
-//     the model cannot place such a sign at all while it is one character.
 //
 // # Where this runs
 //

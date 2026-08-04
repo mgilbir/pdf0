@@ -15,6 +15,24 @@ package fonts
 // here, together with the one decision that has to be taken before any of them
 // runs: which of the three, if any, a run belongs to.
 
+// usesSyllabicShaper reports whether a script is set by one of the shapers that
+// segments text into syllables and reorders them.
+//
+// It exists so that the question is asked in one place and answered the same
+// way everywhere. Normalisation needs it as much as shaping does: a syllabic
+// shaper's rules are written against fully decomposed text — a base, then its
+// marks in canonical order — so a run bound for one must not be left composed,
+// and the short-circuit that is right for Latin is wrong here.
+//
+// Asking "is this Indic" instead was correct while Indic was the only such
+// shaper, and became silently wrong the moment Khmer and Myanmar joined it.
+// That is the drift a predicate with one home prevents, and it is why both the
+// dispatch below and the normalisation pass ask this rather than each deciding
+// for itself.
+func usesSyllabicShaper(script uint16) bool {
+	return indicConfigFor(script) != nil || isKhmerScript(script) || isMyanmarScript(script)
+}
+
 // shapeSyllabic shapes a run by whichever syllabic model its script belongs to,
 // reporting false for a script that belongs to none.
 //
@@ -22,6 +40,9 @@ package fonts
 // decides which of the font's rules apply where, so it cannot be a step before
 // the general substitutions and has to be them.
 func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16) ([]Glyph, bool) {
+	if !usesSyllabicShaper(script) {
+		return buf, false
+	}
 	if cfg := indicConfigFor(script); cfg != nil {
 		return sh.shapeIndic(buf, runes, sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script))), true
 	}
