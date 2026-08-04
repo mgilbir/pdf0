@@ -29,7 +29,12 @@ import "github.com/mgilbir/pdf0/internal/font"
 type rawLookup struct {
 	kind  int
 	flags int
-	subs  [][]byte
+	// markSet is the index of the mark glyph set this lookup filters by, or -1.
+	// A lookup that names one sees only the marks in it and steps over every
+	// other, which is a narrower thing than the mark attachment class in the
+	// flags and is stated separately from them.
+	markSet int
+	subs    [][]byte
 }
 
 // applyContextual runs the substitution lookups of a feature over a buffer,
@@ -68,7 +73,8 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 	// the one it would start at. A rule that ignores marks does not apply *to* a
 	// mark either — the whole of its input is chosen by the flag, not just the
 	// part it steps over on the way.
-	if sh.l.ignores(lk.flags, buf[at]) {
+	sh.markSet = lk.markSet
+	if sh.ignores(lk.flags, buf[at]) {
 		return 0, buf
 	}
 	for _, sub := range lk.subs {
@@ -382,7 +388,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 func (sh shaper) nextNotIgnored(buf []Glyph, from, flags, want int) int {
 	end := sh.end(buf)
 	for i := from; i < end; i++ {
-		if sh.l.ignores(flags, buf[i]) {
+		if sh.ignores(flags, buf[i]) {
 			continue
 		}
 		if buf[i].GID != want && sh.stepsOverJoiner(i, false) {
@@ -421,7 +427,7 @@ func (sh shaper) positionsFrom(buf []Glyph, at, n, flags int, context bool) ([]i
 		if pos >= end {
 			return nil, false
 		}
-		if !sh.l.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, context) {
+		if !sh.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, context) {
 			out = append(out, pos)
 		}
 		pos++
@@ -435,7 +441,7 @@ func (sh shaper) positionsFrom(buf []Glyph, at, n, flags int, context bool) ([]i
 func (sh shaper) backtrackPositions(buf []Glyph, before, n, flags int) ([]int, bool) {
 	out := make([]int, 0, n)
 	for pos := before - 1; pos >= sh.floor && len(out) < n; pos-- {
-		if !sh.l.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, true) {
+		if !sh.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, true) {
 			out = append(out, pos)
 		}
 	}

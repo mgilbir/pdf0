@@ -90,6 +90,11 @@ var harfbuzzCases = []struct {
 	// point. One script cannot tell a general model from an overfitted one.
 	{name: "balinese", font: "fonts/NotoSansBalinese.ttf",
 		corpus: "balinese.txt", expected: "balinese.expected.txt"},
+	// The largest font here, and the one that earns its size: it declares 1190
+	// lookups and states one of them in 738 subtables, which is how three
+	// silent truncations were found.
+	{name: "tibetan", font: "fonts/NotoSerifTibetan.ttf",
+		corpus: "tibetan.txt", expected: "tibetan.expected.txt"},
 }
 
 // TestShapingAgreesWithHarfBuzz compares every case in every corpus.
@@ -226,6 +231,15 @@ var deliberateDifferences = map[string]map[string]string{
 	"khmer":    {},
 	"javanese": {},
 	"balinese": {},
+	// A deprecated vowel sign written after an unassigned code point. HarfBuzz
+	// takes the sign apart; this package leaves it whole. The base is .notdef
+	// either way — U+0F48 is a hole in the Tibetan block — so what differs is
+	// how a shaper decorates a letter that is not there, and neither answer is
+	// better than the other.
+	"tibetan": {
+		"\u0F48\u0F77": "a deprecated vowel sign after an unassigned code point",
+		"\u0F48\u0F79": "the same, with the other deprecated sign",
+	},
 }
 
 // TestTheHarfBuzzOracleHasTeeth is the guard on the guard.

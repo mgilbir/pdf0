@@ -53,8 +53,9 @@ The Khmer font agreed on all 2441 cases at the first run.
 | `fonts/NotoSansKhmer.ttf` | Khmer | a syllable model that draws characters out of order |
 | `fonts/NotoSansJavanese.ttf` | Javanese | the Universal Shaping Engine |
 | `fonts/NotoSansBalinese.ttf` | Balinese | a second script for that engine, so one cannot be overfitted to |
+| `fonts/NotoSerifTibetan.ttf` | Tibetan | a *large* font: 1190 lookups, one of them 738 subtables, and twenty mark glyph sets |
 
-The four extra fonts are Google's Noto builds under the SIL Open Font License
+The five extra fonts are Google's Noto builds under the SIL Open Font License
 1.1, the same licence and publisher as the bundled face, with their copyright
 notices beside them as that licence requires. Neither declares a Reserved Font
 Name. They are test data: nothing this module ships embeds them.
@@ -97,6 +98,12 @@ many paths once.
   consonant stacked under every other, and stacked pairs carrying a vowel too.
 - **Balinese** — the same shape of grid, and the split vowel signs U+1B40 and
   U+1B41, each written as one character and drawn as two marks on opposite sides.
+- **Tibetan** — every consonant with every vowel and every subjoined form. It is
+  here for its size rather than its script: it found a lookup list truncated at
+  512 against its 1190, one lookup's subtables truncated at 256 against its 738,
+  and the mark glyph sets that were not read at all. The first two were silent,
+  because a lookup is named by index and cutting the list breaks every reference
+  past the cut.
 
 ## Why two scripts for one engine
 

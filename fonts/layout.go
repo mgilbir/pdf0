@@ -136,6 +136,9 @@ const (
 	// run out — so the work a font can ask for is bounded by its own size,
 	// which is the bound that means something. This is the backstop.
 	maxLookupList = 0xFFFF
+	// maxSubtableList bounds the subtables of one lookup, and is the format's
+	// own maximum for the same reason.
+	maxSubtableList = 0xFFFF
 	// The FeatureVariations walk. A real face states a handful of records — Noto
 	// Sans Oriya states one — and each names a few conditions and a few
 	// substituted features.
@@ -398,6 +401,9 @@ type layout struct {
 	markMark    []markAttachment
 	markGlyphs  map[int]bool
 	markLookups int
+	// markSets are GDEF's mark glyph sets, which a lookup names to narrow what
+	// it looks at to the marks in one of them.
+	markSets []map[int]bool
 	// kern maps an ordered glyph pair to the adjustment the font states between
 	// them, in font units. Negative advances pull the pair together, which is
 	// what kerning almost always does.
@@ -436,11 +442,12 @@ const (
 	// flagRightToLeft relates only to cursive attachment (GPOS 3): it says the
 	// *last* glyph of a joined run stays on the baseline and the earlier ones
 	// move to meet it, rather than the first.
-	flagRightToLeft      = 0x0001
-	flagIgnoreBaseGlyphs = 0x0002
-	flagIgnoreLigatures  = 0x0004
-	flagIgnoreMarks      = 0x0008
-	flagMarkAttachType   = 0xFF00
+	flagRightToLeft         = 0x0001
+	flagIgnoreBaseGlyphs    = 0x0002
+	flagIgnoreLigatures     = 0x0004
+	flagIgnoreMarks         = 0x0008
+	flagUseMarkFilteringSet = 0x0010
+	flagMarkAttachType      = 0xFF00
 )
 
 // Glyph classes as GDEF defines them.
@@ -461,7 +468,32 @@ const (
 // Reading the pairs and not the flag kerns "A" and "V" but not "Ä" and "V",
 // which is a difference a reader sees.
 func (l *layout) ignores(flags int, g Glyph) bool {
+	return l.ignoresIn(flags, -1, g)
+}
+
+// mergedFlags is what a flag word means once it has been merged across the
+// lookups of a feature, which is what the flat positioning tables do.
+//
+// The mark filtering set is dropped, and has to be: the set is named per
+// lookup, and a merged word has no room to say which. Keeping the bit would
+// read as "filter by a set nobody named", and ignoresIn answers that by
+// stepping over every mark — so a font with one such lookup would lose the mark
+// positioning of every other. Dropping it costs the narrowing that lookup asked
+// for; keeping it costs the whole feature.
+func mergedFlags(flags int) int { return flags &^ flagUseMarkFilteringSet }
+
+// ignoresIn is ignores for a lookup that also names a mark glyph set. A set
+// index of -1 means it names none, which is every lookup but the few that do.
+func (l *layout) ignoresIn(flags, markSet int, g Glyph) bool {
 	class := l.classOf(g)
+	// A lookup that names a set sees the marks in it and no others. It is
+	// checked before the flags below because it is the narrower statement: a
+	// lookup naming a set is saying which marks it means, not which kinds.
+	if flags&flagUseMarkFilteringSet != 0 && class == classMark {
+		if markSet < 0 || markSet >= len(l.markSets) || !l.markSets[markSet][g.GID] {
+			return true
+		}
+	}
 	switch {
 	case flags&flagIgnoreMarks != 0 && class == classMark:
 		return true
@@ -520,6 +552,7 @@ func (l *layout) readGDEF(gdef []byte) {
 			l.glyphClass[gid] = class
 		}
 	}
+	l.readMarkGlyphSets(gdef)
 	if off := font.Be16(gdef, 10); off > 0 && off < len(gdef) {
 		l.markAttach = classDef(gdef, off)
 	}
@@ -631,11 +664,11 @@ func lookupList(gsub []byte, extension int) []rawLookup {
 		if lo <= 0 || lo >= len(list) {
 			// Keep the slot: a rule names a lookup by index, so the indices of
 			// the ones that follow must not shift.
-			out = append(out, rawLookup{})
+			out = append(out, rawLookup{markSet: -1})
 			continue
 		}
-		kind, flags, subs := subtables(list[lo:], extension)
-		out = append(out, rawLookup{kind: kind, flags: flags, subs: subs})
+		kind, flags, markSet, subs := subtables(list[lo:], extension)
+		out = append(out, rawLookup{kind: kind, flags: flags, markSet: markSet, subs: subs})
 	}
 	return out
 }
@@ -740,15 +773,27 @@ func featureLookups(t []byte, tag string, feats tableFeatures) [][]byte {
 
 // subtables returns a lookup's subtables, resolving the extension indirection
 // that lets a large font place them beyond the 16-bit offset range.
-func subtables(lookup []byte, extensionType int) (kind, flags int, out [][]byte) {
+func subtables(lookup []byte, extensionType int) (kind, flags, markSet int, out [][]byte) {
 	if len(lookup) < 6 {
-		return 0, 0, nil
+		return 0, 0, -1, nil
 	}
 	kind = font.Be16(lookup, 0)
 	flags = font.Be16(lookup, 2)
+	markSet = -1
+	// The subtables of one lookup are alternatives tried in order, and the first
+	// that applies wins — so a font states a general rule that matches and does
+	// nothing, then the particular ones after it. Keeping only the first few
+	// hundred therefore does not lose the rare cases at the end: it loses
+	// whichever cases the font happened to list late, while the blocking rules
+	// at the front still match. Noto Serif Tibetan states one lookup in 738
+	// subtables.
+	//
+	// The bound is the format's own, for the reason maxLookupList is: the count
+	// is a uint16, so no valid font is truncated, and what stops a crafted one
+	// is that each subtable needs two bytes of offset present in the lookup.
 	count := font.Be16(lookup, 4)
-	if count > maxSubtables {
-		count = maxSubtables
+	if count > maxSubtableList {
+		count = maxSubtableList
 	}
 	// Whether the *lookup* is an extension has to be decided once. Reading it
 	// from kind inside the loop stops unwrapping after the first subtable, since
@@ -777,7 +822,15 @@ func subtables(lookup []byte, extensionType int) (kind, flags int, out [][]byte)
 		}
 		out = append(out, sub)
 	}
-	return kind, flags, out
+	// A lookup that filters by a mark glyph set names it after the subtable
+	// offsets, which is why this is read last: where the number sits depends on
+	// how many subtables there are.
+	if flags&flagUseMarkFilteringSet != 0 {
+		if at := 6 + 2*count; at+2 <= len(lookup) {
+			markSet = font.Be16(lookup, at)
+		}
+	}
+	return kind, flags, markSet, out
 }
 
 // pairFeatures are the features whose pair adjustments this reads.
@@ -800,11 +853,11 @@ var pairFeatures = [...]string{"kern", "dist"}
 func (l *layout) readGPOSPairs(gpos []byte, feats tableFeatures) {
 	for _, tag := range pairFeatures {
 		for _, lookup := range featureLookups(gpos, tag, feats) {
-			kind, flags, subs := subtables(lookup, 9) // 9 = extension positioning
-			if kind != 2 {                            // 2 = pair adjustment
+			kind, flags, _, subs := subtables(lookup, 9) // 9 = extension positioning
+			if kind != 2 {                               // 2 = pair adjustment
 				continue
 			}
-			l.kernFlags |= flags
+			l.kernFlags |= mergedFlags(flags)
 			for _, sub := range subs {
 				if len(sub) < 2 {
 					continue
@@ -1071,8 +1124,8 @@ func classDef(base []byte, off int) map[int]int {
 // run's script selected.
 func (l *layout) readGSUBLigatures(gsub []byte, feats tableFeatures) {
 	for _, lookup := range featureLookups(gsub, "liga", feats) {
-		kind, flags, subs := subtables(lookup, 7) // 7 = extension substitution
-		if kind != 4 {                            // 4 = ligature substitution
+		kind, flags, _, subs := subtables(lookup, 7) // 7 = extension substitution
+		if kind != 4 {                               // 4 = ligature substitution
 			continue
 		}
 		l.substFlags |= flags
@@ -1220,7 +1273,7 @@ func (l *layout) readSingleSubstitutions(gsub []byte, feats tableFeatures) {
 		}
 		seen[tag] = true
 		for _, lookup := range featureLookups(gsub, tag, feats) {
-			kind, flags, subs := subtables(lookup, 7)
+			kind, flags, _, subs := subtables(lookup, 7)
 			if kind != 1 { // 1 = single substitution
 				continue
 			}
@@ -1275,5 +1328,52 @@ func emptyLayout() *layout {
 		singlePos:  map[int]singleAdjust{},
 		markGlyphs: map[int]bool{},
 		cursive:    map[int]cursiveAnchors{},
+	}
+}
+
+// readMarkGlyphSets reads GDEF's mark glyph sets, which a lookup names to say
+// that it looks at those marks and steps over every other.
+//
+// It is a finer thing than the mark attachment class the flags carry: a class
+// partitions the marks, while a set is any collection of them, and a font that
+// needs two overlapping groups can only say so this way. The table arrived in
+// GDEF 1.2, so a font that predates it has none and the offset is not there to
+// read.
+func (l *layout) readMarkGlyphSets(gdef []byte) {
+	// Version 1.2 or later, and the offset is the fifth in the header.
+	if len(gdef) < 14 || font.Be16(gdef, 0) != 1 || font.Be16(gdef, 2) < 2 {
+		return
+	}
+	// An Offset16, like the four before it in the header. The offsets *inside*
+	// the table are 32-bit, which is the trap: reading this one the same way
+	// finds nothing, and a lookup that filters by a set it cannot find steps
+	// over every mark rather than over none.
+	off := font.Be16(gdef, 12)
+	if off <= 0 || off+4 > len(gdef) {
+		return
+	}
+	sets := gdef[off:]
+	if font.Be16(sets, 0) != 1 {
+		return
+	}
+	n := font.Be16(sets, 2)
+	if n > maxSubtableList {
+		n = maxSubtableList
+	}
+	for i := 0; i < n; i++ {
+		rec := 4 + 4*i
+		if rec+4 > len(sets) {
+			break
+		}
+		co := int(font.Be32(sets, rec))
+		if co <= 0 || co >= len(sets) {
+			l.markSets = append(l.markSets, nil)
+			continue
+		}
+		set := map[int]bool{}
+		for _, gid := range coverageGlyphs(sets, co) {
+			set[gid] = true
+		}
+		l.markSets = append(l.markSets, set)
 	}
 }
