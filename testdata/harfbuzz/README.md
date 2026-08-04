@@ -282,21 +282,41 @@ on the one before it and HarfBuzz leaves it on the base. The smallest case is
 	U+0905 U+0945 U+0955   this package  3917 at y 247
 	                       HarfBuzz      3917 at y 0, beside 3916
 
-## What has been ruled out, by measurement
+## The two that are left
 
-Four readings, each of which fitted the case that suggested it and then failed
-elsewhere. They are written down so the fifth attempt does not repeat them.
+They are no longer one class, and neither is the class this section used to be
+about — that one is fixed, and what fixed it was placing each mark in the order
+the font states its lookups rather than all of them at the end.
 
-- **Not the ligature rule.** MarkMarkPos matches only marks "belonging to the
-  same base, or same component of the same ligature". These marks have no
-  ligature ids, so that branch passes.
-- **Not the mark filtering set.** Lookup 19 names set 15 and the mark, the
-  glyph before it and the one before that are all in it, so nothing is skipped.
-- **Not the order the attachment lookups are read in.** That was genuinely
-  wrong — feature order rather than lookup-list order — and correcting it moved
-  none of these.
-- **Not "the lookup does not fire".** It does. HarfBuzz's own trace says
-  `start lookup 19 feature 'blwm'` with no "skipped" beside it.
+**Tibetan, five units of x.** `U+0F52 U+0F8F U+0FAD U+0F91 U+0F73 U+0F37` puts
+the last mark at x -152 where HarfBuzz puts it at -157. The y agrees, so the
+target and the anchor pair are right and something in the arithmetic between
+them is not. Ruled out: the anchor is design-unit format 1 on the mark side and
+format 3 on the mark2 side, and this package reads format 3's design coordinates
+and ignores its device tables, which is what HarfBuzz does at an unhinted size.
+
+**Khmer, a base where a mark should be.** `U+1787 U+17B9 U+178D U+17D0 U+17C4
+U+17D3 U+17D1 U+17AF` stacks its sixth glyph on the mark before it; HarfBuzz
+attaches it to the base. The trace shows HarfBuzz doing both of them in one
+`abvm` lookup, 26, which places two marks at the same y. So this is a choice
+between two candidate lookups rather than a mark put in the wrong place.
+
+## How to look at either
+
+The per-lookup trace is the tool, and it works from Python — the buffer is not
+passed to the callback, but the buffer object is in scope and can be read from
+inside it:
+
+	log = []
+	def cb(msg):
+	    log.append((msg, [(i.codepoint, p.x_offset, p.y_offset)
+	                      for i, p in zip(b.glyph_infos, b.glyph_positions)]))
+	    return True
+	b.set_message_func(cb)
+
+Print only the lines where the positions changed and it says which lookup moved
+what. That is how the last one was found, after four readings of the tables had
+each produced a plausible wrong answer.
 
 ## What the trace says, and where it points
 
