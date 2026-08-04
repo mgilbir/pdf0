@@ -211,7 +211,7 @@ func TestScriptSelectionSurvivesMalformedScriptList(t *testing.T) {
 	for n := 0; n <= len(gsub); n++ {
 		truncated := append([]byte(nil), gsub[:n]...)
 		l := &layout{
-			kern: map[[2]int]int{}, ligatures: map[int][]ligature{},
+			kern: map[[2]int]pairAdjust{}, ligatures: map[int][]ligature{},
 			glyphClass: map[int]int{}, single: map[string]map[int]int{},
 			singlePos: map[int]singleAdjust{}, markGlyphs: map[int]bool{},
 			cursive: map[int]cursiveAnchors{},

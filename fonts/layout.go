@@ -383,10 +383,10 @@ type layout struct {
 	markMark    []markAttachment
 	markGlyphs  map[int]bool
 	markLookups int
-	// kern maps an ordered glyph pair to the horizontal adjustment between
-	// them, in font units. Negative pulls the pair together, which is what
-	// kerning almost always does.
-	kern map[[2]int]int
+	// kern maps an ordered glyph pair to the adjustment the font states between
+	// them, in font units. Negative advances pull the pair together, which is
+	// what kerning almost always does.
+	kern map[[2]int]pairAdjust
 	// ligatures maps a first glyph to the substitutions that may start with it,
 	// longest first so that a greedy match prefers ffi over ff.
 	//
@@ -524,7 +524,7 @@ type ligature struct {
 // from a misread table is wrong.
 func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 	l := &layout{
-		kern:       map[[2]int]int{},
+		kern:       map[[2]int]pairAdjust{},
 		glyphClass: map[int]int{},
 		singlePos:  map[int]singleAdjust{},
 		markGlyphs: map[int]bool{},
@@ -816,8 +816,8 @@ func (l *layout) pairPosFormat1(sub []byte) {
 				break
 			}
 			second := font.Be16(set, rec)
-			if adv, ok := xAdvance(set[rec+2:], fmt1); ok && adv != 0 {
-				l.kern[[2]int{first[i], second}] = adv
+			if adj := pairAdjustFrom(set[rec+2:], fmt1, fmt2); !adj.zero() {
+				l.kern[[2]int{first[i], second}] = adj
 			}
 			rec += 2 + size1 + size2
 		}
@@ -857,15 +857,15 @@ func (l *layout) pairPosFormat2(sub []byte) {
 			if off+recSize > len(sub) {
 				break
 			}
-			adv, ok := xAdvance(sub[off:], fmt1)
-			if !ok || adv == 0 {
+			adj := pairAdjustFrom(sub[off:], fmt1, fmt2)
+			if adj.zero() {
 				continue
 			}
 			for _, g2 := range byClass2[c2] {
 				if len(l.kern) >= maxPairs {
 					return
 				}
-				l.kern[[2]int{g1, g2}] = adv
+				l.kern[[2]int{g1, g2}] = adj
 			}
 		}
 	}
@@ -885,6 +885,55 @@ func valueSize(format int) int {
 
 // xAdvance reads the horizontal advance out of a ValueRecord, which is present
 // only when bit 2 of the format says so and sits after any placement fields.
+// pairAdjust is what a font states about a pair of glyphs: a placement and an
+// advance for each of the two.
+//
+// Reading only the first glyph's advance covers Latin kerning and loses Arabic.
+// A right-to-left font states a pair as a placement *and* an advance — Noto Sans
+// Arabic writes XPlacement -25 beside XAdvance -25 for reh before an alef —
+// because in a run drawn right to left the two do different things: the advance
+// moves what comes next, and the placement moves this glyph. Applying half of it
+// leaves the letters a hair apart in a script where they are meant to touch.
+//
+// The fields are 16-bit because the format's are: a ValueRecord holds signed
+// 16-bit numbers, and a font this size states seventy thousand pairs, so the
+// difference between this and six machine words is a megabyte of a shared table.
+type pairAdjust struct {
+	firstX, firstY, firstAdvance    int16
+	secondX, secondY, secondAdvance int16
+}
+
+func (p pairAdjust) zero() bool { return p == pairAdjust{} }
+
+// pairAdjustFrom reads the two ValueRecords of a pair.
+func pairAdjustFrom(rec []byte, format1, format2 int) pairAdjust {
+	first := readValueRecord(rec, format1)
+	size1 := valueSize(format1)
+	var second singleAdjust
+	if size1 <= len(rec) {
+		second = readValueRecord(rec[size1:], format2)
+	}
+	return pairAdjust{
+		firstX: clamp16(first.xPlacement), firstY: clamp16(first.yPlacement),
+		firstAdvance: clamp16(first.xAdvance),
+		secondX:      clamp16(second.xPlacement), secondY: clamp16(second.yPlacement),
+		secondAdvance: clamp16(second.xAdvance),
+	}
+}
+
+// clamp16 narrows a value the format stated in sixteen bits back to sixteen.
+// Nothing read from a ValueRecord can be outside the range; the bound is here so
+// that a future caller of this cannot silently truncate.
+func clamp16(v int) int16 {
+	switch {
+	case v > 0x7FFF:
+		return 0x7FFF
+	case v < -0x8000:
+		return -0x8000
+	}
+	return int16(v)
+}
+
 func xAdvance(rec []byte, format int) (int, bool) {
 	const xAdvanceBit = 0x0004
 	if format&xAdvanceBit == 0 {
@@ -1099,7 +1148,8 @@ func (l *layout) kernFormat0(t []byte) {
 		}
 		left, right := font.Be16(t, rec), font.Be16(t, rec+2)
 		if v := signed16(font.Be16(t, rec+4)); v != 0 {
-			l.kern[[2]int{left, right}] = v
+			// The old 'kern' table states one number: an advance adjustment.
+			l.kern[[2]int{left, right}] = pairAdjust{firstAdvance: clamp16(v)}
 		}
 	}
 }
@@ -1185,7 +1235,7 @@ func (l *layout) singleSubst(tag string, sub []byte) {
 // — a standard font, whose metrics are published rather than embedded.
 func emptyLayout() *layout {
 	return &layout{
-		kern:       map[[2]int]int{},
+		kern:       map[[2]int]pairAdjust{},
 		ligatures:  map[int][]ligature{},
 		glyphClass: map[int]int{},
 		single:     map[string]map[int]int{},
