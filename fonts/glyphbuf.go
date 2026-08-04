@@ -123,8 +123,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool) ([]Glyph, int) {
 	// apply where, so it cannot be a step before the general substitutions and
 	// has to be the substitutions. No script both joins cursively and reorders,
 	// which is why these are alternatives rather than stages.
-	if cfg := indicConfigFor(script); cfg != nil {
-		buf = sh.shapeIndic(buf, runes, sh.indicPlan(cfg, f.indicOldSpec(cfg, script)))
+	if out, ok := sh.shapeSyllabic(buf, runes, script); ok {
+		buf = out
 	} else {
 		// Joining first: the joined forms are what a cursive script's ligatures
 		// and contextual rules are written against. The join controls have said
