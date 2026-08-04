@@ -403,6 +403,13 @@ type layout struct {
 	// applied at a position, so these cannot be flattened the way the tables
 	// above are — see context.go.
 	gsub []rawLookup
+	// gpos is the positioning lookups kept whole and addressable by index, for
+	// the same reason gsub is: a contextual positioning rule names one. It is
+	// read only when the font has such a rule, since nothing else needs it.
+	gpos []rawLookup
+	// contextualPos is the indices of the type 7 and 8 lookups a selected
+	// feature names, in the order they are applied.
+	contextualPos []int
 	// featureLookups maps a feature tag to the lookup indices it names, which is
 	// how a feature is turned into work to do.
 	featureLookups map[string][]int
@@ -535,6 +542,7 @@ func readPositioning(tables map[string][]byte, sel featureSet) *layout {
 		feats := tableFeatures{sel: sel, varied: readFeatureVariations(gpos)}
 		l.readGPOSPairs(gpos, feats)
 		l.readGPOSAttachment(gpos, feats)
+		l.readContextualPositioning(gpos, feats)
 	}
 	if len(l.kern) == 0 {
 		// Only as a fallback: a font with both should be read through GPOS,
@@ -579,7 +587,13 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout) *layo
 // flattened readers above take from the same bytes, which is deliberate: those
 // serve the common path cheaply, and a lookup that may be invoked from inside
 // another has to survive as something applicable rather than as a map entry.
-func gsubLookups(gsub []byte) []rawLookup {
+// gposLookups is gsubLookups for the positioning table, whose extension lookup
+// type is 9 rather than 7.
+func gposLookups(gpos []byte) []rawLookup { return lookupList(gpos, 9) }
+
+func gsubLookups(gsub []byte) []rawLookup { return lookupList(gsub, 7) }
+
+func lookupList(gsub []byte, extension int) []rawLookup {
 	off := font.Be16(gsub, 8)
 	if off <= 0 || off+2 > len(gsub) {
 		return nil
@@ -601,7 +615,7 @@ func gsubLookups(gsub []byte) []rawLookup {
 			out = append(out, rawLookup{})
 			continue
 		}
-		kind, flags, subs := subtables(list[lo:], 7)
+		kind, flags, subs := subtables(list[lo:], extension)
 		out = append(out, rawLookup{kind: kind, flags: flags, subs: subs})
 	}
 	return out

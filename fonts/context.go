@@ -795,6 +795,12 @@ func (sh shaper) runRecords(base []byte, at, count int, positions []int, buf []G
 			continue
 		}
 		target := positions[seqIndex]
+		if sh.positioning {
+			// Positioning never changes how many glyphs there are, so there is
+			// nothing to keep in step and nothing to resume differently for.
+			sh.applyGPOSAt(lookupIndex, buf, target, depth+1)
+			continue
+		}
 		before := len(buf)
 		_, out := sh.applyGSUBAt(lookupIndex, buf, target, depth+1)
 		buf = out

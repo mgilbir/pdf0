@@ -28,6 +28,12 @@ func GPOS(pairs []KernPair) []byte { return GPOSPairsUnder("kern", pairs) }
 // matters: it is where the complex scripts state their spacing, and a font may
 // declare it and no 'kern' at all.
 func GPOSPairsUnder(feature string, pairs []KernPair) []byte {
+	return layoutTable(feature, 2, PairPosSubtable(pairs)) // 2 = pair adjustment
+}
+
+// PairPosSubtable is the bare type 2 subtable, for a caller placing it in a
+// lookup list of its own.
+func PairPosSubtable(pairs []KernPair) []byte {
 	// Group by left glyph, which is how PairPos format 1 is organised.
 	order := []int{}
 	byLeft := map[int][]KernPair{}
@@ -68,7 +74,7 @@ func GPOSPairsUnder(feature string, pairs []KernPair) []byte {
 		binary.BigEndian.PutUint16(body[10+2*i:], uint16(len(body)))
 		body = append(body, set...)
 	}
-	return layoutTable(feature, 2, body) // 2 = pair adjustment
+	return body
 }
 
 // GSUB builds a GSUB table with a single 'liga' feature whose one lookup is a
@@ -411,6 +417,12 @@ func CursivePosSubtable(anchors []CursiveAnchor) []byte {
 
 // GPOSSingle builds a GPOS table whose lookup nudges each given glyph.
 func GPOSSingle(glyph, xPlacement, yPlacement, xAdvance int) []byte {
+	return layoutTable("kern", 1, SinglePosSubtable(glyph, xPlacement, yPlacement, xAdvance))
+}
+
+// SinglePosSubtable is the bare type 1 subtable, for a caller placing it in a
+// lookup list of its own — a contextual positioning rule naming it, say.
+func SinglePosSubtable(glyph, xPlacement, yPlacement, xAdvance int) []byte {
 	sub := make([]byte, 6+6)
 	binary.BigEndian.PutUint16(sub[0:], 1)      // posFormat 1: one value for all
 	binary.BigEndian.PutUint16(sub[4:], 0x0007) // XPlacement|YPlacement|XAdvance
@@ -423,7 +435,7 @@ func GPOSSingle(glyph, xPlacement, yPlacement, xAdvance int) []byte {
 	body = append(body, rec...)
 	binary.BigEndian.PutUint16(body[2:], uint16(covOff))
 	body = append(body, coverageFormat1([]int{glyph})...)
-	return layoutTable("kern", 1, body)
+	return body
 }
 
 // anchorTable writes a format-1 anchor: the two coordinates and nothing else.
