@@ -65,3 +65,33 @@ the point of doing it — every remaining difference then means a defect.
 
 Afterwards: re-run the differential fuzzer, because ignorables reaching the
 shaper is a change every script sees and the corpora are a fixed list.
+
+# The batch of forty-eight
+
+Controls passed in all three files.
+
+| | devanagari | tibetan | balinese |
+| --- | --- | --- | --- |
+| CoreText agrees with pdf0 | 4 | 19 | 0 |
+| CoreText agrees with HarfBuzz | 1 | 6 | 1 |
+| CoreText agrees with neither | 0 | 17 | 0 |
+
+## What it settles
+
+**Twenty-three are not defects.** The "a mark a few units to one side" family —
+which is what most of these were — goes to this package, as the two questions
+before it did. Three for three.
+
+**Eight are.** Where CoreText and HarfBuzz agree against this package there is
+nothing to argue about. Six of them are one shape: a deprecated Tibetan vowel
+sign, U+0F77 or U+0F79, followed by U+0F74. The other two are
+`U+0908 U+094E U+093C U+093C` and `U+1B1F U+1B44 U+1B46 U+1B38`.
+
+## And seventeen that are a different question
+
+CoreText inserts dotted circles where neither of the other two does — glyph 1282
+is U+25CC in this font, and it appears two or three times in each of those
+lines. That is not the mark-placement question these were gathered to ask; it is
+CoreText judging the text more malformed than the other two do, and on it
+CoreText is the one out of step. Worth its own look, not worth confusing with
+this.
