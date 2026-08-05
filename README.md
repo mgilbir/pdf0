@@ -4,8 +4,9 @@ A PDF parser, serializer, and conformance validator written in Go. The object
 model is ISO 32000-2 (PDF 2.0); files of any version are read into it, and most
 of the standards below are defined against PDF 1.x — PDF/A-1, -2 and -3 require
 a 1.x header, PDF/X-1a and -3 require 1.3/1.4. Its only dependencies are the
-author's own pure-Go modules (`formalis` for EN 16931 invoice rules,
-`golittlecms` for ICC profiles, `gopenjpeg` for JPEG 2000).
+author's own pure-Go modules (`forme` for text shaping and font programs,
+`formalis` for EN 16931 invoice rules, `golittlecms` for ICC profiles,
+`gopenjpeg` for JPEG 2000).
 
 ```
 go get github.com/mgilbir/pdf0
@@ -237,7 +238,7 @@ inspects a finding imports the package that owns it. Underneath the root:
 - **`internal/`** for implementation whose API is not meant for callers:
   `core` (the document seen from below — see below), `finding` (the shared
   validator harness), `crypt` (the standard security handler, reached only
-  through `Document`), `font`, `ccitt`, `jbig2`.
+  through `Document`), `ccitt`, `jbig2`.
 
 A subsystem does not name `Document`. It takes a `core.View`: the object graph,
 the trailer, what `Read` found in the file, the resolved budget, the

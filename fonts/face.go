@@ -16,7 +16,7 @@
 package fonts
 
 import (
-	"github.com/mgilbir/forme/notosans"
+	"github.com/mgilbir/forme/fonts/notosans"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -106,6 +106,15 @@ func NotoSansSimple() (*Face, error) {
 	}
 	return &Face{f}, nil
 }
+
+// NotoSansLicense is the text of the SIL Open Font License 1.1 as it is
+// distributed with the bundled font, including the copyright line.
+//
+// It is exposed because the licence requires it to travel with the font, and a
+// program that embeds the font in something it ships may need to reproduce it —
+// in an about box, a credits file, a --licenses flag. Reading it off disk is not
+// an option for a single binary, so it is compiled in.
+func NotoSansLicense() string { return notosans.License() }
 
 // Clone is a fresh face over the same parsed font, with its own record of the
 // glyphs used.

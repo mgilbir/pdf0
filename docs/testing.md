@@ -69,12 +69,19 @@ serves genuinely broken PDFs, and roughly 0.7% is normal. A **panic or a hang**
 is the failure, and the file is quarantined as the reproduction. See
 [testdata/cc/README.md](../testdata/cc/README.md).
 
-Two datasets are the exception and *are* committed: `testdata/xmp-rng/`
-(ISO 16684 RelaxNG schemas, MIT, used by `TestXMPTablesMatchRNG`) and the
-spec-example JSON. The EN 16931 / CIUS oracle data referenced by the `.gitignore`
-(`testdata/en16931-*`, `testdata/xrechnung`, `testdata/peppol`, `testdata/nlcius`)
-belongs to `github.com/mgilbir/formalis` now and is fetched by that module's own
-Makefile; pdf0 has no targets for it.
+Three datasets are the exception and *are* committed: `testdata/xmp-rng/`
+(ISO 16684 RelaxNG schemas, MIT, used by `TestXMPTablesMatchRNG`), the
+spec-example JSON, and `testdata/shaping/corpus.txt` — 12,475 strings over
+which `Shape`, `Draw` and `MeasureShaped` have to agree with each other, which
+is a self-consistency check and needs no oracle beside it.
+
+Two oracle sets belong to other modules now and are fetched by their own
+Makefiles; pdf0 has no targets for either. The EN 16931 / CIUS data
+(`testdata/en16931-*`, `testdata/xrechnung`, `testdata/peppol`,
+`testdata/nlcius`) is `github.com/mgilbir/formalis`'. The shaping oracles —
+HarfBuzz's answers over six fonts, Unicode's UAX #9 conformance suites,
+CoreText, and the Universal Shaping Engine's category corrections — are
+`github.com/mgilbir/forme`', along with the engine they judge.
 
 ## Make targets
 
