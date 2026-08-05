@@ -42,6 +42,18 @@ for base in "aoAOЇα":
         words.append(base + "̊" + m + "̑")
         words.append(base + m + "̑")
 
+# Two vowel signs written before the same consonant.
+#
+# Both U+093F and U+094E are stored after the letter and drawn before it, and
+# the second is drawn furthest out — in front of the first, not behind it. The
+# grids above write at most one sign of a kind per letter, so nothing in them
+# asked which way round two of them go.
+for c in [chr(x) for x in range(0x0915, 0x093A)]:
+    words.append(c + "\u093F\u094E")
+    words.append(c + "\u094E\u093F")
+    words.append(c + "\u093F\u094E\u0902")
+    words.append(c + "\u094D" + c + "\u093F\u094E")
+
 # Greek and Cyrillic, pairwise over the alphabet — every letter against every
 # letter, in both cases.
 #
