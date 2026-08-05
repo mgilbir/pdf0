@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/content"
-	"github.com/mgilbir/pdf0/internal/fonttest"
 )
 
 func TestShapeInvertsTheKernSign(t *testing.T) {

@@ -1,18 +1,24 @@
 package pdfa
 
 import (
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/internal/fonttest"
 	"testing"
 
 	"github.com/mgilbir/forme/font"
 )
 
-// Cmap subtable fixtures for the tests in this package that need a font
-// program with hand-built cmap tables. The font package has its own copies for
-// its parser tests; a test helper cannot cross a package boundary, and these
-// two tests belong here — one asserts a budget trip is reported through the
-// limit recorder, the other exercises the validator's .notdef determination.
+// Two tests needing a font program with hand-built cmap tables.
+//
+// The tables come from forme's fonttest, which is where a font fixture is
+// built and is shared rather than copied — a second copy of a fixture both
+// modules edit is how a disagreement between the fixtures comes to look like a
+// disagreement between the readers.
+//
+// The tests belong here because what they assert is this module's: one that a
+// budget trip is reported through the limit recorder, the other that the
+// validator's .notdef determination survives a subtable that outranks a good
+// one and maps nothing.
 
 // TestCmapEmptySubtableDoesNotDisplace ensures a higher-ranked subtable that
 // maps nothing leaves the font's mappings alone. Before the nil-not-empty fix a

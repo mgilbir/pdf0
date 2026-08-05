@@ -2,8 +2,8 @@ package pdfa
 
 import (
 	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/internal/fonttest"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 )

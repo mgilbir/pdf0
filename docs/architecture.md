@@ -55,7 +55,7 @@ regular package.
 | `internal/crypt` | The standard security handler. No public API of its own. |
 | `fonts` | Setting text with a font: shaped glyphs into content-stream operators, and the font into the document. The shaping itself, and the sfnt/CFF/Type 1 program reader under it, are [github.com/mgilbir/forme](https://github.com/mgilbir/forme). |
 | `internal/finding` | The panic boundary, the reserved rule identifiers, deterministic ordering. |
-| `internal/fonttest`, `internal/signtest` | Fixtures shared by tests in packages that cannot share a `_test.go`. |
+| `internal/signtest` | Fixtures shared by tests in packages that cannot share a `_test.go`. The font-program equivalent is [forme](https://github.com/mgilbir/forme)'s `fonttest`, exported rather than internal because two modules read font programs and one copy of the fixtures is the point. |
 
 ### `core.View`: the document seen from below
 
