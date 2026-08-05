@@ -69,6 +69,11 @@ those guards are configurable; the options are in
 [architecture.md](architecture.md#cancellation), and the design record behind
 both is [proposals/configurable-limits.md](proposals/configurable-limits.md).
 
+**[proposals/html-css-rendering.md](proposals/html-css-rendering.md)** — the
+design record for rendering HTML and CSS into a PDF page. Phases 0 and 1 of its
+§9 are done: the package split, and the content-generation layer this library
+had none of. Phase 2 is the parsers, and §11a says where to start.
+
 **[cli.md](cli.md)** — reference for `cmd/pdf0`, a small command-line front end
 used mainly for poking at files during development. pdf0 is a library first; this
 tool is not the supported surface and reaches only a fraction of the API. The doc
