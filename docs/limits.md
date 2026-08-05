@@ -31,7 +31,7 @@ There are only three honest things to do with an incomplete result.
 | **Silently wrong** | The truncated result is then used *as if complete*. | **False positives** — the library accuses a conformant file. |
 
 The third class is the dangerous one, and it is not hypothetical. Audit C46: a
-format-4 cmap segment starting at code 0 was dropped, and because `trueTypeGID`
+format-4 cmap segment starting at code 0 was dropped, and because `font.TrueTypeGID`
 treats a non-nil cmap as authoritative, every affected code resolved to "glyph
 0" — firing *"does not define a glyph referenced for rendering"* and *"references
 the .notdef glyph"* on a font that was fine. The empty-map defect found by
@@ -49,8 +49,8 @@ When a guard truncates a structure, one of three things must happen, in order of
 preference:
 
 1. the structure is made self-describing (partial), and the consumer declines
-   the dependent check — the `parseCmapSubtable` nil-vs-empty contract is this
-   idea, and `fontProgram.cmapPartial` / `parseCIDWidths`' second result extend
+   the dependent check — the `font.ParseCmapSubtable` nil-vs-empty contract is this
+   idea, and `font.Program.CmapPartial` / `parseCIDWidths`' second result extend
    it;
 2. the consumer skips the dependent check because the input is known-partial;
 3. the trip is reported as its own finding rather than the downstream one.
@@ -160,12 +160,12 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| cmap work budget (`WithMaxCmapWork`) | `fontprog.go` | **Silently wrong** | `trueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `fontProgram.cmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
+| cmap work budget (`WithMaxCmapWork`) | forme's `font/fontprog.go` | **Silently wrong** | `font.TrueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `font.Program.CmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
 | CID `/W` range span (`WithMaxCIDRangeSpan`) | `fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Fixed. `parseCIDWidths` reports completeness; the width rule declines; trip reported as `cid-width-range`. |
-| `parseCmapSubtable` nil-on-unreadable | `fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
+| `font.ParseCmapSubtable` nil-on-unreadable | forme's `font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
-| sfnt/CFF/Type1 structural bails (`return nil`) | `fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
+| sfnt/CFF/Type1 structural bails (`return nil`) | forme's `font/fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
 
 ### Content scanning
 
@@ -179,45 +179,45 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | ICC profile size (`WithMaxICCProfileBytes`) | `pdfa.go` | Silently lossy, fail-open by design | `getOutputIntentCoverage` sets `hasRGB=hasCMYK=true` on an unreadable profile precisely to avoid a false positive. | Unchanged. |
 | XMP packet size (`WithMaxXMPPacketBytes`) | `xmp.go`, `xmp_schemas.go` | Silently lossy, fail-open by design | `parseXMPProperties` errors over the cap and `checkXMPProperties` reads that as "no properties to check" — **never** a violation, so an oversized valid packet is not failed. Well-formedness still runs: `xmpWellFormed` is O(n) over the token stream and needs no tree. | Unchanged. The two rules that survive the cap are the two a caller most needs, and the skipped ones are value checks that cannot fire without a tree. |
 | embedded PDF/A validation (no bound of its own) | `final_rules.go` | Was **silently wrong** | `checkEmbeddedPDFA` treated *any* non-empty result from the nested validation as non-conformance, so a guard trip or a recovered panic inside the embedded document became *"an embedded PDF file is not compliant with PDF/A"* (6.9). | Fixed. `embeddedPDFACompliant` returns completeness alongside the verdict; a nested `IsCheckerFinding` declines the 6.9 finding and reports `embedded-pdfa` instead. The nested read and validation now also inherit the outer document's resolved limits rather than the defaults — the one place a hostile file could otherwise spend a whole second document's budget unconfigured. Because that makes a *lowered* ceiling a possible cause of "did not read" and "declares no level", those two exits also withhold the verdict whenever the limits in force are not the defaults, which is fail-open (a missed finding, never a manufactured one). Under the defaults nothing changes. |
-| Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Unchanged. |
+| Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx/pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Unchanged. |
 
 ### Structure and PDF/UA
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| table grid fills (`WithMaxTableGridFills`) | `pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
-| `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua.go`, `pdfua_struct.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. | Reported as `rolemap-work`. Type resolution (`resolveRoleMapChain`) shares the same budget and returns a completeness flag; on a trip `checkUARoleMap` declines rather than reporting *"neither standard nor mapped"*. |
-| `maxFieldTreeDepth` (64) | `signatures.go`, `sign.go` | Silently lossy | Truncates a reported `SignatureResult.Field` name; never flips `Valid` or `CoversWholeDocument`. | Unchanged. |
+| table grid fills (`WithMaxTableGridFills`) | `pdfua/pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
+| `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua/pdfua.go`, `pdfua/pdfua_struct.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. | Reported as `rolemap-work`. Type resolution (`resolveRoleMapChain`) shares the same budget and returns a completeness flag; on a trip `checkUARoleMap` declines rather than reporting *"neither standard nor mapped"*. |
+| `maxFieldTreeDepth` (64) | `signatures.go`, `sign.go` | Silently lossy | Truncates a reported `sign.Result.Field` name; never flips `Valid` or `CoversWholeDocument`. | Unchanged. |
 | `maxPageTreeDepth` (64) | `sign.go` | Loud | `signingTarget` refuses. | Unchanged. |
-| Struct-tree / table-row seen-sets | `pdfua_struct.go`, `pdfua_tablegrid.go` | Silently lossy on well-formed input | An element reachable twice is not a valid structure tree, so these only bite malformed files. | Unchanged (see *Left deliberately*). |
+| Struct-tree / table-row seen-sets | `pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go` | Silently lossy on well-formed input | An element reachable twice is not a valid structure tree, so these only bite malformed files. | Unchanged (see *Left deliberately*). |
 
 ### Parsing and file structure
 
 | Guard | File | Class | Notes |
 | --- | --- | --- | --- |
-| `maxParseDepth` (1000) | `parser.go` | Loud | A hard error. In lenient (rebuilt-xref) mode the caller drops the object instead — see the objstm row. |
+| `maxParseDepth` (1000) | `syntax/parser.go` | Loud | A hard error. In lenient (rebuilt-xref) mode the caller drops the object instead — see the objstm row. |
 | decoded-stream cap (`WithMaxDecodedStreamBytes`, default 100 MB) | `xref.go` | Loud | A hard error out of `flateDecode`. Being loud, it needs no trip report; the write-side `objStmMaxRaw` derives from it so a container pdf0 writes is one the same configuration can read back. |
-| `maxSerializeDepth` (1000) | `serializer.go` | Loud | A hard error; guards an unrecoverable stack overflow. |
+| `maxSerializeDepth` (1000) | `syntax/serializer.go` | Loud | A hard error; guards an unrecoverable stack overflow. |
 | `maxCompareDepth` (1000) | `compare.go` | Silently wrong *by construction* | Beyond the cap two objects are declared **not equal**. Documented as such; no validator rule compares structures that deep. |
-| `maxTokenGap` (1 MiB) | `lexer.go` | Loud-ish | The lexer parks and the parser fails on the next token. Not reachable by the recorder (see *reach*, above). |
+| `maxTokenGap` (1 MiB) | `syntax/lexer.go` | Loud-ish | The lexer parks and the parser fails on the next token. Not reachable by the recorder (see *reach*, above). |
 | object-stream decompression budget (`WithMaxObjectStreamBytes`) | `objstm.go` | Silently wrong *in aggregate* | The container's objects go missing from `doc.Objects`. PDF/A reports the container (6.1.6/6.1.7), but every other validator then resolves those objects to `nil`, which is indistinguishable from "absent": *"document does not specify a default language"*, *"encrypted document has no /P permissions entry"*, *"annotation has no alternate description"*, *"a DPart reference does not resolve to a dictionary"*. Now reported as `objstm-decompressed-total` in every validator, so the cascade is attributable. |
 | `Document.Resolve` 64-hop cap | `document.go` | Silently wrong in principle | Returns `nil`, indistinguishable from "key absent". A 64-hop reference chain does not occur in real files (measured: 0); the same `nil` arriving from the objstm budget is what actually bites, and that is now reported. See *Left deliberately*. |
 | `WriteIncremental` vs `brokenObjStms` | `incremental.go` | Was **silently wrong** | It computed `/Size` from an incomplete object set and wrote the file without a word — the only write path that did not refuse. Now refuses, as `Write` already did. |
 
 ### Image codecs
 
-Every guard in `jbig2*.go`, `ccitt.go`, `mq.go`, `imagejpeg.go`, `imagemask.go`,
-`imagecolor.go`, `function_ps.go` and `filters.go` is at worst a false negative
+Every guard in `internal/jbig2`, `internal/ccitt`, `images/`,
+`images/`, `internal/core` (PDF functions, stream filters) is at worst a false negative
 **for the extraction API**. No PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a
 decoded pixel: the image rules read dictionary keys (`/Alternates`,
 `/Interpolate`, `/OPI`, `/SMask`, `/Filter`, `/ColorSpace`) and
 `checkCSForDevice` judges colour from `/ColorSpace` alone. A budget trip
 surfaces as `ExtractedImage.Note`, not as a finding.
 
-`function_ps.go` is in this list because of who calls it, not where it lives.
+The type-4 budget is in this list because of who calls it, not where it lives.
 The type-4 (PostScript calculator) work budget — `WithMaxPostScriptSteps`, the
 eleventh configurable limit — bounds `psExec`, and `evalFunction` is reached only
-from `imagecolor.go`'s tint-transform rendering. The PDF/A tint-transform rule
+from `images/imagecolor.go`'s tint-transform rendering. The PDF/A tint-transform rule
 compares function *objects* (`Equal`), it never evaluates one, so a trip costs
 pixel fidelity and no finding. This is why the budget reports no trip: there is
 no rule to decline.
@@ -240,7 +240,7 @@ falsePositives=0 missed=0 parseErrors=0`, Isartor `missed=1`, Level A 9/9,
 Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
 
 - **`standardStructType` followed exactly one `/RoleMap` hop**
-  (`pdfua_struct.go`). A role map may reach a standard type through intermediate
+  (`pdfua/pdfua_struct.go`). A role map may reach a standard type through intermediate
   custom types — `MyPara → Para → P` is legal (ISO 32000-1 14.7.3) — and one hop
   declared the type unmapped, firing *"structure type /X is neither standard nor
   mapped in /RoleMap"* and then, because every dependent rule saw the raw type, a
@@ -249,7 +249,7 @@ Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
   budget rather than inventing a second knob, with a seen-set so a cyclic map
   terminates. It returns a completeness flag, so a budget trip declines the
   finding instead of manufacturing one (the rule at the top of this document).
-- **`fontprog.go`'s Type 1 CharStrings loop broke on
+- **forme's `font/fontprog.go`'s Type 1 CharStrings loop broke on
   `strings.Contains(name, "end")`** after a *successful* glyph parse, truncating
   the glyph list at the first font defining `endash` (or
   `enfilledcircbullet`, or `endescender`). **Fixed:** `type1CharStringsEnd`
@@ -257,7 +257,7 @@ Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
   the entry's `ND`/`|-` (Type 1 Font Format 10.3) — read from the byte stream,
   not from a glyph name.
 - **`devColorScanner.memo` was keyed on `*Stream` but not on `applyGroup`**
-  (`pdfx_color.go`), so whichever visit came first answered for both: a form
+  (`pdfx/pdfx_color.go`), so whichever visit came first answered for both: a form
   whose isolated calibrated group covers its `DeviceRGB` was reported unmasked
   once an appearance-stream visit had cached the raw value → *"DeviceRGB used
   without a matching OutputIntent, DefaultRGB or covering group colour space"*.

@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"crypto/x509"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 	"sort"
 	"strings"
 	"testing"
@@ -19,7 +22,7 @@ import (
 // time-stamp added to a document that already had a "Timestamp1" field
 // collided with it. The signing path had already grown a free-name scan;
 // the time-stamp path did not use it. Duplicate names are not only invalid —
-// they defeat SignatureResult.Field and PAdESResult.Field, whose whole job is
+// they defeat sign.Result.Field and sign.PAdESResult.Field, whose whole job is
 // to say which field a result belongs to.
 
 // buildPDFWithNamedField builds a one-page document carrying a single
@@ -55,11 +58,11 @@ func allFieldNames(t *testing.T, d *Document) []string {
 	t.Helper()
 	var names []string
 	for _, iobj := range d.Objects {
-		fd, ok := iobj.Value.(*Dictionary)
+		fd, ok := iobj.Value.(*object.Dictionary)
 		if !ok || (fd.Get("FT") == nil && fd.Get("V") == nil) {
 			continue
 		}
-		if n := d.qualifiedFieldName(fd); n != "" {
+		if n := sign.QualifiedFieldName(d.view(), fd); n != "" {
 			names = append(names, n)
 		}
 	}
@@ -71,8 +74,8 @@ func allFieldNames(t *testing.T, d *Document) []string {
 // hardcoded name: two archival time-stamps on one document must end up in two
 // differently named fields. Before the fix both were "Timestamp1".
 func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
-	cert, _ := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, _ := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	base := buildPDFWithPageContents()
 	d0, err := Read(bytes.NewReader(base), int64(len(base)))
@@ -122,7 +125,7 @@ func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
 	if res[0].Field != "Timestamp1" || res[1].Field != "Timestamp2" {
 		t.Errorf("result fields = [%q %q], want [Timestamp1 Timestamp2]", res[0].Field, res[1].Field)
 	}
-	if !d2.coveringDocTimestamp(o2) {
+	if !sign.CoveringDocTimestamp(d2.view(), o2) {
 		t.Error("the outermost archival time-stamp does not verify over the file it seals")
 	}
 }
@@ -131,8 +134,8 @@ func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
 // need not have been produced by pdf0. A document that already carries a field
 // called "Timestamp1" — for any reason — must not get a second one.
 func TestArchivalTimestampSkipsTakenTimestampName(t *testing.T) {
-	cert, _ := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, _ := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	base := buildPDFWithNamedField("Timestamp1")
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
@@ -161,8 +164,8 @@ func TestArchivalTimestampSkipsTakenTimestampName(t *testing.T) {
 // time-stamp added to a signed document does not become "Timestamp2" because a
 // "Signature1" exists.
 func TestSignatureThenTimestampNames(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	base := buildPDFWithPageContents()
 	d0, err := Read(bytes.NewReader(base), int64(len(base)))
@@ -196,7 +199,7 @@ func TestSignatureThenTimestampNames(t *testing.T) {
 	if strings.Join(got, ",") != "Signature1,Timestamp1" {
 		t.Errorf("/AcroForm /Fields = %v, want [Signature1 Timestamp1]", got)
 	}
-	if res := d2.ValidatePAdES(o2); len(res) != 1 || res[0].Field != "Signature1" || res[0].Level != PAdESBLTA {
+	if res := d2.ValidatePAdES(o2); len(res) != 1 || res[0].Field != "Signature1" || res[0].Level != sign.PAdESBLTA {
 		t.Errorf("ValidatePAdES = %+v, want one B-LTA result for Signature1", res)
 	}
 }

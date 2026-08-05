@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/x509"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -79,18 +81,18 @@ func buildPDFWithNestedPagesOnly() []byte {
 
 // signatureWidget returns the object number and dictionary of the one signature
 // widget (/FT /Sig) in the document.
-func signatureWidget(t *testing.T, d *Document) (int, *Dictionary) {
+func signatureWidget(t *testing.T, d *Document) (int, *object.Dictionary) {
 	t.Helper()
-	num, found := -1, (*Dictionary)(nil)
+	num, found := -1, (*object.Dictionary)(nil)
 	for n, iobj := range d.Objects {
-		fd, ok := iobj.Value.(*Dictionary)
+		fd, ok := iobj.Value.(*object.Dictionary)
 		if !ok {
 			continue
 		}
-		if sub, _ := fd.Get("Subtype").(Name); sub != "Widget" {
+		if sub, _ := fd.Get("Subtype").(object.Name); sub != "Widget" {
 			continue
 		}
-		if ft, _ := fd.Get("FT").(Name); ft != "Sig" {
+		if ft, _ := fd.Get("FT").(object.Name); ft != "Sig" {
 			continue
 		}
 		if found != nil {
@@ -110,16 +112,16 @@ func pageCarryingAnnot(t *testing.T, d *Document, annotNum int) int {
 	t.Helper()
 	num := -1
 	for n, iobj := range d.Objects {
-		pg, ok := iobj.Value.(*Dictionary)
+		pg, ok := iobj.Value.(*object.Dictionary)
 		if !ok {
 			continue
 		}
-		if ty, _ := pg.Get("Type").(Name); ty != "Page" {
+		if ty, _ := pg.Get("Type").(object.Name); ty != "Page" {
 			continue
 		}
-		annots, _ := d.Resolve(pg.Get("Annots")).(Array)
+		annots, _ := d.Resolve(pg.Get("Annots")).(object.Array)
 		for _, a := range annots {
-			if ref, ok := a.(IndirectRef); ok && ref.Number == annotNum {
+			if ref, ok := a.(object.IndirectRef); ok && ref.Number == annotNum {
 				if num >= 0 {
 					t.Fatalf("annotation %d appears in the /Annots of pages %d and %d", annotNum, num, n)
 				}
@@ -138,8 +140,8 @@ func pageCarryingAnnot(t *testing.T, d *Document, annotNum int) int {
 // object, and that object must be the page whose /Annots carries the widget.
 // Everything is asserted on the re-read output, not on internal state.
 func TestWidgetPageAndPRefAgree(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	writers := []struct {
 		name  string
@@ -180,7 +182,7 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 				}
 
 				widgetNum, widget := signatureWidget(t, signed)
-				pRef, ok := widget.Get("P").(IndirectRef)
+				pRef, ok := widget.Get("P").(object.IndirectRef)
 				if !ok {
 					t.Fatalf("widget /P = %#v, want an indirect reference (ISO 32000-2 Table 166)", widget.Get("P"))
 				}
@@ -188,7 +190,7 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 				if target == nil {
 					t.Fatalf("widget /P (%d 0 R) does not resolve to a dictionary", pRef.Number)
 				}
-				if ty, _ := target.Get("Type").(Name); ty != "Page" {
+				if ty, _ := target.Get("Type").(object.Name); ty != "Page" {
 					t.Errorf("widget /P (%d 0 R) resolves to /Type %v, want /Page", pRef.Number, ty)
 				}
 				if carrier := pageCarryingAnnot(t, signed, widgetNum); carrier != pRef.Number {
@@ -200,7 +202,7 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 				if len(pages) == 0 {
 					t.Fatal("the produced document has no pages")
 				}
-				if first := signed.dictObjNum(pages[0]); first != pRef.Number {
+				if first := signed.view().DictObjNum(pages[0]); first != pRef.Number {
 					t.Errorf("the widget is on page object %d, want the first page in reading order (object %d)", pRef.Number, first)
 				}
 			})
@@ -213,7 +215,7 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 // is signable at all. Before, firstPage found no /Type /Page among the root's
 // kids and every writer refused the document.
 func TestSignDocumentWithNestedPageTree(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildPDFWithNestedPagesOnly()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
@@ -238,22 +240,22 @@ func TestSignDocumentWithNestedPageTree(t *testing.T) {
 // document: /Kids pointing back at an ancestor must not loop forever, and a tree
 // that holds no page at all must still report none.
 func TestFirstPageStopsOnACyclicPageTree(t *testing.T) {
-	d := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	root := &Dictionary{}
-	root.Set("Type", Name("Pages"))
-	root.Set("Kids", Array{IndirectRef{Number: 3}})
-	inner := &Dictionary{}
-	inner.Set("Type", Name("Pages"))
-	inner.Set("Kids", Array{IndirectRef{Number: 2}}) // back up to the root
-	d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	d.Objects[2] = &IndirectObject{Number: 2, Value: root}
-	d.Objects[3] = &IndirectObject{Number: 3, Value: inner}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	d := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	root := &object.Dictionary{}
+	root.Set("Type", object.Name("Pages"))
+	root.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+	inner := &object.Dictionary{}
+	inner.Set("Type", object.Name("Pages"))
+	inner.Set("Kids", object.Array{object.IndirectRef{Number: 2}}) // back up to the root
+	d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	d.Objects[2] = &object.IndirectObject{Number: 2, Value: root}
+	d.Objects[3] = &object.IndirectObject{Number: 3, Value: inner}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	if pg := d.firstPage(cat); pg != nil {
+	if pg := firstPage(d, cat); pg != nil {
 		t.Errorf("firstPage on a cyclic, page-less tree = %v, want nil", pg)
 	}
 }

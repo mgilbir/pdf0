@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -86,7 +87,7 @@ func TestParseIndirectLengthNoOverread(t *testing.T) {
 	total := 0
 	found := 0
 	for _, io := range doc.Objects {
-		st, ok := io.Value.(*Stream)
+		st, ok := io.Value.(*object.Stream)
 		if !ok {
 			continue
 		}
@@ -114,14 +115,14 @@ func TestParseIndirectLengthNoOverread(t *testing.T) {
 func TestIntegerObjectValue(t *testing.T) {
 	ok := func(src string, want int64) {
 		t.Helper()
-		v, got := NewParser([]byte(src)).integerObjectValue()
+		v, got := NewParser([]byte(src)).IntegerObjectValue()
 		if !got || v != want {
 			t.Errorf("integerObjectValue(%q) = (%d, %v), want (%d, true)", src, v, got, want)
 		}
 	}
 	bad := func(src string) {
 		t.Helper()
-		if v, got := NewParser([]byte(src)).integerObjectValue(); got {
+		if v, got := NewParser([]byte(src)).IntegerObjectValue(); got {
 			t.Errorf("integerObjectValue(%q) = (%d, true), want false", src, v)
 		}
 	}

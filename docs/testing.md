@@ -69,12 +69,19 @@ serves genuinely broken PDFs, and roughly 0.7% is normal. A **panic or a hang**
 is the failure, and the file is quarantined as the reproduction. See
 [testdata/cc/README.md](../testdata/cc/README.md).
 
-Two datasets are the exception and *are* committed: `testdata/xmp-rng/`
-(ISO 16684 RelaxNG schemas, MIT, used by `TestXMPTablesMatchRNG`) and the
-spec-example JSON. The EN 16931 / CIUS oracle data referenced by the `.gitignore`
-(`testdata/en16931-*`, `testdata/xrechnung`, `testdata/peppol`, `testdata/nlcius`)
-belongs to `github.com/mgilbir/formalis` now and is fetched by that module's own
-Makefile; pdf0 has no targets for it.
+Three datasets are the exception and *are* committed: `testdata/xmp-rng/`
+(ISO 16684 RelaxNG schemas, MIT, used by `TestXMPTablesMatchRNG`), the
+spec-example JSON, and `testdata/shaping/corpus.txt` — 12,475 strings over
+which `Shape`, `Draw` and `MeasureShaped` have to agree with each other, which
+is a self-consistency check and needs no oracle beside it.
+
+Two oracle sets belong to other modules now and are fetched by their own
+Makefiles; pdf0 has no targets for either. The EN 16931 / CIUS data
+(`testdata/en16931-*`, `testdata/xrechnung`, `testdata/peppol`,
+`testdata/nlcius`) is `github.com/mgilbir/formalis`'. The shaping oracles —
+HarfBuzz's answers over six fonts, Unicode's UAX #9 conformance suites,
+CoreText, and the Universal Shaping Engine's category corrections — are
+`github.com/mgilbir/forme`', along with the engine they judge.
 
 ## Make targets
 
@@ -132,18 +139,18 @@ through a valid-enough PDF carrying a valid-enough sfnt carrying a cmap table,
 which no random mutation assembles — so in practice they never exercise it at
 all:
 
-- **`FuzzCmapSubtable`** — `parseCmapSubtable` on raw subtable bytes, the deep
+- **`FuzzCmapSubtable`** — `font.ParseCmapSubtable` on raw subtable bytes, the deep
   target. Beyond "does not panic" it asserts the invariants the work budgets and
   the recent fixes exist to hold: the returned map never exceeds the cmap work
   budget the target parses at (`defaultMaxCmapWork`, the default behind
   `WithMaxCmapWork`) however many groups the table claims; an unreadable subtable — or one that maps nothing — returns nil rather
-  than an empty non-nil map (`trueTypeGID` treats a non-nil cmap as
+  than an empty non-nil map (`font.TrueTypeGID` treats a non-nil cmap as
   authoritative, so an empty one reads as "every code is `.notdef`" and produces
   font-wide false findings); and every key is a Unicode code point mapping to a
   glyph index in 1..0xFFFF, never 0. Seeded from the builders behind the
   hand-written cmap tests: each supported format, the budget-tripping tables, the
   truncated and malformed variants, and formats 2/13/14, which are not parsed.
-- **`FuzzSFNTCmap`** — `parseSFNT`, the smallest entry point that exercises
+- **`FuzzSFNTCmap`** — `font.ParseSFNT`, the smallest entry point that exercises
   subtable *selection*. The (3,10) > (3,1) > (0,x) ranking runs on
   attacker-supplied platform ids, encoding ids and offsets and decides which
   subtable becomes the font's authoritative cmap; whichever it picks must satisfy

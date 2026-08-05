@@ -4,8 +4,9 @@ A PDF parser, serializer, and conformance validator written in Go. The object
 model is ISO 32000-2 (PDF 2.0); files of any version are read into it, and most
 of the standards below are defined against PDF 1.x — PDF/A-1, -2 and -3 require
 a 1.x header, PDF/X-1a and -3 require 1.3/1.4. Its only dependencies are the
-author's own pure-Go modules (`formalis` for EN 16931 invoice rules,
-`golittlecms` for ICC profiles, `gopenjpeg` for JPEG 2000).
+author's own pure-Go modules (`forme` for text shaping and font programs,
+`formalis` for EN 16931 invoice rules, `golittlecms` for ICC profiles,
+`gopenjpeg` for JPEG 2000).
 
 ```
 go get github.com/mgilbir/pdf0
@@ -35,15 +36,15 @@ go get github.com/mgilbir/pdf0
   results combine across validators. Factur-X and Order-X return a result
   *struct* rather than a slice, because they also carry the extracted invoice
   XML, the conformance level the container declared, and what the invoice rule
-  engine did not evaluate — but `res.Violations` holds `FacturXViolation` /
-  `OrderXViolation`, which satisfy `Violation` like every other finding type.
+  engine did not evaluate — but `res.Violations` holds `facturx.Violation` /
+  `facturx.OrderXViolation`, which satisfy `Violation` like every other finding type.
 - **Encrypt / decrypt** with the standard security handler — RC4, AES-128, and
   AES-256, via `ReadWithPassword`, `SetEncryption`, and `RemoveEncryption`
   (`Document.Locked` reports a file that could not be decrypted).
 - **Sign and verify** digital signatures (`WriteSigned` / `VerifySignatures`,
   CMS/PKCS#7), including PAdES B-B through B-LTA (`ValidatePAdES`), RFC 3161
   timestamps, and CRL/OCSP revocation. Read the verdict with
-  `SignatureResult.DocumentUnmodified()`, not `Valid` alone — `Valid` accepts a
+  `sign.Result.DocumentUnmodified()`, not `Valid` alone — `Valid` accepts a
   document altered by a post-signing incremental update. `VerifySignatures`
   performs no trust-chain check; use `VerifySignaturesWithRoots` for that.
 - **Extract** text (`ExtractText`) and images (`ExtractImages`, or the lazy
@@ -86,7 +87,7 @@ func main() {
 Validate against a PDF/A level:
 
 ```go
-errs := pdf0.ValidatePDFA(doc, pdf0.PDFA4)
+errs := pdf0.ValidatePDFA(doc, pdfa.PDFA4)
 for _, e := range errs {
 	fmt.Println(e) // e.g. [PDF/A-4 6.2.10] object 12: font ... must be embedded
 }
@@ -123,7 +124,7 @@ Under a deadline, use the `…Context` variants — `ReadContext`,
 ```go
 ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 defer cancel()
-errs := pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA4)
+errs := pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA4)
 ```
 
 A cancelled validation returns the findings it had gathered plus one under the
@@ -223,18 +224,42 @@ findings, not a description of how the code works — for that start at
 
 ## Layout
 
-pdf0 is one flat Go package. The subsystems, and the doc that maps each:
+The entry points are in the root `pdf0` package — `Read`, `Document`, and one
+validator function per standard. The types they work in are declared in
+subpackages and named from there, so a caller that builds an object graph or
+inspects a finding imports the package that owns it. Underneath the root:
+
+- **Regular packages** for pieces that carry public API — `object` (the value
+  types), `syntax` (lexer, parser, serializer), `images`, `sign`, `facturx`, and
+  one per validator (`pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`). Each
+  type is declared in exactly one place and named from there: a dictionary is
+  `object.Dictionary`, a PDF/UA finding is `pdfua.Violation`, a conformance
+  level is `pdfa.PDFA2b`. The root package does not re-export them.
+- **`internal/`** for implementation whose API is not meant for callers:
+  `core` (the document seen from below — see below), `finding` (the shared
+  validator harness), `crypt` (the standard security handler, reached only
+  through `Document`), `ccitt`, `jbig2`.
+
+A subsystem does not name `Document`. It takes a `core.View`: the object graph,
+the trailer, what `Read` found in the file, the resolved budget, the
+cancellation signal, and a per-run state for memos. `Document` stays at the top
+as the facade — a method must be declared in the package that declares its type,
+and `Document`'s twenty-eight exported methods are the public API, so it cannot
+move below the packages that would need it. Passing a view *down* keeps the
+dependency arrows pointing one way.
+
+The subsystems, and the doc that maps each:
 
 | Subsystem | Files | Map |
 |-----------|-------|-----|
-| Core object model, parser, serializer | `object.go`, `lexer.go`, `parser.go`, `serializer.go`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
-| PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
-| The other validators | `pdfua*.go`, `pdfx*.go`, `pdfvt.go`, `pdfr.go`, `dpart.go`, `facturx*.go`, `order_x.go`, `violations.go` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
-| Fonts | `fonts.go`, `fontprog.go`, `font_encodings.go`, `cff_strings.go` | [fonts.md](docs/fonts.md) |
+| Core object model, parser, serializer | `object/`, `syntax/`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
+| PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `embedded.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
+| The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/` with their `*_api.go` boundaries in root, `facturx*.go`, `order_x.go`, `violations.go`, `internal/finding` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
+| Fonts | `fonts.go`, `fonts/`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [fonts.md](docs/fonts.md) |
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
 | Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | [encryption.md](docs/encryption.md) |
-| Images and codecs | `imageextract.go`, `imagejpeg.go`, `imagecolor.go`, `imagemask.go`, `ccitt.go`, `mq.go`, `jbig2*.go`, `function.go`, `function_ps.go` | [images.md](docs/images.md) |
+| Images and codecs | `images/`, `images_api.go`, `internal/ccitt`, `internal/jbig2`, `internal/core` (PDF functions) | [images.md](docs/images.md) |
 | Text and pages | `text.go`, `pages.go` | [architecture.md](docs/architecture.md) |
 | Command-line front end (dev aid, not the supported surface) | `cmd/pdf0` | [cli.md](docs/cli.md) |
 

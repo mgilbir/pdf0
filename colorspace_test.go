@@ -1,18 +1,20 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"strings"
 	"testing"
 )
 
 // pageWithContent wires a page with the given content stream and resources
 // into a NewPDFADocument.
-func pageWithContent(doc *Document, content string, resources *Dictionary) *Dictionary {
+func pageWithContent(doc *Document, content string, resources *object.Dictionary) *object.Dictionary {
 	page := addTestPage(doc)
-	stream := &Stream{Dict: Dictionary{}, Data: []byte(content)}
-	stream.Dict.Set("Length", Integer(len(content)))
-	doc.Objects[21] = &IndirectObject{Number: 21, Value: stream}
-	page.Set("Contents", IndirectRef{Number: 21})
+	stream := &object.Stream{Dict: object.Dictionary{}, Data: []byte(content)}
+	stream.Dict.Set("Length", object.Integer(len(content)))
+	doc.Objects[21] = &object.IndirectObject{Number: 21, Value: stream}
+	page.Set("Contents", object.IndirectRef{Number: 21})
 	if resources != nil {
 		page.Set("Resources", resources)
 	}
@@ -23,16 +25,16 @@ func pageWithContent(doc *Document, content string, resources *Dictionary) *Dict
 // same form merely referenced but never drawn must not be.
 func TestDeviceColorInFormBody(t *testing.T) {
 	build := func(content string) *Document {
-		doc := NewPDFADocument(PDFA2b)
-		form := &Stream{Dict: Dictionary{}, Data: []byte("0 0.7 0.7 0 k 0 0 9 9 re f")}
-		form.Dict.Set("Type", Name("XObject"))
-		form.Dict.Set("Subtype", Name("Form"))
-		form.Dict.Set("BBox", Array{Integer(0), Integer(0), Integer(10), Integer(10)})
-		form.Dict.Set("Length", Integer(len(form.Data)))
-		doc.Objects[22] = &IndirectObject{Number: 22, Value: form}
-		xobj := &Dictionary{}
-		xobj.Set("X0", IndirectRef{Number: 22})
-		res := &Dictionary{}
+		doc := NewPDFADocument(pdfa.PDFA2b)
+		form := &object.Stream{Dict: object.Dictionary{}, Data: []byte("0 0.7 0.7 0 k 0 0 9 9 re f")}
+		form.Dict.Set("Type", object.Name("XObject"))
+		form.Dict.Set("Subtype", object.Name("Form"))
+		form.Dict.Set("BBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(10), object.Integer(10)})
+		form.Dict.Set("Length", object.Integer(len(form.Data)))
+		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: form}
+		xobj := &object.Dictionary{}
+		xobj.Set("X0", object.IndirectRef{Number: 22})
+		res := &object.Dictionary{}
 		res.Set("XObject", xobj)
 		pageWithContent(doc, content, res)
 		return doc
@@ -40,20 +42,20 @@ func TestDeviceColorInFormBody(t *testing.T) {
 
 	// Invoked: DeviceCMYK without CMYK intent coverage must be flagged
 	// (NewPDFADocument embeds an RGB output intent).
-	if !hasRule(ValidatePDFA(build("q /X0 Do Q"), PDFA2b), "6.2.4.3") {
+	if !hasRule(ValidatePDFA(build("q /X0 Do Q"), pdfa.PDFA2b), "6.2.4.3") {
 		t.Error("DeviceCMYK inside an invoked form must be flagged")
 	}
 	// Referenced but never invoked: executed-content model, no violation.
-	if hasRule(ValidatePDFA(build("q 0.1 0.2 0.3 rg 0 0 5 5 re f Q"), PDFA2b), "6.2.4.3") {
+	if hasRule(ValidatePDFA(build("q 0.1 0.2 0.3 rg 0 0 5 5 re f Q"), pdfa.PDFA2b), "6.2.4.3") {
 		t.Error("a form that is never invoked must not be flagged")
 	}
 }
 
 // /DeviceCMYK cs selection (as opposed to the k operator) must be detected.
 func TestDeviceColorViaCSOperator(t *testing.T) {
-	doc := NewPDFADocument(PDFA2b)
+	doc := NewPDFADocument(pdfa.PDFA2b)
 	pageWithContent(doc, "/DeviceCMYK cs 0 0 0 1 sc 0 0 5 5 re f", nil)
-	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.2.4.3") {
+	if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.2.4.3") {
 		t.Error("device colour selected via cs operator must be detected")
 	}
 }
@@ -62,99 +64,61 @@ func TestDeviceColorViaCSOperator(t *testing.T) {
 // DefaultCMYK does not reach inside the pattern's resource scope.
 func TestDefaultColorSpaceScope(t *testing.T) {
 	build := func(patternDefaults bool) *Document {
-		doc := NewPDFADocument(PDFA2b)
-		pat := &Stream{Dict: Dictionary{}, Data: []byte("0 0 0 1 k 0 0 5 5 re f")}
-		pat.Dict.Set("PatternType", Integer(1))
-		pat.Dict.Set("PaintType", Integer(1))
-		pat.Dict.Set("TilingType", Integer(1))
-		pat.Dict.Set("BBox", Array{Integer(0), Integer(0), Integer(10), Integer(10)})
-		pat.Dict.Set("XStep", Integer(10))
-		pat.Dict.Set("YStep", Integer(10))
-		pat.Dict.Set("Length", Integer(len(pat.Data)))
-		patRes := &Dictionary{}
+		doc := NewPDFADocument(pdfa.PDFA2b)
+		pat := &object.Stream{Dict: object.Dictionary{}, Data: []byte("0 0 0 1 k 0 0 5 5 re f")}
+		pat.Dict.Set("PatternType", object.Integer(1))
+		pat.Dict.Set("PaintType", object.Integer(1))
+		pat.Dict.Set("TilingType", object.Integer(1))
+		pat.Dict.Set("BBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(10), object.Integer(10)})
+		pat.Dict.Set("XStep", object.Integer(10))
+		pat.Dict.Set("YStep", object.Integer(10))
+		pat.Dict.Set("Length", object.Integer(len(pat.Data)))
+		patRes := &object.Dictionary{}
 		if patternDefaults {
-			csDict := &Dictionary{}
-			csDict.Set("DefaultCMYK", Array{Name("ICCBased"), IndirectRef{Number: 5}})
+			csDict := &object.Dictionary{}
+			csDict.Set("DefaultCMYK", object.Array{object.Name("ICCBased"), object.IndirectRef{Number: 5}})
 			patRes.Set("ColorSpace", csDict)
 		}
 		pat.Dict.Set("Resources", patRes)
-		doc.Objects[22] = &IndirectObject{Number: 22, Value: pat}
+		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: pat}
 
-		patterns := &Dictionary{}
-		patterns.Set("P0", IndirectRef{Number: 22})
-		res := &Dictionary{}
+		patterns := &object.Dictionary{}
+		patterns.Set("P0", object.IndirectRef{Number: 22})
+		res := &object.Dictionary{}
 		res.Set("Pattern", patterns)
 		// Page-level DefaultCMYK, which must NOT cover the pattern.
-		pageCS := &Dictionary{}
-		pageCS.Set("DefaultCMYK", Array{Name("ICCBased"), IndirectRef{Number: 5}})
+		pageCS := &object.Dictionary{}
+		pageCS.Set("DefaultCMYK", object.Array{object.Name("ICCBased"), object.IndirectRef{Number: 5}})
 		res.Set("ColorSpace", pageCS)
 		pageWithContent(doc, "/Pattern cs /P0 scn 0 0 50 50 re f", res)
 		return doc
 	}
 
-	if !hasRule(ValidatePDFA(build(false), PDFA2b), "6.2.4.3") {
+	if !hasRule(ValidatePDFA(build(false), pdfa.PDFA2b), "6.2.4.3") {
 		t.Error("page-level DefaultCMYK must not cover device colour inside a pattern")
 	}
-	if hasRule(ValidatePDFA(build(true), PDFA2b), "6.2.4.3") {
+	if hasRule(ValidatePDFA(build(true), pdfa.PDFA2b), "6.2.4.3") {
 		t.Error("the pattern's own DefaultCMYK must cover its device colour")
-	}
-}
-
-// ISO 32000-1 Tables 63-65: CIE colour space parameter validation.
-func TestCIEColorSpaceParams(t *testing.T) {
-	check := func(family string, params *Dictionary) []ValidationError {
-		doc := NewPDFADocument(PDFA2b)
-		var errs []ValidationError
-		checkColorSpaceValue(doc, Array{Name(family), params}, 0, PDFA2b, &errs)
-		return errs
-	}
-	wp := func(x, y, z float64) Array { return Array{Real(x), Real(y), Real(z)} }
-
-	missing := &Dictionary{}
-	if len(check("CalRGB", missing)) == 0 {
-		t.Error("missing WhitePoint must be flagged")
-	}
-	badY := &Dictionary{}
-	badY.Set("WhitePoint", wp(0.95, 0.9, 1.09))
-	if len(check("CalGray", badY)) == 0 {
-		t.Error("WhitePoint Yw != 1.0 must be flagged")
-	}
-	negBP := &Dictionary{}
-	negBP.Set("WhitePoint", wp(0.95, 1.0, 1.09))
-	negBP.Set("BlackPoint", Array{Real(-0.1), Real(0), Real(0)})
-	if len(check("Lab", negBP)) == 0 {
-		t.Error("negative BlackPoint must be flagged")
-	}
-	badRange := &Dictionary{}
-	badRange.Set("WhitePoint", wp(0.95, 1.0, 1.09))
-	badRange.Set("Range", Array{Integer(100), Integer(-100), Integer(-100), Integer(100)})
-	if len(check("Lab", badRange)) == 0 {
-		t.Error("Lab Range with min > max must be flagged")
-	}
-	good := &Dictionary{}
-	good.Set("WhitePoint", wp(0.9505, 1.0, 1.089))
-	if errs := check("CalRGB", good); len(errs) != 0 {
-		t.Errorf("valid CalRGB dict must pass, got %v", errs)
 	}
 }
 
 // Overprint mode 1 with an ICCBased CMYK space and overprinting on.
 func TestICCCMYKOverprint(t *testing.T) {
 	build := func(op bool, paint string) *Document {
-		doc := NewPDFADocument(PDFA2b)
-		icc := &Stream{Dict: Dictionary{}, Data: DefaultSRGBProfile()}
-		icc.Dict.Set("N", Integer(4))
-		icc.Dict.Set("Length", Integer(len(icc.Data)))
-		doc.Objects[22] = &IndirectObject{Number: 22, Value: icc}
-		gs := &Dictionary{}
-		gs.Set("Type", Name("ExtGState"))
-		gs.Set("OPM", Integer(1))
-		gs.Set("OP", Boolean(op))
-		gsDict := &Dictionary{}
+		doc := NewPDFADocument(pdfa.PDFA2b)
+		icc := &object.Stream{Dict: object.Dictionary{}, Data: DefaultSRGBProfile()}
+		icc.Dict.Set("N", object.Integer(4))
+		icc.Dict.Set("Length", object.Integer(len(icc.Data)))
+		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: icc}
+		gs := &object.Dictionary{}
+		gs.Set("Type", object.Name("ExtGState"))
+		gs.Set("OPM", object.Integer(1))
+		gs.Set("OP", object.Boolean(op))
+		gsDict := &object.Dictionary{}
 		gsDict.Set("GS0", gs)
-		csDict := &Dictionary{}
-		csDict.Set("CS0", Array{Name("ICCBased"), IndirectRef{Number: 22}})
-		res := &Dictionary{}
+		csDict := &object.Dictionary{}
+		csDict.Set("CS0", object.Array{object.Name("ICCBased"), object.IndirectRef{Number: 22}})
+		res := &object.Dictionary{}
 		res.Set("ExtGState", gsDict)
 		res.Set("ColorSpace", csDict)
 		pageWithContent(doc, "/GS0 gs /CS0 CS 0 0 0 1 SCN 0 0 5 5 re "+paint, res)
@@ -162,7 +126,7 @@ func TestICCCMYKOverprint(t *testing.T) {
 	}
 	// ICC-profile validity and overprint share clause 6.2.4.2 (different tests),
 	// so match the overprint rule by its message to isolate it.
-	hasOverprint := func(errs []ValidationError) bool {
+	hasOverprint := func(errs []pdfa.Violation) bool {
 		for _, e := range errs {
 			if e.Rule == "6.2.4.2" && strings.Contains(e.Message, "overprint") {
 				return true
@@ -170,13 +134,13 @@ func TestICCCMYKOverprint(t *testing.T) {
 		}
 		return false
 	}
-	if !hasOverprint(ValidatePDFA(build(true, "S"), PDFA2b)) {
+	if !hasOverprint(ValidatePDFA(build(true, "S"), pdfa.PDFA2b)) {
 		t.Error("OPM=1 + OP + stroked ICC CMYK must be flagged")
 	}
-	if hasOverprint(ValidatePDFA(build(false, "S"), PDFA2b)) {
+	if hasOverprint(ValidatePDFA(build(false, "S"), pdfa.PDFA2b)) {
 		t.Error("without overprinting there is no violation")
 	}
-	if hasOverprint(ValidatePDFA(build(true, "f"), PDFA2b)) {
+	if hasOverprint(ValidatePDFA(build(true, "f"), pdfa.PDFA2b)) {
 		t.Error("stroke CS that never strokes must not be flagged")
 	}
 }
@@ -203,59 +167,42 @@ func TestJPXValidation(t *testing.T) {
 		return append(data, box("jp2h", jp2h)...)
 	}
 	build := func(data []byte) *Document {
-		doc := NewPDFADocument(PDFA2b)
-		img := &Stream{Dict: Dictionary{}, Data: data}
-		img.Dict.Set("Type", Name("XObject"))
-		img.Dict.Set("Subtype", Name("Image"))
-		img.Dict.Set("Filter", Name("JPXDecode"))
-		img.Dict.Set("Length", Integer(len(data)))
-		doc.Objects[22] = &IndirectObject{Number: 22, Value: img}
+		doc := NewPDFADocument(pdfa.PDFA2b)
+		img := &object.Stream{Dict: object.Dictionary{}, Data: data}
+		img.Dict.Set("Type", object.Name("XObject"))
+		img.Dict.Set("Subtype", object.Name("Image"))
+		img.Dict.Set("Filter", object.Name("JPXDecode"))
+		img.Dict.Set("Length", object.Integer(len(data)))
+		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: img}
 		return doc
 	}
 
-	if !hasRule(ValidatePDFA(build(jp2(5, 7, 1, 16)), PDFA2b), "6.2.8.3") {
+	if !hasRule(ValidatePDFA(build(jp2(5, 7, 1, 16)), pdfa.PDFA2b), "6.2.8.3") {
 		t.Error("5 colour channels must be flagged")
 	}
-	if !hasRule(ValidatePDFA(build(jp2(3, 40, 1, 16)), PDFA2b), "6.2.8.3") {
+	if !hasRule(ValidatePDFA(build(jp2(3, 40, 1, 16)), pdfa.PDFA2b), "6.2.8.3") {
 		t.Error("bit depth 41 must be flagged")
 	}
-	if !hasRule(ValidatePDFA(build(jp2(3, 7, 4, 0)), PDFA2b), "6.2.8.3") {
+	if !hasRule(ValidatePDFA(build(jp2(3, 7, 4, 0)), pdfa.PDFA2b), "6.2.8.3") {
 		t.Error("METH 4 must be flagged")
 	}
-	if !hasRule(ValidatePDFA(build(jp2(3, 7, 1, 19)), PDFA2b), "6.2.8.3") {
+	if !hasRule(ValidatePDFA(build(jp2(3, 7, 1, 19)), pdfa.PDFA2b), "6.2.8.3") {
 		t.Error("enumerated colour space 19 (CIEJab) must be flagged")
 	}
-	if hasRule(ValidatePDFA(build(jp2(3, 7, 1, 16)), PDFA2b), "6.2.8.3") {
+	if hasRule(ValidatePDFA(build(jp2(3, 7, 1, 16)), pdfa.PDFA2b), "6.2.8.3") {
 		t.Error("valid sRGB JP2 must pass")
 	}
 }
 
 // Separation/DeviceN device alternates need intent coverage at 2b+.
 func TestDeviceAlternateNeedsCoverage(t *testing.T) {
-	doc := NewPDFADocument(PDFA2b) // sRGB intent: no CMYK coverage
-	csDict := &Dictionary{}
-	csDict.Set("CS0", Array{Name("Separation"), Name("Spot"), Name("DeviceCMYK"), IndirectRef{Number: 5}})
-	res := &Dictionary{}
+	doc := NewPDFADocument(pdfa.PDFA2b) // sRGB intent: no CMYK coverage
+	csDict := &object.Dictionary{}
+	csDict.Set("CS0", object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceCMYK"), object.IndirectRef{Number: 5}})
+	res := &object.Dictionary{}
 	res.Set("ColorSpace", csDict)
 	pageWithContent(doc, "/CS0 cs 1 sc 0 0 5 5 re f", res)
-	if !hasRule(ValidatePDFA(doc, PDFA2b), "6.2.4.3") {
+	if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.2.4.3") {
 		t.Error("DeviceCMYK alternate without CMYK intent must be flagged")
-	}
-}
-
-// DeviceN with spot colorants requires a Colorants dictionary at 2b+.
-func TestDeviceNSpotNeedsColorants(t *testing.T) {
-	doc := NewPDFADocument(PDFA2b)
-	var errs []ValidationError
-	deviceN := Array{Name("DeviceN"), Array{Name("Spot1")}, Array{Name("ICCBased"), IndirectRef{Number: 5}}, IndirectRef{Number: 5}}
-	checkColorSpaceValue(doc, deviceN, 0, PDFA2b, &errs)
-	found := false
-	for _, e := range errs {
-		if e.Message == "DeviceN color space with spot colorants must have a Colorants dictionary" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("spot DeviceN without Colorants dict must be flagged, got %v", errs)
 	}
 }

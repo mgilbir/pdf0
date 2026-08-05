@@ -1,10 +1,20 @@
 package pdf0
 
-// Violation is the common face of every validator finding. Each validator
-// keeps its own concrete type — ValidationError (PDF/A), UAViolation (PDF/UA),
-// PDFXViolation, PDFVTViolation, PDFRViolation, DPartViolation,
-// FacturXViolation, OrderXViolation — with the fields and Error formatting of
-// its standard, but all of them satisfy this interface, so findings from
+import (
+	"github.com/mgilbir/pdf0/dpart"
+	"github.com/mgilbir/pdf0/facturx"
+	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/pdfr"
+	"github.com/mgilbir/pdf0/pdfua"
+	"github.com/mgilbir/pdf0/pdfvt"
+	"github.com/mgilbir/pdf0/pdfx"
+)
+
+// Violation is the common face of every validator finding. Each validator keeps
+// its own concrete type — pdfa.Violation, pdfua.Violation, pdfx.Violation,
+// pdfvt.Violation, pdfr.Violation, dpart.Violation, facturx.Violation and
+// facturx.OrderXViolation — with the fields and Error formatting of its
+// standard, but all of them satisfy this interface, so findings from
 // different validators can be collected, filtered and reported together:
 //
 //	var all []pdf0.Violation
@@ -18,9 +28,9 @@ package pdf0
 // There is no longer an exception. The Factur-X and Order-X validators return a
 // result struct rather than a slice, because they carry the extracted invoice
 // XML and its coverage alongside the findings, but the findings themselves are
-// FacturXViolation and OrderXViolation values and satisfy this interface like
-// any other. They used to hold formalis.Violation, an external type this package
-// could not extend, which also put them outside IsCheckerFinding — so a
+// facturx.Violation and facturx.OrderXViolation values and satisfy this
+// interface like any other. They used to hold formalis.Violation, an external
+// type this package could not extend, which also put them outside IsCheckerFinding — so a
 // cancelled or panicking run had no way to say "pdf0 stopped early" that a
 // caller could tell apart from a conformance failure. That is why those two
 // validators had no Context variant, and why they have one now.
@@ -35,65 +45,14 @@ type Violation interface {
 	ObjectNum() int
 }
 
-// RuleID returns the ISO 19005 clause identifier.
-func (e ValidationError) RuleID() string { return e.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (e ValidationError) ObjectNum() int { return e.Object }
-
-// RuleID returns the ISO 14289 clause identifier.
-func (v UAViolation) RuleID() string { return v.Clause }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v UAViolation) ObjectNum() int { return v.Object }
-
-// RuleID returns the PDF/X rule identifier.
-func (v PDFXViolation) RuleID() string { return v.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v PDFXViolation) ObjectNum() int { return v.Object }
-
-// RuleID returns the PDF/VT rule identifier.
-func (v PDFVTViolation) RuleID() string { return v.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v PDFVTViolation) ObjectNum() int { return v.Object }
-
-// RuleID returns the PDF/R rule identifier.
-func (v PDFRViolation) RuleID() string { return v.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v PDFRViolation) ObjectNum() int { return v.Object }
-
-// RuleID returns the ISO 32000-2 DPart subclause.
-func (v DPartViolation) RuleID() string { return v.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v DPartViolation) ObjectNum() int { return v.Object }
-
-// RuleID returns the Factur-X container rule identifier, or the identifier the
-// invoice rule engine minted for an adopted finding. It is unique only within
-// FacturXViolation.Source, which names the authority.
-func (v FacturXViolation) RuleID() string { return v.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v FacturXViolation) ObjectNum() int { return v.Object }
-
-// RuleID returns the Order-X container rule identifier, or the identifier the
-// order rule engine minted for an adopted finding.
-func (v OrderXViolation) RuleID() string { return v.Rule }
-
-// ObjectNum returns the anchoring object number, 0 if N/A.
-func (v OrderXViolation) ObjectNum() int { return v.Object }
-
 // Every finding type satisfies Violation.
 var _ = []Violation{
-	ValidationError{},
-	UAViolation{},
-	PDFXViolation{},
-	PDFVTViolation{},
-	PDFRViolation{},
-	DPartViolation{},
-	FacturXViolation{},
-	OrderXViolation{},
+	pdfa.Violation{},
+	pdfua.Violation{},
+	pdfx.Violation{},
+	pdfvt.Violation{},
+	pdfr.Violation{},
+	dpart.Violation{},
+	facturx.Violation{},
+	facturx.OrderXViolation{},
 }

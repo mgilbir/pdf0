@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 )
@@ -35,7 +36,7 @@ func TestRebuildShiftedObjectOffsets(t *testing.T) {
 	if len(doc.Objects) != 2 {
 		t.Errorf("loaded %d objects, want 2", len(doc.Objects))
 	}
-	if getCatalog(doc) == nil {
+	if doc.view().Catalog() == nil {
 		t.Error("catalog not reachable after rebuild")
 	}
 	var buf bytes.Buffer
@@ -65,7 +66,7 @@ func TestRebuildDeadStartxref(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read did not rebuild from a dead startxref: %v", err)
 	}
-	if len(doc.Objects) != 2 || getCatalog(doc) == nil {
+	if len(doc.Objects) != 2 || doc.view().Catalog() == nil {
 		t.Errorf("rebuild incomplete: %d objects", len(doc.Objects))
 	}
 }
@@ -83,7 +84,7 @@ func TestRebuildSynthesizesRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read did not synthesize a trailer: %v", err)
 	}
-	root, ok := doc.Trailer.Get("Root").(IndirectRef)
+	root, ok := doc.Trailer.Get("Root").(object.IndirectRef)
 	if !ok || root.Number != 1 {
 		t.Fatalf("synthesized /Root = %v, want 1 0 R", doc.Trailer.Get("Root"))
 	}
@@ -102,8 +103,8 @@ func TestRebuildLastDefinitionWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	cat := getCatalog(doc)
-	if v, _ := cat.Get("Version").(Name); v != "B" {
+	cat := doc.view().Catalog()
+	if v, _ := cat.Get("Version").(object.Name); v != "B" {
 		t.Errorf("catalog /Version = %q, want the later definition B", v)
 	}
 }
@@ -153,7 +154,7 @@ func TestRebuildMaterializesObjStm(t *testing.T) {
 		if !ok {
 			t.Fatalf("object %d from the scanned object stream was not materialized", num)
 		}
-		if _, ok := iobj.Value.(*Dictionary); !ok {
+		if _, ok := iobj.Value.(*object.Dictionary); !ok {
 			t.Errorf("object %d is %T, want *Dictionary", num, iobj.Value)
 		}
 	}

@@ -1,6 +1,11 @@
 package pdf0
 
-import "crypto/rand"
+import (
+	"crypto/rand"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
+)
 
 // This file implements preflight repair: the write side of PDF/A conformance,
 // as opposed to the validators that only report. It removes the document-level
@@ -29,7 +34,7 @@ type RepairAction struct {
 // It is not a substitute for validation: run ValidatePDFA afterwards to see what
 // remains (missing embedded fonts, device colour without an output intent, and
 // the like need information Repair does not have).
-func (d *Document) Repair(level PDFALevel) []RepairAction {
+func (d *Document) Repair(level pdfa.Level) []RepairAction {
 	var actions []RepairAction
 	add := func(desc string) { actions = append(actions, RepairAction{Description: desc}) }
 
@@ -49,14 +54,14 @@ func (d *Document) Repair(level PDFALevel) []RepairAction {
 	}
 
 	// Additional-actions dictionaries are forbidden on pages and annotations too.
-	for _, pg := range collectPages(d, d.catalogPages()) {
-		if pg.dict.Get("AA") != nil {
-			pg.dict.Delete("AA")
+	for _, pg := range d.view().Pages(d.view().CatalogPages()) {
+		if pg.Dict.Get("AA") != nil {
+			pg.Dict.Delete("AA")
 			add("removed page additional-actions (/AA)")
 		}
 	}
 	for _, iobj := range d.Objects {
-		if a, ok := iobj.Value.(*Dictionary); ok && isAnnotation(a) && a.Get("AA") != nil {
+		if a, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(a) && a.Get("AA") != nil {
 			a.Delete("AA")
 			add("removed annotation additional-actions (/AA)")
 		}
@@ -67,19 +72,11 @@ func (d *Document) Repair(level PDFALevel) []RepairAction {
 		id := make([]byte, 16)
 		if _, err := rand.Read(id); err == nil {
 			trailer := d.Trailer.Clone()
-			trailer.Set("ID", Array{String{Value: id}, String{Value: append([]byte(nil), id...)}})
+			trailer.Set("ID", object.Array{object.String{Value: id}, object.String{Value: append([]byte(nil), id...)}})
 			d.Trailer = *trailer
 			add("added a missing file identifier (/ID)")
 		}
 	}
 
 	return actions
-}
-
-// catalogPages returns the catalog's /Pages reference, or nil.
-func (d *Document) catalogPages() Object {
-	if cat := d.ResolveDict(d.Trailer.Get("Root")); cat != nil {
-		return cat.Get("Pages")
-	}
-	return nil
 }

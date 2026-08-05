@@ -22,11 +22,76 @@ Each subsystem built on that core has its own map:
 | Symptom-first troubleshooting | [troubleshooting.md](troubleshooting.md) |
 | Decisions that keep coming up | [adr/](adr/README.md) |
 
+## Packages
+
+pdf0 was one flat package. It is now a core plus one package per subsystem, and
+the split follows two rules.
+
+**Each type is declared in exactly one place, and named from there.** A
+dictionary is `object.Dictionary`, a PDF/A finding is `pdfa.Violation`, a
+conformance level is `pdfa.PDFA2b`. The root package holds the entry points —
+`Read`, `Document` and its methods, one validator function per standard — and
+re-exports nothing. A caller that builds an object graph or reads a finding
+imports the package that owns the type.
+
+**A subsystem is a regular package if it carries public API, `internal/` if it
+does not.** `internal/crypt` is the clear case of the second: its whole exported
+surface exists so the reader, the writer and the white-box tests can reach it,
+and no caller ever names it — every entry point is a `Document` method. The
+distinction matters for godoc too: an `internal` package's names cannot be
+linked to from outside, so anything a caller must read about has to live in a
+regular package.
+
+| Package | Holds |
+|---------|-------|
+| `object` | The ISO 32000-2 7.3 value types. Data only — no parsing, no resolution. |
+| `syntax` | Lexer, parser, serializer: bytes ↔ objects, one object at a time. |
+| `pdfa` | The PDF/A rules, level model, XMP machinery and document builder. |
+| `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart` | One validator each, with its finding type. |
+| `sign` | Signature verification: CMS, PAdES, revocation, time-stamp tokens. |
+| `facturx` | The Factur-X and Order-X containers, and the invoice embedder. |
+| `images` | Image extraction. |
+| `internal/core` | What every subsystem needs: the view, resolution, filters, content scanning, limits. |
+| `internal/crypt` | The standard security handler. No public API of its own. |
+| `fonts` | Setting text with a font: shaped glyphs into content-stream operators, and the font into the document. The shaping itself, and the sfnt/CFF/Type 1 program reader under it, are [github.com/mgilbir/forme](https://github.com/mgilbir/forme). |
+| `internal/finding` | The panic boundary, the reserved rule identifiers, deterministic ordering. |
+| `internal/signtest` | Fixtures shared by tests in packages that cannot share a `_test.go`. The font-program equivalent is [forme](https://github.com/mgilbir/forme)'s `fonttest`, exported rather than internal because two modules read font programs and one copy of the fixtures is the point. |
+
+### `core.View`: the document seen from below
+
+A subsystem needs the object graph, the trailer, the version, the resolved
+limits and the cancellation signal — not the `Document` type, which is the
+public facade and must stay at the top. `core.View` is that value: everything
+below the API boundary reads one, and `Document.view()` is where the boundary
+is.
+
+It carries a `*core.Run` for per-operation state, so the memo tables a
+validation builds are private to that run and two concurrent validations of the
+same document cannot see each other's.
+
+### Handing work back across the boundary
+
+Two rules need something the root package has and their own package must not
+depend on: the PDF/A embedded-file rule needs the *reader*, and the Factur-X
+container needs the PDF/A-3 verdict, which needs the reader and the read-time
+limit report. Neither is a package-level variable. The caller installs the
+function on the run — `pdfa.SetEmbeddedChecker`, `facturx.SetPDFAChecker` — so
+nothing is shared between concurrent operations, and the default when none is
+installed *declines to answer* rather than guessing: "pdf0 could not tell" must
+never reach a caller as "the document is wrong."
+
+### Findings and the `Violation` interface
+
+`pdf0.Violation` is declared in the root package, where it is consumed. The
+finding types are declared in their own packages and satisfy it structurally, by
+carrying `Error`, `RuleID` and `ObjectNum` — so no validator package imports its
+own caller.
+
 ## The object model
 
-Every PDF value implements the `Object` interface (`object.go`): `Boolean`,
-`Integer`, `Real`, `String`, `Name`, `Array`, `Dictionary`, `Stream`, `Null`,
-`IndirectObject`, `IndirectRef`. A `Document` holds `Objects` (object number →
+Every PDF value implements the `object.Object` interface: `Boolean`, `Integer`, `Real`, `String`,
+`Name`, `Array`, `Dictionary`, `Stream`, `Null`, `IndirectObject`,
+`IndirectRef`. A `Document` holds `Objects` (object number →
 `IndirectObject`), the `Trailer` dictionary, and — after `Read` — `Offsets`
 (object number → absolute byte offset, used by the byte-level validation rules).
 `Dictionary` uses parallel `Keys`/`Values` slices to preserve key order for
@@ -263,7 +328,7 @@ images — rather than to a bounded structural count.
 |---|---|---|
 | `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
 | `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
-| All eleven validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `FacturXViolation` / `OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
+| All eleven validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `facturx.Violation` / `facturx.OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
 | `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. |
 | | `Images` | An iterator is already cancellable by `break`, and because each image is decoded only as it is yielded, breaking after image N skips exactly what a context checked between images would have. |
 | | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Bounded by the signature count (single digits), and each signature's crypto is bounded. |

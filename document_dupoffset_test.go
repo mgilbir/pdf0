@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -71,8 +72,8 @@ func TestReadDuplicateXrefOffsetShares(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	var first *Stream
-	distinct := map[*Stream]bool{}
+	var first *object.Stream
+	distinct := map[*object.Stream]bool{}
 	for n := 4; n < 4+dups; n++ {
 		io, ok := doc.Objects[n]
 		if !ok {
@@ -81,7 +82,7 @@ func TestReadDuplicateXrefOffsetShares(t *testing.T) {
 		if io.Number != n {
 			t.Errorf("object %d has Number %d; each duplicate must keep its own number", n, io.Number)
 		}
-		st, ok := io.Value.(*Stream)
+		st, ok := io.Value.(*object.Stream)
 		if !ok {
 			t.Fatalf("object %d value is %T, want *Stream", n, io.Value)
 		}
@@ -100,7 +101,7 @@ func TestReadDuplicateXrefOffsetShares(t *testing.T) {
 	}
 	// And the shared data slice is backed by the same array.
 	for n := 4; n < 4+dups; n++ {
-		st := doc.Objects[n].Value.(*Stream)
+		st := doc.Objects[n].Value.(*object.Stream)
 		if len(st.Data) > 0 && len(first.Data) > 0 && &st.Data[0] != &first.Data[0] {
 			t.Fatalf("object %d data is a separate allocation; expected the shared backing array", n)
 		}

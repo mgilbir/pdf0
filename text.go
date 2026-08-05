@@ -2,8 +2,9 @@ package pdf0
 
 import (
 	"context"
-	"iter"
-	"strconv"
+	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
 
@@ -20,7 +21,7 @@ import (
 // breaks follow the text-positioning operators and wide inter-glyph gaps become
 // spaces.
 func (d *Document) ExtractText() string {
-	text, _ := d.extractText(canceler{})
+	text, _ := d.extractText(core.Canceler{})
 	return text
 }
 
@@ -36,27 +37,27 @@ func (d *Document) ExtractText() string {
 //
 // The error is nil exactly when the extraction ran to completion.
 func (d *Document) ExtractTextContext(ctx context.Context) (string, error) {
-	return d.extractText(newCanceler(ctx))
+	return d.extractText(core.NewCanceler(ctx))
 }
 
-func (d *Document) extractText(cancel canceler) (string, error) {
+func (d *Document) extractText(cancel core.Canceler) (string, error) {
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
-		return "", cancel.stopErr("extracting text")
+		return "", cancel.StopErr("extracting text")
 	}
 	var b strings.Builder
-	for i, pg := range collectPages(d, catalog.Get("Pages")) {
+	for i, pg := range d.view().Pages(catalog.Get("Pages")) {
 		// Per page: the coarse boundary. Within a page the tokenizer stops every
 		// cancelScanBytes, so a single enormous page is interruptible too.
-		if err := cancel.stopErr("extracting text"); err != nil {
+		if err := cancel.StopErr("extracting text"); err != nil {
 			return b.String(), err
 		}
 		if i > 0 {
 			b.WriteByte('\f')
 		}
-		b.WriteString(d.extractPageText(cancel, pg.dict))
+		b.WriteString(d.extractPageText(cancel, pg.Dict))
 	}
-	return b.String(), cancel.stopErr("extracting text")
+	return b.String(), cancel.StopErr("extracting text")
 }
 
 // ExtractPageText returns the visible text of a single page dictionary. It
@@ -68,15 +69,15 @@ func (d *Document) extractText(cancel canceler) (string, error) {
 // and a caller extracting several pages already has a loop of its own to check
 // a context in. Adding a variant here would move that check inside a call that
 // does one page's work either way.
-func (d *Document) ExtractPageText(page *Dictionary) string {
-	return d.extractPageText(canceler{}, page)
+func (d *Document) ExtractPageText(page *object.Dictionary) string {
+	return d.extractPageText(core.Canceler{}, page)
 }
 
-func (d *Document) extractPageText(cancel canceler, page *Dictionary) string {
-	res := d.ResolveDict(inheritedPageAttr(d, page, "Resources"))
-	content := getContentStreamData(d, page.Get("Contents"))
+func (d *Document) extractPageText(cancel core.Canceler, page *object.Dictionary) string {
+	res := d.ResolveDict(d.view().InheritedPageAttr(page, "Resources"))
+	content := core.ContentStreamData(d.view(), page.Get("Contents"))
 	var out strings.Builder
-	d.extractContentText(cancel, res, content, &out, map[*Stream]bool{}, 0)
+	d.extractContentText(cancel, res, content, &out, map[*object.Stream]bool{}, 0)
 	return out.String()
 }
 
@@ -87,53 +88,53 @@ const maxTextFormDepth = 32
 // a form XObject — to out. Fonts are resolved from res; a Do that invokes a form
 // XObject recurses into it with the form's own resources (audit C28). seen guards
 // cyclic form references and depth bounds nesting.
-func (d *Document) extractContentText(cancel canceler, res *Dictionary, content []byte, out *strings.Builder, seen map[*Stream]bool, depth int) {
+func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictionary, content []byte, out *strings.Builder, seen map[*object.Stream]bool, depth int) {
 	if len(content) == 0 || depth > maxTextFormDepth {
 		return
 	}
 	fonts := d.fontMapsFrom(res)
-	var xobjs *Dictionary
+	var xobjs *object.Dictionary
 	if res != nil {
 		xobjs = d.ResolveDict(res.Get("XObject"))
 	}
 
-	var curMap map[int]rune
+	var curMap, curEncoding map[int]rune
 	curTwoByte := false
-	var operands []contentToken
+	var operands []core.ContentToken
 
 	show := func(raw []byte) {
-		for _, r := range decodeShown(raw, curMap, curTwoByte) {
+		for _, r := range decodeShown(raw, curMap, curEncoding, curTwoByte) {
 			out.WriteRune(r)
 		}
 	}
-	for tk := range tokenizeContent(cancel, content) {
-		if tk.kind != ctOp {
+	for tk := range core.TokenizeContent(cancel, content) {
+		if tk.Kind != core.KindOp {
 			operands = append(operands, tk)
 			continue
 		}
-		switch tk.op {
+		switch tk.Op {
 		case "Tf":
 			if len(operands) >= 1 {
-				if f, ok := fonts[operands[0].name]; ok {
-					curMap, curTwoByte = f.toUnicode, f.twoByte
+				if f, ok := fonts[operands[0].Name]; ok {
+					curMap, curEncoding, curTwoByte = f.toUnicode, f.encoding, f.twoByte
 				} else {
-					curMap, curTwoByte = nil, false
+					curMap, curEncoding, curTwoByte = nil, nil, false
 				}
 			}
 		case "Tj", "'", "\"":
-			if tk.op != "Tj" {
+			if tk.Op != "Tj" {
 				out.WriteByte('\n')
 			}
 			if len(operands) >= 1 {
-				show(operands[len(operands)-1].str)
+				show(operands[len(operands)-1].Str)
 			}
 		case "TJ":
 			for _, el := range operands {
-				switch el.kind {
-				case ctString:
-					show(el.str)
-				case ctNumber:
-					if el.number() < -100 { // wide negative adjustment ≈ a space
+				switch el.Kind {
+				case core.KindString:
+					show(el.Str)
+				case core.KindNumber:
+					if el.Number() < -100 { // wide negative adjustment ≈ a space
 						out.WriteByte(' ')
 					}
 				}
@@ -142,14 +143,14 @@ func (d *Document) extractContentText(cancel canceler, res *Dictionary, content 
 			out.WriteByte('\n')
 		case "Do":
 			if xobjs != nil && len(operands) >= 1 {
-				if st, ok := d.Resolve(xobjs.Get(Name(operands[len(operands)-1].name))).(*Stream); ok {
-					if sub, _ := st.Dict.Get("Subtype").(Name); sub == "Form" && !seen[st] {
+				if st, ok := d.Resolve(xobjs.Get(object.Name(operands[len(operands)-1].Name))).(*object.Stream); ok {
+					if sub, _ := st.Dict.Get("Subtype").(object.Name); sub == "Form" && !seen[st] {
 						seen[st] = true
 						formRes := d.ResolveDict(st.Dict.Get("Resources"))
 						if formRes == nil {
 							formRes = res // a form may draw with the calling context's resources
 						}
-						d.extractContentText(cancel, formRes, decodeContentStream(d, st), out, seen, depth+1)
+						d.extractContentText(cancel, formRes, d.view().Content(st), out, seen, depth+1)
 					}
 				}
 			}
@@ -160,11 +161,16 @@ func (d *Document) extractContentText(cancel canceler, res *Dictionary, content 
 
 type fontText struct {
 	toUnicode map[int]rune
-	twoByte   bool
+	// encoding maps a character code to the character it stands for, built
+	// from the font's /Encoding. It is consulted when the font carries no
+	// ToUnicode entry for a code, which is the ordinary case for a simple font
+	// naming one of the standard encodings.
+	encoding map[int]rune
+	twoByte  bool
 }
 
 // fontMapsFrom resolves a resource dictionary's /Font entries to their ToUnicode maps.
-func (d *Document) fontMapsFrom(res *Dictionary) map[string]fontText {
+func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 	out := map[string]fontText{}
 	if res == nil {
 		return out
@@ -179,19 +185,95 @@ func (d *Document) fontMapsFrom(res *Dictionary) map[string]fontText {
 			continue
 		}
 		twoByte := false
-		if st, _ := f.Get("Subtype").(Name); st == "Type0" {
+		if st, _ := f.Get("Subtype").(object.Name); st == "Type0" {
 			twoByte = true
 		}
-		out[string(name)] = fontText{toUnicode: parseToUnicodeMap(d, f), twoByte: twoByte}
+		out[string(name)] = fontText{
+			toUnicode: d.view().ParseToUnicodeMap(f),
+			encoding:  d.simpleEncoding(f, twoByte),
+			twoByte:   twoByte,
+		}
 	}
 	return out
 }
 
+// simpleEncoding builds the code-to-character map a simple font's /Encoding
+// describes: a named base encoding, a /Differences list, or both.
+//
+// It matters most where a byte's value is least informative. WinAnsiEncoding
+// and Latin-1 agree everywhere except 0x80 to 0x9F, and that band is where the
+// curly quotes, the dashes, the bullet, the ellipsis and the euro live — so a
+// document setting a quotation mark is exactly the document the byte value gets
+// wrong.
+func (d *Document) simpleEncoding(f *object.Dictionary, twoByte bool) map[int]rune {
+	if twoByte {
+		return nil // a composite font is decoded by its CMap, not by an encoding
+	}
+	base := font.StandardEncodingNames
+	var differences object.Array
+	switch enc := d.Resolve(f.Get("Encoding")).(type) {
+	case object.Name:
+		base = baseEncodingNames(enc, base)
+	case *object.Dictionary:
+		if n, ok := d.Resolve(enc.Get("BaseEncoding")).(object.Name); ok {
+			base = baseEncodingNames(n, base)
+		}
+		differences, _ = d.Resolve(enc.Get("Differences")).(object.Array)
+	case nil:
+		// No /Encoding: the font's built-in encoding governs, which for a
+		// standard Latin face is close enough to Standard for extraction.
+	default:
+		return nil
+	}
+
+	out := make(map[int]rune, len(base)+len(differences))
+	for code, name := range base {
+		if r, ok := font.GlyphNameToRune(name, code); ok {
+			out[int(code)] = r
+		}
+	}
+	// /Differences overrides the base: a run of names beginning at each code it
+	// introduces (ISO 32000-2 9.6.5.1).
+	code := 0
+	for _, item := range differences {
+		switch v := d.Resolve(item).(type) {
+		case object.Integer:
+			code = int(v)
+		case object.Real:
+			code = int(v)
+		case object.Name:
+			if code >= 0 && code < 256 {
+				if r, ok := font.GlyphNameToRune(string(v), byte(code)); ok {
+					out[code] = r
+				} else {
+					delete(out, code) // named something unresolvable: say nothing
+				}
+			}
+			code++
+		}
+	}
+	return out
+}
+
+// baseEncodingNames resolves a base encoding name to its table, keeping the
+// current one for a name this package does not know.
+func baseEncodingNames(n object.Name, current map[byte]string) map[byte]string {
+	switch n {
+	case "WinAnsiEncoding":
+		return font.WinAnsiEncodingNames
+	case "MacRomanEncoding":
+		return font.MacRomanEncodingNames
+	case "StandardEncoding":
+		return font.StandardEncodingNames
+	}
+	return current
+}
+
 // decodeShown maps a shown byte string to runes. It prefers the font's
-// ToUnicode CMap; for a simple (single-byte) font it falls back to the byte
-// value as Latin-1 (a close approximation of WinAnsi for printable text), which
-// recovers ASCII text from the standard fonts that carry no ToUnicode map.
-func decodeShown(raw []byte, toUnicode map[int]rune, twoByte bool) []rune {
+// ToUnicode CMap, then the font's own /Encoding, and only then the byte value
+// as Latin-1 — which is right for ASCII and wrong exactly where an encoding
+// would have said so.
+func decodeShown(raw []byte, toUnicode map[int]rune, encoding map[int]rune, twoByte bool) []rune {
 	var runes []rune
 	step := 1
 	if twoByte {
@@ -206,6 +288,10 @@ func decodeShown(raw []byte, toUnicode map[int]rune, twoByte bool) []rune {
 			runes = append(runes, r)
 			continue
 		}
+		if r, ok := encoding[code]; ok {
+			runes = append(runes, r)
+			continue
+		}
 		if !twoByte && code >= 32 && code < 256 {
 			runes = append(runes, rune(code))
 		}
@@ -214,255 +300,3 @@ func decodeShown(raw []byte, toUnicode map[int]rune, twoByte bool) []rune {
 }
 
 // --- content-stream tokenizer ---
-
-type ctKind int
-
-const (
-	ctOp ctKind = iota
-	ctNumber
-	ctString
-	ctName
-	ctArrayStart
-	ctArrayEnd
-)
-
-type contentToken struct {
-	kind ctKind
-	op   string
-	name string
-	str  []byte
-	raw  []byte // ctNumber: the unparsed digits, sub-sliced from the content
-}
-
-// number parses a ctNumber token's value. Parsing is deferred to the consumer
-// because most consumers never look at a number: the PDF/UA content pass reads
-// only operators, names and strings, yet numbers are the most common token in a
-// content stream, so parsing every one eagerly was pure waste.
-func (t contentToken) number() float64 {
-	f, _ := strconv.ParseFloat(string(t.raw), 64)
-	return f
-}
-
-// tokenizeContent iterates the operand/operator tokens of a content stream. It
-// is lenient: unrecognized bytes are skipped. Array and dictionary delimiters are
-// surfaced so TJ arrays can be read; inline images (BI…ID…EI) are stepped over.
-//
-// Tokens are yielded one at a time rather than collected into a slice. Every
-// caller consumes them in a single forward pass, and a content stream of a real
-// document can hold tens of millions of tokens: materializing them dominated
-// PDF/UA validation, where the token slice alone accounted for ~94% of the run's
-// allocated bytes (the repeated grow-and-copy of a multi-gigabyte slice, not the
-// scan itself). Streaming makes the tokenizer allocation-free apart from the
-// string operands it must decode.
-//
-// The scan stops when cancel fires, checked every cancelScanBytes of input; see
-// cancel.go for why the check is gated on the scan position rather than run per
-// token.
-func tokenizeContent(cancel canceler, data []byte) iter.Seq[contentToken] {
-	return func(yield func(contentToken) bool) {
-		i := 0
-		nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
-		for i < len(data) {
-			if i >= nextCancelCheck {
-				if cancel.stopped() {
-					return
-				}
-				nextCancelCheck = i + cancelScanBytes
-			}
-			c := data[i]
-			switch {
-			case isContentWS(c):
-				i++
-			case c == '%':
-				for i < len(data) && data[i] != '\n' && data[i] != '\r' {
-					i++
-				}
-			case c == '(':
-				s, ni := scanContentLiteral(data, i)
-				if !yield(contentToken{kind: ctString, str: s}) {
-					return
-				}
-				i = ni
-			case c == '<' && i+1 < len(data) && data[i+1] == '<':
-				i += 2 // dictionary start — skip; not needed for text
-			case c == '>' && i+1 < len(data) && data[i+1] == '>':
-				i += 2
-			case c == '<':
-				s, ni := scanContentHex(data, i)
-				if !yield(contentToken{kind: ctString, str: s}) {
-					return
-				}
-				i = ni
-			case c == '/':
-				n, ni := scanContentName(data, i)
-				if !yield(contentToken{kind: ctName, name: n}) {
-					return
-				}
-				i = ni
-			case c == '[':
-				if !yield(contentToken{kind: ctArrayStart}) {
-					return
-				}
-				i++
-			case c == ']':
-				if !yield(contentToken{kind: ctArrayEnd}) {
-					return
-				}
-				i++
-			case c == '-' || c == '+' || c == '.' || (c >= '0' && c <= '9'):
-				raw, ni := scanContentNumberBytes(data, i)
-				if !yield(contentToken{kind: ctNumber, raw: raw}) {
-					return
-				}
-				i = ni
-			default:
-				word, ni := scanContentWord(data, i)
-				i = ni
-				if word == "" {
-					i++
-					continue
-				}
-				if word == "BI" {
-					i = skipContentInlineImage(data, i)
-					continue
-				}
-				if !yield(contentToken{kind: ctOp, op: word}) {
-					return
-				}
-			}
-		}
-	}
-}
-
-func scanContentLiteral(data []byte, i int) ([]byte, int) {
-	i++ // '('
-	var out []byte
-	depth := 1
-	for i < len(data) {
-		c := data[i]
-		switch c {
-		case '\\':
-			i++
-			if i >= len(data) {
-				return out, i
-			}
-			switch e := data[i]; e {
-			case 'n':
-				out = append(out, '\n')
-			case 'r':
-				out = append(out, '\r')
-			case 't':
-				out = append(out, '\t')
-			case 'b':
-				out = append(out, '\b')
-			case 'f':
-				out = append(out, '\f')
-			case '(', ')', '\\':
-				out = append(out, e)
-			default:
-				if e >= '0' && e <= '7' {
-					v := 0
-					for k := 0; k < 3 && i < len(data) && data[i] >= '0' && data[i] <= '7'; k++ {
-						v = v*8 + int(data[i]-'0')
-						i++
-					}
-					out = append(out, byte(v))
-					continue
-				}
-				out = append(out, e)
-			}
-			i++
-		case '(':
-			depth++
-			out = append(out, c)
-			i++
-		case ')':
-			depth--
-			if depth == 0 {
-				return out, i + 1
-			}
-			out = append(out, c)
-			i++
-		default:
-			out = append(out, c)
-			i++
-		}
-	}
-	return out, i
-}
-
-func scanContentHex(data []byte, i int) ([]byte, int) {
-	i++ // '<'
-	var digits []byte
-	for i < len(data) && data[i] != '>' {
-		if !isContentWS(data[i]) {
-			digits = append(digits, data[i])
-		}
-		i++
-	}
-	if i < len(data) {
-		i++ // '>'
-	}
-	if len(digits)%2 == 1 {
-		digits = append(digits, '0')
-	}
-	out := make([]byte, len(digits)/2)
-	for k := 0; k < len(out); k++ {
-		out[k] = hexNibble(digits[2*k])<<4 | hexNibble(digits[2*k+1])
-	}
-	return out, i
-}
-
-func hexNibble(c byte) byte {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0'
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10
-	}
-	return 0
-}
-
-func scanContentName(data []byte, i int) (string, int) {
-	i++ // '/'
-	start := i
-	for i < len(data) && !isContentWS(data[i]) && !isContentDelim(data[i]) {
-		i++
-	}
-	return string(data[start:i]), i
-}
-
-// scanContentNumberBytes returns the numeric literal starting at i as a
-// sub-slice of data, leaving the parse to contentToken.number.
-func scanContentNumberBytes(data []byte, i int) ([]byte, int) {
-	start := i
-	if data[i] == '-' || data[i] == '+' {
-		i++
-	}
-	for i < len(data) && ((data[i] >= '0' && data[i] <= '9') || data[i] == '.') {
-		i++
-	}
-	return data[start:i], i
-}
-
-func scanContentWord(data []byte, i int) (string, int) {
-	start := i
-	for i < len(data) && !isContentWS(data[i]) && !isContentDelim(data[i]) {
-		i++
-	}
-	return string(data[start:i]), i
-}
-
-// skipContentInlineImage steps past a BI…ID…EI inline image, given i positioned
-// just after the BI operator. It delegates to skipInlineImage — the single,
-// robust skipper — which parses the parameter dictionary and honors a declared
-// /L (or /Length) so binary sample data that happens to contain the bytes "EI"
-// does not truncate the image early and spew the rest as bogus tokens (audit
-// C35; the previous whitespace-delimited-EI search ignored /L).
-func skipContentInlineImage(data []byte, i int) int {
-	pos := i
-	skipInlineImage(data, &pos)
-	return pos
-}

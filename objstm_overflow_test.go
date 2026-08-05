@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -13,27 +14,27 @@ import (
 func TestObjectStreamIndexOverflow(t *testing.T) {
 	const n = 70000
 	doc := &Document{
-		Objects:        make(map[int]*IndirectObject, n+2),
+		Objects:        make(map[int]*object.IndirectObject, n+2),
 		usedXRefStream: true, // triggers object-stream packing on Write
 		Version:        "2.0",
 	}
-	catalog := &Dictionary{}
-	catalog.Set("Type", Name("Catalog"))
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", Array{})
-	pages.Set("Count", Integer(0))
-	catalog.Set("Pages", IndirectRef{Number: 2})
-	doc.Objects[1] = &IndirectObject{Number: 1, Value: catalog}
-	doc.Objects[2] = &IndirectObject{Number: 2, Value: pages}
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{})
+	pages.Set("Count", object.Integer(0))
+	catalog.Set("Pages", object.IndirectRef{Number: 2})
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: catalog}
+	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
 	// Many small, compressible (non-stream) objects to fill one object stream.
 	for i := 3; i < n; i++ {
-		d := &Dictionary{}
-		d.Set("V", Integer(i))
-		doc.Objects[i] = &IndirectObject{Number: i, Value: d}
+		d := &object.Dictionary{}
+		d.Set("V", object.Integer(i))
+		doc.Objects[i] = &object.IndirectObject{Number: i, Value: d}
 	}
-	doc.Trailer = Dictionary{}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	doc.Trailer = object.Dictionary{}
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {

@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfvt"
 	"strings"
 	"testing"
 )
@@ -11,12 +13,12 @@ import (
 func buildPDFVT2Doc() *Document {
 	d := buildPDFVT1Doc()
 	cat := d.ResolveDict(d.Trailer.Get("Root"))
-	ms := d.Resolve(cat.Get("Metadata")).(*Stream)
+	ms := d.Resolve(cat.Get("Metadata")).(*object.Stream)
 	ms.Data = bytes.Replace(ms.Data, []byte("PDF/VT-1"), []byte("PDF/VT-2"), 1)
 	return d
 }
 
-func vtHas(v []PDFVTViolation, substr string) bool {
+func vtHas(v []pdfvt.Violation, substr string) bool {
 	for _, e := range v {
 		if strings.Contains(e.Message, substr) {
 			return true
@@ -42,11 +44,11 @@ func TestValidatePDFVT2Identification(t *testing.T) {
 // rejected by PDF/VT-1 (PDF/X-4 base) but permitted by PDF/VT-2 (PDF/X-5 base).
 func TestPDFVT2ReferenceXObjectRelaxed(t *testing.T) {
 	addRef := func(d *Document) {
-		form := &Dictionary{}
-		form.Set("Type", Name("XObject"))
-		form.Set("Subtype", Name("Form"))
-		form.Set("Ref", &Dictionary{})
-		d.Objects[200] = &IndirectObject{Number: 200, Value: &Stream{Dict: *form}}
+		form := &object.Dictionary{}
+		form.Set("Type", object.Name("XObject"))
+		form.Set("Subtype", object.Name("Form"))
+		form.Set("Ref", &object.Dictionary{})
+		d.Objects[200] = &object.IndirectObject{Number: 200, Value: &object.Stream{Dict: *form}}
 	}
 	d1 := buildPDFVT1Doc()
 	addRef(d1)

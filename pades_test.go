@@ -3,6 +3,9 @@ package pdf0
 import (
 	"bytes"
 	"crypto/x509"
+	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 	"strings"
 	"testing"
 )
@@ -11,7 +14,7 @@ import (
 // ETSI.CAdES.detached sub-filter and a CAdES signing-certificate attribute) and
 // checks that ValidatePAdES reports a conformant B-B signature.
 func TestPAdESRoundTrip(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
@@ -44,7 +47,7 @@ func TestPAdESRoundTrip(t *testing.T) {
 	if !r.Conformant {
 		t.Errorf("expected a conformant B-B signature, got issues: %v", r.Issues)
 	}
-	if r.Level != PAdESBB {
+	if r.Level != sign.PAdESBB {
 		t.Errorf("level = %q, want B-B (no timestamp/DSS present)", r.Level)
 	}
 }
@@ -52,7 +55,7 @@ func TestPAdESRoundTrip(t *testing.T) {
 // TestPAdESTamperDetected confirms that modifying the signed content makes the
 // signature non-conformant (it no longer verifies).
 func TestPAdESTamperDetected(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildMinimalPDF()
 	doc, _ := Read(bytes.NewReader(base), int64(len(base)))
 	var buf bytes.Buffer
@@ -83,7 +86,7 @@ func TestPAdESTamperDetected(t *testing.T) {
 // TestPAdESLegacyNotPAdES confirms a legacy adbe.pkcs7.detached signature is
 // reported as not PAdES (but still cryptographically assessed).
 func TestPAdESLegacyNotPAdES(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildMinimalPDF()
 	doc, _ := Read(bytes.NewReader(base), int64(len(base)))
 	var buf bytes.Buffer
@@ -104,7 +107,7 @@ func TestPAdESLegacyNotPAdES(t *testing.T) {
 	if res[0].IsPAdES {
 		t.Error("adbe.pkcs7.detached must not be reported as PAdES")
 	}
-	if res[0].Level != PAdESNone {
+	if res[0].Level != sign.PAdESNone {
 		t.Errorf("legacy signature level = %q, want none", res[0].Level)
 	}
 }
@@ -112,7 +115,7 @@ func TestPAdESLegacyNotPAdES(t *testing.T) {
 // TestPAdESLevelBLT constructs the document-level long-term material (a /DSS in
 // the catalog) and a signature timestamp, and checks the level rises to B-LT.
 func TestPAdESLevelDetection(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildMinimalPDF()
 	doc, _ := Read(bytes.NewReader(base), int64(len(base)))
 	var buf bytes.Buffer
@@ -125,14 +128,14 @@ func TestPAdESLevelDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Baseline: no DSS, no timestamp -> B-B.
-	if got := signed.ValidatePAdES(out)[0].Level; got != PAdESBB {
+	if got := signed.ValidatePAdES(out)[0].Level; got != sign.PAdESBB {
 		t.Fatalf("baseline level = %q, want B-B", got)
 	}
 	// Add a catalog /DSS. Without a signature timestamp the level stays B-B
 	// (each PAdES level requires the previous), which guards the ordering.
-	cat := getCatalog(signed)
-	cat.Set("DSS", &Dictionary{})
-	if got := signed.ValidatePAdES(out)[0].Level; got != PAdESBB {
+	cat := signed.view().Catalog()
+	cat.Set("DSS", &object.Dictionary{})
+	if got := signed.ValidatePAdES(out)[0].Level; got != sign.PAdESBB {
 		t.Errorf("DSS without a timestamp must not reach B-LT; level = %q", got)
 	}
 }
@@ -141,8 +144,8 @@ func TestPAdESLevelDetection(t *testing.T) {
 // and checks that ValidatePAdES reaches level B-T with a cryptographically
 // verified time-stamp.
 func TestPAdESBTTimestamp(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
@@ -171,7 +174,7 @@ func TestPAdESBTTimestamp(t *testing.T) {
 	if r.TimestampTime.IsZero() {
 		t.Error("expected a time-stamp time")
 	}
-	if r.Level != PAdESBT {
+	if r.Level != sign.PAdESBT {
 		t.Errorf("level = %q, want B-T", r.Level)
 	}
 	if !r.Conformant {
@@ -183,8 +186,8 @@ func TestPAdESBTTimestamp(t *testing.T) {
 // incremental update, and checks the signature is assessed at level B-LTA with
 // its original signature still valid.
 func TestPAdESBLTA(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
@@ -211,9 +214,9 @@ func TestPAdESBLTA(t *testing.T) {
 		t.Fatalf("re-read: %v", err)
 	}
 	res := d2.ValidatePAdES(o2)
-	var lta *PAdESResult
+	var lta *sign.PAdESResult
 	for i := range res {
-		if res[i].Level == PAdESBLTA {
+		if res[i].Level == sign.PAdESBLTA {
 			lta = &res[i]
 		}
 	}
@@ -243,7 +246,7 @@ func TestPAdESBLTA(t *testing.T) {
 // signature that does not cover the whole document is still flagged when there is
 // no covering, verifying document time-stamp to seal the trailing bytes.
 func TestPAdESUncoveredNotSealed(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {

@@ -52,6 +52,11 @@ testdata/fuzz/
 testdata/wtpdf/*.pdf
 testdata/wtpdf/.ok
 
+# Unicode's own property files, fetched into place for `make useable`, which
+# regenerates the Universal Shaping Engine's category table. Large, versioned by
+# Unicode rather than by this repository, and only needed to re-derive a table
+# that is checked in.
+
 # Arlington PDF Model (Apache-2.0, pdf-association) — machine-readable ISO 32000
 # object grammar; cloned via `make arlington` for the structural oracle test.
 testdata/arlington-pdf-model/
@@ -70,6 +75,9 @@ testdata/ccitt/.ok
 # decoder (pdf.js conformance suite); manifest + script are committed.
 testdata/jbig2/*.pdf
 testdata/jbig2/.ok
+
+# Unicode's conformance suite for the bidirectional algorithm, UAX #9
+# (downloaded via `make bidi-tests`) — the oracle for fonts/bidi.go.
 
 # Factur-X example invoices (oracle) — not vendored
 testdata/facturx/*.pdf

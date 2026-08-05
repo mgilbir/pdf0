@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,98 +15,98 @@ import (
 // a definite /Trapped flag, PDF/X-4 identification in both XMP and the Info
 // dictionary, and a single embedded TrueType font shown by the page content.
 func buildPDFX4Doc() *Document {
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "1.6"}
-	set := func(num int, v Object) { d.Objects[num] = &IndirectObject{Number: num, Value: v} }
+	d := &Document{Objects: map[int]*object.IndirectObject{}, Version: "1.6"}
+	set := func(num int, v object.Object) { d.Objects[num] = &object.IndirectObject{Number: num, Value: v} }
 
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	cat.Set("OutputIntents", Array{IndirectRef{Number: 4}})
-	cat.Set("Metadata", IndirectRef{Number: 6})
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	cat.Set("OutputIntents", object.Array{object.IndirectRef{Number: 4}})
+	cat.Set("Metadata", object.IndirectRef{Number: 6})
 	set(1, cat)
 
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", Array{IndirectRef{Number: 3}})
-	pages.Set("Count", Integer(1))
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+	pages.Set("Count", object.Integer(1))
 	set(2, pages)
 
-	page := &Dictionary{}
-	page.Set("Type", Name("Page"))
-	page.Set("Parent", IndirectRef{Number: 2})
-	page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-	page.Set("TrimBox", Array{Integer(10), Integer(10), Integer(602), Integer(782)})
-	page.Set("Contents", IndirectRef{Number: 10})
-	res := &Dictionary{}
-	fontRes := &Dictionary{}
-	fontRes.Set("F1", IndirectRef{Number: 7})
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+	page.Set("TrimBox", object.Array{object.Integer(10), object.Integer(10), object.Integer(602), object.Integer(782)})
+	page.Set("Contents", object.IndirectRef{Number: 10})
+	res := &object.Dictionary{}
+	fontRes := &object.Dictionary{}
+	fontRes.Set("F1", object.IndirectRef{Number: 7})
 	res.Set("Font", fontRes)
 	page.Set("Resources", res)
 	set(3, page)
 
-	oi := &Dictionary{}
-	oi.Set("Type", Name("OutputIntent"))
-	oi.Set("S", Name("GTS_PDFX"))
-	oi.Set("OutputConditionIdentifier", String{Value: []byte("FOGRA39")})
-	oi.Set("DestOutputProfile", IndirectRef{Number: 5})
+	oi := &object.Dictionary{}
+	oi.Set("Type", object.Name("OutputIntent"))
+	oi.Set("S", object.Name("GTS_PDFX"))
+	oi.Set("OutputConditionIdentifier", object.String{Value: []byte("FOGRA39")})
+	oi.Set("DestOutputProfile", object.IndirectRef{Number: 5})
 	set(4, oi)
 
-	icc := &Dictionary{}
-	icc.Set("N", Integer(4))
+	icc := &object.Dictionary{}
+	icc.Set("N", object.Integer(4))
 	// A minimal ICC profile whose colour-space signature (bytes 16..19) is CMYK,
 	// so the output intent covers DeviceCMYK/DeviceGray but not DeviceRGB.
 	iccData := make([]byte, 132)
 	copy(iccData[16:], []byte("CMYK"))
-	set(5, &Stream{Dict: *icc, Data: iccData})
+	set(5, &object.Stream{Dict: *icc, Data: iccData})
 
 	xmp := `<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description xmlns:pdfxid="http://www.npes.org/pdfx/ns/id/">
 <pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>
 </rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>`
-	md := &Dictionary{}
-	md.Set("Type", Name("Metadata"))
-	md.Set("Subtype", Name("XML"))
-	set(6, &Stream{Dict: *md, Data: []byte(xmp)})
+	md := &object.Dictionary{}
+	md.Set("Type", object.Name("Metadata"))
+	md.Set("Subtype", object.Name("XML"))
+	set(6, &object.Stream{Dict: *md, Data: []byte(xmp)})
 
-	font := &Dictionary{}
-	font.Set("Type", Name("Font"))
-	font.Set("Subtype", Name("TrueType"))
-	font.Set("BaseFont", Name("EmbeddedFont"))
-	font.Set("FontDescriptor", IndirectRef{Number: 8})
+	font := &object.Dictionary{}
+	font.Set("Type", object.Name("Font"))
+	font.Set("Subtype", object.Name("TrueType"))
+	font.Set("BaseFont", object.Name("EmbeddedFont"))
+	font.Set("FontDescriptor", object.IndirectRef{Number: 8})
 	set(7, font)
 
-	fdesc := &Dictionary{}
-	fdesc.Set("Type", Name("FontDescriptor"))
-	fdesc.Set("FontName", Name("EmbeddedFont"))
-	fdesc.Set("FontFile2", IndirectRef{Number: 9})
+	fdesc := &object.Dictionary{}
+	fdesc.Set("Type", object.Name("FontDescriptor"))
+	fdesc.Set("FontName", object.Name("EmbeddedFont"))
+	fdesc.Set("FontFile2", object.IndirectRef{Number: 9})
 	set(8, fdesc)
 
-	set(9, &Stream{Dict: Dictionary{}, Data: bytes.Repeat([]byte{0}, 64)})
+	set(9, &object.Stream{Dict: object.Dictionary{}, Data: bytes.Repeat([]byte{0}, 64)})
 
-	set(10, &Stream{Dict: Dictionary{}, Data: []byte("BT /F1 12 Tf 100 700 Td (hi) Tj ET")})
+	set(10, &object.Stream{Dict: object.Dictionary{}, Data: []byte("BT /F1 12 Tf 100 700 Td (hi) Tj ET")})
 
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
-	info := &Dictionary{}
-	info.Set("GTS_PDFXVersion", String{Value: []byte("PDF/X-4")})
-	info.Set("Trapped", Name("False"))
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
+	info := &object.Dictionary{}
+	info.Set("GTS_PDFXVersion", object.String{Value: []byte("PDF/X-4")})
+	info.Set("Trapped", object.Name("False"))
 	set(11, info)
-	d.Trailer.Set("Info", IndirectRef{Number: 11})
+	d.Trailer.Set("Info", object.IndirectRef{Number: 11})
 	return d
 }
 
 // objWith builds an indirect object (number 12) holding a dictionary with a
 // single key, for injecting a forbidden construct into a built document.
-func objWith(key Name, val Object) *IndirectObject {
-	d := &Dictionary{}
+func objWith(key object.Name, val object.Object) *object.IndirectObject {
+	d := &object.Dictionary{}
 	d.Set(key, val)
-	return &IndirectObject{Number: 12, Value: d}
+	return &object.IndirectObject{Number: 12, Value: d}
 }
 
 func TestValidatePDFXValid(t *testing.T) {
 	d := buildPDFX4Doc()
-	if v := ValidatePDFX(d, PDFX4); len(v) != 0 {
+	if v := ValidatePDFX(d, pdfx.PDFX4); len(v) != 0 {
 		t.Fatalf("valid PDF/X-4 document reported %d violation(s): %v", len(v), v)
 	}
 }
@@ -123,66 +125,66 @@ func TestValidatePDFXViolations(t *testing.T) {
 			objDict(d, 11).Delete("GTS_PDFXVersion")
 		}, "identification", "not identified as PDF/X"},
 		{"no output intents", func(d *Document) { objDict(d, 1).Delete("OutputIntents") }, "output-intent", "requires a catalog /OutputIntents"},
-		{"no GTS_PDFX intent", func(d *Document) { objDict(d, 4).Set("S", Name("GTS_PDFA1")) }, "output-intent", "GTS_PDFX"},
+		{"no GTS_PDFX intent", func(d *Document) { objDict(d, 4).Set("S", object.Name("GTS_PDFA1")) }, "output-intent", "GTS_PDFX"},
 		{"missing OutputConditionIdentifier", func(d *Document) { objDict(d, 4).Delete("OutputConditionIdentifier") }, "output-intent", "OutputConditionIdentifier"},
 		{"missing DestOutputProfile", func(d *Document) { objDict(d, 4).Delete("DestOutputProfile") }, "output-intent", "embedded ICC"},
-		{"trapped unknown", func(d *Document) { objDict(d, 11).Set("Trapped", Name("Unknown")) }, "trapped", "True or False"},
+		{"trapped unknown", func(d *Document) { objDict(d, 11).Set("Trapped", object.Name("Unknown")) }, "trapped", "True or False"},
 		{"trapped absent", func(d *Document) { objDict(d, 11).Delete("Trapped") }, "trapped", "True or False"},
 		{"both trim and art", func(d *Document) {
-			objDict(d, 3).Set("ArtBox", Array{Integer(10), Integer(10), Integer(602), Integer(782)})
+			objDict(d, 3).Set("ArtBox", object.Array{object.Integer(10), object.Integer(10), object.Integer(602), object.Integer(782)})
 		}, "page-box", "both TrimBox and ArtBox"},
 		{"neither trim nor art", func(d *Document) { objDict(d, 3).Delete("TrimBox") }, "page-box", "neither TrimBox nor ArtBox"},
 		{"trim outside media", func(d *Document) {
-			objDict(d, 3).Set("TrimBox", Array{Integer(-5), Integer(10), Integer(602), Integer(782)})
+			objDict(d, 3).Set("TrimBox", object.Array{object.Integer(-5), object.Integer(10), object.Integer(602), object.Integer(782)})
 		}, "page-box", "not within the MediaBox"},
 		{"bleed outside media", func(d *Document) {
-			objDict(d, 3).Set("BleedBox", Array{Integer(-5), Integer(-5), Integer(700), Integer(800)})
+			objDict(d, 3).Set("BleedBox", object.Array{object.Integer(-5), object.Integer(-5), object.Integer(700), object.Integer(800)})
 		}, "page-box", "BleedBox is not within"},
 		{"font not embedded", func(d *Document) { objDict(d, 8).Delete("FontFile2") }, "font-embedding", "not embedded"},
 		{"device rgb uncovered", func(d *Document) {
 			// Paint with DeviceRGB (rg) under a CMYK-only output intent, no DefaultRGB.
-			d.Objects[10] = &IndirectObject{Number: 10, Value: &Stream{Dict: Dictionary{}, Data: []byte("1 0 0 rg BT /F1 12 Tf 100 700 Td (hi) Tj ET")}}
+			d.Objects[10] = &object.IndirectObject{Number: 10, Value: &object.Stream{Dict: object.Dictionary{}, Data: []byte("1 0 0 rg BT /F1 12 Tf 100 700 Td (hi) Tj ET")}}
 		}, "color", "DeviceRGB used"},
-		{"catalog additional actions", func(d *Document) { objDict(d, 1).Set("AA", &Dictionary{}) }, "forbidden", "additional actions"},
+		{"catalog additional actions", func(d *Document) { objDict(d, 1).Set("AA", &object.Dictionary{}) }, "forbidden", "additional actions"},
 		{"catalog open action", func(d *Document) {
-			oa := &Dictionary{}
-			oa.Set("S", Name("GoTo"))
+			oa := &object.Dictionary{}
+			oa.Set("S", object.Name("GoTo"))
 			objDict(d, 1).Set("OpenAction", oa)
 		}, "forbidden", "OpenAction"},
 		{"javascript name tree", func(d *Document) {
-			n := &Dictionary{}
-			n.Set("JavaScript", &Dictionary{})
+			n := &object.Dictionary{}
+			n.Set("JavaScript", &object.Dictionary{})
 			objDict(d, 1).Set("Names", n)
 		}, "forbidden", "JavaScript name tree"},
-		{"javascript action", func(d *Document) { d.Objects[12] = objWith("S", Name("JavaScript")) }, "forbidden", "JavaScript actions"},
+		{"javascript action", func(d *Document) { d.Objects[12] = objWith("S", object.Name("JavaScript")) }, "forbidden", "JavaScript actions"},
 		{"opi proxy", func(d *Document) {
-			f := objWith("Subtype", Name("Form"))
-			f.Value.(*Dictionary).Set("OPI", &Dictionary{})
+			f := objWith("Subtype", object.Name("Form"))
+			f.Value.(*object.Dictionary).Set("OPI", &object.Dictionary{})
 			d.Objects[12] = f
 		}, "forbidden", "OPI"},
-		{"postscript xobject", func(d *Document) { d.Objects[12] = objWith("Subtype", Name("PS")) }, "forbidden", "PostScript"},
+		{"postscript xobject", func(d *Document) { d.Objects[12] = objWith("Subtype", object.Name("PS")) }, "forbidden", "PostScript"},
 		{"image alternates", func(d *Document) {
-			im := objWith("Subtype", Name("Image"))
-			im.Value.(*Dictionary).Set("Alternates", Array{})
+			im := objWith("Subtype", object.Name("Image"))
+			im.Value.(*object.Dictionary).Set("Alternates", object.Array{})
 			d.Objects[12] = im
 		}, "forbidden", "Alternates"},
 		{"reference xobject", func(d *Document) {
-			f := objWith("Subtype", Name("Form"))
-			f.Value.(*Dictionary).Set("Ref", &Dictionary{})
+			f := objWith("Subtype", object.Name("Form"))
+			f.Value.(*object.Dictionary).Set("Ref", &object.Dictionary{})
 			d.Objects[12] = f
 		}, "forbidden", "reference XObject"},
 		{"transfer function", func(d *Document) {
-			g := objWith("Type", Name("ExtGState"))
-			g.Value.(*Dictionary).Set("TR", &Dictionary{})
+			g := objWith("Type", object.Name("ExtGState"))
+			g.Value.(*object.Dictionary).Set("TR", &object.Dictionary{})
 			d.Objects[12] = g
 		}, "forbidden", "transfer function"},
-		{"movie annotation", func(d *Document) { d.Objects[12] = objWith("Subtype", Name("Movie")) }, "forbidden", "Movie"},
+		{"movie annotation", func(d *Document) { d.Objects[12] = objWith("Subtype", object.Name("Movie")) }, "forbidden", "Movie"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := buildPDFX4Doc()
 			tc.mutate(d)
-			v := ValidatePDFX(d, PDFX4)
+			v := ValidatePDFX(d, pdfx.PDFX4)
 			found := false
 			for _, e := range v {
 				if e.Rule == tc.rule && strings.Contains(e.Message, tc.substr) {
@@ -225,7 +227,7 @@ func TestValidatePDFXCalPolySuite(t *testing.T) {
 			t.Errorf("%s: parse failed: %v", name, err)
 			continue
 		}
-		v := ValidatePDFX(doc, PDFX4)
+		v := ValidatePDFX(doc, pdfx.PDFX4)
 		if isDoc {
 			// The documentation PDF is PDF/X-4 but has an AcroForm and uses
 			// uncovered DeviceRGB (independently confirmed by the PDF/A device-

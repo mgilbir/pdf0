@@ -3,6 +3,8 @@ package pdf0
 import (
 	"bytes"
 	"encoding/csv"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"os"
 	"path/filepath"
 	"sort"
@@ -72,77 +74,77 @@ type arlValidator struct {
 	doc      *Document
 	m        *arlModel
 	findings []string
-	visited  map[*Dictionary]bool
+	visited  map[*object.Dictionary]bool
 }
 
 const arlMaxDepth = 50
 
 func (v *arlValidator) add(path, msg string) { v.findings = append(v.findings, path+": "+msg) }
 
-func arlTypeName(o Object) string {
+func arlTypeName(o object.Object) string {
 	switch o.(type) {
-	case Name:
+	case object.Name:
 		return "name"
-	case *Dictionary:
+	case *object.Dictionary:
 		return "dictionary"
-	case Array:
+	case object.Array:
 		return "array"
-	case Integer:
+	case object.Integer:
 		return "integer"
-	case Real:
+	case object.Real:
 		return "number"
-	case String:
+	case object.String:
 		return "string"
-	case *Stream:
+	case *object.Stream:
 		return "stream"
-	case Boolean:
+	case object.Boolean:
 		return "boolean"
-	case Null:
+	case object.Null:
 		return "null"
 	}
 	return "?"
 }
 
-func arlTypeMatch(o Object, types string) bool {
+func arlTypeMatch(o object.Object, types string) bool {
 	for _, t := range strings.Split(types, ";") {
 		switch strings.TrimSpace(t) {
 		case "name":
-			if _, k := o.(Name); k {
+			if _, k := o.(object.Name); k {
 				return true
 			}
 		case "dictionary", "name-tree", "number-tree":
-			if _, k := o.(*Dictionary); k {
+			if _, k := o.(*object.Dictionary); k {
 				return true
 			}
 		case "array", "rectangle", "matrix":
-			if _, k := o.(Array); k {
+			if _, k := o.(object.Array); k {
 				return true
 			}
 		case "integer", "bitmask":
-			if _, k := o.(Integer); k {
+			if _, k := o.(object.Integer); k {
 				return true
 			}
 		case "number":
-			if _, k := o.(Integer); k {
+			if _, k := o.(object.Integer); k {
 				return true
 			}
-			if _, k := o.(Real); k {
+			if _, k := o.(object.Real); k {
 				return true
 			}
 		case "string-text", "string", "string-byte", "string-ascii", "date":
-			if _, k := o.(String); k {
+			if _, k := o.(object.String); k {
 				return true
 			}
 		case "stream":
-			if _, k := o.(*Stream); k {
+			if _, k := o.(*object.Stream); k {
 				return true
 			}
 		case "boolean":
-			if _, k := o.(Boolean); k {
+			if _, k := o.(object.Boolean); k {
 				return true
 			}
 		case "null":
-			if _, k := o.(Null); k {
+			if _, k := o.(object.Null); k {
 				return true
 			}
 		}
@@ -201,17 +203,17 @@ func arlIsArraySpec(spec []arlRow) bool {
 	return false
 }
 
-func (v *arlValidator) dictOf(o Object) *Dictionary {
+func (v *arlValidator) dictOf(o object.Object) *object.Dictionary {
 	switch t := o.(type) {
-	case *Dictionary:
+	case *object.Dictionary:
 		return t
-	case *Stream:
+	case *object.Stream:
 		return &t.Dict
 	}
 	return nil
 }
 
-func (v *arlValidator) walk(o Object, specName, path string, depth int, inh map[string]bool) {
+func (v *arlValidator) walk(o object.Object, specName, path string, depth int, inh map[string]bool) {
 	if depth > arlMaxDepth {
 		return
 	}
@@ -222,7 +224,7 @@ func (v *arlValidator) walk(o Object, specName, path string, depth int, inh map[
 	o = v.doc.Resolve(o)
 
 	if arlIsArraySpec(spec) {
-		arr, ok := o.(Array)
+		arr, ok := o.(object.Array)
 		if !ok {
 			return
 		}
@@ -268,13 +270,13 @@ func (v *arlValidator) walk(o Object, specName, path string, depth int, inh map[
 		child[k] = true
 	}
 	for _, r := range spec {
-		if r.inheritable == "TRUE" && d.Get(Name(r.key)) != nil {
+		if r.inheritable == "TRUE" && d.Get(object.Name(r.key)) != nil {
 			child[r.key] = true
 		}
 	}
 
 	for _, r := range spec {
-		raw := d.Get(Name(r.key))
+		raw := d.Get(object.Name(r.key))
 		if raw == nil {
 			if r.required == "TRUE" && !(r.inheritable == "TRUE" && child[r.key]) {
 				v.add(path, "missing required /"+r.key)
@@ -286,7 +288,7 @@ func (v *arlValidator) walk(o Object, specName, path string, depth int, inh map[
 			v.add(path, "/"+r.key+" type "+arlTypeName(res)+", want "+r.types)
 		}
 		if ls := arlLitSet(r.possible); ls != nil {
-			if n, ok := res.(Name); ok && !ls[string(n)] {
+			if n, ok := res.(object.Name); ok && !ls[string(n)] {
 				v.add(path, "/"+r.key+" value /"+string(n)+" not in "+r.possible)
 			}
 		}
@@ -296,7 +298,7 @@ func (v *arlValidator) walk(o Object, specName, path string, depth int, inh map[
 	}
 }
 
-func (v *arlValidator) follow(o Object, links, path string, depth int, inh map[string]bool) {
+func (v *arlValidator) follow(o object.Object, links, path string, depth int, inh map[string]bool) {
 	cands := arlLinkSpecs(links)
 	if len(cands) == 0 {
 		return
@@ -310,8 +312,8 @@ func (v *arlValidator) follow(o Object, links, path string, depth int, inh map[s
 // pick returns the unique candidate spec that matches the object, or "" if none
 // or several do — it never guesses, so an unresolved variant is skipped rather
 // than validated against the wrong rules.
-func (v *arlValidator) pick(cands []string, o Object) string {
-	if _, isArr := o.(Array); isArr {
+func (v *arlValidator) pick(cands []string, o object.Object) string {
+	if _, isArr := o.(object.Array); isArr {
 		var arrs []string
 		for _, c := range cands {
 			if arlIsArraySpec(v.m.spec(c)) {
@@ -330,10 +332,10 @@ func (v *arlValidator) pick(cands []string, o Object) string {
 	if d == nil {
 		return ""
 	}
-	typ, _ := d.Get("Type").(Name)
-	sub, _ := d.Get("Subtype").(Name)
-	sAct, _ := d.Get("S").(Name)
-	accepts := func(spec []arlRow, key string, val Name) bool {
+	typ, _ := d.Get("Type").(object.Name)
+	sub, _ := d.Get("Subtype").(object.Name)
+	sAct, _ := d.Get("S").(object.Name)
+	accepts := func(spec []arlRow, key string, val object.Name) bool {
 		for _, r := range spec {
 			if r.key == key {
 				ls := arlLitSet(r.possible)
@@ -368,20 +370,56 @@ func arlValidate(m *arlModel, data []byte) (findings []string, readErr error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &arlValidator{doc: doc, m: m, visited: map[*Dictionary]bool{}}
+	v := &arlValidator{doc: doc, m: m, visited: map[*object.Dictionary]bool{}}
 	v.walk(doc.Trailer.Get("Root"), "Catalog", "Catalog", 0, map[string]bool{})
 	return v.findings, nil
 }
 
+// arlModelDir finds the Arlington grammar, and distinguishes "nobody fetched
+// it" from "somebody pointed at the wrong place".
+//
+// The difference matters more than it looks. This test is a ratchet: it asserts
+// a count of findings over a thousand documents. A skip is indistinguishable
+// from a pass in the output, so a mistyped path turns the whole oracle off
+// silently — which is exactly what happened when it was run with
+// ARLINGTON_MODEL set to the repository root instead of the tsv/2.0 directory
+// inside it. The run looked green and had checked nothing.
+//
+// So: unset and absent is a skip, because the model is fetched on demand and a
+// developer without it should still be able to run the suite. Set and wrong is
+// a failure, because somebody meant to run this and did not.
 func arlModelDir(t *testing.T) string {
-	dir := os.Getenv("ARLINGTON_MODEL")
+	const marker = "Catalog.tsv" // every version of the model has one
+
+	env := os.Getenv("ARLINGTON_MODEL")
+	dir := env
 	if dir == "" {
 		dir = "testdata/arlington-pdf-model/tsv/2.0"
 	}
-	if _, err := os.Stat(filepath.Join(dir, "Catalog.tsv")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+		return dir
+	}
+
+	// The usual mistake is naming the checkout rather than the grammar inside
+	// it. That is unambiguous, so take it rather than making someone guess.
+	if nested := filepath.Join(dir, "tsv", "2.0"); fileExists(filepath.Join(nested, marker)) {
+		return nested
+	}
+
+	if env == "" {
 		t.Skip("Arlington model not present; run `make arlington`")
 	}
-	return dir
+	t.Fatalf("ARLINGTON_MODEL is set to %q, and there is no %s there or in %s.\n"+
+		"It must name the directory holding the grammar — testdata/arlington-pdf-model/tsv/2.0 —\n"+
+		"not the checkout above it. Failing rather than skipping: this test is a ratchet,\n"+
+		"and a skip would report success having checked nothing.",
+		env, marker, filepath.Join(env, "tsv", "2.0"))
+	return ""
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // TestArlingtonParserFaithful checks that pdf0 represents known-conforming
@@ -405,8 +443,8 @@ func TestArlingtonParserFaithful(t *testing.T) {
 	// Builder output.
 	for _, lv := range []struct {
 		name string
-		l    PDFALevel
-	}{{"PDFA1b", PDFA1b}, {"PDFA2b", PDFA2b}, {"PDFA3b", PDFA3b}, {"PDFA4", PDFA4}} {
+		l    pdfa.Level
+	}{{"PDFA1b", pdfa.PDFA1b}, {"PDFA2b", pdfa.PDFA2b}, {"PDFA3b", pdfa.PDFA3b}, {"PDFA4", pdfa.PDFA4}} {
 		var buf bytes.Buffer
 		if err := NewPDFADocumentWithInfo(lv.l, "Title", "Author").Write(&buf); err != nil {
 			t.Errorf("generate %s: %v", lv.name, err)
@@ -454,13 +492,7 @@ const arlCorpusPassBaseline = 5
 // oracle independently detects the malformations those files inject.
 func TestArlingtonCorpusParserFaithful(t *testing.T) {
 	m := loadArlModel(arlModelDir(t))
-	corpus := os.Getenv("VERAPDF_CORPUS")
-	if corpus == "" {
-		corpus = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpus); os.IsNotExist(err) {
-		t.Skip("veraPDF corpus not present; run `make corpus`")
-	}
+	corpus := corpusRoot(t)
 
 	var passTotal, passWith, failWith int
 	passFindings := map[string]int{}
@@ -507,11 +539,11 @@ func TestArlingtonCorpusParserFaithful(t *testing.T) {
 // so a clean TestArlingtonParserFaithful means "faithful", not "checked nothing".
 func TestArlingtonOracleHasTeeth(t *testing.T) {
 	m := loadArlModel(arlModelDir(t))
-	doc := NewPDFADocument(PDFA2b)
+	doc := NewPDFADocument(pdfa.PDFA2b)
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-	cat.Delete("Pages")             // required-key check
-	cat.Set("Type", Name("Bogus"))  // enum check: /Type not in [Catalog]
-	cat.Set("Metadata", Name("no")) // type check: /Metadata must be a stream, not a name
+	cat.Delete("Pages")                    // required-key check
+	cat.Set("Type", object.Name("Bogus"))  // enum check: /Type not in [Catalog]
+	cat.Set("Metadata", object.Name("no")) // type check: /Metadata must be a stream, not a name
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {
 		t.Fatal(err)

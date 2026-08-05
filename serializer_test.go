@@ -2,10 +2,11 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
-func serializeObject(t *testing.T, obj Object) string {
+func serializeObject(t *testing.T, obj object.Object) string {
 	t.Helper()
 	var buf bytes.Buffer
 	s := NewSerializer(&buf)
@@ -16,17 +17,17 @@ func serializeObject(t *testing.T, obj Object) string {
 }
 
 func TestSerializeBoolean(t *testing.T) {
-	if got := serializeObject(t, Boolean(true)); got != "true" {
+	if got := serializeObject(t, object.Boolean(true)); got != "true" {
 		t.Errorf("expected 'true', got %q", got)
 	}
-	if got := serializeObject(t, Boolean(false)); got != "false" {
+	if got := serializeObject(t, object.Boolean(false)); got != "false" {
 		t.Errorf("expected 'false', got %q", got)
 	}
 }
 
 func TestSerializeInteger(t *testing.T) {
 	tests := []struct {
-		val  Integer
+		val  object.Integer
 		want string
 	}{
 		{0, "0"},
@@ -43,7 +44,7 @@ func TestSerializeInteger(t *testing.T) {
 
 func TestSerializeReal(t *testing.T) {
 	tests := []struct {
-		val  Real
+		val  object.Real
 		want string
 	}{
 		{3.14, "3.14"},
@@ -60,14 +61,14 @@ func TestSerializeReal(t *testing.T) {
 
 func TestSerializeLiteralString(t *testing.T) {
 	tests := []struct {
-		val  String
+		val  object.String
 		want string
 	}{
-		{String{Value: []byte("Hello"), IsHex: false}, "(Hello)"},
-		{String{Value: []byte(""), IsHex: false}, "()"},
-		{String{Value: []byte("a(b)c"), IsHex: false}, "(a\\(b\\)c)"},
-		{String{Value: []byte("a\\b"), IsHex: false}, "(a\\\\b)"},
-		{String{Value: []byte("line1\nline2"), IsHex: false}, "(line1\\nline2)"},
+		{object.String{Value: []byte("Hello"), IsHex: false}, "(Hello)"},
+		{object.String{Value: []byte(""), IsHex: false}, "()"},
+		{object.String{Value: []byte("a(b)c"), IsHex: false}, "(a\\(b\\)c)"},
+		{object.String{Value: []byte("a\\b"), IsHex: false}, "(a\\\\b)"},
+		{object.String{Value: []byte("line1\nline2"), IsHex: false}, "(line1\\nline2)"},
 	}
 	for _, tt := range tests {
 		if got := serializeObject(t, tt.val); got != tt.want {
@@ -77,7 +78,7 @@ func TestSerializeLiteralString(t *testing.T) {
 }
 
 func TestSerializeHexString(t *testing.T) {
-	s := String{Value: []byte("Hello"), IsHex: true}
+	s := object.String{Value: []byte("Hello"), IsHex: true}
 	got := serializeObject(t, s)
 	if got != "<48656C6C6F>" {
 		t.Errorf("expected '<48656C6C6F>', got %q", got)
@@ -86,7 +87,7 @@ func TestSerializeHexString(t *testing.T) {
 
 func TestSerializeName(t *testing.T) {
 	tests := []struct {
-		val  Name
+		val  object.Name
 		want string
 	}{
 		{"Type", "/Type"},
@@ -103,7 +104,7 @@ func TestSerializeName(t *testing.T) {
 }
 
 func TestSerializeArray(t *testing.T) {
-	arr := Array{Integer(1), Integer(2), Integer(3)}
+	arr := object.Array{object.Integer(1), object.Integer(2), object.Integer(3)}
 	got := serializeObject(t, arr)
 	if got != "[1 2 3]" {
 		t.Errorf("expected '[1 2 3]', got %q", got)
@@ -111,16 +112,16 @@ func TestSerializeArray(t *testing.T) {
 }
 
 func TestSerializeEmptyArray(t *testing.T) {
-	got := serializeObject(t, Array{})
+	got := serializeObject(t, object.Array{})
 	if got != "[]" {
 		t.Errorf("expected '[]', got %q", got)
 	}
 }
 
 func TestSerializeDictionary(t *testing.T) {
-	dict := &Dictionary{}
-	dict.Set("Type", Name("Catalog"))
-	dict.Set("Pages", IndirectRef{Number: 3, Generation: 0})
+	dict := &object.Dictionary{}
+	dict.Set("Type", object.Name("Catalog"))
+	dict.Set("Pages", object.IndirectRef{Number: 3, Generation: 0})
 
 	got := serializeObject(t, dict)
 	expected := "<< /Type /Catalog /Pages 3 0 R >>"
@@ -130,31 +131,31 @@ func TestSerializeDictionary(t *testing.T) {
 }
 
 func TestSerializeEmptyDictionary(t *testing.T) {
-	got := serializeObject(t, &Dictionary{})
+	got := serializeObject(t, &object.Dictionary{})
 	if got != "<< >>" {
 		t.Errorf("expected '<< >>', got %q", got)
 	}
 }
 
 func TestSerializeNull(t *testing.T) {
-	got := serializeObject(t, Null{})
+	got := serializeObject(t, object.Null{})
 	if got != "null" {
 		t.Errorf("expected 'null', got %q", got)
 	}
 }
 
 func TestSerializeIndirectRef(t *testing.T) {
-	got := serializeObject(t, IndirectRef{Number: 10, Generation: 0})
+	got := serializeObject(t, object.IndirectRef{Number: 10, Generation: 0})
 	if got != "10 0 R" {
 		t.Errorf("expected '10 0 R', got %q", got)
 	}
 }
 
 func TestSerializeIndirectObject(t *testing.T) {
-	obj := &IndirectObject{
+	obj := &object.IndirectObject{
 		Number:     1,
 		Generation: 0,
-		Value:      Integer(42),
+		Value:      object.Integer(42),
 	}
 	got := serializeObject(t, obj)
 	expected := "1 0 obj\n42\nendobj\n"
@@ -164,8 +165,8 @@ func TestSerializeIndirectObject(t *testing.T) {
 }
 
 func TestSerializeStream(t *testing.T) {
-	stream := &Stream{
-		Dict: Dictionary{},
+	stream := &object.Stream{
+		Dict: object.Dictionary{},
 		Data: []byte("Hello World"),
 	}
 	got := serializeObject(t, stream)
@@ -183,7 +184,7 @@ func TestSerializeOffset(t *testing.T) {
 		t.Errorf("expected initial offset 0, got %d", s.Offset())
 	}
 
-	s.WriteObject(Integer(42))
+	s.WriteObject(object.Integer(42))
 	if s.Offset() != 2 { // "42" is 2 bytes
 		t.Errorf("expected offset 2 after writing '42', got %d", s.Offset())
 	}

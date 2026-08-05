@@ -1,0 +1,1542 @@
+package pdfa
+
+import (
+	"fmt"
+	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+	"strings"
+	"unicode"
+)
+
+// This file implements the PDF/A font rule family (ISO 19005-1 clause 6.3,
+// 19005-2/-3 clause 6.2.11, 19005-4 clause 6.2.10), grounded in ISO 32000-1
+// clause 9: CIDFont/CMap consistency (9.7.4-9.7.5, Table 118), TrueType
+// encodings (9.6.6.4), embedding, and ToUnicode restrictions.
+
+// --- content walking: text usage per font ---
+
+// core.ContentItemKind classifies items reported by core.ForEachContentItem.
+
+// core.DecodeContentLiteralString decodes a (...) string starting at open paren;
+// returns the decoded bytes and the index just past the closing paren.
+
+// decodeHexBytes decodes hex-string content (whitespace tolerated, odd
+// length padded with 0).
+func decodeHexBytes(b []byte) []byte {
+	var digits []byte
+	for _, c := range b {
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+			digits = append(digits, c)
+		}
+	}
+	if len(digits)%2 == 1 {
+		digits = append(digits, '0')
+	}
+	out := make([]byte, len(digits)/2)
+	hv := func(c byte) byte {
+		switch {
+		case c <= '9':
+			return c - '0'
+		case c >= 'a':
+			return c - 'a' + 10
+		}
+		return c - 'A' + 10
+	}
+	for i := 0; i < len(out); i++ {
+		out[i] = hv(digits[2*i])<<4 | hv(digits[2*i+1])
+	}
+	return out
+}
+
+// --- predefined CMaps (ISO 32000-1, 9.7.5.2, Table 118) ---
+
+// --- dictionary-level font checks ---
+
+// checkFontDictionaries validates Type0/CIDFont/CMap dictionary consistency,
+// TrueType encodings, ToUnicode values, and embedding of rendered fonts.
+func checkFontDictionaries(doc core.View, level Level) []Violation {
+	rule := fontRule(level)
+	var errs []Violation
+
+	usage := core.CollectFontTextUsage(doc)
+	for fontDict, u := range usage {
+		errs = append(errs, checkOneFontDict(doc, level, rule, fontDict, u)...)
+	}
+	return errs
+}
+
+func fontRule(level Level) string {
+	switch level {
+	case PDFA1b:
+		return "6.3"
+	case PDFA4:
+		return "6.2.10"
+	}
+	return "6.2.11"
+}
+
+// fontClause returns the specific ISO clause for a font-rule concept at the
+// given level. The font requirements live under different clause trees per part
+// (ISO 19005-1 6.3.x; -2/-3 6.2.11.x; -4 6.2.10.x), so a single fontRule parent
+// clause mis-cites the rule in the reported error. Clauses follow the veraPDF
+// validation profiles.
+func fontClause(concept string, level Level) string {
+	// [1b, 2b/3b, 4]
+	m := map[string][3]string{
+		"general":       {"6.3.2", "6.2.11.2", "6.2.10.2"},
+		"cidSystemInfo": {"6.3.3.1", "6.2.11.3.1", "6.2.10.3.1"},
+		"cidToGID":      {"6.3.3.2", "6.2.11.3.2", "6.2.10.3.2"},
+		"cmap":          {"6.3.3.3", "6.2.11.3.3", "6.2.10.3.3"},
+		"embed":         {"6.3.4", "6.2.11.4.1", "6.2.10.4.1"},
+		"glyphs":        {"6.3.5", "6.2.11.4.1", "6.2.10.4.1"},
+		"charSet":       {"6.3.5", "6.2.11.4.2", "6.2.10.4.2"},
+		"width":         {"6.3.6", "6.2.11.5", "6.2.10.5"},
+		"encoding":      {"6.3.7", "6.2.11.6", "6.2.10.6"},
+		"notdef":        {"6.3.5", "6.2.11.8", "6.2.10.9"},
+		"toUnicode":     {"6.3.2", "6.2.11.2", "6.2.10.7"},
+	}
+	c, ok := m[concept]
+	if !ok {
+		return fontRule(level)
+	}
+	switch level {
+	case PDFA1b:
+		return c[0]
+	case PDFA4:
+		return c[2]
+	default:
+		return c[1]
+	}
+}
+
+func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
+	var errs []Violation
+	bad := func(concept, format string, args ...interface{}) {
+		errs = append(errs, Violation{
+			Rule:    fontClause(concept, level),
+			Level:   level,
+			Message: fmt.Sprintf(format, args...),
+			Object:  u.ObjNum,
+		})
+	}
+	subtype, _ := fontDict.Get("Subtype").(object.Name)
+
+	if subtype == "Type0" {
+		desc := core.Type0Descendant(doc, fontDict)
+		encObj := fontDict.Get("Encoding")
+
+		// CMap legality (9.7.5.2): the Encoding must be a predefined CMap
+		// name or an embedded CMap stream.
+		var cmapStreamInfo *object.Dictionary
+		switch enc := doc.Resolve(encObj).(type) {
+		case object.Name:
+			if _, ok := core.PredefinedCMaps[string(enc)]; !ok {
+				bad("cmap", "Type0 font Encoding CMap /%s is neither embedded nor predefined (ISO 32000, Table 118)", string(enc))
+			}
+		case *object.Stream:
+			cmapStreamInfo = doc.ResolveDict(enc.Dict.Get("CIDSystemInfo"))
+			// WMode in the stream dictionary must agree with the CMap
+			// content (9.7.5.3).
+			if dictWMode, ok := doc.Resolve(enc.Dict.Get("WMode")).(object.Integer); ok {
+				if contentWMode, found := cmapContentWMode(doc, enc); found && int(dictWMode) != contentWMode {
+					bad("cmap", "CMap dictionary WMode %d differs from the embedded CMap content WMode %d", int(dictWMode), contentWMode)
+				}
+			}
+			// A CMap's UseCMap reference must be to a predefined CMap
+			// (ISO 32000-1 9.7.5.2, Table 118): an embedded CMap stream or a
+			// non-predefined name is not permitted.
+			switch uc := doc.Resolve(enc.Dict.Get("UseCMap")).(type) {
+			case object.Name:
+				if _, ok := core.PredefinedCMaps[string(uc)]; !ok {
+					bad("cmap", "embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", string(uc))
+				}
+			case *object.Stream:
+				bad("cmap", "embedded CMap references another embedded CMap, but UseCMap must name a predefined CMap (Table 118)")
+			}
+			// The usecmap operator in the CMap body must likewise name a
+			// predefined CMap.
+			if refName, found := cmapUseCMap(doc, enc); found {
+				if _, ok := core.PredefinedCMaps[refName]; !ok {
+					bad("cmap", "embedded CMap references CMap /%s, which is not predefined (ISO 32000, Table 118)", refName)
+				}
+			}
+		}
+
+		// CIDSystemInfo compatibility (9.7.4.2/19005 6.x.11.3.1): the
+		// CIDFont's Registry/Ordering must match the CMap's, and — from
+		// ISO 19005-2 on — the CIDFont Supplement must not exceed the
+		// CMap's.
+		if desc != nil {
+			cidInfo := doc.ResolveDict(desc.Get("CIDSystemInfo"))
+			var cmReg, cmOrd string
+			var cmSupp object.Integer
+			haveCMapInfo := false
+			if name, ok := doc.Resolve(encObj).(object.Name); ok {
+				if info, ok := core.PredefinedCMaps[string(name)]; ok && info.Registry != "" {
+					cmReg, cmOrd = info.Registry, info.Ordering
+					haveCMapInfo = string(name) != "Identity-H" && string(name) != "Identity-V"
+				}
+			} else if cmapStreamInfo != nil {
+				cmReg = pdfTextString(doc, cmapStreamInfo.Get("Registry"))
+				cmOrd = pdfTextString(doc, cmapStreamInfo.Get("Ordering"))
+				if s, ok := doc.Resolve(cmapStreamInfo.Get("Supplement")).(object.Integer); ok {
+					cmSupp = s
+				}
+				haveCMapInfo = true
+			}
+			if cidInfo != nil && haveCMapInfo {
+				reg := pdfTextString(doc, cidInfo.Get("Registry"))
+				ord := pdfTextString(doc, cidInfo.Get("Ordering"))
+				if reg != cmReg {
+					bad("cidSystemInfo", "CIDFont CIDSystemInfo Registry %q does not match the CMap's %q", reg, cmReg)
+				}
+				if ord != cmOrd {
+					bad("cidSystemInfo", "CIDFont CIDSystemInfo Ordering %q does not match the CMap's %q", ord, cmOrd)
+				}
+				// The Supplement relationship is a part-2-and-later rule:
+				// ISO 19005-2 6.2.11.3.1 adds "the value of the Supplement
+				// key ... of the CIDFont shall be less than or equal to
+				// the Supplement key ... of the CMap", which ISO 19005-1
+				// 6.3.3.1 does not require (it constrains Registry and
+				// Ordering only). Applying it at PDF/A-1 false-positives on
+				// PDF_A-1a 6-3-8-t01-pass-f, which pairs a Supplement-3
+				// CIDFont with the Supplement-2 Adobe-Japan1-2 CMap and is a
+				// pass file; the veraPDF profiles agree — "Supplement"
+				// appears in PDFA-2*/3*/4* but in neither 1A nor 1B.
+				if level != PDFA1b && cmapStreamInfo != nil {
+					if supp, ok := doc.Resolve(cidInfo.Get("Supplement")).(object.Integer); ok && supp > cmSupp {
+						bad("cidSystemInfo", "CIDFont CIDSystemInfo Supplement %d is greater than the CMap's %d", int(supp), int(cmSupp))
+					}
+				}
+			}
+
+			// CIDToGIDMap (ISO 32000-1, 9.7.4.2): an embedded Type 2
+			// CIDFont shall carry CIDToGIDMap as a stream or /Identity;
+			// PDF/A requires the entry. Text rendered invisibly (mode 3
+			// only) is exempt — the corpus passes such a font at 1b.
+			onlyInvisible := len(u.Modes) > 0
+			for m := range u.Modes {
+				if m != 3 {
+					onlyInvisible = false
+				}
+			}
+			if dsub, _ := desc.Get("Subtype").(object.Name); dsub == "CIDFontType2" && !onlyInvisible {
+				switch v := doc.Resolve(desc.Get("CIDToGIDMap")).(type) {
+				case nil:
+					bad("cidToGID", "CIDFontType2 must contain a CIDToGIDMap entry (stream or /Identity)")
+				case object.Name:
+					if v != "Identity" {
+						bad("cidToGID", "CIDFontType2 CIDToGIDMap name must be /Identity, got /%s", string(v))
+					}
+				case *object.Stream:
+					// fine
+				default:
+					bad("cidToGID", "CIDFontType2 CIDToGIDMap must be a stream or the name /Identity")
+				}
+			}
+		}
+	}
+
+	// TrueType encodings (ISO 32000-1, 9.6.6.4; 19005 6.x.11.6).
+	if subtype == "TrueType" {
+		errs = append(errs, checkTrueTypeEncoding(doc, level, rule, fontDict, u)...)
+	}
+
+	// ToUnicode values (A-4): no mapping may target U+0000, U+FEFF, U+FFFE.
+	if level == PDFA4 {
+		if tu, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*object.Stream); ok {
+			if core.HasForbiddenUnicodeTargets(doc, tu) {
+				bad("toUnicode", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)")
+			}
+		}
+	}
+
+	// Program-level checks: metrics, glyph coverage, and .notdef references.
+	errs = append(errs, checkFontProgramConsistency(doc, level, rule, fontDict, u)...)
+
+	return errs
+}
+
+func pdfTextString(doc core.View, v object.Object) string {
+	if s, ok := doc.Resolve(v).(object.String); ok {
+		return core.DecodePDFTextString(s.Value)
+	}
+	return ""
+}
+
+// cmapContentWMode extracts "/WMode N def" from an embedded CMap stream.
+func cmapContentWMode(doc core.View, stream *object.Stream) (int, bool) {
+	data := doc.Content(stream)
+	if data == nil {
+		return 0, false
+	}
+	idx := strings.Index(string(data), "/WMode")
+	if idx < 0 {
+		return 0, false
+	}
+	var mode int
+	if _, err := fmt.Sscanf(string(data[idx:]), "/WMode %d", &mode); err != nil {
+		return 0, false
+	}
+	return mode, true
+}
+
+// cmapUseCMap extracts a "/Name usecmap" reference from an embedded CMap.
+func cmapUseCMap(doc core.View, stream *object.Stream) (string, bool) {
+	data := doc.Content(stream)
+	if data == nil {
+		return "", false
+	}
+	s := string(data)
+	idx := strings.Index(s, "usecmap")
+	if idx < 0 {
+		return "", false
+	}
+	// Walk back to the /Name operand.
+	head := strings.TrimRight(s[:idx], " \t\r\n")
+	slash := strings.LastIndexByte(head, '/')
+	if slash < 0 {
+		return "", false
+	}
+	name := strings.TrimSpace(head[slash+1:])
+	if cut := strings.IndexAny(name, " \t\r\n"); cut >= 0 {
+		name = name[:cut]
+	}
+	return name, name != ""
+}
+
+// checkTrueTypeEncoding enforces the PDF/A TrueType encoding rules
+// (ISO 19005-2/-3, 6.2.11.6; -4, 6.2.10.6; grounded in ISO 32000-1,
+// 9.6.6.4): a symbolic TrueType font shall have no Encoding entry; a
+// non-symbolic one shall specify WinAnsiEncoding or MacRomanEncoding —
+// directly or as BaseEncoding — and Differences names must come from the
+// Adobe Glyph List.
+// checkCMapEmbedded enforces ISO 19005-1 6.3.3.3: in PDF/A-1 every CMap used by
+// a Type 0 font other than Identity-H/Identity-V shall be embedded (given as a
+// stream), not referenced by a predefined name. Parts 2 and later permit
+// predefined CMaps by name, so this is a PDF/A-1-only rule.
+func checkCMapEmbedded(doc core.View, level Level) []Violation {
+	if level != PDFA1b {
+		return nil
+	}
+	var errs []Violation
+	for num, iobj := range doc.Objects {
+		dict, ok := iobj.Value.(*object.Dictionary)
+		if !ok {
+			continue
+		}
+		if st, _ := dict.Get("Subtype").(object.Name); st != "Type0" {
+			continue
+		}
+		if enc, ok := doc.Resolve(dict.Get("Encoding")).(object.Name); ok && enc != "Identity-H" && enc != "Identity-V" {
+			errs = append(errs, Violation{
+				Rule:    "6.3.3.3",
+				Level:   level,
+				Message: fmt.Sprintf("CMap /%s must be embedded (PDF/A-1 permits only Identity-H/V by name)", string(enc)),
+				Object:  num,
+			})
+		}
+	}
+	return errs
+}
+
+func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
+	rule = fontClause("encoding", level) // 6.3.7 / 6.2.11.6 / 6.2.10.6
+	var errs []Violation
+	bad := func(format string, args ...interface{}) {
+		errs = append(errs, Violation{
+			Rule:    rule,
+			Level:   level,
+			Message: fmt.Sprintf(format, args...),
+			Object:  u.ObjNum,
+		})
+	}
+
+	fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
+	symbolic := false
+	if fd != nil {
+		if flags, ok := doc.Resolve(fd.Get("Flags")).(object.Integer); ok {
+			symbolic = flags&4 != 0
+		}
+	}
+
+	encObj := doc.Resolve(fontDict.Get("Encoding"))
+
+	if symbolic {
+		if encObj != nil {
+			bad("symbolic TrueType font must not have an Encoding entry")
+		}
+		return errs
+	}
+
+	switch enc := encObj.(type) {
+	case nil:
+		bad("non-symbolic TrueType font must have an Encoding entry")
+	case object.Name:
+		if enc != "WinAnsiEncoding" && enc != "MacRomanEncoding" {
+			bad("non-symbolic TrueType font Encoding must be WinAnsiEncoding or MacRomanEncoding, got /%s", string(enc))
+		}
+	case *object.Dictionary:
+		base, hasBase := doc.Resolve(enc.Get("BaseEncoding")).(object.Name)
+		if !hasBase {
+			bad("non-symbolic TrueType font Encoding dictionary must have a BaseEncoding entry")
+		} else if base != "WinAnsiEncoding" && base != "MacRomanEncoding" {
+			bad("non-symbolic TrueType font BaseEncoding must be WinAnsiEncoding or MacRomanEncoding, got /%s", string(base))
+		}
+		if diffs, ok := doc.Resolve(enc.Get("Differences")).(object.Array); ok {
+			for _, el := range diffs {
+				if name, ok := el.(object.Name); ok {
+					if !aglGlyphName(string(name)) {
+						bad("Differences glyph name /%s is not in the Adobe Glyph List", string(name))
+					}
+				}
+			}
+		}
+	}
+	return errs
+}
+
+// aglGlyphName reports whether a glyph name is a legal Adobe Glyph List
+// reference: a listed name, a uniXXXX[XXXX...] form, or a uXXXX[XX] form
+// (Adobe Glyph Naming convention).
+func aglGlyphName(name string) bool {
+	if name == "" {
+		return false
+	}
+	isHex := func(s string) bool {
+		if s == "" {
+			return false
+		}
+		for _, c := range s {
+			if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'F') {
+				return false
+			}
+		}
+		return true
+	}
+	if strings.HasPrefix(name, "uni") && len(name) >= 7 && (len(name)-3)%4 == 0 && isHex(name[3:]) {
+		return true
+	}
+	if strings.HasPrefix(name, "u") && len(name) >= 5 && len(name) <= 7 && isHex(name[1:]) {
+		return true
+	}
+	return aglNames[name]
+}
+
+// aglNames is the Adobe Glyph List subset covering the standard Latin,
+// Greek, Symbol, and ZapfDingbats glyph names used by the base encodings.
+var aglNames = map[string]bool{
+	"A": true, "AE": true, "AEacute": true, "AEsmall": true, "Aacute": true, "Aacutesmall": true,
+	"Abreve": true, "Acircumflex": true, "Acircumflexsmall": true, "Acute": true, "Acutesmall": true, "Adieresis": true,
+	"Adieresissmall": true, "Agrave": true, "Agravesmall": true, "Alpha": true, "Alphatonos": true, "Amacron": true,
+	"Aogonek": true, "Aring": true, "Aringacute": true, "Aringsmall": true, "Asmall": true, "Atilde": true,
+	"Atildesmall": true, "B": true, "Beta": true, "Bsmall": true, "C": true, "Cacute": true,
+	"Caron": true, "Caronsmall": true, "Ccaron": true, "Ccedilla": true, "Ccedillasmall": true, "Ccircumflex": true,
+	"Cdotaccent": true, "Chi": true, "Circumflexsmall": true, "Csmall": true, "D": true, "Dcaron": true,
+	"Dcroat": true, "Delta": true, "Dieresis": true, "DieresisAcute": true, "DieresisGrave": true, "Dieresissmall": true,
+	"Dotaccentsmall": true, "Dsmall": true, "E": true, "Eacute": true, "Eacutesmall": true, "Ebreve": true,
+	"Ecaron": true, "Ecircumflex": true, "Ecircumflexsmall": true, "Edieresis": true, "Edieresissmall": true, "Edotaccent": true,
+	"Egrave": true, "Egravesmall": true, "Emacron": true, "Eng": true, "Eogonek": true, "Epsilon": true,
+	"Epsilontonos": true, "Esmall": true, "Eta": true, "Etatonos": true, "Eth": true, "Ethsmall": true,
+	"Euro": true, "F": true, "Fsmall": true, "G": true, "Gamma": true, "Gbreve": true,
+	"Gcaron": true, "Gcircumflex": true, "Gcommaaccent": true, "Gdotaccent": true, "Grave": true, "Gravesmall": true,
+	"Gsmall": true, "H": true, "H18533": true, "H18543": true, "H18551": true, "H22073": true,
+	"Hbar": true, "Hcircumflex": true, "Hsmall": true, "Hungarumlaut": true, "Hungarumlautsmall": true, "I": true,
+	"IJ": true, "Iacute": true, "Iacutesmall": true, "Ibreve": true, "Icircumflex": true, "Icircumflexsmall": true,
+	"Idieresis": true, "Idieresissmall": true, "Idotaccent": true, "Ifraktur": true, "Igrave": true, "Igravesmall": true,
+	"Imacron": true, "Iogonek": true, "Iota": true, "Iotadieresis": true, "Iotatonos": true, "Ismall": true,
+	"Itilde": true, "J": true, "Jcircumflex": true, "Jsmall": true, "K": true, "Kappa": true,
+	"Kcommaaccent": true, "Ksmall": true, "L": true, "Lacute": true, "Lambda": true, "Lcaron": true,
+	"Lcommaaccent": true, "Ldot": true, "Lslash": true, "Lslashsmall": true, "Lsmall": true, "M": true,
+	"Macron": true, "Macronsmall": true, "Msmall": true, "Mu": true, "N": true, "Nacute": true,
+	"Ncaron": true, "Ncommaaccent": true, "Nsmall": true, "Ntilde": true, "Ntildesmall": true, "Nu": true,
+	"O": true, "OE": true, "OEsmall": true, "Oacute": true, "Oacutesmall": true, "Obreve": true,
+	"Ocircumflex": true, "Ocircumflexsmall": true, "Odieresis": true, "Odieresissmall": true, "Ogoneksmall": true, "Ograve": true,
+	"Ogravesmall": true, "Ohm": true, "Ohorn": true, "Ohungarumlaut": true, "Omacron": true, "Omega": true,
+	"Omegatonos": true, "Omicron": true, "Omicrontonos": true, "Oslash": true, "Oslashacute": true, "Oslashsmall": true,
+	"Osmall": true, "Otilde": true, "Otildesmall": true, "P": true, "Phi": true, "Pi": true,
+	"Psi": true, "Psmall": true, "Q": true, "Qsmall": true, "R": true, "Racute": true,
+	"Rcaron": true, "Rcommaaccent": true, "Rfraktur": true, "Rho": true, "Ringsmall": true, "Rsmall": true,
+	"S": true, "SF010000": true, "SF020000": true, "SF030000": true, "SF040000": true, "SF050000": true,
+	"SF060000": true, "SF070000": true, "SF080000": true, "SF090000": true, "SF100000": true, "SF110000": true,
+	"Sacute": true, "Scaron": true, "Scaronsmall": true, "Scedilla": true, "Scircumflex": true, "Scommaaccent": true,
+	"Sigma": true, "Ssmall": true, "T": true, "Tau": true, "Tbar": true, "Tcaron": true,
+	"Tcommaaccent": true, "Theta": true, "Thorn": true, "Thornsmall": true, "Tildesmall": true, "Tsmall": true,
+	"U": true, "Uacute": true, "Uacutesmall": true, "Ubreve": true, "Ucircumflex": true, "Ucircumflexsmall": true,
+	"Udieresis": true, "Udieresissmall": true, "Ugrave": true, "Ugravesmall": true, "Uhorn": true, "Uhungarumlaut": true,
+	"Umacron": true, "Uogonek": true, "Upsilon": true, "Upsilon1": true, "Upsilondieresis": true, "Upsilontonos": true,
+	"Uring": true, "Usmall": true, "Utilde": true, "V": true, "Vsmall": true, "W": true,
+	"Wacute": true, "Wcircumflex": true, "Wdieresis": true, "Wgrave": true, "Wsmall": true, "X": true,
+	"Xi": true, "Xsmall": true, "Y": true, "Yacute": true, "Yacutesmall": true, "Ycircumflex": true,
+	"Ydieresis": true, "Ydieresissmall": true, "Ygrave": true, "Ysmall": true, "Z": true, "Zacute": true,
+	"Zcaron": true, "Zcaronsmall": true, "Zdotaccent": true, "Zeta": true, "Zsmall": true, "a": true,
+	"a1": true, "a10": true, "a100": true, "a101": true, "a102": true, "a103": true,
+	"a104": true, "a105": true, "a106": true, "a107": true, "a108": true, "a109": true,
+	"a11": true, "a110": true, "a111": true, "a112": true, "a117": true, "a118": true,
+	"a119": true, "a12": true, "a120": true, "a121": true, "a122": true, "a123": true,
+	"a124": true, "a125": true, "a126": true, "a127": true, "a128": true, "a129": true,
+	"a13": true, "a130": true, "a131": true, "a132": true, "a133": true, "a134": true,
+	"a135": true, "a136": true, "a137": true, "a138": true, "a139": true, "a14": true,
+	"a140": true, "a141": true, "a142": true, "a143": true, "a144": true, "a145": true,
+	"a146": true, "a147": true, "a148": true, "a149": true, "a15": true, "a150": true,
+	"a151": true, "a152": true, "a153": true, "a154": true, "a155": true, "a156": true,
+	"a157": true, "a158": true, "a159": true, "a16": true, "a160": true, "a161": true,
+	"a162": true, "a163": true, "a164": true, "a165": true, "a166": true, "a167": true,
+	"a168": true, "a169": true, "a17": true, "a170": true, "a171": true, "a172": true,
+	"a173": true, "a174": true, "a175": true, "a176": true, "a177": true, "a178": true,
+	"a179": true, "a18": true, "a180": true, "a181": true, "a182": true, "a183": true,
+	"a184": true, "a185": true, "a186": true, "a187": true, "a188": true, "a189": true,
+	"a19": true, "a190": true, "a191": true, "a192": true, "a193": true, "a194": true,
+	"a195": true, "a196": true, "a197": true, "a198": true, "a199": true, "a2": true,
+	"a20": true, "a200": true, "a201": true, "a202": true, "a203": true, "a204": true,
+	"a205": true, "a21": true, "a22": true, "a23": true, "a24": true, "a25": true,
+	"a26": true, "a27": true, "a28": true, "a29": true, "a3": true, "a30": true,
+	"a31": true, "a32": true, "a33": true, "a34": true, "a35": true, "a36": true,
+	"a37": true, "a38": true, "a39": true, "a4": true, "a40": true, "a41": true,
+	"a42": true, "a43": true, "a44": true, "a45": true, "a46": true, "a47": true,
+	"a48": true, "a49": true, "a5": true, "a50": true, "a51": true, "a52": true,
+	"a53": true, "a54": true, "a55": true, "a56": true, "a57": true, "a58": true,
+	"a59": true, "a6": true, "a60": true, "a61": true, "a62": true, "a63": true,
+	"a64": true, "a65": true, "a66": true, "a67": true, "a68": true, "a69": true,
+	"a7": true, "a70": true, "a71": true, "a72": true, "a73": true, "a74": true,
+	"a75": true, "a76": true, "a77": true, "a78": true, "a79": true, "a8": true,
+	"a81": true, "a82": true, "a83": true, "a84": true, "a85": true, "a86": true,
+	"a87": true, "a88": true, "a89": true, "a9": true, "a90": true, "a91": true,
+	"a92": true, "a93": true, "a94": true, "a95": true, "a96": true, "a97": true,
+	"a98": true, "a99": true, "aacute": true, "abreve": true, "acircumflex": true, "acute": true,
+	"acutecomb": true, "adieresis": true, "ae": true, "aeacute": true, "agrave": true, "aleph": true,
+	"alpha": true, "alphatonos": true, "amacron": true, "ampersand": true, "ampersandsmall": true, "angle": true,
+	"angleleft": true, "angleright": true, "anoteleia": true, "aogonek": true, "apple": true, "approxequal": true,
+	"aring": true, "aringacute": true, "arrowboth": true, "arrowdblboth": true, "arrowdbldown": true, "arrowdblleft": true,
+	"arrowdblright": true, "arrowdblup": true, "arrowdown": true, "arrowhorizex": true, "arrowleft": true, "arrowright": true,
+	"arrowup": true, "arrowupdn": true, "arrowupdnbse": true, "arrowvertex": true, "asciicircum": true, "asciitilde": true,
+	"asterisk": true, "asteriskmath": true, "at": true, "atilde": true, "b": true, "backslash": true,
+	"bar": true, "beta": true, "block": true, "braceex": true, "braceleft": true, "braceleftbt": true,
+	"braceleftmid": true, "bracelefttp": true, "braceright": true, "bracerightbt": true, "bracerightmid": true, "bracerighttp": true,
+	"bracket": true, "bracketleft": true, "bracketleftbt": true, "bracketleftex": true, "bracketlefttp": true, "bracketright": true,
+	"bracketrightbt": true, "bracketrightex": true, "bracketrighttp": true, "breve": true, "brokenbar": true, "bullet": true,
+	"c": true, "cacute": true, "caron": true, "carriagereturn": true, "ccaron": true, "ccedilla": true,
+	"ccircumflex": true, "cdotaccent": true, "cedilla": true, "cent": true, "centinferior": true, "centoldstyle": true,
+	"centsuperior": true, "chi": true, "circle": true, "circlemultiply": true, "circleplus": true, "circumflex": true,
+	"club": true, "colon": true, "colonmonetary": true, "comma": true, "commaaccent": true, "commainferior": true,
+	"commasuperior": true, "congruent": true, "copyright": true, "copyrightsans": true, "copyrightserif": true, "currency": true,
+	"cyrBreve": true, "cyrFlex": true, "cyrbreve": true, "cyrflex": true, "d": true, "dagger": true,
+	"daggerdbl": true, "dblGrave": true, "dblgrave": true, "dcaron": true, "dcroat": true, "degree": true,
+	"delta": true, "diamond": true, "dieresis": true, "dieresisacute": true, "dieresisgrave": true, "dieresistonos": true,
+	"divide": true, "dkshade": true, "dnblock": true, "dollar": true, "dollarinferior": true, "dollaroldstyle": true,
+	"dollarsuperior": true, "dong": true, "dotaccent": true, "dotbelowcomb": true, "dotlessi": true, "dotlessj": true,
+	"dotmath": true, "e": true, "eacute": true, "ebreve": true, "ecaron": true, "ecircumflex": true,
+	"edieresis": true, "edotaccent": true, "egrave": true, "eight": true, "eightinferior": true, "eightoldstyle": true,
+	"eightsuperior": true, "element": true, "ellipsis": true, "emacron": true, "emdash": true, "emptyset": true,
+	"endash": true, "eng": true, "eogonek": true, "epsilon": true, "epsilontonos": true, "equal": true,
+	"equivalence": true, "estimated": true, "eta": true, "etatonos": true, "eth": true, "exclam": true,
+	"exclamdbl": true, "exclamdown": true, "exclamdownsmall": true, "exclamsmall": true, "existential": true, "f": true,
+	"female": true, "ff": true, "ffi": true, "ffl": true, "fi": true, "figuredash": true,
+	"filledbox": true, "filledrect": true, "five": true, "fiveeighths": true, "fiveinferior": true, "fiveoldstyle": true,
+	"fivesuperior": true, "fl": true, "florin": true, "four": true, "fourinferior": true, "fouroldstyle": true,
+	"foursuperior": true, "fraction": true, "franc": true, "g": true, "gamma": true, "gbreve": true,
+	"gcaron": true, "gcircumflex": true, "gcommaaccent": true, "gdotaccent": true, "germandbls": true, "gradient": true,
+	"grave": true, "gravecomb": true, "greater": true, "greaterequal": true, "guillemotleft": true, "guillemotright": true,
+	"guilsinglleft": true, "guilsinglright": true, "h": true, "hbar": true, "hcircumflex": true, "heart": true,
+	"hookabovecomb": true, "house": true, "hungarumlaut": true, "hyphen": true, "hypheninferior": true, "hyphensuperior": true,
+	"i": true, "iacute": true, "ibreve": true, "icircumflex": true, "idieresis": true, "igrave": true,
+	"ij": true, "imacron": true, "infinity": true, "integral": true, "integralbt": true, "integralex": true,
+	"integraltp": true, "intersection": true, "invbullet": true, "invcircle": true, "invsmileface": true, "iogonek": true,
+	"iota": true, "iotadieresis": true, "iotatonos": true, "isinferior": true, "isuperior": true, "itilde": true,
+	"j": true, "jcircumflex": true, "k": true, "kappa": true, "kcommaaccent": true, "kgreenlandic": true,
+	"l": true, "lacute": true, "lambda": true, "lcaron": true, "lcommaaccent": true, "ldot": true,
+	"less": true, "lessequal": true, "lfblock": true, "lira": true, "ll": true, "logicaland": true,
+	"logicalnot": true, "logicalor": true, "longs": true, "lozenge": true, "lslash": true, "lsuperior": true,
+	"ltshade": true, "m": true, "macron": true, "male": true, "middot": true, "minus": true,
+	"minute": true, "msuperior": true, "mu": true, "multiply": true, "musicalnote": true, "musicalnotedbl": true,
+	"n": true, "nacute": true, "napostrophe": true, "nbspace": true, "ncaron": true, "ncommaaccent": true,
+	"nine": true, "nineinferior": true, "nineoldstyle": true, "ninesuperior": true, "notelement": true, "notequal": true,
+	"notsubset": true, "nsuperior": true, "ntilde": true, "nu": true, "numbersign": true, "o": true,
+	"oacute": true, "obreve": true, "ocircumflex": true, "odieresis": true, "oe": true, "ogonek": true,
+	"ograve": true, "ohorn": true, "ohungarumlaut": true, "omacron": true, "omega": true, "omega1": true,
+	"omegatonos": true, "omicron": true, "omicrontonos": true, "one": true, "onedotenleader": true, "oneeighth": true,
+	"onefitted": true, "onehalf": true, "oneinferior": true, "oneoldstyle": true, "onequarter": true, "onesuperior": true,
+	"onethird": true, "openbullet": true, "ordfeminine": true, "ordmasculine": true, "orthogonal": true, "oslash": true,
+	"oslashacute": true, "osuperior": true, "otilde": true, "p": true, "paragraph": true, "parenleft": true,
+	"parenleftbt": true, "parenleftex": true, "parenleftinferior": true, "parenleftsuperior": true, "parenlefttp": true, "parenright": true,
+	"parenrightbt": true, "parenrightex": true, "parenrightinferior": true, "parenrightsuperior": true, "parenrighttp": true, "partialdiff": true,
+	"percent": true, "period": true, "periodcentered": true, "periodinferior": true, "periodsuperior": true, "perpendicular": true,
+	"perthousand": true, "peseta": true, "phi": true, "phi1": true, "pi": true, "plus": true,
+	"plusminus": true, "prescription": true, "product": true, "propersubset": true, "propersuperset": true, "proportional": true,
+	"psi": true, "q": true, "question": true, "questiondown": true, "questiondownsmall": true, "questionsmall": true,
+	"quotedbl": true, "quotedblbase": true, "quotedblleft": true, "quotedblright": true, "quoteleft": true, "quotereversed": true,
+	"quoteright": true, "quotesinglbase": true, "quotesingle": true, "r": true, "racute": true, "radical": true,
+	"radicalex": true, "rcaron": true, "rcommaaccent": true, "reflexsubset": true, "reflexsuperset": true, "registered": true,
+	"registersans": true, "registerserif": true, "revlogicalnot": true, "rho": true, "ring": true, "rsuperior": true,
+	"rtblock": true, "rupiah": true, "s": true, "sacute": true, "scaron": true, "scedilla": true,
+	"scircumflex": true, "scommaaccent": true, "second": true, "section": true, "semicolon": true, "seven": true,
+	"seveneighths": true, "seveninferior": true, "sevenoldstyle": true, "sevensuperior": true, "sfthyphen": true, "shade": true,
+	"sigma": true, "sigma1": true, "similar": true, "six": true, "sixinferior": true, "sixoldstyle": true,
+	"sixsuperior": true, "slash": true, "smileface": true, "space": true, "spade": true, "ssuperior": true,
+	"sterling": true, "suchthat": true, "summation": true, "sun": true, "t": true, "tau": true,
+	"tbar": true, "tcaron": true, "tcommaaccent": true, "therefore": true, "theta": true, "theta1": true,
+	"thorn": true, "three": true, "threeeighths": true, "threeinferior": true, "threeoldstyle": true, "threequarters": true,
+	"threequartersemdash": true, "threesuperior": true, "tilde": true, "tildecomb": true, "tonos": true, "trademark": true,
+	"trademarksans": true, "trademarkserif": true, "triagdn": true, "triaglf": true, "triagrt": true, "triagup": true,
+	"tsuperior": true, "two": true, "twodotenleader": true, "twoinferior": true, "twooldstyle": true, "twosuperior": true,
+	"twothirds": true, "u": true, "uacute": true, "ubreve": true, "ucircumflex": true, "udieresis": true,
+	"ugrave": true, "uhorn": true, "uhungarumlaut": true, "umacron": true, "underscore": true, "underscoredbl": true,
+	"union": true, "universal": true, "uogonek": true, "upblock": true, "upsilon": true, "upsilondieresis": true,
+	"upsilondieresistonos": true, "upsilontonos": true, "uring": true, "utilde": true, "v": true, "w": true,
+	"wacute": true, "wcircumflex": true, "wdieresis": true, "weierstrass": true, "wgrave": true, "x": true,
+	"xi": true, "y": true, "yacute": true, "ycircumflex": true, "ydieresis": true, "yen": true,
+	"ygrave": true, "z": true, "zacute": true, "zcaron": true, "zdotaccent": true, "zero": true,
+	"zeroinferior": true, "zerooldstyle": true, "zerosuperior": true, "zeta": true,
+}
+
+// --- font program loading ---
+
+// --- simple font encoding (code -> glyph name) ---
+
+// simpleFontCodeToName builds the character-code to glyph-name table for a
+// simple font per ISO 32000-1, 9.6.6: a base encoding (named, or the font's
+// implicit one) updated by any Differences array.
+func simpleFontCodeToName(doc core.View, fontDict *object.Dictionary, symbolic bool) map[byte]string {
+	table := make(map[byte]string)
+	applyBase := func(name object.Name) {
+		var src map[byte]string
+		switch name {
+		case "WinAnsiEncoding":
+			src = font.WinAnsiEncodingNames
+		case "MacRomanEncoding":
+			src = font.MacRomanEncodingNames
+		case "StandardEncoding":
+			src = font.StandardEncodingNames
+		}
+		for c, n := range src {
+			table[c] = n
+		}
+	}
+
+	switch enc := doc.Resolve(fontDict.Get("Encoding")).(type) {
+	case object.Name:
+		applyBase(enc)
+	case *object.Dictionary:
+		if base, ok := doc.Resolve(enc.Get("BaseEncoding")).(object.Name); ok {
+			applyBase(base)
+		} else if !symbolic {
+			applyBase("StandardEncoding")
+		}
+		if diffs, ok := doc.Resolve(enc.Get("Differences")).(object.Array); ok {
+			code := 0
+			for _, el := range diffs {
+				switch v := el.(type) {
+				case object.Integer:
+					code = int(v)
+				case object.Name:
+					if code >= 0 && code < 256 {
+						table[byte(code)] = string(v)
+					}
+					code++
+				}
+			}
+		}
+	case nil:
+		if !symbolic {
+			applyBase("StandardEncoding")
+		}
+	}
+	return table
+}
+
+// simpleFontBaseEncodingModelled reports whether the base encoding under the
+// table simpleFontCodeToName builds is one this package actually has a table
+// for. When it is not — a symbolic font whose base is the font program's own
+// built-in encoding, or a predefined encoding outside Annex D.2 such as
+// MacExpertEncoding — a code absent from the table means "unknown", not
+// "unencoded": only the Differences entries are trustworthy. When it is,
+// absence is real and the code selects .notdef (ISO 32000-1, 9.6.6.4).
+func simpleFontBaseEncodingModelled(doc core.View, fontDict *object.Dictionary, symbolic bool) bool {
+	modelled := func(n object.Name) bool {
+		switch n {
+		case "WinAnsiEncoding", "MacRomanEncoding", "StandardEncoding":
+			return true
+		}
+		return false
+	}
+	switch enc := doc.Resolve(fontDict.Get("Encoding")).(type) {
+	case object.Name:
+		return modelled(enc)
+	case *object.Dictionary:
+		if base, ok := doc.Resolve(enc.Get("BaseEncoding")).(object.Name); ok {
+			return modelled(base)
+		}
+		// No BaseEncoding: a non-symbolic font falls back to
+		// StandardEncoding, a symbolic one to its built-in encoding.
+		return !symbolic
+	case nil:
+		return !symbolic
+	}
+	return false
+}
+
+// --- glyph-name to Unicode (for TrueType cmap lookup) ---
+
+// --- program consistency: metrics, glyph coverage, .notdef ---
+
+const glyphWidthTolerance = 1.0 // 1/1000 text-space units
+
+// checkFontProgramConsistency validates that, for every glyph actually shown,
+// the font-dictionary width matches the embedded program's advance width
+// (ISO 19005 font-metrics rule), the glyph is present in the program
+// (embedding-completeness rule), and no shown glyph is .notdef.
+func checkFontProgramConsistency(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
+	subtype, _ := fontDict.Get("Subtype").(object.Name)
+	if subtype == "Type3" {
+		return checkType3Widths(doc, level, rule, fontDict, u)
+	}
+	if subtype == "Type0" {
+		return checkCIDFontConsistency(doc, level, rule, fontDict, u)
+	}
+	return checkSimpleFontConsistency(doc, level, rule, fontDict, u)
+}
+
+// damagedFontProgramError is returned in place of the silent fp==nil exemption:
+// if a font whose glyphs are actually shown carries an embedded font program
+// that could not be parsed, the program is damaged and cannot provide those
+// glyphs. Only visibly-rendered fonts count (invisible text needs no embedded
+// program at all), and only when a FontFile is present (a missing program is
+// the separate embedding rule). Across the corpus, every valid embedded program
+// parses, so this raises no false positive.
+func damagedFontProgramError(doc core.View, level Level, rule string, fontDict, fd *object.Dictionary, u *core.FontTextUsage) []Violation {
+	if fd == nil || !rendersVisibly(u) || !hasEmbeddedFontProgram(doc, fd) {
+		return nil
+	}
+	subtype, _ := fontDict.Get("Subtype").(object.Name)
+	return []Violation{{
+		Rule:    fontClause("embed", level),
+		Level:   level,
+		Message: fmt.Sprintf("embedded %s font program is damaged and could not be parsed", string(subtype)),
+		Object:  u.ObjNum,
+	}}
+}
+
+// hasEmbeddedFontProgram reports whether the descriptor carries an embedded font
+// program stream (FontFile/FontFile2/FontFile3).
+func hasEmbeddedFontProgram(doc core.View, fd *object.Dictionary) bool {
+	for _, k := range []object.Name{"FontFile", "FontFile2", "FontFile3"} {
+		if _, ok := doc.Resolve(fd.Get(k)).(*object.Stream); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// fontKindClause maps a report "kind" to its ISO clause for the level.
+func fontKindClause(kind string, level Level) string {
+	switch kind {
+	case "glyph":
+		return fontClause("glyphs", level)
+	case "notdef":
+		return fontClause("notdef", level)
+	case "width":
+		return fontClause("width", level)
+	case "cmap":
+		return fontClause("encoding", level)
+	}
+	return fontClause("general", level)
+}
+
+func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
+	fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
+	fp := core.LoadFontProgram(doc, fd)
+	if fp == nil {
+		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
+	}
+	subtype, _ := fontDict.Get("Subtype").(object.Name)
+	symbolic := false
+	if fd != nil {
+		if flags, ok := doc.Resolve(fd.Get("Flags")).(object.Integer); ok {
+			symbolic = flags&4 != 0
+		}
+	}
+	enc := simpleFontCodeToName(doc, fontDict, symbolic)
+	baseEncodingModelled := simpleFontBaseEncodingModelled(doc, fontDict, symbolic)
+	firstChar := intVal(doc.Resolve(fontDict.Get("FirstChar")))
+	widths, _ := doc.Resolve(fontDict.Get("Widths")).(object.Array)
+	missingWidth := 0.0
+	if fd != nil {
+		missingWidth = numVal(doc.Resolve(fd.Get("MissingWidth")))
+	}
+
+	var errs []Violation
+	reported := map[string]bool{}
+	report := func(kind, msg string) {
+		if reported[kind] {
+			return
+		}
+		reported[kind] = true
+		errs = append(errs, Violation{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.ObjNum})
+	}
+
+	// ISO 19005-1 6.3.7: a symbolic TrueType font's embedded program shall
+	// contain exactly one cmap subtable. (cmapSubtableCount is 0 for a
+	// non-sfnt program, which this rule does not apply to.)
+	if subtype == "TrueType" && symbolic && fp.CmapSubtableCount > 0 && fp.CmapSubtableCount != 1 {
+		report("cmap", fmt.Sprintf("symbolic TrueType font must have exactly one cmap subtable, found %d", fp.CmapSubtableCount))
+	}
+
+	renders := rendersVisibly(u)
+	for _, s := range u.Strings {
+		for _, code := range s {
+			name := enc[code]
+
+			// Program advance width for this code.
+			progW, haveProg := simpleGlyphWidth(fp, subtype, symbolic, code, name)
+			glyphExists := simpleGlyphExists(fp, subtype, symbolic, code, name)
+
+			// A Type 1/CFF code with no glyph name is only evidence of a
+			// missing glyph when the base encoding is one this package
+			// models; otherwise the name comes from the font program's
+			// built-in encoding, which is not parsed here, and reporting
+			// the glyph absent asserts a fact not in evidence. That
+			// false-positives on the conforming corpus files PDF_A-1a
+			// 6-3-8-t01-pass-b (/MacExpertEncoding) and -pass-e (symbolic,
+			// no /Encoding), whose /CharSet lists the very glyph reported
+			// missing. TrueType is unaffected: its codes go through the
+			// program's cmap, not a glyph name.
+			codeMapped := subtype == "TrueType" || name != "" || baseEncodingModelled
+
+			// A code that the cmap does not resolve is only evidence of a
+			// missing glyph when the cmap is complete. When the work budget
+			// truncated it (fp.cmapPartial) the code is *unknown*, and
+			// font.TrueTypeGID's "non-nil cmap is authoritative" contract would
+			// otherwise turn every unread mapping into glyph 0 — audit C46's
+			// false positive, reached through the budget instead of the
+			// dropped-segment bug.
+			if fp.CmapPartial && subtype == "TrueType" {
+				codeMapped = false
+			}
+
+			if renders && codeMapped && !glyphExists {
+				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (code %d)", string(subtype), code))
+			}
+			// A .notdef reference is prohibited even in invisible text
+			// (rendering mode 3), so this is not gated on visible rendering.
+			// It is gated on the cmap being complete for the same reason as
+			// the glyph rule above: a truncated cmap resolves an unread code
+			// to gid 0, which reads as .notdef.
+			if !(fp.CmapPartial && subtype == "TrueType") && isNotdefGlyph(fp, subtype, symbolic, code, name) {
+				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(subtype)))
+			}
+
+			// Width consistency (only for visibly rendered glyphs).
+			pdfW, havePDF := simpleDeclaredWidth(widths, firstChar, code, missingWidth)
+			if renders && haveProg && havePDF && absf(pdfW-progW) > glyphWidthTolerance {
+				report("width", fmt.Sprintf("width information for glyphs used for rendering is inconsistent in %s font", string(subtype)))
+			}
+		}
+	}
+	return errs
+}
+
+func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
+	desc := core.Type0Descendant(doc, fontDict)
+	if desc == nil {
+		return nil
+	}
+	fd := doc.ResolveDict(desc.Get("FontDescriptor"))
+	fp := core.LoadFontProgram(doc, fd)
+	if fp == nil {
+		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
+	}
+	cidSub, _ := desc.Get("Subtype").(object.Name)
+	identity := core.IsIdentityEncoding(doc, fontDict)
+
+	dw := 1000.0
+	if v := doc.Resolve(desc.Get("DW")); v != nil {
+		dw = numVal(v)
+	}
+	wMap, wComplete := parseCIDWidths(doc, desc.Get("W"))
+	if !wComplete {
+		doc.Note(core.GuardCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", core.LimitBound(int64(doc.Limits.CIDRangeSpan), core.DefaultMaxCIDRangeSpan)), u.ObjNum)
+	}
+
+	var errs []Violation
+	reported := map[string]bool{}
+	report := func(kind, msg string) {
+		if reported[kind] {
+			return
+		}
+		reported[kind] = true
+		errs = append(errs, Violation{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.ObjNum})
+	}
+	renders := rendersVisibly(u)
+	toUni := doc.ParseToUnicodeMap(fontDict)
+
+	for _, s := range u.Strings {
+		if !identity {
+			continue // only Identity CID decoding is handled precisely
+		}
+		// Identity-H/V codes are exactly two bytes; a string of odd length
+		// ends in an incomplete code that cannot reference a defined glyph
+		// (ISO 32000-1 9.7.5, 9.10).
+		if renders && len(s)%2 == 1 {
+			report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (incomplete character code)", string(cidSub)))
+		}
+		for i := 0; i+1 < len(s); i += 2 {
+			cid := int(s[i])<<8 | int(s[i+1])
+
+			progW, haveProg := cidGlyphWidth(fp, desc, doc, cidSub, cid)
+			exists := cidGlyphExists(fp, cidSub, cid)
+
+			if renders && !exists {
+				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
+			} else if renders && exists && cidSub == "CIDFontType2" && fp.GlyphNonEmpty != nil &&
+				cid < len(fp.GlyphNonEmpty) && !fp.GlyphNonEmpty[cid] {
+				// A subset must embed an outline for every rendered glyph; an
+				// empty glyf entry is acceptable only for a whitespace
+				// character (ISO 19005 6.2.11.4.1/6.2.10.4.1).
+				if r, ok := toUni[cid]; ok && !isGlyphWhitespace(r) {
+					report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
+				}
+			}
+			if cid == 0 {
+				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(cidSub)))
+			}
+
+			pdfW, havePDF := dw, wComplete
+			if w, ok := wMap[cid]; ok {
+				pdfW, havePDF = w, true
+			}
+			if renders && havePDF && haveProg && absf(pdfW-progW) > glyphWidthTolerance {
+				report("width", fmt.Sprintf("width information for glyphs used for rendering is inconsistent in %s font", string(cidSub)))
+			}
+		}
+	}
+	return errs
+}
+
+func checkType3Widths(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
+	// A Type 3 glyph's advance is the w operand of its d0/d1 operator in the
+	// CharProc, transformed by the FontMatrix; it must match the Widths
+	// array (ISO 32000-1, 9.6.5 / 9.10). Compare in glyph space.
+	charProcs := doc.ResolveDict(fontDict.Get("CharProcs"))
+	if charProcs == nil {
+		return nil
+	}
+	enc := simpleFontCodeToName(doc, fontDict, false)
+	firstChar := intVal(doc.Resolve(fontDict.Get("FirstChar")))
+	widths, _ := doc.Resolve(fontDict.Get("Widths")).(object.Array)
+	fm := parseFontMatrix(doc, fontDict.Get("FontMatrix"))
+	if !rendersVisibly(u) {
+		return nil
+	}
+
+	var errs []Violation
+	reported := false
+	for _, s := range u.Strings {
+		for _, code := range s {
+			name := enc[code]
+			cp, ok := doc.Resolve(charProcs.Get(object.Name(name))).(*object.Stream)
+			if !ok {
+				continue
+			}
+			glyphW, ok := type3GlyphWidth(doc, cp)
+			if !ok {
+				continue
+			}
+			pdfW, havePDF := simpleDeclaredWidth(widths, firstChar, code, 0)
+			if !havePDF {
+				continue
+			}
+			// Transform glyph-space width to text space via the FontMatrix
+			// x-scale, then to 1/1000 units.
+			progW := glyphW * fm[0] * 1000
+			if absf(pdfW-progW) > glyphWidthTolerance && !reported {
+				reported = true
+				errs = append(errs, Violation{Rule: fontClause("width", level), Level: level,
+					Message: "width information for glyphs used for rendering is inconsistent in Type3 font", Object: u.ObjNum})
+			}
+		}
+	}
+	return errs
+}
+
+// --- small helpers ---
+
+func intVal(o object.Object) int {
+	if i, ok := o.(object.Integer); ok {
+		return int(i)
+	}
+	return 0
+}
+
+func numVal(o object.Object) float64 {
+	switch v := o.(type) {
+	case object.Integer:
+		return float64(v)
+	case object.Real:
+		return float64(v)
+	}
+	return 0
+}
+
+func absf(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// rendersVisibly reports whether the font showed text in any mode other than
+// 3 (invisible) or 7 (clip only) — modes where glyph shape/coverage is not
+// actually painted.
+func rendersVisibly(u *core.FontTextUsage) bool {
+	if len(u.Modes) == 0 {
+		return true
+	}
+	for m := range u.Modes {
+		if m != 3 && m != 7 {
+			return true
+		}
+	}
+	return false
+}
+
+// simpleDeclaredWidth returns the width the font dictionary declares for a
+// code: Widths[code-FirstChar] when in range, else MissingWidth.
+func simpleDeclaredWidth(widths object.Array, firstChar int, code byte, missingWidth float64) (float64, bool) {
+	idx := int(code) - firstChar
+	if idx >= 0 && idx < len(widths) {
+		return numVal(widths[idx]), true
+	}
+	if missingWidth != 0 {
+		return missingWidth, true
+	}
+	return 0, false
+}
+
+// simpleGlyphWidth returns the embedded program's advance width for a code.
+func simpleGlyphWidth(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) (float64, bool) {
+	if subtype == "TrueType" {
+		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		if !ok || gid >= len(fp.WidthByGID) {
+			return 0, false
+		}
+		return fp.WidthByGID[gid], true
+	}
+	// Type1 / MMType1 / CFF: by glyph name.
+	if name == "" {
+		return 0, false
+	}
+	w, ok := fp.WidthByName[name]
+	return w, ok
+}
+
+func simpleGlyphExists(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) bool {
+	if subtype == "TrueType" {
+		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		return ok && gid > 0 && gid < fp.NumGlyphs
+	}
+	if name == "" {
+		return false
+	}
+	return fp.GlyphNames[name]
+}
+
+func isNotdefGlyph(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) bool {
+	if name == ".notdef" {
+		return true
+	}
+	if subtype == "TrueType" {
+		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		return ok && gid == 0
+	}
+	return false
+}
+
+// cidGlyphWidth returns a CID's advance from the embedded CIDFont program.
+func cidGlyphWidth(fp *font.Program, desc *object.Dictionary, doc core.View, cidSub object.Name, cid int) (float64, bool) {
+	if cidSub == "CIDFontType2" {
+		gid, ok := cidToGID(doc, desc, cid)
+		if !ok || gid >= len(fp.WidthByGID) {
+			return 0, false
+		}
+		return fp.WidthByGID[gid], true
+	}
+	// CIDFontType0 (CFF): CID-keyed by CID, or GID==CID for non-CID CFF.
+	if fp.WidthByCID != nil {
+		w, ok := fp.WidthByCID[cid]
+		return w, ok
+	}
+	if cid < len(fp.WidthByGID) {
+		return fp.WidthByGID[cid], true
+	}
+	return 0, false
+}
+
+func cidGlyphExists(fp *font.Program, cidSub object.Name, cid int) bool {
+	if cidSub == "CIDFontType2" {
+		if cid <= 0 || cid >= fp.NumGlyphs {
+			return false
+		}
+		if fp.GlyphPresent != nil {
+			return fp.GlyphPresent[cid]
+		}
+		return true
+	}
+	if fp.CIDGIDs != nil {
+		return fp.CIDGIDs[cid]
+	}
+	return cid > 0 && cid < fp.NumGlyphs
+}
+
+// cidToGID resolves a CID to a glyph index via the CIDToGIDMap (name Identity
+// or a 2-byte-per-CID stream).
+func cidToGID(doc core.View, desc *object.Dictionary, cid int) (int, bool) {
+	switch v := doc.Resolve(desc.Get("CIDToGIDMap")).(type) {
+	case object.Name:
+		if v == "Identity" {
+			return cid, true
+		}
+	case *object.Stream:
+		data := doc.Content(v)
+		if data != nil && 2*cid+1 < len(data) {
+			return int(data[2*cid])<<8 | int(data[2*cid+1]), true
+		}
+	case nil:
+		return cid, true // default Identity
+	}
+	return cid, true
+}
+
+// The number of CIDs a single /W range entry may span defaults to
+// defaultMaxCIDRangeSpan; a caller can change it with WithMaxCIDRangeSpan. CIDs
+// are 16-bit, so a well-formed range covers at most the whole CID space; this
+// matches the ceiling the ToUnicode and CMap scanners already apply.
+
+// parseCIDWidths parses a CIDFont /W array into CID -> width. The second result
+// reports that the CID-range span limit dropped at least one range entry, so
+// the map is missing widths the file does declare.
+//
+// This distinction is load-bearing. A missing entry is not "this CID has no
+// declared width" — the caller's fallback for that is /DW, default 1000 — and
+// comparing a defaulted 1000 against the font program's real advance emits
+// "width information for glyphs used for rendering is inconsistent", a
+// violation the file does not commit. Incomplete has to be distinguishable
+// from absent.
+func parseCIDWidths(doc core.View, wObj object.Object) (map[int]float64, bool) {
+	out := make(map[int]float64)
+	arr, ok := doc.Resolve(wObj).(object.Array)
+	if !ok {
+		return out, false
+	}
+	complete := true
+	i := 0
+	for i < len(arr) {
+		c := intVal(doc.Resolve(arr[i]))
+		if i+1 < len(arr) {
+			if sub, ok := doc.Resolve(arr[i+1]).(object.Array); ok {
+				for k, wv := range sub {
+					out[c+k] = numVal(doc.Resolve(wv))
+				}
+				i += 2
+				continue
+			}
+			if i+2 < len(arr) {
+				cLast := intVal(doc.Resolve(arr[i+1]))
+				w := numVal(doc.Resolve(arr[i+2]))
+				// A hostile /W like [0 2000000000 500] would otherwise drive
+				// ~2e9 map inserts — a memory/CPU DoS reached before any render
+				// gate, since parseCIDWidths runs unconditionally in
+				// checkCIDFontConsistency. Bound the span to the 16-bit CID
+				// ceiling and skip inverted or over-wide ranges (audit C1).
+				switch {
+				case c < 0 || cLast < c:
+					// Malformed, not over-budget: an inverted or negative
+					// range declares nothing, so nothing is missing.
+				case cLast-c >= doc.Limits.CIDRangeSpan:
+					complete = false
+				default:
+					for cid := c; cid <= cLast; cid++ {
+						out[cid] = w
+					}
+				}
+				i += 3
+				continue
+			}
+		}
+		i++
+	}
+	return out, complete
+}
+
+// parseFontMatrix reads a Type 3 /FontMatrix (default [0.001 0 0 0.001 0 0]).
+func parseFontMatrix(doc core.View, o object.Object) [6]float64 {
+	fm := [6]float64{0.001, 0, 0, 0.001, 0, 0}
+	if arr, ok := doc.Resolve(o).(object.Array); ok && len(arr) == 6 {
+		for i := 0; i < 6; i++ {
+			fm[i] = numVal(doc.Resolve(arr[i]))
+		}
+	}
+	return fm
+}
+
+// type3GlyphWidth reads the w operand of the leading d0/d1 operator of a
+// Type 3 CharProc content stream (glyph-space units).
+func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
+	data := doc.Content(cp)
+	if data == nil {
+		return 0, false
+	}
+	var nums []float64
+	found := false
+	var w float64
+	core.ForEachContentItem(doc.Cancel, data, func(kind core.ContentItemKind, payload []byte) {
+		if found {
+			return
+		}
+		switch kind {
+		case core.ItemNumber:
+			nums = append(nums, numVal(parseNumberToken(payload)))
+		case core.ItemOperator:
+			switch string(payload) {
+			case "d0", "d1":
+				if len(nums) >= 1 {
+					w = nums[0]
+					found = true
+				}
+			default:
+				nums = nums[:0]
+			}
+		default:
+			nums = nums[:0]
+		}
+	})
+	return w, found
+}
+
+// parseNumberToken parses a numeric content token to a object.Real/object.Integer object.
+func parseNumberToken(b []byte) object.Object {
+	s := string(b)
+	if strings.ContainsAny(s, ".eE") {
+		var f float64
+		font.ParseFloat(s, &f)
+		return object.Real(f)
+	}
+	neg := false
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		neg = s[i] == '-'
+		i++
+	}
+	v := 0
+	for ; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			break
+		}
+		v = v*10 + int(s[i]-'0')
+	}
+	if neg {
+		v = -v
+	}
+	return object.Integer(v)
+}
+
+// --- subset CharSet / CIDSet completeness ---
+
+// subsetRule returns the clause a subset-embedding violation is reported
+// under: 19005-1 6.3.5, 19005-2/-3 6.2.11.4.2, 19005-4 6.2.10.4.2.
+func subsetRule(level Level) string {
+	switch level {
+	case PDFA1b:
+		return "6.3.5"
+	case PDFA4:
+		return "6.2.10.4.2"
+	}
+	return "6.2.11.4.2"
+}
+
+// checkFontSubsetCompleteness verifies that a subset font descriptor's
+// CharSet (Type1) or CIDSet (CIDFont), when present, lists every glyph or
+// CID actually used for rendering (ISO 19005-1 6.3.5, -2/-3 6.2.11.4.2).
+// An empty or partial set omitting a shown glyph is a violation.
+func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
+	rule := subsetRule(level)
+	var errs []Violation
+
+	for fontDict, u := range core.CollectFontTextUsage(doc) {
+		subtype, _ := fontDict.Get("Subtype").(object.Name)
+		switch subtype {
+		case "Type1", "MMType1":
+			fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
+			if fd == nil {
+				continue
+			}
+			cs, ok := doc.Resolve(fd.Get("CharSet")).(object.String)
+			if !ok {
+				continue
+			}
+			listed := core.ParseCharSet(string(cs.Value))
+			symbolic := descriptorSymbolic(doc, fd)
+			enc := simpleFontCodeToName(doc, fontDict, symbolic)
+			if usedGlyphMissing(u, enc, listed) {
+				errs = append(errs, Violation{
+					Rule:    rule,
+					Level:   level,
+					Message: "FontDescriptor CharSet does not list all glyph names used for rendering",
+					Object:  u.ObjNum,
+				})
+			}
+		case "Type0":
+			desc := core.Type0Descendant(doc, fontDict)
+			if desc == nil {
+				continue
+			}
+			fd := doc.ResolveDict(desc.Get("FontDescriptor"))
+			if fd == nil {
+				continue
+			}
+			cidSetStream, ok := doc.Resolve(fd.Get("CIDSet")).(*object.Stream)
+			if !ok {
+				continue
+			}
+			if !core.IsIdentityEncoding(doc, fontDict) {
+				continue
+			}
+			present := core.DecodeCIDSet(doc, cidSetStream)
+			missing := false
+			for _, s := range u.Strings {
+				for i := 0; i+1 < len(s); i += 2 {
+					cid := int(s[i])<<8 | int(s[i+1])
+					if cid != 0 && !present.Has(cid) {
+						missing = true
+					}
+				}
+			}
+			if missing {
+				errs = append(errs, Violation{
+					Rule:    rule,
+					Level:   level,
+					Message: "FontDescriptor CIDSet does not list all CIDs used for rendering",
+					Object:  u.ObjNum,
+				})
+			}
+		}
+	}
+	return errs
+}
+
+// descriptorSymbolic reports the descriptor's Symbolic flag.
+func descriptorSymbolic(doc core.View, fd *object.Dictionary) bool {
+	if flags, ok := doc.Resolve(fd.Get("Flags")).(object.Integer); ok {
+		return flags&4 != 0
+	}
+	return false
+}
+
+// usedGlyphMissing reports whether any shown glyph name is absent from the
+// listed CharSet names.
+func usedGlyphMissing(u *core.FontTextUsage, enc map[byte]string, listed map[string]bool) bool {
+	for _, s := range u.Strings {
+		for _, code := range s {
+			name := enc[code]
+			if name == "" || name == ".notdef" {
+				continue
+			}
+			if !listed[name] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkCMapCIDLimit verifies that no character identifier defined by an
+// embedded CMap exceeds 65535 (ISO 19005-1 6.1.12, -2/-3 6.1.13; the CID is
+// a 16-bit value per ISO 32000-1 9.7.4).
+func checkCMapCIDLimit(doc core.View, level Level) []Violation {
+	if level == PDFA4 {
+		return nil // PDF/A-4 has no implementation-limits clause
+	}
+	rule := "6.1.12"
+	if level == PDFA2b || level == PDFA3b {
+		rule = "6.1.13"
+	}
+	var errs []Violation
+	seen := map[int]bool{}
+	for num, iobj := range doc.Objects {
+		fontDict, ok := iobj.Value.(*object.Dictionary)
+		if !ok {
+			continue
+		}
+		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+			continue
+		}
+		enc, ok := doc.Resolve(fontDict.Get("Encoding")).(*object.Stream)
+		if !ok {
+			continue
+		}
+		data := doc.Content(enc)
+		if data == nil {
+			continue
+		}
+		if maxCMapCID(data) > 65535 && !seen[num] {
+			seen[num] = true
+			errs = append(errs, Violation{
+				Rule:    rule,
+				Level:   level,
+				Message: "a character identifier (CID) defined in the CMap exceeds the maximum value 65535",
+				Object:  num,
+			})
+		}
+	}
+	return errs
+}
+
+// maxCMapCID returns the largest CID mapped by a CMap's cidrange and cidchar
+// sections.
+func maxCMapCID(data []byte) int {
+	max := 0
+	consider := func(v int) {
+		if v > max {
+			max = v
+		}
+	}
+	// cidrange: <lo> <hi> startCID  -> max CID = startCID + (hi - lo)
+	s := string(data)
+	scanRanges := func(begin, end string, isRange bool) {
+		rest := s
+		for {
+			b := strings.Index(rest, begin)
+			if b < 0 {
+				return
+			}
+			e := strings.Index(rest[b:], end)
+			if e < 0 {
+				return
+			}
+			lo, hi := b+len(begin), b+e
+			if lo > hi {
+				rest = rest[b+e+len(end):]
+				continue
+			}
+			section := rest[lo:hi]
+			for _, line := range strings.Split(section, "\n") {
+				fields := strings.Fields(line)
+				if isRange && len(fields) >= 3 {
+					lo := core.HexVal4(fields[0])
+					hi := core.HexVal4(fields[1])
+					cid := atoiSafe(fields[2])
+					if lo >= 0 && hi >= lo {
+						consider(cid + (hi - lo))
+					}
+				} else if !isRange && len(fields) >= 2 {
+					consider(atoiSafe(fields[1]))
+				}
+			}
+			rest = rest[b+e+len(end):]
+		}
+	}
+	scanRanges("begincidrange", "endcidrange", true)
+	scanRanges("begincidchar", "endcidchar", false)
+	return max
+}
+
+func atoiSafe(s string) int {
+	v := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			break
+		}
+		v = v*10 + int(s[i]-'0')
+	}
+	return v
+}
+
+// checkCIDSetProgramComplete enforces the stricter PDF/A-1 subset rule
+// (ISO 19005-1 6.3.5): a CIDFont subset's CIDSet must be present, non-empty,
+// and enumerate every CID whose glyph is present in the embedded font
+// program. (PDF/A-2/-3 only require the CIDSet to cover the CIDs actually
+// used for rendering, handled by checkFontSubsetCompleteness.)
+func checkCIDSetProgramComplete(doc core.View, level Level) []Violation {
+	if level != PDFA1b {
+		return nil
+	}
+	catalog := doc.Catalog()
+	if catalog == nil {
+		return nil
+	}
+	var errs []Violation
+	for fontDict, u := range core.CollectFontTextUsage(doc) {
+		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+			continue
+		}
+		if !rendersVisibly(u) {
+			continue // invisible text is exempt
+		}
+		desc := core.Type0Descendant(doc, fontDict)
+		if desc == nil {
+			continue
+		}
+		fd := doc.ResolveDict(desc.Get("FontDescriptor"))
+		if fd == nil {
+			continue
+		}
+		cidSetStream, ok := doc.Resolve(fd.Get("CIDSet")).(*object.Stream)
+		if !ok {
+			continue // presence is checked by checkFontSubsets
+		}
+		fp := core.LoadFontProgram(doc, fd)
+		if fp == nil {
+			continue
+		}
+		present := core.DecodeCIDSet(doc, cidSetStream)
+		num := 0
+		if ir, ok := fontDict.Get("DescendantFonts").(object.Array); ok && len(ir) > 0 {
+			num = resolveObjNum(doc, ir[0])
+		}
+		// An empty CIDSet on a visibly-rendered CIDFont subset that has
+		// glyphs is a clear violation. (Enumeration completeness beyond
+		// emptiness is not reliably decidable from the program alone —
+		// CIDToGIDMap Identity fonts legitimately omit unused CIDs — so only
+		// emptiness is flagged here.)
+		if present.Empty() && fp.NumGlyphs > 1 {
+			errs = append(errs, Violation{Rule: "6.3.5", Level: level,
+				Message: "CIDFont subset FontDescriptor contains an empty CIDSet stream", Object: num})
+			continue
+		}
+		// The CIDSet must enumerate every glyph present in the embedded font
+		// program (ISO 19005-1 6.3.5). With an Identity CIDToGIDMap the CID
+		// equals the glyph index, so a present (non-empty) glyph whose bit is
+		// clear is a violation. Empty glyphs are not counted as present.
+		missing := false
+		if fp.CIDGIDs != nil {
+			// CFF CIDFont: the charset enumerates the CIDs actually present.
+			for cid := range fp.CIDGIDs {
+				if cid != 0 && !present.Has(cid) {
+					missing = true
+					break
+				}
+			}
+		} else if cgm, _ := doc.Resolve(desc.Get("CIDToGIDMap")).(object.Name); (cgm == "Identity" || cgm == "") && fp.GlyphNonEmpty != nil {
+			// CIDFontType2 with an Identity map: CID == glyph index, so every
+			// present (non-empty) glyph must be listed.
+			for gid, ne := range fp.GlyphNonEmpty {
+				if ne && !present.Has(gid) {
+					missing = true
+					break
+				}
+			}
+		}
+		if missing {
+			errs = append(errs, Violation{Rule: "6.3.5", Level: level,
+				Message: "CIDSet does not list all glyphs present in the embedded font program", Object: num})
+		}
+	}
+	return errs
+}
+
+// isGlyphWhitespace reports whether a Unicode scalar value is whitespace, for
+// which an empty (outline-less) glyph is legitimate.
+func isGlyphWhitespace(r rune) bool {
+	return unicode.IsSpace(r) || r == 0x200B || r == 0xFEFF
+}

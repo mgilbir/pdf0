@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"crypto/x509"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 	"regexp"
 	"sort"
 	"strings"
@@ -118,8 +121,8 @@ func finishTestPDF(buf *bytes.Buffer, offs []int, trailerFmt string) []byte {
 // nothing caught it. The form must be promoted to a real object instead, with
 // the catalog pointed at it.
 func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
-	cert, _ := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, _ := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	base := buildPDFWithDirectForm()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
@@ -141,14 +144,14 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	if cat == nil {
 		t.Fatal("no catalog")
 	}
-	if _, ok := cat.Get("AcroForm").(IndirectRef); !ok {
+	if _, ok := cat.Get("AcroForm").(object.IndirectRef); !ok {
 		t.Errorf("catalog /AcroForm = %#v, want an indirect reference to the promoted form", cat.Get("AcroForm"))
 	}
 	form := d2.ResolveDict(cat.Get("AcroForm"))
 	if form == nil {
 		t.Fatal("catalog /AcroForm does not resolve")
 	}
-	if d2.dictObjNum(form) < 0 {
+	if d2.view().DictObjNum(form) < 0 {
 		t.Error("the form the catalog points at is still not an indirect object")
 	}
 	// The promoted form must be the original, extended: the pre-existing field
@@ -160,7 +163,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("form fields = %v, want %v", got, want)
 	}
-	if flags, _ := d2.Resolve(form.Get("SigFlags")).(Integer); flags != 7 {
+	if flags, _ := d2.Resolve(form.Get("SigFlags")).(object.Integer); flags != 7 {
 		t.Errorf("/SigFlags = %v, want 7 (4 preserved | 3 set)", flags)
 	}
 	if form.Get("DA") == nil || form.Get("NeedAppearances") == nil {
@@ -171,7 +174,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	}
 	// The whole point of the exercise: the archival time-stamp must verify over
 	// the produced bytes.
-	if !d2.coveringDocTimestamp(out) {
+	if !sign.CoveringDocTimestamp(d2.view(), out) {
 		t.Error("the archival time-stamp does not verify over the file it seals")
 	}
 }
@@ -181,8 +184,8 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 // time-stamp then extends the promoted object. Both signature fields must end up
 // in the one form, and the approval signature must stay valid.
 func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	base := buildPDFWithDirectForm()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
@@ -217,7 +220,7 @@ func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("form fields = %v, want %v", got, want)
 	}
-	if res := d2.ValidatePAdES(out); len(res) != 1 || res[0].Level != PAdESBLTA || !res[0].Valid {
+	if res := d2.ValidatePAdES(out); len(res) != 1 || res[0].Level != sign.PAdESBLTA || !res[0].Valid {
 		t.Errorf("expected one valid B-LTA signature, got %+v", res)
 	}
 }
@@ -225,7 +228,7 @@ func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
 // TestSignPromotesDirectAcroForm is the same case on the signing side, where the
 // promotion already existed: it guards the two paths staying consistent.
 func TestSignPromotesDirectAcroForm(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildPDFWithDirectForm()
 
 	for _, tc := range []struct {
@@ -254,7 +257,7 @@ func TestSignPromotesDirectAcroForm(t *testing.T) {
 				t.Fatalf("re-read: %v", err)
 			}
 			cat := signed.ResolveDict(signed.Trailer.Get("Root"))
-			if _, ok := cat.Get("AcroForm").(IndirectRef); !ok {
+			if _, ok := cat.Get("AcroForm").(object.IndirectRef); !ok {
 				t.Errorf("catalog /AcroForm = %#v, want an indirect reference", cat.Get("AcroForm"))
 			}
 			got := formFields(t, signed)
@@ -278,8 +281,8 @@ func TestSignPromotesDirectAcroForm(t *testing.T) {
 // -1 was used as an object number instead, silently producing an invalid file.
 // A clear error is the answer, identically in both signing files.
 func TestSigningRefusesDirectCatalogOrPage(t *testing.T) {
-	cert, key := testCertKey(t)
-	tsaCert, tsaKey := testTSACertKey(t)
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
 
 	for _, doc := range []struct {
 		name string
@@ -333,18 +336,18 @@ func TestSigningRefusesDirectCatalogOrPage(t *testing.T) {
 // both writers.
 func TestWriteRefusesNonPositiveObjectNumber(t *testing.T) {
 	newDoc := func() *Document {
-		d := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-		cat := &Dictionary{}
-		cat.Set("Type", Name("Catalog"))
-		d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-		d.Trailer.Set("Root", IndirectRef{Number: 1})
+		d := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
+		cat := &object.Dictionary{}
+		cat.Set("Type", object.Name("Catalog"))
+		d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+		d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 		return d
 	}
 
 	d := newDoc()
-	stray := &Dictionary{}
-	stray.Set("Type", Name("Bogus"))
-	d.Objects[-1] = &IndirectObject{Number: -1, Value: stray}
+	stray := &object.Dictionary{}
+	stray.Set("Type", object.Name("Bogus"))
+	d.Objects[-1] = &object.IndirectObject{Number: -1, Value: stray}
 	var buf bytes.Buffer
 	if err := d.Write(&buf); err == nil {
 		t.Errorf("Write accepted object number -1 and produced %d bytes", buf.Len())
@@ -357,7 +360,7 @@ func TestWriteRefusesNonPositiveObjectNumber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inc.Objects[-1] = &IndirectObject{Number: -1, Value: stray}
+	inc.Objects[-1] = &object.IndirectObject{Number: -1, Value: stray}
 	for _, changed := range [][]int{{-1}, {0}, {1, -1}} {
 		var b bytes.Buffer
 		if err := inc.WriteIncremental(&b, base, changed); err == nil {

@@ -11,16 +11,16 @@ gates any rule change lives in
 
 ## The anatomy of a rule
 
-A PDF/A rule is a plain `func(*Document, PDFALevel) []ValidationError`: it takes
+A PDF/A rule is a plain `func(*Document, pdfa.Level) []pdfa.Violation`: it takes
 the document and the level being validated, returns the violations it found and
 `nil` when there are none, and must not mutate the document. A complete one,
 verbatim from `pdfa.go`:
 
 ```go
 // Rule 6.1.3-2: Encrypt key must not be present in trailer dictionary.
-func checkNoEncrypt(doc *Document, level PDFALevel) []ValidationError {
+func checkNoEncrypt(doc *Document, level pdfa.Level) []pdfa.Violation {
 	if doc.Trailer.Get("Encrypt") != nil {
-		return []ValidationError{{
+		return []pdfa.Violation{{
 			Rule:    "6.1.3",
 			Level:   level,
 			Message: "trailer must not contain /Encrypt",
@@ -30,7 +30,7 @@ func checkNoEncrypt(doc *Document, level PDFALevel) []ValidationError {
 }
 ```
 
-`ValidationError` has four fields. `Rule` is the ISO 19005 clause string — what
+`pdfa.Violation` has four fields. `Rule` is the ISO 19005 clause string — what
 `RuleID()` returns and what the rule-coverage test greps for, so it is not
 free-form. `Level` is echoed from the argument, `Message` is human prose, and
 `Object` is the anchoring object number (`0` if none). `Error()` renders as
@@ -52,8 +52,8 @@ the caller. Stack overflows from unbounded recursion are not recoverable and are
 prevented at the source instead.
 
 **The byte-level variant** has a different signature — it needs the raw file
-bytes, which `func(*Document, PDFALevel)` has no room for. Those are called
-through closures wrapped in `runByteCheck(level, func() []ValidationError)`, its
+bytes, which `func(*Document, pdfa.Level)` has no room for. Those are called
+through closures wrapped in `runByteCheck(level, func() []pdfa.Violation)`, its
 own recover boundary, and only when `rawData != nil`: `checkNoDataAfterEOF`,
 `checkFileStructureBytes`, `checkLinearizedTrailerID`, `checkStreamLengthBytes`,
 `checkSignatureByteRange`.
@@ -284,5 +284,5 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
 - **Rule IDs are load-bearing.** `TestRuleCoverage` greps non-test source for
   quoted `6.x.y` literals, so renaming or inlining a clause string can break the
   coverage ratchet even when the rule still works. (Related sentinel asymmetry:
-  `objNumForDict` returns 0 on a miss to match `ValidationError.Object`, while
+  `objNumForDict` returns 0 on a miss to match `pdfa.Violation.Object`, while
   the underlying `dictObjNum` returns -1.)

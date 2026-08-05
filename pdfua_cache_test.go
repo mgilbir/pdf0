@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 )
 
@@ -35,10 +36,10 @@ func TestFontUsageCacheMatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uncached := collectFontTextUsage(doc)
-	doc.valCache = &validationCache{pages: map[int][]pageInfo{}, content: map[*Stream][]byte{}}
-	first := collectFontTextUsage(doc)
-	second := collectFontTextUsage(doc)
+	uncached := core.CollectFontTextUsage(doc.view())
+	doc.valCache = newValidationCache(core.Canceler{})
+	first := core.CollectFontTextUsage(doc.view())
+	second := core.CollectFontTextUsage(doc.view())
 	if len(uncached) != len(first) || len(first) != len(second) {
 		t.Errorf("font usage size mismatch: uncached=%d first=%d second=%d", len(uncached), len(first), len(second))
 	}

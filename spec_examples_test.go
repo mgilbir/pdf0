@@ -12,6 +12,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 	"os"
 	"regexp"
 	"strings"
@@ -290,7 +292,7 @@ func TestSpecExamplesLex(t *testing.T) {
 					t.Logf("lexer stopped after %d tokens: %v", tokenCount, err)
 					break
 				}
-				if tok.Type == TokenEOF {
+				if tok.Type == syntax.TokenEOF {
 					break
 				}
 				tokenCount++
@@ -442,7 +444,7 @@ func tryParseObject(t *testing.T, content string) {
 }
 
 // tryRoundTrip serializes and re-parses an indirect object.
-func tryRoundTrip(t *testing.T, obj *IndirectObject) {
+func tryRoundTrip(t *testing.T, obj *object.IndirectObject) {
 	t.Helper()
 	var buf bytes.Buffer
 	s := NewSerializer(&buf)
@@ -474,7 +476,7 @@ func tryParseXref(t *testing.T, content string) {
 
 	data := []byte(content)
 	pos := int64(idx + len("xref"))
-	for pos < int64(len(data)) && isWhitespace(data[pos]) {
+	for pos < int64(len(data)) && syntax.IsWhitespace(data[pos]) {
 		pos++
 	}
 
