@@ -1,4 +1,4 @@
-.PHONY: html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests
+.PHONY: css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -189,6 +189,25 @@ html-entities:
 
 clean-html-entities:
 	rm -f $(HTML_ENTITIES)
+
+# The CSS Color 4 specification's named-colour table, which cmd/gencolors turns
+# into style/colors.go.
+#
+# The source is the specification's own Bikeshed document and *not* the CSS
+# parsing tests, which hold the same 148 mappings: generating the table from the
+# suite that checks it would make that check circular, proving only that a file
+# round-trips through a generator. As with the HTML entities, the generated table
+# is committed and the input is not.
+CSS_COLOR_SPEC := testdata/css-color-4.bs
+
+css-colors:
+	mkdir -p $(dir $(CSS_COLOR_SPEC))
+	curl -sSf -o $(CSS_COLOR_SPEC) https://raw.githubusercontent.com/w3c/csswg-drafts/main/css-color-4/Overview.bs
+	go run ./cmd/gencolors -in $(CSS_COLOR_SPEC) -out style/colors.go
+	gofmt -w style/colors.go
+
+clean-css-colors:
+	rm -f $(CSS_COLOR_SPEC)
 
 # Real-world CCITTFaxDecode sample PDFs (pdf.js Apache-2.0, PyPDF4 BSD) used as
 # the decode oracle for the Group 3/4 fax decoder. Downloaded into

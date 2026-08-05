@@ -110,6 +110,10 @@ testdata/css-parsing-tests/
 # committed; this is not.
 testdata/html/entities.json
 
+# The CSS Color 4 specification source, fetched by `make css-colors` as the
+# input to cmd/gencolors. The generated Go table is committed; this is not.
+testdata/css-color-4.bs
+
 # Agent worktrees created by tooling under .claude/; never part of the repo.
 .claude/worktrees/
 
