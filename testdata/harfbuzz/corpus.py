@@ -42,6 +42,18 @@ for base in "aoAOЇα":
         words.append(base + "̊" + m + "̑")
         words.append(base + m + "̑")
 
+# A second nukta, after a consonant and after a vowel sign.
+#
+# A consonant admits two; a vowel sign admits one, and the second begins a
+# broken syllable of its own. Nothing here wrote two of them anywhere.
+for c in [chr(x) for x in range(0x0915, 0x0930)]:
+    words.append(c + "\u093C\u093C")
+    words.append(c + "\u093F\u093C")
+    words.append(c + "\u093F\u093C\u093C")
+    words.append(c + "\u094E\u093C\u093C")
+for v in [chr(x) for x in range(0x0904, 0x0915)]:
+    words.append(v + "\u094E\u093C\u093C")
+
 # Two vowel signs written before the same consonant.
 #
 # Both U+093F and U+094E are stored after the letter and drawn before it, and

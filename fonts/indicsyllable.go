@@ -20,7 +20,7 @@ package fonts
 //	z            = ZWJ | ZWNJ
 //	cn           = c ZWJ? n?
 //	halant_group = z? H (ZWJ n?)?
-//	matra_group  = z* M n? H?
+//	matra_group  = z* M N? H?
 //	syllable_tail= (z? SM SM? ZWNJ?)? VD*
 //	complex_tail = (halant_group cn)* CM? (halant_group | H ZWNJ | matra_group*) syllable_tail
 //
@@ -192,7 +192,7 @@ func indicTakeFinalHalant(cats []indicCat, i int) (int, bool) {
 	return indicTakeHalant(cats, i)
 }
 
-// matra_group = z* (M | SM? MPst) n? H?
+// matra_group = z* (M | SM? MPst) N? H?
 //
 // The modifier before the vowel sign is Gurmukhi's: the bindi is written before
 // the II sign it belongs with, and only that kind of sign admits one.
@@ -207,7 +207,14 @@ func indicTakeMatra(cats []indicCat, i int) (int, bool) {
 	if j >= len(cats) || !indicIsMatra(cats[j]) {
 		return i, false
 	}
-	j = indicTakeNukta(cats, j+1)
+	// One nukta after a vowel sign, not two. Two is what a *consonant* admits —
+	// n is N N? there — and a matra admits a single one. A second belongs to no
+	// syllable, so it starts a broken one of its own and is shown against a
+	// dotted circle, which is how a reader is told the text is malformed.
+	j++
+	if j < len(cats) && cats[j] == catNukta {
+		j++
+	}
 	if j < len(cats) && indicIsHalant(cats[j]) {
 		j++
 	}
