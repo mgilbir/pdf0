@@ -189,3 +189,27 @@ claimed. HarfBuzz keeps a 600-unit hole where a character nothing is drawn for
 was written; the other two close it.
 
 Recorded in `deliberateDifferences` with the string pinned in the Arabic corpus.
+
+## The fourth question: forty-eight at once
+
+What is left after the shaping defects are fixed is 48 differences in 590,000
+generated strings, and 41 of them are the same shape as the two already settled
+here — a mark a few units to one side. Both of those went to this package. So
+they are asked together rather than one at a time.
+
+```sh
+./shape ../../fonts/notosans/NotoSans-Variable.ttf   < batch-devanagari.txt > out-devanagari.txt
+./shape ../harfbuzz/fonts/NotoSerifTibetan.ttf       < batch-tibetan.txt    > out-tibetan.txt
+./shape ../harfbuzz/fonts/NotoSansBalinese.ttf       < batch-balinese.txt   > out-balinese.txt
+
+python3 compare.py batch-devanagari out-devanagari.txt
+python3 compare.py batch-tibetan    out-tibetan.txt
+python3 compare.py batch-balinese   out-balinese.txt
+```
+
+`compare.py` needs nothing but stock Python: what the other two engines answer
+is recorded in the `.expected` file beside each input. It prints a count, and
+names only the lines where CoreText sides with HarfBuzz — those are the ones
+that would be defects here. The first two lines of each file are controls, and
+if either disagrees the script stops and says so, because a harness that cannot
+reproduce a known answer has nothing to say about an unknown one.
