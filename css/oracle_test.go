@@ -389,6 +389,66 @@ func oracleRuns() []run {
 	}
 }
 
+// TestCSSOracleAnB checks the An+B microsyntax against the suite's file for it.
+//
+// It is separate from the runs above because its file has a different shape:
+// the expected result is not an AST but a pair of integers, or null for input
+// that is not an An+B at all. Roughly half its cases are the null ones, which is
+// the half worth having — "3 n", "+ 2n" and "3.1n" all look like An+B values and
+// are not, and each is a place where a reader that is merely permissive selects
+// elements the author did not ask for.
+func TestCSSOracleAnB(t *testing.T) {
+	dir := oracleDir(t)
+
+	pairs := loadPairs(t, dir, "An+B.json")
+	if len(pairs) == 0 {
+		t.Fatal("An+B.json holds no cases")
+	}
+	var valid, invalid int
+
+	for _, pair := range pairs {
+		input, ok := pair[0].(string)
+		if !ok {
+			t.Fatalf("an input that is not a string: %v", pair[0])
+		}
+		vals, _ := ParseComponentValues(input)
+		got, gotOK := ParseAnB(vals)
+
+		want, wantOK := pair[1].([]any)
+		if !wantOK {
+			// null: the input is not an An+B.
+			invalid++
+			if gotOK {
+				t.Errorf("%q read as %dn%+d, and is not an An+B at all", input, got.A, got.B)
+			}
+			continue
+		}
+		valid++
+		if len(want) != 2 {
+			t.Fatalf("%q: expected result is not a pair: %v", input, want)
+		}
+		wantA, okA := want[0].(float64)
+		wantB, okB := want[1].(float64)
+		if !okA || !okB {
+			t.Fatalf("%q: expected result is not two numbers: %v", input, want)
+		}
+		if !gotOK {
+			t.Errorf("%q was rejected, and is the An+B %vn%+v", input, wantA, wantB)
+			continue
+		}
+		if float64(got.A) != wantA || float64(got.B) != wantB {
+			t.Errorf("%q read as %dn%+d, want %vn%+v", input, got.A, got.B, wantA, wantB)
+		}
+	}
+	t.Logf("An+B.json: %d valid and %d invalid cases checked", valid, invalid)
+
+	// A suite that had drifted to all-valid or all-invalid would still pass
+	// every assertion above while checking almost nothing.
+	if valid == 0 || invalid == 0 {
+		t.Errorf("the suite gave %d valid and %d invalid cases; both are needed", valid, invalid)
+	}
+}
+
 func renderRules(rules []Rule) []any {
 	out := make([]any, 0, len(rules))
 	for _, r := range rules {
