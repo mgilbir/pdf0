@@ -840,10 +840,15 @@ func readAnchor(base []byte, off int) (anchor, bool) {
 // one, because in that lookup it is the base.
 func (l *layout) isMark(g Glyph) bool {
 	if len(l.glyphClass) != 0 {
-		if c, ok := l.glyphClass[g.GID]; ok {
-			return c == classMark
-		}
-		return l.markGlyphs[g.GID]
+		// A font that classifies its glyphs has answered for all of them: one it
+		// leaves out is not a mark, whatever else names it. Falling back to the
+		// mark arrays here reads a glyph as a mark because *some* lookup places
+		// it like one, and a glyph can be a mark in one lookup and the thing a
+		// mark attaches to in another. Noto Sans Balinese has one — a conjunct
+		// form that GDEF leaves unclassified and a mark-to-base lookup names as
+		// the base — and calling it a mark hid it from the mark that belongs on
+		// it.
+		return l.glyphClass[g.GID] == classMark
 	}
 	// No GDEF at all: what the character said, falling back to the mark arrays
 	// for a glyph that came from no character of its own — one a substitution

@@ -28,6 +28,15 @@ for a in cons[:8]:
     for b in cons[:5]:
         words.append(a + adeg + b + signs[0])
 
+# A conjunct form that GDEF leaves unclassified, carrying a mark.
+#
+# Nothing else here writes a stacked pair and then a vowel sign on it, so
+# nothing asked what the mark attaches to when the thing under it is a glyph the
+# font declined to classify.
+for a in cons[:12]:
+    for v in ("\u1B38", "\u1B36", "\u1B3A"):
+        words.append(a + "\u1B44\u1B46" + v)
+
 seen, out = set(), []
 for w in words:
     if w and "\n" not in w and w not in seen:
