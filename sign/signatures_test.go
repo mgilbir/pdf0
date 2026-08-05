@@ -2,6 +2,7 @@ package sign
 
 import (
 	"encoding/hex"
+	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
@@ -90,5 +91,64 @@ func TestVerifySignatures(t *testing.T) {
 	tampered[0] ^= 0xFF
 	if res := VerifySignatures(doc, tampered); res[0].Valid {
 		t.Error("modified document still verified")
+	}
+}
+
+// TestCMSSurvivesTheZeroPaddingItIsWrittenWith pins the reason /Contents may be
+// passed to VerifyCMS exactly as the file holds it.
+//
+// A signature value is a hole reserved in the file *before* the bytes that go
+// in it exist, so it is sized generously and the DER is zero-filled to the end.
+// The DER says how long it is, so the padding is neither part of the signature
+// nor in the way of reading it, and a verifier should hand the window over
+// whole.
+//
+// The temptation is to strip the padding first, and it is wrong in a way that
+// hides: a DER whose own last byte is legitimately 0x00 loses it, and that
+// signature stops verifying. It is one in 256, which is why it surfaces as a
+// flake rather than a failure — it was one, in this suite's own control,
+// reproduced at 2 in 400 before it was understood.
+//
+// So the test does not sign once and hope. It signs until it has a signature
+// ending in 0x00, which is the only kind that can tell a verifier that reads
+// the DER length from one that trims first. Both then have to hold: padding
+// must not break verification, and a blob genuinely one byte short must not
+// verify, or this would pass for a VerifyCMS that had stopped looking at the
+// end of the signature.
+func TestCMSSurvivesTheZeroPaddingItIsWrittenWith(t *testing.T) {
+	cert, key := signtest.CertKey(t)
+
+	// The last byte of the DER is the last byte of the RSA signature, so it is
+	// 0x00 about once in 256 and varying the content is how to get one.
+	var cms, content []byte
+	for i := 0; i < 4000 && cms == nil; i++ {
+		c := []byte(fmt.Sprintf("the exact bytes that were signed, over the /ByteRange #%d", i))
+		der, err := buildSignedData(cert, key, c)
+		if err != nil {
+			t.Fatalf("buildSignedData: %v", err)
+		}
+		if der[len(der)-1] == 0x00 {
+			cms, content = der, c
+		}
+	}
+	if cms == nil {
+		t.Fatal("no signature ending in 0x00 in 4000 tries; that is a one-in-256 event, so something is wrong")
+	}
+
+	if _, _, _, err := VerifyCMS(cms, content); err != nil {
+		t.Fatalf("the unpadded signature does not verify: %v", err)
+	}
+	for _, pad := range []int{1, 2, 64, 8192 - len(cms)} {
+		padded := append(append([]byte(nil), cms...), make([]byte, pad)...)
+		if _, _, _, err := VerifyCMS(padded, content); err != nil {
+			t.Errorf("padded with %d zero bytes: %v\n"+
+				"The signature ends in 0x00, so something between here and the parser "+
+				"is stripping trailing zeros and taking a byte of it with them.", pad, err)
+		}
+	}
+
+	// And the end of the DER is genuinely being read, rather than ignored.
+	if _, _, _, err := VerifyCMS(cms[:len(cms)-1], content); err == nil {
+		t.Error("a signature one byte short verified, so its length is not being read")
 	}
 }
