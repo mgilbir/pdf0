@@ -53,7 +53,7 @@ regular package.
 | `images` | Image extraction. |
 | `internal/core` | What every subsystem needs: the view, resolution, filters, content scanning, limits. |
 | `internal/crypt` | The standard security handler. No public API of its own. |
-| `internal/font` | Font-program parsing (sfnt, CFF, Type 1). |
+| `fonts` | Setting text with a font: shaped glyphs into content-stream operators, and the font into the document. The shaping itself, and the sfnt/CFF/Type 1 program reader under it, are [github.com/mgilbir/forme](https://github.com/mgilbir/forme). |
 | `internal/finding` | The panic boundary, the reserved rule identifiers, deterministic ordering. |
 | `internal/fonttest`, `internal/signtest` | Fixtures shared by tests in packages that cannot share a `_test.go`. |
 

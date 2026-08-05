@@ -268,7 +268,7 @@ tabulated in [testing.md](testing.md).
 
 Shared machinery lives outside these files: `collectFontTextUsage` and the
 `validationCache` in `pdfa.go`, `tokenizeContent` in the content-operator layer,
-`decodeXMPToUTF8` in `xmp.go`, `loadFontProgram` in `internal/font/fontprog.go`.
+`decodeXMPToUTF8` in `xmp.go`, `loadFontProgram` in forme's `font/fontprog.go`.
 
 ## Confirmed limitations
 

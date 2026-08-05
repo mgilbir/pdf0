@@ -160,12 +160,12 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| cmap work budget (`WithMaxCmapWork`) | `internal/font/fontprog.go` | **Silently wrong** | `font.TrueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `font.Program.CmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
+| cmap work budget (`WithMaxCmapWork`) | forme's `font/fontprog.go` | **Silently wrong** | `font.TrueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `font.Program.CmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
 | CID `/W` range span (`WithMaxCIDRangeSpan`) | `fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Fixed. `parseCIDWidths` reports completeness; the width rule declines; trip reported as `cid-width-range`. |
-| `font.ParseCmapSubtable` nil-on-unreadable | `internal/font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
+| `font.ParseCmapSubtable` nil-on-unreadable | forme's `font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
-| sfnt/CFF/Type1 structural bails (`return nil`) | `internal/font/fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
+| sfnt/CFF/Type1 structural bails (`return nil`) | forme's `font/fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
 
 ### Content scanning
 
@@ -249,7 +249,7 @@ Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
   budget rather than inventing a second knob, with a seen-set so a cyclic map
   terminates. It returns a completeness flag, so a budget trip declines the
   finding instead of manufacturing one (the rule at the top of this document).
-- **`internal/font/fontprog.go`'s Type 1 CharStrings loop broke on
+- **forme's `font/fontprog.go`'s Type 1 CharStrings loop broke on
   `strings.Contains(name, "end")`** after a *successful* glyph parse, truncating
   the glyph list at the first font defining `endash` (or
   `enfilledcircbullet`, or `endescender`). **Fixed:** `type1CharStringsEnd`

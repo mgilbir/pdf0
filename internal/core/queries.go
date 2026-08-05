@@ -3,7 +3,7 @@ package core
 import (
 	"encoding/asn1"
 	"fmt"
-	"github.com/mgilbir/pdf0/internal/font"
+	"github.com/mgilbir/forme/font"
 	"sort"
 	"strings"
 	"unicode/utf16"

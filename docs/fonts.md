@@ -1,15 +1,24 @@
 # Fonts
 
-The font subsystem is about 3,900 lines across four files — `fonts.go`,
-`internal/font/fontprog.go`, and the generated tables `internal/font/font_encodings.go` and
-`internal/font/cff_strings.go`. It answers three questions the PDF/A and PDF/UA font rules
-keep asking: *which glyphs does this file actually show*, *does the embedded
-font program define them*, and *do the declared widths match the program's*.
-None of that is decidable from the PDF object model, so pdf0 parses sfnt, CFF
-and Type 1 font programs in-tree. Open this doc when a font rule fires and you
-need to know why, when adding a rule that touches glyphs, or when chasing a
-false positive — font rules are the densest rule family here and the most common
-source of both. For the family view see [validators.md](validators.md).
+This doc is about reading fonts to validate them: `fonts.go` here, and the font
+program reader it leans on, which is `font/fontprog.go` in
+[github.com/mgilbir/forme](https://github.com/mgilbir/forme) along with the
+generated tables `font/font_encodings.go` and `font/cff_strings.go`. Between
+them they answer three questions the PDF/A and PDF/UA font rules keep asking:
+*which glyphs does this file actually show*, *does the embedded font program
+define them*, and *do the declared widths match the program's*. None of that is
+decidable from the PDF object model, which is why sfnt, CFF and Type 1 programs
+are parsed at all. Open this doc when a font rule fires and you need to know
+why, when adding a rule that touches glyphs, or when chasing a false positive —
+font rules are the densest rule family here and the most common source of both.
+For the family view see [validators.md](validators.md).
+
+Setting text with a font is a different subsystem and lives elsewhere.
+Shaping — OpenType layout, the bidirectional algorithm, the Indic, Khmer,
+Myanmar and Universal Shaping Engine models, subsetting — is forme's `shape`
+package, because none of it is about PDF. What is about PDF stays in `fonts/`
+here: turning positioned glyphs into content-stream operators, and writing the
+font into the document as the object graph a reader needs.
 
 ## Font types and what each requires
 
@@ -32,7 +41,7 @@ compares against `/Widths`.
 **The standard 14 fonts get no special case** — no built-in metrics table, no
 exemption list. PDF/A requires every font embedded, so a bare `/BaseFont
 /Helvetica` fails `checkFontsEmbedded` like any other unembedded font, and
-nothing in `internal/font/fontprog.go` can supply its widths.
+nothing in forme's `font/fontprog.go` can supply its widths.
 
 Rule identifiers differ per ISO 19005 part, so every finding routes through
 `fontClause(concept, level)` rather than one parent clause — the `embed` concept
@@ -85,7 +94,7 @@ PDF/UA checks iterate it, `content_operators.go` uses it to find Type 3 glyph
 procedures, and `text.go` reuses `parseToUnicodeMap` for text extraction. PDF/X
 is the outlier — `pdfxCheckFontsEmbedded` scans resources itself.
 
-## Font program parsing (`internal/font/fontprog.go`)
+## Font program parsing (forme's `font/fontprog.go`)
 
 `loadFontProgram` picks the parser from the descriptor key, and everything
 converges on one `font.Program` struct.
@@ -193,11 +202,11 @@ program parses, so this raises no false positive.
 ## Encodings and character mapping
 
 Two generated tables back the encoding machinery, and their headers name their
-provenance. **`internal/font/font_encodings.go`** — "generated from ISO 32000-1 Annex D.2
+provenance. **forme's `font/font_encodings.go`** — "generated from ISO 32000-1 Annex D.2
 (spec/pdf1.7)" — holds `standardEncodingNames`, `macRomanEncodingNames` and
 `winAnsiEncodingNames`, consumed only by `simpleFontCodeToName`, which layers a
 base encoding (named, or `StandardEncoding` implicitly for a non-symbolic font)
-with `/Differences` to produce `map[byte]string`. **`internal/font/cff_strings.go`** — "the
+with `/Differences` to produce `map[byte]string`. **forme's `font/cff_strings.go`** — "the
 391 predefined CFF strings (Adobe Technical Note #5176, Appendix A), indexed by
 SID" — is consumed only by `cffSIDName`: SIDs below 391 index this table, higher
 SIDs index the font's own string INDEX. Neither has a generator committed in
@@ -275,9 +284,9 @@ CIDs whose glyphs exist only as padding or composite components.
 | File | Owns | Governing spec |
 |------|------|----------------|
 | `fonts.go` | Content walking (`forEachContentItem`, `buildFontEvents`, `collectFontTextUsage`), all font rule functions, the predefined-CMap table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, ToUnicode parsing | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
-| `internal/font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1`, and `parseSFNTCFF` for OpenType/CFF | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
-| `internal/font/font_encodings.go` | Generated: `standardEncodingNames`, `macRomanEncodingNames`, `winAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
-| `internal/font/cff_strings.go` | Generated: `cffStandardStrings`, 391 entries indexed by SID | Adobe TN #5176 Appendix A |
+| forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1`, and `parseSFNTCFF` for OpenType/CFF | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
+| forme `font/font_encodings.go` | Generated: `standardEncodingNames`, `macRomanEncodingNames`, `winAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
+| forme `font/cff_strings.go` | Generated: `cffStandardStrings`, 391 entries indexed by SID | Adobe TN #5176 Appendix A |
 
 Font findings are also produced outside these files: `checkFontsEmbedded` and
 `checkFontSubsets` live in `pdfa.go`, the clause-7.21 PDF/UA font family in
@@ -347,20 +356,20 @@ a second field and a second option; nothing here forecloses it.
 
 ## Third-party data
 
-`fonts/standard14.go` is generated from the **Adobe Core 14 AFM files**. Only the
-advance widths and the font-wide metrics are taken; no outline, no font program
-and no character shape is reproduced, and no AFM file is redistributed. The Adobe
-copyright notices and the licence paragraph are retained verbatim in the header
-of the generated file, and the modification is noted there, which is what that
-licence requires. The licence is permissive: any purpose, without charge, with or
-without modification.
+The metrics of the fourteen standard faces are generated from the **Adobe Core
+14 AFM files**, and live with the rest of the shaping code in forme
+(`shape/standard14.go`), which carries the Adobe copyright notices and the
+licence paragraph verbatim as that licence requires. Only advance widths and
+font-wide metrics are taken; no outline, no font program and no character shape
+is reproduced, and no AFM file is redistributed.
 
 The fourteen names — Helvetica, Times, Courier, Symbol, ZapfDingbats and the
 variants — are the identifiers ISO 32000-2 9.6.2.2 gives these faces, and are
 what a `/BaseFont` entry holds. Several are trademarks of their owners. Naming
 one in a PDF is how the format says "the face the reader already has"; this
-repository contains no typeface, and `find . -name '*.ttf' -o -name '*.otf'`
-returns nothing.
+repository contains no typeface at all, and `find . -name '*.ttf' -o -name
+'*.otf'` returns nothing. The bundled face a document can be written with is
+forme's, under the SIL Open Font License, with its licence file beside it.
 
 Other generated tables and their sources are listed in the table above.
 

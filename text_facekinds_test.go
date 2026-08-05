@@ -245,15 +245,15 @@ func TestFallbackWorksAcrossFaceKinds(t *testing.T) {
 	if len(runs) != 2 {
 		t.Fatalf("got %d runs; the text needs both faces", len(runs))
 	}
-	if runs[0].Face != standard {
+	if runs[0].Face != standard.Face {
 		t.Errorf("the Latin run was set in the wrong face")
 	}
-	if runs[1].Face != composite {
+	if runs[1].Face != composite.Face {
 		t.Errorf("the Greek run was set in the wrong face")
 	}
 	for i, r := range runs {
 		for j, g := range r.Glyphs {
-			if g.XAdvance <= 0 && r.Face == standard {
+			if g.XAdvance <= 0 && r.Face == standard.Face {
 				t.Errorf("run %d glyph %d has advance %v", i, j, g.XAdvance)
 			}
 		}

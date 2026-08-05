@@ -7,9 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/internal/font"
 	"github.com/mgilbir/pdf0/internal/fonttest"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
@@ -609,11 +610,11 @@ func TestCFFSubsetIsSmallerAndStillParses(t *testing.T) {
 	// nominal widths every charstring's width is expressed against, so a subset
 	// that relocated it wrongly would give every glyph a different width
 	// without changing a single charstring.
-	origPriv, err := fonts.PrivateDictForTest(font.SFNTTables(program)["CFF "])
+	origPriv, err := shape.PrivateDictForTest(font.SFNTTables(program)["CFF "])
 	if err != nil {
 		t.Fatalf("reading the original Private DICT: %v", err)
 	}
-	subPriv, err := fonts.PrivateDictForTest(font.SFNTTables(sub)["CFF "])
+	subPriv, err := shape.PrivateDictForTest(font.SFNTTables(sub)["CFF "])
 	if err != nil {
 		t.Fatalf("reading the subset Private DICT: %v", err)
 	}
@@ -743,7 +744,7 @@ func TestCFFSubsetValidatesAtEveryLevel(t *testing.T) {
 // look at what the subsetter actually wrote.
 func charStringsOf(t *testing.T, cff []byte) [][]byte {
 	t.Helper()
-	items, err := fonts.CharStringsForTest(cff)
+	items, err := shape.CharStringsForTest(cff)
 	if err != nil {
 		t.Fatalf("reading the subsetted CharStrings: %v", err)
 	}

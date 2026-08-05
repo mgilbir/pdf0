@@ -254,7 +254,7 @@ The subsystems, and the doc that maps each:
 | Core object model, parser, serializer | `object/`, `syntax/`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
 | PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `embedded.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
 | The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/` with their `*_api.go` boundaries in root, `facturx*.go`, `order_x.go`, `violations.go`, `internal/finding` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
-| Fonts | `fonts.go`, `internal/font/` | [fonts.md](docs/fonts.md) |
+| Fonts | `fonts.go`, `fonts/`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [fonts.md](docs/fonts.md) |
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
 | Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | [encryption.md](docs/encryption.md) |

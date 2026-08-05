@@ -3,8 +3,8 @@ package pdfa
 import (
 	"fmt"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/internal/font"
 	"github.com/mgilbir/pdf0/object"
 )
 

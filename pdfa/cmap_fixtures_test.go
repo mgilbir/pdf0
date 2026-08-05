@@ -5,7 +5,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/fonttest"
 	"testing"
 
-	"github.com/mgilbir/pdf0/internal/font"
+	"github.com/mgilbir/forme/font"
 )
 
 // Cmap subtable fixtures for the tests in this package that need a font
