@@ -165,6 +165,74 @@ func FuzzParse(f *testing.F) {
 	})
 }
 
+// FuzzSelector checks the selector parser's totality, and the one invariant its
+// callers rely on: a list that is not usable hands back nothing to use.
+func FuzzSelector(f *testing.F) {
+	seeds := []string{
+		"a", "*", ".c", "#i", "a b", "a > b", "a + b ~ c",
+		"a.c#i[href^=x i]:first-child::before",
+		"a:nth-child(2n+1 of .c)", "a:not(.c, .d)", "a:is(b, c)", "p:lang(en)",
+		"a, b, c", "a:hover", "svg|circle", "[a=b]",
+		// The shapes that recover.
+		"", ",", ">", "a >", "::", "a::", "[", "[a=", "a:not(", "#", ".",
+		// A forgiving list that swallows a malformed argument and still
+		// applies — the case that showed "usable" and "reported nothing" are
+		// different questions.
+		":is(a,)", ":is(a,", ":where(,a)",
+		strings.Repeat(":is(", 200), strings.Repeat(",", 200),
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		vals, _ := ParseComponentValues(input)
+		sels, errs, ok := ParseSelectorList(vals)
+
+		checkErrors(t, errs, len(input))
+
+		if !ok && len(sels) != 0 {
+			t.Fatalf("an unusable selector list returned %d selectors, which a "+
+				"caller that skipped ok would apply", len(sels))
+		}
+		if ok && len(sels) == 0 {
+			t.Fatal("a usable selector list with no selectors in it")
+		}
+		// A usable list may still have reported, and of either kind. ":is(a,)"
+		// is the case that settles it: the stray comma is malformed input and
+		// is reported as such, while :is() is forgiving, drops the empty
+		// argument and leaves a rule that applies. So "reported nothing" is not
+		// what ok means, and the two must not be tied together — the invariant
+		// that matters is the one above, that an unusable list hands back
+		// nothing a caller could apply.
+		for _, s := range sels {
+			if len(s.Compounds) == 0 {
+				t.Fatal("a selector with no compounds, which would select everything")
+			}
+			sp := s.Specificity
+			if sp.A < 0 || sp.B < 0 || sp.C < 0 {
+				t.Fatalf("a negative specificity %v, which inverts the cascade", sp)
+			}
+			// A compound has to constrain something, with exactly one exception:
+			// "::before" on its own is a whole selector, meaning "*::before".
+			// So an empty compound is allowed only as the last one, and only
+			// when a pseudo-element is what it carries. Anywhere else an empty
+			// compound is a selector that matches every element in the
+			// document, which is never what was written.
+			for i, c := range s.Compounds {
+				empty := c.Type == "" && !c.Universal && len(c.IDs) == 0 &&
+					len(c.Classes) == 0 && len(c.Attrs) == 0 && len(c.Pseudos) == 0
+				if !empty {
+					continue
+				}
+				if i != len(s.Compounds)-1 || s.PseudoElement == "" {
+					t.Fatalf("compound %d of %d is empty and carries no pseudo-element, "+
+						"so it selects every element", i, len(s.Compounds))
+				}
+			}
+		}
+	})
+}
+
 func checkRules(t *testing.T, rules []Rule) {
 	t.Helper()
 	for _, r := range rules {
