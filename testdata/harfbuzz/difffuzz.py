@@ -102,6 +102,9 @@ KNOWN = {
     # width: HarfBuzz keeps the gap when it removes the glyph, CoreText and this
     # package close it.
     "invisible-character-with-a-width",
+    # The third, and the only one that is a family rather than a string. See
+    # classify, and testdata/coretext/RESULT.md for how it was decided.
+    "mark-offset",
 }
 
 def classify(text, ours, theirs):
@@ -116,6 +119,27 @@ def classify(text, ours, theirs):
         return "five-units-of-x"
     if "\u061C" in text:
         return "invisible-character-with-a-width"
+    # A mark a few units to one side: the same glyphs, in the same order, with
+    # the same advances, and only the offsets differing.
+    #
+    # Forty-six of these were put to CoreText in one batch and not one of them
+    # went to HarfBuzz — twenty-seven agreed with this package outright and
+    # nineteen were cases where CoreText inserts dotted circles that neither of
+    # the other two does, which is a disagreement about cluster validity and not
+    # about where a mark sits. Three earlier questions of the same shape went
+    # the same way. So the family is decided, and what is recognised here is the
+    # shape rather than the strings, so that it keeps holding for strings nobody
+    # has generated yet.
+    #
+    # A difference in *which* glyphs, or how many, or how wide, is not this and
+    # is still reported.
+    a, b = ours.split(), theirs.split()
+    if len(a) == len(b) and a != b:
+        def gid_adv(f):
+            p = f.split(",")
+            return p[0], p[1]
+        if all(gid_adv(x) == gid_adv(y) for x, y in zip(a, b)):
+            return "mark-offset"
     return None
 
 
