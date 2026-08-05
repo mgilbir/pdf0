@@ -756,10 +756,20 @@ func (sh shaper) applyUseFeatureAt(buf []Glyph, info *[]useInfo, lookups []int, 
 		}
 		step--
 	}
-	sh.floor, sh.limit = start, end
+	sh.floor = start
 	for _, idx := range lookups {
 		for i := start; i < end && i < len(buf); {
 			step = 0
+			// The cluster's far edge, as it stands now. It moves: a lookup that
+			// takes a glyph apart makes the cluster longer, and the next lookup
+			// has to be allowed to see what it produced.
+			//
+			// Setting it once, before the first lookup, is what this did, and it
+			// silently cost every rule a font writes over the pieces of a
+			// decomposition. Noto Serif Tibetan splits a vowel sign in 'ccmp'
+			// and then reorders the pieces in a later 'ccmp' lookup, and the
+			// reordering could not match because the pieces were past the edge.
+			sh.limit = end
 			consumed, out := sh.applyGSUBAt(idx, buf, i, 0)
 			buf = out
 			end += step

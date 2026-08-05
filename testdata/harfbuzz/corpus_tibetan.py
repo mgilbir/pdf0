@@ -37,6 +37,17 @@ for a in cons[:8]:
 # package; see fonts/harfbuzz_test.go.
 words.append("".join(chr(c) for c in (0x0F52, 0x0F8F, 0x0FAD, 0x0F91, 0x0F73, 0x0F37)))
 
+# The deprecated vowel signs with a mark after them.
+#
+# This font splits U+0F77 and U+0F79 in 'ccmp' and then reorders the pieces in a
+# later 'ccmp' lookup. Nothing else here writes a sign that a font takes apart
+# and then rewrites, so nothing else asked whether the second lookup can see
+# what the first produced.
+for c in [chr(x) for x in range(0x0F40, 0x0F6D)]:
+    for v in ("\u0F77", "\u0F79"):
+        words.append(c + v + "\u0F74")
+        words.append(c + v)
+
 seen, out = set(), []
 for w in words:
     if w and "\n" not in w and w not in seen:
