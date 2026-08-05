@@ -190,3 +190,38 @@ Two smaller things were learned on the way and are worth not rediscovering:
 What the six actually need is for the pieces to sort correctly *without* the
 cluster grammar then judging the result malformed — which is a question about
 the grammar, not about normalisation.
+
+# The last batch: forty-six, none of them defects
+
+Controls passed. Not one line went to HarfBuzz.
+
+| | devanagari | tibetan |
+| --- | --- | --- |
+| CoreText agrees with pdf0 | 6 | 21 |
+| CoreText agrees with HarfBuzz | 0 | 0 |
+| CoreText agrees with neither | 0 | 19 |
+
+The nineteen are the dotted-circle class again — CoreText judging the text more
+malformed than either of the others and inserting U+25CC two or three times a
+line, where pdf0 and HarfBuzz agree exactly. That is a disagreement about
+cluster validity, not about where a mark sits, and on it CoreText is alone.
+
+So the "mark a few units to one side" family is decided, four questions running.
+It is now recognised in the fuzzer by its *shape* — same glyphs, same order,
+same advances, only the offsets differing — rather than by listing the strings,
+so it keeps holding for text nobody has generated yet. A difference in which
+glyphs, or how many, or how wide, is not this and is still reported.
+
+That takes the fuzzer from 46 differences to 3.
+
+## What those three are
+
+`U+0975 U+0930 U+094D U+094B`, and two like it: the same five glyphs in a
+different order, with the dotted circle in a different place.
+
+	pdf0     3898,1023  3979,409  3932,0   1586,594  3964,259
+	harfbuzz 3898,1023  1586,594  3979,409 3932,0    3964,259
+
+The circle marks where a broken cluster begins, so the two disagree about where
+the syllable breaks rather than about anything in positioning. It has not been
+looked at, and it is the only shaping question left open.
