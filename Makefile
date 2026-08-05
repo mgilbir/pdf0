@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -28,6 +28,7 @@ PROFILES_DIR := spec/verapdf-profiles
 VERAPDF_CORPUS_REF ?= 49de56cd987929932c9e4fbbbe67d052bf44ef83
 ARLINGTON_REF      ?= 3a7cde314d083e4c6d78d6782334b7409d3889f7
 REFPDF_REF         ?= c20f2c17bfcc4baab7cfe62e70fae64caf14d5fa
+CSS_TESTS_REF      ?= 203ce36bffd617db7f118c551e32794561fb273d
 
 # shallow_at fetches exactly one commit of one repository: no history, no other
 # branches. $(1) directory, $(2) URL, $(3) commit.
@@ -141,6 +142,34 @@ cc-sweep:
 
 clean-cc:
 	rm -rf testdata/cc/run
+
+# CSS parsing tests (CC0, Simon Sapin): implementation-independent expected
+# outputs for the algorithms of CSS Syntax Level 3, one JSON file per algorithm.
+#
+# This is the css package's external oracle, and the framing matters — see
+# docs/adr/0003-arlington-as-parser-oracle.md for the two attempts this
+# repository scrapped for guarding nothing. These expectations were written by
+# someone else, from the specification, and three independent parsers
+# (tinycss2, rust-cssparser, Crass) are checked against them. So a disagreement
+# is evidence about pdf0 rather than a restatement of pdf0's own reading.
+#
+# Cloned under testdata (gitignored); tests skip if absent, mirroring `make
+# corpus` and `make arlington`.
+CSS_TESTS_DIR := testdata/css-parsing-tests
+
+css-tests: $(CSS_TESTS_DIR)/.ok
+
+$(CSS_TESTS_DIR)/.ok:
+	$(call shallow_at,$(CSS_TESTS_DIR),https://github.com/SimonSapin/css-parsing-tests,$(CSS_TESTS_REF))
+	touch $@
+
+# The path is absolute because `go test ./css/` runs with the package directory
+# as its working directory, not the repository root.
+test-css: css-tests
+	CSS_PARSING_TESTS=$(CURDIR)/$(CSS_TESTS_DIR) go test -v -run TestCSSOracle -count=1 ./css/
+
+clean-css-tests:
+	rm -rf $(CSS_TESTS_DIR)
 
 # Real-world CCITTFaxDecode sample PDFs (pdf.js Apache-2.0, PyPDF4 BSD) used as
 # the decode oracle for the Group 3/4 fax decoder. Downloaded into

@@ -100,6 +100,11 @@ testdata/xrechnung/
 testdata/peppol/
 testdata/nlcius/
 
+# CSS parsing tests (CC0, Simon Sapin) — implementation-independent expected
+# outputs for the CSS Syntax Level 3 algorithms, cloned via `make css-tests` as
+# the external oracle for the css package. Not committed.
+testdata/css-parsing-tests/
+
 # Agent worktrees created by tooling under .claude/; never part of the repo.
 .claude/worktrees/
 
