@@ -134,7 +134,32 @@ split vowels already are, so their pieces are sorted with what follows them
 rather than after it. The evidence above says that is sufficient: given the
 pieces in either order, this package already answers exactly as the other two do.
 
-### The fix that was tried, and why it was taken out again
+### What the six actually are
+
+Not a normalisation problem. HarfBuzz's own trace, on the composed input:
+
+	start table GSUB              [11, 1334, 1331]
+	end lookup 16 feature 'ccmp'  [11, 1391, 1327, 1347, 1331]
+	end lookup 22 feature 'ccmp'  [11, 1391, 1327, 1331, 1347]   <- swapped
+	end lookup 51 feature 'blws'  [11, 1765, 1423, 1347]
+	end lookup 1137 feature 'blws'[68, 1766, 1424, 1347]
+
+The *font* puts the pieces in order, in 'ccmp' lookup 22, and the 'blws' chain
+then merges them. Nothing here depends on the canonical sort, which is why
+decomposing before shaping was the wrong idea however it was arranged.
+
+This package stops at `[11, 1765, 1421, 1347, 1432]` — it applies lookup 16 and
+51 and not 22, so the pieces are never reordered and the merges that depend on
+that never match.
+
+Lookup 22 is GSUB type 5, ContextSubst format 1, flags 0, and this package
+implements that format. So it is a lookup that should apply and does not, which
+is a bug to find rather than a question to decide. The next step is to put the
+same trace against this package — apply 'ccmp' a lookup at a time over
+`U+0F45 U+0F77 U+0F74` and see whether 22 is reached at all, whether its
+coverage matches, and whether its rule matches — rather than to reason about it.
+
+### The fix that was tried first, and why it was taken out again
 
 Decomposing the four signs before shaping does fix all six. It was written,
 measured, and reverted, because it costs more than it buys.
