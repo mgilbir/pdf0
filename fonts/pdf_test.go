@@ -528,42 +528,6 @@ func TestDrawEmitsTheOffsetsItWasGiven(t *testing.T) {
 		t.Errorf("the horizontal offset was not emitted:\n%s", stream)
 	}
 }
-func spanCodes(t *testing.T, f *Face, s string) []byte {
-	t.Helper()
-	spans, missing := f.Shape(s)
-	if missing != 0 {
-		t.Fatalf("Shape(%q): %d runes have no glyph", s, missing)
-	}
-	var out []byte
-	for _, sp := range spans {
-		out = append(out, sp.Codes...)
-	}
-	return out
-}
-
-func withCodes(t *testing.T, f *Face, s string) []byte {
-	t.Helper()
-	spans, missing := f.ShapeWith(s, "salt")
-	if missing != 0 {
-		t.Fatalf("ShapeWith(%q): %d runes have no glyph", s, missing)
-	}
-	var out []byte
-	for _, sp := range spans {
-		out = append(out, sp.Codes...)
-	}
-	return out
-}
-
-// The cross-script cursive fixture: two cursive attachment lookups, one per
-// script, with opposite RightToLeft flags. A Latin word and an Arabic word join
-// in opposite directions in the same font, which is the case that decides
-// whether attachment can be read script-blind.
-const (
-	arabAlef, arabBeh = 4, 5
-
-	alefExitY = 100
-	behEntryY = 40
-)
 
 func TestSubsetTagIsAFunctionOfTheGlyphSet(t *testing.T) {
 	abc := subsetTag([]int{0, 1, 2, 3})
@@ -1031,5 +995,19 @@ func TestTheEmbeddedNameCarriesTheSubsetTag(t *testing.T) {
 	}
 	if again := baseFontFor("abc"); again != a {
 		t.Errorf("the same glyph set embedded as %q and then %q", a, again)
+	}
+}
+
+// TestTheLicenceIsReachableFromHere pins that a program embedding the bundled
+// face can reproduce the licence that face is under.
+//
+// The OFL requires its text to travel with the font, and a single binary has no
+// file to point at — so it has to be reachable in the program. What the text
+// says is forme's to guarantee, since the font is forme's; what this checks is
+// that the way through to it from this package still leads somewhere.
+func TestTheLicenceIsReachableFromHere(t *testing.T) {
+	text := strings.Join(strings.Fields(NotoSansLicense()), " ")
+	if !strings.Contains(text, "SIL OPEN FONT LICENSE Version 1.1") {
+		t.Errorf("NotoSansLicense does not return the Open Font License; it returned %d characters", len(text))
 	}
 }
