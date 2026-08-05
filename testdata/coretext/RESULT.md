@@ -106,3 +106,30 @@ and all, so nothing is wrong with how either is taken apart. What differs is
 only what happens when U+0F74 follows one, and it changes the letter's own
 glyph. That points at a rule the font states over the decomposed sequence which
 one of the two is not reaching, rather than at anything in the mark machinery.
+
+### And where they end
+
+Narrowed to one sentence: **this package shapes the decomposed sequence
+correctly and the composed one wrongly.**
+
+	U+0F45 U+0FB2 U+0F71 U+0F80 U+0F74   both: 68 1766 1424 1347
+	U+0F45 U+0FB2 U+0F71 U+0F74 U+0F80   both: 68 1766 1424 1347
+	U+0F45 U+0F77                        both: 291 1421 1347
+	U+0F45 U+0F77 U+0F74                 pdf0: 11 1765 1421 1347 1432
+	                                     hb:   68 1766 1424 1347
+
+So nothing is wrong with the shaping, and nothing is wrong with taking the sign
+apart on its own. What is wrong is the order the pieces end up in when a mark
+follows: U+0F74 belongs *between* U+0F71 and U+0F80 by combining class, and this
+package leaves it after both.
+
+The reason it is not simply a sorting bug: U+0F77's decomposition is
+`<compat> 0FB2 0F81`, a *compatibility* mapping, so NFD does not apply it and
+neither engine decomposes it during normalisation — the split comes from the
+font's 'ccmp', which runs long after the canonical sort. HarfBuzz reaches the
+right answer anyway; this package does not.
+
+The fix worth trying first is to decompose these signs before shaping, the way
+split vowels already are, so their pieces are sorted with what follows them
+rather than after it. The evidence above says that is sufficient: given the
+pieces in either order, this package already answers exactly as the other two do.
