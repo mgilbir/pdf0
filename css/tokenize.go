@@ -511,10 +511,13 @@ func (t *tokenizer) consumeNumeric(start int) Token {
 	}
 	if t.cur() == '%' {
 		t.advance()
-		// A percentage carries no integer flag: the specification does not give
-		// it one, and inventing it here would let a caller act on a distinction
-		// that no other reader of CSS makes.
-		return Token{Kind: Percentage, Number: value, Repr: repr, Offset: start}
+		// The specification gives a percentage no type flag — only numbers and
+		// dimensions have one — but the flag is a property of the text, not of
+		// the token, and "50%" was written without a fractional part whether or
+		// not anything asks. Carrying it costs nothing, and it is what the
+		// reference implementations record, so a comparison against them is a
+		// projection of what is here rather than a re-derivation.
+		return Token{Kind: Percentage, Number: value, Repr: repr, IsInteger: isInteger, Offset: start}
 	}
 	return Token{Kind: Number, Number: value, Repr: repr, IsInteger: isInteger, Offset: start}
 }
