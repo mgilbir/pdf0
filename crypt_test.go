@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/zlib"
 	"crypto/rc4"
+	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,13 +18,7 @@ import (
 // yields bytes that zlib rejects, so a clean inflate is strong evidence the
 // decryption is correct. Self-skips when the corpus is absent.
 func TestDecryptCorpusFiles(t *testing.T) {
-	corpus := os.Getenv("VERAPDF_CORPUS")
-	if corpus == "" {
-		corpus = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpus); err != nil {
-		t.Skip("veraPDF corpus not found; run `make corpus`")
-	}
+	corpus := corpusRoot(t)
 	cases := []struct{ name, sub string }{
 		{"RC4 V2/R3", filepath.Join("PDFA-1b", "6.1 File structure", "6.1.3 File trailer", "isartor-6-1-3-t02-fail-a")},
 		{"AES-128 V4/R4", filepath.Join("PDF_A-2b", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a")},
@@ -47,11 +43,11 @@ func TestDecryptCorpusFiles(t *testing.T) {
 			}
 			checked := 0
 			for _, iobj := range doc.Objects {
-				s, ok := iobj.Value.(*Stream)
+				s, ok := iobj.Value.(*object.Stream)
 				if !ok {
 					continue
 				}
-				if f, _ := s.Dict.Get("Filter").(Name); f != "FlateDecode" {
+				if f, _ := s.Dict.Get("Filter").(object.Name); f != "FlateDecode" {
 					continue
 				}
 				zr, err := zlib.NewReader(bytes.NewReader(s.Data))
@@ -74,22 +70,22 @@ func TestDecryptCorpusFiles(t *testing.T) {
 // TestDecryptRoundTrip exercises the per-object key derivation and ciphers
 // without the corpus: encrypt known plaintext, then confirm decrypt recovers it.
 func TestDecryptRoundTrip(t *testing.T) {
-	h := &stdSecurityHandler{v: 4, r: 4, keyLen: 16, fileKey: bytes.Repeat([]byte{0xAB}, 16)}
+	h := &crypt.Handler{V: 4, R: 4, KeyLen: 16, FileKey: bytes.Repeat([]byte{0xAB}, 16)}
 	plain := []byte("The quick brown fox jumps over the lazy dog.")
 
-	rc4Key := h.objectKey(7, 0, false)
+	rc4Key := h.ObjectKey(7, 0, false)
 	c, _ := rc4.NewCipher(rc4Key)
 	enc := make([]byte, len(plain))
 	c.XORKeyStream(enc, plain)
-	if got := h.decrypt(enc, 7, 0, cryptRC4); !bytes.Equal(got, plain) {
+	if got := h.Decrypt(enc, 7, 0, crypt.RC4); !bytes.Equal(got, plain) {
 		t.Errorf("RC4 round-trip: got %q", got)
 	}
 
-	aesEnc, err := aesCBCEncrypt(h.objectKey(7, 0, true), plain)
+	aesEnc, err := crypt.AESCBCEncrypt(h.ObjectKey(7, 0, true), plain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := h.decrypt(aesEnc, 7, 0, cryptAESV2); !bytes.Equal(got, plain) {
+	if got := h.Decrypt(aesEnc, 7, 0, crypt.AESV2); !bytes.Equal(got, plain) {
 		t.Errorf("AES-128 round-trip: got %q", got)
 	}
 }
@@ -105,10 +101,10 @@ func TestDecryptRoundTrip(t *testing.T) {
 // blank to a file.
 func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	key := bytes.Repeat([]byte{0x11}, 32)
-	h := &stdSecurityHandler{
-		v: 5, r: 6, keyLen: 32, fileKey: key,
-		stmMethod: cryptAESV3, strMethod: cryptAESV3,
-		encryptMetadata: true, encryptObjNum: -1,
+	h := &crypt.Handler{
+		V: 5, R: 6, KeyLen: 32, FileKey: key,
+		StmMethod: crypt.AESV3, StrMethod: crypt.AESV3,
+		EncryptMetadata: true, EncryptObjNum: -1,
 	}
 	// A 32-byte blob (IV + one block) that does not decrypt: AES is
 	// deterministic, so this is a fixed input, but assert it rather than assume.
@@ -116,27 +112,27 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	for i := range bad {
 		bad[i] = byte(i)
 	}
-	if _, err := aesCBCDecrypt(key, bad); err == nil {
+	if _, err := crypt.AESCBCDecrypt(key, bad); err == nil {
 		t.Fatal("fixture does not exercise the failure: the blob decrypts cleanly")
 	}
 
-	st := &Stream{Dict: Dictionary{}, Data: append([]byte(nil), bad...)}
-	st.Dict.Set("Length", Integer(len(bad)))
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Title", String{Value: append([]byte(nil), bad...)})
+	st := &object.Stream{Dict: object.Dictionary{}, Data: append([]byte(nil), bad...)}
+	st.Dict.Set("Length", object.Integer(len(bad)))
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Title", object.String{Value: append([]byte(nil), bad...)})
 	doc := &Document{
-		Objects: map[int]*IndirectObject{
+		Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: cat},
 			4: {Number: 4, Value: st},
 		},
-		Trailer:   Dictionary{},
+		Trailer:   object.Dictionary{},
 		Encrypted: true,
 		security:  h,
 	}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	h.decryptDocument(doc)
+	doc.decryptFailures = h.DecryptDocument(doc.graph())
 
 	if bytes.Equal(st.Data, bad) {
 		t.Error("stream ciphertext was handed on unchanged as plaintext")
@@ -144,7 +140,7 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	if len(st.Data) != 0 {
 		t.Errorf("undecryptable stream data = %x, want empty", st.Data)
 	}
-	if s, _ := cat.Get("Title").(String); bytes.Equal(s.Value, bad) {
+	if s, _ := cat.Get("Title").(object.String); bytes.Equal(s.Value, bad) {
 		t.Error("string ciphertext was handed on unchanged as plaintext")
 	}
 	want := []int{1, 4}
@@ -172,25 +168,25 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 // on a good file.
 func TestDecryptSuccessRecordsNoFailure(t *testing.T) {
 	key := bytes.Repeat([]byte{0x22}, 32)
-	h := &stdSecurityHandler{
-		v: 5, r: 6, keyLen: 32, fileKey: key,
-		stmMethod: cryptAESV3, strMethod: cryptAESV3,
-		encryptMetadata: true, encryptObjNum: -1,
+	h := &crypt.Handler{
+		V: 5, R: 6, KeyLen: 32, FileKey: key,
+		StmMethod: crypt.AESV3, StrMethod: crypt.AESV3,
+		EncryptMetadata: true, EncryptObjNum: -1,
 	}
 	plain := []byte("a page's worth of content")
-	ct, err := aesCBCEncrypt(key, plain)
+	ct, err := crypt.AESCBCEncrypt(key, plain)
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := &Stream{Dict: Dictionary{}, Data: ct}
-	st.Dict.Set("Length", Integer(len(ct)))
+	st := &object.Stream{Dict: object.Dictionary{}, Data: ct}
+	st.Dict.Set("Length", object.Integer(len(ct)))
 	doc := &Document{
-		Objects:   map[int]*IndirectObject{4: {Number: 4, Value: st}},
-		Trailer:   Dictionary{},
+		Objects:   map[int]*object.IndirectObject{4: {Number: 4, Value: st}},
+		Trailer:   object.Dictionary{},
 		Encrypted: true,
 		security:  h,
 	}
-	h.decryptDocument(doc)
+	doc.decryptFailures = h.DecryptDocument(doc.graph())
 	if !bytes.Equal(st.Data, plain) {
 		t.Errorf("stream data = %q, want %q", st.Data, plain)
 	}

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/images"
 	"image"
 	"os"
 	"path/filepath"
@@ -9,7 +10,7 @@ import (
 )
 
 // jbig2CCITTImage decodes the single JBIG2 image from a sample PDF and returns it.
-func jbig2Image(t *testing.T, path string) ExtractedImage {
+func jbig2Image(t *testing.T, path string) images.ExtractedImage {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -25,10 +26,10 @@ func jbig2Image(t *testing.T, path string) ExtractedImage {
 		}
 	}
 	t.Fatalf("%s: no JBIG2 image", filepath.Base(path))
-	return ExtractedImage{}
+	return images.ExtractedImage{}
 }
 
-func grayPixels(t *testing.T, img ExtractedImage) *image.Gray {
+func grayPixels(t *testing.T, img images.ExtractedImage) *image.Gray {
 	t.Helper()
 	g, ok := img.Image.(*image.Gray)
 	if !ok {
@@ -304,12 +305,5 @@ func TestJBIG2EdgeCases(t *testing.T) {
 		if !bytes.Equal(grayPixels(t, img).Pix, want) {
 			t.Errorf("%s: pixels differ from the generic-region reference", name)
 		}
-	}
-}
-
-// TestJBIG2Malformed rejects garbage without panicking.
-func TestJBIG2Malformed(t *testing.T) {
-	if _, err := decodeJBIG2(nil, []byte{0, 0, 0, 0, 0x30, 0x00, 0x01}, 8, 8); err == nil {
-		t.Error("expected an error on malformed JBIG2 data")
 	}
 }

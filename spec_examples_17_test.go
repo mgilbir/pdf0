@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/mgilbir/pdf0/syntax"
 	"os"
 	"regexp"
 	"strings"
@@ -97,7 +98,7 @@ func TestSpec17ExamplesLex(t *testing.T) {
 					t.Logf("lexer stopped after %d tokens: %v", tokenCount, err)
 					break
 				}
-				if tok.Type == TokenEOF {
+				if tok.Type == syntax.TokenEOF {
 					break
 				}
 				tokenCount++

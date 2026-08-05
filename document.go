@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 	"io"
 	"sort"
 	"strconv"
@@ -24,9 +28,9 @@ import (
 
 // Document represents a parsed PDF file.
 type Document struct {
-	Version string                  // e.g., "2.0"
-	Objects map[int]*IndirectObject // object number → object
-	Trailer Dictionary
+	Version string                         // e.g., "2.0"
+	Objects map[int]*object.IndirectObject // object number → object
+	Trailer object.Dictionary
 	// Encrypted reports whether the file carried an /Encrypt dictionary.
 	// Standard-security-handler files with the empty user password are decrypted
 	// on Read (RC4, AES-128, and AES-256); their strings and streams are then in
@@ -52,7 +56,7 @@ type Document struct {
 	// limits holds the resource limits resolved from the Option values passed to
 	// Read. Read through (*Document).lim(), never directly: the zero value means
 	// "defaults", so a hand-built &Document{...} behaves like one Read produced.
-	limits limits
+	limits core.Limits
 
 	// brokenObjStms lists object-stream container numbers whose contents could
 	// not be decoded during Read. The document parses without them so that
@@ -72,13 +76,13 @@ type Document struct {
 	// else to live; every validator merges these into its report. It is written
 	// only during Read and read-only afterwards, which is what keeps validation
 	// (which runs on a shallow copy sharing this pointer) non-mutating.
-	readLimits *limitRecorder
+	readLimits *core.Recorder
 
 	// security holds the standard security handler when an encrypted file was
 	// decrypted on Read. It retains the file key and parameters so the same
 	// encryption can be reproduced on Write. nil for unencrypted documents (or
 	// for a scheme decryption does not support).
-	security *stdSecurityHandler
+	security *crypt.Handler
 
 	// usedXRefStream records that the file's primary cross-reference section was
 	// a cross-reference stream (/Type /XRef) rather than a traditional table, so
@@ -99,12 +103,12 @@ type Document struct {
 // to change them. The resolved limits are stored on the returned Document, so
 // every validator and extractor that runs on it inherits the same configuration.
 func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(canceler{}, r, size, "", resolveLimits(opts))
+	return readDocument(core.Canceler{}, r, size, "", resolveLimits(opts))
 }
 
 // ReadWithPassword is Read with a user or owner password for an encrypted file.
 func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(canceler{}, r, size, password, resolveLimits(opts))
+	return readDocument(core.Canceler{}, r, size, password, resolveLimits(opts))
 }
 
 // ReadContext is Read with cancellation. Parsing is not usually the expensive
@@ -120,22 +124,22 @@ func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option
 // genuinely lacks them, and every validator would then report the absence as a
 // conformance failure. See cancel.go.
 func ReadContext(ctx context.Context, r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(newCanceler(ctx), r, size, "", resolveLimits(opts))
+	return readDocument(core.NewCanceler(ctx), r, size, "", resolveLimits(opts))
 }
 
 // ReadWithPasswordContext is ReadWithPassword with cancellation; see ReadContext.
 func ReadWithPasswordContext(ctx context.Context, r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(newCanceler(ctx), r, size, password, resolveLimits(opts))
+	return readDocument(core.NewCanceler(ctx), r, size, password, resolveLimits(opts))
 }
 
-func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, lim limits) (doc *Document, err error) {
+func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password string, lim core.Limits) (doc *Document, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			doc = nil
 			err = fmt.Errorf("recovered from panic while reading PDF: %v", rec)
 		}
 	}()
-	if err := cancel.stopErr("reading PDF"); err != nil {
+	if err := cancel.StopErr("reading PDF"); err != nil {
 		return nil, err
 	}
 	data := make([]byte, size)
@@ -150,9 +154,9 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 	}
 
 	doc = &Document{
-		Objects:    make(map[int]*IndirectObject),
+		Objects:    make(map[int]*object.IndirectObject),
 		limits:     lim,
-		readLimits: &limitRecorder{},
+		readLimits: &core.Recorder{},
 	}
 
 	// 1. Find header to extract version and header offset
@@ -194,7 +198,7 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 	var firstErr error
 	for {
 		// One iteration per incremental update; a file can carry thousands.
-		if err := cancel.stopErr("reading PDF cross-reference chain"); err != nil {
+		if err := cancel.StopErr("reading PDF cross-reference chain"); err != nil {
 			return nil, err
 		}
 		if visitedXref[sectionOffset] {
@@ -246,12 +250,12 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 		}
 		if first {
 			doc.Trailer = *sectionTrailer
-			if t, _ := sectionTrailer.Get("Type").(Name); t == "XRef" {
+			if t, _ := sectionTrailer.Get("Type").(object.Name); t == "XRef" {
 				doc.usedXRefStream = true
 			}
 			first = false
 		}
-		prevOffset, ok := sectionTrailer.Get("Prev").(Integer)
+		prevOffset, ok := sectionTrailer.Get("Prev").(object.Integer)
 		if !ok {
 			break
 		}
@@ -276,7 +280,7 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 		// A cancellation is not a "this table is broken" signal, so it must not
 		// trigger the (whole-file) rebuild-and-retry: that would do more work in
 		// response to being told to stop.
-		if cerr := cancel.stopErr("reading PDF objects"); cerr != nil {
+		if cerr := cancel.StopErr("reading PDF objects"); cerr != nil {
 			return nil, cerr
 		}
 		t := rebuildXRefByScan(data)
@@ -284,7 +288,7 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 			return nil, err
 		}
 		xrefTable, rebuilt = t, true
-		doc.Objects = make(map[int]*IndirectObject)
+		doc.Objects = make(map[int]*object.IndirectObject)
 		if err2 := doc.loadObjectsFromXref(cancel, data, size, xrefTable, 0, true); err2 != nil {
 			return nil, err
 		}
@@ -300,9 +304,9 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 		}
 		sort.Ints(nums)
 		for _, num := range nums {
-			if d, ok := doc.Objects[num].Value.(*Dictionary); ok {
-				if t, _ := d.Get("Type").(Name); t == "Catalog" {
-					doc.Trailer.Set("Root", IndirectRef{Number: num})
+			if d, ok := doc.Objects[num].Value.(*object.Dictionary); ok {
+				if t, _ := d.Get("Type").(object.Name); t == "Catalog" {
+					doc.Trailer.Set("Root", object.IndirectRef{Number: num})
 					break
 				}
 			}
@@ -319,12 +323,12 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 	// runs before object streams are materialized: an /ObjStm container is an
 	// encrypted stream, but the objects inside it are not separately encrypted.
 	if doc.Trailer.Get("Encrypt") != nil {
-		h, err := buildStdSecurityHandler(doc, password)
+		h, err := crypt.Open(doc.graph(), password)
 		if err != nil {
 			return nil, fmt.Errorf("encryption: %w", err)
 		}
 		if h != nil {
-			h.decryptDocument(doc)
+			doc.decryptFailures = h.DecryptDocument(doc.graph())
 			doc.security = h
 		}
 	}
@@ -356,7 +360,7 @@ func readDocument(cancel canceler, r io.ReaderAt, size int64, password string, l
 // (used for tables reconstructed by rebuildXRefByScan) an entry whose offset
 // is out of range or whose bytes do not parse is dropped rather than failing
 // the read: a scanned entry has no authority beyond the bytes it points at.
-func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int64, xrefTable *XRefTable, adjust int64, lenient bool) error {
+func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size int64, xrefTable *XRefTable, adjust int64, lenient bool) error {
 	doc.Offsets = make(map[int]int64)
 	lexer := NewLexer(data)
 	// parsedByOffset caches the object parsed at each byte offset. A malformed
@@ -368,7 +372,7 @@ func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int6
 	// once bounds the work to the file's real content. Parsing identical bytes
 	// always yields an identical object, so the shared value is correct; the
 	// per-number wrapper still carries the authoritative object number.
-	parsedByOffset := make(map[int64]*IndirectObject)
+	parsedByOffset := make(map[int64]*object.IndirectObject)
 	// resolveLen resolves an indirect stream /Length by seeking to the length
 	// object via the cross-reference table and reading its integer value. This
 	// lets a stream with a (frequently forward-referenced) indirect /Length be
@@ -376,7 +380,7 @@ func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int6
 	// can over-read pathologically when binary data ends in a non-whitespace
 	// byte (see parseStream). A fresh parser with no resolver is used so a
 	// length object cannot itself trigger recursive length resolution.
-	resolveLen := func(ref IndirectRef) (int64, bool) {
+	resolveLen := func(ref object.IndirectRef) (int64, bool) {
 		ent, ok := xrefTable.Entries[ref.Number]
 		if !ok || ent.Free || ent.Compressed {
 			return 0, false
@@ -387,13 +391,13 @@ func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int6
 		}
 		lx := NewLexer(data)
 		lx.SetPosition(lo)
-		return NewParserFromLexer(lx).integerObjectValue()
+		return NewParserFromLexer(lx).IntegerObjectValue()
 	}
 	for num, entry := range xrefTable.Entries {
 		// Per object: the unit of work here is one object parse, which for a
 		// stream is bounded by the per-stream decode cap, so cancellation takes
 		// effect after at most one such parse.
-		if err := cancel.stopErr("reading PDF objects"); err != nil {
+		if err := cancel.StopErr("reading PDF objects"); err != nil {
 			return err
 		}
 		if entry.Free || entry.Compressed {
@@ -425,12 +429,12 @@ func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int6
 		if prev, ok := parsedByOffset[off]; ok {
 			// Same bytes already parsed under another number: reuse the value
 			// rather than re-parsing (and re-allocating any stream data).
-			doc.Objects[num] = &IndirectObject{Number: num, Generation: prev.Generation, Value: prev.Value}
+			doc.Objects[num] = &object.IndirectObject{Number: num, Generation: prev.Generation, Value: prev.Value}
 			continue
 		}
 		lexer.SetPosition(off)
 		parser := NewParserFromLexer(lexer)
-		parser.resolveLength = resolveLen
+		parser.ResolveLength = resolveLen
 		iobj, err := parser.ParseIndirectObject()
 		if err != nil {
 			if lenient {
@@ -460,8 +464,8 @@ func (doc *Document) loadObjectsFromXref(cancel canceler, data []byte, size int6
 // regenerates the cross-reference structure and /Size, so nothing is lost.
 func (d *Document) normalizeStructure() {
 	for num, iobj := range d.Objects {
-		if stream, ok := iobj.Value.(*Stream); ok {
-			if t, ok := stream.Dict.Get("Type").(Name); ok && (t == "XRef" || t == "ObjStm") {
+		if stream, ok := iobj.Value.(*object.Stream); ok {
+			if t, ok := stream.Dict.Get("Type").(object.Name); ok && (t == "XRef" || t == "ObjStm") {
 				delete(d.Objects, num)
 				// Drop the byte offset too: leaving it in d.Offsets makes the
 				// byte-level file-structure checks treat the removed object's
@@ -473,7 +477,7 @@ func (d *Document) normalizeStructure() {
 		}
 	}
 	trailer := d.Trailer.Clone()
-	for _, key := range []Name{"Type", "W", "Index", "Filter", "DecodeParms", "Length", "Prev", "XRefStm", "Size"} {
+	for _, key := range []object.Name{"Type", "W", "Index", "Filter", "DecodeParms", "Length", "Prev", "XRefStm", "Size"} {
 		trailer.Delete(key)
 	}
 	d.Trailer = *trailer
@@ -483,7 +487,7 @@ func (d *Document) normalizeStructure() {
 // followed by its trailer, or an xref stream) at the given absolute offset.
 // For xref streams the stream dictionary doubles as the trailer, and the
 // stream object itself is recorded in doc.Objects.
-func parseXRefSection(cancel canceler, data []byte, offset int64, doc *Document) (*XRefTable, *Dictionary, error) {
+func parseXRefSection(cancel core.Canceler, data []byte, offset int64, doc *Document) (*XRefTable, *object.Dictionary, error) {
 	lexer := NewLexer(data)
 	lexer.SetPosition(offset)
 	tok, err := lexer.NextToken()
@@ -492,7 +496,7 @@ func parseXRefSection(cancel canceler, data []byte, offset int64, doc *Document)
 	}
 
 	switch tok.Type {
-	case TokenXref:
+	case syntax.TokenXref:
 		table, err := ParseXRefTable(data, lexer.Position())
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing xref table: %w", err)
@@ -503,7 +507,7 @@ func parseXRefSection(cancel canceler, data []byte, offset int64, doc *Document)
 		}
 		return table, trailer, nil
 
-	case TokenInteger:
+	case syntax.TokenInteger:
 		// Xref stream: the xref is an indirect object containing a stream
 		lexer.SetPosition(offset)
 		parser := NewParserFromLexer(lexer)
@@ -511,7 +515,7 @@ func parseXRefSection(cancel canceler, data []byte, offset int64, doc *Document)
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing xref stream object: %w", err)
 		}
-		stream, ok := iobj.Value.(*Stream)
+		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
 			return nil, nil, fmt.Errorf("xref stream object is not a stream")
 		}
@@ -584,7 +588,7 @@ func findStartXref(data []byte) (int64, error) {
 
 	// Skip "startxref" and whitespace to get the offset value
 	pos := idx + len("startxref")
-	for pos < len(tail) && isWhitespace(tail[pos]) {
+	for pos < len(tail) && syntax.IsWhitespace(tail[pos]) {
 		pos++
 	}
 
@@ -606,7 +610,7 @@ func findStartXref(data []byte) (int64, error) {
 }
 
 // findTrailer finds and parses the trailer dictionary after xref entries.
-func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
+func findTrailer(data []byte, afterPos int64) (*object.Dictionary, error) {
 	// Search for "trailer" keyword after the given position
 	searchData := data[afterPos:]
 	idx := bytes.Index(searchData, []byte("trailer"))
@@ -623,7 +627,7 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 		return nil, fmt.Errorf("parsing trailer dictionary: %w", err)
 	}
 
-	dict, ok := obj.(*Dictionary)
+	dict, ok := obj.(*object.Dictionary)
 	if !ok {
 		return nil, fmt.Errorf("trailer value is not a dictionary, got %T", obj)
 	}
@@ -638,7 +642,7 @@ func findTrailer(data []byte, afterPos int64) (*Dictionary, error) {
 // written back verbatim as a lossless passthrough under its preserved /Encrypt.
 // Write regenerates the cross-reference section, emitting a cross-reference
 // stream when the source used one and a traditional table otherwise.
-func (d *Document) Write(w io.Writer) error { return d.write(canceler{}, w) }
+func (d *Document) Write(w io.Writer) error { return d.write(core.Canceler{}, w) }
 
 // WriteContext is Write with cancellation.
 //
@@ -653,10 +657,10 @@ func (d *Document) Write(w io.Writer) error { return d.write(canceler{}, w) }
 // A caller that must not leave a partial file behind should write to a
 // temporary and rename on success. See cancel.go.
 func (d *Document) WriteContext(ctx context.Context, w io.Writer) error {
-	return d.write(newCanceler(ctx), w)
+	return d.write(core.NewCanceler(ctx), w)
 }
 
-func (d *Document) write(cancel canceler, w io.Writer) error {
+func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// An encrypted document with a security handler (decrypted on Read) is
 	// re-encrypted below with the retained key. Without a handler (an unsupported
 	// scheme or a non-empty password) the content is still in its original
@@ -693,9 +697,16 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 		return fmt.Errorf("object number 0 is reserved and cannot be written")
 	}
 	worst := 0
-	for num := range d.Objects {
+	for num, iobj := range d.Objects {
 		if num < worst {
 			worst = num
+		}
+		// A nil entry is a caller mistake — a map written into directly, or an
+		// allocation whose error went unchecked — and it is one the serializer
+		// would meet as a nil dereference several layers down. Naming it here
+		// is the difference between an error and the process ending.
+		if iobj == nil {
+			return fmt.Errorf("object %d is nil; every entry in Objects must hold an object", num)
 		}
 	}
 	if worst < 0 {
@@ -720,7 +731,7 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 	// and /ID remain in the trailer and are written as-is.
 	writeObjects, xrefType2 := d.buildWriteSet()
 	if d.security != nil {
-		writeObjects = d.security.encryptCopy(writeObjects)
+		writeObjects = d.security.EncryptCopy(writeObjects)
 	}
 
 	// A stale indirect /Length (its target integer object not updated after a
@@ -730,8 +741,8 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 	// after encryption, since AES padding changes the length (audit C8).
 	lengthOverrides := make(map[int]int64)
 	for _, iobj := range writeObjects {
-		if stream, ok := iobj.Value.(*Stream); ok {
-			if ref, isRef := stream.Dict.Get("Length").(IndirectRef); isRef {
+		if stream, ok := iobj.Value.(*object.Stream); ok {
+			if ref, isRef := stream.Dict.Get("Length").(object.IndirectRef); isRef {
 				n := int64(len(stream.Data))
 				// Two streams pointing their /Length at one integer object with
 				// different data lengths cannot both be represented; overriding it
@@ -751,7 +762,7 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 		version = "2.0"
 	}
 	header := fmt.Sprintf("%%PDF-%s\n%%\x80\x80\x80\x80\n", version)
-	if err := s.writeString(header); err != nil {
+	if err := s.WriteString(header); err != nil {
 		return err
 	}
 
@@ -768,15 +779,15 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 		// Per object: one iteration serializes (and, when re-encrypting, encrypts)
 		// a single object, so cancellation takes effect after at most one object's
 		// worth of output.
-		if err := cancel.stopErr("writing PDF"); err != nil {
+		if err := cancel.StopErr("writing PDF"); err != nil {
 			return err
 		}
 		offsets[num] = s.Offset()
 		iobj := writeObjects[num]
 		if newLen, ok := lengthOverrides[num]; ok {
-			if _, isInt := iobj.Value.(Integer); isInt {
+			if _, isInt := iobj.Value.(object.Integer); isInt {
 				// Emit the corrected length without mutating the caller's object.
-				iobj = &IndirectObject{Number: iobj.Number, Generation: iobj.Generation, Value: Integer(newLen)}
+				iobj = &object.IndirectObject{Number: iobj.Number, Generation: iobj.Generation, Value: object.Integer(newLen)}
 			}
 		}
 		if err := s.WriteIndirectObject(iobj); err != nil {
@@ -806,20 +817,20 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 		// Clone so setting Size doesn't mutate the caller's Document.Trailer
 		// (Dictionary shares its backing slices on a plain struct copy).
 		trailer := d.Trailer.Clone()
-		trailer.Set("Size", Integer(maxObj+1))
-		if err := s.writeString("trailer\n"); err != nil {
+		trailer.Set("Size", object.Integer(maxObj+1))
+		if err := s.WriteString("trailer\n"); err != nil {
 			return err
 		}
-		if err := s.writeDictionary(trailer); err != nil {
+		if err := s.WriteDictionary(trailer); err != nil {
 			return err
 		}
-		if err := s.writeString("\n"); err != nil {
+		if err := s.WriteString("\n"); err != nil {
 			return err
 		}
 	}
 
 	// 5. Write startxref
-	if err := s.writeString(fmt.Sprintf("startxref\n%d\n%%%%EOF\n", xrefOffset)); err != nil {
+	if err := s.WriteString(fmt.Sprintf("startxref\n%d\n%%%%EOF\n", xrefOffset)); err != nil {
 		return err
 	}
 
@@ -830,7 +841,7 @@ func (d *Document) write(cancel canceler, w io.Writer) error {
 // object numbered xrefObjNum (which lands at the current serializer offset, so
 // its own entry points there). Trailer keys (/Root, /Info, /ID, /Encrypt) carry
 // into the stream dictionary. The binary entries are FlateDecode-compressed.
-func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject, type2 map[int][2]int, trailer *Dictionary, xrefObjNum int) error {
+func writeXRefStream(s *syntax.Serializer, objNums []int, offsets map[int]int64, objects map[int]*object.IndirectObject, type2 map[int][2]int, trailer *object.Dictionary, xrefObjNum int) error {
 	offsets[xrefObjNum] = s.Offset()
 
 	// Entry set: the free-list head (object 0), every written object (including
@@ -911,26 +922,26 @@ func writeXRefStream(s *Serializer, objNums []int, offsets map[int]int64, object
 	}
 
 	// /Index: [start count ...] over contiguous runs of object numbers.
-	var index Array
+	var index object.Array
 	for i := 0; i < len(nums); {
 		j := i
 		for j+1 < len(nums) && nums[j+1] == nums[j]+1 {
 			j++
 		}
-		index = append(index, Integer(nums[i]), Integer(j-i+1))
+		index = append(index, object.Integer(nums[i]), object.Integer(j-i+1))
 		i = j + 1
 	}
 
 	dict := trailer.Clone()
-	dict.Set("Type", Name("XRef"))
-	dict.Set("Size", Integer(xrefObjNum+1))
-	dict.Set("W", Array{Integer(w[0]), Integer(w[1]), Integer(w[2])})
+	dict.Set("Type", object.Name("XRef"))
+	dict.Set("Size", object.Integer(xrefObjNum+1))
+	dict.Set("W", object.Array{object.Integer(w[0]), object.Integer(w[1]), object.Integer(w[2])})
 	dict.Set("Index", index)
-	encoded := flateEncode(body.Bytes())
-	dict.Set("Filter", Name("FlateDecode"))
-	dict.Set("Length", Integer(len(encoded)))
+	encoded := core.FlateEncode(body.Bytes())
+	dict.Set("Filter", object.Name("FlateDecode"))
+	dict.Set("Length", object.Integer(len(encoded)))
 
-	return s.WriteIndirectObject(&IndirectObject{Number: xrefObjNum, Value: &Stream{Dict: *dict, Data: encoded}})
+	return s.WriteIndirectObject(&object.IndirectObject{Number: xrefObjNum, Value: &object.Stream{Dict: *dict, Data: encoded}})
 }
 
 // byteWidth returns the number of bytes needed to hold v (at least 1).
@@ -947,8 +958,8 @@ func byteWidth(v uint64) int {
 // balloon the table with fabricated free entries whose free-list linkage
 // would then have to be maintained. The only free entry is the list head
 // (object 0, generation 65535, next-free 0: the canonical empty list).
-func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects map[int]*IndirectObject) error {
-	if err := s.writeString("xref\n"); err != nil {
+func writeXRefTable(s *syntax.Serializer, objNums []int, offsets map[int]int64, objects map[int]*object.IndirectObject) error {
+	if err := s.WriteString("xref\n"); err != nil {
 		return err
 	}
 
@@ -972,11 +983,11 @@ func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects
 	// objects numbered from 1 up continue it.
 	section := []int{0}
 	flush := func() error {
-		if err := s.writeString(fmt.Sprintf("%d %d\n", section[0], len(section))); err != nil {
+		if err := s.WriteString(fmt.Sprintf("%d %d\n", section[0], len(section))); err != nil {
 			return err
 		}
 		for _, num := range section {
-			if err := s.writeString(entryLine(num)); err != nil {
+			if err := s.WriteString(entryLine(num)); err != nil {
 				return err
 			}
 		}
@@ -1003,34 +1014,13 @@ func writeXRefTable(s *Serializer, objNums []int, offsets map[int]int64, objects
 // references (a legal indirect object whose value is itself a reference).
 // Returns the object unchanged if it is not an IndirectRef, and nil if any
 // target in the chain does not exist or the chain cycles.
-func (d *Document) Resolve(obj Object) Object {
-	// A bounded hop count doubles as the cycle guard without allocating a
-	// visited set on this hot path; real files chain a handful of hops at
-	// most, so exceeding the bound means a reference cycle or garbage.
-	for hops := 0; hops < 64; hops++ {
-		ref, ok := obj.(IndirectRef)
-		if !ok {
-			return obj
-		}
-		iobj, exists := d.Objects[ref.Number]
-		if !exists {
-			return nil
-		}
-		obj = iobj.Value
-	}
-	return nil
+func (d *Document) Resolve(obj object.Object) object.Object {
+	return d.graph().Resolve(obj)
 }
 
 // ResolveDict resolves obj and type-asserts to *Dictionary.
-func (d *Document) ResolveDict(obj Object) *Dictionary {
-	v := d.Resolve(obj)
-	if v == nil {
-		return nil
-	}
-	if dict, ok := v.(*Dictionary); ok {
-		return dict
-	}
-	return nil
+func (d *Document) ResolveDict(obj object.Object) *object.Dictionary {
+	return d.graph().ResolveDict(obj)
 }
 
 // precedingXrefKeyword returns the offset of the last standalone "xref"
@@ -1078,7 +1068,7 @@ func xrefLooksValid(data []byte, off int64) bool {
 		return false
 	}
 	i := off
-	for i < int64(len(data)) && isWhitespace(data[i]) {
+	for i < int64(len(data)) && syntax.IsWhitespace(data[i]) {
 		i++
 	}
 	rest := data[i:]
@@ -1094,4 +1084,53 @@ func xrefLooksValid(data []byte, off int64) bool {
 		return bytes.Contains(window, []byte("obj"))
 	}
 	return false
+}
+
+// graph returns the object-graph half of the view: what resolving a reference
+// needs, and nothing else.
+//
+// Resolve is the hottest path in the package — a validation run makes hundreds
+// of thousands of calls — and the full view resolves the limits on the way,
+// which fills eleven fields. None of that is read while chasing a reference, so
+// graph exists to keep it off that path while still leaving one implementation
+// of the walk itself.
+func (d *Document) graph() core.View {
+	return core.View{Objects: d.Objects, Trailer: &d.Trailer}
+}
+
+// view returns the read-only view of this document that the packages below the
+// root package take in place of a *Document. It is built per call rather than
+// cached: a Document may be mutated between operations, and a stale view would
+// resolve against the object map it was built from.
+//
+// The run state travels with it when there is one, so a trip a subsystem records
+// through the view lands in the same recorder the validators report from.
+func (d *Document) view() core.View {
+	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Objects: d.Objects, Offsets: d.Offsets, Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler()}
+	if d.valCache != nil {
+		v.Run = d.valCache.run.shared
+	}
+	return v
+}
+
+// Add stores an object under the next free object number and returns a
+// reference to it. It is how a writer grows the object graph without having to
+// track numbering: font embedding, image embedding and anything else that adds
+// several linked objects at once need one allocator between them.
+//
+// The number is one past the highest in use, so it never collides with an
+// object already read from a file, and never reuses a number a previous Add
+// handed out.
+func (d *Document) Add(value object.Object) object.IndirectRef {
+	if d.Objects == nil {
+		d.Objects = map[int]*object.IndirectObject{}
+	}
+	next := 1
+	for num := range d.Objects {
+		if num >= next {
+			next = num + 1
+		}
+	}
+	d.Objects[next] = &object.IndirectObject{Number: next, Value: value}
+	return object.IndirectRef{Number: next}
 }

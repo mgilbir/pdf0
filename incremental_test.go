@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -14,10 +15,10 @@ func TestWriteIncremental(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Add an Info dictionary as a new object and reference it from the trailer.
-	info := &Dictionary{}
-	info.Set("Producer", String{Value: []byte("incremental-update-marker")})
-	doc.Objects[4] = &IndirectObject{Number: 4, Value: info}
-	doc.Trailer.Set("Info", IndirectRef{Number: 4})
+	info := &object.Dictionary{}
+	info.Set("Producer", object.String{Value: []byte("incremental-update-marker")})
+	doc.Objects[4] = &object.IndirectObject{Number: 4, Value: info}
+	doc.Trailer.Set("Info", object.IndirectRef{Number: 4})
 
 	var buf bytes.Buffer
 	if err := doc.WriteIncremental(&buf, original, []int{4}); err != nil {
@@ -41,7 +42,7 @@ func TestWriteIncremental(t *testing.T) {
 	if info2 == nil {
 		t.Fatal("Info not present after incremental update")
 	}
-	if p, _ := info2.Get("Producer").(String); string(p.Value) != "incremental-update-marker" {
+	if p, _ := info2.Get("Producer").(object.String); string(p.Value) != "incremental-update-marker" {
 		t.Errorf("/Producer = %q", p.Value)
 	}
 	// The original catalog must still resolve through the /Prev chain.

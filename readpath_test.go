@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 )
@@ -93,7 +94,7 @@ func TestStreamEndstreamInBinaryData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, ok := obj.(*Stream)
+	stream, ok := obj.(*object.Stream)
 	if !ok {
 		t.Fatalf("expected *Stream, got %T", obj)
 	}
@@ -136,8 +137,8 @@ func TestDuplicateDictKeysLastWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dict := obj.(*Dictionary)
-	if v, ok := dict.Get("A").(Integer); !ok || v != 2 {
+	dict := obj.(*object.Dictionary)
+	if v, ok := dict.Get("A").(object.Integer); !ok || v != 2 {
 		t.Errorf("expected last-wins /A 2, got %v", dict.Get("A"))
 	}
 	if dict.Len() != 1 {

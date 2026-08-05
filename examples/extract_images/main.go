@@ -1,6 +1,11 @@
 // Command extract_images builds a small PDF holding two image XObjects, writes
 // it, reads it back, and walks the images with the lazy Images iterator.
 //
+// The building half uses the writer this module provides — images.Embed for the
+// XObjects, content.Builder for the drawing, AddPage for the page — so it also
+// shows the two directions meeting: whatever is embedded here is what the walk
+// below reports.
+//
 // It needs no test data: the images are generated in-process. Run it with
 //
 //	go run ./examples/extract_images
@@ -8,123 +13,93 @@ package main
 
 import (
 	"bytes"
-	"compress/zlib"
 	"fmt"
+	"image"
+	"image/color"
 	"os"
 
 	pdf "github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/object"
 )
 
 const imgW, imgH = 8, 8
 
-// rgbSamples returns 8-bit DeviceRGB samples for an imgW x imgH gradient: red
-// rises along x, green along y, blue is constant. PDF packs samples row by row,
-// each row starting on a byte boundary — at 8 bits per component that is just
-// w*3 bytes per row.
-func rgbSamples() []byte {
-	data := make([]byte, 0, imgW*imgH*3)
+// rgbImage is a colour ramp: every pixel differs from its neighbours, so an
+// image written or read in the wrong order is obvious.
+func rgbImage() image.Image {
+	img := image.NewRGBA(image.Rect(0, 0, imgW, imgH))
 	for y := 0; y < imgH; y++ {
 		for x := 0; x < imgW; x++ {
-			data = append(data, byte(x*255/(imgW-1)), byte(y*255/(imgH-1)), 0x40)
+			img.SetRGBA(x, y, color.RGBA{
+				R: uint8(x * 255 / (imgW - 1)),
+				G: uint8(y * 255 / (imgH - 1)),
+				B: 128,
+				A: 255,
+			})
 		}
 	}
-	return data
+	return img
 }
 
-// graySamples returns 8-bit DeviceGray samples for an imgW x imgH ramp.
-func graySamples() []byte {
-	data := make([]byte, 0, imgW*imgH)
+// grayImage is a diagonal ramp, written as DeviceGray because its type says so.
+func grayImage() image.Image {
+	img := image.NewGray(image.Rect(0, 0, imgW, imgH))
 	for y := 0; y < imgH; y++ {
 		for x := 0; x < imgW; x++ {
-			data = append(data, byte((x+y)*255/(imgW+imgH-2)))
+			img.SetGray(x, y, color.Gray{Y: uint8((x + y) * 255 / (imgW + imgH - 2))})
 		}
 	}
-	return data
+	return img
 }
 
-// flate compresses data the way a real producer would store image samples.
-func flate(data []byte) []byte {
-	var buf bytes.Buffer
-	w := zlib.NewWriter(&buf)
-	if _, err := w.Write(data); err != nil {
-		panic(err)
+// buildDoc assembles a one-page document drawing both images.
+func buildDoc() (*pdf.Document, error) {
+	doc := &pdf.Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}}
+
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{})
+	pages.Set("Count", object.Integer(0))
+	pagesRef := doc.Add(pages)
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("Pages", pagesRef)
+	doc.Trailer.Set("Root", doc.Add(catalog))
+
+	rgbRef, err := images.Embed(doc, rgbImage())
+	if err != nil {
+		return nil, err
 	}
-	if err := w.Close(); err != nil {
-		panic(err)
+	grayRef, err := images.Embed(doc, grayImage())
+	if err != nil {
+		return nil, err
 	}
-	return buf.Bytes()
-}
 
-// imageXObject builds an image XObject stream. filter is "" for raw samples.
-func imageXObject(cs pdf.Name, filter pdf.Name, data []byte) *pdf.Stream {
-	d := pdf.Dictionary{}
-	d.Set("Type", pdf.Name("XObject"))
-	d.Set("Subtype", pdf.Name("Image"))
-	d.Set("Width", pdf.Integer(imgW))
-	d.Set("Height", pdf.Integer(imgH))
-	d.Set("BitsPerComponent", pdf.Integer(8))
-	d.Set("ColorSpace", cs)
-	if filter != "" {
-		d.Set("Filter", filter)
-	}
-	return &pdf.Stream{Dict: d, Data: data}
-}
+	// An image XObject draws into the unit square, so the matrix is its size on
+	// the page: each is scaled to a 64pt square.
+	var page content.Builder
+	page.Save().Concat(64, 0, 0, 64, 20, 110).Draw("ImRGB").Restore()
+	page.Save().Concat(64, 0, 0, 64, 20, 20).Draw("ImGray").Restore()
 
-// buildDoc assembles a one-page document whose content stream draws both images.
-func buildDoc() *pdf.Document {
-	catalog := &pdf.Dictionary{}
-	catalog.Set("Type", pdf.Name("Catalog"))
-	catalog.Set("Pages", pdf.IndirectRef{Number: 2})
-
-	pages := &pdf.Dictionary{}
-	pages.Set("Type", pdf.Name("Pages"))
-	pages.Set("Kids", pdf.Array{pdf.IndirectRef{Number: 3}})
-	pages.Set("Count", pdf.Integer(1))
-
-	page := &pdf.Dictionary{}
-	page.Set("Type", pdf.Name("Page"))
-	page.Set("Parent", pdf.IndirectRef{Number: 2})
-	page.Set("MediaBox", pdf.Array{pdf.Integer(0), pdf.Integer(0), pdf.Integer(200), pdf.Integer(200)})
-	page.Set("Contents", pdf.IndirectRef{Number: 4})
-	page.Set("Resources", pdf.IndirectRef{Number: 5})
-
-	// Both images are painted with Do, each scaled to a 64pt square.
-	content := []byte("q 64 0 0 64 20 110 cm /ImRGB Do Q\nq 64 0 0 64 20 20 cm /ImGray Do Q\n")
-	contentStream := &pdf.Stream{Dict: pdf.Dictionary{}, Data: content}
-
-	xobjects := &pdf.Dictionary{}
-	xobjects.Set("ImRGB", pdf.IndirectRef{Number: 6})
-	xobjects.Set("ImGray", pdf.IndirectRef{Number: 7})
-	resources := &pdf.Dictionary{}
-	resources.Set("XObject", xobjects)
-
-	// One Flate-compressed colour image and one uncompressed grayscale image, so
-	// the walk reports two different /Filter values.
-	rgbImage := imageXObject("DeviceRGB", "FlateDecode", flate(rgbSamples()))
-	grayImage := imageXObject("DeviceGray", "", graySamples())
-
-	return &pdf.Document{
-		Version: "2.0",
-		Objects: map[int]*pdf.IndirectObject{
-			1: {Number: 1, Value: catalog},
-			2: {Number: 2, Value: pages},
-			3: {Number: 3, Value: page},
-			4: {Number: 4, Value: contentStream},
-			5: {Number: 5, Value: resources},
-			6: {Number: 6, Value: rgbImage},
-			7: {Number: 7, Value: grayImage},
-		},
-		Trailer: pdf.Dictionary{
-			Keys:   []pdf.Name{"Root"},
-			Values: []pdf.Object{pdf.IndirectRef{Number: 1}},
-		},
-	}
+	_, err = doc.AddPage(pdf.Page{
+		Width: 200, Height: 200,
+		Content:  &page,
+		XObjects: map[object.Name]object.Object{"ImRGB": rgbRef, "ImGray": grayRef},
+	})
+	return doc, err
 }
 
 func main() {
 	// 1. Build and serialize the document.
+	doc0, err := buildDoc()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build: %v\n", err)
+		os.Exit(1)
+	}
 	var buf bytes.Buffer
-	if err := buildDoc().Write(&buf); err != nil {
+	if err := doc0.Write(&buf); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %v\n", err)
 		os.Exit(1)
 	}

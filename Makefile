@@ -170,6 +170,18 @@ $(JBIG2_DIR)/.ok: $(JBIG2_DIR)/sources.tsv $(JBIG2_DIR)/download.sh
 clean-jbig2:
 	rm -f $(JBIG2_DIR)/*.pdf $(JBIG2_DIR)/.ok
 
+# Shaping — the OpenType layout engine, the bidirectional algorithm, the
+# script-specific models and the font-program reader — lives in
+# github.com/mgilbir/forme. Its oracles go with it: HarfBuzz's answers over a
+# checked-in corpus, Unicode's own UAX #9 conformance suite, CoreText for a
+# third opinion, and the generators that build the Unicode-derived tables. They
+# are run by that module's own Makefile.
+#
+# What stays here is what PDF does with a shaped run: writing it into a content
+# stream, and writing the font into the document. testdata/shaping/corpus.txt
+# is forme's corpus, kept because those two have to agree with each other over
+# text that is more than a line of Latin.
+
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
 # suites) is fetched by that module's own Makefile.

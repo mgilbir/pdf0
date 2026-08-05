@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"strings"
 	"testing"
 )
@@ -19,65 +21,65 @@ func contentHeavyPDF(pages int) []byte {
 	content := body.String()
 	form := "q 0 0 1 rg 10 10 20 20 re f Q\n"
 
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "2.0"}
-	gs := &Dictionary{}
-	gs.Set("Type", Name("ExtGState"))
-	d.Objects[100] = &IndirectObject{Number: 100, Value: gs}
-	fm := &Stream{Dict: Dictionary{}, Data: []byte(form)}
-	fm.Dict.Set("Type", Name("XObject"))
-	fm.Dict.Set("Subtype", Name("Form"))
-	fm.Dict.Set("Length", Integer(len(form)))
-	d.Objects[101] = &IndirectObject{Number: 101, Value: fm}
+	d := &Document{Objects: map[int]*object.IndirectObject{}, Version: "2.0"}
+	gs := &object.Dictionary{}
+	gs.Set("Type", object.Name("ExtGState"))
+	d.Objects[100] = &object.IndirectObject{Number: 100, Value: gs}
+	fm := &object.Stream{Dict: object.Dictionary{}, Data: []byte(form)}
+	fm.Dict.Set("Type", object.Name("XObject"))
+	fm.Dict.Set("Subtype", object.Name("Form"))
+	fm.Dict.Set("Length", object.Integer(len(form)))
+	d.Objects[101] = &object.IndirectObject{Number: 101, Value: fm}
 
-	res := &Dictionary{}
-	egs := &Dictionary{}
-	egs.Set("GS0", IndirectRef{Number: 100})
+	res := &object.Dictionary{}
+	egs := &object.Dictionary{}
+	egs.Set("GS0", object.IndirectRef{Number: 100})
 	res.Set("ExtGState", egs)
-	cs := &Dictionary{}
-	cs.Set("CS0", Array{Name("ICCBased"), IndirectRef{Number: 100}})
+	cs := &object.Dictionary{}
+	cs.Set("CS0", object.Array{object.Name("ICCBased"), object.IndirectRef{Number: 100}})
 	res.Set("ColorSpace", cs)
-	xo := &Dictionary{}
-	xo.Set("Fm0", IndirectRef{Number: 101})
+	xo := &object.Dictionary{}
+	xo.Set("Fm0", object.IndirectRef{Number: 101})
 	res.Set("XObject", xo)
-	fonts := &Dictionary{}
-	f0 := &Dictionary{}
-	f0.Set("Type", Name("Font"))
-	f0.Set("Subtype", Name("Type1"))
-	f0.Set("BaseFont", Name("Helvetica"))
+	fonts := &object.Dictionary{}
+	f0 := &object.Dictionary{}
+	f0.Set("Type", object.Name("Font"))
+	f0.Set("Subtype", object.Name("Type1"))
+	f0.Set("BaseFont", object.Name("Helvetica"))
 	fonts.Set("F0", f0)
 	res.Set("Font", fonts)
-	d.Objects[102] = &IndirectObject{Number: 102, Value: res}
+	d.Objects[102] = &object.IndirectObject{Number: 102, Value: res}
 
-	var kids Array
+	var kids object.Array
 	num := 200
 	for p := 0; p < pages; p++ {
 		cn := num
 		num++
-		cst := &Stream{Dict: Dictionary{}, Data: []byte(content)}
-		cst.Dict.Set("Length", Integer(len(content)))
-		d.Objects[cn] = &IndirectObject{Number: cn, Value: cst}
+		cst := &object.Stream{Dict: object.Dictionary{}, Data: []byte(content)}
+		cst.Dict.Set("Length", object.Integer(len(content)))
+		d.Objects[cn] = &object.IndirectObject{Number: cn, Value: cst}
 		pn := num
 		num++
-		pg := &Dictionary{}
-		pg.Set("Type", Name("Page"))
-		pg.Set("Parent", IndirectRef{Number: 2})
-		pg.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-		pg.Set("Contents", IndirectRef{Number: cn})
-		pg.Set("Resources", IndirectRef{Number: 102})
-		d.Objects[pn] = &IndirectObject{Number: pn, Value: pg}
-		kids = append(kids, IndirectRef{Number: pn})
+		pg := &object.Dictionary{}
+		pg.Set("Type", object.Name("Page"))
+		pg.Set("Parent", object.IndirectRef{Number: 2})
+		pg.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+		pg.Set("Contents", object.IndirectRef{Number: cn})
+		pg.Set("Resources", object.IndirectRef{Number: 102})
+		d.Objects[pn] = &object.IndirectObject{Number: pn, Value: pg}
+		kids = append(kids, object.IndirectRef{Number: pn})
 	}
-	pagesDict := &Dictionary{}
-	pagesDict.Set("Type", Name("Pages"))
+	pagesDict := &object.Dictionary{}
+	pagesDict.Set("Type", object.Name("Pages"))
 	pagesDict.Set("Kids", kids)
-	pagesDict.Set("Count", Integer(len(kids)))
-	d.Objects[2] = &IndirectObject{Number: 2, Value: pagesDict}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	pagesDict.Set("Count", object.Integer(len(kids)))
+	d.Objects[2] = &object.IndirectObject{Number: 2, Value: pagesDict}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	var buf bytes.Buffer
 	d.Write(&buf)
@@ -95,7 +97,7 @@ func BenchmarkContentHeavyValidation(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = ValidatePDFABytes(doc, PDFA4, data)
+		_ = ValidatePDFABytes(doc, pdfa.PDFA4, data)
 	}
 }
 
@@ -131,5 +133,5 @@ func TestContentHeavyValidates(t *testing.T) {
 	if got := doc.PageCount(); got != 3 {
 		t.Errorf("PageCount = %d, want 3", got)
 	}
-	_ = ValidatePDFABytes(doc, PDFA4, data) // must not panic
+	_ = ValidatePDFABytes(doc, pdfa.PDFA4, data) // must not panic
 }

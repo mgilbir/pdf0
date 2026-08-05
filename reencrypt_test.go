@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
+	"github.com/mgilbir/pdf0/object"
 	"io"
 	"os"
 	"path/filepath"
@@ -34,13 +35,13 @@ func TestReEncryptRoundTrip(t *testing.T) {
 	if doc2.security == nil {
 		t.Fatal("re-written file is not encrypted")
 	}
-	d, _ := doc2.Objects[1].Value.(*Dictionary)
-	if s, _ := d.Get("Producer").(String); string(s.Value) != producer {
+	d, _ := doc2.Objects[1].Value.(*object.Dictionary)
+	if s, _ := d.Get("Producer").(object.String); string(s.Value) != producer {
 		t.Errorf("/Producer after round-trip = %q, want %q", s.Value, producer)
 	}
 	// The in-memory plaintext must be untouched by Write.
-	d0, _ := doc.Objects[1].Value.(*Dictionary)
-	if s, _ := d0.Get("Producer").(String); string(s.Value) != producer {
+	d0, _ := doc.Objects[1].Value.(*object.Dictionary)
+	if s, _ := d0.Get("Producer").(object.String); string(s.Value) != producer {
 		t.Errorf("Write mutated the in-memory plaintext: %q", s.Value)
 	}
 
@@ -57,13 +58,7 @@ func TestReEncryptRoundTrip(t *testing.T) {
 // decrypt on Read, re-encrypt on Write, then re-read and confirm the streams
 // still decrypt (their FlateDecode content inflates).
 func TestReEncryptCorpusRoundTrip(t *testing.T) {
-	corpus := os.Getenv("VERAPDF_CORPUS")
-	if corpus == "" {
-		corpus = "testdata/verapdf-corpus"
-	}
-	if _, err := os.Stat(corpus); err != nil {
-		t.Skip("veraPDF corpus not found; run `make corpus`")
-	}
+	corpus := corpusRoot(t)
 	cases := []struct{ name, sub string }{
 		{"RC4 V2/R3", filepath.Join("PDFA-1b", "6.1 File structure", "6.1.3 File trailer", "isartor-6-1-3-t02-fail-a")},
 		{"AES-128 V4/R4", filepath.Join("PDF_A-2b", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a")},
@@ -100,11 +95,11 @@ func TestReEncryptCorpusRoundTrip(t *testing.T) {
 			}
 			checked := 0
 			for _, iobj := range doc2.Objects {
-				s, ok := iobj.Value.(*Stream)
+				s, ok := iobj.Value.(*object.Stream)
 				if !ok {
 					continue
 				}
-				if f, _ := s.Dict.Get("Filter").(Name); f != "FlateDecode" {
+				if f, _ := s.Dict.Get("Filter").(object.Name); f != "FlateDecode" {
 					continue
 				}
 				zr, err := zlib.NewReader(bytes.NewReader(s.Data))

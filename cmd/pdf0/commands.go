@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/pdfa"
 )
 
 func cmdInfo(args []string) error {
@@ -230,16 +231,16 @@ func cmdUA(args []string) error {
 	return violationsf("%d PDF/UA violation(s)", len(v))
 }
 
-func parseLevel(s string) (pdf0.PDFALevel, bool) {
+func parseLevel(s string) (pdfa.Level, bool) {
 	switch s {
 	case "1b":
-		return pdf0.PDFA1b, true
+		return pdfa.PDFA1b, true
 	case "2b":
-		return pdf0.PDFA2b, true
+		return pdfa.PDFA2b, true
 	case "3b":
-		return pdf0.PDFA3b, true
+		return pdfa.PDFA3b, true
 	case "4":
-		return pdf0.PDFA4, true
+		return pdfa.PDFA4, true
 	}
 	return 0, false
 }

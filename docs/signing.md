@@ -12,7 +12,7 @@ expect. The code lives in `sign.go`, `signatures.go`, `pades.go`, `timestamp.go`
 
 ## Which verdict do I read?
 
-**`SignatureResult.DocumentUnmodified()`, and — for trust —
+**`sign.Result.DocumentUnmodified()`, and — for trust —
 `VerifySignaturesWithRoots`.** `r.Valid` on its own is not a safe check, and
 `VerifySignatures` performs *no* trust-chain verification whatsoever: with
 `roots == nil` no chain is ever built, so `TrustedChain` is always `false` and
@@ -38,7 +38,7 @@ for _, r := range doc.VerifySignaturesWithRoots(data, roots) {
 }
 ```
 
-Every field of `SignatureResult`, and the exact limit of what it promises:
+Every field of `sign.Result`, and the exact limit of what it promises:
 
 | Field | Promises | Does **not** promise |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ sequenceDiagram
             X-->>S: TrustedChain / ChainErr
         end
     end
-    S-->>C: []SignatureResult (ordered by signature object number)
+    S-->>C: []sign.Result (ordered by signature object number)
 ```
 
 `verifyCMS` insists on a single `SignerInfo`, on signed attributes being present,

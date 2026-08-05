@@ -5,6 +5,8 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/hex"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 	"io"
 	"time"
 )
@@ -21,7 +23,7 @@ import (
 // must be the bytes the document was read from. The document should already carry
 // a B-T signature for the result to reach B-LTA.
 func (d *Document) WriteArchivalTimestamp(w io.Writer, original []byte, certs []*x509.Certificate, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
-	doc, changed, err := d.withArchivalTimestamp(certs)
+	doc, changed, err := withArchivalTimestamp(d, certs)
 	if err != nil {
 		return err
 	}
@@ -39,15 +41,15 @@ func (d *Document) WriteArchivalTimestamp(w io.Writer, original []byte, certs []
 
 // withArchivalTimestamp returns a clone with a DSS and a document time-stamp field
 // added, and the list of changed object numbers for the incremental update.
-func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, []int, error) {
-	catalog, page, catNum, pageNum, err := d.signingTarget("timestamp")
+func withArchivalTimestamp(d *Document, certs []*x509.Certificate) (*Document, []int, error) {
+	catalog, page, catNum, pageNum, err := signingTarget(d, "timestamp")
 	if err != nil {
 		return nil, nil, err
 	}
 
 	clone := &Document{
 		Version:        d.Version,
-		Objects:        make(map[int]*IndirectObject, len(d.Objects)+8),
+		Objects:        make(map[int]*object.IndirectObject, len(d.Objects)+8),
 		Trailer:        *d.Trailer.Clone(),
 		usedXRefStream: d.usedXRefStream,
 	}
@@ -62,68 +64,68 @@ func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, 
 	alloc := func() int { next++; return next }
 
 	// DSS with the validation certificates, each stored as a stream.
-	var certRefs Array
+	var certRefs object.Array
 	for _, c := range certs {
 		n := alloc()
-		clone.Objects[n] = &IndirectObject{Number: n, Value: &Stream{Dict: Dictionary{}, Data: c.Raw}}
-		certRefs = append(certRefs, IndirectRef{Number: n})
+		clone.Objects[n] = &object.IndirectObject{Number: n, Value: &object.Stream{Dict: object.Dictionary{}, Data: c.Raw}}
+		certRefs = append(certRefs, object.IndirectRef{Number: n})
 	}
 	dssNum := alloc()
-	dss := &Dictionary{}
+	dss := &object.Dictionary{}
 	if len(certRefs) > 0 {
 		dss.Set("Certs", certRefs)
 	}
-	clone.Objects[dssNum] = &IndirectObject{Number: dssNum, Value: dss}
+	clone.Objects[dssNum] = &object.IndirectObject{Number: dssNum, Value: dss}
 
 	// Document time-stamp signature dictionary and field.
 	tsNum, fieldNum := alloc(), alloc()
-	ts := &Dictionary{}
-	ts.Set("Type", Name("DocTimeStamp"))
-	ts.Set("Filter", Name("Adobe.PPKLite"))
-	ts.Set("SubFilter", Name("ETSI.RFC3161"))
-	ts.Set("ByteRange", Array{Integer(0), Integer(9999999999), Integer(9999999999), Integer(9999999999)})
-	ts.Set("Contents", String{Value: make([]byte, sigContentsBytes), IsHex: true})
-	clone.Objects[tsNum] = &IndirectObject{Number: tsNum, Value: ts}
+	ts := &object.Dictionary{}
+	ts.Set("Type", object.Name("DocTimeStamp"))
+	ts.Set("Filter", object.Name("Adobe.PPKLite"))
+	ts.Set("SubFilter", object.Name("ETSI.RFC3161"))
+	ts.Set("ByteRange", object.Array{object.Integer(0), object.Integer(9999999999), object.Integer(9999999999), object.Integer(9999999999)})
+	ts.Set("Contents", object.String{Value: make([]byte, sigContentsBytes), IsHex: true})
+	clone.Objects[tsNum] = &object.IndirectObject{Number: tsNum, Value: ts}
 
-	field := &Dictionary{}
-	field.Set("Type", Name("Annot"))
-	field.Set("Subtype", Name("Widget"))
-	field.Set("FT", Name("Sig"))
-	field.Set("T", String{Value: []byte(d.freeFieldName(catalog, "Timestamp"))})
-	field.Set("V", IndirectRef{Number: tsNum})
-	field.Set("Rect", Array{Integer(0), Integer(0), Integer(0), Integer(0)})
-	field.Set("F", Integer(132))
-	field.Set("P", IndirectRef{Number: pageNum})
-	clone.Objects[fieldNum] = &IndirectObject{Number: fieldNum, Value: field}
+	field := &object.Dictionary{}
+	field.Set("Type", object.Name("Annot"))
+	field.Set("Subtype", object.Name("Widget"))
+	field.Set("FT", object.Name("Sig"))
+	field.Set("T", object.String{Value: []byte(freeFieldName(d, catalog, "Timestamp"))})
+	field.Set("V", object.IndirectRef{Number: tsNum})
+	field.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(0), object.Integer(0)})
+	field.Set("F", object.Integer(132))
+	field.Set("P", object.IndirectRef{Number: pageNum})
+	clone.Objects[fieldNum] = &object.IndirectObject{Number: fieldNum, Value: field}
 
 	changed := []int{dssNum, tsNum, fieldNum}
 	for _, r := range certRefs {
-		changed = append(changed, r.(IndirectRef).Number)
+		changed = append(changed, r.(object.IndirectRef).Number)
 	}
 
 	// Attach the field to the page annotations.
 	pageClone := page.Clone()
-	annots, _ := d.Resolve(pageClone.Get("Annots")).(Array)
-	pageClone.Set("Annots", append(append(Array{}, annots...), IndirectRef{Number: fieldNum}))
-	clone.Objects[pageNum] = &IndirectObject{Number: pageNum, Value: pageClone}
+	annots, _ := d.Resolve(pageClone.Get("Annots")).(object.Array)
+	pageClone.Set("Annots", append(append(object.Array{}, annots...), object.IndirectRef{Number: fieldNum}))
+	clone.Objects[pageNum] = &object.IndirectObject{Number: pageNum, Value: pageClone}
 	changed = append(changed, pageNum)
 
 	// Add /DSS to the catalog, appending the field to an existing AcroForm if any.
 	catClone := catalog.Clone()
-	catClone.Set("DSS", IndirectRef{Number: dssNum})
+	catClone.Set("DSS", object.IndirectRef{Number: dssNum})
 
 	// The interactive form, handled exactly as in withSignatureField: an existing
 	// one is extended rather than replaced, so no earlier signature's field is
 	// orphaned and no ordinary form field is dropped, and the signature bits are
 	// OR-ed into /SigFlags (Table 225) so the producer's other bits survive.
 	existingForm := d.ResolveDict(catalog.Get("AcroForm"))
-	acroForm := &Dictionary{}
+	acroForm := &object.Dictionary{}
 	if existingForm != nil {
 		acroForm = existingForm.Clone()
 	}
-	fields, _ := d.Resolve(acroForm.Get("Fields")).(Array)
-	acroForm.Set("Fields", append(append(Array{}, fields...), IndirectRef{Number: fieldNum}))
-	sigFlags, _ := d.Resolve(acroForm.Get("SigFlags")).(Integer)
+	fields, _ := d.Resolve(acroForm.Get("Fields")).(object.Array)
+	acroForm.Set("Fields", append(append(object.Array{}, fields...), object.IndirectRef{Number: fieldNum}))
+	sigFlags, _ := d.Resolve(acroForm.Get("SigFlags")).(object.Integer)
 	acroForm.Set("SigFlags", sigFlags|3)
 
 	// Update the existing form object where there is one so the incremental
@@ -136,16 +138,16 @@ func (d *Document) withArchivalTimestamp(certs []*x509.Certificate) (*Document, 
 	// that the catalog does not reference.
 	formNum := -1
 	if existingForm != nil {
-		formNum = d.dictObjNum(existingForm)
+		formNum = d.view().DictObjNum(existingForm)
 	}
 	if formNum < 0 {
 		formNum = alloc()
-		catClone.Set("AcroForm", IndirectRef{Number: formNum})
+		catClone.Set("AcroForm", object.IndirectRef{Number: formNum})
 	}
-	clone.Objects[formNum] = &IndirectObject{Number: formNum, Value: acroForm}
+	clone.Objects[formNum] = &object.IndirectObject{Number: formNum, Value: acroForm}
 	changed = append(changed, formNum)
 
-	clone.Objects[catNum] = &IndirectObject{Number: catNum, Value: catClone}
+	clone.Objects[catNum] = &object.IndirectObject{Number: catNum, Value: catClone}
 	changed = append(changed, catNum)
 
 	return clone, changed, nil
@@ -164,7 +166,7 @@ func patchDocTimestamp(data []byte, tsaCert *x509.Certificate, tsaKey crypto.Sig
 	if err != nil {
 		return nil, err
 	}
-	token, err := buildTimestampToken(signed, tsaCert, tsaKey, time.Now().UTC())
+	token, err := sign.BuildTimestampToken(signed, tsaCert, tsaKey, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

@@ -2,9 +2,10 @@ package pdf0
 
 import (
 	"bytes"
-	"compress/zlib"
 	"fmt"
-	"io"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 	"strconv"
 )
 
@@ -45,7 +46,7 @@ func ParseXRefTable(data []byte, pos int64) (*XRefTable, error) {
 
 	for {
 		// Skip whitespace
-		for pos < int64(len(data)) && isWhitespace(data[pos]) {
+		for pos < int64(len(data)) && syntax.IsWhitespace(data[pos]) {
 			pos++
 		}
 		if pos >= int64(len(data)) {
@@ -144,11 +145,11 @@ func ParseXRefTable(data []byte, pos int64) (*XRefTable, error) {
 // Resource limits default to values safe for untrusted input; pass With*
 // options to change them. (*Document) supplies its own resolved limits when it
 // calls this during Read, so a document read with options keeps them here.
-func ParseXRefStream(stream *Stream, opts ...Option) (*XRefTable, error) {
-	return parseXRefStream(canceler{}, stream, resolveLimits(opts))
+func ParseXRefStream(stream *object.Stream, opts ...Option) (*XRefTable, error) {
+	return parseXRefStream(core.Canceler{}, stream, resolveLimits(opts))
 }
 
-func parseXRefStream(cancel canceler, stream *Stream, lim limits) (*XRefTable, error) {
+func parseXRefStream(cancel core.Canceler, stream *object.Stream, lim core.Limits) (*XRefTable, error) {
 	table := &XRefTable{
 		Entries: make(map[int]XRefEntry),
 	}
@@ -158,14 +159,14 @@ func parseXRefStream(cancel canceler, stream *Stream, lim limits) (*XRefTable, e
 	if wObj == nil {
 		return nil, fmt.Errorf("xref stream missing /W entry")
 	}
-	wArr, ok := wObj.(Array)
+	wArr, ok := wObj.(object.Array)
 	if !ok || len(wArr) != 3 {
 		return nil, fmt.Errorf("xref stream /W must be array of 3 integers")
 	}
 
 	w := make([]int, 3)
 	for i, obj := range wArr {
-		iv, ok := obj.(Integer)
+		iv, ok := obj.(object.Integer)
 		if !ok {
 			return nil, fmt.Errorf("xref stream /W[%d] is not an integer", i)
 		}
@@ -183,12 +184,12 @@ func parseXRefStream(cancel canceler, stream *Stream, lim limits) (*XRefTable, e
 	var indices []int
 	indexObj := stream.Dict.Get("Index")
 	if indexObj != nil {
-		indexArr, ok := indexObj.(Array)
+		indexArr, ok := indexObj.(object.Array)
 		if !ok {
 			return nil, fmt.Errorf("xref stream /Index is not an array")
 		}
 		for _, obj := range indexArr {
-			iv, ok := obj.(Integer)
+			iv, ok := obj.(object.Integer)
 			if !ok {
 				return nil, fmt.Errorf("xref stream /Index element is not an integer")
 			}
@@ -210,7 +211,7 @@ func parseXRefStream(cancel canceler, stream *Stream, lim limits) (*XRefTable, e
 		if sizeObj == nil {
 			return nil, fmt.Errorf("xref stream missing /Size")
 		}
-		size, ok := sizeObj.(Integer)
+		size, ok := sizeObj.(object.Integer)
 		if !ok {
 			return nil, fmt.Errorf("xref stream /Size is not an integer")
 		}
@@ -218,7 +219,7 @@ func parseXRefStream(cancel canceler, stream *Stream, lim limits) (*XRefTable, e
 	}
 
 	// Decompress stream data
-	streamData, err := decodeStreamData(cancel, stream, lim)
+	streamData, err := core.DecodeStreamData(cancel, stream, lim)
 	if err != nil {
 		return nil, fmt.Errorf("decoding xref stream data: %w", err)
 	}
@@ -285,176 +286,17 @@ func readField(data []byte, width int) int {
 	return val
 }
 
-// decodeStreamData decompresses stream data based on the /Filter and
-// /DecodeParms entries.
-func decodeStreamData(cancel canceler, stream *Stream, lim limits) ([]byte, error) {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		// No filter, return raw data
-		return stream.Data, nil
-	}
-	parms := stream.Dict.Get("DecodeParms")
-
-	filterName, ok := filter.(Name)
-	if !ok {
-		// Could be an array of filters
-		filterArr, ok := filter.(Array)
-		if !ok {
-			return nil, fmt.Errorf("unsupported filter type: %T", filter)
-		}
-		// Apply filters in order
-		data := stream.Data
-		for i, f := range filterArr {
-			fname, ok := f.(Name)
-			if !ok {
-				return nil, fmt.Errorf("filter array element is not a Name")
-			}
-			var err error
-			data, err = applyFilter(cancel, fname, data, parmsDictAt(parms, i), lim)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return data, nil
-	}
-
-	return applyFilter(cancel, filterName, stream.Data, parmsDictAt(parms, 0), lim)
-}
-
-func applyFilter(cancel canceler, name Name, data []byte, parms *Dictionary, lim limits) ([]byte, error) {
-	switch name {
-	case "FlateDecode":
-		decoded, err := flateDecode(cancel, data, lim)
-		if err != nil {
-			return nil, err
-		}
-		return applyPredictor(decoded, predictorFromDict(parms))
-	case "LZWDecode":
-		early := 1
-		if parms != nil {
-			if e, ok := parms.Get("EarlyChange").(Integer); ok {
-				early = int(e)
-			}
-		}
-		decoded, err := lzwDecode(cancel, data, early, lim)
-		if err != nil {
-			return nil, err
-		}
-		return applyPredictor(decoded, predictorFromDict(parms))
-	case "ASCIIHexDecode":
-		return asciiHexDecode(data)
-	default:
-		return nil, fmt.Errorf("unsupported filter: %s", name)
-	}
-}
-
-// isSupportedFilter reports whether applyFilter can decode the named filter.
-func isSupportedFilter(name Name) bool {
-	switch name {
-	case "FlateDecode", "LZWDecode", "ASCIIHexDecode":
-		return true
-	}
-	return false
-}
-
-// streamFiltersSupported reports whether every filter on the stream is one that
-// decodeStreamData can actually apply. Callers use this to tell "we could not
-// inspect this stream" apart from "this stream is corrupt": a decode failure on
-// an unsupported-but-legal filter must not be reported as a violation.
-func streamFiltersSupported(stream *Stream) bool {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		return true
-	}
-	parms := stream.Dict.Get("DecodeParms")
-	switch f := filter.(type) {
-	case Name:
-		return isSupportedFilter(f) && predictorSupported(predictorFromDict(parmsDictAt(parms, 0)))
-	case Array:
-		for i, e := range f {
-			name, ok := e.(Name)
-			if !ok || !isSupportedFilter(name) {
-				return false
-			}
-			if !predictorSupported(predictorFromDict(parmsDictAt(parms, i))) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// predictorSupported reports whether applyPredictor can reverse the given
-// predictor parameters. TIFF horizontal differencing with sub-byte components
-// is the one legal-but-unimplemented combination.
-func predictorSupported(p predictorParms) bool {
-	switch {
-	case p.Predictor == 1:
-		return true
-	case p.Predictor == 2:
-		return p.BitsPerComponent == 8 || p.BitsPerComponent == 16
-	case p.Predictor >= 10 && p.Predictor <= 15:
-		return true
-	}
-	return false
-}
-
 // The maximum size of decompressed stream data defaults to
 // defaultMaxDecodedStreamBytes; a caller can change it with
 // WithMaxDecodedStreamBytes. This prevents decompression bombs from consuming
 // excessive memory.
-
-// flateEncode zlib-compresses data (the inverse of flateDecode) for writing a
-// FlateDecode stream such as a cross-reference stream.
-func flateEncode(data []byte) []byte {
-	var buf bytes.Buffer
-	w := zlib.NewWriter(&buf)
-	w.Write(data)
-	w.Close()
-	return buf.Bytes()
-}
-
-func flateDecode(cancel canceler, data []byte, lim limits) ([]byte, error) {
-	r, err := zlib.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("zlib: %w", err)
-	}
-	defer r.Close()
-
-	maxDecode := lim.decodedStreamBytes
-	limited := io.LimitReader(r, int64(maxDecode)+1)
-	decoded, err := io.ReadAll(cancelReader(cancel, limited))
-	if err != nil {
-		return nil, fmt.Errorf("zlib decompress: %w", err)
-	}
-	if len(decoded) > maxDecode {
-		return nil, fmt.Errorf("decompressed data exceeds maximum size (%d bytes)", maxDecode)
-	}
-	return decoded, nil
-}
-
-func asciiHexDecode(data []byte) ([]byte, error) {
-	// Filter out whitespace and stop at '>'
-	var hexDigits []byte
-	for _, b := range data {
-		if b == '>' {
-			break
-		}
-		if isWhitespace(b) {
-			continue
-		}
-		hexDigits = append(hexDigits, b)
-	}
-	return decodeHex(hexDigits)
-}
 
 // splitFields splits a string by whitespace into non-empty fields.
 func splitFields(s string) []string {
 	var fields []string
 	start := -1
 	for i := 0; i < len(s); i++ {
-		if isWhitespace(s[i]) {
+		if syntax.IsWhitespace(s[i]) {
 			if start >= 0 {
 				fields = append(fields, s[start:i])
 				start = -1
@@ -495,16 +337,16 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 		i = pos + 3
 		// The keyword must be delimited on both sides ("endobj" has 'd'
 		// before; "objx" has a regular character after).
-		if pos+3 < len(data) && !isWhitespace(data[pos+3]) && !isDelimiter(data[pos+3]) {
+		if pos+3 < len(data) && !syntax.IsWhitespace(data[pos+3]) && !syntax.IsDelimiter(data[pos+3]) {
 			continue
 		}
-		if pos == 0 || !isWhitespace(data[pos-1]) {
+		if pos == 0 || !syntax.IsWhitespace(data[pos-1]) {
 			continue
 		}
 		// Backtrack over: whitespace, generation digits, whitespace, object
 		// number digits.
 		k := pos - 1
-		for k >= 0 && isWhitespace(data[k]) {
+		for k >= 0 && syntax.IsWhitespace(data[k]) {
 			k--
 		}
 		genEnd := k + 1
@@ -515,10 +357,10 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 		if genStart == genEnd || genEnd-genStart > 5 {
 			continue
 		}
-		if k < 0 || !isWhitespace(data[k]) {
+		if k < 0 || !syntax.IsWhitespace(data[k]) {
 			continue
 		}
-		for k >= 0 && isWhitespace(data[k]) {
+		for k >= 0 && syntax.IsWhitespace(data[k]) {
 			k--
 		}
 		numEnd := k + 1
@@ -531,7 +373,7 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 		}
 		// The object number must itself be delimited (start of file,
 		// whitespace or a delimiter before it).
-		if numStart > 0 && !isWhitespace(data[numStart-1]) && !isDelimiter(data[numStart-1]) {
+		if numStart > 0 && !syntax.IsWhitespace(data[numStart-1]) && !syntax.IsDelimiter(data[numStart-1]) {
 			continue
 		}
 		num, err1 := strconv.Atoi(string(data[numStart:numEnd]))
@@ -554,8 +396,8 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 // "trailer" keyword and returns the last dictionary that parses and carries
 // /Root — the trailer of the newest update (7.5.6). It returns nil if none
 // qualifies.
-func findTrailerByScan(data []byte) *Dictionary {
-	var best *Dictionary
+func findTrailerByScan(data []byte) *object.Dictionary {
+	var best *object.Dictionary
 	for i := 0; ; {
 		j := bytes.Index(data[i:], []byte("trailer"))
 		if j < 0 {
@@ -563,10 +405,10 @@ func findTrailerByScan(data []byte) *Dictionary {
 		}
 		pos := i + j
 		i = pos + 7
-		if pos > 0 && !isWhitespace(data[pos-1]) && !isDelimiter(data[pos-1]) {
+		if pos > 0 && !syntax.IsWhitespace(data[pos-1]) && !syntax.IsDelimiter(data[pos-1]) {
 			continue
 		}
-		if pos+7 < len(data) && !isWhitespace(data[pos+7]) && !isDelimiter(data[pos+7]) {
+		if pos+7 < len(data) && !syntax.IsWhitespace(data[pos+7]) && !syntax.IsDelimiter(data[pos+7]) {
 			continue
 		}
 		lx := NewLexer(data)
@@ -575,7 +417,7 @@ func findTrailerByScan(data []byte) *Dictionary {
 		if err != nil {
 			continue
 		}
-		if d, ok := dict.(*Dictionary); ok && d.Get("Root") != nil {
+		if d, ok := dict.(*object.Dictionary); ok && d.Get("Root") != nil {
 			best = d
 		}
 	}

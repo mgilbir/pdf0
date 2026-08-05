@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func TestParseBoolean(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		b, ok := obj.(Boolean)
+		b, ok := obj.(object.Boolean)
 		if !ok {
 			t.Errorf("input %q: expected Boolean, got %T", tt.input, obj)
 			continue
@@ -47,7 +48,7 @@ func TestParseInteger(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		i, ok := obj.(Integer)
+		i, ok := obj.(object.Integer)
 		if !ok {
 			t.Errorf("input %q: expected Integer, got %T", tt.input, obj)
 			continue
@@ -76,7 +77,7 @@ func TestParseReal(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		r, ok := obj.(Real)
+		r, ok := obj.(object.Real)
 		if !ok {
 			t.Errorf("input %q: expected Real, got %T", tt.input, obj)
 			continue
@@ -93,7 +94,7 @@ func TestParseLiteralString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, ok := obj.(String)
+	s, ok := obj.(object.String)
 	if !ok {
 		t.Fatalf("expected String, got %T", obj)
 	}
@@ -111,7 +112,7 @@ func TestParseHexString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, ok := obj.(String)
+	s, ok := obj.(object.String)
 	if !ok {
 		t.Fatalf("expected String, got %T", obj)
 	}
@@ -138,7 +139,7 @@ func TestParseName(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		n, ok := obj.(Name)
+		n, ok := obj.(object.Name)
 		if !ok {
 			t.Errorf("input %q: expected Name, got %T", tt.input, obj)
 			continue
@@ -155,7 +156,7 @@ func TestParseNull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := obj.(Null); !ok {
+	if _, ok := obj.(object.Null); !ok {
 		t.Errorf("expected Null, got %T", obj)
 	}
 }
@@ -166,7 +167,7 @@ func TestParseArray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	arr, ok := obj.(Array)
+	arr, ok := obj.(object.Array)
 	if !ok {
 		t.Fatalf("expected Array, got %T", obj)
 	}
@@ -175,22 +176,22 @@ func TestParseArray(t *testing.T) {
 	}
 
 	// Check types
-	if _, ok := arr[0].(Integer); !ok {
+	if _, ok := arr[0].(object.Integer); !ok {
 		t.Errorf("arr[0]: expected Integer, got %T", arr[0])
 	}
-	if _, ok := arr[1].(Real); !ok {
+	if _, ok := arr[1].(object.Real); !ok {
 		t.Errorf("arr[1]: expected Real, got %T", arr[1])
 	}
-	if _, ok := arr[2].(String); !ok {
+	if _, ok := arr[2].(object.String); !ok {
 		t.Errorf("arr[2]: expected String, got %T", arr[2])
 	}
-	if _, ok := arr[3].(Name); !ok {
+	if _, ok := arr[3].(object.Name); !ok {
 		t.Errorf("arr[3]: expected Name, got %T", arr[3])
 	}
-	if _, ok := arr[4].(Boolean); !ok {
+	if _, ok := arr[4].(object.Boolean); !ok {
 		t.Errorf("arr[4]: expected Boolean, got %T", arr[4])
 	}
-	if _, ok := arr[5].(Null); !ok {
+	if _, ok := arr[5].(object.Null); !ok {
 		t.Errorf("arr[5]: expected Null, got %T", arr[5])
 	}
 }
@@ -201,14 +202,14 @@ func TestParseNestedArray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	arr, ok := obj.(Array)
+	arr, ok := obj.(object.Array)
 	if !ok {
 		t.Fatalf("expected Array, got %T", obj)
 	}
 	if len(arr) != 2 {
 		t.Fatalf("expected 2 elements, got %d", len(arr))
 	}
-	inner1, ok := arr[0].(Array)
+	inner1, ok := arr[0].(object.Array)
 	if !ok {
 		t.Fatalf("arr[0]: expected Array, got %T", arr[0])
 	}
@@ -224,7 +225,7 @@ func TestParseDictionary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dict, ok := obj.(*Dictionary)
+	dict, ok := obj.(*object.Dictionary)
 	if !ok {
 		t.Fatalf("expected *Dictionary, got %T", obj)
 	}
@@ -237,7 +238,7 @@ func TestParseDictionary(t *testing.T) {
 	if typeVal == nil {
 		t.Fatal("missing /Type")
 	}
-	if n, ok := typeVal.(Name); !ok || string(n) != "Catalog" {
+	if n, ok := typeVal.(object.Name); !ok || string(n) != "Catalog" {
 		t.Errorf("/Type: expected Name 'Catalog', got %v", typeVal)
 	}
 
@@ -246,7 +247,7 @@ func TestParseDictionary(t *testing.T) {
 	if pagesVal == nil {
 		t.Fatal("missing /Pages")
 	}
-	ref, ok := pagesVal.(IndirectRef)
+	ref, ok := pagesVal.(object.IndirectRef)
 	if !ok {
 		t.Fatalf("/Pages: expected IndirectRef, got %T", pagesVal)
 	}
@@ -259,7 +260,7 @@ func TestParseDictionary(t *testing.T) {
 	if countVal == nil {
 		t.Fatal("missing /Count")
 	}
-	if i, ok := countVal.(Integer); !ok || int64(i) != 5 {
+	if i, ok := countVal.(object.Integer); !ok || int64(i) != 5 {
 		t.Errorf("/Count: expected Integer 5, got %v", countVal)
 	}
 
@@ -276,7 +277,7 @@ func TestParseNestedDictionary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dict, ok := obj.(*Dictionary)
+	dict, ok := obj.(*object.Dictionary)
 	if !ok {
 		t.Fatalf("expected *Dictionary, got %T", obj)
 	}
@@ -284,12 +285,12 @@ func TestParseNestedDictionary(t *testing.T) {
 	if inner == nil {
 		t.Fatal("missing /Key1")
 	}
-	innerDict, ok := inner.(*Dictionary)
+	innerDict, ok := inner.(*object.Dictionary)
 	if !ok {
 		t.Fatalf("/Key1: expected *Dictionary, got %T", inner)
 	}
 	nestedVal := innerDict.Get("Nested")
-	if b, ok := nestedVal.(Boolean); !ok || !bool(b) {
+	if b, ok := nestedVal.(object.Boolean); !ok || !bool(b) {
 		t.Errorf("/Key1/Nested: expected true, got %v", nestedVal)
 	}
 }
@@ -300,7 +301,7 @@ func TestParseIndirectRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, ok := obj.(IndirectRef)
+	ref, ok := obj.(object.IndirectRef)
 	if !ok {
 		t.Fatalf("expected IndirectRef, got %T", obj)
 	}
@@ -319,7 +320,7 @@ func TestParseIndirectObject(t *testing.T) {
 	if obj.Number != 1 || obj.Generation != 0 {
 		t.Errorf("expected 1 0 obj, got %d %d obj", obj.Number, obj.Generation)
 	}
-	dict, ok := obj.Value.(*Dictionary)
+	dict, ok := obj.Value.(*object.Dictionary)
 	if !ok {
 		t.Fatalf("expected *Dictionary, got %T", obj.Value)
 	}
@@ -344,7 +345,7 @@ func TestParseObjectRejectsDefinition(t *testing.T) {
 	if obj.Number != 1 || obj.Generation != 0 {
 		t.Errorf("expected 1 0 obj, got %d %d obj", obj.Number, obj.Generation)
 	}
-	if i, ok := obj.Value.(Integer); !ok || int64(i) != 42 {
+	if i, ok := obj.Value.(object.Integer); !ok || int64(i) != 42 {
 		t.Errorf("expected Integer 42, got %v", obj.Value)
 	}
 }
@@ -356,7 +357,7 @@ func TestParseStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, ok := obj.Value.(*Stream)
+	stream, ok := obj.Value.(*object.Stream)
 	if !ok {
 		t.Fatalf("expected *Stream, got %T", obj.Value)
 	}
@@ -372,7 +373,7 @@ func TestParseStreamLFOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, ok := obj.Value.(*Stream)
+	stream, ok := obj.Value.(*object.Stream)
 	if !ok {
 		t.Fatalf("expected *Stream, got %T", obj.Value)
 	}
@@ -388,7 +389,7 @@ func TestParseIntegerAmbiguity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := obj.(Integer); !ok {
+	if _, ok := obj.(object.Integer); !ok {
 		t.Errorf("expected Integer, got %T", obj)
 	}
 }
@@ -400,7 +401,7 @@ func TestParseIntegerFollowedByNonRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i, ok := obj.(Integer); !ok || int64(i) != 42 {
+	if i, ok := obj.(object.Integer); !ok || int64(i) != 42 {
 		t.Errorf("expected Integer 42, got %T %v", obj, obj)
 	}
 }
@@ -412,7 +413,7 @@ func TestParseArrayWithRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	arr, ok := obj.(Array)
+	arr, ok := obj.(object.Array)
 	if !ok {
 		t.Fatalf("expected Array, got %T", obj)
 	}
@@ -420,21 +421,21 @@ func TestParseArrayWithRefs(t *testing.T) {
 		t.Fatalf("expected 3 elements, got %d", len(arr))
 	}
 
-	ref1, ok := arr[0].(IndirectRef)
+	ref1, ok := arr[0].(object.IndirectRef)
 	if !ok {
 		t.Errorf("arr[0]: expected IndirectRef, got %T", arr[0])
 	} else if ref1.Number != 1 {
 		t.Errorf("arr[0]: expected ref 1, got %d", ref1.Number)
 	}
 
-	ref2, ok := arr[1].(IndirectRef)
+	ref2, ok := arr[1].(object.IndirectRef)
 	if !ok {
 		t.Errorf("arr[1]: expected IndirectRef, got %T", arr[1])
 	} else if ref2.Number != 2 {
 		t.Errorf("arr[1]: expected ref 2, got %d", ref2.Number)
 	}
 
-	if i, ok := arr[2].(Integer); !ok || int64(i) != 42 {
+	if i, ok := arr[2].(object.Integer); !ok || int64(i) != 42 {
 		t.Errorf("arr[2]: expected Integer 42, got %T %v", arr[2], arr[2])
 	}
 }
@@ -472,7 +473,7 @@ func TestParseEmptyDict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dict, ok := obj.(*Dictionary)
+	dict, ok := obj.(*object.Dictionary)
 	if !ok {
 		t.Fatalf("expected *Dictionary, got %T", obj)
 	}
@@ -487,7 +488,7 @@ func TestParseEmptyArray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	arr, ok := obj.(Array)
+	arr, ok := obj.(object.Array)
 	if !ok {
 		t.Fatalf("expected Array, got %T", obj)
 	}

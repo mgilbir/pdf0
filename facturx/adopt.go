@@ -1,0 +1,95 @@
+package facturx
+
+import (
+	"strings"
+
+	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/pdfa"
+)
+
+// This file gives every validator the two properties the PDF/A validator has
+// had since it was written (audit C27): a panic boundary around each check, so
+// a bug or an adversarial structure in one rule cannot crash the caller, and a
+// deterministic output order, so reports are stable and diffable.
+//
+// The PDF/A twins are runCheck / runByteCheck in pdfa.go; the helpers here are
+// the same idea adapted to the other validators' finding types and to the
+// `add(rule, msg, obj)` reporting style they share.
+
+// runUACheck is finding.Guarded for the PDF/UA checks, which return their
+// findings rather than reporting them through a callback. A panicking check
+// loses its own findings but not those of its siblings.
+
+// adoptPDFAFindings replays the findings of a composed PDF/A validation through
+// an add callback, namespacing each rule under prefix. ValidateFacturX and
+// ValidateOrderX use it to fold their PDF/A-3 base into a container report.
+//
+// The two reserved checker identifiers keep their bare names. "internal" and
+// "limit" say that *pdf0* could not finish rather than that the document is
+// wrong (see IsCheckerFinding), and a wrapper that renamed them to
+// "pdfa-3/limit" would leave a caller of the composed validator with no
+// documented spelling for that distinction. The prefix exists to keep two rule
+// *namespaces* from colliding, and these two identifiers belong to neither.
+//
+// The A-vs-B conformance-letter finding is dropped: pdf0 validates at level B,
+// and PDF/A-3 also permits level A, which only adds tagging.
+func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs []pdfa.Violation) {
+	for _, e := range errs {
+		switch {
+		case e.Rule == finding.InternalRule || e.Rule == finding.LimitRule:
+			add(e.Rule, e.Message, e.Object)
+		case e.Rule == "6.6.4" && strings.Contains(e.Message, "pdfaid:conformance"):
+			// Not a container finding.
+		default:
+			add(prefix+e.Rule, e.Message, e.Object)
+		}
+	}
+}
+
+// adoptInvoiceFindings replays the findings of a formalis Report through an
+// adopt callback, so ValidateFacturX and ValidateOrderX can carry them in their
+// own finding type alongside the container findings they made themselves.
+//
+// Unlike the PDF/A-3 findings adoptPDFAFindings folds in, these keep their rule
+// identifiers verbatim, with no namespace prefix. There is nothing to
+// disambiguate: formalis mints its identifiers in its own space (EN 16931's
+// BR-*, Order-X's ORDER-*, and the reserved "limit", "profile" and "root"),
+// pdf0's container identifiers are "structure", "attachment", "metadata" and the
+// unreadable-XML rules, and the two sets are disjoint. What a prefix would have
+// stood in for — which authority wrote the rule — is carried as data instead, in
+// Violation.Source, where a caller can key on it rather than parse it out
+// of a string.
+//
+// Two consequences of adopting verbatim are the point rather than a side effect:
+//
+//   - formalis.RuleLimit is "limit", the identifier pdf0 reserves for the same
+//     event, so a cancelled or budget-stopped rule engine reaches the caller as a
+//     finding IsCheckerFinding recognises, with no special case here. That is the
+//     property adoptPDFAFindings has to preserve by hand for the PDF/A-3 half,
+//     and the reason both halves must spell it the same way.
+//   - formalis.RuleProfile ("profile") is deliberately not folded into that set,
+//     although formalis.IsCheckerViolation covers it. It reports that the profile
+//     pdf0 passed is not one formalis implements, and pdf0 only ever passes one
+//     it read out of the container's XMP — so the finding arises exactly when
+//     fx:ConformanceLevel is missing or unrecognised, which is a defect in the
+//     document that pdf0 has already reported as a "metadata" finding of its own.
+//     It is not a report that pdf0 stopped early, and classifying it as one would
+//     hide a real container defect from a caller counting non-conformances.
+//
+// The advisory flag is what keeps the two halves of the report from being
+// conflated. The rule engine reports findings at two severities its authorities
+// published — CEN flags 1,168 of the two EN 16931 syntax bindings' assertions
+// warning rather than fatal, and a conforming Factur-X EXTENDED invoice trips
+// dozens of them by design, since they hold a document down to the EN 16931 core
+// subset of CII. Those are not non-conformances and must not land in Violations:
+// pdf0's Violation interface carries no severity, so a warning folded into that
+// slice would be indistinguishable from a PDF/A-3 failure the moment a caller
+// appended it to a mixed report — the reclassification the severity exists to
+// prevent, one level up. They are kept, in a field of their own, because
+// discarding them would throw away the only reading anyone has of those rules.
+func adoptInvoiceFindings(adopt func(v formalis.Violation, advisory bool), rep formalis.Report) {
+	for _, v := range rep.Violations {
+		adopt(v, v.Severity == formalis.SeverityWarning)
+	}
+}

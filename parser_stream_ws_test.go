@@ -3,6 +3,8 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -50,7 +52,7 @@ func TestParseStreamKeywordTrailingWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	st, ok := doc.Objects[4].Value.(*Stream)
+	st, ok := doc.Objects[4].Value.(*object.Stream)
 	if !ok {
 		t.Fatalf("object 4 is %T, want *Stream", doc.Objects[4].Value)
 	}
@@ -59,7 +61,7 @@ func TestParseStreamKeywordTrailingWhitespace(t *testing.T) {
 		t.Fatalf("stream data length %d, want %d; first bytes %x (whitespace absorbed?)", len(st.Data), len(flate), st.Data[:min(6, len(st.Data))])
 	}
 	// It must decode through its filter.
-	dec, err := decodeStreamData(canceler{}, st, defaultLimits())
+	dec, err := core.DecodeStreamData(core.Canceler{}, st, core.DefaultLimits())
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -67,7 +69,7 @@ func TestParseStreamKeywordTrailingWhitespace(t *testing.T) {
 		t.Fatalf("decoded %q, want %q", dec, payload)
 	}
 	// /Length must be preserved and the round-trip stable.
-	if got, _ := st.Dict.Get("Length").(Integer); int(got) != len(flate) {
+	if got, _ := st.Dict.Get("Length").(object.Integer); int(got) != len(flate) {
 		t.Errorf("/Length = %v, want %d", got, len(flate))
 	}
 	var out bytes.Buffer

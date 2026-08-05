@@ -6,6 +6,8 @@ import (
 	"crypto/rc4"
 	"encoding/hex"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -22,8 +24,8 @@ func buildAliasedEncryptDictPDF(t *testing.T, userPw, ownerPw, producer string) 
 	const keyLen = 16
 	id := []byte("0123456789ABCDEF")
 	p := int32(-3904)
-	userPad := padPassword(userPw)
-	ownerPad := padPassword(ownerPw)
+	userPad := crypt.PadPassword(userPw)
+	ownerPad := crypt.PadPassword(ownerPw)
 
 	ok := md5.Sum(ownerPad)
 	okey := ok[:]
@@ -33,17 +35,17 @@ func buildAliasedEncryptDictPDF(t *testing.T, userPw, ownerPw, producer string) 
 	}
 	oEntry := rc4Cascade(okey[:keyLen], userPad, seq(0, 19))
 
-	h := &stdSecurityHandler{r: 3, keyLen: keyLen, encryptMetadata: true}
-	h.deriveKeyR234(userPad, oEntry, p, id)
+	h := &crypt.Handler{R: 3, KeyLen: keyLen, EncryptMetadata: true}
+	h.DeriveKeyR234(userPad, oEntry, p, id)
 
 	m := md5.New()
-	m.Write(passwordPad)
+	m.Write(crypt.PasswordPad)
 	m.Write(id)
-	uVal := rc4Cascade(h.fileKey, m.Sum(nil), seq(0, 19))
+	uVal := rc4Cascade(h.FileKey, m.Sum(nil), seq(0, 19))
 	uEntry := make([]byte, 32)
 	copy(uEntry, uVal)
 
-	c, _ := rc4.NewCipher(h.objectKey(1, 0, false))
+	c, _ := rc4.NewCipher(h.ObjectKey(1, 0, false))
 	encProducer := make([]byte, len(producer))
 	c.XORKeyStream(encProducer, []byte(producer))
 
@@ -93,13 +95,13 @@ func TestReadDuplicateOffsetEncryptDict(t *testing.T) {
 	// Objects 4 and 5 must share the parsed /Encrypt dictionary (the duplicate
 	// offset), and that dictionary's key material must be intact — a decrypt
 	// pass must not have mutated it via the alias.
-	d4, _ := doc.Objects[4].Value.(*Dictionary)
-	d5, _ := doc.Objects[5].Value.(*Dictionary)
+	d4, _ := doc.Objects[4].Value.(*object.Dictionary)
+	d5, _ := doc.Objects[5].Value.(*object.Dictionary)
 	if d4 == nil || d5 == nil || d4 != d5 {
 		t.Fatalf("expected objects 4 and 5 to share one /Encrypt dictionary (d4=%p d5=%p)", d4, d5)
 	}
-	o, _ := d4.Get("O").(String)
-	u, _ := d4.Get("U").(String)
+	o, _ := d4.Get("O").(object.String)
+	u, _ := d4.Get("U").(object.String)
 	if len(o.Value) != 32 || len(u.Value) != 32 {
 		t.Fatalf("/Encrypt /O and /U corrupted by alias decryption: len(O)=%d len(U)=%d, want 32,32", len(o.Value), len(u.Value))
 	}
@@ -119,8 +121,8 @@ func TestReadDuplicateOffsetEncryptDict(t *testing.T) {
 	if doc2.security == nil {
 		t.Fatal("rewritten file is not decryptable (alias corrupted the key material)")
 	}
-	cat, _ := doc2.Objects[1].Value.(*Dictionary)
-	if s, _ := cat.Get("Producer").(String); string(s.Value) != producer {
+	cat, _ := doc2.Objects[1].Value.(*object.Dictionary)
+	if s, _ := cat.Get("Producer").(object.String); string(s.Value) != producer {
 		t.Errorf("/Producer after round-trip = %q, want %q", s.Value, producer)
 	}
 }

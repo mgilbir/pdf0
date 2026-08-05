@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
 )
@@ -65,11 +66,11 @@ func TestReadMinimalPDF(t *testing.T) {
 	if catalog == nil {
 		t.Fatal("missing object 1 (catalog)")
 	}
-	dict, ok := catalog.Value.(*Dictionary)
+	dict, ok := catalog.Value.(*object.Dictionary)
 	if !ok {
 		t.Fatalf("object 1: expected *Dictionary, got %T", catalog.Value)
 	}
-	if n := dict.Get("Type"); n == nil || n.(Name) != "Catalog" {
+	if n := dict.Get("Type"); n == nil || n.(object.Name) != "Catalog" {
 		t.Errorf("object 1 /Type: expected /Catalog, got %v", n)
 	}
 
@@ -90,7 +91,7 @@ func TestReadMinimalPDF(t *testing.T) {
 	if root == nil {
 		t.Fatal("trailer missing /Root")
 	}
-	ref, ok := root.(IndirectRef)
+	ref, ok := root.(object.IndirectRef)
 	if !ok {
 		t.Fatalf("trailer /Root: expected IndirectRef, got %T", root)
 	}
@@ -103,32 +104,32 @@ func TestWriteMinimalPDF(t *testing.T) {
 	// Build a document manually
 	doc := &Document{
 		Version: "2.0",
-		Objects: map[int]*IndirectObject{
+		Objects: map[int]*object.IndirectObject{
 			1: {
 				Number: 1, Generation: 0,
-				Value: &Dictionary{
-					Keys:   []Name{"Type", "Pages"},
-					Values: []Object{Name("Catalog"), IndirectRef{Number: 2}},
+				Value: &object.Dictionary{
+					Keys:   []object.Name{"Type", "Pages"},
+					Values: []object.Object{object.Name("Catalog"), object.IndirectRef{Number: 2}},
 				},
 			},
 			2: {
 				Number: 2, Generation: 0,
-				Value: &Dictionary{
-					Keys:   []Name{"Type", "Kids", "Count"},
-					Values: []Object{Name("Pages"), Array{IndirectRef{Number: 3}}, Integer(1)},
+				Value: &object.Dictionary{
+					Keys:   []object.Name{"Type", "Kids", "Count"},
+					Values: []object.Object{object.Name("Pages"), object.Array{object.IndirectRef{Number: 3}}, object.Integer(1)},
 				},
 			},
 			3: {
 				Number: 3, Generation: 0,
-				Value: &Dictionary{
-					Keys:   []Name{"Type", "Parent", "MediaBox"},
-					Values: []Object{Name("Page"), IndirectRef{Number: 2}, Array{Integer(0), Integer(0), Integer(612), Integer(792)}},
+				Value: &object.Dictionary{
+					Keys:   []object.Name{"Type", "Parent", "MediaBox"},
+					Values: []object.Object{object.Name("Page"), object.IndirectRef{Number: 2}, object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)}},
 				},
 			},
 		},
-		Trailer: Dictionary{
-			Keys:   []Name{"Root"},
-			Values: []Object{IndirectRef{Number: 1}},
+		Trailer: object.Dictionary{
+			Keys:   []object.Name{"Root"},
+			Values: []object.Object{object.IndirectRef{Number: 1}},
 		},
 	}
 
@@ -233,15 +234,15 @@ func TestRoundTripObjectStreamPDF(t *testing.T) {
 	}
 
 	// The trailer must not carry xref-stream plumbing.
-	for _, key := range []Name{"Type", "W", "Index", "Filter", "Length"} {
+	for _, key := range []object.Name{"Type", "W", "Index", "Filter", "Length"} {
 		if doc1.Trailer.Get(key) != nil {
 			t.Errorf("trailer still contains xref-stream key /%s", key)
 		}
 	}
 	// The structural objects must be gone; the content objects present.
 	for num, iobj := range doc1.Objects {
-		if stream, ok := iobj.Value.(*Stream); ok {
-			if typ, ok := stream.Dict.Get("Type").(Name); ok && (typ == "XRef" || typ == "ObjStm") {
+		if stream, ok := iobj.Value.(*object.Stream); ok {
+			if typ, ok := stream.Dict.Get("Type").(object.Name); ok && (typ == "XRef" || typ == "ObjStm") {
 				t.Errorf("object %d is a stale /%s stream", num, typ)
 			}
 		}
@@ -280,13 +281,13 @@ func TestRoundTripObjectStreamPDF(t *testing.T) {
 func TestWriteXRefSubsections(t *testing.T) {
 	doc := &Document{
 		Version: "2.0",
-		Objects: map[int]*IndirectObject{
-			1:   {Number: 1, Value: &Dictionary{Keys: []Name{"Type"}, Values: []Object{Name("Catalog")}}},
-			2:   {Number: 2, Value: Integer(1)},
-			100: {Number: 100, Value: Integer(2)},
-			101: {Number: 101, Value: Integer(3)},
+		Objects: map[int]*object.IndirectObject{
+			1:   {Number: 1, Value: &object.Dictionary{Keys: []object.Name{"Type"}, Values: []object.Object{object.Name("Catalog")}}},
+			2:   {Number: 2, Value: object.Integer(1)},
+			100: {Number: 100, Value: object.Integer(2)},
+			101: {Number: 101, Value: object.Integer(3)},
 		},
-		Trailer: Dictionary{Keys: []Name{"Root"}, Values: []Object{IndirectRef{Number: 1}}},
+		Trailer: object.Dictionary{Keys: []object.Name{"Root"}, Values: []object.Object{object.IndirectRef{Number: 1}}},
 	}
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {

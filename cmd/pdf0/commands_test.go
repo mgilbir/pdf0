@@ -8,11 +8,13 @@ import (
 	"testing"
 
 	"github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 )
 
 // writeTestPDF writes a minimal PDF/A document at the given level to dir and
 // returns its path.
-func writeTestPDF(t *testing.T, dir string, level pdf0.PDFALevel, mutate func(*pdf0.Document)) string {
+func writeTestPDF(t *testing.T, dir string, level pdfa.Level, mutate func(*pdf0.Document)) string {
 	t.Helper()
 	doc := pdf0.NewPDFADocument(level)
 	if mutate != nil {
@@ -93,10 +95,10 @@ func TestCommandUsageErrors(t *testing.T) {
 // /Type /Page object outside the tree does not inflate the count (C47).
 func TestCmdInfoPageCount(t *testing.T) {
 	dir := t.TempDir()
-	path := writeTestPDF(t, dir, pdf0.PDFA2b, func(doc *pdf0.Document) {
-		orphan := &pdf0.Dictionary{}
-		orphan.Set("Type", pdf0.Name("Page"))
-		doc.Objects[50] = &pdf0.IndirectObject{Number: 50, Value: orphan}
+	path := writeTestPDF(t, dir, pdfa.PDFA2b, func(doc *pdf0.Document) {
+		orphan := &object.Dictionary{}
+		orphan.Set("Type", object.Name("Page"))
+		doc.Objects[50] = &object.IndirectObject{Number: 50, Value: orphan}
 	})
 	out, err := captureStdout(t, func() error { return cmdInfo([]string{path}) })
 	if err != nil {
@@ -111,7 +113,7 @@ func TestCmdInfoPageCount(t *testing.T) {
 // reports violations with exit code 1.
 func TestCmdValidate(t *testing.T) {
 	dir := t.TempDir()
-	path := writeTestPDF(t, dir, pdf0.PDFA2b, nil)
+	path := writeTestPDF(t, dir, pdfa.PDFA2b, nil)
 	if _, err := captureStdout(t, func() error { return cmdValidate([]string{path}) }); err != nil {
 		t.Errorf("conforming 2b file: %v", err)
 	}
@@ -130,9 +132,9 @@ func TestCmdRepair(t *testing.T) {
 
 	// A repairable defect (catalog /AA) and an unfixable target (a 2b file
 	// repaired toward 1b keeps its pdfaid:part 2 metadata).
-	path := writeTestPDF(t, dir, pdf0.PDFA2b, func(doc *pdf0.Document) {
+	path := writeTestPDF(t, dir, pdfa.PDFA2b, func(doc *pdf0.Document) {
 		cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-		cat.Set("AA", &pdf0.Dictionary{})
+		cat.Set("AA", &object.Dictionary{})
 	})
 	got, err := captureStdout(t, func() error { return cmdRepair([]string{"-level", "1b", path, out}) })
 	if !strings.Contains(got, "fixed: removed catalog additional-actions (/AA)") {
@@ -150,7 +152,7 @@ func TestCmdRepair(t *testing.T) {
 
 	// Repairing a conforming file at its own level: nothing fixed, nothing
 	// remains, exit 0 — but still a summary.
-	clean := writeTestPDF(t, t.TempDir(), pdf0.PDFA2b, nil)
+	clean := writeTestPDF(t, t.TempDir(), pdfa.PDFA2b, nil)
 	got, err = captureStdout(t, func() error { return cmdRepair([]string{"-level", "2b", clean, out}) })
 	if err != nil {
 		t.Errorf("clean repair: %v", err)
@@ -164,7 +166,7 @@ func TestCmdRepair(t *testing.T) {
 // command layer.
 func TestCmdEncryptDecryptRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	in := writeTestPDF(t, dir, pdf0.PDFA2b, nil)
+	in := writeTestPDF(t, dir, pdfa.PDFA2b, nil)
 	enc := filepath.Join(dir, "enc.pdf")
 	dec := filepath.Join(dir, "dec.pdf")
 

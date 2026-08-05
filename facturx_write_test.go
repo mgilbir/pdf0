@@ -3,6 +3,9 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/facturx"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/pdfa"
 	"strings"
 	"testing"
 )
@@ -76,7 +79,7 @@ func TestEmbedFacturXRoundTrip(t *testing.T) {
 		formalis.ProfileMinimum, formalis.ProfileBasicWL, formalis.ProfileBasic, formalis.ProfileEN16931, formalis.ProfileExtended,
 	} {
 		t.Run(string(profile), func(t *testing.T) {
-			doc := NewPDFADocument(PDFA3b)
+			doc := NewPDFADocument(pdfa.PDFA3b)
 			if err := EmbedFacturX(doc, []byte(ciiForProfile(profile)), profile, "Invoice INV-1"); err != nil {
 				t.Fatalf("EmbedFacturX: %v", err)
 			}
@@ -107,7 +110,7 @@ func TestEmbedFacturXRoundTrip(t *testing.T) {
 }
 
 func TestEmbedFacturXUnknownProfile(t *testing.T) {
-	doc := NewPDFADocument(PDFA3b)
+	doc := NewPDFADocument(pdfa.PDFA3b)
 	if err := EmbedFacturX(doc, []byte(validCII), formalis.Profile("BOGUS"), ""); err == nil {
 		t.Error("expected an error for an unknown profile")
 	}
@@ -116,7 +119,7 @@ func TestEmbedFacturXUnknownProfile(t *testing.T) {
 // TestFacturXXMPPacket checks the generated metadata declares the fx extension
 // schema and the Factur-X properties for the profile.
 func TestFacturXXMPPacket(t *testing.T) {
-	xmp := string(facturxXMPPacket(formalis.ProfileBasic, "INVOICE", "Some & Title"))
+	xmp := string(facturx.XMPPacket(formalis.ProfileBasic, "INVOICE", "Some & Title"))
 	for _, want := range []string{
 		"<pdfaid:part>3</pdfaid:part>",
 		"urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#",
@@ -133,11 +136,11 @@ func TestFacturXXMPPacket(t *testing.T) {
 }
 
 func TestEncodeUTF16BE(t *testing.T) {
-	got := encodeUTF16BE("factur-x.xml")
+	got := facturx.EncodeUTF16BE("factur-x.xml")
 	if got[0] != 0xFE || got[1] != 0xFF {
 		t.Fatal("missing UTF-16BE byte-order mark")
 	}
-	if decodePDFTextString(got) != "factur-x.xml" {
-		t.Errorf("round trip failed: %q", decodePDFTextString(got))
+	if core.DecodePDFTextString(got) != "factur-x.xml" {
+		t.Errorf("round trip failed: %q", core.DecodePDFTextString(got))
 	}
 }

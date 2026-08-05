@@ -3,6 +3,8 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/facturx"
+	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,95 +12,11 @@ import (
 	"testing"
 )
 
-// utf16be encodes s as a PDF text string: a UTF-16BE byte-order mark followed by
-// big-endian code units, as Unicode file-spec /UF entries are stored.
-func utf16be(s string) []byte {
-	out := []byte{0xFE, 0xFF}
-	for _, r := range s {
-		out = append(out, byte(r>>8), byte(r))
-	}
-	return out
-}
-
-// afDoc builds a minimal document whose catalog carries one associated-file
-// specification for an embedded XML named via /UF (UTF-16) with the given
-// relationship and embedded-stream subtype.
-func afDoc(ufName string, rel Name, subtype Name) *Document {
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "1.6"}
-	stream := &Stream{Dict: Dictionary{}, Data: []byte("<xml/>")}
-	stream.Dict.Set("Subtype", subtype)
-	d.Objects[10] = &IndirectObject{Number: 10, Value: stream}
-	ef := &Dictionary{}
-	ef.Set("F", IndirectRef{Number: 10})
-	fs := &Dictionary{}
-	fs.Set("Type", Name("Filespec"))
-	fs.Set("F", String{Value: []byte(ufName)})
-	fs.Set("UF", String{Value: utf16be(ufName)})
-	fs.Set("AFRelationship", rel)
-	fs.Set("EF", ef)
-	d.Objects[9] = &IndirectObject{Number: 9, Value: fs}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("AF", Array{IndirectRef{Number: 9}})
-	d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
-	return d
-}
-
-func TestFacturXAttachmentDetection(t *testing.T) {
-	cases := []struct {
-		name     string
-		wantFind bool
-	}{
-		{"factur-x.xml", true},
-		{"zugferd-invoice.xml", true},
-		{"FACTUR-X.XML", true}, // case-insensitive
-		{"invoice.xml", false},
-		{"attachment.pdf", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := afDoc(tc.name, "Data", "text/xml")
-			cat := d.ResolveDict(d.Trailer.Get("Root"))
-			fs, got, _ := findFacturXAttachment(d, cat)
-			if tc.wantFind {
-				if fs == nil {
-					t.Fatalf("expected to find attachment %q, found none", tc.name)
-				}
-				if !strings.EqualFold(got, tc.name) {
-					t.Errorf("decoded name = %q, want %q", got, tc.name)
-				}
-			} else if fs != nil {
-				t.Errorf("did not expect to match %q, but found %q", tc.name, got)
-			}
-		})
-	}
-}
-
-func TestFacturXProfilesComplete(t *testing.T) {
-	// Both the spaced and unspaced spellings map to the same profile.
-	for _, p := range []string{"MINIMUM", "BASIC WL", "BASICWL", "BASIC", "EN 16931", "EN16931", "EXTENDED", "en 16931"} {
-		if _, ok := formalis.ProfileFor(p); !ok {
-			t.Errorf("ConformanceLevel %q not recognised", p)
-		}
-	}
-	if _, ok := formalis.ProfileFor("NONSENSE"); ok {
-		t.Error("NONSENSE must not be a profile")
-	}
-	if facturxIsXMLSubtype("application/pdf") {
-		t.Error("application/pdf must not count as an XML subtype")
-	}
-	if !facturxIsXMLSubtype("text/xml") || !facturxIsXMLSubtype("application/xml") {
-		t.Error("text/xml and application/xml must count as XML subtypes")
-	}
-}
-
 // containerFindings returns the findings pdf0 itself made — its container rules
 // and the PDF/A-3 base — as opposed to those adopted from the invoice rule
 // engine, which carry that engine's Source.
-func containerFindings(res FacturXResult) []FacturXViolation {
-	var out []FacturXViolation
+func containerFindings(res facturx.Result) []facturx.Violation {
+	var out []facturx.Violation
 	for _, v := range res.Violations {
 		if v.Source == formalis.SourceNone {
 			out = append(out, v)
@@ -284,7 +202,7 @@ func TestValidateFacturXMutations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hasViolation := func(res FacturXResult, rule, substr string) bool {
+	hasViolation := func(res facturx.Result, rule, substr string) bool {
 		for _, v := range res.Violations {
 			if v.Rule == rule && strings.Contains(v.Message, substr) {
 				return true
@@ -303,8 +221,8 @@ func TestValidateFacturXMutations(t *testing.T) {
 		}, "attachment", "no embedded invoice XML"},
 		{"bad AFRelationship", func(doc *Document) {
 			cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-			fs, _, _ := findFacturXAttachment(doc, cat)
-			fs.Set("AFRelationship", Name("Unspecified"))
+			fs, _, _ := facturx.FindAttachment(doc.view(), cat)
+			fs.Set("AFRelationship", object.Name("Unspecified"))
 		}, "attachment", "AFRelationship"},
 	}
 	for _, tc := range cases {

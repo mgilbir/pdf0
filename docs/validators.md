@@ -33,7 +33,7 @@ Three further properties hold across the family:
 
 ```go
 var real []pdf0.Violation
-for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA2b) {
+for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA2b) {
 	if !pdf0.IsCheckerFinding(e) {
 		real = append(real, e)
 	}
@@ -44,16 +44,16 @@ for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA2b) {
 
 | Standard | Entry point | Returns | Findings satisfy `Violation` | `…Context` variant |
 |----------|-------------|---------|------------------------------|--------------------|
-| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]ValidationError` | yes | yes (both) |
-| PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]UAViolation` | yes | yes |
-| PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]UAViolation` | yes | yes |
-| PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]PDFXViolation` | yes | yes |
-| PDF/VT-1 (ISO 16612-2) | `ValidatePDFVT(doc)` | `[]PDFVTViolation` | yes | yes |
-| PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]PDFVTViolation` | yes | yes |
-| PDF/R | `ValidatePDFR(doc)` | `[]PDFRViolation` | yes | yes |
-| DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]DPartViolation` | yes | yes |
-| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `FacturXResult` | yes (`FacturXViolation`) | yes |
-| Order-X container | `ValidateOrderX(doc, raw)` | `OrderXResult` | yes (`OrderXViolation`) | yes |
+| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]pdfa.Violation` | yes | yes (both) |
+| PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]pdfua.Violation` | yes | yes |
+| PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]pdfua.Violation` | yes | yes |
+| PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]pdfx.Violation` | yes | yes |
+| PDF/VT-1 (ISO 16612-2) | `ValidatePDFVT(doc)` | `[]pdfvt.Violation` | yes | yes |
+| PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]pdfvt.Violation` | yes | yes |
+| PDF/R | `ValidatePDFR(doc)` | `[]pdfr.Violation` | yes | yes |
+| DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]dpart.Violation` | yes | yes |
+| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `facturx.Result` | yes (`facturx.Violation`) | yes |
+| Order-X container | `ValidateOrderX(doc, raw)` | `facturx.OrderXResult` | yes (`facturx.OrderXViolation`) | yes |
 
 The last two columns move together, and that is not a coincidence: cancellation
 is reported *as a finding* under the reserved rule `limit`, so an entry point
@@ -73,17 +73,17 @@ flowchart TD
     Doc[("*Document")]
 
     subgraph pdfstd["PDF-standard validators — free functions, findings satisfy pdf0.Violation"]
-        A["ValidatePDFA / ValidatePDFABytes<br/>→ []ValidationError"]
-        UA["ValidatePDFUA / ValidatePDFUA2<br/>→ []UAViolation"]
-        X["ValidatePDFX<br/>→ []PDFXViolation"]
-        VT["ValidatePDFVT / ValidatePDFVT2<br/>→ []PDFVTViolation"]
-        R["ValidatePDFR<br/>→ []PDFRViolation"]
-        DP["ValidateDParts<br/>→ []DPartViolation"]
+        A["ValidatePDFA / ValidatePDFABytes<br/>→ []pdfa.Violation"]
+        UA["ValidatePDFUA / ValidatePDFUA2<br/>→ []pdfua.Violation"]
+        X["ValidatePDFX<br/>→ []pdfx.Violation"]
+        VT["ValidatePDFVT / ValidatePDFVT2<br/>→ []pdfvt.Violation"]
+        R["ValidatePDFR<br/>→ []pdfr.Violation"]
+        DP["ValidateDParts<br/>→ []dpart.Violation"]
     end
 
     subgraph invoice["Invoice containers — result structs, findings satisfy pdf0.Violation"]
-        FX["ValidateFacturX(doc, raw)<br/>→ FacturXResult{Violations, InvoiceWarnings,<br/>Profile, CIUS, XMLName, XML,<br/>InvoiceNotEvaluated, InvoiceComplete}"]
-        OX["ValidateOrderX(doc, raw)<br/>→ OrderXResult{Violations, OrderWarnings,<br/>Profile, XMLName, XML,<br/>OrderNotEvaluated, OrderComplete}"]
+        FX["ValidateFacturX(doc, raw)<br/>→ facturx.Result{Violations, InvoiceWarnings,<br/>Profile, CIUS, XMLName, XML,<br/>InvoiceNotEvaluated, InvoiceComplete}"]
+        OX["ValidateOrderX(doc, raw)<br/>→ facturx.OrderXResult{Violations, OrderWarnings,<br/>Profile, XMLName, XML,<br/>OrderNotEvaluated, OrderComplete}"]
     end
 
     Doc --> pdfstd
@@ -101,7 +101,7 @@ multi-standard report is a plain append:
 
 ```go
 var all []pdf0.Violation
-for _, e := range pdf0.ValidatePDFA(doc, pdf0.PDFA2b) {
+for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA2b) {
 	all = append(all, e)
 }
 for _, e := range pdf0.ValidatePDFUA(doc) {
@@ -227,13 +227,13 @@ They are grouped across files by concern:
 | `final_rules.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects |
 | `content_operators.go` | Content-stream operator whitelist, named resources |
 | `filestructure.go` | Byte-level structure rules over the raw file (`Document.Offsets`) |
-| `fonts.go` / `fontprog.go` / `font_encodings.go` / `cff_strings.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
+| `fonts.go` / forme `font/fontprog.go`, `font/font_encodings.go`, `font/cff_strings.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
 | `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
-| `function.go` / `function_ps.go` | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
+| `internal/core` (PDF functions) | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
 
-The other standards each own their file(s): `pdfua.go`, `pdfua_content.go`,
-`pdfua_struct.go`, `pdfua_tablegrid.go`, `pdfua2.go`, `pdfx.go`, `pdfx_color.go`,
-`pdfvt.go`, `pdfr.go`, `dpart.go`, `facturx.go`, `order_x.go`. `violations.go`
+The other standards each own their file(s): `pdfua/pdfua.go`, `pdfua/pdfua_content.go`,
+`pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go`, `pdfua/pdfua2.go`, `pdfx/pdfx.go`, `pdfx/pdfx_color.go`,
+`pdfvt/pdfvt.go`, `pdfr/pdfr.go`, `dpart/dpart.go`, `facturx.go`, `order_x.go`. `violations.go`
 holds the shared `Violation` interface and is the canonical statement of the
 contract above.
 

@@ -46,7 +46,7 @@ func TestValidateFacturXInvoiceCorpus(t *testing.T) {
 		if len(res.XML) == 0 {
 			continue
 		}
-		rep, err := res.validateInvoiceXML(context.Background())
+		rep, err := res.ValidateInvoiceXML(context.Background())
 		if err != nil {
 			t.Errorf("%s [%s]: invoice XML could not be read: %v", name, res.Profile, err)
 			continue

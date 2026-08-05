@@ -4,6 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/pdfx"
 	"io"
 	"os"
 	"runtime"
@@ -44,42 +49,42 @@ func heavyContent(n int) []byte {
 // bytesPerPage of real content tokens, stored uncompressed so the test measures
 // scanning rather than inflation.
 func heavyDoc(pages, bytesPerPage int) *Document {
-	objs := map[int]*IndirectObject{}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	objs[1] = &IndirectObject{Number: 1, Value: cat}
+	objs := map[int]*object.IndirectObject{}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	objs[1] = &object.IndirectObject{Number: 1, Value: cat}
 
-	pagesDict := &Dictionary{}
-	pagesDict.Set("Type", Name("Pages"))
-	pagesDict.Set("Count", Integer(pages))
+	pagesDict := &object.Dictionary{}
+	pagesDict.Set("Type", object.Name("Pages"))
+	pagesDict.Set("Count", object.Integer(pages))
 
-	var kids Array
+	var kids object.Array
 	num := 3
 	content := heavyContent(bytesPerPage)
 	for i := 0; i < pages; i++ {
 		contentNum := num
-		st := &Stream{Data: content}
-		st.Dict.Set("Length", Integer(len(content)))
-		objs[contentNum] = &IndirectObject{Number: contentNum, Value: st}
+		st := &object.Stream{Data: content}
+		st.Dict.Set("Length", object.Integer(len(content)))
+		objs[contentNum] = &object.IndirectObject{Number: contentNum, Value: st}
 		num++
 
 		pageNum := num
-		page := &Dictionary{}
-		page.Set("Type", Name("Page"))
-		page.Set("Parent", IndirectRef{Number: 2})
-		page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-		page.Set("Contents", IndirectRef{Number: contentNum})
-		page.Set("Resources", &Dictionary{})
-		objs[pageNum] = &IndirectObject{Number: pageNum, Value: page}
-		kids = append(kids, IndirectRef{Number: pageNum})
+		page := &object.Dictionary{}
+		page.Set("Type", object.Name("Page"))
+		page.Set("Parent", object.IndirectRef{Number: 2})
+		page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+		page.Set("Contents", object.IndirectRef{Number: contentNum})
+		page.Set("Resources", &object.Dictionary{})
+		objs[pageNum] = &object.IndirectObject{Number: pageNum, Value: page}
+		kids = append(kids, object.IndirectRef{Number: pageNum})
 		num++
 	}
 	pagesDict.Set("Kids", kids)
-	objs[2] = &IndirectObject{Number: 2, Value: pagesDict}
+	objs[2] = &object.IndirectObject{Number: 2, Value: pagesDict}
 
 	return &Document{Version: "2.0", Objects: objs,
-		Trailer: dictWith("Root", IndirectRef{Number: 1})}
+		Trailer: dictWith("Root", object.IndirectRef{Number: 1})}
 }
 
 // cancelledCtx returns a context that is already done.
@@ -94,7 +99,7 @@ func cancelledCtx() context.Context {
 // the package's own IsCheckerFinding predicate.
 func hasCancelFinding[T Violation](v []T) bool {
 	for _, e := range v {
-		if e.RuleID() == limitRule && strings.Contains(e.Error(), limitCanceled) && IsCheckerFinding(e) {
+		if e.RuleID() == finding.LimitRule && strings.Contains(e.Error(), core.GuardCanceled) && IsCheckerFinding(e) {
 			return true
 		}
 	}
@@ -111,7 +116,7 @@ func TestCancelValidationLatency(t *testing.T) {
 	doc := heavyDoc(24, 2<<20) // ~48 MB of content across 24 pages
 
 	start := time.Now()
-	full := ValidatePDFA(doc, PDFA2b)
+	full := ValidatePDFA(doc, pdfa.PDFA2b)
 	baseline := time.Since(start)
 	t.Logf("uncancelled ValidatePDFA: %v (%d findings)", baseline, len(full))
 	if baseline < 300*time.Millisecond {
@@ -124,7 +129,7 @@ func TestCancelValidationLatency(t *testing.T) {
 		cancel()
 	}()
 	start = time.Now()
-	errs := ValidatePDFAContext(ctx, doc, PDFA2b)
+	errs := ValidatePDFAContext(ctx, doc, pdfa.PDFA2b)
 	latency := time.Since(start)
 	cancel()
 	t.Logf("cancelled after 20ms, returned in %v (%d findings)", latency, len(errs))
@@ -151,7 +156,7 @@ func TestCancelInsideOneHugeStream(t *testing.T) {
 	doc := heavyDoc(1, 48<<20) // one page, one 48 MB content stream
 
 	start := time.Now()
-	ValidatePDFA(doc, PDFA2b)
+	ValidatePDFA(doc, pdfa.PDFA2b)
 	baseline := time.Since(start)
 	t.Logf("uncancelled ValidatePDFA over one 48 MB stream: %v", baseline)
 	if baseline < 300*time.Millisecond {
@@ -164,7 +169,7 @@ func TestCancelInsideOneHugeStream(t *testing.T) {
 		cancel()
 	}()
 	start = time.Now()
-	errs := ValidatePDFAContext(ctx, doc, PDFA2b)
+	errs := ValidatePDFAContext(ctx, doc, pdfa.PDFA2b)
 	latency := time.Since(start)
 	cancel()
 	t.Logf("cancelled mid-stream, returned in %v", latency)
@@ -196,7 +201,7 @@ func TestCancelLargeRealFile(t *testing.T) {
 	t.Logf("%s: %d bytes, %d pages, %d objects", path, len(data), doc.PageCount(), len(doc.Objects))
 
 	start := time.Now()
-	ValidatePDFA(doc, PDFA2b)
+	ValidatePDFA(doc, pdfa.PDFA2b)
 	baseline := time.Since(start)
 	t.Logf("uncancelled ValidatePDFA: %v", baseline)
 
@@ -206,7 +211,7 @@ func TestCancelLargeRealFile(t *testing.T) {
 		cancel()
 	}()
 	start = time.Now()
-	errs := ValidatePDFAContext(ctx, doc, PDFA2b)
+	errs := ValidatePDFAContext(ctx, doc, pdfa.PDFA2b)
 	latency := time.Since(start)
 	cancel()
 	t.Logf("cancelled after 50ms, returned in %v (%d findings, full run had more)", latency, len(errs))
@@ -224,7 +229,7 @@ func TestAlreadyCancelledDoesNoWork(t *testing.T) {
 	doc := heavyDoc(24, 2<<20)
 
 	start := time.Now()
-	errs := ValidatePDFAContext(cancelledCtx(), doc, PDFA2b)
+	errs := ValidatePDFAContext(cancelledCtx(), doc, pdfa.PDFA2b)
 	elapsed := time.Since(start)
 	t.Logf("already-cancelled ValidatePDFA returned in %v with %d findings", elapsed, len(errs))
 
@@ -251,11 +256,11 @@ func TestCancelledRunIsNeverClean(t *testing.T) {
 	doc := heavyDoc(2, 4096)
 	ctx := cancelledCtx()
 
-	assertNotClean(t, "ValidatePDFA", ValidatePDFAContext(ctx, doc, PDFA2b))
-	assertNotClean(t, "ValidatePDFABytes", ValidatePDFABytesContext(ctx, doc, PDFA2b, []byte("%PDF-2.0\n")))
+	assertNotClean(t, "ValidatePDFA", ValidatePDFAContext(ctx, doc, pdfa.PDFA2b))
+	assertNotClean(t, "ValidatePDFABytes", ValidatePDFABytesContext(ctx, doc, pdfa.PDFA2b, []byte("%PDF-2.0\n")))
 	assertNotClean(t, "ValidatePDFUA", ValidatePDFUAContext(ctx, doc))
 	assertNotClean(t, "ValidatePDFUA2", ValidatePDFUA2Context(ctx, doc))
-	assertNotClean(t, "ValidatePDFX", ValidatePDFXContext(ctx, doc, PDFX4))
+	assertNotClean(t, "ValidatePDFX", ValidatePDFXContext(ctx, doc, pdfx.PDFX4))
 	assertNotClean(t, "ValidatePDFVT", ValidatePDFVTContext(ctx, doc))
 	assertNotClean(t, "ValidatePDFVT2", ValidatePDFVT2Context(ctx, doc))
 	assertNotClean(t, "ValidatePDFR", ValidatePDFRContext(ctx, doc))
@@ -273,7 +278,7 @@ func assertNotClean[T Violation](t *testing.T, name string, v []T) {
 	}
 	sawCancel, real := false, 0
 	for _, e := range v {
-		if e.RuleID() == limitRule && strings.Contains(e.Error(), limitCanceled) {
+		if e.RuleID() == finding.LimitRule && strings.Contains(e.Error(), core.GuardCanceled) {
 			sawCancel = true
 		}
 		if !IsCheckerFinding(e) {
@@ -281,7 +286,7 @@ func assertNotClean[T Violation](t *testing.T, name string, v []T) {
 		}
 	}
 	if !sawCancel {
-		t.Errorf("%s: cancelled run reported no %q finding naming %q", name, limitRule, limitCanceled)
+		t.Errorf("%s: cancelled run reported no %q finding naming %q", name, finding.LimitRule, core.GuardCanceled)
 	}
 	if real != 0 {
 		t.Errorf("%s: cancelled run reported %d non-checker findings; no check ran, so it cannot have found any", name, real)
@@ -292,7 +297,7 @@ func assertNotClean[T Violation](t *testing.T, name string, v []T) {
 // Level B checks by a different route.
 func TestCancelledLevelAIsNeverClean(t *testing.T) {
 	doc := heavyDoc(2, 4096)
-	errs := ValidatePDFAContext(cancelledCtx(), doc, PDFA2a)
+	errs := ValidatePDFAContext(cancelledCtx(), doc, pdfa.PDFA2a)
 	if len(errs) == 0 {
 		t.Fatal("cancelled Level A run returned an empty result")
 	}
@@ -304,7 +309,7 @@ func TestCancelledLevelAIsNeverClean(t *testing.T) {
 // TestCancelFindingIsNotAConformanceStatement pins the wording. The message must
 // not be readable as a claim about the document.
 func TestCancelFindingIsNotAConformanceStatement(t *testing.T) {
-	errs := ValidatePDFAContext(cancelledCtx(), heavyDoc(1, 1024), PDFA2b)
+	errs := ValidatePDFAContext(cancelledCtx(), heavyDoc(1, 1024), pdfa.PDFA2b)
 	if len(errs) != 1 {
 		t.Fatalf("expected one finding, got %d", len(errs))
 	}
@@ -340,7 +345,7 @@ func TestCancelStopsTheWork(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ValidatePDFAContext(ctx, doc, PDFA2b)
+		ValidatePDFAContext(ctx, doc, pdfa.PDFA2b)
 	}()
 	time.Sleep(20 * time.Millisecond)
 	start := time.Now()
@@ -488,7 +493,7 @@ func TestContextlessAPIUnchanged(t *testing.T) {
 	doc := heavyDoc(3, 8192)
 	bg := context.Background()
 
-	if a, b := len(ValidatePDFA(doc, PDFA2b)), len(ValidatePDFAContext(bg, doc, PDFA2b)); a != b {
+	if a, b := len(ValidatePDFA(doc, pdfa.PDFA2b)), len(ValidatePDFAContext(bg, doc, pdfa.PDFA2b)); a != b {
 		t.Errorf("ValidatePDFA %d findings vs ValidatePDFAContext %d", a, b)
 	}
 	if a, b := len(ValidatePDFUA(doc)), len(ValidatePDFUAContext(bg, doc)); a != b {
@@ -497,7 +502,7 @@ func TestContextlessAPIUnchanged(t *testing.T) {
 	if a, b := len(ValidatePDFUA2(doc)), len(ValidatePDFUA2Context(bg, doc)); a != b {
 		t.Errorf("ValidatePDFUA2 %d findings vs ValidatePDFUA2Context %d", a, b)
 	}
-	if a, b := len(ValidatePDFX(doc, PDFX4)), len(ValidatePDFXContext(bg, doc, PDFX4)); a != b {
+	if a, b := len(ValidatePDFX(doc, pdfx.PDFX4)), len(ValidatePDFXContext(bg, doc, pdfx.PDFX4)); a != b {
 		t.Errorf("ValidatePDFX %d findings vs ValidatePDFXContext %d", a, b)
 	}
 	if a, b := len(ValidatePDFVT(doc)), len(ValidatePDFVTContext(bg, doc)); a != b {
@@ -533,14 +538,14 @@ func TestBackgroundContextCostsNothingMeasurable(t *testing.T) {
 	// Warm the caches equally: each call installs its own per-run cache, so
 	// there is nothing shared to warm, but the allocator and the CPU caches
 	// benefit from a discarded first run.
-	ValidatePDFA(doc, PDFA2b)
+	ValidatePDFA(doc, pdfa.PDFA2b)
 
 	start := time.Now()
-	ValidatePDFA(doc, PDFA2b)
+	ValidatePDFA(doc, pdfa.PDFA2b)
 	plain := time.Since(start)
 
 	start = time.Now()
-	ValidatePDFAContext(context.Background(), doc, PDFA2b)
+	ValidatePDFAContext(context.Background(), doc, pdfa.PDFA2b)
 	background := time.Since(start)
 
 	t.Logf("ValidatePDFA %v, ValidatePDFAContext(Background) %v", plain, background)

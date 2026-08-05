@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/syntax"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ func TestLexerWhitespaceAndComments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenBoolean || string(tok.Value) != "true" {
+	if tok.Type != syntax.TokenBoolean || string(tok.Value) != "true" {
 		t.Errorf("expected Boolean true, got %v", tok)
 	}
 }
@@ -30,7 +31,7 @@ func TestLexerBoolean(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		if tok.Type != TokenBoolean || string(tok.Value) != tt.want {
+		if tok.Type != syntax.TokenBoolean || string(tok.Value) != tt.want {
 			t.Errorf("input %q: expected Boolean %q, got %v", tt.input, tt.want, tok)
 		}
 	}
@@ -53,7 +54,7 @@ func TestLexerInteger(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		if tok.Type != TokenInteger || string(tok.Value) != tt.want {
+		if tok.Type != syntax.TokenInteger || string(tok.Value) != tt.want {
 			t.Errorf("input %q: expected Integer %q, got %v", tt.input, tt.want, tok)
 		}
 	}
@@ -77,7 +78,7 @@ func TestLexerReal(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		if tok.Type != TokenReal || string(tok.Value) != tt.want {
+		if tok.Type != syntax.TokenReal || string(tok.Value) != tt.want {
 			t.Errorf("input %q: expected Real %q, got %v", tt.input, tt.want, tok)
 		}
 	}
@@ -113,7 +114,7 @@ func TestLexerLiteralString(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		if tok.Type != TokenString || string(tok.Value) != tt.want {
+		if tok.Type != syntax.TokenString || string(tok.Value) != tt.want {
 			t.Errorf("input %q: expected String %q, got %v (value=%q)", tt.input, tt.want, tok, tok.Value)
 		}
 	}
@@ -127,7 +128,7 @@ func TestLexerLineContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenString || string(tok.Value) != "helloworld" {
+	if tok.Type != syntax.TokenString || string(tok.Value) != "helloworld" {
 		t.Errorf("expected String 'helloworld', got %v (value=%q)", tok, tok.Value)
 	}
 
@@ -138,7 +139,7 @@ func TestLexerLineContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok2.Type != TokenString || string(tok2.Value) != "helloworld" {
+	if tok2.Type != syntax.TokenString || string(tok2.Value) != "helloworld" {
 		t.Errorf("expected String 'helloworld', got %v (value=%q)", tok2, tok2.Value)
 	}
 }
@@ -161,7 +162,7 @@ func TestLexerHexString(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		if tok.Type != TokenString {
+		if tok.Type != syntax.TokenString {
 			t.Errorf("input %q: expected String, got %v", tt.input, tok.Type)
 			continue
 		}
@@ -194,7 +195,7 @@ func TestLexerName(t *testing.T) {
 			t.Errorf("input %q: %v", tt.input, err)
 			continue
 		}
-		if tok.Type != TokenName || string(tok.Value) != tt.want {
+		if tok.Type != syntax.TokenName || string(tok.Value) != tt.want {
 			t.Errorf("input %q: expected Name %q, got %v (value=%q)", tt.input, tt.want, tok, tok.Value)
 		}
 	}
@@ -204,7 +205,7 @@ func TestLexerDelimiters(t *testing.T) {
 	input := "[ ] << >>"
 	l := NewLexer([]byte(input))
 
-	expected := []TokenType{TokenArrayStart, TokenArrayEnd, TokenDictStart, TokenDictEnd, TokenEOF}
+	expected := []syntax.TokenType{syntax.TokenArrayStart, syntax.TokenArrayEnd, syntax.TokenDictStart, syntax.TokenDictEnd, syntax.TokenEOF}
 	for _, want := range expected {
 		tok, err := l.NextToken()
 		if err != nil {
@@ -219,17 +220,17 @@ func TestLexerDelimiters(t *testing.T) {
 func TestLexerKeywords(t *testing.T) {
 	tests := []struct {
 		input string
-		want  TokenType
+		want  syntax.TokenType
 	}{
-		{"null", TokenNull},
-		{"obj", TokenObj},
-		{"endobj", TokenEndObj},
-		{"stream", TokenStream},
-		{"endstream", TokenEndStream},
-		{"R", TokenRef},
-		{"xref", TokenXref},
-		{"trailer", TokenTrailer},
-		{"startxref", TokenStartXref},
+		{"null", syntax.TokenNull},
+		{"obj", syntax.TokenObj},
+		{"endobj", syntax.TokenEndObj},
+		{"stream", syntax.TokenStream},
+		{"endstream", syntax.TokenEndStream},
+		{"R", syntax.TokenRef},
+		{"xref", syntax.TokenXref},
+		{"trailer", syntax.TokenTrailer},
+		{"startxref", syntax.TokenStartXref},
 	}
 	for _, tt := range tests {
 		l := NewLexer([]byte(tt.input))
@@ -249,16 +250,16 @@ func TestLexerMultipleTokens(t *testing.T) {
 	l := NewLexer([]byte(input))
 
 	expected := []struct {
-		typ TokenType
+		typ syntax.TokenType
 		val string
 	}{
-		{TokenName, "Type"},
-		{TokenName, "Catalog"},
-		{TokenName, "Pages"},
-		{TokenInteger, "3"},
-		{TokenInteger, "0"},
-		{TokenRef, "R"},
-		{TokenEOF, ""},
+		{syntax.TokenName, "Type"},
+		{syntax.TokenName, "Catalog"},
+		{syntax.TokenName, "Pages"},
+		{syntax.TokenInteger, "3"},
+		{syntax.TokenInteger, "0"},
+		{syntax.TokenRef, "R"},
+		{syntax.TokenEOF, ""},
 	}
 
 	for _, want := range expected {
@@ -284,7 +285,7 @@ func TestLexerDictStartVsHexString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenDictStart {
+	if tok.Type != syntax.TokenDictStart {
 		t.Errorf("expected DictStart, got %v", tok)
 	}
 
@@ -292,7 +293,7 @@ func TestLexerDictStartVsHexString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenName {
+	if tok.Type != syntax.TokenName {
 		t.Errorf("expected Name, got %v", tok)
 	}
 
@@ -300,7 +301,7 @@ func TestLexerDictStartVsHexString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenString || string(tok.Value) != "H" {
+	if tok.Type != syntax.TokenString || string(tok.Value) != "H" {
 		t.Errorf("expected String 'H', got %v (value=%q)", tok, tok.Value)
 	}
 
@@ -308,7 +309,7 @@ func TestLexerDictStartVsHexString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenDictEnd {
+	if tok.Type != syntax.TokenDictEnd {
 		t.Errorf("expected DictEnd, got %v", tok)
 	}
 }
@@ -344,7 +345,7 @@ func TestLexerSetPosition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenBoolean || string(tok.Value) != "false" {
+	if tok.Type != syntax.TokenBoolean || string(tok.Value) != "false" {
 		t.Errorf("expected Boolean false, got %v", tok)
 	}
 }
@@ -355,7 +356,7 @@ func TestLexerEmptyInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenEOF {
+	if tok.Type != syntax.TokenEOF {
 		t.Errorf("expected EOF, got %v", tok)
 	}
 }
@@ -369,7 +370,7 @@ func TestLexerNameAtDelimiter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenName || string(tok.Value) != "Type" {
+	if tok.Type != syntax.TokenName || string(tok.Value) != "Type" {
 		t.Errorf("expected Name 'Type', got %v", tok)
 	}
 
@@ -377,7 +378,7 @@ func TestLexerNameAtDelimiter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tok.Type != TokenName || string(tok.Value) != "Catalog" {
+	if tok.Type != syntax.TokenName || string(tok.Value) != "Catalog" {
 		t.Errorf("expected Name 'Catalog', got %v", tok)
 	}
 }

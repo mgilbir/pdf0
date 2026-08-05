@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,7 +29,7 @@ func loadRefPDF(t *testing.T) []byte {
 // and that the builder's output passes the byte-level 6.1.4 rule at every level
 // (audit C6).
 func TestWrittenXrefIs20Bytes(t *testing.T) {
-	for _, lvl := range []PDFALevel{PDFA1b, PDFA2b, PDFA3b, PDFA4} {
+	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		doc := NewPDFADocumentWithInfo(lvl, "T", "A")
 		var buf bytes.Buffer
 		if err := doc.Write(&buf); err != nil {
@@ -55,10 +57,10 @@ func TestWrittenXrefIs20Bytes(t *testing.T) {
 // TestWriteRejectsObject0 ensures an in-use object 0 is refused rather than
 // silently dropped (audit C16).
 func TestWriteRejectsObject0(t *testing.T) {
-	d := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-	dict := &Dictionary{}
-	dict.Set("Type", Name("Catalog"))
-	d.Objects[0] = &IndirectObject{Number: 0, Value: dict}
+	d := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
+	dict := &object.Dictionary{}
+	dict.Set("Type", object.Name("Catalog"))
+	d.Objects[0] = &object.IndirectObject{Number: 0, Value: dict}
 	var buf bytes.Buffer
 	if err := d.Write(&buf); err == nil {
 		t.Fatalf("expected Write to refuse an in-use object 0, got nil")
@@ -68,12 +70,12 @@ func TestWriteRejectsObject0(t *testing.T) {
 // TestWriteUpdatesIndirectLength ensures a stale indirect /Length target is
 // rewritten to the actual data length (audit C8).
 func TestWriteUpdatesIndirectLength(t *testing.T) {
-	d := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}, Trailer: Dictionary{}}
-	st := &Stream{Dict: Dictionary{}, Data: []byte("Hello World")} // 11 bytes
-	st.Dict.Set("Length", IndirectRef{Number: 2})
-	d.Objects[1] = &IndirectObject{Number: 1, Value: st}
-	d.Objects[2] = &IndirectObject{Number: 2, Value: Integer(3)} // stale: says 3
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	d := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
+	st := &object.Stream{Dict: object.Dictionary{}, Data: []byte("Hello World")} // 11 bytes
+	st.Dict.Set("Length", object.IndirectRef{Number: 2})
+	d.Objects[1] = &object.IndirectObject{Number: 1, Value: st}
+	d.Objects[2] = &object.IndirectObject{Number: 2, Value: object.Integer(3)} // stale: says 3
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	var buf bytes.Buffer
 	if err := d.Write(&buf); err != nil {
@@ -83,11 +85,11 @@ func TestWriteUpdatesIndirectLength(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	if got, ok := rd.Objects[2].Value.(Integer); !ok || int(got) != len(st.Data) {
+	if got, ok := rd.Objects[2].Value.(object.Integer); !ok || int(got) != len(st.Data) {
 		t.Errorf("length object = %v, want %d", rd.Objects[2].Value, len(st.Data))
 	}
 	// The caller's document must not be mutated.
-	if got := d.Objects[2].Value.(Integer); int(got) != 3 {
+	if got := d.Objects[2].Value.(object.Integer); int(got) != 3 {
 		t.Errorf("caller's length object was mutated to %d", got)
 	}
 }

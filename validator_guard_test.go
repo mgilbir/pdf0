@@ -1,6 +1,10 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/pdfx"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,22 +19,22 @@ import (
 // value the exported validators can be handed — and it stands in for any bug or
 // hostile structure that makes a check panic mid-run.
 func corruptCatalogDoc() *Document {
-	cat := &Dictionary{
+	cat := &object.Dictionary{
 		// Only /Type has a value; every later key indexes past the end.
-		Keys: []Name{
+		Keys: []object.Name{
 			"Type", "MarkInfo", "StructTreeRoot", "Lang", "ViewerPreferences",
 			"Metadata", "Pages", "OutputIntents", "AF", "DPartRoot", "AA",
 			"Names", "OCProperties", "Perms", "AcroForm", "PageLayout", "PageMode",
 			"Version",
 		},
-		Values: []Object{Name("Catalog")},
+		Values: []object.Object{object.Name("Catalog")},
 	}
 	doc := &Document{
 		Version: "2.0",
-		Objects: map[int]*IndirectObject{1: {Number: 1, Value: cat}},
-		Trailer: Dictionary{},
+		Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: cat}},
+		Trailer: object.Dictionary{},
 	}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 	return doc
 }
 
@@ -47,10 +51,10 @@ func TestValidatorPanicContainment(t *testing.T) {
 	}{
 		// The PDF/A validator has had this containment since runCheck; Level A
 		// (whose own three families were the last gap) is included as its guard.
-		{"ValidatePDFA-levelA", func(d *Document) []string { return ruleIDs(ValidatePDFA(d, PDFA2a)) }},
+		{"ValidatePDFA-levelA", func(d *Document) []string { return ruleIDs(ValidatePDFA(d, pdfa.PDFA2a)) }},
 		{"ValidatePDFUA", func(d *Document) []string { return ruleIDs(ValidatePDFUA(d)) }},
 		{"ValidatePDFUA2", func(d *Document) []string { return ruleIDs(ValidatePDFUA2(d)) }},
-		{"ValidatePDFX", func(d *Document) []string { return ruleIDs(ValidatePDFX(d, PDFX4)) }},
+		{"ValidatePDFX", func(d *Document) []string { return ruleIDs(ValidatePDFX(d, pdfx.PDFX4)) }},
 		{"ValidatePDFVT", func(d *Document) []string { return ruleIDs(ValidatePDFVT(d)) }},
 		{"ValidatePDFVT2", func(d *Document) []string { return ruleIDs(ValidatePDFVT2(d)) }},
 		{"ValidatePDFR", func(d *Document) []string { return ruleIDs(ValidatePDFR(d)) }},
@@ -80,79 +84,14 @@ func TestValidatorPanicContainment(t *testing.T) {
 				// that namespace the PDF/A-3 findings they adopt: "internal" is
 				// a reserved checker identifier, not a rule in either namespace,
 				// so adoptPDFAFindings passes it through unprefixed.
-				if r == internalRule {
+				if r == finding.InternalRule {
 					found = true
 				}
 			}
 			if !found {
-				t.Errorf("no %q finding reported; the panic was swallowed rather than contained (got %v)", internalRule, rules)
+				t.Errorf("no %q finding reported; the panic was swallowed rather than contained (got %v)", finding.InternalRule, rules)
 			}
 		})
-	}
-}
-
-// TestGuardHelpersReportPanics pins the two boundary helpers themselves: the
-// panic value reaches the finding, and findings already reported before the
-// panic survive it.
-func TestGuardHelpersReportPanics(t *testing.T) {
-	var out []PDFXViolation
-	add := func(rule, msg string, obj int) {
-		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
-	}
-	runGuardedCheck(add, func() {
-		add("version", "reported before the panic", 3)
-		panic("boom")
-	})
-	if len(out) != 2 || out[0].Rule != "version" || out[1].Rule != internalRule {
-		t.Fatalf("runGuardedCheck: got %v, want the pre-panic finding plus an %q one", out, internalRule)
-	}
-	if !strings.Contains(out[1].Message, "boom") {
-		t.Errorf("runGuardedCheck: message %q does not carry the panic value", out[1].Message)
-	}
-
-	ua := runUACheck(func() []UAViolation { panic("bang") })
-	if len(ua) != 1 || ua[0].Clause != internalRule {
-		t.Fatalf("runUACheck: got %v, want one %q finding", ua, internalRule)
-	}
-	if !strings.Contains(ua[0].Message, "bang") {
-		t.Errorf("runUACheck: message %q does not carry the panic value", ua[0].Message)
-	}
-}
-
-// TestAdoptPDFAFindingsKeepsReservedRulesBare pins the exception in
-// adoptPDFAFindings. ValidateFacturX and ValidateOrderX namespace the PDF/A-3
-// findings they adopt so that container rules cannot collide with invoice
-// rules, but "limit" and "internal" belong to neither namespace: they say the
-// checker stopped or crashed, and a caller watching for them keys on the bare
-// name. Prefixing one produced "pdfa-3/limit", an identifier nothing documents
-// and no predicate recognises — which hides exactly the event these identifiers
-// exist to make visible.
-func TestAdoptPDFAFindingsKeepsReservedRulesBare(t *testing.T) {
-	var out []PDFXViolation
-	add := func(rule, msg string, obj int) {
-		out = append(out, PDFXViolation{Rule: rule, Message: msg, Object: obj})
-	}
-	adoptPDFAFindings(add, "pdfa-3/", []ValidationError{
-		{Rule: "6.1.2", Message: "a real PDF/A rule"},
-		{Rule: limitRule, Message: "a guard tripped"},
-		{Rule: internalRule, Message: "a check panicked"},
-	})
-
-	want := []string{"pdfa-3/6.1.2", limitRule, internalRule}
-	if len(out) != len(want) {
-		t.Fatalf("got %d findings, want %d: %v", len(out), len(want), out)
-	}
-	for i, w := range want {
-		if out[i].Rule != w {
-			t.Errorf("finding %d: rule %q, want %q", i, out[i].Rule, w)
-		}
-	}
-	// The point of keeping them bare is that the exported predicate still
-	// recognises them after adoption.
-	for _, v := range out[1:] {
-		if !IsCheckerFinding(ValidationError{Rule: v.Rule, Message: v.Message}) {
-			t.Errorf("adopted %q is no longer recognised as a checker finding", v.Rule)
-		}
 	}
 }
 
@@ -168,7 +107,7 @@ func TestValidatorOutputDeterministic(t *testing.T) {
 	}{
 		{"ValidatePDFUA", func(d *Document) []string { return findingStrings(ValidatePDFUA(d)) }},
 		{"ValidatePDFUA2", func(d *Document) []string { return findingStrings(ValidatePDFUA2(d)) }},
-		{"ValidatePDFX", func(d *Document) []string { return findingStrings(ValidatePDFX(d, PDFX4)) }},
+		{"ValidatePDFX", func(d *Document) []string { return findingStrings(ValidatePDFX(d, pdfx.PDFX4)) }},
 		{"ValidatePDFVT", func(d *Document) []string { return findingStrings(ValidatePDFVT(d)) }},
 		{"ValidatePDFR", func(d *Document) []string { return findingStrings(ValidatePDFR(d)) }},
 	}
@@ -213,42 +152,42 @@ func findingStrings[T Violation](v []T) []string {
 func violatingDoc() *Document {
 	doc := &Document{
 		Version: "1.7", // wrong version for PDF/R and for PDF/X-4 alike
-		Objects: map[int]*IndirectObject{},
-		Trailer: Dictionary{},
+		Objects: map[int]*object.IndirectObject{},
+		Trailer: object.Dictionary{},
 	}
 	num := 0
-	add := func(v Object) IndirectRef {
+	add := func(v object.Object) object.IndirectRef {
 		num++
-		doc.Objects[num] = &IndirectObject{Number: num, Value: v}
-		return IndirectRef{Number: num}
+		doc.Objects[num] = &object.IndirectObject{Number: num, Value: v}
+		return object.IndirectRef{Number: num}
 	}
 
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
 	pagesRef := add(pages)
 
-	var kids Array
+	var kids object.Array
 	for i := 0; i < 3; i++ {
 		// Each page draws text and a vector path (non-raster operators, PDF/R),
 		// carries no /TrimBox or /BleedBox (PDF/X) and uses an unembedded font
 		// (PDF/UA and PDF/X), each in its own object.
-		contentRef := add(&Stream{Dict: Dictionary{}, Data: []byte("BT /F1 12 Tf (hi) Tj ET 0 0 10 10 re f")})
+		contentRef := add(&object.Stream{Dict: object.Dictionary{}, Data: []byte("BT /F1 12 Tf (hi) Tj ET 0 0 10 10 re f")})
 
-		font := &Dictionary{}
-		font.Set("Type", Name("Font"))
-		font.Set("Subtype", Name("TrueType"))
-		font.Set("BaseFont", Name("Helvetica"))
+		font := &object.Dictionary{}
+		font.Set("Type", object.Name("Font"))
+		font.Set("Subtype", object.Name("TrueType"))
+		font.Set("BaseFont", object.Name("Helvetica"))
 		fontRef := add(font)
 
-		fonts := &Dictionary{}
+		fonts := &object.Dictionary{}
 		fonts.Set("F1", fontRef)
-		res := &Dictionary{}
+		res := &object.Dictionary{}
 		res.Set("Font", fonts)
 
-		page := &Dictionary{}
-		page.Set("Type", Name("Page"))
+		page := &object.Dictionary{}
+		page.Set("Type", object.Name("Page"))
 		page.Set("Parent", pagesRef)
-		page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(200), Integer(200)})
+		page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(200), object.Integer(200)})
 		page.Set("Contents", contentRef)
 		page.Set("Resources", res)
 		kids = append(kids, add(page))
@@ -257,27 +196,49 @@ func violatingDoc() *Document {
 	// doc.Objects for forbidden features and PDF/UA for forbidden annotation
 	// subtypes, so these are the findings whose order the map decides.
 	for i := 0; i < 3; i++ {
-		movie := &Dictionary{}
-		movie.Set("Type", Name("Annot"))
-		movie.Set("Subtype", Name("Movie"))
+		movie := &object.Dictionary{}
+		movie.Set("Type", object.Name("Annot"))
+		movie.Set("Subtype", object.Name("Movie"))
 		add(movie)
 
-		trapNet := &Dictionary{}
-		trapNet.Set("Type", Name("Annot"))
-		trapNet.Set("Subtype", Name("TrapNet"))
+		trapNet := &object.Dictionary{}
+		trapNet.Set("Type", object.Name("Annot"))
+		trapNet.Set("Subtype", object.Name("TrapNet"))
 		add(trapNet)
 
-		js := &Dictionary{}
-		js.Set("S", Name("JavaScript"))
+		js := &object.Dictionary{}
+		js.Set("S", object.Name("JavaScript"))
 		add(js)
 	}
 
 	pages.Set("Kids", kids)
-	pages.Set("Count", Integer(len(kids)))
+	pages.Set("Count", object.Integer(len(kids)))
 
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
 	cat.Set("Pages", pagesRef)
 	doc.Trailer.Set("Root", add(cat))
 	return doc
+}
+
+// TestGuardedReportsPanicsOverAValidatorType pins finding.Guarded against a real
+// finding type: the panic value reaches the finding, and findings already
+// reported before the panic survive it. The finding package tests the same
+// boundary over a minimal type; this checks it through one of the concrete
+// types the validators actually report.
+func TestGuardedReportsPanicsOverAValidatorType(t *testing.T) {
+	var out []pdfx.Violation
+	add := func(rule, msg string, obj int) {
+		out = append(out, pdfx.Violation{Rule: rule, Message: msg, Object: obj})
+	}
+	finding.Guarded(add, func() {
+		add("version", "reported before the panic", 3)
+		panic("boom")
+	})
+	if len(out) != 2 || out[0].Rule != "version" || out[1].Rule != finding.InternalRule {
+		t.Fatalf("finding.Guarded: got %v, want the pre-panic finding plus an %q one", out, finding.InternalRule)
+	}
+	if !strings.Contains(out[1].Message, "boom") {
+		t.Errorf("finding.Guarded: message %q does not carry the panic value", out[1].Message)
+	}
 }

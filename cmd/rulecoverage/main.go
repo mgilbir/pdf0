@@ -129,7 +129,7 @@ func loadProfile(path string) ([]veraRule, error) {
 }
 
 // ruleLiteral matches any quoted ISO clause number (e.g. "6.7.8", "6.1.7").
-// This catches rule IDs however they reach a ValidationError — inline
+// This catches rule IDs however they reach a pdfa.Violation — inline
 // `Rule: "6.1.4"`, via `rule := "6.1.7"`, or in a multi-assignment like
 // `attrRule, wfRule = "6.7.5", "6.7.9"` — which a `Rule:`-anchored pattern misses.
 var ruleLiteral = regexp.MustCompile(`"(6(?:\.\d+)+)"`)

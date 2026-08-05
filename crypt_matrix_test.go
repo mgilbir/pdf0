@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -18,59 +20,59 @@ import (
 // optional metadata stream, and enough small packable objects that Write forms an
 // object stream when the file uses a cross-reference stream.
 func encMatrixDoc(usedXRefStream, withMetadata bool) *Document {
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "2.0", usedXRefStream: usedXRefStream}
+	d := &Document{Objects: map[int]*object.IndirectObject{}, Version: "2.0", usedXRefStream: usedXRefStream}
 
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
 
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", Array{IndirectRef{Number: 3}})
-	pages.Set("Count", Integer(1))
-	d.Objects[2] = &IndirectObject{Number: 2, Value: pages}
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+	pages.Set("Count", object.Integer(1))
+	d.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
 
-	page := &Dictionary{}
-	page.Set("Type", Name("Page"))
-	page.Set("Parent", IndirectRef{Number: 2})
-	page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-	page.Set("Contents", IndirectRef{Number: 4})
-	d.Objects[3] = &IndirectObject{Number: 3, Value: page}
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+	page.Set("Contents", object.IndirectRef{Number: 4})
+	d.Objects[3] = &object.IndirectObject{Number: 3, Value: page}
 
 	// A FlateDecode content stream: after a round-trip it must still inflate,
 	// which only holds if it was decrypted correctly.
-	content := flateEncode([]byte("BT /F1 12 Tf 72 720 Td (round-trip sentinel) Tj ET"))
-	cs := &Dictionary{}
-	cs.Set("Length", Integer(len(content)))
-	cs.Set("Filter", Name("FlateDecode"))
-	d.Objects[4] = &IndirectObject{Number: 4, Value: &Stream{Dict: *cs, Data: content}}
+	content := core.FlateEncode([]byte("BT /F1 12 Tf 72 720 Td (round-trip sentinel) Tj ET"))
+	cs := &object.Dictionary{}
+	cs.Set("Length", object.Integer(len(content)))
+	cs.Set("Filter", object.Name("FlateDecode"))
+	d.Objects[4] = &object.IndirectObject{Number: 4, Value: &object.Stream{Dict: *cs, Data: content}}
 
 	// A dictionary carrying a string, to exercise string encryption.
-	info := &Dictionary{}
-	info.Set("Title", String{Value: []byte("sentinel-string-\x00-with-binary")})
-	d.Objects[5] = &IndirectObject{Number: 5, Value: info}
+	info := &object.Dictionary{}
+	info.Set("Title", object.String{Value: []byte("sentinel-string-\x00-with-binary")})
+	d.Objects[5] = &object.IndirectObject{Number: 5, Value: info}
 
 	if withMetadata {
 		xmp := []byte(`<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"></x:xmpmeta><?xpacket end="w"?>`)
-		ms := &Dictionary{}
-		ms.Set("Type", Name("Metadata"))
-		ms.Set("Subtype", Name("XML"))
-		ms.Set("Length", Integer(len(xmp)))
-		d.Objects[6] = &IndirectObject{Number: 6, Value: &Stream{Dict: *ms, Data: xmp}}
-		cat.Set("Metadata", IndirectRef{Number: 6})
+		ms := &object.Dictionary{}
+		ms.Set("Type", object.Name("Metadata"))
+		ms.Set("Subtype", object.Name("XML"))
+		ms.Set("Length", object.Integer(len(xmp)))
+		d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *ms, Data: xmp}}
+		cat.Set("Metadata", object.IndirectRef{Number: 6})
 	}
 
 	// Packable filler objects so Write builds an object stream (usedXRefStream).
 	for i := 10; i < 30; i++ {
-		dd := &Dictionary{}
-		dd.Set("Type", Name("Filler"))
-		dd.Set("N", Integer(i))
-		d.Objects[i] = &IndirectObject{Number: i, Value: dd}
+		dd := &object.Dictionary{}
+		dd.Set("Type", object.Name("Filler"))
+		dd.Set("N", object.Integer(i))
+		d.Objects[i] = &object.IndirectObject{Number: i, Value: dd}
 	}
 
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 	return d
 }
 
@@ -88,28 +90,28 @@ func nextObjNum(d *Document) int {
 // makeIndirect moves the value of key in the resolved /Encrypt dictionary into a
 // fresh indirect object and references it, reproducing the shape where the
 // security handler must resolve a separate object before object streams exist.
-func makeIndirect(d *Document, key Name) {
+func makeIndirect(d *Document, key object.Name) {
 	enc := d.ResolveDict(d.Trailer.Get("Encrypt"))
 	val := enc.Get(key)
-	if _, already := val.(IndirectRef); already || val == nil {
+	if _, already := val.(object.IndirectRef); already || val == nil {
 		return
 	}
 	num := nextObjNum(d)
-	d.Objects[num] = &IndirectObject{Number: num, Value: val}
-	enc.Set(key, IndirectRef{Number: num})
+	d.Objects[num] = &object.IndirectObject{Number: num, Value: val}
+	enc.Set(key, object.IndirectRef{Number: num})
 }
 
 // stripStreamLength returns a copy of o with a stream's /Length removed, so two
 // streams that differ only in the declared length (an encrypted length on Write
 // vs the decrypted length after Read) compare equal.
-func stripStreamLength(o Object) Object {
-	s, ok := o.(*Stream)
+func stripStreamLength(o object.Object) object.Object {
+	s, ok := o.(*object.Stream)
 	if !ok {
 		return o
 	}
 	nd := s.Dict.Clone()
 	nd.Delete("Length")
-	return &Stream{Dict: *nd, Data: s.Data}
+	return &object.Stream{Dict: *nd, Data: s.Data}
 }
 
 // docsEqualModuloLength reports whether two documents hold the same objects once
@@ -145,8 +147,8 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 			// Keep the handler (used by Write) and the dictionary (used by Read)
 			// consistent, as any real producer does: the metadata stream is left
 			// in the clear on both sides.
-			d.security.encryptMetadata = false
-			d.ResolveDict(d.Trailer.Get("Encrypt")).Set("EncryptMetadata", Boolean(false))
+			d.security.EncryptMetadata = false
+			d.ResolveDict(d.Trailer.Get("Encrypt")).Set("EncryptMetadata", object.Boolean(false))
 		}},
 		{"indirect-cf/encrypted-metadata", true, true, func(d *Document) { makeIndirect(d, "CF") }},
 	}
@@ -185,8 +187,8 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 				t.Fatal("content differs after the encrypted round-trip")
 			}
 			// The content stream must still inflate — proof it decrypted correctly.
-			if st, ok := back.Objects[4].Value.(*Stream); ok {
-				if _, err := decodeStreamData(canceler{}, st, defaultLimits()); err != nil {
+			if st, ok := back.Objects[4].Value.(*object.Stream); ok {
+				if _, err := core.DecodeStreamData(core.Canceler{}, st, core.DefaultLimits()); err != nil {
 					t.Errorf("content stream does not inflate after round-trip: %v", err)
 				}
 			}

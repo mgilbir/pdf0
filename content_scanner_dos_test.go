@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"github.com/mgilbir/pdf0/internal/core"
 	"testing"
 	"time"
 )
@@ -29,8 +30,8 @@ func TestContentScannersTerminateOnStrayParen(t *testing.T) {
 	}
 	for _, in := range inputs {
 		in := in
-		run("forEachContentItem", func() { forEachContentItem(canceler{}, in, func(contentItemKind, []byte) {}) })
-		run("forEachContentToken", func() { forEachContentToken(canceler{}, in, func([]byte, bool) {}) })
-		run("contentUsedNames", func() { contentUsedNames(canceler{}, in) })
+		run("core.ForEachContentItem", func() { core.ForEachContentItem(core.Canceler{}, in, func(core.ContentItemKind, []byte) {}) })
+		run("core.ForEachContentToken", func() { core.ForEachContentToken(core.Canceler{}, in, func([]byte, bool) {}) })
+		run("core.ContentUsedNames", func() { core.ContentUsedNames(core.Canceler{}, in) })
 	}
 }

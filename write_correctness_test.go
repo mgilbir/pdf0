@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -11,29 +12,29 @@ import (
 // (not just for the byte offsets), or the container reference is truncated and
 // the file no longer re-reads.
 func TestWriteXRefStreamHighObjNum(t *testing.T) {
-	doc := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}, usedXRefStream: true}
+	doc := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}, usedXRefStream: true}
 
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	cat.Set("Pages", IndirectRef{Number: 2})
-	cat.Set("Extra", IndirectRef{Number: 100000})
-	pages := &Dictionary{}
-	pages.Set("Type", Name("Pages"))
-	pages.Set("Kids", Array{IndirectRef{Number: 3}})
-	pages.Set("Count", Integer(1))
-	page := &Dictionary{}
-	page.Set("Type", Name("Page"))
-	page.Set("Parent", IndirectRef{Number: 2})
-	page.Set("MediaBox", Array{Integer(0), Integer(0), Integer(612), Integer(792)})
-	high := &Dictionary{}
-	high.Set("Type", Name("ExtGState"))
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	cat.Set("Pages", object.IndirectRef{Number: 2})
+	cat.Set("Extra", object.IndirectRef{Number: 100000})
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+	pages.Set("Count", object.Integer(1))
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
+	high := &object.Dictionary{}
+	high.Set("Type", object.Name("ExtGState"))
 
-	doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	doc.Objects[2] = &IndirectObject{Number: 2, Value: pages}
-	doc.Objects[3] = &IndirectObject{Number: 3, Value: page}
-	doc.Objects[100000] = &IndirectObject{Number: 100000, Value: high}
-	doc.Trailer = Dictionary{}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
+	doc.Objects[3] = &object.IndirectObject{Number: 3, Value: page}
+	doc.Objects[100000] = &object.IndirectObject{Number: 100000, Value: high}
+	doc.Trailer = object.Dictionary{}
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {
@@ -53,20 +54,20 @@ func TestWriteXRefStreamHighObjNum(t *testing.T) {
 // represented, so Write rejects it instead of emitting a nondeterministic wrong
 // length.
 func TestWriteRejectsSharedLengthConflict(t *testing.T) {
-	doc := &Document{Version: "2.0", Objects: map[int]*IndirectObject{}}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	s1 := &Stream{Data: []byte("abc")}
-	s1.Dict.Set("Length", IndirectRef{Number: 9})
-	s2 := &Stream{Data: []byte("abcdefgh")}
-	s2.Dict.Set("Length", IndirectRef{Number: 9})
+	doc := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	s1 := &object.Stream{Data: []byte("abc")}
+	s1.Dict.Set("Length", object.IndirectRef{Number: 9})
+	s2 := &object.Stream{Data: []byte("abcdefgh")}
+	s2.Dict.Set("Length", object.IndirectRef{Number: 9})
 
-	doc.Objects[1] = &IndirectObject{Number: 1, Value: cat}
-	doc.Objects[5] = &IndirectObject{Number: 5, Value: s1}
-	doc.Objects[6] = &IndirectObject{Number: 6, Value: s2}
-	doc.Objects[9] = &IndirectObject{Number: 9, Value: Integer(3)}
-	doc.Trailer = Dictionary{}
-	doc.Trailer.Set("Root", IndirectRef{Number: 1})
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: s1}
+	doc.Objects[6] = &object.IndirectObject{Number: 6, Value: s2}
+	doc.Objects[9] = &object.IndirectObject{Number: 9, Value: object.Integer(3)}
+	doc.Trailer = object.Dictionary{}
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	if err := doc.Write(&bytes.Buffer{}); err == nil {
 		t.Fatal("Write must reject two streams sharing a /Length target with different lengths")
@@ -76,10 +77,10 @@ func TestWriteRejectsSharedLengthConflict(t *testing.T) {
 // TestParseXRefStreamRejectsNegativeIndex is the C38 guard: a negative /Index
 // start or count is rejected, matching the traditional xref table.
 func TestParseXRefStreamRejectsNegativeIndex(t *testing.T) {
-	s := &Stream{}
-	s.Dict.Set("W", Array{Integer(1), Integer(2), Integer(2)})
-	s.Dict.Set("Index", Array{Integer(-5), Integer(1)})
-	s.Dict.Set("Size", Integer(10))
+	s := &object.Stream{}
+	s.Dict.Set("W", object.Array{object.Integer(1), object.Integer(2), object.Integer(2)})
+	s.Dict.Set("Index", object.Array{object.Integer(-5), object.Integer(1)})
+	s.Dict.Set("Size", object.Integer(10))
 	if _, err := ParseXRefStream(s); err == nil {
 		t.Fatal("a negative /Index start object must be rejected")
 	}

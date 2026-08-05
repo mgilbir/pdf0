@@ -1,15 +1,24 @@
 # Fonts
 
-The font subsystem is about 3,900 lines across four files — `fonts.go`,
-`fontprog.go`, and the generated tables `font_encodings.go` and
-`cff_strings.go`. It answers three questions the PDF/A and PDF/UA font rules
-keep asking: *which glyphs does this file actually show*, *does the embedded
-font program define them*, and *do the declared widths match the program's*.
-None of that is decidable from the PDF object model, so pdf0 parses sfnt, CFF
-and Type 1 font programs in-tree. Open this doc when a font rule fires and you
-need to know why, when adding a rule that touches glyphs, or when chasing a
-false positive — font rules are the densest rule family here and the most common
-source of both. For the family view see [validators.md](validators.md).
+This doc is about reading fonts to validate them: `fonts.go` here, and the font
+program reader it leans on, which is `font/fontprog.go` in
+[github.com/mgilbir/forme](https://github.com/mgilbir/forme) along with the
+generated tables `font/font_encodings.go` and `font/cff_strings.go`. Between
+them they answer three questions the PDF/A and PDF/UA font rules keep asking:
+*which glyphs does this file actually show*, *does the embedded font program
+define them*, and *do the declared widths match the program's*. None of that is
+decidable from the PDF object model, which is why sfnt, CFF and Type 1 programs
+are parsed at all. Open this doc when a font rule fires and you need to know
+why, when adding a rule that touches glyphs, or when chasing a false positive —
+font rules are the densest rule family here and the most common source of both.
+For the family view see [validators.md](validators.md).
+
+Setting text with a font is a different subsystem and lives elsewhere.
+Shaping — OpenType layout, the bidirectional algorithm, the Indic, Khmer,
+Myanmar and Universal Shaping Engine models, subsetting — is forme's `shape`
+package, because none of it is about PDF. What is about PDF stays in `fonts/`
+here: turning positioned glyphs into content-stream operators, and writing the
+font into the document as the object graph a reader needs.
 
 ## Font types and what each requires
 
@@ -19,7 +28,7 @@ the descendant CIDFont's — everything downstream follows from that pair.
 | Font | Program stream | Declared widths | Code → glyph in pdf0 | Subset set |
 |------|----------------|-----------------|----------------------|------------|
 | `Type1` / `MMType1` | `/FontFile` (Type 1) or `/FontFile3` `/Type1C` (CFF) | `/Widths` + `/FirstChar`, else descriptor `/MissingWidth` | code → glyph *name* via the encoding, name → charstring (`glyphNames`, `widthByName`) | `/CharSet` |
-| `TrueType` | `/FontFile2` (sfnt) or `/FontFile3` `/OpenType` | same as Type 1 | code → GID through the program's `cmap` subtables (`trueTypeGID`) | — |
+| `TrueType` | `/FontFile2` (sfnt) or `/FontFile3` `/OpenType` | same as Type 1 | code → GID through the program's `cmap` subtables (`font.TrueTypeGID`) | — |
 | `Type0` → `CIDFontType0` | descendant's `/FontFile3` (CID-keyed CFF) or `/OpenType` | `/W` array + `/DW` (default 1000) | 2-byte code → CID → CFF charset entry (`cidGIDs`, `widthByCID`) | `/CIDSet` |
 | `Type0` → `CIDFontType2` | descendant's `/FontFile2` | `/W` + `/DW` | 2-byte code → CID → GID via `/CIDToGIDMap` → `glyf` entry | `/CIDSet` |
 | `Type3` | none — `/CharProcs` content streams | `/Widths` in glyph space, scaled by `/FontMatrix` | code → glyph name → CharProc, width from the `d0`/`d1` operand | — |
@@ -32,7 +41,7 @@ compares against `/Widths`.
 **The standard 14 fonts get no special case** — no built-in metrics table, no
 exemption list. PDF/A requires every font embedded, so a bare `/BaseFont
 /Helvetica` fails `checkFontsEmbedded` like any other unembedded font, and
-nothing in `fontprog.go` can supply its widths.
+nothing in forme's `font/fontprog.go` can supply its widths.
 
 Rule identifiers differ per ISO 19005 part, so every finding routes through
 `fontClause(concept, level)` rather than one parent clause — the `embed` concept
@@ -85,10 +94,10 @@ PDF/UA checks iterate it, `content_operators.go` uses it to find Type 3 glyph
 procedures, and `text.go` reuses `parseToUnicodeMap` for text extraction. PDF/X
 is the outlier — `pdfxCheckFontsEmbedded` scans resources itself.
 
-## Font program parsing (`fontprog.go`)
+## Font program parsing (forme's `font/fontprog.go`)
 
 `loadFontProgram` picks the parser from the descriptor key, and everything
-converges on one `fontProgram` struct.
+converges on one `font.Program` struct.
 
 ```mermaid
 flowchart TD
@@ -98,21 +107,21 @@ flowchart TD
     T0 -->|yes| D["first /DescendantFonts entry<br/>CIDFontType0 or CIDFontType2"]
     T0 -->|no| FD["/FontDescriptor"]
     D --> FD
-    FD -->|"/FontFile"| P1["parseType1 — PFB unwrap, eexec decrypt"]
-    FD -->|"/FontFile2"| P2["parseSFNT — table directory"]
+    FD -->|"/FontFile"| P1["font.ParseType1 — PFB unwrap, eexec decrypt"]
+    FD -->|"/FontFile2"| P2["font.ParseSFNT — table directory"]
     FD -->|"/FontFile3"| OT{"stream /Subtype is /OpenType?"}
-    OT -->|yes| PSC["parseSFNTCFF — CFF table<br/>falls back to parseSFNT"]
-    OT -->|no| PC["parseCFF — Type1C or CIDFontType0C"]
-    P1 --> FP["fontProgram"]
+    OT -->|yes| PSC["parseSFNTCFF — CFF table<br/>falls back to font.ParseSFNT"]
+    OT -->|no| PC["font.ParseCFF — Type1C or CIDFontType0C"]
+    P1 --> FP["font.Program"]
     P2 --> FP
     PSC --> FP
     PC --> FP
 ```
 
-**sfnt (`parseSFNT`).** Accepts tag `0x00010000`, `true` or `OTTO`. Reads `head`
+**sfnt (`font.ParseSFNT`).** Accepts tag `0x00010000`, `true` or `OTTO`. Reads `head`
 for `unitsPerEm` and the loca format flag, `maxp` for `numGlyphs`, `hhea` +
 `hmtx` for advance widths, `loca` + `glyf` for outline extents, and `cmap` for
-code→GID: the best Unicode subtable into `cmap`, `(3,0)` into `symbolCmap`
+code→GID: the best Unicode subtable into `Cmap`, `(3,0)` into `SymbolCmap`
 (queried with the `0xF000` prefix first), `(1,0)` into `macCmap`.
 `cmapSubtableCount` is kept because ISO 19005-1 6.3.7 requires a symbolic
 TrueType font to declare exactly one subtable.
@@ -135,7 +144,7 @@ to the same thing and is why "maps nothing" is folded into "unreadable" below.
 12 is the only one whose keys can exceed `0xFFFF`, and in practice it is where a
 `(3,10)`/`(0,4)` subtable's supra-BMP coverage lives. An unparseable subtable —
 unknown format, truncated body, a declared `length`/`nGroups` the buffer cannot
-back — yields `nil`, never an empty map: `trueTypeGID` treats a non-nil `cmap` as
+back — yields `nil`, never an empty map: `font.TrueTypeGID` treats a non-nil `cmap` as
 authoritative, so an empty one would read as "every code is `.notdef`" instead of
 "unknown". So does a subtable that parses cleanly and maps nothing at all, which
 is not a theoretical shape: sixteen bytes of format-12 header declaring
@@ -160,7 +169,7 @@ letters) carries an outline solely as a building block and is not a directly
 mapped CID, so `checkCIDFontCIDSet` skips those or a conformant `/CIDSet` looks
 incomplete.
 
-**CFF (`parseCFF`).** Parses the INDEX structures (names, top DICTs, strings,
+**CFF (`font.ParseCFF`).** Parses the INDEX structures (names, top DICTs, strings,
 charstrings), the top DICT operators, and the charset. `_, isCID := top[1230]`
 (the `ROS` operator) splits the two worlds: a CID-keyed font fills `cidGIDs` and
 `widthByCID` keyed by the charset's CIDs, a name-keyed font fills `glyphNames`
@@ -169,7 +178,7 @@ operand of a Type 2 charstring (`type2CharstringWidth`, detected by an operand
 count exceeding what the first stack-clearing operator takes), offset by the
 Private DICT's `nominalWidthX`, defaulting to `defaultWidthX`.
 
-**Type 1 (`parseType1`).** Unwraps PFB segment framing, reads the cleartext
+**Type 1 (`font.ParseType1`).** Unwraps PFB segment framing, reads the cleartext
 `/FontMatrix`, finds `eexec`, decodes the hex form when the payload starts with
 four hex digits, decrypts with r=55665, then walks `/CharStrings` decrypting
 each charstring with r=4330 (skipping `lenIV` bytes) and taking the width from
@@ -193,11 +202,11 @@ program parses, so this raises no false positive.
 ## Encodings and character mapping
 
 Two generated tables back the encoding machinery, and their headers name their
-provenance. **`font_encodings.go`** — "generated from ISO 32000-1 Annex D.2
+provenance. **forme's `font/font_encodings.go`** — "generated from ISO 32000-1 Annex D.2
 (spec/pdf1.7)" — holds `standardEncodingNames`, `macRomanEncodingNames` and
 `winAnsiEncodingNames`, consumed only by `simpleFontCodeToName`, which layers a
 base encoding (named, or `StandardEncoding` implicitly for a non-symbolic font)
-with `/Differences` to produce `map[byte]string`. **`cff_strings.go`** — "the
+with `/Differences` to produce `map[byte]string`. **forme's `font/cff_strings.go`** — "the
 391 predefined CFF strings (Adobe Technical Note #5176, Appendix A), indexed by
 SID" — is consumed only by `cffSIDName`: SIDs below 391 index this table, higher
 SIDs index the font's own string INDEX. Neither has a generator committed in
@@ -275,13 +284,13 @@ CIDs whose glyphs exist only as padding or composite components.
 | File | Owns | Governing spec |
 |------|------|----------------|
 | `fonts.go` | Content walking (`forEachContentItem`, `buildFontEvents`, `collectFontTextUsage`), all font rule functions, the predefined-CMap table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, ToUnicode parsing | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
-| `fontprog.go` | `fontProgram` plus `parseSFNT`, `parseCFF`, `parseType1`, and `parseSFNTCFF` for OpenType/CFF | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
-| `font_encodings.go` | Generated: `standardEncodingNames`, `macRomanEncodingNames`, `winAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
-| `cff_strings.go` | Generated: `cffStandardStrings`, 391 entries indexed by SID | Adobe TN #5176 Appendix A |
+| forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1`, and `parseSFNTCFF` for OpenType/CFF | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
+| forme `font/font_encodings.go` | Generated: `standardEncodingNames`, `macRomanEncodingNames`, `winAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
+| forme `font/cff_strings.go` | Generated: `cffStandardStrings`, 391 entries indexed by SID | Adobe TN #5176 Appendix A |
 
 Font findings are also produced outside these files: `checkFontsEmbedded` and
 `checkFontSubsets` live in `pdfa.go`, the clause-7.21 PDF/UA font family in
-`pdfua.go`, and `pdfxCheckFontsEmbedded` in `pdfx.go`.
+`pdfua/pdfua.go`, and `pdfxCheckFontsEmbedded` in `pdfx/pdfx.go`.
 
 ## DoS guards
 
@@ -298,7 +307,7 @@ Two of these are configurable per document; see
 - **cmap format 4 total work** (`WithMaxCmapWork`, default `1 << 18`) — a valid
   subtable partitions the BMP in ~65536 iterations, a hostile one with many
   full-range segments is O(segments × 65535) (audit C10). On trip the partial
-  map is returned and marked partial (`fontProgram.cmapPartial`), the glyph rules
+  map is returned and marked partial (`font.Program.CmapPartial`), the glyph rules
   decline, and the trip is reported — see [limits.md](limits.md).
 - **cmap format 12 total work** (the same `WithMaxCmapWork` budget, charged
   per subtable) — `nGroups` is
@@ -345,6 +354,25 @@ a second field and a second option; nothing here forecloses it.
 - **Per-run memoization** — the validation cache holds the font-usage map, the
   per-stream event skeletons and the per-stream used-name sets.
 
+## Third-party data
+
+The metrics of the fourteen standard faces are generated from the **Adobe Core
+14 AFM files**, and live with the rest of the shaping code in forme
+(`shape/standard14.go`), which carries the Adobe copyright notices and the
+licence paragraph verbatim as that licence requires. Only advance widths and
+font-wide metrics are taken; no outline, no font program and no character shape
+is reproduced, and no AFM file is redistributed.
+
+The fourteen names — Helvetica, Times, Courier, Symbol, ZapfDingbats and the
+variants — are the identifiers ISO 32000-2 9.6.2.2 gives these faces, and are
+what a `/BaseFont` entry holds. Several are trademarks of their owners. Naming
+one in a PDF is how the format says "the face the reader already has"; this
+repository contains no typeface at all, and `find . -name '*.ttf' -o -name
+'*.otf'` returns nothing. The bundled face a document can be written with is
+forme's, under the SIL Open Font License, with its licence file beside it.
+
+Other generated tables and their sources are listed in the table above.
+
 ## Confirmed limitations
 
 - **Non-Identity CMaps are not decoded.** Glyph coverage, `.notdef` and width
@@ -360,7 +388,7 @@ a second field and a second option; nothing here forecloses it.
   width expressed only through a subroutine call is not recovered; Expert
   charsets (ids 1 and 2) fall back to identity SIDs. **No standard-14 metrics**,
   so only the embedding rule fires on an unembedded standard font.
-- **`glyphNameToRune` covers the common cases only** — `uniXXXX`/`uXXXX` plus
+- **`font.GlyphNameToRune` covers the common cases only** — `uniXXXX`/`uXXXX` plus
   ASCII and Latin-1-high identity, so codes 0x80–0x9F under WinAnsi resolve only
   via a `uni`/`u` glyph name.
 - **`simpleGlyphExists` treats GID 0 as non-existent** for TrueType, merging

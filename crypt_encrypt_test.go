@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -16,10 +17,10 @@ func TestSetEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := &Dictionary{}
-	info.Set("Producer", String{Value: []byte(secret)})
-	doc.Objects[4] = &IndirectObject{Number: 4, Value: info}
-	doc.Trailer.Set("Info", IndirectRef{Number: 4})
+	info := &object.Dictionary{}
+	info.Set("Producer", object.String{Value: []byte(secret)})
+	doc.Objects[4] = &object.IndirectObject{Number: 4, Value: info}
+	doc.Trailer.Set("Info", object.IndirectRef{Number: 4})
 
 	if err := doc.SetEncryption("sesame", "overlord"); err != nil {
 		t.Fatalf("SetEncryption: %v", err)
@@ -69,7 +70,7 @@ func producerOf(doc *Document) string {
 	if info == nil {
 		return ""
 	}
-	s, _ := info.Get("Producer").(String)
+	s, _ := info.Get("Producer").(object.String)
 	return string(s.Value)
 }
 
@@ -82,10 +83,10 @@ func TestRemoveEncryption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := &Dictionary{}
-	info.Set("Producer", String{Value: []byte(secret)})
-	doc.Objects[4] = &IndirectObject{Number: 4, Value: info}
-	doc.Trailer.Set("Info", IndirectRef{Number: 4})
+	info := &object.Dictionary{}
+	info.Set("Producer", object.String{Value: []byte(secret)})
+	doc.Objects[4] = &object.IndirectObject{Number: 4, Value: info}
+	doc.Trailer.Set("Info", object.IndirectRef{Number: 4})
 	if err := doc.SetEncryption("pw", "pw"); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -14,19 +15,19 @@ import (
 // failed to decode — losing every object packed into it. Objects reachable from
 // /Encrypt must stay out of object streams.
 func TestEncryptIndirectCFNotPacked(t *testing.T) {
-	d := &Document{Objects: map[int]*IndirectObject{}, Version: "2.0", usedXRefStream: true}
-	cat := &Dictionary{}
-	cat.Set("Type", Name("Catalog"))
-	d.Objects[1] = &IndirectObject{Number: 1, Value: cat}
+	d := &Document{Objects: map[int]*object.IndirectObject{}, Version: "2.0", usedXRefStream: true}
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
 	// Enough small packable objects that Write builds an object stream.
 	for i := 10; i < 40; i++ {
-		dd := &Dictionary{}
-		dd.Set("Type", Name("Item"))
-		dd.Set("K", Integer(i))
-		d.Objects[i] = &IndirectObject{Number: i, Value: dd}
+		dd := &object.Dictionary{}
+		dd.Set("Type", object.Name("Item"))
+		dd.Set("K", object.Integer(i))
+		d.Objects[i] = &object.IndirectObject{Number: i, Value: dd}
 	}
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Root", IndirectRef{Number: 1})
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	if err := d.SetEncryption("", ""); err != nil {
 		t.Fatal(err)
@@ -34,7 +35,7 @@ func TestEncryptIndirectCFNotPacked(t *testing.T) {
 	// Move the (direct) /CF crypt-filter dictionary into its own indirect object
 	// and reference it — the shape that triggered the bug.
 	enc := d.ResolveDict(d.Trailer.Get("Encrypt"))
-	cf, ok := enc.Get("CF").(*Dictionary)
+	cf, ok := enc.Get("CF").(*object.Dictionary)
 	if !ok {
 		t.Fatalf("expected a direct /CF dictionary, got %T", enc.Get("CF"))
 	}
@@ -45,8 +46,8 @@ func TestEncryptIndirectCFNotPacked(t *testing.T) {
 		}
 	}
 	cfNum++
-	d.Objects[cfNum] = &IndirectObject{Number: cfNum, Value: cf}
-	enc.Set("CF", IndirectRef{Number: cfNum})
+	d.Objects[cfNum] = &object.IndirectObject{Number: cfNum, Value: cf}
+	enc.Set("CF", object.IndirectRef{Number: cfNum})
 
 	var buf bytes.Buffer
 	if err := d.Write(&buf); err != nil {
@@ -76,20 +77,20 @@ func TestEncryptIndirectCFNotPacked(t *testing.T) {
 // TestEncryptReachable checks the set of objects reachable from /Encrypt,
 // including a transitively referenced object.
 func TestEncryptReachable(t *testing.T) {
-	d := &Document{Objects: map[int]*IndirectObject{}}
+	d := &Document{Objects: map[int]*object.IndirectObject{}}
 	// /Encrypt (obj 5) -> /CF (obj 6) -> /StdCF nested with a further ref (obj 7).
-	inner := &Dictionary{}
-	inner.Set("Extra", IndirectRef{Number: 7})
-	d.Objects[7] = &IndirectObject{Number: 7, Value: &Dictionary{}}
-	cf := &Dictionary{}
+	inner := &object.Dictionary{}
+	inner.Set("Extra", object.IndirectRef{Number: 7})
+	d.Objects[7] = &object.IndirectObject{Number: 7, Value: &object.Dictionary{}}
+	cf := &object.Dictionary{}
 	cf.Set("StdCF", inner)
-	d.Objects[6] = &IndirectObject{Number: 6, Value: cf}
-	encDict := &Dictionary{}
-	encDict.Set("Filter", Name("Standard"))
-	encDict.Set("CF", IndirectRef{Number: 6})
-	d.Objects[5] = &IndirectObject{Number: 5, Value: encDict}
-	d.Trailer = Dictionary{}
-	d.Trailer.Set("Encrypt", IndirectRef{Number: 5})
+	d.Objects[6] = &object.IndirectObject{Number: 6, Value: cf}
+	encDict := &object.Dictionary{}
+	encDict.Set("Filter", object.Name("Standard"))
+	encDict.Set("CF", object.IndirectRef{Number: 6})
+	d.Objects[5] = &object.IndirectObject{Number: 5, Value: encDict}
+	d.Trailer = object.Dictionary{}
+	d.Trailer.Set("Encrypt", object.IndirectRef{Number: 5})
 
 	got := d.encryptReachable()
 	for _, num := range []int{5, 6, 7} {

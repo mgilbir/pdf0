@@ -3,6 +3,8 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"math"
 	"strings"
 	"testing"
@@ -36,7 +38,7 @@ func TestReadNegativeXrefOffset(t *testing.T) {
 		if err != nil {
 			t.Fatalf("rebuild should recover the crafted file: %v", err)
 		}
-		if getCatalog(doc) == nil {
+		if doc.view().Catalog() == nil {
 			t.Fatalf("catalog not recovered")
 		}
 	})
@@ -60,12 +62,12 @@ func TestReadNegativePrevOffset(t *testing.T) {
 // TestObjStmHugeNPanic ensures a huge /N does not overflow the sanity guard and
 // panic in make (audit C2).
 func TestObjStmHugeNPanic(t *testing.T) {
-	s := &Stream{Dict: Dictionary{}, Data: []byte("12345678")}
-	s.Dict.Set("Type", Name("ObjStm"))
-	s.Dict.Set("N", Integer(math.MaxInt64))
-	s.Dict.Set("First", Integer(8))
+	s := &object.Stream{Dict: object.Dictionary{}, Data: []byte("12345678")}
+	s.Dict.Set("Type", object.Name("ObjStm"))
+	s.Dict.Set("N", object.Integer(math.MaxInt64))
+	s.Dict.Set("First", object.Integer(8))
 	noPanic(t, "objstm huge N", func() {
-		if _, _, _, err := parseObjStmIndex(canceler{}, s, defaultLimits()); err == nil {
+		if _, _, _, err := parseObjStmIndex(core.Canceler{}, s, core.DefaultLimits()); err == nil {
 			t.Fatalf("expected an error for an absurd /N, got nil")
 		}
 	})
@@ -80,7 +82,7 @@ func TestStreamWrongTypedLengthRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected recovery via endstream search, got err=%v", err)
 	}
-	st, ok := iobj.Value.(*Stream)
+	st, ok := iobj.Value.(*object.Stream)
 	if !ok {
 		t.Fatalf("expected a stream, got %T", iobj.Value)
 	}
@@ -181,7 +183,7 @@ func TestStartxrefFarFromTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rebuild should recover the file: %v", err)
 	}
-	if getCatalog(doc) == nil {
+	if doc.view().Catalog() == nil {
 		t.Fatal("catalog not recovered")
 	}
 }

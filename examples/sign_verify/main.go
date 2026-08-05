@@ -25,6 +25,8 @@ import (
 	"time"
 
 	pdf "github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 )
 
 func main() {
@@ -96,8 +98,8 @@ func main() {
 	fmt.Println("\nOK: DocumentUnmodified() rejected the altered file that Valid alone accepted.")
 }
 
-// report prints the fields of a SignatureResult that a caller should look at.
-func report(label string, r pdf.SignatureResult) {
+// report prints the fields of a sign.Result that a caller should look at.
+func report(label string, r sign.Result) {
 	fmt.Printf("\n%s:\n", label)
 	fmt.Printf("  signer               %s\n", r.SignerCommonName)
 	fmt.Printf("  Valid                %v  (the signed byte range verifies)\n", r.Valid)
@@ -121,30 +123,30 @@ func report(label string, r pdf.SignatureResult) {
 // WriteSigned fail with "/ByteRange placeholder not found". See the limitations
 // section of docs/signing.md.
 func newDocument() *pdf.Document {
-	catalog := &pdf.Dictionary{}
-	catalog.Set("Type", pdf.Name("Catalog"))
-	catalog.Set("Pages", pdf.IndirectRef{Number: 2})
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("Pages", object.IndirectRef{Number: 2})
 
-	pages := &pdf.Dictionary{}
-	pages.Set("Type", pdf.Name("Pages"))
-	pages.Set("Kids", pdf.Array{pdf.IndirectRef{Number: 3}})
-	pages.Set("Count", pdf.Integer(1))
+	pages := &object.Dictionary{}
+	pages.Set("Type", object.Name("Pages"))
+	pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+	pages.Set("Count", object.Integer(1))
 
-	page := &pdf.Dictionary{}
-	page.Set("Type", pdf.Name("Page"))
-	page.Set("Parent", pdf.IndirectRef{Number: 2})
-	page.Set("MediaBox", pdf.Array{pdf.Integer(0), pdf.Integer(0), pdf.Integer(612), pdf.Integer(792)})
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
 
 	return &pdf.Document{
 		Version: "2.0",
-		Objects: map[int]*pdf.IndirectObject{
+		Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: catalog},
 			2: {Number: 2, Value: pages},
 			3: {Number: 3, Value: page},
 		},
-		Trailer: pdf.Dictionary{
-			Keys:   []pdf.Name{"Root"},
-			Values: []pdf.Object{pdf.IndirectRef{Number: 1}},
+		Trailer: object.Dictionary{
+			Keys:   []object.Name{"Root"},
+			Values: []object.Object{object.IndirectRef{Number: 1}},
 		},
 	}
 }
@@ -156,12 +158,12 @@ func incrementallyAlter(original []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	page, ok := doc.Objects[3].Value.(*pdf.Dictionary)
+	page, ok := doc.Objects[3].Value.(*object.Dictionary)
 	if !ok {
 		return nil, fmt.Errorf("object 3 is not the page dictionary")
 	}
 	// Halve the page box: a visible change to what the document renders.
-	page.Set("MediaBox", pdf.Array{pdf.Integer(0), pdf.Integer(0), pdf.Integer(306), pdf.Integer(396)})
+	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(306), object.Integer(396)})
 
 	var buf bytes.Buffer
 	if err := doc.WriteIncremental(&buf, original, []int{3}); err != nil {

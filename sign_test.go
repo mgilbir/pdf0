@@ -2,12 +2,13 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/signtest"
 	"testing"
 )
 
 // TestSignAndVerify signs a document and verifies the resulting signature.
 func TestSignAndVerify(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	base := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(base), int64(len(base)))
 	if err != nil {
@@ -50,7 +51,7 @@ func TestSignAndVerify(t *testing.T) {
 // TestSignIncremental signs as an incremental update: the original bytes must be
 // preserved verbatim and the signature must verify.
 func TestSignIncremental(t *testing.T) {
-	cert, key := testCertKey(t)
+	cert, key := signtest.CertKey(t)
 	original := buildMinimalPDF()
 	doc, err := Read(bytes.NewReader(original), int64(len(original)))
 	if err != nil {

@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/object"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -9,6 +11,15 @@ import (
 )
 
 // jpegBytes encodes a solid-grey WxH image as JPEG.
+// rgb8 is repeated from the images package's colour tests: a test helper
+// cannot cross a package boundary.
+// rgb8 returns the 8-bit RGBA of a pixel.
+func rgb8(t *testing.T, m image.Image, x, y int) (r, g, b, a uint8) {
+	t.Helper()
+	rr, gg, bb, aa := m.At(x, y).RGBA()
+	return uint8(rr >> 8), uint8(gg >> 8), uint8(bb >> 8), uint8(aa >> 8)
+}
+
 func jpegBytes(t *testing.T, w, h int, gray byte) []byte {
 	t.Helper()
 	src := image.NewGray(image.Rect(0, 0, w, h))
@@ -31,9 +42,9 @@ func nrgbaPix(m *image.NRGBA, x, y int) [4]byte {
 }
 
 // extractFirst extracts the single named image from a one-image doc.
-func extractFirst(t *testing.T, st *Stream) ExtractedImage {
+func extractFirst(t *testing.T, st *object.Stream) images.ExtractedImage {
 	t.Helper()
-	d := imageDoc(map[string]*Stream{"Img": st})
+	d := imageDoc(map[string]*object.Stream{"Img": st})
 	imgs := d.ExtractImages()
 	if len(imgs) != 1 {
 		t.Fatalf("expected 1 image, got %d", len(imgs))
@@ -72,7 +83,7 @@ func TestMaskDCTSoftMask(t *testing.T) {
 func TestMaskDCTStencilMask(t *testing.T) {
 	base := imageXObject(2, 1, 8, "DeviceGray", "DCTDecode", jpegBytes(t, 2, 1, 200))
 	mk := imageXObject(2, 1, 1, "", "", []byte{0b10000000}) // pixel0=1 hides, pixel1=0 shows
-	mk.Dict.Set("ImageMask", Boolean(true))
+	mk.Dict.Set("ImageMask", object.Boolean(true))
 	base.Dict.Set("Mask", mk)
 
 	im := extractFirst(t, base)
@@ -107,7 +118,7 @@ func TestMaskDCTNoMaskUnchanged(t *testing.T) {
 // is skipped (raw samples unavailable), leaving the image opaque and unchanged.
 func TestMaskColorKeyIgnoredForCodec(t *testing.T) {
 	base := imageXObject(2, 1, 8, "DeviceGray", "DCTDecode", jpegBytes(t, 2, 1, 128))
-	base.Dict.Set("Mask", Array{Integer(0), Integer(255)}) // colour-key range
+	base.Dict.Set("Mask", object.Array{object.Integer(0), object.Integer(255)}) // colour-key range
 	im := extractFirst(t, base)
 	if _, isNRGBA := im.Image.(*image.NRGBA); isNRGBA {
 		t.Errorf("colour-key /Mask on a codec image should be ignored (no NRGBA conversion)")
@@ -115,34 +126,3 @@ func TestMaskColorKeyIgnoredForCodec(t *testing.T) {
 }
 
 // TestApplyImageMasks exercises applyImageMasks directly on a hand-built RGBA.
-func TestApplyImageMasks(t *testing.T) {
-	// A 2x1 opaque RGBA base.
-	src := image.NewRGBA(image.Rect(0, 0, 2, 1))
-	src.Set(0, 0, color.RGBA{R: 10, G: 20, B: 30, A: 255})
-	src.Set(1, 0, color.RGBA{R: 40, G: 50, B: 60, A: 255})
-
-	st := imageXObject(2, 1, 8, "DeviceRGB", "DCTDecode", nil)
-	sm := imageXObject(2, 1, 8, "DeviceGray", "", []byte{0, 128})
-	st.Dict.Set("SMask", sm)
-
-	d := &Document{}
-	out := d.applyImageMasks(st, src)
-	nrgba, ok := out.(*image.NRGBA)
-	if !ok {
-		t.Fatalf("expected *image.NRGBA, got %T", out)
-	}
-	// Colour is preserved exactly (no codec involved here); alpha from SMask.
-	// Read the NRGBA pixels directly: .RGBA() would premultiply by alpha.
-	if p := nrgbaPix(nrgba, 0, 0); p != [4]byte{10, 20, 30, 0} {
-		t.Errorf("pixel0 = %v, want [10 20 30 0]", p)
-	}
-	if p := nrgbaPix(nrgba, 1, 0); p != [4]byte{40, 50, 60, 128} {
-		t.Errorf("pixel1 = %v, want [40 50 60 128]", p)
-	}
-
-	// With no mask keys, the image is returned unchanged.
-	plain := imageXObject(2, 1, 8, "DeviceRGB", "DCTDecode", nil)
-	if got := d.applyImageMasks(plain, src); got != image.Image(src) {
-		t.Errorf("no-mask image should be returned unchanged")
-	}
-}

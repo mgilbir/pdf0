@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,26 +21,26 @@ func buildPDFVT1Doc() *Document {
 <pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>
 <pdfvtid:GTS_PDFVTVersion>PDF/VT-1</pdfvtid:GTS_PDFVTVersion>
 </rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>`
-	md := &Dictionary{}
-	md.Set("Type", Name("Metadata"))
-	md.Set("Subtype", Name("XML"))
-	d.Objects[6] = &IndirectObject{Number: 6, Value: &Stream{Dict: *md, Data: []byte(xmp)}}
+	md := &object.Dictionary{}
+	md.Set("Type", object.Name("Metadata"))
+	md.Set("Subtype", object.Name("XML"))
+	d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *md, Data: []byte(xmp)}}
 
-	cat := d.Objects[1].Value.(*Dictionary)
-	cat.Set("DPartRoot", IndirectRef{Number: 12})
+	cat := d.Objects[1].Value.(*object.Dictionary)
+	cat.Set("DPartRoot", object.IndirectRef{Number: 12})
 
-	root := &Dictionary{}
-	root.Set("Type", Name("DPartRoot"))
-	root.Set("DPartRootNode", IndirectRef{Number: 13})
-	d.Objects[12] = &IndirectObject{Number: 12, Value: root}
+	root := &object.Dictionary{}
+	root.Set("Type", object.Name("DPartRoot"))
+	root.Set("DPartRootNode", object.IndirectRef{Number: 13})
+	d.Objects[12] = &object.IndirectObject{Number: 12, Value: root}
 
-	leaf := &Dictionary{}
-	leaf.Set("Type", Name("DPart"))
-	leaf.Set("Parent", IndirectRef{Number: 12})
-	leaf.Set("Start", IndirectRef{Number: 3})
-	d.Objects[13] = &IndirectObject{Number: 13, Value: leaf}
+	leaf := &object.Dictionary{}
+	leaf.Set("Type", object.Name("DPart"))
+	leaf.Set("Parent", object.IndirectRef{Number: 12})
+	leaf.Set("Start", object.IndirectRef{Number: 3})
+	d.Objects[13] = &object.IndirectObject{Number: 13, Value: leaf}
 
-	d.Objects[3].Value.(*Dictionary).Set("DPart", IndirectRef{Number: 13})
+	d.Objects[3].Value.(*object.Dictionary).Set("DPart", object.IndirectRef{Number: 13})
 	return d
 }
 
@@ -58,24 +59,24 @@ func TestValidatePDFVTViolations(t *testing.T) {
 		substr string
 	}{
 		{"no VT identification", func(d *Document) {
-			md := &Dictionary{}
-			md.Set("Type", Name("Metadata"))
+			md := &object.Dictionary{}
+			md.Set("Type", object.Name("Metadata"))
 			// XMP with only the PDF/X identification, no pdfvtid.
-			d.Objects[6] = &IndirectObject{Number: 6, Value: &Stream{Dict: *md, Data: []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>")}}
+			d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *md, Data: []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>")}}
 		}, "identification", "not identified as PDF/VT"},
 		{"wrong VT version", func(d *Document) {
-			md := &Dictionary{}
-			md.Set("Type", Name("Metadata"))
-			d.Objects[6] = &IndirectObject{Number: 6, Value: &Stream{Dict: *md, Data: []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion><pdfvtid:GTS_PDFVTVersion>PDF/VT-2</pdfvtid:GTS_PDFVTVersion>")}}
+			md := &object.Dictionary{}
+			md.Set("Type", object.Name("Metadata"))
+			d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *md, Data: []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion><pdfvtid:GTS_PDFVTVersion>PDF/VT-2</pdfvtid:GTS_PDFVTVersion>")}}
 		}, "identification", "does not identify PDF/VT-1"},
 		{"no DPart hierarchy", func(d *Document) {
-			d.Objects[1].Value.(*Dictionary).Delete("DPartRoot")
+			d.Objects[1].Value.(*object.Dictionary).Delete("DPartRoot")
 		}, "dpart", "requires a document part hierarchy"},
 		{"broken DPart propagates", func(d *Document) {
-			d.Objects[13].Value.(*Dictionary).Delete("Parent")
+			d.Objects[13].Value.(*object.Dictionary).Delete("Parent")
 		}, "dpart/14.12.4.1", "missing the required /Parent"},
 		{"X-4 base violation propagates", func(d *Document) {
-			d.Objects[11].Value.(*Dictionary).Set("Trapped", Name("Unknown"))
+			d.Objects[11].Value.(*object.Dictionary).Set("Trapped", object.Name("Unknown"))
 		}, "pdfx-4/trapped", "True or False"},
 	}
 	for _, tc := range cases {

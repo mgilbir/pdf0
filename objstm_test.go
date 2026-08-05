@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
-func makeObjStm(t *testing.T, objects map[int]string, order []int, compress bool) *Stream {
+func makeObjStm(t *testing.T, objects map[int]string, order []int, compress bool) *object.Stream {
 	t.Helper()
 	var index, body bytes.Buffer
 	for _, num := range order {
@@ -18,20 +20,20 @@ func makeObjStm(t *testing.T, objects map[int]string, order []int, compress bool
 	payload := append(index.Bytes(), body.Bytes()...)
 
 	data := payload
-	dict := Dictionary{}
-	dict.Set("Type", Name("ObjStm"))
-	dict.Set("N", Integer(len(order)))
-	dict.Set("First", Integer(index.Len()))
+	dict := object.Dictionary{}
+	dict.Set("Type", object.Name("ObjStm"))
+	dict.Set("N", object.Integer(len(order)))
+	dict.Set("First", object.Integer(index.Len()))
 	if compress {
 		var buf bytes.Buffer
 		zw := zlib.NewWriter(&buf)
 		zw.Write(payload)
 		zw.Close()
 		data = buf.Bytes()
-		dict.Set("Filter", Name("FlateDecode"))
+		dict.Set("Filter", object.Name("FlateDecode"))
 	}
-	dict.Set("Length", Integer(len(data)))
-	return &Stream{Dict: dict, Data: data}
+	dict.Set("Length", object.Integer(len(data)))
+	return &object.Stream{Dict: dict, Data: data}
 }
 
 func TestParseObjStmIndex(t *testing.T) {
@@ -41,7 +43,7 @@ func TestParseObjStmIndex(t *testing.T) {
 		6: "42",
 	}, []int{4, 5, 6}, true)
 
-	data, entries, first, err := parseObjStmIndex(canceler{}, stream, defaultLimits())
+	data, entries, first, err := parseObjStmIndex(core.Canceler{}, stream, core.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +60,7 @@ func TestParseObjStmIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s, ok := obj.(String); !ok || string(s.Value) != "hello" {
+	if s, ok := obj.(object.String); !ok || string(s.Value) != "hello" {
 		t.Errorf("expected string 'hello', got %#v", obj)
 	}
 }
@@ -66,20 +68,20 @@ func TestParseObjStmIndex(t *testing.T) {
 func TestParseObjStmIndexRejectsBadDict(t *testing.T) {
 	cases := []struct {
 		name  string
-		mutig func(*Stream)
+		mutig func(*object.Stream)
 	}{
-		{"wrong type", func(s *Stream) { s.Dict.Set("Type", Name("XRef")) }},
-		{"missing N", func(s *Stream) { s.Dict.Delete("N") }},
-		{"negative N", func(s *Stream) { s.Dict.Set("N", Integer(-1)) }},
-		{"missing First", func(s *Stream) { s.Dict.Delete("First") }},
-		{"First beyond data", func(s *Stream) { s.Dict.Set("First", Integer(1<<30)) }},
-		{"absurd N", func(s *Stream) { s.Dict.Set("N", Integer(1<<30)) }},
+		{"wrong type", func(s *object.Stream) { s.Dict.Set("Type", object.Name("XRef")) }},
+		{"missing N", func(s *object.Stream) { s.Dict.Delete("N") }},
+		{"negative N", func(s *object.Stream) { s.Dict.Set("N", object.Integer(-1)) }},
+		{"missing First", func(s *object.Stream) { s.Dict.Delete("First") }},
+		{"First beyond data", func(s *object.Stream) { s.Dict.Set("First", object.Integer(1<<30)) }},
+		{"absurd N", func(s *object.Stream) { s.Dict.Set("N", object.Integer(1<<30)) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			stream := makeObjStm(t, map[int]string{4: "42"}, []int{4}, false)
 			tc.mutig(stream)
-			if _, _, _, err := parseObjStmIndex(canceler{}, stream, defaultLimits()); err == nil {
+			if _, _, _, err := parseObjStmIndex(core.Canceler{}, stream, core.DefaultLimits()); err == nil {
 				t.Error("expected error")
 			}
 		})
@@ -135,9 +137,9 @@ func buildObjStmPDF(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-func mustInt(t *testing.T, obj Object) int {
+func mustInt(t *testing.T, obj object.Object) int {
 	t.Helper()
-	i, ok := obj.(Integer)
+	i, ok := obj.(object.Integer)
 	if !ok {
 		t.Fatalf("expected Integer, got %T", obj)
 	}
@@ -160,14 +162,14 @@ func TestReadObjectStreamPDF(t *testing.T) {
 	if catalog == nil {
 		t.Fatal("catalog not resolvable")
 	}
-	if typ, ok := catalog.Get("Type").(Name); !ok || typ != "Catalog" {
+	if typ, ok := catalog.Get("Type").(object.Name); !ok || typ != "Catalog" {
 		t.Errorf("catalog /Type wrong: %v", catalog.Get("Type"))
 	}
 	pages := doc.ResolveDict(catalog.Get("Pages"))
 	if pages == nil {
 		t.Fatal("pages not resolvable")
 	}
-	if cnt, ok := pages.Get("Count").(Integer); !ok || cnt != 1 {
+	if cnt, ok := pages.Get("Count").(object.Integer); !ok || cnt != 1 {
 		t.Errorf("pages /Count wrong: %v", pages.Get("Count"))
 	}
 }
@@ -176,23 +178,23 @@ func TestReadObjStmXrefIndexMismatch(t *testing.T) {
 	// An xref entry whose IndexInStream points at a different object number
 	// must error, not silently load the wrong object.
 	stream := makeObjStm(t, map[int]string{4: "42", 5: "43"}, []int{4, 5}, false)
-	doc := &Document{Objects: map[int]*IndirectObject{
+	doc := &Document{Objects: map[int]*object.IndirectObject{
 		1: {Number: 1, Value: stream},
 	}}
 	table := &XRefTable{Entries: map[int]XRefEntry{
 		5: {Compressed: true, StreamObjNum: 1, IndexInStream: 0}, // index 0 holds obj 4
 	}}
-	if err := doc.loadCompressedObjects(canceler{}, table); err == nil {
+	if err := doc.loadCompressedObjects(core.Canceler{}, table); err == nil {
 		t.Error("expected error on index/object-number mismatch")
 	}
 }
 
 func TestReadObjStmMissingContainer(t *testing.T) {
-	doc := &Document{Objects: map[int]*IndirectObject{}}
+	doc := &Document{Objects: map[int]*object.IndirectObject{}}
 	table := &XRefTable{Entries: map[int]XRefEntry{
 		5: {Compressed: true, StreamObjNum: 9, IndexInStream: 0},
 	}}
-	if err := doc.loadCompressedObjects(canceler{}, table); err == nil {
+	if err := doc.loadCompressedObjects(core.Canceler{}, table); err == nil {
 		t.Error("expected error on missing container")
 	}
 }
