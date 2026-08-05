@@ -224,6 +224,18 @@ type Error struct {
 	// Message says what was wrong, in terms of the source rather than of the
 	// algorithm: "unterminated string", not "unexpected EOF in state 7".
 	Message string
+	// Unsupported marks correct CSS that this engine does not implement, as
+	// against input that is malformed. The two need telling apart because they
+	// mean opposite things to an author: a malformed rule is theirs to fix,
+	// while an unsupported one is a limit of the renderer, and a page that came
+	// out wrong because of one is not diagnosed by looking at the other.
+	//
+	// It is here from the first parser rather than added later, because the
+	// rendering proposal's §6.3 argues — and this is the cheapest guardrail it
+	// names — that an engine implementing a subset *will* silently ignore
+	// things, and that a page where a declaration was dropped is plausible and
+	// wrong, which is worse than one that is obviously broken.
+	Unsupported bool
 }
 
 func (e Error) Error() string { return fmt.Sprintf("byte %d: %s", e.Offset, e.Message) }
