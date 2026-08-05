@@ -105,6 +105,11 @@ testdata/nlcius/
 # the external oracle for the css package. Not committed.
 testdata/css-parsing-tests/
 
+# The HTML standard's named character references, fetched by `make
+# html-entities` as the input to cmd/genhtmlentities. The generated Go table is
+# committed; this is not.
+testdata/html/entities.json
+
 # Agent worktrees created by tooling under .claude/; never part of the repo.
 .claude/worktrees/
 
