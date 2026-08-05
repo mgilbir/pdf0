@@ -133,3 +133,35 @@ The fix worth trying first is to decompose these signs before shaping, the way
 split vowels already are, so their pieces are sorted with what follows them
 rather than after it. The evidence above says that is sufficient: given the
 pieces in either order, this package already answers exactly as the other two do.
+
+### The fix that was tried, and why it was taken out again
+
+Decomposing the four signs before shaping does fix all six. It was written,
+measured, and reverted, because it costs more than it buys.
+
+Given `U+0FB2 U+0F71 U+0F80 U+0F74` in either order this package already answers
+as the other two do, so putting those runes in front of the shaper makes the six
+agree exactly. The corpora stayed green. The differential fuzzer did not: over
+half a million strings it went from 42 differences to 78, and the new ones are
+this package inserting a dotted circle where neither of the others does —
+
+	U+0F43 U+0F79 U+0F77   pdf0 has 1282 (U+25CC) and HarfBuzz has none
+
+because two signs taken apart make a run of marks the cluster grammar reads as
+broken. Six fixed against thirty introduced.
+
+Two smaller things were learned on the way and are worth not rediscovering:
+
+  - The decomposition walk deliberately never takes the *second* part apart, on
+    the grounds that no canonical decomposition needs it. That is true, and
+    U+0F77 is not canonical: it is U+0FB2 followed by U+0F81, and U+0F81 is what
+    has to come apart. Making the walk general enough to do it changed answers
+    elsewhere that were already right, so if this is tried again the four signs
+    want a flattened decomposition of their own rather than a more capable walk.
+  - The face has a glyph for U+0F81, so "take it apart only if it cannot be
+    drawn" is not the test. Whether a piece *can* be drawn says nothing about
+    whether it should be left whole.
+
+What the six actually need is for the pieces to sort correctly *without* the
+cluster grammar then judging the result malformed — which is a question about
+the grammar, not about normalisation.
