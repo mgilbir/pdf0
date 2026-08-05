@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -18,6 +19,10 @@ import (
 // program's own metrics, that /CIDSet lists exactly the glyphs the program has,
 // that a Type0 font carries a ToUnicode CMap — so the specification of this
 // writer is executable and the tests aim it back at the output.
+//
+// The facts come from the face in the font's own units and are put into PDF's
+// form here: lengths scaled to a thousandth of an em, flags as the bits
+// Table 121 defines, widths as the run-length array /W takes.
 
 // Allocator adds an object to a document and returns the reference to it. It is
 // declared here, where it is consumed, so this package does not depend on the
@@ -25,6 +30,17 @@ import (
 type Allocator interface {
 	Add(object.Object) object.IndirectRef
 }
+
+var errNoGlyphs = errors.New("fonts: the font program declares no glyphs")
+
+// errEmbedBeforeUse is refused rather than written. Embedding before anything
+// has been encoded produces a font carrying .notdef alone, and every glyph the
+// document goes on to show is then one the program does not define. That is a
+// silent mistake — the file is written, and only a validator or a reader
+// notices — so it is caught here, where the cause is still obvious.
+var errEmbedBeforeUse = errors.New(
+	"fonts: Embed before any text was encoded would embed no glyphs; " +
+		"encode the document's text first, then embed")
 
 // Embed writes the face into doc and returns the reference to put in a page's
 // /Resources /Font.
@@ -37,44 +53,35 @@ type Allocator interface {
 // The name written to /BaseFont carries the six-letter subset tag ISO 32000-2
 // 9.6.4 requires, so a reader can tell two subsets of one face apart.
 func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
-	if f.std != nil {
+	if f.IsStandard() {
 		// A standard face embeds nothing: the reader has it, and naming it is
 		// the whole mechanism.
 		return f.embedStandard(doc)
 	}
-	if f.simple {
-		if len(f.used) == 0 {
-			return object.IndirectRef{}, errors.New(
-				"fonts: Embed before any text was encoded would embed no glyphs; " +
-					"encode the document's text first, then embed")
+	if f.IsSimple() {
+		if len(f.Used()) == 0 {
+			return object.IndirectRef{}, errEmbedBeforeUse
 		}
 		return f.embedSimple(doc)
 	}
-	if f.prog.NumGlyphs == 0 {
+	if f.NumGlyphs() == 0 {
 		return object.IndirectRef{}, errNoGlyphs
 	}
-	// Embedding before anything has been encoded produces a font carrying
-	// .notdef alone, and every glyph the document goes on to show is then one
-	// the program does not define. That is a silent mistake — the file is
-	// written, and only a validator or a reader notices — so it is refused
-	// here, where the cause is still obvious.
-	if len(f.used) == 0 {
-		return object.IndirectRef{}, errors.New(
-			"fonts: Embed before any text was encoded would embed no glyphs; " +
-				"encode the document's text first, then embed")
+	if len(f.Used()) == 0 {
+		return object.IndirectRef{}, errEmbedBeforeUse
 	}
 
-	program, kept, err := f.subset()
+	program, kept, err := f.SubsetGlyphs()
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	baseFont := object.Name(subsetTag(kept) + "+" + f.name)
+	baseFont := object.Name(subsetTag(kept) + "+" + f.Name())
 
 	// The program. /Length1 is the uncompressed length, which a reader needs to
 	// know how much of a compressed stream is font data.
 	programStream := &object.Stream{Dict: object.Dictionary{}, Data: program}
 	programStream.Dict.Set("Length", object.Integer(len(program)))
-	if f.cff {
+	if f.IsCFF() {
 		// FontFile3 carries a program whose format its /Subtype names; an
 		// OpenType wrapper keeps the tables a reader may want beside the
 		// outlines. /Length1 belongs to FontFile2 and is not written here.
@@ -89,26 +96,26 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// subset, and its contents are checked against the embedded program — so it
 	// is written from the same kept set the subsetter used, not from the
 	// original font.
-	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: cidSetBits(kept, f.prog.NumGlyphs)}
+	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: cidSetBits(kept, f.NumGlyphs())}
 	cidSet.Dict.Set("Length", object.Integer(len(cidSet.Data)))
 	cidSetRef := doc.Add(cidSet)
 
+	d := f.Descriptor()
 	descriptor := &object.Dictionary{}
 	descriptor.Set("Type", object.Name("FontDescriptor"))
 	descriptor.Set("FontName", baseFont)
-	descriptor.Set("Flags", object.Integer(f.flags))
-	descriptor.Set("FontBBox", object.Array{
-		object.Integer(int(f.scale(f.bbox[0]))), object.Integer(int(f.scale(f.bbox[1]))),
-		object.Integer(int(f.scale(f.bbox[2]))), object.Integer(int(f.scale(f.bbox[3]))),
-	})
-	descriptor.Set("ItalicAngle", object.Real(f.italic))
-	descriptor.Set("Ascent", object.Integer(int(f.scale(f.ascent))))
-	descriptor.Set("Descent", object.Integer(int(f.scale(f.descent))))
-	descriptor.Set("CapHeight", object.Integer(int(f.scale(f.capHeight))))
-	// StemV is estimated from the weight the font declares; see stemV for why
-	// it cannot be measured here and why that is acceptable.
-	descriptor.Set("StemV", object.Integer(f.stemV))
-	if f.cff {
+	descriptor.Set("Flags", object.Integer(d.Flags))
+	descriptor.Set("FontBBox", f.bboxArray(d))
+	descriptor.Set("ItalicAngle", object.Real(d.ItalicAngle))
+	descriptor.Set("Ascent", object.Integer(int(f.scale(d.Ascent))))
+	descriptor.Set("Descent", object.Integer(int(f.scale(d.Descent))))
+	descriptor.Set("CapHeight", object.Integer(int(f.scale(d.CapHeight))))
+	// StemV is estimated by the face from the weight the font declares; see its
+	// documentation for why it cannot be measured there and why that is
+	// acceptable. It is not scaled: the estimate is already in the thousandths
+	// PDF states it in.
+	descriptor.Set("StemV", object.Integer(d.StemV))
+	if f.IsCFF() {
 		descriptor.Set("FontFile3", programRef)
 	} else {
 		descriptor.Set("FontFile2", programRef)
@@ -118,10 +125,11 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	descriptor.Set("CIDSet", cidSetRef)
 	descriptorRef := doc.Add(descriptor)
 
-	defaultWidth := f.mostCommonWidth()
+	advances := f.GlyphAdvances()
+	defaultWidth := mostCommonWidth(advances)
 	cidFont := &object.Dictionary{}
 	cidFont.Set("Type", object.Name("Font"))
-	if f.cff {
+	if f.IsCFF() {
 		cidFont.Set("Subtype", object.Name("CIDFontType0"))
 	} else {
 		cidFont.Set("Subtype", object.Name("CIDFontType2"))
@@ -134,14 +142,14 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	cidFont.Set("CIDSystemInfo", sysInfo)
 	cidFont.Set("FontDescriptor", descriptorRef)
 	cidFont.Set("DW", widthNumber(defaultWidth))
-	if w := f.widthsArray(defaultWidth); len(w) > 0 {
+	if w := widthsArray(advances, defaultWidth); len(w) > 0 {
 		cidFont.Set("W", w)
 	}
 	// Identity: a CID is a glyph index, which is what Identity-H encoding
 	// already made the character codes. The key belongs to CIDFontType2 only —
 	// for a CFF descendant the mapping is the font program's own business
 	// (ISO 32000-2 9.7.4.2), and writing it there would be meaningless.
-	if !f.cff {
+	if !f.IsCFF() {
 		cidFont.Set("CIDToGIDMap", object.Name("Identity"))
 	}
 	cidFontRef := doc.Add(cidFont)
@@ -150,14 +158,235 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	toUnicode.Dict.Set("Length", object.Integer(len(toUnicode.Data)))
 	toUnicodeRef := doc.Add(toUnicode)
 
-	font := &object.Dictionary{}
-	font.Set("Type", object.Name("Font"))
-	font.Set("Subtype", object.Name("Type0"))
-	font.Set("BaseFont", baseFont)
-	font.Set("Encoding", object.Name("Identity-H"))
-	font.Set("DescendantFonts", object.Array{cidFontRef})
-	font.Set("ToUnicode", toUnicodeRef)
-	return doc.Add(font), nil
+	fd := &object.Dictionary{}
+	fd.Set("Type", object.Name("Font"))
+	fd.Set("Subtype", object.Name("Type0"))
+	fd.Set("BaseFont", baseFont)
+	fd.Set("Encoding", object.Name("Identity-H"))
+	fd.Set("DescendantFonts", object.Array{cidFontRef})
+	fd.Set("ToUnicode", toUnicodeRef)
+	return doc.Add(fd), nil
+}
+
+// embedSimple writes the font dictionary, descriptor and subsetted program for
+// a simple font.
+//
+// The /Widths array is indexed by character code rather than by glyph, which is
+// the difference that matters: the same numbers as a composite font's /W, keyed
+// by the other of the two numberings. Both are written from the program's own
+// metrics, because the validator checks them against it.
+func (f *Face) embedSimple(doc Allocator) (object.IndirectRef, error) {
+	program, kept, err := f.SubsetGlyphs()
+	if err != nil {
+		return object.IndirectRef{}, err
+	}
+	baseFont := object.Name(subsetTag(kept) + "+" + f.Name())
+
+	programStream := &object.Stream{Dict: object.Dictionary{}, Data: program}
+	programStream.Dict.Set("Length", object.Integer(len(program)))
+	programStream.Dict.Set("Length1", object.Integer(len(program)))
+	programRef := doc.Add(programStream)
+
+	d := f.Descriptor()
+	descriptor := &object.Dictionary{}
+	descriptor.Set("Type", object.Name("FontDescriptor"))
+	descriptor.Set("FontName", baseFont)
+	// Nonsymbolic: the codes are characters in a standard encoding, which is
+	// the whole premise of a simple font. Declaring it symbolic — which is what
+	// the face itself reports, since a composite font's codes are glyph indices
+	// and mean nothing outside it — would tell a reader to use the font's
+	// built-in encoding and ignore /Encoding, which is how a document comes out
+	// as the wrong glyphs entirely.
+	flags := 1 << 5
+	if d.Flags&flagFixedPitch != 0 {
+		flags |= flagFixedPitch
+	}
+	if d.ItalicAngle != 0 {
+		flags |= flagItalic
+	}
+	descriptor.Set("Flags", object.Integer(flags))
+	descriptor.Set("FontBBox", f.bboxArray(d))
+	descriptor.Set("ItalicAngle", object.Real(d.ItalicAngle))
+	descriptor.Set("Ascent", object.Integer(int(f.scale(d.Ascent))))
+	descriptor.Set("Descent", object.Integer(int(f.scale(d.Descent))))
+	descriptor.Set("CapHeight", object.Integer(int(f.scale(d.CapHeight))))
+	descriptor.Set("StemV", object.Integer(d.StemV))
+	descriptor.Set("FontFile2", programRef)
+	descriptorRef := doc.Add(descriptor)
+
+	first, last, widths := f.simpleWidths()
+
+	toUnicode := &object.Stream{Dict: object.Dictionary{}, Data: f.simpleToUnicode(first, last)}
+	toUnicode.Dict.Set("Length", object.Integer(len(toUnicode.Data)))
+
+	fd := &object.Dictionary{}
+	fd.Set("Type", object.Name("Font"))
+	fd.Set("Subtype", object.Name("TrueType"))
+	fd.Set("BaseFont", baseFont)
+	fd.Set("FirstChar", object.Integer(first))
+	fd.Set("LastChar", object.Integer(last))
+	fd.Set("Widths", widths)
+	fd.Set("FontDescriptor", descriptorRef)
+	fd.Set("Encoding", object.Name("WinAnsiEncoding"))
+	fd.Set("ToUnicode", doc.Add(toUnicode))
+	return doc.Add(fd), nil
+}
+
+// embedStandard writes the font dictionary for a standard face: a name the
+// reader resolves, with the encoding the codes are in.
+//
+// There is no FontDescriptor and no font program. ISO 32000-2 9.6.2.2 permits
+// both to be omitted for these fourteen, and writing a descriptor for a face
+// whose outlines are not present would describe something this document does
+// not contain.
+func (f *Face) embedStandard(doc Allocator) (object.IndirectRef, error) {
+	fd := &object.Dictionary{}
+	fd.Set("Type", object.Name("Font"))
+	fd.Set("Subtype", object.Name("Type1"))
+	fd.Set("BaseFont", object.Name(f.Name()))
+	// Symbol and ZapfDingbats have built-in encodings of their own; naming
+	// WinAnsi for them would remap every glyph.
+	if f.Name() != "Symbol" && f.Name() != "ZapfDingbats" {
+		fd.Set("Encoding", object.Name("WinAnsiEncoding"))
+	}
+	return doc.Add(fd), nil
+}
+
+// The FontDescriptor flag bits this package sets by hand (ISO 32000-2 9.8.1,
+// Table 121). The face computes the whole set for itself; these are the two a
+// simple font's descriptor keeps when it discards the rest.
+const (
+	flagFixedPitch = 1 << 0
+	flagItalic     = 1 << 6
+)
+
+// bboxArray writes the box enclosing every glyph, scaled to the thousandths of
+// an em /FontBBox is stated in.
+func (f *Face) bboxArray(d Descriptor) object.Array {
+	return object.Array{
+		object.Integer(int(f.scale(d.BBox[0]))), object.Integer(int(f.scale(d.BBox[1]))),
+		object.Integer(int(f.scale(d.BBox[2]))), object.Integer(int(f.scale(d.BBox[3]))),
+	}
+}
+
+// widthsArray builds /W from the program's own advances, in the
+// consecutive-run form ISO 32000-2 9.7.4.3 defines.
+//
+// It is written from the embedded program's own metrics rather than from
+// anything the caller supplies, because PDF/A checks the two against each
+// other: a /W that disagrees with the program is a finding, and the only way to
+// be sure they agree is to have one source.
+func widthsArray(advances []float64, defaultWidth float64) object.Array {
+	var out object.Array
+	for gid := 0; gid < len(advances); {
+		if advances[gid] == defaultWidth {
+			gid++
+			continue
+		}
+		start := gid
+		var run object.Array
+		for gid < len(advances) && advances[gid] != defaultWidth {
+			run = append(run, widthNumber(advances[gid]))
+			gid++
+		}
+		out = append(out, object.Integer(start), run)
+	}
+	return out
+}
+
+// widthNumber writes a width as an integer when it is one, which keeps /W
+// compact and matches what the validator compares against.
+func widthNumber(w float64) object.Object {
+	if w == float64(int(w)) {
+		return object.Integer(int(w))
+	}
+	return object.Real(w)
+}
+
+// mostCommonWidth picks /DW: the advance shared by the most glyphs, so /W
+// carries the exceptions rather than the rule.
+func mostCommonWidth(advances []float64) float64 {
+	counts := map[float64]int{}
+	for _, w := range advances {
+		counts[w]++
+	}
+	best, bestN := 1000.0, -1
+	for w, n := range counts {
+		if n > bestN || (n == bestN && w < best) {
+			best, bestN = w, n
+		}
+	}
+	return best
+}
+
+// simpleWidths builds the /Widths array and the code range it covers.
+//
+// The range is the whole encoding rather than only the codes used, because a
+// /Widths array shorter than the codes a later edit might show is a document
+// that is correct only by accident. It is 224 numbers.
+func (f *Face) simpleWidths() (first, last int, widths object.Array) {
+	first, last = 32, 255
+	cmap := f.Cmap()
+	advances := f.GlyphAdvances()
+	widths = make(object.Array, 0, last-first+1)
+	for code := first; code <= last; code++ {
+		name := font.WinAnsiEncodingNames[byte(code)]
+		w := 0.0
+		if r, ok := font.GlyphNameToRune(name, byte(code)); ok {
+			if gid, mapped := cmap[r]; mapped && gid < len(advances) {
+				w = advances[gid]
+			}
+		}
+		widths = append(widths, widthNumber(w))
+	}
+	return first, last, widths
+}
+
+// simpleToUnicode builds the CMap mapping each code to the character it stands
+// for.
+//
+// A simple font's codes are already characters in a standard encoding, so a
+// reader could work this out — but only one that knows the encoding. The CMap
+// says it outright, which is what makes the text extractable by everything, and
+// what PDF/A-2u and later require.
+func (f *Face) simpleToUnicode(first, last int) []byte {
+	cmap := f.Cmap()
+	pairs := make([][2]int, 0, last-first+1)
+	for code := first; code <= last; code++ {
+		name := font.WinAnsiEncodingNames[byte(code)]
+		r, ok := font.GlyphNameToRune(name, byte(code))
+		if !ok || forbiddenInToUnicode(r) {
+			continue
+		}
+		if gid, mapped := cmap[r]; !mapped || gid == 0 {
+			continue // no glyph: nothing will ever show this code
+		}
+		pairs = append(pairs, [2]int{code, int(r)})
+	}
+	return buildToUnicodeCMap(pairs, "<00> <FF>")
+}
+
+// subsetTag is the six uppercase letters ISO 32000-2 9.6.4 requires in front of
+// a subset font's name, as in "ABCDEF+Probe-Regular". A reader uses it to tell
+// two subsets of the same face apart, so it must differ when the glyph sets do
+// and match when they do not — which makes it a function of the kept glyphs
+// rather than a random draw.
+func subsetTag(kept []int) string {
+	// FNV-1a over the kept indices: cheap, and deterministic, so the same
+	// document produces the same file twice.
+	var h uint64 = 14695981039346656037
+	for _, gid := range kept {
+		for shift := 0; shift < 32; shift += 8 {
+			h ^= uint64(byte(gid >> shift))
+			h *= 1099511628211
+		}
+	}
+	tag := make([]byte, 6)
+	for i := range tag {
+		tag[i] = byte('A' + h%26)
+		h /= 26
+	}
+	return string(tag)
 }
 
 // cidSetBits builds the /CIDSet bitmap: bit i, counting from the high bit of
@@ -187,8 +416,9 @@ func cidSetBits(kept []int, numGlyphs int) []byte {
 // the lowest wins, which is arbitrary but deterministic, and the alternative —
 // omitting the entry — would make that glyph unextractable.
 func (f *Face) toUnicodeCMap() []byte {
-	rev := make(map[int]rune, len(f.prog.Cmap))
-	for r, gid := range f.prog.Cmap {
+	cmap := f.Cmap()
+	rev := make(map[int]rune, len(cmap))
+	for r, gid := range cmap {
 		if gid == 0 || forbiddenInToUnicode(r) {
 			// U+0000, U+FEFF and U+FFFE are not text: mapping a glyph to one
 			// says the character it represents is a byte-order mark or nothing

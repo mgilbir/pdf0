@@ -3,7 +3,7 @@ package fonttest
 import (
 	"testing"
 
-	"github.com/mgilbir/pdf0/internal/font"
+	"github.com/mgilbir/forme/font"
 )
 
 func TestSyntheticFontParses(t *testing.T) {

@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz useable
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -170,124 +170,17 @@ $(JBIG2_DIR)/.ok: $(JBIG2_DIR)/sources.tsv $(JBIG2_DIR)/download.sh
 clean-jbig2:
 	rm -f $(JBIG2_DIR)/*.pdf $(JBIG2_DIR)/.ok
 
-# Unicode's own conformance suite for the bidirectional algorithm (UAX #9), used
-# as the oracle for fonts/bidi.go. BidiTest.txt is every combination of
-# bidirectional character classes up to length four; BidiCharacterTest.txt is
-# real character sequences, which is what brings the paired-bracket rule into
-# scope. Downloaded into testdata/unicode-bidi (gitignored); not committed.
+# Shaping — the OpenType layout engine, the bidirectional algorithm, the
+# script-specific models and the font-program reader — lives in
+# github.com/mgilbir/forme. Its oracles go with it: HarfBuzz's answers over a
+# checked-in corpus, Unicode's own UAX #9 conformance suite, CoreText for a
+# third opinion, and the generators that build the Unicode-derived tables. They
+# are run by that module's own Makefile.
 #
-# The version is pinned to the one the generated tables in fonts/bidiclass.go
-# were built from, because the two have to agree: a character whose class
-# changed between releases would be a test failure that is really a stale table.
-BIDI_DIR := testdata/unicode-bidi
-UNICODE_VERSION ?= 17.0.0
-
-bidi-tests: $(BIDI_DIR)/.ok
-
-$(BIDI_DIR)/.ok:
-	mkdir -p $(BIDI_DIR)
-	curl -fsSL -o $(BIDI_DIR)/BidiTest.txt \
-		https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd/BidiTest.txt
-	curl -fsSL -o $(BIDI_DIR)/BidiCharacterTest.txt \
-		https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd/BidiCharacterTest.txt
-	touch $@
-
-# The path is made absolute because the test's working directory is fonts/, not
-# the repository root.
-test-bidi: bidi-tests
-	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 ./fonts/
-
-clean-bidi-tests:
-	rm -rf $(BIDI_DIR)
-
-# Shaping checked against HarfBuzz, over six fonts.
-#
-# One font cannot cover this. The bundled face has no Arabic and no Khmer, and
-# those are the two shapers with the most to get wrong; testdata/harfbuzz/fonts
-# holds Google's Noto builds for them, under the same SIL Open Font License as
-# the bundled face and with their copyright notices beside them. They are test
-# data and are embedded in nothing this module ships.
-#
-# Unlike every other oracle here, this one is checked in: testdata/harfbuzz/
-# holds the corpora and what HarfBuzz answered for them, so the comparison runs
-# on any machine with a Go toolchain and nothing else. That matters because it has
-# to run on every change to the shaper, and an oracle that needs the right
-# Python on the machine is one that quietly stops running.
-#
-# This target is what regenerates it, and is needed only when the corpus grows,
-# the bundled font changes, or a HarfBuzz release moves an answer. It needs
-# Python with uharfbuzz:
-#
-#	python3 -m venv .hbenv && .hbenv/bin/pip install uharfbuzz
-#	PYTHON=.hbenv/bin/python make hbshaping
-#
-# Review the diff to expected.txt before committing it. A change there is
-# HarfBuzz changing its mind, and is worth understanding rather than accepting.
-HARFBUZZ_DIR := testdata/harfbuzz
-PYTHON ?= python3
-
-hbshaping:
-	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
-	$(PYTHON) $(HARFBUZZ_DIR)/corpus_arabic.py
-	$(PYTHON) $(HARFBUZZ_DIR)/corpus_khmer.py
-	$(PYTHON) $(HARFBUZZ_DIR)/corpus_javanese.py
-	$(PYTHON) $(HARFBUZZ_DIR)/corpus_balinese.py
-	$(PYTHON) $(HARFBUZZ_DIR)/corpus_tibetan.py
-	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
-		fonts/notosans/NotoSans-Variable.ttf \
-		$(HARFBUZZ_DIR)/corpus.txt \
-		$(HARFBUZZ_DIR)/expected.txt
-	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
-		$(HARFBUZZ_DIR)/fonts/NotoSansArabic.ttf \
-		$(HARFBUZZ_DIR)/arabic.txt \
-		$(HARFBUZZ_DIR)/arabic.expected.txt
-	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
-		$(HARFBUZZ_DIR)/fonts/NotoSansKhmer.ttf \
-		$(HARFBUZZ_DIR)/khmer.txt \
-		$(HARFBUZZ_DIR)/khmer.expected.txt
-	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
-		$(HARFBUZZ_DIR)/fonts/NotoSansJavanese.ttf \
-		$(HARFBUZZ_DIR)/javanese.txt \
-		$(HARFBUZZ_DIR)/javanese.expected.txt
-	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
-		$(HARFBUZZ_DIR)/fonts/NotoSansBalinese.ttf \
-		$(HARFBUZZ_DIR)/balinese.txt \
-		$(HARFBUZZ_DIR)/balinese.expected.txt
-	$(PYTHON) $(HARFBUZZ_DIR)/shape.py \
-		$(HARFBUZZ_DIR)/fonts/NotoSerifTibetan.ttf \
-		$(HARFBUZZ_DIR)/tibetan.txt \
-		$(HARFBUZZ_DIR)/tibetan.expected.txt
-
-# Differential fuzzing against HarfBuzz. Needs the same Python as hbshaping.
-hbfuzz:
-	go build -o $(HARFBUZZ_DIR)/.shapetext ./cmd/shapetext
-	SHAPETEXT=$(abspath $(HARFBUZZ_DIR)/.shapetext) $(PYTHON) $(HARFBUZZ_DIR)/difffuzz.py 60
-
-test-hbshaping:
-	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth' -count=1 ./fonts/
-
-# The Universal Shaping Engine's category table.
-#
-# Derived rather than tabulated: cmd/genuse computes it from five properties
-# Unicode publishes, plus the engine's own corrections to two of them, which are
-# vendored in testdata/ms-use because nobody can derive them — see the NOTICE
-# there. A new Unicode release is therefore a re-run of this rather than a
-# re-reading of anything.
-#
-#	make useable UCD=/path/to/unpacked/ucd
-UCD ?= testdata/ucd
-
-useable:
-	go run ./cmd/genuse \
-		$(UCD)/IndicSyllabicCategory.txt \
-		$(UCD)/IndicPositionalCategory.txt \
-		$(UCD)/UnicodeData.txt \
-		$(UCD)/DerivedCoreProperties.txt \
-		$(UCD)/ArabicShaping.txt \
-		testdata/ms-use/IndicSyllabicCategory-Additional.txt \
-		testdata/ms-use/IndicPositionalCategory-Additional.txt \
-		> fonts/usetable.go
-	gofmt -w fonts/usetable.go
+# What stays here is what PDF does with a shaped run: writing it into a content
+# stream, and writing the font into the document. testdata/shaping/corpus.txt
+# is forme's corpus, kept because those two have to agree with each other over
+# text that is more than a line of Latin.
 
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS

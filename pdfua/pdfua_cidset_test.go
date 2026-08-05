@@ -1,7 +1,7 @@
 package pdfua
 
 import (
-	"github.com/mgilbir/pdf0/internal/font"
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
