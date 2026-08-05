@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests
+.PHONY: html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -170,6 +170,25 @@ test-css: css-tests
 
 clean-css-tests:
 	rm -rf $(CSS_TESTS_DIR)
+
+# The HTML standard's own list of named character references, which
+# cmd/genhtmlentities turns into html/entities.go. The *generated table* is
+# committed and the input is not, on the arrangement the font tables used before
+# they moved to forme: the table is part of the source, and re-deriving it needs
+# the network, so a checkout builds without one.
+#
+# Regenerate after the standard adds a name — which it has not done in years, so
+# this is a rare errand rather than part of a build.
+HTML_ENTITIES := testdata/html/entities.json
+
+html-entities:
+	mkdir -p $(dir $(HTML_ENTITIES))
+	curl -sSf -o $(HTML_ENTITIES) https://html.spec.whatwg.org/entities.json
+	go run ./cmd/genhtmlentities -in $(HTML_ENTITIES) -out html/entities.go
+	gofmt -w html/entities.go
+
+clean-html-entities:
+	rm -f $(HTML_ENTITIES)
 
 # Real-world CCITTFaxDecode sample PDFs (pdf.js Apache-2.0, PyPDF4 BSD) used as
 # the decode oracle for the Group 3/4 fax decoder. Downloaded into
