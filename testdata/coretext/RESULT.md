@@ -95,3 +95,14 @@ lines. That is not the mark-placement question these were gathered to ask; it is
 CoreText judging the text more malformed than the other two do, and on it
 CoreText is the one out of step. Worth its own look, not worth confusing with
 this.
+
+## Where the six begin
+
+`U+0F45 U+0F77 U+0F74` is five glyphs here and four in the other two, and the
+*base* differs — glyph 11 against 68 — so this is substitution, not placement.
+
+Each of the two deprecated signs on its own is identical in both, dotted circle
+and all, so nothing is wrong with how either is taken apart. What differs is
+only what happens when U+0F74 follows one, and it changes the letter's own
+glyph. That points at a rule the font states over the decomposed sequence which
+one of the two is not reaching, rather than at anything in the mark machinery.
