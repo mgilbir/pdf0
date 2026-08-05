@@ -1492,11 +1492,41 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 
 	sortIndicByPosition(buf, info, start, end)
 
+	// Find the base again, and turn round a run of more than one pre-base matra
+	// while looking.
+	//
+	// The sort is stable, so two vowel signs written before the same letter come
+	// out in the order they were written. They are drawn in the other one: the
+	// second is drawn furthest from the letter, in front of the first. It is the
+	// same rule the universal engine needs, and the same reading that looked
+	// like an off-by-one there — U+0909 U+093F U+094E is the case, and both
+	// HarfBuzz and this now answer it the same way round.
+	//
+	// What is turned round is the matras, not everything among them. A nukta or
+	// a virama written after a matra belongs to it and travels with it, so each
+	// matra's own run is turned back afterwards.
 	base = end
+	firstMatra, lastMatra := end, end
 	for i := start; i < end; i++ {
 		if info[i].pos == posBaseC {
 			base = i
 			break
+		}
+		if info[i].pos == posPreM {
+			if firstMatra == end {
+				firstMatra = i
+			}
+			lastMatra = i
+		}
+	}
+	if firstMatra < lastMatra {
+		reverseIndicRange(buf, info, firstMatra, lastMatra+1)
+		at := firstMatra
+		for j := at; j <= lastMatra; j++ {
+			if indicIsMatra(info[j].cat) {
+				reverseIndicRange(buf, info, at, j+1)
+				at = j + 1
+			}
 		}
 	}
 
@@ -1859,6 +1889,18 @@ func indicRephPosition(info []indicInfo, plan *indicPlan, start, end, base int) 
 // before, which is what decides where it stops when no virama placed it.
 func indicAfterReph(p indicPos) bool {
 	return p == posPostC || p == posAfterPost || p == posSMVD
+}
+
+// reverseIndicRange turns a stretch of the buffer round, carrying the per-glyph
+// record with it.
+func reverseIndicRange(buf []Glyph, info []indicInfo, start, end int) {
+	if start < 0 || end > len(buf) || end > len(info) {
+		return
+	}
+	for i, j := start, end-1; i < j; i, j = i+1, j-1 {
+		buf[i], buf[j] = buf[j], buf[i]
+		info[i], info[j] = info[j], info[i]
+	}
 }
 
 // sortIndicByPosition puts a syllable into drawing order. The sort is stable
