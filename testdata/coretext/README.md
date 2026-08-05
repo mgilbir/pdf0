@@ -213,3 +213,31 @@ names only the lines where CoreText sides with HarfBuzz — those are the ones
 that would be defects here. The first two lines of each file are controls, and
 if either disagrees the script stops and says so, because a harness that cannot
 reproduce a known answer has nothing to say about an unknown one.
+
+## The fifth question: the forty-six that are left
+
+Every difference CoreText has confirmed as real is now fixed, and the Balinese
+file is gone because that font no longer differs at all. What remains is 46 over
+684,000 generated strings — 6 Devanagari and 40 Tibetan — and most of them look
+like the family CoreText has already ruled on three times: a mark a few units to
+one side.
+
+The batches are regenerated against the current state, so the `.expected` files
+say what this package answers *today*.
+
+```sh
+./shape ../../fonts/notosans/NotoSans-Variable.ttf < batch-devanagari.txt > out-devanagari.txt
+./shape ../harfbuzz/fonts/NotoSerifTibetan.ttf     < batch-tibetan.txt    > out-tibetan.txt
+
+python3 compare.py batch-devanagari out-devanagari.txt
+python3 compare.py batch-tibetan    out-tibetan.txt
+```
+
+It names only the lines where CoreText sides with HarfBuzz. Those are defects.
+Silence means it sides with this package, and a failing control stops it.
+
+If the count comes back all-pdf0, the family closes as one decision rather than
+forty-six investigations. If any line names HarfBuzz, that line is a real defect
+and the way in is the trace — both engines through the same string, before
+forming any opinion about it. Four readings of the font tables produced four
+wrong answers this way round; three traces produced three right ones.
