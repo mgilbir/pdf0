@@ -159,6 +159,22 @@ func TestTableAnonymousObjects(t *testing.T) {
           text "block"
 `,
 	}, {
+		// A generated box needs the repair applied to it as well. A row group
+		// inside a row is wrapped in an anonymous cell, and inside that cell it
+		// is still a row group with no table — which is a box with a background
+		// and no area. Found by a test that expected a blank page and got a red
+		// square.
+		name: "a generated cell repairs its own children",
+		html: `<div style="display: table-row"><div style="display: table-row-group"></div></div>`,
+		want: `anonymous block/flow-root
+  anonymous block/table
+    div block/table-row
+      anonymous block/table-cell
+        anonymous block/flow-root
+          anonymous block/table
+            div block/table-row-group
+`,
+	}, {
 		// A stray cell inside a sentence stays in the sentence. The table that
 		// grows around it is an inline-table, and the span is not split.
 		name: "a stray cell inside an inline grows an inline table",
@@ -272,19 +288,32 @@ func TestTableColumnsDivideTheWidth(t *testing.T) {
 		cells[1].Right().Add(mustPx(10)).Sub(table.BorderRect.X), 300)
 }
 
-// TestTableAutoWidthIsNotShrinkToFit pins the formula of §17.5.2.2, which is the
-// one people expect to be shrink-to-fit and is not.
+// TestTableAutoWidthDoesNotFillItsContainingBlock pins §17.5.2.2's formula in
+// the two directions that distinguish a table from an ordinary block.
 //
-// A table whose content wants less than the containing block gets what it wants;
-// a table whose content wants more than the containing block is as wide as the
-// containing block, not as wide as its content. The two directions are asserted
-// together because an implementation that used shrink-to-fit passes the first
-// and fails the second.
-func TestTableAutoWidthIsNotShrinkToFit(t *testing.T) {
+// A table whose content wants less than the containing block gets what it wants
+// — a <div> in the same place would fill the page. A table whose content wants
+// more is as wide as the containing block, not as wide as its content. Both are
+// asserted because an implementation that simply filled the parent passes the
+// second on its own.
+func TestTableAutoWidthDoesNotFillItsContainingBlock(t *testing.T) {
 	narrow := layoutOf(t, 1000, `<table id=t><tr><td>ab</td></tr></table>`, bareTable)
-	if w := find(t, narrow, "t").BorderRect.W; w >= mustPx(1000) {
+	table := find(t, narrow, "t")
+	if w := table.BorderRect.W; w >= mustPx(1000) {
 		t.Errorf("a table of two characters is %.2f px wide; it should want less than the page",
 			w.Px())
+	}
+	// And so is §17.4's wrapper: it is as wide as the table's border box and no
+	// wider, which is what makes "margin: 0 auto" centre a table. Asserting the
+	// table alone misses this — the two mechanisms each keep the table narrow on
+	// their own, so a wrapper that filled the page would leave the table where
+	// it was and only show up when something was centred against it.
+	wrapper := findFragment(t, narrow, func(f *Fragment) bool {
+		return f.Box != nil && f.Box.TableWrapper
+	})
+	if wrapper.BorderRect.W != table.BorderRect.W {
+		t.Errorf("the table wrapper is %.2f px wide and the table inside it %.2f",
+			wrapper.BorderRect.W.Px(), table.BorderRect.W.Px())
 	}
 
 	wide := layoutOf(t, 200, `<table id=t><tr><td>`+
@@ -660,6 +689,95 @@ func TestFontSizeDoesNotCompound(t *testing.T) {
 		t.Errorf("two nested declarations of \"font-size: 2em\" gave %.2f px, want %.2f",
 			box.FontSize.Px(), want.Px())
 	}
+
+	// A pseudo-element inherits from the element it belongs to, so it has the
+	// same trap and needed the same answer. This case was added after a planted
+	// defect — removing the guard on the pseudo-element path — broke nothing at
+	// all, which meant that half of the fix was untested.
+	pseudo := build(t, `<div style="font-size: 2em"><p id=p>x</p></div>`,
+		`p::before { content: "m" }`)
+	before := findBox(t, pseudo.Root, func(b *Box) bool {
+		return b.Element != nil && b.Element.Name == "p" && len(b.Children) > 0 &&
+			b.Children[0].IsText() && b.Children[0].Text == "m"
+	})
+	if want := mustPx(32); before.Children[0].FontSize != want {
+		t.Errorf("a ::before with no size of its own is set in %.2f px inside a "+
+			"\"font-size: 2em\" wrapper, want %.2f",
+			before.Children[0].FontSize.Px(), want.Px())
+	}
+
+	// And one that declares a relative size still resolves it against the
+	// element it belongs to.
+	sized := build(t, `<div style="font-size: 2em"><p id=p>x</p></div>`,
+		`p::before { content: "m"; font-size: 2em }`)
+	own := findBox(t, sized.Root, func(b *Box) bool {
+		return b.Element != nil && b.Element.Name == "p" && len(b.Children) > 0 &&
+			b.Children[0].IsText() && b.Children[0].Text == "m"
+	})
+	if want := mustPx(64); own.Children[0].FontSize != want {
+		t.Errorf("a ::before declaring \"font-size: 2em\" is set in %.2f px, want %.2f",
+			own.Children[0].FontSize.Px(), want.Px())
+	}
+}
+
+// TestTableColumnSpanWidens pins the part of §17.5.2.2 that a table of equal
+// cells cannot see: a cell spanning several columns has to make them wide enough
+// between them, and the shortfall is shared rather than landing on one.
+//
+// The single-column cells ask for the width of "x", so a spanning cell holding
+// far more than two of those is what decides both columns. The assertion is that
+// the two columns *together* hold it and that neither took the whole increase.
+func TestTableColumnSpanWidens(t *testing.T) {
+	root := layoutOf(t, 1000, `<table><tr>`+
+		`<td>x</td><td>x</td></tr>`+
+		`<tr><td colspan=2 id=wide>`+strings.Repeat("w", 40)+`</td></tr></table>`,
+		bareTable)
+
+	cells := cellRects(root)
+	if len(cells) != 3 {
+		t.Fatalf("got %d cells, want 3:\n%s", len(cells), sketchFragments(root))
+	}
+	wide := find(t, root, "wide")
+	if got, want := cells[0].W.Add(cells[1].W), wide.BorderRect.W; got != want {
+		t.Errorf("the two columns are %.2f px together and the cell spanning them "+
+			"is %.2f", got.Px(), want.Px())
+	}
+	if cells[0].W == cells[1].W && cells[0].W < mustPx(10) {
+		t.Errorf("neither column grew: they are %.2f px each, and the spanning "+
+			"cell needs %.2f", cells[0].W.Px(), wide.BorderRect.W.Px())
+	}
+	// The growth is shared, not dumped on one column. Both started equal, so
+	// both end equal to within the layout unit that the exact-sum distribution
+	// deliberately leaves on the last column rather than losing.
+	if d := cells[0].W.Sub(cells[1].W); d > 1 || d < -1 {
+		t.Errorf("two columns that started equal ended at %.2f and %.2f; the "+
+			"spanning cell's excess should be shared between them",
+			cells[0].W.Px(), cells[1].W.Px())
+	}
+}
+
+// findFragment returns the first fragment in tree order satisfying a predicate.
+func findFragment(t *testing.T, root *Fragment, ok func(*Fragment) bool) *Fragment {
+	t.Helper()
+	var found *Fragment
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f == nil || found != nil {
+			return
+		}
+		if ok(f) {
+			found = f
+			return
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if found == nil {
+		t.Fatalf("no fragment matched:\n%s", sketchFragments(root))
+	}
+	return found
 }
 
 // findBox returns the first box in tree order satisfying a predicate.
