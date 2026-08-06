@@ -164,7 +164,7 @@ const wptEnv = "WPT_TESTS"
 // right-to-left *text* in it is tainted by glyph-missing whatever the ordering
 // does. What the 16 are is documents where "direction: rtl" moved Latin content —
 // the alignment, the over-constrained margins, and the order of the runs.
-const wptCleanPassBaseline = 2540
+const wptCleanPassBaseline = 2578
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

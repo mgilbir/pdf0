@@ -295,6 +295,19 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
             css/CSS2/support css/CSS2/reference css/css-text/white-space css/reference \
             fonts
 
+# "fonts" is there for Ahem.ttf, which a quarter of the suite is written
+# against and which the harness hands to the engine — see render/ahem_test.go
+# for why a test font is the only way those assertions can be expressed.
+#
+# Licensing, since it is a font and fonts often are not as free as the code
+# around them: Ahem.ttf is tracked in the web-platform-tests repository, which
+# is under the 3-Clause BSD licence above, and carries no separate licence of
+# its own. pdf0 neither vendors nor redistributes it — it is fetched into this
+# gitignored directory exactly as the rest of the corpus is, is used only to run
+# the tests, and no font bytes are shipped in this repository or in anything it
+# builds. The exposure is therefore the same as depending on the suite at all,
+# which the ratchet already does.
+
 wpt: $(WPT_DIR)/.ok
 
 $(WPT_DIR)/.ok:
