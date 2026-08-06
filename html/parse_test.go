@@ -101,6 +101,75 @@ func TestDocumentSkeleton(t *testing.T) {
 		if p == nil || p.TextContent() != "hi" {
 			t.Errorf("%q lost its paragraph:\n%s", src, tree(doc))
 		}
+
+		// Exactly one of each, and this is the assertion that matters. The
+		// frame is built before anything is read, so a start tag for one of
+		// its elements names a box that already exists rather than making a
+		// new one — and asking only whether an <html> element *exists* passes
+		// happily while the document has two, nested, with body's margin
+		// applied twice. That is how this went unnoticed until a layout
+		// comparison found the doubled margin.
+		counts := map[string]int{}
+		doc.Walk(func(n *Node) bool {
+			if n.Type == ElementNode {
+				counts[n.Name]++
+			}
+			return true
+		})
+		for _, name := range []string{"html", "head", "body"} {
+			if counts[name] != 1 {
+				t.Errorf("%q produced %d <%s> elements, want exactly 1:\n%s",
+					src, counts[name], name, tree(doc))
+			}
+		}
+	}
+}
+
+// TestFrameTagsContributeTheirAttributes pins what an explicit <html> or <body>
+// tag is *for*, once it no longer creates an element: it carries attributes —
+// lang, dir, class — onto the frame the parser already built.
+func TestFrameTagsContributeTheirAttributes(t *testing.T) {
+	doc := mustParseHTML(t,
+		`<html lang="en"><head></head><body class="doc" id="main"><p>x</p></body></html>`)
+
+	if v, _ := doc.Element("html").Attr("lang"); v != "en" {
+		t.Errorf("the html element's lang is %q, want en", v)
+	}
+	body := doc.Element("body")
+	if v, _ := body.Attr("class"); v != "doc" {
+		t.Errorf("the body's class is %q, want doc", v)
+	}
+	if v, _ := body.Attr("id"); v != "main" {
+		t.Errorf("the body's id is %q, want main", v)
+	}
+}
+
+// TestBodyTagStartsTheBody pins that an explicit <body> still switches out of
+// the head, which was previously a side effect of creating the element.
+func TestBodyTagStartsTheBody(t *testing.T) {
+	doc := mustParseHTML(t, `<html><head><title>t</title></head><body><p>x</p></body></html>`)
+
+	if doc.Element("head").Element("title") == nil {
+		t.Errorf("the title left the head:\n%s", tree(doc))
+	}
+	if doc.Element("body").Element("p") == nil {
+		t.Errorf("the paragraph is not in the body:\n%s", tree(doc))
+	}
+	// And the title did not also land in the body.
+	if doc.Element("body").Element("title") != nil {
+		t.Errorf("the title is in the body as well:\n%s", tree(doc))
+	}
+
+	// The assertion that actually distinguishes the tag from the elements after
+	// it. An ordinary <p> starts the body on its own, so it proves nothing about
+	// <body>; a <style> is metadata and does *not*, so where it lands says
+	// whether the tag itself moved out of the head. A stylesheet in the head
+	// cascades before one in the body, so this is not bookkeeping.
+	doc = mustParseHTML(t,
+		`<html><head></head><body><style>a{color:red}</style><p>x</p></body></html>`)
+	if doc.Element("body").Element("style") == nil {
+		t.Errorf("a <style> after <body> stayed in the head, so the tag did not "+
+			"start the body:\n%s", tree(doc))
 	}
 }
 
