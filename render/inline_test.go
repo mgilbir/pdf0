@@ -560,6 +560,106 @@ func TestWeightBoundary(t *testing.T) {
 	}
 }
 
+// TestForcedBreaks pins the difference between a break *opportunity* and a break
+// the author asked for. A <br> ends the line wherever it falls — mid-phrase, and
+// on a line with room to spare — which is the whole reason it exists.
+func TestForcedBreaks(t *testing.T) {
+	root := layoutOf(t, 10000, `<p id="p">one<br>two<br>three</p>`,
+		noDefaults+`p { font-size: 20px; font-family: Helvetica }`)
+
+	got := lineTexts(linesOf(t, root, "p"))
+	want := []string{"one", "two", "three"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got %v, want %v — a <br> ends the line however much room is left", got, want)
+	}
+
+	// Without the <br> the same text is one line, so the assertion is about the
+	// element and not about the width.
+	root = layoutOf(t, 10000, `<p id="p">one two three</p>`,
+		noDefaults+`p { font-size: 20px; font-family: Helvetica }`)
+	if n := len(linesOf(t, root, "p")); n != 1 {
+		t.Errorf("the same text without <br> gave %d lines, want 1", n)
+	}
+}
+
+// TestPreservedNewlinesBreak pins that a newline in preserved white space is a
+// break too. It is the same instruction written differently, and a <pre> block
+// whose newlines did nothing would run its whole listing onto one line.
+func TestPreservedNewlinesBreak(t *testing.T) {
+	for _, value := range []string{"pre", "pre-wrap", "pre-line"} {
+		root := layoutOf(t, 10000, "<p id=\"p\">one\ntwo\nthree</p>",
+			noDefaults+`p { font-size: 20px; font-family: Helvetica; white-space: `+value+` }`)
+		got := lineTexts(linesOf(t, root, "p"))
+		if len(got) != 3 {
+			t.Errorf("white-space:%s gave %d lines (%v), want 3", value, len(got), got)
+		}
+	}
+
+	// And with the default the newlines are spaces, so it is one line.
+	root := layoutOf(t, 10000, "<p id=\"p\">one\ntwo\nthree</p>",
+		noDefaults+`p { font-size: 20px; font-family: Helvetica }`)
+	if n := len(linesOf(t, root, "p")); n != 1 {
+		t.Errorf("white-space:normal gave %d lines, want 1", n)
+	}
+}
+
+// TestNoWrapDoesNotBreak pins that nowrap means what it says: the text takes a
+// line whole and overflows rather than wrapping at its spaces.
+func TestNoWrapDoesNotBreak(t *testing.T) {
+	const words = "aaaa aaaa aaaa aaaa"
+	root := layoutOf(t, 200, `<p id="p">`+words+`</p>`,
+		noDefaults+`p { font-size: 100px; font-family: Helvetica; white-space: nowrap }`)
+
+	got := lineTexts(linesOf(t, root, "p"))
+	if len(got) != 1 {
+		t.Errorf("nowrap text wrapped onto %d lines: %v", len(got), got)
+	}
+
+	// "pre" does not wrap either — it preserves white space *and* refuses to
+	// break at it, which is what makes a code listing keep its own line breaks
+	// and only those.
+	root = layoutOf(t, 200, `<p id="p">`+words+`</p>`,
+		noDefaults+`p { font-size: 100px; font-family: Helvetica; white-space: pre }`)
+	if got := lineTexts(linesOf(t, root, "p")); len(got) != 1 {
+		t.Errorf("pre text wrapped onto %d lines: %v", len(got), got)
+	}
+
+	// "pre-wrap" preserves the spaces and *does* wrap, which is the contrast
+	// that makes the two assertions above about breaking rather than about
+	// preservation.
+	root = layoutOf(t, 200, `<p id="p">`+words+`</p>`,
+		noDefaults+`p { font-size: 100px; font-family: Helvetica; white-space: pre-wrap }`)
+	if n := len(linesOf(t, root, "p")); n < 2 {
+		t.Errorf("pre-wrap text gave %d lines, want several", n)
+	}
+
+	// The same text without nowrap does wrap, so this is about the property.
+	root = layoutOf(t, 200, `<p id="p">`+words+`</p>`,
+		noDefaults+`p { font-size: 100px; font-family: Helvetica }`)
+	if n := len(linesOf(t, root, "p")); n < 2 {
+		t.Errorf("the same text without nowrap gave %d lines, want several", n)
+	}
+}
+
+// TestForcedBreakMakesAnEmptyLine pins that two breaks in a row leave a blank
+// line rather than collapsing together. "a<br><br>b" is how every author writes
+// a gap, and an engine that swallowed the second one would close it up.
+func TestForcedBreakMakesAnEmptyLine(t *testing.T) {
+	root := layoutOf(t, 10000, `<p id="p">a<br><br>b</p>`,
+		noDefaults+`p { font-size: 20px; font-family: Helvetica; line-height: 20px }`)
+
+	lines := linesOf(t, root, "p")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines (%v), want three with the middle one empty",
+			len(lines), lineTexts(lines))
+	}
+	if len(lines[1].Runs) != 0 {
+		t.Errorf("the middle line is not empty: %q", lineTexts(lines)[1])
+	}
+	// It still occupies its height, which is what makes the gap.
+	px(t, "the paragraph's height", find(t, root, "p").BorderRect.H, 60)
+}
+
 // TestInlineLayoutIsTotal pins that no text panics it.
 func TestInlineLayoutIsTotal(t *testing.T) {
 	texts := []string{

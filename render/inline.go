@@ -71,6 +71,13 @@ type inlineItem struct {
 	// space marks an item that is collapsible white space, which is dropped at
 	// the end of a line rather than measured into it.
 	space bool
+	// forced marks a break the author asked for — a <br>, or a newline in
+	// preserved white space. It ends the line wherever it falls, which is the
+	// difference between a break opportunity and an instruction.
+	forced bool
+	// noWrap marks text that may not break at its spaces, so a line takes it
+	// whole or overflows.
+	noWrap bool
 }
 
 // inlineContent lays a box's inline children into lines and returns the height
@@ -123,6 +130,14 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool) ([]inli
 			out = append(out, items...)
 			continue
 		}
+		if child.Element != nil && strings.EqualFold(child.Element.Name, "br") {
+			// A line break the author wrote. It is not a break *opportunity* —
+			// it ends the line wherever it falls, even mid-word and even on a
+			// line with room to spare.
+			out = append(out, inlineItem{box: child, forced: true})
+			pending = false
+			continue
+		}
 		if child.Outer == OuterInline {
 			out, pending = l.collectInline(child, out, pending)
 		}
@@ -144,13 +159,24 @@ func (l *layouter) itemsFor(b *Box, pendingIn bool) ([]inlineItem, bool) {
 	l.checkGlyphs(b, face)
 
 	size := b.FontSize
+	whiteSpace := strings.ToLower(strings.TrimSpace(b.Style["white-space"]))
+	preserved := whiteSpace == "pre" || whiteSpace == "pre-wrap" ||
+		whiteSpace == "pre-line" || whiteSpace == "break-spaces"
+	noWrap := whiteSpace == "nowrap" || whiteSpace == "pre"
+
 	pieces, pendingOut := splitAtBreaks(b.Text)
 
 	var out []inlineItem
 	for i, piece := range pieces {
+		if preserved && piece.text == "\n" {
+			// A newline that survived collapsing is a break the author wrote.
+			out = append(out, inlineItem{box: b, face: face, size: size, forced: true})
+			continue
+		}
 		item := inlineItem{
 			text: piece.text, box: b, face: face, size: size,
 			breakBefore: piece.breakBefore, space: piece.space,
+			noWrap: noWrap,
 		}
 		if i == 0 && pendingIn {
 			item.breakBefore = true
@@ -224,6 +250,14 @@ func splitAtBreaks(text string) ([]piece, bool) {
 		r := runes[i]
 
 		switch {
+		case r == '\n' || r == '\r':
+			// A newline is its own piece, so a caller preserving white space can
+			// turn it into a break and one collapsing it can treat it as a
+			// space. Which of those happens is not this function's business.
+			flush(false)
+			out = append(out, piece{text: "\n", space: true})
+			breakNext = true
+
 		case r == ' ' || r == '\t':
 			// A space ends the run before it and is itself a run, so that it can
 			// be dropped when it lands at the end of a line.
@@ -301,13 +335,21 @@ func (l *layouter) breakLines(items []inlineItem, width style.Unit) [][]inlineIt
 	for i := 0; i < len(items); i++ {
 		item := items[i]
 
+		if item.forced {
+			// An instruction rather than an opportunity: the line ends here
+			// whatever room is left, and an empty one still occupies its height.
+			lines = append(lines, trimTrailingSpaces(line))
+			line, used = nil, 0
+			continue
+		}
+
 		// A space at the start of a line is dropped: it is the space the break
 		// happened at, and keeping it would indent every line after the first.
 		if item.space && len(line) == 0 {
 			continue
 		}
 
-		if used.Add(item.width) > width && len(line) > 0 && item.breakBefore {
+		if !item.noWrap && used.Add(item.width) > width && len(line) > 0 && item.breakBefore {
 			lines = append(lines, trimTrailingSpaces(line))
 			line, used = nil, 0
 			if item.space {
@@ -320,7 +362,7 @@ func (l *layouter) breakLines(items []inlineItem, width style.Unit) [][]inlineIt
 		// at an arbitrary point reads as a different word — and it is reported,
 		// because the part past the edge is simply not drawn and nothing else
 		// about the page says so.
-		if item.width > width && len(line) == 0 && !item.space {
+		if item.width > width && len(line) == 0 && !item.space && !item.noWrap {
 			l.reportOverflow(item, width)
 		}
 		line = append(line, item)
