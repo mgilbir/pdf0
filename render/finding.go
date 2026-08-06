@@ -121,6 +121,27 @@ const (
 	// more than the overflow itself.
 	RuleOverflowPage Rule = "overflow-page"
 
+	// RuleResourceBlocked is a file the document referred to and this engine did
+	// not load: there was no resolver, the reference named a URL scheme, it
+	// pointed outside the directory the resolver was rooted at, or it could not
+	// be read.
+	//
+	// It is its own rule rather than an unsupported-element, because the element
+	// *was* laid out — an <img> whose image did not arrive is still a box, still
+	// takes part in the line, and still shows its alt text. What is missing is
+	// the picture, and a page with a rectangle of nothing where a chart belongs
+	// is the silent failure §6 is named after.
+	RuleResourceBlocked Rule = "resource-blocked"
+	// RuleImageUndecodable is a resource that was loaded and did not become an
+	// image: a format this engine has no decoder for, bytes that do not parse,
+	// or a picture larger than it will decode.
+	//
+	// The last of those is the one worth having a rule for. A ten-kilobyte PNG
+	// may declare sixty thousand pixels on a side, and refusing it is the only
+	// safe answer — but the refusal has to be visible, or a document that a
+	// caller believes contains a photograph contains a gap instead.
+	RuleImageUndecodable Rule = "image-undecodable"
+
 	// RuleLimit is a resource guard that tripped, or a run that was cancelled.
 	//
 	// It is spelled the same as internal/finding.LimitRule, and deliberately so:
@@ -192,6 +213,12 @@ var defaultSeverity = map[Rule]Severity{
 	// web, and a default that refuses to produce a document for it would be
 	// turned off wholesale and take the rest of the catalogue with it.
 	RulePositionApproximated: Warn,
+	// A missing image is visible: the page has a gap where the picture was, and
+	// the alt text says what it was of. That is why these warn rather than
+	// failing the render — and why a caller producing invoices with a logo on
+	// them should raise both to Error, which is the case the policy exists for.
+	RuleResourceBlocked:  Warn,
+	RuleImageUndecodable: Warn,
 	// A self-check: this firing means the scale computation is wrong, and a
 	// document produced from a wrong scale is worse than none.
 	RuleOverflowPage:  Error,
@@ -329,6 +356,15 @@ var unsupportedRules = map[Rule]bool{
 	// two documents both trip it has not demonstrated anything, and §7.1's
 	// companion signal has to see it.
 	RulePositionApproximated: true,
+	// These two say "the page does not show everything the document says",
+	// which is not quite "this engine does not implement that" — a corrupt PNG
+	// is the input being wrong. They are here anyway, and the reason is the one
+	// §7.1 gives: a reftest whose two documents both failed to load their image
+	// paint two blank rectangles that match perfectly and demonstrate nothing.
+	// The companion signal has to see a document that did not draw what it was
+	// asked to, whichever side the fault was on.
+	RuleResourceBlocked:  true,
+	RuleImageUndecodable: true,
 }
 
 // Unsupported reports whether the finding is about something this engine does
