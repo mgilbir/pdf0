@@ -164,7 +164,7 @@ const wptEnv = "WPT_TESTS"
 // right-to-left *text* in it is tainted by glyph-missing whatever the ordering
 // does. What the 16 are is documents where "direction: rtl" moved Latin content —
 // the alignment, the over-constrained margins, and the order of the runs.
-const wptCleanPassBaseline = 2192
+const wptCleanPassBaseline = 2540
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -230,8 +230,18 @@ func findReftests(t *testing.T, root string) []reftest {
 			return nil
 		}
 
-		// Tests needing something automation cannot give are not run. "ahem"
-		// needs a specific test font, and the rest need a person.
+		// Tests needing something automation cannot give are not run: a person,
+		// an animation, a script, a user stylesheet, a font this checkout has no
+		// way to get.
+		//
+		// "ahem" used to be on that list and is not any more. Ahem is a test font
+		// whose glyphs are all one-em squares, which is what makes a layout
+		// assertion expressible at all — "font: 20px Ahem" with four characters is
+		// an 80x20 block and a test can say so. The suite ships it, so the reason
+		// for skipping was that the harness did not hand it to the engine, not
+		// that it could not. It does now, and running those 962 tests found 325
+		// that pass cleanly and 619 that fail. The failure count is the honest
+		// cost of having stopped skipping them.
 		//
 		// "dom" was added after the collapsing-border work made twelve of them
 		// fail. They change the page with a script and then assert the result;
@@ -245,7 +255,7 @@ func findReftests(t *testing.T, root string) []reftest {
 		if flags := flagsRe.FindStringSubmatch(src); flags != nil {
 			for _, f := range strings.Fields(flags[1]) {
 				switch strings.ToLower(f) {
-				case "ahem", "animated", "interact", "paged", "userstyle", "font", "dom":
+				case "animated", "interact", "paged", "userstyle", "font", "dom":
 					return nil
 				}
 			}
@@ -321,7 +331,7 @@ func renderForCompare(path string) (ops []Op, clean bool, err error) {
 	built := Build(Input{HTML: src, Resources: res})
 
 	rec := NewRecorder(nil)
-	root := Layout(built.Root, A4.Content(), nil, rec)
+	root := Layout(built.Root, A4.Content(), fontSetForWPT(), rec)
 
 	clean = true
 	for _, f := range built.Findings {
