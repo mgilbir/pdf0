@@ -101,7 +101,7 @@ const wptEnv = "WPT_TESTS"
 //
 // It is a ratchet: it may rise and must never be lowered to make a red test
 // green. A drop means a layout regression, and the failing names are printed.
-const wptCleanPassBaseline = 1569
+const wptCleanPassBaseline = 1612
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
