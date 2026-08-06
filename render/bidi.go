@@ -210,8 +210,23 @@ func newBidiBuilder(open []rune) *bidiBuilder {
 func (p *bidiBuilder) cur() *[]rune { return &p.paras[len(p.paras)-1] }
 
 // add appends a run of text and returns where it landed: which paragraph, and
-// the range of runes within it.
-// The paragraph number counts from one; see inlineItem.bidiPara.
+// the range of runes within it. The paragraph number counts from one; see
+// inlineItem.bidiPara.
+//
+// This runs over every character of every document, including the great majority
+// that will turn out not to need the algorithm at all: the paragraph has to be
+// built before anything can know whether it was worth building. It costs a
+// little under three per cent of the layout of a page of Latin prose, measured,
+// and two things that look like improvements are not:
+//
+//   - Sizing the slice for the run rather than letting append double it makes it
+//     three times worse. Every call then reallocates and copies the paragraph so
+//     far, because a slice grown to exactly the length it needs has no room for
+//     the next word.
+//   - Testing each rune as it is copied, instead of scanning the run again for a
+//     character that needs the algorithm, is slower too. The second scan stops
+//     at the first byte below U+0590 without a call, and the great majority of
+//     text is nothing else.
 func (p *bidiBuilder) add(text string) (para, start, end int) {
 	if p == nil {
 		return 0, 0, 0

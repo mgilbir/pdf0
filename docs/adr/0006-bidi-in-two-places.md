@@ -46,11 +46,14 @@ shaping library would then carry a layout engine's API for one consumer.
 ## Decision
 
 `internal/bidi` implements UAX #9 for layout: `Resolve` over a paragraph with a
-base direction, `LineLevels` for rule L1 over one line, `Reorder` for rule L2,
-and `Mirror` for rule L4. `cmd/genbidi` generates its `Bidi_Class`, bracket and
-mirroring tables from the Unicode Character Database, and the generated table is
-committed while the input is not — the arrangement `cmd/genhtmlentities` and
-`cmd/gencolors` already use.
+base direction, `LineLevels` for rule L1 over one line, and `Reorder` for rule
+L2. `cmd/genbidi` generates its `Bidi_Class` and bracket tables from the Unicode
+Character Database, and the generated table is committed while the input is not —
+the arrangement `cmd/genhtmlentities` and `cmd/gencolors` already use.
+
+Rule L4, the mirrored bracket, stays on forme's side of the seam and its table is
+not generated here: the glyph can only be chosen after the run has been reversed,
+which is the shaper's work.
 
 forme keeps its own copy and keeps applying it to the strings it shapes. The
 seam between them is one sentence: **the layout engine decides where each run

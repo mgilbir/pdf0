@@ -241,11 +241,12 @@ clean-bidi-tests:
 # The Unicode Character Database, which cmd/genbidi turns into the Bidi_Class,
 # bracket and mirroring tables in internal/bidi/tables.go.
 #
-# Four files rather than one because the property needs all four: UnicodeData.txt
-# is normative for assigned characters, DerivedBidiClass.txt adds the block
-# defaults for unassigned ones (a code point nobody has assigned inside the
-# Hebrew block still runs right to left), and the bracket and mirroring
-# properties are separate tables that rules N0 and L4 need separately.
+# Three files rather than one because the property needs all three:
+# UnicodeData.txt is normative for assigned characters, DerivedBidiClass.txt adds
+# the block defaults for unassigned ones (a code point nobody has assigned inside
+# the Hebrew block still runs right to left), and BidiBrackets.txt is a property
+# of its own that rule N0 needs. Rule L4's mirroring is the shaper's and its table
+# is deliberately not generated — see cmd/genbidi.
 #
 # As with the HTML entities and the CSS colours, the generated table is committed
 # and the input is not, so a checkout builds without a network. Regenerating is a
@@ -256,7 +257,6 @@ bidi-tables:
 	mkdir -p $(UCD_DIR)/extracted
 	curl -sSf -o $(UCD_DIR)/UnicodeData.txt $(UCD_URL)/UnicodeData.txt
 	curl -sSf -o $(UCD_DIR)/BidiBrackets.txt $(UCD_URL)/BidiBrackets.txt
-	curl -sSf -o $(UCD_DIR)/BidiMirroring.txt $(UCD_URL)/BidiMirroring.txt
 	curl -sSf -o $(UCD_DIR)/extracted/DerivedBidiClass.txt $(UCD_URL)/extracted/DerivedBidiClass.txt
 	go run ./cmd/genbidi -ucd $(UCD_DIR) -out internal/bidi/tables.go
 	gofmt -w internal/bidi/tables.go
