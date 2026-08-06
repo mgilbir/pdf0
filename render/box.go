@@ -195,6 +195,20 @@ type Box struct {
 	// them, which is stable, invisible and wrong.
 	Order int
 
+	// noLeadInset and noTrailInset mark a piece of an inline box that was split
+	// by a block inside it as one whose own margin, border and padding does not
+	// begin or does not end here.
+	//
+	// §8.6's slice model: an inline box broken across a block — or across a line
+	// — carries its left inset on its first piece and its right on its last, and
+	// nothing on the joins. They are set on the pieces splitInline makes rather
+	// than derived at layout time because only the split knows which piece is
+	// which; by the time inline layout sees them they are ordinary siblings.
+	//
+	// Both false is a box that was never split, which is every box in a document
+	// without a block inside an inline.
+	noLeadInset, noTrailInset bool
+
 	Children []*Box
 	Parent   *Box
 }
@@ -840,6 +854,18 @@ func containsBlock(b *Box) bool {
 // An inline piece with nothing in it is dropped. "<span><div>x</div></span>" is
 // one block and no inline pieces at all, and keeping two empty spans either side
 // would give the line boxes they generate a height the author never asked for.
+//
+// That last is a simplification and it has a cost worth stating. §9.4.2 makes an
+// empty inline box with a non-zero horizontal margin, border or padding into a
+// line box that is *not* zero-height, so a span whose only child is a block does
+// keep its own padding-right somewhere — on an empty trailing piece. Dropping
+// the piece drops the padding with it. The tests that show it are
+// visuren/emptyspan-1 and -4 and normal-flow/block-in-inline-empty-001 and -004;
+// keeping such a piece means deciding whether it is empty *after* its lengths
+// are resolved, which is a layouter's question and not a box builder's.
+//
+// The insets that do survive go on the right pieces, which is §8.6's slice
+// model: the left inset on the first piece and the right on the last.
 func splitInline(b *Box) []*Box {
 	var out []*Box
 
@@ -848,6 +874,11 @@ func splitInline(b *Box) []*Box {
 		if len(piece.Children) == 0 {
 			return
 		}
+		// Every piece after the first begins in the middle of the box, and
+		// every piece is assumed to end in the middle until the split turns out
+		// to be over. The last one is corrected below.
+		piece.noLeadInset = len(out) > 0
+		piece.noTrailInset = true
 		out = append(out, piece)
 		piece = clonePiece(b)
 	}
@@ -886,7 +917,74 @@ func splitInline(b *Box) []*Box {
 		}
 	}
 	flush()
+	// The split is over, so whichever piece came last really does end the box.
+	if n := len(out); n > 0 && out[n-1].Outer != OuterBlock {
+		out[n-1].noTrailInset = false
+	}
+	// A box that begins or ends with a block still has a fragment there, and its
+	// own left or right inset belongs to that fragment. Keeping it is what makes
+	// "<span style='padding-right: 10px'><div>x</div></span>" reserve the ten
+	// pixels the specification says it does. It is two boxes at most, whatever
+	// the box contains.
+	//
+	// A box with no inset to carry keeps neither, and that is not an
+	// optimisation. §9.4.2 says a line box holding nothing but an inline box
+	// with *zero* margins, borders and padding "must be treated as not
+	// existing", and a piece that exists is a piece an anonymous block gets
+	// wrapped around — which would stand between two blocks and stop their
+	// margins collapsing. Three tests in box-display say so, and they are the
+	// reason this asks the question rather than always keeping the piece.
+	if len(out) > 0 && mayInsetHorizontally(b.Style) {
+		if out[0].Outer == OuterBlock {
+			lead := clonePiece(b)
+			lead.noTrailInset = true
+			out = append([]*Box{lead}, out...)
+		}
+		if out[len(out)-1].Outer == OuterBlock {
+			trail := clonePiece(b)
+			trail.noLeadInset = true
+			out = append(out, trail)
+		}
+	}
 	return out
+}
+
+// mayInsetHorizontally reports whether a style could give an inline box a
+// non-zero margin, border or padding on the horizontal axis.
+//
+// It is a syntactic question asked without a layouter, so it cannot resolve a
+// length and does not try: anything that is not written as a zero counts as
+// possibly non-zero. Being wrong that way keeps a fragment that turns out to
+// need nothing, which costs a margin collapse; being wrong the other way would
+// drop room the author asked for. The first is the direction to be wrong in,
+// and the common cases — the property absent, or a reset stylesheet's
+// "margin: 0" — are both answered exactly.
+func mayInsetHorizontally(cs style.ComputedStyle) bool {
+	for _, side := range [2]string{"left", "right"} {
+		if !isZeroLength(cs["margin-"+side]) || !isZeroLength(cs["padding-"+side]) {
+			return true
+		}
+		if !noBorder(cs["border-"+side+"-style"]) && !isZeroLength(cs["border-"+side+"-width"]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isZeroLength reports whether a declaration is absent or written as a zero.
+//
+// "auto" is a zero here because that is what it computes to for the horizontal
+// margin of an inline box: §10.3.1 gives an inline box's auto margins the value
+// zero rather than sharing out the space, which is what makes an inline box
+// uncentreable.
+func isZeroLength(v string) bool {
+	switch s := strings.ToLower(strings.TrimSpace(v)); s {
+	case "", "0", "auto":
+		return true
+	default:
+		n, ok := parseNumber(strings.TrimRight(s, "%abcdefghijklmnopqrstuvwxyz"))
+		return ok && n == 0
+	}
 }
 
 // clonePiece makes an empty copy of an inline box, keeping everything that
