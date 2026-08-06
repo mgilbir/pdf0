@@ -118,7 +118,16 @@ const wptEnv = "WPT_TESTS"
 // occlusion-blind comparison taught below, and it is the one this file keeps
 // having to relearn: a pass is only evidence if something could have made it
 // fail.
-const wptCleanPassBaseline = 2023
+//
+// The text properties — text-decoration, text-transform, box-sizing, visibility,
+// text-indent, letter-spacing and word-spacing — moved it from 2023 to 2030, and
+// the shape of the move is worth recording because the headline number
+// understates it: the failures went from 2017 to 1995, and 15 of the 22 tests
+// that stopped failing moved into the *vacuous* bucket rather than this one,
+// where they wait on something else that is still unimplemented. That is the
+// ratchet working as designed — a test only counts here once nothing in either
+// document is missing.
+const wptCleanPassBaseline = 2030
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
