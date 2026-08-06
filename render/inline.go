@@ -1852,7 +1852,7 @@ func trimLineEdge(line []inlineItem) []inlineItem {
 func (l *layouter) lineHeight(b *Box) style.Unit {
 	value := strings.ToLower(strings.TrimSpace(b.Style["line-height"]))
 	if value == "" || value == "normal" {
-		return b.FontSize.Mul(1.2)
+		return l.normalLineHeight(b)
 	}
 	if n, ok := parseNumber(value); ok {
 		return b.FontSize.Mul(n)
@@ -1862,7 +1862,44 @@ func (l *layouter) lineHeight(b *Box) style.Unit {
 			return v
 		}
 	}
-	return b.FontSize.Mul(1.2)
+	return l.normalLineHeight(b)
+}
+
+// normalLineHeightFactor is a placeholder, and the seam this whole function
+// exists to make obvious.
+//
+// The right value is the font's own: ascent + descent + **line gap**, which is
+// what every browser uses and what CSS 2.1 §10.8.1 means by "a reasonable value
+// based on the font". forme's Descriptor carries the first two terms and not the
+// third — mgilbir/forme#3 — and the two-term formula is not a stricter reading of
+// the font, it is the right formula with a term missing:
+//
+//	Helvetica 0.925em, Times 0.900em, Courier 0.786em
+//
+// all of them below the 1.0-to-1.2 range the specification recommends, Courier
+// by a wide margin.
+//
+// Measuring the alternatives was worth doing and worth writing down, because the
+// numbers argue for a change that would be wrong. Against the reftest ratchet:
+// the two-term formula gains 14 clean passes and a floor of 1.0em gains 6, while
+// this placeholder gains none. Neither gain is fidelity. Both documents of a
+// reftest are rendered by *this* engine, so a shorter line box does not move the
+// page closer to a browser — it moves a span's background closer to a div's, and
+// the tests that compare those two agree. Taking either would be reading the
+// oracle as an authority on a value it has no view about.
+//
+// 1.2 stays because it is inside the recommended range and because a placeholder
+// that is honestly arbitrary is better than one that looks derived and is not.
+const normalLineHeightFactor = 1.2
+
+// normalLineHeight is "line-height: normal".
+//
+// It ignores the face today. When forme#3 lands, this is where the font gets
+// read — the ratio becomes (ascent - descent + lineGap) / unitsPerEm — and the
+// three tests that pin 1.2 as a number will need their arithmetic redone rather
+// than their expectations relaxed, since each derives its figure from this one.
+func (l *layouter) normalLineHeight(b *Box) style.Unit {
+	return b.FontSize.Mul(normalLineHeightFactor)
 }
 
 // baselineOf is where the text sits within a line box.
