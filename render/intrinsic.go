@@ -86,6 +86,16 @@ func (l *layouter) contentWidths(b *Box) intrinsicWidths {
 }
 
 func (l *layouter) measureWidths(b *Box) intrinsicWidths {
+	if b.Replaced != nil {
+		// A replaced element has no preference between a narrow box and a wide
+		// one: it is exactly one width and cannot be broken, so both numbers
+		// are that width. This is what stops a floated image shrinking to
+		// nothing — without it, contentWidths would walk a box with no children
+		// and answer zero, and the float would be a sliver with the picture
+		// hanging out of it.
+		w := l.replacedIntrinsicWidth(b)
+		return intrinsicWidths{min: w, max: w}
+	}
 	if b.IsText() {
 		return l.textWidths(b)
 	}
@@ -119,8 +129,10 @@ func (l *layouter) measureWidths(b *Box) intrinsicWidths {
 func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// The frame is empty because §9.4.3's offset is applied after layout and so
 	// changes no width: a relatively positioned inline demands exactly the room
-	// it would have demanded without the declaration.
-	items, _ := l.collectInline(b, nil, false, inlineFrame{})
+	// it would have demanded without the declaration. It is marked as a
+	// measurement so that nothing on the way down is laid out — see
+	// inlineFrame.measuring for why that is a correctness rule and not a saving.
+	items, _ := l.collectInline(b, nil, false, inlineFrame{measuring: true})
 
 	var out intrinsicWidths
 	var line, run style.Unit
@@ -143,6 +155,20 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 			got := l.outerWidths(item.float, 0)
 			out.min = style.Max(out.min, got.min)
 			out.max = style.Max(out.max, got.max)
+
+		case item.atomicBox != nil:
+			// An atomic inline cannot be broken, so it joins the unbreakable
+			// run rather than ending it — "an <img> in a sentence" is one word,
+			// a picture and another word, with the picture as unsplittable as
+			// either. It contributes its own two widths, which for a replaced
+			// element are the same number and for an inline-block are its
+			// content's.
+			if item.breakBefore {
+				endRun()
+			}
+			got := l.outerWidths(item.atomicBox, 0)
+			run = run.Add(got.min)
+			line = line.Add(got.max)
 
 		case item.forced:
 			endLine()

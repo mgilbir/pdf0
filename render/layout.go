@@ -290,8 +290,23 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", containing)
 
-	width := l.resolveWidth(b, margin, border, padding, containing, &margin)
+	// A replaced box is sized from its content rather than from its containing
+	// block, on both axes at once, and the answer is then handed to the
+	// ordinary block arithmetic as though the author had declared it. That is
+	// exactly what CSS 2.1 §10.3.4 and §10.6.5 say to do — the margin rules for
+	// a block-level replaced element are the same ones as for any other block,
+	// applied to a width that came from somewhere else.
+	var replaced *Size
+	if b.Replaced != nil {
+		s := l.replacedSize(b, containing, at.cbHeight, at.cbDefinite)
+		replaced = &s
+	}
+
+	width := l.resolveWidth(b, margin, border, padding, containing, &margin, replaced)
 	declaredHeight, hasHeight := l.explicitHeight(b, containing)
+	if replaced != nil {
+		declaredHeight, hasHeight = replaced.H, true
+	}
 	if forced != nil {
 		margin, width = forced.margin, forced.width
 		if forced.hasHeight {
@@ -378,7 +393,14 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		contentHeight = style.Max(contentHeight, own.bottom())
 	}
 	minHeight, hasMinHeight := l.lengthOf(b, "min-height", containing)
-	contentHeight = l.clampHeight(b, contentHeight, containing)
+	if b.Replaced == nil {
+		// A replaced box's height has already been through §10.4's constraint
+		// table, which resolves the two axes together to keep the picture's
+		// shape. Clamping it again here would undo that on one axis and leave
+		// the other, which is how an image comes out squashed rather than
+		// merely small.
+		contentHeight = l.clampHeight(b, contentHeight, containing)
+	}
 
 	frag.BorderRect.H = contentHeight.Add(padding.Vertical()).Add(border.Vertical())
 
@@ -747,13 +769,28 @@ func collapse(a, b style.Unit) style.Unit {
 // It may adjust the margins, which is why they are passed by pointer: "auto" on
 // both sides is what centres a box, and it can only be resolved once the width
 // is known.
+// replaced, when not nil, is the width and height CSS 2.1 §10.3.2 gave a
+// replaced box. It stands in for a declared width, and it is *not* clamped
+// again: §10.4's constraint table has already applied the minimum and maximum
+// on both axes together, and a second independent clamp would break the ratio
+// it was careful to keep.
 func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
-	containing style.Unit, out *Edges) style.Unit {
+	containing style.Unit, out *Edges, replaced *Size) style.Unit {
 
 	fixed := border.Horizontal().Add(padding.Horizontal())
 	available := containing.Sub(fixed)
 
+	clamp := func(v style.Unit) style.Unit {
+		if replaced != nil {
+			return v
+		}
+		return l.clampWidth(b, v, containing)
+	}
+
 	declared, hasWidth := l.explicitWidth(b, containing)
+	if replaced != nil {
+		declared, hasWidth = replaced.W, true
+	}
 	marginLeftAuto := l.isAuto(b, "margin-left")
 	marginRightAuto := l.isAuto(b, "margin-right")
 
@@ -773,9 +810,9 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 			out.Right = 0
 		}
 		if hasWidth {
-			return l.clampWidth(b, declared, containing)
+			return clamp(declared)
 		}
-		return l.clampWidth(b, l.shrinkToFit(b, maxZero(available.Sub(out.Horizontal()))), containing)
+		return clamp(l.shrinkToFit(b, maxZero(available.Sub(out.Horizontal()))))
 	}
 
 	if !hasWidth {
@@ -789,10 +826,10 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 			out.Right = 0
 		}
 		width := available.Sub(out.Horizontal())
-		return l.clampWidth(b, maxZero(width), containing)
+		return clamp(maxZero(width))
 	}
 
-	width := l.clampWidth(b, declared, containing)
+	width := clamp(declared)
 	slack := available.Sub(width).Sub(margin.Horizontal())
 
 	switch {

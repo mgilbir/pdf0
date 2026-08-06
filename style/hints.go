@@ -1,0 +1,128 @@
+package style
+
+import (
+	"strings"
+
+	"github.com/mgilbir/pdf0/css"
+	"github.com/mgilbir/pdf0/html"
+)
+
+// Presentational hints: the handful of HTML attributes that mean a CSS
+// declaration.
+//
+// "<img width=5 height=96>" is not markup this engine may ignore. It is the
+// oldest way to size an image and it is still what half the web platform's own
+// reference documents use to draw a rectangle of a known size — so an engine
+// that read the attribute as decoration would lay those documents out at the
+// image's own pixel size and be wrong in a way that looks like a layout bug.
+//
+// # Where they sit in the cascade, and why it matters
+//
+// A hint is *not* an inline style. "img { width: 10px }" beats
+// "<img width=5>", and the ordering is what makes a stylesheet able to take
+// control of a document it did not write. CSS Cascade puts a hint in the author
+// origin with a specificity of zero, ahead of every declaration an author
+// actually wrote — which is what is done here: origin OriginAuthor, zero
+// specificity, and an order number below every real declaration's.
+//
+// The consequences are worth stating, because both directions surprise someone:
+// a user-agent rule can never beat a hint, and any author rule at all can,
+// including "* { width: auto }".
+//
+// # Why so few
+//
+// Only the attributes whose element this engine lays out, and only the ones
+// that are a length. The rest of HTML's presentational attributes — align,
+// bgcolor, border, cellpadding — belong to elements that are refused or to a
+// table algorithm that does not exist yet, and a table of hints for boxes that
+// are never built would read as coverage.
+
+// hintOrder is the cascade order number every hint carries.
+//
+// Declarations from stylesheets are numbered from zero upwards, so any negative
+// number is below all of them — which is exactly where a hint belongs, and
+// stating it as a constant is what keeps that relationship from being an
+// accident of two files agreeing.
+const hintOrder = -1
+
+// hintedAttributes lists, per element, which attribute sets which property.
+//
+// Keyed by lower-case element name. The <img> pair is the whole of it today;
+// the map exists rather than a pair of conditionals so that adding <table
+// width> with the table algorithm is a line of data rather than a new branch.
+var hintedAttributes = map[string]map[string]string{
+	"img": {"width": "width", "height": "height"},
+}
+
+// There is deliberately no cache of parsed hint values.
+//
+// One was written here first, on the reasoning that a document of a thousand
+// thumbnails asks for "150px" a thousand times — and it was a package-level
+// map, keyed on text taken straight out of an untrusted document, which is a
+// leak that outlives the render that filled it. The parse it saved is two
+// tokens, asked at most twice per element, so what it bought was nothing and
+// what it cost was unbounded memory across a process's lifetime.
+
+// presentationalHints returns the declarations an element's attributes imply.
+//
+// The value syntax is HTML's "dimension value": a run of digits, optionally
+// followed by a per-cent sign. Anything else — a negative number, a length with
+// a unit, a word — is not a dimension and the attribute is ignored, which is
+// what HTML requires and is also the safe answer: a value this cannot read must
+// not become a length it guessed at.
+func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
+	attrs, ok := hintedAttributes[strings.ToLower(n.Name)]
+	if !ok {
+		return nil
+	}
+	var out map[string][]css.ComponentValue
+	for attr, property := range attrs {
+		raw, ok := n.Attr(attr)
+		if !ok {
+			continue
+		}
+		value, ok := dimensionValue(raw)
+		if !ok {
+			continue
+		}
+		if out == nil {
+			out = make(map[string][]css.ComponentValue, len(attrs))
+		}
+		vals, _ := css.ParseComponentValues(value)
+		out[property] = vals
+	}
+	return out
+}
+
+// maxHintDigits bounds the number a dimension attribute may state.
+//
+// Ten digits cannot overflow the parse below and is already four orders of
+// magnitude past any page; the bound is here because the attribute is untrusted
+// text and a length is one multiplication away from a box the size of a
+// continent. A longer run of digits is not a large image, it is a value nobody
+// meant, so it is refused rather than saturated.
+const maxHintDigits = 10
+
+// dimensionValue turns an HTML dimension attribute into a CSS length.
+//
+// Leading and trailing white space is allowed, because HTML's attribute values
+// are commonly written with it and every browser strips it. Everything else is
+// exact: the digits, then optionally a per-cent sign, then the end.
+func dimensionValue(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	digits := 0
+	for digits < len(s) && s[digits] >= '0' && s[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || digits > maxHintDigits {
+		return "", false
+	}
+	switch s[digits:] {
+	case "":
+		// A bare number is a length in CSS pixels.
+		return s + "px", true
+	case "%":
+		return s, true
+	}
+	return "", false
+}

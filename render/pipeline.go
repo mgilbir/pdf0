@@ -44,6 +44,15 @@ type Input struct {
 	// because its origin is different, and origin is the strongest term in the
 	// cascade.
 	UserCSS string
+
+	// Resources supplies the bytes of the files the document refers to — the
+	// images an <img> names.
+	//
+	// A nil resolver loads nothing, which is the deliberate default: a document
+	// is untrusted input, and "src" is a string in it. See resource.go for what
+	// a resolver may and may not do, and NewDirResolver for the contained
+	// filesystem one.
+	Resources ResourceResolver
 }
 
 // Built is the result of the stages that exist.
@@ -108,6 +117,11 @@ func Build(in Input) Built {
 	}
 
 	root := BuildBoxes(doc, styled, rec)
+	// The one stage that reads anything from outside the two strings the caller
+	// handed in. It runs after the box tree exists because whether an element
+	// is replaced changes only how its box is sized, never whether there is
+	// one — and it runs before layout because a size is what layout needs.
+	resolveReplaced(root, in.Resources, rec)
 	reportUnsupportedDisplays(doc, styled.Styles, rec)
 
 	return Built{
