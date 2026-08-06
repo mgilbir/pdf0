@@ -80,6 +80,18 @@ const (
 	// a reader blames on their PDF viewer.
 	RuleGlyphMissing Rule = "glyph-missing"
 
+	// The size thresholds of §6.1, which are checkable exactly because §5's
+	// scaling is geometric: the effective size of an element is its natural size
+	// times one number, so a threshold is a multiplication rather than an
+	// iteration.
+	//
+	// RuleMinScale is the blunt one and probably the most useful: if the content
+	// had to be shrunk past half to fit, the document is wrong, and no
+	// per-element threshold is needed to say so.
+	RuleMinScale Rule = "min-scale"
+	// RuleMinFontSize is text that would be set below a legible size.
+	RuleMinFontSize Rule = "min-font-size"
+
 	// RuleLimit is a resource guard that tripped, or a run that was cancelled.
 	//
 	// It is spelled the same as internal/finding.LimitRule, and deliberately so:
@@ -136,9 +148,13 @@ var defaultSeverity = map[Rule]Severity{
 	// is the case where returning no document is better than returning one.
 	RuleUnsupportedScript: Error,
 	RuleGlyphMissing:      Error,
-	RuleInvalidMarkup:     Warn,
-	RuleInvalidCSS:        Warn,
-	RuleLimit:             Warn,
+	// A document that only fitted by being made illegible is one where no
+	// document is better than the document.
+	RuleMinScale:      Error,
+	RuleMinFontSize:   Error,
+	RuleInvalidMarkup: Warn,
+	RuleInvalidCSS:    Warn,
+	RuleLimit:         Warn,
 }
 
 // AllRules returns every rule this engine can report, in a fixed order.
