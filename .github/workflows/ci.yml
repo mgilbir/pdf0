@@ -94,11 +94,12 @@ jobs:
             testdata/arlington-pdf-model
             testdata/pdf20examples
             testdata/facturx
+            testdata/unicode-bidi
           key: corpora-${{ hashFiles('Makefile', 'testdata/facturx/sources.tsv') }}
 
       - name: fetch corpora
         if: steps.corpora.outputs.cache-hit != 'true'
-        run: make corpus arlington refpdfs facturx
+        run: make corpus arlington refpdfs facturx bidi-tests
 
       # A half-finished fetch must be red, not green. The corpus-gated tests skip
       # when their directory is empty, and a skip reads as a pass: this repository
@@ -128,8 +129,16 @@ jobs:
           # rather than a fixed number keeps the two from drifting apart.
           want=$(grep -cvE '^[[:space:]]*(#|$)' testdata/facturx/sources.tsv)
           check testdata/facturx                 '*.pdf' "$want"
+          # Unicode's bidirectional conformance suite: two files, and both have
+          # to be there — the character test is the one that exercises rule N0's
+          # bracket pairing, and a fetch that got only the other would leave that
+          # rule unchecked while the job stayed green.
+          check testdata/unicode-bidi            '*.txt'    2
 
       - name: conformance ratchets
         env:
           VERAPDF_CORPUS: testdata/verapdf-corpus
+          # Absolute, because `go test ./internal/bidi/` runs with the package
+          # directory as its working directory and not the repository root.
+          UNICODE_BIDI_TESTS: ${{ github.workspace }}/testdata/unicode-bidi
         run: go test ./... -count=1

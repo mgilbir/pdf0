@@ -391,9 +391,12 @@ func TestUnbreakableTextOverflowsRatherThanSplitting(t *testing.T) {
 func TestUnsupportedScriptIsAnError(t *testing.T) {
 	fired[RuleUnsupportedScript] = true
 
+	// The right-to-left scripts were here and are not any more: the
+	// bidirectional algorithm is implemented, so they are laid out rather than
+	// refused. What is left is the family this engine still cannot break, which
+	// is the one that needs a dictionary — see TestBidiIsNotReportedUnsupported
+	// for the other half of that claim.
 	cases := map[string]string{
-		"מה שלומך":   "right-to-left",
-		"مرحبا":      "right-to-left",
 		"สวัสดีครับ": "no spaces",
 	}
 	for text, why := range cases {

@@ -143,9 +143,28 @@ const wptEnv = "WPT_TESTS"
 // tests are marked "flags: dom" and change a border with a script; nothing here
 // runs scripts, so they cannot pass. They *were* passing, because neither
 // document drew a row border at all and two blank grids match. Drawing the
-// borders made them fail honestly. The harness does not skip the "dom" flag, and
-// whether it should is a separate decision from this one.
-const wptCleanPassBaseline = 2063
+// borders made them fail honestly. The harness skips the "dom" flag now, for the
+// reason given where the flags are read.
+//
+// Bidirectional text took it from 1916 to 2045, and that number is two effects
+// worth keeping apart because they are different claims. They were measured
+// separately, by running the suite with the properties reported as implemented
+// and every layout effect of them switched off:
+//
+//   - Deleting the admissions for "direction" and "unicode-bidi", and the
+//     unsupported-script finding for the right-to-left scripts, moved 113 tests
+//     out of the tainted bucket without changing a pixel. Failures did not move
+//     at all — 1995 before, 1995 after.
+//   - Implementing the properties then moved the pixels: 16 more clean passes,
+//     and failures from 1995 to 1979.
+//
+// The first number is the larger and the second is the one that is about layout.
+// The reason the second is small is worth recording: the standard fourteen faces
+// are the default font set and have no Hebrew or Arabic glyph, so a document with
+// right-to-left *text* in it is tainted by glyph-missing whatever the ordering
+// does. What the 16 are is documents where "direction: rtl" moved Latin content —
+// the alignment, the over-constrained margins, and the order of the runs.
+const wptCleanPassBaseline = 2192
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
