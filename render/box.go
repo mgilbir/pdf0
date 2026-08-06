@@ -150,6 +150,20 @@ type Box struct {
 	// a <span>.
 	Replaced *ReplacedContent
 
+	// BackgroundImages is the pictures this box's background-image named, by the
+	// reference the stylesheet wrote.
+	//
+	// It is a map rather than a slice because the layers are read later, by
+	// layout, and matching a slice to them by index would depend on the loading
+	// pass and the reading pass agreeing about a value they parse separately —
+	// which is the sort of coupling that survives every test and breaks on the
+	// document that repeats one file in two layers.
+	//
+	// A reference that failed to load is absent rather than present and nil, so
+	// a layer naming it paints nothing. That is the same answer a broken <img>
+	// gets and for the same reason: the picture is missing, not the box.
+	BackgroundImages map[string]*ReplacedContent
+
 	// TableWrapper marks the anonymous box §17.4 puts around a table to hold it
 	// and its captions.
 	//
