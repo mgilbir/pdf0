@@ -36,10 +36,19 @@ const (
 	borderRidge
 	borderInset
 	borderOutset
+	// borderHidden draws nothing, exactly as borderNone does, and is a separate
+	// value because §17.6.2.1 makes it the strongest thing an author can say: a
+	// hidden border on any of the boxes meeting at a collapsed grid line
+	// suppresses the line entirely, beating even a wider one. Folding it onto
+	// none — which is what "they both draw nothing" invites — loses the only
+	// way there is to punch a hole in a collapsed table's grid.
+	borderHidden
 )
 
 func parseBorderStyle(value string) borderStyle {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "hidden":
+		return borderHidden
 	case "solid":
 		return borderSolid
 	case "double":
@@ -84,6 +93,13 @@ func (p *painter) paintEdge(band Rect, kind borderStyle, colour style.RGBA, s si
 	horizontal := s == sideTop || s == sideBottom
 
 	switch kind {
+	case borderNone, borderHidden:
+		// Neither draws anything. Both already have a width of zero, so this is
+		// unreachable through an ordinary box — but the collapsing model chooses
+		// a style and a width from different boxes, and a default that filled the
+		// band solid would turn a suppressed edge into a black rule.
+		return
+
 	case borderSolid:
 		p.ops = append(p.ops, FillRect{Rect: band, Color: colour})
 

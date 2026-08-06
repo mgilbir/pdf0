@@ -65,7 +65,7 @@ func (l *layouter) outerWidths(b *Box, containing style.Unit) intrinsicWidths {
 	}
 	edges := l.edges(b, "margin", containing).Horizontal().
 		Add(l.borderWidths(b).Horizontal()).
-		Add(l.edges(b, "padding", containing).Horizontal())
+		Add(l.paddingOf(b, containing).Horizontal())
 	return intrinsicWidths{
 		min: maxZero(inner.min.Add(edges)),
 		max: maxZero(inner.max.Add(edges)),

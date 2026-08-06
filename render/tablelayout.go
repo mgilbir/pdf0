@@ -16,18 +16,21 @@ import (
 // depends on every other cell in its column, and the table's own width depends
 // on all of them at once. Nothing here can be done in one pass over the boxes.
 //
-// # What this implements and what it does not
+// # The two border models
 //
-// The separated borders model of §17.6.1, with border-spacing and empty-cells.
-// The collapsing model of §17.6.2 is *not* implemented: it is not a variation on
-// this one but a different geometry, in which the borders belong to the grid
-// rather than to the cells, half of each border lies outside the table, and
-// which border is drawn at every edge is decided by a conflict resolution over
-// six sources. Approximating it silently would produce a table that is wrong by
-// a border width on every line and looks deliberate, so "border-collapse:
-// collapse" is reported as unsupported and laid out with the separated model at
-// zero spacing — the closest arrangement there is, and one the caller is told
-// about rather than left to discover.
+// The separated model of §17.6.1, with border-spacing and empty-cells, and the
+// collapsing model of §17.6.2, which lives in bordercollapse.go. They are not
+// two settings of one algorithm: in the separated model every cell has its own
+// border and the gaps between them are empty page, and in the collapsing model
+// the borders belong to the *grid* and each cell owns half of the four lines
+// around it.
+//
+// The second model changes almost nothing here, and that is the point of how it
+// is arranged. A collapsed grid line lies *inside* the two boxes that share it —
+// half of it is each one's used border — so the columns abut, the spacing is
+// zero, and every column width, row height and position below is the same
+// arithmetic it always was. What differs is what a cell's border comes out to,
+// which borderWidths answers, and who draws it, which the table does.
 
 // ---------------------------------------------------------------------------
 // The grid
@@ -340,35 +343,29 @@ func spanAttr(b *Box) int {
 // Spacing and the border model
 // ---------------------------------------------------------------------------
 
-// tableSpacing is §17.6.1's border-spacing, split into its two axes.
-type tableSpacing struct{ h, v style.Unit }
+// tableSpacing is what separates one column from the next and one row from the
+// next: §17.6.1's border-spacing.
+//
+// In §17.6.2's collapsing model there is nothing between them — a grid line lies
+// *inside* the two boxes that share it, half in each — so the spacing is zero
+// and the whole of §17.5.2 below runs unchanged. What the collapsed grid is
+// carried here for is the two questions that are not about spacing: whether
+// empty-cells applies, and what the table has to draw.
+type tableSpacing struct {
+	h, v style.Unit
+	// collapsed is §17.6.2's resolved grid, or nil in the separated model.
+	collapsed *collapsedGrid
+}
 
-// spacingOf reads border-spacing, and reports the collapsing model when it is
-// asked for.
+// spacingOf reads the border model a table asks for.
 //
 // border-spacing takes one length or two: one applies to both axes, two are
 // horizontal then vertical. It applies only in the separated model, so
-// "border-collapse: collapse" gives zero whatever the spacing says — which is
-// the closest this engine gets to §17.6.2 and is why it says so.
-//
-// report is false for the callers that only want the number. Measuring a table
-// asks for its spacing several times — once for its minimum, once for its
-// maximum, once to lay it out — and an unimplemented feature is one thing to be
-// told about a table, not three.
-func (l *layouter) spacingOf(table *Box, report bool) tableSpacing {
-	if strings.EqualFold(strings.TrimSpace(table.Style["border-collapse"]), "collapse") {
-		if report {
-			l.rec.ReportDetail(Finding{
-				Rule:   RuleUnsupportedValue,
-				Source: AtHTML(offsetOf(table)),
-				Message: "\"border-collapse: collapse\" is not implemented; the table was laid " +
-					"out with the separated model and no spacing, so each cell keeps its own " +
-					"border instead of sharing one with its neighbour",
-				Path:     PathOf(table.Element),
-				Property: "border-collapse",
-			})
-		}
-		return tableSpacing{}
+// "border-collapse: collapse" gives zero whatever the spacing says — and the
+// resolved grid instead.
+func (l *layouter) spacingOf(table *Box) tableSpacing {
+	if borderCollapses(table) {
+		return tableSpacing{collapsed: l.collapsedGridFor(table)}
 	}
 
 	raw := strings.TrimSpace(table.Style["border-spacing"])
@@ -532,7 +529,7 @@ func (l *layouter) cellDemand(cell *Box) (min, max style.Unit, percent float64) 
 		}
 	}
 	edges := l.borderWidths(cell).Horizontal().
-		Add(l.edges(cell, "padding", 0).Horizontal())
+		Add(l.paddingOf(cell, 0).Horizontal())
 	return inner.min.Add(edges), inner.max.Add(edges), percent
 }
 
@@ -601,7 +598,7 @@ func distribute(total style.Unit, weights []float64, out []style.Unit) {
 // tableGridWidths is the pair §17.5.2.2 calls MIN and MAX: the narrowest and
 // widest the whole grid can be, spacing included.
 func (l *layouter) tableGridWidths(table *Box) (min, max style.Unit) {
-	s := l.spacingOf(table, false)
+	s := l.spacingOf(table)
 	g := l.tableGridFor(table)
 	demands := l.tableColumnDemands(table, s)
 	for _, d := range demands {
@@ -685,7 +682,7 @@ func (l *layouter) captionMinWidth(table *Box) style.Unit {
 	// CAPMIN is a border-box width of the table; what this returns is compared
 	// against a content width, so the table's own edges come off it.
 	edges := l.borderWidths(table).Horizontal().
-		Add(l.edges(table, "padding", 0).Horizontal())
+		Add(l.paddingOf(table, 0).Horizontal())
 	return maxZero(out.Sub(edges))
 }
 
@@ -956,7 +953,7 @@ func (l *layouter) tableWrapperWidths(wrapper *Box) intrinsicWidths {
 		if c.Inner == InnerTable {
 			got := l.tableContentWidths(c)
 			edges := l.borderWidths(c).Horizontal().
-				Add(l.edges(c, "padding", 0).Horizontal())
+				Add(l.paddingOf(c, 0).Horizontal())
 			out.min = style.Max(out.min, got.min.Add(edges))
 			out.max = style.Max(out.max, got.max.Add(edges))
 			continue
@@ -1004,13 +1001,14 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 	if len(g.rows) == 0 {
 		return 0
 	}
-	s := l.spacingOf(table, true)
+	s := l.spacingOf(table)
 	cols := l.columnWidths(table, width, s)
 
 	// The left edge of each column, measured from the table's content box. The
 	// grid starts one spacing in, and there is one between every pair — which is
 	// what makes border-spacing show around the outside of a table as well as
-	// between its cells.
+	// between its cells. In the collapsing model the spacing is zero and the
+	// columns abut: a grid line lies inside the two columns that share it.
 	colX := make([]style.Unit, len(cols))
 	x := s.h
 	for i, w := range cols {
@@ -1032,7 +1030,56 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 
 	l.paintableColumns(parent, g, cols, colX, s.v, gridHeight)
 	l.assembleRows(parent, g, placed, cols, colX, rowY, rowH, rowBaseline, s, gridWidth)
+	if s.collapsed != nil && len(s.collapsed.hoff) > 0 {
+		// A table with rows and no columns at all has no grid lines to resolve
+		// and none to draw; its own border was halved by the degenerate case in
+		// buildCollapsedGrid and is painted the ordinary way.
+		l.paintCollapsedGrid(table, parent, s.collapsed, cols, colX, rowH, rowY)
+	}
 	return y
+}
+
+// paintCollapsedGrid hands the table's fragment the grid lines to draw.
+//
+// The line positions are derived here rather than in bordercollapse.go because
+// this is where the columns and rows first have sizes: which border wins is a
+// question about styles and is answered before any of this, and where it goes is
+// a question about geometry and cannot be.
+func (l *layouter) paintCollapsedGrid(table *Box, parent *Fragment, cg *collapsedGrid,
+	cols, colX, rowH, rowY []style.Unit) {
+
+	// Where each grid line begins, relative to the table's *border* box.
+	//
+	// Column c's border box begins at the centre of line c — that is what "the
+	// border is centred on the grid line" means — so the line begins its own
+	// leading half before it. At the left edge that lands exactly on the table's
+	// border box, since the table's used border is that same leading half.
+	lineX := make([]style.Unit, cg.cols+1)
+	originX := cg.table.Left
+	for c := 0; c < cg.cols && c < len(colX); c++ {
+		lineX[c] = colX[c].Add(originX).Sub(leadingHalf(cg.vgutter[c]))
+	}
+	if last := cg.cols - 1; last >= 0 && last < len(colX) {
+		lineX[cg.cols] = colX[last].Add(cols[last]).Add(originX).
+			Sub(leadingHalf(cg.vgutter[cg.cols]))
+	}
+	lineY := make([]style.Unit, cg.rows+1)
+	originY := cg.table.Top
+	for r := 0; r < cg.rows && r < len(rowY); r++ {
+		lineY[r] = rowY[r].Add(originY).Sub(leadingHalf(cg.hgutter[r]))
+	}
+	if last := cg.rows - 1; last >= 0 && last < len(rowY) {
+		lineY[cg.rows] = rowY[last].Add(rowH[last]).Add(originY).
+			Sub(leadingHalf(cg.hgutter[cg.rows]))
+	}
+
+	parent.inCollapsedGrid = true
+	parent.collapsed = cg.bands(lineX, lineY)
+	if cg.truncated {
+		l.rec.Report(RuleLimit, AtHTML(offsetOf(table)),
+			"the table's collapsed borders break into more stretches of grid line "+
+				"than this engine will draw; the rest of them are not on the page")
+	}
 }
 
 // layoutCells lays every cell out at the width its columns give it.
@@ -1050,7 +1097,9 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 	out := make([]placedCell, 0, len(g.cells))
 	for _, c := range g.cells {
 		// The cell's border box: its columns, and the spacing it swallows
-		// between them.
+		// between them. In the collapsing model that already holds the cell's
+		// half of the grid line on each side, because a column there is exactly
+		// a cell's border box and the columns abut.
 		var outer style.Unit
 		for k := c.col; k < c.col+c.colSpan && k < len(cols); k++ {
 			outer = outer.Add(cols[k])
@@ -1060,7 +1109,7 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 		// A percentage on a cell's padding resolves against the table's width,
 		// because §10.1 makes the table the cell's containing block.
 		border := l.borderWidths(c.box)
-		padding := l.edges(c.box, "padding", tableWidth)
+		padding := l.paddingOf(c.box, tableWidth)
 		content := maxZero(outer.Sub(border.Horizontal()).Sub(padding.Horizontal()))
 
 		absFrom := len(l.deferred)
@@ -1068,6 +1117,9 @@ func (l *layouter) layoutCells(table *Box, g *tableGrid, cols []style.Unit,
 			flow{ctx: &floatContext{}, cbHeight: 0, cbDefinite: false},
 			&forcedGeometry{width: content})
 		frag.BorderRect.W = outer
+		// The cell's half of each grid line is drawn by the table along with the
+		// other half, which belongs to the neighbour: neither of them may draw it.
+		frag.inCollapsedGrid = s.collapsed != nil
 
 		out = append(out, placedCell{
 			cell: c, frag: frag, natural: frag.BorderRect.H,
@@ -1357,12 +1409,18 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 			X: colX[c.col].Sub(s.h), Y: 0,
 			W: p.frag.BorderRect.W, H: height,
 		}
-		if cellIsEmpty(p.frag) && strings.EqualFold(
+		if s.collapsed == nil && cellIsEmpty(p.frag) && strings.EqualFold(
 			strings.TrimSpace(c.box.Style["empty-cells"]), "hide") {
-			// §17.6.1.1: an empty cell in the separated model may be asked to
+			// §17.6.1.1: an empty cell in the *separated* model may be asked to
 			// draw nothing at all. Leaving the fragment out is exactly that —
 			// there is nothing in it but a background and a border, and its
 			// width and height have already been counted.
+			//
+			// The property does not apply in the collapsing model and the
+			// specification says so in as many words. It could not: an empty
+			// cell there owns half of four grid lines that its neighbours own
+			// the other half of, so hiding it would take away half of a border
+			// that belongs to the cell next door.
 			continue
 		}
 		row.Children = append(row.Children, p.frag)
