@@ -36,7 +36,7 @@ type contentValue struct {
 // Strings and attr() are produced. Counters, quotes and images are refused and
 // named, because each of them would otherwise be silently dropped and leave a
 // marker missing from a page that still looks finished.
-func resolveContent(raw string, el *html.Node) contentValue {
+func resolveContent(raw string, el *html.Node, counters counterValues) contentValue {
 	trimmed := strings.TrimSpace(raw)
 	switch strings.ToLower(trimmed) {
 	case "", "normal", "none":
@@ -65,9 +65,35 @@ func resolveContent(raw string, el *html.Node) contentValue {
 			value, _ := el.Attr(name)
 			text.WriteString(value)
 
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counter"),
-			v.IsFunction() && strings.EqualFold(v.Token.Value, "counters"):
-			return contentValue{unsupported: "counters are not implemented"}
+		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counter"):
+			name, listStyle, _, ok := counterArguments(v)
+			if !ok {
+				return contentValue{unsupported: "counter() without a counter name"}
+			}
+			// The innermost counter of that name. A counter that was never
+			// created reads as zero, which is what §12.4.3 says and is better
+			// than refusing: a document referring to a counter it forgot to
+			// reset still numbers from its increments.
+			vals := counters[name]
+			n := 0
+			if len(vals) > 0 {
+				n = vals[len(vals)-1]
+			}
+			text.WriteString(formatCounter(n, listStyle))
+
+		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counters"):
+			name, listStyle, sep, ok := counterArguments(v)
+			if !ok || sep == nil {
+				return contentValue{unsupported: "counters() needs a name and a separator"}
+			}
+			// Every counter of that name in scope, outermost first. This is what
+			// numbers a nested list "2.1.3" — the three values are three
+			// counters alive at once, one per level.
+			var parts []string
+			for _, n := range counters[name] {
+				parts = append(parts, formatCounter(n, listStyle))
+			}
+			text.WriteString(strings.Join(parts, *sep))
 
 		case v.IsToken() && v.Token.Kind == css.URL,
 			v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
@@ -109,7 +135,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 		return nil
 	}
 
-	value := resolveContent(cs["content"], n)
+	value := resolveContent(cs["content"], n, b.counters[n])
 	if value.unsupported != "" {
 		b.rec.ReportDetail(Finding{
 			Rule:     RuleUnsupportedValue,
@@ -163,4 +189,33 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 		box.Children = append(box.Children, text)
 	}
 	return box
+}
+
+// counterArguments reads the name, the optional list style and, for counters(),
+// the separator out of a counter function.
+//
+// The two functions differ in their second argument: counter(name, style) takes
+// a style there, counters(name, sep, style) takes the separator. Telling them
+// apart by *type* rather than by position is what makes one reader serve both —
+// a string is a separator and an identifier is a style, and neither can be
+// mistaken for the other.
+func counterArguments(fn css.ComponentValue) (name, listStyle string, sep *string, ok bool) {
+	for _, v := range fn.Values {
+		if !v.IsToken() {
+			continue
+		}
+		switch v.Token.Kind {
+		case css.Whitespace, css.Comma:
+		case css.Ident:
+			if name == "" {
+				name = v.Token.Value
+				continue
+			}
+			listStyle = v.Token.Value
+		case css.String:
+			s := v.Token.Value
+			sep = &s
+		}
+	}
+	return name, listStyle, sep, name != ""
 }

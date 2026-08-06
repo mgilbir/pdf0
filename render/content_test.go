@@ -96,7 +96,10 @@ func TestContentAttr(t *testing.T) {
 // page that still looks finished.
 func TestUnproducibleContentIsReported(t *testing.T) {
 	cases := map[string]string{
-		`p::before { content: counter(x) }`:    "counter",
+		// counter() and counters() are produced now and so are not here; a
+		// counter function with no name is still unproducible, and is the case
+		// that keeps this covering the counter path at all.
+		`p::before { content: counter() }`:     "counter",
 		`p::before { content: open-quote }`:    "quote",
 		`p::before { content: url(mark.png) }`: "image",
 	}

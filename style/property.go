@@ -137,6 +137,11 @@ var properties = map[string]property{
 
 	// Backgrounds.
 	"background-color": {false, "transparent"},
+	// The counters. Neither inherits: a counter's value comes from the walk in
+	// counter.go, and inheriting the declaration would make every descendant
+	// increment it again.
+	"counter-reset":     {false, "none"},
+	"counter-increment": {false, "none"},
 
 	// Lists.
 	"list-style-type":     {true, "disc"},

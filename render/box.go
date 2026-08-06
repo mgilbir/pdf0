@@ -239,6 +239,10 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 	b := &boxBuilder{
 		styles: styled.Styles, pseudo: styled.Pseudo, rec: rec,
 		ownFontSize: styled.OwnFontSize, ownPseudoFontSize: styled.OwnPseudoFontSize,
+		// Counters are settled before any box exists, because a counter's value
+		// depends on what came *before* an element in the document and the box
+		// walk cannot answer that while descending.
+		counters: computeCounters(doc, styled.Styles, styled.Pseudo),
 	}
 	root := documentElementOf(doc)
 	if root == nil {
@@ -298,8 +302,12 @@ type boxBuilder struct {
 	ownFontSize       map[*html.Node]bool
 	ownPseudoFontSize map[style.PseudoKey]bool
 	rec               *Recorder
-	rootFontSize      style.Unit
-	count             int
+	// counters holds what each element's generated content sees. See counter.go
+	// for why it is a walk of its own rather than something this builder can
+	// answer on the way down.
+	counters     map[*html.Node]counterValues
+	rootFontSize style.Unit
+	count        int
 	// afterWord says the last character emitted was part of a word, which is what
 	// "text-transform: capitalize" needs to know and what a text node cannot
 	// answer on its own: in "<b>e</b>xample" the "x" does not begin a word. It is
