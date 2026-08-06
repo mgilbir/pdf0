@@ -102,6 +102,7 @@ func fontSetForWPT() FontSet {
 		if err != nil {
 			return
 		}
+		registerBlockFont(face, data)
 		wptFontSet = wptFonts{ahem: face, standard: standard, fallback: notoFaces()}
 	})
 	return wptFontSet
@@ -140,8 +141,21 @@ func notoFaces() []*fonts.Face {
 			continue
 		}
 		if face, err := fonts.Load(data); err == nil {
+			registerBlockFont(face, data)
 			out = append(out, face)
 		}
 	}
 	return out
+}
+
+// registerBlockFont records which of a face's glyphs are filled rectangles, for
+// the comparison in blockglyph_test.go.
+//
+// A face with none — which is every ordinary text face — is not registered, and
+// its runs are compared as text as they always were. The work is done once per
+// face, while the font set is built, because it reads every outline in the font.
+func registerBlockFont(face *fonts.Face, data []byte) {
+	if bf, err := newBlockFont(data); err == nil {
+		blockFonts[face] = bf
+	}
 }
