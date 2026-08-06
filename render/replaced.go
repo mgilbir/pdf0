@@ -70,12 +70,26 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 	width, hasWidth := l.lengthOf(b, "width", containing)
 	height, hasHeight := l.verticalLength(b, "height", cbHeight, cbDefinite)
 	// A negative width or height is not a declaration this engine honours; the
-	// property does not accept one and the initial value stands.
+	// property does not accept one and the initial value stands. The test is made
+	// against the *declared* value, before box-sizing takes the padding out of it,
+	// because a border-box width smaller than its own padding is a legitimate
+	// declaration for a content box of zero rather than an invalid one.
 	if hasWidth && width < 0 {
 		width, hasWidth = 0, false
 	}
 	if hasHeight && height < 0 {
 		height, hasHeight = 0, false
+	}
+	// Everything below — §10.3.2's cases, the ratio arithmetic, and §10.4's
+	// constraint table — is stated about the content box, so a border-box
+	// declaration is converted once here and once for the limits in clampReplaced
+	// rather than being carried through the table.
+	insetH, insetV := l.sizingInset(b, containing)
+	if hasWidth {
+		width = maxZero(width.Sub(insetH))
+	}
+	if hasHeight {
+		height = maxZero(height.Sub(insetV))
 	}
 
 	hasIntrinsicW := rc.Width > 0
@@ -162,21 +176,26 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 func (l *layouter) clampReplaced(b *Box, w, h style.Unit, ratio float64,
 	containing, cbHeight style.Unit, cbDefinite bool) Size {
 
+	// The limits are declared values, so under "border-box" they name the border
+	// box and the table below is about the content box. Each is converted the
+	// same way the declared width and height were.
+	insetH, insetV := l.sizingInset(b, containing)
+
 	minW := style.Unit(0)
 	if v, ok := l.lengthOf(b, "min-width", containing); ok && v > 0 {
-		minW = v
+		minW = maxZero(v.Sub(insetH))
 	}
 	maxW := style.MaxUnit
 	if v, ok := l.lengthOf(b, "max-width", containing); ok && v >= 0 {
-		maxW = v
+		maxW = maxZero(v.Sub(insetH))
 	}
 	minH := style.Unit(0)
 	if v, ok := l.verticalLength(b, "min-height", cbHeight, cbDefinite); ok && v > 0 {
-		minH = v
+		minH = maxZero(v.Sub(insetV))
 	}
 	maxH := style.MaxUnit
 	if v, ok := l.verticalLength(b, "max-height", cbHeight, cbDefinite); ok && v >= 0 {
-		maxH = v
+		maxH = maxZero(v.Sub(insetV))
 	}
 
 	// A minimum wins over a maximum that contradicts it, everywhere in CSS.
@@ -284,13 +303,14 @@ func (l *layouter) replacedIntrinsicWidth(b *Box) style.Unit {
 	if rc == nil {
 		return 0
 	}
+	insetH, insetV := l.sizingInset(b, 0)
 	if length, ok := l.parseLength(b, "width"); ok && length.Kind == style.LengthAbsolute {
-		return maxZero(l.clampWidth(b, length.Value, 0))
+		return maxZero(l.clampWidth(b, maxZero(length.Value.Sub(insetH)), 0))
 	}
 	// An auto width with a declared height and a ratio is decided by the
 	// height, exactly as §10.3.2 decides it in layout.
 	if length, ok := l.parseLength(b, "height"); ok && length.Kind == style.LengthAbsolute && rc.Ratio > 0 {
-		return maxZero(l.clampWidth(b, length.Value.Mul(rc.Ratio), 0))
+		return maxZero(l.clampWidth(b, maxZero(length.Value.Sub(insetV)).Mul(rc.Ratio), 0))
 	}
 	return maxZero(l.clampWidth(b, rc.Width, 0))
 }

@@ -113,6 +113,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		reportedGlyphs:   map[string]bool{},
 		reportedOverflow: map[string]bool{},
 		reportedJustify:  map[string]bool{},
+		decorations:      map[*Box][]textDecoration{},
 		intrinsic:        map[*Box]intrinsicWidths{},
 		grids:            map[*Box]*tableGrid{},
 		tableDemands:     map[*Box][]tableColumnDemand{},
@@ -237,6 +238,9 @@ type layouter struct {
 	reportedOverflow map[string]bool
 	// reportedJustify suppresses repeating the justification gap per line.
 	reportedJustify map[string]bool
+	// decorations memoizes the text decorations drawn across each box, which are
+	// built from the box's parent's — see decorationsFor.
+	decorations map[*Box][]textDecoration
 }
 
 type lengthKey struct {
@@ -311,6 +315,12 @@ func (l *layouter) block(b *Box, containing style.Unit, at flow) (*Fragment, col
 // it was written and on no day after.
 func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	forced *forcedGeometry) (*Fragment, collapsed) {
+
+	// The two values this engine understands and does not act on for a box of
+	// this shape. Both are asked once per box here rather than by a pass of their
+	// own, because this is the one function every block-level box goes through.
+	l.checkTableBoxSizing(b)
+	l.checkVisibility(b)
 
 	margin := l.edges(b, "margin", containing)
 	if b.Inner == InnerTable {
@@ -924,7 +934,14 @@ func maxZero(u style.Unit) style.Unit {
 
 // clampWidth and clampHeight apply the min and max properties, with the CSS
 // rule that a minimum wins over a maximum.
+//
+// v is a *content* size and so is the answer, but the limits are declared values
+// and mean whatever box-sizing says they mean. So under "border-box" the clamp
+// happens in the declared space — the inset is added, the limits applied, the
+// inset taken off again — rather than comparing a content width against a
+// border-box minimum. boxsizing.go works through what the naive order produces.
 func (l *layouter) clampWidth(b *Box, v, containing style.Unit) style.Unit {
+	inset, _ := l.sizingInset(b, containing)
 	lo := style.Unit(0)
 	if min, ok := l.lengthOf(b, "min-width", containing); ok {
 		lo = min
@@ -933,10 +950,11 @@ func (l *layouter) clampWidth(b *Box, v, containing style.Unit) style.Unit {
 	if max, ok := l.lengthOf(b, "max-width", containing); ok {
 		hi = max
 	}
-	return style.Clamp(v, lo, hi)
+	return maxZero(style.Clamp(v.Add(inset), lo, hi).Sub(inset))
 }
 
 func (l *layouter) clampHeight(b *Box, v, containing style.Unit) style.Unit {
+	_, inset := l.sizingInset(b, containing)
 	lo := style.Unit(0)
 	if min, ok := l.lengthOf(b, "min-height", containing); ok {
 		lo = min
@@ -945,11 +963,24 @@ func (l *layouter) clampHeight(b *Box, v, containing style.Unit) style.Unit {
 	if max, ok := l.lengthOf(b, "max-height", containing); ok {
 		hi = max
 	}
-	return style.Clamp(v, lo, hi)
+	return maxZero(style.Clamp(v.Add(inset), lo, hi).Sub(inset))
 }
 
+// explicitWidth resolves a declared width to a *content* width.
+//
+// Under "box-sizing: border-box" the declaration named the border box, so the
+// padding and the border come out of it. A declared width smaller than its own
+// padding gives a content width of zero rather than a negative one — the box
+// still exists and is still as wide as its padding, which is what every browser
+// produces and what the specification's "the content box cannot be negative"
+// amounts to.
 func (l *layouter) explicitWidth(b *Box, containing style.Unit) (style.Unit, bool) {
-	return l.lengthOf(b, "width", containing)
+	v, ok := l.lengthOf(b, "width", containing)
+	if !ok {
+		return 0, false
+	}
+	inset, _ := l.sizingInset(b, containing)
+	return maxZero(v.Sub(inset)), true
 }
 
 // explicitHeight resolves a declared height.
@@ -964,7 +995,8 @@ func (l *layouter) explicitHeight(b *Box, containing style.Unit) (style.Unit, bo
 	if !ok || length.Kind != style.LengthAbsolute {
 		return 0, false
 	}
-	return length.Value, true
+	_, inset := l.sizingInset(b, containing)
+	return maxZero(length.Value.Sub(inset)), true
 }
 
 // lengthOf resolves a property to a length, with percentages against a basis.

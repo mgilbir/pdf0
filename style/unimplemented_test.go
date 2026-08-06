@@ -126,10 +126,26 @@ func TestTheGuardHasTeeth(t *testing.T) {
 // leftover from one that was implemented or renamed, and it would sit here
 // suppressing a check that no longer applies to anything.
 func TestUnimplementedPropertiesAreRegistered(t *testing.T) {
+	src := readSources(t)
 	for name := range unimplementedProperties {
 		if _, ok := properties[name]; !ok {
 			t.Errorf("%q is admitted as unimplemented but is not a registered property; "+
 				"the entry is stale", name)
+		}
+		// The other way an entry goes stale, and the one that actually
+		// happened: the property gets implemented and nobody removes the
+		// admission. It then reports a gap that has been closed, which is worse
+		// than the silence it was added to fix — an author is told a
+		// declaration did nothing while looking at the thing it did, and the
+		// reftest oracle counts every document using it as tainted.
+		//
+		// It went unnoticed through a merge because nothing checked it. Being
+		// read somewhere and being admitted as unread are contradictory claims,
+		// so holding both is an error whichever one is wrong.
+		if strings.Contains(src, `"`+name+`"`) {
+			t.Errorf("%q is admitted as unimplemented, but source outside the "+
+				"registry reads it — if it is implemented, delete the admission so "+
+				"it stops being reported", name)
 		}
 	}
 	for name := range readByConstruction {

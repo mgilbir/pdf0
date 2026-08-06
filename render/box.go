@@ -300,6 +300,13 @@ type boxBuilder struct {
 	rec               *Recorder
 	rootFontSize      style.Unit
 	count             int
+	// afterWord says the last character emitted was part of a word, which is what
+	// "text-transform: capitalize" needs to know and what a text node cannot
+	// answer on its own: in "<b>e</b>xample" the "x" does not begin a word. It is
+	// carried on the builder because the walk visits text in document order, and
+	// it is reset around a block-level box because a block starts a new line of
+	// text whatever preceded it.
+	afterWord bool
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
@@ -423,6 +430,14 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 	}
+	if outer != OuterInline {
+		// A block-level box begins its text afresh, so a word cannot run into it
+		// from the paragraph before. Without this, "<p>hi</p><p>there</p>" under
+		// "capitalize" would leave the second paragraph's "t" lower-case, since
+		// the "i" before it is a word character.
+		b.afterWord = false
+	}
+
 	// ::before and ::after bracket the element's own children rather than
 	// replacing them, which is why they are added here and not by the caller.
 	if before := b.generated(n, "before", fontSize); before != nil {
@@ -438,6 +453,11 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	if after := b.generated(n, "after", fontSize); after != nil {
 		after.Parent = box
 		box.Children = append(box.Children, after)
+	}
+	if outer != OuterInline {
+		// And a block-level box ends its text: the word does not continue into
+		// whatever comes after it.
+		b.afterWord = false
 	}
 	return box
 }
@@ -490,6 +510,15 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
 	text := collapseWhitespace(n.Text, inherited["white-space"])
+	// text-transform, applied here so that the text every later stage measures,
+	// breaks, draws and writes into the PDF is the text that will appear.
+	// texttransform.go works through why it cannot wait until paint time.
+	//
+	// It runs after the white-space processing rather than before it, which
+	// changes no answer — a case mapping neither creates nor destroys white space
+	// — and means "capitalize" sees the word boundaries the reader will.
+	text, b.afterWord = transformText(text,
+		transformOf(inherited["text-transform"]), b.afterWord)
 	if text == "" {
 		return nil
 	}

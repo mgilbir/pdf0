@@ -139,7 +139,23 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// measurement so that nothing on the way down is laid out — see
 	// inlineFrame.measuring for why that is a correctness rule and not a saving.
 	items, _ := l.collectInline(b, nil, startOfContext(), inlineFrame{measuring: true})
-	return l.widthsOf(items)
+	got := l.widthsOf(items)
+
+	// §16.1's indent widens the first line, so a box asked to hold its content
+	// unbroken needs room for it. It is added to the preferred width and not to
+	// the minimum, which follows the approximation this file already documents:
+	// the minimum may come out a little small and must never come out too large,
+	// since a float sized by it has to fit where it should. A negative indent —
+	// a hanging one — is left out of both for the same reason.
+	//
+	// The percentage form contributes nothing, because there is no containing
+	// block to take a percentage of while an intrinsic width is being measured.
+	// CSS Sizing says such a percentage behaves as auto here, which is what a
+	// basis of zero produces.
+	if indent := l.textIndent(b, 0); indent > 0 {
+		got.max = got.max.Add(indent)
+	}
+	return got
 }
 
 // textWidths measures one text box.
@@ -218,7 +234,10 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			if item.tab {
 				// Tab stops are measured from the block's content edge, and on
 				// an unbroken line that edge is where this measurement started.
-				w = tabAdvance(line, item.tabStop)
+				// The letter-spacing after the tab is added the same way line
+				// breaking adds it, so the two cannot disagree about how wide a
+				// tab-separated line is.
+				w = tabAdvance(line, item.tabStop).Add(item.spacing.letter)
 			}
 			if item.noWrap {
 				// Text that may not break has one width, not two. A space in it

@@ -37,20 +37,6 @@ var unimplementedProperties = map[string]string{
 		"text is set in the order the characters appear rather than the order they read",
 	"opacity": "the box is painted fully opaque, so anything it was meant to " +
 		"show through it is hidden",
-
-	// The rest are being implemented. Each entry goes when its property does.
-	"text-decoration-line": "no underline, overline or line-through is drawn",
-	"text-decoration-color": "no decoration is drawn, so the colour it would " +
-		"have been drawn in does not arise",
-	"text-transform": "the text is set with the case the document has, so " +
-		"\"uppercase\" leaves lower-case letters lower case",
-	"box-sizing": "a declared width is the content width whatever the value " +
-		"says, so a box asking for border-box comes out wider by its padding and border",
-	"visibility":  "the box is painted, so \"hidden\" shows",
-	"text-indent": "the first line starts at the same place as the rest",
-	"letter-spacing": "the characters are set at the face's own advances, so " +
-		"the run is narrower or wider than asked for",
-	"word-spacing": "the spaces are set at the face's own advance",
 }
 
 // readByConstruction lists properties whose names are built rather than written.
