@@ -152,8 +152,11 @@ func TestBareNumbersAreNotLengths(t *testing.T) {
 // to different places: one is a limit of the renderer, the other is a typo.
 func TestUnsupportedUnitsAreDistinguished(t *testing.T) {
 	ctx := LengthContext{}
-	// Correct CSS this engine does not resolve.
-	for _, input := range []string{"3ex", "2ch", "1lh", "calc(1px + 2px)"} {
+	// Correct CSS this engine does not resolve. "2ch" is here because the
+	// context carries no font metrics: it is resolvable in layout, where a face
+	// has been chosen, and unresolvable everywhere else — which is the same
+	// shape as a viewport unit before the page is known.
+	for _, input := range []string{"2ch", "1lh", "3rex", "calc(1px + 2px)"} {
 		vals, _ := css.ParseComponentValues(input)
 		_, unsupported, ok := ParseLength(vals, ctx)
 		if ok {
@@ -435,5 +438,33 @@ func TestUnitRoundTrip(t *testing.T) {
 	c, _ := FromPx(1 + 1.0/256)
 	if a != c {
 		t.Error("1px and 1+1/256px differ; the resolution is finer than claimed")
+	}
+}
+
+// TestFontRelativeUnitsResolve pins the two font-relative units this engine
+// does resolve, and the condition each needs.
+func TestFontRelativeUnitsResolve(t *testing.T) {
+	px := func(v float64) Unit { u, _ := FromPx(v); return u }
+
+	// ex needs only the font size: CSS Values §5.1.2 specifies half an em where
+	// the x-height cannot be determined, and the face layer carries none.
+	ctx := LengthContext{FontSize: px(20)}
+	vals, _ := css.ParseComponentValues("3ex")
+	got, _, ok := ParseLength(vals, ctx)
+	if !ok || got.Value != px(30) {
+		t.Errorf("3ex at a 20px font size gave (%v, ok=%v), want 30px", got.Value.Px(), ok)
+	}
+
+	// ch needs the advance of "0", and says so rather than resolving to zero
+	// when it does not have one — a zero would silently collapse the box the
+	// author was sizing.
+	vals, _ = css.ParseComponentValues("10ch")
+	if _, unsupported, ok := ParseLength(vals, ctx); ok || !unsupported {
+		t.Errorf("10ch without metrics gave (unsupported=%v, ok=%v), want it reported", unsupported, ok)
+	}
+	ctx.ZeroAdvance, ctx.FontMetricsKnown = px(12), true
+	got, _, ok = ParseLength(vals, ctx)
+	if !ok || got.Value != px(120) {
+		t.Errorf("10ch with a 12px advance gave (%v, ok=%v), want 120px", got.Value.Px(), ok)
 	}
 }
