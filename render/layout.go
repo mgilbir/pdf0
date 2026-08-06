@@ -11,11 +11,12 @@ import (
 // resolved position and size in absolute page coordinates.
 //
 // What is here is the block formatting context of CSS 2.1 §9.4.1 and §10 — the
-// widths, the box model, and margin collapsing. Inline layout is not, and its
-// absence is deliberate rather than partial: measuring a line needs a font and a
-// line-breaking algorithm, and a guess at either would produce geometry that is
-// wrong in a way nothing about the output would reveal. A block whose content is
-// inline therefore has no content height yet, and the render says so once.
+// widths, the box model, margin collapsing, and where the out-of-flow boxes of
+// §9.5 go. Inline layout is next door in inline.go, which is a division by
+// formatting context rather than by convenience: a block container's children
+// are all block-level or all inline-level, never a mixture, so the two walks
+// never interleave. Floats are the one thing that crosses the line, because a
+// float can be written among either and its geometry is read by both.
 //
 // # Why margin collapsing is here and not later
 //
@@ -49,8 +50,13 @@ type Fragment struct {
 	Children []*Fragment
 
 	// Lines is the inline content of a block container, in the same coordinates
-	// as its children. A fragment has children or lines, never both — the
-	// anonymous box rule sees to that.
+	// as its children.
+	//
+	// A fragment has children or lines, with one exception: a float is out of
+	// flow, so a block whose in-flow content is entirely inline can still have
+	// floated children beside those lines. The anonymous box rule deliberately
+	// does not wrap a float, because wrapping it would put it in a different
+	// formatting context from the text meant to run around it.
 	Lines []LineFragment
 
 	// Marker is the bullet or number a list item generates, nil otherwise. It
@@ -93,12 +99,17 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		reportedScripts:  map[string]bool{},
 		reportedGlyphs:   map[string]bool{},
 		reportedOverflow: map[string]bool{},
+		intrinsic:        map[*Box]intrinsicWidths{},
 		fontSet:          set,
 	}
 	if l.fontSet == nil {
 		l.fontSet = StandardFonts()
 	}
-	frag, m := l.block(root, avail.W)
+	// The root box establishes the outermost block formatting context, so no
+	// float in the document can escape the page. The context handed in here is
+	// therefore a placeholder that nothing will ever be put in — block() makes a
+	// fresh one for any box that establishes a context, and the root is one.
+	frag, m := l.block(root, avail.W, flow{ctx: &floatContext{}})
 
 	// Layout runs in coordinates relative to each parent's content box, because
 	// a box's position is not known until its margins have finished collapsing
@@ -107,6 +118,15 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	//
 	// The alternative, translating each subtree as it is placed, costs a walk
 	// per level; this costs one walk in total.
+	// A floated root element has no containing block to be shifted within
+	// except the page itself, and no siblings to make room for — so all that is
+	// left of §9.5 for it is which edge it goes against. Its width already
+	// shrank to fit, and leaving the position alone would honour half of the
+	// declaration and quietly drop the visible half.
+	if root.Float == FloatRight {
+		frag.BorderRect.X = avail.W.Sub(frag.Margin.Right).Sub(frag.BorderRect.W)
+	}
+
 	absolutise(frag, 0, m.top)
 	return frag
 }
@@ -127,8 +147,15 @@ type layouter struct {
 	// face for a style, and the width of a string in one.
 	fonts    map[fontKey]resolvedFont
 	measured map[measureKey]style.Unit
+	// intrinsic memoizes the two content-based widths of a box, which are what
+	// a float with an auto width is sized by.
+	intrinsic map[*Box]intrinsicWidths
 	// fontSet is where faces come from.
 	fontSet FontSet
+	// relayouts counts the subtrees that had to be laid out a second time
+	// because the position predicted for them turned out to be wrong. It is
+	// bounded: see maxRelayouts.
+	relayouts int
 	// reportedScripts and reportedGlyphs suppress repeating a complaint that is
 	// about a script or a character rather than about a place.
 	reportedScripts map[string]bool
@@ -176,7 +203,11 @@ func absolutise(f *Fragment, x, y style.Unit) {
 // The position given is the top left of the *border box*: the caller has
 // already decided where the margin puts it, because deciding that is what
 // margin collapsing does and only the caller can see both sides of a collapse.
-func (l *layouter) block(b *Box, containing style.Unit) (*Fragment, collapsed) {
+// at is where the box's own border box sits inside the formatting context: the
+// containing block's content left edge, and the flow position the caller has
+// reached. The caller cannot supply the box's own left edge because that depends
+// on margins which may be auto, and auto margins are resolved here.
+func (l *layouter) block(b *Box, containing style.Unit, at flow) (*Fragment, collapsed) {
 	margin := l.edges(b, "margin", containing)
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", containing)
@@ -184,12 +215,20 @@ func (l *layouter) block(b *Box, containing style.Unit) (*Fragment, collapsed) {
 	width := l.resolveWidth(b, margin, border, padding, containing, &margin)
 	declaredHeight, hasHeight := l.explicitHeight(b, containing)
 
+	// A box that establishes a block formatting context seals both its edges.
+	// CSS 2.1 §8.3.1 puts it the other way round — the margins of such a box do
+	// not collapse with its in-flow children — but the effect is the same as a
+	// border of zero width that a margin cannot cross, and expressing it here
+	// keeps the collapsing rules in one place. Leaving it out is what would make
+	// a floated <div> holding a <p> sit an em above where the author put it.
+	sealed := establishesBFC(b)
+
 	// A margin collapses through an edge only when nothing sits on that edge to
 	// stop it. A border or a padding of even one unit is something.
-	topOpen := border.Top == 0 && padding.Top == 0
+	topOpen := border.Top == 0 && padding.Top == 0 && !sealed
 	// The bottom edge also needs the height to be the content's own: a declared
 	// height is a floor the margin cannot reach across.
-	bottomOpen := border.Bottom == 0 && padding.Bottom == 0 && !hasHeight
+	bottomOpen := border.Bottom == 0 && padding.Bottom == 0 && !hasHeight && !sealed
 
 	frag := &Fragment{
 		Box:     b,
@@ -203,11 +242,37 @@ func (l *layouter) block(b *Box, containing style.Unit) (*Fragment, collapsed) {
 		},
 	}
 
+	// Where this box's children are laid out, in the coordinates of the
+	// formatting context they belong to.
+	//
+	// The root box gets a context of its own even though it does not seal its
+	// margins: a float has to be contained by the page whatever else is true,
+	// and the root's relationship to the canvas — which is what its margin
+	// behaviour is about — is a separate question this does not touch.
+	inner := flow{
+		ctx: at.ctx,
+		x:   at.x.Add(margin.Left).Add(border.Left).Add(padding.Left),
+		y:   at.y.Add(border.Top).Add(padding.Top),
+	}
+	own := at.ctx
+	if sealed || b.Parent == nil {
+		own = &floatContext{}
+		inner = flow{ctx: own}
+	}
+
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
-		l.children(b, frag, width, topOpen, bottomOpen)
+		l.children(b, frag, width, topOpen, bottomOpen, inner)
 
 	if hasHeight {
 		contentHeight = declaredHeight
+	} else if own != at.ctx {
+		// CSS 2.1 §10.6.7: the auto height of a box that establishes a block
+		// formatting context reaches the bottom of the floats inside it. This is
+		// the entire reason "overflow: hidden" is the idiom for containing a
+		// float, and an ordinary block deliberately does not do it — a float in
+		// a plain <div> hangs out of the bottom, which looks like a bug and is
+		// the specified behaviour.
+		contentHeight = style.Max(contentHeight, own.bottom())
 	}
 	minHeight, hasMinHeight := l.lengthOf(b, "min-height", containing)
 	contentHeight = l.clampHeight(b, contentHeight, containing)
@@ -242,17 +307,21 @@ func (l *layouter) block(b *Box, containing style.Unit) (*Fragment, collapsed) {
 // to the flow when something with a size arrives — which is what lets an empty
 // box between two paragraphs disappear entirely instead of separating them.
 func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
-	topOpen, bottomOpen bool) (height, hoistTop, hoistBottom style.Unit, placed bool) {
+	topOpen, bottomOpen bool, origin flow) (height, hoistTop, hoistBottom style.Unit, placed bool) {
 
 	if len(b.Children) == 0 {
 		return 0, 0, 0, false
 	}
-	// A block container's children are either all block-level or all
-	// inline-level — the anonymous box rule guarantees it — so this is a
-	// two-way choice rather than a mixture.
-	if b.Children[0].Outer == OuterInline {
+	// A block container's in-flow children are either all block-level or all
+	// inline-level — the anonymous box rule guarantees it — so this is a two-way
+	// choice rather than a mixture. Floats are the reason this is a scan rather
+	// than a look at the first child: a float is block-level and out of flow, so
+	// "<div><span class=float></span>text</div>" has a block-level child *and*
+	// an inline formatting context, and deciding from the first child would lose
+	// the text entirely.
+	if hasInlineChild(b) {
 		// Inline content: lines of text, which have a height of their own.
-		return l.inlineContent(b, parent, width), 0, 0, true
+		return l.inlineContent(b, parent, width, origin), 0, 0, true
 	}
 
 	var y, pending style.Unit
@@ -266,21 +335,80 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		if child.Outer != OuterBlock {
 			continue
 		}
-		cf, cm := l.block(child, width)
 		if child.ListItem {
 			listIndex++
-			cf.Marker = l.markerFor(child, cf, listIndex)
 		}
-		parent.Children = append(parent.Children, cf)
+
+		if child.Float != FloatNone {
+			// A float's margin box goes at the flow position, and its margins
+			// collapse with nothing — so the pending margin is committed for it
+			// without being consumed, and the box after it still collapses with
+			// the box before it as though the float were not there. That is what
+			// makes a float between two paragraphs leave their spacing alone.
+			//
+			// The exception is a parent whose top edge is still open and has
+			// hoisted nothing: the pending margin is on its way out of the
+			// parent altogether, so the float sits at the parent's content top.
+			offset := pending
+			if topOpen && !hoisted {
+				offset = 0
+			}
+			parent.Children = append(parent.Children,
+				l.floatChild(child, width, origin, y.Add(offset), style.MaxUnit, 0, listIndex))
+			continue
+		}
+
+		// Where the child's border box is predicted to land, so that the floats
+		// inside it can be placed while it is being laid out.
+		//
+		// It has to be a prediction: the child's own collapsed top margin is not
+		// known until its subtree has been walked, because a descendant's margin
+		// can escape through its top edge. The prediction uses the child's own
+		// margin and is therefore exact unless a descendant's is larger — and
+		// what happens when it is not exact is settled below rather than left to
+		// be approximately right.
+		est := y
+		if !topOpen || hoisted {
+			est = y.Add(collapse(pending, l.ownTopMargin(child, width)))
+		}
+		est = est.Add(l.clearanceAt(child, origin, est))
+
+		mark, consulted := origin.ctx.mark(), origin.ctx.consulted
+		cf, cm := l.block(child, width, origin.at(est))
+		// Whether the *subtree* read the float geometry, captured before the
+		// clearance query below adds a read of its own.
+		//
+		// Over-attributing that read would not move anything — the second
+		// layout happens at the corrected position and produces what the
+		// translation would have — so this is about cost rather than about
+		// geometry, and a planted defect that sets it to true is invisible in
+		// the output by design. What it would cost is a redundant layout of
+		// every cleared subtree in the document, and a spurious "stopped short"
+		// once those exhausted the budget.
+		subtreeRead := origin.ctx.consulted != consulted
 
 		pending = collapse(pending, cm.top)
 
-		if cm.through {
+		// The position §9.5.2 measures clearance against: where the box would
+		// have gone had it not cleared anything.
+		hypothetical := y.Add(pending)
+		if topOpen && !hoisted && !cm.through {
+			hypothetical = y
+		}
+		clearance := l.clearanceAt(child, origin, hypothetical)
+
+		if cm.through && clearance == 0 {
 			// Nothing separates this box's own margins, so it contributes no
 			// height and its two margins join the run. It still gets a
 			// position, because it still exists.
 			pending = collapse(pending, cm.bottom)
-			cf.BorderRect.Y = y.Add(pending)
+			at := y.Add(pending)
+			cf = l.settle(child, width, origin, cf, est, at, mark, subtreeRead)
+			cf.BorderRect.Y = at
+			if child.ListItem {
+				cf.Marker = l.markerFor(child, cf, listIndex)
+			}
+			parent.Children = append(parent.Children, cf)
 			continue
 		}
 
@@ -292,7 +420,14 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			hoisted = true
 		}
 
-		y = y.Add(pending)
+		at := y.Add(pending).Add(clearance)
+		cf = l.settle(child, width, origin, cf, est, at, mark, subtreeRead)
+		if child.ListItem {
+			cf.Marker = l.markerFor(child, cf, listIndex)
+		}
+		parent.Children = append(parent.Children, cf)
+
+		y = at
 		cf.BorderRect.Y = y
 		y = y.Add(cf.BorderRect.H)
 		pending = cm.bottom
@@ -314,6 +449,155 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		pending = 0
 	}
 	return y.Add(pending), hoistTop, hoistBottom, placed
+}
+
+// hasInlineChild reports whether a box has any in-flow inline-level child, which
+// is what makes it an inline formatting context.
+func hasInlineChild(b *Box) bool {
+	for _, c := range b.Children {
+		if c.Outer == OuterInline {
+			return true
+		}
+	}
+	return false
+}
+
+// at moves the flow position without changing the containing block.
+func (f flow) at(y style.Unit) flow {
+	return flow{ctx: f.ctx, x: f.x, y: f.y.Add(y)}
+}
+
+// ownTopMargin is a box's own declared top margin, before anything collapses
+// into it.
+func (l *layouter) ownTopMargin(b *Box, containing style.Unit) style.Unit {
+	v, _ := l.lengthOf(b, "margin-top", containing)
+	return v
+}
+
+// clearanceAt returns how far down a box has to move to clear the floats it
+// asked to clear, given where it would otherwise have sat.
+//
+// CSS 2.1 §9.5.2 computes clearance as a difference rather than as a position,
+// and the distinction is the whole rule: a box that was already below the floats
+// gets no clearance at all, so "clear: left" on a paragraph well down the page
+// changes nothing. An implementation that simply moved the box to the float
+// bottom would push it *up* in that case.
+func (l *layouter) clearanceAt(b *Box, origin flow, at style.Unit) style.Unit {
+	if b.Clear == ClearNone {
+		return 0
+	}
+	want := origin.ctx.clearance(b.Clear)
+	have := origin.y.Add(at)
+	if want > have {
+		return want.Sub(have)
+	}
+	return 0
+}
+
+// floatChild lays a float out and places it in the formatting context.
+//
+// room is how much of the current line is still free and drop is how far down
+// the next line begins. The two only mean anything for a float met part-way
+// along a line; a float met between blocks passes MaxUnit and zero, because
+// there is no line for it to be squeezed off the end of.
+//
+// The float is laid out *before* it is placed, and that order is not an
+// accident: a float establishes its own formatting context, so nothing outside
+// it can reach inside, and its size therefore does not depend on where it ends
+// up. Placing first would need a size that is not known yet.
+func (l *layouter) floatChild(b *Box, width style.Unit, origin flow,
+	top, room, drop style.Unit, index int) *Fragment {
+
+	cf, _ := l.block(b, width, origin.at(top))
+	if b.ListItem {
+		cf.Marker = l.markerFor(b, cf, index)
+	}
+
+	box := cf.MarginRect()
+	size := Size{W: box.W, H: box.H}
+
+	// §9.5.1 rules 5 and 6 in one line: no higher than the flow has reached, and
+	// no higher than the floats this box was told to clear.
+	at := origin.y.Add(top)
+	if size.W > room {
+		// Rule 9, in the form browsers apply it: a float met after a line has
+		// begun goes beside the rest of that line when it fits, and below the
+		// line when it does not. This engine does not re-break the text already
+		// placed on the line, so what it gives up is the case where a wide float
+		// should have pushed earlier words of the same line down with it.
+		at = at.Add(drop)
+	}
+	if c := origin.ctx.clearance(b.Clear); c > at {
+		at = c
+	}
+
+	rect := origin.ctx.place(size, b.Float, at, origin.x, origin.x.Add(width))
+
+	// Back out of the formatting context's coordinates into the parent's content
+	// box, which is what every fragment position in this engine is relative to.
+	cf.BorderRect.X = rect.X.Sub(origin.x).Add(cf.Margin.Left)
+	cf.BorderRect.Y = rect.Y.Sub(origin.y).Add(cf.Margin.Top)
+	return cf
+}
+
+// maxRelayouts bounds how many subtrees one render may lay out twice.
+//
+// It is a variable rather than a constant so that a test can lower it far enough
+// to watch the bound fire. A cap that has only ever been observed not to trip is
+// one nobody knows works, which this repository has learned before: the first
+// test for the box cap built five thousand boxes, nowhere near the limit, and
+// passed just as happily with the cap removed.
+var maxRelayouts = 4096
+
+// settle corrects a child that was laid out at a predicted position.
+//
+// The prediction is described where it is made. When it was right, which is the
+// overwhelmingly common case, this does nothing at all. When it was wrong there
+// are two repairs, and which one applies is decided by whether the subtree ever
+// *read* the float geometry:
+//
+//   - If it only added floats, every one of them is wrong by the same constant,
+//     and moving them is exactly equivalent to having laid the subtree out in
+//     the right place. Nothing else in the subtree depends on the offset.
+//   - If it read the geometry — a line shortened, a float placed beside another,
+//     a clearance computed — then the answer it got was against the wrong band,
+//     and no translation repairs that. The subtree is laid out again from the
+//     corrected position, which is now exact because the collapsed top margin
+//     that the prediction was missing is known.
+//
+// The second repair is bounded, because a corrected parent re-lays its children
+// and each of those may correct again. Past the bound the cheap repair is used
+// and the render says it stopped short, which is a page that is slightly wrong
+// and says so rather than one that took unbounded time to be right.
+func (l *layouter) settle(child *Box, width style.Unit, origin flow, cf *Fragment,
+	predicted, actual style.Unit, mark int, read bool) *Fragment {
+
+	delta := actual.Sub(predicted)
+	if delta == 0 || origin.ctx.mark() == mark && !read {
+		return cf
+	}
+	if !read || l.relayouts >= maxRelayouts {
+		if l.relayouts >= maxRelayouts {
+			l.rec.Report(RuleLimit, AtHTML(offsetOf(child)),
+				"too many boxes had to be laid out twice to settle where the floats "+
+					"around them are; the rest were placed against the position they "+
+					"were predicted to have")
+		}
+		origin.ctx.shift(mark, delta)
+		return cf
+	}
+
+	l.relayouts++
+	origin.ctx.boxes = origin.ctx.boxes[:mark]
+	again, _ := l.block(child, width, origin.at(actual))
+	return again
+}
+
+func offsetOf(b *Box) int {
+	if b == nil || b.Element == nil {
+		return -1
+	}
+	return b.Element.Offset
 }
 
 // collapse combines two adjoining margins.
@@ -350,6 +634,27 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 	declared, hasWidth := l.explicitWidth(b, containing)
 	marginLeftAuto := l.isAuto(b, "margin-left")
 	marginRightAuto := l.isAuto(b, "margin-right")
+
+	if b.Float != FloatNone {
+		// CSS 2.1 §10.3.5, the rules for a floated box, and both halves matter.
+		// An auto margin is zero rather than a share of the slack — a float is
+		// not centred by "margin: auto", which surprises people — and an auto
+		// width shrinks to fit rather than filling the line, which is the whole
+		// visible difference between a float and a block. A float that filled
+		// its containing block would leave no room beside it, so nothing would
+		// ever flow around one, and the feature would look implemented and do
+		// nothing.
+		if marginLeftAuto {
+			out.Left = 0
+		}
+		if marginRightAuto {
+			out.Right = 0
+		}
+		if hasWidth {
+			return l.clampWidth(b, declared, containing)
+		}
+		return l.clampWidth(b, l.shrinkToFit(b, maxZero(available.Sub(out.Horizontal()))), containing)
+	}
 
 	if !hasWidth {
 		// An auto width fills whatever the margins leave, which is why a plain
