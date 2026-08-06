@@ -415,7 +415,10 @@ func (b *boxBuilder) room(n *html.Node) bool {
 	return true
 }
 
-// textBox makes a text box, applying white-space processing.
+// textBox makes a text box, applying Phase I of white-space processing.
+//
+// Only Phase I: the rules that span a box boundary and the rules that need a
+// line are applied later, and whitespace.go says where and why.
 //
 // Text whose content collapses to nothing produces no box. That is not an
 // optimisation: an empty text box between two blocks would make the parent a
@@ -433,70 +436,6 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 		Outer: OuterInline, Inner: InnerText,
 		Style: inherited, Text: text, FontSize: fontSize,
 	}
-}
-
-// collapseWhitespace applies the white-space property to a run of text.
-//
-// The rules are CSS Text §4. What is done here is the part that does not need a
-// line: sequences of white space become one space, or are preserved. Removing
-// the space at the two ends of a *line* is line layout's job, because where a
-// line ends is not known yet.
-func collapseWhitespace(text, whiteSpace string) string {
-	switch strings.ToLower(whiteSpace) {
-	case "pre", "pre-wrap", "break-spaces":
-		// Preserved entirely, newlines included.
-		return text
-	case "pre-line":
-		// Spaces and tabs collapse; newlines survive, because pre-line exists
-		// precisely to keep them.
-		return collapseRuns(text, true)
-	default:
-		// normal and nowrap. They differ in whether a line may break at a
-		// space, not in how the spaces themselves collapse, so both are here.
-		return collapseRuns(text, false)
-	}
-}
-
-// collapseRuns turns each run of white space into a single space, or into a
-// newline when keepNewlines is set and the run held one.
-func collapseRuns(text string, keepNewlines bool) string {
-	var out strings.Builder
-	out.Grow(len(text))
-
-	inRun, runHadNewline := false, false
-	flush := func() {
-		if !inRun {
-			return
-		}
-		if keepNewlines && runHadNewline {
-			out.WriteByte('\n')
-		} else {
-			out.WriteByte(' ')
-		}
-		inRun, runHadNewline = false, false
-	}
-
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if isCollapsibleSpace(c) {
-			inRun = true
-			if c == '\n' || c == '\r' {
-				runHadNewline = true
-			}
-			continue
-		}
-		flush()
-		out.WriteByte(c)
-	}
-	flush()
-	return out.String()
-}
-
-// isCollapsibleSpace is the set CSS Text calls "document white space". A
-// no-break space is deliberately absent: it is not white space for this purpose,
-// which is the whole reason an author writes one.
-func isCollapsibleSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
 }
 
 // displayOf reads the display property into the outer/inner pair.
@@ -929,8 +868,14 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 	return out
 }
 
-// allWhitespace reports whether a run of inline boxes is nothing but
-// collapsible white space.
+// allWhitespace reports whether a run of inline boxes is nothing but white
+// space that would be collapsed away.
+//
+// The qualification is the whole of it. CSS Display generates no anonymous
+// block around white space that *collapses*, which is why an indented
+// "<div>\n<p>a</p>\n</div>" gains no blank lines. White space that is preserved
+// is content — a blank line inside a <pre> is a line the author wrote — so a
+// run of it generates its box like any other text.
 func allWhitespace(run []*Box) bool {
 	for _, c := range run {
 		if c.outOfFlow() {
@@ -939,6 +884,9 @@ func allWhitespace(run []*Box) bool {
 			return false
 		}
 		if !c.IsText() {
+			return false
+		}
+		if !whiteSpaceOf(c.Style["white-space"]).collapse {
 			return false
 		}
 		if strings.TrimSpace(c.Text) != "" {

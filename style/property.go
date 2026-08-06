@@ -108,18 +108,23 @@ var properties = map[string]property{
 
 	// Text and fonts. Most of these inherit, which is the whole reason
 	// inheritance exists: setting a font on <body> has to reach the text.
-	"color":                 {true, "black"},
-	"font-family":           {true, "serif"},
-	"font-size":             {true, "medium"},
-	"font-style":            {true, "normal"},
-	"font-weight":           {true, "normal"},
-	"line-height":           {true, "normal"},
-	"letter-spacing":        {true, "normal"},
-	"word-spacing":          {true, "normal"},
-	"text-align":            {true, "start"},
-	"text-indent":           {true, "0"},
-	"text-transform":        {true, "none"},
-	"white-space":           {true, "normal"},
+	"color":          {true, "black"},
+	"font-family":    {true, "serif"},
+	"font-size":      {true, "medium"},
+	"font-style":     {true, "normal"},
+	"font-weight":    {true, "normal"},
+	"line-height":    {true, "normal"},
+	"letter-spacing": {true, "normal"},
+	"word-spacing":   {true, "normal"},
+	"text-align":     {true, "start"},
+	"text-indent":    {true, "0"},
+	"text-transform": {true, "none"},
+	"white-space":    {true, "normal"},
+	// tab-size inherits, which is the answer that makes a <pre> inside a
+	// styled <article> keep the tab width the author set on the article. A
+	// number is a count of space advances and a length is itself; the initial
+	// value is 8, which is what a tab has meant since terminals had one.
+	"tab-size":              {true, "8"},
 	"text-decoration-line":  {false, "none"},
 	"text-decoration-color": {false, "currentcolor"},
 	"vertical-align":        {false, "baseline"},

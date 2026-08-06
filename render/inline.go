@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/style"
@@ -19,19 +20,47 @@ import (
 //
 // # Where a line may break, and what is refused
 //
-// Doing this properly is UAX #14, a table-driven Unicode algorithm. What is
-// implemented is a documented subset of it: after a space, at an explicit break
-// opportunity, after a hyphen, and between ideographs. That covers Latin, Greek,
-// Cyrillic and the CJK scripts, which is most of what a document generator sets.
+// Doing this properly is UAX #14, a table-driven Unicode algorithm keyed on a
+// line-breaking class per code point. What is implemented is a subset, and the
+// boundary of the subset is stated here rather than discovered:
 //
-// It does *not* cover the scripts that need a dictionary to know where a word
-// ends — Thai, Lao, Khmer, Burmese — nor the bidirectional reordering that
-// right-to-left text needs once a line is broken. Those are refused and reported
-// rather than approximated, because §6.3 is exactly right about them: unshaped
-// or unbroken text still looks like text, so the failure mode looks like
-// success. A paragraph of Thai run together as one unbreakable word would
-// overflow silently and read as a rendering bug rather than as an unimplemented
-// feature.
+//   - after a space or a preserved tab;
+//   - after a run of preserved spaces, and — under break-spaces — after each
+//     one of them;
+//   - at a zero-width space, which is how an author marks an opportunity
+//     inside a word;
+//   - after a hyphen that is not the last character of its run;
+//   - on both sides of an ideograph.
+//
+// That covers Latin, Greek, Cyrillic and the CJK scripts, which is most of what
+// a document generator sets. Everything else UAX #14 says is *not* done, and
+// the two families that matter are not approximated:
+//
+//   - the scripts that need a dictionary to find a word boundary — Thai, Lao,
+//     Khmer, Burmese;
+//   - the bidirectional reordering right-to-left text needs once a line is
+//     broken.
+//
+// Both are refused through the finding vocabulary rather than guessed at,
+// because §6.3 is exactly right about them: unshaped or unbroken text still
+// looks like text, so the failure mode looks like success. A paragraph of Thai
+// run together as one unbreakable word overflows silently and reads as a
+// rendering bug rather than as an unimplemented feature.
+//
+// word-break and overflow-wrap are not implemented either, and are left to be
+// reported as unsupported properties rather than approximated. Both ask for a
+// break *between two characters*, which is only correct at a grapheme cluster
+// boundary — breaking inside one splits a letter from its accent — and nothing
+// in this module's dependencies knows where those are. A "break-all" that split
+// combining sequences would corrupt exactly the text it was asked to fit.
+//
+// # White space at a line edge
+//
+// The rest of CSS Text §4 lives here, and whitespace.go explains why it is
+// split across three stages rather than done once. What this file owns is
+// §4.1.2: the collapsible space removed at each end of a line, the tab stops a
+// preserved tab advances to, and the preserved space that hangs past the line's
+// end instead of pushing the next word down.
 
 // # What relative positioning does to an inline box, and what it does not
 //
@@ -111,9 +140,31 @@ type inlineItem struct {
 	// breakBefore marks an item that may begin a line, which is what a break
 	// opportunity is once the text has been cut into pieces.
 	breakBefore bool
-	// space marks an item that is collapsible white space, which is dropped at
-	// the end of a line rather than measured into it.
+	// space marks white space of any kind: it ends the word before it and does
+	// not join the word after it.
 	space bool
+	// collapsible marks white space that §4.1.2 removes when it lands at
+	// either end of a line.
+	//
+	// It is not the same question as space, and conflating the two is what made
+	// "<pre>   x</pre>" lose its indentation: the leading run is white space,
+	// so it was dropped at the start of the line, but it is *preserved* white
+	// space and dropping it removes something the author wrote.
+	collapsible bool
+	// hangs marks preserved white space that sits past the end of the line
+	// rather than moving to the next one.
+	//
+	// §4.1.2 makes a trailing run of preserved spaces hang under pre and
+	// pre-wrap, so it is not counted when the line is measured for alignment
+	// and never causes a break of its own. break-spaces is the value that opts
+	// out of this, which is the whole difference between it and pre-wrap.
+	hangs bool
+	// tab marks one preserved tab. Its advance is not a property of the text —
+	// it is the distance to the next tab stop, so it is resolved when the tab
+	// has a place on a line and not before.
+	tab bool
+	// tabStop is the distance between two tab stops, from tab-size.
+	tabStop style.Unit
 	// forced marks a break the author asked for — a <br>, or a newline in
 	// preserved white space. It ends the line wherever it falls, which is the
 	// difference between a break opportunity and an instruction.
@@ -154,8 +205,21 @@ type inlineItem struct {
 // The floats themselves are met *while* the lines are being built, which is the
 // second reason the loop is here: a float's position depends on the line it
 // appears on, and the lines after it depend on the float.
+//
+// # text-align is not applied here, and that is a gap rather than a decision
+//
+// Every run is placed from the line box's start edge. text-align is in the
+// property registry — so the cascade accepts it, and nothing reports it — and
+// no stage acts on it, which is precisely the shape §6.3 exists to prevent: a
+// centred heading comes out left-aligned and the author is told nothing.
+//
+// It is named here because it is what makes the *other* half of §4.1.2's
+// trailing-space rule invisible. A hanging space is excluded from the width a
+// line is measured at "for fit, alignment, or justification"; the fit and the
+// intrinsic sizing are done, the alignment cannot be until there is an
+// alignment to do.
 func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, origin flow) style.Unit {
-	items, _ := l.collectInline(b, nil, false, inlineFrame{
+	items, _ := l.collectInline(b, nil, startOfContext(), inlineFrame{
 		containing: width, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite,
 	})
 	if len(items) == 0 {
@@ -184,7 +248,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		y, left, right = l.roomForLine(items[i], origin, y, left, right, lo, hi)
 		lineWidth := right.Sub(left)
 
-		runs, next, mid, forced := l.breakOneLine(items, i, lineWidth)
+		runs, next, mid, forced := l.breakOneLine(items, i, lineWidth, left.Sub(lo))
 		if len(runs) > 0 || forced {
 			line := LineFragment{
 				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lineHeight},
@@ -277,18 +341,37 @@ type midLineBox struct {
 	abs bool
 }
 
+// inlineState is what the flattening carries from one inline box to the next.
+//
+// Both fields are about a rule that spans a box boundary, which is why they
+// travel rather than being recomputed per box: neither can be answered by
+// looking at one text node.
+type inlineState struct {
+	// breakOpportunity says the content before this point ended at one. In
+	// "foo <em>bar</em>" the space and the word are in different text boxes, so
+	// an engine that started each box afresh would find no opportunity between
+	// them and set the whole phrase as one unbreakable word.
+	breakOpportunity bool
+	// afterCollapsibleSpace says the last thing emitted was a collapsible
+	// space, so §4.1.1's fourth rule collapses the next one into it —
+	// "provided both spaces are within the same inline formatting context",
+	// which is exactly the span this state covers.
+	//
+	// It starts true, because the beginning of the context is the beginning of
+	// its first line and §4.1.2 removes the collapsible space there.
+	afterCollapsibleSpace bool
+}
+
+// startOfContext is the state an inline formatting context begins in.
+func startOfContext() inlineState { return inlineState{afterCollapsibleSpace: true} }
+
 // collectInline flattens an inline subtree into measurable items.
 //
 // The tree is flattened because a line break can fall anywhere, including inside
 // an <em> — so what goes on a line is a sequence of runs, not a sequence of
 // boxes. Each item keeps the box it came from, which is what painting needs to
 // know its colour.
-//
-// pending carries a break opportunity *across* a box boundary, and it is not a
-// detail: in "foo <em>bar</em>" the space and the word are in different text
-// boxes, so an engine that started each box afresh would find no opportunity
-// between them and set the whole phrase as one unbreakable word.
-func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool, frame inlineFrame) ([]inlineItem, bool) {
+func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, frame inlineFrame) ([]inlineItem, inlineState) {
 	for _, child := range b.Children {
 		if child.Position.outOfFlow() {
 			// Out of flow and, unlike a float, out of the way: it takes no width
@@ -300,15 +383,15 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool, frame i
 		if child.Float != FloatNone {
 			// Out of flow, so it neither takes width on the line nor breaks it:
 			// it is recorded where it was written and placed when the line it
-			// belongs to is known. The pending break opportunity passes straight
-			// through, because "a <span class=float></span>b" is still one word
-			// followed by another with a space between them.
+			// belongs to is known. The state passes straight through, because
+			// "a <span class=float></span>b" is still one word followed by
+			// another with a space between them.
 			out = append(out, inlineItem{float: child})
 			continue
 		}
 		if child.IsText() {
 			var items []inlineItem
-			items, pending = l.itemsFor(child, pending, frame.offset)
+			items, state = l.itemsFor(child, state, frame.offset)
 			out = append(out, items...)
 			continue
 		}
@@ -317,7 +400,9 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool, frame i
 			// it ends the line wherever it falls, even mid-word and even on a
 			// line with room to spare.
 			out = append(out, inlineItem{box: child, forced: true})
-			pending = false
+			// What follows is at the start of a line, so a collapsible space
+			// there is removed rather than indenting it.
+			state = startOfContext()
 			continue
 		}
 		if child.Outer == OuterInline {
@@ -329,58 +414,123 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool, frame i
 					Y: frame.offset.Y.Add(d.Y),
 				}
 			}
-			out, pending = l.collectInline(child, out, pending, inner)
+			out, state = l.collectInline(child, out, state, inner)
 		}
 	}
-	return out, pending
+	return out, state
 }
 
 // itemsFor cuts one text box into items at its break opportunities and measures
-// each.
-//
-// pendingIn says whether the text before this box ended at an opportunity;
-// pendingOut says whether this one does.
-func (l *layouter) itemsFor(b *Box, pendingIn bool, offset Point) ([]inlineItem, bool) {
+// each, applying the half of §4.1.1 that could not be done per node.
+func (l *layouter) itemsFor(b *Box, in inlineState, offset Point) ([]inlineItem, inlineState) {
 	face, ok := l.fontFor(b)
 	if !ok {
-		return nil, pendingIn
+		return nil, in
 	}
 	l.checkScript(b)
 	l.checkGlyphs(b, face)
 
 	size := b.FontSize
-	whiteSpace := strings.ToLower(strings.TrimSpace(b.Style["white-space"]))
-	preserved := whiteSpace == "pre" || whiteSpace == "pre-wrap" ||
-		whiteSpace == "pre-line" || whiteSpace == "break-spaces"
-	noWrap := whiteSpace == "nowrap" || whiteSpace == "pre"
-
-	pieces, pendingOut := splitAtBreaks(b.Text)
-
-	var out []inlineItem
-	for i, piece := range pieces {
-		if preserved && piece.text == "\n" {
-			// A newline that survived collapsing is a break the author wrote.
-			out = append(out, inlineItem{box: b, face: face, size: size, forced: true, offset: offset})
-			continue
-		}
-		item := inlineItem{
-			text: piece.text, box: b, face: face, size: size,
-			breakBefore: piece.breakBefore, space: piece.space,
-			noWrap: noWrap, offset: offset,
-		}
-		if i == 0 && pendingIn {
-			item.breakBefore = true
-		}
-		item.width = l.measure(face, piece.text, size)
-		out = append(out, item)
-	}
+	ws := whiteSpaceOf(b.Style["white-space"])
+	pieces, endedAtBreak := splitAtBreaks(b.Text, ws)
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what
 		// a <span> holding a single zero-width space is. Either source counts.
-		return out, pendingIn || pendingOut
+		in.breakOpportunity = in.breakOpportunity || endedAtBreak
+		return nil, in
 	}
-	return out, pendingOut
+
+	var tabStop style.Unit
+	for _, p := range pieces {
+		if p.tab {
+			tabStop = l.tabStop(b, face)
+			break
+		}
+	}
+
+	out := make([]inlineItem, 0, len(pieces))
+	state := in
+	for _, p := range pieces {
+		if p.segment {
+			// A segment break that survived Phase I is a break the author
+			// wrote, and it ends the line as firmly as a <br> does.
+			out = append(out, inlineItem{box: b, face: face, size: size, forced: true, offset: offset})
+			state = startOfContext()
+			continue
+		}
+		if p.collapsible && state.afterCollapsibleSpace {
+			// §4.1.1's fourth rule: a collapsible space following another
+			// collapses to zero advance width, across an inline boundary as
+			// readily as within one — so "a <span> </span> b" sets one space
+			// and not three. It keeps its break opportunity, which is what the
+			// rule's parenthesis is for.
+			state.breakOpportunity = true
+			continue
+		}
+
+		item := inlineItem{
+			text: p.text, box: b, face: face, size: size,
+			breakBefore: p.breakBefore || state.breakOpportunity,
+			space:       p.space, collapsible: p.collapsible,
+			tab: p.tab, tabStop: tabStop,
+			// Preserved white space hangs unless the value is break-spaces,
+			// which exists precisely so that it does not.
+			hangs:  p.space && !p.collapsible && !ws.breakSpaces,
+			noWrap: !ws.wrap, offset: offset,
+		}
+		if !p.tab {
+			// A tab is measured against a tab stop when it lands, so there is
+			// nothing to measure here and the face's own advance for U+0009 —
+			// whatever a face happens to give a character it has no glyph for —
+			// would be the wrong number to carry.
+			item.width = l.measure(face, p.text, size)
+		}
+		out = append(out, item)
+		state = inlineState{afterCollapsibleSpace: p.collapsible}
+	}
+	return out, inlineState{
+		breakOpportunity:      endedAtBreak,
+		afterCollapsibleSpace: state.afterCollapsibleSpace,
+	}
+}
+
+// tabStop is the distance between two tab stops, which is what tab-size sets.
+//
+// A number is a count of space advances in the box's own font, which is why
+// this needs the face; a length is itself. The initial value is 8, the width
+// every terminal and every editor has used for a tab since they had one.
+func (l *layouter) tabStop(b *Box, face *fonts.Face) style.Unit {
+	raw := strings.TrimSpace(b.Style["tab-size"])
+	if n, ok := parseNumber(raw); ok {
+		return l.measure(face, " ", b.FontSize).Mul(n)
+	}
+	if v, ok := l.lengthOf(b, "tab-size", 0); ok && v >= 0 {
+		return v
+	}
+	return l.measure(face, " ", b.FontSize).Mul(8)
+}
+
+// tabAdvance is the distance from x to the next tab stop.
+//
+// Tab stops are at multiples of the tab size from the block's content edge, so
+// a tab's advance is a property of where it lands rather than of the text it
+// sits in — which is why it cannot be measured with the rest of a run.
+//
+// The arithmetic is exact rather than floating point, because a layout unit is
+// a fixed-point integer and a tab stop computed in floats would drift along a
+// line of them until two columns that should align did not.
+//
+// A tab size of zero renders no tab at all, which is what §4.1.2 says and is
+// the only way to ask for a tab that takes no room.
+func tabAdvance(x, stop style.Unit) style.Unit {
+	if stop <= 0 {
+		return 0
+	}
+	if x < 0 {
+		x = 0
+	}
+	return stop.Sub(x % stop)
 }
 
 // measure returns the advance width of a string, memoized.
@@ -409,11 +559,18 @@ type measureKey struct {
 	size style.Unit
 }
 
-// piece is a run of text between two break opportunities.
+// piece is a run of text between two break opportunities, together with what
+// §4.1.2 has to know about it once it lands on a line.
 type piece struct {
 	text        string
 	breakBefore bool
+	// space marks white space of any kind, collapsible marks the subset of it
+	// that a line edge removes, and tab and segment mark the two preserved
+	// characters that are not simply text of their own width.
 	space       bool
+	collapsible bool
+	tab         bool
+	segment     bool
 }
 
 // splitAtBreaks cuts text at the break opportunities this engine implements.
@@ -421,74 +578,125 @@ type piece struct {
 // The subset is stated in the file comment. Each rule below is one of UAX #14's,
 // named by what it does rather than by its class letters, and the ones left out
 // are left out loudly — checkScript reports text that needs them.
-func splitAtBreaks(text string) ([]piece, bool) {
+//
+// It takes the white-space value because two of the rules depend on it: a
+// preserved space is a piece of its own rather than a collapsed one, and
+// break-spaces wants each space separately because a line may end after any one
+// of them.
+//
+// The text is walked rune by rune rather than through a []rune, which is not a
+// micro-optimisation: a text node is untrusted and arbitrarily large, and a
+// decoded copy of one is four bytes per character of buffering nobody asked for.
+func splitAtBreaks(text string, ws whiteSpace) ([]piece, bool) {
 	var out []piece
 	var cur strings.Builder
 	breakNext := false
 
-	flush := func(isSpace bool) {
+	flush := func() {
 		if cur.Len() == 0 {
 			return
 		}
-		out = append(out, piece{text: cur.String(), breakBefore: breakNext, space: isSpace})
+		out = append(out, piece{text: cur.String(), breakBefore: breakNext})
 		cur.Reset()
 		breakNext = false
 	}
+	// A white-space piece takes the pending opportunity but does not consume
+	// it: what follows a space may begin a line whatever came before it, and an
+	// earlier version that cleared the flag here lost the opportunity after
+	// "a- b" entirely.
+	emit := func(p piece) {
+		p.breakBefore = breakNext
+		out = append(out, p)
+	}
 
-	runes := []rune(text)
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
+	for i := 0; i < len(text); {
+		r, size := rune(text[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(text[i:])
+		}
+		i += size
 
 		switch {
 		case r == '\n' || r == '\r':
-			// A newline is its own piece, so a caller preserving white space can
-			// turn it into a break and one collapsing it can treat it as a
-			// space. Which of those happens is not this function's business.
-			flush(false)
-			out = append(out, piece{text: "\n", space: true})
+			// Only a *preserved* break reaches here: Phase I turned a
+			// collapsible one into a space. A CR is folded with the LF that may
+			// follow it, so that text which reached this stage without going
+			// through Phase I — a caller measuring raw content — still counts
+			// one break rather than two.
+			if r == '\r' && i < len(text) && text[i] == '\n' {
+				i++
+			}
+			flush()
+			emit(piece{text: "\n", space: true, segment: true})
+			breakNext = true
+
+		case r == '\t' && !ws.collapse:
+			// A preserved tab is its own piece because each one advances to its
+			// own tab stop, so two of them are not one run of a doubled width.
+			flush()
+			emit(piece{text: "\t", space: true, tab: true})
 			breakNext = true
 
 		case r == ' ' || r == '\t':
-			// A space ends the run before it and is itself a run, so that it can
-			// be dropped when it lands at the end of a line.
-			flush(false)
-			start := i
-			for i < len(runes) && (runes[i] == ' ' || runes[i] == '\t') {
-				i++
+			flush()
+			if ws.collapse {
+				// Phase I already reduced the run to a single space and turned
+				// any tab into one, so there is nothing left to gather.
+				emit(piece{text: " ", space: true, collapsible: true})
+				breakNext = true
+				break
 			}
-			i--
-			out = append(out, piece{text: string(runes[start : i+1]), space: true})
-			// What follows a space may begin a line.
+			// Preserved. Under pre and pre-wrap the run hangs or wraps as a
+			// unit, so it is one piece; under break-spaces a line may end after
+			// any single space, so each is its own.
+			start := i - size
+			if !ws.breakSpaces {
+				for i < len(text) && text[i] == ' ' {
+					i++
+				}
+			}
+			emit(piece{text: text[start:i], space: true})
 			breakNext = true
 
 		case r == '​':
 			// A zero-width space is a break opportunity and nothing else: it is
 			// how an author marks one inside a word.
-			flush(false)
+			flush()
 			breakNext = true
 
 		case isIdeographic(r):
 			// CJK breaks between ideographs, which is why it needs no spaces.
-			flush(false)
+			flush()
 			cur.WriteRune(r)
-			flush(false)
+			flush()
 			breakNext = true
 
-		case r == '-' && i+1 < len(runes) && !unicode.IsSpace(runes[i+1]):
+		case r == '-' && !endsRunOrSpace(text, i):
 			// A hyphen ends a run and the next may begin a line — which is what
 			// lets a hyphenated compound break where it is written.
 			cur.WriteRune(r)
-			flush(false)
+			flush()
 			breakNext = true
 
 		default:
 			cur.WriteRune(r)
 		}
 	}
-	flush(false)
+	flush()
 	// breakNext survives the last piece: it says the text ended at an
 	// opportunity, which matters when what follows is in another box.
 	return out, breakNext
+}
+
+// endsRunOrSpace reports whether the text at i is the end of the run or white
+// space, which is what stops a trailing hyphen being a break opportunity: there
+// would be nothing after it to move to the next line.
+func endsRunOrSpace(text string, i int) bool {
+	if i >= len(text) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(text[i:])
+	return unicode.IsSpace(r)
 }
 
 // isIdeographic reports whether a rune breaks on both sides, which is what makes
@@ -525,7 +733,14 @@ func isIdeographic(r rune) bool {
 // forced reports that the line ended at a break the author wrote, which is what
 // makes an empty line real — "a<br><br>b" leaves a blank line, and an engine
 // that dropped empty lines would close the gap up.
-func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) (
+//
+// lineX is where the line box starts within the block's content box, which a
+// float beside it makes something other than zero. It is needed because a tab
+// stop is measured from the block's edge and not from the line's.
+//
+// The returned items carry their resolved widths: a tab's is not known until it
+// has a place, so an item on a line is not always the item that came in.
+func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style.Unit) (
 	line []inlineItem, next int, outOfFlow []midLineBox, forced bool) {
 
 	var used style.Unit
@@ -552,17 +767,32 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) 
 		if item.forced {
 			// An instruction rather than an opportunity: the line ends here
 			// whatever room is left, and an empty one still occupies its height.
-			return trimTrailingSpaces(line), i + 1, outOfFlow, true
+			return trimLineEdge(line), i + 1, outOfFlow, true
 		}
 
-		// A space at the start of a line is dropped: it is the space the break
-		// happened at, and keeping it would indent every line after the first.
-		if item.space && len(line) == 0 {
+		// §4.1.2's first rule: a sequence of collapsible spaces at the
+		// beginning of a line is removed. It is the space the break happened
+		// at, or the one the author left after a tag, and keeping it would
+		// indent every line after the first.
+		//
+		// Only a *collapsible* one. Preserved white space at the start of a
+		// line is content — it is what makes "<pre>    indented</pre>" indent,
+		// and it is the whole of the pre-wrap leading-space rule.
+		if item.collapsible && len(line) == 0 {
 			continue
 		}
 
-		if !item.noWrap && used.Add(item.width) > width && len(line) > 0 && item.breakBefore {
-			return trimTrailingSpaces(line), i, outOfFlow, false
+		if item.tab {
+			item.width = tabAdvance(lineX.Add(used), item.tabStop)
+		}
+
+		// A hanging space never causes a break: it sits past the line's end
+		// rather than moving to the next one. Without this, "XX    XX" under
+		// pre-wrap would push the second word down a line for spaces that take
+		// no room on the page at all.
+		if !item.noWrap && !item.hangs && item.breakBefore &&
+			len(line) > 0 && used.Add(item.width) > width {
+			return trimLineEdge(line), i, outOfFlow, false
 		}
 
 		// A single item wider than the line has nowhere to go. It is placed and
@@ -576,7 +806,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) 
 		line = append(line, item)
 		used = used.Add(item.width)
 	}
-	return trimTrailingSpaces(line), i, outOfFlow, false
+	return trimLineEdge(line), i, outOfFlow, false
 }
 
 // reportOverflow names content too wide for the box holding it.
@@ -603,13 +833,25 @@ func fmtPx(u style.Unit) string {
 	return strconvFormat(u.Px()) + "px"
 }
 
-// trimTrailingSpaces removes the collapsible space at the end of a line.
+// trimLineEdge is §4.1.2's third rule: a sequence of collapsible spaces at the
+// end of a line is removed.
 //
 // CSS Text removes it because it is the space the break happened at: leaving it
 // would make a right-aligned line hang, and a centred one sit off-centre by half
 // a space.
-func trimTrailingSpaces(line []inlineItem) []inlineItem {
-	for len(line) > 0 && line[len(line)-1].space {
+//
+// Preserved white space is *not* removed, and the difference is deliberate: it
+// hangs instead, so it stays in the runs, which is what a reader copying text
+// out of the page gets. Removing it would silently drop characters the author
+// wrote from the document's text, which is the same class of fault as the
+// missing spaces that once made "A heading" extract as "Aheading".
+//
+// What the hanging currently affects is the break decision — hangs is what
+// stops a trailing space pushing the next word down a line — and nothing else,
+// because §4.1.2's other consumers of it are alignment and justification and
+// this engine does neither. See the note on text-align in inlineContent.
+func trimLineEdge(line []inlineItem) []inlineItem {
+	for len(line) > 0 && line[len(line)-1].collapsible {
 		line = line[:len(line)-1]
 	}
 	return line
