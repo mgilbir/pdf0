@@ -634,9 +634,18 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		}
 		est = est.Add(l.clearanceAt(child, origin, est))
 
+		// §9.5's other rule, and the one an engine can omit without the page
+		// looking broken: a box that establishes a block formatting context may
+		// not *overlap* a float, so it is put beside the float and narrowed, or
+		// dropped below it when it cannot be narrowed enough. Predicted here for
+		// the same reason the position is, and re-asked at the settled position
+		// below.
+		estDrop, estGeom := l.avoidFloats(child, width, origin, est)
+		est = est.Add(estDrop)
+
 		mark, consulted := origin.ctx.mark(), origin.ctx.consulted
 		absMark := len(l.deferred)
-		cf, cm := l.block(child, width, origin.at(est))
+		cf, cm := l.blockIn(child, width, origin.at(est), estGeom)
 		// Whether the *subtree* read the float geometry, captured before the
 		// clearance query below adds a read of its own.
 		//
@@ -649,6 +658,9 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// once those exhausted the budget.
 		subtreeRead := origin.ctx.consulted != consulted
 
+		// What was pending before this child's own top margin joined it. It is
+		// needed because clearance separates the two: see the hoist below.
+		before := pending
 		pending = collapse(pending, cm.top)
 
 		// The position §9.5.2 measures clearance against: where the box would
@@ -677,13 +689,42 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		if topOpen && !hoisted {
 			// The parent's top edge is open, so everything collected so far
 			// belongs outside the parent rather than inside it.
+			//
+			// Except this child's own top margin, when the child has clearance.
+			// CSS 2.1 §8.3.1 lists what makes two margins adjoining and puts
+			// clearance beside a border and a padding in the list of things that
+			// separate them, so a cleared box's top margin is not adjoining its
+			// parent's and cannot escape through it. What can still escape is
+			// whatever was pending before this child — those margins belong to
+			// earlier children that collapsed through, and a later box's
+			// clearance says nothing about them.
+			//
+			// Leaving it out is not a rounding. A cleared box whose own margin
+			// escapes takes its parent with it: the parent is placed by that
+			// margin and the child is placed against the float, so the two move
+			// apart by exactly the margin. The suite's clear-on-parent-with-
+			// margins pairs a "clear: left" box with a "margin-top: -1000px"
+			// child and lands the wrapper eight hundred pixels above the page.
 			hoistTop = pending
+			if clearance != 0 {
+				hoistTop = before
+			}
 			pending = 0
 			hoisted = true
 		}
 
 		at := y.Add(pending).Add(clearance)
-		cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
+		// The float-avoidance question again, now that the position is settled.
+		// A prediction that turned out wrong moved the box into a different
+		// band, and a box that had to be narrowed to fit one band is the wrong
+		// width for another — so this counts as having read the geometry and
+		// forces the second layout rather than the translation.
+		atDrop, atGeom := l.avoidFloats(child, width, origin, at)
+		at = at.Add(atDrop)
+		if !sameForced(estGeom, atGeom) {
+			subtreeRead = true
+		}
+		cf = l.settleIn(child, width, origin, cf, est, at, mark, absMark, subtreeRead, atGeom)
 		if child.ListItem {
 			cf.Marker = l.markerFor(child, cf, listIndex)
 		}
@@ -836,6 +877,15 @@ var maxRelayouts = 4096
 // and says so rather than one that took unbounded time to be right.
 func (l *layouter) settle(child *Box, width style.Unit, origin flow, cf *Fragment,
 	predicted, actual style.Unit, mark, absMark int, read bool) *Fragment {
+	return l.settleIn(child, width, origin, cf, predicted, actual, mark, absMark, read, nil)
+}
+
+// settleIn is settle with the geometry §9.5 forced on a box that had to avoid a
+// float, so that the second layout is done against the band the box ended in
+// rather than against the one it was predicted to be in.
+func (l *layouter) settleIn(child *Box, width style.Unit, origin flow, cf *Fragment,
+	predicted, actual style.Unit, mark, absMark int, read bool,
+	forced *forcedGeometry) *Fragment {
 
 	delta := actual.Sub(predicted)
 	if delta == 0 || origin.ctx.mark() == mark && !read {
@@ -859,8 +909,17 @@ func (l *layouter) settle(child *Box, width style.Unit, origin flow, cf *Fragmen
 	// about to be thrown away — and the page would carry a ghost of every
 	// absolutely positioned box inside a subtree that had to be laid out again.
 	l.deferred = l.deferred[:absMark]
-	again, _ := l.block(child, width, origin.at(actual))
+	again, _ := l.blockIn(child, width, origin.at(actual), forced)
 	return again
+}
+
+// sameForced reports whether two forced geometries would lay a box out the same
+// way, so that a box whose band did not change is not laid out twice.
+func sameForced(a, b *forcedGeometry) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func offsetOf(b *Box) int {

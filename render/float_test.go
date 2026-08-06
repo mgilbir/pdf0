@@ -379,6 +379,142 @@ func TestClearanceIsMeasuredAfterMarginsCollapse(t *testing.T) {
 	}
 }
 
+// TestClearanceSeparatesTheTopMarginFromTheParents pins the entry CSS 2.1 §8.3.1
+// puts in its list of what stops two margins being adjoining: "no line boxes, no
+// clearance, no padding and no border separate them".
+//
+// The wrapper has no border and no padding, so an ordinary first child's top
+// margin escapes through its top edge and moves the wrapper rather than the
+// child. A cleared child's does not, and the difference is visible in two
+// places at once: where the wrapper starts, and where the child ends up.
+//
+// The arithmetic. One float, 100 tall, and one child with a 50px top margin. The
+// only difference between the two cases is the child's clear property.
+//
+//   - With "clear: none" nothing separates the two margins, so the 50 escapes:
+//     the wrapper's border top is at 50 and the child's is at 50 too, flush with
+//     it and overlapping the float, which is what an ordinary block does.
+//   - With "clear: left" the clearance separates them, so the 50 is trapped
+//     inside: the wrapper stays at 0 and the child lands at 100, the float's
+//     bottom edge.
+//
+// Getting this wrong is not a small error, and the shape it takes is the reason
+// it is worth a test of its own: the escaped margin moves the wrapper *up the
+// page* while the child stays pinned to the float, so the two separate by
+// exactly the margin. The suite's clear-on-parent-with-margins uses a
+// "margin-top: -1000px" grandchild and the wrapper ends up eight hundred pixels
+// above the top of the document.
+func TestClearanceSeparatesTheTopMarginFromTheParents(t *testing.T) {
+	for _, tc := range []struct {
+		what, clear           string
+		wantWrapperY, wantCsY float64
+	}{
+		{"clear: none", "none", 50, 50},
+		{"clear: left", "left", 0, 100},
+	} {
+		css := noDefaults + `
+		#f { float: left; width: 50px; height: 100px }
+		#c { clear: ` + tc.clear + `; margin-top: 50px; height: 20px }`
+		root := layoutOf(t, 1000,
+			`<section id="w"><div id="f"></div><div id="c"></div></section>`, css)
+
+		w, c := find(t, root, "w"), find(t, root, "c")
+		px(t, tc.what+": the wrapper's top", w.BorderRect.Y, tc.wantWrapperY)
+		px(t, tc.what+": the cleared box's top", c.BorderRect.Y, tc.wantCsY)
+	}
+}
+
+// TestABoxThatMakesItsOwnContextDoesNotOverlapAFloat pins the second rule of
+// §9.5, the one an engine can omit without the page looking broken: "the border
+// box of a table, a block-level replaced element, or an element in the normal
+// flow that establishes a new block formatting context ... must not overlap the
+// margin box of any floats in the same block formatting context".
+//
+// Three answers are needed for the rule to have been implemented rather than
+// approximated, and each is the wrong answer for the other two:
+//
+//   - An ordinary block *does* overlap the float. Only its line boxes are
+//     shortened, and an engine that moved every block would put a gap beside
+//     every float where the specification puts running text. This is the case
+//     that would break if the rule were applied too widely, and it is the
+//     common one.
+//   - A context root with an auto width is narrowed to the band and put beside
+//     the float: the specification's "they may even make the border box of said
+//     element narrower". 300 minus the float's 200 is 100.
+//   - A context root with a declared width that will not fit is dropped below
+//     the float instead, keeping its width: "implementations should clear the
+//     said element by placing it below any preceding floats". 150 does not fit
+//     in 100, so it goes to y=100 at the full 300-wide band.
+func TestABoxThatMakesItsOwnContextDoesNotOverlapAFloat(t *testing.T) {
+	for _, tc := range []struct {
+		what, extra            string
+		wantX, wantY, wantWide float64
+	}{
+		{"an ordinary block", "", 0, 0, 300},
+		{"an auto-width context root", "overflow-x: hidden; overflow-y: hidden", 200, 0, 100},
+		{"a context root too wide for the band",
+			"overflow-x: hidden; overflow-y: hidden; width: 150px", 0, 100, 150},
+	} {
+		css := noDefaults + `
+		#w { width: 300px }
+		#f { float: left; width: 200px; height: 100px }
+		#n { height: 20px; ` + tc.extra + ` }`
+		root := layoutOf(t, 1000,
+			`<div id="w"><div id="f"></div><div id="n"></div></div>`, css)
+
+		w, n := find(t, root, "w"), find(t, root, "n")
+		px(t, tc.what+"'s left", relX(t, n, w), tc.wantX)
+		px(t, tc.what+"'s top", relY(t, n, w), tc.wantY)
+		px(t, tc.what+"'s width", n.BorderRect.W, tc.wantWide)
+	}
+}
+
+// TestABlockLevelImageDoesNotOverlapAFloat is §9.5's third named kind, and it is
+// tested separately because it is the one that reaches the rule by a different
+// route: a block-level replaced element establishes no formatting context at
+// all, so the clause that admits it is its own.
+//
+// The picture is 40 × 20 and is given "width: 150px", which with the ratio kept
+// makes it 150 × 75. That does not fit in the 100px band beside the 200px float,
+// so it goes below the float, at x=0 and y=100, exactly as the declared-width
+// context root above does. An engine that admitted only formatting-context roots
+// would leave it at the top, over the float.
+func TestABlockLevelImageDoesNotOverlapAFloat(t *testing.T) {
+	css := noDefaults + `
+	#w { width: 300px }
+	#f { float: left; width: 200px; height: 100px }
+	#i { display: block; width: 150px }`
+	root := replacedLayout(t, 1000,
+		`<div id="w"><div id="f"></div><img id="i" src="wide.png" alt=""></div>`, css)
+
+	w, i := find(t, root, "w"), find(t, root, "i")
+	px(t, "the image's width", i.BorderRect.W, 150)
+	px(t, "the image's left", relX(t, i, w), 0)
+	px(t, "the image's top", relY(t, i, w), 100)
+}
+
+// TestAContextRootBesideARightFloatKeepsItsLeftEdge is the mirror, and it is
+// here because the two are not the same assertion: a left float moves the box
+// sideways *and* narrows it, a right float only narrows it. Each catches a
+// defect the other does not, which was checked by planting both — measuring the
+// width from the containing block's far edge rather than from the band's is
+// invisible beside a left float and halves the box beside a right one, and
+// narrowing without shifting is invisible here and leaves the box under the
+// float there.
+func TestAContextRootBesideARightFloatKeepsItsLeftEdge(t *testing.T) {
+	css := noDefaults + `
+	#w { width: 300px }
+	#f { float: right; width: 200px; height: 100px }
+	#n { height: 20px; overflow-x: hidden; overflow-y: hidden }`
+	root := layoutOf(t, 1000,
+		`<div id="w"><div id="f"></div><div id="n"></div></div>`, css)
+
+	w, n := find(t, root, "w"), find(t, root, "n")
+	px(t, "the context root's left", relX(t, n, w), 0)
+	px(t, "the context root's top", relY(t, n, w), 0)
+	px(t, "the context root's width", n.BorderRect.W, 100)
+}
+
 // TestFormattingContextRootContainsItsFloats pins §10.6.7, and the plain block
 // beside it pins that the rule is specific to a formatting-context root.
 //
