@@ -271,7 +271,40 @@ const wptEnv = "WPT_TESTS"
 // value is dropped rather than clamped, which the sizing properties needed; and
 // §9.5's rule that a box establishing a formatting context may not overlap a
 // float.
-const wptCleanPassBaseline = 3447
+//
+// An inline box's own background and border took it from 3447 to 3480, and the
+// two effects that have to be separated this time are not reporting and layout —
+// not a finding changed — but a feature and a bug it *exposed*. Each was measured
+// on its own, against the same base:
+//
+//   - painting an inline box's background and border, alone: clean passes 3447 to
+//     3448, failures 1470 to 1454. 30 tests stopped failing and 14 started. Only
+//     one of the 30 reached the clean bucket; the rest went to the vacuous one,
+//     295 to 310, where they wait on something else the engine does not do.
+//   - the illegal-value fix, alone: clean passes 3447 to 3465, failures 1470 to
+//     1452, 18 tests, none the other way. "border-top-width: -1pt" is an illegal
+//     value, so CSS 2.1 §4.2 drops the declaration and the initial "medium"
+//     stands; layout clamped the negative to zero instead and drew no border at
+//     all. The four border widths joined the sizes and the paddings in
+//     nonNegative.
+//   - together: 3480 clean and 1422 failures, counted by name over the whole
+//     suite — 48 tests stopped failing and none started. The two do not add,
+//     because 14 of the 48 are the tests that need both.
+//
+// Those 14 are worth recording for how the bug stayed hidden. css/CSS2/borders
+// checks each width property by drawing two rules on a <span>, once with the
+// illegal value and once with "medium", and asserting they are the same
+// thickness. With no inline border painted the test drew nothing, the reference
+// drew nothing, and 14 tests passed on two blank pages — while the same clamp sat
+// in every block box in the engine, where the other 18 could see it.
+//
+// What the painting itself moved is three families, and all three are the shape
+// the feature was chosen for — a reference that draws its expected picture with a
+// background on a <span>: 16 in css-text/white-space, where a blue span marks
+// where a hanging space went; 7 in css/CSS2/text; and 4 in css/CSS2/linebox,
+// which is the directory that tests §8.4's rule that an inline box's vertical
+// padding and border bleed over the lines around them without moving any of them.
+const wptCleanPassBaseline = 3480
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
