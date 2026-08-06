@@ -117,7 +117,10 @@ func (l *layouter) measureWidths(b *Box) intrinsicWidths {
 // opportunity and so takes the widest unbreakable run. A forced break — a <br>,
 // or a newline in preserved white space — ends a line in both.
 func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
-	items, _ := l.collectInline(b, nil, false)
+	// The frame is empty because §9.4.3's offset is applied after layout and so
+	// changes no width: a relatively positioned inline demands exactly the room
+	// it would have demanded without the declaration.
+	items, _ := l.collectInline(b, nil, false, inlineFrame{})
 
 	var out intrinsicWidths
 	var line, run style.Unit

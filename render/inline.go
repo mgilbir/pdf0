@@ -33,6 +33,24 @@ import (
 // overflow silently and read as a rendering bug rather than as an unimplemented
 // feature.
 
+// # What relative positioning does to an inline box, and what it does not
+//
+// §9.4.3 applies to an inline box like any other, and the offset is carried on
+// each run rather than on a fragment because an inline box has no fragment: a
+// <span> broken across a line contributes to two line boxes and to neither
+// exclusively. Offsetting the runs is the whole of the visible effect here,
+// since this engine draws no background, border or padding on an inline box.
+//
+// What is given up is the *stacking level*. §9.9 makes a positioned inline a
+// positioned box, painted at Appendix E step 7 with everything else positioned;
+// its runs are painted at step 6 with the rest of the block's text. The two
+// differ only where a relatively positioned inline's text overlaps a positioned
+// box that comes earlier in the document — every other pair is ordered the same
+// way by both rules, because step 6 already comes after every block background
+// and every float and before every positioned box. Closing it would mean
+// splitting a line box's runs into stacking levels, which is a change to the
+// shape of a line rather than an addition to it.
+
 // LineFragment is a line box: one row of text within a block.
 type LineFragment struct {
 	// Rect is the line box in the same coordinates as the fragment holding it.
@@ -56,6 +74,31 @@ type TextRun struct {
 	// Box is the inline box the text came from, which carries the colour and
 	// the decoration painting will need.
 	Box *Box
+	// Offset is §9.4.3's relative displacement, accumulated over the inline
+	// boxes this run sits inside.
+	//
+	// It is on the run rather than on a fragment because an inline box has no
+	// fragment: a line box holds runs, and a <span> that spans a line break
+	// contributes to two of them. Carrying the offset per run is what lets a
+	// relatively positioned inline move its text and nothing else — which is the
+	// whole of what relative positioning does to an inline box, since this
+	// engine draws no background, border or padding on one.
+	Offset Point
+}
+
+// inlineFrame is what the walk over an inline subtree carries down: enough to
+// resolve a relatively positioned inline box's own offset, and the offset
+// already accumulated from the inline boxes around it.
+//
+// The accumulation is what makes nesting work. "<span style=...><em style=...>"
+// offsets the em by the sum of the two, because §9.4.3 moves a box together with
+// everything inside it, and the inside of an inline box is a run of text that
+// has been flattened out of the tree by the time anything could walk it again.
+type inlineFrame struct {
+	containing style.Unit
+	cbHeight   style.Unit
+	cbDefinite bool
+	offset     Point
 }
 
 // inlineItem is one piece of inline content before it has been put on a line.
@@ -83,6 +126,17 @@ type inlineItem struct {
 	// where a float appears among the words decides which line box it is placed
 	// against, and that position is lost once the items are on lines.
 	float *Box
+	// offset is the relative displacement of the inline boxes this item is
+	// inside, which travels with the item because the flattening loses the boxes
+	// themselves.
+	offset Point
+	// abs is the box of an absolutely positioned box met in this run, and it is
+	// a marker for the same reason and a different consequence. A float met
+	// among the words changes where the words go; an absolutely positioned one
+	// does not change anything at all, but its *static position* — where it
+	// would have been — is what §10.3.7 falls back on, and that is exactly the
+	// information the flattening destroys.
+	abs *Box
 }
 
 // inlineContent lays a box's inline children into lines and returns the height
@@ -101,7 +155,9 @@ type inlineItem struct {
 // second reason the loop is here: a float's position depends on the line it
 // appears on, and the lines after it depend on the float.
 func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, origin flow) style.Unit {
-	items, _ := l.collectInline(b, nil, false)
+	items, _ := l.collectInline(b, nil, false, inlineFrame{
+		containing: width, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite,
+	})
 	if len(items) == 0 {
 		return 0
 	}
@@ -126,8 +182,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 
 		left, right := origin.ctx.bandAt(origin.y.Add(y), lo, hi)
 		y, left, right = l.roomForLine(items[i], origin, y, left, right, lo, hi)
+		lineWidth := right.Sub(left)
 
-		runs, next, mid, forced := l.breakOneLine(items, i, right.Sub(left))
+		runs, next, mid, forced := l.breakOneLine(items, i, lineWidth)
 		if len(runs) > 0 || forced {
 			line := LineFragment{
 				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lineHeight},
@@ -137,18 +194,28 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			for _, item := range runs {
 				line.Runs = append(line.Runs, TextRun{
 					Text: item.text, Face: item.face, Size: item.size,
-					X: x, Width: item.width, Box: item.box,
+					X: x, Width: item.width, Box: item.box, Offset: item.offset,
 				})
 				x = x.Add(item.width)
 			}
 			parent.Lines = append(parent.Lines, line)
 		}
 
-		// Floats met part-way along the line are placed once the line is
-		// settled, against the room that was left when each was reached.
+		// The out-of-flow boxes met along the line are dealt with once the line
+		// is settled, because until it is neither its top nor its left edge is
+		// known — and both are what the two kinds need.
 		for _, f := range mid {
+			if f.abs {
+				// §10.6.4's static position for a box written among the words:
+				// the top of the line box it appeared on, and the pen position
+				// it appeared at. The x is taken from the line's own left edge
+				// rather than the block's, so a box written beside a float
+				// records the position it would really have had.
+				l.deferAbsolute(f.box, parent, left.Sub(lo).Add(f.used), y, 0)
+				continue
+			}
 			parent.Children = append(parent.Children,
-				l.floatChild(f.box, width, origin, y, f.room, lineHeight, 0))
+				l.floatChild(f.box, width, origin, y, lineWidth.Sub(f.used), lineHeight, 0))
 		}
 
 		i = next
@@ -192,11 +259,22 @@ func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo
 	return y, left, right
 }
 
-// midLineFloat is a float met after a line had already begun, together with how
-// much of that line was still free when it was reached.
-type midLineFloat struct {
-	box  *Box
-	room style.Unit
+// midLineBox is an out-of-flow box met after a line had already begun, together
+// with how much of that line had been filled when it was reached.
+//
+// The same record serves floats and absolutely positioned boxes because both
+// need the one number and neither needs anything else — but they need it for
+// opposite reasons, which is why the two are told apart rather than merged. For
+// a float it says whether there is still room beside the line; for an absolutely
+// positioned box it *is* the static position, and there is no question of room
+// because the box takes none.
+type midLineBox struct {
+	box *Box
+	// used is how much of the line's width had been filled when the box was
+	// reached, measured from the line's own left edge.
+	used style.Unit
+	// abs distinguishes the two kinds.
+	abs bool
 }
 
 // collectInline flattens an inline subtree into measurable items.
@@ -210,8 +288,15 @@ type midLineFloat struct {
 // detail: in "foo <em>bar</em>" the space and the word are in different text
 // boxes, so an engine that started each box afresh would find no opportunity
 // between them and set the whole phrase as one unbreakable word.
-func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool) ([]inlineItem, bool) {
+func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool, frame inlineFrame) ([]inlineItem, bool) {
 	for _, child := range b.Children {
+		if child.Position.outOfFlow() {
+			// Out of flow and, unlike a float, out of the way: it takes no width
+			// on the line, breaks nothing and shortens nothing. All that is kept
+			// is where it was written, which is its static position.
+			out = append(out, inlineItem{abs: child})
+			continue
+		}
 		if child.Float != FloatNone {
 			// Out of flow, so it neither takes width on the line nor breaks it:
 			// it is recorded where it was written and placed when the line it
@@ -223,7 +308,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool) ([]inli
 		}
 		if child.IsText() {
 			var items []inlineItem
-			items, pending = l.itemsFor(child, pending)
+			items, pending = l.itemsFor(child, pending, frame.offset)
 			out = append(out, items...)
 			continue
 		}
@@ -236,7 +321,15 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool) ([]inli
 			continue
 		}
 		if child.Outer == OuterInline {
-			out, pending = l.collectInline(child, out, pending)
+			inner := frame
+			if child.Position == PositionRelative {
+				d := l.relativeOffset(child, frame.containing, frame.cbHeight, frame.cbDefinite)
+				inner.offset = Point{
+					X: frame.offset.X.Add(d.X),
+					Y: frame.offset.Y.Add(d.Y),
+				}
+			}
+			out, pending = l.collectInline(child, out, pending, inner)
 		}
 	}
 	return out, pending
@@ -247,7 +340,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool) ([]inli
 //
 // pendingIn says whether the text before this box ended at an opportunity;
 // pendingOut says whether this one does.
-func (l *layouter) itemsFor(b *Box, pendingIn bool) ([]inlineItem, bool) {
+func (l *layouter) itemsFor(b *Box, pendingIn bool, offset Point) ([]inlineItem, bool) {
 	face, ok := l.fontFor(b)
 	if !ok {
 		return nil, pendingIn
@@ -267,13 +360,13 @@ func (l *layouter) itemsFor(b *Box, pendingIn bool) ([]inlineItem, bool) {
 	for i, piece := range pieces {
 		if preserved && piece.text == "\n" {
 			// A newline that survived collapsing is a break the author wrote.
-			out = append(out, inlineItem{box: b, face: face, size: size, forced: true})
+			out = append(out, inlineItem{box: b, face: face, size: size, forced: true, offset: offset})
 			continue
 		}
 		item := inlineItem{
 			text: piece.text, box: b, face: face, size: size,
 			breakBefore: piece.breakBefore, space: piece.space,
-			noWrap: noWrap,
+			noWrap: noWrap, offset: offset,
 		}
 		if i == 0 && pendingIn {
 			item.breakBefore = true
@@ -433,7 +526,7 @@ func isIdeographic(r rune) bool {
 // makes an empty line real — "a<br><br>b" leaves a blank line, and an engine
 // that dropped empty lines would close the gap up.
 func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) (
-	line []inlineItem, next int, floats []midLineFloat, forced bool) {
+	line []inlineItem, next int, outOfFlow []midLineBox, forced bool) {
 
 	var used style.Unit
 	i := from
@@ -441,16 +534,25 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) 
 		item := items[i]
 
 		if item.float != nil {
-			// Recorded with the room that was left when it was reached, which is
-			// what decides whether it goes beside this line or below it.
-			floats = append(floats, midLineFloat{box: item.float, room: width.Sub(used)})
+			// Recorded with how far along the line it was reached, which is what
+			// decides whether it goes beside this line or below it.
+			outOfFlow = append(outOfFlow, midLineBox{box: item.float, used: used})
+			continue
+		}
+
+		if item.abs != nil {
+			// Recorded and otherwise ignored. It consumes no width, so the words
+			// on the line are placed exactly as they would have been had the box
+			// not been written at all — which is what "out of flow" means and is
+			// the assertion a test can make that a float cannot.
+			outOfFlow = append(outOfFlow, midLineBox{box: item.abs, used: used, abs: true})
 			continue
 		}
 
 		if item.forced {
 			// An instruction rather than an opportunity: the line ends here
 			// whatever room is left, and an empty one still occupies its height.
-			return trimTrailingSpaces(line), i + 1, floats, true
+			return trimTrailingSpaces(line), i + 1, outOfFlow, true
 		}
 
 		// A space at the start of a line is dropped: it is the space the break
@@ -460,7 +562,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) 
 		}
 
 		if !item.noWrap && used.Add(item.width) > width && len(line) > 0 && item.breakBefore {
-			return trimTrailingSpaces(line), i, floats, false
+			return trimTrailingSpaces(line), i, outOfFlow, false
 		}
 
 		// A single item wider than the line has nowhere to go. It is placed and
@@ -474,7 +576,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) 
 		line = append(line, item)
 		used = used.Add(item.width)
 	}
-	return trimTrailingSpaces(line), i, floats, false
+	return trimTrailingSpaces(line), i, outOfFlow, false
 }
 
 // reportOverflow names content too wide for the box holding it.

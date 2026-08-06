@@ -1,6 +1,7 @@
 package render
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/mgilbir/pdf0/css"
@@ -54,18 +55,52 @@ func (DrawText) isOp() {}
 
 // Paint turns a fragment tree into a display list, in painting order.
 //
-// The order is CSS 2.1 Appendix E reduced to what this engine produces: for each
-// box, its background, then its borders, then everything inside it. Without
-// out-of-flow content there are no stacking contexts to interleave, so tree
-// order is painting order — which will stop being true the moment z-index or
-// positioning arrives, and is the reason this is a separate traversal rather
-// than something layout emits as it goes.
+// The order is CSS 2.1 Appendix E. It used to be tree order, with a note saying
+// that this would stop being true the moment positioning arrived, and it has:
+// tree order is painting order only while nothing is out of flow and nothing
+// asks to be painted somewhere else in the stack. Both are now possible, so what
+// is here is the real algorithm.
+//
+// # What a stacking context is, and what it is not
+//
+// §9.9 and Appendix E divide the tree into *stacking contexts*, each of which is
+// painted as an atomic unit in the eight steps of §E.2. The root element makes
+// one. So does
+// a positioned box with a z-index that is not auto — and only that, which is the
+// distinction the whole scheme turns on and the one that reads as a technicality
+// until it bites. A positioned box with "z-index: auto" is painted as a unit,
+// at the same level as one with "z-index: 0", but it does *not* make a stacking
+// context: its own positioned descendants are hoisted out and sorted against its
+// siblings rather than against each other. So a descendant with "z-index: -1"
+// paints behind an ancestor whose z-index is auto and in front of one whose
+// z-index is 0, from the same markup. Collapsing auto onto 0 gives a page where
+// that descendant is simply not visible, which looks like a missing box rather
+// than like a stacking bug.
+//
+// # What each step of Appendix E is for
+//
+// The eight steps exist to make three guarantees that tree order alone does not.
+// Backgrounds of every ordinary block in a subtree are painted before any of
+// the text in it, so a later sibling's background cannot cover an earlier one's
+// words. Floats are a layer of their own between the two, so a floated image
+// sits over the block backgrounds it overlaps and under the text that runs
+// around it. And everything positioned is painted after everything that is not,
+// which is what makes "position: relative" with no offsets at all a way to lift
+// a box above its neighbours — a fact that looks like an accident of the
+// specification and is relied on constantly.
+//
+// # What is not done
+//
+// Opacity and transforms also create stacking contexts and are not implemented,
+// so neither appears here, and step 2 is a background image, which nothing draws
+// yet. Every other step of §E.2 is present, reduced to the primitives this engine
+// emits.
 func Paint(root *Fragment) []Op {
 	if root == nil {
 		return nil
 	}
 	p := &painter{colors: map[string]style.RGBA{}}
-	p.fragment(root)
+	p.stackingContext(root)
 	return p.ops
 }
 
@@ -76,20 +111,245 @@ type painter struct {
 	colors map[string]style.RGBA
 }
 
-func (p *painter) fragment(f *Fragment) {
+// stackLevel is one positioned box waiting to be painted, with what decides
+// where in the order it goes.
+type stackLevel struct {
+	frag *Fragment
+	// z is the z-index, with auto counted as zero. §E.2 step 7 paints
+	// "z-index: auto" and "z-index: 0" together in tree order, so for the
+	// purpose of *ordering* the two really are the same number — they differ
+	// only in whether the box becomes a context of its own, which is asked
+	// separately.
+	z int
+	// order is the box's index in document order, which is what breaks a tie
+	// between equal z-indexes.
+	order int
+}
+
+// layers is what one stacking context's subtree contributes, split into
+// Appendix E's steps.
+type layers struct {
+	// blocks are the in-flow, non-positioned, non-floating descendants whose
+	// backgrounds and borders are §E.2 step 4.
+	blocks []*Fragment
+	// floats are the non-positioned floating descendants of §E.2 step 5, each painted
+	// whole rather than as a background here and text later — §E.2 says a float
+	// is painted as though it created a stacking context, so its own text goes
+	// with its own background rather than joining the parent's text layer.
+	floats []*Fragment
+	// content are the fragments with inline content — line boxes and list
+	// markers — which is §E.2 step 6.
+	content []*Fragment
+	// positioned are §E.2 steps 3, 7 and 8, which are one list sorted by z rather
+	// than three: the steps differ only in the sign of the number.
+	positioned []stackLevel
+}
+
+// stackingContext paints a fragment and everything under it, in the order of
+// Appendix E §E.2.
+func (p *painter) stackingContext(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
+	lv := &layers{}
+	p.gather(f, lv, true, true)
 
+	// Step 1: the context root's own background and border.
+	p.decorations(f)
+
+	sortLevels(lv.positioned)
+	at := 0
+
+	// Step 3: the stacking contexts with a negative z-index, most negative
+	// first. They go behind the in-flow content of this context but in front of
+	// its root's own background, which is the one thing a negative z-index
+	// cannot get behind — and is why "z-index: -1" on a child does not hide it
+	// under its own parent's background.
+	for at < len(lv.positioned) && lv.positioned[at].z < 0 {
+		p.stackLevel(lv.positioned[at])
+		at++
+	}
+
+	// Steps 4, 5 and 6: block backgrounds, then floats, then inline content.
+	for _, g := range lv.blocks {
+		p.decorations(g)
+	}
+	for _, g := range lv.floats {
+		p.unit(g)
+	}
+	for _, g := range lv.content {
+		p.content(g)
+	}
+
+	// Steps 7 and 8: everything positioned, in z order. The two steps are one
+	// loop because the sort has already put the zeroes before the positives and
+	// there is nothing between them.
+	for ; at < len(lv.positioned); at++ {
+		p.stackLevel(lv.positioned[at])
+	}
+}
+
+// stackLevel paints one positioned box, as a context of its own or as a unit.
+//
+// The choice is §9.9's: a z-index that is not auto makes a stacking context, and
+// everything inside it — including its positioned descendants, however extreme
+// their z-index — is sealed within it. A z-index of auto does not, so the box is
+// painted as a unit and its positioned descendants have already been hoisted
+// into the enclosing context by gather.
+func (p *painter) stackLevel(s stackLevel) {
+	if s.frag.Box.ZAuto {
+		p.unit(s.frag)
+		return
+	}
+	p.stackingContext(s.frag)
+}
+
+// unit paints a fragment and its non-positioned content as one indivisible
+// group, in the same block-float-text layering a stacking context uses for its
+// own content.
+//
+// It is what a float is painted by (§E.2 step 5) and what a positioned box with
+// "z-index: auto" is painted by (step 7): both are atomic with respect to their
+// surroundings and neither seals its positioned descendants in.
+func (p *painter) unit(f *Fragment) {
+	lv := &layers{}
+	p.gather(f, lv, true, false)
+
+	p.decorations(f)
+	for _, g := range lv.blocks {
+		p.decorations(g)
+	}
+	for _, g := range lv.floats {
+		p.unit(g)
+	}
+	for _, g := range lv.content {
+		p.content(g)
+	}
+}
+
+// gather walks a subtree and sorts what it finds into Appendix E's layers.
+//
+// root says whether f itself is the thing being painted, whose own background is
+// step 1 rather than step 4. collect says whether positioned descendants belong
+// to this walk's layers: they do when it is collecting for a stacking context,
+// and they do not when it is collecting for a unit, because a unit's positioned
+// descendants were hoisted into the enclosing context before it was painted.
+func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
+	if f.Box == nil {
+		return
+	}
+	if !root {
+		lv.blocks = append(lv.blocks, f)
+	}
+	if len(f.Lines) > 0 || f.Marker != nil {
+		lv.content = append(lv.content, f)
+	}
+	for _, c := range f.Children {
+		if c.Box == nil {
+			continue
+		}
+		if c.Box.Position.positioned() {
+			if !collect {
+				// Already hoisted; painting it here as well would draw it twice.
+				continue
+			}
+			lv.positioned = append(lv.positioned, stackLevel{
+				frag: c, z: levelOf(c), order: c.Box.Order,
+			})
+			if c.Box.ZAuto {
+				// Not a stacking context, so the positioned boxes inside it
+				// belong to this one. Without this hoist a "z-index: 5" inside a
+				// plain "position: relative" wrapper would be trapped under
+				// everything the wrapper is under, which is the bug that makes
+				// authors write z-indexes in the thousands.
+				p.hoist(c, lv)
+			}
+			continue
+		}
+		if c.Box.Float != FloatNone {
+			lv.floats = append(lv.floats, c)
+			if collect {
+				// A float is atomic for its own content and transparent for its
+				// positioned descendants: §E.2 step 5 says so in as many words,
+				// and it is what stops a float trapping a positioned box behind
+				// the text of the paragraph beside it.
+				p.hoist(c, lv)
+			}
+			continue
+		}
+		p.gather(c, lv, false, collect)
+	}
+}
+
+// hoist finds the positioned boxes inside a subtree that is painted as a unit,
+// so that they take their place in the enclosing stacking context instead.
+func (p *painter) hoist(f *Fragment, lv *layers) {
+	for _, c := range f.Children {
+		if c.Box == nil {
+			continue
+		}
+		if c.Box.Position.positioned() {
+			lv.positioned = append(lv.positioned, stackLevel{
+				frag: c, z: levelOf(c), order: c.Box.Order,
+			})
+			if c.Box.ZAuto {
+				p.hoist(c, lv)
+			}
+			continue
+		}
+		p.hoist(c, lv)
+	}
+}
+
+// levelOf is a box's stacking level: its z-index, with auto counted as zero for
+// ordering. See stackLevel.z.
+func levelOf(f *Fragment) int {
+	if f.Box.ZAuto {
+		return 0
+	}
+	return f.Box.ZIndex
+}
+
+// sortLevels orders the positioned boxes by z-index and then by tree order.
+//
+// Ascending, so the most negative is painted first and the largest last, which
+// is the whole of what a z-index means. The tie-break is tree order and not
+// something arbitrary: two boxes at the same level are stacked back to front in
+// the order they were written, which is the rule that makes overlapping cards in
+// a list read correctly without any of them naming a number.
+func sortLevels(levels []stackLevel) {
+	sort.SliceStable(levels, func(i, j int) bool {
+		if levels[i].z != levels[j].z {
+			return levels[i].z < levels[j].z
+		}
+		return levels[i].order < levels[j].order
+	})
+}
+
+// decorations paints a box's own background and border, which is what §E.2 steps
+// 1 and 4 both consist of.
+func (p *painter) decorations(f *Fragment) {
+	if f.Box == nil {
+		return
+	}
 	// The background paints over the padding box — under the border, not under
 	// the margin. A background that covered the margin would bleed into the gap
 	// between two boxes, which is the space that is meant to show the page.
 	if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
 		p.ops = append(p.ops, FillRect{Rect: f.PaddingRect(), Color: bg})
 	}
-
 	p.borders(f)
+}
 
+// content paints the inline-level marks a fragment carries: its list marker and
+// its line boxes, which are §E.2 step 6.
+//
+// The marker is here rather than with the decorations because it is text. A
+// marker painted with the backgrounds would be covered by the background of any
+// box painted after it in step 4, which for an "outside" marker — one that sits
+// in the margin, outside its own list item — is a real overlap rather than a
+// theoretical one.
+func (p *painter) content(f *Fragment) {
 	if m := f.Marker; m != nil && m.Face != nil {
 		p.ops = append(p.ops, DrawText{
 			At: Point{
@@ -98,10 +358,6 @@ func (p *painter) fragment(f *Fragment) {
 			},
 			Text: m.Text, Face: m.Face, Size: m.Size, Color: m.Color,
 		})
-	}
-
-	for _, child := range f.Children {
-		p.fragment(child)
 	}
 	p.lines(f)
 }
@@ -176,7 +432,10 @@ func (p *painter) lines(f *Fragment) {
 				colour = style.RGBA{A: 1}
 			}
 			p.ops = append(p.ops, DrawText{
-				At:    Point{X: content.X.Add(line.Rect.X).Add(run.X), Y: baseline},
+				At: Point{
+					X: content.X.Add(line.Rect.X).Add(run.X).Add(run.Offset.X),
+					Y: baseline.Add(run.Offset.Y),
+				},
 				Text:  run.Text,
 				Face:  run.Face,
 				Size:  run.Size,

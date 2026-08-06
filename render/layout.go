@@ -64,6 +64,19 @@ type Fragment struct {
 	// on the item's position among its siblings, which is not a property of the
 	// box.
 	Marker *Marker
+
+	// Offset is CSS 2.1 §9.4.3's relative displacement: how far the box is drawn
+	// from where the flow put it.
+	//
+	// It is carried rather than folded into BorderRect because folding it in
+	// during layout would be the classic way to get relative positioning wrong.
+	// A relatively positioned box still *occupies* its original space, so every
+	// question layout asks afterwards — where the next sibling goes, how tall
+	// the parent is, which band a line box has — must be answered against the
+	// unoffset position. Applying the offset in absolutise, which visits each
+	// fragment once and already translates each subtree by its parent's origin,
+	// moves the box and everything inside it and moves nothing else.
+	Offset Point
 }
 
 // ContentRect is the area the children were laid out in.
@@ -100,6 +113,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		reportedGlyphs:   map[string]bool{},
 		reportedOverflow: map[string]bool{},
 		intrinsic:        map[*Box]intrinsicWidths{},
+		positioned:       map[*Box]*Fragment{},
 		fontSet:          set,
 	}
 	if l.fontSet == nil {
@@ -109,7 +123,13 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	// float in the document can escape the page. The context handed in here is
 	// therefore a placeholder that nothing will ever be put in — block() makes a
 	// fresh one for any box that establishes a context, and the root is one.
-	frag, m := l.block(root, avail.W, flow{ctx: &floatContext{}})
+	// The initial containing block is the page's content box: this engine has
+	// one page whose size is settled before layout runs, so unlike a viewport it
+	// has a definite height, and a percentage resolved against it is a number
+	// rather than an indefinite value that computes to auto.
+	page := Rect{W: avail.W, H: avail.H}
+	frag, m := l.block(root, avail.W,
+		flow{ctx: &floatContext{}, cbHeight: avail.H, cbDefinite: true})
 
 	// Layout runs in coordinates relative to each parent's content box, because
 	// a box's position is not known until its margins have finished collapsing
@@ -128,6 +148,31 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	}
 
 	absolutise(frag, 0, m.top)
+
+	// Everything out of flow is placed now, against a tree that is already in
+	// page coordinates. That ordering is the whole design of position.go: an
+	// absolutely positioned box resolves against an *ancestor's* box, which does
+	// not exist as a rectangle until this point, and it may do so because
+	// nothing in the flow depends on it in return.
+	l.placeAbsolutes(page)
+
+	// The root element is the one box the walk above cannot take out of the
+	// flow, because nothing walked *to* it: it is where layout starts, it has no
+	// parent to record a static position against, and its fragment is the return
+	// value rather than a child of anything. "html { position: absolute }" is
+	// rare enough that giving Layout a second entry point for it would be
+	// machinery for a corner — but laying it out in the flow and saying nothing
+	// is the silent approximation this engine exists not to make.
+	if root.Position.outOfFlow() {
+		l.rec.ReportDetail(Finding{
+			Rule:   RulePositionApproximated,
+			Source: AtHTML(offsetOf(root)),
+			Message: "the root element is taken out of the flow, but it is what the " +
+				"flow starts from; it was laid out in place and its offsets were not applied",
+			Path:     PathOf(root.Element),
+			Property: "position",
+		})
+	}
 	return frag
 }
 
@@ -150,6 +195,16 @@ type layouter struct {
 	// intrinsic memoizes the two content-based widths of a box, which are what
 	// a float with an auto width is sized by.
 	intrinsic map[*Box]intrinsicWidths
+	// deferred holds the out-of-flow boxes met during the walk, to be placed
+	// once the tree is in absolute coordinates. See position.go for why they
+	// can wait and floats cannot.
+	deferred []absCandidate
+	// positioned maps each positioned box to its fragment, which is how an
+	// absolutely positioned box finds the containing block §10.1 gives it. It is
+	// a map rather than a walk up the fragment tree because a fragment does not
+	// know its parent — layout builds downwards — and giving it one would add a
+	// pointer to every fragment to answer a question a handful of boxes ask.
+	positioned map[*Box]*Fragment
 	// fontSet is where faces come from.
 	fontSet FontSet
 	// relayouts counts the subtrees that had to be laid out a second time
@@ -184,12 +239,19 @@ type collapsed struct {
 
 // absolutise turns positions relative to each parent's content box into absolute
 // page coordinates, in one pass over the finished tree.
+//
+// It is also where §9.4.3's relative offset is applied, and the two belong
+// together: the offset is a translation of a whole subtree, which is precisely
+// what this walk already performs at every level. Adding it here means a
+// relatively positioned box carries its descendants with it for free and moves
+// nothing else at all, because by the time this runs every position in the flow
+// has already been decided against the unoffset geometry.
 func absolutise(f *Fragment, x, y style.Unit) {
 	if f == nil {
 		return
 	}
-	f.BorderRect.X = f.BorderRect.X.Add(x)
-	f.BorderRect.Y = f.BorderRect.Y.Add(y)
+	f.BorderRect.X = f.BorderRect.X.Add(x).Add(f.Offset.X)
+	f.BorderRect.Y = f.BorderRect.Y.Add(y).Add(f.Offset.Y)
 
 	content := f.ContentRect()
 	for _, c := range f.Children {
@@ -208,12 +270,34 @@ func absolutise(f *Fragment, x, y style.Unit) {
 // reached. The caller cannot supply the box's own left edge because that depends
 // on margins which may be auto, and auto margins are resolved here.
 func (l *layouter) block(b *Box, containing style.Unit, at flow) (*Fragment, collapsed) {
+	return l.blockIn(b, containing, at, nil)
+}
+
+// blockIn is block layout with the option of having the box's width, margins and
+// height decided by the caller instead of by its own declarations.
+//
+// The only caller that supplies them is the absolute placement of position.go,
+// whose §10.3.7 constraint resolves a width against a containing block this walk
+// cannot see. Routing it through the same function rather than giving it a
+// layout of its own is deliberate: margin collapsing, floats, line breaking,
+// list markers and the height rules are identical for an absolutely positioned
+// box, and a second implementation of them would agree with this one on the day
+// it was written and on no day after.
+func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
+	forced *forcedGeometry) (*Fragment, collapsed) {
+
 	margin := l.edges(b, "margin", containing)
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", containing)
 
 	width := l.resolveWidth(b, margin, border, padding, containing, &margin)
 	declaredHeight, hasHeight := l.explicitHeight(b, containing)
+	if forced != nil {
+		margin, width = forced.margin, forced.width
+		if forced.hasHeight {
+			declaredHeight, hasHeight = forced.height, true
+		}
+	}
 
 	// A box that establishes a block formatting context seals both its edges.
 	// CSS 2.1 §8.3.1 puts it the other way round — the margins of such a box do
@@ -241,6 +325,16 @@ func (l *layouter) block(b *Box, containing style.Unit, at flow) (*Fragment, col
 			W: width.Add(padding.Horizontal()).Add(border.Horizontal()),
 		},
 	}
+	if b.Position == PositionRelative {
+		frag.Offset = l.relativeOffset(b, containing, at.cbHeight, at.cbDefinite)
+	}
+	if b.Position.positioned() {
+		// Recorded even for a box that is only relatively positioned, because
+		// §10.1 makes any positioned ancestor a containing block — that is the
+		// entire reason the "position: relative with no offsets" wrapper is an
+		// idiom rather than a no-op.
+		l.positioned[b] = frag
+	}
 
 	// Where this box's children are laid out, in the coordinates of the
 	// formatting context they belong to.
@@ -249,15 +343,24 @@ func (l *layouter) block(b *Box, containing style.Unit, at flow) (*Fragment, col
 	// margins: a float has to be contained by the page whatever else is true,
 	// and the root's relationship to the canvas — which is what its margin
 	// behaviour is about — is a separate question this does not touch.
+	//
+	// The containing block a child resolves a percentage offset against is this
+	// box's content box, and whether its height is *definite* is a separate
+	// question from what the height turns out to be: a box sized by its content
+	// has no height to take a percentage of while its children are still being
+	// laid out, and CSS 2.1 makes such a percentage compute to auto rather than
+	// to the number the content later happens to produce.
 	inner := flow{
-		ctx: at.ctx,
-		x:   at.x.Add(margin.Left).Add(border.Left).Add(padding.Left),
-		y:   at.y.Add(border.Top).Add(padding.Top),
+		ctx:        at.ctx,
+		x:          at.x.Add(margin.Left).Add(border.Left).Add(padding.Left),
+		y:          at.y.Add(border.Top).Add(padding.Top),
+		cbHeight:   declaredHeight,
+		cbDefinite: hasHeight,
 	}
 	own := at.ctx
 	if sealed || b.Parent == nil {
 		own = &floatContext{}
-		inner = flow{ctx: own}
+		inner = flow{ctx: own, cbHeight: declaredHeight, cbDefinite: hasHeight}
 	}
 
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
@@ -339,7 +442,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			listIndex++
 		}
 
-		if child.Float != FloatNone {
+		if child.outOfFlow() {
 			// A float's margin box goes at the flow position, and its margins
 			// collapse with nothing — so the pending margin is committed for it
 			// without being consumed, and the box after it still collapses with
@@ -352,6 +455,16 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			offset := pending
 			if topOpen && !hoisted {
 				offset = 0
+			}
+			if child.Position.outOfFlow() {
+				// The same position, kept rather than used: this is the *static*
+				// position of §10.6.4, where the box's margin box would have
+				// started had it been in the flow, and it is the answer §10.3.7
+				// falls back on when neither offset on an axis was given. It can
+				// only be recorded here, because nothing after the walk knows
+				// where in the flow the box was written.
+				l.deferAbsolute(child, parent, 0, y.Add(offset), listIndex)
+				continue
 			}
 			parent.Children = append(parent.Children,
 				l.floatChild(child, width, origin, y.Add(offset), style.MaxUnit, 0, listIndex))
@@ -374,6 +487,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		est = est.Add(l.clearanceAt(child, origin, est))
 
 		mark, consulted := origin.ctx.mark(), origin.ctx.consulted
+		absMark := len(l.deferred)
 		cf, cm := l.block(child, width, origin.at(est))
 		// Whether the *subtree* read the float geometry, captured before the
 		// clearance query below adds a read of its own.
@@ -403,7 +517,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			// position, because it still exists.
 			pending = collapse(pending, cm.bottom)
 			at := y.Add(pending)
-			cf = l.settle(child, width, origin, cf, est, at, mark, subtreeRead)
+			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
 			cf.BorderRect.Y = at
 			if child.ListItem {
 				cf.Marker = l.markerFor(child, cf, listIndex)
@@ -421,7 +535,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		}
 
 		at := y.Add(pending).Add(clearance)
-		cf = l.settle(child, width, origin, cf, est, at, mark, subtreeRead)
+		cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
 		if child.ListItem {
 			cf.Marker = l.markerFor(child, cf, listIndex)
 		}
@@ -464,7 +578,10 @@ func hasInlineChild(b *Box) bool {
 
 // at moves the flow position without changing the containing block.
 func (f flow) at(y style.Unit) flow {
-	return flow{ctx: f.ctx, x: f.x, y: f.y.Add(y)}
+	return flow{
+		ctx: f.ctx, x: f.x, y: f.y.Add(y),
+		cbHeight: f.cbHeight, cbDefinite: f.cbDefinite,
+	}
 }
 
 // ownTopMargin is a box's own declared top margin, before anything collapses
@@ -570,7 +687,7 @@ var maxRelayouts = 4096
 // and the render says it stopped short, which is a page that is slightly wrong
 // and says so rather than one that took unbounded time to be right.
 func (l *layouter) settle(child *Box, width style.Unit, origin flow, cf *Fragment,
-	predicted, actual style.Unit, mark int, read bool) *Fragment {
+	predicted, actual style.Unit, mark, absMark int, read bool) *Fragment {
 
 	delta := actual.Sub(predicted)
 	if delta == 0 || origin.ctx.mark() == mark && !read {
@@ -589,6 +706,11 @@ func (l *layouter) settle(child *Box, width style.Unit, origin flow, cf *Fragmen
 
 	l.relayouts++
 	origin.ctx.boxes = origin.ctx.boxes[:mark]
+	// The out-of-flow boxes the discarded layout found are discarded with it.
+	// Without this they would be placed twice — once against a fragment that is
+	// about to be thrown away — and the page would carry a ghost of every
+	// absolutely positioned box inside a subtree that had to be laid out again.
+	l.deferred = l.deferred[:absMark]
 	again, _ := l.block(child, width, origin.at(actual))
 	return again
 }
