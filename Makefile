@@ -1,4 +1,4 @@
-.PHONY: wpt test-wpt clean-wpt css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests bidi-tests test-bidi clean-bidi-tests bidi-tables clean-bidi-tables
+.PHONY: noto-fonts clean-noto-fonts wpt test-wpt clean-wpt css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests bidi-tests test-bidi clean-bidi-tests bidi-tables clean-bidi-tables
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -208,6 +208,56 @@ css-colors:
 
 clean-css-colors:
 	rm -f $(CSS_COLOR_SPEC)
+
+# Noto, for the scripts the fourteen standard PDF faces do not have.
+#
+# Those fourteen cover Latin and nothing else, so a document with a Hebrew word
+# or a kana in it gets a face that cannot encode the letters — and since the
+# encoder substitutes a space for anything it cannot represent, the word is
+# absent from the page rather than showing as boxes anyone would notice. The
+# reftest harness hands these to the engine through FallbackFontSet.
+#
+# Measured against the suite: the three between them cover 81% of the characters
+# the standard faces are missing and clear 64% of the documents that report one,
+# against 50% for the best single font tried (DejaVu Sans) and 32% for a
+# monospaced one (Cascadia Mono). Coverage per character is a poor guide —
+# a document stops reporting only when *every* character it uses is covered, so
+# the two commonest characters decide more than the long tail does.
+#
+# Licensing: all three are SIL Open Font License 1.1, which is why they were
+# chosen over DejaVu Sans — it scores better on characters and is under the
+# Bitstream Vera licence instead. As with Ahem, pdf0 neither vendors nor
+# redistributes them: they are fetched into this gitignored directory, used only
+# to run the tests, and no font bytes ship in this repository or anything it
+# builds. The licence text is fetched alongside them.
+#
+# The Japanese face is the variable TTF and not one of the static OTFs, because
+# those are CID-keyed CFF and forme does not read them. forme instantiates it at
+# the font's default, which its name table reports as Thin — so CJK set through
+# this fallback is lighter than it should be. It is a fallback for text that
+# would otherwise be invisible, and the weight being wrong is worth saying out
+# loud rather than leaving to be discovered.
+NOTO_DIR := testdata/fonts-noto
+NOTO_BASE := https://raw.githubusercontent.com/notofonts
+NOTO_FILES := NotoSans-Regular.ttf NotoSansHebrew-Regular.ttf NotoSansJP-VF.ttf
+
+noto-fonts: $(NOTO_DIR)/.ok
+
+$(NOTO_DIR)/.ok:
+	mkdir -p $(NOTO_DIR)
+	curl -sSf -o $(NOTO_DIR)/NotoSans-Regular.ttf \
+	  $(NOTO_BASE)/notofonts.github.io/main/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf
+	curl -sSf -o $(NOTO_DIR)/NotoSansHebrew-Regular.ttf \
+	  $(NOTO_BASE)/notofonts.github.io/main/fonts/NotoSansHebrew/hinted/ttf/NotoSansHebrew-Regular.ttf
+	curl -sSf -o $(NOTO_DIR)/NotoSansJP-VF.ttf \
+	  $(NOTO_BASE)/noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
+	curl -sSf -o $(NOTO_DIR)/OFL.txt \
+	  $(NOTO_BASE)/noto-cjk/main/Sans/LICENSE
+	touch $@
+
+clean-noto-fonts:
+	rm -rf $(NOTO_DIR)
+
 
 # Unicode's own conformance data for the bidirectional algorithm, UAX #9, which
 # internal/bidi's conformance_test.go runs in full.

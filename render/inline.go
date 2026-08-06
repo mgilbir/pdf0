@@ -1009,7 +1009,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 // each, applying the half of §4.1.1 that could not be done per node.
 func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inlineItem, inlineState) {
 	offset := frame.offset
-	face, ok := l.fontFor(b)
+	face, ok := l.faceForText(b)
 	if !ok {
 		return nil, in
 	}
@@ -1612,7 +1612,7 @@ func (l *layouter) checkGlyphs(b *Box, face *fonts.Face) {
 	// Shaping the whole run first is also what makes this cheap: the answer is
 	// almost always that nothing is missing, and only then is it worth walking
 	// the characters to find out which.
-	if _, missing := face.Shape(b.Text); missing == 0 {
+	if !missesVisible(face, b.Text) {
 		return
 	}
 	for _, r := range b.Text {
@@ -1692,6 +1692,34 @@ func strconvFormat(v float64) string {
 	return strconv.FormatFloat(float64(int(v*10+0.5))/10, 'f', -1, 64)
 }
 
+// missesVisible reports whether a face cannot set some character of text that
+// would have put ink on the page.
+//
+// It is one predicate rather than two because it has two callers that must not
+// disagree: the guardrail that reports a missing glyph, and the fallback that
+// goes looking for a face which has it. They did disagree, briefly, and the
+// result was the fallback substituting a whole different font for a paragraph
+// whose only "missing" character was a no-break space — changing every metric on
+// the page to fix nothing. Asking the same question twice in two ways is how
+// that happens, so it is asked once.
+//
+// Shaping the whole run first is what keeps it cheap: the answer is almost
+// always no, and only then is it worth walking the characters.
+func missesVisible(face *fonts.Face, text string) bool {
+	if _, missing := face.Shape(text); missing == 0 {
+		return false
+	}
+	for _, r := range text {
+		if r == '\n' || r == '\t' || marksNoPaper(r) {
+			continue
+		}
+		if _, missing := face.Shape(string(r)); missing > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // marksNoPaper reports whether a character is a space by definition.
 //
 // A face that cannot encode one of these is not a problem to report. The encoder
@@ -1734,4 +1762,60 @@ func marksNoPaper(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// faceForText is fontFor, with a substitution when the family the document asked
+// for cannot set the text.
+//
+// The standard fourteen faces cover Latin and nothing else, so a document with a
+// Hebrew word in it gets a face that cannot encode the letters — and the encoder
+// substitutes a space for each, which means the word is absent from the page and
+// from the text extracted out of it rather than showing as boxes a reader would
+// notice. That is what checkGlyphs reports, and reporting it is not the same as
+// fixing it: a caller that has a face with the letters should be able to say so.
+//
+// FallbackFontSet is how it says so, and this is the only place that asks. The
+// substitution is reported, because it changes the metrics and therefore where
+// every line breaks — the same reason a missing family is reported.
+//
+// Two limits, both deliberate and both visible in what they leave behind:
+//
+// It is per box. A box whose text mixes scripts that no single face covers keeps
+// the family's face and reports the missing glyphs, because choosing one face
+// for the box cannot help it. Cutting a run into per-face pieces is what
+// fonts.Stack does and it reaches into measurement, line breaking and the
+// content stream; until that exists, this handles the common shape — a run of
+// text that is all one script.
+//
+// It is cached per box rather than per family, because the answer depends on the
+// text. Shaping a run to find out whether it is covered is not free, and
+// itemsFor is on the hot path.
+func (l *layouter) faceForText(b *Box) (*fonts.Face, bool) {
+	face, ok := l.fontFor(b)
+	if !ok || b.Text == "" {
+		return face, ok
+	}
+	if got, cached := l.textFaces[b]; cached {
+		return got, got != nil
+	}
+	chosen := face
+	if missesVisible(face, b.Text) {
+		if set, canFall := l.fontSet.(FallbackFontSet); canFall {
+			bold := isBold(b.Style["font-weight"])
+			italic := isItalic(b.Style["font-style"])
+			if alt, found := set.FaceFor(b.Text, bold, italic); found {
+				chosen = alt
+				l.rec.ReportDetail(Finding{
+					Rule: RuleFontFallback,
+					Message: "no face for " + quoteValue(b.Style["font-family"]) +
+						" could set this text, so " + quoteValue(alt.Name()) +
+						" was used for it; the metrics and the line breaks will differ",
+					Path:     PathOf(b.Element),
+					Property: "font-family",
+				})
+			}
+		}
+	}
+	l.textFaces[b] = chosen
+	return chosen, true
 }

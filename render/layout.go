@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/pdf0/css"
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -124,6 +125,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		rec: rec, avail: avail,
 		lengths:          map[lengthKey]style.Length{},
 		fonts:            map[fontKey]resolvedFont{},
+		textFaces:        map[*Box]*fonts.Face{},
 		measured:         map[measureKey]style.Unit{},
 		reportedScripts:  map[string]bool{},
 		reportedGlyphs:   map[string]bool{},
@@ -213,6 +215,9 @@ type layouter struct {
 	// almost always one of a handful. The key includes the font size because
 	// that is what an em resolves against.
 	lengths map[lengthKey]style.Length
+	// textFaces memoizes the face a text box is actually set in, which is not
+	// the family's face when the family cannot cover the text. See faceForText.
+	textFaces map[*Box]*fonts.Face
 	// fonts and measured memoize the two things inline layout asks for most: a
 	// face for a style, and the width of a string in one.
 	fonts    map[fontKey]resolvedFont
