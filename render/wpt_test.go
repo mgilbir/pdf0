@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -239,7 +240,38 @@ const wptEnv = "WPT_TESTS"
 //     which means it counts when it fits. This engine hung it unconditionally
 //     and a unit test asserted that it should, which is the second time this
 //     repository has found a test pinning a bug rather than a rule.
-const wptCleanPassBaseline = 3266
+//
+// Block layout and floats took it from 3132 to 3254, and for the fourth time in
+// this file the larger half of the number is not about layout. The two were
+// measured separately, by running the finished engine with the harness's
+// resource resolver put back the way it was:
+//
+//   - the *harness* accounts for 89 of it, 3132 to 3221, and failures from 1812
+//     to 1724 — 100 tests stopped failing and one started. It is the note on
+//     newSuiteResolver: the suite keeps its shared references in
+//     css/CSS2/reference/ and its images in css/CSS2/support/, so every one of
+//     those references writes "../support/black96x96.png" and every one was
+//     refused by a resolver rooted at the reference's own directory. 149 tests
+//     share ref-filled-black-96px-square.xht alone, and each was failing
+//     because the *reference* drew six words of alt text that the test document
+//     had no counterpart for. Not one pixel of engine output changed.
+//   - the *layout* accounts for the other 33, 3221 to 3254, and failures from
+//     1724 to 1691. 33 tests stopped failing and none started, counted by name
+//     over the whole suite rather than netted.
+//
+// The one test that started failing is worth naming for the usual reason:
+// inline-svg-100-percent-in-body's reference can now load the SVG it names, and
+// this engine does not render SVG. It was passing because neither document drew
+// the picture, and it fails honestly now.
+//
+// What the 33 are: §8.3.1's rule that a float between two blocks does not stop
+// their margins collapsing, which was defeated in every real document by the
+// newline after the tag (see wrapInlines); §8.3.1's clearance separating a
+// margin from its parent's; §4.2's rule that a declaration with an illegal
+// value is dropped rather than clamped, which the sizing properties needed; and
+// §9.5's rule that a box establishing a formatting context may not overlap a
+// float.
+const wptCleanPassBaseline = 3447
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -380,8 +412,8 @@ func pageClip() Rect {
 //
 // The ops are returned rather than a canonical string because the comparison
 // resolves occlusion, and occlusion depends on paint order — see picture_test.go.
-func renderForCompare(path string) (ops []Op, clean bool, err error) {
-	data, err := os.ReadFile(path)
+func renderForCompare(root, file string) (ops []Op, clean bool, err error) {
+	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, false, err
 	}
@@ -390,14 +422,30 @@ func renderForCompare(path string) (ops []Op, clean bool, err error) {
 	// The suite's documents refer to real files beside them — most of the
 	// references draw their expected picture with
 	// "<img src=support/blue15x15.png width=5 height=96>" — so the harness
-	// roots a resolver at the directory the document was read from. That is the
-	// caller opting in, which is the only way an image is ever loaded: the
-	// engine's own default is to load nothing, and nothing here changes it.
+	// hands the engine a resolver. That is the caller opting in, which is the
+	// only way an image is ever loaded: the engine's own default is to load
+	// nothing, and nothing here changes it.
 	//
-	// A reference that leaves that directory is refused by the resolver exactly
-	// as it would be for any other caller, so a test document cannot read the
-	// checkout.
-	res, err := NewDirResolver(filepath.Dir(path))
+	// The resolver is rooted at the *checkout* and resolves each reference
+	// against the directory the document was read from, which is what a browser
+	// does and is not what an earlier version of this harness did. Rooting at
+	// the document's own directory looked like the stricter choice and was
+	// measurably the wrong one: the suite keeps its shared references in
+	// css/CSS2/reference/ and its images in css/CSS2/support/, so every one of
+	// those references writes "../support/black96x96.png" and every one of them
+	// was refused. 149 tests share ref-filled-black-96px-square.xht alone, and
+	// each was failing because the *reference* drew six words of alt text that
+	// the test document had no counterpart for. That is the fourth time this
+	// file has recorded a large block of failures that were about the harness
+	// rather than about the engine; see the note on the ratchet.
+	//
+	// Containment is still real and still enforced by os.Root: a reference that
+	// leaves the checkout is refused, and the engine's own DirResolver policy —
+	// no scheme, no absolute path, no escape — is unchanged. What the harness
+	// adds is the document-relative join a browser performs, and it performs it
+	// here rather than in the engine because the engine deliberately has no
+	// notion of a base URL.
+	res, err := newSuiteResolver(root, filepath.Dir(file))
 	if err != nil {
 		return nil, false, err
 	}
@@ -406,7 +454,7 @@ func renderForCompare(path string) (ops []Op, clean bool, err error) {
 	built := Build(Input{HTML: src, Resources: res})
 
 	rec := NewRecorder(nil)
-	root := Layout(built.Root, A4.Content(), fontSetForWPT(), rec)
+	laid := Layout(built.Root, A4.Content(), fontSetForWPT(), rec)
 
 	clean = true
 	for _, f := range built.Findings {
@@ -420,7 +468,7 @@ func renderForCompare(path string) (ops []Op, clean bool, err error) {
 		}
 	}
 
-	ops = Paint(root)
+	ops = Paint(laid)
 	// A document that paints nothing cannot be evidence of anything. Two blank
 	// pages match, which is the purest form of the vacuous pass §7.1 warns
 	// about, and no amount of finding-counting detects it.
@@ -433,6 +481,69 @@ func renderForCompare(path string) (ops []Op, clean bool, err error) {
 	// colour on the other. See blockglyph_test.go for the rule and for what it
 	// refuses.
 	return blockFills(ops), clean, nil
+}
+
+// suiteResolver serves a suite document the files it refers to, from anywhere
+// inside the checkout and from nowhere else.
+//
+// It is the harness's stand-in for a browser's base URL: the engine is handed
+// the reference exactly as the document wrote it, and the engine has no idea
+// which directory the document came from, so somebody has to join the two. A
+// browser does it when it resolves the URL. Doing it here keeps the engine's
+// resolver contract — a relative path with no scheme and no escape — exactly as
+// it is for every other caller.
+//
+// The join is done on the *undecoded* reference and the result is cleaned, so a
+// ".." that stays inside the checkout is resolved away and one that leaves it is
+// refused here. A ".." that is per-cent-escaped survives the clean untouched and
+// is then refused by the engine's own resourcePath after it decodes, which is
+// the second of the two mechanisms and the reason this does not rest on either
+// alone.
+type suiteResolver struct {
+	dir string // the document's directory, relative to the checkout, slash-separated
+	res *DirResolver
+}
+
+func newSuiteResolver(root, dir string) (*suiteResolver, error) {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return nil, err
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return nil, fmt.Errorf("%s is not inside the checkout at %s", dir, root)
+	}
+	res, err := NewDirResolver(root)
+	if err != nil {
+		return nil, err
+	}
+	return &suiteResolver{dir: rel, res: res}, nil
+}
+
+func (s *suiteResolver) Close() error { return s.res.Close() }
+
+func (s *suiteResolver) Resolve(ref string) ([]byte, error) {
+	// The refusals that must happen before anything is joined, because joining
+	// a directory onto "http://example/x" would turn a scheme into a plausible
+	// relative path and lose the reason for the refusal.
+	trimmed := strings.TrimSpace(ref)
+	if scheme, ok := schemeOf(trimmed); ok {
+		return nil, fmt.Errorf("render: %q names the %q scheme; this engine resolves no URLs", ref, scheme)
+	}
+	if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`) {
+		return nil, fmt.Errorf("render: %q is an absolute path", ref)
+	}
+	// A reference that climbs out of the checkout is refused, and it is refused
+	// by the engine's own resolver rather than here. path.Clean resolves away
+	// every ".." that stays inside and can only leave one at the *front*, so a
+	// joined path that escapes is exactly a joined path beginning with "..",
+	// which is what resourcePath already will not take.
+	//
+	// A second check here was written first and then deleted: planting the
+	// escape with it removed changed nothing, because it could never be the
+	// rule that decided. A guard that cannot decide anything reads as defence
+	// and is decoration, and this file has enough of that history already.
+	return s.res.Resolve(path.Clean(path.Join(s.dir, filepath.ToSlash(trimmed))))
 }
 
 // normaliseOps renders a display list as comparable text.
@@ -615,12 +726,12 @@ func TestWPTReftests(t *testing.T) {
 	var failed []string
 
 	for _, rt := range tests {
-		got, gotClean, err := renderForCompare(rt.test)
+		got, gotClean, err := renderForCompare(root, rt.test)
 		if err != nil {
 			broke++
 			continue
 		}
-		want, wantClean, err := renderForCompare(rt.ref)
+		want, wantClean, err := renderForCompare(root, rt.ref)
 		if err != nil {
 			broke++
 			continue
@@ -773,6 +884,89 @@ func TestWPTOracleHasTeeth(t *testing.T) {
 	b := []Op{a[1], a[0]}
 	if !pictureEqual(a, b, clip) {
 		t.Error("the same marks in a different order compared unequal")
+	}
+}
+
+// TestSuiteResolverReachesTheSupportDirectory pins what the harness's resolver
+// is for and what it still refuses.
+//
+// It is a test about the harness rather than about the engine, and it earns its
+// place because the thing it fixes was invisible for a long time: the suite
+// keeps its shared references in one directory and its images in another, so
+// every one of those references writes "../support/x.png". A resolver rooted at
+// the document's own directory refused all of them, the reference drew its alt
+// text instead of its picture, and 149 tests failed on six words the test
+// document had no counterpart for.
+//
+// The refusals are the other half and are the reason this is not simply "open
+// anything": a scheme is still a URL, an absolute path is still the filesystem,
+// and a reference that climbs out of the checkout is still refused — by
+// os.Root, which resolves each component at the system-call level, and by the
+// join here, which is checked so that the containment does not rest on one
+// mechanism.
+func TestSuiteResolverReachesTheSupportDirectory(t *testing.T) {
+	root := t.TempDir()
+	mkdir := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(root, p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, p), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkdir("suite/reference")
+	mkdir("suite/support")
+	write("suite/support/black.png", "pretend png")
+	write("suite/reference/beside.txt", "beside")
+	// Outside the checkout entirely, which is what the containment is about.
+	write("secret.txt", "not for the suite")
+
+	// The two files below are what make the scheme and absolute-path refusals
+	// *decidable*. Joining a directory onto a reference turns "/etc/passwd"
+	// into "reference/etc/passwd" and "http://host/x" into
+	// "reference/http:/host/x" — both perfectly good relative paths — so
+	// without a file at the other end the refusal cannot be told apart from a
+	// missing file, and a test that plants the bug watches it pass.
+	//
+	// That is not a hypothetical: both checks were planted and neither moved
+	// this test until these existed.
+	mkdir("suite/reference/etc")
+	write("suite/reference/etc/passwd", "reachable by a mangled absolute path")
+	mkdir("suite/reference/http:/example.invalid")
+	write("suite/reference/http:/example.invalid/x", "reachable by a mangled URL")
+
+	res, err := newSuiteResolver(filepath.Join(root, "suite"),
+		filepath.Join(root, "suite", "reference"))
+	if err != nil {
+		t.Fatalf("rooting the resolver: %v", err)
+	}
+	defer res.Close()
+
+	if got, err := res.Resolve("../support/black.png"); err != nil {
+		t.Errorf("a reference to the suite's support directory was refused: %v", err)
+	} else if string(got) != "pretend png" {
+		t.Errorf("read %q", got)
+	}
+	if _, err := res.Resolve("beside.txt"); err != nil {
+		t.Errorf("a reference beside the document was refused: %v", err)
+	}
+
+	for _, ref := range []string{
+		"../../secret.txt",            // out of the checkout
+		"../../../../../etc/passwd",   // and well out of it
+		"/etc/passwd",                 // absolute
+		"http://example.invalid/x",    // a URL
+		"file:///etc/passwd",          // a URL by another spelling
+		"..%2f..%2fsecret.txt",        // escaped, so the join cannot see it
+		"../support/../../secret.txt", // climbing after descending
+	} {
+		if _, err := res.Resolve(ref); err == nil {
+			t.Errorf("%q was resolved; it must be refused", ref)
+		}
 	}
 }
 

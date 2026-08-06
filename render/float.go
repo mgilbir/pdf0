@@ -259,6 +259,149 @@ func (fc *floatContext) place(size Size, side FloatSide, top, lo, hi style.Unit)
 	return rect
 }
 
+// avoidsFloats reports whether §9.5's non-overlap rule applies to a box.
+//
+// The rule names three kinds of box: "a table, a block-level replaced element,
+// or an element in the normal flow that establishes a new block formatting
+// context". The common thread is that none of them has line boxes at its own
+// level for the float to shorten, so the only way to keep the float visible is
+// to move the whole box.
+//
+// An ordinary block is deliberately not on the list, and that is the rule's
+// whole point: a plain <div> beside a float *does* overlap it, and only its
+// lines are shortened. An engine that moved every block would put a gap beside
+// every float where the specification puts running text.
+//
+// A box that is itself out of flow is excluded because it is placed by its own
+// rules — a float by §9.5.1, an absolutely positioned box by §10.3.7 — and both
+// of those already know about the floats they care about.
+func avoidsFloats(b *Box) bool {
+	if b == nil || b.outOfFlow() || b.Outer != OuterBlock {
+		return false
+	}
+	if b.Replaced != nil {
+		return true
+	}
+	return establishesBFC(b)
+}
+
+// avoidFloats places a box that may not overlap a float, returning how far below
+// the given position it had to drop and the width and margins it has to be laid
+// out with. A nil geometry means no float reaches it and the ordinary rules
+// apply unchanged.
+//
+// The two halves are the two things §9.5 permits: "implementations should clear
+// the said element by placing it below any preceding floats, but may place it
+// adjacent to such floats if there is enough space. They may even make the
+// border box of said element narrower than defined by section 10.3.3."
+//
+//   - A box whose width is its own — declared, or a percentage of its containing
+//     block — keeps that width and drops until a band is wide enough to hold it.
+//     A "width: 150px" box beside a 200px float in a 300px block will not fit in
+//     the 100px left, so it goes below the float at its full width rather than
+//     being squeezed.
+//   - A box with an auto width is narrowed to the band instead, which is what
+//     makes "overflow: hidden" the way to write a column beside a float.
+//
+// A table arrives here as the wrapper §17.4 put around it, which is a flow root
+// and has no width of its own — the declaration is on the table inside. So a
+// table beside a float always takes the second path and narrows, and the suite's
+// floats-wrap-bfc-005 says browsers drop a "width: 50%" table instead. That one
+// is left: asking the wrapper what the table declared means reaching through
+// §17.5.2, and the tests that turn on it are failing on their cell content as
+// well. It is named here rather than left to be discovered.
+//
+// top is where the box's border box would have gone, in the containing block's
+// coordinates; the return value is measured from there.
+func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
+	top style.Unit) (style.Unit, *forcedGeometry) {
+
+	if !avoidsFloats(b) || len(origin.ctx.boxes) == 0 {
+		return 0, nil
+	}
+	lo, hi := origin.x, origin.x.Add(containing)
+
+	margin := l.edges(b, "margin", containing)
+	// An auto margin gets no share of the slack next to a float: there is no
+	// slack, since the box is being fitted to a band rather than to its
+	// containing block.
+	if l.isAuto(b, "margin-left") {
+		margin.Left = 0
+	}
+	if l.isAuto(b, "margin-right") {
+		margin.Right = 0
+	}
+	fixed := margin.Horizontal().
+		Add(l.borderWidths(b).Horizontal()).
+		Add(l.paddingOf(b, containing).Horizontal())
+
+	// How wide a band the margin box needs. A box that can shrink needs only
+	// the room its own edges take, so it fits wherever there is any band at
+	// all — which is the difference between narrowing and dropping.
+	//
+	// The distinction is whether the used width depends on the room available.
+	// A declared width does not, so the box keeps it and drops. An auto width
+	// does, in both of its forms — filling the band, or shrinking to fit it — so
+	// the box narrows instead. Reading a shrink-to-fit width against the
+	// *containing block* and then insisting on it is the mistake worth naming:
+	// it turns every auto-width table beside a float into one that drops below
+	// it, which is what an earlier draft of this did.
+	declared, hasWidth := l.explicitWidth(b, containing)
+	if hasWidth {
+		declared = l.clampWidth(b, declared, containing)
+	}
+	need := fixed
+	if hasWidth {
+		need = declared.Add(fixed)
+	}
+
+	// Drop to the first band that holds it, exactly as a float does. The search
+	// steps from one float bottom to the next because that is where the set of
+	// bands changes; see nextBottomBelow.
+	y := origin.y.Add(top)
+	for {
+		left, right := origin.ctx.bandAt(y, lo, hi)
+		if right.Sub(left) >= need {
+			break
+		}
+		if left == lo && right == hi {
+			// The whole containing block is not wide enough, so no band below
+			// will be either. §9.5.1 rule 8's overflow, for the same reason.
+			break
+		}
+		next, ok := origin.ctx.nextBottomBelow(y)
+		if !ok {
+			break
+		}
+		y = next
+	}
+
+	drop := y.Sub(origin.y).Sub(top)
+	left, right := origin.ctx.bandAt(y, lo, hi)
+	if left == lo && right == hi {
+		// No float reaches this band, so nothing about the box's own width or
+		// position changes. Only the drop, if any, is the rule's doing.
+		return drop, nil
+	}
+
+	width := declared
+	if !hasWidth {
+		room := maxZero(right.Sub(left).Sub(fixed))
+		if b.TableWrapper {
+			// §17.4: the wrapper is as wide as the table's border box, and the
+			// table's auto width is settled against the room it has — which is
+			// now the band's rather than the containing block's.
+			width = l.shrinkToFit(b, room)
+		} else {
+			width = l.clampWidth(b, room, containing)
+		}
+	}
+	// The box goes against the near edge of the band. Its own left margin is
+	// still its own, so the shift is added to it rather than replacing it.
+	margin.Left = margin.Left.Add(left.Sub(lo))
+	return drop, &forcedGeometry{margin: margin, width: width}
+}
+
 // clearance returns the y a box with this clear value must start at or below.
 //
 // It is the bottom of the lowest float on a cleared side, and zero when there is
