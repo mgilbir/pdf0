@@ -127,18 +127,59 @@ func TestPictureToleratesRounding(t *testing.T) {
 	}
 }
 
+// picText is a run in ordinary black ink.
+//
+// The colour is not decoration here. A run is dropped from the comparison when
+// its ink is the colour of what it is drawn on, and a zero-valued RGBA is fully
+// transparent — so a DrawText built without one vanishes, and a test built that
+// way compares two empty pages and passes whatever the comparison does. That is
+// how this test first failed, which is the cheapest possible way to learn it.
+func picText(s string, x, y float64) Op {
+	return DrawText{
+		Text: s, At: Point{picPx(x), picPx(y)}, Size: picPx(16),
+		Color: style.RGBA{A: 1},
+	}
+}
+
 func TestPictureComparesText(t *testing.T) {
-	a := []Op{DrawText{Text: "Test", At: Point{picPx(8), picPx(29)}, Size: picPx(16)}}
-	b := []Op{DrawText{Text: "Text", At: Point{picPx(8), picPx(29)}, Size: picPx(16)}}
+	a := []Op{picText("Test", 8, 29)}
+	b := []Op{picText("Text", 8, 29)}
 	if pictureEqual(a, b, picPage) {
 		t.Error("two different words at the same place compared equal")
 	}
-	moved := []Op{DrawText{Text: "Test", At: Point{picPx(80), picPx(29)}, Size: picPx(16)}}
+	moved := []Op{picText("Test", 80, 29)}
 	if pictureEqual(a, moved, picPage) {
 		t.Error("the same word in two different places compared equal")
 	}
 	if !pictureEqual(a, a, picPage) {
 		t.Error("a display list did not compare equal to itself")
+	}
+}
+
+func TestPictureIgnoresInkTheColourOfThePaper(t *testing.T) {
+	// White text on bare page marks nothing, and a reference that simply does
+	// not draw it puts the same picture on the page. A whole family of tests is
+	// written that way — "color: white" to put content out of the way — and
+	// counting those runs made every one of the pairs differ over letters that
+	// neither document shows.
+	white := DrawText{
+		Text: "hidden", At: Point{picPx(20), picPx(40)}, Size: picPx(16),
+		Color: style.RGBA{R: 255, G: 255, B: 255, A: 1},
+	}
+	if !pictureEqual([]Op{white}, nil, picPage) {
+		t.Error("white text on bare page did not compare equal to no text at all")
+	}
+
+	// The rule has to stop exactly there. Black text on the same page is the
+	// most ordinary thing a document does, and dropping it would empty the
+	// comparison of everything it is for.
+	if pictureEqual([]Op{picText("visible", 20, 40)}, nil, picPage) {
+		t.Error("black text on bare page compared equal to no text at all")
+	}
+	// And white text over something dark is visible again.
+	overDark := []Op{picFill(0, 0, 200, 100, style.RGBA{A: 1}), white}
+	if pictureEqual(overDark, []Op{picFill(0, 0, 200, 100, style.RGBA{A: 1})}, picPage) {
+		t.Error("white text over a black box compared equal to the box alone")
 	}
 }
 

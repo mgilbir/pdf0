@@ -207,7 +207,7 @@ func intersect(a, b Rect) Rect {
 // different words at the same place compare equal — a false pass, and the
 // direction of error worth avoiding. Sorting is safe here in a way it is not for
 // rectangles, because overlapping text is not how any of these tests are built.
-func texts(ops []Op) []string {
+func texts(ops []Op, under []coloured) []string {
 	var out []string
 	for _, op := range ops {
 		v, ok := op.(DrawText)
@@ -215,6 +215,15 @@ func texts(ops []Op) []string {
 			// A space marks no paper. It is drawn so that text extraction
 			// works, and two documents may legitimately put a different number
 			// of them between the same visible glyphs.
+			continue
+		}
+		if invisibleInk(v, under) {
+			// Ink the same colour as what is under it makes no mark. This is
+			// not a nicety: a whole family of tests puts "color: white" on
+			// content it wants out of the way, and the reference beside it
+			// simply does not draw that content at all. Counting the run as a
+			// mark made every one of those pairs differ over letters neither
+			// document shows.
 			continue
 		}
 		out = append(out, fmt.Sprintf("text %q at %s,%s size %s",
@@ -266,6 +275,16 @@ func edgesY(lo, hi style.Unit, sets ...[]coloured) []style.Unit {
 	return out
 }
 
+// paper is what a page is before anything is drawn on it.
+//
+// Treating bare page as *transparent* was wrong in a way that only showed up
+// once documents started painting white deliberately. A reference that fills its
+// interior white and a test that leaves it alone put exactly the same picture on
+// exactly the same paper, and comparing them as white against nothing called
+// them different. Nothing is not a colour; on paper it is the colour of the
+// paper, and for a PDF page that is white.
+var paper = style.RGBA{R: 255, G: 255, B: 255, A: 1}
+
 // colourAt resolves what is visible at a point.
 //
 // The walk is from the front so that the common case — an opaque mark on top —
@@ -296,6 +315,11 @@ func colourAt(fs []coloured, x, y style.Unit) sample {
 			break
 		}
 	}
+	// Whatever light got through every mark falls on the page itself.
+	acc.R += paper.R * remaining
+	acc.G += paper.G * remaining
+	acc.B += paper.B * remaining
+	acc.A += remaining
 	return sample{c: acc}
 }
 
@@ -319,7 +343,8 @@ func sameColour(a, b style.RGBA) bool {
 // have shown: a mark outside it is not part of the picture, exactly as content
 // scrolled off the page is not.
 func pictureEqual(got, want []Op, clip Rect) bool {
-	gt, wt := texts(got), texts(want)
+	gf, wf := picFills(got), picFills(want)
+	gt, wt := texts(got, gf), texts(want, wf)
 	if len(gt) != len(wt) {
 		return false
 	}
@@ -329,7 +354,6 @@ func pictureEqual(got, want []Op, clip Rect) bool {
 		}
 	}
 
-	gf, wf := picFills(got), picFills(want)
 	xs := edges(clip.X, clip.X.Add(clip.W), gf, wf)
 	ys := edgesY(clip.Y, clip.Y.Add(clip.H), gf, wf)
 
@@ -353,4 +377,31 @@ func pictureEqual(got, want []Op, clip Rect) bool {
 		}
 	}
 	return true
+}
+
+// invisibleInk reports whether a run is the colour of what it is drawn on.
+//
+// The sample is taken at the run's origin, which is on the baseline at its left
+// edge — inside the run's own line and inside whatever box is behind it. A run
+// that begins over one colour and ends over another is not covered by this and
+// is compared as a mark, which is the safe direction: the risk of dropping a run
+// that is visible somewhere is worse than the risk of keeping one that is not.
+//
+// Transparent ink is included by the same rule, since a fully transparent run
+// leaves whatever is underneath exactly as it was.
+func invisibleInk(v DrawText, under []coloured) bool {
+	if v.Color.A == 0 {
+		return true
+	}
+	if v.Color.A < 1 {
+		// Partly transparent ink changes what is under it even when it is the
+		// same hue, and working out by how much is compositing the glyph
+		// coverage, which this comparison deliberately does not do.
+		return false
+	}
+	got := colourAt(under, v.At.X, v.At.Y)
+	if got.img != "" {
+		return false
+	}
+	return sameColour(got.c, v.Color)
 }

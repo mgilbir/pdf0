@@ -217,7 +217,7 @@ const wptEnv = "WPT_TESTS"
 // the property and once with an equivalent margin on an inline box. The engine
 // had letter-spacing and word-spacing exactly right and no inline margin at all,
 // so a third of that directory failed and read as a spacing fault.
-const wptCleanPassBaseline = 3132
+const wptCleanPassBaseline = 3251
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
