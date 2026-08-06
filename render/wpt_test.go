@@ -164,7 +164,23 @@ const wptEnv = "WPT_TESTS"
 // right-to-left *text* in it is tainted by glyph-missing whatever the ordering
 // does. What the 16 are is documents where "direction: rtl" moved Latin content —
 // the alignment, the over-constrained margins, and the order of the runs.
-const wptCleanPassBaseline = 2578
+//
+// Rectangle glyphs took it from 2578 to 2923, and not one line of layout changed
+// to do it — this is the third time this file has recorded the same lesson, and
+// the largest instance of it. The comparison was calling a run of Ahem a piece of
+// text and the identical black square beside it a fill, and ruling that a
+// difference. Failures fell from 2293 to 1930, and every one of the cases dumped
+// and read by hand was already correct to the layout unit. So the whole of this
+// number is honest reporting catching up with an engine that was already right,
+// and none of it is new ink on the page. See blockglyph_test.go.
+//
+// One test went the other way and is worth naming, because it is the same shape
+// as the border-collapse dozen above. lists/list-item-dynamic-color.html sets a
+// red marker and turns it green from a script; nothing here runs scripts, so it
+// cannot pass. It *was* passing, because the comparison could not see the square
+// at all. Drawing it made the test fail honestly. It carries no flags metadata,
+// so the harness has no way to skip it.
+const wptCleanPassBaseline = 2923
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -352,7 +368,12 @@ func renderForCompare(path string) (ops []Op, clean bool, err error) {
 	if normaliseOps(ops) == "" {
 		clean = false
 	}
-	return ops, clean, nil
+	// A run set in a face whose glyphs are filled rectangles is those
+	// rectangles, and has to reach the comparison as such — a quarter of this
+	// suite draws its expected square with Ahem on one side and a background
+	// colour on the other. See blockglyph_test.go for the rule and for what it
+	// refuses.
+	return blockFills(ops), clean, nil
 }
 
 // normaliseOps renders a display list as comparable text.
