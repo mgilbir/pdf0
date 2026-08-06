@@ -270,10 +270,10 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 
 	for _, op := range ops {
 		r, ok := op.(FillRect)
-		if !ok || r.Rect.Empty() || r.Text {
-			// A text decoration is skipped for the reason FillRect.Text gives:
-			// this guard is about boxes, and the letters the decoration belongs to
-			// are not checked either.
+		if !ok || r.Rect.Empty() || r.Overhang {
+			// A text decoration, and an inline box's background and border, are
+			// skipped for the reason FillRect.Overhang gives: this guard is about
+			// boxes the scale was computed from, and none of those is one.
 			continue
 		}
 		if page.Contains(r.Rect) {

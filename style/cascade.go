@@ -415,11 +415,20 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 //
 // Each entry is a property whose definition carries the words "Negative values
 // are illegal" or "Negative lengths are not allowed": the sizes of §10.2, §10.4,
-// §10.5 and §10.7, and the paddings of §8.4. The list is deliberately short and
-// deliberately not "everything that looks like a length" — a negative margin,
-// a negative text-indent, a negative letter-spacing and a negative word-spacing
-// are all legal and all useful, and dropping one of those would break a page
-// that is doing nothing wrong.
+// §10.5 and §10.7, the paddings of §8.4 and the border widths of §8.5.1. The
+// list is deliberately short and deliberately not "everything that looks like a
+// length" — a negative margin, a negative text-indent, a negative letter-spacing
+// and a negative word-spacing are all legal and all useful, and dropping one of
+// those would break a page that is doing nothing wrong.
+//
+// The border widths differ from the paddings in what dropping them produces, and
+// that is why they cannot be handled where they are read. A padding's initial
+// value is zero, so clamping a negative one to zero gives the right answer by
+// accident; a border width's initial value is "medium", which is three pixels of
+// ink. Layout clamped, so "border-top-width: -1pt" drew no border where CSS asks
+// for the initial one — fourteen tests in css/CSS2/borders, one per unit per
+// side, and every one of them invisible until inline boxes started painting
+// their borders, because the reference draws its two rules on a <span>.
 //
 // The shorthands are not here. "padding: 1px -2px" is invalid as a whole, and
 // catching it needs the shorthand expander rather than a name lookup; what
@@ -431,6 +440,8 @@ var nonNegative = map[string]bool{
 	"max-width": true, "max-height": true,
 	"padding-top": true, "padding-right": true,
 	"padding-bottom": true, "padding-left": true,
+	"border-top-width": true, "border-right-width": true,
+	"border-bottom-width": true, "border-left-width": true,
 }
 
 // hasNegativeNumber reports whether any numeric token in a value is negative.

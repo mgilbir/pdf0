@@ -158,6 +158,9 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		decorations:         map[*Box][]textDecoration{},
 		backgrounds:         map[*Box][]backgroundLayer{},
 		reportedBackgrounds: map[string]bool{},
+		inlineDraws:         map[*Box]bool{},
+		inlineChains:        map[*Box][]*Box{},
+		inlineOffsets:       map[*Box]Point{},
 		intrinsic:           map[*Box]intrinsicWidths{},
 		grids:               map[*Box]*tableGrid{},
 		tableDemands:        map[*Box][]tableColumnDemand{},
@@ -308,6 +311,26 @@ type layouter struct {
 	// reportedBackgrounds suppresses repeating a complaint about a background
 	// value, which is about a stylesheet rule rather than about a box.
 	reportedBackgrounds map[string]bool
+	// inlineDraws memoizes whether an inline box has a background or a border to
+	// paint, and inlineChains the chain of such boxes above another box. Both are
+	// asked once per item per line, which is the hottest loop in the engine, and
+	// both answer "nothing" for almost every box in an ordinary document.
+	inlineDraws  map[*Box]bool
+	inlineChains map[*Box][]*Box
+	// inlineOffsets is §9.4.3's accumulated displacement at each inline box that
+	// has one, which is what its background and border are drawn at. It is
+	// recorded by the walk that computes it because nothing downstream can:
+	// collectInline flattens the boxes away, and the offset an inline box's own
+	// fragment needs is its own rather than that of the item that reached it.
+	//
+	// Only a box a relative position actually moved is recorded, so the map stays
+	// empty in a document with no positioned inline in it.
+	inlineOffsets map[*Box]Point
+	// inlineDecorations counts the fragments made for those backgrounds and
+	// borders, which is what maxInlineDecorations bounds, and inlineDecorCapped
+	// says the bound has already been reported.
+	inlineDecorations int
+	inlineDecorCapped bool
 }
 
 type lengthKey struct {
@@ -351,6 +374,17 @@ func absolutise(f *Fragment, x, y style.Unit) {
 	f.BorderRect.Y = f.BorderRect.Y.Add(y).Add(f.Offset.Y)
 
 	content := f.ContentRect()
+	// The inline boxes' own backgrounds and borders, which hang off the line
+	// boxes rather than off the children: they are in the same coordinates the
+	// lines are, so they take the same translation. Their §9.4.3 offset is folded
+	// in here for the reason the walk applies every other one here — it moves the
+	// box and nothing that was measured against it.
+	for i := range f.Lines {
+		for _, ib := range f.Lines[i].Boxes {
+			ib.BorderRect.X = ib.BorderRect.X.Add(content.X).Add(ib.Offset.X)
+			ib.BorderRect.Y = ib.BorderRect.Y.Add(content.Y).Add(ib.Offset.Y)
+		}
+	}
 	for _, c := range f.Children {
 		absolutise(c, content.X, content.Y)
 	}
