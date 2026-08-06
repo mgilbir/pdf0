@@ -220,12 +220,24 @@ clean-css-colors:
 #
 # No browser is needed: pdf0 renders both and compares its own display lists.
 #
-# WPT is enormous, so this is a blobless sparse clone of the directories whose
-# tests exercise what the engine currently does. Widen WPT_DIRS as more lands.
+# WPT is enormous, so this is a blobless sparse clone rather than the whole of
+# it. The directories are everything a page laid out *once* can be held to.
+#
+# What is left out is left out for a reason and not for convenience: pagination
+# and page-box describe flowing content across several pages, which §2.2 decides
+# against; ui and run-in are interaction and a feature CSS removed. Floats,
+# positioning and z-index are emphatically *in* — they are only dynamic in a
+# viewport that resizes, and this one does not.
 WPT_DIR  := testdata/wpt
 WPT_REF  ?= master
 WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-clear \
-            css/css-text/white-space css/reference css/CSS2/reference
+            css/CSS2/abspos css/CSS2/positioning css/CSS2/visuren css/CSS2/visudet \
+            css/CSS2/visufx css/CSS2/floats css/CSS2/floats-clear css/CSS2/tables \
+            css/CSS2/zindex css/CSS2/zorder css/CSS2/stacking-context \
+            css/CSS2/linebox css/CSS2/text css/CSS2/bidi-text css/CSS2/lists \
+            css/CSS2/generated-content css/CSS2/borders css/CSS2/backgrounds \
+            css/CSS2/box css/CSS2/colors css/CSS2/values \
+            css/CSS2/support css/CSS2/reference css/css-text/white-space css/reference
 
 wpt: $(WPT_DIR)/.ok
 
