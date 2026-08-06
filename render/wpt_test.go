@@ -581,6 +581,25 @@ func rectKey(r Rect) string {
 // arithmetic, and a rounding of a third of a pixel in one and not the other is
 // not a rendering difference. A hundredth is far below anything visible and far
 // above the noise.
+//
+// The last clause is not true and it is worth writing down where it is false
+// rather than leaving it to be rediscovered. A layout unit is a 64th of a pixel,
+// which is 0.0156 — *coarser* than the hundredth this rounds to — so two
+// documents can differ by an amount the engine cannot represent and still be
+// told apart here. It happens where one document sets a run of spaces as one run
+// and the other sets them as several: each advance is rounded to the unit as it
+// is measured, so three separate spaces of 19.2px come to 57.609375 and one run
+// of three comes to 57.59375, one unit apart.
+//
+// It is measurable rather than theoretical. The twelve
+// white-space/ws-break-spaces-applies-to tests fail on exactly this and on
+// nothing else: every fill matches, every visible glyph matches, and one "8" is
+// a 64th of a pixel to the right of the other because break-spaces makes each
+// space a run of its own. Fixing it means comparing text positions with a
+// tolerance rather than by a rounded string, and choosing that tolerance is a
+// decision about the oracle — the error accumulates with the number of runs, so
+// no fixed epsilon is principled — which is why it was reported rather than
+// taken.
 func num(u style.Unit) string {
 	return strconv.FormatFloat(float64(int(u.Px()*100+0.5))/100, 'f', -1, 64)
 }
