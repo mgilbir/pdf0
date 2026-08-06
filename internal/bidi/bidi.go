@@ -31,7 +31,12 @@
 //	Resolve      P2, P3, X1-X10, W1-W7, N0-N2, I1, I2 — one paragraph
 //	LineLevels   L1 — one line of that paragraph
 //	Reorder      L2 — the visual order of one line
-//	Mirror       L4 — the character drawn in place of a bracket in an RTL run
+//
+// Rule L4 is not here, and its absence is deliberate rather than a gap. It is the
+// substitution of a mirrored bracket in a right-to-left run, and the glyph for it
+// can only be chosen once the run has been reversed — which is the shaper's work
+// and not this package's. So the mirroring table is not generated either: it
+// would be four hundred lines nothing reads.
 //
 // # Bounds
 //
@@ -344,20 +349,6 @@ func ClassOf(r rune) Class {
 		return classRanges[i].class
 	}
 	return L
-}
-
-// Mirror is rule L4: the character drawn in place of this one in a right-to-left
-// run, if there is one.
-//
-// It is applied at drawing time and not to the text, because the text is what a
-// reader copies out of the page: a parenthesis written as "(" must extract as
-// "(" however it was drawn.
-func Mirror(r rune) (rune, bool) {
-	i := sort.Search(len(mirrors), func(i int) bool { return mirrors[i].from >= r })
-	if i < len(mirrors) && mirrors[i].from == r {
-		return mirrors[i].to, true
-	}
-	return 0, false
 }
 
 // removedByX9 reports whether rule X9 takes a character out of the rules' view.

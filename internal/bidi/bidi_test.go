@@ -153,23 +153,6 @@ func TestBracketsFollowTheirContents(t *testing.T) {
 	}
 }
 
-// TestMirroringIsRule L4's table, not a guess: the mirror of "(" is ")" and the
-// mirror of "a" is nothing at all.
-func TestMirroring(t *testing.T) {
-	if got, ok := Mirror('('); !ok || got != ')' {
-		t.Errorf("Mirror('(') = %q, %v; want ')' , true", got, ok)
-	}
-	if got, ok := Mirror('['); !ok || got != ']' {
-		t.Errorf("Mirror('[') = %q, %v; want ']', true", got, ok)
-	}
-	if _, ok := Mirror('a'); ok {
-		t.Error("a letter was reported as having a mirror")
-	}
-	if _, ok := Mirror(alef); ok {
-		t.Error("a Hebrew letter was reported as having a mirror")
-	}
-}
-
 // TestExplicitDepthCapFires is the security bound.
 //
 // Without it, a document made of nothing but U+202B is a directional-status

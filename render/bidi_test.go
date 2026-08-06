@@ -1,9 +1,12 @@
 package render
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -435,5 +438,152 @@ func TestPlainLatinIsUntouched(t *testing.T) {
 			x = x.Add(run.Width)
 		}
 		x = 0
+	}
+}
+
+// TestRunsAreSplitAtALevelBoundary is the splitting, which is what makes the
+// rest of inline layout able to ignore the algorithm.
+//
+// "HEBREW12" is one word with no space in it and two directions in it. Left
+// whole it would be placed as one run at one level and set as "21WERBEH"; split,
+// the digits keep their own place and their own order.
+func TestRunsAreSplitAtALevelBoundary(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="p">`+hebrewAB+`12</div>`, bidiCSS)
+	runs := runsOf(t, root, "p")
+	if len(runs) != 2 {
+		var all []string
+		for _, r := range runs {
+			all = append(all, r.Text)
+		}
+		t.Fatalf("the line has %d runs (%q), want 2 — the item was not split where "+
+			"its embedding level changes", len(runs), all)
+	}
+	// The number is left-to-right at the left of the phrase and the letters
+	// right-to-left after it: 12 at 0, the Hebrew at 24.
+	number := runAt(t, runs, "12")
+	if number.RTL || number.X.Px() != 0 {
+		t.Errorf("the number is at %gpx with RTL=%v, want 0 and false",
+			number.X.Px(), number.RTL)
+	}
+	letters := runAt(t, runs, hebrewAB)
+	if !letters.RTL || letters.X.Px() != 24 {
+		t.Errorf("the letters are at %gpx with RTL=%v, want 24 and true",
+			letters.X.Px(), letters.RTL)
+	}
+}
+
+// TestRightToLeftRunIsShapedInVisualOrder is the last step: the run reaches the
+// shaper with its direction stated, so the glyphs come back in the order they
+// are drawn and rule L4's mirroring is applied.
+//
+// It is checked through the shaper rather than by inspecting the string, because
+// the string is not the claim — a test that shapedText prefixes some character
+// would pass just as well with a character the shaper ignores.
+func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
+	face, err := fonts.Standard("Helvetica")
+	if err != nil {
+		t.Fatalf("loading a standard face: %v", err)
+	}
+	glyphs := func(run DrawText) []int {
+		g, _ := face.ShapeGlyphs(shapedText(run))
+		out := make([]int, 0, len(g))
+		for _, x := range g {
+			out = append(out, int(x.GID))
+		}
+		return out
+	}
+
+	ltr := glyphs(DrawText{Text: "(ab"})
+	rtl := glyphs(DrawText{Text: "(ab", RTL: true})
+	if len(ltr) != 3 || len(rtl) != 3 {
+		t.Fatalf("shaping gave %d and %d glyphs, want 3 each", len(ltr), len(rtl))
+	}
+	// The whole run comes back reversed: the last letter is drawn first.
+	if rtl[0] != ltr[2] || rtl[1] != ltr[1] {
+		t.Errorf("a right-to-left run shaped to %v against %v; its glyphs are not in "+
+			"the order they are drawn", rtl, ltr)
+	}
+	// And the bracket, now last, is the one that mirrors it — rule L4, which is
+	// not something reversing the glyphs would give.
+	open, _ := face.ShapeGlyphs("(")
+	closing, _ := face.ShapeGlyphs(")")
+	if len(open) != 1 || len(closing) != 1 {
+		t.Fatalf("a bracket shaped to more than one glyph")
+	}
+	if ltr[0] != int(open[0].GID) {
+		t.Fatalf("the left-to-right run drew the bracket as glyph %d and not as the "+
+			"opening one, %d", ltr[0], open[0].GID)
+	}
+	if rtl[2] != int(closing[0].GID) {
+		t.Errorf("the bracket of a right-to-left run was drawn as glyph %d; the "+
+			"mirrored one is %d", rtl[2], closing[0].GID)
+	}
+}
+
+// TestExtractedTextKeepsTheRunsInReadingOrder pins the half of the design that is
+// about the document rather than about the page.
+//
+// A line's runs are drawn where the algorithm puts them and written to the
+// content stream in the order they were typed, so a reader copying text out of
+// the finished PDF gets the words in the order they are read. The glyphs *within*
+// a right-to-left run are another matter and do come out reversed — that is what
+// a text-showing operator can express, and it is what the shaping path has always
+// done — so the claim here is exactly about the runs.
+func TestExtractedTextKeepsTheRunsInReadingOrder(t *testing.T) {
+	got := renderOf(t, `<p>one <bdo dir="rtl">abc def</bdo> two</p>`, Options{})
+	if got.Document == nil {
+		t.Fatalf("no document was produced: %v", got.Findings)
+	}
+	var buf bytes.Buffer
+	if err := got.Document.Write(&buf); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+	doc, err := pdf0.Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	text := doc.ExtractText()
+
+	// The two overridden words are drawn "def" first and "abc" second — that is
+	// the reordering. Extracted, they must still be in the order they were
+	// written, each with its own glyphs reversed by the override.
+	first, second := strings.Index(text, "cba"), strings.Index(text, "fed")
+	if first < 0 || second < 0 {
+		t.Fatalf("the overridden words are not in the extracted text %q", text)
+	}
+	if first > second {
+		t.Errorf("the extracted text is %q; the runs came out in the order they are "+
+			"drawn rather than the order they were written", text)
+	}
+	if a, b := strings.Index(text, "one"), strings.Index(text, "two"); a < 0 || b < 0 || a > b {
+		t.Errorf("the text around the override came out in the wrong order: %q", text)
+	}
+}
+
+// TestAtomicInlineTakesPartInTheOrdering pins the one character an image or an
+// inline-block contributes to the paragraph.
+//
+// CSS Writing Modes says an element that is not text takes part in the algorithm
+// as a single neutral, U+FFFC. Leaving it out does not make the box disappear —
+// it makes the box have no position of its own in the ordering, so it is placed
+// where the character *after* it goes, which in a right-to-left paragraph is the
+// wrong end of the line.
+func TestAtomicInlineTakesPartInTheOrdering(t *testing.T) {
+	const css = `body { margin: 0 } ` +
+		`#p { font-family: Courier; font-size: 20px; width: 300px; direction: rtl } ` +
+		`#box { display: inline-block; width: 40px; height: 10px }`
+	root := layoutOf(t, 600, `<div id="p">`+hebrewAB+`<span id="box"></span></div>`, css)
+
+	// 24px of Hebrew and a 40px box is 64px in a 300px line, flush right in a
+	// right-to-left block. The box is written last, so it is drawn *first* — at
+	// the left of the phrase, 236px in.
+	origin := find(t, root, "p").ContentRect().X
+	box := find(t, root, "box").BorderRect.X.Sub(origin)
+	if got := box.Px(); got != 236 {
+		t.Errorf("the inline-block is %gpx into the line, want 236 — it is the last "+
+			"thing written in a right-to-left paragraph, so it is drawn first", got)
+	}
+	if got := runAt(t, runsOf(t, root, "p"), hebrewAB).X.Px(); got != 276 {
+		t.Errorf("the Hebrew is at %gpx, want 276", got)
 	}
 }
