@@ -100,6 +100,17 @@ const (
 	// silent clip, and it is — the text is there, the box is there, and the part
 	// past the edge is simply not drawn.
 	RuleUnbreakableOverflow Rule = "unbreakable-overflow"
+	// RuleTableColumnUnderflow is a table column narrower than the content in
+	// it, so the content is cut off at the column edge.
+	//
+	// It is the table-shaped form of the silent clip §6.2 is named after, and it
+	// has its own identifier because it has its own cause and its own fix: the
+	// fixed table layout of §17.5.2.1 deliberately ignores what is in the cells,
+	// so a column can end up narrower than its content and the specification
+	// says so. That is a trade an author may want and may not know they made —
+	// the table looks tidy and a word is missing from it.
+	RuleTableColumnUnderflow Rule = "table-column-underflow"
+
 	// RulePositionApproximated is a positioned box this engine placed by a
 	// weaker rule than the one that applies to it.
 	//
@@ -205,6 +216,13 @@ var defaultSeverity = map[Rule]Severity{
 	// A clip nobody asked for removes content from the page, which is the
 	// failure §6.2 is named after.
 	RuleUnbreakableOverflow: Error,
+	// A clipped column warns rather than failing, and the difference from the
+	// rule above is who asked for it. "table-layout: fixed" is a declaration
+	// that says in as many words "lay this table out without looking at what is
+	// in it", so a column too narrow for its content is the author's arrangement
+	// working as specified — worth being told about, not worth refusing to
+	// produce a document over.
+	RuleTableColumnUnderflow: Warn,
 	// A box in the wrong place is visible, and the author can see where it
 	// landed — which is why this warns rather than failing the render. The
 	// argument for Error is that the page is plausible and wrong; the argument

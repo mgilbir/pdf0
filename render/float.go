@@ -357,5 +357,14 @@ type flow struct {
 // thing that seals those. Neither is laid out yet, so the clause is checked
 // directly rather than through a page.
 func establishesBFC(b *Box) bool {
-	return b.Inner == InnerFlowRoot || b.Float != FloatNone || b.Position.outOfFlow()
+	switch b.Inner {
+	case InnerFlowRoot, InnerTable, InnerTableCell, InnerTableCaption:
+		// A cell, a caption and a table each seal their floats in. §17.4 puts
+		// the table's on the wrapper, which is a flow root and so already on
+		// this list; the table box is here as well because a float that escaped
+		// the grid would be placed against a formatting context whose geometry
+		// the table algorithm never consulted.
+		return true
+	}
+	return b.Float != FloatNone || b.Position.outOfFlow()
 }

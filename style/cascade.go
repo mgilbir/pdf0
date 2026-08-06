@@ -117,6 +117,21 @@ type Styled struct {
 	// pseudo-element that nothing styles generates nothing — unlike a real
 	// element, which exists whether or not anything mentions it.
 	Pseudo map[PseudoKey]ComputedStyle
+	// OwnFontSize and OwnPseudoFontSize mark the elements whose font-size came
+	// from a declaration of their own rather than from their parent.
+	//
+	// Nothing else in the cascade needs this and font-size does, because it is
+	// the one property whose computed value is not the value stored here: CSS
+	// makes it an absolute length, and what is in Styles is what the author
+	// wrote. A consumer resolving "2em" against the parent's size gets the right
+	// answer for the element that declared it and the wrong one for every
+	// descendant that merely inherited it — twice the parent at each level, so a
+	// paragraph four levels down a "font-size: 2em" wrapper is set in 256px.
+	//
+	// That was not hypothetical. It is what this map was added to stop.
+	OwnFontSize       map[*html.Node]bool
+	OwnPseudoFontSize map[PseudoKey]bool
+
 	// Findings is everything worth telling the caller, in stylesheet order.
 	Findings []Finding
 	// Incomplete reports that the selector-matching budget tripped, so some
@@ -136,8 +151,10 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 	rules := s.prepare(sheets)
 
 	out := Styled{
-		Styles: map[*html.Node]ComputedStyle{},
-		Pseudo: map[PseudoKey]ComputedStyle{},
+		Styles:            map[*html.Node]ComputedStyle{},
+		Pseudo:            map[PseudoKey]ComputedStyle{},
+		OwnFontSize:       map[*html.Node]bool{},
+		OwnPseudoFontSize: map[PseudoKey]bool{},
 	}
 	// Document order, so a parent is always computed before its children and
 	// inheritance can read the parent's finished values.
@@ -145,15 +162,23 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 		if n.Type != html.ElementNode {
 			return true
 		}
-		out.Styles[n] = s.computeFor(n, rules, out.Styles, "")
+		cs, own := s.computeFor(n, rules, out.Styles, "")
+		out.Styles[n] = cs
+		if own {
+			out.OwnFontSize[n] = true
+		}
 		for _, name := range pseudoElementNames {
 			if !s.anyRuleTargets(rules, n, name) {
 				continue
 			}
 			// A pseudo-element inherits from the element it belongs to, which is
 			// why the parent style passed here is that element's own.
-			out.Pseudo[PseudoKey{Node: n, Name: name}] =
-				s.computeForPseudo(n, rules, out.Styles[n], name)
+			key := PseudoKey{Node: n, Name: name}
+			pcs, own := s.computeForPseudo(n, rules, out.Styles[n], name)
+			out.Pseudo[key] = pcs
+			if own {
+				out.OwnPseudoFontSize[key] = true
+			}
 		}
 		return true
 	})
@@ -392,14 +417,18 @@ func (s *Styler) anyRuleTargets(rules []preparedRule, n *html.Node, name string)
 // parent, which is what makes "p { color: red } p::before { content: '>' }" draw
 // a red marker without the author saying so twice.
 func (s *Styler) computeForPseudo(n *html.Node, rules []preparedRule,
-	owner ComputedStyle, name string) ComputedStyle {
+	owner ComputedStyle, name string) (ComputedStyle, bool) {
 	return s.computeFor(n, rules, map[*html.Node]ComputedStyle{n: owner}, name)
 }
 
 // computeFor resolves every property for one element, or for one of its
 // pseudo-elements when pseudo is not empty.
+//
+// It also reports whether font-size came from a declaration rather than by
+// inheritance, which is the one thing a consumer cannot recover from the map it
+// returns. See Styled.OwnFontSize for why that matters.
 func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
-	done map[*html.Node]ComputedStyle, pseudo string) ComputedStyle {
+	done map[*html.Node]ComputedStyle, pseudo string) (ComputedStyle, bool) {
 
 	var cands []candidate
 	for _, r := range rules {
@@ -460,6 +489,7 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 	}
 
 	out := make(ComputedStyle, len(properties))
+	ownFontSize := false
 	for name, prop := range properties {
 		value, have := "", false
 
@@ -477,8 +507,28 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 		}
 
 		out[name] = s.resolve(name, prop, value, have, parent)
+		if name == "font-size" {
+			ownFontSize = have && declaresItsOwnValue(value, prop)
+		}
 	}
-	return out
+	return out, ownFontSize
+}
+
+// declaresItsOwnValue reports whether a winning declaration says something about
+// the element rather than deferring to its parent.
+//
+// The three CSS-wide keywords that defer are the ones that reach inheritFrom:
+// "inherit" always, and "unset" and "revert" on a property that inherits. Every
+// other value — including "initial", which is a statement about this element —
+// is the element's own.
+func declaresItsOwnValue(value string, prop property) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case kwInherit:
+		return false
+	case kwUnset, kwRevert:
+		return !prop.inherits
+	}
+	return true
 }
 
 // resolve turns a winning declaration — or the absence of one — into a computed
