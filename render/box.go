@@ -134,6 +134,16 @@ type Box struct {
 	// ListItem marks a box that generates a marker — a bullet or a number.
 	ListItem bool
 
+	// TableWrapper marks the anonymous box §17.4 puts around a table to hold it
+	// and its captions.
+	//
+	// It is a flag rather than an Inner of its own because the wrapper really is
+	// an ordinary flow root — block layout, margin collapsing, floats and
+	// positioning all treat it as one, and that is the point of it. The one thing
+	// that is not ordinary is its width, which is the table's rather than its
+	// containing block's, and that is the single question this answers.
+	TableWrapper bool
+
 	// Float and Clear are CSS 2.1 §9.5. They live on the box rather than being
 	// read out of Style at layout time for the same reason Outer and Inner do:
 	// whether a box is in the normal flow changes what the box tree itself is
@@ -230,7 +240,10 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 	// anywhere makes every inline run a candidate — and that set is not known
 	// while the children are still being made.
 	b.fixup(box)
-	return box
+	// §17.4's wrapper is a second pass because it has to see tables that the
+	// first pass generated as well as the ones the author wrote, and it may
+	// replace the root itself: "html { display: table }" is legal.
+	return b.wrapTables(box)
 }
 
 func documentElementOf(doc *html.Node) *html.Node {
@@ -401,11 +414,15 @@ func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit) 
 }
 
 // room reports whether another box may be made.
-func (b *boxBuilder) room(n *html.Node) bool {
+func (b *boxBuilder) room(n *html.Node) bool { return b.roomAt(n.Offset) }
+
+// roomAt is room for a box no element generated, which has no node to be
+// reported against — every box §17.2.1 inserts is one.
+func (b *boxBuilder) roomAt(offset int) bool {
 	if b.count >= maxBoxes {
 		if !b.stopped {
 			b.stopped = true
-			b.rec.Report(RuleLimit, AtHTML(n.Offset),
+			b.rec.Report(RuleLimit, AtHTML(offset),
 				"the document produces more boxes than this engine will build; "+
 					"the rest of it was not laid out")
 		}
@@ -674,10 +691,17 @@ func twoValueDisplay(value string) (Outer, Inner, bool) {
 
 // fixup adds the anonymous boxes the specification requires, depth first so a
 // parent sees children that are already settled.
+// The table repair runs first, and before the two flow rules rather than after
+// them, because it is the rule that decides *which* boxes are in a flow at all.
+// A stray cell inside a <span> becomes an inline-table there, and an
+// inline-table is an atomic inline that does not split the span it is in; run
+// the split first and the cell is lifted out as a block, taking the table it
+// should have grown with it.
 func (b *boxBuilder) fixup(box *Box) {
 	for _, c := range box.Children {
 		b.fixup(c)
 	}
+	box.Children = b.fixupTables(box)
 	box.Children = b.splitBlockInInline(box)
 	box.Children = b.wrapInlines(box)
 }
@@ -709,7 +733,7 @@ func (b *boxBuilder) splitBlockInInline(parent *Box) []*Box {
 		// inline-block is inline outside and a block container inside, so a
 		// block within it is where the author put it and lifting it out would
 		// empty the very box that was meant to hold it.
-		if child.Outer != OuterInline || isBlockContainer(child) || !containsBlock(child) {
+		if child.Outer != OuterInline || laysOutOwnChildren(child) || !containsBlock(child) {
 			out = append(out, child)
 			continue
 		}
@@ -730,12 +754,33 @@ func (b *boxBuilder) splitBlockInInline(parent *Box) []*Box {
 // container or a table, which have rules of their own.
 func isBlockContainer(b *Box) bool {
 	switch b.Inner {
-	case InnerFlowRoot:
+	case InnerFlowRoot, InnerTableCell, InnerTableCaption:
+		// A cell and a caption are block containers that happen to live in a
+		// table: their children are blocks and lines like any other, which is
+		// why the anonymous block rule has to reach inside them.
 		return true
 	case InnerFlow:
 		return b.Outer == OuterBlock
 	}
 	return false
+}
+
+// laysOutOwnChildren reports whether a box is opaque to the two flow rules
+// above: whatever is inside it belongs to it, and neither splitting nor
+// wrapping may reach past it.
+//
+// It differs from isBlockContainer at exactly the boxes that are not block
+// containers and are not part of anyone else's inline formatting context
+// either — an inline-table, an inline-flex. Those hold block-level boxes
+// legitimately, and §9.2.1.1's split must not fire on one: an inline-table in
+// the middle of a sentence would otherwise break the sentence in two and be
+// lifted out as a block, which is the opposite of what "inline" asked for.
+func laysOutOwnChildren(b *Box) bool {
+	switch b.Inner {
+	case InnerTable, InnerFlex:
+		return true
+	}
+	return isBlockContainer(b)
 }
 
 // containsBlock reports whether an inline box has a block-level box anywhere
@@ -759,7 +804,7 @@ func containsBlock(b *Box) bool {
 		// The search stops at a nested block container. A block inside an
 		// inline-block belongs to that box and is not something to be lifted
 		// past it.
-		if c.Outer == OuterInline && !isBlockContainer(c) && containsBlock(c) {
+		if c.Outer == OuterInline && !laysOutOwnChildren(c) && containsBlock(c) {
 			return true
 		}
 	}
@@ -799,7 +844,7 @@ func splitInline(b *Box) []*Box {
 			flush()
 			out = append(out, child)
 
-		case child.Outer == OuterInline && containsBlock(child):
+		case child.Outer == OuterInline && !laysOutOwnChildren(child) && containsBlock(child):
 			// A nested inline that itself holds a block: split it too, and its
 			// inline pieces belong to this one's current piece.
 			for _, inner := range splitInline(child) {
