@@ -254,7 +254,7 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 
 			prepared := preparedRule{selectors: sels, origin: sheet.Origin}
 			for _, d := range decls {
-				for _, e := range s.expand(d) {
+				for _, e := range s.expand(d, sheet.Origin) {
 					e.order = order
 					order++
 					prepared.decls = append(prepared.decls, e)
@@ -270,10 +270,37 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 
 // expand turns one declaration into the longhands it sets, dropping and
 // reporting anything the engine does not implement.
-func (s *Styler) expand(d css.Declaration) []preparedDecl {
+func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	name := strings.ToLower(d.Name)
 
 	if _, ok := properties[name]; ok {
+		// A registered property that nothing reads is reported here rather than
+		// dropped. The value still cascades — inheritance and the computed
+		// value are right, and the day the property is implemented there is
+		// nothing to undo — but the silence that the registry entry bought is
+		// given back. See unimplemented.go for why that silence is the failure
+		// mode this guards.
+		// Only for a declaration someone wrote. The engine's own default sheet
+		// uses several of these — "a { text-decoration: underline }" among them
+		// — and reporting those would put a finding on every document ever
+		// rendered, including documents with no link in them: this runs when the
+		// sheet is parsed, not when a rule matches. That is noise, and noise in
+		// the one channel that says what the page is missing is worse than
+		// silence, because it is what makes the channel stop being read.
+		//
+		// The gap is still real for the default sheet. It belongs in the note on
+		// the property rather than in every document's findings.
+		if reason, missing := unimplementedReason(name); missing &&
+			origin != OriginUserAgent && !s.seen[name] {
+			s.seen[name] = true
+			s.report(Finding{
+				Offset: d.Offset,
+				Message: "the property \"" + name + "\" is not implemented, so " +
+					reason,
+				Unsupported: true,
+				Property:    name,
+			})
+		}
 		return []preparedDecl{{
 			property: name, value: d.Value, important: d.Important, offset: d.Offset,
 		}}
@@ -675,7 +702,7 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 
 	out := map[string]preparedDecl{}
 	for _, d := range decls {
-		for _, e := range s.expand(d) {
+		for _, e := range s.expand(d, OriginAuthor) {
 			// A later declaration in the same attribute wins, and importance
 			// wins over its absence — the same rules as any other block, with
 			// no specificity to separate them.
