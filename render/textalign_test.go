@@ -54,23 +54,67 @@ func TestTextAlignIsInherited(t *testing.T) {
 	}
 }
 
-func TestTextAlignIgnoresHangingSpace(t *testing.T) {
-	// §4.1.2: a trailing space is excluded from the width a line is aligned at.
-	// With "pre-wrap" the space is preserved and stays in the runs — it must
-	// still not be counted, or the line centres around a character that marks
-	// no paper and sits half a space off.
-	//
-	// Both documents hold the same six visible characters, so a correct
-	// implementation centres them identically.
-	plain := layoutOf(t, 600, `<div id="p">abcdef</div>`,
-		alignCSS+` #p { text-align: center }`)
-	trailing := layoutOf(t, 600, `<div id="p">abcdef  </div>`,
-		alignCSS+` #p { text-align: center; white-space: pre-wrap }`)
-	want, got := lineX(t, plain, "p"), lineX(t, trailing, "p")
-	if got != want {
-		t.Errorf("a line with two preserved trailing spaces centred at %gpx and the "+
-			"same text without them at %gpx; the hanging space is being counted",
-			got, want)
+// TestTextAlignIgnoresUnconditionallyHangingSpace is §4.1.2's hang at its full
+// strength: a line that ended at a *soft wrap* leaves its preserved trailing
+// space outside the width the line is aligned at.
+//
+// The line has to be one that wrapped, and that is the whole point of the second
+// word. A trailing space at the end of the content hangs only *conditionally* —
+// see the test below — so a document written without the wrap would be asking
+// this rule a question the other rule answers, which is the shape of test this
+// repository has been caught by twice.
+func TestTextAlignIgnoresUnconditionallyHangingSpace(t *testing.T) {
+	// In 100px — eight characters and a third of Courier at 20px — "abcdef  "
+	// is 96 wide and the second "abcdef" does not fit after it, so the first
+	// line ends at a soft wrap with two preserved spaces on it. Aligned at 72
+	// rather than 96, the line centres at (100-72)/2 = 14.
+	root := layoutOf(t, 600, `<div id="p">abcdef  abcdef</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 100px;
+		      text-align: center; white-space: pre-wrap }`)
+	lines := linesOf(t, root, "p")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2: %q", len(lines), lineTexts(lines))
+	}
+	if got := lines[0].Runs[0].X.Px(); got != 14 {
+		t.Errorf("a soft-wrapped line with two hanging spaces centred at %gpx, "+
+			"want 14 — the hanging space is being counted", got)
+	}
+}
+
+// TestTextAlignCountsAConditionallyHangingSpace is the other half, and it is the
+// half that is easy to get backwards — this engine had it backwards, and a test
+// asserting the wrong answer pinned it there.
+//
+// §4.1.2: preserved white space at the end of a line hangs unconditionally
+// "unless the sequence is followed by a forced line break, in which case it must
+// conditionally hang the sequence instead", and something that conditionally
+// hangs "hangs only if it does not otherwise fit in the line". The end of the
+// content is such a break — the specification's own example is a paragraph whose
+// only content is " 0 ", with no <br> in it anywhere.
+func TestTextAlignCountsAConditionallyHangingSpace(t *testing.T) {
+	// The example from §4.1.2, in Courier rather than in ch: five characters is
+	// 60px, " 0 " is three of them, and centring 36 in 60 puts the line at 12.
+	// Aligning it as though the trailing space hung would put it at 18 — half a
+	// character off, which is exactly what the specification says must not
+	// happen.
+	root := layoutOf(t, 600, `<div id="p"> 0 </div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 60px;
+		      text-align: center; white-space: pre-wrap }`)
+	if got := lineX(t, root, "p"); got != 12 {
+		t.Errorf("the specification's centred \" 0 \" example is at %gpx, want 12", got)
+	}
+
+	// And a space that does *not* fit hangs even here, which is what makes the
+	// rule conditional rather than simply off. "abcdef  " is 96 in a line 84
+	// wide, so the two spaces cannot fit; the six characters do, and a
+	// right-aligned line puts them flush against the edge with the spaces
+	// hanging past it.
+	root = layoutOf(t, 600, `<div id="p">abcdef  </div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 84px;
+		      text-align: right; white-space: pre-wrap }`)
+	if got := lineX(t, root, "p"); got != 12 {
+		t.Errorf("a right-aligned line whose trailing spaces overflow starts at "+
+			"%gpx, want 12 — the spaces should hang past the edge", got)
 	}
 }
 

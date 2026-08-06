@@ -217,7 +217,29 @@ const wptEnv = "WPT_TESTS"
 // the property and once with an equivalent margin on an inline box. The engine
 // had letter-spacing and word-spacing exactly right and no inline margin at all,
 // so a third of that directory failed and read as a spacing fault.
-const wptCleanPassBaseline = 3132
+//
+// §4.1.2's trailing white space took it from 3132 to 3143, and this time the two
+// effects do not need separating because there is only one: not a finding was
+// added or removed, so the whole of the movement is layout. Failures fell from
+// 1812 to 1780, counted in both directions — 32 tests stopped failing and none
+// started — and the 21 that are not in this number went to the vacuous bucket,
+// where they wait on something else the engine does not do.
+//
+// What moved is worth naming, because the largest directory left in the suite is
+// css-text/white-space and none of the three was the thing it looked like:
+//
+//   - break-spaces was breaking after the *word* rather than after the space it
+//     is named for, so a line took one word too many. The rule is that the wrap
+//     opportunity is after every preserved space and nowhere else, which makes a
+//     space part of the unit before it.
+//   - §4.1's "other space separators" — the Zs category less U+0020 and U+00A0 —
+//     were ordinary text. An ideographic space at the end of a line hangs like
+//     any other space; it was stretching the box that held it.
+//   - a preserved space at the end of the *last* line hangs only conditionally,
+//     which means it counts when it fits. This engine hung it unconditionally
+//     and a unit test asserted that it should, which is the second time this
+//     repository has found a test pinning a bug rather than a rule.
+const wptCleanPassBaseline = 3143
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

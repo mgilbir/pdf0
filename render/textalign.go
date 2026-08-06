@@ -145,6 +145,14 @@ func alignedWidth(runs []inlineItem, total style.Unit) style.Unit {
 		if strings.TrimSpace(item.text) != "" {
 			break
 		}
+		if !item.hangs {
+			// break-spaces. Its trailing space is not hanging past the end of the
+			// line, it *is* the end of the line — the value exists so that the
+			// spaces are content — so it counts towards where the line sits. A
+			// right-aligned "a " under break-spaces ends a space short of the
+			// edge, and under pre-wrap it does not.
+			break
+		}
 		total = total.Sub(item.width)
 	}
 	return style.Max(total, 0)

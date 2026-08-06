@@ -30,6 +30,13 @@ import "strings"
 //   - **Line breaking, in inline.go.** §4.1.2 entirely: the line-edge removal,
 //     the tab stops, and the hanging of preserved spaces past the line's end.
 //
+// Only the first stage is about §4.1.1's white space, which is "spaces (U+0020),
+// tabs (U+0009), and segment breaks" and nothing else. §4.1.2 is written over a
+// wider set — "white space, other space separators, and/or preserved tabs" — so
+// an ideographic space reaches the line breaker as text that nothing collapsed
+// and hangs at the end of a line like any other space. isOtherSpaceSeparator
+// below is that set.
+//
 // # What is left out
 //
 // The segment break transformation's zero-width-space exception is applied
@@ -211,4 +218,52 @@ func normaliseBreaks(text string) string {
 // parser produces a line from a form feed.
 func isCollapsibleSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
+}
+
+// isOtherSpaceSeparator is §4.1's term of art, and the definition is exact:
+// "all characters in the Unicode general category Zs except space (U+0020) and
+// no-break space (U+00A0)".
+//
+// The set matters because §4.1.2's fourth rule is written over "white space,
+// other space separators, and/or preserved tabs" — so an ideographic space at
+// the end of a line hangs exactly as an ordinary one does, while §4.1.1 never
+// touches it, because Phase I is defined over "spaces (U+0020), tabs (U+0009),
+// and segment breaks" and nothing else. The pair of rules is what makes
+// "ああ　" set two characters wide with the third hanging past the edge.
+//
+// It is written out rather than taken from unicode.IsSpace, which is a different
+// set: it holds the segment breaks and U+0085, and it holds U+00A0, and each of
+// those three would be wrong here. Zs has not gained a member since Unicode 6.3
+// removed U+180E from it, so the table is a table and not a snapshot.
+func isOtherSpaceSeparator(r rune) bool {
+	switch {
+	case r == 0x1680: // OGHAM SPACE MARK
+		return true
+	case r >= 0x2000 && r <= 0x200A: // EN QUAD .. HAIR SPACE
+		return true
+	case r == 0x202F: // NARROW NO-BREAK SPACE
+		return true
+	case r == 0x205F: // MEDIUM MATHEMATICAL SPACE
+		return true
+	case r == 0x3000: // IDEOGRAPHIC SPACE
+		return true
+	}
+	return false
+}
+
+// separatorBreaksAfter reports whether a line may end after one of them.
+//
+// Hanging and breaking are different questions, and this is the second: §4.1.2
+// says every one of these hangs, and UAX #14 says only some of them offer a
+// soft wrap opportunity. The two that do not are the two that are no-break
+// characters by name — U+2007 FIGURE SPACE, which holds a column of digits
+// together, and U+202F NARROW NO-BREAK SPACE — and both are class GL. The rest
+// are class BA, except U+3000, which is class ID and breaks on both sides like
+// the ideographs it is spaced among.
+//
+// break-spaces overrides all of it: that value puts an opportunity "after every
+// preserved white space character and after every other space separator", with
+// no exception for the no-break ones, and it is the caller that applies it.
+func separatorBreaksAfter(r rune) bool {
+	return r != 0x2007 && r != 0x202F
 }
