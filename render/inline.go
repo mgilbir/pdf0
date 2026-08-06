@@ -27,10 +27,22 @@ import (
 //   - after a space or a preserved tab;
 //   - after a run of preserved spaces, and — under break-spaces — after each
 //     one of them;
+//   - after an "other space separator" that UAX #14 puts in class BA or ID —
+//     everything in the Zs category except U+0020 and U+00A0, less the two the
+//     algorithm calls GL, which are U+2007 FIGURE SPACE and U+202F NARROW
+//     NO-BREAK SPACE. break-spaces overrides the two exceptions, because that
+//     value puts an opportunity after every separator without qualification;
 //   - at a zero-width space, which is how an author marks an opportunity
 //     inside a word;
 //   - after a hyphen that is not the last character of its run;
 //   - on both sides of an ideograph.
+//
+// Two of the omissions are worth naming because they are the ones that show. A
+// break is not taken *before* an ideograph or an ideographic space where the
+// text before it is Latin, though LB31 allows one; and the class table is a
+// handful of ranges rather than the whole of it. Both err towards fewer
+// opportunities, which overflows a line rather than breaking it in the wrong
+// place — the direction that fails visibly.
 //
 // That covers Latin, Greek, Cyrillic and the CJK scripts, which is most of what
 // a document generator sets. Everything else UAX #14 says is *not* done, and the
@@ -62,6 +74,14 @@ import (
 // §4.1.2: the collapsible space removed at each end of a line, the tab stops a
 // preserved tab advances to, and the preserved space that hangs past the line's
 // end instead of pushing the next word down.
+//
+// The hang has two strengths and the difference is not cosmetic. A line that
+// ended at a soft wrap hangs its trailing white space *unconditionally* — it is
+// never counted for fit or alignment. A line that ended at a forced break, which
+// includes the end of the content, hangs it *conditionally*: it hangs only if it
+// does not otherwise fit, so a space that fits is content and the line is
+// aligned around it. inlineContent applies the second and alignedWidth the
+// first.
 
 // # What relative positioning does to an inline box, and what it does not
 //
@@ -198,6 +218,11 @@ type inlineItem struct {
 	breakBefore bool
 	// space marks white space of any kind: it ends the word before it and does
 	// not join the word after it.
+	//
+	// "Of any kind" is §4.1.2's sense — white space, other space separators and
+	// preserved tabs — rather than Phase I's, which is only U+0020, U+0009 and
+	// the segment breaks. The two differ over the ideographic space and its
+	// relatives, which hang at the end of a line and are never collapsed.
 	space bool
 	// collapsible marks white space that §4.1.2 removes when it lands at
 	// either end of a line.
@@ -207,6 +232,17 @@ type inlineItem struct {
 	// so it was dropped at the start of the line, but it is *preserved* white
 	// space and dropping it removes something the author wrote.
 	collapsible bool
+	// trimAtEnd marks white space that §4.1.2's third rule removes outright when
+	// it lands at the end of a line, rather than hanging past it.
+	//
+	// It is the collapsible spaces, and one character more: "any trailing U+1680
+	// OGHAM SPACE MARK whose white-space property is normal, nowrap, or
+	// pre-line". The ogham space mark is not collapsible — it is a *visible*
+	// space, a stemline in an ogham face, and collapsing a run of them would
+	// shorten a line of ogham the way collapsing a run of hyphens would shorten a
+	// rule — so it needs the removal without the collapsing, and that is why this
+	// is a second flag rather than a use of the first.
+	trimAtEnd bool
 	// hangs marks preserved white space that sits past the end of the line
 	// rather than moving to the next one.
 	//
@@ -432,8 +468,26 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					RTL: item.level&1 == 1,
 				})
 			}
+			// §4.1.2's hang comes in two strengths and the difference shows
+			// exactly here. Where the line ended at a soft wrap, its trailing
+			// white space hangs *unconditionally* and is never counted, which is
+			// what alignedWidth does. Where it ended at a forced break — a <br>,
+			// a preserved newline, or simply the end of the content — it hangs
+			// *conditionally*: "it hangs only if it does not otherwise fit in the
+			// line", so a space that fits is content and the line is aligned
+			// around it. The specification's own example is a centred pre-wrap
+			// paragraph reading " 0 " in five characters, which centres as three
+			// and not as two.
+			//
+			// The two are not a matter of degree. Counting the space on a
+			// soft-wrapped line pushes a right-aligned line a space clear of the
+			// edge; not counting it on the last line centres " 0 " off-centre.
+			used := alignedWidth(runs, total)
+			if (forced || next >= len(items)) && total <= textWidth {
+				used = total
+			}
 			shift := lineIndent.Add(
-				l.alignLine(b, lineBaseIsRTL(b, runs), textWidth, alignedWidth(runs, total)))
+				l.alignLine(b, lineBaseIsRTL(b, runs), textWidth, used))
 			if shift != 0 {
 				for k := range line.Runs {
 					line.Runs[k].X = line.Runs[k].X.Add(shift)
@@ -1196,7 +1250,8 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			text: p.text, box: b, face: face, size: size,
 			breakBefore: p.breakBefore || state.breakOpportunity,
 			space:       p.space, collapsible: p.collapsible,
-			tab: p.tab, tabStop: tabStop,
+			trimAtEnd: p.trimAtEnd,
+			tab:       p.tab, tabStop: tabStop,
 			// Preserved white space hangs unless the value is break-spaces,
 			// which exists precisely so that it does not.
 			hangs:  p.space && !p.collapsible && !ws.breakSpaces,
@@ -1308,10 +1363,12 @@ type piece struct {
 	text        string
 	breakBefore bool
 	// space marks white space of any kind, collapsible marks the subset of it
-	// that a line edge removes, and tab and segment mark the two preserved
-	// characters that are not simply text of their own width.
+	// Phase I folds together, trimAtEnd the subset a line edge removes, and tab
+	// and segment the two preserved characters that are not simply text of their
+	// own width.
 	space       bool
 	collapsible bool
+	trimAtEnd   bool
 	tab         bool
 	segment     bool
 }
@@ -1380,12 +1437,38 @@ func splitAtBreaks(text string, ws whiteSpace) ([]piece, bool) {
 			emit(piece{text: "\t", space: true, tab: true})
 			breakNext = true
 
+		case isOtherSpaceSeparator(r):
+			// §4.1's "other space separators". Phase I never saw them — it is
+			// defined over U+0020, U+0009 and the segment breaks and nothing else
+			// — so what arrives here is exactly what the author wrote, and it is
+			// §4.1.2's fourth rule that has something to say about it: a run of
+			// them at the end of a line hangs just as a run of preserved spaces
+			// does, whatever the white-space value, because the rule is written
+			// over "white space, other space separators, and/or preserved tabs".
+			//
+			// One character each rather than a run, because a run of them is not
+			// one thing: U+3000 offers an opportunity after it and U+202F does
+			// not, so two adjacent separators can differ in the only property
+			// that would justify gathering them.
+			//
+			// The ogham space mark is the exception §4.1.2's *third* rule carves
+			// out: where white space collapses it is removed at the end of a line
+			// rather than hung, which is trimAtEnd. It is still not collapsible —
+			// a run of ogham space marks is a run of stemlines and folding them
+			// into one would shorten the line.
+			flush()
+			emit(piece{
+				text: text[i-size : i], space: true,
+				trimAtEnd: r == 0x1680 && ws.collapse,
+			})
+			breakNext = ws.breakSpaces || separatorBreaksAfter(r)
+
 		case r == ' ' || r == '\t':
 			flush()
 			if ws.collapse {
 				// Phase I already reduced the run to a single space and turned
 				// any tab into one, so there is nothing left to gather.
-				emit(piece{text: " ", space: true, collapsible: true})
+				emit(piece{text: " ", space: true, collapsible: true, trimAtEnd: true})
 				breakNext = true
 				break
 			}
@@ -1504,6 +1587,22 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 	// Rewinding rather than looking ahead is what keeps this linear: each item is
 	// still visited once, and the position is a single index rather than a scan.
 	insetAt, insetLine, insetFlow := -1, 0, 0
+	// The most recent point at which this line could have ended, kept for
+	// break-spaces. §3's break-spaces value puts the soft wrap opportunity
+	// *after* every preserved space and nowhere else, so a space belongs to the
+	// unit that precedes it: "X XX X" in four characters is "X " and "XX X",
+	// because the run "XX " — word and the space that follows it, with no
+	// opportunity between them — is three characters wide and does not fit after
+	// the first two. Greedy filling has to measure that whole run and not just
+	// its first item, and this marker is how: the space is placed if it fits, and
+	// sends the line back to the last opportunity if it does not.
+	//
+	// It is a marker rather than a lookahead for the reason insetAt is: each item
+	// is visited once on the way forward and the rewind is a single index, so a
+	// paragraph costs one pass however many times a line has to be given back.
+	// Progress is guaranteed because the marker is only set once the line holds
+	// content, so it is always past the item the line started at.
+	oppAt, oppLine, oppFlow := -1, 0, 0
 	i := from
 	for ; i < len(items); i++ {
 		item := items[i]
@@ -1582,6 +1681,17 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 			return trimLineEdge(line[:insetLine]), insetAt, outOfFlow[:insetFlow], false
 		}
 
+		// The break-spaces rewind. A preserved space that neither hangs nor
+		// begins an opportunity of its own is the tail of the unit before it, so
+		// a line that cannot hold it cannot hold that unit either and ends at the
+		// last opportunity instead. Where there is no such opportunity the space
+		// stays and the line overflows, which is what break-spaces asks for: its
+		// spaces are data and are never dropped to make a line fit.
+		if item.space && !item.collapsible && !item.hangs && !item.noWrap &&
+			!item.breakBefore && oppAt >= 0 && used.Add(item.width) > width {
+			return trimLineEdge(line[:oppLine]), oppAt, outOfFlow[:oppFlow], false
+		}
+
 		// A single item wider than the line has nowhere to go. It is placed and
 		// overflows — breaking inside a word would be worse, since a word split
 		// at an arbitrary point reads as a different word — and it is reported,
@@ -1594,6 +1704,13 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 			// edge, and the box the author wrote is the box that was drawn.
 			l.reportOverflow(item, width)
 		}
+		// Recorded before the switch below, because that is where content becomes
+		// true: an opportunity at the very start of a line is not one the line can
+		// be sent back to.
+		if item.breakBefore && content {
+			oppAt, oppLine, oppFlow = i, len(line), len(outOfFlow)
+		}
+
 		switch {
 		case item.inset && item.breakBefore && content && insetAt < 0:
 			// The line could have ended here. Remember enough to come back.
@@ -1644,7 +1761,9 @@ func fmtPx(u style.Unit) string {
 }
 
 // trimLineEdge is §4.1.2's third rule: a sequence of collapsible spaces at the
-// end of a line is removed.
+// end of a line is removed, "as well as any trailing U+1680 OGHAM SPACE MARK
+// whose white-space property is normal, nowrap, or pre-line". Both are
+// trimAtEnd, which is why the scan reads that rather than collapsible.
 //
 // CSS Text removes it because it is the space the break happened at: leaving it
 // would make a right-aligned line hang, and a centred one sit off-centre by half
@@ -1669,7 +1788,7 @@ func fmtPx(u style.Unit) string {
 // inset is kept.
 func trimLineEdge(line []inlineItem) []inlineItem {
 	end := len(line)
-	for end > 0 && (line[end-1].collapsible || line[end-1].inset) {
+	for end > 0 && (line[end-1].trimAtEnd || line[end-1].inset) {
 		end--
 	}
 	if end == len(line) {

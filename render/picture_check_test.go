@@ -156,6 +156,31 @@ func TestPictureComparesText(t *testing.T) {
 	}
 }
 
+func TestPictureToleratesTextRounding(t *testing.T) {
+	// A run measured as three pieces lands a layout unit away from the same run
+	// measured once. That is a sixty-fourth of a pixel and is not a rendering
+	// difference — but the comparison used to render positions to a hundredth
+	// and match exactly, which made it finer than the engine's own quantum and
+	// stricter than the rule applied to every fill beside it.
+	base := []Op{picText("Test", 8, 29)}
+	for _, off := range []float64{0.015625, 0.05, 0.1, 0.2} {
+		if !pictureEqual([]Op{picText("Test", 8+off, 29)}, base, picPage) {
+			t.Errorf("a run %gpx away was called a rendering difference", off)
+		}
+		if !pictureEqual([]Op{picText("Test", 8, 29+off)}, base, picPage) {
+			t.Errorf("a run %gpx down was called a rendering difference", off)
+		}
+	}
+	// And it stops where the fills stop. Half a pixel is a real displacement,
+	// and a comparison that let it through would stop noticing text moving at
+	// all.
+	for _, off := range []float64{0.5, 1, 5} {
+		if pictureEqual([]Op{picText("Test", 8+off, 29)}, base, picPage) {
+			t.Errorf("a run displaced by %gpx compared equal", off)
+		}
+	}
+}
+
 func TestPictureIgnoresInkTheColourOfThePaper(t *testing.T) {
 	// White text on bare page marks nothing, and a reference that simply does
 	// not draw it puts the same picture on the page. A whole family of tests is

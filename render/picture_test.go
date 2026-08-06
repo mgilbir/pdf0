@@ -207,8 +207,19 @@ func intersect(a, b Rect) Rect {
 // different words at the same place compare equal — a false pass, and the
 // direction of error worth avoiding. Sorting is safe here in a way it is not for
 // rectangles, because overlapping text is not how any of these tests are built.
-func texts(ops []Op, under []coloured) []string {
-	var out []string
+// textMark is one run: what it says, and where.
+//
+// The position is kept as a number rather than folded into the string because
+// the two documents of a reftest reach it by different arithmetic, and comparing
+// formatted text makes every comparison exact — which is stricter than the marks
+// on the page can possibly be.
+type textMark struct {
+	what string
+	x, y style.Unit
+}
+
+func texts(ops []Op, under []coloured) []textMark {
+	var out []textMark
 	for _, op := range ops {
 		v, ok := op.(DrawText)
 		if !ok || strings.TrimSpace(v.Text) == "" {
@@ -226,10 +237,20 @@ func texts(ops []Op, under []coloured) []string {
 			// document shows.
 			continue
 		}
-		out = append(out, fmt.Sprintf("text %q at %s,%s size %s",
-			v.Text, num(v.At.X), num(v.At.Y), num(v.Size)))
+		out = append(out, textMark{
+			what: fmt.Sprintf("text %q size %s", v.Text, num(v.Size)),
+			x:    v.At.X, y: v.At.Y,
+		})
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].what != out[j].what {
+			return out[i].what < out[j].what
+		}
+		if out[i].x != out[j].x {
+			return out[i].x < out[j].x
+		}
+		return out[i].y < out[j].y
+	})
 	return out
 }
 
@@ -349,7 +370,7 @@ func pictureEqual(got, want []Op, clip Rect) bool {
 		return false
 	}
 	for i := range gt {
-		if gt[i] != wt[i] {
+		if gt[i].what != wt[i].what || !nearlyAt(gt[i], wt[i]) {
 			return false
 		}
 	}
@@ -404,4 +425,34 @@ func invisibleInk(v DrawText, under []coloured) bool {
 		return false
 	}
 	return sameColour(got.c, v.Color)
+}
+
+// nearlyAt reports whether two runs are in the same place.
+//
+// "The same place" cannot mean the same number. A layout unit is a sixty-fourth
+// of a pixel and the two documents of a reftest compute their geometry by
+// different routes, so a run measured as three separate spaces lands a unit away
+// from the same run measured once — 57.609375 against 57.59375, which is one
+// unit and is not a rendering difference by any standard.
+//
+// The comparison used to render the position to a hundredth of a pixel and match
+// the text exactly, which made it *finer* than the engine's own quantum: two
+// positions a single layout unit apart could round to different hundredths and
+// be ruled different. Fills have never been compared that way — the sliver rule
+// discards a disagreement narrower than a quarter pixel — so text was being held
+// to a standard sixteen times stricter than everything beside it, for no reason
+// anyone chose.
+//
+// A quarter pixel it is, then, for the same reason and with the same caveat: the
+// error grows with the number of runs measured separately, so this is a bound on
+// what has been seen rather than a proof. What it buys is that the two halves of
+// this comparison now disagree about geometry in the same way.
+func nearlyAt(a, b textMark) bool {
+	off := func(p, q style.Unit) bool {
+		if p > q {
+			p, q = q, p
+		}
+		return q.Sub(p) <= sliver
+	}
+	return off(a.x, b.x) && off(a.y, b.y)
 }
