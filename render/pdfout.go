@@ -6,6 +6,7 @@ import (
 	pdf0 "github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/pdf0/images"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/style"
 )
@@ -291,7 +292,16 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 }
 
 // writePage turns a display list into a one-page document.
+//
+// The document is made before the content stream rather than after, which is
+// the one ordering constraint here: an image has to be written into the file as
+// an object before the drawing can name it, and an object cannot be added to a
+// document that does not exist yet. Fonts are the other way round — a face is
+// subsetted to the glyphs it was asked to set, so it can only be embedded once
+// the drawing is finished — which is why AddPage takes the faces and this
+// passes the images.
 func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
+	doc := pdf0.NewDocument()
 	b := &content.Builder{}
 
 	// The one transform. Reading it right to left: layout units become points,
@@ -310,6 +320,10 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 
 	faces := map[object.Name]*fonts.Face{}
 	names := map[*fonts.Face]object.Name{}
+	xobjects := map[object.Name]object.Object{}
+	// Keyed by the source bytes rather than by the decoded image, so a logo
+	// drawn on every row of a table is one image XObject in the file.
+	imageNames := map[string]object.Name{}
 
 	for _, op := range ops {
 		switch v := op.(type) {
@@ -347,16 +361,47 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 			v.Face.DrawShaped(b, v.Text, v.Size.Px())
 			b.EndText()
 			b.Restore()
+
+		case DrawImage:
+			if v.Image == nil || v.Rect.Empty() {
+				continue
+			}
+			name, ok := imageNames[v.Key]
+			if !ok {
+				// images.Embed is the module's own encoder, and using it rather
+				// than writing a second one is what keeps the two directions
+				// checking each other: whatever it writes, the extraction side
+				// of that package reads back, and the pixels have to survive the
+				// trip. It also brings its own pixel cap.
+				ref, err := images.Embed(doc, v.Image)
+				if err != nil {
+					return nil, fmt.Errorf("embedding an image: %w", err)
+				}
+				name = object.Name(fmt.Sprintf("Im%d", len(imageNames)+1))
+				imageNames[v.Key] = name
+				xobjects[name] = ref
+			}
+			b.Save()
+			// An image XObject is painted into the unit square, so the matrix
+			// *is* the placement. The negative vertical scale is not a flip: in
+			// these coordinates y increases downwards, so the image's own
+			// bottom edge — the one at v=0 — belongs at the rectangle's largest
+			// y. Getting the sign wrong here draws the picture upside down
+			// above the box rather than the right way up inside it.
+			b.Concat(v.Rect.W.Px(), 0, 0, -v.Rect.H.Px(),
+				v.Rect.X.Px(), v.Rect.Bottom().Px())
+			b.Draw(name)
+			b.Restore()
 		}
 	}
 	b.Restore()
 
-	doc := pdf0.NewDocument()
 	if _, err := doc.AddPage(pdf0.Page{
-		Width:   page.Width.Pt(),
-		Height:  page.Height.Pt(),
-		Content: b,
-		Faces:   faces,
+		Width:    page.Width.Pt(),
+		Height:   page.Height.Pt(),
+		Content:  b,
+		Faces:    faces,
+		XObjects: xobjects,
 	}); err != nil {
 		return nil, err
 	}

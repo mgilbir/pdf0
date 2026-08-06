@@ -38,6 +38,34 @@ import (
 type coloured struct {
 	r Rect
 	c style.RGBA
+	// img names the source when this mark is a picture rather than a fill. A
+	// picture is compared by which file it is, not by its pixels: comparing
+	// decoded images would make this a rasterizer, and the question a reftest
+	// asks is whether the two documents drew the same thing in the same place.
+	//
+	// The exception is a picture that is uniformly one opaque colour, which puts
+	// exactly the same ink on exactly the same paper as a fill of that colour —
+	// and the suite depends on the equivalence, since its references draw the
+	// expected square with a solid PNG while the test draws it with a
+	// background. Those arrive here as ordinary fills, so img is empty.
+	img string
+}
+
+// sample is what is visible at a point: either a colour or a picture.
+//
+// The two are kept apart rather than reduced to a colour because there is no
+// colour that means "a picture of a cat". Folding one into the other would make
+// an image compare equal to whatever fill happened to match the synthetic value.
+type sample struct {
+	c   style.RGBA
+	img string
+}
+
+func (s sample) same(o sample) bool {
+	if s.img != "" || o.img != "" {
+		return s.img == o.img
+	}
+	return sameColour(s.c, o.c)
 }
 
 // sliver is the width below which a cell is not evidence of anything.
@@ -57,11 +85,30 @@ const sliver = style.Unit(16) // 1/4 px, given 64 units to the pixel
 func picFills(ops []Op) []coloured {
 	out := make([]coloured, 0, len(ops))
 	for _, op := range ops {
-		v, ok := op.(FillRect)
-		if !ok || v.Rect.Empty() || v.Color.A == 0 {
-			continue
+		switch v := op.(type) {
+		case FillRect:
+			if v.Rect.Empty() || v.Color.A == 0 {
+				continue
+			}
+			out = append(out, coloured{r: v.Rect, c: v.Color})
+		case DrawImage:
+			if v.Rect.Empty() {
+				continue
+			}
+			// A picture of one opaque colour is a fill of that colour, and is
+			// treated as one so that it takes part in occlusion like any other
+			// mark. The check reads every pixel and refuses any transparency —
+			// half-transparent black does not put the same ink down as black.
+			if c, ok := uniformColor(v.Image); ok {
+				out = append(out, coloured{r: v.Rect, c: c})
+				continue
+			}
+			// Anything else is opaque for the purpose of what lies under it.
+			// That is an approximation for a picture with an alpha channel, and
+			// it errs towards calling two documents different, which is the
+			// safe direction for an oracle.
+			out = append(out, coloured{r: v.Rect, c: style.RGBA{A: 1}, img: v.Key})
 		}
-		out = append(out, coloured{v.Rect, v.Color})
 	}
 	return out
 }
@@ -137,13 +184,20 @@ func edgesY(lo, hi style.Unit, sets ...[]coloured) []style.Unit {
 // The walk is from the front so that the common case — an opaque mark on top —
 // stops at the first rectangle. A translucent mark blends with what is under it,
 // which is why the accumulation is a composite rather than a first-hit.
-func colourAt(fs []coloured, x, y style.Unit) style.RGBA {
+func colourAt(fs []coloured, x, y style.Unit) sample {
 	var acc style.RGBA
 	remaining := 1.0
 	for i := len(fs) - 1; i >= 0; i-- {
 		f := fs[i]
 		if x < f.r.X || x >= f.r.X.Add(f.r.W) || y < f.r.Y || y >= f.r.Y.Add(f.r.H) {
 			continue
+		}
+		if f.img != "" {
+			// A picture hides what is beneath it, so the walk stops here.
+			// Anything translucent painted over it does not change *which*
+			// picture is at this point, and blending a colour into one would
+			// invent a value that neither document could be compared against.
+			return sample{img: f.img}
 		}
 		a := f.c.A * remaining
 		acc.R += f.c.R * a
@@ -155,7 +209,7 @@ func colourAt(fs []coloured, x, y style.Unit) style.RGBA {
 			break
 		}
 	}
-	return acc
+	return sample{c: acc}
 }
 
 // sameColour reports whether two resolved colours are indistinguishable.
@@ -206,7 +260,7 @@ func pictureEqual(got, want []Op, clip Rect) bool {
 				continue
 			}
 			y := y0.Add(y1.Sub(y0).Div(2))
-			if !sameColour(colourAt(gf, x, y), colourAt(wf, x, y)) {
+			if !colourAt(gf, x, y).same(colourAt(wf, x, y)) {
 				return false
 			}
 		}

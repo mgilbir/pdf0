@@ -1,6 +1,7 @@
 package render
 
 import (
+	"image"
 	"sort"
 	"strings"
 
@@ -50,8 +51,26 @@ type DrawText struct {
 	Color style.RGBA
 }
 
-func (FillRect) isOp() {}
-func (DrawText) isOp() {}
+// DrawImage paints a decoded image to fill a rectangle.
+//
+// The rectangle is the element's *content* box, which is where a replaced
+// element's content goes: inside its padding, inside its border. The image is
+// stretched to it rather than fitted, because the sizing rules upstream have
+// already chosen a rectangle with the right shape — object-fit, which is what
+// asks for anything else, is not implemented.
+type DrawImage struct {
+	Rect  Rect
+	Image image.Image
+	// Key identifies the source bytes. Two elements naming one file carry the
+	// same key, which is what lets the backend embed the picture once — a
+	// document with a logo in a header repeated on every row would otherwise
+	// carry it as many times as it is drawn.
+	Key string
+}
+
+func (FillRect) isOp()  {}
+func (DrawText) isOp()  {}
+func (DrawImage) isOp() {}
 
 // Paint turns a fragment tree into a display list, in painting order.
 //
@@ -241,7 +260,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 	if !root {
 		lv.blocks = append(lv.blocks, f)
 	}
-	if len(f.Lines) > 0 || f.Marker != nil {
+	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil {
 		lv.content = append(lv.content, f)
 	}
 	for _, c := range f.Children {
@@ -350,6 +369,17 @@ func (p *painter) decorations(f *Fragment) {
 // in the margin, outside its own list item — is a real overlap rather than a
 // theoretical one.
 func (p *painter) content(f *Fragment) {
+	// A replaced element's content is painted here rather than with the
+	// backgrounds, and for the same reason the marker is: it is content. §E.2
+	// paints every block background in a stacking context before any of its
+	// content, so an image drawn with the backgrounds would be covered by the
+	// background of any box painted after it — which for an image overlapping
+	// its next sibling is a real overlap rather than a theoretical one.
+	if r := f.Box.Replaced; r != nil && r.Image != nil {
+		if rect := f.ContentRect(); !rect.Empty() {
+			p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
+		}
+	}
 	if m := f.Marker; m != nil && m.Face != nil {
 		p.ops = append(p.ops, DrawText{
 			At: Point{

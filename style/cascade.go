@@ -76,6 +76,10 @@ type candidate struct {
 	// the remaining ties. Two declarations that are equal in every other term
 	// are decided by which was written later, so this has to be a single
 	// sequence across all sheets rather than an index within one.
+	//
+	// It is numbered from zero across the real declarations, which leaves the
+	// negative numbers free for the things that are ordered against them
+	// without being in a stylesheet at all — see hintOrder.
 	order int
 	// offset is where it was written, for diagnostics.
 	offset int
@@ -408,6 +412,20 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 				property: d.property, value: d.value, important: d.important,
 				origin: r.origin, spec: spec,
 				order: d.order, offset: d.offset,
+			})
+		}
+	}
+
+	// The presentational hints of hints.go, at the very bottom of the author
+	// origin: zero specificity and an order number below every declaration an
+	// author wrote, so any author rule at all beats them and no user-agent rule
+	// ever does. They belong to the element and not to its pseudo-elements,
+	// which have no attributes of their own.
+	if pseudo == "" {
+		for property, value := range presentationalHints(n) {
+			cands = append(cands, candidate{
+				property: property, value: value,
+				origin: OriginAuthor, order: hintOrder, offset: n.Offset,
 			})
 		}
 	}
