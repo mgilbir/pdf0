@@ -93,6 +93,10 @@ var properties = map[string]property{
 	"direction":             {true, "ltr"},
 	"unicode-bidi":          {false, "normal"},
 
+	// Generated content. It does not inherit — a ::before on a parent must not
+	// give every descendant the same marker.
+	"content": {false, "normal"},
+
 	// Backgrounds.
 	"background-color": {false, "transparent"},
 

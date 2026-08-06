@@ -96,10 +96,23 @@ type Styler struct {
 // distinguish "unset" from "absent".
 type ComputedStyle map[string]string
 
+// PseudoKey names one pseudo-element of one element.
+type PseudoKey struct {
+	Node *html.Node
+	// Name is "before", "after" and so on, without the colons.
+	Name string
+}
+
 // Styled is the result: a computed style for every element of the document.
 type Styled struct {
 	// Styles maps each element to its computed values.
 	Styles map[*html.Node]ComputedStyle
+
+	// Pseudo holds the computed values of the pseudo-elements that any rule
+	// selected. An entry exists only where a rule matched, because a
+	// pseudo-element that nothing styles generates nothing — unlike a real
+	// element, which exists whether or not anything mentions it.
+	Pseudo map[PseudoKey]ComputedStyle
 	// Findings is everything worth telling the caller, in stylesheet order.
 	Findings []Finding
 	// Incomplete reports that the selector-matching budget tripped, so some
@@ -118,14 +131,26 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 	// the same question ten thousand times.
 	rules := s.prepare(sheets)
 
-	out := Styled{Styles: map[*html.Node]ComputedStyle{}}
+	out := Styled{
+		Styles: map[*html.Node]ComputedStyle{},
+		Pseudo: map[PseudoKey]ComputedStyle{},
+	}
 	// Document order, so a parent is always computed before its children and
 	// inheritance can read the parent's finished values.
 	doc.Walk(func(n *html.Node) bool {
 		if n.Type != html.ElementNode {
 			return true
 		}
-		out.Styles[n] = s.computeFor(n, rules, out.Styles)
+		out.Styles[n] = s.computeFor(n, rules, out.Styles, "")
+		for _, name := range pseudoElementNames {
+			if !s.anyRuleTargets(rules, n, name) {
+				continue
+			}
+			// A pseudo-element inherits from the element it belongs to, which is
+			// why the parent style passed here is that element's own.
+			out.Pseudo[PseudoKey{Node: n, Name: name}] =
+				s.computeForPseudo(n, rules, out.Styles[n], name)
+		}
 		return true
 	})
 
@@ -322,11 +347,51 @@ func (s *Styler) report(f Finding) {
 	}
 }
 
-// computeFor resolves every property for one element.
-func (s *Styler) computeFor(n *html.Node, rules []preparedRule, done map[*html.Node]ComputedStyle) ComputedStyle {
+// pseudoElementNames are the ones that generate a box of their own.
+//
+// ::first-line and ::first-letter are deliberately absent: they style part of
+// something that already exists rather than generating anything, and they need
+// the line breaking to have happened before there is a first line to style.
+var pseudoElementNames = []string{"before", "after", "marker"}
+
+// anyRuleTargets reports whether any rule selects a pseudo-element of an
+// element.
+//
+// It exists so that a pseudo-element with nothing said about it costs nothing: a
+// document of ten thousand elements would otherwise compute three extra styles
+// each, all of them the initial values, and generate nothing from any of them.
+func (s *Styler) anyRuleTargets(rules []preparedRule, n *html.Node, name string) bool {
+	for _, r := range rules {
+		for _, sel := range r.selectors {
+			if sel.PseudoElement != name {
+				continue
+			}
+			if s.matcher.Match(sel, n) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// computeForPseudo resolves the properties of a pseudo-element.
+//
+// It inherits from the element it belongs to rather than from that element's
+// parent, which is what makes "p { color: red } p::before { content: '>' }" draw
+// a red marker without the author saying so twice.
+func (s *Styler) computeForPseudo(n *html.Node, rules []preparedRule,
+	owner ComputedStyle, name string) ComputedStyle {
+	return s.computeFor(n, rules, map[*html.Node]ComputedStyle{n: owner}, name)
+}
+
+// computeFor resolves every property for one element, or for one of its
+// pseudo-elements when pseudo is not empty.
+func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
+	done map[*html.Node]ComputedStyle, pseudo string) ComputedStyle {
+
 	var cands []candidate
 	for _, r := range rules {
-		spec, ok := s.matchSpecificity(r, n)
+		spec, ok := s.matchSpecificityFor(r, n, pseudo)
 		if !ok {
 			continue
 		}
@@ -342,7 +407,14 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule, done map[*html.N
 	// An inline style="..." attribute, which cascades above every author rule
 	// of the same importance. It has no selector, so it has no specificity;
 	// what puts it on top is its own step in the cascade order.
-	inline := s.inlineDeclarations(n)
+	//
+	// It applies to the element and not to its pseudo-elements: there is no
+	// syntax for writing one on a ::before, so a style attribute reaching one
+	// would be a rule the author had no way to express.
+	var inline map[string]preparedDecl
+	if pseudo == "" {
+		inline = s.inlineDeclarations(n)
+	}
 
 	winners := map[string]candidate{}
 	for _, c := range cands {
@@ -353,7 +425,11 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule, done map[*html.N
 	}
 
 	var parent ComputedStyle
-	if p := parentElement(n); p != nil {
+	if pseudo != "" {
+		// A pseudo-element inherits from its own element, which the caller put
+		// in the map under that element's own key.
+		parent = done[n]
+	} else if p := parentElement(n); p != nil {
 		parent = done[p]
 	}
 
@@ -445,10 +521,16 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 // The specificity is that of the most specific selector that *matched*, not the
 // most specific in the list. "a, #b {…}" applies to an <a> with the specificity
 // of "a"; taking "#b" would let the rule beat declarations it should lose to.
-func (s *Styler) matchSpecificity(r preparedRule, n *html.Node) (css.Specificity, bool) {
+func (s *Styler) matchSpecificityFor(r preparedRule, n *html.Node, pseudo string) (css.Specificity, bool) {
 	var best css.Specificity
 	found := false
 	for _, sel := range r.selectors {
+		// A rule with a pseudo-element styles that and nothing else, and a rule
+		// without one never styles a pseudo-element. Getting this backwards
+		// gives every ::before its element's whole style twice over.
+		if sel.PseudoElement != pseudo {
+			continue
+		}
 		if !s.matcher.Match(sel, n) {
 			continue
 		}

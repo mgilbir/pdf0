@@ -107,7 +107,7 @@ func Build(in Input) Built {
 			"selector matching stopped early, so some rules did not apply")
 	}
 
-	root := BuildBoxes(doc, styled.Styles, rec)
+	root := BuildBoxes(doc, styled, rec)
 	reportUnsupportedDisplays(doc, styled.Styles, rec)
 
 	return Built{

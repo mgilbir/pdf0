@@ -162,8 +162,8 @@ var maxBoxes = 1 << 20
 // The root box is the one the document element generated. It is nil when the
 // document produces no boxes at all, which is what "html { display: none }"
 // means and is not an error.
-func BuildBoxes(doc *html.Node, styles map[*html.Node]style.ComputedStyle, rec *Recorder) *Box {
-	b := &boxBuilder{styles: styles, rec: rec}
+func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
+	b := &boxBuilder{styles: styled.Styles, pseudo: styled.Pseudo, rec: rec}
 	root := documentElementOf(doc)
 	if root == nil {
 		return nil
@@ -213,6 +213,7 @@ func mustPx(px float64) style.Unit {
 
 type boxBuilder struct {
 	styles       map[*html.Node]style.ComputedStyle
+	pseudo       map[style.PseudoKey]style.ComputedStyle
 	rec          *Recorder
 	rootFontSize style.Unit
 	count        int
@@ -297,13 +298,34 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		Outer: outer, Inner: inner, Element: n, Style: cs,
 		ListItem: listItem, FontSize: fontSize,
 	}
+	// ::before and ::after bracket the element's own children rather than
+	// replacing them, which is why they are added here and not by the caller.
+	if before := b.generated(n, "before", fontSize); before != nil {
+		before.Parent = box
+		box.Children = append(box.Children, before)
+	}
 	for _, child := range n.Children {
 		if c := b.build(child, cs, fontSize); c != nil {
 			c.Parent = box
 			box.Children = append(box.Children, c)
 		}
 	}
+	if after := b.generated(n, "after", fontSize); after != nil {
+		after.Parent = box
+		box.Children = append(box.Children, after)
+	}
 	return box
+}
+
+// fontSizeOfStyle resolves a font-size from a computed style that belongs to no
+// element of its own, which is what a pseudo-element has.
+func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit) style.Unit {
+	vals, _ := css.ParseComponentValues(cs["font-size"])
+	size, _, ok := style.ResolveFontSize(vals, parent, b.rootFontSize)
+	if !ok {
+		return parent
+	}
+	return size
 }
 
 // room reports whether another box may be made.
