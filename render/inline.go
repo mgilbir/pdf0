@@ -69,7 +69,9 @@ import (
 // each run rather than on a fragment because an inline box has no fragment: a
 // <span> broken across a line contributes to two line boxes and to neither
 // exclusively. Offsetting the runs is the whole of the visible effect here,
-// since this engine draws no background, border or padding on an inline box.
+// since this engine reserves an inline box's horizontal margin, border and
+// padding — see insetItems — but paints none of them, and paints no background
+// on one either.
 //
 // What is given up is the *stacking level*. §9.9 makes a positioned inline a
 // positioned box, painted at Appendix E step 7 with everything else positioned;
@@ -142,7 +144,8 @@ type TextRun struct {
 	// contributes to two of them. Carrying the offset per run is what lets a
 	// relatively positioned inline move its text and nothing else — which is the
 	// whole of what relative positioning does to an inline box, since this
-	// engine draws no background, border or padding on one.
+	// engine paints no background, border or padding on one. It does reserve the
+	// horizontal room the last two occupy; see insetItems.
 	Offset Point
 }
 
@@ -225,6 +228,11 @@ type inlineItem struct {
 	// noWrap marks text that may not break at its spaces, so a line takes it
 	// whole or overflows.
 	noWrap bool
+	// inset marks an item that is an inline box's own horizontal margin, border
+	// and padding rather than anything of its content: §8.3, §8.4 and §8.5 make
+	// all three apply to a non-replaced inline box on the horizontal axis, and
+	// what they do there is push the content along. See insetItems.
+	inset bool
 	// float is the box of a float met in this run of inline content. It carries
 	// no text of its own: it is a marker saying "a float belongs here", because
 	// where a float appears among the words decides which line box it is placed
@@ -405,6 +413,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					f.BorderRect.X = line.Rect.X.Add(x).Add(f.Margin.Left)
 					f.BorderRect.Y = y.Add(atomicTop(item, st, lh, bl)).Add(f.Margin.Top)
 					parent.Children = append(parent.Children, f)
+					continue
+				}
+				if item.inset {
+					// An inline box's own margin, border and padding. It has
+					// taken its room on the line already — lineOffsets counted
+					// its width, so everything after it is where it belongs —
+					// and it draws nothing, so it becomes no run. A run with no
+					// text would reach the content stream as an empty
+					// text-showing operator and reach a reader extracting the
+					// page as nothing at all.
 					continue
 				}
 				line.Runs = append(line.Runs, TextRun{
@@ -998,11 +1016,121 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// characters at those two points.
 			open, closing := bidiControls(child)
 			frame.bidi.enter(open)
+			lead, trail := l.insetItems(child, frame.containing)
+			if lead.width != 0 {
+				// A break opportunity carried in belongs to the box's leading
+				// edge and not to its first word: a line may end before
+				// "<span style='margin-left: 99px'>word</span>", and it may not
+				// end between that margin and the word it pushes along.
+				//
+				// Whether a collapsible space may still collapse into the one
+				// before it is a different question and is left alone. §4.1.1's
+				// fourth rule collapses across an inline boundary, and a margin
+				// on the boundary does not make two spaces into one space each.
+				lead.breakBefore = state.breakOpportunity
+				state.breakOpportunity = false
+				out = append(out, lead)
+			}
 			out, state = l.collectInline(child, out, state, inner)
+			if trail.width != 0 {
+				// The trailing edge takes no opportunity of its own: a line
+				// cannot end between a box's last word and its own closing
+				// margin, so whatever was carried in passes through to whatever
+				// comes after the box.
+				out = append(out, trail)
+			}
 			frame.bidi.leave(open, closing)
 		}
 	}
 	return out, state
+}
+
+// insetItems is the room a non-replaced inline box's own margin, border and
+// padding take on the line.
+//
+// # Why an inline box needs this at all
+//
+// §8.3, §8.4 and §8.5 each say the same thing about the horizontal axis and the
+// opposite about the vertical: margin-left, border-left-width and padding-left
+// apply to a non-replaced inline box and push its content along, while
+// margin-top and margin-bottom do not apply at all and a vertical padding or
+// border bleeds over the lines above and below without changing the height of
+// any of them.
+//
+// This engine had none of it. A "<span style='margin-left: 96px'>" set its text
+// where the span before it ended, and the measurement that found it is worth
+// naming because the tests were not looking for this: css/CSS2/text's
+// letter-spacing and word-spacing families check their property by drawing the
+// same picture twice, once with the property and once with an equivalent margin
+// on an inline box. The engine got letter-spacing and word-spacing right and the
+// margin wrong, so 34 tests failed and read as spacing failures.
+//
+// # What is emitted, and what a line does with it
+//
+// Two items with no text: one before the box's content and one after, carrying
+// the summed inset of that side. They are ordinary items in every other respect,
+// which is what makes the rest of §9.4.2 come out on its own:
+//
+//   - The inset is added once at the box's real start and once at its real end,
+//     not once per line, which is what §8.6's "box-decoration-break: slice"
+//     asks for on a box broken across lines.
+//   - A line box holding an inline box with a non-zero horizontal margin,
+//     border or padding is not one of §9.4.2's zero-height line boxes, and it
+//     is not one here either — there is an item on it, so the line exists and
+//     takes the strut's height. A box whose insets are all zero emits nothing
+//     and so still produces no line, which is what keeps an empty "<span></span>"
+//     from putting a blank line into every document.
+//   - The intrinsic widths pick it up without being told: widthsOf's default
+//     case adds an unbreakable item to both the running word and the line.
+//
+// # The end that is not done: §8.6's bidi box model
+//
+// The left inset is emitted before the box's content and the right after it, in
+// *logical* order. That is the same thing as physical order on a line that is
+// not reordered, which is every line of a left-to-right document — and it is not
+// the same thing on a line that is. Reordering reverses a right-to-left run, so
+// on such a line the item emitted first is drawn last, and a margin-left is
+// drawn on the box's physical right.
+//
+// §8.6 states the rule this would have to satisfy: with direction ltr the
+// left-most box of the *first* line box carries the left inset and the right-most
+// box of the last carries the right; with direction rtl the two swap. Doing it
+// means placing the two items by the resolved embedding level of the box's
+// content, which is known after resolveBidi and not here — an inset carries no
+// characters, so it has no level of its own and takes its neighbour's.
+//
+// Swapping the two sides on the box's own "direction" was tried, because that is
+// what §8.6 keys on. It is worse: 2964 clean passes against 2973 without it,
+// because a "direction: rtl" that does not also reorder — the default
+// "unicode-bidi: normal" — changes the box model and not the order, and the swap
+// assumes the order changed. The four tests that show the gap either way are
+// css/CSS2/box's ltr-span-only and rtl-span-only and their -ib pair.
+//
+// Nothing is painted. A background, a border or an outline on an inline box is
+// still not drawn — this reserves the room the border occupies without ruling
+// the border — so an inline with a visible border now leaves a gap where the
+// border goes rather than closing over it. That is the closer of the two
+// answers: the text after the box lands where it belongs either way, and it is
+// the position of the text that everything else on the page is measured from.
+func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inlineItem) {
+	edges := l.edges(b, "margin", containing).
+		Add(l.borderWidths(b)).
+		Add(l.paddingOf(b, containing))
+
+	left, right := edges.Left, edges.Right
+	// §8.6's slice model over a box a block inside it broke in two: the left
+	// inset belongs to the piece the box begins on and the right to the piece it
+	// ends on, and a join in the middle gets neither.
+	if b.noLeadInset {
+		left = 0
+	}
+	if b.noTrailInset {
+		right = 0
+	}
+	item := inlineItem{box: b, inset: true}
+	lead, trail = item, item
+	lead.width, trail.width = left, right
+	return lead, trail
 }
 
 // itemsFor cuts one text box into items at its break opportunities and measures
@@ -1359,6 +1487,23 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 	line []inlineItem, next int, outOfFlow []midLineBox, forced bool) {
 
 	var used style.Unit
+	// content says the line holds something a reader would see. It is not the
+	// same as the line being non-empty: an inline box's own margin, border and
+	// padding take room without being content, and §4.1.2's rule about the
+	// *beginning of a line* is about the text. "<span style='margin-left: 5px'>
+	// x</span>" sets one space in from five pixels, not from nine.
+	content := false
+	// A break opportunity that fell on an inline box's leading edge is a break
+	// before the box, and the box's margin travels to the next line with the
+	// word it pushes along. That decision cannot be taken when the margin is
+	// reached: the margin is an item of its own, the word after it is not an
+	// opportunity of its own, and it is the *pair* that has to fit. So where the
+	// opportunity was is remembered and the line rewinds to it if the word turns
+	// out not to fit.
+	//
+	// Rewinding rather than looking ahead is what keeps this linear: each item is
+	// still visited once, and the position is a single index rather than a scan.
+	insetAt, insetLine, insetFlow := -1, 0, 0
 	i := from
 	for ; i < len(items); i++ {
 		item := items[i]
@@ -1393,7 +1538,21 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 		// Only a *collapsible* one. Preserved white space at the start of a
 		// line is content — it is what makes "<pre>    indented</pre>" indent,
 		// and it is the whole of the pre-wrap leading-space rule.
-		if item.collapsible && len(line) == 0 {
+		//
+		// The test is on the line's *content* rather than on the line being
+		// empty, because an inline box's margin is not content — but no
+		// document in the suite can tell the two apart, and that is worth
+		// recording rather than leaving as an implied claim. Reaching the
+		// difference needs a collapsible space that survives collection sitting
+		// immediately after an inline box's leading margin, on a line that
+		// begins there. The two requirements contradict each other: a line
+		// begins at a margin only when a space preceded the box, and a space
+		// before the box is exactly what makes §4.1.1 collapse away the one
+		// after its opening tag. Planting "len(line) == 0" here moves nothing —
+		// 2973 clean passes either way — so this branch is the correct reading
+		// of the rule and has no test, which is a different thing from being
+		// covered.
+		if item.collapsible && !content {
 			continue
 		}
 
@@ -1414,13 +1573,37 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 			return trimLineEdge(line), i, outOfFlow, false
 		}
 
+		// The rewind. The item does not begin a break opportunity of its own,
+		// but an inline box opened just before it did, and the pair is what does
+		// not fit — so the line ends where the box began and the box's leading
+		// margin goes with it.
+		if !item.noWrap && !item.hangs && !item.breakBefore && !item.inset &&
+			insetAt >= 0 && used.Add(item.width) > width {
+			return trimLineEdge(line[:insetLine]), insetAt, outOfFlow[:insetFlow], false
+		}
+
 		// A single item wider than the line has nowhere to go. It is placed and
 		// overflows — breaking inside a word would be worse, since a word split
 		// at an arbitrary point reads as a different word — and it is reported,
 		// because the part past the edge is simply not drawn and nothing else
 		// about the page says so.
-		if item.width > width && len(line) == 0 && !item.space && !item.noWrap {
+		if item.width > width && !content && !item.space && !item.noWrap && !item.inset {
+			// An inset is not text and has no text to name in the report. A
+			// margin wider than the line is also not the fault the report is
+			// about — nothing is clipped, the content is simply pushed past the
+			// edge, and the box the author wrote is the box that was drawn.
 			l.reportOverflow(item, width)
+		}
+		switch {
+		case item.inset && item.breakBefore && content && insetAt < 0:
+			// The line could have ended here. Remember enough to come back.
+			insetAt, insetLine, insetFlow = i, len(line), len(outOfFlow)
+		case !item.inset:
+			// Something that is not a margin has been placed, so the break
+			// before the last box is no longer the one to rewind to: there is a
+			// nearer opportunity, or none, and either way this one is spent.
+			insetAt = -1
+			content = true
 		}
 		line = append(line, item)
 		used = used.Add(item.width)
@@ -1479,11 +1662,28 @@ func fmtPx(u style.Unit) string {
 // space off centre. Justification is the one consumer §4.1.2 names that this
 // engine still does not have, and textalign.go reports it rather than setting
 // justified text ragged in silence.
+// An inline box's own margin, border and padding is not text and does not stop
+// the rule reaching the space before it: "<span>word </span>" ends the line with
+// a space whether or not the span has a margin, and the span's margin is still
+// its margin once the space has gone. So the scan looks past an inset and the
+// inset is kept.
 func trimLineEdge(line []inlineItem) []inlineItem {
-	for len(line) > 0 && line[len(line)-1].collapsible {
-		line = line[:len(line)-1]
+	end := len(line)
+	for end > 0 && (line[end-1].collapsible || line[end-1].inset) {
+		end--
 	}
-	return line
+	if end == len(line) {
+		return line
+	}
+	// Cutting the capacity keeps the append below from writing over the items
+	// after end, which are still the caller's.
+	out := line[:end:end]
+	for _, item := range line[end:] {
+		if item.inset {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // lineHeight resolves the line-height property.

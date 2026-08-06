@@ -180,7 +180,27 @@ const wptEnv = "WPT_TESTS"
 // cannot pass. It *was* passing, because the comparison could not see the square
 // at all. Drawing it made the test fail honestly. It carries no flags metadata,
 // so the harness has no way to skip it.
-const wptCleanPassBaseline = 2923
+//
+// An inline box's own horizontal margin, border and padding took it from 2923 to
+// 2973, and that number *is* about layout: failures fell from 1930 to 1878, and
+// the two directions were counted rather than netted. 62 tests stopped failing
+// and 10 started, every one of the ten understood:
+//
+//   - Nine are §8.6's bidi box model, where the box's inset is on the wrong side
+//     of a "direction: rtl" inline. insetItems says what implementing it would
+//     take and why swapping the sides on the direction property is not it.
+//   - One, linebox/split-inline-borders, fails because its *reference* uses
+//     border-inline-end and padding-inline-end, which this engine does not
+//     implement and does report. The test document is now right and the
+//     reference is not.
+//
+// How the fault was found is worth recording, because nothing was looking for
+// it. The css/CSS2/text directory's letter-spacing and word-spacing families —
+// 34 tests — check their property by drawing the same picture twice, once with
+// the property and once with an equivalent margin on an inline box. The engine
+// had letter-spacing and word-spacing exactly right and no inline margin at all,
+// so a third of that directory failed and read as a spacing fault.
+const wptCleanPassBaseline = 2973
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
