@@ -3,7 +3,11 @@ package render
 import (
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -323,5 +327,68 @@ func TestFindingMessageNamesThePlace(t *testing.T) {
 func TestLimitRuleMatchesTheRestOfPdf0(t *testing.T) {
 	if RuleLimit != "limit" {
 		t.Errorf("the limit rule is %q; internal/finding.LimitRule is \"limit\"", RuleLimit)
+	}
+}
+
+// TestEveryRuleIsRegistered closes the hole the coverage check cannot see.
+//
+// AllRules is derived from defaultSeverity, so a Rule declared as a constant and
+// never put in that map is invisible to it — and therefore invisible to the §6.5
+// coverage check too. It would still be reportable, at whatever severity the
+// fallback gives, and nothing would ever ask whether a test fired it.
+//
+// That is not hypothetical: two rules were added in exactly that state, the
+// coverage check passed because it could not see them, and this test is what
+// stops it happening again. It reads the source because there is no other way to
+// enumerate a Go constant.
+func TestEveryRuleIsRegistered(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "finding.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing finding.go: %v", err)
+	}
+
+	registered := map[Rule]bool{}
+	for _, r := range AllRules() {
+		registered[r] = true
+	}
+
+	var declared int
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		ident, ok := spec.Type.(*ast.Ident)
+		if !ok || ident.Name != "Rule" {
+			return true
+		}
+		for i, name := range spec.Names {
+			if i >= len(spec.Values) {
+				continue
+			}
+			lit, ok := spec.Values[i].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				continue
+			}
+			value, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				continue
+			}
+			declared++
+			if !registered[Rule(value)] {
+				t.Errorf("the rule %s (%q) is declared and is not in defaultSeverity, "+
+					"so AllRules cannot see it and the coverage check never asks "+
+					"whether anything fires it", name.Name, value)
+			}
+		}
+		return true
+	})
+
+	if declared == 0 {
+		t.Fatal("no rule constants were found; this test is checking nothing")
+	}
+	if declared != len(registered) {
+		t.Errorf("%d rules are declared and %d registered", declared, len(registered))
 	}
 }

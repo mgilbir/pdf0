@@ -151,13 +151,16 @@ func Render(in Input, opts Options) (Result, error) {
 	checkScale(rec, scale, opts.MinScale)
 	checkFontSizes(rec, root, scale, opts.MinFontSizePt)
 
+	ops := Paint(root)
+	checkPageOverflow(rec, ops, avail, scale)
+
 	out := Result{Scale: scale, NaturalSize: natural}
 	if rec.Failed() {
 		out.Findings = rec.Findings()
 		return out, nil
 	}
 
-	doc, err := writePage(Paint(root), opts.Page, scale)
+	doc, err := writePage(ops, opts.Page, scale)
 	if err != nil {
 		return out, err
 	}
@@ -246,6 +249,45 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 		}
 	}
 	walk(root)
+}
+
+// checkPageOverflow is the overflow-page guardrail of §6.2.
+//
+// It should never fire. The scale of §5 is computed so that everything fits, so
+// this is a self-check on that computation as much as a guardrail on the
+// document — which is exactly why it is worth having. A threshold that verifies
+// an earlier calculation catches the case where the calculation was wrong, and
+// that is a class of fault no amount of checking the document can reach.
+//
+// Content that overflows its own *box* is the other guardrail's business; this
+// is only about leaving the page.
+func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
+	page := Rect{W: avail.W.Div(scale), H: avail.H.Div(scale)}
+	var worst Rect
+	var found bool
+
+	for _, op := range ops {
+		r, ok := op.(FillRect)
+		if !ok || r.Rect.Empty() {
+			continue
+		}
+		if page.Contains(r.Rect) {
+			continue
+		}
+		if !found || r.Rect.Right() > worst.Right() || r.Rect.Bottom() > worst.Bottom() {
+			worst, found = r.Rect, true
+		}
+	}
+	if !found {
+		return
+	}
+	rec.ReportDetail(Finding{
+		Rule: RuleOverflowPage,
+		Message: fmt.Sprintf(
+			"content reaches %.1f x %.1f px after scaling, outside the page's %.1f x %.1f; "+
+				"the scale-to-fit calculation did not account for it",
+			worst.Right().Px(), worst.Bottom().Px(), page.W.Px(), page.H.Px()),
+	})
 }
 
 // writePage turns a display list into a one-page document.

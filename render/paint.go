@@ -90,6 +90,16 @@ func (p *painter) fragment(f *Fragment) {
 
 	p.borders(f)
 
+	if m := f.Marker; m != nil && m.Face != nil {
+		p.ops = append(p.ops, DrawText{
+			At: Point{
+				X: f.BorderRect.X.Add(m.At.X),
+				Y: f.BorderRect.Y.Add(m.At.Y),
+			},
+			Text: m.Text, Face: m.Face, Size: m.Size, Color: m.Color,
+		})
+	}
+
 	for _, child := range f.Children {
 		p.fragment(child)
 	}
