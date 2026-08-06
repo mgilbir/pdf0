@@ -34,7 +34,11 @@ import (
 //
 // It is loaded from the checkout rather than vendored: the file belongs to the
 // suite, it is fetched with it, and a copy in this repository would be a second
-// thing to keep in step.
+// thing to keep in step. That also settles the licensing, which is worth stating
+// because a font is often not as free as the code around it — Ahem.ttf is
+// tracked in the web-platform-tests repository under its 3-Clause BSD licence
+// and carries none of its own, and pdf0 ships no font bytes at all. See the note
+// beside WPT_DIRS in the Makefile.
 
 // wptFonts is a FontSet that answers for Ahem and defers to the standard
 // faces for everything else.

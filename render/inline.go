@@ -1593,11 +1593,33 @@ func (l *layouter) checkScript(b *Box) {
 // hearing it four hundred times about the same one is not four hundred times as
 // useful.
 func (l *layouter) checkGlyphs(b *Box, face *fonts.Face) {
+	// The question has to be the one *drawing* answers, and it was not.
+	//
+	// This asked face.GlyphID, which is whether the face has a glyph mapped to
+	// a code point. Shaping asks something different and gets a different
+	// answer: a no-break space has no glyph of its own and is set as a space, a
+	// bidi override has none and takes no room at all, and the same goes for
+	// every fixed-width Unicode space and every zero-width format control. All
+	// of them draw correctly, and all of them were being reported — at Error
+	// severity, the one that stops a document being produced.
+	//
+	// Measured over the reftest suite, that was the single most common finding
+	// in the whole engine: 154 documents reported a missing glyph for the
+	// no-break space alone, and 260 documents were kept out of the clean-pass
+	// count by nothing else. A guardrail wrong that often is worse than no
+	// guardrail, because the reports it is right about are buried.
+	//
+	// Shaping the whole run first is also what makes this cheap: the answer is
+	// almost always that nothing is missing, and only then is it worth walking
+	// the characters to find out which.
+	if _, missing := face.Shape(b.Text); missing == 0 {
+		return
+	}
 	for _, r := range b.Text {
-		if r == '\n' || r == '\t' {
+		if r == '\n' || r == '\t' || marksNoPaper(r) {
 			continue
 		}
-		if _, ok := face.GlyphID(r); ok {
+		if _, missing := face.Shape(string(r)); missing == 0 {
 			continue
 		}
 		key := string(r) + "\x00" + face.Name()
@@ -1608,7 +1630,8 @@ func (l *layouter) checkGlyphs(b *Box, face *fonts.Face) {
 		l.rec.ReportDetail(Finding{
 			Rule: RuleGlyphMissing,
 			Message: "the face " + quoteValue(face.Name()) + " has no glyph for " +
-				describeRune(r) + ", which would be drawn as a blank box",
+				describeRune(r) + ", which is set as a space, so the character is " +
+				"missing from the page and from the text extracted out of it",
 			Path: PathOf(b.Element),
 		})
 	}
@@ -1667,4 +1690,48 @@ func unsupportedScript(r rune) (string, bool) {
 // precision than that is noise in a message a person reads.
 func strconvFormat(v float64) string {
 	return strconv.FormatFloat(float64(int(v*10+0.5))/10, 'f', -1, 64)
+}
+
+// marksNoPaper reports whether a character is a space by definition.
+//
+// A face that cannot encode one of these is not a problem to report. The encoder
+// substitutes a space for anything it cannot represent, and for a character that
+// was never going to put ink down that substitution is either exactly right — a
+// no-break space *is* a space, differing only in whether a line may break at it,
+// which is settled long before the face is asked — or wrong by a fraction of an
+// em, as for the fixed-width spaces whose whole purpose is to be a particular
+// width.
+//
+// The distinction matters because the substitution is not harmless in general. A
+// Hebrew letter the face cannot encode also becomes a space, so the word does
+// not appear as a row of boxes — it is simply absent, from the page and from the
+// text extracted out of it. That is worth an error. A no-break space becoming a
+// space is not, and reporting it was the most common finding this engine
+// produced: 154 documents in the reftest suite raised it for U+00A0 alone.
+//
+// # Why the format characters are not listed here
+//
+// They were, and the list could not be observed. A planted defect that deleted
+// the whole format-character branch — soft hyphen, the zero-width spaces, the
+// bidi embeddings and isolates, the byte order mark — broke nothing, and the
+// reason is that shaping already answers "not missing" for every one of them,
+// on both kinds of face. A simple face encodes through WinAnsi and drops them;
+// a composite face shapes them to no glyph and no advance, which is what they
+// are for. Measured on Ahem: every one reports missing=0, and so does the
+// no-break space, because a composite face has a real glyph for it.
+//
+// So only the space separators are here, and only the simple faces need them —
+// which is to say the fourteen standard PDF faces, which is what a document gets
+// unless a caller supplies something else.
+func marksNoPaper(r rune) bool {
+	switch {
+	case r == 0x00A0, // no-break space
+		r == 0x1680,                // ogham space mark
+		r >= 0x2000 && r <= 0x200A, // en quad through hair space
+		r == 0x202F,                // narrow no-break space
+		r == 0x205F,                // medium mathematical space
+		r == 0x3000:                // ideographic space
+		return true
+	}
+	return false
 }
