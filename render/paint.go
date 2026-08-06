@@ -37,8 +37,8 @@ type Op interface{ isOp() }
 type FillRect struct {
 	Rect  Rect
 	Color style.RGBA
-	// Text marks a fill that belongs to a run of text rather than to a box: a
-	// text decoration is the only one.
+	// Overhang marks a fill whose position no layout decision accounted for: a
+	// text decoration, and the background and border of an inline box.
 	//
 	// It exists for the overflow-page guardrail, which is about *boxes* leaving
 	// the page and reads the display list to find them. Text is not checked by it
@@ -49,7 +49,15 @@ type FillRect struct {
 	// severity, and no document is produced at all: an overhang of two pixels
 	// turned into a refusal, from a rule whose whole purpose is to catch a wrong
 	// scale calculation.
-	Text bool
+	//
+	// An inline box's decoration is the same case and reaches it by the same
+	// route. §10.6.1 gives the box a content area the height of its *font* rather
+	// than of the line it sits on, and §8.4 and §8.5 keep its vertical border and
+	// padding out of layout entirely — so a "line-height: 0.5" span, or one with
+	// ten pixels of padding, puts ink above the first line of a page that nothing
+	// in the flow ever measured. The scale-to-fit calculation cannot have
+	// accounted for it, so a guard checking that calculation must not read it.
+	Overhang bool
 }
 
 // DrawText draws a run of text with the origin of its baseline at At.
@@ -574,6 +582,27 @@ func (p *painter) content(f *Fragment) {
 	p.lines(f)
 }
 
+// inlineDecorations paints one fragment of an inline box: the same background
+// and border every other box gets, marked as an overhang.
+//
+// The marking is done over the operations rather than passed into the painting,
+// because the decomposition it would have to be threaded through is border.go's
+// — a dashed border is a dozen fills and a 3-D one is two tones — and a second
+// copy of that decomposition is exactly what border.go exists to prevent. What
+// is here is one flag applied to whatever the shared code produced.
+func (p *painter) inlineDecorations(f *Fragment) {
+	at := len(p.ops)
+	p.decorations(f)
+	for i := at; i < len(p.ops); i++ {
+		r, ok := p.ops[i].(FillRect)
+		if !ok {
+			continue
+		}
+		r.Overhang = true
+		p.ops[i] = r
+	}
+}
+
 // borders paints the four edges as filled bands.
 //
 // Four rectangles rather than a stroked outline, because a stroke is centred on
@@ -640,6 +669,21 @@ func (p *painter) lines(f *Fragment) {
 	content := f.ContentRect()
 	for _, line := range f.Lines {
 		baseline := content.Y.Add(line.Rect.Y).Add(line.Baseline)
+		// §E.2's inline layer, in the order it gives: for each line box, the
+		// background and border of the inline boxes on it, then the text. They
+		// are in tree order among themselves, so an inner box's background is
+		// painted over the box it is inside.
+		//
+		// One deviation, which is the whole of what is not exact here: the
+		// specification interleaves each inline box's own text with its
+		// decoration, so text belonging to a box painted *earlier* in tree order
+		// goes under a later box's background. Two inline boxes on a line only
+		// overlap where a negative margin makes them, and painting all the
+		// decorations of a line first is what keeps this a loop rather than a
+		// second traversal of the tree.
+		for _, box := range line.Boxes {
+			p.inlineDecorations(box)
+		}
 		for _, run := range line.Runs {
 			// Spaces are drawn, not skipped, and the reason is text extraction
 			// rather than ink. A space glyph marks no paper, so skipping it
@@ -720,7 +764,7 @@ func (p *painter) decorate(run TextRun, at Point, over bool) {
 		if band.Empty() {
 			continue
 		}
-		p.ops = append(p.ops, FillRect{Rect: band, Color: colour, Text: true})
+		p.ops = append(p.ops, FillRect{Rect: band, Color: colour, Overhang: true})
 	}
 }
 
