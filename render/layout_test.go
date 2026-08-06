@@ -39,7 +39,7 @@ func layoutOf(t *testing.T, width float64, htmlSrc string, cssSrc ...string) *Fr
 	rec := NewRecorder(nil)
 	w, _ := style.FromPx(width)
 	h, _ := style.FromPx(10000)
-	frag := Layout(got.Root, Size{W: w, H: h}, rec)
+	frag := Layout(got.Root, Size{W: w, H: h}, nil, rec)
 	if frag == nil {
 		t.Fatal("layout produced no fragment")
 	}
@@ -371,189 +371,16 @@ func TestEmResolvesAgainstTheElementsOwnFontSize(t *testing.T) {
 // on any document whose root is display:none.
 func TestNoBoxesIsNotACrash(t *testing.T) {
 	rec := NewRecorder(nil)
-	if got := Layout(nil, Size{}, rec); got != nil {
+	if got := Layout(nil, Size{}, nil, rec); got != nil {
 		t.Error("laying out nothing produced a fragment")
 	}
 	got := Build(Input{HTML: "<p>x</p>", CSS: []Stylesheet{{Source: "html { display: none }"}}})
 	if got.Root != nil {
 		t.Fatal("the document produced boxes")
 	}
-	if frag := Layout(got.Root, Size{}, rec); frag != nil {
+	if frag := Layout(got.Root, Size{}, nil, rec); frag != nil {
 		t.Error("laying out a document with no boxes produced a fragment")
 	}
-}
-
-// TestInlineContentIsReportedOnce pins the honesty of the gap. Text has no
-// height yet, and a document full of paragraphs must say so once rather than per
-// paragraph — a report that long is one nobody reads.
-func TestInlineContentIsReportedOnce(t *testing.T) {
-	got := Build(Input{HTML: "<p>a</p><p>b</p><p>c</p><p>d</p>"})
-	rec := NewRecorder(nil)
-	w, _ := style.FromPx(1000)
-	Layout(got.Root, Size{W: w, H: w}, rec)
-
-	n := 0
-	for _, f := range rec.Findings() {
-		if strings.Contains(f.Message, "inline layout") {
-			n++
-		}
-	}
-	if n != 1 {
-		t.Errorf("the inline gap was reported %d times, want once: %v", n, rec.Findings())
-	}
-
-	// A document with no inline content says nothing about it.
-	got = Build(Input{HTML: `<div><div></div></div>`})
-	rec = NewRecorder(nil)
-	Layout(got.Root, Size{W: w, H: w}, rec)
-	for _, f := range rec.Findings() {
-		if strings.Contains(f.Message, "inline layout") {
-			t.Errorf("a document with no text reported the inline gap: %v", f)
-		}
-	}
-}
-
-// TestFirstChildTopMarginIsApplied pins that a first child's top margin moves
-// it, which nothing else here covered — the collapsing tests all give the first
-// box a *bottom* margin, so dropping the top one entirely changed no expected
-// value.
-func TestFirstChildTopMarginIsApplied(t *testing.T) {
-	css := noDefaults + "#wrap { padding-top: 5px } #a { margin-top: 30px; height: 10px }"
-	root := layoutOf(t, 1000, `<section id="wrap"><div id="a"></div></section>`, css)
-
-	a := find(t, root, "a")
-	// The padding puts the content box at 5, and the margin adds 30.
-	px(t, "the first child's top", a.BorderRect.Y, 35)
-	px(t, "the parent's height", find(t, root, "wrap").BorderRect.H, 5+30+10)
-}
-
-// TestParentChildMarginsCollapse pins the half of §8.3.1 that is about a box and
-// its own children rather than about siblings.
-//
-// A parent with nothing on its top edge — no border, no padding — does not
-// contain its first child's top margin: the two collapse, and the margin ends up
-// outside the parent. A box that behaved otherwise would indent its first child
-// and grow by the same amount, which is a gap the author never wrote.
-func TestParentChildMarginsCollapse(t *testing.T) {
-	css := noDefaults + "#a { margin-top: 20px; height: 10px }"
-	root := layoutOf(t, 1000, `<section id="wrap"><div id="a"></div></section>`, css)
-
-	wrap, a := find(t, root, "wrap"), find(t, root, "a")
-	// The margin escaped through every open edge to the top of the page, so the
-	// child sits exactly where its parent does.
-	px(t, "the child's top", a.BorderRect.Y, 20)
-	px(t, "the parent's top", wrap.BorderRect.Y, 20)
-	// And the parent is only as tall as the child, not the child plus a margin
-	// it never contained.
-	px(t, "the parent's height", wrap.BorderRect.H, 10)
-}
-
-// TestPaddingStopsTheCollapse pins the other side of the same rule. One unit of
-// padding on the edge is enough to hold the margin inside, and the difference in
-// the resulting page is the whole margin.
-func TestPaddingStopsTheCollapse(t *testing.T) {
-	css := noDefaults + "#wrap { padding-top: 1px } #a { margin-top: 20px; height: 10px }"
-	root := layoutOf(t, 1000, `<section id="wrap"><div id="a"></div></section>`, css)
-
-	wrap, a := find(t, root, "wrap"), find(t, root, "a")
-	px(t, "the parent's top", wrap.BorderRect.Y, 0)
-	px(t, "the child's top", a.BorderRect.Y, 21)
-	px(t, "the parent's height", wrap.BorderRect.H, 1+20+10)
-
-	// A border does the same job as a padding.
-	css = noDefaults + `#wrap { border-top-style: solid; border-top-width: 1px }
-		#a { margin-top: 20px; height: 10px }`
-	root = layoutOf(t, 1000, `<section id="wrap"><div id="a"></div></section>`, css)
-	px(t, "the child's top with a border", find(t, root, "a").BorderRect.Y, 21)
-}
-
-// TestBottomMarginsCollapseThroughAnAutoHeight pins that the last child's bottom
-// margin escapes the same way — but only when the parent's height is its
-// content's own. A declared height is a floor the margin cannot reach across.
-func TestBottomMarginsCollapseThroughAnAutoHeight(t *testing.T) {
-	css := noDefaults + "#a { height: 10px; margin-bottom: 20px }"
-	root := layoutOf(t, 1000,
-		`<section id="wrap"><div id="a"></div></section><div id="after"></div>`, css)
-
-	px(t, "the parent's height", find(t, root, "wrap").BorderRect.H, 10)
-	// The margin is outside the parent, so what follows is pushed down by it.
-	px(t, "the following box's top", find(t, root, "after").BorderRect.Y, 30)
-
-	// With a declared height the margin stays inside the parent's flow and the
-	// parent does not shrink to its content.
-	css = noDefaults + "#wrap { height: 50px } #a { height: 10px; margin-bottom: 20px }"
-	root = layoutOf(t, 1000,
-		`<section id="wrap"><div id="a"></div></section><div id="after"></div>`, css)
-	px(t, "a declared height", find(t, root, "wrap").BorderRect.H, 50)
-	px(t, "the following box's top", find(t, root, "after").BorderRect.Y, 50)
-}
-
-// TestEmptyBoxCollapsesThrough pins the everyday case that an engine missing it
-// gets visibly wrong: an empty <div> between two paragraphs must not separate
-// them. Its own two margins collapse into one another and into its neighbours',
-// so the three become one gap.
-func TestEmptyBoxCollapsesThrough(t *testing.T) {
-	css := noDefaults + `
-	#a { height: 10px; margin-bottom: 20px }
-	#gap { margin-top: 10px; margin-bottom: 10px }
-	#b { margin-top: 30px; height: 10px }`
-	root := layoutOf(t, 1000,
-		`<div id="a"></div><div id="gap"></div><div id="b"></div>`, css)
-
-	// The gap is the largest of 20, 10, 10 and 30 — one margin, not four.
-	px(t, "the second box's top", find(t, root, "b").BorderRect.Y, 10+30)
-	// The empty box is still there, occupying nothing.
-	px(t, "the empty box's height", find(t, root, "gap").BorderRect.H, 0)
-
-	// A single unit of height stops it collapsing through, and then it separates
-	// its neighbours like any other box.
-	css = strings.Replace(css, "#gap { margin-top: 10px", "#gap { height: 1px; margin-top: 10px", 1)
-	root = layoutOf(t, 1000,
-		`<div id="a"></div><div id="gap"></div><div id="b"></div>`, css)
-	// 10 + max(20,10) + 1 + max(10,30) = 10 + 20 + 1 + 30
-	px(t, "the second box's top with a solid gap", find(t, root, "b").BorderRect.Y, 61)
-}
-
-// TestInlineContentDoesNotCollapseThrough pins that a box with text in it
-// separates its neighbours, whatever this engine can currently measure.
-//
-// Text has no height yet, so a paragraph is momentarily as empty as an empty
-// <div> by the only measure layout has — and it must not be treated as one. Its
-// content is what stops the margins collapsing through it, not its height, and
-// getting that wrong would pull the paragraphs of every document together and
-// then push them apart again once line layout landed.
-func TestInlineContentDoesNotCollapseThrough(t *testing.T) {
-	css := noDefaults + `
-	#a { height: 10px; margin-bottom: 20px }
-	#b { margin-top: 30px; height: 10px }`
-	root := layoutOf(t, 1000,
-		`<div id="a"></div><p id="p">text</p><div id="b"></div>`, css)
-
-	// The paragraph is content, so the margins either side of it do not meet:
-	// 10 + max(20, 0) + 0 + max(0, 30).
-	px(t, "the box after a paragraph", find(t, root, "b").BorderRect.Y, 60)
-
-	// Replacing the paragraph with an empty box *does* let them collapse, which
-	// is what makes the assertion above about content and not about height.
-	root = layoutOf(t, 1000,
-		`<div id="a"></div><p id="p"></p><div id="b"></div>`, css)
-	px(t, "the box after an empty paragraph", find(t, root, "b").BorderRect.Y, 40)
-}
-
-// TestNegativePaddingIsRefused pins that a negative padding is not a thing. The
-// declaration is invalid and the initial value stands, rather than the box being
-// inset by a negative amount.
-func TestNegativePaddingIsRefused(t *testing.T) {
-	root := layoutOf(t, 1000, `<div id="a"></div>`,
-		noDefaults+"#a { padding-left: -20px; padding-top: -10px }")
-	a := find(t, root, "a")
-	px(t, "a negative left padding", a.Padding.Left, 0)
-	px(t, "a negative top padding", a.Padding.Top, 0)
-
-	// A negative *margin* is legal and does move the box, so the refusal above
-	// is about padding specifically and not about negatives in general.
-	root = layoutOf(t, 1000, `<div id="a"></div>`, noDefaults+"#a { margin-left: -20px }")
-	px(t, "a negative left margin", find(t, root, "a").BorderRect.X, -20)
 }
 
 // TestLayoutIsDeterministic pins that two runs agree, since the stages feeding

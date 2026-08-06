@@ -66,6 +66,20 @@ const (
 	RuleInvalidMarkup Rule = "invalid-markup"
 	RuleInvalidCSS    Rule = "invalid-css"
 
+	// RuleFontFallback is a requested family that was not available, so the
+	// text was set in something else. The metrics and the line breaks differ,
+	// and nothing about the page says so.
+	RuleFontFallback Rule = "font-fallback"
+	// RuleUnsupportedScript is text this engine cannot break or order
+	// correctly. §6.3 makes it an error by default, and is right to: unbroken or
+	// unordered text still looks like text, so the failure mode looks like
+	// success.
+	RuleUnsupportedScript Rule = "unsupported-script"
+	// RuleGlyphMissing is a character no available face has a glyph for. Tofu is
+	// the purest form of silent garbage — a box where a letter should be, which
+	// a reader blames on their PDF viewer.
+	RuleGlyphMissing Rule = "glyph-missing"
+
 	// RuleLimit is a resource guard that tripped, or a run that was cancelled.
 	//
 	// It is spelled the same as internal/finding.LimitRule, and deliberately so:
@@ -105,20 +119,26 @@ func (s Severity) String() string {
 
 // defaultSeverity is what each rule does unless a caller says otherwise.
 //
-// Everything here is Warn. That is not timidity: none of these rules is about
-// geometry yet, and an unsupported property produces a page that is wrong in a
-// way the author can see and decide about. The Error defaults belong to the
-// size thresholds of §6.1 — a 3pt caption or a document scaled past half — and
-// they arrive with the layout that can produce them.
+// Most are Warn: an unsupported property produces a page that is wrong in a way
+// the author can see and decide about. The two that are Error are the ones §6.3
+// names, where the wrongness is invisible — text in the wrong order, or a row of
+// boxes where letters should be, both of which a reader blames on their viewer
+// rather than on the document. The remaining Error defaults belong to the size
+// thresholds of §6.1 and arrive with the layout that can produce them.
 var defaultSeverity = map[Rule]Severity{
 	RuleUnsupportedProperty: Warn,
 	RuleUnsupportedElement:  Warn,
 	RuleUnsupportedSelector: Warn,
 	RuleUnsupportedAtRule:   Warn,
 	RuleUnsupportedValue:    Warn,
-	RuleInvalidMarkup:       Warn,
-	RuleInvalidCSS:          Warn,
-	RuleLimit:               Warn,
+	RuleFontFallback:        Warn,
+	// The two errors. Both produce a page that looks finished and is not, which
+	// is the case where returning no document is better than returning one.
+	RuleUnsupportedScript: Error,
+	RuleGlyphMissing:      Error,
+	RuleInvalidMarkup:     Warn,
+	RuleInvalidCSS:        Warn,
+	RuleLimit:             Warn,
 }
 
 // AllRules returns every rule this engine can report, in a fixed order.
