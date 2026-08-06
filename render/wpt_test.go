@@ -182,7 +182,42 @@ const wptEnv = "WPT_TESTS"
 // failures became passes and only 59 of them were clean, which is the usual
 // shape: a test that stopped failing on its background often still has something
 // else in it this engine does not do.
-const wptCleanPassBaseline = 2737
+// Rectangle glyphs took it from 2578 to 2923, and not one line of layout changed
+// to do it — this is the third time this file has recorded the same lesson, and
+// the largest instance of it. The comparison was calling a run of Ahem a piece of
+// text and the identical black square beside it a fill, and ruling that a
+// difference. Failures fell from 2293 to 1930, and every one of the cases dumped
+// and read by hand was already correct to the layout unit. So the whole of this
+// number is honest reporting catching up with an engine that was already right,
+// and none of it is new ink on the page. See blockglyph_test.go.
+//
+// One test went the other way and is worth naming, because it is the same shape
+// as the border-collapse dozen above. lists/list-item-dynamic-color.html sets a
+// red marker and turns it green from a script; nothing here runs scripts, so it
+// cannot pass. It *was* passing, because the comparison could not see the square
+// at all. Drawing it made the test fail honestly. It carries no flags metadata,
+// so the harness has no way to skip it.
+//
+// An inline box's own horizontal margin, border and padding took it from 2923 to
+// 2973, and that number *is* about layout: failures fell from 1930 to 1878, and
+// the two directions were counted rather than netted. 62 tests stopped failing
+// and 10 started, every one of the ten understood:
+//
+//   - Nine are §8.6's bidi box model, where the box's inset is on the wrong side
+//     of a "direction: rtl" inline. insetItems says what implementing it would
+//     take and why swapping the sides on the direction property is not it.
+//   - One, linebox/split-inline-borders, fails because its *reference* uses
+//     border-inline-end and padding-inline-end, which this engine does not
+//     implement and does report. The test document is now right and the
+//     reference is not.
+//
+// How the fault was found is worth recording, because nothing was looking for
+// it. The css/CSS2/text directory's letter-spacing and word-spacing families —
+// 34 tests — check their property by drawing the same picture twice, once with
+// the property and once with an equivalent margin on an inline box. The engine
+// had letter-spacing and word-spacing exactly right and no inline margin at all,
+// so a third of that directory failed and read as a spacing fault.
+const wptCleanPassBaseline = 3132
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -370,7 +405,12 @@ func renderForCompare(path string) (ops []Op, clean bool, err error) {
 	if normaliseOps(ops) == "" {
 		clean = false
 	}
-	return ops, clean, nil
+	// A run set in a face whose glyphs are filled rectangles is those
+	// rectangles, and has to reach the comparison as such — a quarter of this
+	// suite draws its expected square with Ahem on one side and a background
+	// colour on the other. See blockglyph_test.go for the rule and for what it
+	// refuses.
+	return blockFills(ops), clean, nil
 }
 
 // normaliseOps renders a display list as comparable text.
