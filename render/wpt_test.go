@@ -2,6 +2,8 @@ package render
 
 import (
 	"fmt"
+	"image"
+	"image/color"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -93,7 +95,21 @@ const wptEnv = "WPT_TESTS"
 //
 // It is a ratchet: it may rise and must never be lowered to make a red test
 // green. A drop means a layout regression, and the failing names are printed.
-const wptCleanPassBaseline = 1256
+//
+// The move from 1256 to 1339 was not a straight gain and the shape of it is
+// worth recording, because the number went *down* first. Replaced elements
+// unmasked 172 passes that had been counting nothing: the suite's references
+// draw their expected picture with an <img>, so before images loaded those
+// documents painted only their instruction paragraph — and so did the tests
+// beside them, whose own square was drawn with a display value this engine does
+// not implement. Two documents agreeing on a paragraph is not evidence about
+// layout, and the "paints nothing at all" guard could not see it because both
+// painted the paragraph.
+//
+// So a fifth of the old baseline was measuring the absence of a feature. Adding
+// the feature made the oracle able to tell those pairs apart, and the ones that
+// came back did so on their own merits.
+const wptCleanPassBaseline = 1339
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -207,7 +223,24 @@ func renderForCompare(path string) (list string, clean bool, err error) {
 		return "", false, err
 	}
 	src := cdataRe.ReplaceAllString(string(data), "$1")
-	built := Build(Input{HTML: src})
+
+	// The suite's documents refer to real files beside them — most of the
+	// references draw their expected picture with
+	// "<img src=support/blue15x15.png width=5 height=96>" — so the harness
+	// roots a resolver at the directory the document was read from. That is the
+	// caller opting in, which is the only way an image is ever loaded: the
+	// engine's own default is to load nothing, and nothing here changes it.
+	//
+	// A reference that leaves that directory is refused by the resolver exactly
+	// as it would be for any other caller, so a test document cannot read the
+	// checkout.
+	res, err := NewDirResolver(filepath.Dir(path))
+	if err != nil {
+		return "", false, err
+	}
+	defer res.Close()
+
+	built := Build(Input{HTML: src, Resources: res})
 
 	rec := NewRecorder(nil)
 	root := Layout(built.Root, A4.Content(), nil, rec)
@@ -262,10 +295,93 @@ func normaliseOps(ops []Op) string {
 			}
 			lines = append(lines, fmt.Sprintf("text %q at %s,%s size %s",
 				v.Text, num(v.At.X), num(v.At.Y), num(v.Size)))
+		case DrawImage:
+			if v.Rect.Empty() {
+				continue
+			}
+			// A picture of one colour, drawn over a rectangle, puts exactly the
+			// same ink on exactly the same paper as a fill of that colour over
+			// that rectangle. Saying so here is not a concession to make tests
+			// pass — it is what makes this comparison a faithful proxy for the
+			// thing a reftest actually asserts, which is that the two documents
+			// *render* identically.
+			//
+			// It matters because of how the suite is written. Its references
+			// draw their expected picture with a solid PNG —
+			// "<img src=black96x96.png width=96 height=96>" — while the test
+			// draws the same square with a background colour or a border. A
+			// comparison that could not equate the two would rule that every
+			// one of those pairs differs, which is a statement about the
+			// comparison and not about the engine.
+			//
+			// The check is a real one and not an assumption: every pixel is
+			// read, and an image with two colours in it, or any transparency at
+			// all, is compared as an image. TestWPTOracleHasTeeth plants both.
+			if c, ok := uniformColor(v.Image); ok {
+				lines = append(lines, fmt.Sprintf("fill %s %s", rectKey(v.Rect), c))
+				continue
+			}
+			// Otherwise the source rather than the pixels: two documents
+			// drawing the same file draw the same key, and comparing decoded
+			// images pixel by pixel would make this a rasterizer.
+			lines = append(lines, fmt.Sprintf("image %s %s", v.Key, rectKey(v.Rect)))
 		}
 	}
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+// uniformColours memoizes the scan below, which is over every pixel of every
+// image in four thousand documents rendered twice.
+var uniformColours = map[image.Image]struct {
+	colour style.RGBA
+	ok     bool
+}{}
+
+// uniformColor reports whether every pixel of an image is the same opaque
+// colour, and what that colour is.
+//
+// Opaque is required rather than merely uniform: a picture that is half
+// transparent black does not put the same ink on the page as a fill of black,
+// and treating the two as equal would hide exactly the kind of difference this
+// comparison exists to find.
+func uniformColor(img image.Image) (style.RGBA, bool) {
+	if img == nil {
+		return style.RGBA{}, false
+	}
+	if got, ok := uniformColours[img]; ok {
+		return got.colour, got.ok
+	}
+	colour, ok := scanUniform(img)
+	uniformColours[img] = struct {
+		colour style.RGBA
+		ok     bool
+	}{colour, ok}
+	return colour, ok
+}
+
+func scanUniform(img image.Image) (style.RGBA, bool) {
+	b := img.Bounds()
+	if b.Empty() {
+		return style.RGBA{}, false
+	}
+	r0, g0, b0, a0 := img.At(b.Min.X, b.Min.Y).RGBA()
+	if a0 != 0xFFFF {
+		return style.RGBA{}, false
+	}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, g, bl, a := img.At(x, y).RGBA()
+			if r != r0 || g != g0 || bl != b0 || a != a0 {
+				return style.RGBA{}, false
+			}
+		}
+	}
+	// The same 0-255 scale style.ParseColor produces, so a fill written by a
+	// stylesheet and a fill derived from a pixel are the same string.
+	return style.RGBA{
+		R: float64(r0 >> 8), G: float64(g0 >> 8), B: float64(b0 >> 8), A: 1,
+	}, true
 }
 
 func rectKey(r Rect) string {
@@ -383,6 +499,56 @@ func TestWPTOracleHasTeeth(t *testing.T) {
 	near := []Op{FillRect{Rect: Rect{u(10.0001), u(20), u(100), u(50)}, Color: red}}
 	if normaliseOps(near) != want {
 		t.Error("a difference of a ten-thousandth of a pixel was treated as a difference")
+	}
+
+	// The uniform-image normalisation, which is the one place this comparison
+	// says two different ops are the same mark. It has to be exactly as strict
+	// as that claim: a solid opaque picture is a fill of its colour, and
+	// anything else is not.
+	fill4x4 := func(f func(x, y int) color.NRGBA) image.Image {
+		img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+		for y := 0; y < 4; y++ {
+			for x := 0; x < 4; x++ {
+				img.SetNRGBA(x, y, f(x, y))
+			}
+		}
+		return img
+	}
+	solid := fill4x4(func(int, int) color.NRGBA { return color.NRGBA{R: 255, A: 255} })
+	speckled := fill4x4(func(x, y int) color.NRGBA {
+		if x == 3 && y == 3 {
+			// One pixel of a different colour, which is a picture and not a
+			// rectangle however uniform the rest of it is.
+			return color.NRGBA{G: 255, A: 255}
+		}
+		return color.NRGBA{R: 255, A: 255}
+	})
+	// Half-transparent full red, which *premultiplies* to exactly the opaque
+	// dark red below. That is the whole point of this one: a test using a
+	// translucent colour that premultiplied to something else would be caught
+	// by the colour comparison and would pass with the opacity check deleted,
+	// which was found by planting exactly that.
+	translucent := fill4x4(func(int, int) color.NRGBA { return color.NRGBA{R: 255, A: 128} })
+	darkRed := style.RGBA{R: 128, A: 1}
+
+	rect := Rect{u(10), u(20), u(100), u(50)}
+	if got := normaliseOps([]Op{DrawImage{Rect: rect, Image: solid, Key: "k"}}); got != want {
+		t.Errorf("a solid red image over the same rectangle did not compare equal "+
+			"to a red fill:\n got %q\nwant %q", got, want)
+	}
+	if got := normaliseOps([]Op{DrawImage{Rect: rect, Image: speckled, Key: "k"}}); got == want {
+		t.Error("an image with a pixel of another colour compared equal to a plain fill")
+	}
+	wantDark := normaliseOps([]Op{FillRect{Rect: rect, Color: darkRed}})
+	if got := normaliseOps([]Op{DrawImage{Rect: rect, Image: translucent, Key: "k"}}); got == wantDark {
+		t.Errorf("a half-transparent image compared equal to the opaque fill it "+
+			"premultiplies to: %q", got)
+	}
+	// And two different pictures at the same place are still different.
+	a1 := normaliseOps([]Op{DrawImage{Rect: rect, Image: speckled, Key: "one"}})
+	a2 := normaliseOps([]Op{DrawImage{Rect: rect, Image: speckled, Key: "two"}})
+	if a1 == a2 {
+		t.Error("two different image sources compared equal")
 	}
 
 	// And the sort really does make order irrelevant, since the two documents

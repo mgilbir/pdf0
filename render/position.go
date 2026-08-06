@@ -324,13 +324,28 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 	staticLeft := parent.X.Add(c.staticX).Sub(cb.X)
 	staticTop := parent.Y.Add(c.staticY).Sub(cb.Y)
 
+	// A replaced box brings its own size, and §10.3.6 and §10.6.5 say to treat
+	// it as though the author had declared both — so the constraint below
+	// solves for the offsets and the margins rather than for the size. That is
+	// the difference between an absolutely positioned image and an absolutely
+	// positioned <div>: "left: 0; right: 0" stretches the div and moves the
+	// image, because the image already knows how wide it is.
+	var replaced *Size
+	if b.Replaced != nil {
+		s := l.replacedSize(b, cb.W, cb.H, true)
+		replaced = &s
+	}
+
 	// Horizontal first, because the width has to be settled before the box can
 	// be laid out and the height it needs is what the box's layout produces.
-	h := l.solveHorizontal(b, cb, border, padding, margin, staticLeft)
+	h := l.solveHorizontal(b, cb, border, padding, margin, staticLeft, replaced)
 
 	// A declared height, resolved here rather than by block layout because only
 	// here is the containing block's height definite.
 	declaredHeight, hasHeight := l.absoluteLength(b, "height", cb.H)
+	if replaced != nil {
+		declaredHeight, hasHeight = replaced.H, true
+	}
 
 	frag, _ := l.blockIn(b, cb.W,
 		flow{ctx: &floatContext{}, cbHeight: cb.H, cbDefinite: true},
@@ -590,11 +605,14 @@ func solveAxis(a absAxis) axisSolution {
 // gives a box whose left, width and right no longer add up to its containing
 // block. That shows as a box anchored to neither edge.
 func (l *layouter) solveHorizontal(b *Box, cb Rect, border, padding, margin Edges,
-	staticLeft style.Unit) axisSolution {
+	staticLeft style.Unit, replaced *Size) axisSolution {
 
 	left, leftAuto := l.offsetValue(b, "left", cb.W, true)
 	right, rightAuto := l.offsetValue(b, "right", cb.W, true)
 	width, hasWidth := l.absoluteLength(b, "width", cb.W)
+	if replaced != nil {
+		width, hasWidth = replaced.W, true
+	}
 
 	axis := absAxis{
 		start: left, startAuto: leftAuto,
@@ -608,6 +626,12 @@ func (l *layouter) solveHorizontal(b *Box, cb Rect, border, padding, margin Edge
 		autoSize:  func(room style.Unit) style.Unit { return l.shrinkToFit(b, room) },
 	}
 	got := solveAxis(axis)
+	if replaced != nil {
+		// §10.4's constraint table has already applied the minimum and the
+		// maximum to both axes together. Applying the width's alone here would
+		// undo the height it chose to keep the picture's shape.
+		return got
+	}
 	if clamped := l.clampWidth(b, got.size, cb.W); clamped != got.size {
 		axis.size, axis.sizeAuto = clamped, false
 		got = solveAxis(axis)
@@ -638,6 +662,9 @@ func (l *layouter) solveVertical(b *Box, cb Rect, border, padding, margin Edges,
 		vertical:  true,
 	}
 	got := solveAxis(axis)
+	if b.Replaced != nil {
+		return got
+	}
 	if clamped := l.clampHeight(b, got.size, cb.W); clamped != got.size {
 		axis.size, axis.sizeAuto = clamped, false
 		got = solveAxis(axis)

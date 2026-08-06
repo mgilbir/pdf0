@@ -99,6 +99,23 @@ type inlineFrame struct {
 	cbHeight   style.Unit
 	cbDefinite bool
 	offset     Point
+	// measuring says the walk is being made to find an intrinsic width rather
+	// than to lay a line out, so nothing that has a layout of its own is given
+	// one.
+	//
+	// It is not an optimisation. Laying an inline-block out during a
+	// measurement produces a fragment that is then discarded — and the
+	// absolutely positioned boxes found inside it would have been recorded
+	// against it, so every one of them would be placed twice, once against a
+	// rectangle that no longer exists. That is the same fault settle() has to
+	// undo when a subtree is laid out again, and here it is cheaper not to
+	// create it.
+	measuring bool
+	// strut is the block container's own line metrics, which an atomic inline
+	// needs to resolve vertical-align. It is the containing block's rather than
+	// the box's own, because that is what the property is measured against: a
+	// "text-top" is the top of the *parent's* content area.
+	strut strut
 }
 
 // inlineItem is one piece of inline content before it has been put on a line.
@@ -130,6 +147,34 @@ type inlineItem struct {
 	// inside, which travels with the item because the flattening loses the boxes
 	// themselves.
 	offset Point
+	// atomicBox marks an item that is a box on the line rather than a run of
+	// text: a replaced element or an inline-block. It is set whether or not the
+	// box was laid out, because an intrinsic-width measurement needs to know
+	// there is one without producing a fragment for it.
+	atomicBox *Box
+	// atomic is that box's fragment, already laid out. It is nil while
+	// measuring.
+	//
+	// Being laid out already is what makes the item atomic: its size comes from
+	// its own content and its own declarations, so nothing about the line can
+	// change it. All the line decides is where it goes.
+	atomic *Fragment
+	// ascent and descent are how far the item reaches above and below the
+	// baseline, measured over its *margin* box.
+	//
+	// The two differ by which of §10.8.1's rules gave them. A replaced element's
+	// baseline is its bottom margin edge, so it is all ascent — which is why a
+	// picture sits on the line of type rather than in the middle of it, and why
+	// a line holding one is as tall as the image plus whatever descender space
+	// the surrounding text still wants. An inline-block's baseline is the
+	// baseline of its *last line box*, so a box of two paragraphs hangs below
+	// the line by the depth of its second one — unless it has no line boxes at
+	// all or clips its overflow, when it too is all ascent.
+	ascent, descent style.Unit
+	// align is what vertical-align asked for, and raise is the displacement a
+	// "sub", a "super", a length or a percentage adds on top of it.
+	align vAlign
+	raise style.Unit
 	// abs is the box of an absolutely positioned box met in this run, and it is
 	// a marker for the same reason and a different consequence. A float met
 	// among the words changes where the words go; an absolutely positioned one
@@ -155,15 +200,15 @@ type inlineItem struct {
 // second reason the loop is here: a float's position depends on the line it
 // appears on, and the lines after it depend on the float.
 func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, origin flow) style.Unit {
+	st := l.strutFor(b)
 	items, _ := l.collectInline(b, nil, false, inlineFrame{
 		containing: width, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite,
+		strut: st,
 	})
 	if len(items) == 0 {
 		return 0
 	}
 
-	lineHeight := l.lineHeight(b)
-	baseline := l.baselineOf(b, lineHeight)
 	lo, hi := origin.x, origin.x.Add(width)
 
 	var y style.Unit
@@ -185,13 +230,29 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		lineWidth := right.Sub(left)
 
 		runs, next, mid, forced := l.breakOneLine(items, i, lineWidth)
+		lh, bl := stackLine(runs, st)
 		if len(runs) > 0 || forced {
 			line := LineFragment{
-				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lineHeight},
-				Baseline: baseline,
+				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lh},
+				Baseline: bl,
 			}
 			var x style.Unit
 			for _, item := range runs {
+				if item.atomic != nil {
+					// Placed as a child of the block rather than as a run,
+					// because it is a box: it has a background, a border, a
+					// padding and possibly a subtree of its own, and every one
+					// of those is painted by machinery that works on fragments.
+					// Its margin box hangs from the line's baseline by its own
+					// ascent, which is what puts a picture on the line of type
+					// and an inline-block's last line of text on it.
+					f := item.atomic
+					f.BorderRect.X = line.Rect.X.Add(x).Add(f.Margin.Left)
+					f.BorderRect.Y = y.Add(atomicTop(item, st, lh, bl)).Add(f.Margin.Top)
+					parent.Children = append(parent.Children, f)
+					x = x.Add(item.width)
+					continue
+				}
 				line.Runs = append(line.Runs, TextRun{
 					Text: item.text, Face: item.face, Size: item.size,
 					X: x, Width: item.width, Box: item.box, Offset: item.offset,
@@ -215,7 +276,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				continue
 			}
 			parent.Children = append(parent.Children,
-				l.floatChild(f.box, width, origin, y, lineWidth.Sub(f.used), lineHeight, 0))
+				l.floatChild(f.box, width, origin, y, lineWidth.Sub(f.used), lh, 0))
 		}
 
 		i = next
@@ -225,10 +286,394 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// block children produces no line box at all, and giving it one
 			// would put a blank line into every document whose markup is
 			// indented.
-			y = y.Add(lineHeight)
+			y = y.Add(lh)
 		}
 	}
 	return y
+}
+
+// vAlign is what vertical-align asks of an atomic inline.
+//
+// The set is CSS 2.1 §10.8.1's, less the two that are not a choice of position:
+// "inherit" is the cascade's business and a length or percentage is carried as
+// a displacement from the baseline rather than as a mode of its own, because
+// that is exactly what it is — "vertical-align: 4px" is baseline alignment with
+// the baseline moved.
+//
+// It is read for atomic inlines only. An ordinary inline box's runs are not
+// aligned by it, which is a real gap and a pre-existing one: <sup> and <sub>
+// are set at the smaller size the user-agent stylesheet gives them and on the
+// same baseline as their surroundings. Closing that means giving a text run a
+// vertical displacement of its own, which the run already has a field for, and
+// it is a separate change from this one.
+type vAlign uint8
+
+const (
+	vAlignBaseline vAlign = iota
+	vAlignTop
+	vAlignBottom
+	vAlignMiddle
+	vAlignTextTop
+	vAlignTextBottom
+)
+
+// strut is the block's own contribution to every line box it makes.
+//
+// CSS 2.1 §10.8 gives each line box an imaginary zero-width inline box of the
+// block's font and line-height, and that box takes part in the alignment
+// whether or not there is any text on the line. It is why a line holding
+// nothing but an image is still as tall as the image *plus* the descender space
+// the type would have wanted, and why an empty <p> occupies a line.
+type strut struct {
+	// height and baseline are the line-height and where the baseline sits in it.
+	height, baseline style.Unit
+	// ascent and descent are the font's own extents at the block's size, which
+	// are what "text-top" and "text-bottom" name. They are not the same as the
+	// two above: those include the half-leading.
+	ascent, descent style.Unit
+	// xHeight is what "middle" is measured against.
+	xHeight style.Unit
+}
+
+// strutFor measures the block's own font at its own size.
+func (l *layouter) strutFor(b *Box) strut {
+	s := strut{height: l.lineHeight(b), baseline: l.baselineOf(b, l.lineHeight(b))}
+	face, ok := l.fontFor(b)
+	if !ok {
+		return s
+	}
+	d := face.Descriptor()
+	upem := float64(face.UnitsPerEm())
+	if upem == 0 {
+		return s
+	}
+	s.ascent = b.FontSize.Mul(float64(d.Ascent) / upem)
+	s.descent = b.FontSize.Mul(-float64(d.Descent) / upem)
+	// The x-height, which no face this engine reads reports directly. Half an em
+	// is the figure every implementation falls back to and is within a few per
+	// cent for the Latin faces; a wrong x-height moves a "vertical-align:
+	// middle" box by a pixel or two, where having no answer at all would move it
+	// by half its own height.
+	s.xHeight = b.FontSize.Mul(0.5)
+	if d.CapHeight > 0 {
+		// Cap height is reported, and x-height is about seven tenths of it for
+		// the faces that report either.
+		s.xHeight = b.FontSize.Mul(float64(d.CapHeight) / upem * 0.7)
+	}
+	return s
+}
+
+// verticalAlignOf reads the vertical-align property of an atomic inline.
+func (l *layouter) verticalAlignOf(b *Box, s strut) (vAlign, style.Unit) {
+	raw := strings.ToLower(strings.TrimSpace(b.Style["vertical-align"]))
+	switch raw {
+	case "", "baseline":
+		return vAlignBaseline, 0
+	case "top":
+		return vAlignTop, 0
+	case "bottom":
+		return vAlignBottom, 0
+	case "middle":
+		return vAlignMiddle, 0
+	case "text-top":
+		return vAlignTextTop, 0
+	case "text-bottom":
+		return vAlignTextBottom, 0
+	case "sub":
+		// The specification leaves the distance to the engine. A fifth of the
+		// font size is what browsers use.
+		return vAlignBaseline, style.Unit(0).Sub(b.FontSize.Mul(0.2))
+	case "super":
+		return vAlignBaseline, b.FontSize.Mul(0.33)
+	}
+	// A length raises the box by that much; a percentage is of the line-height,
+	// which is the one property whose percentages are of line-height rather than
+	// of the containing block.
+	if length, ok := l.parseLength(b, "vertical-align"); ok {
+		if v, ok := length.Resolve(s.height, true); ok {
+			return vAlignBaseline, v
+		}
+	}
+	return vAlignBaseline, 0
+}
+
+// stackLine gives a line its height and its baseline, once what is on it is
+// known.
+//
+// CSS 2.1 §10.8 builds a line box by aligning everything on it against the
+// baseline and then taking the distance from the highest top to the lowest
+// bottom. The block's own "strut" — an imaginary zero-width piece of its font
+// at its line-height — always takes part, which is what gives a line of text its
+// height whether or not there is text on it, and what leaves the familiar gap
+// under an image that sits alone on a line: the strut still wants its
+// descender.
+//
+// What is implemented is the baseline alignment of §10.8.1 and nothing else.
+// vertical-align is not read, so a "vertical-align: top" or "middle" on an image
+// is laid out as though it were "baseline". That is a real difference and it is
+// left rather than approximated: getting the other keywords right needs the line
+// box's extent, which is what is being computed here, so they are a second pass
+// rather than another case.
+func stackLine(runs []inlineItem, s strut) (height, baseline style.Unit) {
+	baseline = s.baseline
+	// What the strut wants below the baseline. It can be *negative*, which is
+	// the case that makes this a maximum rather than a floor: "line-height: 0"
+	// gives the strut a half-leading of minus half the font's own height, so
+	// its descent is below the baseline by a negative amount and an image on
+	// the line has to be able to overrule it. Taking the strut's descent
+	// unconditionally would make such a line shorter than the picture on it.
+	descent := s.height.Sub(s.baseline)
+
+	// First pass: everything aligned against the baseline, which is what
+	// decides where the baseline is.
+	for _, item := range runs {
+		if item.atomic == nil {
+			continue
+		}
+		switch item.align {
+		case vAlignTop, vAlignBottom:
+			// Aligned against the line box, which does not exist yet.
+			continue
+		}
+		a, d := alignedExtents(item, s)
+		if a > baseline {
+			baseline = a
+		}
+		if d > descent {
+			descent = d
+		}
+	}
+
+	// Second pass: the two that align against the line box itself. §10.8.1
+	// defines them in terms of a line box whose height they can change, which
+	// reads as circular and is not: a box taller than the line grows it on the
+	// side away from its own edge, and a box that fits changes nothing.
+	height = baseline.Add(descent)
+	for _, item := range runs {
+		if item.atomic == nil {
+			continue
+		}
+		h := item.ascent.Add(item.descent)
+		switch item.align {
+		case vAlignTop:
+			// Its top is the line's top, so anything it needs it takes from
+			// below the baseline.
+			if h > height {
+				descent = descent.Add(h.Sub(height))
+				height = h
+			}
+		case vAlignBottom:
+			// Its bottom is the line's bottom, so it takes from above.
+			if h > height {
+				baseline = baseline.Add(h.Sub(height))
+				height = h
+			}
+		}
+	}
+	return baseline.Add(descent), baseline
+}
+
+// alignedExtents is how far an item reaches above and below the baseline once
+// its vertical-align has been applied.
+func alignedExtents(item inlineItem, s strut) (ascent, descent style.Unit) {
+	h := item.ascent.Add(item.descent)
+	switch item.align {
+	case vAlignTextTop:
+		// The top of the box against the top of the parent's content area,
+		// which is the font's own ascent above the baseline rather than the
+		// line box's top: the half-leading is not part of it.
+		return s.ascent, h.Sub(s.ascent)
+	case vAlignTextBottom:
+		return h.Sub(s.descent), s.descent
+	case vAlignMiddle:
+		// The box's own midpoint against the baseline raised by half the
+		// parent's x-height.
+		half := h.Div(2)
+		return half.Add(s.xHeight.Div(2)), half.Sub(s.xHeight.Div(2))
+	}
+	// Baseline, with whatever "sub", "super" or a length displaced it by.
+	return item.ascent.Add(item.raise), item.descent.Sub(item.raise)
+}
+
+// atomicTop is where an item's margin box goes within its line box.
+func atomicTop(item inlineItem, s strut, height, baseline style.Unit) style.Unit {
+	h := item.ascent.Add(item.descent)
+	switch item.align {
+	case vAlignTop:
+		return 0
+	case vAlignBottom:
+		return height.Sub(h)
+	}
+	ascent, _ := alignedExtents(item, s)
+	return baseline.Sub(ascent)
+}
+
+// isAtomicInline reports whether an inline-level box takes part in a line as a
+// box rather than as a run of words.
+//
+// An inline-block is one. That is the whole of what "inline-block" means and it
+// is easy to under-implement: an engine that walked into it the way it walks
+// into a <span> would flatten its content onto the surrounding line, and the
+// box's own width, height, background, border and padding would all quietly do
+// nothing — a shape of failure that looks like the declarations were ignored
+// rather than like the box was.
+//
+// An inline table and an inline flex container are atomic too, and are
+// deliberately not here: neither has a layout to be atomic *with* yet, and
+// giving them a box before they have contents to put in it would produce an
+// empty rectangle where the author expected a table.
+func isAtomicInline(b *Box) bool {
+	return b.Outer == OuterInline && b.Inner == InnerFlowRoot
+}
+
+// atomicItem lays out an atomic inline and makes the line item for it.
+func (l *layouter) atomicItem(b *Box, frame inlineFrame, pending bool) inlineItem {
+	item := inlineItem{
+		box: b, atomicBox: b, size: b.FontSize,
+		breakBefore: pending, offset: frame.offset,
+	}
+	if frame.measuring {
+		// No fragment: the caller wants a width, and the widths of an atomic
+		// inline are what intrinsic.go computes from the box tree.
+		return item
+	}
+
+	var frag *Fragment
+	if b.Replaced != nil {
+		frag = l.replacedFragment(b, frame)
+	} else {
+		frag = l.inlineBlockFragment(b, frame)
+	}
+	box := frag.MarginRect()
+	item.atomic = frag
+	item.width = box.W
+	item.ascent, item.descent = box.H, 0
+	item.align, item.raise = l.verticalAlignOf(b, frame.strut)
+
+	// §10.8.1: an inline-block's baseline is the baseline of its last in-flow
+	// line box. With no line box at all it is the bottom margin edge — which is
+	// also a replaced element's, so the value set above already says so.
+	//
+	// An overflow that is not visible does not simply fall back to the bottom
+	// margin edge, which is what CSS 2.1 said and what CSS 2.2 corrected: it is
+	// the *higher* of the two candidates. The correction matters because the
+	// 2.1 rule made "overflow: auto" on a one-line box drop the whole box below
+	// its neighbours' baseline, which is a visible jump from a declaration that
+	// was only ever about clipping.
+	if b.Replaced == nil {
+		if bl, ok := lastLineBaseline(frag); ok {
+			ascent := frag.Margin.Top.Add(bl)
+			if overflowIsScrollable(b.Style) {
+				// A smaller ascent is a baseline further up the page, which is
+				// what "higher" means here.
+				ascent = style.Min(ascent, box.H)
+			}
+			item.ascent = ascent
+			item.descent = box.H.Sub(ascent)
+		}
+	}
+	return item
+}
+
+// replacedFragment lays out an inline-level replaced box.
+//
+// Its margins are its own — an "auto" margin on an inline-level box is zero
+// rather than a share of anything, which l.edges already produces — and its
+// size comes from §10.3.2. What it does not get here is a position: that is the
+// line's to decide.
+func (l *layouter) replacedFragment(b *Box, frame inlineFrame) *Fragment {
+	margin := l.edges(b, "margin", frame.containing)
+	border := l.borderWidths(b)
+	padding := l.edges(b, "padding", frame.containing)
+	size := l.replacedSize(b, frame.containing, frame.cbHeight, frame.cbDefinite)
+
+	frag := &Fragment{
+		Box: b, Margin: margin, Border: border, Padding: padding,
+		BorderRect: Rect{
+			W: size.W.Add(padding.Horizontal()).Add(border.Horizontal()),
+			H: size.H.Add(padding.Vertical()).Add(border.Vertical()),
+		},
+		// §9.4.3's offset, accumulated over the inline boxes around it, plus
+		// its own when it is itself relatively positioned. It travels on the
+		// fragment rather than being folded into the position for the reason
+		// layout.go gives: the box still occupies where the flow put it.
+		Offset: frame.offset,
+	}
+	if b.Position == PositionRelative {
+		d := l.relativeOffset(b, frame.containing, frame.cbHeight, frame.cbDefinite)
+		frag.Offset = Point{X: frame.offset.X.Add(d.X), Y: frame.offset.Y.Add(d.Y)}
+	}
+	if b.Position.positioned() {
+		// §10.1 makes any positioned box a containing block, and an image with
+		// "position: relative" is the everyday way to hang a caption on one.
+		l.positioned[b] = frag
+	}
+	return frag
+}
+
+// inlineBlockFragment lays out an inline-block.
+//
+// Its width is CSS 2.1 §10.3.9's: shrink-to-fit, the same formula a float uses,
+// against whatever the containing block leaves after its own margins, border
+// and padding. Everything else is ordinary block layout, run through blockIn
+// with the width handed to it — margin collapsing inside, floats contained,
+// line breaking, list markers and the height rules are all the same, and a
+// second implementation of them would agree with the first on the day it was
+// written and on no day after.
+func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
+	margin := l.edges(b, "margin", frame.containing)
+	border := l.borderWidths(b)
+	padding := l.edges(b, "padding", frame.containing)
+
+	width, ok := l.lengthOf(b, "width", frame.containing)
+	if !ok {
+		room := frame.containing.
+			Sub(margin.Horizontal()).
+			Sub(border.Horizontal()).
+			Sub(padding.Horizontal())
+		width = l.shrinkToFit(b, maxZero(room))
+	}
+	width = l.clampWidth(b, width, frame.containing)
+
+	// A fresh formatting context, because an inline-block establishes one:
+	// no float inside it escapes and none outside reaches in. That is not a
+	// choice made here — it is what "flow-root" means, and blockIn would make
+	// one anyway for a box that seals its margins.
+	frag, _ := l.blockIn(b, frame.containing,
+		flow{ctx: &floatContext{}, cbHeight: frame.cbHeight, cbDefinite: frame.cbDefinite},
+		&forcedGeometry{margin: margin, width: width})
+	if b.Position == PositionRelative {
+		d := l.relativeOffset(b, frame.containing, frame.cbHeight, frame.cbDefinite)
+		frag.Offset = Point{X: frame.offset.X.Add(d.X), Y: frame.offset.Y.Add(d.Y)}
+	} else {
+		frag.Offset = frame.offset
+	}
+	return frag
+}
+
+// lastLineBaseline finds the baseline of the last line box in a subtree, as a
+// distance from the top of that subtree's border box.
+//
+// "Last in the normal flow" is what §10.8.1 asks for, so the walk goes
+// backwards through the children and skips everything out of flow: a float at
+// the end of an inline-block does not give the box its baseline, and neither
+// does an absolutely positioned caption hanging off it.
+func lastLineBaseline(f *Fragment) (style.Unit, bool) {
+	inset := f.Border.Top.Add(f.Padding.Top)
+	for i := len(f.Children) - 1; i >= 0; i-- {
+		c := f.Children[i]
+		if c.Box == nil || c.Box.outOfFlow() {
+			continue
+		}
+		if bl, ok := lastLineBaseline(c); ok {
+			return inset.Add(c.BorderRect.Y).Add(bl), true
+		}
+	}
+	if n := len(f.Lines); n > 0 {
+		line := f.Lines[n-1]
+		return inset.Add(line.Rect.Y).Add(line.Baseline), true
+	}
+	return 0, false
 }
 
 // roomForLine moves a line down past floats that leave it no usable width.
@@ -304,6 +749,18 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool, frame i
 			// through, because "a <span class=float></span>b" is still one word
 			// followed by another with a space between them.
 			out = append(out, inlineItem{float: child})
+			continue
+		}
+		if child.Replaced != nil || isAtomicInline(child) {
+			// An atomic inline: a replaced element, or an inline-block. It is
+			// one unbreakable thing with a size of its own, and it is laid out
+			// here — before the line it will sit on has even been chosen —
+			// because nothing about that line can change its size. That is the
+			// whole difference between an atomic inline and an ordinary inline
+			// box, whose extent is whatever its words turn out to need and
+			// which therefore has to be flattened into the run.
+			out = append(out, l.atomicItem(child, frame, pending))
+			pending = false
 			continue
 		}
 		if child.IsText() {
@@ -585,14 +1042,22 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) 
 // paragraph containing one impossible word would otherwise complain on every
 // line it wraps to.
 func (l *layouter) reportOverflow(item inlineItem, width style.Unit) {
+	what := "the text " + quoteValue(item.text)
 	key := item.text
+	if item.atomic != nil {
+		// A replaced element has no text to name it by, and two different
+		// images of the same width are two findings rather than one — so the
+		// key is where it is in the document rather than what it says.
+		what = "the image"
+		key = "\x00replaced\x00" + PathOf(item.box.Element)
+	}
 	if l.reportedOverflow[key] {
 		return
 	}
 	l.reportedOverflow[key] = true
 	l.rec.ReportDetail(Finding{
 		Rule: RuleUnbreakableOverflow,
-		Message: "the text " + quoteValue(item.text) + " is " +
+		Message: what + " is " +
 			fmtPx(item.width) + " wide and cannot be broken, in a space " +
 			fmtPx(width) + " wide; the part past the edge will not be drawn",
 		Path: PathOf(item.box.Element),

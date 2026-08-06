@@ -134,6 +134,18 @@ type Box struct {
 	// ListItem marks a box that generates a marker — a bullet or a number.
 	ListItem bool
 
+	// Replaced is the content of a replaced element — the decoded image an
+	// <img> names — or nil for every other box.
+	//
+	// It is nil rather than empty when the content could not be loaded, and
+	// that is the whole of what CSS means by an element being replaced: an
+	// image that did not arrive makes the element an ordinary inline box
+	// holding its alt text, not a replaced one holding nothing. Layout
+	// therefore asks whether this is nil rather than asking what the element's
+	// tag is, and an <img> with a broken src goes down exactly the same path as
+	// a <span>.
+	Replaced *ReplacedContent
+
 	// Float and Clear are CSS 2.1 §9.5. They live on the box rather than being
 	// read out of Style at layout time for the same reason Outer and Inner do:
 	// whether a box is in the normal flow changes what the box tree itself is
@@ -827,7 +839,7 @@ func clonePiece(b *Box) *Box {
 	return &Box{
 		Outer: b.Outer, Inner: b.Inner,
 		Element: b.Element, Style: b.Style,
-		FontSize: b.FontSize, ListItem: b.ListItem,
+		FontSize: b.FontSize, ListItem: b.ListItem, Replaced: b.Replaced,
 		Float: b.Float, Clear: b.Clear,
 		Position: b.Position, ZIndex: b.ZIndex, ZAuto: b.ZAuto,
 		Order: b.Order,
