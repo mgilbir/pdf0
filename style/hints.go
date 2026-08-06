@@ -51,7 +51,8 @@ const hintOrder = -1
 // the map exists rather than a pair of conditionals so that adding <table
 // width> with the table algorithm is a line of data rather than a new branch.
 var hintedAttributes = map[string]map[string]string{
-	"img": {"width": "width", "height": "height"},
+	"img":   {"width": "width", "height": "height"},
+	"table": {"cellspacing": "border-spacing"},
 }
 
 // There is deliberately no cache of parsed hint values.
@@ -71,7 +72,11 @@ var hintedAttributes = map[string]map[string]string{
 // what HTML requires and is also the safe answer: a value this cannot read must
 // not become a length it guessed at.
 func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
-	attrs, ok := hintedAttributes[strings.ToLower(n.Name)]
+	name := strings.ToLower(n.Name)
+	if name == "td" || name == "th" {
+		return cellPaddingHint(n)
+	}
+	attrs, ok := hintedAttributes[name]
 	if !ok {
 		return nil
 	}
@@ -125,4 +130,38 @@ func dimensionValue(raw string) (string, bool) {
 		return s, true
 	}
 	return "", false
+}
+
+// cellPaddingHint reads the cellpadding an ancestor table declares.
+//
+// It is the one hint that is not an attribute of the element it styles:
+// cellpadding is written once on the table and applies to every cell in it. The
+// walk stops at the first table, which is what makes a nested table's cells take
+// their own table's padding rather than the one they happen to sit inside.
+//
+// A percentage is refused here even though the dimension syntax allows one,
+// because a percentage padding resolves against the containing block's width and
+// that is not what an author writing cellpadding="10%" is asking for. A value
+// this cannot read leaves the stylesheet's answer standing, which is the same as
+// the attribute not being there.
+func cellPaddingHint(n *html.Node) map[string][]css.ComponentValue {
+	for anc := n.Parent; anc != nil; anc = anc.Parent {
+		if anc.Type != html.ElementNode || !strings.EqualFold(anc.Name, "table") {
+			continue
+		}
+		raw, ok := anc.Attr("cellpadding")
+		if !ok {
+			return nil
+		}
+		value, ok := dimensionValue(raw)
+		if !ok || strings.HasSuffix(value, "%") {
+			return nil
+		}
+		vals, _ := css.ParseComponentValues(value)
+		return map[string][]css.ComponentValue{
+			"padding-top": vals, "padding-right": vals,
+			"padding-bottom": vals, "padding-left": vals,
+		}
+	}
+	return nil
 }

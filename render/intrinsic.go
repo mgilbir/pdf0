@@ -36,8 +36,10 @@ import "github.com/mgilbir/pdf0/style"
 //     boundary between two, so "<em>super</em>market" is measured as two words
 //     rather than one. That makes the minimum a little small; it never makes it
 //     too large, so a float sized by it fits where it should.
-//   - Nothing here knows about tables, whose own automatic layout is two passes
-//     of exactly this kind and is not implemented.
+//   - A table is measured by §17.5.2.2's own two passes rather than by the walk
+//     here, because a table's width is a property of its columns and not of any
+//     one of its children. That lives in tablelayout.go and is reached from
+//     measureWidths.
 
 // intrinsicWidths is the pair, measured across a box's *margin* box so that the
 // caller can compare them against a containing block directly.
@@ -98,6 +100,15 @@ func (l *layouter) measureWidths(b *Box) intrinsicWidths {
 	}
 	if b.IsText() {
 		return l.textWidths(b)
+	}
+	// A table's two widths come from its grid rather than from stacking its
+	// children, and §17.4's wrapper is as wide as the table inside it. Both are
+	// next door in tablelayout.go, which is where the grid is.
+	if b.Inner == InnerTable {
+		return l.tableContentWidths(b)
+	}
+	if b.TableWrapper {
+		return l.tableWrapperWidths(b)
 	}
 	if hasInlineChild(b) {
 		return l.inlineWidths(b)

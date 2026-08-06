@@ -123,8 +123,12 @@ type Box struct {
 
 	// FontSize is the computed font-size, resolved here rather than in the
 	// cascade because it is the one property whose value depends on its own
-	// parent's computed value: "font-size: 1em" means the parent's size, so a
-	// chain of them compounds and can only be resolved walking downwards.
+	// parent's computed value: "font-size: 2em" means twice the parent's size,
+	// so it can only be resolved walking downwards.
+	//
+	// Only an element that *declared* one resolves; an element that inherited
+	// its font-size takes its parent's number unchanged. See fontSizeOf for why
+	// that distinction is the whole of the property's correctness.
 	//
 	// Every font-relative length in the box — its margins, its padding, its
 	// line height — is measured against this, so it has to exist before layout
@@ -145,6 +149,16 @@ type Box struct {
 	// tag is, and an <img> with a broken src goes down exactly the same path as
 	// a <span>.
 	Replaced *ReplacedContent
+
+	// TableWrapper marks the anonymous box §17.4 puts around a table to hold it
+	// and its captions.
+	//
+	// It is a flag rather than an Inner of its own because the wrapper really is
+	// an ordinary flow root — block layout, margin collapsing, floats and
+	// positioning all treat it as one, and that is the point of it. The one thing
+	// that is not ordinary is its width, which is the table's rather than its
+	// containing block's, and that is the single question this answers.
+	TableWrapper bool
 
 	// Float and Clear are CSS 2.1 §9.5. They live on the box rather than being
 	// read out of Style at layout time for the same reason Outer and Inner do:
@@ -222,7 +236,10 @@ var maxBoxes = 1 << 20
 // document produces no boxes at all, which is what "html { display: none }"
 // means and is not an error.
 func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
-	b := &boxBuilder{styles: styled.Styles, pseudo: styled.Pseudo, rec: rec}
+	b := &boxBuilder{
+		styles: styled.Styles, pseudo: styled.Pseudo, rec: rec,
+		ownFontSize: styled.OwnFontSize, ownPseudoFontSize: styled.OwnPseudoFontSize,
+	}
 	root := documentElementOf(doc)
 	if root == nil {
 		return nil
@@ -242,7 +259,10 @@ func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
 	// anywhere makes every inline run a candidate — and that set is not known
 	// while the children are still being made.
 	b.fixup(box)
-	return box
+	// §17.4's wrapper is a second pass because it has to see tables that the
+	// first pass generated as well as the ones the author wrote, and it may
+	// replace the root itself: "html { display: table }" is legal.
+	return b.wrapTables(box)
 }
 
 func documentElementOf(doc *html.Node) *html.Node {
@@ -271,11 +291,15 @@ func mustPx(px float64) style.Unit {
 }
 
 type boxBuilder struct {
-	styles       map[*html.Node]style.ComputedStyle
-	pseudo       map[style.PseudoKey]style.ComputedStyle
-	rec          *Recorder
-	rootFontSize style.Unit
-	count        int
+	styles map[*html.Node]style.ComputedStyle
+	pseudo map[style.PseudoKey]style.ComputedStyle
+	// ownFontSize and ownPseudoFontSize say which elements declared a font-size
+	// of their own. See fontSizeOf.
+	ownFontSize       map[*html.Node]bool
+	ownPseudoFontSize map[style.PseudoKey]bool
+	rec               *Recorder
+	rootFontSize      style.Unit
+	count             int
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
@@ -297,7 +321,24 @@ func (b *boxBuilder) build(n *html.Node, inherited style.ComputedStyle, fontSize
 // A value this engine cannot resolve leaves the size at the parent's, which is
 // what inheriting would have given — the safe answer, since a size of zero would
 // make every em-based margin in the subtree vanish.
+//
+// # Why an inherited size is not resolved again
+//
+// Only an element that *declared* a font-size resolves one. CSS makes the
+// computed value of font-size an absolute length, so inheritance passes a
+// number; what the cascade stores is what the author wrote, so a descendant of
+// "font-size: 2em" inherits the string "2em" and re-resolving it against the
+// parent would double the size at every level. A paragraph four elements inside
+// such a wrapper came out at 256px.
+//
+// That was a real bug, found by the table work: the two halves of a reftest
+// nested their content to different depths, so the compounding moved one and not
+// the other and the difference finally showed. It had been invisible until then
+// because it moves every part of a document equally.
 func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
+	if !b.ownFontSize[n] {
+		return parent
+	}
 	cs, ok := b.styles[n]
 	if !ok {
 		return parent
@@ -403,7 +444,14 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 
 // fontSizeOfStyle resolves a font-size from a computed style that belongs to no
 // element of its own, which is what a pseudo-element has.
-func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit) style.Unit {
+//
+// own says whether a rule set the pseudo-element's font-size, for the reason
+// fontSizeOf gives: a pseudo-element inherits from its originating element, and
+// re-resolving a size it inherited would compound it.
+func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit, own bool) style.Unit {
+	if !own {
+		return parent
+	}
 	vals, _ := css.ParseComponentValues(cs["font-size"])
 	size, _, ok := style.ResolveFontSize(vals, parent, b.rootFontSize)
 	if !ok {
@@ -413,11 +461,15 @@ func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit) 
 }
 
 // room reports whether another box may be made.
-func (b *boxBuilder) room(n *html.Node) bool {
+func (b *boxBuilder) room(n *html.Node) bool { return b.roomAt(n.Offset) }
+
+// roomAt is room for a box no element generated, which has no node to be
+// reported against — every box §17.2.1 inserts is one.
+func (b *boxBuilder) roomAt(offset int) bool {
 	if b.count >= maxBoxes {
 		if !b.stopped {
 			b.stopped = true
-			b.rec.Report(RuleLimit, AtHTML(n.Offset),
+			b.rec.Report(RuleLimit, AtHTML(offset),
 				"the document produces more boxes than this engine will build; "+
 					"the rest of it was not laid out")
 		}
@@ -625,10 +677,17 @@ func twoValueDisplay(value string) (Outer, Inner, bool) {
 
 // fixup adds the anonymous boxes the specification requires, depth first so a
 // parent sees children that are already settled.
+// The table repair runs first, and before the two flow rules rather than after
+// them, because it is the rule that decides *which* boxes are in a flow at all.
+// A stray cell inside a <span> becomes an inline-table there, and an
+// inline-table is an atomic inline that does not split the span it is in; run
+// the split first and the cell is lifted out as a block, taking the table it
+// should have grown with it.
 func (b *boxBuilder) fixup(box *Box) {
 	for _, c := range box.Children {
 		b.fixup(c)
 	}
+	box.Children = b.fixupTables(box)
 	box.Children = b.splitBlockInInline(box)
 	box.Children = b.wrapInlines(box)
 }
@@ -660,7 +719,7 @@ func (b *boxBuilder) splitBlockInInline(parent *Box) []*Box {
 		// inline-block is inline outside and a block container inside, so a
 		// block within it is where the author put it and lifting it out would
 		// empty the very box that was meant to hold it.
-		if child.Outer != OuterInline || isBlockContainer(child) || !containsBlock(child) {
+		if child.Outer != OuterInline || laysOutOwnChildren(child) || !containsBlock(child) {
 			out = append(out, child)
 			continue
 		}
@@ -681,12 +740,33 @@ func (b *boxBuilder) splitBlockInInline(parent *Box) []*Box {
 // container or a table, which have rules of their own.
 func isBlockContainer(b *Box) bool {
 	switch b.Inner {
-	case InnerFlowRoot:
+	case InnerFlowRoot, InnerTableCell, InnerTableCaption:
+		// A cell and a caption are block containers that happen to live in a
+		// table: their children are blocks and lines like any other, which is
+		// why the anonymous block rule has to reach inside them.
 		return true
 	case InnerFlow:
 		return b.Outer == OuterBlock
 	}
 	return false
+}
+
+// laysOutOwnChildren reports whether a box is opaque to the two flow rules
+// above: whatever is inside it belongs to it, and neither splitting nor
+// wrapping may reach past it.
+//
+// It differs from isBlockContainer at exactly the boxes that are not block
+// containers and are not part of anyone else's inline formatting context
+// either — an inline-table, an inline-flex. Those hold block-level boxes
+// legitimately, and §9.2.1.1's split must not fire on one: an inline-table in
+// the middle of a sentence would otherwise break the sentence in two and be
+// lifted out as a block, which is the opposite of what "inline" asked for.
+func laysOutOwnChildren(b *Box) bool {
+	switch b.Inner {
+	case InnerTable, InnerFlex:
+		return true
+	}
+	return isBlockContainer(b)
 }
 
 // containsBlock reports whether an inline box has a block-level box anywhere
@@ -710,7 +790,7 @@ func containsBlock(b *Box) bool {
 		// The search stops at a nested block container. A block inside an
 		// inline-block belongs to that box and is not something to be lifted
 		// past it.
-		if c.Outer == OuterInline && !isBlockContainer(c) && containsBlock(c) {
+		if c.Outer == OuterInline && !laysOutOwnChildren(c) && containsBlock(c) {
 			return true
 		}
 	}
@@ -750,7 +830,7 @@ func splitInline(b *Box) []*Box {
 			flush()
 			out = append(out, child)
 
-		case child.Outer == OuterInline && containsBlock(child):
+		case child.Outer == OuterInline && !laysOutOwnChildren(child) && containsBlock(child):
 			// A nested inline that itself holds a block: split it too, and its
 			// inline pieces belong to this one's current piece.
 			for _, inner := range splitInline(child) {

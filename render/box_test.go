@@ -26,6 +26,12 @@ func sketchBox(b *Box) string {
 			out.WriteString("text " + quoted(cur.Text))
 		case cur.Anonymous():
 			out.WriteString("anonymous " + cur.Outer.String())
+			if cur.Inner != InnerFlow {
+				// The boxes §17.2.1 and §17.4 insert differ only in their inner
+				// display, so an anonymous row and an anonymous cell would
+				// otherwise read identically.
+				out.WriteString("/" + cur.Inner.String())
+			}
 		default:
 			name := cur.Element.Name
 			out.WriteString(name + " " + cur.Outer.String())
@@ -232,9 +238,18 @@ func TestDisplayIsTheOuterInnerPair(t *testing.T) {
 			t.Errorf("display:%s produced no box", value)
 			continue
 		}
-		if box.Outer != want.outer || box.Inner != want.inner {
+		outer := box.Outer
+		if box.Parent != nil && box.Parent.TableWrapper {
+			// §17.4 splits a table into two boxes, and the outer half of the
+			// display value goes to the anonymous wrapper: an inline-table is an
+			// inline-level wrapper holding a block-level table box. Asking the
+			// table box alone would say "block" for both values and stop
+			// distinguishing them.
+			outer = box.Parent.Outer
+		}
+		if outer != want.outer || box.Inner != want.inner {
 			t.Errorf("display:%s is %v/%v, want %v/%v",
-				value, box.Outer, box.Inner, want.outer, want.inner)
+				value, outer, box.Inner, want.outer, want.inner)
 		}
 	}
 }
