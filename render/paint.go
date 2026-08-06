@@ -36,6 +36,19 @@ type Op interface{ isOp() }
 type FillRect struct {
 	Rect  Rect
 	Color style.RGBA
+	// Text marks a fill that belongs to a run of text rather than to a box: a
+	// text decoration is the only one.
+	//
+	// It exists for the overflow-page guardrail, which is about *boxes* leaving
+	// the page and reads the display list to find them. Text is not checked by it
+	// at all — a glyph whose ascender reaches above the page top produces a
+	// DrawText, which the guard skips — so an overline over the same letters must
+	// be skipped too. Without this, "line-height: 0.3" on the first line of a page
+	// puts the overline a few pixels above the top edge, the guard fires at Error
+	// severity, and no document is produced at all: an overhang of two pixels
+	// turned into a refusal, from a rule whose whole purpose is to catch a wrong
+	// scale calculation.
+	Text bool
 }
 
 // DrawText draws a run of text with the origin of its baseline at At.
@@ -49,6 +62,13 @@ type DrawText struct {
 	Face  *fonts.Face
 	Size  style.Unit
 	Color style.RGBA
+	// CharSpacing is letter-spacing: an extra advance after every character.
+	//
+	// It is a property of the drawing rather than of the position because layout
+	// already spent it — the run's width includes it, and the run after this one
+	// is placed accordingly — so a backend that ignored it would draw the glyphs
+	// bunched at the left of a gap the right size.
+	CharSpacing style.Unit
 }
 
 // DrawImage paints a decoded image to fill a rectangle.
@@ -351,6 +371,14 @@ func (p *painter) decorations(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
+	if isHidden(f.Box) {
+		// §11.2: the box is laid out and not drawn. It has already taken its
+		// space — every position on this page was computed with it in — so this
+		// is the only place the property has any effect, and it is asked per box
+		// rather than per subtree because a descendant may set "visibility:
+		// visible" and reappear.
+		return
+	}
 	// The background paints over the padding box — under the border, not under
 	// the margin. A background that covered the margin would bleed into the gap
 	// between two boxes, which is the space that is meant to show the page.
@@ -375,12 +403,13 @@ func (p *painter) content(f *Fragment) {
 	// content, so an image drawn with the backgrounds would be covered by the
 	// background of any box painted after it — which for an image overlapping
 	// its next sibling is a real overlap rather than a theoretical one.
-	if r := f.Box.Replaced; r != nil && r.Image != nil {
+	hidden := isHidden(f.Box)
+	if r := f.Box.Replaced; r != nil && r.Image != nil && !hidden {
 		if rect := f.ContentRect(); !rect.Empty() {
 			p.ops = append(p.ops, DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
 		}
 	}
-	if m := f.Marker; m != nil && m.Face != nil {
+	if m := f.Marker; m != nil && m.Face != nil && !hidden {
 		p.ops = append(p.ops, DrawText{
 			At: Point{
 				X: f.BorderRect.X.Add(m.At.X),
@@ -465,21 +494,70 @@ func (p *painter) lines(f *Fragment) {
 			// spent: line breaking resolved it against the tab stops and gave
 			// the next run its position, so what is left to draw is white
 			// space, and a space is the character that draws it.
+			if isHidden(run.Box) {
+				// A run belongs to the inline box it came from, which may be
+				// visible inside a hidden block or hidden inside a visible one.
+				// Asking per run rather than per fragment is what makes
+				// "visibility: visible" on a <span> inside a hidden paragraph
+				// show that span and nothing else.
+				continue
+			}
 			colour, ok := p.color(run.Box, "color")
 			if !ok {
 				colour = style.RGBA{A: 1}
 			}
+			at := Point{
+				X: content.X.Add(line.Rect.X).Add(run.X).Add(run.Offset.X),
+				Y: baseline.Add(run.Offset.Y),
+			}
+			// The two lines that sit clear of the letters are drawn first, so the
+			// text is over them where they touch; the line-through is drawn after,
+			// because it goes across the letters rather than under them. That is
+			// the order every renderer uses, and it only matters where a
+			// decoration's colour differs from the text's — which is precisely the
+			// case §16.3.1 exists to describe.
+			p.decorate(run, at, false)
 			p.ops = append(p.ops, DrawText{
-				At: Point{
-					X: content.X.Add(line.Rect.X).Add(run.X).Add(run.Offset.X),
-					Y: baseline.Add(run.Offset.Y),
-				},
-				Text:  drawableText(run.Text),
-				Face:  run.Face,
-				Size:  run.Size,
-				Color: colour,
+				At:          at,
+				Text:        drawableText(run.Text),
+				Face:        run.Face,
+				Size:        run.Size,
+				Color:       colour,
+				CharSpacing: run.LetterSpacing,
 			})
+			p.decorate(run, at, true)
 		}
+	}
+}
+
+// decorate paints the lines ruled across one run.
+//
+// over selects the pass: the line-through, which goes on top of the letters, or
+// the underline and overline, which go under them.
+//
+// The colour is the *declaring* box's rather than the run's, which is the whole
+// subtlety of §16.3.1 and is why a decoration carries the box that produced it.
+// A decoration with no colour of its own resolves "currentcolor" against that
+// box too, so "p { text-decoration: underline; color: black } em { color: red }"
+// rules a black line under red words.
+func (p *painter) decorate(run TextRun, at Point, over bool) {
+	if len(run.Decorations) == 0 || run.Width <= 0 {
+		return
+	}
+	metrics := decorationMetricsFor(run.Face, run.Size)
+	for _, d := range run.Decorations {
+		if (d.kind == decorationLineThrough) != over {
+			continue
+		}
+		colour, ok := p.color(d.by, "text-decoration-color")
+		if !ok || colour.A == 0 {
+			continue
+		}
+		band := decorationBand(d.kind, at.X, run.Width, at.Y, metrics)
+		if band.Empty() {
+			continue
+		}
+		p.ops = append(p.ops, FillRect{Rect: band, Color: colour, Text: true})
 	}
 }
 

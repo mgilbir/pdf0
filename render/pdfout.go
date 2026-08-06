@@ -269,7 +269,10 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 
 	for _, op := range ops {
 		r, ok := op.(FillRect)
-		if !ok || r.Rect.Empty() {
+		if !ok || r.Rect.Empty() || r.Text {
+			// A text decoration is skipped for the reason FillRect.Text gives:
+			// this guard is about boxes, and the letters the decoration belongs to
+			// are not checked either.
 			continue
 		}
 		if page.Contains(r.Rect) {
@@ -353,6 +356,20 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 			b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
 			b.BeginText()
 			b.SetFont(name, v.Size.Px())
+			if v.CharSpacing != 0 {
+				// Tc, in unscaled text space units — the same units the size above
+				// is given in, since the text matrix below has no scale of its own.
+				//
+				// word-spacing needs no operator to go with it, and that is worth
+				// stating rather than leaving as an omission. Tw applies only to
+				// the single-byte code 32, so it would silently do nothing for a
+				// composite face, and it is not needed anyway: line breaking
+				// already makes every run of spaces an item of its own with a
+				// position of its own, so the extra advance is spent between runs
+				// rather than inside one, and no run of spaces shows ink for the
+				// spread to be visible in.
+				b.SetCharSpacing(v.CharSpacing.Px())
+			}
 			// The y axis is inverted by the transform, so text drawn through it
 			// would be mirrored. The text matrix undoes that inversion locally,
 			// which leaves the glyphs upright while the position still comes
