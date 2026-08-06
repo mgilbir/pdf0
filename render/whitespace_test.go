@@ -297,6 +297,47 @@ func TestTabAdvancesToTheNextTabStop(t *testing.T) {
 	px(t, "the second tab's stop", runs[3].X, 480)
 }
 
+// TestAPreservedTabIsNotDrawnAsTofu pins that the one character no face has a
+// glyph for does not reach one.
+//
+// Every face returns .notdef for U+0009, so a run holding a tab is set as a box
+// where an author wrote an indent — the purest form of the silent garbage §6.3
+// is written about, and one the glyph-missing guardrail deliberately does not
+// warn about because a tab is white space rather than a letter. The advance is
+// already spent against the tab stops by the time anything paints, so what is
+// left to draw is white space and a space draws it.
+func TestAPreservedTabIsNotDrawnAsTofu(t *testing.T) {
+	face, err := fonts.Standard("Courier")
+	if err != nil {
+		t.Fatalf("loading Courier: %v", err)
+	}
+	if _, ok := face.GlyphID('\t'); ok {
+		t.Skip("this face has a glyph for a tab, so there is nothing to avoid")
+	}
+
+	built := Build(Input{HTML: "<pre>a\tb</pre>"})
+	rec := NewRecorder(nil)
+	root := Layout(built.Root, A4.Content(), nil, rec)
+
+	var drew []string
+	for _, op := range Paint(root) {
+		if v, ok := op.(DrawText); ok {
+			drew = append(drew, v.Text)
+			for _, r := range v.Text {
+				if _, ok := v.Face.GlyphID(r); !ok {
+					t.Errorf("the run %q holds %q, which the face %q cannot set",
+						v.Text, r, v.Face.Name())
+				}
+			}
+		}
+	}
+	// The tab is still a mark of its own rather than being dropped, so the two
+	// letters around it do not run together in the text a reader copies out.
+	if len(drew) != 3 || drew[0] != "a" || drew[1] != " " || drew[2] != "b" {
+		t.Errorf("the page drew %q, want [\"a\" \" \" \"b\"]", drew)
+	}
+}
+
 // TestTabStopsAreMeasuredFromTheBlockEdge pins that the stops belong to the
 // block and not to the line box, which is a distinction only a float makes
 // visible — and the case where getting it wrong makes two lines of a listing

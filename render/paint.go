@@ -427,6 +427,14 @@ func (p *painter) lines(f *Fragment) {
 			// them, and a reader copying the text gets them run together. That
 			// was found by reading back a rendered page: "A heading" came out
 			// as "Aheading".
+			//
+			// A preserved tab is the one character that cannot be drawn as
+			// itself. No face has a glyph for U+0009, so setting it emits
+			// .notdef — a box where white space should be, which is the tofu
+			// this engine has a whole guardrail about. Its advance is already
+			// spent: line breaking resolved it against the tab stops and gave
+			// the next run its position, so what is left to draw is white
+			// space, and a space is the character that draws it.
 			colour, ok := p.color(run.Box, "color")
 			if !ok {
 				colour = style.RGBA{A: 1}
@@ -436,13 +444,27 @@ func (p *painter) lines(f *Fragment) {
 					X: content.X.Add(line.Rect.X).Add(run.X).Add(run.Offset.X),
 					Y: baseline.Add(run.Offset.Y),
 				},
-				Text:  run.Text,
+				Text:  drawableText(run.Text),
 				Face:  run.Face,
 				Size:  run.Size,
 				Color: colour,
 			})
 		}
 	}
+}
+
+// drawableText replaces the characters a face cannot set with the white space
+// they stand for.
+//
+// It is only the tab, and only because a tab's whole meaning is its position:
+// the advance was decided against the tab stops before this, so nothing about
+// the page depends on the character reaching the face — and everything about it
+// depends on .notdef not being drawn where an author wrote an indent.
+func drawableText(s string) string {
+	if strings.IndexByte(s, '\t') < 0 {
+		return s
+	}
+	return strings.ReplaceAll(s, "\t", " ")
 }
 
 // color resolves a computed colour property.
