@@ -250,7 +250,7 @@ func (s *Styler) expand(d css.Declaration) []preparedDecl {
 		}}
 	}
 
-	if expandFn, ok := shorthands[name]; ok {
+	if sh, ok := shorthands[name]; ok {
 		// A CSS-wide keyword on a shorthand sets every longhand to it, which
 		// the expander below cannot express — it splits on whitespace and would
 		// hand "inherit" to the first slot only.
@@ -264,7 +264,24 @@ func (s *Styler) expand(d css.Declaration) []preparedDecl {
 			}
 			return out
 		}
-		parts, ok := expandFn(d.Value)
+		parts, unsupported, ok := sh.expand(d.Value)
+		for _, part := range unsupported {
+			// A part of the shorthand this engine understood and cannot
+			// produce. Naming it is the difference between an author learning
+			// their background image did not appear and wondering why the page
+			// is blank.
+			key := name + "\x00" + part
+			if !s.seen[key] {
+				s.seen[key] = true
+				s.report(Finding{
+					Offset: d.Offset,
+					Message: "\"" + part + "\" in the " + name +
+						" shorthand is not implemented, so it was not applied",
+					Unsupported: true,
+					Property:    name,
+				})
+			}
+		}
 		if !ok {
 			s.report(Finding{
 				Offset:   d.Offset,
@@ -316,20 +333,11 @@ func (s *Styler) expand(d css.Declaration) []preparedDecl {
 
 // shorthandLonghands lists what a shorthand sets, for the CSS-wide-keyword path.
 func shorthandLonghands(name string) []string {
-	expand, ok := shorthands[name]
+	sh, ok := shorthands[name]
 	if !ok {
 		return nil
 	}
-	// Ask the expander itself, with a value it can always split, so this cannot
-	// drift from the table above.
-	parts, ok := expand([]css.ComponentValue{{Token: css.Token{Kind: css.Ident, Value: "x"}}})
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(parts))
-	for k := range parts {
-		out = append(out, k)
-	}
+	out := append([]string(nil), sh.longhands...)
 	sort.Strings(out)
 	return out
 }
