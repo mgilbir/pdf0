@@ -274,6 +274,46 @@ func TestInlineBorderIsDrawnOnTheSlicesThatCarryIt(t *testing.T) {
 	}
 }
 
+// TestInlineBorderSlicesOverABlock is §8.6's slice model over the other kind of
+// break: a block inside an inline splits the box into pieces, and the piece that
+// begins it carries the left border while the piece that ends it carries the
+// right.
+//
+// It needs a test of its own because the flags are a different mechanism from
+// the line-by-line one. A piece is a box in its own right, so it is both the
+// first and the last fragment of *itself* — which is exactly what would give
+// each piece a border on all four sides. A planted defect that removed the two
+// flags from the reckoning was caught by nothing until this was written.
+func TestInlineBorderSlicesOverABlock(t *testing.T) {
+	root := layoutOf(t, 4000,
+		`<div id="d"><span id="s">ab<div id="mid">x</div>cd</span></div>`,
+		courierInk+`#s { border: 50px solid blue }`)
+	got := inkOf(Paint(root), blue)
+	if len(got) != 6 {
+		t.Fatalf("a box split by a block painted %d border bands, want 6 "+
+			"(3 + 3): %v", len(got), got)
+	}
+	var verticals []Rect
+	for _, r := range got {
+		if r.W.Px() == 50 {
+			verticals = append(verticals, r)
+		}
+	}
+	if len(verticals) != 2 {
+		t.Fatalf("%d vertical border bands were painted, want 2 — one at each end "+
+			"of the box and none at the split: %v", len(verticals), got)
+	}
+	// The left one is at the start of the first piece; the right one is past
+	// "cd", which is two Courier characters into the second.
+	if x := verticals[0].X.Px(); x != 0 {
+		t.Errorf("the left border is at %gpx, want 0", x)
+	}
+	if x := verticals[1].X.Px(); x != 2*inkAdvance {
+		t.Errorf("the right border is at %gpx, want %g — past the text of the "+
+			"piece that ends the box", x, 2*inkAdvance)
+	}
+}
+
 // TestInlineBackgroundIsPaintedUnderItsOwnText is Appendix E's inline layer: a
 // box's background goes down before the text that sits on it, and a nested box's
 // background goes down over the box it is inside.

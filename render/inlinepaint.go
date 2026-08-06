@@ -193,8 +193,12 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		p := &d.pieces[i]
 		b := p.box
 		if p.line >= len(parent.Lines) {
-			// The line was measured and then not kept. Nothing to hang the
-			// fragment on, and nothing was drawn there either.
+			// A bounds check on an index the caller computed, not a case that
+			// happens: addLine is given the position the line is about to be
+			// appended at, on the statement before the append. It is here because
+			// the alternative to a skip is a panic on an untrusted document, and
+			// because the two are far enough apart in inlineContent for a later
+			// change to break the invariant quietly.
 			continue
 		}
 
@@ -212,9 +216,12 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			margin.Right, border.Right, padding.Right = 0, 0, 0
 		}
 		// §8.3: margin-top and margin-bottom do not apply to a non-replaced
-		// inline box at all. They are zeroed rather than carried so that the
-		// fragment says what was used — a border and a padding on this axis are
-		// painted and a margin is not.
+		// inline box at all. They are zeroed so that the fragment says what was
+		// used — a border and a padding on this axis are painted and a margin is
+		// not — and nothing reads them: MarginRect is never asked of one of these,
+		// which a planted defect confirmed by setting both to 99 and breaking no
+		// test. It is a statement about the value rather than a computation
+		// anything depends on, and it is written down as one.
 		margin.Top, margin.Bottom = 0, 0
 
 		// §10.6.1: the content area is the font's, not the line's.
