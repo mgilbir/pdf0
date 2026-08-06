@@ -183,7 +183,28 @@ func Inherited(cs ComputedStyle) ComputedStyle {
 // margin at 1em, which only works if the shorthand has already become four
 // declarations competing individually. Cascading the shorthand as a unit would
 // make the later longhand lose to it or win over all four.
-var shorthands = map[string]func(vals []css.ComponentValue) (map[string][]css.ComponentValue, bool){
+// expander turns a shorthand's value into the longhands it sets.
+//
+// It returns three things rather than two, and the third is the point:
+// unsupported names the parts of the value this engine understood and cannot
+// produce — a background image, a font variant. Dropping those silently is the
+// failure §6.3 is written about, and only the expander knows what it saw.
+type expander func(vals []css.ComponentValue) (longhands map[string][]css.ComponentValue, unsupported []string, ok bool)
+
+// shorthand is an expander together with the longhands it controls.
+//
+// The list is declared rather than discovered. An earlier version asked the
+// expander itself, by handing it a value and seeing which keys came back — which
+// worked only while every expander accepted the same probe value, and stopped
+// the moment one of them started rejecting values it could not identify. The
+// list is needed for the CSS-wide keywords ("border: inherit" sets all twelve
+// longhands to inherit), where there is no value to probe with at all.
+type shorthand struct {
+	expand    expander
+	longhands []string
+}
+
+var shorthands = map[string]shorthand{
 	"margin":  boxShorthand("margin-top", "margin-right", "margin-bottom", "margin-left"),
 	"padding": boxShorthand("padding-top", "padding-right", "padding-bottom", "padding-left"),
 	"border-width": boxShorthand("border-top-width", "border-right-width",
@@ -193,6 +214,21 @@ var shorthands = map[string]func(vals []css.ComponentValue) (map[string][]css.Co
 	"border-color": boxShorthand("border-top-color", "border-right-color",
 		"border-bottom-color", "border-left-color"),
 	"overflow": boxShorthand("overflow-x", "overflow-y"),
+
+	// The shorthands whose parts are told apart by type rather than position.
+	// They live in shorthand.go, with the reset rule explained there.
+	"border":        borderSides("top", "right", "bottom", "left"),
+	"border-top":    borderSides("top"),
+	"border-right":  borderSides("right"),
+	"border-bottom": borderSides("bottom"),
+	"border-left":   borderSides("left"),
+
+	"background": {backgroundShorthand, []string{"background-color"}},
+	"list-style": {listStyleShorthand, []string{"list-style-type", "list-style-position"}},
+	"font": {fontShorthand, []string{
+		"font-style", "font-weight", "font-size", "font-family", "line-height"}},
+	"text-decoration": {textDecorationShorthand,
+		[]string{"text-decoration-line", "text-decoration-color"}},
 }
 
 // boxShorthand builds the expander for a property written as one to four values
@@ -202,11 +238,25 @@ var shorthands = map[string]func(vals []css.ComponentValue) (map[string][]css.Co
 //
 // The two-name form is the same rule with two slots, which is what "overflow"
 // needs.
-func boxShorthand(names ...string) func([]css.ComponentValue) (map[string][]css.ComponentValue, bool) {
-	return func(vals []css.ComponentValue) (map[string][]css.ComponentValue, bool) {
+// borderSides builds the "border" family, whose longhands are three per side.
+func borderSides(sides ...string) shorthand {
+	var names []string
+	for _, side := range sides {
+		names = append(names,
+			"border-"+side+"-width", "border-"+side+"-style", "border-"+side+"-color")
+	}
+	return shorthand{borderShorthand(sides...), names}
+}
+
+func boxShorthand(names ...string) shorthand {
+	return shorthand{boxExpander(names...), names}
+}
+
+func boxExpander(names ...string) expander {
+	return func(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
 		parts := splitOnWhitespace(vals)
 		if len(parts) == 0 || len(parts) > len(names) {
-			return nil, false
+			return nil, nil, false
 		}
 		out := make(map[string][]css.ComponentValue, len(names))
 		switch len(names) {
@@ -230,7 +280,7 @@ func boxShorthand(names ...string) func([]css.ComponentValue) (map[string][]css.
 			out[names[0]], out[names[1]] = top, right
 			out[names[2]], out[names[3]] = bottom, left
 		}
-		return out, true
+		return out, nil, true
 	}
 }
 
