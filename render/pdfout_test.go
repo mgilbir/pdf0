@@ -697,3 +697,144 @@ func sketchOps(ops []Op) string {
 	}
 	return b.String()
 }
+
+// TestBorderStylesDiffer pins that each border-style paints something different.
+//
+// Layout only ever asks a border how wide it is, and every style is the same
+// width — so a renderer that ignored the style produced a page that was wrong in
+// a way an author sees at once and a test suite sees as a hundred failures.
+func TestBorderStylesDiffer(t *testing.T) {
+	// All four edges, because the 3-D styles differ from solid only in which
+	// edges are lit: an "outset" top edge *is* the plain colour, so a test with
+	// a top border alone would report outset and solid as the same thing — and
+	// be right about it.
+	sheet := func(kind string) string {
+		return noDefaults + `#a { height: 50px;
+			border-top-width: 9px; border-right-width: 9px;
+			border-bottom-width: 9px; border-left-width: 9px;
+			border-top-color: #808080; border-right-color: #808080;
+			border-bottom-color: #808080; border-left-color: #808080;
+			border-top-style: ` + kind + `; border-right-style: ` + kind + `;
+			border-bottom-style: ` + kind + `; border-left-style: ` + kind + ` }`
+	}
+	seen := map[string]string{}
+	for _, kind := range []string{
+		"solid", "double", "dashed", "dotted", "groove", "ridge", "inset", "outset",
+	} {
+		ops := paintOf(t, `<div id="a"></div>`, sheet(kind))
+		got := sketchOps(ops)
+		if got == "" {
+			t.Errorf("border-style:%s painted nothing", kind)
+			continue
+		}
+		if other, ok := seen[got]; ok {
+			t.Errorf("border-style:%s paints exactly what %s does", kind, other)
+		}
+		seen[got] = kind
+	}
+
+	// "none" and "hidden" paint nothing at all, which is the contrast that makes
+	// the assertions above about style rather than about painting in general.
+	for _, kind := range []string{"none", "hidden"} {
+		ops := paintOf(t, `<div id="a"></div>`, sheet(kind))
+		for _, op := range ops {
+			if r, ok := op.(FillRect); ok && r.Color.R == 128 {
+				t.Errorf("border-style:%s painted a border", kind)
+			}
+		}
+	}
+}
+
+// TestDoubleBorderIsTwoLines pins the style whose whole point is the gap. One
+// band would be a solid border by another name.
+func TestDoubleBorderIsTwoLines(t *testing.T) {
+	ops := paintOf(t, `<div id="a"></div>`,
+		noDefaults+`#a { height: 50px; border-top-width: 9px;
+			border-top-color: #808080; border-top-style: double }`)
+
+	var bands []Rect
+	for _, op := range ops {
+		if r, ok := op.(FillRect); ok && r.Color.R == 128 {
+			bands = append(bands, r.Rect)
+		}
+	}
+	if len(bands) != 2 {
+		t.Fatalf("a double border painted %d bands, want 2", len(bands))
+	}
+	// Each is a third of the width, and there is a third between them.
+	px(t, "the first band", bands[0].H, 3)
+	px(t, "the second band", bands[1].H, 3)
+	px(t, "the gap", bands[1].Y.Sub(bands[0].Bottom()), 3)
+}
+
+// TestDashedAndDottedAreRuns pins that these paint many marks rather than one,
+// and that a dot is shorter than a dash — the ratio is left open by the
+// specification and the difference is not.
+func TestDashedAndDottedAreRuns(t *testing.T) {
+	count := func(kind string) (marks int, markLen float64) {
+		ops := paintOf(t, `<div id="a"></div>`,
+			noDefaults+`#a { height: 50px; border-top-width: 4px;
+				border-top-color: #808080; border-top-style: `+kind+` }`)
+		for _, op := range ops {
+			if r, ok := op.(FillRect); ok && r.Color.R == 128 {
+				marks++
+				markLen = r.Rect.W.Px()
+			}
+		}
+		return
+	}
+	dashes, dashLen := count("dashed")
+	dots, dotLen := count("dotted")
+
+	if dashes < 5 {
+		t.Errorf("a dashed border painted %d marks, want a run of them", dashes)
+	}
+	if dots <= dashes {
+		t.Errorf("dotted painted %d marks and dashed %d; a dot is shorter so there "+
+			"are more of them", dots, dashes)
+	}
+	if dotLen >= dashLen {
+		t.Errorf("a dot is %v wide and a dash %v; a dot is the shorter", dotLen, dashLen)
+	}
+}
+
+// TestThreeDBordersUseTwoTones pins that groove, ridge, inset and outset light
+// some edges and shadow others — which is the whole of what makes them look
+// three-dimensional, and what a single-tone renderer loses.
+func TestThreeDBordersUseTwoTones(t *testing.T) {
+	for _, kind := range []string{"groove", "ridge", "inset", "outset"} {
+		ops := paintOf(t, `<div id="a"></div>`,
+			noDefaults+`#a { height: 50px;
+				border-top-width: 8px; border-right-width: 8px;
+				border-bottom-width: 8px; border-left-width: 8px;
+				border-top-color: #808080; border-right-color: #808080;
+				border-bottom-color: #808080; border-left-color: #808080;
+				border-top-style: `+kind+`; border-right-style: `+kind+`;
+				border-bottom-style: `+kind+`; border-left-style: `+kind+` }`)
+
+		tones := map[float64]bool{}
+		for _, op := range ops {
+			if r, ok := op.(FillRect); ok {
+				tones[r.Color.R] = true
+			}
+		}
+		if len(tones) < 2 {
+			t.Errorf("border-style:%s used %d tone(s), want two", kind, len(tones))
+		}
+	}
+}
+
+// TestBlackThreeDBorderStaysVisible pins the case a naive darkening loses. Half
+// of black is black, so a groove on the colour authors use most would vanish
+// into one tone; the second tone is a lightening instead.
+func TestBlackThreeDBorderStaysVisible(t *testing.T) {
+	black := style.RGBA{A: 1}
+	if shade(black, 0.5) == black {
+		t.Error("a black border's second tone is also black, so the style disappears")
+	}
+	// An ordinary colour does darken, so the special case is only for black.
+	grey := style.RGBA{R: 200, G: 200, B: 200, A: 1}
+	if got := shade(grey, 0.5); got.R >= grey.R {
+		t.Errorf("shading grey gave %v, which is no darker", got)
+	}
+}

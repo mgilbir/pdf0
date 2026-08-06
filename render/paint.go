@@ -120,22 +120,9 @@ func (p *painter) borders(f *Fragment) {
 	r := f.BorderRect
 	e := f.Border
 
-	if e.Top > 0 {
-		if c, ok := p.color(f.Box, "border-top-color"); ok && c.A > 0 {
-			p.ops = append(p.ops, FillRect{
-				Rect:  Rect{X: r.X, Y: r.Y, W: r.W, H: e.Top},
-				Color: c,
-			})
-		}
-	}
-	if e.Bottom > 0 {
-		if c, ok := p.color(f.Box, "border-bottom-color"); ok && c.A > 0 {
-			p.ops = append(p.ops, FillRect{
-				Rect:  Rect{X: r.X, Y: r.Bottom().Sub(e.Bottom), W: r.W, H: e.Bottom},
-				Color: c,
-			})
-		}
-	}
+	// The sides take what the top and bottom leave, which mitres the corners
+	// well enough for a border of one colour and is where a per-corner
+	// implementation would start.
 	inner := Rect{
 		Y: r.Y.Add(e.Top),
 		H: r.H.Sub(e.Top).Sub(e.Bottom),
@@ -143,21 +130,28 @@ func (p *painter) borders(f *Fragment) {
 	if inner.H < 0 {
 		inner.H = 0
 	}
-	if e.Left > 0 {
-		if c, ok := p.color(f.Box, "border-left-color"); ok && c.A > 0 {
-			p.ops = append(p.ops, FillRect{
-				Rect:  Rect{X: r.X, Y: inner.Y, W: e.Left, H: inner.H},
-				Color: c,
-			})
-		}
+
+	edges := [4]struct {
+		width style.Unit
+		band  Rect
+		name  string
+		side  side
+	}{
+		{e.Top, Rect{r.X, r.Y, r.W, e.Top}, "top", sideTop},
+		{e.Right, Rect{r.Right().Sub(e.Right), inner.Y, e.Right, inner.H}, "right", sideRight},
+		{e.Bottom, Rect{r.X, r.Bottom().Sub(e.Bottom), r.W, e.Bottom}, "bottom", sideBottom},
+		{e.Left, Rect{r.X, inner.Y, e.Left, inner.H}, "left", sideLeft},
 	}
-	if e.Right > 0 {
-		if c, ok := p.color(f.Box, "border-right-color"); ok && c.A > 0 {
-			p.ops = append(p.ops, FillRect{
-				Rect:  Rect{X: r.Right().Sub(e.Right), Y: inner.Y, W: e.Right, H: inner.H},
-				Color: c,
-			})
+	for _, edge := range edges {
+		if edge.width <= 0 {
+			continue
 		}
+		colour, ok := p.color(f.Box, "border-"+edge.name+"-color")
+		if !ok || colour.A == 0 {
+			continue
+		}
+		kind := parseBorderStyle(f.Box.Style["border-"+edge.name+"-style"])
+		p.paintEdge(edge.band, kind, colour, edge.side, edge.width)
 	}
 }
 
