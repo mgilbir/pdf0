@@ -1093,7 +1093,27 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 		// anonymous box. Otherwise "<div>\n<p>a</p>\n</div>" — whose newlines
 		// are text nodes — would gain two anonymous blocks and two blank lines
 		// that the author did not write and cannot see in the markup.
-		if allWhitespace(run) {
+		//
+		// An out-of-flow box in such a run is content and stays, but it does
+		// not make the run into an inline formatting context: it is block-level
+		// once §9.7 has blockified it, and nothing is left beside it for a line
+		// box to hold. So it joins the parent's block-level children where it
+		// was written rather than being sealed inside an anonymous block.
+		//
+		// That distinction is worth more than it looks, and it is why the
+		// out-of-flow test was moved out of allWhitespace. An anonymous block
+		// around a lone float *commits the pending margin* — it is an in-flow
+		// box, so the margin above it is separated from the margin below —
+		// which silently defeats the rule in layout.go that a float between two
+		// paragraphs leaves their spacing alone. Every document in the suite
+		// writes a newline between its elements, so the anonymous block was
+		// there in every one of them and the rule almost never fired.
+		if !hasInFlowContent(run) {
+			for _, c := range run {
+				if c.outOfFlow() {
+					out = append(out, c)
+				}
+			}
 			run = nil
 			return
 		}
@@ -1127,32 +1147,34 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 	return out
 }
 
-// allWhitespace reports whether a run of inline boxes is nothing but white
-// space that would be collapsed away.
+// hasInFlowContent reports whether a run of inline-level boxes holds anything
+// that would put a line box on the page.
 //
-// The qualification is the whole of it. CSS Display generates no anonymous
-// block around white space that *collapses*, which is why an indented
-// "<div>\n<p>a</p>\n</div>" gains no blank lines. White space that is preserved
-// is content — a blank line inside a <pre> is a line the author wrote — so a
-// run of it generates its box like any other text.
-func allWhitespace(run []*Box) bool {
+// The qualification about white space is the whole of it. CSS Display generates
+// no anonymous block around white space that *collapses*, which is why an
+// indented "<div>\n<p>a</p>\n</div>" gains no blank lines. White space that is
+// preserved is content — a blank line inside a <pre> is a line the author wrote
+// — so a run of it generates its box like any other text.
+//
+// An out-of-flow box is not in-flow content by definition: it is taken out of
+// the flow, it generates no line box, and the run around it is empty without
+// it. The caller keeps it and drops the run.
+func hasInFlowContent(run []*Box) bool {
 	for _, c := range run {
 		if c.outOfFlow() {
-			// An out-of-flow box in the run is content, even when every
-			// character around it is a space. Dropping the run would drop it.
-			return false
+			continue
 		}
 		if !c.IsText() {
-			return false
+			return true
 		}
 		if !whiteSpaceOf(c.Style["white-space"]).collapse {
-			return false
+			return true
 		}
 		if strings.TrimSpace(c.Text) != "" {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // listValueOf reads the "list-item" counter for a list item.

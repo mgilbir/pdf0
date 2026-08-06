@@ -105,6 +105,71 @@ func TestCascadeOrderOfAppearance(t *testing.T) {
 	}
 }
 
+// TestNegativeValueDropsTheDeclaration pins CSS 2.1 §4.2 applied to the
+// properties whose definitions say a negative value is illegal: the *whole
+// declaration* is dropped, and the cascade goes on as though it had not been
+// written.
+//
+// The distinction that matters is between dropping the declaration and refusing
+// the value later, and the second declaration in each pair below is what makes
+// it visible. "height: 0; height: -1px" has to compute to zero — an engine that
+// let the negative through and refused it while laying out would see only the
+// last declaration and fall back to auto, which is a full-height box where the
+// author asked for none. Clamping to zero is a third answer and wrong in the
+// other direction: "max-height: -1px" would flatten a box that has a height.
+//
+// The legal negatives beside them are the reason this is a list and not a rule
+// about lengths. A negative margin, text-indent, letter-spacing and word-spacing
+// are all useful and all specified, and dropping one would break a page that is
+// doing nothing wrong.
+func TestNegativeValueDropsTheDeclaration(t *testing.T) {
+	doc := parseDoc(t, cascadeDoc)
+	cases := []struct{ src, property, want string }{
+		// The earlier, legal declaration stands.
+		{"p { height: 0; height: -1px }", "height", "0"},
+		{"p { width: 5px; width: -1% }", "width", "5px"},
+		{"p { padding-left: 3px; padding-left: -2em }", "padding-left", "3px"},
+		// With nothing earlier, the initial value stands. "auto" and "none" are
+		// what the property registry gives, and neither is the "0" a clamp
+		// would have produced.
+		{"p { max-height: -1px }", "max-height", "none"},
+		{"p { width: -1px }", "width", "auto"},
+		{"p { min-width: -1px }", "min-width", "0"},
+		// And the negatives that are legal are untouched.
+		{"p { margin-top: -10px }", "margin-top", "-10px"},
+		{"p { text-indent: -3em }", "text-indent", "-3em"},
+		{"p { letter-spacing: -1px }", "letter-spacing", "-1px"},
+		{"p { word-spacing: -1px }", "word-spacing", "-1px"},
+		// A zero is not negative, which is worth pinning because the test is on
+		// the sign of a number and zero has two spellings.
+		{"p { height: 0px }", "height", "0px"},
+		{"p { height: -0px }", "height", "-0px"},
+	}
+	for _, tc := range cases {
+		got := styleOf(t, doc, []Sheet{author(t, tc.src)}, "#target", tc.property)
+		if got != tc.want {
+			t.Errorf("%q\n  gave %s = %q, want %q", tc.src, tc.property, got, tc.want)
+		}
+	}
+
+	// The dropped declaration is reported, and not as something unsupported:
+	// nothing is missing from the engine, a stylesheet said something CSS
+	// forbids and CSS says what to do about it.
+	out := Apply(doc, []Sheet{author(t, "p { max-height: -1px }")})
+	var found bool
+	for _, f := range out.Findings {
+		if f.Property == "max-height" {
+			found = true
+			if f.Unsupported {
+				t.Error("an illegal value was reported as an unimplemented property")
+			}
+		}
+	}
+	if !found {
+		t.Error("dropping a declaration for an illegal value was not reported")
+	}
+}
+
 // TestCascadeSpecificity pins that specificity beats order. A more specific rule
 // written earlier still wins, which is the whole reason specificity exists.
 func TestCascadeSpecificity(t *testing.T) {

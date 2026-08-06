@@ -273,6 +273,30 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 	name := strings.ToLower(d.Name)
 
+	if nonNegative[name] && hasNegativeNumber(d.Value) {
+		// A declaration whose value is illegal is not a declaration with a
+		// strange value: CSS 2.1 §4.2 says the whole declaration is dropped, and
+		// what stands is whatever the cascade would have produced without it.
+		//
+		// That is why this cannot be done where the value is read. "height: 0;
+		// height: -1px" has to compute to zero, and a layout that refuses the
+		// negative number sees only the last declaration and falls back to
+		// auto — which is a full-height box where the author asked for none.
+		// The suite has thirty-five tests of exactly that shape, one per
+		// property per unit, and they are what found it.
+		//
+		// The finding is not marked unsupported. Nothing is missing from the
+		// engine here; a stylesheet said something CSS forbids and CSS says
+		// what to do about it.
+		s.report(Finding{
+			Offset: d.Offset,
+			Message: "\"" + name + ": " + serialize(d.Value) + "\" is negative, which " +
+				name + " does not allow, so the declaration was dropped",
+			Property: name,
+		})
+		return nil
+	}
+
 	if _, ok := properties[name]; ok {
 		// A registered property that nothing reads is reported here rather than
 		// dropped. The value still cascades — inheritance and the computed
@@ -385,6 +409,55 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		})
 	}
 	return nil
+}
+
+// nonNegative lists the longhands whose value CSS 2.1 says may not be negative.
+//
+// Each entry is a property whose definition carries the words "Negative values
+// are illegal" or "Negative lengths are not allowed": the sizes of §10.2, §10.4,
+// §10.5 and §10.7, and the paddings of §8.4. The list is deliberately short and
+// deliberately not "everything that looks like a length" — a negative margin,
+// a negative text-indent, a negative letter-spacing and a negative word-spacing
+// are all legal and all useful, and dropping one of those would break a page
+// that is doing nothing wrong.
+//
+// The shorthands are not here. "padding: 1px -2px" is invalid as a whole, and
+// catching it needs the shorthand expander rather than a name lookup; what
+// happens today is that the negative reaches two longhands, which is a gap this
+// records rather than hides.
+var nonNegative = map[string]bool{
+	"width": true, "height": true,
+	"min-width": true, "min-height": true,
+	"max-width": true, "max-height": true,
+	"padding-top": true, "padding-right": true,
+	"padding-bottom": true, "padding-left": true,
+}
+
+// hasNegativeNumber reports whether any numeric token in a value is negative.
+//
+// It reads the tokens rather than parsing a length, because this runs when a
+// sheet is prepared and there is no element, no font size and no containing
+// block yet. A negative number is negative whatever unit it carries and
+// whatever it would have resolved to, which is what makes the syntactic test
+// exactly as strong as the semantic one for this rule.
+//
+// A function's arguments are not looked into. "calc(10px - 20px)" is negative
+// and this does not say so; calc is not implemented, so there is nothing here
+// to be wrong about yet, and guessing at the sign of an expression that is not
+// evaluated would drop declarations that are perfectly legal.
+func hasNegativeNumber(vals []css.ComponentValue) bool {
+	for _, v := range vals {
+		if !v.IsToken() {
+			continue
+		}
+		switch v.Token.Kind {
+		case css.Number, css.Percentage, css.Dimension:
+			if v.Token.Number < 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // shorthandLonghands lists what a shorthand sets, for the CSS-wide-keyword path.
