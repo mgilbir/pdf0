@@ -111,27 +111,52 @@ func (l *layouter) measureWidths(b *Box) intrinsicWidths {
 }
 
 // inlineWidths measures a run of inline content.
+func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
+	// The frame is empty because §9.4.3's offset is applied after layout and so
+	// changes no width: a relatively positioned inline demands exactly the room
+	// it would have demanded without the declaration.
+	items, _ := l.collectInline(b, nil, startOfContext(), inlineFrame{})
+	return l.widthsOf(items)
+}
+
+// textWidths measures one text box.
+//
+// It goes through the same items line breaking would, rather than reading the
+// pieces itself, so that the two cannot disagree about what a tab is worth or
+// about which space survives — a disagreement that shows up as a float sized to
+// a width the text it holds does not need.
+func (l *layouter) textWidths(b *Box) intrinsicWidths {
+	items, _ := l.itemsFor(b, startOfContext(), Point{})
+	return l.widthsOf(items)
+}
+
+// widthsOf is the pair over a flattened run of inline items.
 //
 // The two numbers differ in exactly one way: the maximum lets everything sit on
 // one line and so adds the pieces up, while the minimum breaks at every
 // opportunity and so takes the widest unbreakable run. A forced break — a <br>,
 // or a newline in preserved white space — ends a line in both.
-func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
-	// The frame is empty because §9.4.3's offset is applied after layout and so
-	// changes no width: a relatively positioned inline demands exactly the room
-	// it would have demanded without the declaration.
-	items, _ := l.collectInline(b, nil, false, inlineFrame{})
-
+func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 	var out intrinsicWidths
-	var line, run style.Unit
+	// edge is the trailing run of collapsible space, which §4.1.2 removes at the
+	// end of a line: a box sized to include it would be wider than the text it
+	// holds by however many spaces happened to end each line.
+	//
+	// A *preserved* trailing space is deliberately not subtracted here even
+	// though it hangs on a wrapped line, because no line here is wrapped. Every
+	// line these widths are measured over ends at a forced break or at the end
+	// of the content, and §4.1.2 makes the hang at those two *conditional*: the
+	// space takes room unless taking it would overflow. A box being sized to
+	// its own preferred width cannot overflow, so the space takes room.
+	var line, run, edge style.Unit
 	endRun := func() {
 		out.min = style.Max(out.min, run)
 		run = 0
 	}
 	endLine := func() {
 		endRun()
-		out.max = style.Max(out.max, line)
-		line = 0
+		out.max = style.Max(out.max, line.Sub(edge))
+		line, edge = 0, 0
 	}
 
 	for _, item := range items {
@@ -144,49 +169,46 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 			out.min = style.Max(out.min, got.min)
 			out.max = style.Max(out.max, got.max)
 
+		case item.abs != nil:
+			// Out of flow: it takes no width on the line, so it contributes to
+			// neither number.
+
 		case item.forced:
 			endLine()
 
 		case item.space:
-			// A space is a break opportunity, so it ends the unbreakable run;
-			// it still occupies width on a line that is never broken.
-			endRun()
-			line = line.Add(item.width)
+			w := item.width
+			if item.tab {
+				// Tab stops are measured from the block's content edge, and on
+				// an unbroken line that edge is where this measurement started.
+				w = tabAdvance(line, item.tabStop)
+			}
+			if item.noWrap {
+				// Text that may not break has one width, not two. A space in it
+				// is a space and not an opportunity, and an engine that ended
+				// the unbreakable run here would give a nowrap paragraph a
+				// minimum width of its longest word — so a float holding one
+				// would be sized to a fraction of the text it then overflows.
+				run = run.Add(w)
+			} else {
+				endRun()
+			}
+			line = line.Add(w)
+			if item.collapsible {
+				edge = edge.Add(w)
+			} else {
+				edge = 0
+			}
 
 		default:
-			if item.breakBefore {
+			if item.breakBefore && !item.noWrap {
 				endRun()
 			}
 			run = run.Add(item.width)
 			line = line.Add(item.width)
+			edge = 0
 		}
 	}
 	endLine()
-	return out
-}
-
-// textWidths measures one text box.
-func (l *layouter) textWidths(b *Box) intrinsicWidths {
-	face, ok := l.fontFor(b)
-	if !ok {
-		return intrinsicWidths{}
-	}
-	pieces, _ := splitAtBreaks(b.Text)
-
-	var out intrinsicWidths
-	var line, run style.Unit
-	for _, p := range pieces {
-		w := l.measure(face, p.text, b.FontSize)
-		if p.space || p.breakBefore {
-			out.min = style.Max(out.min, run)
-			run = 0
-		}
-		if !p.space {
-			run = run.Add(w)
-		}
-		line = line.Add(w)
-	}
-	out.min = style.Max(out.min, run)
-	out.max = line
 	return out
 }
