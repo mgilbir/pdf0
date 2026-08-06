@@ -118,7 +118,7 @@ const wptEnv = "WPT_TESTS"
 // occlusion-blind comparison taught below, and it is the one this file keeps
 // having to relearn: a pass is only evidence if something could have made it
 // fail.
-const wptCleanPassBaseline = 2023
+const wptCleanPassBaseline = 1899
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
