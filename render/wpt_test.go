@@ -126,7 +126,26 @@ const wptEnv = "WPT_TESTS"
 // this one, where they wait on something else that is still unimplemented. That
 // is the ratchet working as designed — a test counts here only once nothing in
 // either document is missing.
-const wptCleanPassBaseline = 1916
+//
+// Bidirectional text took it from 1916 to 2045, and that number is two effects
+// worth keeping apart because they are different claims. They were measured
+// separately, by running the suite with the properties reported as implemented
+// and every layout effect of them switched off:
+//
+//   - Deleting the admissions for "direction" and "unicode-bidi", and the
+//     unsupported-script finding for the right-to-left scripts, moved 113 tests
+//     out of the tainted bucket without changing a pixel. Failures did not move
+//     at all — 1995 before, 1995 after.
+//   - Implementing the properties then moved the pixels: 16 more clean passes,
+//     and failures from 1995 to 1979.
+//
+// The first number is the larger and the second is the one that is about layout.
+// The reason the second is small is worth recording: the standard fourteen faces
+// are the default font set and have no Hebrew or Arabic glyph, so a document with
+// right-to-left *text* in it is tainted by glyph-missing whatever the ordering
+// does. What the 16 are is documents where "direction: rtl" moved Latin content —
+// the alignment, the over-constrained margins, and the order of the runs.
+const wptCleanPassBaseline = 2045
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

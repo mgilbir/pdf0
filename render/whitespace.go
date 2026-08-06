@@ -38,9 +38,13 @@ import "strings"
 // rune of the previous node through box construction, which is a channel that
 // exists for nothing else.
 //
-// Bidi formatting characters are not "ignored as if they were not there", as
-// §4.1.1 requires, because nothing here reorders bidirectional text either —
-// inline.go reports that rather than approximating it.
+// Bidi formatting characters are not "ignored as if they were not there" while
+// white space is collapsed, as §4.1.1 requires: a formatting character between
+// two spaces stops them collapsing into one. They *are* kept out of the way
+// everywhere it matters afterwards — the algorithm removes them from its own
+// view (rule X9) and the shaper draws nothing for them — so the cost is a
+// stray space's width in a document that puts a directional control in the
+// middle of one, and not text in the wrong order.
 
 // whiteSpace is what the property sets, which is three independent bits and one
 // variant. Modelling it as the bits rather than as six keywords is what stops
