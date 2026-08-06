@@ -3,6 +3,7 @@ package render
 import (
 	"strings"
 
+	"github.com/mgilbir/pdf0/css"
 	"github.com/mgilbir/pdf0/html"
 	"github.com/mgilbir/pdf0/style"
 )
@@ -120,6 +121,16 @@ type Box struct {
 	// empty for every other kind.
 	Text string
 
+	// FontSize is the computed font-size, resolved here rather than in the
+	// cascade because it is the one property whose value depends on its own
+	// parent's computed value: "font-size: 1em" means the parent's size, so a
+	// chain of them compounds and can only be resolved walking downwards.
+	//
+	// Every font-relative length in the box — its margins, its padding, its
+	// line height — is measured against this, so it has to exist before layout
+	// asks anything about geometry.
+	FontSize style.Unit
+
 	// ListItem marks a box that generates a marker — a bullet or a number.
 	ListItem bool
 
@@ -157,7 +168,13 @@ func BuildBoxes(doc *html.Node, styles map[*html.Node]style.ComputedStyle, rec *
 	if root == nil {
 		return nil
 	}
-	box := b.build(root, nil)
+	// The root's font-size is resolved against the initial value, since there
+	// is no parent to take one from, and it then becomes what every "rem" in
+	// the document means.
+	b.rootFontSize = defaultFontSize
+	b.rootFontSize = b.fontSizeOf(root, defaultFontSize)
+
+	box := b.build(root, nil, b.rootFontSize)
 	if box == nil {
 		return nil
 	}
@@ -184,27 +201,86 @@ func documentElementOf(doc *html.Node) *html.Node {
 	return nil
 }
 
+// defaultFontSize is the initial value of font-size, "medium", in layout units.
+// It is what the root resolves a relative size against and what a document that
+// sets no size gets.
+var defaultFontSize = mustPx(16)
+
+func mustPx(px float64) style.Unit {
+	u, _ := style.FromPx(px)
+	return u
+}
+
 type boxBuilder struct {
-	styles map[*html.Node]style.ComputedStyle
-	rec    *Recorder
-	count  int
+	styles       map[*html.Node]style.ComputedStyle
+	rec          *Recorder
+	rootFontSize style.Unit
+	count        int
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
 }
 
 // build makes the box or boxes for one node, or nil for none.
-func (b *boxBuilder) build(n *html.Node, inherited style.ComputedStyle) *Box {
+func (b *boxBuilder) build(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
 	switch n.Type {
 	case html.TextNode:
-		return b.textBox(n, inherited)
+		return b.textBox(n, inherited, fontSize)
 	case html.ElementNode:
-		return b.elementBox(n)
+		return b.elementBox(n, fontSize)
 	}
 	return nil
 }
 
-func (b *boxBuilder) elementBox(n *html.Node) *Box {
+// fontSizeOf resolves an element's computed font-size against its parent's.
+//
+// A value this engine cannot resolve leaves the size at the parent's, which is
+// what inheriting would have given — the safe answer, since a size of zero would
+// make every em-based margin in the subtree vanish.
+func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
+	cs, ok := b.styles[n]
+	if !ok {
+		return parent
+	}
+	vals, _ := css.ParseComponentValues(cs["font-size"])
+	size, unsupported, ok := style.ResolveFontSize(vals, parent, b.rootFontSize)
+	if !ok {
+		if unsupported {
+			b.rec.ReportDetail(Finding{
+				Rule:     RuleUnsupportedValue,
+				Source:   AtHTML(n.Offset),
+				Message:  "the font-size " + quoteValue(cs["font-size"]) + " could not be resolved; the inherited size was kept",
+				Path:     PathOf(n),
+				Property: "font-size",
+			})
+		}
+		return parent
+	}
+	return size
+}
+
+// quoteValue renders a value for a diagnostic without letting a hostile
+// stylesheet put control characters into a caller's log.
+func quoteValue(s string) string {
+	const max = 40
+	var out strings.Builder
+	out.WriteByte('"')
+	for i, r := range s {
+		if i >= max {
+			out.WriteString("...")
+			break
+		}
+		if r < 0x20 || r == 0x7F {
+			out.WriteByte('?')
+			continue
+		}
+		out.WriteRune(r)
+	}
+	out.WriteByte('"')
+	return out.String()
+}
+
+func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	cs := b.styles[n]
 	outer, inner, listItem := displayOf(cs)
 	if outer == OuterNone {
@@ -216,9 +292,13 @@ func (b *boxBuilder) elementBox(n *html.Node) *Box {
 		return nil
 	}
 
-	box := &Box{Outer: outer, Inner: inner, Element: n, Style: cs, ListItem: listItem}
+	fontSize := b.fontSizeOf(n, parentFontSize)
+	box := &Box{
+		Outer: outer, Inner: inner, Element: n, Style: cs,
+		ListItem: listItem, FontSize: fontSize,
+	}
 	for _, child := range n.Children {
-		if c := b.build(child, cs); c != nil {
+		if c := b.build(child, cs, fontSize); c != nil {
 			c.Parent = box
 			box.Children = append(box.Children, c)
 		}
@@ -247,7 +327,7 @@ func (b *boxBuilder) room(n *html.Node) bool {
 // optimisation: an empty text box between two blocks would make the parent a
 // block container with inline content, and so generate an anonymous block that
 // occupies a line.
-func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle) *Box {
+func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
 	text := collapseWhitespace(n.Text, inherited["white-space"])
 	if text == "" {
 		return nil
@@ -257,7 +337,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle) *Box {
 	}
 	return &Box{
 		Outer: OuterInline, Inner: InnerText,
-		Style: inherited, Text: text,
+		Style: inherited, Text: text, FontSize: fontSize,
 	}
 }
 
@@ -480,6 +560,7 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 		anon := &Box{
 			Outer: OuterBlock, Inner: InnerFlow,
 			Style: parent.Style, Parent: parent,
+			FontSize: parent.FontSize,
 			Children: run,
 		}
 		for _, c := range run {
