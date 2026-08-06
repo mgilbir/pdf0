@@ -66,6 +66,32 @@ var properties = map[string]property{
 	"float": {false, "none"},
 	"clear": {false, "none"},
 
+	// The positioning schemes of CSS 2.1 §9.3. None of them inherits, and
+	// "position" is the one worth saying why about: a relative position that
+	// reached every descendant would offset the subtree once per level, so a
+	// paragraph three elements deep inside a box nudged 10px down would land
+	// 30px down. The offset belongs to the box the author wrote it on.
+	//
+	// The initial value of the four offsets is "auto" rather than "0", and the
+	// difference between those two is the whole of §10.3.7. A box with "left:
+	// auto" is placed where the flow would have put it; one with "left: 0" is
+	// pinned to its containing block's left padding edge. Reading auto as zero
+	// would send every absolutely positioned box that names only a "top" to the
+	// left edge of its containing block, which is a plausible-looking page and
+	// the wrong one.
+	"position": {false, "static"},
+	"top":      {false, "auto"},
+	"right":    {false, "auto"},
+	"bottom":   {false, "auto"},
+	"left":     {false, "auto"},
+
+	// z-index's initial value is "auto" and not "0" for a reason of the same
+	// shape: "0" makes the box a stacking context and "auto" leaves it in its
+	// parent's, so a descendant with a negative z-index paints behind an
+	// ancestor with "z-index: auto" and in front of one with "z-index: 0".
+	// Collapsing the two would make that descendant unreachable.
+	"z-index": {false, "auto"},
+
 	// Borders.
 	"border-top-width":    {false, "medium"},
 	"border-right-width":  {false, "medium"},

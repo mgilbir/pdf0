@@ -318,6 +318,20 @@ func (fc *floatContext) bottom() style.Unit {
 type flow struct {
 	ctx  *floatContext
 	x, y style.Unit
+
+	// cbHeight is the content height of the containing block, and cbDefinite
+	// says whether it is a height the author declared rather than one the
+	// content happened to produce.
+	//
+	// The pair is here rather than passed alongside the width because it is the
+	// same kind of fact: where a step of layout sits and what it may resolve a
+	// percentage against. Only the vertical offsets of §9.4.3 read it, and they
+	// read the *definite* flag as much as the number — a percentage of a height
+	// that is not definite computes to auto, and answering it with the height
+	// the content later turned out to need would be a number that looks right
+	// and is not the one CSS specifies.
+	cbHeight   style.Unit
+	cbDefinite bool
 }
 
 // establishesBFC reports whether a box lays its floats out in a context of its
@@ -327,6 +341,21 @@ type flow struct {
 // float is on it, which is easy to overlook and matters: floats inside a float do
 // not escape it, so a floated sidebar containing a floated image is as tall as
 // the image.
+//
+// An absolutely positioned box is on it too, and that entry earns more than
+// containment: it is what makes the deferred placement of position.go sound. A
+// box that neither reads the float geometry around it nor contributes to it has
+// no interaction with the flow in either direction, so laying it out after the
+// walk has finished produces exactly what laying it out during the walk would
+// have.
+//
+// For every display value this engine actually lays out, that would already be
+// true without the clause — §9.7 blockifies an out-of-flow box to a flow root,
+// and the first test here catches it. The clause is not therefore redundant: the
+// displays whose inner half *survives* blockification, a table and a flex
+// container, stay themselves when absolutely positioned, and this is the only
+// thing that seals those. Neither is laid out yet, so the clause is checked
+// directly rather than through a page.
 func establishesBFC(b *Box) bool {
-	return b.Inner == InnerFlowRoot || b.Float != FloatNone
+	return b.Inner == InnerFlowRoot || b.Float != FloatNone || b.Position.outOfFlow()
 }

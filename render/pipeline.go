@@ -173,8 +173,8 @@ func ruleForStyleFinding(f style.Finding) Rule {
 	return RuleUnsupportedSelector
 }
 
-// reportUnsupportedDisplays names the display values the box tree recognised
-// and could not honour.
+// reportUnsupportedDisplays names the display and position values the box tree
+// recognised and could not honour.
 //
 // "display: contents" is the one that matters. It asks for an element's own box
 // to be replaced by its children, and the closest available answer — treating it
@@ -197,6 +197,23 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 				Message:  "\"display: contents\" is not implemented; the element was laid out as an inline box",
 				Path:     PathOf(n),
 				Property: "display",
+			})
+		}
+		// "position: sticky" is the one positioning scheme this engine cannot
+		// answer, and it is the one that proves the scope boundary is about
+		// dynamism rather than about difficulty: sticky is defined by where a
+		// scroll container has been scrolled to, and a page does not scroll. It
+		// falls back to static, which is where the box would sit before any
+		// scrolling had happened — the right half of the answer, and silent
+		// about the other half unless this says so.
+		if strings.EqualFold(strings.TrimSpace(cs["position"]), "sticky") {
+			rec.ReportDetail(Finding{
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(n.Offset),
+				Message: "\"position: sticky\" is defined by a scroll position, which a " +
+					"page does not have; the element was laid out in the normal flow",
+				Path:     PathOf(n),
+				Property: "position",
 			})
 		}
 		return true

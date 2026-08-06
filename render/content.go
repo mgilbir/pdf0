@@ -125,6 +125,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	if !b.room(n) {
 		return nil
 	}
+	order := b.count
 
 	size := b.fontSizeOfStyle(cs, fontSize)
 	// A pseudo-element floats like any other box, and "p::before { content: '';
@@ -132,11 +133,20 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	// without adding an element to the markup — so the §9.7 blockification has
 	// to reach here too.
 	float := floatOf(cs)
-	outer, inner = outOfFlowDisplay(outer, inner, float)
+	// A pseudo-element is positioned like any other box too, and the everyday
+	// use of that is the same one: "::before { content: ''; position: absolute }"
+	// is how a stylesheet draws an overlay without an element to hang it on.
+	position := positionOf(cs)
+	if position.outOfFlow() {
+		float = FloatNone
+	}
+	outer, inner = outOfFlowDisplay(outer, inner, float, position)
+	z, zAuto := zIndexOf(cs)
 	box := &Box{
 		Outer: outer, Inner: inner, Element: n, Style: cs,
 		ListItem: listItem, FontSize: size,
 		Float: float, Clear: clearOf(cs),
+		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 	}
 	// The text is not collapsed the way document text is: a content string is
 	// written by the author as the exact characters wanted, and "content: '  '"

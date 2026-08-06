@@ -100,6 +100,19 @@ const (
 	// silent clip, and it is — the text is there, the box is there, and the part
 	// past the edge is simply not drawn.
 	RuleUnbreakableOverflow Rule = "unbreakable-overflow"
+	// RulePositionApproximated is a positioned box this engine placed by a
+	// weaker rule than the one that applies to it.
+	//
+	// It is its own rule rather than an unsupported-value because the value *was*
+	// supported: "position: absolute" was honoured, the box was taken out of the
+	// flow and given offsets, and only the rectangle those offsets were measured
+	// from is not the one §10.1 names. That produces the most deceptive shape of
+	// wrongness this engine has — a box that is manifestly positioned, in a place
+	// that looks deliberate, some tens of pixels from where the author put it.
+	// Telling an author their declaration was ignored would send them looking for
+	// a feature that is there.
+	RulePositionApproximated Rule = "position-approximated"
+
 	// RuleOverflowPage is content outside the page box after scaling.
 	//
 	// It should be unreachable given §5: the scale is computed so that
@@ -171,6 +184,14 @@ var defaultSeverity = map[Rule]Severity{
 	// A clip nobody asked for removes content from the page, which is the
 	// failure §6.2 is named after.
 	RuleUnbreakableOverflow: Error,
+	// A box in the wrong place is visible, and the author can see where it
+	// landed — which is why this warns rather than failing the render. The
+	// argument for Error is that the page is plausible and wrong; the argument
+	// against is that the case it fires on, an absolutely positioned box inside
+	// a relatively positioned inline, is the most common tooltip idiom on the
+	// web, and a default that refuses to produce a document for it would be
+	// turned off wholesale and take the rest of the catalogue with it.
+	RulePositionApproximated: Warn,
 	// A self-check: this firing means the scale computation is wrong, and a
 	// document produced from a wrong scale is worse than none.
 	RuleOverflowPage:  Error,
@@ -303,6 +324,11 @@ var unsupportedRules = map[Rule]bool{
 	RuleUnsupportedScript:   true,
 	RuleFontFallback:        true,
 	RuleGlyphMissing:        true,
+	// This one says "the engine does not form that containing block", which is a
+	// statement about the engine and not about the input — so a reftest whose
+	// two documents both trip it has not demonstrated anything, and §7.1's
+	// companion signal has to see it.
+	RulePositionApproximated: true,
 }
 
 // Unsupported reports whether the finding is about something this engine does
