@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"image"
 
 	pdf0 "github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/content"
@@ -324,9 +325,30 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 	faces := map[object.Name]*fonts.Face{}
 	names := map[*fonts.Face]object.Name{}
 	xobjects := map[object.Name]object.Object{}
+	patterns := map[object.Name]object.Object{}
 	// Keyed by the source bytes rather than by the decoded image, so a logo
 	// drawn on every row of a table is one image XObject in the file.
 	imageNames := map[string]object.Name{}
+	// embed puts a picture in the file once and returns the name the drawing
+	// refers to it by.
+	embed := func(img image.Image, key string) (object.Name, error) {
+		if name, ok := imageNames[key]; ok {
+			return name, nil
+		}
+		// images.Embed is the module's own encoder, and using it rather than
+		// writing a second one is what keeps the two directions checking each
+		// other: whatever it writes, the extraction side of that package reads
+		// back, and the pixels have to survive the trip. It also brings its own
+		// pixel cap.
+		ref, err := images.Embed(doc, img)
+		if err != nil {
+			return "", fmt.Errorf("embedding an image: %w", err)
+		}
+		name := object.Name(fmt.Sprintf("Im%d", len(imageNames)+1))
+		imageNames[key] = name
+		xobjects[name] = ref
+		return name, nil
+	}
 
 	for _, op := range ops {
 		switch v := op.(type) {
@@ -383,20 +405,9 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 			if v.Image == nil || v.Rect.Empty() {
 				continue
 			}
-			name, ok := imageNames[v.Key]
-			if !ok {
-				// images.Embed is the module's own encoder, and using it rather
-				// than writing a second one is what keeps the two directions
-				// checking each other: whatever it writes, the extraction side
-				// of that package reads back, and the pixels have to survive the
-				// trip. It also brings its own pixel cap.
-				ref, err := images.Embed(doc, v.Image)
-				if err != nil {
-					return nil, fmt.Errorf("embedding an image: %w", err)
-				}
-				name = object.Name(fmt.Sprintf("Im%d", len(imageNames)+1))
-				imageNames[v.Key] = name
-				xobjects[name] = ref
+			name, err := embed(v.Image, v.Key)
+			if err != nil {
+				return nil, err
 			}
 			b.Save()
 			// An image XObject is painted into the unit square, so the matrix
@@ -409,6 +420,48 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 				v.Rect.X.Px(), v.Rect.Bottom().Px())
 			b.Draw(name)
 			b.Restore()
+
+		case TileImage:
+			if v.Image == nil || v.Clip.Empty() || v.Tile.Empty() {
+				continue
+			}
+			name, err := embed(v.Image, v.Key)
+			if err != nil {
+				return nil, err
+			}
+			cols, rows := v.Tiles()
+			if cols <= 0 || rows <= 0 {
+				continue
+			}
+			b.Save()
+			b.Rect(v.Clip.X.Px(), v.Clip.Y.Px(), v.Clip.W.Px(), v.Clip.H.Px())
+			b.Clip()
+			b.EndPath()
+			if cols == 1 && rows == 1 {
+				// One tile, which is what "no-repeat" produces and what most
+				// backgrounds are. A pattern for it would be a dictionary, a
+				// stream and a resource to say what two operators already say.
+				b.Concat(v.Tile.W.Px(), 0, 0, -v.Tile.H.Px(),
+					v.Tile.X.Px(), v.Tile.Bottom().Px())
+				b.Draw(name)
+			} else {
+				// A real tiling, drawn as PDF's own: one pattern object with a
+				// step, painted over the clip in a single fill. The alternative
+				// — a Do per tile — would put the tile count into the file, and
+				// the tile count is the number this engine refuses to let a
+				// stylesheet choose.
+				pname := object.Name(fmt.Sprintf("Pt%d", len(patterns)+1))
+				pattern, err := tilingPattern(doc, name, xobjects[name], v, k, tx, ty)
+				if err != nil {
+					return nil, err
+				}
+				patterns[pname] = pattern
+				b.SetColorSpace("Pattern")
+				b.SetPattern(pname)
+				b.Rect(v.Clip.X.Px(), v.Clip.Y.Px(), v.Clip.W.Px(), v.Clip.H.Px())
+				b.Fill()
+			}
+			b.Restore()
 		}
 	}
 	b.Restore()
@@ -419,10 +472,96 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 		Content:  b,
 		Faces:    faces,
 		XObjects: xobjects,
+		Patterns: patterns,
 	}); err != nil {
 		return nil, err
 	}
 	return doc, nil
+}
+
+// tilingPattern builds the PDF pattern that draws one background tiling.
+//
+// # Why a pattern rather than a Do per tile
+//
+// The tile count is (area / tile size) and a stylesheet chooses both ends of it.
+// Writing one drawing operator per tile would put that number into the content
+// stream, so a document could ask for a file of any size — and the check that
+// stopped it would have to be a cap on the *output*, which is the wrong place: by
+// then the work has been done. A pattern has the count nowhere in it. PDF's
+// XStep and YStep say how far apart the cells are and the reader repeats them
+// across whatever is filled, which is precisely the value the display list
+// carries.
+//
+// # The matrix, which is the part that is easy to get wrong
+//
+// A pattern's /Matrix maps pattern space to the *default* coordinate space of
+// the page — not to the space in force where the pattern is painted (ISO 32000-2
+// 8.7.3.1). So the page transform this content stream set up with a "cm" does
+// not apply to it, and has to be repeated here. That is what k, tx and ty are:
+// the same numbers, so that pattern space is the layout's own coordinate system,
+// y downwards, and the cell below can be written in exactly the units every
+// rectangle in the display list is in.
+//
+// Getting this wrong does not produce a blank page. It produces a background
+// tiled at three quarters of the right size, in the wrong place, which looks like
+// a layout bug anywhere except here.
+func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v TileImage, k, tx, ty float64) (object.Object, error) {
+	cell := &content.Builder{}
+	cell.Save()
+	// The same placement DrawImage uses, in the same coordinates: an image
+	// XObject fills the unit square, so the matrix is the position and the
+	// negative vertical scale is what puts the picture the right way up in a
+	// coordinate system whose y grows downwards.
+	cell.Concat(v.Tile.W.Px(), 0, 0, -v.Tile.H.Px(),
+		v.Tile.X.Px(), v.Tile.Bottom().Px())
+	cell.Draw(name)
+	cell.Restore()
+	drawn, err := cell.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("building a background tile: %w", err)
+	}
+
+	// A pattern carries its own resources: the cell is a content stream of its
+	// own, so the page's /XObject is not in scope for it.
+	xobjects := &object.Dictionary{}
+	xobjects.Set(name, ref)
+	res := &object.Dictionary{}
+	res.Set("XObject", xobjects)
+
+	stream := &object.Stream{Dict: object.Dictionary{}, Data: drawn}
+	stream.Dict.Set("Type", object.Name("Pattern"))
+	stream.Dict.Set("PatternType", object.Integer(1))
+	// PaintType 1 is a coloured pattern: the cell brings its own colour, which
+	// an image does. PaintType 2 would take the colour from where it is painted
+	// and leave an image undefined.
+	stream.Dict.Set("PaintType", object.Integer(1))
+	// TilingType 2 lets a reader distort the spacing by no more than a pixel to
+	// keep the cells on the device grid, which is what stops a tiled background
+	// showing seams at some zoom levels.
+	stream.Dict.Set("TilingType", object.Integer(2))
+	stream.Dict.Set("BBox", object.Array{
+		numberOf(v.Tile.X.Px()), numberOf(v.Tile.Y.Px()),
+		numberOf(v.Tile.Right().Px()), numberOf(v.Tile.Bottom().Px()),
+	})
+	stream.Dict.Set("XStep", numberOf(v.StepX.Px()))
+	stream.Dict.Set("YStep", numberOf(v.StepY.Px()))
+	stream.Dict.Set("Resources", res)
+	stream.Dict.Set("Matrix", object.Array{
+		numberOf(k), object.Integer(0), object.Integer(0), numberOf(-k),
+		numberOf(tx), numberOf(ty),
+	})
+	stream.Dict.Set("Length", object.Integer(len(drawn)))
+	// Indirect, because a stream cannot be a direct object in a dictionary.
+	return doc.Add(stream), nil
+}
+
+// numberOf writes a value as an integer when it is one, which keeps the file
+// readable and matches what every other producer emits.
+func numberOf(v float64) object.Object {
+	if v == float64(int64(v)) {
+		return object.Integer(int(v))
+	}
+	return object.Real(v)
 }
 
 // shapedText is the string handed to the shaper for one text run.

@@ -82,6 +82,30 @@ type Fragment struct {
 	// the same as being absent.
 	inCollapsedGrid bool
 
+	// background is this box's background images, resolved against its geometry
+	// and in painting order — CSS lists layers front to back, so the last one
+	// written is the first one painted.
+	background []bgPaint
+	// bgColorRect is where the background *colour* goes, which is the painting
+	// area of the bottom layer and so is the border box by default rather than
+	// the padding box. An empty rectangle means no colour is painted.
+	bgColorRect Rect
+	// bgSuppressed marks the box whose background became the canvas's, so that
+	// it is not also painted over its own smaller box. See §2.11.2: the element
+	// the background was taken from is left with the initial values.
+	bgSuppressed bool
+
+	// canvas, canvasLayers and canvasColor are set on the root fragment only.
+	//
+	// The canvas is the page area the document was laid out into, which is what
+	// a fixed-attachment layer is positioned against and what the propagated
+	// root background is painted over. canvasColor is the box the colour is
+	// taken from, which is the root or its <body> and is nil when neither
+	// declared one.
+	canvas       Rect
+	canvasLayers []bgPaint
+	canvasColor  *Box
+
 	// Offset is CSS 2.1 §9.4.3's relative displacement: how far the box is drawn
 	// from where the flow put it.
 	//
@@ -123,22 +147,24 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	}
 	l := &layouter{
 		rec: rec, avail: avail,
-		lengths:          map[lengthKey]style.Length{},
-		fonts:            map[fontKey]resolvedFont{},
-		textFaces:        map[*Box]*fonts.Face{},
-		measured:         map[measureKey]style.Unit{},
-		reportedScripts:  map[string]bool{},
-		reportedGlyphs:   map[string]bool{},
-		reportedOverflow: map[string]bool{},
-		reportedJustify:  map[string]bool{},
-		decorations:      map[*Box][]textDecoration{},
-		intrinsic:        map[*Box]intrinsicWidths{},
-		grids:            map[*Box]*tableGrid{},
-		tableDemands:     map[*Box][]tableColumnDemand{},
-		collapsed:        map[*Box]*collapsedGrid{},
-		positioned:       map[*Box]*Fragment{},
-		fontSet:          set,
-		rootFontSize:     root.FontSize,
+		lengths:             map[lengthKey]style.Length{},
+		fonts:               map[fontKey]resolvedFont{},
+		textFaces:           map[*Box]*fonts.Face{},
+		measured:            map[measureKey]style.Unit{},
+		reportedScripts:     map[string]bool{},
+		reportedGlyphs:      map[string]bool{},
+		reportedOverflow:    map[string]bool{},
+		reportedJustify:     map[string]bool{},
+		decorations:         map[*Box][]textDecoration{},
+		backgrounds:         map[*Box][]backgroundLayer{},
+		reportedBackgrounds: map[string]bool{},
+		intrinsic:           map[*Box]intrinsicWidths{},
+		grids:               map[*Box]*tableGrid{},
+		tableDemands:        map[*Box][]tableColumnDemand{},
+		collapsed:           map[*Box]*collapsedGrid{},
+		positioned:          map[*Box]*Fragment{},
+		fontSet:             set,
+		rootFontSize:        root.FontSize,
 	}
 	if l.rootFontSize == 0 {
 		l.rootFontSize = defaultFontSize
@@ -200,6 +226,13 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 			Property: "position",
 		})
 	}
+
+	// Backgrounds last, because a background image is placed against a rectangle
+	// rather than taking part in deciding one: a percentage position is of a box
+	// whose width is settled by its children, and a fixed-attachment layer is
+	// placed against the page. Both are known only now, and neither changes
+	// anything the walk above computed.
+	l.resolveBackgrounds(frag, page)
 	return frag
 }
 
@@ -268,6 +301,13 @@ type layouter struct {
 	// decorations memoizes the text decorations drawn across each box, which are
 	// built from the box's parent's — see decorationsFor.
 	decorations map[*Box][]textDecoration
+	// backgrounds memoizes the seven background properties read into layers,
+	// which is one tokenizer run per property per box and is asked for twice
+	// when a box's background is propagated to the canvas.
+	backgrounds map[*Box][]backgroundLayer
+	// reportedBackgrounds suppresses repeating a complaint about a background
+	// value, which is about a stylesheet rule rather than about a box.
+	reportedBackgrounds map[string]bool
 }
 
 type lengthKey struct {
@@ -1074,7 +1114,17 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 	}
 
 	vals, _ := css.ParseComponentValues(raw)
-	length, _, ok := style.ParseLength(vals, style.LengthContext{
+	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics))
+	if !ok {
+		return style.Length{}, false
+	}
+	l.lengths[key] = length
+	return length, true
+}
+
+// lengthContext is what the font- and viewport-relative units resolve against.
+func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool) style.LengthContext {
+	return style.LengthContext{
 		FontSize:         b.FontSize,
 		RootFontSize:     l.rootFontSize,
 		ViewportWidth:    l.avail.W,
@@ -1082,12 +1132,28 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 		ViewportKnown:    true,
 		ZeroAdvance:      zero,
 		FontMetricsKnown: haveMetrics,
-	})
-	if !ok {
-		return style.Length{}, false
 	}
-	l.lengths[key] = length
-	return length, true
+}
+
+// lengthOfValues parses component values that are part of a larger declaration
+// — one term of a background position, one component of a background size —
+// which parseLength cannot do because it reads a whole property by name.
+//
+// It is not memoized: the values it is given are already the result of a parse,
+// and the boxes that reach it are the ones with a background image on them.
+func (l *layouter) lengthOfValues(b *Box, vals []css.ComponentValue) (style.Length, bool) {
+	l.ensureFontSize(b)
+	var zero style.Unit
+	var haveMetrics bool
+	for _, v := range vals {
+		if v.IsToken() && v.Token.Kind == css.Dimension &&
+			strings.EqualFold(v.Token.Unit, "ch") {
+			zero, haveMetrics = l.zeroAdvance(b)
+			break
+		}
+	}
+	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics))
+	return length, ok
 }
 
 // usesCh reports whether a value might carry a "ch" length.

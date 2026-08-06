@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -108,9 +109,95 @@ func picFills(ops []Op) []coloured {
 			// it errs towards calling two documents different, which is the
 			// safe direction for an oracle.
 			out = append(out, coloured{r: v.Rect, c: style.RGBA{A: 1}, img: v.Key})
+
+		case TileImage:
+			out = append(out, tiledFills(v)...)
 		}
 	}
 	return out
+}
+
+// maxComparedTiles bounds how far a tiling is expanded for the comparison.
+//
+// The engine emits a tiling as one operation with a step in it, which is what
+// keeps its own cost independent of the count — but this comparison resolves
+// occlusion by cutting the page at every rectangle edge, so expanding a tiling
+// into tiles costs the *square* of the count. A repeating 15px image over an A4
+// page is nearly two thousand tiles and four thousand grid lines, which is
+// twenty million cells for one document of five thousand.
+//
+// Past the bound the tiling is compared as a single mark keyed by its geometry.
+// Two documents that tile the same picture the same way still agree; two that
+// tile it differently still differ. What is lost is the ability to see *through*
+// the gaps of a spaced tiling with more than this many tiles in it, which errs
+// towards calling documents equal — so the bound is set well above anything the
+// suite draws rather than at a round number.
+const maxComparedTiles = 1024
+
+// tiledFills turns one tiling into the marks it puts on the page.
+func tiledFills(v TileImage) []coloured {
+	if v.Clip.Empty() || v.Tile.Empty() || v.StepX <= 0 || v.StepY <= 0 {
+		return nil
+	}
+	cols, rows := v.Tiles()
+	if cols <= 0 || rows <= 0 {
+		return nil
+	}
+
+	colour, uniform := uniformColor(v.Image)
+	gapless := v.StepX <= v.Tile.W && v.StepY <= v.Tile.H
+	if uniform && gapless {
+		// Tiles butted against each other, all of one opaque colour: the clip is
+		// covered by that colour and nothing about which tile is where is
+		// visible. This is the common case — the suite's pictures are solid
+		// squares — and collapsing it is what keeps the expansion below rare.
+		return []coloured{{r: v.Clip, c: colour}}
+	}
+	if cols > maxComparedTiles/rows {
+		key := fmt.Sprintf("tiled:%s %s step %s,%s",
+			v.Key, rectKey(v.Tile), num(v.StepX), num(v.StepY))
+		return []coloured{{r: v.Clip, c: style.RGBA{A: 1}, img: key}}
+	}
+
+	// Few enough to place exactly. The first tile drawn is the one at or before
+	// the clip's near edge, which is what the span arithmetic in Tiles counts
+	// from.
+	firstX := alignTile(v.Clip.X, v.Tile.X, v.Tile.W, v.StepX)
+	firstY := alignTile(v.Clip.Y, v.Tile.Y, v.Tile.H, v.StepY)
+
+	out := make([]coloured, 0, cols*rows)
+	for j := 0; j < rows; j++ {
+		y := firstY.Add(v.StepY.Mul(float64(j)))
+		for i := 0; i < cols; i++ {
+			x := firstX.Add(v.StepX.Mul(float64(i)))
+			r := intersect(Rect{X: x, Y: y, W: v.Tile.W, H: v.Tile.H}, v.Clip)
+			if r.Empty() {
+				continue
+			}
+			if uniform {
+				out = append(out, coloured{r: r, c: colour})
+				continue
+			}
+			out = append(out, coloured{r: r, c: style.RGBA{A: 1}, img: v.Key})
+		}
+	}
+	return out
+}
+
+// alignTile is the position of the first tile that reaches into the clip.
+func alignTile(clipLo, tileLo, size, step style.Unit) style.Unit {
+	k := math.Floor(clipLo.Sub(tileLo).Sub(size).Px()/step.Px()) + 1
+	return tileLo.Add(step.Mul(k))
+}
+
+func intersect(a, b Rect) Rect {
+	x := style.Max(a.X, b.X)
+	y := style.Max(a.Y, b.Y)
+	return Rect{
+		X: x, Y: y,
+		W: style.Min(a.Right(), b.Right()).Sub(x),
+		H: style.Min(a.Bottom(), b.Bottom()).Sub(y),
+	}
 }
 
 // texts extracts the glyph runs, canonicalised and sorted.
