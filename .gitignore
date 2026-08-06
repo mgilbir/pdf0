@@ -114,6 +114,10 @@ testdata/html/entities.json
 # input to cmd/gencolors. The generated Go table is committed; this is not.
 testdata/css-color-4.bs
 
+# W3C Web Platform Tests, cloned via `make wpt` as the layout engine's external
+# oracle. Large and versioned upstream; not committed.
+testdata/wpt/
+
 # Agent worktrees created by tooling under .claude/; never part of the repo.
 .claude/worktrees/
 

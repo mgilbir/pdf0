@@ -1,4 +1,4 @@
-.PHONY: css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests
+.PHONY: wpt test-wpt clean-wpt css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -208,6 +208,39 @@ css-colors:
 
 clean-css-colors:
 	rm -f $(CSS_COLOR_SPEC)
+
+# W3C Web Platform Tests: the external oracle for the layout engine.
+#
+# A CSS reftest is a pair of documents with the assertion *these two render
+# identically*, and the pair and the claim come from the CSS Working Group. That
+# is what makes it an oracle rather than a restatement of pdf0's own reading —
+# ADR 0003 records what this repository already learned about the difference.
+# Reftests are also built so that the two documents reach the same rendering by
+# *different* mechanisms, so an engine bug usually moves one and not the other.
+#
+# No browser is needed: pdf0 renders both and compares its own display lists.
+#
+# WPT is enormous, so this is a blobless sparse clone of the directories whose
+# tests exercise what the engine currently does. Widen WPT_DIRS as more lands.
+WPT_DIR  := testdata/wpt
+WPT_REF  ?= master
+WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-clear \
+            css/css-text/white-space css/reference css/CSS2/reference
+
+wpt: $(WPT_DIR)/.ok
+
+$(WPT_DIR)/.ok:
+	rm -rf $(WPT_DIR)
+	git clone --filter=blob:none --sparse --depth 1 \
+		https://github.com/web-platform-tests/wpt.git $(WPT_DIR)
+	git -C $(WPT_DIR) sparse-checkout set $(WPT_DIRS)
+	touch $@
+
+test-wpt: wpt
+	WPT_TESTS=$(CURDIR)/$(WPT_DIR) go test -v -run TestWPT -count=1 ./render/
+
+clean-wpt:
+	rm -rf $(WPT_DIR)
 
 # Real-world CCITTFaxDecode sample PDFs (pdf.js Apache-2.0, PyPDF4 BSD) used as
 # the decode oracle for the Group 3/4 fax decoder. Downloaded into
