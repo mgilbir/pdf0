@@ -29,6 +29,32 @@ type FontSet interface {
 	Face(family string, bold, italic bool) (*fonts.Face, bool)
 }
 
+// FallbackFontSet is a FontSet that can also be asked for a face by what it
+// needs to set rather than by name.
+//
+// The two questions are different, and the second one cannot be asked through
+// FontSet: "give me Helvetica" is answerable from the family alone, while "give
+// me something that can set this Hebrew word" needs the text. A set that
+// implements this is offering coverage the named family does not have.
+//
+// It stays optional because it is a different promise. A FontSet answers what
+// the document asked for; a FallbackFontSet answers what the document *needs*,
+// which is a substitution and is reported as one. A set that made that
+// substitution silently from inside Face would be a set that could hide it, and
+// that is the thing this design is against — see the note on FontSet above.
+//
+// The substitution is per box rather than per character. A box whose text mixes
+// scripts that no single face covers still reports a missing glyph, and the
+// remaining step is to cut a run into per-face pieces the way fonts.Stack does,
+// which reaches into measurement, line breaking and the content stream.
+type FallbackFontSet interface {
+	FontSet
+	// FaceFor returns a face that can set the whole of text, and whether one was
+	// found. The bold and italic flags are the ones the box asked for; a set is
+	// free to ignore them when the alternative is having no glyph at all.
+	FaceFor(text string, bold, italic bool) (*fonts.Face, bool)
+}
+
 // StandardFonts is a FontSet of the fourteen faces every PDF reader has built
 // in.
 //

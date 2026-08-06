@@ -40,11 +40,28 @@ import (
 // and carries none of its own, and pdf0 ships no font bytes at all. See the note
 // beside WPT_DIRS in the Makefile.
 
-// wptFonts is a FontSet that answers for Ahem and defers to the standard
-// faces for everything else.
+// wptFonts is a FontSet that answers for Ahem, falls back to Noto for the
+// scripts the standard faces do not have, and defers to those for the rest.
 type wptFonts struct {
 	ahem     *fonts.Face
+	fallback []*fonts.Face
 	standard FontSet
+}
+
+// FaceFor implements FallbackFontSet: the first Noto face that can set the whole
+// of the text, or nothing.
+//
+// Weight and style are ignored. Only the regular faces are fetched, and a
+// document whose Hebrew is meant to be bold is far better served by upright
+// Hebrew than by the space the standard faces would put there — the substitution
+// is reported either way, so nothing is being hidden.
+func (w wptFonts) FaceFor(text string, bold, italic bool) (*fonts.Face, bool) {
+	for _, f := range w.fallback {
+		if _, missing := f.Shape(text); missing == 0 {
+			return f, true
+		}
+	}
+	return nil, false
 }
 
 func (w wptFonts) Face(family string, bold, italic bool) (*fonts.Face, bool) {
@@ -71,6 +88,7 @@ func fontSetForWPT() FontSet {
 
 		dir := os.Getenv(wptEnv)
 		if dir == "" {
+			wptFontSet = wptFonts{standard: standard, fallback: notoFaces()}
 			return
 		}
 		data, err := os.ReadFile(filepath.Join(dir, "fonts", "Ahem.ttf"))
@@ -84,7 +102,39 @@ func fontSetForWPT() FontSet {
 		if err != nil {
 			return
 		}
-		wptFontSet = wptFonts{ahem: face, standard: standard}
+		wptFontSet = wptFonts{ahem: face, standard: standard, fallback: notoFaces()}
 	})
 	return wptFontSet
+}
+
+// notoEnv names the directory `make noto-fonts` fetches into.
+const notoEnv = "NOTO_FONTS"
+
+// notoFaces loads the fallback faces, or none.
+//
+// Absent, everything still runs: the documents that need them report a missing
+// glyph exactly as they did before, and the ratchet is what says whether that
+// has cost anything. The order is coverage-first — the pan-Unicode face, then
+// the two that add a script it does not have — so the common case is answered
+// by the first one asked.
+func notoFaces() []*fonts.Face {
+	dir := os.Getenv(notoEnv)
+	if dir == "" {
+		return nil
+	}
+	var out []*fonts.Face
+	for _, name := range []string{
+		"NotoSans-Regular.ttf",
+		"NotoSansHebrew-Regular.ttf",
+		"NotoSansJP-VF.ttf",
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if face, err := fonts.Load(data); err == nil {
+			out = append(out, face)
+		}
+	}
+	return out
 }
