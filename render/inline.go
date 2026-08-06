@@ -301,6 +301,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				Baseline: bl,
 			}
 			var x style.Unit
+			// Atomic inlines are placed as children of the block rather than as
+			// runs, so aligning the line has to move them too. The range is
+			// noted here because floats placed before the line are already in
+			// this slice and must not move: a float is out of flow and
+			// text-align says nothing about it.
+			atomicStart := len(parent.Children)
 			for _, item := range runs {
 				if item.atomic != nil {
 					// Placed as a child of the block rather than as a run,
@@ -322,6 +328,15 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					X: x, Width: item.width, Box: item.box, Offset: item.offset,
 				})
 				x = x.Add(item.width)
+			}
+			if shift := l.alignLine(b, line.Rect.W, alignedWidth(runs, x)); shift != 0 {
+				for k := range line.Runs {
+					line.Runs[k].X = line.Runs[k].X.Add(shift)
+				}
+				for k := atomicStart; k < len(parent.Children); k++ {
+					parent.Children[k].BorderRect.X =
+						parent.Children[k].BorderRect.X.Add(shift)
+				}
 			}
 			parent.Lines = append(parent.Lines, line)
 		}
