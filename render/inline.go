@@ -86,12 +86,11 @@ import (
 // # What relative positioning does to an inline box, and what it does not
 //
 // §9.4.3 applies to an inline box like any other, and the offset is carried on
-// each run rather than on a fragment because an inline box has no fragment: a
-// <span> broken across a line contributes to two line boxes and to neither
-// exclusively. Offsetting the runs is the whole of the visible effect here,
-// since this engine reserves an inline box's horizontal margin, border and
-// padding — see insetItems — but paints none of them, and paints no background
-// on one either.
+// each run rather than on one fragment because an inline box does not have one:
+// a <span> broken across a line contributes to two line boxes and to neither
+// exclusively. It has a fragment *per line* — see LineFragment.Boxes and
+// inlinepaint.go — and the offset reaches those the same way, recorded per box
+// as the walk accumulates it and folded into the position by absolutise.
 //
 // What is given up is the *stacking level*. §9.9 makes a positioned inline a
 // positioned box, painted at Appendix E step 7 with everything else positioned;
@@ -121,6 +120,22 @@ type LineFragment struct {
 	// the way it reads and copied out the way it was written, and only the X
 	// decides the first.
 	Runs []TextRun
+	// Boxes are the fragments of the inline boxes that have a background or a
+	// border on this line, in tree order — so an inner box's decoration is
+	// painted over the box it is inside.
+	//
+	// They are fragments rather than a shape of their own because everything that
+	// paints a background already works on one, and they hang from the line
+	// rather than from the block's children for two reasons: Appendix E paints
+	// them with the line's own content and not with the block backgrounds, and
+	// one inline box produces one of them *per line* — see inlinepaint.go for
+	// §8.6's slice model, which is the whole of why this is plural.
+	//
+	// A box with nothing to draw has none. The overwhelming majority of the
+	// inline boxes in a document are an <em> or an <a> with no background and no
+	// border, and a rectangle for each of them on each line would be work in
+	// proportion to the document that nothing would ever read.
+	Boxes []*Fragment
 }
 
 // TextRun is a piece of text on a line, set in one face at one size.
@@ -159,13 +174,12 @@ type TextRun struct {
 	// Offset is §9.4.3's relative displacement, accumulated over the inline
 	// boxes this run sits inside.
 	//
-	// It is on the run rather than on a fragment because an inline box has no
-	// fragment: a line box holds runs, and a <span> that spans a line break
-	// contributes to two of them. Carrying the offset per run is what lets a
-	// relatively positioned inline move its text and nothing else — which is the
-	// whole of what relative positioning does to an inline box, since this
-	// engine paints no background, border or padding on one. It does reserve the
-	// horizontal room the last two occupy; see insetItems.
+	// It is on the run rather than on a single fragment because a <span> that
+	// spans a line break has one fragment per line: a line box holds runs, and
+	// the box's own background and border are a Boxes entry on each of the lines
+	// it reaches. Both are moved by the same displacement and are given it
+	// separately — this one at paint time, the fragment's in absolutise, because
+	// a background image is placed against the rectangle its box is drawn at.
 	Offset Point
 }
 
@@ -389,6 +403,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	indent := l.textIndent(b, width)
 	firstLine := true
 
+	// The inline boxes with a background or a border, gathered as the lines are
+	// built and turned into fragments once the last line is known: §8.6 puts a
+	// box's trailing margin, border and padding on the piece it ends with, and
+	// which piece that is cannot be answered until there are no more.
+	decor := inlineDecor{l: l, containing: width}
+
 	var y style.Unit
 	for i := 0; i < len(items); {
 		// A float that begins a line is placed before the line is measured,
@@ -497,6 +517,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						parent.Children[k].BorderRect.X.Add(shift)
 				}
 			}
+			// The inline boxes on this line, recorded now because the alignment
+			// has moved everything on it for the last time. The index is where
+			// the line is about to go, since a fragment cannot be hung on it
+			// until §8.6 knows which piece of its box it is.
+			decor.addLine(len(parent.Lines), runs, xs,
+				line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline))
 			parent.Lines = append(parent.Lines, line)
 			// The indent belongs to the first line box that actually exists. A run
 			// of inline content that produced none — the collapsible space between
@@ -531,6 +557,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			y = y.Add(lh)
 		}
 	}
+	decor.finish(parent)
 	return y
 }
 
@@ -1064,6 +1091,13 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 					Y: frame.offset.Y.Add(d.Y),
 				}
 			}
+			if inner.offset != (Point{}) && !frame.measuring {
+				// The box's own displacement, which its background and border are
+				// drawn at. It is recorded here because this is the only walk that
+				// has it: the items carry the offset of whatever box they came
+				// from, which for a nested inline is not this one's.
+				l.inlineOffsets[child] = inner.offset
+			}
 			// The formatting codes unicode-bidi stands for, around the box's
 			// contents. This is the one walk that sees where an inline box begins
 			// and ends, and an embedding or an isolate is exactly a pair of
@@ -1160,12 +1194,14 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 // assumes the order changed. The four tests that show the gap either way are
 // css/CSS2/box's ltr-span-only and rtl-span-only and their -ib pair.
 //
-// Nothing is painted. A background, a border or an outline on an inline box is
-// still not drawn — this reserves the room the border occupies without ruling
-// the border — so an inline with a visible border now leaves a gap where the
-// border goes rather than closing over it. That is the closer of the two
-// answers: the text after the box lands where it belongs either way, and it is
-// the position of the text that everything else on the page is measured from.
+// What is painted in that room is inlinepaint.go's, and the two have to agree
+// about §8.6 or the ink and the space it sits in would come apart: this decides
+// which side's inset is *reserved* on which piece, and that decides which side's
+// border is *drawn* on which fragment. Both read the same two flags, and a test
+// that plants a defect in either of them fails on the other's assertions.
+//
+// An outline is still not drawn, on an inline box or on any other — nothing in
+// this engine paints one.
 func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inlineItem) {
 	edges := l.edges(b, "margin", containing).
 		Add(l.borderWidths(b)).

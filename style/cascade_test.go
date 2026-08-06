@@ -135,6 +135,15 @@ func TestNegativeValueDropsTheDeclaration(t *testing.T) {
 		{"p { max-height: -1px }", "max-height", "none"},
 		{"p { width: -1px }", "width", "auto"},
 		{"p { min-width: -1px }", "min-width", "0"},
+		// §8.5.1's border widths, where the initial value is the one case in
+		// this list that puts ink on the page: "medium" is three pixels of
+		// border, so clamping a negative width to zero drew nothing where CSS
+		// asks for a rule. Layout did exactly that, and it was invisible until
+		// inline boxes began painting their own borders — the suite checks this
+		// property by putting the two widths on a <span>.
+		{"p { border-top-width: -1pt }", "border-top-width", "medium"},
+		{"p { border-right-width: 5px; border-right-width: -1em }",
+			"border-right-width", "5px"},
 		// And the negatives that are legal are untouched.
 		{"p { margin-top: -10px }", "margin-top", "-10px"},
 		{"p { text-indent: -3em }", "text-indent", "-3em"},

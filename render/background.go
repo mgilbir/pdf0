@@ -222,6 +222,17 @@ func (l *layouter) resolveBackgrounds(root *Fragment, canvas Rect) {
 			f.background = l.paintsFor(f.Box, f, canvas, Rect{})
 			f.bgColorRect = l.colorRect(f)
 		}
+		// An inline box's own fragments, one per line it is broken across. They
+		// are not children — see LineFragment.Boxes — and each is positioned
+		// against its own rectangle, so a background image on a <span> that wraps
+		// starts afresh on each line rather than continuing across the break.
+		// That is what the slice model asks for and what every browser does.
+		for i := range f.Lines {
+			for _, ib := range f.Lines[i].Boxes {
+				ib.background = l.paintsFor(ib.Box, ib, canvas, Rect{})
+				ib.bgColorRect = l.colorRect(ib)
+			}
+		}
 		for _, c := range f.Children {
 			walk(c)
 		}
