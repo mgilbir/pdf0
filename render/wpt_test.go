@@ -218,7 +218,38 @@ const wptEnv = "WPT_TESTS"
 // the property and once with an equivalent margin on an inline box. The engine
 // had letter-spacing and word-spacing exactly right and no inline margin at all,
 // so a third of that directory failed and read as a spacing fault.
-const wptCleanPassBaseline = 3132
+//
+// Block layout and floats took it from 3132 to 3254, and for the fourth time in
+// this file the larger half of the number is not about layout. The two were
+// measured separately, by running the finished engine with the harness's
+// resource resolver put back the way it was:
+//
+//   - the *harness* accounts for 89 of it, 3132 to 3221, and failures from 1812
+//     to 1724 — 100 tests stopped failing and one started. It is the note on
+//     newSuiteResolver: the suite keeps its shared references in
+//     css/CSS2/reference/ and its images in css/CSS2/support/, so every one of
+//     those references writes "../support/black96x96.png" and every one was
+//     refused by a resolver rooted at the reference's own directory. 149 tests
+//     share ref-filled-black-96px-square.xht alone, and each was failing
+//     because the *reference* drew six words of alt text that the test document
+//     had no counterpart for. Not one pixel of engine output changed.
+//   - the *layout* accounts for the other 33, 3221 to 3254, and failures from
+//     1724 to 1691. 33 tests stopped failing and none started, counted by name
+//     over the whole suite rather than netted.
+//
+// The one test that started failing is worth naming for the usual reason:
+// inline-svg-100-percent-in-body's reference can now load the SVG it names, and
+// this engine does not render SVG. It was passing because neither document drew
+// the picture, and it fails honestly now.
+//
+// What the 33 are: §8.3.1's rule that a float between two blocks does not stop
+// their margins collapsing, which was defeated in every real document by the
+// newline after the tag (see wrapInlines); §8.3.1's clearance separating a
+// margin from its parent's; §4.2's rule that a declaration with an illegal
+// value is dropped rather than clamped, which the sizing properties needed; and
+// §9.5's rule that a box establishing a formatting context may not overlap a
+// float.
+const wptCleanPassBaseline = 3254
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
