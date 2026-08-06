@@ -508,7 +508,137 @@ func (b *boxBuilder) fixup(box *Box) {
 	for _, c := range box.Children {
 		b.fixup(c)
 	}
+	box.Children = b.splitBlockInInline(box)
 	box.Children = b.wrapInlines(box)
+}
+
+// splitBlockInInline breaks an inline box apart around any block-level box
+// inside it, per CSS 2.1 §9.2.1.1.
+//
+// "<span>before<div>block</div>after</span>" does not put a block inside an
+// inline. The span is *split*: an inline piece holding "before", then the block,
+// then a second inline piece holding "after", all three siblings of whatever the
+// span was a child of. Both pieces keep the span's style, so a border on it is
+// drawn twice — which is exactly what a browser does and looks odd until you
+// know why.
+//
+// Without this the block would sit inside an inline formatting context, where
+// nothing in block layout knows how to place it. It is common markup — an <a>
+// wrapping a card of block content is the everyday case — so leaving it
+// unhandled is not a corner.
+func (b *boxBuilder) splitBlockInInline(parent *Box) []*Box {
+	// There is deliberately no early return for an inline parent. One was
+	// written here first, on the reasoning that inside an inline formatting
+	// context there is nothing to promote a block *to* — and removing it changes
+	// no output, because fixup runs depth first: a block promoted to be a direct
+	// child of an inline is then lifted again by that inline's own parent, and
+	// the sequence comes out the same either way.
+	var out []*Box
+	for _, child := range parent.Children {
+		// Only an inline box that is *not* itself a block container splits. An
+		// inline-block is inline outside and a block container inside, so a
+		// block within it is where the author put it and lifting it out would
+		// empty the very box that was meant to hold it.
+		if child.Outer != OuterInline || isBlockContainer(child) || !containsBlock(child) {
+			out = append(out, child)
+			continue
+		}
+		for _, piece := range splitInline(child) {
+			piece.Parent = parent
+			out = append(out, piece)
+		}
+	}
+	return out
+}
+
+// isBlockContainer reports whether a box lays its children out as blocks and
+// lines rather than taking part in someone else's line.
+//
+// It is the distinction the two rules above both turn on. A <div> is one. An
+// inline-block is one despite being inline on the outside — that is the whole of
+// what flow-root means. An ordinary <span> is not, and neither is a flex
+// container or a table, which have rules of their own.
+func isBlockContainer(b *Box) bool {
+	switch b.Inner {
+	case InnerFlowRoot:
+		return true
+	case InnerFlow:
+		return b.Outer == OuterBlock
+	}
+	return false
+}
+
+// containsBlock reports whether an inline box has a block-level box anywhere
+// inside it.
+func containsBlock(b *Box) bool {
+	for _, c := range b.Children {
+		if c.Outer == OuterBlock {
+			return true
+		}
+		// The search stops at a nested block container. A block inside an
+		// inline-block belongs to that box and is not something to be lifted
+		// past it.
+		if c.Outer == OuterInline && !isBlockContainer(c) && containsBlock(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitInline returns the sequence an inline box becomes once the blocks inside
+// it have been lifted out: inline pieces and blocks, alternating.
+//
+// An inline piece with nothing in it is dropped. "<span><div>x</div></span>" is
+// one block and no inline pieces at all, and keeping two empty spans either side
+// would give the line boxes they generate a height the author never asked for.
+func splitInline(b *Box) []*Box {
+	var out []*Box
+
+	piece := clonePiece(b)
+	flush := func() {
+		if len(piece.Children) == 0 {
+			return
+		}
+		out = append(out, piece)
+		piece = clonePiece(b)
+	}
+
+	for _, child := range b.Children {
+		switch {
+		case child.Outer == OuterBlock:
+			flush()
+			out = append(out, child)
+
+		case child.Outer == OuterInline && containsBlock(child):
+			// A nested inline that itself holds a block: split it too, and its
+			// inline pieces belong to this one's current piece.
+			for _, inner := range splitInline(child) {
+				if inner.Outer == OuterBlock {
+					flush()
+					out = append(out, inner)
+					continue
+				}
+				inner.Parent = piece
+				piece.Children = append(piece.Children, inner)
+			}
+
+		default:
+			child.Parent = piece
+			piece.Children = append(piece.Children, child)
+		}
+	}
+	flush()
+	return out
+}
+
+// clonePiece makes an empty copy of an inline box, keeping everything that
+// decides how it is styled and measured.
+func clonePiece(b *Box) *Box {
+	return &Box{
+		Outer: b.Outer, Inner: b.Inner,
+		Element: b.Element, Style: b.Style,
+		FontSize: b.FontSize, ListItem: b.ListItem,
+	}
 }
 
 // wrapInlines is the anonymous block box rule of CSS Display §2.1: when a block
@@ -523,10 +653,16 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 	if len(parent.Children) == 0 {
 		return parent.Children
 	}
-	// The rule applies to block containers. A box that establishes some other
-	// context — a flex container, a table — has its own rules for what its
-	// children become, and those arrive with those layouts.
-	if parent.Inner != InnerFlow && parent.Inner != InnerFlowRoot {
+	// The rule applies to *block containers*, and an inline box is not one —
+	// which matters more than it sounds. Wrapping an inline box's children in
+	// anonymous blocks would leave a block inside an inline formatting context
+	// by another name, and it would do it *before* splitBlockInInline could see
+	// the inline content to split, so the pieces would come out empty and the
+	// styling of the split element would vanish.
+	//
+	// An inline-block is a block container despite being inline outside, which
+	// is the whole of what flow-root means here.
+	if !isBlockContainer(parent) {
 		return parent.Children
 	}
 
