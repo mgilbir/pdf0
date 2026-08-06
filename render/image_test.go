@@ -162,8 +162,8 @@ func TestImagePixelCapIsCrossedNotApproached(t *testing.T) {
 		t.Fatalf("this test is written against a cap of %d, which is now %d",
 			int64(side)*int64(side), maxImagePixels)
 	}
-	_, atCap := l.decode("at-cap", bombPNG(side, side))
-	_, overCap := l.decode("over-cap", bombPNG(side, side+1))
+	_, atCap := l.decode("at-cap", "image", bombPNG(side, side))
+	_, overCap := l.decode("over-cap", "image", bombPNG(side, side+1))
 
 	// The image at the cap gets past the *cap* and then fails on its missing
 	// pixel data, which is a different complaint and the one that proves the
@@ -377,7 +377,7 @@ func FuzzImageLoading(f *testing.F) {
 			rec: NewRecorder(nil), loaded: map[string]*ReplacedContent{},
 			failed: map[string]bool{}, budget: maxDocumentPixels,
 		}
-		got, fail := l.decode("fuzz", data)
+		got, fail := l.decode("fuzz", "image", data)
 		switch {
 		case got == nil && fail == nil:
 			t.Fatal("a decode neither succeeded nor explained itself")

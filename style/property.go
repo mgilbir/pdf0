@@ -136,7 +136,22 @@ var properties = map[string]property{
 	"content": {false, "normal"},
 
 	// Backgrounds.
-	"background-color": {false, "transparent"},
+	//
+	// The two initial values worth pausing on are the ones a reader assumes are
+	// the same and are not: the *origin* is the padding box and the *clip* is the
+	// border box. So a background image starts at the inside edge of the border
+	// and is painted out under the border as well — which is what makes a dashed
+	// border show the image through its gaps, and what makes a box with a wide
+	// transparent border tile from a different place than an implementation that
+	// collapsed the two would put it.
+	"background-color":      {false, "transparent"},
+	"background-image":      {false, "none"},
+	"background-repeat":     {false, "repeat"},
+	"background-attachment": {false, "scroll"},
+	"background-position":   {false, "0% 0%"},
+	"background-size":       {false, "auto"},
+	"background-origin":     {false, "padding-box"},
+	"background-clip":       {false, "border-box"},
 	// The counters. Neither inherits: a counter's value comes from the walk in
 	// counter.go, and inheriting the declaration would make every descendant
 	// increment it again.
@@ -233,7 +248,10 @@ var shorthands = map[string]shorthand{
 	"border-bottom": borderSides("bottom"),
 	"border-left":   borderSides("left"),
 
-	"background": {backgroundShorthand, []string{"background-color"}},
+	"background": {backgroundShorthand, []string{
+		"background-color", "background-image", "background-repeat",
+		"background-attachment", "background-position", "background-size",
+		"background-origin", "background-clip"}},
 	"list-style": {listStyleShorthand, []string{"list-style-type", "list-style-position"}},
 	"font": {fontShorthand, []string{
 		"font-style", "font-weight", "font-size", "font-family", "line-height"}},

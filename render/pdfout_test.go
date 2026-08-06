@@ -351,35 +351,55 @@ func TestBackgroundsAndBordersPaint(t *testing.T) {
 	}
 }
 
-// TestBackgroundCoversThePaddingBoxNotTheMargin pins where a background stops.
-// One that covered the margin would bleed into the gap between two boxes, which
-// is the space meant to show the page through.
-func TestBackgroundCoversThePaddingBoxNotTheMargin(t *testing.T) {
-	ops := paintOf(t, `<div id="a"></div>`,
-		noDefaults+`#a { background-color: #ff0000; height: 50px; margin: 20px;
-			border-top-style: solid; border-top-width: 5px }`)
-
-	var bg *FillRect
-	for i := range ops {
-		if r, ok := ops[i].(FillRect); ok && r.Color.R == 255 {
-			c := r
-			bg = &c
-			break
+// TestBackgroundCoversTheBorderBoxNotTheMargin pins where a background stops.
+//
+// It runs *under* the border and stops at the border box, which is
+// background-clip's initial value and is why a dashed border shows the
+// background through its gaps rather than the page. It never reaches the margin,
+// which is the space meant to show the page through.
+//
+// This test asserted the padding box until background-clip was implemented, and
+// the engine agreed with it. Both were wrong: CSS 2.1 §14.2 says the background
+// covers "the content, padding and border areas", and the two only look alike
+// while every border is opaque and solid.
+func TestBackgroundCoversTheBorderBoxNotTheMargin(t *testing.T) {
+	find := func(ops []Op) *FillRect {
+		for i := range ops {
+			if r, ok := ops[i].(FillRect); ok && r.Color.R == 255 {
+				c := r
+				return &c
+			}
 		}
+		return nil
 	}
+	const box = `#a { background-color: #ff0000; height: 50px; margin: 20px;
+			border-top-style: solid; border-top-width: 5px }`
+
+	bg := find(paintOf(t, `<div id="a"></div>`, noDefaults+box))
 	if bg == nil {
 		t.Fatal("the background did not paint")
 	}
-	// The margin puts the border box at 20, and the border is 5 wide, so the
-	// padding box the background covers starts at 25.
-	want, _ := style.FromPx(25)
+	// The margin puts the border box at 20, and that is where the background
+	// starts: the 5px border is painted on top of it.
+	want, _ := style.FromPx(20)
 	if bg.Rect.Y != want {
-		t.Errorf("the background starts at y=%v, want 25 — 20px of margin then "+
-			"5px of border", bg.Rect.Y.Px())
+		t.Errorf("the background starts at y=%v, want 20 — the border box, after "+
+			"20px of margin", bg.Rect.Y.Px())
 	}
-	// And it does not reach into the margin.
-	if bg.Rect.X < 20 {
+	if bg.Rect.X < want {
 		t.Errorf("the background starts at x=%v, inside the 20px margin", bg.Rect.X.Px())
+	}
+
+	// And background-clip moves it in, which is the property's whole purpose.
+	clipped := find(paintOf(t, `<div id="a"></div>`,
+		noDefaults+box+` #a { background-clip: padding-box }`))
+	if clipped == nil {
+		t.Fatal("the clipped background did not paint")
+	}
+	want, _ = style.FromPx(25)
+	if clipped.Rect.Y != want {
+		t.Errorf("with background-clip: padding-box the background starts at y=%v, want 25",
+			clipped.Rect.Y.Px())
 	}
 }
 

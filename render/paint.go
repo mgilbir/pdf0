@@ -2,6 +2,7 @@ package render
 
 import (
 	"image"
+	"math"
 	"sort"
 	"strings"
 
@@ -98,9 +99,73 @@ type DrawImage struct {
 	Key string
 }
 
+// TileImage paints a picture repeatedly across a rectangle.
+//
+// It is one operation for a whole tiling rather than one per tile, and that is a
+// decision about safety rather than about tidiness. The number of tiles is
+// (area / tile size), and a stylesheet chooses both: "background-size: 0.001px"
+// with "repeat" over an A4 page is four hundred billion placements. An engine
+// that emitted one operation each would allocate until it died on a document an
+// attacker wrote, and no cap on the *document* bounds it, because nothing in the
+// document says the number.
+//
+// So the tiling leaves layout as a description — where the first tile is, how
+// far apart they are, and what area they may be drawn into — and the count
+// appears nowhere. A backend expands it with the mechanism it has: PDF has
+// tiling patterns, which are exactly this value. The count is still checked
+// against maxBackgroundTiles before this is built, because whatever expands it
+// is entitled not to be handed four hundred billion cells.
+type TileImage struct {
+	// Clip is the area painted. Nothing is drawn outside it, including the part
+	// of a tile that reaches past it.
+	Clip Rect
+	// Tile is the first tile: its position and its size.
+	Tile Rect
+	// StepX and StepY are the distance to the next tile on each axis, and are
+	// always greater than zero. An axis that does not repeat has a step of the
+	// tile's own size and a Clip no wider than one tile, so the neighbouring
+	// cells fall outside — which is what keeps a backend from needing a case for
+	// "does not repeat".
+	StepX, StepY style.Unit
+
+	Image image.Image
+	// Key identifies the source bytes, so a backend embeds one picture once.
+	Key string
+}
+
+// Tiles is how many tiles touch the clip on each axis, which is what a consumer
+// that expands them needs before it starts.
+func (t TileImage) Tiles() (cols, rows int) {
+	if t.StepX <= 0 || t.StepY <= 0 || t.Clip.Empty() || t.Tile.Empty() {
+		return 0, 0
+	}
+	return tileSpan(t.Clip.X, t.Clip.Right(), t.Tile.X, t.Tile.W, t.StepX),
+		tileSpan(t.Clip.Y, t.Clip.Bottom(), t.Tile.Y, t.Tile.H, t.StepY)
+}
+
+// tileSpan counts the tiles on one axis that overlap [clipLo, clipHi).
+//
+// A tile at tileLo + k·step covers [that, that + size), so it overlaps when
+// k·step < clipHi − tileLo and k·step > clipLo − tileLo − size. The two bounds
+// are what the floor and the ceiling below are: the index of the first tile that
+// reaches into the clip, and of the last one that starts before it ends.
+func tileSpan(clipLo, clipHi, tileLo, size, step style.Unit) int {
+	lo := math.Floor(clipLo.Sub(tileLo).Sub(size).Px()/step.Px()) + 1
+	hi := math.Ceil(clipHi.Sub(tileLo).Px()/step.Px()) - 1
+	if hi < lo {
+		return 0
+	}
+	n := hi - lo + 1
+	if n > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int(n)
+}
+
 func (FillRect) isOp()  {}
 func (DrawText) isOp()  {}
 func (DrawImage) isOp() {}
+func (TileImage) isOp() {}
 
 // Paint turns a fragment tree into a display list, in painting order.
 //
@@ -149,8 +214,51 @@ func Paint(root *Fragment) []Op {
 		return nil
 	}
 	p := &painter{colors: map[string]style.RGBA{}}
+	p.canvasBackground(root)
 	p.stackingContext(root)
 	return p.ops
+}
+
+// canvasBackground paints the page's own background, before anything else.
+//
+// It is CSS 2.1 §14.2 and css-backgrounds-3 §2.11: the root element's background
+// becomes the canvas's and covers the whole canvas, and when the root declares
+// none it is taken from <body> instead. The consequence is the one authors rely
+// on without knowing they do — "body { background: silver }" makes the *page*
+// silver rather than a rectangle the height of the text — and it is the reason
+// the element the background came from is not painted again here.
+//
+// The images are positioned against the root element's box even when the values
+// came from <body>, which is what the specification says in as many words and is
+// decided in layout; what is left here is the order.
+func (p *painter) canvasBackground(root *Fragment) {
+	if root == nil || root.canvas.Empty() {
+		return
+	}
+	if b := root.canvasColor; b != nil {
+		if c, ok := p.color(b, "background-color"); ok && c.A > 0 {
+			p.ops = append(p.ops, FillRect{Rect: root.canvas, Color: c})
+		}
+	}
+	p.backgroundImages(root.canvasLayers)
+}
+
+// backgroundImages emits one operation per resolved layer.
+//
+// The layers arrive in painting order, so this is a loop and not a decision. All
+// the arithmetic — the tile, the step, the clip — happened in layout, where a
+// finding could be raised about it.
+func (p *painter) backgroundImages(layers []bgPaint) {
+	for _, l := range layers {
+		if l.Image == nil || l.Clip.Empty() || l.Tile.Empty() {
+			continue
+		}
+		p.ops = append(p.ops, TileImage{
+			Clip: l.Clip, Tile: l.Tile,
+			StepX: l.StepX, StepY: l.StepY,
+			Image: l.Image, Key: l.Key,
+		})
+	}
 }
 
 type painter struct {
@@ -408,12 +516,28 @@ func (p *painter) decorations(f *Fragment) {
 		// visible" and reappear.
 		return
 	}
-	// The background paints over the padding box — under the border, not under
-	// the margin. A background that covered the margin would bleed into the gap
-	// between two boxes, which is the space that is meant to show the page.
-	if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
-		p.ops = append(p.ops, FillRect{Rect: f.PaddingRect(), Color: bg})
+	if f.bgSuppressed {
+		// This box's background became the canvas's, and was painted over the
+		// whole page before anything else. Painting it again over its own box
+		// would double a translucent colour and would put a "no-repeat" image
+		// down twice in two places.
+		p.borders(f)
+		return
 	}
+	// The background paints over the *border* box by default, under the border
+	// rather than up to it — which is what background-clip's initial value of
+	// border-box means, and is why a dashed border shows the background through
+	// its gaps rather than the page. It stops at the border box and never
+	// reaches the margin, which is the space that is meant to show through.
+	//
+	// The colour goes first and the images over it, in the order §E.2 steps 1 and
+	// 4 give: "the background color of the element, then the background image".
+	if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
+		if rect := f.bgColorRect; !rect.Empty() {
+			p.ops = append(p.ops, FillRect{Rect: rect, Color: bg})
+		}
+	}
+	p.backgroundImages(f.background)
 	p.borders(f)
 }
 
@@ -638,11 +762,24 @@ func (p *painter) color(b *Box, property string) (style.RGBA, bool) {
 	if got, ok := p.colors[raw]; ok {
 		return got, got.A >= 0
 	}
-	vals, _ := css.ParseComponentValues(raw)
-	c, ok := style.ParseColor(vals)
+	c, ok := parseColorValue(raw)
 	if !ok {
 		return style.RGBA{}, false
 	}
 	p.colors[raw] = c
 	return c, true
+}
+
+// parseColorValue reads a computed colour that is not "currentcolor".
+//
+// It is separate from the painter's memoized lookup because layout asks the same
+// question once, of the root and of <body>, when it decides whether either
+// declares a background to give the canvas.
+func parseColorValue(raw string) (style.RGBA, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.EqualFold(raw, "currentcolor") {
+		return style.RGBA{}, false
+	}
+	vals, _ := css.ParseComponentValues(raw)
+	return style.ParseColor(vals)
 }

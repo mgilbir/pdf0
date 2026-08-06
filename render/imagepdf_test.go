@@ -204,3 +204,150 @@ func TestImageWithTransparencyGetsASoftMask(t *testing.T) {
 			"transparent parts will paint as solid colour")
 	}
 }
+
+// pageContent reads back the one page's content stream.
+func pageContent(t *testing.T, doc *pdf0.Document) (*object.Dictionary, string) {
+	t.Helper()
+	pages := doc.PageList()
+	if len(pages) != 1 {
+		t.Fatalf("the document has %d pages, want 1", len(pages))
+	}
+	stream, _ := doc.Resolve(pages[0].Get("Contents")).(*object.Stream)
+	if stream == nil {
+		t.Fatal("the page has no content stream")
+	}
+	data, err := doc.StreamData(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pages[0], string(data)
+}
+
+// TestSingleBackgroundTileIsDrawnDirectly pins that the common case — one tile,
+// which is what "no-repeat" produces — costs a clip and a Do rather than a
+// pattern object. A pattern for it would be a dictionary, a stream and a
+// resource to say what two operators already say.
+func TestSingleBackgroundTileIsDrawnDirectly(t *testing.T) {
+	got := renderWithImages(t, `<div id="a">x</div>`, noDefaults+
+		`#a { width: 200px; height: 100px;
+		      background-image: url(wide.png); background-repeat: no-repeat }`)
+	doc := reread(t, got.Document)
+	page, text := pageContent(t, doc)
+
+	if resources := doc.ResolveDict(page.Get("Resources")); resources != nil {
+		if p := doc.ResolveDict(resources.Get("Pattern")); p != nil && len(p.Keys) > 0 {
+			t.Errorf("a single tile produced %d patterns, want none", len(p.Keys))
+		}
+	}
+	if !strings.Contains(text, " Do") {
+		t.Errorf("the background was not drawn:\n%s", text)
+	}
+	// The clip is what keeps a tile that overhangs its box inside it, and it has
+	// to be there even when the tile happens to fit.
+	if !strings.Contains(text, " W n") && !strings.Contains(text, "W\nn") {
+		t.Errorf("the background was drawn without a clip:\n%s", text)
+	}
+}
+
+// TestRepeatingBackgroundBecomesATilingPattern pins the whole reason the display
+// list carries a step rather than a list of tiles.
+//
+// The tile count is (area / tile size), and a stylesheet chooses both ends of
+// it. A Do per tile would put that number into the file, so a document could ask
+// for a file of any size. A pattern has the count nowhere in it.
+func TestRepeatingBackgroundBecomesATilingPattern(t *testing.T) {
+	got := renderWithImages(t, `<div id="a">x</div>`, noDefaults+
+		`#a { width: 200px; height: 100px;
+		      background-image: url(wide.png); background-repeat: repeat }`)
+	doc := reread(t, got.Document)
+	page, text := pageContent(t, doc)
+
+	// 200 × 100 over a 40 × 20 tile is 5 × 5 = 25 tiles, and the content stream
+	// must not mention any of them.
+	if n := strings.Count(text, " Do"); n != 0 {
+		t.Errorf("the content stream draws the image %d times; a tiling belongs in "+
+			"a pattern, where the count does not appear:\n%s", n, text)
+	}
+
+	resources := doc.ResolveDict(page.Get("Resources"))
+	if resources == nil {
+		t.Fatal("the page has no resources")
+	}
+	patterns := doc.ResolveDict(resources.Get("Pattern"))
+	if patterns == nil || len(patterns.Keys) != 1 {
+		t.Fatalf("the page names %v patterns, want exactly one", patterns)
+	}
+	stream, _ := doc.Resolve(patterns.Values[0]).(*object.Stream)
+	if stream == nil {
+		t.Fatal("the pattern is not a stream")
+	}
+
+	for _, want := range []struct {
+		key   object.Name
+		value object.Object
+	}{
+		{"PatternType", object.Integer(1)},
+		{"PaintType", object.Integer(1)},
+	} {
+		if got := stream.Dict.Get(want.key); got != want.value {
+			t.Errorf("the pattern's /%s is %v, want %v", want.key, got, want.value)
+		}
+	}
+	// The step is the tile size in *points*, because a pattern's own space is
+	// the page's default space and the "cm" this engine emits does not apply to
+	// it. 40 CSS px is 30pt and 20 is 15 — a pattern whose matrix repeated the
+	// page transform would step by 40 and 20 instead, and the background would
+	// tile a third too coarsely with no other symptom.
+	//
+	// The matrix carries the scale, so the numbers here are the layout's own and
+	// the matrix is what has to be checked for the conversion.
+	if s := stream.Dict.Get("XStep"); s != object.Integer(40) {
+		t.Errorf("the pattern's /XStep is %v, want 40 — the tile's width in layout units", s)
+	}
+	if s := stream.Dict.Get("YStep"); s != object.Integer(20) {
+		t.Errorf("the pattern's /YStep is %v, want 20", s)
+	}
+	matrix, _ := doc.Resolve(stream.Dict.Get("Matrix")).(object.Array)
+	if len(matrix) != 6 {
+		t.Fatalf("the pattern's /Matrix is %v, want six numbers", matrix)
+	}
+	// A pattern's matrix maps pattern space to the page's *default* space, so it
+	// has to repeat the page transform: 0.75 to convert px to pt, negated on y
+	// to flip the axis, and translated into the page margin.
+	a, _ := numberValue(matrix[0])
+	d, _ := numberValue(matrix[3])
+	if a != 0.75 || d != -0.75 {
+		t.Errorf("the pattern's matrix scales by (%v, %v), want (0.75, -0.75) — the "+
+			"px-to-pt conversion with the y axis flipped", a, d)
+	}
+	f, _ := numberValue(matrix[5])
+	if f <= 0 {
+		t.Errorf("the pattern's matrix translates y by %v; it has to put the origin "+
+			"at the top of the page", f)
+	}
+
+	// The pattern's cell draws the image, and carries its own resources: the
+	// page's /XObject is not in scope inside a pattern.
+	cell, err := doc.StreamData(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cell), " Do") {
+		t.Errorf("the pattern's cell draws nothing:\n%s", cell)
+	}
+	patternRes := doc.ResolveDict(stream.Dict.Get("Resources"))
+	if patternRes == nil || doc.ResolveDict(patternRes.Get("XObject")) == nil {
+		t.Error("the pattern names no XObject of its own, so its cell refers to " +
+			"a name nothing defines")
+	}
+}
+
+func numberValue(o object.Object) (float64, bool) {
+	switch v := o.(type) {
+	case object.Integer:
+		return float64(v), true
+	case object.Real:
+		return float64(v), true
+	}
+	return 0, false
+}

@@ -164,7 +164,25 @@ const wptEnv = "WPT_TESTS"
 // right-to-left *text* in it is tainted by glyph-missing whatever the ordering
 // does. What the 16 are is documents where "direction: rtl" moved Latin content —
 // the alignment, the over-constrained margins, and the order of the runs.
-const wptCleanPassBaseline = 2578
+//
+// Background images took it from 2578 to 2736, and once again the number is two
+// effects that have to be kept apart. They were measured separately, by running
+// the finished engine with every painting effect of the seven new properties
+// switched off and the old padding-box background colour restored — so the
+// reporting is the new one and the ink is the old one:
+//
+//   - the *reporting* alone moved 99 tests from tainted to clean, 2578 to 2677,
+//     without changing a pixel: failures did not move at all, 2293 before and
+//     2293 after. That is the unsupported-property finding for background-image
+//     going away, which is honest reporting catching up with the engine.
+//   - *painting* the backgrounds then moved 59 more into the clean bucket, 2677
+//     to 2736, and took failures from 2293 to 2227.
+//
+// The first number is the larger and the second is the one about layout. 66
+// failures became passes and only 59 of them were clean, which is the usual
+// shape: a test that stopped failing on its background often still has something
+// else in it this engine does not do.
+const wptCleanPassBaseline = 2736
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -420,6 +438,17 @@ func normaliseOps(ops []Op) string {
 			// drawing the same file draw the same key, and comparing decoded
 			// images pixel by pixel would make this a rasterizer.
 			lines = append(lines, fmt.Sprintf("image %s %s", v.Key, rectKey(v.Rect)))
+		case TileImage:
+			// Only the blank-page check reads this, so a tiling contributes one
+			// line however many tiles it puts down: what matters here is that
+			// something was painted at all.
+			for _, f := range tiledFills(v) {
+				if f.img != "" {
+					lines = append(lines, fmt.Sprintf("image %s %s", f.img, rectKey(f.r)))
+					continue
+				}
+				lines = append(lines, fmt.Sprintf("fill %s %s", rectKey(f.r), f.c))
+			}
 		}
 	}
 	sort.Strings(lines)

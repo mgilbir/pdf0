@@ -150,9 +150,58 @@ func (l *replacedLoader) walk(b *Box) {
 	if b.Element != nil && strings.EqualFold(b.Element.Name, "img") {
 		l.image(b)
 	}
+	l.backgrounds(b)
 	for _, c := range b.Children {
 		l.walk(c)
 	}
+}
+
+// backgrounds loads the pictures a box's background-image names.
+//
+// It goes through the same fetch, the same caps and the same document-wide
+// decode budget as an <img>, which is the whole reason it is here rather than in
+// background.go: a document with a hundred boxes naming one texture must read
+// and decode it once, and a document whose backgrounds together ask for ten
+// gigapixels must be refused by the same counter that refuses ten gigapixels of
+// <img>. A second loading path would be a second policy, and the second one is
+// always the one that is missing a check.
+func (l *replacedLoader) backgrounds(b *Box) {
+	refs := backgroundImageRefs(b.Style["background-image"])
+	if len(refs) == 0 {
+		return
+	}
+	for _, ref := range refs {
+		if got, ok := l.loaded[ref]; ok {
+			l.attachBackground(b, ref, got)
+			continue
+		}
+		if l.failed[ref] {
+			continue
+		}
+		content, why := l.load(ref, "background image")
+		if content == nil {
+			l.failed[ref] = true
+			if why != nil {
+				l.rec.ReportDetail(Finding{
+					Rule:     why.rule,
+					Source:   AtHTML(offsetOf(b)),
+					Message:  why.message,
+					Path:     PathOf(b.Element),
+					Property: "background-image",
+				})
+			}
+			continue
+		}
+		l.loaded[ref] = content
+		l.attachBackground(b, ref, content)
+	}
+}
+
+func (l *replacedLoader) attachBackground(b *Box, ref string, content *ReplacedContent) {
+	if b.BackgroundImages == nil {
+		b.BackgroundImages = map[string]*ReplacedContent{}
+	}
+	b.BackgroundImages[ref] = content
 }
 
 // image loads one <img>, or explains why it did not.
@@ -193,7 +242,7 @@ func (l *replacedLoader) image(b *Box) {
 		return
 	}
 
-	content, why := l.load(src)
+	content, why := l.load(src, "image")
 	if content == nil {
 		l.failed[src] = true
 		l.notReplaced(b, why)
@@ -210,63 +259,67 @@ type loadFailure struct {
 	message string
 }
 
-func (l *replacedLoader) load(src string) (*ReplacedContent, *loadFailure) {
-	data, fail := l.fetch(src)
+// what names the thing being loaded — "image" for an <img>, "background image"
+// for a background — because every message below says what did not arrive, and
+// an author told "the image at paper.png was not loaded" while every <img> on
+// the page is fine looks for the wrong element.
+func (l *replacedLoader) load(src, what string) (*ReplacedContent, *loadFailure) {
+	data, fail := l.fetch(src, what)
 	if fail != nil {
 		return nil, fail
 	}
-	return l.decode(src, data)
+	return l.decode(src, what, data)
 }
 
 // fetch obtains the bytes a reference names, applying the policy of resource.go.
-func (l *replacedLoader) fetch(src string) ([]byte, *loadFailure) {
+func (l *replacedLoader) fetch(src, what string) ([]byte, *loadFailure) {
 	if scheme, ok := schemeOf(src); ok {
 		if scheme == "data" {
 			return decodeDataURI(src)
 		}
 		return nil, &loadFailure{
 			rule: RuleResourceBlocked,
-			message: "the image at " + quoteValue(src) + " names the " + quoteValue(scheme) +
+			message: "the " + what + " at " + quoteValue(src) + " names the " + quoteValue(scheme) +
 				" scheme; this engine resolves no URLs and fetches nothing, so it was not drawn",
 		}
 	}
 	if l.res == nil {
 		return nil, &loadFailure{
 			rule:    RuleResourceBlocked,
-			message: "the image at " + quoteValue(src) + " was not loaded: " + ErrNoResolver.Error(),
+			message: "the " + what + " at " + quoteValue(src) + " was not loaded: " + ErrNoResolver.Error(),
 		}
 	}
 	data, err := l.res.Resolve(src)
 	if err != nil {
 		return nil, &loadFailure{
 			rule:    RuleResourceBlocked,
-			message: "the image at " + quoteValue(src) + " was not loaded: " + err.Error(),
+			message: "the " + what + " at " + quoteValue(src) + " was not loaded: " + err.Error(),
 		}
 	}
 	if len(data) == 0 {
 		return nil, &loadFailure{
 			rule:    RuleImageUndecodable,
-			message: "the image at " + quoteValue(src) + " is empty",
+			message: "the " + what + " at " + quoteValue(src) + " is empty",
 		}
 	}
 	return data, nil
 }
 
 // decode reads a header, checks it against the caps, and only then decodes.
-func (l *replacedLoader) decode(src string, data []byte) (*ReplacedContent, *loadFailure) {
+func (l *replacedLoader) decode(src, what string, data []byte) (*ReplacedContent, *loadFailure) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, &loadFailure{
 			rule: RuleImageUndecodable,
-			message: "the image at " + quoteValue(src) +
+			message: "the " + what + " at " + quoteValue(src) +
 				" is not one this engine can read: " + err.Error(),
 		}
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return nil, &loadFailure{
 			rule: RuleImageUndecodable,
-			message: fmt.Sprintf("the %s image at %s declares a size of %d by %d, which has no area",
-				format, quoteValue(src), cfg.Width, cfg.Height),
+			message: fmt.Sprintf("the %s %s at %s declares a size of %d by %d, which has no area",
+				format, what, quoteValue(src), cfg.Width, cfg.Height),
 		}
 	}
 
@@ -277,9 +330,9 @@ func (l *replacedLoader) decode(src string, data []byte) (*ReplacedContent, *loa
 		return nil, &loadFailure{
 			rule: RuleImageUndecodable,
 			message: fmt.Sprintf(
-				"the %s image at %s declares %d by %d pixels, more than the %d "+
+				"the %s %s at %s declares %d by %d pixels, more than the %d "+
 					"this engine will decode; it was not drawn",
-				format, quoteValue(src), cfg.Width, cfg.Height, maxImagePixels),
+				format, what, quoteValue(src), cfg.Width, cfg.Height, maxImagePixels),
 		}
 	}
 	if pixels > l.budget {
@@ -293,8 +346,8 @@ func (l *replacedLoader) decode(src string, data []byte) (*ReplacedContent, *loa
 		return nil, &loadFailure{
 			rule: RuleImageUndecodable,
 			message: fmt.Sprintf(
-				"the %s image at %s was not drawn: the document's decode budget was already spent",
-				format, quoteValue(src)),
+				"the %s %s at %s was not drawn: the document's decode budget was already spent",
+				format, what, quoteValue(src)),
 		}
 	}
 
@@ -305,7 +358,7 @@ func (l *replacedLoader) decode(src string, data []byte) (*ReplacedContent, *loa
 		// run on bytes an author did not write.
 		return nil, &loadFailure{
 			rule: RuleImageUndecodable,
-			message: "the image at " + quoteValue(src) +
+			message: "the " + what + " at " + quoteValue(src) +
 				" has a readable header and unreadable content: " + err.Error(),
 		}
 	}
@@ -318,7 +371,7 @@ func (l *replacedLoader) decode(src string, data []byte) (*ReplacedContent, *loa
 		if int64(bounds.Dx())*int64(bounds.Dy()) > maxImagePixels {
 			return nil, &loadFailure{
 				rule: RuleImageUndecodable,
-				message: "the image at " + quoteValue(src) +
+				message: "the " + what + " at " + quoteValue(src) +
 					" decoded to more pixels than its header declared, past what this engine will hold",
 			}
 		}

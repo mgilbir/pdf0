@@ -138,31 +138,79 @@ func TestBackgroundShorthand(t *testing.T) {
 	}
 }
 
-// TestBackgroundNamesWhatItCannotProduce pins that the parts of the shorthand
-// this engine does not paint are reported rather than dropped. An author who
-// wrote a background image is told it did not appear instead of wondering why
-// the page is blank.
-func TestBackgroundNamesWhatItCannotProduce(t *testing.T) {
-	doc := parseDoc(t, `<p id="t">x</p>`)
-	got := Apply(doc, []Sheet{author(t, "#t { background: url(paper.png) no-repeat }")})
-
-	var found bool
-	for _, f := range got.Findings {
-		if f.Property == "background" && f.Unsupported {
-			found = true
+// TestBackgroundShorthandExpandsEveryPart pins that the shorthand reaches all
+// eight longhands, whatever order the parts are written in, and that the two
+// <box> values are the origin and then the clip.
+func TestBackgroundShorthandExpandsEveryPart(t *testing.T) {
+	cs := expandOf(t, "background: no-repeat fixed center / cover url(p.png) "+
+		"content-box padding-box red")
+	for _, want := range []struct{ property, value string }{
+		{"background-color", "red"},
+		{"background-image", "url(p.png)"},
+		{"background-repeat", "no-repeat"},
+		{"background-attachment", "fixed"},
+		{"background-position", "center"},
+		{"background-size", "cover"},
+		{"background-origin", "content-box"},
+		{"background-clip", "padding-box"},
+	} {
+		if got := cs[want.property]; got != want.value {
+			t.Errorf("%s is %q, want %q", want.property, got, want.value)
 		}
 	}
-	if !found {
-		t.Errorf("a background image was dropped silently: %v", got.Findings)
+
+	// One <box> sets both, which is the line of the grammar that surprises: the
+	// two longhands' *initial* values differ, so a single keyword is not the same
+	// as leaving it out.
+	one := expandOf(t, "background: url(p.png) content-box")
+	if one["background-origin"] != "content-box" || one["background-clip"] != "content-box" {
+		t.Errorf("one <box> value gave origin=%q clip=%q; it sets both",
+			one["background-origin"], one["background-clip"])
 	}
 
-	// A plain colour says nothing, so the report is about the part and not
-	// about the shorthand.
-	got = Apply(doc, []Sheet{author(t, "#t { background: red }")})
-	for _, f := range got.Findings {
-		if f.Property == "background" {
-			t.Errorf("a plain background colour was reported: %v", f)
+	// And the reset: a shorthand that names only a colour puts every other
+	// longhand back to its initial value, whatever an earlier rule set.
+	reset := expandOf(t, "background: url(p.png) no-repeat right bottom / 50% "+
+		"border-box fixed; background: red")
+	for _, want := range []struct{ property, value string }{
+		{"background-color", "red"},
+		{"background-image", "none"},
+		{"background-repeat", "repeat"},
+		{"background-attachment", "scroll"},
+		{"background-position", "0% 0%"},
+		{"background-size", "auto"},
+		{"background-origin", "padding-box"},
+		{"background-clip", "border-box"},
+	} {
+		if got := reset[want.property]; got != want.value {
+			t.Errorf("after a reset %s is %q, want %q", want.property, got, want.value)
 		}
+	}
+}
+
+// TestBackgroundShorthandLayers pins the comma-separated form, and the rule that
+// only the last layer may carry a colour.
+func TestBackgroundShorthandLayers(t *testing.T) {
+	cs := expandOf(t, "background: url(a.png) no-repeat, url(b.png) repeat-x blue")
+	if got := cs["background-image"]; got != "url(a.png),url(b.png)" {
+		t.Errorf("background-image is %q", got)
+	}
+	if got := cs["background-repeat"]; got != "no-repeat,repeat-x" {
+		t.Errorf("background-repeat is %q", got)
+	}
+	if got := cs["background-color"]; got != "blue" {
+		t.Errorf("background-color is %q, want blue", got)
+	}
+
+	// A colour in a layer that is not the last makes the whole declaration
+	// invalid, which sets nothing rather than setting the parts that parsed.
+	invalid := expandOf(t,
+		"background-color: green; background: red url(a.png), url(b.png)")
+	if v := invalid["background-color"]; v != "green" {
+		t.Errorf("background-color is %q; an invalid shorthand changes nothing", v)
+	}
+	if v := invalid["background-image"]; v != "none" {
+		t.Errorf("background-image is %q; an invalid shorthand changes nothing", v)
 	}
 }
 
