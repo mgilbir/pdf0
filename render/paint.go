@@ -179,6 +179,13 @@ type layers struct {
 	// content are the fragments with inline content — line boxes and list
 	// markers — which is §E.2 step 6.
 	content []*Fragment
+	// tables are the tables using §17.6.2's collapsing border model, whose grid
+	// lines are drawn after every background in the table and not with the
+	// table's own. §17.5.1 paints a table in six layers — the table, the column
+	// groups, the columns, the row groups, the rows and the cells — and a border
+	// centred on a grid line runs under the edge of a row and of two cells, so a
+	// background painted after it would rub it out.
+	tables []*Fragment
 	// positioned are §E.2 steps 3, 7 and 8, which are one list sorted by z rather
 	// than three: the steps differ only in the sign of the number.
 	positioned []stackLevel
@@ -212,6 +219,9 @@ func (p *painter) stackingContext(f *Fragment) {
 	// Steps 4, 5 and 6: block backgrounds, then floats, then inline content.
 	for _, g := range lv.blocks {
 		p.decorations(g)
+	}
+	for _, g := range lv.tables {
+		p.paintCollapsed(g)
 	}
 	for _, g := range lv.floats {
 		p.unit(g)
@@ -258,6 +268,9 @@ func (p *painter) unit(f *Fragment) {
 	for _, g := range lv.blocks {
 		p.decorations(g)
 	}
+	for _, g := range lv.tables {
+		p.paintCollapsed(g)
+	}
 	for _, g := range lv.floats {
 		p.unit(g)
 	}
@@ -279,6 +292,12 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 	}
 	if !root {
 		lv.blocks = append(lv.blocks, f)
+	}
+	if len(f.collapsed) > 0 {
+		// Collected even when f is the root of this walk, because its grid lines
+		// go after the backgrounds of everything inside it rather than with its
+		// own.
+		lv.tables = append(lv.tables, f)
 	}
 	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil {
 		lv.content = append(lv.content, f)
@@ -432,6 +451,15 @@ func (p *painter) content(f *Fragment) {
 // the sides only what is left, which is right for a solid border of one colour
 // and is where a proper implementation of border-style would start.
 func (p *painter) borders(f *Fragment) {
+	if f.inCollapsedGrid {
+		// §17.6.2: this box's declared border is one of the candidates the grid
+		// lines were resolved from, and it was either drawn as part of one of
+		// them or beaten by another box's. Drawing it here as well would put a
+		// losing candidate on the page after the winner — and would draw it at
+		// its full width over a line that is meant to be shared, which is the
+		// separated model showing through.
+		return
+	}
 	r := f.BorderRect
 	e := f.Border
 

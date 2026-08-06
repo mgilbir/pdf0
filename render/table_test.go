@@ -563,43 +563,27 @@ func TestTableColumnCapFires(t *testing.T) {
 	}
 }
 
-// TestBorderCollapseIsReported pins that the collapsing model of §17.6.2 is
-// refused out loud rather than approximated in silence.
+// TestBorderCollapseIsNotReported pins that §17.6.2 is implemented rather than
+// admitted to.
 //
-// A table laid out with the separated model where the author asked for the
-// collapsing one is wrong by a border width on every line, and looks deliberate.
-// §7.1's companion signal has to see it, so it is an unsupported finding.
-func TestBorderCollapseIsReported(t *testing.T) {
-	rec := NewRecorder(nil)
-	built := Build(Input{HTML: `<table style="border-collapse: collapse">` +
-		`<tr><td>a</td></tr></table>`})
-	w, _ := style.FromPx(1000)
-	Layout(built.Root, Size{W: w, H: w}, nil, rec)
-
-	var found *Finding
-	for _, f := range rec.Findings() {
-		if f.Property == "border-collapse" {
-			found = &f
-			break
-		}
-	}
-	if found == nil {
-		t.Fatalf("border-collapse: collapse was accepted in silence:\n%v", rec.Findings())
-	}
-	if !found.Unsupported() {
-		t.Errorf("the finding is %s, which the vacuous-pass check does not count as "+
-			"unsupported", found.Rule)
-	}
-
-	// And the separated model says nothing, so the finding is about the value
-	// rather than about tables.
-	rec = NewRecorder(nil)
-	built = Build(Input{HTML: `<table style="border-collapse: separate">` +
-		`<tr><td>a</td></tr></table>`})
-	Layout(built.Root, Size{W: w, H: w}, nil, rec)
-	for _, f := range rec.Findings() {
-		if f.Property == "border-collapse" {
-			t.Errorf("the separated model reported %q", f.Message)
+// This was the opposite test: the collapsing model was refused out loud, because
+// a table laid out with the separated model where the author asked for the
+// collapsing one is wrong by a border width on every line and looks deliberate.
+// bordercollapse.go is that admission redeemed, and what is left to guard is
+// that the finding does not come back by accident — a leftover report would keep
+// every document with a collapsed table out of §7.1's clean-pass count for a
+// feature that is now there.
+func TestBorderCollapseIsNotReported(t *testing.T) {
+	for _, value := range []string{"collapse", "separate"} {
+		rec := NewRecorder(nil)
+		built := Build(Input{HTML: `<table style="border-collapse: ` + value + `">` +
+			`<tr><td>a</td></tr></table>`})
+		w, _ := style.FromPx(1000)
+		Layout(built.Root, Size{W: w, H: w}, nil, rec)
+		for _, f := range rec.Findings() {
+			if f.Property == "border-collapse" {
+				t.Errorf("border-collapse: %s reported %q", value, f.Message)
+			}
 		}
 	}
 }

@@ -126,7 +126,26 @@ const wptEnv = "WPT_TESTS"
 // this one, where they wait on something else that is still unimplemented. That
 // is the ratchet working as designed — a test counts here only once nothing in
 // either document is missing.
-const wptCleanPassBaseline = 1981
+//
+// §17.6.2's collapsing border model took it from 1916 to 1998, and that number
+// is two effects that are worth keeping apart, because together they overstate
+// the layout work. Measured separately, by running the new layout with the old
+// "collapse is not implemented" finding still in place:
+//
+//   - the *layout* moved 59 tests out of failing, 1995 to 1936, and every one of
+//     them into the vacuous bucket, which stayed at 1916 clean;
+//   - *removing the finding* then moved 82 tests from vacuous to clean, which is
+//     honest reporting catching up with the engine rather than anything new
+//     being drawn.
+//
+// Twelve tests went the other way, and they are worth recording as the clearest
+// example this file has of what a vacuous pass is. The border-collapse-dynamic-*
+// tests are marked "flags: dom" and change a border with a script; nothing here
+// runs scripts, so they cannot pass. They *were* passing, because neither
+// document drew a row border at all and two blank grids match. Drawing the
+// borders made them fail honestly. The harness does not skip the "dom" flag, and
+// whether it should is a separate decision from this one.
+const wptCleanPassBaseline = 2063
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -194,10 +213,20 @@ func findReftests(t *testing.T, root string) []reftest {
 
 		// Tests needing something automation cannot give are not run. "ahem"
 		// needs a specific test font, and the rest need a person.
+		//
+		// "dom" was added after the collapsing-border work made twelve of them
+		// fail. They change the page with a script and then assert the result;
+		// this engine runs no scripts and is not going to, because a PDF page is
+		// settled before it is written. There are 197 of them, contributing 175
+		// failures and 22 vacuous passes and no clean passes at all — so skipping
+		// them costs nothing that was evidence, and stops the failure count
+		// carrying tests that cannot be fixed. Those twelve are the clearest
+		// illustration in this file of what a vacuous pass is: they passed while
+		// neither document drew a border, and drawing the borders made them fail.
 		if flags := flagsRe.FindStringSubmatch(src); flags != nil {
 			for _, f := range strings.Fields(flags[1]) {
 				switch strings.ToLower(f) {
-				case "ahem", "animated", "interact", "paged", "userstyle", "font":
+				case "ahem", "animated", "interact", "paged", "userstyle", "font", "dom":
 					return nil
 				}
 			}
