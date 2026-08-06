@@ -1,6 +1,7 @@
 package render
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -315,9 +316,13 @@ func (l *layouter) breakLines(items []inlineItem, width style.Unit) [][]inlineIt
 		}
 
 		// A single item wider than the line has nowhere to go. It is placed and
-		// overflows, which the guardrails will report once they can see it —
-		// breaking inside a word would be worse, since a word split at an
-		// arbitrary point reads as a different word.
+		// overflows — breaking inside a word would be worse, since a word split
+		// at an arbitrary point reads as a different word — and it is reported,
+		// because the part past the edge is simply not drawn and nothing else
+		// about the page says so.
+		if item.width > width && len(line) == 0 && !item.space {
+			l.reportOverflow(item, width)
+		}
 		line = append(line, item)
 		used = used.Add(item.width)
 	}
@@ -325,6 +330,30 @@ func (l *layouter) breakLines(items []inlineItem, width style.Unit) [][]inlineIt
 		lines = append(lines, trimTrailingSpaces(line))
 	}
 	return lines
+}
+
+// reportOverflow names content too wide for the box holding it.
+//
+// It is reported once per piece of text rather than once per line, because a
+// paragraph containing one impossible word would otherwise complain on every
+// line it wraps to.
+func (l *layouter) reportOverflow(item inlineItem, width style.Unit) {
+	key := item.text
+	if l.reportedOverflow[key] {
+		return
+	}
+	l.reportedOverflow[key] = true
+	l.rec.ReportDetail(Finding{
+		Rule: RuleUnbreakableOverflow,
+		Message: "the text " + quoteValue(item.text) + " is " +
+			fmtPx(item.width) + " wide and cannot be broken, in a space " +
+			fmtPx(width) + " wide; the part past the edge will not be drawn",
+		Path: PathOf(item.box.Element),
+	})
+}
+
+func fmtPx(u style.Unit) string {
+	return strconvFormat(u.Px()) + "px"
 }
 
 // trimTrailingSpaces removes the collapsible space at the end of a line.
@@ -522,4 +551,10 @@ func unsupportedScript(r rune) (string, bool) {
 			"run on as one unbreakable word", true
 	}
 	return "", false
+}
+
+// strconvFormat renders a length for a diagnostic, to a tenth of a pixel — more
+// precision than that is noise in a message a person reads.
+func strconvFormat(v float64) string {
+	return strconv.FormatFloat(float64(int(v*10+0.5))/10, 'f', -1, 64)
 }

@@ -92,6 +92,22 @@ const (
 	// RuleMinFontSize is text that would be set below a legible size.
 	RuleMinFontSize Rule = "min-font-size"
 
+	// The layout-integrity rules of §6.2, which are about the geometry rather
+	// than about a size.
+	//
+	// RuleUnbreakableOverflow is atomic content wider than the box holding it: a
+	// long URL, a nowrap run, an oversized image. §6.2 calls it the classic
+	// silent clip, and it is — the text is there, the box is there, and the part
+	// past the edge is simply not drawn.
+	RuleUnbreakableOverflow Rule = "unbreakable-overflow"
+	// RuleOverflowPage is content outside the page box after scaling.
+	//
+	// It should be unreachable given §5: the scale is computed so that
+	// everything fits. So it is a self-check as much as a guardrail — if it
+	// fires, the scale computation is wrong, which is worth hearing about far
+	// more than the overflow itself.
+	RuleOverflowPage Rule = "overflow-page"
+
 	// RuleLimit is a resource guard that tripped, or a run that was cancelled.
 	//
 	// It is spelled the same as internal/finding.LimitRule, and deliberately so:
@@ -150,8 +166,14 @@ var defaultSeverity = map[Rule]Severity{
 	RuleGlyphMissing:      Error,
 	// A document that only fitted by being made illegible is one where no
 	// document is better than the document.
-	RuleMinScale:      Error,
-	RuleMinFontSize:   Error,
+	RuleMinScale:    Error,
+	RuleMinFontSize: Error,
+	// A clip nobody asked for removes content from the page, which is the
+	// failure §6.2 is named after.
+	RuleUnbreakableOverflow: Error,
+	// A self-check: this firing means the scale computation is wrong, and a
+	// document produced from a wrong scale is worse than none.
+	RuleOverflowPage:  Error,
 	RuleInvalidMarkup: Warn,
 	RuleInvalidCSS:    Warn,
 	RuleLimit:         Warn,

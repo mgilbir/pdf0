@@ -52,6 +52,12 @@ type Fragment struct {
 	// as its children. A fragment has children or lines, never both — the
 	// anonymous box rule sees to that.
 	Lines []LineFragment
+
+	// Marker is the bullet or number a list item generates, nil otherwise. It
+	// is on the fragment rather than in the box tree because its text depends
+	// on the item's position among its siblings, which is not a property of the
+	// box.
+	Marker *Marker
 }
 
 // ContentRect is the area the children were laid out in.
@@ -81,12 +87,13 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	}
 	l := &layouter{
 		rec: rec, avail: avail,
-		lengths:         map[lengthKey]style.Length{},
-		fonts:           map[fontKey]resolvedFont{},
-		measured:        map[measureKey]style.Unit{},
-		reportedScripts: map[string]bool{},
-		reportedGlyphs:  map[string]bool{},
-		fontSet:         set,
+		lengths:          map[lengthKey]style.Length{},
+		fonts:            map[fontKey]resolvedFont{},
+		measured:         map[measureKey]style.Unit{},
+		reportedScripts:  map[string]bool{},
+		reportedGlyphs:   map[string]bool{},
+		reportedOverflow: map[string]bool{},
+		fontSet:          set,
 	}
 	if l.fontSet == nil {
 		l.fontSet = StandardFonts()
@@ -126,6 +133,8 @@ type layouter struct {
 	// about a script or a character rather than about a place.
 	reportedScripts map[string]bool
 	reportedGlyphs  map[string]bool
+	// reportedOverflow suppresses repeating one run's overflow per line.
+	reportedOverflow map[string]bool
 }
 
 type lengthKey struct {
@@ -248,12 +257,20 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 
 	var y, pending style.Unit
 	hoisted := false
+	// listIndex counts the list items among the children, which is what a
+	// numbered marker is numbered by. It counts only list items, so a heading
+	// between two items does not advance the numbering.
+	listIndex := 0
 
 	for _, child := range b.Children {
 		if child.Outer != OuterBlock {
 			continue
 		}
 		cf, cm := l.block(child, width)
+		if child.ListItem {
+			listIndex++
+			cf.Marker = l.markerFor(child, cf, listIndex)
+		}
 		parent.Children = append(parent.Children, cf)
 
 		pending = collapse(pending, cm.top)
