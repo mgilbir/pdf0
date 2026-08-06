@@ -13,10 +13,10 @@ import (
 // to meet — a table is rows of cells, and everything else has to be made into
 // that shape before a column width can mean anything.
 //
-// This file is that repair and the layout that follows it. The two are together
-// because they are one feature: the repair exists only to feed the layout, and
-// every rule in it is justified by something the layout would otherwise have to
-// handle as a special case.
+// This file is that repair, §17.2.1 and §17.4; tablelayout.go is the algorithm
+// it feeds. The two are one feature and are split only by size: every rule here
+// is justified by something the layout would otherwise have to handle as a
+// special case, and reading either alone leaves half the argument out.
 //
 // # Why the repair is worth doing properly
 //
@@ -343,17 +343,21 @@ func (b *boxBuilder) anonymousTableBox(parent *Box, kind Inner, children []*Box)
 	for _, c := range box.Children {
 		c.Parent = box
 	}
-	switch kind {
-	case InnerTableRow:
-		// A row generated around a run of stray content has the same problem
-		// its parent just had, one level down: "<table><div>a</div><td>b</td>
-		// </table>" puts a div and a cell in one row, and the div still needs a
-		// cell of its own. The rule is the same rule, so it is the same call.
-		box.Children = b.generateMissingChildren(box, box.Children)
-		for _, c := range box.Children {
-			c.Parent = box
-		}
-	case InnerTableCell:
+	// A generated box has the same problem its parent just had, one level down,
+	// and it is the same rule that fixes it. A row generated around a run of
+	// stray content still owes each of them a cell; a cell generated around a
+	// stray row group still owes it a table. Both were found by tests that
+	// expected nothing to be drawn and got a red box: "<div display:table-row>
+	// <div display:table-row-group>" is a row group in an anonymous cell, and a
+	// row group with no table around it is a box with a background and no area.
+	box.Children = b.fixupTables(box)
+	for _, c := range box.Children {
+		c.Parent = box
+	}
+	if kind == InnerTableCell {
+		// And a cell is a block container, which the two flow rules have not
+		// reached: it has just acquired a mixed run of block and inline children
+		// and nothing has wrapped the inline ones.
 		box.Children = b.splitBlockInInline(box)
 		box.Children = b.wrapInlines(box)
 	}

@@ -123,8 +123,12 @@ type Box struct {
 
 	// FontSize is the computed font-size, resolved here rather than in the
 	// cascade because it is the one property whose value depends on its own
-	// parent's computed value: "font-size: 1em" means the parent's size, so a
-	// chain of them compounds and can only be resolved walking downwards.
+	// parent's computed value: "font-size: 2em" means twice the parent's size,
+	// so it can only be resolved walking downwards.
+	//
+	// Only an element that *declared* one resolves; an element that inherited
+	// its font-size takes its parent's number unchanged. See fontSizeOf for why
+	// that distinction is the whole of the property's correctness.
 	//
 	// Every font-relative length in the box — its margins, its padding, its
 	// line height — is measured against this, so it has to exist before layout
@@ -220,7 +224,10 @@ var maxBoxes = 1 << 20
 // document produces no boxes at all, which is what "html { display: none }"
 // means and is not an error.
 func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
-	b := &boxBuilder{styles: styled.Styles, pseudo: styled.Pseudo, rec: rec}
+	b := &boxBuilder{
+		styles: styled.Styles, pseudo: styled.Pseudo, rec: rec,
+		ownFontSize: styled.OwnFontSize, ownPseudoFontSize: styled.OwnPseudoFontSize,
+	}
 	root := documentElementOf(doc)
 	if root == nil {
 		return nil
@@ -272,11 +279,15 @@ func mustPx(px float64) style.Unit {
 }
 
 type boxBuilder struct {
-	styles       map[*html.Node]style.ComputedStyle
-	pseudo       map[style.PseudoKey]style.ComputedStyle
-	rec          *Recorder
-	rootFontSize style.Unit
-	count        int
+	styles map[*html.Node]style.ComputedStyle
+	pseudo map[style.PseudoKey]style.ComputedStyle
+	// ownFontSize and ownPseudoFontSize say which elements declared a font-size
+	// of their own. See fontSizeOf.
+	ownFontSize       map[*html.Node]bool
+	ownPseudoFontSize map[style.PseudoKey]bool
+	rec               *Recorder
+	rootFontSize      style.Unit
+	count             int
 	// stopped records that the box cap was reached, so it is reported once
 	// rather than per box.
 	stopped bool
@@ -298,7 +309,24 @@ func (b *boxBuilder) build(n *html.Node, inherited style.ComputedStyle, fontSize
 // A value this engine cannot resolve leaves the size at the parent's, which is
 // what inheriting would have given — the safe answer, since a size of zero would
 // make every em-based margin in the subtree vanish.
+//
+// # Why an inherited size is not resolved again
+//
+// Only an element that *declared* a font-size resolves one. CSS makes the
+// computed value of font-size an absolute length, so inheritance passes a
+// number; what the cascade stores is what the author wrote, so a descendant of
+// "font-size: 2em" inherits the string "2em" and re-resolving it against the
+// parent would double the size at every level. A paragraph four elements inside
+// such a wrapper came out at 256px.
+//
+// That was a real bug, found by the table work: the two halves of a reftest
+// nested their content to different depths, so the compounding moved one and not
+// the other and the difference finally showed. It had been invisible until then
+// because it moves every part of a document equally.
 func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
+	if !b.ownFontSize[n] {
+		return parent
+	}
 	cs, ok := b.styles[n]
 	if !ok {
 		return parent
@@ -404,7 +432,14 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 
 // fontSizeOfStyle resolves a font-size from a computed style that belongs to no
 // element of its own, which is what a pseudo-element has.
-func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit) style.Unit {
+//
+// own says whether a rule set the pseudo-element's font-size, for the reason
+// fontSizeOf gives: a pseudo-element inherits from its originating element, and
+// re-resolving a size it inherited would compound it.
+func (b *boxBuilder) fontSizeOfStyle(cs style.ComputedStyle, parent style.Unit, own bool) style.Unit {
+	if !own {
+		return parent
+	}
 	vals, _ := css.ParseComponentValues(cs["font-size"])
 	size, _, ok := style.ResolveFontSize(vals, parent, b.rootFontSize)
 	if !ok {

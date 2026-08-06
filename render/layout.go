@@ -113,6 +113,8 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		reportedGlyphs:   map[string]bool{},
 		reportedOverflow: map[string]bool{},
 		intrinsic:        map[*Box]intrinsicWidths{},
+		grids:            map[*Box]*tableGrid{},
+		tableDemands:     map[*Box][]tableColumnDemand{},
 		positioned:       map[*Box]*Fragment{},
 		fontSet:          set,
 	}
@@ -195,6 +197,12 @@ type layouter struct {
 	// intrinsic memoizes the two content-based widths of a box, which are what
 	// a float with an auto width is sized by.
 	intrinsic map[*Box]intrinsicWidths
+	// grids and tableDemands memoize the two expensive answers about a table:
+	// where its cells sit in the grid, and what each column asks for. Both are
+	// wanted once while the table's width is being resolved and again while it
+	// is laid out, so a table nested n deep would cost 2^n without them.
+	grids        map[*Box]*tableGrid
+	tableDemands map[*Box][]tableColumnDemand
 	// deferred holds the out-of-flow boxes met during the walk, to be placed
 	// once the tree is in absolute coordinates. See position.go for why they
 	// can wait and floats cannot.
@@ -287,6 +295,12 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	forced *forcedGeometry) (*Fragment, collapsed) {
 
 	margin := l.edges(b, "margin", containing)
+	if b.Inner == InnerTable {
+		// §17.4 moved the margins to the wrapper. Reading them here as well
+		// would apply them twice: the wrapper would be indented and the table
+		// would be indented again inside it.
+		margin = Edges{}
+	}
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", containing)
 
@@ -367,7 +381,16 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		l.children(b, frag, width, topOpen, bottomOpen, inner)
 
 	if hasHeight {
-		contentHeight = declaredHeight
+		if b.Inner == InnerTable || b.Inner == InnerTableCell {
+			// §17.5.3: a declared height on a table or a cell is a *minimum*.
+			// Content is never cut off to honour it, which is the opposite of
+			// what a declared height does to an ordinary block — and is why a
+			// table with "height: 1px" is as tall as its rows rather than a
+			// hairline with its rows spilling out.
+			contentHeight = style.Max(contentHeight, declaredHeight)
+		} else {
+			contentHeight = declaredHeight
+		}
 	} else if own != at.ctx {
 		// CSS 2.1 §10.6.7: the auto height of a box that establishes a block
 		// formatting context reaches the bottom of the floats inside it. This is
@@ -412,6 +435,14 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	topOpen, bottomOpen bool, origin flow) (height, hoistTop, hoistBottom style.Unit, placed bool) {
 
+	if b.Inner == InnerTable {
+		// A table's children are not a flow at all: they are the grid, and §17.5
+		// places them from the columns and rows rather than by stacking them.
+		// The two hoisted margins are zero because a table seals both its edges,
+		// and something was placed because a table occupies its own height
+		// whether or not any cell has content in it.
+		return l.tableContent(b, parent, width, origin), 0, 0, true
+	}
 	if len(b.Children) == 0 {
 		return 0, 0, 0, false
 	}
@@ -756,6 +787,21 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 	declared, hasWidth := l.explicitWidth(b, containing)
 	marginLeftAuto := l.isAuto(b, "margin-left")
 	marginRightAuto := l.isAuto(b, "margin-right")
+
+	switch {
+	case b.Inner == InnerTable:
+		// §17.5.2 decides a table's width by its own algorithm, and then §10.3.3
+		// resolves the margins against it exactly as though it had been
+		// declared. Routing it through the declared-width branch below is what
+		// gives a table "margin: 0 auto" — the margins are on the wrapper, so
+		// this arrives here only for a table whose author put a width on it.
+		declared, hasWidth = l.tableUsedWidth(b, available), true
+	case b.TableWrapper && !hasWidth:
+		// §17.4: the wrapper is as wide as the table's border box and no wider,
+		// which is what makes "margin: 0 auto" centre a table rather than
+		// centring nothing inside a full-width box.
+		declared, hasWidth = l.shrinkToFit(b, maxZero(available.Sub(margin.Horizontal()))), true
+	}
 
 	if b.Float != FloatNone {
 		// CSS 2.1 §10.3.5, the rules for a floated box, and both halves matter.

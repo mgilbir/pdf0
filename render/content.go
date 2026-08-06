@@ -99,7 +99,8 @@ func attrArgument(fn css.ComponentValue) string {
 
 // generated builds the box a pseudo-element produces, or nil.
 func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *Box {
-	cs, ok := b.pseudo[style.PseudoKey{Node: n, Name: name}]
+	key := style.PseudoKey{Node: n, Name: name}
+	cs, ok := b.pseudo[key]
 	if !ok {
 		return nil
 	}
@@ -127,7 +128,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	}
 	order := b.count
 
-	size := b.fontSizeOfStyle(cs, fontSize)
+	size := b.fontSizeOfStyle(cs, fontSize, b.ownPseudoFontSize[key])
 	// A pseudo-element floats like any other box, and "p::before { content: '';
 	// float: left }" is how a stylesheet makes a drop cap or a decorative rule
 	// without adding an element to the markup — so the §9.7 blockification has
