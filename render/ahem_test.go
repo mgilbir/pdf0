@@ -124,8 +124,15 @@ func notoFaces() []*fonts.Face {
 	}
 	var out []*fonts.Face
 	for _, name := range []string{
+		// Broadest first, so the common case is answered by the first face
+		// asked. The rest each add a script the one before it does not have.
 		"NotoSans-Regular.ttf",
 		"NotoSansHebrew-Regular.ttf",
+		"NotoSansArabic-Regular.ttf",
+		"NotoSansDevanagari-Regular.ttf",
+		"NotoSerifTibetan-Regular.ttf",
+		"NotoSansArmenian-Regular.ttf",
+		"NotoSansGeorgian-Regular.ttf",
 		"NotoSansJP-VF.ttf",
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
