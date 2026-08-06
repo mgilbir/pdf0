@@ -72,9 +72,17 @@ func Layout(root *Box, avail Size, rec *Recorder) *Fragment {
 		return nil
 	}
 	l := &layouter{rec: rec, avail: avail, lengths: map[lengthKey]style.Length{}}
-	frag := l.block(root, Point{}, avail.W)
+	frag, m := l.block(root, avail.W)
 	l.reportInlineGap()
-	l.reportCollapseGap()
+
+	// Layout runs in coordinates relative to each parent's content box, because
+	// a box's position is not known until its margins have finished collapsing
+	// with its descendants' — and that is only settled after its subtree is
+	// laid out. Absolute coordinates are then one pass over the finished tree.
+	//
+	// The alternative, translating each subtree as it is placed, costs a walk
+	// per level; this costs one walk in total.
+	absolutise(frag, 0, m.top)
 	return frag
 }
 
@@ -94,9 +102,6 @@ type layouter struct {
 	// sawInline records that some block had inline content, so the gap is
 	// reported once rather than per box.
 	sawInline bool
-	// sawParentChildCollapse records that a document met the margin-collapsing
-	// case this engine does not implement. See reportCollapseGap.
-	sawParentChildCollapse bool
 }
 
 type lengthKey struct {
@@ -119,28 +124,32 @@ func (l *layouter) reportInlineGap() {
 			"and every block containing only text was laid out as empty")
 }
 
-// reportCollapseGap says that a margin which should have collapsed through a
-// parent did not.
+// collapsed is what a box contributes to its parent's flow once its own margins
+// have collapsed with its descendants'.
 //
-// Sibling margins collapse; a parent's margin collapsing with its first or last
-// child's does not, and that half is not implemented. Reporting it is not a
-// formality — the difference is visible geometry, so a document where it applies
-// is laid out differently here than in a browser, and a page that is quietly
-// different is exactly what §6 exists to prevent.
-//
-// It is reported only when it would actually change something: a box whose first
-// or last in-flow child has a non-zero adjoining margin, with no border or
-// padding between them to stop the collapse. A document where the case never
-// arises hears nothing, which is what keeps the report worth reading.
-func (l *layouter) reportCollapseGap() {
-	if !l.sawParentChildCollapse {
+// through marks a box with nothing to separate its own two margins — no border,
+// no padding, no content, no height — so they collapse into one another and the
+// box's neighbours end up adjoining each other through it. An empty <div>
+// between two paragraphs is the everyday case, and an engine that misses it puts
+// a gap where the author sees none.
+type collapsed struct {
+	top, bottom style.Unit
+	through     bool
+}
+
+// absolutise turns positions relative to each parent's content box into absolute
+// page coordinates, in one pass over the finished tree.
+func absolutise(f *Fragment, x, y style.Unit) {
+	if f == nil {
 		return
 	}
-	l.rec.Report(RuleLimit, NoSource,
-		"a margin that should collapse through a parent did not: margins between "+
-			"siblings collapse, but a parent's own margin collapsing with its "+
-			"first or last child's is not implemented, so those boxes sit further "+
-			"apart here than in a browser")
+	f.BorderRect.X = f.BorderRect.X.Add(x)
+	f.BorderRect.Y = f.BorderRect.Y.Add(y)
+
+	content := f.ContentRect()
+	for _, c := range f.Children {
+		absolutise(c, content.X, content.Y)
+	}
 }
 
 // block lays out a block-level box at a position, inside a containing width,
@@ -149,12 +158,20 @@ func (l *layouter) reportCollapseGap() {
 // The position given is the top left of the *border box*: the caller has
 // already decided where the margin puts it, because deciding that is what
 // margin collapsing does and only the caller can see both sides of a collapse.
-func (l *layouter) block(b *Box, at Point, containing style.Unit) *Fragment {
+func (l *layouter) block(b *Box, containing style.Unit) (*Fragment, collapsed) {
 	margin := l.edges(b, "margin", containing)
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", containing)
 
 	width := l.resolveWidth(b, margin, border, padding, containing, &margin)
+	declaredHeight, hasHeight := l.explicitHeight(b, containing)
+
+	// A margin collapses through an edge only when nothing sits on that edge to
+	// stop it. A border or a padding of even one unit is something.
+	topOpen := border.Top == 0 && padding.Top == 0
+	// The bottom edge also needs the height to be the content's own: a declared
+	// height is a floor the margin cannot reach across.
+	bottomOpen := border.Bottom == 0 && padding.Bottom == 0 && !hasHeight
 
 	frag := &Fragment{
 		Box:     b,
@@ -162,90 +179,120 @@ func (l *layouter) block(b *Box, at Point, containing style.Unit) *Fragment {
 		Border:  border,
 		Padding: padding,
 		BorderRect: Rect{
-			X: at.X, Y: at.Y,
+			// Relative to the parent's content box; absolutise fixes it later.
+			X: margin.Left,
 			W: width.Add(padding.Horizontal()).Add(border.Horizontal()),
 		},
 	}
 
-	contentX := frag.BorderRect.X.Add(border.Left).Add(padding.Left)
-	contentY := frag.BorderRect.Y.Add(border.Top).Add(padding.Top)
-	contentHeight := l.children(b, frag, Point{X: contentX, Y: contentY}, width)
+	contentHeight, hoistTop, hoistBottom, placedAnything :=
+		l.children(b, frag, width, topOpen, bottomOpen)
 
-	// An explicit height replaces the content's own, which is what makes
-	// overflow possible at all.
-	if h, ok := l.explicitHeight(b, containing); ok {
-		contentHeight = h
+	if hasHeight {
+		contentHeight = declaredHeight
 	}
+	minHeight, hasMinHeight := l.lengthOf(b, "min-height", containing)
 	contentHeight = l.clampHeight(b, contentHeight, containing)
 
 	frag.BorderRect.H = contentHeight.Add(padding.Vertical()).Add(border.Vertical())
-	return frag
-}
 
-// children lays out a box's children and returns the content height they need.
-func (l *layouter) children(b *Box, parent *Fragment, at Point, width style.Unit) style.Unit {
-	if len(b.Children) == 0 {
-		return 0
+	out := collapsed{top: margin.Top, bottom: margin.Bottom}
+	if topOpen {
+		out.top = collapse(margin.Top, hoistTop)
+	}
+	if bottomOpen {
+		out.bottom = collapse(margin.Bottom, hoistBottom)
 	}
 
+	// A box collapses through when there is nothing at all between its two
+	// margins: no border, no padding, no height it was given, no height its
+	// content needed, and no minimum keeping it open.
+	if topOpen && bottomOpen && !placedAnything && frag.BorderRect.H == 0 &&
+		!(hasMinHeight && minHeight > 0) {
+		both := collapse(out.top, out.bottom)
+		return frag, collapsed{top: both, bottom: both, through: true}
+	}
+	return frag, out
+}
+
+// children lays out a box's children and reports what came of them: the content
+// height, the margins hoisted out through each open edge, and whether anything
+// with a size was actually placed.
+//
+// The walk keeps a *pending* margin rather than adding gaps as it goes. Every
+// margin it meets collapses into that one value, and the value is only committed
+// to the flow when something with a size arrives — which is what lets an empty
+// box between two paragraphs disappear entirely instead of separating them.
+func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
+	topOpen, bottomOpen bool) (height, hoistTop, hoistBottom style.Unit, placed bool) {
+
+	if len(b.Children) == 0 {
+		return 0, 0, 0, false
+	}
 	// A block container's children are either all block-level or all
 	// inline-level — the anonymous box rule guarantees it — so this is a
 	// two-way choice rather than a mixture.
 	if b.Children[0].Outer == OuterInline {
 		// Inline content. Measuring it needs a font and a line-breaking
 		// algorithm; until those exist it occupies no height, and the render
-		// says so once.
+		// says so once. It does count as content for collapsing, though: a
+		// paragraph with text in it does not collapse through, whatever this
+		// engine can currently measure.
 		l.sawInline = true
-		return 0
+		return 0, 0, 0, true
 	}
 
-	y := at.Y
-	// prevBottom is the bottom margin left uncollapsed by the previous sibling,
-	// waiting to be collapsed with the next one's top margin.
-	var prevBottom style.Unit
-	first := true
+	var y, pending style.Unit
+	hoisted := false
 
 	for _, child := range b.Children {
 		if child.Outer != OuterBlock {
 			continue
 		}
-		childMargin := l.edges(child, "margin", width)
+		cf, cm := l.block(child, width)
+		parent.Children = append(parent.Children, cf)
 
-		// Adjoining vertical margins collapse into one, and the one is not
-		// their sum: positives take the largest, negatives the most negative,
-		// and a mixture adds those two. That rule is why two paragraphs with
-		// 1em margins are 1em apart and not 2em.
-		var gap style.Unit
-		if first {
-			// The first child's top margin should collapse with the parent's
-			// own when nothing separates them. It does not here, so the case is
-			// noticed and reported rather than being silently different.
-			if parent.Border.Top == 0 && parent.Padding.Top == 0 && childMargin.Top != 0 {
-				l.sawParentChildCollapse = true
-			}
-			gap = childMargin.Top
-			first = false
-		} else {
-			gap = collapse(prevBottom, childMargin.Top)
+		pending = collapse(pending, cm.top)
+
+		if cm.through {
+			// Nothing separates this box's own margins, so it contributes no
+			// height and its two margins join the run. It still gets a
+			// position, because it still exists.
+			pending = collapse(pending, cm.bottom)
+			cf.BorderRect.Y = y.Add(pending)
+			continue
 		}
-		y = y.Add(gap)
 
-		frag := l.block(child, Point{X: at.X, Y: y}, width)
-		// The child's own margin box positions it horizontally; the vertical
-		// margins were dealt with above and must not be applied twice.
-		frag.BorderRect.X = at.X.Add(frag.Margin.Left)
-		parent.Children = append(parent.Children, frag)
+		if topOpen && !hoisted {
+			// The parent's top edge is open, so everything collected so far
+			// belongs outside the parent rather than inside it.
+			hoistTop = pending
+			pending = 0
+			hoisted = true
+		}
 
-		y = frag.BorderRect.Bottom()
-		prevBottom = frag.Margin.Bottom
+		y = y.Add(pending)
+		cf.BorderRect.Y = y
+		y = y.Add(cf.BorderRect.H)
+		pending = cm.bottom
+		placed = true
 	}
-	// The last child's bottom margin is inside the content height here. It
-	// should collapse with the parent's own bottom margin when nothing
-	// separates them; that half is not implemented, so the case is reported.
-	if parent.Border.Bottom == 0 && parent.Padding.Bottom == 0 && prevBottom != 0 {
-		l.sawParentChildCollapse = true
+
+	if bottomOpen {
+		// The bottom edge is open too, so the trailing margin belongs outside.
+		hoistBottom = pending
+		pending = 0
 	}
-	return y.Sub(at.Y).Add(prevBottom)
+	if topOpen && !hoisted {
+		// Every child collapsed through, so nothing was ever committed and the
+		// whole run belongs outside.
+		hoistTop = collapse(hoistTop, pending)
+		if bottomOpen {
+			hoistBottom = collapse(hoistBottom, pending)
+		}
+		pending = 0
+	}
+	return y.Add(pending), hoistTop, hoistBottom, placed
 }
 
 // collapse combines two adjoining margins.
