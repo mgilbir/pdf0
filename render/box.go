@@ -138,6 +138,23 @@ type Box struct {
 	// ListItem marks a box that generates a marker — a bullet or a number.
 	ListItem bool
 
+	// ListValue is what a numbered marker counts to, taken from the "list-item"
+	// counter rather than from the item's position among its siblings.
+	//
+	// ListNumbered says whether it means anything, because zero is a value a
+	// list can legitimately be at — <ol start="0"> — and not a way of saying
+	// there is no counter. Reading the zero as "unset" numbered that list from
+	// one, which is the same shape of fault as a sentinel colliding with a real
+	// value elsewhere in this engine.
+	//
+	// The two differ whenever a document says so, and documents do: <ol start>,
+	// <li value>, a "counter-reset: list-item" on the list, an item that is not
+	// the first child, or a list whose items are not siblings at all. Counting
+	// siblings gets every one of those wrong, and gets them wrong quietly — the
+	// list is numbered, just not with the numbers the author asked for.
+	ListValue    int
+	ListNumbered bool
+
 	// Replaced is the content of a replaced element — the decoded image an
 	// <img> names — or nil for every other box.
 	//
@@ -452,6 +469,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 	}
+	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	if outer != OuterInline {
 		// A block-level box begins its text afresh, so a word cannot run into it
 		// from the paragraph before. Without this, "<p>hi</p><p>there</p>" under
@@ -1037,4 +1055,19 @@ func allWhitespace(run []*Box) bool {
 		}
 	}
 	return true
+}
+
+// listValueOf reads the "list-item" counter for a list item.
+//
+// It is resolved at build time because that is when the counters are known: they
+// depend on what came *before* an element in the document, which the layout walk
+// cannot answer while descending. See counter.go.
+func (b *boxBuilder) listValueOf(n *html.Node, listItem bool) (int, bool) {
+	if !listItem {
+		return 0, false
+	}
+	if vals := b.counters[n]["list-item"]; len(vals) > 0 {
+		return vals[len(vals)-1], true
+	}
+	return 0, false
 }

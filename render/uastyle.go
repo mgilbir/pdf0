@@ -30,7 +30,11 @@ html, body, div, p, blockquote, figure, figcaption, address,
 header, footer, nav, section, article, aside, main, hgroup,
 h1, h2, h3, h4, h5, h6, ul, ol, dl, dt, dd, pre, hr { display: block }
 
-li { display: list-item }
+li { display: list-item; counter-increment: list-item }
+/* Each list creates its own counter, which is what makes a nested list start
+   again at one while the list around it carries on. "list-item" is the name CSS
+   Lists reserves for exactly this. */
+ol, ul, menu, dir { counter-reset: list-item }
 
 /* Tables. The display values are the ones the table algorithm keys off, so
    these are not decoration: a <tr> that were left inline would not be a row. */

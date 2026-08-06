@@ -182,7 +182,7 @@ const wptEnv = "WPT_TESTS"
 // failures became passes and only 59 of them were clean, which is the usual
 // shape: a test that stopped failing on its background often still has something
 // else in it this engine does not do.
-const wptCleanPassBaseline = 2736
+const wptCleanPassBaseline = 2737
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
