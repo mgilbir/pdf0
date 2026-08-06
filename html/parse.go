@@ -178,6 +178,29 @@ func (p *parser) room(off int) bool {
 func (p *parser) startTag(tk token) {
 	name := tk.name
 
+	// The three frame elements always exist already, because run() built them
+	// before reading anything. A start tag for one of them is therefore not an
+	// element to create — it is the author naming a box that is already there,
+	// and the only thing it carries that the frame does not is its attributes.
+	//
+	// Creating a second one instead is a fault that hides well: <html> and
+	// <body> would nest inside the frame, every document with explicit tags
+	// would apply body's margin twice, and a test asking only whether an <html>
+	// element *exists* would pass — which is exactly how this survived until a
+	// layout comparison noticed the doubled margin.
+	switch name {
+	case "html":
+		mergeAttributes(p.html, tk.attrs)
+		return
+	case "head":
+		mergeAttributes(p.head, tk.attrs)
+		return
+	case "body":
+		mergeAttributes(p.body, tk.attrs)
+		p.enterBody()
+		return
+	}
+
 	if why, dropped := droppedElements[name]; dropped {
 		p.tok.unsupported(tk.offset, "<"+name+"> is dropped: "+why)
 		// Its content goes with it. For the raw-text ones that means consuming
@@ -235,6 +258,24 @@ func (p *parser) startTag(tk token) {
 		p.tok.fail(tk.offset, "elements are nested more deeply than this engine will read ("+
 			strconv.Itoa(maxDepth)+")")
 		p.truncated = true
+	}
+}
+
+// mergeAttributes copies the attributes a frame element's start tag carried onto
+// the element the parser had already made.
+//
+// An attribute already present wins over the one arriving, which is the rule
+// HTML gives: the first value of a repeated attribute is the one that counts, and
+// the frame's own is the first by construction.
+func mergeAttributes(el *Node, attrs []Attribute) {
+	if el == nil {
+		return
+	}
+	for _, a := range attrs {
+		if el.HasAttr(a.Name) {
+			continue
+		}
+		el.Attrs = append(el.Attrs, a)
 	}
 }
 
