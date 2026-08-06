@@ -31,11 +31,17 @@ type Marker struct {
 
 // markerFor works out the marker a list item generates, or nil.
 //
-// index is the item's one-based position among the list items of its parent,
-// which is what a numbered list counts.
+// index is the item's one-based position among the list items of its parent. It
+// is a fallback only: what a numbered list counts is the "list-item" counter,
+// which the user-agent sheet increments and every list resets. The two agree for
+// a plain list and disagree the moment a document says <ol start="5"> or
+// <li value="3"> or resets the counter itself.
 func (l *layouter) markerFor(b *Box, frag *Fragment, index int) *Marker {
 	if !b.ListItem {
 		return nil
+	}
+	if b.ListNumbered {
+		index = b.ListValue
 	}
 	text := markerText(b.Style["list-style-type"], index)
 	if text == "" {

@@ -1,6 +1,7 @@
 package style
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/mgilbir/pdf0/css"
@@ -53,7 +54,16 @@ const hintOrder = -1
 var hintedAttributes = map[string]map[string]string{
 	"img":   {"width": "width", "height": "height"},
 	"table": {"cellspacing": "border-spacing"},
+	// <ol start="5"> and <li value="3"> are the counter, written as attributes.
+	// They take a signed integer rather than a dimension, so they are read by
+	// integerAttr below instead of the table's usual dimensionValue.
+	"ol": {"start": "counter-reset"},
+	"li": {"value": "counter-reset"},
 }
+
+// counterHintAttributes are the entries above whose value is a plain integer
+// naming a counter, rather than a length.
+var counterHintAttributes = map[string]bool{"start": true, "value": true}
 
 // There is deliberately no cache of parsed hint values.
 //
@@ -86,7 +96,15 @@ func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 		if !ok {
 			continue
 		}
-		value, ok := dimensionValue(raw)
+		var value string
+		if counterHintAttributes[attr] {
+			// "start" and "value" set the counter to one *below* the number
+			// they name, because the item increments it on the way in. That is
+			// what makes <li value="3"> show a 3 rather than a 4.
+			value, ok = counterResetValue(raw)
+		} else {
+			value, ok = dimensionValue(raw)
+		}
 		if !ok {
 			continue
 		}
@@ -164,4 +182,33 @@ func cellPaddingHint(n *html.Node) map[string][]css.ComponentValue {
 		}
 	}
 	return nil
+}
+
+// counterResetValue turns a start or value attribute into a counter-reset.
+//
+// The attribute names the number the item is to show. The list-item counter is
+// incremented as the item is entered, so the reset has to be one less — and
+// "one less" is why this is not simply the integer: a value of the most negative
+// integer would wrap, and an attribute is untrusted text.
+func counterResetValue(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	neg := false
+	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+		neg = s[0] == '-'
+		s = s[1:]
+	}
+	if s == "" || len(s) > maxHintDigits {
+		return "", false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return "", false
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	if neg {
+		n = -n
+	}
+	return "list-item " + strconv.Itoa(n-1), true
 }
