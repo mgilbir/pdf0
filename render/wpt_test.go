@@ -64,23 +64,31 @@ import (
 // the wrapper is stripped, and a document that paints nothing at all cannot
 // count as a clean pass however quiet it was.
 //
-// # How much this oracle currently proves, which is less than it looks
+// # How much this oracle proves
 //
-// Worth stating plainly, because a suite of 1715 tests reads as more assurance
-// than 39 clean passes provide.
+// A reftest compares two documents rendered by the *same* engine, so in
+// principle it can only see a fault that moves one of them and not the other. A
+// uniform error — every border half as wide — shifts both sides equally and
+// passes. That is the standing objection to reftests as a guard, and it was
+// measured rather than assumed: against the earlier marks-based comparison, of
+// eight planted layout defects this oracle caught two, and halved borders,
+// broken inheritance, an ignored display:none and a missing min-height all went
+// through.
 //
-// A reftest compares two documents rendered by the *same* engine, so it can only
-// see a fault that moves one of them and not the other. A uniform error — every
-// border half as wide, every percentage nine tenths of what it should be — shifts
-// both sides equally and passes. That was measured rather than assumed: of eight
-// planted layout defects, this oracle caught two. Broken inheritance, an ignored
-// display:none, halved borders and a missing min-height all went through.
+// Resolving occlusion changed that more than expected. Re-measured against five
+// planted defects, all five are now caught, halved borders among them — from
+// 1569 clean passes down to 1029. The reason is that the reference documents in
+// this suite are not built symmetrically with the tests: they draw the expected
+// result directly, often with a plain image or a single filled box, so a fault in
+// the engine's box model moves the test and leaves the reference standing. The
+// marks-based comparison could not see that, because the pair disagreed about red
+// rectangles before it ever got to the geometry.
 //
-// So this is a real external check and it is not the primary one. The
-// planted-defect tests next door are, and they catch the uniform faults precisely
-// because they assert absolute numbers against the specification's own
-// arithmetic. What the reftests add is the class those cannot reach: an
-// interaction between two features that no one thought to write a test for.
+// It remains a secondary guard. The planted-defect tests next door assert
+// absolute numbers against the specification's own arithmetic, and they are what
+// catches a fault that is uniform across both documents. What the reftests add is
+// the class those cannot reach: an interaction between two features that no one
+// thought to write a test for.
 //
 // The ratchet's value grows with the engine. Every layout feature that lands
 // moves tests out of the "something unsupported" bucket and into this one, and
@@ -93,7 +101,7 @@ const wptEnv = "WPT_TESTS"
 //
 // It is a ratchet: it may rise and must never be lowered to make a red test
 // green. A drop means a layout regression, and the failing names are printed.
-const wptCleanPassBaseline = 1256
+const wptCleanPassBaseline = 1569
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -199,12 +207,25 @@ func findReftests(t *testing.T, root string) []reftest {
 // clean passes below.
 var cdataRe = regexp.MustCompile(`(?s)<!\[CDATA\[(.*?)\]\]>`)
 
-// renderForCompare lays a document out and returns its normalised display list
-// together with whether anything unsupported was reported.
-func renderForCompare(path string) (list string, clean bool, err error) {
+// pageClip is the area a rendering is compared over.
+//
+// It stands in for the viewport a browser would have shown the reftest in: a
+// mark outside it is not part of the picture, exactly as content scrolled off
+// the page is not. Absolutely positioned boxes land outside it routinely.
+func pageClip() Rect {
+	sz := A4.Content()
+	return Rect{W: sz.W, H: sz.H}
+}
+
+// renderForCompare lays a document out and returns its display list together
+// with whether anything unsupported was reported.
+//
+// The ops are returned rather than a canonical string because the comparison
+// resolves occlusion, and occlusion depends on paint order — see picture_test.go.
+func renderForCompare(path string) (ops []Op, clean bool, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	src := cdataRe.ReplaceAllString(string(data), "$1")
 	built := Build(Input{HTML: src})
@@ -224,24 +245,31 @@ func renderForCompare(path string) (list string, clean bool, err error) {
 		}
 	}
 
-	out := normaliseOps(Paint(root))
+	ops = Paint(root)
 	// A document that paints nothing cannot be evidence of anything. Two blank
 	// pages match, which is the purest form of the vacuous pass §7.1 warns
 	// about, and no amount of finding-counting detects it.
-	if out == "" {
+	if normaliseOps(ops) == "" {
 		clean = false
 	}
-	return out, clean, nil
+	return ops, clean, nil
 }
 
 // normaliseOps renders a display list as comparable text.
 //
-// The ops are sorted rather than compared in order, because the two documents
-// of a reftest paint the same marks from different structures and so may emit
-// them in a different sequence. Sorting loses the ability to detect a wrong
-// *painting order*, which is a real fault — but painting order only matters
-// where marks overlap, and a reftest that depended on it would be testing
-// z-ordering rather than layout.
+// This is no longer what decides whether two renderings agree — pictureEqual is,
+// because it can see that one mark covers another and this cannot. What is left
+// for it is the blank-page check above, where only the presence of marks matters
+// and their order does not.
+//
+// It is worth recording why the sorted form was wrong as a comparison, since the
+// reasoning that justified it sounded solid: sorting loses the ability to detect
+// a wrong painting order, and painting order only matters where marks overlap,
+// so a test that depended on it would be testing z-ordering rather than layout.
+// The last step is the false one. Nearly every CSS 2.1 test paints a red box and
+// covers it with a green one, and you pass by showing no red — which is an
+// overlap, and which no comparison of unordered marks can ever satisfy, because
+// the test has a red rectangle in it and the reference does not.
 func normaliseOps(ops []Op) string {
 	lines := make([]string, 0, len(ops))
 	for _, op := range ops {
@@ -305,7 +333,7 @@ func TestWPTReftests(t *testing.T) {
 			continue
 		}
 
-		same := got == want
+		same := pictureEqual(got, want, pageClip())
 		passed := same != rt.mismatch
 
 		switch {
@@ -366,33 +394,43 @@ func TestWPTOracleHasTeeth(t *testing.T) {
 		{"resized", []Op{FillRect{Rect: Rect{u(10), u(20), u(101), u(50)}, Color: red}}, false},
 		{"recoloured", []Op{FillRect{Rect: Rect{u(10), u(20), u(100), u(50)}, Color: blue}}, false},
 		{"missing", nil, false},
+		// Painting the same opaque rectangle twice produces the same page. The
+		// marks-based comparison called this a difference, which was over-strict
+		// in the direction that costs real passes: a reference is free to reach
+		// its picture with a different number of marks than the test.
 		{"doubled", []Op{
 			FillRect{Rect: Rect{u(10), u(20), u(100), u(50)}, Color: red},
 			FillRect{Rect: Rect{u(10), u(20), u(100), u(50)}, Color: red},
+		}, true},
+		// Covering the mark completely with another colour is a different page,
+		// and is the case the whole suite turns on.
+		{"covered", []Op{
+			FillRect{Rect: Rect{u(10), u(20), u(100), u(50)}, Color: red},
+			FillRect{Rect: Rect{u(10), u(20), u(100), u(50)}, Color: blue},
 		}, false},
 	}
-	want := normaliseOps(base)
+	clip := pageClip()
 	for _, tc := range cases {
-		if got := normaliseOps(tc.ops) == want; got != tc.equal {
+		if got := pictureEqual(tc.ops, base, clip); got != tc.equal {
 			t.Errorf("%s: the comparison said equal=%v, want %v", tc.name, got, tc.equal)
 		}
 	}
 
-	// A difference below a hundredth of a pixel is not a rendering difference,
-	// and treating it as one would fail every test on arithmetic noise.
+	// A difference far below a pixel is not a rendering difference, and treating
+	// it as one would fail every test on arithmetic noise.
 	near := []Op{FillRect{Rect: Rect{u(10.0001), u(20), u(100), u(50)}, Color: red}}
-	if normaliseOps(near) != want {
+	if !pictureEqual(near, base, clip) {
 		t.Error("a difference of a ten-thousandth of a pixel was treated as a difference")
 	}
 
-	// And the sort really does make order irrelevant, since the two documents
-	// of a reftest paint from different structures.
+	// Marks that do not overlap may be emitted in either order, since the two
+	// documents of a reftest paint from different structures.
 	a := []Op{
 		FillRect{Rect: Rect{u(0), u(0), u(1), u(1)}, Color: red},
 		FillRect{Rect: Rect{u(5), u(5), u(1), u(1)}, Color: blue},
 	}
 	b := []Op{a[1], a[0]}
-	if normaliseOps(a) != normaliseOps(b) {
+	if !pictureEqual(a, b, clip) {
 		t.Error("the same marks in a different order compared unequal")
 	}
 }
