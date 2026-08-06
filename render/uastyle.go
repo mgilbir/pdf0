@@ -95,4 +95,18 @@ rt { font-size: 0.5em; vertical-align: super }
    the direction, so they say so rather than inheriting it. */
 bdo { unicode-bidi: bidi-override }
 bdi { unicode-bidi: isolate }
+
+/* The dir attribute, which is how nearly every document in the world states a
+   direction — a stylesheet saying so is the exception. HTML's own rendering
+   section defines it as these declarations, and the isolation is part of the
+   definition rather than an extra: an element that says which way it runs must
+   not reorder the text around it.
+
+   dir=auto is the first-strong rule over the element's own content, which is
+   what unicode-bidi: plaintext is; it deliberately leaves direction alone,
+   because the content decides. */
+[dir="ltr"] { direction: ltr; unicode-bidi: isolate }
+[dir="rtl"] { direction: rtl; unicode-bidi: isolate }
+[dir="auto"] { unicode-bidi: plaintext }
+bdo[dir] { unicode-bidi: isolate-override }
 `

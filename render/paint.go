@@ -57,8 +57,18 @@ type FillRect struct {
 // is what a text-drawing backend takes and because converting between them needs
 // the face's metrics — which this stage has and the backend may not.
 type DrawText struct {
-	At    Point
-	Text  string
+	At   Point
+	Text string
+	// RTL says the run reads right to left.
+	//
+	// The text is in *logical* order — the order it is written and read, which
+	// is what a reader copying it out of the page expects and what the string
+	// here has to be for the text of the document to survive. Which way the
+	// glyphs go is a separate fact, and it is one the backend has to be told
+	// rather than one it can work out: a run of punctuation between two Hebrew
+	// words is right-to-left because of its neighbours, and by the time the run
+	// reaches a backend the neighbours are gone.
+	RTL   bool
 	Face  *fonts.Face
 	Size  style.Unit
 	Color style.RGBA
@@ -548,6 +558,7 @@ func (p *painter) lines(f *Fragment) {
 			p.ops = append(p.ops, DrawText{
 				At:          at,
 				Text:        drawableText(run.Text),
+				RTL:         run.RTL,
 				Face:        run.Face,
 				Size:        run.Size,
 				Color:       colour,

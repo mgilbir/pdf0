@@ -33,12 +33,21 @@ const (
 
 // alignmentOf resolves the text-align of a block container.
 //
-// "start" and "end" are resolved against the inline direction, which this engine
-// treats as left-to-right everywhere: `direction` is not implemented, so an rtl
-// document is already being laid out the wrong way round and an alignment that
-// guessed otherwise would not save it. That gap is the property's, not this
-// function's.
-func alignmentOf(b *Box) textAlign {
+// "start" and "end" are resolved against the inline base direction, which is what
+// the direction property sets. That is why the initial value matters more than it
+// looks: it is "start", so a block with "direction: rtl" and no text-align at all
+// is right-aligned, and getting this wrong would leave every right-to-left
+// paragraph flush against the edge its text runs away from.
+//
+// "left" and "right" are physical and are *not* affected by direction. The pair
+// exists precisely so that an author can say "that edge" rather than "the edge
+// the text starts at".
+// rtl is the inline base direction the line was laid out in, which is the
+// block's own direction except under "unicode-bidi: plaintext" — there each
+// paragraph decides its own, and each has to be aligned against the one it was
+// set in or a paragraph of Hebrew would be flush against the left edge of a
+// block the algorithm just set right to left.
+func alignmentOf(b *Box, rtl bool) textAlign {
 	switch strings.ToLower(strings.TrimSpace(b.Style["text-align"])) {
 	case "right":
 		return alignRight
@@ -47,10 +56,18 @@ func alignmentOf(b *Box) textAlign {
 	case "justify":
 		return alignJustify
 	case "end":
+		if rtl {
+			return alignLeft
+		}
+		return alignRight
+	case "left":
+		return alignLeft
+	}
+	// start, match-parent, and anything unrecognised. §16.2 makes start the
+	// initial value, so this is also the answer for a block that says nothing.
+	if rtl {
 		return alignRight
 	}
-	// left, start, match-parent, and anything unrecognised. §16.2 makes start
-	// the initial value and left is what start means here.
 	return alignLeft
 }
 
@@ -60,12 +77,12 @@ func alignmentOf(b *Box) textAlign {
 // already discounted. A line at least as wide as the space it has does not move:
 // an overfull line overflows to the right whatever the alignment says, because
 // moving it would push it off the other edge as well.
-func (l *layouter) alignLine(b *Box, lineWidth, used style.Unit) style.Unit {
+func (l *layouter) alignLine(b *Box, rtl bool, lineWidth, used style.Unit) style.Unit {
 	slack := lineWidth.Sub(used)
 	if slack <= 0 {
 		return 0
 	}
-	switch alignmentOf(b) {
+	switch alignmentOf(b, rtl) {
 	case alignRight:
 		return slack
 	case alignCenter:

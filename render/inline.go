@@ -33,19 +33,20 @@ import (
 //   - on both sides of an ideograph.
 //
 // That covers Latin, Greek, Cyrillic and the CJK scripts, which is most of what
-// a document generator sets. Everything else UAX #14 says is *not* done, and
-// the two families that matter are not approximated:
+// a document generator sets. Everything else UAX #14 says is *not* done, and the
+// family that matters is not approximated: the scripts that need a dictionary to
+// find a word boundary — Thai, Lao, Khmer, Burmese.
 //
-//   - the scripts that need a dictionary to find a word boundary — Thai, Lao,
-//     Khmer, Burmese;
-//   - the bidirectional reordering right-to-left text needs once a line is
-//     broken.
+// It is refused through the finding vocabulary rather than guessed at, because
+// §6.3 is exactly right about it: unbroken text still looks like text, so the
+// failure mode looks like success. A paragraph of Thai run together as one
+// unbreakable word overflows silently and reads as a rendering bug rather than
+// as an unimplemented feature.
 //
-// Both are refused through the finding vocabulary rather than guessed at,
-// because §6.3 is exactly right about them: unshaped or unbroken text still
-// looks like text, so the failure mode looks like success. A paragraph of Thai
-// run together as one unbreakable word overflows silently and reads as a
-// rendering bug rather than as an unimplemented feature.
+// The other refusal that used to be here — the bidirectional reordering a
+// right-to-left line needs — is not a refusal any more. bidi.go resolves the
+// levels over each paragraph and this file reorders the runs of each line once
+// it has been broken; see visualRuns below.
 //
 // word-break and overflow-wrap are not implemented either, and are left to be
 // reported as unsupported properties rather than approximated. Both ask for a
@@ -88,7 +89,15 @@ type LineFragment struct {
 	// text sits on. Painting needs it, and it is not derivable afterwards —
 	// half-leading is split above and below the text.
 	Baseline style.Unit
-	// Runs are the pieces of text on the line, in reading order.
+	// Runs are the pieces of text on the line, in *reading* order — the order
+	// they were written, which on a line that mixes directions is not the order
+	// they are drawn in. Where each one goes is its own X.
+	//
+	// The two are kept apart on purpose. The order here is the order the runs
+	// reach the content stream, and so the order a reader extracting text from
+	// the finished page gets them in; a right-to-left paragraph has to be drawn
+	// the way it reads and copied out the way it was written, and only the X
+	// decides the first.
 	Runs []TextRun
 }
 
@@ -110,6 +119,15 @@ type TextRun struct {
 	// textdecoration.go, where the difference between propagating and inheriting
 	// is worked through.
 	Decorations []textDecoration
+	// RTL says the run reads right to left, so its glyphs are drawn from the
+	// right edge of its box towards the left and its brackets are mirrored.
+	//
+	// It is on the run rather than derived from the text because it is not a
+	// property of the text: a run of punctuation between two Hebrew words is
+	// right-to-left and has nothing in it that says so. The algorithm decided it
+	// from the neighbours, which are other runs by the time anything paints this
+	// one.
+	RTL bool
 	// LetterSpacing is what letter-spacing added after each character of this
 	// run. It is carried into painting as well as into the width because the two
 	// have to agree: the width decided where the next run starts, and glyphs
@@ -158,6 +176,11 @@ type inlineFrame struct {
 	// the box's own, because that is what the property is measured against: a
 	// "text-top" is the top of the *parent's* content area.
 	strut strut
+	// bidi collects the context's text in logical order as the walk flattens it,
+	// so that the bidirectional algorithm has a paragraph to run over. It is nil
+	// while measuring: an intrinsic width is a sum over the items and does not
+	// depend on the order they are set in.
+	bidi *bidiBuilder
 }
 
 // inlineItem is one piece of inline content before it has been put on a line.
@@ -251,6 +274,23 @@ type inlineItem struct {
 	// would have been — is what §10.3.7 falls back on, and that is exactly the
 	// information the flattening destroys.
 	abs *Box
+	// bidiPara, bidiStart and bidiEnd say where this item's text sits in the
+	// inline formatting context's bidi paragraphs, which is what the algorithm
+	// resolves levels over.
+	//
+	// bidiPara counts from one so that zero means "contributes no characters",
+	// which is what a float or an absolutely positioned box is: out of flow, and
+	// taking no part in the ordering. Numbering from zero would have made a
+	// forgotten field on any of the several places that build an item read as a
+	// claim to be the first character of the first paragraph.
+	bidiPara           int
+	bidiStart, bidiEnd int
+	// para is the resolved paragraph, filled in once the algorithm has run, and
+	// level is this item's embedding level. Both are zero-valued in a document
+	// that needs no reordering, which is what tells the line builder there is
+	// nothing to do.
+	para  *bidiParagraph
+	level uint8
 }
 
 // inlineContent lays a box's inline children into lines and returns the height
@@ -281,13 +321,21 @@ type inlineItem struct {
 // has the rest of that argument.
 func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, origin flow) style.Unit {
 	st := l.strutFor(b)
+	// The block container is one bidi paragraph — or several, where it holds a
+	// forced break — and its own unicode-bidi may wrap the whole of it in an
+	// override. Both are decided before the walk, because the walk is what fills
+	// the paragraph in.
+	_, open, closing := paragraphDirection(b)
+	para := newBidiBuilder(open)
 	items, _ := l.collectInline(b, nil, startOfContext(), inlineFrame{
 		containing: width, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite,
-		strut: st,
+		strut: st, bidi: para,
 	})
+	para.leave(open, closing)
 	if len(items) == 0 {
 		return 0
 	}
+	items = l.resolveBidi(b, items, para)
 
 	lo, hi := origin.x, origin.x.Add(width)
 
@@ -333,14 +381,18 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lh},
 				Baseline: bl,
 			}
-			var x style.Unit
+			// Rules L1 and L2 over the runs of this line: where each of them
+			// sits, which on a line mixing directions is not the order they
+			// were collected in.
+			xs, total := lineOffsets(runs)
 			// Atomic inlines are placed as children of the block rather than as
 			// runs, so aligning the line has to move them too. The range is
 			// noted here because floats placed before the line are already in
 			// this slice and must not move: a float is out of flow and
 			// text-align says nothing about it.
 			atomicStart := len(parent.Children)
-			for _, item := range runs {
+			for k, item := range runs {
+				x := xs[k]
 				if item.atomic != nil {
 					// Placed as a child of the block rather than as a run,
 					// because it is a box: it has a background, a border, a
@@ -353,17 +405,18 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					f.BorderRect.X = line.Rect.X.Add(x).Add(f.Margin.Left)
 					f.BorderRect.Y = y.Add(atomicTop(item, st, lh, bl)).Add(f.Margin.Top)
 					parent.Children = append(parent.Children, f)
-					x = x.Add(item.width)
 					continue
 				}
 				line.Runs = append(line.Runs, TextRun{
 					Text: item.text, Face: item.face, Size: item.size,
 					X: x, Width: item.width, Box: item.box, Offset: item.offset,
 					Decorations: item.decorations, LetterSpacing: item.spacing.letter,
+					RTL: item.level&1 == 1,
 				})
-				x = x.Add(item.width)
 			}
-			if shift := lineIndent.Add(l.alignLine(b, textWidth, alignedWidth(runs, x))); shift != 0 {
+			shift := lineIndent.Add(
+				l.alignLine(b, lineBaseIsRTL(b, runs), textWidth, alignedWidth(runs, total)))
+			if shift != 0 {
 				for k := range line.Runs {
 					line.Runs[k].X = line.Runs[k].X.Add(shift)
 				}
@@ -888,6 +941,10 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			continue
 		}
 		if child.Replaced != nil || isAtomicInline(child) {
+			// One neutral character in the paragraph, before the item is built,
+			// so that the ordering sees a picture between two words as something
+			// that is there rather than as a gap between them.
+			para, start, end := frame.bidi.object()
 			// An atomic inline: a replaced element, or an inline-block. It is
 			// one unbreakable thing with a size of its own, and it is laid out
 			// here — before the line it will sit on has even been chosen —
@@ -895,7 +952,9 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// whole difference between an atomic inline and an ordinary inline
 			// box, whose extent is whatever its words turn out to need and
 			// which therefore has to be flattened into the run.
-			out = append(out, l.atomicItem(child, frame, state.breakOpportunity))
+			item := l.atomicItem(child, frame, state.breakOpportunity)
+			item.bidiPara, item.bidiStart, item.bidiEnd = para, start, end
+			out = append(out, item)
 			// An atomic inline is content, not space: it ends any break
 			// opportunity that was carried into it, and a collapsible space
 			// after it survives rather than collapsing into whatever came
@@ -906,7 +965,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 		}
 		if child.IsText() {
 			var items []inlineItem
-			items, state = l.itemsFor(child, state, frame.offset)
+			items, state = l.itemsFor(child, state, frame)
 			out = append(out, items...)
 			continue
 		}
@@ -915,6 +974,10 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// it ends the line wherever it falls, even mid-word and even on a
 			// line with room to spare.
 			out = append(out, inlineItem{box: child, forced: true})
+			// It ends a bidi paragraph too: CSS makes a forced break a paragraph
+			// separator, so the direction of what follows is decided afresh
+			// rather than by the first strong character of the block.
+			frame.bidi.breakParagraph()
 			// What follows is at the start of a line, so a collapsible space
 			// there is removed rather than indenting it.
 			state = startOfContext()
@@ -929,7 +992,14 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 					Y: frame.offset.Y.Add(d.Y),
 				}
 			}
+			// The formatting codes unicode-bidi stands for, around the box's
+			// contents. This is the one walk that sees where an inline box begins
+			// and ends, and an embedding or an isolate is exactly a pair of
+			// characters at those two points.
+			open, closing := bidiControls(child)
+			frame.bidi.enter(open)
 			out, state = l.collectInline(child, out, state, inner)
+			frame.bidi.leave(open, closing)
 		}
 	}
 	return out, state
@@ -937,7 +1007,8 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 
 // itemsFor cuts one text box into items at its break opportunities and measures
 // each, applying the half of §4.1.1 that could not be done per node.
-func (l *layouter) itemsFor(b *Box, in inlineState, offset Point) ([]inlineItem, inlineState) {
+func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inlineItem, inlineState) {
+	offset := frame.offset
 	face, ok := l.fontFor(b)
 	if !ok {
 		return nil, in
@@ -974,8 +1045,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, offset Point) ([]inlineItem,
 	for _, p := range pieces {
 		if p.segment {
 			// A segment break that survived Phase I is a break the author
-			// wrote, and it ends the line as firmly as a <br> does.
+			// wrote, and it ends the line as firmly as a <br> does — and ends a
+			// bidi paragraph with it, for the same reason.
 			out = append(out, inlineItem{box: b, face: face, size: size, forced: true, offset: offset})
+			frame.bidi.breakParagraph()
 			state = startOfContext()
 			continue
 		}
@@ -989,7 +1062,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, offset Point) ([]inlineItem,
 			continue
 		}
 
+		para, start, end := frame.bidi.add(p.text)
 		item := inlineItem{
+			bidiPara: para, bidiStart: start, bidiEnd: end,
 			text: p.text, box: b, face: face, size: size,
 			breakBefore: p.breakBefore || state.breakOpportunity,
 			space:       p.space, collapsible: p.collapsible,
@@ -1568,21 +1643,13 @@ func hex(v uint32) string {
 }
 
 // unsupportedScript names why a rune cannot be laid out, or reports false.
+//
+// The right-to-left scripts used to be here, and are not any more: the
+// bidirectional algorithm is applied per paragraph and its reordering per line —
+// see bidi.go — so Hebrew, Arabic, Syriac and Thaana are set in the order they
+// are read. Shaping them was already forme's, and still is.
 func unsupportedScript(r rune) (string, bool) {
 	switch {
-	// Right-to-left. Shaping these is done in forme; ordering them within a
-	// broken line is not done here, and text laid out in the wrong order is
-	// text that reads as nonsense while looking like a font problem.
-	case r >= 0x0590 && r <= 0x05FF, // Hebrew
-		r >= 0x0600 && r <= 0x06FF, // Arabic
-		r >= 0x0700 && r <= 0x074F, // Syriac
-		r >= 0x0780 && r <= 0x07BF, // Thaana
-		r >= 0x07C0 && r <= 0x08FF, // NKo, Samaritan, Arabic Extended
-		r >= 0xFB1D && r <= 0xFDFF, // Hebrew and Arabic presentation forms
-		r >= 0xFE70 && r <= 0xFEFF:
-		return "right-to-left text needs the bidirectional algorithm applied to " +
-			"each line, which is not implemented; it would be laid out in the wrong order", true
-
 	// Scripts with no spaces between words, which need a dictionary to know
 	// where a line may break.
 	case r >= 0x0E00 && r <= 0x0E7F, // Thai

@@ -31,10 +31,6 @@ package style
 // declaration were absent, and what that looks like. Each string below finishes
 // the sentence "the property was not applied, so ...".
 var unimplementedProperties = map[string]string{
-	"direction": "the text is laid out left to right whatever the value says, " +
-		"so a right-to-left document is set in the wrong order",
-	"unicode-bidi": "no bidirectional reordering is done, so mixed-direction " +
-		"text is set in the order the characters appear rather than the order they read",
 	"opacity": "the box is painted fully opaque, so anything it was meant to " +
 		"show through it is hidden",
 }

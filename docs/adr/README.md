@@ -15,3 +15,4 @@ A record is superseded, never edited to say something different.
 | [0003](0003-arlington-as-parser-oracle.md) | Arlington is a parser-faithfulness oracle, not a second validator |
 | [0004](0004-executed-content-model.md) | PDF/A rules apply to executed content, not present content |
 | [0005](0005-parallel-slice-dictionary.md) | `Dictionary` is parallel slices with a lazy index, not a map |
+| [0006](0006-bidi-in-two-places.md) | The bidirectional algorithm is implemented twice, on purpose |
