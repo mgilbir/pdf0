@@ -265,6 +265,28 @@ func (f Finding) Error() string {
 	return b.String()
 }
 
+// unsupportedRules are the rules that say "this engine does not do that", as
+// against the ones that say "the input is wrong" or "we stopped short".
+//
+// The distinction is what §7.1's companion signal needs: a reftest passes
+// vacuously when the engine ignores the same thing in both documents, and the
+// only way to tell that apart from a real pass is to know whether anything went
+// unimplemented.
+var unsupportedRules = map[Rule]bool{
+	RuleUnsupportedProperty: true,
+	RuleUnsupportedElement:  true,
+	RuleUnsupportedSelector: true,
+	RuleUnsupportedAtRule:   true,
+	RuleUnsupportedValue:    true,
+	RuleUnsupportedScript:   true,
+	RuleFontFallback:        true,
+	RuleGlyphMissing:        true,
+}
+
+// Unsupported reports whether the finding is about something this engine does
+// not implement.
+func (f Finding) Unsupported() bool { return unsupportedRules[f.Rule] }
+
 // RuleID is the identifier of the violated rule, for pdf0.Violation.
 func (f Finding) RuleID() string { return string(f.Rule) }
 

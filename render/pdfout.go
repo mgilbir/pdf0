@@ -193,13 +193,6 @@ func fitScale(natural, avail Size, allowUp bool) float64 {
 	return s
 }
 
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // checkScale is the min-scale guardrail of §6.1.
 //
 // It is the blunt one and probably the most useful: if the content had to be
