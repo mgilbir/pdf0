@@ -165,7 +165,9 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 // about which space survives — a disagreement that shows up as a float sized to
 // a width the text it holds does not need.
 func (l *layouter) textWidths(b *Box) intrinsicWidths {
-	items, _ := l.itemsFor(b, startOfContext(), Point{})
+	// No bidi builder: an intrinsic width is a sum over the items and over the
+	// widest of them, and neither depends on the order they are set in.
+	items, _ := l.itemsFor(b, startOfContext(), inlineFrame{})
 	return l.widthsOf(items)
 }
 

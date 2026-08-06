@@ -375,7 +375,7 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 			// which leaves the glyphs upright while the position still comes
 			// from the flipped system.
 			b.SetTextMatrix(1, 0, 0, -1, v.At.X.Px(), v.At.Y.Px())
-			v.Face.DrawShaped(b, v.Text, v.Size.Px())
+			v.Face.DrawShaped(b, shapedText(v), v.Size.Px())
 			b.EndText()
 			b.Restore()
 
@@ -423,4 +423,32 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 		return nil, err
 	}
 	return doc, nil
+}
+
+// shapedText is the string handed to the shaper for one text run.
+//
+// The run's own text is in logical order and carries no direction of its own: a
+// run of punctuation between two Hebrew words is right-to-left because of
+// characters that are in other runs by now. The shaper applies UAX #9 to the
+// string it is given, so left to itself it would answer for that string rather
+// than for the paragraph the run came out of, and a lone bracket would come out
+// facing the wrong way.
+//
+// So the direction the layout resolved is stated to it, in the one vocabulary a
+// string has for saying so: an explicit right-to-left override in front of the
+// text. That is exactly what the character means; it is a default-ignorable code
+// point, so the shaper drops it before any glyph is chosen; and what comes back
+// is the run's glyphs in the order they are drawn, with rule L4's mirroring
+// applied.
+//
+// The override goes here and not into the run's text, because the run's text is
+// what a reader copies out of the finished page.
+func shapedText(v DrawText) string {
+	if !v.RTL {
+		// A left-to-right run needs nothing. Every character in it resolved to
+		// an even level, so the shaper's own answer for the string is already
+		// this one.
+		return v.Text
+	}
+	return "‮" + v.Text
 }

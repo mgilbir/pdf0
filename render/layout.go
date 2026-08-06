@@ -918,8 +918,19 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 	case marginRightAuto:
 		out.Right = slack
 	default:
-		// Over-constrained: the specification resolves it by ignoring the right
-		// margin, which keeps the box where its left margin put it.
+		// Over-constrained. The specification resolves it by ignoring one of the
+		// two margins, and which one is decided by the *containing block's*
+		// direction rather than the box's own: the margin at the end of the
+		// inline direction is the one that gives way, so the box stays where its
+		// starting margin put it.
+		//
+		// The containing block's and not this box's, because a box that declares
+		// "direction: rtl" is stating which way its own contents run, not which
+		// side of its parent it hangs from.
+		if b.Parent != nil && isRTL(b.Parent) {
+			out.Left = margin.Left.Add(slack)
+			break
+		}
 		out.Right = margin.Right.Add(slack)
 	}
 	return width
