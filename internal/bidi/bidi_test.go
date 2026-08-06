@@ -131,25 +131,35 @@ func TestArabicDigitsDifferFromHebrewDigits(t *testing.T) {
 	}
 }
 
-// TestBracketsFollowTheirContents is rule N0: without it a parenthesised Hebrew
-// phrase comes out with its parentheses facing outwards.
+// TestBracketsFollowTheirContents is rule N0, which resolves a bracket pair as a
+// unit rather than as two neutrals that happen to look alike.
+//
+// The case has to be chosen with care, and the obvious one does not work: for
+// "a (HEBREW)" the neutral rules N1 and N2 reach the same answer as N0 on their
+// own, so a test on it passes with N0 deleted. This is a case where they do not.
+// "ab (c)" in a right-to-left paragraph has Latin inside the brackets and Latin
+// before them, so N0 gives the pair the direction of its contents and both
+// brackets go left-to-right with the letters. Without it the closing bracket has
+// right-to-left text on one side — the end of the paragraph — and falls back to
+// the paragraph's own direction, which puts it at the wrong end of the phrase.
 func TestBracketsFollowTheirContents(t *testing.T) {
-	// "a (HEBREW)" in a left-to-right paragraph. The brackets are neutrals
-	// between Latin and Hebrew, so N1 cannot decide them; N0 says they belong to
-	// the Hebrew inside, but only where the context agrees — here it does not, so
-	// they stay left-to-right at level 0 and the Hebrew reverses between them.
-	text := []rune{'a', ' ', '(', alef, bet, ')'}
-	levels := Resolve(text, LeftToRight).Levels()
-	if levels[2] != 0 || levels[5] != 0 {
-		t.Errorf("brackets at levels %d and %d, want 0 and 0 (levels %v)",
-			levels[2], levels[5], levels)
+	text := []rune("ab (c)")
+	levels := Resolve(text, RightToLeft).Levels()
+	for i, want := range []uint8{2, 2, 2, 2, 2, 2} {
+		if levels[i] != want {
+			t.Fatalf("levels %v, want all 2 — rule N0 gives the bracket pair the "+
+				"direction of what is inside it, and the closing bracket at index 5 "+
+				"is the one that differs without it", levels)
+		}
 	}
-	// The same phrase in a right-to-left paragraph: now the context agrees with
-	// the embedding and the brackets go right-to-left with it.
+
+	// And the rule really is about the *pair*: with right-to-left text inside,
+	// in the same left-to-right context, the brackets follow that instead.
+	text = []rune{'a', 'b', ' ', '(', alef, ')'}
 	levels = Resolve(text, RightToLeft).Levels()
-	if levels[2] != 1 || levels[5] != 1 {
-		t.Errorf("in a right-to-left paragraph, brackets at levels %d and %d, want 1 and 1 "+
-			"(levels %v)", levels[2], levels[5], levels)
+	if levels[3] != 1 || levels[5] != 1 {
+		t.Errorf("with Hebrew inside, the brackets are at levels %d and %d, want 1 "+
+			"and 1 (levels %v)", levels[3], levels[5], levels)
 	}
 }
 

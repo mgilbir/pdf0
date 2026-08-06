@@ -587,3 +587,28 @@ func TestAtomicInlineTakesPartInTheOrdering(t *testing.T) {
 		t.Errorf("the Hebrew is at %gpx, want 276", got)
 	}
 }
+
+// TestAnOpenIsolateSurvivesAForcedBreak pins what happens to a formatting code
+// that is still open when a bidi paragraph ends.
+//
+// A <br> ends the paragraph, and the algorithm resolves each on its own — so an
+// override or an isolate opened before the break has to be opened again after
+// it, or the second half of the element is laid out as though the element were
+// not there. It is the same thing a browser does, and the failure is visible:
+// half of a <bdo> comes out overridden and half does not.
+func TestAnOpenIsolateSurvivesAForcedBreak(t *testing.T) {
+	root := layoutOf(t, 600,
+		`<div id="p"><bdo dir="rtl">abc<br>def</bdo></div>`, bidiCSS)
+	f := find(t, root, "p")
+	if len(f.Lines) != 2 {
+		t.Fatalf("the block produced %d lines, want 2", len(f.Lines))
+	}
+	if !runAt(t, f.Lines[0].Runs, "abc").RTL {
+		t.Fatal("the text before the break was not overridden, so this test is not " +
+			"about what happens after it")
+	}
+	if !runAt(t, f.Lines[1].Runs, "def").RTL {
+		t.Error("the text after the forced break was not overridden; the override " +
+			"was still open and the new bidi paragraph did not reopen it")
+	}
+}
