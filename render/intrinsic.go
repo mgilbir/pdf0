@@ -200,7 +200,15 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 		line, edge = 0, 0
 	}
 
-	for _, item := range items {
+	for k, item := range items {
+		// Whether a line may end after this item. It is the next item's own
+		// answer to whether it may begin one, which is the same question read
+		// from the other side, and it is needed for the space case below: not
+		// every space offers an opportunity. U+2007 FIGURE SPACE holds a column
+		// of digits together and U+202F NARROW NO-BREAK SPACE holds a number to
+		// its unit, and a minimum width that broke at either would be the width
+		// of one digit.
+		breaks := k+1 >= len(items) || items[k+1].breakBefore
 		switch {
 		case item.float != nil:
 			// A float beside text is as wide as it is whether or not the text
@@ -241,7 +249,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				// tab-separated line is.
 				w = tabAdvance(line, item.tabStop).Add(item.spacing.letter)
 			}
-			if item.noWrap {
+			if item.noWrap || !breaks {
 				// Text that may not break has one width, not two. A space in it
 				// is a space and not an opportunity, and an engine that ended
 				// the unbreakable run here would give a nowrap paragraph a
@@ -252,7 +260,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				endRun()
 			}
 			line = line.Add(w)
-			if item.collapsible {
+			if item.trimAtEnd {
 				edge = edge.Add(w)
 			} else {
 				edge = 0
