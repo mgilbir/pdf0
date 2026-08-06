@@ -292,7 +292,8 @@ WPT_DIRS := css/CSS2/normal-flow css/CSS2/box-display css/CSS2/margin-padding-cl
             css/CSS2/linebox css/CSS2/text css/CSS2/bidi-text css/CSS2/lists \
             css/CSS2/generated-content css/CSS2/borders css/CSS2/backgrounds \
             css/CSS2/box css/CSS2/colors css/CSS2/values \
-            css/CSS2/support css/CSS2/reference css/css-text/white-space css/reference
+            css/CSS2/support css/CSS2/reference css/css-text/white-space css/reference \
+            fonts
 
 wpt: $(WPT_DIR)/.ok
 
