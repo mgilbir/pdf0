@@ -239,16 +239,19 @@ clean-css-colors:
 # loud rather than leaving to be discovered.
 NOTO_DIR := testdata/fonts-noto
 NOTO_BASE := https://raw.githubusercontent.com/notofonts
-NOTO_FILES := NotoSans-Regular.ttf NotoSansHebrew-Regular.ttf NotoSansJP-VF.ttf
+NOTO_HINTED := NotoSans NotoSansHebrew NotoSansArabic NotoSansDevanagari \
+               NotoSansArmenian NotoSansGeorgian
 
 noto-fonts: $(NOTO_DIR)/.ok
 
 $(NOTO_DIR)/.ok:
 	mkdir -p $(NOTO_DIR)
-	curl -sSf -o $(NOTO_DIR)/NotoSans-Regular.ttf \
-	  $(NOTO_BASE)/notofonts.github.io/main/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf
-	curl -sSf -o $(NOTO_DIR)/NotoSansHebrew-Regular.ttf \
-	  $(NOTO_BASE)/notofonts.github.io/main/fonts/NotoSansHebrew/hinted/ttf/NotoSansHebrew-Regular.ttf
+	for fam in $(NOTO_HINTED); do \
+	  curl -sSf -o $(NOTO_DIR)/$$fam-Regular.ttf \
+	    $(NOTO_BASE)/notofonts.github.io/main/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf; \
+	done
+	curl -sSf -o $(NOTO_DIR)/NotoSerifTibetan-Regular.ttf \
+	  $(NOTO_BASE)/notofonts.github.io/main/fonts/NotoSerifTibetan/hinted/ttf/NotoSerifTibetan-Regular.ttf
 	curl -sSf -o $(NOTO_DIR)/NotoSansJP-VF.ttf \
 	  $(NOTO_BASE)/noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
 	curl -sSf -o $(NOTO_DIR)/OFL.txt \
