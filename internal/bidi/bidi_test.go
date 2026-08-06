@@ -223,6 +223,46 @@ func TestExplicitDepthCapFires(t *testing.T) {
 // TestBracketStackIsBounded is BD16's own cap. A document nesting parentheses
 // ten thousand deep must cost a fixed 63 entries, and the text must still come
 // out — the rule is abandoned for the rest of the sequence, not the text.
+// TestBracketCapChangesTheAnswerAtItsBoundary pins that the bracket cap is
+// load-bearing, which the test below it does not.
+//
+// That one resolves fifty thousand nested pairs and checks the letter inside is
+// still right-to-left — true whether or not the cap fires, so it proves the
+// algorithm terminates and nothing more. The cap was therefore caught only by
+// the Unicode conformance data, which is fetched separately and skipped when
+// absent: a checkout without it would not notice the bound being removed. A
+// resource bound that only an optional download can catch is one nobody will
+// see fail.
+//
+// "ab (c)" is the case where N0 decides the answer — the pair takes the
+// direction of what is inside it, giving level 2 throughout. Nesting that pair
+// exactly to the cap keeps it; one deeper, the opening bracket arrives with the
+// stack full, BD16 stops for the rest of the sequence as the specification
+// requires, and N2 gives the trailing brackets the embedding direction instead.
+// So the boundary is visible in the levels, and only if the cap is there.
+func TestBracketCapChangesTheAnswerAtItsBoundary(t *testing.T) {
+	nested := func(depth int) []uint8 {
+		text := []rune("ab " + strings.Repeat("(", depth) + "c" + strings.Repeat(")", depth))
+		return Resolve(text, RightToLeft).Levels()
+	}
+	allTwo := func(levels []uint8) bool {
+		for _, l := range levels {
+			if l != 2 {
+				return false
+			}
+		}
+		return true
+	}
+	if !allTwo(nested(maxBracketPairs)) {
+		t.Errorf("at exactly %d nested pairs the brackets are not all at level 2: %v",
+			maxBracketPairs, nested(maxBracketPairs))
+	}
+	if allTwo(nested(maxBracketPairs + 1)) {
+		t.Errorf("at %d nested pairs — one past the cap — rule N0 still applied, so "+
+			"the bracket stack is not bounded", maxBracketPairs+1)
+	}
+}
+
 func TestBracketStackIsBounded(t *testing.T) {
 	const deep = 50000
 	text := []rune(strings.Repeat("(", deep) + string(alef) + strings.Repeat(")", deep))
