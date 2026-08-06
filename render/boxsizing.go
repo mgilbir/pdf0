@@ -61,7 +61,7 @@ func (l *layouter) sizingInset(b *Box, containing style.Unit) (horizontal, verti
 		return 0, 0
 	}
 	border := l.borderWidths(b)
-	padding := l.edges(b, "padding", containing)
+	padding := l.paddingOf(b, containing)
 	return border.Horizontal().Add(padding.Horizontal()),
 		border.Vertical().Add(padding.Vertical())
 }

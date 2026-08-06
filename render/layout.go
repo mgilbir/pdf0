@@ -65,6 +65,22 @@ type Fragment struct {
 	// box.
 	Marker *Marker
 
+	// collapsed is the grid lines of a table using §17.6.2's collapsing border
+	// model, in coordinates relative to this fragment's border box.
+	//
+	// They hang off the table rather than off the cells because that is whose
+	// borders they are: a collapsed border is centred on a grid line and belongs
+	// half to the cell on each side, so neither cell can draw it.
+	collapsed []collapsedBand
+	// inCollapsedGrid marks a fragment whose own border is part of that grid —
+	// the table and every cell in it — and so must not be painted here.
+	//
+	// It is separate from the list because a table with no borders anywhere still
+	// must not fall back to painting the one it declared: that border took part
+	// in the conflict resolution like every other candidate, and losing is not
+	// the same as being absent.
+	inCollapsedGrid bool
+
 	// Offset is CSS 2.1 §9.4.3's relative displacement: how far the box is drawn
 	// from where the flow put it.
 	//
@@ -117,6 +133,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		intrinsic:        map[*Box]intrinsicWidths{},
 		grids:            map[*Box]*tableGrid{},
 		tableDemands:     map[*Box][]tableColumnDemand{},
+		collapsed:        map[*Box]*collapsedGrid{},
 		positioned:       map[*Box]*Fragment{},
 		fontSet:          set,
 		rootFontSize:     root.FontSize,
@@ -209,6 +226,11 @@ type layouter struct {
 	// is laid out, so a table nested n deep would cost 2^n without them.
 	grids        map[*Box]*tableGrid
 	tableDemands map[*Box][]tableColumnDemand
+	// collapsed memoizes §17.6.2's resolved grid lines, for the same reason and
+	// with one more: every cell asks for it while its own border is resolved, so
+	// without the memo a table would re-run the conflict resolution once per
+	// cell.
+	collapsed map[*Box]*collapsedGrid
 	// deferred holds the out-of-flow boxes met during the walk, to be placed
 	// once the tree is in absolute coordinates. See position.go for why they
 	// can wait and floats cannot.
@@ -330,7 +352,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		margin = Edges{}
 	}
 	border := l.borderWidths(b)
-	padding := l.edges(b, "padding", containing)
+	padding := l.paddingOf(b, containing)
 
 	// A replaced box is sized from its content rather than from its containing
 	// block, on both axes at once, and the answer is then handed to the
@@ -1119,6 +1141,12 @@ func (l *layouter) edges(b *Box, prefix string, containing style.Unit) Edges {
 // nothing, which is a rule that surprises people and is in the specification for
 // a reason: it lets a width be declared once and switched on per side.
 func (l *layouter) borderWidths(b *Box) Edges {
+	if e, ok := l.collapsedBorderWidths(b); ok {
+		// A table or a cell in §17.6.2's model does not have the border it
+		// declared: it has half of whichever border won each of the grid lines
+		// it touches, which may have come from any of six boxes.
+		return e
+	}
 	side := func(name string) style.Unit {
 		if noBorder(b.Style["border-"+name+"-style"]) {
 			return 0
@@ -1137,6 +1165,62 @@ func (l *layouter) borderWidths(b *Box) Edges {
 		Bottom: side("bottom"),
 		Left:   side("left"),
 	}
+}
+
+// collapsedBorderWidths is the used border of a table or of one of its cells
+// under §17.6.2, or false for every other box.
+//
+// It is asked here rather than by the table code alone because a cell goes
+// through ordinary block layout — blockIn resolves its own border from its own
+// style like any other box — and a second answer given only to the table
+// algorithm would leave the cell's fragment carrying a border box that disagreed
+// with where the table put it.
+func (l *layouter) collapsedBorderWidths(b *Box) (Edges, bool) {
+	switch b.Inner {
+	case InnerTable:
+		if !borderCollapses(b) {
+			return Edges{}, false
+		}
+		return l.collapsedGridFor(b).table, true
+	case InnerTableCell:
+		table := tableAncestorOf(b)
+		if table == nil || !borderCollapses(table) {
+			return Edges{}, false
+		}
+		e, ok := l.collapsedGridFor(table).cells[b]
+		return e, ok
+	}
+	return Edges{}, false
+}
+
+// tableAncestorOf finds the table a cell belongs to.
+//
+// §17.2.1 guarantees the chain — a cell is in a row, a row is in a row group or
+// in a table — so this is two or three steps. The bound is there because the box
+// tree is built from an untrusted document and a walk with no end is the one
+// mistake a cycle in it could turn into a hang.
+func tableAncestorOf(cell *Box) *Box {
+	b := cell.Parent
+	for i := 0; b != nil && i < 4; i++ {
+		if b.Inner == InnerTable {
+			return b
+		}
+		b = b.Parent
+	}
+	return nil
+}
+
+// paddingOf is a box's padding, which a table using §17.6.2 does not have.
+//
+// "in this model, a table does not have padding (but does have borders and
+// margins)". It is not a rounding: the grid lines start at the table's border,
+// so a padding would put a gap between the table's own border and the first
+// line's other half — two borders that are meant to be one.
+func (l *layouter) paddingOf(b *Box, containing style.Unit) Edges {
+	if b.Inner == InnerTable && borderCollapses(b) {
+		return Edges{}
+	}
+	return l.edges(b, "padding", containing)
 }
 
 func noBorder(styleValue string) bool {
