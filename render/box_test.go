@@ -480,6 +480,48 @@ func TestWhitespaceBetweenBlocksMakesNoBox(t *testing.T) {
 	}
 }
 
+// TestWhitespaceAroundAFloatMakesNoBoxEither is the same rule with the one thing
+// in it that is not white space, and it is the case the rule above quietly did
+// not cover.
+//
+// A float written between two blocks has newlines on either side of it, so the
+// run wrapInlines sees is [white space, float, white space]. The float is
+// content and must survive; the white space is not and must not. What was
+// happening instead was that the presence of the float made the whole run count
+// as content, so an anonymous block was generated around it — and an anonymous
+// block is an in-flow box, which *commits the pending margin*. The float ended
+// up separating the margins of the blocks on either side of it, which is the
+// exact opposite of what §9.5 says a float does, and it happened in every
+// document that puts a newline after a tag.
+//
+// The float goes into the parent's block-level children where it was written.
+// §9.7 has blockified it, so it is block-level already; there is no line box for
+// it to sit in and nothing beside it for a line box to hold.
+func TestWhitespaceAroundAFloatMakesNoBoxEither(t *testing.T) {
+	got := bodyBoxes(t, "<div>\n  <p>a</p>\n  <i id=f></i>\n  <p>b</p>\n</div>",
+		"#f { float: left }")
+	want := `div block
+  p block
+    text "a"
+  i block/flow-root
+  p block
+    text "b"
+`
+	if got != want {
+		t.Errorf("got:\n%swant:\n%s", got, want)
+	}
+
+	// The contrast that makes it a rule about *empty* runs rather than about
+	// floats: a float with words beside it stays in the run with them, because
+	// those words are an inline formatting context and it is the context the
+	// float was placed in that shortens their lines.
+	got = bodyBoxes(t, "<div>\n  <p>a</p>\n  words <i id=f></i> more\n  <p>b</p>\n</div>",
+		"#f { float: left }")
+	if !strings.Contains(got, "anonymous block") {
+		t.Errorf("a float among words lost the anonymous block around them:\n%s", got)
+	}
+}
+
 // TestWhitespaceCollapsing pins CSS Text §4. The rules differ per white-space
 // value, and each difference is one an author chose deliberately.
 func TestWhitespaceCollapsing(t *testing.T) {
