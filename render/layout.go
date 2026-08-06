@@ -47,6 +47,11 @@ type Fragment struct {
 	Margin, Border, Padding Edges
 
 	Children []*Fragment
+
+	// Lines is the inline content of a block container, in the same coordinates
+	// as its children. A fragment has children or lines, never both — the
+	// anonymous box rule sees to that.
+	Lines []LineFragment
 }
 
 // ContentRect is the area the children were laid out in.
@@ -67,13 +72,26 @@ func (f *Fragment) MarginRect() Rect { return f.BorderRect.Outset(f.Margin) }
 // avail is the content box of the page: what §11 calls the page box minus its
 // margins. Only the width constrains layout — the height is what comes out, and
 // whether it fits is §5's scale-to-fit question, asked afterwards.
-func Layout(root *Box, avail Size, rec *Recorder) *Fragment {
+//
+// set supplies the faces; a nil one uses the fourteen standard faces, which need
+// no embedding and cover Latin.
+func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	if root == nil {
 		return nil
 	}
-	l := &layouter{rec: rec, avail: avail, lengths: map[lengthKey]style.Length{}}
+	l := &layouter{
+		rec: rec, avail: avail,
+		lengths:         map[lengthKey]style.Length{},
+		fonts:           map[fontKey]resolvedFont{},
+		measured:        map[measureKey]style.Unit{},
+		reportedScripts: map[string]bool{},
+		reportedGlyphs:  map[string]bool{},
+		fontSet:         set,
+	}
+	if l.fontSet == nil {
+		l.fontSet = StandardFonts()
+	}
 	frag, m := l.block(root, avail.W)
-	l.reportInlineGap()
 
 	// Layout runs in coordinates relative to each parent's content box, because
 	// a box's position is not known until its margins have finished collapsing
@@ -98,30 +116,21 @@ type layouter struct {
 	// almost always one of a handful. The key includes the font size because
 	// that is what an em resolves against.
 	lengths map[lengthKey]style.Length
-
-	// sawInline records that some block had inline content, so the gap is
-	// reported once rather than per box.
-	sawInline bool
+	// fonts and measured memoize the two things inline layout asks for most: a
+	// face for a style, and the width of a string in one.
+	fonts    map[fontKey]resolvedFont
+	measured map[measureKey]style.Unit
+	// fontSet is where faces come from.
+	fontSet FontSet
+	// reportedScripts and reportedGlyphs suppress repeating a complaint that is
+	// about a script or a character rather than about a place.
+	reportedScripts map[string]bool
+	reportedGlyphs  map[string]bool
 }
 
 type lengthKey struct {
 	value    string
 	fontSize style.Unit
-}
-
-// reportInlineGap says once that inline content was not measured.
-//
-// Once, rather than per box: every document with text would otherwise produce a
-// finding per paragraph, and a report that long is one nobody reads. It is a
-// limit rather than an unsupported feature — the engine stopped short of doing
-// something it is going to do — which is the distinction RuleLimit exists for.
-func (l *layouter) reportInlineGap() {
-	if !l.sawInline {
-		return
-	}
-	l.rec.Report(RuleLimit, NoSource,
-		"inline layout is not implemented yet, so text contributes no height "+
-			"and every block containing only text was laid out as empty")
 }
 
 // collapsed is what a box contributes to its parent's flow once its own margins
@@ -233,13 +242,8 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	// inline-level — the anonymous box rule guarantees it — so this is a
 	// two-way choice rather than a mixture.
 	if b.Children[0].Outer == OuterInline {
-		// Inline content. Measuring it needs a font and a line-breaking
-		// algorithm; until those exist it occupies no height, and the render
-		// says so once. It does count as content for collapsing, though: a
-		// paragraph with text in it does not collapse through, whatever this
-		// engine can currently measure.
-		l.sawInline = true
-		return 0, 0, 0, true
+		// Inline content: lines of text, which have a height of their own.
+		return l.inlineContent(b, parent, width), 0, 0, true
 	}
 
 	var y, pending style.Unit
