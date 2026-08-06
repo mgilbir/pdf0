@@ -283,6 +283,171 @@ func TestAnonymousBlockBoxes(t *testing.T) {
 	}
 }
 
+// TestBlockInInlineSplits pins CSS 2.1 §9.2.1.1, which is common markup rather
+// than a corner: an <a> wrapping a card of block content is the everyday case.
+//
+// A block inside an inline does not nest. The inline is *split* — an inline
+// piece holding what came before, then the block, then a second piece holding
+// what came after, all siblings of whatever the inline was a child of. Leaving
+// the block where it was written would put it in an inline formatting context,
+// where nothing in block layout knows how to place it.
+func TestBlockInInlineSplits(t *testing.T) {
+	got := bodyBoxes(t, `<div>a<span>before<p>block</p>after</span>b</div>`)
+	want := `div block
+  anonymous block
+    text "a"
+    span inline
+      text "before"
+  p block
+    text "block"
+  anonymous block
+    span inline
+      text "after"
+    text "b"
+`
+	if got != want {
+		t.Errorf("got:\n%swant:\n%s", got, want)
+	}
+}
+
+// TestBlockInInlineDropsEmptyPieces pins that a split which leaves an inline
+// piece with nothing in it produces no piece at all. Two empty spans either side
+// of the block would generate line boxes, and those have a height the author
+// never asked for.
+func TestBlockInInlineDropsEmptyPieces(t *testing.T) {
+	got := bodyBoxes(t, `<div><span><p>only</p></span></div>`)
+	want := `div block
+  p block
+    text "only"
+`
+	if got != want {
+		t.Errorf("got:\n%swant:\n%s", got, want)
+	}
+}
+
+// TestNestedInlinesSplitToo pins that the split reaches through more than one
+// level of inline, since the block may be several deep.
+func TestNestedInlinesSplitToo(t *testing.T) {
+	got := bodyBoxes(t, `<div><em>x<strong>y<p>b</p>z</strong>w</em></div>`)
+	want := `div block
+  anonymous block
+    em inline
+      text "x"
+      strong inline
+        text "y"
+  p block
+    text "b"
+  anonymous block
+    em inline
+      strong inline
+        text "z"
+      text "w"
+`
+	if got != want {
+		t.Errorf("got:\n%swant:\n%s", got, want)
+	}
+}
+
+// TestInlineWithoutABlockIsNotSplit pins that the rule only fires when it has to
+// — an ordinary inline keeps its single box, and splitting one that did not need
+// it would draw its border twice.
+func TestInlineWithoutABlockIsNotSplit(t *testing.T) {
+	got := bodyBoxes(t, `<div>a<span>b<em>c</em>d</span>e</div>`)
+	want := `div block
+  text "a"
+  span inline
+    text "b"
+    em inline
+      text "c"
+    text "d"
+  text "e"
+`
+	if got != want {
+		t.Errorf("got:\n%swant:\n%s", got, want)
+	}
+}
+
+// TestSplitPiecesKeepTheirStyle pins that both halves are still the element they
+// came from. A border on the split inline is drawn on each piece, which is what
+// a browser does and looks odd until you know why — but a piece that lost its
+// style would silently drop the styling from half the content.
+func TestSplitPiecesKeepTheirStyle(t *testing.T) {
+	built := build(t, `<div>a<span id="s">before<p>b</p>after</span></div>`,
+		"#s { color: rgb(1, 2, 3) }")
+
+	var pieces int
+	var walk func(*Box)
+	walk = func(b *Box) {
+		if b.Element != nil {
+			if id, _ := b.Element.Attr("id"); id == "s" {
+				pieces++
+				if b.Style["color"] != "rgb(1, 2, 3)" {
+					t.Errorf("a split piece has colour %q, not the span's", b.Style["color"])
+				}
+			}
+		}
+		for _, c := range b.Children {
+			walk(c)
+		}
+	}
+	walk(built.Root)
+	if pieces != 2 {
+		t.Errorf("the span became %d pieces, want 2", pieces)
+	}
+}
+
+// TestInlineBlockIsABlockContainer pins the box that is inline on the outside
+// and a block container on the inside, which is the whole of what flow-root
+// means. Its children get the anonymous block treatment; an ordinary inline's
+// do not.
+func TestInlineBlockIsABlockContainer(t *testing.T) {
+	// Mixed content inside an inline-block is wrapped, exactly as it would be
+	// inside a <div>.
+	got := bodyBoxes(t, `<div><span id="ib">loose<p>block</p></span></div>`,
+		"#ib { display: inline-block }")
+	want := `div block
+  ib inline/flow-root
+    anonymous block
+      text "loose"
+    p block
+      text "block"
+`
+	// The sketch names elements by tag, so fix the expectation to the tag.
+	want = strings.ReplaceAll(want, "ib inline/flow-root", "span inline/flow-root")
+	if got != want {
+		t.Errorf("got:\n%swant:\n%s", got, want)
+	}
+
+	// An inline-block *shields* what is inside it. A block within one belongs to
+	// it, so an inline wrapping that inline-block has no reason to split — and
+	// splitting it would tear apart markup that was perfectly well formed.
+	got = bodyBoxes(t, `<div><em>a<span id="ib"><p>x</p></span>b</em></div>`,
+		"#ib { display: inline-block }")
+	shielded := `div block
+  em inline
+    text "a"
+    span inline/flow-root
+      p block
+        text "x"
+    text "b"
+`
+	if got != shielded {
+		t.Errorf("an inline-block did not shield the block inside it:\n%swant:\n%s",
+			got, shielded)
+	}
+
+	// The same markup with an ordinary inline splits instead, which is the
+	// contrast that makes the assertion above about flow-root and not about
+	// spans.
+	got = bodyBoxes(t, `<div><span id="ib">loose<p>block</p></span></div>`)
+	if strings.Contains(got, "flow-root") {
+		t.Errorf("an ordinary inline became a block container:\n%s", got)
+	}
+	if !strings.Contains(got, "p block") {
+		t.Errorf("the block was not lifted out of the inline:\n%s", got)
+	}
+}
+
 // TestWhitespaceBetweenBlocksMakesNoBox is the case that would otherwise put a
 // blank line into every well-formatted document. The newlines between two <p>
 // elements are text nodes, and wrapping each in an anonymous block would give
