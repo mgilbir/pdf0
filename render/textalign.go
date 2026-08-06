@@ -127,9 +127,18 @@ func (l *layouter) reportJustify(b *Box) {
 // stays in the runs so that the document's text is what the author wrote. It
 // still must not be counted here, or "pre-wrap" text would centre around
 // characters that mark no paper.
+//
+// An inline box's own margin, border and padding has no text either and is the
+// opposite case: it marks no paper and it is still part of what the line
+// occupies, because it is the box's own width and not a space that happened to
+// fall at the break. So it is stepped over rather than subtracted, which leaves
+// a hanging space *before* a closing margin still discounted.
 func alignedWidth(runs []inlineItem, total style.Unit) style.Unit {
 	for i := len(runs) - 1; i >= 0; i-- {
 		item := runs[i]
+		if item.inset {
+			continue
+		}
 		if item.atomicBox != nil || item.atomic != nil {
 			break
 		}
