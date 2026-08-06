@@ -134,6 +134,14 @@ type Box struct {
 	// ListItem marks a box that generates a marker — a bullet or a number.
 	ListItem bool
 
+	// Float and Clear are CSS 2.1 §9.5. They live on the box rather than being
+	// read out of Style at layout time for the same reason Outer and Inner do:
+	// whether a box is in the normal flow changes what the box tree itself is
+	// allowed to do to it — an anonymous block box is generated around a run of
+	// *in-flow* inline content, and a float in that run is not part of the run.
+	Float FloatSide
+	Clear ClearSide
+
 	Children []*Box
 	Parent   *Box
 }
@@ -294,9 +302,22 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	}
 
 	fontSize := b.fontSizeOf(n, parentFontSize)
+	float := floatOf(cs)
+	outer, inner = outOfFlowDisplay(outer, inner, float)
+	if outer == OuterBlock && inner == InnerFlow && overflowIsScrollable(cs) {
+		// CSS 2.1 §9.4.1: a block box whose overflow is anything but visible
+		// establishes a block formatting context. That is not a painting
+		// detail — it is what makes "overflow: hidden" the idiom for containing
+		// a float, because §10.6.7 gives a formatting-context root a height
+		// that includes the floats inside it. An engine that treated overflow
+		// as purely visual would leave the float sticking out of the box the
+		// author wrapped around it precisely to stop that.
+		inner = InnerFlowRoot
+	}
 	box := &Box{
 		Outer: outer, Inner: inner, Element: n, Style: cs,
 		ListItem: listItem, FontSize: fontSize,
+		Float: float, Clear: clearOf(cs),
 	}
 	// ::before and ::after bracket the element's own children rather than
 	// replacing them, which is why they are added here and not by the caller.
@@ -493,6 +514,79 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 	return OuterInline, InnerFlow, false
 }
 
+// floatOf and clearOf read the two out-of-flow properties.
+//
+// An unrecognised value gives the initial one, which is what the cascade would
+// have produced had the declaration been thrown out. "inline-start" and
+// "inline-end" are CSS Logical rather than CSS 2.1 and are not read here: they
+// need the writing mode, and answering them as "left" would be right for a
+// left-to-right document and silently wrong for the documents they exist for.
+func floatOf(cs style.ComputedStyle) FloatSide {
+	switch strings.ToLower(strings.TrimSpace(cs["float"])) {
+	case "left":
+		return FloatLeft
+	case "right":
+		return FloatRight
+	}
+	return FloatNone
+}
+
+func clearOf(cs style.ComputedStyle) ClearSide {
+	switch strings.ToLower(strings.TrimSpace(cs["clear"])) {
+	case "left":
+		return ClearLeft
+	case "right":
+		return ClearRight
+	case "both":
+		return ClearBoth
+	}
+	return ClearNone
+}
+
+// outOfFlowDisplay applies CSS 2.1 §9.7: a floated box's display is blockified.
+//
+// The table in §9.7 is what makes "float: left" work on a <span> without the
+// author also writing "display: block". It is a computed-value rule rather than
+// a layout one, and doing it here rather than in layout is what keeps the rest
+// of the engine from having to ask "is this inline box actually inline" at every
+// step — the box tree's invariant that an inline box takes part in a line is
+// only true if a float has already stopped being inline.
+//
+// A float also establishes a block formatting context of its own, which is the
+// half of §9.7 that is easy to forget and expensive to omit: without it the
+// margins of a float's first child would collapse out through its top edge, so
+// a floated <div> holding a <p> would be positioned an em above where the author
+// put it, and the floats inside it would escape into the surrounding context.
+func outOfFlowDisplay(outer Outer, inner Inner, float FloatSide) (Outer, Inner) {
+	if float == FloatNone || outer == OuterNone {
+		return outer, inner
+	}
+	switch inner {
+	case InnerFlow, InnerFlowRoot:
+		return OuterBlock, InnerFlowRoot
+	case InnerTable, InnerFlex:
+		// The two-value forms whose inner half survives blockification: an
+		// inline-table floats as a table, an inline-flex as a flex container.
+		return OuterBlock, inner
+	}
+	// The table-internal displays. §9.7 turns each into its block-level
+	// equivalent, and the honest one for a lone floated cell or row is a block.
+	return OuterBlock, InnerFlowRoot
+}
+
+// overflowIsScrollable reports whether either axis of overflow is something
+// other than visible.
+func overflowIsScrollable(cs style.ComputedStyle) bool {
+	for _, axis := range [2]string{"overflow-x", "overflow-y"} {
+		switch strings.ToLower(strings.TrimSpace(cs[axis])) {
+		case "", "visible":
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // twoValueDisplay reads the "outer inner" form.
 func twoValueDisplay(value string) (Outer, Inner, bool) {
 	parts := strings.Fields(value)
@@ -594,6 +688,15 @@ func isBlockContainer(b *Box) bool {
 // inside it.
 func containsBlock(b *Box) bool {
 	for _, c := range b.Children {
+		if c.Float != FloatNone {
+			// A float inside an inline box does not split it. §9.2.1.1 is about
+			// a *block-level box in the normal flow* appearing inside an inline
+			// formatting context, and a float is not in the flow: it is placed
+			// beside the line boxes rather than interrupting them. Splitting the
+			// inline around it would draw the inline's border twice and put a
+			// line break in the middle of a sentence.
+			continue
+		}
 		if c.Outer == OuterBlock {
 			return true
 		}
@@ -627,6 +730,13 @@ func splitInline(b *Box) []*Box {
 
 	for _, child := range b.Children {
 		switch {
+		case child.Float != FloatNone:
+			// Out of flow, so it does not interrupt the inline it sits in. It
+			// stays with the piece so that the inline formatting context which
+			// has to flow around it is the one it was written in.
+			child.Parent = piece
+			piece.Children = append(piece.Children, child)
+
 		case child.Outer == OuterBlock:
 			flush()
 			out = append(out, child)
@@ -660,6 +770,7 @@ func clonePiece(b *Box) *Box {
 		Outer: b.Outer, Inner: b.Inner,
 		Element: b.Element, Style: b.Style,
 		FontSize: b.FontSize, ListItem: b.ListItem,
+		Float: b.Float, Clear: b.Clear,
 	}
 }
 
@@ -688,9 +799,17 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 		return parent.Children
 	}
 
+	// A float does not count as a block-level child here, and does not end a run
+	// of inline content either. It is out of flow, so it neither needs an
+	// anonymous block around it nor forces one around the text beside it — and
+	// the text beside it is exactly what has to stay in one inline formatting
+	// context, because that context is what shortens its line boxes to make room
+	// for the float. Wrapping the text on each side of a float in its own
+	// anonymous block would give the float two separate contexts to flow around
+	// and neither would be the one it was placed in.
 	hasBlock := false
 	for _, c := range parent.Children {
-		if c.Outer == OuterBlock {
+		if c.Outer == OuterBlock && c.Float == FloatNone {
 			hasBlock = true
 			break
 		}
@@ -715,9 +834,14 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 			run = nil
 			return
 		}
+		// An anonymous box inherits and has nothing else. Handing it the
+		// parent's whole computed style would hand it the parent's margins,
+		// padding, borders and background too — so the anonymous block around a
+		// paragraph of text inside <body> would be indented by body's own
+		// margin, and the gap it left would look like a deliberate one.
 		anon := &Box{
 			Outer: OuterBlock, Inner: InnerFlow,
-			Style: parent.Style, Parent: parent,
+			Style: style.Inherited(parent.Style), Parent: parent,
 			FontSize: parent.FontSize,
 			Children: run,
 		}
@@ -729,7 +853,7 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 	}
 
 	for _, c := range parent.Children {
-		if c.Outer == OuterBlock {
+		if c.Outer == OuterBlock && c.Float == FloatNone {
 			flush()
 			out = append(out, c)
 			continue
@@ -744,6 +868,11 @@ func (b *boxBuilder) wrapInlines(parent *Box) []*Box {
 // collapsible white space.
 func allWhitespace(run []*Box) bool {
 	for _, c := range run {
+		if c.Float != FloatNone {
+			// A float in the run is content, even when every character around
+			// it is a space. Dropping the run would drop the float with it.
+			return false
+		}
 		if !c.IsText() {
 			return false
 		}

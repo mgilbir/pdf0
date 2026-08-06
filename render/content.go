@@ -127,9 +127,16 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	}
 
 	size := b.fontSizeOfStyle(cs, fontSize)
+	// A pseudo-element floats like any other box, and "p::before { content: '';
+	// float: left }" is how a stylesheet makes a drop cap or a decorative rule
+	// without adding an element to the markup — so the §9.7 blockification has
+	// to reach here too.
+	float := floatOf(cs)
+	outer, inner = outOfFlowDisplay(outer, inner, float)
 	box := &Box{
 		Outer: outer, Inner: inner, Element: n, Style: cs,
 		ListItem: listItem, FontSize: size,
+		Float: float, Clear: clearOf(cs),
 	}
 	// The text is not collapsed the way document text is: a content string is
 	// written by the author as the exact characters wanted, and "content: '  '"

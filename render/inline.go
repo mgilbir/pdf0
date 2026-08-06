@@ -78,37 +78,125 @@ type inlineItem struct {
 	// noWrap marks text that may not break at its spaces, so a line takes it
 	// whole or overflows.
 	noWrap bool
+	// float is the box of a float met in this run of inline content. It carries
+	// no text of its own: it is a marker saying "a float belongs here", because
+	// where a float appears among the words decides which line box it is placed
+	// against, and that position is lost once the items are on lines.
+	float *Box
 }
 
 // inlineContent lays a box's inline children into lines and returns the height
 // they need.
-func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit) style.Unit {
+//
+// # Why this drives the line breaking rather than calling it
+//
+// Before floats, every line in a block was the same width and the whole
+// paragraph could be broken in one go. It cannot be now. The width available to
+// a line depends on which floats overlap the y the line starts at, and that y
+// depends on how tall the lines above it were — so the available width is not
+// known until the previous line has been placed. Each line is therefore measured
+// against its own band, one at a time.
+//
+// The floats themselves are met *while* the lines are being built, which is the
+// second reason the loop is here: a float's position depends on the line it
+// appears on, and the lines after it depend on the float.
+func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, origin flow) style.Unit {
 	items, _ := l.collectInline(b, nil, false)
 	if len(items) == 0 {
 		return 0
 	}
 
 	lineHeight := l.lineHeight(b)
-	lines := l.breakLines(items, width)
+	baseline := l.baselineOf(b, lineHeight)
+	lo, hi := origin.x, origin.x.Add(width)
 
 	var y style.Unit
-	for _, runs := range lines {
-		line := LineFragment{
-			Rect:     Rect{X: 0, Y: y, W: width, H: lineHeight},
-			Baseline: l.baselineOf(b, lineHeight),
+	for i := 0; i < len(items); {
+		// A float that begins a line is placed before the line is measured,
+		// because it is one of the floats the line has to avoid. §9.5.1 rule 4
+		// puts its top at the top of the line box it belongs to.
+		for i < len(items) && items[i].float != nil {
+			parent.Children = append(parent.Children,
+				l.floatChild(items[i].float, width, origin, y, style.MaxUnit, 0, 0))
+			i++
 		}
-		var x style.Unit
-		for _, item := range runs {
-			line.Runs = append(line.Runs, TextRun{
-				Text: item.text, Face: item.face, Size: item.size,
-				X: x, Width: item.width, Box: item.box,
-			})
-			x = x.Add(item.width)
+		if i >= len(items) {
+			break
 		}
-		parent.Lines = append(parent.Lines, line)
-		y = y.Add(lineHeight)
+
+		left, right := origin.ctx.bandAt(origin.y.Add(y), lo, hi)
+		y, left, right = l.roomForLine(items[i], origin, y, left, right, lo, hi)
+
+		runs, next, mid, forced := l.breakOneLine(items, i, right.Sub(left))
+		if len(runs) > 0 || forced {
+			line := LineFragment{
+				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lineHeight},
+				Baseline: baseline,
+			}
+			var x style.Unit
+			for _, item := range runs {
+				line.Runs = append(line.Runs, TextRun{
+					Text: item.text, Face: item.face, Size: item.size,
+					X: x, Width: item.width, Box: item.box,
+				})
+				x = x.Add(item.width)
+			}
+			parent.Lines = append(parent.Lines, line)
+		}
+
+		// Floats met part-way along the line are placed once the line is
+		// settled, against the room that was left when each was reached.
+		for _, f := range mid {
+			parent.Children = append(parent.Children,
+				l.floatChild(f.box, width, origin, y, f.room, lineHeight, 0))
+		}
+
+		i = next
+		if len(runs) > 0 || forced {
+			// Only a line that exists occupies a line's height. A run of inline
+			// content that is nothing but the collapsible space between two
+			// block children produces no line box at all, and giving it one
+			// would put a blank line into every document whose markup is
+			// indented.
+			y = y.Add(lineHeight)
+		}
 	}
 	return y
+}
+
+// roomForLine moves a line down past floats that leave it no usable width.
+//
+// CSS 2.1 §9.5 says a line box that is too small to hold any content is shifted
+// downwards until it either fits or there are no floats left. Without this a
+// paragraph beside two facing floats would have every line clipped to nothing
+// and the text would vanish — a failure that produces a page with a hole in it
+// and no other symptom, which is the shape §6 exists to prevent.
+//
+// It moves only for the *first* item of the line. An item that does not fit on a
+// full-width line is genuinely too wide and is reported as an overflow rather
+// than chased down the page for ever.
+func (l *layouter) roomForLine(first inlineItem, origin flow, y, left, right, lo, hi style.Unit) (
+	style.Unit, style.Unit, style.Unit) {
+
+	for left != lo || right != hi {
+		if right.Sub(left) > 0 && (first.space || first.width <= right.Sub(left)) {
+			break
+		}
+		next, ok := origin.ctx.nextBottomBelow(origin.y.Add(y))
+		if !ok {
+			break
+		}
+		y = next.Sub(origin.y)
+		left, right = origin.ctx.bandAt(origin.y.Add(y), lo, hi)
+	}
+	return y, left, right
+}
+
+// midLineFloat is a float met after a line had already begun, together with how
+// much of that line was still free when it was reached.
+type midLineFloat struct {
+	box  *Box
+	room style.Unit
 }
 
 // collectInline flattens an inline subtree into measurable items.
@@ -124,6 +212,15 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit) sty
 // between them and set the whole phrase as one unbreakable word.
 func (l *layouter) collectInline(b *Box, out []inlineItem, pending bool) ([]inlineItem, bool) {
 	for _, child := range b.Children {
+		if child.Float != FloatNone {
+			// Out of flow, so it neither takes width on the line nor breaks it:
+			// it is recorded where it was written and placed when the line it
+			// belongs to is known. The pending break opportunity passes straight
+			// through, because "a <span class=float></span>b" is still one word
+			// followed by another with a space between them.
+			out = append(out, inlineItem{float: child})
+			continue
+		}
 		if child.IsText() {
 			var items []inlineItem
 			items, pending = l.itemsFor(child, pending)
@@ -321,26 +418,39 @@ func isIdeographic(r rune) bool {
 	return false
 }
 
-// breakLines puts items onto lines, greedily.
+// breakOneLine fills a single line, greedily, and says where the next one
+// starts.
 //
 // Greedy is what browsers do: a line takes what fits and the next one starts
 // after it. The alternative — minimising raggedness across a paragraph, which is
 // what TeX does — produces better-looking text and needs the whole paragraph
 // before any line is settled, which is a different shape of engine.
-func (l *layouter) breakLines(items []inlineItem, width style.Unit) [][]inlineItem {
-	var lines [][]inlineItem
-	var line []inlineItem
-	var used style.Unit
+//
+// One line at a time rather than the whole paragraph, because width is no longer
+// a property of the paragraph: with a float beside it, each line has its own.
+//
+// forced reports that the line ended at a break the author wrote, which is what
+// makes an empty line real — "a<br><br>b" leaves a blank line, and an engine
+// that dropped empty lines would close the gap up.
+func (l *layouter) breakOneLine(items []inlineItem, from int, width style.Unit) (
+	line []inlineItem, next int, floats []midLineFloat, forced bool) {
 
-	for i := 0; i < len(items); i++ {
+	var used style.Unit
+	i := from
+	for ; i < len(items); i++ {
 		item := items[i]
+
+		if item.float != nil {
+			// Recorded with the room that was left when it was reached, which is
+			// what decides whether it goes beside this line or below it.
+			floats = append(floats, midLineFloat{box: item.float, room: width.Sub(used)})
+			continue
+		}
 
 		if item.forced {
 			// An instruction rather than an opportunity: the line ends here
 			// whatever room is left, and an empty one still occupies its height.
-			lines = append(lines, trimTrailingSpaces(line))
-			line, used = nil, 0
-			continue
+			return trimTrailingSpaces(line), i + 1, floats, true
 		}
 
 		// A space at the start of a line is dropped: it is the space the break
@@ -350,11 +460,7 @@ func (l *layouter) breakLines(items []inlineItem, width style.Unit) [][]inlineIt
 		}
 
 		if !item.noWrap && used.Add(item.width) > width && len(line) > 0 && item.breakBefore {
-			lines = append(lines, trimTrailingSpaces(line))
-			line, used = nil, 0
-			if item.space {
-				continue
-			}
+			return trimTrailingSpaces(line), i, floats, false
 		}
 
 		// A single item wider than the line has nowhere to go. It is placed and
@@ -368,10 +474,7 @@ func (l *layouter) breakLines(items []inlineItem, width style.Unit) [][]inlineIt
 		line = append(line, item)
 		used = used.Add(item.width)
 	}
-	if len(line) > 0 {
-		lines = append(lines, trimTrailingSpaces(line))
-	}
-	return lines
+	return trimTrailingSpaces(line), i, floats, false
 }
 
 // reportOverflow names content too wide for the box holding it.

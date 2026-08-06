@@ -59,6 +59,13 @@ var properties = map[string]property{
 	"padding-left":   {false, "0"},
 	"box-sizing":     {false, "content-box"},
 
+	// Out-of-flow positioning by the one mechanism CSS had before there was a
+	// positioning scheme. Neither inherits: a float that inherited would make
+	// every descendant of a floated sidebar float too, which is the opposite of
+	// what an author writing "float: left" on one box means.
+	"float": {false, "none"},
+	"clear": {false, "none"},
+
 	// Borders.
 	"border-top-width":    {false, "medium"},
 	"border-right-width":  {false, "medium"},
@@ -116,6 +123,31 @@ var properties = map[string]property{
 	"overflow-x": {false, "visible"},
 	"overflow-y": {false, "visible"},
 	"opacity":    {false, "1"},
+}
+
+// Inherited returns the style an anonymous box has: everything that inherits
+// taken from the box it was generated inside, and everything that does not at
+// its initial value.
+//
+// This is what the specification means by an anonymous box having no style of
+// its own. It matters far more than it sounds, because the obvious shortcut —
+// giving the anonymous box its parent's whole computed style — makes it a copy
+// of the parent's *box model* as well: the anonymous block wrapped around a run
+// of text inside <body> would take body's 8px margin, indent the text by it, and
+// separate it from the block after it by a gap the author never wrote. Every
+// number in that document is then plausible and wrong.
+func Inherited(cs ComputedStyle) ComputedStyle {
+	out := make(ComputedStyle, len(properties))
+	for name, prop := range properties {
+		if prop.inherits {
+			if v, ok := cs[name]; ok {
+				out[name] = v
+				continue
+			}
+		}
+		out[name] = prop.initial
+	}
+	return out
 }
 
 // shorthands expands a shorthand into the longhands it sets.
