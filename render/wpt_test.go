@@ -126,7 +126,7 @@ const wptEnv = "WPT_TESTS"
 // this one, where they wait on something else that is still unimplemented. That
 // is the ratchet working as designed — a test counts here only once nothing in
 // either document is missing.
-const wptCleanPassBaseline = 1916
+const wptCleanPassBaseline = 1981
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
