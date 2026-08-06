@@ -342,7 +342,7 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 
 	// A declared height, resolved here rather than by block layout because only
 	// here is the containing block's height definite.
-	declaredHeight, hasHeight := l.absoluteLength(b, "height", cb.H)
+	declaredHeight, hasHeight := l.absoluteSize(b, "height", cb.H, cb.W)
 	if replaced != nil {
 		declaredHeight, hasHeight = replaced.H, true
 	}
@@ -439,6 +439,27 @@ func (l *layouter) absoluteLength(b *Box, property string, basis style.Unit) (st
 		return 0, false
 	}
 	return length.Resolve(basis, true)
+}
+
+// absoluteSize is absoluteLength for the two properties box-sizing governs.
+//
+// §10.3.7 solves for a *content* width, and the constraint it solves has the
+// padding and the border in it separately as "fixed" — so a declared width that
+// already includes them has to have them taken out before it enters the
+// equation, or the box is as much too wide as its own padding twice over.
+// padBasis is what a percentage padding resolves against, which is the
+// containing block's *width* on both axes — so it is passed separately rather
+// than reusing basis, which for a height is the containing block's height.
+func (l *layouter) absoluteSize(b *Box, property string, basis, padBasis style.Unit) (style.Unit, bool) {
+	v, ok := l.absoluteLength(b, property, basis)
+	if !ok {
+		return 0, false
+	}
+	horizontal, vertical := l.sizingInset(b, padBasis)
+	if property == "height" {
+		return maxZero(v.Sub(vertical)), true
+	}
+	return maxZero(v.Sub(horizontal)), true
 }
 
 // axisSolution is what solving one axis of the constraint produces.
@@ -609,7 +630,7 @@ func (l *layouter) solveHorizontal(b *Box, cb Rect, border, padding, margin Edge
 
 	left, leftAuto := l.offsetValue(b, "left", cb.W, true)
 	right, rightAuto := l.offsetValue(b, "right", cb.W, true)
-	width, hasWidth := l.absoluteLength(b, "width", cb.W)
+	width, hasWidth := l.absoluteSize(b, "width", cb.W, cb.W)
 	if replaced != nil {
 		width, hasWidth = replaced.W, true
 	}

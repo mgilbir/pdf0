@@ -203,6 +203,13 @@ type rowRun struct {
 // differ only in where the count comes from.
 func (l *layouter) collectColumns(table *Box, g *tableGrid) {
 	add := func(col *Box, n int) {
+		if col != nil {
+			// A column box never reaches block layout — it produces no fragment of
+			// its own — so the two value checks blockIn makes for every other box
+			// are asked here.
+			l.checkVisibility(col)
+			l.checkTableBoxSizing(col)
+		}
 		for i := 0; i < n && len(g.colBoxes) < maxTableColumns; i++ {
 			g.colBoxes = append(g.colBoxes, col)
 		}
@@ -1303,6 +1310,10 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 		if rg.count == 0 {
 			continue
 		}
+		// A row group's fragment is made here rather than by block layout, so the
+		// two value checks every other box gets in blockIn are asked here instead.
+		l.checkVisibility(rg.box)
+		l.checkTableBoxSizing(rg.box)
 		last := rg.first + rg.count - 1
 		groupFrags[i] = &Fragment{
 			Box: rg.box,
@@ -1314,6 +1325,8 @@ func (l *layouter) assembleRows(parent *Fragment, g *tableGrid, placed []placedC
 		parent.Children = append(parent.Children, groupFrags[i])
 	}
 	for r, info := range g.rows {
+		l.checkVisibility(info.box)
+		l.checkTableBoxSizing(info.box)
 		frag := &Fragment{
 			Box:        info.box,
 			BorderRect: Rect{X: s.h, Y: rowY[r], W: gridWidth, H: rowH[r]},

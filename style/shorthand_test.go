@@ -241,6 +241,48 @@ func TestTextDecorationShorthand(t *testing.T) {
 	}
 }
 
+// TestTextDecorationTakesSeveralLines pins that the line part is a set.
+//
+// "underline overline" is one declaration asking for two lines, and the value
+// has to survive as both — an expander that kept the first would produce a page
+// with one line on it and a finding blaming the second, which describes the
+// engine's own reading rather than anything unimplemented.
+func TestTextDecorationTakesSeveralLines(t *testing.T) {
+	cs := expandOf(t, "text-decoration: underline overline")
+	if cs["text-decoration-line"] != "underline overline" {
+		t.Errorf("line is %q, want %q", cs["text-decoration-line"], "underline overline")
+	}
+	// In either order, and with a colour among them.
+	cs = expandOf(t, "text-decoration: red line-through underline")
+	if cs["text-decoration-line"] != "line-through underline" {
+		t.Errorf("line is %q, want %q", cs["text-decoration-line"], "line-through underline")
+	}
+	if cs["text-decoration-color"] != "red" {
+		t.Errorf("colour is %q, want red", cs["text-decoration-color"])
+	}
+}
+
+// TestTextDecorationRefusesAnImpossibleSet pins the two combinations that are
+// not values at all.
+//
+// The assertion is against the *initial* value in a document where an earlier
+// declaration set something else, because "none" is text-decoration-line's own
+// initial value: a test that only checked for "none" would pass just as happily
+// if the declaration had been accepted and read as none.
+func TestTextDecorationRefusesAnImpossibleSet(t *testing.T) {
+	for _, bad := range []string{
+		"text-decoration: none underline",
+		"text-decoration: underline none",
+		"text-decoration: underline underline",
+	} {
+		cs := expandOf(t, "text-decoration: overline; "+bad)
+		if cs["text-decoration-line"] != "overline" {
+			t.Errorf("%q gave %q; an invalid shorthand sets nothing, so the earlier "+
+				"declaration stands", bad, cs["text-decoration-line"])
+		}
+	}
+}
+
 // TestShorthandWideKeywordsReachEveryLonghand pins that "border: inherit" sets
 // all twelve longhands. The list is declared rather than discovered precisely so
 // that this works — there is no value to probe an expander with here.

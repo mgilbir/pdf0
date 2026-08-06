@@ -103,6 +103,19 @@ type TextRun struct {
 	// Box is the inline box the text came from, which carries the colour and
 	// the decoration painting will need.
 	Box *Box
+	// Decorations are the lines ruled across this run: CSS 2.1 §16.3.1's
+	// underline, overline and line-through. They are on the run rather than
+	// derived from Box at paint time because a decoration belongs to whichever
+	// *ancestor* declared it, and that box's colour is the line's colour — see
+	// textdecoration.go, where the difference between propagating and inheriting
+	// is worked through.
+	Decorations []textDecoration
+	// LetterSpacing is what letter-spacing added after each character of this
+	// run. It is carried into painting as well as into the width because the two
+	// have to agree: the width decided where the next run starts, and glyphs
+	// drawn without the same spacing would leave a gap the size of the whole
+	// run's spacing before it.
+	LetterSpacing style.Unit
 	// Offset is §9.4.3's relative displacement, accumulated over the inline
 	// boxes this run sits inside.
 	//
@@ -226,6 +239,11 @@ type inlineItem struct {
 	// "sub", a "super", a length or a percentage adds on top of it.
 	align vAlign
 	raise style.Unit
+	// decorations are the lines ruled across this item, and spacing is what
+	// letter-spacing and word-spacing added to its width. Both travel with the
+	// item because the flattening loses the boxes they were read from.
+	decorations []textDecoration
+	spacing     textSpacing
 	// abs is the box of an absolutely positioned box met in this run, and it is
 	// a marker for the same reason and a different consequence. A float met
 	// among the words changes where the words go; an absolutely positioned one
@@ -251,18 +269,16 @@ type inlineItem struct {
 // second reason the loop is here: a float's position depends on the line it
 // appears on, and the lines after it depend on the float.
 //
-// # text-align is not applied here, and that is a gap rather than a decision
+// # What decides where a finished line sits
 //
-// Every run is placed from the line box's start edge. text-align is in the
-// property registry — so the cascade accepts it, and nothing reports it — and
-// no stage acts on it, which is precisely the shape §6.3 exists to prevent: a
-// centred heading comes out left-aligned and the author is told nothing.
-//
-// It is named here because it is what makes the *other* half of §4.1.2's
-// trailing-space rule invisible. A hanging space is excluded from the width a
-// line is measured at "for fit, alignment, or justification"; the fit and the
-// intrinsic sizing are done, the alignment cannot be until there is an
-// alignment to do.
+// Two things move a line's content within the band it was measured against, and
+// they are added rather than chosen between: §16.1's text-indent, which applies
+// to the first line box only and is taken off the room that line has for text,
+// and §16.2's text-align, which distributes whatever is left over. Both are
+// applied after the line has been broken, because the width a line is *aligned*
+// at is not the width it was *broken* at — §4.1.2 excludes a hanging space "for
+// fit, alignment, or justification", and the fit has already happened. textalign.go
+// has the rest of that argument.
 func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, origin flow) style.Unit {
 	st := l.strutFor(b)
 	items, _ := l.collectInline(b, nil, startOfContext(), inlineFrame{
@@ -274,6 +290,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	}
 
 	lo, hi := origin.x, origin.x.Add(width)
+
+	// §16.1's indent, which applies to the first line box this container
+	// generates and to no other. It is resolved once: a percentage is of this
+	// box's own content width, which is the width being laid out in.
+	indent := l.textIndent(b, width)
+	firstLine := true
 
 	var y style.Unit
 	for i := 0; i < len(items); {
@@ -293,7 +315,18 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		y, left, right = l.roomForLine(items[i], origin, y, left, right, lo, hi)
 		lineWidth := right.Sub(left)
 
-		runs, next, mid, forced := l.breakOneLine(items, i, lineWidth, left.Sub(lo))
+		// The indent is taken off the room the first line has for text, not off
+		// the line box: the line box still spans the band, and its content starts
+		// further in. Taking it off the box instead would make a "text-align:
+		// right" first line end short of the right edge by the indent, which is
+		// the opposite of what §16.1 asks for.
+		lineIndent := style.Unit(0)
+		if firstLine {
+			lineIndent = indent
+		}
+		textWidth := lineWidth.Sub(lineIndent)
+
+		runs, next, mid, forced := l.breakOneLine(items, i, textWidth, left.Sub(lo).Add(lineIndent))
 		lh, bl := stackLine(runs, st)
 		if len(runs) > 0 || forced {
 			line := LineFragment{
@@ -326,10 +359,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				line.Runs = append(line.Runs, TextRun{
 					Text: item.text, Face: item.face, Size: item.size,
 					X: x, Width: item.width, Box: item.box, Offset: item.offset,
+					Decorations: item.decorations, LetterSpacing: item.spacing.letter,
 				})
 				x = x.Add(item.width)
 			}
-			if shift := l.alignLine(b, line.Rect.W, alignedWidth(runs, x)); shift != 0 {
+			if shift := lineIndent.Add(l.alignLine(b, textWidth, alignedWidth(runs, x))); shift != 0 {
 				for k := range line.Runs {
 					line.Runs[k].X = line.Runs[k].X.Add(shift)
 				}
@@ -339,6 +373,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				}
 			}
 			parent.Lines = append(parent.Lines, line)
+			// The indent belongs to the first line box that actually exists. A run
+			// of inline content that produced none — the collapsible space between
+			// two block children — has not used it up.
+			firstLine = false
 		}
 
 		// The out-of-flow boxes met along the line are dealt with once the line
@@ -704,7 +742,7 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", frame.containing)
 
-	width, ok := l.lengthOf(b, "width", frame.containing)
+	width, ok := l.explicitWidth(b, frame.containing)
 	if !ok {
 		room := frame.containing.
 			Sub(margin.Horizontal()).
@@ -909,6 +947,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, offset Point) ([]inlineItem,
 
 	size := b.FontSize
 	ws := whiteSpaceOf(b.Style["white-space"])
+	// Both are read once per text box rather than once per piece: they are
+	// inherited properties, so every piece of one box has the same answer, and
+	// the decorations are memoized across the whole tree besides.
+	decorations := l.decorationsFor(b)
+	spacing := l.spacingFor(b)
 	pieces, endedAtBreak := splitAtBreaks(b.Text, ws)
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
@@ -955,13 +998,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, offset Point) ([]inlineItem,
 			// which exists precisely so that it does not.
 			hangs:  p.space && !p.collapsible && !ws.breakSpaces,
 			noWrap: !ws.wrap, offset: offset,
+			decorations: decorations, spacing: spacing,
 		}
 		if !p.tab {
 			// A tab is measured against a tab stop when it lands, so there is
 			// nothing to measure here and the face's own advance for U+0009 —
 			// whatever a face happens to give a character it has no glyph for —
 			// would be the wrong number to carry.
-			item.width = l.measure(face, p.text, size)
+			item.width = l.measureSpaced(face, p.text, size, spacing)
 		}
 		out = append(out, item)
 		state = inlineState{afterCollapsibleSpace: p.collapsible}
@@ -1010,30 +1054,49 @@ func tabAdvance(x, stop style.Unit) style.Unit {
 	return stop.Sub(x % stop)
 }
 
-// measure returns the advance width of a string, memoized.
+// measure returns the advance width of a string in a face, memoized.
+//
+// It is the face's own advance and nothing else, which is what the three callers
+// that use it want: a tab stop is a multiple of the space advance, "ch" is the
+// advance of a zero, and a list marker is set without the text's spacing. Text
+// that is laid out on a line goes through measureSpaced instead.
+func (l *layouter) measure(face *fonts.Face, text string, size style.Unit) style.Unit {
+	return l.measureSpaced(face, text, size, textSpacing{})
+}
+
+// measureSpaced is the advance of a run as it will be set, with letter-spacing
+// and word-spacing in it.
 //
 // Measuring is the inner loop of line breaking, and the same words recur
 // constantly in a document — every "the" in a page measures the same. The key
-// includes the face and the size because both scale the answer.
-func (l *layouter) measure(face *fonts.Face, text string, size style.Unit) style.Unit {
+// includes the face and the size because both scale the answer, and the spacing
+// because it changes it: two boxes at the same size in the same face with
+// different letter-spacing must not share an entry. Leaving it out of the key is
+// the same memoization bug lengthKey.zeroAdvance records for the "ch" unit, and
+// it produces a wrong page only in a document that uses two values.
+func (l *layouter) measureSpaced(face *fonts.Face, text string, size style.Unit,
+	sp textSpacing) style.Unit {
+
 	if text == "" {
 		return 0
 	}
-	key := measureKey{face: face, text: text, size: size}
+	key := measureKey{face: face, text: text, size: size, spacing: sp}
 	if got, ok := l.measured[key]; ok {
 		return got
 	}
 	// Measure returns the advance in the units the size was given in, so a size
 	// in CSS pixels gives an advance in CSS pixels.
 	w, _ := style.FromPx(face.Measure(text, size.Px()))
+	w = w.Add(spacingAdvance(text, sp))
 	l.measured[key] = w
 	return w
 }
 
 type measureKey struct {
-	face *fonts.Face
-	text string
-	size style.Unit
+	face    *fonts.Face
+	text    string
+	size    style.Unit
+	spacing textSpacing
 }
 
 // piece is a run of text between two break opportunities, together with what
@@ -1260,7 +1323,11 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 		}
 
 		if item.tab {
-			item.width = tabAdvance(lineX.Add(used), item.tabStop)
+			// The distance to the next tab stop, plus whatever letter-spacing adds
+			// after the character — a tab is a character like any other for that
+			// purpose, and leaving it out would put the run after a tab a spacing
+			// to the left of where it is drawn.
+			item.width = tabAdvance(lineX.Add(used), item.tabStop).Add(item.spacing.letter)
 		}
 
 		// A hanging space never causes a break: it sits past the line's end
@@ -1331,10 +1398,12 @@ func fmtPx(u style.Unit) string {
 // wrote from the document's text, which is the same class of fault as the
 // missing spaces that once made "A heading" extract as "Aheading".
 //
-// What the hanging currently affects is the break decision — hangs is what
-// stops a trailing space pushing the next word down a line — and nothing else,
-// because §4.1.2's other consumers of it are alignment and justification and
-// this engine does neither. See the note on text-align in inlineContent.
+// What the hanging affects is the break decision — hangs is what stops a
+// trailing space pushing the next word down a line — and the alignment, which
+// alignedWidth discounts it from so that a centred line does not sit half a
+// space off centre. Justification is the one consumer §4.1.2 names that this
+// engine still does not have, and textalign.go reports it rather than setting
+// justified text ragged in silence.
 func trimLineEdge(line []inlineItem) []inlineItem {
 	for len(line) > 0 && line[len(line)-1].collapsible {
 		line = line[:len(line)-1]

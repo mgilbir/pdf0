@@ -318,26 +318,57 @@ func joinParts(parts ...[]css.ComponentValue) []css.ComponentValue {
 	return out
 }
 
-// textDecorationShorthand expands "text-decoration": a line and a colour.
+// textDecorationShorthand expands "text-decoration": the lines and a colour.
+//
+// The line part is a *set* rather than a single keyword — "text-decoration:
+// underline overline" is one declaration asking for two lines — so the keywords
+// are gathered rather than the first one taken. An earlier version kept only the
+// first and reported the second as a part it could not produce, which was a
+// finding about the engine's own reading rather than about anything unimplemented.
+//
+// "none" cannot be combined with anything, and a repeated keyword is not a valid
+// value either; both make the whole declaration invalid, which sets nothing at
+// all rather than the parts that happened to parse.
 func textDecorationShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
-	line, colour := ident("none"), ident("currentcolor")
-	var seenLine, seenColour bool
+	var lines []css.ComponentValue
+	colour := ident("currentcolor")
+	var seenNone, seenColour bool
+	seen := map[string]bool{}
 	var unsupported []string
 
 	for _, part := range splitOnWhitespace(vals) {
 		switch {
-		case isDecorationLine(part) && !seenLine:
-			line, seenLine = part, true
+		case isDecorationLine(part):
+			name := strings.ToLower(part[0].Token.Value)
+			if seen[name] || seenNone || (name == "none" && len(lines) > 0) {
+				return nil, nil, false
+			}
+			seen[name] = true
+			seenNone = name == "none"
+			if len(lines) > 0 {
+				lines = append(lines, css.ComponentValue{
+					Token: css.Token{Kind: css.Whitespace},
+				})
+			}
+			lines = append(lines, part...)
 		case isColour(part) && !seenColour:
 			colour, seenColour = part, true
 		case isIdentPart(part):
+			// A keyword this engine understood as belonging to the shorthand and
+			// cannot produce: "blink", or one of the CSS Text Decoration 3 styles
+			// such as "wavy".
 			unsupported = append(unsupported, serialize(part))
 		default:
 			return nil, nil, false
 		}
 	}
+	if len(lines) == 0 {
+		// The shorthand resets what it does not mention, so a declaration that
+		// named only a colour still turns the lines off.
+		lines = ident("none")
+	}
 	return map[string][]css.ComponentValue{
-		"text-decoration-line":  line,
+		"text-decoration-line":  lines,
 		"text-decoration-color": colour,
 	}, unsupported, true
 }
