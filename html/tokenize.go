@@ -158,10 +158,65 @@ func (t *tokenizer) rawValue(s string, off int) string {
 	return s
 }
 
+// hasPrefixFold and indexFold are case-insensitive prefix and substring
+// searches over ASCII, and they exist because the obvious spellings of both are
+// quadratic on a document this engine is expected to take from anywhere.
+//
+// "strings.HasPrefix(strings.ToLower(src[pos:]), ...)" lowercases everything
+// from the cursor to the end of the file, and it sat in the path taken at *every*
+// "<". A document of forty thousand tags therefore lowercased its own length
+// forty thousand times: forty gigabytes of work for a megabyte of HTML, which
+// measured at sixty-six seconds while the same document's layout took a third of
+// one. Anything past a few hundred kilobytes of small elements was effectively a
+// hang, reachable by anyone who could hand this engine a file.
+//
+// Only ASCII is folded, which is what the HTML syntax needs: tag and doctype
+// names are ASCII, and folding beyond it would make "İ" a match for "i".
+func hasPrefixFold(s, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		if lowerASCII(s[i]) != lowerASCII(prefix[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// indexFold returns the first index of a substring, ignoring ASCII case.
+//
+// The scan is anchored on the first byte so that the inner comparison runs only
+// where it can succeed, which keeps the search linear in the source rather than
+// in the source times the needle.
+func indexFold(s, sub string) int {
+	if sub == "" {
+		return 0
+	}
+	first := lowerASCII(sub[0])
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if lowerASCII(s[i]) != first {
+			continue
+		}
+		if hasPrefixFold(s[i:], sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+func lowerASCII(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
+}
+
 // findEndTag locates "</name" followed by a tag terminator, from position i.
 func (t *tokenizer) findEndTag(name string, i int) int {
+	want := "</" + name
 	for {
-		j := strings.Index(strings.ToLower(t.src[i:]), "</"+name)
+		j := indexFold(t.src[i:], want)
 		if j < 0 {
 			return -1
 		}
@@ -190,7 +245,7 @@ func (t *tokenizer) markup() token {
 		return t.next()
 	}
 
-	if strings.HasPrefix(strings.ToLower(t.src[t.pos:]), "<!doctype") {
+	if hasPrefixFold(t.src[t.pos:], "<!doctype") {
 		return t.doctype()
 	}
 
