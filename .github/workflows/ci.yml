@@ -95,11 +95,13 @@ jobs:
             testdata/pdf20examples
             testdata/facturx
             testdata/unicode-bidi
+            testdata/wpt
+            testdata/fonts-noto
           key: corpora-${{ hashFiles('Makefile', 'testdata/facturx/sources.tsv') }}
 
       - name: fetch corpora
         if: steps.corpora.outputs.cache-hit != 'true'
-        run: make corpus arlington refpdfs facturx bidi-tests
+        run: make corpus arlington refpdfs facturx bidi-tests wpt noto-fonts
 
       # A half-finished fetch must be red, not green. The corpus-gated tests skip
       # when their directory is empty, and a skip reads as a pass: this repository
@@ -134,6 +136,27 @@ jobs:
           # bracket pairing, and a fetch that got only the other would leave that
           # rule unchecked while the job stayed green.
           check testdata/unicode-bidi            '*.txt'    2
+          # The Web Platform Tests, which the layout ratchet is measured over. A
+          # sparse checkout that fetched no directory at all still leaves the
+          # repository root, and TestWPTReftests skips on an unset variable and
+          # *passes* on an empty one — so the count is what stops a fetch failure
+          # reading as a clean run of a suite that was not there.
+          # The thresholds sit below the counts a good fetch produces (7946 and
+          # 1292 when this was written) with room for the suite to change, and
+          # they were checked against a real checkout — the first pair guessed
+          # high and would have failed CI on a correct fetch.
+          check testdata/wpt                     '*.xht'  7000
+          check testdata/wpt                     '*.html' 1200
+          # Ahem is a single file and a quarter of the suite is written against
+          # it. Without it those tests still run, against a fallback whose
+          # metrics are not square, and the clean-pass count drops by about 180
+          # — a red ratchet rather than a silent one, but the reason would take
+          # an afternoon to find. Checking it here says so immediately.
+          check testdata/wpt/fonts               'Ahem.ttf' 1
+          # The fallback faces for the scripts the standard fourteen do not
+          # have. Absent, the engine reports a missing glyph instead of setting
+          # the text, which is a different rendering and not a skipped test.
+          check testdata/fonts-noto              '*.ttf'    8
 
       - name: conformance ratchets
         env:
@@ -141,4 +164,7 @@ jobs:
           # Absolute, because `go test ./internal/bidi/` runs with the package
           # directory as its working directory and not the repository root.
           UNICODE_BIDI_TESTS: ${{ github.workspace }}/testdata/unicode-bidi
+          # Absolute for the same reason: ./render/ runs in its own directory.
+          WPT_TESTS: ${{ github.workspace }}/testdata/wpt
+          NOTO_FONTS: ${{ github.workspace }}/testdata/fonts-noto
         run: go test ./... -count=1
