@@ -115,6 +115,10 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		intrinsic:        map[*Box]intrinsicWidths{},
 		positioned:       map[*Box]*Fragment{},
 		fontSet:          set,
+		rootFontSize:     root.FontSize,
+	}
+	if l.rootFontSize == 0 {
+		l.rootFontSize = defaultFontSize
 	}
 	if l.fontSet == nil {
 		l.fontSet = StandardFonts()
@@ -207,6 +211,11 @@ type layouter struct {
 	positioned map[*Box]*Fragment
 	// fontSet is where faces come from.
 	fontSet FontSet
+	// rootFontSize is the font-size of the root element, which is what "rem"
+	// resolves against. It is settled once, before the walk: the point of rem is
+	// that it does not compound as elements nest, so reading it from the box in
+	// hand — as this did — makes it a synonym for em.
+	rootFontSize style.Unit
 	// relayouts counts the subtrees that had to be laid out a second time
 	// because the position predicted for them turned out to be wrong. It is
 	// bounded: see maxRelayouts.
@@ -222,6 +231,12 @@ type layouter struct {
 type lengthKey struct {
 	value    string
 	fontSize style.Unit
+	// zeroAdvance is part of the key because "ch" resolves against the face, so
+	// two boxes at the same size in different fonts do not share an answer.
+	// Leaving it out would have made the first font to parse "40ch" decide it
+	// for every other — a memoization bug, which is the kind that produces a
+	// wrong page only when a document uses two fonts.
+	zeroAdvance style.Unit
 }
 
 // collapsed is what a box contributes to its parent's flow once its own margins
@@ -887,24 +902,65 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 	if raw == "" {
 		return style.Length{}, false
 	}
-	key := lengthKey{value: raw, fontSize: b.FontSize}
+	// The face is resolved only for a value that needs it. Asking for one has
+	// side effects — fontFor reports a fallback when the requested family is
+	// missing — so resolving it for every length would make a box that merely
+	// declares an unavailable font report it without ever setting any text. It
+	// is also a measurement per property, on the hot path of layout.
+	var zero style.Unit
+	var haveMetrics bool
+	if usesCh(raw) {
+		zero, haveMetrics = l.zeroAdvance(b)
+	}
+	key := lengthKey{value: raw, fontSize: b.FontSize, zeroAdvance: zero}
 	if got, ok := l.lengths[key]; ok {
 		return got, true
 	}
 
 	vals, _ := css.ParseComponentValues(raw)
 	length, _, ok := style.ParseLength(vals, style.LengthContext{
-		FontSize:       b.FontSize,
-		RootFontSize:   b.FontSize,
-		ViewportWidth:  l.avail.W,
-		ViewportHeight: l.avail.H,
-		ViewportKnown:  true,
+		FontSize:         b.FontSize,
+		RootFontSize:     l.rootFontSize,
+		ViewportWidth:    l.avail.W,
+		ViewportHeight:   l.avail.H,
+		ViewportKnown:    true,
+		ZeroAdvance:      zero,
+		FontMetricsKnown: haveMetrics,
 	})
 	if !ok {
 		return style.Length{}, false
 	}
 	l.lengths[key] = length
 	return length, true
+}
+
+// usesCh reports whether a value might carry a "ch" length.
+//
+// It is a cheap over-approximation: a false positive costs one face lookup that
+// the parse then does not use, and a false negative would silently resolve "ch"
+// against no font at all. The unit is always preceded by a digit, which is what
+// keeps "inherit" and a family name containing the letters from matching.
+func usesCh(raw string) bool {
+	for i := 0; i+1 < len(raw); i++ {
+		if (raw[i] == 'c' || raw[i] == 'C') && (raw[i+1] == 'h' || raw[i+1] == 'H') &&
+			i > 0 && raw[i-1] >= '0' && raw[i-1] <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// zeroAdvance is the width of "0" in a box's own font, which is what "ch" means.
+//
+// It reports false when no face could be found, so that a "ch" length is
+// unresolvable — and therefore reported — rather than silently zero, which would
+// collapse the box the author was trying to size.
+func (l *layouter) zeroAdvance(b *Box) (style.Unit, bool) {
+	face, ok := l.fontFor(b)
+	if !ok {
+		return 0, false
+	}
+	return l.measure(face, "0", b.FontSize), true
 }
 
 func (l *layouter) ensureFontSize(b *Box) {

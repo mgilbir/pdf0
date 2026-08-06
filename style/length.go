@@ -87,14 +87,21 @@ type LengthContext struct {
 	// zero.
 	ViewportWidth, ViewportHeight Unit
 	ViewportKnown                 bool
+
+	// ZeroAdvance is the width of "0" in the element's own font, which is what
+	// "ch" is. It is zero when no face has been chosen — during the cascade,
+	// where a length is parsed before layout knows what will set it — and
+	// FontMetricsKnown says which of the two a zero means.
+	ZeroAdvance      Unit
+	FontMetricsKnown bool
 }
 
 // ParseLength reads a length from component values.
 //
 // unsupported distinguishes a unit that is correct CSS this engine does not
-// resolve — "3ex" needs the font's x-height, which is not threaded here yet —
-// from input that is not a length at all. The caller reports them differently,
-// because they send an author to different places.
+// resolve — "3lh" needs the line height, which is not threaded here — from input
+// that is not a length at all. The caller reports them differently, because they
+// send an author to different places.
 func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupported bool, ok bool) {
 	parts := splitOnWhitespace(vals)
 	if len(parts) != 1 || len(parts[0]) != 1 {
@@ -182,6 +189,27 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 	case "rem":
 		return ctx.RootFontSize.Px(), true, true
 
+	// ch is the advance of "0" in the element's own font. It is what an author
+	// reaches for to size a box in characters — "width: 40ch" is a column forty
+	// digits wide — and it is exact for the monospaced fonts that use is nearly
+	// always about.
+	case "ch":
+		if !ctx.FontMetricsKnown {
+			return 0, false, true
+		}
+		return ctx.ZeroAdvance.Px(), true, true
+
+	// ex is the font's x-height.
+	//
+	// The face layer does not carry one: OS/2 has the field but forme's
+	// descriptor stops at cap height, and recovering it would mean measuring the
+	// outline of "x". CSS Values §5.1.2 settles what to do — "in the cases where
+	// it is impossible or impractical to determine the x-height, a value of
+	// 0.5em must be assumed" — so this is the specified answer rather than an
+	// approximation standing in for one.
+	case "ex":
+		return ctx.FontSize.Px() / 2, true, true
+
 	// The viewport units, and the small/large/dynamic variants of them.
 	//
 	// The variants exist because a phone's viewport changes as its toolbars come
@@ -231,8 +259,9 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 // chooses. The container ones need a container query, which needs a layout pass
 // before the cascade. The logical ones need a writing mode.
 var unresolvedUnits = map[string]bool{
-	// Font-relative, needing metrics from the chosen face.
-	"ex": true, "ch": true, "cap": true, "ic": true,
+	// Font-relative, needing metrics from the chosen face. "ex" and "ch" are
+	// resolved; the rest need a metric the face layer does not carry.
+	"cap": true, "ic": true,
 	"rex": true, "rch": true, "rcap": true, "ric": true,
 	"lh": true, "rlh": true,
 	// Container-relative.
