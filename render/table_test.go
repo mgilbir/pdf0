@@ -1,7 +1,10 @@
 package render
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/style"
 )
 
 // Tables, CSS 2.1 §17.
@@ -206,6 +209,456 @@ func TestCaptionSide(t *testing.T) {
 			t.Errorf("caption-side:%s puts %v first, want %v",
 				tc.side, wrapper.Children[0].Inner, tc.first)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+// The layout tests assert absolute numbers against §17's own arithmetic, which
+// is the point of them: the reftest oracle next door compares two documents
+// rendered by the same engine and cannot see a fault that moves both. Every
+// expected value here is worked out from the specification and from the widths
+// the standard faces give, and the comment on each says which.
+
+// bare turns off everything the user-agent sheet does to a table, so that an
+// expected number is the rule under test and not the sum of the rule and 2px of
+// spacing.
+const bareTable = `
+html, body, p, div { margin: 0; padding: 0 }
+table { border-spacing: 0 }
+td, th { padding: 0 }
+`
+
+// cellRect returns the border boxes of a table's cells, in document order.
+func cellRects(root *Fragment) []Rect {
+	var out []Rect
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f.Box != nil && f.Box.Inner == InnerTableCell {
+			out = append(out, f.BorderRect)
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
+}
+
+// TestTableColumnsDivideTheWidth pins §17.5.2: the columns and the spacing add
+// up to the table's content width exactly, and each cell sits at its column.
+//
+// The arithmetic: a table 300 wide with 10px of spacing has spacing before,
+// between and after two columns — 30 in all — leaving 270 to divide. Both
+// columns hold the same text, so the automatic algorithm gives them the same
+// maximum and they take 135 each.
+func TestTableColumnsDivideTheWidth(t *testing.T) {
+	root := layoutOf(t, 1000, `<table id=t style="width: 300px; border-spacing: 10px">`+
+		`<tr><td>ab</td><td>ab</td></tr></table>`, bareTable)
+	cells := cellRects(root)
+	if len(cells) != 2 {
+		t.Fatalf("got %d cells, want 2:\n%s", len(cells), sketchFragments(root))
+	}
+	table := find(t, root, "t")
+	px(t, "the table's width", table.BorderRect.W, 300)
+	px(t, "the first column's left edge", cells[0].X.Sub(table.BorderRect.X), 10)
+	px(t, "the first column's width", cells[0].W, 135)
+	px(t, "the second column's left edge", cells[1].X.Sub(table.BorderRect.X), 155)
+	px(t, "the second column's width", cells[1].W, 135)
+	// And the table is exactly as wide as its parts, with no hairline left over.
+	px(t, "the right edge of the grid",
+		cells[1].Right().Add(mustPx(10)).Sub(table.BorderRect.X), 300)
+}
+
+// TestTableAutoWidthIsNotShrinkToFit pins the formula of §17.5.2.2, which is the
+// one people expect to be shrink-to-fit and is not.
+//
+// A table whose content wants less than the containing block gets what it wants;
+// a table whose content wants more than the containing block is as wide as the
+// containing block, not as wide as its content. The two directions are asserted
+// together because an implementation that used shrink-to-fit passes the first
+// and fails the second.
+func TestTableAutoWidthIsNotShrinkToFit(t *testing.T) {
+	narrow := layoutOf(t, 1000, `<table id=t><tr><td>ab</td></tr></table>`, bareTable)
+	if w := find(t, narrow, "t").BorderRect.W; w >= mustPx(1000) {
+		t.Errorf("a table of two characters is %.2f px wide; it should want less than the page",
+			w.Px())
+	}
+
+	wide := layoutOf(t, 200, `<table id=t><tr><td>`+
+		strings.Repeat("word ", 60)+`</td></tr></table>`, bareTable)
+	px(t, "a table whose content overflows the page", find(t, wide, "t").BorderRect.W, 200)
+}
+
+// TestTableFixedLayoutIgnoresContent pins §17.5.2.1.
+//
+// The declared widths in the first row decide the columns whatever is in them,
+// and the column left over shares what remains. The second row is deliberately
+// far wider than the first and must change nothing — that is the whole of what
+// "fixed" buys and the whole of what it costs.
+func TestTableFixedLayoutIgnoresContent(t *testing.T) {
+	root := layoutOf(t, 1000, `<table id=t style="table-layout: fixed; width: 300px">`+
+		`<tr><td style="width: 100px">a</td><td>b</td></tr>`+
+		`<tr><td>`+strings.Repeat("x", 200)+`</td><td>y</td></tr></table>`, bareTable)
+	cells := cellRects(root)
+	if len(cells) != 4 {
+		t.Fatalf("got %d cells, want 4:\n%s", len(cells), sketchFragments(root))
+	}
+	px(t, "the declared column", cells[0].W, 100)
+	px(t, "the remaining column", cells[1].W, 200)
+	px(t, "the second row's first column", cells[2].W, 100)
+}
+
+// TestTableColumnUnderflowIsReported pins the guardrail: a fixed layout that
+// squeezes a column below its content is a silent clip, and §6.2 says so out
+// loud.
+func TestTableColumnUnderflowIsReported(t *testing.T) {
+	fired[RuleTableColumnUnderflow] = true
+
+	rec := NewRecorder(nil)
+	built := Build(Input{HTML: `<table style="table-layout: fixed; width: 20px">` +
+		`<tr><td>` + strings.Repeat("x", 200) + `</td></tr></table>`,
+		CSS: []Stylesheet{{Source: bareTable}}})
+	w, _ := style.FromPx(1000)
+	h, _ := style.FromPx(1000)
+	Layout(built.Root, Size{W: w, H: h}, nil, rec)
+
+	if rec.Count(RuleTableColumnUnderflow) == 0 {
+		t.Errorf("a column of 20px holding 200 characters raised nothing:\n%v", rec.Findings())
+	}
+
+	// And a table wide enough for its content says nothing, so the rule is not
+	// simply always on.
+	rec = NewRecorder(nil)
+	built = Build(Input{HTML: `<table style="table-layout: fixed; width: 900px">` +
+		`<tr><td>x</td></tr></table>`,
+		CSS: []Stylesheet{{Source: bareTable}}})
+	Layout(built.Root, Size{W: w, H: h}, nil, rec)
+	if n := rec.Count(RuleTableColumnUnderflow); n != 0 {
+		t.Errorf("a table with room to spare reported %d underflows", n)
+	}
+}
+
+// TestTableRowHeightsAndSpans pins §17.5.3's vertical arithmetic.
+//
+// Two rows of 40 and 30, with 10px of vertical spacing: the second row starts 50
+// below the first, and a cell spanning both is 80 tall — the two rows plus the
+// spacing it swallows between them. A rowspan that did not add the spacing would
+// be 10px short and look like a rounding error.
+func TestTableRowHeightsAndSpans(t *testing.T) {
+	root := layoutOf(t, 1000, `<table style="border-spacing: 10px">`+
+		`<tr><td rowspan=2 id=span>s</td><td style="height: 40px">a</td></tr>`+
+		`<tr><td style="height: 30px">b</td></tr></table>`, bareTable)
+	cells := cellRects(root)
+	if len(cells) != 3 {
+		t.Fatalf("got %d cells, want 3:\n%s", len(cells), sketchFragments(root))
+	}
+	px(t, "the first row's height", cells[1].H, 40)
+	px(t, "the second row's height", cells[2].H, 30)
+	px(t, "the gap between the two rows", cells[2].Y.Sub(cells[1].Bottom()), 10)
+	px(t, "the spanning cell's height", cells[0].H, 80)
+	px(t, "the spanning cell's top", cells[0].Y, cells[1].Y.Px())
+}
+
+// TestTableVerticalAlign pins §17.5.3's four alignments.
+//
+// One tall cell sets the row's height at 60; the others are one line of 16px
+// text, whose line box is 1.2 times that. Top puts the line at the row's top,
+// bottom at 60 minus the line's height, middle halfway between.
+func TestTableVerticalAlign(t *testing.T) {
+	root := layoutOf(t, 1000, `<table>`+
+		`<tr><td style="height: 60px">tall</td>`+
+		`<td id=top style="vertical-align: top">a</td>`+
+		`<td id=mid style="vertical-align: middle">a</td>`+
+		`<td id=bot style="vertical-align: bottom">a</td></tr></table>`, bareTable)
+
+	line := 16 * 1.2
+	for _, tc := range []struct {
+		id   string
+		want float64
+	}{
+		{"top", 0},
+		{"mid", (60 - line) / 2},
+		{"bot", 60 - line},
+	} {
+		cell := find(t, root, tc.id)
+		if len(cell.Lines) != 1 {
+			t.Fatalf("#%s has %d lines, want 1", tc.id, len(cell.Lines))
+		}
+		px(t, "the line box of #"+tc.id, cell.Lines[0].Rect.Y, tc.want)
+		px(t, "the height of #"+tc.id, cell.BorderRect.H, 60)
+	}
+}
+
+// TestTableBaselineAlignment pins the default alignment, which is the one that
+// makes a table of text read as rows rather than as a grid of boxes.
+//
+// The two cells hold text at different sizes, so their first baselines are at
+// different depths. Aligning on the baseline moves the smaller text down until
+// the two sit on one line, which means the *difference* between the two cells'
+// line positions is the difference between their baselines — and the cell with
+// the deeper baseline does not move at all.
+func TestTableBaselineAlignment(t *testing.T) {
+	root := layoutOf(t, 1000, `<table><tr>`+
+		`<td id=big style="font-size: 40px">A</td>`+
+		`<td id=small style="font-size: 10px">a</td></tr></table>`, bareTable)
+
+	big, small := find(t, root, "big"), find(t, root, "small")
+	if len(big.Lines) != 1 || len(small.Lines) != 1 {
+		t.Fatalf("expected one line in each cell:\n%s", sketchFragments(root))
+	}
+	bigBase := big.Lines[0].Rect.Y.Add(big.Lines[0].Baseline)
+	smallBase := small.Lines[0].Rect.Y.Add(small.Lines[0].Baseline)
+	if bigBase != smallBase {
+		t.Errorf("the two cells' baselines are %.4f and %.4f px from the row top; "+
+			"vertical-align: baseline should put them on one line",
+			bigBase.Px(), smallBase.Px())
+	}
+	// And the deeper one did not move, since it is what the row aligned on.
+	px(t, "the big cell's line box", big.Lines[0].Rect.Y, 0)
+	if small.Lines[0].Rect.Y <= 0 {
+		t.Errorf("the small cell's line did not move down to meet the baseline "+
+			"(it is at %.4f)", small.Lines[0].Rect.Y.Px())
+	}
+}
+
+// TestTableEmptyCells pins §17.6.1.1 in both directions: an empty cell asked to
+// hide draws nothing, and the same cell with a character in it draws.
+func TestTableEmptyCells(t *testing.T) {
+	// The empty cell is given a width of its own: a column with nothing in it
+	// and no width is zero wide, so a test without one would be asserting that
+	// an empty rectangle paints nothing, which it does either way.
+	const src = `<table style="empty-cells: %s"><tr>` +
+		`<td id=full style="background: red">x</td>` +
+		`<td id=empty style="background: red; width: 50px; height: 20px"></td></tr></table>`
+
+	painted := func(css string) int {
+		root := layoutOf(t, 1000, strings.Replace(src, "%s", css, 1), bareTable)
+		n := 0
+		for _, op := range Paint(root) {
+			if fill, ok := op.(FillRect); ok && fill.Color.R == 255 && !fill.Rect.Empty() {
+				n++
+			}
+		}
+		return n
+	}
+	if got := painted("show"); got != 2 {
+		t.Errorf("empty-cells: show painted %d red cells, want 2", got)
+	}
+	if got := painted("hide"); got != 1 {
+		t.Errorf("empty-cells: hide painted %d red cells, want 1", got)
+	}
+}
+
+// TestTableRowGroupOrder pins §17.5.1: the header goes first and the footer
+// last, wherever the markup put them.
+func TestTableRowGroupOrder(t *testing.T) {
+	root := layoutOf(t, 1000, `<table>`+
+		`<tfoot><tr><td id=f>f</td></tr></tfoot>`+
+		`<tbody><tr><td id=b>b</td></tr></tbody>`+
+		`<thead><tr><td id=h>h</td></tr></thead></table>`, bareTable)
+
+	h, b, f := find(t, root, "h"), find(t, root, "b"), find(t, root, "f")
+	if !(h.BorderRect.Y < b.BorderRect.Y && b.BorderRect.Y < f.BorderRect.Y) {
+		t.Errorf("the rows are at head=%.2f body=%.2f foot=%.2f; the header goes "+
+			"first and the footer last whatever order they were written in",
+			h.BorderRect.Y.Px(), b.BorderRect.Y.Px(), f.BorderRect.Y.Px())
+	}
+}
+
+// TestTableSpanClamping is the security test: colspan and rowspan are
+// attacker-controlled integers, and a document that names a hundred million
+// columns must not allocate them.
+//
+// The assertion is on the grid rather than on the render, because a render that
+// survived would prove only that the machine was big enough that day.
+func TestTableSpanClamping(t *testing.T) {
+	l := &layouter{rec: NewRecorder(nil), lengths: map[lengthKey]style.Length{},
+		grids: map[*Box]*tableGrid{}}
+
+	built := Build(Input{HTML: `<table><tr>` +
+		`<td colspan="99999999" rowspan="99999999">a</td></tr></table>`})
+	table := findBox(t, built.Root, func(b *Box) bool { return b.Inner == InnerTable })
+
+	g := l.tableGridFor(table)
+	if g.cols != maxColSpan {
+		t.Errorf("colspan=99999999 produced %d columns, want it clamped to %d",
+			g.cols, maxColSpan)
+	}
+	if len(g.cells) != 1 {
+		t.Fatalf("got %d cells, want 1", len(g.cells))
+	}
+	if got := g.cells[0].colSpan; got != maxColSpan {
+		t.Errorf("the cell spans %d columns, want %d", got, maxColSpan)
+	}
+	// A rowspan is clipped to the rows that exist, so a span of ninety-nine
+	// million in a one-row table is a span of one. Nothing proportional to the
+	// attribute is ever allocated.
+	if got := g.cells[0].rowSpan; got != 1 {
+		t.Errorf("the cell spans %d rows in a table with one, want 1", got)
+	}
+}
+
+// TestTableColumnCapFires watches the grid bound trip.
+//
+// The cap is lowered rather than the document made enormous, for the reason
+// maxBoxes gives: a bound that has only ever been observed not to trip is one
+// nobody knows works, and building four thousand columns to watch this one
+// would cost more than the rest of the file.
+func TestTableColumnCapFires(t *testing.T) {
+	fired[RuleLimit] = true
+
+	saved := maxTableColumns
+	maxTableColumns = 3
+	defer func() { maxTableColumns = saved }()
+
+	rec := NewRecorder(nil)
+	l := &layouter{rec: rec, lengths: map[lengthKey]style.Length{},
+		grids: map[*Box]*tableGrid{}}
+	built := Build(Input{HTML: `<table><tr><td>a</td><td>b</td><td>c</td>` +
+		`<td>d</td><td>e</td></tr></table>`})
+	table := findBox(t, built.Root, func(b *Box) bool { return b.Inner == InnerTable })
+
+	g := l.tableGridFor(table)
+	if g.cols > 3 {
+		t.Errorf("the grid has %d columns with the cap at 3", g.cols)
+	}
+	if len(g.cells) != 3 {
+		t.Errorf("%d cells were placed, want the 3 that fit under the cap", len(g.cells))
+	}
+	if rec.Count(RuleLimit) == 0 {
+		t.Error("the cap dropped cells and said nothing, which is the silent " +
+			"truncation the limit rule exists to prevent")
+	}
+}
+
+// TestBorderCollapseIsReported pins that the collapsing model of §17.6.2 is
+// refused out loud rather than approximated in silence.
+//
+// A table laid out with the separated model where the author asked for the
+// collapsing one is wrong by a border width on every line, and looks deliberate.
+// §7.1's companion signal has to see it, so it is an unsupported finding.
+func TestBorderCollapseIsReported(t *testing.T) {
+	rec := NewRecorder(nil)
+	built := Build(Input{HTML: `<table style="border-collapse: collapse">` +
+		`<tr><td>a</td></tr></table>`})
+	w, _ := style.FromPx(1000)
+	Layout(built.Root, Size{W: w, H: w}, nil, rec)
+
+	var found *Finding
+	for _, f := range rec.Findings() {
+		if f.Property == "border-collapse" {
+			found = &f
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("border-collapse: collapse was accepted in silence:\n%v", rec.Findings())
+	}
+	if !found.Unsupported() {
+		t.Errorf("the finding is %s, which the vacuous-pass check does not count as "+
+			"unsupported", found.Rule)
+	}
+
+	// And the separated model says nothing, so the finding is about the value
+	// rather than about tables.
+	rec = NewRecorder(nil)
+	built = Build(Input{HTML: `<table style="border-collapse: separate">` +
+		`<tr><td>a</td></tr></table>`})
+	Layout(built.Root, Size{W: w, H: w}, nil, rec)
+	for _, f := range rec.Findings() {
+		if f.Property == "border-collapse" {
+			t.Errorf("the separated model reported %q", f.Message)
+		}
+	}
+}
+
+// TestTableCellHeightIsAMinimum pins the rule of §17.5.3 that is the opposite of
+// what a height does to an ordinary block: content is never cut off to honour
+// it.
+func TestTableCellHeightIsAMinimum(t *testing.T) {
+	root := layoutOf(t, 1000,
+		`<table><tr><td id=c style="height: 1px">a<br>b<br>c</td></tr></table>`, bareTable)
+	cell := find(t, root, "c")
+	// Three line boxes, each rounded to the layout unit before they are added
+	// up — which is not the same number as rounding their sum.
+	if want := mustPx(19.2).Mul(3); cell.BorderRect.H != want {
+		t.Errorf("a cell declared 1px tall holding three lines is %.2f px, want %.2f",
+			cell.BorderRect.H.Px(), want.Px())
+	}
+}
+
+// TestPresentationalTableAttributes pins the HTML mapping, in both directions:
+// the attribute overrides the user-agent sheet and loses to the author's CSS.
+func TestPresentationalTableAttributes(t *testing.T) {
+	// Without the attribute the user-agent sheet's 2px of spacing and 1px of
+	// cell padding apply, so the two cells are 4px apart across the gap.
+	plain := cellRects(layoutOf(t, 1000, `<table><tr><td>a</td><td>b</td></tr></table>`))
+	if len(plain) != 2 {
+		t.Fatalf("got %d cells, want 2", len(plain))
+	}
+	px(t, "the default gap between two cells", plain[1].X.Sub(plain[0].Right()), 2)
+
+	// cellspacing=0 beats the user-agent rule.
+	zero := cellRects(layoutOf(t, 1000,
+		`<table cellspacing="0"><tr><td>a</td><td>b</td></tr></table>`))
+	px(t, "the gap with cellspacing=0", zero[1].X.Sub(zero[0].Right()), 0)
+
+	// And loses to the author's, which is the half that is easy to get wrong by
+	// treating the attribute as an inline style.
+	beaten := cellRects(layoutOf(t, 1000,
+		`<table cellspacing="0"><tr><td>a</td><td>b</td></tr></table>`,
+		`table { border-spacing: 6px }`))
+	px(t, "the gap when CSS overrides cellspacing", beaten[1].X.Sub(beaten[0].Right()), 6)
+
+	// cellpadding reaches the cells, which are not the element carrying it.
+	padded := cellRects(layoutOf(t, 1000,
+		`<table cellspacing="0" cellpadding="7"><tr><td>a</td></tr></table>`))
+	bare := cellRects(layoutOf(t, 1000,
+		`<table cellspacing="0" cellpadding="0"><tr><td>a</td></tr></table>`))
+	px(t, "the width cellpadding=7 adds to a cell", padded[0].W.Sub(bare[0].W), 14)
+}
+
+// TestFontSizeDoesNotCompound pins the bug the table work found.
+//
+// CSS inherits the *computed* font-size, which is an absolute length. An engine
+// that stores the specified value and re-resolves it at every level doubles the
+// size once per element inside a "font-size: 2em" wrapper — and it is invisible
+// until two subtrees of different depths have to line up, which is exactly what
+// a table full of nested boxes does.
+func TestFontSizeDoesNotCompound(t *testing.T) {
+	got := build(t, `<div style="font-size: 2em"><p id=a>x</p>`+
+		`<div><div><p id=b>y</p></div></div></div>`)
+
+	for _, id := range []string{"a", "b"} {
+		box := findBox(t, got.Root, func(b *Box) bool {
+			if b.Element == nil {
+				return false
+			}
+			v, _ := b.Element.Attr("id")
+			return v == id
+		})
+		if want := mustPx(32); box.FontSize != want {
+			t.Errorf("#%s is set in %.2f px; everything inside one \"font-size: 2em\" "+
+				"is 32px however deeply it is nested", id, box.FontSize.Px())
+		}
+	}
+
+	// An element that declares its own relative size *does* compound, which is
+	// the half a naive "inherited values are never resolved" fix breaks.
+	nested := build(t, `<div style="font-size: 2em"><div id=c style="font-size: 2em">z</div></div>`)
+	box := findBox(t, nested.Root, func(b *Box) bool {
+		v, _ := "", ""
+		if b.Element != nil {
+			v, _ = b.Element.Attr("id")
+		}
+		return v == "c"
+	})
+	if want := mustPx(64); box.FontSize != want {
+		t.Errorf("two nested declarations of \"font-size: 2em\" gave %.2f px, want %.2f",
+			box.FontSize.Px(), want.Px())
 	}
 }
 

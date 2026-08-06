@@ -113,6 +113,21 @@ type Styled struct {
 	// pseudo-element that nothing styles generates nothing — unlike a real
 	// element, which exists whether or not anything mentions it.
 	Pseudo map[PseudoKey]ComputedStyle
+	// OwnFontSize and OwnPseudoFontSize mark the elements whose font-size came
+	// from a declaration of their own rather than from their parent.
+	//
+	// Nothing else in the cascade needs this and font-size does, because it is
+	// the one property whose computed value is not the value stored here: CSS
+	// makes it an absolute length, and what is in Styles is what the author
+	// wrote. A consumer resolving "2em" against the parent's size gets the right
+	// answer for the element that declared it and the wrong one for every
+	// descendant that merely inherited it — twice the parent at each level, so a
+	// paragraph four levels down a "font-size: 2em" wrapper is set in 256px.
+	//
+	// That was not hypothetical. It is what this map was added to stop.
+	OwnFontSize       map[*html.Node]bool
+	OwnPseudoFontSize map[PseudoKey]bool
+
 	// Findings is everything worth telling the caller, in stylesheet order.
 	Findings []Finding
 	// Incomplete reports that the selector-matching budget tripped, so some
@@ -132,8 +147,10 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 	rules := s.prepare(sheets)
 
 	out := Styled{
-		Styles: map[*html.Node]ComputedStyle{},
-		Pseudo: map[PseudoKey]ComputedStyle{},
+		Styles:            map[*html.Node]ComputedStyle{},
+		Pseudo:            map[PseudoKey]ComputedStyle{},
+		OwnFontSize:       map[*html.Node]bool{},
+		OwnPseudoFontSize: map[PseudoKey]bool{},
 	}
 	// Document order, so a parent is always computed before its children and
 	// inheritance can read the parent's finished values.
@@ -141,15 +158,23 @@ func Apply(doc *html.Node, sheets []Sheet) Styled {
 		if n.Type != html.ElementNode {
 			return true
 		}
-		out.Styles[n] = s.computeFor(n, rules, out.Styles, "")
+		cs, own := s.computeFor(n, rules, out.Styles, "")
+		out.Styles[n] = cs
+		if own {
+			out.OwnFontSize[n] = true
+		}
 		for _, name := range pseudoElementNames {
 			if !s.anyRuleTargets(rules, n, name) {
 				continue
 			}
 			// A pseudo-element inherits from the element it belongs to, which is
 			// why the parent style passed here is that element's own.
-			out.Pseudo[PseudoKey{Node: n, Name: name}] =
-				s.computeForPseudo(n, rules, out.Styles[n], name)
+			key := PseudoKey{Node: n, Name: name}
+			pcs, own := s.computeForPseudo(n, rules, out.Styles[n], name)
+			out.Pseudo[key] = pcs
+			if own {
+				out.OwnPseudoFontSize[key] = true
+			}
 		}
 		return true
 	})
@@ -388,14 +413,18 @@ func (s *Styler) anyRuleTargets(rules []preparedRule, n *html.Node, name string)
 // parent, which is what makes "p { color: red } p::before { content: '>' }" draw
 // a red marker without the author saying so twice.
 func (s *Styler) computeForPseudo(n *html.Node, rules []preparedRule,
-	owner ComputedStyle, name string) ComputedStyle {
+	owner ComputedStyle, name string) (ComputedStyle, bool) {
 	return s.computeFor(n, rules, map[*html.Node]ComputedStyle{n: owner}, name)
 }
 
 // computeFor resolves every property for one element, or for one of its
 // pseudo-elements when pseudo is not empty.
+//
+// It also reports whether font-size came from a declaration rather than by
+// inheritance, which is the one thing a consumer cannot recover from the map it
+// returns. See Styled.OwnFontSize for why that matters.
 func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
-	done map[*html.Node]ComputedStyle, pseudo string) ComputedStyle {
+	done map[*html.Node]ComputedStyle, pseudo string) (ComputedStyle, bool) {
 
 	var cands []candidate
 	for _, r := range rules {
@@ -441,11 +470,28 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 		parent = done[p]
 	}
 
+	// The HTML attributes that carry presentation. They apply to the element
+	// itself, so a pseudo-element never has any.
+	var hints map[string]string
+	if pseudo == "" {
+		hints = presentationalHints(n)
+	}
+
 	out := make(ComputedStyle, len(properties))
+	ownFontSize := false
 	for name, prop := range properties {
 		value, have := "", false
 
-		if c, ok := winners[name]; ok {
+		if h, ok := hints[name]; ok {
+			// A presentational hint sits between the two stylesheets that are
+			// not the author's: it overrides the engine's defaults, because
+			// "cellspacing=0" is written precisely to override them, and loses
+			// to anything a person wrote. That is where CSS 2.1 §6.4.4 puts it,
+			// and it is why the check below is on the origin rather than on
+			// whether a rule matched at all.
+			value, have = h, true
+		}
+		if c, ok := winners[name]; ok && (!have || c.origin != OriginUserAgent) {
 			value, have = serialize(c.value), true
 		}
 		if d, ok := inline[name]; ok {
@@ -459,8 +505,28 @@ func (s *Styler) computeFor(n *html.Node, rules []preparedRule,
 		}
 
 		out[name] = s.resolve(name, prop, value, have, parent)
+		if name == "font-size" {
+			ownFontSize = have && declaresItsOwnValue(value, prop)
+		}
 	}
-	return out
+	return out, ownFontSize
+}
+
+// declaresItsOwnValue reports whether a winning declaration says something about
+// the element rather than deferring to its parent.
+//
+// The three CSS-wide keywords that defer are the ones that reach inheritFrom:
+// "inherit" always, and "unset" and "revert" on a property that inherits. Every
+// other value — including "initial", which is a statement about this element —
+// is the element's own.
+func declaresItsOwnValue(value string, prop property) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case kwInherit:
+		return false
+	case kwUnset, kwRevert:
+		return !prop.inherits
+	}
+	return true
 }
 
 // resolve turns a winning declaration — or the absence of one — into a computed
@@ -586,6 +652,86 @@ func cascadeRank(c candidate) int {
 	// 3, 4, 5 with the origins reversed: author important is 3, user is 4,
 	// user-agent is 5.
 	return 3 + (int(OriginAuthor) - int(c.origin))
+}
+
+// presentationalHints maps the HTML attributes that are really CSS onto the
+// properties they mean.
+//
+// # Why these are here and not in the user-agent stylesheet
+//
+// A stylesheet can say "every <td> has 1px of padding". It cannot say "every
+// <td> inside a table whose cellpadding attribute is 3 has 3px of padding",
+// because the value is in the attribute rather than in the selector — and the
+// attribute is on an *ancestor*. So the mapping has to be computed per element,
+// which is what this is.
+//
+// The set is deliberately small: the attributes that decide a table's geometry.
+// They are not deprecated decoration — every table written before about 2005 and
+// most of the CSS test suite use "cellspacing=0 cellpadding=0" to switch off the
+// user-agent defaults, and an engine that ignores them puts three pixels between
+// every pair of cells that the document asked to be flush.
+//
+// What is *not* here is as deliberate. "bgcolor", "align" and "border" are
+// presentation too; each needs a decision this has no reason to make yet
+// (border sets a different border on the table and on its cells, align means
+// three different things depending on the element), and a half-right answer to
+// those would be a table that is subtly wrong rather than one that is plainly
+// unstyled.
+func presentationalHints(n *html.Node) map[string]string {
+	switch n.Name {
+	case "table":
+		v, ok := pixelAttr(n, "cellspacing")
+		if !ok {
+			return nil
+		}
+		return map[string]string{"border-spacing": v}
+
+	case "td", "th":
+		// cellpadding is written on the table and applies to its cells, so the
+		// value has to be fetched from the ancestor. The walk stops at the first
+		// table, which is what makes a nested table's cells take their own
+		// table's padding rather than the outer one's.
+		for anc := n.Parent; anc != nil; anc = anc.Parent {
+			if anc.Type != html.ElementNode {
+				continue
+			}
+			if anc.Name != "table" {
+				continue
+			}
+			v, ok := pixelAttr(anc, "cellpadding")
+			if !ok {
+				return nil
+			}
+			return map[string]string{
+				"padding-top": v, "padding-right": v,
+				"padding-bottom": v, "padding-left": v,
+			}
+		}
+	}
+	return nil
+}
+
+// pixelAttr reads an attribute that is a number of pixels.
+//
+// Only a plain non-negative integer counts. HTML also allows a percentage for
+// these, which means something different for each of them and is vanishingly
+// rare; a value that is not read leaves the stylesheet's answer standing, which
+// is the same as it not being there.
+func pixelAttr(n *html.Node, name string) (string, bool) {
+	raw, ok := n.Attr(name)
+	if !ok {
+		return "", false
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return "", false
+		}
+	}
+	return raw + "px", true
 }
 
 // inlineDeclarations reads an element's style attribute.
