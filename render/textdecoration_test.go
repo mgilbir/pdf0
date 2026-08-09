@@ -1,8 +1,11 @@
 package render
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -292,4 +295,147 @@ func decorationFindings(t *testing.T, htmlSrc, cssSrc string) int {
 		}
 	}
 	return n
+}
+
+// TestUnderlineComesFromTheFaceThatStatesOne is the other half of the fallback
+// the tests above pin.
+//
+// Those use Courier, a standard PDF face, which has no post table at all — its
+// metrics come from AFM data and forme reports no underline for it, so the
+// 0.05em/0.1em fractions stand and are the specified thing to do. A face that
+// *does* state a position and a thickness must be believed instead, and until
+// forme reported the post table there was no way to tell the two situations
+// apart.
+func TestUnderlineComesFromTheFaceThatStatesOne(t *testing.T) {
+	set := loadAhem(t)
+	// Ahem states an underline at -133 with a thickness of 20, out of 1000
+	// units. At 20px that is a band 0.4px thick whose top edge is 2.66px below
+	// the baseline — against the fallback's 1px at 1.5px, which is what Courier
+	// gives two tests above.
+	built := Build(Input{
+		HTML: `<div id="p">abcdef</div>`,
+		CSS: []Stylesheet{{Source: noDefaults +
+			`#p { font-family: Ahem; font-size: 20px; text-decoration: underline }`}},
+	})
+	rec := NewRecorder(nil)
+	w, _ := style.FromPx(600)
+	h, _ := style.FromPx(10000)
+	root := Layout(built.Root, Size{W: w, H: h}, set, rec)
+
+	got := bands(Paint(root), black)
+	if len(got) != 1 {
+		t.Fatalf("an underlined word painted %d bands, want 1", len(got))
+	}
+	// 20 units of 1000 at 20px is 0.4px, which is 25.6 layout units and rounds
+	// to 26 — a sixty-fourth over, and the figure is written out rather than
+	// rounded off because a test that tolerated the difference would tolerate a
+	// wrong thickness too.
+	if h := got[0].H.Px(); h != 0.40625 {
+		t.Errorf("the underline is %gpx thick, want 0.40625 (20/1000 em at 20px, "+
+			"quantised); 1 means the face was ignored for the fallback", h)
+	}
+	baseline := baselineOfFirstRun(t, root, "p")
+	if want := baseline.Add(mustPx(2.65625)); got[0].Y != want {
+		t.Errorf("the underline's top edge is %gpx below the baseline, want 2.65625 "+
+			"(133/1000 em at 20px, quantised); 1.5 means the fallback was used",
+			got[0].Y.Sub(baseline).Px())
+	}
+}
+
+// faceFrom loads a face from the fetched corpora, or skips.
+func faceFrom(t *testing.T, env, rel string) FontSet {
+	t.Helper()
+	dir := os.Getenv(env)
+	if dir == "" {
+		t.Skipf("set %s for a face that states these metrics", env)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Skipf("no %s: %v", rel, err)
+	}
+	face, err := fonts.Load(data)
+	if err != nil {
+		t.Fatalf("loading %s: %v", rel, err)
+	}
+	return ahemSet{ahem: face, standard: StandardFonts()}
+}
+
+// decoBand lays out one decorated word against a font set and returns its band.
+func decoBand(t *testing.T, set FontSet, decoration string) (Rect, style.Unit) {
+	t.Helper()
+	built := Build(Input{
+		HTML: `<div id="p">abcdef</div>`,
+		CSS: []Stylesheet{{Source: noDefaults +
+			`#p { font-family: Ahem; font-size: 20px; text-decoration: ` + decoration + ` }`}},
+	})
+	rec := NewRecorder(nil)
+	w, _ := style.FromPx(600)
+	h, _ := style.FromPx(10000)
+	root := Layout(built.Root, Size{W: w, H: h}, set, rec)
+	got := bands(Paint(root), black)
+	if len(got) != 1 {
+		t.Fatalf("%s painted %d bands, want 1", decoration, len(got))
+	}
+	return got[0], baselineOfFirstRun(t, root, "p")
+}
+
+// TestLineThroughComesFromTheFaceThatStatesOne pins the strikeout half.
+//
+// It is separate from the underline because OS/2 states a strikeout position and
+// size independently of post's underline, and 86 of the 88 faces in this
+// checkout state both — so a line-through drawn at the underline's thickness is
+// wrong for almost every real font, at exactly the right height, which reads as
+// a choice rather than a mistake.
+func TestLineThroughComesFromTheFaceThatStatesOne(t *testing.T) {
+	set := faceFrom(t, "NOTO_FONTS", "NotoSans-Regular.ttf")
+	band, baseline := decoBand(t, set, "line-through")
+
+	// Noto Sans states a strikeout at 322 with a size of 50, out of 1000 units.
+	// At 20px the band is 1px thick with its top 6.44px *above* the baseline.
+	if h := band.H.Px(); h != 1 {
+		t.Errorf("the line-through is %gpx thick, want 1 (50/1000 em at 20px)", h)
+	}
+	if above := baseline.Sub(band.Y).Px(); above != 6.4375 {
+		t.Errorf("the line-through's top edge is %gpx above the baseline, want 6.4375 "+
+			"(322/1000 em at 20px, quantised); about 5.86 means the x-height "+
+			"estimate was used instead of the stated strikeout", above)
+	}
+}
+
+// TestLineThroughFallsBackToTheXHeight is the other side, and it needs a face
+// that states an x-height and no strikeout. Two of the eighty-eight do.
+func TestLineThroughFallsBackToTheXHeight(t *testing.T) {
+	set := faceFrom(t, "WPT_TESTS", "fonts/baseline-diagnostic/BaselineDiagnostic.ttf")
+	band, baseline := decoBand(t, set, "line-through")
+
+	// The face states an x-height of 250/1000 and no strikeout, so the line goes
+	// through the middle of it: 20px x 0.25 / 2 = 2.5px above the baseline, less
+	// half the band's own thickness. Reading half an em instead — the estimate
+	// used before the face could be asked — would put it at 5px.
+	above := baseline.Sub(band.Y).Px()
+	if above < 2.4 || above > 3.1 {
+		t.Errorf("the line-through's top edge is %gpx above the baseline; want about "+
+			"2.5 to 3, half of the stated 0.25em x-height plus half a band. Near 5 "+
+			"means the half-em estimate was used although the face stated one", above)
+	}
+}
+
+// TestLineThroughUsesItsOwnThickness is the clause that says a strikeout is not
+// an underline drawn higher up.
+//
+// It needs a face whose two sizes differ, and Noto Sans is not one — it states
+// 50 for both, so a line-through drawn at the underline's thickness is right by
+// coincidence there and the clause decides nothing. Fifteen faces in this
+// checkout do differ, Ahem among them at 50 against 20, which is why this test
+// uses it rather than the face the tests above use.
+func TestLineThroughUsesItsOwnThickness(t *testing.T) {
+	set := loadAhem(t)
+	band, _ := decoBand(t, set, "line-through")
+	// 50/1000 of an em at 20px is 1px. The underline's 20/1000 would be 0.4,
+	// which quantises to 0.40625 — the figure the underline test asserts.
+	if h := band.H.Px(); h != 1 {
+		t.Errorf("the line-through is %gpx thick, want 1 (the stated strikeout size "+
+			"of 50/1000 em); 0.40625 is the underline's thickness and means the "+
+			"strikeout's own was ignored", h)
+	}
 }
