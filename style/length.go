@@ -88,6 +88,13 @@ type LengthContext struct {
 	ViewportWidth, ViewportHeight Unit
 	ViewportKnown                 bool
 
+	// XHeight is the height of a lowercase x in the element's own font, which is
+	// what "ex" is. It is zero when the face does not state one, and
+	// XHeightKnown says which — a font stating zero and a font with no OS/2
+	// table both report zero, and only one of them has answered.
+	XHeight      Unit
+	XHeightKnown bool
+
 	// ZeroAdvance is the width of "0" in the element's own font, which is what
 	// "ch" is. It is zero when no face has been chosen — during the cascade,
 	// where a length is parsed before layout knows what will set it — and
@@ -199,15 +206,19 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 		}
 		return ctx.ZeroAdvance.Px(), true, true
 
-	// ex is the font's x-height.
+	// ex is the font's x-height, when the font states one.
 	//
-	// The face layer does not carry one: OS/2 has the field but forme's
-	// descriptor stops at cap height, and recovering it would mean measuring the
-	// outline of "x". CSS Values §5.1.2 settles what to do — "in the cases where
-	// it is impossible or impractical to determine the x-height, a value of
-	// 0.5em must be assumed" — so this is the specified answer rather than an
-	// approximation standing in for one.
+	// It did not used to: the descriptor stopped at cap height, so every "ex"
+	// in every document was half an em. CSS Values §5.1.2 permits exactly that
+	// — "in the cases where it is impossible or impractical to determine the
+	// x-height, a value of 0.5em must be assumed" — which made the fallback the
+	// specified answer rather than a guess, and also made it the *only* answer.
+	// Now the face is asked first and half an em is what is left when it does
+	// not say, which is what §5.1.2 was written for.
 	case "ex":
+		if ctx.XHeightKnown && ctx.XHeight > 0 {
+			return ctx.XHeight.Px(), true, true
+		}
 		return ctx.FontSize.Px() / 2, true, true
 
 	// The viewport units, and the small/large/dynamic variants of them.

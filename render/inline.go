@@ -1865,41 +1865,50 @@ func (l *layouter) lineHeight(b *Box) style.Unit {
 	return l.normalLineHeight(b)
 }
 
-// normalLineHeightFactor is a placeholder, and the seam this whole function
-// exists to make obvious.
+// normalLineHeightFallbackFactor is what "normal" means for a face that does
+// not say.
 //
-// The right value is the font's own: ascent + descent + **line gap**, which is
-// what every browser uses and what CSS 2.1 §10.8.1 means by "a reasonable value
-// based on the font". forme's Descriptor carries the first two terms and not the
-// third — mgilbir/forme#3 — and the two-term formula is not a stricter reading of
-// the font, it is the right formula with a term missing:
+// The font's own answer is ascent + descent + line gap, and forme reports all
+// three now — but only for a face that has the tables to state them. The
+// fourteen standard PDF faces have no hhea and no OS/2 at all: their metrics
+// come from AFM data, which carries no line gap, so Descriptor reports zero with
+// the bit clear. Zero and silence are different answers and this is the one
+// place in the engine where reading them as the same would be invisible: a page
+// spaced by a number the font never gave.
 //
-//	Helvetica 0.925em, Times 0.900em, Courier 0.786em
-//
-// all of them below the 1.0-to-1.2 range the specification recommends, Courier
-// by a wide margin.
-//
-// Measuring the alternatives was worth doing and worth writing down, because the
-// numbers argue for a change that would be wrong. Against the reftest ratchet:
-// the two-term formula gains 14 clean passes and a floor of 1.0em gains 6, while
-// this placeholder gains none. Neither gain is fidelity. Both documents of a
-// reftest are rendered by *this* engine, so a shorter line box does not move the
-// page closer to a browser — it moves a span's background closer to a div's, and
-// the tests that compare those two agree. Taking either would be reading the
-// oracle as an authority on a value it has no view about.
-//
-// 1.2 stays because it is inside the recommended range and because a placeholder
-// that is honestly arbitrary is better than one that looks derived and is not.
-const normalLineHeightFactor = 1.2
+// 1.2 for those, because CSS 2.1 §10.8.1 recommends between 1.0 and 1.2 and a
+// value inside the range beats one derived from a term that is missing.
+const normalLineHeightFallbackFactor = 1.2
 
 // normalLineHeight is "line-height: normal".
 //
-// It ignores the face today. When forme#3 lands, this is where the font gets
-// read — the ratio becomes (ascent - descent + lineGap) / unitsPerEm — and the
-// three tests that pin 1.2 as a number will need their arithmetic redone rather
-// than their expectations relaxed, since each derives its figure from this one.
+// Worth recording what changed when the font finally got asked. Ahem states
+// ascent 800, descent -200 and a line gap of zero, which comes to exactly one
+// em — right for a face whose every glyph is an em square, and a figure no
+// constant would have produced. Noto Sans comes to more than 1.2. Neither is
+// something an engine can guess, which is the whole argument for asking.
 func (l *layouter) normalLineHeight(b *Box) style.Unit {
-	return b.FontSize.Mul(normalLineHeightFactor)
+	face, ok := l.fontFor(b)
+	if !ok {
+		return b.FontSize.Mul(normalLineHeightFallbackFactor)
+	}
+	d := face.Descriptor()
+	upem := float64(face.UnitsPerEm())
+	// The line gap is the term that decides whether the font has answered at
+	// all. Ascent and descent are there for every face, including the standard
+	// ones; without the gap the sum is the right formula missing a term, which
+	// lands below the range the specification recommends — 0.925em for
+	// Helvetica, 0.786em for Courier.
+	if upem <= 0 || !d.Has(fonts.MetricLineGap) {
+		return b.FontSize.Mul(normalLineHeightFallbackFactor)
+	}
+	h := b.FontSize.Mul((float64(d.Ascent) - float64(d.Descent) + float64(d.LineGap)) / upem)
+	if h <= 0 {
+		// A face stating metrics that sum to nothing would collapse every line
+		// on the page. It is not a value to pass on.
+		return b.FontSize.Mul(normalLineHeightFallbackFactor)
+	}
+	return h
 }
 
 // baselineOf is where the text sits within a line box.

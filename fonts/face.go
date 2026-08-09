@@ -134,6 +134,24 @@ type Run = shape.Run
 // Descriptor is a face's own metrics, in the font's own units.
 type Descriptor = shape.Descriptor
 
+// Metric names a metric a font may or may not state, for Descriptor.Declared.
+//
+// The distinction is the point of it. A font that states a line gap of zero and
+// a font with no hhea table at all both report zero, and a renderer that could
+// not tell them apart would space its lines by a number it believed came from
+// the font. Every one of these is a metric this engine would otherwise guess.
+type Metric = shape.Metric
+
+const (
+	MetricLineGap     = shape.MetricLineGap
+	MetricTypoMetrics = shape.MetricTypoMetrics
+	MetricXHeight     = shape.MetricXHeight
+	MetricCapHeight   = shape.MetricCapHeight
+	MetricUnderline   = shape.MetricUnderline
+	MetricStrikeout   = shape.MetricStrikeout
+	MetricWeight      = shape.MetricWeight
+)
+
 // MeasureGlyphs is the width a shaped run occupies at a given size.
 func MeasureGlyphs(glyphs []Glyph, size float64) float64 {
 	return shape.MeasureGlyphs(glyphs, size)
