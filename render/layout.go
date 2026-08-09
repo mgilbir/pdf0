@@ -336,6 +336,8 @@ type layouter struct {
 type lengthKey struct {
 	value    string
 	fontSize style.Unit
+	// xHeight joins it for "ex", for the same reason and after the same lesson.
+	xHeight style.Unit
 	// zeroAdvance is part of the key because "ch" resolves against the face, so
 	// two boxes at the same size in different fonts do not share an answer.
 	// Leaving it out would have made the first font to parse "40ch" decide it
@@ -1201,13 +1203,18 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 	if usesCh(raw) {
 		zero, haveMetrics = l.zeroAdvance(b)
 	}
-	key := lengthKey{value: raw, fontSize: b.FontSize, zeroAdvance: zero}
+	var xh style.Unit
+	var haveXHeight bool
+	if usesEx(raw) {
+		xh, haveXHeight = l.xHeightOf(b)
+	}
+	key := lengthKey{value: raw, fontSize: b.FontSize, zeroAdvance: zero, xHeight: xh}
 	if got, ok := l.lengths[key]; ok {
 		return got, true
 	}
 
 	vals, _ := css.ParseComponentValues(raw)
-	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics))
+	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics, xh, haveXHeight))
 	if !ok {
 		return style.Length{}, false
 	}
@@ -1216,7 +1223,7 @@ func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
 }
 
 // lengthContext is what the font- and viewport-relative units resolve against.
-func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool) style.LengthContext {
+func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool, xh style.Unit, haveXHeight bool) style.LengthContext {
 	return style.LengthContext{
 		FontSize:         b.FontSize,
 		RootFontSize:     l.rootFontSize,
@@ -1225,6 +1232,8 @@ func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool) styl
 		ViewportKnown:    true,
 		ZeroAdvance:      zero,
 		FontMetricsKnown: haveMetrics,
+		XHeight:          xh,
+		XHeightKnown:     haveXHeight,
 	}
 }
 
@@ -1236,16 +1245,20 @@ func (l *layouter) lengthContext(b *Box, zero style.Unit, haveMetrics bool) styl
 // and the boxes that reach it are the ones with a background image on them.
 func (l *layouter) lengthOfValues(b *Box, vals []css.ComponentValue) (style.Length, bool) {
 	l.ensureFontSize(b)
-	var zero style.Unit
-	var haveMetrics bool
+	var zero, xh style.Unit
+	var haveMetrics, haveXHeight bool
 	for _, v := range vals {
-		if v.IsToken() && v.Token.Kind == css.Dimension &&
-			strings.EqualFold(v.Token.Unit, "ch") {
+		if !v.IsToken() || v.Token.Kind != css.Dimension {
+			continue
+		}
+		switch {
+		case strings.EqualFold(v.Token.Unit, "ch"):
 			zero, haveMetrics = l.zeroAdvance(b)
-			break
+		case strings.EqualFold(v.Token.Unit, "ex"):
+			xh, haveXHeight = l.xHeightOf(b)
 		}
 	}
-	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics))
+	length, _, ok := style.ParseLength(vals, l.lengthContext(b, zero, haveMetrics, xh, haveXHeight))
 	return length, ok
 }
 
@@ -1263,6 +1276,44 @@ func usesCh(raw string) bool {
 		}
 	}
 	return false
+}
+
+// usesEx reports whether a value might carry an "ex" length. Same shape and same
+// reason as usesCh: a false positive costs one face lookup.
+func usesEx(raw string) bool {
+	for i := 0; i+1 < len(raw); i++ {
+		if (raw[i] == 'e' || raw[i] == 'E') && (raw[i+1] == 'x' || raw[i+1] == 'X') &&
+			i > 0 && raw[i-1] >= '0' && raw[i-1] <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// xHeightOf is the height of a lowercase x in a box's own font.
+//
+// It reports false when the face does not state one, so that "ex" falls back to
+// half an em rather than to zero — a zero would collapse the box the author was
+// sizing, and a face stating no x-height is the common case for the fourteen
+// standard faces this engine uses by default.
+func (l *layouter) xHeightOf(b *Box) (style.Unit, bool) {
+	face, ok := l.fontFor(b)
+	if !ok {
+		return 0, false
+	}
+	d := face.Descriptor()
+	upem := float64(face.UnitsPerEm())
+	// The Declared check cannot be observed today and is kept deliberately. A
+	// face that states no x-height reports zero, so the positive test below
+	// already sends it to the fallback, and a planted defect removing the
+	// Declared check changes nothing. Relying on that is the trap, though: it
+	// works only while "not stated" and "stated as zero" happen to be the same
+	// bytes, and telling those apart is the entire reason Declared exists. Four
+	// bugs in this engine have come from reading a zero as an answer.
+	if upem <= 0 || !d.Has(fonts.MetricXHeight) || d.XHeight <= 0 {
+		return 0, false
+	}
+	return b.FontSize.Mul(float64(d.XHeight) / upem), true
 }
 
 // zeroAdvance is the width of "0" in a box's own font, which is what "ch" means.

@@ -304,7 +304,7 @@ const wptEnv = "WPT_TESTS"
 // where a hanging space went; 7 in css/CSS2/text; and 4 in css/CSS2/linebox,
 // which is the directory that tests §8.4's rule that an inline box's vertical
 // padding and border bleed over the lines around them without moving any of them.
-const wptCleanPassBaseline = 3480
+const wptCleanPassBaseline = 3551
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
