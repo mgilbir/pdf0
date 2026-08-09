@@ -224,8 +224,12 @@ func (l *layouter) checkDecorationValue(b *Box) {
 // decorationMetrics is where the three lines sit for one face at one size, as
 // distances from the baseline with the CSS convention that down is positive.
 type decorationMetrics struct {
-	// thickness is the height of every one of the bands.
+	// thickness is the height of every one of the bands, except a line-through
+	// drawn from a face that states a strikeout size of its own.
 	thickness style.Unit
+	// strikeThickness is that size, and is zero when the face did not state one
+	// — in which case the line-through is drawn at thickness like the rest.
+	strikeThickness style.Unit
 	// underline, overline and strike are the *top* edge of each band.
 	underline, overline, strike style.Unit
 }
@@ -262,6 +266,21 @@ func decorationMetricsFor(face *fonts.Face, size style.Unit) decorationMetrics {
 	}
 	d := face.Descriptor()
 
+	// The underline, when the face states one. post gives the *top* of the
+	// stroke and a thickness, which is exactly the band this draws, so there is
+	// no arithmetic to get wrong beyond the sign: the position is measured up
+	// from the baseline and an underline is below it, so a negative number is a
+	// positive offset downwards.
+	//
+	// The thickness is still floored at one layout unit. A face is free to state
+	// a thickness that rounds to nothing at a small size, and a decoration that
+	// silently disappears below some font size is worse than one a fraction too
+	// thick.
+	if d.Has(fonts.MetricUnderline) && d.UnderlineThickness > 0 {
+		m.thickness = style.Max(size.Mul(float64(d.UnderlineThickness)/upem), 1)
+		m.underline = style.Unit(0).Sub(size.Mul(float64(d.UnderlinePosition) / upem))
+	}
+
 	// The overline sits on the face's own ascent — the top of its content area,
 	// which is where a browser draws it and is above every letter the face sets.
 	ascent := size.Mul(float64(d.Ascent) / upem)
@@ -274,11 +293,33 @@ func decorationMetricsFor(face *fonts.Face, size style.Unit) decorationMetrics {
 	// declared. Two places using one estimate is deliberate: a document where the
 	// two disagreed would have a strike and a middle-aligned box at different
 	// heights for the same reason.
+	// The line-through, when the face states one. OS/2 gives the position of the
+	// stroke's top and its size, in the same convention as the underline.
+	if d.Has(fonts.MetricStrikeout) && d.StrikeoutSize > 0 {
+		strikeThickness := style.Max(size.Mul(float64(d.StrikeoutSize)/upem), 1)
+		m.strike = style.Unit(0).Sub(size.Mul(float64(d.StrikeoutPosition) / upem))
+		// A strikeout has a size of its own and it is not always the underline's.
+		// Using the underline's here would draw a line the font asked to be
+		// thinner or thicker, at the right height, which is the sort of wrong
+		// that looks like a rendering choice.
+		m.strikeThickness = strikeThickness
+		return m
+	}
+
+	// No strikeout stated, so it is placed through the middle of the lower-case
+	// letters. The x-height is the face's own when it states one, and otherwise
+	// the same estimate strutFor uses for "vertical-align: middle" — seven
+	// tenths of the cap height, or half an em. Two places sharing one estimate is
+	// deliberate: a document where they disagreed would have a strike and a
+	// middle-aligned box at different heights for the same reason.
 	xHeight := size.Mul(0.5)
-	if d.CapHeight > 0 {
+	switch {
+	case d.Has(fonts.MetricXHeight) && d.XHeight > 0:
+		xHeight = size.Mul(float64(d.XHeight) / upem)
+	case d.CapHeight > 0:
 		xHeight = size.Mul(float64(d.CapHeight) / upem * 0.7)
 	}
-	m.strike = style.Unit(0).Sub(xHeight.Div(2)).Sub(thickness.Div(2))
+	m.strike = style.Unit(0).Sub(xHeight.Div(2)).Sub(m.thickness.Div(2))
 	return m
 }
 
@@ -289,14 +330,19 @@ func decorationMetricsFor(face *fonts.Face, size style.Unit) decorationMetrics {
 func decorationBand(kind decorationKind, x, width, baseline style.Unit,
 	m decorationMetrics) Rect {
 
-	var top style.Unit
+	top, height := m.underline, m.thickness
 	switch kind {
 	case decorationOverline:
 		top = m.overline
 	case decorationLineThrough:
 		top = m.strike
-	default:
-		top = m.underline
+		if m.strikeThickness > 0 {
+			// The face stated a size for this line and it need not be the
+			// underline's. Drawing it at the underline's would put a line the
+			// font asked to be thinner or thicker at exactly the right height,
+			// which reads as a choice rather than as a mistake.
+			height = m.strikeThickness
+		}
 	}
-	return Rect{X: x, Y: baseline.Add(top), W: width, H: m.thickness}
+	return Rect{X: x, Y: baseline.Add(top), W: width, H: height}
 }
