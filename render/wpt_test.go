@@ -316,7 +316,19 @@ const wptEnv = "WPT_TESTS"
 //   - §17.6.1's divergence, where a <table>'s width is its border box and a
 //     "display: table" div's is its content box: another 8, 3610 to 3618, again
 //     none the other way.
-const wptCleanPassBaseline = 3618
+//
+// Joining abutting runs in the comparison took it from 3618 to 3644, and none of
+// that is layout: not a pixel of engine output changed. Failures fell from 1282
+// to 1255 — 27 tests stopped failing, none started, and one of the 27 went to the
+// vacuous bucket rather than this one.
+//
+// It is the fifth time this file has recorded a block of failures that were about
+// the harness, and the reason these were invisible is that the two documents were
+// already drawing the same glyphs in the same places. The comparison matched them
+// run against run, so a reference setting "a bc d" as one line disagreed with a
+// test setting "a b" and "c d" as two table cells that touch — over a boundary
+// that exists in the display list and not on the page. See joinRuns.
+const wptCleanPassBaseline = 3644
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

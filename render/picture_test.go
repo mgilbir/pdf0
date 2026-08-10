@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -219,7 +220,7 @@ type textMark struct {
 }
 
 func texts(ops []Op, under []coloured) []textMark {
-	var out []textMark
+	var marking []DrawText
 	for _, op := range ops {
 		v, ok := op.(DrawText)
 		if !ok || strings.TrimSpace(v.Text) == "" {
@@ -237,6 +238,11 @@ func texts(ops []Op, under []coloured) []textMark {
 			// document shows.
 			continue
 		}
+		marking = append(marking, v)
+	}
+
+	var out []textMark
+	for _, v := range joinRuns(marking) {
 		out = append(out, textMark{
 			what: fmt.Sprintf("text %q size %s", v.Text, num(v.Size)),
 			x:    v.At.X, y: v.At.Y,
@@ -252,6 +258,134 @@ func texts(ops []Op, under []coloured) []textMark {
 		return out[i].y < out[j].y
 	})
 	return out
+}
+
+// joinRuns splices marking runs that abut into the single run they are
+// indistinguishable from.
+//
+// # Why the comparison needs this
+//
+// A run is a unit of *drawing*, not a unit of ink. Where one document sets "a b"
+// and "c d" as two table cells that happen to touch, and the other sets "a bc d"
+// as one line of a div, the two put the same glyphs at the same positions in the
+// same face — and the earlier comparison ruled them different, because it matched
+// each run's string against a run of the other document and found "b" beside
+// "bc".
+//
+// That is a statement about how this engine batches its drawing and not about
+// the page. §17.2.1's anonymous table objects are where it bites hardest, because
+// splitting content into cells is exactly what those tests do and drawing the
+// same content as flowing text is exactly what their references do: 16 of the
+// css/CSS2/tables failures were this and nothing else, every glyph already at the
+// right place to the layout unit. Another 11 elsewhere in the suite were the same
+// thing arrived at by a different route.
+//
+// # What makes it safe
+//
+// Two runs are joined only when nothing about them could produce different ink:
+// the same face, the same size, the same colour, the same letter-spacing, the
+// same direction, the same baseline, and the second starting exactly where the
+// first ends. The join preserves the glyph sequence and the position of every
+// glyph in it, so a joined pair is equal to another joined pair only if the two
+// documents put the same glyphs in the same places. It cannot make two different
+// words compare equal, and it cannot move one.
+//
+// The end of a run is accumulated from each part's own advance rather than
+// re-measured from the joined string, which matters twice: it is linear rather
+// than quadratic in the length of a line, and it does not let a kerning pair that
+// appears only in the joined string shift the boundary this is testing.
+//
+// # What it is deliberately not shown
+//
+// Only the runs that mark the page reach here — texts drops white space and
+// invisible ink first — and that ordering is not an optimisation, it is what
+// makes the advance arithmetic answerable at all. A tab does not advance by its
+// glyph's width but to the next tab stop, and a space on a justified line does
+// not advance by its own width either; asking a face how wide either of them is
+// gives the wrong answer, the wrong answer lands in the middle of a chain of
+// joins, and the two documents then join differently. That was measured: joining
+// over white space too cost eight tests in css-text/white-space and bidi-text,
+// every one of them a tab or a justified line, against the 27 it gained.
+//
+// A gap between two visible runs therefore stops the chain, whatever is in it.
+// That is the safe direction — two runs a space apart are left as two marks,
+// exactly as before.
+//
+// Right-to-left runs are left alone. Their glyphs march the other way from the
+// origin, so "starts where the last one ended" is a different sum, and there is
+// no case in the suite that needs it — an unnecessary rule here would be a way
+// for the oracle to lose a difference it should see.
+func joinRuns(runs []DrawText) []DrawText {
+	type key struct {
+		y, size, spacing style.Unit
+		face             *fonts.Face
+		colour           style.RGBA
+	}
+	// Runs are gathered per group and spliced within it. The order of the output
+	// is not the paint order any more, which is why this is used only by texts:
+	// text is compared as a sorted set of marks, and picFills — where order
+	// decides what covers what — never sees it.
+	groups := map[key][]DrawText{}
+	var order []key
+	out := make([]DrawText, 0, len(runs))
+	for _, v := range runs {
+		if v.RTL || v.Face == nil {
+			// A run with no face has no advance to add, so "where it ends" is
+			// unanswerable and the chain has to stop at it rather than treat it
+			// as zero wide. Nothing the engine draws is faceless; the hand-built
+			// runs in picture_check_test.go are, and a rule that joined every one
+			// of those into whatever sat at the same point would make that file
+			// measure something other than what it says.
+			out = append(out, v)
+			continue
+		}
+		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color}
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], v)
+	}
+	for _, k := range order {
+		g := groups[k]
+		sort.SliceStable(g, func(i, j int) bool { return g[i].At.X < g[j].At.X })
+		cur, end := g[0], g[0].At.X.Add(runAdvance(g[0]))
+		for _, next := range g[1:] {
+			if abs(end.Sub(next.At.X)) <= joinSlack {
+				cur.Text += next.Text
+				end = end.Add(runAdvance(next))
+				continue
+			}
+			out = append(out, cur)
+			cur, end = next, next.At.X.Add(runAdvance(next))
+		}
+		out = append(out, cur)
+	}
+	return out
+}
+
+// joinSlack is how far apart two runs may be and still count as touching.
+//
+// One layout unit, which is the smallest difference the engine can represent.
+// Both runs were placed by the same engine from the same advances, so an abutting
+// pair agrees exactly; the unit of slack is for the rounding of a sum, not for a
+// gap.
+const joinSlack = style.Unit(1)
+
+// runAdvance is how far a run moves the pen: the face's own advance plus the
+// letter-spacing that was already spent on it.
+func runAdvance(v DrawText) style.Unit {
+	if v.Face == nil {
+		return 0
+	}
+	w, _ := style.FromPx(v.Face.Measure(v.Text, v.Size.Px()))
+	return w.Add(v.CharSpacing.Mul(float64(len([]rune(v.Text)))))
+}
+
+func abs(u style.Unit) style.Unit {
+	if u < 0 {
+		return -u
+	}
+	return u
 }
 
 // edges collects the distinct grid lines of both documents along one axis.
