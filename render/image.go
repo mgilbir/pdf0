@@ -312,7 +312,7 @@ func (l *replacedLoader) load(src, what string) (*ReplacedContent, *loadFailure)
 func (l *replacedLoader) fetch(src, what string) ([]byte, *loadFailure) {
 	if scheme, ok := schemeOf(src); ok {
 		if scheme == "data" {
-			return decodeDataURI(src)
+			return decodeDataURI(src, what, RuleImageUndecodable)
 		}
 		return nil, &loadFailure{
 			rule: RuleResourceBlocked,
@@ -434,23 +434,29 @@ func (l *replacedLoader) decode(src, what string, data []byte) (*ReplacedContent
 // caps, which apply exactly as they do to a file. The length is checked before
 // the decode rather than after, because base64 expands by three quarters and a
 // cap applied to the result is a cap applied to an allocation already made.
-func decodeDataURI(src string) ([]byte, *loadFailure) {
+//
+// what names the kind of thing being read and bad is the rule to raise when it
+// cannot be, because the two callers report under different ones: an image that
+// will not decode is undecodable, and a stylesheet that will not decode was
+// never loaded. The policy and the caps are one piece of code either way, which
+// is the point.
+func decodeDataURI(src, what string, bad Rule) ([]byte, *loadFailure) {
 	const prefix = "data:"
 	rest := src[len(prefix):]
 	comma := strings.IndexByte(rest, ',')
 	if comma < 0 {
 		return nil, &loadFailure{
-			rule:    RuleImageUndecodable,
-			message: "a data: image has no comma separating its type from its content",
+			rule:    bad,
+			message: "a data: " + what + " has no comma separating its type from its content",
 		}
 	}
 	meta, payload := rest[:comma], rest[comma+1:]
 	if len(payload) > maxDataURIBytes {
 		return nil, &loadFailure{
-			rule: RuleImageUndecodable,
+			rule: bad,
 			message: fmt.Sprintf(
-				"a data: image carries %d encoded bytes, more than the %d this engine will read",
-				len(payload), maxDataURIBytes),
+				"a data: %s carries %d encoded bytes, more than the %d this engine will read",
+				what, len(payload), maxDataURIBytes),
 		}
 	}
 
@@ -465,8 +471,8 @@ func decodeDataURI(src string) ([]byte, *loadFailure) {
 			data, err = base64.RawStdEncoding.DecodeString(strings.TrimSpace(payload))
 			if err != nil {
 				return nil, &loadFailure{
-					rule:    RuleImageUndecodable,
-					message: "a data: image is not valid base64: " + err.Error(),
+					rule:    bad,
+					message: "a data: " + what + " is not valid base64: " + err.Error(),
 				}
 			}
 		}
@@ -475,8 +481,8 @@ func decodeDataURI(src string) ([]byte, *loadFailure) {
 	decoded, err := url.PathUnescape(payload)
 	if err != nil {
 		return nil, &loadFailure{
-			rule:    RuleImageUndecodable,
-			message: "a data: image is not readable: " + err.Error(),
+			rule:    bad,
+			message: "a data: " + what + " is not readable: " + err.Error(),
 		}
 	}
 	return []byte(decoded), nil
