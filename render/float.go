@@ -144,19 +144,33 @@ func (fc *floatContext) shift(from int, dy style.Unit) {
 // bandAt returns the left and right edges available at one y, between the two
 // edges of a containing block.
 //
-// The query is at a single y rather than over a range, which is what browsers do
-// and is worth stating because the alternative looks more careful and is not: a
-// line box is placed at the y it starts at, and a float that begins halfway down
-// it does not retroactively shorten it. Taking the intersection over the line's
-// whole height would shorten lines that the specification leaves alone.
-//
-// A float of zero height obstructs nothing. That is not an optimisation either —
-// an empty floated <div> is a common way to write a clearance hack, and treating
-// it as an obstacle would move the text beside it.
+// A float of zero height obstructs nothing. That is not an optimisation — an
+// empty floated <div> is a common way to write a clearance hack, and treating it
+// as an obstacle would move the text beside it.
 func (fc *floatContext) bandAt(y, lo, hi style.Unit) (left, right style.Unit) {
+	return fc.bandOver(y, y, lo, hi)
+}
+
+// bandOver returns the left and right edges available over a vertical range,
+// between the two edges of a containing block.
+//
+// The range matters, and getting it wrong was worth a dozen of the suite's
+// tests. §9.5's non-overlap rule is about a *box*, not about a point: a float
+// whose top is below the top of the box still overlaps it, so the room a box has
+// is the intersection of the bands over its whole height rather than the band at
+// its first line. The suite says so by name —
+// floats-wrap-top-below-bfc-001l.xht is "test for wrapping around floats whose
+// top is below the top of what must wrap around them" — and an engine that asks
+// at a single y puts the box in the wider band above the float and lets the
+// float pass straight through it.
+//
+// A degenerate range, where bottom is not below top, is the single-y question,
+// and it is answered as such rather than as an empty intersection: a float that
+// begins exactly at y obstructs a query at y.
+func (fc *floatContext) bandOver(top, bottom, lo, hi style.Unit) (left, right style.Unit) {
 	left, right = lo, hi
 	for _, f := range fc.boxes {
-		if f.rect.H <= 0 || y < f.rect.Y || y >= f.rect.Bottom() {
+		if f.rect.H <= 0 || !spansRange(f.rect.Y, f.rect.Bottom(), top, bottom) {
 			continue
 		}
 		if f.side == FloatLeft {
@@ -178,6 +192,53 @@ func (fc *floatContext) bandAt(y, lo, hi style.Unit) (left, right style.Unit) {
 		fc.consulted++
 	}
 	return left, right
+}
+
+// spansRange reports whether [a0,a1) meets [b0,b1), where an empty second range
+// is the point b0.
+func spansRange(a0, a1, b0, b1 style.Unit) bool {
+	if b1 <= b0 {
+		return a0 <= b0 && b0 < a1
+	}
+	return a0 < b1 && a1 > b0
+}
+
+// overlaps reports whether a rectangle meets the margin box of any float.
+//
+// This is the question §9.5 actually asks — "the border box of a table, a
+// block-level replaced element, or an element in the normal flow that
+// establishes a new block formatting context must not overlap the margin box of
+// any floats" — and it is not the same question as whether the box is narrower
+// than the band. Two cases separate them, and both are in the suite:
+//
+//   - A float outside the containing block. floats-wrap-bfc-with-margin-008 puts
+//     a 100px box in a 50px containing block beside a right float that begins
+//     exactly where that block ends. The band is the whole containing block, so
+//     a width comparison says the box fits; the box is twice as wide as the
+//     block and lands squarely on the float.
+//   - A box whose own margin moves its border box. The band says where there is
+//     room, not where the border box will be.
+//
+// Touching is not overlapping: a box that begins exactly at a float's right edge
+// is beside it, which is the whole point of the band.
+func (fc *floatContext) overlaps(r Rect) bool {
+	if r.W <= 0 || r.H <= 0 {
+		// A box with no extent covers nothing, so nothing can be under it. A
+		// zero-height flow root is a real thing — an empty "overflow: hidden"
+		// div — and it does not get pushed below a float.
+		return false
+	}
+	for _, f := range fc.boxes {
+		if f.rect.W <= 0 || f.rect.H <= 0 {
+			continue
+		}
+		if f.rect.X < r.Right() && f.rect.Right() > r.X &&
+			f.rect.Y < r.Bottom() && f.rect.Bottom() > r.Y {
+			fc.consulted++
+			return true
+		}
+	}
+	return false
 }
 
 // nextBottomBelow returns the smallest float bottom strictly below a y.
@@ -311,10 +372,30 @@ func avoidsFloats(b *Box) bool {
 // §17.5.2, and the tests that turn on it are failing on their cell content as
 // well. It is named here rather than left to be discovered.
 //
+// # Which box the rule is about
+//
+// §9.5 constrains the *border* box, and against the float's *margin* box. The
+// distinction is not pedantry: a box with "margin-right: 1px" whose border box
+// exactly fills the band beside a float belongs beside that float, and the
+// suite's new-fc-beside-float-with-margin asserts it. Counting the margin as
+// part of what has to fit drops the box a hundred pixels for the sake of one
+// pixel nobody can see.
+//
+// # top, height and known
+//
 // top is where the box's border box would have gone, in the containing block's
-// coordinates; the return value is measured from there.
+// coordinates; the return value is measured from there. height is the border
+// box's height, and known says whether it has been laid out yet.
+//
+// The pair is the awkward part of the rule, and it is awkward in the
+// specification rather than here: the room a box has depends on its height, and
+// its height depends on the room it has. Layout therefore asks twice — once
+// before the box exists, with known false, where the question can only be the
+// band at the box's first line; and once after, with the height it turned out
+// to have, where the real rectangle can be tested and the box moved if the
+// first answer was too generous.
 func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
-	top style.Unit) (style.Unit, *forcedGeometry) {
+	top, height style.Unit, known bool) (style.Unit, *forcedGeometry) {
 
 	if !avoidsFloats(b) || len(origin.ctx.boxes) == 0 {
 		return 0, nil
@@ -322,23 +403,23 @@ func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
 	lo, hi := origin.x, origin.x.Add(containing)
 
 	margin := l.edges(b, "margin", containing)
-	// An auto margin gets no share of the slack next to a float: there is no
-	// slack, since the box is being fitted to a band rather than to its
-	// containing block.
-	if l.isAuto(b, "margin-left") {
+	// An auto margin is zero for as long as the box is being fitted: it is a
+	// share of whatever the band has left over, and how much that is cannot be
+	// known until the band and the width are both settled. It is resolved at the
+	// bottom of this function, once they are.
+	leftAuto, rightAuto := l.isAuto(b, "margin-left"), l.isAuto(b, "margin-right")
+	if leftAuto {
 		margin.Left = 0
 	}
-	if l.isAuto(b, "margin-right") {
+	if rightAuto {
 		margin.Right = 0
 	}
-	fixed := margin.Horizontal().
-		Add(l.borderWidths(b).Horizontal()).
+	// The box's own edges, which are inside the border box, and the same plus its
+	// margins. Both are needed, for two questions that only look like one.
+	edges := l.borderWidths(b).Horizontal().
 		Add(l.paddingOf(b, containing).Horizontal())
+	fixed := edges.Add(margin.Horizontal())
 
-	// How wide a band the margin box needs. A box that can shrink needs only
-	// the room its own edges take, so it fits wherever there is any band at
-	// all — which is the difference between narrowing and dropping.
-	//
 	// The distinction is whether the used width depends on the room available.
 	// A declared width does not, so the box keeps it and drops. An auto width
 	// does, in both of its forms — filling the band, or shrinking to fit it — so
@@ -350,23 +431,90 @@ func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
 	if hasWidth {
 		declared = l.clampWidth(b, declared, containing)
 	}
+	// How wide a band the box needs, and this is where the two questions part.
+	//
+	// A box that narrows takes its width *from* the band, so what the band has to
+	// pay for besides the content is its edges and both its margins. A negative
+	// margin makes that number negative and so makes the box wider than the band,
+	// which is the whole of what a negative margin is for — the suite turns on it
+	// in floats-wrap-bfc-with-margin-006 and -007 and in
+	// new-fc-beside-float-with-margin-rtl.
+	//
+	// A box with a declared width is §10.3.3's over-constrained case, and that is
+	// what decides whether its margins count. The equality "margin-left + border
+	// + padding + width + padding + border + margin-right = the room available"
+	// cannot hold when the width is fixed, so one value has to give, and in a
+	// left-to-right box it is margin-right: "the specified value of margin-right
+	// is ignored". A *positive* margin-right is therefore not part of what has to
+	// fit — new-fc-beside-float-with-margin is a "margin-right: 1px" beside a
+	// band its border box exactly fills, and dropping the box a hundred pixels
+	// for one invisible pixel is what counting it does. A *negative* one is not
+	// over-constraining at all: it makes the equality hold at a larger width, so
+	// it is room and it counts.
 	need := fixed
 	if hasWidth {
-		need = declared.Add(fixed)
+		need = declared.Add(edges).Add(margin.Left).Add(style.Min(margin.Right, 0))
+	}
+
+	// bottom is the far edge of the range the band is asked over. Before the box
+	// is laid out there is no such range and the question degenerates to the
+	// band at its top, which is bandOver's empty-range case.
+	extent := func(y style.Unit) style.Unit {
+		if !known {
+			return y
+		}
+		return y.Add(height)
+	}
+
+	// usedWidth is the width the box would be laid out with in a given band, and
+	// borderBox is where its border box would then be.
+	usedWidth := func(left, right style.Unit) style.Unit {
+		if hasWidth {
+			return declared
+		}
+		room := maxZero(right.Sub(left).Sub(fixed))
+		if b.TableWrapper {
+			// §17.4: the wrapper is as wide as the table's border box, and the
+			// table's auto width is settled against the room it has — which is
+			// now the band's rather than the containing block's.
+			return l.shrinkToFit(b, room)
+		}
+		return l.clampWidth(b, room, containing)
+	}
+	borderBox := func(y, left, right style.Unit) Rect {
+		return Rect{
+			X: left.Add(margin.Left), Y: y,
+			W: usedWidth(left, right).Add(edges), H: height,
+		}
 	}
 
 	// Drop to the first band that holds it, exactly as a float does. The search
 	// steps from one float bottom to the next because that is where the set of
-	// bands changes; see nextBottomBelow.
+	// bands changes; see nextBottomBelow — and because it terminates: there are
+	// finitely many float bottoms and each step is strictly below the last.
 	y := origin.y.Add(top)
 	for {
-		left, right := origin.ctx.bandAt(y, lo, hi)
-		if right.Sub(left) >= need {
+		left, right := origin.ctx.bandOver(y, extent(y), lo, hi)
+		// Whether the border box lands on a float even though the band says
+		// there is room for it. A width comparison cannot see that, because the
+		// band is clamped to the containing block and a float can be outside
+		// one: floats-wrap-bfc-with-margin-008 puts a hundred-pixel box in a
+		// fifty-pixel block beside a right float that begins exactly where the
+		// block ends, and every width in the arithmetic says it fits.
+		//
+		// Only asked of a declared width, and only once the height is known. A
+		// box that narrows took its width from this band, so it is by
+		// construction where the band put it, and a rectangle test would
+		// rediscover nothing but the negative margin the author wrote on purpose.
+		hit := known && hasWidth && origin.ctx.overlaps(borderBox(y, left, right))
+		if right.Sub(left) >= need && !hit {
 			break
 		}
-		if left == lo && right == hi {
+		if left == lo && right == hi && !hit {
 			// The whole containing block is not wide enough, so no band below
-			// will be either. §9.5.1 rule 8's overflow, for the same reason.
+			// will be either. §9.5.1 rule 8's overflow, for the same reason —
+			// unless the box is lying on a float, which is not something a
+			// wider band below cannot fix.
 			break
 		}
 		next, ok := origin.ctx.nextBottomBelow(y)
@@ -377,23 +525,42 @@ func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
 	}
 
 	drop := y.Sub(origin.y).Sub(top)
-	left, right := origin.ctx.bandAt(y, lo, hi)
+	left, right := origin.ctx.bandOver(y, extent(y), lo, hi)
 	if left == lo && right == hi {
 		// No float reaches this band, so nothing about the box's own width or
 		// position changes. Only the drop, if any, is the rule's doing.
 		return drop, nil
 	}
 
-	width := declared
-	if !hasWidth {
-		room := maxZero(right.Sub(left).Sub(fixed))
-		if b.TableWrapper {
-			// §17.4: the wrapper is as wide as the table's border box, and the
-			// table's auto width is settled against the room it has — which is
-			// now the band's rather than the containing block's.
-			width = l.shrinkToFit(b, room)
-		} else {
-			width = l.clampWidth(b, room, containing)
+	width := usedWidth(left, right)
+	if hasWidth && (leftAuto || rightAuto) {
+		// §10.3.3's auto margins, resolved against the band rather than against
+		// the containing block. That is the only substitution the rule makes:
+		// the box has been fitted to a band, so the room it has to share out is
+		// the band's room, and an auto margin still takes all of what is left.
+		//
+		// It is what puts a "width: 200px; margin-left: auto" box against the
+		// *right* float rather than against the left edge of a block that has a
+		// float in the way. Zeroing the auto margin instead — which is what this
+		// did first, on the reasoning that a box fitted to a band has no slack to
+		// give away — puts the box a hundred and fifty pixels from where every
+		// browser puts it, and the suite says so in
+		// floats-wrap-top-below-bfc-001r.
+		//
+		// A negative remainder is not shared out. It means the box is wider than
+		// the band and is overflowing it, and an auto margin that went negative
+		// would pull the border box back onto the float this whole function
+		// exists to keep it off.
+		slack := maxZero(right.Sub(left).Sub(width).Sub(edges).
+			Sub(margin.Left).Sub(margin.Right))
+		switch {
+		case leftAuto && rightAuto:
+			half := slack.Div(2)
+			margin.Left, margin.Right = half, slack.Sub(half)
+		case leftAuto:
+			margin.Left = slack
+		default:
+			margin.Right = slack
 		}
 	}
 	// The box goes against the near edge of the band. Its own left margin is

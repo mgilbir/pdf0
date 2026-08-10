@@ -932,7 +932,22 @@ func (l *layouter) positionTerms(b *Box, vals []css.ComponentValue) ([]posTerm, 
 			switch kw {
 			case "left", "right", "top", "bottom", "center":
 				term := posTerm{edge: kw}
-				if kw != "center" && i+1 < len(parts) {
+				// A keyword takes a following length as *its own* offset only in
+				// the three- and four-value syntax, where every axis still names
+				// an edge. In the two-value form the length belongs to the other
+				// axis: CSS Backgrounds' grammar reads "left -1em" as the
+				// alternative "[left|center|right|<length-percentage>]
+				// [top|center|bottom|<length-percentage>]", so it is the left
+				// edge horizontally and an em above the top vertically — not an
+				// em in from the left and nothing said about the vertical.
+				//
+				// Grouping greedily and then refusing the result is what this did
+				// first, and it turned "background: url(x) left -1em" into no
+				// position at all: the image landed an em below where the
+				// stylesheet put it, which in the suite's margin-collapse tests
+				// slides a whole band of red out from under the box meant to
+				// cover it.
+				if kw != "center" && len(parts) > 2 && i+1 < len(parts) {
 					if length, ok := l.lengthOfValues(b, parts[i+1]); ok {
 						term.offset, term.hasOffset = length, true
 						i += 2

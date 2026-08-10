@@ -456,7 +456,53 @@ const wptEnv = "WPT_TESTS"
 // missing families is 2.25px taller than the one that names them together — the
 // union of two faces with different baselines, which is §10.8.1 working. It
 // fails honestly.
-const wptCleanPassBaseline = 3924
+//
+// Floats, clearance and margins took it from 3924 to 3957, and this time the
+// reporting and the ink need no separating: the vacuous count is 320 before and
+// 320 after, so not one test moved buckets for a reason other than a mark
+// changing place. 33 tests stopped failing, 968 to 935, and *none* started —
+// each of the five changes was measured on its own against a per-test dump and
+// counted in both directions.
+//
+// What the failures turned out to be is the part worth recording, because the
+// heading was wrong again. Of the 159 failures across floats, floats-clear and
+// margin-padding-clear, only 27 came from the three rules the directories are
+// named for; the rest are still there. The five that moved:
+//
+//   - <table width> was not a presentational hint. Eighteen of the dbaron float
+//     tests declare their table's width as an attribute, so the table came out
+//     at its content's width and the whole document was laid out at half scale.
+//     Five tests, and not a line of float code.
+//   - §9.5's non-overlap rule was asked at a single y. A box is a rectangle and
+//     a float whose top is below the box's top still overlaps it, which is the
+//     subject of twelve tests that say so in their titles. Six of them.
+//   - The same rule was asked as "is the band wide enough" rather than as "do
+//     these two rectangles meet", which cannot see a float outside the
+//     containing block, and it counted the box's margins against a rule that is
+//     about its border box. Five more.
+//   - Line boxes had the same single-y fault, which is the other six of the
+//     twelve, plus one on a zero-height float.
+//   - "height: 0" was read as a barrier a margin cannot cross. §8.3.1 asks for
+//     "zero or 'auto'" where a box's own two margins meet and for "'auto'"
+//     where a parent's meets its last child's, and one condition was doing for
+//     both. Three tests, two of them nowhere near a float.
+//   - And one that is not a layout rule at all: "background: url(x) left -1em"
+//     parsed as no position, because the keyword grabbed the length greedily and
+//     the result was then refused. Seven tests, four of them in the backgrounds
+//     directory. Removing the *finding* alone moved nothing in either direction
+//     — those tests were failing, not tainted — so the whole of the seven is the
+//     image landing where the stylesheet put it.
+//
+// What did not move is worth naming too. css/CSS2/floats-clear went from 65
+// failures to 64. Almost all of what is left there is one missing behaviour: a
+// float's position depends on the margins that collapse around the block it sits
+// in, so a float followed by a large margin is pulled down with it — and
+// clearance on the box carrying that margin has to put the float back. This
+// engine places a float where the flow has reached when it meets it and never
+// moves it again, which is right until a later sibling's margin collapses
+// through. adjoining-float-before-clearance and the four
+// adjoining-float-nested-forced-clearance tests are all this one thing.
+const wptCleanPassBaseline = 3957
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
