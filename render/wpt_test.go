@@ -304,7 +304,19 @@ const wptEnv = "WPT_TESTS"
 // where a hanging space went; 7 in css/CSS2/text; and 4 in css/CSS2/linebox,
 // which is the directory that tests §8.4's rule that an inline box's vertical
 // padding and border bleed over the lines around them without moving any of them.
-const wptCleanPassBaseline = 3551
+//
+// §17.5.2.1's two width rules took it from 3551 to 3618, and this time both
+// numbers are about layout: not a finding was added or removed, and the two were
+// counted by name over the whole suite and in both directions.
+//
+//   - A first-row cell's declared width is a content width, so the column it
+//     settles has to hold that cell's padding and border too. 59 tests, 3551 to
+//     3610, none the other way, and every one of the 59 landed in this bucket
+//     rather than the vacuous one.
+//   - §17.6.1's divergence, where a <table>'s width is its border box and a
+//     "display: table" div's is its content box: another 8, 3610 to 3618, again
+//     none the other way.
+const wptCleanPassBaseline = 3618
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
