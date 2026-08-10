@@ -95,13 +95,14 @@ jobs:
             testdata/pdf20examples
             testdata/facturx
             testdata/unicode-bidi
+            testdata/unicode-grapheme
             testdata/wpt
             testdata/fonts-noto
           key: corpora-${{ hashFiles('Makefile', 'testdata/facturx/sources.tsv') }}
 
       - name: fetch corpora
         if: steps.corpora.outputs.cache-hit != 'true'
-        run: make corpus arlington refpdfs facturx bidi-tests wpt noto-fonts
+        run: make corpus arlington refpdfs facturx bidi-tests grapheme-tests wpt noto-fonts
 
       # A half-finished fetch must be red, not green. The corpus-gated tests skip
       # when their directory is empty, and a skip reads as a pass: this repository
@@ -136,6 +137,7 @@ jobs:
           # bracket pairing, and a fetch that got only the other would leave that
           # rule unchecked while the job stayed green.
           check testdata/unicode-bidi            '*.txt'    2
+          check testdata/unicode-grapheme        '*.txt'    1
           # The Web Platform Tests, which the layout ratchet is measured over. A
           # sparse checkout that fetched no directory at all still leaves the
           # repository root, and TestWPTReftests skips on an unset variable and
@@ -164,6 +166,7 @@ jobs:
           # Absolute, because `go test ./internal/bidi/` runs with the package
           # directory as its working directory and not the repository root.
           UNICODE_BIDI_TESTS: ${{ github.workspace }}/testdata/unicode-bidi
+          UNICODE_GRAPHEME_TESTS: ${{ github.workspace }}/testdata/unicode-grapheme
           # Absolute for the same reason: ./render/ runs in its own directory.
           WPT_TESTS: ${{ github.workspace }}/testdata/wpt
           NOTO_FONTS: ${{ github.workspace }}/testdata/fonts-noto

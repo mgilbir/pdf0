@@ -334,7 +334,9 @@ type layouter struct {
 	// reportedScripts and reportedGlyphs suppress repeating a complaint that is
 	// about a script or a character rather than about a place.
 	reportedScripts map[string]bool
-	reportedGlyphs  map[string]bool
+	// reportedWordBreak is the same for the word-break values read as normal.
+	reportedWordBreak map[string]bool
+	reportedGlyphs    map[string]bool
 	// reportedOverflow suppresses repeating one run's overflow per line.
 	reportedOverflow map[string]bool
 	// reportedJustify suppresses repeating the justification gap per line.

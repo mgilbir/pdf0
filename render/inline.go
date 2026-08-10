@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/pdf0/internal/grapheme"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -60,29 +61,40 @@ import (
 // levels over each paragraph and this file reorders the runs of each line once
 // it has been broken; see visualRuns below.
 //
-// word-break and overflow-wrap are not implemented either, and are left to be
-// reported as unsupported properties rather than approximated. Both ask for a
-// break *between two characters*, and CSS Text §2 says which positions those
-// are: a soft wrap opportunity falls between typographic character units, which
-// is the grapheme cluster. Breaking inside one splits a letter from its accent.
+// word-break: break-all *is* implemented, and the machinery it needed is worth
+// naming because it turned out to be the answer to a question this file had
+// wrong for everything, not only for break-all.
+//
+// It asks for a break *between two characters*, and CSS Text §2 says which
+// positions those are: a soft wrap opportunity falls between typographic
+// character units, which is the grapheme cluster. Breaking inside one splits a
+// letter from its accent.
 //
 // The shaper's clusters are the obvious candidate for those positions and are
-// not them, which was measured rather than assumed —
-// graphemecluster_test.go shapes five strings whose UAX #29 segmentation is not
-// in doubt and finds forme's clusters finer than the grapheme clusters in every
-// one: a base with two combining marks breaks between the marks, a keycap
-// breaks off its digit, conjoining Hangul breaks into three, a flag breaks into
-// two letters, and a Thai spacing mark leaves its consonant. In a right-to-left
-// run the clusters are not even ordered — the glyphs come back as they are
-// drawn — so "the cluster changed" does not name a position in the text.
+// not them, which was measured rather than assumed — graphemecluster_test.go
+// shapes five strings whose UAX #29 segmentation is not in doubt and finds
+// forme's clusters finer than the grapheme clusters in every one: a base with
+// two combining marks breaks between the marks, a keycap breaks off its digit,
+// conjoining Hangul breaks into three, a flag breaks into two letters, and a
+// Thai spacing mark leaves its consonant. In a right-to-left run the clusters
+// are not even ordered — the glyphs come back as they are drawn — so "the
+// cluster changed" does not name a position in the text.
 //
-// What is missing is a UAX #29 grapheme segmenter over the *characters*, which
-// is where this belongs anyway since splitAtBreaks never sees a glyph. It needs
-// Grapheme_Cluster_Break, Extended_Pictographic and Indic_Conjunct_Break, none
-// of which Go's unicode package has, so it is a generated table and it belongs
-// beside forme's other UCD tables. Until then the refusal stands, because a
-// "break-all" that split combining sequences would corrupt exactly the text it
-// was asked to fit.
+// So internal/grapheme is a UAX #29 segmenter over the *characters*, which is
+// where this belongs anyway since splitAtBreaks never sees a glyph. Every cut
+// this file makes now goes through it, not only break-all's, and that caught a
+// break the ideograph rule had been offering since it was written: a Hangul
+// syllable spelled as a precomposed LV plus its own trailing jamo was cut in
+// two, so a line could end in the middle of one letter.
+//
+// keep-all and auto-phrase are still not implemented, and both *remove* or
+// *move* an opportunity rather than adding one — so ignoring either breaks a
+// line where the author said not to, and both are reported.
+//
+// overflow-wrap is not implemented and is reported. It is a different shape of
+// problem from break-all rather than a smaller one: its opportunities exist
+// only when the line cannot otherwise fit, so it is not a question about the
+// text at all but about what the breaker should do having failed once.
 //
 // # White space at a line edge
 //
@@ -1762,7 +1774,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// which is the whole of what makes a <span> set larger than the paragraph
 	// around it grow the line it is on.
 	above, below := l.leading(b)
-	pieces, endedAtBreak := splitAtBreaks(b.Text, ws)
+	wb, unhandled := wordBreakOf(b.Style["word-break"])
+	if unhandled != "" {
+		l.reportWordBreak(b, unhandled)
+	}
+	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb)
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what
@@ -1987,10 +2003,31 @@ type piece struct {
 // The text is walked rune by rune rather than through a []rune, which is not a
 // micro-optimisation: a text node is untrusted and arbitrarily large, and a
 // decoded copy of one is four bytes per character of buffering nobody asked for.
-func splitAtBreaks(text string, ws whiteSpace) ([]piece, bool) {
+func splitAtBreaks(text string, ws whiteSpace, wb wordBreak) ([]piece, bool) {
 	var out []piece
 	var cur strings.Builder
 	breakNext := false
+
+	// Grapheme cluster boundaries, walked in lockstep with the scan.
+	//
+	// It runs for every value of word-break and not only for break-all, because
+	// the rule it enforces is not break-all's: CSS Text §2 puts a soft wrap
+	// opportunity *between* typographic character units, so no opportunity this
+	// function produces may fall inside a cluster. The ideograph rule below used
+	// to produce one — a Hangul syllable followed by its own trailing jamo was
+	// cut in two, which put half a syllable at the end of a line.
+	//
+	// A Scanner rather than a list of offsets: the scan is already linear, and a
+	// list would allocate one int per character for Latin text, where every
+	// character is its own cluster and nothing is learned.
+	var clusters grapheme.Scanner
+	// deferBreak says the previous character allows a line to end after it, and
+	// the opportunity has not been taken yet.
+	//
+	// It is deferred because whether the cut is legal depends on the character
+	// that *follows*: only that one says whether the cluster ended. Taking the
+	// opportunity where it is offered is what cut the syllable open.
+	deferBreak := false
 
 	flush := func() {
 		if cur.Len() == 0 {
@@ -2014,7 +2051,29 @@ func splitAtBreaks(text string, ws whiteSpace) ([]piece, bool) {
 		if r >= utf8.RuneSelf {
 			r, size = utf8.DecodeRuneInString(text[i:])
 		}
+		start := i
 		i += size
+
+		atBoundary := clusters.Boundary(r)
+
+		// The opportunity that may fall before this character: one deferred from
+		// the character before, or — under break-all, CSS Text §5.2 — one at
+		// every typographic character unit boundary inside a word.
+		//
+		// White space is excluded from break-all's half, and that exclusion is
+		// UAX #14's LB7 rather than a simplification: a line may not end between
+		// a word and the space after it, so the space stays on its word's line.
+		// Without it, "X XX X" in four characters of room breaks after the
+		// fourth — which fits more text and is the wrong answer. The other
+		// separators are excluded with it, which errs towards fewer
+		// opportunities and so overflows a line rather than breaking it in a
+		// place the algorithm did not sanction.
+		if (deferBreak || (wb.breakAll && !startsSpacePiece(r, ws))) &&
+			atBoundary && cur.Len() > 0 {
+			flush()
+			breakNext = true
+		}
+		deferBreak = false
 
 		switch {
 		case r == '\n' || r == '\r':
@@ -2058,7 +2117,7 @@ func splitAtBreaks(text string, ws whiteSpace) ([]piece, bool) {
 			// into one would shorten the line.
 			flush()
 			emit(piece{
-				text: text[i-size : i], space: true,
+				text: text[start:i], space: true,
 				trimAtEnd: r == 0x1680 && ws.collapse,
 			})
 			breakNext = ws.breakSpaces || separatorBreaksAfter(r)
@@ -2075,7 +2134,6 @@ func splitAtBreaks(text string, ws whiteSpace) ([]piece, bool) {
 			// Preserved. Under pre and pre-wrap the run hangs or wraps as a
 			// unit, so it is one piece; under break-spaces a line may end after
 			// any single space, so each is its own.
-			start := i - size
 			if !ws.breakSpaces {
 				for i < len(text) && text[i] == ' ' {
 					i++
@@ -2092,10 +2150,14 @@ func splitAtBreaks(text string, ws whiteSpace) ([]piece, bool) {
 
 		case isIdeographic(r):
 			// CJK breaks between ideographs, which is why it needs no spaces.
+			//
+			// The opportunity after it is deferred rather than taken, because a
+			// Hangul syllable can be followed by a trailing jamo that belongs to
+			// it and by a combining mark that belongs to it, and neither is a
+			// place a line may end. The next character's boundary decides.
 			flush()
 			cur.WriteRune(r)
-			flush()
-			breakNext = true
+			deferBreak = true
 
 		case r == '-' && !endsRunOrSpace(text, i):
 			// A hyphen ends a run and the next may begin a line — which is what
@@ -2110,8 +2172,32 @@ func splitAtBreaks(text string, ws whiteSpace) ([]piece, bool) {
 	}
 	flush()
 	// breakNext survives the last piece: it says the text ended at an
-	// opportunity, which matters when what follows is in another box.
-	return out, breakNext
+	// opportunity, which matters when what follows is in another box. A deferred
+	// one counts, and has to: text ending in an ideograph offers a break to
+	// whatever box comes next, and the character that would have confirmed it is
+	// in that box rather than this one.
+	return out, breakNext || deferBreak
+}
+
+// startsSpacePiece reports whether a character is one splitAtBreaks gives a
+// white-space piece of its own.
+//
+// It is the set break-all's opportunities are withheld before — see the call
+// site — and it is written as a predicate rather than inlined so the two places
+// cannot drift apart: a character that grew a branch below without being added
+// here would silently gain a break opportunity before it.
+func startsSpacePiece(r rune, ws whiteSpace) bool {
+	switch {
+	case r == '\n' || r == '\r':
+		return true
+	case r == '\t':
+		return true
+	case r == ' ':
+		return true
+	case r == '​':
+		return true
+	}
+	return isOtherSpaceSeparator(r)
 }
 
 // endsRunOrSpace reports whether the text at i is the end of the run or white
@@ -2520,6 +2606,32 @@ func parseNumber(s string) (float64, bool) {
 		}
 	}
 	return v, seenDigit
+}
+
+// reportWordBreak reports a word-break value this engine reads as normal.
+//
+// "break-all" is implemented; "keep-all" and "auto-phrase" are not, and both
+// *remove* or *move* opportunities rather than adding them — keep-all stops CJK
+// text breaking between two ideographs, and auto-phrase moves a Korean break to
+// a phrase boundary. Ignoring either breaks a line somewhere the author said not
+// to, which no amount of looking at the page reveals as a missing feature.
+//
+// Once per value per box, for the same reason checkScript is once per script.
+func (l *layouter) reportWordBreak(b *Box, value string) {
+	if l.reportedWordBreak == nil {
+		l.reportedWordBreak = map[string]bool{}
+	}
+	if l.reportedWordBreak[value] {
+		return
+	}
+	l.reportedWordBreak[value] = true
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "word-break",
+		Message: value + " was read as normal, so a line may break where the " +
+			"value asked it not to",
+		Path: PathOf(b.Element),
+	})
 }
 
 // checkScript reports text this engine cannot break or order correctly.

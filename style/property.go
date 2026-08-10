@@ -121,6 +121,12 @@ var properties = map[string]property{
 	"text-indent":    {true, "0"},
 	"text-transform": {true, "none"},
 	"white-space":    {true, "normal"},
+	// word-break inherits, which is what makes a rule on a container reach the
+	// text in it. Only "normal" and "break-all" are acted on; the two values
+	// this engine does not distinguish are read as normal and reported, because
+	// "keep-all" changes where CJK text may break and getting it wrong silently
+	// is a line broken in the middle of a word.
+	"word-break": {true, "normal"},
 	// tab-size inherits, which is the answer that makes a <pre> inside a
 	// styled <article> keep the tab width the author set on the article. A
 	// number is a count of space advances and a length is itself; the initial

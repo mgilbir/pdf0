@@ -82,6 +82,10 @@ testdata/jbig2/.ok
 # versioned by Unicode.
 testdata/unicode-bidi/
 
+# Unicode's grapheme cluster conformance suite, fetched by `make grapheme-tests`.
+# internal/grapheme's tables are committed; the suite that checks them is not.
+testdata/unicode-grapheme/
+
 # Factur-X example invoices (oracle) — not vendored
 testdata/facturx/*.pdf
 testdata/facturx/.ok
