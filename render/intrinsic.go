@@ -58,11 +58,34 @@ func (l *layouter) shrinkToFit(b *Box, available style.Unit) style.Unit {
 
 // outerWidths returns a box's intrinsic widths including its own margins,
 // border and padding — what it takes up in a parent.
+//
+// The box's own §10.4 limits are applied here, and applying them is the
+// difference between measuring what a box *would* like to be and measuring what
+// it will actually take up. A child with "max-width: 4em" holding eight ems of
+// unbreakable text is four ems wide when it is laid out, so a parent shrinking
+// to fit it needs four and not eight — and a parent that asked for eight would
+// be twice as wide as its own content with the rest of the page showing through.
 func (l *layouter) outerWidths(b *Box, containing style.Unit) intrinsicWidths {
 	inner := l.contentWidths(b)
-	if declared, ok := l.explicitWidth(b, containing); ok {
+	if declared, ok := l.intrinsicLength(b, "width"); ok {
 		inner = intrinsicWidths{min: declared, max: declared}
 	}
+	lo, hi := style.Unit(0), style.MaxUnit
+	if v, ok := l.intrinsicLength(b, "min-width"); ok {
+		lo = v
+	}
+	if v, ok := l.intrinsicLength(b, "max-width"); ok {
+		hi = v
+	}
+	// §10.4's order — a minimum below a contradicting maximum still wins — is
+	// style.Clamp's own: it applies the maximum first and the minimum last. A
+	// "hi = max(hi, lo)" was written here first and then deleted, because
+	// planting its removal changed nothing that could be measured: it can never
+	// be the clause that decides, and a guard that decides nothing reads as
+	// defence and is decoration.
+	inner.min = style.Clamp(inner.min, lo, hi)
+	inner.max = style.Clamp(inner.max, lo, hi)
+
 	edges := l.edges(b, "margin", containing).Horizontal().
 		Add(l.borderWidths(b).Horizontal()).
 		Add(l.paddingOf(b, containing).Horizontal())
@@ -70,6 +93,25 @@ func (l *layouter) outerWidths(b *Box, containing style.Unit) intrinsicWidths {
 		min: maxZero(inner.min.Add(edges)),
 		max: maxZero(inner.max.Add(edges)),
 	}
+}
+
+// intrinsicLength reads a sizing property for use in an intrinsic measurement,
+// where there is no containing block to resolve a percentage against.
+//
+// CSS Sizing says a percentage that cannot be resolved behaves as "auto" for
+// intrinsic sizing — as *no declaration*, not as zero. Resolving one against a
+// basis of nought is the plausible wrong answer and was the one here: a float
+// holding a child at "width: 50%" measured that child as nothing at all, so the
+// float shrank to the widest of its *other* children and the child overflowed
+// it. The size is a content size, so box-sizing's inset comes off it, and that
+// inset is itself resolved against nothing for the same reason.
+func (l *layouter) intrinsicLength(b *Box, property string) (style.Unit, bool) {
+	length, ok := l.parseLength(b, property)
+	if !ok || length.Kind != style.LengthAbsolute {
+		return 0, false
+	}
+	inset, _ := l.sizingInset(b, 0)
+	return maxZero(length.Value.Sub(inset)), true
 }
 
 // contentWidths returns the two widths of a box's content box, memoized.

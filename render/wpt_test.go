@@ -607,7 +607,59 @@ const wptEnv = "WPT_TESTS"
 // a box broken across several. What had to be found was not the property but
 // whether the algorithm reversed the content, and that is a resolved embedding
 // level.
-const wptCleanPassBaseline = 4072
+//
+// §9's and §10's remaining families took it from 4072 to 4100, and this time the
+// two effects need no separating because there is only one: the vacuous count is
+// 319 before and 319 after, so not a finding moved and the whole of it is
+// layout. Failures fell from 821 to 793, counted by name over the whole suite —
+// 28 tests stopped failing and none started.
+//
+// The diagnosis is worth more than the fix and is the seventh time this file has
+// recorded the same shape. The three directories the work was aimed at —
+// positioning, normal-flow and box-display — held 195 failures, and 78 of them
+// cannot be fixed by any amount of layout work:
+//
+//   - 45 draw their picture with inline SVG, which this engine does not render.
+//     The absolute-replaced-width family is 25 of them, and it is the largest
+//     single family of failures in the three directories.
+//   - 33 are flagged "dom" and change the page with a script. They are run only
+//     because flagsRe wants the attributes in the order name-then-content and
+//     these write content-then-name — the expression fault recorded above,
+//     measured here at 33 tests in three directories.
+//
+// Of the 117 that were left, five rules moved 28. None of the five is what the
+// directory names suggest, and four are one section away from where the tests
+// are filed:
+//
+//   - a child's own min-width and max-width were left out of what it contributes
+//     to the width a float or an absolutely positioned box shrinks to fit, so a
+//     box holding a child at "max-width: 4em" came out at the width of the eight
+//     ems of text inside that child, and the page showed through the difference.
+//     10 tests, four of them not in these directories at all — they are in
+//     floats-clear, where a float's shrink-to-fit is the same calculation.
+//   - §10.3.7's right-to-left half: "set 'right' to the static position" and
+//     "set 'margin-right' to zero and solve for 'margin-left'". 8 tests. The
+//     static position needed a second number rather than a change of sign — see
+//     absCandidate.staticEnd.
+//   - §10.4's clamp reaching through a box into its descendants: the used height
+//     is what a percentage height resolves against, so a maximum that cuts the
+//     box down has to cut it down before its content is laid out. 2 tests.
+//   - §E.2's step 4 is over the *non-inline-level* descendants, so an
+//     inline-block's background belongs with the line it sits on and not with
+//     the block backgrounds. Painted in tree order it went underneath a later
+//     sibling's background instead of over it. 6 tests.
+//   - §10.4's constraint table divides by the ratio of the tentative used width
+//     and height, and "height: 0" with an auto width makes that pair 0 by 0. The
+//     intrinsic ratio stands in for it. 2 tests.
+//
+// One more change is in the same commit and moved *nothing*: a percentage width
+// in an intrinsic measurement was being resolved against a basis of nought,
+// which makes "width: 50%" mean "width: 0" rather than the "as though auto" CSS
+// Sizing asks for. Zero tests either way over the whole suite, so its evidence
+// is a unit test written for it rather than anything here — worth recording
+// because intrinsic.go's own comment had claimed the correct behaviour for as
+// long as the code had done the other thing.
+const wptCleanPassBaseline = 4100
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
