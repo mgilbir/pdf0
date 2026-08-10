@@ -120,3 +120,40 @@ func TestHintsApplyOnlyToTheElementsThatHaveThem(t *testing.T) {
 		t.Errorf("a <span>'s height attribute set height to %q", h)
 	}
 }
+
+// TestTableWidthAttributeIsAHint pins the entry the table algorithm made
+// meaningful.
+//
+// The HTML Standard's table rendering section maps <table width> to the width
+// property as a dimension value, so a bare number is pixels and a trailing
+// per-cent sign is a percentage. Without it the suite's dbaron float tests size
+// their table from its content and lay the document out at half the width the
+// reference does.
+func TestTableWidthAttributeIsAHint(t *testing.T) {
+	cases := map[string]string{
+		"300":  "300px",
+		"100%": "100%",
+		// Not a dimension value, so not a hint. A length with a unit is HTML's
+		// own refusal, and it must not become a length this guessed at.
+		"300px": "auto",
+		"-1":    "auto",
+	}
+	for value, want := range cases {
+		got := computed(t, `<table id="t" width="`+value+`"><tr><td>x</td></tr></table>`)
+		if w := got["t"]["width"]; w != want {
+			t.Errorf("<table width=%q> gave width %q, want %q", value, w, want)
+		}
+	}
+}
+
+// TestTableHeightAttributeIsNotAHint records a deliberate absence.
+//
+// HTML maps no height attribute on <table>. Browsers honour one as a legacy and
+// this engine does not, because a hint the specification does not describe is a
+// number with nothing to check it against.
+func TestTableHeightAttributeIsNotAHint(t *testing.T) {
+	got := computed(t, `<table id="t" height="300"><tr><td>x</td></tr></table>`)
+	if h := got["t"]["height"]; h != "auto" {
+		t.Errorf("<table height=300> set height to %q, want auto", h)
+	}
+}
