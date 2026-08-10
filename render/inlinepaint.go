@@ -35,14 +35,18 @@ import (
 // about it — is the reason these fills are marked Overhang, and FillRect says
 // what that costs.
 //
-// # What is not done
+// # §8.6's bidi box model, and where it still stops
 //
-// §8.6's bidi box model, for the same reason insetItems does not do it: a
-// fragment's extent here is the span from the leftmost to the rightmost of the
-// items that belong to it, which is exact on a line that was not reordered and
-// too generous on one that was. A box whose content a reordering splits into two
-// visual pieces paints one rectangle covering both, and the inset that §8.6 puts
-// on the box's *start* edge is painted on its physical left.
+// A fragment's extent here is the span from the leftmost to the rightmost of the
+// items that belong to it, insets included — so it follows insetSides without
+// having to know about it. §8.6 puts the left margin, border and padding on the
+// box's leftmost generated box; insetSides puts the room for them there, this
+// takes the leftmost edge of that room as the fragment's, and the two agree by
+// construction rather than by two readings of the same rule.
+//
+// What is still not done is a box whose content a reordering splits into two
+// visual pieces on one line. It paints one rectangle covering both, where a
+// browser paints two.
 //
 // Outline is not painted either. Nothing in this engine paints one, on an inline
 // box or on any other, so an inline box is not the place to start.
@@ -87,7 +91,11 @@ type inlinePiece struct {
 	// piece carries an inset, because the inset item insetItems emits covers the
 	// margin as well as the border and the padding.
 	left, right style.Unit
-	// baseline is where the line's baseline sits, from the block's content edge.
+	// baseline is where *this box's* baseline sits, from the block's content
+	// edge: the line's own, moved by §10.8.1's vertical-align applied to this
+	// box. It is the box's rather than the line's so that a raised <span>'s
+	// background is raised with its words — the ink and the room it sits in have
+	// to come apart nowhere.
 	baseline style.Unit
 	// first says no earlier line held this box, so this piece begins it.
 	first bool
@@ -105,7 +113,12 @@ type inlineDecor struct {
 	// containing is the width a percentage margin or padding on an inline box
 	// resolves against, which is the containing block's and not the line's.
 	containing style.Unit
-	pieces     []inlinePiece
+	// strut is the block's own line metrics, which is what §10.8.1 measures a
+	// vertical-align keyword against — "text-top" is the top of the parent's
+	// content area. It is the same value stackLine used, so a box's ink and its
+	// text are moved by the same arithmetic.
+	strut  strut
+	pieces []inlinePiece
 	// last is the index of the most recent piece made for each box, which is
 	// what finish needs to find the fragment that ends it.
 	last map[*Box]int
@@ -117,7 +130,7 @@ type inlineDecor struct {
 // with §16.2's alignment shift already in it, so that adding an item's offset
 // within the line gives a coordinate in the same space the line boxes are in.
 func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
-	at, baseline style.Unit) {
+	at, baseline style.Unit, stack *lineStack) {
 
 	// The pieces made for this line, so that a box met twice on it extends its
 	// piece rather than starting another. A linear scan rather than a map: the
@@ -153,9 +166,24 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 				continue
 			}
 			_, seen := d.last[box]
+			// §10.8.1's vertical-align on this box, which moved its text and has
+			// to move its ink by exactly as much. It is the *box's* own
+			// accumulation and not the item's: the item carries the sum down to
+			// the innermost box it sits in, and a fragment for a box halfway up
+			// that chain is placed by the sum down to itself.
+			//
+			// The extents are the box's line-height split around its baseline —
+			// §10.8's inline box — rather than the font's content area the
+			// fragment is drawn over, which is §10.6.1's and a different
+			// question.
+			base := baseline
+			if va, ok := d.l.inlineAligns[box]; ok {
+				above, below := d.l.leading(box)
+				base = base.Add(stack.shift(va, above, below))
+			}
 			d.pieces = append(d.pieces, inlinePiece{
 				box: box, line: index, left: left, right: right,
-				baseline: baseline, first: !seen,
+				baseline: base, first: !seen,
 			})
 			if d.last == nil {
 				d.last = make(map[*Box]int)
