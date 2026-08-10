@@ -855,13 +855,8 @@ func sameColour(a, b style.RGBA) bool {
 func pictureEqual(got, want []Op, clip Rect) bool {
 	gf, wf := picFills(got), picFills(want)
 	gt, wt := texts(got, gf), texts(want, wf)
-	if len(gt) != len(wt) {
+	if !sameTextMarks(gt, wt) {
 		return false
-	}
-	for i := range gt {
-		if gt[i].what != wt[i].what || !nearlyAt(gt[i], wt[i]) {
-			return false
-		}
 	}
 
 	xs := edges(clip.X, clip.X.Add(clip.W), gf, wf)
@@ -944,4 +939,94 @@ func nearlyAt(a, b textMark) bool {
 		return q.Sub(p) <= sliver
 	}
 	return off(a.x, b.x) && off(a.y, b.y)
+}
+
+// sameTextMarks reports whether the two documents put the same runs in the same
+// places, and it is a *pairing* question rather than an index-wise one.
+//
+// The marks arrive sorted by text and then by position, and matching them by
+// index was the obvious reading of that and had a hole in it exactly where the
+// tolerance above exists. Two marks with the same text sort by x, and an x that
+// differs by a layout unit — which nearlyAt is there to forgive — can put them
+// in a different order in the two lists. The comparison then held up the wrong
+// pair and ruled two identical pages different: the twelve
+// white-space/ws-break-spaces-applies-to tests failed on nothing else, with an
+// "8" at each of two places in both documents and a sixty-fourth of a pixel
+// between the two readings of one of them.
+//
+// So marks with the same text are matched to each other as a set. That is not a
+// weakening: two runs with the same text, size and clip are interchangeable on
+// the page — the marks are already stripped of paint order by the time they get
+// here, occlusion having been resolved before the sort — so which of them is
+// called the first changes nothing that is drawn. Anything that differs in the
+// text, the size or the clip is still a different mark and is still compared as
+// one.
+//
+// The pairing is greedy within a group, which is exact for the tolerance it is
+// used with: two candidates could only both match if they were within half a
+// pixel of each other, and marks that close are the same mark for every other
+// purpose in this file. Where greedy fails and a pairing exists, the answer is
+// "different" — the direction this comparison errs in everywhere.
+func sameTextMarks(got, want []textMark) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	// The groups line up, because both lists are sorted by the same key and a
+	// group is a run of one text. Walking them together keeps the whole thing
+	// linear except inside a group that did not match in order, which is the
+	// rare case and is bounded by the group's own size.
+	for i := 0; i < len(got); {
+		j := i + 1
+		for j < len(got) && got[j].what == got[i].what {
+			j++
+		}
+		k := i + 1
+		for k < len(want) && want[k].what == want[i].what {
+			k++
+		}
+		if got[i].what != want[i].what || j != k {
+			return false
+		}
+		if !matchGroup(got[i:j], want[i:j]) {
+			return false
+		}
+		i = j
+	}
+	return true
+}
+
+// matchGroup pairs marks that carry the same text.
+//
+// maxGroupPairing bounds the fallback: a page with more than this many runs of
+// one identical string that also disagree about their order is compared by index
+// and ruled different, rather than costing the square of the count. No document
+// in the suite comes near it — the largest group met is under a hundred.
+const maxGroupPairing = 512
+
+func matchGroup(got, want []textMark) bool {
+	inOrder := true
+	for i := range got {
+		if !nearlyAt(got[i], want[i]) {
+			inOrder = false
+			break
+		}
+	}
+	if inOrder || len(got) > maxGroupPairing {
+		return inOrder
+	}
+	taken := make([]bool, len(want))
+	for i := range got {
+		found := false
+		for j := range want {
+			if taken[j] || !nearlyAt(got[i], want[j]) {
+				continue
+			}
+			taken[j], found = true, true
+			break
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

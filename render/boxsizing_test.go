@@ -1,6 +1,9 @@
 package render
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // box-sizing.
 //
@@ -157,4 +160,71 @@ func TestBorderBoxWidensAnIntrinsicWidth(t *testing.T) {
 	root := layoutOf(t, 600, `<div><div id="b">x</div></div>`,
 		noDefaults+sizeCSS+`#b { float: left; width: 200px }`)
 	px(t, "a float declared border-box", find(t, root, "b").MarginRect().W, 200)
+}
+
+// TestAnIntrinsicSizeIsReportedRatherThanDropped pins the guardrail on the
+// keywords this engine does not accept as a declared size.
+//
+// "width: min-content" is correct CSS Sizing, and parseLength reads it as not a
+// length at all — so the declaration vanishes and the box takes its automatic
+// width, which for a block is the whole containing block and about the widest
+// wrong answer there is. It was found in the white-space intrinsic-size tests,
+// where a box that should have been 50px came out 626px with no finding at all.
+func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
+	report := func(t *testing.T, decl string) []Finding {
+		t.Helper()
+		rec := NewRecorder(nil)
+		built := Build(Input{
+			HTML: `<div id="b">x</div>`,
+			CSS:  []Stylesheet{{Source: `#b { ` + decl + ` }`}},
+		})
+		Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, nil, rec)
+		var out []Finding
+		for _, f := range rec.Findings() {
+			if f.Rule == RuleUnsupportedValue {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+
+	for _, decl := range []string{
+		"width: min-content", "width: max-content", "width: fit-content",
+		"width: stretch", "width: fit-content(20px)", "min-width: min-content",
+		"max-width: max-content", "height: min-content", "min-height: min-content",
+		"max-height: max-content", "width: MIN-CONTENT",
+	} {
+		got := report(t, decl)
+		if len(got) != 1 {
+			t.Errorf("%q produced %d findings, want one — the declaration is dropped "+
+				"and the box is laid out at its automatic size, which nothing else "+
+				"about the page reveals", decl, len(got))
+			continue
+		}
+		prop := decl[:strings.IndexByte(decl, ':')]
+		if !strings.Contains(got[0].Message, prop) || got[0].Property != prop {
+			t.Errorf("%q was reported as %q on %q, which does not name the property",
+				decl, got[0].Message, got[0].Property)
+		}
+	}
+
+	// And not for a value that is applied, nor for one where the keyword is not
+	// correct CSS. An engine that reported "auto" would report nearly every box
+	// in every document; one that reported a margin would send an author looking
+	// for a feature instead of for the typo they made.
+	for _, decl := range []string{
+		"width: auto", "width: 100px", "width: 50%",
+		"margin-left: min-content", "padding-top: max-content",
+		"font-size: min-content",
+	} {
+		if got := report(t, decl); len(got) != 0 {
+			t.Errorf("%q was reported as an unsupported value (%q); it is either "+
+				"applied or not correct CSS on that property", decl, got[0].Message)
+		}
+	}
+
+	// Once per element, however many of its sizes name one.
+	if got := report(t, "width: min-content; height: max-content"); len(got) != 1 {
+		t.Errorf("a box with two intrinsic sizes was reported %d times, want once", len(got))
+	}
 }

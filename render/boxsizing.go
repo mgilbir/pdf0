@@ -97,3 +97,77 @@ func (l *layouter) checkTableBoxSizing(b *Box) {
 		Property: "box-sizing",
 	})
 }
+
+// The intrinsic sizing keywords, and why they are a finding rather than nothing.
+//
+// "width: min-content" is correct CSS Sizing: it asks for the narrowest width
+// the content can take without overflowing. This engine computes that number —
+// intrinsic.go does nothing else — but it does not accept the keyword as a
+// declared width, so the declaration falls through parseLength as "not a length
+// at all" and the box is laid out at its automatic width.
+//
+// That is the silent failure §6.3 is about, and it is worse here than most. The
+// automatic width of a block is the whole of its containing block, so a box
+// asked to shrink to its content is set to the full width of the page instead —
+// about the largest wrong answer available — and nothing about the page says so.
+// It was found in the white-space intrinsic-size tests, where a box that should
+// have been 50px wide came out 626px wide with no finding of any kind.
+//
+// It is a report and not an implementation because accepting the keyword means
+// resolving it at every place a used width is decided, which is a change to the
+// sizing model rather than an addition to it. What is cheap and honest meanwhile
+// is saying that the declaration was dropped.
+//
+// The set is the keywords of CSS Sizing 3 that name an intrinsic size. "auto" is
+// not among them: it is the initial value and it is applied. The fit-content()
+// *function* is a different value and is caught by the same check, since its
+// name is the first thing in it.
+var intrinsicSizeKeywords = map[string]bool{
+	"min-content": true,
+	"max-content": true,
+	"fit-content": true,
+	"stretch":     true,
+}
+
+// sizingProperties are the ones an intrinsic keyword is valid on, and so the
+// ones where dropping it is this engine's limitation rather than the author's
+// mistake. "min-content" written as a margin is not correct CSS, and reporting
+// it as unsupported would send an author looking for a feature instead of for a
+// typo — which is the distinction RuleInvalidCSS and RuleUnsupportedValue are
+// kept apart for.
+var sizingProperties = [...]string{
+	"width", "min-width", "max-width",
+	"height", "min-height", "max-height",
+}
+
+// checkIntrinsicSizing reports a sizing property that named an intrinsic size.
+//
+// Once per element rather than once per property, because a box that says
+// "width: min-content" and "height: max-content" has one thing wrong with it and
+// what the author needs is the box. The message still names the declaration it
+// found, so which one was dropped is in it.
+func (l *layouter) checkIntrinsicSizing(b *Box) {
+	for _, prop := range sizingProperties {
+		raw := strings.TrimSpace(b.Style[prop])
+		if raw == "" {
+			continue
+		}
+		name := strings.ToLower(raw)
+		if i := strings.IndexByte(name, '('); i > 0 {
+			name = strings.TrimSpace(name[:i])
+		}
+		if !intrinsicSizeKeywords[name] {
+			continue
+		}
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: AtHTML(offsetOf(b)),
+			Message: "\"" + prop + ": " + raw + "\" is not applied; this engine does " +
+				"not accept an intrinsic size as a declared one, so the box was laid " +
+				"out at its automatic size instead",
+			Path:     PathOf(b.Element),
+			Property: prop,
+		})
+		return
+	}
+}

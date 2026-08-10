@@ -553,6 +553,60 @@ func TestWhitespaceProcessingIsLinear(t *testing.T) {
 	}
 }
 
+// TestHangingSpaceHangsOffTheEndOfARightToLeftLine pins which *side* §4.1.2's
+// hang is on, which is a different question from how wide it is.
+//
+// The white space hangs past the line's end, and the end of a right-to-left line
+// is its left edge — rule L1 gives a line's trailing separators the paragraph's
+// own level, so the reordering draws them before the first word rather than
+// after the last. A line aligned as though the hang followed its content
+// therefore starts a hang too far in, and every word on it is pushed right by
+// the width of a space that was supposed to take no room at all.
+//
+// The numbers are chosen so that the two answers cannot be confused. Five
+// characters fit; "XX" and the four spaces after it break the line, and the four
+// spaces hang. Under "text-align: left" — physical, and so unaffected by the
+// direction — the content is flush against the left edge and "XX" is at zero. An
+// engine that hangs on the wrong side puts it at 4ch, which is not a rounding
+// away from anything.
+func TestHangingSpaceHangsOffTheEndOfARightToLeftLine(t *testing.T) {
+	const css = noDefaults + mono + `p { white-space: pre-wrap; text-align: left }`
+
+	root := layoutOf(t, 5*ch, `<p id="p" dir="rtl">XX    XX</p>`, css)
+	lines := linesOf(t, root, "p")
+	if got := lineTexts(lines); len(got) != 2 || got[0] != "XX    " {
+		t.Fatalf("the line broke as %q, want the first to be \"XX    \" — the four "+
+			"spaces hang, so the word after them starts a line", got)
+	}
+	px(t, "the word on a right-to-left line whose spaces hang",
+		runAt(t, lines[0].Runs, "XX").X, 0)
+
+	// The same document set left to right, where the hang follows the content
+	// and moves nothing. It is the control: an implementation that subtracted
+	// the hang from every line, rather than only from the ones it is in front
+	// of, would pull this one 4ch off the left edge of the page.
+	root = layoutOf(t, 5*ch, `<p id="p">XX    XX</p>`, css)
+	lines = linesOf(t, root, "p")
+	if got := lineTexts(lines); len(got) != 2 || got[0] != "XX    " {
+		t.Fatalf("the left-to-right line broke as %q, want the first \"XX    \"", got)
+	}
+	px(t, "the word on a left-to-right line whose spaces hang",
+		runAt(t, lines[0].Runs, "XX").X, 0)
+
+	// And the arithmetic under an alignment that is not zero, so that the rule is
+	// pinned as "the hang comes off the shift" rather than as "a right-to-left
+	// line starts at zero". Two characters of content in five leave three of
+	// slack, half of which is 1.5ch; the four hanging spaces come off that, so
+	// they run from -2.5ch to 1.5ch and the word sits centred at 1.5ch.
+	root = layoutOf(t, 5*ch, `<p id="p" dir="rtl">XX    XX</p>`,
+		noDefaults+mono+`p { white-space: pre-wrap; text-align: center }`)
+	lines = linesOf(t, root, "p")
+	px(t, "a centred right-to-left line's word",
+		runAt(t, lines[0].Runs, "XX").X, 1.5*ch)
+	px(t, "the spaces hanging off its left edge",
+		runAt(t, lines[0].Runs, "    ").X, -2.5*ch)
+}
+
 // TestSpaceIsMeasuredAgainstTheFace pins the constant the rest of this file is
 // written against, so that a change in the standard metrics fails here and
 // makes every other number in the file readable rather than mysterious.

@@ -62,10 +62,27 @@ import (
 //
 // word-break and overflow-wrap are not implemented either, and are left to be
 // reported as unsupported properties rather than approximated. Both ask for a
-// break *between two characters*, which is only correct at a grapheme cluster
-// boundary — breaking inside one splits a letter from its accent — and nothing
-// in this module's dependencies knows where those are. A "break-all" that split
-// combining sequences would corrupt exactly the text it was asked to fit.
+// break *between two characters*, and CSS Text §2 says which positions those
+// are: a soft wrap opportunity falls between typographic character units, which
+// is the grapheme cluster. Breaking inside one splits a letter from its accent.
+//
+// The shaper's clusters are the obvious candidate for those positions and are
+// not them, which was measured rather than assumed —
+// graphemecluster_test.go shapes five strings whose UAX #29 segmentation is not
+// in doubt and finds forme's clusters finer than the grapheme clusters in every
+// one: a base with two combining marks breaks between the marks, a keycap
+// breaks off its digit, conjoining Hangul breaks into three, a flag breaks into
+// two letters, and a Thai spacing mark leaves its consonant. In a right-to-left
+// run the clusters are not even ordered — the glyphs come back as they are
+// drawn — so "the cluster changed" does not name a position in the text.
+//
+// What is missing is a UAX #29 grapheme segmenter over the *characters*, which
+// is where this belongs anyway since splitAtBreaks never sees a glyph. It needs
+// Grapheme_Cluster_Break, Extended_Pictographic and Indic_Conjunct_Break, none
+// of which Go's unicode package has, so it is a generated table and it belongs
+// beside forme's other UCD tables. Until then the refusal stands, because a
+// "break-all" that split combining sequences would corrupt exactly the text it
+// was asked to fit.
 //
 // # White space at a line edge
 //
@@ -619,8 +636,24 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			if (forced || next >= len(items)) && total <= textWidth {
 				used = total
 			}
-			shift := lineIndent.Add(
-				l.alignLine(b, lineBaseIsRTL(b, runs), textWidth, used))
+			// Which *side* it hangs off, which is not a second way of saying how
+			// much. §4.1.2 hangs the white space past the line's end, and the
+			// end of a right-to-left line is its left edge: rule L1 has already
+			// given the trailing spaces the paragraph's own level, so
+			// lineOffsets draws them leftmost — at the positions before the
+			// first word rather than after the last.
+			//
+			// So on such a line the content does not begin where alignLine put
+			// it, it begins a hang further in. Aligning without this leaves
+			// every right-to-left pre-wrap line pushed right by the width of the
+			// space it was meant to hang, which is what the ten dir=rtl
+			// pre-wrap-align tests measure. It is invisible in a left-to-right
+			// document, where the hang follows the content and moves nothing.
+			rtl := lineBaseIsRTL(b, runs)
+			shift := lineIndent.Add(l.alignLine(b, rtl, textWidth, used))
+			if rtl {
+				shift = shift.Sub(total.Sub(used))
+			}
 			if shift != 0 {
 				for k := range line.Runs {
 					line.Runs[k].X = line.Runs[k].X.Add(shift)
