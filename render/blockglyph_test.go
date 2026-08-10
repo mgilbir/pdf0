@@ -89,10 +89,16 @@ type blockRect struct {
 	blank          bool
 }
 
-// blockFonts maps the faces the harness loaded to their rectangle tables.
+// blockFonts maps the faces in play to their rectangle tables.
 //
-// It is keyed on the face pointer because that is what a display list carries,
-// and it is written once while the font set is built and only read afterwards.
+// It is keyed on the face pointer because that is what a display list carries.
+// Two kinds of face are in it. The caller's library — the Noto faces — is
+// registered once while the font set is built and stays. A face a *document*
+// loaded for itself with @font-face is registered around the one rendering that
+// uses it and taken out again, because a face belongs to its document: Ahem
+// arrives this way in 1665 of the suite's documents, and leaving each one in
+// would be that many parsed fonts nothing could free. See
+// registerDocumentBlockFonts.
 var blockFonts = map[*fonts.Face]*blockFont{}
 
 // blockFills converts the rectangle-glyph runs of a display list into fills,
