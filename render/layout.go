@@ -466,6 +466,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// this shape. Both are asked once per box here rather than by a pass of their
 	// own, because this is the one function every block-level box goes through.
 	l.checkTableBoxSizing(b)
+	l.checkIntrinsicSizing(b)
 	l.checkVisibility(b)
 
 	margin := l.edges(b, "margin", containing)
