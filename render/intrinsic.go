@@ -289,7 +289,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				// The letter-spacing after the tab is added the same way line
 				// breaking adds it, so the two cannot disagree about how wide a
 				// tab-separated line is.
-				w = tabAdvance(line, item.tabStop).Add(item.spacing.letter)
+				w = tabAdvance(line, item.tabStop, item.tabFloor).Add(item.spacing.letter)
 			}
 			if item.noWrap || !breaks {
 				// Text that may not break has one width, not two. A space in it

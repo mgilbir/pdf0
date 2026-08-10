@@ -297,6 +297,67 @@ func TestTabAdvancesToTheNextTabStop(t *testing.T) {
 	px(t, "the second tab's stop", runs[3].X, 480)
 }
 
+// TestATabTooCloseToItsStopTakesTheNextOne pins §4.1.2's threshold: "if this
+// distance is less than 0.5ch, then the subsequent tab stop is used instead".
+//
+// It is the rule that makes a tab a tab rather than a rounding. Without it, text
+// that ends a tenth of a character before a stop is followed by a tab that
+// advances a tenth of a character, so the column the author wrote the tab to
+// make is not a column and the two words are, to the eye, touching. The failure
+// is invisible in the source and looks like a kerning fault in the page.
+//
+// The three cases are the two sides of the comparison and its boundary, since
+// "less than" and "at most" are the same rule everywhere except at 0.5ch exactly
+// — and one Courier character at 100px is 60px, so the threshold is 30px and can
+// be hit on the nose rather than approached.
+func TestATabTooCloseToItsStopTakesTheNextOne(t *testing.T) {
+	cases := []struct {
+		css string
+		// want is where the text after the tab begins, in px.
+		want float64
+	}{
+		// "a" ends at 60 and the stop is at 70, which is 10px away — inside the
+		// 30px threshold, so the tab takes the stop after it.
+		{"p { tab-size: 70px }", 140},
+		// 30px away: exactly the threshold, and the rule is "less than", so this
+		// tab keeps the stop it was going to take. A comparison written as "at
+		// most" moves this one to 180 and nothing else in this test.
+		{"p { tab-size: 90px }", 90},
+		// A single px inside it. 89 is chosen because 29 and 30 are one px apart
+		// and a layout unit is a 64th of one, so this distinguishes the two
+		// comparisons without resting on the rounding of either.
+		{"p { tab-size: 89px }", 178},
+		// Far outside the threshold, which is every ordinary tab: the stop is
+		// 420px away from the 60px "a" ends at.
+		{"p { tab-size: 8 }", 480},
+	}
+	for _, tc := range cases {
+		root := layoutOf(t, 10000, "<p id=\"p\">a\tb</p>",
+			noDefaults+mono+`p { white-space: pre }`+tc.css)
+		lines := linesOf(t, root, "p")
+		if len(lines) != 1 {
+			t.Fatalf("%q gave %d lines", tc.css, len(lines))
+		}
+		runs := lines[0].Runs
+		if len(runs) != 3 {
+			t.Fatalf("%q gave %d runs (%q), want 3", tc.css, len(runs),
+				runTexts(lines[0]))
+		}
+		px(t, tc.css+": where the text after the tab begins", runs[2].X, tc.want)
+	}
+
+	// The same rule in the intrinsic measurement, which resolves its own tab
+	// advances rather than reading them off a laid-out line. A float is sized
+	// shrink-to-fit, so its width is what the measurement said: "a" at 60, the
+	// tab pushed past the 70px stop to 140, and "b" for another 60.
+	root := layoutOf(t, 10000,
+		`<div style="width: 5000px"><p id="f">a	b</p></div>`,
+		noDefaults+mono+`#f { float: left; font-size: 100px; font-family: Courier;
+		  white-space: pre; tab-size: 70px }`)
+	px(t, "a float measured over a tab inside the threshold",
+		find(t, root, "f").BorderRect.W, 200)
+}
+
 // TestAPreservedTabIsNotDrawnAsTofu pins that the one character no face has a
 // glyph for does not reach one.
 //
