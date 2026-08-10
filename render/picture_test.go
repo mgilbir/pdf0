@@ -466,8 +466,9 @@ type textMark struct {
 }
 
 func texts(ops []Op, under []coloured) []textMark {
+	covers := opaqueCovers(ops)
 	var marking []DrawText
-	for _, op := range ops {
+	for i, op := range ops {
 		v, ok := op.(DrawText)
 		if !ok || strings.TrimSpace(v.Text) == "" {
 			// A space marks no paper. It is drawn so that text extraction
@@ -482,6 +483,9 @@ func texts(ops []Op, under []coloured) []textMark {
 			// simply does not draw that content at all. Counting the run as a
 			// mark made every one of those pairs differ over letters neither
 			// document shows.
+			continue
+		}
+		if buriedUnder(covers, i, textInk(v)) {
 			continue
 		}
 		marking = append(marking, v)
@@ -515,6 +519,96 @@ func texts(ops []Op, under []coloured) []textMark {
 		return out[i].y < out[j].y
 	})
 	return out
+}
+
+// Text that is buried, which is the other half of resolving occlusion.
+//
+// This comparison has always resolved occlusion between *fills* and never
+// between a fill and a run of text, and the omission was invisible for as long
+// as it was because it needs a document that draws a word and then covers it
+// completely. The suite has a family built on exactly that: ten of the twelve
+// abspos-overflow tests in css/CSS2/positioning write a red "FAIL" and then put
+// an opaque green "PASS" box over the top of it, and the reference beside them
+// simply does not have the word. Every one of the ten had geometry correct to
+// the layout unit and was ruled different over letters neither document shows.
+//
+// It is exact rather than an approximation, and it is deliberately narrow. Only
+// a *single* opaque mark painted after the run and containing the whole of its
+// ink counts. The union of several would also bury a run, and computing it
+// means compressing coordinates once per run — which is what pictureEqual does
+// for the page as a whole and would cost the square of the mark count here. So
+// the union case is left as visible, which keeps the run as a mark: the safe
+// direction, and the one this file errs in everywhere else.
+//
+// The ink is the face's declared ascent and descent over the run's own advance
+// — see textInk. Erring large is what is wanted for this question: a box bigger
+// than the letters is harder to bury, so a run that shows is never dropped.
+
+// opaqueCover is one mark that hides whatever is under it, with where in the
+// paint order it was made.
+type opaqueCover struct {
+	r  Rect
+	at int
+}
+
+// opaqueCovers collects the marks that are opaque, in paint order.
+//
+// A fill counts when its colour is fully opaque; a picture counts whatever it
+// is made of only when it has no transparency anywhere, which is the same
+// question uniformColor and bandsOf already answer for occlusion between fills.
+// A tiling does not count at all: whether its tiles cover a rectangle without
+// gaps is the arithmetic this deliberately does not do.
+func opaqueCovers(ops []Op) []opaqueCover {
+	var out []opaqueCover
+	for i, op := range ops {
+		switch v := op.(type) {
+		case FillRect:
+			if !v.Rect.Empty() && v.Color.A >= 1 {
+				out = append(out, opaqueCover{v.Rect, i})
+			}
+		case DrawImage:
+			if v.Rect.Empty() {
+				continue
+			}
+			r := v.Rect
+			if v.Clip.Active {
+				// Only the part of the picture that is painted hides anything.
+				r = intersect(r, v.Clip.Rect)
+				if r.Empty() {
+					continue
+				}
+			}
+			if _, ok := uniformColor(v.Image); ok {
+				out = append(out, opaqueCover{r, i})
+				continue
+			}
+			if bandsOf(v.Image) != nil {
+				// A decomposed picture may have a transparent band in it, which
+				// is precisely where a document shows what is behind. Its bands
+				// are already fills for the purpose of occlusion; treating the
+				// whole rectangle as a cover here would undo that.
+				continue
+			}
+			// Compared as an opaque unknown everywhere else in this file, so it
+			// is one here too.
+			out = append(out, opaqueCover{r, i})
+		}
+	}
+	return out
+}
+
+// buriedUnder reports whether a rectangle is wholly covered by one opaque mark
+// painted after index at.
+func buriedUnder(covers []opaqueCover, at int, ink Rect) bool {
+	if ink.Empty() {
+		return false
+	}
+	for _, c := range covers {
+		if c.at > at && c.r.Contains(ink) {
+			return true
+		}
+	}
+	return false
 }
 
 // joinRuns splices marking runs that abut into the single run they are
