@@ -134,6 +134,19 @@ var properties = map[string]property{
 	// Generated content. It does not inherit — a ::before on a parent must not
 	// give every descendant the same marker.
 	"content": {false, "normal"},
+	// The quotation marks §12.3.1's keywords draw from. This one *does* inherit,
+	// and has to: a quotation is nested inside the element that set the pairs, and
+	// the ::before that draws the mark is a child of a child of it.
+	//
+	// CSS 2.1 leaves the initial value to the user agent. The English typographic
+	// pairs are what is chosen here rather than "none", because "none" would make
+	// "content: open-quote" in a document that never set the property draw nothing
+	// at all — a silent no-op that looks exactly like the feature being missing,
+	// which is the failure mode this engine's whole reporting design is against.
+	// Nothing in the CSS 2.1 test suite depends on the choice: every test that uses
+	// the keywords sets the property, save one that uses no-open-quote and so
+	// draws nothing whatever the list says.
+	"quotes": {true, `"“" "”" "‘" "’"`},
 
 	// Backgrounds.
 	//
