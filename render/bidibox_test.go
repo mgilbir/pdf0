@@ -171,6 +171,44 @@ func TestInlineInsetOfAMixedBoxIsLeftAlone(t *testing.T) {
 	}
 }
 
+// TestAnEmptyInlineBoxsInsetTakesTheParagraphsDirection is the fixture the two
+// "no level yet" answers needed, and it exists because without it neither of
+// them decided anything.
+//
+// A box with a margin and no content at all has no characters to take a level
+// from — and zero is a real level, the left-to-right one, so "no level" and
+// "level zero" have to stay distinguishable all the way through. Both places
+// that could conflate them were planted with the conflation and nothing in the
+// suite moved until this document existed:
+//
+//   - insetSides gives a box's insets the lowest level anything inside it
+//     reached; a box with nothing inside it gets none, rather than getting zero.
+//   - the reordering then gives such an item the level of what precedes it, and
+//     the *paragraph's* base level where nothing does. That is what rule L1
+//     gives a line's leading separators, and it is not zero in a right-to-left
+//     paragraph.
+//
+// Read either as zero and the margin of an empty span at the start of a
+// right-to-left line is drawn at the left of the line instead of the right,
+// which pushes every word along by its width.
+func TestAnEmptyInlineBoxsInsetTakesTheParagraphsDirection(t *testing.T) {
+	// The empty span is written first, so it is drawn last: its 24px margin is
+	// the rightmost thing on the line and the word is flush left.
+	//
+	//   0..24   the word
+	//   24..48  the empty span's left margin
+	root := layoutOf(t, 600,
+		`<div id="p" dir="rtl"><span id="s" style="margin-left: 24px"></span>`+
+			hebrewAB+`</div>`, bidiBoxCSS)
+	runs := runsOf(t, root, "p")
+
+	if got := runAt(t, runs, hebrewAB).X.Px(); got != 0 {
+		t.Errorf("the word is at %gpx, want 0 — the empty span before it is drawn "+
+			"last on a right-to-left line, so its margin takes the room at the "+
+			"right-hand end", got)
+	}
+}
+
 // TestInlineBorderIsPaintedInTheRoomReservedForIt is the other half of §8.6 and
 // the reason the two halves cannot disagree.
 //

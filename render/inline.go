@@ -817,6 +817,16 @@ func (l *layouter) vAlignFor(b *Box, in vAlignState) vAlignState {
 	// "middle", "text-top" or "text-bottom": a position against the parent, so
 	// it replaces the accumulated displacement and stays in whatever subtree it
 	// was already in.
+	//
+	// The reset is written twice and that was established rather than assumed.
+	// alignedExtents reads raise only in its baseline case, so clearing it here
+	// changes no answer today: planted on its own, this line decides nothing and
+	// no test in the package moves. Planted *together* with a raise added to one
+	// of the keyword cases, the pair is caught — so the rule is guarded, by
+	// whichever of the two a later change leaves standing. It is kept because it
+	// is what makes the field's documented meaning true, and a stale displacement
+	// travelling in a struct that calls it the displacement is the sort of thing
+	// the next reader spends an afternoon on.
 	in.align, in.raise = own, 0
 	return in
 }
