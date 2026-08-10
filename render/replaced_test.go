@@ -445,23 +445,30 @@ func TestOneSourceIsOneImage(t *testing.T) {
 // TestOtherReplacedElementsAreReported pins the scope boundary.
 //
 // <img> is the replaced element this engine draws. Everything else that is one
-// — a plugin, a nested document, a video, a canvas, a drawing, a form control —
-// is out of scope, and being out of scope has to mean *reported* rather than
-// laid out as an ordinary box. An <svg> quietly rendered as an empty inline is
-// a page with a chart missing and nothing to say so, which is precisely the
-// silent failure §6 exists to name.
+// — a plugin, a nested document, a video, a canvas, a drawing — is out of scope,
+// and being out of scope has to mean *reported* rather than laid out as an
+// ordinary box. An <svg> quietly rendered as an empty inline is a page with a
+// chart missing and nothing to say so, which is precisely the silent failure §6
+// exists to name.
+//
+// The form controls used to be in this list and are not any more. The reason
+// they were here confused interactivity with layout: a control has a size and
+// content on paper whether or not anything can be clicked, and refusing the
+// element lost the content. control.go says what each is drawn as; the boundary
+// that stays is that nothing is interactive and no PDF form field is produced,
+// and TestControlsAreLaidOutAsStaticBoxes is what holds it.
+//
+// <object> left the list for a different reason: HTML says an object whose data
+// cannot be used is represented by its children, and dropping the element threw
+// those away. Its data is still never fetched — see
+// TestObjectReportsItsBlockedData.
 func TestOtherReplacedElementsAreReported(t *testing.T) {
 	cases := map[string]string{
-		"svg":      `<svg width="100" height="100"><rect width="50" height="50"/></svg>`,
-		"object":   `<object data="x.pdf" width="100" height="100"></object>`,
-		"iframe":   `<iframe src="x.html" width="100"></iframe>`,
-		"video":    `<video src="x.mp4"></video>`,
-		"canvas":   `<canvas width="100" height="100"></canvas>`,
-		"input":    `<input type="text" value="x">`,
-		"button":   `<button>press</button>`,
-		"select":   `<select><option>a</option></select>`,
-		"textarea": `<textarea>words</textarea>`,
-		"embed":    `<embed src="x.swf">`,
+		"svg":    `<svg width="100" height="100"><rect width="50" height="50"/></svg>`,
+		"iframe": `<iframe src="x.html" width="100"></iframe>`,
+		"video":  `<video src="x.mp4"></video>`,
+		"canvas": `<canvas width="100" height="100"></canvas>`,
+		"embed":  `<embed src="x.swf">`,
 	}
 	for name, markup := range cases {
 		built := Build(Input{HTML: `<div>` + markup + `</div>`})

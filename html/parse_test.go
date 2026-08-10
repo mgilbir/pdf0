@@ -319,11 +319,17 @@ func TestSelfClosingNonVoidIsRefused(t *testing.T) {
 // TestScriptAndFriendsAreDropped pins §4.1 of the rendering proposal. These are
 // the whole of the code-execution and remote-content surface, and a renderer
 // that ignored them quietly would still be one that had read them.
+//
+// <object> used to be on this list and is not any more. Its *data* is still
+// never fetched and never embedded — that half of §4.1 is unchanged — but HTML
+// says an object whose data cannot be used is represented by its children, and
+// those children are ordinary markup. Dropping the element threw them away; see
+// TestObjectKeepsItsFallbackContent below and render's resolveReplaced, which is
+// where the blocked resource is reported.
 func TestScriptAndFriendsAreDropped(t *testing.T) {
 	cases := []struct{ src, gone string }{
 		{"<p>a</p><script>var x = 1 < 2;</script><p>b</p>", "script"},
 		{"<p>a</p><iframe src=http://example.com></iframe><p>b</p>", "iframe"},
-		{"<p>a</p><object data=x></object><p>b</p>", "object"},
 		{"<p>a</p><embed src=x><p>b</p>", "embed"},
 	}
 	for _, tc := range cases {
@@ -587,6 +593,47 @@ func TestHeadAndBody(t *testing.T) {
 	}
 	if bodyEl.Element("style") == nil {
 		t.Errorf("the body's <style> was moved, which would reorder the cascade:\n%s", tree(doc))
+	}
+}
+
+// TestLeadingNewlineIsDropped pins HTML §13.2.6.4.7: the line feed immediately
+// after a <pre> or a <textarea> start tag is not part of the content.
+//
+// The rule is small and its absence is a whole line of paper. Both elements
+// preserve their white space, and everybody writes them with the content on the
+// next line, so an engine that kept the newline puts a blank first line inside
+// every <pre> in the world — a difference that is invisible in the markup and
+// obvious on the page.
+func TestLeadingNewlineIsDropped(t *testing.T) {
+	for _, tc := range []struct{ name, elem, src, want string }{
+		{"pre", "pre", "<pre>\nhello</pre>", "hello"},
+		{"textarea", "textarea", "<textarea>\nhello</textarea>", "hello"},
+		// One newline and only the first: a deliberate blank line survives.
+		{"two newlines", "pre", "<pre>\n\nhello</pre>", "\nhello"},
+		// A newline that is not the first character is content.
+		{"later", "pre", "<pre>a\nb</pre>", "a\nb"},
+		// And only these two elements. A <p> does not preserve its white space
+		// anyway, but the rule is about the tree rather than about the
+		// stylesheet, so the newline is still there for white-space processing
+		// to collapse later.
+		{"not a pre", "p", "<p>\nhello</p>", "\nhello"},
+		// A character reference produces a character token like any other, so it
+		// is the one that gets dropped.
+		{"reference", "pre", "<pre>&#10;hello</pre>", "hello"},
+		// The rule is about "the next token", so the tag in between takes it: the
+		// newline after <b> is dropped by nothing and the one after <pre> is not
+		// first any more. Both survive.
+		{"tag between", "pre", "<pre>x<b>\ny</b></pre>", "x\ny"},
+	} {
+		doc := mustParseHTML(t, tc.src)
+		el := doc.Element(tc.elem)
+		if el == nil {
+			t.Errorf("%s: no <%s>:\n%s", tc.name, tc.elem, tree(doc))
+			continue
+		}
+		if got := el.TextContent(); got != tc.want {
+			t.Errorf("%s: content is %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
