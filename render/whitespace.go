@@ -100,6 +100,38 @@ func whiteSpaceOf(value string) whiteSpace {
 	return whiteSpace{collapse: true, wrap: true}
 }
 
+// wordBreak is what the word-break property sets: whether a line may end
+// between two characters of a word rather than only between words.
+//
+// CSS Text §5.2 gives it four values and this is a bool, which is a statement
+// about two of them rather than a simplification. "normal" and "break-all" are
+// the two this engine distinguishes; "keep-all" and "auto-phrase" change where
+// CJK and Korean text may break and are read as normal *and reported*, because
+// a value that moves a break and is silently ignored produces a line broken in
+// a place the author asked it not to be.
+type wordBreak struct {
+	// breakAll allows a line to end at any typographic character unit boundary
+	// inside a word, which is the grapheme cluster — see internal/grapheme for
+	// why that is the unit and why the shaper's clusters are not it.
+	breakAll bool
+}
+
+// wordBreakOf reads the property. The second result is the value to report as
+// unhandled, or the empty string.
+//
+// As with white-space, an unrecognised value gives the initial one rather than a
+// guess: normal is the value that breaks in the fewest places, so a
+// misinterpretation overflows a line rather than cutting a word open.
+func wordBreakOf(value string) (wordBreak, string) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "break-all":
+		return wordBreak{breakAll: true}, ""
+	case "keep-all", "auto-phrase":
+		return wordBreak{}, strings.ToLower(strings.TrimSpace(value))
+	}
+	return wordBreak{}, ""
+}
+
 // collapseWhitespace is §4.1.1 Phase I over one text node.
 //
 // It is linear in the length of the text and allocates one builder, which is

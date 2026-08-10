@@ -540,7 +540,7 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	// counted pieces passed just as happily when the rule was deleted. What
 	// changes is the opportunity the run *ends* at, which is the value that
 	// travels to the next box.
-	pieces, endedAtBreak := splitAtBreaks("end-", whiteSpaceOf("normal"))
+	pieces, endedAtBreak := splitAtBreaks("end-", whiteSpaceOf("normal"), wordBreak{})
 	if len(pieces) != 1 || pieces[0].text != "end-" {
 		t.Errorf("a trailing hyphen cut the text into %d pieces", len(pieces))
 	}
@@ -550,7 +550,7 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	// One before a space does not either, for the same reason: the space is
 	// already the opportunity, and the hyphen must not claim it — a piece that
 	// took it would leave the word after the space unable to begin a line.
-	pieces, _ = splitAtBreaks("end- x", whiteSpaceOf("normal"))
+	pieces, _ = splitAtBreaks("end- x", whiteSpaceOf("normal"), wordBreak{})
 	if len(pieces) != 3 || pieces[0].text != "end-" {
 		t.Errorf("a hyphen before a space gave %d pieces starting %q",
 			len(pieces), pieces[0].text)
@@ -560,10 +560,10 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	}
 	// And a hyphen inside a word does leave one, so the assertions above are
 	// about where the hyphen is and not about hyphens.
-	if _, ok := splitAtBreaks("well-known", whiteSpaceOf("normal")); ok {
+	if _, ok := splitAtBreaks("well-known", whiteSpaceOf("normal"), wordBreak{}); ok {
 		t.Error("a word ending after a hyphenated compound ended at an opportunity")
 	}
-	if pieces, _ := splitAtBreaks("well-known", whiteSpaceOf("normal")); len(pieces) != 2 ||
+	if pieces, _ := splitAtBreaks("well-known", whiteSpaceOf("normal"), wordBreak{}); len(pieces) != 2 ||
 		!pieces[1].breakBefore {
 		t.Error("a hyphen inside a word left no break opportunity")
 	}

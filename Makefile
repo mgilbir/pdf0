@@ -1,4 +1,4 @@
-.PHONY: noto-fonts clean-noto-fonts wpt test-wpt clean-wpt css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests bidi-tests test-bidi clean-bidi-tests bidi-tables clean-bidi-tables
+.PHONY: noto-fonts clean-noto-fonts wpt test-wpt clean-wpt css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests bidi-tests test-bidi clean-bidi-tests bidi-tables clean-bidi-tables grapheme-tests test-grapheme clean-grapheme-tests grapheme-tables
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -316,6 +316,38 @@ bidi-tables:
 
 clean-bidi-tables:
 	rm -rf $(UCD_DIR)
+
+# UAX #29's grapheme cluster boundaries, which internal/grapheme finds and
+# word-break: break-all needs: CSS Text puts a soft wrap opportunity between
+# typographic character units, and that unit is the grapheme cluster.
+#
+# Same division as the bidi tables above and for the same reasons. The property
+# tables are generated from the UCD and committed, so a checkout builds without
+# a network; the conformance suite is fetched, because it is Unicode's file
+# rather than this repository's and pinning it here would be a copy that goes
+# stale silently.
+GRAPHEME_DIR := testdata/unicode-grapheme
+
+grapheme-tests: $(GRAPHEME_DIR)/.ok
+
+$(GRAPHEME_DIR)/.ok:
+	mkdir -p $(GRAPHEME_DIR)
+	curl -sSf -o $(GRAPHEME_DIR)/GraphemeBreakTest.txt $(UCD_URL)/auxiliary/GraphemeBreakTest.txt
+	touch $@
+
+test-grapheme: grapheme-tests
+	UNICODE_GRAPHEME_TESTS=$(CURDIR)/$(GRAPHEME_DIR) go test -v -run TestGrapheme -count=1 ./internal/grapheme/
+
+clean-grapheme-tests:
+	rm -rf $(GRAPHEME_DIR)
+
+grapheme-tables:
+	mkdir -p $(UCD_DIR)/auxiliary $(UCD_DIR)/emoji
+	curl -sSf -o $(UCD_DIR)/auxiliary/GraphemeBreakProperty.txt $(UCD_URL)/auxiliary/GraphemeBreakProperty.txt
+	curl -sSf -o $(UCD_DIR)/emoji/emoji-data.txt $(UCD_URL)/emoji/emoji-data.txt
+	curl -sSf -o $(UCD_DIR)/DerivedCoreProperties.txt $(UCD_URL)/DerivedCoreProperties.txt
+	go run ./cmd/gengrapheme -ucd $(UCD_DIR) -version $(UNICODE_VERSION) -out internal/grapheme/tables.go
+	gofmt -w internal/grapheme/tables.go
 
 # W3C Web Platform Tests: the external oracle for the layout engine.
 #
