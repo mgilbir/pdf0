@@ -847,6 +847,113 @@ func TestHTMLTableWidthIsItsBorderBox(t *testing.T) {
 	px(t, "a CSS table's border box", find(t, root, "t").BorderRect.W, 250)
 }
 
+// TestFixedTableIsAtLeastAsWideAsItsColumns pins the last sentence of §17.5.2.1:
+// "the width of the table is then the greater of the value of the 'width'
+// property for the table element and the sum of the column widths (plus cell
+// spacing or borders)".
+//
+// The arithmetic: two columns the author sized at 20px, with 20px of
+// border-spacing before, between and after them, come to 20 + 20 + 20 + 20 + 20 =
+// 100. A table declared 70px wide is 100px wide, because nothing in the fixed
+// algorithm can make a column narrower than it was declared.
+//
+// The failure it guards against is invisible in the cells, which is why the
+// assertion is on the table: the columns were always laid out at 20px, and it was
+// the table's own box that came out 30px short — so the cells hung out of the
+// right-hand side of their own table and whatever was behind it showed through.
+//
+// The other direction is asserted beside it, because "the greater of" has two
+// halves and a rule that simply took the columns' sum would pass the first: a
+// table declared 300px wide with the same 100px of columns stays 300, and the
+// fixed algorithm's promise that a table is the width it was given survives.
+func TestFixedTableIsAtLeastAsWideAsItsColumns(t *testing.T) {
+	const row = `<tr><td style="width: 20px">1</td><td style="width: 20px">2</td></tr>`
+	narrow := layoutOf(t, 1000,
+		`<div id=t style="display: table; table-layout: fixed; border-spacing: 20px; `+
+			`width: 70px">`+row+`</div>`, bareTable)
+	px(t, "a fixed table declared narrower than its own columns",
+		find(t, narrow, "t").BorderRect.W, 100)
+
+	wide := layoutOf(t, 1000,
+		`<div id=t style="display: table; table-layout: fixed; border-spacing: 20px; `+
+			`width: 300px">`+row+`</div>`, bareTable)
+	px(t, "a fixed table declared wider than its own columns",
+		find(t, wide, "t").BorderRect.W, 300)
+	// And the surplus went to the columns rather than being left as a gap, which
+	// is the rest of that sentence: 300 − 60 of spacing is 240 over two columns.
+	cells := cellRects(wide)
+	if len(cells) != 2 {
+		t.Fatalf("got %d cells, want 2:\n%s", len(cells), sketchFragments(wide))
+	}
+	px(t, "the first column of the wider table", cells[0].W, 120)
+
+	// The case above cannot tell "the greater of the two" from "the sum of the
+	// columns", and that is not a hole in the assertion — it is the arithmetic:
+	// whenever the declared width is the larger, the fixed algorithm spends the
+	// difference on the columns and the sum comes to the declared width exactly.
+	// A table with no columns at all is the one document where the two differ,
+	// because there is nothing to spend the width on and the sum is zero. Planting
+	// the clause found this: without a table like this one, dropping "the greater
+	// of" entirely changes nothing anywhere in the suite.
+	empty := layoutOf(t, 1000,
+		`<div id=t style="display: table; table-layout: fixed; width: 300px; `+
+			`height: 40px"></div>`, bareTable)
+	px(t, "a fixed table with no columns in it", find(t, empty, "t").BorderRect.W, 300)
+}
+
+// TestTablePercentageWidthIsOfTheWrappersContainingBlock pins §17.4's rule for a
+// percentage: it is a percentage of the containing block the *wrapper* is in, not
+// of the wrapper, and not of what is left after the table's own border.
+//
+// Both of those were wrong, in the same document and in opposite directions, and
+// each hid the other:
+//
+//   - the wrapper shrank to fit the table's content, so "width: 80%" meant eighty
+//     per cent of the widest word in the table;
+//   - and the percentage was resolved against the room left after the table's own
+//     border, so a 20px border took 16px off the answer as well.
+//
+// The arithmetic here: a 500px containing block, "width: 80%" and a 20px border
+// either side. The table is 400px wide altogether — a <table>'s width is its
+// border box — and its content box is 360. Resolving against the wrapper would
+// give 320 and against the room after the border 368, so the three answers are
+// far enough apart that the test cannot pass by accident.
+func TestTablePercentageWidthIsOfTheWrappersContainingBlock(t *testing.T) {
+	root := layoutOf(t, 1000,
+		`<div style="width: 500px">`+
+			`<table id=t style="width: 80%; border: solid 20px">`+
+			`<tr><td>a</td></tr></table></div>`, bareTable)
+
+	table := find(t, root, "t")
+	px(t, "the table's border box", table.BorderRect.W, 400)
+	px(t, "the table's content box", table.ContentRect().W, 360)
+
+	// §17.4's wrapper is as wide as the table's border box and no wider, which is
+	// what makes the whole thing hold together: a wrapper that had shrunk to the
+	// content would be the containing block the percentage was answered against.
+	wrapper := findFragment(t, root, func(f *Fragment) bool {
+		return f.Box != nil && f.Box.TableWrapper
+	})
+	px(t, "the table wrapper", wrapper.BorderRect.W, 400)
+
+	// The same document as a CSS table, where the declared width is the content
+	// box — see htmlTableWidth. 80% of 500 is 400 of content and the border makes
+	// the box 440, so the wrapper is 440 and not 400. It is the same percentage
+	// against the same containing block and a different answer, which is what
+	// makes this the case that decides whether the wrapper adds the table's edges
+	// back on.
+	root = layoutOf(t, 1000,
+		`<div style="width: 500px">`+
+			`<div id=t style="display: table; width: 80%; border: solid 20px">`+
+			`<div style="display: table-row"><div style="display: table-cell">a</div></div>`+
+			`</div></div>`, bareTable)
+	px(t, "a CSS table's border box", find(t, root, "t").BorderRect.W, 440)
+	wrapper = findFragment(t, root, func(f *Fragment) bool {
+		return f.Box != nil && f.Box.TableWrapper
+	})
+	px(t, "the wrapper around a CSS table", wrapper.BorderRect.W, 440)
+}
+
 // findFragment returns the first fragment in tree order satisfying a predicate.
 func findFragment(t *testing.T, root *Fragment, ok func(*Fragment) bool) *Fragment {
 	t.Helper()

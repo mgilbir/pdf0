@@ -328,7 +328,24 @@ const wptEnv = "WPT_TESTS"
 // run against run, so a reference setting "a bc d" as one line disagreed with a
 // test setting "a b" and "c d" as two table cells that touch — over a boundary
 // that exists in the display list and not on the page. See joinRuns.
-const wptCleanPassBaseline = 3644
+//
+// The two remaining ways a table's own width comes out wrong took it from 3644 to
+// 3663, both layout and both measured on their own, by name over the whole suite
+// and in both directions. No test started failing at either step.
+//
+//   - §17.5.2.1's last sentence, that the table is the greater of its declared
+//     width and the sum of its columns: 2 tests, 3644 to 3646. Small, and worth
+//     the note for what the failure looked like — nothing was clipped, the
+//     columns were laid out at the widths the author gave them and the table's
+//     own box was the smaller number, so the cells hung out of the side of their
+//     own table and what was behind it showed through.
+//   - §17.4's percentage, which is of the *wrapper's* containing block: 18 tests,
+//     3646 to 3663, failures 1253 to 1235. The wrapper shrank to fit the table's
+//     content and the percentage then resolved against that, so "width: 80%"
+//     meant eighty per cent of the widest word in the table. Eleven of the 18 are
+//     css/CSS2/floats-clear's float-applies-to family, which floats a
+//     "display: table" at a percentage width and is not a table test at all.
+const wptCleanPassBaseline = 3663
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
