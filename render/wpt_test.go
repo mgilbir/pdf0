@@ -456,7 +456,61 @@ const wptEnv = "WPT_TESTS"
 // missing families is 2.25px taller than the one that names them together — the
 // union of two faces with different baselines, which is §10.8.1 working. It
 // fails honestly.
-const wptCleanPassBaseline = 3924
+//
+// §10.8.1 on a run of text and §8.6's bidi box model took it from 3924 to 3953,
+// and for once the number needs no separating at all: not a finding was added or
+// removed, so the whole of it is layout. Failures fell from 968 to 939, counted
+// by name over the whole suite and in both directions — 29 tests stopped failing
+// and none started. The two were measured on their own against the same base.
+//
+//   - vertical-align on an inline box's *text*: 3924 to 3947, 23 tests. The
+//     property was read for atomic inlines only, so a "vertical-align: 96px" on
+//     a <span> moved nothing at all and a <sup> sat on the line of type. Eighteen
+//     of the 23 are one family — linebox's vertical-align-007 through -104, which
+//     check a length or a percentage in each of nine units.
+//   - §8.6's bidi box model: 3947 to 3953, 6 tests, all of bidi-text's
+//     bidi-box-model family.
+//
+// Neither headline was the first thing tried, and every intermediate answer is
+// worth recording, because each was found by a test rather than by argument.
+//
+// The first vertical-align attempt aligned each *item* rather than each aligned
+// subtree, and cost three tests while gaining 23. Both faults behind them are
+// real and both are now implemented:
+//
+//   - §10.8.1's "top" and "bottom" move a box together with everything
+//     baseline-aligned inside it. Applied per run, a "vertical-align: top" span
+//     holding two sizes of text had the smaller run pulled up out of the words it
+//     belongs with — which is precisely what anonymous-inline-inherit-001
+//     asserts must not happen.
+//   - §16.3.1 draws a decoration across the whole of the box that *declared* it,
+//     "without paying any attention to" the descendants it crosses, so moving the
+//     run moved the underline with it. text-decoration-va-length-001 sets three
+//     spans at three alignments under one overlining div and asserts one straight
+//     line; it got three stepped ones.
+//
+// §8.6 went through three readings before it stopped costing something:
+//
+//   - swapping the two insets on the *first* content item's level cost
+//     css-text/white-space's tab-bidi-001, whose outer span holds a right-to-left
+//     <bdo> and then left-to-right text. A box whose content is not right-to-left
+//     throughout has ends that need not be at its visual edges at all, and two
+//     items cannot say where they are; the engine leaves such a box alone now.
+//   - giving an inset the *paragraph's* base level, which is what rule L1 gives a
+//     line's leading separators, cost css/CSS2/text's bidi-span-003: a
+//     purple-bordered span of Latin in a "direction: rtl" div had its opening
+//     border thrown to the far end of the line, so a border drawn round one word
+//     enclosed two. An inset takes the lowest level anything inside its box
+//     reached instead, which is the level the box's own edges sit at.
+//
+// The reading that §8.6 keys on the direction property is the one insetItems
+// recorded as nine clean passes worse, and it is still wrong. §8.6 is physical on
+// both sides of its rule: the leftmost generated box carries the left inset
+// whichever direction is declared, and the direction decides only which *line* of
+// a box broken across several. What had to be found was not the property but
+// whether the algorithm reversed the content, and that is a resolved embedding
+// level.
+const wptCleanPassBaseline = 3953
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

@@ -72,6 +72,18 @@ type textDecoration struct {
 	// means the declaring box's own colour rather than the colour of whatever
 	// text the line happens to cross.
 	by *Box
+	// shift is how far the declaring box's own baseline sits below the line's,
+	// which is §10.8.1's vertical-align applied to *that* box and not to the run
+	// the decoration is attached to.
+	//
+	// §16.3.1 is the reason the two are different numbers: a decoration is drawn
+	// across the whole of the box that declared it "without paying any attention
+	// to" what it crosses, so a div with an overline over three spans at three
+	// vertical-aligns rules one straight line and not three stepped ones. The
+	// field is filled in when a run is placed on a line, since only then is the
+	// line's own geometry known, and it stays zero for the decorations of every
+	// document that does not use the property.
+	shift style.Unit
 }
 
 // decorationsFor is every decoration drawn across a box's text.
@@ -126,6 +138,33 @@ func (l *layouter) decorationsFor(b *Box) []textDecoration {
 		out = append(out, own...)
 	}
 	l.decorations[b] = out
+	return out
+}
+
+// decorationsAt fixes each decoration to the baseline of the box that declared
+// it, for a run that §10.8.1's vertical-align has moved off the line's own.
+//
+// It copies, and the copy is why it is only called for such a run: the slice it
+// is given is memoized and shared by every run of every line the box produced,
+// so writing into it would give one line's arithmetic to all of them.
+//
+// A decoration whose declaring box was not moved keeps a shift of zero, which is
+// what puts an underline declared by the paragraph under a raised <sup> where
+// the paragraph's own text is. That is the case §16.3.1 is about.
+func (l *layouter) decorationsAt(in []textDecoration, ls *lineStack) []textDecoration {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]textDecoration, len(in))
+	copy(out, in)
+	for i := range out {
+		va, ok := l.inlineAligns[out[i].by]
+		if !ok {
+			continue
+		}
+		above, below := l.leading(out[i].by)
+		out[i].shift = ls.shift(va, above, below)
+	}
 	return out
 }
 
