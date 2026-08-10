@@ -804,3 +804,63 @@ func TestTheComparisonSeesAClippedPicture(t *testing.T) {
 		t.Error("a solid picture clipped to a strip did not compare equal to that strip")
 	}
 }
+
+// TestInlineBoxBackgroundIsClippedByItsBlock.
+//
+// An inline box's fragments are not children in the fragment tree — there is
+// one per line it was broken across, hanging off the line box — so the clip
+// resolution has to reach them explicitly. Forgetting to leaves a <span>'s
+// background running out of the side of the "overflow: hidden" box that holds
+// the words it belongs to, which is the one place a clip can be missed without
+// anything else looking wrong.
+func TestInlineBoxBackgroundIsClippedByItsBlock(t *testing.T) {
+	doc := `<div id="p"><span id="s">wwwwwwwwwwwwwwwwwwwwwwww</span></div>`
+	css := noDefaults + `
+		#p { width: 40px; height: 40px }
+		#s { background-color: #ff0000; white-space: pre }`
+
+	loose := soleFill(t, paintOf(t, doc, css), red, "an inline background with no clip")
+	tight := soleFill(t, paintOf(t, doc, css+`#p { overflow: hidden }`), red,
+		"an inline background inside overflow: hidden")
+
+	if loose.W <= tight.W {
+		t.Fatalf("the unclipped inline background is %.2f wide and the clipped one "+
+			"%.2f; the document does not distinguish them", loose.W.Px(), tight.W.Px())
+	}
+	px(t, "the clipped inline background's width", tight.W, 40)
+}
+
+// TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow.
+//
+// §17.6.2's grid lines are centred on the boundaries between cells, and the
+// ones at the table's edge are centred on its border box — outside the padding
+// box that "overflow: hidden" clips the table's *contents* to. They are the
+// table's own border by another name, so they take the table's own clip. Cutting
+// them there would erase the frame of every collapsing table that also declared
+// an overflow, and would do it by half a border width, which reads as a
+// rendering artefact rather than as a rule being applied to the wrong box.
+func TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow(t *testing.T) {
+	doc := `<table id="t"><tr><td id="d">x</td></tr></table>`
+	css := noDefaults + `
+		#t { border-collapse: collapse; width: 60px;
+		     border-top-style: solid; border-top-width: 8px;
+		     border-top-color: #0000ff }
+		#d { padding: 0 }`
+
+	loose := fillsOf(paintOf(t, doc, css), borderInk)
+	tight := fillsOf(paintOf(t, doc, css+`#t { overflow: hidden }`), borderInk)
+
+	if len(loose) == 0 {
+		t.Fatalf("the collapsing table drew no grid line, so this proves nothing")
+	}
+	if len(tight) != len(loose) {
+		t.Fatalf("the table with overflow drew %d grid lines and the one without %d",
+			len(tight), len(loose))
+	}
+	for i := range loose {
+		if tight[i] != loose[i] {
+			t.Errorf("grid line %d is %v with overflow and %v without; the table's own "+
+				"border must not be cut by its own overflow", i, tight[i], loose[i])
+		}
+	}
+}
