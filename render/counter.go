@@ -157,50 +157,149 @@ func (c *counterState) snapshot() counterValues {
 	return out
 }
 
-// computeCounters walks the document and records what each element sees.
+// counterSnapshots is what every box that can name a counter sees.
+//
+// Elements and pseudo-elements are kept apart because they see different things:
+// a ::before that resets a counter of its own must show its own value in its
+// content, and the element it hangs from must not — the pseudo-element is a
+// child of the element, so its scope is nested inside.
+type counterSnapshots struct {
+	elements map[*html.Node]counterValues
+	pseudo   map[style.PseudoKey]counterValues
+	// quoteDepth is the level of quotation nesting each pseudo-element's content
+	// begins at. It rides along with the counters because it is the same kind of
+	// value — see quotes.go — and because threading it through a second walk of
+	// the same tree in the same order would be two chances to disagree about
+	// document order rather than one.
+	quoteDepth map[style.PseudoKey]int
+}
+
+// computeCounters walks the document and records what each box sees.
 //
 // The value an element sees is the one *after* its own resets and increments,
-// because that is what its marker and its ::before and ::after content use: "li
-// { counter-increment: item } li::before { content: counter(item) }" must show
-// the item's own number, not the previous one's.
+// because that is what its marker uses: "li { counter-increment: item }" must
+// show the item's own number, not the previous one's.
+//
+// # A pseudo-element is a child, not a second helping of its element
+//
+// §12.4.1's scope is a tree scope, and ::before and ::after are in the tree: they
+// are the element's first and last children. Applying their counter-reset in the
+// *element's* scope instead — which is what this did — is wrong in a way that
+// only shows when both carry a counter of the same name, and then it is wrong
+// loudly. "html { counter-reset: c 0 c 4 c 0; counter-increment: c 1 c 3 }" with
+// "html::before { counter-reset: c 9999; counter-increment: c 9999 }" must leave
+// html's counter at 4, because the 9999 is a *nested* counter that dies with the
+// pseudo-element; sharing the scope made the reset overwrite html's own and the
+// document numbered from 19998.
+//
+// Document order decides the rest: ::before applies before the element's
+// children and ::after after them, so a counter either of them creates is in
+// scope for its following siblings exactly as any other child's would be.
+//
+// # What does not count
+//
+// §12.4.1 excludes two things and both of them are the difference between a rule
+// that reads right and a document that numbers wrong:
+//
+//   - An element with "display: none" cannot reset or increment a counter, and
+//     neither can anything inside it. It is not in the formatting structure at
+//     all, so there is nothing to number.
+//   - A pseudo-element that generates no box does not either, and "generates no
+//     box" is decided by its content: the initial value is "normal", so *every*
+//     element in every document has a ::before rule's worth of declarations
+//     sitting on it that must do nothing. A stylesheet saying only
+//     "#one::before { counter-increment: c }" increments nothing at all.
+//
+// "visibility: hidden" is deliberately not here. A hidden box is laid out and
+// takes its room; only display removes it.
 func computeCounters(root *html.Node, styles map[*html.Node]style.ComputedStyle,
-	pseudo map[style.PseudoKey]style.ComputedStyle) map[*html.Node]counterValues {
+	pseudo map[style.PseudoKey]style.ComputedStyle) counterSnapshots {
 
-	out := map[*html.Node]counterValues{}
+	out := counterSnapshots{
+		elements:   map[*html.Node]counterValues{},
+		pseudo:     map[style.PseudoKey]counterValues{},
+		quoteDepth: map[style.PseudoKey]int{},
+	}
 	state := newCounterState()
+	// §12.3.1's level of quotation, which runs across the whole document in
+	// document order and belongs to no element.
+	depthOfQuotes := 0
+
+	// apply runs one box's declarations in one scope. Reset before increment:
+	// "counter-reset: n 0; counter-increment: n" on one element yields 1, and the
+	// specification fixes the order rather than leaving it to the declaration
+	// order.
+	apply := func(cs style.ComputedStyle, depth int) {
+		for _, r := range parseCounterList(cs["counter-reset"], 0) {
+			state.reset(r.name, r.value, depth)
+		}
+		for _, r := range parseCounterList(cs["counter-increment"], 1) {
+			state.increment(r.name, r.value, depth)
+		}
+	}
+	// atPseudo applies one pseudo-element's declarations in a scope of its own
+	// and records what its content() will see.
+	atPseudo := func(n *html.Node, name string, depth int) {
+		key := style.PseudoKey{Node: n, Name: name}
+		cs, ok := pseudo[key]
+		if !ok || !generatesPseudoBox(cs) {
+			return
+		}
+		state.enter(depth)
+		apply(cs, depth)
+		out.pseudo[key] = state.snapshot()
+		// The depth this pseudo-element's content *starts* at, recorded before
+		// its own keywords move it: "content: open-quote" draws the mark for the
+		// level it is opening, not for the one it leaves behind.
+		out.quoteDepth[key] = depthOfQuotes
+		depthOfQuotes = quoteDepthAfter(cs["content"], depthOfQuotes, parseQuotes(cs["quotes"]))
+	}
 
 	var walk func(n *html.Node, depth int)
 	walk = func(n *html.Node, depth int) {
 		if n.Type == html.ElementNode {
-			state.enter(depth)
 			cs := styles[n]
-			// Reset before increment: "counter-reset: n 0; counter-increment: n"
-			// on one element yields 1, and the specification fixes the order
-			// rather than leaving it to the declaration order.
-			for _, r := range parseCounterList(cs["counter-reset"], 0) {
-				state.reset(r.name, r.value, depth)
+			if displayIsNone(cs) {
+				return
 			}
-			for _, r := range parseCounterList(cs["counter-increment"], 1) {
-				state.increment(r.name, r.value, depth)
-			}
-			// A pseudo-element may carry its own, and ::before comes before the
-			// element's content in document order.
-			if ps, ok := pseudo[style.PseudoKey{Node: n, Name: "before"}]; ok {
-				for _, r := range parseCounterList(ps["counter-reset"], 0) {
-					state.reset(r.name, r.value, depth)
-				}
-				for _, r := range parseCounterList(ps["counter-increment"], 1) {
-					state.increment(r.name, r.value, depth)
-				}
-			}
-			out[n] = state.snapshot()
+			state.enter(depth)
+			apply(cs, depth)
+			out.elements[n] = state.snapshot()
+			atPseudo(n, "before", depth+1)
 		}
 		for _, child := range n.Children {
 			walk(child, depth+1)
 		}
+		if n.Type == html.ElementNode {
+			atPseudo(n, "after", depth+1)
+		}
 	}
 	walk(root, 0)
 	return out
+}
+
+// displayIsNone reports the one display value that takes a box out of the
+// formatting structure rather than merely changing its shape.
+func displayIsNone(cs style.ComputedStyle) bool {
+	outer, _, _ := displayOf(cs)
+	return outer == OuterNone
+}
+
+// generatesPseudoBox reports whether a ::before or ::after produces a box, which
+// is what decides whether its counters happen at all.
+//
+// The content value is read here rather than through resolveContent because the
+// question is asked before any counter has a value — and it can be, since the
+// three values that mean "no box" are the three that need nothing resolved.
+func generatesPseudoBox(cs style.ComputedStyle) bool {
+	if displayIsNone(cs) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(cs["content"])) {
+	case "", "normal", "none":
+		return false
+	}
+	return true
 }
 
 // counterRequest is one name-and-number pair from a counter-reset or

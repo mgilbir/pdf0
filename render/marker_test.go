@@ -149,6 +149,129 @@ func TestRomanNumerals(t *testing.T) {
 	}
 }
 
+// TestLowerGreekSkipsFinalSigma pins the one thing about §12.6.2's Greek
+// alphabet that is not "the letters in order".
+//
+// U+03C2, final sigma, is the same letter as U+03C3 written at the end of a
+// word. It is not a numeral, so the sequence steps over it — and an
+// implementation that walked the code points from alpha to omega would number
+// the eighteenth item ς and every item after it one letter out, which is far
+// enough into a list that only a document with one would show it.
+func TestLowerGreekSkipsFinalSigma(t *testing.T) {
+	cases := map[int]string{
+		1: "α", 17: "ρ",
+		// The eighteenth is sigma proper, not final sigma.
+		18: "σ", 19: "τ", 24: "ω",
+		// Bijective, like the Latin alphabets: after the last letter comes the
+		// first doubled.
+		25: "αα", 26: "αβ", 48: "αω", 49: "βα",
+	}
+	for index, want := range cases {
+		if got := alphabeticIn(index, lowerGreek); got != want {
+			t.Errorf("item %d is %q, want %q", index, got, want)
+		}
+	}
+	if strings.ContainsRune(string(lowerGreek), 'ς') {
+		t.Error("final sigma is in the alphabet; it is not a numeral")
+	}
+	if n := len(lowerGreek); n != 24 {
+		t.Errorf("the alphabet has %d letters, want 24", n)
+	}
+}
+
+// TestArmenianAndGeorgianAreAdditive pins the two systems §12.6.2 names.
+//
+// Additive, not positional: the number is the sum of the largest numerals that
+// fit, so each figure of a decimal number is a separate mark and 1979 is four of
+// them for a coincidental reason rather than because it has four digits. The
+// cases below are chosen so that a carry crosses each order of magnitude.
+func TestArmenianAndGeorgianAreAdditive(t *testing.T) {
+	armenian := map[int]string{
+		1: "Ա", 9: "Թ", 10: "Ժ", 11: "ԺԱ", 99: "ՂԹ", 100: "Ճ",
+		// 1000 + 900 + 70 + 9.
+		1979: "ՌՋՀԹ",
+		// The largest the system expresses: 9000 + 900 + 90 + 9.
+		9999: "ՔՋՂԹ",
+	}
+	for index, want := range armenian {
+		if got := additive(index, armenianNumerals, 1, 9999); got != want {
+			t.Errorf("armenian %d is %q, want %q", index, got, want)
+		}
+	}
+	georgian := map[int]string{
+		1: "ა", 9: "თ", 10: "ი", 11: "ია", 100: "რ", 1000: "ჩ",
+		10000: "ჵ",
+		// The largest: 10000 + 9000 + 900 + 90 + 9.
+		19999: "ჵჰშჟთ",
+	}
+	for index, want := range georgian {
+		if got := additive(index, georgianNumerals, 1, 19999); got != want {
+			t.Errorf("georgian %d is %q, want %q", index, got, want)
+		}
+	}
+
+	// Past the range the decimal stands, which is §12.6.2's instruction for a
+	// marker a style cannot represent. Silence there would be a list that loses
+	// its numbering on the ten-thousandth item and says nothing.
+	if got := additive(10000, armenianNumerals, 1, 9999); got != "10000" {
+		t.Errorf("armenian 10000 is %q, want the decimal", got)
+	}
+	if got := additive(20000, georgianNumerals, 1, 19999); got != "20000" {
+		t.Errorf("georgian 20000 is %q, want the decimal", got)
+	}
+	if got := additive(0, armenianNumerals, 1, 9999); got != "0" {
+		t.Errorf("armenian 0 is %q, want the decimal", got)
+	}
+}
+
+// TestEveryListStyleTypeIsDistinct pins that §12.6.2's list is complete.
+//
+// The fallback for an unrecognised type is a bullet, which is the right answer
+// for a type CSS does not define and the wrong one for a type it does: a
+// document asking for Armenian numerals got a disc, on every item, with nothing
+// reported. Two of the three that were missing needed a whole numbering system,
+// so the gap could not be seen by reading markerText — only by listing what the
+// specification names and checking each answers differently.
+func TestEveryListStyleTypeIsDistinct(t *testing.T) {
+	// §12.6.2's complete list, less "none" and the three that are bullets.
+	// lower-latin and lower-alpha are one style under two names, and so are the
+	// upper pair, so they are grouped rather than expected to differ.
+	numbering := [][]string{
+		{"decimal"}, {"decimal-leading-zero"}, {"lower-roman"}, {"upper-roman"},
+		{"lower-greek"}, {"lower-latin", "lower-alpha"}, {"upper-latin", "upper-alpha"},
+		{"armenian"}, {"georgian"},
+	}
+	seen := map[string]string{}
+	for _, names := range numbering {
+		got := markerText(names[0], 4)
+		if got == "•" {
+			t.Errorf("%q produced a bullet, so it is not implemented and nothing said so",
+				names[0])
+			continue
+		}
+		for _, alias := range names[1:] {
+			if other := markerText(alias, 4); other != got {
+				t.Errorf("%q and %q are the same style but produced %q and %q",
+					names[0], alias, got, other)
+			}
+		}
+		if was, dup := seen[got]; dup {
+			t.Errorf("%q and %q both number the fourth item %q", was, names[0], got)
+		}
+		seen[got] = names[0]
+	}
+	// The three that are marks rather than numbers, and "none", which is the one
+	// value that produces nothing at all.
+	for _, style := range []string{"disc", "circle", "square"} {
+		if got := markerText(style, 4); got == "" {
+			t.Errorf("%q produced nothing", style)
+		}
+	}
+	if got := markerText("none", 4); got != "" {
+		t.Errorf("none produced %q", got)
+	}
+}
+
 // TestMarkerPositionIsOutsideByDefault pins where the marker sits. Outside puts
 // it clear of the content box, which is what a list looks like; inside puts it
 // at the start of the first line, where it pushes the text along.
@@ -175,15 +298,114 @@ func TestMarkerPositionIsOutsideByDefault(t *testing.T) {
 			li.Marker.At.X.Px())
 	}
 
+	// Inside is a different mechanism and not a different x: §12.5.1 makes the
+	// marker the first inline box in the item, so it is a run on the first line
+	// and there is no Marker on the fragment at all. A test that only looked for
+	// a Marker would read the change as the feature disappearing.
 	root = layoutOf(t, 600, "<ul><li>a</li></ul>", "li { list-style-position: inside }")
 	li = nil
 	walk(root)
-	if li == nil {
-		t.Fatal("no marker")
-	}
-	if li.Marker.At.X < 0 {
-		t.Errorf("an inside marker is at x=%v; it belongs at the content's start",
+	if li != nil {
+		t.Errorf("an inside marker was drawn beside the box at x=%v; it belongs on the line",
 			li.Marker.At.X.Px())
+	}
+	first := firstItemLine(t, root)
+	if len(first.Runs) < 2 {
+		t.Fatalf("the first line has %d runs, want the marker and the text", len(first.Runs))
+	}
+	if first.Runs[0].Text != "•" {
+		t.Errorf("the first run is %q, want the bullet", first.Runs[0].Text)
+	}
+	if first.Runs[0].X != 0 {
+		t.Errorf("the marker run is at x=%v, want the start of the line", first.Runs[0].X.Px())
+	}
+	if got := first.Runs[1].Text; got != "a" {
+		t.Errorf("the run after the marker is %q, want the item's text", got)
+	}
+	if first.Runs[1].X <= first.Runs[0].X {
+		t.Error("the text was not pushed along by the marker")
+	}
+}
+
+// firstItemLine is the first line box of the first list item in a tree.
+func firstItemLine(t *testing.T, root *Fragment) LineFragment {
+	t.Helper()
+	var found *LineFragment
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if found == nil && f.Box != nil && f.Box.ListItem && len(f.Lines) > 0 {
+			found = &f.Lines[0]
+			return
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if found == nil {
+		t.Fatal("no list item with a line box")
+	}
+	return *found
+}
+
+// TestInsideMarkerTakesRoomOnTheLine pins §12.5.1's arithmetic exactly, which
+// needs a face whose advances are known: Ahem's every glyph is an em square.
+//
+// "1." at 20px is two squares, so 40px, and the gap this engine leaves between a
+// marker and its text is half an em, 10px. The item's own text therefore begins
+// at 50px and not at 40 and not at 0.
+func TestInsideMarkerTakesRoomOnTheLine(t *testing.T) {
+	set := loadAhem(t)
+	built := Build(Input{HTML: "<ol><li>ab</li></ol>", CSS: []Stylesheet{{Source: `
+		ol { list-style-type: decimal; list-style-position: inside; margin: 0; padding: 0 }
+		li { font-family: Ahem; font-size: 20px }`}}})
+	w, _ := style.FromPx(600)
+	h, _ := style.FromPx(600)
+	root := Layout(built.Root, Size{W: w, H: h}, set, NewRecorder(nil))
+
+	line := firstItemLine(t, root)
+	if len(line.Runs) != 2 {
+		t.Fatalf("the line has %d runs, want the marker and the text", len(line.Runs))
+	}
+	if got := line.Runs[0].Text; got != "1." {
+		t.Fatalf("the marker run is %q, want %q", got, "1.")
+	}
+	if got := line.Runs[1].X.Px(); got != 50 {
+		t.Errorf("the item's text begins at %vpx; §12.5.1 puts it after the marker's "+
+			"40px and the half-em gap, so 50", got)
+	}
+}
+
+// TestEmptyInsideListItemHasALine pins the case a marker drawn beside the box
+// cannot produce: an item with no content of its own is still one line tall,
+// because the marker is content.
+//
+// It is the shape a dozen of the suite's list tests are built on — an empty
+// "display: list-item" with a background, asserted to be a coloured strip with a
+// dot in it — and with the marker drawn beside the box the strip had no height
+// and nothing was painted at all.
+func TestEmptyInsideListItemHasALine(t *testing.T) {
+	root := layoutOf(t, 600, `<div id="i"></div>`,
+		"#i { display: list-item; list-style-position: inside }")
+	var item *Fragment
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f.Box != nil && f.Box.ListItem {
+			item = f
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if item == nil {
+		t.Fatal("no list item")
+	}
+	if len(item.Lines) != 1 {
+		t.Fatalf("an empty item with an inside marker has %d line boxes, want 1", len(item.Lines))
+	}
+	if item.BorderRect.H <= 0 {
+		t.Error("the item has no height, so its background would paint nothing")
 	}
 }
 

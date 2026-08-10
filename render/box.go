@@ -152,6 +152,14 @@ type Box struct {
 	// the first child, or a list whose items are not siblings at all. Counting
 	// siblings gets every one of those wrong, and gets them wrong quietly — the
 	// list is numbered, just not with the numbers the author asked for.
+	//
+	// Where there is no counter — a "display: list-item" that no rule increments
+	// — the position among the parent's list items is written here instead, by
+	// the block walk, which is the only place that knows it. ListNumbered stays
+	// false there, and says which of the two answered. Keeping the fallback in
+	// the same field is what lets everything that draws a marker read one number:
+	// it used to travel as an argument, and three of the five call sites had
+	// nothing to pass and passed zero.
 	ListValue    int
 	ListNumbered bool
 
@@ -347,10 +355,10 @@ type boxBuilder struct {
 	ownFontSize       map[*html.Node]bool
 	ownPseudoFontSize map[style.PseudoKey]bool
 	rec               *Recorder
-	// counters holds what each element's generated content sees. See counter.go
-	// for why it is a walk of its own rather than something this builder can
-	// answer on the way down.
-	counters     map[*html.Node]counterValues
+	// counters holds what each element and each pseudo-element sees. See
+	// counter.go for why it is a walk of its own rather than something this
+	// builder can answer on the way down, and for why the two are separate.
+	counters     counterSnapshots
 	rootFontSize style.Unit
 	count        int
 	// afterWord says the last character emitted was part of a word, which is what
@@ -1186,7 +1194,7 @@ func (b *boxBuilder) listValueOf(n *html.Node, listItem bool) (int, bool) {
 	if !listItem {
 		return 0, false
 	}
-	if vals := b.counters[n]["list-item"]; len(vals) > 0 {
+	if vals := b.counters.elements[n]["list-item"]; len(vals) > 0 {
 		return vals[len(vals)-1], true
 	}
 	return 0, false

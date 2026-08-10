@@ -297,6 +297,26 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		return nil
 	}
 
+	if name == "quotes" && !legalQuotes(d.Value) {
+		// §12.3.2's grammar is "[<string> <string>]+ | none", so an odd number of
+		// strings names a level with an opening mark and no closing one and is not
+		// a value at all. §4.2 drops it, and dropping it here rather than where it
+		// is read is what makes the *inherited* pairs stand: a child of an element
+		// that set two good pairs must go on using them, and an engine that fell
+		// back to the initial value at read time would quote the child in a
+		// different alphabet from its parent.
+		//
+		// Not marked unsupported, for the same reason the negative lengths above
+		// are not: nothing is missing from the engine, and CSS says what to do.
+		s.report(Finding{
+			Offset: d.Offset,
+			Message: "\"quotes: " + serialize(d.Value) + "\" is not a list of pairs of " +
+				"strings, so the declaration was dropped",
+			Property: name,
+		})
+		return nil
+	}
+
 	if _, ok := properties[name]; ok {
 		// A registered property that nothing reads is reported here rather than
 		// dropped. The value still cascades — inheritance and the computed
@@ -442,6 +462,50 @@ var nonNegative = map[string]bool{
 	"padding-bottom": true, "padding-left": true,
 	"border-top-width": true, "border-right-width": true,
 	"border-bottom-width": true, "border-left-width": true,
+}
+
+// legalQuotes reports whether a "quotes" value matches §12.3.2's grammar.
+//
+// The CSS-wide keywords never reach it — expand deals with those before any
+// property-specific check — so what is left is "none" or an even, non-zero
+// number of strings and nothing else between them.
+func legalQuotes(vals []css.ComponentValue) bool {
+	seen := 0
+	for _, v := range vals {
+		if !v.IsToken() {
+			return false
+		}
+		switch v.Token.Kind {
+		case css.Whitespace:
+		case css.String:
+			seen++
+		case css.Ident:
+			// "none" is the only identifier the grammar admits, and only alone.
+			return seen == 0 && strings.EqualFold(v.Token.Value, "none") && onlyIdent(vals)
+		default:
+			return false
+		}
+	}
+	return seen >= 2 && seen%2 == 0
+}
+
+// onlyIdent reports that a value holds exactly one identifier and no other
+// token, which is what "quotes: none" has to be to mean none.
+func onlyIdent(vals []css.ComponentValue) bool {
+	seen := 0
+	for _, v := range vals {
+		if !v.IsToken() {
+			return false
+		}
+		if v.Token.Kind == css.Whitespace {
+			continue
+		}
+		if v.Token.Kind != css.Ident {
+			return false
+		}
+		seen++
+	}
+	return seen == 1
 }
 
 // hasNegativeNumber reports whether any numeric token in a value is negative.
