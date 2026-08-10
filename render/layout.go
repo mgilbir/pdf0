@@ -1033,7 +1033,7 @@ func (l *layouter) settleIn(child *Box, width style.Unit, origin flow, cf *Fragm
 	}
 
 	l.relayouts++
-	origin.ctx.boxes = origin.ctx.boxes[:mark]
+	origin.ctx.truncate(mark)
 	// The out-of-flow boxes the discarded layout found are discarded with it.
 	// Without this they would be placed twice — once against a fragment that is
 	// about to be thrown away — and the page would carry a ghost of every
@@ -1094,7 +1094,7 @@ func (l *layouter) fitBesideFloats(child *Box, width style.Unit, origin flow,
 		}
 		l.relayouts++
 		at, geom = at.Add(drop), next
-		origin.ctx.boxes = origin.ctx.boxes[:mark]
+		origin.ctx.truncate(mark)
 		l.deferred = l.deferred[:absMark]
 		cf, _ = l.blockIn(child, width, origin.at(at), geom)
 	}
