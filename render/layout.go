@@ -184,6 +184,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		positioned:          map[*Box]*Fragment{},
 		fontSet:             set,
 		rootFontSize:        root.FontSize,
+		root:                root,
 	}
 	if l.rootFontSize == 0 {
 		l.rootFontSize = defaultFontSize
@@ -319,6 +320,13 @@ type layouter struct {
 	// that it does not compound as elements nest, so reading it from the box in
 	// hand — as this did — makes it a synonym for em.
 	rootFontSize style.Unit
+	// root is the box layout began at, kept because §8.3.1's "margins of the
+	// root element's box do not collapse" is the one rule in the collapsing
+	// model that is about *which* box rather than about what the box declares.
+	// Identity is the right question to ask and an element name is not: this
+	// package is handed hand-built trees by its own tests, and a tree whose top
+	// box is a <div> still has a root.
+	root *Box
 	// relayouts counts the subtrees that had to be laid out a second time
 	// because the position predicted for them turned out to be wrong. It is
 	// bounded: see maxRelayouts.
@@ -509,7 +517,16 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// border of zero width that a margin cannot cross, and expressing it here
 	// keeps the collapsing rules in one place. Leaving it out is what would make
 	// a floated <div> holding a <p> sit an em above where the author put it.
-	sealed := establishesBFC(b)
+	//
+	// The root element is sealed for a second reason and by the same mechanism.
+	// §8.3.1 says flatly that "margins of the root element's box do not
+	// collapse", and it is the one entry in the collapsing model that is about
+	// which box this is rather than about what it declares — so it is asked by
+	// identity. Without it "html { margin-top: 1em }" over a body whose first
+	// child also has one draws a single em rather than two, which is
+	// margin-collapse-020 exactly: the green bar lands an em high and the red
+	// the reference covers is left showing.
+	sealed := establishesBFC(b) || b == l.root
 
 	// A margin collapses through an edge only when nothing sits on that edge to
 	// stop it. A border or a padding of even one unit is something.
