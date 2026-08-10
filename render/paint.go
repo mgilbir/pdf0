@@ -596,6 +596,15 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 
 		case DrawText:
 			ink := textInk(v)
+			if ink.Empty() {
+				// Nothing measurable to place: a run with no face, which the
+				// engine does not produce and a caller building a display list
+				// by hand might. Keeping it is the safe direction — the other
+				// one drops every such run through any clip at all, since an
+				// empty rectangle meets nothing.
+				kept = append(kept, v)
+				continue
+			}
 			if c.hides(ink) {
 				// Every glyph is outside the clip. This is the case the whole
 				// feature exists for and the only one that can be settled
