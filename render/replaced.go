@@ -209,16 +209,35 @@ func (l *layouter) clampReplaced(b *Box, w, h style.Unit, ratio float64,
 		maxH = minH
 	}
 
-	if ratio <= 0 || w <= 0 || h <= 0 {
-		// No ratio to preserve, so the axes do not interact. A zero extent is
-		// here too: every row of the table divides by the tentative size, and a
-		// box with none has no shape to keep.
+	if ratio <= 0 || (w <= 0) != (h <= 0) {
+		// No ratio to preserve, so the axes do not interact. A box with a zero
+		// extent on *one* axis is here too: every row of the table divides by
+		// the tentative size, and such a box has no shape left to keep — its
+		// tentative ratio is nought or infinite, which is not the picture's.
 		return Size{W: style.Clamp(w, minW, maxW), H: style.Clamp(h, minH, maxH)}
 	}
 
 	wide, narrow := w > maxW, w < minW
 	tall, short := h > maxH, h < minH
 	wf, hf := w.Px(), h.Px()
+	if w <= 0 && h <= 0 {
+		// Both axes nought and a picture with a shape: "height: 0" on an image
+		// with "width: auto" gives a tentative pair of 0 by 0, and the ratio the
+		// table divides by is 0/0. The intrinsic ratio stands in for it, which
+		// is the only shape there is to scale by and is what §10.4 means by
+		// "using the ratio".
+		//
+		// Every comparison the table makes is then still the right one, because
+		// each is a ratio rather than a length: a row asking whether minW/w is
+		// below minH/h is asking which minimum demands the larger box, and
+		// minW/ratio against minH answers exactly that.
+		//
+		// It is not a hypothetical pair of declarations. It is what
+		// "height: 0; min-height: 100px" on an image says, and the test suite
+		// has it both ways round: the picture is sized by whichever limit
+		// survives and the other axis follows the shape.
+		wf, hf = ratio, 1
+	}
 
 	switch {
 	case wide && tall:

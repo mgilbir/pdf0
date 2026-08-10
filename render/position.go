@@ -259,6 +259,22 @@ type absCandidate struct {
 	// a top margin, which is a combination that asks for two contradictory
 	// things at once.
 	staticX, staticY style.Unit
+	// staticEnd is the same position read from the other side: the distance from
+	// the *right* edge of parent's content box to the hypothetical box's right
+	// margin edge. §10.3.7 needs it because a right-to-left containing block
+	// resolves "right" from the static position rather than "left", and the two
+	// are not each other's negation — staticX is measured from one edge of the
+	// parent and this from the other, and a box that does not fill the width is
+	// not the same distance from both.
+	//
+	// A flag saying whether it had been measured was written here first and then
+	// deleted. Both callers can answer: a block-level box fills the parent's
+	// content width, so both distances are nought, and a box among the words has
+	// a pen position which is measured in *logical* order and so already counts
+	// from the right on a right-to-left line. Planting the flag as always-true
+	// moved nothing anywhere in the suite, which is the signature of a clause
+	// that decides nothing — so the second caller does the mirror instead.
+	staticEnd style.Unit
 	// index is the box's position among its parent's list items, which is what a
 	// numbered marker is numbered by. An absolutely positioned list item still
 	// generates a marker.
@@ -281,9 +297,13 @@ var maxAbsolutes = 1 << 14
 
 // deferAbsolute records an out-of-flow box to be placed once the tree is
 // absolute.
-func (l *layouter) deferAbsolute(b *Box, parent *Fragment, x, y style.Unit, index int) {
+//
+// end is the static position measured from the parent's content right edge. See
+// absCandidate.staticEnd.
+func (l *layouter) deferAbsolute(b *Box, parent *Fragment, x, y, end style.Unit, index int) {
 	l.deferred = append(l.deferred, absCandidate{
-		box: b, parent: parent, staticX: x, staticY: y, index: index,
+		box: b, parent: parent, staticX: x, staticY: y,
+		staticEnd: end, index: index,
 	})
 }
 
@@ -311,7 +331,7 @@ func (l *layouter) placeAbsolutes(page Rect) {
 // layoutAbsolute places one out-of-flow box.
 func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 	b := c.box
-	cb := l.containingBlockFor(b, page)
+	cb, cbBox := l.containingBlockFor(b, page)
 
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", cb.W)
@@ -323,6 +343,18 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 	parent := c.parent.ContentRect()
 	staticLeft := parent.X.Add(c.staticX).Sub(cb.X)
 	staticTop := parent.Y.Add(c.staticY).Sub(cb.Y)
+
+	// §10.3.7's other half: where the element the box would have flowed in is
+	// right-to-left, it is "right" that takes the static position. The distance
+	// is from the containing block's right edge to the hypothetical box's right
+	// margin edge, which is the mirror of staticLeft and not its negation.
+	//
+	// The direction read is the *parent's*, because that is the element
+	// establishing the static-position containing block. It is not the box's own:
+	// a box declaring "direction: rtl" is saying which way its contents run, not
+	// which end of its parent it would have started at.
+	staticRight := cb.X.Add(cb.W).Sub(parent.X.Add(parent.W).Sub(c.staticEnd))
+	fromEnd := b.Parent != nil && isRTL(b.Parent)
 
 	// A replaced box brings its own size, and §10.3.6 and §10.6.5 say to treat
 	// it as though the author had declared both — so the constraint below
@@ -338,13 +370,26 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 
 	// Horizontal first, because the width has to be settled before the box can
 	// be laid out and the height it needs is what the box's layout produces.
-	h := l.solveHorizontal(b, cb, border, padding, margin, staticLeft, replaced)
+	static := staticLeft
+	if fromEnd {
+		static = staticRight
+	}
+	h := l.solveHorizontal(b, cb, border, padding, margin,
+		static, fromEnd, cbBox != nil && isRTL(cbBox), replaced)
 
 	// A declared height, resolved here rather than by block layout because only
 	// here is the containing block's height definite.
 	declaredHeight, hasHeight := l.absoluteSize(b, "height", cb.H, cb.W)
 	if replaced != nil {
 		declaredHeight, hasHeight = replaced.H, true
+	} else if hasHeight {
+		// §10.4's clamp, applied *before* the box is laid out rather than only to
+		// the answer. The used height is what this box's descendants resolve a
+		// percentage height against, so a declared height that a maximum cuts
+		// down has to be cut down here — laying the content out against the
+		// declared number and shrinking the box afterwards gives a child with
+		// "height: 50%" half of a height its parent never had.
+		declaredHeight = l.clampHeight(b, declaredHeight, cb.W, cb.H, true)
 	}
 
 	frag, _ := l.blockIn(b, cb.W,
@@ -399,16 +444,21 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 // With no positioned ancestor the answer is the initial containing block, which
 // in this engine is the page box: there is one page, its size is settled before
 // layout, and the root's content box is laid out to fill it.
-func (l *layouter) containingBlockFor(b *Box, page Rect) Rect {
+//
+// The element the rectangle came from is returned beside it, because §10.3.7
+// asks a second question about the containing block that a rectangle cannot
+// answer: which way it runs. A nil box means the initial containing block, whose
+// direction is the root element's.
+func (l *layouter) containingBlockFor(b *Box, page Rect) (Rect, *Box) {
 	if b.Position == PositionFixed {
-		return page
+		return page, nil
 	}
 	for anc := b.Parent; anc != nil; anc = anc.Parent {
 		if !anc.Position.positioned() {
 			continue
 		}
 		if f, ok := l.positioned[anc]; ok {
-			return f.PaddingRect()
+			return f.PaddingRect(), anc
 		}
 		// A positioned ancestor with no fragment is an inline-level one, and
 		// §10.1 forms its containing block from the padding boxes of its first
@@ -428,7 +478,7 @@ func (l *layouter) containingBlockFor(b *Box, page Rect) Rect {
 			Property: "position",
 		})
 	}
-	return page
+	return page, nil
 }
 
 // absoluteLength resolves a property against a definite basis, which is what an
@@ -498,6 +548,19 @@ type absAxis struct {
 	// static is where the box's margin edge would have been in the flow,
 	// measured from the containing block's start edge.
 	static style.Unit
+	// staticFromEnd selects §10.3.7's other half. Where the element establishing
+	// the static-position containing block is right-to-left, it is *right* that
+	// takes the static position and left that is solved for — so static is then
+	// measured from the containing block's right edge instead, and a box with no
+	// offsets at all shrink-wraps against the right rather than the left.
+	//
+	// It is a separate flag from rtl below because the two rules key on different
+	// elements: this one on the element the box would have flowed in, and rtl on
+	// the containing block. They are usually the same element and need not be.
+	staticFromEnd bool
+	// rtl is the containing block's direction, which decides *which* of a pair of
+	// auto margins gives way when they would come out negative.
+	rtl bool
 
 	// autoSize gives the size to use when it is auto and the equation does not
 	// decide it. This is the first of the three differences between the
@@ -539,9 +602,18 @@ func solveAxis(a absAxis) axisSolution {
 			me = 0
 		}
 		room := a.available.Sub(a.static).Sub(ms).Sub(me).Sub(a.fixed)
+		size := maxZero(a.autoSize(maxZero(room)))
+		start := a.static
+		if a.staticFromEnd {
+			// The static position anchors the *end* edge, so the start is
+			// whatever the box's own width leaves. Both are measured from their
+			// own side of the containing block, which is why this is a
+			// subtraction and not a negation.
+			start = a.available.Sub(a.static).Sub(ms).Sub(me).Sub(a.fixed).Sub(size)
+		}
 		return axisSolution{
-			start:       a.static,
-			size:        maxZero(a.autoSize(maxZero(room))),
+			start:       start,
+			size:        size,
 			marginStart: ms, marginEnd: me,
 		}
 	}
@@ -553,15 +625,21 @@ func solveAxis(a absAxis) axisSolution {
 		switch {
 		case a.marginStartAuto && a.marginEndAuto:
 			half := slack.Div(2)
-			if slack < 0 && !a.vertical {
+			switch {
+			case slack >= 0 || a.vertical:
+				ms, me = half, slack.Sub(half)
+			case a.rtl:
+				// The right-to-left half of the same rule: "set 'margin-right'
+				// to zero and solve for 'margin-left'", so the box stays pinned
+				// to its right offset and overflows to the left.
+				ms, me = slack, 0
+			default:
 				// §10.3.7: equal margins that would be negative are not what an
 				// author asking to centre a box meant. In a left-to-right
 				// document the left margin goes to zero and the right absorbs
 				// the whole difference, so the box stays pinned to its left
 				// offset and overflows to the right.
 				ms, me = 0, slack
-			} else {
-				ms, me = half, slack.Sub(half)
 			}
 		case a.marginStartAuto:
 			ms = slack.Sub(me)
@@ -595,8 +673,14 @@ func solveAxis(a absAxis) axisSolution {
 		out.size = maxZero(a.autoSize(maxZero(a.available.Sub(a.end).Sub(edges))))
 		out.start = a.available.Sub(a.end).Sub(edges).Sub(out.size)
 	case a.startAuto && a.endAuto:
-		// Neither edge is anchored, so the box stays where the flow left it.
-		out.start, out.size = a.static, a.size
+		// Neither edge is anchored, so the box stays where the flow left it —
+		// which for a right-to-left static-position containing block means its
+		// *end* edge stays there and the start is solved for.
+		out.size = a.size
+		out.start = a.static
+		if a.staticFromEnd {
+			out.start = a.available.Sub(a.static).Sub(edges).Sub(a.size)
+		}
 	case a.sizeAuto && a.endAuto:
 		out.start = a.start
 		out.size = maxZero(a.autoSize(maxZero(a.available.Sub(a.start).Sub(edges))))
@@ -626,7 +710,7 @@ func solveAxis(a absAxis) axisSolution {
 // gives a box whose left, width and right no longer add up to its containing
 // block. That shows as a box anchored to neither edge.
 func (l *layouter) solveHorizontal(b *Box, cb Rect, border, padding, margin Edges,
-	staticLeft style.Unit, replaced *Size) axisSolution {
+	static style.Unit, staticFromEnd, rtl bool, replaced *Size) axisSolution {
 
 	left, leftAuto := l.offsetValue(b, "left", cb.W, true)
 	right, rightAuto := l.offsetValue(b, "right", cb.W, true)
@@ -641,10 +725,12 @@ func (l *layouter) solveHorizontal(b *Box, cb Rect, border, padding, margin Edge
 		end: right, endAuto: rightAuto,
 		marginStart: margin.Left, marginStartAuto: l.isAuto(b, "margin-left"),
 		marginEnd: margin.Right, marginEndAuto: l.isAuto(b, "margin-right"),
-		fixed:     border.Horizontal().Add(padding.Horizontal()),
-		available: cb.W,
-		static:    staticLeft,
-		autoSize:  func(room style.Unit) style.Unit { return l.shrinkToFit(b, room) },
+		fixed:         border.Horizontal().Add(padding.Horizontal()),
+		available:     cb.W,
+		static:        static,
+		staticFromEnd: staticFromEnd,
+		rtl:           rtl,
+		autoSize:      func(room style.Unit) style.Unit { return l.shrinkToFit(b, room) },
 	}
 	got := solveAxis(axis)
 	if replaced != nil {

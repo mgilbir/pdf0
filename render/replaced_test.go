@@ -544,3 +544,45 @@ func TestReplacedInATightFloatIsReported(t *testing.T) {
 	Layout(built.Root, Size{W: w, H: h}, nil, rec)
 	requireFinding(t, rec.Findings(), RuleUnbreakableOverflow, "the image is 40px wide")
 }
+
+// TestReplacedZeroTentativeSizeUsesTheIntrinsicRatio is §10.4's table where the
+// tentative pair it divides by is 0 by 0.
+//
+// Every row of the table scales one axis by the ratio of the *tentative* used
+// width and height, and "height: 0" on an image with an auto width makes both of
+// them nought: the height was declared as zero and the width was computed from
+// it. The ratio is then 0/0, which is no ratio at all, and an implementation
+// that noticed the division and bailed out to two independent clamps produces a
+// picture 0 wide and 100 tall — a rectangle where the author asked for a square,
+// from declarations that say nothing about the shape at all.
+//
+// The intrinsic ratio is what stands in for it, and it is the only shape there
+// is: the picture's own. wide.png is 40 × 20, so a minimum height of 100 makes
+// the width 200.
+func TestReplacedZeroTentativeSizeUsesTheIntrinsicRatio(t *testing.T) {
+	root := replacedLayout(t, 500, `<div><img id="i" src="wide.png"></div>`, noDefaults,
+		`#i { height: 0; width: auto; min-height: 100px }`)
+	w, h := contentSize(find(t, root, "i"))
+	px(t, "the width recomputed from the held-open height", w, 200)
+	px(t, "the used height", h, 100)
+
+	// The same the other way round, which is a different row of the table and so
+	// cannot pass by the same accident: a minimum *width* of 100 makes the
+	// height 50.
+	root = replacedLayout(t, 500, `<div><img id="i" src="wide.png"></div>`, noDefaults,
+		`#i { width: 0; height: auto; min-width: 100px }`)
+	w, h = contentSize(find(t, root, "i"))
+	px(t, "the used width", w, 100)
+	px(t, "the height recomputed from the held-open width", h, 50)
+
+	// And where only *one* axis is nought the ratio really is gone — the box has
+	// no shape left to keep — so the two limits are independent and the height
+	// stays where it was declared. This is the case the guard still refuses, and
+	// it is here so that widening the guard to cover it is a decision somebody
+	// takes rather than one that slips through.
+	root = replacedLayout(t, 500, `<div><img id="i" src="wide.png"></div>`, noDefaults,
+		`#i { width: 0; height: 50px; min-width: 100px }`)
+	w, h = contentSize(find(t, root, "i"))
+	px(t, "the used width", w, 100)
+	px(t, "a declared height a degenerate ratio cannot move", h, 50)
+}

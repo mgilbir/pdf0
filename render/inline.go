@@ -653,7 +653,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// it appeared at. The x is taken from the line's own left edge
 				// rather than the block's, so a box written beside a float
 				// records the position it would really have had.
-				l.deferAbsolute(f.box, parent, left.Sub(lo).Add(f.used), y, 0)
+				//
+				// §10.3.7 asks for the same position from the other side, because
+				// a right-to-left containing block anchors "right" rather than
+				// "left". f.used is the advance in *logical* order, which is from
+				// the left on a left-to-right line and from the right on a
+				// right-to-left one — so the two are mirror images and neither is
+				// the negation of the other: one counts from the line's left edge
+				// and the other from the block's content right edge, and the line
+				// need not reach either.
+				l.deferAbsolute(f.box, parent, left.Sub(lo).Add(f.used), y,
+					width.Sub(right.Sub(lo).Sub(f.used)), 0)
 				continue
 			}
 			parent.Children = append(parent.Children,
