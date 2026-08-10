@@ -50,6 +50,27 @@ func (r Rect) Contains(inner Rect) bool {
 		inner.Right() <= r.Right() && inner.Bottom() <= r.Bottom()
 }
 
+// Intersect is the rectangle two rectangles have in common.
+//
+// Two rectangles that do not overlap produce one with a negative extent, which
+// Empty reports and every consumer treats as nothing. It is not normalised to
+// zero, for the reason Rect itself is not: a value that says "less than
+// nothing" is worth being able to see.
+//
+// The arithmetic cannot wrap. Every operation on a Unit saturates at the ends
+// of its range, so the worst an intersection of two extreme rectangles can
+// produce is a saturated extent — never a negative width that reads as a very
+// large one, which is the failure that would turn a clip into an amplifier.
+func (r Rect) Intersect(o Rect) Rect {
+	x := style.Max(r.X, o.X)
+	y := style.Max(r.Y, o.Y)
+	return Rect{
+		X: x, Y: y,
+		W: style.Min(r.Right(), o.Right()).Sub(x),
+		H: style.Min(r.Bottom(), o.Bottom()).Sub(y),
+	}
+}
+
 // Inset shrinks a rectangle by an edge on each side, which is what stepping in
 // from a border box to a padding box to a content box does.
 //

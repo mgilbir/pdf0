@@ -88,6 +88,16 @@ type DrawText struct {
 	// is placed accordingly — so a backend that ignored it would draw the glyphs
 	// bunched at the left of a gap the right size.
 	CharSpacing style.Unit
+
+	// Clip is §11.1's clipping, when something cuts this run.
+	//
+	// It is set only when the clip really does cut the run: a run wholly inside
+	// its clip carries none, and one wholly outside is not emitted at all. That
+	// is not an optimisation — it is what keeps the display list of a document
+	// whose text merely happens to sit inside an "overflow: hidden" box
+	// identical to the list of one that does not, which is what the reftest
+	// comparison needs to be able to say the two look the same.
+	Clip Clip
 }
 
 // DrawImage paints a decoded image to fill a rectangle.
@@ -105,6 +115,13 @@ type DrawImage struct {
 	// document with a logo in a header repeated on every row would otherwise
 	// carry it as many times as it is drawn.
 	Key string
+	// Clip is §11.1's clipping, when something clips this picture.
+	//
+	// It cannot be folded into Rect the way a fill's is, because Rect is where
+	// the picture is *stretched to*: narrowing it would squeeze the whole
+	// image into the visible strip rather than cutting the part that is not.
+	// A backend must intersect its own clipping path with this.
+	Clip Clip
 }
 
 // TileImage paints a picture repeatedly across a rectangle.
@@ -510,12 +527,135 @@ func sortLevels(levels []stackLevel) {
 	})
 }
 
+// clipping applies a clip to everything a painting step produced.
+//
+// It is a wrapper around the step rather than an argument threaded into it, for
+// the reason inlineDecorations gives about its own flag: the decompositions
+// underneath — a dashed border is a dozen fills, a 3-D one is two tones, a
+// tiling is an area and a step — would each have to learn about clipping, and a
+// second copy of any of them is what those functions exist to prevent. One
+// place applies the clip, to whatever the shared code produced, and a painting
+// step that forgot to clip is not expressible: the three steps that emit
+// anything all go through here.
+func (p *painter) clipping(c Clip, paint func()) {
+	if c.blocks() {
+		// Nothing can be painted through it, so nothing is built and then
+		// thrown away. This is the case "clip: rect(0, 0, 0, 0)" and a
+		// zero-sized "overflow: hidden" box are, and it is common enough in a
+		// hostile document to be worth not doing the work for.
+		return
+	}
+	at := len(p.ops)
+	paint()
+	if !c.Active {
+		return
+	}
+	p.ops = clipOps(p.ops, at, c)
+}
+
+// clipOps narrows every operation from index at onwards, dropping the ones that
+// no longer mark anything.
+func clipOps(ops []Op, at int, c Clip) []Op {
+	kept := ops[:at]
+	for _, op := range ops[at:] {
+		switch v := op.(type) {
+		case FillRect:
+			// Exact: a rectangle cut by a rectangle is a rectangle. No clip
+			// travels with it, which is what keeps the overflow-page guardrail
+			// and the reftest comparison from needing to know about clipping at
+			// all.
+			v.Rect = v.Rect.Intersect(c.Rect)
+			if v.Rect.Empty() {
+				continue
+			}
+			kept = append(kept, v)
+
+		case TileImage:
+			// The area a tiling may paint is already one of its fields, and
+			// this is the same statement narrowed. The tile positions are not
+			// touched, so a tiling cut in half still lines up with the one
+			// beside it.
+			v.Clip = v.Clip.Intersect(c.Rect)
+			if v.Clip.Empty() {
+				continue
+			}
+			kept = append(kept, v)
+
+		case DrawImage:
+			if c.Rect.Intersect(v.Rect).Empty() {
+				continue
+			}
+			v.Clip = v.Clip.meet(c)
+			if c.Rect.Contains(v.Rect) {
+				// Wholly visible, so the clip is not worth carrying: it would
+				// make an unclipped picture and a clipped one compare as
+				// different marks when they put the same ink on the page.
+				v.Clip = Clip{}
+			}
+			kept = append(kept, v)
+
+		case DrawText:
+			ink := textInk(v)
+			if c.hides(ink) {
+				// Every glyph is outside the clip. This is the case the whole
+				// feature exists for and the only one that can be settled
+				// exactly without cutting a letter in half.
+				continue
+			}
+			if !c.admits(ink) {
+				v.Clip = v.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
+		default:
+			kept = append(kept, op)
+		}
+	}
+	return kept
+}
+
+// textInk is the area a run of text may put ink in.
+//
+// The face's declared ascent and descent rather than a measured outline: this
+// engine has no glyph rasteriser, and the same two numbers are what inline
+// layout gave the run's line box, so a run is bounded here by exactly the
+// rectangle layout reserved for it. A face that states neither falls back to a
+// generous em above the baseline and a third of one below, which errs towards
+// keeping a run that is only just visible rather than dropping one that is.
+func textInk(v DrawText) Rect {
+	above, below := v.Size, v.Size.Mul(0.3)
+	if v.Face != nil {
+		if upem := float64(v.Face.UnitsPerEm()); upem > 0 {
+			d := v.Face.Descriptor()
+			above = v.Size.Mul(float64(d.Ascent) / upem)
+			below = v.Size.Mul(-float64(d.Descent) / upem)
+		}
+	}
+	var width style.Unit
+	if v.Face != nil {
+		w, _ := style.FromPx(v.Face.Measure(v.Text, v.Size.Px()))
+		width = w.Add(v.CharSpacing.Mul(float64(len([]rune(v.Text)))))
+	}
+	return Rect{
+		X: v.At.X, Y: v.At.Y.Sub(above),
+		W: width, H: above.Add(below),
+	}
+}
+
 // decorations paints a box's own background and border, which is what §E.2 steps
 // 1 and 4 both consist of.
+// The clip is the box's own — §11.1.1 clips a box's *contents* and not the box,
+// so an "overflow: hidden" element with a wide border still draws all of it.
+// What can cut a box's own background is §11.1.2's "clip", which is in clipSelf
+// and not in clipContent.
 func (p *painter) decorations(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
+	p.clipping(f.clipSelf, func() { p.paintDecorations(f) })
+}
+
+func (p *painter) paintDecorations(f *Fragment) {
 	if isHidden(f.Box) {
 		// §11.2: the box is laid out and not drawn. It has already taken its
 		// space — every position on this page was computed with it in — so this
@@ -557,7 +697,14 @@ func (p *painter) decorations(f *Fragment) {
 // box painted after it in step 4, which for an "outside" marker — one that sits
 // in the margin, outside its own list item — is a real overlap rather than a
 // theoretical one.
+// The clip is the box's *content* clip, so its own "overflow" cuts the text and
+// pictures inside it to its padding box. That is §11.1.1 in one line, and it is
+// the half of clipping every author uses.
 func (p *painter) content(f *Fragment) {
+	p.clipping(f.clipContent, func() { p.paintContent(f) })
+}
+
+func (p *painter) paintContent(f *Fragment) {
 	// A replaced element's content is painted here rather than with the
 	// backgrounds, and for the same reason the marker is: it is content. §E.2
 	// paints every block background in a stacking context before any of its

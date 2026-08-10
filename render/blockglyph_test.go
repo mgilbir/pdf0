@@ -209,17 +209,28 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 			if !ok0 || !ok1 || !ok2 || !ok3 {
 				return nil, false
 			}
-			out = append(out, FillRect{
-				Rect: Rect{
-					X: pen.Add(x0),
-					// y grows downwards on the page and upwards in the font, so
-					// the top of the ink is the baseline less its highest point.
-					Y: v.At.Y.Sub(y1),
-					W: x1.Sub(x0),
-					H: y1.Sub(y0),
-				},
-				Color: v.Color,
-			})
+			rect := Rect{
+				X: pen.Add(x0),
+				// y grows downwards on the page and upwards in the font, so
+				// the top of the ink is the baseline less its highest point.
+				Y: v.At.Y.Sub(y1),
+				W: x1.Sub(x0),
+				H: y1.Sub(y0),
+			}
+			// A run that §11.1 cut carries its clip, and the rectangles it is
+			// being turned into have to be cut the same way. A glyph whose ink
+			// is a rectangle *can* be clipped by arithmetic, which is exactly
+			// why this reconstruction is allowed to do it — and forgetting to
+			// would make the comparison see the whole of a square that the page
+			// shows half of.
+			if v.Clip.Active {
+				rect = rect.Intersect(v.Clip.Rect)
+				if rect.Empty() {
+					pen = pen.Add(step).Add(v.CharSpacing)
+					continue
+				}
+			}
+			out = append(out, FillRect{Rect: rect, Color: v.Color})
 		}
 		pen = pen.Add(step).Add(v.CharSpacing)
 	}
