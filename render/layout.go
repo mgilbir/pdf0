@@ -267,6 +267,13 @@ type layouter struct {
 	// is laid out, so a table nested n deep would cost 2^n without them.
 	grids        map[*Box]*tableGrid
 	tableDemands map[*Box][]tableColumnDemand
+	// tablePercentBase is what a percentage width on a table resolves against.
+	//
+	// §17.4 makes it the *wrapper's* containing block rather than the wrapper,
+	// which is the one thing about a table's width that cannot be answered where
+	// the table is laid out: by then the containing block is the wrapper, and the
+	// wrapper is as wide as the table. So the wrapper records it on the way past.
+	tablePercentBase map[*Box]style.Unit
 	// collapsed memoizes §17.6.2's resolved grid lines, for the same reason and
 	// with one more: every cell asks for it while its own border is resolved, so
 	// without the memo a table would re-run the conflict resolution once per
@@ -1027,6 +1034,10 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 		// §17.4: the wrapper is as wide as the table's border box and no wider,
 		// which is what makes "margin: 0 auto" centre a table rather than
 		// centring nothing inside a full-width box.
+		if w, ok := l.wrapperWidthForPercentTable(b, containing); ok {
+			declared, hasWidth = w, true
+			break
+		}
 		declared, hasWidth = l.shrinkToFit(b, maxZero(available.Sub(margin.Horizontal()))), true
 	}
 
