@@ -124,6 +124,22 @@ const (
 	// a feature that is there.
 	RulePositionApproximated Rule = "position-approximated"
 
+	// RuleControlApproximated is a form control laid out as the static box a
+	// printed page has, where that box is visibly not the widget a browser
+	// would draw.
+	//
+	// It is its own rule rather than an unsupported-element because the element
+	// *was* laid out: it has its size, its chrome and whatever text the markup
+	// gave it, and it takes part in the flow like any other box. What is missing
+	// is a widget — a slider's thumb at a position, the mark inside a checked
+	// box, the options a drop-down is not showing — and every one of those is a
+	// piece of information the document carries and the page does not.
+	//
+	// It fires only where the difference shows. A text field with a border round
+	// its value is what a browser prints, so a text field says nothing; a rule
+	// that fired on every control would be one nobody reads.
+	RuleControlApproximated Rule = "control-approximated"
+
 	// RuleOverflowPage is content outside the page box after scaling.
 	//
 	// It should be unreachable given §5: the scale is computed so that
@@ -231,6 +247,12 @@ var defaultSeverity = map[Rule]Severity{
 	// web, and a default that refuses to produce a document for it would be
 	// turned off wholesale and take the rest of the catalogue with it.
 	RulePositionApproximated: Warn,
+	// A control drawn as a box is visible and the reader can see what is there;
+	// what they cannot see is what is missing, which is why this is reported at
+	// all. It warns rather than failing for the same reason the rule above does:
+	// refusing to produce a document because a page has a checkbox on it would
+	// be a default turned off wholesale.
+	RuleControlApproximated: Warn,
 	// A missing image is visible: the page has a gap where the picture was, and
 	// the alt text says what it was of. That is why these warn rather than
 	// failing the render — and why a caller producing invoices with a logo on
@@ -374,6 +396,10 @@ var unsupportedRules = map[Rule]bool{
 	// two documents both trip it has not demonstrated anything, and §7.1's
 	// companion signal has to see it.
 	RulePositionApproximated: true,
+	// And this one says "the page does not show a widget the document has", for
+	// which the same argument holds: two documents that both draw a slider as an
+	// empty box agree about a picture neither of them drew.
+	RuleControlApproximated: true,
 	// These two say "the page does not show everything the document says",
 	// which is not quite "this engine does not implement that" — a corrupt PNG
 	// is the input being wrong. They are here anyway, and the reason is the one
