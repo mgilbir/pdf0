@@ -304,7 +304,51 @@ const wptEnv = "WPT_TESTS"
 // where a hanging space went; 7 in css/CSS2/text; and 4 in css/CSS2/linebox,
 // which is the directory that tests §8.4's rule that an inline box's vertical
 // padding and border bleed over the lines around them without moving any of them.
-const wptCleanPassBaseline = 3551
+//
+// Generated content and lists took it from 3551 to 3642, and the headline is the
+// sixth time this file has recorded the same lesson and the clearest instance of
+// it. The two directories held 162 failures between them and the obvious reading
+// was counters and quotes; 97 of the 162 raised no finding at all, and the first
+// one dumped was §10.8.1. A ::before with "font-size: 30px" had its baseline
+// 11.66px too high — and so did a plain <span> at 30px in a 16px div, which is
+// the moment the framing changed. Nothing about it was generated content: the
+// engine stacked only the *atomic* inlines when it built a line box, so a run of
+// text in an inline box of a different size contributed nothing to the line's
+// height, and the tests are simply full of pseudo-elements with a size on them.
+//
+// The four changes, measured separately and counted by name over the whole
+// suite rather than netted:
+//
+//   - §10.8.1's leading for text runs: 3551 to 3616, failures 1349 to 1284. 66
+//     tests stopped failing and one started. 50 of the 66 are in lists and only
+//     9 in generated-content, which is the clearest evidence that the cluster
+//     was never about the feature it was filed under.
+//   - §12.4.1's counter scope: 3616 to 3619. A pseudo-element is a *child* of its
+//     element, so a counter its ::before creates nests inside the element's own
+//     rather than overwriting it; an element with "display: none" cannot count,
+//     and neither can a pseudo-element that generates no box.
+//   - §12.3's quotes: 3619 to 3635. Split, because there was a finding to remove
+//     as well as marks to draw: admitting the property alone moved *nothing*, 0
+//     tests either way, because every test that declares "quotes" also uses the
+//     keywords and stayed tainted by the content finding; removing that finding
+//     with the marks still suppressed moved 1 test to clean and no failures;
+//     drawing the marks moved the other 15 and took 15 tests out of failing. So
+//     unusually for this file the ink is almost the whole of it.
+//   - §12.5.1's inside markers: 3635 to 3642. A marker with "list-style-position:
+//     inside" is the first inline box in the item rather than a mark beside it,
+//     which is what makes an *empty* list item one line tall and show its
+//     background — the shape a dozen of the "does this property apply to a list
+//     item" tests are built on.
+//
+// Over the four: 98 tests stopped failing and one started, 1349 to 1252. The one
+// is visudet/line-height-205, and it is the familiar shape. It asserts that a
+// line box set in two downloadable faces is the union of the two, which needs
+// @font-face; nothing here loads one, so the test cannot pass. It *was* passing
+// because neither of its two divs grew, and now the div whose spans name the
+// missing families is 2.25px taller than the one that names them together — the
+// union of two faces with different baselines, which is §10.8.1 working. It
+// fails honestly.
+const wptCleanPassBaseline = 3642
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
