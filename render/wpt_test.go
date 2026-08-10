@@ -745,7 +745,64 @@ const wptEnv = "WPT_TESTS"
 // the run ends. Eighteen pairs drew the same glyphs in the same places and were
 // told apart by which call the space was batched into. Nothing rendered
 // differently after it than before.
-const wptCleanPassBaseline = 4185
+//
+// Form controls took it from 4185 to 4192, and this time the split between
+// reporting and layout is the other way round from every entry above: the
+// reporting is worth *one* test and the ink is worth the rest. Measured by name
+// over the whole suite and in both directions — 9 tests stopped failing and 2
+// started, 671 to 665.
+//
+//   - the *reporting* is one test, floats-wrap-bfc-outside-001, which was
+//     already passing and was tainted by nothing but a dropped <button>. No
+//     failure moved with it.
+//   - the *layout* is the other 6 of the net 7. Seven tests stopped failing
+//     outright: five are css/CSS2/generated-content's form:before family, which
+//     hangs an attr() on a <form> and draws it in a bordered box; one is the
+//     same shape on a <label>; and one is normal-flow/blocks-026, which needs an
+//     <input> to be a box at all.
+//
+// The headline was wrong again, and this is the eighth time this file has
+// recorded that. "67 failures involve a form control" was a grep over the
+// suite's source; grouped by what the pair actually needs, 29 of the 671
+// failures mention one of these tags and only 19 of those could be moved by
+// laying a control out. The rest divide into three groups worth naming:
+//
+//   - twelve are textarea tests in css-text/white-space, and ten of them are
+//     blocked on something else entirely: they put the control's styling in a
+//     <link rel=stylesheet>, and this engine follows no links, so the test
+//     document is styled by the user-agent sheet while its reference carries a
+//     <style> with everything in it. No amount of control work reaches them.
+//   - the remaining two, textarea-pre-wrap-012 and -013, are a §4.1.2 question
+//     and not a control one: their reference hangs a preserved space before a
+//     forced break, and this engine hangs it only conditionally there, so the
+//     line is aligned one character out. A <div> with the same content behaves
+//     identically, which is what says it is not about the control. Reported
+//     rather than taken.
+//   - seven are <object>, and every one of them is unreachable: five draw their
+//     picture with SVG, one embeds an HTML document, and one needs an object to
+//     decode a PNG. Rendering the fallback content — which is what HTML says an
+//     object whose data cannot be used represents — moved none of them, and is
+//     in this change for what it does to a real document rather than for what it
+//     does here.
+//
+// The two that started failing are understood and both are honest:
+//
+//   - white-space-pre-001.xht loses a leading newline it used to keep. HTML's
+//     tree builder drops the line feed immediately after a <pre> start tag and
+//     this engine now does too, which is right for HTML and wrong for this file:
+//     it is XHTML, where there is no such rule, and its reference is drawn for a
+//     <pre> seven lines tall. The harness already adapts these documents in one
+//     place (see cdataRe); this is a second place where reading XHTML as HTML
+//     shows, and it is reported rather than worked around. Measured on its own,
+//     the newline rule is worth exactly this: −1 clean, +1 failure, no other test
+//     either way.
+//   - textarea-always-preserves-spaces-001.tentative was passing because neither
+//     document drew a textarea. Both draw one now and they differ, because the
+//     test overrides "white-space" on the control and the reference does not. The
+//     behaviour it asserts — that a textarea's preserved white space cannot be
+//     overridden by an author — is why the file is named tentative; it is not in
+//     HTML's rendering section yet and is not implemented here.
+const wptCleanPassBaseline = 4192
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

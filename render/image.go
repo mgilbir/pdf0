@@ -150,6 +150,9 @@ func (l *replacedLoader) walk(b *Box) {
 	if b.Element != nil && strings.EqualFold(b.Element.Name, "img") {
 		l.image(b)
 	}
+	if b.Element != nil && strings.EqualFold(b.Element.Name, "object") {
+		l.object(b)
+	}
 	l.backgrounds(b)
 	for _, c := range b.Children {
 		l.walk(c)
@@ -250,6 +253,40 @@ func (l *replacedLoader) image(b *Box) {
 	}
 	l.loaded[src] = content
 	b.Replaced = content
+}
+
+// object reports an <object> whose data was not embedded.
+//
+// Nothing here embeds one, and nothing is going to: an <object> names a
+// resource to be handed to a plugin, a nested browsing context or an image
+// decoder chosen by a media type, and the first two are what §4.1 refuses
+// outright. What HTML then says is exactly what this engine does — an object
+// whose data cannot be used is represented by its *fallback content*, which is
+// the element's children and is ordinary markup — so the element is laid out
+// like any other box and its children are on the page.
+//
+// The finding is the half that matters. The children of an <object> are what an
+// author wrote for the case where the object could not be shown, so a page that
+// draws them is a page that is deliberately showing its second choice, and a
+// caller has to be able to know that rather than to infer it from a paragraph
+// reading "your browser cannot show this".
+//
+// An <object> with no data names nothing, so there is nothing to have failed and
+// nothing to report: it is a box holding its children, and that is all it ever
+// was.
+func (l *replacedLoader) object(b *Box) {
+	data, ok := b.Element.Attr("data")
+	if !ok || strings.TrimSpace(data) == "" {
+		return
+	}
+	l.rec.ReportDetail(Finding{
+		Rule:   RuleResourceBlocked,
+		Source: AtHTML(b.Element.Offset),
+		Message: "the object at " + quoteValue(strings.TrimSpace(data)) +
+			" was not embedded: this engine embeds no objects, so the element's " +
+			"fallback content was laid out in its place",
+		Path: PathOf(b.Element),
+	})
 }
 
 // load fetches and decodes one reference, returning nil and a finding to raise

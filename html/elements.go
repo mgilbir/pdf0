@@ -42,6 +42,32 @@ var knownElements = map[string]bool{
 
 	// Images.
 	"img": true, "picture": true, "source": true,
+
+	// Forms, as static boxes.
+	//
+	// These are here for what they *are* on a page rather than for what they do
+	// on a screen. The reason they used to be refused — "form controls are not
+	// interactive here" — is about interactivity, and interactivity is not what
+	// a printed page has: a <textarea> has an intrinsic size from its cols and
+	// rows, it has text in it, and a browser asked to print one puts that text
+	// on the paper inside a box. Refusing the element meant a document lost
+	// content and said only that an element had been dropped, which is the
+	// class of fault this engine reports everywhere else rather than commits.
+	//
+	// What stays refused is the interaction itself, and it is not a boundary
+	// this moves: nothing is submitted, nothing is typed into, no value a reader
+	// would have entered is invented, and no PDF form field is produced. See
+	// render/control.go for what each control is drawn as and for the findings
+	// that name the places where a static box is an approximation of a widget.
+	"form": true, "label": true, "fieldset": true, "legend": true,
+	"input": true, "button": true, "select": true, "option": true,
+	"optgroup": true, "textarea": true,
+
+	// <object>, for its fallback content. Nothing is embedded — see
+	// resolveObjects — but HTML says an object whose data cannot be used is
+	// represented by its children, and those children are ordinary markup this
+	// engine can lay out. <param> comes with it and generates no box.
+	"object": true, "param": true,
 }
 
 // voidElements have no content and no end tag. Writing one — "</br>" — is an
@@ -67,30 +93,25 @@ var rcdataElements = map[string]bool{
 // droppedElements are the ones refused for what they *do* rather than for being
 // unknown, and each has its own reason.
 //
-// The first four are §4.1 of the rendering proposal: they are the entirety of
+// The first three are §4.1 of the rendering proposal: they are the entirety of
 // the code-execution and remote-content surface. A renderer that ignored them
 // silently would still be one that had read them, and an author who embedded a
 // <script> expecting it to be inert deserves to be told it was thrown away
 // rather than left to assume it ran.
+//
+// The form controls used to be here, under "form controls are not interactive
+// here". That reason confused interactivity with layout: a control has a size
+// and content on a printed page whether or not anything can be clicked, and
+// dropping it lost the content. They are in knownElements now, and the
+// interactivity boundary is stated there rather than deleted.
 var droppedElements = map[string]string{
 	"script":   "scripts are never run, and never will be",
 	"iframe":   "a nested browsing context would need a network and a renderer for it",
-	"object":   "an embedded object would need a plugin",
 	"embed":    "an embedded plugin would need a plugin",
 	"applet":   "applets would need a virtual machine",
 	"canvas":   "a canvas is drawn by script, which is never run",
 	"audio":    "a page laid out once cannot play anything",
 	"video":    "a page laid out once cannot play anything",
-	"form":     "a form cannot be submitted from a page laid out once",
-	"input":    "form controls are not interactive here",
-	"button":   "form controls are not interactive here",
-	"select":   "form controls are not interactive here",
-	"option":   "form controls are not interactive here",
-	"optgroup": "form controls are not interactive here",
-	"textarea": "form controls are not interactive here",
-	"label":    "form controls are not interactive here",
-	"fieldset": "form controls are not interactive here",
-	"legend":   "form controls are not interactive here",
 	"details":  "a disclosure widget needs somewhere to click",
 	"summary":  "a disclosure widget needs somewhere to click",
 	"dialog":   "a dialog is opened by script, which is never run",
