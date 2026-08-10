@@ -677,8 +677,9 @@ const wptEnv = "WPT_TESTS"
 // is a unit test written for it rather than anything here — worth recording
 // because intrinsic.go's own comment had claimed the correct behaviour for as
 // long as the code had done the other thing.
-// Generated content, the root element's margins and the counter grammar took it
-// from 4116 to 4154, and the run that did most of the work was not about
+//
+// Generated content, the margin-collapsing rules and the counter grammar took it
+// from 4116 to 4158, and the run that did most of the work was not about
 // generated content at all. In order of size, and each measured on its own:
 //
 //   - +14, the user-agent stylesheet underlining every <a> rather than every
@@ -691,16 +692,19 @@ const wptEnv = "WPT_TESTS"
 //   - +10, §8.3.1's "margins of the root element's box do not collapse".
 //   - +3, white-space processing on generated content, which this engine used to
 //     say deliberately did not apply.
+//   - +4, §8.3.1's rule read over the whole run of adjoining margins rather than
+//     folded two at a time. The two are not the same arithmetic once a negative
+//     is in the run, and the walk was folding.
 //   - +1 each, the order a collapsed-through run leaves a box by, and §12.2's
 //     grammar for the counter functions.
 //
-// The last step to 4171 is not the engine at all and is recorded separately for
-// that reason: +17 came from trimRunSpace in picture_test.go, which stopped the
+// The +17 that takes it to 4175 is not the engine at all and is recorded
+// separately for that reason: it came from trimRunSpace in picture_test.go, which stopped the
 // comparison treating white space *inside* a run as something that decides where
 // the run ends. Eighteen pairs drew the same glyphs in the same places and were
 // told apart by which call the space was batched into. Nothing rendered
 // differently after it than before.
-const wptCleanPassBaseline = 4171
+const wptCleanPassBaseline = 4175
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

@@ -220,7 +220,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		frag.BorderRect.X = avail.W.Sub(frag.Margin.Right).Sub(frag.BorderRect.W)
 	}
 
-	absolutise(frag, 0, m.top)
+	absolutise(frag, 0, m.top.value())
 
 	// Everything out of flow is placed now, against a tree that is already in
 	// page coordinates. That ordering is the whole design of position.go: an
@@ -406,9 +406,50 @@ type lengthKey struct {
 // between two paragraphs is the everyday case, and an engine that misses it puts
 // a gap where the author sees none.
 type collapsed struct {
-	top, bottom style.Unit
+	top, bottom marginRun
 	through     bool
 }
+
+// marginRun is a set of adjoining margins, carried as the two numbers §8.3.1's
+// rule needs rather than as the single value it produces.
+//
+// The rule is written over the whole set at once:
+//
+//	the maximum of the absolute values of the negative adjoining margins is
+//	deducted from the maximum of the positive adjoining margins
+//
+// and folding it two at a time gives a different answer, because the maximum of
+// a set is not recoverable from a value that has already had a negative taken
+// off it. 16px, then 96px, then -96px is 96 - 96 = 0 over the set; folded from
+// the right it is collapse(16, collapse(96, -96)) = collapse(16, 0) = 16.
+//
+// That is not a corner. It is the shape of every test that puts a negative
+// margin under an empty box: margin-bottom-103 and -104 in the suite lay a
+// paragraph's own em of bottom margin, an empty box's 50%, and a negative inch
+// end to end, and expect them to come to nothing — the two-at-a-time answer
+// leaves the em standing and the black rule an em low.
+type marginRun struct{ pos, neg style.Unit }
+
+// marginOf is the run one margin makes on its own.
+func marginOf(u style.Unit) marginRun {
+	if u < 0 {
+		return marginRun{neg: u}
+	}
+	return marginRun{pos: u}
+}
+
+// merge is the union of two sets of adjoining margins. It is associative and
+// commutative, which is what folding a run of them requires and what taking the
+// value between steps loses.
+func (m marginRun) merge(o marginRun) marginRun {
+	return marginRun{pos: style.Max(m.pos, o.pos), neg: style.Min(m.neg, o.neg)}
+}
+
+// add merges in one more margin.
+func (m marginRun) add(u style.Unit) marginRun { return m.merge(marginOf(u)) }
+
+// value is the width the collapsed margin has on the page.
+func (m marginRun) value() style.Unit { return m.pos.Add(m.neg) }
 
 // absolutise turns positions relative to each parent's content box into absolute
 // page coordinates, in one pass over the finished tree.
@@ -643,12 +684,12 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 
 	frag.BorderRect.H = contentHeight.Add(padding.Vertical()).Add(border.Vertical())
 
-	out := collapsed{top: margin.Top, bottom: margin.Bottom}
+	out := collapsed{top: marginOf(margin.Top), bottom: marginOf(margin.Bottom)}
 	if topOpen {
-		out.top = collapse(margin.Top, hoistTop)
+		out.top = out.top.merge(hoistTop)
 	}
 	if bottomOpen {
-		out.bottom = collapse(margin.Bottom, hoistBottom)
+		out.bottom = out.bottom.merge(hoistBottom)
 	}
 
 	// A box collapses through when there is nothing at all between its two
@@ -656,7 +697,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// its content needed, and no minimum keeping it open.
 	if ownMarginsAdjoin && !placedAnything && frag.BorderRect.H == 0 &&
 		!(hasMinHeight && minHeight > 0) {
-		both := collapse(out.top, out.bottom)
+		both := out.top.merge(out.bottom)
 		return frag, collapsed{top: both, bottom: both, through: true}
 	}
 	return frag, out
@@ -667,11 +708,16 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 // with a size was actually placed.
 //
 // The walk keeps a *pending* margin rather than adding gaps as it goes. Every
-// margin it meets collapses into that one value, and the value is only committed
-// to the flow when something with a size arrives — which is what lets an empty
-// box between two paragraphs disappear entirely instead of separating them.
+// margin it meets joins that one run, and the run is only committed to the flow
+// when something with a size arrives — which is what lets an empty box between
+// two paragraphs disappear entirely instead of separating them.
+//
+// The run is a marginRun and not a number, because §8.3.1's rule is over the
+// whole set of adjoining margins at once and folding it two at a time gives a
+// different answer. See marginRun.
 func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
-	topOpen, bottomOpen bool, origin flow) (height, hoistTop, hoistBottom style.Unit, placed bool) {
+	topOpen, bottomOpen bool, origin flow) (height style.Unit,
+	hoistTop, hoistBottom marginRun, placed bool) {
 
 	if b.Inner == InnerTable {
 		// A table's children are not a flow at all: they are the grid, and §17.5
@@ -679,7 +725,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// The two hoisted margins are zero because a table seals both its edges,
 		// and something was placed because a table occupies its own height
 		// whether or not any cell has content in it.
-		return l.tableContent(b, parent, width, origin), 0, 0, true
+		return l.tableContent(b, parent, width, origin), marginRun{}, marginRun{}, true
 	}
 	if len(b.Children) == 0 && !markerInside(b) {
 		// An inside marker is content the box did not have to be given: §12.5.1
@@ -688,7 +734,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// the empty item is zero-tall and paints no background, which is what a
 		// dozen of the suite's "does this property apply to a list item" tests are
 		// built to show.
-		return 0, 0, 0, false
+		return 0, marginRun{}, marginRun{}, false
 	}
 	// A block container's in-flow children are either all block-level or all
 	// inline-level — the anonymous box rule guarantees it — so this is a two-way
@@ -701,10 +747,11 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// Inline content: lines of text, which have a height of their own. An
 		// inside marker is inline content of the item's own, which is why it can
 		// answer here for a box that has no inline child — or no child at all.
-		return l.inlineContent(b, parent, width, origin), 0, 0, true
+		return l.inlineContent(b, parent, width, origin), marginRun{}, marginRun{}, true
 	}
 
-	var y, pending style.Unit
+	var y style.Unit
+	var pending marginRun
 	hoisted := false
 	// listIndex counts the list items among the children, which is what a
 	// numbered marker is numbered by. It counts only list items, so a heading
@@ -743,7 +790,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			// The exception is a parent whose top edge is still open and has
 			// hoisted nothing: the pending margin is on its way out of the
 			// parent altogether, so the float sits at the parent's content top.
-			offset := pending
+			offset := pending.value()
 			if topOpen && !hoisted {
 				offset = 0
 			}
@@ -777,7 +824,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// be approximately right.
 		est := y
 		if !topOpen || hoisted {
-			est = y.Add(collapse(pending, l.ownTopMargin(child, width)))
+			est = y.Add(pending.add(l.ownTopMargin(child, width)).value())
 		}
 		est = est.Add(l.clearanceAt(child, origin, est))
 
@@ -808,11 +855,11 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// What was pending before this child's own top margin joined it. It is
 		// needed because clearance separates the two: see the hoist below.
 		before := pending
-		pending = collapse(pending, cm.top)
+		pending = pending.merge(cm.top)
 
 		// The position §9.5.2 measures clearance against: where the box would
 		// have gone had it not cleared anything.
-		hypothetical := y.Add(pending)
+		hypothetical := y.Add(pending.value())
 		if topOpen && !hoisted && !cm.through {
 			hypothetical = y
 		}
@@ -822,8 +869,8 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			// Nothing separates this box's own margins, so it contributes no
 			// height and its two margins join the run. It still gets a
 			// position, because it still exists.
-			pending = collapse(pending, cm.bottom)
-			at := y.Add(pending)
+			pending = pending.merge(cm.bottom)
+			at := y.Add(pending.value())
 			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
 			cf.BorderRect.Y = at
 			if child.ListItem {
@@ -856,11 +903,11 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			if clearance != 0 {
 				hoistTop = before
 			}
-			pending = 0
+			pending = marginRun{}
 			hoisted = true
 		}
 
-		at := y.Add(pending).Add(clearance)
+		at := y.Add(pending.value()).Add(clearance)
 		// The float-avoidance question again, now that the position is settled.
 		// A prediction that turned out wrong moved the box into a different
 		// band, and a box that had to be narrowed to fit one band is the wrong
@@ -917,15 +964,15 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	// is its min-height, and a min-height of zero would have made it collapse
 	// through before this line was reached.
 	if topOpen && !hoisted {
-		hoistTop = collapse(hoistTop, pending)
-		pending = 0
+		hoistTop = hoistTop.merge(pending)
+		pending = marginRun{}
 	}
 	if bottomOpen {
 		// The bottom edge is open too, so the trailing margin belongs outside.
 		hoistBottom = pending
-		pending = 0
+		pending = marginRun{}
 	}
-	return y.Add(pending), hoistTop, hoistBottom, placed
+	return y.Add(pending.value()), hoistTop, hoistBottom, placed
 }
 
 // hasInlineChild reports whether a box has any in-flow inline-level child, which
@@ -1159,24 +1206,6 @@ func offsetOf(b *Box) int {
 		return -1
 	}
 	return b.Element.Offset
-}
-
-// collapse combines two adjoining margins.
-//
-// The largest positive and the most negative are taken separately and then
-// added, which is the rule of CSS 2.1 §8.3.1. It is not max() and it is not a
-// sum: 20px against -30px is -10px, and 20px against 10px is 20px.
-func collapse(a, b style.Unit) style.Unit {
-	pos, neg := style.Unit(0), style.Unit(0)
-	for _, m := range [2]style.Unit{a, b} {
-		if m > pos {
-			pos = m
-		}
-		if m < neg {
-			neg = m
-		}
-	}
-	return pos.Add(neg)
 }
 
 // resolveWidth computes a block-level box's content width by the constraint of
