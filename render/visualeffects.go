@@ -179,19 +179,19 @@ func (l *layouter) resolveClips(root *Fragment) {
 		f.clipSelf = self
 		f.clipContent = content
 		inherited[f.Box] = content
-		// An inline box's own fragments, one per line it was broken across.
-		// They are not children — see LineFragment.Boxes — and they are content
-		// of the block container that holds the line, so an "overflow: hidden"
-		// on that container cuts a <span>'s background exactly as it cuts the
-		// words in it. Nothing inline can clip in its own right: §11.1.1's
-		// property does not apply to an inline box, and §11.1.2's applies only
-		// to a positioned one, which an inline box is not by the time it
-		// reaches a line.
-		for i := range f.Lines {
-			for _, ib := range f.Lines[i].Boxes {
-				ib.clipSelf, ib.clipContent = content, content
-			}
-		}
+		// An inline box's own fragments — one per line it was broken across, and
+		// not children of anything; see LineFragment.Boxes — are deliberately
+		// left alone. They are painted from inside painter.content, which has
+		// already narrowed everything it produces to this fragment's content
+		// clip, so a <span>'s background is cut by the block holding its words
+		// without carrying a clip of its own. Setting one here as well was
+		// written first and then deleted: planting its removal changed nothing,
+		// because the same clip was being applied twice.
+		//
+		// Nothing inline can clip in its own right, which is what makes that
+		// safe rather than merely true today: §11.1.1's property does not apply
+		// to an inline box, and §11.1.2's applies only to a positioned one,
+		// which an inline box is not by the time it reaches a line.
 		for _, c := range f.Children {
 			walk(c, content, depth)
 		}

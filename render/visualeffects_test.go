@@ -808,11 +808,10 @@ func TestTheComparisonSeesAClippedPicture(t *testing.T) {
 // TestInlineBoxBackgroundIsClippedByItsBlock.
 //
 // An inline box's fragments are not children in the fragment tree — there is
-// one per line it was broken across, hanging off the line box — so the clip
-// resolution has to reach them explicitly. Forgetting to leaves a <span>'s
-// background running out of the side of the "overflow: hidden" box that holds
-// the words it belongs to, which is the one place a clip can be missed without
-// anything else looking wrong.
+// one per line it was broken across, hanging off the line box — so it is worth
+// pinning that they are clipped at all. They are, and by the wrapper around
+// painter.content rather than by a clip of their own: resolveClips says why it
+// does not give them one, and planting one there changes nothing.
 func TestInlineBoxBackgroundIsClippedByItsBlock(t *testing.T) {
 	doc := `<div id="p"><span id="s">wwwwwwwwwwwwwwwwwwwwwwww</span></div>`
 	css := noDefaults + `
