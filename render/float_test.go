@@ -963,6 +963,77 @@ func TestAFloatedRootGoesToItsEdge(t *testing.T) {
 	px(t, "a left-floated root's left edge", root.BorderRect.X, 0)
 }
 
+// TestAClearedBoxThatCollapsesThroughLaysItsMarginOnce pins the sentence CSS 2.1
+// §9.5.2 ends on, which is the one rule about clearance that is not about where
+// the cleared box goes:
+//
+//	If the top and bottom margins of an element with clearance are adjoining,
+//	its margins collapse with the adjoining margins of following siblings but
+//	that resulting margin does not collapse with the bottom margin of the parent
+//	block.
+//
+// Two things follow, and an engine can get either one right on its own while
+// producing a page that is wrong.
+//
+// The arithmetic is the suite's margin-collapse-clear-012, which sets it out in
+// a comment in its own source. A parent with a top border — so that nothing
+// escapes through its top edge and the numbers are the parent's own — holds a
+// 100px float, then an empty box with "clear: left", a 40px top margin and an
+// 80px bottom margin, then an empty sibling with a 140px bottom margin.
+//
+//   - The empty box's margins are adjoining, so they collapse into one run. Its
+//     top margin puts its hypothetical border edge at 40, the float's bottom is
+//     at 100, so clearance takes the edge to 100. The 40 is *under* the edge
+//     already: laying the whole run again below it would put the sibling at 240.
+//   - The run goes on collecting: the sibling's 140 joins it. 140 - 40 = 100
+//     more, so the content ends at 200.
+//   - That resulting margin does not collapse with the parent's bottom margin,
+//     so it stays inside and the parent is 200 tall rather than 100. This is the
+//     half that a bottom edge with a border on it would hide, which is why the
+//     second case below takes the border off.
+func TestAClearedBoxThatCollapsesThroughLaysItsMarginOnce(t *testing.T) {
+	const doc = `<div id="p"><div id="f"></div><div id="c"></div><div id="s"></div></div>`
+	css := noDefaults + `
+	#p { border-top: 1px solid black; width: 200px }
+	#f { float: left; width: 100px; height: 100px }
+	#c { clear: left; margin-top: 40px; margin-bottom: 80px }
+	#s { margin-bottom: 140px }`
+
+	root := layoutOf(t, 1000, doc, css)
+	p := find(t, root, "p")
+	px(t, "the cleared box's border edge", relY(t, find(t, root, "c"), p), 100)
+	px(t, "the following sibling's border edge", relY(t, find(t, root, "s"), p), 200)
+	px(t, "the parent's content height", p.ContentRect().H, 200)
+
+	// The same without the top border, so that the parent's top edge is open.
+	// The float is what stops the run leaving through it — the cleared box's own
+	// top margin is separated from the parent's by the clearance — so the
+	// numbers are unchanged and the parent's border box is one pixel shorter.
+	open := noDefaults + `
+	#p { width: 200px }
+	#f { float: left; width: 100px; height: 100px }
+	#c { clear: left; margin-top: 40px; margin-bottom: 80px }
+	#s { margin-bottom: 140px }`
+	root = layoutOf(t, 1000, doc, open)
+	p = find(t, root, "p")
+	px(t, "with an open top edge: the cleared box", relY(t, find(t, root, "c"), p), 100)
+	px(t, "with an open top edge: the parent's height", p.BorderRect.H, 200)
+
+	// And the case the rule must not reach. With the float only 20px tall the
+	// hypothetical position — 40, the collapsed run — is already past it, so
+	// there is no clearance at all, every margin collapses through, and the
+	// parent has no height of its own. An engine that reached for the float's
+	// bottom rather than for a difference would make this 140 instead.
+	nofloat := noDefaults + `
+	#p { border-top: 1px solid black; width: 200px }
+	#f { float: left; width: 100px; height: 20px }
+	#c { clear: left; margin-top: 40px; margin-bottom: 80px }
+	#s { margin-bottom: 140px }`
+	root = layoutOf(t, 1000, doc, nofloat)
+	px(t, "no clearance: the parent's content height",
+		find(t, root, "p").ContentRect().H, 0)
+}
+
 // nearly compares two float widths at a tolerance far below a layout unit, which
 // is a 64th of a pixel.
 func nearly(a, b float64) bool {
