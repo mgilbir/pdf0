@@ -607,7 +607,25 @@ const wptEnv = "WPT_TESTS"
 // a box broken across several. What had to be found was not the property but
 // whether the algorithm reversed the content, and that is a resolved embedding
 // level.
-const wptCleanPassBaseline = 4072
+// The last sixteen came from css-text/white-space, and it is worth recording
+// which half was engine and which was apparatus, because the two are routinely
+// conflated in this file's history.
+//
+//   - eleven are §4.1.2's hang landing on the wrong side of a right-to-left
+//     line. Rule L1 puts the trailing spaces at the paragraph's level, so they
+//     are drawn *before* the first word, and the alignment was computed as
+//     though they still followed the last — every dir=rtl pre-wrap line was
+//     pushed right by the width of a space that hangs. That is layout, and it is
+//     the whole of the dir=rtl half of pre-wrap-align-*.
+//   - five are the comparison's own: text marks were paired by their place in a
+//     sorted list, and the sort key was an x that nearlyAt's tolerance exists to
+//     forgive, so a sixty-fourth of a pixel could reverse two marks in one list
+//     and not in the other. That is apparatus, and it moved no pixel. The note
+//     above num() had recorded the symptom on twelve ws-break-spaces-applies-to
+//     tests and diagnosed it as needing a positional tolerance; the tolerance
+//     arrived and the sort key did not follow it. Seven of the twelve are still
+//     failing, on a table width and not on this.
+const wptCleanPassBaseline = 4088
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
