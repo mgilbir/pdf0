@@ -619,8 +619,24 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			if (forced || next >= len(items)) && total <= textWidth {
 				used = total
 			}
-			shift := lineIndent.Add(
-				l.alignLine(b, lineBaseIsRTL(b, runs), textWidth, used))
+			// Which *side* it hangs off, which is not a second way of saying how
+			// much. §4.1.2 hangs the white space past the line's end, and the
+			// end of a right-to-left line is its left edge: rule L1 has already
+			// given the trailing spaces the paragraph's own level, so
+			// lineOffsets draws them leftmost — at the positions before the
+			// first word rather than after the last.
+			//
+			// So on such a line the content does not begin where alignLine put
+			// it, it begins a hang further in. Aligning without this leaves
+			// every right-to-left pre-wrap line pushed right by the width of the
+			// space it was meant to hang, which is what the ten dir=rtl
+			// pre-wrap-align tests measure. It is invisible in a left-to-right
+			// document, where the hang follows the content and moves nothing.
+			rtl := lineBaseIsRTL(b, runs)
+			shift := lineIndent.Add(l.alignLine(b, rtl, textWidth, used))
+			if rtl {
+				shift = shift.Sub(total.Sub(used))
+			}
 			if shift != 0 {
 				for k := range line.Runs {
 					line.Runs[k].X = line.Runs[k].X.Add(shift)
