@@ -100,9 +100,11 @@ type Result struct {
 // Options configure a render beyond the input itself.
 type Options struct {
 	// Page is the sheet. The zero value is A4 with a 20mm margin.
+	//
+	// The faces are not here. They are on Input, because a document brings its
+	// own with @font-face and the set it is laid out in is the caller's library
+	// with the document's faces over it — see Input.Fonts and Built.Fonts.
 	Page PageSize
-	// Fonts supplies the faces; nil uses the standard fourteen.
-	Fonts FontSet
 	// MinScale is the floor §6.1 puts under scale-to-fit. A document that had
 	// to be shrunk past it is refused rather than produced illegibly. Zero uses
 	// the default of 0.5.
@@ -134,7 +136,10 @@ func Render(in Input, opts Options) (Result, error) {
 	}
 
 	avail := opts.Page.Content()
-	root := Layout(built.Root, avail, opts.Fonts, rec)
+	// built.Fonts rather than in.Fonts: the document's own @font-face rules
+	// have been loaded onto the caller's library by now, and laying out with
+	// the library alone would set the page in the wrong faces.
+	root := Layout(built.Root, avail, built.Fonts, rec)
 
 	// The natural size is the far edge of the root's border box, not its margin
 	// box, and the difference is not cosmetic. A block-level box resolves an
