@@ -55,13 +55,40 @@ func TestNoContentGeneratesNothing(t *testing.T) {
 	}
 }
 
-// TestContentTakesItsStringExactly pins that a content string is not collapsed
-// the way document text is. The author wrote the characters they wanted, and
-// "content: '  '" asking for two spaces is a legitimate way to indent a marker.
-func TestContentTakesItsStringExactly(t *testing.T) {
+// TestContentIsWhiteSpaceProcessed pins that a content string goes through CSS
+// Text §4 exactly as document text does.
+//
+// This test used to assert the opposite — that the string was taken exactly as
+// written, on the reasoning that the author had typed the characters they wanted
+// and "content: '  '" was a way to indent a marker. That reasoning is wrong and
+// the test was pinning the bug: generated content is put in an anonymous inline
+// box, and nothing exempts that box from the white-space processing every other
+// inline gets. The suite says so directly in
+// css/CSS2/generated-content/content-white-space-004, which puts tabs and
+// newlines in a content string and requires it to set identically to the same
+// words written in the markup.
+func TestContentIsWhiteSpaceProcessed(t *testing.T) {
+	// Under the initial value a run of spaces is one space, a segment break is a
+	// space, and the leading and trailing spaces survive Phase I — where they go
+	// is the line breaker's question and not this one.
 	got := bodyBoxes(t, `<p>x</p>`, `p::before { content: "  a  b  " }`)
+	if !strings.Contains(got, `text " a b "`) {
+		t.Errorf("the content string was not collapsed:\n%s", got)
+	}
+	got = bodyBoxes(t, `<p>x</p>`, `p::before { content: "a\A b" }`)
+	if !strings.Contains(got, `text "a b"`) {
+		t.Errorf("the segment break did not become a space:\n%s", got)
+	}
+
+	// And "white-space: pre" keeps every one of them, which is the half that
+	// makes the rule a rule rather than an unconditional collapse.
+	got = bodyBoxes(t, `<p>x</p>`, `p::before { content: "  a  b  "; white-space: pre }`)
 	if !strings.Contains(got, `text "  a  b  "`) {
-		t.Errorf("the content string was collapsed:\n%s", got)
+		t.Errorf("white-space: pre did not preserve the string:\n%s", got)
+	}
+	got = bodyBoxes(t, `<p>x</p>`, `p::before { content: "a\A b"; white-space: pre }`)
+	if !strings.Contains(got, "text \"a\\nb\"") {
+		t.Errorf("white-space: pre did not preserve the segment break:\n%s", got)
 	}
 }
 
