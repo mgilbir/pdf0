@@ -653,3 +653,74 @@ func TestPictureDoesNotBuryTextUnderAPatternedPicture(t *testing.T) {
 		t.Error("a run under a picture with a transparent half was treated as buried")
 	}
 }
+
+// TestPictureIgnoresSpaceAtTheEndsOfARun is the rule trimRunSpace exists for,
+// and the two ways it must not go too far.
+//
+// The space inside a run marks no paper, exactly as a run that is nothing but
+// space marks none — but leaving it in changes where the run is judged to end,
+// and joinRuns decides whether two runs are one mark by whether the first ends
+// where the second begins. So one document setting "b " and then "c" produced a
+// single "bc" and another setting "b", " " and "c" produced "b" and "c", from
+// the same glyphs in the same places.
+func TestPictureIgnoresSpaceAtTheEndsOfARun(t *testing.T) {
+	face, adv := picFace(t)
+	black := style.RGBA{A: 1}
+
+	// A trailing space, and the same glyphs written without it. "c" is where it
+	// would be either way: after "b" and after the space that follows it.
+	afterSpace := 20 + adv("b ")
+	withSpace := []Op{
+		picFacedText(face, "b ", 20, 40, black),
+		picFacedText(face, "c", afterSpace, 40, black),
+	}
+	without := []Op{
+		picFacedText(face, "b", 20, 40, black),
+		picFacedText(face, "c", afterSpace, 40, black),
+	}
+	if !pictureEqual(withSpace, without, picPage) {
+		t.Error("a run with a trailing space did not compare equal to the same glyphs without it")
+	}
+	// The no-break space is the case the suite actually writes, and the one the
+	// old grouping could not see: it belongs to the word before it, so it can
+	// never be a run of its own, so the run it is in ends exactly where the next
+	// word begins and the two were joined into a mark neither document has.
+	//
+	// Both sides put "c" in the same place, so the only difference between them
+	// is which run the space is in. This is the pair that fails without the
+	// trim: one side reads as one mark and the other as two.
+	afterNBSP := 20 + adv("b ")
+	nbsp := []Op{
+		picFacedText(face, "b ", 20, 40, black),
+		picFacedText(face, "c", afterNBSP, 40, black),
+	}
+	loose := []Op{
+		picFacedText(face, "b", 20, 40, black),
+		picFacedText(face, " ", 20+adv("b"), 40, black),
+		picFacedText(face, "c", afterNBSP, 40, black),
+	}
+	if !pictureEqual(nbsp, loose, picPage) {
+		t.Error("a run ending in a no-break space did not compare equal to the same " +
+			"glyphs with the space set on its own")
+	}
+
+	// A *leading* space moves the glyphs, and the mark has to move with it. This
+	// is the assertion that stops the trim being a plain strings.TrimSpace on
+	// the key: drop the space without moving the origin and " c" at 20 reads as
+	// "c" at 20, which is a quarter of an em from where it is drawn.
+	leading := []Op{picFacedText(face, " c", 20, 40, black)}
+	same := []Op{picFacedText(face, "c", 20+adv(" "), 40, black)}
+	if !pictureEqual(leading, same, picPage) {
+		t.Error("a run with a leading space did not compare equal to the glyph where it is drawn")
+	}
+	elsewhere := []Op{picFacedText(face, "c", 20, 40, black)}
+	if pictureEqual(leading, elsewhere, picPage) {
+		t.Error(`" c" at 20 was treated as "c" at 20, so the leading space moved nothing`)
+	}
+
+	// And the trim is of white space and not of the run: a difference in the
+	// visible glyphs is still a difference.
+	if pictureEqual(withSpace, []Op{picFacedText(face, "bd", 20, 40, black)}, picPage) {
+		t.Error("two different words compared equal")
+	}
+}
