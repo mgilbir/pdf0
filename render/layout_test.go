@@ -212,6 +212,38 @@ func TestMarginCollapsingWithNegatives(t *testing.T) {
 	}
 }
 
+// TestTheRootElementsMarginsDoNotCollapse pins §8.3.1's flattest sentence:
+// "Margins of the root element's box do not collapse."
+//
+// It is the one entry in the collapsing model that is about *which* box this is
+// rather than about what the box declares, and leaving it out is invisible in
+// the ordinary case — a document whose root has no margin collapses nothing
+// either way.
+//
+// The arithmetic, with the default stylesheet's own margins suppressed so that
+// only the two written here can appear. <html> has a 20px top margin and <body>
+// has none, so <div>'s 20px top margin collapses with <body>'s zero to 20px and
+// nothing more: the root's own 20px is separate, and #d's border box starts at
+// 20 + 20 = 40px. Collapse the root in and the answer is max(20, 0, 20) = 20px,
+// half a bar's height out — which is margin-collapse-020 in the suite.
+func TestTheRootElementsMarginsDoNotCollapse(t *testing.T) {
+	css := noDefaults + `
+	html { margin-top: 20px }
+	#d { margin-top: 20px; height: 10px }`
+	root := layoutOf(t, 1000, `<div id="d"></div>`, css)
+	px(t, "#d's top", find(t, root, "d").BorderRect.Y, 40)
+
+	// The bottom edge is sealed by the same rule, and asserting it separately is
+	// what stops the test passing on a change that seals only the top. #e's
+	// bottom margin stays inside the root, so the root's border box is as tall
+	// as the child *and* its margin: 10 + 30 = 40px.
+	css = noDefaults + `
+	html { margin-bottom: 20px }
+	#e { margin-bottom: 30px; height: 10px }`
+	root = layoutOf(t, 1000, `<div id="e"></div>`, css)
+	px(t, "the root's height", root.BorderRect.H, 40)
+}
+
 // TestCollapseIsNotASumOrAMaximum tests the rule directly, since the cases above
 // reach it through layout and a wrong answer there could come from elsewhere.
 func TestCollapseIsNotASumOrAMaximum(t *testing.T) {
