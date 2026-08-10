@@ -1399,7 +1399,12 @@ func (l *layouter) explicitWidth(b *Box, containing style.Unit) (style.Unit, boo
 	}
 	v, ok := l.lengthOf(b, "width", containing)
 	if !ok {
-		return 0, false
+		// A control's auto width is its intrinsic one — cols characters, size
+		// characters — which is a content width and so skips the inset below for
+		// the same reason a keyword does. It is asked *after* the declaration
+		// rather than before, so that any width an author wrote wins over it,
+		// which is what "auto" means and what a browser does.
+		return l.controlIntrinsicWidth(b)
 	}
 	inset, _ := l.sizingInset(b, containing)
 	return maxZero(v.Sub(inset)), true
@@ -1437,7 +1442,10 @@ func (l *layouter) explicitHeight(b *Box, containing, cbHeight style.Unit, cbDef
 	l.ensureFontSize(b)
 	v, ok := l.verticalLength(b, "height", cbHeight, cbDefinite)
 	if !ok {
-		return 0, false
+		// A control's auto height is rows line boxes, which is a used height and
+		// not a minimum: a textarea holding twenty lines is still two lines tall
+		// and the rest is clipped, exactly as a browser scrolls it away.
+		return l.controlIntrinsicHeight(b)
 	}
 	_, inset := l.sizingInset(b, containing)
 	return maxZero(v.Sub(inset)), true

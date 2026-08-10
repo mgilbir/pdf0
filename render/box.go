@@ -175,6 +175,15 @@ type Box struct {
 	// a <span>.
 	Replaced *ReplacedContent
 
+	// Control is what makes a box a form control, or nil for every other box.
+	//
+	// It carries only what CSS cannot say — an intrinsic size in characters and
+	// in lines — for the reason ReplacedContent gives about itself: being a
+	// control changes where a box's auto width and height come from and nothing
+	// else about it. See control.go, and note what it deliberately is not: no
+	// PDF form field is produced from it and nothing about it is interactive.
+	Control *Control
+
 	// BackgroundImages is the pictures this box's background-image named, by the
 	// reference the stylesheet wrote.
 	//
@@ -492,6 +501,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 	}
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
+	box.Control = b.controlFor(n)
 	if outer != OuterInline {
 		// A block-level box begins its text afresh, so a word cannot run into it
 		// from the paragraph before. Without this, "<p>hi</p><p>there</p>" under
@@ -506,7 +516,15 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		before.Parent = box
 		box.Children = append(box.Children, before)
 	}
+	// A control that shows a value rather than markup — a text field, a submit
+	// button — has that value here as an ordinary text box. It comes before the
+	// element's own children because an <input> is void and has none, and
+	// because a <select>'s children are its options rather than its label.
+	b.controlContent(box, n, cs, fontSize)
 	for _, child := range n.Children {
+		if controlSkipsChild(box, child) {
+			continue
+		}
 		if c := b.build(child, cs, fontSize); c != nil {
 			c.Parent = box
 			box.Children = append(box.Children, c)

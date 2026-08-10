@@ -79,7 +79,24 @@ type parser struct {
 	// truncated records that a bound stopped the tree being built, so the
 	// caller is never handed a short document that looks complete.
 	truncated bool
+	// stripNewline records that the element just opened is one whose first
+	// character, if it is a line feed, HTML throws away. See dropFirstNewline.
+	stripNewline bool
 }
+
+// dropFirstNewline are the elements HTML §13.2.6.4.7 ignores a leading line
+// feed inside.
+//
+// The rule exists because their content is preserved white space and the
+// newline after the start tag is punctuation of the *markup* rather than of the
+// text. "<pre>\nhello</pre>" is how everyone writes a <pre>, and an engine that
+// kept that newline would put a blank line at the top of every one — a whole
+// line of paper, from a character the author did not mean to write.
+//
+// It is one newline and only the first, and it applies whatever the element's
+// white-space property says: the rule is in the tree builder, before any
+// stylesheet has been consulted.
+var dropFirstNewline = map[string]bool{"pre": true, "textarea": true}
 
 func (p *parser) run() {
 	p.doc = &Node{Type: DocumentNode}
@@ -93,6 +110,13 @@ func (p *parser) run() {
 
 	for {
 		tk := p.tok.next()
+		// HTML's rule is about "the next token" after the start tag, so the flag
+		// is read and cleared once per token however that token turns out. A
+		// start tag for <pre> sets it again below, after this line has already
+		// taken the old value — which is what makes "<pre><pre>\nx" drop one
+		// newline rather than none.
+		strip := p.stripNewline
+		p.stripNewline = false
 		switch tk.kind {
 		case tokEOF:
 			p.finish()
@@ -101,6 +125,9 @@ func (p *parser) run() {
 			// Nothing to do with it: there is one document model here, and it
 			// is not chosen by a doctype.
 		case tokText:
+			if strip {
+				tk.text = strings.TrimPrefix(tk.text, "\n")
+			}
 			p.text(tk)
 		case tokStartTag:
 			p.startTag(tk)
@@ -252,6 +279,7 @@ func (p *parser) startTag(tk token) {
 	} else if rcdataElements[name] {
 		p.tok.raw, p.tok.rcdata = name, true
 	}
+	p.stripNewline = dropFirstNewline[name]
 	p.open = append(p.open, el)
 
 	if len(p.open) > maxDepth {

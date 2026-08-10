@@ -120,4 +120,74 @@ bdi { unicode-bidi: isolate }
 [dir="rtl"] { direction: rtl; unicode-bidi: isolate }
 [dir="auto"] { unicode-bidi: plaintext }
 bdo[dir] { unicode-bidi: isolate-override }
+
+/* Form controls, as the static boxes a printed page has. control.go carries the
+   half of this that CSS cannot say — an intrinsic size in characters and lines,
+   and the text a control shows — and says what is approximated and reported.
+
+   The display values and "white-space: pre-wrap" are HTML's rendering section.
+   The chrome is not: the specification leaves a control's border, padding and
+   colours to the user agent, and every one below is the shape desktop browsers
+   converged on. It is here rather than left off because a text field with no
+   border is invisible on paper, which is a page that has quietly lost a
+   control rather than one that shows an approximate one. */
+form, fieldset, legend, optgroup, option { display: block }
+input, button, select, textarea { display: inline-block }
+param { display: none }
+input[type="hidden" i] { display: none }
+
+/* A <textarea> is preserved white space that wraps, which is the one rule in
+   here that changes what the text says rather than how it looks. */
+textarea { white-space: pre-wrap; overflow-x: auto; overflow-y: auto }
+
+/* The text-entry chrome. A <select> is drawn as a field rather than as a
+   drop-down, because the arrow is a widget and this is paper. */
+input, textarea, select {
+  border-top: 1px solid #767676; border-right: 1px solid #767676;
+  border-bottom: 1px solid #767676; border-left: 1px solid #767676;
+  padding-top: 1px; padding-right: 2px; padding-bottom: 1px; padding-left: 2px;
+  background-color: #ffffff;
+}
+
+/* The push buttons, whose label is centred in a raised box. */
+button,
+input[type="submit" i], input[type="reset" i], input[type="button" i] {
+  text-align: center;
+  padding-top: 1px; padding-right: 6px; padding-bottom: 1px; padding-left: 6px;
+  border-top: 2px outset #c0c0c0; border-right: 2px outset #c0c0c0;
+  border-bottom: 2px outset #c0c0c0; border-left: 2px outset #c0c0c0;
+  background-color: #f0f0f0;
+}
+
+/* A checkbox and a radio are a small fixed square. HTML sizes these from the
+   border box, which is why the size does not move when the border does. */
+input[type="checkbox" i], input[type="radio" i] {
+  box-sizing: border-box; width: 13px; height: 13px;
+  margin-top: 3px; margin-right: 3px; margin-bottom: 0; margin-left: 4px;
+  padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0;
+}
+
+/* An image button is a picture, so it carries none of the field's chrome. */
+input[type="image" i] {
+  border-top-style: none; border-right-style: none;
+  border-bottom-style: none; border-left-style: none;
+  padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0;
+  background-color: transparent;
+}
+
+/* §15.3.9. "ThreeDFace" is a system colour this engine has no palette for, so
+   the grey every desktop resolves it to is written out. */
+fieldset {
+  margin-left: 2px; margin-right: 2px;
+  border-top: 2px groove #c0c0c0; border-right: 2px groove #c0c0c0;
+  border-bottom: 2px groove #c0c0c0; border-left: 2px groove #c0c0c0;
+  padding-top: 0.35em; padding-right: 0.75em;
+  padding-bottom: 0.625em; padding-left: 0.75em;
+}
+legend { padding-left: 2px; padding-right: 2px }
+
+/* <form> deliberately has no margin. HTML's rendering section gives it
+   "margin-block-end: 1em" in *quirks mode* only, and this engine has one
+   document mode; taking the quirk would indent every standards-mode document
+   by an em nothing asked for. */
 `
