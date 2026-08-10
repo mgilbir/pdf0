@@ -179,14 +179,22 @@ func dropIrrelevantTableBoxes(parent *Box, kids []*Box) []*Box {
 // isCollapsibleText reports whether a text box is white space that the table
 // rules may throw away.
 //
-// Collapsing has already run, so "\n    " between two cells is a single space
-// here — but "white-space: pre" preserves it verbatim, and text the author
-// asked to be preserved is content whatever it is made of.
+// It does not consult white-space, and that is a correction rather than an
+// omission. §17.2.1 states both rules over "an anonymous inline box that
+// contains only white space" and qualifies neither with the property: the
+// question is what the box is made of, not what would have become of it. This
+// read the property and returned false for pre, on the reasoning that text an
+// author asked to preserve is content whatever it is made of — which is the
+// right reading of CSS Text and the wrong one here, because the white space
+// between two tags is not text an author wrote.
+//
+// The consequence was not subtle. "white-space: pre" on a table turned the
+// newline and indentation between <div id=table> and <div id=row> into a cell,
+// so every row gained a phantom cell before the real one and the table's own
+// content was pushed a column to the right. The suite says so in fifty-seven
+// tests, which is what "applies to" means: the property has to reach the cell's
+// text without generating structure on the way.
 func isCollapsibleText(b *Box) bool {
-	switch b.Style["white-space"] {
-	case "pre", "pre-wrap", "break-spaces":
-		return false
-	}
 	for _, r := range b.Text {
 		switch r {
 		case ' ', '\t', '\n', '\r', '\f':

@@ -1050,3 +1050,50 @@ func findBoxWhere(t *testing.T, root *Box, ok func(*Box) bool) *Box {
 	}
 	return found
 }
+
+// TestPreservedWhiteSpaceBetweenTableTagsIsStillDropped is §17.2.1's
+// remove-irrelevant-boxes rule against the white-space property.
+//
+// Both of the rules are stated over "an anonymous inline box that contains only
+// white space" and neither is qualified by white-space, because the question is
+// what the box is made of rather than what would have become of it. Reading the
+// property here turned the newline and indentation between two tags into table
+// content: a cell appeared before every real one, and the table's own content
+// moved a column to the right.
+func TestPreservedWhiteSpaceBetweenTableTagsIsStillDropped(t *testing.T) {
+	// The indentation is the point, so it is written out rather than folded on
+	// to one line: this document has a text node between every pair of tags.
+	const doc = `<div id="t">
+		<div id="r">
+			<div id="c">ab</div>
+		</div>
+	</div>`
+	const css = `#t { display: table; white-space: pre; font-family: Courier;
+	                  font-size: 20px }
+	             #r { display: table-row }
+	             #c { display: table-cell }`
+
+	root := layoutOf(t, 600, doc, css)
+	cell := find(t, root, "c")
+	table := find(t, root, "t")
+	if got := cell.BorderRect.X; got != table.ContentRect().X {
+		t.Errorf("the cell starts at %gpx and the table's content at %gpx — the "+
+			"white space between the tags generated a cell before it",
+			got.Px(), table.ContentRect().X.Px())
+	}
+
+	// And the cell's own text still has its spaces, which is the half of the
+	// rule that must not be lost to fix the other: "white-space: pre" has to
+	// reach the cell's text.
+	root = layoutOf(t, 600, `<div id="t"><div id="r"><div id="c">a  b</div></div></div>`, css)
+	var text string
+	for _, ln := range find(t, root, "c").Lines {
+		for _, run := range ln.Runs {
+			text += run.Text
+		}
+	}
+	if text != "a  b" {
+		t.Errorf("the cell's text is %q, want %q — the property stopped applying "+
+			"to the cell as well as to the tags", text, "a  b")
+	}
+}
