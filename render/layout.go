@@ -737,7 +737,11 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 				// falls back on when neither offset on an axis was given. It can
 				// only be recorded here, because nothing after the walk knows
 				// where in the flow the box was written.
-				l.deferAbsolute(child, parent, 0, y.Add(offset), listIndex)
+				// The hypothetical box is block-level and so fills the parent's
+				// content width: its left margin edge is at the parent's content
+				// left edge and its right margin edge at the parent's content
+				// right edge, which is what makes both static positions nought.
+				l.deferAbsolute(child, parent, 0, y.Add(offset), 0, listIndex)
 				continue
 			}
 			parent.Children = append(parent.Children,

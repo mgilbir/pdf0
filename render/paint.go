@@ -320,8 +320,15 @@ type layers struct {
 	// with its own background rather than joining the parent's text layer.
 	floats []*Fragment
 	// content are the fragments with inline content — line boxes and list
-	// markers — which is §E.2 step 6.
-	content []*Fragment
+	// markers — which is §E.2 step 6, together with the atomic inlines that sit
+	// on those lines.
+	//
+	// The two are one list rather than two because §E.2 paints an inline-block
+	// "atomically, as if it created a new stacking context", *in the line box it
+	// sits in* and so in tree order among the text around it. Two lists painted
+	// one after the other would put every inline-block over every run of words,
+	// or under every one, and neither is the order.
+	content []contentItem
 	// tables are the tables using §17.6.2's collapsing border model, whose grid
 	// lines are drawn after every background in the table and not with the
 	// table's own. §17.5.1 paints a table in six layers — the table, the column
@@ -332,6 +339,30 @@ type layers struct {
 	// positioned are §E.2 steps 3, 7 and 8, which are one list sorted by z rather
 	// than three: the steps differ only in the sign of the number.
 	positioned []stackLevel
+}
+
+// contentItem is one entry of the content layer: either a fragment whose lines
+// and marker are painted, or an atomic inline painted whole.
+type contentItem struct {
+	frag *Fragment
+	// atomic marks an inline-level box that §E.2 paints as a unit — an
+	// inline-block, an inline-table, or an inline replaced element. Its
+	// background travels with its text rather than joining the block backgrounds
+	// of step 4, which is the difference the "z-ordering of inline-block" tests
+	// are written about: a later sibling block's background is painted *under*
+	// an inline-block that overlaps it, not over it.
+	atomic bool
+}
+
+// atomicInline reports whether a fragment is an inline-level box that §E.2
+// paints atomically.
+//
+// It is the box's *used* outer display, which for an inline-block is inline and
+// for a floated or absolutely positioned box has already been blockified by
+// §9.7 — so a float never reaches here and neither does an abspos box, and both
+// are dealt with by the branches above the caller.
+func atomicInline(f *Fragment) bool {
+	return f.Box != nil && f.Box.Outer == OuterInline
 }
 
 // stackingContext paints a fragment and everything under it, in the order of
@@ -370,7 +401,7 @@ func (p *painter) stackingContext(f *Fragment) {
 		p.unit(g)
 	}
 	for _, g := range lv.content {
-		p.content(g)
+		p.contentItem(g)
 	}
 
 	// Steps 7 and 8: everything positioned, in z order. The two steps are one
@@ -418,7 +449,7 @@ func (p *painter) unit(f *Fragment) {
 		p.unit(g)
 	}
 	for _, g := range lv.content {
-		p.content(g)
+		p.contentItem(g)
 	}
 }
 
@@ -443,7 +474,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 		lv.tables = append(lv.tables, f)
 	}
 	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil {
-		lv.content = append(lv.content, f)
+		lv.content = append(lv.content, contentItem{frag: f})
 	}
 	for _, c := range f.Children {
 		if c.Box == nil {
@@ -478,8 +509,31 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 			}
 			continue
 		}
+		if atomicInline(c) {
+			// §E.2's step 4 is over the "non-inline-level" descendants, so an
+			// inline-block's background and border are not there: they belong
+			// with the line the box sits on, and the box is painted whole and in
+			// tree order among the words. It is transparent for its positioned
+			// descendants for the same reason a float is — they are hoisted into
+			// the enclosing context rather than sealed inside a box that never
+			// became a stacking context.
+			lv.content = append(lv.content, contentItem{frag: c, atomic: true})
+			if collect {
+				p.hoist(c, lv)
+			}
+			continue
+		}
 		p.gather(c, lv, false, collect)
 	}
+}
+
+// contentItem paints one entry of the content layer.
+func (p *painter) contentItem(it contentItem) {
+	if it.atomic {
+		p.unit(it.frag)
+		return
+	}
+	p.content(it.frag)
 }
 
 // hoist finds the positioned boxes inside a subtree that is painted as a unit,
