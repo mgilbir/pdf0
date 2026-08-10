@@ -31,12 +31,33 @@ type contentValue struct {
 	unsupported string
 }
 
+// maxContentLength bounds the text one pseudo-element's content may produce.
+//
+// Every other source of text in a document is at most as long as the document:
+// a literal string is its own length, an attr() is the attribute's. The quote
+// keywords are the first that are not, and the amplification is worth writing
+// down rather than trusting to good taste. "quotes" holds two strings of the
+// author's choosing and "content: open-quote open-quote …" draws one of them per
+// keyword, so eleven bytes of declaration fetch a megabyte of mark — a factor of
+// a hundred thousand, from a stylesheet, before any element has been matched.
+//
+// A megabyte of generated content is already past anything a page can show. The
+// refusal is reported rather than truncated, because a marker cut off in the
+// middle is a page that looks finished and is not.
+const maxContentLength = 1 << 20
+
 // resolveContent reads a "content" declaration.
 //
-// Strings and attr() are produced. Counters, quotes and images are refused and
-// named, because each of them would otherwise be silently dropped and leave a
-// marker missing from a page that still looks finished.
-func resolveContent(raw string, el *html.Node, counters counterValues) contentValue {
+// Strings, attr(), counters and quotes are produced. Images are refused and
+// named, because they would otherwise be silently dropped and leave a marker
+// missing from a page that still looks finished.
+//
+// depth is the level of quotation the value begins at and quotes the pairs to
+// draw from; both come from the document walk, because neither is anything the
+// pseudo-element can answer about itself. See quotes.go.
+func resolveContent(raw string, el *html.Node, counters counterValues,
+	quotes quoteList, depth int) contentValue {
+
 	trimmed := strings.TrimSpace(raw)
 	switch strings.ToLower(trimmed) {
 	case "", "normal", "none":
@@ -46,6 +67,9 @@ func resolveContent(raw string, el *html.Node, counters counterValues) contentVa
 	vals, _ := css.ParseComponentValues(trimmed)
 	var text strings.Builder
 	for _, v := range vals {
+		if text.Len() > maxContentLength {
+			return contentValue{unsupported: "the content is longer than this engine will generate"}
+		}
 		switch {
 		case v.IsToken() && v.Token.Kind == css.Whitespace:
 			// Whitespace separates the parts of the value and contributes
@@ -100,9 +124,15 @@ func resolveContent(raw string, el *html.Node, counters counterValues) contentVa
 			return contentValue{unsupported: "an image in generated content needs a resolver"}
 
 		case v.IsToken() && v.Token.Kind == css.Ident:
-			switch strings.ToLower(v.Token.Value) {
-			case "open-quote", "close-quote", "no-open-quote", "no-close-quote":
-				return contentValue{unsupported: "quotes are not implemented"}
+			// §12.3.1's four keywords. The depth they move is the document's, not
+			// this value's, which is why it arrived as an argument — but within one
+			// value they still run in order, so "open-quote close-quote" draws a
+			// matched pair and ends where it began.
+			if op, isQuote := quoteKeyword(v.Token.Value); isQuote {
+				var mark string
+				mark, depth = applyQuote(op, depth, quotes)
+				text.WriteString(mark)
+				continue
 			}
 			return contentValue{unsupported: "\"" + v.Token.Value + "\" is not content this engine can produce"}
 
@@ -135,7 +165,8 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 		return nil
 	}
 
-	value := resolveContent(cs["content"], n, b.counters[n])
+	value := resolveContent(cs["content"], n, b.counters.pseudo[key],
+		parseQuotes(cs["quotes"]), b.counters.quoteDepth[key])
 	if value.unsupported != "" {
 		b.rec.ReportDetail(Finding{
 			Rule:     RuleUnsupportedValue,

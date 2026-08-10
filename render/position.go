@@ -359,7 +359,7 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 			hasHeight: hasHeight,
 		})
 	if b.ListItem {
-		frag.Marker = l.markerFor(b, frag, c.index)
+		frag.Marker = l.markerFor(b, frag)
 	}
 
 	// What the content needed, which is the "auto" height of §10.6.4.

@@ -304,6 +304,18 @@ type inlineItem struct {
 	// its own content and its own declarations, so nothing about the line can
 	// change it. All the line decides is where it goes.
 	atomic *Fragment
+	// leads reports that this item is a run of text whose own inline box takes
+	// part in §10.8.1's stacking, and above and below are how far it reaches from
+	// the baseline.
+	//
+	// The flag is separate from the two lengths rather than derived from them
+	// because zero is a legitimate answer: "line-height: 0" on a <span> gives a
+	// run that reaches nowhere at all, and reading that as "this item has no
+	// metrics" would let a taller strut win a line the span was supposed to
+	// collapse. Every other kind of item — a float marker, an absolutely
+	// positioned one, an inline box's own inset — leaves it clear.
+	leads        bool
+	above, below style.Unit
 	// ascent and descent are how far the item reaches above and below the
 	// baseline, measured over its *margin* box.
 	//
@@ -385,7 +397,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// the paragraph in.
 	_, open, closing := paragraphDirection(b)
 	para := newBidiBuilder(open)
-	items, _ := l.collectInline(b, nil, startOfContext(), inlineFrame{
+	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{
 		containing: width, cbHeight: origin.cbHeight, cbDefinite: origin.cbDefinite,
 		strut: st, bidi: para,
 	})
@@ -632,6 +644,26 @@ func (l *layouter) strutFor(b *Box) strut {
 	return s
 }
 
+// leading is how far a run of text in an inline box reaches above and below the
+// baseline it sits on: CSS 2.1 §10.8.1's leading, half above the font's ascent
+// and half below its descent.
+//
+// It is the same arithmetic the strut is measured by, and deliberately so — the
+// strut *is* an inline box, the block's own, and the only thing that makes it
+// special is that it is on every line whether or not anything else is. Sharing
+// the formula is what keeps a line of plain text exactly as tall as it was: the
+// text box inherits the block's font and line-height, so its two numbers are the
+// strut's two numbers and the maximum below changes nothing.
+//
+// The half-leading may be negative — "line-height: 0" asks for a box shorter
+// than its own type — and it is passed on rather than clamped, because that is
+// precisely how a stylesheet packs lines closer than the font wants.
+func (l *layouter) leading(b *Box) (above, below style.Unit) {
+	h := l.lineHeight(b)
+	above = l.baselineOf(b, h)
+	return above, h.Sub(above)
+}
+
 // verticalAlignOf reads the vertical-align property of an atomic inline.
 func (l *layouter) verticalAlignOf(b *Box, s strut) (vAlign, style.Unit) {
 	raw := strings.ToLower(strings.TrimSpace(b.Style["vertical-align"]))
@@ -697,6 +729,23 @@ func stackLine(runs []inlineItem, s strut) (height, baseline style.Unit) {
 	// decides where the baseline is.
 	for _, item := range runs {
 		if item.atomic == nil {
+			// A run of text in an inline box of its own. §10.8.1 gives every
+			// inline-level box on the line its leading and stacks them all, and
+			// leaving these out was a real fault rather than a simplification: a
+			// <span> set larger than the paragraph around it grew nothing, so its
+			// line box stayed the strut's height and its baseline sat where the
+			// smaller type wanted it. The generated-content tests found it in
+			// numbers, because a ::before with a font-size on it is how half of
+			// them are written — but nothing about it is to do with generated
+			// content, and a plain <span> showed the same page.
+			if item.leads {
+				if item.above > baseline {
+					baseline = item.above
+				}
+				if item.below > descent {
+					descent = item.below
+				}
+			}
 			continue
 		}
 		switch item.align {
@@ -1256,6 +1305,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// the decorations are memoized across the whole tree besides.
 	decorations := l.decorationsFor(b)
 	spacing := l.spacingFor(b)
+	// §10.8.1's leading, for the same reason and read the same number of times.
+	// It is the inline box's own line-height and font rather than the block's,
+	// which is the whole of what makes a <span> set larger than the paragraph
+	// around it grow the line it is on.
+	above, below := l.leading(b)
 	pieces, endedAtBreak := splitAtBreaks(b.Text, ws)
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
@@ -1280,7 +1334,8 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// A segment break that survived Phase I is a break the author
 			// wrote, and it ends the line as firmly as a <br> does — and ends a
 			// bidi paragraph with it, for the same reason.
-			out = append(out, inlineItem{box: b, face: face, size: size, forced: true, offset: offset})
+			out = append(out, inlineItem{box: b, face: face, size: size, forced: true,
+				offset: offset, leads: true, above: above, below: below})
 			frame.bidi.breakParagraph()
 			state = startOfContext()
 			continue
@@ -1299,6 +1354,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		item := inlineItem{
 			bidiPara: para, bidiStart: start, bidiEnd: end,
 			text: p.text, box: b, face: face, size: size,
+			leads: true, above: above, below: below,
 			// An opportunity carried in from the piece before is offered to
 			// anything but a space. UAX #14's LB7 — "do not break before spaces"
 			// — is an earlier rule than every rule that creates one, so a space

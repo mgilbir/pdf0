@@ -138,7 +138,7 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// it would have demanded without the declaration. It is marked as a
 	// measurement so that nothing on the way down is laid out — see
 	// inlineFrame.measuring for why that is a correctness rule and not a saving.
-	items, _ := l.collectInline(b, nil, startOfContext(), inlineFrame{measuring: true})
+	items, _ := l.collectInline(b, l.markerItems(b), startOfContext(), inlineFrame{measuring: true})
 	got := l.widthsOf(items)
 
 	// §16.1's indent widens the first line, so a box asked to hold its content
