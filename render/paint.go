@@ -714,7 +714,12 @@ func (p *painter) lines(f *Fragment) {
 			}
 			at := Point{
 				X: content.X.Add(line.Rect.X).Add(run.X).Add(run.Offset.X),
-				Y: baseline.Add(run.Offset.Y),
+				// The run's own baseline: the line's, displaced by §10.8.1's
+				// vertical-align, and then by §9.4.3's relative positioning.
+				// The two are added rather than chosen between, and in that
+				// order — a raised <sup> that is also relatively positioned
+				// moves twice.
+				Y: baseline.Add(run.Shift).Add(run.Offset.Y),
 			}
 			// The two lines that sit clear of the letters are drawn first, so the
 			// text is over them where they touch; the line-through is drawn after,
@@ -747,11 +752,20 @@ func (p *painter) lines(f *Fragment) {
 // A decoration with no colour of its own resolves "currentcolor" against that
 // box too, so "p { text-decoration: underline; color: black } em { color: red }"
 // rules a black line under red words.
+//
+// So is the *height*, and for the same reason. §16.3.1 draws a decoration across
+// the whole of the box that declared it "without paying any attention to" the
+// descendants it crosses, so the band is placed at the declaring box's baseline
+// rather than at the run's: three spans at three vertical-aligns under one
+// overlining div are ruled by one straight line. at.Y is the run's own baseline
+// and carries the run's own shift, which is undone here and the declaring box's
+// put in its place.
 func (p *painter) decorate(run TextRun, at Point, over bool) {
 	if len(run.Decorations) == 0 || run.Width <= 0 {
 		return
 	}
 	metrics := decorationMetricsFor(run.Face, run.Size)
+	lineY := at.Y.Sub(run.Shift)
 	for _, d := range run.Decorations {
 		if (d.kind == decorationLineThrough) != over {
 			continue
@@ -760,7 +774,7 @@ func (p *painter) decorate(run TextRun, at Point, over bool) {
 		if !ok || colour.A == 0 {
 			continue
 		}
-		band := decorationBand(d.kind, at.X, run.Width, at.Y, metrics)
+		band := decorationBand(d.kind, at.X, run.Width, lineY.Add(d.shift), metrics)
 		if band.Empty() {
 			continue
 		}

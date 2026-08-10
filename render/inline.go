@@ -181,6 +181,18 @@ type TextRun struct {
 	// separately — this one at paint time, the fragment's in absolutise, because
 	// a background image is placed against the rectangle its box is drawn at.
 	Offset Point
+	// Shift is how far this run's own baseline sits below the line box's,
+	// which is §10.8.1's vertical-align applied to the inline box the run came
+	// from. It is negative for a run that is raised.
+	//
+	// It is a length on the run rather than a line of its own because a line
+	// box has exactly one baseline — §10.8's alignment is *against* that
+	// baseline — and every run on the line is placed relative to it. Folding it
+	// into Offset would have been shorter and is wrong: Offset is §9.4.3's
+	// relative positioning, which moves a box after layout without changing
+	// anything about the line, whereas this displacement is part of what
+	// decided the line's height.
+	Shift style.Unit
 }
 
 // inlineFrame is what the walk over an inline subtree carries down: enough to
@@ -213,6 +225,15 @@ type inlineFrame struct {
 	// the box's own, because that is what the property is measured against: a
 	// "text-top" is the top of the *parent's* content area.
 	strut strut
+	// valign is §10.8.1's vertical-align, accumulated over the inline boxes the
+	// walk is currently inside.
+	//
+	// It travels on the frame for the same reason offset does: the flattening
+	// destroys the boxes, and a run of text has to carry out of it whatever its
+	// ancestors declared. A text box cannot be asked — vertical-align is not
+	// inherited, so the anonymous box holding a <span>'s words has the initial
+	// value whatever the span said.
+	valign vAlignState
 	// bidi collects the context's text in logical order as the walk flattens it,
 	// so that the bidirectional algorithm has a paragraph to run over. It is nil
 	// while measuring: an intrinsic width is a sum over the items and does not
@@ -283,6 +304,30 @@ type inlineItem struct {
 	// all three apply to a non-replaced inline box on the horizontal axis, and
 	// what they do there is push the content along. See insetItems.
 	inset bool
+	// insetLead distinguishes the two: the item before the box's content from
+	// the item after it, in *logical* order.
+	//
+	// Which of them carries the box's left inset and which its right is not the
+	// same question, and on a right-to-left line it is the other answer — see
+	// insetSides for §8.6. The flag says where the item sits in the content, and
+	// the width says what it holds.
+	insetLead bool
+	// insetLevel is the embedding level the box's own edges sit at, and
+	// insetLevelKnown says insetSides worked one out.
+	//
+	// An inset carries no characters, so the algorithm gives it no level of its
+	// own, and the two obvious guesses are both wrong somewhere: the level of the
+	// neighbouring item glues the box's edge to whatever run happens to abut it,
+	// and the paragraph's base level detaches it from its own content. What the
+	// edge of an inline box sits at is the *lowest* level anything inside it
+	// reached — an embedding inside the box only raises the level of what is
+	// inside, and the box's own boundary is outside all of them.
+	//
+	// The flag is separate because zero is a real level, the left-to-right one,
+	// and a box with no content on the line at all has to stay distinguishable
+	// from a box whose content is left-to-right.
+	insetLevel      uint8
+	insetLevelKnown bool
 	// float is the box of a float met in this run of inline content. It carries
 	// no text of its own: it is a marker saying "a float belongs here", because
 	// where a float appears among the words decides which line box it is placed
@@ -328,10 +373,9 @@ type inlineItem struct {
 	// the line by the depth of its second one — unless it has no line boxes at
 	// all or clips its overflow, when it too is all ascent.
 	ascent, descent style.Unit
-	// align is what vertical-align asked for, and raise is the displacement a
-	// "sub", a "super", a length or a percentage adds on top of it.
-	align vAlign
-	raise style.Unit
+	// valign is §10.8.1's vertical-align, as the walk accumulated it over the
+	// inline boxes this item sits inside.
+	valign vAlignState
 	// decorations are the lines ruled across this item, and spacing is what
 	// letter-spacing and word-spacing added to its width. Both travel with the
 	// item because the flattening loses the boxes they were read from.
@@ -419,7 +463,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// built and turned into fragments once the last line is known: §8.6 puts a
 	// box's trailing margin, border and padding on the piece it ends with, and
 	// which piece that is cannot be answered until there are no more.
-	decor := inlineDecor{l: l, containing: width}
+	decor := inlineDecor{l: l, containing: width, strut: st}
 
 	var y style.Unit
 	for i := 0; i < len(items); {
@@ -451,7 +495,8 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		textWidth := lineWidth.Sub(lineIndent)
 
 		runs, next, mid, forced := l.breakOneLine(items, i, textWidth, left.Sub(lo).Add(lineIndent))
-		lh, bl := stackLine(runs, st)
+		stack := stackLine(runs, st)
+		lh, bl := stack.height, stack.baseline
 		if len(runs) > 0 || forced {
 			line := LineFragment{
 				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lh},
@@ -479,7 +524,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// and an inline-block's last line of text on it.
 					f := item.atomic
 					f.BorderRect.X = line.Rect.X.Add(x).Add(f.Margin.Left)
-					f.BorderRect.Y = y.Add(atomicTop(item, st, lh, bl)).Add(f.Margin.Top)
+					f.BorderRect.Y = y.Add(stack.atomicTop(item)).Add(f.Margin.Top)
 					parent.Children = append(parent.Children, f)
 					continue
 				}
@@ -493,11 +538,29 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// page as nothing at all.
 					continue
 				}
+				shift := style.Unit(0)
+				decorations := item.decorations
+				if item.valign.aligned() {
+					shift = stack.shift(item.valign, item.above, item.below)
+					// §16.3.1: a decoration declared by an ancestor is drawn at
+					// *that* box's position and is not moved by the alignment of
+					// what it crosses — "text decorations on inline boxes are
+					// drawn across the entire element, going across any descendant
+					// elements without paying any attention to their presence". So
+					// three spans at three different vertical-aligns under one
+					// overlining div are crossed by one straight line, not three
+					// stepped ones.
+					//
+					// The copy is made only for a run something moved, which is
+					// almost none of them.
+					decorations = l.decorationsAt(decorations, &stack)
+				}
 				line.Runs = append(line.Runs, TextRun{
 					Text: item.text, Face: item.face, Size: item.size,
 					X: x, Width: item.width, Box: item.box, Offset: item.offset,
-					Decorations: item.decorations, LetterSpacing: item.spacing.letter,
-					RTL: item.level&1 == 1,
+					Decorations: decorations, LetterSpacing: item.spacing.letter,
+					RTL:   item.level&1 == 1,
+					Shift: shift,
 				})
 			}
 			// §4.1.2's hang comes in two strengths and the difference shows
@@ -534,7 +597,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// the line is about to go, since a fragment cannot be hung on it
 			// until §8.6 knows which piece of its box it is.
 			decor.addLine(len(parent.Lines), runs, xs,
-				line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline))
+				line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack)
 			parent.Lines = append(parent.Lines, line)
 			// The indent belongs to the first line box that actually exists. A run
 			// of inline content that produced none — the collapsible space between
@@ -573,7 +636,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	return y
 }
 
-// vAlign is what vertical-align asks of an atomic inline.
+// vAlign is what vertical-align asks of an inline-level box.
 //
 // The set is CSS 2.1 §10.8.1's, less the two that are not a choice of position:
 // "inherit" is the cascade's business and a length or percentage is carried as
@@ -581,12 +644,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 // that is exactly what it is — "vertical-align: 4px" is baseline alignment with
 // the baseline moved.
 //
-// It is read for atomic inlines only. An ordinary inline box's runs are not
-// aligned by it, which is a real gap and a pre-existing one: <sup> and <sub>
-// are set at the smaller size the user-agent stylesheet gives them and on the
-// same baseline as their surroundings. Closing that means giving a text run a
-// vertical displacement of its own, which the run already has a field for, and
-// it is a separate change from this one.
+// It is read for an ordinary inline box as well as for an atomic one, which it
+// was not: a <sup> used to be set at the smaller size the user-agent stylesheet
+// gives it and on the same baseline as its surroundings. The two share every
+// line of the arithmetic — §10.8.1 aligns "inline-level boxes" and says nothing
+// about which kind — and the only difference left is where the two extents come
+// from. See itemExtents.
 type vAlign uint8
 
 const (
@@ -664,8 +727,8 @@ func (l *layouter) leading(b *Box) (above, below style.Unit) {
 	return above, h.Sub(above)
 }
 
-// verticalAlignOf reads the vertical-align property of an atomic inline.
-func (l *layouter) verticalAlignOf(b *Box, s strut) (vAlign, style.Unit) {
+// verticalAlignOf reads the vertical-align property of an inline-level box.
+func (l *layouter) verticalAlignOf(b *Box) (vAlign, style.Unit) {
 	raw := strings.ToLower(strings.TrimSpace(b.Style["vertical-align"]))
 	switch raw {
 	case "", "baseline":
@@ -689,13 +752,102 @@ func (l *layouter) verticalAlignOf(b *Box, s strut) (vAlign, style.Unit) {
 	}
 	// A length raises the box by that much; a percentage is of the line-height,
 	// which is the one property whose percentages are of line-height rather than
-	// of the containing block.
+	// of the containing block. It is the box's *own* line-height and not the
+	// block's: §10.8.1 says "a percentage of the 'line-height' value" with no
+	// qualification, and an unqualified percentage in CSS is of the element's own
+	// value of the property named.
 	if length, ok := l.parseLength(b, "vertical-align"); ok {
-		if v, ok := length.Resolve(s.height, true); ok {
+		if v, ok := length.Resolve(l.lineHeight(b), true); ok {
 			return vAlignBaseline, v
 		}
 	}
 	return vAlignBaseline, 0
+}
+
+// vAlignState is where §10.8.1's alignment has got to at one point of the walk
+// over an inline subtree.
+//
+// The two halves answer different questions and cannot be one field, which is
+// the whole reason this is a struct. align and raise say where the box sits
+// against the baseline of *what it is inside*; subtree and lineAlign say which
+// aligned subtree it belongs to and where that subtree sits against the *line
+// box*. Only "top" and "bottom" ask the second question, and §10.8.1 defines
+// them alone in terms of a subtree:
+//
+//	The aligned subtree of an inline element contains that element and the
+//	aligned subtrees of all children inline elements whose computed
+//	vertical-align value is not top or bottom.
+//
+// So a "middle" inside a "top" is still part of the top's subtree, placed within
+// it by its own rule, and the whole of it then moves to the top of the line
+// together. Getting that wrong is visible rather than academic: a
+// "vertical-align: top" span holding text in two sizes had each run's own top
+// put at the top of the line, which pulls the smaller one up out of the words it
+// belongs with.
+type vAlignState struct {
+	// align and raise place the box against its parent's baseline. A keyword
+	// other than "baseline" is a position rather than a displacement, so it
+	// replaces what it is inside instead of adding to it; a length, a
+	// percentage, "sub" and "super" accumulate, which is what makes nested
+	// superscripts rise twice.
+	align vAlign
+	raise style.Unit
+	// lineAlign is vAlignTop or vAlignBottom when the box is inside an aligned
+	// subtree placed against the line box, and vAlignBaseline when it is not.
+	// subtree is the box that asked for it, which is what groups the items of
+	// one subtree together.
+	lineAlign vAlign
+	subtree   *Box
+}
+
+// vAlignFor combines an inline box's own vertical-align with what the boxes
+// around it already asked for.
+func (l *layouter) vAlignFor(b *Box, in vAlignState) vAlignState {
+	own, lift := l.verticalAlignOf(b)
+	switch own {
+	case vAlignTop, vAlignBottom:
+		// A new aligned subtree, placed against the line box. Nothing outside it
+		// carries in: whatever raised the boxes around this one, this one's top
+		// or bottom is the line's.
+		return vAlignState{lineAlign: own, subtree: b}
+	case vAlignBaseline:
+		in.raise = in.raise.Add(lift)
+		return in
+	}
+	// "middle", "text-top" or "text-bottom": a position against the parent, so
+	// it replaces the accumulated displacement and stays in whatever subtree it
+	// was already in.
+	in.align, in.raise = own, 0
+	return in
+}
+
+// aligned reports whether vertical-align moved anything at all, which is false
+// for the great majority of the inline content of the great majority of
+// documents.
+func (v vAlignState) aligned() bool {
+	return v.align != vAlignBaseline || v.raise != 0 || v.lineAlign != vAlignBaseline
+}
+
+// itemExtents is how far an inline-level item's own box reaches above and below
+// its own baseline, before vertical-align has moved it.
+//
+// The two kinds of item answer it differently and that is the whole of what
+// distinguishes them here. An atomic inline's box is its margin box, measured
+// when it was laid out. A run of text is §10.8's inline box: "the height of the
+// inline box encloses all glyphs and their half-leading on each side and is thus
+// exactly 'line-height'", which is the pair the leading gave it.
+//
+// Anything else on a line — an inset, a float marker, the record of an
+// absolutely positioned box — is not an inline-level box at all and takes no
+// part in §10.8.1's stacking.
+func itemExtents(item inlineItem) (ascent, descent style.Unit, ok bool) {
+	if item.atomic != nil {
+		return item.ascent, item.descent, true
+	}
+	if item.leads {
+		return item.above, item.below, true
+	}
+	return 0, 0, false
 }
 
 // stackLine gives a line its height and its baseline, once what is on it is
@@ -709,14 +861,18 @@ func (l *layouter) verticalAlignOf(b *Box, s strut) (vAlign, style.Unit) {
 // under an image that sits alone on a line: the strut still wants its
 // descender.
 //
-// What is implemented is the baseline alignment of §10.8.1 and nothing else.
-// vertical-align is not read, so a "vertical-align: top" or "middle" on an image
-// is laid out as though it were "baseline". That is a real difference and it is
-// left rather than approximated: getting the other keywords right needs the line
-// box's extent, which is what is being computed here, so they are a second pass
-// rather than another case.
-func stackLine(runs []inlineItem, s strut) (height, baseline style.Unit) {
-	baseline = s.baseline
+// What is implemented is §10.8.1's alignment of every inline-level box on the
+// line — a run of text as much as an atomic inline, since the section names
+// neither and the arithmetic is the same for both once each has said how far it
+// reaches above and below its own baseline. See itemExtents.
+//
+// Where it is not exact is which box a keyword alignment is measured against.
+// §10.8.1 names the *parent*; this engine has flattened the tree by now and uses
+// the block's own strut, so a "text-top" inside an intervening box whose font
+// metrics differ from the block's names the block's content area rather than
+// that box's.
+func stackLine(runs []inlineItem, s strut) lineStack {
+	ls := lineStack{strut: s, baseline: s.baseline}
 	// What the strut wants below the baseline. It can be *negative*, which is
 	// the case that makes this a maximum rather than a floor: "line-height: 0"
 	// gives the strut a half-leading of minus half the font's own height, so
@@ -726,53 +882,41 @@ func stackLine(runs []inlineItem, s strut) (height, baseline style.Unit) {
 	descent := s.height.Sub(s.baseline)
 
 	// First pass: everything aligned against the baseline, which is what
-	// decides where the baseline is.
+	// decides where the baseline is. What belongs to an aligned subtree is
+	// gathered instead, because it is placed against a line box that does not
+	// exist yet.
+	//
+	// Stacking the text runs and not only the atomic inlines was a fault fixed
+	// rather than a simplification kept: a <span> set larger than the paragraph
+	// around it grew nothing, so its line box stayed the strut's height and its
+	// baseline sat where the smaller type wanted it.
 	for _, item := range runs {
-		if item.atomic == nil {
-			// A run of text in an inline box of its own. §10.8.1 gives every
-			// inline-level box on the line its leading and stacks them all, and
-			// leaving these out was a real fault rather than a simplification: a
-			// <span> set larger than the paragraph around it grew nothing, so its
-			// line box stayed the strut's height and its baseline sat where the
-			// smaller type wanted it. The generated-content tests found it in
-			// numbers, because a ::before with a font-size on it is how half of
-			// them are written — but nothing about it is to do with generated
-			// content, and a plain <span> showed the same page.
-			if item.leads {
-				if item.above > baseline {
-					baseline = item.above
-				}
-				if item.below > descent {
-					descent = item.below
-				}
-			}
+		a, d, ok := itemExtents(item)
+		if !ok {
 			continue
 		}
-		switch item.align {
-		case vAlignTop, vAlignBottom:
-			// Aligned against the line box, which does not exist yet.
+		a, d = alignedExtents(item.valign, a, d, s)
+		if item.valign.lineAlign != vAlignBaseline {
+			ls.gather(item.valign, a, d)
 			continue
 		}
-		a, d := alignedExtents(item, s)
-		if a > baseline {
-			baseline = a
+		if a > ls.baseline {
+			ls.baseline = a
 		}
 		if d > descent {
 			descent = d
 		}
 	}
 
-	// Second pass: the two that align against the line box itself. §10.8.1
+	// Second pass: the subtrees that align against the line box itself. §10.8.1
 	// defines them in terms of a line box whose height they can change, which
-	// reads as circular and is not: a box taller than the line grows it on the
-	// side away from its own edge, and a box that fits changes nothing.
-	height = baseline.Add(descent)
-	for _, item := range runs {
-		if item.atomic == nil {
-			continue
-		}
-		h := item.ascent.Add(item.descent)
-		switch item.align {
+	// reads as circular and is not: a subtree taller than the line grows it on
+	// the side away from its own edge, and one that fits changes nothing.
+	height := ls.baseline.Add(descent)
+	for i := range ls.groups {
+		g := &ls.groups[i]
+		h := g.ascent.Add(g.descent)
+		switch g.lineAlign {
 		case vAlignTop:
 			// Its top is the line's top, so anything it needs it takes from
 			// below the baseline.
@@ -783,19 +927,105 @@ func stackLine(runs []inlineItem, s strut) (height, baseline style.Unit) {
 		case vAlignBottom:
 			// Its bottom is the line's bottom, so it takes from above.
 			if h > height {
-				baseline = baseline.Add(h.Sub(height))
+				ls.baseline = ls.baseline.Add(h.Sub(height))
 				height = h
 			}
 		}
 	}
-	return baseline.Add(descent), baseline
+	ls.height = ls.baseline.Add(descent)
+
+	// Where each subtree's own baseline ended up, which is what places the boxes
+	// in it. It is a third pass because the height above is not settled until
+	// every subtree has had its say, and a "top" subtree that grew the line
+	// moves a "bottom" one.
+	for i := range ls.groups {
+		g := &ls.groups[i]
+		if g.lineAlign == vAlignBottom {
+			g.baseline = ls.height.Sub(g.descent)
+			continue
+		}
+		g.baseline = g.ascent
+	}
+	return ls
 }
 
-// alignedExtents is how far an item reaches above and below the baseline once
+// lineStack is a finished line box: its height and baseline, and where each
+// aligned subtree on it ended up.
+type lineStack struct {
+	strut            strut
+	height, baseline style.Unit
+	// groups is one entry per aligned subtree placed against the line box. There
+	// is one for each "vertical-align: top" or "bottom" box with content on the
+	// line, which is none at all in almost every document — so the lookups below
+	// scan a slice rather than consult a map, and an ordinary line never
+	// allocates.
+	groups []alignGroup
+}
+
+// alignGroup is one of §10.8.1's aligned subtrees, as it appears on one line.
+type alignGroup struct {
+	box       *Box
+	lineAlign vAlign
+	// ascent and descent are the subtree's extents: the highest top and the
+	// lowest bottom of the boxes in it, measured from the subtree's own
+	// baseline.
+	ascent, descent style.Unit
+	// baseline is where that baseline sits, from the top of the line box.
+	baseline style.Unit
+}
+
+// gather adds one box's extents to its subtree's.
+func (ls *lineStack) gather(v vAlignState, ascent, descent style.Unit) {
+	for i := range ls.groups {
+		if ls.groups[i].box != v.subtree {
+			continue
+		}
+		if ascent > ls.groups[i].ascent {
+			ls.groups[i].ascent = ascent
+		}
+		if descent > ls.groups[i].descent {
+			ls.groups[i].descent = descent
+		}
+		return
+	}
+	ls.groups = append(ls.groups, alignGroup{
+		box: v.subtree, lineAlign: v.lineAlign, ascent: ascent, descent: descent,
+	})
+}
+
+// baselineFor is where the baseline a box is placed against sits, from the top
+// of the line box: the line's own, or its aligned subtree's.
+func (ls *lineStack) baselineFor(v vAlignState) style.Unit {
+	if v.lineAlign == vAlignBaseline {
+		return ls.baseline
+	}
+	for i := range ls.groups {
+		if ls.groups[i].box == v.subtree {
+			return ls.groups[i].baseline
+		}
+	}
+	return ls.baseline
+}
+
+// shift is how far a box's own baseline sits below the line's, once
+// vertical-align has placed it.
+//
+// It is the one number painting needs: a run's glyphs sit on its own baseline,
+// and the line has only one of its own.
+func (ls *lineStack) shift(v vAlignState, ascent, descent style.Unit) style.Unit {
+	a, _ := alignedExtents(v, ascent, descent, ls.strut)
+	// a is how far the box reaches above the baseline it is aligned against, so
+	// the box's own baseline is that much below that box's top — and ascent is
+	// how far its own baseline is below its own top.
+	return ls.baselineFor(v).Sub(a).Add(ascent).Sub(ls.baseline)
+}
+
+// alignedExtents is how far a box reaching ascent above and descent below its
+// own baseline reaches above and below the baseline it is aligned against, once
 // its vertical-align has been applied.
-func alignedExtents(item inlineItem, s strut) (ascent, descent style.Unit) {
-	h := item.ascent.Add(item.descent)
-	switch item.align {
+func alignedExtents(v vAlignState, ascent, descent style.Unit, s strut) (style.Unit, style.Unit) {
+	h := ascent.Add(descent)
+	switch v.align {
 	case vAlignTextTop:
 		// The top of the box against the top of the parent's content area,
 		// which is the font's own ascent above the baseline rather than the
@@ -810,20 +1040,14 @@ func alignedExtents(item inlineItem, s strut) (ascent, descent style.Unit) {
 		return half.Add(s.xHeight.Div(2)), half.Sub(s.xHeight.Div(2))
 	}
 	// Baseline, with whatever "sub", "super" or a length displaced it by.
-	return item.ascent.Add(item.raise), item.descent.Sub(item.raise)
+	return ascent.Add(v.raise), descent.Sub(v.raise)
 }
 
-// atomicTop is where an item's margin box goes within its line box.
-func atomicTop(item inlineItem, s strut, height, baseline style.Unit) style.Unit {
-	h := item.ascent.Add(item.descent)
-	switch item.align {
-	case vAlignTop:
-		return 0
-	case vAlignBottom:
-		return height.Sub(h)
-	}
-	ascent, _ := alignedExtents(item, s)
-	return baseline.Sub(ascent)
+// atomicTop is where an atomic inline's margin box goes within its line box.
+func (ls *lineStack) atomicTop(item inlineItem) style.Unit {
+	return ls.baseline.
+		Add(ls.shift(item.valign, item.ascent, item.descent)).
+		Sub(item.ascent)
 }
 
 // isAtomicInline reports whether an inline-level box takes part in a line as a
@@ -874,7 +1098,7 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	item.atomic = frag
 	item.width = box.W
 	item.ascent, item.descent = box.H, 0
-	item.align, item.raise = l.verticalAlignOf(b, frame.strut)
+	item.valign = l.vAlignFor(b, frame.valign)
 
 	// §10.8.1: an inline-block's baseline is the baseline of its last in-flow
 	// line box. With no line box at all it is the bottom margin edge — which is
@@ -1155,6 +1379,15 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 					Y: frame.offset.Y.Add(d.Y),
 				}
 			}
+			// §10.8.1's vertical-align, composed with what the boxes outside
+			// this one already asked for. It is recorded against the box as well
+			// as carried down, because the box's own background and border are
+			// moved by it and they are made from the box rather than from the
+			// items — see inlineDecor.finish.
+			inner.valign = l.vAlignFor(child, frame.valign)
+			if inner.valign.aligned() && !frame.measuring {
+				l.inlineAligns[child] = inner.valign
+			}
 			if inner.offset != (Point{}) && !frame.measuring {
 				// The box's own displacement, which its background and border are
 				// drawn at. It is recorded here because this is the only walk that
@@ -1168,8 +1401,8 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// characters at those two points.
 			open, closing := bidiControls(child)
 			frame.bidi.enter(open)
-			lead, trail := l.insetItems(child, frame.containing)
-			if lead.width != 0 {
+			lead, trail, any := l.insetItems(child, frame.containing)
+			if any {
 				// A break opportunity carried in belongs to the box's leading
 				// edge and not to its first word: a line may end before
 				// "<span style='margin-left: 99px'>word</span>", and it may not
@@ -1184,7 +1417,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				out = append(out, lead)
 			}
 			out, state = l.collectInline(child, out, state, inner)
-			if trail.width != 0 {
+			if any {
 				// The trailing edge takes no opportunity of its own: a line
 				// cannot end between a box's last word and its own closing
 				// margin, so whatever was carried in passes through to whatever
@@ -1235,28 +1468,32 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 //   - The intrinsic widths pick it up without being told: widthsOf's default
 //     case adds an unbreakable item to both the running word and the line.
 //
-// # The end that is not done: §8.6's bidi box model
+// The pair is emitted together or not at all, and that is what the third result
+// says. A box with a margin on one side only used to emit the one item that had
+// a width in it; both are needed now, because §8.6 can move the width from one
+// to the other and there has to be something at the far end to move it to. The
+// item that ends up empty draws nothing and takes no room, so nothing but
+// insetSides can tell the difference.
+//
+// # §8.6's bidi box model
 //
 // The left inset is emitted before the box's content and the right after it, in
-// *logical* order. That is the same thing as physical order on a line that is
-// not reordered, which is every line of a left-to-right document — and it is not
-// the same thing on a line that is. Reordering reverses a right-to-left run, so
-// on such a line the item emitted first is drawn last, and a margin-left is
-// drawn on the box's physical right.
+// *logical* order. On a line the reordering does not touch — every line of a
+// left-to-right document — logical order is physical order and there is nothing
+// more to do. On a line it does touch, the item emitted first is drawn last.
 //
-// §8.6 states the rule this would have to satisfy: with direction ltr the
-// left-most box of the *first* line box carries the left inset and the right-most
-// box of the last carries the right; with direction rtl the two swap. Doing it
-// means placing the two items by the resolved embedding level of the box's
-// content, which is known after resolveBidi and not here — an inset carries no
-// characters, so it has no level of its own and takes its neighbour's.
+// §8.6 is physical on both sides of its rule: with either direction, "the
+// leftmost generated box" carries the left margin, border and padding and "the
+// rightmost" carries the right ones, and what the direction decides is only
+// *which line box* of a box broken across several. So the fix is not to swap on
+// the direction property. Swapping on the declared direction was tried and
+// measured nine clean passes worse, because "direction: rtl" with the initial
+// "unicode-bidi: normal" changes the box model and does not reorder anything —
+// the swap assumed an order that had not changed.
 //
-// Swapping the two sides on the box's own "direction" was tried, because that is
-// what §8.6 keys on. It is worse: 2964 clean passes against 2973 without it,
-// because a "direction: rtl" that does not also reorder — the default
-// "unicode-bidi: normal" — changes the box model and not the order, and the swap
-// assumes the order changed. The four tests that show the gap either way are
-// css/CSS2/box's ltr-span-only and rtl-span-only and their -ib pair.
+// insetSides does it on the *resolved embedding level* of the box's content
+// instead, which is the thing that actually says whether the content was
+// reversed, and which is known only after resolveBidi has run.
 //
 // What is painted in that room is inlinepaint.go's, and the two have to agree
 // about §8.6 or the ink and the space it sits in would come apart: this decides
@@ -1266,7 +1503,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 //
 // An outline is still not drawn, on an inline box or on any other — nothing in
 // this engine paints one.
-func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inlineItem) {
+func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inlineItem, any bool) {
 	edges := l.edges(b, "margin", containing).
 		Add(l.borderWidths(b)).
 		Add(l.paddingOf(b, containing))
@@ -1281,10 +1518,14 @@ func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inline
 	if b.noTrailInset {
 		right = 0
 	}
+	if left == 0 && right == 0 {
+		return inlineItem{}, inlineItem{}, false
+	}
 	item := inlineItem{box: b, inset: true}
 	lead, trail = item, item
+	lead.insetLead = true
 	lead.width, trail.width = left, right
-	return lead, trail
+	return lead, trail, true
 }
 
 // itemsFor cuts one text box into items at its break opportunities and measures
@@ -1335,7 +1576,8 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// wrote, and it ends the line as firmly as a <br> does — and ends a
 			// bidi paragraph with it, for the same reason.
 			out = append(out, inlineItem{box: b, face: face, size: size, forced: true,
-				offset: offset, leads: true, above: above, below: below})
+				offset: offset, leads: true, above: above, below: below,
+				valign: frame.valign})
 			frame.bidi.breakParagraph()
 			state = startOfContext()
 			continue
@@ -1355,6 +1597,12 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			bidiPara: para, bidiStart: start, bidiEnd: end,
 			text: p.text, box: b, face: face, size: size,
 			leads: true, above: above, below: below,
+			// §10.8.1's vertical-align, which a text box cannot be asked for
+			// itself: the property is not inherited, so the anonymous box holding
+			// a <span>'s words carries the initial value however the span was
+			// aligned. The frame brought the answer down from the boxes the walk
+			// is inside.
+			valign: frame.valign,
 			// An opportunity carried in from the piece before is offered to
 			// anything but a space. UAX #14's LB7 — "do not break before spaces"
 			// — is an earlier rule than every rule that creates one, so a space

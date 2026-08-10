@@ -161,6 +161,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 		inlineDraws:         map[*Box]bool{},
 		inlineChains:        map[*Box][]*Box{},
 		inlineOffsets:       map[*Box]Point{},
+		inlineAligns:        map[*Box]vAlignState{},
 		intrinsic:           map[*Box]intrinsicWidths{},
 		grids:               map[*Box]*tableGrid{},
 		tableDemands:        map[*Box][]tableColumnDemand{},
@@ -333,6 +334,19 @@ type layouter struct {
 	// Only a box a relative position actually moved is recorded, so the map stays
 	// empty in a document with no positioned inline in it.
 	inlineOffsets map[*Box]Point
+	// inlineAligns is §10.8.1's accumulated vertical-align at each inline box
+	// that has one, recorded for the same reason and read by the same code: an
+	// inline box's own background and border move with the box, and the box is
+	// gone by the time the fragment for them is made.
+	//
+	// It is the box's own accumulation rather than an item's, which is the whole
+	// reason it is a map and not a field on the item. An item carries the sum
+	// down to the innermost box it sits in; a fragment for a box halfway up that
+	// chain needs the sum down to *itself*.
+	//
+	// Only a box that vertical-align actually moved is recorded, so the map stays
+	// empty in a document that never uses the property.
+	inlineAligns map[*Box]vAlignState
 	// inlineDecorations counts the fragments made for those backgrounds and
 	// borders, which is what maxInlineDecorations bounds, and inlineDecorCapped
 	// says the bound has already been reported.
