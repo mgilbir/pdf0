@@ -323,7 +323,25 @@ const wptEnv = "WPT_TESTS"
 //
 // The condition §10.5 attaches to the rule is real and is still enforced; what
 // was wrong was reading the condition as the rule. See percentheight_test.go.
-const wptCleanPassBaseline = 3610
+// A wrap opportunity around an atomic inline took it from 3610 to 3624, and
+// again the whole of it is layout: no finding moved, failures fell from 1290 to
+// 1276, and counted by name 15 tests stopped failing and one started.
+//
+// It is the same lesson as the percentage height above and was found the same
+// way. Eleven failures in css/CSS2/positioning shared one display-list
+// signature, and in every one of them the document laying out wrongly was the
+// reference: it draws a two-row expected picture as two full-width images with
+// no space between them, and this engine set them side by side because an atomic
+// inline offered no break opportunity of its own. UAX #14's LB20 gives one on
+// both sides, and LB7 takes back the one a following space would have taken.
+//
+// The test that started failing is understood and is about the page rather than
+// the engine. css/CSS2/values/units-002 needs a line 700px wide and this page's
+// content box is 626.52; both documents used to overflow that on one line and
+// agree, and now both wrap — at different line heights, because one line holds
+// 250px text and the other 200px images. The suite is written for an 800px
+// viewport, and this is the first test to notice.
+const wptCleanPassBaseline = 3624
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
