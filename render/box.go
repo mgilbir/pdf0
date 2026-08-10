@@ -248,6 +248,20 @@ type Box struct {
 	// without a block inside an inline.
 	noLeadInset, noTrailInset bool
 
+	// staticInline records that this box was inline-level before §9.7 blockified
+	// it for being out of flow.
+	//
+	// It exists for one question, and the question is asked in the specification's
+	// own words. §10.3.7 resolves an "auto" left on an absolutely positioned box
+	// against "a hypothetical box that would have been the first box of the
+	// element if its 'position' property had been 'static'" — and with a static
+	// position there is no blockification, so the hypothetical box of an
+	// abspos <span> is on the line where it was written and that of an abspos
+	// <div> is a block starting at the containing block's content edge. Reading
+	// the used display instead makes every such box inline-level, because §9.7
+	// has already turned every one of them into a block.
+	staticInline bool
+
 	Children []*Box
 	Parent   *Box
 }
@@ -473,6 +487,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// its offsets against a containing block chosen for the float.
 		float = FloatNone
 	}
+	staticInline := outer == OuterInline
 	outer, inner = outOfFlowDisplay(outer, inner, float, position)
 	if outer == OuterBlock && inner == InnerFlow && overflowIsScrollable(cs) {
 		// CSS 2.1 §9.4.1: a block box whose overflow is anything but visible
@@ -490,6 +505,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		ListItem: listItem, FontSize: fontSize,
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
+		staticInline: staticInline,
 	}
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	if outer != OuterInline {
