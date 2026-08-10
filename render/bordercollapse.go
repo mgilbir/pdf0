@@ -907,6 +907,17 @@ func (p *painter) paintCollapsed(f *Fragment) {
 	if len(f.collapsed) == 0 {
 		return
 	}
+	// The table's own clip rather than its content clip. A collapsed grid line
+	// is half in the cell on each side of it, and the ones at the table's edge
+	// are centred on the table's border box — outside the padding box a
+	// "table { overflow: hidden }" clips its contents to. Cutting them there
+	// would erase the frame of every collapsing table that also declared an
+	// overflow, which is not what §11.1.1 clips: the outer grid lines are the
+	// table's own border by another name.
+	p.clipping(f.clipSelf, func() { p.paintCollapsedBands(f) })
+}
+
+func (p *painter) paintCollapsedBands(f *Fragment) {
 	order := make([]int, len(f.collapsed))
 	for i := range order {
 		order[i] = i
