@@ -215,3 +215,24 @@ func TestAHangulSyllableIsNotCutFromItsJamo(t *testing.T) {
 			len(pieces))
 	}
 }
+
+// TestAnIdeographOffersABreakToTheNextBox is the deferred opportunity crossing
+// a box boundary, which is the one path the tests above cannot reach.
+//
+// The break after an ideograph is held back until the following character says
+// the cluster ended — but when the ideograph is the last thing in its box, that
+// character is in another box and this one has to hand the opportunity on. A
+// version that dropped it would run "日本" together on one line however narrow
+// the block, and every test that keeps both characters in one box would still
+// pass.
+func TestAnIdeographOffersABreakToTheNextBox(t *testing.T) {
+	// Two ideographs, one per box, in a block one ideograph wide. Ahem is not
+	// needed: what is asserted is the number of lines, and a break between them
+	// is the only way to get two.
+	root := layoutOf(t, 600, `<div id="p"><span>日</span>本</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 20px }`)
+	if got := len(find(t, root, "p").Lines); got != 2 {
+		t.Errorf("two ideographs in separate boxes made %d line(s), want 2 — the "+
+			"opportunity after the first was not passed to the box after it", got)
+	}
+}
