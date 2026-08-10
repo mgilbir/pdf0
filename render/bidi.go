@@ -327,7 +327,142 @@ func (l *layouter) resolveBidi(b *Box, items []inlineItem, p *bidiBuilder) []inl
 		}
 		out = append(out, l.splitByLevel(item, para)...)
 	}
+	insetSides(out)
 	return out
+}
+
+// insetSides is CSS 2.1 §8.6: an inline box's margin, border and padding go on
+// the physical side they are named for, whichever way its content reads.
+//
+// # The rule, and why it is not the direction property
+//
+// §8.6 says it twice, once per direction, and both halves put the left inset on
+// "the leftmost generated box" of the element and the right inset on "the
+// rightmost". What the direction property changes is only which *line box* those
+// two are looked for on when the element is broken across several — the first or
+// the last. On a single line it changes nothing at all.
+//
+// So the question this has to answer is not "what did direction say" but "was
+// this box's content reversed", and only the algorithm knows that. A
+// "direction: rtl" span with the initial "unicode-bidi: normal" is not reversed —
+// the property is inert on an inline box without an embedding, by design, since a
+// box that changed the direction without opening one would reorder text outside
+// itself. Swapping on the property was tried and cost nine clean passes.
+//
+// # How it is done
+//
+// Two things are decided per box, and both are about the box's content rather
+// than about anything declared on it.
+//
+// The first is whether the two items should swap what they hold. They are
+// emitted in logical order with the left inset first; a box whose content
+// resolves to an odd level *throughout* will have that content reversed by the
+// reordering and the two items reversed with it, so their widths are exchanged
+// here. The item that will be drawn last is given the inset that belongs on the
+// right, and the one that will be drawn first the inset that belongs on the
+// left. Nothing else about either item moves, so line breaking still sees the
+// box's leading edge where the box begins.
+//
+// "Throughout" is the strict reading and it is deliberate. A box whose content
+// resolves to more than one level has ends that need not be at its visual edges
+// at all — its leftmost generated box may be neither of them — and §8.6 then
+// asks for something two items cannot express. Guessing from the first item's
+// level is measurably worse: css-text/white-space's tab-bidi-001 has an outer
+// span holding a right-to-left <bdo> followed by left-to-right text, and
+// swapping on the <bdo>'s level put the span's left border three pixels inside
+// where the reference draws it.
+//
+// The second is the level the two items are *reordered* at, which they need
+// because they carry no characters and so the algorithm gave them none. It is
+// the lowest level anything inside the box reached. An embedding raises the
+// level of what is inside it and leaves the box's own boundary outside, so the
+// lowest is the box's own — and both other candidates were tried and are wrong:
+//
+//   - the neighbouring item's level glues the box's edge to whatever run abuts
+//     it, which is the tab-bidi-001 fault again, one border out of place;
+//   - the paragraph's base level detaches the edge from its own content, which
+//     costs bidi-span-003: a purple-bordered <span> of Latin in a
+//     "direction: rtl" div had its opening border thrown to the far end of the
+//     line, so the border drawn round one word enclosed two.
+//
+// # Cost
+//
+// One pass and no allocation beyond the stack of inline boxes currently open.
+// Every question is answered in constant time per box: the counts are subtracted
+// from the running totals at the close, and the minimum is folded into the
+// enclosing box's as each one pops, so no box ever rescans its own content. The
+// stack's depth is the inline nesting, which the HTML parser caps at 256.
+func insetSides(items []inlineItem) {
+	// noLevel is above every level UAX #9 can produce: MaxDepth is 125 and rule
+	// X8 admits one more.
+	const noLevel uint8 = 255
+
+	// open is one inline box whose lead inset has been seen and whose trail
+	// inset has not.
+	type open struct {
+		box  *Box
+		lead int
+		// content and odd are the running counts at the moment the box opened.
+		// Subtracting them at the close gives the box's own.
+		//
+		// They are counts rather than a level and a "have we got one yet" flag
+		// because zero is a real embedding level — the left-to-right one — so a
+		// box that has seen no content and a box whose content is left-to-right
+		// have to stay distinguishable. Counting keeps them apart without a
+		// sentinel: no content is a count of zero, which swaps nothing.
+		content, odd int
+		// min is the lowest level seen inside this box so far, or noLevel.
+		min uint8
+	}
+	var stack []open
+	content, odd := 0, 0
+
+	for i := range items {
+		if items[i].inset {
+			if items[i].insetLead {
+				stack = append(stack, open{
+					box: items[i].box, lead: i,
+					content: content, odd: odd, min: noLevel,
+				})
+				continue
+			}
+			if len(stack) == 0 || stack[len(stack)-1].box != items[i].box {
+				// The pair is emitted together by insetItems and nested by the
+				// recursion that emits it, so this cannot happen. It is checked
+				// because the alternative to skipping is swapping two unrelated
+				// boxes' insets on a document nobody wrote deliberately.
+				continue
+			}
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			// A box's content counts as its parent's too, so the minimum folds
+			// outwards as the stack unwinds rather than being recomputed.
+			if len(stack) > 0 && top.min < stack[len(stack)-1].min {
+				stack[len(stack)-1].min = top.min
+			}
+			if n := content - top.content; n > 0 && odd-top.odd == n {
+				items[top.lead].width, items[i].width =
+					items[i].width, items[top.lead].width
+			}
+			if top.min != noLevel {
+				items[top.lead].insetLevel, items[top.lead].insetLevelKnown = top.min, true
+				items[i].insetLevel, items[i].insetLevelKnown = top.min, true
+			}
+			continue
+		}
+		if items[i].para == nil {
+			// No characters of its own: a float marker, or a run in a paragraph
+			// the algorithm did not resolve. It says nothing about direction.
+			continue
+		}
+		content++
+		if items[i].level&1 == 1 {
+			odd++
+		}
+		if len(stack) > 0 && items[i].level < stack[len(stack)-1].min {
+			stack[len(stack)-1].min = items[i].level
+		}
+	}
 }
 
 // splitByLevel cuts one item where its characters change embedding level.
@@ -471,19 +606,64 @@ func lineVisualOrder(runs []inlineItem) []int {
 	// side the next word would have been on.
 	lineLevels := para.LineLevels(start, end)
 
+	// An item's level, or levelUnset where it has no characters to get one from:
+	// an inline box's own inset, a float marker, the record of an absolutely
+	// positioned box.
+	//
+	// The sentinel is the whole reason this is two passes. Zero is a real
+	// embedding level — the left-to-right one — so an item left at zero because
+	// nothing had filled it in is indistinguishable from one the algorithm put
+	// there, and it lands in the middle of a right-to-left run as an
+	// left-to-right island that the reordering then moves to the wrong end. That
+	// is exactly what happened to the first item on a line: it had no previous
+	// item to copy, so it kept the zero, and a margin at the start of a
+	// right-to-left line was placed at the left of the line instead of beside the
+	// box it belongs to.
+	//
+	// 255 cannot collide: UAX #9 caps an embedding level at MaxDepth + 1.
+	const levelUnset uint8 = 255
+
 	levels := make([]uint8, len(runs))
-	plain := true
 	for i, item := range runs {
 		switch {
-		case item.para != para:
-			// An item with no text of its own — an out-of-flow marker that
-			// reached the line — takes the level of what precedes it, so it
-			// never splits a run.
-			if i > 0 {
-				levels[i] = levels[i-1]
-			}
-		case item.bidiStart-start < len(lineLevels):
+		case item.para == para && item.bidiStart-start < len(lineLevels):
 			levels[i] = lineLevels[item.bidiStart-start]
+		case item.insetLevelKnown:
+			// An inline box's own margin, border and padding: no characters, and
+			// so no level from the algorithm. insetSides worked out the level the
+			// box's edges sit at from what is inside it.
+			levels[i] = item.insetLevel
+		default:
+			levels[i] = levelUnset
+		}
+	}
+
+	// Whatever is left has nothing to say about direction — a float marker, the
+	// record of an absolutely positioned box, an inset whose box put no content
+	// on this line — and takes the level of what precedes it, so that it never
+	// splits a run in two.
+	for i := range runs {
+		if levels[i] != levelUnset {
+			continue
+		}
+		if i > 0 {
+			levels[i] = levels[i-1]
+			continue
+		}
+		// The first item on the line, with nothing before it to copy. Rule L1
+		// gives the paragraph's own embedding level to a line's leading and
+		// trailing separators, and this is that position — so the base level is
+		// what an item with no characters gets, rather than the zero that a
+		// left-to-right paragraph happens to share with it.
+		levels[i] = para.Level
+	}
+
+	plain := true
+	for i := range levels {
+		if levels[i] == levelUnset {
+			// Nothing on the line has a level at all, which can only mean the
+			// line holds no text. There is nothing to reorder.
+			return nil
 		}
 		if levels[i] != levels[0] {
 			plain = false
