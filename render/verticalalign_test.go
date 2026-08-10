@@ -39,6 +39,27 @@ func vaLine(t *testing.T, set FontSet, htmlSrc, cssSrc string) LineFragment {
 	return line
 }
 
+// vaPaint lays the same document out and returns its display list, so that a
+// test can assert what was drawn as well as what was decided.
+func vaPaint(t *testing.T, set FontSet, htmlSrc, cssSrc string) []Op {
+	t.Helper()
+	built := Build(Input{HTML: htmlSrc, CSS: []Stylesheet{{Source: noDefaults + cssSrc}}})
+	w, _ := style.FromPx(600)
+	h, _ := style.FromPx(600)
+	return Paint(Layout(built.Root, Size{W: w, H: h}, set, NewRecorder(nil)))
+}
+
+// textBaselines is where each drawn run's baseline sits, keyed by what it says.
+func textBaselines(ops []Op) map[string]float64 {
+	out := map[string]float64{}
+	for _, op := range ops {
+		if v, ok := op.(DrawText); ok {
+			out[v.Text] = v.At.Y.Px()
+		}
+	}
+	return out
+}
+
 // shiftOf is the baseline shift of the run reading want.
 func shiftOf(t *testing.T, line LineFragment, want string) float64 {
 	t.Helper()
@@ -270,6 +291,13 @@ func TestVerticalAlignTopAndBottomReachTheLineBox(t *testing.T) {
 
 // TestVerticalAlignAccumulatesAndKeywordsReplace is how §10.8.1's values compose,
 // which they must because the property aligns each box against its *parent*.
+//
+// The second half of it guards a rule written down in two places — vAlignFor
+// clears the accumulated displacement when a keyword replaces it, and
+// alignedExtents does not read the displacement for a keyword anyway. Neither is
+// enough to fail this on its own, which was measured: planted separately, each
+// leaves every test in the package green. Planted together they are caught here,
+// which is what says the rule is guarded rather than merely written twice.
 func TestVerticalAlignAccumulatesAndKeywordsReplace(t *testing.T) {
 	set := loadAhem(t)
 	// Two raises nest and add: 10 and then 5 is 15 off the block's baseline.
@@ -384,6 +412,27 @@ func TestADecorationIsNotMovedByADescendantsAlignment(t *testing.T) {
 	}
 	if got := runAt(t, line.Runs, "a").Decorations; len(got) != 0 {
 		t.Errorf("the text beside the span carries %d decorations, want none", len(got))
+	}
+
+	// And the same thing on the page, because the shift is carried on the
+	// decoration and *applied* in the painter, and either of them alone can put
+	// the band in the wrong place. The div underlines both words; the two bands
+	// must be one straight line, which is what §16.3.1 asserts, and the raised
+	// word's glyphs must be 30px above the other's, which is what says the two
+	// numbers were kept apart rather than both set to zero.
+	ops := vaPaint(t, set, `<div id="d">a<span id="s">x</span></div>`, css)
+	bands := inkOf(ops, style.RGBA{A: 1})
+	if len(bands) != 2 {
+		t.Fatalf("the page holds %d underline bands, want 2", len(bands))
+	}
+	if bands[0].Y != bands[1].Y {
+		t.Errorf("the two halves of one underline are drawn at %vpx and %vpx; §16.3.1 "+
+			"rules it across the whole of the box that declared it, so it is one "+
+			"straight line", bands[0].Y.Px(), bands[1].Y.Px())
+	}
+	at := textBaselines(ops)
+	if got := at["a"] - at["x"]; got != 30 {
+		t.Errorf("the raised word's baseline is %vpx above the other's, want 30", got)
 	}
 }
 
