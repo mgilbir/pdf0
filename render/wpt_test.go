@@ -487,17 +487,29 @@ const wptEnv = "WPT_TESTS"
 // is a measurement of its own rather than a tidy-up, and it is reported here
 // rather than taken.
 //
-// The abspos-overflow family is worth recording for what it turned out not to
-// be. Twelve tests in css/CSS2/positioning are written about §11.1.1's rule
-// that an absolutely positioned box escapes an ancestor's overflow, ten of them
-// fail, and the rule is implemented — but dumping their display lists shows
-// every one of the ten already correct to the layout unit. What they have in
-// common is a "FAIL" run that a later opaque fill completely covers: this
-// comparison resolves occlusion between *fills* and not between a fill and a
-// run of text, so it counts letters neither document shows. That is a gap in
-// the oracle rather than in the engine, it is nothing to do with clipping, and
-// it is not fixed here.
-const wptCleanPassBaseline = 3979
+// Buried text took it from 3979 to 4007, and this is the sixth time this file
+// has recorded a block of failures that were about the comparison rather than
+// about the engine. Not a line of layout changed, failures fell from 914 to
+// 886, and 28 tests stopped failing with none the other way.
+//
+// It is the abspos-overflow family, and it is worth recording for what it
+// turned out not to be. Twelve tests in css/CSS2/positioning are written about
+// §11.1.1's rule that an absolutely positioned box escapes an ancestor's
+// overflow, ten of them were failing, and the rule was implemented — but
+// dumping their display lists showed every one of the ten already correct to
+// the layout unit. What they have in common is a red "FAIL" that an opaque
+// green box is painted over: this comparison resolved occlusion between
+// *fills* and never between a fill and a run of text, so it was counting
+// letters that neither document shows. Eighteen more tests elsewhere are the
+// same shape.
+//
+// The rule that fixes it is exact and narrow — a single opaque mark painted
+// after the run and containing the whole of its ink — and picture_test.go says
+// what it deliberately does not do. That the *clipping* work above sits between
+// this note and the tests it was sent to fix is the whole lesson: the brief
+// said those tests needed §11.1.1, and they needed the oracle to be able to see
+// a covered word.
+const wptCleanPassBaseline = 4007
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
