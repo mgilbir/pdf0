@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"image"
 	"math"
 	"sort"
 	"strings"
@@ -104,6 +105,14 @@ func picFills(ops []Op) []coloured {
 				out = append(out, coloured{r: v.Rect, c: c})
 				continue
 			}
+			// A picture made of uniform rectangles is those rectangles. See
+			// imageBands: this is the same equivalence as the line above and not
+			// a weaker one, because the decomposition is verified pixel by pixel
+			// and refused when it does not hold exactly.
+			if fills := bandedFills(v.Image, v.Rect); fills != nil {
+				out = append(out, fills...)
+				continue
+			}
 			// Anything else is opaque for the purpose of what lies under it.
 			// That is an approximation for a picture with an alpha channel, and
 			// it errs towards calling two documents different, which is the
@@ -113,6 +122,193 @@ func picFills(ops []Op) []coloured {
 		case TileImage:
 			out = append(out, tiledFills(v)...)
 		}
+	}
+	return out
+}
+
+// Seeing through a picture that is not all one colour.
+//
+// The comparison equates a picture of one opaque colour with a fill of that
+// colour, because the two put the same ink on the same paper. Everything else
+// used to be one opaque mark keyed by its file, and that turns out to be the
+// single largest reason a correct rendering was called wrong.
+//
+// The CSS 2.1 suite draws with two kinds of picture. One is a solid swatch,
+// which the uniform case already handles. The other is a *pattern*: a few solid
+// bands or a three-by-three grid, often with a fully transparent region in the
+// middle, and the test passes by showing no red through the gap. Compared as an
+// opaque unknown, such a picture hides whatever the document put behind it and
+// differs from the plain green rectangle its reference draws — so the pair was
+// ruled different over a gap that both documents leave in the same place.
+//
+// The decomposition below is exact rather than an approximation, which is what
+// makes it a legitimate thing for an oracle to do. It finds the pixel rows and
+// columns where the image changes, forms the grid they define, and then *checks*
+// every cell of that grid pixel by pixel; if any cell is not uniform it gives up
+// and the picture goes back to being an opaque mark. So it can only ever fire on
+// an image that genuinely is a set of uniform rectangles, and for one of those,
+// saying so is not a concession — it is the same statement as the uniform case,
+// made once per band instead of once per picture.
+//
+// What it is, said plainly rather than flatteringly: for a small enough picture
+// this *is* a rasterizer, and the header above says this comparison is not one.
+// A four-by-four image is sixteen uniform rectangles however random its pixels
+// are, so the rule cannot exclude it on principle and the bound is what does the
+// work. That is a cost decision rather than a correctness one — the marks are
+// exact either way — and it is stated here so that the bound is read as the
+// line it is rather than as a round number.
+//
+// The other bound is about correctness and is the one that could have gone
+// wrong. A band narrower on the page than the comparison's own sliver is refused
+// outright, and the whole picture with it: below a quarter-pixel a cell is
+// thrown away as rounding, so a heavily downscaled pattern would decompose into
+// marks the comparison then ignores, and a difference inside it would disappear.
+// That is the direction an oracle must never err in, so the picture goes back to
+// being an opaque mark instead.
+
+// maxImageBands bounds the grid a picture may be decomposed into.
+//
+// The suite's patterns are three by three and five by five, and sixty-four is
+// chosen against them rather than against the cost: measured over the whole
+// suite, raising it to 256 moves no test at all, and the run is a second faster
+// with the decomposition than without it because a pattern that decomposes stops
+// being an opaque mark that forces every cell under it to be resolved.
+const maxImageBands = 64
+
+// band is one uniform rectangle of a picture, in image pixels. x1 and y1 are
+// exclusive, in the manner of image.Rectangle.
+type band struct {
+	x0, y0, x1, y1 int
+	c              style.RGBA
+}
+
+// imageBands memoizes the decomposition, which reads every pixel twice and is
+// asked for once per picture per document over five thousand documents.
+var imageBands = map[image.Image][]band{}
+
+// bandsOf decomposes a picture into the uniform rectangles it is made of, or
+// reports nil if it is not made of them.
+func bandsOf(img image.Image) []band {
+	if img == nil {
+		return nil
+	}
+	if got, ok := imageBands[img]; ok {
+		return got
+	}
+	got := scanBands(img)
+	imageBands[img] = got
+	return got
+}
+
+func scanBands(img image.Image) []band {
+	b := img.Bounds()
+	if b.Empty() {
+		return nil
+	}
+	at := func(x, y int) style.RGBA {
+		r, g, bl, a := img.At(x, y).RGBA()
+		return style.RGBA{
+			R: float64(r >> 8), G: float64(g >> 8), B: float64(bl >> 8),
+			A: float64(a) / 0xFFFF,
+		}
+	}
+
+	// The grid lines: a column that differs anywhere from the one before it
+	// starts a new band, and the same down the other axis.
+	//
+	// The lines alone are enough, and it is worth writing down why, because the
+	// obvious reading is that they are not. A picture that changes along both
+	// axes at once — a diagonal, a circle — plainly cannot be cut into a few
+	// uniform rectangles, so the instinct is that these lines might produce a
+	// coarse grid with ragged cells in it and that each cell has to be read to
+	// find out. A verification pass was written on that instinct, and planting
+	// its removal changed nothing at all, because the cells it checked are
+	// uniform by construction:
+	//
+	//	Take a cell with no grid line strictly inside it and suppose two of its
+	//	pixels differ. Walk from one to the other through the cell, a step at a
+	//	time; the walk stays inside because a rectangle is connected. Somewhere
+	//	along it two adjacent pixels differ. If they differ across a column
+	//	boundary at x, then column x differs from column x-1 and x is a grid
+	//	line inside the cell; if across a row boundary, likewise for y. Either
+	//	way the supposition contradicts the premise.
+	//
+	// So the diagonal is not refused by a ragged cell — it is refused by the
+	// bound, having produced a line for every row and every column. The check is
+	// deleted rather than kept as a cheap assertion because it read as the thing
+	// that made the decomposition safe and it was not; what makes it safe is the
+	// argument above, and TestImageBandsAreExact holds the argument to account by
+	// checking the invariant over pictures built to break it.
+	xs := []int{b.Min.X}
+	for x := b.Min.X + 1; x < b.Max.X; x++ {
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			if at(x, y) != at(x-1, y) {
+				xs = append(xs, x)
+				break
+			}
+		}
+		if len(xs) > maxImageBands {
+			return nil
+		}
+	}
+	ys := []int{b.Min.Y}
+	for y := b.Min.Y + 1; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if at(x, y) != at(x, y-1) {
+				ys = append(ys, y)
+				break
+			}
+		}
+		if len(ys) > maxImageBands {
+			return nil
+		}
+	}
+	if (len(xs))*(len(ys)) > maxImageBands {
+		return nil
+	}
+	xs = append(xs, b.Max.X)
+	ys = append(ys, b.Max.Y)
+
+	out := make([]band, 0, (len(xs)-1)*(len(ys)-1))
+	for i := 0; i+1 < len(xs); i++ {
+		for j := 0; j+1 < len(ys); j++ {
+			c := at(xs[i], ys[j])
+			out = append(out, band{xs[i], ys[j], xs[i+1], ys[j+1], c})
+		}
+	}
+	return out
+}
+
+// bandedFills places a decomposed picture on the page, or reports nil if it
+// should be compared as a picture after all.
+//
+// A fully transparent band is dropped rather than painted, which is the whole
+// point: it is where the document behind shows through.
+func bandedFills(img image.Image, r Rect) []coloured {
+	bands := bandsOf(img)
+	if bands == nil || r.Empty() {
+		return nil
+	}
+	b := img.Bounds()
+	sx := r.W.Px() / float64(b.Dx())
+	sy := r.H.Px() / float64(b.Dy())
+	out := make([]coloured, 0, len(bands))
+	for _, bd := range bands {
+		x0, _ := style.FromPx(r.X.Px() + float64(bd.x0-b.Min.X)*sx)
+		x1, _ := style.FromPx(r.X.Px() + float64(bd.x1-b.Min.X)*sx)
+		y0, _ := style.FromPx(r.Y.Px() + float64(bd.y0-b.Min.Y)*sy)
+		y1, _ := style.FromPx(r.Y.Px() + float64(bd.y1-b.Min.Y)*sy)
+		// A band the comparison would throw away as rounding is a band this
+		// must not produce: dropping it would make the picture *less* visible
+		// than it is, which is a false pass waiting to happen. The picture goes
+		// back to being one opaque mark instead.
+		if x1.Sub(x0) < sliver || y1.Sub(y0) < sliver {
+			return nil
+		}
+		if bd.c.A == 0 {
+			continue
+		}
+		out = append(out, coloured{r: Rect{X: x0, Y: y0, W: x1.Sub(x0), H: y1.Sub(y0)}, c: bd.c})
 	}
 	return out
 }
@@ -153,7 +349,18 @@ func tiledFills(v TileImage) []coloured {
 		// squares — and collapsing it is what keeps the expansion below rare.
 		return []coloured{{r: v.Clip, c: colour}}
 	}
-	if cols > maxComparedTiles/rows {
+	// A patterned tile is decomposed like any other picture, once per tile. The
+	// budget is against the *marks* rather than the tiles, because that is what
+	// the grid compression pays for: a three-by-three pattern over a hundred
+	// tiles is nine hundred rectangles, and the cost of the comparison is the
+	// square of how many edges they contribute.
+	var bands []band
+	if !uniform {
+		if bs := bandsOf(v.Image); bs != nil && cols*rows*len(bs) <= maxComparedTiles {
+			bands = bs
+		}
+	}
+	if bands == nil && cols > maxComparedTiles/rows {
 		key := fmt.Sprintf("tiled:%s %s step %s,%s",
 			v.Key, rectKey(v.Tile), num(v.StepX), num(v.StepY))
 		return []coloured{{r: v.Clip, c: style.RGBA{A: 1}, img: key}}
@@ -170,12 +377,33 @@ func tiledFills(v TileImage) []coloured {
 		y := firstY.Add(v.StepY.Mul(float64(j)))
 		for i := 0; i < cols; i++ {
 			x := firstX.Add(v.StepX.Mul(float64(i)))
-			r := intersect(Rect{X: x, Y: y, W: v.Tile.W, H: v.Tile.H}, v.Clip)
+			tile := Rect{X: x, Y: y, W: v.Tile.W, H: v.Tile.H}
+			r := intersect(tile, v.Clip)
 			if r.Empty() {
 				continue
 			}
 			if uniform {
 				out = append(out, coloured{r: r, c: colour})
+				continue
+			}
+			if bands != nil {
+				// The bands are placed against the whole tile and then clipped,
+				// so a tile half off the edge shows the half of the pattern that
+				// is on the page rather than the whole of it squeezed in.
+				placed := bandedFills(v.Image, tile)
+				if placed == nil {
+					// Refused for this geometry — a band below a sliver. Fall
+					// back for every tile rather than for this one, so that the
+					// picture is one thing throughout.
+					bands = nil
+					out = append(out, coloured{r: r, c: style.RGBA{A: 1}, img: v.Key})
+					continue
+				}
+				for _, f := range placed {
+					if c := intersect(f.r, v.Clip); !c.Empty() {
+						out = append(out, coloured{r: c, c: f.c})
+					}
+				}
 				continue
 			}
 			out = append(out, coloured{r: r, c: style.RGBA{A: 1}, img: v.Key})

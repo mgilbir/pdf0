@@ -304,7 +304,74 @@ const wptEnv = "WPT_TESTS"
 // where a hanging space went; 7 in css/CSS2/text; and 4 in css/CSS2/linebox,
 // which is the directory that tests §8.4's rule that an inline box's vertical
 // padding and border bleed over the lines around them without moving any of them.
-const wptCleanPassBaseline = 3551
+// §10.5's percentage height took it from 3551 to 3610, and for once the two
+// effects do not need separating: not a finding was added or removed, so the
+// whole of the movement is layout. Failures fell from 1349 to 1290, counted by
+// name over the whole suite rather than netted — 59 tests stopped failing and
+// none started.
+//
+// What it was is worth recording, because the headline was wrong again and this
+// time the failing document was the *reference*. The four largest directories
+// left in the suite are §9's and §10's, and grouping their 365 failures by the
+// shape of the display-list difference rather than by filename put 55 of them on
+// one line of arithmetic: a percentage height was refused whatever it was a
+// percentage of. The suite's references say "html, body, div { height: 100% }"
+// and then position a background against the bottom of that box, which is how a
+// reftest puts an expected picture at the bottom of the page — so the *test*
+// document drew its green square at the bottom, correctly, and the reference
+// drew its own at the top of a box as tall as one line of text.
+//
+// The condition §10.5 attaches to the rule is real and is still enforced; what
+// was wrong was reading the condition as the rule. See percentheight_test.go.
+// A wrap opportunity around an atomic inline took it from 3610 to 3624, and
+// again the whole of it is layout: no finding moved, failures fell from 1290 to
+// 1276, and counted by name 15 tests stopped failing and one started.
+//
+// It is the same lesson as the percentage height above and was found the same
+// way. Eleven failures in css/CSS2/positioning shared one display-list
+// signature, and in every one of them the document laying out wrongly was the
+// reference: it draws a two-row expected picture as two full-width images with
+// no space between them, and this engine set them side by side because an atomic
+// inline offered no break opportunity of its own. UAX #14's LB20 gives one on
+// both sides, and LB7 takes back the one a following space would have taken.
+//
+// The test that started failing is understood and is about the page rather than
+// the engine. css/CSS2/values/units-002 needs a line 700px wide and this page's
+// content box is 626.52; both documents used to overflow that on one line and
+// agree, and now both wrap — at different line heights, because one line holds
+// 250px text and the other 200px images. The suite is written for an 800px
+// viewport, and this is the first test to notice.
+// Seeing through a patterned picture took it from 3624 to 3721, and none of it
+// is layout. This is the fifth time this file has recorded a large block of
+// failures that were about the comparison rather than about the engine, and it
+// is the largest since the rectangle glyphs: 99 tests stopped failing, two
+// started, and not one line of the engine changed.
+//
+// What it was: the suite draws with two kinds of picture. A solid swatch, which
+// the uniform-colour equivalence already handled — and a *pattern*, three or
+// five solid bands with a fully transparent region in it, which is how a test
+// says "nothing of mine should show here, and the page behind should". Compared
+// as one opaque mark keyed by its file, such a picture hid whatever the document
+// had drawn behind it, so a test drawing a green box under a striped overlay
+// differed from a reference drawing the same green box and two red bars. Twelve
+// of the css/CSS2/margin-padding-clear margin-collapse family are exactly that,
+// and every one had geometry correct to the layout unit.
+//
+// The decomposition is exact and picture_test.go argues why. What is worth
+// recording here is the shape of the investigation rather than the fix, because
+// it is the same shape as the two commits before it: the four largest failing
+// directories were grouped by the *display-list difference* rather than by
+// filename, and the three clusters that came out of it were a percentage height,
+// a wrap opportunity, and this — of which only the first two were about layout.
+//
+// The two that started failing are honest and are named for the usual reason.
+// background-root-008 and -009 tile a 17px pattern down the left edge, and the
+// test and its reference now disagree by one pixel about where the tiling
+// starts: 19 against 18. That is a real difference in where this engine anchors
+// a background propagated from the body to the canvas, it was there before, and
+// the old comparison could not see it because both documents drew the same
+// opaque unknown. It is reported rather than fixed here.
+const wptCleanPassBaseline = 3721
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -901,10 +968,32 @@ func TestWPTOracleHasTeeth(t *testing.T) {
 	if pictureEqual([]Op{DrawImage{Rect: rect, Image: translucent, Key: "k"}}, dark, clip) {
 		t.Error("a half-transparent image compared equal to the opaque fill it premultiplies to")
 	}
-	// And two different pictures at the same place are still different.
+	// Two different pictures at the same place are still different. The images
+	// here are diagonals, which is deliberate: a diagonal changes along both
+	// axes at once, so it is not a set of uniform rectangles and bandsOf refuses
+	// it — which is what leaves the key as the thing being compared, and is the
+	// path this case is for. A pair of *patterned* images is covered next door
+	// in TestImageBandsAreExact, where the answer is different and is meant to
+	// be.
+	diagonal := func(c color.NRGBA) image.Image {
+		img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
+		for y := 0; y < 32; y++ {
+			for x := 0; x < 32; x++ {
+				if x == y {
+					img.SetNRGBA(x, y, c)
+					continue
+				}
+				img.SetNRGBA(x, y, color.NRGBA{A: 255})
+			}
+		}
+		return img
+	}
+	if bandsOf(diagonal(color.NRGBA{R: 255, A: 255})) != nil {
+		t.Error("a diagonal was decomposed into uniform rectangles; it is not made of them")
+	}
 	if pictureEqual(
-		[]Op{DrawImage{Rect: rect, Image: speckled, Key: "one"}},
-		[]Op{DrawImage{Rect: rect, Image: speckled, Key: "two"}}, clip) {
+		[]Op{DrawImage{Rect: rect, Image: diagonal(color.NRGBA{R: 255, A: 255}), Key: "one"}},
+		[]Op{DrawImage{Rect: rect, Image: diagonal(color.NRGBA{B: 255, A: 255}), Key: "two"}}, clip) {
 		t.Error("two different image sources compared equal")
 	}
 
