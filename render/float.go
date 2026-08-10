@@ -107,11 +107,14 @@ type placedFloat struct {
 
 // floatContext is the set of floats in one block formatting context.
 //
-// It is a flat slice rather than an interval tree because the queries are all
-// linear scans over a list that is short in every real document — a page with a
-// hundred floats on it is not a page — and because a scan has no ordering
-// invariant to get wrong. If it ever needs to be faster, the shape to reach for
-// is the pair of "float bottom" lists browsers keep, one per side.
+// The list of rectangles is the whole of the state; everything else is derived
+// from it. It was once *all* of it, and every query was a scan — which was a
+// perfectly good decision until it was measured, because a page with a hundred
+// floats on it is not a page but a document with a hundred thousand is a denial
+// of service. What answers the queries now is floatindex.go, which keeps the
+// staircase of band edges and the running maxima that the scans used to
+// recompute. The list stays the source of truth: the index is caught up to it
+// lazily, so a context built from a literal list still answers correctly.
 type floatContext struct {
 	boxes []placedFloat
 
@@ -123,11 +126,36 @@ type floatContext struct {
 	// could have reached the geometry. A subtree that never touched a float can
 	// have its floats translated; one that read them has to be laid out again.
 	consulted int
+
+	idx floatIndex
+}
+
+// sync catches the index up with the list of floats.
+//
+// It runs before every query and — this is the part that matters — before place
+// appends, which is what keeps a truncation from being mistaken for the floats
+// that replaced it. Nothing else may append, so no rewrite of the list can get
+// past this unnoticed: it is either shorter than the index, or the index is a
+// prefix of it.
+func (fc *floatContext) sync() {
+	if fc.idx.n == len(fc.boxes) {
+		return
+	}
+	fc.idx.rewind(len(fc.boxes))
+	for fc.idx.n < len(fc.boxes) {
+		fc.idx.absorb(fc.boxes[fc.idx.n])
+	}
 }
 
 // mark returns a position in the list, so that the floats added after it can be
 // found again.
 func (fc *floatContext) mark() int { return len(fc.boxes) }
+
+// truncate discards every float added since a mark, which is what a subtree that
+// has to be laid out again leaves behind.
+func (fc *floatContext) truncate(mark int) {
+	fc.boxes = fc.boxes[:mark]
+}
 
 // shift moves every float added since a mark.
 //
@@ -135,7 +163,13 @@ func (fc *floatContext) mark() int { return len(fc.boxes) }
 // only *added* floats and never read any, its whole contribution is wrong by one
 // constant offset and moving it is exactly equivalent to having laid it out at
 // the right place.
+//
+// The rewind is not an optimisation to be skipped. The list is being rewritten
+// in place and its length does not change, so sync cannot see that anything
+// happened; taking the moved floats out of the index here is what makes them be
+// put back at their new positions.
 func (fc *floatContext) shift(from int, dy style.Unit) {
+	fc.idx.rewind(from)
 	for i := from; i < len(fc.boxes); i++ {
 		fc.boxes[i].rect.Y = fc.boxes[i].rect.Y.Add(dy)
 	}
@@ -168,20 +202,13 @@ func (fc *floatContext) bandAt(y, lo, hi style.Unit) (left, right style.Unit) {
 // and it is answered as such rather than as an empty intersection: a float that
 // begins exactly at y obstructs a query at y.
 func (fc *floatContext) bandOver(top, bottom, lo, hi style.Unit) (left, right style.Unit) {
+	fc.sync()
 	left, right = lo, hi
-	for _, f := range fc.boxes {
-		if f.rect.H <= 0 || !spansRange(f.rect.Y, f.rect.Bottom(), top, bottom) {
-			continue
-		}
-		if f.side == FloatLeft {
-			if edge := f.rect.Right(); edge > left {
-				left = edge
-			}
-			continue
-		}
-		if f.rect.X < right {
-			right = f.rect.X
-		}
+	if edge, ok := bandEdge(&fc.idx.left, top, bottom); ok && edge > left {
+		left = edge
+	}
+	if edge, ok := bandEdge(&fc.idx.right, top, bottom); ok && edge < right {
+		right = edge
 	}
 	if right < left {
 		// Floats from both sides that overlap leave no room at all rather than
@@ -194,13 +221,17 @@ func (fc *floatContext) bandOver(top, bottom, lo, hi style.Unit) (left, right st
 	return left, right
 }
 
-// spansRange reports whether [a0,a1) meets [b0,b1), where an empty second range
-// is the point b0.
-func spansRange(a0, a1, b0, b1 style.Unit) bool {
-	if b1 <= b0 {
-		return a0 <= b0 && b0 < a1
+// bandEdge asks a staircase for the winning edge over [top, bottom), where an
+// empty range is the point top.
+//
+// The two cases are the two halves of the question bandOver documents: a float
+// spans a point when it begins at or above it and ends below it, and it spans a
+// range when the two ranges meet at all.
+func bandEdge(s *stair, top, bottom style.Unit) (style.Unit, bool) {
+	if bottom <= top {
+		return s.at(top)
 	}
-	return a0 < b1 && a1 > b0
+	return s.over(top, bottom)
 }
 
 // overlaps reports whether a rectangle meets the margin box of any float.
@@ -221,6 +252,17 @@ func spansRange(a0, a1, b0, b1 style.Unit) bool {
 //
 // Touching is not overlapping: a box that begins exactly at a float's right edge
 // is beside it, which is the whole point of the band.
+//
+// This is the one query still answered by looking at every float, and it is
+// where the remaining quadratic lives: a document that alternates a float with a
+// block that establishes a formatting context and declares a width asks it once
+// per such block, and sixty-four thousand of each pair spend four seconds here —
+// three quarters of the layout, measured. It is left because neither staircase
+// decides it. Both summarise one edge of the floats over a range of y, and this
+// is a rectangle meeting a rectangle: the left float with the greatest right
+// edge over a range need not be the one whose own left edge reaches into the
+// box. What it wants is a stabbing query in two dimensions, which is a different
+// structure and not a variation on this one.
 func (fc *floatContext) overlaps(r Rect) bool {
 	if r.W <= 0 || r.H <= 0 {
 		// A box with no extent covers nothing, so nothing can be under it. A
@@ -248,16 +290,8 @@ func (fc *floatContext) overlaps(r Rect) bool {
 // float bottoms. Searching by increments would be both slower and, at a fixed
 // point scale of a 64th of a pixel, effectively unbounded.
 func (fc *floatContext) nextBottomBelow(y style.Unit) (style.Unit, bool) {
-	best, found := style.Unit(0), false
-	for _, f := range fc.boxes {
-		if f.rect.H <= 0 {
-			continue
-		}
-		if b := f.rect.Bottom(); b > y && (!found || b < best) {
-			best, found = b, true
-		}
-	}
-	return best, found
+	fc.sync()
+	return firstAbove(fc.idx.bottoms, y)
 }
 
 // place positions a float and records it, returning its margin box.
@@ -273,6 +307,7 @@ func (fc *floatContext) nextBottomBelow(y style.Unit) (style.Unit, bool) {
 // to 9 are here: as far up as possible, then as far to the chosen side as
 // possible, and a float that cannot fit beside another goes below it.
 func (fc *floatContext) place(size Size, side FloatSide, top, lo, hi style.Unit) Rect {
+	fc.sync()
 	y := top
 	// Rule 5, which is the one that stops floats reordering: a float may not
 	// start higher than any float declared before it. Without it a narrow float
@@ -280,10 +315,8 @@ func (fc *floatContext) place(size Size, side FloatSide, top, lo, hi style.Unit)
 	// the page shows them in the opposite order to the markup — and it looks
 	// deliberate, because the result is a perfectly tidy arrangement of the
 	// wrong boxes.
-	for _, f := range fc.boxes {
-		if f.rect.Y > y {
-			y = f.rect.Y
-		}
+	if n := fc.idx.n; n > 0 && fc.idx.marks[n-1].topMax > y {
+		y = fc.idx.marks[n-1].topMax
 	}
 	for {
 		left, right := fc.bandAt(y, lo, hi)
@@ -584,13 +617,17 @@ func (fc *floatContext) clearance(clear ClearSide) style.Unit {
 	if clear == ClearNone {
 		return 0
 	}
+	fc.sync()
 	var lowest style.Unit
-	for _, f := range fc.boxes {
-		if !clear.clears(f.side) {
-			continue
-		}
-		if b := f.rect.Bottom(); b > lowest {
-			lowest = b
+	if n := fc.idx.n; n > 0 {
+		a := fc.idx.marks[n-1]
+		switch clear {
+		case ClearLeft:
+			lowest = a.bottomLeft
+		case ClearRight:
+			lowest = a.bottomRight
+		default:
+			lowest = a.bottomAll
 		}
 	}
 	if lowest > 0 {
@@ -607,13 +644,11 @@ func (fc *floatContext) clearance(clear ClearSide) style.Unit {
 // not do this, and the difference between the two is the whole of why the idiom
 // exists.
 func (fc *floatContext) bottom() style.Unit {
-	var lowest style.Unit
-	for _, f := range fc.boxes {
-		if b := f.rect.Bottom(); b > lowest {
-			lowest = b
-		}
+	fc.sync()
+	if n := fc.idx.n; n > 0 {
+		return fc.idx.marks[n-1].bottomAll
 	}
-	return lowest
+	return 0
 }
 
 // flow is where a step of layout sits inside a block formatting context.
