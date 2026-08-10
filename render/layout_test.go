@@ -244,6 +244,58 @@ func TestTheRootElementsMarginsDoNotCollapse(t *testing.T) {
 	px(t, "the root's height", root.BorderRect.H, 40)
 }
 
+// TestAMinHeightSendsACollapsedRunOutOfTheTop pins the sentence CSS 2.2 added to
+// §8.3.1 over 2.1:
+//
+//	If the top margin of a box with non-zero computed 'min-height' and 'auto'
+//	computed 'height' collapses with the bottom margin of its last in-flow
+//	child, then the child's bottom margin does not collapse with the parent's
+//	bottom margin.
+//
+// A min-height is the only thing that lets the question be asked. Without one
+// the parent would collapse through itself and the margin would be above and
+// below it alike; with one the parent has a height, and the run has to leave by
+// one edge or the other.
+//
+// The arithmetic. #p has no border, no padding, no height and a 50px min-height;
+// its only child is empty with a 50px bottom margin, so the child collapses
+// through and the run reaching #p's edges is 50px. #c has a 1px top border, so
+// nothing escapes it and everything below is measured from its content top:
+//
+//   - #p's border box starts 50px down, at y = 1 + 50 = 51;
+//   - #p is 50px tall, its min-height, so #s follows at y = 101;
+//   - #c's content is 50 + 50 + 50 = 150px tall.
+//
+// Send the run out of the bottom instead and #p stays at y = 1 with the 50px
+// under it: the same total height, and the white square half a square high. That
+// is margin-collapse-min-height-002 in the suite exactly.
+func TestAMinHeightSendsACollapsedRunOutOfTheTop(t *testing.T) {
+	css := noDefaults + `
+	#c { border-top-style: solid; border-top-width: 1px }
+	#p { min-height: 50px }
+	#k { margin-bottom: 50px }
+	#s { height: 50px }`
+	root := layoutOf(t, 1000,
+		`<div id="c"><div id="p"><div id="k"></div></div><div id="s"></div></div>`, css)
+
+	px(t, "#p's top", find(t, root, "p").BorderRect.Y, 51)
+	px(t, "#p's height", find(t, root, "p").BorderRect.H, 50)
+	px(t, "#s's top", find(t, root, "s").BorderRect.Y, 101)
+	px(t, "#c's height", find(t, root, "c").BorderRect.H, 151)
+
+	// The half that has to keep working, and the reason the order rather than
+	// the branch is the fix: with something placed in it, the parent's trailing
+	// margin still leaves through the bottom and collapses with the sibling's.
+	css = noDefaults + `
+	#p { min-height: 10px }
+	#k { height: 10px; margin-bottom: 50px }
+	#s { height: 50px }`
+	root = layoutOf(t, 1000,
+		`<div id="p"><div id="k"></div></div><div id="s"></div>`, css)
+	px(t, "#p's height with content", find(t, root, "p").BorderRect.H, 10)
+	px(t, "#s's top after a hoisted bottom margin", find(t, root, "s").BorderRect.Y, 60)
+}
+
 // TestCollapseIsNotASumOrAMaximum tests the rule directly, since the cases above
 // reach it through layout and a wrong answer there could come from elsewhere.
 func TestCollapseIsNotASumOrAMaximum(t *testing.T) {

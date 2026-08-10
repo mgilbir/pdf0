@@ -889,18 +889,40 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		placed = true
 	}
 
+	// The top edge is served first, and the order is the rule rather than a
+	// detail of the code.
+	//
+	// When every child collapsed through, nothing was ever committed and the
+	// whole run belongs outside — and it leaves through the *top*, because that
+	// is the edge it is adjoining: the first child's top margin is adjoining the
+	// parent's, and the run reached the bottom only by collapsing through every
+	// child on the way. CSS 2.2 §8.3.1 says what follows, in the sentence it
+	// added over 2.1:
+	//
+	//   If the top margin of a box with non-zero computed 'min-height' and
+	//   'auto' computed 'height' collapses with the bottom margin of its last
+	//   in-flow child, then the child's bottom margin does not collapse with the
+	//   parent's bottom margin.
+	//
+	// which is exactly this box: a min-height is what keeps the parent from
+	// collapsing through itself, and so the only reason the question can be
+	// asked at all. With the bottom served first the run left through the bottom
+	// and the top got nothing, so the parent stayed where it was and the margin
+	// appeared under it — margin-collapse-min-height-002 in the suite, where the
+	// white square lands half a square high and the red the reference covers is
+	// left showing.
+	//
+	// Nothing else can reach this: both edges open with nothing placed means no
+	// border, no padding, no declared height and no content, so the box's height
+	// is its min-height, and a min-height of zero would have made it collapse
+	// through before this line was reached.
+	if topOpen && !hoisted {
+		hoistTop = collapse(hoistTop, pending)
+		pending = 0
+	}
 	if bottomOpen {
 		// The bottom edge is open too, so the trailing margin belongs outside.
 		hoistBottom = pending
-		pending = 0
-	}
-	if topOpen && !hoisted {
-		// Every child collapsed through, so nothing was ever committed and the
-		// whole run belongs outside.
-		hoistTop = collapse(hoistTop, pending)
-		if bottomOpen {
-			hoistBottom = collapse(hoistBottom, pending)
-		}
 		pending = 0
 	}
 	return y.Add(pending), hoistTop, hoistBottom, placed
