@@ -96,12 +96,13 @@ func TestContentAttr(t *testing.T) {
 // page that still looks finished.
 func TestUnproducibleContentIsReported(t *testing.T) {
 	cases := map[string]string{
-		// counter() and counters() are produced now and so are not here; a
-		// counter function with no name is still unproducible, and is the case
-		// that keeps this covering the counter path at all.
+		// counter(), counters() and the quote keywords are produced now and so
+		// are not here; a counter function with no name is still unproducible,
+		// and is the case that keeps this covering the counter path at all.
 		`p::before { content: counter() }`:     "counter",
-		`p::before { content: open-quote }`:    "quote",
 		`p::before { content: url(mark.png) }`: "image",
+		// An identifier that is not one of the keywords the property defines.
+		`p::before { content: elephant }`: "elephant",
 	}
 	for sheet, want := range cases {
 		got := build(t, `<p>x</p>`, sheet)

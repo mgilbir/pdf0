@@ -603,7 +603,13 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// whether or not any cell has content in it.
 		return l.tableContent(b, parent, width, origin), 0, 0, true
 	}
-	if len(b.Children) == 0 {
+	if len(b.Children) == 0 && !markerInside(b) {
+		// An inside marker is content the box did not have to be given: §12.5.1
+		// makes it the first inline box in the principal block box, so a list item
+		// with nothing in it still has a line to put it on. Without the exception
+		// the empty item is zero-tall and paints no background, which is what a
+		// dozen of the suite's "does this property apply to a list item" tests are
+		// built to show.
 		return 0, 0, 0, false
 	}
 	// A block container's in-flow children are either all block-level or all
@@ -613,8 +619,10 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	// "<div><span class=float></span>text</div>" has a block-level child *and*
 	// an inline formatting context, and deciding from the first child would lose
 	// the text entirely.
-	if hasInlineChild(b) {
-		// Inline content: lines of text, which have a height of their own.
+	if hasInlineChild(b) || markerInside(b) {
+		// Inline content: lines of text, which have a height of their own. An
+		// inside marker is inline content of the item's own, which is why it can
+		// answer here for a box that has no inline child — or no child at all.
 		return l.inlineContent(b, parent, width, origin), 0, 0, true
 	}
 
@@ -631,6 +639,20 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		}
 		if child.ListItem {
 			listIndex++
+			if !child.ListNumbered {
+				// No "list-item" counter answered for this box, so its position
+				// among its parent's list items is the number. This is the only
+				// place in the engine that knows it, and it is written onto the box
+				// rather than passed along because the marker is worked out in
+				// several places and at several depths — inside the box's own first
+				// line, beside its border box, and again for a floated item met
+				// among the words — and three of those had no index to pass.
+				//
+				// Idempotent, which matters: a box may be laid out twice when its
+				// width has to be guessed and then read, and the second pass
+				// recomputes the same count.
+				child.ListValue = listIndex
+			}
 		}
 
 		if child.outOfFlow() {
@@ -723,7 +745,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
 			cf.BorderRect.Y = at
 			if child.ListItem {
-				cf.Marker = l.markerFor(child, cf, listIndex)
+				cf.Marker = l.markerFor(child, cf)
 			}
 			parent.Children = append(parent.Children, cf)
 			continue
@@ -769,7 +791,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		}
 		cf = l.settleIn(child, width, origin, cf, est, at, mark, absMark, subtreeRead, atGeom)
 		if child.ListItem {
-			cf.Marker = l.markerFor(child, cf, listIndex)
+			cf.Marker = l.markerFor(child, cf)
 		}
 		parent.Children = append(parent.Children, cf)
 
@@ -859,7 +881,7 @@ func (l *layouter) floatChild(b *Box, width style.Unit, origin flow,
 
 	cf, _ := l.block(b, width, origin.at(top))
 	if b.ListItem {
-		cf.Marker = l.markerFor(b, cf, index)
+		cf.Marker = l.markerFor(b, cf)
 	}
 
 	box := cf.MarginRect()
