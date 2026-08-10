@@ -481,6 +481,30 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	// height is a floor the margin cannot reach across.
 	bottomOpen := border.Bottom == 0 && padding.Bottom == 0 && !hasHeight && !sealed
 
+	// Whether the box's *own* two margins are adjoining to each other, which is a
+	// different question from whether either of them is adjoining a child's, and
+	// §8.3.1 gives it a different answer. Its list of adjoining pairs asks for
+	// 'auto' where a parent's bottom margin meets its last child's:
+	//
+	//   bottom margin of a last in-flow child and bottom margin of its parent if
+	//   the parent has 'auto' computed height
+	//
+	// and for 'auto' *or zero* where a box's own two meet:
+	//
+	//   top and bottom margins of a box that does not establish a new block
+	//   formatting context and that has zero computed 'min-height', zero or
+	//   'auto' computed 'height', and no in-flow children
+	//
+	// Reading one condition for both is the zero-versus-unset mistake in its
+	// usual shape, and it is not a corner: "height: 0" is how the suite writes a
+	// box that exists to contribute a margin and nothing else, and treating it as
+	// a floor leaves that margin uncollapsed on both sides. The suite's
+	// margin-collapse-016 and -019 put such a box between two others and check
+	// where the second one lands; with the height read as a barrier it lands two
+	// ems low, and the red the reference covers is left showing.
+	ownMarginsAdjoin := border.Vertical() == 0 && padding.Vertical() == 0 && !sealed &&
+		(!hasHeight || declaredHeight == 0)
+
 	frag := &Fragment{
 		Box:     b,
 		Margin:  margin,
@@ -574,9 +598,9 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	}
 
 	// A box collapses through when there is nothing at all between its two
-	// margins: no border, no padding, no height it was given, no height its
-	// content needed, and no minimum keeping it open.
-	if topOpen && bottomOpen && !placedAnything && frag.BorderRect.H == 0 &&
+	// margins: no border, no padding, no height that keeps them apart, no height
+	// its content needed, and no minimum keeping it open.
+	if ownMarginsAdjoin && !placedAnything && frag.BorderRect.H == 0 &&
 		!(hasMinHeight && minHeight > 0) {
 		both := collapse(out.top, out.bottom)
 		return frag, collapsed{top: both, bottom: both, through: true}
@@ -705,7 +729,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// dropped below it when it cannot be narrowed enough. Predicted here for
 		// the same reason the position is, and re-asked at the settled position
 		// below.
-		estDrop, estGeom := l.avoidFloats(child, width, origin, est)
+		estDrop, estGeom := l.avoidFloats(child, width, origin, est, 0, false)
 		est = est.Add(estDrop)
 
 		mark, consulted := origin.ctx.mark(), origin.ctx.consulted
@@ -784,12 +808,17 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// band, and a box that had to be narrowed to fit one band is the wrong
 		// width for another — so this counts as having read the geometry and
 		// forces the second layout rather than the translation.
-		atDrop, atGeom := l.avoidFloats(child, width, origin, at)
+		atDrop, atGeom := l.avoidFloats(child, width, origin, at, 0, false)
 		at = at.Add(atDrop)
 		if !sameForced(estGeom, atGeom) {
 			subtreeRead = true
 		}
 		cf = l.settleIn(child, width, origin, cf, est, at, mark, absMark, subtreeRead, atGeom)
+		// The same question again, now that the box has a height. See
+		// fitBesideFloats: the two answers differ exactly when a float begins
+		// below the box's top and inside its height, which is the case the band
+		// at a single y cannot see.
+		at, cf = l.fitBesideFloats(child, width, origin, cf, at, atGeom, mark, absMark)
 		if child.ListItem {
 			cf.Marker = l.markerFor(child, cf)
 		}
@@ -976,6 +1005,64 @@ func (l *layouter) settleIn(child *Box, width style.Unit, origin flow, cf *Fragm
 	l.deferred = l.deferred[:absMark]
 	again, _ := l.blockIn(child, width, origin.at(actual), forced)
 	return again
+}
+
+// maxFloatFits bounds how many times one box may be re-fitted against the floats
+// around it.
+//
+// Each round moves the box strictly down or narrows it, so the sequence cannot
+// cycle through the same state twice — but narrowing changes the height, a new
+// height meets a different set of floats, and there is no argument that says the
+// pair settles quickly. Three rounds is what the suite's deepest case needs
+// (a box that drops, is narrowed by the band it lands in, and grows tall enough
+// to meet the next float); past that the box keeps the position it has, which is
+// a page that is slightly wrong rather than one that takes unbounded time.
+//
+// It is a variable so that a test can lower it and watch the bound decide,
+// on the model of maxRelayouts.
+var maxFloatFits = 3
+
+// fitBesideFloats re-asks §9.5's non-overlap question with the height the box
+// turned out to have, and lays the box out again where the answer has changed.
+//
+// The prediction made before the box existed could only ask about the band at
+// its top edge. That is the right answer for a box no taller than the float
+// beside it and the wrong one for every box that reaches past the float's
+// bottom, or past the top of a float that begins lower down — and the second is
+// a case the suite tests by name (floats-wrap-top-below-bfc-*), because it is
+// the one where a float slides silently through a box that was supposed to move
+// out of its way.
+//
+// The rewind is the one settleIn does: the floats the discarded layout placed
+// are dropped, the out-of-flow boxes it deferred are dropped with them, and the
+// box is laid out again from the corrected position. Unlike settleIn this cannot
+// take the cheap translation, because a box whose band changed is a box whose
+// width may have changed, and no translation repairs that.
+func (l *layouter) fitBesideFloats(child *Box, width style.Unit, origin flow,
+	cf *Fragment, at style.Unit, geom *forcedGeometry, mark, absMark int) (style.Unit, *Fragment) {
+
+	if !avoidsFloats(child) || len(origin.ctx.boxes) == 0 {
+		return at, cf
+	}
+	for i := 0; i < maxFloatFits; i++ {
+		drop, next := l.avoidFloats(child, width, origin, at, cf.BorderRect.H, true)
+		if drop == 0 && sameForced(geom, next) {
+			return at, cf
+		}
+		if l.relayouts >= maxRelayouts {
+			l.rec.Report(RuleLimit, AtHTML(offsetOf(child)),
+				"too many boxes had to be laid out twice to settle where the floats "+
+					"around them are; the rest were placed against the position they "+
+					"were predicted to have")
+			return at, cf
+		}
+		l.relayouts++
+		at, geom = at.Add(drop), next
+		origin.ctx.boxes = origin.ctx.boxes[:mark]
+		l.deferred = l.deferred[:absMark]
+		cf, _ = l.blockIn(child, width, origin.at(at), geom)
+	}
+	return at, cf
 }
 
 // sameForced reports whether two forced geometries would lay a box out the same

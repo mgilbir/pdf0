@@ -437,7 +437,6 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 
 		left, right := origin.ctx.bandAt(origin.y.Add(y), lo, hi)
 		y, left, right = l.roomForLine(items[i], origin, y, left, right, lo, hi)
-		lineWidth := right.Sub(left)
 
 		// The indent is taken off the room the first line has for text, not off
 		// the line box: the line box still spans the band, and its content starts
@@ -448,10 +447,48 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		if firstLine {
 			lineIndent = indent
 		}
-		textWidth := lineWidth.Sub(lineIndent)
 
-		runs, next, mid, forced := l.breakOneLine(items, i, textWidth, left.Sub(lo).Add(lineIndent))
-		lh, bl := stackLine(runs, st)
+		// A line is shortened by every float its *box* meets, not only by the
+		// ones its top edge meets — §9.5's "line boxes created next to the float
+		// are shortened to make room for the margin box of the float", where
+		// "next to" is a relation between two rectangles. So the band has to be
+		// asked over the line's height, and the line's height is not known until
+		// the line has been broken against a band.
+		//
+		// The circle is broken the way browsers break it: break against the band
+		// at the top, measure, ask again over the height that produced, and
+		// break again if the answer moved. A float whose top is below the top of
+		// the line is exactly the case a single-y query cannot see, and the suite
+		// tests it by name in floats-wrap-top-below-inline-*.
+		var (
+			runs   []inlineItem
+			next   int
+			mid    []midLineBox
+			forced bool
+			lh, bl style.Unit
+		)
+		for attempt := 0; ; attempt++ {
+			runs, next, mid, forced = l.breakOneLine(items, i,
+				right.Sub(left).Sub(lineIndent), left.Sub(lo).Add(lineIndent))
+			lh, bl = stackLine(runs, st)
+			if lh <= 0 || attempt >= maxLineFits {
+				break
+			}
+			top := origin.y.Add(y)
+			nl, nr := origin.ctx.bandOver(top, top.Add(lh), lo, hi)
+			if nl == left && nr == right {
+				break
+			}
+			// The narrower band may leave no room at all, in which case the line
+			// drops past the float exactly as it would have at its top edge.
+			ny, nl, nr := l.roomForLine(items[i], origin, y, nl, nr, lo, hi)
+			if ny == y && nl == left && nr == right {
+				break
+			}
+			y, left, right = ny, nl, nr
+		}
+		lineWidth := right.Sub(left)
+		textWidth := lineWidth.Sub(lineIndent)
 		if len(runs) > 0 || forced {
 			line := LineFragment{
 				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lh},
@@ -1001,6 +1038,21 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 	}
 	return 0, false
 }
+
+// maxLineFits bounds how many times one line box may be broken again because
+// the band it was broken against turned out to be the wrong one.
+//
+// Each round is a strictly narrower band or a strictly lower line, so the
+// sequence cannot return to a state it has left — but a narrower band can make
+// a line taller (a word wraps onto it) as easily as shorter, and a taller line
+// meets a different set of floats, so there is no argument that it settles at
+// all. Two extra attempts is what the suite's deepest case needs; past that the
+// line keeps the break it has, which is a line that is slightly wrong rather
+// than a render that does not finish.
+//
+// A variable so that a test can lower it and watch the bound decide, on the
+// model of maxRelayouts.
+var maxLineFits = 2
 
 // roomForLine moves a line down past floats that leave it no usable width.
 //
