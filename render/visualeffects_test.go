@@ -863,3 +863,25 @@ func TestCollapsedGridLinesAreNotCutByTheTablesOwnOverflow(t *testing.T) {
 		}
 	}
 }
+
+// TestAFacelessRunSurvivesAClip.
+//
+// A run with no face has no measurable ink, so its box is empty — and an empty
+// rectangle meets nothing, which means the "wholly outside the clip" test would
+// answer yes for every clip there is and silently delete the run. The engine
+// never emits a faceless run, but a caller building a display list by hand does
+// and the comparison's own fixtures do, and "no engine reaches this" is how a
+// rule of that shape survives until something does.
+func TestAFacelessRunSurvivesAClip(t *testing.T) {
+	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
+	run := DrawText{At: Point{u(500), u(500)}, Text: "x", Size: u(16)}
+	clip := Clip{Rect: Rect{u(0), u(0), u(10), u(10)}, Active: true}
+
+	got := clipOps([]Op{run}, 0, clip)
+	if len(got) != 1 {
+		t.Fatalf("a run with no face was dropped by a clip it cannot be measured against")
+	}
+	if v := got[0].(DrawText); v.Clip.Active {
+		t.Errorf("a run with no face was given a clip: %v", v.Clip)
+	}
+}
