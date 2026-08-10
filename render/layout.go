@@ -448,7 +448,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	}
 
 	width := l.resolveWidth(b, margin, border, padding, containing, &margin, replaced)
-	declaredHeight, hasHeight := l.explicitHeight(b, containing)
+	declaredHeight, hasHeight := l.explicitHeight(b, containing, at.cbHeight, at.cbDefinite)
 	if replaced != nil {
 		declaredHeight, hasHeight = replaced.H, true
 	}
@@ -546,14 +546,14 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		// the specified behaviour.
 		contentHeight = style.Max(contentHeight, own.bottom())
 	}
-	minHeight, hasMinHeight := l.lengthOf(b, "min-height", containing)
+	minHeight, hasMinHeight := l.verticalLength(b, "min-height", at.cbHeight, at.cbDefinite)
 	if b.Replaced == nil {
 		// A replaced box's height has already been through §10.4's constraint
 		// table, which resolves the two axes together to keep the picture's
 		// shape. Clamping it again here would undo that on one axis and leave
 		// the other, which is how an image comes out squashed rather than
 		// merely small.
-		contentHeight = l.clampHeight(b, contentHeight, containing)
+		contentHeight = l.clampHeight(b, contentHeight, containing, at.cbHeight, at.cbDefinite)
 	}
 
 	frag.BorderRect.H = contentHeight.Add(padding.Vertical()).Add(border.Vertical())
@@ -1126,14 +1126,29 @@ func (l *layouter) clampWidth(b *Box, v, containing style.Unit) style.Unit {
 	return maxZero(style.Clamp(v.Add(inset), lo, hi).Sub(inset))
 }
 
-func (l *layouter) clampHeight(b *Box, v, containing style.Unit) style.Unit {
+// clampHeight is clampWidth's vertical half, and the two differ in what a
+// percentage limit is a percentage *of*.
+//
+// containing is still the containing block's width, because that is what a
+// percentage padding resolves against on both axes and the inset is what
+// box-sizing needs. But §10.7 measures a percentage "min-height" or "max-height"
+// against the containing block's *height*, and adds the clause the horizontal
+// axis has no counterpart for: if that height is not stated explicitly, the
+// percentage is treated as zero for a minimum and as "none" for a maximum,
+// rather than resolved against anything.
+//
+// Passing the width for both was a real fault rather than a simplification.
+// "min-height: 50%" in a 600px-wide containing block came out as 300px whatever
+// the block's height was, which is the mistake explicitHeight's comment warns
+// against, made one function away from the warning.
+func (l *layouter) clampHeight(b *Box, v, containing, cbHeight style.Unit, cbDefinite bool) style.Unit {
 	_, inset := l.sizingInset(b, containing)
 	lo := style.Unit(0)
-	if min, ok := l.lengthOf(b, "min-height", containing); ok {
+	if min, ok := l.verticalLength(b, "min-height", cbHeight, cbDefinite); ok {
 		lo = min
 	}
 	hi := style.MaxUnit
-	if max, ok := l.lengthOf(b, "max-height", containing); ok {
+	if max, ok := l.verticalLength(b, "max-height", cbHeight, cbDefinite); ok {
 		hi = max
 	}
 	return maxZero(style.Clamp(v.Add(inset), lo, hi).Sub(inset))
@@ -1156,20 +1171,42 @@ func (l *layouter) explicitWidth(b *Box, containing style.Unit) (style.Unit, boo
 	return maxZero(v.Sub(inset)), true
 }
 
-// explicitHeight resolves a declared height.
+// explicitHeight resolves a declared height to a *content* height.
 //
-// A percentage height resolves against the containing block's *height*, which is
-// indefinite while that block is itself being sized by its content — so a
-// percentage here is refused rather than resolved against the width, which is a
-// mistake that produces a plausible number.
-func (l *layouter) explicitHeight(b *Box, containing style.Unit) (style.Unit, bool) {
+// containing is the containing block's width, which is what a percentage padding
+// resolves against and so what box-sizing's inset is computed from. The height a
+// *percentage height* is a percentage of is a different number and is passed
+// separately, together with whether it is definite — because §10.5's rule is
+// conditional and the condition is the whole of the difference between this and
+// explicitWidth:
+//
+//	The percentage is calculated with respect to the height of the generated
+//	box's containing block. If the height of the containing block is not
+//	specified explicitly (i.e., it depends on content height), and this element
+//	is not absolutely positioned, the value computes to 'auto'.
+//
+// Refusing every percentage was the previous reading, and it was half of the
+// rule. The condition is not "a containing block's height is never known" — the
+// initial containing block is the page, whose height is settled before layout
+// runs, and a block that declares its own height passes a definite one down to
+// its children. So "html, body, div { height: 100% }" is a chain of definite
+// heights from the page, and it is the idiom the CSS 2.1 reftests use to put
+// something at the *bottom* of the page: 42 of them draw their expected picture
+// with a background positioned against a full-height box, and every one drew it
+// against a box as tall as its text instead.
+//
+// What stays refused is the case the rule is actually about, and it stays
+// refused for the reason the old comment gave: a box being sized by its content
+// has no height yet, and resolving against the width instead would produce a
+// plausible number that is not the one CSS asks for.
+func (l *layouter) explicitHeight(b *Box, containing, cbHeight style.Unit, cbDefinite bool) (style.Unit, bool) {
 	l.ensureFontSize(b)
-	length, ok := l.parseLength(b, "height")
-	if !ok || length.Kind != style.LengthAbsolute {
+	v, ok := l.verticalLength(b, "height", cbHeight, cbDefinite)
+	if !ok {
 		return 0, false
 	}
 	_, inset := l.sizingInset(b, containing)
-	return maxZero(length.Value.Sub(inset)), true
+	return maxZero(v.Sub(inset)), true
 }
 
 // lengthOf resolves a property to a length, with percentages against a basis.

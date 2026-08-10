@@ -796,10 +796,18 @@ func isAtomicInline(b *Box) bool {
 }
 
 // atomicItem lays out an atomic inline and makes the line item for it.
-func (l *layouter) atomicItem(b *Box, frame inlineFrame, pending bool) inlineItem {
+//
+// The item may always begin a line. CSS Text §5.1 says to treat an atomic inline
+// as U+FFFC OBJECT REPLACEMENT CHARACTER for the purpose of line breaking, and
+// UAX #14 puts that character in class CB, whose rule LB20 is "break before and
+// after unresolved CB" — so a picture is never welded to the word beside it, and
+// two pictures side by side are two units rather than one. What comes *after*
+// the item is the caller's business, because the rule there has an exception;
+// see where the state is set.
+func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	item := inlineItem{
 		box: b, atomicBox: b, size: b.FontSize,
-		breakBefore: pending, offset: frame.offset,
+		breakBefore: true, offset: frame.offset,
 	}
 	if frame.measuring {
 		// No fragment: the caller wants a width, and the widths of an atomic
@@ -1051,14 +1059,21 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// whole difference between an atomic inline and an ordinary inline
 			// box, whose extent is whatever its words turn out to need and
 			// which therefore has to be flattened into the run.
-			item := l.atomicItem(child, frame, state.breakOpportunity)
+			item := l.atomicItem(child, frame)
 			item.bidiPara, item.bidiStart, item.bidiEnd = para, start, end
 			out = append(out, item)
-			// An atomic inline is content, not space: it ends any break
-			// opportunity that was carried into it, and a collapsible space
-			// after it survives rather than collapsing into whatever came
-			// before the picture.
-			state.breakOpportunity = false
+			// LB20's other half: a line may also begin after the picture, so
+			// "<img/><img/>" is two units and the second wraps when it does not
+			// fit. What this is not is an opportunity for a *space* to take —
+			// LB7 says not to break before one and is the earlier rule, so the
+			// space stays with the picture and the break falls after the space
+			// where LB18 puts it. itemsFor is where that exception lives, since
+			// it is the only place that knows a piece is a space.
+			//
+			// The distinction is visible rather than theoretical: a float after
+			// "<img/> " goes on the line after the picture, and offering the
+			// opportunity to the space put it one line further down again.
+			state.breakOpportunity = true
 			state.afterCollapsibleSpace = false
 			continue
 		}
@@ -1284,7 +1299,13 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		item := inlineItem{
 			bidiPara: para, bidiStart: start, bidiEnd: end,
 			text: p.text, box: b, face: face, size: size,
-			breakBefore: p.breakBefore || state.breakOpportunity,
+			// An opportunity carried in from the piece before is offered to
+			// anything but a space. UAX #14's LB7 — "do not break before spaces"
+			// — is an earlier rule than every rule that creates one, so a space
+			// belongs to the unit in front of it and the break falls after it.
+			// The piece's own opportunity still stands, which is what puts the
+			// break after a preserved space rather than losing it.
+			breakBefore: p.breakBefore || (state.breakOpportunity && !p.space),
 			space:       p.space, collapsible: p.collapsible,
 			trimAtEnd: p.trimAtEnd,
 			tab:       p.tab, tabStop: tabStop,
