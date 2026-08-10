@@ -168,6 +168,16 @@ const (
 	// safe answer — but the refusal has to be visible, or a document that a
 	// caller believes contains a photograph contains a gap instead.
 	RuleImageUndecodable Rule = "image-undecodable"
+	// RuleFontUndecodable is a font an @font-face named, that arrived, and that
+	// did not become a face: a container this engine does not unwrap, a format
+	// hint naming one, or bytes that are not a font program.
+	//
+	// It is separate from RuleResourceBlocked for the same reason
+	// image-undecodable is: "the file did not arrive" and "the file arrived and
+	// was not usable" send an author to different places, and a font is the
+	// case where the second is most likely — the web serves woff2 to everything
+	// and this engine reads sfnt.
+	RuleFontUndecodable Rule = "font-undecodable"
 
 	// RuleLimit is a resource guard that tripped, or a run that was cancelled.
 	//
@@ -259,6 +269,11 @@ var defaultSeverity = map[Rule]Severity{
 	// them should raise both to Error, which is the case the policy exists for.
 	RuleResourceBlocked:  Warn,
 	RuleImageUndecodable: Warn,
+	// A font that did not load is a page set in something else, which is
+	// visible and which RuleFontFallback then says out loud where the family
+	// was used. Refusing to produce the document over it would be a default
+	// turned off wholesale by anyone whose fonts are woff2.
+	RuleFontUndecodable: Warn,
 	// A self-check: this firing means the scale computation is wrong, and a
 	// document produced from a wrong scale is worse than none.
 	RuleOverflowPage:  Error,
