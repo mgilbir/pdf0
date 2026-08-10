@@ -206,16 +206,32 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 		Float: float, Clear: clearOf(cs),
 		Position: position, ZIndex: z, ZAuto: zAuto, Order: order,
 	}
-	// The text is not collapsed the way document text is: a content string is
-	// written by the author as the exact characters wanted, and "content: '  '"
-	// asking for two spaces is a legitimate way to indent a marker.
-	if value.text != "" {
+	// The text is collapsed exactly as document text is, by the pseudo-element's
+	// own "white-space". Generated content is put in an anonymous inline box and
+	// nothing exempts that box from CSS Text §4, so "content: 'a  b'" sets one
+	// space and "content: 'a\Ab'" sets one line unless white-space says
+	// otherwise — the same two answers the same characters would get in the
+	// markup.
+	//
+	// This file used to say the opposite, and to pin it with a test: that the
+	// author had written the characters they wanted, so "content: '  '" was a
+	// legitimate way to indent a marker. It reads well and it is not what any
+	// engine does; the indent is written with padding, and the suite says so
+	// directly — content-white-space-004 puts a run of tabs and newlines in a
+	// content string and asserts it sets identically to the same words in the
+	// document.
+	//
+	// Only Phase I, as in textBox: the rules that cross a box boundary and the
+	// rules that need a line are applied later, by the same passes that apply
+	// them to everything else.
+	text := collapseWhitespace(value.text, cs["white-space"])
+	if text != "" {
 		if !b.room(n) {
 			return box
 		}
 		text := &Box{
 			Outer: OuterInline, Inner: InnerText,
-			Style: cs, Text: value.text, FontSize: size, Parent: box,
+			Style: cs, Text: text, FontSize: size, Parent: box,
 		}
 		box.Children = append(box.Children, text)
 	}
