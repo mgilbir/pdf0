@@ -184,6 +184,107 @@ func TestPictureToleratesTextRounding(t *testing.T) {
 	}
 }
 
+// TestPictureMatchesRepeatedRunsAsASet is the hole the tolerance above left, and
+// it is a hole in the *pairing* rather than in the tolerance.
+//
+// Marks are sorted by their text and then by position, and two marks with the
+// same text are ordered by an x that the tolerance exists to forgive. A
+// sixty-fourth of a pixel is therefore enough to swap them in one list and not
+// in the other, after which an index-wise comparison holds up the wrong pair and
+// rules two identical pages different. It is not hypothetical: twelve of the
+// suite's white-space tests failed on exactly this and on nothing else.
+func TestPictureMatchesRepeatedRunsAsASet(t *testing.T) {
+	// The same word at two places, with the reading of one of them a layout unit
+	// out — enough to reverse the sort, not enough to be a displacement.
+	const unit = 0.015625
+	got := []Op{picText("8", 100, 300), picText("8", 100+unit, 100)}
+	want := []Op{picText("8", 100, 100), picText("8", 100, 300)}
+	if !pictureEqual(got, want, picPage) {
+		t.Error("two pages with an \"8\" at each of the same two places compared " +
+			"different because a layout unit reversed the order they sorted in")
+	}
+
+	// And it is a pairing, not a licence to ignore position. Three runs of one
+	// word against three of the same word in one different place is still a
+	// difference, however they are ordered.
+	got = []Op{picText("8", 100, 100), picText("8", 100, 300), picText("8", 100, 500)}
+	want = []Op{picText("8", 100, 300), picText("8", 100, 100), picText("8", 100, 900)}
+	if pictureEqual(got, want, picPage) {
+		t.Error("a run in a different place was matched to one that was not there, " +
+			"so the set matching lost the position entirely")
+	}
+
+	// Nor a licence to ignore how many there are.
+	got = []Op{picText("8", 100, 100), picText("8", 100, 300)}
+	want = []Op{picText("8", 100, 100)}
+	if pictureEqual(got, want, picPage) {
+		t.Error("a page with the word twice matched one with it once")
+	}
+
+	// And it is a *bijection*. Both of these runs are near (100, 100) and only
+	// one of the other page's is, so pairing that let a mark stand in for two
+	// would call a page with the word twice in one place the same as a page with
+	// it once there and once elsewhere. Equal counts do not rescue that: they are
+	// equal here.
+	got = []Op{picText("8", 100, 100), picText("8", 100+unit, 100)}
+	want = []Op{picText("8", 100, 100), picText("8", 400, 100)}
+	if pictureEqual(got, want, picPage) {
+		t.Error("one run was matched to two, so the comparison checked that every " +
+			"mark had a neighbour rather than that the two sets were the same")
+	}
+
+	// Two words in the same three places, with one of them swapped for the other
+	// in the middle. It takes a case built for it: the groups are the same size
+	// in total and differ one against the next, so the two lists agree in length
+	// and the marks agree in position, and the only thing that distinguishes the
+	// pages is which word is at 300. A pairing that lined the groups up by where
+	// they start rather than by how long they are compares an "A" against a "B"
+	// and asks only whether they are in the same place.
+	got = []Op{picText("A", 100, 100), picText("A", 100, 300), picText("B", 100, 500)}
+	want = []Op{picText("A", 100, 100), picText("B", 100, 300), picText("B", 100, 500)}
+	if pictureEqual(got, want, picPage) {
+		t.Error("a page reading A A B matched one reading A B B; the groups were " +
+			"paired by position and not by the word in them")
+	}
+}
+
+// TestPictureCapsTheSetMatching pins the bound on the pairing, and pins which
+// way it fails when it is reached.
+//
+// The set matching costs the square of a group's size, so a group larger than
+// the cap is compared by index and a swapped pair in it is called a difference.
+// That is the safe direction and it is the reason the bound can exist at all —
+// but a bound nothing ever reaches is a bound nobody has checked, so this walks
+// up to it and one past it.
+func TestPictureCapsTheSetMatching(t *testing.T) {
+	// A group of n marks with the first two swapped between the two pages, and
+	// the reading of one of them a layout unit out so that the two sort
+	// differently. Below the cap the pairing sorts it out; above it, it does not.
+	const unit = 0.015625
+	page := func(n int, swap bool) []Op {
+		out := make([]Op, 0, n)
+		for i := 0; i < n; i++ {
+			y := float64(10 + i)
+			if swap && i < 2 {
+				y = float64(11 - i)
+			}
+			x := 100.0
+			if swap && i == 0 {
+				x += unit
+			}
+			out = append(out, picText("8", x, y))
+		}
+		return out
+	}
+	if !pictureEqual(page(maxGroupPairing, false), page(maxGroupPairing, true), picPage) {
+		t.Errorf("a group of exactly %d was not paired as a set", maxGroupPairing)
+	}
+	if pictureEqual(page(maxGroupPairing+1, false), page(maxGroupPairing+1, true), picPage) {
+		t.Errorf("a group of %d was paired as a set; the cap is not doing anything",
+			maxGroupPairing+1)
+	}
+}
+
 func TestPictureIgnoresInkTheColourOfThePaper(t *testing.T) {
 	// White text on bare page marks nothing, and a reference that simply does
 	// not draw it puts the same picture on the page. A whole family of tests is
