@@ -705,7 +705,20 @@ const wptEnv = "WPT_TESTS"
 // three numbers exactly where they were, and the keyword alone *breaks* a test
 // that was passing. They are only a pair, which is why the trim's evidence is a
 // unit test written for it rather than anything here.
-const wptCleanPassBaseline = 4124
+// §4.1.2's conditional hang, read per character rather than per sequence, took
+// it from 4124 to 4126, and only one of those two is a page. Failures went from
+// 732 to 731: white-space-pre-wrap-trailing-spaces-001, whose reference centres
+// a letter where a full line puts it and not where a line of five characters
+// does. The second clean pass is text-align-white-space-001, which was passing
+// already and lost its "text-align: justify is not implemented" finding — its
+// lines now come out exactly full, and a full line is one justification would
+// not have moved, so the finding no longer applies. Nothing about that page
+// changed; see alignLine for why the report sits inside the slack test.
+//
+// The clamp inside the change moves nothing here at all and is not decoration:
+// it decides how far a sequence hangs, which is invisible until the hang is at
+// the *start* edge of a right-to-left line. Its evidence is a unit test.
+const wptCleanPassBaseline = 4126
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

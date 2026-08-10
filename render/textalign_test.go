@@ -104,17 +104,87 @@ func TestTextAlignCountsAConditionallyHangingSpace(t *testing.T) {
 		t.Errorf("the specification's centred \" 0 \" example is at %gpx, want 12", got)
 	}
 
-	// And a space that does *not* fit hangs even here, which is what makes the
-	// rule conditional rather than simply off. "abcdef  " is 96 in a line 84
-	// wide, so the two spaces cannot fit; the six characters do, and a
-	// right-aligned line puts them flush against the edge with the spaces
-	// hanging past it.
+	// And a space that does not fit hangs even here, which is what makes the
+	// rule conditional rather than simply off — but it is the space that does
+	// not fit and not the sequence it belongs to. §4.1.2's next sentence is the
+	// one that says so: the UA "may also visually collapse the character advance
+	// widths of any that would otherwise overflow", so a sequence that half fits
+	// counts up to the line's edge and hangs the rest.
+	//
+	// "abcdef  " is 96 in a line 84 wide. Six characters and one space are 84 —
+	// exactly the line — and the second space is what overflows. So the line is
+	// as wide as the space it has, a right-aligned line has nothing left over,
+	// and it starts at 0.
+	//
+	// This assertion said 12 and was wrong, which is worth recording because it
+	// is the second time this rule has been pinned backwards here. The evidence
+	// is not a reading: css-text/white-space/white-space-pre-wrap-trailing-
+	// spaces-001 centres "    S" followed by thirty-two spaces in nine
+	// characters, and its reference puts the S at the fourth character — which
+	// is where a line that fills its width puts it and two characters from where
+	// a line of five puts it. Nothing in the suite requires the other answer.
 	root = layoutOf(t, 600, `<div id="p">abcdef  </div>`,
 		`#p { font-family: Courier; font-size: 20px; width: 84px;
 		      text-align: right; white-space: pre-wrap }`)
-	if got := lineX(t, root, "p"); got != 12 {
+	if got := lineX(t, root, "p"); got != 0 {
 		t.Errorf("a right-aligned line whose trailing spaces overflow starts at "+
-			"%gpx, want 12 — the spaces should hang past the edge", got)
+			"%gpx, want 0 — one space fills the line and only the second hangs", got)
+	}
+
+	// The sequence that overflows *entirely* is the case the clamp has to get
+	// right at its other end: "abcdef" alone is 72 of the 84, and eight spaces
+	// after it are 96 more. The line is still only as wide as it has room for,
+	// so it still starts at 0 — and the six characters are not pushed off the
+	// left edge by a line measured at 168.
+	root = layoutOf(t, 600, `<div id="p">abcdef        </div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 84px;
+		      text-align: right; white-space: pre-wrap }`)
+	if got := lineX(t, root, "p"); got != 0 {
+		t.Errorf("a right-aligned line whose trailing spaces overflow far starts "+
+			"at %gpx, want 0", got)
+	}
+
+	// The centred form of the same thing, which is the shape the suite measures
+	// and the one where the two readings differ by a visible two characters.
+	// Nine characters is 108; "    S" is 60 of it and the thirty-two spaces
+	// after it are 384 more, so the line fills its width and does not move.
+	// Counting it as five characters would centre it 24px in.
+	root = layoutOf(t, 600,
+		`<div id="p">    S                                </div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 108px;
+		      text-align: center; white-space: pre-wrap }`)
+	if got := lineX(t, root, "p"); got != 0 {
+		t.Errorf("a centred line of five characters and thirty-two spaces starts "+
+			"at %gpx, want 0 — the spaces fill the line before they hang", got)
+	}
+}
+
+// TestAConditionalHangIsMeasuredOnARightToLeftLine is the clamp's other half,
+// and it is the half a left-to-right document cannot show.
+//
+// Going one way, the clamp to the line's width changes nothing that can be seen:
+// a line longer than the space it has gets no slack either way, and a line that
+// fits is its own length either way. What the clamp decides is *how far past the
+// edge the sequence hangs*, and that only moves anything where the hang is at the
+// left — which is a right-to-left line, where §4.1.2's hang goes off the start
+// edge and the content has to be pulled back over it.
+//
+// Measured over the whole suite, dropping the clamp moves nothing at all. It is
+// not dead: it moves this box by sixty pixels, which is the width of the part of
+// the sequence that hangs.
+func TestAConditionalHangIsMeasuredOnARightToLeftLine(t *testing.T) {
+	// Five characters of room, two of Hebrew and eight preserved spaces after
+	// it. The line is 120 long in 60 of room, so 60 of the spaces hang; rule L1
+	// gives them the paragraph's own level, so they are drawn leftmost and the
+	// word sits at the line's right edge, from 36 to 60.
+	root := layoutOf(t, 600, `<div id="p" dir="rtl">`+hebrewAB+`        </div>`,
+		`#p { font-family: Courier; font-size: 20px; line-height: 20px;
+		      width: 60px; white-space: pre-wrap }`)
+	runs := runsOf(t, root, "p")
+	if got := runAt(t, runs, hebrewAB).X.Px(); got != 36 {
+		t.Errorf("the word on a right-to-left line with a hanging sequence is at "+
+			"%gpx, want 36 — its right edge should be the line's, with the part of "+
+			"the sequence that does not fit hanging off the left", got)
 	}
 }
 

@@ -635,9 +635,21 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// The two are not a matter of degree. Counting the space on a
 			// soft-wrapped line pushes a right-aligned line a space clear of the
 			// edge; not counting it on the last line centres " 0 " off-centre.
+			//
+			// "Only if it does not otherwise fit" is a rule about each character
+			// and not about the sequence, which is the second half of the same
+			// paragraph: the UA "may also visually collapse the character advance
+			// widths of any that would otherwise overflow". So a sequence that
+			// fits counts entirely, one that does not counts up to the line's
+			// edge, and the part past the edge hangs. Taking it as all-or-nothing
+			// is the reading that was here, and it centres a line of five
+			// characters and thirty-two spaces as though it were five: the page
+			// shows the letter two characters right of where every browser puts
+			// it, and the same document without the spaces is correct, so the
+			// fault reads as an alignment bug rather than a white-space one.
 			used := alignedWidth(runs, total)
-			if (forced || next >= len(items)) && total <= textWidth {
-				used = total
+			if forced || next >= len(items) {
+				used = style.Max(used, style.Min(total, textWidth))
 			}
 			// Which *side* it hangs off, which is not a second way of saying how
 			// much. §4.1.2 hangs the white space past the line's end, and the
