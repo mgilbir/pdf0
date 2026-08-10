@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -451,11 +452,16 @@ const wptEnv = "WPT_TESTS"
 // Over the four: 98 tests stopped failing and one started, 1349 to 1252. The one
 // is visudet/line-height-205, and it is the familiar shape. It asserts that a
 // line box set in two downloadable faces is the union of the two, which needs
-// @font-face; nothing here loads one, so the test cannot pass. It *was* passing
-// because neither of its two divs grew, and now the div whose spans name the
-// missing families is 2.25px taller than the one that names them together — the
-// union of two faces with different baselines, which is §10.8.1 working. It
-// fails honestly.
+// @font-face; nothing loaded one at the time, so the test could not pass. It
+// *was* passing because neither of its two divs grew, and now the div whose
+// spans name the missing families is 2.25px taller than the one that names them
+// together — the union of two faces with different baselines, which is §10.8.1
+// working. It fails honestly.
+//
+// It still fails, and the reason has narrowed rather than gone: @font-face is
+// implemented now and this test's two faces are `format('woff')`, a compressed
+// container this engine does not unwrap. So the fonts are refused before the
+// read and reported, which is the honest answer and not a passing one.
 //
 // Floats, clearance and margins took it from 3924 to 3957, and this time the
 // reporting and the ink need no separating: the vacuous count is 320 before and
@@ -823,7 +829,9 @@ const wptEnv = "WPT_TESTS"
 //
 // 162 of the 665 failures did link a stylesheet. 152 of them linked exactly one
 // file, /fonts/ahem.css, whose entire content is an @font-face for Ahem — a face
-// this harness hands the engine directly, so loading it changes not one pixel.
+// this harness handed the engine directly at the time, so loading it changed not
+// one pixel. (It does not hand it over any more; the engine loads that sheet and
+// that font itself. See the note below on @font-face.)
 // Ten linked a sheet with rules in it, all ten the same file, and nine of those
 // ten stopped failing. Counted by name over the whole suite and in both
 // directions: 9 tests moved, every one of them from failing to the vacuous
@@ -838,8 +846,29 @@ const wptEnv = "WPT_TESTS"
 // fall from 4192 to 3205, measured, for a suite whose pages were all rendering
 // correctly. Measured again with the harness resolving the path the way the WPT
 // server does, so the sheet really loaded: 3205 again, because the cascade then
-// reports the @font-face it does not apply. See ahemLinkRe for what the harness
-// does about it and for the guard that keeps that honest.
+// reports the @font-face it does not apply.
+//
+// @font-face itself then moved this number by *nothing*, and that is the whole
+// point of recording it: the two adaptations above — the stripped link and the
+// harness's hand-built Ahem — came out in the same change, and the suite landed
+// on the same 4211 it was on before. Not the same total: the same *documents*.
+// The per-test dump is byte-identical to the one before, all 5177 lines of it,
+// so no test moved in either direction.
+//
+// That is the result the work was for, and on its own it would be consistent
+// with having changed nothing at all, so the load-bearing measurement is the
+// other one. With @font-face in place and the strip put back — so a document
+// can no longer ask for Ahem and nothing hands it over either — clean passes
+// fall from 4211 to 3383: 565 tests go from clean to failing and 263 from clean
+// to vacuous, none the other way. Those 828 are what the document's own
+// @font-face is now carrying, and what the two adaptations were carrying before
+// it.
+//
+// The two effects stay separated. Removing the strip from the *old* engine, with
+// no @font-face to answer the link, was measured at 4211 to 3222, and every one
+// of those 989 moved from clean to vacuous with not one test changing from
+// passing to failing: a pure reporting cost, which is exactly what the strip
+// existed to avoid. What replaced it removes the cost by removing its cause.
 const wptCleanPassBaseline = 4211
 
 // linkRe finds the reference link that makes a document a reftest.
@@ -990,40 +1019,6 @@ func findReftests(t *testing.T, root string) []reftest {
 // clean passes below.
 var cdataRe = regexp.MustCompile(`(?s)<!\[CDATA\[(.*?)\]\]>`)
 
-// ahemLinkRe matches the one stylesheet link this harness removes, and it is the
-// second adaptation in this file after the CDATA wrapper above.
-//
-// 1665 documents in the suite carry `<link rel="stylesheet" href="/fonts/ahem.css">`,
-// and the whole of that file is an @font-face declaring Ahem from /fonts/Ahem.ttf.
-// This harness hands the engine Ahem directly — see fontSetForWPT, which loads
-// the same file from the same checkout — so the sheet asks for something the
-// document already has, and the pages render identically with it and without it.
-//
-// What removing it avoids is a *report*, not a rendering. The engine follows a
-// stylesheet link now, and there are two ways this one ends: refused, because
-// "/fonts/ahem.css" is an absolute path and no resolver in this engine will take
-// one; or loaded, whereupon the cascade reports @font-face as an at-rule it does
-// not apply. Both are honest and both are unsupported findings, so either taints
-// every one of those 1665 documents and the suite stops distinguishing a test
-// that rendered correctly from one that did not. Measured: clean passes 4192 to
-// 3205 for the refusal, and 4192 to 3205 again with the harness resolving the
-// path the way the WPT server does and the sheet actually loading. Identical,
-// because the taint is the point in both.
-//
-// The adaptation is narrow on purpose — one exact href, matched literally — and
-// TestAhemStylesheetIsOnlyAFontFace is the check that keeps it honest: it reads
-// the file out of the checkout and fails if it ever contains anything but that
-// one @font-face. If the suite starts putting layout rules in there, this stops
-// being a redundant link and the guard says so rather than the ratchet silently
-// measuring the wrong thing.
-//
-// The engine's own gap is real and is not hidden by this: nothing here applies
-// an @font-face, the cascade says so for every document that writes one inline,
-// and the ten documents in the suite that link a stylesheet with rules in it —
-// css-text/white-space's trailing-space-and-text-alignment family — go through
-// the loader untouched.
-var ahemLinkRe = regexp.MustCompile(`(?i)<link\s+[^>]*href\s*=\s*["']/fonts/ahem\.css["'][^>]*>`)
-
 // pageClip is the area a rendering is compared over.
 //
 // It stands in for the viewport a browser would have shown the reftest in: a
@@ -1045,7 +1040,6 @@ func renderForCompare(root, file string) (ops []Op, clean bool, err error) {
 		return nil, false, err
 	}
 	src := cdataRe.ReplaceAllString(string(data), "$1")
-	src = ahemLinkRe.ReplaceAllString(src, "")
 
 	// The suite's documents refer to real files beside them — most of the
 	// references draw their expected picture with
@@ -1079,10 +1073,21 @@ func renderForCompare(root, file string) (ops []Op, clean bool, err error) {
 	}
 	defer res.Close()
 
-	built := Build(Input{HTML: src, Resources: res})
+	built := Build(Input{HTML: src, Resources: res, Fonts: fontSetForWPT()})
+
+	// The faces the document itself brought, which for a quarter of this suite
+	// is Ahem: 1665 of its documents link /fonts/ahem.css, whose whole content
+	// is an @font-face for it. The engine loads that through the same resolver
+	// as everything else, so what is registered here is a face that arrived
+	// from the document rather than one this harness handed over.
+	//
+	// The registration is undone before the next document, because a face is
+	// per document — a thousand documents' Ahems left in a package-level map
+	// would be a thousand parsed fonts nothing can free.
+	defer unregisterBlockFonts(registerDocumentBlockFonts(built, res))
 
 	rec := NewRecorder(nil)
-	laid := Layout(built.Root, A4.Content(), fontSetForWPT(), rec)
+	laid := Layout(built.Root, A4.Content(), built.Fonts, rec)
 
 	clean = true
 	for _, f := range built.Findings {
@@ -1158,7 +1163,23 @@ func (s *suiteResolver) Resolve(ref string) ([]byte, error) {
 	if scheme, ok := schemeOf(trimmed); ok {
 		return nil, fmt.Errorf("render: %q names the %q scheme; this engine resolves no URLs", ref, scheme)
 	}
-	if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`) {
+	// A leading "/" in this suite is not a filesystem path, it is the root of
+	// the server the suite is served from — which is the checkout. Resolving it
+	// as such is the other half of the base-URL job a browser does, and it is
+	// what the 1665 documents linking "/fonts/ahem.css" are asking for.
+	//
+	// This is the harness standing in for the server and is not a loosening of
+	// anything: the engine's own DirResolver still refuses an absolute path
+	// outright, and everything below still goes through it rooted at the
+	// checkout. What arrives at the engine is a relative path inside it.
+	base := s.dir
+	if strings.HasPrefix(trimmed, "/") {
+		base, trimmed = ".", strings.TrimPrefix(trimmed, "/")
+		if trimmed == "" {
+			return nil, fmt.Errorf("render: %q names the server root, which is not a file", ref)
+		}
+	}
+	if strings.HasPrefix(trimmed, `\`) {
 		return nil, fmt.Errorf("render: %q is an absolute path", ref)
 	}
 	// A reference that climbs out of the checkout is refused, and it is refused
@@ -1171,8 +1192,64 @@ func (s *suiteResolver) Resolve(ref string) ([]byte, error) {
 	// escape with it removed changed nothing, because it could never be the
 	// rule that decided. A guard that cannot decide anything reads as defence
 	// and is decoration, and this file has enough of that history already.
-	return s.res.Resolve(path.Clean(path.Join(s.dir, filepath.ToSlash(trimmed))))
+	return s.res.Resolve(path.Clean(path.Join(base, filepath.ToSlash(trimmed))))
 }
+
+// registerDocumentBlockFonts gives the rectangle-glyph comparison the faces the
+// document loaded for itself, and returns them so they can be taken out again.
+//
+// Without it, Ahem arriving from a document rather than from the harness would
+// be compared as text on one side of a reftest and as a fill on the other, which
+// is the failure blockglyph_test.go exists to prevent and which no single test
+// names — it is worth about 345 clean passes.
+//
+// The rectangle table is cached by the reference that produced it, because it is
+// a function of the font *file* and the file is the same one for every document
+// that links ahem.css. What is not shared is the face: each document parses its
+// own, which is what a face records glyphs for.
+func registerDocumentBlockFonts(built Built, res ResourceResolver) []*fonts.Face {
+	var set *documentFonts
+	switch f := built.Fonts.(type) {
+	case *documentFonts:
+		set = f
+	case fallbackDocumentFonts:
+		set = f.documentFonts
+	default:
+		return nil
+	}
+	var added []*fonts.Face
+	for _, df := range set.faces {
+		if _, have := blockFonts[df.face]; have {
+			continue
+		}
+		bf, ok := suiteBlockFonts[df.ref]
+		if !ok {
+			data, err := res.Resolve(df.ref)
+			if err == nil {
+				bf, _ = newBlockFont(data)
+			}
+			suiteBlockFonts[df.ref] = bf
+		}
+		if bf == nil {
+			continue
+		}
+		blockFonts[df.face] = bf
+		added = append(added, df.face)
+	}
+	return added
+}
+
+func unregisterBlockFonts(faces []*fonts.Face) {
+	for _, f := range faces {
+		delete(blockFonts, f)
+	}
+}
+
+// suiteBlockFonts caches a rectangle table per font file, so that the outlines
+// of Ahem are read once rather than once per document that links it. A nil
+// entry is a file already found to have no rectangles, which is as worth
+// remembering as one that has.
+var suiteBlockFonts = map[string]*blockFont{}
 
 // normaliseOps renders a display list as comparable text.
 //
@@ -1638,107 +1715,116 @@ func TestWPTFindsRealPairs(t *testing.T) {
 	}
 }
 
-// TestAhemStylesheetIsOnlyAFontFace guards the one adaptation ahemLinkRe makes.
+// TestSuiteFontFaceLoadsAhem is what replaced the harness's Ahem shortcut, and
+// it asserts the whole of the path that replaced it.
 //
-// The harness removes that link because the sheet behind it declares nothing but
-// a face this harness already supplies. That is a claim about a file in someone
-// else's repository, and a claim about someone else's file is exactly the kind
-// that stops being true without anybody here noticing — so it is asserted rather
-// than assumed. If the suite ever puts a layout rule in ahem.css, the link stops
-// being redundant, the ratchet starts measuring documents that are missing their
-// styles, and this fails instead.
+// Until this branch the harness handed the engine Ahem by filename and stripped
+// the `<link rel="stylesheet" href="/fonts/ahem.css">` out of every document
+// that asked for it, because the engine had no @font-face and the report would
+// have tainted 1665 documents whose pages were rendering correctly. Both are
+// gone. What has to be true instead is a chain of five things, and the reason
+// this test walks all five rather than asserting the metric at the end is that
+// four of them can fail while the fifth still looks right — a fallback face with
+// the wrong metrics still measures *something*.
 //
-// It also checks that the removal actually removes: the file's own note on
-// attribute order records 142 documents in this suite writing a link's
-// attributes the other way round, and a pattern that quietly matches nothing is
-// the failure this repository has produced most often.
-func TestAhemStylesheetIsOnlyAFontFace(t *testing.T) {
+// So: the suite's own document is read, unmodified; the link is followed; the
+// sheet's @font-face is loaded through the same resolver; the face that arrives
+// is the real Ahem, which is checked by the metric the font exists for — every
+// glyph exactly one em wide; and the rectangle table is found for it, which is
+// what a quarter of this suite's comparisons depend on.
+func TestSuiteFontFaceLoadsAhem(t *testing.T) {
 	root := wptDir(t)
-	data, err := os.ReadFile(filepath.Join(root, "fonts", "ahem.css"))
+
+	// A real document from the suite rather than a hand-written one, because
+	// the claim is about what the suite's documents do.
+	doc := filepath.Join(root, "css", "CSS2", "text", "white-space-processing-001.xht")
+	data, err := os.ReadFile(doc)
 	if err != nil {
-		t.Skipf("no fonts/ahem.css in the checkout: %v", err)
+		t.Skipf("no such document in this checkout: %v", err)
 	}
-	if rest, ok := onlyAnAhemFontFace(data); !ok {
-		t.Errorf("fonts/ahem.css is no longer just an @font-face for Ahem, so the link "+
-			"to it is not redundant and ahemLinkRe must not drop it; what is left "+
-			"over is:\n%s\nthe whole file is:\n%s", rest, data)
-	}
-	// The check has to be able to say no, and the file it is pointed at is not
-	// something this repository can plant a defect in — it is someone else's
-	// checkout, and doctoring it would leave a modified corpus behind. So the
-	// refusal is exercised here, on the real file with a rule added to it.
-	for _, doctored := range []string{
-		string(data) + "\np { color: red }\n",
-		"p { color: red }\n" + string(data),
-		"", // no @font-face at all
-	} {
-		if rest, ok := onlyAnAhemFontFace([]byte(doctored)); ok {
-			t.Errorf("a stylesheet with more than an Ahem @font-face in it was "+
-				"accepted (leftover %q):\n%s", rest, doctored)
-		}
-	}
-	// And it has to accept a sheet that names a different family for no better
-	// reason than that it has an @font-face in it.
-	if _, ok := onlyAnAhemFontFace([]byte(
-		"@font-face { font-family: 'Helvetica'; src: url('/fonts/x.ttf'); }")); ok {
-		t.Error("a @font-face for some other family was accepted as Ahem's")
+	src := cdataRe.ReplaceAllString(string(data), "$1")
+	if !strings.Contains(src, "/fonts/ahem.css") {
+		t.Skipf("%s no longer links the Ahem stylesheet", doc)
 	}
 
-	// The removal reaches both attribute orders, and reaches the documents that
-	// really carry it.
-	for _, doc := range []string{
-		`<link rel="stylesheet" href="/fonts/ahem.css">`,
-		`<link href="/fonts/ahem.css" rel="stylesheet">`,
-		`<link href='/fonts/ahem.css' rel='stylesheet' />`,
-	} {
-		if got := ahemLinkRe.ReplaceAllString(doc, ""); got != "" {
-			t.Errorf("ahemLinkRe left %q of %q", got, doc)
-		}
+	res, err := newSuiteResolver(root, filepath.Dir(doc))
+	if err != nil {
+		t.Fatalf("resolver: %v", err)
 	}
-	// And reaches nothing else. A link to a stylesheet with rules in it is the
-	// case the ten trailing-space tests depend on.
-	keep := `<link rel="stylesheet" href="support/trailing-space-and-text-alignment.css">`
-	if got := ahemLinkRe.ReplaceAllString(keep, ""); got != keep {
-		t.Errorf("ahemLinkRe removed a stylesheet it must leave alone: %q", keep)
+	defer res.Close()
+
+	built := Build(Input{HTML: src, Resources: res, Fonts: fontSetForWPT()})
+
+	face, ok := built.Fonts.Face("Ahem", false, false)
+	if !ok || face == nil {
+		t.Fatalf("the document links /fonts/ahem.css and the engine has no Ahem; findings: %v",
+			built.Findings)
+	}
+	if _, standard := fontSetForWPT().Face("Ahem", false, false); standard {
+		t.Fatal("the harness font set answers for Ahem, so this test cannot tell " +
+			"a face loaded from the document from one handed over")
 	}
 
-	var seen int
-	for _, rt := range findReftests(t, root) {
-		src, err := os.ReadFile(rt.test)
-		if err != nil {
-			continue
-		}
-		if ahemLinkRe.Match(src) {
-			seen++
+	// The metric the font exists for: every glyph is one em, so four characters
+	// at 20px are exactly 80px. A fallback face is not.
+	if got := face.Measure("XXXX", 20); got < 79.99 || got > 80.01 {
+		t.Errorf("four characters of 20px Ahem measure %v, want 80 — the face that "+
+			"arrived is not Ahem", got)
+	}
+
+	// And it reaches the rectangle-glyph comparison, which is where about 345
+	// of this suite's clean passes live.
+	added := registerDocumentBlockFonts(built, res)
+	defer unregisterBlockFonts(added)
+	if blockFonts[face] == nil {
+		t.Error("the face the document loaded has no rectangle table, so every Ahem " +
+			"run in the suite would be compared as text against a fill")
+	}
+
+	// Nothing about loading it is reported as unsupported. That is the half the
+	// stripped link was hiding, and it is what lets those documents count as
+	// clean passes.
+	for _, f := range built.Findings {
+		if f.Unsupported() && strings.Contains(strings.ToLower(f.Message), "font") {
+			t.Errorf("loading the document's own font reported %s: %s", f.Rule, f.Message)
 		}
 	}
-	if seen == 0 {
-		t.Error("ahemLinkRe matched no document in the suite, so it is guarding nothing")
-	}
-	t.Logf("ahemLinkRe matches %d of the suite's test documents", seen)
 }
 
-// onlyAnAhemFontFace reports whether a stylesheet is nothing but one @font-face
-// declaring Ahem, and returns whatever else it found.
+// TestSuiteResolverServesTheServerRoot pins the other half of the base-URL job
+// this harness does for the engine.
 //
-// It is a function rather than four lines inside the test so that the *refusal*
-// can be exercised. The file it is really pointed at lives in someone else's
-// checkout, which this repository must not doctor in order to watch a check
-// fail, and a check that has only ever been observed to pass is one nobody knows
-// works.
-func onlyAnAhemFontFace(data []byte) (leftover string, ok bool) {
-	loc := fontFaceRe.FindIndex(data)
-	if loc == nil {
-		return strings.TrimSpace(string(data)), false
+// The suite is served over HTTP and its documents write "/fonts/ahem.css" for
+// the root of that server, which is the checkout. Resolving it is the harness's
+// business and not the engine's — the engine still refuses an absolute path
+// outright, which the second half of this checks.
+func TestSuiteResolverServesTheServerRoot(t *testing.T) {
+	root := wptDir(t)
+	res, err := newSuiteResolver(root, filepath.Join(root, "css", "CSS2", "text"))
+	if err != nil {
+		t.Fatalf("resolver: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(string(data[loc[0]:loc[1]])), "ahem") {
-		return strings.TrimSpace(string(data[loc[0]:loc[1]])), false
-	}
-	rest := strings.TrimSpace(string(data[:loc[0]]) + string(data[loc[1]:]))
-	return rest, rest == ""
-}
+	defer res.Close()
 
-// fontFaceRe matches one @font-face block. The block has no nested braces in it,
-// which is what makes the naive body pattern right here and would not be right
-// for CSS in general.
-var fontFaceRe = regexp.MustCompile(`(?is)@font-face\s*\{[^{}]*\}`)
+	if _, err := res.Resolve("/fonts/ahem.css"); err != nil {
+		t.Errorf("the harness did not serve the server root: %v", err)
+	}
+	// And it is still contained. "/" is the checkout, not the filesystem.
+	if _, err := res.Resolve("/../../../etc/passwd"); err == nil {
+		t.Error("a server-root reference climbed out of the checkout")
+	}
+	if _, err := res.Resolve("/"); err == nil {
+		t.Error("the server root itself was served as a file")
+	}
+
+	// The engine's own resolver is unchanged: an absolute path is refused.
+	plain, err := NewDirResolver(root)
+	if err != nil {
+		t.Fatalf("DirResolver: %v", err)
+	}
+	defer plain.Close()
+	if _, err := plain.Resolve("/fonts/ahem.css"); err == nil {
+		t.Error("DirResolver took an absolute path; the harness's join must not " +
+			"have loosened the engine's policy")
+	}
+}

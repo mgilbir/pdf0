@@ -54,6 +54,17 @@ type Input struct {
 	// resource.go for what a resolver may and may not do, and NewDirResolver
 	// for the contained filesystem one.
 	Resources ResourceResolver
+
+	// Fonts is the caller's font library: the faces a document may name and
+	// have, before it brings any of its own. A nil set is the fourteen standard
+	// PDF faces.
+	//
+	// It is on the input rather than on the render options because an
+	// @font-face is part of the *document*, and the set a document is laid out
+	// in is the caller's library with the document's own faces over it. Build
+	// puts the two together and returns the result as Built.Fonts, which is
+	// what a caller calling Layout directly must pass on.
+	Fonts FontSet
 }
 
 // Built is the result of the stages that exist.
@@ -65,6 +76,12 @@ type Built struct {
 	Root *Box
 	// Styles is every element's computed style.
 	Styles map[*html.Node]style.ComputedStyle
+	// Fonts is the set the document is to be laid out in: the caller's library
+	// with the faces the document's own @font-face rules loaded over it. It is
+	// never nil, and it is what a caller calling Layout directly must hand it —
+	// passing Input.Fonts instead would lay the document out without the fonts
+	// it brought.
+	Fonts FontSet
 	// Findings is everything worth telling the caller, ordered deterministically.
 	Findings []Finding
 	// Failed reports that something fired at Error severity, so a caller that
@@ -87,10 +104,16 @@ func Build(in Input) Built {
 		rec.Report(rule, AtHTML(e.Offset), e.Message)
 	}
 
+	// The document's @font-face rules, collected as the sheets are parsed and
+	// loaded once all of them are in. They are gathered rather than acted on
+	// here because a rule in the last stylesheet may replace one in the first,
+	// and because the caps below are on the document rather than on a sheet.
+	var faces []pendingFontFace
+
 	sheets := make([]style.Sheet, 0, len(in.CSS)+2)
-	sheets = append(sheets, parseSheet(rec, style.OriginUserAgent, "user agent", UserAgentCSS))
+	sheets = append(sheets, parseSheet(rec, style.OriginUserAgent, "user agent", UserAgentCSS, &faces))
 	if in.UserCSS != "" {
-		sheets = append(sheets, parseSheet(rec, style.OriginUser, "user", in.UserCSS))
+		sheets = append(sheets, parseSheet(rec, style.OriginUser, "user", in.UserCSS, &faces))
 	}
 	// A <style> element and a <link rel=stylesheet> are both author stylesheets,
 	// and they come before the ones the caller passed only because they were
@@ -99,11 +122,17 @@ func Build(in Input) Built {
 	// interleaved in document order for that reason; see stylesheet.go for what
 	// a linked one is allowed to be read from.
 	for _, s := range documentStylesheets(doc, in.Resources, rec) {
-		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source))
+		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source, &faces))
 	}
 	for _, s := range in.CSS {
-		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.Name, s.Source))
+		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.Name, s.Source, &faces))
 	}
+
+	base := in.Fonts
+	if base == nil {
+		base = StandardFonts()
+	}
+	fontSet := loadFontFaces(faces, in.Resources, base, rec)
 
 	styled := style.Apply(doc, sheets)
 	for _, f := range styled.Findings {
@@ -131,14 +160,21 @@ func Build(in Input) Built {
 		Document:  doc,
 		Root:      root,
 		Styles:    styled.Styles,
+		Fonts:     fontSet,
 		Findings:  rec.Findings(),
 		Failed:    rec.Failed(),
 		Truncated: rec.Truncated(),
 	}
 }
 
-// parseSheet reads one stylesheet, reporting what it could not read.
-func parseSheet(rec *Recorder, origin style.Origin, name, src string) style.Sheet {
+// parseSheet reads one stylesheet, reporting what it could not read and setting
+// aside the @font-face rules in it.
+//
+// The rules are taken out here rather than in the cascade because they are not
+// a cascade matter at all: an @font-face selects nothing and computes nothing,
+// it loads a file. Leaving them in would mean the styling stage reporting each
+// as an at-rule it does not apply, which after fontface.go would be untrue.
+func parseSheet(rec *Recorder, origin style.Origin, name, src string, faces *[]pendingFontFace) style.Sheet {
 	rules, errs := css.ParseStylesheet(src)
 	for _, e := range errs {
 		rec.ReportDetail(Finding{
@@ -147,7 +183,7 @@ func parseSheet(rec *Recorder, origin style.Origin, name, src string) style.Shee
 			Message: e.Message,
 		})
 	}
-	return style.Sheet{Origin: origin, Rules: rules}
+	return style.Sheet{Origin: origin, Rules: splitFontFaces(rules, name, faces)}
 }
 
 // ruleForStyleFinding maps the styling stage's report onto a rule.

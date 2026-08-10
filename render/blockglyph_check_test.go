@@ -3,6 +3,7 @@ package render
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/mgilbir/pdf0/fonts"
@@ -448,23 +449,52 @@ func simpleGlyph(nContours int16, pts [][2]int, onCurve []bool) []byte {
 }
 
 // ahemFace is the test font, or a skip.
+//
+// It reads the file directly, which is what these tests are about: they assert
+// facts about the *font program* — that its glyphs are rectangles, and which
+// ones — and there is no document in them for the face to have arrived from.
+// The engine's own path to Ahem is through an @font-face in a document, and
+// TestSuiteFontFaceLoadsAhem is what checks that.
+//
+// The face and its table are built once. Every one of these tests wants the
+// same font, and parsing 278 outlines per test would be paid for a dozen times.
 func ahemFace(t *testing.T) *fonts.Face {
 	t.Helper()
-	wptDir(t)
-	fs, ok := fontSetForWPT().(wptFonts)
-	if !ok || fs.ahem == nil {
-		t.Skip("the checkout has no Ahem.ttf")
+	dir := wptDir(t)
+	ahemOnce.Do(func() {
+		data, err := os.ReadFile(filepath.Join(dir, "fonts", "Ahem.ttf"))
+		if err != nil {
+			return
+		}
+		face, err := fonts.Load(data)
+		if err != nil {
+			return
+		}
+		ahemTestFace = face
+		ahemTestBlocks, _ = newBlockFont(data)
+		// Registered, because several of these tests drive blockFills itself
+		// and it reads the table off the map rather than being handed one.
+		registerBlockFont(face, data)
+	})
+	if ahemTestFace == nil {
+		t.Skip("the checkout has no readable Ahem.ttf")
 	}
-	return fs.ahem
+	return ahemTestFace
 }
+
+var (
+	ahemOnce       sync.Once
+	ahemTestFace   *fonts.Face
+	ahemTestBlocks *blockFont
+)
 
 func ahemBlockFont(t *testing.T) *blockFont {
 	t.Helper()
-	bf := blockFonts[ahemFace(t)]
-	if bf == nil {
+	ahemFace(t)
+	if ahemTestBlocks == nil {
 		t.Fatal("Ahem was loaded but has no rectangle table")
 	}
-	return bf
+	return ahemTestBlocks
 }
 
 // assertOps compares two display lists exactly, in order.
