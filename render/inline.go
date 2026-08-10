@@ -309,6 +309,9 @@ type inlineItem struct {
 	tab bool
 	// tabStop is the distance between two tab stops, from tab-size.
 	tabStop style.Unit
+	// tabFloor is §4.1.2's 0.5ch threshold: a tab whose shift would be shorter
+	// than this advances to the tab stop after the nearest one instead.
+	tabFloor style.Unit
 	// forced marks a break the author asked for — a <br>, or a newline in
 	// preserved white space. It ends the line wherever it falls, which is the
 	// difference between a break opportunity and an instruction.
@@ -632,9 +635,21 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// The two are not a matter of degree. Counting the space on a
 			// soft-wrapped line pushes a right-aligned line a space clear of the
 			// edge; not counting it on the last line centres " 0 " off-centre.
+			//
+			// "Only if it does not otherwise fit" is a rule about each character
+			// and not about the sequence, which is the second half of the same
+			// paragraph: the UA "may also visually collapse the character advance
+			// widths of any that would otherwise overflow". So a sequence that
+			// fits counts entirely, one that does not counts up to the line's
+			// edge, and the part past the edge hangs. Taking it as all-or-nothing
+			// is the reading that was here, and it centres a line of five
+			// characters and thirty-two spaces as though it were five: the page
+			// shows the letter two characters right of where every browser puts
+			// it, and the same document without the spaces is correct, so the
+			// fault reads as an alignment bug rather than a white-space one.
 			used := alignedWidth(runs, total)
-			if (forced || next >= len(items)) && total <= textWidth {
-				used = total
+			if forced || next >= len(items) {
+				used = style.Max(used, style.Min(total, textWidth))
 			}
 			// Which *side* it hangs off, which is not a second way of saying how
 			// much. §4.1.2 hangs the white space past the line's end, and the
@@ -1666,10 +1681,19 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		return nil, in
 	}
 
-	var tabStop style.Unit
+	var tabStop, tabFloor style.Unit
 	for _, p := range pieces {
 		if p.tab {
 			tabStop = l.tabStop(b, face)
+			// §4.1.2's threshold is half of "ch", which is the advance of "0" in
+			// the box's own font — the same measurement the "ch" unit is, taken
+			// here rather than through lengthOf because there is no declaration
+			// to parse. A face with no digit gives nothing to halve, and then the
+			// threshold is absent rather than zero: absent means every shift is
+			// long enough, which is the behaviour of every engine that does not
+			// implement the rule and is the one that cannot move a tab stop by
+			// mistake.
+			tabFloor = l.measure(face, "0", size).Div(2)
 			break
 		}
 	}
@@ -1718,7 +1742,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			breakBefore: p.breakBefore || (state.breakOpportunity && !p.space),
 			space:       p.space, collapsible: p.collapsible,
 			trimAtEnd: p.trimAtEnd,
-			tab:       p.tab, tabStop: tabStop,
+			tab:       p.tab, tabStop: tabStop, tabFloor: tabFloor,
 			// Preserved white space hangs unless the value is break-spaces,
 			// which exists precisely so that it does not.
 			hangs:  p.space && !p.collapsible && !ws.breakSpaces,
@@ -1769,14 +1793,33 @@ func (l *layouter) tabStop(b *Box, face *fonts.Face) style.Unit {
 //
 // A tab size of zero renders no tab at all, which is what §4.1.2 says and is
 // the only way to ask for a tab that takes no room.
-func tabAdvance(x, stop style.Unit) style.Unit {
+//
+// floor is §4.1.2's threshold: "if this distance is less than 0.5ch, then the
+// subsequent tab stop is used instead". It is a rule about the *shift* and not
+// about where the tab lands, which is why it is applied to the remainder rather
+// than to the position: a tab already sitting a hair before a stop is a tab that
+// would otherwise be invisible, and the paragraph it is in would lose the column
+// it was written to make. Without it a tab at 7.9ch of an 8ch stop advances a
+// tenth of a character and the text after it is a tenth of a character from the
+// text before it — which looks like no tab at all rather than like a wrong one,
+// and is the shape of silent difference §6 is about.
+//
+// A floor of zero is *absent* rather than "no distance is short enough": the
+// comparison is strict, so a zero floor can never fire, and a caller that could
+// not measure a "0" passes zero to say exactly that. The two readings agree
+// here, which is why there is one parameter and not two.
+func tabAdvance(x, stop, floor style.Unit) style.Unit {
 	if stop <= 0 {
 		return 0
 	}
 	if x < 0 {
 		x = 0
 	}
-	return stop.Sub(x % stop)
+	d := stop.Sub(x % stop)
+	if d < floor {
+		d = d.Add(stop)
+	}
+	return d
 }
 
 // measure returns the advance width of a string in a face, memoized.
@@ -2127,7 +2170,8 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 			// after the character — a tab is a character like any other for that
 			// purpose, and leaving it out would put the run after a tab a spacing
 			// to the left of where it is drawn.
-			item.width = tabAdvance(lineX.Add(used), item.tabStop).Add(item.spacing.letter)
+			item.width = tabAdvance(lineX.Add(used), item.tabStop, item.tabFloor).
+				Add(item.spacing.letter)
 		}
 
 		// A hanging space never causes a break: it sits past the line's end

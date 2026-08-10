@@ -80,6 +80,14 @@ func alignmentOf(b *Box, rtl bool) textAlign {
 func (l *layouter) alignLine(b *Box, rtl bool, lineWidth, used style.Unit) style.Unit {
 	slack := lineWidth.Sub(used)
 	if slack <= 0 {
+		// A line with nothing left over is a line justification would not have
+		// moved, so there is nothing to report about it either: an engine that
+		// does not justify sets such a line exactly where a conforming one
+		// would. That is why the report below is inside the slack test and not
+		// before it, and it is worth saying because the ordering has a visible
+		// consequence — a paragraph whose every line comes out full is a
+		// paragraph this engine renders correctly with "text-align: justify" on
+		// it, and it counts as a clean pass in the reftest ratchet on purpose.
 		return 0
 	}
 	switch alignmentOf(b, rtl) {

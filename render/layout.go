@@ -1324,6 +1324,11 @@ func (l *layouter) clampHeight(b *Box, v, containing, cbHeight style.Unit, cbDef
 // produces and what the specification's "the content box cannot be negative"
 // amounts to.
 func (l *layouter) explicitWidth(b *Box, containing style.Unit) (style.Unit, bool) {
+	// An intrinsic keyword is already a content width and box-sizing does not
+	// touch it, so it returns before the inset below rather than through it.
+	if v, ok := l.keywordWidth(b); ok {
+		return v, true
+	}
 	v, ok := l.lengthOf(b, "width", containing)
 	if !ok {
 		return 0, false
