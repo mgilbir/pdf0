@@ -182,11 +182,15 @@ var properties = map[string]property{
 	"empty-cells":     {true, "show"},
 	"table-layout":    {false, "auto"},
 
-	// Visibility and overflow.
+	// Visibility, overflow and clipping.
 	"visibility": {true, "visible"},
 	"overflow-x": {false, "visible"},
 	"overflow-y": {false, "visible"},
-	"opacity":    {false, "1"},
+	// CSS 2.1 §11.1.2. It does not inherit, which is what makes "clip: inherit"
+	// on a positioned child of a box that declared a rect() a test worth having
+	// — the value has to travel by the keyword rather than by default.
+	"clip":    {false, "auto"},
+	"opacity": {false, "1"},
 }
 
 // Inherited returns the style an anonymous box has: everything that inherits

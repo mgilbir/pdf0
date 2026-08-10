@@ -98,12 +98,30 @@ func picFills(ops []Op) []coloured {
 			if v.Rect.Empty() {
 				continue
 			}
+			// §11.1's clip, applied to the marks the picture becomes rather
+			// than to the picture's own rectangle: narrowing that would
+			// rescale the image, and what a clip does is show less of it in
+			// the same place. Every mark below is a rectangle, so the cut is
+			// exact.
+			cut := func(fills []coloured) []coloured {
+				if !v.Clip.Active {
+					return fills
+				}
+				kept := fills[:0]
+				for _, f := range fills {
+					if r := intersect(f.r, v.Clip.Rect); !r.Empty() {
+						f.r = r
+						kept = append(kept, f)
+					}
+				}
+				return kept
+			}
 			// A picture of one opaque colour is a fill of that colour, and is
 			// treated as one so that it takes part in occlusion like any other
 			// mark. The check reads every pixel and refuses any transparency —
 			// half-transparent black does not put the same ink down as black.
 			if c, ok := uniformColor(v.Image); ok {
-				out = append(out, coloured{r: v.Rect, c: c})
+				out = append(out, cut([]coloured{{r: v.Rect, c: c}})...)
 				continue
 			}
 			// A picture made of uniform rectangles is those rectangles. See
@@ -111,14 +129,14 @@ func picFills(ops []Op) []coloured {
 			// a weaker one, because the decomposition is verified pixel by pixel
 			// and refused when it does not hold exactly.
 			if fills := bandedFills(v.Image, v.Rect); fills != nil {
-				out = append(out, fills...)
+				out = append(out, cut(fills)...)
 				continue
 			}
 			// Anything else is opaque for the purpose of what lies under it.
 			// That is an approximation for a picture with an alpha channel, and
 			// it errs towards calling two documents different, which is the
 			// safe direction for an oracle.
-			out = append(out, coloured{r: v.Rect, c: style.RGBA{A: 1}, img: v.Key})
+			out = append(out, cut([]coloured{{r: v.Rect, c: style.RGBA{A: 1}, img: v.Key}})...)
 
 		case TileImage:
 			out = append(out, tiledFills(v)...)
@@ -471,10 +489,21 @@ func texts(ops []Op, under []coloured) []textMark {
 
 	var out []textMark
 	for _, v := range joinRuns(marking) {
-		out = append(out, textMark{
-			what: fmt.Sprintf("text %q size %s", v.Text, num(v.Size)),
-			x:    v.At.X, y: v.At.Y,
-		})
+		what := fmt.Sprintf("text %q size %s", v.Text, num(v.Size))
+		if v.Clip.Active {
+			// A run §11.1 cut is a different mark from the same run drawn
+			// whole, and there is no way to say which glyphs survived without a
+			// rasteriser — so the clip goes into the key and two documents
+			// agree only when they cut the same run in the same place. That
+			// errs towards calling documents different, which is the direction
+			// an oracle must err in.
+			//
+			// A run the clip does not cut carries no clip at all, so this does
+			// not fire merely because a document put its text inside an
+			// "overflow: hidden" box. See DrawText.Clip.
+			what += " clipped to " + rectKey(v.Clip.Rect)
+		}
+		out = append(out, textMark{what: what, x: v.At.X, y: v.At.Y})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].what != out[j].what {
@@ -548,6 +577,10 @@ func joinRuns(runs []DrawText) []DrawText {
 		y, size, spacing style.Unit
 		face             *fonts.Face
 		colour           style.RGBA
+		// Two runs cut by different clips do not put the same ink down even
+		// where they abut, so they are not joined. Clip is comparable, which is
+		// what lets it sit in a map key at all.
+		clip Clip
 	}
 	// Runs are gathered per group and spliced within it. The order of the output
 	// is not the paint order any more, which is why this is used only by texts:
@@ -567,7 +600,7 @@ func joinRuns(runs []DrawText) []DrawText {
 			out = append(out, v)
 			continue
 		}
-		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color}
+		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color, v.Clip}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}

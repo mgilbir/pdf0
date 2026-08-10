@@ -375,6 +375,7 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 				faces[name] = v.Face
 			}
 			b.Save()
+			clipTo(b, v.Clip)
 			b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
 			b.BeginText()
 			b.SetFont(name, v.Size.Px())
@@ -410,6 +411,7 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 				return nil, err
 			}
 			b.Save()
+			clipTo(b, v.Clip)
 			// An image XObject is painted into the unit square, so the matrix
 			// *is* the placement. The negative vertical scale is not a flip: in
 			// these coordinates y increases downwards, so the image's own
@@ -477,6 +479,29 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 		return nil, err
 	}
 	return doc, nil
+}
+
+// clipTo narrows the graphics state to a clip, if the operation carries one.
+//
+// It is called immediately after the Save that begins an operation and never
+// anywhere else, which is what makes an unbalanced clip impossible rather than
+// merely avoided: the clipping path is part of the graphics state, so the
+// Restore that ends the operation takes it away, and there is no path through
+// this file where one happens without the other. A display list cannot express
+// a clip that outlives the mark it belongs to, so a hostile document cannot
+// leave one open and blank the rest of the page.
+//
+// "W n" rather than "W f": the path sets the clip and is not painted. Emitting
+// "W" without a path-painting operator afterwards is a malformed content
+// stream, and "n" is the operator that means "no paint" — which is why the
+// pair is written together here and not split across a helper.
+func clipTo(b *content.Builder, c Clip) {
+	if !c.Active {
+		return
+	}
+	b.Rect(c.Rect.X.Px(), c.Rect.Y.Px(), c.Rect.W.Px(), c.Rect.H.Px())
+	b.Clip()
+	b.EndPath()
 }
 
 // tilingPattern builds the PDF pattern that draws one background tiling.

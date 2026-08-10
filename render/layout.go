@@ -106,6 +106,21 @@ type Fragment struct {
 	canvasLayers []bgPaint
 	canvasColor  *Box
 
+	// clipSelf and clipContent are CSS 2.1 §11.1: the area this box's own
+	// background and border may paint, and the area everything inside it may.
+	//
+	// They are two values because the two rules differ. "overflow" clips a
+	// box's *contents* to its padding box and leaves the box itself alone, so a
+	// wide border on an "overflow: hidden" element is still drawn; "clip" cuts
+	// the element's own rendered content as well. See visualeffects.go.
+	//
+	// The zero value clips nothing, which is what a fragment built by hand — or
+	// by a Layout that ran before this stage existed — gets. That is the right
+	// default for a display list: an unresolved clip must not silently hide a
+	// box, because a box that is not drawn is far harder to notice than one
+	// that is drawn too large.
+	clipSelf, clipContent Clip
+
 	// Offset is CSS 2.1 §9.4.3's relative displacement: how far the box is drawn
 	// from where the flow put it.
 	//
@@ -236,6 +251,13 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	// placed against the page. Both are known only now, and neither changes
 	// anything the walk above computed.
 	l.resolveBackgrounds(frag, page)
+
+	// Clipping last of all, because §11.1's rectangles are final ones: a
+	// padding box in page coordinates, for boxes that were positioned after
+	// everything else. It changes no geometry — §11.1 is about painting and
+	// never about layout, and a clipped box still occupies every inch of the
+	// space it did — so nothing computed above depends on it.
+	l.resolveClips(frag)
 	return frag
 }
 
