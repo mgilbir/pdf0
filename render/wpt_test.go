@@ -677,7 +677,30 @@ const wptEnv = "WPT_TESTS"
 // is a unit test written for it rather than anything here — worth recording
 // because intrinsic.go's own comment had claimed the correct behaviour for as
 // long as the code had done the other thing.
-const wptCleanPassBaseline = 4116
+// Generated content, the root element's margins and the counter grammar took it
+// from 4116 to 4154, and the run that did most of the work was not about
+// generated content at all. In order of size, and each measured on its own:
+//
+//   - +14, the user-agent stylesheet underlining every <a> rather than every
+//     link. An empty <a> is where the suite hangs its pseudo-elements, and every
+//     one came out blue against a reference that drew neither the colour nor the
+//     line.
+//   - +9, a string value that could not survive the cascade's own round trip: a
+//     newline in "content: 'a\Ab'" was written back raw, did not tokenize, and
+//     was reported as a value this engine cannot produce.
+//   - +10, §8.3.1's "margins of the root element's box do not collapse".
+//   - +3, white-space processing on generated content, which this engine used to
+//     say deliberately did not apply.
+//   - +1 each, the order a collapsed-through run leaves a box by, and §12.2's
+//     grammar for the counter functions.
+//
+// The last step to 4171 is not the engine at all and is recorded separately for
+// that reason: +17 came from trimRunSpace in picture_test.go, which stopped the
+// comparison treating white space *inside* a run as something that decides where
+// the run ends. Eighteen pairs drew the same glyphs in the same places and were
+// told apart by which call the space was batched into. Nothing rendered
+// differently after it than before.
+const wptCleanPassBaseline = 4171
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
