@@ -1077,6 +1077,91 @@ func TestAClearedChildStopsItsParentCollapsingThrough(t *testing.T) {
 	px(t, "the box after it", relY(t, find(t, root, "b"), w), 90)
 }
 
+// TestAFloatMetAlongALineShortensThatLine pins the half of §9.5 an engine that
+// places its floats after the line is finished cannot reach:
+//
+//	line boxes created next to the float are shortened to make room for the
+//	margin box of the float
+//
+// "next to" is a relation between two rectangles, so a float written after the
+// words is still next to them and the line still has to make room. The float
+// goes to the band's edge and the content already on the line moves aside.
+//
+// The arithmetic. A 300px block, an inline-block 50 wide on the line, then a
+// 100px float. The float is offered what the line began with — 300 - 50 = 250 —
+// so it fits, takes the band's left edge, and the line is re-broken in what is
+// left: the inline-block lands at 100.
+//
+// The second case is the one that must not move, and it is the reason the room
+// is measured against the band the line began with rather than the band it ends
+// with. A 250px inline-block leaves 50, which will not hold the float, so the
+// float goes below the line instead — and then it is not next to the line, does
+// not shorten it, and the inline-block stays at 0. A line box here is 40 tall
+// because that is the line-height, so the float lands at 40.
+func TestAFloatMetAlongALineShortensThatLine(t *testing.T) {
+	for _, tc := range []struct {
+		what                 string
+		inline               float64
+		wantInlineX, wantFlY float64
+	}{
+		{"the float fits beside the line", 50, 100, 0},
+		{"the float does not fit", 250, 0, 40},
+	} {
+		css := noDefaults + `
+		#w { width: 300px; line-height: 40px }
+		#a { display: inline-block; vertical-align: top; height: 20px;
+		     width: ` + trim(tc.inline) + `px }
+		#f { float: left; width: 100px; height: 50px }`
+		root := layoutOf(t, 1000,
+			`<section id="w"><span id="a"></span><span id="f"></span></section>`, css)
+
+		w := find(t, root, "w")
+		px(t, tc.what+": the inline-block's left", relX(t, find(t, root, "a"), w), tc.wantInlineX)
+		px(t, tc.what+": the float's left", relX(t, find(t, root, "f"), w), 0)
+		px(t, tc.what+": the float's top", relY(t, find(t, root, "f"), w), tc.wantFlY)
+	}
+}
+
+// TestAStaticPositionIsOfTheUnblockifiedBox pins the words §10.3.7 resolves an
+// "auto" left against:
+//
+//	the static position ... is the distance from the left edge of the containing
+//	block to the left margin edge of a hypothetical box that would have been the
+//	first box of the element if its 'position' property had been 'static'
+//
+// With "position: static" there is no §9.7 blockification, so the hypothetical
+// box of an absolutely positioned <span> is an inline box on the line where it
+// was written and that of an absolutely positioned <div> is a block box whose
+// left margin edge is the containing block's content edge. Reading the *used*
+// display cannot tell them apart, because §9.7 has already made both blocks.
+//
+// The difference only shows once something moves the line's own left edge, and a
+// float is the ordinary way that happens. The 100px float takes the band's left
+// edge, so the line starts at 100; the 50px inline-block before the positioned
+// box takes it to 150, which is where an inline hypothetical box would have
+// begun. A block hypothetical box begins at 0 whatever is on the line.
+func TestAStaticPositionIsOfTheUnblockifiedBox(t *testing.T) {
+	for _, tc := range []struct {
+		tag   string
+		wantX float64
+	}{
+		{"div", 0},
+		{"span", 150},
+	} {
+		css := noDefaults + `
+		#w { width: 300px; position: relative; line-height: 40px }
+		#a { display: inline-block; vertical-align: top; width: 50px; height: 20px }
+		#p { position: absolute; top: 0; width: 40px; height: 40px }
+		#f { float: left; width: 100px; height: 50px }`
+		root := layoutOf(t, 1000, `<section id="w"><span id="a"></span><`+tc.tag+
+			` id="p"></`+tc.tag+`><span id="f"></span></section>`, css)
+
+		w := find(t, root, "w")
+		px(t, "an absolute <"+tc.tag+">'s static left",
+			relX(t, find(t, root, "p"), w), tc.wantX)
+	}
+}
+
 // nearly compares two float widths at a tolerance far below a layout unit, which
 // is a 64th of a pixel.
 func nearly(a, b float64) bool {

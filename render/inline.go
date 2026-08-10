@@ -525,18 +525,85 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		// the line is exactly the case a single-y query cannot see, and the suite
 		// tests it by name in floats-wrap-top-below-inline-*.
 		var (
-			runs   []inlineItem
-			next   int
-			mid    []midLineBox
-			forced bool
-			lh, bl style.Unit
-			stack  lineStack
+			runs     []inlineItem
+			next     int
+			mid      []midLineBox
+			forced   bool
+			lh, bl   style.Unit
+			stack    lineStack
+			midKids  []*Fragment
+			after    []midLineBox
+			baseRoom = right.Sub(left)
 		)
+		// Where this line's own floats begin, so that an attempt that has to be
+		// made again can put the context back as it found it. The floats that
+		// *started* the line are before the mark and stay.
+		midMark, midAbs := origin.ctx.mark(), len(l.deferred)
 		for attempt := 0; ; attempt++ {
+			origin.ctx.truncate(midMark)
+			l.deferred = l.deferred[:midAbs]
+			midKids = midKids[:0]
+
 			runs, next, mid, forced = l.breakOneLine(items, i,
 				right.Sub(left).Sub(lineIndent), left.Sub(lo).Add(lineIndent))
 			stack = stackLine(runs, st)
 			lh, bl = stack.height, stack.baseline
+
+			// A float met part-way along the line is placed *now*, before the
+			// band is asked again, because §9.5 shortens "the current and
+			// subsequent line boxes" — the line it appears on included. Placing
+			// it after the line was settled, which is what this used to do, left
+			// the words it should have pushed aside sitting underneath it: the
+			// suite's floats-001, -006, -029, -030 and -031 each put a float
+			// after the content of a line and check that the content moved.
+			//
+			// The room it is offered is measured in the band the line started
+			// from rather than in the one it has been narrowed to. That is what
+			// makes the loop settle: narrowing the band and then asking again
+			// whether the float fits in what is left of it counts the float
+			// twice, and a float that fits on one attempt stops fitting on the
+			// next and starts fitting again on the one after. Against the
+			// original band the advance can only shrink as the band narrows, so
+			// a float that fits goes on fitting.
+			//
+			// A float that ends up *below* the line — because it did not fit
+			// beside what is already there, or because it cleared something —
+			// is taken back out and placed once the line is settled. It is not
+			// beside the line, so it does not shorten it, and leaving it in
+			// would: a line box is a little taller than the box on it, so a
+			// float sitting under the line reaches a few pixels into the range
+			// the band is asked over and narrows it to nothing. floats-
+			// placement-006 is that exactly, an inline-block and a "clear: both"
+			// float that between them drove the line two hundred pixels down
+			// the page.
+			//
+			// From the first such float onwards the rest are placed after the
+			// line too, in order. Rolling one back is a truncation, so it can
+			// only be the last thing in the context; and a float placed while an
+			// earlier one is missing is placed against the wrong obstacles.
+			after = after[:0]
+			for _, f := range mid {
+				if f.abs {
+					continue
+				}
+				if len(after) > 0 {
+					after = append(after, f)
+					continue
+				}
+				held, heldAbs := origin.ctx.mark(), len(l.deferred)
+				kid := l.floatChild(f.box, width, origin, y, baseRoom.Sub(f.used), lh, 0)
+				if kid.MarginRect().Y > y {
+					origin.ctx.truncate(held)
+					// The out-of-flow boxes the discarded layout found go with
+					// it, or the float would defer each of them twice when it is
+					// laid out again after the line.
+					l.deferred = l.deferred[:heldAbs]
+					after = append(after, f)
+					continue
+				}
+				midKids = append(midKids, kid)
+			}
+
 			if lh <= 0 || attempt >= maxLineFits {
 				break
 			}
@@ -691,9 +758,19 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			firstLine = false
 		}
 
-		// The out-of-flow boxes met along the line are dealt with once the line
-		// is settled, because until it is neither its top nor its left edge is
-		// known — and both are what the two kinds need.
+		// The floats met along the line were placed while it was being fitted —
+		// the line had to be broken against them — but their fragments join the
+		// tree here, after the line's own boxes, so that paint order is the
+		// order the display list has always had.
+		parent.Children = append(parent.Children, midKids...)
+		for _, f := range after {
+			parent.Children = append(parent.Children,
+				l.floatChild(f.box, width, origin, y, lineWidth.Sub(f.used), lh, 0))
+		}
+
+		// An absolutely positioned box met along the line is dealt with once the
+		// line is settled, because until it is neither its top nor its left edge
+		// is known, and both are what it needs.
 		for _, f := range mid {
 			if f.abs {
 				// §10.6.4's static position for a box written among the words:
@@ -710,12 +787,25 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// the negation of the other: one counts from the line's left edge
 				// and the other from the block's content right edge, and the line
 				// need not reach either.
+				if !f.box.staticInline {
+					// §10.3.7's hypothetical box for a box that would have been
+					// block-level had it been static: a block box, whose margin
+					// edges are the containing block's content edges. Only the
+					// line it was written on is taken from here — which is what
+					// makes this different from the block walk's answer and the
+					// reason the box is collected among the words at all.
+					//
+					// Reading the pen position instead is invisible until
+					// something moves the line's own left edge, and then it is
+					// not: float-in-inline-001 and position-absolute-007 in the
+					// suite each write such a box beside a float and check that
+					// the float did not carry it along.
+					l.deferAbsolute(f.box, parent, 0, y, 0, 0)
+					continue
+				}
 				l.deferAbsolute(f.box, parent, left.Sub(lo).Add(f.used), y,
 					width.Sub(right.Sub(lo).Sub(f.used)), 0)
-				continue
 			}
-			parent.Children = append(parent.Children,
-				l.floatChild(f.box, width, origin, y, lineWidth.Sub(f.used), lh, 0))
 		}
 
 		i = next
