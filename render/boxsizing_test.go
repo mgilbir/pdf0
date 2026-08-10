@@ -170,6 +170,11 @@ func TestBorderBoxWidensAnIntrinsicWidth(t *testing.T) {
 // width, which for a block is the whole containing block and about the widest
 // wrong answer there is. It was found in the white-space intrinsic-size tests,
 // where a box that should have been 50px came out 626px with no finding at all.
+//
+// The two width keywords that are now applied moved to the second list, which is
+// the assertion that matters most here: the guardrail has to stop reporting
+// exactly what the engine started doing, and a finding left behind on an applied
+// declaration is a caller told their page is wrong when it is right.
 func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
 	report := func(t *testing.T, decl string) []Finding {
 		t.Helper()
@@ -189,10 +194,10 @@ func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
 	}
 
 	for _, decl := range []string{
-		"width: min-content", "width: max-content", "width: fit-content",
-		"width: stretch", "width: fit-content(20px)", "min-width: min-content",
-		"max-width: max-content", "height: min-content", "min-height: min-content",
-		"max-height: max-content", "width: MIN-CONTENT",
+		"width: fit-content", "width: stretch", "width: fit-content(20px)",
+		"min-width: min-content", "max-width: max-content",
+		"height: min-content", "min-height: min-content",
+		"max-height: max-content",
 	} {
 		got := report(t, decl)
 		if len(got) != 1 {
@@ -216,6 +221,9 @@ func TestAnIntrinsicSizeIsReportedRatherThanDropped(t *testing.T) {
 		"width: auto", "width: 100px", "width: 50%",
 		"margin-left: min-content", "padding-top: max-content",
 		"font-size: min-content",
+		// Applied, so not reported. The case difference is here because the
+		// keyword arrives from the cascade as the author wrote it.
+		"width: min-content", "width: max-content", "width: MIN-CONTENT",
 	} {
 		if got := report(t, decl); len(got) != 0 {
 			t.Errorf("%q was reported as an unsupported value (%q); it is either "+

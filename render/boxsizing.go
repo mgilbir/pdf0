@@ -98,25 +98,22 @@ func (l *layouter) checkTableBoxSizing(b *Box) {
 	})
 }
 
-// The intrinsic sizing keywords, and why they are a finding rather than nothing.
+// The intrinsic sizing keywords: which of them are applied, and why the rest are
+// a finding rather than nothing.
 //
 // "width: min-content" is correct CSS Sizing: it asks for the narrowest width
 // the content can take without overflowing. This engine computes that number —
-// intrinsic.go does nothing else — but it does not accept the keyword as a
-// declared width, so the declaration falls through parseLength as "not a length
-// at all" and the box is laid out at its automatic width.
+// intrinsic.go does nothing else — and now accepts it, together with
+// "max-content", as a declared width. See keywordWidth for what that covers and
+// for the two boxes it refuses.
 //
-// That is the silent failure §6.3 is about, and it is worse here than most. The
-// automatic width of a block is the whole of its containing block, so a box
-// asked to shrink to its content is set to the full width of the page instead —
-// about the largest wrong answer available — and nothing about the page says so.
-// It was found in the white-space intrinsic-size tests, where a box that should
-// have been 50px wide came out 626px wide with no finding of any kind.
-//
-// It is a report and not an implementation because accepting the keyword means
-// resolving it at every place a used width is decided, which is a change to the
-// sizing model rather than an addition to it. What is cheap and honest meanwhile
-// is saying that the declaration was dropped.
+// Everything else in this file is still dropped, and dropping it silently is the
+// failure §6.3 is about. It is worse here than most: the automatic width of a
+// block is the whole of its containing block, so a box asked to shrink to its
+// content is set to the full width of the page instead — about the largest wrong
+// answer available — and nothing about the page says so. It was found in the
+// white-space intrinsic-size tests, where a box that should have been 50px wide
+// came out 626px wide with no finding of any kind.
 //
 // The set is the keywords of CSS Sizing 3 that name an intrinsic size. "auto" is
 // not among them: it is the initial value and it is applied. The fit-content()
@@ -127,6 +124,24 @@ var intrinsicSizeKeywords = map[string]bool{
 	"max-content": true,
 	"fit-content": true,
 	"stretch":     true,
+}
+
+// sizingKeyword is the keyword a sizing declaration names, lower-cased and with
+// a function's arguments dropped, or "" for a value that names none.
+//
+// The arguments are dropped because "fit-content(20px)" is the fit-content
+// keyword's function form and is neither applied nor reported differently from
+// the bare keyword. Everything here is a comparison against a fixed set, so a
+// value that is a length or a percentage falls out as "".
+func sizingKeyword(raw string) string {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	if i := strings.IndexByte(name, '('); i > 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	if !intrinsicSizeKeywords[name] {
+		return ""
+	}
+	return name
 }
 
 // sizingProperties are the ones an intrinsic keyword is valid on, and so the
@@ -140,24 +155,33 @@ var sizingProperties = [...]string{
 	"height", "min-height", "max-height",
 }
 
-// checkIntrinsicSizing reports a sizing property that named an intrinsic size.
+// checkIntrinsicSizing reports a sizing property that named an intrinsic size
+// this engine did not apply.
 //
 // Once per element rather than once per property, because a box that says
 // "width: min-content" and "height: max-content" has one thing wrong with it and
 // what the author needs is the box. The message still names the declaration it
 // found, so which one was dropped is in it.
+//
+// A declaration that *was* applied is skipped rather than reported, and it is
+// skipped by asking the same function the sizing path asks — not by repeating
+// its conditions here. A guardrail whose idea of what the engine does is a copy
+// of what the engine does is a guardrail that goes stale silently, and this one
+// would go stale in the direction that matters: it would stop reporting a
+// dropped declaration.
 func (l *layouter) checkIntrinsicSizing(b *Box) {
 	for _, prop := range sizingProperties {
 		raw := strings.TrimSpace(b.Style[prop])
 		if raw == "" {
 			continue
 		}
-		name := strings.ToLower(raw)
-		if i := strings.IndexByte(name, '('); i > 0 {
-			name = strings.TrimSpace(name[:i])
-		}
-		if !intrinsicSizeKeywords[name] {
+		if sizingKeyword(raw) == "" {
 			continue
+		}
+		if prop == "width" {
+			if _, applied := l.keywordWidth(b); applied {
+				continue
+			}
 		}
 		l.rec.ReportDetail(Finding{
 			Rule:   RuleUnsupportedValue,

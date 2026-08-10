@@ -47,6 +47,63 @@ type intrinsicWidths struct {
 	min, max style.Unit
 }
 
+// keywordWidth resolves "width: min-content" and "width: max-content" to the
+// number they name.
+//
+// The two are the only intrinsic keywords this engine accepts as a declared
+// width, and they are the two that need nothing but the content: CSS Sizing §3.2
+// says to "use the min-content size" or "the max-content size in the relevant
+// axis", and both of those are numbers this file already computes for every box
+// so that a float can shrink to fit. What is left out is left out for a reason
+// rather than for want of time:
+//
+//   - fit-content and stretch are sizes *of the space available*, and the space
+//     available is not a property of the box. A float's is the band it lands in,
+//     which is being searched for when its width is asked for, so the two would
+//     have to be resolved together. They stay reported by checkIntrinsicSizing.
+//   - The height half of both keywords is, per §3.2, "equivalent to its
+//     automatic size" for a block size — which is what this engine already does
+//     with a height it cannot parse, so the page is right and the finding is the
+//     only thing wrong. Correcting the finding is not the same work as this and
+//     is not done here.
+//
+// box-sizing is deliberately not applied. §3.3 is explicit: "non-quantitative
+// values such as auto and min-content are not influenced by the box-sizing
+// property", so the keyword names a content width under either value and
+// subtracting the padding and border from it — which is what every other
+// declared width here does — would be wrong by exactly those edges.
+//
+// It is refused for the boxes whose width is decided somewhere else. A table's
+// comes from §17.5.2 over its columns and a replaced element's from its own
+// intrinsic size, and neither reads this; answering here would produce a number
+// that is then ignored, and the finding those boxes still get is the honest
+// report.
+func (l *layouter) keywordWidth(b *Box) (style.Unit, bool) {
+	if !acceptsKeywordWidth(b) {
+		return 0, false
+	}
+	switch sizingKeyword(b.Style["width"]) {
+	case "min-content":
+		return l.contentWidths(b).min, true
+	case "max-content":
+		return l.contentWidths(b).max, true
+	}
+	return 0, false
+}
+
+// acceptsKeywordWidth reports whether a box's width is decided by the sizing
+// path that reads the keyword.
+func acceptsKeywordWidth(b *Box) bool {
+	if b.Replaced != nil || b.TableWrapper {
+		return false
+	}
+	switch b.Inner {
+	case InnerFlow, InnerFlowRoot:
+		return true
+	}
+	return false
+}
+
 // shrinkToFit is CSS 2.1 §10.3.5's formula.
 //
 // available is what the containing block leaves after this box's own margins,
@@ -68,6 +125,19 @@ func (l *layouter) shrinkToFit(b *Box, available style.Unit) style.Unit {
 func (l *layouter) outerWidths(b *Box, containing style.Unit) intrinsicWidths {
 	inner := l.contentWidths(b)
 	if declared, ok := l.intrinsicLength(b, "width"); ok {
+		inner = intrinsicWidths{min: declared, max: declared}
+	} else if declared, ok := l.keywordWidth(b); ok {
+		// A child sized to an intrinsic keyword contributes that one number to
+		// both of its parent's, exactly as a declared length does: a box at
+		// "width: min-content" is that wide whether or not the parent wraps, so
+		// a parent measured with the child's *own* pair would be as wide as the
+		// child's longest line and would leave the page showing through.
+		//
+		// fit-content is deliberately not here even though it names a keyword.
+		// Its contribution is the pair unchanged — min(max-content,
+		// max(min-content, available)) is min-content at its narrowest and
+		// max-content at its widest — which is what falling through to
+		// contentWidths already gives, and keywordWidth does not claim it.
 		inner = intrinsicWidths{min: declared, max: declared}
 	}
 	lo, hi := style.Unit(0), style.MaxUnit
@@ -231,10 +301,20 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 	// of the content, and §4.1.2 makes the hang at those two *conditional*: the
 	// space takes room unless taking it would overflow. A box being sized to
 	// its own preferred width cannot overflow, so the space takes room.
-	var line, run, edge style.Unit
+	//
+	// runEdge is the same measurement over the *unbreakable* run, and it is not
+	// the same number. Where the text wraps the two agree trivially, because a
+	// space that a line may end at ends the run as well and there is nothing left
+	// in it to trim. Where the text may not wrap — "white-space: nowrap", or a
+	// space that offers no opportunity at all — the space joins the run, and a
+	// minimum measured without this is wider than the text by the trailing space
+	// of every line. That is not hypothetical: "width: min-content" on a nowrap
+	// box ending in an ogham space mark, which §4.1.2 removes by name, came out
+	// one stemline wider than the same text without it.
+	var line, run, edge, runEdge style.Unit
 	endRun := func() {
-		out.min = style.Max(out.min, run)
-		run = 0
+		out.min = style.Max(out.min, run.Sub(runEdge))
+		run, runEdge = 0, 0
 	}
 	endLine := func() {
 		endRun()
@@ -277,6 +357,10 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			got := l.outerWidths(item.atomicBox, 0)
 			run = run.Add(got.min)
 			line = line.Add(got.max)
+			// Content, so a space before it is no longer trailing. Without this
+			// a picture after a space would be measured into a box short by the
+			// space's width — the same slip the text case below avoids.
+			edge, runEdge = 0, 0
 
 		case item.forced:
 			endLine()
@@ -298,7 +382,14 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				// minimum width of its longest word — so a float holding one
 				// would be sized to a fraction of the text it then overflows.
 				run = run.Add(w)
+				if item.trimAtEnd {
+					runEdge = runEdge.Add(w)
+				} else {
+					runEdge = 0
+				}
 			} else {
+				// The run ended at the space, so it holds nothing that a line
+				// edge could remove — endRun clears both.
 				endRun()
 			}
 			line = line.Add(w)
@@ -314,7 +405,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 			}
 			run = run.Add(item.width)
 			line = line.Add(item.width)
-			edge = 0
+			edge, runEdge = 0, 0
 		}
 	}
 	endLine()

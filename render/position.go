@@ -501,6 +501,16 @@ func (l *layouter) absoluteLength(b *Box, property string, basis style.Unit) (st
 // containing block's *width* on both axes — so it is passed separately rather
 // than reusing basis, which for a height is the containing block's height.
 func (l *layouter) absoluteSize(b *Box, property string, basis, padBasis style.Unit) (style.Unit, bool) {
+	// An intrinsic keyword width is a content width already, and box-sizing does
+	// not apply to it — see keywordWidth — so it skips the inset below. It also
+	// makes the width *not auto*, which is the answer §10.3.7 needs from here:
+	// a box with "width: min-content" and both offsets declared is
+	// over-constrained rather than solved for its width.
+	if property == "width" {
+		if v, ok := l.keywordWidth(b); ok {
+			return v, true
+		}
+	}
 	v, ok := l.absoluteLength(b, property, basis)
 	if !ok {
 		return 0, false
