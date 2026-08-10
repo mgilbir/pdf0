@@ -265,12 +265,17 @@ func TestDisplayNoneCannotCount(t *testing.T) {
 func TestMarkerDoesNotSeeItsOwnBeforeCounter(t *testing.T) {
 	// Numbered inside, so that the marker is a run on the line and generatedText
 	// can see it. Which side of the box it is drawn on decides nothing here.
+	//
+	// The comparison is exact and not a Contains, which is the second thing this
+	// test taught. Taking the element's snapshot after its ::before rather than
+	// before it numbers the item 11, and "11." contains "1." — so the substring
+	// form watched the plant go past.
 	got := generatedText(t, `<ol><li></li></ol>`, `
 		ol { list-style-type: decimal }
 		li { list-style-position: inside }
 		li::before { content: "["; counter-increment: list-item 10 }`)
-	if !strings.Contains(got, "1.") {
-		t.Errorf("the marker read %q, want \"1.\" — the ::before's increment is "+
-			"after it in document order", got)
+	if want := "1.|["; got != want {
+		t.Errorf("the marker read %q, want %q — the ::before's increment is "+
+			"after it in document order", got, want)
 	}
 }
