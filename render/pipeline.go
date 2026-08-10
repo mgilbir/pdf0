@@ -46,12 +46,13 @@ type Input struct {
 	UserCSS string
 
 	// Resources supplies the bytes of the files the document refers to — the
-	// images an <img> names.
+	// images an <img> or a background-image names, and the stylesheets a
+	// <link rel=stylesheet> does.
 	//
 	// A nil resolver loads nothing, which is the deliberate default: a document
-	// is untrusted input, and "src" is a string in it. See resource.go for what
-	// a resolver may and may not do, and NewDirResolver for the contained
-	// filesystem one.
+	// is untrusted input, and "src" and "href" are strings in it. See
+	// resource.go for what a resolver may and may not do, and NewDirResolver
+	// for the contained filesystem one.
 	Resources ResourceResolver
 }
 
@@ -91,12 +92,14 @@ func Build(in Input) Built {
 	if in.UserCSS != "" {
 		sheets = append(sheets, parseSheet(rec, style.OriginUser, "user", in.UserCSS))
 	}
-	// A <style> element in the document is an author stylesheet like any other,
-	// and comes before the ones the caller passed only because it was written
-	// first — order is the cascade's last tie-break and it has to be the order
-	// the author would expect.
-	for _, s := range documentStylesheets(doc) {
-		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, "", s))
+	// A <style> element and a <link rel=stylesheet> are both author stylesheets,
+	// and they come before the ones the caller passed only because they were
+	// written first — order is the cascade's last tie-break and it has to be the
+	// order the author would expect. documentStylesheets returns the two kinds
+	// interleaved in document order for that reason; see stylesheet.go for what
+	// a linked one is allowed to be read from.
+	for _, s := range documentStylesheets(doc, in.Resources, rec) {
+		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source))
 	}
 	for _, s := range in.CSS {
 		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.Name, s.Source))
@@ -145,26 +148,6 @@ func parseSheet(rec *Recorder, origin style.Origin, name, src string) style.Shee
 		})
 	}
 	return style.Sheet{Origin: origin, Rules: rules}
-}
-
-// documentStylesheets collects the text of every <style> element.
-//
-// A <link rel=stylesheet> is *not* followed. Nothing here resolves a URL — §4.1
-// makes that the caller's resolver's job and forbids this engine a network —
-// and the blocked reference is reported where the element is dropped rather than
-// here.
-func documentStylesheets(doc *html.Node) []string {
-	var out []string
-	doc.Walk(func(n *html.Node) bool {
-		if n.Type == html.ElementNode && n.Name == "style" {
-			if text := n.TextContent(); text != "" {
-				out = append(out, text)
-			}
-			return false
-		}
-		return true
-	})
-	return out
 }
 
 // ruleForStyleFinding maps the styling stage's report onto a rule.
