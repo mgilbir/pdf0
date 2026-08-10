@@ -263,6 +263,23 @@ func TestBackgroundPositionLengthsAndEdges(t *testing.T) {
 		// An em is the element's own font size, which the default sheet leaves
 		// at 16px.
 		{"2em 1em", 42, 26},
+		// A keyword and a length, in the *two*-value form. The grammar's second
+		// alternative is "[left|center|right|<length-percentage>]
+		// [top|center|bottom|<length-percentage>]", so this is the left edge
+		// horizontally and 40 down from the top — not, as a greedy reading has
+		// it, "40 in from the left" with nothing said about the vertical.
+		{"left 40px", 10, 50},
+		{"right 5px", 210, 15},
+		{"30px bottom", 40, 130},
+		// A negative vertical offset, which is the form the suite writes —
+		// "background: url(x) left -1em" — and the one a greedy grouping loses
+		// altogether, leaving the image at the origin.
+		{"left -5px", 10, 5},
+		// The same words with a third value are the four-value form again, and
+		// there the keyword does take the offset: 30 in from the left, and the
+		// vertical centres on the keyword it names.
+		{"left 30px top", 40, 10},
+		{"left 30px bottom", 40, 130},
 	}
 	for _, tc := range cases {
 		t.Run(tc.position, func(t *testing.T) {

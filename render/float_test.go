@@ -198,10 +198,12 @@ func TestFloatDoesNotCollapseMarginsWithAnything(t *testing.T) {
 // having, and the half an engine can quietly not do.
 //
 // The containing block is 200px and the float is 100x50 with a 25px line height,
-// so the first two lines start at y=0 and y=25 and both overlap the float; the
-// third starts at y=50, which is the float's bottom edge and therefore clear of
-// it. §9.5 shortens a line to the *band* at the y it starts at, so the first two
-// are 100px wide starting at x=100 and the rest are the full 200.
+// so the first two lines span y 0 to 25 and 25 to 50 and both overlap the float;
+// the third spans 50 to 75, which begins at the float's bottom edge and is
+// therefore clear of it. §9.5 shortens a line to the band over the line box's
+// own extent — see bandOver, and floatextent_test.go for the case where that
+// differs from the band at its top edge — so the first two are 100px wide
+// starting at x=100 and the rest are the full 200.
 //
 // The text follows from that and is asserted as well as the geometry, because
 // the geometry alone would be satisfied by a line box that was narrowed and then
