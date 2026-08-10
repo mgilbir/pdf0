@@ -185,42 +185,81 @@ func TestLowerGreekSkipsFinalSigma(t *testing.T) {
 // fit, so each figure of a decimal number is a separate mark and 1979 is four of
 // them for a coincidental reason rather than because it has four digits. The
 // cases below are chosen so that a carry crosses each order of magnitude.
+//
+// They go through markerText rather than through additive, which is not a
+// stylistic choice: each system's range is written where the style is dispatched
+// and not in the table, so a test that called additive with the range as an
+// argument was asserting its own arithmetic. Narrowing Armenian to 1..999 in
+// markerText went straight past it.
 func TestArmenianAndGeorgianAreAdditive(t *testing.T) {
 	armenian := map[int]string{
-		1: "Ա", 9: "Թ", 10: "Ժ", 11: "ԺԱ", 99: "ՂԹ", 100: "Ճ",
+		1: "Ա.", 2: "Բ.", 3: "Գ.", 9: "Թ.", 10: "Ժ.", 11: "ԺԱ.", 99: "ՂԹ.", 100: "Ճ.",
 		// 1000 + 900 + 70 + 9.
-		1979: "ՌՋՀԹ",
+		1979: "ՌՋՀԹ.",
 		// The largest the system expresses: 9000 + 900 + 90 + 9.
-		9999: "ՔՋՂԹ",
+		9999: "ՔՋՂԹ.",
+		// Past it the decimal stands, which is §12.6.2's instruction for a marker
+		// a style cannot represent. Silence there would be a list that loses its
+		// numbering on the ten-thousandth item and says nothing.
+		10000: "10000.",
+		0:     "0.",
 	}
 	for index, want := range armenian {
-		if got := additive(index, armenianNumerals, 1, 9999); got != want {
+		if got := markerText("armenian", index); got != want {
 			t.Errorf("armenian %d is %q, want %q", index, got, want)
 		}
 	}
 	georgian := map[int]string{
-		1: "ა", 9: "თ", 10: "ი", 11: "ია", 100: "რ", 1000: "ჩ",
-		10000: "ჵ",
+		1: "ა.", 2: "ბ.", 3: "გ.", 9: "თ.", 10: "ი.", 11: "ია.", 100: "რ.", 1000: "ჩ.",
+		10000: "ჵ.",
 		// The largest: 10000 + 9000 + 900 + 90 + 9.
-		19999: "ჵჰშჟთ",
+		19999: "ჵჰშჟთ.",
+		20000: "20000.",
+		0:     "0.",
 	}
 	for index, want := range georgian {
-		if got := additive(index, georgianNumerals, 1, 19999); got != want {
+		if got := markerText("georgian", index); got != want {
 			t.Errorf("georgian %d is %q, want %q", index, got, want)
 		}
 	}
+}
 
-	// Past the range the decimal stands, which is §12.6.2's instruction for a
-	// marker a style cannot represent. Silence there would be a list that loses
-	// its numbering on the ten-thousandth item and says nothing.
-	if got := additive(10000, armenianNumerals, 1, 9999); got != "10000" {
-		t.Errorf("armenian 10000 is %q, want the decimal", got)
-	}
-	if got := additive(20000, georgianNumerals, 1, 19999); got != "20000" {
-		t.Errorf("georgian 20000 is %q, want the decimal", got)
-	}
-	if got := additive(0, armenianNumerals, 1, 9999); got != "0" {
-		t.Errorf("armenian 0 is %q, want the decimal", got)
+// TestAdditiveNumeralsDescend pins the invariant the greedy sum rests on.
+//
+// additive walks the table once and takes each numeral as many times as it fits,
+// which is only the largest-first answer if the table is in strictly descending
+// order. A pair out of order is not a wrong mark in one place: it silently makes
+// every value that needs the smaller one write it repeatedly instead — 2 becomes
+// "ԱԱ" rather than "Բ" — and the tables are long enough that reading them is not
+// a check. Swapping two entries was planted and every value the tests happened to
+// name still came out right.
+func TestAdditiveNumeralsDescend(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		numerals []additiveNumeral
+	}{
+		{"armenian", armenianNumerals},
+		{"georgian", georgianNumerals},
+	} {
+		for i := 1; i < len(tc.numerals); i++ {
+			if tc.numerals[i].weight >= tc.numerals[i-1].weight {
+				t.Errorf("%s numeral %d (%d) is not below the one before it (%d)",
+					tc.name, i, tc.numerals[i].weight, tc.numerals[i-1].weight)
+			}
+		}
+		if n := tc.numerals[len(tc.numerals)-1].weight; n != 1 {
+			t.Errorf("%s's smallest numeral is %d; without a 1 the sum cannot reach "+
+				"every value", tc.name, n)
+		}
+		// Every symbol distinct, which is the other way a long table goes wrong:
+		// a copied line reads as plausible and numbers two levels alike.
+		seen := map[string]int{}
+		for _, n := range tc.numerals {
+			if was, dup := seen[n.symbol]; dup {
+				t.Errorf("%s uses %q for both %d and %d", tc.name, n.symbol, was, n.weight)
+			}
+			seen[n.symbol] = n.weight
+		}
 	}
 }
 
@@ -269,6 +308,91 @@ func TestEveryListStyleTypeIsDistinct(t *testing.T) {
 	}
 	if got := markerText("none", 4); got != "" {
 		t.Errorf("none produced %q", got)
+	}
+}
+
+// TestOutsideMarkerSitsAWholeMarkerAndAGapToTheLeft pins the outside position's
+// arithmetic, which the sign test below does not.
+//
+// It earns its place the way this repository's tests are supposed to: halving
+// the marker's own width was planted and nothing failed, because every
+// assertion about the outside marker asked only whether its x was negative. With
+// the same gap on both sides of the property, one figure covers both — the
+// inside marker's text begins a marker-and-a-gap in from the content edge and
+// the outside marker's begins a marker-and-a-gap out from it.
+//
+// "1." at 20px Ahem is two em squares, 40px, and the gap is half an em, 10px. So
+// the marker's origin is 50px to the left of the item's border box, which has no
+// border and no padding here.
+func TestOutsideMarkerSitsAWholeMarkerAndAGapToTheLeft(t *testing.T) {
+	set := loadAhem(t)
+	built := Build(Input{HTML: "<ol><li>ab</li></ol>", CSS: []Stylesheet{{Source: `
+		ol { list-style-type: decimal; margin: 0; padding: 0 }
+		li { font-family: Ahem; font-size: 20px }`}}})
+	w, _ := style.FromPx(600)
+	h, _ := style.FromPx(600)
+	root := Layout(built.Root, Size{W: w, H: h}, set, NewRecorder(nil))
+
+	var marker *Marker
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f.Marker != nil && marker == nil {
+			marker = f.Marker
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if marker == nil {
+		t.Fatal("no marker")
+	}
+	if marker.Text != "1." {
+		t.Fatalf("the marker reads %q, want %q", marker.Text, "1.")
+	}
+	if got := marker.At.X.Px(); got != -50 {
+		t.Errorf("the marker's origin is at %vpx; outside puts it clear of the "+
+			"content by its own 40px and the 10px gap, so -50", got)
+	}
+}
+
+// TestAShrinkToFitItemMakesRoomForItsInsideMarker pins that the marker seeds the
+// intrinsic-width measurement as well as the line building.
+//
+// A floated or inline-block list item is sized by its own content, and the
+// marker is content: an item measured without it is narrower than the marker it
+// then draws, so the first line wraps a word early and the marker hangs over the
+// edge. Seeding only the line builder was planted and every other test here
+// passed, because they all lay out in a page 600px wide where nothing has to be
+// measured to fit.
+//
+// 20px Ahem: "1." is 40px, the gap 10px, "ab" 40px, so the float is 90px wide.
+func TestAShrinkToFitItemMakesRoomForItsInsideMarker(t *testing.T) {
+	set := loadAhem(t)
+	built := Build(Input{HTML: `<div id="f">ab</div>`, CSS: []Stylesheet{{Source: noDefaults + `
+		#f { float: left; display: list-item; list-style-type: decimal;
+		     list-style-position: inside; font-family: Ahem; font-size: 20px }`}}})
+	w, _ := style.FromPx(600)
+	h, _ := style.FromPx(600)
+	root := Layout(built.Root, Size{W: w, H: h}, set, NewRecorder(nil))
+
+	var item *Fragment
+	var walk func(*Fragment)
+	walk = func(f *Fragment) {
+		if f.Box != nil && f.Box.ListItem && item == nil {
+			item = f
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if item == nil {
+		t.Fatal("no list item")
+	}
+	if got := item.BorderRect.W.Px(); got != 90 {
+		t.Errorf("the float is %vpx wide, want 90 — the marker's 40, the 10px gap "+
+			"and the 40px of text", got)
 	}
 }
 

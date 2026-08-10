@@ -170,3 +170,33 @@ func TestZeroLineHeightIsAValueAndNotAnAbsence(t *testing.T) {
 		t.Errorf("the baseline is at %vpx, want 6", got)
 	}
 }
+
+func TestOnlyRunsOfTextBringLeading(t *testing.T) {
+	// The other half of the flag, and the half that took a fixture chosen for it.
+	//
+	// A line holds items that are not text and have no metrics at all: the marker
+	// for a float met among the words, the one for an absolutely positioned box,
+	// and an inline box's own margin, border and padding. Letting those through
+	// makes each of them offer a reach of zero above and zero below — which is
+	// harmless on almost every line, and is not harmless on a line whose strut
+	// reaches a *negative* distance below the baseline.
+	//
+	// 20px Ahem with line-height 0: ascent 16, descent 4, half-leading
+	// (0-20)/2 = -10. The baseline is at 6 and the strut's descent is 0-6 = -6, so
+	// the line is 6 + (-6) = 0 tall, which is what "line-height: 0" asks for. An
+	// inset item offering 0 would win that maximum and the line would be 6.
+	//
+	// This was measured rather than argued: with the flag ignored, nothing in the
+	// unit tests moved and nothing in all 5212 reftests moved either. The guard
+	// decided nothing until this document existed.
+	set := loadAhem(t)
+	line, _ := lineOfBlock(t, set,
+		`<div id="d"><span id="s">x</span></div>`,
+		noDefaults+`
+		 #d { font-family: Ahem; font-size: 20px; line-height: 0 }
+		 #s { padding-left: 10px }`, "d")
+	if got := line.Rect.H.Px(); got != 0 {
+		t.Errorf("the line box is %vpx tall, want 0 — the inline box's padding is "+
+			"not a run of text and brings no leading of its own", got)
+	}
+}
