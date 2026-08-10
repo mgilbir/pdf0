@@ -634,14 +634,42 @@ func (l *layouter) tableGridWidths(table *Box) (min, max style.Unit) {
 // content wants. A table with two short columns does not fill the page, and a
 // table with more content than fits is as wide as its minimum and overflows.
 func (l *layouter) tableUsedWidth(table *Box, available style.Unit) style.Unit {
-	declared, hasDeclared := l.declaredTableWidth(table, available)
+	// §17.4: a percentage width on the table is a percentage of the *wrapper's*
+	// containing block, which is the one thing the table cannot see — by the time
+	// it is sized, its containing block is the wrapper and the wrapper is as wide
+	// as the table. The wrapper records it on the way past, and that recording is
+	// the only correct source for it.
+	//
+	// The fallback is for a table box with no wrapper, which §17.4's box tree does
+	// not produce and only a hand-built tree can reach. It is not a second answer
+	// to the same question — there is no right answer available here — so it is
+	// the room the table has and nothing is claimed for it.
+	base, ok := l.tablePercentBase[table]
+	if !ok {
+		base = available
+	}
+	declared, hasDeclared := l.declaredTableWidth(table, base)
 	if hasDeclared && tableLayoutIsFixed(table) {
 		// §17.5.2.1: the fixed algorithm's whole promise is that the table is
-		// the width it was given and the content does not argue. Flooring it by
+		// the width it was given and the *content* does not argue. Flooring it by
 		// the content's minimum, which is what the automatic algorithm does,
 		// would take the promise back — a table declared 300px wide holding one
 		// long word would come out as wide as the word.
-		return maxZero(declared)
+		//
+		// What does argue is the widths the author declared on the columns
+		// themselves, and the same sentence of §17.5.2.1 says so: "the width of
+		// the table is then the greater of the value of the 'width' property for
+		// the table element and the sum of the column widths (plus cell spacing or
+		// borders)". Two 20px cells with 20px of border-spacing come to 100 and a
+		// table declared 70px wide is 100 wide, because nothing in the fixed
+		// algorithm can make a declared column narrower than it was declared.
+		//
+		// Ignoring it does not clip anything, which is why it was easy to miss: the
+		// columns are laid out at their declared widths and the table's *box* is
+		// the smaller number, so the cells simply hang out of the right-hand side
+		// of their own table and whatever is behind it shows through the gap.
+		declared = maxZero(declared)
+		return style.Max(declared, l.fixedGridWidth(table, declared))
 	}
 
 	min, max := l.tableGridWidths(table)
@@ -656,6 +684,33 @@ func (l *layouter) tableUsedWidth(table *Box, available style.Unit) style.Unit {
 		return style.Max(max, min)
 	}
 	return style.Max(min, available)
+}
+
+// fixedGridWidth is what §17.5.2.1's columns come to: the sum of the column
+// widths plus the cell spacing between and around them.
+//
+// It runs the fixed distribution over the width the author declared and adds the
+// answer up, which reads circular and is not: the second run, over the width this
+// settles, produces the same columns. A column the author sized is set either way,
+// and the columns nobody sized share exactly the total they were given the first
+// time — distribute hands out a total exactly, so the sum of their first-pass
+// shares is the amount the second pass has to share. The extra pass costs one
+// walk of the grid on a table that declared a width, and the grid and the column
+// demands behind it are both memoized.
+func (l *layouter) fixedGridWidth(table *Box, declared style.Unit) style.Unit {
+	g := l.tableGridFor(table)
+	if g.cols == 0 {
+		// No columns, so no spacing either: a table with nothing in it is as wide
+		// as it was declared and there is nothing to be the greater of.
+		return 0
+	}
+	s := l.spacingOf(table)
+	gaps := s.h.Mul(float64(g.cols + 1))
+	var total style.Unit
+	for _, w := range l.fixedColumnWidths(table, g, maxZero(declared.Sub(gaps)), s) {
+		total = total.Add(w)
+	}
+	return total.Add(gaps)
 }
 
 // declaredTableWidth resolves a width the author put on the table, as a content
@@ -1043,6 +1098,66 @@ func (l *layouter) tableContentWidths(table *Box) intrinsicWidths {
 		return intrinsicWidths{min: maxZero(w), max: maxZero(w)}
 	}
 	return intrinsicWidths{min: min, max: max}
+}
+
+// wrapperWidthForPercentTable is §17.4's wrapper sized around a table whose own
+// width is a percentage.
+//
+// The wrapper shrinks to fit the table, and shrink-to-fit reads intrinsic widths
+// — which is exactly where a percentage cannot be answered, for the reason
+// tableContentWidths gives: resolving it needs a containing block, and the
+// containing block is the box being sized. So the wrapper came out as wide as the
+// table's *content* and the percentage then resolved against that, which turns
+// "width: 80%" into eighty per cent of the widest word in the table.
+//
+// The circle is broken here rather than there, because this is the one place the
+// right containing block is in hand. §17.4 puts the wrapper where the table was
+// and leaves the table inside it, so by the time the table is sized its
+// containing block *is* the wrapper — and answering the percentage against that
+// would be answering it against itself. The base is the wrapper's own containing
+// block, which is what a browser resolves it against and what
+// fixed-table-layout-023 writes out in a comment: a 640px body and "width: 80%"
+// is a 512px table. It is recorded for the table on the way past, because the
+// table cannot recover it later.
+//
+// A length is deliberately left to shrink-to-fit, which already reaches the same
+// answer through tableContentWidths. Only the percentage is answered here, and
+// only when there is exactly one thing that could have declared it.
+func (l *layouter) wrapperWidthForPercentTable(wrapper *Box, room style.Unit) (style.Unit, bool) {
+	var table *Box
+	for _, c := range wrapper.Children {
+		if c.Inner != InnerTable {
+			continue
+		}
+		if table != nil {
+			return 0, false
+		}
+		table = c
+	}
+	if table == nil {
+		return 0, false
+	}
+	length, ok := l.parseLength(table, "width")
+	if !ok || length.Kind != style.LengthPercent {
+		return 0, false
+	}
+	w, ok := length.Resolve(room, true)
+	if !ok {
+		return 0, false
+	}
+	if l.tablePercentBase == nil {
+		l.tablePercentBase = map[*Box]style.Unit{}
+	}
+	l.tablePercentBase[table] = room
+	// The wrapper is a border box around the table's border box, and the table's
+	// declared width is a border box only on a <table> — so on a CSS table the
+	// edges have to be added back on, exactly as tableWrapperWidths does.
+	if !htmlTableWidth(table) {
+		w = w.Add(l.tableEdges(table))
+	}
+	// A caption can still be wider than the table, and §17.4 says the wrapper
+	// holds both.
+	return style.Max(maxZero(w), l.tableWrapperWidths(wrapper).min), true
 }
 
 // tableWrapperWidths is §17.4's wrapper measured: as wide as the table, and at
