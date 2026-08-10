@@ -89,7 +89,14 @@ sup { vertical-align: super }
 u, ins { text-decoration-line: underline }
 s, del { text-decoration-line: line-through }
 mark { background-color: yellow; color: black }
-a { text-decoration-line: underline; color: #0000ee }
+/* Links, and only links. HTML's rendering section writes this as ":link,
+   :visited", and :link matches an <a> *that has an href* — an <a> without one
+   is an anchor and not a link, and browsers leave it the colour of its
+   surroundings. Writing it as a bare "a" was measurably wrong: the suite is full
+   of empty <a> elements used as a place to hang a pseudo-element on, and every
+   one of them came out blue and underlined against a reference that had no such
+   thing. */
+a[href] { text-decoration-line: underline; color: #0000ee }
 
 /* Ruby annotations sit above their base text; the sizing is the only part of
    that this engine can express yet. */
