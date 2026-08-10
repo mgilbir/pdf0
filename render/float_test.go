@@ -1034,6 +1034,49 @@ func TestAClearedBoxThatCollapsesThroughLaysItsMarginOnce(t *testing.T) {
 		find(t, root, "p").ContentRect().H, 0)
 }
 
+// TestAClearedChildStopsItsParentCollapsingThrough pins the other half of what
+// clearance does to §8.3.1, which is that it stops being a question about the
+// cleared box and becomes one about the box holding it.
+//
+// A box's own two margins are adjoining only when it has "no in-flow children",
+// and the engine reads that as "nothing inside it that did not itself collapse
+// through" — which is what lets an empty box between two paragraphs disappear
+// instead of separating them. A child with clearance did not collapse through:
+// the clearance separates its own two margins, so it is a real in-flow child and
+// its parent has to stay.
+//
+// Reaching that is harder than it looks, because a clearance is normally height
+// and a parent with height cannot collapse through anyway. It takes a negative
+// bottom margin that exactly cancels the clearance:
+//
+//   - #f is 100 tall, so the float's bottom is 100 below #p's content top.
+//   - #c collapses through with a run of max(0, -100) = -100, so its
+//     hypothetical border edge is 100 *above* that top and the clearance is 200,
+//     putting the edge at 100.
+//   - The run continues below the edge, so #p's content ends at 100 - 100 = 0
+//     and #p has no height at all.
+//
+// #p's own margins are 30 above and 50 below. If it collapsed through they would
+// be one margin of 50 and #b would follow #a by 50; because it does not, they
+// are laid in turn and #b follows by 80. The float's own bottom is not what
+// separates them: an ordinary <div> does not contain its floats.
+func TestAClearedChildStopsItsParentCollapsingThrough(t *testing.T) {
+	css := noDefaults + `
+	#a { height: 10px }
+	#p { margin-top: 30px; margin-bottom: 50px }
+	#f { float: left; width: 100px; height: 100px }
+	#c { clear: left; margin-bottom: -100px }
+	#b { height: 10px }`
+	root := layoutOf(t, 1000, `<section id="w"><div id="a"></div>`+
+		`<div id="p"><div id="f"></div><div id="c"></div></div>`+
+		`<div id="b"></div></section>`, css)
+
+	w := find(t, root, "w")
+	px(t, "the parent's border top", relY(t, find(t, root, "p"), w), 40)
+	px(t, "the parent's height", find(t, root, "p").BorderRect.H, 0)
+	px(t, "the box after it", relY(t, find(t, root, "b"), w), 90)
+}
+
 // nearly compares two float widths at a tolerance far below a layout unit, which
 // is a 64th of a pixel.
 func nearly(a, b float64) bool {
