@@ -2,6 +2,8 @@ package render
 
 import (
 	"fmt"
+	"image"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -196,10 +198,16 @@ func TestOverflowScrollAndAutoClipExactlyAsHiddenDoes(t *testing.T) {
 	}
 }
 
-// TestOverflowOnAnInlineBoxClipsNothing is what overflow-applies-to-001 checks
-// and is the second condition in the property's "applies to" line: block
-// containers and boxes that establish a formatting context. A <span> is
-// neither.
+// TestOverflowOnAnInlineBoxClipsNothing is what overflow-applies-to-001's third
+// case checks: the property applies to block containers and to boxes that
+// establish a formatting context, and a <span> is neither.
+//
+// This test is weaker than it looks and the reason is recorded rather than left
+// to be rediscovered. An inline box produces no fragment of its own — inline
+// content lives in line boxes — so the clip resolution never sees the span at
+// all, and planting a check that would have let it clip changes nothing here or
+// in the suite. What this pins is the outcome; overflowClips says why there is
+// no code behind it.
 func TestOverflowOnAnInlineBoxClipsNothing(t *testing.T) {
 	ops := paintOf(t, `<div id="outer"><span id="s"><span id="i"></span></span></div>`,
 		noDefaults+`
@@ -211,6 +219,30 @@ func TestOverflowOnAnInlineBoxClipsNothing(t *testing.T) {
 	got := soleFill(t, ops, red, "the child of an inline box with overflow: hidden")
 	px(t, "the unclipped child's width", got.W, 200)
 	px(t, "the unclipped child's height", got.H, 200)
+}
+
+// TestOverflowOnATableRowClipsNothing is the reachable half of the same
+// "applies to" clause, and the one there is code for. A row and a row group do
+// produce fragments with the cells inside them, so an engine that read the
+// property off any box would cut a cell's content at its row's edge.
+//
+// The cell in the same document is the control: overflow *does* apply to a
+// table cell, which is a block container.
+func TestOverflowOnATableRowClipsNothing(t *testing.T) {
+	doc := `<table id="t"><tbody id="g"><tr id="r"><td id="d"><div id="i"></div></td></tr></tbody></table>`
+	css := noDefaults + `
+		table { border-spacing: 0 } td { padding: 0 }
+		#t { width: 100px; table-layout: fixed }
+		#i { background-color: #ff0000; width: 300px; height: 300px }`
+
+	for _, on := range []string{"#r", "#g"} {
+		ops := paintOf(t, doc, css+on+` { overflow: hidden }`)
+		got := soleFill(t, ops, red, "a cell's content under "+on+" { overflow: hidden }")
+		px(t, "the width of content under "+on, got.W, 300)
+	}
+	ops := paintOf(t, doc, css+`#d { overflow: hidden }`)
+	got := soleFill(t, ops, red, "a cell's content under td { overflow: hidden }")
+	px(t, "the width of content clipped by its cell", got.W, 100)
 }
 
 // TestOverflowOnATableClipsItsContents is the other side of the same rule: a
@@ -644,5 +676,131 @@ func TestClipReachesTheContentStreamBalanced(t *testing.T) {
 	}
 	if depth != 0 {
 		t.Errorf("the content stream ends %d levels deep:\n%s", depth, stream)
+	}
+}
+
+// TestClippedPictureCarriesItsClipRatherThanASmallerRectangle.
+//
+// A picture is the one mark that cannot be clipped by arithmetic: its rectangle
+// is where it is *stretched to*, so narrowing it would squeeze the whole image
+// into the visible strip rather than showing less of it. The assertion is
+// therefore two things at once — the rectangle is untouched, and the clip is
+// there.
+func TestClippedPictureCarriesItsClipRatherThanASmallerRectangle(t *testing.T) {
+	root := replacedLayout(t, 500,
+		`<div id="p"><img id="i" src="wide.png"></div>`,
+		noDefaults+`
+		#p { width: 20px; height: 30px; overflow: hidden }
+		#i { width: 40px; height: 20px }`)
+	ops := Paint(root)
+
+	var pics []DrawImage
+	for _, op := range ops {
+		if v, ok := op.(DrawImage); ok {
+			pics = append(pics, v)
+		}
+	}
+	if len(pics) != 1 {
+		t.Fatalf("%d pictures were drawn, want 1\n%s", len(pics), sketchClips(ops))
+	}
+	px(t, "the clipped picture's own width", pics[0].Rect.W, 40)
+	px(t, "the clipped picture's own height", pics[0].Rect.H, 20)
+	if !pics[0].Clip.Active {
+		t.Fatalf("a picture wider than its clipping ancestor carries no clip")
+	}
+	rectPx(t, "the clip on the picture", pics[0].Clip.Rect, 0, 0, 20, 30)
+
+	// And the comparison sees through it: only the visible strip takes part in
+	// occlusion, so a mark behind the clipped-away half is not hidden by it.
+	for _, f := range picFills(ops) {
+		if f.r.Right() > pics[0].Clip.Rect.Right() {
+			t.Errorf("the comparison saw a mark reaching to %.2f, past the clip at %.2f",
+				f.r.Right().Px(), pics[0].Clip.Rect.Right().Px())
+		}
+	}
+}
+
+// TestClippedTilingNarrowsTheAreaItPaintsAndNotItsTiles.
+//
+// A tiling already carries the area it may paint, so §11.1 meets that
+// rectangle. What must not move is the tile: a background cut in half still has
+// to line up with the same background on the box beside it, which it would not
+// if the clip had shifted the first tile.
+func TestClippedTilingNarrowsTheAreaItPaintsAndNotItsTiles(t *testing.T) {
+	const doc = `<div id="p"><div id="b">x</div></div>`
+	const inner = `#b { width: 200px; height: 100px; background-image: url(wide.png) }`
+
+	loose := firstTiling(t, bgPaintOf(t, doc,
+		noDefaults+`#p { width: 20px; height: 30px }`+inner))
+	tight := firstTiling(t, bgPaintOf(t, doc,
+		noDefaults+`#p { width: 20px; height: 30px; overflow: hidden }`+inner))
+
+	rectPx(t, "the unclipped tiling's area", loose.Clip, 0, 0, 200, 100)
+	rectPx(t, "the clipped tiling's area", tight.Clip, 0, 0, 20, 30)
+	if tight.Tile != loose.Tile || tight.StepX != loose.StepX || tight.StepY != loose.StepY {
+		t.Errorf("the clip moved the tiles: tile %v step %v,%v, want %v step %v,%v",
+			tight.Tile, tight.StepX.Px(), tight.StepY.Px(),
+			loose.Tile, loose.StepX.Px(), loose.StepY.Px())
+	}
+}
+
+// TestTheComparisonSeesAClippedRun.
+//
+// The reftest oracle is what most of this engine's evidence rests on, and a
+// clip is the one thing in a display list it could silently ignore: a fill
+// arrives already cut down, so nothing about occlusion needed to change, and a
+// run of text carrying a Clip would compare equal to the same run drawn whole
+// unless the comparison were told otherwise. This is the check on that, on the
+// model of TestWPTOracleHasTeeth.
+func TestTheComparisonSeesAClippedRun(t *testing.T) {
+	face, ok := StandardFonts().Face("Helvetica", false, false)
+	if !ok {
+		t.Skip("the standard faces are not available")
+	}
+	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
+	run := DrawText{
+		At: Point{u(10), u(30)}, Text: "hello", Face: face, Size: u(16),
+		Color: style.RGBA{A: 1},
+	}
+	cut := run
+	cut.Clip = Clip{Rect: Rect{u(10), u(20), u(20), u(20)}, Active: true}
+	narrower := run
+	narrower.Clip = Clip{Rect: Rect{u(10), u(20), u(10), u(20)}, Active: true}
+
+	clip := pageClip()
+	if pictureEqual([]Op{cut}, []Op{run}, clip) {
+		t.Error("a run cut by a clip compared equal to the same run drawn whole")
+	}
+	if pictureEqual([]Op{cut}, []Op{narrower}, clip) {
+		t.Error("two runs cut by different clips compared equal")
+	}
+	if !pictureEqual([]Op{cut}, []Op{cut}, clip) {
+		t.Error("a run compared unequal to itself")
+	}
+}
+
+// TestTheComparisonSeesAClippedPicture is the same check for a picture, whose
+// clip cannot be folded into its rectangle either.
+func TestTheComparisonSeesAClippedPicture(t *testing.T) {
+	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
+	img := image.NewNRGBA(image.Rect(0, 0, 40, 20))
+	for y := 0; y < 20; y++ {
+		for x := 0; x < 40; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{R: 255, A: 255})
+		}
+	}
+	whole := DrawImage{Rect: Rect{u(0), u(0), u(40), u(20)}, Image: img, Key: "k"}
+	cut := whole
+	cut.Clip = Clip{Rect: Rect{u(0), u(0), u(10), u(20)}, Active: true}
+
+	clip := pageClip()
+	if pictureEqual([]Op{cut}, []Op{whole}, clip) {
+		t.Error("a picture cut by a clip compared equal to the whole picture")
+	}
+	// And what it *is* equal to: a fill of its colour over the visible strip,
+	// which is the uniform-colour equivalence the comparison already makes.
+	strip := FillRect{Rect: Rect{u(0), u(0), u(10), u(20)}, Color: style.RGBA{R: 255, A: 1}}
+	if !pictureEqual([]Op{cut}, []Op{strip}, clip) {
+		t.Error("a solid picture clipped to a strip did not compare equal to that strip")
 	}
 }

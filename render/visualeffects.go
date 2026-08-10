@@ -247,18 +247,37 @@ func clipDepthOf(c Clip) int {
 
 // overflowClips reports whether a box clips what is inside it.
 //
-// Two conditions, and the second is what overflow-applies-to-001 is for.
-// "overflow" applies to block containers and to boxes that establish a
-// formatting context — so it does nothing at all on a plain inline box, and it
-// does work on a table, which is neither a block container nor flow content.
-// An engine that read the property off any box would clip a <span>'s children
-// to a padding box that inline layout never gave it.
+// # What the property applies to, and how little of that needs code
 //
-// The root element is the exception §11.1.1 names: its overflow is propagated
-// to the viewport rather than applied to its own box, and in a paged medium the
-// viewport is the page, which already bounds everything. <body> is the second
-// half of the same rule — when the root's own overflow is visible, the body's
-// is what propagates, and the body then behaves as though it were visible.
+// "overflow" applies to block containers and to boxes that establish a
+// formatting context. Among the boxes this walk can reach — the ones with a
+// fragment — the only kinds that are neither are a table row and a table row
+// group, and those are excluded below because excluding them is observable: a
+// cell whose content is wider than its row would otherwise be cut at the row's
+// edge.
+//
+// The rest of the "applies to" clause needs no code at all, and each of those
+// was planted rather than reasoned about:
+//
+//   - A plain inline box with "overflow: hidden" produces no fragment — inline
+//     content lives in line boxes — so a test for it here can never decide
+//     anything. Removing one changed nothing in the unit tests and nothing in
+//     the suite. overflow-applies-to-001's third case passes for that reason
+//     rather than because of a check.
+//   - A block-level box with a non-visible overflow has already been made a
+//     formatting-context root by box.go, so "block-level and plain flow" is
+//     unreachable here.
+//   - A table column and a column group do get fragments, and clipping them is
+//     unobservable: a column box has no content and no descendants, and the
+//     cells whose width it settles belong to the rows.
+//
+// # The root and <body>
+//
+// §11.1.1's propagation: the root element's overflow goes to the viewport
+// rather than to its own box, and in a paged medium the viewport is the page,
+// which already bounds everything. <body> is the second half of the same rule —
+// when the root's own overflow is visible, the body's is what propagates, and
+// the body then behaves as though it were visible.
 func (l *layouter) overflowClips(b *Box) bool {
 	if b == nil || b.Element == nil {
 		return false
@@ -267,14 +286,7 @@ func (l *layouter) overflowClips(b *Box) bool {
 		return false
 	}
 	switch b.Inner {
-	case InnerFlow:
-		// Only a block-level one; box.go turns a block-level "overflow: hidden"
-		// into a flow root, so a box still in this state and block-level has
-		// visible overflow and cannot reach here.
-		if b.Outer != OuterBlock {
-			return false
-		}
-	case InnerText, InnerTableColumn, InnerTableColumnGroup:
+	case InnerTableRow, InnerTableRowGroup:
 		return false
 	}
 	if l.propagatesOverflow(b) {
@@ -318,6 +330,12 @@ func (l *layouter) clipRectOf(f *Fragment) Clip {
 	if b == nil || !b.Position.outOfFlow() {
 		return Clip{}
 	}
+	// A fast path and not a rule. "auto" is the initial value, so every
+	// absolutely positioned box in every document arrives here with it, and
+	// looking for a shape in it each time would be the whole cost of this
+	// feature for the documents that do not use it. It decides nothing —
+	// planted, and parseClipShape refuses a bare "auto" anyway, because it is
+	// not a rect().
 	raw := strings.TrimSpace(b.Style["clip"])
 	if raw == "" || strings.EqualFold(raw, "auto") {
 		return Clip{}
