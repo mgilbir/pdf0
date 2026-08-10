@@ -252,6 +252,17 @@ func bandEdge(s *stair, top, bottom style.Unit) (style.Unit, bool) {
 //
 // Touching is not overlapping: a box that begins exactly at a float's right edge
 // is beside it, which is the whole point of the band.
+//
+// This is the one query still answered by looking at every float, and it is
+// where the remaining quadratic lives: a document that alternates a float with a
+// block that establishes a formatting context and declares a width asks it once
+// per such block, and sixty-four thousand of each pair spend four seconds here —
+// three quarters of the layout, measured. It is left because neither staircase
+// decides it. Both summarise one edge of the floats over a range of y, and this
+// is a rectangle meeting a rectangle: the left float with the greatest right
+// edge over a range need not be the one whose own left edge reaches into the
+// box. What it wants is a stabbing query in two dimensions, which is a different
+// structure and not a variation on this one.
 func (fc *floatContext) overlaps(r Rect) bool {
 	if r.W <= 0 || r.H <= 0 {
 		// A box with no extent covers nothing, so nothing can be under it. A
