@@ -677,7 +677,48 @@ const wptEnv = "WPT_TESTS"
 // is a unit test written for it rather than anything here — worth recording
 // because intrinsic.go's own comment had claimed the correct behaviour for as
 // long as the code had done the other thing.
-const wptCleanPassBaseline = 4116
+// §4.1.2's tab threshold — "if this distance is less than 0.5ch, then the
+// subsequent tab stop is used instead" — took it from 4116 to 4119, and the
+// three are the whole of the effect: failures went from 742 to 739 and the
+// vacuous bucket did not move, so nothing here changed category without also
+// changing a page. They are tab-stop-threshold-002, -004 and -006, one for each
+// of pre, pre-wrap and break-spaces, and their references are the same document.
+//
+// It is a small number for a rule worth writing down anyway, because the tests
+// it moved are the only three in the suite that can tell the two readings apart
+// and the difference they measure is not small: a tab a tenth of a character
+// before its stop advanced a tenth of a character, so the column an author wrote
+// it to make was not a column at all.
+// "width: min-content" and "width: max-content" took it from 4119 to 4124, and
+// the two effects have to be kept apart because together they overstate the
+// layout work. Failures went from 739 to 732, so *seven* pages changed and came
+// out right. Of those seven, four had nothing else unsupported in either
+// document and count here; the other three still carry a missing ogham glyph, so
+// they moved into the vacuous bucket and wait there. The fifth clean pass is the
+// taint coming off: one test was already passing and its finding was the only
+// thing keeping it out of this count. Nothing about that page changed.
+//
+// Two of the seven needed a second fix that moves nothing at all on its own —
+// the trailing white space §4.1.2 removes at a line edge was taken off the
+// preferred width and not off the minimum, which is invisible until something
+// asks for the minimum by name. Measured separately: the trim alone leaves all
+// three numbers exactly where they were, and the keyword alone *breaks* a test
+// that was passing. They are only a pair, which is why the trim's evidence is a
+// unit test written for it rather than anything here.
+// §4.1.2's conditional hang, read per character rather than per sequence, took
+// it from 4124 to 4126, and only one of those two is a page. Failures went from
+// 732 to 731: white-space-pre-wrap-trailing-spaces-001, whose reference centres
+// a letter where a full line puts it and not where a line of five characters
+// does. The second clean pass is text-align-white-space-001, which was passing
+// already and lost its "text-align: justify is not implemented" finding — its
+// lines now come out exactly full, and a full line is one justification would
+// not have moved, so the finding no longer applies. Nothing about that page
+// changed; see alignLine for why the report sits inside the slack test.
+//
+// The clamp inside the change moves nothing here at all and is not decoration:
+// it decides how far a sequence hangs, which is invisible until the hang is at
+// the *start* edge of a right-to-left line. Its evidence is a unit test.
+const wptCleanPassBaseline = 4126
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
