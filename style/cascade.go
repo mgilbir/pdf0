@@ -317,6 +317,34 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 		return nil
 	}
 
+	if name == "content" && !legalCounterFunctions(d.Value) {
+		// §12.2's grammar gives the two counter functions fixed argument lists:
+		//
+		//	counter(<identifier>) | counter(<identifier>, <list-style-type>)
+		//	counters(<identifier>, <string>) | counters(<identifier>, <string>, <list-style-type>)
+		//
+		// so "counter(c, '.')" names a separator on the function that has none,
+		// and "counter(c, decimal, decimal)" gives two styles to a function that
+		// takes one. Neither is a value, and §4.2 drops the declaration.
+		//
+		// Dropping it here is what makes the *earlier* declaration stand, which
+		// is the whole of what a test of this can observe: content-counter-016
+		// writes "content: counter(c)" and then four malformed ones after it,
+		// and requires the numbering to come out 1 to 12 from the first. Read at
+		// use time instead, the last declaration is the only one left and the
+		// page numbers every item 1000.
+		//
+		// Not marked unsupported, for the same reason the two checks above are
+		// not: nothing is missing from the engine, and CSS says what to do.
+		s.report(Finding{
+			Offset: d.Offset,
+			Message: "\"content: " + serialize(d.Value) + "\" calls a counter " +
+				"function with arguments it does not take, so the declaration was dropped",
+			Property: name,
+		})
+		return nil
+	}
+
 	if _, ok := properties[name]; ok {
 		// A registered property that nothing reads is reported here rather than
 		// dropped. The value still cascades — inheritance and the computed
@@ -487,6 +515,80 @@ func legalQuotes(vals []css.ComponentValue) bool {
 		}
 	}
 	return seen >= 2 && seen%2 == 0
+}
+
+// legalCounterFunctions reports whether every counter() and counters() in a
+// "content" value has the arguments §12.2 gives it.
+//
+// Only those two functions are judged. The rest of the property's grammar is
+// deliberately left alone: a value this engine cannot *produce* — an image, an
+// identifier that is not one of the quote keywords — is reported where it is
+// read, by name and with the element it was on, and turning that into a silent
+// drop here would take the one message that says what is missing from a page and
+// replace it with nothing. What is checked here is different in kind: a value
+// that is not CSS at all, where §4.2 says the declaration goes and the earlier
+// one stands.
+//
+// Anything that is not one of the two functions passes, including a nested one:
+// neither function takes a function as an argument, so a counter() inside
+// something else is already outside the grammar being checked and is left to the
+// reader to refuse.
+func legalCounterFunctions(vals []css.ComponentValue) bool {
+	for _, v := range vals {
+		if !v.IsFunction() {
+			continue
+		}
+		name := strings.ToLower(v.Token.Value)
+		if name != "counter" && name != "counters" {
+			continue
+		}
+		if !legalCounterArguments(name == "counters", v.Values) {
+			return false
+		}
+	}
+	return true
+}
+
+// legalCounterArguments checks one call's argument list.
+//
+// The arguments are read positionally rather than by type, which is the point:
+// counter(name, style) and counters(name, string, style) put different things in
+// the second slot, and a reader that took whichever it recognised would accept
+// counter(name, string) — the value this exists to refuse.
+func legalCounterArguments(isCounters bool, vals []css.ComponentValue) bool {
+	var args [][]css.ComponentValue
+	cur := []css.ComponentValue{}
+	for _, v := range vals {
+		if v.IsToken() && v.Token.Kind == css.Whitespace {
+			continue
+		}
+		if v.IsToken() && v.Token.Kind == css.Comma {
+			args = append(args, cur)
+			cur = nil
+			continue
+		}
+		cur = append(cur, v)
+	}
+	args = append(args, cur)
+
+	// The name, then the separator counters() takes and counter() does not,
+	// then the style both may end with.
+	want := []css.Kind{css.Ident}
+	if isCounters {
+		want = append(want, css.String)
+	}
+	if len(args) == len(want)+1 {
+		want = append(want, css.Ident)
+	}
+	if len(args) != len(want) {
+		return false
+	}
+	for i, arg := range args {
+		if len(arg) != 1 || !arg[0].IsToken() || arg[0].Token.Kind != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // onlyIdent reports that a value holds exactly one identifier and no other

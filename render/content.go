@@ -89,6 +89,14 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			value, _ := el.Attr(name)
 			text.WriteString(value)
 
+		// The two refusals below no longer answer anything a stylesheet can
+		// write: §12.2's grammar for these functions is checked where the sheet
+		// is prepared, and a call with the wrong arguments takes the whole
+		// declaration with it so that an earlier one stands. They are kept for
+		// the reason parseQuotes gives for the same shape of check — a computed
+		// style can be built by hand, and the initial value travels this path —
+		// and TestResolveContentRefusesAMalformedCounterCall is the fixture that
+		// keeps them from being a guard nobody has ever seen decide anything.
 		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counter"):
 			name, listStyle, _, ok := counterArguments(v)
 			if !ok {

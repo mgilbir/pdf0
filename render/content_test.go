@@ -124,9 +124,13 @@ func TestContentAttr(t *testing.T) {
 func TestUnproducibleContentIsReported(t *testing.T) {
 	cases := map[string]string{
 		// counter(), counters() and the quote keywords are produced now and so
-		// are not here; a counter function with no name is still unproducible,
-		// and is the case that keeps this covering the counter path at all.
-		`p::before { content: counter() }`:     "counter",
+		// are not here. Nor is a counter function with the wrong arguments, which
+		// used to be: that is not content this engine cannot make, it is not CSS,
+		// and the cascade now drops the declaration so that an earlier one stands
+		// — see TestAMalformedCounterFunctionDropsTheDeclaration next door in
+		// style. resolveContent still refuses it, because a computed style can be
+		// built by hand and the initial value travels the same path, but nothing
+		// a stylesheet can write reaches that refusal any more.
 		`p::before { content: url(mark.png) }`: "image",
 		// An identifier that is not one of the keywords the property defines.
 		`p::before { content: elephant }`: "elephant",
@@ -237,5 +241,38 @@ func TestGeneratedContentCanBeABlock(t *testing.T) {
 	got = bodyBoxes(t, `<p>x</p>`, `p::before { content: "gone"; display: none }`)
 	if strings.Contains(got, "gone") {
 		t.Errorf("display:none on a ::before still generated a box:\n%s", got)
+	}
+}
+
+// TestResolveContentRefusesAMalformedCounterCall is the fixture for the two
+// refusals in resolveContent that no stylesheet can reach any more.
+//
+// §12.2's grammar for the counter functions is checked where the sheet is
+// prepared, and a call with the wrong arguments takes the whole declaration with
+// it — so the reader can only meet one through the door this test uses, which is
+// a computed value built by hand. That door is real: the initial value travels
+// the same path, and this package's own tests build styles directly.
+//
+// Without a fixture the refusals would be a guard nobody had ever seen decide
+// anything, which is worse than no guard because it reads as defence.
+func TestResolveContentRefusesAMalformedCounterCall(t *testing.T) {
+	for _, raw := range []string{
+		`counter()`,
+		`counters(c)`,
+	} {
+		got := resolveContent(raw, nil, nil, quoteList{}, 0)
+		if got.unsupported == "" {
+			t.Errorf("%q was read as %q rather than refused", raw, got.text)
+		}
+	}
+
+	// And the calls that are legal still produce, so the refusal is not a
+	// blanket one. The counter that was never created reads as zero, which is
+	// §12.4.3's own answer.
+	if got := resolveContent(`counter(c)`, nil, nil, quoteList{}, 0); got.text != "0" {
+		t.Errorf("counter(c) produced %q, %q", got.text, got.unsupported)
+	}
+	if got := resolveContent(`counters(c, ".")`, nil, nil, quoteList{}, 0); got.unsupported != "" {
+		t.Errorf(`counters(c, ".") was refused: %s`, got.unsupported)
 	}
 }
