@@ -456,7 +456,48 @@ const wptEnv = "WPT_TESTS"
 // missing families is 2.25px taller than the one that names them together — the
 // union of two faces with different baselines, which is §10.8.1 working. It
 // fails honestly.
-const wptCleanPassBaseline = 3924
+//
+// §11.1's clipping took it from 3924 to 3979, and the three effects were
+// measured separately because the headline named the wrong one of them. The
+// directory this was filed under is css/CSS2/visufx, whose 47 failures read as
+// "overflow"; 44 of them are the "clip" property and three are overflow.
+//
+//   - registering "clip" so that it stops being reported unsupported moved
+//     *nothing*: 3924 clean and 968 failures before and after. Unusually for
+//     this file the reporting half is zero, and the reason is that every one of
+//     those tests was failing rather than passing vacuously — a red square that
+//     should have been clipped away was on the page, so no amount of honest
+//     reporting could move it.
+//   - overflow clipping: 3924 to 3935 clean, 968 to 957 failures. 11 tests
+//     stopped failing and none started, counted by name over the whole suite.
+//     Only one of the 11 is in visufx; the rest are in normal-flow, floats,
+//     text and margin-padding-clear, which is the usual shape — a test that
+//     needs a clip is rarely filed under the property.
+//   - the clip property: 3935 to 3979 clean, 957 to 914 failures, 44 tests and
+//     one the other way.
+//
+// The one is visufx/clip-001, and it is the same shape as the border-collapse
+// dozen and lists/list-item-dynamic-color above. It sets "clip" from a script
+// and asserts the result; nothing here runs scripts, so it cannot pass. It
+// *was* passing because the property did nothing, and drawing the clip made it
+// fail honestly. It does carry the "dom" flag this harness skips — but written
+// as <meta content="dom" name="flags"/>, with the attributes in the order
+// flagsRe does not match. 142 documents in the suite write them that way, about
+// forty of them with a flag that would be skipped, so correcting the expression
+// is a measurement of its own rather than a tidy-up, and it is reported here
+// rather than taken.
+//
+// The abspos-overflow family is worth recording for what it turned out not to
+// be. Twelve tests in css/CSS2/positioning are written about §11.1.1's rule
+// that an absolutely positioned box escapes an ancestor's overflow, ten of them
+// fail, and the rule is implemented — but dumping their display lists shows
+// every one of the ten already correct to the layout unit. What they have in
+// common is a "FAIL" run that a later opaque fill completely covers: this
+// comparison resolves occlusion between *fills* and not between a fill and a
+// run of text, so it counts letters neither document shows. That is a gap in
+// the oracle rather than in the engine, it is nothing to do with clipping, and
+// it is not fixed here.
+const wptCleanPassBaseline = 3979
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
