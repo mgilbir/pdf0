@@ -465,6 +465,39 @@ type textMark struct {
 	x, y style.Unit
 }
 
+// trimRunSpace takes the white space off the ends of a run, moving its origin by
+// what it removed.
+//
+// A run that is nothing but space is already dropped above, on the ground that a
+// space marks no paper. Space at the *end* of a run marks no paper either, and
+// leaving it in is not merely untidy: it changes where the run is judged to end,
+// and joinRuns decides whether two runs are one mark by whether the first ends
+// where the second begins. So a document that sets "text " and then "Filler"
+// produced one mark and a document that set "text", " " and "Filler" produced
+// two, of the same glyphs in the same places.
+//
+// That is not a difference between the two pages. It is a difference in how the
+// same ink was grouped into calls, and it made the suite's three "&nbsp; at the
+// end of a table cell" pairs differ — a no-break space belongs to the word
+// before it, so it cannot be a run of its own and the run it is in abutted the
+// next cell's first word exactly.
+//
+// A right-to-left run is left alone. Its origin is not the left edge of its
+// glyphs, so moving it by a measured width would move it the wrong way, and
+// joinRuns already declines to join one for a related reason.
+func trimRunSpace(v DrawText) DrawText {
+	trimmed := strings.TrimSpace(v.Text)
+	if trimmed == v.Text || v.RTL || v.Face == nil {
+		return v
+	}
+	if lead := v.Text[:strings.Index(v.Text, trimmed)]; lead != "" {
+		w, _ := style.FromPx(v.Face.Measure(lead, v.Size.Px()))
+		v.At.X = v.At.X.Add(w).Add(v.CharSpacing.Mul(float64(len([]rune(lead)))))
+	}
+	v.Text = trimmed
+	return v
+}
+
 func texts(ops []Op, under []coloured) []textMark {
 	covers := opaqueCovers(ops)
 	var marking []DrawText
@@ -488,7 +521,7 @@ func texts(ops []Op, under []coloured) []textMark {
 		if buriedUnder(covers, i, textInk(v)) {
 			continue
 		}
-		marking = append(marking, v)
+		marking = append(marking, trimRunSpace(v))
 	}
 
 	var out []textMark

@@ -207,6 +207,29 @@ func TestLinksAreUnderlinedByTheDefaultStylesheet(t *testing.T) {
 	}
 }
 
+// TestAnAnchorWithoutAnHrefIsNotALink pins the other half of that rule, which
+// the stylesheet used to get wrong: it styled every <a>, and HTML styles :link,
+// which is an <a> *that has an href*. An <a> without one is an anchor — a place
+// in the document, not a way out of it — and it takes the colour of its
+// surroundings and no underline.
+//
+// The cost of the old rule was not theoretical. An empty <a> is the everyday
+// place to hang a ::before on, and every one of them came out blue and
+// underlined against a reference that drew neither.
+func TestAnAnchorWithoutAnHrefIsNotALink(t *testing.T) {
+	root := layoutOf(t, 600, `<p><a id="a">abcdef</a></p>`, decoCSS)
+	ops := Paint(root)
+	linkBlue := style.RGBA{B: 238, A: 1}
+	if got := bands(ops, linkBlue); len(got) != 0 {
+		t.Errorf("an <a> with no href painted %d underlines, want 0", len(got))
+	}
+	for _, op := range ops {
+		if v, ok := op.(DrawText); ok && v.Color == linkBlue {
+			t.Errorf("an <a> with no href set %q in link blue", v.Text)
+		}
+	}
+}
+
 func TestDecorationIsNotPaintedForAHiddenRun(t *testing.T) {
 	// visibility and text-decoration meet here: a hidden box paints neither its
 	// letters nor the line ruled through them.

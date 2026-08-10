@@ -718,7 +718,34 @@ const wptEnv = "WPT_TESTS"
 // The clamp inside the change moves nothing here at all and is not decoration:
 // it decides how far a sequence hangs, which is invisible until the hang is at
 // the *start* edge of a right-to-left line. Its evidence is a unit test.
-const wptCleanPassBaseline = 4126
+//
+// Generated content, the margin-collapsing rules and the counter grammar took it
+// from 4116 to 4158, and the run that did most of the work was not about
+// generated content at all. In order of size, and each measured on its own:
+//
+//   - +14, the user-agent stylesheet underlining every <a> rather than every
+//     link. An empty <a> is where the suite hangs its pseudo-elements, and every
+//     one came out blue against a reference that drew neither the colour nor the
+//     line.
+//   - +9, a string value that could not survive the cascade's own round trip: a
+//     newline in "content: 'a\Ab'" was written back raw, did not tokenize, and
+//     was reported as a value this engine cannot produce.
+//   - +10, §8.3.1's "margins of the root element's box do not collapse".
+//   - +3, white-space processing on generated content, which this engine used to
+//     say deliberately did not apply.
+//   - +4, §8.3.1's rule read over the whole run of adjoining margins rather than
+//     folded two at a time. The two are not the same arithmetic once a negative
+//     is in the run, and the walk was folding.
+//   - +1 each, the order a collapsed-through run leaves a box by, and §12.2's
+//     grammar for the counter functions.
+//
+// The +17 that takes it to 4175 is not the engine at all and is recorded
+// separately for that reason: it came from trimRunSpace in picture_test.go, which stopped the
+// comparison treating white space *inside* a run as something that decides where
+// the run ends. Eighteen pairs drew the same glyphs in the same places and were
+// told apart by which call the space was batched into. Nothing rendered
+// differently after it than before.
+const wptCleanPassBaseline = 4185
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

@@ -1,6 +1,7 @@
 package style
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/mgilbir/pdf0/css"
@@ -432,7 +433,7 @@ func writeValue(b *strings.Builder, v css.ComponentValue) {
 		// Quoted, because a string that serialised bare would be
 		// indistinguishable from an identifier — and "none" the keyword is not
 		// "none" the font family.
-		b.WriteString(`"` + strings.ReplaceAll(t.Value, `"`, `\"`) + `"`)
+		writeCSSString(b, t.Value)
 	case css.URL:
 		b.WriteString("url(" + t.Value + ")")
 	case css.Number:
@@ -454,4 +455,54 @@ func writeValue(b *strings.Builder, v css.ComponentValue) {
 		// written here would be a value the author did not type.
 		b.WriteString("<invalid>")
 	}
+}
+
+// writeCSSString renders a string value as a CSS <string> token.
+//
+// It is CSS Syntax's "serialize a string" and not a shorter approximation of it,
+// because this text is *re-parsed*: the cascade keeps a winning value as text,
+// and every reader of that value tokenizes it again. Anything the escaping loses
+// is lost for good, and it is lost quietly — the value comes back as something
+// the author could have typed, so nothing anywhere reports a problem.
+//
+// Two characters make that concrete, and both were live faults before this
+// existed:
+//
+//   - A newline. "content: 'a\Ab'" is how a stylesheet puts a line break in
+//     generated content, and a raw newline written back between quotes does not
+//     tokenize at all — a CSS string may not span lines. The value came back as
+//     a bad-string and the declaration was reported as one this engine cannot
+//     produce, which was true of the serialisation and not of the engine.
+//
+//   - A backslash. "content: 'a\\b'" is one backslash between two letters;
+//     written back unescaped it reads as "\b", which is the escape for U+000B,
+//     so the value silently became a vertical tab. That one is worse than the
+//     newline, because nothing is reported: the page renders, with the wrong
+//     character in it.
+//
+// The rules are the specification's: NULL becomes U+FFFD, a control character
+// becomes a hexadecimal escape, and a quote or a backslash is escaped with a
+// backslash. The space after a hexadecimal escape is required — without it "\a"
+// followed by a literal "b" would read back as the single escape "\ab".
+func writeCSSString(b *strings.Builder, s string) {
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == 0:
+			// A NULL never survives tokenizing, so this cannot arise from a
+			// parsed stylesheet; it is here because the rule is part of the
+			// definition, and a caller may hand over a string from elsewhere.
+			b.WriteRune('�')
+		case r <= 0x1F || r == 0x7F:
+			b.WriteByte('\\')
+			b.WriteString(strconv.FormatInt(int64(r), 16))
+			b.WriteByte(' ')
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
 }
