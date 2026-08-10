@@ -304,7 +304,26 @@ const wptEnv = "WPT_TESTS"
 // where a hanging space went; 7 in css/CSS2/text; and 4 in css/CSS2/linebox,
 // which is the directory that tests §8.4's rule that an inline box's vertical
 // padding and border bleed over the lines around them without moving any of them.
-const wptCleanPassBaseline = 3551
+// §10.5's percentage height took it from 3551 to 3610, and for once the two
+// effects do not need separating: not a finding was added or removed, so the
+// whole of the movement is layout. Failures fell from 1349 to 1290, counted by
+// name over the whole suite rather than netted — 59 tests stopped failing and
+// none started.
+//
+// What it was is worth recording, because the headline was wrong again and this
+// time the failing document was the *reference*. The four largest directories
+// left in the suite are §9's and §10's, and grouping their 365 failures by the
+// shape of the display-list difference rather than by filename put 55 of them on
+// one line of arithmetic: a percentage height was refused whatever it was a
+// percentage of. The suite's references say "html, body, div { height: 100% }"
+// and then position a background against the bottom of that box, which is how a
+// reftest puts an expected picture at the bottom of the page — so the *test*
+// document drew its green square at the bottom, correctly, and the reference
+// drew its own at the top of a box as tall as one line of text.
+//
+// The condition §10.5 attaches to the rule is real and is still enforced; what
+// was wrong was reading the condition as the rule. See percentheight_test.go.
+const wptCleanPassBaseline = 3610
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

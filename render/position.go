@@ -686,7 +686,11 @@ func (l *layouter) solveVertical(b *Box, cb Rect, border, padding, margin Edges,
 	if b.Replaced != nil {
 		return got
 	}
-	if clamped := l.clampHeight(b, got.size, cb.W); clamped != got.size {
+	// The containing block of an absolutely positioned box is a rectangle that
+	// has already been laid out, so its height is definite whatever its own
+	// height property said — which is §10.7's other clause, and the reason the
+	// percentage here resolves where the one in block layout may not.
+	if clamped := l.clampHeight(b, got.size, cb.W, cb.H, true); clamped != got.size {
 		axis.size, axis.sizeAuto = clamped, false
 		got = solveAxis(axis)
 	}
