@@ -677,7 +677,19 @@ const wptEnv = "WPT_TESTS"
 // is a unit test written for it rather than anything here — worth recording
 // because intrinsic.go's own comment had claimed the correct behaviour for as
 // long as the code had done the other thing.
-const wptCleanPassBaseline = 4116
+// §4.1.2's tab threshold — "if this distance is less than 0.5ch, then the
+// subsequent tab stop is used instead" — took it from 4116 to 4119, and the
+// three are the whole of the effect: failures went from 742 to 739 and the
+// vacuous bucket did not move, so nothing here changed category without also
+// changing a page. They are tab-stop-threshold-002, -004 and -006, one for each
+// of pre, pre-wrap and break-spaces, and their references are the same document.
+//
+// It is a small number for a rule worth writing down anyway, because the tests
+// it moved are the only three in the suite that can tell the two readings apart
+// and the difference they measure is not small: a tab a tenth of a character
+// before its stop advanced a tenth of a character, so the column an author wrote
+// it to make was not a column at all.
+const wptCleanPassBaseline = 4119
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
