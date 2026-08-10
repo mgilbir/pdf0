@@ -689,7 +689,23 @@ const wptEnv = "WPT_TESTS"
 // and the difference they measure is not small: a tab a tenth of a character
 // before its stop advanced a tenth of a character, so the column an author wrote
 // it to make was not a column at all.
-const wptCleanPassBaseline = 4119
+// "width: min-content" and "width: max-content" took it from 4119 to 4124, and
+// the two effects have to be kept apart because together they overstate the
+// layout work. Failures went from 739 to 732, so *seven* pages changed and came
+// out right. Of those seven, four had nothing else unsupported in either
+// document and count here; the other three still carry a missing ogham glyph, so
+// they moved into the vacuous bucket and wait there. The fifth clean pass is the
+// taint coming off: one test was already passing and its finding was the only
+// thing keeping it out of this count. Nothing about that page changed.
+//
+// Two of the seven needed a second fix that moves nothing at all on its own —
+// the trailing white space §4.1.2 removes at a line edge was taken off the
+// preferred width and not off the minimum, which is invisible until something
+// asks for the minimum by name. Measured separately: the trim alone leaves all
+// three numbers exactly where they were, and the keyword alone *breaks* a test
+// that was passing. They are only a pair, which is why the trim's evidence is a
+// unit test written for it rather than anything here.
+const wptCleanPassBaseline = 4124
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
