@@ -371,7 +371,48 @@ const wptEnv = "WPT_TESTS"
 // a background propagated from the body to the canvas, it was there before, and
 // the old comparison could not see it because both documents drew the same
 // opaque unknown. It is reported rather than fixed here.
-const wptCleanPassBaseline = 3721
+//
+// §17.5.2.1's two width rules took it from 3551 to 3618, and this time both
+// numbers are about layout: not a finding was added or removed, and the two were
+// counted by name over the whole suite and in both directions.
+//
+//   - A first-row cell's declared width is a content width, so the column it
+//     settles has to hold that cell's padding and border too. 59 tests, 3551 to
+//     3610, none the other way, and every one of the 59 landed in this bucket
+//     rather than the vacuous one.
+//   - §17.6.1's divergence, where a <table>'s width is its border box and a
+//     "display: table" div's is its content box: another 8, 3610 to 3618, again
+//     none the other way.
+//
+// Joining abutting runs in the comparison took it from 3618 to 3644, and none of
+// that is layout: not a pixel of engine output changed. Failures fell from 1282
+// to 1255 — 27 tests stopped failing, none started, and one of the 27 went to the
+// vacuous bucket rather than this one.
+//
+// It is the fifth time this file has recorded a block of failures that were about
+// the harness, and the reason these were invisible is that the two documents were
+// already drawing the same glyphs in the same places. The comparison matched them
+// run against run, so a reference setting "a bc d" as one line disagreed with a
+// test setting "a b" and "c d" as two table cells that touch — over a boundary
+// that exists in the display list and not on the page. See joinRuns.
+//
+// The two remaining ways a table's own width comes out wrong took it from 3644 to
+// 3663, both layout and both measured on their own, by name over the whole suite
+// and in both directions. No test started failing at either step.
+//
+//   - §17.5.2.1's last sentence, that the table is the greater of its declared
+//     width and the sum of its columns: 2 tests, 3644 to 3646. Small, and worth
+//     the note for what the failure looked like — nothing was clipped, the
+//     columns were laid out at the widths the author gave them and the table's
+//     own box was the smaller number, so the cells hung out of the side of their
+//     own table and what was behind it showed through.
+//   - §17.4's percentage, which is of the *wrapper's* containing block: 18 tests,
+//     3646 to 3663, failures 1253 to 1235. The wrapper shrank to fit the table's
+//     content and the percentage then resolved against that, so "width: 80%"
+//     meant eighty per cent of the widest word in the table. Eleven of the 18 are
+//     css/CSS2/floats-clear's float-applies-to family, which floats a
+//     "display: table" at a percentage width and is not a table test at all.
+const wptCleanPassBaseline = 3833
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

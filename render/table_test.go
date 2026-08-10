@@ -740,6 +740,220 @@ func TestTableColumnSpanWidens(t *testing.T) {
 	}
 }
 
+// TestFixedColumnTakesTheCellsPaddingAndBorder pins the half of §17.5.2.1 that a
+// cell with no padding cannot see: a first-row cell's declared "width" is a
+// content width, so the column it settles has to hold that plus the cell's own
+// horizontal padding and border.
+//
+// The arithmetic, from a 400px table with three columns and no spacing:
+//
+//	column 2 = 80 (width) + 60 + 60 (padding) = 200
+//	columns 1 and 3 = (400 − 200) / 2 = 100 each
+//
+// Every number is exact in layout units, so there is nothing to quantise.
+//
+// The two directions are asserted together on purpose. Reading the 80 as the
+// whole column makes the middle column 80 and the outer two 160, so a test that
+// only looked at the cell that declared the width would be satisfied by either
+// answer being *somewhere* — it is the pair that decides.
+func TestFixedColumnTakesTheCellsPaddingAndBorder(t *testing.T) {
+	root := layoutOf(t, 1000, `<table id=t style="table-layout: fixed; width: 400px">`+
+		`<tr><td>a</td>`+
+		`<td id=mid style="width: 80px; padding: 0 60px">b</td>`+
+		`<td>c</td></tr></table>`, bareTable)
+
+	cells := cellRects(root)
+	if len(cells) != 3 {
+		t.Fatalf("got %d cells, want 3:\n%s", len(cells), sketchFragments(root))
+	}
+	px(t, "the column of the cell that declared a width", cells[1].W, 200)
+	px(t, "the first of the columns that declared nothing", cells[0].W, 100)
+	px(t, "the second of the columns that declared nothing", cells[2].W, 100)
+
+	// A border counts for exactly the same reason and by the same arithmetic, so
+	// an implementation that added only the padding is caught here rather than
+	// looking correct above.
+	root = layoutOf(t, 1000, `<table id=t style="table-layout: fixed; width: 400px">`+
+		`<tr><td>a</td>`+
+		`<td id=mid style="width: 80px; border-left: solid 60px; border-right: solid 60px">b</td>`+
+		`<td>c</td></tr></table>`, bareTable)
+	cells = cellRects(root)
+	if len(cells) != 3 {
+		t.Fatalf("got %d cells, want 3:\n%s", len(cells), sketchFragments(root))
+	}
+	px(t, "the column of a cell whose width is bordered rather than padded",
+		cells[1].W, 200)
+	px(t, "a column beside it", cells[0].W, 100)
+}
+
+// TestFixedColumnTakesHalfACollapsedBorder is the same rule under §17.6.2, where
+// a cell's used border is half of each grid line rather than what it declared.
+//
+// The suite writes the arithmetic out in fixed-table-layout-003f01, and it is the
+// case that tells the two models apart:
+//
+//	column 2 = 30 (half the left line) + 80 (width) + 30 (half the right line) = 140
+//	columns 1 and 3 = (400 − 140) / 2 = 130 each
+//
+// The same document in the separated model gives 200 and 100 — that is the case
+// above — so the two together are what pin the halving rather than either alone.
+// The declared 60px border is *painted* 60 wide all the same, centred on the grid
+// line and so reaching 30px into the column next door; only the 30 on this side
+// of the line is width the column has to find.
+func TestFixedColumnTakesHalfACollapsedBorder(t *testing.T) {
+	root := layoutOf(t, 1000, `<table id=t style="table-layout: fixed; width: 400px">`+
+		`<tr><td>a</td>`+
+		`<td id=mid style="width: 80px; border-left: solid 60px; border-right: solid 60px">b</td>`+
+		`<td>c</td></tr></table>`, collapsing)
+
+	table := find(t, root, "t")
+	px(t, "the table's width", table.BorderRect.W, 400)
+
+	cells := cellRects(root)
+	if len(cells) != 3 {
+		t.Fatalf("got %d cells, want 3:\n%s", len(cells), sketchFragments(root))
+	}
+	px(t, "the column of the cell that declared a width", cells[1].W, 140)
+	px(t, "the first of the columns that declared nothing", cells[0].W, 130)
+	px(t, "the second of the columns that declared nothing", cells[2].W, 130)
+	// The cell's own used border is the half-line, which is what made the column
+	// 140 rather than 200. Asserting it here is what separates "the column came
+	// out at 140" from "the column came out at 140 for the right reason".
+	px(t, "the cell's used border-left", find(t, root, "mid").Border.Left, 30)
+}
+
+// TestHTMLTableWidthIsItsBorderBox pins §17.6.1's divergence, in both directions.
+//
+// The specification is explicit that the two are different boxes:
+//
+//	The width of the table is the distance from the left inner padding edge to
+//	the right inner padding edge (including the border spacing but excluding
+//	padding and border). However, in HTML and XHTML1, the width of the <table>
+//	element is the distance from the left border edge to the right border edge.
+//
+// So a <table> with a 25px border and "width: 200px" is 200px wide altogether,
+// and a div with "display: table" and exactly the same declarations is 250px. The
+// pair is the test: either rule on its own passes half of it.
+func TestHTMLTableWidthIsItsBorderBox(t *testing.T) {
+	const decl = `width: 200px; border: solid 25px`
+	root := layoutOf(t, 1000,
+		`<table id=t style="`+decl+`"><tr><td>a</td></tr></table>`, bareTable)
+	px(t, "an HTML table's border box", find(t, root, "t").BorderRect.W, 200)
+
+	root = layoutOf(t, 1000,
+		`<div id=t style="display: table; `+decl+`">`+
+			`<div style="display: table-row"><div style="display: table-cell">a</div></div>`+
+			`</div>`, bareTable)
+	px(t, "a CSS table's border box", find(t, root, "t").BorderRect.W, 250)
+}
+
+// TestFixedTableIsAtLeastAsWideAsItsColumns pins the last sentence of §17.5.2.1:
+// "the width of the table is then the greater of the value of the 'width'
+// property for the table element and the sum of the column widths (plus cell
+// spacing or borders)".
+//
+// The arithmetic: two columns the author sized at 20px, with 20px of
+// border-spacing before, between and after them, come to 20 + 20 + 20 + 20 + 20 =
+// 100. A table declared 70px wide is 100px wide, because nothing in the fixed
+// algorithm can make a column narrower than it was declared.
+//
+// The failure it guards against is invisible in the cells, which is why the
+// assertion is on the table: the columns were always laid out at 20px, and it was
+// the table's own box that came out 30px short — so the cells hung out of the
+// right-hand side of their own table and whatever was behind it showed through.
+//
+// The other direction is asserted beside it, because "the greater of" has two
+// halves and a rule that simply took the columns' sum would pass the first: a
+// table declared 300px wide with the same 100px of columns stays 300, and the
+// fixed algorithm's promise that a table is the width it was given survives.
+func TestFixedTableIsAtLeastAsWideAsItsColumns(t *testing.T) {
+	const row = `<tr><td style="width: 20px">1</td><td style="width: 20px">2</td></tr>`
+	narrow := layoutOf(t, 1000,
+		`<div id=t style="display: table; table-layout: fixed; border-spacing: 20px; `+
+			`width: 70px">`+row+`</div>`, bareTable)
+	px(t, "a fixed table declared narrower than its own columns",
+		find(t, narrow, "t").BorderRect.W, 100)
+
+	wide := layoutOf(t, 1000,
+		`<div id=t style="display: table; table-layout: fixed; border-spacing: 20px; `+
+			`width: 300px">`+row+`</div>`, bareTable)
+	px(t, "a fixed table declared wider than its own columns",
+		find(t, wide, "t").BorderRect.W, 300)
+	// And the surplus went to the columns rather than being left as a gap, which
+	// is the rest of that sentence: 300 − 60 of spacing is 240 over two columns.
+	cells := cellRects(wide)
+	if len(cells) != 2 {
+		t.Fatalf("got %d cells, want 2:\n%s", len(cells), sketchFragments(wide))
+	}
+	px(t, "the first column of the wider table", cells[0].W, 120)
+
+	// The case above cannot tell "the greater of the two" from "the sum of the
+	// columns", and that is not a hole in the assertion — it is the arithmetic:
+	// whenever the declared width is the larger, the fixed algorithm spends the
+	// difference on the columns and the sum comes to the declared width exactly.
+	// A table with no columns at all is the one document where the two differ,
+	// because there is nothing to spend the width on and the sum is zero. Planting
+	// the clause found this: without a table like this one, dropping "the greater
+	// of" entirely changes nothing anywhere in the suite.
+	empty := layoutOf(t, 1000,
+		`<div id=t style="display: table; table-layout: fixed; width: 300px; `+
+			`height: 40px"></div>`, bareTable)
+	px(t, "a fixed table with no columns in it", find(t, empty, "t").BorderRect.W, 300)
+}
+
+// TestTablePercentageWidthIsOfTheWrappersContainingBlock pins §17.4's rule for a
+// percentage: it is a percentage of the containing block the *wrapper* is in, not
+// of the wrapper, and not of what is left after the table's own border.
+//
+// Both of those were wrong, in the same document and in opposite directions, and
+// each hid the other:
+//
+//   - the wrapper shrank to fit the table's content, so "width: 80%" meant eighty
+//     per cent of the widest word in the table;
+//   - and the percentage was resolved against the room left after the table's own
+//     border, so a 20px border took 16px off the answer as well.
+//
+// The arithmetic here: a 500px containing block, "width: 80%" and a 20px border
+// either side. The table is 400px wide altogether — a <table>'s width is its
+// border box — and its content box is 360. Resolving against the wrapper would
+// give 320 and against the room after the border 368, so the three answers are
+// far enough apart that the test cannot pass by accident.
+func TestTablePercentageWidthIsOfTheWrappersContainingBlock(t *testing.T) {
+	root := layoutOf(t, 1000,
+		`<div style="width: 500px">`+
+			`<table id=t style="width: 80%; border: solid 20px">`+
+			`<tr><td>a</td></tr></table></div>`, bareTable)
+
+	table := find(t, root, "t")
+	px(t, "the table's border box", table.BorderRect.W, 400)
+	px(t, "the table's content box", table.ContentRect().W, 360)
+
+	// §17.4's wrapper is as wide as the table's border box and no wider, which is
+	// what makes the whole thing hold together: a wrapper that had shrunk to the
+	// content would be the containing block the percentage was answered against.
+	wrapper := findFragment(t, root, func(f *Fragment) bool {
+		return f.Box != nil && f.Box.TableWrapper
+	})
+	px(t, "the table wrapper", wrapper.BorderRect.W, 400)
+
+	// The same document as a CSS table, where the declared width is the content
+	// box — see htmlTableWidth. 80% of 500 is 400 of content and the border makes
+	// the box 440, so the wrapper is 440 and not 400. It is the same percentage
+	// against the same containing block and a different answer, which is what
+	// makes this the case that decides whether the wrapper adds the table's edges
+	// back on.
+	root = layoutOf(t, 1000,
+		`<div style="width: 500px">`+
+			`<div id=t style="display: table; width: 80%; border: solid 20px">`+
+			`<div style="display: table-row"><div style="display: table-cell">a</div></div>`+
+			`</div></div>`, bareTable)
+	px(t, "a CSS table's border box", find(t, root, "t").BorderRect.W, 440)
+	wrapper = findFragment(t, root, func(f *Fragment) bool {
+		return f.Box != nil && f.Box.TableWrapper
+	})
+	px(t, "the wrapper around a CSS table", wrapper.BorderRect.W, 440)
+}
+
 // findFragment returns the first fragment in tree order satisfying a predicate.
 func findFragment(t *testing.T, root *Fragment, ok func(*Fragment) bool) *Fragment {
 	t.Helper()
