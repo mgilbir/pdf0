@@ -81,3 +81,65 @@ func TestStringValueThroughTheCascade(t *testing.T) {
 		t.Errorf("the computed value %q holds %q, want %q", got, vals[0].Token.Value, want)
 	}
 }
+
+// TestAMalformedCounterFunctionDropsTheDeclaration pins §4.2's error handling
+// over §12.2's grammar for the two counter functions.
+//
+// The grammar is fixed:
+//
+//	counter(<identifier>) | counter(<identifier>, <list-style-type>)
+//	counters(<identifier>, <string>) | counters(<identifier>, <string>, <list-style-type>)
+//
+// so a separator on counter(), or a second style on either, is not a value with
+// a stray argument in it — the declaration goes, and what stands is whatever the
+// cascade would have produced without it.
+//
+// Refusing it where it is read instead is invisible until a stylesheet writes a
+// good declaration and a bad one after it, which is exactly what the suite's
+// content-counter-016 does: "content: counter(c)" and then four malformed ones,
+// with the numbering required to come out of the first. Read at use time, the
+// last declaration is the only one left and every item is numbered 1000.
+func TestAMalformedCounterFunctionDropsTheDeclaration(t *testing.T) {
+	bad := []string{
+		`counter(c, ".")`,
+		`counter(c, ".", decimal)`,
+		`counter(c, decimal, ".")`,
+		`counter(c, decimal, decimal)`,
+		`counter()`,
+		`counters(c)`,
+		`counters(c, decimal)`,
+		`counters(c, ".", ".")`,
+		`counter(c c)`,
+	}
+	for _, v := range bad {
+		doc, _, _ := html.Parse(`<p>x</p>`)
+		rules, _ := css.ParseStylesheet(`p { content: "kept"; content: ` + v + ` }`)
+		got := styleOf(t, doc, []Sheet{{Origin: OriginAuthor, Rules: rules}}, "p", "content")
+		if got != `"kept"` {
+			t.Errorf("%q is malformed, so the earlier declaration should stand; content is %q", v, got)
+		}
+	}
+
+	// The other direction, which is what stops the check being a way to drop
+	// every value it does not recognise.
+	good := []string{
+		`counter(c)`,
+		`counter(c, decimal)`,
+		`counters(c, ".")`,
+		`counters(c, ".", lower-roman)`,
+		// Not a counter function, so not this check's business. Each is refused
+		// where it is read, by name and with the element it was on, which is a
+		// message this must not turn into a silent drop.
+		`url(mark.png)`,
+		`attr(title)`,
+		`open-quote`,
+	}
+	for _, v := range good {
+		doc, _, _ := html.Parse(`<p>x</p>`)
+		rules, _ := css.ParseStylesheet(`p { content: "kept"; content: ` + v + ` }`)
+		got := styleOf(t, doc, []Sheet{{Origin: OriginAuthor, Rules: rules}}, "p", "content")
+		if got == `"kept"` {
+			t.Errorf("%q is a legal value and was dropped", v)
+		}
+	}
+}
