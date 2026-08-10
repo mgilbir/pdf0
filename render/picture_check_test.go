@@ -3,6 +3,7 @@ package render
 import (
 	"testing"
 
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -236,5 +237,196 @@ func TestPictureBlendsTranslucency(t *testing.T) {
 	blended := []Op{picFill(0, 0, 50, 50, style.RGBA{R: 255, G: 127.5, B: 127.5, A: 1})}
 	if !pictureEqual(translucent, blended, picPage) {
 		t.Error("50% red over white did not compare equal to the colour it blends to")
+	}
+}
+
+// picFacedText is a run in a real face, which is what joinRuns needs: a run's
+// advance is the face's, and a faceless run is deliberately never joined.
+func picFacedText(face *fonts.Face, s string, x, y float64, c style.RGBA) DrawText {
+	return DrawText{
+		Text: s, At: Point{picPx(x), picPx(y)}, Size: picPx(16), Face: face, Color: c,
+	}
+}
+
+// picFace is the standard serif face, and the advance of a string in it at 16px.
+func picFace(t *testing.T) (*fonts.Face, func(string) float64) {
+	t.Helper()
+	face, ok := StandardFonts().Face("serif", false, false)
+	if !ok || face == nil {
+		t.Fatal("the standard font set has no serif face")
+	}
+	return face, func(s string) float64 { return face.Measure(s, 16) }
+}
+
+// TestPictureJoinsAbuttingRuns is the rule joinRuns exists for, and the six ways
+// it must refuse.
+//
+// Each case is built so that exactly one thing decides it. The pair that must
+// compare *equal* differs only in how the same glyphs were batched; every pair
+// that must compare unequal differs in one property and is otherwise identical
+// to the equal case, so a rule that stopped checking that property fails here
+// and nothing else does.
+func TestPictureJoinsAbuttingRuns(t *testing.T) {
+	face, adv := picFace(t)
+	black := style.RGBA{A: 1}
+	// Where "b" ends when it starts at 20. The join must happen at exactly this
+	// point and nowhere else, so the number is measured rather than assumed.
+	end := 20 + adv("b")
+
+	one := []Op{picFacedText(face, "bc", 20, 40, black)}
+	two := []Op{
+		picFacedText(face, "b", 20, 40, black),
+		picFacedText(face, "c", end, 40, black),
+	}
+	if !pictureEqual(two, one, picPage) {
+		t.Errorf("two runs abutting at %.4fpx did not compare equal to the one run "+
+			"they draw", end)
+	}
+	// The same two runs in the other order in the display list. Joining walks
+	// them in x order, so the batching order of the two documents cannot matter.
+	if !pictureEqual([]Op{two[1], two[0]}, one, picPage) {
+		t.Error("the same two abutting runs, emitted in the other order, did not join")
+	}
+
+	// A gap. Four pixels is far more than the layout unit of slack and far less
+	// than a space, and it is a real difference in the picture: the glyphs are
+	// not where the joined run puts them.
+	gapped := []Op{
+		picFacedText(face, "b", 20, 40, black),
+		picFacedText(face, "c", end+4, 40, black),
+	}
+	if pictureEqual(gapped, one, picPage) {
+		t.Error("two runs 4px apart were joined into the run that has them touching")
+	}
+	// An overlap is the same statement from the other side.
+	overlapped := []Op{
+		picFacedText(face, "b", 20, 40, black),
+		picFacedText(face, "c", end-4, 40, black),
+	}
+	if pictureEqual(overlapped, one, picPage) {
+		t.Error("two runs overlapping by 4px were joined as though they abutted")
+	}
+
+	// Two runs that touch but are in different colours are two marks. Joining
+	// them would produce a run in one of the two colours and lose the other,
+	// which is a difference anyone can see.
+	twoColours := []Op{
+		picFacedText(face, "b", 20, 40, black),
+		picFacedText(face, "c", end, 40, picRed),
+	}
+	if pictureEqual(twoColours, one, picPage) {
+		t.Error("a black run and a red run were joined into one black run")
+	}
+	// And at two sizes, where the glyphs are a different size on the page.
+	bigger := picFacedText(face, "c", end, 40, black)
+	bigger.Size = picPx(32)
+	if pictureEqual([]Op{two[0], bigger}, one, picPage) {
+		t.Error("a 16px run and a 32px run were joined into one 16px run")
+	}
+	// And with different letter-spacing, which changes where every glyph after
+	// the first one lands.
+	spaced := picFacedText(face, "c", end, 40, black)
+	spaced.CharSpacing = picPx(4)
+	if pictureEqual([]Op{two[0], spaced}, one, picPage) {
+		t.Error("two runs with different letter-spacing were joined")
+	}
+	// Letter-spacing that both runs share is part of the advance and not a
+	// reason to refuse: "b" with 4px after it ends 4px further on, and the run
+	// that abuts it starts there. This is the case that makes the spacing term
+	// of runAdvance decidable — without it, an advance that ignored
+	// letter-spacing altogether passes every assertion above.
+	withSpacing := func(s string, x float64) DrawText {
+		v := picFacedText(face, s, x, 40, black)
+		v.CharSpacing = picPx(4)
+		return v
+	}
+	spacedPair := []Op{withSpacing("b", 20), withSpacing("c", end+4)}
+	spacedWhole := []Op{withSpacing("bc", 20)}
+	if !pictureEqual(spacedPair, spacedWhole, picPage) {
+		t.Errorf("two runs abutting at %.4fpx with 4px of letter-spacing did not join",
+			end+4)
+	}
+	// And the same pair placed as though the spacing were not there does not
+	// join, which is what stops the case above passing for the wrong reason.
+	if pictureEqual([]Op{withSpacing("b", 20), withSpacing("c", end)},
+		spacedWhole, picPage) {
+		t.Error("a run placed as though letter-spacing cost nothing was still joined")
+	}
+	// And on two baselines: "abutting" is along one line and says nothing about
+	// two runs a line apart that happen to meet in x.
+	twoLines := []Op{
+		picFacedText(face, "b", 20, 40, black),
+		picFacedText(face, "c", end, 60, black),
+	}
+	if pictureEqual(twoLines, one, picPage) {
+		t.Error("two runs on different baselines were joined")
+	}
+
+	// A run with no face has no advance, so where it ends is unanswerable and
+	// nothing may be joined onto it. Treating the unknown as zero would put two
+	// faceless runs at one point and splice them, which is how the hand-built
+	// runs everywhere else in this file would quietly stop measuring what they
+	// say. The two here are at the same point for exactly that reason.
+	faceless := []Op{picText("b", 20, 40), picText("c", 20, 40)}
+	if pictureEqual(faceless, []Op{picText("bc", 20, 40)}, picPage) {
+		t.Error("two runs with no face were joined as though each were zero wide")
+	}
+
+	// Right-to-left runs are left alone: their glyphs march away from the origin
+	// the other way, so joining them in x order would concatenate the logical
+	// text backwards. Pinning the refusal is what stops the rule being widened
+	// without the arithmetic being redone.
+	rtl := func(s string, x float64) DrawText {
+		v := picFacedText(face, s, x, 40, black)
+		v.RTL = true
+		return v
+	}
+	if pictureEqual([]Op{rtl("b", 20), rtl("c", end)},
+		[]Op{rtl("bc", 20)}, picPage) {
+		t.Error("two right-to-left runs were joined in visual order")
+	}
+
+	// The join must not invent equality between different text. "bc" and "cb"
+	// are the same glyphs and not the same picture.
+	if pictureEqual(two, []Op{picFacedText(face, "cb", 20, 40, black)}, picPage) {
+		t.Error("\"b\"+\"c\" compared equal to \"cb\"")
+	}
+	// Nor between a joined pair and the same pair somewhere else.
+	if pictureEqual(two, []Op{picFacedText(face, "bc", 120, 40, black)}, picPage) {
+		t.Error("a joined run compared equal to the same run 100px away")
+	}
+}
+
+// TestPictureJoinsAChainOfRuns pins that the joining is over a run of runs and
+// that its arithmetic does not drift.
+//
+// Six one-character runs laid end to end must come out as the six-character word,
+// and the sixth is placed from the accumulated advances — so an implementation
+// that lost a layout unit per join disagrees by the end even though it agrees at
+// the start.
+func TestPictureJoinsAChainOfRuns(t *testing.T) {
+	face, adv := picFace(t)
+	black := style.RGBA{A: 1}
+	const word = "joined"
+
+	var chain []Op
+	x := 20.0
+	for _, r := range word {
+		chain = append(chain, picFacedText(face, string(r), x, 40, black))
+		x += adv(string(r))
+	}
+	whole := []Op{picFacedText(face, word, 20, 40, black)}
+	if !pictureEqual(chain, whole, picPage) {
+		t.Errorf("%d runs laid end to end did not compare equal to the word they spell",
+			len([]rune(word)))
+	}
+	// And one character out of place breaks it, so the chain is being checked
+	// rather than merely concatenated.
+	broken := append([]Op(nil), chain...)
+	v := broken[3].(DrawText)
+	v.At.X = v.At.X.Add(picPx(3))
+	broken[3] = v
+	if pictureEqual(broken, whole, picPage) {
+		t.Error("a chain with one character moved 3px compared equal to the whole word")
 	}
 }
