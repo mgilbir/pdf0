@@ -21,11 +21,12 @@ import (
 //
 // An Input with no resolver loads nothing. There is no "well, it looks like a
 // path, so read it" fallback, and there is no flag that turns one on: a caller
-// who wants an <img> to draw something must say where the bytes may come from.
-// That is the difference between a template renderer and a file-disclosure
-// primitive, because the documents this engine renders are untrusted — an
-// invoice template from a customer, a report body from a form — and "src" is a
-// string in one of them.
+// who wants an <img> to draw something, or a <link rel=stylesheet> to style
+// anything, must say where the bytes may come from. That is the difference
+// between a template renderer and a file-disclosure primitive, because the
+// documents this engine renders are untrusted — an invoice template from a
+// customer, a report body from a form — and "src" and "href" are strings in one
+// of them.
 //
 // # No network, at any level
 //
