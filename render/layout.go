@@ -408,6 +408,12 @@ type lengthKey struct {
 type collapsed struct {
 	top, bottom marginRun
 	through     bool
+	// topAlone is the run on the box's *top* edge before a box that collapses
+	// through merged its two edges into one. It is the part of that run which
+	// still sits above the border edge when §9.5.2 puts a clearance under it,
+	// and it is meaningless — and left zero — for a box that does not collapse
+	// through, because then the two edges never merged.
+	topAlone marginRun
 }
 
 // marginRun is a set of adjoining margins, carried as the two numbers §8.3.1's
@@ -428,7 +434,23 @@ type collapsed struct {
 // paragraph's own em of bottom margin, an empty box's 50%, and a negative inch
 // end to end, and expect them to come to nothing — the two-at-a-time answer
 // leaves the em standing and the black rule an em low.
-type marginRun struct{ pos, neg style.Unit }
+type marginRun struct {
+	pos, neg style.Unit
+	// cleared records that a box whose own margins collapsed through had a
+	// clearance put under them, and that this run is what §9.5.2 calls the
+	// margin resulting from collapsing that box's margins with its following
+	// siblings'. The sentence that needs it is the one after:
+	//
+	//	that resulting margin does not collapse with the bottom margin of the
+	//	parent block
+	//
+	// so a run carrying this flag is committed inside the parent rather than
+	// hoisted out through its bottom edge, and the parent is that much taller.
+	// It is on the run rather than on the box because the rule is about where
+	// the run ends up, and the run outlives the box: it goes on collecting the
+	// margins of every following sibling that collapses through.
+	cleared bool
+}
 
 // marginOf is the run one margin makes on its own.
 func marginOf(u style.Unit) marginRun {
@@ -442,7 +464,11 @@ func marginOf(u style.Unit) marginRun {
 // commutative, which is what folding a run of them requires and what taking the
 // value between steps loses.
 func (m marginRun) merge(o marginRun) marginRun {
-	return marginRun{pos: style.Max(m.pos, o.pos), neg: style.Min(m.neg, o.neg)}
+	return marginRun{
+		pos:     style.Max(m.pos, o.pos),
+		neg:     style.Min(m.neg, o.neg),
+		cleared: m.cleared || o.cleared,
+	}
 }
 
 // add merges in one more margin.
@@ -698,7 +724,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	if ownMarginsAdjoin && !placedAnything && frag.BorderRect.H == 0 &&
 		!(hasMinHeight && minHeight > 0) {
 		both := out.top.merge(out.bottom)
-		return frag, collapsed{top: both, bottom: both, through: true}
+		return frag, collapsed{top: both, bottom: both, through: true, topAlone: out.top}
 	}
 	return frag, out
 }
@@ -857,13 +883,35 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		before := pending
 		pending = pending.merge(cm.top)
 
+		// Whether the parent's top edge is still open with nothing committed
+		// inside it, so that a margin met here is on its way out of the parent
+		// rather than into it.
+		escapes := topOpen && !hoisted
+
 		// The position §9.5.2 measures clearance against: where the box would
-		// have gone had it not cleared anything.
+		// have gone had it not cleared anything. With the parent's edge open and
+		// nothing placed, that is the parent's content top, because the margin
+		// would have left through the edge and taken the parent with it — it
+		// moves the two together and neither apart.
+		//
+		// A box whose own margins collapse through is the exception §9.5.2 makes
+		// in its own parenthesis, "including the case where the element's
+		// margins collapse through, in which case its bottom margin is also
+		// included": such a box is measured with its whole run whether the
+		// parent's edge is open or not. Leaving it out is not academic — it is
+		// the difference between clearing a float and not clearing it at all,
+		// and no-clearance-adjoining-opposite-float and
+		// no-clearance-due-to-large-margin-after-left-right in the suite are
+		// exactly that case, a 150px and a 185px top margin that carry a cleared
+		// empty box past the float so that nothing is drawn at all.
 		hypothetical := y.Add(pending.value())
-		if topOpen && !hoisted && !cm.through {
+		if escapes && !cm.through {
 			hypothetical = y
 		}
 		clearance := l.clearanceAt(child, origin, hypothetical)
+		// Where the border edge lands: the hypothetical position with the
+		// clearance §9.5.2 computed against it laid under.
+		edge := hypothetical.Add(clearance)
 
 		if cm.through && clearance == 0 {
 			// Nothing separates this box's own margins, so it contributes no
@@ -880,7 +928,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			continue
 		}
 
-		if topOpen && !hoisted {
+		if escapes {
 			// The parent's top edge is open, so everything collected so far
 			// belongs outside the parent rather than inside it.
 			//
@@ -907,7 +955,48 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			hoisted = true
 		}
 
-		at := y.Add(pending.value()).Add(clearance)
+		at := edge
+
+		if cm.through {
+			// A box whose own margins collapse through, with a clearance under
+			// them. §9.5.2:
+			//
+			//	If the top and bottom margins of an element with clearance are
+			//	adjoining, its margins collapse with the adjoining margins of
+			//	following siblings but that resulting margin does not collapse
+			//	with the bottom margin of the parent block.
+			//
+			// The run is therefore neither lost nor laid twice. The part of it
+			// on the box's top edge is already above the border edge, with the
+			// clearance under it; the rest goes on collecting following
+			// siblings' margins below the edge, which is why the flow carries on
+			// from the edge less that part rather than from the edge itself.
+			//
+			// margin-collapse-clear-012 works the arithmetic out in a comment in
+			// its own source and is the reason this is expressed as a
+			// subtraction: a 40px top margin, an 80px bottom margin, a following
+			// sibling with 140px under it and a 100px float to clear give a
+			// parent 100 + (140 - 40) = 200px tall.
+			//
+			// The second half of the sentence is why the parent is that tall at
+			// all rather than 100: the run is committed inside it instead of
+			// leaving through its bottom edge, which is what marginRun.cleared
+			// carries to the end of the walk.
+			cf = l.settle(child, width, origin, cf, est, at, mark, absMark, subtreeRead)
+			cf.BorderRect.Y = at
+			if child.ListItem {
+				cf.Marker = l.markerFor(child, cf)
+			}
+			parent.Children = append(parent.Children, cf)
+			y = at.Sub(cm.topAlone.value())
+			pending = cm.bottom
+			pending.cleared = true
+			// The clearance is a real separation, so the parent can no longer
+			// collapse through itself and swallow it.
+			placed = true
+			continue
+		}
+
 		// The float-avoidance question again, now that the position is settled.
 		// A prediction that turned out wrong moved the box into a different
 		// band, and a box that had to be narrowed to fit one band is the wrong
@@ -967,8 +1056,12 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		hoistTop = hoistTop.merge(pending)
 		pending = marginRun{}
 	}
-	if bottomOpen {
-		// The bottom edge is open too, so the trailing margin belongs outside.
+	if bottomOpen && !pending.cleared {
+		// The bottom edge is open too, so the trailing margin belongs outside —
+		// unless §9.5.2 has already said it does not. A run that collected the
+		// margins of a box with clearance "does not collapse with the bottom
+		// margin of the parent block", so it stays inside and the parent grows
+		// by it. See marginRun.cleared.
 		hoistBottom = pending
 		pending = marginRun{}
 	}
