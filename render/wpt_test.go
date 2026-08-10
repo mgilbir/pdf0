@@ -685,9 +685,35 @@ var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch
 // hrefRe pulls the href out of such a link.
 var hrefRe = regexp.MustCompile(`(?i)href\s*=\s*["']([^"']+)["']`)
 
-// flagsRe finds the metadata that marks a test as needing something automation
-// cannot give it.
-var flagsRe = regexp.MustCompile(`(?i)<meta\s+name\s*=\s*["']?flags["']?\s+content\s*=\s*["']([^"']*)["']`)
+// The metadata that marks a test as needing something automation cannot give it.
+//
+// It is read as a tag with two attributes rather than as one pattern, because a
+// pattern has to fix their order and HTML does not. The expression this replaced
+// demanded name before content, and 142 documents in the suite write them the
+// other way round — 35 of them carrying a flag this harness means to honour, so
+// 35 tests it had decided not to run were running and failing.
+//
+// That is the shape of harness bug worth being slow about: it cost nothing
+// visible, because a test that should not run and fails looks exactly like a
+// test that should run and fails.
+var (
+	metaTagRe   = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
+	flagsNameRe = regexp.MustCompile(`(?is)\bname\s*=\s*["']?flags["']?[\s/>]`)
+	contentRe   = regexp.MustCompile(`(?is)\bcontent\s*=\s*["']([^"']*)["']`)
+)
+
+// flagsOf returns the flags a document declares, in either attribute order.
+func flagsOf(src string) []string {
+	for _, tag := range metaTagRe.FindAllString(src, -1) {
+		if !flagsNameRe.MatchString(tag) {
+			continue
+		}
+		if m := contentRe.FindStringSubmatch(tag); m != nil {
+			return strings.Fields(m[1])
+		}
+	}
+	return nil
+}
 
 func wptDir(t *testing.T) string {
 	t.Helper()
@@ -765,12 +791,10 @@ func findReftests(t *testing.T, root string) []reftest {
 		// carrying tests that cannot be fixed. Those twelve are the clearest
 		// illustration in this file of what a vacuous pass is: they passed while
 		// neither document drew a border, and drawing the borders made them fail.
-		if flags := flagsRe.FindStringSubmatch(src); flags != nil {
-			for _, f := range strings.Fields(flags[1]) {
-				switch strings.ToLower(f) {
-				case "animated", "interact", "paged", "userstyle", "font", "dom":
-					return nil
-				}
+		for _, f := range flagsOf(src) {
+			switch strings.ToLower(f) {
+			case "animated", "interact", "paged", "userstyle", "font", "dom":
+				return nil
 			}
 		}
 
