@@ -296,23 +296,102 @@ func TestAMinHeightSendsACollapsedRunOutOfTheTop(t *testing.T) {
 	px(t, "#s's top after a hoisted bottom margin", find(t, root, "s").BorderRect.Y, 60)
 }
 
+// TestARunOfThreeMarginsCollapsesAsOneSet pins §8.3.1's rule over a run longer
+// than two, which is where folding it a pair at a time gives a different answer.
+//
+// The rule is written over the whole set: the largest negative is deducted from
+// the largest positive. A set is not recoverable from a value that has already
+// had a negative taken off it, so the order the walk happens to fold in decides
+// the page — which is a layout that depends on how the code is written.
+//
+// The arithmetic, with the default stylesheet suppressed. #a has a 16px bottom
+// margin. #k is empty with a 96px bottom margin, so it collapses through and its
+// two margins join the run. #z has a -96px top margin. All five are adjoining —
+// #w has no border, no padding and no height of its own — so the run is
+// {16, 0, 0, 96, -96} and collapses to 96 - 96 = 0: #z's border box sits at #a's
+// bottom edge, y = 10.
+//
+// Folded from the right it is collapse(16, collapse(96, -96)) = 16, and #z lands
+// an em low. That is margin-bottom-103 and -104 in the suite, where the em is a
+// paragraph's and the 96px a 50% margin.
+func TestARunOfThreeMarginsCollapsesAsOneSet(t *testing.T) {
+	css := noDefaults + `
+	#a { height: 10px; margin-bottom: 16px }
+	#k { margin-bottom: 96px }
+	#z { margin-top: -96px; height: 10px }`
+	root := layoutOf(t, 1000,
+		`<div id="a"></div><div id="w"><div id="k"></div><div id="z"></div></div>`, css)
+
+	px(t, "#z's top", find(t, root, "z").BorderRect.Y, 10)
+	// #w is placed by the same run, so it must not have moved either.
+	px(t, "#w's top", find(t, root, "w").BorderRect.Y, 10)
+
+	// The same three margins with the negative in the middle rather than at the
+	// end, which a fold that happened to be right-associative would get right by
+	// luck. 96 - 96 = 0 again, so #z is still at 10.
+	css = noDefaults + `
+	#a { height: 10px; margin-bottom: 96px }
+	#k { margin-bottom: -96px }
+	#z { margin-top: 16px; height: 10px }`
+	root = layoutOf(t, 1000,
+		`<div id="a"></div><div id="w"><div id="k"></div><div id="z"></div></div>`, css)
+	px(t, "#z's top with the negative in the middle", find(t, root, "z").BorderRect.Y, 10)
+}
+
 // TestCollapseIsNotASumOrAMaximum tests the rule directly, since the cases above
 // reach it through layout and a wrong answer there could come from elsewhere.
 func TestCollapseIsNotASumOrAMaximum(t *testing.T) {
 	u := func(v float64) style.Unit { r, _ := style.FromPx(v); return r }
-	cases := []struct{ a, b, want float64 }{
-		{20, 10, 20},
-		{10, 20, 20},
-		{20, -30, -10},
-		{-30, 20, -10},
-		{-10, -20, -20},
-		{0, 0, 0},
+	run := func(ms ...float64) style.Unit {
+		var m marginRun
+		for _, v := range ms {
+			m = m.add(u(v))
+		}
+		return m.value()
+	}
+	cases := []struct {
+		margins []float64
+		want    float64
+	}{
+		{[]float64{20, 10}, 20},
+		{[]float64{10, 20}, 20},
+		{[]float64{20, -30}, -10},
+		{[]float64{-30, 20}, -10},
+		{[]float64{-10, -20}, -20},
+		{[]float64{0, 0}, 0},
+
+		// Three and more, which is where the rule stops being expressible two at
+		// a time. §8.3.1 deducts the largest negative from the largest positive
+		// over the whole set: 96 - 96 = 0, whatever the 16 in the middle. Folded
+		// pairwise from the right it is collapse(16, collapse(96, -96)) = 16,
+		// which is the answer margin-bottom-103 and -104 catch.
+		{[]float64{16, 96, -96}, 0},
+		{[]float64{96, -96, 16}, 0},
+		{[]float64{-96, 16, 96}, 0},
+		{[]float64{16, 96, -20, -96}, 0},
+		{[]float64{10, 20, 30}, 30},
+		{[]float64{-10, -20, -30}, -30},
+		{[]float64{50, -10, -30}, 20},
 	}
 	for _, tc := range cases {
-		if got := collapse(u(tc.a), u(tc.b)); got != u(tc.want) {
-			t.Errorf("collapsing %g and %g gave %g, want %g",
-				tc.a, tc.b, got.Px(), tc.want)
+		if got := run(tc.margins...); got != u(tc.want) {
+			t.Errorf("collapsing %v gave %g, want %g", tc.margins, got.Px(), tc.want)
 		}
+	}
+
+	// merge has to be associative and commutative, since the walk folds a run in
+	// whatever order the boxes arrive in and hands parts of it up to a parent to
+	// be merged again. A rule that was not would give the same document
+	// different answers depending on where its boxes were nested.
+	var a, b marginRun
+	a = a.add(u(16)).add(u(96))
+	b = b.add(u(-96)).add(u(-20))
+	if got, want := a.merge(b).value(), b.merge(a).value(); got != want {
+		t.Errorf("merging in the other order gave %g, not %g", got.Px(), want.Px())
+	}
+	if got, want := a.merge(b).value(), run(16, 96, -96, -20); got != want {
+		t.Errorf("merging two runs gave %g; merging the four margins gives %g",
+			got.Px(), want.Px())
 	}
 }
 
