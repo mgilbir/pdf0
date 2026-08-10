@@ -156,6 +156,55 @@ func TestFontFaceSrcIsTriedInOrder(t *testing.T) {
 	}
 }
 
+// TestFontFaceSrcEntryGrammar pins which shapes of src entry are read and which
+// are skipped, because an entry this engine cannot parse must be skipped rather
+// than take the rest of the list down with it — and because the parser's
+// clauses are otherwise not all reachable from the tests above.
+func TestFontFaceSrcEntryGrammar(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string // the reference the loader ended up using, or "" for none
+	}{
+		{"an unquoted url token", `url(a.ttf)`, "a.ttf"},
+		{"a quoted url function", `url("a.ttf")`, "a.ttf"},
+		{"a format hint this engine reads", `url(a.ttf) format("truetype")`, "a.ttf"},
+		{"an unquoted format hint", `url(a.ttf) format(opentype)`, "a.ttf"},
+		// tech() narrows when an entry may be used and never widens it, so
+		// ignoring it can only mean trying a font that then parses or does not.
+		{"a tech list", `url(a.ttf) tech(color-COLRv1)`, "a.ttf"},
+		// An entry with something in it that is not the grammar is skipped, and
+		// the next one is taken — which is the behaviour that makes a
+		// forward-compatible src list work at all.
+		{"a nonsense entry then a real one", `nonsense(x), url(a.ttf)`, "a.ttf"},
+		// A url followed by something that is not the grammar invalidates that
+		// entry and only that entry. This is the case that distinguishes
+		// skipping an entry from ignoring a stray token inside one, and the
+		// difference shows: the second url is what must be used.
+		{"a url followed by nonsense", `url(a.ttf) nonsense, url(b.ttf)`, "b.ttf"},
+		{"two urls in one entry", `url(a.ttf) url(b.ttf), url(b.ttf)`, "b.ttf"},
+		{"a format before its url", `format("truetype") url(a.ttf), url(b.ttf)`, "b.ttf"},
+		{"nothing usable at all", `nonsense(x)`, ""},
+	} {
+		res := &fileResolver{files: map[string][]byte{
+			"a.ttf": realFont(), "b.ttf": realFont(),
+		}}
+		built := Build(Input{
+			HTML:      docWithFontFace(`@font-face { font-family: Trial; src: ` + tc.src + `; }`),
+			Resources: res,
+		})
+		set, _ := built.Fonts.(*documentFonts)
+		got := ""
+		if set != nil && len(set.faces) == 1 {
+			got = set.faces[0].ref
+		}
+		if got != tc.want {
+			t.Errorf("%s (%s) loaded %q, want %q; findings: %v",
+				tc.name, tc.src, got, tc.want, built.Findings)
+		}
+	}
+}
+
 // TestFontFaceLocalIsNotAFailure pins the other half of the chain. local() names
 // a face the reader may have; not having it is the ordinary case, and reporting
 // it would put a finding on every well-written stylesheet on the web.
@@ -578,6 +627,87 @@ func TestWeightRankFollowsTheSpecification(t *testing.T) {
 	if clampWeight(900, 100, 400) != 400 {
 		t.Error("a weight above a declared range did not clamp to its top")
 	}
+}
+
+// TestFontWeightAndStyleDescriptorGrammar pins what the two descriptors take,
+// including the range form a variable font declares and the values that are
+// refused — a descriptor this engine cannot read falls back to the default and
+// says so, rather than being silently treated as normal.
+func TestFontWeightAndStyleDescriptorGrammar(t *testing.T) {
+	weight := func(s string) (float64, float64, bool) {
+		vals, _ := css.ParseComponentValues(s)
+		return parseWeightDescriptor(vals)
+	}
+	for _, tc := range []struct {
+		in        string
+		low, high float64
+		ok        bool
+	}{
+		{"normal", 400, 400, true},
+		{"bold", 700, 700, true},
+		{"350", 350, 350, true},
+		{"100 900", 100, 900, true},
+		{"1 1000", 1, 1000, true},
+		// Refused: out of range, reversed, relative, and not a number at all.
+		{"0", 0, 0, false},
+		{"1001", 0, 0, false},
+		{"900 100", 0, 0, false},
+		{"bolder", 0, 0, false},
+		{"lighter", 0, 0, false},
+		{"400 500 600", 0, 0, false},
+		{"", 0, 0, false},
+		{"heavy", 0, 0, false},
+	} {
+		low, high, ok := weight(tc.in)
+		if ok != tc.ok || (ok && (low != tc.low || high != tc.high)) {
+			t.Errorf("font-weight %q gave %v %v %v, want %v %v %v",
+				tc.in, low, high, ok, tc.low, tc.high, tc.ok)
+		}
+	}
+
+	style := func(s string) (bool, bool) {
+		vals, _ := css.ParseComponentValues(s)
+		return parseStyleDescriptor(vals)
+	}
+	for _, tc := range []struct {
+		in         string
+		italic, ok bool
+	}{
+		{"normal", false, true},
+		{"italic", true, true},
+		{"oblique", true, true},
+		{"oblique 14deg", true, true},
+		{"oblique 0deg", false, true},
+		{"oblique -20deg 30deg", true, true},
+		{"", false, false},
+		{"slanted", false, false},
+		{"italic 20deg", false, false},
+		{"oblique 20px", false, false},
+	} {
+		italic, ok := style(tc.in)
+		if ok != tc.ok || (ok && italic != tc.italic) {
+			t.Errorf("font-style %q gave %v %v, want %v %v", tc.in, italic, ok, tc.italic, tc.ok)
+		}
+	}
+
+	// And an unreadable one is reported and defaulted rather than taking the
+	// rule down.
+	res := &fileResolver{files: map[string][]byte{"a.ttf": realFont()}}
+	built := Build(Input{
+		HTML: docWithFontFace(`@font-face { font-family: Trial; src: url(a.ttf);
+			font-weight: heavy; font-style: slanted; }`),
+		Resources: res,
+	})
+	requireFinding(t, built.Findings, RuleInvalidCSS, "font-weight")
+	requireFinding(t, built.Findings, RuleInvalidCSS, "font-style")
+	set, ok := built.Fonts.(*documentFonts)
+	if !ok {
+		t.Fatalf("an unreadable descriptor took the rule down; findings: %v", built.Findings)
+	}
+	if r := set.faces[0].rule; r.weightLow != 400 || r.weightHigh != 400 || r.italic {
+		t.Errorf("the defaults after an unreadable descriptor are %+v, want 400..400 upright", r)
+	}
+	fired[RuleInvalidCSS] = true
 }
 
 // TestFontFaceUnicodeRangeIsReported is the honest half of a descriptor this

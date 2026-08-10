@@ -452,11 +452,16 @@ const wptEnv = "WPT_TESTS"
 // Over the four: 98 tests stopped failing and one started, 1349 to 1252. The one
 // is visudet/line-height-205, and it is the familiar shape. It asserts that a
 // line box set in two downloadable faces is the union of the two, which needs
-// @font-face; nothing here loads one, so the test cannot pass. It *was* passing
-// because neither of its two divs grew, and now the div whose spans name the
-// missing families is 2.25px taller than the one that names them together — the
-// union of two faces with different baselines, which is §10.8.1 working. It
-// fails honestly.
+// @font-face; nothing loaded one at the time, so the test could not pass. It
+// *was* passing because neither of its two divs grew, and now the div whose
+// spans name the missing families is 2.25px taller than the one that names them
+// together — the union of two faces with different baselines, which is §10.8.1
+// working. It fails honestly.
+//
+// It still fails, and the reason has narrowed rather than gone: @font-face is
+// implemented now and this test's two faces are `format('woff')`, a compressed
+// container this engine does not unwrap. So the fonts are refused before the
+// read and reported, which is the honest answer and not a passing one.
 //
 // Floats, clearance and margins took it from 3924 to 3957, and this time the
 // reporting and the ink need no separating: the vacuous count is 320 before and
@@ -824,7 +829,9 @@ const wptEnv = "WPT_TESTS"
 //
 // 162 of the 665 failures did link a stylesheet. 152 of them linked exactly one
 // file, /fonts/ahem.css, whose entire content is an @font-face for Ahem — a face
-// this harness hands the engine directly, so loading it changes not one pixel.
+// this harness handed the engine directly at the time, so loading it changed not
+// one pixel. (It does not hand it over any more; the engine loads that sheet and
+// that font itself. See the note below on @font-face.)
 // Ten linked a sheet with rules in it, all ten the same file, and nine of those
 // ten stopped failing. Counted by name over the whole suite and in both
 // directions: 9 tests moved, every one of them from failing to the vacuous
@@ -839,8 +846,29 @@ const wptEnv = "WPT_TESTS"
 // fall from 4192 to 3205, measured, for a suite whose pages were all rendering
 // correctly. Measured again with the harness resolving the path the way the WPT
 // server does, so the sheet really loaded: 3205 again, because the cascade then
-// reports the @font-face it does not apply. See ahemLinkRe for what the harness
-// does about it and for the guard that keeps that honest.
+// reports the @font-face it does not apply.
+//
+// @font-face itself then moved this number by *nothing*, and that is the whole
+// point of recording it: the two adaptations above — the stripped link and the
+// harness's hand-built Ahem — came out in the same change, and the suite landed
+// on the same 4211 it was on before. Not the same total: the same *documents*.
+// The per-test dump is byte-identical to the one before, all 5177 lines of it,
+// so no test moved in either direction.
+//
+// That is the result the work was for, and on its own it would be consistent
+// with having changed nothing at all, so the load-bearing measurement is the
+// other one. With @font-face in place and the strip put back — so a document
+// can no longer ask for Ahem and nothing hands it over either — clean passes
+// fall from 4211 to 3383: 565 tests go from clean to failing and 263 from clean
+// to vacuous, none the other way. Those 828 are what the document's own
+// @font-face is now carrying, and what the two adaptations were carrying before
+// it.
+//
+// The two effects stay separated. Removing the strip from the *old* engine, with
+// no @font-face to answer the link, was measured at 4211 to 3222, and every one
+// of those 989 moved from clean to vacuous with not one test changing from
+// passing to failing: a pure reporting cost, which is exactly what the strip
+// existed to avoid. What replaced it removes the cost by removing its cause.
 const wptCleanPassBaseline = 4211
 
 // linkRe finds the reference link that makes a document a reftest.
