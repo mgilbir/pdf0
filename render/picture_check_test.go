@@ -1,6 +1,8 @@
 package render
 
 import (
+	"image"
+	"image/color"
 	"testing"
 
 	"github.com/mgilbir/pdf0/fonts"
@@ -428,5 +430,125 @@ func TestPictureJoinsAChainOfRuns(t *testing.T) {
 	broken[3] = v
 	if pictureEqual(broken, whole, picPage) {
 		t.Error("a chain with one character moved 3px compared equal to the whole word")
+	}
+}
+
+// Text that something later covers.
+//
+// This is the one occlusion question the comparison did not ask, and the
+// direction it errs in is the dangerous one — a run dropped wrongly is a
+// difference that disappears. So it is bounded from both sides here: exactly
+// the buried run goes, and every neighbouring case stays.
+
+// picRun is a run in a real face, so that it has a measurable extent. The
+// runs elsewhere in this file are faceless on purpose; a faceless run has no
+// ink to bury and is never dropped, which would make every case below vacuous.
+func picRun(t *testing.T, s string, x, y float64) DrawText {
+	t.Helper()
+	face, ok := StandardFonts().Face("Helvetica", false, false)
+	if !ok {
+		t.Skip("the standard faces are not available")
+	}
+	return DrawText{
+		Text: s, At: Point{picPx(x), picPx(y)}, Size: picPx(16),
+		Face: face, Color: picRed,
+	}
+}
+
+func TestPictureSeesThroughBuriedText(t *testing.T) {
+	run := picRun(t, "FAIL", 0, 14)
+	ink := textInk(run)
+
+	// The shape ten of the abspos-overflow tests are: a red "FAIL" and then an
+	// opaque box over the whole of it, against a reference that never wrote
+	// the word.
+	cover := FillRect{
+		Rect:  Rect{ink.X, ink.Y.Sub(picPx(2)), ink.W.Add(picPx(4)), ink.H.Add(picPx(4))},
+		Color: picGreen,
+	}
+	buried := []Op{run, cover}
+	plain := []Op{cover}
+	if !pictureEqual(buried, plain, picPage) {
+		t.Error("a run completely covered by a later opaque box did not compare equal " +
+			"to the box alone")
+	}
+}
+
+func TestPictureKeepsTextThatIsNotBuried(t *testing.T) {
+	run := picRun(t, "FAIL", 0, 14)
+	ink := textInk(run)
+	whole := Rect{ink.X, ink.Y.Sub(picPx(2)), ink.W.Add(picPx(4)), ink.H.Add(picPx(4))}
+
+	cases := []struct {
+		name  string
+		cover Op
+		// order says whether the cover is painted after the run. A box painted
+		// *before* it does not hide anything, and getting that backwards is the
+		// single way this rule could silently drop half the text in the suite.
+		after bool
+	}{
+		{"an opaque box painted before the run", FillRect{Rect: whole, Color: picGreen}, false},
+		{"a box covering only the left half", FillRect{
+			Rect: Rect{ink.X, ink.Y, ink.W.Div(2), ink.H}, Color: picGreen}, true},
+		// Exactly the ink less a pixel on each axis, which is the boundary: the
+		// same box at the ink's own size does bury the run, and this one must
+		// not. A rule that used a rectangle bigger than the letters would let
+		// this through, which is why the margin is one pixel and not ten.
+		{"a box a pixel short of the ink on each axis", FillRect{
+			Rect: Rect{ink.X.Add(picPx(1)), ink.Y.Add(picPx(1)),
+				ink.W.Sub(picPx(2)), ink.H.Sub(picPx(2))}, Color: picGreen}, true},
+		{"a translucent box", FillRect{
+			Rect: whole, Color: style.RGBA{G: 128, A: 0.5}}, true},
+	}
+	for _, tc := range cases {
+		var ops []Op
+		if tc.after {
+			ops = []Op{run, tc.cover}
+		} else {
+			ops = []Op{tc.cover, run}
+		}
+		if pictureEqual(ops, []Op{tc.cover}, picPage) {
+			t.Errorf("%s: the run was treated as buried", tc.name)
+		}
+	}
+
+	// Two different words, both buried, are the same page — that is the claim
+	// this rule makes and it has to hold in both directions. The box is wide
+	// enough for either of them, so neither is peeping out of the side.
+	other := picRun(t, "PASS", 0, 14)
+	wide := Rect{whole.X, whole.Y,
+		style.Max(whole.W, textInk(other).W.Add(picPx(8))), whole.H}
+	cover := FillRect{Rect: wide, Color: picGreen}
+	if !pictureEqual([]Op{run, cover}, []Op{other, cover}, picPage) {
+		t.Error("two different buried words did not compare equal; both are invisible")
+	}
+	if pictureEqual([]Op{run, cover}, []Op{other}, picPage) {
+		t.Error("a buried word compared equal to a visible one")
+	}
+}
+
+// TestPictureDoesNotBuryTextUnderAPatternedPicture.
+//
+// A picture with a transparent region in it is where a document shows what is
+// behind — the comparison decomposes such a picture into its bands precisely so
+// that it can see through the gap, and treating the whole rectangle as a cover
+// here would undo that in the one place it matters most.
+func TestPictureDoesNotBuryTextUnderAPatternedPicture(t *testing.T) {
+	run := picRun(t, "FAIL", 0, 14)
+	ink := textInk(run)
+	rect := Rect{ink.X, ink.Y.Sub(picPx(2)), ink.W.Add(picPx(4)), ink.H.Add(picPx(4))}
+
+	// Two bands, the lower of which is fully transparent: the word shows
+	// through it.
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	img.SetNRGBA(0, 0, color.NRGBA{G: 128, A: 255})
+	img.SetNRGBA(1, 0, color.NRGBA{G: 128, A: 255})
+	if bandsOf(img) == nil {
+		t.Fatal("the two-band picture was not decomposed, so this proves nothing")
+	}
+	pic := DrawImage{Rect: rect, Image: img, Key: "banded"}
+
+	if pictureEqual([]Op{run, pic}, []Op{pic}, picPage) {
+		t.Error("a run under a picture with a transparent half was treated as buried")
 	}
 }
