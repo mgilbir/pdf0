@@ -222,7 +222,15 @@ func (l *layouter) collectColumns(table *Box, g *tableGrid) {
 		case InnerTableColumnGroup:
 			start := len(g.colBoxes)
 			if len(c.Children) == 0 {
-				add(nil, spanAttr(c))
+				// §17.2's second rule: a column group with no column children
+				// generates the columns itself. It is therefore the box that
+				// describes them, and its own "width" is theirs — the columns
+				// have no box of their own for one to be written on. A group
+				// whose width is read from nowhere leaves them to be sized by
+				// their content, and a table of empty cells then has no width at
+				// all; width-applies-to-005 in the suite is 96 pixels of exactly
+				// that.
+				add(c, spanAttr(c))
 			}
 			for _, col := range c.Children {
 				add(col, spanAttr(col))
@@ -1534,7 +1542,10 @@ func (l *layouter) paintableColumns(parent *Fragment, g *tableGrid,
 		}
 		for i := cg.first; i < cg.first+cg.count && i < len(cols); i++ {
 			grouped[i] = true
-			if g.colBoxes[i] == nil {
+			if g.colBoxes[i] == nil || g.colBoxes[i] == cg.box {
+				// A group that generated its own columns is already the fragment
+				// they hang from, and painting it again as one of them would put
+				// its background down twice.
 				continue
 			}
 			if i > cg.first && g.colBoxes[i] == g.colBoxes[i-1] {

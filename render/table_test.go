@@ -340,6 +340,55 @@ func TestTableFixedLayoutIgnoresContent(t *testing.T) {
 	px(t, "the second row's first column", cells[2].W, 100)
 }
 
+// TestAColumnGroupWithNoColumnsDescribesItsOwn pins §17.2's second rule for
+// generating the column grid:
+//
+//	A 'table-column-group' box ... if it has no children, it generates as many
+//	anonymous 'table-column' boxes as its 'span' says
+//
+// and the consequence §17.5.2 then relies on: those columns have no box of their
+// own for a width to be written on, so the group's own width is theirs. A group
+// whose width is read from nowhere leaves the columns to be sized by their
+// content, and a table of empty cells then has no width at all — which is what
+// this engine did, and what width-applies-to-005 in the suite is 96 pixels of.
+//
+// The two cases are the two rules, and each is the wrong answer for the other.
+// With no children the group is the column box and its 96px sizes the table.
+// With a child column, the column has its own box and its own 40px, and the
+// group's 96 says nothing about it.
+func TestAColumnGroupWithNoColumnsDescribesItsOwn(t *testing.T) {
+	for _, tc := range []struct {
+		what, inner string
+		want        float64
+	}{
+		{"a group with no columns", "", 96},
+		{"a group whose column has its own width", `<col style="width: 40px">`, 40},
+	} {
+		root := layoutOf(t, 1000,
+			`<table id=t style="table-layout: fixed">`+
+				`<colgroup id=cg style="width: 96px">`+tc.inner+`</colgroup>`+
+				`<tr><td id=c></td></tr></table>`, bareTable)
+		px(t, tc.what+": the table's width", find(t, root, "t").BorderRect.W, tc.want)
+
+		// And the group's background is put down once. It is already the
+		// fragment the columns hang from, so painting it again as one of them
+		// would double it — invisible for an opaque colour and not for this one.
+		root = layoutOf(t, 1000,
+			`<table id=t style="table-layout: fixed">`+
+				`<colgroup id=cg style="width: 96px; background: rgba(0,0,255,0.5)">`+
+				tc.inner+`</colgroup><tr><td id=c style="height: 20px"></td></tr></table>`, bareTable)
+		n := 0
+		for _, op := range Paint(root) {
+			if v, ok := op.(FillRect); ok && v.Color.B == 255 {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s: the group's background was painted %d times, want 1", tc.what, n)
+		}
+	}
+}
+
 // TestTableColumnUnderflowIsReported pins the guardrail: a fixed layout that
 // squeezes a column below its content is a silent clip, and §6.2 says so out
 // loud.

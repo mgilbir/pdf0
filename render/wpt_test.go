@@ -802,7 +802,21 @@ const wptEnv = "WPT_TESTS"
 //     behaviour it asserts — that a textarea's preserved white space cannot be
 //     overridden by an author — is why the file is named tentative; it is not in
 //     HTML's rendering section yet and is not implemented here.
-const wptCleanPassBaseline = 4192
+//
+// The +19 that takes it to 4204 is §8.3.1, §9.5 and §17.2, and the three are
+// worth keeping apart because two of them are much larger than they look from
+// here. Counted in both directions over the six directories they were found in —
+// normal-flow, floats, floats-clear, positioning, abspos and margin-padding-clear
+// — nothing at all moved the wrong way in any of them:
+//
+//   - §9.5.2's closing sentence about a cleared box whose own margins collapse
+//     took six, all in floats-clear.
+//   - §9.5's "line boxes created next to the float are shortened" took twelve,
+//     from a float met part-way along a line, with §10.3.7's static position
+//     folded in because the first exposed the second. Fourteen tests moved,
+//     across four of the six directories.
+//   - §17.2's column group that generates its own columns took one.
+const wptCleanPassBaseline = 4211
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

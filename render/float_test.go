@@ -963,6 +963,280 @@ func TestAFloatedRootGoesToItsEdge(t *testing.T) {
 	px(t, "a left-floated root's left edge", root.BorderRect.X, 0)
 }
 
+// TestAClearedBoxThatCollapsesThroughLaysItsMarginOnce pins the sentence CSS 2.1
+// §9.5.2 ends on, which is the one rule about clearance that is not about where
+// the cleared box goes:
+//
+//	If the top and bottom margins of an element with clearance are adjoining,
+//	its margins collapse with the adjoining margins of following siblings but
+//	that resulting margin does not collapse with the bottom margin of the parent
+//	block.
+//
+// Two things follow, and an engine can get either one right on its own while
+// producing a page that is wrong.
+//
+// The arithmetic is the suite's margin-collapse-clear-012, which sets it out in
+// a comment in its own source. A parent with a top border — so that nothing
+// escapes through its top edge and the numbers are the parent's own — holds a
+// 100px float, then an empty box with "clear: left", a 40px top margin and an
+// 80px bottom margin, then an empty sibling with a 140px bottom margin.
+//
+//   - The empty box's margins are adjoining, so they collapse into one run. Its
+//     top margin puts its hypothetical border edge at 40, the float's bottom is
+//     at 100, so clearance takes the edge to 100. The 40 is *under* the edge
+//     already: laying the whole run again below it would put the sibling at 240.
+//   - The run goes on collecting: the sibling's 140 joins it. 140 - 40 = 100
+//     more, so the content ends at 200.
+//   - That resulting margin does not collapse with the parent's bottom margin,
+//     so it stays inside and the parent is 200 tall rather than 100. This is the
+//     half that a bottom edge with a border on it would hide, which is why the
+//     second case below takes the border off.
+func TestAClearedBoxThatCollapsesThroughLaysItsMarginOnce(t *testing.T) {
+	const doc = `<div id="p"><div id="f"></div><div id="c"></div><div id="s"></div></div>`
+	css := noDefaults + `
+	#p { border-top: 1px solid black; width: 200px }
+	#f { float: left; width: 100px; height: 100px }
+	#c { clear: left; margin-top: 40px; margin-bottom: 80px }
+	#s { margin-bottom: 140px }`
+
+	root := layoutOf(t, 1000, doc, css)
+	p := find(t, root, "p")
+	px(t, "the cleared box's border edge", relY(t, find(t, root, "c"), p), 100)
+	px(t, "the following sibling's border edge", relY(t, find(t, root, "s"), p), 200)
+	px(t, "the parent's content height", p.ContentRect().H, 200)
+
+	// The same without the top border, so that the parent's top edge is open.
+	// The float is what stops the run leaving through it — the cleared box's own
+	// top margin is separated from the parent's by the clearance — so the
+	// numbers are unchanged and the parent's border box is one pixel shorter.
+	open := noDefaults + `
+	#p { width: 200px }
+	#f { float: left; width: 100px; height: 100px }
+	#c { clear: left; margin-top: 40px; margin-bottom: 80px }
+	#s { margin-bottom: 140px }`
+	root = layoutOf(t, 1000, doc, open)
+	p = find(t, root, "p")
+	px(t, "with an open top edge: the cleared box", relY(t, find(t, root, "c"), p), 100)
+	px(t, "with an open top edge: the parent's height", p.BorderRect.H, 200)
+
+	// And the case the rule must not reach. With the float only 20px tall the
+	// hypothetical position — 40, the collapsed run — is already past it, so
+	// there is no clearance at all, every margin collapses through, and the
+	// parent has no height of its own. An engine that reached for the float's
+	// bottom rather than for a difference would make this 140 instead.
+	nofloat := noDefaults + `
+	#p { border-top: 1px solid black; width: 200px }
+	#f { float: left; width: 100px; height: 20px }
+	#c { clear: left; margin-top: 40px; margin-bottom: 80px }
+	#s { margin-bottom: 140px }`
+	root = layoutOf(t, 1000, doc, nofloat)
+	px(t, "no clearance: the parent's content height",
+		find(t, root, "p").ContentRect().H, 0)
+}
+
+// TestAClearedChildStopsItsParentCollapsingThrough pins the other half of what
+// clearance does to §8.3.1, which is that it stops being a question about the
+// cleared box and becomes one about the box holding it.
+//
+// A box's own two margins are adjoining only when it has "no in-flow children",
+// and the engine reads that as "nothing inside it that did not itself collapse
+// through" — which is what lets an empty box between two paragraphs disappear
+// instead of separating them. A child with clearance did not collapse through:
+// the clearance separates its own two margins, so it is a real in-flow child and
+// its parent has to stay.
+//
+// Reaching that is harder than it looks, because a clearance is normally height
+// and a parent with height cannot collapse through anyway. It takes a negative
+// bottom margin that exactly cancels the clearance:
+//
+//   - #f is 100 tall, so the float's bottom is 100 below #p's content top.
+//   - #c collapses through with a run of max(0, -100) = -100, so its
+//     hypothetical border edge is 100 *above* that top and the clearance is 200,
+//     putting the edge at 100.
+//   - The run continues below the edge, so #p's content ends at 100 - 100 = 0
+//     and #p has no height at all.
+//
+// #p's own margins are 30 above and 50 below. If it collapsed through they would
+// be one margin of 50 and #b would follow #a by 50; because it does not, they
+// are laid in turn and #b follows by 80. The float's own bottom is not what
+// separates them: an ordinary <div> does not contain its floats.
+func TestAClearedChildStopsItsParentCollapsingThrough(t *testing.T) {
+	css := noDefaults + `
+	#a { height: 10px }
+	#p { margin-top: 30px; margin-bottom: 50px }
+	#f { float: left; width: 100px; height: 100px }
+	#c { clear: left; margin-bottom: -100px }
+	#b { height: 10px }`
+	root := layoutOf(t, 1000, `<section id="w"><div id="a"></div>`+
+		`<div id="p"><div id="f"></div><div id="c"></div></div>`+
+		`<div id="b"></div></section>`, css)
+
+	w := find(t, root, "w")
+	px(t, "the parent's border top", relY(t, find(t, root, "p"), w), 40)
+	px(t, "the parent's height", find(t, root, "p").BorderRect.H, 0)
+	px(t, "the box after it", relY(t, find(t, root, "b"), w), 90)
+}
+
+// TestAFloatMetAlongALineShortensThatLine pins the half of §9.5 an engine that
+// places its floats after the line is finished cannot reach:
+//
+//	line boxes created next to the float are shortened to make room for the
+//	margin box of the float
+//
+// "next to" is a relation between two rectangles, so a float written after the
+// words is still next to them and the line still has to make room. The float
+// goes to the band's edge and the content already on the line moves aside.
+//
+// The arithmetic. A 300px block, an inline-block 50 wide on the line, then a
+// 100px float. The float is offered what the line began with — 300 - 50 = 250 —
+// so it fits, takes the band's left edge, and the line is re-broken in what is
+// left: the inline-block lands at 100.
+//
+// The second case is the one that must not move, and it is the reason the room
+// is measured against the band the line began with rather than the band it ends
+// with. A 250px inline-block leaves 50, which will not hold the float, so the
+// float goes below the line instead — and then it is not next to the line, does
+// not shorten it, and the inline-block stays at 0. A line box here is 40 tall
+// because that is the line-height, so the float lands at 40.
+func TestAFloatMetAlongALineShortensThatLine(t *testing.T) {
+	for _, tc := range []struct {
+		what                 string
+		inline               float64
+		wantInlineX, wantFlY float64
+	}{
+		{"the float fits beside the line", 50, 100, 0},
+		{"the float does not fit", 250, 0, 40},
+		// The case that separates the two bands, and the reason the room is
+		// measured against the one the line began with. 300 - 150 leaves 150,
+		// which holds the float; once it has taken its 100 the line is 200 wide
+		// and 200 - 150 leaves 50, which does not. Measured against the narrowed
+		// band the float fits, then stops fitting, then fits again, and the loop
+		// ends wherever its budget runs out — here with the float underneath the
+		// inline-block at 0 rather than beside it.
+		{"the float fits only against the band the line began with", 150, 100, 0},
+	} {
+		css := noDefaults + `
+		#w { width: 300px; line-height: 40px }
+		#a { display: inline-block; vertical-align: top; height: 20px;
+		     width: ` + trim(tc.inline) + `px }
+		#f { float: left; width: 100px; height: 50px }`
+		root := layoutOf(t, 1000,
+			`<section id="w"><span id="a"></span><span id="f"></span></section>`, css)
+
+		w := find(t, root, "w")
+		px(t, tc.what+": the inline-block's left", relX(t, find(t, root, "a"), w), tc.wantInlineX)
+		px(t, tc.what+": the float's left", relX(t, find(t, root, "f"), w), 0)
+		px(t, tc.what+": the float's top", relY(t, find(t, root, "f"), w), tc.wantFlY)
+	}
+}
+
+// TestAFloatBelowALineDoesNotShortenIt is the other side of the rule above, and
+// it is the one that has to be right for the first to be safe.
+//
+// A float is next to a line or it is under it, and only the first shortens
+// anything. The difference is easy to lose because a line box is *taller* than
+// the boxes on it: a float placed at the bottom of the content still begins
+// above the bottom of the line, so a band asked over the line's height finds it
+// and narrows the line to nothing.
+//
+// The arithmetic. A 100px block with a 60px line-height holds a 50px
+// inline-block, a 50px right float and a 30px left float that clears the right
+// one.
+//
+//   - The right float is offered 100 - 50 = 50, takes it, and sits at 50 at the
+//     top of the line.
+//   - The left float clears it, so while the line is being fitted it goes to the
+//     right float's bottom edge at 40 — under the line, whose height is the 60px
+//     line-height, and so not beside it.
+//   - The line is therefore shortened by the right float alone, to 0..50, and
+//     the inline-block fits in it at 0.
+//   - The left float is then placed against the settled line, which is 50 wide
+//     and full, so it goes under the line at 60. Its own clearance of 40 is
+//     above that and moves it no further.
+//
+// Leave the left float standing at 40 where the line can see it and the band
+// over the line becomes 30..50, twenty pixels for a fifty-pixel box, and the
+// line drops past both.
+func TestAFloatBelowALineDoesNotShortenIt(t *testing.T) {
+	css := noDefaults + `
+	#w { width: 100px; line-height: 60px }
+	#a { display: inline-block; vertical-align: top; width: 50px; height: 40px }
+	#r { float: right; width: 50px; height: 40px }
+	#c { float: left; clear: right; width: 30px; height: 20px }
+	#g { position: absolute; top: 0; left: 0; width: 10px; height: 10px }`
+	const doc = `<section id="w"><span id="a"></span>` +
+		`<span id="r"></span><span id="c"><div id="g"></div></span></section>`
+	root := layoutOf(t, 1000, doc, css)
+
+	w := find(t, root, "w")
+	a, r, c := find(t, root, "a"), find(t, root, "r"), find(t, root, "c")
+	px(t, "the inline-block's left", relX(t, a, w), 0)
+	px(t, "the inline-block's top", relY(t, a, w), 0)
+	px(t, "the right float's left", relX(t, r, w), 50)
+	px(t, "the right float's top", relY(t, r, w), 0)
+	px(t, "the cleared float's left", relX(t, c, w), 0)
+	px(t, "the cleared float's top", relY(t, c, w), 60)
+
+	// Taking the float back out has to take the out-of-flow boxes its layout
+	// found with it, or it defers each of them again when it is placed after the
+	// line. This is TestAbsoluteInARelaidSubtreeIsPlacedOnce's question on the
+	// inline side, and it has the same answer about how to ask it: counting
+	// fragments passes under the defect, because the duplicate hangs off the
+	// float fragment that was thrown away and is unreachable from the root. What
+	// it costs is real everywhere else, so the assertion is against the
+	// placement budget — one is enough for the one box this document has, and
+	// not enough for two.
+	if n := countFor(root, "g"); n != 1 {
+		t.Errorf("the absolute box inside the rolled-back float has %d fragments, want 1", n)
+	}
+	defer func(old int) { maxAbsolutes = old }(maxAbsolutes)
+	maxAbsolutes = 1
+	if got := findingsOf(t, doc, css); hasRule(got, RuleLimit) {
+		t.Errorf("one out-of-flow box exhausted a budget of one, so the rolled-back "+
+			"float's copy was placed as well as the real one: %v", got)
+	}
+}
+
+// TestAStaticPositionIsOfTheUnblockifiedBox pins the words §10.3.7 resolves an
+// "auto" left against:
+//
+//	the static position ... is the distance from the left edge of the containing
+//	block to the left margin edge of a hypothetical box that would have been the
+//	first box of the element if its 'position' property had been 'static'
+//
+// With "position: static" there is no §9.7 blockification, so the hypothetical
+// box of an absolutely positioned <span> is an inline box on the line where it
+// was written and that of an absolutely positioned <div> is a block box whose
+// left margin edge is the containing block's content edge. Reading the *used*
+// display cannot tell them apart, because §9.7 has already made both blocks.
+//
+// The difference only shows once something moves the line's own left edge, and a
+// float is the ordinary way that happens. The 100px float takes the band's left
+// edge, so the line starts at 100; the 50px inline-block before the positioned
+// box takes it to 150, which is where an inline hypothetical box would have
+// begun. A block hypothetical box begins at 0 whatever is on the line.
+func TestAStaticPositionIsOfTheUnblockifiedBox(t *testing.T) {
+	for _, tc := range []struct {
+		tag   string
+		wantX float64
+	}{
+		{"div", 0},
+		{"span", 150},
+	} {
+		css := noDefaults + `
+		#w { width: 300px; position: relative; line-height: 40px }
+		#a { display: inline-block; vertical-align: top; width: 50px; height: 20px }
+		#p { position: absolute; top: 0; width: 40px; height: 40px }
+		#f { float: left; width: 100px; height: 50px }`
+		root := layoutOf(t, 1000, `<section id="w"><span id="a"></span><`+tc.tag+
+			` id="p"></`+tc.tag+`><span id="f"></span></section>`, css)
+
+		w := find(t, root, "w")
+		px(t, "an absolute <"+tc.tag+">'s static left",
+			relX(t, find(t, root, "p"), w), tc.wantX)
+	}
+}
+
 // nearly compares two float widths at a tolerance far below a layout unit, which
 // is a 64th of a pixel.
 func nearly(a, b float64) bool {
