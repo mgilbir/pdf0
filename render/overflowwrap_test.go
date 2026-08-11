@@ -240,3 +240,35 @@ func TestAnywhereNarrowsAShrinkToFitBoxAndBreakWordDoesNot(t *testing.T) {
 			"character, so the float takes the room it has", room)
 	}
 }
+
+// TestALineEndsAtItsLastOpportunityWhenTheNextThingCannotBeginOne is a bug
+// found by asking why overflow-wrap's last-resort guard could not be observed.
+//
+// The guard says the last resort applies only where the line has no rewind
+// target, which is §5.5's own wording. Removing it moved nothing, and the reason
+// was not that the guard is unnecessary: it was that the rewind it names did not
+// happen for anything but a space, so the case never arose. Text that begins no
+// opportunity — the text after a </span>, which has none in front of it — simply
+// overflowed.
+func TestALineEndsAtItsLastOpportunityWhenTheNextThingCannotBeginOne(t *testing.T) {
+	// "xy ab" is 60px of a 72px line and "cdefgh" is 72px more. There is no
+	// opportunity between the span and the text after it, so the only place the
+	// line can end is the space it already passed.
+	got := lineTextsOf(t, layoutOf(t, 600, `<div id="p">xy <span>ab</span>cdefgh</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 72px }`), "p")
+	if len(got) != 2 || got[0] != "xy" || got[1] != "abcdefgh" {
+		t.Errorf("got %q, want [xy abcdefgh] — the line did not go back to the "+
+			"space when the text after the span would not fit", got)
+	}
+
+	// And with overflow-wrap the word that is left is then broken on the line it
+	// starts, which is the two rules composing: the rewind first, the last
+	// resort only once there is nothing left to rewind to.
+	got = lineTextsOf(t, layoutOf(t, 600, `<div id="p">xy <span>ab</span>cdefgh</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 72px;
+		      overflow-wrap: break-word }`), "p")
+	want := []string{"xy", "abcdef", "gh"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
