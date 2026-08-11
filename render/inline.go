@@ -2400,13 +2400,27 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 			return trimLineEdge(line[:insetLine]), insetAt, 0, outOfFlow[:insetFlow], false
 		}
 
-		// The break-spaces rewind. A preserved space that neither hangs nor
-		// begins an opportunity of its own is the tail of the unit before it, so
-		// a line that cannot hold it cannot hold that unit either and ends at the
-		// last opportunity instead. Where there is no such opportunity the space
-		// stays and the line overflows, which is what break-spaces asks for: its
-		// spaces are data and are never dropped to make a line fit.
-		if item.space && !item.collapsible && !item.hangs && !item.noWrap &&
+		// The rewind to the last opportunity. Something that does not fit and
+		// cannot begin a line of its own is the tail of the unit before it, so a
+		// line that cannot hold it cannot hold that unit either and ends at the
+		// last opportunity instead. Where there is no such opportunity it stays
+		// and the line overflows.
+		//
+		// It was written for break-spaces, whose preserved space is exactly that
+		// — data, never dropped to make a line fit — and it was restricted to
+		// spaces, which was too narrow. "xy <span>ab</span>cdefgh" in seventy-two
+		// pixels put everything on one line and let it overflow: "cdefgh" begins
+		// no opportunity, because there is none between a span and the text after
+		// it, so nothing sent the line back to the space it had.
+		//
+		// Atomic inlines are still excluded, and that is measured rather than
+		// reasoned. Letting an inline-block or an image rewind costs thirty-two
+		// reftests, so the suite says the behaviour they have is the right one
+		// and this is not the change that should alter it; extending the rule to
+		// text alone moves nothing on the suite either way and fixes the case
+		// above, which makes it a strict improvement rather than a trade.
+		if (item.space || item.atomicBox == nil) && !item.collapsible &&
+			!item.hangs && !item.noWrap && !item.inset &&
 			!item.breakBefore && oppAt >= 0 && used.Add(item.width) > width {
 			return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
 		}
