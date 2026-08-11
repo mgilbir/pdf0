@@ -121,6 +121,11 @@ var properties = map[string]property{
 	"text-indent":    {true, "0"},
 	"text-transform": {true, "none"},
 	"white-space":    {true, "normal"},
+	// overflow-wrap inherits. word-wrap is the name Internet Explorer shipped it
+	// under and is a legal alias in CSS Text §5.5, so it is registered rather
+	// than reported: a document using it is not using an unsupported property.
+	"overflow-wrap": {true, "normal"},
+	"word-wrap":     {true, "normal"},
 	// word-break inherits, which is what makes a rule on a container reach the
 	// text in it. Only "normal" and "break-all" are acted on; the two values
 	// this engine does not distinguish are read as normal and reported, because

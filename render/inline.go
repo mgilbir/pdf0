@@ -315,6 +315,15 @@ type inlineItem struct {
 	// and never causes a break of its own. break-spaces is the value that opts
 	// out of this, which is the whole difference between it and pre-wrap.
 	hangs bool
+	// breakWord is overflow-wrap's last-resort break, carried per item because
+	// the property is the box's and a line holds items from several boxes.
+	breakWord bool
+	// anywhere is the value of overflow-wrap that also lowers the min-content
+	// width, so a shrink-to-fit box narrows to its widest character rather than
+	// to its widest word. §5.5 says break-word's opportunities "are not
+	// considered when calculating min-content intrinsic sizes" and anywhere's
+	// are, which is the whole difference between the two values.
+	anywhere bool
 	// tab marks one preserved tab. Its advance is not a property of the text —
 	// it is the distance to the next tab stop, so it is resolved when the tab
 	// has a place on a line and not before.
@@ -498,11 +507,14 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	decor := inlineDecor{l: l, containing: width, strut: st}
 
 	var y style.Unit
+	// iByte is how far into items[i] the next line begins, which is other than
+	// zero only where overflow-wrap ended the line inside a word.
+	iByte := 0
 	for i := 0; i < len(items); {
 		// A float that begins a line is placed before the line is measured,
 		// because it is one of the floats the line has to avoid. §9.5.1 rule 4
 		// puts its top at the top of the line box it belongs to.
-		for i < len(items) && items[i].float != nil {
+		for iByte == 0 && i < len(items) && items[i].float != nil {
 			parent.Children = append(parent.Children,
 				l.floatChild(items[i].float, width, origin, y, style.MaxUnit, 0, 0))
 			i++
@@ -512,7 +524,15 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		}
 
 		left, right := origin.ctx.bandAt(origin.y.Add(y), lo, hi)
-		y, left, right = l.roomForLine(items[i], origin, y, left, right, lo, hi)
+		// What has to fit beside a float is what this line will actually start
+		// with, which is the *remainder* of a word the line before broke — not
+		// the whole word, whose width would push the line down past a float it
+		// has room beside.
+		firstItem := items[i]
+		if iByte > 0 {
+			_, firstItem = l.splitItem(firstItem, iByte)
+		}
+		y, left, right = l.roomForLine(firstItem, origin, y, left, right, lo, hi)
 
 		// The indent is taken off the room the first line has for text, not off
 		// the line box: the line box still spans the band, and its content starts
@@ -539,6 +559,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		var (
 			runs     []inlineItem
 			next     int
+			nextByte int
 			mid      []midLineBox
 			forced   bool
 			lh, bl   style.Unit
@@ -556,7 +577,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			l.deferred = l.deferred[:midAbs]
 			midKids = midKids[:0]
 
-			runs, next, mid, forced = l.breakOneLine(items, i,
+			runs, next, nextByte, mid, forced = l.breakOneLine(items, i, iByte,
 				right.Sub(left).Sub(lineIndent), left.Sub(lo).Add(lineIndent))
 			stack = stackLine(runs, st)
 			lh, bl = stack.height, stack.baseline
@@ -820,7 +841,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			}
 		}
 
-		i = next
+		i, iByte = next, nextByte
 		if len(runs) > 0 || forced {
 			// Only a line that exists occupies a line's height. A run of inline
 			// content that is nothing but the collapsible space between two
@@ -1774,6 +1795,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// which is the whole of what makes a <span> set larger than the paragraph
 	// around it grow the line it is on.
 	above, below := l.leading(b)
+	ow := overflowWrapOf(b.Style)
 	wb, unhandled := wordBreakOf(b.Style["word-break"])
 	if unhandled != "" {
 		l.reportWordBreak(b, unhandled)
@@ -1853,6 +1875,8 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// which exists precisely so that it does not.
 			hangs:  p.space && !p.collapsible && !ws.breakSpaces,
 			noWrap: !ws.wrap, offset: offset,
+			breakWord:   ow.breakWord,
+			anywhere:    ow.anywhere,
 			decorations: decorations, spacing: spacing,
 		}
 		if !p.tab {
@@ -2252,8 +2276,8 @@ func isIdeographic(r rune) bool {
 //
 // The returned items carry their resolved widths: a tab's is not known until it
 // has a place, so an item on a line is not always the item that came in.
-func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style.Unit) (
-	line []inlineItem, next int, outOfFlow []midLineBox, forced bool) {
+func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, lineX style.Unit) (
+	line []inlineItem, next, nextByte int, outOfFlow []midLineBox, forced bool) {
 
 	var used style.Unit
 	// content says the line holds something a reader would see. It is not the
@@ -2292,6 +2316,14 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 	i := from
 	for ; i < len(items); i++ {
 		item := items[i]
+		if i == from && fromByte > 0 {
+			// The line begins part-way through an item, because the line before
+			// it ended inside this word. The cursor is an index *and* an offset
+			// rather than a rewritten items slice: the caller re-runs this over
+			// several band widths, so anything written back would be seen by the
+			// next attempt and the split would compound.
+			_, item = l.splitItem(item, fromByte)
+		}
 
 		if item.float != nil {
 			// Recorded with how far along the line it was reached, which is what
@@ -2312,7 +2344,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 		if item.forced {
 			// An instruction rather than an opportunity: the line ends here
 			// whatever room is left, and an empty one still occupies its height.
-			return trimLineEdge(line), i + 1, outOfFlow, true
+			return trimLineEdge(line), i + 1, 0, outOfFlow, true
 		}
 
 		// §4.1.2's first rule: a sequence of collapsible spaces at the
@@ -2356,7 +2388,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 		// no room on the page at all.
 		if !item.noWrap && !item.hangs && item.breakBefore &&
 			len(line) > 0 && used.Add(item.width) > width {
-			return trimLineEdge(line), i, outOfFlow, false
+			return trimLineEdge(line), i, 0, outOfFlow, false
 		}
 
 		// The rewind. The item does not begin a break opportunity of its own,
@@ -2365,7 +2397,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 		// margin goes with it.
 		if !item.noWrap && !item.hangs && !item.breakBefore && !item.inset &&
 			insetAt >= 0 && used.Add(item.width) > width {
-			return trimLineEdge(line[:insetLine]), insetAt, outOfFlow[:insetFlow], false
+			return trimLineEdge(line[:insetLine]), insetAt, 0, outOfFlow[:insetFlow], false
 		}
 
 		// The break-spaces rewind. A preserved space that neither hangs nor
@@ -2376,7 +2408,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 		// spaces are data and are never dropped to make a line fit.
 		if item.space && !item.collapsible && !item.hangs && !item.noWrap &&
 			!item.breakBefore && oppAt >= 0 && used.Add(item.width) > width {
-			return trimLineEdge(line[:oppLine]), oppAt, outOfFlow[:oppFlow], false
+			return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
 		}
 
 		// A single item wider than the line has nowhere to go. It is placed and
@@ -2384,6 +2416,53 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 		// at an arbitrary point reads as a different word — and it is reported,
 		// because the part past the edge is simply not drawn and nothing else
 		// about the page says so.
+		// overflow-wrap, CSS Text §5.5: the last resort.
+		//
+		// Its opportunities exist only "if there are no otherwise-acceptable
+		// break points in the line", and this is the place that knows: every
+		// rewind above has been tried and none applied, so ending the line here
+		// is the only way not to overflow.
+		//
+		// The condition is about the *line* and not about one over-wide item,
+		// which is the correction that made this do anything at all. A first
+		// draft fired only where a single item was wider than the whole line,
+		// and the suite's own fixture is not that shape: "XXXX XX" in four
+		// characters cuts into pieces that each fit, and it is the run of them
+		// that does not. Requiring no rewind target is what keeps it a last
+		// resort — a line with a space in it breaks at the space.
+		if item.breakWord && !item.noWrap && !item.hangs && !item.inset && !item.tab &&
+			insetAt < 0 && oppAt < 0 && used.Add(item.width) > width {
+			// The offset is into items[i]. It is only the cursor's offset away
+			// from that when this *is* the item the cursor pointed at: a line
+			// that began at a float and reached its first text later is at
+			// i > from, where the item is whole.
+			base := 0
+			if i == from {
+				base = fromByte
+			}
+			// As much of the item as the room left will hold. This is what
+			// keeps the fill greedy: a line with "ab" on it and "cdefgh" next
+			// takes "cd" as well rather than stopping at the two characters it
+			// already has.
+			if head, at, ok := l.breakInsideWord(item, width.Sub(used)); ok {
+				line = append(line, head)
+				return trimLineEdge(line), i, base + at, outOfFlow, false
+			}
+			// Nothing of it fits — a single character too wide for the room
+			// left, or a space, which has one cluster and cannot be cut. The
+			// line ends in front of it and it begins the next one, which is
+			// where a preserved space under break-spaces has to go: the value
+			// exists so that spaces are data, and dropping one to tidy the line
+			// would lose it.
+			//
+			// Only where the line holds something already. Otherwise there is
+			// nothing to end and the item would begin this line again for ever;
+			// it is placed, it overflows, and it is reported below.
+			if content {
+				return trimLineEdge(line), i, base, outOfFlow, false
+			}
+		}
+
 		if item.width > width && !content && !item.space && !item.noWrap && !item.inset {
 			// An inset is not text and has no text to name in the report. A
 			// margin wider than the line is also not the fault the report is
@@ -2412,7 +2491,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from int, width, lineX style
 		line = append(line, item)
 		used = used.Add(item.width)
 	}
-	return trimLineEdge(line), i, outOfFlow, false
+	return trimLineEdge(line), i, 0, outOfFlow, false
 }
 
 // reportOverflow names content too wide for the box holding it.
@@ -2896,4 +2975,84 @@ func (l *layouter) faceForText(b *Box) (*fonts.Face, bool) {
 	}
 	l.textFaces[b] = chosen
 	return chosen, true
+}
+
+// splitItem cuts one text item in two at a byte offset, re-measuring both.
+//
+// The bidi range goes with the text. An item carries the span of the paragraph
+// buffer its characters occupy, and the two halves occupy the two halves of it —
+// which is what keeps the resolved levels attached to the right characters after
+// a word has been broken across a line.
+//
+// Re-measuring rather than apportioning the original width is the point. A face
+// may kern or ligate across the cut, so the two pieces do not in general add up
+// to the whole, and the number that has to be right is the one used to place the
+// text that is actually drawn.
+func (l *layouter) splitItem(item inlineItem, at int) (head, tail inlineItem) {
+	head, tail = item, item
+	head.text, tail.text = item.text[:at], item.text[at:]
+	head.bidiEnd = item.bidiStart + at
+	tail.bidiStart = item.bidiStart + at
+	head.width = l.measureSpaced(item.face, head.text, item.size, item.spacing)
+	tail.width = l.measureSpaced(item.face, tail.text, item.size, item.spacing)
+	// The tail begins a line, so it takes no opportunity from what was in front
+	// of the head — there is nothing in front of it any more.
+	tail.breakBefore = false
+	return head, tail
+}
+
+// breakInsideWord is overflow-wrap's last resort: the largest prefix of an item
+// that fits, cut where a grapheme cluster ends.
+//
+// The cut is at a cluster boundary and not at a character, for the reason
+// break-all's is — CSS Text §2 puts a soft wrap opportunity between typographic
+// character units, and a cut inside one separates a letter from its accent. It
+// is the same rule and the same table; only when it applies differs.
+//
+// The prefix is found by bisection over the boundaries rather than by measuring
+// the text a cluster at a time. Widths do not add up: a face may kern or ligate
+// across the join, so a running total is not the width of the prefix it claims
+// to be. Bisection measures each candidate whole, which is exact for the one
+// that is chosen, and costs a logarithmic number of measurements rather than
+// one per character — which matters, because the input is untrusted and this is
+// reached precisely for the longest words in a document.
+//
+// It reports false when there is nothing to gain: an item with one cluster, or
+// one whose first cluster already overflows. Both leave the word to overflow and
+// be reported, which is right — a line cannot hold less than one character, and
+// breaking one off to leave the rest overflowing anyway would only lose a
+// character off the end.
+func (l *layouter) breakInsideWord(item inlineItem, width style.Unit) (head inlineItem, at int, ok bool) {
+	if !item.breakWord || item.face == nil || width <= 0 || item.text == "" {
+		return inlineItem{}, 0, false
+	}
+	bounds := grapheme.Boundaries(nil, item.text)
+	if len(bounds) == 0 {
+		return inlineItem{}, 0, false // one cluster: nothing to cut
+	}
+
+	// The largest boundary whose prefix fits. Bisection needs the predicate to
+	// be monotone, and it is for any face whose advances are non-negative: a
+	// longer prefix is never narrower. A face with a negative advance would make
+	// this pick a cut that is merely *a* fitting one rather than the longest,
+	// which is a worse line and not a wrong page.
+	lo, hi := 0, len(bounds) // lo is known to fit (the empty prefix), hi is not known
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if mid > len(bounds) {
+			break
+		}
+		w := l.measureSpaced(item.face, item.text[:bounds[mid-1]], item.size, item.spacing)
+		if w <= width {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	if lo == 0 {
+		return inlineItem{}, 0, false // not even one cluster fits
+	}
+	at = bounds[lo-1]
+	head, _ = l.splitItem(item, at)
+	return head, at, true
 }

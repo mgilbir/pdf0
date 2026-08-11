@@ -132,6 +132,49 @@ func wordBreakOf(value string) (wordBreak, string) {
 	return wordBreak{}, ""
 }
 
+// overflowWrap is what the overflow-wrap property sets: whether a word with
+// nowhere to break may be broken anyway rather than overflowing its line.
+//
+// It is a different shape of rule from word-break and the difference decides
+// where it is implemented. break-all adds opportunities to the text, so it
+// belongs in splitAtBreaks and can be decided by looking at the characters.
+// overflow-wrap adds none: CSS Text §5.5 makes its opportunities exist only
+// "if there are no otherwise-acceptable break points in the line", so it is not
+// a property of the text at all but of what the breaker should do having
+// already failed. It lives in breakOneLine for that reason.
+type overflowWrap struct {
+	// breakWord allows the last-resort break.
+	breakWord bool
+	// anywhere is the value that also shrinks the min-content size, so a
+	// shrink-to-fit box narrows to its widest *character* rather than to its
+	// widest word. break-word deliberately does not: §5.5 says its opportunities
+	// "are not considered when calculating min-content intrinsic sizes".
+	anywhere bool
+}
+
+// overflowWrapOf reads the property, taking the winner of overflow-wrap and its
+// alias word-wrap.
+//
+// Both names are legal and mean the same thing, so the one to obey is whichever
+// the cascade resolved last. The cascade cannot tell them apart — they are two
+// entries in the registry, not one property with two spellings — so an author
+// who sets overflow-wrap on a rule and word-wrap on a more specific one gets the
+// wrong answer here. Taking the non-initial value is what makes the common case
+// right: a document sets one of them.
+func overflowWrapOf(style map[string]string) overflowWrap {
+	value := strings.ToLower(strings.TrimSpace(style["overflow-wrap"]))
+	if value == "" || value == "normal" {
+		value = strings.ToLower(strings.TrimSpace(style["word-wrap"]))
+	}
+	switch value {
+	case "break-word":
+		return overflowWrap{breakWord: true}
+	case "anywhere":
+		return overflowWrap{breakWord: true, anywhere: true}
+	}
+	return overflowWrap{}
+}
+
 // collapseWhitespace is §4.1.1 Phase I over one text node.
 //
 // It is linear in the length of the text and allocates one builder, which is
