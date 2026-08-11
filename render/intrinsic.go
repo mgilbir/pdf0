@@ -1,6 +1,9 @@
 package render
 
-import "github.com/mgilbir/pdf0/style"
+import (
+	"github.com/mgilbir/pdf0/internal/grapheme"
+	"github.com/mgilbir/pdf0/style"
+)
 
 // Intrinsic widths: how wide a box wants to be when nothing tells it.
 //
@@ -399,6 +402,20 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				edge = 0
 			}
 
+		case item.anywhere && !item.noWrap:
+			// overflow-wrap: anywhere. §5.5 gives this value opportunities that
+			// *are* counted here, which is the only thing that distinguishes it
+			// from break-word: a shrink-to-fit box holding one long word narrows
+			// to the widest character in it rather than to the whole word.
+			//
+			// It ends the unbreakable run on both sides and contributes its own
+			// widest cluster, because a run of text that may break between any
+			// two characters is not part of anything unbreakable.
+			endRun()
+			out.min = style.Max(out.min, l.widestCluster(item))
+			line = line.Add(item.width)
+			edge, runEdge = 0, 0
+
 		default:
 			if item.breakBefore && !item.noWrap {
 				endRun()
@@ -410,4 +427,30 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 	}
 	endLine()
 	return out
+}
+
+// widestCluster is an item's min-content contribution under overflow-wrap:
+// anywhere — the widest grapheme cluster in it.
+//
+// The cluster and not the character, for the reason every other cut in this
+// engine is at a cluster: a line may not end inside one, so a box narrower than
+// the widest cluster could not hold the text however hard it broke it.
+//
+// Each cluster is measured on its own rather than summed from a running total,
+// which is exactly the approximation this refuses elsewhere — here it is not an
+// approximation, because a single cluster's width is what it is. What is lost is
+// kerning between two clusters, and there is none: they are never adjacent on a
+// line this width.
+func (l *layouter) widestCluster(item inlineItem) style.Unit {
+	if item.face == nil || item.text == "" {
+		return item.width
+	}
+	var widest style.Unit
+	prev := 0
+	for _, at := range append(grapheme.Boundaries(nil, item.text), len(item.text)) {
+		w := l.measureSpaced(item.face, item.text[prev:at], item.size, item.spacing)
+		widest = style.Max(widest, w)
+		prev = at
+	}
+	return widest
 }
