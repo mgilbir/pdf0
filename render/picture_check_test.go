@@ -724,3 +724,49 @@ func TestPictureIgnoresSpaceAtTheEndsOfARun(t *testing.T) {
 		t.Error("two different words compared equal")
 	}
 }
+
+// TestPictureComparesTheGlyphsAndNotTheString is the right-to-left half of the
+// comparison, and it is tested in both directions because the change that
+// introduced it could have weakened the oracle rather than sharpened it.
+//
+// A run carries its text in logical order and a flag saying which way it is
+// drawn. Comparing the strings makes a correct right-to-left rendering differ
+// from the reference that draws the same glyphs left to right — which is how
+// the suite writes a whole family of its bidi tests, "SSAP" against a reference
+// that writes "PASS" — and comparing the shaped glyphs is what sees that they
+// are the same four marks in the same four places.
+//
+// The second half is the one that matters more. Two runs whose glyphs differ
+// have to keep comparing different, or the sharpening would be a hole: the same
+// letters drawn the *other* way round are not the same page.
+func TestPictureComparesTheGlyphsAndNotTheString(t *testing.T) {
+	face, err := fonts.Standard("Helvetica")
+	if err != nil {
+		t.Fatalf("loading a standard face: %v", err)
+	}
+	run := func(s string, rtl bool) []Op {
+		return []Op{DrawText{
+			Text: s, RTL: rtl, Face: face,
+			At: Point{picPx(8), picPx(29)}, Size: picPx(16),
+			Color: style.RGBA{A: 1},
+		}}
+	}
+
+	// The same ink: "SSAP" drawn right to left is "PASS".
+	if !pictureEqual(run("SSAP", true), run("PASS", false), picPage) {
+		t.Error("a right-to-left run did not match the left-to-right run that " +
+			"draws the same glyphs in the same place")
+	}
+	// Not the same ink: "SSAP" drawn left to right is "SSAP".
+	if pictureEqual(run("SSAP", true), run("SSAP", false), picPage) {
+		t.Error("a right-to-left run matched a left-to-right run of the same " +
+			"string, which draws its glyphs in the other order")
+	}
+	if pictureEqual(run("PASS", true), run("PASS", false), picPage) {
+		t.Error("reversing a run's direction did not change what it draws")
+	}
+	// And a run still differs from a different word.
+	if pictureEqual(run("PASS", false), run("PAST", false), picPage) {
+		t.Error("two different words at the same place compared equal")
+	}
+}
