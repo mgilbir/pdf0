@@ -498,6 +498,51 @@ func trimRunSpace(v DrawText) DrawText {
 	return v
 }
 
+// drawnGlyphs identifies a run by the glyphs it puts on the page rather than by the
+// string it was written from.
+//
+// The two differ for a right-to-left run, and that is the whole reason this
+// exists. A run's Text is in *logical* order — the order it is read — while what
+// is drawn is the shaper's answer for it, which for a right-to-left run is the
+// other way round. So "SSAP" drawn right-to-left and "PASS" drawn left-to-right
+// are the same four glyphs in the same four places, and comparing the strings
+// called them different.
+//
+// That is not a hypothetical. The suite writes a whole family of tests this way
+// — direction, unicode-bidi and their applies-to sets each say "test passes if
+// there are the words PASS PASS" and get there by writing SSAP and reversing it
+// — and every one of them was counted a failure against a reference that simply
+// writes PASS. The pages are identical: same glyph ids, same origins, measured.
+//
+// Shaping is how the answer is had rather than reversing the runes, because
+// reversing is not what the engine does. It hands the shaper an override and
+// lets it apply rule L4's mirroring on the way, so a bracket in a right-to-left
+// run comes back as the other bracket — a difference a rune reversal would miss
+// and would then call two different pages the same, which is the direction an
+// oracle must never err in.
+//
+// A run with no face has no shaper to ask; those are the hand-built runs in
+// picture_check_test.go, and they fall back to the string.
+func drawnGlyphs(v DrawText) string {
+	if v.Face == nil {
+		return fmt.Sprintf("%q", v.Text)
+	}
+	glyphs, _ := v.Face.ShapeGlyphs(shapedText(v))
+	if len(glyphs) == 0 {
+		return fmt.Sprintf("%q", v.Text)
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, g := range glyphs {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%d", g.GID)
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
 func texts(ops []Op, under []coloured) []textMark {
 	covers := opaqueCovers(ops)
 	var marking []DrawText
@@ -526,7 +571,7 @@ func texts(ops []Op, under []coloured) []textMark {
 
 	var out []textMark
 	for _, v := range joinRuns(marking) {
-		what := fmt.Sprintf("text %q size %s", v.Text, num(v.Size))
+		what := fmt.Sprintf("text %s size %s", drawnGlyphs(v), num(v.Size))
 		if v.Clip.Active {
 			// A run §11.1 cut is a different mark from the same run drawn
 			// whole, and there is no way to say which glyphs survived without a
