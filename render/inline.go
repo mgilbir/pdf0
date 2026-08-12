@@ -511,6 +511,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// zero only where overflow-wrap ended the line inside a word.
 	iByte := 0
 	for i := 0; i < len(items); {
+		// Where this pass started, so that the foot of the loop can tell whether
+		// it moved. Nothing in the body increments the cursor on its own: it is
+		// carried entirely by what breakOneLine hands back.
+		wasI, wasByte := i, iByte
 		// A float that begins a line is placed before the line is measured,
 		// because it is one of the floats the line has to avoid. §9.5.1 rule 4
 		// puts its top at the top of the line box it belongs to.
@@ -842,6 +846,25 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		}
 
 		i, iByte = next, nextByte
+		// The cursor has to move, and only forwards. A break that hands back the
+		// position it was given is a bug in breakOneLine rather than anything a
+		// document can ask for — but the loop has no increment of its own, so
+		// such a break is not a wrong line, it is a render that never finishes:
+		// the same line is measured, appended and measured again until the
+		// process is killed. Two of the mutation plants over this function reach
+		// exactly that state, and unguarded each one takes 25GB before the OOM
+		// killer arrives.
+		//
+		// So the cursor is pushed past the item it stalled on. What that costs is
+		// the rest of one item, and what it buys is the same bargain maxLineFits
+		// strikes: output that is slightly wrong beats output that never comes.
+		//
+		// The comparison is a function of its own because it is the part that can
+		// be got wrong quietly: the recovery below cannot be reached by any
+		// document, so a test can only reach the decision.
+		if !cursorAdvanced(wasI, wasByte, i, iByte) {
+			i, iByte = wasI+1, 0
+		}
 		if len(runs) > 0 || forced {
 			// Only a line that exists occupies a line's height. A run of inline
 			// content that is nothing but the collapsible space between two
@@ -1453,6 +1476,19 @@ func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 		return inset.Add(line.Rect.Y).Add(line.Baseline), true
 	}
 	return 0, false
+}
+
+// cursorAdvanced reports whether a line took at least one item, or at least one
+// byte of one, from where it began.
+//
+// The cursor is the pair (item, byte into that item), so "forwards" is the
+// lexicographic order on the two and not a comparison of either alone: a line
+// that ends inside the item it started in has the same index and a greater
+// offset, and a line that ends in a later item may have any offset at all,
+// including a smaller one — which is why the offset is only consulted when the
+// index has not moved.
+func cursorAdvanced(wasI, wasByte, i, iByte int) bool {
+	return i > wasI || (i == wasI && iByte > wasByte)
 }
 
 // maxLineFits bounds how many times one line box may be broken again because
@@ -2444,6 +2480,18 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// characters cuts into pieces that each fit, and it is the run of them
 		// that does not. Requiring no rewind target is what keeps it a last
 		// resort — a line with a space in it breaks at the space.
+		//
+		// That last requirement is the correct reading of the rule and has no
+		// test, which is a different thing from being covered. It cannot have
+		// one: the two rewinds above return before this is reached, and the
+		// branch before them takes any item that begins an opportunity of its
+		// own, so what is left to arrive here holding a rewind target is an
+		// atomic inline or a collapsible space — and breakInsideWord can cut
+		// neither, so the branch declines and the line goes on to the same place
+		// it would have reached anyway. Instrumented to count the case, no
+		// document in the suite reaches it: zero hits over all 5177 reftests.
+		// Dropping the conjunct therefore moves nothing, which is why it is
+		// recorded here rather than left as an implied claim.
 		if item.breakWord && !item.noWrap && !item.hangs && !item.inset && !item.tab &&
 			insetAt < 0 && oppAt < 0 && used.Add(item.width) > width {
 			// The offset is into items[i]. It is only the cursor's offset away

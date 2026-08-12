@@ -347,3 +347,41 @@ func TestInlineInsetRewindTerminates(t *testing.T) {
 		t.Fatal("laying out 200 nested inline margins did not finish in 30 seconds")
 	}
 }
+
+// TestASpentInsetRewindIsNotTakenAgain is the clearing of the inset rewind
+// target once something that is not a margin has been placed.
+//
+// Two rewinds sit in front of the last resort, and they are tried in order: back
+// to the inline box's opening margin, then back to the last break opportunity.
+// The first is the earlier of the two once any opportunity has appeared after
+// the box, so leaving it set would send the line further back than it has to go
+// — and it is tried first, so it would win.
+//
+// The shape needed to see it is narrow. The item that does not fit has to be one
+// that cannot begin a line of its own, or the plain break in front of a space
+// ends the line before either rewind is reached; that is text written straight
+// after a closing tag. And an opportunity has to fall between the box's margin
+// and that text, or the two rewinds point at the same place and agree.
+//
+// Measured on the suite, dropping the clear moves the rewind from one firing to
+// three, and both extra firings are lines like this one.
+func TestASpentInsetRewindIsNotTakenAgain(t *testing.T) {
+	// "xy " is 36, the margin 12, "ab" 24: exactly the 72 the box holds. Then a
+	// space, "cd", and "efgh" written against the closing tag, which is what
+	// cannot begin a line.
+	root := layoutOf(t, 600,
+		`<div id="p">xy <span style="margin-left: 12px">ab cd</span>efgh</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 72px }`)
+	got := lineTextsOf(t, root, "p")
+	want := []string{"xy ab", "cdefgh"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d lines %q, want %q — the line was sent back past the "+
+			"nearest opportunity to a margin that had already been spent",
+			len(got), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d is %q, want %q (all %q)", i, got[i], want[i], got)
+		}
+	}
+}

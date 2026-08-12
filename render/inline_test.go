@@ -680,3 +680,37 @@ func TestInlineLayoutIsTotal(t *testing.T) {
 		}
 	}
 }
+
+// TestCursorAdvancedOrdersThePair is the line loop's forward-progress decision.
+//
+// The loop has no increment of its own — the cursor is whatever breakOneLine
+// hands back — so a break that returns the position it was given is not a wrong
+// line but a render that never finishes, and one that returns an earlier
+// position is the same thing with extra steps. The recovery that follows the
+// decision cannot be reached by any document, which is what makes the decision
+// itself worth a test: it is the half that a change could get wrong quietly.
+func TestCursorAdvancedOrdersThePair(t *testing.T) {
+	cases := []struct {
+		name                    string
+		wasI, wasByte, i, iByte int
+		want                    bool
+	}{
+		{"a later item", 3, 0, 4, 0, true},
+		{"a later item from part-way through one", 3, 7, 4, 0, true},
+		{"a later item, smaller offset", 3, 99, 5, 2, true},
+		{"further into the same item", 3, 4, 3, 9, true},
+		{"into the same item from its start", 3, 0, 3, 1, true},
+		{"the same place", 3, 4, 3, 4, false},
+		{"the same place at an item boundary", 3, 0, 3, 0, false},
+		{"back inside the same item", 3, 9, 3, 4, false},
+		{"an earlier item", 3, 0, 2, 0, false},
+		{"an earlier item at a greater offset", 3, 0, 2, 80, false},
+	}
+	for _, c := range cases {
+		got := cursorAdvanced(c.wasI, c.wasByte, c.i, c.iByte)
+		if got != c.want {
+			t.Errorf("%s: cursorAdvanced(%d,%d,%d,%d) = %v, want %v",
+				c.name, c.wasI, c.wasByte, c.i, c.iByte, got, c.want)
+		}
+	}
+}

@@ -190,12 +190,18 @@ func TestOverflowWrapBreaksBetweenTwoItemsThatEachFit(t *testing.T) {
 	}
 }
 
-// TestOverflowWrapDoesNotFireWhenTheLineHasASpace is the guard on the rule
-// above: requiring no rewind target is what keeps it a last resort.
+// TestOverflowWrapDoesNotFireWhenTheLineHasASpace is that break-word does not
+// become break-all: a line with an ordinary break point in it takes that one.
+//
+// It does not reach the rewind-target conjunct in the last-resort branch, which
+// is what this comment used to claim. Both were measured by planting: disabling
+// the whole rewind-to-the-last-opportunity branch, and dropping the conjunct,
+// each leave this test green. What ends the line here is the plain break before
+// a word that does not fit, several branches earlier — so this pins the rule and
+// not the guard on it, which is a different and smaller statement.
 func TestOverflowWrapDoesNotFireWhenTheLineHasASpace(t *testing.T) {
 	// "ab cdef" in four characters. There *is* an acceptable break point — the
 	// space — so the line ends there and "cdef" goes whole to the next line.
-	// Without the rewind-target guard the line would fill to "ab c".
 	got := lineTextsOf(t, layoutOf(t, 600, `<div id="p">ab cdef</div>`,
 		`#p { font-family: Courier; font-size: 20px; width: 48px;
 		      overflow-wrap: break-word }`), "p")
@@ -270,5 +276,26 @@ func TestALineEndsAtItsLastOpportunityWhenTheNextThingCannotBeginOne(t *testing.
 	want := []string{"xy", "abcdef", "gh"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestOverflowWrapTakesTheLastCutAvailable is the top of the bisection's range.
+//
+// grapheme.Boundaries reports the boundaries *inside* a string and not the one
+// at its end, so the largest cut it offers already leaves a cluster behind for
+// the next line. Bisecting over one fewer than that — an easy off-by-one, since
+// the slice is indexed at lo-1 — costs a character on every line whose fill ends
+// at the last boundary, and only on those: a word cut anywhere earlier is
+// unaffected, which is why the rest of this file does not notice.
+func TestOverflowWrapTakesTheLastCutAvailable(t *testing.T) {
+	// Three of the four characters fit, so the cut has to be the last boundary
+	// there is. "abcd" in 36px of Courier at 20px is 48 against 36.
+	got := lineTextsOf(t, layoutOf(t, 600, `<div id="p">abcd</div>`,
+		`#p { font-family: Courier; font-size: 20px; width: 36px;
+		      overflow-wrap: break-word }`), "p")
+	want := []string{"abc", "d"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %q, want %q — the fill stopped a cluster short of the "+
+			"longest prefix that fits", got, want)
 	}
 }
