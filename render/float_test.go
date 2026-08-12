@@ -1248,3 +1248,35 @@ func nearly(a, b float64) bool {
 func trim(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
+
+// TestAnOverWideFloatOverflowsRatherThanDropping is §9.5.1 rule 8's other half.
+//
+// The placement search descends by float bottoms until the band is wide enough,
+// and a float wider than its containing block never reaches that condition. What
+// stops the search is noticing that the band is already the whole block: there is
+// no more room to be had lower down, so the float stays as high as rule 7 allows
+// and overflows.
+//
+// Reaching the case takes a float that spans the y being tried and yet leaves the
+// band whole, which means one outside the *inner* containing block — otherwise
+// rule 5 has already put y at or below every float's top, a full band means every
+// float has ended above it, and there is no bottom left to descend to. Here the
+// side float occupies the hundred pixels that the inner block's margin has
+// already stepped past.
+func TestAnOverWideFloatOverflowsRatherThanDropping(t *testing.T) {
+	css := noDefaults + `
+	#w { width: 300px }
+	#side { float: left; width: 100px; height: 50px }
+	#inner { margin-left: 100px }
+	#big { float: left; width: 300px; height: 10px }`
+	root := layoutOf(t, 1000,
+		`<div id="w"><div id="side"></div><div id="inner"><div id="big"></div></div></div>`,
+		css)
+	w := find(t, root, "w")
+	big := find(t, root, "big")
+	// The inner block begins at 100 and is 200 wide; the float is 300 and
+	// overflows it to the right. Dropping to 50 — below the side float — buys it
+	// nothing, because the band there is the same 200 wide.
+	px(t, "#big's left", relX(t, big, w), 100)
+	px(t, "#big's top", relY(t, big, w), 0)
+}
