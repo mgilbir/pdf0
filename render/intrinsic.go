@@ -298,12 +298,26 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 	// end of a line: a box sized to include it would be wider than the text it
 	// holds by however many spaces happened to end each line.
 	//
-	// A *preserved* trailing space is deliberately not subtracted here even
-	// though it hangs on a wrapped line, because no line here is wrapped. Every
-	// line these widths are measured over ends at a forced break or at the end
-	// of the content, and §4.1.2 makes the hang at those two *conditional*: the
-	// space takes room unless taking it would overflow. A box being sized to
-	// its own preferred width cannot overflow, so the space takes room.
+	// A *conditionally* hanging trailing space is deliberately not subtracted
+	// from the maximum, because no line here is wrapped. Every line these widths
+	// are measured over ends at a forced break or at the end of the content, and
+	// §4.1.2 makes pre-wrap's hang at those two conditional: the space takes room
+	// unless taking it would overflow. A box at its own preferred width cannot
+	// overflow, so the space takes room — which is what
+	// white-space-intrinsic-size-004 says in as many words.
+	//
+	// An *unconditionally* hanging one is subtracted, because it never takes
+	// room at all. That is the answer §4.1.2 gives for normal, nowrap and
+	// pre-line, and what reaches the end of a line under those three is the
+	// other space separators and the preserved tabs — the spaces themselves
+	// having been removed by the rule before it. A box sized to its content was
+	// a stemline or an ideographic space wider than the text it holds.
+	//
+	// The minimum is the other way round for the conditional case: a box at its
+	// min-content width is precisely the one that cannot spare the room, so the
+	// space hangs and is not measured. Under pre nothing hangs at all, so
+	// nothing is subtracted from either — white-space-intrinsic-size-013 and
+	// -015 are the two halves of that, and they disagree on purpose.
 	//
 	// runEdge is the same measurement over the *unbreakable* run, and it is not
 	// the same number. Where the text wraps the two agree trivially, because a
@@ -385,7 +399,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				// minimum width of its longest word — so a float holding one
 				// would be sized to a fraction of the text it then overflows.
 				run = run.Add(w)
-				if item.trimAtEnd {
+				if item.trimAtEnd || item.hangs {
 					runEdge = runEdge.Add(w)
 				} else {
 					runEdge = 0
@@ -396,7 +410,7 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 				endRun()
 			}
 			line = line.Add(w)
-			if item.trimAtEnd {
+			if item.trimAtEnd || item.hangsHard {
 				edge = edge.Add(w)
 			} else {
 				edge = 0

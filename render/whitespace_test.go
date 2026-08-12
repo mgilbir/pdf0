@@ -683,3 +683,87 @@ func TestSpaceIsMeasuredAgainstTheFace(t *testing.T) {
 		}
 	}
 }
+
+// TestHangingWhiteSpaceAndTheTwoIntrinsicWidths is §4.1.2's fourth rule, which
+// is where the white-space values stop agreeing with each other.
+//
+// What reaches the rule is whatever the third rule left at the end of the line:
+// under a collapsing value that is the other space separators and the preserved
+// tabs, the spaces themselves having been removed, and under a preserving value
+// it is the spaces as well. The rule then answers one value at a time, and the
+// answers differ in a way no single "does it hang" bit can express:
+//
+//   - normal, nowrap and pre-line hang the sequence *unconditionally*. It never
+//     takes room, so it is measured into neither width.
+//   - pre-wrap hangs it unconditionally too, "unless the sequence is followed by
+//     a forced line break, in which case it must conditionally hang the sequence
+//     instead" — and every line measured for an intrinsic width ends at a forced
+//     break or at the end of the content, so here it is always the conditional
+//     one. A conditional hang takes room and gives it up only where the room is
+//     not there: a box at its max-content width has the room and is that much
+//     wider, and a box at its min-content width is precisely the box that has
+//     not, so the sequence hangs and is not measured.
+//   - break-spaces is named as not hanging: the spaces are data, take room, and
+//     overflow if they must.
+//   - pre is not in the rule's list at all, so nothing hangs under it either.
+//
+// The suite states the four corners of this in its own words —
+// white-space-intrinsic-size-004 for pre-wrap's maximum, -013 for its minimum,
+// -015 and -016 for pre — and they contradict each other unless the conditional
+// and unconditional hangs are kept apart.
+func TestHangingWhiteSpaceAndTheTwoIntrinsicWidths(t *testing.T) {
+	// Courier at 20px is 12px a character: "xx" is 24, and U+2000 EN QUAD is one
+	// more character's width. Every number below is 24 or 24 plus that one.
+	const sep = " " // en quad, an "other space separator"
+	widthOf := func(t *testing.T, ws, keyword, text string) float64 {
+		t.Helper()
+		css := noDefaults + `
+		#d { position: absolute; line-height: 1; font-family: Courier;
+		     font-size: 20px; white-space: ` + ws + `; width: ` + keyword + ` }`
+		root := layoutOf(t, 1000, `<div id="d">xx`+text+`<br>xx</div>`, css)
+		return find(t, root, "d").BorderRect.W.Px()
+	}
+
+	for _, c := range []struct {
+		ws       string
+		max, min float64
+		why      string
+	}{
+		{"normal", 24, 24, "hangs unconditionally"},
+		{"nowrap", 24, 24, "hangs unconditionally"},
+		{"pre-line", 24, 24, "hangs unconditionally"},
+		{"pre-wrap", 36, 24, "hangs conditionally before a forced break"},
+		{"pre", 36, 36, "does not hang: the rule does not name it"},
+		{"break-spaces", 36, 36, "does not hang: the spaces are data"},
+	} {
+		if got := widthOf(t, c.ws, "max-content", sep); got != c.max {
+			t.Errorf("white-space:%s max-content is %g, want %g — a trailing "+
+				"separator that %s", c.ws, got, c.max, c.why)
+		}
+		if got := widthOf(t, c.ws, "min-content", sep); got != c.min {
+			t.Errorf("white-space:%s min-content is %g, want %g — a trailing "+
+				"separator that %s", c.ws, got, c.min, c.why)
+		}
+	}
+
+	// A trailing *space* is the same question with the third rule in front of
+	// it: under a collapsing value it is removed before the fourth rule is
+	// reached, so those three answer 24 for a different reason and the two
+	// preserving values answer as they do above.
+	for _, c := range []struct {
+		ws       string
+		max, min float64
+	}{
+		{"normal", 24, 24}, {"nowrap", 24, 24}, {"pre-line", 24, 24},
+		{"pre-wrap", 36, 24}, {"pre", 36, 36}, {"break-spaces", 36, 36},
+	} {
+		if got := widthOf(t, c.ws, "max-content", " "); got != c.max {
+			t.Errorf("white-space:%s max-content with a trailing space is %g, want %g",
+				c.ws, got, c.max)
+		}
+		if got := widthOf(t, c.ws, "min-content", " "); got != c.min {
+			t.Errorf("white-space:%s min-content with a trailing space is %g, want %g",
+				c.ws, got, c.min)
+		}
+	}
+}
