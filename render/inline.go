@@ -3005,12 +3005,30 @@ func (l *layouter) faceForText(b *Box) (*fonts.Face, bool) {
 func (l *layouter) splitItem(item inlineItem, at int) (head, tail inlineItem) {
 	head, tail = item, item
 	head.text, tail.text = item.text[:at], item.text[at:]
-	head.bidiEnd = item.bidiStart + at
-	tail.bidiStart = item.bidiStart + at
+	// at is an offset into the string, and the bidi range counts runes: the
+	// paragraph the levels were resolved over is a []rune, and bidiStart is a
+	// position in it. Adding the byte offset to it is right for Latin and wrong
+	// for everything that needs the algorithm at all — a Hebrew letter is two
+	// bytes, so a word cut in half moved the range twice as far as the text, and
+	// the tail then read its level from a position two characters past its own.
+	//
+	// What that looks like is "אבגדהו12" in an RTL block narrow enough to cut the
+	// word: the "12" belongs to the left of the letters and was drawn to the
+	// right of them, on the line the tail begins, while the same text unbroken
+	// orders correctly.
+	runesBefore := utf8.RuneCountInString(item.text[:at])
+	head.bidiEnd = item.bidiStart + runesBefore
+	tail.bidiStart = item.bidiStart + runesBefore
 	head.width = l.measureSpaced(item.face, head.text, item.size, item.spacing)
 	tail.width = l.measureSpaced(item.face, tail.text, item.size, item.spacing)
 	// The tail begins a line, so it takes no opportunity from what was in front
 	// of the head — there is nothing in front of it any more.
+	//
+	// Nothing reads it: a tail is always the first item of the line it starts, and
+	// there an opportunity is neither recorded (that wants content before it) nor
+	// acted on (the break in front of one wants a line with something on it). It
+	// is cleared because leaving it would make the field state something untrue
+	// about where the item now sits, not because a document can tell.
 	tail.breakBefore = false
 	return head, tail
 }
