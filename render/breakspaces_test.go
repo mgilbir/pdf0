@@ -379,9 +379,22 @@ func TestOghamSpaceMarkIsRemovedAtALineEnd(t *testing.T) {
 		find(t, root, "f").BorderRect.W, 2*ch)
 
 	// A trailing separator that is *not* the one the rule names is the contrast:
-	// it hangs rather than being removed, and §4.1.2 makes the hang at the end
-	// of the content conditional, so it takes room in a box that cannot overflow.
+	// it hangs rather than being removed. It is still not measured, because the
+	// hang here is the *unconditional* one: §4.1.2's fourth rule gives that
+	// answer for normal, nowrap and pre-line, and this box is at the initial
+	// value. The conditional hang — the one that does take room in a box which
+	// cannot overflow — belongs to pre-wrap alone, "unless the sequence is
+	// followed by a forced line break, in which case it must conditionally hang
+	// the sequence instead". So the two separators reach the same width by
+	// different routes, one removed and one hung, and the contrast being drawn
+	// here is between the routes and not between the numbers.
+	//
+	// This asserted three characters until the rule was read one value at a
+	// time, and the reasoning above it named the conditional hang for a value
+	// the specification does not give it to. Nothing in the suite moved when it
+	// was corrected; the reading would have gone on being copied.
+	// TestHangingWhiteSpaceAndTheTwoIntrinsicWidths has the whole table.
 	root = layoutOf(t, 10000, strings.Replace(shrink, "%", "ab\u3000", 1), css)
 	px(t, "the preferred width of text ending in an ideographic space",
-		find(t, root, "f").BorderRect.W, 3*ch)
+		find(t, root, "f").BorderRect.W, 2*ch)
 }

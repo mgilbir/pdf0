@@ -310,11 +310,20 @@ type inlineItem struct {
 	// hangs marks preserved white space that sits past the end of the line
 	// rather than moving to the next one.
 	//
-	// §4.1.2 makes a trailing run of preserved spaces hang under pre and
-	// pre-wrap, so it is not counted when the line is measured for alignment
-	// and never causes a break of its own. break-spaces is the value that opts
-	// out of this, which is the whole difference between it and pre-wrap.
+	// §4.1.2 hangs whatever white space its third rule left at the end of a
+	// line, so it is not counted when the line is measured for alignment and
+	// never causes a break of its own. Two values are named as not doing it:
+	// break-spaces, which is the whole difference between it and pre-wrap, and
+	// pre, which the rule does not list — a line under pre ends only where the
+	// author ended it, and the rule is about what happens at a wrap.
 	hangs bool
+	// hangsHard says the hang is unconditional: the sequence never takes
+	// room, whether or not there is room for it. §4.1.2 gives that answer
+	// for normal, nowrap and pre-line, and the conditional one for pre-wrap
+	// before a forced break — where the sequence does take room, and gives
+	// it up only when it would overflow. The two differ nowhere on the page
+	// and differ in both intrinsic widths.
+	hangsHard bool
 	// breakWord is overflow-wrap's last-resort break, carried per item because
 	// the property is the box's and a line holds items from several boxes.
 	breakWord bool
@@ -1907,10 +1916,32 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			space:       p.space, collapsible: p.collapsible,
 			trimAtEnd: p.trimAtEnd,
 			tab:       p.tab, tabStop: tabStop, tabFloor: tabFloor,
-			// Preserved white space hangs unless the value is break-spaces,
-			// which exists precisely so that it does not.
-			hangs:  p.space && !p.collapsible && !ws.breakSpaces,
-			noWrap: !ws.wrap, offset: offset,
+			// §4.1.2's fourth rule, which is three answers and not one.
+			//
+			// What reaches it is whatever rule 3 left: under a collapsing value
+			// that is the other space separators and the preserved tabs, and
+			// under a preserving one it is the spaces as well. The rule then
+			// names the values one at a time.
+			//
+			//   - normal, nowrap and pre-line — which is exactly ws.collapse —
+			//     hang the sequence *unconditionally*. It never takes room.
+			//   - pre-wrap hangs it unconditionally too, "unless the sequence is
+			//     followed by a forced line break, in which case it must
+			//     conditionally hang the sequence instead". A conditional hang
+			//     takes room and gives it up only where the room is not there.
+			//   - break-spaces is named to say the sequence does *not* hang: the
+			//     spaces are data and take room even when they overflow.
+			//   - pre is not in the list at all, so nothing hangs under it. That
+			//     is not an omission to be read past: a line under pre ends only
+			//     where the author ended it, so its trailing spaces are before a
+			//     forced break or the end of the block, and the rule's whole
+			//     subject is what to do at a wrap.
+			//
+			// The distinction is invisible on the page and decides two intrinsic
+			// widths, which is where hangsHard is read. See widthsOf.
+			hangs:     p.space && !p.collapsible && !ws.breakSpaces && (ws.collapse || ws.wrap),
+			hangsHard: p.space && !p.collapsible && ws.collapse,
+			noWrap:    !ws.wrap, offset: offset,
 			breakWord:   ow.breakWord,
 			anywhere:    ow.anywhere,
 			decorations: decorations, spacing: spacing,
