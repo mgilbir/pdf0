@@ -301,6 +301,13 @@ func (l *layouter) placeRun(g *tableGrid, run *rowRun) {
 				box: cb, row: first + ri, col: col,
 				rowSpan: rowSpan, colSpan: colSpan,
 			})
+			// Redundant, strictly: every column this cell took has just been
+			// marked occupied until at least the next row, so the scan at the top
+			// of the loop would walk the cursor past them anyway. It is kept
+			// because the scan's job is stepping over *other* rows' cells and
+			// this one's job is saying how wide this cell is, and a reader who
+			// has to derive the second from the first has been made to prove
+			// something to learn where the next cell goes.
 			col += colSpan
 		}
 		if len(until) > g.cols {
@@ -1428,6 +1435,11 @@ func (l *layouter) rowHeights(g *tableGrid, placed []placedCell, s tableSpacing,
 			// A declared row height is a minimum. A percentage is not read: it
 			// would be a percentage of the table's height, which is what the
 			// rows are in the middle of deciding.
+			//
+			// The maximum is against nothing today — this runs before either
+			// pass over the cells, so the entry is still zero — and is written
+			// this way because "a minimum" is the rule, and a later pass moved
+			// above this one would otherwise be silently overwritten.
 			rowH[r] = style.Max(rowH[r], v)
 		}
 	}
