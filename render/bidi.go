@@ -494,6 +494,13 @@ func (l *layouter) splitByLevel(item inlineItem, para *bidi.Paragraph) []inlineI
 		// mean the two were built from different text. Splitting on the levels
 		// would cut the string at the wrong place, so the item is left whole at
 		// the level of its first character — wrong order rather than wrong text.
+		//
+		// Instrumented over the suite it never fires: every range is built by
+		// bidiBuilder.add from the very text it describes, and splitItem moves
+		// text and range together. So this is defence against a range that has
+		// drifted rather than a case the layout produces — and the danger it
+		// guards is that such drift is otherwise silent, since giving up on the
+		// reordering looks like text that simply had one direction.
 		return []inlineItem{item}
 	}
 

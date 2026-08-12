@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/fonts"
@@ -610,5 +611,114 @@ func TestAnOpenIsolateSurvivesAForcedBreak(t *testing.T) {
 	if !runAt(t, f.Lines[1].Runs, "def").RTL {
 		t.Error("the text after the forced break was not overridden; the override " +
 			"was still open and the new bidi paragraph did not reopen it")
+	}
+}
+
+// hebrewHV is two more Hebrew letters, so that a word of six can be cut into a
+// line of four and leave a tail of two.
+const hebrewHV = "הו" // he vav
+
+// TestABrokenWordDoesNotDisorderWhatSharesItsLine is the bidi range of the
+// halves of a word cut by overflow-wrap.
+//
+// splitItem is handed an offset into the string and the range it has to move
+// counts runes: the paragraph the levels were resolved over is a []rune. Adding
+// the byte offset to it is right for Latin and wrong for every script that needs
+// the algorithm, and the tail then reads its level from a position past its own
+// — two characters past, for Hebrew, which is two bytes to the letter.
+//
+// The claim is not a number but a comparison: cutting a word must not reorder
+// what shares the line with the half that is left. So the same text is laid out
+// in a container wide enough to need no cut, and the narrow one has to agree
+// with it about which of the two runs is on the right.
+//
+// The block is left-to-right, which is the case that shows the fault. Digits
+// following Hebrew are a level above it and sit at the left of the letters
+// either way, so a right-to-left block puts the two runs where they already
+// were and the drifted range costs nothing visible.
+func TestABrokenWordDoesNotDisorderWhatSharesItsLine(t *testing.T) {
+	const word = hebrewAB + hebrewGD + hebrewHV // six letters, twelve bytes
+	const narrow = `#p { font-family: Courier; font-size: 20px; width: 48px;
+	                     overflow-wrap: break-word }`
+	const wide = `#p { font-family: Courier; font-size: 20px; width: 96px }`
+
+	// The control: eight characters in ninety-six pixels is one line, so no word
+	// is cut and no range is moved. The digits belong to the left of the letters
+	// they follow.
+	whole := runsOf(t, layoutOf(t, 600, `<div id="p">`+word+`12</div>`, wide), "p")
+	if runAt(t, whole, word).X.Px() <= runAt(t, whole, "12").X.Px() {
+		t.Fatalf("uncut, the letters are at %gpx and the digits at %gpx — the letters "+
+			"should be to the right, and this test has nothing to compare against",
+			runAt(t, whole, word).X.Px(), runAt(t, whole, "12").X.Px())
+	}
+
+	// The same text in four characters of room: the word is cut after four
+	// letters and the second line holds the other two and the digits.
+	f := find(t, layoutOf(t, 600, `<div id="p">`+word+`12</div>`, narrow), "p")
+	if len(f.Lines) != 2 {
+		t.Fatalf("the block produced %d lines, want 2", len(f.Lines))
+	}
+	tail := runAt(t, f.Lines[1].Runs, hebrewHV)
+	digits := runAt(t, f.Lines[1].Runs, "12")
+	if tail.X.Px() <= digits.X.Px() {
+		t.Errorf("on the line the tail begins, the letters are at %gpx and the digits "+
+			"at %gpx — the order the uncut text has is reversed, so the tail took its "+
+			"level from the wrong place in the paragraph", tail.X.Px(), digits.X.Px())
+	}
+	// The arithmetic, once the order is right: two letters of 12px sit at the
+	// right of a 48px line and the digits fill what is left.
+	if tail.X.Px() != 24 || digits.X.Px() != 0 {
+		t.Errorf("the letters are at %gpx and the digits at %gpx, want 24 and 0",
+			tail.X.Px(), digits.X.Px())
+	}
+}
+
+// TestSplittingAnItemMovesItsBidiRangeByRunes is the same fault stated as the
+// invariant the rest of the algorithm relies on: an item's bidi range has
+// exactly as many positions as its text has runes. splitByLevel checks it by
+// hand before it cuts on the levels, and leaves the item whole where it does not
+// hold — so a range that drifts does not announce itself, it quietly stops the
+// reordering from happening.
+func TestSplittingAnItemMovesItsBidiRangeByRunes(t *testing.T) {
+	l := &layouter{
+		measured: map[measureKey]style.Unit{},
+		fonts:    map[fontKey]resolvedFont{},
+		fontSet:  StandardFonts(),
+		rec:      NewRecorder(nil),
+	}
+	face, ok := l.fontSet.Face("Courier", false, false)
+	if !ok {
+		t.Fatal("no Courier")
+	}
+	// Four Hebrew letters — eight bytes — sitting at position seven of their
+	// paragraph, cut after the first two.
+	item := inlineItem{
+		text: hebrewAB + hebrewGD, face: face, size: mustPx(20),
+		bidiPara: 1, bidiStart: 7, bidiEnd: 11,
+	}
+	head, tail := l.splitItem(item, len(hebrewAB))
+
+	for _, half := range []struct {
+		name string
+		it   inlineItem
+	}{{"head", head}, {"tail", tail}} {
+		runes := utf8.RuneCountInString(half.it.text)
+		if got := half.it.bidiEnd - half.it.bidiStart; got != runes {
+			t.Errorf("the %s covers %d positions of the paragraph for %d runes of text "+
+				"(%d..%d for %q) — splitByLevel reads a mismatch as text and levels built "+
+				"from different strings and gives up on reordering the item",
+				half.name, got, runes, half.it.bidiStart, half.it.bidiEnd, half.it.text)
+		}
+	}
+	if head.bidiStart != 7 || head.bidiEnd != 9 {
+		t.Errorf("the head is %d..%d, want 7..9", head.bidiStart, head.bidiEnd)
+	}
+	if tail.bidiStart != 9 || tail.bidiEnd != 11 {
+		t.Errorf("the tail is %d..%d, want 9..11", tail.bidiStart, tail.bidiEnd)
+	}
+	if head.bidiEnd != tail.bidiStart {
+		t.Errorf("the head ends at %d and the tail begins at %d; the two halves have "+
+			"to meet, or a character belongs to both or to neither",
+			head.bidiEnd, tail.bidiStart)
 	}
 }
