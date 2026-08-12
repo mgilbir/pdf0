@@ -331,7 +331,15 @@ func (fc *floatContext) place(size Size, side FloatSide, top, lo, hi style.Unit)
 			break
 		}
 		next, ok := fc.nextBottomBelow(y)
-		if !ok {
+		if !ok || next <= y {
+			// The descent is bounded by nothing but the step it takes, so the
+			// step has to be a real one. nextBottomBelow answers strictly below
+			// y — that is what "below" means in its name and what the sorted
+			// list of bottoms is searched for — so a step of zero is not a
+			// question this can be asked; but it is not a badly placed float
+			// either, it is a page that never finishes, and the same goes for a
+			// step back up. Relaxing firstAbove from > to >= is enough to reach
+			// it, and unguarded that hangs instead of failing.
 			break
 		}
 		y = next
@@ -345,6 +353,10 @@ func (fc *floatContext) place(size Size, side FloatSide, top, lo, hi style.Unit)
 		// back to lo the way a left float is.
 		x = right.Sub(size.W)
 	} else if x < lo {
+		// Not a case bandAt can produce: it starts the left edge at lo and only
+		// ever raises it, so a left float is already at or inside the block.
+		// Instrumented over the suite this never fires. It is kept as the
+		// statement of the constraint the mirror above deliberately breaks.
 		x = lo
 	}
 

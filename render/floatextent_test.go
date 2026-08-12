@@ -308,10 +308,53 @@ func TestFloatOverlapIsExclusiveAtTheEdges(t *testing.T) {
 			Rect{X: u(0), Y: u(0), W: u(100), H: 0}, false},
 		{"a box of no width",
 			Rect{X: u(0), Y: u(0), W: 0, H: u(50)}, false},
+
+		// The mirror of the first four. Each of the four comparisons is a
+		// separate statement and the cases above reach only two of them: with the
+		// float below and to the right of the box it is the other two that decide,
+		// and a mutation of either survived the whole suite.
+		{"a box ending at the float's top",
+			Rect{X: u(0), Y: u(-50), W: u(100), H: u(50)}, false},
+		{"a box ending one unit inside it",
+			Rect{X: u(0), Y: u(-50).Add(1), W: u(100), H: u(50)}, true},
+		{"a box ending at the float's left edge",
+			Rect{X: u(-100), Y: u(0), W: u(100), H: u(50)}, false},
+		{"a box ending one unit inside it horizontally",
+			Rect{X: u(-100).Add(1), Y: u(0), W: u(100), H: u(50)}, true},
+
+		// A box with no extent, placed where the intersection test would
+		// otherwise find it. The cases above put it on the float's own edge,
+		// where the comparisons answer false anyway and the early return is not
+		// what decided — an empty "overflow: hidden" div beside a float is a real
+		// thing and must not be pushed below it.
+		{"a box of no height inside the float's span",
+			Rect{X: u(0), Y: u(25), W: u(100), H: 0}, false},
+		{"a box of no width inside the float's span",
+			Rect{X: u(25), Y: u(0), W: 0, H: u(50)}, false},
 	}
 	for _, c := range cases {
 		if got := fc.overlaps(c.r); got != c.want {
 			t.Errorf("%s: overlaps is %v, want %v", c.what, got, c.want)
+		}
+	}
+
+	// A float with no extent obstructs nothing — an empty floated div is a
+	// common clearance hack — and the skip that says so is reached only by a
+	// float the intersection test would otherwise have found, which means one
+	// with extent in the other axis.
+	empty := &floatContext{boxes: []placedFloat{
+		{rect: Rect{X: u(25), Y: u(0), W: 0, H: u(50)}, side: FloatLeft},
+		{rect: Rect{X: u(0), Y: u(25), W: u(100), H: 0}, side: FloatLeft},
+	}}
+	for _, c := range []struct {
+		what string
+		r    Rect
+	}{
+		{"a box over a float of no width", Rect{X: u(0), Y: u(0), W: u(100), H: u(50)}},
+		{"a box over a float of no height", Rect{X: u(0), Y: u(0), W: u(100), H: u(50)}},
+	} {
+		if empty.overlaps(c.r) {
+			t.Errorf("%s: overlaps is true, want false", c.what)
 		}
 	}
 }
