@@ -611,12 +611,21 @@ func TestFloatWidthShrinksToFit(t *testing.T) {
 // escapes through #n's open top edge, so #n really sits at 40 — and the float
 // inside #m, which was placed while #n was being laid out, belongs at 40 rather
 // than at 0. Nothing in that subtree ever read the float geometry, so the cheap
-// repair applies: the float is translated. #c then clears to 40 + 30 = 70.
+// repair applies: the float is translated.
+//
+// The float is taller than the box holding it, and that is the whole of what
+// makes the last assertion mean anything. With a 30px float the clearing box
+// clears to 70, which is also where the normal flow was going to put it — so the
+// translation could be reversed, or not happen at all, and the answer would not
+// move. At 100px the three outcomes are three different numbers: 140 when the
+// float is translated down to where it belongs, 100 when it is left at the
+// predicted 0, and 70 — the flow position, clearance having asked about a float
+// above the page — when the translation is applied backwards.
 func TestFloatPositionSurvivesAMarginItCannotSeeYet(t *testing.T) {
 	css := noDefaults + `
 	#w { border-top-style: solid; border-top-width: 5px }
 	#m { margin-top: 40px; height: 30px }
-	#f { float: left; width: 50px; height: 30px }
+	#f { float: left; width: 50px; height: 100px }
 	#c { height: 10px; clear: left }`
 	root := layoutOf(t, 1000,
 		`<div id="w"><div id="n"><div id="m"><div id="f"></div></div></div>`+
@@ -630,8 +639,8 @@ func TestFloatPositionSurvivesAMarginItCannotSeeYet(t *testing.T) {
 	px(t, "the float's left", relX(t, f, w), 0)
 
 	// The clearing box has to get past the corrected bottom, not the predicted
-	// one. A translation that never happened would put it at 30.
-	px(t, "the clearing box", relY(t, find(t, root, "c"), w), 70)
+	// one: 40 plus the float's hundred.
+	px(t, "the clearing box", relY(t, find(t, root, "c"), w), 140)
 }
 
 // relayoutSource is a document where the prediction above is wrong *and* the
@@ -681,15 +690,32 @@ func TestSubtreeThatReadFloatsIsLaidOutAgain(t *testing.T) {
 // expensive one, and the render has to say so rather than quietly produce
 // geometry it knows is stale.
 func TestRelayoutBudgetIsSeenToFire(t *testing.T) {
-	src, css := relayoutSource, noDefaults+relayoutCSS
+	// Three subtrees that each need the expensive repair, and a bound of two.
+	//
+	// A bound of zero was what this used to set, and it fires before the counter
+	// is ever read: nothing then distinguishes a budget that counts from one that
+	// does not, and dropping the increment altogether left this test green. It
+	// takes a bound the counter has to *reach* to say anything about counting,
+	// and so a document that exceeds it — the single subtree the earlier fixture
+	// had is repaired once, which no positive bound can catch.
+	//
+	// Each copy needs its own formatting context. Repeating the subtree inside
+	// one context repairs only the first: the later ones sit below the float, so
+	// they never read the band and take the cheap translation instead.
+	const one = `<div class="w"><div class="f"></div>` +
+		`<div><div class="m">aaaa aaaa aaaa aaaa</div></div></div>`
+	css := noDefaults + `
+	.w { border-top-style: solid; border-top-width: 5px; width: 200px; overflow: hidden }
+	.f { float: left; width: 100px; height: 50px }
+	.m { margin-top: 60px; font-family: Helvetica; font-size: 20px; line-height: 25px }`
 
-	built := Build(Input{HTML: src, CSS: []Stylesheet{{Source: css}}})
+	built := Build(Input{HTML: one + one + one, CSS: []Stylesheet{{Source: css}}})
 	if built.Root == nil {
 		t.Fatal("the document produced no boxes")
 	}
 
 	saved := maxRelayouts
-	maxRelayouts = 0
+	maxRelayouts = 2
 	defer func() { maxRelayouts = saved }()
 
 	rec := NewRecorder(nil)
