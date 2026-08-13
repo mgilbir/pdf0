@@ -509,6 +509,14 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	indent := l.textIndent(b, width)
 	firstLine := true
 
+	// §5.1's balancing, as a cap on how wide a line may be broken.
+	//
+	// It is a cap and not a width: the line boxes still span the band, and only
+	// the *breaking* is done in the narrower measure. Narrowing the box itself
+	// would move a centred line and shorten a right-aligned one, which is a
+	// different rendering from the one balancing asks for.
+	balanceCaps := l.balanceCaps(b, items, width, indent)
+
 	// The inline boxes with a background or a border, gathered as the lines are
 	// built and turned into fragments once the last line is known: §8.6 puts a
 	// box's trailing margin, border and padding on the piece it ends with, and
@@ -591,7 +599,13 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			midKids = midKids[:0]
 
 			runs, next, nextByte, mid, forced = l.breakOneLine(items, i, iByte,
-				right.Sub(left).Sub(lineIndent), left.Sub(lo).Add(lineIndent))
+				// The cap is a *line* width, so the indent comes off it and not
+				// off the band before it: the search counted the first line's
+				// room as the balanced width less the indent, and taking the
+				// indent off the band instead makes the two disagree by exactly
+				// the indent on the one line it applies to.
+				style.Min(right.Sub(left), capAt(balanceCaps, i)).Sub(lineIndent),
+				left.Sub(lo).Add(lineIndent))
 			stack = stackLine(runs, st)
 			lh, bl = stack.height, stack.baseline
 
@@ -2382,6 +2396,155 @@ func isIdeographic(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// maxBalanceLines bounds how many lines this engine will balance.
+//
+// Balancing costs a binary search over the width, and each probe breaks the
+// whole paragraph again — so a page of running prose set to "text-wrap: balance"
+// would be laid out sixteen times over. CSS Text §5.1 allows the bound in as
+// many words ("UAs may disable balancing when the number of lines exceeds some
+// threshold"), and balancing is a display effect: it is what a headline of two
+// or three lines is for, and nobody can see it in a paragraph of thirty.
+//
+// It is a variable so that a test can lower it far enough to watch it decide
+// something. A bound that has only ever been observed not to trip is one nobody
+// knows works.
+var maxBalanceLines = 6
+
+// balanceWidth is CSS Text §5.1's "text-wrap-style: balance", computed as the
+// narrowest width that still fits the text in the same number of lines.
+//
+//	balance: Line breaks are chosen to balance the remaining (empty) space in
+//	each line box, if a better balance than block-progression-first filling is
+//	possible.
+//
+// The specification gives no algorithm, and the one below is the one every
+// implementation uses, because its two statements turn out to be the same: a
+// greedy break at the narrowest width that still makes N lines is the greedy
+// break whose longest line is as short as it can be, which is exactly "the
+// remaining space is as even as it can be made". "The quickest brown fox jumped
+// over the lazy dog" in thirty-five characters greedily fills the first line to
+// thirty-three and leaves twelve on the second; the narrowest width that still
+// takes two lines is twenty-four, and there it reads "The quickest brown fox /
+// jumped over the lazy dog", which is what the suite's text-wrap-balance-003
+// draws with an explicit <br>.
+//
+// The search needs the count to fall as the width grows, and it does: a wider
+// line takes at least what a narrower one took.
+//
+// Returns MaxUnit — no cap at all — when the box does not balance, when it is
+// one line already, or when it is longer than this engine will balance.
+func (l *layouter) balanceWidth(items []inlineItem, width, indent style.Unit) style.Unit {
+	full := l.countLines(items, width, indent, maxBalanceLines+1)
+	if full < 2 || full > maxBalanceLines {
+		return style.MaxUnit
+	}
+	// One unit is the finest distinction the geometry can hold, so the search
+	// stops when the bracket is that wide and there is nothing left to choose
+	// between.
+	lo, hi := style.Unit(1), width
+	for hi.Sub(lo) > 1 {
+		mid := lo.Add(hi.Sub(lo).Div(2))
+		if l.countLines(items, mid, indent, full+1) <= full {
+			hi = mid
+			continue
+		}
+		lo = mid
+	}
+	return hi
+}
+
+// balanceCaps is the balanced width for each line, by the item it starts at.
+//
+// One number would not do, because §5.1 balances "each group of lines separated
+// by a forced line break" on its own: a headline of two lines with a <br> in the
+// middle is two groups of one, and balancing the pair together would move the
+// break the author wrote. text-wrap-balance-004 is that exactly — a <section>
+// with a <br> in it, checked against two <div>s balanced separately.
+//
+// The text indent belongs to the first group alone, for the same reason it
+// belongs to the first line: §16.1 gives it to the first formatted line of the
+// element, and the line after a <br> is not one.
+//
+// A nil result means no cap anywhere, which is what a box that does not balance
+// gets and is what capAt reads as MaxUnit.
+func (l *layouter) balanceCaps(b *Box, items []inlineItem, width, indent style.Unit) []style.Unit {
+	if !strings.EqualFold(strings.TrimSpace(b.Style["text-wrap-style"]), "balance") {
+		return nil
+	}
+	caps := make([]style.Unit, len(items))
+	for i := range caps {
+		caps[i] = style.MaxUnit
+	}
+	start := 0
+	for i := 0; i <= len(items); i++ {
+		if i < len(items) && !items[i].forced {
+			continue
+		}
+		ind := style.Unit(0)
+		if start == 0 {
+			ind = indent
+		}
+		w := l.balanceWidth(items[start:i], width, ind)
+		for j := start; j < i; j++ {
+			caps[j] = w
+		}
+		start = i + 1
+	}
+	return caps
+}
+
+// capAt is the balanced width for a line beginning at an item.
+func capAt(caps []style.Unit, i int) style.Unit {
+	if i < 0 || i >= len(caps) {
+		return style.MaxUnit
+	}
+	return caps[i]
+}
+
+// countLines is how many lines the greedy breaker makes of these items in a
+// given width.
+//
+// It stops counting at limit, because the caller only ever needs to know whether
+// the count is above a number: a two-character probe width over a page of text
+// would otherwise break every word in it to answer a question already settled.
+//
+// Floats are not consulted. Balancing chooses break points within the room the
+// content has, and what that room is on each line is decided by the real loop
+// against the real bands; a count that placed floats would have to place them
+// once per probe and roll them back once per probe.
+func (l *layouter) countLines(items []inlineItem, width, indent style.Unit, limit int) int {
+	n := 0
+	iByte := 0
+	for i := 0; i < len(items); {
+		for iByte == 0 && i < len(items) && items[i].float != nil {
+			i++
+		}
+		if i >= len(items) {
+			break
+		}
+		room := width
+		if n == 0 {
+			room = width.Sub(indent)
+		}
+		wasI, wasByte := i, iByte
+		runs, next, nextByte, _, forced := l.breakOneLine(items, i, iByte, room, 0)
+		if len(runs) > 0 || forced {
+			n++
+		}
+		if n >= limit {
+			return n
+		}
+		i, iByte = next, nextByte
+		if !cursorAdvanced(wasI, wasByte, i, iByte) {
+			// The same forward-progress guard the real loop carries. A probe
+			// width of one unit is narrower than any glyph, and a breaker that
+			// cannot fit even one would otherwise be asked for ever.
+			break
+		}
+	}
+	return n
 }
 
 // breakOneLine fills a single line, greedily, and says where the next one
