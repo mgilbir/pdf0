@@ -405,8 +405,24 @@ func (l *layouter) widthsOf(items []inlineItem) intrinsicWidths {
 					runEdge = 0
 				}
 			} else {
-				// The run ended at the space, so it holds nothing that a line
-				// edge could remove — endRun clears both.
+				// The run ends at the space — but on which side of it depends on
+				// whether the space is still there when the line ends.
+				//
+				// Under normal and pre-wrap it is not: §4.1.2 removes a
+				// collapsible one and hangs a preserved one, so the run before it
+				// is what has to fit and the space costs the minimum nothing.
+				//
+				// Under break-spaces it is. That value's whole point is that "a
+				// sequence of preserved white space always takes up space,
+				// including at the end of the line", and the opportunity it
+				// offers is *after* each space rather than before — so the space
+				// belongs to the run in front of it and the narrowest that run
+				// can be is one space wider. "123    8" in four characters wraps
+				// to "123 " and "   8", and a minimum of three said the four
+				// would not fit.
+				if !item.trimAtEnd && !item.hangs {
+					run = run.Add(w)
+				}
 				endRun()
 			}
 			line = line.Add(w)

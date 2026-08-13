@@ -1386,3 +1386,37 @@ func TestTableHeightLimitsReachTheRows(t *testing.T) {
 		}
 	}
 }
+
+// TestADeclaredCellWidthIsWhatItsColumnPrefers is §17.5.2.2 on a cell that
+// says how wide it wants to be.
+//
+// "If the specified 'width' (W) of the cell is greater than MCW, W is the
+// minimum cell width" — and it is what the column *prefers* as well, floored by
+// that minimum. A cell that asked for four characters does not want twenty
+// because its text would fit on one line: it wants four, and wraps.
+//
+// Reading W as a floor under the maximum instead left the column at the content's
+// preferred width whenever there was room for it, so a narrow cell in a table
+// with space around it was as wide as its longest line.
+func TestADeclaredCellWidthIsWhatItsColumnPrefers(t *testing.T) {
+	// Four characters declared, eight characters of unbreakable-looking text in
+	// a table with the whole page to grow into.
+	root := layoutOf(t, 4000,
+		`<table><tr><td id="c">aaa bbb c</td></tr></table>`,
+		bareTable+`td { font-family: Courier; font-size: 100px;
+		 line-height: 100px } #c { width: `+itoa(int(4*ch))+`px }`)
+	if got := find(t, root, "c").BorderRect.W.Px(); got != 4*ch {
+		t.Errorf("the cell is %gpx wide, want %g — it declared four characters "+
+			"and the column takes what the cell prefers", got, 4*ch)
+	}
+	// And the declaration is still a floor rather than a ceiling: a cell whose
+	// content cannot be made that narrow is as wide as it has to be.
+	root = layoutOf(t, 4000,
+		`<table><tr><td id="c">aaaaaaaa</td></tr></table>`,
+		bareTable+`td { font-family: Courier; font-size: 100px;
+		 line-height: 100px } #c { width: `+itoa(int(4*ch))+`px }`)
+	if got := find(t, root, "c").BorderRect.W.Px(); got != 8*ch {
+		t.Errorf("a cell holding an eight-character word is %gpx wide, want %g "+
+			"— a declared width does not cut content off", got, 8*ch)
+	}
+}

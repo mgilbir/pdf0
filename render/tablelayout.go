@@ -567,8 +567,13 @@ func (l *layouter) cellDemand(cell *Box) (min, max style.Unit, percent float64) 
 	if length, ok := l.parseLength(cell, "width"); ok {
 		switch length.Kind {
 		case style.LengthAbsolute:
+			// §17.5.2.2: "If the specified width of the cell is greater than
+			// MCW, W is the minimum cell width." And it is what the column
+			// *prefers* as well, floored by that minimum — a cell that asked for
+			// four characters does not want twenty because its text would fit on
+			// one line, it wants four and wraps.
 			inner.min = style.Max(inner.min, length.Value)
-			inner.max = style.Max(inner.max, length.Value)
+			inner.max = inner.min
 		case style.LengthPercent:
 			percent = length.Percent
 		}
