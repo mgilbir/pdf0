@@ -2,6 +2,7 @@ package render
 
 import (
 	"github.com/mgilbir/pdf0/style"
+	"sort"
 )
 
 // The background and the border of a non-replaced inline box.
@@ -132,13 +133,25 @@ type inlineDecor struct {
 func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 	at, baseline style.Unit, stack *lineStack) {
 
-	// The pieces made for this line, so that a box met twice on it extends its
-	// piece rather than starting another. A linear scan rather than a map: the
-	// number of painting inline boxes on one line is a handful, and a map here
-	// would be an allocation on every line of every document.
-	start := len(d.pieces)
+	// The items in the order they are *drawn*, because §8.6's pieces are visual:
+	// a box whose content the reordering cut in two generates two boxes, and the
+	// one in the middle of them belongs to something else. Walking the logical
+	// order and taking a box's extremes would draw one piece straight through
+	// the other box's words.
+	order := make([]int, 0, len(items))
+	for k := range items {
+		order = append(order, k)
+	}
+	sort.SliceStable(order, func(a, b int) bool { return xs[order[a]] < xs[order[b]] })
 
-	for k, item := range items {
+	// The piece each box has open, and the visual position it was last seen at.
+	// A box absent from the item before this one has been interrupted, so what
+	// follows is a new piece rather than more of the old one.
+	open := map[*Box]int{}
+	lastAt := map[*Box]int{}
+
+	for pos, k := range order {
+		item := items[k]
 		chain := d.l.inlineChain(item)
 		if len(chain) == 0 {
 			continue
@@ -146,20 +159,14 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 		left := at.Add(xs[k])
 		right := left.Add(item.width)
 		for _, box := range chain {
-			at := -1
-			for j := start; j < len(d.pieces); j++ {
-				if d.pieces[j].box == box {
-					at = j
-					break
+			if pi, ok := open[box]; ok && lastAt[box] == pos-1 {
+				if left < d.pieces[pi].left {
+					d.pieces[pi].left = left
 				}
-			}
-			if at >= 0 {
-				if left < d.pieces[at].left {
-					d.pieces[at].left = left
+				if right > d.pieces[pi].right {
+					d.pieces[pi].right = right
 				}
-				if right > d.pieces[at].right {
-					d.pieces[at].right = right
-				}
+				lastAt[box] = pos
 				continue
 			}
 			if !d.room(box) {
@@ -189,6 +196,8 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 				d.last = make(map[*Box]int)
 			}
 			d.last[box] = len(d.pieces) - 1
+			open[box] = len(d.pieces) - 1
+			lastAt[box] = pos
 		}
 	}
 }
@@ -217,6 +226,7 @@ func (d *inlineDecor) room(b *Box) bool {
 // border and padding only if it begins the box, and its right ones only if it
 // ends it, and the second of those is a fact about every other line.
 func (d *inlineDecor) finish(parent *Fragment) {
+	carry := d.insetCarriers()
 	for i := range d.pieces {
 		p := &d.pieces[i]
 		b := p.box
@@ -240,19 +250,22 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		// one. Which physical side "begins" it is the containing block's
 		// business — see splitInsetSides.
 		noLeft, noRight := splitInsetSides(b)
-		// Which of the box's two ends this piece is, and then which physical side
-		// each end is. §8.6 gives the piece that *begins* the box the box's
-		// starting inset, and for an element whose own direction is right-to-left
-		// the starting inset is the right one — see beginsAtRight.
+		// §8.6 names two of a box's pieces and gives the rest nothing: the one at
+		// the end the box *begins* on, on the first line it appears on, carries
+		// the box's starting inset, and the one at the other end on the last line
+		// carries the ending inset. Which physical end begins it is the box's own
+		// direction — see beginsAtRight — and insetCarriers has already found the
+		// two pieces.
 		//
-		// Reading "first piece" as "left inset" is the left-to-right half of the
-		// rule written down as though it were the whole of it, and it drew the
-		// border down the wrong side of every right-to-left inline box broken
-		// over lines. CSS2/box/rtl-basic and rtl-span-only are the two documents.
-		keepLeft, keepRight := p.first, d.last[b] == i
-		if beginsAtRight(b) {
-			keepLeft, keepRight = keepRight, keepLeft
-		}
+		//	All other generated boxes for the element have no horizontal
+		//	margins, borders or padding.
+		//
+		// Reading "the first piece" as "the left inset" is the left-to-right half
+		// of the rule written down as though it were the whole of it.
+		c := carry[b]
+		startsRight := beginsAtRight(b)
+		keepLeft := (!startsRight && i == c.start) || (startsRight && i == c.end)
+		keepRight := (startsRight && i == c.start) || (!startsRight && i == c.end)
 		if !keepLeft || noLeft {
 			margin.Left, border.Left, padding.Left = 0, 0, 0
 		}
@@ -289,6 +302,69 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		}
 		parent.Lines[p.line].Boxes = append(parent.Lines[p.line].Boxes, frag)
 	}
+}
+
+// insetEnds is the two pieces of one box that carry its insets.
+type insetEnds struct{ start, end int }
+
+// insetCarriers finds them, per box.
+//
+// §8.6 asks for the piece at one end of the *first line* the box appears on and
+// the piece at the other end of the *last line* — where the ends are physical
+// and which is which is the box's own direction. With one piece per line those
+// are the first and last pieces, which is what this used to assume; with a box
+// the reordering cut into several pieces on one line they are the extremes of
+// that line, and every piece between them carries nothing.
+func (d *inlineDecor) insetCarriers() map[*Box]insetEnds {
+	type span struct{ first, last int }
+	lines := map[*Box]span{}
+	for i := range d.pieces {
+		p := d.pieces[i]
+		s, ok := lines[p.box]
+		if !ok {
+			lines[p.box] = span{p.line, p.line}
+			continue
+		}
+		if p.line < s.first {
+			s.first = p.line
+		}
+		if p.line > s.last {
+			s.last = p.line
+		}
+		lines[p.box] = s
+	}
+
+	out := make(map[*Box]insetEnds, len(lines))
+	for b, s := range lines {
+		startsRight := beginsAtRight(b)
+		startAt, endAt := -1, -1
+		for i := range d.pieces {
+			p := d.pieces[i]
+			if p.box != b {
+				continue
+			}
+			// The end the box begins on, on its first line: the rightmost piece
+			// when it begins at its right, and the leftmost otherwise.
+			if p.line == s.first && (startAt < 0 || further(p, d.pieces[startAt], startsRight)) {
+				startAt = i
+			}
+			// And the other end on its last line.
+			if p.line == s.last && (endAt < 0 || further(p, d.pieces[endAt], !startsRight)) {
+				endAt = i
+			}
+		}
+		out[b] = insetEnds{start: startAt, end: endAt}
+	}
+	return out
+}
+
+// further reports whether a is nearer the right end than b, or nearer the left
+// end when right is false.
+func further(a, b inlinePiece, right bool) bool {
+	if right {
+		return a.right > b.right
+	}
+	return a.left < b.left
 }
 
 // inlineChain is the inline boxes an item sits inside that have something to

@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/style"
@@ -523,6 +524,66 @@ func trimRunSpace(v DrawText) DrawText {
 //
 // A run with no face has no shaper to ask; those are the hand-built runs in
 // picture_check_test.go, and they fall back to the string.
+// leavesInk reports whether a run has anything in it that puts ink on the page.
+func leavesInk(text string) bool {
+	for _, r := range text {
+		if unicode.IsSpace(r) || marksNoPaper(r) || isDefaultIgnorable(r) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// isDefaultIgnorable is the part of Unicode's Default_Ignorable_Code_Point
+// property this comparison meets: the bidi controls, the joiners, and the marks
+// that are there to say something to the algorithm rather than to be seen.
+func isDefaultIgnorable(r rune) bool {
+	switch {
+	case r == 0x00AD, // soft hyphen
+		r == 0x034F,                // combining grapheme joiner
+		r >= 0x200B && r <= 0x200F, // zero width space through RLM
+		r >= 0x202A && r <= 0x202E, // the embedding and override controls
+		r >= 0x2060 && r <= 0x2064, // word joiner and the invisible operators
+		r >= 0x2066 && r <= 0x2069, // the isolates
+		r == 0xFEFF:                // zero width no-break space
+		return true
+	}
+	return false
+}
+
+// groupGlyphs is the identity of a run of abutting text: the glyphs each piece
+// of it draws, in the order they appear across the page.
+//
+// Per piece rather than over the joined text, because the pieces may read in
+// different directions and a single string cannot say that. drawnGlyphs already
+// reports one run's glyphs in the order they are drawn — shapedText states the
+// run's direction to the shaper — so laying the pieces end to end in x order
+// gives the whole group's glyphs in the order a reader meets them.
+func groupGlyphs(group []DrawText) string {
+	if len(group) == 1 {
+		return drawnGlyphs(group[0])
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	first := true
+	for _, v := range group {
+		inner := drawnGlyphs(v)
+		inner = strings.TrimPrefix(inner, "[")
+		inner = strings.TrimSuffix(inner, "]")
+		if inner == "" {
+			continue
+		}
+		if !first {
+			b.WriteByte(' ')
+		}
+		first = false
+		b.WriteString(inner)
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
 func drawnGlyphs(v DrawText) string {
 	if v.Face == nil {
 		return fmt.Sprintf("%q", v.Text)
@@ -548,10 +609,19 @@ func texts(ops []Op, under []coloured) []textMark {
 	var marking []DrawText
 	for i, op := range ops {
 		v, ok := op.(DrawText)
-		if !ok || strings.TrimSpace(v.Text) == "" {
+		if !ok || !leavesInk(v.Text) {
 			// A space marks no paper. It is drawn so that text extraction
 			// works, and two documents may legitimately put a different number
 			// of them between the same visible glyphs.
+			//
+			// A bidi control is the same case and reaches it the same way. It is
+			// default-ignorable, the shaper drops it before any glyph is chosen,
+			// and it is in the run only because the run's text is what a reader
+			// copies out of the page. A document that writes its overrides as
+			// characters therefore has runs that draw nothing at all, and
+			// counting one as a mark ruled it different from a reference that
+			// achieved the same picture with markup. TrimSpace does not see them:
+			// they are format characters, not white space.
 			continue
 		}
 		if invisibleInk(v, under) {
@@ -570,8 +640,9 @@ func texts(ops []Op, under []coloured) []textMark {
 	}
 
 	var out []textMark
-	for _, v := range joinRuns(marking) {
-		what := fmt.Sprintf("text %s size %s", drawnGlyphs(v), num(v.Size))
+	for _, group := range joinRuns(marking) {
+		v := group[0]
+		what := fmt.Sprintf("text %s size %s", groupGlyphs(group), num(v.Size))
 		if v.Clip.Active {
 			// A run §11.1 cut is a different mark from the same run drawn
 			// whole, and there is no way to say which glyphs survived without a
@@ -744,7 +815,7 @@ func buriedUnder(covers []opaqueCover, at int, ink Rect) bool {
 // origin, so "starts where the last one ended" is a different sum, and there is
 // no case in the suite that needs it — an unnecessary rule here would be a way
 // for the oracle to lose a difference it should see.
-func joinRuns(runs []DrawText) []DrawText {
+func joinRuns(runs []DrawText) [][]DrawText {
 	type key struct {
 		y, size, spacing style.Unit
 		face             *fonts.Face
@@ -753,18 +824,22 @@ func joinRuns(runs []DrawText) []DrawText {
 		// where they abut, so they are not joined. Clip is comparable, which is
 		// what lets it sit in a map key at all.
 		clip Clip
-		// Direction is part of the key because it decides how two abutting runs
-		// are spliced, and because a left-to-right run between two
-		// right-to-left ones is not part of either chain.
-		rtl bool
 	}
 	// Runs are gathered per group and spliced within it. The order of the output
 	// is not the paint order any more, which is why this is used only by texts:
 	// text is compared as a sorted set of marks, and picFills — where order
 	// decides what covers what — never sees it.
-	groups := map[key][]DrawText{}
+	//
+	// Direction is deliberately not part of the key. Two runs that abut put the
+	// same ink on the page whichever way each of them reads, and under an
+	// explicit override a single word can be cut into runs at three different
+	// levels — "fgh" comes out as an RTL "f", an LTR "g" and an RTL "h". What
+	// makes joining them safe is that the identity built from a group is the
+	// concatenation of each run's *glyphs*, in x order, and drawnGlyphs already
+	// reports a run's glyphs in the order they are drawn.
+	groups := map[key][][]DrawText{}
 	var order []key
-	out := make([]DrawText, 0, len(runs))
+	var out [][]DrawText
 	for _, v := range runs {
 		if v.Face == nil {
 			// A run with no face has no advance to add, so "where it ends" is
@@ -773,35 +848,32 @@ func joinRuns(runs []DrawText) []DrawText {
 			// runs in picture_check_test.go are, and a rule that joined every one
 			// of those into whatever sat at the same point would make that file
 			// measure something other than what it says.
-			out = append(out, v)
+			out = append(out, []DrawText{v})
 			continue
 		}
-		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color, v.Clip, v.RTL}
+		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color, v.Clip}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
-		groups[k] = append(groups[k], v)
+		groups[k] = append(groups[k], []DrawText{v})
 	}
 	for _, k := range order {
 		g := groups[k]
-		sort.SliceStable(g, func(i, j int) bool { return g[i].At.X < g[j].At.X })
-		cur, end := g[0], g[0].At.X.Add(runAdvance(g[0]))
-		for _, next := range g[1:] {
+		flat := make([]DrawText, 0, len(g))
+		for _, one := range g {
+			flat = append(flat, one...)
+		}
+		sort.SliceStable(flat, func(i, j int) bool { return flat[i].At.X < flat[j].At.X })
+		cur := []DrawText{flat[0]}
+		end := flat[0].At.X.Add(runAdvance(flat[0]))
+		for _, next := range flat[1:] {
 			if abs(end.Sub(next.At.X)) <= joinSlack {
-				if k.rtl {
-					// A run's text is in logical order — see shapedText — and in
-					// a right-to-left run the text that reads first is drawn
-					// furthest right. So the run being appended, which is the
-					// one further right, goes in front.
-					cur.Text = next.Text + cur.Text
-				} else {
-					cur.Text += next.Text
-				}
+				cur = append(cur, next)
 				end = end.Add(runAdvance(next))
 				continue
 			}
 			out = append(out, cur)
-			cur, end = next, next.At.X.Add(runAdvance(next))
+			cur, end = []DrawText{next}, next.At.X.Add(runAdvance(next))
 		}
 		out = append(out, cur)
 	}

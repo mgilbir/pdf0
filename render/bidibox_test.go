@@ -2,6 +2,8 @@ package render
 
 import (
 	"github.com/mgilbir/pdf0/style"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -558,5 +560,165 @@ func TestASideMarginIsUnaffectedByDirection(t *testing.T) {
 	if ltr, rtl := runX(t, "ltr"), runX(t, "rtl"); ltr != rtl {
 		t.Errorf("a span with margin-left starts at %g under ltr and %g under "+
 			"rtl; a side margin is the same side either way", ltr.Px(), rtl.Px())
+	}
+}
+
+// overrideRow is the suite's own fixture for §8.6 under explicit overrides,
+// reduced to what can be asserted directly.
+//
+// The letters a…m are written in an order the RLO, LRO and PDF characters undo,
+// so the line reads "abcdefghijklm" — and the spans around c/j/e and around
+// i/d/k/b hold letters that end up scattered across it, which is what makes the
+// box model interesting: one inline box, several boxes generated for it.
+const overrideRow = `<p id="p">a&#x202E;l&#x202D;<span id="one">c&#x202E;j&#x202D;e&#x202E;</span>` +
+	`h&#x202D;g&#x202C;f<span id="two">&#x202C;i&#x202C;d&#x202C;k&#x202C;b</span>&#x202C;m</p>`
+
+// visualLetters is the line's text in the order it is drawn, with the format
+// characters — which draw nothing — left out.
+func visualLetters(t *testing.T, root *Fragment, id string) string {
+	t.Helper()
+	type at struct {
+		x style.Unit
+		s string
+	}
+	var runs []at
+	for _, line := range find(t, root, id).Lines {
+		for _, r := range line.Runs {
+			var keep []rune
+			for _, c := range r.Text {
+				if c >= 0x202A && c <= 0x202E {
+					continue
+				}
+				keep = append(keep, c)
+			}
+			if len(keep) == 0 {
+				continue
+			}
+			runs = append(runs, at{line.Rect.X.Add(r.X), string(keep)})
+		}
+	}
+	sort.SliceStable(runs, func(i, j int) bool { return runs[i].x < runs[j].x })
+	var b strings.Builder
+	for _, r := range runs {
+		b.WriteString(r.s)
+	}
+	return b.String()
+}
+
+// TestAnInsetDoesNotDisturbTheReordering is the bug that made an inline box's
+// own border rearrange the words around it.
+//
+// An inset used to take an embedding level of its own — the lowest level inside
+// its box — and an item at level 2 dropped into the middle of a level-4 run cuts
+// that run in half. Rule L2 then reverses the halves separately, and the line
+// comes out in an order UAX #9 never asked for. The suite's bidi-001 and its
+// siblings are written to read "abcdefghijklm" through six nested overrides, and
+// putting a border on one of the spans was enough to scramble them.
+//
+// The assertion is the comparison: the same markup with and without a border on
+// the spans reads the same, because a border is not something the bidi algorithm
+// has an opinion about.
+func TestAnInsetDoesNotDisturbTheReordering(t *testing.T) {
+	plain := layoutOf(t, 4000, overrideRow, noDefaults+mono+`p { white-space: pre }`)
+	if got := visualLetters(t, plain, "p"); got != "abcdefghijklm" {
+		t.Fatalf("the overrides alone read %q, want \"abcdefghijklm\" — the "+
+			"fixture is wrong before any box model is involved", got)
+	}
+	bordered := layoutOf(t, 4000, overrideRow, noDefaults+mono+`p { white-space: pre }
+		#one, #two { border: 10px solid; margin: 0 50px }`)
+	if got := visualLetters(t, bordered, "p"); got != "abcdefghijklm" {
+		t.Errorf("with a border on the spans the line reads %q, want "+
+			"\"abcdefghijklm\" — an inset is not a character and takes no level", got)
+	}
+}
+
+// TestAnInsetTakesRoomAtTheEndsOfItsOwnBox is where that room goes once the
+// inset is out of the reordering.
+//
+// §8.6 puts an inline box's margin, border and padding at the two ends of the
+// box, and under an override the two ends are the extremes of the several boxes
+// generated for it — not the two ends of anything contiguous. #one's letters
+// land at c, e and j with other spans' letters between them, so its left inset
+// belongs before c and its right inset after j.
+func TestAnInsetTakesRoomAtTheEndsOfItsOwnBox(t *testing.T) {
+	// One character is 60px wide; the insets are 60 each (50 margin, 10 border).
+	root := layoutOf(t, 4000, overrideRow, noDefaults+mono+`p { white-space: pre }
+		#one, #two { border: 10px solid; margin: 0 50px }`)
+	x := map[string]float64{}
+	for _, line := range find(t, root, "p").Lines {
+		for _, r := range line.Runs {
+			for _, c := range r.Text {
+				if c >= 0x202A && c <= 0x202E {
+					continue
+				}
+				x[string(c)] = line.Rect.X.Add(r.X).Px()
+				break
+			}
+		}
+	}
+	// a b [#two's left inset] ... and #one's left inset between b and c.
+	for _, tc := range []struct {
+		from, to string
+		want     float64
+	}{
+		{"a", "b", 120}, // a, then #two's left inset, then b
+		{"b", "c", 120}, // b, then #one's left inset, then c
+		{"c", "d", 60},  // plain neighbours
+		{"i", "j", 60},
+		{"j", "k", 120}, // j, then #one's right inset, then k
+		{"k", "l", 120}, // k, then #two's right inset, then l
+		{"l", "m", 60},
+	} {
+		if got := x[tc.to] - x[tc.from]; got != tc.want {
+			t.Errorf("%s to %s is %gpx, want %g", tc.from, tc.to, got, tc.want)
+		}
+	}
+}
+
+// TestOnlyTheEndPiecesOfASplitBoxAreDecorated is §8.6's last sentence:
+//
+//	All other generated boxes for the element have no horizontal margins,
+//	borders or padding.
+//
+// A box the reordering cut into three draws three boxes, and only the outer two
+// carry anything horizontal. Drawing one fragment from the box's leftmost item
+// to its rightmost — which is what one piece per line amounts to — paints a
+// border straight through the words of whatever sits between them.
+func TestOnlyTheEndPiecesOfASplitBoxAreDecorated(t *testing.T) {
+	root := layoutOf(t, 4000, overrideRow, noDefaults+mono+`p { white-space: pre }
+		#one, #two { border: 10px solid; margin: 0 50px }`)
+	p := find(t, root, "p")
+	if len(p.Lines) != 1 {
+		t.Fatalf("%d lines, want 1", len(p.Lines))
+	}
+	// The pieces are the line's inline box fragments, not children of anything,
+	// so they are found by the element they belong to.
+	var pieces []*Fragment
+	for _, f := range p.Lines[0].Boxes {
+		if f.Box == nil || f.Box.Element == nil {
+			continue
+		}
+		if id, _ := f.Box.Element.Attr("id"); id == "one" {
+			pieces = append(pieces, f)
+		}
+	}
+	if len(pieces) != 3 {
+		t.Fatalf("#one generated %d boxes, want 3 — its letters land at c, e "+
+			"and j with other spans' between them", len(pieces))
+	}
+	sort.SliceStable(pieces, func(i, j int) bool {
+		return pieces[i].BorderRect.X < pieces[j].BorderRect.X
+	})
+	if got := pieces[0].Border; got.Left.Px() != 10 || got.Right.Px() != 0 {
+		t.Errorf("the leftmost piece has borders %g/%g, want 10/0",
+			got.Left.Px(), got.Right.Px())
+	}
+	if got := pieces[1].Border; got.Left.Px() != 0 || got.Right.Px() != 0 {
+		t.Errorf("the middle piece has borders %g/%g, want none at all",
+			got.Left.Px(), got.Right.Px())
+	}
+	if got := pieces[2].Border; got.Left.Px() != 0 || got.Right.Px() != 10 {
+		t.Errorf("the rightmost piece has borders %g/%g, want 0/10",
+			got.Left.Px(), got.Right.Px())
 	}
 }

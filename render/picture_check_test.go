@@ -817,3 +817,83 @@ func TestPictureJoinsRightToLeftRunsInLogicalOrder(t *testing.T) {
 			"join is agreeing with anything")
 	}
 }
+
+// TestPictureIgnoresRunsThatDrawNothing is the filter that lets a document
+// writing its bidi with characters compare against one writing it with markup.
+//
+// An override character is default-ignorable: the shaper drops it before any
+// glyph is chosen, so a run holding nothing else puts no ink on the page. It is
+// in the run at all only because a run's text is what a reader copies out. The
+// filter that already drops space-only runs did not see one — TrimSpace does
+// not treat a format character as white space — so the run counted as a mark
+// that the reference had no counterpart for.
+func TestPictureIgnoresRunsThatDrawNothing(t *testing.T) {
+	face, err := fonts.Standard("Helvetica")
+	if err != nil {
+		t.Skipf("no Helvetica: %v", err)
+	}
+	mk := func(s string, x float64) Op {
+		return DrawText{
+			Text: s, At: Point{picPx(x), picPx(29)}, Size: picPx(16),
+			Color: style.RGBA{A: 1}, Face: face,
+		}
+	}
+	plain := []Op{mk("ab", 8)}
+	withControls := []Op{mk("ab", 8), mk("‬", 40), mk("​", 60)}
+	if !pictureEqual(plain, withControls, picPage) {
+		t.Error("a run of nothing but format characters was counted as a mark")
+	}
+	// And the filter is not "ignore short runs": a real letter still counts.
+	if pictureEqual(plain, []Op{mk("ab", 8), mk("c", 40)}, picPage) {
+		t.Error("an extra letter compared equal; the filter is dropping ink")
+	}
+}
+
+// TestPictureJoinsAcrossDirection is the other half, and the one that makes the
+// join safe to do at all.
+//
+// Under an explicit override a single word is cut into runs at several embedding
+// levels — "fgh" comes out as a right-to-left "f", a left-to-right "g" and a
+// right-to-left "h" — while the reference beside it draws one left-to-right run.
+// The ink is identical, so the comparison has to say so, and it can because the
+// identity of a joined group is each piece's *glyphs* laid end to end in x
+// order: drawnGlyphs already reports a run's glyphs in the order they are drawn.
+//
+// The second half is what stops that being a way of agreeing with anything.
+func TestPictureJoinsAcrossDirection(t *testing.T) {
+	face, err := fonts.Standard("Helvetica")
+	if err != nil {
+		t.Skipf("no Helvetica: %v", err)
+	}
+	const size = 16.0
+	mk := func(s string, x float64, rtl bool) Op {
+		return DrawText{
+			Text: s, At: Point{picPx(x), picPx(29)}, Size: picPx(size),
+			Color: style.RGBA{A: 1}, Face: face, RTL: rtl,
+		}
+	}
+	w := func(s string) float64 { return face.Measure(s, size) }
+
+	whole := []Op{mk("fgh", 8, false)}
+	// The same three glyphs, cut into three runs at three directions, each where
+	// it belongs on the page.
+	cut := []Op{
+		mk("f", 8, true),
+		mk("g", 8+w("f"), false),
+		mk("h", 8+w("fg"), true),
+	}
+	if !pictureEqual(whole, cut, picPage) {
+		t.Error("a word cut into runs of differing direction compared different " +
+			"from the same word drawn once")
+	}
+	// Put the same three glyphs down in another order and it is another page.
+	scrambled := []Op{
+		mk("g", 8, true),
+		mk("f", 8+w("g"), false),
+		mk("h", 8+w("gf"), true),
+	}
+	if pictureEqual(whole, scrambled, picPage) {
+		t.Error("three glyphs in a different order compared equal; the join is " +
+			"agreeing with anything")
+	}
+}

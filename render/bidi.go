@@ -511,81 +511,85 @@ func insetSides(items []inlineItem) {
 // order, or whose inset is somewhere in the middle of them, is left exactly as
 // the reordering placed it: those are the shapes this rotation is not an answer
 // for, and moving something in them would be a guess.
-func (l *layouter) placeInsetsBySide(runs []inlineItem, xs []style.Unit) {
-	// Innermost first, so that an outer box rearranges a group whose inner boxes
-	// have finished moving. The order the insets are met in is the order the
-	// boxes open, so reversing it puts the innermost first.
+func (l *layouter) placeInsetsBySide(runs []inlineItem, order []int) []int {
+	// The boxes with an inset on this line, innermost first. An inner box has to
+	// be arranged before the box around it, because once it is, its own insets
+	// are part of what the outer box's extent has to enclose.
 	var boxes []*Box
 	seen := map[*Box]bool{}
-	for k := range runs {
-		if !runs[k].inset || runs[k].box == nil || seen[runs[k].box] {
-			continue
+	for _, k := range order {
+		if runs[k].inset && runs[k].box != nil && !seen[runs[k].box] {
+			seen[runs[k].box] = true
+			boxes = append(boxes, runs[k].box)
 		}
-		seen[runs[k].box] = true
-		boxes = append(boxes, runs[k].box)
 	}
-	for i, j := 0, len(boxes)-1; i < j; i, j = i+1, j-1 {
-		boxes[i], boxes[j] = boxes[j], boxes[i]
-	}
+	sort.SliceStable(boxes, func(a, c int) bool {
+		return boxDepth(boxes[a]) > boxDepth(boxes[c])
+	})
 
 	for _, b := range boxes {
-		mine := make([]int, 0, 8)
-		lo, hi := style.MaxUnit, style.Unit(0)
-		for k := range runs {
+		// The box's own two insets come out of the order, and everything else
+		// keeps the order the reordering gave it.
+		lead, trail := -1, -1
+		rest := make([]int, 0, len(order))
+		for _, k := range order {
+			if runs[k].inset && runs[k].box == b {
+				if runs[k].insetLead {
+					lead = k
+				} else {
+					trail = k
+				}
+				continue
+			}
+			rest = append(rest, k)
+		}
+		// Where the box's content sits in what is left. Its own inner boxes'
+		// insets count as its content, which is what makes the nesting come out
+		// right: an outer border encloses an inner margin.
+		lo, hi := -1, -1
+		for i, k := range rest {
 			if !itemInside(runs[k], b) {
 				continue
 			}
-			mine = append(mine, k)
-			if xs[k] < lo {
-				lo = xs[k]
+			if lo < 0 {
+				lo = i
 			}
-			if end := xs[k].Add(runs[k].width); end > hi {
-				hi = end
-			}
+			hi = i
 		}
-		if len(mine) == 0 {
+		if lo < 0 {
+			// Nothing of the box's own on this line, so there is no extent to
+			// put anything at the ends of. The order stands.
 			continue
 		}
-		// Only a group that occupies a span of the line to itself is rearranged.
-		// Anything else is a shape this is not an answer for, and moving
-		// something inside one would be a guess.
-		foreign := false
-		for k := range runs {
-			if itemInside(runs[k], b) {
-				continue
-			}
-			if xs[k] >= lo && xs[k] < hi {
-				foreign = true
-				break
-			}
+		// insetSides has already given the lead item the width of whichever
+		// physical side begins the box, so the lead goes at that side.
+		left, right := lead, trail
+		if beginsAtRight(b) {
+			left, right = trail, lead
 		}
-		if foreign {
-			continue
+		out := make([]int, 0, len(order))
+		out = append(out, rest[:lo]...)
+		if left >= 0 {
+			out = append(out, left)
 		}
-
-		// The box's own items in the order the reordering left them, so that the
-		// content keeps the order UAX #9 gave it and only the insets move.
-		sort.SliceStable(mine, func(a, c int) bool { return xs[mine[a]] < xs[mine[c]] })
-		var left, right, middle []int
-		for _, k := range mine {
-			if !runs[k].inset || runs[k].box != b {
-				middle = append(middle, k)
-				continue
-			}
-			// insetSides has already given the lead item the width of whichever
-			// physical side begins the box, so the lead belongs at that side.
-			if runs[k].insetLead == beginsAtRight(b) {
-				right = append(right, k)
-				continue
-			}
-			left = append(left, k)
+		out = append(out, rest[lo:hi+1]...)
+		if right >= 0 {
+			out = append(out, right)
 		}
-		x := lo
-		for _, k := range append(append(left, middle...), right...) {
-			xs[k] = x
-			x = x.Add(runs[k].width)
-		}
+		out = append(out, rest[hi+1:]...)
+		order = out
 	}
+	return order
+}
+
+// boxDepth is how many boxes a box sits inside, which orders a line's inline
+// boxes innermost first.
+func boxDepth(b *Box) int {
+	n := 0
+	for c := b; c != nil; c = c.Parent {
+		n++
+	}
+	return n
 }
 
 // itemInside reports whether an item's content sits inside an inline box.
@@ -683,17 +687,21 @@ func (l *layouter) splitByLevel(item inlineItem, para *bidi.Paragraph) []inlineI
 // the slice in logical order is what lets a right-to-left paragraph be drawn the
 // way it reads and copied out the way it was written; reordering the slice would
 // have traded the second for nothing.
-func lineOffsets(runs []inlineItem) ([]style.Unit, style.Unit) {
-	xs := make([]style.Unit, len(runs))
-	var x style.Unit
+func (l *layouter) lineOffsets(runs []inlineItem) ([]style.Unit, style.Unit) {
 	order := lineVisualOrder(runs)
 	if order == nil {
-		for i, item := range runs {
-			xs[i] = x
-			x = x.Add(item.width)
+		order = make([]int, len(runs))
+		for i := range order {
+			order[i] = i
 		}
-		return xs, x
 	}
+	// §8.6 wants each inline box's inset at the ends of *its own* extent, which
+	// is a statement about the visual order and so is made here, before anything
+	// is measured out. See placeInsetsBySide.
+	order = l.placeInsetsBySide(runs, order)
+
+	xs := make([]style.Unit, len(runs))
+	var x style.Unit
 	for _, k := range order {
 		xs[k] = x
 		x = x.Add(runs[k].width)
@@ -780,10 +788,9 @@ func lineVisualOrder(runs []inlineItem) []int {
 		switch {
 		case item.para == para && item.bidiStart-start < len(lineLevels):
 			levels[i] = lineLevels[item.bidiStart-start]
-		case item.insetLevelKnown:
-			// An inline box's own margin, border and padding: no characters, and
-			// so no level from the algorithm. insetSides worked out the level the
-			// box's edges sit at from what is inside it.
+		case item.insetLevelKnown && !item.inset:
+			// Kept for a caller that sets the field on something other than an
+			// inset; nothing in this engine does.
 			levels[i] = item.insetLevel
 		default:
 			levels[i] = levelUnset
@@ -791,9 +798,21 @@ func lineVisualOrder(runs []inlineItem) []int {
 	}
 
 	// Whatever is left has nothing to say about direction — a float marker, the
-	// record of an absolutely positioned box, an inset whose box put no content
-	// on this line — and takes the level of what precedes it, so that it never
+	// record of an absolutely positioned box, an inline box's own margin, border
+	// and padding — and takes the level of what precedes it, so that it never
 	// splits a run in two.
+	//
+	// An inset used to take a level of its own, worked out by insetSides from
+	// the lowest level inside its box, and that is what splitting a run does:
+	// dropping a level-2 item into the middle of a level-4 run cuts the run in
+	// half, and rule L2 then reverses the halves separately. A span holding
+	// three characters at three different levels — which is what an explicit
+	// override makes of "c j e" — came out with its letters in an order the
+	// algorithm never asked for, and the letters between them moved with it.
+	//
+	// So an inset takes no part in the reordering at all now. Where it goes is
+	// §8.6's question rather than UAX #9's, and placeInsetsBySide answers it
+	// afterwards, over the order this returns.
 	for i := range runs {
 		if levels[i] != levelUnset {
 			continue
