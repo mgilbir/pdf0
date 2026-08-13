@@ -240,6 +240,40 @@ func TestTableAnonymousObjects(t *testing.T) {
   table block/table
     tr block/table-row
 `,
+	}, {
+		// A replaced element cannot be an internal table box: its content is not
+		// a formatting context a table's structure can be put through, so the
+		// declaration is dropped and it is laid out as the inline replaced box it
+		// is — which the missing-child rule then wraps in an anonymous cell,
+		// along with the text beside it.
+		//
+		// Honouring it instead made the picture a cell, and the cell took the
+		// column's width and the row's height and stretched the picture to fill
+		// them.
+		name: "a replaced element cannot be a table cell",
+		html: `<span style="display:table-row">x<img style="display:table-cell"/>y</span>`,
+		want: `anonymous block/flow-root
+  anonymous block/table
+    span block/table-row
+      anonymous block/table-cell
+        text "x"
+        img inline
+        text "y"
+`,
+	}, {
+		// The same for a row, and the same for a non-replaced element beside it:
+		// the div does become the cell it asked to be.
+		name: "a replaced element cannot be a table row either",
+		html: `<div style="display:table"><img style="display:table-row"/>` +
+			`<div style="display:table-cell">c</div></div>`,
+		want: `anonymous block/flow-root
+  div block/table
+    anonymous block/table-row
+      anonymous block/table-cell
+        img inline
+      div block/table-cell
+        text "c"
+`,
 	}}
 
 	for _, tc := range cases {
