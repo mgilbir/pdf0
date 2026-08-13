@@ -1448,3 +1448,36 @@ func TestABoxThatNarrowsStillHasAFloorBesideAFloat(t *testing.T) {
 			"still there, not over it", got)
 	}
 }
+
+// TestAPercentWidthTableBesideAFloatDropsRatherThanNarrowing is the other half
+// of the floor: a width the box has that the floor cannot see.
+//
+// §17.4 puts an anonymous wrapper around a table, and the wrapper is what
+// §9.5's rule is applied to — but the width is declared on the table inside it,
+// and a percentage cannot reach the wrapper through the intrinsic widths:
+// tableContentWidths leaves a percentage out on purpose, since resolving it
+// needs a containing block and the containing block is the box being measured.
+// So the wrapper looked like a box with no width of its own, was told to narrow
+// to the band, and took its percentage of the containing block anyway.
+func TestAPercentWidthTableBesideAFloatDropsRatherThanNarrowing(t *testing.T) {
+	root := layoutOf(t, 1000,
+		`<div id="k"><div id="f"></div><table id="t"><tr><td></td></tr></table></div>`,
+		noDefaults+`
+		#k { width: 300px }
+		#f { float: left; width: 200px; height: 20px }
+		table { border-spacing: 0; width: 50% } td { padding: 0 }`)
+	k := find(t, root, "k")
+	tbl := find(t, root, "t")
+	// Fifty per cent of the containing block, not of the hundred-pixel band.
+	if got := tbl.BorderRect.W.Px(); got != 150 {
+		t.Errorf("the table is %g wide, want 150 — fifty per cent of its "+
+			"containing block", got)
+	}
+	// It does not fit beside the float, so it goes below it rather than over it.
+	if got := relY(t, tbl, k).Px(); got != 20 {
+		t.Errorf("the table is at y=%g, want 20 — below the float", got)
+	}
+	if got := relX(t, tbl, k).Px(); got != 0 {
+		t.Errorf("the table is at x=%g, want 0", got)
+	}
+}
