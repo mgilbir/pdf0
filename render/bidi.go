@@ -1,6 +1,7 @@
 package render
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/mgilbir/pdf0/internal/bidi"
@@ -304,6 +305,14 @@ func (l *layouter) resolveBidi(b *Box, items []inlineItem, p *bidiBuilder) []inl
 		// nothing for the reordering to do. This is the common case by a wide
 		// margin, and skipping it here is what keeps a page of Latin text from
 		// paying for a feature it does not use.
+		//
+		// The insets are still settled, because which of a box's two of them
+		// begins it is §8.6's question about the *element's* direction and not
+		// about any character in the paragraph — a "direction: rtl" span holding
+		// Latin text reorders nothing and still begins at its right. Skipping
+		// this left CSS2/box/rtl-span-only reserving room on the side it was not
+		// drawing on.
+		insetSides(items)
 		return items
 	}
 
@@ -440,7 +449,16 @@ func insetSides(items []inlineItem) {
 			if len(stack) > 0 && top.min < stack[len(stack)-1].min {
 				stack[len(stack)-1].min = top.min
 			}
-			if n := content - top.content; n > 0 && odd-top.odd == n {
+			// Which of the box's two physical insets belongs to the end that
+			// *begins* it. §8.6 answers with the element's own direction, and
+			// that is what beginsAtRight reads.
+			//
+			// This used to answer with the box's content instead — swap when
+			// everything inside resolved to an odd level — which agrees on a box
+			// whose direction and content run the same way and on nothing else.
+			// A "direction: rtl" span holding Latin text is the case it got
+			// wrong, and CSS2/box/rtl-basic is that document.
+			if beginsAtRight(items[top.lead].box) {
 				items[top.lead].width, items[i].width =
 					items[i].width, items[top.lead].width
 			}
@@ -463,6 +481,133 @@ func insetSides(items []inlineItem) {
 			stack[len(stack)-1].min = items[i].level
 		}
 	}
+}
+
+// placeInsetsBySide is §8.6's other half: an inset is *reserved* on the physical
+// side it is drawn on.
+//
+// The two are separate mechanisms here and have to be made to agree. Which side
+// is drawn is settled per line, by inlineDecor.finish, from the box's own
+// direction. Which side is reserved is settled by where the inset item lands in
+// the visual order — and the item is emitted at the box's logical start, so it
+// lands wherever the *content's* bidi order puts it, which is a different
+// question with a different answer.
+//
+// A "direction: rtl" span holding Latin text in a left-to-right line is the case
+// where they part: nothing about the line is reordered, so the item stays at the
+// left of the words, while §8.6 draws the box's starting inset at their right.
+// The reference for CSS2/box/rtl-span-only puts "One" hard against the block's
+// left edge with its border and margin beyond it.
+//
+// So the offsets are corrected after the line is ordered. For each box with an
+// inset on this line, the inset belongs at one end of that box's own visual
+// extent: the left end if it is the box's left inset, the right end if it is the
+// right one. Where it is already there nothing moves; where it is at the other
+// end the group is rotated — the content slides over by the inset's width and
+// the inset takes the far end. The line's total width does not change, because
+// the same items occupy the same span.
+//
+// It is deliberately narrow. A box whose items are not contiguous in visual
+// order, or whose inset is somewhere in the middle of them, is left exactly as
+// the reordering placed it: those are the shapes this rotation is not an answer
+// for, and moving something in them would be a guess.
+func (l *layouter) placeInsetsBySide(runs []inlineItem, xs []style.Unit) {
+	// Innermost first, so that an outer box rearranges a group whose inner boxes
+	// have finished moving. The order the insets are met in is the order the
+	// boxes open, so reversing it puts the innermost first.
+	var boxes []*Box
+	seen := map[*Box]bool{}
+	for k := range runs {
+		if !runs[k].inset || runs[k].box == nil || seen[runs[k].box] {
+			continue
+		}
+		seen[runs[k].box] = true
+		boxes = append(boxes, runs[k].box)
+	}
+	for i, j := 0, len(boxes)-1; i < j; i, j = i+1, j-1 {
+		boxes[i], boxes[j] = boxes[j], boxes[i]
+	}
+
+	for _, b := range boxes {
+		mine := make([]int, 0, 8)
+		lo, hi := style.MaxUnit, style.Unit(0)
+		for k := range runs {
+			if !itemInside(runs[k], b) {
+				continue
+			}
+			mine = append(mine, k)
+			if xs[k] < lo {
+				lo = xs[k]
+			}
+			if end := xs[k].Add(runs[k].width); end > hi {
+				hi = end
+			}
+		}
+		if len(mine) == 0 {
+			continue
+		}
+		// Only a group that occupies a span of the line to itself is rearranged.
+		// Anything else is a shape this is not an answer for, and moving
+		// something inside one would be a guess.
+		foreign := false
+		for k := range runs {
+			if itemInside(runs[k], b) {
+				continue
+			}
+			if xs[k] >= lo && xs[k] < hi {
+				foreign = true
+				break
+			}
+		}
+		if foreign {
+			continue
+		}
+
+		// The box's own items in the order the reordering left them, so that the
+		// content keeps the order UAX #9 gave it and only the insets move.
+		sort.SliceStable(mine, func(a, c int) bool { return xs[mine[a]] < xs[mine[c]] })
+		var left, right, middle []int
+		for _, k := range mine {
+			if !runs[k].inset || runs[k].box != b {
+				middle = append(middle, k)
+				continue
+			}
+			// insetSides has already given the lead item the width of whichever
+			// physical side begins the box, so the lead belongs at that side.
+			if runs[k].insetLead == beginsAtRight(b) {
+				right = append(right, k)
+				continue
+			}
+			left = append(left, k)
+		}
+		x := lo
+		for _, k := range append(append(left, middle...), right...) {
+			xs[k] = x
+			x = x.Add(runs[k].width)
+		}
+	}
+}
+
+// itemInside reports whether an item's content sits inside an inline box.
+//
+// It walks the box tree rather than asking inlineChain, and the difference
+// matters: inlineChain keeps only the boxes that have something to *paint*, so a
+// span with a margin and no border is not in it — and a span with a margin and
+// no border is exactly the shape bidi-box-model-011 is built from. Asking the
+// painting question here left such a box's own words out of its group, so the
+// group was two insets with a word between them that belonged to nobody, and
+// the rearrangement below declined to touch it.
+func itemInside(item inlineItem, b *Box) bool {
+	start := item.box
+	if item.atomicBox != nil && start != nil {
+		start = start.Parent
+	}
+	for c := start; c != nil; c = c.Parent {
+		if c == b {
+			return true
+		}
+	}
+	return false
 }
 
 // splitByLevel cuts one item where its characters change embedding level.

@@ -697,6 +697,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// sits, which on a line mixing directions is not the order they
 			// were collected in.
 			xs, total := lineOffsets(runs)
+			l.placeInsetsBySide(runs, xs)
 			// Atomic inlines are placed as children of the block rather than as
 			// runs, so aligning the line has to move them too. The range is
 			// noted here because floats placed before the line are already in

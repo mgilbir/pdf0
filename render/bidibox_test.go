@@ -1,6 +1,7 @@
 package render
 
 import (
+	"github.com/mgilbir/pdf0/style"
 	"testing"
 )
 
@@ -470,4 +471,92 @@ func TestTheBoxsOwnDirectionDecidesWhichEndBeginsIt(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestAnInsetIsReservedOnTheSideItIsDrawnOn is §8.6's two halves made to agree.
+//
+// Which side an inline box's margin, border and padding are *drawn* on is
+// settled per line, from the box's own direction. How much room they take is
+// settled by an item in the line's stream, placed where the reordering puts it.
+// Those are two mechanisms answering two different questions, and where they
+// disagree the box is drawn somewhere it did not reserve: a "direction: rtl"
+// span holding Latin text reorders nothing, so the item stayed at the left of
+// the words while the border went to their right, and the fragment came out four
+// pixels wide with its own text outside it.
+//
+// The assertion is the agreement rather than either number: the box's fragment
+// has to contain the text it belongs to, whichever way the two run.
+func TestAnInsetIsReservedOnTheSideItIsDrawnOn(t *testing.T) {
+	const css = noDefaults + mono + `
+	#s { border-left: 4px solid; border-right: 8px solid;
+	     padding-left: 5px; padding-right: 10px;
+	     margin-left: 30px; margin-right: 60px }`
+	for _, tc := range []struct{ outer, inner string }{
+		{"ltr", "ltr"}, {"ltr", "rtl"}, {"rtl", "ltr"}, {"rtl", "rtl"},
+	} {
+		root := layoutOf(t, 1000,
+			`<div id="k" style="direction: `+tc.outer+`">`+
+				`<span id="s" style="direction: `+tc.inner+`">aa<br>bb</span></div>`, css)
+		k := find(t, root, "k")
+		if len(k.Lines) != 2 {
+			t.Fatalf("%s/%s: %d lines, want 2", tc.outer, tc.inner, len(k.Lines))
+		}
+		for i, line := range k.Lines {
+			if len(line.Boxes) != 1 {
+				t.Fatalf("%s/%s line %d: %d fragments, want 1",
+					tc.outer, tc.inner, i, len(line.Boxes))
+			}
+			frag := line.Boxes[0]
+			// The content area of the fragment: inside its border and padding.
+			lo := frag.BorderRect.X.Add(frag.Border.Left).Add(frag.Padding.Left)
+			hi := frag.BorderRect.X.Add(frag.BorderRect.W).
+				Sub(frag.Border.Right).Sub(frag.Padding.Right)
+			if len(line.Runs) == 0 {
+				continue
+			}
+			for _, r := range line.Runs {
+				if r.Text == "" {
+					continue
+				}
+				x := line.Rect.X.Add(r.X)
+				if x < lo || x.Add(r.Width) > hi {
+					t.Errorf("%s block, %s span, line %d: the run %q runs "+
+						"%g..%g and its own box's content area is %g..%g — the "+
+						"inset was reserved on one side and drawn on the other",
+						tc.outer, tc.inner, i, r.Text,
+						x.Px(), x.Add(r.Width).Px(), lo.Px(), hi.Px())
+				}
+			}
+		}
+	}
+}
+
+// TestASideMarginIsUnaffectedByDirection is the other side of the same rule, and
+// the one that stops it being applied too widely.
+//
+// "margin-left" is a left margin whichever way the box runs. What §8.6's two
+// halves choose between is which *line* of a broken box carries it, so a box on
+// one line carries both of its insets and looks the same either way. The suite
+// says so a dozen times over — every bidi-box-model test whose assertion reads
+// "side margins should be unaffected by directionality" — and a first attempt at
+// the rule above swapped the two on every box and broke sixteen of them.
+func TestASideMarginIsUnaffectedByDirection(t *testing.T) {
+	runX := func(t *testing.T, dir string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 1000,
+			`<div id="k">aa <span id="s" style="direction: `+dir+`">bb</span></div>`,
+			noDefaults+mono+`#s { margin-left: 40px }`)
+		k := find(t, root, "k")
+		for _, r := range k.Lines[0].Runs {
+			if r.Text == "bb" {
+				return k.Lines[0].Rect.X.Add(r.X)
+			}
+		}
+		t.Fatalf("no run for the span")
+		return 0
+	}
+	if ltr, rtl := runX(t, "ltr"), runX(t, "rtl"); ltr != rtl {
+		t.Errorf("a span with margin-left starts at %g under ltr and %g under "+
+			"rtl; a side margin is the same side either way", ltr.Px(), rtl.Px())
+	}
 }
