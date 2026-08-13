@@ -29,6 +29,16 @@ const (
 	// LengthAuto is the keyword, which is not a length at all — it is an
 	// instruction to layout to work the value out.
 	LengthAuto
+	// LengthCalc is a calc() that came out as both: so many units, plus so much
+	// per cent of the containing block. "calc(100% - 2em)" is the everyday
+	// example and neither half of it can be dropped.
+	//
+	// It is a kind of its own rather than an absolute length with a percentage
+	// hanging off it, so that every switch over LengthKind in this engine has to
+	// say what it does with the pair rather than silently reading one half. A
+	// calc() that comes out as only one of the two is that one: the kind exists
+	// for the mixture and not for the function.
+	LengthCalc
 )
 
 // Length is a parsed length: a number, and what it is a number of.
@@ -37,7 +47,9 @@ type Length struct {
 	// Value is the resolved length when Kind is LengthAbsolute, and meaningless
 	// otherwise.
 	Value Unit
-	// Percent is the percentage when Kind is LengthPercent, on a 0-100 scale.
+	// Percent is the percentage when Kind is LengthPercent or LengthCalc, on a
+	// 0-100 scale. Under LengthCalc it is added to Value rather than replacing
+	// it.
 	Percent float64
 }
 
@@ -62,6 +74,14 @@ func (l Length) Resolve(basis Unit, definite bool) (Unit, bool) {
 			return 0, false
 		}
 		return basis.Mul(l.Percent / 100), true
+	case LengthCalc:
+		// The percentage half is still a percentage, so a calc() holding one is
+		// as indefinite as a bare percentage would be: "calc(50% + 1em)" of a
+		// height nothing has decided is not one em.
+		if !definite {
+			return 0, false
+		}
+		return basis.Mul(l.Percent / 100).Add(l.Value), true
 	}
 	return 0, false
 }
@@ -116,10 +136,18 @@ func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupp
 	}
 	v := parts[0][0]
 	if !v.IsToken() {
-		// A function such as calc() is a length this engine does not compute
-		// yet, and is correct CSS.
 		if v.IsFunction() && strings.EqualFold(v.Token.Value, "calc") {
-			return Length{}, true, false
+			// A calc() is arithmetic over lengths, and everything in it but the
+			// percentages can be settled here — the font-relative units against
+			// the context the caller supplied, the operators against each other.
+			// See calc.go.
+			//
+			// An expression that does not typecheck is not reported as
+			// unsupported: it is invalid CSS, and the declaration holding it is
+			// dropped so that the one before it stands, exactly as a browser
+			// does with any other value it cannot parse.
+			l, ok := evalCalc(v.Values, ctx)
+			return l, false, ok
 		}
 		return Length{}, false, false
 	}

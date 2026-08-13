@@ -156,7 +156,11 @@ func TestUnsupportedUnitsAreDistinguished(t *testing.T) {
 	// context carries no font metrics: it is resolvable in layout, where a face
 	// has been chosen, and unresolvable everywhere else — which is the same
 	// shape as a viewport unit before the page is known.
-	for _, input := range []string{"2ch", "1lh", "3rex", "calc(1px + 2px)"} {
+	// calc() is deliberately not in this list any more: it is computed here,
+	// so it is a length like any other and its own tests are in calc_test.go.
+	// A calc *holding* one of these units is still unresolvable, which is the
+	// case below.
+	for _, input := range []string{"2ch", "1lh", "3rex"} {
 		vals, _ := css.ParseComponentValues(input)
 		_, unsupported, ok := ParseLength(vals, ctx)
 		if ok {
@@ -167,6 +171,19 @@ func TestUnsupportedUnitsAreDistinguished(t *testing.T) {
 			t.Errorf("%q was reported as malformed, and it is correct CSS", input)
 		}
 	}
+	// A calc() is only as resolvable as what is inside it, and one holding a
+	// unit this context cannot answer is refused for that reason rather than
+	// silently dropping the term. It is reported as malformed rather than as
+	// unsupported, which is the one place calc() is coarser than a bare
+	// dimension: the expression as a whole did not come out, and which of its
+	// units was the reason is not carried back out.
+	for _, input := range []string{"calc(1px + 2ch)", "calc(2 * 1lh)"} {
+		vals, _ := css.ParseComponentValues(input)
+		if _, _, ok := ParseLength(vals, ctx); ok {
+			t.Errorf("%q was resolved without the metrics it needs", input)
+		}
+	}
+
 	// Not a length at all.
 	for _, input := range []string{"", "red", "1px 2px", "\"x\"", "1foo", "url(x)"} {
 		vals, _ := css.ParseComponentValues(input)
