@@ -701,6 +701,11 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		contentHeight = style.Max(contentHeight, own.bottom())
 	}
 	minHeight, hasMinHeight := l.verticalLength(b, "min-height", at.cbHeight, at.cbDefinite)
+	// What the content came to, before a minimum or a maximum is applied to it.
+	// Comparing the two is how the box learns that it was made taller than what
+	// is inside it, which decides whether its last child's bottom margin still
+	// reaches its bottom edge. See below.
+	contentNeeded := contentHeight
 	if b.Replaced == nil {
 		// A replaced box's height has already been through §10.4's constraint
 		// table, which resolves the two axes together to keep the picture's
@@ -716,7 +721,30 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	if topOpen {
 		out.top = out.top.merge(hoistTop)
 	}
-	if bottomOpen {
+	// §8.3.1 makes two margins adjoining only where nothing separates them, and
+	// a minimum that raised this box above its own content is something: the last
+	// child's bottom margin edge is where the content ended, and the box's bottom
+	// edge is lower down, so the two do not meet and do not collapse.
+	//
+	// The specification's list asks only for an "'auto' computed height" on this
+	// pair, and a min-height leaves the computed height auto — read to the letter
+	// the margin escapes however tall the minimum made the box. That reading is
+	// what this did, and it is wrong on the suite by a clear margin: min-height
+	// on a parent is how an author reserves a band, and a child's bottom margin
+	// escaping through it moves everything below the parent down by a distance
+	// the author put *inside* it. margin-collapse-min-height-001 is 550px of it,
+	// and the same section's sentence about a non-zero min-height stopping a
+	// child's bottom margin collapsing with its parent's says which way the rule
+	// is meant to fall, even though its own precondition is the narrower case
+	// where the parent's *top* margin is in the collapse too.
+	//
+	// Only a minimum that actually bound counts. Where the content is taller than
+	// the minimum the margin reaches the edge exactly as it did before, and where
+	// a maximum cut the box down the child is overflowing rather than being held
+	// off the edge — hence the comparison is against what the content needed and
+	// not against whether a minimum was declared.
+	raisedByMinimum := hasMinHeight && contentHeight > contentNeeded
+	if bottomOpen && !raisedByMinimum {
 		out.bottom = out.bottom.merge(hoistBottom)
 	}
 
