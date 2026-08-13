@@ -767,3 +767,76 @@ func TestHangingWhiteSpaceAndTheTwoIntrinsicWidths(t *testing.T) {
 		}
 	}
 }
+
+// TestALineDoesNotBreakInsideTheWhiteSpaceThatEndsIt is the other half of
+// §4.1.2's third and fourth rules.
+//
+// Both are written over white space "at the end of a line": the third removes
+// the collapsible part of it, the fourth hangs what remains. Neither can happen
+// to white space the line breaks *inside*, and breaking inside it is exactly
+// what a greedy fill does unprompted — the run is wider than the room left, so
+// the first opportunity in it ends the line and the rest goes to the next one.
+// What that produces is a line, or several, holding nothing but spaces, above a
+// line holding the text that followed them.
+//
+// The reftests cannot see this. The suite's fixtures for it turn on an inline
+// box's background covering the line box, and §10.6.1 sizes that background to
+// the *font's* ascent and descent — which for the standard faces is nine tenths
+// of the em and for the fonts a browser has is more than the em. So the pages
+// differ by a fraction of a pixel at the top and bottom of a stripe whatever
+// this does, and the wrapping has to be asserted directly.
+func TestALineDoesNotBreakInsideTheWhiteSpaceThatEndsIt(t *testing.T) {
+	// Four characters of room, then two of text and a run of white space far
+	// wider than what is left.
+	//
+	// The run is separators *with ordinary spaces between them*, and the spaces
+	// are the whole point. A separator hangs on its own, so a line already
+	// refuses to break at one; an ordinary space under a collapsing value does
+	// not hang — the third rule removes it, which can only happen once the line
+	// has ended — so it is an opportunity sitting in the middle of the run, and
+	// it is where the line came apart before the run was recognised as one.
+	const seps = "\u2000 \u2001 \u2002 \u2003 \u2004 \u2005"
+	narrow := func(ws string) string {
+		return noDefaults + `
+		#d { font-family: Courier; font-size: 20px; width: 48px;
+		     white-space: ` + ws + ` }`
+	}
+
+	for _, ws := range []string{"normal", "pre-line", "pre-wrap"} {
+		got := lineTextsOf(t, layoutOf(t, 1000,
+			`<div id="d">xx`+seps+`<br>xx</div>`, narrow(ws)), "d")
+		if len(got) != 2 {
+			t.Errorf("white-space:%s put the trailing separators on %d lines %q, "+
+				"want 2 — the run at the end of the line hangs, and a line may not "+
+				"be broken inside what hangs off it", ws, len(got), got)
+		}
+	}
+
+	// The same run inside an inline box with padding on it, which is how the
+	// suite writes these — the spaces go in a <span> so that they can be given a
+	// background and seen. A span's own padding, border and margin are items on
+	// the line in their own right, and if one of them ended the run then the
+	// half in front of it would be breakable again.
+	{
+		got := lineTextsOf(t, layoutOf(t, 1000,
+			`<div id="d">xx<span style="padding: 0 2px">`+seps+`</span><br>xx</div>`,
+			narrow("normal")), "d")
+		if len(got) != 2 {
+			t.Errorf("a hanging run inside a padded span went onto %d lines %q, "+
+				"want 2 — the box's own padding is not content and does not cut "+
+				"the run in two", len(got), got)
+		}
+	}
+
+	// break-spaces is the value that says otherwise, and it is the reason this
+	// is a rule about hanging rather than a rule about white space. Its spaces
+	// are data: they take room, they overflow, and §3 puts an opportunity after
+	// every one of them — so a line may end inside a run of them and must.
+	got := lineTextsOf(t, layoutOf(t, 1000,
+		`<div id="d">xx        <br>xx</div>`, narrow("break-spaces")), "d")
+	if len(got) < 3 {
+		t.Errorf("white-space:break-spaces kept eight trailing spaces on %d lines "+
+			"%q, want more than 2 — its spaces do not hang, so the line breaks "+
+			"among them", len(got), got)
+	}
+}

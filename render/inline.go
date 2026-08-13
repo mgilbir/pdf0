@@ -2380,6 +2380,33 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 	// Progress is guaranteed because the marker is only set once the line holds
 	// content, so it is always past the item the line started at.
 	oppAt, oppLine, oppFlow := -1, 0, 0
+	// Where the white space that ends this line begins.
+	//
+	// §4.1.2's third and fourth rules are both about white space "at the end of a
+	// line": the collapsible part of it is removed and what remains hangs. Neither
+	// can happen to white space the line breaks *inside*, and breaking inside it
+	// is what a greedy fill does on its own — the run is wider than the room left,
+	// so the first opportunity in it ends the line and the rest goes to the next
+	// one. What that produces is a line of nothing but spaces, which is precisely
+	// the thing the two rules exist to prevent.
+	//
+	// So the run is found before the fill starts and the fill is told not to break
+	// in it. It reaches from the last item that is not white space to the end of
+	// the line's material — the next forced break, or the last item there is — and
+	// an inline box's own inset is passed over rather than ending it, since a
+	// margin is not content and a span wrapped around the spaces must not make
+	// them breakable again.
+	end := len(items)
+	for k := from; k < len(items); k++ {
+		if items[k].forced {
+			end = k
+			break
+		}
+	}
+	tailFrom := end
+	for tailFrom > from && isLineTailSpace(items[tailFrom-1]) {
+		tailFrom--
+	}
 	i := from
 	for ; i < len(items); i++ {
 		item := items[i]
@@ -2453,7 +2480,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// rather than moving to the next one. Without this, "XX    XX" under
 		// pre-wrap would push the second word down a line for spaces that take
 		// no room on the page at all.
-		if !item.noWrap && !item.hangs && item.breakBefore &&
+		if !item.noWrap && !item.hangs && i < tailFrom && item.breakBefore &&
 			len(line) > 0 && used.Add(item.width) > width {
 			return trimLineEdge(line), i, 0, outOfFlow, false
 		}
@@ -2462,7 +2489,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// but an inline box opened just before it did, and the pair is what does
 		// not fit — so the line ends where the box began and the box's leading
 		// margin goes with it.
-		if !item.noWrap && !item.hangs && !item.breakBefore && !item.inset &&
+		if !item.noWrap && !item.hangs && i < tailFrom && !item.breakBefore && !item.inset &&
 			insetAt >= 0 && used.Add(item.width) > width {
 			return trimLineEdge(line[:insetLine]), insetAt, 0, outOfFlow[:insetFlow], false
 		}
@@ -2487,7 +2514,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// text alone moves nothing on the suite either way and fixes the case
 		// above, which makes it a strict improvement rather than a trade.
 		if (item.space || item.atomicBox == nil) && !item.collapsible &&
-			!item.hangs && !item.noWrap && !item.inset &&
+			!item.hangs && i < tailFrom && !item.noWrap && !item.inset &&
 			!item.breakBefore && oppAt >= 0 && used.Add(item.width) > width {
 			return trimLineEdge(line[:oppLine]), oppAt, 0, outOfFlow[:oppFlow], false
 		}
@@ -2523,7 +2550,7 @@ func (l *layouter) breakOneLine(items []inlineItem, from, fromByte int, width, l
 		// document in the suite reaches it: zero hits over all 5177 reftests.
 		// Dropping the conjunct therefore moves nothing, which is why it is
 		// recorded here rather than left as an implied claim.
-		if item.breakWord && !item.noWrap && !item.hangs && !item.inset && !item.tab &&
+		if item.breakWord && !item.noWrap && !item.hangs && i < tailFrom && !item.inset && !item.tab &&
 			insetAt < 0 && oppAt < 0 && used.Add(item.width) > width {
 			// The offset is into items[i]. It is only the cursor's offset away
 			// from that when this *is* the item the cursor pointed at: a line
@@ -2662,6 +2689,26 @@ func trimLineEdge(line []inlineItem) []inlineItem {
 		}
 	}
 	return out
+}
+
+// isLineTailSpace reports whether an item can be part of the white space that
+// ends a line: the space itself, an inline box's own inset, and a box that is
+// out of flow.
+//
+// The last two are there so that a span wrapped around the spaces, or an
+// absolutely positioned box written among them, does not break the run in two
+// and make the half before it breakable again. Neither is content — §4.1.2's
+// rules are about the text — and neither takes the line anywhere.
+func isLineTailSpace(item inlineItem) bool {
+	if item.inset || item.abs != nil {
+		return true
+	}
+	// White space that the end of a line does something to: the third rule
+	// removes it, or the fourth hangs it. break-spaces is the value where
+	// neither happens — its spaces are data, they take room, and §3 puts an
+	// opportunity after every one of them — so a line may end inside a run of
+	// them and this must not say otherwise.
+	return item.space && (item.hangs || item.trimAtEnd)
 }
 
 // lineHeight resolves the line-height property.
