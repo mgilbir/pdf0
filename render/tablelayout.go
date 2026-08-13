@@ -493,6 +493,14 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 			out[i].max = style.Max(out[i].max, length.Value)
 		case style.LengthPercent:
 			out[i].percent = max(out[i].percent, length.Percent)
+		case style.LengthCalc:
+			// Both halves, each to the demand that can hold it. The column has
+			// nowhere to resolve the percentage against — it is the thing being
+			// decided — so the two travel separately exactly as they would from
+			// two declarations.
+			out[i].min = style.Max(out[i].min, length.Value)
+			out[i].max = style.Max(out[i].max, length.Value)
+			out[i].percent = max(out[i].percent, length.Percent)
 		}
 	}
 
@@ -575,6 +583,13 @@ func (l *layouter) cellDemand(cell *Box) (min, max style.Unit, percent float64) 
 			inner.min = style.Max(inner.min, length.Value)
 			inner.max = inner.min
 		case style.LengthPercent:
+			percent = length.Percent
+		case style.LengthCalc:
+			// See the column's own case above: the two halves go their separate
+			// ways, because the column is what the percentage would resolve
+			// against.
+			inner.min = style.Max(inner.min, length.Value)
+			inner.max = inner.min
 			percent = length.Percent
 		}
 	}

@@ -756,3 +756,32 @@ func TestABoxOfOnlyWhiteSpaceCollapsesThrough(t *testing.T) {
 			"line box", got)
 	}
 }
+
+// TestCalcReachesLayout is calc() as a width rather than as a parse.
+//
+// The point of the two-part length is here: "calc(50% - 10px)" cannot be a
+// number until the containing block is one, and it must not be dropped to its
+// absolute half in the meantime. A box that took the percentage and forgot the
+// subtraction is ten pixels too wide, which is exactly the kind of wrong that
+// looks like a rounding error.
+func TestCalcReachesLayout(t *testing.T) {
+	root := layoutOf(t, 1000,
+		`<div id="k"><div id="a"></div><div id="b"></div><div id="c"></div></div>`,
+		noDefaults+`
+		#k { width: 200px }
+		#a { width: calc(50% - 10px); height: 5px }
+		#b { width: calc(20px + 30px); height: 5px }
+		#c { width: calc(100% / 4); height: 5px }`)
+	for _, tc := range []struct {
+		id   string
+		want float64
+	}{
+		{"a", 90}, // half of 200, less ten
+		{"b", 50}, // no percentage in it at all
+		{"c", 50}, // a percentage divided by a number is a percentage
+	} {
+		if got := find(t, root, tc.id).BorderRect.W.Px(); got != tc.want {
+			t.Errorf("#%s is %gpx wide, want %g", tc.id, got, tc.want)
+		}
+	}
+}

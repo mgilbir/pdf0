@@ -871,9 +871,15 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// shows the letter two characters right of where every browser puts
 				// it, and the same document without the spaces is correct, so the
 				// fault reads as an alignment bug rather than a white-space one.
+				// What the line's own content may occupy. The clamp's mark sits
+				// at the end of it, so on that line it is the line less the mark
+				// — both for the hang below and for the alignment further down,
+				// since the mark is where the line ends and alignment is about
+				// where the content ends.
+				avail := textWidth.Sub(lineEllipsis)
 				used := alignedWidth(runs, total)
 				if forced || next >= len(items) {
-					used = style.Max(used, style.Min(total, textWidth))
+					used = style.Max(used, style.Min(total, avail))
 				}
 				// Which *side* it hangs off, which is not a second way of saying how
 				// much. §4.1.2 hangs the white space past the line's end, and the
@@ -889,7 +895,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
 				rtl := lineBaseIsRTL(b, runs)
-				shift := lineIndent.Add(l.alignLine(b, rtl, textWidth, used))
+				shift := lineIndent.Add(l.alignLine(b, rtl, avail, used))
 				if rtl {
 					shift = shift.Sub(total.Sub(used))
 				}
