@@ -473,6 +473,22 @@ func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
 	// it turns every auto-width table beside a float into one that drops below
 	// it, which is what an earlier draft of this did.
 	declared, hasWidth := l.explicitWidth(b, containing)
+	if !hasWidth && b.TableWrapper {
+		// A table arrives here as §17.4's wrapper, which is anonymous and so has
+		// no width of its own; the declaration is on the table inside it. When
+		// that declaration is a length the wrapper's minimum carries it — a table
+		// is at least as wide as its declared width — and the floor below is
+		// enough. A percentage cannot travel that way: tableContentWidths leaves
+		// it out on purpose, because resolving it needs a containing block and
+		// the containing block is the box being measured.
+		//
+		// So it is resolved here, against the containing block and not against
+		// the band, which is what §17.5.2 says it is a percentage of. Without it
+		// a "width: 50%" table beside a float was a box with no width to keep: it
+		// narrowed to nothing in particular, took its fifty per cent anyway, and
+		// ended up half over the float and half out of the cell it was in.
+		declared, hasWidth = l.wrapperWidthForPercentTable(b, containing)
+	}
 	if hasWidth {
 		declared = l.clampWidth(b, declared, containing)
 	}
