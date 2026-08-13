@@ -188,6 +188,58 @@ func TestTableAnonymousObjects(t *testing.T) {
           text "c"
   text "y"
 `,
+	}, {
+		// §17.2.1 throws white space away for what is *around* it, and an
+		// engine that looked only at the parent got this one backwards. The
+		// space before <span>bc</span> has table structure on one side and an
+		// inline box on the other, so the rule does not reach it — and the
+		// missing-child rule then sweeps space, span and space into a single
+		// anonymous cell, which is what makes the row read "a bc d" rather than
+		// "abcd" with the words run together.
+		name: "white space beside an inline is kept and joins its cell",
+		html: `<span style="display:table-row">` +
+			`<span style="display:table-cell">a</span> <span>bc</span> ` +
+			`<span style="display:table-cell">d</span></span>`,
+		want: `anonymous block/flow-root
+  anonymous block/table
+    span block/table-row
+      span block/table-cell
+        text "a"
+      anonymous block/table-cell
+        text " "
+        span inline
+          text "bc"
+        text " "
+      span block/table-cell
+        text "d"
+`,
+	}, {
+		// The other side of the same rule, and the reason the neighbours are
+		// checked rather than assumed: white space with structure on both sides
+		// still goes, which is every hand-written table in existence.
+		name: "white space between two cells is still dropped",
+		html: `<span style="display:table-row">` +
+			`<span style="display:table-cell">a</span> ` +
+			`<span style="display:table-cell">d</span></span>`,
+		want: `anonymous block/flow-root
+  anonymous block/table
+    span block/table-row
+      span block/table-cell
+        text "a"
+      span block/table-cell
+        text "d"
+`,
+	}, {
+		// The one place a missing neighbour is no objection. §17.2.1 qualifies
+		// the container rule with "if any", so a row holding nothing but the
+		// newline between its own tags is a row with no cells — not a row with
+		// one empty one, which is what every browser produces too.
+		name: "white space alone in a row generates no cell",
+		html: "<table><tr>\n</tr></table>",
+		want: `anonymous block/flow-root
+  table block/table
+    tr block/table-row
+`,
 	}}
 
 	for _, tc := range cases {
