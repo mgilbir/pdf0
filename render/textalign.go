@@ -79,33 +79,61 @@ func alignmentOf(b *Box, rtl bool) textAlign {
 // moving it would push it off the other edge as well.
 func (l *layouter) alignLine(b *Box, rtl bool, lineWidth, used style.Unit) style.Unit {
 	slack := lineWidth.Sub(used)
-	if slack <= 0 {
-		// A line with nothing left over is a line justification would not have
-		// moved, so there is nothing to report about it either: an engine that
-		// does not justify sets such a line exactly where a conforming one
-		// would. That is why the report below is inside the slack test and not
-		// before it, and it is worth saying because the ordering has a visible
-		// consequence — a paragraph whose every line comes out full is a
-		// paragraph this engine renders correctly with "text-align: justify" on
-		// it, and it counts as a clean pass in the reftest ratchet on purpose.
-		return 0
-	}
-	switch alignmentOf(b, rtl) {
-	case alignRight:
-		return slack
-	case alignCenter:
-		// Half the slack, in layout units rather than pixels, so a line with an
-		// odd number of units left over is not rounded twice.
-		return slack.Div(2)
-	case alignJustify:
+	align := alignmentOf(b, rtl)
+	if slack > 0 && align == alignJustify {
 		// Justification stretches the spaces of every line but the last, which
 		// needs the break opportunities inside the line and a decision about
 		// what to do with a line that has none. Neither is here, so the line is
 		// left where "start" would put it and the difference is reported —
 		// silently setting justified text ragged is the kind of wrong page that
 		// looks deliberate.
+		//
+		// A line with nothing left over is a line justification would not have
+		// moved, so there is nothing to report about it either: an engine that
+		// does not justify sets such a line exactly where a conforming one
+		// would. That is why the report is inside the slack test, and it is
+		// worth saying because the ordering has a visible consequence — a
+		// paragraph whose every line comes out full is a paragraph this engine
+		// renders correctly with "text-align: justify" on it, and it counts as a
+		// clean pass in the reftest ratchet on purpose.
 		l.reportJustify(b)
-		return 0
+	}
+	switch align {
+	case alignRight:
+		// The slack may be negative, and then this is the whole of what the
+		// alignment does. §16.2 aligns the line box inside the block, and a line
+		// too long to fit is still aligned: its right edge stays at the block's
+		// right edge and what does not fit hangs off the left. Returning zero
+		// for a negative slack — which is what "no room to distribute" reads
+		// like — sets such a line flush *left* instead, so it overflows the way
+		// a left-aligned one would and the two alignments become the same
+		// declaration for exactly the text that most needs them apart.
+		if slack < 0 && overflowIsScrollable(b.Style) {
+			// Except where the overflow can be scrolled to, and then it cannot:
+			// what goes off the *start* edge of a scrollable box is unreachable,
+			// because scrolling only ever reaches the other way. The suite says
+			// so in the assert of trailing-space-and-text-alignment-002 —
+			// preserved spaces under "pre" do not hang, so they "may cause
+			// overflow and activate the scrollbars" — and a right-aligned
+			// textarea that pushed its own text off the left would be a box
+			// whose content no reader could get to.
+			return 0
+		}
+		return slack
+	case alignCenter:
+		if slack <= 0 {
+			// Centring a line that does not fit would push it off the *start*
+			// edge as well, and what goes off that edge is unreachable rather
+			// than merely outside — there is no scrolling back to it on a page.
+			// So an overfull centred line is left where it starts and overflows
+			// one way, which is what TestTextAlignDoesNotMoveAnOverfullLine
+			// pins and what the suite's trailing-space-and-text-alignment pairs
+			// agree with.
+			return 0
+		}
+		// Half the slack, in layout units rather than pixels, so a line with an
+		// odd number of units left over is not rounded twice.
+		return slack.Div(2)
 	}
 	return 0
 }

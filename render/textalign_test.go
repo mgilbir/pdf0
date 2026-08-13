@@ -243,3 +243,53 @@ func TestTextAlignJustifyIsReported(t *testing.T) {
 		t.Errorf("the justification gap was reported %d times; once per box is enough", found)
 	}
 }
+
+// TestARightAlignedLineTooLongHangsOffTheStart is §16.2 applied to a line that
+// does not fit.
+//
+// Alignment places the line box inside the block, and a line wider than the
+// block is still placed: its right edge stays at the block's right edge and
+// what does not fit hangs off the left. Reading "no room to distribute" as "do
+// not move it" sets such a line flush left instead — so it overflows the way a
+// left-aligned one would, and the two alignments become the same declaration
+// for exactly the text that most needs them apart.
+//
+// It is a right-to-left box here because that is how the suite reaches it:
+// direction alone makes "start" mean right, and an absolutely positioned box
+// whose width shrinks to fit is then narrower than a child that a max-width
+// has cut — absolute-non-replaced-width-021 to -024.
+func TestARightAlignedLineTooLongHangsOffTheStart(t *testing.T) {
+	const css = `#p { font-family: Courier; font-size: 20px; width: 40px;
+	              white-space: nowrap; %s }`
+	// Courier is 600/1000, so a character at 20px is 12 wide and six of them
+	// are 72 in 40 of room: the line is 32 too long, and aligning its right edge
+	// with the block's puts it at -32.
+	for _, c := range []struct {
+		what, decl string
+		want       float64
+	}{
+		{"text-align: right", `text-align: right`, -32},
+		{"direction: rtl", `direction: rtl`, -32},
+		// Centring is the exception and stays put: half of it would go off the
+		// start edge, which on a page is unreachable rather than merely outside.
+		{"text-align: center", `text-align: center`, 0},
+		{"text-align: left", `text-align: left`, 0},
+	} {
+		root := layoutOf(t, 600, `<div id="p">abcdef</div>`,
+			strings.Replace(css, "%s", c.decl, 1))
+		if got := lineX(t, root, "p"); got != c.want {
+			t.Errorf("with %s an overfull line is at %gpx, want %g",
+				c.what, got, c.want)
+		}
+	}
+
+	// And a box whose overflow can be scrolled keeps its content reachable:
+	// what goes off the start edge cannot be scrolled back to, so the line is
+	// left where it begins however it is aligned.
+	root := layoutOf(t, 600, `<div id="p">abcdef</div>`,
+		strings.Replace(css, "%s", `text-align: right; overflow: auto`, 1))
+	if got := lineX(t, root, "p"); got != 0 {
+		t.Errorf("an overfull right-aligned line in a scrollable box is at %gpx, "+
+			"want 0 — what goes off the start edge could never be scrolled to", got)
+	}
+}
