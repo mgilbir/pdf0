@@ -250,9 +250,17 @@ func (p *parser) startTag(tk token) {
 		// ordinary elements, so a browser reads this as an open <div> and every
 		// following element ends up inside it — a shape that looks like a
 		// typo's worth of markup and moves half the page.
+		//
+		// It is reported and then parsed that way, which is what the tree
+		// construction stage says to do: the flag on a non-void element is a
+		// parse error and is left unacknowledged, so the element is opened as
+		// though the slash were not there. The document is still refused — see
+		// TestSelfClosingNonVoidIsRefused — and this is about what a caller that
+		// renders it anyway is given. Dropping the element was a worse answer
+		// than either reading of the markup: XHTML says it is an empty div, HTML
+		// says it is an open one, and *neither* says it is nothing at all.
 		p.tok.fail(tk.offset, "<"+name+"/> is not an empty element; HTML has no "+
-			"self-closing syntax outside void elements, so a browser reads this as <"+name+">")
-		return
+			"self-closing syntax outside void elements, so it is read as <"+name+">")
 	}
 
 	// The optional end tags of HTML: an incoming start tag can close what is

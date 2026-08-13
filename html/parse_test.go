@@ -812,3 +812,41 @@ func TestWellFormedDocumentIsQuiet(t *testing.T) {
 		t.Errorf("the link is %q", v)
 	}
 }
+
+// TestSelfClosingNonVoidStillMakesTheElement is the other half of refusing it.
+//
+// The document is rejected — TestSelfClosingNonVoidIsRefused says so — and a
+// caller that renders it anyway has to be given something. HTML's tree
+// construction says what: the self-closing flag on a non-void element is a
+// parse error and is left unacknowledged, so the element is opened exactly as
+// though the slash were not written.
+//
+// Dropping it instead was worse than either reading of the markup. XHTML says
+// "<div/>" is an empty div and HTML says it is an open one; neither says it is
+// nothing at all, and a renderer that silently loses an element loses whatever
+// was styled onto it too.
+func TestSelfClosingNonVoidStillMakesTheElement(t *testing.T) {
+	doc, _, _ := Parse(`<body><div id="a"/><div id="b"/></body>`)
+	if doc == nil {
+		t.Fatal("no tree at all")
+	}
+	var ids []string
+	var walk func(*Node)
+	walk = func(n *Node) {
+		if n.Type == ElementNode && n.Name == "div" {
+			id, _ := n.Attr("id")
+			ids = append(ids, id)
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(doc)
+	if len(ids) != 2 {
+		t.Fatalf("the tree has %d divs %v, want 2 — a refused document still has "+
+			"to describe what it was refused for", len(ids), ids)
+	}
+	if ids[0] != "a" || ids[1] != "b" {
+		t.Errorf("the divs are %v, want [a b]", ids)
+	}
+}
