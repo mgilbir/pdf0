@@ -659,10 +659,20 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 				kept = append(kept, v)
 				continue
 			}
-			if c.hides(ink) {
+			if c.hides(textInkReserved(v)) {
 				// Every glyph is outside the clip. This is the case the whole
 				// feature exists for and the only one that can be settled
 				// exactly without cutting a letter in half.
+				//
+				// Asked of a *wider* rectangle than the clip question below,
+				// because the two want to be wrong in opposite directions. This
+				// one throws the run away, so being wrong here loses text off
+				// the page and nothing downstream can put it back; it is asked
+				// of every pixel the face could reach. The one below only
+				// records that a clip cuts the run, so being wrong there costs
+				// nothing on paper — but it does make this run a different mark
+				// from the same run drawn whole, so it is asked of where the
+				// letters actually sit.
 				continue
 			}
 			if !c.admits(ink) {
@@ -677,14 +687,18 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 	return kept
 }
 
-// textInk is the area a run of text may put ink in.
+// textInk is where a run of text puts ink, as far as anything short of a glyph
+// rasteriser can say.
 //
-// The face's declared ascent and descent rather than a measured outline: this
-// engine has no glyph rasteriser, and the same two numbers are what inline
-// layout gave the run's line box, so a run is bounded here by exactly the
-// rectangle layout reserved for it. A face that states neither falls back to a
-// generous em above the baseline and a third of one below, which errs towards
-// keeping a run that is only just visible rather than dropping one that is.
+// The face's declared ascent and descent: the top of a "d" and the bottom of a
+// "p", which is where letters sit. It is the rectangle for every question about
+// what a reader can *see* — whether a run is cut, whether it is buried under
+// something opaque — because those questions must not be answered yes about a
+// run nobody sees cut or hidden.
+//
+// It is deliberately not the rectangle for the question of whether to keep a run
+// at all; textInkReserved is, and says why. A face that declares neither number
+// falls back to a generous em above the baseline and a third of one below.
 func textInk(v DrawText) Rect {
 	above, below := v.Size, v.Size.Mul(0.3)
 	if v.Face != nil {
@@ -694,6 +708,36 @@ func textInk(v DrawText) Rect {
 			below = v.Size.Mul(-float64(d.Descent) / upem)
 		}
 	}
+	return textInkAt(v, above, below)
+}
+
+// textInkReserved is every pixel the run could reach: the box inline layout set
+// aside for it.
+//
+// The same extents lineMetrics gives the line box — the face's line gap when it
+// declares one, and the box enclosing all its glyphs when it does not — so a run
+// is bounded here by exactly the rectangle layout reserved, which is the promise
+// textInk used to make and had stopped keeping once layout moved to the glyph
+// box for gap-less faces.
+//
+// It is wider than textInk for such a face, since the glyph box has to hold an
+// accented capital and a bracket that ordinary text never reaches. That width is
+// the point: this answers the one question whose wrong answer is unrecoverable,
+// which is whether to drop the run from the page.
+func textInkReserved(v DrawText) Rect {
+	above, below := v.Size, v.Size.Mul(0.3)
+	if v.Face != nil {
+		if top, bottom, upem, ok := lineMetrics(v.Face); ok {
+			above = v.Size.Mul(top / upem)
+			below = v.Size.Mul(-bottom / upem)
+		}
+	}
+	return textInkAt(v, above, below)
+}
+
+// textInkAt is the rectangle both of them return, given how far the run's ink
+// reaches above and below its baseline.
+func textInkAt(v DrawText, above, below style.Unit) Rect {
 	var width style.Unit
 	if v.Face != nil {
 		w, _ := style.FromPx(v.Face.Measure(v.Text, v.Size.Px()))

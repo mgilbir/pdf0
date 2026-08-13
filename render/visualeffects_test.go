@@ -885,3 +885,52 @@ func TestAFacelessRunSurvivesAClip(t *testing.T) {
 		t.Errorf("a run with no face was given a clip: %v", v.Clip)
 	}
 }
+
+// TestATextRunIsKeptWhenOnlyItsReservedBoxReachesTheClip is the seam between
+// the two rectangles §11.1 asks about, and the one a run can fall through.
+//
+// A run is discarded outright when no part of it is inside the clip, so the
+// rectangle that question is asked of decides whether text stays on the page.
+// It has to be the one inline layout reserved — and for a face that declares no
+// line gap that is the box around all its glyphs, which reaches higher than the
+// face's ascent. Asking the ascent instead loses a run whose line box is inside
+// the clip while its letters are not: nothing downstream can put it back, and
+// the page simply comes out missing a word.
+//
+// The second half is what gives the test teeth. It requires the case to still
+// be the discriminating one — the run outside the clip by the ascent and inside
+// it by the reserved box — so a face whose numbers moved until the two agree
+// makes this fail rather than quietly pass on a case that proves nothing.
+func TestATextRunIsKeptWhenOnlyItsReservedBoxReachesTheClip(t *testing.T) {
+	const clipBottom = 210
+
+	ops := paintOf(t,
+		`<div id="outer"><div id="a"></div><div id="b">peek</div></div>`,
+		noDefaults+`
+		#outer { width: 400px; height: 210px; overflow: hidden }
+		#a { height: 200px }
+		#b { font-size: 100px }`)
+
+	var run *DrawText
+	for i := range ops {
+		if v, ok := ops[i].(DrawText); ok && v.Text == "peek" {
+			run = &v
+		}
+	}
+	if run == nil {
+		t.Fatalf("a run whose line box is inside the clip was dropped\n%s",
+			sketchClips(ops))
+	}
+
+	seen, reserved := textInk(*run), textInkReserved(*run)
+	if seen.Y.Px() < clipBottom {
+		t.Fatalf("the run's letters start at y=%g, above the %dpx clip edge — "+
+			"this no longer tests the case it was written for",
+			seen.Y.Px(), clipBottom)
+	}
+	if reserved.Y.Px() >= clipBottom {
+		t.Fatalf("the run's reserved box starts at y=%g, below the %dpx clip "+
+			"edge — the run is outside the clip either way and this proves nothing",
+			reserved.Y.Px(), clipBottom)
+	}
+}
