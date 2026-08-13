@@ -146,14 +146,27 @@ func TestTableWidthAttributeIsAHint(t *testing.T) {
 	}
 }
 
-// TestTableHeightAttributeIsNotAHint records a deliberate absence.
+// TestTableHeightAttributeIsAHint replaces a test that asserted the opposite.
 //
-// HTML maps no height attribute on <table>. Browsers honour one as a legacy and
-// this engine does not, because a hint the specification does not describe is a
-// number with nothing to check it against.
-func TestTableHeightAttributeIsNotAHint(t *testing.T) {
-	got := computed(t, `<table id="t" height="300"><tr><td>x</td></tr></table>`)
-	if h := got["t"]["height"]; h != "auto" {
-		t.Errorf("<table height=300> set height to %q, want auto", h)
+// It recorded <table height> as a deliberate absence, on the reasoning that the
+// standard describes no such mapping and browsers honour it only as a legacy.
+// That reasoning was wrong about the standard — the attribute is in the same
+// list as width, mapped the same way — and the suite says so without the prose:
+// the reference for floats-wrap-bfc-005 draws with "height: 20px" on a div what
+// the test writes as <table height="20">.
+func TestTableHeightAttributeIsAHint(t *testing.T) {
+	cases := map[string]string{
+		"300": "300px",
+		"50%": "50%",
+		// The same refusals width takes: a dimension value is digits and an
+		// optional per-cent sign, and anything else is not one.
+		"300px": "auto",
+		"-1":    "auto",
+	}
+	for value, want := range cases {
+		got := computed(t, `<table id="t" height="`+value+`"><tr><td>x</td></tr></table>`)
+		if h := got["t"]["height"]; h != want {
+			t.Errorf("<table height=%q> gave height %q, want %q", value, h, want)
+		}
 	}
 }
