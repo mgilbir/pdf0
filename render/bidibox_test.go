@@ -722,3 +722,69 @@ func TestOnlyTheEndPiecesOfASplitBoxAreDecorated(t *testing.T) {
 			got.Left.Px(), got.Right.Px())
 	}
 }
+
+// TestAnInvisibleCharacterIsNotAnEndOfTheBox is the rule that keeps §8.6's
+// "generated boxes" about boxes that generate something.
+//
+// A bidi control draws nothing and belongs to whichever element the author wrote
+// it in. Under an override it can be reordered to the far end of the line from
+// the words of its own span — and then it stood for the span's edge twice over:
+// it cut the span's run in two, so the border was painted in pieces with a seam,
+// and it stretched the span's extent, so the inset was reserved away from the
+// words it belongs to with someone else's text in between.
+//
+// The suite's bidi-011 is a <span> holding an override whose matching pop is
+// written after it, which puts exactly that character exactly there.
+func TestAnInvisibleCharacterIsNotAnEndOfTheBox(t *testing.T) {
+	// "TE" then a span holding an override and four letters, then a pop and two
+	// more letters. The override reverses the span's letters and reaches past
+	// its end, so the two letters after it land between the span's control and
+	// the span's words.
+	root := layoutOf(t, 4000,
+		`<div id="k">TE<span id="s">&#x202E;TSET</span>&#x202D;ST</div>`,
+		noDefaults+mono+`#s { border: 10px solid }`)
+	k := find(t, root, "k")
+	if len(k.Lines) != 1 {
+		t.Fatalf("%d lines, want 1", len(k.Lines))
+	}
+	var pieces []*Fragment
+	for _, f := range k.Lines[0].Boxes {
+		if f.Box == nil || f.Box.Element == nil {
+			continue
+		}
+		if id, _ := f.Box.Element.Attr("id"); id == "s" {
+			pieces = append(pieces, f)
+		}
+	}
+	if len(pieces) != 1 {
+		t.Fatalf("the span generated %d boxes, want 1 — the only thing between "+
+			"its words and its own control draws nothing", len(pieces))
+	}
+	// And the border encloses the span's letters rather than reaching back past
+	// the text that sits between them and the control.
+	frag := pieces[0]
+	lo := frag.BorderRect.X.Add(frag.Border.Left)
+	hi := frag.BorderRect.X.Add(frag.BorderRect.W).Sub(frag.Border.Right)
+	for _, r := range k.Lines[0].Runs {
+		if r.Text != "TSET" {
+			continue
+		}
+		x := k.Lines[0].Rect.X.Add(r.X)
+		if x < lo || x.Add(r.Width) > hi {
+			t.Errorf("the span's letters run %g..%g and its own box holds "+
+				"%g..%g", x.Px(), x.Add(r.Width).Px(), lo.Px(), hi.Px())
+		}
+	}
+	// The letters that are not the span's are outside it.
+	for _, r := range k.Lines[0].Runs {
+		if r.Text != "ST" {
+			continue
+		}
+		x := k.Lines[0].Rect.X.Add(r.X)
+		if x >= lo && x < hi {
+			t.Errorf("%q at %g is inside the span's box %g..%g; the span's "+
+				"extent was stretched by a character that draws nothing",
+				r.Text, x.Px(), lo.Px(), hi.Px())
+		}
+	}
+}

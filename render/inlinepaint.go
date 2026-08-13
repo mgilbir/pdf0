@@ -140,6 +140,16 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs []style.Unit,
 	// the other box's words.
 	order := make([]int, 0, len(items))
 	for k := range items {
+		// An item with no width puts no ink anywhere, so it cannot come between
+		// two pieces of a box and make them two. A bidi control the shaper drops
+		// is such an item, and it belongs to whichever box the author wrote it
+		// in — so one written *outside* a span, between two of that span's own
+		// items, cut the span into pieces that then drew a border apiece.
+		// bidi-011 is a <span> holding an override with the matching pop after
+		// it, and it came out as three boxes with two seams.
+		if items[k].width == 0 {
+			continue
+		}
 		order = append(order, k)
 	}
 	sort.SliceStable(order, func(a, b int) bool { return xs[order[a]] < xs[order[b]] })

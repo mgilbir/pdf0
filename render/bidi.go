@@ -548,7 +548,13 @@ func (l *layouter) placeInsetsBySide(runs []inlineItem, order []int) []int {
 		// right: an outer border encloses an inner margin.
 		lo, hi := -1, -1
 		for i, k := range rest {
-			if !itemInside(runs[k], b) {
+			if !itemInside(runs[k], b) || runs[k].width == 0 {
+				// An item with no width draws nothing, so it is not one of the
+				// boxes §8.6 puts an inset at the end of — and letting one stand
+				// for the box's edge strands the inset away from the words. A
+				// bidi control the author wrote inside a span is such an item,
+				// and bidi-011 has one at the far end of the line from the span
+				// it belongs to.
 				continue
 			}
 			if lo < 0 {
