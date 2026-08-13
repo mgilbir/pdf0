@@ -803,7 +803,23 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// Inline content: lines of text, which have a height of their own. An
 		// inside marker is inline content of the item's own, which is why it can
 		// answer here for a box that has no inline child — or no child at all.
-		return l.inlineContent(b, parent, width, origin), marginRun{}, marginRun{}, true
+		h := l.inlineContent(b, parent, width, origin)
+		// Whether anything was placed is whether a *line* came of it, and not
+		// whether there were inline children to try. §8.3.1's self-collapsing
+		// box "does not contain a line box", and a box holding nothing but
+		// collapsible white space contains none: the space is removed at both
+		// edges of the line it would have been on, and no line is made.
+		//
+		// Answering "yes, there were children" instead is the difference between
+		// <div><span style="position:absolute"></span></div> written on one line
+		// and the same thing written on three. The markup in a document is
+		// indented, so the second is what documents actually contain — and it
+		// stopped the box collapsing through, which moved everything after it
+		// down by the margin that should have collapsed away. The suite has four
+		// of them in margin-collapse-113 to -116, where a box holding one
+		// absolutely positioned or floated child is written across lines and the
+		// bands below it come out an em low.
+		return h, marginRun{}, marginRun{}, len(parent.Lines) > 0
 	}
 
 	var y style.Unit

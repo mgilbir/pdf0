@@ -653,3 +653,106 @@ func TestAMinimumHeightHoldsTheLastChildsMarginInside(t *testing.T) {
 			"want 30 and 580", h, y)
 	}
 }
+
+// TestABoxOfOnlyWhiteSpaceCollapsesThrough is §8.3.1's self-collapsing box, and
+// the half of its definition that is about what a box *contains* rather than
+// about the properties set on it.
+//
+// The condition is that the box "does not contain a line box". A box holding
+// nothing but collapsible white space contains none — the space is removed at
+// both edges of the line it would have been on, and no line is made — so its
+// margins meet each other and collapse through it.
+//
+// Reading the condition as "was given inline children" instead is the difference
+// between a box written on one line and the same box written on three, because
+// the markup in a real document is indented:
+//
+//	<div class="b"><span style="position: absolute"></span></div>
+//
+//	<div class="b">
+//	  <span style="position: absolute"></span>
+//	</div>
+//
+// The second is what documents contain, and it stopped the box collapsing —
+// moving everything after it down by a margin that should have disappeared.
+func TestABoxOfOnlyWhiteSpaceCollapsesThrough(t *testing.T) {
+	const css = noDefaults + `
+	#k { font-size: 50px; width: 50px }
+	#a { margin-bottom: 1em; height: 1em }
+	#b { margin-top: 2em; position: relative }
+	#c { margin-top: 3em; height: 1em }
+	.d { height: 1em; width: 100% }`
+	at := func(t *testing.T, inner string) (bTop, cTop float64, bLines int) {
+		t.Helper()
+		root := layoutOf(t, 1000,
+			`<div id="k"><div id="a"></div><div id="b">`+inner+`</div><div id="c"></div></div>`,
+			css)
+		k := find(t, root, "k")
+		b := find(t, root, "b")
+		return relY(t, b, k).Px(), relY(t, find(t, root, "c"), k).Px(), len(b.Lines)
+	}
+
+	// One em of content, then margins of 1, 2 and 3 ems meeting each other: the
+	// collapsed run is the largest of them, so #c sits at 1em + 3em = 200. #b is
+	// placed by its own top margin alone, at 1em + 2em = 150, which is where an
+	// out-of-flow child of it belongs.
+	for _, c := range []struct{ name, inner string }{
+		{"nothing at all", ``},
+		{"white space only", "\n      "},
+		{"an absolutely positioned child", `<div class="d" style="position:absolute"></div>`},
+		{"the same, written across lines",
+			"\n      " + `<div class="d" style="position:absolute"></div>` + "\n    "},
+		{"a floated child, written across lines",
+			"\n      " + `<div class="d" style="float:left"></div>` + "\n    "},
+	} {
+		bTop, cTop, lines := at(t, c.inner)
+		if lines != 0 {
+			t.Errorf("%s: the box holds %d line boxes, want none — the fixture is "+
+				"not testing a self-collapsing box", c.name, lines)
+		}
+		if bTop != 150 {
+			t.Errorf("%s: the collapsed box is at %g, want 150 — a box that "+
+				"collapses through is still placed by its own top margin",
+				c.name, bTop)
+		}
+		if cTop != 200 {
+			t.Errorf("%s: the box after it is at %g, want 200 — the margins did "+
+				"not collapse through", c.name, cTop)
+		}
+	}
+
+	// The contrast: one character of text is a line box, and a box with a line
+	// box in it does not collapse through. #b is then 1em tall and #c follows it.
+	bTop, cTop, lines := at(t, "x")
+	if lines != 1 {
+		t.Fatalf("a box holding text has %d line boxes, want 1", lines)
+	}
+	if bTop != 150 || cTop <= 200 {
+		t.Errorf("with a line box in it the box is at %g and the one after it at "+
+			"%g; the second must be below 200, since nothing collapsed through",
+			bTop, cTop)
+	}
+
+	// And a line box of no height is still a line box. This is the case that
+	// separates the rule from the height check beside it: the box is zero tall
+	// either way, so only "does it contain a line box" can decide, and §8.3.1
+	// says it does and the margins therefore do not collapse through it.
+	root := layoutOf(t, 1000,
+		`<div id="k"><div id="a"></div>`+
+			`<div id="b" style="line-height: 0">x</div>`+
+			`<div id="c"></div></div>`, css)
+	k := find(t, root, "k")
+	b := find(t, root, "b")
+	if len(b.Lines) != 1 || b.BorderRect.H != 0 {
+		t.Fatalf("the zero-leading box has %d lines and is %gpx tall, want 1 and 0",
+			len(b.Lines), b.BorderRect.H.Px())
+	}
+	// #b keeps its own two margins apart, so the run above it (1em against 2em)
+	// puts its edges at 150 and the run below it (0 against 3em) puts #c at 300.
+	// Collapsing through would have made one run of all four and put #c at 200.
+	if got := relY(t, find(t, root, "c"), k).Px(); got != 300 {
+		t.Errorf("after a zero-height box holding a line box the next box is at "+
+			"%g, want 300 — its margins collapsed through a box that contains a "+
+			"line box", got)
+	}
+}
