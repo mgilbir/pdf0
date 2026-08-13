@@ -598,3 +598,58 @@ func TestGeometryHelpers(t *testing.T) {
 		t.Errorf("a negative outset gave %v", out)
 	}
 }
+
+// TestAMinimumHeightHoldsTheLastChildsMarginInside is §8.3.1's requirement that
+// nothing separate two margins for them to be adjoining, applied to a minimum.
+//
+// The list of adjoining pairs asks only for an "'auto' computed height" where a
+// parent's bottom margin meets its last child's, and a min-height leaves the
+// computed height auto — so read to the letter the child's margin escapes
+// however tall the minimum made the box. It cannot: the child's bottom margin
+// edge is where the content ended and the box's bottom edge is lower down, so
+// the two never meet. The same section says which way the rule falls, in the
+// sentence about a non-zero min-height stopping a child's bottom margin
+// collapsing with its parent's — written for the narrower case where the
+// parent's top margin is in the collapse too, and pointing the same way here.
+//
+// What it costs to get wrong is the whole point of the property: a min-height is
+// how an author reserves a band, and a margin escaping through it moves
+// everything below the parent down by a distance that was meant to be inside it.
+func TestAMinimumHeightHoldsTheLastChildsMarginInside(t *testing.T) {
+	const css = noDefaults + `
+	#w { width: 100px }
+	#p { min-height: %s }
+	#c { height: 30px; margin-bottom: 550px }
+	#f { height: 50px }`
+	layout := func(t *testing.T, min string) (parentH, footerY float64) {
+		t.Helper()
+		root := layoutOf(t, 1000,
+			`<div id="w"><div id="p"><div id="c"></div></div><div id="f"></div></div>`,
+			strings.Replace(css, "%s", min, 1))
+		w := find(t, root, "w")
+		return find(t, root, "p").BorderRect.H.Px(), relY(t, find(t, root, "f"), w).Px()
+	}
+
+	// The minimum binds: the box is a hundred tall against thirty of content, so
+	// the child's margin is held inside and the footer follows the box.
+	if h, y := layout(t, "100px"); h != 100 || y != 100 {
+		t.Errorf("with min-height:100px the parent is %g tall and the footer is at "+
+			"%g, want 100 and 100 — the child's 550px bottom margin escaped through "+
+			"a box that was taller than its content", h, y)
+	}
+
+	// The minimum does not bind: thirty of content against twenty of minimum, so
+	// the child's margin reaches the bottom edge and collapses out as always.
+	if h, y := layout(t, "20px"); h != 30 || y != 580 {
+		t.Errorf("with min-height:20px the parent is %g tall and the footer is at "+
+			"%g, want 30 and 580 — a minimum smaller than the content separates "+
+			"nothing and must not hold the margin in", h, y)
+	}
+
+	// And with no minimum at all, which is the case the other two are measured
+	// against.
+	if h, y := layout(t, "0"); h != 30 || y != 580 {
+		t.Errorf("with no minimum the parent is %g tall and the footer is at %g, "+
+			"want 30 and 580", h, y)
+	}
+}

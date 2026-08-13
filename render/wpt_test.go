@@ -869,7 +869,7 @@ const wptEnv = "WPT_TESTS"
 // of those 989 moved from clean to vacuous with not one test changing from
 // passing to failing: a pure reporting cost, which is exactly what the strip
 // existed to avoid. What replaced it removes the cost by removing its cause.
-const wptCleanPassBaseline = 4287
+const wptCleanPassBaseline = 4289
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
