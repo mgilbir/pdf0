@@ -1306,3 +1306,64 @@ func TestAnOverWideFloatOverflowsRatherThanDropping(t *testing.T) {
 	px(t, "#big's left", relX(t, big, w), 100)
 	px(t, "#big's top", relY(t, big, w), 0)
 }
+
+// TestAMarginCarriesACleredBoxPastAFloatItDoesNotMove is §9.5.2's hypothetical
+// position, which is where the box would be "if the element's 'clear' property
+// had been 'none'" — and so with its top margin collapsing exactly as any other
+// margin would.
+//
+// Measuring it without that margin makes the answer circular: clearance is
+// introduced because the box looks too high, and §8.3.1 then stops the margin
+// collapsing *because* the box has clearance, which is the reason it looked too
+// high. A box with a 150px margin sat at the float's bottom edge instead of
+// 150px down the page, and the parent it should have taken with it stayed put.
+//
+// The second case is the one that says why the margin does not always help. A
+// float inside the same box the margin is leaving through moves when that box
+// moves, so the margin never carries the cleared box past it — the two travel
+// together, and the suite's adjoining-float-before-clearance puts it as "no
+// matter how large the margin is, it should still be just below the float".
+//
+// The third part of the same change is not asserted here and is worth saying so
+// rather than leaving it to be discovered: where the box is *placed* once the
+// clearance is known. This fixture does not reach the branch — measured by
+// deleting it, which leaves this test green — and the corpus reaches it very
+// hard indeed, losing two hundred and fifty-two clean passes. The ratchet in
+// wpt_test.go is what guards it.
+func TestAMarginCarriesAClearedBoxPastAFloatItDoesNotMove(t *testing.T) {
+	// The float is a sibling of the wrapper, so it stays where it is while the
+	// margin moves everything inside the wrapper down past it. 150 is past the
+	// float's bottom at 100, so no clearance is introduced and the cleared box
+	// lands at its margin.
+	root := layoutOf(t, 1000,
+		`<div id="f"></div><div id="outer"><div id="red"><div id="w">x</div></div></div>`,
+		noDefaults+`
+		#f { float: left; width: 100px; height: 100px }
+		#outer { padding-top: 1px }
+		#w { clear: left; margin-top: 150px; height: 20px }`)
+	outer := find(t, root, "outer")
+	if got := relY(t, find(t, root, "red"), outer).Px(); got != 150 {
+		t.Errorf("the wrapper is at %g, want 150 — the cleared box's margin "+
+			"collapsed out of it and should have carried it down", got)
+	}
+	if got := relY(t, find(t, root, "w"), find(t, root, "red")).Px(); got != 0 {
+		t.Errorf("the cleared box is %g inside its wrapper, want 0 — the margin "+
+			"moved the wrapper, so it must not move the box as well", got)
+	}
+
+	// Now the float is *inside* the box the margin leaves through, so it moves
+	// with it. However large the margin, the cleared box lands just under the
+	// float rather than at the margin.
+	root = layoutOf(t, 1000,
+		`<div id="k"><div><div id="f"></div></div><div id="w">x</div></div>`,
+		noDefaults+`
+		#k { width: 100px }
+		#f { float: left; width: 100px; height: 50px }
+		#w { clear: left; margin-top: 400px; height: 50px }`)
+	k := find(t, root, "k")
+	if got := relY(t, find(t, root, "w"), k).Px(); got != 50 {
+		t.Errorf("the cleared box is at %g, want 50 — the float it clears is "+
+			"inside the box the margin would move, so the margin cannot carry it "+
+			"past the float and clearance has to", got)
+	}
+}

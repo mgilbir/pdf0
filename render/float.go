@@ -689,6 +689,12 @@ type flow struct {
 	// and is not the one CSS specifies.
 	cbHeight   style.Unit
 	cbDefinite bool
+
+	// carriedTop is how much collapsed top margin is already inside y because
+	// this box is being laid out at its corrected position rather than the one
+	// predicted for it. Only §9.5.2's hypothetical position reads it; see where
+	// that is worked out.
+	carriedTop style.Unit
 }
 
 // establishesBFC reports whether a box lays its floats out in a context of its
