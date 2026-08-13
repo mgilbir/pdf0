@@ -33,6 +33,8 @@ package style
 var unimplementedProperties = map[string]string{
 	"opacity": "the box is painted fully opaque, so anything it was meant to " +
 		"show through it is hidden",
+	"text-wrap-style": "the line breaks are chosen greedily, which is what " +
+		"\"auto\" asks for",
 }
 
 // readByConstruction lists properties whose names are built rather than written.

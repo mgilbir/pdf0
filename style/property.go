@@ -120,7 +120,22 @@ var properties = map[string]property{
 	"text-align":     {true, "start"},
 	"text-indent":    {true, "0"},
 	"text-transform": {true, "none"},
-	"white-space":    {true, "normal"},
+	// white-space is a shorthand in CSS Text 4 — see the shorthands table — and
+	// these are the two longhands it sets that this engine acts on. The third,
+	// white-space-trim, is not registered because nothing trims yet, and
+	// registering a property nothing reads is what the note above this table
+	// warns against.
+	"white-space-collapse": {true, "collapse"},
+	// text-wrap-mode is the wrapping half of white-space, and it is a property in
+	// its own right because "text-wrap: nowrap" sets it without saying anything
+	// about collapsing. Splitting them is what lets the cascade decide between
+	// the two spellings by ordinary means, rather than by one of them being
+	// consulted after the other in the layout code.
+	"text-wrap-mode": {true, "wrap"},
+	// text-wrap-style chooses *how* the breaks are picked among the ones
+	// text-wrap-mode allows. "balance" is implemented; the others are read as
+	// auto and reported.
+	"text-wrap-style": {true, "auto"},
 	// overflow-wrap inherits. word-wrap is the name Internet Explorer shipped it
 	// under and is a legal alias in CSS Text §5.5, so it is registered rather
 	// than reported: a document using it is not using an unsupported property.
@@ -293,6 +308,15 @@ var shorthands = map[string]shorthand{
 		"font-style", "font-weight", "font-size", "font-family", "line-height"}},
 	"text-decoration": {textDecorationShorthand,
 		[]string{"text-decoration-line", "text-decoration-color"}},
+
+	// CSS Text 4 makes white-space a shorthand, and that is not a reshuffle for
+	// its own sake: "text-wrap: nowrap" and "white-space: nowrap" set the same
+	// thing, and unless they set the same *longhand* the cascade cannot decide
+	// between them and the answer comes down to which one layout happens to read
+	// second.
+	"white-space": {whiteSpaceShorthand,
+		[]string{"white-space-collapse", "text-wrap-mode"}},
+	"text-wrap": {textWrapShorthand, []string{"text-wrap-mode", "text-wrap-style"}},
 }
 
 // boxShorthand builds the expander for a property written as one to four values

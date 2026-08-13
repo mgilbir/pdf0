@@ -374,6 +374,8 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"list-style":      "square inside",
 		"font":            "12px serif",
 		"text-decoration": "underline red",
+		"white-space":     "pre-line",
+		"text-wrap":       "balance",
 	}
 	if len(samples) != len(shorthands) {
 		t.Errorf("%d shorthands are declared and %d have a sample here; every one "+

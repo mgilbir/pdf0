@@ -524,50 +524,56 @@ func TestWhitespaceAroundAFloatMakesNoBoxEither(t *testing.T) {
 
 // TestWhitespaceCollapsing pins CSS Text §4. The rules differ per white-space
 // value, and each difference is one an author chose deliberately.
+//
+// The values are white-space-collapse's, since that is the longhand Phase I
+// depends on and the only one this function is given — nothing here turns on
+// whether the text wraps. Which shorthand keyword expands to which of them is
+// pinned separately, by TestWhiteSpaceIsThreeIndependentBits; the keyword each
+// case stands for is named in the comment where it matters.
 func TestWhitespaceCollapsing(t *testing.T) {
 	cases := []struct {
 		whiteSpace string
 		in, want   string
 	}{
-		{"normal", "a   b", "a b"},
-		{"normal", "a\n\nb", "a b"},
-		{"normal", "a \t\n b", "a b"},
-		{"normal", "  a  ", " a "},
-		{"nowrap", "a   b", "a b"},
+		{"collapse", "a   b", "a b"},
+		{"collapse", "a\n\nb", "a b"},
+		{"collapse", "a \t\n b", "a b"},
+		{"collapse", "  a  ", " a "},
+		{"collapse", "a   b", "a b"},
 		// pre keeps everything, which is the whole point of it.
-		{"pre", "a   b", "a   b"},
-		{"pre", "a\n\nb", "a\n\nb"},
-		{"pre-wrap", "a   b", "a   b"},
+		{"preserve", "a   b", "a   b"},
+		{"preserve", "a\n\nb", "a\n\nb"},
+		{"preserve", "a   b", "a   b"},
 		// pre-line collapses spaces and keeps newlines.
-		{"pre-line", "a   b", "a b"},
+		{"preserve-breaks", "a   b", "a b"},
 		// Each newline, not one per run. CSS Text §3's table says "New Lines:
 		// Preserve" for pre-line, and preserve means every one of them: an
 		// engine that emitted a single break per run of white space would close
 		// up every paragraph gap in a document written with blank lines, which
 		// is the one thing pre-line is used for. This assertion previously read
 		// "a\nb" and was wrong.
-		{"pre-line", "a\n\nb", "a\n\nb"},
+		{"preserve-breaks", "a\n\nb", "a\n\nb"},
 		// Rule 1 of §4.1.1: the collapsible spaces and tabs around a segment
 		// break are removed *before* anything else looks at them, so the break
 		// does not also leave the space that was written beside it.
-		{"pre-line", "a  \n  b", "a\nb"},
-		{"pre-line", "a \t \n \t b", "a\nb"},
+		{"preserve-breaks", "a  \n  b", "a\nb"},
+		{"preserve-breaks", "a \t \n \t b", "a\nb"},
 
 		// A CRLF is one segment break and not two. This engine's HTML parser
 		// does not fold it, so a <pre> written on Windows would otherwise gain
 		// a blank line between every pair of its own.
-		{"pre", "a\r\nb", "a\nb"},
-		{"pre", "a\rb", "a\nb"},
-		{"pre-line", "a\r\n\r\nb", "a\n\nb"},
-		{"normal", "a\r\nb", "a b"},
+		{"preserve", "a\r\nb", "a\nb"},
+		{"preserve", "a\rb", "a\nb"},
+		{"preserve-breaks", "a\r\n\r\nb", "a\n\nb"},
+		{"collapse", "a\r\nb", "a b"},
 
 		// The segment break transformation's one exception: a break against a
 		// zero-width space is removed rather than becoming a space, so an
 		// author who hard-wrapped their source at a marked break opportunity
 		// does not also get a space they never wrote.
-		{"normal", "a​\nb", "a​b"},
-		{"normal", "a\n​b", "a​b"},
-		{"normal", "a\nb", "a b"},
+		{"collapse", "a​\nb", "a​b"},
+		{"collapse", "a\n​b", "a​b"},
+		{"collapse", "a\nb", "a b"},
 
 		// break-spaces preserves everything pre-wrap does; the two differ in
 		// what happens at a line edge, not in Phase I.

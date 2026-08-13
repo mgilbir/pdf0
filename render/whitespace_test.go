@@ -50,6 +50,12 @@ func lineWidth(line LineFragment) style.Unit {
 // combinations of three questions and an engine that gets one cell wrong gets it
 // wrong in a way that reads as a different bug entirely: "pre-line does not
 // wrap" looks like a broken line breaker, not like a misread keyword.
+//
+// It goes through the cascade rather than calling the reader with a keyword,
+// because the keyword is no longer what the reader sees: CSS Text 4 makes
+// white-space a shorthand, and the table below is as much about the expansion as
+// about the reading. Writing the longhands here instead would test the second
+// half twice and the first half not at all.
 func TestWhiteSpaceIsThreeIndependentBits(t *testing.T) {
 	cases := map[string]whiteSpace{
 		"normal":       {collapse: true, wrap: true},
@@ -58,18 +64,89 @@ func TestWhiteSpaceIsThreeIndependentBits(t *testing.T) {
 		"pre-wrap":     {preserveBreaks: true, wrap: true},
 		"pre-line":     {collapse: true, preserveBreaks: true, wrap: true},
 		"break-spaces": {preserveBreaks: true, wrap: true, breakSpaces: true},
-		// Case and surrounding space are the cascade's, not this function's.
+		// Case and surrounding space are the cascade's, and this checks that they
+		// really are: the value goes through it on the way here.
 		"  PRE-Wrap ": {preserveBreaks: true, wrap: true},
-		// Anything else is the initial value, which is what the cascade would
-		// have used had the declaration been thrown out.
-		"":            {collapse: true, wrap: true},
+		// Anything else is the initial value, which is what the cascade uses when
+		// the declaration is thrown out — and it is thrown out by the expander,
+		// which is where an unreadable shorthand now stops.
 		"balance":     {collapse: true, wrap: true},
 		"pre wrap":    {collapse: true, wrap: true},
 		"break-space": {collapse: true, wrap: true},
 	}
 	for value, want := range cases {
-		if got := whiteSpaceOf(value); got != want {
+		built := Build(Input{
+			HTML: `<p id="p">x</p>`,
+			CSS:  []Stylesheet{{Source: `#p { white-space: ` + value + ` }`}},
+		})
+		var found *Box
+		var walk func(*Box)
+		walk = func(b *Box) {
+			if b.Element != nil {
+				if id, _ := b.Element.Attr("id"); id == "p" {
+					found = b
+				}
+			}
+			for _, c := range b.Children {
+				walk(c)
+			}
+		}
+		walk(built.Root)
+		if found == nil {
+			t.Fatalf("white-space:%q: no box", value)
+		}
+		if got := whiteSpaceFor(found.Style); got != want {
 			t.Errorf("white-space:%q read as %+v, want %+v", value, got, want)
+		}
+	}
+}
+
+// TestTextWrapAndWhiteSpaceCompeteInTheCascade is the reason the shorthand was
+// split rather than read twice in layout.
+//
+// "text-wrap: nowrap" and "white-space: nowrap" say the same thing about
+// wrapping, so which of them wins has to be decided by the cascade — by origin,
+// specificity and order — exactly as it is for any other pair of declarations.
+// An engine that kept white-space whole and consulted text-wrap afterwards would
+// answer by whichever it looked at second, and would be right half the time by
+// accident.
+func TestTextWrapAndWhiteSpaceCompeteInTheCascade(t *testing.T) {
+	for _, tc := range []struct {
+		css  string
+		want bool // does it wrap
+	}{
+		{`white-space: nowrap; text-wrap: wrap`, true},
+		{`text-wrap: wrap; white-space: nowrap`, false},
+		{`white-space: pre; text-wrap: wrap`, true},
+		{`text-wrap: nowrap; white-space: pre-wrap`, true},
+		{`white-space: pre-wrap; text-wrap: nowrap`, false},
+		// The shorthand resets what it does not mention, so the second
+		// declaration here puts the mode back to wrap even though it is only
+		// talking about style.
+		{`text-wrap: nowrap; text-wrap: balance`, true},
+	} {
+		built := Build(Input{
+			HTML: `<p id="p">x</p>`,
+			CSS:  []Stylesheet{{Source: `#p { ` + tc.css + ` }`}},
+		})
+		var found *Box
+		var walk func(*Box)
+		walk = func(b *Box) {
+			if b.Element != nil {
+				if id, _ := b.Element.Attr("id"); id == "p" {
+					found = b
+				}
+			}
+			for _, c := range b.Children {
+				walk(c)
+			}
+		}
+		walk(built.Root)
+		if found == nil {
+			t.Fatalf("%q: no box", tc.css)
+		}
+		if got := whiteSpaceFor(found.Style).wrap; got != tc.want {
+			t.Errorf("{%s} wraps=%v, want %v", tc.css, got, tc.want)
 		}
 	}
 }
@@ -540,7 +617,7 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	// counted pieces passed just as happily when the rule was deleted. What
 	// changes is the opportunity the run *ends* at, which is the value that
 	// travels to the next box.
-	pieces, endedAtBreak := splitAtBreaks("end-", whiteSpaceOf("normal"), wordBreak{}, lineBreak{})
+	pieces, endedAtBreak := splitAtBreaks("end-", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 	if len(pieces) != 1 || pieces[0].text != "end-" {
 		t.Errorf("a trailing hyphen cut the text into %d pieces", len(pieces))
 	}
@@ -550,7 +627,7 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	// One before a space does not either, for the same reason: the space is
 	// already the opportunity, and the hyphen must not claim it — a piece that
 	// took it would leave the word after the space unable to begin a line.
-	pieces, _ = splitAtBreaks("end- x", whiteSpaceOf("normal"), wordBreak{}, lineBreak{})
+	pieces, _ = splitAtBreaks("end- x", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 	if len(pieces) != 3 || pieces[0].text != "end-" {
 		t.Errorf("a hyphen before a space gave %d pieces starting %q",
 			len(pieces), pieces[0].text)
@@ -560,10 +637,10 @@ func TestBreakAfterAHyphenAndNotAfterATrailingOne(t *testing.T) {
 	}
 	// And a hyphen inside a word does leave one, so the assertions above are
 	// about where the hyphen is and not about hyphens.
-	if _, ok := splitAtBreaks("well-known", whiteSpaceOf("normal"), wordBreak{}, lineBreak{}); ok {
+	if _, ok := splitAtBreaks("well-known", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}); ok {
 		t.Error("a word ending after a hyphenated compound ended at an opportunity")
 	}
-	if pieces, _ := splitAtBreaks("well-known", whiteSpaceOf("normal"), wordBreak{}, lineBreak{}); len(pieces) != 2 ||
+	if pieces, _ := splitAtBreaks("well-known", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{}); len(pieces) != 2 ||
 		!pieces[1].breakBefore {
 		t.Error("a hyphen inside a word left no break opportunity")
 	}
@@ -838,5 +915,29 @@ func TestALineDoesNotBreakInsideTheWhiteSpaceThatEndsIt(t *testing.T) {
 		t.Errorf("white-space:break-spaces kept eight trailing spaces on %d lines "+
 			"%q, want more than 2 — its spaces do not hang, so the line breaks "+
 			"among them", len(got), got)
+	}
+}
+
+// TestTextWrapNowrapStopsWrapping is the property reaching layout rather than
+// only reaching the cascade.
+//
+// It is the same assertion twice under two spellings, which is the form that
+// catches an expansion that lands on a longhand nothing reads: text set in a box
+// too narrow for it either wraps or it does not, and both spellings have to give
+// the same answer.
+func TestTextWrapNowrapStopsWrapping(t *testing.T) {
+	const src = `<p id="p">one two three four</p>`
+	for _, css := range []string{"text-wrap: nowrap", "white-space: nowrap"} {
+		root := layoutOf(t, 10000, src,
+			noDefaults+mono+`p { width: 4ch; `+css+` }`)
+		if got := lineTexts(linesOf(t, root, "p")); len(got) != 1 {
+			t.Errorf("{%s} broke the text into %d lines %q, want 1", css, len(got), got)
+		}
+	}
+	// And the control: without either, it wraps.
+	root := layoutOf(t, 10000, src, noDefaults+mono+`p { width: 4ch }`)
+	if got := lineTexts(linesOf(t, root, "p")); len(got) < 2 {
+		t.Errorf("without nowrap the text stayed on %d line(s) %q, want several",
+			len(got), got)
 	}
 }
