@@ -1039,7 +1039,7 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 			// margins pairs a "clear: left" box with a "margin-top: -1000px"
 			// child and lands the wrapper eight hundred pixels above the page.
 			hoistTop = pending
-			if clearance != 0 {
+			if clearance != 0 || estDrop != 0 {
 				hoistTop = before
 			}
 			pending = marginRun{}

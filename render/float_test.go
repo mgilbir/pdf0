@@ -1367,3 +1367,43 @@ func TestAMarginCarriesAClearedBoxPastAFloatItDoesNotMove(t *testing.T) {
 			"past the float and clearance has to", got)
 	}
 }
+
+// TestABoxDroppedPastAFloatDoesNotTakeTheFloatWithIt is §9.5's non-overlap rule
+// meeting §8.3.1, and the suite states the connection itself: "a new formatting
+// context that doesn't fit beside a float that would otherwise be adjoining will
+// need to separate its margin from the float, so that it doesn't affect the
+// float. This is very similar to clearance."
+//
+// It is the same trap clearance had. A box whose top margin escapes through its
+// parent's open edge moves the parent, and a float already placed inside that
+// parent moves with it — so a box that has to drop past the float would pull the
+// float down as it went, and never get past it. The margin has to be separated
+// exactly as a clearance separates it.
+//
+// Without that, the float in this document ended up two hundred pixels down the
+// page and the container was twice as tall as it should be, with the red showing
+// where the green square was meant to be.
+func TestABoxDroppedPastAFloatDoesNotTakeTheFloatWithIt(t *testing.T) {
+	root := layoutOf(t, 1000,
+		`<div id="k"><div><div><div id="f"></div></div>`+
+			`<div id="n"></div></div></div>`,
+		noDefaults+`
+		#k { overflow: hidden; width: 200px }
+		#f { float: left; width: 200px; height: 200px }
+		#n { margin-top: 200px; overflow: hidden; width: 200px; height: 1px }`)
+	k := find(t, root, "k")
+	if got := relY(t, find(t, root, "f"), k).Px(); got != 0 {
+		t.Errorf("the float is at %g, want 0 — the box that had to drop past it "+
+			"took it along instead of separating its margin from it", got)
+	}
+	// The box that could not fit beside the float goes immediately below it, and
+	// its margin is spent getting there rather than added to the drop.
+	if got := relY(t, find(t, root, "n"), k).Px(); got != 200 {
+		t.Errorf("the new formatting context is at %g, want 200 — immediately "+
+			"below the float it could not fit beside", got)
+	}
+	if got := k.BorderRect.H.Px(); got != 201 {
+		t.Errorf("the container is %g tall, want 201 — the float and the one "+
+			"pixel below it", got)
+	}
+}
