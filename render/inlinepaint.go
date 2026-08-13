@@ -240,10 +240,23 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		// one. Which physical side "begins" it is the containing block's
 		// business — see splitInsetSides.
 		noLeft, noRight := splitInsetSides(b)
-		if !p.first || noLeft {
+		// Which of the box's two ends this piece is, and then which physical side
+		// each end is. §8.6 gives the piece that *begins* the box the box's
+		// starting inset, and for an element whose own direction is right-to-left
+		// the starting inset is the right one — see beginsAtRight.
+		//
+		// Reading "first piece" as "left inset" is the left-to-right half of the
+		// rule written down as though it were the whole of it, and it drew the
+		// border down the wrong side of every right-to-left inline box broken
+		// over lines. CSS2/box/rtl-basic and rtl-span-only are the two documents.
+		keepLeft, keepRight := p.first, d.last[b] == i
+		if beginsAtRight(b) {
+			keepLeft, keepRight = keepRight, keepLeft
+		}
+		if !keepLeft || noLeft {
 			margin.Left, border.Left, padding.Left = 0, 0, 0
 		}
-		if d.last[b] != i || noRight {
+		if !keepRight || noRight {
 			margin.Right, border.Right, padding.Right = 0, 0, 0
 		}
 		// §8.3: margin-top and margin-bottom do not apply to a non-replaced

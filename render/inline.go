@@ -1860,10 +1860,37 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 // something about the box's own outside, which it does not.
 func splitInsetSides(b *Box) (noLeft, noRight bool) {
 	noLeft, noRight = b.noLeadInset, b.noTrailInset
-	if b.Parent != nil && isRTL(b.Parent) {
+	if beginsAtRight(b) {
 		noLeft, noRight = noRight, noLeft
 	}
 	return noLeft, noRight
+}
+
+// beginsAtRight reports whether the physical side an inline box *begins* on is
+// its right, which is what its own "direction: rtl" makes it.
+//
+// §8.6 states the rule twice, once per direction, and the two halves differ only
+// in which physical side goes with which end of the box:
+//
+//	When the element's 'direction' property is 'ltr', the leftmost generated box
+//	of the first line box in which the element appears has the left margin, left
+//	border and left padding [...] When the element's 'direction' property is
+//	'rtl', the rightmost generated box of the first line box [...] has the right
+//	padding, right border and right margin.
+//
+// "The element's" — its own, not its containing block's, and the suite settles
+// it rather than leaving it a reading. CSS2/box has the four combinations as
+// four documents against four references: rtl-span-only is a "direction: rtl"
+// span inside a left-to-right block and its reference gives the first line the
+// *right* inset, while ltr-span-only is the mirror and gives the first line the
+// left one. The containing block decides where the content sits; the element
+// decides which of its own edges begins it.
+//
+// An earlier note here said no test could tell the two apart and followed
+// resolveWidth on that basis. That was wrong about the suite: those two
+// documents exist for exactly this question.
+func beginsAtRight(b *Box) bool {
+	return isRTL(b)
 }
 
 func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inlineItem, any bool) {
