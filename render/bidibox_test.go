@@ -287,3 +287,64 @@ func TestReorderingIsLinearInTheLength(t *testing.T) {
 		t.Errorf("the line holds %d runs, want %d", got, words)
 	}
 }
+
+// TestASplitInlineKeepsItsInsetOnTheSideTheBlockRunsFrom is §8.6's slice model
+// meeting the containing block's direction.
+//
+// A box broken by a block inside it carries its own inset on the pieces at its
+// two ends and nothing on the joins. Which *physical* side that is depends on
+// which way the containing block runs: in a left-to-right one the piece the box
+// begins on is the leftmost, and in a right-to-left one it is the rightmost — so
+// the same declaration lands on the other side of the block.
+//
+// A span with nothing in it but a block and a padding on one side is the whole
+// of the case, and the suite writes it once each way. The ten pixels are before
+// the block under rtl and after it under ltr, and reading the flag as a physical
+// side put them after it both times.
+func TestASplitInlineKeepsItsInsetOnTheSideTheBlockRunsFrom(t *testing.T) {
+	// The padding is on the right, so under ltr it ends the box and under rtl it
+	// begins it. The block is 20px tall so that the two pieces are told apart by
+	// where they sit rather than by how wide they are.
+	const css = noDefaults + `
+	#s { padding-right: 10px }
+	#b { display: block; height: 20px }`
+	insetY := func(t *testing.T, dir string) (before, after bool) {
+		t.Helper()
+		root := layoutOf(t, 1000,
+			`<div id="k" style="direction: `+dir+`"><span id="s"><span id="b"></span></span></div>`,
+			css)
+		k := find(t, root, "k")
+		blockTop := relY(t, find(t, root, "b"), k)
+		// Every line box the span's own pieces made, by where it sits relative
+		// to the block the span was broken by.
+		for _, c := range k.Children {
+			if c.Box == nil || c.Box == find(t, root, "b").Box {
+				continue
+			}
+			for _, line := range c.Lines {
+				y := c.BorderRect.Y.Add(line.Rect.Y)
+				if line.Rect.W <= 0 {
+					continue
+				}
+				if y < blockTop {
+					before = true
+				} else {
+					after = true
+				}
+			}
+		}
+		return before, after
+	}
+
+	if before, after := insetY(t, "ltr"); before || !after {
+		t.Errorf("under ltr the padding-right made a line before=%v after=%v the "+
+			"block, want it after only — it is the inset that *ends* the box",
+			before, after)
+	}
+	if before, after := insetY(t, "rtl"); !before || after {
+		t.Errorf("under rtl the padding-right made a line before=%v after=%v the "+
+			"block, want it before only — in a right-to-left containing block the "+
+			"piece the box begins on is the rightmost, so the right inset is the "+
+			"one that begins it", before, after)
+	}
+}
