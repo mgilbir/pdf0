@@ -121,16 +121,108 @@ func TestNormalLineHeightIncludesTheLineGap(t *testing.T) {
 	}
 }
 
-func TestNormalLineHeightFallsBackWhenTheFontIsSilent(t *testing.T) {
-	// A standard PDF face has no hhea and no OS/2: its metrics come from AFM
-	// data, which carries no line gap at all. Descriptor reports zero with the
-	// bit clear, and reading that zero as an answer would space the page by a
-	// number the font never gave. 1.2 is the recommended fallback.
+// TestNormalLineHeightUsesTheGlyphBoxWhenTheFontStatesNoGap replaces a test
+// that asserted the 1.2 fallback here.
+//
+// A standard PDF face has no hhea and no OS/2: its metrics come from AFM data,
+// which carries no line gap at all, so there is no line spacing to read. What
+// the AFM does carry is the box enclosing every glyph, and that is the question
+// being asked — how much room does a line of this face need — so it is used
+// rather than a constant.
+//
+// Helvetica's box is -225 to 931 out of 1000: 1.156em, or 23.125px at 20. The
+// AFM's own Ascender and Descender come to 0.925em, which is what a line spaced
+// by them would be and is tighter than any browser sets the same text; the 1.2
+// factor that used to stand here was in §10.8.1's recommended range but bore no
+// relation to the *content area*, which is measured from the same two numbers
+// and so came out at 0.925em beside a 1.2em line.
+func TestNormalLineHeightUsesTheGlyphBoxWhenTheFontStatesNoGap(t *testing.T) {
 	got := boxHeight(t, StandardFonts(), `<p id="p">x</p>`,
 		noDefaults+`p { font-family: Helvetica; font-size: 20px; line-height: normal }`, "p")
-	if got != 24 {
-		t.Errorf("a line of 20px Helvetica is %gpx tall, want 24 — the face states "+
-			"no line gap, so the fallback stands", got)
+	if got != 23.125 {
+		t.Errorf("a line of 20px Helvetica is %gpx tall, want 23.125 — the glyph "+
+			"box, (931 + 225) / 1000 of an em; 24 is the old constant and 18.5 "+
+			"the AFM ascender and descender alone", got)
+	}
+}
+
+// TestNormalLineHeightPrefersTheFontsOwnMetricsOverItsGlyphBox is the other
+// side of lineMetrics, and it exists because a planted defect that used the box
+// for *every* face went unnoticed by every other test here.
+//
+// The faces the rest of this file uses cannot tell the two apart: Ahem's glyphs
+// are em squares, so its box is exactly its ascent and descent, and CanvasTest's
+// box matches its hhea too. Noto Sans does not — it states 1069 and -293 out of
+// 1000 and has a box running from -389 to 1067, because a handful of its glyphs
+// reach far past the height the font asks for its lines to be set at. That is
+// the whole reason the box is a fallback and not the answer: it is the extreme
+// of what the face can draw, and hhea is what the face asks for.
+func TestNormalLineHeightPrefersTheFontsOwnMetricsOverItsGlyphBox(t *testing.T) {
+	dir := os.Getenv(notoEnv)
+	if dir == "" {
+		t.Skipf("set %s for a face whose box and metrics differ", notoEnv)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
+	if err != nil {
+		t.Skipf("no Noto Sans: %v", err)
+	}
+	face, err := fonts.Load(data)
+	if err != nil {
+		t.Fatalf("loading Noto Sans: %v", err)
+	}
+	d := face.Descriptor()
+	if !d.Has(fonts.MetricLineGap) {
+		t.Skip("this face states no line gap, so it is the fallback case")
+	}
+	upem := float64(face.UnitsPerEm())
+	size, _ := style.FromPx(20)
+	// Both expectations are computed from the Descriptor rather than from
+	// lineMetrics, so that the test does not agree with the code by construction.
+	stated := size.Mul((float64(d.Ascent) - float64(d.Descent) + float64(d.LineGap)) / upem)
+	box := size.Mul(float64(d.BBox[3]-d.BBox[1]) / upem)
+	if stated == box {
+		t.Skip("this face's box is its metrics, so nothing here discriminates")
+	}
+
+	set := ahemSet{ahem: face, standard: StandardFonts()}
+	got := boxHeight(t, set, `<p id="p">x</p>`,
+		noDefaults+`p { font-family: Ahem; font-size: 20px; line-height: normal }`, "p")
+	if got != stated.Px() {
+		t.Errorf("a line of 20px Noto Sans is %gpx tall, want %g — what the face "+
+			"states; %g is its glyph box, which is only used by a face that "+
+			"states nothing", got, stated.Px(), box.Px())
+	}
+}
+
+// TestTheLineHeightAndTheContentAreaAgree is the relationship the change above
+// was for, and the one the suite checks directly.
+//
+// An inline box's background paints its content area, §10.6.1; a block's height
+// with "line-height: normal" is its line box. For a face that states no line gap
+// there is no leading to add, so the two are the same number — and
+// inline-formatting-context-002 puts a black inline box beside a float holding
+// the same text and asks for exactly that. They did not agree: the background
+// was measured from the AFM's ascender and descender, 0.925em, and the line from
+// a 1.2 constant.
+//
+// It is asserted through the paint rather than through the two functions,
+// because comparing the two functions when both now call the same one would be
+// a tautology — the defect being guarded against is precisely that they stop
+// sharing a source.
+func TestTheLineHeightAndTheContentAreaAgree(t *testing.T) {
+	for _, family := range []string{"Helvetica", "Times", "Courier"} {
+		css := noDefaults + `
+			p { font-family: ` + family + `; font-size: 100px; line-height: normal;
+			    margin: 0 }
+			span { background: green }`
+		root := layoutOf(t, 4000, `<p id="p"><span>ab</span></p>`, css)
+		background := oneFill(t, Paint(root), green)
+		line := find(t, root, "p").BorderRect.H
+		if background.H != line {
+			t.Errorf("%s: the inline background is %gpx tall and the line box %gpx; "+
+				"a face that states no line gap has no leading to tell them apart",
+				family, background.H.Px(), line.Px())
+		}
 	}
 }
 

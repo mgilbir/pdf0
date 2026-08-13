@@ -127,7 +127,9 @@ func TestTrailingSpacesAreTrimmed(t *testing.T) {
 // true, and the reason line-height is usually written that way.
 func TestLineHeight(t *testing.T) {
 	cases := map[string]float64{
-		"normal": 24, // 1.2 x 20px
+		// Helvetica states no line gap, so "normal" is the box enclosing its
+		// glyphs: -225 to 931 out of 1000, which is 1.15625 x 20px.
+		"normal": 23.125,
 		"1.5":    30, // a multiplier
 		"2":      40, //
 		"30px":   30, // a length
@@ -170,10 +172,16 @@ func TestBaselineSplitsTheLeading(t *testing.T) {
 
 	line := linesOf(t, root, "p")[0]
 	face, _ := fonts.Standard("Helvetica")
-	d := face.Descriptor()
-	upem := float64(face.UnitsPerEm())
-	ascent := 100 * float64(d.Ascent) / upem
-	descent := 100 * -float64(d.Descent) / upem
+	// The same two numbers the line box is measured from — the glyph box for a
+	// face like this one that states no line gap — because the leading is the
+	// difference between the line box and the type, and asking the question two
+	// ways would make the halves not add up.
+	top, bottom, upem, ok := lineMetrics(face)
+	if !ok {
+		t.Fatal("Helvetica states no usable metrics")
+	}
+	ascent := 100 * top / upem
+	descent := 100 * -bottom / upem
 	wantBaseline := (200-ascent-descent)/2 + ascent
 
 	px(t, "the baseline", line.Baseline, wantBaseline)

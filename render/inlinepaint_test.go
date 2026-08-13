@@ -24,11 +24,17 @@ import (
 const (
 	inkSize    = 250.0
 	inkAdvance = inkSize * 0.600 // 150, one Courier character
-	inkAscent  = inkSize * 0.629 // 157.25
-	inkDescent = inkSize * 0.157 // 39.25
+	// The extents are Courier's glyph box, -250 to 805 out of 1000, and not the
+	// AFM's ascender and descender of 629 and -157. Courier has no hhea and no
+	// OS/2 to state a line gap, and where there is none to read the box enclosing
+	// the glyphs is what says how much room a line of this face needs — see
+	// lineMetrics. The two numbers here and "line-height: normal" have to come
+	// from the same place or an inline box's background does not fill its line.
+	inkAscent  = inkSize * 0.805 // 201.25
+	inkDescent = inkSize * 0.250 // 62.5
 	// inkHeight is §10.6.1's content area: the font's ascent plus its descent,
 	// and nothing to do with the line box.
-	inkHeight = inkAscent + inkDescent // 196.5
+	inkHeight = inkAscent + inkDescent // 263.75
 )
 
 // courierInk sets the text at that size, with a line-height far larger than the
@@ -200,7 +206,7 @@ func TestInlineBackgroundImagePlacesAgainstTheFragment(t *testing.T) {
 	// background-origin's initial value is the padding box, which for a box with
 	// no padding is the content area: the ascent above the baseline.
 	base := baselineOfFirstRun(t, root, "p")
-	if want := base.Sub(mustPx(40 * 0.629)); got.Tile.Y != want {
+	if want := base.Sub(mustPx(40 * 0.805)); got.Tile.Y != want {
 		t.Errorf("the tile's top is at %g, want %g — the box's own content area, "+
 			"not the line box", got.Tile.Y.Px(), want.Px())
 	}

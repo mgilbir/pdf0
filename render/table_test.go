@@ -529,8 +529,14 @@ func TestTableRowHeightsAndSpans(t *testing.T) {
 // TestTableVerticalAlign pins §17.5.3's four alignments.
 //
 // One tall cell sets the row's height at 60; the others are one line of 16px
-// text, whose line box is 1.2 times that. Top puts the line at the row's top,
-// bottom at 60 minus the line's height, middle halfway between.
+// text. Top puts the line at the row's top, bottom at 60 minus the line's
+// height, middle halfway between.
+//
+// The line is 17.859375: the default face here is Times, which states no line
+// gap, so "line-height: normal" is the box enclosing its glyphs — -218 to 898
+// out of 1000, or 1.116 of an em — and 16px is 1024 units, of which 1116/1000
+// is 1142.784, rounding to 1143 units. See lineMetrics for why the glyph box
+// and not the AFM's ascender and descender.
 func TestTableVerticalAlign(t *testing.T) {
 	root := layoutOf(t, 1000, `<table>`+
 		`<tr><td style="height: 60px">tall</td>`+
@@ -538,7 +544,7 @@ func TestTableVerticalAlign(t *testing.T) {
 		`<td id=mid style="vertical-align: middle">a</td>`+
 		`<td id=bot style="vertical-align: bottom">a</td></tr></table>`, bareTable)
 
-	line := 16 * 1.2
+	const line = 17.859375
 	for _, tc := range []struct {
 		id   string
 		want float64
@@ -740,7 +746,7 @@ func TestTableCellHeightIsAMinimum(t *testing.T) {
 	cell := find(t, root, "c")
 	// Three line boxes, each rounded to the layout unit before they are added
 	// up — which is not the same number as rounding their sum.
-	if want := mustPx(19.2).Mul(3); cell.BorderRect.H != want {
+	if want := mustPx(17.859375).Mul(3); cell.BorderRect.H != want {
 		t.Errorf("a cell declared 1px tall holding three lines is %.2f px, want %.2f",
 			cell.BorderRect.H.Px(), want.Px())
 	}

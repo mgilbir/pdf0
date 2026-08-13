@@ -942,8 +942,9 @@ func (l *layouter) strutFor(b *Box) strut {
 	if upem == 0 {
 		return s
 	}
-	s.ascent = b.FontSize.Mul(float64(d.Ascent) / upem)
-	s.descent = b.FontSize.Mul(-float64(d.Descent) / upem)
+	if ascent, descent, ok := l.lineExtents(b, face); ok {
+		s.ascent, s.descent = ascent, descent
+	}
 	// The x-height, which no face this engine reads reports directly. Half an em
 	// is the figure every implementation falls back to and is within a few per
 	// cent for the Latin faces; a wrong x-height moves a "vertical-align:
@@ -2823,23 +2824,84 @@ func (l *layouter) normalLineHeight(b *Box) style.Unit {
 	if !ok {
 		return b.FontSize.Mul(normalLineHeightFallbackFactor)
 	}
-	d := face.Descriptor()
-	upem := float64(face.UnitsPerEm())
-	// The line gap is the term that decides whether the font has answered at
-	// all. Ascent and descent are there for every face, including the standard
-	// ones; without the gap the sum is the right formula missing a term, which
-	// lands below the range the specification recommends — 0.925em for
-	// Helvetica, 0.786em for Courier.
-	if upem <= 0 || !d.Has(fonts.MetricLineGap) {
+	top, bottom, upem, ok := lineMetrics(face)
+	if !ok {
 		return b.FontSize.Mul(normalLineHeightFallbackFactor)
 	}
-	h := b.FontSize.Mul((float64(d.Ascent) - float64(d.Descent) + float64(d.LineGap)) / upem)
+	var gap float64
+	if d := face.Descriptor(); d.Has(fonts.MetricLineGap) {
+		gap = float64(d.LineGap)
+	}
+	// One multiplication over the summed ratio rather than three over the terms.
+	// A layout unit is a 64th of a pixel and each product is rounded to one, so
+	// adding three rounded products is not the same number as rounding the sum —
+	// it is out by up to a unit and a half, which is enough to move a line.
+	h := b.FontSize.Mul((top - bottom + gap) / upem)
 	if h <= 0 {
 		// A face stating metrics that sum to nothing would collapse every line
 		// on the page. It is not a value to pass on.
 		return b.FontSize.Mul(normalLineHeightFallbackFactor)
 	}
 	return h
+}
+
+// lineExtents is how far a face's type reaches above and below its baseline,
+// for the purpose of laying lines out.
+//
+// It is one function because the two places that ask have to agree. "line-height:
+// normal" is these two plus the line gap, and an inline box's *content area* —
+// what its background paints and what "text-top" and "text-bottom" name — is
+// these two exactly. When they come from different formulas the two disagree,
+// and the suite catches it directly: inline-formatting-context-002 draws a black
+// inline box beside a float of the same text and asks for the two to be the same
+// height. Ours were 14.4 and 19.2.
+//
+// # Where the numbers come from, and the case that forced this
+//
+// hhea's ascender and descender, for any face that has an hhea to state them.
+// The standard fourteen PDF faces have neither hhea nor OS/2: their metrics come
+// from AFM data, whose Ascender and Descender are *typographic* — about the top
+// of a "d" and the bottom of a "p" — rather than the box the face wants a line
+// laid out in. Times comes to 0.900em that way and Courier to 0.786em, which is
+// tighter than any browser sets the same text: a browser reads usWinAscent and
+// usWinDescent from a real Times, which come to about 1.15em.
+//
+// So for a face that states no line gap — the one thing that says there is no
+// hhea and no OS/2 behind these numbers — the glyph bounding box is used
+// instead. It is the AFM's own answer to the same question, it is the nearest
+// thing the file has to usWin*, and it puts Times at 1.116em and Courier at
+// 1.055em: inside §10.8.1's recommended range, and close to what a browser
+// produces for the same document.
+//
+// The previous shape of this was a 1.2 factor for "normal" alone, which put the
+// line height in range and left the content area at 0.900em. That is the pair
+// the suite disagreed with — and simply dropping the factor, so both came to
+// 0.900em, made them agree at a line height no browser would produce and lost
+// inline-formatting-context-015, whose reference is a 30px cell that two lines
+// of text have to fill.
+func lineMetrics(face *fonts.Face) (top, bottom, upem float64, ok bool) {
+	upem = float64(face.UnitsPerEm())
+	if upem <= 0 {
+		return 0, 0, 0, false
+	}
+	d := face.Descriptor()
+	top, bottom = float64(d.Ascent), float64(d.Descent)
+	if !d.Has(fonts.MetricLineGap) {
+		top, bottom = float64(d.BBox[3]), float64(d.BBox[1])
+	}
+	if top-bottom <= 0 {
+		return 0, 0, 0, false
+	}
+	return top, bottom, upem, true
+}
+
+// lineExtents is lineMetrics at a box's font size.
+func (l *layouter) lineExtents(b *Box, face *fonts.Face) (ascent, descent style.Unit, ok bool) {
+	top, bottom, upem, ok := lineMetrics(face)
+	if !ok {
+		return 0, 0, false
+	}
+	return b.FontSize.Mul(top / upem), b.FontSize.Mul(-bottom / upem), true
 }
 
 // baselineOf is where the text sits within a line box.
@@ -2852,13 +2914,10 @@ func (l *layouter) baselineOf(b *Box, lineHeight style.Unit) style.Unit {
 	if !ok {
 		return lineHeight.Mul(0.8)
 	}
-	d := face.Descriptor()
-	unitsPerEm := float64(face.UnitsPerEm())
-	if unitsPerEm == 0 {
+	ascent, descent, ok := l.lineExtents(b, face)
+	if !ok {
 		return lineHeight.Mul(0.8)
 	}
-	ascent := b.FontSize.Mul(float64(d.Ascent) / unitsPerEm)
-	descent := b.FontSize.Mul(-float64(d.Descent) / unitsPerEm)
 	halfLeading := lineHeight.Sub(ascent).Sub(descent).Div(2)
 	return halfLeading.Add(ascent)
 }
