@@ -670,6 +670,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 		y:          at.y.Add(border.Top).Add(padding.Top),
 		cbHeight:   declaredHeight,
 		cbDefinite: hasHeight,
+		carriedTop: at.carriedTop,
 	}
 	own := at.ctx
 	if sealed || b.Parent == nil {
@@ -825,6 +826,11 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	var y style.Unit
 	var pending marginRun
 	hoisted := false
+	// The floats that existed before this box began. Anything added after it is
+	// inside this box's own subtree and moves when this box moves — which is
+	// what decides whether a margin can carry a cleared child past a float. See
+	// where the hypothetical position is worked out.
+	outsideFloats := origin.ctx.mark()
 	// listIndex counts the list items among the children, which is what a
 	// numbered marker is numbered by. It counts only list items, so a heading
 	// between two items does not advance the numbering.
@@ -950,14 +956,53 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 		// no-clearance-due-to-large-margin-after-left-right in the suite are
 		// exactly that case, a 150px and a 185px top margin that carry a cleared
 		// empty box past the float so that nothing is drawn at all.
+		// §9.5.2 measures clearance against where the box would have gone had it
+		// not cleared anything — with 'clear' none, so with its top margin
+		// collapsing and leaving through the parent's open edge exactly as any
+		// other margin would. The whole run counts: the margin moves the parent
+		// and the box together, and the floats it is being measured against move
+		// with neither.
+		// A float placed inside this box is adjoining in the sense the suite's
+		// adjoining-float-before-clearance means: the margin that would carry
+		// the cleared box past it would move the float too, because both are
+		// inside the box the margin is leaving through. Its own assert says what
+		// follows — "if the clearance candidate would pull a float down with it
+		// (due to margin collapsing) if there were no clearance, clearance needs
+		// to be inserted to separate the two [...] No matter how large the
+		// margin is, it should still be just below the float."
+		//
+		// So against such a float the margin buys nothing and the hypothetical
+		// position is measured without it. Against a float that was already
+		// there before this box started, the margin moves this box relative to
+		// it and the run counts in full.
+		adjoining := origin.ctx.mark() > outsideFloats
 		hypothetical := y.Add(pending.value())
-		if escapes && !cm.through {
+		if escapes && adjoining && !cm.through {
 			hypothetical = y
+		} else if escapes {
+			hypothetical = hypothetical.Sub(origin.carriedTop)
 		}
 		clearance := l.clearanceAt(child, origin, hypothetical)
-		// Where the border edge lands: the hypothetical position with the
-		// clearance §9.5.2 computed against it laid under.
+
+		// Where the border edge lands, which is not the same question.
+		//
+		// With clearance, §9.5.2's first rule puts the edge level with the
+		// bottom of the float and the margin is spent getting there — that is
+		// what clearanceAt returns, measured from this box's own offset, so the
+		// edge is that offset plus it.
+		//
+		// Without clearance the margin is doing the moving. Where it goes
+		// depends on whether the parent's edge is open: through it, in which
+		// case the parent moves and the box stays at the offset the flow has
+		// reached — adding the run here as well would count it twice — or into
+		// the parent, in which case it is this box that moves.
 		edge := hypothetical.Add(clearance)
+		if clearance == 0 && escapes {
+			// No clearance, and the margin leaves through the parent's open
+			// edge: it moves the parent, and this box stays where the flow had
+			// reached. Adding the run here as well would count it twice.
+			edge = y
+		}
 
 		if cm.through && clearance == 0 {
 			// Nothing separates this box's own margins, so it contributes no
@@ -1269,7 +1314,9 @@ func (l *layouter) settleIn(child *Box, width style.Unit, origin flow, cf *Fragm
 	// about to be thrown away — and the page would carry a ghost of every
 	// absolutely positioned box inside a subtree that had to be laid out again.
 	l.deferred = l.deferred[:absMark]
-	again, _ := l.blockIn(child, width, origin.at(actual), forced)
+	corrected := origin.at(actual)
+	corrected.carriedTop = delta
+	again, _ := l.blockIn(child, width, corrected, forced)
 	return again
 }
 
