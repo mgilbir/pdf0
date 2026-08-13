@@ -535,23 +535,6 @@ func leavesInk(text string) bool {
 	return false
 }
 
-// isDefaultIgnorable is the part of Unicode's Default_Ignorable_Code_Point
-// property this comparison meets: the bidi controls, the joiners, and the marks
-// that are there to say something to the algorithm rather than to be seen.
-func isDefaultIgnorable(r rune) bool {
-	switch {
-	case r == 0x00AD, // soft hyphen
-		r == 0x034F,                // combining grapheme joiner
-		r >= 0x200B && r <= 0x200F, // zero width space through RLM
-		r >= 0x202A && r <= 0x202E, // the embedding and override controls
-		r >= 0x2060 && r <= 0x2064, // word joiner and the invisible operators
-		r >= 0x2066 && r <= 0x2069, // the isolates
-		r == 0xFEFF:                // zero width no-break space
-		return true
-	}
-	return false
-}
-
 // groupGlyphs is the identity of a run of abutting text: the glyphs each piece
 // of it draws, in the order they appear across the page.
 //
@@ -894,8 +877,32 @@ func runAdvance(v DrawText) style.Unit {
 	if v.Face == nil {
 		return 0
 	}
-	w, _ := style.FromPx(v.Face.Measure(v.Text, v.Size.Px()))
-	return w.Add(v.CharSpacing.Mul(float64(len([]rune(v.Text)))))
+	// The code points the shaper drops take no room, and they take no
+	// letter-spacing either: a run carrying a bidi control ends on the page
+	// exactly where the same run without it would. Counting them put the end
+	// past the next run's start — by a whole em per control under
+	// "letter-spacing: 1em" — so the two failed to abut and a document writing
+	// its overrides as characters was ruled different from a reference that drew
+	// the same picture from markup.
+	text := inkOnly(v.Text)
+	w, _ := style.FromPx(v.Face.Measure(text, v.Size.Px()))
+	return w.Add(v.CharSpacing.Mul(float64(len([]rune(text)))))
+}
+
+// inkOnly is a run's text without the code points the shaper drops.
+func inkOnly(text string) string {
+	if !strings.ContainsFunc(text, isDefaultIgnorable) {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	for _, r := range text {
+		if isDefaultIgnorable(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func abs(u style.Unit) style.Unit {

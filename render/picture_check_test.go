@@ -897,3 +897,39 @@ func TestPictureJoinsAcrossDirection(t *testing.T) {
 			"agreeing with anything")
 	}
 }
+
+// TestPictureDoesNotChargeSpacingToAControl is the same rule as the engine's,
+// on the other side of the comparison.
+//
+// Where a run ends on the page is what decides whether the next one abuts it,
+// and a code point the shaper drops moves that end by nothing at all — not its
+// own advance, which it has none of, and not a letter-space, which is added
+// between typographic character units and it is not one. Charging it one put the
+// end an em past the next run's start under "letter-spacing: 1em", the two
+// stopped abutting, and the group they should have formed became two marks that
+// the reference had one of.
+func TestPictureDoesNotChargeSpacingToAControl(t *testing.T) {
+	face, err := fonts.Standard("Helvetica")
+	if err != nil {
+		t.Skipf("no Helvetica: %v", err)
+	}
+	const size, spacing = 16.0, 5.0
+	mk := func(s string, x float64) Op {
+		return DrawText{
+			Text: s, At: Point{picPx(x), picPx(29)}, Size: picPx(size),
+			Color: style.RGBA{A: 1}, Face: face, CharSpacing: picPx(spacing),
+		}
+	}
+	// Where "ab" ends with a letter-space after each of its two characters.
+	end := 8 + face.Measure("ab", size) + 2*spacing
+
+	plain := []Op{mk("ab", 8), mk("cd", end)}
+	// The same ink, with a pop-directional-formatting carried along in the text.
+	// It draws nothing and is spaced from nothing, so the second run still
+	// begins exactly where the first one ends.
+	withControl := []Op{mk("ab‬", 8), mk("cd", end)}
+	if !pictureEqual(plain, withControl, picPage) {
+		t.Error("a run carrying a format character stopped abutting the run " +
+			"after it; the control was charged for room it does not take")
+	}
+}
