@@ -770,3 +770,50 @@ func TestPictureComparesTheGlyphsAndNotTheString(t *testing.T) {
 		t.Error("two different words at the same place compared equal")
 	}
 }
+
+// TestPictureJoinsRightToLeftRunsInLogicalOrder is the splice, in both
+// directions.
+//
+// Two abutting runs put the same ink on the page as one run of their text, and
+// the comparison has to say so: an inline box boundary splits a run without
+// moving a glyph, so "א<span>ב</span>ג" and "אבג" are the same picture and the
+// suite's bidi-span-001 asserts it. Refusing to join right-to-left runs at all —
+// which is what this did — ruled every such pair different.
+//
+// The order is the part that has to be right, and it is the reverse of the
+// left-to-right one: a run's text is in logical order, and in right-to-left text
+// the part that reads first is drawn furthest right. Splicing left-to-right
+// would make "אב" + "ג" out of a picture that reads "אבג", which is a different
+// page — so the second half of this test is the one that keeps the join from
+// being a way of agreeing with anything.
+//
+// The direction rather than the script is what the join turns on, so ASCII in a
+// run marked right-to-left tests it exactly and needs no Hebrew face.
+func TestPictureJoinsRightToLeftRunsInLogicalOrder(t *testing.T) {
+	face, err := fonts.Standard("Helvetica")
+	if err != nil {
+		t.Skipf("no Helvetica: %v", err)
+	}
+	const size = 16.0
+	run := func(s string, x float64) Op {
+		return DrawText{
+			Text: s, At: Point{picPx(x), picPx(29)}, Size: picPx(size),
+			Color: style.RGBA{A: 1}, Face: face, RTL: true,
+		}
+	}
+	width := func(s string) float64 { return face.Measure(s, size) }
+
+	whole := []Op{run("abcd", 8)}
+	// The same ink: "ab" reads first, so it is drawn to the right of "cd".
+	split := []Op{run("ab", 8+width("cd")), run("cd", 8)}
+	if !pictureEqual(whole, split, picPage) {
+		t.Error("a right-to-left run split in two compared different from the whole")
+	}
+	// The other arrangement puts the same letters on the page in the other
+	// order, which is a different page and must not compare equal.
+	swapped := []Op{run("cd", 8+width("ab")), run("ab", 8)}
+	if pictureEqual(whole, swapped, picPage) {
+		t.Error("two right-to-left runs in the other order compared equal; the " +
+			"join is agreeing with anything")
+	}
+}

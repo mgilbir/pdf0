@@ -753,6 +753,10 @@ func joinRuns(runs []DrawText) []DrawText {
 		// where they abut, so they are not joined. Clip is comparable, which is
 		// what lets it sit in a map key at all.
 		clip Clip
+		// Direction is part of the key because it decides how two abutting runs
+		// are spliced, and because a left-to-right run between two
+		// right-to-left ones is not part of either chain.
+		rtl bool
 	}
 	// Runs are gathered per group and spliced within it. The order of the output
 	// is not the paint order any more, which is why this is used only by texts:
@@ -762,7 +766,7 @@ func joinRuns(runs []DrawText) []DrawText {
 	var order []key
 	out := make([]DrawText, 0, len(runs))
 	for _, v := range runs {
-		if v.RTL || v.Face == nil {
+		if v.Face == nil {
 			// A run with no face has no advance to add, so "where it ends" is
 			// unanswerable and the chain has to stop at it rather than treat it
 			// as zero wide. Nothing the engine draws is faceless; the hand-built
@@ -772,7 +776,7 @@ func joinRuns(runs []DrawText) []DrawText {
 			out = append(out, v)
 			continue
 		}
-		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color, v.Clip}
+		k := key{v.At.Y, v.Size, v.CharSpacing, v.Face, v.Color, v.Clip, v.RTL}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
@@ -784,7 +788,15 @@ func joinRuns(runs []DrawText) []DrawText {
 		cur, end := g[0], g[0].At.X.Add(runAdvance(g[0]))
 		for _, next := range g[1:] {
 			if abs(end.Sub(next.At.X)) <= joinSlack {
-				cur.Text += next.Text
+				if k.rtl {
+					// A run's text is in logical order — see shapedText — and in
+					// a right-to-left run the text that reads first is drawn
+					// furthest right. So the run being appended, which is the
+					// one further right, goes in front.
+					cur.Text = next.Text + cur.Text
+				} else {
+					cur.Text += next.Text
+				}
 				end = end.Add(runAdvance(next))
 				continue
 			}
