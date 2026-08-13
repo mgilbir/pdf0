@@ -660,6 +660,13 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 	switch value {
 	case "none":
 		return OuterNone, InnerFlow, false
+	case "-webkit-box":
+		// The legacy flexible box, of which this engine implements exactly the
+		// part CSS Overflow 4's compatibility section needs: a block that
+		// "-webkit-line-clamp" can be written on. Its own layout — the old
+		// flexbox — is not implemented, and treating it as a block is what every
+		// engine does for the vertical, single-column case the clamp is used in.
+		return OuterBlock, InnerFlow, false
 	case "block", "flow-root":
 		inner := InnerFlow
 		if value == "flow-root" {

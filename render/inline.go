@@ -509,6 +509,24 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	indent := l.textIndent(b, width)
 	firstLine := true
 
+	// CSS Overflow 4's line-clamp: how many lines this block shows, and whether
+	// it has to say that it cut something off.
+	maxLines := l.lineClamp(b)
+	clampEllipsis := style.Unit(0)
+	if maxLines > 0 && l.countLines(items, width, indent, maxLines+1) > maxLines {
+		// Only when content is actually discarded. A block clamped to three
+		// lines that has two says nothing, which is the difference between the
+		// property and a truncation.
+		// The block's own font, because §"block-ellipsis" puts the mark in the
+		// block container rather than in whatever inline box the last line
+		// happened to end inside — the suite's line-clamp-002 sets the text in a
+		// span a quarter the block's size and expects the ellipsis at the
+		// block's.
+		if face, ok := l.fontFor(b); ok {
+			clampEllipsis = l.measure(face, blockEllipsis, b.FontSize)
+		}
+	}
+
 	// §5.1's balancing, as a cap on how wide a line may be broken.
 	//
 	// It is a cap and not a width: the line boxes still span the band, and only
@@ -516,6 +534,18 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// would move a centred line and shorten a right-aligned one, which is a
 	// different rendering from the one balancing asks for.
 	balanceCaps := l.balanceCaps(b, items, width, indent)
+	if balanceCaps != nil && maxLines > 0 {
+		// Balancing a clamped block is a different question, because the clamp
+		// has already decided how many lines there are: any width at all
+		// produces that many, so "the narrowest width with the same line count"
+		// asks nothing. What must not change is how much of the content is
+		// *shown* — §5.1 evens out the lines, it does not throw more away — so
+		// the search is over the reach instead. See balanceClampedWidth.
+		w := l.balanceClampedWidth(items, width, indent, clampEllipsis, maxLines)
+		for i := range balanceCaps {
+			balanceCaps[i] = w
+		}
+	}
 	// Whether any line of a balanced box turned out to be shortened by a float.
 	// See reportBalanceBesideFloat.
 	balanceMetFloat := false
@@ -567,6 +597,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		if firstLine {
 			lineIndent = indent
 		}
+		// The room the ellipsis needs on this line, which is the last one the
+		// clamp allows and nothing before it.
+		lineEllipsis := style.Unit(0)
+		if maxLines > 0 && len(parent.Lines) == maxLines-1 {
+			lineEllipsis = clampEllipsis
+		}
 
 		// A line is shortened by every float its *box* meets, not only by the
 		// ones its top edge meets — §9.5's "line boxes created next to the float
@@ -607,7 +643,8 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// room as the balanced width less the indent, and taking the
 				// indent off the band instead makes the two disagree by exactly
 				// the indent on the one line it applies to.
-				style.Min(right.Sub(left), capAt(balanceCaps, i)).Sub(lineIndent),
+				style.Min(right.Sub(left), capAt(balanceCaps, i)).
+					Sub(lineIndent).Sub(lineEllipsis),
 				left.Sub(lo).Add(lineIndent))
 			stack = stackLine(runs, st)
 			lh, bl = stack.height, stack.baseline
@@ -683,12 +720,31 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			}
 			y, left, right = ny, nl, nr
 		}
+		// On the line the clamp ends at, a unit too wide to sit beside the
+		// ellipsis is not shown at all. Everywhere else this engine sets an
+		// over-long word anyway, because the alternative is losing it; here
+		// losing it is exactly what the clamp asks for, and the mark is what
+		// stands in its place. "123456789012" against nine characters less an
+		// ellipsis leaves the line holding nothing but the mark, which is what
+		// line-clamp-004 draws.
+		if lineEllipsis > 0 {
+			var used style.Unit
+			for _, r := range runs {
+				used = used.Add(r.width)
+			}
+			if used > right.Sub(left).Sub(lineIndent).Sub(lineEllipsis) {
+				runs, next, nextByte = nil, len(items), 0
+				stack = stackLine(runs, st)
+				lh, bl = stack.height, stack.baseline
+			}
+		}
+
 		lineWidth := right.Sub(left)
 		if balanceCaps != nil && lineWidth < width {
 			balanceMetFloat = true
 		}
 		textWidth := lineWidth.Sub(lineIndent)
-		if len(runs) > 0 || forced {
+		if len(runs) > 0 || forced || lineEllipsis > 0 {
 			line := LineFragment{
 				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lh},
 				Baseline: bl,
@@ -817,6 +873,22 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// until §8.6 knows which piece of its box it is.
 			decor.addLine(len(parent.Lines), runs, xs,
 				line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack)
+			if lineEllipsis > 0 {
+				// The mark goes where the line's own content ends, which is not
+				// where the line box does: an aligned line may have been moved,
+				// and a right-to-left one ends at its left. alignedWidth is the
+				// same measure the alignment used.
+				at := shift.Add(used)
+				if lineBaseIsRTL(b, runs) {
+					at = shift.Sub(lineEllipsis)
+				}
+				if face, ok := l.fontFor(b); ok {
+					line.Runs = append(line.Runs, TextRun{
+						Text: blockEllipsis, Face: face, Size: b.FontSize,
+						X: at, Width: lineEllipsis, Box: b,
+					})
+				}
+			}
 			parent.Lines = append(parent.Lines, line)
 			// The indent belongs to the first line box that actually exists. A run
 			// of inline content that produced none — the collapsible space between
@@ -894,13 +966,22 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		if !cursorAdvanced(wasI, wasByte, i, iByte) {
 			i, iByte = wasI+1, 0
 		}
-		if len(runs) > 0 || forced {
+		if len(runs) > 0 || forced || lineEllipsis > 0 {
 			// Only a line that exists occupies a line's height. A run of inline
 			// content that is nothing but the collapsible space between two
 			// block children produces no line box at all, and giving it one
 			// would put a blank line into every document whose markup is
 			// indented.
+			//
+			// The clamp's own line exists even when nothing of the content fits
+			// on it, because the ellipsis is on it: a block clamped to three
+			// lines whose third holds only the mark is three lines tall.
 			y = y.Add(lh)
+		}
+		if maxLines > 0 && len(parent.Lines) >= maxLines {
+			// The clamp: everything after this line is discarded, which is what
+			// "continue: discard" means and what the ellipsis just said.
+			break
 		}
 	}
 	decor.finish(parent)
@@ -2473,6 +2554,68 @@ func (l *layouter) reportBalanceBesideFloat(b *Box) {
 	})
 }
 
+// blockEllipsis is what a clamped block puts at the end of its last line.
+//
+// CSS Overflow 4's "block-ellipsis: auto" is "a UA-defined value", and the
+// horizontal ellipsis is the one every engine uses and the one the suite's
+// references write.
+const blockEllipsis = "\u2026"
+
+// lineClamp is how many lines CSS Overflow 4 lets this block show, or zero for
+// no limit.
+//
+// Two spellings, and the second is not a synonym for the first. The unprefixed
+// property is read on its own; the prefixed one is only the clamp when the two
+// declarations that made it work in the engine it came from are there as well —
+// §"Legacy" gives the trio as "display: -webkit-box", "-webkit-box-orient:
+// vertical" and "-webkit-line-clamp". A document that writes only
+// "-webkit-line-clamp" on an ordinary block is not asking for anything, and
+// browsers give it nothing.
+//
+// A count of zero or less clamps nothing rather than clamping everything away:
+// the value is an integer with no stated floor, and a block with no lines at all
+// is not something a stylesheet can plausibly be asking for.
+func (l *layouter) lineClamp(b *Box) int {
+	if n, ok := positiveInteger(b.Style["line-clamp"]); ok {
+		return n
+	}
+	if !strings.EqualFold(strings.TrimSpace(b.Style["display"]), "-webkit-box") ||
+		!strings.EqualFold(strings.TrimSpace(b.Style["-webkit-box-orient"]), "vertical") {
+		return 0
+	}
+	if n, ok := positiveInteger(b.Style["-webkit-line-clamp"]); ok {
+		return n
+	}
+	return 0
+}
+
+// positiveInteger reads a whole number above zero, which is the only form of
+// either clamp property this engine acts on.
+func positiveInteger(value string) (int, bool) {
+	s := strings.TrimSpace(value)
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+		n = n*10 + int(s[i]-'0')
+		if n > maxClampLines {
+			return maxClampLines, true
+		}
+	}
+	return n, n > 0
+}
+
+// maxClampLines bounds the count an untrusted stylesheet can state.
+//
+// The number is only ever compared against a line count, so a large one clamps
+// nothing — but it is parsed from a document and multiplied by nothing, and a
+// bound costs one line. It is far above any block a reader would call clamped.
+const maxClampLines = 1 << 20
+
 // maxBalanceLines bounds how many lines this engine will balance.
 //
 // Balancing costs a binary search over the width, and each probe breaks the
@@ -2576,6 +2719,90 @@ func capAt(caps []style.Unit, i int) style.Unit {
 		return style.MaxUnit
 	}
 	return caps[i]
+}
+
+// balanceClampedWidth is §5.1's balancing where CSS Overflow 4's clamp has
+// already cut the block off: the narrowest width that still shows everything the
+// full width showed.
+//
+// The suite states the rule as a picture rather than as prose, and both of its
+// halves are in the diagrams. line-clamp-002 balances "1 2 3 4 5 6 7 8 9 0 1 2"
+// into two lines of thirteen characters where the second carries a four-
+// character ellipsis — so the ellipsis is part of what is being evened out, not
+// something added afterwards. And line-clamp-003 shows *more* text balanced than
+// unbalanced: three lines of "1 2 3", "4 5 6", "7 8 9…" against an unbalanced
+// "1 2 3 4 5", "6 7 8 9", "…", because the narrower measure lets the last line
+// hold something beside the mark.
+//
+// So the search is over how far into the content the clamped layout reaches,
+// and the answer is the narrowest width that reaches as far as the full width
+// did. Reaching *further* is fine and is what the third line above does.
+func (l *layouter) balanceClampedWidth(items []inlineItem,
+	width, indent, ellipsis style.Unit, maxLines int) style.Unit {
+
+	wantI, wantByte := l.clampedReach(items, width, indent, ellipsis, maxLines)
+	lo, hi := style.Unit(1), width
+	for hi.Sub(lo) > 1 {
+		mid := lo.Add(hi.Sub(lo).Div(2))
+		i, iByte := l.clampedReach(items, mid, indent, ellipsis, maxLines)
+		if i > wantI || (i == wantI && iByte >= wantByte) {
+			hi = mid
+			continue
+		}
+		lo = mid
+	}
+	return hi
+}
+
+// clampedReach is how far into the items a clamped block gets: the cursor after
+// the last line it shows.
+//
+// The last line is the one the ellipsis sits on, so it is broken in a narrower
+// measure than the rest — and it is the one line that does not overflow. A word
+// too long for its line is set anyway everywhere else in this engine, because
+// the alternative is losing it; here the alternative is exactly what the clamp
+// asks for, since what does not fit beside the mark is what the mark stands for.
+// "unbreakable" against nine characters less an ellipsis shows nothing at all,
+// which is what the suite's line-clamp-003 draws.
+func (l *layouter) clampedReach(items []inlineItem,
+	width, indent, ellipsis style.Unit, maxLines int) (int, int) {
+
+	i, iByte := 0, 0
+	for n := 0; n < maxLines; n++ {
+		for iByte == 0 && i < len(items) && items[i].float != nil {
+			i++
+		}
+		if i >= len(items) {
+			break
+		}
+		room := width
+		if n == 0 {
+			room = room.Sub(indent)
+		}
+		last := n == maxLines-1
+		if last {
+			room = room.Sub(ellipsis)
+		}
+		wasI, wasByte := i, iByte
+		runs, next, nextByte, _, _ := l.breakOneLine(items, i, iByte, room, 0)
+		if last {
+			var used style.Unit
+			for _, r := range runs {
+				used = used.Add(r.width)
+			}
+			if used > room {
+				// The breaker only overflows when a single unit left it no
+				// choice, so a line wider than its room is one unit that did not
+				// fit — and on the clamped line that unit is not shown.
+				break
+			}
+		}
+		i, iByte = next, nextByte
+		if !cursorAdvanced(wasI, wasByte, i, iByte) {
+			break
+		}
+	}
+	return i, iByte
 }
 
 // countLines is how many lines the greedy breaker makes of these items in a

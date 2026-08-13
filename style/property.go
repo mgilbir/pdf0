@@ -136,6 +136,23 @@ var properties = map[string]property{
 	// text-wrap-mode allows. "balance" is implemented; the others are read as
 	// auto and reported.
 	"text-wrap-style": {true, "auto"},
+	// line-clamp cuts a block off after a number of lines and marks the cut.
+	// CSS Overflow 4 defines it as a shorthand for max-lines, block-ellipsis and
+	// continue; the three are not registered separately because the only
+	// combination this engine acts on is the one the shorthand's integer form
+	// sets, and a longhand nothing reads is worse than no longhand.
+	//
+	// It does not inherit: it says where *this* block stops, and a paragraph
+	// inside a clamped one is not itself clamped.
+	"line-clamp": {false, "none"},
+	// The prefixed form, and the property that makes it apply. CSS Overflow 4's
+	// compatibility section defines the legacy behaviour as this trio —
+	// "display: -webkit-box", "-webkit-box-orient: vertical" and
+	// "-webkit-line-clamp: <integer>" — so all three are read, and reading them
+	// is what keeps a document that writes the old spelling from being reported
+	// as using three things this engine ignores.
+	"-webkit-line-clamp": {false, "none"},
+	"-webkit-box-orient": {false, "horizontal"},
 	// overflow-wrap inherits. word-wrap is the name Internet Explorer shipped it
 	// under and is a legal alias in CSS Text §5.5, so it is registered rather
 	// than reported: a document using it is not using an unsupported property.
