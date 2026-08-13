@@ -132,6 +132,13 @@ var properties = map[string]property{
 	// "keep-all" changes where CJK text may break and getting it wrong silently
 	// is a line broken in the middle of a word.
 	"word-break": {true, "normal"},
+	// line-break inherits too, and only "anywhere" is acted on. The other three
+	// — loose, normal and strict — differ from auto in how strictly CJK text may
+	// break around small kana and punctuation, which this engine does not model
+	// at all; they are read as auto and reported only over text where the
+	// difference could show, since the suite has tests asserting in as many words
+	// that they change nothing about Latin text.
+	"line-break": {true, "auto"},
 	// tab-size inherits, which is the answer that makes a <pre> inside a
 	// styled <article> keep the tab width the author set on the article. A
 	// number is a count of space advances and a length is itself; the initial

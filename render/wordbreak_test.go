@@ -164,7 +164,7 @@ func TestSplitAtBreaksCutsAtClusterBoundariesOnly(t *testing.T) {
 		"a b́c",                 // a space among them
 	}
 	for _, text := range cases {
-		pieces, _ := splitAtBreaks(text, whiteSpaceOf("normal"), wordBreak{breakAll: true})
+		pieces, _ := splitAtBreaks(text, whiteSpaceOf("normal"), wordBreak{breakAll: true}, lineBreak{})
 
 		// Every cut must fall on a boundary the segmenter agrees with, and the
 		// pieces must still spell the text.
@@ -198,7 +198,7 @@ func TestSplitAtBreaksCutsAtClusterBoundariesOnly(t *testing.T) {
 // every cut through the segmenter fixes it.
 func TestAHangulSyllableIsNotCutFromItsJamo(t *testing.T) {
 	const syllable = "각" // 각, spelled LV + T
-	pieces, _ := splitAtBreaks(syllable, whiteSpaceOf("normal"), wordBreak{})
+	pieces, _ := splitAtBreaks(syllable, whiteSpaceOf("normal"), wordBreak{}, lineBreak{})
 	for i, p := range pieces {
 		if i > 0 && p.breakBefore {
 			t.Fatalf("a line may end inside one Hangul syllable: %q then %q",
@@ -208,7 +208,7 @@ func TestAHangulSyllableIsNotCutFromItsJamo(t *testing.T) {
 
 	// And two whole syllables still break between them, which is the rule this
 	// must not have disabled to pass.
-	pieces, _ = splitAtBreaks("가가", whiteSpaceOf("normal"), wordBreak{})
+	pieces, _ = splitAtBreaks("가가", whiteSpaceOf("normal"), wordBreak{}, lineBreak{})
 	if len(pieces) != 2 || !pieces[1].breakBefore {
 		t.Errorf("two Hangul syllables gave %d pieces with no opportunity between "+
 			"them; the ideograph rule has been turned off rather than corrected",

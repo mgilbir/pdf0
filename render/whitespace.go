@@ -132,6 +132,43 @@ func wordBreakOf(value string) (wordBreak, string) {
 	return wordBreak{}, ""
 }
 
+// lineBreak is what the line-break property sets: how strict the rules are about
+// where a line may end.
+//
+// Three of its four values are about CJK text — loose, normal and strict move
+// breaks around small kana, iteration marks and centred punctuation — and this
+// engine's CJK breaking is one rule, "between two ideographs", which none of the
+// three refines. They are read as auto for that reason, and reported only over
+// text that contains an ideograph: the suite has three tests whose whole
+// assertion is that "line-break: loose" changes nothing about "XX    XX", and a
+// warning there would be a false one.
+//
+// The fourth is different in kind and is implemented. CSS Text §5.3:
+//
+//	anywhere: There is a soft wrap opportunity around every typographic
+//	character unit, including around any punctuation character or preserved
+//	white spaces, or in the middle of words, disregarding any prohibition
+//	against line breaks, even those introduced by characters with the GL, WJ, or
+//	ZWJ character class or mandated by the word-break property.
+type lineBreak struct {
+	// anywhere is that value: an opportunity at every grapheme cluster boundary,
+	// and no prohibition survives it.
+	anywhere bool
+}
+
+// lineBreakOf reads the property. The second result is the value to report as
+// unhandled, or the empty string — and reporting it is still conditional on the
+// text, which is the caller's decision rather than this one's.
+func lineBreakOf(value string) (lineBreak, string) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "anywhere":
+		return lineBreak{anywhere: true}, ""
+	case "loose", "normal", "strict":
+		return lineBreak{}, strings.ToLower(strings.TrimSpace(value))
+	}
+	return lineBreak{}, ""
+}
+
 // overflowWrap is what the overflow-wrap property sets: whether a word with
 // nowhere to break may be broken anyway rather than overflowing its line.
 //
