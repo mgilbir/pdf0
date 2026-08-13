@@ -508,6 +508,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// box's own content width, which is the width being laid out in.
 	indent := l.textIndent(b, width)
 	firstLine := true
+	_ = firstLine
 
 	// CSS Overflow 4's line-clamp: how many lines this block shows, and whether
 	// it has to say that it cut something off.
@@ -546,448 +547,490 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			balanceCaps[i] = w
 		}
 	}
-	// Whether any line of a balanced box turned out to be shortened by a float.
-	// See reportBalanceBesideFloat.
+	// Whether any line of a balanced box turned out to be shortened by a float,
+	// which is what says the balancing has to be done again in the widths those
+	// lines really had.
 	balanceMetFloat := false
 
 	// The inline boxes with a background or a border, gathered as the lines are
 	// built and turned into fragments once the last line is known: §8.6 puts a
 	// box's trailing margin, border and padding on the piece it ends with, and
 	// which piece that is cannot be answered until there are no more.
-	decor := inlineDecor{l: l, containing: width, strut: st}
+	var decor inlineDecor
+
+	// Where this box's lines begin, so that a first attempt at them can be taken
+	// back. Balancing beside a float needs the widths the lines actually had,
+	// and those are not known until the lines exist: the floats inside the box
+	// are placed as the loop meets them, and what shortens a line is decided by
+	// the lines above it. So the box is laid out once to find out, thrown away,
+	// and laid out again in the measure that answer gives.
+	//
+	// It is thrown away with the same three handles the per-line retry above
+	// uses — the float context, the out-of-flow queue and the fragment's own
+	// children — plus its lines. Anything else the pass touched is a memo keyed
+	// by box, and recomputing it gives the same answer.
+	linesAt, kidsAt := len(parent.Lines), len(parent.Children)
+	ctxAt, absAt := origin.ctx.mark(), len(l.deferred)
 
 	var y style.Unit
+	// The width each line turned out to have, which is the band a float left it.
+	var bands []style.Unit
 	// iByte is how far into items[i] the next line begins, which is other than
 	// zero only where overflow-wrap ended the line inside a word.
-	iByte := 0
-	for i := 0; i < len(items); {
-		// Where this pass started, so that the foot of the loop can tell whether
-		// it moved. Nothing in the body increments the cursor on its own: it is
-		// carried entirely by what breakOneLine hands back.
-		wasI, wasByte := i, iByte
-		// A float that begins a line is placed before the line is measured,
-		// because it is one of the floats the line has to avoid. §9.5.1 rule 4
-		// puts its top at the top of the line box it belongs to.
-		for iByte == 0 && i < len(items) && items[i].float != nil {
-			parent.Children = append(parent.Children,
-				l.floatChild(items[i].float, width, origin, y, style.MaxUnit, 0, 0))
-			i++
-		}
-		if i >= len(items) {
-			break
-		}
-
-		left, right := origin.ctx.bandAt(origin.y.Add(y), lo, hi)
-		// What has to fit beside a float is what this line will actually start
-		// with, which is the *remainder* of a word the line before broke — not
-		// the whole word, whose width would push the line down past a float it
-		// has room beside.
-		firstItem := items[i]
-		if iByte > 0 {
-			_, firstItem = l.splitItem(firstItem, iByte)
-		}
-		y, left, right = l.roomForLine(firstItem, origin, y, left, right, lo, hi)
-
-		// The indent is taken off the room the first line has for text, not off
-		// the line box: the line box still spans the band, and its content starts
-		// further in. Taking it off the box instead would make a "text-align:
-		// right" first line end short of the right edge by the indent, which is
-		// the opposite of what §16.1 asks for.
-		lineIndent := style.Unit(0)
-		if firstLine {
-			lineIndent = indent
-		}
-		// The room the ellipsis needs on this line, which is the last one the
-		// clamp allows and nothing before it.
-		lineEllipsis := style.Unit(0)
-		if maxLines > 0 && len(parent.Lines) == maxLines-1 {
-			lineEllipsis = clampEllipsis
-		}
-
-		// A line is shortened by every float its *box* meets, not only by the
-		// ones its top edge meets — §9.5's "line boxes created next to the float
-		// are shortened to make room for the margin box of the float", where
-		// "next to" is a relation between two rectangles. So the band has to be
-		// asked over the line's height, and the line's height is not known until
-		// the line has been broken against a band.
-		//
-		// The circle is broken the way browsers break it: break against the band
-		// at the top, measure, ask again over the height that produced, and
-		// break again if the answer moved. A float whose top is below the top of
-		// the line is exactly the case a single-y query cannot see, and the suite
-		// tests it by name in floats-wrap-top-below-inline-*.
-		var (
-			runs     []inlineItem
-			next     int
-			nextByte int
-			mid      []midLineBox
-			forced   bool
-			lh, bl   style.Unit
-			stack    lineStack
-			midKids  []*Fragment
-			after    []midLineBox
-			baseRoom = right.Sub(left)
-		)
-		// Where this line's own floats begin, so that an attempt that has to be
-		// made again can put the context back as it found it. The floats that
-		// *started* the line are before the mark and stay.
-		midMark, midAbs := origin.ctx.mark(), len(l.deferred)
-		for attempt := 0; ; attempt++ {
-			origin.ctx.truncate(midMark)
-			l.deferred = l.deferred[:midAbs]
-			midKids = midKids[:0]
-
-			runs, next, nextByte, mid, forced = l.breakOneLine(items, i, iByte,
-				// The cap is a *line* width, so the indent comes off it and not
-				// off the band before it: the search counted the first line's
-				// room as the balanced width less the indent, and taking the
-				// indent off the band instead makes the two disagree by exactly
-				// the indent on the one line it applies to.
-				style.Min(right.Sub(left), capAt(balanceCaps, i)).
-					Sub(lineIndent).Sub(lineEllipsis),
-				left.Sub(lo).Add(lineIndent))
-			stack = stackLine(runs, st)
-			lh, bl = stack.height, stack.baseline
-
-			// A float met part-way along the line is placed *now*, before the
-			// band is asked again, because §9.5 shortens "the current and
-			// subsequent line boxes" — the line it appears on included. Placing
-			// it after the line was settled, which is what this used to do, left
-			// the words it should have pushed aside sitting underneath it: the
-			// suite's floats-001, -006, -029, -030 and -031 each put a float
-			// after the content of a line and check that the content moved.
-			//
-			// The room it is offered is measured in the band the line started
-			// from rather than in the one it has been narrowed to. That is what
-			// makes the loop settle: narrowing the band and then asking again
-			// whether the float fits in what is left of it counts the float
-			// twice, and a float that fits on one attempt stops fitting on the
-			// next and starts fitting again on the one after. Against the
-			// original band the advance can only shrink as the band narrows, so
-			// a float that fits goes on fitting.
-			//
-			// A float that ends up *below* the line — because it did not fit
-			// beside what is already there, or because it cleared something —
-			// is taken back out and placed once the line is settled. It is not
-			// beside the line, so it does not shorten it, and leaving it in
-			// would: a line box is a little taller than the box on it, so a
-			// float sitting under the line reaches a few pixels into the range
-			// the band is asked over and narrows it to nothing. floats-
-			// placement-006 is that exactly, an inline-block and a "clear: both"
-			// float that between them drove the line two hundred pixels down
-			// the page.
-			//
-			// From the first such float onwards the rest are placed after the
-			// line too, in order. Rolling one back is a truncation, so it can
-			// only be the last thing in the context; and a float placed while an
-			// earlier one is missing is placed against the wrong obstacles.
-			after = after[:0]
-			for _, f := range mid {
-				if f.abs {
-					continue
-				}
-				if len(after) > 0 {
-					after = append(after, f)
-					continue
-				}
-				held, heldAbs := origin.ctx.mark(), len(l.deferred)
-				kid := l.floatChild(f.box, width, origin, y, baseRoom.Sub(f.used), lh, 0)
-				if kid.MarginRect().Y > y {
-					origin.ctx.truncate(held)
-					// The out-of-flow boxes the discarded layout found go with
-					// it, or the float would defer each of them twice when it is
-					// laid out again after the line.
-					l.deferred = l.deferred[:heldAbs]
-					after = append(after, f)
-					continue
-				}
-				midKids = append(midKids, kid)
+	var iByte int
+	for pass := 0; ; pass++ {
+		y, iByte = 0, 0
+		bands = bands[:0]
+		firstLine = true
+		balanceMetFloat = false
+		decor = inlineDecor{l: l, containing: width, strut: st}
+		for i := 0; i < len(items); {
+			// Where this pass started, so that the foot of the loop can tell whether
+			// it moved. Nothing in the body increments the cursor on its own: it is
+			// carried entirely by what breakOneLine hands back.
+			wasI, wasByte := i, iByte
+			// A float that begins a line is placed before the line is measured,
+			// because it is one of the floats the line has to avoid. §9.5.1 rule 4
+			// puts its top at the top of the line box it belongs to.
+			for iByte == 0 && i < len(items) && items[i].float != nil {
+				parent.Children = append(parent.Children,
+					l.floatChild(items[i].float, width, origin, y, style.MaxUnit, 0, 0))
+				i++
 			}
-
-			if lh <= 0 || attempt >= maxLineFits {
+			if i >= len(items) {
 				break
 			}
-			top := origin.y.Add(y)
-			nl, nr := origin.ctx.bandOver(top, top.Add(lh), lo, hi)
-			if nl == left && nr == right {
-				break
+
+			left, right := origin.ctx.bandAt(origin.y.Add(y), lo, hi)
+			// What has to fit beside a float is what this line will actually start
+			// with, which is the *remainder* of a word the line before broke — not
+			// the whole word, whose width would push the line down past a float it
+			// has room beside.
+			firstItem := items[i]
+			if iByte > 0 {
+				_, firstItem = l.splitItem(firstItem, iByte)
 			}
-			// The narrower band may leave no room at all, in which case the line
-			// drops past the float exactly as it would have at its top edge.
-			ny, nl, nr := l.roomForLine(items[i], origin, y, nl, nr, lo, hi)
-			if ny == y && nl == left && nr == right {
-				break
+			y, left, right = l.roomForLine(firstItem, origin, y, left, right, lo, hi)
+
+			// The indent is taken off the room the first line has for text, not off
+			// the line box: the line box still spans the band, and its content starts
+			// further in. Taking it off the box instead would make a "text-align:
+			// right" first line end short of the right edge by the indent, which is
+			// the opposite of what §16.1 asks for.
+			lineIndent := style.Unit(0)
+			if firstLine {
+				lineIndent = indent
 			}
-			y, left, right = ny, nl, nr
-		}
-		// On the line the clamp ends at, a unit too wide to sit beside the
-		// ellipsis is not shown at all. Everywhere else this engine sets an
-		// over-long word anyway, because the alternative is losing it; here
-		// losing it is exactly what the clamp asks for, and the mark is what
-		// stands in its place. "123456789012" against nine characters less an
-		// ellipsis leaves the line holding nothing but the mark, which is what
-		// line-clamp-004 draws.
-		if lineEllipsis > 0 {
-			var used style.Unit
-			for _, r := range runs {
-				used = used.Add(r.width)
+			// The room the ellipsis needs on this line, which is the last one the
+			// clamp allows and nothing before it.
+			lineEllipsis := style.Unit(0)
+			if maxLines > 0 && len(parent.Lines) == maxLines-1 {
+				lineEllipsis = clampEllipsis
 			}
-			if used > right.Sub(left).Sub(lineIndent).Sub(lineEllipsis) {
-				runs, next, nextByte = nil, len(items), 0
+
+			// A line is shortened by every float its *box* meets, not only by the
+			// ones its top edge meets — §9.5's "line boxes created next to the float
+			// are shortened to make room for the margin box of the float", where
+			// "next to" is a relation between two rectangles. So the band has to be
+			// asked over the line's height, and the line's height is not known until
+			// the line has been broken against a band.
+			//
+			// The circle is broken the way browsers break it: break against the band
+			// at the top, measure, ask again over the height that produced, and
+			// break again if the answer moved. A float whose top is below the top of
+			// the line is exactly the case a single-y query cannot see, and the suite
+			// tests it by name in floats-wrap-top-below-inline-*.
+			var (
+				runs     []inlineItem
+				next     int
+				nextByte int
+				mid      []midLineBox
+				forced   bool
+				lh, bl   style.Unit
+				stack    lineStack
+				midKids  []*Fragment
+				after    []midLineBox
+				baseRoom = right.Sub(left)
+			)
+			// Where this line's own floats begin, so that an attempt that has to be
+			// made again can put the context back as it found it. The floats that
+			// *started* the line are before the mark and stay.
+			midMark, midAbs := origin.ctx.mark(), len(l.deferred)
+			for attempt := 0; ; attempt++ {
+				origin.ctx.truncate(midMark)
+				l.deferred = l.deferred[:midAbs]
+				midKids = midKids[:0]
+
+				runs, next, nextByte, mid, forced = l.breakOneLine(items, i, iByte,
+					// The cap is a *line* width, so the indent comes off it and not
+					// off the band before it: the search counted the first line's
+					// room as the balanced width less the indent, and taking the
+					// indent off the band instead makes the two disagree by exactly
+					// the indent on the one line it applies to.
+					style.Min(right.Sub(left), capAt(balanceCaps, i)).
+						Sub(lineIndent).Sub(lineEllipsis),
+					left.Sub(lo).Add(lineIndent))
 				stack = stackLine(runs, st)
 				lh, bl = stack.height, stack.baseline
-			}
-		}
 
-		lineWidth := right.Sub(left)
-		if balanceCaps != nil && lineWidth < width {
-			balanceMetFloat = true
-		}
-		textWidth := lineWidth.Sub(lineIndent)
-		if len(runs) > 0 || forced || lineEllipsis > 0 {
-			line := LineFragment{
-				Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lh},
-				Baseline: bl,
-			}
-			// Rules L1 and L2 over the runs of this line: where each of them
-			// sits, which on a line mixing directions is not the order they
-			// were collected in.
-			xs, total := l.lineOffsets(runs)
-			// Atomic inlines are placed as children of the block rather than as
-			// runs, so aligning the line has to move them too. The range is
-			// noted here because floats placed before the line are already in
-			// this slice and must not move: a float is out of flow and
-			// text-align says nothing about it.
-			atomicStart := len(parent.Children)
-			for k, item := range runs {
-				x := xs[k]
-				if item.atomic != nil {
-					// Placed as a child of the block rather than as a run,
-					// because it is a box: it has a background, a border, a
-					// padding and possibly a subtree of its own, and every one
-					// of those is painted by machinery that works on fragments.
-					// Its margin box hangs from the line's baseline by its own
-					// ascent, which is what puts a picture on the line of type
-					// and an inline-block's last line of text on it.
-					f := item.atomic
-					f.BorderRect.X = line.Rect.X.Add(x).Add(f.Margin.Left)
-					f.BorderRect.Y = y.Add(stack.atomicTop(item)).Add(f.Margin.Top)
-					parent.Children = append(parent.Children, f)
-					continue
+				// A float met part-way along the line is placed *now*, before the
+				// band is asked again, because §9.5 shortens "the current and
+				// subsequent line boxes" — the line it appears on included. Placing
+				// it after the line was settled, which is what this used to do, left
+				// the words it should have pushed aside sitting underneath it: the
+				// suite's floats-001, -006, -029, -030 and -031 each put a float
+				// after the content of a line and check that the content moved.
+				//
+				// The room it is offered is measured in the band the line started
+				// from rather than in the one it has been narrowed to. That is what
+				// makes the loop settle: narrowing the band and then asking again
+				// whether the float fits in what is left of it counts the float
+				// twice, and a float that fits on one attempt stops fitting on the
+				// next and starts fitting again on the one after. Against the
+				// original band the advance can only shrink as the band narrows, so
+				// a float that fits goes on fitting.
+				//
+				// A float that ends up *below* the line — because it did not fit
+				// beside what is already there, or because it cleared something —
+				// is taken back out and placed once the line is settled. It is not
+				// beside the line, so it does not shorten it, and leaving it in
+				// would: a line box is a little taller than the box on it, so a
+				// float sitting under the line reaches a few pixels into the range
+				// the band is asked over and narrows it to nothing. floats-
+				// placement-006 is that exactly, an inline-block and a "clear: both"
+				// float that between them drove the line two hundred pixels down
+				// the page.
+				//
+				// From the first such float onwards the rest are placed after the
+				// line too, in order. Rolling one back is a truncation, so it can
+				// only be the last thing in the context; and a float placed while an
+				// earlier one is missing is placed against the wrong obstacles.
+				after = after[:0]
+				for _, f := range mid {
+					if f.abs {
+						continue
+					}
+					if len(after) > 0 {
+						after = append(after, f)
+						continue
+					}
+					held, heldAbs := origin.ctx.mark(), len(l.deferred)
+					kid := l.floatChild(f.box, width, origin, y, baseRoom.Sub(f.used), lh, 0)
+					if kid.MarginRect().Y > y {
+						origin.ctx.truncate(held)
+						// The out-of-flow boxes the discarded layout found go with
+						// it, or the float would defer each of them twice when it is
+						// laid out again after the line.
+						l.deferred = l.deferred[:heldAbs]
+						after = append(after, f)
+						continue
+					}
+					midKids = append(midKids, kid)
 				}
-				if item.inset {
-					// An inline box's own margin, border and padding. It has
-					// taken its room on the line already — lineOffsets counted
-					// its width, so everything after it is where it belongs —
-					// and it draws nothing, so it becomes no run. A run with no
-					// text would reach the content stream as an empty
-					// text-showing operator and reach a reader extracting the
-					// page as nothing at all.
-					continue
+
+				if lh <= 0 || attempt >= maxLineFits {
+					break
 				}
-				shift := style.Unit(0)
-				decorations := item.decorations
-				if item.valign.aligned() {
-					shift = stack.shift(item.valign, item.above, item.below)
-					// §16.3.1: a decoration declared by an ancestor is drawn at
-					// *that* box's position and is not moved by the alignment of
-					// what it crosses — "text decorations on inline boxes are
-					// drawn across the entire element, going across any descendant
-					// elements without paying any attention to their presence". So
-					// three spans at three different vertical-aligns under one
-					// overlining div are crossed by one straight line, not three
-					// stepped ones.
-					//
-					// The copy is made only for a run something moved, which is
-					// almost none of them.
-					decorations = l.decorationsAt(decorations, &stack)
+				top := origin.y.Add(y)
+				nl, nr := origin.ctx.bandOver(top, top.Add(lh), lo, hi)
+				if nl == left && nr == right {
+					break
 				}
-				line.Runs = append(line.Runs, TextRun{
-					Text: item.text, Face: item.face, Size: item.size,
-					X: x, Width: item.width, Box: item.box, Offset: item.offset,
-					Decorations: decorations, LetterSpacing: item.spacing.letter,
-					RTL:   item.level&1 == 1,
-					Shift: shift,
-				})
-			}
-			// §4.1.2's hang comes in two strengths and the difference shows
-			// exactly here. Where the line ended at a soft wrap, its trailing
-			// white space hangs *unconditionally* and is never counted, which is
-			// what alignedWidth does. Where it ended at a forced break — a <br>,
-			// a preserved newline, or simply the end of the content — it hangs
-			// *conditionally*: "it hangs only if it does not otherwise fit in the
-			// line", so a space that fits is content and the line is aligned
-			// around it. The specification's own example is a centred pre-wrap
-			// paragraph reading " 0 " in five characters, which centres as three
-			// and not as two.
-			//
-			// The two are not a matter of degree. Counting the space on a
-			// soft-wrapped line pushes a right-aligned line a space clear of the
-			// edge; not counting it on the last line centres " 0 " off-centre.
-			//
-			// "Only if it does not otherwise fit" is a rule about each character
-			// and not about the sequence, which is the second half of the same
-			// paragraph: the UA "may also visually collapse the character advance
-			// widths of any that would otherwise overflow". So a sequence that
-			// fits counts entirely, one that does not counts up to the line's
-			// edge, and the part past the edge hangs. Taking it as all-or-nothing
-			// is the reading that was here, and it centres a line of five
-			// characters and thirty-two spaces as though it were five: the page
-			// shows the letter two characters right of where every browser puts
-			// it, and the same document without the spaces is correct, so the
-			// fault reads as an alignment bug rather than a white-space one.
-			used := alignedWidth(runs, total)
-			if forced || next >= len(items) {
-				used = style.Max(used, style.Min(total, textWidth))
-			}
-			// Which *side* it hangs off, which is not a second way of saying how
-			// much. §4.1.2 hangs the white space past the line's end, and the
-			// end of a right-to-left line is its left edge: rule L1 has already
-			// given the trailing spaces the paragraph's own level, so
-			// lineOffsets draws them leftmost — at the positions before the
-			// first word rather than after the last.
-			//
-			// So on such a line the content does not begin where alignLine put
-			// it, it begins a hang further in. Aligning without this leaves
-			// every right-to-left pre-wrap line pushed right by the width of the
-			// space it was meant to hang, which is what the ten dir=rtl
-			// pre-wrap-align tests measure. It is invisible in a left-to-right
-			// document, where the hang follows the content and moves nothing.
-			rtl := lineBaseIsRTL(b, runs)
-			shift := lineIndent.Add(l.alignLine(b, rtl, textWidth, used))
-			if rtl {
-				shift = shift.Sub(total.Sub(used))
-			}
-			if shift != 0 {
-				for k := range line.Runs {
-					line.Runs[k].X = line.Runs[k].X.Add(shift)
+				// The narrower band may leave no room at all, in which case the line
+				// drops past the float exactly as it would have at its top edge.
+				ny, nl, nr := l.roomForLine(items[i], origin, y, nl, nr, lo, hi)
+				if ny == y && nl == left && nr == right {
+					break
 				}
-				for k := atomicStart; k < len(parent.Children); k++ {
-					parent.Children[k].BorderRect.X =
-						parent.Children[k].BorderRect.X.Add(shift)
-				}
+				y, left, right = ny, nl, nr
 			}
-			// The inline boxes on this line, recorded now because the alignment
-			// has moved everything on it for the last time. The index is where
-			// the line is about to go, since a fragment cannot be hung on it
-			// until §8.6 knows which piece of its box it is.
-			decor.addLine(len(parent.Lines), runs, xs,
-				line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack)
+			// On the line the clamp ends at, a unit too wide to sit beside the
+			// ellipsis is not shown at all. Everywhere else this engine sets an
+			// over-long word anyway, because the alternative is losing it; here
+			// losing it is exactly what the clamp asks for, and the mark is what
+			// stands in its place. "123456789012" against nine characters less an
+			// ellipsis leaves the line holding nothing but the mark, which is what
+			// line-clamp-004 draws.
 			if lineEllipsis > 0 {
-				// The mark goes where the line's own content ends, which is not
-				// where the line box does: an aligned line may have been moved,
-				// and a right-to-left one ends at its left. alignedWidth is the
-				// same measure the alignment used.
-				at := shift.Add(used)
-				if lineBaseIsRTL(b, runs) {
-					at = shift.Sub(lineEllipsis)
+				var used style.Unit
+				for _, r := range runs {
+					used = used.Add(r.width)
 				}
-				if face, ok := l.fontFor(b); ok {
+				if used > right.Sub(left).Sub(lineIndent).Sub(lineEllipsis) {
+					runs, next, nextByte = nil, len(items), 0
+					stack = stackLine(runs, st)
+					lh, bl = stack.height, stack.baseline
+				}
+			}
+
+			lineWidth := right.Sub(left)
+			if balanceCaps != nil && lineWidth < width {
+				balanceMetFloat = true
+			}
+			bands = append(bands, lineWidth)
+			textWidth := lineWidth.Sub(lineIndent)
+			if len(runs) > 0 || forced || lineEllipsis > 0 {
+				line := LineFragment{
+					Rect:     Rect{X: left.Sub(lo), Y: y, W: right.Sub(left), H: lh},
+					Baseline: bl,
+				}
+				// Rules L1 and L2 over the runs of this line: where each of them
+				// sits, which on a line mixing directions is not the order they
+				// were collected in.
+				xs, total := l.lineOffsets(runs)
+				// Atomic inlines are placed as children of the block rather than as
+				// runs, so aligning the line has to move them too. The range is
+				// noted here because floats placed before the line are already in
+				// this slice and must not move: a float is out of flow and
+				// text-align says nothing about it.
+				atomicStart := len(parent.Children)
+				for k, item := range runs {
+					x := xs[k]
+					if item.atomic != nil {
+						// Placed as a child of the block rather than as a run,
+						// because it is a box: it has a background, a border, a
+						// padding and possibly a subtree of its own, and every one
+						// of those is painted by machinery that works on fragments.
+						// Its margin box hangs from the line's baseline by its own
+						// ascent, which is what puts a picture on the line of type
+						// and an inline-block's last line of text on it.
+						f := item.atomic
+						f.BorderRect.X = line.Rect.X.Add(x).Add(f.Margin.Left)
+						f.BorderRect.Y = y.Add(stack.atomicTop(item)).Add(f.Margin.Top)
+						parent.Children = append(parent.Children, f)
+						continue
+					}
+					if item.inset {
+						// An inline box's own margin, border and padding. It has
+						// taken its room on the line already — lineOffsets counted
+						// its width, so everything after it is where it belongs —
+						// and it draws nothing, so it becomes no run. A run with no
+						// text would reach the content stream as an empty
+						// text-showing operator and reach a reader extracting the
+						// page as nothing at all.
+						continue
+					}
+					shift := style.Unit(0)
+					decorations := item.decorations
+					if item.valign.aligned() {
+						shift = stack.shift(item.valign, item.above, item.below)
+						// §16.3.1: a decoration declared by an ancestor is drawn at
+						// *that* box's position and is not moved by the alignment of
+						// what it crosses — "text decorations on inline boxes are
+						// drawn across the entire element, going across any descendant
+						// elements without paying any attention to their presence". So
+						// three spans at three different vertical-aligns under one
+						// overlining div are crossed by one straight line, not three
+						// stepped ones.
+						//
+						// The copy is made only for a run something moved, which is
+						// almost none of them.
+						decorations = l.decorationsAt(decorations, &stack)
+					}
 					line.Runs = append(line.Runs, TextRun{
-						Text: blockEllipsis, Face: face, Size: b.FontSize,
-						X: at, Width: lineEllipsis, Box: b,
+						Text: item.text, Face: item.face, Size: item.size,
+						X: x, Width: item.width, Box: item.box, Offset: item.offset,
+						Decorations: decorations, LetterSpacing: item.spacing.letter,
+						RTL:   item.level&1 == 1,
+						Shift: shift,
 					})
 				}
-			}
-			parent.Lines = append(parent.Lines, line)
-			// The indent belongs to the first line box that actually exists. A run
-			// of inline content that produced none — the collapsible space between
-			// two block children — has not used it up.
-			firstLine = false
-		}
-
-		// The floats met along the line were placed while it was being fitted —
-		// the line had to be broken against them — but their fragments join the
-		// tree here, after the line's own boxes, so that paint order is the
-		// order the display list has always had.
-		parent.Children = append(parent.Children, midKids...)
-		for _, f := range after {
-			parent.Children = append(parent.Children,
-				l.floatChild(f.box, width, origin, y, lineWidth.Sub(f.used), lh, 0))
-		}
-
-		// An absolutely positioned box met along the line is dealt with once the
-		// line is settled, because until it is neither its top nor its left edge
-		// is known, and both are what it needs.
-		for _, f := range mid {
-			if f.abs {
-				// §10.6.4's static position for a box written among the words:
-				// the top of the line box it appeared on, and the pen position
-				// it appeared at. The x is taken from the line's own left edge
-				// rather than the block's, so a box written beside a float
-				// records the position it would really have had.
+				// §4.1.2's hang comes in two strengths and the difference shows
+				// exactly here. Where the line ended at a soft wrap, its trailing
+				// white space hangs *unconditionally* and is never counted, which is
+				// what alignedWidth does. Where it ended at a forced break — a <br>,
+				// a preserved newline, or simply the end of the content — it hangs
+				// *conditionally*: "it hangs only if it does not otherwise fit in the
+				// line", so a space that fits is content and the line is aligned
+				// around it. The specification's own example is a centred pre-wrap
+				// paragraph reading " 0 " in five characters, which centres as three
+				// and not as two.
 				//
-				// §10.3.7 asks for the same position from the other side, because
-				// a right-to-left containing block anchors "right" rather than
-				// "left". f.used is the advance in *logical* order, which is from
-				// the left on a left-to-right line and from the right on a
-				// right-to-left one — so the two are mirror images and neither is
-				// the negation of the other: one counts from the line's left edge
-				// and the other from the block's content right edge, and the line
-				// need not reach either.
-				if !f.box.staticInline {
-					// §10.3.7's hypothetical box for a box that would have been
-					// block-level had it been static: a block box, whose margin
-					// edges are the containing block's content edges. Only the
-					// line it was written on is taken from here — which is what
-					// makes this different from the block walk's answer and the
-					// reason the box is collected among the words at all.
-					//
-					// Reading the pen position instead is invisible until
-					// something moves the line's own left edge, and then it is
-					// not: float-in-inline-001 and position-absolute-007 in the
-					// suite each write such a box beside a float and check that
-					// the float did not carry it along.
-					l.deferAbsolute(f.box, parent, 0, y, 0, 0)
-					continue
+				// The two are not a matter of degree. Counting the space on a
+				// soft-wrapped line pushes a right-aligned line a space clear of the
+				// edge; not counting it on the last line centres " 0 " off-centre.
+				//
+				// "Only if it does not otherwise fit" is a rule about each character
+				// and not about the sequence, which is the second half of the same
+				// paragraph: the UA "may also visually collapse the character advance
+				// widths of any that would otherwise overflow". So a sequence that
+				// fits counts entirely, one that does not counts up to the line's
+				// edge, and the part past the edge hangs. Taking it as all-or-nothing
+				// is the reading that was here, and it centres a line of five
+				// characters and thirty-two spaces as though it were five: the page
+				// shows the letter two characters right of where every browser puts
+				// it, and the same document without the spaces is correct, so the
+				// fault reads as an alignment bug rather than a white-space one.
+				used := alignedWidth(runs, total)
+				if forced || next >= len(items) {
+					used = style.Max(used, style.Min(total, textWidth))
 				}
-				l.deferAbsolute(f.box, parent, left.Sub(lo).Add(f.used), y,
-					width.Sub(right.Sub(lo).Sub(f.used)), 0)
+				// Which *side* it hangs off, which is not a second way of saying how
+				// much. §4.1.2 hangs the white space past the line's end, and the
+				// end of a right-to-left line is its left edge: rule L1 has already
+				// given the trailing spaces the paragraph's own level, so
+				// lineOffsets draws them leftmost — at the positions before the
+				// first word rather than after the last.
+				//
+				// So on such a line the content does not begin where alignLine put
+				// it, it begins a hang further in. Aligning without this leaves
+				// every right-to-left pre-wrap line pushed right by the width of the
+				// space it was meant to hang, which is what the ten dir=rtl
+				// pre-wrap-align tests measure. It is invisible in a left-to-right
+				// document, where the hang follows the content and moves nothing.
+				rtl := lineBaseIsRTL(b, runs)
+				shift := lineIndent.Add(l.alignLine(b, rtl, textWidth, used))
+				if rtl {
+					shift = shift.Sub(total.Sub(used))
+				}
+				if shift != 0 {
+					for k := range line.Runs {
+						line.Runs[k].X = line.Runs[k].X.Add(shift)
+					}
+					for k := atomicStart; k < len(parent.Children); k++ {
+						parent.Children[k].BorderRect.X =
+							parent.Children[k].BorderRect.X.Add(shift)
+					}
+				}
+				// The inline boxes on this line, recorded now because the alignment
+				// has moved everything on it for the last time. The index is where
+				// the line is about to go, since a fragment cannot be hung on it
+				// until §8.6 knows which piece of its box it is.
+				decor.addLine(len(parent.Lines), runs, xs,
+					line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack)
+				if lineEllipsis > 0 {
+					// The mark goes where the line's own content ends, which is not
+					// where the line box does: an aligned line may have been moved,
+					// and a right-to-left one ends at its left. alignedWidth is the
+					// same measure the alignment used.
+					at := shift.Add(used)
+					if lineBaseIsRTL(b, runs) {
+						at = shift.Sub(lineEllipsis)
+					}
+					if face, ok := l.fontFor(b); ok {
+						line.Runs = append(line.Runs, TextRun{
+							Text: blockEllipsis, Face: face, Size: b.FontSize,
+							X: at, Width: lineEllipsis, Box: b,
+						})
+					}
+				}
+				parent.Lines = append(parent.Lines, line)
+				// The indent belongs to the first line box that actually exists. A run
+				// of inline content that produced none — the collapsible space between
+				// two block children — has not used it up.
+				firstLine = false
+			}
+
+			// The floats met along the line were placed while it was being fitted —
+			// the line had to be broken against them — but their fragments join the
+			// tree here, after the line's own boxes, so that paint order is the
+			// order the display list has always had.
+			parent.Children = append(parent.Children, midKids...)
+			for _, f := range after {
+				parent.Children = append(parent.Children,
+					l.floatChild(f.box, width, origin, y, lineWidth.Sub(f.used), lh, 0))
+			}
+
+			// An absolutely positioned box met along the line is dealt with once the
+			// line is settled, because until it is neither its top nor its left edge
+			// is known, and both are what it needs.
+			for _, f := range mid {
+				if f.abs {
+					// §10.6.4's static position for a box written among the words:
+					// the top of the line box it appeared on, and the pen position
+					// it appeared at. The x is taken from the line's own left edge
+					// rather than the block's, so a box written beside a float
+					// records the position it would really have had.
+					//
+					// §10.3.7 asks for the same position from the other side, because
+					// a right-to-left containing block anchors "right" rather than
+					// "left". f.used is the advance in *logical* order, which is from
+					// the left on a left-to-right line and from the right on a
+					// right-to-left one — so the two are mirror images and neither is
+					// the negation of the other: one counts from the line's left edge
+					// and the other from the block's content right edge, and the line
+					// need not reach either.
+					if !f.box.staticInline {
+						// §10.3.7's hypothetical box for a box that would have been
+						// block-level had it been static: a block box, whose margin
+						// edges are the containing block's content edges. Only the
+						// line it was written on is taken from here — which is what
+						// makes this different from the block walk's answer and the
+						// reason the box is collected among the words at all.
+						//
+						// Reading the pen position instead is invisible until
+						// something moves the line's own left edge, and then it is
+						// not: float-in-inline-001 and position-absolute-007 in the
+						// suite each write such a box beside a float and check that
+						// the float did not carry it along.
+						l.deferAbsolute(f.box, parent, 0, y, 0, 0)
+						continue
+					}
+					l.deferAbsolute(f.box, parent, left.Sub(lo).Add(f.used), y,
+						width.Sub(right.Sub(lo).Sub(f.used)), 0)
+				}
+			}
+
+			i, iByte = next, nextByte
+			// The cursor has to move, and only forwards. A break that hands back the
+			// position it was given is a bug in breakOneLine rather than anything a
+			// document can ask for — but the loop has no increment of its own, so
+			// such a break is not a wrong line, it is a render that never finishes:
+			// the same line is measured, appended and measured again until the
+			// process is killed. Two of the mutation plants over this function reach
+			// exactly that state, and unguarded each one takes 25GB before the OOM
+			// killer arrives.
+			//
+			// So the cursor is pushed past the item it stalled on. What that costs is
+			// the rest of one item, and what it buys is the same bargain maxLineFits
+			// strikes: output that is slightly wrong beats output that never comes.
+			//
+			// The comparison is a function of its own because it is the part that can
+			// be got wrong quietly: the recovery below cannot be reached by any
+			// document, so a test can only reach the decision.
+			if !cursorAdvanced(wasI, wasByte, i, iByte) {
+				i, iByte = wasI+1, 0
+			}
+			if len(runs) > 0 || forced || lineEllipsis > 0 {
+				// Only a line that exists occupies a line's height. A run of inline
+				// content that is nothing but the collapsible space between two
+				// block children produces no line box at all, and giving it one
+				// would put a blank line into every document whose markup is
+				// indented.
+				//
+				// The clamp's own line exists even when nothing of the content fits
+				// on it, because the ellipsis is on it: a block clamped to three
+				// lines whose third holds only the mark is three lines tall.
+				y = y.Add(lh)
+			}
+			if maxLines > 0 && len(parent.Lines) >= maxLines {
+				// The clamp: everything after this line is discarded, which is what
+				// "continue: discard" means and what the ellipsis just said.
+				break
 			}
 		}
-
-		i, iByte = next, nextByte
-		// The cursor has to move, and only forwards. A break that hands back the
-		// position it was given is a bug in breakOneLine rather than anything a
-		// document can ask for — but the loop has no increment of its own, so
-		// such a break is not a wrong line, it is a render that never finishes:
-		// the same line is measured, appended and measured again until the
-		// process is killed. Two of the mutation plants over this function reach
-		// exactly that state, and unguarded each one takes 25GB before the OOM
-		// killer arrives.
-		//
-		// So the cursor is pushed past the item it stalled on. What that costs is
-		// the rest of one item, and what it buys is the same bargain maxLineFits
-		// strikes: output that is slightly wrong beats output that never comes.
-		//
-		// The comparison is a function of its own because it is the part that can
-		// be got wrong quietly: the recovery below cannot be reached by any
-		// document, so a test can only reach the decision.
-		if !cursorAdvanced(wasI, wasByte, i, iByte) {
-			i, iByte = wasI+1, 0
-		}
-		if len(runs) > 0 || forced || lineEllipsis > 0 {
-			// Only a line that exists occupies a line's height. A run of inline
-			// content that is nothing but the collapsible space between two
-			// block children produces no line box at all, and giving it one
-			// would put a blank line into every document whose markup is
-			// indented.
-			//
-			// The clamp's own line exists even when nothing of the content fits
-			// on it, because the ellipsis is on it: a block clamped to three
-			// lines whose third holds only the mark is three lines tall.
-			y = y.Add(lh)
-		}
-		if maxLines > 0 && len(parent.Lines) >= maxLines {
-			// The clamp: everything after this line is discarded, which is what
-			// "continue: discard" means and what the ellipsis just said.
+		if pass > 0 {
+			// Laid out twice already: the second pass balanced in the bands the
+			// first one measured, which is the best this can do.
 			break
+		}
+		if !balanceMetFloat || maxLines > 0 {
+			// Nothing to do again: the box does not balance, or no float reached
+			// into it. A clamped box is left to the first answer as well — the
+			// clamp's own search is over how far the content reaches rather than
+			// over a line count, and the two have not been put together.
+			break
+		}
+		parent.Lines = parent.Lines[:linesAt]
+		parent.Children = parent.Children[:kidsAt]
+		origin.ctx.truncate(ctxAt)
+		l.deferred = l.deferred[:absAt]
+		w := l.balanceWidthInBands(items, bands, width, indent)
+		for i := range balanceCaps {
+			balanceCaps[i] = w
 		}
 	}
 	decor.finish(parent)
-	if balanceMetFloat {
-		l.reportBalanceBesideFloat(b)
-	}
 	return y
 }
 
@@ -2515,45 +2558,6 @@ func isIdeographic(r rune) bool {
 	return false
 }
 
-// reportBalanceBesideFloat says that a balanced box was balanced in the wrong
-// measure.
-//
-// countLines does not consult floats, so the width the search settles on is the
-// width the box would have had with nothing beside it. Where a float reaches
-// into the box the lines are shorter than that, and the breaks chosen are not
-// the ones §5.1 asks for — the suite's text-wrap-balance-float-001 fills its
-// first line to thirteen characters where a browser fills it to nine.
-//
-// Getting it right means running the whole line loop once per probe, with the
-// floats placed and rolled back each time, since what shortens a line is decided
-// by the lines above it. That is a different shape of function and is not
-// attempted; what is not acceptable is doing the arithmetic in the wrong measure
-// and saying nothing, because a balanced paragraph that is merely differently
-// ragged looks exactly like a balanced one.
-//
-// It fires only where a float really did shorten a line. A balanced box with
-// nothing beside it is balanced exactly right, and warning about it would be
-// crying wolf on the common case.
-func (l *layouter) reportBalanceBesideFloat(b *Box) {
-	key := PathOf(b.Element)
-	if l.reportedBalance == nil {
-		l.reportedBalance = map[string]bool{}
-	}
-	if l.reportedBalance[key] {
-		return
-	}
-	l.reportedBalance[key] = true
-	l.rec.ReportDetail(Finding{
-		Rule:   RuleUnsupportedValue,
-		Source: AtHTML(offsetOf(b)),
-		Message: "\"text-wrap: balance\" chose its line breaks in the width this " +
-			"box would have had with no float beside it; a float shortens these " +
-			"lines, so the breaks are not the balanced ones",
-		Path:     key,
-		Property: "text-wrap-style",
-	})
-}
-
 // blockEllipsis is what a clamped block puts at the end of its last line.
 //
 // CSS Overflow 4's "block-ellipsis: auto" is "a UA-defined value", and the
@@ -2803,6 +2807,88 @@ func (l *layouter) clampedReach(items []inlineItem,
 		}
 	}
 	return i, iByte
+}
+
+// balanceWidthInBands is §5.1's balancing where a float has shortened some of
+// the lines: the same search, over the widths the lines actually had.
+//
+// The bands come from laying the box out once, which is the only way to know
+// them — a float inside the box is placed as the lines are built, and what
+// shortens a line is decided by the lines above it. They are the *greedy*
+// layout's bands and the balanced one may differ slightly, since a line that
+// changes height meets a different set of floats; the difference is a line's
+// worth of a float's edge, and browsers make the same approximation.
+func (l *layouter) balanceWidthInBands(items []inlineItem, bands []style.Unit,
+	width, indent style.Unit) style.Unit {
+
+	full := l.countLinesInBands(items, bands, width, indent, maxBalanceLines+1)
+	if full < 2 || full > maxBalanceLines {
+		return style.MaxUnit
+	}
+	lo, hi := style.Unit(1), width
+	for hi.Sub(lo) > 1 {
+		mid := lo.Add(hi.Sub(lo).Div(2))
+		if l.countLinesInBands(items, bands, mid, indent, full+1) <= full {
+			hi = mid
+			continue
+		}
+		lo = mid
+	}
+	return hi
+}
+
+// countLinesInBands is countLines with a width per line rather than one for all
+// of them.
+//
+// A line's room is the narrower of the band it is in and the width being
+// probed — the cap chooses break points inside the room the floats leave, it
+// does not widen a line past them.
+func (l *layouter) countLinesInBands(items []inlineItem, bands []style.Unit,
+	cap, indent style.Unit, limit int) int {
+
+	n := 0
+	iByte := 0
+	for i := 0; i < len(items); {
+		for iByte == 0 && i < len(items) && items[i].float != nil {
+			i++
+		}
+		if i >= len(items) {
+			break
+		}
+		room := style.Min(bandAt(bands, n), cap)
+		if n == 0 {
+			room = room.Sub(indent)
+		}
+		wasI, wasByte := i, iByte
+		runs, next, nextByte, _, forced := l.breakOneLine(items, i, iByte, room, 0)
+		if len(runs) > 0 || forced {
+			n++
+		}
+		if n >= limit {
+			return n
+		}
+		i, iByte = next, nextByte
+		if !cursorAdvanced(wasI, wasByte, i, iByte) {
+			break
+		}
+	}
+	return n
+}
+
+// bandAt is the width of the nth line, or of the last one recorded once the
+// probe runs past what was measured.
+//
+// A probe that makes more lines than the layout did is asking about lines that
+// were never laid out, and the band below the last float is the best answer
+// there is: it is what every line after it had.
+func bandAt(bands []style.Unit, n int) style.Unit {
+	if len(bands) == 0 {
+		return style.MaxUnit
+	}
+	if n >= len(bands) {
+		return bands[len(bands)-1]
+	}
+	return bands[n]
 }
 
 // countLines is how many lines the greedy breaker makes of these items in a

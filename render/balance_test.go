@@ -207,55 +207,37 @@ func TestBalanceStopsAtTheLineLimit(t *testing.T) {
 	}
 }
 
-// TestBalanceBesideAFloatIsReported is the limit of the implementation, said out
-// loud.
+// TestBalancingBesideAFloatUsesTheWidthsTheLinesHad is §5.1 where the lines are
+// not all the same width.
 //
-// The search does not consult floats: what shortens a line is decided by the
-// lines above it, so counting with floats means running the whole line loop once
-// per probe and rolling the floats back each time. Until that exists the width
-// the search settles on is the width the box would have had with nothing beside
-// it, and where a float reaches in, the breaks are not the balanced ones — the
-// suite's text-wrap-balance-float-001 fills its first line to thirteen
-// characters where a browser fills it to nine.
+// A float inside the box shortens the lines beside it and leaves the ones below
+// it alone, so there is no single width to search in — and the widths cannot be
+// known before the box is laid out, because a float inside it is placed as the
+// lines are built and what shortens a line is decided by the lines above it. So
+// the box is laid out once to find out, thrown away, and laid out again in the
+// measure that answer gives.
 //
-// A differently-ragged paragraph looks exactly like a balanced one, so this is
-// the §6.3 case: the page is plausible and wrong, and the only thing that makes
-// it discoverable is saying so.
-func TestBalanceBesideAFloatIsReported(t *testing.T) {
-	fired[RuleUnsupportedValue] = true
-	reported := func(html, css string) string {
-		t.Helper()
-		rec := NewRecorder(nil)
-		built := Build(Input{HTML: html, CSS: []Stylesheet{{Source: css}}})
-		Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, StandardFonts(), rec)
-		for _, f := range rec.Findings() {
-			if f.Property == "text-wrap-style" {
-				return f.Message
-			}
+// The assertion is the difference between the two: searching as though the box
+// were the width it declares puts a word on the second line that does not fit
+// there once the float is counted.
+func TestBalancingBesideAFloatUsesTheWidthsTheLinesHad(t *testing.T) {
+	// 23.5 characters of block, a float seven wide and two lines tall, so the
+	// first two lines have 16.5 and the third has all of it.
+	const src = `<p id="p"><span id="f"></span>abc de fg hij klm nop qrst uvw xyz!</p>`
+	css := noDefaults + mono + `p { width: ` + itoa(int(23.5*ch)) + `px;
+		text-wrap-style: balance }
+		#f { float: left; width: ` + itoa(int(7*ch)) + `px; height: 200px }`
+
+	got := lineTexts(linesOf(t, layoutOf(t, 10000, src, css), "p"))
+	want := []string{"abc de fg hij", "klm nop qrst", "uvw xyz!"}
+	if len(got) != len(want) {
+		t.Fatalf("%d lines %q, want %d %q", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d is %q, want %q — the search has to run in the "+
+				"widths the float leaves, not in the width the box declares",
+				i, got[i], want[i])
 		}
-		return ""
-	}
-	const text = "The quickest brown fox jumped over the lazy dog"
-
-	// A float beside the lines: the balance is in the wrong measure and says so.
-	if got := reported(
-		`<div id="f"></div><p id="p">`+text+`</p>`,
-		widthCSS(35, "text-wrap: balance")+
-			`#f { float: left; width: 300px; height: 300px }`); got == "" {
-		t.Error("a balanced paragraph beside a float said nothing")
-	}
-
-	// Nothing beside them: the balance is exactly right, and a warning here
-	// would be crying wolf on the case that works.
-	if got := reported(`<p id="p">`+text+`</p>`,
-		widthCSS(35, "text-wrap: balance")); got != "" {
-		t.Errorf("a balanced paragraph with nothing beside it reported %q", got)
-	}
-
-	// And a float beside a paragraph that is not balanced is nobody's business.
-	if got := reported(
-		`<div id="f"></div><p id="p">`+text+`</p>`,
-		widthCSS(35, "")+`#f { float: left; width: 300px; height: 300px }`); got != "" {
-		t.Errorf("an unbalanced paragraph beside a float reported %q", got)
 	}
 }
