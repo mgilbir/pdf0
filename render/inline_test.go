@@ -714,3 +714,53 @@ func TestCursorAdvancedOrdersThePair(t *testing.T) {
 		}
 	}
 }
+
+// TestAnInlineTableSitsOnItsFirstRow is §10.8.1's other baseline rule, and the
+// one an inline-table does not share with an inline-block.
+//
+//	The baseline of an 'inline-block' is the baseline of its last line box
+//	[...] The baseline of an 'inline-table' is the baseline of the first row
+//	of the table.
+//
+// Last against first, so the two disagree the moment there is more than one of
+// anything. A table of two rows was sitting on its second: the word beside it
+// lined up with the bottom row and the rest of the table hung above the text.
+//
+// The one-row table is the control, and it is what makes the assertion readable
+// — a table whose first row is also its last cannot tell the two rules apart,
+// so it is the number the two-row table has to match.
+func TestAnInlineTableSitsOnItsFirstRow(t *testing.T) {
+	const css = noDefaults + `p { font-family: Courier; font-size: 20px }`
+	baselineOf := func(t *testing.T, html, decl string) style.Unit {
+		t.Helper()
+		root := layoutOf(t, 1000, html, css+decl)
+		p := find(t, root, "p")
+		if len(p.Lines) != 1 {
+			t.Fatalf("the paragraph made %d lines, want 1", len(p.Lines))
+		}
+		return p.Lines[0].Rect.Y.Add(p.Lines[0].Baseline)
+	}
+
+	one := baselineOf(t, `<p id="p">a<span id="s">bcd</span>e</p>`,
+		`#s { display: inline-table }`)
+	two := baselineOf(t,
+		`<p id="p">a<span id="s"><span style="display:table-row">b</span>`+
+			`<span style="display:table-row">c</span></span>e</p>`,
+		`#s { display: inline-table }`)
+	if one != two {
+		t.Errorf("a one-row inline table puts the line's baseline at %g and a "+
+			"two-row one at %g; both sit on their first row, so the second row "+
+			"must not move it", one.Px(), two.Px())
+	}
+
+	// The contrast, so that this is a statement about inline-table rather than
+	// about tables being special everywhere: an inline-block with two lines in
+	// it does sit on its last, and so is lower than either table above.
+	block := baselineOf(t, `<p id="p">a<span id="s">b<br>c</span>e</p>`,
+		`#s { display: inline-block }`)
+	if block <= two {
+		t.Errorf("a two-line inline block puts the baseline at %g and a two-row "+
+			"inline table at %g; the block sits on its *last* line and must be "+
+			"the lower of the two", block.Px(), two.Px())
+	}
+}

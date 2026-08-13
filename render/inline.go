@@ -1372,7 +1372,25 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	// its neighbours' baseline, which is a visible jump from a declaration that
 	// was only ever about clipping.
 	if b.Replaced == nil {
-		if bl, ok := lastLineBaseline(frag); ok {
+		baseline, ok := lastLineBaseline(frag)
+		if b.TableWrapper {
+			// §10.8.1 again, and a different sentence of it: "the baseline of an
+			// 'inline-table' is the baseline of the first row of the table".
+			//
+			// The first row and not the last line box, which is the rule for an
+			// inline-block and the one an inline-table was sharing. A table of
+			// two rows therefore sat on its *second* one: the word beside it
+			// lined up with the bottom row and the rest of the table hung above
+			// the text, which is inline-table-002a and its neighbours.
+			//
+			// The wrapper is what arrives here — §17.4 puts one around every
+			// table, and for an inline-table it is the atomic inline — so the
+			// search starts outside the table and finds the first line box in
+			// it, which is in the first cell of the first row.
+			baseline, ok = firstBaseline(frag)
+		}
+		if ok {
+			bl := baseline
 			ascent := frag.Margin.Top.Add(bl)
 			if overflowIsScrollable(b.Style) {
 				// A smaller ascent is a baseline further up the page, which is
