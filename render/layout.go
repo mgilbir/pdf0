@@ -201,6 +201,35 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	// has a definite height, and a percentage resolved against it is a number
 	// rather than an indefinite value that computes to auto.
 	page := Rect{W: avail.W, H: avail.H}
+	if root.Position.outOfFlow() {
+		// The root taken out of the flow is the one box the deferring walk below
+		// cannot reach: it is where layout starts, so nothing walks *to* it and
+		// there is no parent to record a static position against. It is placed
+		// here instead, through the same function every other out-of-flow box
+		// goes through, against a stand-in for the initial containing block —
+		// which is the page, and which is also the containing block §10.1 gives
+		// it, since it has no ancestor at all and so certainly no positioned one.
+		//
+		// Its static position is the page's origin for the same reason: there is
+		// no flow it was taken out of, so the place it "would have been" is where
+		// layout would have started.
+		//
+		// This used to be laid out in the flow with its offsets dropped and a
+		// warning raised. The warning was honest and the page was still wrong:
+		// "html { position: absolute; left: 100px }" put the document at the top
+		// left corner. abspos-containing-block-initial-004a, -004b, -004c, -004d
+		// and -009b are five documents that do exactly that.
+		icb := &Fragment{BorderRect: page}
+		l.layoutAbsolute(absCandidate{box: root, parent: icb}, page)
+		l.placeAbsolutes(page)
+		if len(icb.Children) == 0 {
+			return nil
+		}
+		frag := icb.Children[0]
+		l.resolveBackgrounds(frag, page)
+		l.resolveClips(frag)
+		return frag
+	}
 	frag, m := l.block(root, avail.W,
 		flow{ctx: &floatContext{}, cbHeight: avail.H, cbDefinite: true})
 
@@ -228,24 +257,6 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	// not exist as a rectangle until this point, and it may do so because
 	// nothing in the flow depends on it in return.
 	l.placeAbsolutes(page)
-
-	// The root element is the one box the walk above cannot take out of the
-	// flow, because nothing walked *to* it: it is where layout starts, it has no
-	// parent to record a static position against, and its fragment is the return
-	// value rather than a child of anything. "html { position: absolute }" is
-	// rare enough that giving Layout a second entry point for it would be
-	// machinery for a corner — but laying it out in the flow and saying nothing
-	// is the silent approximation this engine exists not to make.
-	if root.Position.outOfFlow() {
-		l.rec.ReportDetail(Finding{
-			Rule:   RulePositionApproximated,
-			Source: AtHTML(offsetOf(root)),
-			Message: "the root element is taken out of the flow, but it is what the " +
-				"flow starts from; it was laid out in place and its offsets were not applied",
-			Path:     PathOf(root.Element),
-			Property: "position",
-		})
-	}
 
 	// Backgrounds last, because a background image is placed against a rectangle
 	// rather than taking part in deciding one: a percentage position is of a box

@@ -859,23 +859,56 @@ func TestInlineContainingBlockIsReported(t *testing.T) {
 	}
 }
 
-// TestPositionedRootIsReported pins the one box this mechanism cannot reach.
+// TestAPositionedRootIsPositioned replaces a test that asserted a warning here.
 //
-// The walk records a candidate where it *meets* an out-of-flow box, and nothing
-// meets the root element: layout starts there, it has no parent to take a static
-// position from, and its fragment is the return value rather than a child of
-// anything. It is laid out in the flow, which is a page that looks arranged and
-// is missing the declaration, so it says so.
-func TestPositionedRootIsReported(t *testing.T) {
-	fired[RulePositionApproximated] = true
-	got := findingsOf(t, `<div>x</div>`, `html { position: absolute; top: 40px }`)
-	if !hasRule(got, RulePositionApproximated) {
-		t.Errorf("an absolutely positioned root element said nothing: %v", got)
+// The deferring walk records a candidate where it *meets* an out-of-flow box,
+// and nothing meets the root element: layout starts there, it has no parent to
+// take a static position from, and its fragment is the return value rather than
+// a child of anything. So it used to be laid out in the flow with its offsets
+// dropped, and a warning raised to say so — honest, and still a page with the
+// document in the wrong corner.
+//
+// It goes through the same placement as every other out-of-flow box now, against
+// the initial containing block, which is the containing block §10.1 gives it
+// anyway: it has no ancestor at all, so certainly no positioned one.
+func TestAPositionedRootIsPositioned(t *testing.T) {
+	root := layoutOf(t, 1000, `<div id="d">x</div>`,
+		noDefaults+`html { position: absolute; left: 30px; top: 40px;
+		            width: 100px; height: 100px }`)
+	d := find(t, root, "d")
+	if got := d.BorderRect.X.Px(); got != 30 {
+		t.Errorf("the content of a root at left:30px is at x=%g, want 30", got)
 	}
-	// The same declaration one level down is handled, and reports nothing.
-	got = findingsOf(t, `<div>x</div>`, `body { position: absolute; top: 40px }`)
-	if hasRule(got, RulePositionApproximated) {
+	if got := d.BorderRect.Y.Px(); got != 40 {
+		t.Errorf("the content of a root at top:40px is at y=%g, want 40", got)
+	}
+	// And it says nothing, because there is nothing left to approximate.
+	if got := findingsOf(t, `<div>x</div>`,
+		`html { position: absolute; top: 40px }`); hasRule(got, RulePositionApproximated) {
+		t.Errorf("a positioned root was still reported as approximated: %v", got)
+	}
+	// The same declaration one level down reports nothing either, and did not
+	// before: this is the case that was always handled.
+	if got := findingsOf(t, `<div>x</div>`,
+		`body { position: absolute; top: 40px }`); hasRule(got, RulePositionApproximated) {
 		t.Errorf("an absolutely positioned <body> was reported: %v", got)
+	}
+}
+
+// TestAFixedRootIsPositionedToo: "fixed" resolves against the page, which for a
+// root element is the same rectangle "absolute" resolves against — so the two
+// must agree, and an implementation that handled only one of them would look
+// right in every test that used the other.
+func TestAFixedRootIsPositionedToo(t *testing.T) {
+	root := layoutOf(t, 1000, `<div id="d">x</div>`,
+		noDefaults+`html { position: fixed; left: 30px; top: 40px;
+		            width: 100px; height: 100px }`)
+	d := find(t, root, "d")
+	if got := d.BorderRect.X.Px(); got != 30 {
+		t.Errorf("the content of a fixed root at left:30px is at x=%g, want 30", got)
+	}
+	if got := d.BorderRect.Y.Px(); got != 40 {
+		t.Errorf("the content of a fixed root at top:40px is at y=%g, want 40", got)
 	}
 }
 
