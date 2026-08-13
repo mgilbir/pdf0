@@ -1309,6 +1309,41 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 		x = x.Add(w).Add(s.h)
 	}
 
+	// §10.7's two limits are limits on the table's own height, and §17.5.3
+	// shares a table's height out over its rows — so a limit that moved the
+	// table has to reach them, or the table is one height and the rows inside it
+	// are another. Both halves of that were visible: a minimum of an inch over
+	// one cell left the cell at nothing inside a table an inch tall
+	// (min-height-applies-to-013), and a maximum of an inch under a declared
+	// three left the rows three inches long inside a table one inch tall, with
+	// the content hanging out of the bottom of its own background
+	// (max-height-applies-to-013).
+	//
+	// The maximum is applied before the minimum, which is §10.7's order, and
+	// only to a height that was declared. A maximum on its own does not give the
+	// table a height for the rows to share: it caps what the content produced,
+	// and the rows keep what they needed and overflow. Handing it to them as a
+	// definite height would *stretch* rows that were shorter than the cap up to
+	// meet it, which is the one thing a maximum must never do.
+	//
+	// The limits are handed to the rows here rather than made part of the
+	// containing block's definiteness, which is a different question with a
+	// different answer: §10.5 makes a percentage height inside a box whose own
+	// height comes from its content compute to auto, and neither limit changes
+	// that. What the rows need is the number, not the claim.
+	//
+	// Absolute lengths only, for the reason the row heights below read them that
+	// way: a percentage would be a percentage of the table's height, which is
+	// what this is in the middle of deciding.
+	if origin.cbDefinite {
+		if max, ok := l.absoluteLengthOf(table, "max-height"); ok && max < origin.cbHeight {
+			origin.cbHeight = max
+		}
+	}
+	if min, ok := l.absoluteLengthOf(table, "min-height"); ok && min > origin.cbHeight {
+		origin.cbHeight, origin.cbDefinite = min, true
+	}
+
 	placed := l.layoutCells(table, g, cols, s, width)
 	rowH, rowBaseline := l.rowHeights(g, placed, s, origin)
 
