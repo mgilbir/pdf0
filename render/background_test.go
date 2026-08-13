@@ -597,6 +597,33 @@ func TestBackgroundPropagatesToTheCanvas(t *testing.T) {
 		}
 	})
 
+	t.Run("through the wrapper a table root is put in", func(t *testing.T) {
+		// §17.4 wraps a table in an anonymous box, and a root element declaring
+		// "display: table" is wrapped like any other — so the box layout starts
+		// from has no element at all. The rule is about the root *element*, and
+		// asking the wrapper made the answer "this is not an HTML document":
+		// nothing was propagated, the page had no background, and <body> painted
+		// its own colour at its own size, which is the one outcome §2.11.2 exists
+		// to prevent. The suite says so four times over in
+		// abspos-containing-block-initial-004e, -004f, -005b and -005d.
+		ops := bgPaintOf(t, `<div id="a"></div>`, noDefaults+
+			`html { display: table } body { background-color: #00ff00; height: 10px }`)
+		var fills []FillRect
+		for _, op := range ops {
+			if v, ok := op.(FillRect); ok && v.Color.G == 255 {
+				fills = append(fills, v)
+			}
+		}
+		if len(fills) != 1 {
+			t.Fatalf("the body's background painted %d times, want once — the "+
+				"wrapper is not the root element and must not hide it", len(fills))
+		}
+		if fills[0].Rect != page {
+			t.Errorf("the propagated background is %s, want the whole page %s — "+
+				"%s is the body's own box", fills[0].Rect, page, fills[0].Rect)
+		}
+	})
+
 	t.Run("the root wins over the body", func(t *testing.T) {
 		ops := bgPaintOf(t, `<div id="a"></div>`, noDefaults+
 			`html { background-color: #ff0000 } body { background-color: #00ff00; height: 10px }`)

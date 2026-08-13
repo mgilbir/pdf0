@@ -251,6 +251,20 @@ func (l *layouter) resolveBackgrounds(root *Fragment, canvas Rect) {
 // place — and the element it came from then paints nothing of its own, which is
 // what stops the same colour being laid down twice at two different sizes.
 func (l *layouter) canvasBackgroundSource(root *Fragment) *Fragment {
+	// §17.4's wrapper stands where the root element does and is anonymous, so a
+	// document whose root declared "display: table" arrives here as a box with no
+	// element at all — and the rule below, which is about the root *element*,
+	// answered "not an HTML document" and propagated nothing. The page then had
+	// no background and <body> painted its own colour at its own size, which is
+	// the one thing §2.11.2 exists to prevent.
+	if root.Box != nil && root.Box.TableWrapper {
+		for _, c := range root.Children {
+			if c.Box != nil && c.Box.Element != nil {
+				root = c
+				break
+			}
+		}
+	}
 	if root.Box == nil || root.Box.Element == nil {
 		return nil
 	}
