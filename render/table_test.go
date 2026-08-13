@@ -1165,3 +1165,69 @@ func TestTableCellsAreMiddleAlignedByDefault(t *testing.T) {
 			"%g, want 0 — the row's value did not reach the cell", got.Px())
 	}
 }
+
+// TestColumnWidthLimitsApplyToColumns is §10.4's two limits reaching a table
+// column, which they do: the properties apply to everything but non-replaced
+// inline elements, table rows and row groups, and a column is none of those.
+//
+// A column is not laid out — it produces no fragment — so its width reaches the
+// page only through the cells that sit in it, and every property written on one
+// has to be read where the columns are sized rather than where boxes are. The
+// width was; the two limits were not, so "min-width" on a <col> did nothing at
+// all and "max-width" was overridden by the first cell that wanted more.
+//
+// The empty-table case is the one that shows the minimum matters on its own. A
+// column with a minimum and no width has no content to be sized by, so without
+// the minimum it comes out at nothing and the table with it — which is
+// min-width-applies-to-005, a square that does not appear.
+func TestColumnWidthLimitsApplyToColumns(t *testing.T) {
+	const base = noDefaults + `
+	#table { display: table; table-layout: fixed }
+	#row { display: table-row }
+	#cell { display: table-cell; height: 96px }`
+	const html = `<div id="table"><div id="test"></div>` +
+		`<div id="row"><div id="cell"></div></div></div>`
+	widthOf := func(t *testing.T, decl string) float64 {
+		t.Helper()
+		root := layoutOf(t, 1000, html, base+`#test { `+decl+` }`)
+		return find(t, root, "cell").BorderRect.W.Px()
+	}
+
+	for _, display := range []string{"table-column", "table-column-group"} {
+		for _, c := range []struct {
+			what, decl string
+			want       float64
+		}{
+			{"a width", `width: 96px`, 96},
+			{"a minimum and no width", `min-width: 96px`, 96},
+			{"a maximum under the width", `max-width: 96px; width: 288px`, 96},
+			{"a maximum over the width", `max-width: 288px; width: 96px`, 96},
+			// §10.4 applies the maximum first and the minimum to what that
+			// leaves, so a minimum above the maximum wins.
+			{"a minimum above the maximum", `min-width: 96px; max-width: 48px`, 96},
+		} {
+			decl := "display: " + display + "; " + c.decl
+			if got := widthOf(t, decl); got != c.want {
+				t.Errorf("%s with %s: the column is %g wide, want %g",
+					display, c.what, got, c.want)
+			}
+		}
+	}
+
+	// The fixed algorithm is a second reader of the same properties, and it is
+	// only reached when the table itself declares a width — so it needs a case
+	// of its own or the clamp it does is never run.
+	//
+	// The table is declared at the width the maximum allows, so that the column
+	// exactly fills it: a fixed table with room left over shares the surplus
+	// among its columns, which would put back what the maximum took off and
+	// leave nothing to see.
+	root := layoutOf(t, 1000,
+		`<div id="table" style="width: 96px"><div id="test"></div>`+
+			`<div id="row"><div id="cell"></div></div></div>`,
+		base+`#test { display: table-column; width: 288px; max-width: 96px }`)
+	if got := find(t, root, "cell").BorderRect.W.Px(); got != 96 {
+		t.Errorf("in a fixed table the column is %g wide, want 96 — its maximum "+
+			"was not applied to the width declared on it", got)
+	}
+}

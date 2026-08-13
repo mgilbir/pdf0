@@ -518,6 +518,36 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 		gaps := s.h.Mul(float64(c.colSpan - 1))
 		spreadDemand(out[c.col:c.col+c.colSpan], lo.Sub(gaps), hi.Sub(gaps))
 	}
+	// §10.4's two limits, applied once the cells have spoken. A column is on the
+	// list the two properties apply to — everything but non-replaced inlines,
+	// table rows and row groups — and the suite says so by name in the min-width
+	// and max-width applies-to families.
+	//
+	// After the cells and not before, because they are limits on the answer and
+	// not another demand to be maximised with the others: a column asked to be at
+	// most an inch is at most an inch whatever the text in it wants, and applying
+	// the cap first would leave the next cell to raise the column straight back
+	// through it.
+	//
+	// The maximum is applied before the minimum, which is §10.4's own order and
+	// decides the case where an author writes a max-width below the min-width:
+	// the minimum wins, because it is applied to the result of the maximum.
+	//
+	// Percentages are left alone. What they are a percentage *of* is the table's
+	// width, which is the number this is being called to help work out.
+	for i, col := range g.colBoxes {
+		if col == nil || i >= len(out) {
+			continue
+		}
+		if v, ok := l.parseLength(col, "max-width"); ok && v.Kind == style.LengthAbsolute {
+			out[i].max = style.Min(out[i].max, v.Value)
+			out[i].min = style.Min(out[i].min, v.Value)
+		}
+		if v, ok := l.parseLength(col, "min-width"); ok && v.Kind == style.LengthAbsolute && v.Value > 0 {
+			out[i].min = style.Max(out[i].min, v.Value)
+			out[i].max = style.Max(out[i].max, v.Value)
+		}
+	}
 	for i := range out {
 		if out[i].max < out[i].min {
 			out[i].max = out[i].min
@@ -1012,8 +1042,8 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 		if col == nil {
 			continue
 		}
-		if v, ok := l.lengthOf(col, "width", room); ok && !l.isAuto(col, "width") {
-			out[i], set[i] = maxZero(v), true
+		if v, ok := l.columnWidth(col, room); ok {
+			out[i], set[i] = v, true
 		}
 	}
 	for _, c := range g.cells {
@@ -1057,6 +1087,35 @@ func (l *layouter) fixedColumnWidths(table *Box, g *tableGrid, room style.Unit,
 
 	l.reportColumnUnderflow(table, out, s)
 	return out
+}
+
+// columnWidth is what a <col> or a <colgroup> asks its column to be.
+//
+// The width is the one the author wrote, and it is clamped by the same
+// element's own min-width and max-width. §10.4 applies both to every element
+// but non-replaced inlines, table rows and row groups — columns are on the list
+// that they apply to, and the suite says so by name in the min-width, max-width
+// and width applies-to families.
+//
+// A column with no width of its own but a minimum still has a width: the
+// minimum is a floor under a share it has not been given yet, and a column that
+// went into the free pool without it would come out at whatever was left over —
+// zero, for a table of empty cells, which is min-width-applies-to-005 and is a
+// square that does not appear.
+//
+// A *maximum* on a column with no width does not settle it here. What such a
+// column ends up with is a share of the room the declared ones leave, and
+// clamping a share before it has been worked out would only move the surplus
+// somewhere else without saying where. It is left to the share and recorded
+// here as the boundary of what this reads.
+func (l *layouter) columnWidth(col *Box, room style.Unit) (style.Unit, bool) {
+	if v, ok := l.lengthOf(col, "width", room); ok && !l.isAuto(col, "width") {
+		return maxZero(l.clampWidth(col, v, room)), true
+	}
+	if min, ok := l.lengthOf(col, "min-width", room); ok && min > 0 {
+		return maxZero(l.clampWidth(col, min, room)), true
+	}
+	return 0, false
 }
 
 // reportColumnUnderflow names a column too narrow for what is in it.
