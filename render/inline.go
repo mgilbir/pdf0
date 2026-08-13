@@ -510,23 +510,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	firstLine := true
 	_ = firstLine
 
-	// CSS Overflow 4's line-clamp: how many lines this block shows, and whether
-	// it has to say that it cut something off.
-	maxLines := l.lineClamp(b)
-	clampEllipsis := style.Unit(0)
-	if maxLines > 0 && l.countLines(items, width, indent, maxLines+1) > maxLines {
-		// Only when content is actually discarded. A block clamped to three
-		// lines that has two says nothing, which is the difference between the
-		// property and a truncation.
-		// The block's own font, because §"block-ellipsis" puts the mark in the
-		// block container rather than in whatever inline box the last line
-		// happened to end inside — the suite's line-clamp-002 sets the text in a
-		// span a quarter the block's size and expects the ellipsis at the
-		// block's.
-		if face, ok := l.fontFor(b); ok {
-			clampEllipsis = l.measure(face, blockEllipsis, b.FontSize)
-		}
-	}
+	// CSS Overflow 4's line-clamp: how many more lines the clamps in force
+	// allow this block, and the room the mark will need on the last of them.
+	//
+	// Not this box's own property. The clamp counts *descendant* line boxes, so
+	// a block inside a clamp container is under a clamp it never declared and a
+	// clamp container's own budget has already been spent by whichever of its
+	// descendants was laid out first. Both are the same question, and clamp.go
+	// answers it — including whether anything is discarded at all, which is why
+	// there is no count of the content here any more.
+	maxLines, clampEllipsis, clamped := l.clampRoom()
 
 	// §5.1's balancing, as a cap on how wide a line may be broken.
 	//
@@ -535,7 +528,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// would move a centred line and shorten a right-aligned one, which is a
 	// different rendering from the one balancing asks for.
 	balanceCaps := l.balanceCaps(b, items, width, indent)
-	if balanceCaps != nil && maxLines > 0 {
+	if balanceCaps != nil && clamped && maxLines > 0 {
 		// Balancing a clamped block is a different question, because the clamp
 		// has already decided how many lines there are: any width at all
 		// produces that many, so "the narrowest width with the same line count"
@@ -633,9 +626,10 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			}
 			// The room the ellipsis needs on this line, which is the last one the
 			// clamp allows and nothing before it.
+			ending := l.clampEndingHere()
 			lineEllipsis := style.Unit(0)
-			if maxLines > 0 && len(parent.Lines) == maxLines-1 {
-				lineEllipsis = clampEllipsis
+			if ending != nil {
+				lineEllipsis = ending.ellipsis
 			}
 
 			// A line is shortened by every float its *box* meets, not only by the
@@ -914,7 +908,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// until §8.6 knows which piece of its box it is.
 				decor.addLine(len(parent.Lines), runs, xs,
 					line.Rect.X.Add(shift), line.Rect.Y.Add(line.Baseline), &stack)
-				if lineEllipsis > 0 {
+				if lineEllipsis > 0 && ending.face != nil {
 					// The mark goes where the line's own content ends, which is not
 					// where the line box does: an aligned line may have been moved,
 					// and a right-to-left one ends at its left. alignedWidth is the
@@ -923,14 +917,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					if lineBaseIsRTL(b, runs) {
 						at = shift.Sub(lineEllipsis)
 					}
-					if face, ok := l.fontFor(b); ok {
-						line.Runs = append(line.Runs, TextRun{
-							Text: blockEllipsis, Face: face, Size: b.FontSize,
-							X: at, Width: lineEllipsis, Box: b,
-						})
-					}
+					// The clamp container's font and box, not this block's: the
+					// mark belongs to the container's root inline box even when
+					// the line it lands on came from a descendant.
+					line.Runs = append(line.Runs, TextRun{
+						Text: blockEllipsis, Face: ending.face, Size: ending.size,
+						X: at, Width: lineEllipsis, Box: ending.box,
+					})
 				}
 				parent.Lines = append(parent.Lines, line)
+				l.clampLine()
 				// The indent belongs to the first line box that actually exists. A run
 				// of inline content that produced none — the collapsible space between
 				// two block children — has not used it up.
@@ -1019,9 +1015,12 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// lines whose third holds only the mark is three lines tall.
 				y = y.Add(lh)
 			}
-			if maxLines > 0 && len(parent.Lines) >= maxLines {
+			if l.clampReached() {
 				// The clamp: everything after this line is discarded, which is what
-				// "continue: discard" means and what the ellipsis just said.
+				// "continue: discard" means and what the ellipsis just said. It is
+				// asked of the clamps and not of this box's line count, because
+				// the line that used the last of the budget may have been made by
+				// a block laid out before this one.
 				break
 			}
 		}
@@ -1037,7 +1036,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// measured in a width it never had.
 			break
 		}
-		if !balanceMetFloat || maxLines > 0 {
+		if !balanceMetFloat || clamped {
 			// Nothing to do again: the box does not balance, or no float reached
 			// into it. A clamped box is left to the first answer as well — the
 			// clamp's own search is over how far the content reaches rather than
@@ -1648,9 +1647,12 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 	// no float inside it escapes and none outside reaches in. That is not a
 	// choice made here — it is what "flow-root" means, and blockIn would make
 	// one anyway for a box that seals its margins.
-	frag, _ := l.blockIn(b, frame.containing,
-		flow{ctx: &floatContext{}, cbHeight: frame.cbHeight, cbDefinite: frame.cbDefinite},
-		&forcedGeometry{margin: margin, width: width})
+	frag := outOfClamp(l, func() *Fragment {
+		f, _ := l.blockIn(b, frame.containing,
+			flow{ctx: &floatContext{}, cbHeight: frame.cbHeight, cbDefinite: frame.cbDefinite},
+			&forcedGeometry{margin: margin, width: width})
+		return f
+	})
 	if b.Position == PositionRelative {
 		d := l.relativeOffset(b, frame.containing, frame.cbHeight, frame.cbDefinite)
 		frag.Offset = Point{X: frame.offset.X.Add(d.X), Y: frame.offset.Y.Add(d.Y)}
