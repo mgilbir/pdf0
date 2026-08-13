@@ -136,35 +136,62 @@ func dropIrrelevantTableBoxes(parent *Box, kids []*Box) []*Box {
 		return out
 	}
 
-	// White space between table structure. The specification states this as two
-	// rules, one about a tabular container's children and one about a box
-	// between two internal table siblings; what is here is the union, which is
-	// the behaviour every browser has and is simpler to be sure of.
+	// White space between table structure. §17.2.1 states it as two rules, and
+	// what they have in common is the *neighbours*: white space is thrown away
+	// where it sits between table structure, and only there.
 	//
-	// The knowing divergence: the specification qualifies the first rule with
-	// "and its immediately preceding and following siblings, if any, are proper
-	// table descendants", so white space alone inside an otherwise empty <tr>
-	// would generate a cell. It does not here, and it does not in any browser —
-	// "<tr>\n</tr>" is a row with no cells, not a row with one empty one.
+	//	If a child C of a tabular container P is an anonymous inline box that
+	//	contains only white space, and its immediately preceding and following
+	//	siblings, if any, are proper table descendants of P and are either
+	//	'table-caption' or internal table boxes, then it is treated as if it had
+	//	'display: none'.
+	//
+	//	If a box B is an anonymous inline containing only white space, and is
+	//	between two immediate siblings each of which is either an internal table
+	//	box or a 'table-caption' box then B is treated as if it had
+	//	'display: none'.
+	//
+	// The two differ in one word, and the word is "any". Inside a tabular
+	// container a missing neighbour is no objection, so "<tr>\n</tr>" is a row
+	// with no cells rather than a row with one empty one — which is also what
+	// every browser produces. Anywhere else both neighbours have to be there,
+	// since white space "between two immediate siblings" needs two of them.
+	//
+	// Dropping it inside a container without looking at the neighbours at all is
+	// what this did, and the neighbours are the whole point of the rule. A row
+	// written as
+	//
+	//	<span style="display: table-row"><span style="display: table-cell">a</span>
+	//	<span>bc</span> <span style="display: table-cell">d</span></span>
+	//
+	// has two runs of white space whose *other* side is an inline span, not
+	// table structure. §17.2.1 keeps them, and the missing-child rule then sweeps
+	// space, span and space into one anonymous cell — so the row reads "a bc d".
+	// Throwing them away first gives "abcd", with the words run together, and
+	// the suite's table-anonymous-objects-199 and -200 draw the difference.
 	drop := make([]bool, len(kids))
 	inContainer := isTableInternalContainer(parent)
+	structural := func(b *Box) bool {
+		return isInternalTableBox(b) || b.Inner == InnerTableCaption
+	}
 	for i, c := range kids {
 		if !c.IsText() || !isCollapsibleText(c) {
 			continue
 		}
-		if inContainer {
-			drop[i] = true
+		before, hasBefore := previousBox(kids, i, drop)
+		after, hasAfter := nextBox(kids, i)
+		if hasBefore && !structural(before) {
 			continue
 		}
-		// Between two internal table boxes, wherever that happens: it is what
-		// makes two rows written on separate lines of a <div> consecutive, which
-		// is what lets the missing-parent rule gather them into one table
-		// instead of two.
-		if before, ok := previousBox(kids, i, drop); ok && (isInternalTableBox(before) || before.Inner == InnerTableCaption) {
-			if after, ok := nextBox(kids, i); ok && (isInternalTableBox(after) || after.Inner == InnerTableCaption) {
-				drop[i] = true
-			}
+		if hasAfter && !structural(after) {
+			continue
 		}
+		// Outside a container the rule needs two siblings and there is nothing
+		// to be between without them.
+		if !inContainer && (!hasBefore || !hasAfter) {
+			continue
+		}
+		drop[i] = true
 	}
 
 	out := kids[:0:0]
