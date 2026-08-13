@@ -869,7 +869,7 @@ const wptEnv = "WPT_TESTS"
 // of those 989 moved from clean to vacuous with not one test changing from
 // passing to failing: a pure reporting cost, which is exactly what the strip
 // existed to avoid. What replaced it removes the cost by removing its cause.
-const wptCleanPassBaseline = 4329
+const wptCleanPassBaseline = 4341
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1019,6 +1019,54 @@ func findReftests(t *testing.T, root string) []reftest {
 // clean passes below.
 var cdataRe = regexp.MustCompile(`(?s)<!\[CDATA\[(.*?)\]\]>`)
 
+// emptyElementRe matches an XML empty-element tag: "<div/>", "<td class='x'/>".
+//
+// The attribute part is spelled out rather than written [^>]* so that a ">"
+// inside a quoted attribute value does not end the match early.
+var emptyElementRe = regexp.MustCompile(
+	`<([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*?)\s*/>`)
+
+// xhtmlVoid is the set an empty-element tag says nothing extra about, because
+// HTML has no end tag for them either.
+var xhtmlVoid = map[string]bool{
+	"area": true, "base": true, "br": true, "col": true, "embed": true,
+	"hr": true, "img": true, "input": true, "link": true, "meta": true,
+	"param": true, "source": true, "track": true, "wbr": true,
+}
+
+// expandEmptyElements rewrites XML empty-element tags into a start tag and an
+// end tag, which is what they mean.
+//
+// The suite's .xht documents are XHTML and a browser parses them as XML, where
+// "<div/>" is an empty div. This engine has an HTML parser, and HTML has no
+// self-closing syntax outside the void elements — it reads the same tag as an
+// open <div> and puts everything after it inside. Neither reading is a bug: they
+// are two languages, and the file extension says which one the document is in.
+//
+// So the harness says it too, in the same place and for the same reason it
+// unwraps CDATA. These are XHTML documents being handed to an HTML parser, and
+// where the two languages disagree about what the markup *means* it is the
+// harness's business to translate rather than the engine's to guess — the note
+// on the tree-builder change above calls this the second place where reading
+// XHTML as HTML shows, and this is it.
+//
+// Without it the numbers-units references, written "<div/><div/>", are read as
+// one div inside another and draw a single square where the test draws two.
+// Twelve tests across values, floats-clear, generated-content and positioning
+// turn on it, and none goes the other way.
+//
+// Only .xht is rewritten. An .html document in the suite is HTML, and its
+// "<div/>" means what HTML says it means.
+func expandEmptyElements(src string) string {
+	return emptyElementRe.ReplaceAllStringFunc(src, func(tag string) string {
+		m := emptyElementRe.FindStringSubmatch(tag)
+		if xhtmlVoid[strings.ToLower(m[1])] {
+			return tag
+		}
+		return "<" + m[1] + m[2] + "></" + m[1] + ">"
+	})
+}
+
 // pageClip is the area a rendering is compared over.
 //
 // It stands in for the viewport a browser would have shown the reftest in: a
@@ -1040,6 +1088,9 @@ func renderForCompare(root, file string) (ops []Op, clean bool, err error) {
 		return nil, false, err
 	}
 	src := cdataRe.ReplaceAllString(string(data), "$1")
+	if ext := strings.ToLower(filepath.Ext(file)); ext == ".xht" || ext == ".xhtml" {
+		src = expandEmptyElements(src)
+	}
 
 	// The suite's documents refer to real files beside them — most of the
 	// references draw their expected picture with
