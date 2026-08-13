@@ -293,9 +293,13 @@ func TestReorderingIsLinearInTheLength(t *testing.T) {
 //
 // A box broken by a block inside it carries its own inset on the pieces at its
 // two ends and nothing on the joins. Which *physical* side that is depends on
-// which way the containing block runs: in a left-to-right one the piece the box
-// begins on is the leftmost, and in a right-to-left one it is the rightmost — so
-// the same declaration lands on the other side of the block.
+// which way the box itself runs: under ltr the piece it begins on is the
+// leftmost, under rtl the rightmost — so the same declaration lands on the other
+// side of the block.
+//
+// The direction is set on the containing block here and inherited, which is how
+// the suite writes it and is the case that says nothing about *whose* direction
+// is read. TestTheBoxsOwnDirectionDecidesWhichEndBeginsIt is the one that does.
 //
 // A span with nothing in it but a block and a padding on one side is the whole
 // of the case, and the suite writes it once each way. The ten pixels are before
@@ -347,4 +351,123 @@ func TestASplitInlineKeepsItsInsetOnTheSideTheBlockRunsFrom(t *testing.T) {
 			"piece the box begins on is the rightmost, so the right inset is the "+
 			"one that begins it", before, after)
 	}
+}
+
+// TestTheBoxsOwnDirectionDecidesWhichEndBeginsIt is §8.6's rule read as it is
+// written, and it is written twice — once per direction — with "the element's"
+// in both:
+//
+//	When the element's 'direction' property is 'ltr', the leftmost generated box
+//	of the first line box in which the element appears has the left margin, left
+//	border and left padding [...] When the element's 'direction' property is
+//	'rtl', the rightmost generated box of the first line box [...] has the right
+//	padding, right border and right margin.
+//
+// The element's own, not its containing block's — and until this test the
+// difference was unmeasured, because every other document in the suite and in
+// this package sets the direction on an ancestor and lets the span inherit it,
+// where the two readings agree. CSS2/box has the four combinations as four
+// documents; rtl-span-only is a "direction: rtl" span in a left-to-right block
+// and its reference gives the *first* line the right inset.
+//
+// The two halves of the rule are asserted separately because they are two pieces
+// of code: which side a *block-in-inline* split suppresses, and which side a
+// *line* split draws.
+func TestTheBoxsOwnDirectionDecidesWhichEndBeginsIt(t *testing.T) {
+	// A block inside the span cuts it in two. The padding is on the right, so
+	// under the span's own ltr it ends the box — the piece after the block — and
+	// under its own rtl it begins it, whatever the block around it says.
+	t.Run("a block-in-inline split", func(t *testing.T) {
+		const css = noDefaults + `
+		#s { padding-right: 10px }
+		#b { display: block; height: 20px }`
+		sides := func(t *testing.T, outer, inner string) (before, after bool) {
+			t.Helper()
+			root := layoutOf(t, 1000,
+				`<div id="k" style="direction: `+outer+`">`+
+					`<span id="s" style="direction: `+inner+`">`+
+					`<span id="b"></span></span></div>`, css)
+			k := find(t, root, "k")
+			blockTop := relY(t, find(t, root, "b"), k)
+			for _, c := range k.Children {
+				if c.Box == nil || c.Box == find(t, root, "b").Box {
+					continue
+				}
+				for _, line := range c.Lines {
+					if line.Rect.W <= 0 {
+						continue
+					}
+					if c.BorderRect.Y.Add(line.Rect.Y) < blockTop {
+						before = true
+					} else {
+						after = true
+					}
+				}
+			}
+			return before, after
+		}
+		// The span's own direction decides, both times against its container's.
+		if before, after := sides(t, "rtl", "ltr"); before || !after {
+			t.Errorf("an ltr span in an rtl block put its padding-right "+
+				"before=%v after=%v the block, want after only", before, after)
+		}
+		if before, after := sides(t, "ltr", "rtl"); !before || after {
+			t.Errorf("an rtl span in an ltr block put its padding-right "+
+				"before=%v after=%v the block, want before only", before, after)
+		}
+	})
+
+	// A <br> inside the span cuts it in two the other way. The first line draws
+	// the box's starting border and the last its ending one, and which physical
+	// side each is depends on the span's own direction — so the widths tell them
+	// apart without depending on where the lines sit.
+	t.Run("a line split", func(t *testing.T) {
+		const css = noDefaults + mono + `
+		#s { border-left: 4px solid; border-right: 8px solid }`
+		borders := func(t *testing.T, outer, inner string) (first, last Edges) {
+			t.Helper()
+			root := layoutOf(t, 1000,
+				`<div id="k" style="direction: `+outer+`">`+
+					`<span id="s" style="direction: `+inner+`">a<br>b</span></div>`, css)
+			k := find(t, root, "k")
+			if len(k.Lines) != 2 {
+				t.Fatalf("%d lines, want 2", len(k.Lines))
+			}
+			for i, line := range k.Lines {
+				if len(line.Boxes) != 1 {
+					t.Fatalf("line %d has %d inline fragments, want 1", i, len(line.Boxes))
+				}
+				if i == 0 {
+					first = line.Boxes[0].Border
+				} else {
+					last = line.Boxes[0].Border
+				}
+			}
+			return first, last
+		}
+		for _, tc := range []struct {
+			outer, inner          string
+			firstLeft, firstRight float64
+			lastLeft, lastRight   float64
+		}{
+			// ltr: the first line begins the box, so it draws the left border.
+			{"ltr", "ltr", 4, 0, 0, 8},
+			{"rtl", "ltr", 4, 0, 0, 8},
+			// rtl: the first line begins the box at its right.
+			{"rtl", "rtl", 0, 8, 4, 0},
+			{"ltr", "rtl", 0, 8, 4, 0},
+		} {
+			first, last := borders(t, tc.outer, tc.inner)
+			if first.Left.Px() != tc.firstLeft || first.Right.Px() != tc.firstRight {
+				t.Errorf("%s block, %s span: the first line's borders are %g/%g, "+
+					"want %g/%g", tc.outer, tc.inner,
+					first.Left.Px(), first.Right.Px(), tc.firstLeft, tc.firstRight)
+			}
+			if last.Left.Px() != tc.lastLeft || last.Right.Px() != tc.lastRight {
+				t.Errorf("%s block, %s span: the last line's borders are %g/%g, "+
+					"want %g/%g", tc.outer, tc.inner,
+					last.Left.Px(), last.Right.Px(), tc.lastLeft, tc.lastRight)
+			}
+		}
+	})
 }
