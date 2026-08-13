@@ -1231,3 +1231,66 @@ func TestColumnWidthLimitsApplyToColumns(t *testing.T) {
 			"was not applied to the width declared on it", got)
 	}
 }
+
+// TestTableHeightLimitsReachTheRows is §10.7's two limits meeting §17.5.3's
+// height algorithm.
+//
+// A table's height is shared out over its rows, so a limit that moved the table
+// has to reach them or the table is one height and the rows in it are another.
+// Both halves showed: a minimum left the rows at what their content needed
+// inside a table that was taller, and a maximum left them at what the declared
+// height gave them inside a table that was shorter — the cells hanging out of
+// the bottom of their own table's background.
+//
+// The last case is the one that says why the maximum is applied only to a height
+// that was declared. A maximum is not a height for the rows to share: it caps
+// what the content produced. Handing it to them as one would stretch rows
+// *shorter* than the cap up to meet it, which is the one thing a maximum must
+// never do — and is a mistake that looks right in every test where the content
+// is taller than the cap.
+func TestTableHeightLimitsReachTheRows(t *testing.T) {
+	const base = noDefaults + `
+	#row { display: table-row }
+	#cell { display: table-cell; width: 96px; height: 20px }`
+	sizes := func(t *testing.T, decl string) (table, cell float64) {
+		t.Helper()
+		root := layoutOf(t, 1000,
+			`<div id="table"><div id="row"><div id="cell"></div></div></div>`,
+			base+`#table { `+decl+` }`)
+		return find(t, root, "table").BorderRect.H.Px(),
+			find(t, root, "cell").BorderRect.H.Px()
+	}
+
+	for _, c := range []struct {
+		what, decl  string
+		table, cell float64
+	}{
+		// A minimum above the content raises the table, and the row with it.
+		{"a minimum over a table", `display: table; min-height: 96px`, 96, 96},
+		{"a minimum over an inline table", `display: inline-table; min-height: 96px`, 96, 96},
+		// A maximum under a declared height lowers both.
+		{"a maximum under a declared height",
+			`display: table; height: 288px; max-height: 96px`, 96, 96},
+		// A maximum over a declared height is not a floor: neither moves.
+		{"a maximum over a declared height",
+			`display: table; height: 96px; max-height: 288px`, 96, 96},
+		// A maximum with no height at all leaves the content where it is. This
+		// is the case that must not stretch.
+		{"a maximum with no height", `display: table; max-height: 96px`, 20, 20},
+		// And a minimum under the content changes nothing either.
+		{"a minimum under the content", `display: table; min-height: 10px`, 20, 20},
+		// Both limits at once, which is where their order shows. §10.7 applies
+		// the maximum to the declared height and the minimum to what that
+		// leaves, so a minimum above the maximum wins: 288 capped to 96 and then
+		// raised to 200. Applying them the other way round gives 96, and every
+		// case above is blind to the difference.
+		{"a minimum above a maximum",
+			`display: table; height: 288px; min-height: 200px; max-height: 96px`, 200, 200},
+	} {
+		table, cell := sizes(t, c.decl)
+		if table != c.table || cell != c.cell {
+			t.Errorf("%s: the table is %g tall holding a %gpx row, want %g and %g",
+				c.what, table, cell, c.table, c.cell)
+		}
+	}
+}
