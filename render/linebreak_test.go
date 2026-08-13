@@ -58,7 +58,7 @@ func TestLineBreakAnywhereBreaksBeforeAPreservedSpace(t *testing.T) {
 // Under pre-wrap a run of preserved spaces is one unit — it hangs or wraps
 // whole — and that is the thing "anywhere" takes apart.
 func TestLineBreakAnywhereSplitsARunOfPreservedSpaces(t *testing.T) {
-	pieces, _ := splitAtBreaks("a    b", whiteSpaceOf("pre-wrap"), wordBreak{},
+	pieces, _ := splitAtBreaks("a    b", whiteSpaceOf("preserve"), wordBreak{},
 		lineBreak{anywhere: true})
 	var spaces int
 	for _, p := range pieces {
@@ -74,7 +74,7 @@ func TestLineBreakAnywhereSplitsARunOfPreservedSpaces(t *testing.T) {
 	}
 
 	// Without it they are one piece, which is what pre-wrap means.
-	pieces, _ = splitAtBreaks("a    b", whiteSpaceOf("pre-wrap"), wordBreak{},
+	pieces, _ = splitAtBreaks("a    b", whiteSpaceOf("preserve"), wordBreak{},
 		lineBreak{})
 	for _, p := range pieces {
 		if p.space && p.text != "    " {

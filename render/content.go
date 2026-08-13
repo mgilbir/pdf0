@@ -232,7 +232,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 	// Only Phase I, as in textBox: the rules that cross a box boundary and the
 	// rules that need a line are applied later, by the same passes that apply
 	// them to everything else.
-	text := collapseWhitespace(value.text, cs["white-space"])
+	text := collapseWhitespace(value.text, cs["white-space-collapse"])
 	if text != "" {
 		if !b.room(n) {
 			return box

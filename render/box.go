@@ -621,7 +621,7 @@ func (b *boxBuilder) roomAt(offset int) bool {
 // block container with inline content, and so generate an anonymous block that
 // occupies a line.
 func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSize style.Unit) *Box {
-	text := collapseWhitespace(n.Text, inherited["white-space"])
+	text := collapseWhitespace(n.Text, inherited["white-space-collapse"])
 	// text-transform, applied here so that the text every later stage measures,
 	// breaks, draws and writes into the PDF is the text that will appear.
 	// texttransform.go works through why it cannot wait until paint time.
@@ -1261,7 +1261,7 @@ func hasInFlowContent(run []*Box) bool {
 		if !c.IsText() {
 			return true
 		}
-		if !whiteSpaceOf(c.Style["white-space"]).collapse {
+		if !whiteSpaceOf(c.Style["white-space-collapse"]).collapse {
 			return true
 		}
 		if strings.TrimSpace(c.Text) != "" {

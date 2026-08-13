@@ -243,7 +243,7 @@ func TestBoldAndItalicPickDifferentFaces(t *testing.T) {
 // spaces. Chinese writes none, so a breaker that only knew about spaces would
 // run a whole paragraph together as one unbreakable word.
 func TestCJKBreaksBetweenIdeographs(t *testing.T) {
-	pieces, _ := splitAtBreaks("日本語のテキスト", whiteSpaceOf("normal"), wordBreak{}, lineBreak{})
+	pieces, _ := splitAtBreaks("日本語のテキスト", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 	if len(pieces) < 4 {
 		t.Fatalf("ideographic text was cut into %d pieces, want one per character", len(pieces))
 	}
@@ -254,7 +254,7 @@ func TestCJKBreaksBetweenIdeographs(t *testing.T) {
 	}
 
 	// And Latin is not cut up that way: a word stays whole.
-	pieces, _ = splitAtBreaks("hello world", whiteSpaceOf("normal"), wordBreak{}, lineBreak{})
+	pieces, _ = splitAtBreaks("hello world", whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 	var words []string
 	for _, p := range pieces {
 		if !p.space {
@@ -271,7 +271,7 @@ func TestCJKBreaksBetweenIdeographs(t *testing.T) {
 func TestBreakOpportunities(t *testing.T) {
 	texts := func(text string) []string {
 		var out []string
-		pieces, _ := splitAtBreaks(text, whiteSpaceOf("normal"), wordBreak{}, lineBreak{})
+		pieces, _ := splitAtBreaks(text, whiteSpaceOf("collapse"), wordBreak{}, lineBreak{})
 		for _, p := range pieces {
 			if !p.space {
 				out = append(out, p.text)

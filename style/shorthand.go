@@ -729,3 +729,105 @@ func isDecorationLine(part []css.ComponentValue) bool {
 	}
 	return false
 }
+
+// whiteSpaceShorthand is CSS Text 4's table for the property that used to be one
+// keyword.
+//
+//	white-space-collapse | text-wrap-mode
+//	normal        collapse         wrap
+//	pre           preserve         nowrap
+//	nowrap        collapse         nowrap
+//	pre-wrap      preserve         wrap
+//	pre-line      preserve-breaks  wrap
+//	break-spaces  break-spaces     wrap
+//
+// The two-value syntax the level 4 draft also allows — "white-space: preserve
+// nowrap" — is deliberately not accepted. Nothing in the suite writes it, the
+// keywords it takes are the longhands' own, and an expander that guessed at
+// which of two idents belonged to which longhand would be inventing a grammar.
+func whiteSpaceShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	name, ok := singleIdent(vals)
+	if !ok {
+		return nil, nil, false
+	}
+	var collapse, mode string
+	switch name {
+	case "normal":
+		collapse, mode = "collapse", "wrap"
+	case "pre":
+		collapse, mode = "preserve", "nowrap"
+	case "nowrap":
+		collapse, mode = "collapse", "nowrap"
+	case "pre-wrap":
+		collapse, mode = "preserve", "wrap"
+	case "pre-line":
+		collapse, mode = "preserve-breaks", "wrap"
+	case "break-spaces":
+		collapse, mode = "break-spaces", "wrap"
+	default:
+		return nil, nil, false
+	}
+	return map[string][]css.ComponentValue{
+		"white-space-collapse": ident(collapse),
+		"text-wrap-mode":       ident(mode),
+	}, nil, true
+}
+
+// textWrapShorthand is "<'text-wrap-mode'> || <'text-wrap-style'>": either, or
+// both in either order.
+//
+// Whichever is absent is reset to its initial value, which is the rule the note
+// at the top of this file is about — "text-wrap: balance" after "text-wrap:
+// nowrap" wraps, because the shorthand set the mode back to wrap.
+func textWrapShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	mode, style := "", ""
+	for _, part := range splitOnWhitespace(vals) {
+		name, ok := singleIdent(part)
+		if !ok {
+			return nil, nil, false
+		}
+		switch name {
+		case "wrap", "nowrap":
+			if mode != "" {
+				return nil, nil, false
+			}
+			mode = name
+		case "auto", "balance", "stable", "pretty":
+			if style != "" {
+				return nil, nil, false
+			}
+			style = name
+		default:
+			return nil, nil, false
+		}
+	}
+	if mode == "" && style == "" {
+		return nil, nil, false
+	}
+	if mode == "" {
+		mode = "wrap"
+	}
+	if style == "" {
+		style = "auto"
+	}
+	return map[string][]css.ComponentValue{
+		"text-wrap-mode":  ident(mode),
+		"text-wrap-style": ident(style),
+	}, nil, true
+}
+
+// singleIdent reads a value that is exactly one keyword, ignoring the whitespace
+// either side of it.
+func singleIdent(vals []css.ComponentValue) (string, bool) {
+	name := ""
+	for _, v := range vals {
+		if v.IsToken() && v.Token.Kind == css.Whitespace {
+			continue
+		}
+		if !v.IsToken() || v.Token.Kind != css.Ident || name != "" {
+			return "", false
+		}
+		name = strings.ToLower(v.Token.Value)
+	}
+	return name, name != ""
+}

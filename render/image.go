@@ -528,7 +528,7 @@ func (l *replacedLoader) altOnly(b *Box) {
 	if !ok {
 		return
 	}
-	text := collapseWhitespace(alt, b.Style["white-space"])
+	text := collapseWhitespace(alt, b.Style["white-space-collapse"])
 	if strings.TrimSpace(text) == "" {
 		// alt="" is a deliberate statement that the image carries no
 		// information, and generating a box for it would put a space on the

@@ -1,6 +1,10 @@
 package render
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mgilbir/pdf0/style"
+)
 
 // White space: the white-space property, and CSS Text §4's processing rules.
 //
@@ -77,22 +81,33 @@ type whiteSpace struct {
 	breakSpaces bool
 }
 
-// whiteSpaceOf reads the property.
+// whiteSpaceFor reads the two longhands the white-space shorthand sets.
 //
-// An unrecognised value gives the initial one. That is what the cascade would
-// have produced had the declaration been thrown out, and it is the answer that
-// cannot lose text: a value read as "pre" by mistake would leave a document's
-// indentation in the page, but one read as "nowrap" by mistake would run a
-// paragraph off the edge.
+// They are two properties rather than one because "text-wrap: nowrap" sets the
+// wrapping half without saying anything about collapsing, and the two spellings
+// have to compete in the cascade rather than in the layout code — see the
+// shorthands table in style/property.go.
+//
+// An unrecognised value in either gives that longhand's initial one. That is
+// what the cascade would have produced had the declaration been thrown out, and
+// it is the answer that cannot lose text: a collapse value read as "preserve" by
+// mistake would leave a document's indentation in the page, but a mode read as
+// "nowrap" by mistake would run a paragraph off the edge.
+func whiteSpaceFor(cs style.ComputedStyle) whiteSpace {
+	ws := whiteSpaceOf(cs["white-space-collapse"])
+	ws.wrap = !strings.EqualFold(strings.TrimSpace(cs["text-wrap-mode"]), "nowrap")
+	return ws
+}
+
+// whiteSpaceOf reads white-space-collapse alone, leaving the wrapping half at
+// its initial value. Every caller that has a style should use whiteSpaceFor;
+// this is for the places that have only the one value — and for the tests, whose
+// cases are written as the collapse keyword.
 func whiteSpaceOf(value string) whiteSpace {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "nowrap":
-		return whiteSpace{collapse: true}
-	case "pre":
-		return whiteSpace{preserveBreaks: true}
-	case "pre-wrap":
+	case "preserve":
 		return whiteSpace{preserveBreaks: true, wrap: true}
-	case "pre-line":
+	case "preserve-breaks":
 		return whiteSpace{collapse: true, preserveBreaks: true, wrap: true}
 	case "break-spaces":
 		return whiteSpace{preserveBreaks: true, wrap: true, breakSpaces: true}
