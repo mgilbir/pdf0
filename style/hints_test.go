@@ -170,3 +170,36 @@ func TestTableHeightAttributeIsAHint(t *testing.T) {
 		}
 	}
 }
+
+// TestNowrapAttributeOnACellIsAHint is HTML's table rendering section, which
+// states it as a rule rather than as an attribute mapping:
+//
+//	td[nowrap], th[nowrap] { white-space: nowrap }
+//
+// It is a boolean attribute, so what matters is that it is there at all.
+//
+// It sets the two longhands rather than the shorthand, and has to: a hint goes
+// straight into the cascade without passing through the expander, so naming
+// white-space here would set a property nothing reads. Both of them, because
+// that is what the rule says — a cell with nowrap inside a "white-space: pre"
+// table collapses its spaces as well as refusing to wrap.
+func TestNowrapAttributeOnACellIsAHint(t *testing.T) {
+	got := computed(t, `<table><tr><td id="a" nowrap>x</td><td id="b">y</td></tr></table>`)
+	if v := got["a"]["text-wrap-mode"]; v != "nowrap" {
+		t.Errorf("<td nowrap> has text-wrap-mode %q, want nowrap", v)
+	}
+	if v := got["a"]["white-space-collapse"]; v != "collapse" {
+		t.Errorf("<td nowrap> has white-space-collapse %q, want collapse", v)
+	}
+	// And the cell beside it is untouched, which is what makes it the
+	// attribute's doing rather than a rule about cells.
+	if v := got["b"]["text-wrap-mode"]; v != "wrap" {
+		t.Errorf("a cell without the attribute has text-wrap-mode %q, want wrap", v)
+	}
+	// An author's own rule still beats it, which is where a hint sits.
+	got = computed(t, `<table><tr><td id="a" nowrap>x</td></tr></table>`,
+		sheet(t, OriginAuthor, `td { white-space: normal }`))
+	if v := got["a"]["text-wrap-mode"]; v != "wrap" {
+		t.Errorf("an author rule lost to the hint: text-wrap-mode is %q", v)
+	}
+}

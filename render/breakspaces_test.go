@@ -398,3 +398,41 @@ func TestOghamSpaceMarkIsRemovedAtALineEnd(t *testing.T) {
 	px(t, "the preferred width of text ending in an ideographic space",
 		find(t, root, "f").BorderRect.W, 2*ch)
 }
+
+// TestBreakSpacesMinimumKeepsTheSpaceThatEndsTheRun is §3's break-spaces where
+// it meets an intrinsic width.
+//
+// The value's whole point is that "a sequence of preserved white space always
+// takes up space, including at the end of the line", and the opportunity it
+// offers is *after* each space rather than before. So the space belongs to the
+// run in front of it, and the narrowest that run can be is one space wider than
+// the word.
+//
+// The comparison against pre-wrap is the assertion, because the two agree about
+// everything else here: pre-wrap hangs the space at a line edge, so the run
+// before it is what has to fit and the space costs the minimum nothing.
+func TestBreakSpacesMinimumKeepsTheSpaceThatEndsTheRun(t *testing.T) {
+	const src = `<p id="p">123    8</p>`
+	width := func(ws, kw string) float64 {
+		t.Helper()
+		root := layoutOf(t, 10000, src, noDefaults+mono+
+			`p { white-space: `+ws+`; width: `+kw+` }`)
+		return find(t, root, "p").BorderRect.W.Px()
+	}
+	// Four characters: "123" and the space a line may end after.
+	if got := width("break-spaces", "min-content"); got != 4*ch {
+		t.Errorf("break-spaces min-content is %gpx, want %g (four characters)",
+			got, 4*ch)
+	}
+	// Three: pre-wrap hangs the space instead.
+	if got := width("pre-wrap", "min-content"); got != 3*ch {
+		t.Errorf("pre-wrap min-content is %gpx, want %g (three characters)",
+			got, 3*ch)
+	}
+	// Neither changes the maximum, which is the whole text either way.
+	for _, ws := range []string{"break-spaces", "pre-wrap"} {
+		if got := width(ws, "max-content"); got != 8*ch {
+			t.Errorf("%s max-content is %gpx, want %g", ws, got, 8*ch)
+		}
+	}
+}

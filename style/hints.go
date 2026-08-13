@@ -97,7 +97,7 @@ var counterHintAttributes = map[string]bool{"start": true, "value": true}
 func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
 	name := strings.ToLower(n.Name)
 	if name == "td" || name == "th" {
-		return cellPaddingHint(n)
+		return cellHints(n)
 	}
 	attrs, ok := hintedAttributes[name]
 	if !ok {
@@ -161,6 +161,32 @@ func dimensionValue(raw string) (string, bool) {
 		return s, true
 	}
 	return "", false
+}
+
+// cellHints are the hints a table cell takes: its table's cellpadding, and its
+// own nowrap.
+//
+// HTML's table rendering section states the second as a rule rather than as an
+// attribute mapping — "td[nowrap], th[nowrap] { white-space: nowrap }" — and it
+// is a boolean attribute, so what matters is that it is there at all and not
+// what it says.
+//
+// It sets the two longhands rather than the shorthand, because a hint goes
+// straight into the cascade without passing through the expander: naming
+// white-space here would set a property nothing reads. Both of them, and not
+// only the wrapping half, because that is what the rule says — a cell inside a
+// "white-space: pre" table with nowrap on it collapses its spaces.
+func cellHints(n *html.Node) map[string][]css.ComponentValue {
+	out := cellPaddingHint(n)
+	if _, ok := n.Attr("nowrap"); !ok {
+		return out
+	}
+	if out == nil {
+		out = make(map[string][]css.ComponentValue, 2)
+	}
+	out["white-space-collapse"] = ident("collapse")
+	out["text-wrap-mode"] = ident("nowrap")
+	return out
 }
 
 // cellPaddingHint reads the cellpadding an ancestor table declares.
