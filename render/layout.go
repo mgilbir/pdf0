@@ -354,8 +354,6 @@ type layouter struct {
 	reportedOverflow map[string]bool
 	// reportedJustify suppresses repeating the justification gap per line.
 	reportedJustify map[string]bool
-	// reportedBalance is the same for a balanced box a float reaches into.
-	reportedBalance map[string]bool
 	// decorations memoizes the text decorations drawn across each box, which are
 	// built from the box's parent's — see decorationsFor.
 	decorations map[*Box][]textDecoration
