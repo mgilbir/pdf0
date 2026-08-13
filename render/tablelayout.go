@@ -839,6 +839,34 @@ func tableLayoutIsFixed(table *Box) bool {
 // A caption cannot make the table wider than the widest caption *needs* to be —
 // only its minimum counts, not its preferred width. A paragraph of prose in a
 // <caption> wraps; it does not stretch the table across the page.
+//
+// # Two tests in the suite want opposite answers here
+//
+// That this widens the *table* and not only §17.4's wrapper is §17.5.2.2's
+// automatic algorithm read literally: "the used width is the greater of the
+// table's containing block width, CAPMIN, and MIN. However, if either CAPMIN or
+// [MAX] is less than that of the containing block, use max(MAX, CAPMIN)."
+// CAPMIN is in both halves, so a caption wider than the grid widens the table.
+//
+// anonymous-table-box-width-001 is that sentence as a picture and cannot be
+// satisfied any other way: an empty table — MIN and MAX both zero — with an
+// empty "width: 100px" caption and a hundred pixels of green bottom border, over
+// a hundred-pixel red square. Only the caption can make that border wide enough
+// to cover the red, and the test cites the working group's resolution of issue
+// 172 for it.
+//
+// floats-wrap-bfc-006 wants the other answer just as plainly. Its second case is
+// a table whose grid comes to 100 under a "width: 190px" caption, and the
+// reference paints the table 100 wide inside a 190-wide wrapper — the caption
+// sizes the wrapper and leaves the table alone, which is what css-tables-3 says
+// and what the browser this reference was written against does.
+//
+// Removing this line was measured over the whole suite: it trades exactly one
+// test for the other, 001 for 006, and moves nothing else. So it stays, because
+// the letter of the specification this engine implements is on that side and the
+// test that turns on it says so in its own assertion. The cost is bfc-006, which
+// is a real failure and is recorded here rather than filed as a float bug —
+// everything about that test except this one width is already right.
 func (l *layouter) captionMinWidth(table *Box) style.Unit {
 	wrapper := table.Parent
 	if wrapper == nil || !wrapper.TableWrapper {
