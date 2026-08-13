@@ -216,7 +216,7 @@ func TestOtherSpaceSeparatorsAreWhiteSpaceForPhaseII(t *testing.T) {
 			t.Errorf("U+%04X is in Zs and is neither U+0020 nor U+00A0, so it is "+
 				"an other space separator", r)
 		}
-		pieces, _ := splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("pre-wrap"), wordBreak{})
+		pieces, _ := splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("pre-wrap"), wordBreak{}, lineBreak{})
 		if len(pieces) != 3 {
 			t.Errorf("U+%04X cut its text into %d pieces, want 3", r, len(pieces))
 			continue
@@ -251,14 +251,14 @@ func TestSeparatorBreakOpportunitiesFollowUAX14(t *testing.T) {
 		if got := separatorBreaksAfter(r); got != want {
 			t.Errorf("a line may end after U+%04X: got %v, want %v", r, got, want)
 		}
-		pieces, _ := splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("pre-wrap"), wordBreak{})
+		pieces, _ := splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("pre-wrap"), wordBreak{}, lineBreak{})
 		if len(pieces) == 3 && pieces[2].breakBefore != want {
 			t.Errorf("the text after U+%04X may begin a line: got %v, want %v",
 				r, pieces[2].breakBefore, want)
 		}
 		// break-spaces overrides both exceptions: it puts an opportunity "after
 		// every other space separator", with no carve-out for the no-break ones.
-		pieces, _ = splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("break-spaces"), wordBreak{})
+		pieces, _ = splitAtBreaks("ab"+string(r)+"cd", whiteSpaceOf("break-spaces"), wordBreak{}, lineBreak{})
 		if len(pieces) == 3 && !pieces[2].breakBefore {
 			t.Errorf("break-spaces left no opportunity after U+%04X", r)
 		}
@@ -360,7 +360,7 @@ func TestOghamSpaceMarkIsRemovedAtALineEnd(t *testing.T) {
 	// It is still not *collapsible*, which is the distinction the second flag
 	// exists for: a run of them is a run of stemlines, and folding two into one
 	// would shorten the line by a character the author drew.
-	pieces, _ := splitAtBreaks("a\u1680\u1680b", whiteSpaceOf("normal"), wordBreak{})
+	pieces, _ := splitAtBreaks("a\u1680\u1680b", whiteSpaceOf("normal"), wordBreak{}, lineBreak{})
 	if len(pieces) != 4 {
 		t.Errorf("two ogham space marks gave %d pieces, want 4 — they were "+
 			"collapsed into one", len(pieces))

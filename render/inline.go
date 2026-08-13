@@ -1893,7 +1893,11 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandled != "" {
 		l.reportWordBreak(b, unhandled)
 	}
-	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb)
+	lb, unhandledLine := lineBreakOf(b.Style["line-break"])
+	if unhandledLine != "" {
+		l.reportLineBreak(b, unhandledLine)
+	}
+	pieces, endedAtBreak := splitAtBreaks(b.Text, ws, wb, lb)
 	if len(pieces) == 0 {
 		// A box that produced nothing passes an opportunity through rather than
 		// swallowing it — and it may have created one of its own, which is what
@@ -2142,7 +2146,7 @@ type piece struct {
 // The text is walked rune by rune rather than through a []rune, which is not a
 // micro-optimisation: a text node is untrusted and arbitrarily large, and a
 // decoded copy of one is four bytes per character of buffering nobody asked for.
-func splitAtBreaks(text string, ws whiteSpace, wb wordBreak) ([]piece, bool) {
+func splitAtBreaks(text string, ws whiteSpace, wb wordBreak, lb lineBreak) ([]piece, bool) {
 	var out []piece
 	var cur strings.Builder
 	breakNext := false
@@ -2207,7 +2211,13 @@ func splitAtBreaks(text string, ws whiteSpace, wb wordBreak) ([]piece, bool) {
 		// separators are excluded with it, which errs towards fewer
 		// opportunities and so overflows a line rather than breaking it in a
 		// place the algorithm did not sanction.
-		if (deferBreak || (wb.breakAll && !startsSpacePiece(r, ws))) &&
+		// line-break: anywhere is the third source and the widest: §5.3 puts an
+		// opportunity around *every* typographic character unit, so it needs
+		// neither break-all's exclusion of white space nor anything deferred. It
+		// is what makes "X XX X" in four characters of room break after the
+		// fourth — the answer break-all must not give, and the one the suite's
+		// break-spaces-before-first-char-007 asks for by name.
+		if (deferBreak || (wb.breakAll && !startsSpacePiece(r, ws)) || lb.anywhere) &&
 			atBoundary && cur.Len() > 0 {
 			flush()
 			breakNext = true
@@ -2273,7 +2283,10 @@ func splitAtBreaks(text string, ws whiteSpace, wb wordBreak) ([]piece, bool) {
 			// Preserved. Under pre and pre-wrap the run hangs or wraps as a
 			// unit, so it is one piece; under break-spaces a line may end after
 			// any single space, so each is its own.
-			if !ws.breakSpaces {
+			// Under pre and pre-wrap the run hangs or wraps as a unit, so it is
+			// gathered — unless line-break: anywhere says a line may end between
+			// any two of them, which is a run that is no longer one thing.
+			if !ws.breakSpaces && !lb.anywhere {
 				for i < len(text) && text[i] == ' ' {
 					i++
 				}
@@ -2896,6 +2909,41 @@ func (l *layouter) reportWordBreak(b *Box, value string) {
 		Rule:     RuleUnsupportedValue,
 		Property: "word-break",
 		Message: value + " was read as normal, so a line may break where the " +
+			"value asked it not to",
+		Path: PathOf(b.Element),
+	})
+}
+
+// reportLineBreak reports a line-break value this engine reads as auto.
+//
+// Unlike its word-break counterpart it is conditional on the text, and the
+// condition is what keeps it honest. loose, normal and strict differ from auto
+// only in how strictly CJK text may break — around small kana, around iteration
+// marks, before centred punctuation — and this engine's whole CJK rule is
+// "between two ideographs", which all three leave alone. Over Latin text the
+// three values provably change nothing, and the suite says so: pre-wrap-004,
+// -005 and -006 exist to assert that "XX    XX" wraps the same under loose,
+// normal and strict as under auto. Warning there would be crying wolf on a page
+// that is correct.
+//
+// So the report is made where the difference could show, which is text with an
+// ideograph in it — the only text this engine breaks by a rule the three values
+// have anything to say about.
+func (l *layouter) reportLineBreak(b *Box, value string) {
+	if !strings.ContainsFunc(b.Text, isIdeographic) {
+		return
+	}
+	if l.reportedLineBreak == nil {
+		l.reportedLineBreak = map[string]bool{}
+	}
+	if l.reportedLineBreak[value] {
+		return
+	}
+	l.reportedLineBreak[value] = true
+	l.rec.ReportDetail(Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "line-break",
+		Message: value + " was read as auto, so CJK text may break where the " +
 			"value asked it not to",
 		Path: PathOf(b.Element),
 	})

@@ -336,6 +336,8 @@ type layouter struct {
 	reportedScripts map[string]bool
 	// reportedWordBreak is the same for the word-break values read as normal.
 	reportedWordBreak map[string]bool
+	// reportedLineBreak is the same again for line-break.
+	reportedLineBreak map[string]bool
 	reportedGlyphs    map[string]bool
 	// reportedOverflow suppresses repeating one run's overflow per line.
 	reportedOverflow map[string]bool
