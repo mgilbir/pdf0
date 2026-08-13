@@ -86,12 +86,54 @@ func (l *layouter) spacingValue(b *Box, property string) (style.Unit, bool) {
 func spacingAdvance(text string, sp textSpacing) style.Unit {
 	var out style.Unit
 	if sp.letter != 0 {
-		out = out.Add(sp.letter.Mul(float64(utf8.RuneCountInString(text))))
+		out = out.Add(sp.letter.Mul(float64(spacedUnits(text))))
 	}
 	if sp.word != 0 {
 		out = out.Add(sp.word.Mul(float64(countWordSeparators(text))))
 	}
 	return out
+}
+
+// spacedUnits counts what letter-spacing is added between.
+//
+// CSS Text §8.2 spaces "adjacent typographic character units", and a code point
+// the shaper drops before choosing any glyph is not one of them: it draws
+// nothing and it is in the text only because the text is what a reader copies
+// out of the page. Counting one gave a bidi override an em of its own under
+// "letter-spacing: 1em", which pushed every letter after it along — the suite
+// writes that document eight times over, as the second half of each
+// bidi-text/bidi-00N pair.
+//
+// Grapheme clusters would be the exact reading of "typographic character unit"
+// and this counts runes, so a base and its combining mark are still spaced
+// apart. That is a separate question with a separate answer, and it is not
+// mixed in here.
+func spacedUnits(text string) int {
+	n := 0
+	for _, r := range text {
+		if isDefaultIgnorable(r) {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// isDefaultIgnorable is the part of Unicode's Default_Ignorable_Code_Point
+// property this engine meets: the bidi controls, the joiners, and the marks that
+// are there to say something to an algorithm rather than to be seen.
+func isDefaultIgnorable(r rune) bool {
+	switch {
+	case r == 0x00AD, // soft hyphen
+		r == 0x034F,                // combining grapheme joiner
+		r >= 0x200B && r <= 0x200F, // zero width space through RLM
+		r >= 0x202A && r <= 0x202E, // the embedding and override controls
+		r >= 0x2060 && r <= 0x2064, // word joiner and the invisible operators
+		r >= 0x2066 && r <= 0x2069, // the isolates
+		r == 0xFEFF:                // zero width no-break space
+		return true
+	}
+	return false
 }
 
 // countWordSeparators counts the characters word-spacing applies to.

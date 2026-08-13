@@ -356,3 +356,44 @@ func TestTabTakesLetterSpacing(t *testing.T) {
 		t.Errorf("the tab is %gpx wide, want 36 (48 - 17 + 5)", got)
 	}
 }
+
+// TestLetterSpacingSkipsTheCharactersThatDrawNothing is CSS Text §8.2's
+// "adjacent typographic character units" taken at its word.
+//
+// A code point the shaper drops before choosing any glyph is not a typographic
+// character unit: it draws nothing, and it is in the text only because a run's
+// text is what a reader copies out of the page. Giving one a share of the
+// spacing pushes everything after it along by a whole letter-space — an em, in
+// the suite's documents — and a bidi override written as a character is exactly
+// that. Half of the bidi-text/bidi-00N pairs are the same document as the other
+// half with "letter-spacing: 1em" added, and they were the half that failed.
+func TestLetterSpacingSkipsTheCharactersThatDrawNothing(t *testing.T) {
+	const css = noDefaults + spaceCSS + ` #p { letter-spacing: 5px }`
+	plain := runWidths(t, layoutOf(t, 600, `<div id="p">abc</div>`, css), "p")
+	if len(plain) != 1 {
+		t.Fatalf("the plain line has %d runs, want 1", len(plain))
+	}
+	for _, r := range []struct {
+		name string
+		text string
+	}{
+		{"a bidi override", "a‮bc"},
+		{"a pop-directional-formatting", "ab‬c"},
+		{"a soft hyphen", "a­bc"},
+		// A zero-width joiner is deliberately not here. Courier has no glyph
+		// for one, so the encoder substitutes a space and the character costs a
+		// character's *advance* — which is the missing-glyph guardrail's
+		// business and not letter-spacing's. The controls above cost nothing
+		// either way, which is what makes them able to isolate the spacing.
+	} {
+		got := runWidths(t, layoutOf(t, 600, `<div id="p">`+r.text+`</div>`, css), "p")
+		var total float64
+		for _, w := range got {
+			total += w
+		}
+		if total != plain[0] {
+			t.Errorf("with %s the line is %gpx, want %g — the character draws "+
+				"nothing and is spaced from nothing", r.name, total, plain[0])
+		}
+	}
+}
