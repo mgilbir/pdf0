@@ -397,6 +397,10 @@ type layouter struct {
 	// says the bound has already been reported.
 	inlineDecorations int
 	inlineDecorCapped bool
+	// clamps is the stack of line-clamp containers being laid out, innermost
+	// last. It is on the layouter because CSS Overflow 4 counts *descendant*
+	// line boxes, which no one block container can see. See clamp.go.
+	clamps []*lineClamp
 }
 
 type lengthKey struct {
@@ -692,7 +696,7 @@ func (l *layouter) blockIn(b *Box, containing style.Unit, at flow,
 	}
 
 	contentHeight, hoistTop, hoistBottom, placedAnything :=
-		l.children(b, frag, width, topOpen, bottomOpen, inner)
+		l.clampedChildren(b, frag, width, topOpen, bottomOpen, inner)
 
 	if hasHeight {
 		if b.Inner == InnerTable || b.Inner == InnerTableCell {
@@ -852,6 +856,15 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	for _, child := range b.Children {
 		if child.Outer != OuterBlock {
 			continue
+		}
+		if l.clampReached() {
+			// Past the clamp point, so this child and everything after it is
+			// "fragmented away and neither rendered nor measured" — which is
+			// why the walk stops here rather than skipping the child: an
+			// out-of-flow box after the clamp point is discarded with the rest,
+			// and a list item after it does not advance the numbering of the
+			// items that are shown.
+			break
 		}
 		if child.ListItem {
 			listIndex++
@@ -1232,7 +1245,10 @@ func (l *layouter) clearanceAt(b *Box, origin flow, at style.Unit) style.Unit {
 func (l *layouter) floatChild(b *Box, width style.Unit, origin flow,
 	top, room, drop style.Unit, index int) *Fragment {
 
-	cf, _ := l.block(b, width, origin.at(top))
+	cf := outOfClamp(l, func() *Fragment {
+		f, _ := l.block(b, width, origin.at(top))
+		return f
+	})
 	if b.ListItem {
 		cf.Marker = l.markerFor(b, cf)
 	}
