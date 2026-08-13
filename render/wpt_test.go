@@ -869,7 +869,7 @@ const wptEnv = "WPT_TESTS"
 // of those 989 moved from clean to vacuous with not one test changing from
 // passing to failing: a pure reporting cost, which is exactly what the strip
 // existed to avoid. What replaced it removes the cost by removing its cause.
-const wptCleanPassBaseline = 4363
+const wptCleanPassBaseline = 4364
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -1073,8 +1073,31 @@ func expandEmptyElements(src string) string {
 // mark outside it is not part of the picture, exactly as content scrolled off
 // the page is not. Absolutely positioned boxes land outside it routinely.
 func pageClip() Rect {
-	sz := A4.Content()
+	sz := wptViewport()
 	return Rect{W: sz.W, H: sz.H}
+}
+
+// wptViewport is the viewport the suite was written against.
+//
+// The suite is run by browsers in a window 800 pixels wide, and a good number of
+// its documents are laid out to that number — units-002 sets two 250px Ahem
+// glyphs and an image on one line and needs 642 of them, which A4's content box
+// does not have. Rendering the suite into an A4 page is standing in for a
+// browser viewport with the wrong one, and a test that wrapped only because the
+// page was narrow is not evidence about the engine.
+//
+// Measured over the whole suite the difference is one test either way — nothing
+// regressed, units-002 gained — which says the suite is very largely
+// width-insensitive and that this is a fidelity fix rather than a lever. It is
+// made for the fidelity.
+//
+// The height stays A4's rather than becoming 600. The suite's 600 is a *window*
+// height and its references are compared over the whole scrollable page, so the
+// faithful stand-in for it is a page tall enough not to paginate, which is what
+// A4's already is. Six hundred would cut documents in half and would be copying
+// the number rather than the meaning.
+func wptViewport() Size {
+	return Size{W: picPx(800), H: A4.Content().H}
 }
 
 // renderForCompare lays a document out and returns its display list together
@@ -1138,7 +1161,7 @@ func renderForCompare(root, file string) (ops []Op, clean bool, err error) {
 	defer unregisterBlockFonts(registerDocumentBlockFonts(built, res))
 
 	rec := NewRecorder(nil)
-	laid := Layout(built.Root, A4.Content(), built.Fonts, rec)
+	laid := Layout(built.Root, wptViewport(), built.Fonts, rec)
 
 	clean = true
 	for _, f := range built.Findings {
