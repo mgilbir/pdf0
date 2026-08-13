@@ -575,6 +575,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	var y style.Unit
 	// The width each line turned out to have, which is the band a float left it.
 	var bands []style.Unit
+	// The width to break each line at, chosen by the scored search. It is per
+	// line rather than per box because the answer is a break *set*: with the
+	// lines no longer all the same width there is no single measure that
+	// produces it. See balanceScoredCaps.
+	var lineCaps []style.Unit
+	// The bands the pass before this one measured, so that the two can be
+	// compared. A float met part-way down the box is placed on the line it
+	// appears on, so laying the lines out differently can move it — and then the
+	// widths the search was given are not the widths it produced.
+	var wasBands []style.Unit
 	// iByte is how far into items[i] the next line begins, which is other than
 	// zero only where overflow-wrap ended the line inside a word.
 	var iByte int
@@ -667,7 +677,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// room as the balanced width less the indent, and taking the
 					// indent off the band instead makes the two disagree by exactly
 					// the indent on the one line it applies to.
-					style.Min(right.Sub(left), capAt(balanceCaps, i)).
+					style.Min(right.Sub(left), lineCap(balanceCaps, lineCaps, i, len(parent.Lines))).
 						Sub(lineIndent).Sub(lineEllipsis),
 					left.Sub(lo).Add(lineIndent))
 				stack = stackLine(runs, st)
@@ -1009,9 +1019,16 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				break
 			}
 		}
-		if pass > 0 {
-			// Laid out twice already: the second pass balanced in the bands the
-			// first one measured, which is the best this can do.
+		if pass > 0 && sameUnits(bands, wasBands) {
+			// The lines came out in the widths the search was given, so the
+			// answer is consistent with itself and there is nothing to redo.
+			break
+		}
+		if pass >= maxBalancePasses-1 {
+			// It has not settled and will not be given more attempts. What is on
+			// the page is a balanced layout measured in *some* set of bands the
+			// box really produced, which is a great deal closer than one
+			// measured in a width it never had.
 			break
 		}
 		if !balanceMetFloat || maxLines > 0 {
@@ -1021,13 +1038,22 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// over a line count, and the two have not been put together.
 			break
 		}
+		wasBands = append(wasBands[:0], bands...)
 		parent.Lines = parent.Lines[:linesAt]
 		parent.Children = parent.Children[:kidsAt]
 		origin.ctx.truncate(ctxAt)
 		l.deferred = l.deferred[:absAt]
-		w := l.balanceWidthInBands(items, bands, width, indent)
-		for i := range balanceCaps {
-			balanceCaps[i] = w
+		// The scored search first, because it is the one that can answer when
+		// the lines have different room. Where it declines — a paragraph too
+		// long to search, or one whose lines cannot be made to come out at the
+		// count the first pass found — the width search stands, and its answer
+		// is at least measured in the right bands.
+		lineCaps = l.balanceScoredCaps(items, bands, indent, len(bands))
+		if lineCaps == nil {
+			w := l.balanceWidthInBands(items, bands, width, indent)
+			for i := range balanceCaps {
+				balanceCaps[i] = w
+			}
 		}
 	}
 	decor.finish(parent)
@@ -2875,6 +2901,44 @@ func (l *layouter) countLinesInBands(items []inlineItem, bands []style.Unit,
 	return n
 }
 
+// maxBalancePasses bounds how many times a balanced box beside a float is laid
+// out.
+//
+// Each pass measures the widths the last one produced and balances in them, and
+// the two agree after one round for every box whose floats are all above its
+// text. Where a float sits part-way down, moving the lines can move the float
+// and the answer chases itself; three attempts is where that stops. It is a
+// variable so that a test can lower it and watch the bound decide something.
+var maxBalancePasses = 3
+
+// sameUnits reports whether two runs of measurements are the same.
+func sameUnits(a, b []style.Unit) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// lineCap is the width this line may be broken at.
+//
+// Two sources, and the per-line one wins where it has an answer: the scored
+// search names a width for each line, and the width search names one for the
+// whole box. A line past the end of either is not capped by it.
+func lineCap(perItem, perLine []style.Unit, item, line int) style.Unit {
+	if line >= 0 && line < len(perLine) {
+		return perLine[line]
+	}
+	if len(perLine) > 0 {
+		return style.MaxUnit
+	}
+	return capAt(perItem, item)
+}
+
 // bandAt is the width of the nth line, or of the last one recorded once the
 // probe runs past what was measured.
 //
@@ -2889,6 +2953,140 @@ func bandAt(bands []style.Unit, n int) style.Unit {
 		return bands[len(bands)-1]
 	}
 	return bands[n]
+}
+
+// maxScoredItems bounds the paragraph the scored search will look at.
+//
+// The search is quadratic in the break opportunities — every position is a state
+// and every state enumerates the lines that can start at it — so a long
+// paragraph is left to the width search, which is linear and gives the same
+// answer wherever the lines all have the same room. Six lines of ordinary prose
+// is well under this; a paragraph that is not is one nobody can see the
+// balancing of anyway.
+var maxScoredItems = 400
+
+// balanceScoredCaps is §5.1's balancing as a choice between break sets rather
+// than as a narrower measure to fill greedily in.
+//
+// The two are the same question when every line has the same room, and they part
+// when a float shortens some of them. The suite's text-wrap-balance-float-001 is
+// the case: three lines with sixteen and a half characters of room, sixteen and
+// a half, and twenty-three and a half. Filling greedily in a narrower measure can
+// reach two arrangements there and no others — thirteen, twelve and eight
+// characters, or thirteen, sixteen and four — while the reference is nine, seven
+// and seventeen. What that one minimises is the sum of the squares of the space
+// left over: 188.75 against 272.75 and 392.75.
+//
+// So that is what is minimised, over break sets that make the same number of
+// lines. The count is a constraint rather than part of the score because
+// balancing may not cost a line — a paragraph that grew one to look tidier would
+// be balancing at the expense of the thing being balanced.
+//
+// The square is what makes it *balance* rather than merely fit: it charges one
+// line left half empty far more than two lines left a quarter empty each, which
+// is the difference a reader sees.
+//
+// Returns the width to break each line at, or nil where there is nothing to
+// choose or too much to choose between.
+func (l *layouter) balanceScoredCaps(items []inlineItem, bands []style.Unit,
+	indent style.Unit, lines int) []style.Unit {
+
+	if lines < 2 || lines > maxBalanceLines || len(items) > maxScoredItems {
+		return nil
+	}
+
+	type state struct {
+		i, iByte, n int
+	}
+	type answer struct {
+		score      float64
+		used       style.Unit
+		next       state
+		ok, walked bool
+	}
+	memo := map[state]answer{}
+
+	room := func(n int) style.Unit {
+		r := bandAt(bands, n)
+		if n == 0 {
+			r = r.Sub(indent)
+		}
+		return r
+	}
+
+	var best func(st state) answer
+	best = func(st state) answer {
+		if got, ok := memo[st]; ok {
+			return got
+		}
+		// Guard against a cycle: a state is marked as being worked on, and a
+		// candidate that leads back to it is refused rather than followed. The
+		// enumeration below only ever moves the cursor forward, so this cannot
+		// fire — it is here because the alternative to refusing is a hang on an
+		// untrusted document.
+		memo[st] = answer{}
+		if st.i >= len(items) {
+			out := answer{ok: st.n == lines}
+			memo[st] = out
+			return out
+		}
+		if st.n >= lines {
+			memo[st] = answer{}
+			return answer{}
+		}
+
+		out := answer{}
+		r := room(st.n)
+		for w := r; w >= 0; {
+			runs, next, nextByte, _, _ := l.breakOneLine(items, st.i, st.iByte, w, 0)
+			if !cursorAdvanced(st.i, st.iByte, next, nextByte) {
+				break
+			}
+			var used style.Unit
+			for _, run := range runs {
+				used = used.Add(run.width)
+			}
+			rest := best(state{next, nextByte, st.n + 1})
+			if rest.ok {
+				slack := float64(r.Sub(used).Px())
+				score := slack*slack + rest.score
+				if !out.ok || score <= out.score {
+					out = answer{score: score, used: used, next: state{next, nextByte, st.n + 1}, ok: true}
+				}
+			}
+			// The next candidate is the widest line strictly shorter than this
+			// one, which is this one measured a layout unit narrower. The
+			// minimum is what keeps it strictly shorter: a line holding a single
+			// unit too wide for it is set anyway, so its used width is *more*
+			// than the width it was asked for, and stepping down from that would
+			// step back up.
+			shorter := style.Min(used, w).Sub(1)
+			if shorter >= w || shorter < 0 {
+				break
+			}
+			w = shorter
+		}
+		memo[st] = out
+		return out
+	}
+
+	first := best(state{0, 0, 0})
+	if !first.ok {
+		return nil
+	}
+	caps := make([]style.Unit, 0, lines)
+	for st, cur := (state{0, 0, 0}), first; cur.ok && len(caps) < lines; {
+		caps = append(caps, cur.used)
+		st = cur.next
+		if st.i >= len(items) {
+			break
+		}
+		cur = memo[st]
+	}
+	if len(caps) == 0 {
+		return nil
+	}
+	return caps
 }
 
 // countLines is how many lines the greedy breaker makes of these items in a

@@ -208,18 +208,20 @@ func TestBalanceStopsAtTheLineLimit(t *testing.T) {
 }
 
 // TestBalancingBesideAFloatUsesTheWidthsTheLinesHad is §5.1 where the lines are
-// not all the same width.
+// not all the same width, and it is the case that shows balancing to be a choice
+// between break sets rather than a narrower measure to fill greedily in.
 //
 // A float inside the box shortens the lines beside it and leaves the ones below
-// it alone, so there is no single width to search in — and the widths cannot be
-// known before the box is laid out, because a float inside it is placed as the
-// lines are built and what shortens a line is decided by the lines above it. So
-// the box is laid out once to find out, thrown away, and laid out again in the
-// measure that answer gives.
+// it alone. The widths cannot be known before the box is laid out — a float
+// inside it is placed as the lines are built, and what shortens a line is
+// decided by the lines above it — so the box is laid out once to find out,
+// thrown away, and laid out again in the measure that answer gives.
 //
-// The assertion is the difference between the two: searching as though the box
-// were the width it declares puts a word on the second line that does not fit
-// there once the float is counted.
+// And then no single measure produces the answer. With rooms of 16.5, 16.5 and
+// 23.5 characters, filling greedily in a narrower one can reach 13/12/8 and
+// 13/16/4 and nothing else; the arrangement below is 9/7/17, which is what
+// minimises the sum of the squares of the space left over — 188.75 against
+// 272.75 and 392.75. It is what the suite's text-wrap-balance-float-001 draws.
 func TestBalancingBesideAFloatUsesTheWidthsTheLinesHad(t *testing.T) {
 	// 23.5 characters of block, a float seven wide and two lines tall, so the
 	// first two lines have 16.5 and the third has all of it.
@@ -229,15 +231,56 @@ func TestBalancingBesideAFloatUsesTheWidthsTheLinesHad(t *testing.T) {
 		#f { float: left; width: ` + itoa(int(7*ch)) + `px; height: 200px }`
 
 	got := lineTexts(linesOf(t, layoutOf(t, 10000, src, css), "p"))
-	want := []string{"abc de fg hij", "klm nop qrst", "uvw xyz!"}
+	want := []string{"abc de fg", "hij klm", "nop qrst uvw xyz!"}
 	if len(got) != len(want) {
 		t.Fatalf("%d lines %q, want %d %q", len(got), got, len(want), want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("line %d is %q, want %q — the search has to run in the "+
-				"widths the float leaves, not in the width the box declares",
-				i, got[i], want[i])
+			t.Errorf("line %d is %q, want %q — the evenest of the break sets, "+
+				"measured in the widths the float leaves", i, got[i], want[i])
 		}
+	}
+}
+
+// TestBalancingSettlesWhenAFloatMovesWithTheLines is the loop that the two
+// answers chasing each other needs.
+//
+// A float written part-way through the text is placed on the line it appears
+// on, so choosing different breaks can move it — and then the widths the search
+// was given are not the widths it produced. The box is laid out again until the
+// two agree, and the suite's text-wrap-balance-float-005 needs exactly one extra
+// round: the first answer puts the float on a different line from the second,
+// and the second is stable.
+func TestBalancingSettlesWhenAFloatMovesWithTheLines(t *testing.T) {
+	// Two floats, seven characters each, in twenty-six and a half. The second is
+	// written after "nop", so which line it lands on depends on where the breaks
+	// go, and the room the lines have depends on which line it landed on.
+	const src = `<p id="p"><span id="f"></span>abcde fghi jklm nop` +
+		`<span id="g"></span> qrst uvw xyz!</p>`
+	css := noDefaults + mono + `p { width: ` + itoa(int(26.5*ch)) + `px;
+		text-wrap-style: balance }
+		#f { float: left; width: ` + itoa(int(7*ch)) + `px; height: 200px }
+		#g { float: right; width: ` + itoa(int(7*ch)) + `px; height: 200px }`
+
+	want := []string{"abcde fghi", "jklm nop", "qrst uvw xyz!"}
+	got := lineTexts(linesOf(t, layoutOf(t, 10000, src, css), "p"))
+	if len(got) != len(want) {
+		t.Fatalf("%d lines %q, want %d %q", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d is %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// One pass is not enough, which is what makes the loop worth having: the
+	// first answer is measured in the widths the *greedy* layout produced, and
+	// the float is not where that layout put it.
+	defer func(n int) { maxBalancePasses = n }(maxBalancePasses)
+	maxBalancePasses = 1
+	if once := lineTexts(linesOf(t, layoutOf(t, 10000, src, css), "p")); once[0] == want[0] {
+		t.Errorf("one pass already gave %q; the fixture no longer needs the loop "+
+			"and has stopped testing it", once)
 	}
 }
