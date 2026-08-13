@@ -1810,19 +1810,49 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 //
 // An outline is still not drawn, on an inline box or on any other — nothing in
 // this engine paints one.
+// splitInsetSides turns "does the box begin here" into "which physical side",
+// which is the same question only in a left-to-right containing block.
+//
+// §8.6's slice model gives a box broken by a block inside it its own inset on
+// the pieces at its two ends and nothing on the joins, and which *physical*
+// side that is depends on which way the containing block runs. In a
+// right-to-left one the piece the box begins on is the rightmost, so what
+// belongs to it is the right inset: "<span style='padding-right: 10px'>" holding
+// nothing but a block reserves its ten pixels *before* the block under rtl and
+// after it under ltr. block-in-inline-empty-002 and -004 are that pair, written
+// once each way with their references in the two orders.
+//
+// The containing block's direction and not the box's own, for the reason
+// resolveWidth gives where it settles the over-constrained case: a box that
+// declares "direction: rtl" is saying which way its contents run, not which
+// side of its parent it hangs from.
+//
+// That choice is a reading rather than a measurement, and it is worth saying
+// which. Every document in the suite sets the direction on an ancestor and lets
+// the span inherit it, so the two answers agree on all of them and no test can
+// tell them apart — planting the box's own direction here changes nothing. It
+// follows resolveWidth because being wrong the same way twice is at least
+// consistent, and because the alternative reads the property as saying
+// something about the box's own outside, which it does not.
+func splitInsetSides(b *Box) (noLeft, noRight bool) {
+	noLeft, noRight = b.noLeadInset, b.noTrailInset
+	if b.Parent != nil && isRTL(b.Parent) {
+		noLeft, noRight = noRight, noLeft
+	}
+	return noLeft, noRight
+}
+
 func (l *layouter) insetItems(b *Box, containing style.Unit) (lead, trail inlineItem, any bool) {
 	edges := l.edges(b, "margin", containing).
 		Add(l.borderWidths(b)).
 		Add(l.paddingOf(b, containing))
 
 	left, right := edges.Left, edges.Right
-	// §8.6's slice model over a box a block inside it broke in two: the left
-	// inset belongs to the piece the box begins on and the right to the piece it
-	// ends on, and a join in the middle gets neither.
-	if b.noLeadInset {
+	noLeft, noRight := splitInsetSides(b)
+	if noLeft {
 		left = 0
 	}
-	if b.noTrailInset {
+	if noRight {
 		right = 0
 	}
 	if left == 0 && right == 0 {

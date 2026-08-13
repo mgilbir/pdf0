@@ -234,13 +234,16 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		border := d.l.borderWidths(b)
 		padding := d.l.paddingOf(b, d.containing)
 
-		// §8.6, and the same two flags insetItems reads: a piece of an inline
-		// box split by a block inside it does not begin or does not end the box,
-		// and neither does a line that continues one.
-		if !p.first || b.noLeadInset {
+		// §8.6, and the same two flags insetItems reads, mapped to sides the
+		// same way: a piece of an inline box split by a block inside it does not
+		// begin or does not end the box, and neither does a line that continues
+		// one. Which physical side "begins" it is the containing block's
+		// business — see splitInsetSides.
+		noLeft, noRight := splitInsetSides(b)
+		if !p.first || noLeft {
 			margin.Left, border.Left, padding.Left = 0, 0, 0
 		}
-		if d.last[b] != i || b.noTrailInset {
+		if d.last[b] != i || noRight {
 			margin.Right, border.Right, padding.Right = 0, 0, 0
 		}
 		// §8.3: margin-top and margin-bottom do not apply to a non-replaced
