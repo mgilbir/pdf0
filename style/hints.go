@@ -59,11 +59,14 @@ var hintedAttributes = map[string]map[string]string{
 	// <img width> takes and so the same reader below: a bare number is pixels
 	// and a trailing per-cent sign is a percentage of the containing block.
 	//
-	// There is deliberately no "height" beside it. HTML maps no such attribute
-	// on <table> — it is a legacy that browsers honour and the standard does
-	// not describe — and inventing a hint the specification does not have would
-	// put this engine's table sizing beyond anything it can be checked against.
-	"table": {"cellspacing": "border-spacing", "width": "width"},
+	// The height attribute is beside it because the standard does describe it,
+	// in the same list and the same words — "maps to the dimension property
+	// ... on the table element" — and an earlier note here that said otherwise
+	// was wrong. The suite settles it without needing the prose: the reference
+	// for floats-wrap-bfc-005 draws with a plain "height: 20px" div what the
+	// test writes as <table height="20">, so a browser that ignored the
+	// attribute would fail its own reftest.
+	"table": {"cellspacing": "border-spacing", "width": "width", "height": "height"},
 	// <ol start="5"> and <li value="3"> are the counter, written as attributes.
 	// They take a signed integer rather than a dimension, so they are read by
 	// integerAttr below instead of the table's usual dimensionValue.
