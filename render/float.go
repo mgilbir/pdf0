@@ -533,6 +533,23 @@ func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
 		}
 	}
 
+	if !hasWidth {
+		// A box that narrows still has a floor, and a band under it cannot hold
+		// the box however much the box gives way. What the floor is depends on
+		// the box — a table's is its content's own minimum, §17.5.2.2's MIN, and
+		// any box's is whatever min-width says — so it is asked for rather than
+		// worked out here: the width this box would take in a band with no room
+		// in it at all is exactly the narrowest it can be.
+		//
+		// Without it the band only had to hold the box's margins and borders, so
+		// a table beside two hundred pixels of float in three hundred of block
+		// was told a hundred pixels was room enough. It then took its minimum
+		// anyway — a table is never narrower than its content — and sat on the
+		// float it was supposed to be avoiding, with its own content sticking
+		// out of it. floats-wrap-bfc-004 draws that four times over.
+		need = fixed.Add(usedWidth(0, 0))
+	}
+
 	// Drop to the first band that holds it, exactly as a float does. The search
 	// steps from one float bottom to the next because that is where the set of
 	// bands changes; see nextBottomBelow — and because it terminates: there are

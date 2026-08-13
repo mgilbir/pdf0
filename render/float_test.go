@@ -1407,3 +1407,44 @@ func TestABoxDroppedPastAFloatDoesNotTakeTheFloatWithIt(t *testing.T) {
 			"pixel below it", got)
 	}
 }
+
+// TestABoxThatNarrowsStillHasAFloorBesideAFloat is the half of §9.5's
+// non-overlap rule that a width comparison gets wrong.
+//
+// A box that establishes a formatting context is put beside a float and
+// narrowed to the band, or dropped below it when it cannot be narrowed enough —
+// and "enough" is the part with a floor under it. A table is never narrower
+// than §17.5.2.2's MIN, so a band under that width cannot hold it however much
+// it gives way; asking only whether the band holds the box's margins and
+// borders says yes and then lays a table over the float it was avoiding.
+func TestABoxThatNarrowsStillHasAFloorBesideAFloat(t *testing.T) {
+	// Two hundred pixels of float in three hundred of block leaves a hundred,
+	// and the table's content is a fixed hundred and fifty. It cannot narrow to
+	// the band, so it drops — and the shorter float ends at 6, which is the
+	// first band below that holds it.
+	root := layoutOf(t, 1000,
+		`<div id="k"><div id="f1"></div><div id="f2"></div>`+
+			`<table id="t"><tr><td><div id="c"></div></td></tr></table></div>`,
+		noDefaults+`
+		#k { width: 300px }
+		#f1 { float: left; width: 100px; height: 20px }
+		#f2 { float: left; width: 100px; height: 6px }
+		table { border-spacing: 0 } td { padding: 0 }
+		#c { width: 150px; height: 10px }`)
+	k := find(t, root, "k")
+	c := find(t, root, "c")
+	if got := c.BorderRect.W.Px(); got != 150 {
+		t.Errorf("the table's content is %g wide, want 150 — the table narrowed "+
+			"below the minimum its own content sets", got)
+	}
+	// Below the six-pixel float, beside the twenty-pixel one: the band there is
+	// 100..300, which is the first that can hold 150.
+	if got := relY(t, find(t, root, "t"), k).Px(); got != 6 {
+		t.Errorf("the table is at y=%g, want 6 — the first band below that can "+
+			"hold it", got)
+	}
+	if got := relX(t, find(t, root, "t"), k).Px(); got != 100 {
+		t.Errorf("the table is at x=%g, want 100 — beside the float that is "+
+			"still there, not over it", got)
+	}
+}
