@@ -496,6 +496,22 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// its offsets against a containing block chosen for the float.
 		float = FloatNone
 	}
+	if isLayoutInternalDisplay(inner) && replacesItsOwnContent(n) {
+		// A replaced element cannot be a table cell, a row, or any of the other
+		// boxes that exist only inside a table. Its content is not a formatting
+		// context this engine — or any engine — can put a table's structure
+		// through, so the declaration is dropped and the element is laid out as
+		// what it is: an inline replaced box, which the table fixup then wraps in
+		// an anonymous cell along with whatever inline content sits beside it.
+		//
+		// The visible difference is not academic. Honouring it made an <img
+		// style="display: table-cell"> a cell, and the cell took the column's
+		// width and the row's height and stretched the picture to fill them —
+		// 15 by 15 pixels of swatch drawn 63 wide and 21 tall. The suite's
+		// table-anonymous-objects-211 puts a row of them beside a row of real
+		// cells and asks for the two to match.
+		outer, inner = OuterInline, InnerFlow
+	}
 	staticInline := outer == OuterInline
 	outer, inner = outOfFlowDisplay(outer, inner, float, position)
 	if outer == OuterBlock && inner == InnerFlow && overflowIsScrollable(cs) {
@@ -691,6 +707,42 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 	// An unrecognised value: the initial one, which is what the cascade would
 	// have used had the declaration been invalid.
 	return OuterInline, InnerFlow, false
+}
+
+// isLayoutInternalDisplay reports the display types that exist only inside a
+// table — the ones css-display-3 calls layout-internal.
+//
+// The caption is one of them. It is not inside the table's border box, but it is
+// still a box §17.4's wrapper generates and holds, and it is no more available
+// to a replaced element than a cell is.
+func isLayoutInternalDisplay(inner Inner) bool {
+	switch inner {
+	case InnerTableRowGroup, InnerTableRow, InnerTableCell,
+		InnerTableColumn, InnerTableColumnGroup, InnerTableCaption:
+		return true
+	}
+	return false
+}
+
+// replacesItsOwnContent reports whether an element's content comes from
+// somewhere other than its children.
+//
+// It is asked at build time, where Box.Replaced is not filled in yet — that
+// happens in a later pass, once there is a resolver — so the question has to be
+// put to the element rather than to the box. The two elements here are the two
+// that pass sets: an <img> and an <object>. A form control is replaced in the
+// CSS sense too, and is deliberately not included, because this engine does not
+// model one as replaced anywhere else either; whatever "display: table-cell" on
+// a <select> should do, it should not be decided here alone.
+func replacesItsOwnContent(n *html.Node) bool {
+	if n == nil {
+		return false
+	}
+	switch strings.ToLower(n.Name) {
+	case "img", "object":
+		return true
+	}
+	return false
 }
 
 // floatOf and clearOf read the two out-of-flow properties.
