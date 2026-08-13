@@ -470,18 +470,26 @@ func TestTableVerticalAlign(t *testing.T) {
 	}
 }
 
-// TestTableBaselineAlignment pins the default alignment, which is the one that
-// makes a table of text read as rows rather than as a grid of boxes.
+// TestTableBaselineAlignment pins the alignment that makes a table of text read
+// as rows rather than as a grid of boxes.
 //
 // The two cells hold text at different sizes, so their first baselines are at
 // different depths. Aligning on the baseline moves the smaller text down until
 // the two sit on one line, which means the *difference* between the two cells'
 // line positions is the difference between their baselines — and the cell with
 // the deeper baseline does not move at all.
+//
+// The value is asked for rather than relied on. This used to say it was pinning
+// the *default* and to leave the property unset, which was wrong twice over:
+// vertical-align's initial value is baseline, but a cell never sees it, because
+// HTML's rendering section puts "vertical-align: middle" on the row groups and
+// "vertical-align: inherit" on the rows and cells. A cell's default is middle,
+// and TestTableCellsAreMiddleAlignedByDefault is where that is stated.
 func TestTableBaselineAlignment(t *testing.T) {
 	root := layoutOf(t, 1000, `<table><tr>`+
-		`<td id=big style="font-size: 40px">A</td>`+
-		`<td id=small style="font-size: 10px">a</td></tr></table>`, bareTable)
+		`<td id=big style="font-size: 40px; vertical-align: baseline">A</td>`+
+		`<td id=small style="font-size: 10px; vertical-align: baseline">a</td>`+
+		`</tr></table>`, bareTable)
 
 	big, small := find(t, root, "big"), find(t, root, "small")
 	if len(big.Lines) != 1 || len(small.Lines) != 1 {
@@ -1095,5 +1103,65 @@ func TestPreservedWhiteSpaceBetweenTableTagsIsStillDropped(t *testing.T) {
 	if text != "a  b" {
 		t.Errorf("the cell's text is %q, want %q — the property stopped applying "+
 			"to the cell as well as to the tags", text, "a  b")
+	}
+}
+
+// TestTableCellsAreMiddleAlignedByDefault is where a cell's vertical alignment
+// comes from, which is not the property's initial value.
+//
+// vertical-align does not inherit and its initial value is baseline, so left to
+// CSS alone every cell would align on its row's baseline. HTML's rendering
+// section overrides both halves of that:
+//
+//	thead, tbody, tfoot, table > tr { vertical-align: middle }
+//	tr, td, th                      { vertical-align: inherit }
+//
+// which is why a short cell beside a tall one sits in the middle of the row
+// rather than on its first line — the behaviour anyone who has centred
+// something in a table cell without asking has relied on.
+//
+// The inherit is the half that is easy to drop, and dropping it is invisible
+// until an author writes the property on a row. A UA rule naming the cells
+// directly would set their value outright, and since the property does not
+// inherit, an author's "vertical-align: top" on the <tr> would then reach
+// nothing at all.
+func TestTableCellsAreMiddleAlignedByDefault(t *testing.T) {
+	// One cell sixty tall, one holding a single line. Middle puts the line
+	// halfway down the row; baseline would put it at the top.
+	root := layoutOf(t, 1000, `<table><tr>`+
+		`<td style="height: 60px">tall</td><td id=q>a</td></tr></table>`, bareTable)
+	q := find(t, root, "q")
+	if len(q.Lines) != 1 {
+		t.Fatalf("expected one line in the short cell:\n%s", sketchFragments(root))
+	}
+	line := q.Lines[0].Rect
+	if line.Y <= 0 {
+		t.Errorf("the short cell's line is at %g, at the top of a 60px row — the "+
+			"cell was aligned on the baseline, so the middle never came down the "+
+			"table", line.Y.Px())
+	}
+	// Halfway down, stated as the two gaps being the same: the room above the
+	// line and the room below it. Measured rather than computed from the font
+	// size, because "normal" line-height is whatever the face recommends and is
+	// not exactly 1.2 of it.
+	//
+	// Within a layout unit, because the exact centre of this row falls on half
+	// of one — the row has 40.796875px to share — and the engine works in
+	// sixty-fourths of a pixel. A tolerance of one unit is the smallest that can
+	// be right, and asking for equality is asking the arithmetic to do something
+	// it cannot.
+	above, below := line.Y, mustPx(60).Sub(line.Y).Sub(line.H)
+	if d := above.Sub(below); d > 1 || d < -1 {
+		t.Errorf("the short cell's line has %gpx above it and %gpx below it in a "+
+			"60px row — the content is not centred", above.Px(), below.Px())
+	}
+
+	// And the author can still say otherwise on the row, which is what the
+	// inherit in the rule is for.
+	root = layoutOf(t, 1000, `<table><tr style="vertical-align: top">`+
+		`<td style="height: 60px">tall</td><td id=q>a</td></tr></table>`, bareTable)
+	if got := find(t, root, "q").Lines[0].Rect.Y; got != 0 {
+		t.Errorf("with vertical-align:top on the row the short cell's line is at "+
+			"%g, want 0 — the row's value did not reach the cell", got.Px())
 	}
 }

@@ -48,6 +48,19 @@ tfoot { display: table-footer-group }
 tr { display: table-row }
 td, th { display: table-cell; padding: 1px }
 th { font-weight: bold; text-align: center }
+/* A cell's vertical alignment comes down the table rather than from the
+   property's own initial value, which is HTML's rendering section 15.3.8 and
+   the reason a cell's content sits in the middle of a tall row by default:
+
+       thead, tbody, tfoot, table > tr { vertical-align: middle }
+       tr, td, th                      { vertical-align: inherit }
+
+   The inherit is what carries an author's "vertical-align: top" on a row to
+   the cells in it — vertical-align does not inherit on its own, so a UA rule
+   naming the cells directly would win over the author's rule on the row and
+   the declaration would do nothing. */
+thead, tbody, tfoot, table > tr { vertical-align: middle }
+tr, td, th { vertical-align: inherit }
 
 /* Vertical rhythm. Margins are em so that spacing follows the type size. */
 p, blockquote, figure, ul, ol, dl, pre { margin-top: 1em; margin-bottom: 1em }
