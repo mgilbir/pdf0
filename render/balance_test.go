@@ -206,3 +206,56 @@ func TestBalanceStopsAtTheLineLimit(t *testing.T) {
 			"balancing should be off, not merely cheaper", got)
 	}
 }
+
+// TestBalanceBesideAFloatIsReported is the limit of the implementation, said out
+// loud.
+//
+// The search does not consult floats: what shortens a line is decided by the
+// lines above it, so counting with floats means running the whole line loop once
+// per probe and rolling the floats back each time. Until that exists the width
+// the search settles on is the width the box would have had with nothing beside
+// it, and where a float reaches in, the breaks are not the balanced ones — the
+// suite's text-wrap-balance-float-001 fills its first line to thirteen
+// characters where a browser fills it to nine.
+//
+// A differently-ragged paragraph looks exactly like a balanced one, so this is
+// the §6.3 case: the page is plausible and wrong, and the only thing that makes
+// it discoverable is saying so.
+func TestBalanceBesideAFloatIsReported(t *testing.T) {
+	fired[RuleUnsupportedValue] = true
+	reported := func(html, css string) string {
+		t.Helper()
+		rec := NewRecorder(nil)
+		built := Build(Input{HTML: html, CSS: []Stylesheet{{Source: css}}})
+		Layout(built.Root, Size{W: picPx(600), H: picPx(10000)}, StandardFonts(), rec)
+		for _, f := range rec.Findings() {
+			if f.Property == "text-wrap-style" {
+				return f.Message
+			}
+		}
+		return ""
+	}
+	const text = "The quickest brown fox jumped over the lazy dog"
+
+	// A float beside the lines: the balance is in the wrong measure and says so.
+	if got := reported(
+		`<div id="f"></div><p id="p">`+text+`</p>`,
+		widthCSS(35, "text-wrap: balance")+
+			`#f { float: left; width: 300px; height: 300px }`); got == "" {
+		t.Error("a balanced paragraph beside a float said nothing")
+	}
+
+	// Nothing beside them: the balance is exactly right, and a warning here
+	// would be crying wolf on the case that works.
+	if got := reported(`<p id="p">`+text+`</p>`,
+		widthCSS(35, "text-wrap: balance")); got != "" {
+		t.Errorf("a balanced paragraph with nothing beside it reported %q", got)
+	}
+
+	// And a float beside a paragraph that is not balanced is nobody's business.
+	if got := reported(
+		`<div id="f"></div><p id="p">`+text+`</p>`,
+		widthCSS(35, "")+`#f { float: left; width: 300px; height: 300px }`); got != "" {
+		t.Errorf("an unbalanced paragraph beside a float reported %q", got)
+	}
+}

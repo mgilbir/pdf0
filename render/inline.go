@@ -516,6 +516,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 	// would move a centred line and shorten a right-aligned one, which is a
 	// different rendering from the one balancing asks for.
 	balanceCaps := l.balanceCaps(b, items, width, indent)
+	// Whether any line of a balanced box turned out to be shortened by a float.
+	// See reportBalanceBesideFloat.
+	balanceMetFloat := false
 
 	// The inline boxes with a background or a border, gathered as the lines are
 	// built and turned into fragments once the last line is known: §8.6 puts a
@@ -681,6 +684,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			y, left, right = ny, nl, nr
 		}
 		lineWidth := right.Sub(left)
+		if balanceCaps != nil && lineWidth < width {
+			balanceMetFloat = true
+		}
 		textWidth := lineWidth.Sub(lineIndent)
 		if len(runs) > 0 || forced {
 			line := LineFragment{
@@ -898,6 +904,9 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		}
 	}
 	decor.finish(parent)
+	if balanceMetFloat {
+		l.reportBalanceBesideFloat(b)
+	}
 	return y
 }
 
@@ -2396,6 +2405,45 @@ func isIdeographic(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// reportBalanceBesideFloat says that a balanced box was balanced in the wrong
+// measure.
+//
+// countLines does not consult floats, so the width the search settles on is the
+// width the box would have had with nothing beside it. Where a float reaches
+// into the box the lines are shorter than that, and the breaks chosen are not
+// the ones §5.1 asks for — the suite's text-wrap-balance-float-001 fills its
+// first line to thirteen characters where a browser fills it to nine.
+//
+// Getting it right means running the whole line loop once per probe, with the
+// floats placed and rolled back each time, since what shortens a line is decided
+// by the lines above it. That is a different shape of function and is not
+// attempted; what is not acceptable is doing the arithmetic in the wrong measure
+// and saying nothing, because a balanced paragraph that is merely differently
+// ragged looks exactly like a balanced one.
+//
+// It fires only where a float really did shorten a line. A balanced box with
+// nothing beside it is balanced exactly right, and warning about it would be
+// crying wolf on the common case.
+func (l *layouter) reportBalanceBesideFloat(b *Box) {
+	key := PathOf(b.Element)
+	if l.reportedBalance == nil {
+		l.reportedBalance = map[string]bool{}
+	}
+	if l.reportedBalance[key] {
+		return
+	}
+	l.reportedBalance[key] = true
+	l.rec.ReportDetail(Finding{
+		Rule:   RuleUnsupportedValue,
+		Source: AtHTML(offsetOf(b)),
+		Message: "\"text-wrap: balance\" chose its line breaks in the width this " +
+			"box would have had with no float beside it; a float shortens these " +
+			"lines, so the breaks are not the balanced ones",
+		Path:     key,
+		Property: "text-wrap-style",
+	})
 }
 
 // maxBalanceLines bounds how many lines this engine will balance.
