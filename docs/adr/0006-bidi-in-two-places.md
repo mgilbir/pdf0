@@ -1,6 +1,7 @@
 # 0006 — The bidirectional algorithm is implemented twice, on purpose
 
-**Status:** accepted, in force.
+**Status:** superseded by [0007](0007-bidi-in-forme.md). The reasoning below is
+kept as it was written, because what changed is its premise and not its logic.
 
 ## Context
 

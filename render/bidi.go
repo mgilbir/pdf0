@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mgilbir/pdf0/internal/bidi"
+	"github.com/mgilbir/forme/bidi"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -238,7 +238,7 @@ func (p *bidiBuilder) add(text string) (para, start, end int) {
 		*cur = append(*cur, r)
 	}
 	if !p.needed {
-		p.needed = bidi.Needed(text)
+		p.needed = bidi.NeedsAlgorithm(text)
 	}
 	return len(p.paras), start, len(*cur)
 }
@@ -404,7 +404,7 @@ func (l *layouter) resolveBidi(b *Box, items []inlineItem, p *bidiBuilder) []inl
 func insetSides(items []inlineItem) {
 	// noLevel is above every level UAX #9 can produce: MaxDepth is 125 and rule
 	// X8 admits one more.
-	const noLevel uint8 = 255
+	const noLevel = -1
 
 	// open is one inline box whose lead inset has been seen and whose trail
 	// inset has not.
@@ -421,7 +421,7 @@ func insetSides(items []inlineItem) {
 		// sentinel: no content is a count of zero, which swaps nothing.
 		content, odd int
 		// min is the lowest level seen inside this box so far, or noLevel.
-		min uint8
+		min int
 	}
 	var stack []open
 	content, odd := 0, 0
@@ -725,7 +725,7 @@ func (l *layouter) lineOffsets(runs []inlineItem) ([]style.Unit, style.Unit) {
 func lineBaseIsRTL(b *Box, runs []inlineItem) bool {
 	for _, item := range runs {
 		if item.para != nil {
-			return item.para.Level&1 == 1
+			return item.para.Level()&1 == 1
 		}
 	}
 	return isRTL(b)
@@ -787,9 +787,9 @@ func lineVisualOrder(runs []inlineItem) []int {
 	// box it belongs to.
 	//
 	// 255 cannot collide: UAX #9 caps an embedding level at MaxDepth + 1.
-	const levelUnset uint8 = 255
+	const levelUnset = -1
 
-	levels := make([]uint8, len(runs))
+	levels := make([]int, len(runs))
 	for i, item := range runs {
 		switch {
 		case item.para == para && item.bidiStart-start < len(lineLevels):
@@ -832,7 +832,7 @@ func lineVisualOrder(runs []inlineItem) []int {
 		// trailing separators, and this is that position — so the base level is
 		// what an item with no characters gets, rather than the zero that a
 		// left-to-right paragraph happens to share with it.
-		levels[i] = para.Level
+		levels[i] = para.Level()
 	}
 
 	plain := true
@@ -851,5 +851,5 @@ func lineVisualOrder(runs []inlineItem) []int {
 		// reordering is the identity.
 		return nil
 	}
-	return bidi.Reorder(levels)
+	return bidi.VisualOrder(levels)
 }

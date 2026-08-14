@@ -1,4 +1,4 @@
-.PHONY: noto-fonts clean-noto-fonts wpt test-wpt clean-wpt css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests bidi-tests test-bidi clean-bidi-tests bidi-tables clean-bidi-tables grapheme-tests test-grapheme clean-grapheme-tests grapheme-tables
+.PHONY: noto-fonts clean-noto-fonts wpt test-wpt clean-wpt css-colors clean-css-colors html-entities clean-html-entities test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc css-tests test-css clean-css-tests grapheme-tests test-grapheme clean-grapheme-tests grapheme-tables
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -262,60 +262,15 @@ clean-noto-fonts:
 	rm -rf $(NOTO_DIR)
 
 
-# Unicode's own conformance data for the bidirectional algorithm, UAX #9, which
-# internal/bidi's conformance_test.go runs in full.
-#
-# This is an external oracle in the sense ADR 0003 means and not a restatement of
-# pdf0's own reading: BidiTest.txt is every combination of four bidirectional
-# classes with the levels and the visual order the Consortium says they resolve
-# to, and BidiCharacterTest.txt is the same over real code points, which is what
-# exercises the bracket pairing of rule N0.
-#
-# Fetched rather than committed — 15 MB, versioned by Unicode — so the tests skip
-# when it is absent, exactly as the veraPDF corpus and the Arlington model do.
+# The bidirectional algorithm moved to github.com/mgilbir/forme/bidi, and its
+# conformance data with it. `make test-bidi` lives in that repository now; there
+# is nothing here to fetch, and nothing here that reads UAX #9 any more.
+
+# The Unicode version the generated tables are derived from, and where the
+# database lives. Shared by the grapheme targets below.
 UNICODE_VERSION ?= 17.0.0
 UCD_URL         := https://www.unicode.org/Public/$(UNICODE_VERSION)/ucd
-BIDI_DIR        := testdata/unicode-bidi
-
-bidi-tests: $(BIDI_DIR)/.ok
-
-$(BIDI_DIR)/.ok:
-	mkdir -p $(BIDI_DIR)
-	curl -sSf -o $(BIDI_DIR)/BidiTest.txt $(UCD_URL)/BidiTest.txt
-	curl -sSf -o $(BIDI_DIR)/BidiCharacterTest.txt $(UCD_URL)/BidiCharacterTest.txt
-	touch $@
-
-test-bidi: bidi-tests
-	UNICODE_BIDI_TESTS=$(CURDIR)/$(BIDI_DIR) go test -v -run 'TestBidi|TestRepresentatives' -count=1 ./internal/bidi/
-
-clean-bidi-tests:
-	rm -rf $(BIDI_DIR)
-
-# The Unicode Character Database, which cmd/genbidi turns into the Bidi_Class,
-# bracket and mirroring tables in internal/bidi/tables.go.
-#
-# Three files rather than one because the property needs all three:
-# UnicodeData.txt is normative for assigned characters, DerivedBidiClass.txt adds
-# the block defaults for unassigned ones (a code point nobody has assigned inside
-# the Hebrew block still runs right to left), and BidiBrackets.txt is a property
-# of its own that rule N0 needs. Rule L4's mirroring is the shaper's and its table
-# is deliberately not generated — see cmd/genbidi.
-#
-# As with the HTML entities and the CSS colours, the generated table is committed
-# and the input is not, so a checkout builds without a network. Regenerating is a
-# rare errand — a new Unicode version — and the version to move to is set above.
-UCD_DIR := testdata/unicode
-
-bidi-tables:
-	mkdir -p $(UCD_DIR)/extracted
-	curl -sSf -o $(UCD_DIR)/UnicodeData.txt $(UCD_URL)/UnicodeData.txt
-	curl -sSf -o $(UCD_DIR)/BidiBrackets.txt $(UCD_URL)/BidiBrackets.txt
-	curl -sSf -o $(UCD_DIR)/extracted/DerivedBidiClass.txt $(UCD_URL)/extracted/DerivedBidiClass.txt
-	go run ./cmd/genbidi -ucd $(UCD_DIR) -out internal/bidi/tables.go
-	gofmt -w internal/bidi/tables.go
-
-clean-bidi-tables:
-	rm -rf $(UCD_DIR)
+UCD_DIR         := testdata/unicode
 
 # UAX #29's grapheme cluster boundaries, which internal/grapheme finds and
 # word-break: break-all needs: CSS Text puts a soft wrap opportunity between
@@ -442,11 +397,11 @@ clean-jbig2:
 # and the generators that build the Unicode-derived tables it needs. They are run
 # by that module's own Makefile.
 #
-# The bidirectional algorithm is the one thing on that list with a copy on each
-# side, and ADR 0006 records why: forme applies it to a string to decide which way
-# a run of glyphs is drawn, and internal/bidi applies it to a paragraph laid out
-# across boxes, with a base direction and the CSS unicode-bidi controls. The
-# second cannot be expressed in terms of the first.
+# The bidirectional algorithm used to be the one thing on that list with a copy
+# on each side. ADR 0007 records why there is now one: forme/bidi serves the
+# shaper and the layout engine both, and the seam between them is unchanged —
+# the layout engine decides where each run goes on the line, the shaper decides
+# the order of the glyphs inside one.
 #
 # What stays here is what PDF does with a shaped run: writing it into a content
 # stream, and writing the font into the document. testdata/shaping/corpus.txt
