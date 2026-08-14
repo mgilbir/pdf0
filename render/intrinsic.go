@@ -1,7 +1,7 @@
 package render
 
 import (
-	"github.com/mgilbir/pdf0/internal/grapheme"
+	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -477,7 +477,7 @@ func (l *layouter) widestCluster(item inlineItem) style.Unit {
 	}
 	var widest style.Unit
 	prev := 0
-	for _, at := range append(grapheme.Boundaries(nil, item.text), len(item.text)) {
+	for _, at := range append(segment.Boundaries(nil, item.text), len(item.text)) {
 		w := l.measureSpaced(item.face, item.text[prev:at], item.size, item.spacing)
 		widest = style.Max(widest, w)
 		prev = at
