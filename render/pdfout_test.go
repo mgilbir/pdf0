@@ -2,29 +2,34 @@ package render
 
 import (
 	"bytes"
+	"github.com/mgilbir/forme/layout"
+	"image"
+	"image/color"
+	"image/png"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/style"
 	pdf0 "github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/style"
 )
 
 // The display list and the PDF it becomes.
 //
 // Two things are worth testing separately here and are: what the display list
 // says, and what the content stream says. They are separated in the engine for
-// the reason §7 gives — a layout fault and an emission fault produce pages that
+// the reason §7 gives — a layout.layout fault and an emission fault produce pages that
 // look like each other's symptom — and testing them together would give that
 // separation away.
 
-func renderOf(t *testing.T, htmlSrc string, opts Options, cssSrc ...string) Result {
+func renderOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc ...string) Result {
 	t.Helper()
-	in := Input{HTML: htmlSrc}
+	in := layout.Input{HTML: htmlSrc}
 	for _, c := range cssSrc {
-		in.CSS = append(in.CSS, Stylesheet{Source: c})
+		in.CSS = append(in.CSS, layout.Stylesheet{Source: c})
 	}
 	got, err := Render(in, opts)
 	if err != nil {
@@ -40,8 +45,29 @@ func renderOf(t *testing.T, htmlSrc string, opts Options, cssSrc ...string) Resu
 // output with our own reader is not an oracle. What it does catch is the whole
 // class of emission faults that make a file unopenable, which is worth having
 // before anything subtler.
+// TestRenderProducesAReadablePDF is the end-to-end check: a document goes in and
+// a PDF that pdf0 itself can read comes out.
+//
+// It is a self-check and labelled as one — §7.2 is explicit that validating our
+// output with our own reader is not an oracle. What it does catch is the whole
+// class of emission faults that make a file unopenable, which is worth having
+// before anything subtler.
+// TestRenderProducesAReadablePDF is the end-to-end check: a document goes in and
+// a PDF that pdf0 itself can read comes out.
+//
+// It is a self-check and labelled as one — §7.2 is explicit that validating our
+// output with our own reader is not an oracle. What it does catch is the whole
+// class of emission faults that make a file unopenable, which is worth having
+// before anything subtler.
+// TestRenderProducesAReadablePDF is the end-to-end check: a document goes in and
+// a PDF that pdf0 itself can read comes out.
+//
+// It is a self-check and labelled as one — §7.2 is explicit that validating our
+// output with our own reader is not an oracle. What it does catch is the whole
+// class of emission faults that make a file unopenable, which is worth having
+// before anything subtler.
 func TestRenderProducesAReadablePDF(t *testing.T) {
-	got := renderOf(t, `<h1>A heading</h1><p>Some text in a paragraph.</p>`, Options{})
+	got := renderOf(t, `<h1>A heading</h1><p>Some text in a paragraph.</p>`, layout.Options{})
 	if got.Document == nil {
 		t.Fatalf("no document was produced: %v", got.Findings)
 	}
@@ -74,8 +100,14 @@ func TestRenderProducesAReadablePDF(t *testing.T) {
 
 // TestPageGeometry pins the page a document lands on, in points, since that is
 // what a PDF records.
+// TestPageGeometry pins the page a document lands on, in points, since that is
+// what a PDF records.
+// TestPageGeometry pins the page a document lands on, in points, since that is
+// what a PDF records.
+// TestPageGeometry pins the page a document lands on, in points, since that is
+// what a PDF records.
 func TestPageGeometry(t *testing.T) {
-	got := renderOf(t, `<p>x</p>`, Options{Page: A4})
+	got := renderOf(t, `<p>x</p>`, layout.Options{Page: layout.A4})
 	if got.Document == nil {
 		t.Fatalf("no document: %v", got.Findings)
 	}
@@ -92,13 +124,16 @@ func TestPageGeometry(t *testing.T) {
 	if len(pages) != 1 {
 		t.Fatalf("got %d pages", len(pages))
 	}
-	// A4 is 595.276 x 841.89 points, which is the number every printer expects.
+	// layout.A4 is 595.276 x 841.89 points, which is the number every printer expects.
 	box := mediaBoxOf(t, doc, pages[0])
 	if math.Abs(box[2]-595.276) > 0.01 || math.Abs(box[3]-841.89) > 0.01 {
-		t.Errorf("the page is %v x %v points, want A4", box[2], box[3])
+		t.Errorf("the page is %v x %v points, want layout.A4", box[2], box[3])
 	}
 }
 
+// mediaBoxOf reads a page's /MediaBox, resolving it through the document.
+// mediaBoxOf reads a page's /MediaBox, resolving it through the document.
+// mediaBoxOf reads a page's /MediaBox, resolving it through the document.
 // mediaBoxOf reads a page's /MediaBox, resolving it through the document.
 func mediaBoxOf(t *testing.T, doc *pdf0.Document, page *object.Dictionary) [4]float64 {
 	t.Helper()
@@ -122,7 +157,13 @@ func mediaBoxOf(t *testing.T, doc *pdf0.Document, page *object.Dictionary) [4]fl
 
 // contentStreamOf renders a document and returns the bytes of its page's content
 // stream, which is the only place the coordinate transform is visible.
-func contentStreamOf(t *testing.T, htmlSrc string, opts Options, cssSrc ...string) string {
+// contentStreamOf renders a document and returns the bytes of its page's content
+// stream, which is the only place the coordinate transform is visible.
+// contentStreamOf renders a document and returns the bytes of its page's content
+// stream, which is the only place the coordinate transform is visible.
+// contentStreamOf renders a document and returns the bytes of its page's content
+// stream, which is the only place the coordinate transform is visible.
+func contentStreamOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc ...string) string {
 	t.Helper()
 	got := renderOf(t, htmlSrc, opts, cssSrc...)
 	if got.Document == nil {
@@ -152,27 +193,14 @@ func contentStreamOf(t *testing.T, htmlSrc string, opts Options, cssSrc ...strin
 }
 
 // firstMatrix returns the operands of the first "cm" in a content stream.
-func firstMatrix(t *testing.T, stream string) [6]float64 {
-	t.Helper()
-	for _, line := range strings.Split(stream, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 7 || fields[6] != "cm" {
-			continue
-		}
-		var out [6]float64
-		for i := 0; i < 6; i++ {
-			v, err := strconv.ParseFloat(fields[i], 64)
-			if err != nil {
-				t.Fatalf("the transform has a non-numeric operand %q", fields[i])
-			}
-			out[i] = v
-		}
-		return out
-	}
-	t.Fatalf("the content stream has no transform:\n%s", stream)
-	return [6]float64{}
-}
-
+// TestTheTransformIsWrittenOnce pins the one "cm" this stage exists to emit, and
+// every conversion folded into it.
+//
+// Nothing above pdfout has ever seen PDF's coordinate system, so this matrix is
+// the only place the flip happens — and it was entirely untested until a planted
+// defect showed that inverting it, dropping the unit conversion, dropping the
+// scale and dropping the page margin all left every other test passing.
+// firstMatrix returns the operands of the first "cm" in a content stream.
 // TestTheTransformIsWrittenOnce pins the one "cm" this stage exists to emit, and
 // every conversion folded into it.
 //
@@ -181,13 +209,13 @@ func firstMatrix(t *testing.T, stream string) [6]float64 {
 // defect showed that inverting it, dropping the unit conversion, dropping the
 // scale and dropping the page margin all left every other test passing.
 func TestTheTransformIsWrittenOnce(t *testing.T) {
-	stream := contentStreamOf(t, `<div id="a"></div>`, Options{Page: A4},
+	stream := contentStreamOf(t, `<div id="a"></div>`, layout.Options{Page: layout.A4},
 		noDefaults+"#a { height: 10px }")
 
 	m := firstMatrix(t, stream)
 	const pxToPt = 72.0 / 96.0
 
-	// a is the horizontal scale: layout units to points, unscaled content.
+	// a is the horizontal scale: layout.layout units to points, unscaled content.
 	if math.Abs(m[0]-pxToPt) > 1e-9 {
 		t.Errorf("the horizontal scale is %v, want %v — a CSS pixel is 1/96 inch "+
 			"and a point is 1/72", m[0], pxToPt)
@@ -207,8 +235,8 @@ func TestTheTransformIsWrittenOnce(t *testing.T) {
 	}
 	// The origin moves to the top left of the content box: in from the left
 	// margin, and down from the top of the sheet by the top margin.
-	wantX := A4.Margin.Left.Pt()
-	wantY := A4.Height.Pt() - A4.Margin.Top.Pt()
+	wantX := layout.A4.Margin.Left.Pt()
+	wantY := layout.A4.Height.Pt() - layout.A4.Margin.Top.Pt()
 	if math.Abs(m[4]-wantX) > 0.01 {
 		t.Errorf("the origin is at x=%v, want the left margin %v", m[4], wantX)
 	}
@@ -221,10 +249,19 @@ func TestTheTransformIsWrittenOnce(t *testing.T) {
 // TestTheTransformCarriesTheScale pins that §5's factor is in the matrix rather
 // than applied to the geometry. One "cm" is what keeps the output vector: the
 // text stays selectable and no image is resampled.
+// TestTheTransformCarriesTheScale pins that §5's factor is in the matrix rather
+// than applied to the geometry. One "cm" is what keeps the output vector: the
+// text stays selectable and no image is resampled.
+// TestTheTransformCarriesTheScale pins that §5's factor is in the matrix rather
+// than applied to the geometry. One "cm" is what keeps the output vector: the
+// text stays selectable and no image is resampled.
+// TestTheTransformCarriesTheScale pins that §5's factor is in the matrix rather
+// than applied to the geometry. One "cm" is what keeps the output vector: the
+// text stays selectable and no image is resampled.
 func TestTheTransformCarriesTheScale(t *testing.T) {
-	avail := A4.Content()
+	avail := layout.A4.Content()
 	stream := contentStreamOf(t, `<div id="a"></div>`,
-		Options{Page: A4, MinScale: 0.1},
+		layout.Options{Page: layout.A4, MinScale: 0.1},
 		noDefaults+"#a { height: "+ftoa(avail.H.Px()*2)+"px }")
 
 	m := firstMatrix(t, stream)
@@ -243,8 +280,20 @@ func TestTheTransformCarriesTheScale(t *testing.T) {
 // miss. The transform inverts the y axis, so text drawn through it would come
 // out mirrored; the text matrix inverts it again locally, which leaves the
 // glyphs upright while the position still comes from the flipped system.
+// TestTextIsNotMirrored pins the consequence of the flip that is easiest to
+// miss. The transform inverts the y axis, so text drawn through it would come
+// out mirrored; the text matrix inverts it again locally, which leaves the
+// glyphs upright while the position still comes from the flipped system.
+// TestTextIsNotMirrored pins the consequence of the flip that is easiest to
+// miss. The transform inverts the y axis, so text drawn through it would come
+// out mirrored; the text matrix inverts it again locally, which leaves the
+// glyphs upright while the position still comes from the flipped system.
+// TestTextIsNotMirrored pins the consequence of the flip that is easiest to
+// miss. The transform inverts the y axis, so text drawn through it would come
+// out mirrored; the text matrix inverts it again locally, which leaves the
+// glyphs upright while the position still comes from the flipped system.
 func TestTextIsNotMirrored(t *testing.T) {
-	stream := contentStreamOf(t, `<p>text</p>`, Options{Page: A4},
+	stream := contentStreamOf(t, `<p>text</p>`, layout.Options{Page: layout.A4},
 		noDefaults+"p { font-size: 20px; font-family: Helvetica }")
 
 	var found bool
@@ -275,9 +324,30 @@ func TestTextIsNotMirrored(t *testing.T) {
 //
 // Getting this wrong produces a document that is upside down, which is obvious,
 // or one that is off by the page height, which is not.
+// TestCoordinatesFlipExactlyOnce pins the conversion this stage exists for. CSS
+// puts the origin at the top left with y downwards and PDF at the bottom left
+// with y upwards, so a box near the top of the document must be near the *top*
+// of the page — which is a large y in PDF coordinates.
+//
+// Getting this wrong produces a document that is upside down, which is obvious,
+// or one that is off by the page height, which is not.
+// TestCoordinatesFlipExactlyOnce pins the conversion this stage exists for. CSS
+// puts the origin at the top left with y downwards and PDF at the bottom left
+// with y upwards, so a box near the top of the document must be near the *top*
+// of the page — which is a large y in PDF coordinates.
+//
+// Getting this wrong produces a document that is upside down, which is obvious,
+// or one that is off by the page height, which is not.
+// TestCoordinatesFlipExactlyOnce pins the conversion this stage exists for. CSS
+// puts the origin at the top left with y downwards and PDF at the bottom left
+// with y upwards, so a box near the top of the document must be near the *top*
+// of the page — which is a large y in PDF coordinates.
+//
+// Getting this wrong produces a document that is upside down, which is obvious,
+// or one that is off by the page height, which is not.
 func TestCoordinatesFlipExactlyOnce(t *testing.T) {
 	// Two boxes, one at the top and one far below it.
-	got := renderOf(t, `<div id="top"></div><div id="bottom"></div>`, Options{Page: A4},
+	got := renderOf(t, `<div id="top"></div><div id="bottom"></div>`, layout.Options{Page: layout.A4},
 		noDefaults+"#top { height: 20px } #bottom { height: 20px; margin-top: 400px }")
 	if got.Document == nil {
 		t.Fatalf("no document: %v", got.Findings)
@@ -290,9 +360,9 @@ func TestCoordinatesFlipExactlyOnce(t *testing.T) {
 		noDefaults+`#top { height: 20px; background-color: red }
 		#bottom { height: 20px; margin-top: 400px; background-color: blue }`)
 
-	var top, bottom *FillRect
+	var top, bottom *layout.FillRect
 	for i := range ops {
-		if r, ok := ops[i].(FillRect); ok {
+		if r, ok := ops[i].(layout.FillRect); ok {
 			c := r
 			if c.Color.R > 200 {
 				top = &c
@@ -312,12 +382,15 @@ func TestCoordinatesFlipExactlyOnce(t *testing.T) {
 	}
 }
 
-func paintOf(t *testing.T, htmlSrc, cssSrc string) []Op {
-	t.Helper()
-	root := layoutOf(t, A4.Content().W.Px(), htmlSrc, cssSrc)
-	return Paint(root)
-}
-
+// TestBackgroundsAndBordersPaint pins that a box's decorations reach the display
+// list, in the order the specification puts them: the background under the
+// border, and both under the content.
+// TestBackgroundsAndBordersPaint pins that a box's decorations reach the display
+// list, in the order the specification puts them: the background under the
+// border, and both under the content.
+// TestBackgroundsAndBordersPaint pins that a box's decorations reach the display
+// list, in the order the specification puts them: the background under the
+// border, and both under the content.
 // TestBackgroundsAndBordersPaint pins that a box's decorations reach the display
 // list, in the order the specification puts them: the background under the
 // border, and both under the content.
@@ -329,7 +402,7 @@ func TestBackgroundsAndBordersPaint(t *testing.T) {
 
 	var sawBackground, sawBorder int
 	for i, op := range ops {
-		r, ok := op.(FillRect)
+		r, ok := op.(layout.FillRect)
 		if !ok {
 			continue
 		}
@@ -362,270 +435,10 @@ func TestBackgroundsAndBordersPaint(t *testing.T) {
 // the engine agreed with it. Both were wrong: CSS 2.1 §14.2 says the background
 // covers "the content, padding and border areas", and the two only look alike
 // while every border is opaque and solid.
-func TestBackgroundCoversTheBorderBoxNotTheMargin(t *testing.T) {
-	find := func(ops []Op) *FillRect {
-		for i := range ops {
-			if r, ok := ops[i].(FillRect); ok && r.Color.R == 255 {
-				c := r
-				return &c
-			}
-		}
-		return nil
-	}
-	const box = `#a { background-color: #ff0000; height: 50px; margin: 20px;
-			border-top-style: solid; border-top-width: 5px }`
-
-	bg := find(paintOf(t, `<div id="a"></div>`, noDefaults+box))
-	if bg == nil {
-		t.Fatal("the background did not paint")
-	}
-	// The margin puts the border box at 20, and that is where the background
-	// starts: the 5px border is painted on top of it.
-	want, _ := style.FromPx(20)
-	if bg.Rect.Y != want {
-		t.Errorf("the background starts at y=%v, want 20 — the border box, after "+
-			"20px of margin", bg.Rect.Y.Px())
-	}
-	if bg.Rect.X < want {
-		t.Errorf("the background starts at x=%v, inside the 20px margin", bg.Rect.X.Px())
-	}
-
-	// And background-clip moves it in, which is the property's whole purpose.
-	clipped := find(paintOf(t, `<div id="a"></div>`,
-		noDefaults+box+` #a { background-clip: padding-box }`))
-	if clipped == nil {
-		t.Fatal("the clipped background did not paint")
-	}
-	want, _ = style.FromPx(25)
-	if clipped.Rect.Y != want {
-		t.Errorf("with background-clip: padding-box the background starts at y=%v, want 25",
-			clipped.Rect.Y.Px())
-	}
-}
-
-// TestTextPaintsAtItsBaseline pins that a text op carries the baseline rather
-// than the top of the line box, which is what a text backend takes.
-func TestTextPaintsAtItsBaseline(t *testing.T) {
-	ops := paintOf(t, `<p id="p">text</p>`,
-		noDefaults+`p { font-size: 100px; font-family: Helvetica; line-height: 200px }`)
-
-	var text *DrawText
-	for i := range ops {
-		if d, ok := ops[i].(DrawText); ok {
-			c := d
-			text = &c
-			break
-		}
-	}
-	if text == nil {
-		t.Fatal("no text painted")
-	}
-	if text.Text != "text" {
-		t.Errorf("the run reads %q", text.Text)
-	}
-	// The baseline is inside the line box and below its top, which a value of
-	// zero or of the full line height would not be.
-	if text.At.Y <= 0 {
-		t.Errorf("the baseline is at y=%v", text.At.Y.Px())
-	}
-	if text.At.Y.Px() >= 200 {
-		t.Errorf("the baseline at %v is below the 200px line box", text.At.Y.Px())
-	}
-}
-
-// TestSpacesArePainted pins that the gap between two words is drawn rather than
-// skipped, and the reason is text extraction rather than ink.
-//
-// A space marks no paper, so skipping it looks free. But the words either side
-// then become separate text operations with only a position jump between them,
-// and a reader copying the text gets them run together. This was written the
-// other way round first, and the end-to-end test caught it: "A heading" came
-// back from the finished PDF as "Aheading".
-func TestSpacesArePainted(t *testing.T) {
-	ops := paintOf(t, `<p>one two three</p>`,
-		noDefaults+`p { font-size: 20px; font-family: Helvetica }`)
-
-	var spaces int
-	for _, op := range ops {
-		if d, ok := op.(DrawText); ok && strings.TrimSpace(d.Text) == "" {
-			spaces++
-		}
-	}
-	if spaces != 2 {
-		t.Errorf("%d spaces were painted, want the 2 between the three words", spaces)
-	}
-}
-
 // TestScaleToFit pins §5: one factor, computed from the natural size, applied to
-// everything. It is not re-layout — the line breaks do not move — which is what
+// everything. It is not re-layout.layout — the line breaks do not move — which is what
 // makes the threshold checks exact.
-func TestScaleToFit(t *testing.T) {
-	// Content that fits needs no scaling.
-	got := renderOf(t, `<div id="a"></div>`, Options{Page: A4},
-		noDefaults+"#a { height: 100px }")
-	if got.Scale != 1 {
-		t.Errorf("content that fits was scaled by %v", got.Scale)
-	}
-
-	// Content that is smaller in *both* axes — and so could be grown — is still
-	// left alone. Using a full-width box here would prove nothing, since an auto
-	// width already fills the page and no such document can grow.
-	got = renderOf(t, `<div id="a"></div>`, Options{Page: A4},
-		noDefaults+"html, body { width: 50px } #a { height: 10px }")
-	if got.Scale != 1 {
-		t.Errorf("content that could have been grown was grown by %v without being asked",
-			got.Scale)
-	}
-
-	// Content twice as tall as the page is scaled to about half.
-	avail := A4.Content()
-	tall := avail.H.Px() * 2
-	got = renderOf(t, `<div id="a"></div>`, Options{Page: A4, MinScale: 0.1},
-		noDefaults+"#a { height: "+ftoa(tall)+"px }")
-	if got.Scale >= 1 {
-		t.Fatalf("content twice the page height was not scaled: %v", got.Scale)
-	}
-	if math.Abs(got.Scale-0.5) > 0.02 {
-		t.Errorf("the scale is %v, want about 0.5", got.Scale)
-	}
-	// The natural size is reported unscaled, which is what a caller adjusting a
-	// template needs.
-	if math.Abs(got.NaturalSize.H.Px()-tall) > 1 {
-		t.Errorf("the natural height is %v, want %v", got.NaturalSize.H.Px(), tall)
-	}
-}
-
-func ftoa(v float64) string {
-	n := int(v)
-	return itoa(n)
-}
-
-// TestScalingUpIsOffByDefault pins that an underfull page is left alone. Growing
-// it is surprising and it degrades images, so it is opt-in.
-func TestScalingUpIsOffByDefault(t *testing.T) {
-	got := renderOf(t, `<div id="a"></div>`, Options{Page: A4},
-		noDefaults+"#a { height: 10px }")
-	if got.Scale != 1 {
-		t.Errorf("a nearly empty page was scaled by %v", got.Scale)
-	}
-
-	// Growing needs room in *both* axes. An auto width already fills the page,
-	// so only content that is narrower as well as shorter can grow — which is
-	// worth stating, because a test using a full-width box would report that
-	// scaling up does not work when it is the content that cannot.
-	got = renderOf(t, `<div id="a"></div>`, Options{Page: A4, AllowScaleUp: true},
-		noDefaults+"html, body { width: 50px } #a { height: 10px }")
-	if got.Scale <= 1 {
-		t.Errorf("content smaller than the page in both axes was not grown: %v", got.Scale)
-	}
-}
-
-// TestMinScaleIsAnError pins the blunt guardrail of §6.1, and that it stops the
-// document being produced: a page that only fitted by being made illegible is
-// one where no document is better than the document.
-func TestMinScaleIsAnError(t *testing.T) {
-	fired[RuleMinScale] = true
-
-	avail := A4.Content()
-	got := renderOf(t, `<div id="a"></div>`, Options{Page: A4},
-		noDefaults+"#a { height: "+ftoa(avail.H.Px()*10)+"px }")
-
-	var found *Finding
-	for i := range got.Findings {
-		if got.Findings[i].Rule == RuleMinScale {
-			f := got.Findings[i]
-			found = &f
-		}
-	}
-	if found == nil {
-		t.Fatalf("content ten times the page height did not trip min-scale: %v", got.Findings)
-	}
-	if found.Severity != Error {
-		t.Errorf("min-scale was reported as %v, want an error", found.Severity)
-	}
-	if got.Document != nil {
-		t.Error("a document was produced despite an error-severity finding")
-	}
-	// The message says what the scale was and what the floor is, so an author
-	// can decide which to change.
-	if !strings.Contains(found.Message, "%") {
-		t.Errorf("the message %q does not give the numbers", found.Message)
-	}
-
-	// Content that fits says nothing.
-	got = renderOf(t, `<div id="a"></div>`, Options{Page: A4}, noDefaults+"#a { height: 10px }")
-	for _, f := range got.Findings {
-		if f.Rule == RuleMinScale {
-			t.Errorf("content that fits tripped min-scale: %v", f)
-		}
-	}
-}
-
-// TestMinFontSizeIsAnError pins the other §6.1 threshold, and the property that
-// makes it exact: because the scaling is geometric, the effective size is the
-// natural size times one number, so this is a multiplication rather than an
-// iteration.
-func TestMinFontSizeIsAnError(t *testing.T) {
-	fired[RuleMinFontSize] = true
-
-	// 4px is 3pt, below the 6pt floor, with no scaling involved.
-	got := renderOf(t, `<p>tiny</p>`, Options{Page: A4},
-		noDefaults+"p { font-size: 4px; font-family: Helvetica }")
-
-	var found *Finding
-	for i := range got.Findings {
-		if got.Findings[i].Rule == RuleMinFontSize {
-			f := got.Findings[i]
-			found = &f
-		}
-	}
-	if found == nil {
-		t.Fatalf("3pt text did not trip min-font-size: %v", got.Findings)
-	}
-	if found.Severity != Error {
-		t.Errorf("min-font-size was reported as %v, want an error", found.Severity)
-	}
-	if got.Document != nil {
-		t.Error("a document was produced despite an error-severity finding")
-	}
-
-	// Ordinary text says nothing.
-	got = renderOf(t, `<p>ordinary</p>`, Options{Page: A4},
-		noDefaults+"p { font-size: 16px; font-family: Helvetica }")
-	for _, f := range got.Findings {
-		if f.Rule == RuleMinFontSize {
-			t.Errorf("16px text tripped min-font-size: %v", f)
-		}
-	}
-}
-
-// TestScalingMakesTextTooSmall pins the interaction between the two thresholds,
-// which is the case §6.1 is really about: text that is legible on its own
-// becomes illegible once the page is shrunk to fit, and the check has to be
-// against the *effective* size rather than the declared one.
-func TestScalingMakesTextTooSmall(t *testing.T) {
-	avail := A4.Content()
-	// 10px is 7.5pt, above the floor. Scaled to a fifth it is 1.5pt, well below.
-	got := renderOf(t, `<p id="p">text</p><div id="tall"></div>`,
-		Options{Page: A4, MinScale: 0.01},
-		noDefaults+`p { font-size: 10px; font-family: Helvetica }
-		#tall { height: `+ftoa(avail.H.Px()*5)+`px }`)
-
-	var found bool
-	for _, f := range got.Findings {
-		if f.Rule == RuleMinFontSize {
-			found = true
-			if !strings.Contains(f.Message, "before the page scaling") {
-				t.Errorf("the message %q does not say the size was legible before scaling",
-					f.Message)
-			}
-		}
-	}
-	if !found {
-		t.Errorf("text made illegible by scaling was not reported: %v", got.Findings)
-	}
-}
-
+// TestRenderIsTotal pins that no document and no options panic it.
 // TestRenderIsTotal pins that no document and no options panic it.
 func TestRenderIsTotal(t *testing.T) {
 	docs := []string{
@@ -637,12 +450,12 @@ func TestRenderIsTotal(t *testing.T) {
 		"", "* { display: none }", "p { font-size: 1px }",
 		"p { font-size: 1000px }", "* { margin: 100px }",
 	}
-	pages := []PageSize{A4, A5, Letter, Legal, {}, PageSizePt(10, 10)}
+	pages := []layout.PageSize{layout.A4, layout.A5, layout.Letter, layout.Legal, {}, layout.PageSizePt(10, 10)}
 	for _, d := range docs {
 		for _, s := range sheets {
 			for _, page := range pages {
-				in := Input{HTML: d, CSS: []Stylesheet{{Source: s}}}
-				got, err := Render(in, Options{Page: page, MinScale: 0.001})
+				in := layout.Input{HTML: d, CSS: []layout.Stylesheet{{Source: s}}}
+				got, err := Render(in, layout.Options{Page: page, MinScale: 0.001})
 				if err != nil {
 					continue
 				}
@@ -655,6 +468,36 @@ func TestRenderIsTotal(t *testing.T) {
 	}
 }
 
+// TestRenderIsDeterministic pins that two renders of one document agree. It is
+// the property §7's comparison testing needs, and the one that map iteration
+// quietly breaks.
+//
+// The comparison is of the *display list* rather than of the file, and that is
+// not a weaker claim — it is the right one. A PDF carries an /ID, which is a
+// unique identifier for the file and is deliberately different every time; two
+// byte-identical files would mean that identifier was not doing its job. The
+// display list is the stage §7 attaches at, and it is what has to be
+// reproducible.
+// TestRenderIsDeterministic pins that two renders of one document agree. It is
+// the property §7's comparison testing needs, and the one that map iteration
+// quietly breaks.
+//
+// The comparison is of the *display list* rather than of the file, and that is
+// not a weaker claim — it is the right one. A PDF carries an /ID, which is a
+// unique identifier for the file and is deliberately different every time; two
+// byte-identical files would mean that identifier was not doing its job. The
+// display list is the stage §7 attaches at, and it is what has to be
+// reproducible.
+// TestRenderIsDeterministic pins that two renders of one document agree. It is
+// the property §7's comparison testing needs, and the one that map iteration
+// quietly breaks.
+//
+// The comparison is of the *display list* rather than of the file, and that is
+// not a weaker claim — it is the right one. A PDF carries an /ID, which is a
+// unique identifier for the file and is deliberately different every time; two
+// byte-identical files would mean that identifier was not doing its job. The
+// display list is the stage §7 attaches at, and it is what has to be
+// reproducible.
 // TestRenderIsDeterministic pins that two renders of one document agree. It is
 // the property §7's comparison testing needs, and the one that map iteration
 // quietly breaks.
@@ -681,8 +524,8 @@ func TestRenderIsDeterministic(t *testing.T) {
 	// by rendering twice and comparing the lengths — a difference in content
 	// would move them.
 	render := func() int {
-		got, err := Render(Input{HTML: src, CSS: []Stylesheet{{Source: sheet}}},
-			Options{Page: A4})
+		got, err := Render(layout.Input{HTML: src, CSS: []layout.Stylesheet{{Source: sheet}}},
+			layout.Options{Page: layout.A4})
 		if err != nil || got.Document == nil {
 			t.Fatalf("rendering: %v %v", err, got.Findings)
 		}
@@ -701,13 +544,136 @@ func TestRenderIsDeterministic(t *testing.T) {
 }
 
 // sketchOps renders a display list as text, so a difference names itself.
-func sketchOps(ops []Op) string {
+
+// find is the fragment for an element, which every geometric assertion here
+// starts from.
+//
+// A copy of the layout engine's own helper, and deliberately a copy: it is
+// eight lines, and a test helper exported across a module boundary is API this
+// module would then be holding forme to.
+func find(t *testing.T, root *layout.Fragment, id string) *layout.Fragment {
+	t.Helper()
+	var found *layout.Fragment
+	var walk func(*layout.Fragment)
+	walk = func(f *layout.Fragment) {
+		if found != nil || f == nil {
+			return
+		}
+		if f.Box.Element != nil {
+			if got, _ := f.Box.Element.Attr("id"); got == id {
+				found = f
+				return
+			}
+		}
+		for _, c := range f.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	if found == nil {
+		t.Fatalf("no fragment for #%s", id)
+	}
+	return found
+}
+
+// noDefaults suppresses the user-agent margins, whose arithmetic would
+// otherwise be in every expected value here.
+const noDefaults = `
+html, body, div, p, section { margin: 0; padding: 0; border-top-style: none;
+  border-right-style: none; border-bottom-style: none; border-left-style: none }
+`
+
+// layoutOf builds and lays out a document in a page of the given width, for the
+// tests here that need a fragment tree rather than a finished document.
+func layoutOf(t *testing.T, width float64, htmlSrc string, cssSrc ...string) *layout.Fragment {
+	t.Helper()
+	in := layout.Input{HTML: htmlSrc}
+	for _, c := range cssSrc {
+		in.CSS = append(in.CSS, layout.Stylesheet{Source: c})
+	}
+	got := layout.Build(in)
+	if got.Root == nil {
+		t.Fatalf("the document produced no boxes")
+	}
+	w, _ := style.FromPx(width)
+	h, _ := style.FromPx(10000)
+	frag := layout.Layout(got.Root, layout.Size{W: w, H: h}, nil, layout.NewRecorder(nil))
+	if frag == nil {
+		t.Fatal("layout produced no fragment")
+	}
+	return frag
+}
+
+// lineX returns the x of the first run of the first line of an element.
+func lineX(t *testing.T, root *layout.Fragment, id string) float64 {
+	t.Helper()
+	f := find(t, root, id)
+	if len(f.Lines) == 0 || len(f.Lines[0].Runs) == 0 {
+		t.Fatalf("#%s has no line runs to align", id)
+	}
+	return f.Lines[0].Runs[0].X.Px()
+}
+
+// writePNG puts a solid blue PNG of the given size on disk.
+func writePNG(t *testing.T, path string, w, h int) {
+	t.Helper()
+	if err := os.WriteFile(path, encodePNG(t, w, h), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeImage(t *testing.T, path string, img image.Image) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// firstMatrix returns the operands of the first "cm" in a content stream.
+func firstMatrix(t *testing.T, stream string) [6]float64 {
+	t.Helper()
+	for _, line := range strings.Split(stream, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 7 || fields[6] != "cm" {
+			continue
+		}
+		var out [6]float64
+		for i := 0; i < 6; i++ {
+			v, err := strconv.ParseFloat(fields[i], 64)
+			if err != nil {
+				t.Fatalf("the transform has a non-numeric operand %q", fields[i])
+			}
+			out[i] = v
+		}
+		return out
+	}
+	t.Fatalf("the content stream has no transform:\n%s", stream)
+	return [6]float64{}
+}
+
+func ftoa(v float64) string {
+	n := int(v)
+	return itoa(n)
+}
+
+func paintOf(t *testing.T, htmlSrc, cssSrc string) []layout.Op {
+	t.Helper()
+	root := layoutOf(t, layout.A4.Content().W.Px(), htmlSrc, cssSrc)
+	return layout.Paint(root)
+}
+
+// sketchOps renders a display list as text, so a difference names itself.
+func sketchOps(ops []layout.Op) string {
 	var b strings.Builder
 	for _, op := range ops {
 		switch v := op.(type) {
-		case FillRect:
+		case layout.FillRect:
 			b.WriteString("fill " + v.Rect.String() + " " + v.Color.String() + "\n")
-		case DrawText:
+		case layout.DrawText:
 			b.WriteString("text " + strconv.Quote(v.Text) + " at " +
 				strconv.FormatFloat(v.At.X.Px(), 'f', 2, 64) + "," +
 				strconv.FormatFloat(v.At.Y.Px(), 'f', 2, 64) + " " +
@@ -718,143 +684,29 @@ func sketchOps(ops []Op) string {
 	return b.String()
 }
 
-// TestBorderStylesDiffer pins that each border-style paints something different.
-//
-// Layout only ever asks a border how wide it is, and every style is the same
-// width — so a renderer that ignored the style produced a page that was wrong in
-// a way an author sees at once and a test suite sees as a hundred failures.
-func TestBorderStylesDiffer(t *testing.T) {
-	// All four edges, because the 3-D styles differ from solid only in which
-	// edges are lit: an "outset" top edge *is* the plain colour, so a test with
-	// a top border alone would report outset and solid as the same thing — and
-	// be right about it.
-	sheet := func(kind string) string {
-		return noDefaults + `#a { height: 50px;
-			border-top-width: 9px; border-right-width: 9px;
-			border-bottom-width: 9px; border-left-width: 9px;
-			border-top-color: #808080; border-right-color: #808080;
-			border-bottom-color: #808080; border-left-color: #808080;
-			border-top-style: ` + kind + `; border-right-style: ` + kind + `;
-			border-bottom-style: ` + kind + `; border-left-style: ` + kind + ` }`
-	}
-	seen := map[string]string{}
-	for _, kind := range []string{
-		"solid", "double", "dashed", "dotted", "groove", "ridge", "inset", "outset",
-	} {
-		ops := paintOf(t, `<div id="a"></div>`, sheet(kind))
-		got := sketchOps(ops)
-		if got == "" {
-			t.Errorf("border-style:%s painted nothing", kind)
-			continue
-		}
-		if other, ok := seen[got]; ok {
-			t.Errorf("border-style:%s paints exactly what %s does", kind, other)
-		}
-		seen[got] = kind
-	}
-
-	// "none" and "hidden" paint nothing at all, which is the contrast that makes
-	// the assertions above about style rather than about painting in general.
-	for _, kind := range []string{"none", "hidden"} {
-		ops := paintOf(t, `<div id="a"></div>`, sheet(kind))
-		for _, op := range ops {
-			if r, ok := op.(FillRect); ok && r.Color.R == 128 {
-				t.Errorf("border-style:%s painted a border", kind)
-			}
+func encodePNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.NRGBA{B: 255, A: 255})
 		}
 	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
-// TestDoubleBorderIsTwoLines pins the style whose whole point is the gap. One
-// band would be a solid border by another name.
-func TestDoubleBorderIsTwoLines(t *testing.T) {
-	ops := paintOf(t, `<div id="a"></div>`,
-		noDefaults+`#a { height: 50px; border-top-width: 9px;
-			border-top-color: #808080; border-top-style: double }`)
-
-	var bands []Rect
-	for _, op := range ops {
-		if r, ok := op.(FillRect); ok && r.Color.R == 128 {
-			bands = append(bands, r.Rect)
-		}
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
 	}
-	if len(bands) != 2 {
-		t.Fatalf("a double border painted %d bands, want 2", len(bands))
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
 	}
-	// Each is a third of the width, and there is a third between them.
-	px(t, "the first band", bands[0].H, 3)
-	px(t, "the second band", bands[1].H, 3)
-	px(t, "the gap", bands[1].Y.Sub(bands[0].Bottom()), 3)
-}
-
-// TestDashedAndDottedAreRuns pins that these paint many marks rather than one,
-// and that a dot is shorter than a dash — the ratio is left open by the
-// specification and the difference is not.
-func TestDashedAndDottedAreRuns(t *testing.T) {
-	count := func(kind string) (marks int, markLen float64) {
-		ops := paintOf(t, `<div id="a"></div>`,
-			noDefaults+`#a { height: 50px; border-top-width: 4px;
-				border-top-color: #808080; border-top-style: `+kind+` }`)
-		for _, op := range ops {
-			if r, ok := op.(FillRect); ok && r.Color.R == 128 {
-				marks++
-				markLen = r.Rect.W.Px()
-			}
-		}
-		return
-	}
-	dashes, dashLen := count("dashed")
-	dots, dotLen := count("dotted")
-
-	if dashes < 5 {
-		t.Errorf("a dashed border painted %d marks, want a run of them", dashes)
-	}
-	if dots <= dashes {
-		t.Errorf("dotted painted %d marks and dashed %d; a dot is shorter so there "+
-			"are more of them", dots, dashes)
-	}
-	if dotLen >= dashLen {
-		t.Errorf("a dot is %v wide and a dash %v; a dot is the shorter", dotLen, dashLen)
-	}
-}
-
-// TestThreeDBordersUseTwoTones pins that groove, ridge, inset and outset light
-// some edges and shadow others — which is the whole of what makes them look
-// three-dimensional, and what a single-tone renderer loses.
-func TestThreeDBordersUseTwoTones(t *testing.T) {
-	for _, kind := range []string{"groove", "ridge", "inset", "outset"} {
-		ops := paintOf(t, `<div id="a"></div>`,
-			noDefaults+`#a { height: 50px;
-				border-top-width: 8px; border-right-width: 8px;
-				border-bottom-width: 8px; border-left-width: 8px;
-				border-top-color: #808080; border-right-color: #808080;
-				border-bottom-color: #808080; border-left-color: #808080;
-				border-top-style: `+kind+`; border-right-style: `+kind+`;
-				border-bottom-style: `+kind+`; border-left-style: `+kind+` }`)
-
-		tones := map[float64]bool{}
-		for _, op := range ops {
-			if r, ok := op.(FillRect); ok {
-				tones[r.Color.R] = true
-			}
-		}
-		if len(tones) < 2 {
-			t.Errorf("border-style:%s used %d tone(s), want two", kind, len(tones))
-		}
-	}
-}
-
-// TestBlackThreeDBorderStaysVisible pins the case a naive darkening loses. Half
-// of black is black, so a groove on the colour authors use most would vanish
-// into one tone; the second tone is a lightening instead.
-func TestBlackThreeDBorderStaysVisible(t *testing.T) {
-	black := style.RGBA{A: 1}
-	if shade(black, 0.5) == black {
-		t.Error("a black border's second tone is also black, so the style disappears")
-	}
-	// An ordinary colour does darken, so the special case is only for black.
-	grey := style.RGBA{R: 200, G: 200, B: 200, A: 1}
-	if got := shade(grey, 0.5); got.R >= grey.R {
-		t.Errorf("shading grey gave %v, which is no darker", got)
-	}
+	return string(b)
 }

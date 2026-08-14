@@ -2,16 +2,16 @@ package render
 
 import (
 	"bytes"
+	"github.com/mgilbir/forme/layout"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
+	"github.com/mgilbir/forme/style"
 	"github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/style"
 )
 
-// Bidirectional text in layout: the direction and unicode-bidi properties, and
+// Bidirectional text in layout.layout: the direction and unicode-bidi properties, and
 // the reordering of a line's runs.
 //
 // The algorithm itself is tested next door, against Unicode's own conformance
@@ -29,6 +29,11 @@ import (
 // escapes so that a reversed expectation cannot be mistaken for a correct one by
 // an editor that renders the script, and so that this file reads the same in
 // every terminal.
+
+// hebrew is two Hebrew letters, and hebrew2 two more. They are spelled as
+// escapes so that a reversed expectation cannot be mistaken for a correct one by
+// an editor that renders the script, and so that this file reads the same in
+// every terminal.
 const (
 	hebrewAB = "אב" // alef bet
 	hebrewGD = "גד" // gimel dalet
@@ -37,7 +42,8 @@ const (
 const bidiCSS = `#p { font-family: Courier; font-size: 20px; width: 300px }`
 
 // runsOf returns the first line's runs of an element.
-func runsOf(t *testing.T, root *Fragment, id string) []TextRun {
+// runsOf returns the first line's runs of an element.
+func runsOf(t *testing.T, root *layout.Fragment, id string) []layout.TextRun {
 	t.Helper()
 	f := find(t, root, id)
 	if len(f.Lines) == 0 {
@@ -47,9 +53,10 @@ func runsOf(t *testing.T, root *Fragment, id string) []TextRun {
 }
 
 // runAt returns the run whose text is s, and fails if there is not exactly one.
-func runAt(t *testing.T, runs []TextRun, s string) TextRun {
+// runAt returns the run whose text is s, and fails if there is not exactly one.
+func runAt(t *testing.T, runs []layout.TextRun, s string) layout.TextRun {
 	t.Helper()
-	var found *TextRun
+	var found *layout.TextRun
 	for i := range runs {
 		if runs[i].Text == s {
 			if found != nil {
@@ -68,6 +75,14 @@ func runAt(t *testing.T, runs []TextRun, s string) TextRun {
 	return *found
 }
 
+// TestRightToLeftRunsAreReordered is the reordering itself, on a line whose runs
+// are all right-to-left.
+//
+// Two Hebrew words separated by a space: the second word is drawn first, the
+// space in the middle, the first word last. A renderer that reversed the glyphs
+// of each word and left the words where they were would put them in the order
+// they were written, which is the failure this is about — the words would read
+// backwards while every letter looked right.
 // TestRightToLeftRunsAreReordered is the reordering itself, on a line whose runs
 // are all right-to-left.
 //
@@ -112,6 +127,11 @@ func TestRightToLeftRunsAreReordered(t *testing.T) {
 // A Latin word inside a right-to-left paragraph moves with the sentence and is
 // *not* itself reversed. Reversing the whole line would put the words in the
 // right places and spell every one of them backwards.
+// TestLatinInsideRightToLeftKeepsItsOrder is the case a reversal gets wrong.
+//
+// A Latin word inside a right-to-left paragraph moves with the sentence and is
+// *not* itself reversed. Reversing the whole line would put the words in the
+// right places and spell every one of them backwards.
 func TestLatinInsideRightToLeftKeepsItsOrder(t *testing.T) {
 	root := layoutOf(t, 600,
 		`<div id="p" dir="rtl">`+hebrewAB+` abc `+hebrewGD+`</div>`, bidiCSS)
@@ -148,6 +168,13 @@ func TestLatinInsideRightToLeftKeepsItsOrder(t *testing.T) {
 // sitting inside a right-to-left run. It takes a level of its own, two above the
 // paragraph's, which is what puts it in the right place *and* keeps its digits
 // in the right order.
+// TestNumbersInRightToLeftTextRunLeftToRight is rules W2 and I1, which are the
+// part of the algorithm no heuristic reaches.
+//
+// A number written after Hebrew reads left to right — "12" and not "21" — while
+// sitting inside a right-to-left run. It takes a level of its own, two above the
+// paragraph's, which is what puts it in the right place *and* keeps its digits
+// in the right order.
 func TestNumbersInRightToLeftTextRunLeftToRight(t *testing.T) {
 	root := layoutOf(t, 600, `<div id="p">`+hebrewAB+` 12</div>`, bidiCSS)
 	runs := runsOf(t, root, "p")
@@ -166,6 +193,9 @@ func TestNumbersInRightToLeftTextRunLeftToRight(t *testing.T) {
 	}
 }
 
+// TestDirectionRTLAlignsFromTheRight is the effect of direction that most
+// documents will actually see: the inline base direction is what "text-align:
+// start" resolves against, and start is the initial value.
 // TestDirectionRTLAlignsFromTheRight is the effect of direction that most
 // documents will actually see: the inline base direction is what "text-align:
 // start" resolves against, and start is the initial value.
@@ -189,6 +219,11 @@ func TestDirectionRTLAlignsFromTheRight(t *testing.T) {
 	}
 }
 
+// TestDirectionAloneOnAnInlineDoesNothing pins the rule everyone meets once: a
+// direction on an inline box with the initial unicode-bidi has no effect at all.
+//
+// It is not an omission, it is the property. An inline box that changed the
+// direction without opening an embedding would reorder text outside itself.
 // TestDirectionAloneOnAnInlineDoesNothing pins the rule everyone meets once: a
 // direction on an inline box with the initial unicode-bidi has no effect at all.
 //
@@ -224,6 +259,8 @@ func TestDirectionAloneOnAnInlineDoesNothing(t *testing.T) {
 
 // TestBidiOverrideForcesTheDirection is unicode-bidi: bidi-override, which is
 // what <bdo> is.
+// TestBidiOverrideForcesTheDirection is unicode-bidi: bidi-override, which is
+// what <bdo> is.
 func TestBidiOverrideForcesTheDirection(t *testing.T) {
 	root := layoutOf(t, 600, `<div id="p">abc <bdo dir="rtl">def</bdo></div>`, bidiCSS)
 	over := runAt(t, runsOf(t, root, "p"), "def")
@@ -241,6 +278,15 @@ func TestBidiOverrideForcesTheDirection(t *testing.T) {
 	}
 }
 
+// TestIsolateKeepsTheContentsOutOfTheSurroundings is unicode-bidi: isolate, and
+// the difference between it and an embedding is the whole reason it exists.
+//
+// Rule P2 decides a paragraph's direction from its first strong character and
+// *skips over an isolate entirely* while looking. So a Hebrew phrase at the start
+// of an otherwise English sentence sets the whole sentence right to left when it
+// is embedded, and does not when it is isolated. That is the bug isolates were
+// added to Unicode to fix, and it is the one an author hits when they interpolate
+// a user's name into a sentence.
 // TestIsolateKeepsTheContentsOutOfTheSurroundings is unicode-bidi: isolate, and
 // the difference between it and an embedding is the whole reason it exists.
 //
@@ -280,6 +326,12 @@ func TestIsolateKeepsTheContentsOutOfTheSurroundings(t *testing.T) {
 // line break ends one. Without the split the first strong character of the block
 // would decide the direction of every line in it — so a <br> between a Hebrew
 // line and a Latin one would set the Latin one right-to-left.
+// TestForcedBreakStartsANewBidiParagraph pins CSS's paragraph split.
+//
+// The algorithm's first rule resolves each paragraph on its own, and a forced
+// line break ends one. Without the split the first strong character of the block
+// would decide the direction of every line in it — so a <br> between a Hebrew
+// line and a Latin one would set the Latin one right-to-left.
 func TestForcedBreakStartsANewBidiParagraph(t *testing.T) {
 	root := layoutOf(t, 600, `<div id="p" style="unicode-bidi: plaintext">`+
 		hebrewAB+`<br>abc</div>`, bidiCSS)
@@ -302,6 +354,9 @@ func TestForcedBreakStartsANewBidiParagraph(t *testing.T) {
 // TestPlaintextTakesTheDirectionFromTheText is unicode-bidi: plaintext, which
 // is what <bdi> and dir=auto are for: content whose language the author does not
 // know.
+// TestPlaintextTakesTheDirectionFromTheText is unicode-bidi: plaintext, which
+// is what <bdi> and dir=auto are for: content whose language the author does not
+// know.
 func TestPlaintextTakesTheDirectionFromTheText(t *testing.T) {
 	// The same declaration over two different contents, and the direction
 	// follows the content rather than the declaration.
@@ -315,6 +370,9 @@ func TestPlaintextTakesTheDirectionFromTheText(t *testing.T) {
 	}
 }
 
+// TestEachLineIsReorderedOnItsOwn is why the reordering is per line rather than
+// per paragraph. A paragraph broken across two lines has each of them reordered
+// against its own extent, and rule L1 resets the space the break happened at.
 // TestEachLineIsReorderedOnItsOwn is why the reordering is per line rather than
 // per paragraph. A paragraph broken across two lines has each of them reordered
 // against its own extent, and rule L1 resets the space the break happened at.
@@ -346,6 +404,9 @@ func TestEachLineIsReorderedOnItsOwn(t *testing.T) {
 // TestOverConstrainedMarginsFollowTheContainingBlock is CSS 2.1 §10.3.3's other
 // half: which margin gives way when the arithmetic does not add up depends on
 // the containing block's direction.
+// TestOverConstrainedMarginsFollowTheContainingBlock is CSS 2.1 §10.3.3's other
+// half: which margin gives way when the arithmetic does not add up depends on
+// the containing block's direction.
 func TestOverConstrainedMarginsFollowTheContainingBlock(t *testing.T) {
 	// The body's own margin is taken out so that the numbers below are the
 	// arithmetic of §10.3.3 and nothing else.
@@ -372,25 +433,29 @@ func TestOverConstrainedMarginsFollowTheContainingBlock(t *testing.T) {
 // unsupported-script guardrail used to make. Right-to-left text is laid out now,
 // so reporting it would be telling an author a gap has not been closed while
 // they look at the thing that closed it.
+// TestBidiIsNotReportedUnsupported is the other half of the claim the
+// unsupported-script guardrail used to make. Right-to-left text is laid out now,
+// so reporting it would be telling an author a gap has not been closed while
+// they look at the thing that closed it.
 func TestBidiIsNotReportedUnsupported(t *testing.T) {
 	for _, text := range []string{hebrewAB, "مرحبا"} {
-		got := Build(Input{HTML: "<p>" + text + "</p>"})
-		rec := NewRecorder(nil)
+		got := layout.Build(layout.Input{HTML: "<p>" + text + "</p>"})
+		rec := layout.NewRecorder(nil)
 		w, _ := style.FromPx(1000)
-		Layout(got.Root, Size{W: w, H: w}, nil, rec)
+		layout.Layout(got.Root, layout.Size{W: w, H: w}, nil, rec)
 		for _, f := range rec.Findings() {
-			if f.Rule == RuleUnsupportedScript {
+			if f.Rule == layout.RuleUnsupportedScript {
 				t.Errorf("%q was reported as an unsupported script: %v", text, f)
 			}
 		}
 	}
 	// And the two properties are no longer reported as unimplemented, which is
 	// the finding that used to taint every document declaring one.
-	got := Build(Input{
+	got := layout.Build(layout.Input{
 		HTML: `<p style="direction: rtl; unicode-bidi: bidi-override">x</p>`,
 	})
 	for _, f := range got.Findings {
-		if f.Rule == RuleUnsupportedProperty &&
+		if f.Rule == layout.RuleUnsupportedProperty &&
 			(f.Property == "direction" || f.Property == "unicode-bidi") {
 			t.Errorf("%s is still reported as unimplemented: %v", f.Property, f)
 		}
@@ -400,10 +465,13 @@ func TestBidiIsNotReportedUnsupported(t *testing.T) {
 // TestBidiControlsInTheTextAreHonoured pins that the algorithm sees the codes an
 // author wrote as well as the ones unicode-bidi stands for. U+202E is a
 // right-to-left override, and a document using one expects it to work.
+// TestBidiControlsInTheTextAreHonoured pins that the algorithm sees the codes an
+// author wrote as well as the ones unicode-bidi stands for. U+202E is a
+// right-to-left override, and a document using one expects it to work.
 func TestBidiControlsInTheTextAreHonoured(t *testing.T) {
 	root := layoutOf(t, 600, "<div id=\"p\">abc‮def‬</div>", bidiCSS)
 	runs := runsOf(t, root, "p")
-	var over *TextRun
+	var over *layout.TextRun
 	for i := range runs {
 		if strings.Contains(runs[i].Text, "def") {
 			over = &runs[i]
@@ -418,6 +486,9 @@ func TestBidiControlsInTheTextAreHonoured(t *testing.T) {
 	}
 }
 
+// TestPlainLatinIsUntouched is the regression guard the whole feature needs: a
+// document with nothing bidirectional in it must lay out exactly as it did
+// before any of this existed, and must not pay for the algorithm either.
 // TestPlainLatinIsUntouched is the regression guard the whole feature needs: a
 // document with nothing bidirectional in it must lay out exactly as it did
 // before any of this existed, and must not pay for the algorithm either.
@@ -443,7 +514,13 @@ func TestPlainLatinIsUntouched(t *testing.T) {
 }
 
 // TestRunsAreSplitAtALevelBoundary is the splitting, which is what makes the
-// rest of inline layout able to ignore the algorithm.
+// rest of inline layout.layout able to ignore the algorithm.
+//
+// "HEBREW12" is one word with no space in it and two directions in it. Left
+// whole it would be placed as one run at one level and set as "21WERBEH"; split,
+// the digits keep their own place and their own order.
+// TestRunsAreSplitAtALevelBoundary is the splitting, which is what makes the
+// rest of inline layout.layout able to ignore the algorithm.
 //
 // "HEBREW12" is one word with no space in it and two directions in it. Left
 // whole it would be placed as one run at one level and set as "21WERBEH"; split,
@@ -480,13 +557,20 @@ func TestRunsAreSplitAtALevelBoundary(t *testing.T) {
 // It is checked through the shaper rather than by inspecting the string, because
 // the string is not the claim — a test that shapedText prefixes some character
 // would pass just as well with a character the shaper ignores.
+// TestRightToLeftRunIsShapedInVisualOrder is the last step: the run reaches the
+// shaper with its direction stated, so the glyphs come back in the order they
+// are drawn and rule L4's mirroring is applied.
+//
+// It is checked through the shaper rather than by inspecting the string, because
+// the string is not the claim — a test that shapedText prefixes some character
+// would pass just as well with a character the shaper ignores.
 func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
 	face, err := fonts.Standard("Helvetica")
 	if err != nil {
 		t.Fatalf("loading a standard face: %v", err)
 	}
-	glyphs := func(run DrawText) []int {
-		g, _ := face.ShapeGlyphs(shapedText(run))
+	glyphs := func(run layout.DrawText) []int {
+		g, _ := face.ShapeGlyphs(layout.ShapedText(run))
 		out := make([]int, 0, len(g))
 		for _, x := range g {
 			out = append(out, int(x.GID))
@@ -494,8 +578,8 @@ func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
 		return out
 	}
 
-	ltr := glyphs(DrawText{Text: "(ab"})
-	rtl := glyphs(DrawText{Text: "(ab", RTL: true})
+	ltr := glyphs(layout.DrawText{Text: "(ab"})
+	rtl := glyphs(layout.DrawText{Text: "(ab", RTL: true})
 	if len(ltr) != 3 || len(rtl) != 3 {
 		t.Fatalf("shaping gave %d and %d glyphs, want 3 each", len(ltr), len(rtl))
 	}
@@ -530,8 +614,17 @@ func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
 // a right-to-left run are another matter and do come out reversed — that is what
 // a text-showing operator can express, and it is what the shaping path has always
 // done — so the claim here is exactly about the runs.
+// TestExtractedTextKeepsTheRunsInReadingOrder pins the half of the design that is
+// about the document rather than about the page.
+//
+// A line's runs are drawn where the algorithm puts them and written to the
+// content stream in the order they were typed, so a reader copying text out of
+// the finished PDF gets the words in the order they are read. The glyphs *within*
+// a right-to-left run are another matter and do come out reversed — that is what
+// a text-showing operator can express, and it is what the shaping path has always
+// done — so the claim here is exactly about the runs.
 func TestExtractedTextKeepsTheRunsInReadingOrder(t *testing.T) {
-	got := renderOf(t, `<p>one <bdo dir="rtl">abc def</bdo> two</p>`, Options{})
+	got := renderOf(t, `<p>one <bdo dir="rtl">abc def</bdo> two</p>`, layout.Options{})
 	if got.Document == nil {
 		t.Fatalf("no document was produced: %v", got.Findings)
 	}
@@ -569,6 +662,14 @@ func TestExtractedTextKeepsTheRunsInReadingOrder(t *testing.T) {
 // it makes the box have no position of its own in the ordering, so it is placed
 // where the character *after* it goes, which in a right-to-left paragraph is the
 // wrong end of the line.
+// TestAtomicInlineTakesPartInTheOrdering pins the one character an image or an
+// inline-block contributes to the paragraph.
+//
+// CSS Writing Modes says an element that is not text takes part in the algorithm
+// as a single neutral, U+FFFC. Leaving it out does not make the box disappear —
+// it makes the box have no position of its own in the ordering, so it is placed
+// where the character *after* it goes, which in a right-to-left paragraph is the
+// wrong end of the line.
 func TestAtomicInlineTakesPartInTheOrdering(t *testing.T) {
 	const css = `body { margin: 0 } ` +
 		`#p { font-family: Courier; font-size: 20px; width: 300px; direction: rtl } ` +
@@ -597,6 +698,14 @@ func TestAtomicInlineTakesPartInTheOrdering(t *testing.T) {
 // it, or the second half of the element is laid out as though the element were
 // not there. It is the same thing a browser does, and the failure is visible:
 // half of a <bdo> comes out overridden and half does not.
+// TestAnOpenIsolateSurvivesAForcedBreak pins what happens to a formatting code
+// that is still open when a bidi paragraph ends.
+//
+// A <br> ends the paragraph, and the algorithm resolves each on its own — so an
+// override or an isolate opened before the break has to be opened again after
+// it, or the second half of the element is laid out as though the element were
+// not there. It is the same thing a browser does, and the failure is visible:
+// half of a <bdo> comes out overridden and half does not.
 func TestAnOpenIsolateSurvivesAForcedBreak(t *testing.T) {
 	root := layoutOf(t, 600,
 		`<div id="p"><bdo dir="rtl">abc<br>def</bdo></div>`, bidiCSS)
@@ -616,8 +725,28 @@ func TestAnOpenIsolateSurvivesAForcedBreak(t *testing.T) {
 
 // hebrewHV is two more Hebrew letters, so that a word of six can be cut into a
 // line of four and leave a tail of two.
+// hebrewHV is two more Hebrew letters, so that a word of six can be cut into a
+// line of four and leave a tail of two.
 const hebrewHV = "הו" // he vav
 
+// TestABrokenWordDoesNotDisorderWhatSharesItsLine is the bidi range of the
+// halves of a word cut by overflow-wrap.
+//
+// splitItem is handed an offset into the string and the range it has to move
+// counts runes: the paragraph the levels were resolved over is a []rune. Adding
+// the byte offset to it is right for Latin and wrong for every script that needs
+// the algorithm, and the tail then reads its level from a position past its own
+// — two characters past, for Hebrew, which is two bytes to the letter.
+//
+// The claim is not a number but a comparison: cutting a word must not reorder
+// what shares the line with the half that is left. So the same text is laid out
+// in a container wide enough to need no cut, and the narrow one has to agree
+// with it about which of the two runs is on the right.
+//
+// The block is left-to-right, which is the case that shows the fault. Digits
+// following Hebrew are a level above it and sit at the left of the letters
+// either way, so a right-to-left block puts the two runs where they already
+// were and the drifted range costs nothing visible.
 // TestABrokenWordDoesNotDisorderWhatSharesItsLine is the bidi range of the
 // halves of a word cut by overflow-wrap.
 //
@@ -679,46 +808,3 @@ func TestABrokenWordDoesNotDisorderWhatSharesItsLine(t *testing.T) {
 // hand before it cuts on the levels, and leaves the item whole where it does not
 // hold — so a range that drifts does not announce itself, it quietly stops the
 // reordering from happening.
-func TestSplittingAnItemMovesItsBidiRangeByRunes(t *testing.T) {
-	l := &layouter{
-		measured: map[measureKey]style.Unit{},
-		fonts:    map[fontKey]resolvedFont{},
-		fontSet:  StandardFonts(),
-		rec:      NewRecorder(nil),
-	}
-	face, ok := l.fontSet.Face("Courier", false, false)
-	if !ok {
-		t.Fatal("no Courier")
-	}
-	// Four Hebrew letters — eight bytes — sitting at position seven of their
-	// paragraph, cut after the first two.
-	item := inlineItem{
-		text: hebrewAB + hebrewGD, face: face, size: mustPx(20),
-		bidiPara: 1, bidiStart: 7, bidiEnd: 11,
-	}
-	head, tail := l.splitItem(item, len(hebrewAB))
-
-	for _, half := range []struct {
-		name string
-		it   inlineItem
-	}{{"head", head}, {"tail", tail}} {
-		runes := utf8.RuneCountInString(half.it.text)
-		if got := half.it.bidiEnd - half.it.bidiStart; got != runes {
-			t.Errorf("the %s covers %d positions of the paragraph for %d runes of text "+
-				"(%d..%d for %q) — splitByLevel reads a mismatch as text and levels built "+
-				"from different strings and gives up on reordering the item",
-				half.name, got, runes, half.it.bidiStart, half.it.bidiEnd, half.it.text)
-		}
-	}
-	if head.bidiStart != 7 || head.bidiEnd != 9 {
-		t.Errorf("the head is %d..%d, want 7..9", head.bidiStart, head.bidiEnd)
-	}
-	if tail.bidiStart != 9 || tail.bidiEnd != 11 {
-		t.Errorf("the tail is %d..%d, want 9..11", tail.bidiStart, tail.bidiEnd)
-	}
-	if head.bidiEnd != tail.bidiStart {
-		t.Errorf("the head ends at %d and the tail begins at %d; the two halves have "+
-			"to meet, or a character belongs to both or to neither",
-			head.bidiEnd, tail.bidiStart)
-	}
-}

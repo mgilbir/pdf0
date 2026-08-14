@@ -1,15 +1,27 @@
+// Package render writes a laid-out document into a PDF.
+//
+// It is the backend, and it is all that is left here of what used to be a
+// layout engine: the HTML parser, the CSS cascade and the layout itself are
+// github.com/mgilbir/forme, which knows nothing about PDF and is not the poorer
+// for it. What arrives here is a display list — rectangles, runs of text,
+// images, clips — and what leaves is a document.
+//
+// Render is Compose plus writePage. Everything before writePage is layout's,
+// and the seam is exact: the step that turns a display list into a document is
+// the only one that knows what a document is.
 package render
 
 import (
 	"fmt"
 	"image"
 
+	"github.com/mgilbir/forme/layout"
+	"github.com/mgilbir/forme/shape"
 	pdf0 "github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/images"
 	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/style"
 )
 
 // From a display list to a PDF page.
@@ -22,57 +34,13 @@ import (
 //     coordinate system that changed halfway through an engine is one where
 //     every sign error is plausible, so nothing above this file has ever seen
 //     PDF's.
-//   - Layout units become points. CSS px is 1/96 inch and a PDF point is 1/72,
+//   - layout.Layout units become points. CSS px is 1/96 inch and a PDF point is 1/72,
 //     so the factor is exactly 0.75.
 //
 // Both fold into the single transform §5 asks for, together with the
 // scale-to-fit factor. One "cm" at the top of the content stream, and the
 // output stays vector: text remains selectable and searchable, and no image is
 // resampled.
-
-// PageSize is the sheet a document is laid out onto.
-type PageSize struct {
-	// Width and Height are the whole sheet.
-	Width, Height style.Unit
-	// Margin is the space left around the content.
-	Margin Edges
-}
-
-// PageSizePt builds a page size from a width and height in points, which is how
-// paper is conventionally measured.
-func PageSizePt(w, h float64) PageSize {
-	return PageSize{Width: ptToUnit(w), Height: ptToUnit(h)}
-}
-
-// WithMarginPt returns the page with a uniform margin in points.
-func (p PageSize) WithMarginPt(m float64) PageSize {
-	u := ptToUnit(m)
-	p.Margin = Edges{Top: u, Right: u, Bottom: u, Left: u}
-	return p
-}
-
-// The paper sizes a document generator is actually asked for.
-var (
-	A4     = PageSizePt(595.276, 841.89).WithMarginPt(56.7) // 20mm
-	A5     = PageSizePt(419.528, 595.276).WithMarginPt(42.5)
-	Letter = PageSizePt(612, 792).WithMarginPt(54) // 0.75in
-	Legal  = PageSizePt(612, 1008).WithMarginPt(54)
-)
-
-// ptToUnit converts points to layout units: a point is 1/72 inch and a CSS
-// pixel is 1/96, so a point is 4/3 of a pixel.
-func ptToUnit(pt float64) style.Unit {
-	u, _ := style.FromPx(pt * 96 / 72)
-	return u
-}
-
-// Content is the area a document is laid out in: the sheet minus its margins.
-func (p PageSize) Content() Size {
-	return Size{
-		W: p.Width.Sub(p.Margin.Horizontal()),
-		H: p.Height.Sub(p.Margin.Vertical()),
-	}
-}
 
 // Result is what a render produces.
 //
@@ -90,21 +58,21 @@ type Result struct {
 	Scale float64
 
 	// Findings is everything the guardrails raised, in a deterministic order.
-	Findings []Finding
+	Findings []layout.Finding
 
 	// NaturalSize is what the content needed at its natural size, before any
 	// scaling. It is what a caller adjusting a template needs to know.
-	NaturalSize Size
+	NaturalSize layout.Size
 }
 
 // Options configure a render beyond the input itself.
 type Options struct {
-	// Page is the sheet. The zero value is A4 with a 20mm margin.
+	// Page is the sheet. The zero value is layout.A4 with a 20mm margin.
 	//
-	// The faces are not here. They are on Input, because a document brings its
+	// The faces are not here. They are on layout.Input, because a document brings its
 	// own with @font-face and the set it is laid out in is the caller's library
-	// with the document's faces over it — see Input.Fonts and Built.Fonts.
-	Page PageSize
+	// with the document's faces over it — see layout.Input.Fonts and Built.Fonts.
+	Page layout.PageSize
 	// MinScale is the floor §6.1 puts under scale-to-fit. A document that had
 	// to be shrunk past it is refused rather than produced illegibly. Zero uses
 	// the default of 0.5.
@@ -118,186 +86,39 @@ type Options struct {
 }
 
 // Render lays a document out and writes it onto one PDF page.
-func Render(in Input, opts Options) (Result, error) {
-	if opts.Page.Width == 0 || opts.Page.Height == 0 {
-		opts.Page = A4
+func Render(in layout.Input, opts layout.Options) (Result, error) {
+	composed := layout.Compose(in, opts)
+
+	out := Result{
+		Scale:       composed.Scale,
+		NaturalSize: composed.NaturalSize,
+		Findings:    composed.Findings,
 	}
-	if opts.MinScale == 0 {
-		opts.MinScale = 0.5
-	}
-	if opts.MinFontSizePt == 0 {
-		opts.MinFontSizePt = 6
-	}
-
-	built := Build(in)
-	rec := NewRecorder(in.Policy)
-	for _, f := range built.Findings {
-		rec.ReportDetail(f)
-	}
-
-	avail := opts.Page.Content()
-	// built.Fonts rather than in.Fonts: the document's own @font-face rules
-	// have been loaded onto the caller's library by now, and laying out with
-	// the library alone would set the page in the wrong faces.
-	root := Layout(built.Root, avail, built.Fonts, rec)
-
-	// The natural size is the far edge of the root's border box, not its margin
-	// box, and the difference is not cosmetic. A block-level box resolves an
-	// over-constrained width by widening its right margin, so the root's margin
-	// box is *always* exactly the page width — measuring that would report every
-	// document as needing precisely the space it was given, and scale-to-fit
-	// would never fire. The border box's far edges include the root's own left
-	// and top margins, since those move it, and exclude the one that was
-	// invented to make the arithmetic add up.
-	natural := Size{}
-	if root != nil {
-		natural = Size{W: root.BorderRect.Right(), H: root.BorderRect.Bottom()}
-	}
-
-	scale := fitScale(natural, avail, opts.AllowScaleUp)
-	checkScale(rec, scale, opts.MinScale)
-	checkFontSizes(rec, root, scale, opts.MinFontSizePt)
-
-	ops := Paint(root)
-	checkPageOverflow(rec, ops, avail, scale)
-
-	out := Result{Scale: scale, NaturalSize: natural}
-	if rec.Failed() {
-		out.Findings = rec.Findings()
+	if composed.Refused {
+		// A rule fired at Error severity, so the caller was told not to render
+		// rather than left to decide. Everything above this line ran, which is
+		// what makes the findings worth reading.
 		return out, nil
 	}
 
-	doc, err := writePage(ops, opts.Page, scale)
+	doc, err := writePage(composed.Ops, pageOf(opts), composed.Scale)
 	if err != nil {
 		return out, err
 	}
 	out.Document = doc
-	out.Findings = rec.Findings()
 	return out, nil
 }
 
-// fitScale is §5's factor: one number, applied to everything.
+// pageOf is the sheet Compose used, which is the one to write.
 //
-// The proposal argues this at length and the argument decides the whole shape of
-// the engine. Laying out again at a smaller size would reflow the text, which
-// moves the line breaks, which changes the height — non-monotonically, since a
-// smaller font can produce a *taller* block by breaking differently. Scaling the
-// finished layout geometrically leaves every proportion as the author designed
-// it, needs one pass, and makes the size of every element exactly its natural
-// size times this number, so a threshold check is a multiplication rather than
-// an iteration.
-func fitScale(natural, avail Size, allowUp bool) float64 {
-	s := 1.0
-	if natural.W > 0 && natural.W > avail.W {
-		s = min(s, avail.W.Px()/natural.W.Px())
+// Compose fills in the default when the caller left it zero and does not hand
+// the filled-in value back, so this repeats that one line rather than have two
+// places disagree about what layout.A4 means.
+func pageOf(opts layout.Options) layout.PageSize {
+	if opts.Page.Width == 0 || opts.Page.Height == 0 {
+		return layout.A4
 	}
-	if natural.H > 0 && natural.H > avail.H {
-		s = min(s, avail.H.Px()/natural.H.Px())
-	}
-	if allowUp && natural.W > 0 && natural.H > 0 {
-		up := min(avail.W.Px()/natural.W.Px(), avail.H.Px()/natural.H.Px())
-		if up > s {
-			s = up
-		}
-	}
-	return s
-}
-
-// checkScale is the min-scale guardrail of §6.1.
-//
-// It is the blunt one and probably the most useful: if the content had to be
-// shrunk past half to fit, the document is wrong, and no per-element threshold
-// is needed to say so.
-func checkScale(rec *Recorder, scale, floor float64) {
-	if scale >= floor {
-		return
-	}
-	rec.ReportDetail(Finding{
-		Rule: RuleMinScale,
-		Message: fmt.Sprintf(
-			"the content had to be scaled to %.0f%% to fit the page, past the floor of %.0f%%",
-			scale*100, floor*100),
-	})
-}
-
-// checkFontSizes is the min-font-size guardrail of §6.1.
-//
-// Because the scale is geometric, the effective size of every element is exactly
-// its natural size times the factor — so this is one multiplication per box,
-// computed before anything is emitted, with no iteration and no possibility of a
-// later pass invalidating it. That exactness is the whole reason §5 chose
-// geometric scaling.
-func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
-	if root == nil {
-		return
-	}
-	seen := map[style.Unit]bool{}
-	var walk func(*Fragment)
-	walk = func(f *Fragment) {
-		if f.Box != nil && len(f.Lines) > 0 {
-			size := f.Box.FontSize
-			if !seen[size] {
-				seen[size] = true
-				effective := size.Mul(scale).Pt()
-				if effective < floorPt {
-					rec.ReportDetail(Finding{
-						Rule: RuleMinFontSize,
-						Message: fmt.Sprintf(
-							"text would be set at %.2fpt, below the floor of %.2fpt"+
-								" (%.2fpt before the page scaling of %.0f%%)",
-							effective, floorPt, size.Pt(), scale*100),
-						Path: PathOf(f.Box.Element),
-					})
-				}
-			}
-		}
-		for _, c := range f.Children {
-			walk(c)
-		}
-	}
-	walk(root)
-}
-
-// checkPageOverflow is the overflow-page guardrail of §6.2.
-//
-// It should never fire. The scale of §5 is computed so that everything fits, so
-// this is a self-check on that computation as much as a guardrail on the
-// document — which is exactly why it is worth having. A threshold that verifies
-// an earlier calculation catches the case where the calculation was wrong, and
-// that is a class of fault no amount of checking the document can reach.
-//
-// Content that overflows its own *box* is the other guardrail's business; this
-// is only about leaving the page.
-func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
-	page := Rect{W: avail.W.Div(scale), H: avail.H.Div(scale)}
-	var worst Rect
-	var found bool
-
-	for _, op := range ops {
-		r, ok := op.(FillRect)
-		if !ok || r.Rect.Empty() || r.Overhang {
-			// A text decoration, and an inline box's background and border, are
-			// skipped for the reason FillRect.Overhang gives: this guard is about
-			// boxes the scale was computed from, and none of those is one.
-			continue
-		}
-		if page.Contains(r.Rect) {
-			continue
-		}
-		if !found || r.Rect.Right() > worst.Right() || r.Rect.Bottom() > worst.Bottom() {
-			worst, found = r.Rect, true
-		}
-	}
-	if !found {
-		return
-	}
-	rec.ReportDetail(Finding{
-		Rule: RuleOverflowPage,
-		Message: fmt.Sprintf(
-			"content reaches %.1f x %.1f px after scaling, outside the page's %.1f x %.1f; "+
-				"the scale-to-fit calculation did not account for it",
-			worst.Right().Px(), worst.Bottom().Px(), page.W.Px(), page.H.Px()),
-	})
+	return opts.Page
 }
 
 // writePage turns a display list into a one-page document.
@@ -309,11 +130,11 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 // subsetted to the glyphs it was asked to set, so it can only be embedded once
 // the drawing is finished — which is why AddPage takes the faces and this
 // passes the images.
-func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
+func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
 	doc := pdf0.NewDocument()
 	b := &content.Builder{}
 
-	// The one transform. Reading it right to left: layout units become points,
+	// The one transform. Reading it right to left: layout.layout units become points,
 	// the y axis is inverted, the whole thing is scaled to fit, and the result
 	// is placed inside the page's margin.
 	//
@@ -327,8 +148,12 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 	b.Save()
 	b.Concat(k, 0, 0, -k, tx, ty)
 
+	// Keyed by the shaping face, which is what the display list carries, and
+	// held as the embedding wrapper, which is what writing the document needs.
+	// Adopt does not copy: the two are the same font, and each records the
+	// glyphs the other used, which is what makes the subset come out right.
 	faces := map[object.Name]*fonts.Face{}
-	names := map[*fonts.Face]object.Name{}
+	names := map[*shape.Face]object.Name{}
 	xobjects := map[object.Name]object.Object{}
 	patterns := map[object.Name]object.Object{}
 	// Keyed by the source bytes rather than by the decoded image, so a logo
@@ -357,19 +182,19 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 
 	for _, op := range ops {
 		switch v := op.(type) {
-		case FillRect:
+		case layout.FillRect:
 			if v.Rect.Empty() {
 				continue
 			}
 			b.Save()
 			b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
-			// The rectangle is given in layout units and the transform above
-			// converts them, so the numbers written here are the layout's own.
+			// The rectangle is given in layout.layout units and the transform above
+			// converts them, so the numbers written here are the layout.layout's own.
 			b.Rect(v.Rect.X.Px(), v.Rect.Y.Px(), v.Rect.W.Px(), v.Rect.H.Px())
 			b.Fill()
 			b.Restore()
 
-		case DrawText:
+		case layout.DrawText:
 			if v.Face == nil || v.Text == "" {
 				continue
 			}
@@ -377,8 +202,9 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 			if !ok {
 				name = object.Name(fmt.Sprintf("F%d", len(names)+1))
 				names[v.Face] = name
-				faces[name] = v.Face
+				faces[name] = fonts.Adopt(v.Face)
 			}
+			face := faces[name]
 			b.Save()
 			clipTo(b, v.Clip)
 			b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
@@ -403,11 +229,11 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 			// which leaves the glyphs upright while the position still comes
 			// from the flipped system.
 			b.SetTextMatrix(1, 0, 0, -1, v.At.X.Px(), v.At.Y.Px())
-			v.Face.DrawShaped(b, shapedText(v), v.Size.Px())
+			face.DrawShaped(b, layout.ShapedText(v), v.Size.Px())
 			b.EndText()
 			b.Restore()
 
-		case DrawImage:
+		case layout.DrawImage:
 			if v.Image == nil || v.Rect.Empty() {
 				continue
 			}
@@ -428,7 +254,7 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 			b.Draw(name)
 			b.Restore()
 
-		case TileImage:
+		case layout.TileImage:
 			if v.Image == nil || v.Clip.Empty() || v.Tile.Empty() {
 				continue
 			}
@@ -500,7 +326,7 @@ func writePage(ops []Op, page PageSize, scale float64) (*pdf0.Document, error) {
 // "W" without a path-painting operator afterwards is a malformed content
 // stream, and "n" is the operator that means "no paint" — which is why the
 // pair is written together here and not split across a helper.
-func clipTo(b *content.Builder, c Clip) {
+func clipTo(b *content.Builder, c layout.Clip) {
 	if !c.Active {
 		return
 	}
@@ -528,17 +354,17 @@ func clipTo(b *content.Builder, c Clip) {
 // the page — not to the space in force where the pattern is painted (ISO 32000-2
 // 8.7.3.1). So the page transform this content stream set up with a "cm" does
 // not apply to it, and has to be repeated here. That is what k, tx and ty are:
-// the same numbers, so that pattern space is the layout's own coordinate system,
+// the same numbers, so that pattern space is the layout.layout's own coordinate system,
 // y downwards, and the cell below can be written in exactly the units every
 // rectangle in the display list is in.
 //
 // Getting this wrong does not produce a blank page. It produces a background
 // tiled at three quarters of the right size, in the wrong place, which looks like
-// a layout bug anywhere except here.
-func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v TileImage, k, tx, ty float64) (object.Object, error) {
+// a layout.layout bug anywhere except here.
+func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v layout.TileImage, k, tx, ty float64) (object.Object, error) {
 	cell := &content.Builder{}
 	cell.Save()
-	// The same placement DrawImage uses, in the same coordinates: an image
+	// The same placement layout.DrawImage uses, in the same coordinates: an image
 	// XObject fills the unit square, so the matrix is the position and the
 	// negative vertical scale is what puts the picture the right way up in a
 	// coordinate system whose y grows downwards.
@@ -592,32 +418,4 @@ func numberOf(v float64) object.Object {
 		return object.Integer(int(v))
 	}
 	return object.Real(v)
-}
-
-// shapedText is the string handed to the shaper for one text run.
-//
-// The run's own text is in logical order and carries no direction of its own: a
-// run of punctuation between two Hebrew words is right-to-left because of
-// characters that are in other runs by now. The shaper applies UAX #9 to the
-// string it is given, so left to itself it would answer for that string rather
-// than for the paragraph the run came out of, and a lone bracket would come out
-// facing the wrong way.
-//
-// So the direction the layout resolved is stated to it, in the one vocabulary a
-// string has for saying so: an explicit right-to-left override in front of the
-// text. That is exactly what the character means; it is a default-ignorable code
-// point, so the shaper drops it before any glyph is chosen; and what comes back
-// is the run's glyphs in the order they are drawn, with rule L4's mirroring
-// applied.
-//
-// The override goes here and not into the run's text, because the run's text is
-// what a reader copies out of the finished page.
-func shapedText(v DrawText) string {
-	if !v.RTL {
-		// A left-to-right run needs nothing. Every character in it resolved to
-		// an even level, so the shaper's own answer for the string is already
-		// this one.
-		return v.Text
-	}
-	return "‮" + v.Text
 }
