@@ -6,8 +6,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/internal/grapheme"
 	"github.com/mgilbir/pdf0/style"
 )
 
@@ -2372,7 +2372,7 @@ func splitAtBreaks(text string, ws whiteSpace, wb wordBreak, lb lineBreak) ([]pi
 	// A Scanner rather than a list of offsets: the scan is already linear, and a
 	// list would allocate one int per character for Latin text, where every
 	// character is its own cluster and nothing is learned.
-	var clusters grapheme.Scanner
+	var clusters segment.Scanner
 	// deferBreak says the previous character allows a line to end after it, and
 	// the opportunity has not been taken yet.
 	//
@@ -4096,7 +4096,7 @@ func (l *layouter) breakInsideWord(item inlineItem, width style.Unit) (head inli
 	if !item.breakWord || item.face == nil || width <= 0 || item.text == "" {
 		return inlineItem{}, 0, false
 	}
-	bounds := grapheme.Boundaries(nil, item.text)
+	bounds := segment.Boundaries(nil, item.text)
 	if len(bounds) == 0 {
 		return inlineItem{}, 0, false // one cluster: nothing to cut
 	}

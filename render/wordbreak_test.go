@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/pdf0/internal/grapheme"
+	"github.com/mgilbir/forme/segment"
 )
 
 // word-break: break-all, CSS Text §5.2.
@@ -169,7 +169,7 @@ func TestSplitAtBreaksCutsAtClusterBoundariesOnly(t *testing.T) {
 		// Every cut must fall on a boundary the segmenter agrees with, and the
 		// pieces must still spell the text.
 		allowed := map[int]bool{0: true, len(text): true}
-		for _, b := range grapheme.Boundaries(nil, text) {
+		for _, b := range segment.Boundaries(nil, text) {
 			allowed[b] = true
 		}
 		at := 0
