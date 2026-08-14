@@ -934,3 +934,58 @@ func TestATextRunIsKeptWhenOnlyItsReservedBoxReachesTheClip(t *testing.T) {
 			reserved.Y.Px(), clipBottom)
 	}
 }
+
+// TestAClipCutsARunByItsLettersAndNotByItsFace is §11.1 asked of the text in
+// hand rather than of the font it is set in.
+//
+// A face's descent is how far below the baseline it reserves room, for the
+// deepest tail it has. Almost no run uses it: a line of capitals ends at the
+// baseline, and a box that stops between the two cuts nothing. Answering from
+// the face marks that run as cut, and a cut run is a different mark from the
+// same run drawn whole — so two documents that put the same letters in the same
+// place are ruled different over a descender neither of them contains.
+//
+// The pair is the assertion. Both documents are the same but for three letters,
+// both are clipped at the same y, and the face's descent puts both runs' ink
+// past it. Only their own glyphs tell them apart.
+func TestAClipCutsARunByItsLettersAndNotByItsFace(t *testing.T) {
+	// The clip edge sits between the baseline, where capitals end, and the
+	// face's declared descent, which is where both runs appear to end if the
+	// question is asked of the face.
+	const css = noDefaults + `
+		#o { width: 900px; height: 85px; overflow: hidden }
+		#b { font-size: 100px; line-height: 100px; font-family: Courier }`
+
+	run := func(text string) DrawText {
+		t.Helper()
+		ops := paintOf(t, `<div id="o"><div id="b">`+text+`</div></div>`, css)
+		for _, op := range ops {
+			if v, ok := op.(DrawText); ok && v.Text == text {
+				return v
+			}
+		}
+		t.Fatalf("the run %q did not paint\n%s", text, sketchClips(ops))
+		return DrawText{}
+	}
+
+	flat, tailed := run("TIM"), run("pqy")
+
+	if flat.Clip.Active {
+		t.Errorf("a line of capitals ending at the baseline was clipped by a box "+
+			"below it: %v", flat.Clip)
+	}
+	if !tailed.Clip.Active {
+		t.Errorf("a line of descenders reaching past the box was not clipped")
+	}
+
+	// And the guard on the fixture: if the face's own descent stopped reaching
+	// past the clip, the two runs would be told apart by the box rather than by
+	// their glyphs and this would prove nothing.
+	d := flat.Face.Descriptor()
+	declared := flat.At.Y.Add(flat.Size.Mul(float64(-d.Descent) / float64(flat.Face.UnitsPerEm())))
+	if declared.Px() <= 85 {
+		t.Fatalf("the face's descent puts the capitals' ink at y=%g, inside the "+
+			"85px clip — this no longer tests the case it was written for",
+			declared.Px())
+	}
+}

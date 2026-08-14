@@ -376,7 +376,7 @@ type inlineItem struct {
 	// The flag is separate because zero is a real level, the left-to-right one,
 	// and a box with no content on the line at all has to stay distinguishable
 	// from a box whose content is left-to-right.
-	insetLevel      uint8
+	insetLevel      int
 	insetLevelKnown bool
 	// float is the box of a float met in this run of inline content. It carries
 	// no text of its own: it is a marker saying "a float belongs here", because
@@ -454,7 +454,7 @@ type inlineItem struct {
 	// that needs no reordering, which is what tells the line builder there is
 	// nothing to do.
 	para  *bidiParagraph
-	level uint8
+	level int
 }
 
 // inlineContent lays a box's inline children into lines and returns the height

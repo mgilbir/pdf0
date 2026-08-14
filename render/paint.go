@@ -687,22 +687,34 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 	return kept
 }
 
-// textInk is where a run of text puts ink, as far as anything short of a glyph
-// rasteriser can say.
+// textInk is where a run of text puts ink.
 //
-// The face's declared ascent and descent: the top of a "d" and the bottom of a
-// "p", which is where letters sit. It is the rectangle for every question about
-// what a reader can *see* — whether a run is cut, whether it is buried under
-// something opaque — because those questions must not be answered yes about a
-// run nobody sees cut or hidden.
+// The glyphs the run is actually made of, which the face reads out of its own
+// tables — the glyph headers of a real font, Adobe's published boxes for the
+// standard fourteen. It is the rectangle for every question about what a reader
+// can *see*: whether a run is cut, whether it is buried under something opaque.
+// Those must not be answered yes about a run nobody sees cut or hidden, and the
+// face's own ascent and descent answer yes far too often. They describe the
+// face — the room a line of it needs, tallest accent and deepest tail included
+// — and almost no run uses all of it. A four-em ellipsis is three dots on the
+// baseline; asked of Courier's descent it appears to hang ten times as far
+// below the line as it does, and a box ending under the baseline appears to cut
+// it.
+//
+// The face's numbers remain the fallback for a font that cannot say, which is a
+// CFF-flavoured one: its glyph extents are in the charstrings and reading them
+// means interpreting them. That fallback errs large, which for these questions
+// is the direction that calls two documents different rather than the same.
 //
 // It is deliberately not the rectangle for the question of whether to keep a run
-// at all; textInkReserved is, and says why. A face that declares neither number
-// falls back to a generous em above the baseline and a third of one below.
+// at all; textInkReserved is, and says why.
 func textInk(v DrawText) Rect {
 	above, below := v.Size, v.Size.Mul(0.3)
 	if v.Face != nil {
-		if upem := float64(v.Face.UnitsPerEm()); upem > 0 {
+		if a, b, ok := v.Face.InkExtent(v.Text, v.Size.Px()); ok {
+			above, _ = style.FromPx(a)
+			below, _ = style.FromPx(b)
+		} else if upem := float64(v.Face.UnitsPerEm()); upem > 0 {
 			d := v.Face.Descriptor()
 			above = v.Size.Mul(float64(d.Ascent) / upem)
 			below = v.Size.Mul(-float64(d.Descent) / upem)
