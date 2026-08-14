@@ -45,27 +45,6 @@ func renderOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc ...strin
 // output with our own reader is not an oracle. What it does catch is the whole
 // class of emission faults that make a file unopenable, which is worth having
 // before anything subtler.
-// TestRenderProducesAReadablePDF is the end-to-end check: a document goes in and
-// a PDF that pdf0 itself can read comes out.
-//
-// It is a self-check and labelled as one — §7.2 is explicit that validating our
-// output with our own reader is not an oracle. What it does catch is the whole
-// class of emission faults that make a file unopenable, which is worth having
-// before anything subtler.
-// TestRenderProducesAReadablePDF is the end-to-end check: a document goes in and
-// a PDF that pdf0 itself can read comes out.
-//
-// It is a self-check and labelled as one — §7.2 is explicit that validating our
-// output with our own reader is not an oracle. What it does catch is the whole
-// class of emission faults that make a file unopenable, which is worth having
-// before anything subtler.
-// TestRenderProducesAReadablePDF is the end-to-end check: a document goes in and
-// a PDF that pdf0 itself can read comes out.
-//
-// It is a self-check and labelled as one — §7.2 is explicit that validating our
-// output with our own reader is not an oracle. What it does catch is the whole
-// class of emission faults that make a file unopenable, which is worth having
-// before anything subtler.
 func TestRenderProducesAReadablePDF(t *testing.T) {
 	got := renderOf(t, `<h1>A heading</h1><p>Some text in a paragraph.</p>`, layout.Options{})
 	if got.Document == nil {
@@ -100,12 +79,6 @@ func TestRenderProducesAReadablePDF(t *testing.T) {
 
 // TestPageGeometry pins the page a document lands on, in points, since that is
 // what a PDF records.
-// TestPageGeometry pins the page a document lands on, in points, since that is
-// what a PDF records.
-// TestPageGeometry pins the page a document lands on, in points, since that is
-// what a PDF records.
-// TestPageGeometry pins the page a document lands on, in points, since that is
-// what a PDF records.
 func TestPageGeometry(t *testing.T) {
 	got := renderOf(t, `<p>x</p>`, layout.Options{Page: layout.A4})
 	if got.Document == nil {
@@ -132,9 +105,6 @@ func TestPageGeometry(t *testing.T) {
 }
 
 // mediaBoxOf reads a page's /MediaBox, resolving it through the document.
-// mediaBoxOf reads a page's /MediaBox, resolving it through the document.
-// mediaBoxOf reads a page's /MediaBox, resolving it through the document.
-// mediaBoxOf reads a page's /MediaBox, resolving it through the document.
 func mediaBoxOf(t *testing.T, doc *pdf0.Document, page *object.Dictionary) [4]float64 {
 	t.Helper()
 	arr, ok := doc.Resolve(page.Get("MediaBox")).(object.Array)
@@ -155,12 +125,6 @@ func mediaBoxOf(t *testing.T, doc *pdf0.Document, page *object.Dictionary) [4]fl
 	return out
 }
 
-// contentStreamOf renders a document and returns the bytes of its page's content
-// stream, which is the only place the coordinate transform is visible.
-// contentStreamOf renders a document and returns the bytes of its page's content
-// stream, which is the only place the coordinate transform is visible.
-// contentStreamOf renders a document and returns the bytes of its page's content
-// stream, which is the only place the coordinate transform is visible.
 // contentStreamOf renders a document and returns the bytes of its page's content
 // stream, which is the only place the coordinate transform is visible.
 func contentStreamOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc ...string) string {
@@ -192,14 +156,6 @@ func contentStreamOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc .
 	return string(data)
 }
 
-// firstMatrix returns the operands of the first "cm" in a content stream.
-// TestTheTransformIsWrittenOnce pins the one "cm" this stage exists to emit, and
-// every conversion folded into it.
-//
-// Nothing above pdfout has ever seen PDF's coordinate system, so this matrix is
-// the only place the flip happens — and it was entirely untested until a planted
-// defect showed that inverting it, dropping the unit conversion, dropping the
-// scale and dropping the page margin all left every other test passing.
 // firstMatrix returns the operands of the first "cm" in a content stream.
 // TestTheTransformIsWrittenOnce pins the one "cm" this stage exists to emit, and
 // every conversion folded into it.
@@ -249,15 +205,6 @@ func TestTheTransformIsWrittenOnce(t *testing.T) {
 // TestTheTransformCarriesTheScale pins that §5's factor is in the matrix rather
 // than applied to the geometry. One "cm" is what keeps the output vector: the
 // text stays selectable and no image is resampled.
-// TestTheTransformCarriesTheScale pins that §5's factor is in the matrix rather
-// than applied to the geometry. One "cm" is what keeps the output vector: the
-// text stays selectable and no image is resampled.
-// TestTheTransformCarriesTheScale pins that §5's factor is in the matrix rather
-// than applied to the geometry. One "cm" is what keeps the output vector: the
-// text stays selectable and no image is resampled.
-// TestTheTransformCarriesTheScale pins that §5's factor is in the matrix rather
-// than applied to the geometry. One "cm" is what keeps the output vector: the
-// text stays selectable and no image is resampled.
 func TestTheTransformCarriesTheScale(t *testing.T) {
 	avail := layout.A4.Content()
 	stream := contentStreamOf(t, `<div id="a"></div>`,
@@ -276,18 +223,6 @@ func TestTheTransformCarriesTheScale(t *testing.T) {
 	}
 }
 
-// TestTextIsNotMirrored pins the consequence of the flip that is easiest to
-// miss. The transform inverts the y axis, so text drawn through it would come
-// out mirrored; the text matrix inverts it again locally, which leaves the
-// glyphs upright while the position still comes from the flipped system.
-// TestTextIsNotMirrored pins the consequence of the flip that is easiest to
-// miss. The transform inverts the y axis, so text drawn through it would come
-// out mirrored; the text matrix inverts it again locally, which leaves the
-// glyphs upright while the position still comes from the flipped system.
-// TestTextIsNotMirrored pins the consequence of the flip that is easiest to
-// miss. The transform inverts the y axis, so text drawn through it would come
-// out mirrored; the text matrix inverts it again locally, which leaves the
-// glyphs upright while the position still comes from the flipped system.
 // TestTextIsNotMirrored pins the consequence of the flip that is easiest to
 // miss. The transform inverts the y axis, so text drawn through it would come
 // out mirrored; the text matrix inverts it again locally, which leaves the
@@ -317,27 +252,6 @@ func TestTextIsNotMirrored(t *testing.T) {
 	}
 }
 
-// TestCoordinatesFlipExactlyOnce pins the conversion this stage exists for. CSS
-// puts the origin at the top left with y downwards and PDF at the bottom left
-// with y upwards, so a box near the top of the document must be near the *top*
-// of the page — which is a large y in PDF coordinates.
-//
-// Getting this wrong produces a document that is upside down, which is obvious,
-// or one that is off by the page height, which is not.
-// TestCoordinatesFlipExactlyOnce pins the conversion this stage exists for. CSS
-// puts the origin at the top left with y downwards and PDF at the bottom left
-// with y upwards, so a box near the top of the document must be near the *top*
-// of the page — which is a large y in PDF coordinates.
-//
-// Getting this wrong produces a document that is upside down, which is obvious,
-// or one that is off by the page height, which is not.
-// TestCoordinatesFlipExactlyOnce pins the conversion this stage exists for. CSS
-// puts the origin at the top left with y downwards and PDF at the bottom left
-// with y upwards, so a box near the top of the document must be near the *top*
-// of the page — which is a large y in PDF coordinates.
-//
-// Getting this wrong produces a document that is upside down, which is obvious,
-// or one that is off by the page height, which is not.
 // TestCoordinatesFlipExactlyOnce pins the conversion this stage exists for. CSS
 // puts the origin at the top left with y downwards and PDF at the bottom left
 // with y upwards, so a box near the top of the document must be near the *top*
@@ -382,15 +296,6 @@ func TestCoordinatesFlipExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestBackgroundsAndBordersPaint pins that a box's decorations reach the display
-// list, in the order the specification puts them: the background under the
-// border, and both under the content.
-// TestBackgroundsAndBordersPaint pins that a box's decorations reach the display
-// list, in the order the specification puts them: the background under the
-// border, and both under the content.
-// TestBackgroundsAndBordersPaint pins that a box's decorations reach the display
-// list, in the order the specification puts them: the background under the
-// border, and both under the content.
 // TestBackgroundsAndBordersPaint pins that a box's decorations reach the display
 // list, in the order the specification puts them: the background under the
 // border, and both under the content.
@@ -468,36 +373,6 @@ func TestRenderIsTotal(t *testing.T) {
 	}
 }
 
-// TestRenderIsDeterministic pins that two renders of one document agree. It is
-// the property §7's comparison testing needs, and the one that map iteration
-// quietly breaks.
-//
-// The comparison is of the *display list* rather than of the file, and that is
-// not a weaker claim — it is the right one. A PDF carries an /ID, which is a
-// unique identifier for the file and is deliberately different every time; two
-// byte-identical files would mean that identifier was not doing its job. The
-// display list is the stage §7 attaches at, and it is what has to be
-// reproducible.
-// TestRenderIsDeterministic pins that two renders of one document agree. It is
-// the property §7's comparison testing needs, and the one that map iteration
-// quietly breaks.
-//
-// The comparison is of the *display list* rather than of the file, and that is
-// not a weaker claim — it is the right one. A PDF carries an /ID, which is a
-// unique identifier for the file and is deliberately different every time; two
-// byte-identical files would mean that identifier was not doing its job. The
-// display list is the stage §7 attaches at, and it is what has to be
-// reproducible.
-// TestRenderIsDeterministic pins that two renders of one document agree. It is
-// the property §7's comparison testing needs, and the one that map iteration
-// quietly breaks.
-//
-// The comparison is of the *display list* rather than of the file, and that is
-// not a weaker claim — it is the right one. A PDF carries an /ID, which is a
-// unique identifier for the file and is deliberately different every time; two
-// byte-identical files would mean that identifier was not doing its job. The
-// display list is the stage §7 attaches at, and it is what has to be
-// reproducible.
 // TestRenderIsDeterministic pins that two renders of one document agree. It is
 // the property §7's comparison testing needs, and the one that map iteration
 // quietly breaks.
@@ -709,4 +584,152 @@ func itoa(i int) string {
 		i /= 10
 	}
 	return string(b)
+}
+
+// TestHTMLAndCSSAndAPageSizeMakeAPDF is the whole of what this repository and
+// forme were built to do, asserted in one place.
+//
+// The three inputs are a document, a stylesheet and a sheet of paper; the
+// output is a PDF. Every other test here is about one step of that, and each
+// would still pass if the steps had stopped fitting together — the layout
+// engine is a separate module now, and nothing else checks that the two ends of
+// the seam still meet. examples/html_to_pdf is the same path with prose around
+// it, and CI runs it.
+func TestHTMLAndCSSAndAPageSizeMakeAPDF(t *testing.T) {
+	// A5 in points, with a 15mm margin: not a named size, so the numbers have
+	// to survive the whole way rather than being matched against a constant.
+	const wantW, wantH = 419.53, 595.28
+	page := layout.PageSizePt(wantW, wantH).WithMarginPt(42.52)
+
+	got, err := Render(layout.Input{
+		HTML: `<h1>Aurora</h1>
+		       <table><tr><td>Grating</td><td class="n">445.50</td></tr></table>
+		       <p class="note">Payment within 30 days.</p>`,
+		CSS: []layout.Stylesheet{{Source: `
+			body { font-family: Helvetica; font-size: 11pt }
+			h1 { font-size: 20pt; border-bottom: 2pt solid #b8860b }
+			table { width: 100%; border-collapse: collapse }
+			td { border-bottom: 0.5pt solid #cccccc }
+			.n { text-align: right }
+			.note { font-size: 9pt; color: #666666 }`}},
+	}, layout.Options{Page: page})
+	if err != nil {
+		t.Fatalf("rendering: %v", err)
+	}
+	if got.Document == nil {
+		t.Fatalf("no document was produced: %v", got.Findings)
+	}
+	if len(got.Findings) != 0 {
+		t.Errorf("an ordinary document raised %v", got.Findings)
+	}
+	if got.Scale != 1 {
+		t.Errorf("the content was scaled to %v; it fits at full size", got.Scale)
+	}
+
+	var buf bytes.Buffer
+	if err := got.Document.Write(&buf); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+	doc, err := pdf0.Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("the document pdf0 wrote, pdf0 cannot read: %v", err)
+	}
+
+	pages := doc.PageList()
+	if len(pages) != 1 {
+		t.Fatalf("the document has %d pages, want 1", len(pages))
+	}
+	// The sheet the caller asked for, in the units a PDF records.
+	box := mediaBoxOf(t, doc, pages[0])
+	if math.Abs(box[2]-wantW) > 0.01 || math.Abs(box[3]-wantH) > 0.01 {
+		t.Errorf("the page is %v x %v pt, want %v x %v", box[2], box[3], wantW, wantH)
+	}
+
+	// The text arrived, in reading order.
+	text := doc.ExtractText()
+	for _, want := range []string{"Aurora", "Grating", "445.50", "Payment within 30 days."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the extracted text is missing %q; it is %q", want, text)
+		}
+	}
+
+	// And the stylesheet was obeyed, which is the half a text extraction cannot
+	// show. It is asked of the *content stream of this document* and not of a
+	// second layout run: the point of the test is that the two ends of the seam
+	// meet, and a render that dropped the stylesheets on the way in would still
+	// have satisfied a separately composed control. That is not hypothetical —
+	// it is what the first version of this test did, and planting the fault
+	// found it green.
+	stream := contentStreamOf(t, `<h1>Aurora</h1><p class="note">Payment within 30 days.</p>`,
+		layout.Options{Page: page}, `
+			body { font-family: Helvetica; font-size: 11pt }
+			h1 { font-size: 20pt; border-bottom: 2pt solid #b8860b }
+			.note { font-size: 9pt }`)
+
+	// The heading's rule, in the colour the stylesheet names. The operands are
+	// parsed rather than matched as text: a PDF states them at full float
+	// precision, and pinning that spelling would be a test of strconv.
+	if !hasFill(stream, 0xb8/255.0, 0x86/255.0, 0x0b/255.0) {
+		t.Errorf("no fill in #b8860b — the heading's border-bottom was not painted "+
+			"in the colour the stylesheet gave it:\n%s", stream)
+	}
+	// The two sizes, which only the stylesheet asks for. A PDF states them on
+	// Tf in the units the text matrix is in, which here is CSS pixels: 20pt is
+	// 26.67 of them and 9pt is 12.
+	sizes := fontSizes(stream)
+	if !hasSize(sizes, 20*4/3.0) || !hasSize(sizes, 9*4/3.0) {
+		t.Errorf("the text is set at %v; the stylesheet asks for a 20pt heading "+
+			"and a 9pt note, which is %.2f and %.2f in the page's units",
+			sizes, 20*4/3.0, 9*4/3.0)
+	}
+}
+
+// hasFill reports whether the content stream sets a non-stroking colour close
+// to the one given. Close, because a channel is written as a float.
+func hasFill(stream string, r, g, b float64) bool {
+	for _, line := range strings.Split(stream, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 4 || f[3] != "rg" {
+			continue
+		}
+		var got [3]float64
+		ok := true
+		for i := range got {
+			v, err := strconv.ParseFloat(f[i], 64)
+			if err != nil {
+				ok = false
+				break
+			}
+			got[i] = v
+		}
+		if ok && math.Abs(got[0]-r) < 0.002 && math.Abs(got[1]-g) < 0.002 &&
+			math.Abs(got[2]-b) < 0.002 {
+			return true
+		}
+	}
+	return false
+}
+
+// fontSizes is every size the content stream selects with Tf.
+func fontSizes(stream string) []float64 {
+	var out []float64
+	for _, line := range strings.Split(stream, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 || f[2] != "Tf" {
+			continue
+		}
+		if v, err := strconv.ParseFloat(f[1], 64); err == nil {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func hasSize(sizes []float64, want float64) bool {
+	for _, s := range sizes {
+		if math.Abs(s-want) < 0.05 {
+			return true
+		}
+	}
+	return false
 }
