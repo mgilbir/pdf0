@@ -2,7 +2,9 @@ package render
 
 import (
 	"bytes"
+	"github.com/mgilbir/forme/layout"
 	"image"
+	"image/color"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,17 +26,17 @@ func renderWithImages(t *testing.T, htmlSrc string, cssSrc ...string) Result {
 	t.Helper()
 	dir := t.TempDir()
 	writePNG(t, filepath.Join(dir, "wide.png"), 40, 20)
-	res, err := NewDirResolver(dir)
+	res, err := layout.NewDirResolver(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { res.Close() })
 
-	in := Input{HTML: htmlSrc, Resources: res}
+	in := layout.Input{HTML: htmlSrc, Resources: res}
 	for _, c := range cssSrc {
-		in.CSS = append(in.CSS, Stylesheet{Source: c})
+		in.CSS = append(in.CSS, layout.Stylesheet{Source: c})
 	}
-	got, err := Render(in, Options{})
+	got, err := Render(in, layout.Options{})
 	if err != nil {
 		t.Fatalf("rendering: %v", err)
 	}
@@ -89,7 +91,7 @@ func TestImageBecomesAnXObject(t *testing.T) {
 //
 // An image XObject is painted into the unit square, so the matrix before the Do
 // *is* the placement. The vertical scale is negative and that is not a mirror:
-// layout's y increases downwards, so the image's own bottom edge belongs at the
+// layout.layout's y increases downwards, so the image's own bottom edge belongs at the
 // rectangle's largest y. Getting the sign wrong draws the picture upside down
 // above the box instead of the right way up inside it — which is invisible in a
 // solid-colour test image and obvious in a photograph.
@@ -166,21 +168,21 @@ func TestImageWithTransparencyGetsASoftMask(t *testing.T) {
 	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
-			img.SetNRGBA(x, y, colorNRGBA(0, 0, 255, uint8(x*60)))
+			img.SetNRGBA(x, y, color.NRGBA{R: 0, G: 0, B: 255, A: uint8(x * 60)})
 		}
 	}
 	writeImage(t, filepath.Join(dir, "fade.png"), img)
 
-	res, err := NewDirResolver(dir)
+	res, err := layout.NewDirResolver(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Close()
-	got, err := Render(Input{
+	got, err := Render(layout.Input{
 		HTML:      `<div><img src="fade.png"></div>`,
-		CSS:       []Stylesheet{{Source: noDefaults}},
+		CSS:       []layout.Stylesheet{{Source: noDefaults}},
 		Resources: res,
-	}, Options{})
+	}, layout.Options{})
 	if err != nil {
 		t.Fatalf("rendering: %v", err)
 	}
@@ -299,10 +301,10 @@ func TestRepeatingBackgroundBecomesATilingPattern(t *testing.T) {
 	// page transform would step by 40 and 20 instead, and the background would
 	// tile a third too coarsely with no other symptom.
 	//
-	// The matrix carries the scale, so the numbers here are the layout's own and
+	// The matrix carries the scale, so the numbers here are the layout.layout's own and
 	// the matrix is what has to be checked for the conversion.
 	if s := stream.Dict.Get("XStep"); s != object.Integer(40) {
-		t.Errorf("the pattern's /XStep is %v, want 40 — the tile's width in layout units", s)
+		t.Errorf("the pattern's /XStep is %v, want 40 — the tile's width in layout.layout units", s)
 	}
 	if s := stream.Dict.Get("YStep"); s != object.Integer(20) {
 		t.Errorf("the pattern's /YStep is %v, want 20", s)

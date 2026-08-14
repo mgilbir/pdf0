@@ -2,6 +2,7 @@ package render
 
 import (
 	"bytes"
+	"github.com/mgilbir/forme/layout"
 	"strings"
 	"testing"
 
@@ -19,10 +20,10 @@ import (
 // text.
 
 // drawn joins the text of every run painted, in painting order.
-func drawn(ops []Op) string {
+func drawn(ops []layout.Op) string {
 	var out strings.Builder
 	for _, op := range ops {
-		if t, ok := op.(DrawText); ok {
+		if t, ok := op.(layout.DrawText); ok {
 			out.WriteString(t.Text)
 		}
 	}
@@ -133,10 +134,10 @@ func TestTextTransformReachesTheExtractedText(t *testing.T) {
 	// The PDF carries what was drawn, so a transformed heading extracts in the
 	// case it was set in. This pins the consequence rather than leaving it to be
 	// discovered by someone copying text out of a page.
-	res, err := Render(Input{
+	res, err := Render(layout.Input{
 		HTML: `<div id="p">quiet</div>`,
-		CSS:  []Stylesheet{{Source: `#p { text-transform: uppercase }`}},
-	}, Options{})
+		CSS:  []layout.Stylesheet{{Source: `#p { text-transform: uppercase }`}},
+	}, layout.Options{})
 	if err != nil {
 		t.Fatalf("rendering: %v", err)
 	}
