@@ -65,26 +65,6 @@ type Result struct {
 	NaturalSize layout.Size
 }
 
-// Options configure a render beyond the input itself.
-type Options struct {
-	// Page is the sheet. The zero value is layout.A4 with a 20mm margin.
-	//
-	// The faces are not here. They are on layout.Input, because a document brings its
-	// own with @font-face and the set it is laid out in is the caller's library
-	// with the document's faces over it — see layout.Input.Fonts and Built.Fonts.
-	Page layout.PageSize
-	// MinScale is the floor §6.1 puts under scale-to-fit. A document that had
-	// to be shrunk past it is refused rather than produced illegibly. Zero uses
-	// the default of 0.5.
-	MinScale float64
-	// MinFontSizePt is the floor under an effective font size, in points. Zero
-	// uses the default of 6.
-	MinFontSizePt float64
-	// AllowScaleUp lets an underfull page be enlarged to fill the sheet. It is
-	// off by default because it is surprising and it degrades images.
-	AllowScaleUp bool
-}
-
 // Render lays a document out and writes it onto one PDF page.
 func Render(in layout.Input, opts layout.Options) (Result, error) {
 	composed := layout.Compose(in, opts)
