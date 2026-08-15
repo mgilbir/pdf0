@@ -70,10 +70,6 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	if len(f.Used()) == 0 {
 		return object.IndirectRef{}, errEmbedBeforeUse
 	}
-	if err := refuseCIDKeyed(f); err != nil {
-		return object.IndirectRef{}, err
-	}
-
 	program, kept, err := f.SubsetGlyphs()
 	if err != nil {
 		return object.IndirectRef{}, err
@@ -99,7 +95,7 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// subset, and its contents are checked against the embedded program — so it
 	// is written from the same kept set the subsetter used, not from the
 	// original font.
-	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: cidSetBits(kept, f.NumGlyphs())}
+	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: f.cidSetBits(kept)}
 	cidSet.Dict.Set("Length", object.Integer(len(cidSet.Data)))
 	cidSetRef := doc.Add(cidSet)
 
@@ -138,14 +134,22 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 		cidFont.Set("Subtype", object.Name("CIDFontType2"))
 	}
 	cidFont.Set("BaseFont", baseFont)
+	// §9.7.4.2: the collection the descendant's CIDs are numbered in, which
+	// must be compatible with the glyph source's own. A CID-keyed CFF states
+	// one and it is read from the program; everything else is addressed by
+	// glyph index, and Adobe-Identity-0 is the way to say that.
+	registry, ordering, supplement := "Adobe", "Identity", 0
+	if f.cidKeyed && f.registry != "" && f.ordering != "" {
+		registry, ordering, supplement = f.registry, f.ordering, f.supplement
+	}
 	sysInfo := &object.Dictionary{}
-	sysInfo.Set("Registry", object.String{Value: []byte("Adobe")})
-	sysInfo.Set("Ordering", object.String{Value: []byte("Identity")})
-	sysInfo.Set("Supplement", object.Integer(0))
+	sysInfo.Set("Registry", object.String{Value: []byte(registry)})
+	sysInfo.Set("Ordering", object.String{Value: []byte(ordering)})
+	sysInfo.Set("Supplement", object.Integer(supplement))
 	cidFont.Set("CIDSystemInfo", sysInfo)
 	cidFont.Set("FontDescriptor", descriptorRef)
 	cidFont.Set("DW", widthNumber(defaultWidth))
-	if w := widthsArray(advances, defaultWidth); len(w) > 0 {
+	if w := f.widthsArray(advances, defaultWidth, kept); len(w) > 0 {
 		cidFont.Set("W", w)
 	}
 	// Identity: a CID is a glyph index, which is what Identity-H encoding
@@ -272,39 +276,6 @@ func (f *Face) bboxArray(d Descriptor) object.Array {
 	}
 }
 
-// errCIDKeyed is a CID-keyed CFF offered for embedding.
-var errCIDKeyed = errors.New("fonts: cannot embed a CID-keyed CFF font: its " +
-	"CIDs are not its glyph indices, and this package writes /W and " +
-	"/CIDSystemInfo as though they were")
-
-// refuseCIDKeyed stops a CID-keyed CFF becoming a document that looks finished
-// and shows the wrong glyphs.
-//
-// A CIDFontType0 is addressed by CID: a character code goes into the font's
-// charset and comes out as a glyph index. Everything below writes the two as
-// though they were one number — /W is built from advances indexed by glyph, and
-// /CIDSystemInfo declares the Identity ordering, which says exactly that. For a
-// font whose charset is the identity they are the same and nothing is wrong;
-// for a real CJK face they are nothing alike, and the reader draws whichever
-// glyph happens to carry the number.
-//
-// forme refused to *read* such a font until v0.2.0, which was too strict —
-// shaping never needs a CID, and every static Noto CJK face is one of these. So
-// reading and measuring work now, and this is the narrower refusal that
-// replaces it, at the step where the two numberings actually part.
-//
-// Lifting it is a real piece of work rather than a missing condition: /W has to
-// be keyed by CID, /CIDSystemInfo has to carry the font's own registry and
-// ordering instead of Identity, and the subsetter has to keep the charset
-// consistent with what it kept. font.Program.GIDToCID is the mapping that makes
-// it possible; nothing here uses it yet.
-func refuseCIDKeyed(f *Face) error {
-	if f.cidKeyed {
-		return errCIDKeyed
-	}
-	return nil
-}
-
 // widthsArray builds /W from the program's own advances, in the
 // consecutive-run form ISO 32000-2 9.7.4.3 defines.
 //
@@ -312,20 +283,43 @@ func refuseCIDKeyed(f *Face) error {
 // anything the caller supplies, because PDF/A checks the two against each
 // other: a /W that disagrees with the program is a finding, and the only way to
 // be sure they agree is to have one source.
-func widthsArray(advances []float64, defaultWidth float64) object.Array {
+func (f *Face) widthsArray(advances []float64, defaultWidth float64, kept []int) object.Array {
+	// Keyed by CID, which is what the code in the content stream is. For every
+	// font but a CID-keyed CFF the CID is the glyph index and this is the array
+	// it always was; for one of those the two are different numberings, and
+	// writing the glyph's own number here would give the reader the width of
+	// whatever glyph happened to carry it.
+	widths := map[int]float64{}
+	for _, gid := range kept {
+		if gid >= 0 && gid < len(advances) {
+			widths[f.cidOf(gid)] = advances[gid]
+		}
+	}
+	// Only the glyphs the subset kept, rather than every slot in the program.
+	// A CJK face has seventeen thousand of them and a document uses a dozen;
+	// the rest are an endchar apiece in the program and take /DW here.
+	cids := make([]int, 0, len(widths))
+	for cid := range widths {
+		cids = append(cids, cid)
+	}
+	sort.Ints(cids)
+
 	var out object.Array
-	for gid := 0; gid < len(advances); {
-		if advances[gid] == defaultWidth {
-			gid++
+	for i := 0; i < len(cids); {
+		if widths[cids[i]] == defaultWidth {
+			i++
 			continue
 		}
-		start := gid
+		// One run per stretch of consecutive CIDs, which is the compact form
+		// and the reason /W is a nest of arrays rather than a flat list.
+		start := i
 		var run object.Array
-		for gid < len(advances) && advances[gid] != defaultWidth {
-			run = append(run, widthNumber(advances[gid]))
-			gid++
+		for i < len(cids) && widths[cids[i]] != defaultWidth &&
+			(i == start || cids[i] == cids[i-1]+1) {
+			run = append(run, widthNumber(widths[cids[i]]))
+			i++
 		}
-		out = append(out, object.Integer(start), run)
+		out = append(out, object.Integer(cids[start]), run)
 	}
 	return out
 }
@@ -432,12 +426,25 @@ func subsetTag(kept []int) string {
 // program, so that a disagreement between the two is a real defect this
 // module's validator will report rather than something rediscovered here and
 // silently papered over.
-func cidSetBits(kept []int, numGlyphs int) []byte {
-	bits := make([]byte, (numGlyphs+7)/8)
+func (f *Face) cidSetBits(kept []int) []byte {
+	// One bit per CID, for the same reason /W is keyed by CID: the set says
+	// which characters of the collection the subset carries, and for a
+	// CID-keyed CFF those are not the glyph indices.
+	highest := 0
+	cids := make([]int, 0, len(kept))
 	for _, gid := range kept {
-		if gid >= 0 && gid < numGlyphs {
-			bits[gid/8] |= 0x80 >> (gid % 8)
+		if gid < 0 || gid >= f.NumGlyphs() {
+			continue
 		}
+		cid := f.cidOf(gid)
+		cids = append(cids, cid)
+		if cid > highest {
+			highest = cid
+		}
+	}
+	bits := make([]byte, highest/8+1)
+	for _, cid := range cids {
+		bits[cid/8] |= 0x80 >> (cid % 8)
 	}
 	return bits
 }
@@ -464,7 +471,7 @@ func (f *Face) toUnicodeCMap() []byte {
 			// the smaller loss.
 			continue
 		}
-		if prev, ok := rev[gid]; !ok || r < prev {
+		if prev, ok := rev[gid]; !ok || betterForToUnicode(r, prev) {
 			rev[gid] = r
 		}
 	}
@@ -473,10 +480,17 @@ func (f *Face) toUnicodeCMap() []byte {
 		gids = append(gids, gid)
 	}
 	sort.Ints(gids)
+	// Keyed by the code in the content stream, which is the CID — the same
+	// number /W and /CIDSet are keyed by, and for a CID-keyed CFF not the glyph
+	// index this map was built from. Getting it wrong does not show on the page
+	// at all: the glyphs are drawn from the codes and look right, and only the
+	// text copied out of the document is nonsense.
 	pairs := make([][2]int, 0, len(gids))
 	for _, gid := range gids {
-		pairs = append(pairs, [2]int{gid, int(rev[gid])})
+		pairs = append(pairs, [2]int{f.cidOf(gid), int(rev[gid])})
 	}
+	// cidOf can reorder, since a higher glyph may carry a lower CID.
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i][0] < pairs[j][0] })
 	return buildToUnicodeCMap(pairs, "<0000> <FFFF>")
 }
 
@@ -539,4 +553,44 @@ func utf16beHex(r rune) string {
 // byte-order marks and one is the null.
 func forbiddenInToUnicode(r rune) bool {
 	return r == 0 || r == 0xFEFF || r == 0xFFFE
+}
+
+// betterForToUnicode picks between two characters a font draws with the same
+// glyph, for the reverse map that says what a code means.
+//
+// A font's cmap is many-to-one and this map has to be one-to-one, so something
+// has to choose. The lowest code point is the obvious tie-break and it is wrong
+// wherever Unicode encoded the same shape twice: 日 is U+65E5 and also U+2F07
+// KANGXI RADICAL SUN, which sorts lower, so a CJK page came back as a string of
+// radicals — every glyph correct on the page and every character wrong in the
+// text copied out of it.
+//
+// So a compatibility form loses to an ordinary character, and only then does
+// the lower code point win.
+func betterForToUnicode(r, prev rune) bool {
+	if a, b := compatibilityForm(r), compatibilityForm(prev); a != b {
+		return b
+	}
+	return r < prev
+}
+
+// compatibilityForm reports the blocks Unicode encoded for round-tripping older
+// standards rather than for writing text: the two radical blocks, whose members
+// are shapes of ideographs encoded elsewhere, and the compatibility ideographs
+// themselves.
+//
+// A document sets 日, not the radical that looks like it, so the radical is
+// never the better answer for what a code meant.
+func compatibilityForm(r rune) bool {
+	switch {
+	case r >= 0x2E80 && r <= 0x2EFF: // CJK Radicals Supplement
+		return true
+	case r >= 0x2F00 && r <= 0x2FDF: // Kangxi Radicals
+		return true
+	case r >= 0xF900 && r <= 0xFAFF: // CJK Compatibility Ideographs
+		return true
+	case r >= 0xFE30 && r <= 0xFE4F: // CJK Compatibility Forms
+		return true
+	}
+	return false
 }
