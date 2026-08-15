@@ -70,6 +70,9 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	if len(f.Used()) == 0 {
 		return object.IndirectRef{}, errEmbedBeforeUse
 	}
+	if err := refuseCIDKeyed(f); err != nil {
+		return object.IndirectRef{}, err
+	}
 
 	program, kept, err := f.SubsetGlyphs()
 	if err != nil {
@@ -267,6 +270,39 @@ func (f *Face) bboxArray(d Descriptor) object.Array {
 		object.Integer(int(f.scale(d.BBox[0]))), object.Integer(int(f.scale(d.BBox[1]))),
 		object.Integer(int(f.scale(d.BBox[2]))), object.Integer(int(f.scale(d.BBox[3]))),
 	}
+}
+
+// errCIDKeyed is a CID-keyed CFF offered for embedding.
+var errCIDKeyed = errors.New("fonts: cannot embed a CID-keyed CFF font: its " +
+	"CIDs are not its glyph indices, and this package writes /W and " +
+	"/CIDSystemInfo as though they were")
+
+// refuseCIDKeyed stops a CID-keyed CFF becoming a document that looks finished
+// and shows the wrong glyphs.
+//
+// A CIDFontType0 is addressed by CID: a character code goes into the font's
+// charset and comes out as a glyph index. Everything below writes the two as
+// though they were one number — /W is built from advances indexed by glyph, and
+// /CIDSystemInfo declares the Identity ordering, which says exactly that. For a
+// font whose charset is the identity they are the same and nothing is wrong;
+// for a real CJK face they are nothing alike, and the reader draws whichever
+// glyph happens to carry the number.
+//
+// forme refused to *read* such a font until v0.2.0, which was too strict —
+// shaping never needs a CID, and every static Noto CJK face is one of these. So
+// reading and measuring work now, and this is the narrower refusal that
+// replaces it, at the step where the two numberings actually part.
+//
+// Lifting it is a real piece of work rather than a missing condition: /W has to
+// be keyed by CID, /CIDSystemInfo has to carry the font's own registry and
+// ordering instead of Identity, and the subsetter has to keep the charset
+// consistent with what it kept. font.Program.GIDToCID is the mapping that makes
+// it possible; nothing here uses it yet.
+func refuseCIDKeyed(f *Face) error {
+	if f.cidKeyed {
+		return errCIDKeyed
+	}
+	return nil
 }
 
 // widthsArray builds /W from the program's own advances, in the

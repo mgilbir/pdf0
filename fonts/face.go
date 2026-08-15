@@ -16,6 +16,7 @@
 package fonts
 
 import (
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonts/notosans"
 	"github.com/mgilbir/forme/shape"
 )
@@ -27,7 +28,23 @@ import (
 // Encode, GlyphID, Features and the rest — and it is exported so that a caller
 // can reach it, and so that a face can be handed to something that takes
 // forme's own type.
-type Face struct{ *shape.Face }
+type Face struct {
+	*shape.Face
+
+	// cidKeyed is the CFF inside this face numbering its glyphs by CID, with
+	// its charset mapping CID to glyph index — so the two are different
+	// numberings.
+	//
+	// It is recorded here, from the bytes, because forme does not report it and
+	// the subset this package would otherwise ask is not a reliable place to
+	// look: subsetting such a font fails today for its own reasons, and a
+	// refusal that rests on another component's failure stops being a refusal
+	// the moment that component improves. See refuseCIDKeyed.
+	//
+	// False for a face from Adopt, which is handed a shaping face and never the
+	// program it was read from. That is a known gap and is stated on Adopt.
+	cidKeyed bool
+}
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
 //
@@ -35,7 +52,11 @@ type Face struct{ *shape.Face }
 // for: one out of a cache, or one a caller built with forme directly. The face
 // is not copied — the wrapper and the original are the same font, and each
 // records the glyphs the other used.
-func Adopt(f *shape.Face) *Face { return &Face{f} }
+// A face adopted this way is never refused as CID-keyed, because the check is
+// made from the font program and this is handed a face rather than the bytes it
+// was read from. A caller embedding a CID-keyed CFF adopted from elsewhere gets
+// the wrong /W; use Load, which has the program and looks.
+func Adopt(f *shape.Face) *Face { return &Face{Face: f} }
 
 // Load reads a font program — TrueType, OpenType, or an sfnt carrying CFF
 // outlines — as a composite face, whose character codes are glyph indices.
@@ -48,7 +69,20 @@ func Load(data []byte) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f, cidKeyed: programIsCIDKeyed(data)}, nil
+}
+
+// programIsCIDKeyed reports whether an sfnt's CFF table is CID-keyed.
+//
+// A CFF says so with its ROS operator, which is what font.ParseCFF reads to
+// build GIDToCID; a font with no CFF table at all — every TrueType — is not.
+func programIsCIDKeyed(data []byte) bool {
+	cff := font.SFNTTables(data)["CFF "]
+	if cff == nil {
+		return false
+	}
+	p := font.ParseCFF(cff)
+	return p != nil && p.GIDToCID != nil
 }
 
 // LoadSimple reads a font program as a simple face, whose character codes are
@@ -63,7 +97,7 @@ func LoadSimple(data []byte) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f}, nil
 }
 
 // Standard names one of the fourteen faces every PDF reader is required to
@@ -76,7 +110,7 @@ func Standard(name string) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f}, nil
 }
 
 // StandardNames lists the fourteen faces Standard takes.
@@ -94,7 +128,7 @@ func NotoSans() (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f}, nil
 }
 
 // NotoSansSimple is the bundled face in the simple form: one byte per
@@ -104,7 +138,7 @@ func NotoSansSimple() (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f}, nil
 }
 
 // NotoSansLicense is the text of the SIL Open Font License 1.1 as it is
@@ -122,7 +156,7 @@ func NotoSansLicense() string { return notosans.License() }
 // Parsing is the expensive part and its result never changes; what must not be
 // shared is the used set, since that decides what each document embeds. So a
 // second document takes a clone rather than a second parse.
-func (f *Face) Clone() *Face { return &Face{f.Face.Clone()} }
+func (f *Face) Clone() *Face { return &Face{Face: f.Face.Clone(), cidKeyed: f.cidKeyed} }
 
 // Glyph is one positioned glyph: which glyph, where in the text it came from,
 // and how far it displaces and advances.
