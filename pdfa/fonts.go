@@ -1125,8 +1125,25 @@ func cidToGID(doc core.View, desc *object.Dictionary, cid int) (int, bool) {
 // from absent.
 func parseCIDWidths(doc core.View, wObj object.Object) (map[int]float64, bool) {
 	out := make(map[int]float64)
-	arr, ok := doc.Resolve(wObj).(object.Array)
+	resolved := doc.Resolve(wObj)
+	if resolved == nil {
+		// No /W at all, which is legal and complete: §9.7.4.3 makes the array
+		// optional and every CID then takes /DW. It is also common — a subset
+		// whose glyphs are all the default width has nothing to state, and a
+		// CJK face is monospaced, so the array is empty for exactly the fonts
+		// that would otherwise have the largest one.
+		//
+		// Reporting it as incomplete said "a /W entry spans more than 65536
+		// CIDs" about a font with no entries, and skipped the width-consistency
+		// check that could have run perfectly well against /DW.
+		return out, true
+	}
+	arr, ok := resolved.(object.Array)
 	if !ok {
+		// Present and not an array: malformed, and the widths cannot be read.
+		// That is incomplete in the sense the caller means — a check run
+		// against /DW here would be checking against numbers the document did
+		// not state.
 		return out, false
 	}
 	complete := true

@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -200,3 +200,23 @@ clean-jbig2:
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
 # suites) is fetched by that module's own Makefile.
+
+# A CID-keyed CFF face, for the embedding tests that need one.
+#
+# Every static Noto CJK face is CID-keyed, and what those tests turn on is a
+# charset that is *not* the identity — the only thing that tells a CID from a
+# glyph index. No synthetic fixture builds one, so this is a real font: 4.5 MB,
+# fetched and gitignored like every other corpus, and the tests skip without it.
+CJK_DIR := testdata/notocjk
+
+notocjk: $(CJK_DIR)/.ok
+
+$(CJK_DIR)/.ok:
+	mkdir -p $(CJK_DIR)
+	curl -sSfL -o $(CJK_DIR)/NotoSansJP-Regular.otf \
+		https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf
+	touch $@
+
+clean-notocjk:
+	rm -rf $(CJK_DIR)
+

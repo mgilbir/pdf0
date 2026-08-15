@@ -44,6 +44,18 @@ type Face struct {
 	// False for a face from Adopt, which is handed a shaping face and never the
 	// program it was read from. That is a known gap and is stated on Adopt.
 	cidKeyed bool
+
+	// gidToCID maps each glyph index to the CID that reaches it through the
+	// font's charset, and registry/ordering/supplement name the collection
+	// those CIDs are numbered in. All four are read from the program at load
+	// and are nil or empty for anything that is not a CID-keyed CFF.
+	//
+	// A PDF needs them to embed one: /W is keyed by CID, and /CIDSystemInfo has
+	// to state the collection rather than assume it. See embed.go.
+	gidToCID   []int
+	registry   string
+	ordering   string
+	supplement int
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
@@ -69,20 +81,44 @@ func Load(data []byte) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{Face: f, cidKeyed: programIsCIDKeyed(data)}, nil
+	face := &Face{Face: f}
+	face.readCIDKeying(data)
+	return face, nil
 }
 
-// programIsCIDKeyed reports whether an sfnt's CFF table is CID-keyed.
+// readCIDKeying records what a CID-keyed CFF needs to be embedded correctly:
+// which CID reaches each glyph, and the collection those CIDs belong to.
 //
-// A CFF says so with its ROS operator, which is what font.ParseCFF reads to
-// build GIDToCID; a font with no CFF table at all — every TrueType — is not.
-func programIsCIDKeyed(data []byte) bool {
+// A CFF declares itself CID-keyed with the ROS operator, which is also what
+// font.ParseCFF reads to build GIDToCID; a font with no CFF table at all —
+// every TrueType — is not one, and everything here stays zero.
+//
+// It is read here, from the program, rather than at embed time from the subset.
+// The subset carries the same charset, so either would do today; doing it here
+// means the answer does not depend on subsetting having succeeded, and a face
+// that cannot be subsetted still knows what it is.
+func (f *Face) readCIDKeying(data []byte) {
 	cff := font.SFNTTables(data)["CFF "]
 	if cff == nil {
-		return false
+		return
 	}
 	p := font.ParseCFF(cff)
-	return p != nil && p.GIDToCID != nil
+	if p == nil || p.GIDToCID == nil {
+		return
+	}
+	f.cidKeyed = true
+	f.gidToCID = p.GIDToCID
+	f.registry, f.ordering, f.supplement = p.Registry, p.Ordering, p.Supplement
+}
+
+// cidOf is the CID that reaches a glyph, which for everything but a CID-keyed
+// CFF is the glyph index itself — that is what "the code is the glyph index"
+// means, and what Identity ordering says.
+func (f *Face) cidOf(gid int) int {
+	if gid >= 0 && gid < len(f.gidToCID) {
+		return f.gidToCID[gid]
+	}
+	return gid
 }
 
 // LoadSimple reads a font program as a simple face, whose character codes are
@@ -156,7 +192,11 @@ func NotoSansLicense() string { return notosans.License() }
 // Parsing is the expensive part and its result never changes; what must not be
 // shared is the used set, since that decides what each document embeds. So a
 // second document takes a clone rather than a second parse.
-func (f *Face) Clone() *Face { return &Face{Face: f.Face.Clone(), cidKeyed: f.cidKeyed} }
+func (f *Face) Clone() *Face {
+	c := *f
+	c.Face = f.Face.Clone()
+	return &c
+}
 
 // Glyph is one positioned glyph: which glyph, where in the text it came from,
 // and how far it displaces and advances.
