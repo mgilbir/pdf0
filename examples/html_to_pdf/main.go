@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mgilbir/forme/layout"
 	"github.com/mgilbir/pdf0/render"
 )
 
@@ -59,14 +58,16 @@ const stylesheet = `
 `
 
 func main() {
-	// The sheet: A5 in points, with a 15mm margin. Any size works — this is
-	// the third of the three inputs, and it is the caller's to choose.
-	page := layout.PageSizePt(419.53, 595.28).WithMarginPt(42.52)
+	// The sheet, which is the third of the three inputs and the caller's to
+	// choose. render.A5 is this exact size with a margin already on it; it is
+	// spelled out here so that the general form is visible — any width, any
+	// height, any margin, in the points a PDF records.
+	page := render.PageSizePt(419.53, 595.28).WithMarginPt(42.52)
 
-	out, err := render.Render(layout.Input{
+	out, err := render.Render(render.Input{
 		HTML: document,
-		CSS:  []layout.Stylesheet{{Source: stylesheet}},
-	}, layout.Options{Page: page})
+		CSS:  []render.Stylesheet{{Source: stylesheet}},
+	}, render.Options{Page: page})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rendering: %v\n", err)
 		os.Exit(1)

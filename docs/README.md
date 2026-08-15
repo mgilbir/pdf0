@@ -9,6 +9,7 @@ Start from the question you have.
 | Pick a validator, or add a rule to one | [validators.md](validators.md) |
 | Add or debug a PDF/A rule | [pdfa.md](pdfa.md) |
 | Work on accessibility (PDF/UA) checking | [pdfua.md](pdfua.md) |
+| Turn HTML and CSS into a PDF, or work on the backend that writes it | [htmlpdf.md](htmlpdf.md) |
 | Understand a font finding, or touch font parsing | [fonts.md](fonts.md) |
 | Work on XMP metadata or a conformance declaration | [xmp.md](xmp.md) |
 | Read, write or debug encrypted files | [encryption.md](encryption.md) |
@@ -49,6 +50,10 @@ one rule body serves four levels.
 
 **[pdfua.md](pdfua.md)** — explanation. The structure tree, the UA rule
 families, table-grid reconstruction, and how much a clean result is worth.
+
+**[htmlpdf.md](htmlpdf.md)** — reference plus explanation. The three inputs and
+the one call, where the layout engine actually lives, the two ways a render can
+decline, and the findings worth knowing about before you meet them.
 
 **[fonts.md](fonts.md)** — explanation. Font types and what each requires,
 font-program parsing, encodings and CMaps, and the empty-vs-missing-glyph trap.
