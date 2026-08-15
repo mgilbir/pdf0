@@ -774,22 +774,30 @@ func attachPage(doc *Document, drawn []byte, fontRef object.IndirectRef) {
 	pages.Set("Count", object.Integer(1))
 }
 
-// TestCIDKeyedCFFIsRefused pins the other half of CFF support: the fonts this
-// package will not take. A CID-keyed CFF numbers its glyphs by CID and maps CID
-// to glyph index through its charset, so the two are different numberings —
-// while everything here assumes they are the same, because Encode emits glyph
-// indices as character codes.
+// TestCIDKeyedCFFIsReadButNotEmbedded pins where the line moved to.
 //
-// Embedding one anyway produces /W keyed by one numbering and codes by the
-// other, which this module's own validator reports. Refusing is the honest
-// answer until the charset is read, and this is the test that says the refusal
-// happens rather than being an intention in a comment.
+// A CID-keyed CFF numbers its glyphs by CID and maps CID to glyph index through
+// its charset, so the two are different numberings. forme refused to *read* one
+// until v0.2.0, and that was too strict: shaping never asks for a CID — a
+// charstring is found by glyph index, the cmap gives glyph indices, the
+// advances come from hmtx — and every static Noto CJK face is one of these, so
+// the refusal blocked faces that already worked.
+//
+// Embedding is where the numberings really part. A CIDFontType0 is addressed by
+// CID, and this package writes /W indexed by glyph and declares the Identity
+// ordering, which says a CID *is* a glyph index. For a font whose charset is
+// the identity that is true and nothing is wrong; for a real CJK face 日 is
+// glyph 6369 and CID 20220, and the reader draws whatever carries the number.
+//
+// So the two halves are tested apart: reading works, embedding is refused, and
+// the refusal names the reason rather than failing somewhere downstream in a
+// /W array nobody reads.
 //
 // The corpus carries CID-keyed CFF programs but none inside an OpenType
 // wrapper, so the fixture wraps a real one — writing a CID-keyed CFF from
 // scratch is a font compiler, and a synthetic one would not exercise the
 // detection that matters.
-func TestCIDKeyedCFFIsRefused(t *testing.T) {
+func TestCIDKeyedCFFIsReadButNotEmbedded(t *testing.T) {
 	cff := corpusCIDKeyedCFF(t)
 	program := fonttest.OTTO(cff, fonttest.SFNTOptions{
 		Name: "CIDKeyed",
@@ -798,8 +806,21 @@ func TestCIDKeyedCFFIsRefused(t *testing.T) {
 			{Rune: 'B', Advance: 500, HasShape: true},
 		},
 	})
-	if _, err := fonts.Load(program); err == nil {
-		t.Error("a CID-keyed CFF font was accepted; its CIDs are not glyph indices")
+
+	f, err := fonts.Load(program)
+	if err != nil {
+		t.Fatalf("a CID-keyed CFF was refused at load; shaping one needs no CID: %v", err)
+	}
+	// And it is usable: the text encodes, which is the capability the refusal
+	// used to cost.
+	if _, missing := f.Encode("AB"); missing != 0 {
+		t.Errorf("%d characters missing from a face that covers them", missing)
+	}
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	if _, err := f.Embed(doc); err == nil {
+		t.Error("a CID-keyed CFF was embedded; its CIDs are not its glyph indices, " +
+			"so /W and /CIDSystemInfo would both be written about the wrong numbering")
 	} else if !strings.Contains(err.Error(), "CID-keyed") {
 		t.Errorf("refused for the wrong reason: %v", err)
 	}

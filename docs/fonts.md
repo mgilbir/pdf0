@@ -375,6 +375,23 @@ Other generated tables and their sources are listed in the table above.
 
 ## Confirmed limitations
 
+- **A CID-keyed CFF can be read and shaped but not embedded.** `fonts.Load`
+  takes one and `Encode` sets it correctly — forme asks the charset, so the
+  codes come out as CIDs — but `Embed` refuses. This package writes `/W` from
+  advances indexed by *glyph* and declares the Identity ordering, which says a
+  CID is a glyph index; for a real CJK face they are nothing alike (in Noto Sans
+  JP, 日 is glyph 6369 and CID 20220) and a reader would draw whichever glyph
+  carried the number. Every static Noto CJK face is one of these, so this is the
+  limitation that keeps CJK out of a generated document.
+  Lifting it means keying `/W` by CID, carrying the font's own registry and
+  ordering in `/CIDSystemInfo` instead of Identity, and keeping the subsetter's
+  charset consistent with what it kept; `font.Program.GIDToCID` is the mapping
+  that makes it possible. The refusal is `errCIDKeyed` in `fonts/embed.go`, and
+  it is recorded on the face at load rather than derived at embed time —
+  subsetting such a font happens to fail today for its own reasons, and a
+  refusal resting on another component's failure stops being one when that
+  component improves. A face from `fonts.Adopt` is not checked, because it is
+  handed a shaping face and never the program.
 - **Non-Identity CMaps are not decoded.** Glyph coverage, `.notdef` and width
   consistency are evaluated only for `Identity-H`/`Identity-V`; a Type 0 font
   with a predefined CJK CMap is checked at the dictionary level only.
