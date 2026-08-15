@@ -73,8 +73,15 @@ type Result struct {
 	// that only fitted by being made small.
 	Scale float64
 
-	// Findings is everything the guardrails raised, in a deterministic order.
+	// Findings is everything the guardrails raised, in a deterministic order —
+	// or as much of it as the engine's reporting limit allowed, which Truncated
+	// says.
 	Findings []layout.Finding
+
+	// Truncated is the report having been cut at that limit. A caller showing
+	// findings to anyone has to say so: a cut list presented as a complete one
+	// is how four hundred problems become three.
+	Truncated bool
 
 	// NaturalSize is what the content needed at its natural size, before any
 	// scaling. It is what a caller adjusting a template needs to know.
@@ -107,7 +114,16 @@ type Result struct {
 type RefusedError struct {
 	// Findings is everything raised, in a deterministic order — the rules that
 	// caused the refusal and any warning alongside them.
+	//
+	// It may not contain the finding that caused the refusal. The engine counts
+	// a rule the moment it fires and only then tries to record it, so a
+	// document that tripped enough rules to fill the report can be refused by
+	// one the limit dropped. Truncated says when the list is partial.
 	Findings []layout.Finding
+
+	// Truncated is the report having been cut at the engine's limit, so
+	// Findings is some of what was raised rather than all of it.
+	Truncated bool
 }
 
 func (e *RefusedError) Error() string {
@@ -119,9 +135,16 @@ func (e *RefusedError) Error() string {
 	}
 	switch len(why) {
 	case 0:
-		// Not reachable from Render, which only builds this when a rule fired
-		// at Error severity. Worth a sentence rather than an empty message, for
-		// a value built by hand in a test.
+		// Reachable, and not the "cannot happen" this first claimed. A rule
+		// counts the moment it fires, before the report deduplicates and before
+		// its bound cuts it — so the finding that refused the document may be
+		// one the bound dropped, and then there is a refusal with nothing in
+		// the list to explain it. Saying that is better than a bare refusal or
+		// a guess.
+		if e.Truncated {
+			return "htmlpdf: refused to produce a document — the reason is not in " +
+				"the findings, which were cut at the reporting limit"
+		}
 		return "htmlpdf: refused to produce a document"
 	case 1:
 		return "htmlpdf: refused to produce a document — " + why[0]
@@ -159,9 +182,13 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 		Scale:       composed.Scale,
 		NaturalSize: composed.NaturalSize,
 		Findings:    composed.Findings,
+		Truncated:   composed.Truncated,
 	}
 	if composed.Refused {
-		return out, &RefusedError{Findings: composed.Findings}
+		return out, &RefusedError{
+			Findings:  composed.Findings,
+			Truncated: composed.Truncated,
+		}
 	}
 
 	doc, err := writePage(composed.Ops, pageOf(opts), composed.Scale)

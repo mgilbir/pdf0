@@ -32,6 +32,17 @@ type (
 	Finding = layout.Finding
 	// Size is a width and a height in the engine's own units.
 	Size = layout.Size
+	// Severity is how much a Finding matters. Error is the one that refuses a
+	// document; see RefusedError.
+	Severity = layout.Severity
+)
+
+// The severities, so that a caller reading Finding.Severity or writing a
+// Policy does not have to reach past this package for the constants.
+const (
+	Ignore = layout.Ignore
+	Warn   = layout.Warn
+	Error  = layout.Error
 )
 
 // PageSizePt builds a sheet from a width and height in points, which is the
