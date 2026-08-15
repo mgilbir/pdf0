@@ -236,3 +236,43 @@ func TestFindingsAreNotRefusals(t *testing.T) {
 			"property the engine reports, or it is asserting nothing")
 	}
 }
+
+// A note on what is not tested here. Result.Truncated and
+// RefusedError.Truncated are carried from the engine, and no document this
+// package can build reaches the state: the engine deduplicates findings hard
+// enough that a flood of two thousand at-rules produces 201 of them against a
+// limit of 500, so nothing here truncates. forme tests the flag where it can
+// lower the limit; what is asserted below is the message, built by hand.
+//
+// The field is kept rather than dropped as unreachable because the ceiling is
+// incidental — it is today's dedup behaviour, not a promise — and the day a
+// rule fires per element, a backend without it presents a cut list as a
+// complete one.
+
+// TestARefusalSaysSoWhenItCannotSayWhy is the case the message used to call
+// unreachable.
+//
+// The engine counts a rule the moment it fires and only then tries to record
+// it, so a document that trips enough rules to fill the report can be refused
+// by one the limit dropped. The refusal is still right; the list just cannot
+// explain it. A message of "refused" and nothing else would send a reader
+// looking through the findings for a reason that is not in them.
+func TestARefusalSaysSoWhenItCannotSayWhy(t *testing.T) {
+	err := &htmlpdf.RefusedError{
+		Findings:  []htmlpdf.Finding{{Rule: "unsupported-property", Message: "not implemented"}},
+		Truncated: true,
+	}
+	if !strings.Contains(err.Error(), "cut at the reporting limit") {
+		t.Errorf("a refusal whose reason was cut says %q, which sends a reader "+
+			"looking for a reason that is not there", err)
+	}
+
+	// And with room in the list, the reason is named rather than hedged.
+	err = &htmlpdf.RefusedError{Findings: []htmlpdf.Finding{
+		{Rule: "min-font-size", Message: "3pt", Severity: htmlpdf.Error},
+	}}
+	got := err.Error()
+	if !strings.Contains(got, "min-font-size") || strings.Contains(got, "cut at") {
+		t.Errorf("a refusal with its reason in the list says %q", got)
+	}
+}

@@ -95,6 +95,13 @@ The thresholds behind a refusal are `Options.MinScale` and
 `Options.MinFontSizePt`, both with defaults, and `Input.Policy` can lower any
 rule's severity if a warning is what you want instead.
 
+`RefusedError.Findings` may not contain the finding that caused the refusal.
+The engine counts a rule the moment it fires and only then tries to record it,
+so a document that trips enough rules to fill the report can be refused by one
+the limit dropped. `Truncated` — on the error and on the `Result` — says when
+the list is partial, and the error message says so too rather than leaving a
+reader hunting for a reason that is not there.
+
 > **This shape changed.** A refused document used to come back as a nil
 > `Document` with a **nil error**, on the reasoning that "this needs a
 > three-point font to fit, so I have not made one" is not an I/O failure. The
