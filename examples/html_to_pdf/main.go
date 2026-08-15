@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mgilbir/pdf0/render"
+	"github.com/mgilbir/pdf0/htmlpdf"
 )
 
 const document = `<!DOCTYPE html>
@@ -59,28 +59,28 @@ const stylesheet = `
 
 func main() {
 	// The sheet, which is the third of the three inputs and the caller's to
-	// choose. render.A5 is this exact size with a margin already on it; it is
+	// choose. htmlpdf.A5 is this exact size with a margin already on it; it is
 	// spelled out here so that the general form is visible — any width, any
 	// height, any margin, in the points a PDF records.
-	page := render.PageSizePt(419.53, 595.28).WithMarginPt(42.52)
+	page := htmlpdf.PageSizePt(419.53, 595.28).WithMarginPt(42.52)
 
-	out, err := render.Render(render.Input{
+	out, err := htmlpdf.Render(htmlpdf.Input{
 		HTML: document,
-		CSS:  []render.Stylesheet{{Source: stylesheet}},
-	}, render.Options{Page: page})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "rendering: %v\n", err)
-		os.Exit(1)
-	}
-
+		CSS:  []htmlpdf.Stylesheet{{Source: stylesheet}},
+	}, htmlpdf.Options{Page: page})
 	// A finding is the engine saying something about the document rather than
-	// about itself: a property it does not implement, a page the content did
-	// not fit on. They are worth printing even when a document was produced.
+	// about itself: a property it does not implement, an image it was not
+	// allowed to load. They are worth printing whether or not a document came
+	// of it, so this runs before the error is checked.
 	for _, f := range out.Findings {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", f.Rule, f.Message)
 	}
-	if out.Document == nil {
-		fmt.Fprintln(os.Stderr, "no document: a rule fired at error severity")
+	// One check. err is non-nil exactly when out.Document is nil, so there is
+	// no second thing to remember — a refusal (the content would only fit
+	// illegibly, a face has no glyph for a character on the page) arrives as a
+	// *htmlpdf.RefusedError, and a failure to write arrives as whatever failed.
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rendering: %v\n", err)
 		os.Exit(1)
 	}
 	if out.Scale != 1 {

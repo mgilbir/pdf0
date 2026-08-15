@@ -1,4 +1,4 @@
-package render
+package htmlpdf
 
 import "github.com/mgilbir/forme/layout"
 

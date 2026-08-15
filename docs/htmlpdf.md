@@ -3,18 +3,17 @@
 Three inputs — a document, a stylesheet, a sheet of paper — and a PDF.
 
 ```go
-out, err := render.Render(render.Input{
+out, err := htmlpdf.Render(htmlpdf.Input{
     HTML: document,
-    CSS:  []render.Stylesheet{{Source: stylesheet}},
-}, render.Options{Page: render.A5})
-if err != nil {
-    return err
-}
+    CSS:  []htmlpdf.Stylesheet{{Source: stylesheet}},
+}, htmlpdf.Options{Page: htmlpdf.A5})
+
+// Worth reading whether or not a document came of it.
 for _, f := range out.Findings {
     log.Printf("%s: %s", f.Rule, f.Message)
 }
-if out.Document == nil {
-    return errors.New("a rule fired at error severity; nothing was produced")
+if err != nil {
+    return err
 }
 return out.Document.Write(w)
 ```
@@ -27,13 +26,13 @@ it on every push.
 The layout engine is not in this repository. The HTML parser, the CSS syntax
 and cascade, the box model, floats, tables, line breaking and the bidirectional
 algorithm are [forme](https://github.com/mgilbir/forme), which has no idea what
-a PDF is. What is here is the backend: `render/pdfout.go`, which writes a
+a PDF is. What is here is the backend: `htmlpdf/pdfout.go`, which writes a
 display list into a document.
 
 ```
 forme/html     ─┐
 forme/css      ─┤
-forme/style    ─┼─▶ forme/layout ─▶ Compose ─▶ []layout.Op ─▶ render.Render ─▶ *pdf0.Document
+forme/style    ─┼─▶ forme/layout ─▶ Compose ─▶ []layout.Op ─▶ htmlpdf.Render ─▶ *pdf0.Document
 forme/shape    ─┤                  (build, lay out,          (writePage)
 forme/bidi     ─┤                   scale, check, paint)
 forme/segment  ─┘
@@ -46,7 +45,7 @@ than a PDF — to draw onto a canvas, to test, to write some other format — ca
 
 ## The API
 
-`render` re-exports the handful of names the call above needs, so the common
+`htmlpdf` re-exports the handful of names the call above needs, so the common
 case takes one import:
 
 | name | is |
@@ -56,28 +55,52 @@ case takes one import:
 | `A4`, `A5`, `Letter` | named sheets, each with a margin already |
 | `Finding`, `Size` | what `Result` carries |
 
+`Result` and `RefusedError` are this package's own, since what a render produced
+and why it would not are its business rather than the engine's.
+
 They are **aliases**, not wrappers, so they are the same types
 `github.com/mgilbir/forme/layout` declares. A caller who outgrows the list — a
 resource resolver for images, a font library, a severity policy, the display
 list itself — imports `layout` and finds every value already fits. See
-`render/api.go`.
+`htmlpdf/api.go`.
 
-## Two ways it can decline
+## One way it can fail
 
-`Render` returns an error only when writing the document failed. A document
-that should not be produced comes back as **`Result.Document == nil` with a
-`nil` error**, and the reason is in `Findings`. Check both:
+`Render` returns a `Result` and an error, and **the error is non-nil exactly
+when `Result.Document` is nil**. There is no state where one says yes and the
+other no, so the ordinary shape works and cannot go wrong:
 
 ```go
-if err != nil { ... }          // the writing failed
-if out.Document == nil { ... } // the engine refused, see out.Findings
+out, err := htmlpdf.Render(in, opts)
+if err != nil {
+    return err
+}
+return out.Document.Write(w)
 ```
 
-That is deliberate. "This page needs a 3pt font to fit, so I have not made it"
-is not an I/O failure, and a caller that only checked `err` would ship a blank
-or illegible page. The threshold is `Options.MinScale` and
-`Options.MinFontSizePt`; both have defaults, and `Input.Policy` can lower any
+Two things can go wrong, and a caller who cares which asks:
+
+```go
+var refused *htmlpdf.RefusedError
+switch {
+case errors.As(err, &refused):
+    // The document is wrong: it would only have fitted illegibly, or a face
+    // has no glyph for a character on the page. refused.Findings says how.
+case err != nil:
+    // Writing failed: a full disk, a broken io.Writer.
+}
+```
+
+The thresholds behind a refusal are `Options.MinScale` and
+`Options.MinFontSizePt`, both with defaults, and `Input.Policy` can lower any
 rule's severity if a warning is what you want instead.
+
+> **This shape changed.** A refused document used to come back as a nil
+> `Document` with a **nil error**, on the reasoning that "this needs a
+> three-point font to fit, so I have not made one" is not an I/O failure. The
+> reasoning is sound and the shape it produced was not: the second check is not
+> where anyone looks, and a caller who wrote the five lines above got a nil
+> dereference. A refusal is an error now.
 
 ## Findings
 
@@ -123,6 +146,9 @@ What is checked here is the seam — that the two ends still meet:
 - `TestHTMLAndCSSAndAPageSizeMakeAPDF` renders the three inputs, reads the
   document back, and asserts the page size in points, the text in reading
   order, and the stylesheet's effect on that document's own content stream.
-- `render/api_test.go` is an external test package importing only
-  `pdf0/render`, so a name missing from the alias list stops it compiling.
+- `htmlpdf/api_test.go` is an external test package importing only
+  `pdf0/htmlpdf`, so a name missing from the alias list stops it compiling. It
+  also pins the error shape: that a refusal is a `*RefusedError` carrying its
+  findings, that the error and the document never disagree, and that checking
+  only the error is enough — the last of which panicked under the old shape.
 - CI runs `examples/html_to_pdf` and requires a PDF out of it.
