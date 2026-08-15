@@ -1,15 +1,26 @@
-// Package render writes a laid-out document into a PDF.
+// Package htmlpdf turns HTML and CSS into a PDF.
 //
-// It is the backend, and it is all that is left here of what used to be a
-// layout engine: the HTML parser, the CSS cascade and the layout itself are
-// github.com/mgilbir/forme, which knows nothing about PDF and is not the poorer
-// for it. What arrives here is a display list — rectangles, runs of text,
-// images, clips — and what leaves is a document.
+// Three inputs — a document, a stylesheet, a sheet of paper — and Render gives
+// back a document, or says why it would not. See docs/htmlpdf.md and
+// examples/html_to_pdf.
 //
-// Render is Compose plus writePage. Everything before writePage is layout's,
-// and the seam is exact: the step that turns a display list into a document is
-// the only one that knows what a document is.
-package render
+// Very little of that work happens here. The HTML parser, the CSS cascade, the
+// box model, floats, tables, line breaking and the bidirectional algorithm are
+// github.com/mgilbir/forme, which has no idea what a PDF is and is not the
+// poorer for it. What arrives here is a display list — rectangles, runs of
+// text, images, clips — and what leaves is a document.
+//
+// So Render is layout.Compose plus writePage, and the seam is exact: the step
+// that turns a display list into a document is the only one that knows what a
+// document is. A caller who wants the display list instead — to draw onto a
+// canvas, to test, to write some other format — calls Compose and never imports
+// this package.
+//
+// The package is named for the pair it joins rather than for the joining. It
+// was called "render" while it held the engine as well, and that stopped being
+// true and stopped being accurate on the same day: what is left renders
+// nothing, it writes.
+package htmlpdf
 
 import (
 	"fmt"
@@ -42,14 +53,19 @@ import (
 // output stays vector: text remains selectable and searchable, and no image is
 // resampled.
 
-// Result is what a render produces.
+// Result is what a render produces, whether or not it produced a document.
 //
-// The shape follows the Factur-X precedent §6 names — a struct, because there is
-// more to report than findings.
+// A struct rather than a bare document, because there is more to report than
+// the bytes: what the engine had to say, how far it had to shrink the content,
+// and how big the content wanted to be. Those are worth having when the render
+// succeeded and worth having *most* when it did not, so Result is returned
+// alongside an error rather than instead of one.
 type Result struct {
-	// Document is the finished PDF, and is nil when a rule fired at Error
-	// severity. A caller that got findings and no document was told not to
-	// render, rather than left to decide.
+	// Document is the finished PDF.
+	//
+	// Non-nil exactly when Render returned a nil error — see Render for why
+	// that is worth stating. A caller that has checked the error does not need
+	// to check this.
 	Document *pdf0.Document
 
 	// Scale is the factor of §5: 1 when the content fitted, less when it had to
@@ -66,6 +82,76 @@ type Result struct {
 }
 
 // Render lays a document out and writes it onto one PDF page.
+// RefusedError is the engine declining to produce a document.
+//
+// It means a rule fired at Error severity: the content had to be shrunk past
+// legibility to fit, or a face had no glyph for a character the page needs, or
+// something else that would have produced a document nobody should ship. The
+// page was laid out — that is how the rule fired — so the Result returned
+// beside this says how far it got.
+//
+// It is an error and not a quiet nil because the caller asked for a document
+// and has not got one, and Go has one place a caller looks for that.
+// Distinguish it from a failure to write with errors.As:
+//
+//	out, err := htmlpdf.Render(in, opts)
+//	var refused *htmlpdf.RefusedError
+//	switch {
+//	case errors.As(err, &refused):
+//		// The document is wrong. refused.Findings says how.
+//	case err != nil:
+//		// Writing failed: out of disk, a broken io.Writer.
+//	}
+//
+// A caller who does not care which just checks err, which is the point.
+type RefusedError struct {
+	// Findings is everything raised, in a deterministic order — the rules that
+	// caused the refusal and any warning alongside them.
+	Findings []layout.Finding
+}
+
+func (e *RefusedError) Error() string {
+	var why []string
+	for _, f := range e.Findings {
+		if f.Severity == layout.Error {
+			why = append(why, string(f.Rule)+": "+f.Message)
+		}
+	}
+	switch len(why) {
+	case 0:
+		// Not reachable from Render, which only builds this when a rule fired
+		// at Error severity. Worth a sentence rather than an empty message, for
+		// a value built by hand in a test.
+		return "htmlpdf: refused to produce a document"
+	case 1:
+		return "htmlpdf: refused to produce a document — " + why[0]
+	}
+	return fmt.Sprintf("htmlpdf: refused to produce a document — %s (and %d more)",
+		why[0], len(why)-1)
+}
+
+// Render turns a document, its stylesheets and a sheet of paper into a PDF.
+//
+// The error is the only thing a caller has to check. It is non-nil exactly when
+// Result.Document is nil, and there is no state where one says yes and the
+// other no — so the ordinary shape works and cannot go wrong:
+//
+//	out, err := htmlpdf.Render(in, opts)
+//	if err != nil {
+//		return err
+//	}
+//	return out.Document.Write(w)
+//
+// It used to be otherwise. A document the engine refused came back as a nil
+// Document with a nil error, on the reasoning that "this needs a three-point
+// font to fit, so I have not made one" is not an I/O failure. That reasoning is
+// sound and the shape it produced was not: the second check is not where anyone
+// looks, and a caller who wrote the five lines above shipped a nil dereference.
+// A refusal is now a RefusedError.
+//
+// Findings are on the Result either way. A document can be produced and still
+// be worth complaining about — a property the engine does not implement, an
+// image it was not allowed to load — and those are not refusals.
 func Render(in layout.Input, opts layout.Options) (Result, error) {
 	composed := layout.Compose(in, opts)
 
@@ -75,10 +161,7 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 		Findings:    composed.Findings,
 	}
 	if composed.Refused {
-		// A rule fired at Error severity, so the caller was told not to render
-		// rather than left to decide. Everything above this line ran, which is
-		// what makes the findings worth reading.
-		return out, nil
+		return out, &RefusedError{Findings: composed.Findings}
 	}
 
 	doc, err := writePage(composed.Ops, pageOf(opts), composed.Scale)

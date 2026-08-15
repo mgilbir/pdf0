@@ -1,4 +1,4 @@
-package render
+package htmlpdf
 
 import (
 	"bytes"

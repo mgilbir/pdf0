@@ -19,7 +19,7 @@ go get github.com/mgilbir/pdf0
 - **Serialize** the object model back to PDF bytes (`Document.Write`),
   regenerating cross-reference streams and object streams where the source used
   them.
-- **Render** HTML and CSS onto a page (`render.Render`). The engine — the HTML
+- **Render** HTML and CSS onto a page (`htmlpdf.Render`). The engine — the HTML
   parser, the cascade, the box model, floats, tables, bidirectional text — is
   [forme](https://github.com/mgilbir/forme); what is here is the backend that
   writes its display list into a document. See [htmlpdf.md](docs/htmlpdf.md).
@@ -260,7 +260,7 @@ The subsystems, and the doc that maps each:
 | PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `embedded.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
 | The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/` with their `*_api.go` boundaries in root, `facturx*.go`, `order_x.go`, `violations.go`, `internal/finding` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
 | Fonts | `fonts.go`, `fonts/`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [fonts.md](docs/fonts.md) |
-| HTML and CSS to PDF | `render/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](docs/htmlpdf.md) |
+| HTML and CSS to PDF | `htmlpdf/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](docs/htmlpdf.md) |
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
 | Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | [encryption.md](docs/encryption.md) |
