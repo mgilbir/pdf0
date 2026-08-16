@@ -424,11 +424,50 @@ untouched. For a loaded face the collection is known before subsetting, so a
 font that cannot be embedded says so for the reason that matters rather than
 reporting whatever the subsetter met first.
 
+## CMaps
+
+A Type 0 font's `/Encoding` says how the bytes in a content stream become CIDs,
+and nothing else does. Until it is read, a checker cannot name a single glyph
+the page uses — not to ask whether the font has it, not to compare its width,
+not to notice `.notdef`.
+
+| `/Encoding` | read | how |
+|---|---|---|
+| `Identity-H`, `Identity-V` | yes | built in: two bytes to a code, CID = code |
+| a stream | yes | `core.ParseCMap` — codespace ranges, `cidrange`, `cidchar` |
+| any other name | **no** | a predefined CMap; the data is not here, so the font is skipped |
+
+The corpus says where the value is: of 223 Type 0 fonts, 149 use Identity, **69
+embed a CMap** and 5 name a predefined one.
+
+**Code length comes from the first byte, not from containment** (§9.7.6.2). A
+mixed-width CMap has a one-byte space `<00>–<80>` and a two-byte one
+`<8140>–<9FFC>`; the string `81 20` is a *two-byte* code — invalid, outside the
+range, but two bytes. Deciding by containment reads it as one byte and the `20`
+becomes the start of the next code, so every code after it in the string is
+wrong. That is the whole of mixed-width CJK and it is what `codeAt` is careful
+about.
+
+A code the document writes and its own CMap does not define is reported as
+that, and not as CID 0 — a `.notdef` reference is something the document did on
+purpose and this is not.
+
+A CMap using `usecmap` is refused rather than half-read: it names a predefined
+CMap, so the result would be a map with holes that reports "undefined" for
+codes it simply never learned.
+
+The parser is bounded, because a CMap arrives in a document: `<0000> <FFFFFFFF>
+1` is eleven bytes asking for four billion inserts. Ranges are kept as ranges,
+one wider than 65,536 refuses the whole map, and the stream decodes through the
+same budget as any other.
+
 ## Confirmed limitations
 
-- **Non-Identity CMaps are not decoded.** Glyph coverage, `.notdef` and width
-  consistency are evaluated only for `Identity-H`/`Identity-V`; a Type 0 font
-  with a predefined CJK CMap is checked at the dictionary level only.
+- **Predefined CMaps are not decoded.** A Type 0 font whose `/Encoding` names
+  one of Adobe's published CMaps — `UniJIS-UCS2-H` and the rest — is checked at
+  the dictionary level only, because the mapping is data this module does not
+  carry. Identity and *embedded* CMaps are decoded; see below. Five of the
+  corpus's 223 Type 0 fonts name a predefined CMap, against 69 that embed one.
 - **cmap formats 2, 8, 10, 13 and 14 are not parsed** — a font whose only
   Unicode subtable is one of those has no `cmap` at all (`nil`, so the lookup
   falls through to the Mac and symbol tables rather than reporting `.notdef`).

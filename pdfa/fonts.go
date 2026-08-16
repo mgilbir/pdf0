@@ -848,7 +848,10 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
 	}
 	cidSub, _ := desc.Get("Subtype").(object.Name)
-	identity := core.IsIdentityEncoding(doc, fontDict)
+	// The CMap: how this font's character codes become CIDs. Identity-H is one
+	// answer and an embedded CMap stream is another; a predefined name is data
+	// this module does not carry, and cmap is nil for it.
+	cmap, haveCMap := core.LoadCMap(doc, fontDict)
 
 	dw := 1000.0
 	if v := doc.Resolve(desc.Get("DW")); v != nil {
@@ -872,17 +875,31 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 	toUni := doc.ParseToUnicodeMap(fontDict)
 
 	for _, s := range u.Strings {
-		if !identity {
-			continue // only Identity CID decoding is handled precisely
+		if !haveCMap {
+			// A predefined CMap this module does not carry. Nothing about the
+			// string can be said: not where one code ends, not which glyph any
+			// of them names. Skipping is the honest answer, and the note above
+			// says the checks did not run.
+			continue
 		}
 		// Identity-H/V codes are exactly two bytes; a string of odd length
 		// ends in an incomplete code that cannot reference a defined glyph
-		// (ISO 32000-1 9.7.5, 9.10).
-		if renders && len(s)%2 == 1 {
+		// (ISO 32000-1 9.7.5, 9.10). An embedded CMap says its own code widths,
+		// so the same question is asked of it below, per code.
+		if renders && cmap.Identity() && len(s)%2 == 1 {
 			report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (incomplete character code)", string(cidSub)))
 		}
-		for i := 0; i+1 < len(s); i += 2 {
-			cid := int(s[i])<<8 | int(s[i+1])
+		for _, code := range cmap.Decode([]byte(s)) {
+			if !code.Mapped {
+				// A code the document wrote and its own CMap does not define.
+				// It names no glyph, so every check below would be about CID 0
+				// by accident rather than because the page asked for .notdef.
+				if renders {
+					report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (character code %d is outside the font's CMap)", string(cidSub), code.Value))
+				}
+				continue
+			}
+			cid := code.CID
 
 			progW, haveProg := cidGlyphWidth(fp, desc, doc, cidSub, cid)
 			exists := cidGlyphExists(fp, cidSub, cid)
@@ -1316,15 +1333,17 @@ func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 			if !ok {
 				continue
 			}
-			if !core.IsIdentityEncoding(doc, fontDict) {
+			// The same CMap question as the width and coverage checks: without
+			// one, the string cannot be cut into codes and no CID can be named.
+			cmap, ok := core.LoadCMap(doc, fontDict)
+			if !ok {
 				continue
 			}
 			present := core.DecodeCIDSet(doc, cidSetStream)
 			missing := false
 			for _, s := range u.Strings {
-				for i := 0; i+1 < len(s); i += 2 {
-					cid := int(s[i])<<8 | int(s[i+1])
-					if cid != 0 && !present.Has(cid) {
+				for _, code := range cmap.Decode([]byte(s)) {
+					if code.Mapped && code.CID != 0 && !present.Has(code.CID) {
 						missing = true
 					}
 				}
