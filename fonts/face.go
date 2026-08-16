@@ -31,29 +31,20 @@ import (
 type Face struct {
 	*shape.Face
 
-	// cidKeyed is the CFF inside this face numbering its glyphs by CID, with
-	// its charset mapping CID to glyph index — so the two are different
-	// numberings.
+	// cidKeyed is the CFF inside this face numbering its glyphs by CID rather
+	// than by index, which is the one thing about such a face that forme does
+	// not report and this cannot ask it.
 	//
-	// It is recorded here, from the bytes, because forme does not report it and
-	// the subset this package would otherwise ask is not a reliable place to
-	// look: subsetting such a font fails today for its own reasons, and a
-	// refusal that rests on another component's failure stops being a refusal
-	// the moment that component improves. See refuseCIDKeyed.
+	// It decides a single question: whether a face that cannot name its
+	// character collection may be embedded as Adobe-Identity-0. For a font
+	// addressed by glyph index that is the truth; for a CID-keyed one it is a
+	// false claim about the numbering. Everything else that used to need the
+	// distinction now asks shape.Face.GlyphCode, which answers correctly for
+	// every kind of face and has no branch to forget.
 	//
 	// False for a face from Adopt, which is handed a shaping face and never the
-	// program it was read from. That is a known gap and is stated on Adopt.
+	// program. Stated on Adopt.
 	cidKeyed bool
-
-	// gidToCID maps each glyph index to the CID that reaches it through the
-	// font's charset. Nil for anything that is not a CID-keyed CFF, which is
-	// what "the code is the glyph index" means everywhere else.
-	//
-	// A PDF needs it to embed one: /W, /CIDSet and /ToUnicode are all keyed by
-	// the CID rather than by the glyph. The collection those CIDs are numbered
-	// in is not kept here — shape.Face.CharacterCollection answers that, from
-	// the same parse, and validates it in ways this would have to repeat.
-	gidToCID []int
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
@@ -62,10 +53,15 @@ type Face struct {
 // for: one out of a cache, or one a caller built with forme directly. The face
 // is not copied — the wrapper and the original are the same font, and each
 // records the glyphs the other used.
-// A face adopted this way is never refused as CID-keyed, because the check is
-// made from the font program and this is handed a face rather than the bytes it
-// was read from. A caller embedding a CID-keyed CFF adopted from elsewhere gets
-// the wrong /W; use Load, which has the program and looks.
+// An adopted face is keyed correctly whatever its outlines are: /W, /CIDSet and
+// /ToUnicode all ask shape.Face.GlyphCode, which answers from the face itself.
+//
+// One narrower thing is still lost. A CID-keyed face that cannot name its
+// character collection is refused when it was loaded here and embedded as
+// Adobe-Identity-0 when it was adopted, because knowing it is CID-keyed at all
+// needs the program and this never sees it. That is wrong for a font numbered
+// in a collection it failed to state — rare, and malformed to begin with — and
+// Load is the constructor that catches it.
 func Adopt(f *shape.Face) *Face { return &Face{Face: f} }
 
 // Load reads a font program — TrueType, OpenType, or an sfnt carrying CFF
@@ -84,7 +80,7 @@ func Load(data []byte) (*Face, error) {
 	return face, nil
 }
 
-// readCIDKeying records which CID reaches each glyph, for a CID-keyed CFF.
+// readCIDKeying records that the outlines are a CID-keyed CFF.
 //
 // A CFF declares itself CID-keyed with the ROS operator, which is also what
 // font.ParseCFF reads to build GIDToCID; a font with no CFF table at all —
@@ -104,17 +100,6 @@ func (f *Face) readCIDKeying(data []byte) {
 		return
 	}
 	f.cidKeyed = true
-	f.gidToCID = p.GIDToCID
-}
-
-// cidOf is the CID that reaches a glyph, which for everything but a CID-keyed
-// CFF is the glyph index itself — that is what "the code is the glyph index"
-// means, and what Identity ordering says.
-func (f *Face) cidOf(gid int) int {
-	if gid >= 0 && gid < len(f.gidToCID) {
-		return f.gidToCID[gid]
-	}
-	return gid
 }
 
 // LoadSimple reads a font program as a simple face, whose character codes are

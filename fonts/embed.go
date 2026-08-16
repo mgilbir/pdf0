@@ -319,7 +319,7 @@ func (f *Face) widthsArray(advances []float64, defaultWidth float64, kept []int)
 	widths := map[int]float64{}
 	for _, gid := range kept {
 		if gid >= 0 && gid < len(advances) {
-			widths[f.cidOf(gid)] = advances[gid]
+			widths[f.GlyphCode(gid)] = advances[gid]
 		}
 	}
 	// Only the glyphs the subset kept, rather than every slot in the program.
@@ -463,7 +463,7 @@ func (f *Face) cidSetBits(kept []int) []byte {
 		if gid < 0 || gid >= f.NumGlyphs() {
 			continue
 		}
-		cid := f.cidOf(gid)
+		cid := f.GlyphCode(gid)
 		cids = append(cids, cid)
 		if cid > highest {
 			highest = cid
@@ -514,9 +514,9 @@ func (f *Face) toUnicodeCMap() []byte {
 	// text copied out of the document is nonsense.
 	pairs := make([][2]int, 0, len(gids))
 	for _, gid := range gids {
-		pairs = append(pairs, [2]int{f.cidOf(gid), int(rev[gid])})
+		pairs = append(pairs, [2]int{f.GlyphCode(gid), int(rev[gid])})
 	}
-	// cidOf can reorder, since a higher glyph may carry a lower CID.
+	// GlyphCode can reorder, since a higher glyph may carry a lower CID.
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i][0] < pairs[j][0] })
 	return buildToUnicodeCMap(pairs, "<0000> <FFFF>")
 }

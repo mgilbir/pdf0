@@ -383,8 +383,9 @@ than by glyph, and all three come from the program rather than being assumed:
 | written | keyed by | read from |
 |---|---|---|
 | the code in the content stream | CID | `Encode`, which asks the charset |
-| `/W` | CID | `Face.cidOf`, from `font.Program.GIDToCID` |
+| `/W` | CID | `shape.Face.GlyphCode` |
 | `/CIDSet` | CID | the same |
+| `/ToUnicode` | CID | the same |
 | `/CIDSystemInfo` | — | the CFF's ROS operator |
 
 Getting any of them wrong is invisible on a font whose charset happens to be the
@@ -416,8 +417,12 @@ charstrings — the two disagree in Noto Sans JP (glyph 34 is 608 in `hmtx` and
 is also what layout measured with, so the document's `/W` and its line breaks
 agree.
 
-A face from `fonts.Adopt` is not checked for any of this: it is handed a shaping
-face and never the program the keying is read from. Use `fonts.Load`.
+A face from `fonts.Adopt` is keyed correctly too — `GlyphCode` answers from the
+face, so there is nothing for this package to parse and no branch to forget. The
+one thing an adopted face loses is the refusal above: knowing a font is
+CID-keyed *at all* needs the program, so an adopted CID-keyed face that cannot
+name its collection is written as Adobe-Identity-0 rather than refused. `Load`
+is the constructor that catches that.
 
 ## Confirmed limitations
 
