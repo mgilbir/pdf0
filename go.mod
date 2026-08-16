@@ -8,4 +8,4 @@ require github.com/mgilbir/gopenjpeg v0.0.0-20260727163526-8a139bc479b2
 
 require github.com/mgilbir/golittlecms v0.0.0-20260727161601-f6af7cfe1556
 
-require github.com/mgilbir/forme v0.2.1
+require github.com/mgilbir/forme v0.2.2-0.20260816101958-c03943221191

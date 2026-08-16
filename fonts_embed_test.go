@@ -1377,3 +1377,54 @@ func TestACIDFontThatCannotNameItsCollectionIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestAnAdoptedCIDFaceIsKeyedCorrectly closes the gap this package used to
+// state on Adopt.
+//
+// Adopt is handed a shaping face and never the program it was read from, so
+// nothing here could parse the charset for it and an adopted CID-keyed face
+// was written with /W, /CIDSet and /ToUnicode keyed by glyph index — the exact
+// defect the loaded path was fixed for, reachable by the one constructor that
+// could not look.
+//
+// shape.Face.GlyphCode closed it: the face answers with the number it will
+// itself write, so there is nothing left to parse and nothing to remember.
+func TestAnAdoptedCIDFaceIsKeyedCorrectly(t *testing.T) {
+	data := cidKeyedFace(t)
+	inner, err := shape.Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	// The path with no program: a face built with forme directly and handed
+	// over, which is what Adopt is for.
+	f := fonts.Adopt(inner)
+
+	gid, ok := f.GlyphID(halfWidthKatakana)
+	if !ok {
+		t.Fatalf("the fixture has no glyph for %q", halfWidthKatakana)
+	}
+	codes, missing := f.Encode(string(halfWidthKatakana))
+	if missing != 0 {
+		t.Fatalf("%d characters missing", missing)
+	}
+	cid := int(codes[0])<<8 | int(codes[1])
+	if cid == gid {
+		t.Fatalf("glyph %d and CID %d are equal; this face cannot show the "+
+			"difference", gid, cid)
+	}
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	ref, err := f.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding an adopted CID-keyed face: %v", err)
+	}
+	cidFont := descendantOf(t, doc, ref)
+	if got, ok := widthOfCID(t, doc, cidFont, cid); !ok {
+		t.Errorf("/W has no entry for CID %d, the code the page uses", cid)
+	} else if want := f.GlyphAdvances()[gid]; got != want {
+		t.Errorf("/W gives CID %d a width of %v, want %v", cid, got, want)
+	}
+	if _, ok := widthOfCID(t, doc, cidFont, gid); ok {
+		t.Errorf("/W has an entry at %d, the glyph index", gid)
+	}
+}
