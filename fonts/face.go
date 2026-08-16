@@ -46,16 +46,14 @@ type Face struct {
 	cidKeyed bool
 
 	// gidToCID maps each glyph index to the CID that reaches it through the
-	// font's charset, and registry/ordering/supplement name the collection
-	// those CIDs are numbered in. All four are read from the program at load
-	// and are nil or empty for anything that is not a CID-keyed CFF.
+	// font's charset. Nil for anything that is not a CID-keyed CFF, which is
+	// what "the code is the glyph index" means everywhere else.
 	//
-	// A PDF needs them to embed one: /W is keyed by CID, and /CIDSystemInfo has
-	// to state the collection rather than assume it. See embed.go.
-	gidToCID   []int
-	registry   string
-	ordering   string
-	supplement int
+	// A PDF needs it to embed one: /W, /CIDSet and /ToUnicode are all keyed by
+	// the CID rather than by the glyph. The collection those CIDs are numbered
+	// in is not kept here — shape.Face.CharacterCollection answers that, from
+	// the same parse, and validates it in ways this would have to repeat.
+	gidToCID []int
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
@@ -86,8 +84,7 @@ func Load(data []byte) (*Face, error) {
 	return face, nil
 }
 
-// readCIDKeying records what a CID-keyed CFF needs to be embedded correctly:
-// which CID reaches each glyph, and the collection those CIDs belong to.
+// readCIDKeying records which CID reaches each glyph, for a CID-keyed CFF.
 //
 // A CFF declares itself CID-keyed with the ROS operator, which is also what
 // font.ParseCFF reads to build GIDToCID; a font with no CFF table at all —
@@ -108,7 +105,6 @@ func (f *Face) readCIDKeying(data []byte) {
 	}
 	f.cidKeyed = true
 	f.gidToCID = p.GIDToCID
-	f.registry, f.ordering, f.supplement = p.Registry, p.Ordering, p.Supplement
 }
 
 // cidOf is the CID that reaches a glyph, which for everything but a CID-keyed

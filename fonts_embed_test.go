@@ -1323,3 +1323,57 @@ func TestACJKDocumentIsWrittenAndReadsBack(t *testing.T) {
 		}
 	}
 }
+
+// TestACIDFontThatCannotNameItsCollectionIsRefused is the case the first
+// version of this got wrong, and it got it wrong in the direction that ships.
+//
+// A CID-keyed font whose ROS half-parses — SIDs naming strings the font does
+// not carry, or a supplement below zero, which is a version number and counts
+// up — has CIDs in some collection and has not said which. Writing
+// Adobe-Identity-0 there is not a cautious default: it is a specific claim that
+// the numbering is the font's own, and a reader that believes it looks every
+// glyph up in the wrong collection. The document looks finished either way.
+//
+// So it is refused, and refused before the font is subsetted — these fixtures
+// cannot be subsetted at all (fonttest's CID-keyed CFF has no FDSelect), and a
+// check that ran after would report that instead, which is a true statement
+// about the wrong thing.
+//
+// The fixtures are fonttest's, which builds these two shapes deliberately
+// because both are malformed in ways that *parse*. The control — a CID-keyed
+// font that does name its collection, embedded with that collection in
+// /CIDSystemInfo — is TestCIDKeyedSystemInfoIsTheFontsOwn, on the corpus's
+// Adobe-Japan1-6 font.
+func TestACIDFontThatCannotNameItsCollectionIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		opts fonttest.CFFOptions
+	}{
+		{"a ROS naming strings the font does not carry",
+			fonttest.CFFOptions{Glyphs: 4, CIDKeyed: true, UnnamedCollection: true}},
+		{"a supplement below zero",
+			fonttest.CFFOptions{Glyphs: 4, CIDKeyed: true, NegativeSupplement: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, err := fonts.Load(fonttest.OTTO(fonttest.CFF(c.opts), fonttest.SFNTOptions{
+				Name:   "Broken",
+				Glyphs: glyphsFor(c.opts.Glyphs - 1),
+			}))
+			if err != nil {
+				t.Fatalf("loading: %v", err)
+			}
+			// Reading it is fine; nothing about shaping needs the collection.
+			if _, missing := f.Encode("A"); missing != 0 {
+				t.Errorf("%d characters missing from a face that covers them", missing)
+			}
+
+			doc := NewPDFADocument(pdfa.PDFA2b)
+			if _, err := f.Embed(doc); err == nil {
+				t.Error("the font was embedded; its /CIDSystemInfo would claim a " +
+					"collection the program never named")
+			} else if !strings.Contains(err.Error(), "character collection") {
+				t.Errorf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+}
