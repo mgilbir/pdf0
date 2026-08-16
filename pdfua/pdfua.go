@@ -843,7 +843,14 @@ func checkUANotdefCID(d core.View) []Violation {
 		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
 			continue
 		}
-		if !core.IsIdentityEncoding(d, fontDict) {
+		// The CMap says how the codes are cut and what CID each names. Identity
+		// is one answer and a CMap the document carries is another; a
+		// predefined name is data this module does not have, and the check is
+		// skipped rather than run against a guess — reading UniJIS-UCS2-H as
+		// Identity would find CID 0 wherever the file happens to hold two zero
+		// bytes, which is a report about nothing.
+		cmap, ok := core.LoadCMap(d, fontDict)
+		if !ok {
 			continue
 		}
 		if u == nil {
@@ -851,8 +858,8 @@ func checkUANotdefCID(d core.View) []Violation {
 		}
 		found := false
 		for _, s := range u.Strings {
-			for i := 0; i+1 < len(s); i += 2 {
-				if int(s[i])<<8|int(s[i+1]) == 0 {
+			for _, code := range cmap.Decode(s) {
+				if code.Mapped && code.CID == 0 {
 					found = true
 				}
 			}
