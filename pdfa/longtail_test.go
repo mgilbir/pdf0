@@ -75,30 +75,60 @@ func TestXMPIsUTF8(t *testing.T) {
 	}
 }
 
+// TestSameICCProfile pins both directions, because they come from different
+// places and want opposite errors.
+//
+// The answer feeds a rule that reports a violation when it is *yes* — an
+// ICCBased colour space must not embed the same profile as the output intent —
+// so a wrong "same" turns a conforming file into a reported one.
 func TestSameICCProfile(t *testing.T) {
-	mk := func(id byte) *object.Stream {
+	// A profile of the given length whose ID field carries id and whose last
+	// byte carries mark, so two profiles can differ in the ID, in the content,
+	// or in neither.
+	mk := func(id, mark byte) *object.Stream {
 		data := make([]byte, 128)
 		data[16] = 'C' // colour space marker area (irrelevant here)
 		for i := 84; i < 100; i++ {
 			data[i] = id
 		}
+		data[127] = mark
 		s := &object.Stream{Dict: object.Dictionary{}, Data: data}
 		s.Dict.Set("Length", object.Integer(len(data)))
 		return s
 	}
 	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
-	a, b := mk(1), mk(1)
-	if !sameICCProfile(doc, a, b) {
-		t.Error("equal non-zero Profile IDs must be the same")
+
+	if !sameICCProfile(doc, mk(1, 1), mk(1, 1)) {
+		t.Error("two identical profiles must be the same")
 	}
-	c := mk(2)
-	if sameICCProfile(doc, a, c) {
-		t.Error("different non-zero Profile IDs must differ")
+
+	// The corpus's ruling, not a reading: PDF_A-4 6-2-4-2-t03-pass-d embeds two
+	// 557,188-byte profiles differing in one byte of their IDs and in nothing
+	// else, and it is a *pass* file. Comparing content with the ID zeroed
+	// reports it as violating the rule it was written to pass.
+	if sameICCProfile(doc, mk(1, 1), mk(2, 1)) {
+		t.Error("profiles differing only in their Profile ID must differ")
 	}
-	// One zero ID: fall back to content comparison (both zeroed -> equal).
-	z1, z2 := mk(0), mk(0)
-	if !sameICCProfile(doc, z1, z2) {
+
+	// And the half the ID cannot be trusted for. It is sixteen bytes in a
+	// stream the document supplies — a claim the file makes about itself — so
+	// an equal ID is not proof that the colours are the same.
+	if sameICCProfile(doc, mk(1, 1), mk(1, 2)) {
+		t.Error("two profiles with different content were called the same because " +
+			"they claimed the same Profile ID")
+	}
+
+	// A zero ID is common and says nothing, so the content decides.
+	if !sameICCProfile(doc, mk(0, 1), mk(0, 1)) {
 		t.Error("zero-ID identical content must be the same")
+	}
+	if sameICCProfile(doc, mk(0, 1), mk(0, 2)) {
+		t.Error("zero-ID different content must differ")
+	}
+
+	if sameICCProfile(doc, nil, mk(1, 1)) || sameICCProfile(doc, mk(1, 1), nil) ||
+		sameICCProfile(doc, nil, nil) {
+		t.Error("a nil profile compared equal to something")
 	}
 }
 
