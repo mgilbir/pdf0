@@ -2030,13 +2030,23 @@ func checkAnnotationAA(doc core.View, level Level) []Violation {
 		return nil // PDF/A-4 gates trigger events per-event; see checkA4TriggerEvents
 	}
 
-	// ISO 19005-1 6.5.3 / 19005-2 6.3.3: an annotation dictionary shall not
-	// contain the AA key — for ANY annotation, not only widgets/form fields.
+	// The clause is the widget/form-field additional-actions rule: 6.6.2 at
+	// PDF/A-1 and 6.4.1 at -2 and -3, which annotActionClause has under
+	// "widget". It was hardcoded to 6.6.3, which is PDF/A-4's — a level this
+	// function returns nil for — and the comment here cited 6.5.3 and 6.3.3,
+	// which are the annotation rules about CA, F, C/IC and AP and say nothing
+	// about AA. Three different wrong numbers for one report.
+	//
+	// The scope stays wider than veraPDF's, which writes the rule against
+	// PDWidgetAnnot and PDFormField: this reports /AA on any annotation. The
+	// corpus is the oracle on that and it holds at FP=0 either way, so the
+	// broader reading keeps whatever it catches.
+	clause := annotActionClause("widget", level)
 	var errs []Violation
 	check := func(dict *object.Dictionary, num int) {
 		if dict.Get("AA") != nil {
 			errs = append(errs, Violation{
-				Rule:    "6.6.3",
+				Rule:    clause,
 				Level:   level,
 				Message: "annotation must not have /AA (additional-actions)",
 				Object:  num,

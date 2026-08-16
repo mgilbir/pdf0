@@ -393,18 +393,42 @@ func TestValidatePDFA_NamedActions(t *testing.T) {
 }
 
 func TestValidatePDFA_WidgetAA(t *testing.T) {
-	t.Run("PDFA-2b rejects widget AA", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA2b)
-		widget := &object.Dictionary{}
-		widget.Set("Subtype", object.Name("Widget"))
-		widget.Set("AA", &object.Dictionary{})
-		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: widget}
+	// The clause is numbered differently per part, and the report has to carry
+	// the one the level uses: veraPDF writes the widget additional-actions rule
+	// as 6.6.2 in PDFA-1B.xml and 6.4.1 in PDFA-2B and -3B. It was reported as
+	// 6.6.3 at all three, which is PDF/A-4's number for a rule this check does
+	// not even run — so every report named a clause the reader could not look
+	// up at the level they were validating against.
+	for _, c := range []struct {
+		level pdfa.Level
+		rule  string
+	}{
+		{pdfa.PDFA1b, "6.6.2"},
+		{pdfa.PDFA2b, "6.4.1"},
+		{pdfa.PDFA3b, "6.4.1"},
+	} {
+		t.Run(c.rule+" rejects widget AA", func(t *testing.T) {
+			doc := NewPDFADocument(c.level)
+			widget := &object.Dictionary{}
+			widget.Set("Subtype", object.Name("Widget"))
+			widget.Set("AA", &object.Dictionary{})
+			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: widget}
 
-		errs := ValidatePDFA(doc, pdfa.PDFA2b)
-		if !hasRule(errs, "6.6.3") {
-			t.Error("expected 6.6.3 error for widget with /AA in PDF/A-2b")
-		}
-	})
+			errs := ValidatePDFA(doc, c.level)
+			if !hasRule(errs, c.rule) {
+				var got []string
+				for _, e := range errs {
+					got = append(got, e.Rule)
+				}
+				t.Errorf("a widget with /AA at %v was reported under %v, want %s",
+					c.level, got, c.rule)
+			}
+			if hasRule(errs, "6.6.3") {
+				t.Errorf("the report names 6.6.3, which is PDF/A-4's clause for a " +
+					"rule this level does not use")
+			}
+		})
+	}
 
 	t.Run("PDFA-4 allows widget AA", func(t *testing.T) {
 		doc := NewPDFADocument(pdfa.PDFA4)
