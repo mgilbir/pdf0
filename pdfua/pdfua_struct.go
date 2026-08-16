@@ -98,7 +98,7 @@ func checkUAStructNesting(d core.View, cat *object.Dictionary) []Violation {
 			return
 		}
 		// Only structure elements (those with an /S type) participate.
-		if _, hasS := elem.Get("S").(object.Name); !hasS {
+		if _, hasS := d.ResolveName(elem.Get("S")); !hasS {
 			return
 		}
 		t := standardStructType(d, elem, roleMap)
@@ -211,7 +211,7 @@ func childStructTypes(d core.View, elem *object.Dictionary, roleMap *object.Dict
 		if child == nil {
 			continue
 		}
-		if _, hasS := child.Get("S").(object.Name); !hasS {
+		if _, hasS := d.ResolveName(child.Get("S")); !hasS {
 			continue
 		}
 		out = append(out, standardStructType(d, child, roleMap))

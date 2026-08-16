@@ -392,14 +392,14 @@ func checkColorantArrayUTF8(doc core.View, arr object.Array, num int, add func(s
 // checkA4NameUTF8 checks the additional PDF/A-4 name categories: font names,
 // structure element type names, and RoleMap names.
 func checkA4NameUTF8(doc core.View, dict *object.Dictionary, num int, add func(string, int)) {
-	if t, _ := dict.Get("Type").(object.Name); t == "Font" {
-		if bf, ok := dict.Get("BaseFont").(object.Name); ok && !validUTF8Name(bf) {
+	if t, _ := doc.ResolveName(dict.Get("Type")); t == "Font" {
+		if bf, ok := doc.ResolveName(dict.Get("BaseFont")); ok && !validUTF8Name(bf) {
 			add("the font name is not a valid UTF-8 string", num)
 		}
 	}
 	// Structure element type name.
-	if t, _ := dict.Get("Type").(object.Name); t == "StructElem" {
-		if s, ok := dict.Get("S").(object.Name); ok && !validUTF8Name(s) {
+	if t, _ := doc.ResolveName(dict.Get("Type")); t == "StructElem" {
+		if s, ok := doc.ResolveName(dict.Get("S")); ok && !validUTF8Name(s) {
 			add("the structure type name is not a valid UTF-8 string", num)
 		}
 	}
@@ -744,7 +744,7 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 		if !ok {
 			continue
 		}
-		subtype, _ := s.Dict.Get("Subtype").(object.Name)
+		subtype, _ := doc.ResolveName(s.Dict.Get("Subtype"))
 		isContent := subtype == "Form" || s.Dict.Get("PatternType") != nil
 		if !isContent {
 			continue
@@ -761,7 +761,7 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 		if !ok {
 			continue
 		}
-		if st, _ := fd.Get("Subtype").(object.Name); st != "Type3" {
+		if st, _ := doc.ResolveName(fd.Get("Subtype")); st != "Type3" {
 			continue
 		}
 		cp := doc.ResolveDict(fd.Get("CharProcs"))

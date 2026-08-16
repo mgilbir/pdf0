@@ -113,7 +113,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	// the page (ISO 19005 6.2.2; a glyph proc that references a colour space
 	// present only in the page resources is invalid).
 	for fontDict, u := range core.CollectFontTextUsage(doc) {
-		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type3" || !rendersVisibly(u) {
+		if st, _ := doc.ResolveName(fontDict.Get("Subtype")); st != "Type3" || !rendersVisibly(u) {
 			continue
 		}
 		res := doc.ResolveDict(fontDict.Get("Resources"))
@@ -196,7 +196,7 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 				continue
 			}
 			if s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream); ok {
-				st, _ := s.Dict.Get("Subtype").(object.Name)
+				st, _ := doc.ResolveName(s.Dict.Get("Subtype"))
 				xnum := resolveObjNum(doc, xobj.Values[i])
 				// A PostScript XObject that is actually drawn is prohibited
 				// (ISO 19005-1 6.2.5, -2/-3/-4 6.2.9).
@@ -445,7 +445,7 @@ func pdfaOutputIntentProfile(doc core.View, container *object.Dictionary) *objec
 		if d == nil {
 			continue
 		}
-		if s, _ := d.Get("S").(object.Name); s == "GTS_PDFA1" {
+		if s, _ := doc.ResolveName(d.Get("S")); s == "GTS_PDFA1" {
 			if p, ok := doc.Resolve(d.Get("DestOutputProfile")).(*object.Stream); ok {
 				return p
 			}
@@ -499,7 +499,7 @@ func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, k
 			if !ok {
 				continue
 			}
-			if st, _ := s.Dict.Get("Subtype").(object.Name); st != "Form" {
+			if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
 				continue
 			}
 			childBlend := blend

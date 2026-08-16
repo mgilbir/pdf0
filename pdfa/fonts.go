@@ -121,7 +121,7 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 			Object:  u.ObjNum,
 		})
 	}
-	subtype, _ := fontDict.Get("Subtype").(object.Name)
+	subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 
 	if subtype == "Type0" {
 		desc := core.Type0Descendant(doc, fontDict)
@@ -222,7 +222,7 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 					onlyInvisible = false
 				}
 			}
-			if dsub, _ := desc.Get("Subtype").(object.Name); dsub == "CIDFontType2" && !onlyInvisible {
+			if dsub, _ := doc.ResolveName(desc.Get("Subtype")); dsub == "CIDFontType2" && !onlyInvisible {
 				switch v := doc.Resolve(desc.Get("CIDToGIDMap")).(type) {
 				case nil:
 					bad("cidToGID", "CIDFontType2 must contain a CIDToGIDMap entry (stream or /Identity)")
@@ -327,7 +327,7 @@ func checkCMapEmbedded(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		if st, _ := dict.Get("Subtype").(object.Name); st != "Type0" {
+		if st, _ := doc.ResolveName(dict.Get("Subtype")); st != "Type0" {
 			continue
 		}
 		if enc, ok := doc.Resolve(dict.Get("Encoding")).(object.Name); ok && enc != "Identity-H" && enc != "Identity-V" {
@@ -688,7 +688,7 @@ const glyphWidthTolerance = 1.0 // 1/1000 text-space units
 // (ISO 19005 font-metrics rule), the glyph is present in the program
 // (embedding-completeness rule), and no shown glyph is .notdef.
 func checkFontProgramConsistency(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
-	subtype, _ := fontDict.Get("Subtype").(object.Name)
+	subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 	if subtype == "Type3" {
 		return checkType3Widths(doc, level, rule, fontDict, u)
 	}
@@ -709,7 +709,7 @@ func damagedFontProgramError(doc core.View, level Level, rule string, fontDict, 
 	if fd == nil || !rendersVisibly(u) || !hasEmbeddedFontProgram(doc, fd) {
 		return nil
 	}
-	subtype, _ := fontDict.Get("Subtype").(object.Name)
+	subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 	return []Violation{{
 		Rule:    fontClause("embed", level),
 		Level:   level,
@@ -750,7 +750,7 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 	if fp == nil {
 		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
 	}
-	subtype, _ := fontDict.Get("Subtype").(object.Name)
+	subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 	symbolic := false
 	if fd != nil {
 		if flags, ok := doc.Resolve(fd.Get("Flags")).(object.Integer); ok {
@@ -847,7 +847,7 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 	if fp == nil {
 		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
 	}
-	cidSub, _ := desc.Get("Subtype").(object.Name)
+	cidSub, _ := doc.ResolveName(desc.Get("Subtype"))
 	// The CMap: how this font's character codes become CIDs. Identity-H is one
 	// answer and an embedded CMap stream is another; a predefined name is data
 	// this module does not carry, and cmap is nil for it.
@@ -1303,7 +1303,7 @@ func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 	var errs []Violation
 
 	for fontDict, u := range core.CollectFontTextUsage(doc) {
-		subtype, _ := fontDict.Get("Subtype").(object.Name)
+		subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 		switch subtype {
 		case "Type1", "MMType1":
 			fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
@@ -1409,7 +1409,7 @@ func checkCMapCIDLimit(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+		if st, _ := doc.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
 			continue
 		}
 		enc, ok := doc.Resolve(fontDict.Get("Encoding")).(*object.Stream)
@@ -1508,7 +1508,7 @@ func checkCIDSetProgramComplete(doc core.View, level Level) []Violation {
 	}
 	var errs []Violation
 	for fontDict, u := range core.CollectFontTextUsage(doc) {
-		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+		if st, _ := doc.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
 			continue
 		}
 		if !rendersVisibly(u) {
@@ -1532,7 +1532,7 @@ func checkCIDSetProgramComplete(doc core.View, level Level) []Violation {
 		}
 		present := core.DecodeCIDSet(doc, cidSetStream)
 		num := 0
-		if ir, ok := fontDict.Get("DescendantFonts").(object.Array); ok && len(ir) > 0 {
+		if ir, ok := doc.Resolve(fontDict.Get("DescendantFonts")).(object.Array); ok && len(ir) > 0 {
 			num = resolveObjNum(doc, ir[0])
 		}
 		// An empty CIDSet on a visibly-rendered CIDFont subset that has

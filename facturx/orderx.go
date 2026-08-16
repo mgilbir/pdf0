@@ -174,13 +174,13 @@ func ValidateOrderContext(ctx context.Context, doc core.View, rawData []byte) (r
 		add("attachment", "no embedded order XML (order-x.xml) is present as an associated file", 0)
 	} else {
 		res.XMLName = name
-		if rel, ok := fs.Get("AFRelationship").(object.Name); !ok || !facturxRelationships[rel] {
+		if rel, ok := doc.ResolveName(fs.Get("AFRelationship")); !ok || !facturxRelationships[rel] {
 			add("attachment", "the order XML /AFRelationship shall be /Data, /Alternative or /Source", num)
 		}
 		if ef := doc.ResolveDict(fs.Get("EF")); ef != nil {
 			if st, ok := doc.Resolve(ef.Get("F")).(*object.Stream); ok {
 				res.XML = doc.Content(st)
-				if sub, _ := st.Dict.Get("Subtype").(object.Name); !facturxIsXMLSubtype(sub) {
+				if sub, _ := doc.ResolveName(st.Dict.Get("Subtype")); !facturxIsXMLSubtype(sub) {
 					add("attachment", fmt.Sprintf("the order embedded-file /Subtype should be text/xml, got /%s", sub), num)
 				}
 			} else {

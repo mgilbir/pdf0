@@ -49,7 +49,7 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 	if groupRef := page.Get("Group"); groupRef != nil {
 		groupDict := doc.ResolveDict(groupRef)
 		if groupDict != nil {
-			s, _ := groupDict.Get("S").(object.Name)
+			s, _ := doc.ResolveName(groupDict.Get("S"))
 			if s == "Transparency" {
 				return true
 			}
@@ -122,7 +122,7 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 				if v.Dict.Get("Group") != nil {
 					groupDict := doc.ResolveDict(v.Dict.Get("Group"))
 					if groupDict != nil {
-						s, _ := groupDict.Get("S").(object.Name)
+						s, _ := doc.ResolveName(groupDict.Get("S"))
 						if s == "Transparency" {
 							return true
 						}
@@ -139,7 +139,7 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 						if stateStream.Dict.Get("Group") != nil {
 							groupDict := doc.ResolveDict(stateStream.Dict.Get("Group"))
 							if groupDict != nil {
-								s, _ := groupDict.Get("S").(object.Name)
+								s, _ := doc.ResolveName(groupDict.Get("S"))
 								if s == "Transparency" {
 									return true
 								}
@@ -184,14 +184,14 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 				if !ok {
 					continue
 				}
-				subtype, _ := stream.Dict.Get("Subtype").(object.Name)
+				subtype, _ := doc.ResolveName(stream.Dict.Get("Subtype"))
 				if subtype == "Form" {
 					// If the Form XObject has its own transparency Group,
 					// it manages its own compositing - don't propagate to page level.
 					if stream.Dict.Get("Group") != nil {
 						groupDict := doc.ResolveDict(stream.Dict.Get("Group"))
 						if groupDict != nil {
-							s, _ := groupDict.Get("S").(object.Name)
+							s, _ := doc.ResolveName(groupDict.Get("S"))
 							if s == "Transparency" {
 								continue // self-contained transparency group
 							}
@@ -221,7 +221,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 				if fd == nil {
 					continue
 				}
-				subtype, _ := fd.Get("Subtype").(object.Name)
+				subtype, _ := doc.ResolveName(fd.Get("Subtype"))
 				if subtype == "Type3" {
 					if resourcesUseTransparency(doc, fd, seen) {
 						return true

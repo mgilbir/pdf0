@@ -39,7 +39,7 @@ var StandardStructTypes = map[object.Name]bool{
 // standard type, or returns the element's own /S (which the role-map checks
 // flag if non-standard).
 func StandardStructType(d View, elem *object.Dictionary, roleMap *object.Dictionary) object.Name {
-	s, _ := elem.Get("S").(object.Name)
+	s, _ := d.ResolveName(elem.Get("S"))
 	t, _, _ := ResolveRoleMapChain(d, s, roleMap)
 	return t
 }
@@ -215,7 +215,7 @@ func buildStructTree(d View, cat *object.Dictionary) []StructNode {
 			}
 			return
 		}
-		rawS, hasS := elem.Get("S").(object.Name)
+		rawS, hasS := d.ResolveName(elem.Get("S"))
 		kids := StructKids(d, elem)
 		var childTypes []object.Name
 		for _, kid := range kids {
@@ -223,7 +223,7 @@ func buildStructTree(d View, cat *object.Dictionary) []StructNode {
 			if child == nil {
 				continue
 			}
-			if _, ok := child.Get("S").(object.Name); !ok {
+			if _, ok := d.ResolveName(child.Get("S")); !ok {
 				continue
 			}
 			childTypes = append(childTypes, StandardStructType(d, child, roleMap))
