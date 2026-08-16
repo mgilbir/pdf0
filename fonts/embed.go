@@ -84,18 +84,24 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// and not about the subset. A font that cannot be embedded then says so for
 	// the reason that matters, rather than reporting whatever the subsetter ran
 	// into first.
-	registry, ordering, supplement := "Adobe", "Identity", 0
-	if f.cidKeyed {
-		r, o, sup, ok := f.CharacterCollection()
-		if !ok {
-			return object.IndirectRef{}, errNoCollection
-		}
-		registry, ordering, supplement = r, o, sup
+	registry, ordering, supplement, err := f.collection()
+	if err != nil {
+		return object.IndirectRef{}, err
 	}
 
 	program, kept, err := f.SubsetGlyphs()
 	if err != nil {
 		return object.IndirectRef{}, err
+	}
+	// The same question again, of the program this time, for a face that
+	// arrived through Adopt and so was never read from bytes here. See
+	// collection.
+	if !f.cidKeyed {
+		if r, o, sup, ok := collectionOfProgram(program); ok {
+			registry, ordering, supplement = r, o, sup
+		} else if programIsCIDKeyed(program) {
+			return object.IndirectRef{}, errNoCollection
+		}
 	}
 	baseFont := object.Name(subsetTag(kept) + "+" + f.Name())
 
@@ -289,6 +295,61 @@ func (f *Face) bboxArray(d Descriptor) object.Array {
 		object.Integer(int(f.scale(d.BBox[0]))), object.Integer(int(f.scale(d.BBox[1]))),
 		object.Integer(int(f.scale(d.BBox[2]))), object.Integer(int(f.scale(d.BBox[3]))),
 	}
+}
+
+// collection is the character collection to write into /CIDSystemInfo, and
+// whether the face may be embedded at all.
+//
+// §9.7.4.2: it must be compatible with the collection of the glyph source. A
+// font addressed by glyph index has none, and Adobe-Identity-0 is how a PDF
+// says exactly that. It is not a default for a font that *has* one and could
+// not state it — that is a specific claim about a numbering, and it is wrong
+// for precisely the fonts this distinguishes.
+//
+// Asked before the font is subsetted, because for a face read here it is a fact
+// already known, and a font that cannot be embedded should say so for the
+// reason that matters rather than reporting whatever the subsetter met first.
+// A face from Adopt is not known, and embedComposite asks again afterwards.
+func (f *Face) collection() (registry, ordering string, supplement int, err error) {
+	if !f.cidKeyed {
+		return "Adobe", "Identity", 0, nil
+	}
+	r, o, sup, ok := f.CharacterCollection()
+	if !ok {
+		return "", "", 0, errNoCollection
+	}
+	return r, o, sup, nil
+}
+
+// collectionOfProgram reads the collection out of an sfnt's CFF table.
+//
+// It exists for the face this package did not load. Adopt is handed a shaping
+// face and never the bytes, so nothing was parsed for it — but the subset *is*
+// bytes, and it carries the ROS and the charset through untouched, so the
+// question can be asked of it instead. That is how an adopted CID-keyed face
+// gets the collection it is numbered in rather than the default.
+func collectionOfProgram(program []byte) (registry, ordering string, supplement int, ok bool) {
+	cff := font.SFNTTables(program)["CFF "]
+	if cff == nil {
+		return "", "", 0, false
+	}
+	p := font.ParseCFF(cff)
+	if p == nil || p.GIDToCID == nil || p.Registry == "" || p.Ordering == "" {
+		return "", "", 0, false
+	}
+	return p.Registry, p.Ordering, p.Supplement, true
+}
+
+// programIsCIDKeyed reports whether an sfnt's CFF numbers its glyphs by CID,
+// which decides whether a missing collection is a refusal or a font that simply
+// has none to state.
+func programIsCIDKeyed(program []byte) bool {
+	cff := font.SFNTTables(program)["CFF "]
+	if cff == nil {
+		return false
+	}
+	p := font.ParseCFF(cff)
+	return p != nil && p.GIDToCID != nil
 }
 
 // errNoCollection is a CID-keyed face that cannot say which collection its CIDs

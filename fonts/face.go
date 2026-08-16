@@ -53,15 +53,10 @@ type Face struct {
 // for: one out of a cache, or one a caller built with forme directly. The face
 // is not copied — the wrapper and the original are the same font, and each
 // records the glyphs the other used.
-// An adopted face is keyed correctly whatever its outlines are: /W, /CIDSet and
-// /ToUnicode all ask shape.Face.GlyphCode, which answers from the face itself.
-//
-// One narrower thing is still lost. A CID-keyed face that cannot name its
-// character collection is refused when it was loaded here and embedded as
-// Adobe-Identity-0 when it was adopted, because knowing it is CID-keyed at all
-// needs the program and this never sees it. That is wrong for a font numbered
-// in a collection it failed to state — rare, and malformed to begin with — and
-// Load is the constructor that catches it.
+// An adopted face is embedded exactly as a loaded one is. /W, /CIDSet and
+// /ToUnicode ask shape.Face.GlyphCode, which answers from the face; the
+// character collection is read from the subset, which is the program this
+// constructor never saw and carries the ROS through untouched.
 func Adopt(f *shape.Face) *Face { return &Face{Face: f} }
 
 // Load reads a font program — TrueType, OpenType, or an sfnt carrying CFF

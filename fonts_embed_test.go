@@ -1378,6 +1378,60 @@ func TestACIDFontThatCannotNameItsCollectionIsRefused(t *testing.T) {
 	}
 }
 
+// TestAnAdoptedCIDFaceGetsItsOwnCollection is the other half of the Adopt gap,
+// and the half that survived GlyphCode.
+//
+// Adopt is handed a shaping face and never the program, so nothing here knew
+// whether an adopted font was CID-keyed — and the collection is written from
+// that. An adopted Adobe-Japan1 font was described as Adobe-Identity-0, which
+// says its CIDs are its own arbitrary numbering, and a reader believing it
+// looks every glyph up in the wrong collection.
+//
+// The subset is the program, and it carries the ROS through untouched, so the
+// question can be asked of it after subsetting instead. The fixture is the
+// corpus's Adobe-Japan1-6 font because Noto is Adobe-Identity-0, which is also
+// the default — a test on Noto would pass without the fix.
+func TestAnAdoptedCIDFaceGetsItsOwnCollection(t *testing.T) {
+	cff := corpusCIDKeyedCFF(t)
+	prog := font.ParseCFF(cff)
+	if prog == nil || prog.GIDToCID == nil {
+		t.Fatal("the corpus fixture is not a CID-keyed CFF")
+	}
+	if prog.Registry == "Adobe" && prog.Ordering == "Identity" {
+		t.Skip("the corpus font found is Adobe-Identity-0, which is also the " +
+			"default, so this run cannot tell the two apart")
+	}
+	data := fonttest.OTTO(cff, fonttest.SFNTOptions{
+		Name: "Japan1", Glyphs: glyphsFor(prog.NumGlyphs - 1),
+	})
+	inner, err := shape.Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	// Adopt, not Load: the constructor that never sees the bytes.
+	f := fonts.Adopt(inner)
+	f.Encode("A")
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	ref, err := f.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding an adopted CID-keyed face: %v", err)
+	}
+	info, _ := doc.Resolve(descendantOf(t, doc, ref).Get("CIDSystemInfo")).(*object.Dictionary)
+	if info == nil {
+		t.Fatal("the descendant has no /CIDSystemInfo")
+	}
+	reg, _ := doc.Resolve(info.Get("Registry")).(object.String)
+	ord, _ := doc.Resolve(info.Get("Ordering")).(object.String)
+	sup, _ := doc.Resolve(info.Get("Supplement")).(object.Integer)
+	if string(reg.Value) != prog.Registry || string(ord.Value) != prog.Ordering ||
+		int(sup) != prog.Supplement {
+		t.Errorf("an adopted face was written as %s-%s-%d; the program says "+
+			"%s-%s-%d", reg.Value, ord.Value, sup,
+			prog.Registry, prog.Ordering, prog.Supplement)
+	}
+}
+
 // TestAnAdoptedCIDFaceIsKeyedCorrectly closes the gap this package used to
 // state on Adopt.
 //
