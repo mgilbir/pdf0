@@ -1,0 +1,216 @@
+package core
+
+import "testing"
+
+// Reading a CMap, which is how a Type 0 font's bytes become glyph references.
+//
+// Every test here is about one of the two things a CMap says — where a code
+// ends, and which CID it names — because a checker that gets either wrong is
+// asking about the wrong glyph and will say so with confidence.
+
+const mixedWidthCMap = `
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> def
+/CMapName /Test-H def
+/CMapType 1 def
+2 begincodespacerange
+<00> <80>
+<8140> <9FFC>
+endcodespacerange
+2 begincidrange
+<20> <7E> 231
+<8140> <817E> 633
+endcidrange
+1 begincidchar
+<8180> 700
+endcidchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+`
+
+// TestCMapCutsCodesByTheirFirstByte is §9.7.6.2, and the rule a naive reader
+// gets wrong.
+//
+// The length comes from the first byte alone. A mixed-width CMap has a one-byte
+// space and a two-byte one, and which a code belongs to is decided before
+// anything asks whether the code is in range.
+func TestCMapCutsCodesByTheirFirstByte(t *testing.T) {
+	c, ok := ParseCMap(mixedWidthCMap)
+	if !ok {
+		t.Fatal("the CMap did not parse")
+	}
+
+	// "A" is one byte; 0x81 0x41 is two.
+	got := c.Decode([]byte{0x41, 0x81, 0x41, 0x42})
+	if len(got) != 3 {
+		t.Fatalf("%d codes from four bytes, want 3: %+v", len(got), got)
+	}
+	if got[0].Bytes != 1 || got[0].Value != 0x41 {
+		t.Errorf("the first code is %d bytes of %#x, want 1 byte of 0x41", got[0].Bytes, got[0].Value)
+	}
+	if got[1].Bytes != 2 || got[1].Value != 0x8141 {
+		t.Errorf("the second code is %d bytes of %#x, want 2 bytes of 0x8141", got[1].Bytes, got[1].Value)
+	}
+	if got[2].Bytes != 1 || got[2].Value != 0x42 {
+		t.Errorf("the third code is %d bytes of %#x, want 1 byte of 0x42", got[2].Bytes, got[2].Value)
+	}
+}
+
+// TestCMapLengthIsNotContainment is the same rule at the point it bites.
+//
+// 0x81 0x20 begins in the two-byte range's first byte and its value is below
+// the range, so it is a two-byte code that maps to nothing. Reading it as one
+// byte — which is what deciding by containment does — leaves the 0x20 to be
+// read as a code of its own, and every code after it in the string is wrong.
+func TestCMapLengthIsNotContainment(t *testing.T) {
+	c, _ := ParseCMap(mixedWidthCMap)
+	got := c.Decode([]byte{0x81, 0x20, 0x41})
+	if len(got) != 2 {
+		t.Fatalf("%d codes, want 2 — the invalid two-byte code and the 'A' after "+
+			"it: %+v", len(got), got)
+	}
+	if got[0].Bytes != 2 {
+		t.Errorf("0x8120 was read as %d bytes, want 2; the string desynchronises "+
+			"from here", got[0].Bytes)
+	}
+	if got[0].Mapped {
+		t.Errorf("0x8120 mapped to CID %d; it is outside every cidrange", got[0].CID)
+	}
+	if got[1].Value != 0x41 || got[1].Bytes != 1 {
+		t.Errorf("the code after it is %#x of %d bytes, want 0x41 of 1", got[1].Value, got[1].Bytes)
+	}
+}
+
+// TestCMapMapsRangesAndSingles: a cidrange counts up from its start, and a
+// cidchar names one code.
+func TestCMapMapsRangesAndSingles(t *testing.T) {
+	c, _ := ParseCMap(mixedWidthCMap)
+	for _, tc := range []struct {
+		in   []byte
+		cid  int
+		what string
+	}{
+		{[]byte{0x20}, 231, "the start of a range"},
+		{[]byte{0x41}, 231 + 0x41 - 0x20, "the middle of a range"},
+		{[]byte{0x7E}, 231 + 0x7E - 0x20, "the end of a range"},
+		{[]byte{0x81, 0x40}, 633, "the start of the two-byte range"},
+		{[]byte{0x81, 0x7E}, 633 + 0x3E, "the end of the two-byte range"},
+		{[]byte{0x81, 0x80}, 700, "a cidchar"},
+	} {
+		got := c.Decode(tc.in)
+		if len(got) != 1 {
+			t.Errorf("%s: %d codes, want 1", tc.what, len(got))
+			continue
+		}
+		if !got[0].Mapped || got[0].CID != tc.cid {
+			t.Errorf("%s: % x mapped to %d (mapped=%v), want %d",
+				tc.what, tc.in, got[0].CID, got[0].Mapped, tc.cid)
+		}
+	}
+	// Just past the one-byte range's end, and inside the codespace: a code the
+	// document may write and the CMap does not define.
+	if got := c.Decode([]byte{0x1F}); len(got) != 1 || got[0].Mapped {
+		t.Errorf("0x1F mapped to %+v; it is in the codespace and in no cidrange", got)
+	}
+}
+
+// TestIdentityCMapIsTwoBytesAndItself, since it is the case every other
+// document uses and the one a mistake here would break.
+func TestIdentityCMapIsTwoBytesAndItself(t *testing.T) {
+	c := IdentityCMap()
+	if !c.Identity() {
+		t.Error("the identity CMap does not say it is one")
+	}
+	got := c.Decode([]byte{0x00, 0x41, 0xFF, 0xFE})
+	if len(got) != 2 {
+		t.Fatalf("%d codes from four bytes, want 2", len(got))
+	}
+	if got[0].CID != 0x0041 || got[1].CID != 0xFFFE {
+		t.Errorf("CIDs are %d and %d, want 65 and 65534", got[0].CID, got[1].CID)
+	}
+	for _, g := range got {
+		if !g.Mapped || g.Bytes != 2 {
+			t.Errorf("code %#x: mapped=%v bytes=%d, want true and 2", g.Value, g.Mapped, g.Bytes)
+		}
+	}
+	// An odd trailing byte is still reported rather than dropped, so a caller
+	// counting codes sees the incomplete one.
+	if got := c.Decode([]byte{0x00, 0x41, 0x00}); len(got) != 2 {
+		t.Errorf("three bytes gave %d codes, want 2 — the pair and the stray", len(got))
+	}
+}
+
+// TestACMapWithNoCodespaceIsRefused. Without one nothing can be cut into
+// codes, and a map that answers for no code is worse than no map: it reports
+// every string as defining nothing.
+func TestACMapWithNoCodespaceIsRefused(t *testing.T) {
+	if _, ok := ParseCMap("begincmap\n1 begincidrange\n<20> <7E> 1\nendcidrange\nendcmap"); ok {
+		t.Error("a CMap with no codespacerange was accepted")
+	}
+	if _, ok := ParseCMap(""); ok {
+		t.Error("an empty CMap was accepted")
+	}
+	if _, ok := ParseCMap("not a cmap at all"); ok {
+		t.Error("a non-CMap was accepted")
+	}
+}
+
+// TestACMapThatDefersToAnotherIsRefused: usecmap names a predefined CMap, which
+// is data this module does not carry. The result would be a map with holes and
+// no way to tell a hole from a code the document really left undefined.
+func TestACMapThatDefersToAnotherIsRefused(t *testing.T) {
+	src := `begincmap
+/UniJIS-UCS2-H usecmap
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+endcmap`
+	if _, ok := ParseCMap(src); ok {
+		t.Error("a CMap deferring to a predefined one was accepted; the codes it " +
+			"does not define would read as undefined rather than unknown")
+	}
+}
+
+// TestACMapCannotBeAskedForUnboundedWork is the security bound.
+//
+// A CMap arrives in a document. "<0000> <FFFFFFFF> 1" is eleven bytes and asks
+// for four billion inserts if the range is expanded, and a file containing it
+// costs nothing to make. Ranges are kept as ranges, and one wider than the
+// bound refuses the whole map rather than being truncated — a truncated map
+// answers "undefined" for codes it simply did not reach.
+func TestACMapCannotBeAskedForUnboundedWork(t *testing.T) {
+	huge := `begincmap
+1 begincodespacerange
+<00000000> <FFFFFFFF>
+endcodespacerange
+1 begincidrange
+<00000000> <FFFFFFFF> 1
+endcidrange
+endcmap`
+	if _, ok := ParseCMap(huge); ok {
+		t.Error("a cidrange spanning four billion codes was accepted")
+	}
+
+	// And the bound is not so tight that a real CMap trips it: Adobe's largest
+	// published CMaps run to a few thousand entries.
+	var b []byte
+	b = append(b, "begincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"...)
+	b = append(b, "begincidrange\n"...)
+	for i := 0; i < 3000; i++ {
+		b = append(b, []byte("<"+hex4(i*16)+"> <"+hex4(i*16+15)+"> 1\n")...)
+	}
+	b = append(b, "endcidrange\nendcmap"...)
+	if _, ok := ParseCMap(string(b)); !ok {
+		t.Error("a three-thousand-range CMap was refused; the bound is too tight " +
+			"for a real font")
+	}
+}
+
+func hex4(v int) string {
+	const d = "0123456789ABCDEF"
+	return string([]byte{d[(v>>12)&15], d[(v>>8)&15], d[(v>>4)&15], d[v&15]})
+}
