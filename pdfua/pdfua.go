@@ -460,7 +460,7 @@ func checkUAAnnotations(d core.View) []Violation {
 	var v []Violation
 	for num, iobj := range d.Objects {
 		a, ok := iobj.Value.(*object.Dictionary)
-		if !ok || !core.IsAnnotation(a) {
+		if !ok || !d.IsAnnotation(a) {
 			continue
 		}
 		st, _ := a.Get("Subtype").(object.Name)
