@@ -965,20 +965,17 @@ func checkPermsDict(doc core.View, level Level) []Violation {
 	// DigestLocation/DigestMethod/DigestValue keys in its signature reference
 	// dictionaries (ISO 19005-2, 6.1.12).
 	if sigDict := doc.ResolveDict(permsDict.Get("DocMDP")); sigDict != nil {
-		refArr, ok := doc.Resolve(sigDict.Get("Reference")).(object.Array)
-		if !ok {
-			if a, isArr := sigDict.Get("Reference").(object.Array); isArr {
-				refArr = a
-			}
-		}
+		// Resolve returns a non-reference as it stands, so these two reach a
+		// direct array and direct dictionaries without a fallback. The
+		// fallbacks that used to be here could only fire when the assertion
+		// they retried had already failed for the same reason, and the second
+		// one reinstated a nil dictionary that the check below would then
+		// dereference.
+		refArr, _ := doc.Resolve(sigDict.Get("Reference")).(object.Array)
 		for _, el := range refArr {
 			refDict := doc.ResolveDict(el)
 			if refDict == nil {
-				if d, isDict := el.(*object.Dictionary); isDict {
-					refDict = d
-				} else {
-					continue
-				}
+				continue
 			}
 			for _, forbidden := range []object.Name{"DigestLocation", "DigestMethod", "DigestValue"} {
 				if refDict.Get(forbidden) != nil {
@@ -2414,7 +2411,6 @@ func imageClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"image": {"6.2.4", "6.2.8", "6.2.7.1"},
-		"jpx":   {"6.2.4", "6.2.8.3", "6.2.7.3"},
 	}
 	c, ok := m[concept]
 	if !ok {
@@ -2428,6 +2424,19 @@ func imageClause(concept string, level Level) string {
 	default:
 		return c[1]
 	}
+}
+
+// jpxClause returns the ISO clause for the JPEG 2000 image rules.
+//
+// It is separate from imageClause because there is no PDF/A-1 answer to give
+// and the table above should not invent one: JPXDecode is not a permitted
+// filter at that level, so a JPEG 2000 image there is reported by the filter
+// check under 6.1.10 and the rules below never run.
+func jpxClause(level Level) string {
+	if level == PDFA4 {
+		return "6.2.7.3"
+	}
+	return "6.2.8.3"
 }
 
 func checkNoAlternateImages(doc core.View, level Level) []Violation {
@@ -2946,17 +2955,6 @@ func checkInfoXMPConsistency(doc core.View, level Level) []Violation {
 	return errs
 }
 
-func getInfoString(info *object.Dictionary, key string) string {
-	obj := info.Get(object.Name(key))
-	if obj == nil {
-		return ""
-	}
-	if s, ok := obj.(object.String); ok {
-		return core.DecodePDFTextString(s.Value)
-	}
-	return ""
-}
-
 // countXMPListEntries counts the rdf:li entries inside an XMP list-valued
 // property (rdf:Seq/rdf:Bag/rdf:Alt).
 func countXMPListEntries(xmp, key string) int {
@@ -3227,7 +3225,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 	}
 
 	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
-		for i, val := range xobjDict.Values {
+		for _, val := range xobjDict.Values {
 			stream, ok := doc.Resolve(val).(*object.Stream)
 			if !ok {
 				continue
@@ -3258,7 +3256,6 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 				}
 				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs)
 			}
-			_ = i
 		}
 	}
 
@@ -4974,7 +4971,7 @@ func checkJPXImages(doc core.View, level Level) []Violation {
 	if level == PDFA1b {
 		return nil // JPXDecode is forbidden outright at PDF/A-1 (6.1.10)
 	}
-	rule := imageClause("jpx", level)
+	rule := jpxClause(level)
 
 	var errs []Violation
 	for num, iobj := range doc.Objects {
