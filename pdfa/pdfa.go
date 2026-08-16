@@ -4773,16 +4773,27 @@ func sameICCProfile(doc core.View, a, b *object.Stream) bool {
 		return false
 	}
 	if len(da) >= 100 {
-		// The ICC Profile ID (header bytes 84-99) is an MD5 of the profile.
-		// When both profiles carry a non-zero Profile ID, they are the same
-		// iff the IDs match — two profiles with different non-zero IDs are
-		// distinct even if otherwise byte-identical. When either ID is zero
-		// (not computed), fall back to comparing the content with the ID
-		// field zeroed.
+		// The ICC Profile ID is an MD5 of the profile, in header bytes 84-99.
+		//
+		// Two *different* non-zero IDs mean different profiles, and that is
+		// the corpus's ruling rather than a reading: PDF_A-4 6-2-4-2-t03-pass-d
+		// embeds two 557,188-byte profiles that are identical but for one byte
+		// of their IDs, and it is a pass file — so veraPDF holds them distinct,
+		// and comparing content with the ID zeroed reports it as a violation.
+		//
+		// Two *equal* non-zero IDs are not taken as proof, which is the half
+		// that was missing. The ID is sixteen bytes in a stream the document
+		// supplies, so it is a claim the file makes about itself, and the rule
+		// this feeds — an ICCBased space shall not embed the same profile as
+		// the output intent — reports a violation when the answer is "same". A
+		// forged ID would therefore turn a conforming file into a reported one,
+		// so an equal ID still has to be borne out by the content.
 		ida, idb := da[84:100], db[84:100]
-		if !allZero(ida) && !allZero(idb) {
-			return bytes.Equal(ida, idb)
+		if !allZero(ida) && !allZero(idb) && !bytes.Equal(ida, idb) {
+			return false
 		}
+		// Either the IDs agree — in which case the content still has to — or
+		// one is absent, which is common and says nothing about the colours.
 		na := append([]byte(nil), da...)
 		nb := append([]byte(nil), db...)
 		for i := 84; i < 100; i++ {
