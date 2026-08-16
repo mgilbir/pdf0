@@ -417,12 +417,12 @@ charstrings — the two disagree in Noto Sans JP (glyph 34 is 608 in `hmtx` and
 is also what layout measured with, so the document's `/W` and its line breaks
 agree.
 
-A face from `fonts.Adopt` is keyed correctly too — `GlyphCode` answers from the
-face, so there is nothing for this package to parse and no branch to forget. The
-one thing an adopted face loses is the refusal above: knowing a font is
-CID-keyed *at all* needs the program, so an adopted CID-keyed face that cannot
-name its collection is written as Adobe-Identity-0 rather than refused. `Load`
-is the constructor that catches that.
+A face from `fonts.Adopt` is embedded exactly as a loaded one is. `GlyphCode`
+answers the keying from the face, and the collection is read from the *subset* —
+the program `Adopt` never saw, which carries the ROS and the charset through
+untouched. For a loaded face the collection is known before subsetting, so a
+font that cannot be embedded says so for the reason that matters rather than
+reporting whatever the subsetter met first.
 
 ## Confirmed limitations
 
