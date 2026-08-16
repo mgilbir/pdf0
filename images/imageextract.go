@@ -329,7 +329,7 @@ func collectImagesFrom(d core.View, res *object.Dictionary, seen map[int]bool, d
 			}
 			seen[num] = true
 		}
-		switch sub, _ := st.Dict.Get("Subtype").(object.Name); sub {
+		switch sub, _ := d.ResolveName(st.Dict.Get("Subtype")); sub {
 		case "Image":
 			if !yield(extractImage(d, st, object.RefNum(ref))) {
 				return false

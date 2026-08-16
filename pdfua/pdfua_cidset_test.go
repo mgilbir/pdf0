@@ -46,7 +46,7 @@ func TestUACIDFontCIDSetNonSubset(t *testing.T) {
 	f.Set("Subtype", object.Name("Type0"))
 	f.Set("BaseFont", object.Name("Arial")) // no subset tag
 	doc.Objects[10] = &object.IndirectObject{Number: 10, Value: f}
-	if isSubsetFont(f) {
+	if isSubsetFont(doc, f) {
 		t.Fatal("Arial should not be a subset font")
 	}
 	if v := checkCIDFontCIDSet(doc, f); len(v) != 0 {

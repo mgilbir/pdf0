@@ -310,7 +310,7 @@ func (v View) collectPages(ref object.Object, pages *[]PageInfo, seen map[int]bo
 	if node == nil {
 		return
 	}
-	switch nodeType, _ := node.Get("Type").(object.Name); nodeType {
+	switch nodeType, _ := v.ResolveName(node.Get("Type")); nodeType {
 	case "Pages":
 		if kids, ok := v.Resolve(node.Get("Kids")).(object.Array); ok {
 			for _, kid := range kids {

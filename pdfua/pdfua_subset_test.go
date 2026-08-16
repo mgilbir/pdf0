@@ -13,13 +13,14 @@ func TestIsSubsetFont(t *testing.T) {
 		d.Set("BaseFont", bf)
 		return d
 	}
+	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
 	for _, bf := range yes {
-		if !isSubsetFont(mk(bf)) {
+		if !isSubsetFont(doc, mk(bf)) {
 			t.Errorf("%q should be a subset font", bf)
 		}
 	}
 	for _, bf := range no {
-		if isSubsetFont(mk(bf)) {
+		if isSubsetFont(doc, mk(bf)) {
 			t.Errorf("%q should not be a subset font", bf)
 		}
 	}
