@@ -201,3 +201,47 @@ func TestAPredefinedCMapIsStillSkipped(t *testing.T) {
 		}
 	}
 }
+
+// TestToUnicodeIsKeyedByCodeNotCID is a rule that only becomes visible once a
+// non-Identity CMap is read.
+//
+// §9.10.3 maps a ToUnicode CMap over the character codes a content stream
+// writes. Under Identity-H the code and the CID are the same number, so the
+// distinction never showed; for a font with its own CMap they are different,
+// and asking by CID reads whatever entry happens to sit at that number.
+//
+// It decides whether an empty glyph is reported. A subset must embed an outline
+// for every glyph it renders, except a whitespace one — so the check asks
+// ToUnicode what character the code meant. Ask with the wrong key and an empty glyph
+// standing for a space gets reported, or one standing for a letter does not.
+func TestToUnicodeIsKeyedByCodeNotCID(t *testing.T) {
+	// Code 0x41 maps to CID 2, whose glyph is empty. ToUnicode says code 0x41
+	// is a space, so the empty glyph is legitimate and must not be reported.
+	//
+	// The trap: CID 2 as a ToUnicode key is 'B', which is not whitespace — so a
+	// checker asking by CID reports a font that is correct.
+	const cmapSrc = `begincmap
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 begincidchar
+<41> 2
+endcidchar
+endcmap`
+	doc, font, u := cmapFontWith(t, cmapSrc, []byte{0x41})
+
+	// ToUnicode: code 0x41 is a space; code 0x02 — the CID read as a code —
+	// is 'B'.
+	tu := "beginbfchar <0041> <0020> <0002> <0042> endbfchar"
+	stream := &object.Stream{Dict: object.Dictionary{}, Data: []byte(tu)}
+	stream.Dict.Set("Length", object.Integer(len(tu)))
+	doc.Objects[13] = &object.IndirectObject{Number: 13, Value: stream}
+	font.Set("ToUnicode", object.IndirectRef{Number: 13})
+
+	for _, m := range errMessages(checkCIDFontConsistency(doc, PDFA1b, "6.3", font, u)) {
+		if strings.Contains(m, "does not define a glyph") {
+			t.Errorf("an empty glyph standing for a space was reported: %s\n"+
+				"ToUnicode was read at the CID rather than at the code", m)
+		}
+	}
+}

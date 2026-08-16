@@ -911,7 +911,12 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 				// A subset must embed an outline for every rendered glyph; an
 				// empty glyf entry is acceptable only for a whitespace
 				// character (ISO 19005 6.2.11.4.1/6.2.10.4.1).
-				if r, ok := toUni[cid]; ok && !isGlyphWhitespace(r) {
+				// Keyed by the character *code*, not the CID. §9.10.3 maps a
+				// ToUnicode CMap over the codes a content stream writes, and
+				// the two are the same number only under Identity — for a font
+				// with its own CMap, asking by CID reads whatever entry happens
+				// to sit at that number, or none.
+				if r, ok := toUni[int(code.Value)]; ok && !isGlyphWhitespace(r) {
 					report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
 				}
 			}

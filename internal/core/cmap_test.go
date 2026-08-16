@@ -1,6 +1,10 @@
 package core
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/mgilbir/pdf0/object"
+)
 
 // Reading a CMap, which is how a Type 0 font's bytes become glyph references.
 //
@@ -213,4 +217,59 @@ endcmap`
 func hex4(v int) string {
 	const d = "0123456789ABCDEF"
 	return string([]byte{d[(v>>12)&15], d[(v>>8)&15], d[(v>>4)&15], d[v&15]})
+}
+
+// TestToUnicodeReadsEveryEntryNotJustTheFirstOfEachLine.
+//
+// Nothing requires one mapping per line, and font tools do not write it that
+// way. This reader took the first entry of each line and dropped the rest, so a
+// CMap with its table on one line — which is how several producers emit them —
+// came back with a single mapping in it. Its sibling ParseToUnicodeRunes
+// already consumed the body as a flat stream and documented why; the two now
+// agree.
+//
+// It is not a cosmetic difference. The map decides whether an empty glyph is
+// allowed to be empty, so a lost entry turns "this code is a space" into "this
+// code is unknown" and a conforming file into a reported one.
+func TestToUnicodeReadsEveryEntryNotJustTheFirstOfEachLine(t *testing.T) {
+	got := parseToUnicode("beginbfchar <0041> <0061> <0042> <0062> <0043> <0063> endbfchar")
+	for code, want := range map[int]rune{0x41: 'a', 0x42: 'b', 0x43: 'c'} {
+		if got[code] != want {
+			t.Errorf("code %#x mapped to %q, want %q — entries after the first on "+
+				"a line were dropped", code, got[code], want)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("%d mappings, want 3: %v", len(got), got)
+	}
+
+	// Across lines as well as along them, and ranges the same way.
+	got = parseToUnicode("beginbfrange\n<0041> <0043> <0061> <0050> <0051> <0070>\nendbfrange")
+	for code, want := range map[int]rune{0x41: 'a', 0x42: 'b', 0x43: 'c', 0x50: 'p', 0x51: 'q'} {
+		if got[code] != want {
+			t.Errorf("code %#x mapped to %q, want %q", code, got[code], want)
+		}
+	}
+
+	// And an entry split across a line break, which the flat-stream reading
+	// handles and a line-at-a-time one cannot.
+	got = parseToUnicode("beginbfchar <0041>\n<0061> endbfchar")
+	if got[0x41] != 'a' {
+		t.Errorf("a mapping split across a line break was lost: %v", got)
+	}
+}
+
+// parseToUnicode runs a ToUnicode CMap body through the reader, which needs a
+// font dictionary and a document to hang the stream on.
+func parseToUnicode(body string) map[int]rune {
+	st := &object.Stream{Dict: object.Dictionary{}, Data: []byte(body)}
+	st.Dict.Set("Length", object.Integer(len(body)))
+	fontDict := &object.Dictionary{}
+	fontDict.Set("ToUnicode", object.IndirectRef{Number: 1})
+	doc := View{
+		Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: st}},
+		Limits:  DefaultLimits(),
+		Run:     NewRun(nil),
+	}
+	return doc.ParseToUnicodeMap(fontDict)
 }
