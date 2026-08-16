@@ -448,6 +448,11 @@ becomes the start of the next code, so every code after it in the string is
 wrong. That is the whole of mixed-width CJK and it is what `codeAt` is careful
 about.
 
+Every check that turns a shown string into glyph references goes through it:
+the PDF/A glyph, `.notdef` and width rules, the `/CIDSet` completeness rule, and
+PDF/UA's `.notdef` rule. Simple fonts are untouched — a code there is one byte
+by definition.
+
 A code the document writes and its own CMap does not define is reported as
 that, and not as CID 0 — a `.notdef` reference is something the document did on
 purpose and this is not.
