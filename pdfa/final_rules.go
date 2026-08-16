@@ -279,7 +279,7 @@ func checkA4TriggerEvents(doc core.View, level Level) []Violation {
 		report(doc.ResolveDict(page.Dict.Get("AA")), page.ObjNum)
 	}
 	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(d) {
+		if d, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(d) {
 			report(doc.ResolveDict(d.Get("AA")), num)
 		}
 	}

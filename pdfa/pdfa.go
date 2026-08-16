@@ -1069,7 +1069,7 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 		if brObj == nil || dict.Get("Contents") == nil {
 			continue
 		}
-		if t, _ := dict.Get("Type").(object.Name); t != "" && t != "Sig" && t != "DocTimeStamp" {
+		if t, _ := doc.ResolveName(dict.Get("Type")); t != "" && t != "Sig" && t != "DocTimeStamp" {
 			continue
 		}
 
@@ -1275,7 +1275,7 @@ func fontObjNum(doc core.View, fontDict *object.Dictionary) int {
 // checkOneFontEmbedded applies the 6.2.10 embedding rule to a single font
 // dictionary.
 func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int, level Level) []Violation {
-	subtypeName, _ := fontDict.Get("Subtype").(object.Name)
+	subtypeName, _ := doc.ResolveName(fontDict.Get("Subtype"))
 
 	// Type3 fonts define their glyphs with content streams, so they carry no
 	// font program to embed. Type0 (composite) fonts DO require embedding —
@@ -1321,7 +1321,7 @@ func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int
 		}
 	}
 	baseFontName := ""
-	if bn, ok := fontDict.Get("BaseFont").(object.Name); ok {
+	if bn, ok := doc.ResolveName(fontDict.Get("BaseFont")); ok {
 		baseFontName = string(bn)
 	}
 	return []Violation{{
@@ -1350,7 +1350,7 @@ func collectFontsRecursive(doc core.View, ref object.Object, fonts map[int]*obje
 		return
 	}
 
-	nodeType, _ := node.Get("Type").(object.Name)
+	nodeType, _ := doc.ResolveName(node.Get("Type"))
 
 	if nodeType == "Pages" {
 		kidsObj := doc.Resolve(node.Get("Kids"))
@@ -1518,7 +1518,7 @@ func checkAnnotationSubtypes(doc core.View, level Level) []Violation {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(dict) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -1559,7 +1559,7 @@ func checkAnnotationFlags(doc core.View, level Level) []Violation {
 		}
 
 		// Popup annotations are exempt from F requirement
-		st, _ := dict.Get("Subtype").(object.Name)
+		st, _ := doc.ResolveName(dict.Get("Subtype"))
 		if st == "Popup" {
 			return
 		}
@@ -1629,7 +1629,7 @@ func checkAnnotationFlags(doc core.View, level Level) []Violation {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(dict) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -1643,7 +1643,7 @@ func checkAnnotationFlags(doc core.View, level Level) []Violation {
 func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 	var errs []Violation
 	check := func(dict *object.Dictionary, num int) {
-		st, _ := dict.Get("Subtype").(object.Name)
+		st, _ := doc.ResolveName(dict.Get("Subtype"))
 
 		// Exempt subtypes
 		if st == "Popup" || st == "Link" || st == "Projection" {
@@ -1706,7 +1706,7 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(dict) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(dict) {
 			check(dict, num)
 		}
 	}
@@ -1721,7 +1721,7 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 func annotFieldType(doc core.View, dict *object.Dictionary) object.Name {
 	node := dict
 	for hops := 0; node != nil && hops < 32; hops++ {
-		if ft, ok := node.Get("FT").(object.Name); ok {
+		if ft, ok := doc.ResolveName(node.Get("FT")); ok {
 			return ft
 		}
 		node = doc.ResolveDict(node.Get("Parent"))
@@ -1755,7 +1755,7 @@ func isZeroAreaRect(obj object.Object) bool {
 func checkWidgetNoAction(doc core.View, level Level) []Violation {
 	var errs []Violation
 	check := func(dict *object.Dictionary, num int) {
-		st, _ := dict.Get("Subtype").(object.Name)
+		st, _ := doc.ResolveName(dict.Get("Subtype"))
 		if st != "Widget" {
 			return
 		}
@@ -1913,8 +1913,8 @@ func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 		}
 
 		// Check if the object itself is an action dict (has /S and /Type=Action or no /Type)
-		if s, ok := dict.Get("S").(object.Name); ok {
-			typeObj := dict.Get("Type")
+		if s, ok := doc.ResolveName(dict.Get("S")); ok {
+			typeObj := doc.Resolve(dict.Get("Type"))
 			isAction := typeObj == nil || typeObj == object.Name("Action")
 			if isAction && isForbiddenAction(s, level, conformance) {
 				errs = append(errs, Violation{
@@ -1956,7 +1956,7 @@ func checkActionChain(doc core.View, ref object.Object, objNum int, level Level,
 	}
 	seen[actionDict] = true
 
-	if s, ok := actionDict.Get("S").(object.Name); ok && isForbiddenAction(s, level, conformance) {
+	if s, ok := doc.ResolveName(actionDict.Get("S")); ok && isForbiddenAction(s, level, conformance) {
 		*errs = append(*errs, Violation{
 			Rule:    annotActionClause("forbidden", level),
 			Level:   level,
@@ -2051,7 +2051,7 @@ func checkAnnotationAA(doc core.View, level Level) []Violation {
 		}
 	}
 	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && (core.IsAnnotation(dict) || isWidgetOrField(dict)) {
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && (doc.IsAnnotation(dict) || isWidgetOrField(doc, dict)) {
 			check(dict, num)
 		}
 	}
@@ -2064,8 +2064,8 @@ func checkAnnotationAA(doc core.View, level Level) []Violation {
 // isWidgetOrField reports whether dict is a widget annotation or an interactive
 // form field, which the /AA prohibition also covers and which need not carry
 // the /Rect that core.IsAnnotation looks for.
-func isWidgetOrField(dict *object.Dictionary) bool {
-	if st, ok := dict.Get("Subtype").(object.Name); ok && st == "Widget" {
+func isWidgetOrField(doc core.View, dict *object.Dictionary) bool {
+	if st, ok := doc.ResolveName(dict.Get("Subtype")); ok && st == "Widget" {
 		return true
 	}
 	return dict.Get("FT") != nil
@@ -2247,7 +2247,7 @@ func checkNoTransparency(doc core.View, level Level) []Violation {
 			if groupDict == nil {
 				continue
 			}
-			s, _ := groupDict.Get("S").(object.Name)
+			s, _ := doc.ResolveName(groupDict.Get("S"))
 			if s == "Transparency" {
 				errs = append(errs, Violation{
 					Rule:    "6.4",
@@ -2446,7 +2446,7 @@ func checkNoAlternateImages(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		if st, ok := stream.Dict.Get("Subtype").(object.Name); ok && st == "Image" {
+		if st, ok := doc.ResolveName(stream.Dict.Get("Subtype")); ok && st == "Image" {
 			if stream.Dict.Get("Alternates") != nil {
 				errs = append(errs, Violation{
 					Rule:    imageClause("image", level),
@@ -2468,10 +2468,10 @@ func checkInterpolate(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		if st, ok := stream.Dict.Get("Subtype").(object.Name); ok && st == "Image" {
+		if st, ok := doc.ResolveName(stream.Dict.Get("Subtype")); ok && st == "Image" {
 			interpObj := stream.Dict.Get("Interpolate")
 			if interpObj != nil {
-				if b, ok := interpObj.(object.Boolean); ok && bool(b) {
+				if b, ok := doc.ResolveBool(interpObj); ok && bool(b) {
 					errs = append(errs, Violation{
 						Rule:    imageClause("image", level),
 						Level:   level,
@@ -2517,7 +2517,7 @@ func checkNoOPI(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		st, ok := stream.Dict.Get("Subtype").(object.Name)
+		st, ok := doc.ResolveName(stream.Dict.Get("Subtype"))
 		if !ok {
 			continue
 		}
@@ -2608,8 +2608,8 @@ func checkFontSubsets(doc core.View, level Level) []Violation {
 	var errs []Violation
 
 	for objNum, fontDict := range fonts {
-		subtype, _ := fontDict.Get("Subtype").(object.Name)
-		baseFont, _ := fontDict.Get("BaseFont").(object.Name)
+		subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
+		baseFont, _ := doc.ResolveName(fontDict.Get("BaseFont"))
 
 		// Check if it's a subset font (XXXXXX+ prefix)
 		baseFontStr := string(baseFont)
@@ -3139,7 +3139,7 @@ func checkTransparencyBlending(doc core.View, level Level) []Violation {
 			continue
 		}
 
-		s, _ := groupDict.Get("S").(object.Name)
+		s, _ := doc.ResolveName(groupDict.Get("S"))
 		if s != "Transparency" {
 			errs = append(errs, Violation{
 				Rule:    "6.2.4",
@@ -3231,7 +3231,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 				continue
 			}
 			num := resolveObjNum(doc, val)
-			switch subtype, _ := stream.Dict.Get("Subtype").(object.Name); subtype {
+			switch subtype, _ := doc.ResolveName(stream.Dict.Get("Subtype")); subtype {
 			case "Image":
 				if sm := stream.Dict.Get("SMask"); sm != nil {
 					if n, ok := sm.(object.Name); !ok || n != "None" {
@@ -3245,7 +3245,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 				}
 			case "Form":
 				if g := doc.ResolveDict(stream.Dict.Get("Group")); g != nil {
-					if s, _ := g.Get("S").(object.Name); s == "Transparency" {
+					if s, _ := doc.ResolveName(g.Get("S")); s == "Transparency" {
 						*errs = append(*errs, Violation{
 							Rule:    "6.4",
 							Level:   level,
@@ -3270,7 +3270,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 	if fontDict := doc.ResolveDict(res.Get("Font")); fontDict != nil {
 		for _, val := range fontDict.Values {
 			if fd := doc.ResolveDict(val); fd != nil {
-				if st, _ := fd.Get("Subtype").(object.Name); st == "Type3" {
+				if st, _ := doc.ResolveName(fd.Get("Subtype")); st == "Type3" {
 					find1bTransparencyXObjects(doc, fd, level, seen, errs)
 				}
 			}
@@ -3363,7 +3363,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 		}
 		// A file specification is not required to carry /Type /Filespec;
 		// anything holding an /EF is acting as one.
-		t, hasType := dict.Get("Type").(object.Name)
+		t, hasType := doc.ResolveName(dict.Get("Type"))
 		isFilespec := (hasType && t == "Filespec") || dict.Get("EF") != nil
 		if !isFilespec {
 			continue
@@ -3964,7 +3964,7 @@ func getOutputIntentCoverage(doc core.View, catalog *object.Dictionary) (hasRGB,
 		// Only the PDF/A output intent counts: device colour backed solely
 		// by e.g. a PDF/X intent is a violation (the corpus fails a
 		// DeviceRGB file whose only intent is GTS_PDFX).
-		if s, _ := dict.Get("S").(object.Name); s != "GTS_PDFA1" {
+		if s, _ := doc.ResolveName(dict.Get("S")); s != "GTS_PDFA1" {
 			continue
 		}
 		profileRef := dict.Get("DestOutputProfile")
@@ -4098,7 +4098,7 @@ func checkICCBasedProfiles(doc core.View, level Level) []Violation {
 		// Structural stream types also carry an integer /N with a different
 		// meaning (an object stream's /N is its object count); they are never
 		// ICC profiles.
-		if t, ok := stream.Dict.Get("Type").(object.Name); ok && (t == "ObjStm" || t == "XRef") {
+		if t, ok := doc.ResolveName(stream.Dict.Get("Type")); ok && (t == "ObjStm" || t == "XRef") {
 			continue
 		}
 
@@ -4734,7 +4734,7 @@ func iccCMYKProfile(doc core.View, csVal object.Object) *object.Stream {
 	if !ok {
 		return nil
 	}
-	if n, ok := stream.Dict.Get("N").(object.Integer); !ok || n != 4 {
+	if n, ok := doc.ResolveInt(stream.Dict.Get("N")); !ok || n != 4 {
 		return nil
 	}
 	return stream
@@ -4841,11 +4841,11 @@ func checkICCBasedUsageRules(doc core.View, level Level) []Violation {
 				if gs == nil {
 					continue
 				}
-				if v, ok := gs.Get("OPM").(object.Integer); ok && v == 1 {
+				if v, ok := doc.ResolveInt(gs.Get("OPM")); ok && v == 1 {
 					opm1 = true
 				}
-				strokeSet, strokeIsSet := gs.Get("OP").(object.Boolean)
-				fillSet, fillIsSet := gs.Get("op").(object.Boolean)
+				strokeSet, strokeIsSet := doc.ResolveBool(gs.Get("OP"))
+				fillSet, fillIsSet := doc.ResolveBool(gs.Get("op"))
 				if strokeIsSet && bool(strokeSet) {
 					opStroke = true
 				}

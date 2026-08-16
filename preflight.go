@@ -2,7 +2,6 @@ package pdf0
 
 import (
 	"crypto/rand"
-	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 )
@@ -61,7 +60,7 @@ func (d *Document) Repair(level pdfa.Level) []RepairAction {
 		}
 	}
 	for _, iobj := range d.Objects {
-		if a, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(a) && a.Get("AA") != nil {
+		if a, ok := iobj.Value.(*object.Dictionary); ok && d.view().IsAnnotation(a) && a.Get("AA") != nil {
 			a.Delete("AA")
 			add("removed annotation additional-actions (/AA)")
 		}

@@ -185,12 +185,19 @@ func decodeUTF32(data []byte, bigEndian bool) string {
 	return string(buf)
 }
 
-func IsAnnotation(dict *object.Dictionary) bool {
-	if t, ok := dict.Get("Type").(object.Name); ok && t == "Annot" {
+// IsAnnotation reports whether dict is an annotation.
+//
+// It takes the view because both keys it reads may be indirect references, and
+// it gates every annotation rule in the package: a document that writes
+// `/Type 9 0 R` naming `/Annot` is a legal document, and reading the key
+// without resolving it made that document's annotations invisible to the
+// checks rather than conforming.
+func (v View) IsAnnotation(dict *object.Dictionary) bool {
+	if t, ok := v.ResolveName(dict.Get("Type")); ok && t == "Annot" {
 		return true
 	}
 	// Also detect annotations by Subtype + Rect (some PDFs omit /Type)
-	if _, ok := dict.Get("Subtype").(object.Name); ok && dict.Get("Rect") != nil {
+	if _, ok := v.ResolveName(dict.Get("Subtype")); ok && dict.Get("Rect") != nil {
 		return true
 	}
 	return false
