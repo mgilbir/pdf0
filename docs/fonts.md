@@ -392,11 +392,23 @@ identity, and most are. In Noto Sans JP `ｱ` is glyph 15435 and CID 59158, so a
 `/W` written by glyph index describes something fifteen thousand places away —
 and the reader shows a plausible page with the wrong metrics.
 
-`/CIDSystemInfo` is the font's own registry, ordering and supplement, because
-§9.7.4.2 requires it to be compatible with the character collection of the glyph
-source. Noto's is `Adobe-Identity-0`; the veraPDF corpus carries an
-`Adobe-Japan1-6` font, which is what the test uses, since a font already in the
-Identity collection cannot tell a read value from an assumed one.
+`/CIDSystemInfo` is the font's own registry, ordering and supplement, from
+`shape.Face.CharacterCollection`, because §9.7.4.2 requires it to be compatible
+with the character collection of the glyph source. Noto's is
+`Adobe-Identity-0`; the veraPDF corpus carries an `Adobe-Japan1-6` font, which
+is what the test uses, since a font already in the Identity collection cannot
+tell a read value from an assumed one.
+
+**A CID-keyed font that cannot name its collection is refused, not defaulted.**
+`CharacterCollection` returns `ok == false` for a ROS naming strings the font
+does not carry, or a supplement below zero — both malformed in ways that parse,
+which is what makes them dangerous. Writing `Adobe-Identity-0` there looks like
+caution and is not: it is a specific claim that the CIDs are the font's own
+arbitrary numbering, and a reader believing it over an Adobe-Japan1 font looks
+every glyph up in the wrong collection. The check runs *before* subsetting,
+since the collection is a fact about the face; a font that cannot be embedded
+then says so for the reason that matters rather than reporting whatever the
+subsetter met first.
 
 Widths come from `hmtx` through `Face.GlyphAdvances`, not from the CFF
 charstrings — the two disagree in Noto Sans JP (glyph 34 is 608 in `hmtx` and

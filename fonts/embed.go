@@ -70,6 +70,29 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	if len(f.Used()) == 0 {
 		return object.IndirectRef{}, errEmbedBeforeUse
 	}
+	// §9.7.4.2: the collection the descendant's CIDs are numbered in, which
+	// must be compatible with the glyph source's own.
+	//
+	// A font addressed by glyph index has no collection, and Adobe-Identity-0
+	// is how a PDF says exactly that. It is *not* a default for a font that has
+	// one and could not state it: that is a specific claim about a numbering,
+	// and it is wrong for precisely the fonts this distinguishes. So a
+	// CID-keyed face whose collection cannot be read is refused rather than
+	// described as Identity — which is what the first version of this did.
+	//
+	// Asked before the font is subsetted, because it is a fact about the face
+	// and not about the subset. A font that cannot be embedded then says so for
+	// the reason that matters, rather than reporting whatever the subsetter ran
+	// into first.
+	registry, ordering, supplement := "Adobe", "Identity", 0
+	if f.cidKeyed {
+		r, o, sup, ok := f.CharacterCollection()
+		if !ok {
+			return object.IndirectRef{}, errNoCollection
+		}
+		registry, ordering, supplement = r, o, sup
+	}
+
 	program, kept, err := f.SubsetGlyphs()
 	if err != nil {
 		return object.IndirectRef{}, err
@@ -134,14 +157,6 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 		cidFont.Set("Subtype", object.Name("CIDFontType2"))
 	}
 	cidFont.Set("BaseFont", baseFont)
-	// §9.7.4.2: the collection the descendant's CIDs are numbered in, which
-	// must be compatible with the glyph source's own. A CID-keyed CFF states
-	// one and it is read from the program; everything else is addressed by
-	// glyph index, and Adobe-Identity-0 is the way to say that.
-	registry, ordering, supplement := "Adobe", "Identity", 0
-	if f.cidKeyed && f.registry != "" && f.ordering != "" {
-		registry, ordering, supplement = f.registry, f.ordering, f.supplement
-	}
 	sysInfo := &object.Dictionary{}
 	sysInfo.Set("Registry", object.String{Value: []byte(registry)})
 	sysInfo.Set("Ordering", object.String{Value: []byte(ordering)})
@@ -275,6 +290,18 @@ func (f *Face) bboxArray(d Descriptor) object.Array {
 		object.Integer(int(f.scale(d.BBox[2]))), object.Integer(int(f.scale(d.BBox[3]))),
 	}
 }
+
+// errNoCollection is a CID-keyed face that cannot say which collection its CIDs
+// belong to: a ROS naming strings the font does not carry, or a supplement
+// below zero, which is a version number and counts up.
+//
+// It is refused rather than embedded as Adobe-Identity-0, because that is not a
+// neutral default. It states that the CIDs are the font's own arbitrary
+// numbering, and a reader trusting it over an Adobe-Japan1 font looks the
+// glyphs up in the wrong collection. Half a collection is the shape that
+// reaches a document unnoticed.
+var errNoCollection = errors.New("fonts: cannot embed a CID-keyed font that " +
+	"does not say which character collection its CIDs are numbered in")
 
 // widthsArray builds /W from the program's own advances, in the
 // consecutive-run form ISO 32000-2 9.7.4.3 defines.
