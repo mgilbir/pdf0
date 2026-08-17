@@ -60,7 +60,7 @@ func ValidatePAdES(d core.View, raw []byte) []PAdESResult {
 	hasDocTimestamp := false
 	for _, iobj := range d.Objects {
 		if dict, ok := iobj.Value.(*object.Dictionary); ok {
-			if t, _ := dict.Get("Type").(object.Name); t == "DocTimeStamp" && dict.Get("ByteRange") != nil {
+			if t, _ := d.ResolveName(dict.Get("Type")); t == "DocTimeStamp" && dict.Get("ByteRange") != nil {
 				hasDocTimestamp = true
 			}
 		}
@@ -100,7 +100,7 @@ func CoveringDocTimestamp(d core.View, raw []byte) bool {
 		if !ok {
 			continue
 		}
-		if t, _ := dict.Get("Type").(object.Name); t != "DocTimeStamp" {
+		if t, _ := d.ResolveName(dict.Get("Type")); t != "DocTimeStamp" {
 			continue
 		}
 		segs, covers, ok := byteRangeSegments(d, dict.Get("ByteRange"), int64(len(raw)))
@@ -129,7 +129,7 @@ func CoveringDocTimestamp(d core.View, raw []byte) bool {
 
 func assessPAdES(d core.View, sig *object.Dictionary, raw []byte, hasDSS, hasDocTimestamp, sealed bool) PAdESResult {
 	var res PAdESResult
-	sub, _ := sig.Get("SubFilter").(object.Name)
+	sub, _ := d.ResolveName(sig.Get("SubFilter"))
 	res.SubFilter = string(sub)
 
 	// Reuse the CMS verification for cryptographic validity and signer identity.

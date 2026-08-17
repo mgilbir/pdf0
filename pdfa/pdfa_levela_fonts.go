@@ -24,7 +24,7 @@ func checkLevelAToUnicode(doc core.View, level Level) []Violation {
 		if fontDict.Get("ToUnicode") != nil || toUnicodeExempt(doc, fontDict, u) {
 			continue
 		}
-		name, _ := fontDict.Get("BaseFont").(object.Name)
+		name, _ := doc.ResolveName(fontDict.Get("BaseFont"))
 		errs = append(errs, Violation{
 			Rule:    rule,
 			Level:   level,
@@ -53,7 +53,7 @@ func checkLevelAToUnicode(doc core.View, level Level) []Violation {
 // unambiguous on the point — an Identity-H font without ToUnicode is a failing
 // file.
 func toUnicodeExempt(doc core.View, fontDict *object.Dictionary, u *core.FontTextUsage) bool {
-	subtype, _ := fontDict.Get("Subtype").(object.Name)
+	subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 	if subtype == "Type0" {
 		desc := core.Type0Descendant(doc, fontDict)
 		if desc == nil {

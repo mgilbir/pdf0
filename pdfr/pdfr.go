@@ -91,7 +91,7 @@ func CheckPage(d core.View, page *object.Dictionary, objNum int, add func(rule, 
 			continue
 		}
 		xnum := object.RefNum(xobjs.Values[i])
-		sub, _ := st.Dict.Get("Subtype").(object.Name)
+		sub, _ := d.ResolveName(st.Dict.Get("Subtype"))
 		if sub != "Image" {
 			add("raster-only", fmt.Sprintf("XObject /%s is not an image (/Subtype %q); a PDF/R page shall use image XObjects only", key, sub), xnum)
 			continue

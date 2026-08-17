@@ -57,7 +57,7 @@ func ValidateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 		return
 	}
 	rootDictNum := object.RefNum(rootRef)
-	if t, ok := rootDict.Get("Type").(object.Name); ok && t != "DPartRoot" {
+	if t, ok := doc.ResolveName(rootDict.Get("Type")); ok && t != "DPartRoot" {
 		add("14.12.4.1", fmt.Sprintf("DPartRoot /Type shall be /DPartRoot, got /%s", t), rootDictNum)
 	}
 
@@ -110,7 +110,7 @@ func ValidateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 		if depth+1 > maxDepth {
 			maxDepth = depth + 1
 		}
-		if t, ok := node.Get("Type").(object.Name); ok && t != "DPart" {
+		if t, ok := doc.ResolveName(node.Get("Type")); ok && t != "DPart" {
 			add("14.12.4.1", fmt.Sprintf("DPart /Type shall be /DPart, got /%s", t), num)
 		}
 

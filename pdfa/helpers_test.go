@@ -1,6 +1,8 @@
 package pdfa
 
 import (
+	"strings"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -144,4 +146,14 @@ func addExtGStateToDoc(v core.View, gs *object.Dictionary) {
 	pagesDict := v.ResolveDict(object.IndirectRef{Number: 2})
 	pagesDict.Set("Kids", object.Array{object.IndirectRef{Number: 20}})
 	pagesDict.Set("Count", object.Integer(1))
+}
+
+// hasMessage reports whether any violation's message contains want.
+func hasMessage(errs []Violation, want string) bool {
+	for _, e := range errs {
+		if strings.Contains(e.Message, want) {
+			return true
+		}
+	}
+	return false
 }

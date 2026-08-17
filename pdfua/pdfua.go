@@ -460,10 +460,10 @@ func checkUAAnnotations(d core.View) []Violation {
 	var v []Violation
 	for num, iobj := range d.Objects {
 		a, ok := iobj.Value.(*object.Dictionary)
-		if !ok || !core.IsAnnotation(a) {
+		if !ok || !d.IsAnnotation(a) {
 			continue
 		}
-		st, _ := a.Get("Subtype").(object.Name)
+		st, _ := d.ResolveName(a.Get("Subtype"))
 		if st == "Popup" {
 			continue
 		}
@@ -546,7 +546,7 @@ func checkUACIDSystemInfo(d core.View) []Violation {
 }
 
 func checkOneUACIDSystemInfo(d core.View, fontDict *object.Dictionary) []Violation {
-	if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+	if st, _ := d.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
 		return nil
 	}
 	var wantReg, wantOrd string
@@ -621,7 +621,7 @@ func cidSystemInfo(d core.View, dict *object.Dictionary) (string, string) {
 func checkUACMapWMode(d core.View) []Violation {
 	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
-		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+		if st, _ := d.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
 			continue
 		}
 		s, ok := d.Resolve(fontDict.Get("Encoding")).(*object.Stream)
@@ -666,7 +666,7 @@ func cmapInnerWMode(data []byte) (int, bool) {
 }
 
 func checkOneUACMap(d core.View, fontDict *object.Dictionary) []Violation {
-	if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+	if st, _ := d.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
 		return nil
 	}
 	num := d.DictObjNum(fontDict)
@@ -676,7 +676,7 @@ func checkOneUACMap(d core.View, fontDict *object.Dictionary) []Violation {
 			return []Violation{{"7.21.3.3", "Type 0 font uses CMap /" + string(enc) + ", which is neither predefined nor embedded", num}}
 		}
 	case *object.Stream:
-		if use, ok := enc.Dict.Get("UseCMap").(object.Name); ok && !isPredefinedCMap(use) {
+		if use, ok := d.ResolveName(enc.Dict.Get("UseCMap")); ok && !isPredefinedCMap(use) {
 			return []Violation{{"7.21.3.3", "embedded CMap references non-predefined CMap /" + string(use) + " via /UseCMap", num}}
 		}
 	}
@@ -711,10 +711,10 @@ func checkUAToUnicodeValues(d core.View) []Violation {
 func checkUAFontSubsetGlyphs(d core.View) []Violation {
 	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
-		if !isSubsetFont(fontDict) {
+		if !isSubsetFont(d, fontDict) {
 			continue
 		}
-		switch st, _ := fontDict.Get("Subtype").(object.Name); st {
+		switch st, _ := d.ResolveName(fontDict.Get("Subtype")); st {
 		case "Type1", "MMType1":
 			v = append(v, checkType1CharSet(d, fontDict)...)
 		case "Type0":
@@ -796,7 +796,7 @@ func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []Violation {
 	if desc == nil {
 		return nil
 	}
-	if cs, _ := desc.Get("Subtype").(object.Name); cs != "CIDFontType2" {
+	if cs, _ := d.ResolveName(desc.Get("Subtype")); cs != "CIDFontType2" {
 		return nil
 	}
 	if m := d.Resolve(desc.Get("CIDToGIDMap")); m != nil {
@@ -840,10 +840,17 @@ func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []Violation {
 func checkUANotdefCID(d core.View) []Violation {
 	var v []Violation
 	for fontDict, u := range core.CollectFontTextUsage(d) {
-		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+		if st, _ := d.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
 			continue
 		}
-		if !core.IsIdentityEncoding(d, fontDict) {
+		// The CMap says how the codes are cut and what CID each names. Identity
+		// is one answer and a CMap the document carries is another; a
+		// predefined name is data this module does not have, and the check is
+		// skipped rather than run against a guess — reading UniJIS-UCS2-H as
+		// Identity would find CID 0 wherever the file happens to hold two zero
+		// bytes, which is a report about nothing.
+		cmap, ok := core.LoadCMap(d, fontDict)
+		if !ok {
 			continue
 		}
 		if u == nil {
@@ -851,8 +858,8 @@ func checkUANotdefCID(d core.View) []Violation {
 		}
 		found := false
 		for _, s := range u.Strings {
-			for i := 0; i+1 < len(s); i += 2 {
-				if int(s[i])<<8|int(s[i+1]) == 0 {
+			for _, code := range cmap.Decode(s) {
+				if code.Mapped && code.CID == 0 {
 					found = true
 				}
 			}
@@ -866,8 +873,8 @@ func checkUANotdefCID(d core.View) []Violation {
 
 // isSubsetFont reports whether a font dictionary's BaseFont carries the six
 // uppercase letters + '+' subset tag (e.g. ABCDEF+Arial).
-func isSubsetFont(fontDict *object.Dictionary) bool {
-	bf, _ := fontDict.Get("BaseFont").(object.Name)
+func isSubsetFont(d core.View, fontDict *object.Dictionary) bool {
+	bf, _ := d.ResolveName(fontDict.Get("BaseFont"))
 	if len(bf) < 7 || bf[6] != '+' {
 		return false
 	}
@@ -885,10 +892,10 @@ func isSubsetFont(fontDict *object.Dictionary) bool {
 func checkUAReferenceXObjects(d core.View) []Violation {
 	var v []Violation
 	walkAllDicts(d, func(dict *object.Dictionary, num int) {
-		if st, _ := dict.Get("Subtype").(object.Name); st != "Form" {
+		if st, _ := d.ResolveName(dict.Get("Subtype")); st != "Form" {
 			return
 		}
-		if ty, _ := dict.Get("Type").(object.Name); ty != "" && ty != "XObject" {
+		if ty, _ := d.ResolveName(dict.Get("Type")); ty != "" && ty != "XObject" {
 			return
 		}
 		if dict.Get("Ref") != nil {
@@ -905,7 +912,7 @@ func checkUAReferenceXObjects(d core.View) []Violation {
 func checkUAMediaClips(d core.View) []Violation {
 	var v []Violation
 	walkAllDicts(d, func(mc *object.Dictionary, num int) {
-		if t, _ := mc.Get("Type").(object.Name); t != "MediaClip" {
+		if t, _ := d.ResolveName(mc.Get("Type")); t != "MediaClip" {
 			return
 		}
 		if mc.Get("CT") == nil {
@@ -1040,7 +1047,7 @@ func checkUAEmbeddedFiles(d core.View) []Violation {
 		if !ok || fs.Get("EF") == nil {
 			continue
 		}
-		if t, _ := fs.Get("Type").(object.Name); t != "" && t != "Filespec" {
+		if t, _ := d.ResolveName(fs.Get("Type")); t != "" && t != "Filespec" {
 			continue
 		}
 		f, _ := d.Resolve(fs.Get("F")).(object.String)
@@ -1093,7 +1100,7 @@ func checkUAFieldDescription(d core.View, cat *object.Dictionary) []Violation {
 		if fd == nil {
 			return
 		}
-		_, hasFT := fd.Get("FT").(object.Name)
+		_, hasFT := d.ResolveName(fd.Get("FT"))
 		ftu, _ := d.Resolve(fd.Get("TU")).(object.String)
 		kids, _ := d.Resolve(fd.Get("Kids")).(object.Array)
 		if hasFT && len(ftu.Value) == 0 {
@@ -1102,7 +1109,7 @@ func checkUAFieldDescription(d core.View, cat *object.Dictionary) []Violation {
 				if kd == nil {
 					continue
 				}
-				st, _ := kd.Get("Subtype").(object.Name)
+				st, _ := d.ResolveName(kd.Get("Subtype"))
 				kt, _ := d.Resolve(kd.Get("T")).(object.String)
 				ktu, _ := d.Resolve(kd.Get("TU")).(object.String)
 				if st == "Widget" && len(kt.Value) == 0 && len(ktu.Value) > 0 {
@@ -1180,7 +1187,7 @@ func checkUATitle(d core.View, cat *object.Dictionary) []Violation {
 func checkUAFonts(d core.View) []Violation {
 	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
-		st, _ := fontDict.Get("Subtype").(object.Name)
+		st, _ := d.ResolveName(fontDict.Get("Subtype"))
 		if st == "Type3" {
 			continue // procedural glyphs, no font program
 		}
@@ -1209,7 +1216,7 @@ func checkUACharMapping(d core.View) []Violation {
 		if fontDict.Get("ToUnicode") != nil {
 			continue
 		}
-		if st, _ := fontDict.Get("Subtype").(object.Name); st != "Type0" {
+		if st, _ := d.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
 			continue
 		}
 		if enc, _ := d.Resolve(fontDict.Get("Encoding")).(object.Name); enc == "Identity-H" || enc == "Identity-V" {
@@ -1236,7 +1243,7 @@ func checkUAFontDicts(d core.View) []Violation {
 // font dictionary.
 func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []Violation {
 	var v []Violation
-	st, _ := fontDict.Get("Subtype").(object.Name)
+	st, _ := d.ResolveName(fontDict.Get("Subtype"))
 	num := d.DictObjNum(fontDict)
 	switch st {
 	case "Type0":
@@ -1248,7 +1255,7 @@ func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []Violation {
 		if cid == nil {
 			return nil
 		}
-		cst, _ := cid.Get("Subtype").(object.Name)
+		cst, _ := d.ResolveName(cid.Get("Subtype"))
 		if cst == "CIDFontType2" && fontProgramEmbedded(d, cid) && cid.Get("CIDToGIDMap") == nil {
 			v = append(v, Violation{"7.21.3.2", "embedded CIDFontType2 font has no /CIDToGIDMap", num})
 		}
@@ -1270,7 +1277,7 @@ func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []Violation {
 		}
 		base, _ := enc.(object.Name)
 		if ed := d.ResolveDict(fontDict.Get("Encoding")); ed != nil {
-			base, _ = ed.Get("BaseEncoding").(object.Name)
+			base, _ = d.ResolveName(ed.Get("BaseEncoding"))
 		}
 		if base != "MacRomanEncoding" && base != "WinAnsiEncoding" {
 			v = append(v, Violation{"7.21.6", "non-symbolic TrueType font must use MacRomanEncoding or WinAnsiEncoding", num})

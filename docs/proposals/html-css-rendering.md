@@ -1,7 +1,16 @@
 # Rendering HTML + CSS to a PDF page — design sketch
 
-**Status:** phases 0 and 1 of §9 are complete (2026-08-05, pdf0#267). Phase 2,
-the HTML and CSS parsers, is next and is where a fresh session starts.
+**Status:** done, and the result does not live here. The engine was built
+through §9's phases and then moved to
+[forme](https://github.com/mgilbir/forme) (2026-08-14, forme#10–#14) as
+`html`, `css`, `style` and `layout`, because none of it was about PDF: the
+seam turned out to be one file. What pdf0 keeps is the backend, `htmlpdf`,
+which writes a display list into a document.
+
+For how it works today read [htmlpdf.md](../htmlpdf.md) and forme's own docs.
+This stays as the design record — what was intended, and why — and the
+sections below have not been rewritten to match the outcome except where they
+would otherwise read as instructions to someone starting work.
 
 This document is the design record for a new capability: take an HTML document
 with CSS, lay it out inside a declared page box, and emit a PDF page. It was
@@ -676,8 +685,12 @@ thing to a worked example — it measures, breaks lines and draws them.
 
 ## 12. Open questions
 
-- Package name. `pdf0/html` shadows a stdlib name at the identifier level;
-  `pdf0/render` does not, and reads better at the call site.
+- ~~Package name.~~ **Settled, and not either way this expected.** The engine
+  is not in pdf0 at all: the parsers are `forme/html` and `forme/css`, where
+  nothing shadows, and what stayed behind is `pdf0/htmlpdf`. It was `pdf0/render`
+  for a day and that was wrong twice over — it renders nothing now, and "render"
+  said what the package did to its input rather than what a caller wants from
+  it.
 - Whether the display list should be a public API. It is the natural extension
   point for a non-PDF backend, and publishing it constrains its evolution.
 - Whether the bundled family is Liberation alone or gains a broader-coverage face

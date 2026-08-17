@@ -148,7 +148,7 @@ func (s *DevColorScanner) container(c *object.Dictionary, data []byte, key *obje
 				if !ok {
 					continue
 				}
-				if sub, _ := st.Dict.Get("Subtype").(object.Name); sub == "Form" {
+				if sub, _ := s.doc.ResolveName(st.Dict.Get("Subtype")); sub == "Form" {
 					nested.or(s.streamEscape(st, true))
 				} else {
 					core.CheckCSForDevice(s.doc, st.Dict.Get("ColorSpace"), &local.RGB, &local.CMYK, &local.Gray)
@@ -188,7 +188,7 @@ func (s *DevColorScanner) container(c *object.Dictionary, data []byte, key *obje
 				if fd == nil {
 					continue
 				}
-				if sub, _ := fd.Get("Subtype").(object.Name); sub == "Type3" {
+				if sub, _ := s.doc.ResolveName(fd.Get("Subtype")); sub == "Type3" {
 					nested.or(s.container(fd, nil, nil)) // Type3 font resources, own Default* scope
 					if cp := s.doc.ResolveDict(fd.Get("CharProcs")); cp != nil {
 						for _, cpv := range cp.Values {

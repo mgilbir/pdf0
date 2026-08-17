@@ -248,9 +248,13 @@ func TestMeasureUsesTheProgramsOwnMetrics(t *testing.T) {
 		if !ok {
 			t.Fatal("the CIDFont has no /W array")
 		}
-		gid, _ := face.GlyphID('W')
-		if got := widthFromW(widths, gid); got != 944 {
-			t.Errorf("/W gives glyph %d a width of %v, want 944", gid, got)
+		// A letter the document actually sets. /W describes the subset, so
+		// asking about a glyph the text never used says only that the array is
+		// not the whole font — which is a different test, in fonts/pdf_test.go.
+		gid, _ := face.GlyphID('H')
+		if got := widthFromW(widths, gid); got != 722 {
+			t.Errorf("/W gives glyph %d — the H in the text — a width of %v, want 722",
+				gid, got)
 		}
 	}
 	if !found {
@@ -774,35 +778,229 @@ func attachPage(doc *Document, drawn []byte, fontRef object.IndirectRef) {
 	pages.Set("Count", object.Integer(1))
 }
 
-// TestCIDKeyedCFFIsRefused pins the other half of CFF support: the fonts this
-// package will not take. A CID-keyed CFF numbers its glyphs by CID and maps CID
-// to glyph index through its charset, so the two are different numberings —
-// while everything here assumes they are the same, because Encode emits glyph
-// indices as character codes.
+// A CID-keyed CFF numbers its glyphs by CID and reaches them through its
+// charset, so the CID and the glyph index are two different numberings. Every
+// static Noto CJK face is one, and getting this wrong is invisible on the fonts
+// where the charset happens to be the identity.
 //
-// Embedding one anyway produces /W keyed by one numbering and codes by the
-// other, which this module's own validator reports. Refusing is the honest
-// answer until the charset is read, and this is the test that says the refusal
-// happens rather than being an intention in a comment.
-//
-// The corpus carries CID-keyed CFF programs but none inside an OpenType
-// wrapper, so the fixture wraps a real one — writing a CID-keyed CFF from
-// scratch is a font compiler, and a synthetic one would not exercise the
-// detection that matters.
-func TestCIDKeyedCFFIsRefused(t *testing.T) {
-	cff := corpusCIDKeyedCFF(t)
-	program := fonttest.OTTO(cff, fonttest.SFNTOptions{
-		Name: "CIDKeyed",
-		Glyphs: []fonttest.Glyph{
-			{Rune: 'A', Advance: 500, HasShape: true},
-			{Rune: 'B', Advance: 500, HasShape: true},
-		},
-	})
-	if _, err := fonts.Load(program); err == nil {
-		t.Error("a CID-keyed CFF font was accepted; its CIDs are not glyph indices")
-	} else if !strings.Contains(err.Error(), "CID-keyed") {
-		t.Errorf("refused for the wrong reason: %v", err)
+// The fixture is the real Noto Sans JP rather than something synthetic, because
+// the structure under test is a charset that is *not* the identity, and that is
+// the only thing that tells a CID from a glyph index. `make notocjk` fetches it.
+func cidKeyedFace(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "notocjk", "NotoSansJP-Regular.otf"))
+	if err != nil {
+		t.Skip("run `make notocjk` for a CID-keyed face: ", err)
 	}
+	return data
+}
+
+// halfWidthKatakana is the character these tests turn on: its CID and its glyph
+// index differ, and its advance differs from the default.
+//
+// Both halves are needed. A glyph whose CID equals its index proves nothing
+// about which of the two was written, and one whose width equals /DW is left
+// out of /W altogether — the CJK ideographs are all 1000 units, so the obvious
+// choice of 日 would assert nothing at all.
+const halfWidthKatakana = 'ｱ'
+
+// TestCIDKeyedWidthsAreKeyedByCID is the defect this all exists to prevent.
+//
+// A CIDFontType0 is addressed by CID: the code in the content stream goes into
+// the font's charset and comes out as a glyph index, and /W is keyed by the
+// same number as the code. Writing the glyph index there gives the reader the
+// width of whatever glyph happens to carry that number — in this face ｱ is
+// glyph 15435 and CID 59158, so a document written the wrong way describes a
+// glyph fifteen thousand places away.
+func TestCIDKeyedWidthsAreKeyedByCID(t *testing.T) {
+	f, err := fonts.Load(cidKeyedFace(t))
+	if err != nil {
+		t.Fatalf("a CID-keyed CFF was refused at load: %v", err)
+	}
+	gid, ok := f.GlyphID(halfWidthKatakana)
+	if !ok {
+		t.Fatalf("the fixture has no glyph for %q", halfWidthKatakana)
+	}
+	want := f.GlyphAdvances()[gid]
+
+	codes, missing := f.Encode(string(halfWidthKatakana))
+	if missing != 0 {
+		t.Fatalf("%d characters missing", missing)
+	}
+	// The code *is* the CID under Identity-H, which is what makes /W's keying
+	// the same question as the code's meaning.
+	cid := int(codes[0])<<8 | int(codes[1])
+	if cid == gid {
+		t.Fatalf("this face maps glyph %d to CID %d; with the two equal the test "+
+			"cannot tell which number was written", gid, cid)
+	}
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	ref, err := f.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding: %v", err)
+	}
+	cidFont := descendantOf(t, doc, ref)
+
+	if got, ok := widthOfCID(t, doc, cidFont, cid); !ok {
+		t.Errorf("/W has no entry for CID %d, the code the page actually uses", cid)
+	} else if got != want {
+		t.Errorf("/W gives CID %d a width of %v, want %v", cid, got, want)
+	}
+	// And nothing at the glyph index, which is where the wrong answer lands.
+	if got, ok := widthOfCID(t, doc, cidFont, gid); ok {
+		t.Errorf("/W has an entry at %d — the glyph index — of %v; that number is "+
+			"not a CID in this font and no code refers to it", gid, got)
+	}
+}
+
+// TestCIDKeyedSystemInfoIsTheFontsOwn: §9.7.4.2 requires the descendant's
+// /CIDSystemInfo to be compatible with the character collection of its glyph
+// source, so it is read from the program rather than assumed.
+//
+// The fixture is the corpus font and not Noto, and that is the whole point.
+// Noto Sans JP is numbered in Adobe-Identity-0, which is also what this package
+// writes for every font that is not CID-keyed — so a version that ignored the
+// program entirely would agree with it, and the test would pass while asserting
+// nothing. The corpus carries an Adobe-Japan1-6 font, where the two answers
+// differ.
+func TestCIDKeyedSystemInfoIsTheFontsOwn(t *testing.T) {
+	cff := corpusCIDKeyedCFF(t)
+	prog := font.ParseCFF(cff)
+	if prog == nil || prog.GIDToCID == nil {
+		t.Fatal("the corpus fixture is not a CID-keyed CFF")
+	}
+	if prog.Registry == "Adobe" && prog.Ordering == "Identity" {
+		t.Skip("the corpus font found is Adobe-Identity-0, which is also the " +
+			"fallback, so this run cannot tell the two apart")
+	}
+
+	data := fonttest.OTTO(cff, fonttest.SFNTOptions{
+		Name:   "CIDKeyed",
+		Glyphs: glyphsFor(prog.NumGlyphs - 1),
+	})
+	f, err := fonts.Load(data)
+	if err != nil {
+		t.Fatalf("a CID-keyed CFF was refused at load: %v", err)
+	}
+	f.Encode("A")
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	ref, err := f.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding: %v", err)
+	}
+	info, _ := doc.Resolve(descendantOf(t, doc, ref).Get("CIDSystemInfo")).(*object.Dictionary)
+	if info == nil {
+		t.Fatal("the descendant has no /CIDSystemInfo")
+	}
+	reg, _ := doc.Resolve(info.Get("Registry")).(object.String)
+	ord, _ := doc.Resolve(info.Get("Ordering")).(object.String)
+	sup, _ := doc.Resolve(info.Get("Supplement")).(object.Integer)
+	if string(reg.Value) != prog.Registry || string(ord.Value) != prog.Ordering ||
+		int(sup) != prog.Supplement {
+		t.Errorf("/CIDSystemInfo says %s-%s-%d; the program says %s-%s-%d — a "+
+			"document claiming a collection its glyph source is not numbered in",
+			reg.Value, ord.Value, sup, prog.Registry, prog.Ordering, prog.Supplement)
+	}
+}
+
+// glyphsFor builds the glyph list for an sfnt wrapper holding n more glyphs
+// beyond the .notdef fonttest always writes, so that the wrapper's count
+// matches the CFF inside it. A mismatch is not a font, and the subsetter says
+// so rather than guessing.
+func glyphsFor(n int) []fonttest.Glyph {
+	out := make([]fonttest.Glyph, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, fonttest.Glyph{Rune: rune('A' + i), Advance: 500, HasShape: true})
+	}
+	return out
+}
+
+// TestCIDKeyedSetIsKeyedByCID: /CIDSet says which members of the collection the
+// subset carries, so its bits are at CIDs for the same reason /W's keys are.
+func TestCIDKeyedSetIsKeyedByCID(t *testing.T) {
+	f, err := fonts.Load(cidKeyedFace(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, _ := f.GlyphID(halfWidthKatakana)
+	codes, _ := f.Encode(string(halfWidthKatakana))
+	cid := int(codes[0])<<8 | int(codes[1])
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	ref, err := f.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding: %v", err)
+	}
+	cidFont := descendantOf(t, doc, ref)
+	fd, _ := doc.Resolve(cidFont.Get("FontDescriptor")).(*object.Dictionary)
+	set, _ := doc.Resolve(fd.Get("CIDSet")).(*object.Stream)
+	if set == nil {
+		t.Fatal("the descriptor has no /CIDSet")
+	}
+	bits, err := doc.StreamData(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bitSet(bits, cid) {
+		t.Errorf("/CIDSet has no bit for CID %d, which the subset carries", cid)
+	}
+	if bitSet(bits, gid) {
+		t.Errorf("/CIDSet has a bit at %d — the glyph index — which is not a CID "+
+			"the subset carries", gid)
+	}
+}
+
+func bitSet(bits []byte, i int) bool {
+	return i/8 < len(bits) && bits[i/8]&(0x80>>(i%8)) != 0
+}
+
+// descendantOf is the CIDFont a Type0 font delegates to.
+func descendantOf(t *testing.T, doc *Document, ref object.Object) *object.Dictionary {
+	t.Helper()
+	top, _ := doc.Resolve(ref).(*object.Dictionary)
+	if top == nil {
+		t.Fatal("the embedded font is not a dictionary")
+	}
+	kids, _ := doc.Resolve(top.Get("DescendantFonts")).(object.Array)
+	if len(kids) != 1 {
+		t.Fatalf("%d descendant fonts, want 1", len(kids))
+	}
+	d, _ := doc.Resolve(kids[0]).(*object.Dictionary)
+	if d == nil {
+		t.Fatal("the descendant is not a dictionary")
+	}
+	return d
+}
+
+// widthOfCID reads one CID's width out of /W, which is a list of runs: a
+// starting CID followed by an array of consecutive widths.
+func widthOfCID(t *testing.T, doc *Document, cidFont *object.Dictionary, cid int) (float64, bool) {
+	t.Helper()
+	w, _ := doc.Resolve(cidFont.Get("W")).(object.Array)
+	for i := 0; i+1 < len(w); i += 2 {
+		start, ok := doc.Resolve(w[i]).(object.Integer)
+		if !ok {
+			continue
+		}
+		run, ok := doc.Resolve(w[i+1]).(object.Array)
+		if !ok {
+			// The other form, "first last width", which this writer does not
+			// emit; skipping it would hide a change of form rather than report
+			// one.
+			t.Fatalf("/W entry %d is %T, want an array of widths", i+1, w[i+1])
+		}
+		if cid < int(start) || cid >= int(start)+len(run) {
+			continue
+		}
+		switch v := doc.Resolve(run[cid-int(start)]).(type) {
+		case object.Integer:
+			return float64(v), true
+		case object.Real:
+			return float64(v), true
+		}
+	}
+	return 0, false
 }
 
 // corpusCIDKeyedCFF returns a bare CID-keyed CFF program from the corpus.
@@ -1044,4 +1242,243 @@ func TestSimpleFontCarriesAToUnicodeCMap(t *testing.T) {
 		return
 	}
 	t.Fatal("no simple font was written")
+}
+
+// TestACJKDocumentIsWrittenAndReadsBack is the whole of CID-keyed embedding as
+// a document rather than as three dictionary entries.
+//
+// It is the case that was refused outright until now: a page set in a font
+// whose CIDs are not its glyph indices. Everything the other tests check
+// separately has to agree at once for the text to come back — the codes are
+// CIDs, /W is keyed by them, the subset carries the glyphs those CIDs reach,
+// and /CIDSystemInfo names the collection they are numbered in.
+func TestACJKDocumentIsWrittenAndReadsBack(t *testing.T) {
+	const text = "日本語のテキスト"
+
+	face, err := fonts.Load(cidKeyedFace(t))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	doc := NewPDFADocument(pdfa.PDFA2b)
+
+	codes, missing := face.Encode(text)
+	if missing != 0 {
+		t.Fatalf("the CJK face is missing %d runes of %q", missing, text)
+	}
+	var b content.Builder
+	b.BeginText().SetFont("F1", 24).MoveText(72, 700).ShowText(codes).EndText()
+	data, err := b.Bytes()
+	if err != nil {
+		t.Fatalf("drawing: %v", err)
+	}
+	fontRef, err := face.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding: %v", err)
+	}
+
+	stream := &object.Stream{Dict: object.Dictionary{}, Data: data}
+	stream.Dict.Set("Length", object.Integer(len(data)))
+	contentRef := doc.Add(stream)
+	fontDict := &object.Dictionary{}
+	for _, name := range b.Resources().Fonts {
+		fontDict.Set(name, fontRef)
+	}
+	resources := &object.Dictionary{}
+	resources.Set("Font", fontDict)
+	page := &object.Dictionary{}
+	page.Set("Type", object.Name("Page"))
+	page.Set("Parent", object.IndirectRef{Number: 2})
+	page.Set("MediaBox", object.Array{
+		object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792),
+	})
+	page.Set("Resources", resources)
+	page.Set("Contents", contentRef)
+	pageRef := doc.Add(page)
+	pages := doc.ResolveDict(doc.ResolveDict(doc.Trailer.Get("Root")).Get("Pages"))
+	pages.Set("Kids", object.Array{pageRef})
+	pages.Set("Count", object.Integer(1))
+
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+	back, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("the document pdf0 wrote, pdf0 cannot read: %v", err)
+	}
+
+	// The ToUnicode CMap is written from the same CIDs the codes are, so the
+	// text comes back only if every one of them agrees.
+	if got := back.ExtractText(); !strings.Contains(got, text) {
+		t.Errorf("the extracted text is %q, want it to contain %q", got, text)
+	}
+	// And this repository's own validator, which checks /CIDSet against the
+	// glyphs the embedded program actually has — the one rule that reads the
+	// CID numbering back out of the CFF charset.
+	if v := ValidatePDFA(back, pdfa.PDFA2b); len(v) != 0 {
+		for i, f := range v {
+			if i < 5 {
+				t.Errorf("PDF/A-2b: %s", f.Error())
+			}
+		}
+	}
+}
+
+// TestACIDFontThatCannotNameItsCollectionIsRefused is the case the first
+// version of this got wrong, and it got it wrong in the direction that ships.
+//
+// A CID-keyed font whose ROS half-parses — SIDs naming strings the font does
+// not carry, or a supplement below zero, which is a version number and counts
+// up — has CIDs in some collection and has not said which. Writing
+// Adobe-Identity-0 there is not a cautious default: it is a specific claim that
+// the numbering is the font's own, and a reader that believes it looks every
+// glyph up in the wrong collection. The document looks finished either way.
+//
+// So it is refused, and refused before the font is subsetted — these fixtures
+// cannot be subsetted at all (fonttest's CID-keyed CFF has no FDSelect), and a
+// check that ran after would report that instead, which is a true statement
+// about the wrong thing.
+//
+// The fixtures are fonttest's, which builds these two shapes deliberately
+// because both are malformed in ways that *parse*. The control — a CID-keyed
+// font that does name its collection, embedded with that collection in
+// /CIDSystemInfo — is TestCIDKeyedSystemInfoIsTheFontsOwn, on the corpus's
+// Adobe-Japan1-6 font.
+func TestACIDFontThatCannotNameItsCollectionIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		opts fonttest.CFFOptions
+	}{
+		{"a ROS naming strings the font does not carry",
+			fonttest.CFFOptions{Glyphs: 4, CIDKeyed: true, UnnamedCollection: true}},
+		{"a supplement below zero",
+			fonttest.CFFOptions{Glyphs: 4, CIDKeyed: true, NegativeSupplement: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, err := fonts.Load(fonttest.OTTO(fonttest.CFF(c.opts), fonttest.SFNTOptions{
+				Name:   "Broken",
+				Glyphs: glyphsFor(c.opts.Glyphs - 1),
+			}))
+			if err != nil {
+				t.Fatalf("loading: %v", err)
+			}
+			// Reading it is fine; nothing about shaping needs the collection.
+			if _, missing := f.Encode("A"); missing != 0 {
+				t.Errorf("%d characters missing from a face that covers them", missing)
+			}
+
+			doc := NewPDFADocument(pdfa.PDFA2b)
+			if _, err := f.Embed(doc); err == nil {
+				t.Error("the font was embedded; its /CIDSystemInfo would claim a " +
+					"collection the program never named")
+			} else if !strings.Contains(err.Error(), "character collection") {
+				t.Errorf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
+// TestAnAdoptedCIDFaceGetsItsOwnCollection is the other half of the Adopt gap,
+// and the half that survived GlyphCode.
+//
+// Adopt is handed a shaping face and never the program, so nothing here knew
+// whether an adopted font was CID-keyed — and the collection is written from
+// that. An adopted Adobe-Japan1 font was described as Adobe-Identity-0, which
+// says its CIDs are its own arbitrary numbering, and a reader believing it
+// looks every glyph up in the wrong collection.
+//
+// The subset is the program, and it carries the ROS through untouched, so the
+// question can be asked of it after subsetting instead. The fixture is the
+// corpus's Adobe-Japan1-6 font because Noto is Adobe-Identity-0, which is also
+// the default — a test on Noto would pass without the fix.
+func TestAnAdoptedCIDFaceGetsItsOwnCollection(t *testing.T) {
+	cff := corpusCIDKeyedCFF(t)
+	prog := font.ParseCFF(cff)
+	if prog == nil || prog.GIDToCID == nil {
+		t.Fatal("the corpus fixture is not a CID-keyed CFF")
+	}
+	if prog.Registry == "Adobe" && prog.Ordering == "Identity" {
+		t.Skip("the corpus font found is Adobe-Identity-0, which is also the " +
+			"default, so this run cannot tell the two apart")
+	}
+	data := fonttest.OTTO(cff, fonttest.SFNTOptions{
+		Name: "Japan1", Glyphs: glyphsFor(prog.NumGlyphs - 1),
+	})
+	inner, err := shape.Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	// Adopt, not Load: the constructor that never sees the bytes.
+	f := fonts.Adopt(inner)
+	f.Encode("A")
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	ref, err := f.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding an adopted CID-keyed face: %v", err)
+	}
+	info, _ := doc.Resolve(descendantOf(t, doc, ref).Get("CIDSystemInfo")).(*object.Dictionary)
+	if info == nil {
+		t.Fatal("the descendant has no /CIDSystemInfo")
+	}
+	reg, _ := doc.Resolve(info.Get("Registry")).(object.String)
+	ord, _ := doc.Resolve(info.Get("Ordering")).(object.String)
+	sup, _ := doc.Resolve(info.Get("Supplement")).(object.Integer)
+	if string(reg.Value) != prog.Registry || string(ord.Value) != prog.Ordering ||
+		int(sup) != prog.Supplement {
+		t.Errorf("an adopted face was written as %s-%s-%d; the program says "+
+			"%s-%s-%d", reg.Value, ord.Value, sup,
+			prog.Registry, prog.Ordering, prog.Supplement)
+	}
+}
+
+// TestAnAdoptedCIDFaceIsKeyedCorrectly closes the gap this package used to
+// state on Adopt.
+//
+// Adopt is handed a shaping face and never the program it was read from, so
+// nothing here could parse the charset for it and an adopted CID-keyed face
+// was written with /W, /CIDSet and /ToUnicode keyed by glyph index — the exact
+// defect the loaded path was fixed for, reachable by the one constructor that
+// could not look.
+//
+// shape.Face.GlyphCode closed it: the face answers with the number it will
+// itself write, so there is nothing left to parse and nothing to remember.
+func TestAnAdoptedCIDFaceIsKeyedCorrectly(t *testing.T) {
+	data := cidKeyedFace(t)
+	inner, err := shape.Load(data)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	// The path with no program: a face built with forme directly and handed
+	// over, which is what Adopt is for.
+	f := fonts.Adopt(inner)
+
+	gid, ok := f.GlyphID(halfWidthKatakana)
+	if !ok {
+		t.Fatalf("the fixture has no glyph for %q", halfWidthKatakana)
+	}
+	codes, missing := f.Encode(string(halfWidthKatakana))
+	if missing != 0 {
+		t.Fatalf("%d characters missing", missing)
+	}
+	cid := int(codes[0])<<8 | int(codes[1])
+	if cid == gid {
+		t.Fatalf("glyph %d and CID %d are equal; this face cannot show the "+
+			"difference", gid, cid)
+	}
+
+	doc := NewPDFADocument(pdfa.PDFA2b)
+	ref, err := f.Embed(doc)
+	if err != nil {
+		t.Fatalf("embedding an adopted CID-keyed face: %v", err)
+	}
+	cidFont := descendantOf(t, doc, ref)
+	if got, ok := widthOfCID(t, doc, cidFont, cid); !ok {
+		t.Errorf("/W has no entry for CID %d, the code the page uses", cid)
+	} else if want := f.GlyphAdvances()[gid]; got != want {
+		t.Errorf("/W gives CID %d a width of %v, want %v", cid, got, want)
+	}
+	if _, ok := widthOfCID(t, doc, cidFont, gid); ok {
+		t.Errorf("/W has an entry at %d, the glyph index", gid)
+	}
 }

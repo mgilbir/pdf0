@@ -931,17 +931,49 @@ func TestTheWidthsAreTheProgramsOwn(t *testing.T) {
 			}
 		}
 	}
+	// Only the glyphs the subset carries. /W describes those and lets every
+	// other CID take /DW, which is what keeps the array a few entries rather
+	// than one per glyph in the original font — a CJK face has seventeen
+	// thousand and a document uses a dozen. A glyph the subset dropped is an
+	// endchar in the program and no code refers to it, so what /DW says about
+	// it cannot be read by anything.
+	used := f.Used()
+	if len(used) == 0 {
+		t.Fatal("no glyphs were used, so this asserts nothing")
+	}
 	var wrong int
-	for gid, w := range stated {
-		if w != advances[gid] {
+	for _, gid := range used {
+		if gid < 0 || gid >= len(stated) {
+			continue
+		}
+		if stated[gid] != advances[gid] {
 			wrong++
 			if wrong <= 5 {
-				t.Errorf("glyph %d: the font advances %v and /W says %v", gid, advances[gid], w)
+				t.Errorf("glyph %d: the font advances %v and /W says %v",
+					gid, advances[gid], stated[gid])
 			}
 		}
 	}
 	if wrong > 5 {
 		t.Errorf("%d glyphs in all have the wrong width", wrong)
+	}
+
+	// And the other half of the same decision: the array is about the subset,
+	// not about the font it came from. Without this the test above passes just
+	// as well against a /W with an entry for every glyph, which is what this
+	// used to write.
+	if wObj := cid.Get("W"); wObj != nil {
+		var entries int
+		w := wObj.(object.Array)
+		for i := 1; i < len(w); i += 2 {
+			if run, ok := w[i].(object.Array); ok {
+				entries += len(run)
+			}
+		}
+		if entries > 4*len(used) {
+			t.Errorf("/W states %d widths for a subset of %d glyphs; it is "+
+				"describing the whole font", entries, len(used))
+		}
 	}
 }
 
