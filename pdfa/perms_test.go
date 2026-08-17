@@ -3,6 +3,8 @@ package pdfa
 import (
 	"testing"
 
+	"github.com/mgilbir/pdf0/internal/core"
+
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -185,5 +187,83 @@ func TestPermsSurvivesAnArrayEntryThatIsNotADictionary(t *testing.T) {
 	if !hasMessage(errs, "DigestValue") {
 		t.Errorf("the entries that are not dictionaries stopped the one that is "+
 			"from being checked: %v", errs)
+	}
+}
+
+// TestNeedsRenderingIsTheOtherHalfOfClause642.
+//
+// Clause 6.4.2 forbids XFA and says so about two keys: /XFA in the interactive
+// form dictionary, and /NeedsRendering in the document catalog. Only the first
+// was implemented.
+//
+// It stayed hidden because the one corpus file that isolates the second —
+// PDF_A-4 6-4-2-t01-fail-b, which sets the flag and carries no /XFA — was being
+// failed by an unrelated false positive about Type 1 glyph widths. When that
+// was fixed upstream the file started passing, and the gap surfaced as a
+// detection regression on a dependency bump.
+func TestNeedsRenderingIsTheOtherHalfOfClause642(t *testing.T) {
+	// A catalog with /NeedsRendering and no interactive form at all, so the
+	// /XFA half cannot be what answers.
+	build := func(v object.Object) core.View {
+		objs := map[int]*object.IndirectObject{}
+		catalog := &object.Dictionary{}
+		catalog.Set("Type", object.Name("Catalog"))
+		if v != nil {
+			catalog.Set("NeedsRendering", v)
+		}
+		objs[1] = &object.IndirectObject{Number: 1, Value: catalog}
+		trailer := object.Dictionary{}
+		trailer.Set("Root", object.IndirectRef{Number: 1})
+		return mkView(objs, trailer)
+	}
+
+	const want = "NeedsRendering"
+	for _, level := range []Level{PDFA2b, PDFA3b, PDFA4} {
+		if !hasMessage(checkNoXFA(build(object.Boolean(true)), level), want) {
+			t.Errorf("%s: /NeedsRendering true was not reported", level)
+		}
+		// veraPDF's test is `NeedsRendering == false`, so the value decides and
+		// an explicit false is as good as an absence. Reporting on presence
+		// alone would condemn a conforming document.
+		if hasMessage(checkNoXFA(build(object.Boolean(false)), level), want) {
+			t.Errorf("%s: /NeedsRendering false was reported", level)
+		}
+		if hasMessage(checkNoXFA(build(nil), level), want) {
+			t.Errorf("%s: an absent /NeedsRendering was reported", level)
+		}
+	}
+
+	// Not at PDF/A-1, which is based on PDF 1.4 — the key did not exist, and
+	// neither the 1A nor the 1B veraPDF profile carries the rule.
+	if hasMessage(checkNoXFA(build(object.Boolean(true)), PDFA1b), want) {
+		t.Error("PDF/A-1b reported /NeedsRendering, which its profile does not have")
+	}
+
+	// Written indirectly, since almost any value may be (see the sweep in
+	// indirect_evasion_test.go).
+	objs := map[int]*object.IndirectObject{}
+	catalog := &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("NeedsRendering", indirect(objs, 9, object.Boolean(true)))
+	objs[1] = &object.IndirectObject{Number: 1, Value: catalog}
+	trailer := object.Dictionary{}
+	trailer.Set("Root", object.IndirectRef{Number: 1})
+	if !hasMessage(checkNoXFA(mkView(objs, trailer), PDFA4), want) {
+		t.Error("an indirect /NeedsRendering was not reported")
+	}
+
+	// And the /XFA half still answers, including when there is no
+	// /NeedsRendering to distract it.
+	objs = map[int]*object.IndirectObject{}
+	af := &object.Dictionary{}
+	af.Set("XFA", object.Array{})
+	catalog = &object.Dictionary{}
+	catalog.Set("Type", object.Name("Catalog"))
+	catalog.Set("AcroForm", indirect(objs, 4, af))
+	objs[1] = &object.IndirectObject{Number: 1, Value: catalog}
+	trailer = object.Dictionary{}
+	trailer.Set("Root", object.IndirectRef{Number: 1})
+	if !hasMessage(checkNoXFA(mkView(objs, trailer), PDFA4), "/XFA") {
+		t.Error("the /XFA half of the clause stopped reporting")
 	}
 }

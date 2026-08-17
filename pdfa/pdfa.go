@@ -1779,28 +1779,50 @@ func checkWidgetNoAction(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// Rule 6.4.2-1: AcroForm dictionary cannot contain XFA key.
+// Clause 6.4.2 forbids XFA, and says so about two different keys.
+//
+//   - testNumber 1: the interactive form dictionary shall not contain /XFA.
+//   - testNumber 2: the document catalog's /NeedsRendering shall not be true.
+//     That is the flag saying the form is a dynamic XFA one whose real content
+//     is the XML rather than the page, so a viewer that honours it shows
+//     something the PDF does not contain.
+//
+// The second was missing. It went unnoticed because the only corpus file that
+// isolates it — PDF_A-4 6-4-2-t01-fail-b, which sets the flag and carries no
+// /XFA — was being failed by an unrelated false positive about Type 1 glyph
+// widths, and fixing that upstream left the file passing.
+//
+// The value is what counts, not the key: veraPDF's test is
+// `NeedsRendering == false`, so an explicit false is as good as an absence.
+// The profiles carry this at PDF/A-2, -3 and -4 and not at PDF/A-1, which is
+// based on PDF 1.4, before the key existed.
 func checkNoXFA(doc core.View, level Level) []Violation {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
-	afRef := catalog.Get("AcroForm")
-	if afRef == nil {
-		return nil
+
+	var errs []Violation
+	if level != PDFA1b {
+		if nr, ok := doc.ResolveBool(catalog.Get("NeedsRendering")); ok && bool(nr) {
+			errs = append(errs, Violation{
+				Rule:    "6.4.2",
+				Level:   level,
+				Message: "document catalog /NeedsRendering must not be true (dynamic XFA form)",
+			})
+		}
 	}
-	af := doc.ResolveDict(afRef)
-	if af == nil {
-		return nil
-	}
-	if af.Get("XFA") != nil {
-		return []Violation{{
+
+	// /NeedsRendering lives in the catalog and does not need a form to be
+	// there, so the XFA check is what the missing /AcroForm returns from.
+	if af := doc.ResolveDict(catalog.Get("AcroForm")); af != nil && af.Get("XFA") != nil {
+		errs = append(errs, Violation{
 			Rule:    "6.4.2",
 			Level:   level,
 			Message: "AcroForm must not contain /XFA",
-		}}
+		})
 	}
-	return nil
+	return errs
 }
 
 // Rule 6.4.1-2: NeedAppearances flag must be absent or false.
