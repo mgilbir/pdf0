@@ -1320,6 +1320,7 @@ func TestCorpusConformanceSuites(t *testing.T) {
 			continue
 		}
 		var fail, missed, parseErrors, falsePositives int
+		var missedFiles, fpFiles, parseErrFiles []string
 		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
 				return nil
@@ -1337,30 +1338,36 @@ func TestCorpusConformanceSuites(t *testing.T) {
 			doc, e := Read(bytes.NewReader(data), int64(len(data)))
 			if e != nil {
 				parseErrors++
+				parseErrFiles = append(parseErrFiles, base+" :: "+e.Error())
 				return nil
 			}
 			errs := ValidatePDFABytes(doc, s.level, data)
 			if isPass {
 				if s.checkPassFP && len(errs) > 0 {
 					falsePositives++
+					fpFiles = append(fpFiles, base+" :: "+errs[0].Error())
 				}
 				return nil
 			}
 			fail++
 			if len(errs) == 0 {
 				missed++
+				missedFiles = append(missedFiles, base)
 			}
 			return nil
 		})
 		t.Logf("%-10s @ %-8v : fail=%d missed=%d falsePositives=%d parseErrors=%d", s.dir, s.level, fail, missed, falsePositives, parseErrors)
 		if missed > s.maxMissed {
-			t.Errorf("%s: missed %d exceed baseline %d (detection regressed)", s.dir, missed, s.maxMissed)
+			t.Errorf("%s: missed %d exceed baseline %d (detection regressed). Offending fail files:\n  %s",
+				s.dir, missed, s.maxMissed, strings.Join(missedFiles, "\n  "))
 		}
 		if s.checkPassFP && falsePositives > 0 {
-			t.Errorf("%s: false positives %d exceed baseline 0 (regression)", s.dir, falsePositives)
+			t.Errorf("%s: false positives %d exceed baseline 0 (regression). Offending pass files:\n  %s",
+				s.dir, falsePositives, strings.Join(fpFiles, "\n  "))
 		}
 		if parseErrors > 0 {
-			t.Errorf("%s: parse errors %d exceed baseline 0 (regression)", s.dir, parseErrors)
+			t.Errorf("%s: parse errors %d exceed baseline 0 (regression). Offending files:\n  %s",
+				s.dir, parseErrors, strings.Join(parseErrFiles, "\n  "))
 		}
 	}
 }
@@ -1462,7 +1469,7 @@ func TestCorpus(t *testing.T) {
 	)
 	// Record the specific files behind each regression bucket so a baseline
 	// breach is debuggable.
-	var fpFiles, parseErrFiles []string
+	var fpFiles, parseErrFiles, missedFiles []string
 
 	for _, levelDir := range levels {
 		level, ok := corpusLevel(levelDir)
@@ -1513,6 +1520,7 @@ func TestCorpus(t *testing.T) {
 					failTotal++
 					if len(errs) == 0 {
 						missed++
+						missedFiles = append(missedFiles, f.rel)
 					}
 				}
 			}
@@ -1531,7 +1539,8 @@ func TestCorpus(t *testing.T) {
 			falsePositives, corpusMaxFalsePositives, strings.Join(fpFiles, "\n  "))
 	}
 	if missed > corpusMaxMissed {
-		t.Errorf("missed violations %d exceed baseline %d (detection regressed)", missed, corpusMaxMissed)
+		t.Errorf("missed violations %d exceed baseline %d (detection regressed). Offending fail files:\n  %s",
+			missed, corpusMaxMissed, strings.Join(missedFiles, "\n  "))
 	}
 	if parseErrors > corpusMaxParseErrors {
 		t.Errorf("parse errors %d exceed baseline %d (regression). Offending files:\n  %s",
