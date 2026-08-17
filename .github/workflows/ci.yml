@@ -64,6 +64,13 @@ jobs:
           rm output.pdf
           go run ./examples/extract_images
           go run ./examples/sign_verify
+          # HTML + CSS + a page size -> a PDF, which is what the layout half of
+          # this project exists for. It writes to stdout, so a non-empty file
+          # with a PDF header is the assertion.
+          go run ./examples/html_to_pdf > html.pdf
+          test -s html.pdf
+          head -c 8 html.pdf | grep -q '%PDF-'
+          rm html.pdf
 
   # The conformance ratchets: corpus FP=0/missed=0, Isartor, Level A, the
   # whole-corpus parse sweep, the Arlington structural oracle and the Factur-X

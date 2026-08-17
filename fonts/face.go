@@ -16,6 +16,7 @@
 package fonts
 
 import (
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonts/notosans"
 	"github.com/mgilbir/forme/shape"
 )
@@ -27,7 +28,24 @@ import (
 // Encode, GlyphID, Features and the rest — and it is exported so that a caller
 // can reach it, and so that a face can be handed to something that takes
 // forme's own type.
-type Face struct{ *shape.Face }
+type Face struct {
+	*shape.Face
+
+	// cidKeyed is the CFF inside this face numbering its glyphs by CID rather
+	// than by index, which is the one thing about such a face that forme does
+	// not report and this cannot ask it.
+	//
+	// It decides a single question: whether a face that cannot name its
+	// character collection may be embedded as Adobe-Identity-0. For a font
+	// addressed by glyph index that is the truth; for a CID-keyed one it is a
+	// false claim about the numbering. Everything else that used to need the
+	// distinction now asks shape.Face.GlyphCode, which answers correctly for
+	// every kind of face and has no branch to forget.
+	//
+	// False for a face from Adopt, which is handed a shaping face and never the
+	// program. Stated on Adopt.
+	cidKeyed bool
+}
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
 //
@@ -35,7 +53,11 @@ type Face struct{ *shape.Face }
 // for: one out of a cache, or one a caller built with forme directly. The face
 // is not copied — the wrapper and the original are the same font, and each
 // records the glyphs the other used.
-func Adopt(f *shape.Face) *Face { return &Face{f} }
+// An adopted face is embedded exactly as a loaded one is. /W, /CIDSet and
+// /ToUnicode ask shape.Face.GlyphCode, which answers from the face; the
+// character collection is read from the subset, which is the program this
+// constructor never saw and carries the ROS through untouched.
+func Adopt(f *shape.Face) *Face { return &Face{Face: f} }
 
 // Load reads a font program — TrueType, OpenType, or an sfnt carrying CFF
 // outlines — as a composite face, whose character codes are glyph indices.
@@ -48,7 +70,31 @@ func Load(data []byte) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	face := &Face{Face: f}
+	face.readCIDKeying(data)
+	return face, nil
+}
+
+// readCIDKeying records that the outlines are a CID-keyed CFF.
+//
+// A CFF declares itself CID-keyed with the ROS operator, which is also what
+// font.ParseCFF reads to build GIDToCID; a font with no CFF table at all —
+// every TrueType — is not one, and everything here stays zero.
+//
+// It is read here, from the program, rather than at embed time from the subset.
+// The subset carries the same charset, so either would do today; doing it here
+// means the answer does not depend on subsetting having succeeded, and a face
+// that cannot be subsetted still knows what it is.
+func (f *Face) readCIDKeying(data []byte) {
+	cff := font.SFNTTables(data)["CFF "]
+	if cff == nil {
+		return
+	}
+	p := font.ParseCFF(cff)
+	if p == nil || p.GIDToCID == nil {
+		return
+	}
+	f.cidKeyed = true
 }
 
 // LoadSimple reads a font program as a simple face, whose character codes are
@@ -63,7 +109,7 @@ func LoadSimple(data []byte) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f}, nil
 }
 
 // Standard names one of the fourteen faces every PDF reader is required to
@@ -76,7 +122,7 @@ func Standard(name string) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f}, nil
 }
 
 // StandardNames lists the fourteen faces Standard takes.
@@ -94,7 +140,7 @@ func NotoSans() (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f}, nil
 }
 
 // NotoSansSimple is the bundled face in the simple form: one byte per
@@ -104,7 +150,7 @@ func NotoSansSimple() (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{f}, nil
+	return &Face{Face: f}, nil
 }
 
 // NotoSansLicense is the text of the SIL Open Font License 1.1 as it is
@@ -122,7 +168,11 @@ func NotoSansLicense() string { return notosans.License() }
 // Parsing is the expensive part and its result never changes; what must not be
 // shared is the used set, since that decides what each document embeds. So a
 // second document takes a clone rather than a second parse.
-func (f *Face) Clone() *Face { return &Face{f.Face.Clone()} }
+func (f *Face) Clone() *Face {
+	c := *f
+	c.Face = f.Face.Clone()
+	return &c
+}
 
 // Glyph is one positioned glyph: which glyph, where in the text it came from,
 // and how far it displaces and advances.
@@ -133,6 +183,24 @@ type Run = shape.Run
 
 // Descriptor is a face's own metrics, in the font's own units.
 type Descriptor = shape.Descriptor
+
+// Metric names a metric a font may or may not state, for Descriptor.Declared.
+//
+// The distinction is the point of it. A font that states a line gap of zero and
+// a font with no hhea table at all both report zero, and a renderer that could
+// not tell them apart would space its lines by a number it believed came from
+// the font. Every one of these is a metric this engine would otherwise guess.
+type Metric = shape.Metric
+
+const (
+	MetricLineGap     = shape.MetricLineGap
+	MetricTypoMetrics = shape.MetricTypoMetrics
+	MetricXHeight     = shape.MetricXHeight
+	MetricCapHeight   = shape.MetricCapHeight
+	MetricUnderline   = shape.MetricUnderline
+	MetricStrikeout   = shape.MetricStrikeout
+	MetricWeight      = shape.MetricWeight
+)
 
 // MeasureGlyphs is the width a shaped run occupies at a given size.
 func MeasureGlyphs(glyphs []Glyph, size float64) float64 {

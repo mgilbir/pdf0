@@ -48,14 +48,15 @@ testdata/fuzz/
 /corpusprobe
 /corpustime
 
+# The example binary, if anyone runs `go build ./examples/html_to_pdf` from the
+# repository root. One went in with the commit that added the example: 11 MB of
+# ELF. It is out of this branch's history; this is so the next one cannot follow.
+/html_to_pdf
+
 # WTPDF / PDF/UA-2 example PDFs (downloaded via `make wtpdf`); manifest + script are committed
 testdata/wtpdf/*.pdf
 testdata/wtpdf/.ok
 
-# Unicode's own property files, fetched into place for `make useable`, which
-# regenerates the Universal Shaping Engine's category table. Large, versioned by
-# Unicode rather than by this repository, and only needed to re-derive a table
-# that is checked in.
 
 # Arlington PDF Model (Apache-2.0, pdf-association) — machine-readable ISO 32000
 # object grammar; cloned via `make arlington` for the structural oracle test.
@@ -75,9 +76,6 @@ testdata/ccitt/.ok
 # decoder (pdf.js conformance suite); manifest + script are committed.
 testdata/jbig2/*.pdf
 testdata/jbig2/.ok
-
-# Unicode's conformance suite for the bidirectional algorithm, UAX #9
-# (downloaded via `make bidi-tests`) — the oracle for fonts/bidi.go.
 
 # Factur-X example invoices (oracle) — not vendored
 testdata/facturx/*.pdf
@@ -106,3 +104,6 @@ testdata/nlcius/
 # Common Crawl robustness sweep: streamed blocks, probe binary, logs and the
 # quarantined reproductions. The sweep script is committed; none of this is.
 testdata/cc/run/
+
+# A CID-keyed CFF face for the font-embedding tests, fetched by `make notocjk`.
+testdata/notocjk/

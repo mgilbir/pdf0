@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc
+.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -28,6 +28,7 @@ PROFILES_DIR := spec/verapdf-profiles
 VERAPDF_CORPUS_REF ?= 49de56cd987929932c9e4fbbbe67d052bf44ef83
 ARLINGTON_REF      ?= 3a7cde314d083e4c6d78d6782334b7409d3889f7
 REFPDF_REF         ?= c20f2c17bfcc4baab7cfe62e70fae64caf14d5fa
+CSS_TESTS_REF      ?= 203ce36bffd617db7f118c551e32794561fb273d
 
 # shallow_at fetches exactly one commit of one repository: no history, no other
 # branches. $(1) directory, $(2) URL, $(3) commit.
@@ -142,6 +143,15 @@ cc-sweep:
 clean-cc:
 	rm -rf testdata/cc/run
 
+# The bidirectional algorithm moved to github.com/mgilbir/forme/bidi, and its
+# conformance data with it. `make test-bidi` lives in that repository now; there
+# is nothing here to fetch, and nothing here that reads UAX #9 any more.
+
+# UAX #29's grapheme cluster boundaries moved to
+# github.com/mgilbir/forme/segment, and its conformance data, its property-table
+# generator and the part of the Unicode Character Database they need went with
+# it. `make test-grapheme` lives in that repository now.
+
 # Real-world CCITTFaxDecode sample PDFs (pdf.js Apache-2.0, PyPDF4 BSD) used as
 # the decode oracle for the Group 3/4 fax decoder. Downloaded into
 # testdata/ccitt (gitignored); the source manifest and downloader are committed.
@@ -170,12 +180,17 @@ $(JBIG2_DIR)/.ok: $(JBIG2_DIR)/sources.tsv $(JBIG2_DIR)/download.sh
 clean-jbig2:
 	rm -f $(JBIG2_DIR)/*.pdf $(JBIG2_DIR)/.ok
 
-# Shaping — the OpenType layout engine, the bidirectional algorithm, the
-# script-specific models and the font-program reader — lives in
-# github.com/mgilbir/forme. Its oracles go with it: HarfBuzz's answers over a
-# checked-in corpus, Unicode's own UAX #9 conformance suite, CoreText for a
-# third opinion, and the generators that build the Unicode-derived tables. They
-# are run by that module's own Makefile.
+# Shaping — the OpenType layout engine, the script-specific models and the
+# font-program reader — lives in github.com/mgilbir/forme. Its oracles go with
+# it: HarfBuzz's answers over a checked-in corpus, CoreText for a third opinion,
+# and the generators that build the Unicode-derived tables it needs. They are run
+# by that module's own Makefile.
+#
+# The bidirectional algorithm used to be the one thing on that list with a copy
+# on each side. ADR 0007 records why there is now one: forme/bidi serves the
+# shaper and the layout engine both, and the seam between them is unchanged —
+# the layout engine decides where each run goes on the line, the shaper decides
+# the order of the glyphs inside one.
 #
 # What stays here is what PDF does with a shaped run: writing it into a content
 # stream, and writing the font into the document. testdata/shaping/corpus.txt
@@ -185,3 +200,23 @@ clean-jbig2:
 # The EN 16931 / CIUS validation lives in github.com/mgilbir/formalis; its oracle
 # data (EN 16931 artefacts, code lists, UBL examples, XRechnung/Peppol/NLCIUS
 # suites) is fetched by that module's own Makefile.
+
+# A CID-keyed CFF face, for the embedding tests that need one.
+#
+# Every static Noto CJK face is CID-keyed, and what those tests turn on is a
+# charset that is *not* the identity — the only thing that tells a CID from a
+# glyph index. No synthetic fixture builds one, so this is a real font: 4.5 MB,
+# fetched and gitignored like every other corpus, and the tests skip without it.
+CJK_DIR := testdata/notocjk
+
+notocjk: $(CJK_DIR)/.ok
+
+$(CJK_DIR)/.ok:
+	mkdir -p $(CJK_DIR)
+	curl -sSfL -o $(CJK_DIR)/NotoSansJP-Regular.otf \
+		https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf
+	touch $@
+
+clean-notocjk:
+	rm -rf $(CJK_DIR)
+

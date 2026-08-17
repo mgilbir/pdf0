@@ -109,7 +109,7 @@ func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		if st, _ := stream.Dict.Get("Subtype").(object.Name); st != "Image" {
+		if st, _ := doc.ResolveName(stream.Dict.Get("Subtype")); st != "Image" {
 			continue
 		}
 		if intent, ok := doc.Resolve(stream.Dict.Get("Intent")).(object.Name); ok && !standardRenderingIntents[string(intent)] {
@@ -279,7 +279,7 @@ func checkA4TriggerEvents(doc core.View, level Level) []Violation {
 		report(doc.ResolveDict(page.Dict.Get("AA")), page.ObjNum)
 	}
 	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*object.Dictionary); ok && core.IsAnnotation(d) {
+		if d, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(d) {
 			report(doc.ResolveDict(d.Get("AA")), num)
 		}
 	}
@@ -324,7 +324,7 @@ func checkActualTextPUA(doc core.View, level Level) []Violation {
 	// Structure element (and any) dictionaries carrying /ActualText.
 	for num, iobj := range doc.Objects {
 		if d, ok := iobj.Value.(*object.Dictionary); ok {
-			if s, ok := d.Get("ActualText").(object.String); ok && stringHasPUA(s.Value) {
+			if s, ok := doc.Resolve(d.Get("ActualText")).(object.String); ok && stringHasPUA(s.Value) {
 				add("an ActualText entry in a dictionary contains a Unicode Private Use Area value", num)
 			}
 		}
@@ -476,7 +476,7 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 					continue
 				}
 				if s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream); ok {
-					if st, _ := s.Dict.Get("Subtype").(object.Name); st == "Form" {
+					if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
 						walk(&s.Dict, doc.Content(s), s)
 					}
 				}

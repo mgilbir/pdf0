@@ -204,6 +204,37 @@ func (v View) ResolveDict(obj object.Object) *object.Dictionary {
 	return d
 }
 
+// ResolveName, ResolveInt and ResolveBool are ResolveDict for the three scalar
+// types a rule branches on, and they exist because asserting without resolving
+// is how a rule gets skipped.
+//
+// Almost nothing in ISO 32000 requires an entry to be a direct object, so
+// `/Subtype 5 0 R` naming `/Widget` is a legal way to write a widget
+// annotation. A check that reads it as `dict.Get("Subtype").(object.Name)` gets
+// the empty name back, decides the annotation is not a widget, and returns
+// without looking — which turns "shall not" into "shall not, unless you write
+// it indirectly". The same shape hides a transparency group behind `/S`, an
+// action type behind `/S`, and an overprint mode behind `/OPM`.
+//
+// The second return distinguishes absent from present-but-wrong-type only
+// where a caller acts on the difference; most read the value and compare it.
+func (v View) ResolveName(obj object.Object) (object.Name, bool) {
+	n, ok := v.Resolve(obj).(object.Name)
+	return n, ok
+}
+
+// ResolveInt resolves obj and type-asserts to object.Integer.
+func (v View) ResolveInt(obj object.Object) (object.Integer, bool) {
+	i, ok := v.Resolve(obj).(object.Integer)
+	return i, ok
+}
+
+// ResolveBool resolves obj and type-asserts to object.Boolean.
+func (v View) ResolveBool(obj object.Object) (object.Boolean, bool) {
+	b, ok := v.Resolve(obj).(object.Boolean)
+	return b, ok
+}
+
 // Catalog returns the document catalog, or nil when the trailer names no /Root
 // or names one that is not a dictionary.
 func (v View) Catalog() *object.Dictionary {
@@ -279,7 +310,7 @@ func (v View) collectPages(ref object.Object, pages *[]PageInfo, seen map[int]bo
 	if node == nil {
 		return
 	}
-	switch nodeType, _ := node.Get("Type").(object.Name); nodeType {
+	switch nodeType, _ := v.ResolveName(node.Get("Type")); nodeType {
 	case "Pages":
 		if kids, ok := v.Resolve(node.Get("Kids")).(object.Array); ok {
 			for _, kid := range kids {

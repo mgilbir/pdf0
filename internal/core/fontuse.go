@@ -154,7 +154,7 @@ func collectTextFromContainer(doc View, container *object.Dictionary, data []byt
 	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
 		for i, name := range xobjDict.Keys {
 			if s, ok := doc.Resolve(xobjDict.Values[i]).(*object.Stream); ok {
-				if st, _ := s.Dict.Get("Subtype").(object.Name); st == "Form" {
+				if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
 					forms = append(forms, candidate{string(name), s})
 				}
 			}
@@ -309,7 +309,7 @@ func LoadFontProgram(doc View, fd *object.Dictionary) *font.Program {
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile3")).(*object.Stream); ok {
 		if data := doc.Content(s); data != nil {
-			subtype, _ := s.Dict.Get("Subtype").(object.Name)
+			subtype, _ := doc.ResolveName(s.Dict.Get("Subtype"))
 			if subtype == "OpenType" {
 				if fp := ParseSFNTCFF(data); fp != nil {
 					return noteFontProgramLimits(doc, fp)

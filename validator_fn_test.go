@@ -71,8 +71,16 @@ func TestAAOnNonWidgetFlagged(t *testing.T) {
 	page.Set("Annots", object.Array{annot})
 	doc := pageDoc(page)
 
-	if got := countRule(ValidatePDFABytes(doc, pdfa.PDFA2b, nil), "6.6.3"); got == 0 {
+	// Under the clause the level numbers it by — 6.4.1 at -2 and -3, 6.6.2 at
+	// -1 — and not 6.6.3, which is PDF/A-4's. veraPDF scopes this rule to
+	// widgets and form fields; reporting a plain annotation under it is this
+	// module reading the requirement more broadly, which the corpus allows at
+	// FP=0, but the number still has to be one the reader can look up.
+	if got := countRule(ValidatePDFABytes(doc, pdfa.PDFA2b, nil), "6.4.1"); got == 0 {
 		t.Errorf("/AA on a non-widget annotation was not flagged at 2b")
+	}
+	if got := countRule(ValidatePDFABytes(doc, pdfa.PDFA1b, nil), "6.6.2"); got == 0 {
+		t.Errorf("/AA on a non-widget annotation was not flagged at 1b")
 	}
 	// (At A-4 the same /AA is caught by the per-event trigger rule, which is a
 	// separate check; that path is not exercised here.)

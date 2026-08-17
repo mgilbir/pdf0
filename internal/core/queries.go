@@ -185,12 +185,19 @@ func decodeUTF32(data []byte, bigEndian bool) string {
 	return string(buf)
 }
 
-func IsAnnotation(dict *object.Dictionary) bool {
-	if t, ok := dict.Get("Type").(object.Name); ok && t == "Annot" {
+// IsAnnotation reports whether dict is an annotation.
+//
+// It takes the view because both keys it reads may be indirect references, and
+// it gates every annotation rule in the package: a document that writes
+// `/Type 9 0 R` naming `/Annot` is a legal document, and reading the key
+// without resolving it made that document's annotations invisible to the
+// checks rather than conforming.
+func (v View) IsAnnotation(dict *object.Dictionary) bool {
+	if t, ok := v.ResolveName(dict.Get("Type")); ok && t == "Annot" {
 		return true
 	}
 	// Also detect annotations by Subtype + Rect (some PDFs omit /Type)
-	if _, ok := dict.Get("Subtype").(object.Name); ok && dict.Get("Rect") != nil {
+	if _, ok := v.ResolveName(dict.Get("Subtype")); ok && dict.Get("Rect") != nil {
 		return true
 	}
 	return false
@@ -372,22 +379,32 @@ func (doc View) ParseToUnicodeMap(fontDict *object.Dictionary) map[int]rune {
 				rest = rest[b+e+len(end):]
 				continue
 			}
-			for _, line := range strings.Split(rest[lo:hi], "\n") {
-				// Tokens are <hhhh> groups, often with no separating space
-				// (e.g. <0003><0003><0020>).
-				f := AngleTokens(line)
-				if isRange && len(f) >= 3 {
-					lo, hi, r := HexVal4(f[0]), HexVal4(f[1]), FirstRuneFromHex(f[2])
-					if lo >= 0 && hi >= lo && hi-lo < 65536 && r != 0 {
-						for c := lo; c <= hi; c++ {
-							m[c] = r + rune(c-lo)
+			// The entries run on without regard to line breaks, and there may
+			// be several on one — "<0041> <0061> <0042> <0062>" is two
+			// mappings. So the body is a flat stream of operands taken two at a
+			// time for bfchar and three for bfrange, which is what the sibling
+			// below already did: this one read the first entry of each line and
+			// dropped the rest, so a CMap written with its table on one line
+			// came back with a single mapping in it.
+			items := bfItems(rest[lo:hi])
+			step := 2
+			if isRange {
+				step = 3
+			}
+			for i := 0; i+step <= len(items); i += step {
+				if isRange {
+					src, last := items[i].value(), items[i+1].value()
+					r := FirstRuneFromHex(items[i+2].hex)
+					if src >= 0 && last >= src && last-src < 65536 && r != 0 {
+						for c := src; c <= last; c++ {
+							m[c] = r + rune(c-src)
 						}
 					}
-				} else if !isRange && len(f) >= 2 {
-					if src := HexVal4(f[0]); src >= 0 {
-						if r := FirstRuneFromHex(f[1]); r != 0 {
-							m[src] = r
-						}
+					continue
+				}
+				if src := items[i].value(); src >= 0 {
+					if r := FirstRuneFromHex(items[i+1].hex); r != 0 {
+						m[src] = r
 					}
 				}
 			}

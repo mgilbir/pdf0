@@ -4,9 +4,9 @@ A PDF parser, serializer, and conformance validator written in Go. The object
 model is ISO 32000-2 (PDF 2.0); files of any version are read into it, and most
 of the standards below are defined against PDF 1.x — PDF/A-1, -2 and -3 require
 a 1.x header, PDF/X-1a and -3 require 1.3/1.4. Its only dependencies are the
-author's own pure-Go modules (`forme` for text shaping and font programs,
-`formalis` for EN 16931 invoice rules, `golittlecms` for ICC profiles,
-`gopenjpeg` for JPEG 2000).
+author's own pure-Go modules (`forme` for text shaping, font programs and the
+HTML/CSS layout engine, `formalis` for EN 16931 invoice rules, `golittlecms` for
+ICC profiles, `gopenjpeg` for JPEG 2000).
 
 ```
 go get github.com/mgilbir/pdf0
@@ -19,6 +19,10 @@ go get github.com/mgilbir/pdf0
 - **Serialize** the object model back to PDF bytes (`Document.Write`),
   regenerating cross-reference streams and object streams where the source used
   them.
+- **Render** HTML and CSS onto a page (`htmlpdf.Render`). The engine — the HTML
+  parser, the cascade, the box model, floats, tables, bidirectional text — is
+  [forme](https://github.com/mgilbir/forme); what is here is the backend that
+  writes its display list into a document. See [htmlpdf.md](docs/htmlpdf.md).
 - **Validate** against ten conformance standards:
 
   | Standard | Entry point | Findings satisfy `Violation` |
@@ -256,6 +260,7 @@ The subsystems, and the doc that maps each:
 | PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `embedded.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
 | The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/` with their `*_api.go` boundaries in root, `facturx*.go`, `order_x.go`, `violations.go`, `internal/finding` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
 | Fonts | `fonts.go`, `fonts/`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [fonts.md](docs/fonts.md) |
+| HTML and CSS to PDF | `htmlpdf/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](docs/htmlpdf.md) |
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
 | Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | [encryption.md](docs/encryption.md) |

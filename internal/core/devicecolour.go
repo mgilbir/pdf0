@@ -165,7 +165,7 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 				if !ok {
 					continue
 				}
-				subtype, _ := stream.Dict.Get("Subtype").(object.Name)
+				subtype, _ := doc.ResolveName(stream.Dict.Get("Subtype"))
 				if subtype == "Form" {
 					// Scan the Form XObject (its own content stream plus its
 					// resources) separately, so the Form's Group /CS coverage
@@ -268,7 +268,7 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 				if fd == nil {
 					continue
 				}
-				subtype, _ := fd.Get("Subtype").(object.Name)
+				subtype, _ := doc.ResolveName(fd.Get("Subtype"))
 				if subtype == "Type3" {
 					// Recurse into Type3 font resources
 					scanResourcesForDeviceCS(doc, fd, seen, usesRGB, usesCMYK, usesGray)

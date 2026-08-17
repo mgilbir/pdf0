@@ -119,7 +119,7 @@ func pdfxCheckNoTransparency(doc core.View, add func(rule, msg string, obj int))
 	}
 	for _, page := range doc.Pages(cat.Get("Pages")) {
 		if grp := doc.ResolveDict(page.Dict.Get("Group")); grp != nil {
-			if s, _ := grp.Get("S").(object.Name); s == "Transparency" {
+			if s, _ := doc.ResolveName(grp.Get("S")); s == "Transparency" {
 				add("transparency", "a page transparency group is not permitted in this PDF/X level", page.ObjNum)
 				continue
 			}
@@ -159,12 +159,12 @@ func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int)) {
 		if d == nil {
 			continue
 		}
-		sub, _ := d.Get("Subtype").(object.Name)
+		sub, _ := doc.ResolveName(d.Get("Subtype"))
 
 		if d.Get("OPI") != nil {
 			add("forbidden", "OPI (Open Prepress Interface) proxies are not permitted", num)
 		}
-		if s, _ := d.Get("S").(object.Name); s == "JavaScript" {
+		if s, _ := doc.ResolveName(d.Get("S")); s == "JavaScript" {
 			add("forbidden", "JavaScript actions are not permitted", num)
 		}
 		switch sub {
@@ -181,7 +181,7 @@ func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int)) {
 		case "Movie", "Sound", "Screen", "FileAttachment":
 			add("forbidden", fmt.Sprintf("annotation subtype /%s is not permitted", sub), num)
 		}
-		if t, _ := d.Get("Type").(object.Name); t == "ExtGState" {
+		if t, _ := doc.ResolveName(d.Get("Type")); t == "ExtGState" {
 			for _, k := range []object.Name{"TR", "TR2"} {
 				if tr := d.Get(k); tr != nil && !pdfxTransferIsIdentity(doc, tr) {
 					add("forbidden", fmt.Sprintf("a transfer function (ExtGState /%s) is not permitted", k), num)
@@ -253,7 +253,7 @@ func pdfxOutputIntentCoverage(doc core.View, cat *object.Dictionary) (rgb, cmyk,
 		if oi == nil {
 			continue
 		}
-		if s, _ := oi.Get("S").(object.Name); s != "GTS_PDFX" {
+		if s, _ := doc.ResolveName(oi.Get("S")); s != "GTS_PDFX" {
 			continue
 		}
 		stream, ok := doc.Resolve(oi.Get("DestOutputProfile")).(*object.Stream)
@@ -336,11 +336,11 @@ func pdfxCheckOutputIntent(doc core.View, level Level, add func(rule, msg string
 		if oi == nil {
 			continue
 		}
-		if s, _ := oi.Get("S").(object.Name); s != "GTS_PDFX" {
+		if s, _ := doc.ResolveName(oi.Get("S")); s != "GTS_PDFX" {
 			continue
 		}
 		found = true
-		if oci, ok := oi.Get("OutputConditionIdentifier").(object.String); !ok || len(oci.Value) == 0 {
+		if oci, ok := doc.Resolve(oi.Get("OutputConditionIdentifier")).(object.String); !ok || len(oci.Value) == 0 {
 			add("output-intent", "GTS_PDFX output intent lacks a non-empty /OutputConditionIdentifier", object.RefNum(e))
 		}
 		prof := oi.Get("DestOutputProfile")
@@ -374,7 +374,7 @@ func pdfxCheckTrapped(doc core.View, add func(rule, msg string, obj int)) {
 		add("trapped", "Info dictionary with a definite /Trapped value is required", 0)
 		return
 	}
-	switch t, _ := info.Get("Trapped").(object.Name); t {
+	switch t, _ := doc.ResolveName(info.Get("Trapped")); t {
 	case "True", "False":
 		// definite, as required
 	default:
@@ -444,7 +444,7 @@ func pdfxCheckFontsEmbedded(doc core.View, add func(rule, msg string, obj int)) 
 				}
 				seenFont[fd] = true
 				if !fontIsEmbedded(doc, fd) {
-					name, _ := fd.Get("BaseFont").(object.Name)
+					name, _ := doc.ResolveName(fd.Get("BaseFont"))
 					add("font-embedding", fmt.Sprintf("font /%s (resource /%s) is not embedded", name, fonts.Keys[i]), object.RefNum(ref))
 				}
 			}
@@ -473,7 +473,7 @@ func pdfxCheckFontsEmbedded(doc core.View, add func(rule, msg string, obj int)) 
 // composite font carries its program on the descendant CIDFont; a Type 3 font
 // defines glyphs with content streams and has no program to embed.
 func fontIsEmbedded(doc core.View, font *object.Dictionary) bool {
-	switch sub, _ := font.Get("Subtype").(object.Name); sub {
+	switch sub, _ := doc.ResolveName(font.Get("Subtype")); sub {
 	case "Type3":
 		return true
 	case "Type0":

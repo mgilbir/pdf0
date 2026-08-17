@@ -175,7 +175,7 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 			return
 		}
 		width := 1
-		if st, _ := font.Get("Subtype").(object.Name); st == "Type0" {
+		if st, _ := doc.ResolveName(font.Get("Subtype")); st == "Type0" {
 			width = 2
 		}
 		for _, s := range pending {
@@ -323,7 +323,7 @@ func structActualTextMCIDs(doc core.View, cat *object.Dictionary) map[mcKey]bool
 			case object.Integer:
 				out[mcKey{page[i], int(k)}] = true
 			case *object.Dictionary:
-				if t, _ := k.Get("Type").(object.Name); t != "MCR" {
+				if t, _ := doc.ResolveName(k.Get("Type")); t != "MCR" {
 					continue
 				}
 				pg := page[i]

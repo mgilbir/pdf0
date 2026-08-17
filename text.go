@@ -144,7 +144,7 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 		case "Do":
 			if xobjs != nil && len(operands) >= 1 {
 				if st, ok := d.Resolve(xobjs.Get(object.Name(operands[len(operands)-1].Name))).(*object.Stream); ok {
-					if sub, _ := st.Dict.Get("Subtype").(object.Name); sub == "Form" && !seen[st] {
+					if sub, _ := d.view().ResolveName(st.Dict.Get("Subtype")); sub == "Form" && !seen[st] {
 						seen[st] = true
 						formRes := d.ResolveDict(st.Dict.Get("Resources"))
 						if formRes == nil {
@@ -185,7 +185,7 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 			continue
 		}
 		twoByte := false
-		if st, _ := f.Get("Subtype").(object.Name); st == "Type0" {
+		if st, _ := d.view().ResolveName(f.Get("Subtype")); st == "Type0" {
 			twoByte = true
 		}
 		out[string(name)] = fontText{

@@ -169,13 +169,13 @@ func tableAttrDicts(d core.View, cell *object.Dictionary) []*object.Dictionary {
 	var out []*object.Dictionary
 	switch a := d.Resolve(cell.Get("A")).(type) {
 	case *object.Dictionary:
-		if o, _ := a.Get("O").(object.Name); o == "Table" {
+		if o, _ := d.ResolveName(a.Get("O")); o == "Table" {
 			out = append(out, a)
 		}
 	case object.Array:
 		for _, e := range a {
 			if ad := d.ResolveDict(e); ad != nil {
-				if o, _ := ad.Get("O").(object.Name); o == "Table" {
+				if o, _ := d.ResolveName(ad.Get("O")); o == "Table" {
 					out = append(out, ad)
 				}
 			}

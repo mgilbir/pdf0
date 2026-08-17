@@ -164,7 +164,7 @@ func documentSignatures(d core.View, includeDocTimestamps bool) []signatureEntry
 		if !ok || dict.Get("ByteRange") == nil || dict.Get("Contents") == nil {
 			continue
 		}
-		switch t, _ := dict.Get("Type").(object.Name); t {
+		switch t, _ := d.ResolveName(dict.Get("Type")); t {
 		case "", "Sig":
 		case "DocTimeStamp":
 			if !includeDocTimestamps {

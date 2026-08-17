@@ -436,7 +436,7 @@ func firstPageIn(d *Document, node object.Object, seen map[int]bool, depth int) 
 	// A leaf counts as a page only when it says so: an untyped leaf was never
 	// accepted here and is not now. An untyped node holding /Kids is descended
 	// into all the same, since only its children can be pages.
-	if t, _ := dict.Get("Type").(object.Name); t == "Page" {
+	if t, _ := d.view().ResolveName(dict.Get("Type")); t == "Page" {
 		return dict
 	}
 	kids, _ := d.Resolve(dict.Get("Kids")).(object.Array)

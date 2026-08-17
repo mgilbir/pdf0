@@ -186,7 +186,7 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 		if !ok {
 			continue
 		}
-		if st, _ := s.Dict.Get("Subtype").(object.Name); st != "Form" {
+		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
 			continue
 		}
 		if bytesContainsToken(d.Content(s), "/MCID") {
@@ -233,7 +233,7 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 		if !ok {
 			continue
 		}
-		if st, _ := s.Dict.Get("Subtype").(object.Name); st != "Form" {
+		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
 			continue
 		}
 		countDo(d.Content(s), s, d.ResolveDict(s.Dict.Get("Resources")))
@@ -320,13 +320,13 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
 			return
 		}
 		// An OBJR structure element references an object (often an annotation).
-		if t, _ := elem.Get("Type").(object.Name); t == "OBJR" {
+		if t, _ := d.ResolveName(elem.Get("Type")); t == "OBJR" {
 			if ref, ok := elem.Get("Obj").(object.IndirectRef); ok {
 				annotParent[ref.Number] = parentType
 			}
 			return
 		}
-		s, _ := elem.Get("S").(object.Name)
+		s, _ := d.ResolveName(elem.Get("S"))
 		if k := elem.Get("K"); k != nil {
 			switch kids := d.Resolve(k).(type) {
 			case object.Array:
@@ -343,10 +343,10 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	for num, iobj := range d.Objects {
 		a, ok := iobj.Value.(*object.Dictionary)
-		if !ok || !core.IsAnnotation(a) {
+		if !ok || !d.IsAnnotation(a) {
 			continue
 		}
-		st, _ := a.Get("Subtype").(object.Name)
+		st, _ := d.ResolveName(a.Get("Subtype"))
 		if st == "Popup" {
 			continue
 		}
