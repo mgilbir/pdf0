@@ -48,6 +48,11 @@ testdata/fuzz/
 /corpusprobe
 /corpustime
 
+# The example binary, if anyone runs `go build ./examples/html_to_pdf` from the
+# repository root. One went in with the commit that added the example: 11 MB of
+# ELF. It is out of this branch's history; this is so the next one cannot follow.
+/html_to_pdf
+
 # WTPDF / PDF/UA-2 example PDFs (downloaded via `make wtpdf`); manifest + script are committed
 testdata/wtpdf/*.pdf
 testdata/wtpdf/.ok
