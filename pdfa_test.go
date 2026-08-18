@@ -1147,8 +1147,13 @@ const (
 	// the PDF/A-1 CMap-embedding rule; 4 after validating extension-schema
 	// field value types; 3 after flagging an XMP packet whose rdf:RDF
 	// namespace prefix is undeclared; 2 after the linearized-file /ID
-	// consistency rule; 1 after the byte-level stream /Length check.)
-	corpusMaxIsartorMissed = 1
+	// consistency rule; 1 after the byte-level stream /Length check; 0 after
+	// checking an XMP value against the structure its own extension schema
+	// declares for it.)
+	//
+	// This is 0 now, which means the Isartor suite is fully detected and any
+	// regression is a test failure rather than a number to re-baseline.
+	corpusMaxIsartorMissed = 0
 
 	// Level A baselines (TestCorpusLevelA). The PDF_A-1a / PDF_A-2a suites
 	// declare pdfaid:conformance A, so they are only measured meaningfully
