@@ -138,9 +138,13 @@ undefined field on an extension-schema object `6.7.8` / `6.6.2.3.2`.
 `pdfaSchema:namespaceURI` → `pdfaProperty:name` + `valueType`;
 `declaredTypeToPropType` maps declared type names (including `Bag …`, `Seq …`,
 `Alt …`, `Lang Alt`) onto the same checkable forms, so a declared `Integer`
-property holding a non-integer is flagged. Unknown type names apply no value
-check, but a structure value's fields must appear in the type's
-`pdfaType:field` list (`extensionTypeFields`). `checkXMPExtensionContainer`
+property holding a non-integer is flagged. Unknown type names apply no
+*syntax* check, but the value still has to match the shape the schema declares:
+a structure value's fields must appear in the type's `pdfaType:field` list, and
+a type that lists any `pdfaType:field` must be written as a structure rather
+than as text (`extensionTypeFields`, Isartor 6.7.8-t02-fail-k — the last
+undetected file in that suite). A custom type that lists no fields is a simple
+type under another name, so a text value is what it should have. `checkXMPExtensionContainer`
 validates the container itself: `schemas` must be a Bag of structures carrying
 `schema`/`namespaceURI`/`prefix`; property definitions require
 `name`/`valueType`/`category`/`description` with `category` ∈ {`internal`,
