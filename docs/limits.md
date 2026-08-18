@@ -236,7 +236,8 @@ limit — they are ordinary defects that happened to surface in the same reading
 so they were parked for separate work with its own corpus verification. That
 work is done; each is recorded here with the rule it was really breaking. Every
 ratchet was unchanged by the five together: corpus `pass=776 fail=1278
-falsePositives=0 missed=0 parseErrors=0`, Isartor `missed=1`, Level A 9/9,
+falsePositives=0 missed=0 parseErrors=0`, Isartor `missed=1` (0 since the
+extension-schema structure rule), Level A 9/9,
 Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
 
 - **`standardStructType` followed exactly one `/RoleMap` hop**
