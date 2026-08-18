@@ -2,9 +2,11 @@ package pdfa
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"strings"
 )
 
 // Predefined XMP schema tables. PDF/A-1 (ISO 19005-1) normatively references
@@ -817,6 +819,27 @@ func checkXMPProperties(doc core.View, level Level) []Violation {
 						})
 					}
 				}
+			} else if declaredFields, ok := typeFields[vt]; ok && len(declaredFields) > 0 {
+				// The other direction, and the one that was missing: the
+				// extension schema declares vt as a structure — it lists
+				// pdfaType:field entries — and the value is not one.
+				//
+				// A declaration nothing has to honour is not a declaration.
+				// The clause exists so that a reader meeting an unknown
+				// property can find out what it holds, and a text value
+				// where a structure was promised tells it something false.
+				//
+				// Only when the type really does declare fields. A custom
+				// value type with no pdfaType:field list is a simple type
+				// under another name, and a text value is what it should
+				// have.
+				errs = append(errs, Violation{
+					Rule:  rule,
+					Level: level,
+					Message: fmt.Sprintf("XMP property %s is declared as custom value type %s, "+
+						"which the extension schema defines as a structure (%s), but its value is %s",
+						p.Name, vt, sortedFieldNames(declaredFields), p.Value.Kind),
+				})
 			}
 			continue
 		}
@@ -1107,6 +1130,17 @@ func extensionTypeFields(props []xmpProperty) map[string]map[string]bool {
 		}
 	}
 	return types
+}
+
+// sortedFieldNames renders a declared type's field names for a message, in a
+// fixed order so the report does not change between runs over one file.
+func sortedFieldNames(fields map[string]bool) string {
+	names := make([]string, 0, len(fields))
+	for n := range fields {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // checkXMPWellFormed validates the XMP packet wrapper (ISO 19005-2 6.6.2.1,
