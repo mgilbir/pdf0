@@ -852,6 +852,14 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 	// answer and an embedded CMap stream is another; a predefined name is data
 	// this module does not carry, and cmap is nil for it.
 	cmap, haveCMap := core.LoadCMap(doc, fontDict)
+	if !haveCMap {
+		if name, skipped := core.PredefinedCMapName(doc, fontDict); skipped {
+			doc.Note(core.GuardPredefinedCMap, fmt.Sprintf("the font's CMap /%s is "+
+				"predefined and its code-to-CID data is not carried, so the glyph "+
+				"coverage, .notdef and width-consistency checks were skipped for "+
+				"that font rather than run against a guess", name), u.ObjNum)
+		}
+	}
 
 	dw := 1000.0
 	if v := doc.Resolve(desc.Get("DW")); v != nil {
@@ -1342,6 +1350,12 @@ func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 			// one, the string cannot be cut into codes and no CID can be named.
 			cmap, ok := core.LoadCMap(doc, fontDict)
 			if !ok {
+				if name, skipped := core.PredefinedCMapName(doc, fontDict); skipped {
+					doc.Note(core.GuardPredefinedCMap, fmt.Sprintf("the font's CMap "+
+						"/%s is predefined and its code-to-CID data is not carried, "+
+						"so the /CIDSet completeness check was skipped for that font",
+						name), u.ObjNum)
+				}
 				continue
 			}
 			present := core.DecodeCIDSet(doc, cidSetStream)
