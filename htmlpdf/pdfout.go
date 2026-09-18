@@ -147,7 +147,22 @@ func (e *RefusedError) Error() string {
 		}
 		return "htmlpdf: refused to produce a document"
 	case 1:
+		if e.Truncated {
+			// One reason survived the bound, and there is no way to know how
+			// many did not. Saying only the one presents a cut list as a
+			// complete one, which is what the flag exists to prevent.
+			return "htmlpdf: refused to produce a document — " + why[0] +
+				", and more that were cut at the reporting limit"
+		}
 		return "htmlpdf: refused to produce a document — " + why[0]
+	}
+	if e.Truncated {
+		// "and 499 more" is a count, and a count of a list that was cut is a
+		// floor rather than a total: a document with two thousand problems
+		// reports five hundred and reads as though it had five hundred.
+		return fmt.Sprintf("htmlpdf: refused to produce a document — %s (and at "+
+			"least %d more; the findings were cut at the reporting limit)",
+			why[0], len(why)-1)
 	}
 	return fmt.Sprintf("htmlpdf: refused to produce a document — %s (and %d more)",
 		why[0], len(why)-1)
