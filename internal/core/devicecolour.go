@@ -26,6 +26,23 @@ func PageDeviceColourUse(doc View, page *object.Dictionary) (usesRGB, usesCMYK, 
 				if annotDict == nil {
 					continue
 				}
+				// A 3D annotation's artwork is not in its appearance stream:
+				// the 3D stream carries its own /ColorSpace, and that colour is
+				// rendered like any other. PDF/A-4e permits the annotation, not
+				// the unmanaged colour. This goes before the /AP gate below,
+				// because a 3D annotation need not have an appearance stream
+				// and the artwork is painted either way.
+				if st, _ := doc.ResolveName(annotDict.Get("Subtype")); st == "3D" {
+					if td, ok := doc.Resolve(annotDict.Get("3DD")).(*object.Stream); ok {
+						CheckCSForDevice(doc, td.Dict.Get("ColorSpace"), &usesRGB, &usesCMYK, &usesGray)
+					} else if ref := doc.ResolveDict(annotDict.Get("3DD")); ref != nil {
+						// A 3D reference dictionary pointing at the stream.
+						if s, ok := doc.Resolve(ref.Get("3DD")).(*object.Stream); ok {
+							CheckCSForDevice(doc, s.Dict.Get("ColorSpace"), &usesRGB, &usesCMYK, &usesGray)
+						}
+					}
+				}
+
 				ap := annotDict.Get("AP")
 				if ap == nil {
 					continue
