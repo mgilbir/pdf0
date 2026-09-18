@@ -79,6 +79,24 @@ func (s *DevColorScanner) PageDeviceUse(page *object.Dictionary) DevUse {
 			if ad == nil {
 				continue
 			}
+			// A 3D annotation's artwork is not in its appearance stream: the
+			// 3D stream carries its own /ColorSpace. This goes before the /AP
+			// gate, because such an annotation need not have an appearance
+			// stream and the artwork is painted either way. core's scanner
+			// does the same, and the cross-check in the root package compares
+			// the two over the whole corpus.
+			if st, _ := s.doc.ResolveName(ad.Get("Subtype")); st == "3D" {
+				var cs object.Object
+				if td, ok := s.doc.Resolve(ad.Get("3DD")).(*object.Stream); ok {
+					cs = td.Dict.Get("ColorSpace")
+				} else if ref := s.doc.ResolveDict(ad.Get("3DD")); ref != nil {
+					if t, ok := s.doc.Resolve(ref.Get("3DD")).(*object.Stream); ok {
+						cs = t.Dict.Get("ColorSpace")
+					}
+				}
+				core.CheckCSForDevice(s.doc, cs, &u.RGB, &u.CMYK, &u.Gray)
+			}
+
 			apd := s.doc.ResolveDict(ad.Get("AP"))
 			if apd == nil {
 				continue
