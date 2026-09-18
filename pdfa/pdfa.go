@@ -242,6 +242,9 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 		checkType5Halftones,
 		// Embedded PDF/A files (6.9)
 		checkEmbeddedPDFA,
+		// The PDF/A-4e / PDF/A-4f variants' own requirements (6.9, 6.1.6.1)
+		checkA4FEmbeddedFilesPresent,
+		checkA4E3DStreamSubtype,
 		// Inherited page XObject (6.2.2)
 		checkInheritedPageXObject,
 		// Stream /Length correctness (6.1.6/6.1.7)
