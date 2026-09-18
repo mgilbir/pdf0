@@ -295,7 +295,7 @@ A limit answers "how much may one document cost me". It does not answer "I need
 an answer within five seconds, whatever it costs". That is what a
 `context.Context` is for, and `cancel.go` is where it lives.
 
-The motivating case was pdf0's own `cmd/corpusprobe`, which ran each file in a
+The motivating case was pdf0's own `internal/cmd/corpusprobe`, which ran each file in a
 goroutine and gave up on it with `select`/`time.After`. Giving up on a goroutine
 is not stopping it: the work carried on burning a core and holding its memory
 until it finished by itself. With eight workers and a 25-second file that is
