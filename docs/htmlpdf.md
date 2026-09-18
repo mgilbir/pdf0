@@ -144,9 +144,10 @@ default, because it is surprising and it degrades images.
 
 ## How it is known to work
 
-The layout engine's oracle is the W3C Web Platform Tests, run in forme: **4,438
-of 5,177 CSS reftests pass cleanly**, and the number is a ratchet that a change
-may not lower. That is a measurement of the engine, not of this backend.
+The layout engine's oracle is the CSS Working Group reftests, run in forme:
+**5,982 of 6,253 documents pass with nothing unsupported reported in either
+document**, and the number is a ratchet that a change may not lower. That is a
+measurement of the engine, not of this backend.
 
 What is checked here is the seam — that the two ends still meet:
 
