@@ -44,12 +44,12 @@ hand.
 |---|---|---|---|---|---|---|
 | **veraPDF corpus** | The PDF/A conformance ratchet: no false positives, no missed violations, no parse errors | `TestCorpus`, `TestCorpusIsartor`, `TestCorpusConformanceSuites`, `TestCorpusParsesEntirely`, `TestLevelACorpus`, `TestDecryptCorpusFiles`, `TestEncryptedPassthroughAESCorpus`, `TestReEncryptCorpusRoundTrip`, `TestRepairEncryption`, `TestDevColorScannerMatchesPDFA`, `TestArlingtonCorpusParserFaithful` | `make corpus` | `VERAPDF_CORPUS` | `testdata/verapdf-corpus/` | `git clone` [veraPDF/veraPDF-corpus](https://github.com/veraPDF/veraPDF-corpus) |
 | **PDF 2.0 reference PDFs** | Read→Write→Read round-trips over real PDF 2.0 files | `TestRoundTripReferencePDFs`, `TestExtractAndMergePages`, `TestExtractText`, `TestValidateConcurrentSameDoc`, `TestWrittenXrefIs20Bytes` and the rest of `write_conformance_test.go`, `TestArlingtonParserFaithful`; also seeds both fuzzers | `make refpdfs` | — (path is hard-coded) | `testdata/pdf20examples/` | `git clone` [pdf-association/pdf20examples](https://github.com/pdf-association/pdf20examples) |
-| **veraPDF validation profiles** | Rule-ID coverage against the reference validator's own rule inventory | `TestRuleCoverage`; `cmd/rulecoverage` | `make profiles` | `VERAPDF_PROFILES` | `spec/verapdf-profiles/` | `git clone` [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 |
+| **veraPDF validation profiles** | Rule-ID coverage against the reference validator's own rule inventory | `TestRuleCoverage`; `internal/cmd/rulecoverage` | `make profiles` | `VERAPDF_PROFILES` | `spec/verapdf-profiles/` | `git clone` [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 |
 | **Arlington PDF Model** | External grammar oracle: the parser/serializer represent objects faithfully (right types, keys, structure) | `TestArlingtonParserFaithful`, `TestArlingtonCorpusParserFaithful`, `TestArlingtonOracleHasTeeth` | `make arlington` | `ARLINGTON_MODEL` (points at the `tsv/2.0` subdirectory) | `testdata/arlington-pdf-model/` | `git clone` [pdf-association/arlington-pdf-model](https://github.com/pdf-association/arlington-pdf-model), Apache-2.0 |
 | **WTPDF / PDF/UA-2 examples** | Round-trip and robustness over complex real tagged PDF 2.0 (structure trees, associated files, MathML, role maps) | `TestWTPDFExamples` | `make wtpdf` | — | `testdata/wtpdf/*.pdf` | LaTeX Project, [tagging-project discussion 72](https://github.com/latex3/tagging-project/discussions/72), fetched from Google Drive; licences vary per file (see `sources.tsv`) |
 | **CCITT samples** | Decode oracle for the Group 3/4 fax decoder (the veraPDF corpus has no CCITT images) | `TestCCITTRealFiles` | `make ccitt` | — | `testdata/ccitt/*.pdf` | pdf.js (Apache-2.0), PyPDF4 (BSD) |
 | **JBIG2 samples** | Decode oracle for the JBIG2 decoder: generic templates, MMR, symbol/text, halftone, refinement | `TestJBIG2GenericCrossCheck`, `TestJBIG2SymbolText`, `TestJBIG2Refinement`, `TestJBIG2Halftone`, `TestJBIG2Huffman`, `TestJBIG2EdgeCases` | `make jbig2` | — | `testdata/jbig2/*.pdf` | pdf.js conformance suite, Apache-2.0 |
-| **Common Crawl PDFs** | Robustness: the parser must never panic or hang on real-world input nobody designed. Not a decode or conformance oracle — a crash hunt | `cmd/corpusprobe` via `make cc-sweep`; **no `go test` walks it** | `make cc-sweep` | — | streamed, never stored (`testdata/cc/run/`) | digitalcorpora `CC-MAIN-2021-31-PDF-UNTRUNCATED`, ~8M PDFs from Common Crawl |
+| **Common Crawl PDFs** | Robustness: the parser must never panic or hang on real-world input nobody designed. Not a decode or conformance oracle — a crash hunt | `internal/cmd/corpusprobe` via `make cc-sweep`; **no `go test` walks it** | `make cc-sweep` | — | streamed, never stored (`testdata/cc/run/`) | digitalcorpora `CC-MAIN-2021-31-PDF-UNTRUNCATED`, ~8M PDFs from Common Crawl |
 | **Factur-X / ZUGFeRD invoices** | FP=0 oracle for the Factur-X **container** checks; the invoice rule engine's findings are ratcheted, not forbidden (`facturxInvoiceRuleFindings`), because which business rules fire is `formalis`' scope decision | `TestValidateFacturXCorpus`, `TestValidateFacturXMutations`, `TestValidateFacturXInvoiceCorpus` | `make facturx` | — | `testdata/facturx/*.pdf` | ZUGFeRD/corpus and ZUGFeRD/mustangproject, Apache-2.0 |
 | **Cal Poly PDF/VT-1 suite** | FP=0 oracle for PDF/VT, PDF/X and DPart — conforming files must report zero violations | `TestValidatePDFVTCalPolySuite`, `TestValidateDPartsCalPolySuite`, `TestValidatePDFXCalPolySuite`, `TestDevColorScannerMatchesPDFA` | **no make target — place by hand** | — | `testdata/pdfvt/` | Cal Poly Graphic Communications PDF/VT-1 Test File Suite; copyrighted test content, not redistributable |
 | **PDFUA-Reference-Files** | FP=0 oracle for PDF/UA — conformant reference documents must report zero violations | `TestUAReferenceFilesNoFalsePositives` | **no make target — place by hand** | — | `spec/pdfua/reference-files/*.pdf` | PDFUA-Reference-Files suite from pdfa.org |
@@ -108,7 +108,7 @@ Each fetch target is guarded by a `.ok` stamp file, so re-running is a no-op.
 | `make test` | `go test ./...` — the default tier |
 | `make test-corpus` | `make corpus`, then `VERAPDF_CORPUS=… go test -v -run TestCorpus -count=1 ./...` |
 | `make test-arlington` | `make arlington refpdfs`, then `ARLINGTON_MODEL=…/tsv/2.0 go test -v -run TestArlington -count=1 ./...`; with the corpus also present it additionally sweeps the conformant corpus files |
-| `make rule-coverage` | `make profiles`, then `VERAPDF_PROFILES=… go run ./cmd/rulecoverage` |
+| `make rule-coverage` | `make profiles`, then `VERAPDF_PROFILES=… go run ./internal/cmd/rulecoverage` |
 
 **Clean**
 
@@ -192,13 +192,13 @@ return an error instead.
 
 ## Developer aids under `cmd/`
 
-- **`cmd/corpusprobe`** — stress-tests the parser against a directory of
+- **`internal/cmd/corpusprobe`** — stress-tests the parser against a directory of
   untrusted PDFs, recording parse outcomes and, most importantly, any panics or
   hangs. It runs each file under panic recovery and a 30 s timeout, and also
   exercises `PageCount`, `Write` (to `io.Discard`) and `ValidatePDFUA` on a
   successful parse. Panics and timeouts are reported as bugs; a per-file log of
   every non-ok outcome goes to `$TMPDIR/corpusprobe-failures.tsv`.
-  `go run ./cmd/corpusprobe <dir> [workers]` (default 8 workers).
+  `go run -tags devtools ./internal/cmd/corpusprobe <dir> [workers]` (default 8 workers).
 
   The timeout is a `context.Context` deadline that pdf0 observes
   (`ReadContext` / `WriteContext` / `ValidatePDFUAContext`), *and* a `select` on
@@ -214,12 +214,12 @@ return an error instead.
   stop when told to, not merely that it was slow. Measured: two quarantined
   real-world files needing ~14 s and ~25 s, probed with the timeout lowered to
   300 ms, complete the whole run in 0.42 s wall and 0.53 s of CPU.
-- **`cmd/corpustime`** — times each parse stage of one PDF with a generous budget
+- **`internal/cmd/corpustime`** — times each parse stage of one PDF with a generous budget
   (`Read` 180 s, `PageCount` 60 s, `Write` 180 s, `ValidatePDFUA` 180 s), to
   distinguish a truly-hanging stage from a merely slow huge file.
-  `go run ./cmd/corpustime <file.pdf> [file.pdf …]`.
-- **`cmd/rulecoverage`** — the human-readable rule-coverage report; see below.
-  `go run ./cmd/rulecoverage [srcdir]`.
+  `go run -tags devtools ./internal/cmd/corpustime <file.pdf> [file.pdf …]`.
+- **`internal/cmd/rulecoverage`** — the human-readable rule-coverage report; see below.
+  `go run ./internal/cmd/rulecoverage [srcdir]`.
 - **`cmd/extract_spec_examples`** — the two Python extractors (`main.py` for
   ISO 32000-2:2020, `main17.py` for ISO 32000-1:2008) that turn `pdftotext
   -layout` output of a spec PDF into the committed
@@ -230,7 +230,7 @@ return an error instead.
 
 ## Rule coverage
 
-`cmd/rulecoverage` cross-references the veraPDF validation profiles (the
+`internal/cmd/rulecoverage` cross-references the veraPDF validation profiles (the
 reference validator's machine-readable inventory of every PDF/A rule) against the
 ISO clause strings that appear as quoted literals in pdf0's non-test source — the
 rule IDs the validator can emit. `TestRuleCoverage` ratchets the same number with
@@ -239,7 +239,7 @@ rule IDs the validator can emit. `TestRuleCoverage` ratchets the same number wit
 As of today:
 
 ```
-$ VERAPDF_PROFILES=spec/verapdf-profiles go run ./cmd/rulecoverage
+$ VERAPDF_PROFILES=spec/verapdf-profiles go run -tags devtools ./internal/cmd/rulecoverage
 pdf0 emits 100 distinct rule clauses across the source.
 
 === PDF/A-1b: 129 rules across 40 clauses — 40/40 clauses covered ===

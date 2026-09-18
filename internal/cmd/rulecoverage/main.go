@@ -1,3 +1,5 @@
+//go:build devtools
+
 // Command rulecoverage reports how the pdf0 PDF/A validator's rule coverage
 // compares to the veraPDF validation profiles — the machine-readable inventory
 // of every PDF/A rule the reference validator checks.

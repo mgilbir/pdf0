@@ -43,12 +43,12 @@ normal, mostly `startxref not found` and `PDF header not found` — servers hand
 out HTML error pages with a `.pdf` name.
 
 **Panics and timeouts are failures**, and the file is copied into
-`run/quarantine/` as the reproduction. For a timeout, run `cmd/corpustime` on it
+`run/quarantine/` as the reproduction. For a timeout, run `internal/cmd/corpustime` on it
 before assuming a hang: it times `Read`, `PageCount`, `Write` and
 `ValidatePDFUA` separately, and a large file can simply be slow.
 
 ```
-go run ./cmd/corpustime testdata/cc/run/quarantine/<file>.pdf
+go run -tags devtools ./internal/cmd/corpustime testdata/cc/run/quarantine/<file>.pdf
 ```
 
 ## Sweep log
