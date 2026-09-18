@@ -36,6 +36,15 @@ jobs:
       - name: build
         run: go build ./...
 
+      # The development tools carry a build tag so that `go install
+      # <module>/internal/cmd/x@version` cannot fetch them — internal/ alone
+      # does not stop that, because the rule governs imports and a main package
+      # built from the command line has no importer. The tag takes them out of
+      # ./... as a side effect, so they are compiled here explicitly rather than
+      # left to rot.
+      - name: build development tools
+        run: go build -tags devtools ./internal/cmd/...
+
       - name: test
         # No corpus here on purpose: this job is the fast signal, and the
         # corpus-gated tests self-skip. The corpus job below runs them.

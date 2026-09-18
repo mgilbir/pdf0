@@ -84,7 +84,7 @@ $(PROFILES_DIR)/.ok:
 
 # Report which veraPDF PDF/A rules this validator covers (needs `make profiles`).
 rule-coverage: profiles
-	VERAPDF_PROFILES=$(PROFILES_DIR) go run ./cmd/rulecoverage
+	VERAPDF_PROFILES=$(PROFILES_DIR) go run -tags devtools ./internal/cmd/rulecoverage
 
 # Download the LaTeX Project's Well Tagged PDF / PDF/UA-2 example documents.
 wtpdf: $(WTPDF_DIR)/.ok
@@ -137,7 +137,7 @@ LAST  ?= 4203
 
 cc-sweep:
 	mkdir -p testdata/cc/run
-	go build -o testdata/cc/run/corpusprobe ./cmd/corpusprobe
+	go build -tags devtools -o testdata/cc/run/corpusprobe ./internal/cmd/corpusprobe
 	testdata/cc/sweep.sh $(FIRST) $(LAST)
 
 clean-cc:
