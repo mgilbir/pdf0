@@ -732,7 +732,7 @@ reports is in [limits.md](../limits.md). Every prediction below held, and the
 one open API question is answered at the end.
 
 pdf0 offered a caller, when this was written, **no way to stop work in
-progress**. The evidence is in the project's own tooling — `cmd/corpusprobe`
+progress**. The evidence is in the project's own tooling — `internal/cmd/corpusprobe`
 needs a per-file timeout and the best it could do was:
 
 ```go

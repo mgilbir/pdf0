@@ -1,3 +1,5 @@
+//go:build devtools
+
 // Command corpustime times each parse stage of one PDF with a generous budget,
 // to distinguish a truly-hanging stage from a merely-slow huge file.
 package main

@@ -1,3 +1,5 @@
+//go:build devtools
+
 // Command corpusprobe stress-tests the parser against a directory of
 // (untrusted) PDFs, recording parse outcomes and — most importantly — any
 // panics or hangs, which represent robustness bugs: the parser must return an
