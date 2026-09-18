@@ -19,8 +19,14 @@ import (
 // real colour usage) and always over any Cal Poly PDF/VT files, and skips when
 // neither is available.
 func TestDevColorScannerMatchesPDFA(t *testing.T) {
+	// Through corpusRoot, like every other corpus test, rather than reading
+	// VERAPDF_CORPUS directly. Reading the variable meant the corpus was
+	// walked only where it happened to be set — CI sets it, a local `go test
+	// ./...` does not — so this test ran over the Cal Poly files alone and
+	// reported itself passing. It caught a real disagreement the moment CI ran
+	// it, which is exactly the run a local check should not have missed.
 	var files []string
-	if root := os.Getenv("VERAPDF_CORPUS"); root != "" {
+	if root := corpusRoot(t); root != "" {
 		filepath.Walk(root, func(p string, i os.FileInfo, e error) error {
 			if e == nil && !i.IsDir() && filepath.Ext(p) == ".pdf" {
 				files = append(files, p)
