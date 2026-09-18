@@ -435,7 +435,7 @@ not to notice `.notdef`.
 |---|---|---|
 | `Identity-H`, `Identity-V` | yes | built in: two bytes to a code, CID = code |
 | a stream | yes | `core.ParseCMap` — codespace ranges, `cidrange`, `cidchar` |
-| any other name | **no** | a predefined CMap; the data is not here, so the font is skipped |
+| any other name | **no** | a predefined CMap; the data is not here, so the font is skipped — and the skip is *reported*, as the `predefined-cmap` guard, so a caller can tell "checked and clean" from "not checked" |
 
 The corpus says where the value is: of 223 Type 0 fonts, 149 use Identity, **69
 embed a CMap** and 5 name a predefined one.
