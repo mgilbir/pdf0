@@ -851,6 +851,14 @@ func checkUANotdefCID(d core.View) []Violation {
 		// bytes, which is a report about nothing.
 		cmap, ok := core.LoadCMap(d, fontDict)
 		if !ok {
+			// u is checked first because the entry may carry no usage record,
+			// and the object number for the report comes out of it.
+			if name, skipped := core.PredefinedCMapName(d, fontDict); skipped && u != nil {
+				d.Note(core.GuardPredefinedCMap, fmt.Sprintf("the font's CMap /%s is "+
+					"predefined and its code-to-CID data is not carried, so the "+
+					"check that no .notdef glyph is shown was skipped for that font",
+					name), u.ObjNum)
+			}
 			continue
 		}
 		if u == nil {

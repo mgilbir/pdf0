@@ -275,6 +275,14 @@ const (
 	GuardCIDWidthRange = "cid-width-range"           // Limits.CIDRangeSpan, WithMaxCIDRangeSpan
 	GuardEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own; the recursive embedded check
 	GuardObjStmTotal   = "objstm-decompressed-total" // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes
+
+	// GuardPredefinedCMap is not a resource guard either. No budget stopped
+	// anything: the code-to-CID data for the predefined CJK CMaps is not
+	// carried by this module, so the checks that need it cannot run at all.
+	// It is reported through the same mechanism because the consequence is the
+	// same one a budget has — a check did not run, and a caller who is told
+	// only "no violations" would read that as "checked and clean".
+	GuardPredefinedCMap = "predefined-cmap" // no bound; see PredefinedCMapName
 )
 
 // Pages returns the page tree under ref flattened into document order,

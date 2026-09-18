@@ -194,6 +194,29 @@ func LoadCMap(doc View, fontDict *object.Dictionary) (*CMap, bool) {
 	return nil, false
 }
 
+// PredefinedCMapName is the predefined CMap a Type 0 font's /Encoding names,
+// when that is a name whose data this module does not carry.
+//
+// It exists so that the skip can be reported rather than taken silently. Three
+// checks need a code-to-CID mapping — whether every code shown has a glyph,
+// whether .notdef is drawn, and whether /W agrees with the program's own
+// advances — and for these fonts none of them can run.
+//
+// Two cases are deliberately not skips. Identity-H and Identity-V are answered
+// by LoadCMap, and an embedded stream is read. A name that is not predefined at
+// all is not reported here either: that is a violation of Table 118 and the
+// CMap-legality rule says so, which is a stronger statement than "not checked".
+func PredefinedCMapName(v View, fontDict *object.Dictionary) (string, bool) {
+	name, ok := v.ResolveName(fontDict.Get("Encoding"))
+	if !ok || name == "Identity-H" || name == "Identity-V" {
+		return "", false
+	}
+	if _, known := PredefinedCMaps[string(name)]; !known {
+		return "", false
+	}
+	return string(name), true
+}
+
 // ParseCMap reads the CID half of a CMap program.
 //
 // The grammar is PostScript and this is not an interpreter: it finds the
