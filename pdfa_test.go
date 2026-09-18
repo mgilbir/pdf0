@@ -1215,11 +1215,10 @@ func TestCorpusParsesEntirely(t *testing.T) {
 // pass files, so this guards detection (missed <= baseline) and any future
 // false positive (fp must stay 0).
 //
-// The PDF_A-4f / PDF_A-4e suites are deliberately NOT ratcheted yet: validating
-// them at PDF/A-4 yields false positives because the A-4e/A-4f feature
-// relaxations (embedded 3D/RichMedia for 4e, arbitrary embedded files for 4f)
-// are not modelled. Baking those false positives into a baseline would lower
-// the FP=0 bar; they can join once those relaxations exist.
+// The PDF_A-4f and PDF_A-4e suites are ratcheted, in TestCorpusConformanceSuites
+// rather than here: the relaxations those variants grant are modelled, and so
+// are the requirements they take on in exchange. 4f is fully detected; 4e keeps
+// one file, for the reason given on its baseline.
 func TestCorpusIsartor(t *testing.T) {
 	root := corpusSubdir(t, "Isartor test files")
 
@@ -1282,9 +1281,10 @@ func TestCorpusIsartor(t *testing.T) {
 // It deliberately counts only fail files. The pass files of these suites cannot
 // be ratcheted at FP=0: they are minimal per-clause fixtures (a "1a-pass" file
 // passes the one accessibility clause it targets but is not a complete 1b
-// document), and the 4e/4f feature relaxations (embedded 3D/RichMedia,
-// arbitrary embedded files) are not modelled — so validating their pass files
-// yields expected false positives. Baking those in would lower the FP=0 bar.
+// document), so validating their pass files yields expected false positives,
+// and baking those in would lower the FP=0 bar. The 4e and 4f suites are the
+// exception and *are* held to FP=0: both their relaxations and the
+// requirements they take on are modelled.
 //
 // A further caveat: many of these fail files are caught incidentally (they trip
 // an implemented PDF/A rule unrelated to the clause they were built for, and
@@ -1313,8 +1313,14 @@ func TestCorpusConformanceSuites(t *testing.T) {
 		{"PDF_A-1a", pdfa.PDFA1b, 0, false},
 		{"PDF_A-2a", pdfa.PDFA2b, 0, false},
 		{"PDF_A-2u", pdfa.PDFA2b, 0, false},
-		{"PDF_A-4f", pdfa.PDFA4, 2, true},
-		{"PDF_A-4e", pdfa.PDFA4, 3, true},
+		// 4f is fully detected. 4e keeps one: 6-7-3-t01-fail-b declares
+		// pdfaid:part 4 with no conformance, which is a valid *plain* PDF/A-4
+		// file — base rule 6.7.3-3 says a file conforming to neither variant
+		// shall not provide one — so it fails only against the 4E profile, and
+		// that is a question only a caller who asked for PDF/A-4e can pose.
+		// See the issue on modelling PDFA4E/PDFA4F as levels.
+		{"PDF_A-4f", pdfa.PDFA4, 0, true},
+		{"PDF_A-4e", pdfa.PDFA4, 1, true},
 		{"PDF_UA-1", pdfa.PDFA2b, 0, false},
 		{"PDF_UA-2", pdfa.PDFA4, 0, false},
 	}
