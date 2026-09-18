@@ -102,6 +102,12 @@ the limit dropped. `Truncated` — on the error and on the `Result` — says whe
 the list is partial, and the error message says so too rather than leaving a
 reader hunting for a reason that is not there.
 
+A count of a cut list is a floor, and the message says which it is: `and 2
+more` when the whole list is in hand, `and at least 499 more; the findings were
+cut at the reporting limit` when it is not. A document with two thousand
+missing glyphs really does reach this — one paragraph per character, since
+`glyph-missing` is reported per run of text.
+
 > **This shape changed.** A refused document used to come back as a nil
 > `Document` with a **nil error**, on the reasoning that "this needs a
 > three-point font to fit, so I have not made one" is not an I/O failure. The
