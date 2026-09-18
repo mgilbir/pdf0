@@ -3,6 +3,7 @@ package htmlpdf_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -237,17 +238,66 @@ func TestFindingsAreNotRefusals(t *testing.T) {
 	}
 }
 
-// A note on what is not tested here. Result.Truncated and
-// RefusedError.Truncated are carried from the engine, and no document this
-// package can build reaches the state: the engine deduplicates findings hard
-// enough that a flood of two thousand at-rules produces 201 of them against a
-// limit of 500, so nothing here truncates. forme tests the flag where it can
-// lower the limit; what is asserted below is the message, built by hand.
+// TestADocumentCanActuallyTruncateItsReport is the end-to-end case that was
+// missing, and the reason the field was kept when nothing could reach it.
 //
-// The field is kept rather than dropped as unreachable because the ceiling is
-// incidental — it is today's dedup behaviour, not a promise — and the day a
-// rule fires per element, a backend without it presents a cut list as a
-// complete one.
+// Truncated used to be unreachable from here. The engine deduplicates findings
+// hard enough that a flood of two thousand at-rules produces 201 of them
+// against a limit of five hundred, so the flag was carried, asserted only
+// through a value built by hand, and documented as a gap — kept rather than
+// dropped because the ceiling was incidental rather than a promise, and a
+// backend without the flag would one day present a cut list as a complete one.
+//
+// That day arrived. glyph-missing is reported per run of text, so a document
+// with two thousand distinct characters no standard face has fills the report
+// and overruns it. Both halves are asserted: that the list stops at the bound,
+// and that the document says so rather than looking complete.
+func TestADocumentCanActuallyTruncateItsReport(t *testing.T) {
+	// Each paragraph holds one CJK ideograph, which none of the fourteen
+	// standard faces has a glyph for. Distinct characters at distinct places,
+	// so the recorder folds none of them into another.
+	var doc strings.Builder
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&doc, "<p>%c</p>", rune(0x4E00+i))
+	}
+
+	out, err := htmlpdf.Render(htmlpdf.Input{HTML: doc.String()},
+		htmlpdf.Options{Page: htmlpdf.A4, MinScale: 0.01})
+
+	if !out.Truncated {
+		t.Fatalf("%d findings and no truncation; this test needs the report to "+
+			"overflow or it asserts nothing about the flag", len(out.Findings))
+	}
+	if len(out.Findings) >= 2000 {
+		t.Errorf("%d findings for 2000 problems — the list did not stop at the "+
+			"bound, so Truncated is describing something else", len(out.Findings))
+	}
+
+	// A document the engine could not set is refused, and the refusal carries
+	// the same warning: the reason may not be in the list it hands back.
+	var refused *htmlpdf.RefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("a document with two thousand missing glyphs was not refused: %v", err)
+	}
+	if !refused.Truncated {
+		t.Error("the Result says its report was cut and the error does not")
+	}
+	if !strings.Contains(refused.Error(), "cut at the reporting limit") {
+		t.Errorf("a refusal whose reasons were cut reads %q, which sends a "+
+			"reader looking for a reason that is not there", refused)
+	}
+
+	// And the other way, so the flag is not simply always on: an ordinary
+	// document reports nothing cut.
+	clean, cleanErr := htmlpdf.Render(htmlpdf.Input{HTML: "<p>Hello.</p>"},
+		htmlpdf.Options{Page: htmlpdf.A4})
+	if cleanErr != nil {
+		t.Fatalf("a one-paragraph document was refused: %v", cleanErr)
+	}
+	if clean.Truncated {
+		t.Error("a one-paragraph document reported a truncated report")
+	}
+}
 
 // TestARefusalSaysSoWhenItCannotSayWhy is the case the message used to call
 // unreachable.
@@ -274,5 +324,47 @@ func TestARefusalSaysSoWhenItCannotSayWhy(t *testing.T) {
 	got := err.Error()
 	if !strings.Contains(got, "min-font-size") || strings.Contains(got, "cut at") {
 		t.Errorf("a refusal with its reason in the list says %q", got)
+	}
+}
+
+// TestACutListIsNotReportedAsATotal is the defect the test above found.
+//
+// Error() mentioned the cut only when *no* error finding survived the bound.
+// With findings present it said "(and 499 more)" — a precise count of a list
+// that had been cut, for a document with two thousand problems in it. The
+// number is a floor, and reading it as a total is the mistake the flag exists
+// to prevent.
+func TestACutListIsNotReportedAsATotal(t *testing.T) {
+	many := []htmlpdf.Finding{
+		{Rule: "glyph-missing", Message: "no glyph for U+4E00", Severity: htmlpdf.Error},
+		{Rule: "glyph-missing", Message: "no glyph for U+4E01", Severity: htmlpdf.Error},
+		{Rule: "glyph-missing", Message: "no glyph for U+4E02", Severity: htmlpdf.Error},
+	}
+
+	cut := (&htmlpdf.RefusedError{Findings: many, Truncated: true}).Error()
+	if !strings.Contains(cut, "at least") || !strings.Contains(cut, "cut at the reporting limit") {
+		t.Errorf("a cut list reports %q, which reads as a total", cut)
+	}
+
+	// With the whole list in hand the count is exact, and saying "at least"
+	// would be hedging about something known.
+	whole := (&htmlpdf.RefusedError{Findings: many}).Error()
+	if strings.Contains(whole, "at least") || strings.Contains(whole, "cut at") {
+		t.Errorf("a complete list reports %q, which hedges a count it knows", whole)
+	}
+	if !strings.Contains(whole, "and 2 more") {
+		t.Errorf("a complete list of three reports %q, want the other two counted", whole)
+	}
+
+	// And the single-reason case, which has no count to qualify and so has to
+	// say it in words.
+	one := []htmlpdf.Finding{{Rule: "min-scale", Message: "32%", Severity: htmlpdf.Error}}
+	cut1 := (&htmlpdf.RefusedError{Findings: one, Truncated: true}).Error()
+	if !strings.Contains(cut1, "cut at the reporting limit") {
+		t.Errorf("one surviving reason out of a cut list reports %q, which reads "+
+			"as though it were the only one", cut1)
+	}
+	if whole1 := (&htmlpdf.RefusedError{Findings: one}).Error(); strings.Contains(whole1, "cut at") {
+		t.Errorf("the only reason there was reports %q", whole1)
 	}
 }
