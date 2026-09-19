@@ -32,7 +32,7 @@ func TestConformanceComesFromTheDocumentsOwnClaim(t *testing.T) {
 		pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4,
 		pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a,
 	} {
-		got, ok := NewPDFADocument(level).Conformance()
+		got, ok := mustPDFADoc(t, level).Conformance()
 		if !ok {
 			t.Errorf("a %s document claims nothing", level)
 			continue
@@ -47,7 +47,7 @@ func TestConformanceComesFromTheDocumentsOwnClaim(t *testing.T) {
 // in a Go field. A document read back from bytes has to report the same thing,
 // or read-modify-write silently loses the guarantee.
 func TestConformanceSurvivesAWriteAndRead(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {
 		t.Fatalf("write: %v", err)
@@ -69,7 +69,7 @@ func TestConformanceSurvivesAWriteAndRead(t *testing.T) {
 // not — with nothing anywhere saying so. The claim and the content had drifted
 // apart with no step in between to notice.
 func TestSaveRefusesADocumentThatContradictsItsClaim(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA1b)
+	doc := mustPDFADoc(t, pdfa.PDFA1b)
 	// Transparency, which PDF/A-1 forbids outright.
 	gs, err := Opacity(0.5, 1)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestSaveRefusesADocumentThatContradictsItsClaim(t *testing.T) {
 func TestSaveWritesAConformingDocument(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			if _, err := doc.AddPage(Page{Width: 200, Height: 200, Content: aRedSquare()}); err != nil {
 				t.Fatalf("adding the page: %v", err)
 			}
@@ -176,7 +176,7 @@ func TestSaveOnAPlainDocumentJustWrites(t *testing.T) {
 // written with that assertion standing unchecked — Save's promise is that it
 // verified the claim, and it cannot make that promise here.
 func TestSaveRefusesAClaimItCannotCheck(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream)
 	if !ok {
@@ -209,7 +209,7 @@ func TestLevelForIsTheInverseOfWhatIsWritten(t *testing.T) {
 		pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4,
 		pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a,
 	} {
-		doc := NewPDFADocument(level)
+		doc := mustPDFADoc(t, level)
 		got, ok := doc.Conformance()
 		if !ok || got != level {
 			t.Errorf("%s round-trips through its metadata as (%v, %v)", level, got, ok)

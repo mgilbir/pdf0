@@ -26,7 +26,7 @@ import (
 // drawImageDoc builds a PDF/A-2b document whose page draws one embedded image.
 func drawImageDoc(t *testing.T, embed func(images.Allocator) (object.IndirectRef, error)) *Document {
 	t.Helper()
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	imgRef, err := embed(doc)
 	if err != nil {
 		t.Fatalf("embedding: %v", err)
@@ -472,7 +472,7 @@ func TestJPEGIsEmbeddedWithoutReencoding(t *testing.T) {
 // width × height × components is where a small number becomes an allocation
 // that ends the process.
 func TestEmbedRefusesWhatItCannotWrite(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	if _, err := images.Embed(doc, nil); err == nil {
 		t.Error("a nil image was accepted")
 	}
