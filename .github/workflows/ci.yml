@@ -62,6 +62,12 @@ jobs:
         # which mermaid reads as a statement separator (docs audit follow-up).
         run: ./scripts/check-mermaid.sh
 
+      - name: no binaries in the tree
+        # Three executables were committed to the root and shipped in two
+        # modules — 19.5 MB of ELF in a 24 MB download — and nothing noticed for
+        # six weeks because nothing was looking.
+        run: ./scripts/check-no-binaries.sh
+
       - name: example runs
         # The README's headline example must run and produce a file (audit C9).
         # extract_images builds its own document and exits non-zero if the images
