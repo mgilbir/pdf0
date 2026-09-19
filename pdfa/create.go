@@ -1,13 +1,12 @@
 package pdfa
 
 import (
-	"crypto/md5"
 	_ "embed"
 	"fmt"
 	"strings"
-	"time"
 
 	lcms2 "github.com/mgilbir/golittlecms"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -43,6 +42,20 @@ type SkeletonOptions struct {
 	Title        string
 	Author       string
 	OutputIntent OutputIntentSpec
+
+	// FileID is the document's /ID, both halves. Empty means a fresh random
+	// one, which is what a document wants: the identifier exists to tell this
+	// file from every other.
+	//
+	// Supply one when the output has to be reproducible — the same inputs
+	// giving the same bytes, so a build can be compared, cached or signed for.
+	// It is the last thing in a generated document that varies between runs;
+	// with it set and an ICCProfile supplied, two builds are byte-identical.
+	// A digest of the content is the usual choice.
+	//
+	// Sixteen bytes is conventional (ISO 32000-2 14.4) and nothing enforces it.
+	// The bytes are copied, so the caller may reuse the slice.
+	FileID []byte
 }
 
 // SkeletonWith is Skeleton with the output intent under the caller's control:
@@ -62,10 +75,13 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 	}
 	version := pdfaVersion(level)
 
-	// Generate file ID
-	now := time.Now().Format(time.RFC3339Nano)
-	hash := md5.Sum([]byte("pdf0-pdfa-" + now))
-	fileID := object.String{Value: hash[:], IsHex: true}
+	// The file identifier. A caller who supplies one gets a document whose
+	// bytes depend on nothing but its content; otherwise it is random, for the
+	// reasons on core.RandomFileID.
+	fileID := core.RandomFileID()
+	if len(opts.FileID) > 0 {
+		fileID = object.String{Value: append([]byte(nil), opts.FileID...), IsHex: true}
+	}
 
 	// Object 1: Catalog
 	catalog := &object.Dictionary{}
