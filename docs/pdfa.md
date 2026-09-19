@@ -244,6 +244,33 @@ document introduced a failure that could not happen and a panic standing in for
 handling it, and an ICC profile carries its creation timestamp, so every
 document used to embed a profile stamped with the moment it was generated.
 
+**Reproducible output.** Two things in a generated document used to vary
+between runs. The sRGB profile carried its own creation timestamp, which
+embedding fixed. The file identifier is the other, and it is *meant* to vary —
+it exists to tell this file from every other — so it is offered rather than
+removed: set `PDFAOptions.FileID` and the bytes become a function of the
+content alone. A digest of that content is the usual choice.
+
+```go
+doc, err := pdf0.NewPDFADocumentWith(pdf0.PDFAOptions{
+    Level:        pdfa.PDFA4,
+    FileID:       contentDigest[:16],
+    OutputIntent: pdf0.PDFAOutputIntent{ICCProfile: myProfile, OutputConditionIdentifier: "FOGRA51"},
+})
+```
+
+With both set, two builds of the same document are byte-identical — asserted in
+`pdfa_reproducible_test.go`, along with the other direction: without a pinned
+`FileID` the output *must* vary, or the first assertion is proving nothing.
+
+The identifier is 16 random bytes from `core.RandomFileID`, shared by both
+document builders. The PDF/A builder used to hash `time.Now()` with MD5, which
+was a second answer to a question that already had one — and a worse one, since
+two documents built inside a single clock tick would have shared an identifier.
+MD5 remains in exactly one place, `internal/crypt`, where ISO 32000-1
+Algorithm 2 specifies it for the standard security handler; that is the file
+format, not a choice.
+
 **Bringing your own profile.** `NewPDFADocumentWith` takes a
 `PDFAOutputIntent` — the profile bytes and the output-condition identifier that
 names what they characterise — and embeds it with `/N` read from the profile's
