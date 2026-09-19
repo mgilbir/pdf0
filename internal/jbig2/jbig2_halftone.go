@@ -47,12 +47,19 @@ func (d *jbig2Decoder) readPatternDict(seg jbSegment) error {
 		at := halftoneAT(template, atPixel{-pw, 0})
 		dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 		gb := make([]mqState, 1<<16)
-		collective = decodeGenericInto(dec, gb, numPats*pw, ph, template, at, false, nil)
+		var err error
+		collective, err = decodeGenericInto(dec, gb, numPats*pw, ph, template, at, false, nil)
+		if err != nil {
+			return err
+		}
 	}
 
 	patterns := make([]*jbBitmap, numPats)
 	for m := 0; m < numPats; m++ {
-		p := newJBBitmap(pw, ph, 0)
+		p, err := newJBBitmap(pw, ph, 0)
+		if err != nil {
+			return err
+		}
 		for y := 0; y < ph; y++ {
 			for x := 0; x < pw; x++ {
 				p.pix[y*pw+x] = collective.get(m*pw+x, y)
@@ -141,12 +148,19 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 		bpp = 1
 	}
 
-	region := newJBBitmap(ri.w, ri.h, defPixel)
+	region, err := newJBBitmap(ri.w, ri.h, defPixel)
+	if err != nil {
+		return err
+	}
 
 	// Cells whose pattern lies entirely outside the region can be skipped.
 	var skip *jbBitmap
 	if enableSkip {
-		skip = newJBBitmap(gw, gh, 0)
+		var err error
+		skip, err = newJBBitmap(gw, gh, 0)
+		if err != nil {
+			return err
+		}
 		for m := 0; m < gh; m++ {
 			for n := 0; n < gw; n++ {
 				x := (hgx + m*int(hry) + n*int(hrx)) >> 8
@@ -160,7 +174,10 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 
 	var gray []int
 	if hmmr != 0 {
-		gray = decodeGrayScaleMMR(r.data[r.pos:], gw, gh, bpp)
+		gray, err = decodeGrayScaleMMR(r.data[r.pos:], gw, gh, bpp)
+		if err != nil {
+			return err
+		}
 	} else {
 		a1x := 3
 		if template > 1 {
@@ -169,7 +186,10 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 		at := halftoneAT(template, atPixel{a1x, -1})
 		dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 		gb := make([]mqState, 1<<16)
-		gray = decodeGrayScale(dec, gb, gw, gh, template, bpp, at, skip)
+		gray, err = decodeGrayScale(dec, gb, gw, gh, template, bpp, at, skip)
+		if err != nil {
+			return err
+		}
 	}
 
 	for m := 0; m < gh; m++ {
@@ -190,7 +210,11 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 		}
 	}
 	if d.page == nil {
-		d.page = newJBBitmap(d.imgW, d.imgH, 0)
+		page, err := newJBBitmap(d.imgW, d.imgH, 0)
+		if err != nil {
+			return err
+		}
+		d.page = page
 	}
 	d.page.blit(region, ri.x, ri.y, ri.combOp)
 	return nil
@@ -199,28 +223,38 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 // decodeGrayScale decodes a greyscale image of grey values (Annex C.5): bpp
 // bitplanes, each an arithmetic generic region sharing one context, combined
 // out of Gray code into an integer per cell. Returns w*h values row-major.
-func decodeGrayScale(dec *mqDecoder, gb []mqState, w, h, template, bpp int, at []atPixel, skip *jbBitmap) []int {
+func decodeGrayScale(dec *mqDecoder, gb []mqState, w, h, template, bpp int, at []atPixel, skip *jbBitmap) ([]int, error) {
 	planes := make([]*jbBitmap, bpp)
 	for i := bpp - 1; i >= 0; i-- { // most significant plane first
-		planes[i] = decodeGenericInto(dec, gb, w, h, template, at, false, skip)
+		plane, err := decodeGenericInto(dec, gb, w, h, template, at, false, skip)
+		if err != nil {
+			return nil, err
+		}
+		planes[i] = plane
 	}
-	return grayCombine(planes, w, h, bpp)
+	return grayCombine(planes, w, h, bpp), nil
 }
 
 // decodeGrayScaleMMR decodes the greyscale image when the halftone region is
 // MMR-coded (HMMR = 1): the bitplanes are consecutive Group-4 bitmaps sharing one
 // bit stream, each ended by an EOFB (Annex C.5). A malformed plane yields zeros.
-func decodeGrayScaleMMR(data []byte, w, h, bpp int) []int {
+func decodeGrayScaleMMR(data []byte, w, h, bpp int) ([]int, error) {
 	mr := newMMRPlaneReader(data)
 	planes := make([]*jbBitmap, bpp)
 	for i := bpp - 1; i >= 0; i-- { // most significant plane first
 		p, err := mr.plane(w, h, true)
 		if err != nil {
-			p = newJBBitmap(w, h, 0)
+			// A plane the reader could not produce is an empty one: the
+			// greyscale image is still assembled, at a lower bit depth than
+			// the file claimed. An allocation the budget refuses is not that,
+			// and is carried out.
+			if p, err = newJBBitmap(w, h, 0); err != nil {
+				return nil, err
+			}
 		}
 		planes[i] = p
 	}
-	return grayCombine(planes, w, h, bpp)
+	return grayCombine(planes, w, h, bpp), nil
 }
 
 // grayCombine turns bpp Gray-coded bitplanes (MSB first) into one integer per

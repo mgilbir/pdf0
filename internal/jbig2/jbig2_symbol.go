@@ -190,7 +190,11 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 			}
 			var bmp *jbBitmap
 			if sdrefagg == 0 {
-				bmp = decodeGenericInto(dec, gb, symWidth, hcHeight, template, at, false, nil)
+				var err error
+				bmp, err = decodeGenericInto(dec, gb, symWidth, hcHeight, template, at, false, nil)
+				if err != nil {
+					return err
+				}
 			} else {
 				// Aggregate/refinement coding (6.5.8.2).
 				nInst, _ := decodeInt(dec, iaai)
@@ -203,7 +207,11 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 					if id < 0 || id >= len(all) {
 						return errJBIG2Unsupported
 					}
-					bmp = decodeRefinement(dec, grCx, symWidth, hcHeight, sdrTemplate, all[id], rdx, rdy, false, rAt)
+					var err error
+					bmp, err = decodeRefinement(dec, grCx, symWidth, hcHeight, sdrTemplate, all[id], rdx, rdy, false, rAt)
+					if err != nil {
+						return err
+					}
 				} else if nInst <= 0 {
 					return errJBIG2Unsupported
 				} else {
@@ -329,7 +337,10 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 	iaid := make([]mqState, 1<<uint(symCodeLen+1))
 	grCx := make([]mqState, 1<<13)
 
-	region := newJBBitmap(ri.w, ri.h, sbDefPixel)
+	region, err := newJBBitmap(ri.w, ri.h, sbDefPixel)
+	if err != nil {
+		return err
+	}
 	strips := 1 << logStrips
 
 	dt, _ := decodeInt(dec, iadt)
@@ -375,8 +386,12 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 					if rw <= 0 || rh <= 0 || rw > 1<<16 || rh > 1<<16 {
 						return errJBIG2Unsupported
 					}
-					sym = decodeRefinement(dec, grCx, rw, rh, sbrTemplate, sym,
+					refined, err := decodeRefinement(dec, grCx, rw, rh, sbrTemplate, sym,
 						(rdw>>1)+rdx, (rdh>>1)+rdy, false, rAt)
+					if err != nil {
+						return err
+					}
+					sym = refined
 				}
 			}
 			placeSymbol(region, sym, &curS, t, refCorner, transposed, sbCombOp)
@@ -384,7 +399,11 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 		}
 	}
 	if d.page == nil {
-		d.page = newJBBitmap(d.imgW, d.imgH, 0)
+		page, err := newJBBitmap(d.imgW, d.imgH, 0)
+		if err != nil {
+			return err
+		}
+		d.page = page
 	}
 	d.page.blit(region, ri.x, ri.y, ri.combOp)
 	return nil
@@ -403,7 +422,10 @@ type aggCtx struct {
 // strips, top-left reference corner, OR compositing, no S offset. It reads from
 // the dictionary's ongoing MQ stream and shared contexts.
 func decodeAggregateArith(dec *mqDecoder, c aggCtx, w, height, numInst, symCodeLen int, syms []*jbBitmap, sbrTemplate int, rAt []atPixel) (*jbBitmap, error) {
-	region := newJBBitmap(w, height, 0)
+	region, err := newJBBitmap(w, height, 0)
+	if err != nil {
+		return nil, err
+	}
 	dt0, _ := decodeInt(dec, c.iadt)
 	stripT := -dt0 // SBSTRIPS == 1
 	firstS := 0
@@ -441,7 +463,11 @@ func decodeAggregateArith(dec *mqDecoder, c aggCtx, w, height, numInst, symCodeL
 				if rw <= 0 || rh <= 0 || rw > 1<<16 || rh > 1<<16 {
 					return nil, errJBIG2Unsupported
 				}
-				sym = decodeRefinement(dec, c.gr, rw, rh, sbrTemplate, sym, (rdw>>1)+rdx, (rdh>>1)+rdy, false, rAt)
+				refined, err := decodeRefinement(dec, c.gr, rw, rh, sbrTemplate, sym, (rdw>>1)+rdx, (rdh>>1)+rdy, false, rAt)
+				if err != nil {
+					return nil, err
+				}
+				sym = refined
 			}
 			placeSymbol(region, sym, &curS, stripT, 1 /*TOPLEFT*/, false, 0 /*OR*/)
 			inst++
