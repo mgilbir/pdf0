@@ -21,7 +21,7 @@ func validateAtEveryLevel(t *testing.T, build func(*Document) error) {
 	t.Helper()
 	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			if err := build(doc); err != nil {
 				t.Fatalf("building: %v", err)
 			}
@@ -187,7 +187,7 @@ func TestFormXObjectValidates(t *testing.T) {
 // outside the box are clipped away, so a box with no area is a form that draws
 // nothing at all — and nothing else would report it.
 func TestFormBoundingBoxMustHaveArea(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.Rect(0, 0, 10, 10).Fill()
 	if _, err := doc.AddForm(Form{BBox: [4]float64{0, 0, 0, 10}, Content: &b}); err == nil {
@@ -204,7 +204,7 @@ func TestFormBoundingBoxMustHaveArea(t *testing.T) {
 // page does. Its resources are its own, so a name it uses and does not define
 // is as broken there as on a page.
 func TestFormUndefinedResourceIsRefused(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.Draw("Missing")
 	_, err := doc.AddForm(Form{BBox: [4]float64{0, 0, 10, 10}, Content: &b})
@@ -221,7 +221,7 @@ func TestFormUndefinedResourceIsRefused(t *testing.T) {
 // and both are easy to omit without any visible difference until two shapes
 // overlap.
 func TestTransparencyGroupIsWritten(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.Rect(0, 0, 10, 10).Fill()
 	ref, err := doc.AddForm(Form{BBox: [4]float64{0, 0, 10, 10}, Content: &b, Group: true})
@@ -296,7 +296,7 @@ func TestLinkDestinationsAreChecked(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			doc := NewPDFADocument(pdfa.PDFA2b)
+			doc := mustPDFADoc(t, pdfa.PDFA2b)
 			var b content.Builder
 			b.Rect(0, 0, 10, 10).Fill()
 			if _, err := doc.AddPage(Page{Width: 612, Height: 792, Content: &b, Links: []Link{tc.link}}); err == nil {
@@ -311,7 +311,7 @@ func TestLinkDestinationsAreChecked(t *testing.T) {
 // Hidden or NoView; the validator reports the omission, and a reader simply
 // drops the link from the printed page.
 func TestLinkAnnotationPrints(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.Rect(0, 0, 10, 10).Fill()
 	ref, err := doc.AddPage(Page{

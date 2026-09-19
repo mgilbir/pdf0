@@ -163,7 +163,7 @@ func TestUnsetFieldsAreNotWritten(t *testing.T) {
 func TestDescribingAPDFADocumentKeepsItOne(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			if err := doc.SetDocumentInfo(DocumentInfo{Title: "Described", Author: "An Author"}); err != nil {
 				t.Fatalf("describing: %v", err)
 			}
@@ -190,7 +190,7 @@ func TestDescribingAPDFADocumentKeepsItOne(t *testing.T) {
 // PDF/A-4 and is not one — which the validator says, and which is how this was
 // found.
 func TestPDFA4IsDescribedInMetadataAlone(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	if err := doc.SetDocumentInfo(DocumentInfo{Title: "Described", Author: "An Author"}); err != nil {
 		t.Fatalf("describing: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestPDFA4IsDescribedInMetadataAlone(t *testing.T) {
 // TestPDFAIdentificationIsCarriedNotInvented is the other half. The claim must
 // survive a rewrite, and must not appear on a document that never made it.
 func TestPDFAIdentificationIsCarriedNotInvented(t *testing.T) {
-	described := NewPDFADocument(pdfa.PDFA2b)
+	described := mustPDFADoc(t, pdfa.PDFA2b)
 	if err := described.SetDocumentInfo(DocumentInfo{Title: "x"}); err != nil {
 		t.Fatalf("describing: %v", err)
 	}

@@ -16,7 +16,7 @@ import (
 // one call produce a document that validates, with no page dictionary assembled
 // by hand.
 func TestAddPageProducesAConformingPage(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 
 	face, err := fonts.Load(fonttest.SFNT(fonttest.SFNTOptions{
 		Name: "Page-Regular",
@@ -71,7 +71,7 @@ func TestAddPageProducesAConformingPage(t *testing.T) {
 // nothing in the file says why. It is caught here, where the cause is still to
 // hand.
 func TestAddPageRefusesAnUndefinedResource(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.BeginText().SetFont("F1", 12).ShowText([]byte{0, 1}).EndText()
 
@@ -88,7 +88,7 @@ func TestAddPageRefusesAnUndefinedResource(t *testing.T) {
 // cannot become a page. Drawing calls do not return errors so that a page can
 // be written as a sequence; this is where that debt is settled.
 func TestAddPageSurfacesDrawingErrors(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.Save().Rect(0, 0, 10, 10).Fill() // no Restore: unbalanced
 	if _, err := doc.AddPage(Page{Width: 612, Height: 792, Content: &b}); err == nil {
@@ -98,7 +98,7 @@ func TestAddPageSurfacesDrawingErrors(t *testing.T) {
 
 // TestAddPageAppendsRatherThanReplaces pins that a second page joins the first.
 func TestAddPageAppendsRatherThanReplaces(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	for i := 0; i < 3; i++ {
 		var b content.Builder
 		b.Rect(0, 0, 10, 10).Fill()
@@ -128,7 +128,7 @@ func TestAddPageAppendsRatherThanReplaces(t *testing.T) {
 // TestAddPageCompressesTheContentStream pins that a produced file is not
 // needlessly large, and that the bytes come back through the public reader.
 func TestAddPageCompressesTheContentStream(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	for i := 0; i < 200; i++ {
 		b.Rect(float64(i), float64(i), 10, 10).Fill()
@@ -162,7 +162,7 @@ func TestAddPageCompressesTheContentStream(t *testing.T) {
 // TestOpacityIsAUsableExtGState pins the other half of §3.2's graphics state:
 // translucency needs a dictionary the content stream names, and this is it.
 func TestOpacityIsAUsableExtGState(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	gs, err := Opacity(0.5, 1)
 	if err != nil {
 		t.Fatalf("Opacity: %v", err)
@@ -197,7 +197,7 @@ func TestOpacityIsAUsableExtGState(t *testing.T) {
 // reader can apply, and one silently dropped would leave a landscape page
 // displayed portrait.
 func TestPageRotationIsAMultipleOfNinety(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.Rect(0, 0, 10, 10).Fill()
 	ref, err := doc.AddPage(Page{Width: 595, Height: 842, Rotate: 90, Content: &b})

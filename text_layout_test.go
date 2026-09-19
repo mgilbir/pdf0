@@ -134,7 +134,7 @@ func TestStandardFaceIsRefusedByPDFA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	codes, _ := face.Encode("Hello")
 	var b content.Builder
 	b.BeginText().SetFont("H", 12).MoveText(72, 700).ShowText(codes).EndText()

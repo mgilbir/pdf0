@@ -206,7 +206,7 @@ func nan() float64 { return math.NaN() }
 func TestPatternPaintsAndValidates(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA2b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			patRef, err := doc.AddTilingPattern(TilingPattern{
 				BBox: [4]float64{0, 0, 10, 10}, Content: cell(),
 			})

@@ -287,7 +287,7 @@ Everything below is implemented in the library and has **no** CLI surface. Absen
 | Image extraction | `ExtractImages()`, `Images()` (lazy iterator) |
 | Page extraction / subsetting | `ExtractPages(indices)`; per-page text via `ExtractPageText(page)` |
 | Incremental write | `WriteIncremental(w, original, changed)` |
-| Building conformant documents | `NewPDFADocument`, `NewPDFADocumentWithInfo`, `GenerateXMPMetadata`, `DefaultSRGBProfile` |
+| Building conformant documents | `NewPDFADocument`, `NewPDFADocumentWithInfo`, `NewPDFADocumentWith` (bring your own output intent), `GenerateXMPMetadata`, `DefaultSRGBProfile` |
 | Comparison, low-level parsing | `DocumentEqual`, `Equal`, `NewLexer`, `NewParser`, `NewSerializer`, `ParseXRefTable`, `ParseXRefStream` |
 
 Two encryption nuances the CLI flattens: `decrypt` is exactly `RemoveEncryption()` +

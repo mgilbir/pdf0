@@ -167,9 +167,9 @@ func FuzzWriteSurface(f *testing.F) {
 		case 0:
 			doc = NewDocument()
 		case 1:
-			doc = NewPDFADocument(pdfa.PDFA2b)
+			doc = mustPDFADoc(t, pdfa.PDFA2b)
 		default:
-			doc = NewPDFADocument(pdfa.PDFA4)
+			doc = mustPDFADoc(t, pdfa.PDFA4)
 		}
 
 		if p.byte()%2 == 0 {

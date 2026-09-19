@@ -59,7 +59,7 @@ func buildCMS(t *testing.T, hasCert bool, nSigners int) []byte {
 func TestValidatePDFA_SignaturePKCS7(t *testing.T) {
 	raw := make([]byte, 1000)
 	mk := func(contents []byte) *Document {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		sig := &object.Dictionary{}
 		sig.Set("Type", object.Name("Sig"))
 		sig.Set("SubFilter", object.Name("adbe.pkcs7.detached"))

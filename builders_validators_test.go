@@ -15,7 +15,7 @@ import (
 // conformance-less, untagged document that failed with several errors).
 func TestNewPDFADocumentLevelA(t *testing.T) {
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a} {
-		doc := NewPDFADocument(lvl)
+		doc := mustPDFADoc(t, lvl)
 		if errs := ValidatePDFA(doc, lvl); len(errs) > 0 {
 			t.Errorf("NewPDFADocument(%v) is not conformant: %d error(s)", lvl, len(errs))
 			for _, e := range errs {
@@ -25,7 +25,7 @@ func TestNewPDFADocumentLevelA(t *testing.T) {
 	}
 	// The b-levels are unaffected.
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-		if errs := ValidatePDFA(NewPDFADocument(lvl), lvl); len(errs) > 0 {
+		if errs := ValidatePDFA(mustPDFADoc(t, lvl), lvl); len(errs) > 0 {
 			t.Errorf("NewPDFADocument(%v) regressed: %d error(s)", lvl, len(errs))
 		}
 	}
@@ -65,7 +65,7 @@ func TestUAPartParameterized(t *testing.T) {
 // orders — an invoice missing its number (BT-1) is reported by the container
 // validator itself.
 func TestFacturXInvoiceRulesInline(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA3b)
+	doc := mustPDFADoc(t, pdfa.PDFA3b)
 	bad := strings.Replace(validCII, "<ID>INV-1</ID>", "", 1)
 	if err := EmbedFacturX(doc, []byte(bad), formalis.ProfileEN16931, "Invoice"); err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestFacturXInvoiceRulesInline(t *testing.T) {
 // an Order-X document, not a Factur-X invoice, and is now rejected with the
 // message the check always printed.
 func TestFacturXRejectsOrderType(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA3b)
+	doc := mustPDFADoc(t, pdfa.PDFA3b)
 	if err := EmbedFacturX(doc, []byte(validCII), formalis.ProfileEN16931, "Invoice"); err != nil {
 		t.Fatal(err)
 	}

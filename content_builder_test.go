@@ -21,7 +21,7 @@ import (
 // by a content.Builder, and returns it with the bytes of the content stream.
 func drawnPageDoc(t *testing.T, draw func(*content.Builder)) (*Document, []byte) {
 	t.Helper()
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 
 	var b content.Builder
 	draw(&b)
@@ -145,7 +145,7 @@ func TestDrawnPageOperatorsPassTheContentRule(t *testing.T) {
 // stream carrying an operator ISO 32000 does not define must be reported. If
 // this passes with a planted defect, the tests above prove nothing.
 func TestDrawnPageOracleHasTeeth(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	bad := []byte("q\n1 0 0 rg\n0 0 10 10 re\nf\nZz\nQ\n")
 	stream := &object.Stream{Dict: object.Dictionary{}, Data: bad}
 	stream.Dict.Set("Length", object.Integer(len(bad)))
@@ -200,7 +200,7 @@ func TestBuilderRefusesWhatTheValidatorWouldReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the builder refused a stream at the documented limit: %v", err)
 	}
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	stream := &object.Stream{Dict: object.Dictionary{}, Data: data}
 	stream.Dict.Set("Length", object.Integer(len(data)))
 	doc.Objects[20] = &object.IndirectObject{Number: 20, Value: stream}

@@ -25,7 +25,7 @@ func pageWithContent(doc *Document, content string, resources *object.Dictionary
 // same form merely referenced but never drawn must not be.
 func TestDeviceColorInFormBody(t *testing.T) {
 	build := func(content string) *Document {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		form := &object.Stream{Dict: object.Dictionary{}, Data: []byte("0 0.7 0.7 0 k 0 0 9 9 re f")}
 		form.Dict.Set("Type", object.Name("XObject"))
 		form.Dict.Set("Subtype", object.Name("Form"))
@@ -53,7 +53,7 @@ func TestDeviceColorInFormBody(t *testing.T) {
 
 // /DeviceCMYK cs selection (as opposed to the k operator) must be detected.
 func TestDeviceColorViaCSOperator(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	pageWithContent(doc, "/DeviceCMYK cs 0 0 0 1 sc 0 0 5 5 re f", nil)
 	if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.2.4.3") {
 		t.Error("device colour selected via cs operator must be detected")
@@ -64,7 +64,7 @@ func TestDeviceColorViaCSOperator(t *testing.T) {
 // DefaultCMYK does not reach inside the pattern's resource scope.
 func TestDefaultColorSpaceScope(t *testing.T) {
 	build := func(patternDefaults bool) *Document {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		pat := &object.Stream{Dict: object.Dictionary{}, Data: []byte("0 0 0 1 k 0 0 5 5 re f")}
 		pat.Dict.Set("PatternType", object.Integer(1))
 		pat.Dict.Set("PaintType", object.Integer(1))
@@ -105,8 +105,8 @@ func TestDefaultColorSpaceScope(t *testing.T) {
 // Overprint mode 1 with an ICCBased CMYK space and overprinting on.
 func TestICCCMYKOverprint(t *testing.T) {
 	build := func(op bool, paint string) *Document {
-		doc := NewPDFADocument(pdfa.PDFA2b)
-		icc := &object.Stream{Dict: object.Dictionary{}, Data: DefaultSRGBProfile()}
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
+		icc := &object.Stream{Dict: object.Dictionary{}, Data: mustSRGBProfile(t)}
 		icc.Dict.Set("N", object.Integer(4))
 		icc.Dict.Set("Length", object.Integer(len(icc.Data)))
 		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: icc}
@@ -167,7 +167,7 @@ func TestJPXValidation(t *testing.T) {
 		return append(data, box("jp2h", jp2h)...)
 	}
 	build := func(data []byte) *Document {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		img := &object.Stream{Dict: object.Dictionary{}, Data: data}
 		img.Dict.Set("Type", object.Name("XObject"))
 		img.Dict.Set("Subtype", object.Name("Image"))
@@ -196,7 +196,7 @@ func TestJPXValidation(t *testing.T) {
 
 // Separation/DeviceN device alternates need intent coverage at 2b+.
 func TestDeviceAlternateNeedsCoverage(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b) // sRGB intent: no CMYK coverage
+	doc := mustPDFADoc(t, pdfa.PDFA2b) // sRGB intent: no CMYK coverage
 	csDict := &object.Dictionary{}
 	csDict.Set("CS0", object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceCMYK"), object.IndirectRef{Number: 5}})
 	res := &object.Dictionary{}

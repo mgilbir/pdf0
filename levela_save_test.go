@@ -33,7 +33,7 @@ func aBlackBar() *content.Builder {
 
 func TestSaveRefusesAnUntaggedLevelADocument(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a} {
-		doc := NewPDFADocument(level)
+		doc := mustPDFADoc(t, level)
 		if _, err := doc.AddPage(Page{Width: 200, Height: 200, Content: aBlackBar()}); err != nil {
 			t.Fatalf("%s: adding the page: %v", level, err)
 		}
@@ -70,7 +70,7 @@ func TestSaveRefusesAnUntaggedLevelADocument(t *testing.T) {
 // about the drawing.
 func TestSaveAcceptsALevelBDocumentOfTheSameDrawing(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b} {
-		doc := NewPDFADocument(level)
+		doc := mustPDFADoc(t, level)
 		if _, err := doc.AddPage(Page{Width: 200, Height: 200, Content: aBlackBar()}); err != nil {
 			t.Fatalf("%s: adding the page: %v", level, err)
 		}
@@ -85,7 +85,7 @@ func TestSaveAcceptsALevelBDocumentOfTheSameDrawing(t *testing.T) {
 // describes the page, is conforming — so the rule is about whether the content
 // is described, not about Level A being unreachable.
 func TestSaveAcceptsALevelADocumentWhoseContentIsMarked(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA1a)
+	doc := mustPDFADoc(t, pdfa.PDFA1a)
 	var b content.Builder
 	b.BeginMarked("Artifact").SetRGB(0, 0, 0).Rect(10, 10, 100, 20).Fill().EndMarked()
 	pageRef, err := doc.AddPage(Page{Width: 200, Height: 200, Content: &b})

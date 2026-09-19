@@ -61,7 +61,7 @@ func typesetDoc(t *testing.T, text string) (*Document, *fonts.Face) {
 
 func typesetDocAt(t *testing.T, level pdfa.Level, text string) (*Document, *fonts.Face) {
 	t.Helper()
-	doc := NewPDFADocument(level)
+	doc := mustPDFADoc(t, level)
 	face := testFace(t)
 
 	// Encode first, embed last: the subset carries the glyphs the face has been
@@ -341,7 +341,7 @@ func TestShapedTextValidatesAndKeepsItsLigature(t *testing.T) {
 		t.Fatalf("%d runes missing", missing)
 	}
 
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.BeginText().SetFont("F1", 24).MoveText(72, 700).ShowTextAdjusted(spans...).EndText()
 	drawn, err := b.Bytes()
@@ -499,7 +499,7 @@ func TestOpenTypeCFFEmbedsAndValidates(t *testing.T) {
 		t.Fatalf("%d runes missing from a font that reported them present", missing)
 	}
 
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	var b content.Builder
 	b.BeginText().SetFont("F1", 18).MoveText(72, 700).ShowText(codes).EndText()
 	drawn, err := b.Bytes()
@@ -716,7 +716,7 @@ func TestCFFSubsetValidatesAtEveryLevel(t *testing.T) {
 			}
 			codes, _ := face.Encode(text)
 
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			var b content.Builder
 			b.BeginText().SetFont("F1", 18).MoveText(72, 700).ShowText(codes).EndText()
 			drawn, err := b.Bytes()
@@ -835,7 +835,7 @@ func TestCIDKeyedWidthsAreKeyedByCID(t *testing.T) {
 			"cannot tell which number was written", gid, cid)
 	}
 
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	ref, err := f.Embed(doc)
 	if err != nil {
 		t.Fatalf("embedding: %v", err)
@@ -884,7 +884,7 @@ func TestCIDKeyedSystemInfoIsTheFontsOwn(t *testing.T) {
 		t.Fatalf("a CID-keyed CFF was refused at load: %v", err)
 	}
 	f.Encode("A")
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	ref, err := f.Embed(doc)
 	if err != nil {
 		t.Fatalf("embedding: %v", err)
@@ -927,7 +927,7 @@ func TestCIDKeyedSetIsKeyedByCID(t *testing.T) {
 	codes, _ := f.Encode(string(halfWidthKatakana))
 	cid := int(codes[0])<<8 | int(codes[1])
 
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	ref, err := f.Embed(doc)
 	if err != nil {
 		t.Fatalf("embedding: %v", err)
@@ -1099,7 +1099,7 @@ func TestSimpleFontValidatesAtEveryLevel(t *testing.T) {
 			if missing != 0 {
 				t.Fatalf("%d characters outside the encoding", missing)
 			}
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			var b content.Builder
 			b.BeginText().SetFont("F1", 14).MoveText(72, 700).ShowText(codes).EndText()
 			drawn, err := b.Bytes()
@@ -1139,7 +1139,7 @@ func TestSimpleFontValidatesAtEveryLevel(t *testing.T) {
 func TestSimpleFontWidthsAreIndexedByCode(t *testing.T) {
 	face := simpleFace(t)
 	face.Encode("A")
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	if _, err := face.Embed(doc); err != nil {
 		t.Fatal(err)
 	}
@@ -1215,7 +1215,7 @@ func TestLoadSimpleRefusesWhatCannotBeOne(t *testing.T) {
 func TestSimpleFontCarriesAToUnicodeCMap(t *testing.T) {
 	face := simpleFace(t)
 	face.Encode("A")
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	if _, err := face.Embed(doc); err != nil {
 		t.Fatal(err)
 	}
@@ -1259,7 +1259,7 @@ func TestACJKDocumentIsWrittenAndReadsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading: %v", err)
 	}
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 
 	codes, missing := face.Encode(text)
 	if missing != 0 {
@@ -1367,7 +1367,7 @@ func TestACIDFontThatCannotNameItsCollectionIsRefused(t *testing.T) {
 				t.Errorf("%d characters missing from a face that covers them", missing)
 			}
 
-			doc := NewPDFADocument(pdfa.PDFA2b)
+			doc := mustPDFADoc(t, pdfa.PDFA2b)
 			if _, err := f.Embed(doc); err == nil {
 				t.Error("the font was embedded; its /CIDSystemInfo would claim a " +
 					"collection the program never named")
@@ -1412,7 +1412,7 @@ func TestAnAdoptedCIDFaceGetsItsOwnCollection(t *testing.T) {
 	f := fonts.Adopt(inner)
 	f.Encode("A")
 
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	ref, err := f.Embed(doc)
 	if err != nil {
 		t.Fatalf("embedding an adopted CID-keyed face: %v", err)
@@ -1467,7 +1467,7 @@ func TestAnAdoptedCIDFaceIsKeyedCorrectly(t *testing.T) {
 			"difference", gid, cid)
 	}
 
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	ref, err := f.Embed(doc)
 	if err != nil {
 		t.Fatalf("embedding an adopted CID-keyed face: %v", err)

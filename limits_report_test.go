@@ -83,7 +83,7 @@ func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
 //	content budget starved /Metadata: [metadata must contain pdfaid:part
 //	pdfaid:conformance must be B, got ""]
 func TestMetadataSurvivesContentBudget(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	// Give it one page whose content stream is big enough to exhaust a lowered
 	// budget before the identification checks run. The content paints nothing,
 	// so the page adds no findings of its own.
@@ -259,7 +259,7 @@ func TestLimitRecorderIsBounded(t *testing.T) {
 //	WriteIncremental accepted a document with 1 unmaterialised object stream(s)
 func TestIncrementalRefusesMissingObjects(t *testing.T) {
 	var buf bytes.Buffer
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	if err := doc.Write(&buf); err != nil {
 		t.Fatalf("writing: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestIncrementalRefusesMissingObjects(t *testing.T) {
 func embeddedPDFAFixture(t *testing.T, lim core.Limits) (inner []byte, outer *Document) {
 	t.Helper()
 
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	next := 1
 	for n := range doc.Objects {
 		if n >= next {
