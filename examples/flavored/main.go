@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"log"
 	"os"
 	"strings"
 
@@ -49,15 +50,18 @@ func main() {
 	// identical, and none of it mentions a level.
 	flavours := []struct {
 		name string
-		make func() *pdf.Document
+		make func() (*pdf.Document, error)
 	}{
-		{"plain PDF 2.0", pdf.NewDocument},
-		{"PDF/A-2b", func() *pdf.Document { return pdf.NewPDFADocument(pdfa.PDFA2b) }},
-		{"PDF/A-4", func() *pdf.Document { return pdf.NewPDFADocument(pdfa.PDFA4) }},
+		{"plain PDF 2.0", func() (*pdf.Document, error) { return pdf.NewDocument(), nil }},
+		{"PDF/A-2b", func() (*pdf.Document, error) { return pdf.NewPDFADocument(pdfa.PDFA2b) }},
+		{"PDF/A-4", func() (*pdf.Document, error) { return pdf.NewPDFADocument(pdfa.PDFA4) }},
 	}
 
 	for _, f := range flavours {
-		doc := f.make()
+		doc, err := f.make()
+		if err != nil {
+			log.Fatalf("%s: %v", f.name, err)
+		}
 		if err := doc.SetDocumentInfo(pdf.DocumentInfo{
 			Title:   "Quarterly results",
 			Author:  "pdf0",

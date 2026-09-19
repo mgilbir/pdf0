@@ -446,7 +446,7 @@ func TestArlingtonParserFaithful(t *testing.T) {
 		l    pdfa.Level
 	}{{"PDFA1b", pdfa.PDFA1b}, {"PDFA2b", pdfa.PDFA2b}, {"PDFA3b", pdfa.PDFA3b}, {"PDFA4", pdfa.PDFA4}} {
 		var buf bytes.Buffer
-		if err := NewPDFADocumentWithInfo(lv.l, "Title", "Author").Write(&buf); err != nil {
+		if err := mustPDFADocWithInfo(t, lv.l, "Title", "Author").Write(&buf); err != nil {
 			t.Errorf("generate %s: %v", lv.name, err)
 			continue
 		}
@@ -539,7 +539,7 @@ func TestArlingtonCorpusParserFaithful(t *testing.T) {
 // so a clean TestArlingtonParserFaithful means "faithful", not "checked nothing".
 func TestArlingtonOracleHasTeeth(t *testing.T) {
 	m := loadArlModel(arlModelDir(t))
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	cat.Delete("Pages")                    // required-key check
 	cat.Set("Type", object.Name("Bogus"))  // enum check: /Type not in [Catalog]

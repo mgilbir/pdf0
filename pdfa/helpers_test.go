@@ -1,6 +1,8 @@
 package pdfa
 
 import (
+	"testing"
+
 	"strings"
 
 	"github.com/mgilbir/pdf0/internal/core"
@@ -30,7 +32,28 @@ func mkView(objs map[int]*object.IndirectObject, trailer object.Dictionary) core
 // mkPDFAView is mkView over the minimal conforming skeleton for a level — the
 // same object graph NewPDFADocument wraps into a Document.
 func mkPDFAView(level Level) core.View {
-	objs, trailer, version := Skeleton(level, "", "")
+	// Skeleton's error is always nil today and this helper has no testing.TB to
+	// report one through. Panicking here would be the very thing the error
+	// return replaced — but this is a test helper, not the library, and a
+	// fixture that cannot be built has nothing useful to return. mkPDFAViewT
+	// below is the version that fails properly, for callers that have a T.
+	objs, trailer, version, err := Skeleton(level, "", "")
+	if err != nil {
+		panic("pdfa: test fixture: building the " + level.String() + " skeleton: " + err.Error())
+	}
+	v := mkView(objs, trailer)
+	v.Version = version
+	return v
+}
+
+// mkPDFAViewT is mkPDFAView for a caller that has a testing.TB, which is all of
+// them but for the table-level fixtures built before a subtest starts.
+func mkPDFAViewT(tb testing.TB, level Level) core.View {
+	tb.Helper()
+	objs, trailer, version, err := Skeleton(level, "", "")
+	if err != nil {
+		tb.Fatalf("building the %s skeleton: %v", level, err)
+	}
 	v := mkView(objs, trailer)
 	v.Version = version
 	return v

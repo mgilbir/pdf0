@@ -17,7 +17,7 @@ import (
 // here even though DocumentEqual still passed.
 func TestBuilderWriteValidatesClean(t *testing.T) {
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-		doc := NewPDFADocumentWithInfo(lvl, "Title", "Author")
+		doc := mustPDFADocWithInfo(t, lvl, "Title", "Author")
 		var buf bytes.Buffer
 		if err := doc.Write(&buf); err != nil {
 			t.Fatalf("%s: write: %v", lvl, err)
@@ -42,8 +42,8 @@ func TestBuilderWriteValidatesClean(t *testing.T) {
 // single round-trip's DocumentEqual holds.
 func TestWriteIsIdempotent(t *testing.T) {
 	docs := map[string]*Document{
-		"builder-2b": NewPDFADocumentWithInfo(pdfa.PDFA2b, "T", "A"),
-		"builder-4":  NewPDFADocument(pdfa.PDFA4),
+		"builder-2b": mustPDFADocWithInfo(t, pdfa.PDFA2b, "T", "A"),
+		"builder-4":  mustPDFADoc(t, pdfa.PDFA4),
 	}
 	files, _ := filepath.Glob("testdata/pdf20examples/*.pdf")
 	for _, f := range files {
