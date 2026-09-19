@@ -1,21 +1,79 @@
 package jbig2
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // TestNewJBBitmapBudget pins the single-allocation choke point: a normal bitmap
-// allocates, an over-budget one panics with the recoverable sentinel rather than
-// attempting a multi-gigabyte make (audit C2).
+// allocates, an over-budget one returns errJBIG2Budget rather than attempting a
+// multi-gigabyte make (audit C2).
+//
+// It used to panic and be recovered at the Decode boundary. The bound is the
+// same; what changed is that it is now carried out through every caller as an
+// error, because a library should not panic.
 func TestNewJBBitmapBudget(t *testing.T) {
-	if b := newJBBitmap(100, 100, 0); b == nil || len(b.pix) != 10000 {
-		t.Fatalf("newJBBitmap(100,100) = %v", b)
+	b, err := newJBBitmap(100, 100, 0)
+	if err != nil || b == nil || len(b.pix) != 10000 {
+		t.Fatalf("newJBBitmap(100,100) = %v, %v", b, err)
 	}
-	defer func() {
-		if r := recover(); r != errJBIG2Budget {
-			t.Fatalf("over-budget newJBBitmap: recovered %v, want errJBIG2Budget", r)
+
+	// 2^28 pixels > maxJBIG2Pixels (2^26).
+	over, err := newJBBitmap(1<<14, 1<<14, 0)
+	if !errors.Is(err, errJBIG2Budget) {
+		t.Fatalf("over-budget newJBBitmap: err = %v, want errJBIG2Budget", err)
+	}
+	if over != nil {
+		t.Error("a refused allocation came back with a bitmap beside the error")
+	}
+
+	// A negative dimension is refused the same way rather than panicking in
+	// make.
+	if _, err := newJBBitmap(-1, 10, 0); !errors.Is(err, errJBIG2Budget) {
+		t.Errorf("a negative width gave %v, want errJBIG2Budget", err)
+	}
+}
+
+// TestNothingInTheDecoderPanics is the rule this package now keeps.
+//
+// The budget used to be signalled by a panic recovered at the Decode boundary,
+// which meant every allocation site was one missing recover away from taking
+// the process down. There is no recover left, so a panic from anywhere in the
+// decoder reaches the caller — this walks the adversarial shapes that reach the
+// allocation paths and asserts none of them does.
+func TestNothingInTheDecoderPanics(t *testing.T) {
+	region := func(w, h uint32, typ byte) []byte {
+		return []byte{
+			0, 0, 0, 0, typ, 0, 1, 0, 0, 0, 0x12,
+			byte(w >> 24), byte(w >> 16), byte(w >> 8), byte(w),
+			byte(h >> 24), byte(h >> 16), byte(h >> 8), byte(h),
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		}
-	}()
-	_ = newJBBitmap(1<<14, 1<<14, 0) // 2^28 pixels > maxJBIG2Pixels (2^26)
-	t.Fatal("newJBBitmap did not panic on an over-budget allocation")
+	}
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"a generic region larger than the budget", region(1<<20, 1<<20, 0x26)},
+		{"a zero-sized region", region(0, 0, 0x26)},
+		{"a width that fills the field", region(0xFFFFFFFF, 1, 0x26)},
+		{"a halftone region larger than the budget", region(1<<20, 1<<20, 0x2A)},
+		{"a refinement region larger than the budget", region(1<<20, 1<<20, 0x2E)},
+		{"a text region larger than the budget", region(1<<20, 1<<20, 0x06)},
+		{"a truncated segment header", []byte{0, 0, 0, 0, 0x26}},
+		{"nothing at all", []byte{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("the decoder panicked: %v", r)
+				}
+			}()
+			// The result does not matter; not panicking does.
+			_, _ = Decode(nil, tc.data, 8, 8)
+			_, _ = Decode(tc.data, tc.data, 1<<10, 1<<10)
+		})
+	}
 }
 
 // TestReserveBoundsAggregate pins both the per-allocation and the stream-wide
