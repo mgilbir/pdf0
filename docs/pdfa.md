@@ -208,13 +208,30 @@ the one finding saying `pdfaid:conformance` must be `B`, relabel the rest at the
 level, then add `checkLevelAConformance`, `checkLevelAStructure` and
 `checkLevelALanguage`, each through `runCheck` so the panic boundary is not lost.
 
-**`pdfa_create.go`** — the write side. `NewPDFADocument` /
-`NewPDFADocumentWithInfo` build a five-object skeleton (catalog, page tree, XMP
-metadata, output intent, ICC profile) that passes pdf0's own validator at every
-level. The sRGB destination profile is a real one from
+**`create.go`** — the write side. `NewPDFADocument` /
+`NewPDFADocumentWithInfo` / `NewPDFADocumentWith` build a five-object skeleton
+(catalog, page tree, XMP metadata, output intent, ICC profile) that passes
+pdf0's own validator at every level. All three return an error; the build →
+`ValidatePDFA` round trip keeps builder and validator honest.
+
+The sRGB destination profile is a real one from
 `github.com/mgilbir/golittlecms`, versioned by level (v2.1 for PDF/A-1, which
-targets PDF 1.4 and admits only ICC v2; v4 later); the build → `ValidatePDFA`
-round trip keeps builder and validator honest.
+targets PDF 1.4 and admits only ICC v2; v4 later). It is **embedded** rather
+than built per document — `internal/cmd/genicc` writes the two files and
+`TestTheEmbeddedProfilesAreWhatTheEngineBuilds` rebuilds them through
+golittlecms and compares, so they cannot drift. Two reasons: building it per
+document introduced a failure that could not happen and a panic standing in for
+handling it, and an ICC profile carries its creation timestamp, so every
+document used to embed a profile stamped with the moment it was generated.
+
+**Bringing your own profile.** `NewPDFADocumentWith` takes a
+`PDFAOutputIntent` — the profile bytes and the output-condition identifier that
+names what they characterise — and embeds it with `/N` read from the profile's
+own header. Nothing of pdf0's colour management reaches the document. A profile
+that is not one, that disagrees with its own declared length, that is in a
+colour space a PDF/A output intent may not use (only GRAY, RGB and CMYK), or
+that is ICC v4 at a level based on PDF 1.4, is refused rather than embedded —
+which is what the error on these constructors is for.
 
 **`preflight.go`** — `(*Document).Repair(level)`, the deliberately narrow repair
 path: it removes encryption and catalog/page/annotation `/AA` dictionaries and

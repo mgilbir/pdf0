@@ -26,7 +26,7 @@ func blankPage(t *testing.T, doc *Document) object.IndirectRef {
 // shows a mangled outline rather than reporting anything — so every link is
 // checked here.
 func TestOutlineTreeIsLinkedBothWays(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	p1, p2, p3 := blankPage(t, doc), blankPage(t, doc), blankPage(t, doc)
 
 	if err := doc.SetOutline([]OutlineItem{
@@ -82,7 +82,7 @@ func TestOutlineTreeIsLinkedBothWays(t *testing.T) {
 // with this many showing". Getting it backwards opens every bookmark in a long
 // document at once.
 func TestClosedOutlineEntryHasANegativeCount(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	p := blankPage(t, doc)
 	if err := doc.SetOutline([]OutlineItem{
 		{Title: "Closed", Page: p, Children: []OutlineItem{{Title: "Hidden", Page: p}}},
@@ -109,7 +109,7 @@ func TestClosedOutlineEntryHasANegativeCount(t *testing.T) {
 // A PDF text string is bytes or UTF-16 behind a byte-order mark, and writing
 // the wrong one turns a Russian heading into mojibake.
 func TestOutlineTitlesCarryTheirScript(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	p := blankPage(t, doc)
 	if err := doc.SetOutline([]OutlineItem{
 		{Title: "Introduction", Page: p},
@@ -146,7 +146,7 @@ func TestOutlineValidatesAtEveryLevel(t *testing.T) {
 
 // TestOutlineInputIsChecked pins the entries that could not be shown.
 func TestOutlineInputIsChecked(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	p := blankPage(t, doc)
 	if err := doc.SetOutline([]OutlineItem{{Page: p}}); err == nil {
 		t.Error("an entry with no title was accepted")
@@ -183,7 +183,7 @@ func TestOutlineInputIsChecked(t *testing.T) {
 func TestSoftMaskShapesTransparency(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			maskRef := buildFadeMask(t, doc)
 			gs, err := LuminositySoftMask(maskRef, [3]float64{0, 0, 0})
 			if err != nil {
@@ -245,7 +245,7 @@ func buildFadeMask(t *testing.T, doc *Document) object.IndirectRef {
 // alpha mask measures whether the form painted at all, so a black shape shows
 // it. Reaching for the wrong one inverts the mask exactly.
 func TestSoftMaskKindsAreDistinct(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	form := buildFadeMask(t, doc)
 
 	lum, err := LuminositySoftMask(form, [3]float64{0, 0, 0})
