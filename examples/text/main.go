@@ -120,17 +120,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	f, err := os.Create("output.pdf")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "creating the file: %v\n", err)
-		os.Exit(1)
-	}
-	defer f.Close()
-	if err := doc.Write(f); err != nil {
+	// To stdout, so the example composes and leaves nothing behind:
+	//
+	//	go run ./examples/text > out.pdf
+	//
+	// It used to write output.pdf into whatever directory it was run from.
+	if err := doc.Write(os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "writing: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("wrote output.pdf: %d lines of body text in a %.0fpt column\n", len(lines), column)
+	fmt.Fprintf(os.Stderr, "wrote %d lines of body text in a %.0fpt column to stdout\n",
+		len(lines), column)
 }
 
 // wrap breaks text into lines no wider than width, measuring with the face the

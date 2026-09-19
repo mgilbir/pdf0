@@ -58,15 +58,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	f, err := os.Create("output.pdf")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "creating the file: %v\n", err)
-		os.Exit(1)
-	}
-	defer f.Close()
-	if err := doc.Write(f); err != nil {
+	// To stdout, so the example composes and leaves nothing behind:
+	//
+	//	go run ./examples/simple_pdf17 > out.pdf
+	//
+	// It used to write output.pdf into whatever directory it was run from.
+	if err := doc.Write(os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "writing: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("wrote output.pdf")
+	fmt.Fprintln(os.Stderr, "wrote a PDF 1.7 document to stdout")
 }
