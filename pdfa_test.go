@@ -21,7 +21,7 @@ type corpusFile struct {
 }
 
 func TestValidatePDFA_NoEncrypt(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	doc.Trailer.Set("Encrypt", &object.Dictionary{})
 
 	errs := ValidatePDFA(doc, pdfa.PDFA4)
@@ -31,7 +31,7 @@ func TestValidatePDFA_NoEncrypt(t *testing.T) {
 }
 
 func TestValidatePDFA_FileID(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	doc.Trailer.Delete("ID")
 
 	errs := ValidatePDFA(doc, pdfa.PDFA4)
@@ -61,7 +61,7 @@ func TestValidatePDFA_Header(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.level.String()+"/"+tt.version, func(t *testing.T) {
-			doc := NewPDFADocument(tt.level)
+			doc := mustPDFADoc(t, tt.level)
 			doc.Version = tt.version
 
 			errs := filterRule(ValidatePDFA(doc, tt.level), "6.1.2")
@@ -77,7 +77,7 @@ func TestValidatePDFA_Header(t *testing.T) {
 
 func TestValidatePDFA_TrailerInfo(t *testing.T) {
 	t.Run("Info without PieceInfo", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		infoDict := &object.Dictionary{}
 		infoDict.Set("ModDate", object.String{Value: []byte("D:20240101")})
 		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: infoDict}
@@ -90,7 +90,7 @@ func TestValidatePDFA_TrailerInfo(t *testing.T) {
 	})
 
 	t.Run("Info with non-ModDate key", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("PieceInfo", &object.Dictionary{})
 		infoDict := &object.Dictionary{}
@@ -105,7 +105,7 @@ func TestValidatePDFA_TrailerInfo(t *testing.T) {
 	})
 
 	t.Run("Info with only ModDate and PieceInfo", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("PieceInfo", &object.Dictionary{})
 		infoDict := &object.Dictionary{}
@@ -125,7 +125,7 @@ func TestValidatePDFA_TrailerInfo(t *testing.T) {
 
 func TestValidatePDFA_MetadataStream(t *testing.T) {
 	t.Run("missing metadata", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Delete("Metadata")
 
@@ -139,7 +139,7 @@ func TestValidatePDFA_MetadataStream(t *testing.T) {
 		// A Filter on the metadata stream is forbidden only in PDF/A-1
 		// (ISO 19005-1 6.7.2); PDF/A-2/3/4 permit a permitted filter.
 		filterErr := func(level pdfa.Level) bool {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 			ms := doc.Resolve(cat.Get("Metadata")).(*object.Stream)
 			ms.Dict.Set("Filter", object.Name("FlateDecode"))
@@ -162,7 +162,7 @@ func TestValidatePDFA_MetadataStream(t *testing.T) {
 func TestValidatePDFA_OutputIntents(t *testing.T) {
 	t.Run("missing output intents OK for all levels", func(t *testing.T) {
 		for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 			catalog.Delete("OutputIntents")
 
@@ -175,7 +175,7 @@ func TestValidatePDFA_OutputIntents(t *testing.T) {
 
 	t.Run("empty OutputIntents OK", func(t *testing.T) {
 		for _, level := range []pdfa.Level{pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 			catalog.Set("OutputIntents", object.Array{})
 
@@ -187,7 +187,7 @@ func TestValidatePDFA_OutputIntents(t *testing.T) {
 	})
 
 	t.Run("validates OutputIntents structure when present", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		// Set OutputIntents to array with invalid entry
 		badOI := &object.Dictionary{}
@@ -202,7 +202,7 @@ func TestValidatePDFA_OutputIntents(t *testing.T) {
 
 func TestValidatePDFA_CatalogAA(t *testing.T) {
 	t.Run("PDFA-2b rejects AA", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("AA", &object.Dictionary{})
 
@@ -213,7 +213,7 @@ func TestValidatePDFA_CatalogAA(t *testing.T) {
 	})
 
 	t.Run("PDFA-4 allows AA", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("AA", &object.Dictionary{})
 
@@ -226,7 +226,7 @@ func TestValidatePDFA_CatalogAA(t *testing.T) {
 
 func TestValidatePDFA_OCProperties(t *testing.T) {
 	t.Run("PDFA-1b rejects OCProperties", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA1b)
+		doc := mustPDFADoc(t, pdfa.PDFA1b)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("OCProperties", &object.Dictionary{})
 
@@ -237,7 +237,7 @@ func TestValidatePDFA_OCProperties(t *testing.T) {
 	})
 
 	t.Run("PDFA-2b allows OCProperties", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 		catalog.Set("OCProperties", &object.Dictionary{})
 
@@ -249,7 +249,7 @@ func TestValidatePDFA_OCProperties(t *testing.T) {
 }
 
 func TestValidatePDFA_ExternalStreams(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	stream := &object.Stream{Dict: object.Dictionary{}, Data: []byte("test")}
 	stream.Dict.Set("F", object.String{Value: []byte("external.dat")})
 	stream.Dict.Set("Length", object.Integer(4))
@@ -262,7 +262,7 @@ func TestValidatePDFA_ExternalStreams(t *testing.T) {
 }
 
 func TestValidatePDFA_FontsEmbedded(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 
 	page := &object.Dictionary{}
 	page.Set("Type", object.Name("Page"))
@@ -305,7 +305,7 @@ func TestValidatePDFA_ForbiddenActions(t *testing.T) {
 
 	for _, actionType := range forbiddenTypes {
 		t.Run(string(actionType), func(t *testing.T) {
-			doc := NewPDFADocument(pdfa.PDFA4)
+			doc := mustPDFADoc(t, pdfa.PDFA4)
 			action := &object.Dictionary{}
 			action.Set("S", actionType)
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: action}
@@ -320,7 +320,7 @@ func TestValidatePDFA_ForbiddenActions(t *testing.T) {
 	t.Run("allowed actions pass", func(t *testing.T) {
 		allowed := []object.Name{"GoTo", "GoToR", "URI", "Named", "SubmitForm", "JavaScript"}
 		for _, s := range allowed {
-			doc := NewPDFADocument(pdfa.PDFA4)
+			doc := mustPDFADoc(t, pdfa.PDFA4)
 			action := &object.Dictionary{}
 			action.Set("S", s)
 			if s == "Named" {
@@ -336,7 +336,7 @@ func TestValidatePDFA_ForbiddenActions(t *testing.T) {
 	})
 
 	t.Run("JavaScript forbidden in PDFA-1b", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA1b)
+		doc := mustPDFADoc(t, pdfa.PDFA1b)
 		action := &object.Dictionary{}
 		action.Set("S", object.Name("JavaScript"))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: action}
@@ -349,7 +349,7 @@ func TestValidatePDFA_ForbiddenActions(t *testing.T) {
 }
 
 func TestValidatePDFA_OpenAction(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	action := &object.Dictionary{}
 	action.Set("S", object.Name("ImportData"))
 	doc.Objects[20] = &object.IndirectObject{Number: 20, Value: action}
@@ -365,7 +365,7 @@ func TestValidatePDFA_OpenAction(t *testing.T) {
 func TestValidatePDFA_NamedActions(t *testing.T) {
 	t.Run("allowed named actions", func(t *testing.T) {
 		for _, name := range []object.Name{"NextPage", "PrevPage", "FirstPage", "LastPage"} {
-			doc := NewPDFADocument(pdfa.PDFA4)
+			doc := mustPDFADoc(t, pdfa.PDFA4)
 			action := &object.Dictionary{}
 			action.Set("S", object.Name("Named"))
 			action.Set("N", name)
@@ -379,7 +379,7 @@ func TestValidatePDFA_NamedActions(t *testing.T) {
 	})
 
 	t.Run("forbidden named action", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		action := &object.Dictionary{}
 		action.Set("S", object.Name("Named"))
 		action.Set("N", object.Name("Print"))
@@ -408,7 +408,7 @@ func TestValidatePDFA_WidgetAA(t *testing.T) {
 		{pdfa.PDFA3b, "6.4.1"},
 	} {
 		t.Run(c.rule+" rejects widget AA", func(t *testing.T) {
-			doc := NewPDFADocument(c.level)
+			doc := mustPDFADoc(t, c.level)
 			widget := &object.Dictionary{}
 			widget.Set("Subtype", object.Name("Widget"))
 			widget.Set("AA", &object.Dictionary{})
@@ -431,7 +431,7 @@ func TestValidatePDFA_WidgetAA(t *testing.T) {
 	}
 
 	t.Run("PDFA-4 allows widget AA", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		widget := &object.Dictionary{}
 		widget.Set("Subtype", object.Name("Widget"))
 		widget.Set("AA", &object.Dictionary{})
@@ -445,7 +445,7 @@ func TestValidatePDFA_WidgetAA(t *testing.T) {
 }
 
 func TestValidatePDFA_WidgetNoAction(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	widget := &object.Dictionary{}
 	widget.Set("Subtype", object.Name("Widget"))
 	widget.Set("A", &object.Dictionary{})
@@ -458,7 +458,7 @@ func TestValidatePDFA_WidgetNoAction(t *testing.T) {
 }
 
 func TestValidatePDFA_NoXFA(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 	acroForm := &object.Dictionary{}
 	acroForm.Set("XFA", &object.Stream{})
@@ -471,7 +471,7 @@ func TestValidatePDFA_NoXFA(t *testing.T) {
 }
 
 func TestValidatePDFA_NeedAppearances(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA4)
+	doc := mustPDFADoc(t, pdfa.PDFA4)
 	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 	acroForm := &object.Dictionary{}
 	acroForm.Set("NeedAppearances", object.Boolean(true))
@@ -488,7 +488,7 @@ func TestValidatePDFA_NeedAppearances(t *testing.T) {
 func TestValidatePDFA_SignatureByteRange(t *testing.T) {
 	raw := make([]byte, 1000)
 	mk := func(br object.Array) *Document {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		sig := &object.Dictionary{}
 		sig.Set("Type", object.Name("Sig"))
 		sig.Set("SubFilter", object.Name("adbe.pkcs7.detached"))
@@ -519,7 +519,7 @@ func TestValidatePDFA_SignatureByteRange(t *testing.T) {
 // forbidden outright, each cited under the level's clause.
 func TestValidatePDFA_FormXObjectRules(t *testing.T) {
 	mk := func(key object.Name) *Document {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		form := &object.Stream{Dict: object.Dictionary{}}
 		form.Dict.Set("Type", object.Name("XObject"))
 		form.Dict.Set("Subtype", object.Name("Form"))
@@ -537,7 +537,7 @@ func TestValidatePDFA_FormXObjectRules(t *testing.T) {
 		t.Error("reference XObject (/Ref) must be flagged as 6.2.9 at PDF/A-2b")
 	}
 	// A plain form XObject with neither key is clean.
-	clean := NewPDFADocument(pdfa.PDFA4)
+	clean := mustPDFADoc(t, pdfa.PDFA4)
 	form := &object.Stream{Dict: object.Dictionary{}}
 	form.Dict.Set("Subtype", object.Name("Form"))
 	clean.Objects[20] = &object.IndirectObject{Number: 20, Value: form}
@@ -549,7 +549,7 @@ func TestValidatePDFA_FormXObjectRules(t *testing.T) {
 // 6.5.3: at PDF/A-1 an annotation /CA (opacity) must be 1.0; other levels allow it.
 func TestValidatePDFA_AnnotationOpacity(t *testing.T) {
 	mk := func(ca object.Object) *Document {
-		doc := NewPDFADocument(pdfa.PDFA1b)
+		doc := mustPDFADoc(t, pdfa.PDFA1b)
 		annot := &object.Dictionary{}
 		annot.Set("Type", object.Name("Annot"))
 		annot.Set("Subtype", object.Name("Text"))
@@ -578,7 +578,7 @@ func TestValidatePDFA_AnnotationOpacity(t *testing.T) {
 
 func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 	t.Run("missing Print flag", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		annot := &object.Dictionary{}
 		annot.Set("Type", object.Name("Annot"))
 		annot.Set("Subtype", object.Name("Text"))
@@ -594,7 +594,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 	})
 
 	t.Run("Hidden flag set", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		annot := &object.Dictionary{}
 		annot.Set("Type", object.Name("Annot"))
 		annot.Set("Subtype", object.Name("Text"))
@@ -610,7 +610,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 	})
 
 	t.Run("Popup exempt from F requirement", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		annot := &object.Dictionary{}
 		annot.Set("Type", object.Name("Annot"))
 		annot.Set("Subtype", object.Name("Popup"))
@@ -627,7 +627,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 
 func TestValidatePDFA_AnnotationAppearance(t *testing.T) {
 	t.Run("missing AP", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		annot := &object.Dictionary{}
 		annot.Set("Type", object.Name("Annot"))
 		annot.Set("Subtype", object.Name("Text"))
@@ -642,7 +642,7 @@ func TestValidatePDFA_AnnotationAppearance(t *testing.T) {
 	})
 
 	t.Run("Link exempt from AP", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		annot := &object.Dictionary{}
 		annot.Set("Type", object.Name("Annot"))
 		annot.Set("Subtype", object.Name("Link"))
@@ -657,7 +657,7 @@ func TestValidatePDFA_AnnotationAppearance(t *testing.T) {
 	})
 
 	t.Run("Popup exempt from AP", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		annot := &object.Dictionary{}
 		annot.Set("Type", object.Name("Annot"))
 		annot.Set("Subtype", object.Name("Popup"))
@@ -673,7 +673,7 @@ func TestValidatePDFA_AnnotationAppearance(t *testing.T) {
 
 func TestValidatePDFA_MetadataVersion(t *testing.T) {
 	t.Run("PDFA-4 missing rev", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		// Replace metadata with one missing pdfaid:rev
 		xmp := []byte(`<?xpacket begin="` + "\xEF\xBB\xBF" + `" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -694,7 +694,7 @@ func TestValidatePDFA_MetadataVersion(t *testing.T) {
 	})
 
 	t.Run("PDFA-4 wrong rev", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		xmp := []byte(`<?xpacket begin="` + "\xEF\xBB\xBF" + `" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -721,7 +721,7 @@ func TestValidatePDFA_MetadataVersion(t *testing.T) {
 	})
 
 	t.Run("PDFA-4 with conformance", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		xmp := []byte(`<?xpacket begin="` + "\xEF\xBB\xBF" + `" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -776,7 +776,7 @@ func addExtGStateToDoc(doc *Document, gs *object.Dictionary) {
 
 func TestValidatePDFA_Transparency(t *testing.T) {
 	t.Run("PDFA-1b rejects SMask", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA1b)
+		doc := mustPDFADoc(t, pdfa.PDFA1b)
 		gs := &object.Dictionary{}
 		gs.Set("SMask", &object.Dictionary{})
 		addExtGStateToDoc(doc, gs)
@@ -788,7 +788,7 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	})
 
 	t.Run("PDFA-1b allows SMask None", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA1b)
+		doc := mustPDFADoc(t, pdfa.PDFA1b)
 		gs := &object.Dictionary{}
 		gs.Set("SMask", object.Name("None"))
 		addExtGStateToDoc(doc, gs)
@@ -800,7 +800,7 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	})
 
 	t.Run("PDFA-1b rejects non-Normal BM", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA1b)
+		doc := mustPDFADoc(t, pdfa.PDFA1b)
 		gs := &object.Dictionary{}
 		gs.Set("BM", object.Name("Multiply"))
 		addExtGStateToDoc(doc, gs)
@@ -812,7 +812,7 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 	})
 
 	t.Run("PDFA-2b allows transparency", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		gs := &object.Dictionary{}
 		gs.Set("SMask", &object.Dictionary{})
 		gs.Set("BM", object.Name("Multiply"))
@@ -827,7 +827,7 @@ func TestValidatePDFA_Transparency(t *testing.T) {
 
 func TestValidatePDFA_ImageChecks(t *testing.T) {
 	t.Run("alternate images", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		img := &object.Stream{Dict: object.Dictionary{}, Data: []byte{0xFF}}
 		img.Dict.Set("Subtype", object.Name("Image"))
 		img.Dict.Set("Alternates", object.Array{})
@@ -840,7 +840,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 	})
 
 	t.Run("interpolate true", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		img := &object.Stream{Dict: object.Dictionary{}, Data: []byte{0xFF}}
 		img.Dict.Set("Subtype", object.Name("Image"))
 		img.Dict.Set("Interpolate", object.Boolean(true))
@@ -853,7 +853,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 	})
 
 	t.Run("OPI in XObject", func(t *testing.T) {
-		doc := NewPDFADocument(pdfa.PDFA4)
+		doc := mustPDFADoc(t, pdfa.PDFA4)
 		img := &object.Stream{Dict: object.Dictionary{}, Data: []byte{0xFF}}
 		img.Dict.Set("Subtype", object.Name("Image"))
 		img.Dict.Set("OPI", &object.Dictionary{})
@@ -869,7 +869,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 func TestValidatePDFA_RoundTrip(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 
 			var buf bytes.Buffer
 			if err := doc.Write(&buf); err != nil {
@@ -944,7 +944,7 @@ func TestGenerateXMPMetadata(t *testing.T) {
 }
 
 func TestDefaultSRGBProfile(t *testing.T) {
-	profile := DefaultSRGBProfile()
+	profile := mustSRGBProfile(t)
 
 	if len(profile) < 128 {
 		t.Fatalf("profile too short: %d bytes", len(profile))
@@ -1037,7 +1037,7 @@ func TestResolveDict(t *testing.T) {
 func TestValidatePDFA_CleanDocument(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			errs := ValidatePDFA(doc, level)
 			if len(errs) > 0 {
 				t.Errorf("clean %s document has %d validation errors:", level, len(errs))
@@ -1667,7 +1667,7 @@ func TestResolveChainsAndCycles(t *testing.T) {
 // A9: annotations written as direct dictionaries in a page's /Annots must be
 // subject to the same checks as top-level annotation objects.
 func TestValidatePDFA_DirectAnnotationsChecked(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	page := addTestPage(doc)
 
 	annot := &object.Dictionary{}
@@ -1686,7 +1686,7 @@ func TestValidatePDFA_DirectAnnotationsChecked(t *testing.T) {
 
 // A9: direct annotations with direct forbidden actions must be flagged.
 func TestValidatePDFA_DirectAnnotationForbiddenAction(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	page := addTestPage(doc)
 
 	action := &object.Dictionary{}
@@ -1707,7 +1707,7 @@ func TestValidatePDFA_DirectAnnotationForbiddenAction(t *testing.T) {
 // A13: Separation/DeviceN rules must fire when Resources is a direct
 // dictionary on the page (the common case).
 func TestValidatePDFA_SeparationInDirectResources(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	page := addTestPage(doc)
 
 	// DeviceN with 33 colorants exceeds the PDF/A-2 limit of 32.
@@ -1732,7 +1732,7 @@ func TestValidatePDFA_SeparationInDirectResources(t *testing.T) {
 // genuinely different transforms for the same colorant are not.
 func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 	build := func(fn2Body object.Object) *Document {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		page := addTestPage(doc)
 
 		fn := &object.Dictionary{}
@@ -1776,7 +1776,7 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 
 // A19: forbidden actions hiding behind /Next chains must be found.
 func TestValidatePDFA_ActionNextChain(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	launch := &object.Dictionary{}
 	launch.Set("S", object.Name("Launch"))
 	action := &object.Dictionary{}
@@ -1793,7 +1793,7 @@ func TestValidatePDFA_ActionNextChain(t *testing.T) {
 	a := &object.Dictionary{}
 	a.Set("S", object.Name("GoTo"))
 	a.Set("Next", a)
-	doc2 := NewPDFADocument(pdfa.PDFA2b)
+	doc2 := mustPDFADoc(t, pdfa.PDFA2b)
 	catalog2 := doc2.ResolveDict(doc2.Trailer.Get("Root"))
 	catalog2.Set("OpenAction", a)
 	ValidatePDFA(doc2, pdfa.PDFA2b) // must not hang
@@ -1801,7 +1801,7 @@ func TestValidatePDFA_ActionNextChain(t *testing.T) {
 
 // A19: page dictionaries must not carry /AA at 1b/2b/3b.
 func TestValidatePDFA_PageAA(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	page := addTestPage(doc)
 	page.Set("AA", &object.Dictionary{})
 	if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.5.2") {
@@ -1830,7 +1830,7 @@ func TestDecodePDFTextString(t *testing.T) {
 
 // Validation output must be deterministic (checks iterate Go maps).
 func TestValidatePDFA_DeterministicOutput(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	page := addTestPage(doc)
 	// Provoke several errors from different checks.
 	page.Set("AA", &object.Dictionary{})
@@ -1864,7 +1864,7 @@ func TestContentScanHandlesFilterArrays(t *testing.T) {
 	zw.Write(raw.Bytes())
 	zw.Close()
 
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	page := addTestPage(doc)
 	content := &object.Stream{Dict: object.Dictionary{}, Data: z.Bytes()}
 	content.Dict.Set("Filter", object.Array{object.Name("FlateDecode")})
@@ -1879,7 +1879,7 @@ func TestContentScanHandlesFilterArrays(t *testing.T) {
 
 // A31: inheritable page attributes come from the Pages ancestors.
 func TestPageSizeLimitInherited(t *testing.T) {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	page := addTestPage(doc)
 	page.Delete("MediaBox")
 	pages := doc.Objects[2].Value.(*object.Dictionary)
@@ -1892,7 +1892,7 @@ func TestPageSizeLimitInherited(t *testing.T) {
 
 // C21: builder accepts title/author and stays conformant.
 func TestNewPDFADocumentWithInfo(t *testing.T) {
-	doc := NewPDFADocumentWithInfo(pdfa.PDFA2b, "My Title", "An Author")
+	doc := mustPDFADocWithInfo(t, pdfa.PDFA2b, "My Title", "An Author")
 	meta := doc.Objects[3].Value.(*object.Stream)
 	if !bytes.Contains(meta.Data, []byte("My Title")) || !bytes.Contains(meta.Data, []byte("An Author")) {
 		t.Error("title/author missing from generated XMP")

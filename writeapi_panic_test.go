@@ -411,7 +411,7 @@ func TestWritingSurvivesAHostileObjectGraph(t *testing.T) {
 // an error.
 func TestWritingToAFailingWriterReportsRatherThanPanics(t *testing.T) {
 	build := func() *Document {
-		d := NewPDFADocument(pdfa.PDFA2b)
+		d := mustPDFADoc(t, pdfa.PDFA2b)
 		var b content.Builder
 		b.SetRGB(0, 0, 0).Rect(0, 0, 10, 10).Fill()
 		if _, err := d.AddPage(Page{Width: 100, Height: 100, Content: &b}); err != nil {

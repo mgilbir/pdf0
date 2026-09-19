@@ -352,7 +352,7 @@ func TestAlternateTextReachesTheElement(t *testing.T) {
 func TestTaggedDocumentValidatesAtLevelA(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA1a, pdfa.PDFA2a} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			var b content.Builder
 			b.BeginTagged("P", 0).SetRGB(0, 0, 0).Rect(10, 10, 100, 20).Fill().EndMarked()
 			page, err := doc.AddPage(Page{Width: 200, Height: 200, Content: &b})

@@ -30,7 +30,7 @@ func loadRefPDF(t *testing.T) []byte {
 // (audit C6).
 func TestWrittenXrefIs20Bytes(t *testing.T) {
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-		doc := NewPDFADocumentWithInfo(lvl, "T", "A")
+		doc := mustPDFADocWithInfo(t, lvl, "T", "A")
 		var buf bytes.Buffer
 		if err := doc.Write(&buf); err != nil {
 			t.Fatalf("level %v: write: %v", lvl, err)

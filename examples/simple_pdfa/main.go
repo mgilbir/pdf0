@@ -9,6 +9,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	pdf "github.com/mgilbir/pdf0"
@@ -17,7 +18,10 @@ import (
 )
 
 func main() {
-	doc := pdf.NewPDFADocument(pdfa.PDFA4)
+	doc, err := pdf.NewPDFADocument(pdfa.PDFA4)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Draw. The builder emits the operators and records which resources the
 	// drawing named; AddPage checks that every one of them is defined.

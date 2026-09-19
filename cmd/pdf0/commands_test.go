@@ -16,7 +16,10 @@ import (
 // returns its path.
 func writeTestPDF(t *testing.T, dir string, level pdfa.Level, mutate func(*pdf0.Document)) string {
 	t.Helper()
-	doc := pdf0.NewPDFADocument(level)
+	doc, err := pdf0.NewPDFADocument(level)
+	if err != nil {
+		t.Fatalf("building a %s skeleton: %v", level, err)
+	}
 	if mutate != nil {
 		mutate(doc)
 	}

@@ -62,7 +62,7 @@ func TestStreamDataHonoursTheDecodedSizeLimit(t *testing.T) {
 		t.Fatalf("a megabyte is within the default ceiling: %v", err)
 	}
 
-	raw := minimalPDF()
+	raw := minimalPDF(t)
 	tight, err := Read(bytes.NewReader(raw), int64(len(raw)), WithMaxDecodedStreamBytes(1024))
 	if err != nil {
 		t.Fatalf("reading with a lowered ceiling: %v", err)
@@ -111,11 +111,12 @@ func TestStreamDataOnANilStream(t *testing.T) {
 
 // minimalPDF is the smallest document Read accepts, for tests that need a
 // Document carrying options rather than one built by hand.
-func minimalPDF() []byte {
-	doc := NewPDFADocument(pdfa.PDFA2b)
+func minimalPDF(tb testing.TB) []byte {
+	tb.Helper()
+	doc := mustPDFADoc(tb, pdfa.PDFA2b)
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {
-		panic(err)
+		tb.Fatalf("writing the minimal document: %v", err)
 	}
 	return buf.Bytes()
 }
