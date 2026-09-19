@@ -39,6 +39,18 @@ const (
 	PDFA1a
 	PDFA2a
 	PDFA3a
+
+	// The PDF/A-4 variants, ISO 19005-4 Annexes A and B. Each relaxes something
+	// the base part forbids — arbitrary embedded files for 4f, 3D and RichMedia
+	// annotations for 4e — and takes on requirements in exchange.
+	//
+	// They are levels rather than something read out of the file because one
+	// question cannot be answered any other way: a part-4 file carrying no
+	// pdfaid:conformance is a valid *plain* PDF/A-4 file, so "this should have
+	// said E" is only meaningful to a caller who asked for PDF/A-4e. Appended
+	// rather than inserted so the existing constants keep their values.
+	PDFA4E
+	PDFA4F
 )
 
 // pdfaCache is this engine's memo for one run: the annotations found directly
@@ -70,6 +82,10 @@ func (l Level) String() string {
 		return "PDF/A-2a"
 	case PDFA3a:
 		return "PDF/A-3a"
+	case PDFA4E:
+		return "PDF/A-4e"
+	case PDFA4F:
+		return "PDF/A-4f"
 	default:
 		return fmt.Sprintf("PDFALevel(%d)", int(l))
 	}
@@ -77,6 +93,21 @@ func (l Level) String() string {
 
 // IsA reports whether l is a Level A (accessible) conformance level.
 func (l Level) IsA() bool { return l == PDFA1a || l == PDFA2a || l == PDFA3a }
+
+// Is4Variant reports whether l is one of the PDF/A-4 variants (4e, 4f).
+func (l Level) Is4Variant() bool { return l == PDFA4E || l == PDFA4F }
+
+// variantConformance is the pdfaid:conformance value a variant requires: "E"
+// for PDF/A-4e, "F" for PDF/A-4f, and "" for every level that is not one.
+func (l Level) variantConformance() string {
+	switch l {
+	case PDFA4E:
+		return "E"
+	case PDFA4F:
+		return "F"
+	}
+	return ""
+}
 
 // BaseB returns the Level B conformance level whose requirements a Level A level
 // includes (1a→1b, 2a→2b, 3a→3b); for a non-A level it returns the level itself.
@@ -88,6 +119,11 @@ func (l Level) BaseB() Level {
 		return PDFA2b
 	case PDFA3a:
 		return PDFA3b
+	case PDFA4E, PDFA4F:
+		// Not a Level B, but the same relationship: every base PDF/A-4
+		// requirement applies to a variant, so a level check written against
+		// the base part answers correctly for one.
+		return PDFA4
 	}
 	return l
 }
@@ -150,6 +186,11 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 	// families (see validatePDFALevelA).
 	if level.IsA() {
 		return ValidateLevelAView(doc, level, rawData)
+	}
+	// The PDF/A-4 variants are the base part plus what the variant takes on,
+	// validated the same way (see ValidateVariant4View).
+	if level.Is4Variant() {
+		return ValidateVariant4View(doc, level, rawData)
 	}
 
 	var errs []Violation
