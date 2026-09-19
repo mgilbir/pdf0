@@ -3,8 +3,8 @@ package fonts
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"sort"
+	"strconv"
 
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/object"
@@ -610,9 +610,18 @@ endcodespacerange
 		if end > len(pairs) {
 			end = len(pairs)
 		}
-		fmt.Fprintf(&b, "%d beginbfchar\n", end-start)
+		b.WriteString(strconv.Itoa(end - start))
+		b.WriteString(" beginbfchar\n")
 		for _, p := range pairs[start:end] {
-			fmt.Fprintf(&b, "<%0*X> <%s>\n", digits, p[0], utf16beHex(rune(p[1])))
+			// Written by hand rather than through fmt. This runs once per glyph
+			// in every embedded font, and fmt's two calls — the Fprintf and the
+			// Sprintf inside utf16beHex — allocated a string per entry and cost
+			// more than the rest of building the document's fonts put together.
+			b.WriteByte('<')
+			appendHex(&b, p[0], digits)
+			b.WriteString("> <")
+			appendUTF16BE(&b, rune(p[1]))
+			b.WriteString(">\n")
 		}
 		b.WriteString("endbfchar\n")
 	}
@@ -624,16 +633,38 @@ end
 	return b.Bytes()
 }
 
-// utf16beHex renders a rune as the hexadecimal UTF-16BE a bfchar destination
+// appendHex writes v as uppercase hexadecimal, zero-padded to at least n
+// digits.
+//
+// At *least*, which is the part worth stating: this replaced fmt's "%0*X", and
+// a width there is a minimum rather than a truncation. A fixed-width version
+// passes every test built from plausible data — a one-byte codespace holds
+// codes 0..255 — and silently writes the wrong code for the font that breaks
+// that assumption. The equivalence test caught it, and only on random input.
+func appendHex(b *bytes.Buffer, v, n int) {
+	const digits = "0123456789ABCDEF"
+	width := 1
+	for u := uint(v); u > 0xF; u >>= 4 {
+		width++
+	}
+	if width < n {
+		width = n
+	}
+	for shift := (width - 1) * 4; shift >= 0; shift -= 4 {
+		b.WriteByte(digits[(v>>shift)&0xF])
+	}
+}
+
+// appendUTF16BE writes a rune as the hexadecimal UTF-16BE a bfchar destination
 // takes, including the surrogate pair an astral character needs.
-func utf16beHex(r rune) string {
+func appendUTF16BE(b *bytes.Buffer, r rune) {
 	if r > 0xFFFF {
 		r -= 0x10000
-		hi := 0xD800 + (r >> 10)
-		lo := 0xDC00 + (r & 0x3FF)
-		return fmt.Sprintf("%04X%04X", hi, lo)
+		appendHex(b, 0xD800+int(r>>10), 4)
+		appendHex(b, 0xDC00+int(r&0x3FF), 4)
+		return
 	}
-	return fmt.Sprintf("%04X", r)
+	appendHex(b, int(r), 4)
 }
 
 // forbiddenInToUnicode reports the code points a ToUnicode CMap may not map to
