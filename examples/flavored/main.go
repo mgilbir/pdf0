@@ -21,6 +21,7 @@ import (
 	"image/color"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	pdf "github.com/mgilbir/pdf0"
@@ -38,7 +39,24 @@ const (
 
 func main() {
 	fontPath := flag.String("font", "", "a TrueType or OpenType file to embed; the bundled Noto Sans if empty")
+	outDir := flag.String("o", "", "directory to write the documents into; a fresh temporary one if empty")
 	flag.Parse()
+
+	// Somewhere the caller named, or somewhere that is nobody's working
+	// directory. This example writes one document per flavour, so it cannot
+	// write to stdout the way the single-document examples do — but it should
+	// not leave four files wherever it happened to be run either.
+	dir := *outDir
+	if dir == "" {
+		var err error
+		if dir, err = os.MkdirTemp("", "pdf0-flavored-"); err != nil {
+			fmt.Fprintf(os.Stderr, "making an output directory: %v\n", err)
+			os.Exit(1)
+		}
+	} else if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "making %s: %v\n", dir, err)
+		os.Exit(1)
+	}
 
 	face, err := loadFace(*fontPath)
 	if err != nil {
@@ -74,14 +92,16 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%s: drawing: %v\n", f.name, err)
 			os.Exit(1)
 		}
-		report(f.name, doc)
+		report(dir, f.name, doc)
 	}
+	fmt.Printf("\nwritten to %s\n", dir)
 }
 
 // report saves the document and says what happened, which is the whole point of
 // the example.
-func report(name string, doc *pdf.Document) {
-	file := "flavored-" + strings.NewReplacer("/", "", " ", "-", ".", "").Replace(name) + ".pdf"
+func report(dir, name string, doc *pdf.Document) {
+	file := filepath.Join(dir, "flavored-"+
+		strings.NewReplacer("/", "", " ", "-", ".", "").Replace(name)+".pdf")
 	out, err := os.Create(file)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
@@ -104,7 +124,7 @@ func report(name string, doc *pdf.Document) {
 	if claimed {
 		what = "verified as " + level.String()
 	}
-	fmt.Printf("%-14s  wrote %s (%d bytes, %s)\n", name, file, info.Size(), what)
+	fmt.Printf("%-14s  wrote %s (%d bytes, %s)\n", name, filepath.Base(file), info.Size(), what)
 }
 
 // drawPage puts text, a chart and an image on a page.

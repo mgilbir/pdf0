@@ -30,7 +30,7 @@ request (Go 1.25.x, `ubuntu-latest`):
 2. `go vet ./...`
 3. `go build ./...`
 4. `go test ./... -count=1`
-5. `go run ./examples/simple_pdfa` must produce a non-empty `output.pdf`, and
+5. `go run ./examples/simple_pdfa > out.pdf` must produce a non-empty PDF, and
    `go run ./examples/extract_images` must exit 0
 
 **No conformance corpus is fetched in CI**, so every corpus-gated test skips

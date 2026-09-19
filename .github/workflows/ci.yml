@@ -68,9 +68,11 @@ jobs:
         # it wrote do not come back decoded, so it guards the extraction API the
         # docs describe (docs audit D13).
         run: |
-          go run ./examples/simple_pdfa
-          test -s output.pdf
-          rm output.pdf
+          # The examples write to stdout, so a non-empty file with a PDF
+          # header is the assertion; nothing is left in the working tree.
+          go run ./examples/simple_pdfa > pdfa.pdf
+          test -s pdfa.pdf
+          head -c 5 pdfa.pdf | grep -q '%PDF-'
           go run ./examples/extract_images
           go run ./examples/sign_verify
           # HTML + CSS + a page size -> a PDF, which is what the layout half of
