@@ -37,8 +37,13 @@ testdata/pdf20examples/
 # ISO spec PDFs (copyrighted)
 spec/
 
-# Generated example output
+# Generated example output. The examples write to stdout now — or, for the one
+# that produces several documents, to a directory it is told about — so nothing
+# should land here. These stay as a backstop: `git add -A` swept example output
+# into a commit twice, and a rule costs nothing.
 output.pdf
+/flavored-*.pdf
+/out.pdf
 
 # veraPDF test corpus (downloaded via `make corpus`)
 testdata/verapdf-corpus/
