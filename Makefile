@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk
+.PHONY: test cc-sweep cc-sweep-limited check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -135,10 +135,33 @@ clean-facturx:
 FIRST ?= 4200
 LAST  ?= 4203
 
+# Limits for cc-sweep-limited. The 2026-09-19 sweep peaked at 4.58 GB, so 6G is
+# headroom rather than a guess.
+CC_MEM  ?= 6G
+CC_CPU  ?= 800%
+CC_SECS ?= 5400
+
 cc-sweep:
 	mkdir -p testdata/cc/run
 	go build -tags devtools -o testdata/cc/run/corpusprobe ./internal/cmd/corpusprobe
 	testdata/cc/sweep.sh $(FIRST) $(LAST)
+
+# The same sweep inside a cgroup that stops it taking the machine with it. The
+# probe already bounds itself, but the sweep also fetches and unzips, and a bug
+# anywhere in that should hit a wall rather than swap. MemorySwapMax=0 is the
+# one that matters: without it a runaway thrashes for hours instead of failing.
+cc-sweep-limited:
+	mkdir -p testdata/cc/run
+	go build -tags devtools -o testdata/cc/run/corpusprobe ./internal/cmd/corpusprobe
+	systemd-run --user --unit=pdf0-ccsweep --collect \
+		-p MemoryMax=$(CC_MEM) -p MemorySwapMax=0 -p CPUQuota=$(CC_CPU) \
+		-p TasksMax=256 -p RuntimeMaxSec=$(CC_SECS) \
+		--working-directory="$(CURDIR)" \
+		--setenv=CORPUSPROBE="$(CURDIR)/testdata/cc/run/corpusprobe" \
+		testdata/cc/sweep.sh $(FIRST) $(LAST)
+	@echo "started as pdf0-ccsweep.service — follow with:"
+	@echo "  systemctl --user status pdf0-ccsweep"
+	@echo "  tail -f testdata/cc/run/p*.log"
 
 clean-cc:
 	rm -rf testdata/cc/run
