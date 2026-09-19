@@ -285,8 +285,8 @@ on `ubuntu-latest` with Go 1.25.x. Five steps, in order:
 2. **go vet** — `go vet ./...`.
 3. **build** — `go build ./...`.
 4. **test** — `go test ./... -count=1`.
-5. **example runs** — `go run ./examples/simple_pdfa`, then asserts `output.pdf`
-   is non-empty and removes it, then `go run ./examples/extract_images`, which
+5. **example runs** — `go run ./examples/simple_pdfa > pdfa.pdf`, then asserts it
+   is non-empty and a PDF, then `go run ./examples/extract_images`, which
    exits non-zero unless the images it wrote come back decoded. These keep the
    examples the docs point at from rotting.
 
