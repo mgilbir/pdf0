@@ -274,7 +274,7 @@ func TestPageGroupIsWrittenWhenAsked(t *testing.T) {
 func TestBlendingPageValidates(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA2b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			gs, err := BlendWithOpacity(BlendMultiply, 0.5, 1)
 			if err != nil {
 				t.Fatalf("building the graphics state: %v", err)

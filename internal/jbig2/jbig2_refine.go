@@ -25,7 +25,7 @@ var jbRefReusedContexts = [2]int{0x0020, 0x0008}
 // caller-owned GR context. offX/offY position the reference under the output
 // (output pixel (x,y) sees reference pixel (x-offX, y-offY)). template must be 0
 // or 1; at holds the two AT pixels for template 0 (coding AT then reference AT).
-func decodeRefinement(dec *mqDecoder, cx []mqState, w, h, template int, ref *jbBitmap, offX, offY int, tpgron bool, at []atPixel) *jbBitmap {
+func decodeRefinement(dec *mqDecoder, cx []mqState, w, h, template int, ref *jbBitmap, offX, offY int, tpgron bool, at []atPixel) (*jbBitmap, error) {
 	coding := append([]atPixel{}, jbRefCodingTemplates[template]...)
 	reference := append([]atPixel{}, jbRefReferenceTemplates[template]...)
 	if template == 0 {
@@ -37,7 +37,10 @@ func decodeRefinement(dec *mqDecoder, cx []mqState, w, h, template int, ref *jbB
 		}
 	}
 
-	out := newJBBitmap(w, h, 0)
+	out, err := newJBBitmap(w, h, 0)
+	if err != nil {
+		return nil, err
+	}
 	ltp := 0
 	for y := 0; y < h; y++ {
 		if tpgron {
@@ -73,5 +76,5 @@ func decodeRefinement(dec *mqDecoder, cx []mqState, w, h, template int, ref *jbB
 			out.pix[y*w+x] = byte(dec.decode(cx, ctx))
 		}
 	}
-	return out
+	return out, nil
 }

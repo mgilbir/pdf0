@@ -58,15 +58,19 @@ const (
 	maxJBIG2GrayCells   = 1 << 20 // halftone grid cells
 )
 
-// errJBIG2Budget is panicked by newJBBitmap on an over-budget allocation and
-// recovered at the Decode boundary. Using a panic keeps the single
-// allocation choke point authoritative: every bitmap flows through newJBBitmap,
-// so no allocation site can be missed, while genuine bugs still propagate.
+// errJBIG2Budget is returned by newJBBitmap for an allocation that is negative
+// or over the per-bitmap pixel budget.
+//
+// It used to be panicked and recovered at the Decode boundary, which kept the
+// single choke point authoritative at the price of a library that panicked.
+// Every allocation still goes through newJBBitmap — that part was worth
+// keeping — but it is an error now, returned and carried out through every
+// caller like any other.
 var errJBIG2Budget = errors.New("jbig2: bitmap exceeds pixel budget")
 
-func newJBBitmap(w, h int, fill byte) *jbBitmap {
+func newJBBitmap(w, h int, fill byte) (*jbBitmap, error) {
 	if w < 0 || h < 0 || int64(w)*int64(h) > maxJBIG2Pixels {
-		panic(errJBIG2Budget)
+		return nil, errJBIG2Budget
 	}
 	b := &jbBitmap{w: w, h: h, pix: make([]byte, w*h)}
 	if fill != 0 {
@@ -74,7 +78,7 @@ func newJBBitmap(w, h int, fill byte) *jbBitmap {
 			b.pix[i] = fill
 		}
 	}
-	return b
+	return b, nil
 }
 
 // reserve charges the area w*h against the stream-wide pixel budget, returning
@@ -166,18 +170,6 @@ func Decode(globals, data []byte, width, height int) (out []byte, err error) {
 	if int64(width)*int64(height) > maxJBIG2Pixels {
 		return nil, errJBIG2Unsupported
 	}
-	// A bitmap allocation over budget panics with errJBIG2Budget from the single
-	// newJBBitmap choke point; convert it to a clean decode error here. Any other
-	// panic is a genuine bug and is re-raised.
-	defer func() {
-		if r := recover(); r != nil {
-			if r == errJBIG2Budget {
-				out, err = nil, errJBIG2Unsupported
-				return
-			}
-			panic(r)
-		}
-	}()
 	d := &jbig2Decoder{imgW: width, imgH: height}
 	// Account the page canvas once; region and dictionary segments add their own
 	// areas as they are decoded.
@@ -451,7 +443,11 @@ func (d *jbig2Decoder) readPageInfo(seg jbSegment) error {
 		w, h = uint32(d.imgW), uint32(d.imgH)
 	}
 	defPixel := (flags >> 2) & 1
-	d.page = newJBBitmap(int(w), int(h), defPixel)
+	page, err := newJBBitmap(int(w), int(h), defPixel)
+	if err != nil {
+		return err
+	}
+	d.page = page
 	return nil
 }
 
@@ -527,7 +523,11 @@ func (d *jbig2Decoder) readGenericRegion(seg jbSegment) error {
 	}
 	if d.page == nil {
 		// No explicit page info; make the region the page.
-		d.page = newJBBitmap(d.imgW, d.imgH, 0)
+		page, err := newJBBitmap(d.imgW, d.imgH, 0)
+		if err != nil {
+			return err
+		}
+		d.page = page
 	}
 	d.page.blit(bmp, ri.x, ri.y, ri.combOp)
 	return nil
@@ -575,14 +575,17 @@ func (b *jbBitmap) blit(src *jbBitmap, dx, dy, op int) {
 
 // subregion copies a w x h window of b starting at (x,y) into a new bitmap,
 // reading 0 outside b's bounds.
-func (b *jbBitmap) subregion(x, y, w, h int) *jbBitmap {
-	s := newJBBitmap(w, h, 0)
+func (b *jbBitmap) subregion(x, y, w, h int) (*jbBitmap, error) {
+	s, err := newJBBitmap(w, h, 0)
+	if err != nil {
+		return nil, err
+	}
 	for j := 0; j < h; j++ {
 		for i := 0; i < w; i++ {
 			s.pix[j*w+i] = b.get(x+i, y+j)
 		}
 	}
-	return s
+	return s, nil
 }
 
 // readRefinementRegion decodes a standalone generic refinement region (types
@@ -625,19 +628,34 @@ func (d *jbig2Decoder) readRefinementRegion(seg jbSegment) error {
 	onPage := ref == nil
 	if onPage {
 		if d.page == nil {
-			d.page = newJBBitmap(d.imgW, d.imgH, 0)
+			page, err := newJBBitmap(d.imgW, d.imgH, 0)
+			if err != nil {
+				return err
+			}
+			d.page = page
 		}
-		ref = d.page.subregion(ri.x, ri.y, ri.w, ri.h)
+		sub, err := d.page.subregion(ri.x, ri.y, ri.w, ri.h)
+		if err != nil {
+			return err
+		}
+		ref = sub
 	}
 	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 	cx := make([]mqState, 1<<13)
-	out := decodeRefinement(dec, cx, ri.w, ri.h, template, ref, 0, 0, tpgron, at)
+	out, err := decodeRefinement(dec, cx, ri.w, ri.h, template, ref, 0, 0, tpgron, at)
+	if err != nil {
+		return err
+	}
 	if seg.typ == 40 { // intermediate: stored, not composed
 		d.storeIntermediate(seg.number, out)
 		return nil
 	}
 	if d.page == nil {
-		d.page = newJBBitmap(d.imgW, d.imgH, 0)
+		page, err := newJBBitmap(d.imgW, d.imgH, 0)
+		if err != nil {
+			return err
+		}
+		d.page = page
 	}
 	// Refining the page in place replaces that region; refining a referenced
 	// intermediate region composes the result with the region's operator.
@@ -669,7 +687,10 @@ func decodeGenericMMR(data []byte, w, h int) (*jbBitmap, error) {
 	if len(packed) < h*stride {
 		return nil, errJBIG2Unsupported
 	}
-	bmp := newJBBitmap(w, h, 0)
+	bmp, err := newJBBitmap(w, h, 0)
+	if err != nil {
+		return nil, err
+	}
 	for y := 0; y < h; y++ {
 		row := packed[y*stride:]
 		for x := 0; x < w; x++ {
@@ -697,7 +718,10 @@ func newMMRPlaneReader(data []byte) *mmrPlaneReader {
 // consumes the trailing EOFB and byte-aligns so the reader is positioned at the
 // next plane.
 func (m *mmrPlaneReader) plane(w, h int, eofb bool) (*jbBitmap, error) {
-	bmp := newJBBitmap(w, h, 0)
+	bmp, err := newJBBitmap(w, h, 0)
+	if err != nil {
+		return nil, err
+	}
 	ref := []int{}
 	for row := 0; row < h; row++ {
 		cur, err := ccitt.Decode2DLine(m.br, ref, w)
@@ -750,7 +774,7 @@ func decodeGenericArith(data []byte, w, h, template int, tpgdon bool, at []atPix
 	}
 	dec := newMQDecoder(data, 0, len(data))
 	cx := make([]mqState, 1<<16)
-	return decodeGenericInto(dec, cx, w, h, template, at, tpgdon, nil), nil
+	return decodeGenericInto(dec, cx, w, h, template, at, tpgdon, nil)
 }
 
 // decodeGenericInto decodes a generic region into a bitmap using a caller-owned
@@ -758,7 +782,7 @@ func decodeGenericArith(data []byte, w, h, template int, tpgdon bool, at []atPix
 // shared context across all symbols in the dictionary. When skip is non-nil, a
 // set pixel in skip forces the corresponding output pixel to 0 without decoding
 // (used by halftone grayscale-image decoding).
-func decodeGenericInto(dec *mqDecoder, cx []mqState, w, h, template int, at []atPixel, tpgdon bool, skip *jbBitmap) *jbBitmap {
+func decodeGenericInto(dec *mqDecoder, cx []mqState, w, h, template int, at []atPixel, tpgdon bool, skip *jbBitmap) (*jbBitmap, error) {
 	// Build the full template (fixed pixels + AT pixels) and sort into raster
 	// order so the context label matches the reused TPGDON contexts.
 	tmpl := append([]atPixel{}, jbCodingTemplates[template]...)
@@ -770,7 +794,10 @@ func decodeGenericInto(dec *mqDecoder, cx []mqState, w, h, template int, at []at
 		return tmpl[i].x < tmpl[j].x
 	})
 
-	bmp := newJBBitmap(w, h, 0)
+	bmp, err := newJBBitmap(w, h, 0)
+	if err != nil {
+		return nil, err
+	}
 	ltp := 0
 	for y := 0; y < h; y++ {
 		if tpgdon {
@@ -793,5 +820,5 @@ func decodeGenericInto(dec *mqDecoder, cx []mqState, w, h, template int, at []at
 			bmp.pix[y*w+x] = byte(dec.decode(cx, ctx))
 		}
 	}
-	return bmp
+	return bmp, nil
 }

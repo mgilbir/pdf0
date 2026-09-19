@@ -24,7 +24,7 @@ func TestGeneratedICCProfileIsReal(t *testing.T) {
 		{pdfa.PDFA4, 4},
 	}
 	for _, tc := range cases {
-		doc := NewPDFADocument(tc.level)
+		doc := mustPDFADoc(t, tc.level)
 
 		// Locate the OutputIntent's DestOutputProfile stream.
 		catalog := doc.view().Catalog()
@@ -71,7 +71,7 @@ func TestGeneratedICCProfileIsReal(t *testing.T) {
 // exercised against (audit C29).
 func TestGeneratedDocPassesOutputIntentProfileCheck(t *testing.T) {
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-		doc := NewPDFADocumentWithInfo(lvl, "T", "A")
+		doc := mustPDFADocWithInfo(t, lvl, "T", "A")
 		var buf bytes.Buffer
 		if err := doc.Write(&buf); err != nil {
 			t.Fatalf("%v: write: %v", lvl, err)

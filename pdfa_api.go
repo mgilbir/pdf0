@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
@@ -19,20 +20,60 @@ func GenerateXMPMetadata(level pdfa.Level, title, author string) []byte {
 }
 
 // DefaultSRGBProfile returns the sRGB ICC profile embedded in generated
-// PDF/A documents.
-func DefaultSRGBProfile() []byte { return pdfa.DefaultSRGBProfile() }
+// PDF/A documents. The error is always nil; see pdfa.Skeleton for why it is
+// in the signature.
+func DefaultSRGBProfile() ([]byte, error) { return pdfa.DefaultSRGBProfile() }
 
 // NewPDFADocument creates a minimal valid PDF/A document for the given level.
 // The document has an empty page tree and passes ValidatePDFA.
-func NewPDFADocument(level pdfa.Level) *Document {
+func NewPDFADocument(level pdfa.Level) (*Document, error) {
 	return NewPDFADocumentWithInfo(level, "", "")
 }
 
 // NewPDFADocumentWithInfo is NewPDFADocument with the document title and
 // author embedded in the generated XMP metadata.
-func NewPDFADocumentWithInfo(level pdfa.Level, title, author string) *Document {
-	objs, trailer, version := pdfa.Skeleton(level, title, author)
-	return &Document{Version: version, Objects: objs, Trailer: trailer}
+func NewPDFADocumentWithInfo(level pdfa.Level, title, author string) (*Document, error) {
+	return NewPDFADocumentWith(pdfa.SkeletonOptions{Level: level, Title: title, Author: author})
+}
+
+// PDFAOptions is what a generated PDF/A document is made of: the level, the
+// title and author recorded in its XMP, and the output intent it carries.
+//
+// It is an alias rather than a wrapper, so a value built here is the same value
+// pdfa.SkeletonWith takes and a caller who reaches for the pdfa package finds
+// everything already fits.
+type PDFAOptions = pdfa.SkeletonOptions
+
+// PDFAOutputIntent is the output intent a generated document carries. The zero
+// value asks for pdf0's embedded sRGB profile; set ICCProfile and
+// OutputConditionIdentifier to supply your own.
+type PDFAOutputIntent = pdfa.OutputIntentSpec
+
+// NewPDFADocumentWith creates a minimal valid PDF/A document to order.
+//
+// It is the constructor for a caller who wants their own output intent —
+// a press profile, a house sRGB variant, or simply the exact bytes they
+// audited — rather than the profile pdf0 embeds:
+//
+//	doc, err := pdf0.NewPDFADocumentWith(pdf0.PDFAOptions{
+//	    Level: pdfa.PDFA4,
+//	    OutputIntent: pdf0.PDFAOutputIntent{
+//	        ICCProfile:                myProfile,
+//	        OutputConditionIdentifier: "FOGRA51",
+//	    },
+//	})
+//
+// The profile is embedded as given and /N is read from its header, so nothing
+// of pdf0's colour management ends up in the document. A profile that is not
+// one, that disagrees with its own declared length, that is in a colour space a
+// PDF/A output intent may not use, or that is ICC v4 at a level based on PDF
+// 1.4, is an error rather than a document built wrongly.
+func NewPDFADocumentWith(opts pdfa.SkeletonOptions) (*Document, error) {
+	objs, trailer, version, err := pdfa.SkeletonWith(opts)
+	if err != nil {
+		return nil, fmt.Errorf("pdf0: building the PDF/A skeleton: %w", err)
+	}
+	return &Document{Version: version, Objects: objs, Trailer: trailer}, nil
 }
 
 // ValidatePDFA checks doc against the implemented rules for the given PDF/A

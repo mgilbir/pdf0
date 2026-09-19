@@ -77,7 +77,7 @@ func buildDoc(b *testing.B, level pdfa.Level, conforming bool, pages int) *Docum
 	b.Helper()
 	var doc *Document
 	if conforming {
-		doc = NewPDFADocument(level)
+		doc = mustPDFADoc(b, level)
 	} else {
 		doc = NewDocument()
 	}
@@ -242,7 +242,7 @@ func TestSaveCostIsProportionalToTheDocument(t *testing.T) {
 		t.Skip("timing-sensitive")
 	}
 	sizeOf := func(pages int) int {
-		doc := NewPDFADocument(pdfa.PDFA2b)
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		face, err := fonts.NotoSans()
 		if err != nil {
 			t.Fatal(err)

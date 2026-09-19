@@ -150,7 +150,7 @@ func TestStencilRefusesWhatItCannotWrite(t *testing.T) {
 func TestStencilPaintsAndValidates(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
-			doc := NewPDFADocument(level)
+			doc := mustPDFADoc(t, level)
 			src := image.NewAlpha(image.Rect(0, 0, 16, 16))
 			for i := 0; i < 16; i++ {
 				src.SetAlpha(i, i, color.Alpha{A: 255})
