@@ -153,6 +153,26 @@ later, and `annotActionClause("catalogAA", level)` yields `6.6.1` / `6.5.2` /
 it, grepping the source for quoted clause literals and ratcheting unmatched
 profile clauses at `ruleCoverageMaxUncovered = 0`.
 
+**A level of its own** where the target, not the document, decides. PDF/A-4e and
+PDF/A-4f are `PDFA4E` and `PDFA4F`, and validate the way Level A does: run the
+base pipeline at `level.BaseB()` — which is `PDFA4` for both — adopt its
+findings at this level, then add what the variant asks for
+(`ValidateVariant4View`).
+
+Most of what the variants need does not require this. A document that declares
+`pdfaid:conformance F` gets 4f's relaxation (arbitrary embedded files) and 4f's
+requirement (it must actually carry some) whatever level it is validated at,
+because `effectiveVariant` reads the declaration. What needs the level is the
+one question the document cannot answer about itself: a part-4 file carrying no
+conformance is a valid **plain** PDF/A-4 file — base rule 6.7.3-3 says a file
+conforming to neither variant shall not provide one — so *"this should have
+declared E"* is meaningful only against a caller who asked for PDF/A-4e.
+
+Note that `pdfaConformanceFlag` uppercases and the conformance *value* rule does
+not. The first is right for the relaxations: a file saying `e` is trying to be a
+4e, so the stricter rules should apply to it rather than be skipped. The second
+is right for the rule: the property is case-sensitive, and `e` is not `E`.
+
 **An inline `if level == PDFA4` branch** where the requirement itself differs. The
 genuine PDF/A-4 divergences:
 

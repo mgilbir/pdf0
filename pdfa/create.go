@@ -84,6 +84,19 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 		structTreeRoot.Set("Type", object.Name("StructTreeRoot"))
 		catalog.Set("StructTreeRoot", structTreeRoot)
 	}
+	if level == PDFA4F {
+		// A PDF/A-4f file shall contain an /EmbeddedFiles key in the catalog's
+		// name dictionary (6.9). The skeleton has nothing to attach yet, so it
+		// gets the empty name tree — the same answer Level A gets above, for
+		// the same reason: the structure the level requires, holding the
+		// nothing the skeleton has. A caller attaches to it; inventing a file
+		// to put in it would be inventing content.
+		embedded := &object.Dictionary{}
+		embedded.Set("Names", object.Array{})
+		names := &object.Dictionary{}
+		names.Set("EmbeddedFiles", embedded)
+		catalog.Set("Names", names)
+	}
 
 	// Object 2: Pages (empty page tree)
 	pages := &object.Dictionary{}
@@ -163,8 +176,10 @@ func pdfaConformance(level Level) string {
 	switch {
 	case level.IsA():
 		return "A"
+	case level.Is4Variant():
+		return level.variantConformance() // "E" or "F"
 	case level == PDFA4:
-		return "" // PDF/A-4 has no conformance level
+		return "" // plain PDF/A-4 has no conformance level
 	default:
 		return "B"
 	}
@@ -202,9 +217,17 @@ func LevelFor(part, conformance string) (Level, bool) {
 		}
 		return PDFA3b, true
 	case "4":
-		// PDF/A-4 has no conformance letter; its F and E variants are
-		// distinguished elsewhere and validate under the same rules.
-		return PDFA4, true
+		// PDF/A-4 itself has no conformance letter; E and F name its two
+		// variants, which are levels of their own.
+		switch strings.ToUpper(conformance) {
+		case "E":
+			return PDFA4E, true
+		case "F":
+			return PDFA4F, true
+		case "":
+			return PDFA4, true
+		}
+		return 0, false
 	}
 	return 0, false
 }
@@ -241,7 +264,7 @@ func GenerateXMPMetadata(level Level, title, author string) []byte {
 	}
 
 	revXMP := ""
-	if level == PDFA4 {
+	if level.BaseB() == PDFA4 {
 		revXMP = `
       <pdfaid:rev>2020</pdfaid:rev>`
 	}

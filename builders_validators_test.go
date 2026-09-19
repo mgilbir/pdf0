@@ -120,3 +120,43 @@ func TestFacturXRejectsOrderType(t *testing.T) {
 		t.Errorf("expected fx:DocumentType ORDER to be rejected; got %v", res.Violations)
 	}
 }
+
+// TestNewPDFADocumentVariants4 is the C19 guard for the PDF/A-4 variants: the
+// builder produces a document that passes its own validator at the level it was
+// asked for, not one the validator then rejects.
+//
+// Both needed something. A 4e or 4f skeleton carried no pdfaid:rev, because the
+// generator tested for plain PDF/A-4 rather than the part. And a 4f file must
+// contain an /EmbeddedFiles key — the skeleton has nothing to attach, so it
+// gets the empty name tree, which is the answer Level A gets for its structure
+// tree and for the same reason: the structure the level requires, holding the
+// nothing the skeleton has.
+func TestNewPDFADocumentVariants4(t *testing.T) {
+	for _, level := range []pdfa.Level{pdfa.PDFA4, pdfa.PDFA4E, pdfa.PDFA4F} {
+		doc := mustPDFADoc(t, level)
+		if errs := ValidatePDFA(doc, level); len(errs) > 0 {
+			t.Errorf("NewPDFADocument(%v) does not pass its own validator: %v", level, errs)
+		}
+		// And it round-trips, so the declaration survives being written.
+		var buf bytes.Buffer
+		if err := doc.Write(&buf); err != nil {
+			t.Fatalf("%v: %v", level, err)
+		}
+		back, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
+			t.Fatalf("%v: reading back: %v", level, err)
+		}
+		if errs := ValidatePDFABytes(back, level, buf.Bytes()); len(errs) > 0 {
+			t.Errorf("%v: after a round trip: %v", level, errs)
+		}
+	}
+
+	// A plain PDF/A-4 document is not a 4e or a 4f, and says so by declaring
+	// nothing — so validating it as one is a finding rather than a pass.
+	plain := mustPDFADoc(t, pdfa.PDFA4)
+	for _, l := range []pdfa.Level{pdfa.PDFA4E, pdfa.PDFA4F} {
+		if errs := ValidatePDFA(plain, l); len(errs) == 0 {
+			t.Errorf("a plain PDF/A-4 document validated clean as %v", l)
+		}
+	}
+}
