@@ -205,7 +205,11 @@ func (d *jbig2Decoder) readSymbolDictHuff(seg jbSegment, r *jbReader, flags uint
 			h.align()
 			var collective *jbBitmap
 			if bmSize == 0 {
-				collective = readUncompressedBitmap(h, totWidth, hcHeight)
+				var err error
+				collective, err = readUncompressedBitmap(h, totWidth, hcHeight)
+				if err != nil {
+					return err
+				}
 			} else {
 				start := h.bytePos()
 				if start+bmSize > len(h.data) {
@@ -220,7 +224,10 @@ func (d *jbig2Decoder) readSymbolDictHuff(seg jbSegment, r *jbReader, flags uint
 			}
 			x := 0
 			for _, w := range widths {
-				sym := newJBBitmap(w, hcHeight, 0)
+				sym, err := newJBBitmap(w, hcHeight, 0)
+				if err != nil {
+					return err
+				}
 				for yy := 0; yy < hcHeight; yy++ {
 					for xx := 0; xx < w; xx++ {
 						sym.pix[yy*w+xx] = collective.get(x+xx, yy)
@@ -267,7 +274,10 @@ func huffRefine(h *huffReader, cx []mqState, w, height, template int, ref *jbBit
 		return nil, errJBIG2Unsupported
 	}
 	dec := newMQDecoder(h.data, start, end)
-	out := decodeRefinement(dec, cx, w, height, template, ref, dx, dy, false, at)
+	out, err := decodeRefinement(dec, cx, w, height, template, ref, dx, dy, false, at)
+	if err != nil {
+		return nil, err
+	}
 	h.pos = end * 8
 	return out, nil
 }
@@ -324,7 +334,10 @@ func decodeAggregateHuff(h *huffReader, cx []mqState, w, height, numInst, symCod
 	rdxT, rdyT := stdHuffTable(15), stdHuffTable(15)
 	rsizeT := stdHuffTable(1)
 
-	region := newJBBitmap(w, height, 0)
+	region, err := newJBBitmap(w, height, 0)
+	if err != nil {
+		return nil, err
+	}
 	dt0, _ := dtTable.decode(h)
 	stripT := -dt0 // SBSTRIPS == 1
 	firstS := 0
@@ -379,15 +392,18 @@ func decodeAggregateHuff(h *huffReader, cx []mqState, w, height, numInst, symCod
 
 // readUncompressedBitmap reads a w x h bitmap stored one bit per pixel, MSB
 // first, with each row padded to a byte boundary.
-func readUncompressedBitmap(h *huffReader, w, height int) *jbBitmap {
-	bmp := newJBBitmap(w, height, 0)
+func readUncompressedBitmap(h *huffReader, w, height int) (*jbBitmap, error) {
+	bmp, err := newJBBitmap(w, height, 0)
+	if err != nil {
+		return nil, err
+	}
 	for y := 0; y < height; y++ {
 		for x := 0; x < w; x++ {
 			bmp.pix[y*w+x] = byte(h.bit())
 		}
 		h.align()
 	}
-	return bmp
+	return bmp, nil
 }
 
 // readTextRegionHuff decodes a Huffman-coded text region. r is positioned just
@@ -487,7 +503,10 @@ func (d *jbig2Decoder) readTextRegionHuff(seg jbSegment, r *jbReader, ri regionI
 	// (T.88 7.4.3.1.7).
 	h.align()
 
-	region := newJBBitmap(ri.w, ri.h, sbDefPixel)
+	region, err := newJBBitmap(ri.w, ri.h, sbDefPixel)
+	if err != nil {
+		return err
+	}
 	strips := 1 << logStrips
 	// One GR context shared by every instance refinement in the region.
 	grCx := make([]mqState, 1<<13)
@@ -553,7 +572,11 @@ func (d *jbig2Decoder) readTextRegionHuff(seg jbSegment, r *jbReader, ri regionI
 		}
 	}
 	if d.page == nil {
-		d.page = newJBBitmap(d.imgW, d.imgH, 0)
+		page, err := newJBBitmap(d.imgW, d.imgH, 0)
+		if err != nil {
+			return err
+		}
+		d.page = page
 	}
 	d.page.blit(region, ri.x, ri.y, ri.combOp)
 	return nil
