@@ -32,7 +32,7 @@ import (
 // contradiction rather than a harmless overstatement: a reader that honours the
 // declaration goes looking for attachments that are not there.
 func checkA4FEmbeddedFilesPresent(doc core.View, level Level) []Violation {
-	if level != PDFA4 || pdfaConformanceFlag(doc) != "F" {
+	if level.BaseB() != PDFA4 || effectiveVariant(doc, level) != "F" {
 		return nil
 	}
 	catalog := doc.Catalog()
@@ -60,7 +60,7 @@ func checkA4FEmbeddedFilesPresent(doc core.View, level Level) []Violation {
 // Elsewhere the annotation carrying it is the violation, and reporting the
 // artwork format as well would be answering a question nobody reached.
 func checkA4E3DStreamSubtype(doc core.View, level Level) []Violation {
-	if level != PDFA4 || pdfaConformanceFlag(doc) != "E" {
+	if level.BaseB() != PDFA4 || effectiveVariant(doc, level) != "E" {
 		return nil
 	}
 	var errs []Violation

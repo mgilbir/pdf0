@@ -1319,8 +1319,8 @@ func TestCorpusConformanceSuites(t *testing.T) {
 		// shall not provide one — so it fails only against the 4E profile, and
 		// that is a question only a caller who asked for PDF/A-4e can pose.
 		// See the issue on modelling PDFA4E/PDFA4F as levels.
-		{"PDF_A-4f", pdfa.PDFA4, 0, true},
-		{"PDF_A-4e", pdfa.PDFA4, 1, true},
+		{"PDF_A-4f", pdfa.PDFA4F, 0, true},
+		{"PDF_A-4e", pdfa.PDFA4E, 0, true},
 		{"PDF_UA-1", pdfa.PDFA2b, 0, false},
 		{"PDF_UA-2", pdfa.PDFA4, 0, false},
 	}
