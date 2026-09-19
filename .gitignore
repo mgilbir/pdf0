@@ -47,7 +47,12 @@ output.pdf
 
 # veraPDF test corpus (downloaded via `make corpus`)
 testdata/verapdf-corpus/
-testdata/fuzz/
+
+# testdata/fuzz is deliberately NOT ignored. Go keeps the corpus it generates
+# in the build cache — 21 MB of it here — and writes only two things under
+# testdata/fuzz: seeds a human added, and the input that made a target fail.
+# The second is a regression test that arrives exactly when it is needed, and
+# ignoring the directory meant `git add` would silently skip it.
 
 # corpus test harness binaries
 /corpusprobe
