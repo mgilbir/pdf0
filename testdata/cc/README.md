@@ -32,6 +32,29 @@ Block numbers are arbitrary. The value is in bytes nobody has run through the
 parser before, so pick a fresh range rather than re-running one that is already
 in the log below.
 
+**Run it under a cgroup**, which is what `make cc-sweep-limited` does:
+
+```sh
+make cc-sweep-limited FIRST=5600 LAST=5619
+```
+
+The probe bounds itself — `GOMEMLIMIT=3GiB` and a per-file timeout — but the
+sweep also fetches and unzips, and a bug anywhere in that should hit a wall
+rather than the machine. The target wraps the sweep in a `systemd-run --user`
+unit with `MemoryMax`, `MemorySwapMax=0`, `CPUQuota`, `TasksMax` and
+`RuntimeMaxSec`; override them with `CC_MEM`, `CC_CPU` and `CC_SECS`.
+
+`MemorySwapMax=0` is the one that matters most: without it a runaway thrashes
+for hours instead of failing. The 2026-09-19 sweep peaked at 4.58 GB against a
+6 GB cap.
+
+It runs in the background, so follow it with:
+
+```sh
+systemctl --user status pdf0-ccsweep
+tail -f testdata/cc/run/p*.log
+```
+
 ## Reading the results
 
 `run/aggregate.txt` holds the totals, the grouped error strings, and the
@@ -57,6 +80,7 @@ go run -tags devtools ./internal/cmd/corpustime testdata/cc/run/quarantine/<file
 |------|--------|-------|--------|--------|----------|-------|
 | 2026-07-27 | 5100–5101 | 2,000 | 14 | 0 | 0 | Clean. First run of this committed harness. |
 | 2026-07-27 | 4200–4211 | 12,000 | 85 | 0 | 2 | Neither timeout was a hang: 71 MB and 117 MB files where `Read`/`Write` take under 0.5 s and `ValidatePDFUA` takes ~25 s, over the probe's 30 s whole-file budget. |
+| 2026-09-19 | 5500–5511 | 11,999 | 88 | 0 | 0 | Clean. First sweep run under a cgroup, via `make cc-sweep-limited`: `MemoryMax=6G`, `MemorySwapMax=0`, `CPUQuota=800%`, `TasksMax=256`. Peak usage 4.58 GB, so the cap was not decorative. Errors were 49 `startxref not found` and 26 `PDF header not found` over the first ten blocks, and the same two kinds over the last two. |
 
 Earlier sweeps (before this harness was committed) are recorded in the source:
 `grep -rn "Common Crawl" *.go` points at the defects they found, including the
