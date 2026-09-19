@@ -17,6 +17,11 @@ require github.com/mgilbir/forme v0.3.0
 // point, including the one the tag named.
 //
 // The proxy keeps what it has cached, so the version cannot be withdrawn by
-// deleting the tag. This is the withdrawal: go get refuses it and says to use
-// a later one. v0.3.1 is v0.3.0's tree, from a history that is clean.
+// deleting the tag. This is what withdrawal amounts to: the version is excluded
+// from selection, so `go get @latest` and every upgrade skip it, and `go list
+// -m -u` reports it as retracted with this text as the reason. An explicit
+// `go get @v0.3.0` still resolves — Go honours a pin it is asked for — so this
+// is a strong recommendation, not a block.
+//
+// v0.3.1 is v0.3.0's tree, from a history that is clean.
 retract v0.3.0
