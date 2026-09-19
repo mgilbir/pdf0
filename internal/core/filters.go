@@ -7,6 +7,7 @@ import (
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
 	"io"
+	"sync"
 )
 
 // This file implements the stream filters of ISO 32000-2 7.4 that the Go
@@ -435,12 +436,37 @@ func asciiHexDecode(data []byte) ([]byte, error) {
 	return syntax.DecodeHex(hexDigits)
 }
 
+// flateWriters pools the zlib compressors FlateEncode uses.
+//
+// zlib.NewWriter allocates the deflate window and hash tables — about a
+// megabyte — and a document compresses one stream per content stream, form,
+// pattern, page, object stream and cross-reference stream. Building a
+// single-page document allocated 150 MB, and a quarter of it was compressors
+// that were used once and dropped.
+//
+// Reset is what makes this safe: it returns a writer to exactly the state
+// NewWriter produces, so the bytes out are the bytes a fresh writer would have
+// written. TestPooledFlateMatchesAFreshWriter holds that.
+var flateWriters = sync.Pool{
+	New: func() any { return zlib.NewWriter(io.Discard) },
+}
+
 // FlateEncode zlib-compresses data (the inverse of FlateDecode) for writing a
 // FlateDecode stream such as a cross-reference stream.
 func FlateEncode(data []byte) []byte {
 	var buf bytes.Buffer
-	w := zlib.NewWriter(&buf)
-	w.Write(data)
-	w.Close()
+	w := flateWriters.Get().(*zlib.Writer)
+	w.Reset(&buf)
+	if _, err := w.Write(data); err != nil {
+		// A bytes.Buffer does not fail, so this is unreachable; a writer that
+		// has seen an error is not returned to the pool either way, since its
+		// error state is sticky and would poison the next caller.
+		w.Close()
+		return buf.Bytes()
+	}
+	if err := w.Close(); err != nil {
+		return buf.Bytes()
+	}
+	flateWriters.Put(w)
 	return buf.Bytes()
 }

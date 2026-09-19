@@ -1,13 +1,12 @@
 package images
 
 import (
-	"bytes"
-	"compress/zlib"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -186,16 +185,12 @@ func EmbedStencil(doc Allocator, img image.Image) (object.IndirectRef, error) {
 		}
 	}
 
-	var buf bytes.Buffer
-	zw := zlib.NewWriter(&buf)
-	if _, err := zw.Write(bits); err != nil {
-		return object.IndirectRef{}, fmt.Errorf("images: compressing the stencil: %w", err)
-	}
-	if err := zw.Close(); err != nil {
-		return object.IndirectRef{}, fmt.Errorf("images: compressing the stencil: %w", err)
-	}
-
-	s := &object.Stream{Dict: object.Dictionary{}, Data: buf.Bytes()}
+	// Through core's pooled compressor rather than a fresh zlib.Writer per
+	// image: the writer carries about a megabyte of window and hash tables, and
+	// an image-heavy document was allocating one for each. Neither Write nor
+	// Close can fail here — the sink is a bytes.Buffer — which is why the
+	// errors these calls used to return are gone rather than swallowed.
+	s := &object.Stream{Dict: object.Dictionary{}, Data: core.FlateEncode(bits)}
 	s.Dict.Set("Type", object.Name("XObject"))
 	s.Dict.Set("Subtype", object.Name("Image"))
 	s.Dict.Set("Width", object.Integer(w))
@@ -216,15 +211,7 @@ func EmbedStencil(doc Allocator, img image.Image) (object.IndirectRef, error) {
 
 // imageStream builds one Flate-compressed image XObject over raw samples.
 func imageStream(samples []byte, w, h int, space object.Name) (*object.Stream, error) {
-	var buf bytes.Buffer
-	zw := zlib.NewWriter(&buf)
-	if _, err := zw.Write(samples); err != nil {
-		return nil, fmt.Errorf("images: compressing samples: %w", err)
-	}
-	if err := zw.Close(); err != nil {
-		return nil, fmt.Errorf("images: compressing samples: %w", err)
-	}
-	s := &object.Stream{Dict: object.Dictionary{}, Data: buf.Bytes()}
+	s := &object.Stream{Dict: object.Dictionary{}, Data: core.FlateEncode(samples)}
 	s.Dict.Set("Type", object.Name("XObject"))
 	s.Dict.Set("Subtype", object.Name("Image"))
 	s.Dict.Set("Width", object.Integer(w))
