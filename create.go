@@ -1,11 +1,11 @@
 package pdf0
 
 import (
-	"crypto/rand"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -33,7 +33,7 @@ func NewDocument() *Document {
 	pages.Set("Kids", object.Array{})
 	pages.Set("Count", object.Integer(0))
 
-	id := fileID()
+	id := core.RandomFileID()
 	return &Document{
 		Version: "2.0",
 		Objects: map[int]*object.IndirectObject{
@@ -45,19 +45,6 @@ func NewDocument() *Document {
 			Values: []object.Object{object.IndirectRef{Number: 1}, object.Array{id, id}},
 		},
 	}
-}
-
-// fileID makes the two-part file identifier of ISO 32000-2 14.4.
-//
-// It is random rather than a hash of the moment of creation. The identifier's
-// job is to distinguish this file from every other, including one made a
-// microsecond later by the same program, and a clock cannot promise that. Since
-// Go 1.24 the system random source cannot fail without the runtime ending, so
-// there is no error to handle.
-func fileID() object.String {
-	var b [16]byte
-	rand.Read(b[:])
-	return object.String{Value: b[:], IsHex: true}
 }
 
 // DocumentInfo is what a document says about itself.
