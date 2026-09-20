@@ -8,6 +8,15 @@
 *.so
 *.dylib
 
+# A bare `go build ./examples/text` drops an executable named after the package
+# in the working directory, and three of them — text, simple_pdf and genuse —
+# were committed and shipped, 19.5 MB of ELF in a 24 MB module. The examples
+# write to stdout now and nothing builds here on purpose, but the names are
+# listed because that is how they arrived: unnoticed, in a `git add -A`.
+/text
+/simple_pdf
+/genuse
+
 # Test binary, built with `go test -c`
 *.test
 
