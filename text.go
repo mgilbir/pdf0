@@ -98,11 +98,22 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 		xobjs = d.ResolveDict(res.Get("XObject"))
 	}
 
-	var curMap, curEncoding map[int]rune
+	var curMap map[int][]rune
+	var curEncoding map[int]rune
 	curTwoByte := false
 	var operands []core.ContentToken
 
+	// marked is the stack of open marked-content sequences, true for one
+	// carrying an /ActualText, and replaced counts those. Inside one, what
+	// the glyphs map to is not the text: the /ActualText is (ISO 32000-2
+	// 14.9.4), and it has already been written when the sequence opened.
+	var marked []bool
+	replaced := 0
+
 	show := func(raw []byte) {
+		if replaced > 0 {
+			return
+		}
 		for _, r := range decodeShown(raw, curMap, curEncoding, curTwoByte) {
 			out.WriteRune(r)
 		}
@@ -112,7 +123,37 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 			operands = append(operands, tk)
 			continue
 		}
+		if replaced > 0 {
+			// Everything inside a replaced sequence is covered by its text:
+			// the line breaks and spacing the operators would add as well
+			// as the glyphs.
+			switch tk.Op {
+			case "BDC", "BMC", "EMC":
+			default:
+				operands = operands[:0]
+				continue
+			}
+		}
 		switch tk.Op {
+		case "BMC":
+			marked = append(marked, false)
+		case "BDC":
+			actual, ok := d.actualText(res, operands)
+			if ok && replaced == 0 {
+				out.WriteString(actual)
+			}
+			marked = append(marked, ok)
+			if ok {
+				replaced++
+			}
+		case "EMC":
+			// An EMC with nothing open is malformed and changes nothing.
+			if n := len(marked); n > 0 {
+				if marked[n-1] {
+					replaced--
+				}
+				marked = marked[:n-1]
+			}
 		case "Tf":
 			if len(operands) >= 1 {
 				if f, ok := fonts[operands[0].Name]; ok {
@@ -159,8 +200,40 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 	}
 }
 
+// actualText is the /ActualText of the marked-content sequence a BDC opens,
+// from the property list its operands carry inline or from the named entry in
+// the resources' /Properties.
+//
+// The tokenizer steps over dictionary delimiters, so an inline list arrives as
+// its keys and values in a row: the tag, then /ActualText followed by its
+// string. A named list arrives as the tag and one more name.
+func (d *Document) actualText(res *object.Dictionary, operands []core.ContentToken) (string, bool) {
+	for i := 1; i+1 < len(operands); i++ {
+		if operands[i].Kind == core.KindName && operands[i].Name == "ActualText" &&
+			operands[i+1].Kind == core.KindString {
+			return core.DecodePDFTextString(operands[i+1].Str), true
+		}
+	}
+	if len(operands) == 2 && operands[1].Kind == core.KindName && res != nil {
+		props := d.ResolveDict(res.Get("Properties"))
+		if props == nil {
+			return "", false
+		}
+		list := d.ResolveDict(props.Get(object.Name(operands[1].Name)))
+		if list == nil {
+			return "", false
+		}
+		if s, ok := d.Resolve(list.Get("ActualText")).(object.String); ok {
+			return core.DecodePDFTextString(s.Value), true
+		}
+	}
+	return "", false
+}
+
 type fontText struct {
-	toUnicode map[int]rune
+	// toUnicode maps a code to every character its ToUnicode entry names — a
+	// ligature's are several.
+	toUnicode map[int][]rune
 	// encoding maps a character code to the character it stands for, built
 	// from the font's /Encoding. It is consulted when the font carries no
 	// ToUnicode entry for a code, which is the ordinary case for a simple font
@@ -189,7 +262,7 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 			twoByte = true
 		}
 		out[string(name)] = fontText{
-			toUnicode: d.view().ParseToUnicodeMap(f),
+			toUnicode: core.ParseToUnicodeRunes(d.view(), f),
 			encoding:  d.simpleEncoding(f, twoByte),
 			twoByte:   twoByte,
 		}
@@ -273,7 +346,7 @@ func baseEncodingNames(n object.Name, current map[byte]string) map[byte]string {
 // ToUnicode CMap, then the font's own /Encoding, and only then the byte value
 // as Latin-1 — which is right for ASCII and wrong exactly where an encoding
 // would have said so.
-func decodeShown(raw []byte, toUnicode map[int]rune, encoding map[int]rune, twoByte bool) []rune {
+func decodeShown(raw []byte, toUnicode map[int][]rune, encoding map[int]rune, twoByte bool) []rune {
 	var runes []rune
 	step := 1
 	if twoByte {
@@ -284,8 +357,8 @@ func decodeShown(raw []byte, toUnicode map[int]rune, encoding map[int]rune, twoB
 		if twoByte {
 			code = int(raw[i])<<8 | int(raw[i+1])
 		}
-		if r, ok := toUnicode[code]; ok {
-			runes = append(runes, r)
+		if rs, ok := toUnicode[code]; ok {
+			runes = append(runes, rs...)
 			continue
 		}
 		if r, ok := encoding[code]; ok {
