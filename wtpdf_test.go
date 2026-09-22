@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,10 +18,7 @@ import (
 // and robustness check: every file must parse, expose pages, and survive a
 // Read -> Write -> Read cycle without error or panic.
 func TestWTPDFExamples(t *testing.T) {
-	files, _ := filepath.Glob("testdata/wtpdf/*.pdf")
-	if len(files) == 0 {
-		t.Skip("no WTPDF examples present; run `make wtpdf` to download them")
-	}
+	files := testfiles.WTPDF.Glob(t, "*.pdf")
 	for _, path := range files {
 		path := path
 		t.Run(filepath.Base(path), func(t *testing.T) {

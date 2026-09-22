@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"github.com/mgilbir/formalis"
 	"github.com/mgilbir/pdf0/facturx"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
@@ -96,10 +97,7 @@ var facturxInvoiceRuleFindings = map[string]int{
 // made a rule this repository does not own able to break an oracle about
 // containers, which is what happened on the formalis v0.2.0 bump.
 func TestValidateFacturXCorpus(t *testing.T) {
-	files, _ := filepath.Glob("testdata/facturx/*.pdf")
-	if len(files) == 0 {
-		t.Skip("Factur-X corpus not present (testdata/facturx)")
-	}
+	files := testfiles.FacturX.Glob(t, "*.pdf")
 	sort.Strings(files)
 	seenProfiles := map[formalis.Profile]bool{}
 	seenCIUS := map[formalis.CIUS]bool{}
@@ -191,13 +189,9 @@ func facturxCorpusHasCIUS(files []string) bool {
 // Factur-X-specific checks fire when the container is broken. Gated on the
 // corpus, since it needs a real PDF/A-3 base to mutate.
 func TestValidateFacturXMutations(t *testing.T) {
-	files, _ := filepath.Glob("testdata/facturx/corpus_EN16931_Einfach.pdf")
-	if len(files) == 0 {
-		files, _ = filepath.Glob("testdata/facturx/*EN16931*.pdf")
-	}
-	if len(files) == 0 {
-		t.Skip("Factur-X corpus not present")
-	}
+	// corpus_EN16931_Einfach.pdf is in the committed manifest, so a stamped
+	// corpus without it is broken, not absent.
+	files := []string{testfiles.FacturX.File(t, "corpus_EN16931_Einfach.pdf")}
 	data, err := os.ReadFile(files[0])
 	if err != nil {
 		t.Fatal(err)

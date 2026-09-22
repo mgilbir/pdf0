@@ -16,9 +16,33 @@ and PDF 2.0 spec-example tests. The spec examples *are* committed
 vendored XMP RelaxNG schemas (`testdata/xmp-rng/`), so those tiers never skip.
 This tier is what CI runs.
 
+A committed data file that a test cannot find fails the test: it is part of the
+repository, so its absence means a broken checkout or a wrong path, never an
+optional download. Tests resolve it against the module root through
+`internal/testfiles`, so a test in a subpackage reads the same file as one at
+the root. (The XMP RelaxNG guard in `pdfa/` named a package-relative path and
+skipped on every run from the package split until this was the rule.)
+
 **Tier 2 — self-skips when its data is absent.** Every corpus, oracle and
-round-trip test looks for a directory and calls `t.Skip` when it is missing, so a
-fresh clone stays green. That is the point, and it is also the hazard:
+round-trip test resolves its data set through `internal/testfiles`, which skips
+when the data set was never fetched, so a fresh clone stays green. Anything
+short of "never fetched" fails instead, because a skip or an empty walk reads as
+a pass:
+
+- a fetched data set counts as present only when its `.ok` stamp is there (the
+  make target writes it last, and only when every file arrived), so a fetch that
+  was interrupted skips with a message saying so;
+- an environment override (`VERAPDF_CORPUS`, `ARLINGTON_MODEL`,
+  `VERAPDF_PROFILES`) that names something without its stamp, or nothing at all,
+  fails;
+- a present data set in which the test finds zero files fails;
+- a named fixture missing from a present data set fails: the sets are pinned,
+  so that is a layout change, not a missing download.
+
+Data placed by hand (the Cal Poly suite, the PDF/UA reference files, the
+Order-X examples, the ISO PDFs) has no stamp; the directory's presence is the
+signal, and present-but-empty fails. That is the point of the tier, and skipping
+is also its hazard:
 
 > **A green `go test ./...` does not mean your change is covered.** Roughly forty
 > test functions skip on a fresh clone, including the entire PDF/A conformance
@@ -32,6 +56,20 @@ you touched an image codec, fetch its sample set.
 
 **Tier 3 — opt-in, long-running.** The fuzzers (`go test -fuzz=…`) and the
 developer aids under `cmd/` never run as part of `go test`.
+
+## Hostile-input tests
+
+A regression test for a denial-of-service guard feeds the input the guard exists
+for. Run in the test process, it protects nothing on the day the guard breaks:
+the input then does what it was built to do, and an out-of-memory kill takes the
+developer's session or the CI runner with it, or a fatal stack overflow ends the
+whole test binary. So every such test runs its hostile part through
+`internal/hostile`, which re-executes the test binary for that one test with a
+resident-memory cap (Linux), a wall-clock cap and a small goroutine stack, and
+reports a breach as an ordinary failure: *over memory*, *timeout* or *fatal*.
+The test body still asserts the real result (a bounded error, a specific
+finding); the caps are only the net underneath. See the package documentation
+for the API and the outcomes, and use it for any new test of this kind.
 
 ## External datasets
 
@@ -100,6 +138,10 @@ CoreText, and the Universal Shaping Engine's category corrections — are
 | `make cc-sweep` | Sweep real-world Common Crawl PDFs for parser panics and hangs (`FIRST=`/`LAST=` pick the block range) |
 
 Each fetch target is guarded by a `.ok` stamp file, so re-running is a no-op.
+The stamp is written only when the fetch succeeded (the download scripts exit
+non-zero if any file failed), and it is what the tests read as "this data set is
+complete". If you placed a fetchable data set by hand, run its make target,
+which fetches it again and writes the stamp.
 
 **Run**
 

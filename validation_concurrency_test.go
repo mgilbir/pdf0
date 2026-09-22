@@ -2,9 +2,9 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/pdfa"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -15,13 +15,10 @@ import (
 //
 // Run with -race to actually catch the regression.
 func TestValidateConcurrentSameDoc(t *testing.T) {
-	files, _ := filepath.Glob("testdata/pdf20examples/*.pdf")
-	if len(files) == 0 {
-		t.Skip("testdata/pdf20examples not present")
-	}
+	files := testfiles.PDF20Examples.Glob(t, "*.pdf")
 	b, err := os.ReadFile(files[0])
 	if err != nil {
-		t.Skipf("reading reference PDF: %v", err)
+		t.Fatalf("reading reference PDF: %v", err)
 	}
 	doc, err := Read(bytes.NewReader(b), int64(len(b)))
 	if err != nil {

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"encoding/json"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,19 +28,22 @@ func TestSpecExamplesRegenerate(t *testing.T) {
 
 	cases := []struct {
 		name      string
+		ds        testfiles.Dataset
 		specPDF   string
 		script    string
 		committed string
 	}{
 		{
 			name:      "PDF 2.0",
-			specPDF:   "spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf",
+			ds:        testfiles.SpecPDF20,
+			specPDF:   "ISO_32000-2_sponsored-ec2.pdf",
 			script:    "cmd/extract_spec_examples/main.py",
 			committed: "testdata/spec_examples.json",
 		},
 		{
 			name:      "PDF 1.7",
-			specPDF:   "spec/pdf1.7/PDF32000_2008.pdf",
+			ds:        testfiles.SpecPDF17,
+			specPDF:   "PDF32000_2008.pdf",
 			script:    "cmd/extract_spec_examples/main17.py",
 			committed: "testdata/spec_examples_17.json",
 		},
@@ -47,9 +51,9 @@ func TestSpecExamplesRegenerate(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := os.Stat(c.specPDF); err != nil {
-				t.Skipf("spec PDF %s not present", c.specPDF)
-			}
+			// Skips when the spec directory was never placed; a placed
+			// directory without the PDF fails.
+			c.specPDF = c.ds.File(t, c.specPDF)
 
 			dir := t.TempDir()
 			txt := filepath.Join(dir, "spec.txt")

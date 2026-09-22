@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
@@ -104,10 +105,7 @@ func TestValidatePDFVTViolations(t *testing.T) {
 // DPart hierarchy, no PDF/VT identification), so it is a negative control here.
 // Uses the smaller record-count variants; skips when the suite is absent.
 func TestValidatePDFVTCalPolySuite(t *testing.T) {
-	all, _ := filepath.Glob("testdata/pdfvt/*.pdf")
-	if len(all) == 0 {
-		t.Skip("Cal Poly PDF/VT suite not present (testdata/pdfvt)")
-	}
+	all := testfiles.CalPolyPDFVT.Glob(t, "*.pdf")
 	var vtFiles []string
 	sawDoc := false
 	for _, f := range all {

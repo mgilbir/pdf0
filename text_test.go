@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"strings"
 	"testing"
@@ -10,10 +11,9 @@ import (
 // TestExtractText checks text extraction against a reference PDF (skips when the
 // reference set is absent).
 func TestExtractText(t *testing.T) {
-	const path = "testdata/pdf20examples/Simple PDF 2.0 file.pdf"
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(testfiles.PDF20Examples.File(t, "Simple PDF 2.0 file.pdf"))
 	if err != nil {
-		t.Skip("reference PDFs not present; run `make refpdfs`")
+		t.Fatal(err)
 	}
 	doc, err := Read(bytes.NewReader(data), int64(len(data)))
 	if err != nil {

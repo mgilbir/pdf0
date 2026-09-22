@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"strings"
 	"testing"
@@ -9,9 +10,9 @@ import (
 
 func readRef(t *testing.T, name string) *Document {
 	t.Helper()
-	data, err := os.ReadFile("testdata/pdf20examples/" + name)
+	data, err := os.ReadFile(testfiles.PDF20Examples.File(t, name))
 	if err != nil {
-		t.Skip("reference PDFs not present; run `make refpdfs`")
+		t.Fatal(err)
 	}
 	doc, err := Read(bytes.NewReader(data), int64(len(data)))
 	if err != nil {

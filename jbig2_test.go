@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"image"
 	"os"
 	"path/filepath"
@@ -44,7 +45,6 @@ func grayPixels(t *testing.T, img images.ExtractedImage) *image.Gray {
 // byte-identical pixels. Different coders agreeing on the same output is strong
 // evidence the decoder is correct.
 func TestJBIG2GenericCrossCheck(t *testing.T) {
-	dir := "testdata/jbig2"
 	generic := []string{
 		"bitmap-template1.pdf",
 		"bitmap-template2.pdf",
@@ -61,12 +61,9 @@ func TestJBIG2GenericCrossCheck(t *testing.T) {
 		"bitmap-stripe-initially-unknown-height.pdf",
 		"bitmap-initially-unknown-size.pdf",
 	}
-	if _, err := os.Stat(filepath.Join(dir, generic[0])); err != nil {
-		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
-	}
 	var want *image.Gray
 	for _, name := range generic {
-		img := jbig2Image(t, filepath.Join(dir, name))
+		img := jbig2Image(t, jbig2Sample(t, name))
 		if !img.Decoded {
 			t.Errorf("%s: not decoded: %s", name, img.Note)
 			continue
@@ -103,11 +100,7 @@ func TestJBIG2GenericCrossCheck(t *testing.T) {
 // generic-region reference. This exercises the integer arithmetic decoder, the
 // symbol dictionary, and text-region symbol placement.
 func TestJBIG2SymbolText(t *testing.T) {
-	dir := "testdata/jbig2"
-	ref := filepath.Join(dir, "bitmap-template1.pdf")
-	if _, err := os.Stat(ref); err != nil {
-		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
-	}
+	ref := jbig2Sample(t, "bitmap-template1.pdf")
 	want := grayPixels(t, jbig2Image(t, ref)).Pix
 
 	symbolFiles := []string{
@@ -121,10 +114,7 @@ func TestJBIG2SymbolText(t *testing.T) {
 		"bitmap-symbol-negative-sbdsoffset.pdf",
 	}
 	for _, name := range symbolFiles {
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
+		path := jbig2Sample(t, name)
 		img := jbig2Image(t, path)
 		if !img.Decoded {
 			t.Errorf("%s: not decoded: %s", name, img.Note)
@@ -142,11 +132,7 @@ func TestJBIG2SymbolText(t *testing.T) {
 // dictionaries, single-instance and multi-instance aggregate, arithmetic and
 // Huffman) — and asserts each matches the generic-region reference.
 func TestJBIG2Refinement(t *testing.T) {
-	dir := "testdata/jbig2"
-	ref := filepath.Join(dir, "bitmap-template1.pdf")
-	if _, err := os.Stat(ref); err != nil {
-		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
-	}
+	ref := jbig2Sample(t, "bitmap-template1.pdf")
 	want := grayPixels(t, jbig2Image(t, ref)).Pix
 
 	for _, name := range []string{
@@ -185,10 +171,7 @@ func TestJBIG2Refinement(t *testing.T) {
 		"bitmap-composite-or-xor-replace-refine.pdf",
 		"bitmap-trailing-7fff-stripped-harder-refine.pdf",
 	} {
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
+		path := jbig2Sample(t, name)
 		img := jbig2Image(t, path)
 		if !img.Decoded {
 			t.Errorf("%s: not decoded: %s", name, img.Note)
@@ -205,11 +188,7 @@ func TestJBIG2Refinement(t *testing.T) {
 // optimisation, a 10-bit-per-pixel grid (arithmetic and MMR), compositing and
 // refinement — and asserts each matches the generic-region reference.
 func TestJBIG2Halftone(t *testing.T) {
-	dir := "testdata/jbig2"
-	ref := filepath.Join(dir, "bitmap-template1.pdf")
-	if _, err := os.Stat(ref); err != nil {
-		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
-	}
+	ref := jbig2Sample(t, "bitmap-template1.pdf")
 	want := grayPixels(t, jbig2Image(t, ref)).Pix
 
 	for _, name := range []string{
@@ -224,10 +203,7 @@ func TestJBIG2Halftone(t *testing.T) {
 		"bitmap-halftone-composite.pdf",
 		"bitmap-halftone-refine.pdf",
 	} {
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
+		path := jbig2Sample(t, name)
 		img := jbig2Image(t, path)
 		if !img.Decoded {
 			t.Errorf("%s: not decoded: %s", name, img.Note)
@@ -244,11 +220,7 @@ func TestJBIG2Halftone(t *testing.T) {
 // an uncompressed collective bitmap — and asserts each matches the arithmetic
 // generic-region reference.
 func TestJBIG2Huffman(t *testing.T) {
-	dir := "testdata/jbig2"
-	ref := filepath.Join(dir, "bitmap-template1.pdf")
-	if _, err := os.Stat(ref); err != nil {
-		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
-	}
+	ref := jbig2Sample(t, "bitmap-template1.pdf")
 	want := grayPixels(t, jbig2Image(t, ref)).Pix
 
 	for _, name := range []string{
@@ -258,10 +230,7 @@ func TestJBIG2Huffman(t *testing.T) {
 		"bitmap-symbol-symhuffcustom-texthuffcustom.pdf",
 		"bitmap-symbol-symhuffuncompressed-texthuff.pdf",
 	} {
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
+		path := jbig2Sample(t, name)
 		img := jbig2Image(t, path)
 		if !img.Decoded {
 			t.Errorf("%s: not decoded: %s", name, img.Note)
@@ -279,11 +248,7 @@ func TestJBIG2Huffman(t *testing.T) {
 // referencing), and region compositing with every operator — and asserts each
 // matches the generic-region reference.
 func TestJBIG2EdgeCases(t *testing.T) {
-	dir := "testdata/jbig2"
-	ref := filepath.Join(dir, "bitmap-template1.pdf")
-	if _, err := os.Stat(ref); err != nil {
-		t.Skip("no JBIG2 sample PDFs; run `make jbig2`")
-	}
+	ref := jbig2Sample(t, "bitmap-template1.pdf")
 	want := grayPixels(t, jbig2Image(t, ref)).Pix
 
 	for _, name := range []string{
@@ -293,10 +258,7 @@ func TestJBIG2EdgeCases(t *testing.T) {
 		"bitmap-composite-and-xnor.pdf",
 		"bitmap-composite-or-xor-replace.pdf",
 	} {
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
+		path := jbig2Sample(t, name)
 		img := jbig2Image(t, path)
 		if !img.Decoded {
 			t.Errorf("%s: not decoded: %s", name, img.Note)
@@ -306,4 +268,13 @@ func TestJBIG2EdgeCases(t *testing.T) {
 			t.Errorf("%s: pixels differ from the generic-region reference", name)
 		}
 	}
+}
+
+// jbig2Sample returns one of the pdf.js JBIG2 samples. The set is skipped when
+// it was never fetched; once it is (the .ok stamp), every sample named here is
+// in the committed manifest, so a missing one fails rather than quietly
+// dropping out of the comparison.
+func jbig2Sample(t *testing.T, name string) string {
+	t.Helper()
+	return testfiles.JBIG2.File(t, name)
 }

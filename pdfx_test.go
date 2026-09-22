@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfx"
 	"os"
@@ -207,10 +208,7 @@ func TestValidatePDFXViolations(t *testing.T) {
 // to run the executed-content font walk over in a unit test. Skips when the
 // suite is absent.
 func TestValidatePDFXCalPolySuite(t *testing.T) {
-	all, _ := filepath.Glob("testdata/pdfvt/*.pdf")
-	if len(all) == 0 {
-		t.Skip("Cal Poly PDF/VT suite not present (testdata/pdfvt)")
-	}
+	all := testfiles.CalPolyPDFVT.Glob(t, "*.pdf")
 	for _, f := range all {
 		name := filepath.Base(f)
 		isDoc := strings.HasPrefix(name, "Documentation")

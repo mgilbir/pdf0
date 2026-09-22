@@ -1184,25 +1184,18 @@ func TestCorpusParsesEntirely(t *testing.T) {
 	corpusDir := corpusRoot(t)
 	var total int
 	var failures []string
-	filepath.Walk(corpusDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-			return nil
-		}
-		base := filepath.Base(path)
-		if !strings.Contains(base, "-pass-") && !strings.Contains(base, "-fail-") {
-			return nil
-		}
+	for _, path := range corpusTestFiles(t, "") {
 		total++
+		rel, _ := filepath.Rel(corpusDir, path)
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return nil
+			failures = append(failures, rel+" :: "+readErr.Error())
+			continue
 		}
 		if _, e := Read(bytes.NewReader(data), int64(len(data))); e != nil {
-			rel, _ := filepath.Rel(corpusDir, path)
 			failures = append(failures, rel+" :: "+e.Error())
 		}
-		return nil
-	})
+	}
 	t.Logf("corpus parse: %d files, %d failures", total, len(failures))
 	if len(failures) > 0 {
 		t.Errorf("%d corpus files failed to parse:\n  %s", len(failures), strings.Join(failures, "\n  "))
@@ -1220,28 +1213,19 @@ func TestCorpusParsesEntirely(t *testing.T) {
 // are the requirements they take on in exchange. 4f is fully detected; 4e keeps
 // one file, for the reason given on its baseline.
 func TestCorpusIsartor(t *testing.T) {
-	root := corpusSubdir(t, "Isartor test files")
-
 	var fail, missed, fp, parseErrors int
 	var missedFiles []string
-	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-			return nil
-		}
+	for _, path := range corpusTestFiles(t, "Isartor test files") {
 		base := filepath.Base(path)
 		isPass := strings.Contains(base, "-pass-")
-		isFail := strings.Contains(base, "-fail-")
-		if !isPass && !isFail {
-			return nil
-		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return nil
+			t.Fatalf("read %s: %v", base, readErr)
 		}
 		doc, e := Read(bytes.NewReader(data), int64(len(data)))
 		if e != nil {
 			parseErrors++
-			return nil
+			continue
 		}
 		// Isartor is a PDF/A-1b test suite.
 		errs := ValidatePDFABytes(doc, pdfa.PDFA1b, data)
@@ -1249,15 +1233,14 @@ func TestCorpusIsartor(t *testing.T) {
 			if len(errs) > 0 {
 				fp++
 			}
-			return nil
+			continue
 		}
 		fail++
 		if len(errs) == 0 {
 			missed++
 			missedFiles = append(missedFiles, base)
 		}
-		return nil
-	})
+	}
 
 	t.Logf("Isartor results: fail=%d | falsePositives=%d missed=%d parseErrors=%d",
 		fail, fp, missed, parseErrors)
@@ -1291,7 +1274,8 @@ func TestCorpusIsartor(t *testing.T) {
 // PDF/UA is a different standard entirely). This is a regression net, not a
 // claim of 1a/2a/2u/UA conformance coverage — that needs new rule families.
 func TestCorpusConformanceSuites(t *testing.T) {
-	corpusDir := corpusRoot(t)
+	// Every suite is required: corpusTestFiles skips when the corpus is absent
+	// and fails when it is present without the suite.
 
 	suites := []struct {
 		dir       string
@@ -1326,31 +1310,23 @@ func TestCorpusConformanceSuites(t *testing.T) {
 	}
 
 	for _, s := range suites {
-		root := filepath.Join(corpusDir, s.dir)
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue
-		}
+		// A suite missing from a present corpus fails inside corpusTestFiles:
+		// the corpus is pinned, so that is a layout change, not a download
+		// the developer skipped.
 		var fail, missed, parseErrors, falsePositives int
 		var missedFiles, fpFiles, parseErrFiles []string
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-				return nil
-			}
+		for _, path := range corpusTestFiles(t, s.dir) {
 			base := filepath.Base(path)
 			isPass := strings.Contains(base, "-pass-")
-			isFail := strings.Contains(base, "-fail-")
-			if !isPass && !isFail {
-				return nil
-			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
-				return nil
+				t.Fatalf("read %s: %v", base, readErr)
 			}
 			doc, e := Read(bytes.NewReader(data), int64(len(data)))
 			if e != nil {
 				parseErrors++
 				parseErrFiles = append(parseErrFiles, base+" :: "+e.Error())
-				return nil
+				continue
 			}
 			errs := ValidatePDFABytes(doc, s.level, data)
 			if isPass {
@@ -1358,15 +1334,14 @@ func TestCorpusConformanceSuites(t *testing.T) {
 					falsePositives++
 					fpFiles = append(fpFiles, base+" :: "+errs[0].Error())
 				}
-				return nil
+				continue
 			}
 			fail++
 			if len(errs) == 0 {
 				missed++
 				missedFiles = append(missedFiles, base)
 			}
-			return nil
-		})
+		}
 		t.Logf("%-10s @ %-8v : fail=%d missed=%d falsePositives=%d parseErrors=%d", s.dir, s.level, fail, missed, falsePositives, parseErrors)
 		if missed > s.maxMissed {
 			t.Errorf("%s: missed %d exceed baseline %d (detection regressed). Offending fail files:\n  %s",
@@ -1398,7 +1373,7 @@ func TestCorpusConformanceSuites(t *testing.T) {
 // falsePositives is the hard invariant at 0 — a Level A pass file is a
 // conforming document and rejecting it means a rule is wrong.
 func TestCorpusLevelA(t *testing.T) {
-	corpusDir := corpusRoot(t)
+	// Both suites are required; see corpusTestFiles.
 
 	suites := []struct {
 		dir       string
@@ -1410,30 +1385,19 @@ func TestCorpusLevelA(t *testing.T) {
 	}
 
 	for _, s := range suites {
-		root := filepath.Join(corpusDir, s.dir)
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue
-		}
 		var pass, fail, missed, falsePositives, parseErrors int
 		var fpFiles, missedFiles []string
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-				return nil
-			}
+		for _, path := range corpusTestFiles(t, s.dir) {
 			base := filepath.Base(path)
 			isPass := strings.Contains(base, "-pass-")
-			isFail := strings.Contains(base, "-fail-")
-			if !isPass && !isFail {
-				return nil
-			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
-				return nil
+				t.Fatalf("read %s: %v", base, readErr)
 			}
 			doc, e := Read(bytes.NewReader(data), int64(len(data)))
 			if e != nil {
 				parseErrors++
-				return nil
+				continue
 			}
 			errs := ValidatePDFABytes(doc, s.level, data)
 			if isPass {
@@ -1442,15 +1406,14 @@ func TestCorpusLevelA(t *testing.T) {
 					falsePositives++
 					fpFiles = append(fpFiles, base+" :: "+errs[0].Error())
 				}
-				return nil
+				continue
 			}
 			fail++
 			if len(errs) == 0 {
 				missed++
 				missedFiles = append(missedFiles, base)
 			}
-			return nil
-		})
+		}
 		t.Logf("%-10s @ %-8v : pass=%d fail=%d missed=%d falsePositives=%d parseErrors=%d",
 			s.dir, s.level, pass, fail, missed, falsePositives, parseErrors)
 
@@ -1487,28 +1450,15 @@ func TestCorpus(t *testing.T) {
 		if !ok {
 			t.Fatalf("unknown level dir: %s", levelDir)
 		}
-		root := filepath.Join(corpusDir, levelDir)
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue
-		}
-
 		// Collect paths first, then iterate. This avoids holding all parsed
 		// Documents in memory at once (which caused OOM kills with the full
-		// 2900+ file corpus).
+		// 2900+ file corpus). A level missing from a present corpus fails.
 		var files []corpusFile
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-				return nil
-			}
+		for _, path := range corpusTestFiles(t, levelDir) {
 			rel, _ := filepath.Rel(corpusDir, path)
 			isPass := strings.Contains(filepath.Base(path), "-pass-")
-			isFail := strings.Contains(filepath.Base(path), "-fail-")
-			if !isPass && !isFail {
-				return nil
-			}
 			files = append(files, corpusFile{path: path, rel: rel, isPass: isPass})
-			return nil
-		})
+		}
 
 		for i, f := range files {
 			data, err := os.ReadFile(f.path)

@@ -58,7 +58,7 @@ func TestReEncryptRoundTrip(t *testing.T) {
 // decrypt on Read, re-encrypt on Write, then re-read and confirm the streams
 // still decrypt (their FlateDecode content inflates).
 func TestReEncryptCorpusRoundTrip(t *testing.T) {
-	corpus := corpusRoot(t)
+	corpusRoot(t) // skips when the corpus is absent
 	cases := []struct{ name, sub string }{
 		{"RC4 V2/R3", filepath.Join("PDFA-1b", "6.1 File structure", "6.1.3 File trailer", "isartor-6-1-3-t02-fail-a")},
 		{"AES-128 V4/R4", filepath.Join("PDF_A-2b", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a")},
@@ -66,10 +66,7 @@ func TestReEncryptCorpusRoundTrip(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := findCorpusFile(corpus, c.sub)
-			if p == "" {
-				t.Skipf("%s not found", c.sub)
-			}
+			p := corpusFileNamed(t, c.sub)
 			data, err := os.ReadFile(p)
 			if err != nil {
 				t.Fatal(err)
@@ -79,7 +76,7 @@ func TestReEncryptCorpusRoundTrip(t *testing.T) {
 				t.Fatalf("read: %v", err)
 			}
 			if doc.security == nil {
-				t.Skip("file did not decrypt")
+				t.Fatal("the pinned encrypted fixture did not decrypt with the empty password")
 			}
 			var buf bytes.Buffer
 			if err := doc.Write(&buf); err != nil {
@@ -113,7 +110,7 @@ func TestReEncryptCorpusRoundTrip(t *testing.T) {
 				checked++
 			}
 			if checked == 0 {
-				t.Skip("no FlateDecode streams to verify")
+				t.Fatal("no FlateDecode streams to verify; the fixture no longer exercises re-encryption")
 			}
 		})
 	}

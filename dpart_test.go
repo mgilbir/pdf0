@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
@@ -172,10 +173,7 @@ func TestValidateDPartsValidDPM(t *testing.T) {
 // testdata/pdfvt is absent (as in CI), mirroring the veraPDF corpus tests. It
 // also confirms the parser scales to the largest members (up to ~195k pages).
 func TestValidateDPartsCalPolySuite(t *testing.T) {
-	files, _ := filepath.Glob("testdata/pdfvt/*.pdf")
-	if len(files) == 0 {
-		t.Skip("Cal Poly PDF/VT suite not present (testdata/pdfvt)")
-	}
+	files := testfiles.CalPolyPDFVT.Glob(t, "*.pdf")
 	for _, f := range files {
 		name := filepath.Base(f)
 		data, err := os.ReadFile(f)

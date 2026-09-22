@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
@@ -9,18 +10,8 @@ import (
 )
 
 func TestRoundTripReferencePDFs(t *testing.T) {
-	dir := "testdata/pdf20examples"
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Skipf("reference PDFs not available: %v", err)
-	}
-
-	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".pdf" {
-			continue
-		}
-		t.Run(entry.Name(), func(t *testing.T) {
-			path := filepath.Join(dir, entry.Name())
+	for _, path := range testfiles.PDF20Examples.Glob(t, "*.pdf") {
+		t.Run(filepath.Base(path), func(t *testing.T) {
 			testRoundTripFile(t, path)
 		})
 	}
@@ -81,10 +72,10 @@ func testRoundTripFile(t *testing.T, path string) {
 }
 
 func TestReadSimplePDF(t *testing.T) {
-	path := "testdata/pdf20examples/Simple PDF 2.0 file.pdf"
+	path := testfiles.PDF20Examples.File(t, "Simple PDF 2.0 file.pdf")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Skipf("file not available: %v", err)
+		t.Fatal(err)
 	}
 
 	r := bytes.NewReader(data)

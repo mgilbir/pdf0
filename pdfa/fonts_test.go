@@ -342,7 +342,7 @@ func TestDamagedFontProgramFlagged(t *testing.T) {
 	// A usage that renders visible text.
 	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{[]byte("Hi")}, Modes: map[int]bool{0: true}}
 	if core.LoadFontProgram(doc, fd) != nil {
-		t.Skip("garbage stream unexpectedly parsed as a font program")
+		t.Fatal("the fixture no longer exercises the rule: its garbage stream parsed as a font program")
 	}
 	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd, u)); got == 0 {
 		t.Error("damaged embedded font program not flagged for a rendered font")

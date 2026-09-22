@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"encoding/xml"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,13 +28,9 @@ const ruleCoverageMaxUncovered = 0
 // self-skips when the profiles are absent (fetch them with `make profiles`),
 // mirroring the corpus tests.
 func TestRuleCoverage(t *testing.T) {
-	profilesDir := os.Getenv("VERAPDF_PROFILES")
-	if profilesDir == "" {
-		profilesDir = "spec/verapdf-profiles"
-	}
-	if _, err := os.Stat(filepath.Join(profilesDir, "PDF_A")); err != nil {
-		t.Skip("veraPDF profiles not found; run `make profiles` to download")
-	}
+	// Skips when never fetched; fails when VERAPDF_PROFILES names something
+	// unusable, or when the fetched profiles lack the PDF_A directory.
+	profilesDir := filepath.Dir(testfiles.VeraPDFProfiles.File(t, "PDF_A"))
 
 	emitted, err := scanEmittedRuleClauses(".")
 	if err != nil {

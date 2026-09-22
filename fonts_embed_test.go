@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"path/filepath"
 	"strings"
@@ -406,46 +407,45 @@ func TestShapedTextValidatesAndKeepsItsLigature(t *testing.T) {
 // is absent rather than failing.
 func corpusOpenTypeCFF(t *testing.T) []byte {
 	t.Helper()
-	root := "testdata/verapdf-corpus"
-	if _, err := os.Stat(root); err != nil {
-		t.Skip("veraPDF corpus not present; run `make corpus`")
-	}
 	var found []byte
-	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if found != nil || err != nil || info.IsDir() || filepath.Ext(p) != ".pdf" {
-			return nil
+	for _, p := range testfiles.VeraPDFCorpus.Files(t, "", func(p string) bool { return filepath.Ext(p) == ".pdf" }) {
+		if found != nil {
+			break
 		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return nil
-		}
-		defer func() { _ = recover() }()
-		doc, err := Read(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			return nil
-		}
-		for _, iobj := range doc.Objects {
-			s, ok := iobj.Value.(*object.Stream)
-			if !ok || s.Dict.Get("Subtype") != object.Name("OpenType") {
-				continue
+		func() {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return
 			}
-			raw, err := doc.StreamData(s)
-			if err != nil || len(raw) < 4 || string(raw[:4]) != "OTTO" {
-				continue
+			defer func() { _ = recover() }()
+			doc, err := Read(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				return
 			}
-			if _, err := fonts.Load(raw); err != nil {
-				continue // CID-keyed, or otherwise not one this package takes
+			for _, iobj := range doc.Objects {
+				s, ok := iobj.Value.(*object.Stream)
+				if !ok || s.Dict.Get("Subtype") != object.Name("OpenType") {
+					continue
+				}
+				raw, err := doc.StreamData(s)
+				if err != nil || len(raw) < 4 || string(raw[:4]) != "OTTO" {
+					continue
+				}
+				if _, err := fonts.Load(raw); err != nil {
+					continue // CID-keyed, or otherwise not one this package takes
+				}
+				if !selfConsistentWidths(raw) {
+					continue
+				}
+				found = raw
+				return
 			}
-			if !selfConsistentWidths(raw) {
-				continue
-			}
-			found = raw
-			return filepath.SkipAll
-		}
-		return nil
-	})
+		}()
+	}
 	if found == nil {
-		t.Skip("no CFF-flavoured OpenType program found in the corpus")
+		// The corpus is present (Files skips otherwise) and pinned, so this is
+		// a broken finder, not a missing download.
+		t.Fatal("no CFF-flavoured OpenType program found in the corpus")
 	}
 	return found
 }
@@ -492,7 +492,7 @@ func TestOpenTypeCFFEmbedsAndValidates(t *testing.T) {
 		}
 	}
 	if text == "" {
-		t.Skip("the corpus program maps none of the ASCII letters")
+		t.Fatal("the corpus program maps none of the ASCII letters; the fixture no longer exercises this test")
 	}
 	codes, missing := face.Encode(text)
 	if missing != 0 {
@@ -588,7 +588,7 @@ func TestCFFSubsetIsSmallerAndStillParses(t *testing.T) {
 		}
 	}
 	if text == "" {
-		t.Skip("the corpus program maps none of the ASCII letters")
+		t.Fatal("the corpus program maps none of the ASCII letters; the fixture no longer exercises this test")
 	}
 	face.Encode(text)
 
@@ -659,7 +659,7 @@ func TestCFFSubsetDropsUnusedOutlines(t *testing.T) {
 		}
 	}
 	if keptRune == 0 {
-		t.Skip("the corpus program maps none of the ASCII letters")
+		t.Fatal("the corpus program maps none of the ASCII letters; the fixture no longer exercises this test")
 	}
 	face.Encode(string(keptRune))
 	keptGID, _ := face.GlyphID(keptRune)
@@ -712,7 +712,7 @@ func TestCFFSubsetValidatesAtEveryLevel(t *testing.T) {
 				}
 			}
 			if text == "" {
-				t.Skip("the corpus program maps none of the ASCII letters")
+				t.Fatal("the corpus program maps none of the ASCII letters; the fixture no longer exercises this test")
 			}
 			codes, _ := face.Encode(text)
 
@@ -788,9 +788,9 @@ func attachPage(doc *Document, drawn []byte, fontRef object.IndirectRef) {
 // the only thing that tells a CID from a glyph index. `make notocjk` fetches it.
 func cidKeyedFace(t *testing.T) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "notocjk", "NotoSansJP-Regular.otf"))
+	data, err := os.ReadFile(testfiles.NotoCJK.File(t, "NotoSansJP-Regular.otf"))
 	if err != nil {
-		t.Skip("run `make notocjk` for a CID-keyed face: ", err)
+		t.Fatal(err)
 	}
 	return data
 }
@@ -871,7 +871,7 @@ func TestCIDKeyedSystemInfoIsTheFontsOwn(t *testing.T) {
 		t.Fatal("the corpus fixture is not a CID-keyed CFF")
 	}
 	if prog.Registry == "Adobe" && prog.Ordering == "Identity" {
-		t.Skip("the corpus font found is Adobe-Identity-0, which is also the " +
+		t.Fatal("the corpus font found is Adobe-Identity-0, which is also the " +
 			"fallback, so this run cannot tell the two apart")
 	}
 
@@ -1006,42 +1006,39 @@ func widthOfCID(t *testing.T, doc *Document, cidFont *object.Dictionary, cid int
 // corpusCIDKeyedCFF returns a bare CID-keyed CFF program from the corpus.
 func corpusCIDKeyedCFF(t *testing.T) []byte {
 	t.Helper()
-	root := "testdata/verapdf-corpus"
-	if _, err := os.Stat(root); err != nil {
-		t.Skip("veraPDF corpus not present; run `make corpus`")
-	}
 	var found []byte
-	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if found != nil || err != nil || info.IsDir() || filepath.Ext(p) != ".pdf" {
-			return nil
+	for _, p := range testfiles.VeraPDFCorpus.Files(t, "", func(p string) bool { return filepath.Ext(p) == ".pdf" }) {
+		if found != nil {
+			break
 		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return nil
-		}
-		defer func() { _ = recover() }()
-		doc, err := Read(bytes.NewReader(data), int64(len(data)))
-		if err != nil {
-			return nil
-		}
-		for _, iobj := range doc.Objects {
-			s, ok := iobj.Value.(*object.Stream)
-			if !ok || s.Dict.Get("Subtype") != object.Name("CIDFontType0C") {
-				continue
-			}
-			raw, err := doc.StreamData(s)
+		func() {
+			data, err := os.ReadFile(p)
 			if err != nil {
-				continue
+				return
 			}
-			if prog := font.ParseCFF(raw); prog != nil && prog.WidthByCID != nil {
-				found = raw
-				return filepath.SkipAll
+			defer func() { _ = recover() }()
+			doc, err := Read(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				return
 			}
-		}
-		return nil
-	})
+			for _, iobj := range doc.Objects {
+				s, ok := iobj.Value.(*object.Stream)
+				if !ok || s.Dict.Get("Subtype") != object.Name("CIDFontType0C") {
+					continue
+				}
+				raw, err := doc.StreamData(s)
+				if err != nil {
+					continue
+				}
+				if prog := font.ParseCFF(raw); prog != nil && prog.WidthByCID != nil {
+					found = raw
+					return
+				}
+			}
+		}()
+	}
 	if found == nil {
-		t.Skip("no CID-keyed CFF program found in the corpus")
+		t.Fatal("no CID-keyed CFF program found in the corpus")
 	}
 	return found
 }
@@ -1398,7 +1395,7 @@ func TestAnAdoptedCIDFaceGetsItsOwnCollection(t *testing.T) {
 		t.Fatal("the corpus fixture is not a CID-keyed CFF")
 	}
 	if prog.Registry == "Adobe" && prog.Ordering == "Identity" {
-		t.Skip("the corpus font found is Adobe-Identity-0, which is also the " +
+		t.Fatal("the corpus font found is Adobe-Identity-0, which is also the " +
 			"default, so this run cannot tell the two apart")
 	}
 	data := fonttest.OTTO(cff, fonttest.SFNTOptions{

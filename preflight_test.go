@@ -53,11 +53,7 @@ func TestRepairCatalogAA(t *testing.T) {
 // TestRepairEncryption decrypts an encrypted corpus file, repairs away the
 // encryption, and confirms the /Encrypt violation is gone.
 func TestRepairEncryption(t *testing.T) {
-	corpus := corpusRoot(t)
-	p := findCorpusFile(corpus, "PDF_A-2b/6.1 File structure/6.1.3 File trailer/veraPDF test suite 6-1-3-t02-fail-a")
-	if p == "" {
-		t.Skip("encrypted sample not found")
-	}
+	p := corpusFileNamed(t, "PDF_A-2b/6.1 File structure/6.1.3 File trailer/veraPDF test suite 6-1-3-t02-fail-a")
 	data, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +63,7 @@ func TestRepairEncryption(t *testing.T) {
 		t.Fatal(err)
 	}
 	if doc.security == nil {
-		t.Skip("file did not decrypt")
+		t.Fatal("the pinned encrypted fixture did not decrypt with the empty password")
 	}
 	if countEncryptViolations(ValidatePDFA(doc, pdfa.PDFA2b)) == 0 {
 		t.Fatal("expected an /Encrypt violation before repair")

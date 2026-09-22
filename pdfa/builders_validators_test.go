@@ -43,7 +43,7 @@ func TestCanonicalPrefixSingleQuote(t *testing.T) {
 		break
 	}
 	if uri == "" {
-		t.Skip("no canonical prefixes configured")
+		t.Fatal("canonicalXMPPrefixes is empty, so this test checks nothing")
 	}
 
 	// Bind the namespace to a deliberately wrong prefix using single quotes.

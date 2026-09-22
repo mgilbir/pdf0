@@ -115,7 +115,9 @@ func TestEncryptedDocumentDetectedAndNotWritten(t *testing.T) {
 	s := string(base)
 	s = strings.Replace(s, "<< /Size 4 /Root 1 0 R >>", "<< /Size 4 /Root 1 0 R /Encrypt 9 0 R >>", 1)
 	if s == string(base) {
-		t.Skip("minimal PDF trailer changed; update this test")
+		// A security regression test that stops exercising its case must fail,
+		// not skip: a skip reads as a pass (audit 2026-09-22 C167).
+		t.Fatal("the minimal PDF's trailer changed, so the /Encrypt entry was not planted; update this test")
 	}
 	doc, err := Read(bytes.NewReader([]byte(s)), int64(len(s)))
 	if err != nil {

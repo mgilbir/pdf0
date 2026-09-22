@@ -3,8 +3,8 @@ package fonts
 import (
 	"bufio"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
-	"path/filepath"
 
 	"github.com/mgilbir/pdf0/object"
 	"strings"
@@ -663,7 +663,7 @@ func describeRunes(s string) string {
 // the right input for both.
 func shapingCorpus(t *testing.T) []string {
 	t.Helper()
-	return readNonEmptyLines(t, filepath.Join("..", "testdata", "shaping", "corpus.txt"))
+	return readNonEmptyLines(t, testfiles.Committed(t, "testdata/shaping/corpus.txt"))
 }
 
 // from fonts/bidi_test.go
