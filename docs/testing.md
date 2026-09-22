@@ -82,7 +82,7 @@ hand.
 |---|---|---|---|---|---|---|
 | **veraPDF corpus** | The PDF/A conformance ratchet: no false positives, no missed violations, no parse errors | `TestCorpus`, `TestCorpusIsartor`, `TestCorpusConformanceSuites`, `TestCorpusParsesEntirely`, `TestLevelACorpus`, `TestDecryptCorpusFiles`, `TestEncryptedPassthroughAESCorpus`, `TestReEncryptCorpusRoundTrip`, `TestRepairEncryption`, `TestDevColorScannerMatchesPDFA`, `TestArlingtonCorpusParserFaithful` | `make corpus` | `VERAPDF_CORPUS` | `testdata/verapdf-corpus/` | `git clone` [veraPDF/veraPDF-corpus](https://github.com/veraPDF/veraPDF-corpus) |
 | **PDF 2.0 reference PDFs** | Read→Write→Read round-trips over real PDF 2.0 files | `TestRoundTripReferencePDFs`, `TestExtractAndMergePages`, `TestExtractText`, `TestValidateConcurrentSameDoc`, `TestWrittenXrefIs20Bytes` and the rest of `write_conformance_test.go`, `TestArlingtonParserFaithful`; also seeds both fuzzers | `make refpdfs` | — (path is hard-coded) | `testdata/pdf20examples/` | `git clone` [pdf-association/pdf20examples](https://github.com/pdf-association/pdf20examples) |
-| **veraPDF validation profiles** | Rule-ID coverage against the reference validator's own rule inventory | `TestRuleCoverage`; `internal/cmd/rulecoverage` | `make profiles` | `VERAPDF_PROFILES` | `spec/verapdf-profiles/` | `git clone` [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 |
+| **veraPDF validation profiles** | Per-rule detection coverage against the reference validator's own rule inventory (with the corpus) | `TestRuleCoverage`; `internal/cmd/rulecoverage` | `make profiles` | `VERAPDF_PROFILES` | `spec/verapdf-profiles/` | `git clone` [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 |
 | **Arlington PDF Model** | External grammar oracle: the parser/serializer represent objects faithfully (right types, keys, structure) | `TestArlingtonParserFaithful`, `TestArlingtonCorpusParserFaithful`, `TestArlingtonOracleHasTeeth` | `make arlington` | `ARLINGTON_MODEL` (points at the `tsv/2.0` subdirectory) | `testdata/arlington-pdf-model/` | `git clone` [pdf-association/arlington-pdf-model](https://github.com/pdf-association/arlington-pdf-model), Apache-2.0 |
 | **WTPDF / PDF/UA-2 examples** | Round-trip and robustness over complex real tagged PDF 2.0 (structure trees, associated files, MathML, role maps) | `TestWTPDFExamples` | `make wtpdf` | — | `testdata/wtpdf/*.pdf` | LaTeX Project, [tagging-project discussion 72](https://github.com/latex3/tagging-project/discussions/72), fetched from Google Drive; licences vary per file (see `sources.tsv`) |
 | **CCITT samples** | Decode oracle for the Group 3/4 fax decoder (the veraPDF corpus has no CCITT images) | `TestCCITTRealFiles` | `make ccitt` | — | `testdata/ccitt/*.pdf` | pdf.js (Apache-2.0), PyPDF4 (BSD) |
@@ -150,7 +150,7 @@ which fetches it again and writes the stamp.
 | `make test` | `go test ./...` — the default tier |
 | `make test-corpus` | `make corpus`, then `VERAPDF_CORPUS=… go test -v -run TestCorpus -count=1 ./...` |
 | `make test-arlington` | `make arlington refpdfs`, then `ARLINGTON_MODEL=…/tsv/2.0 go test -v -run TestArlington -count=1 ./...`; with the corpus also present it additionally sweeps the conformant corpus files |
-| `make rule-coverage` | `make profiles`, then `VERAPDF_PROFILES=… go run ./internal/cmd/rulecoverage` |
+| `make rule-coverage` | `make profiles corpus`, then `VERAPDF_PROFILES=… VERAPDF_CORPUS=… go run -tags devtools ./internal/cmd/rulecoverage` |
 
 **Clean**
 
@@ -239,8 +239,13 @@ return an error instead.
   hangs. It runs each file under panic recovery and a 30 s timeout, and also
   exercises `PageCount`, `Write` (to `io.Discard`) and `ValidatePDFUA` on a
   successful parse. Panics and timeouts are reported as bugs; a per-file log of
-  every non-ok outcome goes to `$TMPDIR/corpusprobe-failures.tsv`.
-  `go run -tags devtools ./internal/cmd/corpusprobe <dir> [workers]` (default 8 workers).
+  every non-ok outcome goes to `$TMPDIR/corpusprobe-failures.tsv` (the probe
+  refuses to start if it cannot create it, since `testdata/cc/sweep.sh`
+  quarantines files from it).
+  `go run -tags devtools ./internal/cmd/corpusprobe <dir> [workers]` (default 8
+  workers; 1 to 1024, anything else is a usage error). Exit status 0 when nothing
+  panicked or hung, 1 when something did, a file could not be read, the walk hit
+  an error or there were no PDFs to probe, 2 on a usage error.
 
   The timeout is a `context.Context` deadline that pdf0 observes
   (`ReadContext` / `WriteContext` / `ValidatePDFUAContext`), *and* a `select` on
@@ -258,10 +263,19 @@ return an error instead.
   300 ms, complete the whole run in 0.42 s wall and 0.53 s of CPU.
 - **`internal/cmd/corpustime`** — times each parse stage of one PDF with a generous budget
   (`Read` 180 s, `PageCount` 60 s, `Write` 180 s, `ValidatePDFUA` 180 s), to
-  distinguish a truly-hanging stage from a merely slow huge file.
+  distinguish a truly-hanging stage from a merely slow huge file. A file that
+  cannot be read or parsed, a failed `Write` and a hung stage are reported and
+  make the exit status 1; a hung stage is abandoned (its goroutine keeps running)
+  and that file's later stages are skipped.
   `go run -tags devtools ./internal/cmd/corpustime <file.pdf> [file.pdf …]`.
-- **`internal/cmd/rulecoverage`** — the human-readable rule-coverage report; see below.
-  `go run ./internal/cmd/rulecoverage [srcdir]`.
+- **`internal/cmd/rulecoverage`** — the per-rule coverage report; see below.
+  `make rule-coverage`, or
+  `go run -tags devtools ./internal/cmd/rulecoverage [-v]` from the repository root.
+
+  All three build only with `-tags devtools`. `corpusprobe` and `corpustime` are
+  tested by executing the built command (their `main_test.go` files carry no tag,
+  so `go test ./...` runs them); `rulecoverage`'s measurement lives in
+  `internal/rulecov`, tested there and by `TestRuleCoverage`.
 - **`cmd/extract_spec_examples`** — the two Python extractors (`main.py` for
   ISO 32000-2:2020, `main17.py` for ISO 32000-1:2008) that turn `pdftotext
   -layout` output of a spec PDF into the committed
@@ -272,48 +286,58 @@ return an error instead.
 
 ## Rule coverage
 
-`internal/cmd/rulecoverage` cross-references the veraPDF validation profiles (the
-reference validator's machine-readable inventory of every PDF/A rule) against the
-ISO clause strings that appear as quoted literals in pdf0's non-test source — the
-rule IDs the validator can emit. `TestRuleCoverage` ratchets the same number with
-`ruleCoverageMaxUncovered = 0`.
+`internal/cmd/rulecoverage` measures, rule by rule, which veraPDF PDF/A rules pdf0
+*detects*. For every rule in a level's profile (the reference validator's
+machine-readable rule inventory: 528 rules across 1b/2b/3b/4) it takes the corpus
+files that must fail that rule — the corpus names each file after its rule, e.g.
+`veraPDF test suite 6-2-11-4-1-t02-fail-a.pdf` — validates each at that level,
+and asks whether pdf0 reports a violation under the rule's own clause. Each rule
+is then one of:
 
-As of today:
+| Status | Meaning |
+|---|---|
+| detected | every fail file is flagged under the rule's clause |
+| elsewhere | every fail file is flagged, but at least one only under other clauses — `TestCorpus` counts the file as caught, yet not for the reason the rule describes: the rule is unimplemented and the file trips something else, or it is implemented under another number |
+| missed | a fail file is not flagged at all (`TestCorpus`'s "missed") |
+| unreadable | a fail file does not parse |
+| untested | the corpus has no fail file for the rule, so nothing here can say whether pdf0 implements it |
+
+`TestRuleCoverage` runs the same measurement and ratchets it per level
+(`ruleCoverageBaselines` in `coverage_test.go`): the number of rules detected
+under their own clause must not fall, and the number tested but not detected
+must not rise. As of today:
 
 ```
-$ VERAPDF_PROFILES=spec/verapdf-profiles go run -tags devtools ./internal/cmd/rulecoverage
-pdf0 emits 100 distinct rule clauses across the source.
-
-=== PDF/A-1b: 129 rules across 40 clauses — 40/40 clauses covered ===
-
-=== PDF/A-2b: 144 rules across 48 clauses — 48/48 clauses covered ===
-
-=== PDF/A-3b: 146 rules across 48 clauses — 48/48 clauses covered ===
-
-=== PDF/A-4: 109 rules across 45 clauses — 45/45 clauses covered ===
-
-Overall: 181/181 veraPDF clauses matched by a pdf0 rule ID (clause-string match; see caveat).
+$ make rule-coverage
+=== PDF/A-1b: 129 rules; 50 tested by the corpus: 46 detected, 4 caught only under another clause, 0 missed, 0 unreadable; 79 untested ===
+  elsewhere  6.1.12-t09       Maximum number of DeviceN components is 8
+                                veraPDF test suite 6-1-12-t09-fail-a.pdf: reported 6.2.3
+  …
+=== PDF/A-2b: 144 rules; 74 tested by the corpus: 63 detected, 11 caught only under another clause, 0 missed, 0 unreadable; 70 untested ===
+=== PDF/A-3b: 146 rules; 2 tested by the corpus: 2 detected, 0 caught only under another clause, 0 missed, 0 unreadable; 144 untested ===
+=== PDF/A-4: 109 rules; 79 tested by the corpus: 68 detected, 11 caught only under another clause, 0 missed, 0 unreadable; 30 untested ===
+Overall: 528 rules; the corpus tests 205, and pdf0 detects 179 of those under the rule's own clause.
 ```
 
-**Read that number carefully — it is a clause-string match, and it is loose in
-both directions.**
+`-v` also lists the untested rules. The 26 "elsewhere" rules are the gap list: each
+line names the fail files and what pdf0 reported for them instead.
 
-1. *A clause reported as uncovered may still be implemented.* pdf0 emits some
-   rule IDs with ISO 19005-2 numbering even at PDF/A-1, so a clause with no
-   textual match may be checked under a different number. The printed rule
-   description tells you which pdf0 rule to check by hand. (This direction no
-   longer occurs in practice — the count is currently 181/181 — but it is why the
-   matcher is deliberately not a hard assertion.)
-2. *A matched clause may implement only some of that clause's rules.* This is the
-   direction that matters now. The profiles define **528 rules** across those 181
-   clauses (129 + 144 + 146 + 109); the match is at clause granularity, so a
-   single pdf0 rule emitting `"6.2.11"` marks that whole clause covered no matter
-   how many of veraPDF's tests under it are actually implemented. **181/181 is
-   not full rule coverage, and it is not a conformance claim.**
+**Why it changed.** The tool used to collect every quoted `6.x.y` literal in the
+non-test source and match the profiles' clauses against that set. It read
+181/181 at every level and could no longer find anything, for three reasons: the
+set was one for all levels, so a literal written for 2b covered the same number
+at 1b; it matched clauses, not the 528 rules within them; and it never ran the
+validator. Once every clause string had been written somewhere, the number could
+only read 181/181 — renaming the clause of a working 2b check (`6.1.3` in
+`checkFileTrailerID`) left it at 181/181, because `"6.1.3"` still appears
+elsewhere, while the per-rule measure drops 2b to 62 detected and fails.
 
-The numbering-agnostic check of *actual detection* is the corpus ratchet
-(`TestCorpus`, `TestCorpusIsartor`) — that is what measures whether the validator
-finds the violations veraPDF finds. Use rule coverage to locate gaps, use the
+**What it still does not show.** The measure is as wide as the corpus: the 323
+untested rules are unmeasured, in either direction (PDF/A-3b's corpus directory
+holds only a handful of files; most 3b behaviour is exercised through 2b). A
+clause match is not proof that the right check fired, only that a check under
+that clause did. And fail files that name a rule the profile does not define are
+listed separately rather than counted. Use rule coverage to locate gaps, use the
 corpus to prove you closed them. See
 [CONTRIBUTING.md](../CONTRIBUTING.md#the-corpus-ratchet--read-this-before-changing-a-validation-rule).
 

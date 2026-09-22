@@ -91,18 +91,14 @@ For validators other than PDF/A (PDF/UA, PDF/X, PDF/VT, DPart, Factur-X) see
 
 `make rule-coverage` fetches the
 [veraPDF validation profiles](https://github.com/veraPDF/veraPDF-validation-profiles)
-(CC BY 4.0, veraPDF Consortium) and cross-references them against the ISO clause
-strings pdf0's source emits. It currently reports **181/181 clauses matched**, and
-`TestRuleCoverage` ratchets that with `ruleCoverageMaxUncovered = 0`.
-
-That number is loose in both directions, and the second one is the one to
-remember: the match is at *clause* granularity, so one pdf0 rule emitting
-`"6.2.11"` marks that whole clause covered no matter how many of veraPDF's tests
-under it are implemented — the profiles define 528 rules across those 181
-clauses. **181/181 is not full rule coverage and not a conformance claim.** (In
-the other direction, a clause reported as uncovered may still be implemented
-under different numbering; that no longer occurs today.) The corpus ratchet above
-is the numbering-agnostic check of actual detection. Details in
+(CC BY 4.0, veraPDF Consortium) and the corpus, and reports rule by rule whether
+pdf0 flags each rule's corpus fail files under that rule's own clause. Of the 528
+profile rules the corpus tests 205, and pdf0 detects 179 of those under their own
+clause; the other 26 are rejected only for some other reason, and the report
+lists them with what pdf0 reported instead. `TestRuleCoverage` ratchets the
+per-level counts (`ruleCoverageBaselines`): lower the not-detected baseline when
+you fix one. Rules the corpus does not test are not measured, so this is not a
+conformance claim either. Details in
 [docs/testing.md](docs/testing.md#rule-coverage).
 
 ## Fuzzing

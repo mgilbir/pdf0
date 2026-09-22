@@ -31,8 +31,8 @@ func checkNoEncrypt(doc *Document, level pdfa.Level) []pdfa.Violation {
 ```
 
 `pdfa.Violation` has four fields. `Rule` is the ISO 19005 clause string — what
-`RuleID()` returns and what the rule-coverage test greps for, so it is not
-free-form. `Level` is echoed from the argument, `Message` is human prose, and
+`RuleID()` returns and what the rule-coverage test matches against each veraPDF
+rule's clause, so it is not free-form. `Level` is echoed from the argument, `Message` is human prose, and
 `Object` is the anchoring object number (`0` if none). `Error()` renders as
 `[PDF/A-2b 6.1.3] object 12: trailer must not contain /Encrypt`, dropping the
 `object N:` segment when `Object` is 0.
@@ -150,8 +150,9 @@ differently per part: helpers hold a `[1b, 2b/3b, 4]` triple and switch on the
 level, so `colourClause("outputIntent", level)` yields `6.2.2` at 1b and `6.2.3`
 later, and `annotActionClause("catalogAA", level)` yields `6.6.1` / `6.5.2` /
 `6.6.3`. The numbering follows the veraPDF profiles and `TestRuleCoverage` pins
-it, grepping the source for quoted clause literals and ratcheting unmatched
-profile clauses at `ruleCoverageMaxUncovered = 0`.
+it: it validates each corpus fail file at its level and ratchets how many veraPDF
+rules are reported under their own clause (see
+[testing.md](testing.md#rule-coverage)).
 
 **A level of its own** where the target, not the document, decides. PDF/A-4e and
 PDF/A-4f are `PDFA4E` and `PDFA4F`, and validate the way Level A does: run the
@@ -345,8 +346,9 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
   new check must never reuse: they name the checker, not the document, and
   `IsCheckerFinding` is the caller's way to tell the two apart. A cancelled
   `ValidatePDFAContext` run reports itself the same way.
-- **Rule IDs are load-bearing.** `TestRuleCoverage` greps non-test source for
-  quoted `6.x.y` literals, so renaming or inlining a clause string can break the
-  coverage ratchet even when the rule still works. (Related sentinel asymmetry:
+- **Rule IDs are load-bearing.** `TestRuleCoverage` checks that each corpus
+  fail file is reported under its veraPDF rule's clause, so emitting a working
+  check under a different clause number breaks the coverage ratchet even when
+  the file is still rejected. (Related sentinel asymmetry:
   `objNumForDict` returns 0 on a miss to match `pdfa.Violation.Object`, while
   the underlying `dictObjNum` returns -1.)

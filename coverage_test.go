@@ -1,153 +1,95 @@
 package pdf0
 
 import (
-	"encoding/xml"
-	"github.com/mgilbir/pdf0/internal/testfiles"
-	"os"
+	"bytes"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/internal/rulecov"
+	"github.com/mgilbir/pdf0/internal/testfiles"
+	"github.com/mgilbir/pdf0/pdfa"
 )
 
-// ruleCoverageMaxUncovered is a ratchet, like the corpus baselines: the number
-// of veraPDF profile clauses (summed over PDF/A-1b/2b/3b/4) for which this
-// validator emits no matching rule ID. It is 0 — every clause the profiles
-// define is covered — and must never rise. If a rule-ID edit unmatches a clause,
-// TestRuleCoverage fails; lower nothing, fix the rule ID (or, when veraPDF adds
-// genuinely new rules, implement them).
+// ruleCoverageBaselines ratchet the per-rule coverage internal/rulecov
+// measures: for every veraPDF profile rule the corpus tests, whether pdf0
+// flags the rule's fail files under the rule's own clause.
 //
-// Matching is by ISO clause string, so this also pins the per-level numbering
-// the reconciliation established. See cmd/rulecoverage for the human-readable
-// report and CONTRIBUTING.md for the caveat.
-const ruleCoverageMaxUncovered = 0
+//   - minDetected must never fall: a rule that was detected under its own
+//     clause and no longer is has regressed, even when the file is still
+//     rejected for some other reason (which TestCorpus alone cannot see).
+//   - maxNotDetected (caught only under another clause, missed, or unreadable)
+//     must never rise. Lower it when a rule is fixed; `make rule-coverage`
+//     lists the rules behind it.
+//
+// This replaced a clause-string scan of the source that read 181/181 at every
+// level and so could not fail on anything (audit 2026-09-22 C156); see the
+// rulecov package documentation.
+var ruleCoverageBaselines = []struct {
+	name, profile, corpus string
+	level                 pdfa.Level
+	minDetected           int
+	maxNotDetected        int
+}{
+	{"PDF/A-1b", "PDFA-1B.xml", "PDF_A-1b", pdfa.PDFA1b, 46, 4},
+	{"PDF/A-2b", "PDFA-2B.xml", "PDF_A-2b", pdfa.PDFA2b, 63, 11},
+	{"PDF/A-3b", "PDFA-3B.xml", "PDF_A-3b", pdfa.PDFA3b, 2, 0},
+	{"PDF/A-4", "PDFA-4.xml", "PDF_A-4", pdfa.PDFA4, 68, 11},
+}
 
-// TestRuleCoverage cross-references the veraPDF validation profiles against the
-// rule IDs this package emits and ratchets the number of unmatched clauses. It
-// self-skips when the profiles are absent (fetch them with `make profiles`),
-// mirroring the corpus tests.
+// TestRuleCoverage measures, per level and per veraPDF rule, whether pdf0
+// detects the corpus's fail files for that rule under the rule's clause, and
+// ratchets the result. It skips when the profiles (`make profiles`) or the
+// corpus (`make corpus`) were never fetched.
 func TestRuleCoverage(t *testing.T) {
-	// Skips when never fetched; fails when VERAPDF_PROFILES names something
-	// unusable, or when the fetched profiles lack the PDF_A directory.
 	profilesDir := filepath.Dir(testfiles.VeraPDFProfiles.File(t, "PDF_A"))
+	corpusDir := corpusRoot(t)
 
-	emitted, err := scanEmittedRuleClauses(".")
-	if err != nil {
-		t.Fatalf("scanning source: %v", err)
-	}
-
-	levels := []struct{ name, file string }{
-		{"PDF/A-1b", "PDFA-1B.xml"},
-		{"PDF/A-2b", "PDFA-2B.xml"},
-		{"PDF/A-3b", "PDFA-3B.xml"},
-		{"PDF/A-4", "PDFA-4.xml"},
-	}
-
-	var totalUncovered int
-	for _, lv := range levels {
-		clauses, err := profileClauses(filepath.Join(profilesDir, "PDF_A", lv.file))
+	for _, lv := range ruleCoverageBaselines {
+		rules, err := rulecov.LoadProfile(filepath.Join(profilesDir, "PDF_A", lv.profile))
 		if err != nil {
 			t.Fatalf("%s: %v", lv.name, err)
 		}
-		var uncovered []string
-		for _, c := range clauses {
-			if !emitted[c] {
-				uncovered = append(uncovered, c)
+		files, err := rulecov.CorpusFiles(filepath.Join(corpusDir, lv.corpus))
+		if err != nil {
+			t.Fatalf("%s: %v", lv.name, err)
+		}
+		if len(files) == 0 {
+			t.Fatalf("%s: no corpus test files under %s; the corpus layout changed and nothing would be measured", lv.name, lv.corpus)
+		}
+		level := lv.level
+		rep, err := rulecov.Measure(rules, files, func(data []byte) ([]string, error) {
+			doc, err := Read(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				return nil, err
+			}
+			var clauses []string
+			for _, v := range ValidatePDFABytes(doc, level, data) {
+				clauses = append(clauses, v.Rule)
+			}
+			return clauses, nil
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", lv.name, err)
+		}
+
+		detected := rep.Count(rulecov.Detected)
+		untested := rep.Count(rulecov.Untested)
+		notDetected := len(rep.Rules) - detected - untested
+		t.Logf("%-9s %d rules, %d tested: %d detected under their clause, %d not (elsewhere %d, missed %d, unreadable %d); %d untested",
+			lv.name, len(rep.Rules), len(rep.Rules)-untested, detected, notDetected,
+			rep.Count(rulecov.Elsewhere), rep.Count(rulecov.Missed), rep.Count(rulecov.Unreadable), untested)
+		for _, r := range rep.Rules {
+			if s := r.Status(); s != rulecov.Detected && s != rulecov.Untested {
+				t.Logf("   %-10s %s %v", s, r.ID(), r.Examples)
 			}
 		}
-		totalUncovered += len(uncovered)
-		t.Logf("%-9s %d/%d clauses covered", lv.name, len(clauses)-len(uncovered), len(clauses))
-		if len(uncovered) > 0 {
-			t.Logf("   uncovered: %s", strings.Join(uncovered, ", "))
+		if detected < lv.minDetected {
+			t.Errorf("%s: %d rules detected under their own clause, below the baseline %d (a regression; see the list above)",
+				lv.name, detected, lv.minDetected)
+		}
+		if notDetected > lv.maxNotDetected {
+			t.Errorf("%s: %d tested rules not detected under their own clause, above the baseline %d (a regression; see the list above)",
+				lv.name, notDetected, lv.maxNotDetected)
 		}
 	}
-
-	if totalUncovered > ruleCoverageMaxUncovered {
-		t.Errorf("veraPDF clause coverage regressed: %d clauses have no matching pdf0 rule ID "+
-			"(baseline %d). See the per-level list above and `make rule-coverage`.",
-			totalUncovered, ruleCoverageMaxUncovered)
-	}
-}
-
-// clauseLiteral matches a quoted ISO clause number, e.g. "6.7.8" or "6.2.11.6".
-var clauseLiteral = regexp.MustCompile(`"(6(?:\.\d+)+)"`)
-
-// scanEmittedRuleClauses returns the set of ISO clause strings that appear as
-// quoted literals in the package's non-test Go source — the rule IDs the
-// validator can emit, whether inline or via a clause-helper table.
-func scanEmittedRuleClauses(root string) (map[string]bool, error) {
-	set := map[string]bool{}
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		if strings.Contains(path, string(filepath.Separator)+"cmd"+string(filepath.Separator)) {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, m := range clauseLiteral.FindAllStringSubmatch(string(data), -1) {
-			set[m[1]] = true
-		}
-		return nil
-	})
-	return set, err
-}
-
-// profileClauses returns the distinct ISO clauses a combined veraPDF profile
-// defines, sorted numerically.
-func profileClauses(path string) ([]string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var p struct {
-		Rules []struct {
-			ID struct {
-				Clause string `xml:"clause,attr"`
-			} `xml:"id"`
-		} `xml:"rules>rule"`
-	}
-	if err := xml.Unmarshal(data, &p); err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	var out []string
-	for _, r := range p.Rules {
-		if c := r.ID.Clause; c != "" && !seen[c] {
-			seen[c] = true
-			out = append(out, c)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return clauseLess(out[i], out[j]) })
-	return out, nil
-}
-
-// clauseLess orders dotted clause numbers numerically ("6.2.10" after "6.2.9").
-func clauseLess(a, b string) bool {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(as) && i < len(bs); i++ {
-		x, y := atoiClause(as[i]), atoiClause(bs[i])
-		if x != y {
-			return x < y
-		}
-	}
-	return len(as) < len(bs)
-}
-
-func atoiClause(s string) int {
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return n
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n
 }

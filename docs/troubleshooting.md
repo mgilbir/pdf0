@@ -124,7 +124,8 @@ A `pdfa.Violation` prints as `[LEVEL CLAUSE] object N: message`, e.g.
 `PDF/A-4` is the level whose rules require this; `6.2.10` is the ISO 19005
 clause; `object 12` is the offending object number (omitted entirely when the
 violation is document-level). Look the clause up in the standard, or in the
-veraPDF profiles — `make rule-coverage` prints each clause's description.
+veraPDF profiles — `go run -tags devtools ./internal/cmd/rulecoverage -v` prints
+each rule's description.
 
 **An empty result is not a conformance guarantee.** From the `ValidatePDFA`
 godoc: *"An empty result means 'none of the implemented checks fired', not a
