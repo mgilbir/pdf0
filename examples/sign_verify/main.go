@@ -163,7 +163,7 @@ func incrementallyAlter(original []byte) ([]byte, error) {
 	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(306), object.Integer(396)})
 
 	var buf bytes.Buffer
-	if err := doc.WriteIncremental(&buf, original, []int{3}); err != nil {
+	if err := doc.WriteIncremental(&buf, []int{3}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

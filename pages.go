@@ -27,15 +27,18 @@ func (d *Document) PageCount() int { return len(d.PageList()) }
 // graphCopier copies an object graph from a source document into a destination,
 // assigning fresh object numbers and remapping indirect references. It is
 // cycle-safe: each source object is copied once.
+//
+// Destination numbers come from the destination's allocator (allocObjNum), so a
+// copy appended to a document read from a file never lands on a number the
+// file's object streams or cross-reference streams use.
 type graphCopier struct {
 	src     *Document
 	dst     *Document
 	mapping map[int]int // source object number → destination object number
-	nextNum int
 }
 
-func newGraphCopier(src, dst *Document, startNum int) *graphCopier {
-	return &graphCopier{src: src, dst: dst, mapping: map[int]int{}, nextNum: startNum}
+func newGraphCopier(src, dst *Document) *graphCopier {
+	return &graphCopier{src: src, dst: dst, mapping: map[int]int{}}
 }
 
 // copyRef copies the object referenced by ref (and its graph) into dst, skipping
@@ -44,8 +47,7 @@ func (g *graphCopier) copyRef(ref object.IndirectRef, skip map[object.Name]bool)
 	if n, ok := g.mapping[ref.Number]; ok {
 		return object.IndirectRef{Number: n}
 	}
-	dstNum := g.nextNum
-	g.nextNum++
+	dstNum := g.dst.allocObjNum()
 	g.mapping[ref.Number] = dstNum
 
 	src := g.src.Objects[ref.Number]
@@ -153,7 +155,7 @@ func appendPageInto(g *graphCopier, dst *Document, pagesNum int, srcPageRef obje
 func (d *Document) ExtractPages(indices []int) (*Document, error) {
 	srcPages := d.pageRefsOf()
 	out, _, pagesNum := newDocWithPageTree(d.Version)
-	g := newGraphCopier(d, out, 3)
+	g := newGraphCopier(d, out)
 	for _, idx := range indices {
 		if idx < 0 || idx >= len(srcPages) {
 			return nil, errPageOutOfRange(idx, len(srcPages))
@@ -175,18 +177,14 @@ func (d *Document) AppendPages(other *Document) {
 		return
 	}
 	pagesNum := d.view().DictObjNum(pages)
-	max := 0
-	for num := range d.Objects {
-		if num > max {
-			max = num
-		}
-	}
-	g := newGraphCopier(other, d, max+1)
+	g := newGraphCopier(other, d)
 	for _, ref := range other.pageRefsOf() {
 		appendPageInto(g, d, pagesNum, ref)
 	}
 }
 
+// finalizeSize records /Size on a document ExtractPages built, which has no
+// source file. Write and WriteIncremental compute /Size themselves.
 func finalizeSize(d *Document) {
 	max := 0
 	for num := range d.Objects {

@@ -84,12 +84,13 @@ func (d *Document) WriteSignedTimestamped(w io.Writer, cert *x509.Certificate, k
 	return err
 }
 
-// WriteSignedIncremental signs the document as an incremental update: the
-// original bytes are preserved verbatim and only the signature objects are
-// appended. This is the correct way to add a signature without invalidating any
-// signature already present. original must be the bytes the document was read
-// from.
-func (d *Document) WriteSignedIncremental(w io.Writer, original []byte, cert *x509.Certificate, key crypto.Signer) error {
+// WriteSignedIncremental signs the document as an incremental update of the
+// file it was read from: those bytes are preserved verbatim and only the
+// signature objects are appended (see WriteIncremental). This is the correct way
+// to add a signature without invalidating any signature already present. The
+// document must have been read from a file; the new objects are numbered above
+// every number that file uses.
+func (d *Document) WriteSignedIncremental(w io.Writer, cert *x509.Certificate, key crypto.Signer) error {
 	if d.Encrypted || d.security != nil {
 		return errors.New("cannot sign an encrypted document")
 	}
@@ -97,11 +98,11 @@ func (d *Document) WriteSignedIncremental(w io.Writer, original []byte, cert *x5
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	if err := signedDoc.WriteIncremental(&buf, original, changed); err != nil {
+	data, err := signedDoc.incrementalBytes(changed)
+	if err != nil {
 		return err
 	}
-	out, err := patchSignature(buf.Bytes(), cert, key, nil, nil)
+	out, err := patchSignature(data, cert, key, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -216,20 +217,8 @@ func withSignatureField(d *Document) (*Document, []int, error) {
 		return nil, nil, err
 	}
 
-	clone := &Document{
-		Version:        d.Version,
-		Objects:        make(map[int]*object.IndirectObject, len(d.Objects)+3),
-		Trailer:        *d.Trailer.Clone(),
-		usedXRefStream: d.usedXRefStream,
-	}
-	maxObj := 0
-	for num, iobj := range d.Objects {
-		clone.Objects[num] = iobj
-		if num > maxObj {
-			maxObj = num
-		}
-	}
-	sigNum, fieldNum := maxObj+1, maxObj+2
+	clone := d.updateClone(4)
+	sigNum, fieldNum := clone.allocObjNum(), clone.allocObjNum()
 
 	// Placeholder signature dictionary. /ByteRange before /Contents so the array
 	// sits in the first signed segment.
@@ -294,7 +283,7 @@ func withSignatureField(d *Document) (*Document, []int, error) {
 		clone.Objects[formNum] = &object.IndirectObject{Number: formNum, Value: acroForm}
 		changed = append(changed, formNum)
 	} else {
-		formNum = maxObj + 3
+		formNum = clone.allocObjNum()
 		clone.Objects[formNum] = &object.IndirectObject{Number: formNum, Value: acroForm}
 		catClone := catalog.Clone()
 		catClone.Set("AcroForm", object.IndirectRef{Number: formNum})

@@ -24,7 +24,11 @@ import (
 //
 // Read then normalizes the file structure away — /XRef and /ObjStm objects,
 // xref-stream-only trailer keys — because Write always regenerates it. Nothing
-// that must survive a round trip may live outside the object graph.
+// that must survive a round trip may live outside the object graph. What the
+// structure said about the file itself — its bytes, sections, revisions and the
+// object numbers it uses — is kept in the source record (source.go), for the
+// operations that still need it: the object-number allocator, incremental
+// writers, and byte-level checks.
 
 // Document represents a parsed PDF file.
 type Document struct {
@@ -44,10 +48,13 @@ type Document struct {
 	// see validationCache.
 	valCache *validationCache
 
-	// Offsets records the absolute byte offset of each uncompressed indirect
-	// object, for the byte-level file-structure checks. Objects materialised
-	// from object streams are absent.
-	Offsets map[int]int64
+	// source is the record of the file this document was read from; see
+	// Source. nil for a document built in memory.
+	source *Source
+
+	// nextObjNum is the object-number allocator's hint; see allocObjNum. Zero
+	// until the first allocation.
+	nextObjNum int
 
 	// embeddedDepth guards the recursive validation of embedded PDF/A files
 	// (see checkEmbeddedPDFA); it is 0 for a top-level document.
@@ -164,10 +171,13 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		return nil, err
 	}
 
+	// The source record keeps data itself rather than a copy; see Source.
+	src := &Source{data: data}
 	doc = &Document{
 		Objects:    make(map[int]*object.IndirectObject),
 		limits:     lim,
 		readLimits: &core.Recorder{},
+		source:     src,
 	}
 
 	// 1. Find header to extract version and header offset
@@ -177,106 +187,45 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	}
 	doc.Version = version
 
-	// 2. Find startxref and xref offset
-	xrefOffset, err := findStartXref(data)
-	if err != nil {
-		return nil, err
-	}
-	// Byte offsets are specified from the start of the file (ISO 32000-1
-	// 7.5.4), so absolute offsets are correct even when data precedes the
-	// header. Some producers, however, prepend bytes without updating their
-	// offsets, leaving them relative to %PDF-. Choose whichever convention
-	// actually lands on the cross-reference section, preferring absolute.
-	adjust := int64(0)
-	if !xrefLooksValid(data, xrefOffset) && headerOffset != 0 && xrefLooksValid(data, xrefOffset+headerOffset) {
-		adjust = headerOffset
-	}
-	xrefOffset += adjust
-	if xrefOffset < 0 || xrefOffset >= size {
-		return nil, fmt.Errorf("startxref offset %d outside file (size %d)", xrefOffset, size)
-	}
-
-	// 3. Parse xref sections, following the /Prev chain. Both traditional
-	// tables and xref streams can carry /Prev (incremental updates), and a
-	// visited-set guards against cycles: a /Prev pointing at an already-seen
-	// section (or at itself) would otherwise loop forever on a crafted or
-	// corrupt file.
-	xrefTable := &XRefTable{Entries: make(map[int]XRefEntry)}
-	visitedXref := make(map[int64]bool)
-	sectionOffset := xrefOffset
-	first := true
+	// 2–3. Find startxref and walk the cross-reference chain from it. When
+	// either fails — no startxref in the file, one that points outside it, or a
+	// newest section that does not parse — the table is rebuilt by scanning for
+	// object headers (the long-standing reader practice for damaged files; see
+	// rebuildXRefByScan). The trailer then comes from a scan too; an
+	// xref-stream file whose trailer IS the broken stream dictionary gets /Root
+	// synthesized from the catalog after the objects load.
+	var xrefTable *XRefTable
 	rebuilt := false // the table was reconstructed by scanning (load leniently)
 	var firstErr error
-	for {
-		// One iteration per incremental update; a file can carry thousands.
-		if err := cancel.StopErr("reading PDF cross-reference chain"); err != nil {
+	budget := newFileInUseBudget(size)
+	chainBroken := false
+	xrefOffset, adjust, err := locateXRef(data, headerOffset)
+	if err == nil {
+		var sections []XRefSection
+		sections, chainBroken, err = walkXRefChain(cancel, data, xrefOffset, adjust, lim, budget)
+		if cerr := cancel.StopErr("reading PDF cross-reference chain"); cerr != nil {
+			return nil, cerr
+		}
+		if err == nil {
+			src.adjust = adjust
+			src.sections = sections
+			xrefTable = mergeSections(sections)
+			// The section's trailer stays in the source record, and recovery
+			// below may set /Root on the document's: clone it so that edit
+			// never reaches the record.
+			doc.Trailer = *sections[0].trailer.Clone() // dictcopy: a fresh clone; nothing else holds it
+			doc.usedXRefStream = sections[0].kind == XRefStreamSection
+		}
+	}
+	if err != nil {
+		t := rebuildXRefByScan(data)
+		if t == nil {
 			return nil, err
 		}
-		if visitedXref[sectionOffset] {
-			break // cycle in the /Prev chain
-		}
-		visitedXref[sectionOffset] = true
-
-		sectionTable, sectionTrailer, err := parseXRefSection(cancel, data, sectionOffset, doc)
-		if err != nil {
-			// Recovery: the startxref value "shall [give] the byte offset ...
-			// to the beginning of the xref keyword in the last cross-reference
-			// section" (ISO 32000-2, 7.5.5). Real-world files violate this by
-			// pointing a few dozen bytes INTO the table's entries instead
-			// (Common Crawl sweep #13: consistently 55-57 bytes past the
-			// keyword), which reads as an integer and mis-dispatches to the
-			// xref-stream branch. Relocate to the spec-mandated target: the
-			// nearest standalone "xref" keyword at or before the offset.
-			if rec := precedingXrefKeyword(data, sectionOffset); rec >= 0 && !visitedXref[rec] {
-				visitedXref[rec] = true
-				sectionTable, sectionTrailer, err = parseXRefSection(cancel, data, rec, doc)
-			}
-			if err != nil {
-				if first {
-					// Last resort: the cross-reference data is unusable, so
-					// rebuild the table by scanning for object headers (the
-					// long-standing reader practice for damaged files; see
-					// rebuildXRefByScan). The trailer comes from a scan too;
-					// an xref-stream file whose trailer IS the broken stream
-					// dictionary gets /Root synthesized from the catalog
-					// after the objects load.
-					if t := rebuildXRefByScan(data); t != nil {
-						xrefTable = t
-						rebuilt, firstErr = true, err
-						if tr := findTrailerByScan(data); tr != nil {
-							doc.Trailer = *tr // dictcopy: a fresh parse of the scanned trailer; nothing else holds it
-						}
-						break
-					}
-					return nil, err
-				}
-				break // tolerate a broken older section
-			}
-		}
-		// Merge: newer sections take precedence over older ones.
-		for num, entry := range sectionTable.Entries {
-			if _, exists := xrefTable.Entries[num]; !exists {
-				xrefTable.Entries[num] = entry
-			}
-		}
-		if first {
-			// The section trailer of a cross-reference stream is that stream
-			// object's own dictionary, still in doc.Objects until
-			// normalizeStructure drops it, and recovery below may set /Root on
-			// the trailer: clone it so that edit never reaches the object.
-			doc.Trailer = *sectionTrailer.Clone()
-			if t, _ := sectionTrailer.Get("Type").(object.Name); t == "XRef" {
-				doc.usedXRefStream = true
-			}
-			first = false
-		}
-		prevOffset, ok := sectionTrailer.Get("Prev").(object.Integer)
-		if !ok {
-			break
-		}
-		sectionOffset = int64(prevOffset) + adjust
-		if sectionOffset < 0 || sectionOffset >= size {
-			break // /Prev points outside the file; ignore the broken chain tail
+		xrefTable = t
+		rebuilt, firstErr = true, err
+		if tr := findTrailerByScan(data); tr != nil {
+			doc.Trailer = *tr // dictcopy: a fresh parse of the scanned trailer; nothing else holds it
 		}
 	}
 
@@ -287,11 +236,7 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	// triggers the same scan-rebuild as an unparseable section before giving
 	// up (the sweep-13 holdout: the table parses, but every offset in it is
 	// shifted and lands inside the previous object).
-	effAdjust := adjust
-	if rebuilt {
-		effAdjust = 0 // scanned offsets are absolute by construction
-	}
-	if err := doc.loadObjectsFromXref(cancel, data, size, xrefTable, effAdjust, rebuilt); err != nil {
+	if err := doc.loadObjectsFromXref(cancel, data, size, xrefTable, rebuilt); err != nil {
 		// A cancellation is not a "this table is broken" signal, so it must not
 		// trigger the (whole-file) rebuild-and-retry: that would do more work in
 		// response to being told to stop.
@@ -304,10 +249,12 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		}
 		xrefTable, rebuilt = t, true
 		doc.Objects = make(map[int]*object.IndirectObject)
-		if err2 := doc.loadObjectsFromXref(cancel, data, size, xrefTable, 0, true); err2 != nil {
+		if err2 := doc.loadObjectsFromXref(cancel, data, size, xrefTable, true); err2 != nil {
 			return nil, err
 		}
 	}
+	src.rebuilt = rebuilt
+	src.merged = xrefTable
 	// A rebuilt file may have no parseable trailer at all (an xref-stream
 	// file's trailer IS its broken stream dictionary). The document catalog is
 	// the root of the object hierarchy (ISO 32000-2, 7.7.2), so synthesize the
@@ -351,7 +298,7 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		} else if h != nil {
 			containers := map[int]bool{}
 			for _, entry := range xrefTable.Entries {
-				if entry.Compressed && !entry.Free {
+				if entry.Compressed {
 					containers[entry.StreamObjNum] = true
 				}
 			}
@@ -383,7 +330,9 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		doc.decryptFailures = pending.Finish(doc.graph())
 	}
 
-	// 6. Drop file-structure artifacts so the document holds only content.
+	// 6. Record what the file uses, then drop file-structure artifacts so the
+	// document holds only content.
+	src.finish(doc, chainBroken)
 	doc.normalizeStructure()
 
 	doc.Encrypted = doc.Trailer.Get("Encrypt") != nil
@@ -391,13 +340,152 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	return doc, nil
 }
 
+// locateXRef finds the offset of the newest cross-reference section: the value
+// after the file's last startxref keyword, corrected for a file whose offsets
+// count from the %PDF- header rather than from the start of the file, and
+// required to land inside the file.
+//
+// ISO 32000-2 7.5.5 has a reader look for startxref at the end of the file, and
+// this looks in the last 1024 bytes first. A file with more trailing bytes than
+// that after its %%EOF (padding, a second file concatenated by a transfer, a
+// signature container) is searched in full, backwards, and the value used only
+// if a section plausibly starts there. Every failure is returned as an error,
+// on which Read rebuilds the table by scanning rather than giving up (audit
+// 2026-09-22 C126).
+func locateXRef(data []byte, headerOffset int64) (offset, adjust int64, err error) {
+	offset, err = findStartXref(data)
+	if err != nil {
+		if i := bytes.LastIndex(data, []byte("startxref")); i >= 0 {
+			if off, err2 := startXRefValue(data, i); err2 == nil && (xrefLooksValid(data, off) || xrefLooksValid(data, off+headerOffset)) {
+				offset, err = off, nil
+			}
+		}
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	// Byte offsets are specified from the start of the file (ISO 32000-1
+	// 7.5.4), so absolute offsets are correct even when data precedes the
+	// header. Some producers, however, prepend bytes without updating their
+	// offsets, leaving them relative to %PDF-. Choose whichever convention
+	// actually lands on the cross-reference section, preferring absolute.
+	if !xrefLooksValid(data, offset) && headerOffset != 0 && xrefLooksValid(data, offset+headerOffset) {
+		adjust = headerOffset
+	}
+	if abs := offset + adjust; abs < 0 || abs >= int64(len(data)) {
+		return 0, 0, fmt.Errorf("startxref offset %d outside file (size %d)", abs, len(data))
+	}
+	return offset, adjust, nil
+}
+
+// walkXRefChain parses the cross-reference section at the stated offset and
+// every older one its /Prev chain reaches, newest first. Both traditional
+// tables and xref streams can carry /Prev (incremental updates), and a
+// visited-set guards against cycles: a /Prev pointing at an already-seen
+// section (or at itself) would otherwise loop forever on a crafted or corrupt
+// file.
+//
+// Only the newest section is required: its failure is the returned error, on
+// which Read rebuilds the table by scanning. A broken older section ends the
+// chain there and sets broken, so Read can still count the numbers that
+// section's objects use toward the high-water mark.
+func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim core.Limits, budget *inUseBudget) (sections []XRefSection, broken bool, err error) {
+	size := int64(len(data))
+	visited := make(map[int64]bool)
+	ends := eofEnds(data)
+	for {
+		// One iteration per incremental update; a file can carry thousands.
+		if err := cancel.StopErr("reading PDF cross-reference chain"); err != nil {
+			return nil, false, err
+		}
+		offset := stated + adjust
+		if offset < 0 || offset >= size {
+			// /Prev points outside the file; ignore the broken chain tail.
+			return sections, true, nil
+		}
+		if visited[offset] {
+			return sections, false, nil // cycle in the /Prev chain
+		}
+		visited[offset] = true
+
+		sec, err := parseXRefSection(cancel, data, offset, adjust, lim, budget)
+		if err != nil {
+			// Recovery: the startxref value "shall [give] the byte offset ...
+			// to the beginning of the xref keyword in the last cross-reference
+			// section" (ISO 32000-2, 7.5.5). Real-world files violate this by
+			// pointing a few dozen bytes INTO the table's entries instead
+			// (Common Crawl sweep #13: consistently 55-57 bytes past the
+			// keyword), which reads as an integer and mis-dispatches to the
+			// xref-stream branch. Relocate to the spec-mandated target: the
+			// nearest standalone "xref" keyword at or before the offset.
+			if rec := precedingXrefKeyword(data, offset); rec >= 0 && !visited[rec] {
+				visited[rec] = true
+				sec, err = parseXRefSection(cancel, data, rec, adjust, lim, budget)
+			}
+			if err != nil {
+				if len(sections) == 0 {
+					return nil, false, err
+				}
+				return sections, true, nil // tolerate a broken older section
+			}
+		}
+		sec.stated = stated
+		sec.end = -1
+		sec.end = ends.sectionEnd(stated, sec.offset)
+		sections = append(sections, sec)
+
+		prev, ok := sec.trailer.Get("Prev").(object.Integer)
+		if !ok {
+			return sections, false, nil
+		}
+		stated = int64(prev)
+	}
+}
+
+// mergeSections builds the effective cross-reference table from a chain of
+// sections, newest first: an object number takes the entry of the newest
+// section that mentions it, and a newer section's free entry hides every older
+// definition (ISO 32000-2 7.5.6). Within a section, in-use wins over free,
+// which is how a hybrid section's /XRefStm entries replace the free entries its
+// table lists (7.5.8.4); see XRefTable.
+//
+// A single section is used as it is, with no copy.
+func mergeSections(sections []XRefSection) *XRefTable {
+	if len(sections) == 1 {
+		return sections[0].table
+	}
+	merged := &XRefTable{Entries: make(map[int]XRefEntry)}
+	var hidden []XRefRange // free runs of the sections already merged, sorted
+	isHidden := func(num int) bool {
+		i := sort.Search(len(hidden), func(i int) bool { return hidden[i].Start+hidden[i].Count > num })
+		return i < len(hidden) && hidden[i].Start <= num
+	}
+	for _, sec := range sections {
+		for num, e := range sec.table.Entries {
+			if _, done := merged.Entries[num]; done || isHidden(num) {
+				continue
+			}
+			merged.Entries[num] = e
+		}
+		if len(sec.table.Free) > 0 {
+			hidden = mergeRanges(append(hidden, sec.table.Free...))
+		}
+	}
+	return merged
+}
+
 // loadObjectsFromXref parses every uncompressed object the cross-reference
-// table lists into doc.Objects, resetting doc.Offsets first. In lenient mode
-// (used for tables reconstructed by rebuildXRefByScan) an entry whose offset
-// is out of range or whose bytes do not parse is dropped rather than failing
-// the read: a scanned entry has no authority beyond the bytes it points at.
-func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size int64, xrefTable *XRefTable, adjust int64, lenient bool) error {
-	doc.Offsets = make(map[int]int64)
+// table lists into doc.Objects, recording where each one was found in the
+// source record's offsets. In lenient mode (used for tables reconstructed by
+// rebuildXRefByScan) an entry whose offset is out of range or whose bytes do
+// not parse is dropped rather than failing the read: a scanned entry has no
+// authority beyond the bytes it points at.
+//
+// Offsets in the table are absolute: walkXRefChain applies the header-offset
+// correction when it parses each section.
+func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size int64, xrefTable *XRefTable, lenient bool) error {
+	offsets := make(map[int]int64)
+	doc.source.offsets = offsets
 	lexer := NewLexer(data)
 	// parsedByOffset caches the object parsed at each byte offset. A malformed
 	// cross-reference table can point many distinct object numbers at the same
@@ -418,10 +506,10 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 	// length object cannot itself trigger recursive length resolution.
 	resolveLen := func(ref object.IndirectRef) (int64, bool) {
 		ent, ok := xrefTable.Entries[ref.Number]
-		if !ok || ent.Free || ent.Compressed {
+		if !ok || ent.Compressed {
 			return 0, false
 		}
-		lo := ent.Offset + adjust
+		lo := ent.Offset
 		if lo < 0 || lo >= size {
 			return 0, false
 		}
@@ -436,7 +524,7 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 		if err := cancel.StopErr("reading PDF objects"); err != nil {
 			return err
 		}
-		if entry.Free || entry.Compressed {
+		if entry.Compressed {
 			continue
 		}
 		if num == 0 {
@@ -448,10 +536,10 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 			continue
 		}
 		if _, exists := doc.Objects[num]; exists {
-			continue // already loaded (e.g., xref stream)
+			continue
 		}
 
-		off := entry.Offset + adjust
+		off := entry.Offset
 		if off < 0 || off >= size {
 			if lenient {
 				continue
@@ -461,7 +549,7 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 			// otherwise seek the lexer to an invalid position.
 			return fmt.Errorf("object %d xref offset %d outside file (size %d)", num, off, size)
 		}
-		doc.Offsets[num] = off
+		offsets[num] = off
 		if prev, ok := parsedByOffset[off]; ok {
 			// Same bytes already parsed under another number: reuse the value
 			// rather than re-parsing (and re-allocating any stream data).
@@ -474,10 +562,10 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 		iobj, err := parser.ParseIndirectObject()
 		if err != nil {
 			if lenient {
-				delete(doc.Offsets, num)
+				delete(offsets, num)
 				continue
 			}
-			return fmt.Errorf("parsing object %d at offset %d: %w", num, entry.Offset, err)
+			return fmt.Errorf("parsing object %d at offset %d: %w", num, off, err)
 		}
 		// The cross-reference key is the authoritative object number: readers
 		// resolve references through the xref, so the body's declared number
@@ -491,24 +579,107 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 	return nil
 }
 
+// finish completes the source record once every object is loaded: the highest
+// object number the file uses, the largest /Size it declares, the object
+// streams it holds, and its revisions.
+//
+// The high-water mark counts every number the file puts to any use: in-use and
+// free entries of every section, each cross-reference stream's own number
+// (listed in its own table or not), the objects Read loaded, and the numbers
+// object streams index (noted as they were unpacked). When the /Prev chain
+// broke partway, the sections past the break were never read, so the numbers
+// found by scanning the file for object headers count too: an allocator that
+// ignored them could hand out a number an older revision still defines.
+func (s *Source) finish(doc *Document, chainBroken bool) {
+	note := s.note
+	noteSize := func(tr *object.Dictionary) {
+		if tr == nil {
+			return
+		}
+		if v, ok := tr.Get("Size").(object.Integer); ok && v > 0 {
+			sz := int(min(int64(v), int64(syntax.MaxObjectNumber)+1))
+			if sz > s.size {
+				s.size = sz
+			}
+		}
+	}
+	if s.containers == nil {
+		s.containers = map[int]bool{}
+	}
+	for _, sec := range s.sections {
+		note(sec.objNum)
+		note(sec.xrefStmObjNum)
+		noteSize(sec.trailer)
+		for num, e := range sec.table.Entries {
+			note(num)
+			if e.Compressed {
+				note(e.StreamObjNum)
+			}
+		}
+		if f := sec.table.Free; len(f) > 0 {
+			note(f[len(f)-1].Start + f[len(f)-1].Count - 1)
+		}
+	}
+	if s.merged != nil {
+		for num, e := range s.merged.Entries {
+			note(num)
+			if e.Compressed && e.StreamObjNum > 0 {
+				s.containers[e.StreamObjNum] = true
+			}
+		}
+	}
+	for num, iobj := range doc.Objects {
+		note(num)
+		if st, ok := iobj.Value.(*object.Stream); ok {
+			if t, _ := st.Dict.Get("Type").(object.Name); t == "ObjStm" {
+				s.containers[num] = true
+			}
+		}
+	}
+	if s.rebuilt || len(s.sections) == 0 {
+		noteSize(&doc.Trailer)
+	}
+	if chainBroken {
+		if t := rebuildXRefByScan(s.data); t != nil {
+			for num := range t.Entries {
+				note(num)
+			}
+		}
+	}
+	s.assignRevisions()
+}
+
+// note raises the high-water mark to n. It is how the object-stream loaders
+// count the numbers a container's index lists, including ones no
+// cross-reference entry names. A nil record (a hand-built Document) ignores it.
+func (s *Source) note(n int) {
+	if s != nil && n > s.maxNum && n <= syntax.MaxObjectNumber {
+		s.maxNum = n
+	}
+}
+
 // normalizeStructure removes cross-reference plumbing from the parsed
 // document. An xref stream's dictionary doubles as the trailer, so a document
 // read from a modern file would otherwise carry xref-stream-only keys in
 // doc.Trailer and re-emit stale /XRef and /ObjStm objects on Write — encoding
 // obsolete offsets contradicting the rewritten file (audit C5). Object-stream
 // contents are already materialized as ordinary objects, and Write always
-// regenerates the cross-reference structure and /Size, so nothing is lost.
+// regenerates the cross-reference structure and /Size, so nothing the graph
+// needs is lost; what incremental writers need — the numbers those objects
+// used, and the file's /Size — is kept in the source record (see Source).
 func (d *Document) normalizeStructure() {
 	for num, iobj := range d.Objects {
 		if stream, ok := iobj.Value.(*object.Stream); ok {
 			if t, ok := stream.Dict.Get("Type").(object.Name); ok && (t == "XRef" || t == "ObjStm") {
 				delete(d.Objects, num)
-				// Drop the byte offset too: leaving it in d.Offsets makes the
-				// byte-level file-structure checks treat the removed object's
+				// Drop the byte offset too: leaving it among the offsets makes
+				// the byte-level file-structure checks treat the removed object's
 				// span as part of the previous surviving object's region,
 				// mis-attributing errors and skipping the last real object's
 				// endobj check (audit C9).
-				delete(d.Offsets, num)
+				if d.source != nil {
+					delete(d.source.offsets, num)
+				}
 			}
 		}
 	}
@@ -519,68 +690,109 @@ func (d *Document) normalizeStructure() {
 	d.Trailer = *trailer // dictcopy: installs the edited clone; nothing else holds it
 }
 
-// parseXRefSection parses one cross-reference section (a traditional table
-// followed by its trailer, or an xref stream) at the given absolute offset.
-// For xref streams the stream dictionary doubles as the trailer, and the
-// stream object itself is recorded in doc.Objects.
-func parseXRefSection(cancel core.Canceler, data []byte, offset int64, doc *Document) (*XRefTable, *object.Dictionary, error) {
+// parseXRefSection parses one cross-reference section at the given absolute
+// offset: a traditional table followed by its trailer, or an xref stream, whose
+// dictionary doubles as the trailer. A table whose trailer carries /XRefStm is
+// a hybrid-reference section, and the stream it names is parsed as part of it
+// (ISO 32000-2 7.5.8.4); a section whose /XRefStm stream cannot be read fails
+// as a whole, so that Read falls back to rebuilding the table by scan, which
+// recovers the compressed objects from their object streams, rather than
+// silently losing every object only that stream lists.
+//
+// Offsets in the returned entries are absolute (adjust applied). Nothing is
+// added to the document: the xref stream is loaded like any other object if
+// the effective table lists it, and dropped by normalizeStructure. Loading it
+// here instead let an older section's stream shadow a newer section's
+// redefinition of its number (audit 2026-09-22 C3).
+func parseXRefSection(cancel core.Canceler, data []byte, offset, adjust int64, lim core.Limits, budget *inUseBudget) (XRefSection, error) {
 	lexer := NewLexer(data)
 	lexer.SetPosition(offset)
 	tok, err := lexer.NextToken()
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading xref at offset %d: %w", offset, err)
+		return XRefSection{}, fmt.Errorf("reading xref at offset %d: %w", offset, err)
 	}
 
+	sec := XRefSection{offset: offset}
 	switch tok.Type {
 	case syntax.TokenXref:
-		table, err := ParseXRefTable(data, lexer.Position())
+		table, err := parseXRefTable(data, lexer.Position(), budget)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parsing xref table: %w", err)
+			return XRefSection{}, fmt.Errorf("parsing xref table: %w", err)
 		}
 		trailer, err := findTrailer(data, lexer.Position())
 		if err != nil {
-			return nil, nil, fmt.Errorf("parsing trailer: %w", err)
+			return XRefSection{}, fmt.Errorf("parsing trailer: %w", err)
 		}
-		return table, trailer, nil
+		sec.kind, sec.table, sec.trailer = XRefTableSection, table, trailer
+		if v, ok := trailer.Get("XRefStm").(object.Integer); ok {
+			stm, num, _, err := parseXRefStreamAt(cancel, data, int64(v)+adjust, lim, budget)
+			if err != nil {
+				return XRefSection{}, fmt.Errorf("parsing /XRefStm stream: %w", err)
+			}
+			for n, e := range stm.Entries {
+				if _, inTable := table.Entries[n]; !inTable {
+					table.Entries[n] = e
+				}
+			}
+			table.Free = append(table.Free, stm.Free...)
+			table.normalizeFree()
+			sec.kind, sec.xrefStm, sec.xrefStmObjNum = XRefHybridSection, int64(v)+adjust, num
+		}
 
 	case syntax.TokenInteger:
-		// Xref stream: the xref is an indirect object containing a stream
-		lexer.SetPosition(offset)
-		parser := NewParserFromLexer(lexer)
-		iobj, err := parser.ParseIndirectObject()
+		table, num, trailer, err := parseXRefStreamAt(cancel, data, offset, lim, budget)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parsing xref stream object: %w", err)
+			return XRefSection{}, err
 		}
-		stream, ok := iobj.Value.(*object.Stream)
-		if !ok {
-			return nil, nil, fmt.Errorf("xref stream object is not a stream")
-		}
-		// The document's own resolved limits, not defaultLimits(): a
-		// cross-reference stream is a Flate stream the file controls like any
-		// other, so a caller who lowered WithMaxDecodedStreamBytes for untrusted
-		// uploads has to get that ceiling here too. doc.limits is populated
-		// before the cross-reference chain is walked, so the value is available.
-		//
-		// This costs nothing under the defaults, which is the only configuration
-		// the corpus exercises: doc.lim() is then defaultLimits() field for
-		// field. Measured across 3,102 files (the veraPDF corpus, the Cal Poly
-		// PDF/VT suite, the WTPDF set, the Factur-X invoices and the PDF 2.0
-		// reference files), 930 cross-reference stream sections decode to at most
-		// 430,350 bytes — 0.4% of the 100 MB default, and none above 1 MiB. A
-		// caller has to go two orders of magnitude below the default before this
-		// bound is what stops their read.
-		table, err := parseXRefStream(cancel, stream, doc.lim())
-		if err != nil {
-			return nil, nil, fmt.Errorf("parsing xref stream: %w", err)
-		}
-		if _, exists := doc.Objects[iobj.Number]; !exists {
-			doc.Objects[iobj.Number] = iobj
-		}
-		return table, &stream.Dict, nil
+		sec.kind, sec.table, sec.trailer, sec.objNum = XRefStreamSection, table, trailer, num
 
 	default:
-		return nil, nil, fmt.Errorf("expected 'xref' or object number at offset %d, got %v", offset, tok.Type)
+		return XRefSection{}, fmt.Errorf("expected 'xref' or object number at offset %d, got %v", offset, tok.Type)
 	}
+	if adjust != 0 {
+		for n, e := range sec.table.Entries {
+			if !e.Compressed {
+				e.Offset += adjust
+				sec.table.Entries[n] = e
+			}
+		}
+	}
+	return sec, nil
+}
+
+// parseXRefStreamAt parses the cross-reference stream object at an absolute
+// offset and returns its entries, its object number and its dictionary.
+func parseXRefStreamAt(cancel core.Canceler, data []byte, offset int64, lim core.Limits, budget *inUseBudget) (*XRefTable, int, *object.Dictionary, error) {
+	if offset < 0 || offset >= int64(len(data)) {
+		return nil, 0, nil, fmt.Errorf("xref stream offset %d outside file (size %d)", offset, len(data))
+	}
+	lexer := NewLexer(data)
+	lexer.SetPosition(offset)
+	iobj, err := NewParserFromLexer(lexer).ParseIndirectObject()
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("parsing xref stream object: %w", err)
+	}
+	stream, ok := iobj.Value.(*object.Stream)
+	if !ok {
+		return nil, 0, nil, fmt.Errorf("xref stream object is not a stream")
+	}
+	// The document's own resolved limits, not defaultLimits(): a
+	// cross-reference stream is a Flate stream the file controls like any
+	// other, so a caller who lowered WithMaxDecodedStreamBytes for untrusted
+	// uploads has to get that ceiling here too.
+	//
+	// This costs nothing under the defaults, which is the only configuration
+	// the corpus exercises. Measured across 3,102 files (the veraPDF corpus,
+	// the Cal Poly PDF/VT suite, the WTPDF set, the Factur-X invoices and the
+	// PDF 2.0 reference files), 930 cross-reference stream sections decode to
+	// at most 430,350 bytes — 0.4% of the 100 MB default, and none above
+	// 1 MiB. A caller has to go two orders of magnitude below the default
+	// before this bound is what stops their read.
+	table, err := parseXRefStream(cancel, stream, lim, budget)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("parsing xref stream: %w", err)
+	}
+	return table, iobj.Number, &stream.Dict, nil
 }
 
 // parseHeader extracts the PDF version from the header and returns the header offset.
@@ -607,41 +819,38 @@ func parseHeader(data []byte) (version string, headerOffset int64, err error) {
 	return string(header[verStart:verEnd]), int64(idx), nil
 }
 
-// findStartXref finds the byte offset stored after the startxref keyword.
+// findStartXref finds the byte offset stored after the last startxref keyword
+// in the final 1024 bytes of the file.
 func findStartXref(data []byte) (int64, error) {
-	// Search backwards from end of file for startxref
-	// Look in the last 1024 bytes
 	searchLen := 1024
 	if len(data) < searchLen {
 		searchLen = len(data)
 	}
-	tail := data[len(data)-searchLen:]
-
-	idx := bytes.LastIndex(tail, []byte("startxref"))
+	base := len(data) - searchLen
+	idx := bytes.LastIndex(data[base:], []byte("startxref"))
 	if idx < 0 {
 		return 0, fmt.Errorf("startxref not found")
 	}
+	return startXRefValue(data, base+idx)
+}
 
-	// Skip "startxref" and whitespace to get the offset value
+// startXRefValue reads the offset after the startxref keyword at idx.
+func startXRefValue(data []byte, idx int) (int64, error) {
 	pos := idx + len("startxref")
-	for pos < len(tail) && syntax.IsWhitespace(tail[pos]) {
+	for pos < len(data) && syntax.IsWhitespace(data[pos]) {
 		pos++
 	}
-
-	// Read digits
 	numStart := pos
-	for pos < len(tail) && tail[pos] >= '0' && tail[pos] <= '9' {
+	for pos < len(data) && data[pos] >= '0' && data[pos] <= '9' {
 		pos++
 	}
 	if numStart == pos {
 		return 0, fmt.Errorf("no offset after startxref")
 	}
-
-	offset, err := strconv.ParseInt(string(tail[numStart:pos]), 10, 64)
+	offset, err := strconv.ParseInt(string(data[numStart:pos]), 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid startxref offset: %w", err)
 	}
-
 	return offset, nil
 }
 
@@ -1011,15 +1220,19 @@ func writeXRefTable(s *syntax.Serializer, objNums []int, offsets map[int]int64, 
 	// EOL. Emitting "n \r\n" (a space AND CRLF after the type) produced a
 	// 21-byte line that no fixed-format reader — including this package's own
 	// 6.1.4 validator — accepts. Use a bare CRLF EOL.
-	entryLine := func(num int) string {
+	entryLine := func(num int) (string, error) {
 		if num == 0 {
-			return "0000000000 65535 f\r\n"
+			return "0000000000 65535 f\r\n", nil
 		}
 		gen := 0
 		if obj, ok := objects[num]; ok {
 			gen = obj.Generation
 		}
-		return fmt.Sprintf("%010d %05d n\r\n", offsets[num], gen)
+		line, err := xrefLine(offsets[num], gen, false)
+		if err != nil {
+			return "", fmt.Errorf("object %d: %w", num, err)
+		}
+		return line, nil
 	}
 
 	// Object 0 (the free-list head) always begins the first subsection;
@@ -1030,7 +1243,11 @@ func writeXRefTable(s *syntax.Serializer, objNums []int, offsets map[int]int64, 
 			return err
 		}
 		for _, num := range section {
-			if err := s.WriteString(entryLine(num)); err != nil {
+			line, err := entryLine(num)
+			if err != nil {
+				return err
+			}
+			if err := s.WriteString(line); err != nil {
 				return err
 			}
 		}
@@ -1149,7 +1366,7 @@ func (d *Document) graph() core.View {
 // The run state travels with it when there is one, so a trip a subsystem records
 // through the view lands in the same recorder the validators report from.
 func (d *Document) view() core.View {
-	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Objects: d.Objects, Offsets: d.Offsets, Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler()}
+	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Objects: d.Objects, Offsets: d.Source().offsets, Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler(), Alloc: d.allocObjNum}
 	if d.valCache != nil {
 		v.Run = d.valCache.run.shared
 	}
@@ -1161,19 +1378,13 @@ func (d *Document) view() core.View {
 // track numbering: font embedding, image embedding and anything else that adds
 // several linked objects at once need one allocator between them.
 //
-// The number is one past the highest in use, so it never collides with an
-// object already read from a file, and never reuses a number a previous Add
-// handed out.
+// The number is above every number the source file uses — including the
+// cross-reference streams and object streams Read removes from Objects, and
+// free entries (see Source.MaxObjectNumber) — and above every key in Objects,
+// so it collides neither with the file nor with the graph. A number Add has
+// handed out is never handed out again. Adds cost O(1) amortised.
 func (d *Document) Add(value object.Object) object.IndirectRef {
-	if d.Objects == nil {
-		d.Objects = map[int]*object.IndirectObject{}
-	}
-	next := 1
-	for num := range d.Objects {
-		if num >= next {
-			next = num + 1
-		}
-	}
-	d.Objects[next] = &object.IndirectObject{Number: next, Value: value}
-	return object.IndirectRef{Number: next}
+	n := d.allocObjNum()
+	d.Objects[n] = &object.IndirectObject{Number: n, Value: value}
+	return object.IndirectRef{Number: n}
 }

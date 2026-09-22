@@ -29,15 +29,14 @@ func Embed(doc core.View, invoiceXML []byte, profile formalis.Profile, title str
 		return fmt.Errorf("unknown Factur-X profile %q", profile)
 	}
 
-	next := 1
-	for n := range doc.Objects {
-		if n >= next {
-			next = n + 1
-		}
+	// New objects are numbered by the document's allocator: one past the
+	// highest key in Objects can be a number the source file's object streams
+	// use (audit 2026-09-22 C3).
+	if doc.Alloc == nil {
+		return fmt.Errorf("the document view has no object allocator")
 	}
 	newObj := func(v object.Object) int {
-		n := next
-		next++
+		n := doc.Alloc()
 		doc.Objects[n] = &object.IndirectObject{Number: n, Value: v}
 		return n
 	}

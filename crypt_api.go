@@ -110,13 +110,10 @@ func (d *Document) installEncryption(h *crypt.Handler, dict *object.Dictionary) 
 
 	// Attach the /Encrypt dictionary as a new indirect object and point the
 	// trailer at it. Its own strings (/O, /U, …) are never encrypted.
-	maxObj := 0
-	for num := range d.Objects {
-		if num > maxObj {
-			maxObj = num
-		}
-	}
-	encNum := maxObj + 1
+	// Numbered by the document's allocator, never one past the highest key in
+	// Objects: that number can belong to an object stream or cross-reference
+	// stream of the source file (audit 2026-09-22 C3).
+	encNum := d.allocObjNum()
 	d.Objects[encNum] = &object.IndirectObject{Number: encNum, Value: dict}
 	h.EncryptObjNum = encNum
 	d.security = h

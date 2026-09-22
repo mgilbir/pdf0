@@ -148,6 +148,7 @@ func (d *Document) materializeScannedObjStms(cancel core.Canceler) error {
 		}
 		decompressed += int64(len(data))
 		for _, ie := range index {
+			d.source.note(ie.Number)
 			if ie.Number <= 0 {
 				continue
 			}
@@ -170,12 +171,28 @@ func (d *Document) materializeScannedObjStms(cancel core.Canceler) error {
 // (type-2 xref entries) into doc.Objects. Container streams must already be
 // loaded; each container is decoded and indexed once regardless of how many
 // of its objects are referenced.
+//
+// A container that cannot supply the objects the table places in it is
+// recorded in brokenObjStms and the read continues, exactly as for one whose
+// data does not decode: the container is missing, is not a stream, lists fewer
+// objects than an entry's index, or holds an object that does not parse. Those
+// objects are then absent, validation can report why, and Write refuses rather
+// than emit a document missing them. Failing the whole read instead (as this
+// did) made one bad entry cost every other object in the file, with no scan
+// rebuild to fall back on (audit 2026-09-22 C102).
+//
+// One case stays fatal: an entry whose index names a different object number
+// in the container's own index. That is not missing data but two parts of the
+// file disagreeing about which object is object N, and any choice between them
+// is a guess a crafted file can steer, showing one object to pdf0 and another
+// to a reader that trusts the other part. Read refuses the file rather than
+// guess (TestReadObjStmXrefIndexMismatch).
 func (d *Document) loadCompressedObjects(cancel core.Canceler, table *XRefTable) error {
 	// Group requested object numbers by container so each object stream is
 	// decoded exactly once.
 	byContainer := make(map[int][]int)
 	for num, entry := range table.Entries {
-		if entry.Free || !entry.Compressed {
+		if !entry.Compressed {
 			continue
 		}
 		if num == 0 {
@@ -211,11 +228,13 @@ func (d *Document) loadCompressedObjects(cancel core.Canceler, table *XRefTable)
 		objNums := byContainer[containerNum]
 		container, ok := d.Objects[containerNum]
 		if !ok {
-			return fmt.Errorf("object stream %d referenced by xref but not present", containerNum)
+			d.brokenObjStms = append(d.brokenObjStms, containerNum)
+			continue
 		}
 		stream, ok := container.Value.(*object.Stream)
 		if !ok {
-			return fmt.Errorf("object stream %d is not a stream", containerNum)
+			d.brokenObjStms = append(d.brokenObjStms, containerNum)
+			continue
 		}
 		// Once the aggregate decompressed object-stream budget is exhausted,
 		// stop materializing further streams (recorded as broken, like an
@@ -235,11 +254,17 @@ func (d *Document) loadCompressedObjects(cancel core.Canceler, table *XRefTable)
 			continue
 		}
 		decompressed += int64(len(data))
+		for _, ie := range index {
+			d.source.note(ie.Number)
+		}
+		sort.Ints(objNums) // deterministic: the fatal mismatch, if any, is the same every run
+		broken := false
 		for _, num := range objNums {
 			entry := table.Entries[num]
 			idx := entry.IndexInStream
 			if idx < 0 || idx >= len(index) {
-				return fmt.Errorf("object %d: index %d out of range in object stream %d (N=%d)", num, idx, containerNum, len(index))
+				broken = true
+				continue
 			}
 			ie := index[idx]
 			if ie.Number != num {
@@ -249,10 +274,14 @@ func (d *Document) loadCompressedObjects(cancel core.Canceler, table *XRefTable)
 			parser.Lexer().SetPosition(int64(first + ie.Offset))
 			obj, err := parser.ParseObject()
 			if err != nil {
-				return fmt.Errorf("parsing object %d in object stream %d: %w", num, containerNum, err)
+				broken = true
+				continue
 			}
 			// Objects in an object stream always have generation 0.
 			d.Objects[num] = &object.IndirectObject{Number: num, Value: obj}
+		}
+		if broken {
+			d.brokenObjStms = append(d.brokenObjStms, containerNum)
 		}
 	}
 	return nil

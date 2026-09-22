@@ -18,20 +18,22 @@ func TestParseXRefTable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(table.Entries) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(table.Entries))
+	// Three in-use entries; the free entry for object 0 is held as a run in
+	// Free, not as an entry (see XRefTable).
+	if len(table.Entries) != 3 {
+		t.Fatalf("expected 3 in-use entries, got %d", len(table.Entries))
 	}
 
 	// Object 0 should be free
-	if !table.Entries[0].Free {
+	if _, inUse := table.Entries[0]; inUse || !table.IsFree(0) {
 		t.Error("object 0 should be free")
 	}
-	if table.Entries[0].Generation != 65535 {
-		t.Errorf("object 0 generation: expected 65535, got %d", table.Entries[0].Generation)
+	if want := []XRefRange{{Start: 0, Count: 1}}; len(table.Free) != 1 || table.Free[0] != want[0] {
+		t.Errorf("Free = %v, want %v", table.Free, want)
 	}
 
 	// Object 1
-	if table.Entries[1].Free {
+	if table.IsFree(1) {
 		t.Error("object 1 should not be free")
 	}
 	if table.Entries[1].Offset != 9 {
@@ -62,8 +64,8 @@ func TestParseXRefTableMultipleSubsections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(table.Entries) != 3 {
-		t.Fatalf("expected 3 entries, got %d", len(table.Entries))
+	if len(table.Entries) != 2 || !table.IsFree(0) {
+		t.Fatalf("expected 2 in-use entries and object 0 free, got %d entries, Free %v", len(table.Entries), table.Free)
 	}
 
 	if table.Entries[1].Offset != 9 {

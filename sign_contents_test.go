@@ -98,7 +98,7 @@ func TestSignIncrementalWithPageContents(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := doc.WriteSignedIncremental(&buf, original, cert, key); err != nil {
+	if err := doc.WriteSignedIncremental(&buf, cert, key); err != nil {
 		t.Fatalf("WriteSignedIncremental on a document with page content: %v", err)
 	}
 	out := buf.Bytes()
@@ -143,7 +143,7 @@ func TestSignIncrementalSecondSignature(t *testing.T) {
 		t.Fatalf("re-read once-signed: %v", err)
 	}
 	var second bytes.Buffer
-	if err := reread.WriteSignedIncremental(&second, onceSigned, cert, key); err != nil {
+	if err := reread.WriteSignedIncremental(&second, cert, key); err != nil {
 		t.Fatalf("second (incremental) WriteSignedIncremental: %v", err)
 	}
 	out := second.Bytes()

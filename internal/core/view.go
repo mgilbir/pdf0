@@ -67,6 +67,14 @@ type View struct {
 	// Cancel is this operation's cancellation signal, or the zero value when the
 	// operation cannot be cancelled.
 	Cancel Canceler
+	// Alloc returns an object number nothing uses — no object in Objects and no
+	// number the source file uses, including the cross-reference and object
+	// streams Read removed from Objects — for a subsystem that adds objects to
+	// the document. Document.view sets it to the Document's one allocator. It is
+	// nil on a hand-built View, and a function that needs it refuses rather than
+	// numbering objects itself: one past the highest key in Objects is a number
+	// the source file may still use (audit 2026-09-22 C3).
+	Alloc func() int
 	// Run holds what the calls of one operation share. It is nil outside a run —
 	// a bare Read, say — and every method here tolerates that.
 	Run *Run

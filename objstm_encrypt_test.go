@@ -69,7 +69,7 @@ func TestEncryptIndirectCFNotPacked(t *testing.T) {
 	}
 	// The /CF object itself must not have been packed into an object stream: it
 	// must have a recorded byte offset (uncompressed) in the rewritten file.
-	if _, ok := d2.Offsets[cfNum]; !ok {
+	if _, ok := d2.Source().Offset(cfNum); !ok {
 		t.Errorf("the /CF object %d was packed into an object stream", cfNum)
 	}
 }

@@ -151,10 +151,10 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 	}{
 		{"WriteSigned", func(d *Document, _ []byte, b *bytes.Buffer) error { return d.WriteSigned(b, cert, key) }},
 		{"WriteSignedIncremental", func(d *Document, raw []byte, b *bytes.Buffer) error {
-			return d.WriteSignedIncremental(b, raw, cert, key)
+			return d.WriteSignedIncremental(b, cert, key)
 		}},
 		{"WriteArchivalTimestamp", func(d *Document, raw []byte, b *bytes.Buffer) error {
-			return d.WriteArchivalTimestamp(b, raw, []*x509.Certificate{cert}, tsaCert, tsaKey)
+			return d.WriteArchivalTimestamp(b, []*x509.Certificate{cert}, tsaCert, tsaKey)
 		}},
 	}
 	bases := []struct {

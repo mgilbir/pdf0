@@ -275,7 +275,7 @@ func TestIncrementalRefusesMissingObjects(t *testing.T) {
 	reread.brokenObjStms = append(reread.brokenObjStms, 3)
 
 	var out bytes.Buffer
-	if err := reread.WriteIncremental(&out, original, []int{1}); err == nil {
+	if err := reread.WriteIncremental(&out, []int{1}); err == nil {
 		t.Fatal("WriteIncremental accepted a document with 1 unmaterialised object stream(s)")
 	} else if !strings.Contains(err.Error(), "object stream") {
 		t.Errorf("unexpected error: %v", err)

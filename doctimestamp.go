@@ -1,7 +1,6 @@
 package pdf0
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/x509"
 	"encoding/hex"
@@ -19,19 +18,19 @@ import (
 // signature stays valid.
 
 // WriteArchivalTimestamp adds a DSS (holding certs as validation material) and a
-// document time-stamp over the whole file, as an incremental update. original
-// must be the bytes the document was read from. The document should already carry
-// a B-T signature for the result to reach B-LTA.
-func (d *Document) WriteArchivalTimestamp(w io.Writer, original []byte, certs []*x509.Certificate, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
+// document time-stamp over the whole file, as an incremental update of the file
+// the document was read from (see WriteIncremental). The document should already
+// carry a B-T signature for the result to reach B-LTA.
+func (d *Document) WriteArchivalTimestamp(w io.Writer, certs []*x509.Certificate, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
 	doc, changed, err := withArchivalTimestamp(d, certs)
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	if err := doc.WriteIncremental(&buf, original, changed); err != nil {
+	data, err := doc.incrementalBytes(changed)
+	if err != nil {
 		return err
 	}
-	out, err := patchDocTimestamp(buf.Bytes(), tsaCert, tsaKey)
+	out, err := patchDocTimestamp(data, tsaCert, tsaKey)
 	if err != nil {
 		return err
 	}
@@ -47,21 +46,8 @@ func withArchivalTimestamp(d *Document, certs []*x509.Certificate) (*Document, [
 		return nil, nil, err
 	}
 
-	clone := &Document{
-		Version:        d.Version,
-		Objects:        make(map[int]*object.IndirectObject, len(d.Objects)+8),
-		Trailer:        *d.Trailer.Clone(),
-		usedXRefStream: d.usedXRefStream,
-	}
-	maxObj := 0
-	for num, iobj := range d.Objects {
-		clone.Objects[num] = iobj
-		if num > maxObj {
-			maxObj = num
-		}
-	}
-	next := maxObj
-	alloc := func() int { next++; return next }
+	clone := d.updateClone(len(certs) + 5)
+	alloc := clone.allocObjNum
 
 	// DSS with the validation certificates, each stored as a stream.
 	var certRefs object.Array

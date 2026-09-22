@@ -83,7 +83,7 @@ func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b1 bytes.Buffer
-	if err := d0.WriteArchivalTimestamp(&b1, base, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d0.WriteArchivalTimestamp(&b1, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("first WriteArchivalTimestamp: %v", err)
 	}
 	o1 := b1.Bytes()
@@ -96,7 +96,7 @@ func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
 	}
 
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, o1, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("second WriteArchivalTimestamp: %v", err)
 	}
 	o2 := b2.Bytes()
@@ -143,7 +143,7 @@ func TestArchivalTimestampSkipsTakenTimestampName(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := doc.WriteArchivalTimestamp(&buf, base, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := doc.WriteArchivalTimestamp(&buf, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	out := buf.Bytes()
@@ -186,7 +186,7 @@ func TestSignatureThenTimestampNames(t *testing.T) {
 	}
 
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, o1, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	o2 := b2.Bytes()

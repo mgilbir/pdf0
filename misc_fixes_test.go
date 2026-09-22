@@ -47,9 +47,13 @@ func TestOffsetsMatchObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for num := range doc.Offsets {
+	offsets := doc.Source().Offsets()
+	if len(offsets) == 0 {
+		t.Fatal("the source record holds no offsets for a file read from bytes")
+	}
+	for num := range offsets {
 		if _, ok := doc.Objects[num]; !ok {
-			t.Errorf("doc.Offsets holds object %d that is not in doc.Objects", num)
+			t.Errorf("the source record holds an offset for object %d that is not in doc.Objects", num)
 		}
 	}
 }

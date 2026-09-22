@@ -204,7 +204,7 @@ func TestPAdESBLTA(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, o1, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	o2 := b2.Bytes()

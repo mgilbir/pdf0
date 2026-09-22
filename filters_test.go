@@ -44,7 +44,7 @@ func TestParseXRefStreamWithPredictor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !table.Entries[0].Free {
+	if !table.IsFree(0) {
 		t.Error("entry 0 should be free")
 	}
 	if table.Entries[1].Offset != 15 {

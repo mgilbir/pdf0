@@ -130,7 +130,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := doc.WriteArchivalTimestamp(&buf, base, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := doc.WriteArchivalTimestamp(&buf, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	out := buf.Bytes()
@@ -204,7 +204,7 @@ func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, o1, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	out := b2.Bytes()
@@ -237,7 +237,7 @@ func TestSignPromotesDirectAcroForm(t *testing.T) {
 	}{
 		{"WriteSigned", func(d *Document, b *bytes.Buffer) error { return d.WriteSigned(b, cert, key) }},
 		{"WriteSignedIncremental", func(d *Document, b *bytes.Buffer) error {
-			return d.WriteSignedIncremental(b, base, cert, key)
+			return d.WriteSignedIncremental(b, cert, key)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,10 +301,10 @@ func TestSigningRefusesDirectCatalogOrPage(t *testing.T) {
 				return d.WriteSignedTimestamped(b, cert, key, tsaCert, tsaKey)
 			}},
 			{"WriteSignedIncremental", func(d *Document, raw []byte, b *bytes.Buffer) error {
-				return d.WriteSignedIncremental(b, raw, cert, key)
+				return d.WriteSignedIncremental(b, cert, key)
 			}},
 			{"WriteArchivalTimestamp", func(d *Document, raw []byte, b *bytes.Buffer) error {
-				return d.WriteArchivalTimestamp(b, raw, []*x509.Certificate{cert}, tsaCert, tsaKey)
+				return d.WriteArchivalTimestamp(b, []*x509.Certificate{cert}, tsaCert, tsaKey)
 			}},
 		} {
 			t.Run(doc.name+"/"+w.name, func(t *testing.T) {
@@ -363,7 +363,7 @@ func TestWriteRefusesNonPositiveObjectNumber(t *testing.T) {
 	inc.Objects[-1] = &object.IndirectObject{Number: -1, Value: stray}
 	for _, changed := range [][]int{{-1}, {0}, {1, -1}} {
 		var b bytes.Buffer
-		if err := inc.WriteIncremental(&b, base, changed); err == nil {
+		if err := inc.WriteIncremental(&b, changed); err == nil {
 			t.Errorf("WriteIncremental accepted changed=%v", changed)
 		}
 	}
