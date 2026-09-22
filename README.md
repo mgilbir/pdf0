@@ -3,10 +3,12 @@
 A PDF parser, serializer, and conformance validator written in Go. The object
 model is ISO 32000-2 (PDF 2.0); files of any version are read into it, and most
 of the standards below are defined against PDF 1.x — PDF/A-1, -2 and -3 require
-a 1.x header, PDF/X-1a and -3 require 1.3/1.4. Its only dependencies are the
-author's own pure-Go modules (`forme` for text shaping, font programs and the
+a 1.x header, PDF/X-1a and -3 require 1.3/1.4. It is pure Go. Its dependencies
+are the author's own modules (`forme` for text shaping, font programs and the
 HTML/CSS layout engine, `formalis` for EN 16931 invoice rules, `golittlecms` for
-ICC profiles, `gopenjpeg` for JPEG 2000).
+ICC profiles, `gopenjpeg` for JPEG 2000) and one from the Go project,
+`golang.org/x/text`, for the Unicode normalisation that PDF 2.0 password
+preparation (SASLprep) requires.
 
 ```
 go get github.com/mgilbir/pdf0

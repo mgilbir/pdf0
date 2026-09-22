@@ -186,8 +186,8 @@ tables against the ISO 16684 RELAX NG schemas vendored in `testdata/xmp-rng/`
 (15 `XMP_Properties-*.rng` files from ceztko/XMP-RNG-Schema, MIT; see the
 directory's `NOTICE.md`). Unlike the veraPDF corpus and the Arlington model,
 these files are **committed to the repository**, so the guard runs on any
-checkout — it skips only if they are absent. They are test-only; the library
-stays dependency-free.
+checkout — a checkout without them fails the test rather than skipping it. They
+are test-only; the library does not read them.
 
 The test parses each schema with `encoding/xml`, evaluates the schemas'
 `condition` attributes (`$IsPDFA1`…`$IsPDFA4`, `$IsPDFAxOrGreater`) at PDF/A

@@ -1,6 +1,9 @@
-// Package pdf0 is a PDF 2.0 parser, serializer, and PDF/A validator. Its only
-// dependencies are the author's own pure-Go modules (formalis for EN 16931
-// invoice rules, golittlecms for ICC profiles, gopenjpeg for JPEG 2000).
+// Package pdf0 is a PDF 2.0 parser, serializer, and PDF/A validator. It is pure
+// Go. Its dependencies are the author's own modules (forme for text shaping and
+// font programs, formalis for EN 16931 invoice rules, golittlecms for ICC
+// profiles, gopenjpeg for JPEG 2000) and one from the Go project,
+// golang.org/x/text, whose Unicode normalisation SASLprep needs to prepare
+// PDF 2.0 passwords.
 //
 // The core is four entry points:
 //
