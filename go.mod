@@ -10,6 +10,8 @@ require github.com/mgilbir/golittlecms v0.0.0-20260727161601-f6af7cfe1556
 
 require github.com/mgilbir/forme v0.3.0
 
+require golang.org/x/text v0.40.0
+
 // v0.3.0 was published from a commit that no longer exists. Its tree was
 // correct — the module zip a consumer downloads never contained anything it
 // should not — but the history behind it carried 2 MB of generated PDFs
