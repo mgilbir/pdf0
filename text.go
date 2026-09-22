@@ -237,10 +237,10 @@ func (d *Document) simpleEncoding(f *object.Dictionary, twoByte bool) map[int]ru
 	code := 0
 	for _, item := range differences {
 		switch v := d.Resolve(item).(type) {
-		case object.Integer:
-			code = int(v)
-		case object.Real:
-			code = int(v)
+		case object.Integer, object.Real:
+			// object.Int saturates an out-of-range Real; a raw int(v) is
+			// implementation-defined for one (audit 2026-09-22 C118).
+			code = object.Int(v)
 		case object.Name:
 			if code >= 0 && code < 256 {
 				if r, ok := font.GlyphNameToRune(string(v), byte(code)); ok {
