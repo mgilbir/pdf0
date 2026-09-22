@@ -299,15 +299,22 @@ func (s *Serializer) writeStream(stream *object.Stream) error {
 }
 
 // WriteIndirectObject writes an indirect object definition to the output. The
-// object and generation numbers must be non-negative and the value must be a
-// value, not another definition, which is what ParseIndirectObject accepts.
-// Everything checkable before the first byte is checked before it.
+// object number must be in 0..MaxObjectNumber, the generation in
+// 0..MaxGeneration, and the value must be a value, not another definition:
+// what ParseIndirectObject accepts. Everything checkable before the first byte
+// is checked before it.
 func (s *Serializer) WriteIndirectObject(obj *object.IndirectObject) error {
 	if obj == nil {
 		return fmt.Errorf("cannot serialize a nil *IndirectObject")
 	}
-	if obj.Number < 0 || obj.Generation < 0 {
-		return fmt.Errorf("indirect object %d %d: object and generation numbers must be non-negative", obj.Number, obj.Generation)
+	// The header is what the cross-reference entry for this object repeats, and
+	// a number or generation outside what the parser accepts would produce a
+	// header (and an xref line) no reader, pdf0 included, reads back.
+	if obj.Number < 0 || obj.Number > MaxObjectNumber {
+		return fmt.Errorf("indirect object %d %d: object number is outside 0..%d", obj.Number, obj.Generation, MaxObjectNumber)
+	}
+	if obj.Generation < 0 || obj.Generation > MaxGeneration {
+		return fmt.Errorf("indirect object %d %d: generation is outside 0..%d", obj.Number, obj.Generation, MaxGeneration)
 	}
 	if obj.Value == nil {
 		return fmt.Errorf("indirect object %d %d has no value", obj.Number, obj.Generation)

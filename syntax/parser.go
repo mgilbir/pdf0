@@ -22,6 +22,21 @@ import (
 // Input is untrusted: recursion is depth-capped (maxParseDepth), and duplicate
 // keys are resolved through Dictionary.Set, which is O(1) amortised at any size.
 
+// MaxGeneration is the largest generation number an indirect object can carry.
+// ISO 32000-2 7.5.4 gives the generation a five-digit field in a
+// cross-reference table and reserves 65535 as the generation after which an
+// object number is never reused.
+const MaxGeneration = 65535
+
+// MaxObjectNumber is the largest object number pdf0 reads or writes.
+//
+// ISO 32000-2 sets no upper bound (PDF 1.7's Annex C suggested 8,388,607 as an
+// implementation limit), so this is pdf0's own: 2^31 − 1, the largest value
+// every platform's int holds. It keeps "start + count" in a cross-reference
+// subsection from wrapping (audit 2026-09-22 C128), and it is far above any
+// real file's numbering.
+const MaxObjectNumber = 1<<31 - 1
+
 // maxParseDepth bounds recursion through nested arrays and dictionaries so that
 // adversarial input (e.g. millions of nested '[') cannot exhaust the goroutine
 // stack, which would abort the process uncatchably. Real PDFs nest only a
@@ -227,11 +242,11 @@ func (p *Parser) parseIntegerOrRef(tok Token) (object.Object, error) {
 			p.consumeToken() // consume second int
 			p.consumeToken() // consume R
 
-			num, err := p.toObjectNumber(tok)
+			num, err := p.toObjectNumber(tok, math.MaxInt, "object")
 			if err != nil {
 				return nil, err
 			}
-			gen, err := p.toObjectNumber(tok2)
+			gen, err := p.toObjectNumber(tok2, math.MaxInt, "generation")
 			if err != nil {
 				return nil, err
 			}
@@ -289,15 +304,28 @@ func (p *Parser) toReal(tok Token) (object.Object, error) {
 }
 
 // toObjectNumber parses an object or generation number, rejecting values that
-// overflow or are negative. Overflow was previously swallowed (strconv.Atoi
-// error dropped), yielding garbage references like Number=MaxInt64.
-func (p *Parser) toObjectNumber(tok Token) (int, error) {
+// overflow, are negative, or exceed max. Overflow was previously swallowed
+// (strconv.Atoi error dropped), yielding garbage references like
+// Number=MaxInt64.
+//
+// A definition ("N G obj") passes MaxObjectNumber and MaxGeneration: a
+// generation above 65535 (ISO 32000-2 7.5.4: the field is five digits and
+// 65535 is the largest value it holds) cannot be written back in a
+// cross-reference table, and the scan that rebuilds a damaged table rejects
+// the same header, so a definition carrying one is refused here rather than
+// accepted by one path and dropped by the other (audit 2026-09-22 C125). A
+// reference ("N G R") passes math.MaxInt: a reference to an object that cannot
+// exist is harmless, and refusing it would fail the whole containing object.
+func (p *Parser) toObjectNumber(tok Token, max int, what string) (int, error) {
 	val, err := strconv.Atoi(string(tok.Value))
 	if err != nil {
-		return 0, fmt.Errorf("invalid object number %q at offset %d: %w", tok.Value, tok.Offset, err)
+		return 0, fmt.Errorf("invalid %s number %q at offset %d: %w", what, tok.Value, tok.Offset, err)
 	}
 	if val < 0 {
-		return 0, fmt.Errorf("negative object number %d at offset %d", val, tok.Offset)
+		return 0, fmt.Errorf("negative %s number %d at offset %d", what, val, tok.Offset)
+	}
+	if val > max {
+		return 0, fmt.Errorf("%s number %d at offset %d exceeds %d", what, val, tok.Offset, max)
 	}
 	return val, nil
 }
@@ -573,7 +601,7 @@ func (p *Parser) ParseIndirectObject() (*object.IndirectObject, error) {
 	if numTok.Type != TokenInteger {
 		return nil, fmt.Errorf("expected integer for object number, got %v at offset %d", numTok.Type, numTok.Offset)
 	}
-	num, err := p.toObjectNumber(numTok)
+	num, err := p.toObjectNumber(numTok, MaxObjectNumber, "object")
 	if err != nil {
 		return nil, err
 	}
@@ -585,7 +613,7 @@ func (p *Parser) ParseIndirectObject() (*object.IndirectObject, error) {
 	if genTok.Type != TokenInteger {
 		return nil, fmt.Errorf("expected integer for generation number, got %v at offset %d", genTok.Type, genTok.Offset)
 	}
-	gen, err := p.toObjectNumber(genTok)
+	gen, err := p.toObjectNumber(genTok, MaxGeneration, "generation")
 	if err != nil {
 		return nil, err
 	}
