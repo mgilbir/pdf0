@@ -15,13 +15,21 @@ what `github.com/mgilbir/pdf0` implements ([what it does not
 expose](#what-the-cli-does-not-expose)).
 
 ```
-go build ./cmd/pdf0                              # builds ./pdf0 in the repo
+go install ./cmd/pdf0                             # from a checkout: into $GOBIN or $(go env GOPATH)/bin
 go install github.com/mgilbir/pdf0/cmd/pdf0@latest
 ```
 
+Prefer `go install` (or `go build -o <somewhere-else> ./cmd/pdf0`) to a bare
+`go build ./cmd/pdf0` in a checkout: that drops a `pdf0` executable in the repository
+root, which is how compiled binaries once ended up in a release
+(`scripts/check-no-binaries.sh` now refuses them).
+
 The install path is `github.com/mgilbir/pdf0/cmd/pdf0` (module `github.com/mgilbir/pdf0`,
-command in `cmd/pdf0`). The repository carries **no version tags**, so `@latest` resolves
-to a pseudo-version of the default branch.
+command in `cmd/pdf0`). The repository has two usable version tags, `v0.1.0` and `v0.3.2`;
+`v0.2.0` through `v0.3.1` are retracted (see `go.mod`), so `@latest` resolves to `v0.3.2`.
+The behaviour on this page — passwords off the command line, the overwrite guard, `-`
+for stdin and stdout — is newer than `v0.3.2`; until a release carries it, install
+`@main` to get it.
 
 ## Synopsis
 
@@ -32,21 +40,32 @@ goes to **stderr**, not stdout:
 pdf0 — inspect, validate, and (de)encrypt PDF files
 
 usage:
-  pdf0 info     [-password PW] <file>
-  pdf0 validate [-level 1b|2b|3b|4] [-password PW] <file>
-  pdf0 decrypt  [-password PW] <in> <out>
-  pdf0 encrypt  -user PW [-owner PW] <in> <out>
-  pdf0 extract  [-password PW] <file>
-  pdf0 repair   [-level 1b|2b|3b|4] [-password PW] <in> <out>
-  pdf0 merge    <out> <in1> <in2> [in3 ...]
-  pdf0 ua       [-password PW] <file>
+  pdf0 info     [-password-file F] <file>
+  pdf0 validate [-level 1b|2b|3b|4] [-password-file F] <file>
+  pdf0 decrypt  [-force] [-password-file F] <in> <out>
+  pdf0 encrypt  [-force] [-user-password-file F] [-owner-password-file F] <in> <out>
+  pdf0 extract  [-password-file F] <file>
+  pdf0 repair   [-force] [-level 1b|2b|3b|4] [-password-file F] <in> <out>
+  pdf0 merge    [-force] <out> <in1> <in2> [in3 ...]
+  pdf0 ua       [-password-file F] <file>
 
-exit codes: 0 success, 1 violations reported, 2 usage error,
-3 read/write, parse, or encryption error
+"-" is stdin as an input and stdout as an output. An existing output is
+replaced only with -force, and never when it is one of the inputs.
+
+passwords are never taken on the command line. Each comes from, in order:
+its file flag ("-" reads stdin), the environment (PDF0_PASSWORD,
+PDF0_USER_PASSWORD, PDF0_OWNER_PASSWORD), or a no-echo prompt when stdin
+is a terminal.
+
+exit codes: 0 success, 1 violations reported, 2 usage error or refused
+overwrite, 3 read/write, parse, or encryption error
 ```
 
 The three help spellings exit **0**. Bare `pdf0` exits **2**, and an unknown command prints
 `unknown command "bogus"` followed by the same block, also exit **2**.
+
+Flags come before the operands (Go's `flag` package stops at the first operand), so
+`pdf0 decrypt -force in.pdf out.pdf`, not `pdf0 decrypt in.pdf out.pdf -force`.
 
 ## Exit codes
 
@@ -57,8 +76,8 @@ The split between 1 and 3 is the point of the design: a conformance failure is a
 |---|---|---|
 | 0 | Success — the run completed and no checks reported violations | all commands |
 | 1 | Checks reported violations; the file was read (and written) fine | `validate`, `ua`, `repair` |
-| 2 | Usage error: bad/missing operand, unknown command, unknown flag, unknown `-level` | all commands |
-| 3 | Operational error: I/O, parse failure, wrong password, encryption-state conflict | all commands |
+| 2 | Usage error: bad/missing operand, unknown command or flag, unknown `-level`, a password given on the command line, an output that exists (without `-force`) or is one of the inputs | all commands |
+| 3 | Operational error: I/O, parse failure, missing or wrong password, encryption-state conflict, a result that could not be written to stdout | all commands |
 
 Violation lines go to **stdout**; the trailing `error: …` summary goes to **stderr**:
 
@@ -72,12 +91,101 @@ case $? in
 esac
 ```
 
+A command whose stdout cannot be written — redirected to a full disk, say — exits **3**
+with `error: writing to stdout: …`, whatever it would otherwise have returned: a report
+nobody received is not a success.
+
+## Passwords
+
+A password is **never** taken from the command line. Anything in argv is readable by every
+user on the machine (`ps`, `/proc/<pid>/cmdline`) and is saved in shell history. Each
+password a command takes has three sources, tried in this order:
+
+| Source | Reading a file (`info`, `validate`, `decrypt`, `extract`, `repair`, `ua`) | `encrypt`: user password | `encrypt`: owner password |
+|---|---|---|---|
+| 1. file flag | `-password-file F` | `-user-password-file F` | `-owner-password-file F` |
+| 2. environment | `PDF0_PASSWORD` | `PDF0_USER_PASSWORD` | `PDF0_OWNER_PASSWORD` |
+| 3. prompt | when the file turns out to be locked | always, twice to confirm | never; defaults to the user password |
+
+- **File flag.** The file's whole contents are the password, minus **one** trailing
+  newline (`\n` or `\r\n`), so `echo secret > pw` works; a password that itself ends in a
+  newline cannot be expressed. `F` may be `-` for stdin — `pass show pdf | pdf0 decrypt
+  -password-file - in.pdf out.pdf` — unless stdin is also the PDF input (`stdin cannot be
+  used for both …`, exit 2) or is a terminal, where it would echo; omit the flag to be
+  prompted instead. A file flag wins over the environment.
+- **Environment.** An empty variable counts as unset. The environment is not visible to
+  other users, but it is inherited by child processes and readable by your own.
+- **Prompt.** Only when stdin is a terminal and is not the PDF input. Echo is switched off
+  before the prompt appears and restored afterwards, including when the prompt is
+  interrupted with Ctrl-C (exit 130). The prompt is written to stderr. It is implemented on
+  Linux and macOS; elsewhere there is no prompt and a password comes from a file or the
+  environment.
+- **No terminal, no password.** With stdin not a terminal (a script, a pipe, CI) there is
+  no prompt; a locked file fails at once with exit 3 rather than hanging.
+
+A password is bounded at 4096 bytes. ISO 32000-2 uses only the first 127 bytes of one (32
+for the older revisions), so the bound only stops a mistaken `-password-file /dev/zero`.
+
+The old `-password`, `-user` and `-owner` flags are still recognised, but only to refuse
+them (exit 2) with a message naming the replacements; the value given is never used or
+printed. By the time pdf0 sees it the password has already been exposed, so change it if
+it mattered.
+
+Why a file stayed locked comes from the library (`Document.LockReason`), and each reason
+has its own message, all exit 3. A **missing** password and a **wrong** one are told apart,
+and encryption pdf0 cannot open is never blamed on the password:
+
+```
+error: enc.pdf is encrypted and no password was supplied (give it with -password-file FILE, PDF0_PASSWORD, or run from a terminal to be prompted)
+error: could not decrypt enc.pdf: the password is wrong (the password is neither the user nor the owner password)
+error: could not decrypt unk.pdf: unsupported encryption: /Filter …: only the standard security handler is implemented
+```
+
+A malformed `/Encrypt` dictionary is reported the same way as unsupported encryption, with
+the library's description of the entry at fault.
+
+## Inputs and outputs
+
+`-` is **stdin** as an input and **stdout** as an output, for every command. Only one input
+may be `-`. A PDF is never written to a terminal: `-` as the output with stdout on a
+terminal is refused (exit 2).
+
+Every command that writes a file — `decrypt`, `encrypt`, `repair`, `merge` — follows the
+same rules:
+
+- **An output is never one of the inputs**, compared by file identity rather than by
+  spelling: `./dir/../in.pdf`, a symlink to `in.pdf` and a hard link to it are all
+  refused, exit 2, and `-force` does not change that. (`pdf0 merge a.pdf b.pdf` once
+  replaced `a.pdf` with a copy of `b.pdf`.)
+- **An existing output is replaced only with `-force`**; without it the command exits 2
+  before doing any work: `error: output out.pdf already exists; pass -force to replace
+  it`. This is stricter than `cp`, deliberately: the output is a positional operand next
+  to the inputs, and swapping two operands, or reusing a name, should cost a flag rather
+  than a file. The check is repeated atomically when the file is put in place, so a file
+  created in the meantime is not overwritten either.
+- **The output appears whole or not at all.** It is written to a temporary file in the same
+  directory (`.<name>.pdf0-<random>.tmp`), synced, and then renamed or linked into place;
+  a failure part-way — a full disk, a file-size limit — leaves any existing output as it
+  was and no temporary file behind. (A process killed with SIGKILL mid-write can leave the
+  temporary file.)
+- **Through a symlink**, `-force` replaces the file the link points to and keeps the link.
+- **Permissions.** Output that holds decrypted content — `decrypt`, and `repair` of an
+  encrypted file — is created **0600** whatever the umask. Other output is created 0666
+  less the umask, as a shell redirect would. A replaced file does not keep the old file's
+  mode.
+
+When the output is stdout, the PDF is the only thing written to it: `repair`'s report moves
+to stderr.
+
+Two things pdf0 cannot prevent: `pdf0 decrypt in.pdf - > in.pdf` has already lost `in.pdf`
+when pdf0 starts, because the shell truncates it first (pdf0 notices and says so, exit 2);
+and reading stdin is unbounded, as is reading any input file.
+
 ---
 
 ## `info`
 
-`pdf0 info [-password PW] <file>` — `-password` (default `""`) takes the user *or* owner
-password.
+`pdf0 info [-password-file F] <file>`
 
 ```
 $ pdf0 info simple.pdf
@@ -85,25 +193,28 @@ version:   2.0
 objects:   6
 pages:     1
 encrypted: false
+locked:    false
 ```
 
 `pages` comes from the page tree (`Document.PageCount`), not a scan for `/Type /Page`, so
 an orphan page object outside the tree does not inflate it. `objects` is the size of the
 object map after `Read` normalisation. `info` is the only read command that does **not**
-refuse a locked file; consequently `encrypted` reflects the mere presence of an `/Encrypt`
-dictionary and stays `true` even when you supply the right password.
+refuse a locked file, and it never prompts: it reports structure, which a locked file
+still has. `encrypted` reflects the presence of an `/Encrypt` dictionary and stays `true`
+with the right password; `locked` says whether the password supplied (from the file flag
+or `PDF0_PASSWORD`, if any) opened it.
 
 Exit codes: 0; 2 (no operand, or more than one); 3 — `error: open nosuch.pdf: no such file
-or directory`, `error: PDF header not found`, `error: read /tmp: is a directory`.
+or directory`, `error: x.txt: PDF header not found`, `error: read /tmp: is a directory`.
 
 ## `validate`
 
-`pdf0 validate [-level 1b|2b|3b|4] [-password PW] <file>`
+`pdf0 validate [-level 1b|2b|3b|4] [-password-file F] <file>`
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `-level` | `2b` | PDF/A level: `1b`, `2b`, `3b`, or `4` — nothing else |
-| `-password` | `""` | user or owner password |
+| `-password-file` | — | see [Passwords](#passwords) |
 
 Runs `ValidatePDFABytes`: the object model *and* the raw bytes, so the byte-level clause
 6.1 file-structure rules apply.
@@ -122,15 +233,15 @@ error: 3 violation(s) found                              # stderr, exit 1
 Any other `-level` is a **usage** error (exit 2), including the Level A names the library
 does implement: `error: unknown level "1a" (want 1b, 2b, 3b, or 4)`.
 
-A locked file is refused rather than validated against ciphertext — `error: could not read
-enc.pdf: it is encrypted (supply -password)`, exit **3**. With the password it validates
-normally and correctly reports the encryption itself
-(`[PDF/A-2b 6.1.3] trailer must not contain /Encrypt`).
+A locked file is refused rather than validated against ciphertext, exit **3**, with the
+[missing- or wrong-password message](#passwords). With the password it validates normally
+and correctly reports the encryption itself (`[PDF/A-2b 6.1.3] trailer must not contain
+/Encrypt`).
 
 ## `ua`
 
-`pdf0 ua [-password PW] <file>` — `-password` (default `""`). Runs `ValidatePDFUA`,
-**PDF/UA-1 only**: there is no `-level`, and `ValidatePDFUA2` is unreachable from the CLI.
+`pdf0 ua [-password-file F] <file>`. Runs `ValidatePDFUA`, **PDF/UA-1 only**: there is no
+`-level`, and `ValidatePDFUA2` is unreachable from the CLI.
 
 ```
 $ pdf0 ua simple.pdf
@@ -147,51 +258,46 @@ error: 8 PDF/UA violation(s)                             # stderr, exit 1
 
 A clean run prints `<file>: no PDF/UA violations found (foundational checks)` — the
 parenthetical is the tool's own honesty about coverage. Exit codes 0, 1, 2, 3 (a locked
-file without a password is 3, same message as `validate`).
+file is 3, as for `validate`).
 
 ## `decrypt`
 
-`pdf0 decrypt [-password PW] <in> <out>` — `-password` accepts either the user or the
-owner password. Reads `<in>`, calls `RemoveEncryption`, writes plaintext to `<out>`, and
-succeeds silently (`pdf0 decrypt -password secret enc.pdf dec.pdf`, exit 0; `info dec.pdf`
-then shows `encrypted: false`). Three distinct failures, all exit **3**:
+`pdf0 decrypt [-force] [-password-file F] <in> <out>` — the password may be the user or the
+owner password. Reads `<in>`, calls `RemoveEncryption`, writes plaintext to `<out>` with
+mode **0600**, and succeeds silently (`PDF0_PASSWORD=secret pdf0 decrypt enc.pdf dec.pdf`,
+exit 0; `info dec.pdf` then shows `encrypted: false`). Failures:
 
 ```
-error: simple.pdf is not encrypted                                          # nothing to do
-error: could not decrypt enc.pdf: wrong password or unsupported encryption  # bad/absent password
-error: open /nonexistentdir/out.pdf: no such file or directory              # unwritable <out>
+error: simple.pdf is not encrypted                                          # exit 3
+error: enc.pdf is encrypted and no password was supplied (…)                # exit 3
+error: could not decrypt enc.pdf: the password is wrong (…)                 # exit 3
+error: output dec.pdf already exists; pass -force to replace it             # exit 2
+error: creating the output in /nonexistentdir: open /nonexistentdir/.out.pdf.pdf0-….tmp: no such file or directory  # exit 3
 ```
-
-Omitting `-password` on a protected file yields the same "wrong password" message, because
-the empty user password is what was tried.
 
 ## `encrypt`
 
-`pdf0 encrypt -user PW [-owner PW] <in> <out>`
+`pdf0 encrypt [-force] [-user-password-file F] [-owner-password-file F] <in> <out>`
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `-user` | `""` | user password |
-| `-owner` | `""` | owner password; defaults to the user password |
+Applies `SetEncryption` and writes `<out>`; silent on success, exit 0.
 
-Applies `SetEncryption` and writes `<out>`; silent on success, exit 0. There is **no
-`-password` flag**: `encrypt` always reads `<in>` with the empty password, so an
-already-encrypted input is rejected.
+- The **user password** is required and must not be empty (an empty user password opens
+  the file for anyone: encrypted, but not protected). With neither `-user-password-file`
+  nor `PDF0_USER_PASSWORD`, `encrypt` prompts twice on a terminal and refuses if the two
+  answers differ; with no terminal it exits 2 (`encrypt needs a user password: …`).
+- The **owner password** comes from `-owner-password-file` or `PDF0_OWNER_PASSWORD`, and
+  otherwise defaults to the user password. It is never prompted for.
+- `<in>` is always read without a password, so an already-encrypted input is rejected:
 
 ```
-$ pdf0 encrypt -user secret simple.pdf enc.pdf           # exit 0, no output
-$ pdf0 encrypt -user secret enc.pdf enc2.pdf
+$ PDF0_USER_PASSWORD=secret pdf0 encrypt simple.pdf enc.pdf   # exit 0, no output
+$ PDF0_USER_PASSWORD=secret pdf0 encrypt enc.pdf enc2.pdf
 error: enc.pdf is already encrypted; decrypt it first    # exit 3
 ```
 
-`-user` is mandatory: an empty user password opens the file for anyone, and `SetEncryption`
-grants every permission, so the result would be encrypted without being protected — the
-library refuses it too. Omitting it is a usage error (exit 2):
-`error: encrypt requires -user (and optionally -owner)`.
-
 ## `extract`
 
-`pdf0 extract [-password PW] <file>`
+`pdf0 extract [-password-file F] <file>`
 
 Extracts **plain text only** — `Document.ExtractText`, which walks the page tree and each
 page's content stream, recursing into invoked form XObjects. It does not extract images,
@@ -209,12 +315,12 @@ document with no text prints nothing and exits 0. A locked file is refused, exit
 
 ## `repair`
 
-`pdf0 repair [-level 1b|2b|3b|4] [-password PW] <in> <out>` — `-level` defaults to `2b`
-("target PDF/A level"), `-password` to `""`.
+`pdf0 repair [-force] [-level 1b|2b|3b|4] [-password-file F] <in> <out>` — `-level`
+defaults to `2b` ("target PDF/A level").
 
 Calls `Document.Repair(level)`, which removes forbidden **document-level** constructs only
-— it is not a general fixer. It then writes `<out>`, **re-reads its own output and
-re-validates it**, and reports what is left.
+— it is not a general fixer. It then serialises the result, **re-reads and re-validates
+those bytes**, writes `<out>`, and reports what is left.
 
 ```
 $ pdf0 repair -level 2b broken2b.pdf rep2.pdf
@@ -227,22 +333,30 @@ rep1.pdf: 1 fix(es) applied, 3 violation(s) remain
 error: 3 violation(s) remain after repair (run: pdf0 validate -level 1b rep1.pdf)  # exit 1
 ```
 
-The output file is always written, even when violations remain: exit 1 means "written but
-still non-conformant", not "nothing happened". A no-op run still prints its summary
-(`0 fix(es) applied, 0 violation(s) remain`) rather than exiting silently. With a password,
-removing encryption counts as a repair (`fixed: removed document encryption (/Encrypt)`).
+The output file is written even when violations remain: exit 1 means "written but still
+non-conformant", not "nothing happened". A no-op run still prints its summary
+(`0 fix(es) applied, 0 violation(s) remain`) rather than exiting silently. The report is
+printed after the file is in place, so a `fixed:` line never describes a file that was not
+written.
 
-Unlike `validate`/`ua`/`extract`, `repair` does **not** check `Locked()`. Run on an
-encrypted file without the password it does not refuse: `Write` emits a byte-faithful
-passthrough of the still-encrypted document, 0 fixes are applied, and it reports the
-violations visible from a locked read. The output stays openable with the original
-password — but nothing was repaired and the tool never says so. Bad `-level` is exit 2 with
-a terser message than `validate`'s: `error: unknown level "9z"`.
+- **A locked file is refused**, exit 3, with the [password messages](#passwords):
+  repairing ciphertext would report "0 fixes" for work never attempted.
+- **With the password**, removing encryption counts as a repair
+  (`fixed: removed document encryption (/Encrypt)`), and the output is created **0600**,
+  since it holds the decrypted content.
+- **If the repaired document does not read back**, that is an operational error (exit 3,
+  `the repaired document does not read back (nothing written): …`) and no output is
+  written — never "0 violation(s) remain".
+- **To stdout** (`<out>` is `-`), the `fixed:` lines and the summary go to stderr.
+
+Bad `-level` is exit 2: `error: unknown level "9z" (want 1b, 2b, 3b, or 4)`.
 
 ## `merge`
 
-`pdf0 merge <out> <in1> <in2> [in3 ...]` — **no flags at all**. The *first* operand is the
-output; the rest are inputs, read left to right and concatenated with `AppendPages`.
+`pdf0 merge [-force] <out> <in1> <in2> [in3 ...]` — the *first* operand is the output; the
+rest are inputs, read left to right and concatenated with `AppendPages`. At least **two**
+inputs are required: with one, `pdf0 merge a.pdf b.pdf` reads naturally as "merge a and b"
+but would replace `a.pdf`, so it is a usage error (exit 2).
 
 ```
 $ pdf0 merge merged3.pdf simple.pdf a4.pdf simple17.pdf   # exit 0, no output
@@ -251,22 +365,18 @@ version:   2.0
 objects:   16
 pages:     3
 encrypted: false
+locked:    false
 ```
 
 The result inherits the **first** input's header version — merging a 1.7 file first with a
-2.0 file second yields `version: 1.7`; it does not take the maximum. `merge` accepts **no
-password**: `-password` is rejected by the flag parser (`flag provided but not defined:
--password`, exit 2), and every input is checked, so an encrypted file in any position is an
+2.0 file second yields `version: 1.7`; it does not take the maximum. `merge` takes **no
+password**, and every input is checked, so an encrypted file in any position is an
 operational error — copying ciphertext into a plaintext container would corrupt the result:
 
 ```
 $ pdf0 merge m.pdf simple.pdf enc.pdf
 error: enc.pdf is encrypted; decrypt it before merging    # exit 3
 ```
-
-The synopsis implies at least two inputs, but the check is `NArg() < 2`, so **`pdf0 merge
-out.pdf one.pdf` is accepted** and simply rewrites the single input (exit 0). Only
-`pdf0 merge out.pdf` with no input is a usage error.
 
 ---
 
@@ -302,15 +412,13 @@ presents it as a development aid rather than the library's surface.
 
 - **All help output goes to stderr**, including `pdf0 <cmd> -h`, so `pdf0 -h > file`
   captures nothing. Top-level help exits 0; bare `pdf0` prints the same text and exits 2.
-- **Subcommand `-h` lists only that command's flags** (Go's `flag` package): `pdf0 merge -h`
-  prints just `Usage of merge:`, no flags, exit 0. An unknown or argument-less flag
-  (`pdf0 info -bogus`, `pdf0 validate -level`) is handled by `flag.ExitOnError` and exits 2
-  — consistent with the usage contract, but formatted differently from the tool's own
-  `error: …` lines.
-- **`repair` on a locked file silently no-ops** — the one place where an operation that
-  cannot do its job still exits 1 rather than 3.
-- **`merge` with a single input** is accepted despite the synopsis showing otherwise.
+- **Subcommand `-h` lists only that command's flags** (Go's `flag` package), exit 0. An
+  unknown or argument-less flag (`pdf0 info -bogus`, `pdf0 validate -level`) is handled by
+  the `flag` package and exits 2 — consistent with the usage contract, but formatted
+  differently from the tool's own `error: …` lines.
+- **Re-running a command that writes needs `-force`** the second time, because the first
+  run's output now exists.
 - **`info` never fails on encryption** and always reports `encrypted: true` for a file with
-  an `/Encrypt` dictionary, password or not.
-- A non-PDF input fails at parse with exit 3 (`error: PDF header not found`), so exit 3
-  covers both "cannot open" and "not a PDF".
+  an `/Encrypt` dictionary; `locked` is the line that says whether it could be read.
+- A non-PDF input fails at parse with exit 3 (`error: x.txt: PDF header not found`), so
+  exit 3 covers both "cannot open" and "not a PDF".

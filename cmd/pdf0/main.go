@@ -2,13 +2,18 @@
 // inspect, validate, decrypt, and encrypt PDF files.
 //
 // Exit codes: 0 — success (no violations found); 1 — the requested checks
-// reported violations; 2 — usage error; 3 — operational error (I/O, parse,
-// encryption).
+// reported violations; 2 — usage error, including a refusal to overwrite a
+// file; 3 — operational error (I/O, parse, encryption).
+//
+// Passwords are never taken from argv; see secret.go. Outputs never replace an
+// input and are written atomically; see files.go.
 package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/mgilbir/pdf0"
@@ -37,77 +42,113 @@ func violationsf(format string, a ...any) error {
 
 // exitCode maps a command's error to the process exit code.
 func exitCode(err error) int {
-	switch err.(type) {
-	case nil:
+	var u usageError
+	var v violationsError
+	switch {
+	case err == nil:
 		return 0
-	case usageError:
+	case errors.As(err, &u):
 		return 2
-	case violationsError:
+	case errors.As(err, &v):
 		return 1
 	}
 	return 3
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
+// resultWriter is stdout for command results. It remembers the first write
+// error, so a report that could not be written (a full disk behind a
+// redirect) fails the run instead of exiting 0 with the output lost.
+type resultWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (r *resultWriter) Write(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
 	}
-	var err error
-	switch os.Args[1] {
-	case "info":
-		err = cmdInfo(os.Args[2:])
-	case "validate":
-		err = cmdValidate(os.Args[2:])
-	case "decrypt":
-		err = cmdDecrypt(os.Args[2:])
-	case "encrypt":
-		err = cmdEncrypt(os.Args[2:])
-	case "extract":
-		err = cmdExtract(os.Args[2:])
-	case "repair":
-		err = cmdRepair(os.Args[2:])
-	case "merge":
-		err = cmdMerge(os.Args[2:])
-	case "ua":
-		err = cmdUA(os.Args[2:])
+	n, err := r.w.Write(p)
+	if err != nil {
+		r.err = err
+	}
+	return n, err
+}
+
+// stdout is where every command writes its results and, for "-", its PDF.
+var stdout = &resultWriter{w: os.Stdout}
+
+var commands = map[string]func([]string) error{
+	"info":     cmdInfo,
+	"validate": cmdValidate,
+	"decrypt":  cmdDecrypt,
+	"encrypt":  cmdEncrypt,
+	"extract":  cmdExtract,
+	"repair":   cmdRepair,
+	"merge":    cmdMerge,
+	"ua":       cmdUA,
+}
+
+func main() {
+	os.Exit(run(os.Args[1:]))
+}
+
+// run executes one command line and returns the exit code.
+func run(args []string) int {
+	if len(args) < 1 {
+		usage()
+		return 2
+	}
+	switch args[0] {
 	case "-h", "--help", "help":
 		usage()
-		return
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
+		return 0
+	}
+	cmd, ok := commands[args[0]]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", args[0])
 		usage()
-		os.Exit(2)
+		return 2
+	}
+	err := cmd(args[1:])
+	if stdout.err != nil {
+		// Whatever the command concluded, its result did not reach the
+		// reader; that is the failure to report.
+		err = fmt.Errorf("writing to stdout: %w", stdout.err)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(exitCode(err))
 	}
+	return exitCode(err)
 }
 
 func usage() {
 	fmt.Fprint(os.Stderr, `pdf0 — inspect, validate, and (de)encrypt PDF files
 
 usage:
-  pdf0 info     [-password PW] <file>
-  pdf0 validate [-level 1b|2b|3b|4] [-password PW] <file>
-  pdf0 decrypt  [-password PW] <in> <out>
-  pdf0 encrypt  -user PW [-owner PW] <in> <out>
-  pdf0 extract  [-password PW] <file>
-  pdf0 repair   [-level 1b|2b|3b|4] [-password PW] <in> <out>
-  pdf0 merge    <out> <in1> <in2> [in3 ...]
-  pdf0 ua       [-password PW] <file>
+  pdf0 info     [-password-file F] <file>
+  pdf0 validate [-level 1b|2b|3b|4] [-password-file F] <file>
+  pdf0 decrypt  [-force] [-password-file F] <in> <out>
+  pdf0 encrypt  [-force] [-user-password-file F] [-owner-password-file F] <in> <out>
+  pdf0 extract  [-password-file F] <file>
+  pdf0 repair   [-force] [-level 1b|2b|3b|4] [-password-file F] <in> <out>
+  pdf0 merge    [-force] <out> <in1> <in2> [in3 ...]
+  pdf0 ua       [-password-file F] <file>
 
-exit codes: 0 success, 1 violations reported, 2 usage error,
-3 read/write, parse, or encryption error
+"-" is stdin as an input and stdout as an output. An existing output is
+replaced only with -force, and never when it is one of the inputs.
+
+passwords are never taken on the command line. Each comes from, in order:
+its file flag ("-" reads stdin), the environment (PDF0_PASSWORD,
+PDF0_USER_PASSWORD, PDF0_OWNER_PASSWORD), or a no-echo prompt when stdin
+is a terminal.
+
+exit codes: 0 success, 1 violations reported, 2 usage error or refused
+overwrite, 3 read/write, parse, or encryption error
 `)
 }
 
-func readDoc(path, password string) (*pdf0.Document, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+// parseDoc parses a PDF from memory, with a password when one is given.
+func parseDoc(data []byte, password string) (*pdf0.Document, error) {
 	if password != "" {
 		return pdf0.ReadWithPassword(bytes.NewReader(data), int64(len(data)), password)
 	}
