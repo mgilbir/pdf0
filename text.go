@@ -126,9 +126,10 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 		if replaced > 0 {
 			// Everything inside a replaced sequence is covered by its text:
 			// the line breaks and spacing the operators would add as well
-			// as the glyphs.
+			// as the glyphs, and a form it invokes. What it changes is not:
+			// a font selected inside the sequence is the font after it.
 			switch tk.Op {
-			case "BDC", "BMC", "EMC":
+			case "BDC", "BMC", "EMC", "Tf":
 			default:
 				operands = operands[:0]
 				continue

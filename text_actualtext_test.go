@@ -63,6 +63,44 @@ func TestExtractTextHonoursActualText(t *testing.T) {
 	}
 }
 
+// TestAFontSelectedInsideActualTextOutlivesIt: /ActualText replaces what the
+// sequence shows, not the state it sets. A font selected inside it is the font
+// the text after it is decoded with.
+func TestAFontSelectedInsideActualTextOutlivesIt(t *testing.T) {
+	simple, err := fonts.Standard("Helvetica")
+	if err != nil {
+		t.Fatal(err)
+	}
+	composite, err := fonts.NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b content.Builder
+	b.BeginText().SetFont("F1", 12).MoveText(10, 10)
+	b.BeginActualText("x")
+	b.SetFont("F2", 12)
+	b.EndMarked()
+	codes, _ := composite.Encode("Hi")
+	b.ShowText(codes)
+	b.EndText()
+	doc := NewDocument()
+	if _, err := doc.AddPage(Page{Width: 100, Height: 100, Content: &b,
+		Faces: map[object.Name]*fonts.Face{"F1": simple, "F2": composite}}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(back.ExtractText()); got != "xHi" {
+		t.Errorf("extracted %q, want %q", got, "xHi")
+	}
+}
+
 // TestExtractTextSurvivesAStrayEMC: an EMC with nothing open is malformed and
 // must neither panic nor start suppressing text.
 func TestExtractTextSurvivesAStrayEMC(t *testing.T) {
