@@ -112,15 +112,18 @@ in-memory `*Document`; they work on a clone.
 | --- | --- | --- |
 | `WriteSigned(w, cert, key)` | full serialization plus a signature field, `/SubFilter /ETSI.CAdES.detached`, SHA-256 detached CMS with `content-type`, `message-digest` and `signing-certificate-v2` attributes | PAdES B-B |
 | `WriteSignedTimestamped(w, cert, key, tsaCert, tsaKey)` | the same, plus an RFC 3161 signature time-stamp over the signature value as an unsigned attribute, issued in-process by the supplied TSA key | PAdES B-T |
-| `WriteSignedIncremental(w, original, cert, key)` | `original` verbatim, then only the appended signature objects and a new xref section chaining back via `/Prev` | PAdES B-B |
-| `WriteArchivalTimestamp(w, original, certs, tsaCert, tsaKey)` | an incremental update adding a catalog `/DSS` holding `certs` and a `/Type /DocTimeStamp` field whose RFC 3161 token covers the whole file | PAdES B-LTA, on top of an existing B-T |
+| `WriteSignedIncremental(w, cert, key)` | the file the document was read from verbatim, then only the appended signature objects and a new xref section chaining back via `/Prev` | PAdES B-B |
+| `WriteArchivalTimestamp(w, certs, tsaCert, tsaKey)` | an incremental update of the file the document was read from, adding a catalog `/DSS` holding `certs` and a `/Type /DocTimeStamp` field whose RFC 3161 token covers the whole file | PAdES B-LTA, on top of an existing B-T |
 
 Adding to a signed file is always an *append*: a PDF signature covers a byte
 range of a particular file, so re-serializing the document — new offsets, new
 xref, possibly different object-stream packing — would move every byte a previous
 signature committed to and invalidate it. `WriteSignedIncremental` and
-`WriteArchivalTimestamp` therefore copy the original bytes out untouched and add
-a revision behind them; the update can even be undone by truncation.
+`WriteArchivalTimestamp` therefore copy the bytes the document was read from
+(its source record, `Document.Source`) out untouched and add a revision behind
+them; the update can even be undone by truncation. The new objects are numbered
+above every number that file uses, including its object streams and
+cross-reference streams, so the update never redefines one of them.
 (`WriteSigned` rewrites the whole file, which is fine for a document that carries
 no signature yet.)
 

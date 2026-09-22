@@ -397,7 +397,7 @@ Everything below is implemented in the library and has **no** CLI surface. Absen
 | Signing and timestamping | `WriteSigned`, `WriteSignedIncremental`, `WriteSignedTimestamped`, `WriteArchivalTimestamp` |
 | Image extraction | `ExtractImages()`, `Images()` (lazy iterator) |
 | Page extraction / subsetting | `ExtractPages(indices)`; per-page text via `ExtractPageText(page)` |
-| Incremental write | `WriteIncremental(w, original, changed)` |
+| Incremental write | `WriteIncremental(w, changed)`; the file it appends to is `Source()` |
 | Building conformant documents | `NewPDFADocument`, `NewPDFADocumentWithInfo`, `NewPDFADocumentWith` (bring your own output intent), `GenerateXMPMetadata`, `DefaultSRGBProfile` |
 | Comparison, low-level parsing | `DocumentEqual`, `Equal`, `NewLexer`, `NewParser`, `NewSerializer`, `ParseXRefTable`, `ParseXRefStream` |
 

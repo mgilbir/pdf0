@@ -275,13 +275,17 @@ Consequences worth knowing:
 
 - **Do not re-`Write` a signed document.** Regenerating the layout invalidates
   every signature over the original bytes.
-- **To amend a file, use `WriteIncremental`.** It writes "the original file bytes
-  verbatim followed by only the objects listed in changed, a new cross-reference
-  section whose /Prev chains back to the original, and a new trailer. The
-  original bytes are preserved exactly, so any signature over them stays valid
-  and the update can be undone by truncation." It refuses encrypted documents
+- **To amend a file, use `WriteIncremental`.** It writes the bytes of the file
+  the document was read from verbatim, followed by only the objects listed in
+  changed, a new cross-reference section whose /Prev chains back to the file's
+  newest one, and a new trailer. The original bytes are preserved exactly, so
+  any signature over them stays valid and the update can be undone by
+  truncation. The document must have been read from a file: a document built in
+  memory is refused (`this document was built in memory, so use Write`), as is
+  one whose cross-reference data was rebuilt by scanning, an encrypted one
   (`incremental update of an encrypted document is not supported`) and an empty
-  change list (`incremental update with no changed objects`).
+  change list (`incremental update with no changed objects`). Number new objects
+  with `Add`, which never reuses a number the file uses.
 - **`Read` normalizes structure.** It drops `/XRef` and `/ObjStm` objects and
   strips the xref-stream-only trailer keys, so a second `Read` of your output
   will not show them where the input did. Compare with `DocumentEqual`, not with

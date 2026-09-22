@@ -124,7 +124,7 @@ thousands of objects). `ValidatePDFABytes` therefore installs a `validationCache
 
 **It is installed on a shallow copy** — `runDoc := *doc; runDoc.valCache = …; doc
 = &runDoc`. The copy shares the (read-only during validation)
-`Objects`/`Trailer`/`Offsets`, so it is cheap, and the caller's `*Document` is
+`Objects`/`Trailer` and the immutable source record, so it is cheap, and the caller's `*Document` is
 never touched. That is what makes validation non-mutating and lets one document be
 validated concurrently, at several levels at once.
 
@@ -217,7 +217,7 @@ A-4 ICC profile-identity rule. `walkExecutedContent` lives here — see the diag
 
 **`filestructure.go`** — the byte-level clause-6.1 rules, reading the raw file
 rather than the object model: header layout, indirect-object syntax (`obj`/`endobj`
-placement, located via `Document.Offsets`), xref table formatting, hex-string form
+placement, located via the source record's offsets, `Document.Source`), xref table formatting, hex-string form
 (scanned in object bodies *and* in decoded content streams, with an
 inline-image-aware tokenizer), `stream`/`endstream` layout, inline image filters
 and intent, name UTF-8 validity. It also hosts `checkStreamLength` and
