@@ -1,6 +1,7 @@
 package fonts
 
 import (
+	"slices"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -229,30 +230,29 @@ func (f *Face) recordCluster(glyphs []Glyph, text string) {
 	// name: a half-form, a conjunct, a reordered part. The cluster in drawing
 	// order may still not spell the text — a vowel sign drawn before the
 	// consonant it follows — and the drawing gives that an /ActualText.
-	residual := text
+	//
+	// The characters the named glyphs take are struck out of the cluster by
+	// position, so the whole pass is linear in the cluster: a cluster is
+	// whatever the text says it is, and a base letter under ten thousand
+	// combining marks is one.
+	left := newResidual(text)
 	var unnamed []int
 	for _, gl := range glyphs {
 		g := gl.GID
 		if g == 0 {
 			continue
 		}
-		name, known := rec.byGID[g]
-		if !known {
-			if c, ok := f.canonical(g); ok && strings.ContainsRune(residual, c) {
-				name, known = string(c), true
-				rec.setText(g, name)
-			}
+		if name, known := rec.byGID[g]; known {
+			left.take(name)
+			continue
 		}
-		if known && name != "" {
-			if i := strings.Index(residual, name); i >= 0 {
-				residual = residual[:i] + residual[i+len(name):]
-				continue
-			}
+		if c, ok := f.canonical(g); ok && left.take(string(c)) {
+			rec.setText(g, string(c))
+			continue
 		}
-		if !known {
-			unnamed = append(unnamed, g)
-		}
+		unnamed = append(unnamed, g)
 	}
+	residual := left.String()
 	for i, g := range unnamed {
 		if _, done := rec.byGID[g]; done {
 			continue // the same glyph twice in one cluster
@@ -274,6 +274,72 @@ func (f *Face) recordCluster(glyphs []Glyph, text string) {
 			rec.setText(g, s)
 		}
 	}
+}
+
+// residual is a cluster's text with some of its characters struck out.
+type residual struct {
+	runes  []rune
+	struck []bool
+	// at lists, for each character, the positions it occurs at that are not
+	// struck, in order; a position is dropped from the front once struck.
+	at map[rune][]int
+}
+
+func newResidual(text string) *residual {
+	r := &residual{runes: []rune(text), at: map[rune][]int{}}
+	r.struck = make([]bool, len(r.runes))
+	for i, c := range r.runes {
+		r.at[c] = append(r.at[c], i)
+	}
+	return r
+}
+
+// take strikes out name where it first occurs among the characters not yet
+// struck, reading them as consecutive, and reports whether it did. A name of
+// several characters (a glyph drawn earlier for a ligature's letters) is
+// matched only at the first unstruck occurrence of its first character, which
+// keeps the cost to the length of the name.
+func (r *residual) take(name string) bool {
+	nr := []rune(name)
+	if len(nr) == 0 {
+		return false
+	}
+	q := r.at[nr[0]]
+	for len(q) > 0 && r.struck[q[0]] {
+		q = q[1:]
+	}
+	r.at[nr[0]] = q
+	if len(q) == 0 {
+		return false
+	}
+	idx := make([]int, 1, len(nr))
+	idx[0] = q[0]
+	j := q[0] + 1
+	for _, c := range nr[1:] {
+		for j < len(r.runes) && r.struck[j] {
+			j++
+		}
+		if j >= len(r.runes) || r.runes[j] != c {
+			return false
+		}
+		idx = append(idx, j)
+		j++
+	}
+	for _, k := range idx {
+		r.struck[k] = true
+	}
+	return true
+}
+
+// String is the characters not struck, in order.
+func (r *residual) String() string {
+	var b strings.Builder
+	for i, c := range r.runes {
+		if !r.struck[i] {
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
 }
 
 // extracted is what a reader following the font's ToUnicode CMap — or, for a
@@ -456,13 +522,10 @@ func visible(s string) string {
 
 func sortUnique(v []int) []int {
 	out := append([]int(nil), v...)
-	// Insertion sort: a run's cluster count is its glyph count, and the input
-	// is nearly always already in order, where this is linear.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	// slices.Sort and not an insertion sort that is linear on text already in
+	// order: a right-to-left run arrives in exactly the reverse order, where
+	// that is quadratic in the length of the run.
+	slices.Sort(out)
 	n := 0
 	for i, x := range out {
 		if i == 0 || x != out[n-1] {

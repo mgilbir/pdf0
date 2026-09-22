@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/internal/testfiles"
@@ -293,6 +294,65 @@ func TestASimpleFaceDrawnByGlyphKeepsItsLetters(t *testing.T) {
 	for _, r := range "AB" {
 		if gid := face.Cmap()[r]; !used[gid] {
 			t.Errorf("the glyph for %q (%d) is not in the used set %v", r, gid, face.Used())
+		}
+	}
+}
+
+// TestPlanIsLinearInTheRun: the text a page draws is the caller's, and so is
+// how long a run is and how many marks one cluster carries. A right-to-left run
+// arrives with its clusters in descending order and a stack of combining marks
+// is one cluster, and both were quadratic in an earlier version of the plan (a
+// reversed run of 100,000 glyphs took 3.4 s; it takes 40 ms). The check is on
+// how the cost grows rather than on a time, so it does not depend on the
+// machine: ten times the input may cost ten times as much, not a hundred.
+func TestPlanIsLinearInTheRun(t *testing.T) {
+	face, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reversed := func(n int) ([]Glyph, string) {
+		glyphs := make([]Glyph, n)
+		for i := range glyphs {
+			glyphs[i] = Glyph{GID: 68, Cluster: n - 1 - i}
+		}
+		return glyphs, strings.Repeat("a", n)
+	}
+	// A base and n-1 copies of the combining acute, each drawn with the glyph
+	// the cmap names U+0301 by, so every mark is a named glyph striking its
+	// character out of the cluster.
+	acute, ok := face.GlyphID('́')
+	base, ok2 := face.GlyphID('a')
+	if !ok || !ok2 {
+		t.Fatal("the fixture face has no a or combining acute")
+	}
+	stacked := func(n int) ([]Glyph, string) {
+		glyphs := make([]Glyph, n)
+		glyphs[0] = Glyph{GID: base}
+		for i := 1; i < n; i++ {
+			glyphs[i] = Glyph{GID: acute}
+		}
+		return glyphs, "a" + strings.Repeat("́", n-1)
+	}
+	for name, input := range map[string]func(int) ([]Glyph, string){
+		"reversed run": reversed, "stacked marks": stacked,
+	} {
+		cost := func(n int) time.Duration {
+			best := time.Duration(1<<63 - 1)
+			for range 3 {
+				glyphs, text := input(n)
+				f := face.Clone()
+				start := time.Now()
+				f.plan(glyphs, text)
+				if d := time.Since(start); d < best {
+					best = d
+				}
+			}
+			return best
+		}
+		small, large := cost(20000), cost(200000)
+		if ratio := float64(large) / float64(small); ratio > 30 {
+			t.Errorf("%s: 10x the glyphs cost %.0fx the time (%v → %v); the plan is not linear",
+				name, ratio, small, large)
 		}
 	}
 }
