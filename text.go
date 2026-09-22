@@ -179,7 +179,7 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 	if fontDict == nil {
 		return out
 	}
-	for _, name := range fontDict.Keys {
+	for name := range fontDict.Keys() {
 		f := d.ResolveDict(fontDict.Get(name))
 		if f == nil {
 			continue

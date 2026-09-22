@@ -40,10 +40,10 @@ func NewDocument() *Document {
 			1: {Number: 1, Value: catalog},
 			2: {Number: 2, Value: pages},
 		},
-		Trailer: object.Dictionary{
-			Keys:   []object.Name{"Root", "ID"},
-			Values: []object.Object{object.IndirectRef{Number: 1}, object.Array{id, id}},
-		},
+		Trailer: *object.NewDictionary(
+			object.Entry{Key: "Root", Value: object.IndirectRef{Number: 1}},
+			object.Entry{Key: "ID", Value: object.Array{id, id}},
+		),
 	}
 }
 

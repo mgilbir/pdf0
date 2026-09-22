@@ -80,12 +80,11 @@ func (g *graphCopier) copyValue(o object.Object, skip map[object.Name]bool) obje
 
 func (g *graphCopier) copyDict(d *object.Dictionary, skip map[object.Name]bool) *object.Dictionary {
 	cp := &object.Dictionary{}
-	for i, key := range d.Keys {
+	for key, val := range d.All() {
 		if skip[key] {
 			continue
 		}
-		cp.Keys = append(cp.Keys, key)
-		cp.Values = append(cp.Values, g.copyValue(d.Values[i], nil))
+		cp.Set(key, g.copyValue(val, nil))
 	}
 	return cp
 }

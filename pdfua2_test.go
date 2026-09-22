@@ -21,8 +21,8 @@ func buildUA2Doc(t *testing.T) *Document {
 	doc.Version = "2.0"
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	cat.Set("Lang", object.String{Value: []byte("en-US")})
-	cat.Set("MarkInfo", &object.Dictionary{Keys: []object.Name{"Marked"}, Values: []object.Object{object.Boolean(true)}})
-	cat.Set("ViewerPreferences", &object.Dictionary{Keys: []object.Name{"DisplayDocTitle"}, Values: []object.Object{object.Boolean(true)}})
+	cat.Set("MarkInfo", object.NewDictionary(object.Entry{Key: "Marked", Value: object.Boolean(true)}))
+	cat.Set("ViewerPreferences", object.NewDictionary(object.Entry{Key: "DisplayDocTitle", Value: object.Boolean(true)}))
 	structRoot := &object.Dictionary{}
 	structRoot.Set("Type", object.Name("StructTreeRoot"))
 	doc.Objects[99] = &object.IndirectObject{Number: 99, Value: structRoot}

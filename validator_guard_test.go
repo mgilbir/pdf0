@@ -10,28 +10,33 @@ import (
 	"testing"
 )
 
-// corruptCatalogDoc returns a document whose catalog is an internally
-// inconsistent Dictionary: it declares keys for which no value slot exists.
-// Dictionary.Get indexes Values by the matching key's slot, so any lookup of a
-// declared key beyond the last value panics with an index-out-of-range. The
-// parser cannot produce such a dictionary, but Document/Dictionary are public
-// types a caller builds by hand (the builders in this package do), so this is a
-// value the exported validators can be handed — and it stands in for any bug or
-// hostile structure that makes a check panic mid-run.
+// corruptCatalogDoc returns a document whose catalog holds a nil *Stream under
+// most keys a validator reads, and a reference to a nil *IndirectObject under
+// /DPartRoot. A nil *Stream satisfies Object, and a check that type-asserts a
+// stream and then reads its /Dict dereferences nil; resolving a reference to a
+// nil map entry does the same. The parser cannot produce either, but Document
+// and its objects are public types a caller builds by hand (the builders in
+// this package do), so this is a value the exported validators can be handed —
+// and it stands in for any bug or hostile structure that makes a check panic
+// mid-run.
+//
+// (It used to be a Dictionary with more keys than values. Dictionary's storage
+// is private now, so that shape cannot be built.)
 func corruptCatalogDoc() *Document {
-	cat := &object.Dictionary{
-		// Only /Type has a value; every later key indexes past the end.
-		Keys: []object.Name{
-			"Type", "MarkInfo", "StructTreeRoot", "Lang", "ViewerPreferences",
-			"Metadata", "Pages", "OutputIntents", "AF", "DPartRoot", "AA",
-			"Names", "OCProperties", "Perms", "AcroForm", "PageLayout", "PageMode",
-			"Version",
-		},
-		Values: []object.Object{object.Name("Catalog")},
+	cat := &object.Dictionary{}
+	cat.Set("Type", object.Name("Catalog"))
+	for _, k := range []object.Name{
+		"MarkInfo", "StructTreeRoot", "Lang", "ViewerPreferences",
+		"Metadata", "Pages", "OutputIntents", "AF", "AA",
+		"Names", "OCProperties", "Perms", "AcroForm", "PageLayout", "PageMode",
+		"Version",
+	} {
+		cat.Set(k, (*object.Stream)(nil))
 	}
+	cat.Set("DPartRoot", object.IndirectRef{Number: 2})
 	doc := &Document{
 		Version: "2.0",
-		Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: cat}},
+		Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: cat}, 2: nil},
 		Trailer: object.Dictionary{},
 	}
 	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})

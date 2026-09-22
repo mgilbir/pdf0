@@ -3,15 +3,16 @@ package pdf0
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/object"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// TestParseDictLargeDedup verifies that the map-backed key indexing used for
-// large dictionaries produces exactly the same result as the linear
-// Dictionary.Set path — same key order (first occurrence) and same values (last
-// occurrence wins) — for a dictionary well past dictIndexThreshold, with
-// duplicate keys in both the linear phase and the map phase.
+// TestParseDictLargeDedup verifies that the parser resolves duplicate keys
+// exactly as successive Dictionary.Set calls do — same key order (first
+// occurrence) and same values (last occurrence wins) — for a dictionary well
+// past the size at which Dictionary keeps an index, with duplicate keys both
+// before and after that size is reached.
 func TestParseDictLargeDedup(t *testing.T) {
 	type kv struct {
 		k string
@@ -48,15 +49,16 @@ func TestParseDictLargeDedup(t *testing.T) {
 		ref.Set(object.Name(e.k), object.Integer(e.v))
 	}
 
-	if len(got.Keys) != len(ref.Keys) {
-		t.Fatalf("parsed %d keys, Set reference has %d", len(got.Keys), len(ref.Keys))
+	if got.Len() != ref.Len() {
+		t.Fatalf("parsed %d keys, Set reference has %d", got.Len(), ref.Len())
 	}
-	for i := range ref.Keys {
-		if got.Keys[i] != ref.Keys[i] {
-			t.Errorf("key[%d] = %q, reference %q", i, got.Keys[i], ref.Keys[i])
+	gotKeys, refKeys := slices.Collect(got.Keys()), slices.Collect(ref.Keys())
+	for i := range refKeys {
+		if gotKeys[i] != refKeys[i] {
+			t.Errorf("key[%d] = %q, reference %q", i, gotKeys[i], refKeys[i])
 		}
-		if got.Values[i] != ref.Values[i] {
-			t.Errorf("value for %q = %v, reference %v", got.Keys[i], got.Values[i], ref.Values[i])
+		if got.Get(refKeys[i]) != ref.Get(refKeys[i]) {
+			t.Errorf("value for %q = %v, reference %v", refKeys[i], got.Get(refKeys[i]), ref.Get(refKeys[i]))
 		}
 	}
 	// Spot-check the deduped values directly.

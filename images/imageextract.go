@@ -271,7 +271,7 @@ func Walk(d core.View, yield func(ExtractedImage) bool) {
 				if ap == nil {
 					continue
 				}
-				for _, entry := range ap.Values {
+				for entry := range ap.Values() {
 					if !collectAppearanceImages(d, entry, seen, yield) {
 						return
 					}
@@ -296,7 +296,7 @@ func collectAppearanceImages(d core.View, entry object.Object, seen map[int]bool
 		}
 		return collectImagesFrom(d, d.ResolveDict(v.Dict.Get("Resources")), seen, 1, yield)
 	case *object.Dictionary:
-		for _, state := range v.Values {
+		for state := range v.Values() {
 			if !collectAppearanceImages(d, state, seen, yield) {
 				return false
 			}
@@ -317,8 +317,7 @@ func collectImagesFrom(d core.View, res *object.Dictionary, seen map[int]bool, d
 	if xobjs == nil {
 		return true
 	}
-	for i := range xobjs.Keys {
-		ref := xobjs.Values[i]
+	for _, ref := range xobjs.All() {
 		st, ok := d.Resolve(ref).(*object.Stream)
 		if !ok {
 			continue

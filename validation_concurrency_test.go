@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/pdfa"
 	"os"
@@ -41,4 +42,48 @@ func TestValidateConcurrentSameDoc(t *testing.T) {
 	if doc.valCache != nil {
 		t.Errorf("ValidatePDFABytes left a cache on the caller's Document")
 	}
+}
+
+// TestValidateConcurrentLargeParsedDict is the C45 regression test (audit
+// 2026-09-22). TestValidateConcurrentSameDoc never saw the race because no
+// dictionary in its reference file reaches the size at which lookups switch
+// to an index. Here the catalog has 70 keys and the document is re-read from
+// bytes, so the dictionary is parser-produced, then eight goroutines validate
+// it at once. Reads of a Dictionary must be pure; before the fix the first
+// Get built the index lazily and -race reported a DATA RACE on it.
+//
+// Run with -race to catch the regression.
+func TestValidateConcurrentLargeParsedDict(t *testing.T) {
+	src, err := NewPDFADocument(pdfa.PDFA2b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := src.ResolveDict(src.Trailer.Get("Root"))
+	if cat == nil {
+		t.Fatal("no catalog")
+	}
+	for i := 0; i < 70; i++ {
+		cat.Set(Name(fmt.Sprintf("X%02d", i)), Integer(i))
+	}
+	var buf bytes.Buffer
+	if err := src.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := doc.ResolveDict(doc.Trailer.Get("Root")).Len(); n < 70 {
+		t.Fatalf("re-read catalog has %d keys, want at least 70", n)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = ValidatePDFA(doc, pdfa.PDFA2b)
+		}()
+	}
+	wg.Wait()
 }

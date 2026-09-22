@@ -107,30 +107,29 @@ func TestWriteMinimalPDF(t *testing.T) {
 		Objects: map[int]*object.IndirectObject{
 			1: {
 				Number: 1, Generation: 0,
-				Value: &object.Dictionary{
-					Keys:   []object.Name{"Type", "Pages"},
-					Values: []object.Object{object.Name("Catalog"), object.IndirectRef{Number: 2}},
-				},
+				Value: object.NewDictionary(
+					object.Entry{Key: "Type", Value: object.Name("Catalog")},
+					object.Entry{Key: "Pages", Value: object.IndirectRef{Number: 2}},
+				),
 			},
 			2: {
 				Number: 2, Generation: 0,
-				Value: &object.Dictionary{
-					Keys:   []object.Name{"Type", "Kids", "Count"},
-					Values: []object.Object{object.Name("Pages"), object.Array{object.IndirectRef{Number: 3}}, object.Integer(1)},
-				},
+				Value: object.NewDictionary(
+					object.Entry{Key: "Type", Value: object.Name("Pages")},
+					object.Entry{Key: "Kids", Value: object.Array{object.IndirectRef{Number: 3}}},
+					object.Entry{Key: "Count", Value: object.Integer(1)},
+				),
 			},
 			3: {
 				Number: 3, Generation: 0,
-				Value: &object.Dictionary{
-					Keys:   []object.Name{"Type", "Parent", "MediaBox"},
-					Values: []object.Object{object.Name("Page"), object.IndirectRef{Number: 2}, object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)}},
-				},
+				Value: object.NewDictionary(
+					object.Entry{Key: "Type", Value: object.Name("Page")},
+					object.Entry{Key: "Parent", Value: object.IndirectRef{Number: 2}},
+					object.Entry{Key: "MediaBox", Value: object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)}},
+				),
 			},
 		},
-		Trailer: object.Dictionary{
-			Keys:   []object.Name{"Root"},
-			Values: []object.Object{object.IndirectRef{Number: 1}},
-		},
+		Trailer: *object.NewDictionary(object.Entry{Key: "Root", Value: object.IndirectRef{Number: 1}}),
 	}
 
 	var buf bytes.Buffer
@@ -282,12 +281,12 @@ func TestWriteXRefSubsections(t *testing.T) {
 	doc := &Document{
 		Version: "2.0",
 		Objects: map[int]*object.IndirectObject{
-			1:   {Number: 1, Value: &object.Dictionary{Keys: []object.Name{"Type"}, Values: []object.Object{object.Name("Catalog")}}},
+			1:   {Number: 1, Value: object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("Catalog")})},
 			2:   {Number: 2, Value: object.Integer(1)},
 			100: {Number: 100, Value: object.Integer(2)},
 			101: {Number: 101, Value: object.Integer(3)},
 		},
-		Trailer: object.Dictionary{Keys: []object.Name{"Root"}, Values: []object.Object{object.IndirectRef{Number: 1}}},
+		Trailer: *object.NewDictionary(object.Entry{Key: "Root", Value: object.IndirectRef{Number: 1}}),
 	}
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {

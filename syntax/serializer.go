@@ -237,7 +237,7 @@ func (s *Serializer) WriteDictionary(dict *object.Dictionary) error {
 	if err := s.WriteString("<<"); err != nil {
 		return err
 	}
-	for i, key := range dict.Keys {
+	for key, val := range dict.All() {
 		if err := s.WriteString(" "); err != nil {
 			return err
 		}
@@ -247,7 +247,7 @@ func (s *Serializer) WriteDictionary(dict *object.Dictionary) error {
 		if err := s.WriteString(" "); err != nil {
 			return err
 		}
-		if err := s.WriteObject(dict.Values[i]); err != nil {
+		if err := s.WriteObject(val); err != nil {
 			return err
 		}
 	}

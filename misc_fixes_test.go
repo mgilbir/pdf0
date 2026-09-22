@@ -7,17 +7,26 @@ import (
 	"testing"
 )
 
-// TestDictionaryEqualDuplicateKeys ensures duplicate keys are compared as a
-// multiset, not by first-occurrence (audit C26).
+// TestDictionaryEqualDuplicateKeys guards audit C26 (first-occurrence
+// comparison gave false positives on duplicate keys). A Dictionary now holds
+// at most one entry per key — a duplicate keeps the first position and the
+// last value — so the shapes that fooled the comparison cannot be built.
 func TestDictionaryEqualDuplicateKeys(t *testing.T) {
-	dup11 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(1)}}
-	a1b99 := &object.Dictionary{Keys: []object.Name{"A", "B"}, Values: []object.Object{object.Integer(1), object.Integer(99)}}
+	e := func(k object.Name, v int) object.Entry { return object.Entry{Key: k, Value: object.Integer(v)} }
+	dup11 := object.NewDictionary(e("A", 1), e("A", 1))
+	a1b99 := object.NewDictionary(e("A", 1), e("B", 99))
+	if dup11.Len() != 1 {
+		t.Errorf("{A:1,A:1} holds %d entries, want 1", dup11.Len())
+	}
 	if Equal(dup11, a1b99) {
 		t.Errorf("{A:1,A:1} must not equal {A:1,B:99}")
 	}
-	dup12 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
+	dup12 := object.NewDictionary(e("A", 1), e("A", 2))
 	if !Equal(dup12, dup12) {
-		t.Errorf("a dictionary with duplicate keys must equal itself")
+		t.Errorf("a dictionary built with a duplicate key must equal itself")
+	}
+	if !Equal(dup12, object.NewDictionary(e("A", 2))) || Equal(dup12, object.NewDictionary(e("A", 1))) {
+		t.Errorf("{A:1,A:2} must equal {A:2} and not {A:1}")
 	}
 }
 

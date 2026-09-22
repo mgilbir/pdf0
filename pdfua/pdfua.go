@@ -402,7 +402,7 @@ func checkUARoleMapIntegrity(d core.View, cat *object.Dictionary) []Violation {
 	// keeps that from being a CPU DoS on a large map while never triggering on a
 	// real one (audit C20).
 	work := 0
-	for _, key := range roleMap.Keys {
+	for key := range roleMap.Keys() {
 		if standardStructTypes[key] {
 			v = append(v, Violation{"7.1", "/RoleMap remaps standard structure type <" + string(key) + ">", 0})
 		}
@@ -975,14 +975,14 @@ func walkAllDicts(d core.View, fn func(dict *object.Dictionary, objNum int)) {
 			}
 			seenPtr[x] = true
 			fn(x, objNum)
-			for _, val := range x.Values {
+			for val := range x.Values() {
 				visit(val, objNum)
 			}
 		case *object.Stream:
 			if !seenPtr[&x.Dict] {
 				seenPtr[&x.Dict] = true
 				fn(&x.Dict, objNum)
-				for _, val := range x.Dict.Values {
+				for val := range x.Dict.Values() {
 					visit(val, objNum)
 				}
 			}

@@ -130,7 +130,7 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 				}
 			case *object.Dictionary:
 				// Dict of appearance states (e.g., /N << /Yes 12 0 R /Off 13 0 R >>)
-				for _, stateVal := range v.Values {
+				for stateVal := range v.Values() {
 					stateObj := doc.Resolve(stateVal)
 					if stateStream, ok := stateObj.(*object.Stream); ok {
 						if resourcesUseTransparency(doc, &stateStream.Dict, seen) {
@@ -178,7 +178,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 	if xobjRef != nil {
 		xobjDict := doc.ResolveDict(xobjRef)
 		if xobjDict != nil {
-			for _, val := range xobjDict.Values {
+			for val := range xobjDict.Values() {
 				obj := doc.Resolve(val)
 				stream, ok := obj.(*object.Stream)
 				if !ok {
@@ -216,7 +216,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 	if fontRef != nil {
 		fontDict := doc.ResolveDict(fontRef)
 		if fontDict != nil {
-			for _, val := range fontDict.Values {
+			for val := range fontDict.Values() {
 				fd := doc.ResolveDict(val)
 				if fd == nil {
 					continue
@@ -236,7 +236,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 	if patRef != nil {
 		patDict := doc.ResolveDict(patRef)
 		if patDict != nil {
-			for _, val := range patDict.Values {
+			for val := range patDict.Values() {
 				obj := doc.Resolve(val)
 				stream, ok := obj.(*object.Stream)
 				if !ok {
@@ -262,7 +262,7 @@ func extGStateUsesTransparency(doc View, res *object.Dictionary) bool {
 	if gsDict == nil {
 		return false
 	}
-	for _, val := range gsDict.Values {
+	for val := range gsDict.Values() {
 		gs := doc.ResolveDict(val)
 		if gs == nil {
 			continue
@@ -364,7 +364,7 @@ func DefaultColorSpaces(doc View, page *object.Dictionary) (hasRGB, hasCMYK, has
 	if csDict == nil {
 		return
 	}
-	for _, key := range csDict.Keys {
+	for key := range csDict.Keys() {
 		switch key {
 		case "DefaultRGB":
 			hasRGB = true

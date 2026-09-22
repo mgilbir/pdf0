@@ -14,6 +14,7 @@ A record is superseded, never edited to say something different.
 | [0002](0002-formalis-extraction.md) | EN 16931 invoice rules live in a separate module |
 | [0003](0003-arlington-as-parser-oracle.md) | Arlington is a parser-faithfulness oracle, not a second validator |
 | [0004](0004-executed-content-model.md) | PDF/A rules apply to executed content, not present content |
-| [0005](0005-parallel-slice-dictionary.md) | `Dictionary` is parallel slices with a lazy index, not a map |
+| [0005](0005-parallel-slice-dictionary.md) | `Dictionary` is parallel slices with a lazy index, not a map — *superseded by 0008* |
 | [0006](0006-bidi-in-two-places.md) | The bidirectional algorithm is implemented twice, on purpose — *superseded by 0007* |
 | [0007](0007-bidi-in-forme.md) | The bidirectional algorithm moves to forme, and is exported |
+| [0008](0008-opaque-dictionary.md) | `Dictionary` is opaque: ordered, one entry per key, index kept by the mutators |

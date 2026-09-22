@@ -94,9 +94,10 @@ Every PDF value implements the `object.Object` interface: `Boolean`, `Integer`, 
 `IndirectRef`. A `Document` holds `Objects` (object number →
 `IndirectObject`), the `Trailer` dictionary, and — after `Read` — `Offsets`
 (object number → absolute byte offset, used by the byte-level validation rules).
-`Dictionary` uses parallel `Keys`/`Values` slices to preserve key order for
-faithful round-tripping, with a lazy name→slot index above 64 keys — see
-[ADR 0005](adr/0005-parallel-slice-dictionary.md).
+`Dictionary` is opaque: it keeps its entries in insertion order for faithful
+round-tripping, holds one entry per key, and is read and changed only through
+its methods, whose mutators maintain the lookup index so that reads are pure and
+safe to run concurrently — see [ADR 0008](adr/0008-opaque-dictionary.md).
 
 ## Read
 

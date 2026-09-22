@@ -80,7 +80,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			annot.Set("Subtype", tt.subtype)
 			annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 			annot.Set("F", object.Integer(4))
-			annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+			annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 
 			errs := ValidateView(doc, tt.level, nil)
@@ -99,7 +99,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			annot.Set("Subtype", st)
 			annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 			annot.Set("F", object.Integer(4))
-			annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+			annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 
 			errs := filterRule(ValidateView(doc, PDFA4, nil), "6.3.1")

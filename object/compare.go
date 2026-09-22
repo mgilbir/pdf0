@@ -145,8 +145,10 @@ func equalDepth(a, b Object, depth int) bool {
 	return false
 }
 
-// dictionaryEqual compares two dictionaries semantically.
-// Key order is ignored for semantic comparison.
+// DictionaryEqual reports whether two dictionaries hold the same keys with
+// Equal values. Key order is ignored. A Dictionary holds at most one entry per
+// key, so this is a lookup per entry, linear in the size of the dictionaries.
+// Two nil dictionaries are equal; a nil and a non-nil one are not.
 func DictionaryEqual(a, b *Dictionary) bool {
 	return dictionaryEqualDepth(a, b, 0)
 }
@@ -155,38 +157,15 @@ func dictionaryEqualDepth(a, b *Dictionary, depth int) bool {
 	if depth > maxCompareDepth {
 		return false
 	}
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
 	if a.Len() != b.Len() {
 		return false
 	}
-	// Match each of a's (key, value) entries to a distinct entry of b. Using
-	// b.Get (first occurrence) would give false positives on duplicate keys —
-	// e.g. {A:1, A:1} would compare equal to {A:1, B:99}, and {A:1, A:2} would
-	// not compare equal to itself (audit C26). Equal lengths plus a full
-	// one-to-one matching is correct multiset equality.
-	//
-	// Group b's slots by key so the candidates for each of a's keys are only the
-	// same-key slots, not all of b: a dictionary with distinct keys then compares
-	// in linear time instead of O(n^2), which a crafted large tint-transform dict
-	// otherwise exploited (audit C22). Duplicate keys keep exact multiset
-	// semantics (their slots share a candidate list).
-	bByKey := make(map[Name][]int, len(b.Keys))
-	for j, k := range b.Keys {
-		bByKey[k] = append(bByKey[k], j)
-	}
-	used := make([]bool, len(b.Keys))
-	for i, key := range a.Keys {
-		matched := false
-		for _, j := range bByKey[key] {
-			if used[j] {
-				continue
-			}
-			if equalDepth(a.Values[i], b.Values[j], depth+1) {
-				used[j] = true
-				matched = true
-				break
-			}
-		}
-		if !matched {
+	for k, av := range a.All() {
+		bv, ok := b.Lookup(k)
+		if !ok || !equalDepth(av, bv, depth+1) {
 			return false
 		}
 	}

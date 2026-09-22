@@ -356,11 +356,11 @@ func walkColorantUTF8(doc core.View, obj object.Object, num int, add func(string
 			walkColorantUTF8(doc, e, num, add, depth+1)
 		}
 	case *object.Dictionary:
-		for _, val := range v.Values {
+		for val := range v.Values() {
 			walkColorantUTF8(doc, val, num, add, depth+1)
 		}
 	case *object.Stream:
-		for _, val := range v.Dict.Values {
+		for val := range v.Dict.Values() {
 			walkColorantUTF8(doc, val, num, add, depth+1)
 		}
 	}
@@ -405,11 +405,11 @@ func checkA4NameUTF8(doc core.View, dict *object.Dictionary, num int, add func(s
 	}
 	// RoleMap: a dictionary of name -> name.
 	if rm := doc.ResolveDict(dict.Get("RoleMap")); rm != nil {
-		for i, key := range rm.Keys {
+		for key, rval := range rm.All() {
 			if !validUTF8Name(key) {
 				add("the structure type name in RoleMap is not a valid UTF-8 string", num)
 			}
-			if val, ok := rm.Values[i].(object.Name); ok && !validUTF8Name(val) {
+			if val, ok := rval.(object.Name); ok && !validUTF8Name(val) {
 				add("the structure type name in RoleMap is not a valid UTF-8 string", num)
 			}
 		}
@@ -768,7 +768,7 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 		if cp == nil {
 			continue
 		}
-		for _, val := range cp.Values {
+		for val := range cp.Values() {
 			num := resolveObjNum(doc, val)
 			if num == 0 {
 				continue

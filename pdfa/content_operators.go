@@ -121,7 +121,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 		if cps == nil {
 			continue
 		}
-		for _, cpVal := range cps.Values {
+		for cpVal := range cps.Values() {
 			if cp, ok := doc.Resolve(cpVal).(*object.Stream); ok {
 				if cpData := doc.Content(cp); cpData != nil {
 					checkContentTokens(cpData, res, doc, u.ObjNum, add)
@@ -149,7 +149,7 @@ func collectAppearanceStreams(doc core.View) []appearanceStream {
 		case *object.Stream:
 			out = append(out, appearanceStream{stream: v, objNum: objNum})
 		case *object.Dictionary:
-			for _, sv := range v.Values {
+			for sv := range v.Values() {
 				if s, ok := doc.Resolve(sv).(*object.Stream); ok {
 					out = append(out, appearanceStream{stream: s, objNum: objNum})
 				}
@@ -191,13 +191,13 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 	}
 	used := doc.ContentUsedNamesCached(data, key)
 	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
-		for i, key := range xobj.Keys {
+		for key, xref := range xobj.All() {
 			if !used.XObjects[string(key)] {
 				continue
 			}
-			if s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream); ok {
+			if s, ok := doc.Resolve(xref).(*object.Stream); ok {
 				st, _ := doc.ResolveName(s.Dict.Get("Subtype"))
-				xnum := resolveObjNum(doc, xobj.Values[i])
+				xnum := resolveObjNum(doc, xref)
 				// A PostScript XObject that is actually drawn is prohibited
 				// (ISO 19005-1 6.2.5, -2/-3/-4 6.2.9).
 				if st == "PS" {
@@ -215,11 +215,16 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 		}
 	}
 	if pat := doc.ResolveDict(res.Get("Pattern")); pat != nil {
-		for i, key := range pat.Keys {
+		// i is the entry's position, passed on as the object number exactly as
+		// before this loop moved to Dictionary.All; that it is a position and
+		// not an object number is audit 2026-09-22 C143, fixed separately.
+		i := -1
+		for key, pref := range pat.All() {
+			i++
 			if !used.Patterns[string(key)] {
 				continue
 			}
-			if s, ok := doc.Resolve(pat.Values[i]).(*object.Stream); ok {
+			if s, ok := doc.Resolve(pref).(*object.Stream); ok {
 				walkExecutedContent(doc, &s.Dict, doc.Content(s), s, i, seen, add)
 			}
 		}
@@ -491,11 +496,11 @@ func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, k
 	// the form is an isolated transparency group.
 	used := doc.ContentUsedNamesCached(data, key)
 	if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
-		for i, xkey := range xobj.Keys {
+		for xkey, xref := range xobj.All() {
 			if !used.XObjects[string(xkey)] {
 				continue
 			}
-			s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream)
+			s, ok := doc.Resolve(xref).(*object.Stream)
 			if !ok {
 				continue
 			}
@@ -506,7 +511,7 @@ func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, k
 			if gp := groupBlendProfile(doc, &s.Dict); gp != nil {
 				childBlend = gp
 			}
-			walkICCIdentity(doc, &s.Dict, doc.Content(s), s, resolveObjNum(doc, xobj.Values[i]), oi, childBlend, seen, add)
+			walkICCIdentity(doc, &s.Dict, doc.Content(s), s, resolveObjNum(doc, xref), oi, childBlend, seen, add)
 		}
 	}
 }

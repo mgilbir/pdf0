@@ -570,7 +570,7 @@ func encryptValueObjects(doc core.View) map[int]bool {
 	out := map[int]bool{}
 	encObj := doc.Trailer.Get("Encrypt")
 	markRefs := func(d *object.Dictionary) {
-		for _, v := range d.Values {
+		for v := range d.Values() {
 			if ref, ok := v.(object.IndirectRef); ok {
 				out[ref.Number] = true
 			}
@@ -586,7 +586,7 @@ func encryptValueObjects(doc core.View) map[int]bool {
 	markRefs(enc)
 	if cf := doc.ResolveDict(enc.Get("CF")); cf != nil {
 		markRefs(cf)
-		for _, v := range cf.Values {
+		for v := range cf.Values() {
 			if fd := doc.ResolveDict(v); fd != nil {
 				markRefs(fd)
 			}
@@ -608,12 +608,12 @@ func embeddedFileStreams(doc core.View) map[int]bool {
 	var walk func(o object.Object)
 	walkDict := func(d *object.Dictionary) {
 		if ef := doc.ResolveDict(d.Get("EF")); ef != nil {
-			for _, v := range ef.Values {
+			for v := range ef.Values() {
 				mark(v)
 			}
 		}
 		if rf := doc.ResolveDict(d.Get("RF")); rf != nil {
-			for _, v := range rf.Values {
+			for v := range rf.Values() {
 				if arr, ok := doc.Resolve(v).(object.Array); ok {
 					for i := 1; i < len(arr); i += 2 {
 						mark(arr[i]) // [name1 stream1 name2 stream2 …]
@@ -621,7 +621,7 @@ func embeddedFileStreams(doc core.View) map[int]bool {
 				}
 			}
 		}
-		for _, v := range d.Values {
+		for v := range d.Values() {
 			walk(v)
 		}
 	}
@@ -790,21 +790,18 @@ func (h *Handler) encryptObj(o object.Object, num, gen int, sc StreamContext) (o
 }
 
 func (h *Handler) encryptDictCopy(d *object.Dictionary, num, gen int, sc StreamContext) (*object.Dictionary, error) {
-	cp := &object.Dictionary{
-		Keys:   append([]object.Name(nil), d.Keys...),
-		Values: make([]object.Object, len(d.Values)),
-	}
+	cp := &object.Dictionary{}
 	sig := IsSignatureDict(d)
-	for i, val := range d.Values {
-		if sig && d.Keys[i] == "Contents" {
-			cp.Values[i] = val // the signature value is never encrypted (7.6.2)
+	for key, val := range d.All() {
+		if sig && key == "Contents" {
+			cp.Set(key, val) // the signature value is never encrypted (7.6.2)
 			continue
 		}
 		e, err := h.encryptObj(val, num, gen, sc)
 		if err != nil {
 			return nil, err
 		}
-		cp.Values[i] = e
+		cp.Set(key, e)
 	}
 	return cp, nil
 }
@@ -982,11 +979,11 @@ func (h *Handler) DecryptDictStrings(d *object.Dictionary, num, gen int) {
 	// aliasing hazard the /Encrypt skip in DecryptDocument documents: whichever
 	// object number a shared value is reached under, its /Contents is skipped.
 	sig := IsSignatureDict(d)
-	for i := range d.Values {
-		if sig && d.Keys[i] == "Contents" {
+	for key, val := range d.All() {
+		if sig && key == "Contents" {
 			continue
 		}
-		d.Values[i] = h.decryptValue(d.Values[i], num, gen)
+		d.Set(key, h.decryptValue(val, num, gen)) // replacing a value mid-iteration is allowed
 	}
 }
 

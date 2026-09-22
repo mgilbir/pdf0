@@ -144,10 +144,7 @@ func newDocument() *pdf.Document {
 			2: {Number: 2, Value: pages},
 			3: {Number: 3, Value: page},
 		},
-		Trailer: object.Dictionary{
-			Keys:   []object.Name{"Root"},
-			Values: []object.Object{object.IndirectRef{Number: 1}},
-		},
+		Trailer: *object.NewDictionary(object.Entry{Key: "Root", Value: object.IndirectRef{Number: 1}}),
 	}
 }
 

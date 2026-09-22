@@ -557,7 +557,7 @@ func TestValidatePDFA_AnnotationOpacity(t *testing.T) {
 		annot.Set("Subtype", object.Name("Text"))
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		annot.Set("F", object.Integer(4)) // Print
-		annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+		annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 		if ca != nil {
 			annot.Set("CA", ca)
 		}
@@ -586,7 +586,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 		annot.Set("Subtype", object.Name("Text"))
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		annot.Set("F", object.Integer(0))
-		annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+		annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
@@ -602,7 +602,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 		annot.Set("Subtype", object.Name("Text"))
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		annot.Set("F", object.Integer(4|2)) // Print + Hidden
-		annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+		annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)

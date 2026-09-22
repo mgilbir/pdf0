@@ -8,26 +8,19 @@ import (
 	"time"
 )
 
-// directDict builds an n-key dictionary by populating Keys/Values directly,
-// bypassing Set — whose linear existence scan is O(n^2) over n appends — so the
-// cost measured below is the comparison's and not the builder's.
-//
-// The object package's own index tests have an identical helper. It is repeated
-// rather than shared because a test helper cannot cross a package boundary
-// without being exported into the object package's public surface, and this
-// guard is over dictionaryEqual, which lives here.
+// directDict builds an n-key dictionary K0..K(n-1). Set is O(1) amortised, so
+// building it is linear and the cost measured below is the comparison's.
 func directDict(n int) *object.Dictionary {
-	d := &object.Dictionary{Keys: make([]object.Name, n), Values: make([]object.Object, n)}
+	d := &object.Dictionary{}
 	for i := 0; i < n; i++ {
-		d.Keys[i] = object.Name(fmt.Sprintf("K%d", i))
-		d.Values[i] = object.Integer(i)
+		d.Set(object.Name(fmt.Sprintf("K%d", i)), object.Integer(i))
 	}
 	return d
 }
 
-// TestDictionaryEqualLinear is the C22 guard: comparing two large distinct-key
-// dictionaries is linear, not O(n^2), while duplicate-key multiset semantics are
-// preserved.
+// TestDictionaryEqualLinear is the C22 guard: comparing two large dictionaries
+// is linear, not O(n^2). (Duplicate keys, the other half of the old guard, are
+// no longer representable; TestDictionaryEqualDuplicateKeys covers them.)
 func TestDictionaryEqualLinear(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
 		const n = 50000
@@ -40,16 +33,10 @@ func TestDictionaryEqualLinear(t *testing.T) {
 			t.Fatalf("comparing %d-key dictionaries took %v — dictionaryEqual regressed to O(n^2)", n, d)
 		}
 
-		// Duplicate-key multiset semantics (audit C26) must survive the change.
-		dup12 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
-		dup12b := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
-		if !object.DictionaryEqual(dup12, dup12b) {
-			t.Error("{A:1, A:2} should equal itself")
-		}
-		dup11 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(1)}}
-		ab := &object.Dictionary{Keys: []object.Name{"A", "B"}, Values: []object.Object{object.Integer(1), object.Integer(99)}}
-		if object.DictionaryEqual(dup11, ab) {
-			t.Error("{A:1, A:1} must not equal {A:1, B:99}")
+		// A single differing value late in the order is still found.
+		b.Set("K49999", object.Integer(-1))
+		if object.DictionaryEqual(a, b) {
+			t.Fatal("dictionaries differing in one value compared equal")
 		}
 	})
 }

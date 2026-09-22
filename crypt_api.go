@@ -222,7 +222,7 @@ func (d *Document) dropEncryption() {
 			case object.IndirectRef:
 				referenced[v.Number] = true
 			case *object.Dictionary:
-				for _, val := range v.Values {
+				for val := range v.Values() {
 					walk(val)
 				}
 			case object.Array:

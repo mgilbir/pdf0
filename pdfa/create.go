@@ -155,13 +155,10 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 			3: {Number: 3, Generation: 0, Value: metaStream},
 			4: {Number: 4, Generation: 0, Value: outputIntent},
 			5: {Number: 5, Generation: 0, Value: iccStream},
-		}, object.Dictionary{
-			Keys: []object.Name{"Root", "ID"},
-			Values: []object.Object{
-				object.IndirectRef{Number: 1},
-				object.Array{fileID, fileID},
-			},
-		}, version, nil
+		}, *object.NewDictionary(
+			object.Entry{Key: "Root", Value: object.IndirectRef{Number: 1}},
+			object.Entry{Key: "ID", Value: object.Array{fileID, fileID}},
+		), version, nil
 }
 
 func pdfaVersion(level Level) string {

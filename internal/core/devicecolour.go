@@ -61,7 +61,7 @@ func PageDeviceColourUse(doc View, page *object.Dictionary) (usesRGB, usesCMYK, 
 					case *object.Stream:
 						scanContentStreamForDeviceCS(doc, v, seen, &usesRGB, &usesCMYK, &usesGray)
 					case *object.Dictionary:
-						for _, stateVal := range v.Values {
+						for stateVal := range v.Values() {
 							if s, ok := doc.Resolve(stateVal).(*object.Stream); ok {
 								scanContentStreamForDeviceCS(doc, s, seen, &usesRGB, &usesCMYK, &usesGray)
 							}
@@ -162,7 +162,7 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 	if csRef != nil {
 		csDict := doc.ResolveDict(csRef)
 		if csDict != nil {
-			for _, val := range csDict.Values {
+			for val := range csDict.Values() {
 				CheckCSForDevice(doc, val, &localRGB, &localCMYK, &localGray)
 			}
 		}
@@ -173,11 +173,11 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 	if xobjRef != nil {
 		xobjDict := doc.ResolveDict(xobjRef)
 		if xobjDict != nil {
-			for i, key := range xobjDict.Keys {
+			for key, xref := range xobjDict.All() {
 				if !used.XObjects[string(key)] {
 					continue
 				}
-				resolved := doc.Resolve(xobjDict.Values[i])
+				resolved := doc.Resolve(xref)
 				stream, ok := resolved.(*object.Stream)
 				if !ok {
 					continue
@@ -232,11 +232,10 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 	if shadingRef != nil {
 		shadingDict := doc.ResolveDict(shadingRef)
 		if shadingDict != nil {
-			for i, key := range shadingDict.Keys {
+			for key, val := range shadingDict.All() {
 				if !used.Shadings[string(key)] {
 					continue
 				}
-				val := shadingDict.Values[i]
 				sd := doc.ResolveDict(val)
 				if sd == nil {
 					// Could be a stream (type 4-7 shadings)
@@ -256,11 +255,11 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 	if patRef != nil {
 		patDict := doc.ResolveDict(patRef)
 		if patDict != nil {
-			for i, key := range patDict.Keys {
+			for key, pval := range patDict.All() {
 				if !used.Patterns[string(key)] {
 					continue
 				}
-				obj := doc.Resolve(patDict.Values[i])
+				obj := doc.Resolve(pval)
 				switch v := obj.(type) {
 				case *object.Stream:
 					// Tiling pattern: its body is a content stream.
@@ -280,7 +279,7 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 	if fontRef != nil {
 		fontDict := doc.ResolveDict(fontRef)
 		if fontDict != nil {
-			for _, val := range fontDict.Values {
+			for val := range fontDict.Values() {
 				fd := doc.ResolveDict(val)
 				if fd == nil {
 					continue
@@ -293,7 +292,7 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 					cpRef := fd.Get("CharProcs")
 					cpDict := doc.ResolveDict(cpRef)
 					if cpDict != nil {
-						for _, cpVal := range cpDict.Values {
+						for cpVal := range cpDict.Values() {
 							cpObj := doc.Resolve(cpVal)
 							if cpStream, ok := cpObj.(*object.Stream); ok {
 								data := doc.Content(cpStream)

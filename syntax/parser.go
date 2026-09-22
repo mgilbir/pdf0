@@ -17,9 +17,8 @@ import (
 // searching for the endstream keyword — a search that over-reads pathologically
 // on binary data.
 //
-// Input is untrusted: recursion is depth-capped (maxParseDepth), and large
-// dictionaries switch to a name index so duplicate-key elimination stays off an
-// O(n^2) path.
+// Input is untrusted: recursion is depth-capped (maxParseDepth), and duplicate
+// keys are resolved through Dictionary.Set, which is O(1) amortised at any size.
 
 // maxParseDepth bounds recursion through nested arrays and dictionaries so that
 // adversarial input (e.g. millions of nested '[') cannot exhaust the goroutine
@@ -280,21 +279,10 @@ func (p *Parser) parseArray() (object.Object, error) {
 	}
 }
 
-// dictIndexThreshold is the key count past which parseDictOrStream stops
-// deduplicating keys by a linear scan (Dictionary.Set) and builds a name→index
-// map instead. Below it the linear scan is cheaper than a map allocation;
-// above it the O(n²) scan is what makes a dictionary with hundreds of thousands
-// of keys (from a crafted object stream) take minutes to parse.
-const dictIndexThreshold = 64
-
 // parseDictOrStream parses a dictionary, and if followed by 'stream', parses it as a Stream.
 func (p *Parser) parseDictOrStream() (object.Object, error) {
 	p.consumeToken() // consume '<<'
 	dict := object.Dictionary{}
-	// index maps a key to its slot in dict once the dictionary grows past
-	// dictIndexThreshold, so duplicate-key handling stays O(1) instead of a
-	// linear scan per key. It is nil (and unused) for small dictionaries.
-	var index map[object.Name]int
 
 	for {
 		tok, err := p.peekToken(0)
@@ -322,26 +310,11 @@ func (p *Parser) parseDictOrStream() (object.Object, error) {
 			return nil, fmt.Errorf("parsing dictionary value for key %s: %w", key, err)
 		}
 
-		// Duplicate keys are legal to tolerate but undefined by the spec; keep
-		// the last value at the key's first position, matching Dictionary.Set
-		// and common reader behavior.
-		if index != nil {
-			if i, ok := index[key]; ok {
-				dict.Values[i] = val
-			} else {
-				index[key] = len(dict.Keys)
-				dict.Keys = append(dict.Keys, key)
-				dict.Values = append(dict.Values, val)
-			}
-		} else {
-			dict.Set(key, val)
-			if len(dict.Keys) >= dictIndexThreshold {
-				index = make(map[object.Name]int, len(dict.Keys)*2)
-				for i, k := range dict.Keys {
-					index[k] = i
-				}
-			}
-		}
+		// A duplicated key is undefined by the spec; keep the last value at the
+		// key's first position, which is Dictionary.Set's rule and common reader
+		// behaviour. Set is O(1) amortised, so a crafted dictionary with
+		// hundreds of thousands of keys still parses in linear time.
+		dict.Set(key, val)
 	}
 
 	// Check if followed by 'stream'. A look-ahead failure is a real lexer

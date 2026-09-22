@@ -211,8 +211,8 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 			return
 		}
 		name2num := map[string]int{}
-		for i, k := range xobjs.Keys {
-			if ref, ok := xobjs.Values[i].(object.IndirectRef); ok {
+		for k, xval := range xobjs.All() {
+			if ref, ok := xval.(object.IndirectRef); ok {
 				name2num[string(k)] = ref.Number
 			}
 		}

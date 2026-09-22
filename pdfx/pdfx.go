@@ -437,7 +437,7 @@ func pdfxCheckFontsEmbedded(doc core.View, add func(rule, msg string, obj int)) 
 		}
 		seenRes[res] = true
 		if fonts := doc.ResolveDict(res.Get("Font")); fonts != nil {
-			for i, ref := range fonts.Values {
+			for fontKey, ref := range fonts.All() {
 				fd := doc.ResolveDict(ref)
 				if fd == nil || seenFont[fd] {
 					continue
@@ -445,7 +445,7 @@ func pdfxCheckFontsEmbedded(doc core.View, add func(rule, msg string, obj int)) 
 				seenFont[fd] = true
 				if !fontIsEmbedded(doc, fd) {
 					name, _ := doc.ResolveName(fd.Get("BaseFont"))
-					add("font-embedding", fmt.Sprintf("font %s (resource %s) is not embedded", name, fonts.Keys[i]), object.RefNum(ref))
+					add("font-embedding", fmt.Sprintf("font %s (resource %s) is not embedded", name, fontKey), object.RefNum(ref))
 				}
 			}
 		}
@@ -454,7 +454,7 @@ func pdfxCheckFontsEmbedded(doc core.View, add func(rule, msg string, obj int)) 
 			if sub == nil {
 				continue
 			}
-			for _, ref := range sub.Values {
+			for ref := range sub.Values() {
 				switch v := doc.Resolve(ref).(type) {
 				case *object.Stream:
 					scan(doc.ResolveDict(v.Dict.Get("Resources")), depth+1)

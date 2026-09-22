@@ -209,7 +209,7 @@ func (d *Document) encryptReachable() map[int]bool {
 				stack = append(stack, v.Number)
 			}
 		case *object.Dictionary:
-			for _, val := range v.Values {
+			for val := range v.Values() {
 				walk(val)
 			}
 		case object.Array:
@@ -217,7 +217,7 @@ func (d *Document) encryptReachable() map[int]bool {
 				walk(e)
 			}
 		case *object.Stream:
-			for _, val := range v.Dict.Values {
+			for val := range v.Dict.Values() {
 				walk(val)
 			}
 		}

@@ -266,7 +266,7 @@ func checkA4TriggerEvents(doc core.View, level Level) []Violation {
 		if aa == nil {
 			return
 		}
-		for _, k := range aa.Keys {
+		for k := range aa.Keys() {
 			if forbiddenAAEvents[k] {
 				errs = append(errs, Violation{Rule: "6.6.3", Level: level,
 					Message: "an /AA dictionary must not contain the forbidden trigger event /" + string(k),
@@ -412,7 +412,7 @@ func checkType5Halftones(doc core.View, level Level) []Violation {
 			continue
 		}
 		num := objNumForDict(doc, d)
-		for _, key := range d.Keys {
+		for key := range d.Keys() {
 			if halftoneReserved[key] || key == "Default" {
 				continue
 			}
@@ -456,11 +456,11 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 		used := doc.ContentUsedNamesCached(data, key)
 		gsNames := scanContentColorUsage(doc.Cancel, data).gsNames
 		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
-			for i, key := range gsDict.Keys {
+			for key, gref := range gsDict.All() {
 				if !gsNames[string(key)] {
 					continue
 				}
-				gs := doc.ResolveDict(gsDict.Values[i])
+				gs := doc.ResolveDict(gref)
 				if gs == nil {
 					continue
 				}
@@ -471,11 +471,11 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 			}
 		}
 		if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
-			for i, key := range xobj.Keys {
+			for key, xref := range xobj.All() {
 				if !used.XObjects[string(key)] {
 					continue
 				}
-				if s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream); ok {
+				if s, ok := doc.Resolve(xref).(*object.Stream); ok {
 					if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
 						walk(&s.Dict, doc.Content(s), s)
 					}
@@ -519,7 +519,7 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 		if efDict == nil {
 			continue
 		}
-		for _, val := range efDict.Values {
+		for val := range efDict.Values() {
 			stream, ok := doc.Resolve(val).(*object.Stream)
 			if !ok {
 				continue

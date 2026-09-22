@@ -208,11 +208,11 @@ func (p *params) resolveFilters(doc core.View, enc *object.Dictionary, resolve f
 		return malformed("/CF is a %T, not a dictionary", c)
 	}
 	if cf != nil {
-		for i, name := range cf.Keys {
+		for name, cfv := range cf.All() {
 			if name == "Identity" {
 				continue // a standard name: its /CF entry "shall be ignored" (Table 20)
 			}
-			m, err := p.filterMethod(name, resolve(cf.Values[i]), resolve)
+			m, err := p.filterMethod(name, resolve(cfv), resolve)
 			if err != nil {
 				m = invalid
 			}

@@ -436,7 +436,7 @@ func checkTrailerInfo(doc core.View, level Level) []Violation {
 	if infoDict == nil {
 		return nil
 	}
-	for _, key := range infoDict.Keys {
+	for key := range infoDict.Keys() {
 		if key != "ModDate" {
 			return []Violation{{
 				Rule:    "6.1.3",
@@ -995,7 +995,7 @@ func checkPermsDict(doc core.View, level Level) []Violation {
 	}
 
 	var errs []Violation
-	for _, key := range permsDict.Keys {
+	for key := range permsDict.Keys() {
 		if key != "UR3" && key != "DocMDP" {
 			errs = append(errs, Violation{
 				Rule:    "6.1.12",
@@ -1428,7 +1428,7 @@ func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fo
 		return
 	}
 
-	for _, fontRef := range fontDict.Values {
+	for fontRef := range fontDict.Values() {
 		objNum := 0
 		if iref, ok := fontRef.(object.IndirectRef); ok {
 			objNum = iref.Number
@@ -2415,7 +2415,7 @@ func collectAllExtGState(doc core.View) []extGStateEntry {
 		if gsDict == nil {
 			return
 		}
-		for _, val := range gsDict.Values {
+		for val := range gsDict.Values() {
 			objNum := fallbackObjNum
 			if iref, ok := val.(object.IndirectRef); ok {
 				objNum = iref.Number
@@ -3291,7 +3291,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 	}
 
 	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
-		for _, val := range xobjDict.Values {
+		for val := range xobjDict.Values() {
 			stream, ok := doc.Resolve(val).(*object.Stream)
 			if !ok {
 				continue
@@ -3326,7 +3326,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 	}
 
 	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
-		for _, val := range patDict.Values {
+		for val := range patDict.Values() {
 			if stream, ok := doc.Resolve(val).(*object.Stream); ok {
 				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs)
 			}
@@ -3334,7 +3334,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 	}
 
 	if fontDict := doc.ResolveDict(res.Get("Font")); fontDict != nil {
-		for _, val := range fontDict.Values {
+		for val := range fontDict.Values() {
 			if fd := doc.ResolveDict(val); fd != nil {
 				if st, _ := doc.ResolveName(fd.Get("Subtype")); st == "Type3" {
 					find1bTransparencyXObjects(doc, fd, level, seen, errs)
@@ -3465,7 +3465,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 		// Embedded file streams must declare their MIME type in PDF/A-3/4.
 		if level == PDFA3b || level == PDFA4 {
 			if efDict := doc.ResolveDict(dict.Get("EF")); efDict != nil {
-				for _, val := range efDict.Values {
+				for val := range efDict.Values() {
 					stream, ok := doc.Resolve(val).(*object.Stream)
 					if !ok {
 						continue
@@ -3784,9 +3784,9 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 				Object:  objNum,
 			})
 		}
-		for i, key := range v.Keys {
+		for key, ev := range v.All() {
 			checkObjectLimits(key, objNum, level, lim, depth+1, errs)
-			checkObjectLimits(v.Values[i], objNum, level, lim, depth+1, errs)
+			checkObjectLimits(ev, objNum, level, lim, depth+1, errs)
 		}
 	case object.Array:
 		if depth > lim.nesting {
@@ -4303,7 +4303,7 @@ func collectTintTransforms(doc core.View, dict *object.Dictionary, tintTransform
 	if csDict == nil {
 		return
 	}
-	for _, val := range csDict.Values {
+	for val := range csDict.Values() {
 		collectSeparationConsistency(doc, val, tintTransforms, objNum, level, errs)
 	}
 }
@@ -4339,7 +4339,7 @@ func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTran
 	if csType == "DeviceN" && len(arr) >= 5 {
 		if attrDict := doc.ResolveDict(arr[4]); attrDict != nil {
 			if colorantsDict := doc.ResolveDict(attrDict.Get("Colorants")); colorantsDict != nil {
-				for _, cval := range colorantsDict.Values {
+				for cval := range colorantsDict.Values() {
 					collectSeparationConsistencySeen(doc, cval, tintTransforms, objNum, level, errs, seen)
 				}
 			}
@@ -4393,7 +4393,7 @@ func checkDictForSepDeviceN(doc core.View, dict *object.Dictionary, objNum int, 
 	if csDict == nil {
 		return
 	}
-	for _, val := range csDict.Values {
+	for val := range csDict.Values() {
 		checkColorSpaceValue(doc, val, objNum, level, errs)
 	}
 }
@@ -4559,7 +4559,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 							}
 						}
 						// Recursively check Colorant entries
-						for _, cval := range colorantsDict.Values {
+						for cval := range colorantsDict.Values() {
 							checkColorSpaceValueSeen(doc, cval, objNum, level, errs, seen)
 						}
 					}
@@ -4899,11 +4899,11 @@ func checkICCBasedUsageRules(doc core.View, level Level) []Violation {
 		// Accumulated overprint state from applied ExtGStates.
 		opm1, opFill, opStroke := false, false, false
 		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
-			for i, name := range gsDict.Keys {
+			for name, gref := range gsDict.All() {
 				if !usage.gsNames[string(name)] {
 					continue
 				}
-				gs := doc.ResolveDict(gsDict.Values[i])
+				gs := doc.ResolveDict(gref)
 				if gs == nil {
 					continue
 				}

@@ -260,8 +260,8 @@ func validateDPM(doc core.View, dpm *object.Dictionary, objNum int, seen map[*ob
 		return
 	}
 	seen[dpm] = true
-	for i := range dpm.Keys {
-		validateDPMValue(doc, dpm.Values[i], objNum, seen, add)
+	for _, dval := range dpm.All() {
+		validateDPMValue(doc, dval, objNum, seen, add)
 	}
 }
 

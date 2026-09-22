@@ -30,7 +30,7 @@ import (
 
 // The one-line summaries are the first lines of the canonical comments in the
 // object package, kept identical so the two cannot say different things.
-// Anything longer — the method documentation, the parallel-slice rationale —
+// Anything longer — the method documentation, the copy and duplicate-key rules —
 // lives there and is deliberately not repeated.
 type (
 	// Object is the interface all PDF objects implement.

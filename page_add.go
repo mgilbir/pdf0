@@ -349,11 +349,11 @@ func BlendWithOpacity(mode BlendMode, fill, stroke float64) (*object.Dictionary,
 	if err != nil {
 		return nil, err
 	}
-	for i, key := range alpha.Keys {
+	for key, aval := range alpha.All() {
 		if key == "Type" {
 			continue
 		}
-		gs.Set(key, alpha.Values[i])
+		gs.Set(key, aval)
 	}
 	return gs, nil
 }
