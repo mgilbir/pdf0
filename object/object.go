@@ -9,6 +9,18 @@
 // object.Dictionary are the same type: values pass between the two without
 // conversion and either name may be used. The canonical documentation is here.
 //
+// # One representation per type
+//
+// The composite types — *Dictionary, *Stream and *IndirectObject — are Objects
+// only as pointers: their marker method has a pointer receiver, so the compiler
+// rejects a Dictionary, Stream or IndirectObject value where an Object is
+// wanted. The other types — Boolean, Integer, Real, String, Name, Array, Null
+// and IndirectRef — are Objects as values. Go's method-set rules make a pointer
+// to one of those (*Name, *Integer, *Array, ...) satisfy the interface too, and
+// no declaration can prevent that; such a pointer is not a PDF object. The
+// serializer refuses one with an error, and Equal treats one as equal to
+// nothing. Every consumer can therefore type-switch on exactly one form.
+//
 // # Dictionaries
 //
 // A Dictionary keeps its entries in insertion order, so a document round-trips
@@ -34,7 +46,8 @@ import (
 	"iter"
 )
 
-// Object is the interface all PDF objects implement.
+// Object is the interface all PDF objects implement. See the package
+// documentation for the one form each type takes.
 type Object interface {
 	pdfObject() // marker method
 }
@@ -89,7 +102,7 @@ type dictStore struct {
 	index  map[Name]int
 }
 
-func (Dictionary) pdfObject() {}
+func (*Dictionary) pdfObject() {}
 
 // Entry is one key/value pair, the argument form of NewDictionary.
 type Entry struct {
@@ -297,7 +310,7 @@ type Stream struct {
 	Data []byte // raw (encoded) stream data
 }
 
-func (Stream) pdfObject() {}
+func (*Stream) pdfObject() {}
 
 // Null represents the PDF null object.
 type Null struct{}
@@ -311,7 +324,7 @@ type IndirectObject struct {
 	Value      Object
 }
 
-func (IndirectObject) pdfObject() {}
+func (*IndirectObject) pdfObject() {}
 
 // IndirectRef represents a PDF indirect object reference (N G R).
 type IndirectRef struct {
@@ -356,7 +369,7 @@ func (ref IndirectRef) String() string {
 	return fmt.Sprintf("%d %d R", ref.Number, ref.Generation)
 }
 
-func (obj IndirectObject) String() string {
+func (obj *IndirectObject) String() string {
 	return fmt.Sprintf("%d %d obj", obj.Number, obj.Generation)
 }
 

@@ -98,6 +98,9 @@ Every PDF value implements the `object.Object` interface: `Boolean`, `Integer`, 
 round-tripping, holds one entry per key, and is read and changed only through
 its methods, whose mutators maintain the lookup index so that reads are pure and
 safe to run concurrently — see [ADR 0008](adr/0008-opaque-dictionary.md).
+`Dictionary`, `Stream` and `IndirectObject` are `Object`s only as pointers
+(their marker method has a pointer receiver), so each type has exactly one form
+a type switch has to handle.
 
 ## Read
 

@@ -88,13 +88,6 @@ func equalDepth(a, b Object, depth int) bool {
 		}
 		return dictionaryEqualDepth(av, bv, depth)
 
-	case Dictionary:
-		bv, ok := b.(Dictionary)
-		if !ok {
-			return false
-		}
-		return dictionaryEqualDepth(&av, &bv, depth)
-
 	case *Stream:
 		bv, ok := b.(*Stream)
 		if !ok {
@@ -102,16 +95,6 @@ func equalDepth(a, b Object, depth int) bool {
 		}
 		if av == nil || bv == nil {
 			return av == nil && bv == nil
-		}
-		if !dictionaryEqualDepth(&av.Dict, &bv.Dict, depth) {
-			return false
-		}
-		return bytes.Equal(av.Data, bv.Data)
-
-	case Stream:
-		bv, ok := b.(Stream)
-		if !ok {
-			return false
 		}
 		if !dictionaryEqualDepth(&av.Dict, &bv.Dict, depth) {
 			return false

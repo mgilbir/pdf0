@@ -94,6 +94,11 @@ func (s *Serializer) WriteObject(obj object.Object) error {
 		return s.WriteIndirectObject(v)
 	case object.IndirectRef:
 		return s.writeIndirectRef(v)
+	case *object.Boolean, *object.Integer, *object.Real, *object.String, *object.Name,
+		*object.Array, *object.Null, *object.IndirectRef:
+		// These satisfy Object only through Go's method-set rules; the value
+		// is the one representation (see the object package documentation).
+		return fmt.Errorf("%T is a pointer to a PDF value, not a PDF object: store the value itself", obj)
 	default:
 		return fmt.Errorf("unsupported object type: %T", obj)
 	}
