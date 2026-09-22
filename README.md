@@ -263,7 +263,7 @@ The subsystems, and the doc that maps each:
 | HTML and CSS to PDF | `htmlpdf/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](docs/htmlpdf.md) |
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
-| Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | [encryption.md](docs/encryption.md) |
+| Encryption (standard security handler) | `crypt_api.go`, `internal/crypt`, `internal/saslprep`, `internal/pdfdoc` | [encryption.md](docs/encryption.md) |
 | Images and codecs | `images/`, `images_api.go`, `internal/ccitt`, `internal/jbig2`, `internal/core` (PDF functions) | [images.md](docs/images.md) |
 | Text and pages | `text.go`, `pages.go` | [architecture.md](docs/architecture.md) |
 | Command-line front end (dev aid, not the supported surface) | `cmd/pdf0` | [cli.md](docs/cli.md) |

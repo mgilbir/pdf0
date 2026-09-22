@@ -102,8 +102,10 @@
 // not, because AES draws a fresh random initialisation vector per object on
 // every write. Document.RemoveEncryption drops the encryption so Write emits
 // plaintext. A document whose scheme or password could not be handled stays
-// encrypted (Document.Locked reports this) and is written back unchanged as a
-// lossless passthrough. Write regenerates the
+// encrypted — Document.Locked reports this, and Document.LockReason says why:
+// a wrong password, an unsupported scheme, or a malformed /Encrypt dictionary;
+// an /Encrypt dictionary never makes Read fail — and is written back unchanged
+// as a lossless passthrough. Write regenerates the
 // on-disk layout, emitting a cross-reference stream when the source used one and
 // a traditional cross-reference table otherwise.
 //

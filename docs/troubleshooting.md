@@ -22,7 +22,6 @@ unusable, not merely malformed.** In practice you will see one of:
 | `startxref offset N outside file (size M)` | The pointer lands past the end of the file — usually a truncated download. |
 | `rebuilt cross-reference table found no document catalog` | The scan-rebuild ran and recovered objects, but none is a `/Type /Catalog`, so there is no document to hand back. |
 | `parsing object N at offset M: …` | An individual object failed to parse *and* the scan-rebuild retry also failed. |
-| `encryption: …` | Reserved for a malformed `/Encrypt` dictionary, but **currently unreachable**: `buildStdSecurityHandler` returns a nil handler and a nil error on every failure path, so a malformed `/Encrypt` yields a `Locked()` document rather than an error. See [encryption.md](encryption.md). |
 | `recovered from panic while reading PDF: …` | A bug. `Read` converts panics into errors so a hostile file cannot crash your process, but please report it (and see [testing.md](testing.md#fuzzing) — the fuzzers exist for exactly this). |
 
 ## `short read: got N of M bytes`
@@ -44,17 +43,26 @@ Two fields, and they mean different things:
 
 - **`Document.Encrypted`** — the file *carried* an `/Encrypt` dictionary. It stays
   `true` on a file that was decrypted successfully.
-- **`Document.Locked()`** — `Encrypted && no usable security handler`: the
-  password was wrong or the scheme is unsupported, and *the strings and streams
-  are still ciphertext*.
+- **`Document.Locked()`** — the file carries `/Encrypt` but has no usable
+  security handler, and *the strings and streams are still ciphertext*.
+  **`Document.LockReason()`** says why, wrapping one of `ErrWrongPassword`,
+  `ErrEncryptionUnsupported` or `ErrEncryptionMalformed` (test with
+  `errors.Is`); its text names the entry at fault. An `/Encrypt` dictionary
+  never makes `Read` fail — a malformed one is a `Locked` document with
+  `ErrEncryptionMalformed`, not an error.
+- **`Document.DecryptFailures()`** — on a document that is *not* Locked, the
+  objects whose content could not be decrypted: corrupt ciphertext, or a stream
+  whose crypt filter pdf0 cannot apply (an embedded file under an unsupported
+  `/EFF`, a `/Crypt` filter naming an undefined filter). Their bodies are empty,
+  and `Write` refuses the document.
 
 From the godoc on `Locked`:
 
 > Encrypted alone does not distinguish this from a successfully decrypted file
 > (both keep Encrypted true). Callers that intend to read content, validate,
 > extract, or re-encrypt should check Locked first: on a locked document
-> RemoveEncryption is a no-op, ExtractText and the validators see ciphertext, and
-> SetEncryption/Write refuse.
+> RemoveEncryption is a no-op, ExtractText and the validators see ciphertext,
+> SetEncryption refuses, and Write writes the file back verbatim.
 
 **Empty password vs `ReadWithPassword`.** `Read` tries the empty password, which
 covers the common "owner-restricted, no user password" case. For anything else
@@ -85,7 +93,18 @@ cannot write encrypted document: N object stream(s) could not be decrypted, so s
 ```
 
 The first would produce a file readers wrongly try to decrypt; the second would
-silently drop the objects locked inside the undecryptable container.
+silently drop the objects locked inside the undecryptable container. A
+*decrypted* document is refused when `DecryptFailures` is non-empty
+(`cannot write: object(s) [N …] could not be decrypted on read, so their content
+is missing`), and when a stream added since `Read` names a crypt filter the
+handler does not define.
+
+**`SetEncryption` refusals.** It needs a non-empty user password (an empty one
+opens the file for anyone, and `SetEncryption` grants every permission), and
+refuses a password SASLprep prohibits — control characters, private-use or
+Unicode-3.2-unassigned code points, mixed right-to-left and left-to-right text —
+because no conforming reader could reproduce it. An empty *owner* password is
+replaced by a random one. See [encryption.md](encryption.md#passwords).
 
 Two related refusals that are not about encryption:
 

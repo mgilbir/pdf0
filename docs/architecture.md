@@ -111,19 +111,25 @@ flowchart TD
     C --> D{xref offset valid?<br/>absolute vs header-relative probe}
     D --> E["parse xref sections, follow /Prev<br/>visited-set guards cycles<br/>(recovery ladder below)"]
     E --> F[load uncompressed objects<br/>xref key is the object number]
-    F --> G["decrypt strings + streams<br/>(standard security handler)"]
+    F --> G["validate /Encrypt, derive the key<br/>decrypt strings + /ObjStm containers<br/>(or record why it stays Locked)"]
     G --> H[loadCompressedObjects<br/>materialize /ObjStm entries]
     H -->|decode fails| H2[record brokenObjStms<br/>non-fatal]
-    H --> I[normalizeStructure<br/>drop XRef/ObjStm objects + their Offsets]
+    H --> G2["decrypt the remaining streams<br/>(their crypt filter can depend on the whole graph)"]
+    G2 --> I[normalizeStructure<br/>drop XRef/ObjStm objects + their Offsets]
     I --> J[set Encrypted from /Encrypt]
     J --> K[(Document)]
     A -.panic anywhere.-> R[recover -> error, never crash]
 ```
 
-**Decryption runs before object streams are materialized**, and the order is
-load-bearing: an `/ObjStm` container is itself an encrypted stream, but the
-objects stored inside it are *not* separately encrypted. Materializing first
-would decrypt the inner objects a second time and corrupt them.
+**Decryption of strings and object-stream containers runs before object streams
+are materialized**, and the order is load-bearing: an `/ObjStm` container is
+itself an encrypted stream, but the objects stored inside it are *not*
+separately encrypted. Materializing first would decrypt the inner objects a
+second time and corrupt them. The other streams are decrypted *after*, because
+which crypt filter applies to one — an embedded file follows `/EFF` — is decided
+by a file specification that may itself be inside an object stream. An
+`/Encrypt` dictionary never fails the read; see
+[encryption.md](encryption.md#the-ordering-constraint-and-what-is-exempt).
 
 ### The recovery ladder
 
