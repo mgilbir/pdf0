@@ -2,6 +2,7 @@ package object
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"testing"
 	"time"
 )
@@ -128,21 +129,23 @@ func directDict(n int) *Dictionary {
 // O(n^2); the index makes it O(n). We assert a generous wall-clock ceiling so
 // the test is not flaky but still fails hard on a regression to linear scan.
 func TestDictLookupIsSubLinear(t *testing.T) {
-	const n = 200_000
-	d := directDict(n)
-	start := time.Now()
-	// One full sweep of lookups: O(n) with the index, O(n^2) without.
-	sum := 0
-	for i := 0; i < n; i++ {
-		if v, ok := d.Get(Name(fmt.Sprintf("K%d", i))).(Integer); ok {
-			sum += int(v)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const n = 200_000
+		d := directDict(n)
+		start := time.Now()
+		// One full sweep of lookups: O(n) with the index, O(n^2) without.
+		sum := 0
+		for i := 0; i < n; i++ {
+			if v, ok := d.Get(Name(fmt.Sprintf("K%d", i))).(Integer); ok {
+				sum += int(v)
+			}
 		}
-	}
-	elapsed := time.Since(start)
-	if sum == 0 {
-		t.Fatal("lookups returned nothing; test is not exercising the path")
-	}
-	if elapsed > 5*time.Second {
-		t.Fatalf("full lookup sweep over %d keys took %v — indexed Get regressed to linear scan", n, elapsed)
-	}
+		elapsed := time.Since(start)
+		if sum == 0 {
+			t.Fatal("lookups returned nothing; test is not exercising the path")
+		}
+		if elapsed > 5*time.Second {
+			t.Fatalf("full lookup sweep over %d keys took %v — indexed Get regressed to linear scan", n, elapsed)
+		}
+	})
 }

@@ -1,6 +1,10 @@
 package core
 
-import "testing"
+import (
+	"github.com/mgilbir/pdf0/internal/hostile"
+	"testing"
+	"time"
+)
 
 // The type-4 PostScript step budget is enforced by this package, so its guard
 // lives here with it.
@@ -9,19 +13,21 @@ import "testing"
 // operator count is bounded, so an if/ifelse fan-out cannot run unbounded work
 // per pixel.
 func TestPSStepBudget(t *testing.T) {
-	prog := []psItem{{isNum: true, num: 1}, {isNum: true, num: 2}, {op: "add"}}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		prog := []psItem{{isNum: true, num: 1}, {isNum: true, num: 2}, {op: "add"}}
 
-	budget := psBudget{max: DefaultMaxPostScriptSteps}
-	if _, ok := psExec(prog, nil, 0, &budget); !ok {
-		t.Fatal("a simple program should execute")
-	}
-	if budget.steps != 3 {
-		t.Fatalf("step count = %d, want 3", budget.steps)
-	}
+		budget := psBudget{max: DefaultMaxPostScriptSteps}
+		if _, ok := psExec(prog, nil, 0, &budget); !ok {
+			t.Fatal("a simple program should execute")
+		}
+		if budget.steps != 3 {
+			t.Fatalf("step count = %d, want 3", budget.steps)
+		}
 
-	// Once the budget is spent, even a tiny program is aborted.
-	budget.steps = budget.max
-	if _, ok := psExec(prog, nil, 0, &budget); ok {
-		t.Fatal("a program exceeding the step budget must be aborted")
-	}
+		// Once the budget is spent, even a tiny program is aborted.
+		budget.steps = budget.max
+		if _, ok := psExec(prog, nil, 0, &budget); ok {
+			t.Fatal("a program exceeding the step budget must be aborted")
+		}
+	})
 }

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
@@ -28,25 +29,27 @@ func directDict(n int) *object.Dictionary {
 // dictionaries is linear, not O(n^2), while duplicate-key multiset semantics are
 // preserved.
 func TestDictionaryEqualLinear(t *testing.T) {
-	const n = 50000
-	a, b := directDict(n), directDict(n)
-	start := time.Now()
-	if !object.DictionaryEqual(a, b) {
-		t.Fatal("two identical dictionaries compared unequal")
-	}
-	if d := time.Since(start); d > 3*time.Second {
-		t.Fatalf("comparing %d-key dictionaries took %v — dictionaryEqual regressed to O(n^2)", n, d)
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const n = 50000
+		a, b := directDict(n), directDict(n)
+		start := time.Now()
+		if !object.DictionaryEqual(a, b) {
+			t.Fatal("two identical dictionaries compared unequal")
+		}
+		if d := time.Since(start); d > 3*time.Second {
+			t.Fatalf("comparing %d-key dictionaries took %v — dictionaryEqual regressed to O(n^2)", n, d)
+		}
 
-	// Duplicate-key multiset semantics (audit C26) must survive the change.
-	dup12 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
-	dup12b := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
-	if !object.DictionaryEqual(dup12, dup12b) {
-		t.Error("{A:1, A:2} should equal itself")
-	}
-	dup11 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(1)}}
-	ab := &object.Dictionary{Keys: []object.Name{"A", "B"}, Values: []object.Object{object.Integer(1), object.Integer(99)}}
-	if object.DictionaryEqual(dup11, ab) {
-		t.Error("{A:1, A:1} must not equal {A:1, B:99}")
-	}
+		// Duplicate-key multiset semantics (audit C26) must survive the change.
+		dup12 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
+		dup12b := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(2)}}
+		if !object.DictionaryEqual(dup12, dup12b) {
+			t.Error("{A:1, A:2} should equal itself")
+		}
+		dup11 := &object.Dictionary{Keys: []object.Name{"A", "A"}, Values: []object.Object{object.Integer(1), object.Integer(1)}}
+		ab := &object.Dictionary{Keys: []object.Name{"A", "B"}, Values: []object.Object{object.Integer(1), object.Integer(99)}}
+		if object.DictionaryEqual(dup11, ab) {
+			t.Error("{A:1, A:1} must not equal {A:1, B:99}")
+		}
+	})
 }

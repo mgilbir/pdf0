@@ -1,6 +1,7 @@
 package pdfa
 
 import (
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"testing"
 	"time"
 )
@@ -11,19 +12,21 @@ import (
 // A large reverse-ordered slice (insertion sort's worst case) must sort quickly
 // and correctly.
 func TestSortInt64LargeInputFast(t *testing.T) {
-	const n = 300000
-	a := make([]int64, n)
-	for i := range a {
-		a[i] = int64(n - i) // reverse order
-	}
-	start := time.Now()
-	sortInt64(a)
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("sortInt64 took %v on %d reverse-ordered elements — an insertion sort would be quadratic", d, n)
-	}
-	for i := 1; i < len(a); i++ {
-		if a[i-1] > a[i] {
-			t.Fatalf("not sorted at index %d: %d > %d", i, a[i-1], a[i])
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const n = 300000
+		a := make([]int64, n)
+		for i := range a {
+			a[i] = int64(n - i) // reverse order
 		}
-	}
+		start := time.Now()
+		sortInt64(a)
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("sortInt64 took %v on %d reverse-ordered elements — an insertion sort would be quadratic", d, n)
+		}
+		for i := 1; i < len(a); i++ {
+			if a[i-1] > a[i] {
+				t.Fatalf("not sorted at index %d: %d > %d", i, a[i-1], a[i])
+			}
+		}
+	})
 }

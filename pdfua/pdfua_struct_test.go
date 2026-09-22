@@ -2,6 +2,7 @@ package pdfua
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
@@ -213,29 +214,31 @@ func TestRoleMapChainResolves(t *testing.T) {
 // still report the types as unmapped: following chains must not trade a
 // single-hop false positive for a hang.
 func TestRoleMapChainTerminates(t *testing.T) {
-	rm := &object.Dictionary{}
-	rm.Set("MyTable", object.Name("MyRow"))
-	rm.Set("MyRow", object.Name("MyTable")) // a two-key cycle reaching no standard type
-	doc := roleMapChainDoc(rm)
-	cat := doc.ResolveDict(object.IndirectRef{Number: 1})
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		rm := &object.Dictionary{}
+		rm.Set("MyTable", object.Name("MyRow"))
+		rm.Set("MyRow", object.Name("MyTable")) // a two-key cycle reaching no standard type
+		doc := roleMapChainDoc(rm)
+		cat := doc.ResolveDict(object.IndirectRef{Number: 1})
 
-	done := make(chan []Violation, 1)
-	go func() { done <- checkUARoleMap(doc, cat) }()
-	select {
-	case v := <-done:
-		if len(v) != 2 {
-			t.Errorf("cyclic /RoleMap: got %d findings, want one per unmapped type: %+v", len(v), v)
+		done := make(chan []Violation, 1)
+		go func() { done <- checkUARoleMap(doc, cat) }()
+		select {
+		case v := <-done:
+			if len(v) != 2 {
+				t.Errorf("cyclic /RoleMap: got %d findings, want one per unmapped type: %+v", len(v), v)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("checkUARoleMap did not terminate on a cyclic /RoleMap")
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("checkUARoleMap did not terminate on a cyclic /RoleMap")
-	}
-	// A type mapping to itself is a cycle of length one.
-	self := &object.Dictionary{}
-	self.Set("MyTable", object.Name("MyTable"))
-	sdoc := roleMapChainDoc(self)
-	if got := standardStructType(sdoc, sdoc.ResolveDict(object.IndirectRef{Number: 10}), self); got != "MyTable" {
-		t.Errorf("self-mapping type resolved to %q, want the raw type back", got)
-	}
+		// A type mapping to itself is a cycle of length one.
+		self := &object.Dictionary{}
+		self.Set("MyTable", object.Name("MyTable"))
+		sdoc := roleMapChainDoc(self)
+		if got := standardStructType(sdoc, sdoc.ResolveDict(object.IndirectRef{Number: 10}), self); got != "MyTable" {
+			t.Errorf("self-mapping type resolved to %q, want the raw type back", got)
+		}
+	})
 }
 
 // TestRoleMapChainBudgetDeclines pins the incomplete-result rule for this walk:

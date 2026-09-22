@@ -3,10 +3,12 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The zero value must be safe: a caller who sets nothing gets the defaults, and
@@ -171,19 +173,21 @@ func TestLimitsArePerDocument(t *testing.T) {
 
 // A lowered decoded-stream cap must actually be enforced at the leaf.
 func TestDecodedStreamLimitIsEnforced(t *testing.T) {
-	payload := bytes.Repeat([]byte("A"), 256<<10)
-	var buf bytes.Buffer
-	buf.Write(core.FlateEncode(payload))
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		payload := bytes.Repeat([]byte("A"), 256<<10)
+		var buf bytes.Buffer
+		buf.Write(core.FlateEncode(payload))
 
-	lim := resolveLimits([]Option{WithMaxDecodedStreamBytes(64 << 10)})
-	if _, err := core.FlateDecode(core.Canceler{}, buf.Bytes(), lim); err == nil {
-		t.Error("expected the lowered decoded-stream cap to reject a 256 KiB payload")
-	}
-	if got, err := core.FlateDecode(core.Canceler{}, buf.Bytes(), core.DefaultLimits()); err != nil {
-		t.Errorf("default limits should accept the same payload: %v", err)
-	} else if len(got) != len(payload) {
-		t.Errorf("decoded %d bytes, want %d", len(got), len(payload))
-	}
+		lim := resolveLimits([]Option{WithMaxDecodedStreamBytes(64 << 10)})
+		if _, err := core.FlateDecode(core.Canceler{}, buf.Bytes(), lim); err == nil {
+			t.Error("expected the lowered decoded-stream cap to reject a 256 KiB payload")
+		}
+		if got, err := core.FlateDecode(core.Canceler{}, buf.Bytes(), core.DefaultLimits()); err != nil {
+			t.Errorf("default limits should accept the same payload: %v", err)
+		} else if len(got) != len(payload) {
+			t.Errorf("decoded %d bytes, want %d", len(got), len(payload))
+		}
+	})
 }
 
 // The document's resolved limits must reach the file's *own* cross-reference
@@ -198,32 +202,34 @@ func TestDecodedStreamLimitIsEnforced(t *testing.T) {
 // the PDF 2.0 reference files decodes to 430,350 bytes — 0.4% of the 100 MB
 // default, with none above 1 MiB.
 func TestXRefStreamHonoursConfiguredDecodeLimit(t *testing.T) {
-	doc := &Document{
-		Objects:        map[int]*object.IndirectObject{},
-		usedXRefStream: true, // makes Write emit a cross-reference stream
-		Version:        "2.0",
-	}
-	catalog := &object.Dictionary{}
-	catalog.Set("Type", object.Name("Catalog"))
-	catalog.Set("Pages", object.IndirectRef{Number: 2})
-	pages := &object.Dictionary{}
-	pages.Set("Type", object.Name("Pages"))
-	pages.Set("Kids", object.Array{})
-	pages.Set("Count", object.Integer(0))
-	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: catalog}
-	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
-	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		doc := &Document{
+			Objects:        map[int]*object.IndirectObject{},
+			usedXRefStream: true, // makes Write emit a cross-reference stream
+			Version:        "2.0",
+		}
+		catalog := &object.Dictionary{}
+		catalog.Set("Type", object.Name("Catalog"))
+		catalog.Set("Pages", object.IndirectRef{Number: 2})
+		pages := &object.Dictionary{}
+		pages.Set("Type", object.Name("Pages"))
+		pages.Set("Kids", object.Array{})
+		pages.Set("Count", object.Integer(0))
+		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: catalog}
+		doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
+		doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	var buf bytes.Buffer
-	if err := doc.Write(&buf); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	data := buf.Bytes()
+		var buf bytes.Buffer
+		if err := doc.Write(&buf); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		data := buf.Bytes()
 
-	if _, err := Read(bytes.NewReader(data), int64(len(data))); err != nil {
-		t.Fatalf("default limits should read this document: %v", err)
-	}
-	if _, err := Read(bytes.NewReader(data), int64(len(data)), WithMaxDecodedStreamBytes(4)); err == nil {
-		t.Error("a 4-byte decoded-stream cap must not be bypassed for the file's own cross-reference stream")
-	}
+		if _, err := Read(bytes.NewReader(data), int64(len(data))); err != nil {
+			t.Fatalf("default limits should read this document: %v", err)
+		}
+		if _, err := Read(bytes.NewReader(data), int64(len(data)), WithMaxDecodedStreamBytes(4)); err == nil {
+			t.Error("a 4-byte decoded-stream cap must not be bypassed for the file's own cross-reference stream")
+		}
+	})
 }

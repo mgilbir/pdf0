@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
@@ -87,30 +88,32 @@ func TestImagesIteratorMatchesExtract(t *testing.T) {
 // cache-defeating: the run cache is per-walk, the per-pixel exec dominates)
 // tint program that takes far longer than the bound if decoded.
 func TestImagesIteratorLazy(t *testing.T) {
-	// A ~40k-operator program EXECUTED per pixel of a 200x200 image if the
-	// image is decoded: ~1.6G psExec steps, well over the bound. Breaking
-	// early must avoid all of it. (Stays under the PostScript step budget per evaluation.)
-	var b []byte
-	b = append(b, "{ pop 0 0 1"...)
-	for i := 0; i < 20000; i++ {
-		b = append(b, " 0 pop"...)
-	}
-	b = append(b, " }"...)
-	doc := buildTwoImageDoc(string(b), 200, 200)
-
-	start := time.Now()
-	got := 0
-	for im := range doc.Images() {
-		got++
-		if im.ObjNum != 6 {
-			t.Fatalf("first yielded image is %d, want the cheap image 6", im.ObjNum)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		// A ~40k-operator program EXECUTED per pixel of a 200x200 image if the
+		// image is decoded: ~1.6G psExec steps, well over the bound. Breaking
+		// early must avoid all of it. (Stays under the PostScript step budget per evaluation.)
+		var b []byte
+		b = append(b, "{ pop 0 0 1"...)
+		for i := 0; i < 20000; i++ {
+			b = append(b, " 0 pop"...)
 		}
-		break
-	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("early break still took %v; the remaining image was decoded eagerly", d)
-	}
-	if got != 1 {
-		t.Errorf("yielded %d images before break, want 1", got)
-	}
+		b = append(b, " }"...)
+		doc := buildTwoImageDoc(string(b), 200, 200)
+
+		start := time.Now()
+		got := 0
+		for im := range doc.Images() {
+			got++
+			if im.ObjNum != 6 {
+				t.Fatalf("first yielded image is %d, want the cheap image 6", im.ObjNum)
+			}
+			break
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("early break still took %v; the remaining image was decoded eagerly", d)
+		}
+		if got != 1 {
+			t.Errorf("yielded %d images before break, want 1", got)
+		}
+	})
 }

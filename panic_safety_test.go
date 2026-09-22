@@ -2,9 +2,11 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 	"testing"
+	"time"
 )
 
 // TestEmptyArrayColorSpaceNoPanic ensures an empty-array colour space is
@@ -32,22 +34,26 @@ func TestEmptyArrayColorSpaceNoPanic(t *testing.T) {
 // TestEqualCyclicNoOverflow ensures Equal on a cyclic direct dictionary returns
 // rather than overflowing the stack (audit C15).
 func TestEqualCyclicNoOverflow(t *testing.T) {
-	d := &object.Dictionary{}
-	d.Set("Self", d)
-	d2 := &object.Dictionary{}
-	d2.Set("Self", d2)
-	_ = Equal(d, d2) // must return (false), not crash
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		d := &object.Dictionary{}
+		d.Set("Self", d)
+		d2 := &object.Dictionary{}
+		d2.Set("Self", d2)
+		_ = Equal(d, d2) // must return (false), not crash
+	})
 }
 
 // TestSerializeCyclicErrors ensures WriteObject on a cyclic graph returns an
 // error rather than overflowing the stack (audit C15).
 func TestSerializeCyclicErrors(t *testing.T) {
-	d := &object.Dictionary{}
-	d.Set("Self", d)
-	var buf bytes.Buffer
-	if err := NewSerializer(&buf).WriteObject(d); err == nil {
-		t.Fatalf("expected a depth-limit error serializing a cyclic dictionary, got nil")
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		d := &object.Dictionary{}
+		d.Set("Self", d)
+		var buf bytes.Buffer
+		if err := NewSerializer(&buf).WriteObject(d); err == nil {
+			t.Fatalf("expected a depth-limit error serializing a cyclic dictionary, got nil")
+		}
+	})
 }
 
 // TestTypedNilNoPanic ensures typed-nil pointers do not panic (audit C30).

@@ -4,9 +4,11 @@ import (
 	"encoding/binary"
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
+	"time"
 )
 
 func errMessages(errs []Violation) []string {
@@ -83,49 +85,51 @@ func budgetBustingCmap() []byte {
 //	rendering (code 65) text showing operator references the .notdef glyph in
 //	TrueType font]
 func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
-	head := make([]byte, 54)
-	binary.BigEndian.PutUint16(head[18:], 1000) // unitsPerEm
-	maxp := make([]byte, 6)
-	binary.BigEndian.PutUint16(maxp[4:], 300) // numGlyphs
-	prog := buildTestSFNT([]sfntTable{
-		{"head", head},
-		{"maxp", maxp},
-		{"cmap", cmapTable(budgetBustingCmap())},
-	})
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		head := make([]byte, 54)
+		binary.BigEndian.PutUint16(head[18:], 1000) // unitsPerEm
+		maxp := make([]byte, 6)
+		binary.BigEndian.PutUint16(maxp[4:], 300) // numGlyphs
+		prog := buildTestSFNT([]sfntTable{
+			{"head", head},
+			{"maxp", maxp},
+			{"cmap", cmapTable(budgetBustingCmap())},
+		})
 
-	fd := &object.Dictionary{}
-	fd.Set("Flags", object.Integer(32)) // non-symbolic: codes go through the (3,1) cmap
-	fd.Set("FontFile2", object.IndirectRef{Number: 9})
-	font := &object.Dictionary{}
-	font.Set("Subtype", object.Name("TrueType"))
-	font.Set("Encoding", object.Name("WinAnsiEncoding"))
-	font.Set("FontDescriptor", fd)
-	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
-		1: {Number: 1, Value: font},
-		9: {Number: 9, Value: &object.Stream{Dict: object.Dictionary{}, Data: prog}},
-	}})
+		fd := &object.Dictionary{}
+		fd.Set("Flags", object.Integer(32)) // non-symbolic: codes go through the (3,1) cmap
+		fd.Set("FontFile2", object.IndirectRef{Number: 9})
+		font := &object.Dictionary{}
+		font.Set("Subtype", object.Name("TrueType"))
+		font.Set("Encoding", object.Name("WinAnsiEncoding"))
+		font.Set("FontDescriptor", fd)
+		doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
+			1: {Number: 1, Value: font},
+			9: {Number: 9, Value: &object.Stream{Dict: object.Dictionary{}, Data: prog}},
+		}})
 
-	if fp := core.LoadFontProgram(doc, fd); fp == nil || !fp.CmapPartial {
-		t.Fatalf("fixture wrong: font program parsed=%v, cmapPartial=%v", fp != nil, fp != nil && fp.CmapPartial)
-	}
-
-	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{[]byte("A")}, Modes: map[int]bool{0: true}}
-	msgs := errMessages(checkSimpleFontConsistency(doc, PDFA1b, "6.3", font, u))
-	var bad []string
-	for _, m := range msgs {
-		if strings.Contains(m, "does not define a glyph") || strings.Contains(m, ".notdef") {
-			bad = append(bad, m)
+		if fp := core.LoadFontProgram(doc, fd); fp == nil || !fp.CmapPartial {
+			t.Fatalf("fixture wrong: font program parsed=%v, cmapPartial=%v", fp != nil, fp != nil && fp.CmapPartial)
 		}
-	}
-	if len(bad) > 0 {
-		t.Errorf("glyph-coverage rules fired on a font whose cmap was truncated by the work budget: %v", bad)
-	}
 
-	// The trip is not silently swallowed either.
-	trips := doc.Run.Trips.Snapshot()
-	if len(trips) == 0 || trips[0].Guard() != core.GuardCmapWork {
-		t.Errorf("cmap work-budget trip was not reported: %v", trips)
-	}
+		u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{[]byte("A")}, Modes: map[int]bool{0: true}}
+		msgs := errMessages(checkSimpleFontConsistency(doc, PDFA1b, "6.3", font, u))
+		var bad []string
+		for _, m := range msgs {
+			if strings.Contains(m, "does not define a glyph") || strings.Contains(m, ".notdef") {
+				bad = append(bad, m)
+			}
+		}
+		if len(bad) > 0 {
+			t.Errorf("glyph-coverage rules fired on a font whose cmap was truncated by the work budget: %v", bad)
+		}
+
+		// The trip is not silently swallowed either.
+		trips := doc.Run.Trips.Snapshot()
+		if len(trips) == 0 || trips[0].Guard() != core.GuardCmapWork {
+			t.Errorf("cmap work-budget trip was not reported: %v", trips)
+		}
+	})
 }
 
 // --- the CID /W range span limit (limits.cidRangeSpan, WithMaxCIDRangeSpan) ---
@@ -134,17 +138,19 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 // over-wide /W range is dropped, and the map says so rather than looking like a
 // font that simply declares no width for those CIDs.
 func TestCIDWidthRangeBudgetReportsPartial(t *testing.T) {
-	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{}})
-	if _, complete := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)}); complete {
-		t.Error("an over-wide /W range was dropped but the map claims to be complete")
-	}
-	// A malformed (inverted) range declares nothing, so nothing is missing.
-	if _, complete := parseCIDWidths(doc, object.Array{object.Integer(100), object.Integer(10), object.Real(500)}); !complete {
-		t.Error("an inverted /W range is malformed input, not a budget trip")
-	}
-	if _, complete := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(65535), object.Real(500)}); !complete {
-		t.Error("a full-CID-space /W range fits the budget and must count as complete")
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		doc := mkV(core.View{Objects: map[int]*object.IndirectObject{}})
+		if _, complete := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)}); complete {
+			t.Error("an over-wide /W range was dropped but the map claims to be complete")
+		}
+		// A malformed (inverted) range declares nothing, so nothing is missing.
+		if _, complete := parseCIDWidths(doc, object.Array{object.Integer(100), object.Integer(10), object.Real(500)}); !complete {
+			t.Error("an inverted /W range is malformed input, not a budget trip")
+		}
+		if _, complete := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(65535), object.Real(500)}); !complete {
+			t.Error("a full-CID-space /W range fits the budget and must count as complete")
+		}
+	})
 }
 
 // TestCIDWidthBudgetDoesNotReportWidthMismatch is the false positive: with the
@@ -158,60 +164,62 @@ func TestCIDWidthRangeBudgetReportsPartial(t *testing.T) {
 //	[width information for glyphs used for rendering is inconsistent in
 //	CIDFontType2 font]
 func TestCIDWidthBudgetDoesNotReportWidthMismatch(t *testing.T) {
-	// A CIDFontType2 program whose glyph 1 advances 500 units.
-	head := make([]byte, 54)
-	binary.BigEndian.PutUint16(head[18:], 1000)
-	maxp := make([]byte, 6)
-	binary.BigEndian.PutUint16(maxp[4:], 4)
-	hhea := make([]byte, 36)
-	binary.BigEndian.PutUint16(hhea[34:], 4) // numberOfHMetrics
-	hmtx := make([]byte, 16)
-	for gid := 0; gid < 4; gid++ {
-		binary.BigEndian.PutUint16(hmtx[4*gid:], 500)
-	}
-	loca := make([]byte, 2*(4+1))
-	for i := range loca {
-		loca[i] = 0
-	}
-	glyf := make([]byte, 0)
-	prog := buildTestSFNT([]sfntTable{
-		{"head", head}, {"maxp", maxp}, {"hhea", hhea}, {"hmtx", hmtx},
-		{"loca", loca}, {"glyf", glyf},
-	})
-
-	fd := &object.Dictionary{}
-	fd.Set("Flags", object.Integer(4))
-	fd.Set("FontFile2", object.IndirectRef{Number: 9})
-	desc := &object.Dictionary{}
-	desc.Set("Subtype", object.Name("CIDFontType2"))
-	desc.Set("FontDescriptor", fd)
-	desc.Set("CIDToGIDMap", object.Name("Identity"))
-	// The file declares width 500 for every CID — correctly — but as one range
-	// wider than the guard will expand.
-	desc.Set("W", object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)})
-	font := &object.Dictionary{}
-	font.Set("Subtype", object.Name("Type0"))
-	font.Set("Encoding", object.Name("Identity-H"))
-	font.Set("DescendantFonts", object.Array{desc})
-	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
-		1: {Number: 1, Value: font},
-		9: {Number: 9, Value: &object.Stream{Dict: object.Dictionary{}, Data: prog}},
-	}})
-
-	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0x00, 0x01}}, Modes: map[int]bool{0: true}}
-	msgs := errMessages(checkCIDFontConsistency(doc, PDFA1b, "6.3", font, u))
-	var bad []string
-	for _, m := range msgs {
-		if strings.Contains(m, "width information") {
-			bad = append(bad, m)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		// A CIDFontType2 program whose glyph 1 advances 500 units.
+		head := make([]byte, 54)
+		binary.BigEndian.PutUint16(head[18:], 1000)
+		maxp := make([]byte, 6)
+		binary.BigEndian.PutUint16(maxp[4:], 4)
+		hhea := make([]byte, 36)
+		binary.BigEndian.PutUint16(hhea[34:], 4) // numberOfHMetrics
+		hmtx := make([]byte, 16)
+		for gid := 0; gid < 4; gid++ {
+			binary.BigEndian.PutUint16(hmtx[4*gid:], 500)
 		}
-	}
-	if len(bad) > 0 {
-		t.Errorf("width rule fired on a font whose /W was dropped by the range budget: %v", bad)
-	}
-	if trips := doc.Run.Trips.Snapshot(); len(trips) == 0 || trips[0].Guard() != core.GuardCIDWidthRange {
-		t.Errorf("/W range budget trip was not reported: %v", trips)
-	}
+		loca := make([]byte, 2*(4+1))
+		for i := range loca {
+			loca[i] = 0
+		}
+		glyf := make([]byte, 0)
+		prog := buildTestSFNT([]sfntTable{
+			{"head", head}, {"maxp", maxp}, {"hhea", hhea}, {"hmtx", hmtx},
+			{"loca", loca}, {"glyf", glyf},
+		})
+
+		fd := &object.Dictionary{}
+		fd.Set("Flags", object.Integer(4))
+		fd.Set("FontFile2", object.IndirectRef{Number: 9})
+		desc := &object.Dictionary{}
+		desc.Set("Subtype", object.Name("CIDFontType2"))
+		desc.Set("FontDescriptor", fd)
+		desc.Set("CIDToGIDMap", object.Name("Identity"))
+		// The file declares width 500 for every CID — correctly — but as one range
+		// wider than the guard will expand.
+		desc.Set("W", object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)})
+		font := &object.Dictionary{}
+		font.Set("Subtype", object.Name("Type0"))
+		font.Set("Encoding", object.Name("Identity-H"))
+		font.Set("DescendantFonts", object.Array{desc})
+		doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
+			1: {Number: 1, Value: font},
+			9: {Number: 9, Value: &object.Stream{Dict: object.Dictionary{}, Data: prog}},
+		}})
+
+		u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0x00, 0x01}}, Modes: map[int]bool{0: true}}
+		msgs := errMessages(checkCIDFontConsistency(doc, PDFA1b, "6.3", font, u))
+		var bad []string
+		for _, m := range msgs {
+			if strings.Contains(m, "width information") {
+				bad = append(bad, m)
+			}
+		}
+		if len(bad) > 0 {
+			t.Errorf("width rule fired on a font whose /W was dropped by the range budget: %v", bad)
+		}
+		if trips := doc.Run.Trips.Snapshot(); len(trips) == 0 || trips[0].Guard() != core.GuardCIDWidthRange {
+			t.Errorf("/W range budget trip was not reported: %v", trips)
+		}
+	})
 }
 
 // --- the aggregate content budget vs. the document's own identification ---

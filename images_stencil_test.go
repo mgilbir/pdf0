@@ -2,9 +2,11 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"image"
 	"image/color"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/images"
@@ -131,18 +133,20 @@ func TestStencilTakesDarknessWhereThereIsNoAlpha(t *testing.T) {
 // is one eighth the size of a colour image, which is not a reason to let a
 // hostile caller allocate an unbounded one.
 func TestStencilRefusesWhatItCannotWrite(t *testing.T) {
-	doc := NewDocument()
-	if _, err := images.EmbedStencil(doc, nil); err == nil {
-		t.Error("a nil image was accepted")
-	}
-	if _, err := images.EmbedStencil(doc, image.NewAlpha(image.Rect(0, 0, 0, 5))); err == nil {
-		t.Error("an image with no area was accepted")
-	}
-	huge := image.NewAlpha(image.Rect(0, 0, 1, 1))
-	huge.Rect = image.Rect(0, 0, 1<<16, 1<<16) // claims 4 gigapixels without allocating them
-	if _, err := images.EmbedStencil(doc, huge); err == nil {
-		t.Error("an image past the pixel limit was accepted")
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		doc := NewDocument()
+		if _, err := images.EmbedStencil(doc, nil); err == nil {
+			t.Error("a nil image was accepted")
+		}
+		if _, err := images.EmbedStencil(doc, image.NewAlpha(image.Rect(0, 0, 0, 5))); err == nil {
+			t.Error("an image with no area was accepted")
+		}
+		huge := image.NewAlpha(image.Rect(0, 0, 1, 1))
+		huge.Rect = image.Rect(0, 0, 1<<16, 1<<16) // claims 4 gigapixels without allocating them
+		if _, err := images.EmbedStencil(doc, huge); err == nil {
+			t.Error("an image past the pixel limit was accepted")
+		}
+	})
 }
 
 // TestStencilPaintsAndValidates is the end-to-end claim: a page that paints

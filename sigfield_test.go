@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/hex"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
+	"time"
 )
 
 // TestSignedDocumentReportsFieldName pins that verification reports the name of
@@ -297,30 +299,32 @@ func TestSignatureFieldNameIndirectValue(t *testing.T) {
 // hierarchy loops cannot hang the naming walk (the validator reads untrusted
 // files).
 func TestSignatureFieldCyclicHierarchy(t *testing.T) {
-	doc, raw := sigFieldTestDoc(10)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		doc, raw := sigFieldTestDoc(10)
 
-	a := &object.Dictionary{}
-	a.Set("T", object.String{Value: []byte("A")})
-	a.Set("Kids", object.Array{object.IndirectRef{Number: 6}})
-	a.Set("Parent", object.IndirectRef{Number: 6})
-	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
+		a := &object.Dictionary{}
+		a.Set("T", object.String{Value: []byte("A")})
+		a.Set("Kids", object.Array{object.IndirectRef{Number: 6}})
+		a.Set("Parent", object.IndirectRef{Number: 6})
+		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
 
-	b := &object.Dictionary{}
-	b.Set("T", object.String{Value: []byte("B")})
-	b.Set("Kids", object.Array{object.IndirectRef{Number: 5}})
-	b.Set("Parent", object.IndirectRef{Number: 5})
-	b.Set("V", object.IndirectRef{Number: 10})
-	doc.Objects[6] = &object.IndirectObject{Number: 6, Value: b}
+		b := &object.Dictionary{}
+		b.Set("T", object.String{Value: []byte("B")})
+		b.Set("Kids", object.Array{object.IndirectRef{Number: 5}})
+		b.Set("Parent", object.IndirectRef{Number: 5})
+		b.Set("V", object.IndirectRef{Number: 10})
+		doc.Objects[6] = &object.IndirectObject{Number: 6, Value: b}
 
-	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 5}})
+		setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 5}})
 
-	res := doc.VerifySignatures(raw)
-	if len(res) != 1 {
-		t.Fatalf("got %d signatures, want 1", len(res))
-	}
-	if want := "A.B"; res[0].Field != want {
-		t.Errorf("Field = %q, want %q", res[0].Field, want)
-	}
+		res := doc.VerifySignatures(raw)
+		if len(res) != 1 {
+			t.Fatalf("got %d signatures, want 1", len(res))
+		}
+		if want := "A.B"; res[0].Field != want {
+			t.Errorf("Field = %q, want %q", res[0].Field, want)
+		}
+	})
 }
 
 // TestSignatureFieldNameUTF16 checks that a /T stored as a UTF-16BE PDF text

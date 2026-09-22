@@ -3,8 +3,10 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
+	"time"
 )
 
 // buildIndirectLengthStreamsPDF assembles a PDF whose stream objects each
@@ -75,38 +77,40 @@ func buildIndirectLengthStreamsPDF(t *testing.T, nStreams, dataLen int) []byte {
 // (each stream's Data is exactly its declared length) and a DoS guard (total
 // stream data stays proportional to the file, not quadratic).
 func TestParseIndirectLengthNoOverread(t *testing.T) {
-	const nStreams = 8
-	const dataLen = 64
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const nStreams = 8
+		const dataLen = 64
 
-	pdf := buildIndirectLengthStreamsPDF(t, nStreams, dataLen)
-	doc, err := Read(bytes.NewReader(pdf), int64(len(pdf)))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
+		pdf := buildIndirectLengthStreamsPDF(t, nStreams, dataLen)
+		doc, err := Read(bytes.NewReader(pdf), int64(len(pdf)))
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
 
-	total := 0
-	found := 0
-	for _, io := range doc.Objects {
-		st, ok := io.Value.(*object.Stream)
-		if !ok {
-			continue
+		total := 0
+		found := 0
+		for _, io := range doc.Objects {
+			st, ok := io.Value.(*object.Stream)
+			if !ok {
+				continue
+			}
+			found++
+			total += len(st.Data)
+			if len(st.Data) != dataLen {
+				t.Errorf("object %d: stream data len = %d, want %d (over-read)", io.Number, len(st.Data), dataLen)
+			}
+			if n := len(st.Data); n > 0 && st.Data[n-1] != 0x01 {
+				t.Errorf("object %d: stream data last byte = %#x, want 0x01", io.Number, st.Data[n-1])
+			}
 		}
-		found++
-		total += len(st.Data)
-		if len(st.Data) != dataLen {
-			t.Errorf("object %d: stream data len = %d, want %d (over-read)", io.Number, len(st.Data), dataLen)
+		if found != nStreams {
+			t.Fatalf("found %d streams, want %d", found, nStreams)
 		}
-		if n := len(st.Data); n > 0 && st.Data[n-1] != 0x01 {
-			t.Errorf("object %d: stream data last byte = %#x, want 0x01", io.Number, st.Data[n-1])
+		// Total must be exactly nStreams*dataLen — any over-read inflates it.
+		if want := nStreams * dataLen; total != want {
+			t.Fatalf("total stream data = %d bytes, want %d (quadratic over-read)", total, want)
 		}
-	}
-	if found != nStreams {
-		t.Fatalf("found %d streams, want %d", found, nStreams)
-	}
-	// Total must be exactly nStreams*dataLen — any over-read inflates it.
-	if want := nStreams * dataLen; total != want {
-		t.Fatalf("total stream data = %d bytes, want %d (quadratic over-read)", total, want)
-	}
+	})
 }
 
 // TestIntegerObjectValue checks the lightweight integer-object reader that backs

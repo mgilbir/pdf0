@@ -3,6 +3,7 @@ package pdfa
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
@@ -89,32 +90,34 @@ func TestXMPStreamingMatchesTree(t *testing.T) {
 // property-parse cap lowered, the property extraction is skipped while the
 // streaming well-formedness check still passes.
 func TestXMPLargePacketBounded(t *testing.T) {
-	const capBytes = 4 << 10 // 4 KiB, for the test
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const capBytes = 4 << 10 // 4 KiB, for the test
 
-	var b strings.Builder
-	for i := 0; b.Len() < 64<<10; i++ { // 64 KiB of valid properties, well over the cap
-		fmt.Fprintf(&b, `<dc:item%d>value %d</dc:item%d>`, i, i, i)
-	}
-	xmp := validXMP(b.String())
-	doc := docWithXMP([]byte(xmp))
-	// Lower the cap on this view only, so the whole check pipeline sees it
-	// (not just the direct call below). The root package's public option
-	// resolves to exactly this field.
-	doc.Limits.XMPPacketBytes = capBytes
+		var b strings.Builder
+		for i := 0; b.Len() < 64<<10; i++ { // 64 KiB of valid properties, well over the cap
+			fmt.Fprintf(&b, `<dc:item%d>value %d</dc:item%d>`, i, i, i)
+		}
+		xmp := validXMP(b.String())
+		doc := docWithXMP([]byte(xmp))
+		// Lower the cap on this view only, so the whole check pipeline sees it
+		// (not just the direct call below). The root package's public option
+		// resolves to exactly this field.
+		doc.Limits.XMPPacketBytes = capBytes
 
-	// Property extraction is skipped (capped), reported as an error the caller
-	// turns into "no properties to check" — never a violation.
-	if _, err := parseXMPProperties([]byte(xmp), capBytes); err == nil {
-		t.Error("expected parseXMPProperties to refuse the oversized packet")
-	}
-	// Well-formedness still validated by streaming, with no false positive.
-	for _, e := range checkXMPWellFormed(doc, PDFA1b) {
-		t.Errorf("unexpected well-formedness violation on a valid large packet: %s", e.Message)
-	}
-	// The property check must not flag anything on the capped packet.
-	if errs := checkXMPProperties(doc, PDFA1b); len(errs) != 0 {
-		t.Errorf("unexpected property violations on a capped packet: %v", errs)
-	}
+		// Property extraction is skipped (capped), reported as an error the caller
+		// turns into "no properties to check" — never a violation.
+		if _, err := parseXMPProperties([]byte(xmp), capBytes); err == nil {
+			t.Error("expected parseXMPProperties to refuse the oversized packet")
+		}
+		// Well-formedness still validated by streaming, with no false positive.
+		for _, e := range checkXMPWellFormed(doc, PDFA1b) {
+			t.Errorf("unexpected well-formedness violation on a valid large packet: %s", e.Message)
+		}
+		// The property check must not flag anything on the capped packet.
+		if errs := checkXMPProperties(doc, PDFA1b); len(errs) != 0 {
+			t.Errorf("unexpected property violations on a capped packet: %v", errs)
+		}
+	})
 }
 
 // TestXMPManyElementsFast guards the quadratic-GC blow-up: validating a document
@@ -123,16 +126,18 @@ func TestXMPLargePacketBounded(t *testing.T) {
 // tens of seconds; here even a large element count completes well under a second
 // because the tree is never built.
 func TestXMPManyElementsFast(t *testing.T) {
-	var b strings.Builder
-	for i := 0; i < 200000; i++ {
-		fmt.Fprintf(&b, `<dc:i%d>v</dc:i%d>`, i, i)
-	}
-	xmp := validXMP(b.String())
-	doc := docWithXMP([]byte(xmp))
-	start := time.Now()
-	_ = checkXMPWellFormed(doc, PDFA1b)
-	_ = checkXMPProperties(doc, PDFA1b)
-	if d := time.Since(start); d > 5*time.Second {
-		t.Errorf("XMP checks on a many-element packet took %v; expected sub-second", d)
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < 200000; i++ {
+			fmt.Fprintf(&b, `<dc:i%d>v</dc:i%d>`, i, i)
+		}
+		xmp := validXMP(b.String())
+		doc := docWithXMP([]byte(xmp))
+		start := time.Now()
+		_ = checkXMPWellFormed(doc, PDFA1b)
+		_ = checkXMPProperties(doc, PDFA1b)
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("XMP checks on a many-element packet took %v; expected sub-second", d)
+		}
+	})
 }

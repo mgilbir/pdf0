@@ -2,6 +2,7 @@ package pdfua
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"strings"
 	"testing"
 	"time"
@@ -74,45 +75,47 @@ func TestGridDefects(t *testing.T) {
 // proportional to the row count, not the (billions of) grid cells — while still
 // detecting (or not detecting) the hole correctly.
 func TestGridDefectsSparseHuge(t *testing.T) {
-	const nRows = 60000
-	const width = 30000
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const nRows = 60000
+		const width = 30000
 
-	// One wide row of `width` single cells; every other row has a single cell,
-	// so those rows leave the rest of the grid empty → a hole.
-	holed := make([]tableRow, nRows)
-	wideRow := make(tableRow, width)
-	for c := range wideRow {
-		wideRow[c] = cell(1, 1)
-	}
-	holed[0] = wideRow
-	for r := 1; r < nRows; r++ {
-		holed[r] = tableRow{cell(1, 1)}
-	}
-
-	start := time.Now()
-	got := mustGrid(t, holed)
-	if el := time.Since(start); el > 3*time.Second {
-		t.Fatalf("gridDefects took %v on a %dx%d sparse table; expected O(rows)", el, nRows, width)
-	}
-	hasHole := false
-	for _, e := range got {
-		if strings.Contains(e.Message, "empty") {
-			hasHole = true
+		// One wide row of `width` single cells; every other row has a single cell,
+		// so those rows leave the rest of the grid empty → a hole.
+		holed := make([]tableRow, nRows)
+		wideRow := make(tableRow, width)
+		for c := range wideRow {
+			wideRow[c] = cell(1, 1)
 		}
-	}
-	if !hasHole {
-		t.Error("sparse huge table with short rows should be flagged as having a hole")
-	}
+		holed[0] = wideRow
+		for r := 1; r < nRows; r++ {
+			holed[r] = tableRow{cell(1, 1)}
+		}
 
-	// A tall single-column table (every row exactly one cell) fills its whole
-	// width, so there is no hole — the O(rows) test must agree.
-	full := make([]tableRow, nRows)
-	for r := range full {
-		full[r] = tableRow{cell(1, 1)}
-	}
-	if v := mustGrid(t, full); len(v) != 0 {
-		t.Errorf("tall single-column table flagged: %v", v)
-	}
+		start := time.Now()
+		got := mustGrid(t, holed)
+		if el := time.Since(start); el > 3*time.Second {
+			t.Fatalf("gridDefects took %v on a %dx%d sparse table; expected O(rows)", el, nRows, width)
+		}
+		hasHole := false
+		for _, e := range got {
+			if strings.Contains(e.Message, "empty") {
+				hasHole = true
+			}
+		}
+		if !hasHole {
+			t.Error("sparse huge table with short rows should be flagged as having a hole")
+		}
+
+		// A tall single-column table (every row exactly one cell) fills its whole
+		// width, so there is no hole — the O(rows) test must agree.
+		full := make([]tableRow, nRows)
+		for r := range full {
+			full[r] = tableRow{cell(1, 1)}
+		}
+		if v := mustGrid(t, full); len(v) != 0 {
+			t.Errorf("tall single-column table flagged: %v", v)
+		}
+	})
 }
 
 // TestGridDefectsSpanBomb guards against the fill-loop blow-up: a cell whose
@@ -120,67 +123,71 @@ func TestGridDefectsSparseHuge(t *testing.T) {
 // grid slots. Such a table exceeds the work budget and is analyzed in bounded
 // time (reported with no grid defects rather than hanging).
 func TestGridDefectsSpanBomb(t *testing.T) {
-	cases := []struct {
-		name string
-		rows []tableRow
-	}{
-		// A single cell claiming a two-billion-column span.
-		{"colspan", []tableRow{{cell(1, 1<<31)}, {cell(1, 1), cell(1, 1)}}},
-		// A single cell claiming a two-billion-row span.
-		{"rowspan", []tableRow{{cell(1<<31, 1)}, {cell(1, 1)}}},
-		// Near-int-max spans must not overflow the budget arithmetic.
-		{"maxint", []tableRow{{cell(1, 1<<62)}, {cell(1, 1<<62)}}},
-		// Many moderately-large cells that together blow the budget.
-		{"cumulative", func() []tableRow {
-			rows := make([]tableRow, 100)
-			for i := range rows {
-				rows[i] = tableRow{cell(1, 1<<20)}
-			}
-			return rows
-		}()},
-	}
-	// The budget bounds the work to a few million map writes (~seconds at the
-	// ceiling), so any of these returns quickly; an unbounded fill would run for
-	// minutes. The threshold is generous so the test is not flaky under load —
-	// the point is bounded-vs-unbounded, not a precise time.
-	for _, tc := range cases {
-		done := make(chan int, 1)
-		go func() { v, _ := gridDefects(tc.rows, core.DefaultMaxTableGridFills); done <- len(v) }()
-		select {
-		case <-done:
-		case <-time.After(25 * time.Second):
-			t.Fatalf("%s: gridDefects did not return within 25s; span bomb not bounded", tc.name)
+	hostile.Run(t, hostile.Limits{MaxRSS: 1 << 30, Timeout: time.Minute}, func(t *testing.T) {
+		cases := []struct {
+			name string
+			rows []tableRow
+		}{
+			// A single cell claiming a two-billion-column span.
+			{"colspan", []tableRow{{cell(1, 1<<31)}, {cell(1, 1), cell(1, 1)}}},
+			// A single cell claiming a two-billion-row span.
+			{"rowspan", []tableRow{{cell(1<<31, 1)}, {cell(1, 1)}}},
+			// Near-int-max spans must not overflow the budget arithmetic.
+			{"maxint", []tableRow{{cell(1, 1<<62)}, {cell(1, 1<<62)}}},
+			// Many moderately-large cells that together blow the budget.
+			{"cumulative", func() []tableRow {
+				rows := make([]tableRow, 100)
+				for i := range rows {
+					rows[i] = tableRow{cell(1, 1<<20)}
+				}
+				return rows
+			}()},
 		}
-	}
+		// The budget bounds the work to a few million map writes (~seconds at the
+		// ceiling), so any of these returns quickly; an unbounded fill would run for
+		// minutes. The threshold is generous so the test is not flaky under load —
+		// the point is bounded-vs-unbounded, not a precise time.
+		for _, tc := range cases {
+			done := make(chan int, 1)
+			go func() { v, _ := gridDefects(tc.rows, core.DefaultMaxTableGridFills); done <- len(v) }()
+			select {
+			case <-done:
+			case <-time.After(25 * time.Second):
+				t.Fatalf("%s: gridDefects did not return within 25s; span bomb not bounded", tc.name)
+			}
+		}
 
-	// A table just under the budget is still laid out normally (not treated as
-	// oversize): two full rows of a modest width report no defect.
-	small := []tableRow{{cell(1, 3)}, {cell(1, 1), cell(1, 1), cell(1, 1)}}
-	if v := mustGrid(t, small); len(v) != 0 {
-		t.Errorf("well-formed small table flagged: %v", v)
-	}
+		// A table just under the budget is still laid out normally (not treated as
+		// oversize): two full rows of a modest width report no defect.
+		small := []tableRow{{cell(1, 3)}, {cell(1, 1), cell(1, 1), cell(1, 1)}}
+		if v := mustGrid(t, small); len(v) != 0 {
+			t.Errorf("well-formed small table flagged: %v", v)
+		}
+	})
 }
 
 // TestGridBudgetSaysItDidNotFinish pins that an abandoned layout is reported as
 // not determined rather than as a clean table. The suppression itself was
 // already correct; what was missing was any way for a caller to know.
 func TestGridBudgetSaysItDidNotFinish(t *testing.T) {
-	bomb := []tableRow{{cell(1, 1<<25)}}
-	v, complete := gridDefects(bomb, core.DefaultMaxTableGridFills)
-	if complete {
-		t.Fatal("the grid work budget did not trip; the fixture no longer exercises it")
-	}
-	if len(v) != 0 {
-		t.Errorf("an abandoned layout must not report defects: %v", v)
-	}
-	ok := []tableRow{{cell(1, 1), cell(1, 1)}, {cell(1, 1), cell(1, 1)}}
-	if _, complete := gridDefects(ok, core.DefaultMaxTableGridFills); !complete {
-		t.Error("an ordinary table must lay out within the budget")
-	}
-	// A lowered budget trips where the default would not: the same table is
-	// "not determined" rather than clean, which is what makes the trip report
-	// worth having for a caller who tightened the knob.
-	if _, complete := gridDefects(ok, 2); complete {
-		t.Error("a budget of 2 slots must not lay out a four-cell table")
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		bomb := []tableRow{{cell(1, 1<<25)}}
+		v, complete := gridDefects(bomb, core.DefaultMaxTableGridFills)
+		if complete {
+			t.Fatal("the grid work budget did not trip; the fixture no longer exercises it")
+		}
+		if len(v) != 0 {
+			t.Errorf("an abandoned layout must not report defects: %v", v)
+		}
+		ok := []tableRow{{cell(1, 1), cell(1, 1)}, {cell(1, 1), cell(1, 1)}}
+		if _, complete := gridDefects(ok, core.DefaultMaxTableGridFills); !complete {
+			t.Error("an ordinary table must lay out within the budget")
+		}
+		// A lowered budget trips where the default would not: the same table is
+		// "not determined" rather than clean, which is what makes the trip report
+		// worth having for a caller who tightened the knob.
+		if _, complete := gridDefects(ok, 2); complete {
+			t.Error("a budget of 2 slots must not lay out a four-cell table")
+		}
+	})
 }

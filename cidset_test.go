@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"testing"
 	"time"
 )
@@ -62,23 +63,25 @@ func TestCIDSetMatchesBitmap(t *testing.T) {
 // cheap. Materialising a map of every set bit turned a 64 MB CIDSet into ~70s of
 // validation; direct membership testing is O(1) per lookup regardless of size.
 func TestCIDSetLargeNoBlowup(t *testing.T) {
-	const n = 16 << 20 // 16 MiB = 128M bits, all present
-	data := make([]byte, n)
-	for i := range data {
-		data[i] = 0xFF
-	}
-	cs := core.CIDSet(data)
-	start := time.Now()
-	// Membership tests across the whole range plus an emptiness scan.
-	for cid := 0; cid < n*8; cid += 997 {
-		if !cs.Has(cid) {
-			t.Fatalf("CID %d should be present", cid)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const n = 16 << 20 // 16 MiB = 128M bits, all present
+		data := make([]byte, n)
+		for i := range data {
+			data[i] = 0xFF
 		}
-	}
-	if cs.Empty() {
-		t.Fatal("a full set must not be empty")
-	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("large-CIDSet membership took %v; expected well under a second", d)
-	}
+		cs := core.CIDSet(data)
+		start := time.Now()
+		// Membership tests across the whole range plus an emptiness scan.
+		for cid := 0; cid < n*8; cid += 997 {
+			if !cs.Has(cid) {
+				t.Fatalf("CID %d should be present", cid)
+			}
+		}
+		if cs.Empty() {
+			t.Fatal("a full set must not be empty")
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("large-CIDSet membership took %v; expected well under a second", d)
+		}
+	})
 }

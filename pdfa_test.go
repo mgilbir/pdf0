@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 type corpusFile struct {
@@ -1596,22 +1598,24 @@ func addTestPage(doc *Document) *object.Dictionary {
 
 // A7: Resolve must follow ref->ref chains and bail out on cycles.
 func TestResolveChainsAndCycles(t *testing.T) {
-	doc := &Document{Objects: map[int]*object.IndirectObject{
-		1: {Number: 1, Value: object.IndirectRef{Number: 2}},
-		2: {Number: 2, Value: object.IndirectRef{Number: 3}},
-		3: {Number: 3, Value: object.Integer(42)},
-		7: {Number: 7, Value: object.IndirectRef{Number: 8}},
-		8: {Number: 8, Value: object.IndirectRef{Number: 7}},
-	}}
-	if v, ok := doc.Resolve(object.IndirectRef{Number: 1}).(object.Integer); !ok || v != 42 {
-		t.Errorf("chained resolve: expected 42, got %#v", doc.Resolve(object.IndirectRef{Number: 1}))
-	}
-	if v := doc.Resolve(object.IndirectRef{Number: 7}); v != nil {
-		t.Errorf("cyclic resolve: expected nil, got %#v", v)
-	}
-	if v, ok := doc.Resolve(object.Integer(5)).(object.Integer); !ok || v != 5 {
-		t.Error("non-ref must resolve to itself")
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		doc := &Document{Objects: map[int]*object.IndirectObject{
+			1: {Number: 1, Value: object.IndirectRef{Number: 2}},
+			2: {Number: 2, Value: object.IndirectRef{Number: 3}},
+			3: {Number: 3, Value: object.Integer(42)},
+			7: {Number: 7, Value: object.IndirectRef{Number: 8}},
+			8: {Number: 8, Value: object.IndirectRef{Number: 7}},
+		}}
+		if v, ok := doc.Resolve(object.IndirectRef{Number: 1}).(object.Integer); !ok || v != 42 {
+			t.Errorf("chained resolve: expected 42, got %#v", doc.Resolve(object.IndirectRef{Number: 1}))
+		}
+		if v := doc.Resolve(object.IndirectRef{Number: 7}); v != nil {
+			t.Errorf("cyclic resolve: expected nil, got %#v", v)
+		}
+		if v, ok := doc.Resolve(object.Integer(5)).(object.Integer); !ok || v != 5 {
+			t.Error("non-ref must resolve to itself")
+		}
+	})
 }
 
 // A9: annotations written as direct dictionaries in a page's /Annots must be
@@ -1726,27 +1730,29 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 
 // A19: forbidden actions hiding behind /Next chains must be found.
 func TestValidatePDFA_ActionNextChain(t *testing.T) {
-	doc := mustPDFADoc(t, pdfa.PDFA2b)
-	launch := &object.Dictionary{}
-	launch.Set("S", object.Name("Launch"))
-	action := &object.Dictionary{}
-	action.Set("S", object.Name("GoTo"))
-	action.Set("Next", object.Array{launch})
-	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
-	catalog.Set("OpenAction", action)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
+		launch := &object.Dictionary{}
+		launch.Set("S", object.Name("Launch"))
+		action := &object.Dictionary{}
+		action.Set("S", object.Name("GoTo"))
+		action.Set("Next", object.Array{launch})
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+		catalog.Set("OpenAction", action)
 
-	if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.5.1") {
-		t.Error("expected 6.6.1 error for Launch action in /Next chain")
-	}
+		if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.5.1") {
+			t.Error("expected 6.6.1 error for Launch action in /Next chain")
+		}
 
-	// A /Next cycle must terminate.
-	a := &object.Dictionary{}
-	a.Set("S", object.Name("GoTo"))
-	a.Set("Next", a)
-	doc2 := mustPDFADoc(t, pdfa.PDFA2b)
-	catalog2 := doc2.ResolveDict(doc2.Trailer.Get("Root"))
-	catalog2.Set("OpenAction", a)
-	ValidatePDFA(doc2, pdfa.PDFA2b) // must not hang
+		// A /Next cycle must terminate.
+		a := &object.Dictionary{}
+		a.Set("S", object.Name("GoTo"))
+		a.Set("Next", a)
+		doc2 := mustPDFADoc(t, pdfa.PDFA2b)
+		catalog2 := doc2.ResolveDict(doc2.Trailer.Get("Root"))
+		catalog2.Set("OpenAction", a)
+		ValidatePDFA(doc2, pdfa.PDFA2b) // must not hang
+	})
 }
 
 // A19: page dictionaries must not carry /AA at 1b/2b/3b.

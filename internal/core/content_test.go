@@ -3,7 +3,9 @@ package core
 import (
 	"bytes"
 	"compress/zlib"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/pdf0/object"
 )
@@ -29,27 +31,29 @@ func makeFlateContentStream(decodedLen int) *object.Stream {
 // cannot force unbounded decode+tokenize work. Under the budget behaviour is
 // unchanged.
 func TestDecodeContentStreamBudget(t *testing.T) {
-	v := View{Limits: DefaultLimits(), Run: NewRun(&Recorder{})}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		v := View{Limits: DefaultLimits(), Run: NewRun(&Recorder{})}
 
-	// A ~1 MB content stream decodes fine while under budget.
-	s1 := makeFlateContentStream(1 << 20)
-	if got := v.Content(s1); len(got) != 1<<20 {
-		t.Fatalf("under budget: decoded %d bytes, want %d", len(got), 1<<20)
-	}
-	if v.Run.contentBytes != 1<<20 {
-		t.Fatalf("contentBytes = %d, want %d", v.Run.contentBytes, 1<<20)
-	}
+		// A ~1 MB content stream decodes fine while under budget.
+		s1 := makeFlateContentStream(1 << 20)
+		if got := v.Content(s1); len(got) != 1<<20 {
+			t.Fatalf("under budget: decoded %d bytes, want %d", len(got), 1<<20)
+		}
+		if v.Run.contentBytes != 1<<20 {
+			t.Fatalf("contentBytes = %d, want %d", v.Run.contentBytes, 1<<20)
+		}
 
-	// Simulate the run having reached the budget.
-	v.Run.contentBytes = v.Limits.DecodedContentBytes
-	s2 := makeFlateContentStream(1 << 20)
-	if got := v.Content(s2); got != nil {
-		t.Fatalf("over budget: decoded %d bytes, want nil (budget must skip decoding)", len(got))
-	}
-	// The decision is negatively cached and stable on re-request.
-	if got := v.Content(s2); got != nil {
-		t.Fatalf("over budget (cached): got %d bytes, want nil", len(got))
-	}
+		// Simulate the run having reached the budget.
+		v.Run.contentBytes = v.Limits.DecodedContentBytes
+		s2 := makeFlateContentStream(1 << 20)
+		if got := v.Content(s2); got != nil {
+			t.Fatalf("over budget: decoded %d bytes, want nil (budget must skip decoding)", len(got))
+		}
+		// The decision is negatively cached and stable on re-request.
+		if got := v.Content(s2); got != nil {
+			t.Fatalf("over budget (cached): got %d bytes, want nil", len(got))
+		}
+	})
 }
 
 // TestContentBombBoundedValidation is an end-to-end guard: a small PDF whose
