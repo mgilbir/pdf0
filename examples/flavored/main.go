@@ -58,6 +58,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Loaded once: parsing is the expensive part of a face, and its result
+	// never changes.
 	face, err := loadFace(*fontPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "loading the face: %v\n", err)
@@ -88,7 +90,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%s: describing: %v\n", f.name, err)
 			os.Exit(1)
 		}
-		if err := drawPage(doc, face); err != nil {
+		// But each document draws with a clone of its own. A face records the
+		// glyphs it is asked for and what each was drawn for, and that record
+		// is what its document's subset and ToUnicode CMap are made from: one
+		// face shared by three documents gives the third a font built from
+		// all three. Clone shares the parse and not the record.
+		if err := drawPage(doc, face.Clone()); err != nil {
 			fmt.Fprintf(os.Stderr, "%s: drawing: %v\n", f.name, err)
 			os.Exit(1)
 		}
