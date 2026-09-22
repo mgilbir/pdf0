@@ -204,12 +204,15 @@ func drawnDocument(t *testing.T, face *fonts.Face, path drawPath, text string, l
 func TestEveryDrawingPathRoundTripsInEveryFaceKind(t *testing.T) {
 	for _, fc := range drawPathFaces() {
 		t.Run(fc.name, func(t *testing.T) {
+			base := fc.load(t)
 			for _, path := range drawPaths {
 				t.Run(path.name, func(t *testing.T) {
 					for _, text := range fc.texts {
-						// A fresh face per document: a face records what it
-						// was asked to draw, and that decides the subset.
-						back, _ := drawnDocument(t, fc.load(t), path, text, pdfa.PDFA4, fc.embedded)
+						// A clone per document: a face records what it was
+						// asked to draw, and that decides the subset and the
+						// ToUnicode CMap. The clone shares the parse, which for
+						// the CJK face is most of the cost.
+						back, _ := drawnDocument(t, base.Clone(), path, text, pdfa.PDFA4, fc.embedded)
 						if got := strings.TrimSpace(back.ExtractText()); got != text {
 							t.Errorf("%q extracted as %q", text, got)
 						}
@@ -230,11 +233,12 @@ func TestEveryDrawingPathValidatesAtEveryLevel(t *testing.T) {
 			continue
 		}
 		t.Run(fc.name, func(t *testing.T) {
+			base := fc.load(t)
 			for _, path := range drawPaths {
 				t.Run(path.name, func(t *testing.T) {
 					for _, level := range levels {
 						text := strings.Join(fc.texts, " ")
-						back, raw := drawnDocument(t, fc.load(t), path, text, level, true)
+						back, raw := drawnDocument(t, base.Clone(), path, text, level, true)
 						for _, v := range ValidatePDFABytes(back, level, raw) {
 							t.Errorf("%s, %q: %s", level, text, v.Error())
 						}
