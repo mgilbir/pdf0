@@ -397,6 +397,13 @@ func ApplyFilter(cancel Canceler, name object.Name, data []byte, parms *object.D
 		return ApplyPredictor(decoded, PredictorFromDict(parms))
 	case "ASCIIHexDecode":
 		return asciiHexDecode(data)
+	case "Crypt":
+		// A stream's own crypt filter (ISO 32000-2 7.4.10) is applied by the
+		// security handler when Read decrypts the document, so the data here
+		// is already past it. On a document that was not decrypted it is
+		// ciphertext, but so is every other stream: that state is Locked, and
+		// callers check it.
+		return data, nil
 	default:
 		return nil, fmt.Errorf("unsupported filter: %s", name)
 	}

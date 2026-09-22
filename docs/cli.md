@@ -184,9 +184,10 @@ $ pdf0 encrypt -user secret enc.pdf enc2.pdf
 error: enc.pdf is already encrypted; decrypt it first    # exit 3
 ```
 
-Although the synopsis shows `-user` as mandatory, the guard is `user == "" && owner == ""`,
-so **`-owner PW` alone is accepted**, producing a file with an empty user password.
-Supplying neither is a usage error (exit 2): `error: encrypt requires -user (and optionally -owner)`.
+`-user` is mandatory: an empty user password opens the file for anyone, and `SetEncryption`
+grants every permission, so the result would be encrypted without being protected — the
+library refuses it too. Omitting it is a usage error (exit 2):
+`error: encrypt requires -user (and optionally -owner)`.
 
 ## `extract`
 
@@ -308,8 +309,7 @@ presents it as a development aid rather than the library's surface.
   `error: …` lines.
 - **`repair` on a locked file silently no-ops** — the one place where an operation that
   cannot do its job still exits 1 rather than 3.
-- **`encrypt -owner PW` without `-user`**, and **`merge` with a single input**, are both
-  accepted despite the synopsis showing otherwise.
+- **`merge` with a single input** is accepted despite the synopsis showing otherwise.
 - **`info` never fails on encryption** and always reports `encrypted: true` for a file with
   an `/Encrypt` dictionary, password or not.
 - A non-PDF input fails at parse with exit 3 (`error: PDF header not found`), so exit 3

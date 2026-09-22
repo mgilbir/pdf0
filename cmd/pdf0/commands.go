@@ -98,7 +98,9 @@ func cmdEncrypt(args []string) error {
 	if fs.NArg() != 2 {
 		return usagef("usage: pdf0 encrypt -user PW [-owner PW] <in> <out>")
 	}
-	if *user == "" && *owner == "" {
+	// An empty user password opens for anyone; SetEncryption refuses it,
+	// since the file would be encrypted without being protected.
+	if *user == "" {
 		return usagef("encrypt requires -user (and optionally -owner)")
 	}
 	ownerPw := *owner

@@ -79,7 +79,7 @@ func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]i
 	// those into a new object stream would be wrong — a reader does not apply
 	// per-object decryption to objects inside an /ObjStm — so leave every object
 	// individually addressable and let Write emit an all-uncompressed xref stream.
-	if (d.Encrypted || d.Trailer.Get("Encrypt") != nil) && d.security == nil {
+	if d.Locked() {
 		return d.Objects, nil
 	}
 

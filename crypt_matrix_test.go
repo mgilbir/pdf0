@@ -156,7 +156,7 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 	for _, v := range variants {
 		t.Run(v.name, func(t *testing.T) {
 			doc := encMatrixDoc(v.xrefStream, v.metadata)
-			if err := doc.SetEncryption("", ""); err != nil {
+			if err := doc.SetEncryption("matrix-user", ""); err != nil {
 				t.Fatalf("SetEncryption: %v", err)
 			}
 			if v.mutate != nil {
@@ -170,12 +170,12 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 			}
 			out := buf.Bytes()
 
-			back, err := Read(bytes.NewReader(out), int64(len(out)))
+			back, err := ReadWithPassword(bytes.NewReader(out), int64(len(out)), "matrix-user")
 			if err != nil {
 				t.Fatalf("re-read: %v", err)
 			}
 			if back.security == nil {
-				t.Fatal("re-read did not decrypt with the empty password")
+				t.Fatalf("re-read did not decrypt with the user password: %v", back.LockReason())
 			}
 			if len(back.brokenObjStms) > 0 {
 				t.Fatalf("object stream(s) failed to decode on re-read: %v", back.brokenObjStms)

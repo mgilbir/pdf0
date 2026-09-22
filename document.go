@@ -32,12 +32,12 @@ type Document struct {
 	Objects map[int]*object.IndirectObject // object number → object
 	Trailer object.Dictionary
 	// Encrypted reports whether the file carried an /Encrypt dictionary.
-	// Standard-security-handler files with the empty user password are decrypted
-	// on Read (RC4, AES-128, and AES-256); their strings and streams are then in
-	// the clear but this flag stays set. Schemes decryption does not handle
-	// (non-empty passwords) keep their contents encrypted. Write re-encrypts a
-	// decrypted document (reproducing the original /Encrypt) but refuses one whose
-	// content is still encrypted.
+	// Standard-security-handler files are decrypted on Read (RC4, AES-128, and
+	// AES-256) when the password — empty for Read — is the user or owner
+	// password; their strings and streams are then in the clear but this flag
+	// stays set. Otherwise the content stays encrypted and the document is
+	// Locked (see LockReason). Write re-encrypts a decrypted document
+	// (reproducing the original /Encrypt) and writes a Locked one back verbatim.
 	Encrypted bool
 
 	// valCache memoizes traversals for the duration of one validation run;
@@ -64,10 +64,11 @@ type Document struct {
 	brokenObjStms []int
 
 	// decryptFailures lists the object numbers whose ciphertext did not decrypt
-	// under a known-good file key — corrupt AES data, or data that was never
-	// encrypted (see stdSecurityHandler.decrypt). Their strings and stream
-	// bodies are empty rather than noise, so the content is unrecoverable and
-	// Write refuses, exactly as it does for brokenObjStms.
+	// under a known-good file key — corrupt AES data, data that was never
+	// encrypted, or a stream under a crypt filter the handler cannot apply (see
+	// crypt.Handler.Decrypt). Their strings and stream bodies are empty rather
+	// than noise, so the content is unrecoverable and Write refuses, exactly as
+	// it does for brokenObjStms. DecryptFailures exposes it.
 	decryptFailures []int
 
 	// readLimits records the resource guards that tripped while this file was
@@ -84,6 +85,12 @@ type Document struct {
 	// for a scheme decryption does not support).
 	security *crypt.Handler
 
+	// lockReason records why Read built no security handler for a file that
+	// carries /Encrypt (see LockReason); encryptWarnings the defects that did
+	// not prevent decryption (see EncryptionWarnings).
+	lockReason      error
+	encryptWarnings []error
+
 	// usedXRefStream records that the file's primary cross-reference section was
 	// a cross-reference stream (/Type /XRef) rather than a traditional table, so
 	// Write regenerates the same kind of structure.
@@ -97,8 +104,10 @@ type Document struct {
 //
 // Encrypted files (standard security handler) are decrypted with the empty
 // password; use ReadWithPassword to supply a user or owner password. A file
-// that cannot be decrypted is still parsed structurally, with its strings and
-// streams left encrypted (see Document.Encrypted).
+// that cannot be decrypted — a wrong password, an unsupported scheme, or a
+// malformed /Encrypt dictionary — is still parsed structurally, with its
+// strings and streams left encrypted: see Document.Locked and LockReason. An
+// /Encrypt dictionary never makes Read fail.
 // Resource limits default to values safe for untrusted input; pass With* options
 // to change them. The resolved limits are stored on the returned Document, so
 // every validator and extractor that runs on it inherits the same configuration.
@@ -107,6 +116,11 @@ func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
 }
 
 // ReadWithPassword is Read with a user or owner password for an encrypted file.
+// The password is prepared as ISO 32000-2 prescribes for the file's revision:
+// SASLprep, UTF-8 and the first 127 bytes for AES-256 (revision 6), and
+// PDFDocEncoding and the first 32 bytes for revisions 2–4. Its unprepared UTF-8
+// bytes are tried as well, for files written by producers that skip the
+// preparation; either must still match the file's password hash.
 func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
 	return readDocument(core.Canceler{}, r, size, password, resolveLimits(opts))
 }
@@ -319,17 +333,33 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		}
 	}
 
-	// 4.5. Decrypt strings and streams under the standard security handler. This
-	// runs before object streams are materialized: an /ObjStm container is an
-	// encrypted stream, but the objects inside it are not separately encrypted.
+	// 4.5. Decrypt under the standard security handler: every string, and the
+	// object-stream containers. This runs before object streams are
+	// materialized: an /ObjStm container is an encrypted stream, but the objects
+	// inside it are not separately encrypted. The other streams are decrypted in
+	// step 5.5, once the graph is complete (see crypt.DecryptDocument).
+	//
+	// An /Encrypt dictionary never fails the read. A handler that cannot be
+	// built — a wrong password, an unsupported scheme, a malformed dictionary —
+	// leaves the document Locked with the reason recorded (LockReason).
+	var pending *crypt.Pending
 	if doc.Trailer.Get("Encrypt") != nil {
 		h, err := crypt.Open(doc.graph(), password)
 		if err != nil {
-			return nil, fmt.Errorf("encryption: %w", err)
-		}
-		if h != nil {
-			doc.decryptFailures = h.DecryptDocument(doc.graph())
+			doc.lockReason = err
+		} else if h != nil {
+			containers := map[int]bool{}
+			for _, entry := range xrefTable.Entries {
+				if entry.Compressed && !entry.Free {
+					containers[entry.StreamObjNum] = true
+				}
+			}
+			pending = h.DecryptDocument(doc.graph(), func(num int, s *object.Stream) bool {
+				t, _ := s.Dict.Get("Type").(object.Name)
+				return containers[num] || t == "ObjStm"
+			})
 			doc.security = h
+			doc.encryptWarnings = h.Warnings
 		}
 	}
 
@@ -345,6 +375,11 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		if err := doc.materializeScannedObjStms(cancel); err != nil {
 			return nil, err
 		}
+	}
+
+	// 5.5. Decrypt the remaining streams, now that every object is loaded.
+	if pending != nil {
+		doc.decryptFailures = pending.Finish(doc.graph())
 	}
 
 	// 6. Drop file-structure artifacts so the document holds only content.
@@ -667,7 +702,7 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// encrypted form in the model; it is written back verbatim under the
 	// preserved /Encrypt and /ID — a lossless passthrough that keeps a file we
 	// cannot decrypt round-trippable rather than losing it on save.
-	if (d.Encrypted || d.Trailer.Get("Encrypt") != nil) && d.security == nil {
+	if d.Locked() {
 		// The passthrough is sound only when the content is known to be
 		// encrypted and the whole object model survived Read:
 		//   - The /Encrypt dictionary must resolve. If it does not, the
@@ -731,7 +766,14 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// and /ID remain in the trailer and are written as-is.
 	writeObjects, xrefType2 := d.buildWriteSet()
 	if d.security != nil {
-		writeObjects = d.security.EncryptCopy(writeObjects)
+		// Which crypt filter a stream uses depends on the document (embedded
+		// files follow /EFF, the catalog's metadata may be exempt), so the
+		// context comes from the model, not the packed write set.
+		enc, err := d.security.EncryptCopy(writeObjects, d.security.StreamContext(d.view()))
+		if err != nil {
+			return fmt.Errorf("cannot write encrypted document: %w", err)
+		}
+		writeObjects = enc
 	}
 
 	// A stale indirect /Length (its target integer object not updated after a

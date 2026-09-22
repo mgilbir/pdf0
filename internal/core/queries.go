@@ -666,7 +666,7 @@ func StreamFiltersSupported(stream *object.Stream) bool {
 // IsSupportedFilter reports whether applyFilter can decode the named filter.
 func IsSupportedFilter(name object.Name) bool {
 	switch name {
-	case "FlateDecode", "LZWDecode", "ASCIIHexDecode":
+	case "FlateDecode", "LZWDecode", "ASCIIHexDecode", "Crypt":
 		return true
 	}
 	return false

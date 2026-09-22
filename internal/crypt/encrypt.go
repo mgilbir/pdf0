@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
+
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -21,8 +23,18 @@ import (
 // NewAES256 builds an AES-256 (V5/R6) security handler with a random
 // file key and the matching /Encrypt dictionary for the given passwords. It is
 // the inverse of the R6 read path (deriveKeyR6): the values it writes are what
-// that function validates and decrypts.
-func NewAES256(userPw, ownerPw string) (*Handler, *object.Dictionary, error) {
+// that function validates and decrypts. Each password is prepared as ISO
+// 32000-2 Algorithm 2.A requires (PrepareR6Password), so a password SASLprep
+// prohibits is an error, and only the first 127 bytes of its UTF-8 form count.
+func NewAES256(userPassword, ownerPassword string) (*Handler, *object.Dictionary, error) {
+	up, err := PrepareR6Password(userPassword)
+	if err != nil {
+		return nil, nil, fmt.Errorf("user %w", err)
+	}
+	op, err := PrepareR6Password(ownerPassword)
+	if err != nil {
+		return nil, nil, fmt.Errorf("owner %w", err)
+	}
 	FileKey := make([]byte, 32)
 	salts := make([]byte, 32) // uValSalt|uKeySalt|oValSalt|oKeySalt, 8 bytes each
 	permsTail := make([]byte, 4)
@@ -33,7 +45,6 @@ func NewAES256(userPw, ownerPw string) (*Handler, *object.Dictionary, error) {
 	}
 	uValSalt, uKeySalt := salts[0:8], salts[8:16]
 	oValSalt, oKeySalt := salts[16:24], salts[24:32]
-	up, op := []byte(userPw), []byte(ownerPw)
 	zeroIV := make([]byte, 16)
 
 	// /U = Hash(pw, userValSalt) || userValSalt || userKeySalt; /UE encrypts the
@@ -57,7 +68,8 @@ func NewAES256(userPw, ownerPw string) (*Handler, *object.Dictionary, error) {
 	}
 
 	h := &Handler{V: 5, R: 6, KeyLen: 32, FileKey: FileKey,
-		StmMethod: AESV3, StrMethod: AESV3, EncryptMetadata: true,
+		StmMethod: AESV3, StrMethod: AESV3, EFFMethod: AESV3, EncryptMetadata: true,
+		EncryptObjNum: -1, filters: map[object.Name]method{"StdCF": AESV3},
 	}
 
 	stdCF := &object.Dictionary{}

@@ -41,7 +41,9 @@ func encryptSeed(base []byte) []byte {
 	if err != nil {
 		return base
 	}
-	if err := doc.SetEncryption("", ""); err != nil {
+	// An empty user password, so FuzzRead's password-less Read decrypts the
+	// seed; SetEncryption refuses that, so install it directly.
+	if err := setOpenEncryption(doc); err != nil {
 		return base
 	}
 	var buf bytes.Buffer

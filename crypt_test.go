@@ -131,7 +131,7 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	}
 	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	doc.decryptFailures = h.DecryptDocument(doc.graph())
+	doc.decryptFailures = decryptAll(h, doc)
 
 	if bytes.Equal(st.Data, bad) {
 		t.Error("stream ciphertext was handed on unchanged as plaintext")
@@ -185,11 +185,18 @@ func TestDecryptSuccessRecordsNoFailure(t *testing.T) {
 		Encrypted: true,
 		security:  h,
 	}
-	doc.decryptFailures = h.DecryptDocument(doc.graph())
+	doc.decryptFailures = decryptAll(h, doc)
 	if !bytes.Equal(st.Data, plain) {
 		t.Errorf("stream data = %q, want %q", st.Data, plain)
 	}
 	if len(doc.decryptFailures) != 0 {
 		t.Errorf("clean decrypt recorded failures %v", doc.decryptFailures)
 	}
+}
+
+// decryptAll runs both phases of the read-side decryption over a document built
+// in memory, which has no object streams.
+func decryptAll(h *crypt.Handler, doc *Document) []int {
+	noContainers := func(int, *object.Stream) bool { return false }
+	return h.DecryptDocument(doc.graph(), noContainers).Finish(doc.graph())
 }
