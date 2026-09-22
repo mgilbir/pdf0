@@ -28,8 +28,6 @@ func killGroup(p *os.Process) {
 
 func peakRSS(int) int64 { return 0 }
 
-func exitPeakRSS(*os.ProcessState) int64 { return 0 }
-
 func signalOf(ps *os.ProcessState) string {
 	if ps == nil {
 		return ""

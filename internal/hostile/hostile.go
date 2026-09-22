@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,7 +42,7 @@ const (
 // pollInterval is how often the parent samples the child's memory. At a few
 // GB/s of fresh allocation it bounds the overshoot past MaxRSS to tens of
 // megabytes before the kill lands.
-const pollInterval = 5 * time.Millisecond
+var pollInterval = 5 * time.Millisecond // a var only so a self-test can take polling out of the picture
 
 // Output capture bounds. The parent keeps the head and the tail of the child's
 // combined stdout and stderr and drops the middle, so its own memory does not
@@ -218,6 +219,7 @@ const (
 	sentinelStart = "start"
 	sentinelDone  = "done"
 	sentinelSkip  = "skip"
+	sentinelPeak  = "peak " // followed by the child's own VmHWM in bytes
 )
 
 func runChild(t *testing.T, marker string, lim Limits, fn func(t *testing.T)) Outcome {
@@ -241,6 +243,11 @@ func runChild(t *testing.T, marker string, lim Limits, fn func(t *testing.T)) Ou
 	}()
 	fn(t)
 	returned = true
+	// The child's own high-water mark, measured by itself: it covers a spike
+	// the parent's polling missed, and it is the child's alone. (The kernel's
+	// ru_maxrss is not: Linux carries the forking process's peak into the
+	// child across exec, which charged every child with its parent's memory.)
+	fmt.Fprintf(os.Stdout, "\nhostile-%s: %s%d\n", nonce, sentinelPeak, peakRSS(os.Getpid()))
 	fmt.Fprintf(os.Stdout, "\nhostile-%s: %s\n", nonce, sentinelDone)
 	return Outcome{Kind: OK, Limits: lim}
 }
@@ -356,8 +363,8 @@ wait:
 	}
 	pr.Close()
 
-	if p := exitPeakRSS(cmd.ProcessState); p > peak {
-		peak = p
+	if c.peak > peak {
+		peak = c.peak
 	}
 	out := Outcome{
 		PeakRSS:  peak,
@@ -371,8 +378,8 @@ wait:
 	case killed:
 		out.Kind = kind
 	case rssSupported && peak > lim.MaxRSS:
-		// A spike between two polls is still a breach: the kernel's own peak
-		// accounting, read after exit, is authoritative.
+		// A spike between two polls is still a breach: the child reports its
+		// own high-water mark when fn returns.
 		out.Kind = OverMemory
 	default:
 		out.Kind = classify(waitErr, out.ExitCode, c)
@@ -445,6 +452,7 @@ type capture struct {
 	started bool
 	done    bool
 	skip    bool
+	peak    int64 // the child's self-reported VmHWM, if it reported one
 }
 
 func newCapture(prefix string) *capture {
@@ -485,6 +493,10 @@ func (c *capture) endLine() {
 			c.done = true
 		case sentinelSkip:
 			c.skip = true
+		default:
+			if n, err := strconv.ParseInt(strings.TrimPrefix(rest, sentinelPeak), 10, 64); err == nil && strings.HasPrefix(rest, sentinelPeak) {
+				c.peak = n
+			}
 		}
 		return
 	}

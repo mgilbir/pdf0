@@ -75,8 +75,9 @@
 //   - OverMemory: the child's resident set exceeded Limits.MaxRSS. The peak is
 //     reported. The parent polls the child's peak RSS (VmHWM) and kills it on
 //     breach; a child that spiked above the cap between polls and then finished
-//     is still OverMemory, because the kernel's own peak accounting is checked
-//     after it exits.
+//     is still OverMemory, because the child reports its own VmHWM when fn
+//     returns. (Not ru_maxrss: Linux carries the parent's peak into the
+//     child's across exec.)
 //   - Timeout: the child ran longer than Limits.Timeout and was killed.
 //   - Fatal: the child died of something no test can recover from: a runtime
 //     fatal error ("fatal error: stack overflow", concurrent map writes), an

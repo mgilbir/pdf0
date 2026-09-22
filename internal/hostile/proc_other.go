@@ -20,6 +20,4 @@ func killGroup(p *os.Process) { _ = p.Kill() }
 
 func peakRSS(int) int64 { return 0 }
 
-func exitPeakRSS(*os.ProcessState) int64 { return 0 }
-
 func signalOf(*os.ProcessState) string { return "" }

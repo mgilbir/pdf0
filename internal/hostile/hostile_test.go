@@ -3,6 +3,7 @@ package hostile
 import (
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestClassifiesOutcomes(t *testing.T) {
 		},
 		{
 			// Over the cap and gone before the parent necessarily polls: the
-			// kernel's peak accounting after exit still catches it.
+			// child's own report of its high-water mark still catches it.
 			name: "allocation spike then return",
 			lim:  small,
 			fn: func(t *testing.T) {
@@ -218,6 +219,48 @@ func TestOutputIsBounded(t *testing.T) {
 	}
 	if !strings.Contains(out.Output, "bytes of output omitted") {
 		t.Errorf("the omitted middle is not marked")
+	}
+}
+
+// The child's peak is its own, not the parent's. Linux carries the forking
+// process's high-water mark into the child's ru_maxrss across exec, so
+// measuring the child by its rusage charged it with the parent's memory: in
+// the root package, after the corpus tests, every hostile test reported a
+// 3 GiB peak in a 20 ms child. Here the parent holds more than the child's
+// cap while a small child runs.
+func TestParentMemoryIsNotChargedToTheChild(t *testing.T) {
+	if !InChild() {
+		ballast := touch(int(small.MaxRSS) + 64<<20)
+		defer runtime.KeepAlive(ballast) // resident for the child's whole life
+	}
+	out := run(t, small, func(t *testing.T) {})
+	if InChild() {
+		return
+	}
+	if out.Kind != OK {
+		t.Fatalf("a trivial child under a large parent was classified %s", out)
+	}
+}
+
+// A spike the parent's polling never sees is still a breach: the child reports
+// its own high-water mark when fn returns. Polling is switched off here so
+// that report is the only way to catch it.
+func TestUnpolledSpikeIsCaught(t *testing.T) {
+	if !InChild() {
+		saved := pollInterval
+		pollInterval = time.Hour
+		defer func() { pollInterval = saved }()
+	}
+	out := run(t, small, func(t *testing.T) {
+		b := touch(int(small.MaxRSS) + 64<<20)
+		runtime.KeepAlive(b)
+	})
+	if InChild() {
+		return
+	}
+	if rssSupported && out.Kind != OverMemory {
+		t.Fatalf("an unpolled %d MiB spike under a %d MiB cap was classified %s",
+			(small.MaxRSS+64<<20)>>20, small.MaxRSS>>20, out)
 	}
 }
 

@@ -37,9 +37,12 @@ func killGroup(p *os.Process) {
 	_ = p.Kill()
 }
 
-// peakRSS reads the child's peak resident set (VmHWM) from /proc. The high-
-// water mark rather than the current VmRSS catches a spike that came and went
-// between two polls. It returns 0 once the child has exited.
+// peakRSS reads a process's peak resident set (VmHWM) from /proc: the parent
+// polls the child with it, and the child reports its own when fn returns. The
+// high-water mark rather than the current VmRSS catches a spike that came and
+// went between two polls. VmHWM belongs to the address space exec created, so
+// unlike ru_maxrss it does not include the parent's. It returns 0 once the
+// process has exited.
 func peakRSS(pid int) int64 {
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
 	if err != nil {
@@ -61,19 +64,6 @@ func peakRSS(pid int) int64 {
 		return kb << 10
 	}
 	return 0
-}
-
-// exitPeakRSS is the kernel's peak resident set for the reaped child, from its
-// rusage (ru_maxrss, in KiB on Linux).
-func exitPeakRSS(ps *os.ProcessState) int64 {
-	if ps == nil {
-		return 0
-	}
-	ru, ok := ps.SysUsage().(*syscall.Rusage)
-	if !ok || ru == nil {
-		return 0
-	}
-	return ru.Maxrss << 10
 }
 
 func signalOf(ps *os.ProcessState) string {
