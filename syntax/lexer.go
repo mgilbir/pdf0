@@ -126,7 +126,8 @@ const readChunk = 1 << 20
 //     length (a Size method, as bytes.Reader, strings.Reader and
 //     io.SectionReader have, or Stat, as *os.File has) a claim beyond it fails
 //     before anything is allocated. Otherwise the buffer starts at 1 MiB and
-//     doubles, so a false claim costs at most twice what the source holds.
+//     doubles as it fills, so a false claim costs memory in proportion to what
+//     the source actually holds (a small multiple of it), not to the claim.
 func ReadSource(r io.ReaderAt, size int64) ([]byte, error) {
 	if size < 0 {
 		return nil, fmt.Errorf("invalid input size %d", size)
