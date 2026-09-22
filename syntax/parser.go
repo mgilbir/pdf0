@@ -31,12 +31,16 @@ const maxParseDepth = 1000
 // Parser builds PDF Object values from a token stream.
 type Parser struct {
 	lexer *Lexer
-	// buf holds tokens lexed ahead of the parse. An entry can be an error: a
-	// malformed token found while looking ahead is kept in its place and
-	// reported by whichever parse reaches it, not by the one that peeked.
-	buf   []lookahead
-	depth int   // current nesting depth (arrays/dictionaries)
-	end   int64 // offset just past the last consumed token; see Offset
+	// buf is a ring of the tokens lexed ahead of the parse: head is the next
+	// one to consume and n how many are held. The grammar never looks more
+	// than maxLookahead tokens ahead ("N G R"), so it is a fixed array and
+	// peeking allocates nothing. An entry can be an error: a malformed token
+	// found while looking ahead is kept in its place and reported by whichever
+	// parse reaches it, not by the one that peeked.
+	buf     [maxLookahead]lookahead
+	head, n int
+	depth   int   // current nesting depth (arrays/dictionaries)
+	end     int64 // offset just past the last consumed token; see Offset
 
 	// ResolveLength, when set, resolves an indirect stream /Length reference to
 	// its integer value (typically via the cross-reference table). It lets
@@ -46,6 +50,9 @@ type Parser struct {
 	// plain non-negative integer, in which case the search fallback is used.
 	ResolveLength func(ref object.IndirectRef) (int64, bool)
 }
+
+// maxLookahead is the most tokens the parser holds before consuming one.
+const maxLookahead = 3
 
 // lookahead is one look-ahead slot: a token, or the error lexing it gave.
 type lookahead struct {
@@ -84,7 +91,7 @@ func (p *Parser) Offset() int64 {
 
 // SetOffset moves the parser to offset, discarding any look-ahead.
 func (p *Parser) SetOffset(offset int64) {
-	p.buf = p.buf[:0]
+	p.head, p.n = 0, 0
 	p.lexer.SetPosition(offset)
 	p.end = offset
 }
@@ -93,23 +100,38 @@ func (p *Parser) SetOffset(offset int64) {
 // error at or before that place is returned instead; it stays buffered, so the
 // parse that reaches it reports it.
 func (p *Parser) peekToken(n int) (Token, error) {
-	for len(p.buf) <= n {
-		if k := len(p.buf); k > 0 && p.buf[k-1].err != nil {
-			return Token{}, p.buf[k-1].err // nothing can be read past an error
+	if n >= maxLookahead {
+		return Token{}, fmt.Errorf("internal error: look-ahead of %d tokens exceeds %d", n+1, maxLookahead)
+	}
+	for p.n <= n {
+		if p.n > 0 {
+			if last := &p.buf[(p.head+p.n-1)%maxLookahead]; last.err != nil {
+				return Token{}, last.err // nothing can be read past an error
+			}
 		}
 		tok, err := p.lexer.NextToken()
-		p.buf = append(p.buf, lookahead{tok, err})
+		p.buf[(p.head+p.n)%maxLookahead] = lookahead{tok, err}
+		p.n++
 	}
-	return p.buf[n].tok, p.buf[n].err
+	e := &p.buf[(p.head+n)%maxLookahead]
+	return e.tok, e.err
+}
+
+// pop removes the next buffered token; the caller has checked there is one.
+func (p *Parser) pop() lookahead {
+	e := p.buf[p.head]
+	p.buf[p.head] = lookahead{} // drop the reference to the token's bytes
+	p.head = (p.head + 1) % maxLookahead
+	p.n--
+	return e
 }
 
 func (p *Parser) nextToken() (Token, error) {
-	if len(p.buf) > 0 {
-		e := p.buf[0]
-		if e.err != nil {
+	if p.n > 0 {
+		if e := p.buf[p.head]; e.err != nil {
 			return Token{}, e.err
 		}
-		p.buf = p.buf[1:]
+		e := p.pop()
 		p.end = e.tok.End
 		return e.tok, nil
 	}
@@ -122,9 +144,8 @@ func (p *Parser) nextToken() (Token, error) {
 
 // consumeToken consumes the token a successful peekToken(0) returned.
 func (p *Parser) consumeToken() {
-	if len(p.buf) > 0 {
-		p.end = p.buf[0].tok.End
-		p.buf = p.buf[1:]
+	if p.n > 0 {
+		p.end = p.pop().tok.End
 	}
 }
 
@@ -389,7 +410,7 @@ func (p *Parser) parseStream(dict object.Dictionary, streamTok Token) (object.Ob
 	// lexer, so nothing may be buffered past it. Look-ahead never reaches past
 	// "stream" (it follows ">>", which ends any look-ahead), but a stale token
 	// here would be data misread as syntax, so drop it rather than trust that.
-	p.buf = p.buf[:0]
+	p.head, p.n = 0, 0
 	p.lexer.pos = streamTok.End
 
 	// After 'stream' keyword, there must be a single EOL marker (\r\n or \n)
