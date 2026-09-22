@@ -3,6 +3,7 @@ package fonts
 import (
 	"bytes"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -338,9 +339,13 @@ func TestPlanIsLinearInTheRun(t *testing.T) {
 	} {
 		cost := func(n int) time.Duration {
 			best := time.Duration(1<<63 - 1)
-			for range 3 {
+			for range 5 {
 				glyphs, text := input(n)
 				f := face.Clone()
+				// A collection that the previous run left owing would be
+				// charged to this one; so would one the scheduler owes to a
+				// parallel test. Collect first, and keep the best of five.
+				runtime.GC()
 				start := time.Now()
 				f.plan(glyphs, text)
 				if d := time.Since(start); d < best {
@@ -349,7 +354,7 @@ func TestPlanIsLinearInTheRun(t *testing.T) {
 			}
 			return best
 		}
-		small, large := cost(20000), cost(200000)
+		small, large := cost(40000), cost(400000)
 		if ratio := float64(large) / float64(small); ratio > 30 {
 			t.Errorf("%s: 10x the glyphs cost %.0fx the time (%v → %v); the plan is not linear",
 				name, ratio, small, large)
