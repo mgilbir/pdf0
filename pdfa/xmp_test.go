@@ -139,7 +139,7 @@ func TestXMPUndeclaredRDFPrefix(t *testing.T) {
 		return mkV(core.View{Version: "1.7", Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: cat},
 			2: {Number: 2, Value: meta},
-		}, Trailer: ptrDict(dictWith("Root", object.IndirectRef{Number: 1}))})
+		}, Trailer: dictWith("Root", object.IndirectRef{Number: 1})})
 	}
 	rdfNS := `xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"`
 	bad := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF:RDF ` + rdfNS + `><rdf:Description/></RDF:RDF></x:xmpmeta>`

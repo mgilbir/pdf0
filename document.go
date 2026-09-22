@@ -244,7 +244,7 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 						xrefTable = t
 						rebuilt, firstErr = true, err
 						if tr := findTrailerByScan(data); tr != nil {
-							doc.Trailer = *tr
+							doc.Trailer = *tr // dictcopy: a fresh parse of the scanned trailer; nothing else holds it
 						}
 						break
 					}
@@ -260,7 +260,11 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 			}
 		}
 		if first {
-			doc.Trailer = *sectionTrailer
+			// The section trailer of a cross-reference stream is that stream
+			// object's own dictionary, still in doc.Objects until
+			// normalizeStructure drops it, and recovery below may set /Root on
+			// the trailer: clone it so that edit never reaches the object.
+			doc.Trailer = *sectionTrailer.Clone()
 			if t, _ := sectionTrailer.Get("Type").(object.Name); t == "XRef" {
 				doc.usedXRefStream = true
 			}
@@ -512,7 +516,7 @@ func (d *Document) normalizeStructure() {
 	for _, key := range []object.Name{"Type", "W", "Index", "Filter", "DecodeParms", "Length", "Prev", "XRefStm", "Size"} {
 		trailer.Delete(key)
 	}
-	d.Trailer = *trailer
+	d.Trailer = *trailer // dictcopy: installs the edited clone; nothing else holds it
 }
 
 // parseXRefSection parses one cross-reference section (a traditional table
@@ -980,7 +984,7 @@ func writeXRefStream(s *syntax.Serializer, objNums []int, offsets map[int]int64,
 	dict.Set("Filter", object.Name("FlateDecode"))
 	dict.Set("Length", object.Integer(len(encoded)))
 
-	return s.WriteIndirectObject(&object.IndirectObject{Number: xrefObjNum, Value: &object.Stream{Dict: *dict, Data: encoded}})
+	return s.WriteIndirectObject(&object.IndirectObject{Number: xrefObjNum, Value: object.NewStream(dict, encoded)})
 }
 
 // byteWidth returns the number of bytes needed to hold v (at least 1).

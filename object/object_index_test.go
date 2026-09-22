@@ -210,7 +210,7 @@ func TestDictRandomOpsMatchModel(t *testing.T) {
 // value refers to the same entries (like a map), and Clone is independent.
 func TestDictCopySemantics(t *testing.T) {
 	orig := bigDict(100)
-	cp := *orig
+	cp := *orig // dictcopy: the copy under test
 	cp.Set("shared", Integer(1))
 	if orig.Get("shared") != Integer(1) {
 		t.Fatal("a value copy does not share entries with the original")

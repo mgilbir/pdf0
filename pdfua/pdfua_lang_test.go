@@ -23,7 +23,7 @@ func TestValidBCP47(t *testing.T) {
 
 func TestUALang(t *testing.T) {
 	mk := func(catLang string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		cat := &object.Dictionary{}
 		if catLang != "" {
 			cat.Set("Lang", object.String{Value: []byte(catLang)})

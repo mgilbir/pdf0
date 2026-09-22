@@ -25,7 +25,7 @@ func buildPDFVT1Doc() *Document {
 	md := &object.Dictionary{}
 	md.Set("Type", object.Name("Metadata"))
 	md.Set("Subtype", object.Name("XML"))
-	d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *md, Data: []byte(xmp)}}
+	d.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(md, []byte(xmp))}
 
 	cat := d.Objects[1].Value.(*object.Dictionary)
 	cat.Set("DPartRoot", object.IndirectRef{Number: 12})
@@ -63,12 +63,12 @@ func TestValidatePDFVTViolations(t *testing.T) {
 			md := &object.Dictionary{}
 			md.Set("Type", object.Name("Metadata"))
 			// XMP with only the PDF/X identification, no pdfvtid.
-			d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *md, Data: []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>")}}
+			d.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(md, []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"))}
 		}, "identification", "not identified as PDF/VT"},
 		{"wrong VT version", func(d *Document) {
 			md := &object.Dictionary{}
 			md.Set("Type", object.Name("Metadata"))
-			d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *md, Data: []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion><pdfvtid:GTS_PDFVTVersion>PDF/VT-2</pdfvtid:GTS_PDFVTVersion>")}}
+			d.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(md, []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion><pdfvtid:GTS_PDFVTVersion>PDF/VT-2</pdfvtid:GTS_PDFVTVersion>"))}
 		}, "identification", "does not identify PDF/VT-1"},
 		{"no DPart hierarchy", func(d *Document) {
 			d.Objects[1].Value.(*object.Dictionary).Delete("DPartRoot")

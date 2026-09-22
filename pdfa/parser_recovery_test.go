@@ -32,7 +32,7 @@ func TestBrokenObjStmFlagged(t *testing.T) {
 	if !hasRuleMsg(checkObjectStreamDecodable(doc, PDFA4), "6.1.6") {
 		t.Error("broken object stream must be flagged")
 	}
-	if len(checkObjectStreamDecodable((mkView(nil, object.Dictionary{})), PDFA4)) != 0 {
+	if len(checkObjectStreamDecodable((mkView(nil, nil)), PDFA4)) != 0 {
 		t.Error("no broken streams must produce no errors")
 	}
 }

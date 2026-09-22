@@ -10,7 +10,7 @@ import (
 // buildContainer makes a StructTreeRoot whose single container element (type
 // container) has the given ordered child types, and returns the catalog.
 func buildContainer(container object.Name, childTypes ...object.Name) (core.View, *object.Dictionary) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	var kids object.Array
 	n := 20
 	for _, ct := range childTypes {

@@ -784,7 +784,7 @@ func (h *Handler) encryptObj(o object.Object, num, gen int, sc StreamContext) (o
 				d.Set("Length", object.Integer(len(data)))
 			}
 		}
-		return &object.Stream{Dict: *d, Data: data}, nil
+		return object.NewStream(d, data), nil
 	}
 	return o, nil
 }

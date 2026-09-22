@@ -84,7 +84,7 @@ func heavyDoc(pages, bytesPerPage int) *Document {
 	objs[2] = &object.IndirectObject{Number: 2, Value: pagesDict}
 
 	return &Document{Version: "2.0", Objects: objs,
-		Trailer: dictWith("Root", object.IndirectRef{Number: 1})}
+		Trailer: *dictWith("Root", object.IndirectRef{Number: 1})}
 }
 
 // cancelledCtx returns a context that is already done.

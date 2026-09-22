@@ -11,7 +11,7 @@ func TestUACIDSystemInfo(t *testing.T) {
 	// Build a Type0 font with an embedded CMap (its own CIDSystemInfo) and a
 	// descendant CIDFont whose CIDSystemInfo may or may not match.
 	mk := func(cmapReg, cmapOrd, cidReg, cidOrd string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		si := func(r, o string) *object.Dictionary {
 			d := &object.Dictionary{}
 			d.Set("Registry", object.String{Value: []byte(r)})
@@ -48,7 +48,7 @@ func TestUACIDSystemInfo(t *testing.T) {
 // TestUACIDSupplement flags a CIDFont whose Supplement exceeds the CMap's.
 func TestUACIDSupplement(t *testing.T) {
 	mk := func(cmapSup, cidSup int) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		si := func(sup int) *object.Dictionary {
 			d := &object.Dictionary{}
 			d.Set("Registry", object.String{Value: []byte("Adobe")})

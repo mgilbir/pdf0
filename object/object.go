@@ -35,7 +35,15 @@
 // A Dictionary behaves like a Go map: copying the struct (Stream.Dict or
 // Document.Trailer copied by value, for instance) copies a reference to the
 // same entries, and a mutation through either copy is seen through both. Use
-// Clone for an independent copy.
+// Clone for an independent copy, and NewStream to put a dictionary you built
+// into a stream.
+//
+// A copy is therefore never a snapshot, which makes an accidental one a bug
+// that is easy to write and hard to see. The module's own code is checked for
+// them: built with the dictcopycheck tag, Dictionary carries a marker that go
+// vet's copylocks analyzer reports on every copy, and
+// scripts/check-dict-copies.sh fails on any copy whose line does not say why
+// it is intended with a "dictcopy:" comment. Normal builds carry nothing.
 //
 // String.IsHex records which of the two syntactic forms a string arrived in, so
 // it is written back the same way.
@@ -90,6 +98,7 @@ func (Array) pdfObject() {}
 // at most one entry per key. The zero value is an empty dictionary ready to
 // use. See the package documentation for its copy semantics.
 type Dictionary struct {
+	_ noCopy // zero-sized; see nocopy.go
 	s *dictStore
 }
 
@@ -305,13 +314,27 @@ func (d *Dictionary) Clone() *Dictionary {
 	return &Dictionary{s: c}
 }
 
-// Stream represents a PDF stream object.
+// Stream represents a PDF stream object. Copying a Stream by value copies its
+// Dict, which shares entries with the original (see Dictionary).
 type Stream struct {
 	Dict Dictionary
 	Data []byte // raw (encoded) stream data
 }
 
 func (*Stream) pdfObject() {}
+
+// NewStream returns a stream with the given data whose Dict holds dict's
+// entries. The stream takes dict over rather than copying it: dict and the
+// stream's Dict then refer to the same entries, which is what a caller that
+// built dict for this stream wants. Pass dict.Clone() to keep them separate.
+// A nil dict gives an empty Dict.
+func NewStream(dict *Dictionary, data []byte) *Stream {
+	st := &Stream{Data: data}
+	if dict != nil {
+		st.Dict.s = dict.s
+	}
+	return st
+}
 
 // Null represents the PDF null object.
 type Null struct{}

@@ -16,7 +16,7 @@ import (
 // same pre-order.
 func TestStructTreeFlatten(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		put := func(num int, v object.Object) { doc.Objects[num] = &object.IndirectObject{Number: num, Value: v} }
 		elem := func(num int, s object.Name, k object.Object) {
 			d := &object.Dictionary{}

@@ -12,7 +12,7 @@ import (
 // xmp, optionally FlateDecode-compressed.
 func docWithMetadata(t *testing.T, xmp string, compressed bool) core.View {
 	t.Helper()
-	d := mkViewVersion(map[int]*object.IndirectObject{}, object.Dictionary{}, "1.6")
+	d := mkViewVersion(map[int]*object.IndirectObject{}, nil, "1.6")
 	md := &object.Dictionary{}
 	md.Set("Type", object.Name("Metadata"))
 	md.Set("Subtype", object.Name("XML"))
@@ -21,7 +21,7 @@ func docWithMetadata(t *testing.T, xmp string, compressed bool) core.View {
 		md.Set("Filter", object.Name("FlateDecode"))
 		data = core.FlateEncode([]byte(xmp))
 	}
-	d.Objects[2] = &object.IndirectObject{Number: 2, Value: &object.Stream{Dict: *md, Data: data}}
+	d.Objects[2] = &object.IndirectObject{Number: 2, Value: object.NewStream(md, data)}
 	cat := &object.Dictionary{}
 	cat.Set("Type", object.Name("Catalog"))
 	cat.Set("Metadata", object.IndirectRef{Number: 2})

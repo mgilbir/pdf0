@@ -46,7 +46,7 @@ func encMatrixDoc(usedXRefStream, withMetadata bool) *Document {
 	cs := &object.Dictionary{}
 	cs.Set("Length", object.Integer(len(content)))
 	cs.Set("Filter", object.Name("FlateDecode"))
-	d.Objects[4] = &object.IndirectObject{Number: 4, Value: &object.Stream{Dict: *cs, Data: content}}
+	d.Objects[4] = &object.IndirectObject{Number: 4, Value: object.NewStream(cs, content)}
 
 	// A dictionary carrying a string, to exercise string encryption.
 	info := &object.Dictionary{}
@@ -59,7 +59,7 @@ func encMatrixDoc(usedXRefStream, withMetadata bool) *Document {
 		ms.Set("Type", object.Name("Metadata"))
 		ms.Set("Subtype", object.Name("XML"))
 		ms.Set("Length", object.Integer(len(xmp)))
-		d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *ms, Data: xmp}}
+		d.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(ms, xmp)}
 		cat.Set("Metadata", object.IndirectRef{Number: 6})
 	}
 
@@ -111,7 +111,7 @@ func stripStreamLength(o object.Object) object.Object {
 	}
 	nd := s.Dict.Clone()
 	nd.Delete("Length")
-	return &object.Stream{Dict: *nd, Data: s.Data}
+	return object.NewStream(nd, s.Data)
 }
 
 // docsEqualModuloLength reports whether two documents hold the same objects once

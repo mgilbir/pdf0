@@ -32,7 +32,7 @@ func TestContentFactsSinglePass(t *testing.T) {
 // facts are reused, and the Do-count and real-content violations are both
 // derived from the same cached entry.
 func TestContentFactsCacheShared(t *testing.T) {
-	d := mkViewVersion(map[int]*object.IndirectObject{}, object.Dictionary{}, "1.7")
+	d := mkViewVersion(map[int]*object.IndirectObject{}, nil, "1.7")
 	put := func(n int, v object.Object) { d.Objects[n] = &object.IndirectObject{Number: n, Value: v} }
 
 	// A tagged form XObject painted twice from one page → 7.20 violation.

@@ -73,7 +73,7 @@ func (g *graphCopier) copyValue(o object.Object, skip map[object.Name]bool) obje
 		return cp
 	case *object.Stream:
 		d := g.copyDict(&v.Dict, skip)
-		return &object.Stream{Dict: *d, Data: append([]byte(nil), v.Data...)}
+		return object.NewStream(d, append([]byte(nil), v.Data...))
 	}
 	return o // scalars are immutable
 }

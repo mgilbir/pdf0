@@ -59,7 +59,7 @@ func TestProhibitedCatalogEntries(t *testing.T) {
 
 func TestFileTrailerID(t *testing.T) {
 	mk := func(id object.Object) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		if id != nil {
 			doc.Trailer.Set("ID", id)
 		}
@@ -219,7 +219,7 @@ func TestIsPDFMIME(t *testing.T) {
 
 func TestDeclaredPDFALevel(t *testing.T) {
 	mk := func(xmp string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		cat := &object.Dictionary{}
 		cat.Set("Type", object.Name("Catalog"))
 		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte(xmp)}
@@ -259,7 +259,7 @@ func TestExtractXMPAttr(t *testing.T) {
 func TestParseToUnicodeMapSpaceless(t *testing.T) {
 	// bfrange with no separators between <hhhh> tokens (real-world format).
 	cmap := "begincmap\n2 beginbfrange\n<0003><0003><0020>\n<0028><0028><0048>\nendbfrange\nendcmap"
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	s := &object.Stream{Dict: object.Dictionary{}, Data: []byte(cmap)}
 	s.Dict.Set("Length", object.Integer(len(cmap)))
 	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: s}
@@ -280,7 +280,7 @@ func TestParseToUnicodeMapMalformed(t *testing.T) {
 		"beginbfchar", "endbfchar beginbfchar", "beginbfrangeendbfrange",
 		"beginbfchar<00", "beginbfrange<0><1><2>", "",
 	} {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte(bad)}
 		s.Dict.Set("Length", object.Integer(len(bad)))
 		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: s}
@@ -305,7 +305,7 @@ func TestAngleTokens(t *testing.T) {
 
 func TestInheritedPageXObject(t *testing.T) {
 	mk := func(pageHasOwn bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		xo := &object.Dictionary{}
 		xo.Set("X0", object.IndirectRef{Number: 90})
 		page := &object.Dictionary{}

@@ -17,7 +17,7 @@ func docWithXMP(xmp []byte) core.View {
 	ms.Dict.Set("Type", object.Name("Metadata"))
 	ms.Dict.Set("Subtype", object.Name("XML"))
 	ms.Dict.Set("Length", object.Integer(len(xmp)))
-	d := mkViewVersion(map[int]*object.IndirectObject{}, object.Dictionary{}, "1.7")
+	d := mkViewVersion(map[int]*object.IndirectObject{}, nil, "1.7")
 	d.Objects[2] = &object.IndirectObject{Number: 2, Value: ms}
 	cat := &object.Dictionary{}
 	cat.Set("Type", object.Name("Catalog"))

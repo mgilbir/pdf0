@@ -128,7 +128,7 @@ func (d *Document) installEncryption(h *crypt.Handler, dict *object.Dictionary) 
 	if id != nil {
 		trailer.Set("ID", object.Array{object.String{Value: id}, object.String{Value: append([]byte(nil), id...)}})
 	}
-	d.Trailer = *trailer
+	d.Trailer = *trailer // dictcopy: installs the edited clone; nothing else holds it
 	return nil
 }
 
@@ -211,7 +211,7 @@ func (d *Document) dropEncryption() {
 	}
 	trailer := d.Trailer.Clone()
 	trailer.Delete("Encrypt")
-	d.Trailer = *trailer
+	d.Trailer = *trailer // dictcopy: installs the edited clone; nothing else holds it
 
 	// Keep any candidate something else still references.
 	if len(candidates) > 0 {

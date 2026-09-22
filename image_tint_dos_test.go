@@ -38,7 +38,7 @@ func TestExtractImagesTintFunctionCached(t *testing.T) {
 		fnDict.Set("Domain", object.Array{object.Integer(0), object.Integer(1)})
 		fnDict.Set("Range", object.Array{object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1)})
 		fnDict.Set("Length", object.Integer(len(prog)))
-		fnRef := set(4, &object.Stream{Dict: fnDict, Data: []byte(prog)})
+		fnRef := set(4, object.NewStream(&fnDict, []byte(prog)))
 
 		imgDict := object.Dictionary{}
 		imgDict.Set("Type", object.Name("XObject"))
@@ -48,7 +48,7 @@ func TestExtractImagesTintFunctionCached(t *testing.T) {
 		imgDict.Set("BitsPerComponent", object.Integer(8))
 		imgDict.Set("ColorSpace", object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceRGB"), fnRef})
 		imgDict.Set("Length", object.Integer(w*h))
-		imgRef := set(5, &object.Stream{Dict: imgDict, Data: make([]byte, w*h)})
+		imgRef := set(5, object.NewStream(&imgDict, make([]byte, w*h)))
 
 		xobj := &object.Dictionary{}
 		xobj.Set("Im0", imgRef)

@@ -9,7 +9,7 @@ import (
 // TestJPXForbiddenAtPDFA1 is the C17 guard: JPXDecode (a PDF 1.5 filter) is
 // rejected at PDF/A-1, which is based on PDF 1.4, but allowed at 2b.
 func TestJPXForbiddenAtPDFA1(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	st := &object.Stream{Data: []byte("jpx")}
 	st.Dict.Set("Filter", object.Name("JPXDecode"))
 	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: st}
@@ -33,7 +33,7 @@ func TestJPXForbiddenAtPDFA1(t *testing.T) {
 // TestPageLevelOutputIntentNotDuplicated is the C23 guard: a page-level
 // OutputIntent violation is reported once, not twice.
 func TestPageLevelOutputIntentNotDuplicated(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	cat := &object.Dictionary{}
 	cat.Set("Type", object.Name("Catalog"))
 	cat.Set("Pages", object.IndirectRef{Number: 2})

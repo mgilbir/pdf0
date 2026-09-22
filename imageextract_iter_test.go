@@ -25,14 +25,14 @@ func buildTwoImageDoc(expensiveProg string, w, h int) *Document {
 	small.Set("BitsPerComponent", object.Integer(8))
 	small.Set("ColorSpace", object.Name("DeviceGray"))
 	small.Set("Length", object.Integer(1))
-	smallRef := set(6, &object.Stream{Dict: small, Data: []byte{0x80}})
+	smallRef := set(6, object.NewStream(&small, []byte{0x80}))
 
 	fnDict := object.Dictionary{}
 	fnDict.Set("FunctionType", object.Integer(4))
 	fnDict.Set("Domain", object.Array{object.Integer(0), object.Integer(1)})
 	fnDict.Set("Range", object.Array{object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1)})
 	fnDict.Set("Length", object.Integer(len(expensiveProg)))
-	fnRef := set(4, &object.Stream{Dict: fnDict, Data: []byte(expensiveProg)})
+	fnRef := set(4, object.NewStream(&fnDict, []byte(expensiveProg)))
 	big := object.Dictionary{}
 	big.Set("Type", object.Name("XObject"))
 	big.Set("Subtype", object.Name("Image"))
@@ -41,7 +41,7 @@ func buildTwoImageDoc(expensiveProg string, w, h int) *Document {
 	big.Set("BitsPerComponent", object.Integer(8))
 	big.Set("ColorSpace", object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceRGB"), fnRef})
 	big.Set("Length", object.Integer(w*h))
-	bigRef := set(5, &object.Stream{Dict: big, Data: make([]byte, w*h)})
+	bigRef := set(5, object.NewStream(&big, make([]byte, w*h)))
 
 	xobj := &object.Dictionary{}
 	xobj.Set("ImA", smallRef)

@@ -11,7 +11,7 @@ func TestUAFontDicts(t *testing.T) {
 	// Build a document holding one font dictionary (object 10) plus its
 	// descendant/descriptor, and run the per-font check directly.
 	run := func(build func(doc core.View) *object.Dictionary) []Violation {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		f := build(doc)
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: f}
 		return checkOneUAFontDict(doc, f)
@@ -94,7 +94,7 @@ func TestUAFontDicts(t *testing.T) {
 // TestUACIDToGIDMapValue flags a /CIDToGIDMap name other than Identity.
 func TestUACIDToGIDMapValue(t *testing.T) {
 	mk := func(v object.Object) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		cid := &object.Dictionary{}
 		cid.Set("Subtype", object.Name("CIDFontType2"))
 		if v != nil {

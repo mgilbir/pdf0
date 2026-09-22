@@ -1,7 +1,6 @@
 package pdfua
 
 import (
-	"github.com/mgilbir/pdf0/object"
 	"testing"
 )
 
@@ -23,7 +22,7 @@ func TestXMPElementPrefixes(t *testing.T) {
 }
 
 func TestUAIdentifierPrefix(t *testing.T) {
-	d := mkView(nil, object.Dictionary{})
+	d := mkView(nil, nil)
 	// Wrong prefix bound to the pdfua-id namespace -> flagged.
 	bad := `xmlns:pdfuaia="http://www.aiim.org/pdfua/ns/id/" <pdfuaia:amd>A</pdfuaia:amd>`
 	if len(checkUAIdentifierPrefix(d, bad)) == 0 {

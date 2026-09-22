@@ -47,7 +47,22 @@ and the 2026-09-22 audit found each of them broken:
   `Dictionary` struct — `Stream.Dict` or `Document.Trailer` taken by value, as
   the validators' per-run shallow `Document` copy does — copies a reference to
   the same entries. A mutation through either copy is seen through both, and
-  neither can corrupt the other. `Clone` gives an independent copy.
+  neither can corrupt the other. `Clone` gives an independent copy, and
+  `NewStream(dict, data)` puts a dictionary that was built for a stream into
+  one without copying the struct.
+- **Copies are checked by tooling.** A copy is never a snapshot, so code
+  written expecting one edits the original. Under the `dictcopycheck` build
+  tag `Dictionary` carries a zero-sized marker with `Lock`/`Unlock` methods,
+  which `go vet`'s copylocks analyzer reports on every copy of a
+  `Dictionary`, a `Stream` or a `Document`. `scripts/check-dict-copies.sh`
+  (run in CI) fails on any report whose line lacks a `dictcopy:` comment
+  giving the reason. Normal builds carry an empty marker and nothing else. The
+  marker is not permanent in normal builds because it would also flag every
+  shallow `Document` copy, the validators' own per-run copies included, and
+  every caller's. Copylocks treats the result of a function call as a fresh
+  value, so `*d.Clone()` is not reported, correctly, and neither is `*f()`
+  for an `f` that returns a shared dictionary; there is no such call in the
+  module.
 
 ## Consequences
 

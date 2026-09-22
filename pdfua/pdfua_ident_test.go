@@ -24,7 +24,7 @@ func TestXMPPDFUAPart(t *testing.T) {
 
 func TestUAStructParent(t *testing.T) {
 	mk := func(withP bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		e := &object.Dictionary{}
 		e.Set("S", object.Name("P"))
 		if withP {
@@ -50,7 +50,7 @@ func TestUAStructParent(t *testing.T) {
 
 func TestUARoleMapIntegrity(t *testing.T) {
 	mk := func(roleMap *object.Dictionary) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		root := &object.Dictionary{}
 		root.Set("Type", object.Name("StructTreeRoot"))
 		root.Set("RoleMap", roleMap)

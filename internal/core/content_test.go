@@ -22,7 +22,7 @@ func makeFlateContentStream(decodedLen int) *object.Stream {
 	d := &object.Dictionary{}
 	d.Set("Length", object.Integer(zb.Len()))
 	d.Set("Filter", object.Name("FlateDecode"))
-	return &object.Stream{Dict: *d, Data: zb.Bytes()}
+	return object.NewStream(d, zb.Bytes())
 }
 
 // TestDecodeContentStreamBudget verifies the aggregate decoded-content budget:

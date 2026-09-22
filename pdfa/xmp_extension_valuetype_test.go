@@ -87,7 +87,7 @@ func xmpView(xmp string) core.View {
 	return mkV(core.View{Version: "1.7", Objects: map[int]*object.IndirectObject{
 		1: {Number: 1, Value: cat},
 		2: {Number: 2, Value: meta},
-	}, Trailer: ptrDict(dictWith("Root", object.IndirectRef{Number: 1}))})
+	}, Trailer: dictWith("Root", object.IndirectRef{Number: 1})})
 }
 
 func declaredStructure(errs []Violation) bool {

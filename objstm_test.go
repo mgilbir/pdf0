@@ -33,7 +33,7 @@ func makeObjStm(t *testing.T, objects map[int]string, order []int, compress bool
 		dict.Set("Filter", object.Name("FlateDecode"))
 	}
 	dict.Set("Length", object.Integer(len(data)))
-	return &object.Stream{Dict: dict, Data: data}
+	return object.NewStream(&dict, data)
 }
 
 func TestParseObjStmIndex(t *testing.T) {

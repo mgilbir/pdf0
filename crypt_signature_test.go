@@ -99,7 +99,7 @@ func rc4EncryptedDoc(t *testing.T) *Document {
 	tr := doc.Trailer.Clone()
 	tr.Set("Encrypt", object.IndirectRef{Number: encNum})
 	tr.Set("ID", object.Array{object.String{Value: id, IsHex: true}, object.String{Value: append([]byte(nil), id...), IsHex: true}})
-	doc.Trailer = *tr
+	doc.Trailer = *tr // dictcopy: installs the edited clone; nothing else holds it
 	return doc
 }
 

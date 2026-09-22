@@ -40,7 +40,7 @@ func TestParseXRefStreamWithPredictor(t *testing.T) {
 	parms.Set("Columns", object.Integer(4))
 	dict.Set("DecodeParms", parms)
 
-	table, err := ParseXRefStream(&object.Stream{Dict: dict, Data: buf.Bytes()})
+	table, err := ParseXRefStream(object.NewStream(&dict, buf.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}

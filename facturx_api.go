@@ -18,7 +18,7 @@ import (
 // cache, and the PDF/A-3 checker the container rules compose but cannot reach
 // on their own.
 func facturxRun(ctx context.Context, doc *Document, rawData []byte) core.View {
-	runDoc := *doc
+	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
 	runDoc.valCache = newValidationCache(core.NewCanceler(ctx))
 	v := runDoc.view()
 	facturx.SetPDFAChecker(v, func(core.View) []pdfa.Violation {

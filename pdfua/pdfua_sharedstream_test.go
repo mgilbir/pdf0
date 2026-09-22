@@ -15,7 +15,7 @@ import (
 // The content shows two literal strings with font F1 outside any marked-content
 // sequence.
 func buildSharedStreamDoc(nPages int) core.View {
-	d := mkViewVersion(map[int]*object.IndirectObject{}, object.Dictionary{}, "1.7")
+	d := mkViewVersion(map[int]*object.IndirectObject{}, nil, "1.7")
 	put := func(n int, v object.Object) { d.Objects[n] = &object.IndirectObject{Number: n, Value: v} }
 
 	font := &object.Dictionary{}

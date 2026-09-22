@@ -358,7 +358,7 @@ func (p *Parser) parseArray() (object.Object, error) {
 // parseDictOrStream parses a dictionary, and if followed by 'stream', parses it as a Stream.
 func (p *Parser) parseDictOrStream() (object.Object, error) {
 	p.consumeToken() // consume '<<'
-	dict := object.Dictionary{}
+	dict := &object.Dictionary{}
 
 	for {
 		tok, err := p.peekToken(0)
@@ -400,11 +400,11 @@ func (p *Parser) parseDictOrStream() (object.Object, error) {
 		return p.parseStream(dict, tok)
 	}
 
-	return &dict, nil
+	return dict, nil
 }
 
 // parseStream parses stream data after the dictionary has been parsed.
-func (p *Parser) parseStream(dict object.Dictionary, streamTok Token) (object.Object, error) {
+func (p *Parser) parseStream(dict *object.Dictionary, streamTok Token) (object.Object, error) {
 	p.consumeToken() // consume 'stream'
 	// The data is read from the bytes after the keyword, not through the
 	// lexer, so nothing may be buffered past it. Look-ahead never reaches past
@@ -530,7 +530,7 @@ func (p *Parser) parseStream(dict object.Dictionary, streamTok Token) (object.Ob
 	// keyword (audit C120).
 	p.lexer.pos = kwAt + int64(len(endstreamKeyword))
 	p.end = p.lexer.pos
-	return &object.Stream{Dict: dict, Data: data}, nil
+	return object.NewStream(dict, data), nil
 }
 
 // FindDelimitedKeyword returns the offset of the first occurrence of keyword

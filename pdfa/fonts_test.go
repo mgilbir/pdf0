@@ -78,7 +78,7 @@ func TestSimpleFontEncodingDifferences(t *testing.T) {
 	enc.Set("BaseEncoding", object.Name("WinAnsiEncoding"))
 	enc.Set("Differences", object.Array{object.Integer(65), object.Name("Alpha"), object.Name("Beta")})
 	font.Set("Encoding", enc)
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	table := simpleFontCodeToName(doc, font, false)
 	if table[65] != "Alpha" || table[66] != "Beta" {
 		t.Errorf("Differences not applied: %q %q", table[65], table[66])
@@ -95,7 +95,7 @@ func TestSimpleFontEncodingDifferences(t *testing.T) {
 // not parsed, and the rule must stay silent (corpus PDF_A-1a 6-3-8-t01-pass-b
 // and -pass-e).
 func TestSimpleFontBaseEncodingModelled(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	mk := func(enc object.Object) *object.Dictionary {
 		f := &object.Dictionary{}
 		if enc != nil {
@@ -141,7 +141,7 @@ func TestCharSetParsing_Numbers(t *testing.T) {
 // checkTrueTypeEncoding via crafted dictionaries (ISO 32000-1 9.6.6.4).
 func TestTrueTypeEncodingRules(t *testing.T) {
 	mk := func(symbolic bool, enc object.Object) (core.View, *object.Dictionary, *core.FontTextUsage) {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		fd := &object.Dictionary{}
 		flags := 32 // nonsymbolic
 		if symbolic {
@@ -191,7 +191,7 @@ func TestTrueTypeEncodingRules(t *testing.T) {
 // ToUnicode forbidden values (A-4): U+0000, U+FEFF, U+FFFE.
 func TestToUnicodeForbiddenValues(t *testing.T) {
 	mk := func(body string) (core.View, *object.Stream) {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte(body)}
 		s.Dict.Set("Length", object.Integer(len(body)))
 		return doc, s
@@ -213,7 +213,7 @@ func TestToUnicodeForbiddenValues(t *testing.T) {
 // CIDToGIDMap requirement for embedded CIDFontType2 (ISO 32000-1 9.7.4.2).
 func TestCIDToGIDMapRule(t *testing.T) {
 	mkFont := func(cidToGID object.Object) (core.View, *object.Dictionary, *core.FontTextUsage) {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		desc := &object.Dictionary{}
 		desc.Set("Subtype", object.Name("CIDFontType2"))
 		desc.Set("CIDSystemInfo", &object.Dictionary{})
@@ -249,7 +249,7 @@ func TestCIDToGIDMapRule(t *testing.T) {
 // PDF_A-1a 6-3-8-t01-pass-f.
 func TestCIDSystemInfoSupplementIsPart2AndLater(t *testing.T) {
 	mkFont := func(cmapSup, cidSup int) (core.View, *object.Dictionary, *core.FontTextUsage) {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		si := func(sup int) *object.Dictionary {
 			d := &object.Dictionary{}
 			d.Set("Registry", object.String{Value: []byte("Adobe")})
@@ -293,7 +293,7 @@ func hasRuleErr(errs []Violation, rule string) bool {
 }
 
 func TestParseCIDWidths(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	// [ 1 [100 200] 5 7 300 ]  -> CID1=100, CID2=200, CID5..7=300
 	w := object.Array{object.Integer(1), object.Array{object.Integer(100), object.Integer(200)}, object.Integer(5), object.Integer(7), object.Integer(300)}
 	m, _ := parseCIDWidths(doc, w)

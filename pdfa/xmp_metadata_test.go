@@ -74,7 +74,7 @@ func TestA4ConformanceFE(t *testing.T) {
 		return mkV(core.View{Version: "2.0", Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: cat},
 			2: {Number: 2, Value: meta},
-		}, Trailer: ptrDict(dictWith("Root", object.IndirectRef{Number: 1}))})
+		}, Trailer: dictWith("Root", object.IndirectRef{Number: 1})})
 	}
 	confErrs := func(doc core.View) int {
 		n := 0
@@ -111,7 +111,7 @@ func TestXMPPacketHeaderAt1b(t *testing.T) {
 		return mkV(core.View{Version: "1.7", Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: cat},
 			2: {Number: 2, Value: meta},
-		}, Trailer: ptrDict(dictWith("Root", object.IndirectRef{Number: 1}))})
+		}, Trailer: dictWith("Root", object.IndirectRef{Number: 1})})
 	}
 	wf := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"></rdf:RDF></x:xmpmeta>`
 	if got := len(checkXMPWellFormed(mk(`<?xpacket begin="" bytes="47"?>`+wf), PDFA1b)); got == 0 {

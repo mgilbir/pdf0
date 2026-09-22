@@ -14,7 +14,7 @@ import (
 // recovered, so the only way this test passes is if the recursion terminates.
 func TestDevColorScannerType3Cycle(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
-		doc := mkView(nil, object.Dictionary{})
+		doc := mkView(nil, nil)
 
 		// Two Type3 fonts whose resource /Font entries reference each other, plus a
 		// self-reference, forming a cycle of container() calls.

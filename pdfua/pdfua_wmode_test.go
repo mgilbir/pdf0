@@ -30,7 +30,7 @@ func TestCMapInnerWMode(t *testing.T) {
 // disagrees with its dictionary /WMode.
 func TestUACMapWMode(t *testing.T) {
 	mk := func(dictWM int, inner string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		cmap := &object.Stream{Dict: object.Dictionary{}, Data: []byte("begincmap " + inner + " endcmap")}
 		cmap.Dict.Set("WMode", object.Integer(dictWM))
 		f := &object.Dictionary{}

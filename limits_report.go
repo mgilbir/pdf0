@@ -193,7 +193,7 @@ func beginRunCancel(doc *Document, cancel core.Canceler) *Document {
 	if doc.valCache != nil {
 		return doc
 	}
-	runDoc := *doc
+	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
 	runDoc.valCache = newValidationCache(cancel)
 	return &runDoc
 }

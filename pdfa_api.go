@@ -73,7 +73,7 @@ func NewPDFADocumentWith(opts pdfa.SkeletonOptions) (*Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pdf0: building the PDF/A skeleton: %w", err)
 	}
-	return &Document{Version: version, Objects: objs, Trailer: trailer}, nil
+	return &Document{Version: version, Objects: objs, Trailer: trailer}, nil // dictcopy: the skeleton's trailer is fresh and returned by value
 }
 
 // ValidatePDFA checks doc against the implemented rules for the given PDF/A
@@ -133,7 +133,7 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, ra
 	// goroutines and at several levels at once — without a data race.
 	//
 	// This is the boundary: everything below reads a view.
-	runDoc := *doc
+	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
 	runDoc.valCache = newValidationCache(cancel)
 	v := runDoc.view()
 

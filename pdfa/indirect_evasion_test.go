@@ -58,7 +58,7 @@ func TestAWidgetWrittenIndirectlyIsStillAWidget(t *testing.T) {
 				objs[5] = &object.IndirectObject{Number: 5, Value: annot}
 
 				trailer := object.Dictionary{}
-				errs := tc.check(mkView(objs, trailer), PDFA2b)
+				errs := tc.check(mkView(objs, &trailer), PDFA2b)
 				if !hasMessage(errs, tc.want) {
 					t.Errorf("%s /Subtype: the rule did not fire: %v", form, errs)
 				}
@@ -89,7 +89,7 @@ func TestAForbiddenActionWrittenIndirectlyIsStillForbidden(t *testing.T) {
 		trailer := object.Dictionary{}
 		trailer.Set("Root", object.IndirectRef{Number: 1})
 
-		errs := checkNoForbiddenActions(mkView(objs, trailer), PDFA2b)
+		errs := checkNoForbiddenActions(mkView(objs, &trailer), PDFA2b)
 		if !hasMessage(errs, "JavaScript") {
 			t.Errorf("%s /S: a forbidden action was not reported: %v", form, errs)
 		}
@@ -115,7 +115,7 @@ func TestAnImageWrittenIndirectlyIsStillAnImage(t *testing.T) {
 	for _, form := range []string{"direct", "indirect"} {
 		objs, img := build(form)
 		img.Dict.Set("Alternates", object.Array{})
-		if errs := checkNoAlternateImages(mkView(objs, object.Dictionary{}), PDFA2b); !hasMessage(errs, "/Alternates") {
+		if errs := checkNoAlternateImages(mkView(objs, nil), PDFA2b); !hasMessage(errs, "/Alternates") {
 			t.Errorf("%s /Subtype: /Alternates was not reported: %v", form, errs)
 		}
 
@@ -125,7 +125,7 @@ func TestAnImageWrittenIndirectlyIsStillAnImage(t *testing.T) {
 		} else {
 			img.Dict.Set("Interpolate", indirect(objs, 10, object.Boolean(true)))
 		}
-		if errs := checkInterpolate(mkView(objs, object.Dictionary{}), PDFA2b); !hasMessage(errs, "/Interpolate") {
+		if errs := checkInterpolate(mkView(objs, nil), PDFA2b); !hasMessage(errs, "/Interpolate") {
 			t.Errorf("%s: /Interpolate true was not reported: %v", form, errs)
 		}
 	}
@@ -157,7 +157,7 @@ func TestATransparencyGroupWrittenIndirectlyIsStillTransparency(t *testing.T) {
 		trailer := object.Dictionary{}
 		trailer.Set("Root", object.IndirectRef{Number: 1})
 
-		errs := checkNoTransparency(mkView(objs, trailer), PDFA1b)
+		errs := checkNoTransparency(mkView(objs, &trailer), PDFA1b)
 		if !hasMessage(errs, "Transparency") {
 			t.Errorf("%s /S: a transparency group was not reported at PDF/A-1b: %v", form, errs)
 		}
@@ -184,7 +184,7 @@ func TestAType3FontWrittenIndirectlyIsStillExemptFromEmbedding(t *testing.T) {
 			font.Set("Subtype", indirect(objs, 9, object.Name("Type3")))
 		}
 
-		errs := checkOneFontEmbedded(mkView(objs, object.Dictionary{}), font, 5, PDFA2b)
+		errs := checkOneFontEmbedded(mkView(objs, nil), font, 5, PDFA2b)
 		if len(errs) != 0 {
 			t.Errorf("%s /Subtype: a Type 3 font, which has no program to embed, "+
 				"was reported: %v", form, errs)
@@ -212,7 +212,7 @@ func TestAnAnnotationWrittenIndirectlyIsStillAnAnnotation(t *testing.T) {
 		}
 		objs[5] = &object.IndirectObject{Number: 5, Value: annot}
 
-		errs := checkAnnotationFlags(mkView(objs, object.Dictionary{}), PDFA2b)
+		errs := checkAnnotationFlags(mkView(objs, nil), PDFA2b)
 		if !hasMessage(errs, "/F") {
 			t.Errorf("%s /Type: the annotation was not looked at at all: %v", form, errs)
 		}

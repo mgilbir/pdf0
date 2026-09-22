@@ -60,7 +60,7 @@ func buildObjectStream(nums []int, bodies map[int][]byte, objStmNum int) (*objec
 	dict.Set("First", object.Integer(first))
 	dict.Set("Filter", object.Name("FlateDecode"))
 	dict.Set("Length", object.Integer(len(encoded)))
-	return &object.IndirectObject{Number: objStmNum, Value: &object.Stream{Dict: *dict, Data: encoded}}, index
+	return &object.IndirectObject{Number: objStmNum, Value: object.NewStream(dict, encoded)}, index
 }
 
 // buildWriteSet returns the objects Write should serialize. When regenerating a

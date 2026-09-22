@@ -41,7 +41,7 @@ func TestMarkComposite(t *testing.T) {
 
 // TestUACIDFontCIDSetNonSubset confirms a non-subset font is out of scope.
 func TestUACIDFontCIDSetNonSubset(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	f := &object.Dictionary{}
 	f.Set("Subtype", object.Name("Type0"))
 	f.Set("BaseFont", object.Name("Arial")) // no subset tag

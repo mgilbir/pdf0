@@ -10,7 +10,7 @@ import (
 // clears when only non-zero CIDs are shown.
 func TestUANotdefCID(t *testing.T) {
 	mk := func(content string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		font := &object.Dictionary{}
 		font.Set("Type", object.Name("Font"))
 		font.Set("Subtype", object.Name("Type0"))
@@ -57,7 +57,7 @@ func TestUANotdefCID(t *testing.T) {
 // that does not exist.
 func TestUANotdefCIDReadsAnEmbeddedCMap(t *testing.T) {
 	mk := func(content, cmapSrc string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		enc := &object.Stream{Dict: object.Dictionary{}, Data: []byte(cmapSrc)}
 		enc.Dict.Set("Length", object.Integer(len(cmapSrc)))
 		font := &object.Dictionary{}

@@ -23,7 +23,7 @@ func imageXObject(w, h, bpc int, cs, filter string, data []byte) *object.Stream 
 	if filter != "" {
 		d.Set("Filter", object.Name(filter))
 	}
-	return &object.Stream{Dict: d, Data: data}
+	return object.NewStream(&d, data)
 }
 
 func imageDoc(images map[string]*object.Stream) *Document {

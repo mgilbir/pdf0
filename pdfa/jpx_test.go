@@ -50,7 +50,7 @@ func TestJPXClauseIsPinnedPerLevel(t *testing.T) {
 	trailer.Set("Root", object.IndirectRef{Number: 1})
 	doc := mkView(map[int]*object.IndirectObject{
 		2: {Number: 2, Value: stream},
-	}, trailer)
+	}, &trailer)
 
 	if errs := checkJPXImages(doc, PDFA2b); !hasMessage(errs, "2 colour channels") {
 		t.Fatalf("the fixture does not violate anything at PDF/A-2b, so the "+

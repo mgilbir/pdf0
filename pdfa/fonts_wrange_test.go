@@ -13,7 +13,7 @@ import (
 // reachable memory/CPU exhaustion via the public validator.
 func TestParseCIDWidthsBoundsRange(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 
 		// [0 2000000000 500] — a ~2e9-wide range. Must be skipped, not expanded.
 		// If the guard regresses this test hangs / OOMs instead of failing cleanly.

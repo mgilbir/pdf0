@@ -11,7 +11,7 @@ import (
 // artifact) and an untagged one is accepted.
 func TestUAPrinterMark(t *testing.T) {
 	mk := func(tagged bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		a := &object.Dictionary{}
 		a.Set("Type", object.Name("Annot"))
 		a.Set("Subtype", object.Name("PrinterMark"))
@@ -36,7 +36,7 @@ func TestUAPrinterMark(t *testing.T) {
 // TestUAMediaClips checks that a nested media clip missing /CT or /Alt is caught.
 func TestUAMediaClips(t *testing.T) {
 	mk := func(ct, alt bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		mc := &object.Dictionary{}
 		mc.Set("Type", object.Name("MediaClip"))
 		if ct {
@@ -80,7 +80,7 @@ func TestUAMediaClips(t *testing.T) {
 // TestUAMediaClipEmptyAlt flags a media clip whose /Alt has no non-empty text.
 func TestUAMediaClipEmptyAlt(t *testing.T) {
 	mk := func(alt object.Object) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		mc := &object.Dictionary{}
 		mc.Set("Type", object.Name("MediaClip"))
 		mc.Set("CT", object.String{Value: []byte("video/mp4")})

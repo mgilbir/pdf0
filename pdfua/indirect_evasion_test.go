@@ -52,7 +52,7 @@ func TestAnAnnotationSubtypeWrittenIndirectlyIsStillRead(t *testing.T) {
 			a.Set("Subtype", indirect(objs, 9, subtype))
 		}
 		objs[5] = &object.IndirectObject{Number: 5, Value: a}
-		return checkUAAnnotations(mkView(objs, object.Dictionary{}))
+		return checkUAAnnotations(mkView(objs, nil))
 	}
 
 	for _, form := range []string{"direct", "indirect"} {
@@ -81,7 +81,7 @@ func TestASubsetTagWrittenIndirectlyIsStillASubsetTag(t *testing.T) {
 		} else {
 			f.Set("BaseFont", indirect(objs, 9, object.Name("ABCDEF+Arial")))
 		}
-		if !isSubsetFont(mkView(objs, object.Dictionary{}), f) {
+		if !isSubsetFont(mkView(objs, nil), f) {
 			t.Errorf("%s /BaseFont: a subset tag was not recognised, so the "+
 				"glyph-coverage and /CIDSet rules do not run", form)
 		}
@@ -121,7 +121,7 @@ func TestAStructureElementTypeWrittenIndirectlyIsStillAStructureElement(t *testi
 		trailer := object.Dictionary{}
 		trailer.Set("Root", object.IndirectRef{Number: 1})
 
-		v := checkUAStructNesting(mkView(objs, trailer), catalog)
+		v := checkUAStructNesting(mkView(objs, &trailer), catalog)
 		if !has(v, "TD") {
 			t.Errorf("%s /S: a <TD> outside a table was not reported — the "+
 				"element was not seen as a structure element at all: %v", form, v)

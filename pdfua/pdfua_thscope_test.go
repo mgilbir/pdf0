@@ -8,7 +8,7 @@ import (
 
 func TestUATableTHScope(t *testing.T) {
 	mk := func(scope string, hasID bool) (core.View, *object.Dictionary) {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		th := &object.Dictionary{}
 		th.Set("S", object.Name("TH"))
 		if scope != "" {

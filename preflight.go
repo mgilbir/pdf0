@@ -72,7 +72,7 @@ func (d *Document) Repair(level pdfa.Level) []RepairAction {
 		if _, err := rand.Read(id); err == nil {
 			trailer := d.Trailer.Clone()
 			trailer.Set("ID", object.Array{object.String{Value: id}, object.String{Value: append([]byte(nil), id...)}})
-			d.Trailer = *trailer
+			d.Trailer = *trailer // dictcopy: installs the edited clone; nothing else holds it
 			add("added a missing file identifier (/ID)")
 		}
 	}
