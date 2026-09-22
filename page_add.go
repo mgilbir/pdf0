@@ -182,15 +182,15 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face, refs map[object
 	}
 	for name, face := range faces {
 		if face == nil {
-			return nil, fmt.Errorf("pdf0: the face named /%s is nil", name)
+			return nil, fmt.Errorf("pdf0: the face named %s is nil", name)
 		}
 		if _, clash := merged[name]; clash {
 			return nil, fmt.Errorf(
-				"pdf0: /%s names both a face to embed and a font dictionary; it can be one of them", name)
+				"pdf0: %s names both a face to embed and a font dictionary; it can be one of them", name)
 		}
 		ref, err := face.Embed(d)
 		if err != nil {
-			return nil, fmt.Errorf("embedding the face named /%s: %w", name, err)
+			return nil, fmt.Errorf("embedding the face named %s: %w", name, err)
 		}
 		merged[name] = ref
 	}
@@ -244,7 +244,7 @@ func (p Page) resources() (*object.Dictionary, error) {
 		for _, name := range g.names {
 			value, ok := g.defs[name]
 			if !ok {
-				return nil, fmt.Errorf("pdf0: the content stream uses /%s but no /%s resource defines it",
+				return nil, fmt.Errorf("pdf0: the content stream uses %s but no %s resource defines it",
 					name, g.key)
 			}
 			sub.Set(name, value)

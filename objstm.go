@@ -45,7 +45,7 @@ type objStmEntry struct {
 // individual objects without decoding twice.
 func parseObjStmIndex(cancel core.Canceler, stream *object.Stream, lim core.Limits) (data []byte, entries []objStmEntry, first int, err error) {
 	if t, ok := stream.Dict.Get("Type").(object.Name); ok && t != "ObjStm" {
-		return nil, nil, 0, fmt.Errorf("not an object stream: /Type /%s", t)
+		return nil, nil, 0, fmt.Errorf("not an object stream: /Type %s", t)
 	}
 	n, ok := stream.Dict.Get("N").(object.Integer)
 	if !ok || n < 0 {

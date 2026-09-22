@@ -237,14 +237,14 @@ func checkLevelAStructTypes(doc core.View, level Level) []Violation {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
-				Message: fmt.Sprintf("non-standard structure type /%s is not mapped to a standard type by /RoleMap", st),
+				Message: fmt.Sprintf("non-standard structure type %s is not mapped to a standard type by /RoleMap", st),
 			})
 		}
 		if cyclic, complete := core.RoleMapChainCycles(doc, st, roleMap); cyclic && complete {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
-				Message: fmt.Sprintf("/RoleMap contains a circular mapping for structure type /%s", st),
+				Message: fmt.Sprintf("/RoleMap contains a circular mapping for structure type %s", st),
 			})
 		}
 	}

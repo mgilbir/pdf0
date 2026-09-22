@@ -92,7 +92,7 @@ func parseParams(doc core.View, encObj object.Object) (*params, error) {
 	switch f := resolve(enc.Get("Filter")).(type) {
 	case object.Name:
 		if f != "Standard" {
-			return nil, unsupported("/Filter /%s: only the standard security handler is implemented", f)
+			return nil, unsupported("/Filter %s: only the standard security handler is implemented", f)
 		}
 	case nil:
 		return nil, malformed("/Filter is missing")
@@ -227,17 +227,17 @@ func (p *params) resolveFilters(doc core.View, enc *object.Dictionary, resolve f
 		case object.Name:
 			name = n
 		default:
-			return invalid, malformed("/%s is a %T, not a name", key, n)
+			return invalid, malformed("%s is a %T, not a name", key, n)
 		}
 		if name == "Identity" {
 			return None, nil
 		}
 		if cf == nil {
-			return invalid, malformed("/%s names crypt filter /%s but there is no /CF dictionary", key, name)
+			return invalid, malformed("%s names crypt filter %s but there is no /CF dictionary", key, name)
 		}
 		entry := cf.Get(name)
 		if entry == nil {
-			return invalid, malformed("/%s names crypt filter /%s, which /CF does not define", key, name)
+			return invalid, malformed("%s names crypt filter %s, which /CF does not define", key, name)
 		}
 		return p.filterMethod(name, resolve(entry), resolve)
 	}
@@ -263,7 +263,7 @@ func (p *params) resolveFilters(doc core.View, enc *object.Dictionary, resolve f
 func (p *params) filterMethod(name object.Name, entry object.Object, resolve func(object.Object) object.Object) (method, error) {
 	fd, ok := entry.(*object.Dictionary)
 	if !ok {
-		return invalid, malformed("crypt filter /%s is a %T, not a dictionary", name, entry)
+		return invalid, malformed("crypt filter %s is a %T, not a dictionary", name, entry)
 	}
 	var cfm object.Name = "None" // Default value: None
 	switch c := resolve(fd.Get("CFM")).(type) {
@@ -271,7 +271,7 @@ func (p *params) filterMethod(name object.Name, entry object.Object, resolve fun
 	case object.Name:
 		cfm = c
 	default:
-		return invalid, malformed("crypt filter /%s: /CFM is a %T, not a name", name, c)
+		return invalid, malformed("crypt filter %s: /CFM is a %T, not a name", name, c)
 	}
 	switch {
 	case p.v == 4 && cfm == "V2":
@@ -284,9 +284,9 @@ func (p *params) filterMethod(name object.Name, entry object.Object, resolve fun
 		// "The application shall not decrypt data but shall direct the input
 		// stream to the security handler for decryption" — i.e. a handler
 		// other than this one.
-		return invalid, unsupported("crypt filter /%s has /CFM /None: its data is decrypted by a handler other than the standard one", name)
+		return invalid, unsupported("crypt filter %s has /CFM /None: its data is decrypted by a handler other than the standard one", name)
 	}
-	return invalid, unsupported("crypt filter /%s: /CFM /%s is not defined for /V %d (ISO 32000-2 7.6.4.1: V2 or AESV2 at revision 4, AESV3 at revision 6)", name, cfm, p.v)
+	return invalid, unsupported("crypt filter %s: /CFM %s is not defined for /V %d (ISO 32000-2 7.6.4.1: V2 or AESV2 at revision 4, AESV3 at revision 6)", name, cfm, p.v)
 }
 
 // resolveKeyLen sets the file key length, in bytes.
@@ -333,7 +333,7 @@ func (p *params) resolveKeyLen(doc core.View, enc *object.Dictionary, resolve fu
 		}
 		n, ok := lv.(object.Integer)
 		if !ok {
-			return malformed("crypt filter /%s: /Length is a %T, not an integer", name, lv)
+			return malformed("crypt filter %s: /Length is a %T, not an integer", name, lv)
 		}
 		var bytes int
 		switch {
@@ -342,7 +342,7 @@ func (p *params) resolveKeyLen(doc core.View, enc *object.Dictionary, resolve fu
 		case n >= 40 && n <= 128 && n%8 == 0:
 			bytes = int(n) / 8 // bits, as producers commonly write it
 		default:
-			return malformed("crypt filter /%s: /Length %d is neither 5 to 16 bytes nor 40 to 128 bits", name, n)
+			return malformed("crypt filter %s: /Length %d is neither 5 to 16 bytes nor 40 to 128 bits", name, n)
 		}
 		if declared != 0 && declared != bytes {
 			return malformed("crypt filters declare different key lengths (%d and %d bytes) for one file key", declared, bytes)
@@ -388,9 +388,9 @@ func requiredInt(resolve func(object.Object) object.Object, d *object.Dictionary
 	case object.Integer:
 		return int64(n), nil
 	case nil:
-		return 0, malformed("/%s is missing", key)
+		return 0, malformed("%s is missing", key)
 	default:
-		return 0, malformed("/%s is a %T, not an integer", key, n)
+		return 0, malformed("%s is a %T, not an integer", key, n)
 	}
 }
 
@@ -399,12 +399,12 @@ func requiredBytes(resolve func(object.Object) object.Object, d *object.Dictiona
 	switch s := resolve(d.Get(key)).(type) {
 	case object.String:
 		if len(s.Value) < n {
-			return nil, malformed("/%s is %d bytes, want %d", key, len(s.Value), n)
+			return nil, malformed("%s is %d bytes, want %d", key, len(s.Value), n)
 		}
 		return s.Value[:n:n], nil
 	case nil:
-		return nil, malformed("/%s is missing", key)
+		return nil, malformed("%s is missing", key)
 	default:
-		return nil, malformed("/%s is a %T, not a string", key, s)
+		return nil, malformed("%s is a %T, not a string", key, s)
 	}
 }

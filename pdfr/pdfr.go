@@ -93,12 +93,12 @@ func CheckPage(d core.View, page *object.Dictionary, objNum int, add func(rule, 
 		xnum := object.RefNum(xobjs.Values[i])
 		sub, _ := d.ResolveName(st.Dict.Get("Subtype"))
 		if sub != "Image" {
-			add("raster-only", fmt.Sprintf("XObject /%s is not an image (/Subtype %q); a PDF/R page shall use image XObjects only", key, sub), xnum)
+			add("raster-only", fmt.Sprintf("XObject %s is not an image (/Subtype %q); a PDF/R page shall use image XObjects only", key, sub), xnum)
 			continue
 		}
 		for _, f := range streamFilters(d, st) {
 			if !pdfrImageFilters[f] {
-				add("image-filter", fmt.Sprintf("image XObject /%s uses filter /%s, which PDF/R does not permit", key, f), xnum)
+				add("image-filter", fmt.Sprintf("image XObject %s uses filter %s, which PDF/R does not permit", key, f), xnum)
 			}
 		}
 	}

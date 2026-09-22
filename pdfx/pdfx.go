@@ -179,12 +179,12 @@ func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int)) {
 				add("forbidden", "reference XObjects (/Ref) are not permitted in PDF/X-4", num)
 			}
 		case "Movie", "Sound", "Screen", "FileAttachment":
-			add("forbidden", fmt.Sprintf("annotation subtype /%s is not permitted", sub), num)
+			add("forbidden", fmt.Sprintf("annotation subtype %s is not permitted", sub), num)
 		}
 		if t, _ := doc.ResolveName(d.Get("Type")); t == "ExtGState" {
 			for _, k := range []object.Name{"TR", "TR2"} {
 				if tr := d.Get(k); tr != nil && !pdfxTransferIsIdentity(doc, tr) {
-					add("forbidden", fmt.Sprintf("a transfer function (ExtGState /%s) is not permitted", k), num)
+					add("forbidden", fmt.Sprintf("a transfer function (ExtGState %s) is not permitted", k), num)
 				}
 			}
 		}
@@ -445,7 +445,7 @@ func pdfxCheckFontsEmbedded(doc core.View, add func(rule, msg string, obj int)) 
 				seenFont[fd] = true
 				if !fontIsEmbedded(doc, fd) {
 					name, _ := doc.ResolveName(fd.Get("BaseFont"))
-					add("font-embedding", fmt.Sprintf("font /%s (resource /%s) is not embedded", name, fonts.Keys[i]), object.RefNum(ref))
+					add("font-embedding", fmt.Sprintf("font %s (resource %s) is not embedded", name, fonts.Keys[i]), object.RefNum(ref))
 				}
 			}
 		}

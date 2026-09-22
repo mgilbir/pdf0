@@ -181,7 +181,7 @@ func ValidateOrderContext(ctx context.Context, doc core.View, rawData []byte) (r
 			if st, ok := doc.Resolve(ef.Get("F")).(*object.Stream); ok {
 				res.XML = doc.Content(st)
 				if sub, _ := doc.ResolveName(st.Dict.Get("Subtype")); !facturxIsXMLSubtype(sub) {
-					add("attachment", fmt.Sprintf("the order embedded-file /Subtype should be text/xml, got /%s", sub), num)
+					add("attachment", fmt.Sprintf("the order embedded-file /Subtype should be text/xml, got %s", sub), num)
 				}
 			} else {
 				add("attachment", "the order file specification has no embedded file stream (/EF /F)", num)

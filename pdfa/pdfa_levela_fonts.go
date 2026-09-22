@@ -28,7 +28,7 @@ func checkLevelAToUnicode(doc core.View, level Level) []Violation {
 		errs = append(errs, Violation{
 			Rule:    rule,
 			Level:   level,
-			Message: fmt.Sprintf("font /%s is used for rendering but has no ToUnicode CMap and meets no exemption", name),
+			Message: fmt.Sprintf("font %s is used for rendering but has no ToUnicode CMap and meets no exemption", name),
 			Object:  u.ObjNum,
 		})
 	}
