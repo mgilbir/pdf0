@@ -505,7 +505,7 @@ func TestDrawEmitsTheOffsetsItWasGiven(t *testing.T) {
 
 	var b content.Builder
 	b.BeginText().SetFont("F1", 10)
-	f.Draw(&b, glyphs, 10)
+	f.Draw(&b, "a\u0301", glyphs, 10)
 	b.EndText()
 	out, err := b.Bytes()
 	if err != nil {

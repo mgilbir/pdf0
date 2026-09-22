@@ -532,9 +532,9 @@ func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
 // A line's runs are drawn where the algorithm puts them and written to the
 // content stream in the order they were typed, so a reader copying text out of
 // the finished PDF gets the words in the order they are read. The glyphs *within*
-// a right-to-left run are another matter and do come out reversed — that is what
-// a text-showing operator can express, and it is what the shaping path has always
-// done — so the claim here is exactly about the runs.
+// a right-to-left run are drawn in visual order, which is all a text-showing
+// operator can express; the run carries its text as an /ActualText, so they
+// come out in the order they were written too. They used to come out reversed.
 func TestExtractedTextKeepsTheRunsInReadingOrder(t *testing.T) {
 	got := renderOf(t, `<p>one <bdo dir="rtl">abc def</bdo> two</p>`, layout.Options{})
 	if got.Document == nil {
@@ -550,10 +550,10 @@ func TestExtractedTextKeepsTheRunsInReadingOrder(t *testing.T) {
 	}
 	text := doc.ExtractText()
 
-	// The two overridden words are drawn "def" first and "abc" second — that is
-	// the reordering. Extracted, they must still be in the order they were
-	// written, each with its own glyphs reversed by the override.
-	first, second := strings.Index(text, "cba"), strings.Index(text, "fed")
+	// The two overridden words are drawn "fed" first and "cba" second — that is
+	// the reordering. Extracted, they must be in the order they were written,
+	// and each word as it was written.
+	first, second := strings.Index(text, "abc"), strings.Index(text, "def")
 	if first < 0 || second < 0 {
 		t.Fatalf("the overridden words are not in the extracted text %q", text)
 	}

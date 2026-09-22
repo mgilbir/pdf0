@@ -16,7 +16,7 @@ import (
 // original rather than against a reading of what it should do.
 
 // fmtVersion is the code this replaced, kept here as the oracle.
-func fmtVersion(pairs [][2]int, codespace string) []byte {
+func fmtVersion(pairs []toUnicodeEntry, codespace string) []byte {
 	var b bytes.Buffer
 	b.WriteString(`/CIDInit /ProcSet findresource begin
 12 dict begin
@@ -46,7 +46,11 @@ endcodespacerange
 		}
 		fmt.Fprintf(&b, "%d beginbfchar\n", end-start)
 		for _, p := range pairs[start:end] {
-			fmt.Fprintf(&b, "<%0*X> <%s>\n", digits, p[0], utf16beHex(rune(p[1])))
+			dst := ""
+			for _, r := range p.runes {
+				dst += utf16beHex(r)
+			}
+			fmt.Fprintf(&b, "<%0*X> <%s>\n", digits, p.code, dst)
 		}
 		b.WriteString("endbfchar\n")
 	}
@@ -64,26 +68,39 @@ func TestToUnicodeCMapMatchesTheFormattedVersion(t *testing.T) {
 	// The interesting values, then a lot of random ones. The edges are where a
 	// hand-written hex writer goes wrong: the pad boundaries, the ends of the
 	// BMP, and either side of the astral cutoff where a surrogate pair starts.
-	var edge [][2]int
+	var edge []toUnicodeEntry
 	for _, code := range []int{0, 1, 9, 10, 15, 16, 255, 256, 4095, 4096, 65535} {
 		for _, r := range []rune{0x01, 0x09, 0x0A, 0x0F, 0x10, 0x41, 0x7F, 0xFF, 0x100,
 			0x0FFF, 0x1000, 0xD7FF, 0xE000, 0xFFFD, 0xFFFF, 0x10000, 0x10001, 0x1F600, 0x10FFFF} {
-			edge = append(edge, [2]int{code, int(r)})
+			edge = append(edge, toUnicodeEntry{code: code, runes: []rune{r}})
 		}
 	}
 
 	rng := rand.New(rand.NewSource(1))
-	var random [][2]int
+	var random []toUnicodeEntry
 	for i := 0; i < 5000; i++ {
-		random = append(random, [2]int{rng.Intn(0x10000), rng.Intn(0x110000)})
+		random = append(random, toUnicodeEntry{code: rng.Intn(0x10000), runes: []rune{rune(rng.Intn(0x110000))}})
+	}
+	// Destinations of several characters — a ligature's, a conjunct's — are
+	// the characters' UTF-16 one after another, surrogate pairs included.
+	var multi []toUnicodeEntry
+	for i := 0; i < 500; i++ {
+		n := 1 + rng.Intn(6)
+		rs := make([]rune, n)
+		for j := range rs {
+			rs[j] = rune(rng.Intn(0x110000))
+		}
+		multi = append(multi, toUnicodeEntry{code: rng.Intn(0x10000), runes: rs})
 	}
 
 	for _, cs := range codespaces {
-		for name, pairs := range map[string][][2]int{
+		for name, pairs := range map[string][]toUnicodeEntry{
 			"empty":  nil,
-			"one":    {{0x41, 0x61}},
+			"one":    {{code: 0x41, runes: []rune{0x61}}},
+			"ffi":    {{code: 0x41, runes: []rune("ffi")}},
 			"edges":  edge,
 			"random": random,
+			"multi":  multi,
 			// Exactly at, and either side of, the 100-entry section cap.
 			"99":  random[:99],
 			"100": random[:100],

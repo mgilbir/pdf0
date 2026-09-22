@@ -385,9 +385,20 @@ func TestShapedTextValidatesAndKeepsItsLigature(t *testing.T) {
 	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
 		t.Errorf("violation on a page of shaped text: %s", e.Error())
 	}
-	// The ligature glyph reached the file with an outline.
-	if got := rd.ExtractText(); !strings.Contains(got, "ﬁ") {
-		t.Errorf("extracted %q, which does not contain the fi ligature", got)
+	// The ligature glyph is what the page shows — code 3, the fixture's ﬁ —
+	// and it validated above, so it reached the file with an outline.
+	var shown []byte
+	for _, s := range spans {
+		shown = append(shown, s.Codes...)
+	}
+	if !bytes.Contains(shown, []byte{0, 3}) {
+		t.Errorf("the page shows codes % X, which do not include the ligature's", shown)
+	}
+	// And the text comes back as it was written: the ligature's ToUnicode
+	// entry is the "fi" it was drawn for, not the U+FB01 the cmap registers
+	// the glyph under.
+	if got := strings.TrimSpace(rd.ExtractText()); got != "fix" {
+		t.Errorf("extracted %q, want %q", got, "fix")
 	}
 }
 

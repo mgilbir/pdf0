@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -52,6 +53,12 @@ var errEmbedBeforeUse = errors.New(
 //
 // The name written to /BaseFont carries the six-letter subset tag ISO 32000-2
 // 9.6.4 requires, so a reader can tell two subsets of one face apart.
+//
+// The font's own licence is honoured (see embedding.go): a font whose OS/2
+// fsType forbids embedding, or permits only its bitmaps, is refused with
+// ErrRestrictedLicense or ErrBitmapEmbeddingOnly, and one that forbids
+// subsetting is embedded whole, without a subset tag. Every stream is
+// Flate-compressed.
 func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	if f.IsStandard() {
 		// A standard face embeds nothing: the reader has it, and naming it is
@@ -89,7 +96,7 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 		return object.IndirectRef{}, err
 	}
 
-	program, kept, err := f.SubsetGlyphs()
+	program, kept, subset, err := f.programToEmbed()
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
@@ -103,12 +110,14 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 			return object.IndirectRef{}, errNoCollection
 		}
 	}
-	baseFont := object.Name(subsetTag(kept) + "+" + f.Name())
+	baseFont := f.baseFontName(kept, subset)
 
-	// The program. /Length1 is the uncompressed length, which a reader needs to
-	// know how much of a compressed stream is font data.
-	programStream := &object.Stream{Dict: object.Dictionary{}, Data: program}
-	programStream.Dict.Set("Length", object.Integer(len(program)))
+	// The program, Flate-compressed like every other stream this module
+	// writes. A CJK subset is a megabyte and a half of CFF before compression
+	// and a third of that after, and a reader decompresses a font stream as it
+	// does a content stream. /Length1 is the length after decoding, which a
+	// reader of a FontFile2 needs to know how much of the stream is the font.
+	programStream := flateStream(program)
 	if f.IsCFF() {
 		// FontFile3 carries a program whose format its /Subtype names; an
 		// OpenType wrapper keeps the tables a reader may want beside the
@@ -119,14 +128,11 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	}
 	programRef := doc.Add(programStream)
 
-	// /CIDSet: one bit per CID, high bit of each byte first, set for the glyphs
-	// the subset carries. It is mandatory now that /BaseFont is tagged as a
-	// subset, and its contents are checked against the embedded program — so it
-	// is written from the same kept set the subsetter used, not from the
-	// original font.
-	cidSet := &object.Stream{Dict: object.Dictionary{}, Data: f.cidSetBits(kept)}
-	cidSet.Dict.Set("Length", object.Integer(len(cidSet.Data)))
-	cidSetRef := doc.Add(cidSet)
+	// /CIDSet: one bit per CID, high bit of each byte first, set for every
+	// CID the embedded program has. It is mandatory for a subset at PDF/A-1,
+	// and whenever it is present its contents are checked against the
+	// program — see cidSetBits for what "has" means.
+	cidSetRef := doc.Add(flateStream(f.cidSetBits(kept, program)))
 
 	d := f.Descriptor()
 	descriptor := &object.Dictionary{}
@@ -148,8 +154,8 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	} else {
 		descriptor.Set("FontFile2", programRef)
 	}
-	// /CIDSet is required of a subset font whatever its outlines are, and both
-	// kinds are subsets here — the /BaseFont tag says so.
+	// /CIDSet is required of a subset font whatever its outlines are, and
+	// correct of a whole one, which lists every CID the program has.
 	descriptor.Set("CIDSet", cidSetRef)
 	descriptorRef := doc.Add(descriptor)
 
@@ -182,9 +188,7 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	}
 	cidFontRef := doc.Add(cidFont)
 
-	toUnicode := &object.Stream{Dict: object.Dictionary{}, Data: f.toUnicodeCMap()}
-	toUnicode.Dict.Set("Length", object.Integer(len(toUnicode.Data)))
-	toUnicodeRef := doc.Add(toUnicode)
+	toUnicodeRef := doc.Add(flateStream(f.toUnicodeCMap()))
 
 	fd := &object.Dictionary{}
 	fd.Set("Type", object.Name("Font"))
@@ -204,14 +208,13 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 // by the other of the two numberings. Both are written from the program's own
 // metrics, because the validator checks them against it.
 func (f *Face) embedSimple(doc Allocator) (object.IndirectRef, error) {
-	program, kept, err := f.SubsetGlyphs()
+	program, kept, subset, err := f.programToEmbed()
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	baseFont := object.Name(subsetTag(kept) + "+" + f.Name())
+	baseFont := f.baseFontName(kept, subset)
 
-	programStream := &object.Stream{Dict: object.Dictionary{}, Data: program}
-	programStream.Dict.Set("Length", object.Integer(len(program)))
+	programStream := flateStream(program)
 	programStream.Dict.Set("Length1", object.Integer(len(program)))
 	programRef := doc.Add(programStream)
 
@@ -244,8 +247,7 @@ func (f *Face) embedSimple(doc Allocator) (object.IndirectRef, error) {
 
 	first, last, widths := f.simpleWidths()
 
-	toUnicode := &object.Stream{Dict: object.Dictionary{}, Data: f.simpleToUnicode(first, last)}
-	toUnicode.Dict.Set("Length", object.Integer(len(toUnicode.Data)))
+	toUnicode := flateStream(f.simpleToUnicode(first, last))
 
 	fd := &object.Dictionary{}
 	fd.Set("Type", object.Name("Font"))
@@ -278,6 +280,27 @@ func (f *Face) embedStandard(doc Allocator) (object.IndirectRef, error) {
 		fd.Set("Encoding", object.Name("WinAnsiEncoding"))
 	}
 	return doc.Add(fd), nil
+}
+
+// baseFontName is the /BaseFont a program is embedded under: the face's name,
+// with the six-letter tag ISO 32000-2 9.6.4 requires in front of it when the
+// program is a subset — and only then, because the tag is a statement that it
+// is one, and a font embedded whole because its licence says so is not.
+func (f *Face) baseFontName(kept []int, subset bool) object.Name {
+	if !subset {
+		return object.Name(f.Name())
+	}
+	return object.Name(subsetTag(kept) + "+" + f.Name())
+}
+
+// flateStream is data as a Flate-compressed stream, which is how every stream
+// this package writes is written: the font program, /CIDSet and /ToUnicode.
+func flateStream(data []byte) *object.Stream {
+	compressed := core.FlateEncode(data)
+	st := object.NewStream(nil, compressed)
+	st.Dict.Set("Filter", object.Name("FlateDecode"))
+	st.Dict.Set("Length", object.Integer(len(compressed)))
+	return st
 }
 
 // The FontDescriptor flag bits this package sets by hand (ISO 32000-2 9.8.1,
@@ -469,7 +492,7 @@ func (f *Face) simpleWidths() (first, last int, widths object.Array) {
 // what PDF/A-2u and later require.
 func (f *Face) simpleToUnicode(first, last int) []byte {
 	cmap := f.Cmap()
-	pairs := make([][2]int, 0, last-first+1)
+	entries := make([]toUnicodeEntry, 0, last-first+1)
 	for code := first; code <= last; code++ {
 		name := font.WinAnsiEncodingNames[byte(code)]
 		r, ok := font.GlyphNameToRune(name, byte(code))
@@ -479,9 +502,9 @@ func (f *Face) simpleToUnicode(first, last int) []byte {
 		if gid, mapped := cmap[r]; !mapped || gid == 0 {
 			continue // no glyph: nothing will ever show this code
 		}
-		pairs = append(pairs, [2]int{code, int(r)})
+		entries = append(entries, toUnicodeEntry{code: code, runes: []rune{r}})
 	}
-	return buildToUnicodeCMap(pairs, "<00> <FF>")
+	return buildToUnicodeCMap(entries, "<00> <FF>")
 }
 
 // subsetTag is the six uppercase letters ISO 32000-2 9.6.4 requires in front of
@@ -508,13 +531,19 @@ func subsetTag(kept []int) string {
 }
 
 // cidSetBits builds the /CIDSet bitmap: bit i, counting from the high bit of
-// byte 0, is set when the subset carries glyph i.
+// byte 0, is set when the embedded program has CID i.
 //
-// It is written from the kept set rather than by re-reading the emitted
-// program, so that a disagreement between the two is a real defect this
-// module's validator will report rather than something rediscovered here and
-// silently papered over.
-func (f *Face) cidSetBits(kept []int) []byte {
+// ISO 19005-2 6.2.11.4.2 (and -1 6.3.5 before it) says the set "shall identify
+// all CIDs which are present in the font program, regardless of whether a CID
+// in the font is referenced or used by the PDF or not". For a font addressed by
+// glyph index those are the glyphs the subset kept with outlines, which is the
+// kept set. For a CID-keyed CFF they are every CID its charset lists — and
+// forme's subsetter (v0.3.0) keeps the whole charset, giving the glyphs it
+// dropped an empty charstring each rather than removing them. So the set is
+// the kept glyphs' CIDs together with the charset of the program actually
+// embedded, read back from it: listing only the kept ones described a smaller
+// font than the one in the file, which PDF/A-1b reports.
+func (f *Face) cidSetBits(kept []int, program []byte) []byte {
 	// One bit per CID, for the same reason /W is keyed by CID: the set says
 	// which characters of the collection the subset carries, and for a
 	// CID-keyed CFF those are not the glyph indices.
@@ -530,6 +559,19 @@ func (f *Face) cidSetBits(kept []int) []byte {
 			highest = cid
 		}
 	}
+	if cff := font.SFNTTables(program)["CFF "]; cff != nil {
+		if p := font.ParseCFF(cff); p != nil && p.GIDToCID != nil {
+			for _, cid := range p.GIDToCID {
+				if cid < 0 || cid > 0xFFFF {
+					continue // not a CID a two-byte code can reach
+				}
+				cids = append(cids, cid)
+				if cid > highest {
+					highest = cid
+				}
+			}
+		}
+	}
 	bits := make([]byte, highest/8+1)
 	for _, cid := range cids {
 		bits[cid/8] |= 0x80 >> (cid % 8)
@@ -542,53 +584,59 @@ func (f *Face) cidSetBits(kept []int) []byte {
 // searched or read aloud — the glyph indices mean nothing outside the font —
 // and PDF/A requires one.
 //
-// It is written from the font's own cmap, inverted: every code the encoder can
-// produce for a rune maps back to that rune. Where several runes share a glyph
-// the lowest wins, which is arbitrary but deterministic, and the alternative —
-// omitting the entry — would make that glyph unextractable.
+// It covers the glyphs the face drew and nothing else. Each says what it was
+// drawn for, as the drawing recorded it (textRecord): a ligature the characters
+// it replaced, a conjunct its cluster, an ordinary letter its character. A glyph
+// the face used without this package seeing the text — a caller of the shaping
+// face directly, or the other wrapper of an adopted face — says what the font's
+// cmap names it by, which is what this CMap used to say for every glyph.
+//
+// It used to invert the whole cmap, which for a CJK face is seventeen thousand
+// entries — 232 KB of CMap for a page of three characters — and still said
+// nothing for the glyphs shaping reaches that no character maps to.
 func (f *Face) toUnicodeCMap() []byte {
-	cmap := f.Cmap()
-	rev := make(map[int]rune, len(cmap))
-	for r, gid := range cmap {
-		if gid == 0 || forbiddenInToUnicode(r) {
-			// U+0000, U+FEFF and U+FFFE are not text: mapping a glyph to one
-			// says the character it represents is a byte-order mark or nothing
-			// at all, and PDF/A reports it. A glyph whose only cmap entry is
-			// one of these is left unmapped, which costs its extractability —
-			// the alternative costs conformance, and an unextractable glyph is
-			// the smaller loss.
+	rec := f.record()
+	used := f.Used()
+	entries := make([]toUnicodeEntry, 0, len(used))
+	for _, gid := range used {
+		if gid == 0 {
+			continue // .notdef stands for nothing
+		}
+		var runes []rune
+		if s, ok := rec.byGID[gid]; ok {
+			runes = []rune(s)
+		} else if r, ok := f.canonical(gid); ok {
+			runes = []rune{r}
+		}
+		if len(runes) == 0 {
 			continue
 		}
-		if prev, ok := rev[gid]; !ok || betterForToUnicode(r, prev) {
-			rev[gid] = r
-		}
-	}
-	gids := make([]int, 0, len(rev))
-	for gid := range rev {
-		gids = append(gids, gid)
-	}
-	sort.Ints(gids)
-	// Keyed by the code in the content stream, which is the CID — the same
-	// number /W and /CIDSet are keyed by, and for a CID-keyed CFF not the glyph
-	// index this map was built from. Getting it wrong does not show on the page
-	// at all: the glyphs are drawn from the codes and look right, and only the
-	// text copied out of the document is nonsense.
-	pairs := make([][2]int, 0, len(gids))
-	for _, gid := range gids {
-		pairs = append(pairs, [2]int{f.GlyphCode(gid), int(rev[gid])})
+		// Keyed by the code in the content stream, which is the CID — the
+		// same number /W and /CIDSet are keyed by, and for a CID-keyed CFF not
+		// the glyph index. Getting it wrong does not show on the page at all:
+		// the glyphs are drawn from the codes and look right, and only the
+		// text copied out of the document is nonsense.
+		entries = append(entries, toUnicodeEntry{code: f.GlyphCode(gid), runes: runes})
 	}
 	// GlyphCode can reorder, since a higher glyph may carry a lower CID.
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i][0] < pairs[j][0] })
-	return buildToUnicodeCMap(pairs, "<0000> <FFFF>")
+	sort.Slice(entries, func(i, j int) bool { return entries[i].code < entries[j].code })
+	return buildToUnicodeCMap(entries, "<0000> <FFFF>")
 }
 
-// buildToUnicodeCMap writes a ToUnicode CMap over code-to-character pairs,
-// which must be sorted by code.
+// toUnicodeEntry is one bfchar mapping: a code and the characters it stands
+// for, which for a ligature or a conjunct is more than one.
+type toUnicodeEntry struct {
+	code  int
+	runes []rune
+}
+
+// buildToUnicodeCMap writes a ToUnicode CMap over code-to-text entries, which
+// must be sorted by code.
 //
 // The codespace differs between the two font forms and is the caller's to
 // state: a composite font's codes are two bytes and a simple font's are one,
 // and a reader takes the range literally when splitting a shown string.
-func buildToUnicodeCMap(pairs [][2]int, codespace string) []byte {
+func buildToUnicodeCMap(pairs []toUnicodeEntry, codespace string) []byte {
 	var b bytes.Buffer
 	b.WriteString(`/CIDInit /ProcSet findresource begin
 12 dict begin
@@ -618,9 +666,11 @@ endcodespacerange
 			// Sprintf inside utf16beHex — allocated a string per entry and cost
 			// more than the rest of building the document's fonts put together.
 			b.WriteByte('<')
-			appendHex(&b, p[0], digits)
+			appendHex(&b, p.code, digits)
 			b.WriteString("> <")
-			appendUTF16BE(&b, rune(p[1]))
+			for _, r := range p.runes {
+				appendUTF16BE(&b, r)
+			}
 			b.WriteString(">\n")
 		}
 		b.WriteString("endbfchar\n")
