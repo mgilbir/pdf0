@@ -50,7 +50,7 @@ The repro programs live in the session scratchpad and are not committed.
 - **Critical:** a security break; a crash, fatal stack overflow or OOM reachable from a public entry point on untrusted input; or silent data loss on a common path.
 - **High:** wrong verdicts or wrong output on realistic inputs, super-linear DoS in the seconds-to-minutes range, and APIs whose easy path corrupts data.
 
-The prior audit (`codebase-audit-2026-07-26.md`, C1–C49) was reported as fully worked. **Nine of its items are reopened here as partial fixes or siblings the fix missed.** See §7.
+The prior audit (`codebase-audit-2026-07-26.md`, C1–C49) was reported as fully worked. **Twelve of its items are reopened here as partial fixes or siblings the fix missed.** See §7.
 
 ---
 
