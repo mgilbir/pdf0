@@ -552,10 +552,10 @@ func samplesToImage(data []byte, w, h, bpc int, cs string) (image.Image, bool) {
 
 	switch {
 	case (gray || mask) && bpc == 1:
-		stride := (w + 7) / 8
-		if len(data) < stride*h {
+		if !sampleDataFits(data, w, h, 1, 1) {
 			return nil, false
 		}
+		stride := (w + 7) / 8
 		im := image.NewGray(image.Rect(0, 0, w, h))
 		for y := 0; y < h; y++ {
 			row := data[y*stride:]
@@ -571,7 +571,7 @@ func samplesToImage(data []byte, w, h, bpc int, cs string) (image.Image, bool) {
 		}
 		return im, true
 	case gray && bpc == 8:
-		if len(data) < w*h {
+		if !sampleDataFits(data, w, h, 1, 8) {
 			return nil, false
 		}
 		im := image.NewGray(image.Rect(0, 0, w, h))
@@ -580,7 +580,7 @@ func samplesToImage(data []byte, w, h, bpc int, cs string) (image.Image, bool) {
 		}
 		return im, true
 	case rgb && bpc == 8:
-		if len(data) < w*h*3 {
+		if !sampleDataFits(data, w, h, 3, 8) {
 			return nil, false
 		}
 		im := image.NewRGBA(image.Rect(0, 0, w, h))

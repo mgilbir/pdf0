@@ -44,6 +44,7 @@ package object
 import (
 	"fmt"
 	"iter"
+	"math"
 )
 
 // Object is the interface all PDF objects implement. See the package
@@ -377,12 +378,36 @@ func (obj *IndirectObject) String() string {
 // anything that is not an Integer or a Real. PDF is loose about which of the
 // two a number arrives as — a /Width may be either — so nearly every consumer
 // wants the value and not the distinction.
+//
+// Int truncates a Real toward zero and saturates one outside the range of int
+// at math.MinInt or math.MaxInt; a NaN Real is 0. The values come from
+// untrusted files, so the result is always defined, never the
+// implementation-specific value of an out-of-range float conversion (which is
+// math.MinInt on amd64 for any overflow, positive or negative). A caller that
+// uses the result as a size must still bound it.
 func Int(obj Object) int {
 	switch n := obj.(type) {
 	case Integer:
+		// int is 64 bits on every platform this module supports; the clamp
+		// keeps a 32-bit build defined too.
+		if int64(n) > int64(math.MaxInt) {
+			return math.MaxInt
+		}
+		if int64(n) < int64(math.MinInt) {
+			return math.MinInt
+		}
 		return int(n)
 	case Real:
-		return int(n)
+		f := float64(n)
+		switch {
+		case math.IsNaN(f):
+			return 0
+		case f >= math.MaxInt: // float64(math.MaxInt) rounds up to 2^63
+			return math.MaxInt
+		case f <= math.MinInt:
+			return math.MinInt
+		}
+		return int(f)
 	}
 	return 0
 }

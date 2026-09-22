@@ -299,10 +299,20 @@ func (s *sampleReader) next() int {
 }
 
 // sampleDataFits reports whether data holds at least one full image of w x h
-// pixels with ncomp components at bpc bits, rows byte-aligned.
+// pixels with ncomp components at bpc bits, rows byte-aligned. Every argument
+// can come from the file, so nothing is multiplied that could wrap: each
+// dimension is compared against what the data could hold, by division. A
+// non-positive argument never fits.
 func sampleDataFits(data []byte, w, h, ncomp, bpc int) bool {
-	rowBytes := (w*ncomp*bpc + 7) / 8
-	return len(data) >= rowBytes*h
+	if w <= 0 || h <= 0 || ncomp <= 0 || bpc <= 0 {
+		return false
+	}
+	bits := int64(len(data)) * 8
+	if int64(w) > bits/int64(ncomp)/int64(bpc) {
+		return false // one row alone is larger than the data
+	}
+	rowBytes := (int64(w)*int64(ncomp)*int64(bpc) + 7) / 8 // ≤ len(data), no overflow
+	return int64(h) <= int64(len(data))/rowBytes
 }
 
 // resolveColorSpace resolves a PDF colour-space object to an imgColorSpace, or

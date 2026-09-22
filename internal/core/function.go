@@ -170,7 +170,9 @@ func evalType0(d View, stream *object.Stream, dict *object.Dictionary, domain []
 	total := 1
 	for i := range size {
 		size[i] = object.Int(d.Resolve(sizeArr[i]))
-		if size[i] < 1 {
+		// The product must not wrap: [MaxInt MaxInt] multiplies to 1 and would
+		// pass the sample-table check below, then index outside the table.
+		if size[i] < 1 || total > math.MaxInt/size[i] {
 			return nil, false
 		}
 		total *= size[i]
@@ -200,9 +202,11 @@ func evalType0(d View, stream *object.Stream, dict *object.Dictionary, domain []
 		return nil, false
 	}
 	data := d.Content(stream)
-	// Guard against a sample table that does not hold every grid sample.
-	needBits := int64(total) * int64(n) * int64(bps)
-	if int64(len(data))*8 < needBits {
+	// Guard against a sample table that does not hold every grid sample:
+	// total*n samples of bps bits each, compared by division so that no
+	// product of file-supplied numbers can overflow. Every sample offset below
+	// is then less than len(data)*8.
+	if total > int(int64(len(data))*8/int64(bps)/int64(n)) {
 		return nil, false
 	}
 	maxSample := float64(uint64(1)<<uint(bps) - 1)

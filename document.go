@@ -156,15 +156,12 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	if err := cancel.StopErr("reading PDF"); err != nil {
 		return nil, err
 	}
-	data := make([]byte, size)
-	n, err := r.ReadAt(data, 0)
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("reading input: %w", err)
-	}
-	if int64(n) < size {
-		// Zero padding from a short read counts as PDF whitespace and would
-		// silently mask truncated input.
-		return nil, fmt.Errorf("short read: got %d of %d bytes", n, size)
+	// The size is the caller's claim: ReadSource refuses a negative one and
+	// commits memory only as bytes arrive, so a claim larger than the source
+	// fails without first allocating it (audit C123).
+	data, err := syntax.ReadSource(r, size)
+	if err != nil {
+		return nil, err
 	}
 
 	doc = &Document{
