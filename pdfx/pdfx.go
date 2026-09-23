@@ -4,23 +4,17 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
-	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
-	"strings"
 )
 
-// This file implements validation for PDF/X-4 (ISO 15930-7), the print-exchange
-// profile that PDF/VT-1 (ISO 16612-2) builds on. The checks are conservative and
-// structural: identification, the PDF/X output intent with an embedded ICC
-// destination profile, the /Trapped flag, page geometry boxes, font embedding,
-// and the prohibition on encryption. They are grounded in the requirements of
-// ISO 15930-7 and calibrated against the valid Cal Poly PDF/VT-1 test suite,
-// whose files are conforming PDF/X-4.
-//
-// Colour-space output-intent coverage (device colour requiring the destination
-// profile) and the full forbidden-feature list are deliberately left to later
-// work; the pieces here are the ones that can be verified false-positive-free
-// against the valid corpus today.
+// This file implements validation for the PDF/X levels (ISO 15930): PDF/X-1a,
+// PDF/X-3, PDF/X-4 and -4p, and PDF/X-6. The checks are conservative and
+// structural: identification, the PDF/X output intent and its ICC destination
+// profile, the /Trapped flag, page geometry boxes, font embedding, device
+// colour coverage, forbidden features, transparency where the level predates
+// it, and the prohibition on encryption. What differs between the levels is
+// one table, levels.go; the PDF/X-4 rules are calibrated against the valid Cal
+// Poly PDF/VT-1 test suite, whose files are conforming PDF/X-4.
 
 // Level identifies a PDF/X conformance level.
 type Level int
@@ -55,42 +49,6 @@ func (l Level) String() string {
 		return "PDF/X-6"
 	default:
 		return fmt.Sprintf("PDFXLevel(%d)", int(l))
-	}
-}
-
-// valid reports whether l names a PDF/X level. Anything else — an arbitrary
-// integer converted to Level — used to be validated as PDF/X-4 by every
-// default branch below (audit 2026-09-22 C139).
-func (l Level) valid() bool { return l >= PDFX4 && l <= PDFX6 }
-
-// pdfxVersionPrefix is the GTS_PDFXVersion identifier prefix a level requires.
-func (l Level) pdfxVersionPrefix() string {
-	switch l {
-	case PDFX1a:
-		return "PDF/X-1a"
-	case PDFX3:
-		return "PDF/X-3"
-	case PDFX6:
-		return "PDF/X-6"
-	default:
-		return "PDF/X-4"
-	}
-}
-
-// noTransparency reports whether the level forbids transparency (PDF/X-1a and
-// PDF/X-3 predate the transparency imaging model; PDF/X-4 and -6 permit it).
-func (l Level) noTransparency() bool { return l == PDFX1a || l == PDFX3 }
-
-// maxPDFMinor returns the highest PDF 1.x minor version the level is defined
-// for, and whether the level is a PDF 2.0 level.
-func (l Level) versionBound() (maxMinor int, pdf2 bool) {
-	switch l {
-	case PDFX1a, PDFX3:
-		return 4, false
-	case PDFX6:
-		return 0, true
-	default: // PDFX4 / PDFX4p
-		return 6, false
 	}
 }
 
@@ -231,7 +189,12 @@ func pdfxTransferIsIdentity(doc core.View, o object.Object) bool {
 // the content interpreter's answer (core.PageDeviceColourUse), the same one
 // PDF/A reads; its memo keeps the per-page walk fast on PDF/VT files that reuse
 // content across very many pages.
-func pdfxCheckDeviceColor(doc core.View, add func(rule, msg string, obj int)) {
+//
+// At PDF/X-1a colour is CMYK, gray or spot only (ISO 15930-1/-4), so DeviceRGB
+// is a finding whatever output intent the file carries: before, an RGB output
+// intent "covered" it and an RGB PDF/X-1a file passed (audit 2026-09-22 C85).
+func pdfxCheckDeviceColor(doc core.View, level Level, add func(rule, msg string, obj int)) {
+	r, _ := level.rules()
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return
@@ -240,7 +203,9 @@ func pdfxCheckDeviceColor(doc core.View, add func(rule, msg string, obj int)) {
 	for _, page := range doc.Pages(cat.Get("Pages")) {
 		rgb, cmyk, gray := core.PageDeviceColourUse(doc, page.Dict)
 		groupRGB, groupCMYK, _ := core.GroupCSCoverage(doc, page.Dict)
-		if rgb && !oiRGB && !groupRGB {
+		if rgb && r.cmykOnly {
+			add("color", fmt.Sprintf("%s permits only CMYK, gray and spot colour; DeviceRGB is used", level), page.ObjNum)
+		} else if rgb && !oiRGB && !groupRGB {
 			add("color", "DeviceRGB used without a matching OutputIntent, DefaultRGB or covering group colour space", page.ObjNum)
 		}
 		if cmyk && !oiCMYK && !groupCMYK {
@@ -293,122 +258,6 @@ func pdfxOutputIntentCoverage(doc core.View, cat *object.Dictionary) (rgb, cmyk,
 		}
 	}
 	return
-}
-
-// pdfxCheckIdentification verifies the file identifies as the requested PDF/X
-// level. PDF/X-4 records the identifier in XMP (pdfxid:GTS_PDFXVersion); the
-// Info dictionary /GTS_PDFXVersion, used by older PDF/X versions, is accepted as
-// a fallback.
-func pdfxCheckIdentification(doc core.View, level Level, add func(rule, msg string, obj int)) {
-	claimed := ""
-	unread := false
-	// The XMP identification is read through the XMP model, by namespace URI,
-	// so a comment, an attribute-form property or another prefix cannot hide
-	// or forge it (audit C141). A property named GTS_PDFXVersion in no
-	// namespace at all is also accepted, as the substring reader this replaced
-	// accepted it.
-	switch packet, status := doc.DocumentXMPPacket(); status {
-	case core.XMPParsed:
-		if v, ok := packet.Text(xmp.NSPDFXID, "GTS_PDFXVersion"); ok {
-			claimed = v
-		} else if v, ok := packet.Text("", "GTS_PDFXVersion"); ok {
-			claimed = v
-		}
-	case core.XMPLimit:
-		unread = true
-	}
-	if claimed == "" {
-		if info := doc.ResolveDict(doc.Trailer.Get("Info")); info != nil {
-			// A text string: decoded, so a UTF-16 identifier reads as itself.
-			switch s, r := doc.StringValue(info.Get("GTS_PDFXVersion")); r {
-			case core.ReasonOK:
-				claimed = strings.TrimSpace(core.DecodePDFTextString(s.Value))
-			case core.ReasonLocked:
-				unread = true // ciphertext: the claim cannot be read
-			}
-		}
-	}
-	if claimed == "" {
-		if unread {
-			// The XMP packet was not read (a limit, already on the run), so
-			// whether it identifies the file is unknown.
-			return
-		}
-		add("identification", "file is not identified as PDF/X (no pdfxid:GTS_PDFXVersion or Info /GTS_PDFXVersion)", 0)
-		return
-	}
-	// The identifier begins with the level's family prefix (e.g. "PDF/X-4" for
-	// both PDF/X-4 and PDF/X-4p, "PDF/X-1a" for PDF/X-1a:2001/2003).
-	if !strings.HasPrefix(claimed, level.pdfxVersionPrefix()) {
-		add("identification", fmt.Sprintf("GTS_PDFXVersion %q does not identify %s", claimed, level), 0)
-	}
-}
-
-// pdfxCheckOutputIntent verifies a PDF/X output intent with an ICC destination
-// profile (ISO 15930-7 6.2). A GTS_PDFX intent with an OutputConditionIdentifier
-// is required; PDF/X-4 requires the profile embedded (DestOutputProfile), while
-// PDF/X-4p also accepts an external reference.
-func pdfxCheckOutputIntent(doc core.View, level Level, add func(rule, msg string, obj int)) {
-	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-	if cat == nil {
-		return
-	}
-	arr, ok := doc.Resolve(cat.Get("OutputIntents")).(object.Array)
-	if !ok || len(arr) == 0 {
-		add("output-intent", "a PDF/X file requires a catalog /OutputIntents array with a GTS_PDFX intent", 0)
-		return
-	}
-	var profiles []object.Object
-	found := false
-	for _, e := range arr {
-		oi := doc.ResolveDict(e)
-		if oi == nil {
-			continue
-		}
-		if s, _ := doc.ResolveName(oi.Get("S")); s != "GTS_PDFX" {
-			continue
-		}
-		found = true
-		if !doc.NonEmptyStringOrLocked(oi.Get("OutputConditionIdentifier")) {
-			add("output-intent", "GTS_PDFX output intent lacks a non-empty /OutputConditionIdentifier", object.RefNum(e))
-		}
-		prof := oi.Get("DestOutputProfile")
-		if _, ok := doc.Resolve(prof).(*object.Stream); ok {
-			profiles = append(profiles, prof)
-		} else if level != PDFX4p {
-			// Only PDF/X-4p permits an external reference; every other level
-			// requires the ICC profile embedded.
-			add("output-intent", fmt.Sprintf("%s requires an embedded ICC /DestOutputProfile in the GTS_PDFX output intent", level), object.RefNum(e))
-		} else if oi.Get("DestOutputProfileRef") == nil {
-			add("output-intent", "PDF/X-4p output intent has neither an embedded /DestOutputProfile nor a /DestOutputProfileRef", object.RefNum(e))
-		}
-	}
-	if !found {
-		add("output-intent", "no output intent with /S /GTS_PDFX is present", 0)
-	}
-	// ISO 15930-7 6.2: all GTS_PDFX intents shall reference the same profile.
-	for i := 1; i < len(profiles); i++ {
-		if object.RefNum(profiles[i]) != object.RefNum(profiles[0]) {
-			add("output-intent", "multiple GTS_PDFX output intents reference different destination profiles", 0)
-			break
-		}
-	}
-}
-
-// pdfxCheckTrapped verifies the Info /Trapped flag is present and definite
-// (ISO 15930-7 6.3): it shall be True or False, not Unknown or absent.
-func pdfxCheckTrapped(doc core.View, add func(rule, msg string, obj int)) {
-	info := doc.ResolveDict(doc.Trailer.Get("Info"))
-	if info == nil {
-		add("trapped", "Info dictionary with a definite /Trapped value is required", 0)
-		return
-	}
-	switch t, _ := doc.ResolveName(info.Get("Trapped")); t {
-	case "True", "False":
-		// definite, as required
-	default:
-		add("trapped", "Info /Trapped shall be True or False, not Unknown or absent", 0)
-	}
 }
 
 // pdfxCheckPageBoxes verifies page geometry (ISO 15930-7 6.4): every page has a
@@ -569,7 +418,8 @@ func rectContains(outer, inner [4]float64) bool {
 // ValidateView runs the PDF/X checks over a view. The caller starts the run,
 // builds the view, and reports the guards that tripped while the file was read.
 func ValidateView(v core.View, level Level) []Violation {
-	if !level.valid() {
+	r, ok := level.rules()
+	if !ok {
 		return []Violation{{Rule: finding.LimitRule, Message: fmt.Sprintf("not validated: %s names no PDF/X level", level)}}
 	}
 	var out []Violation
@@ -602,7 +452,7 @@ func ValidateView(v core.View, level Level) []Violation {
 		// and -3 for PDF 1.3/1.4, PDF/X-4/-4p for 1.6, PDF/X-6 for PDF 2.0. A newer
 		// version than the level allows is out of scope.
 		if maj, min, ok := core.ParsePDFVersion(v.Version); ok {
-			maxMinor, pdf2 := level.versionBound()
+			maxMinor, pdf2 := r.maxMinor, r.pdf2
 			if pdf2 {
 				if maj != 2 {
 					add("version", fmt.Sprintf("%s is defined for PDF 2.0; file declares %s", level, v.Version), 0)
@@ -615,12 +465,12 @@ func ValidateView(v core.View, level Level) []Violation {
 
 	run(func() { pdfxCheckIdentification(v, level, add) })
 	run(func() { pdfxCheckOutputIntent(v, level, add) })
-	run(func() { pdfxCheckTrapped(v, add) })
+	run(func() { pdfxCheckTrapped(v, level, add) })
 	run(func() { pdfxCheckPageBoxes(v, add) })
 	run(func() { pdfxCheckFontsEmbedded(v, add) })
-	run(func() { pdfxCheckDeviceColor(v, add) })
+	run(func() { pdfxCheckDeviceColor(v, level, add) })
 	run(func() { pdfxCheckForbidden(v, add, addChecked) })
-	if level.noTransparency() {
+	if r.noTransparency {
 		run(func() { pdfxCheckNoTransparency(v, add) })
 	}
 
