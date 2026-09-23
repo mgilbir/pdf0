@@ -15,9 +15,12 @@ positives on conformant documents — the corpus rejects it (see
 
 Rules about *used* resources are evaluated over content that is actually
 executed. Validation walks page content streams and follows only what they
-invoke — form XObjects drawn with `Do`, patterns selected with `scn`, shadings
-with `sh`, Type3 glyph procedures actually reached — and checks the resources
-those paths reference. See `walkExecutedContent` and `collectFontTextUsage`.
+invoke — form XObjects drawn with `Do`, patterns painted with, shadings with
+`sh`, the glyph procedures of the Type3 codes actually shown — and checks the
+resources those paths reference. See `walkExecutedContent`, and for device
+colour and font usage the content interpreter (`internal/core/interp.go`),
+which executes content with a graphics state: an invoked form starts in its
+caller's colour, font and render mode, and `Q` restores them.
 
 Consequences that follow from the same principle, each corpus-confirmed:
 
@@ -26,7 +29,10 @@ Consequences that follow from the same principle, each corpus-confirmed:
   XObject that is never invoked does not breach the limit.
 - Font rules apply to text actually shown; rendering modes 3 and 7 (invisible)
   are exempt from embedding and metric rules.
-- Device-colour coverage counts a colour space only when an operator selects it.
+- Device-colour coverage counts a colour space only when an operator selects it
+  — a selection counts even if nothing is painted with it (the corpus fails
+  DeviceRGB set for stroking beside filled-only text) — or when painting uses a
+  colour set earlier, inherited, or initial (DeviceGray).
 
 ## Consequences
 

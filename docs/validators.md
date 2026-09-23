@@ -232,7 +232,7 @@ They are grouped across files by concern:
 | `internal/core` (PDF functions) | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
 
 The other standards each own their file(s): `pdfua/pdfua.go`, `pdfua/pdfua_content.go`,
-`pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go`, `pdfua/pdfua2.go`, `pdfx/pdfx.go`, `pdfx/pdfx_color.go`,
+`pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go`, `pdfua/pdfua2.go`, `pdfx/pdfx.go`,
 `pdfvt/pdfvt.go`, `pdfr/pdfr.go`, `dpart/dpart.go`, `facturx.go`, `order_x.go`. `violations.go`
 holds the shared `Violation` interface and is the canonical statement of the
 contract above.
