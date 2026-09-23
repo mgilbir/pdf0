@@ -225,9 +225,11 @@ clean2b.pdf: no violations found for PDF/A-2b            # exit 0
 
 $ pdf0 validate -level 1b clean2b.pdf
 [PDF/A-1b 6.2.2] /OutputIntents[0] ICC profile version 4.3 not allowed for PDF/A-1b (max 2.x)
-[PDF/A-1b 6.2.3] object 5: ICCBased profile version 4.x not allowed (max 2.x)
 [PDF/A-1b 6.7.11] pdfaid:part must be 1, got 2
-error: 3 violation(s) found                              # stderr, exit 1
+error: 2 violation(s) found                              # stderr, exit 1
+
+$ pdf0 validate -level declared clean2b.pdf
+clean2b.pdf: no violations found for PDF/A-2b            # exit 0
 ```
 
 Any other `-level` is a **usage** error (exit 2): `error: unknown level "5b" (want 1b, 1a,
@@ -334,8 +336,8 @@ rep2.pdf: 1 fix(es) applied, 0 violation(s) remain                  # exit 0
 
 $ pdf0 repair -level 1b broken2b.pdf rep1.pdf
 fixed: removed catalog additional-actions (/AA)
-rep1.pdf: 1 fix(es) applied, 3 violation(s) remain
-error: 3 violation(s) remain after repair (run: pdf0 validate -level 1b rep1.pdf)  # exit 1
+rep1.pdf: 1 fix(es) applied, 2 violation(s) remain
+error: 2 violation(s) remain after repair (run: pdf0 validate -level 1b rep1.pdf)  # exit 1
 ```
 
 The output file is written even when violations remain: exit 1 means "written but still

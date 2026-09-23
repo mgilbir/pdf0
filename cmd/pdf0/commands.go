@@ -148,6 +148,9 @@ func cmdValidate(args []string) error {
 	}
 	errs := pdf0.ValidatePDFABytes(doc, lvl, src.in.data)
 	if len(errs) == 0 {
+		if declared, ok := doc.Conformance(); ok && lvl == pdfa.LevelDeclared {
+			lvl = declared // the level the run resolved to, for the report
+		}
 		fmt.Fprintf(stdout, "%s: no violations found for %s\n", src.in.name, lvl)
 		return nil
 	}

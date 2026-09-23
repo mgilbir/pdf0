@@ -200,7 +200,9 @@ genuine PDF/A-4 divergences:
 
 - **Page-level output intents.** `checkOutputIntents` runs a separate A-4-only
   pass over `collectPages`, requiring each page `/OutputIntents` entry to carry
-  `/S /GTS_PDFA1`. It runs even when the catalog has none.
+  `/S /GTS_PDFA1`. It runs even when the catalog has none. Their destination
+  profiles are judged by `checkOutputIntentProfile` with the catalog's, each
+  profile once.
 - **No mandatory transparency group.** `transparencyGroupNotRequired` returns
   true at A-4 whenever *any* output intent — catalog or page — provides colour
   coverage, because at A-4 the output intent supplies the blending space

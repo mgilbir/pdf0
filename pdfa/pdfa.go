@@ -8,6 +8,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -645,9 +646,12 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 		}
 
 		profRef := dict.Get("DestOutputProfile")
-		if profRef == nil {
+		if sName, _ := doc.ResolveName(s); profRef == nil && sName != "GTS_PDFA1" {
 			// /DestOutputProfile is required unless /OutputConditionIdentifier
-			// identifies a standard registered condition
+			// identifies a standard registered condition. A GTS_PDFA1 intent
+			// needs the profile whatever its identifier says, which the rule
+			// below reports; reporting it here as well gave one missing profile
+			// two findings (audit 2026-09-22 C140).
 			oci := dict.Get("OutputConditionIdentifier")
 			if oci == nil {
 				errs = append(errs, Violation{
@@ -714,46 +718,73 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 	return errs
 }
 
-func checkOutputIntentProfile(doc core.View, level Level) []Violation {
+// outputIntentRef is one output intent a profile rule judges: its dictionary,
+// how a message names it, and the object a finding anchors to.
+type outputIntentRef struct {
+	dict  *object.Dictionary
+	label string
+	obj   int
+}
+
+// documentOutputIntents lists the catalog's output intents and, at PDF/A-4,
+// every page's — ISO 19005-4 6.2.3 lets a page carry its own, and its
+// destination profile is held to the same requirements as the document's.
+func documentOutputIntents(doc core.View, level Level) []outputIntentRef {
+	var out []outputIntentRef
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
-
-	oiRef := catalog.Get("OutputIntents")
-	if oiRef == nil {
-		return nil
+	if arr, ok := doc.Resolve(catalog.Get("OutputIntents")).(object.Array); ok {
+		for i, elem := range arr {
+			if d := doc.ResolveDict(elem); d != nil {
+				out = append(out, outputIntentRef{d, fmt.Sprintf("/OutputIntents[%d]", i), 0})
+			}
+		}
 	}
-
-	oiObj := doc.Resolve(oiRef)
-	arr, ok := oiObj.(object.Array)
-	if !ok || len(arr) == 0 {
-		return nil
+	if level.Part() == 4 {
+		for _, page := range doc.Pages(catalog.Get("Pages")) {
+			arr, ok := doc.Resolve(page.Dict.Get("OutputIntents")).(object.Array)
+			if !ok {
+				continue
+			}
+			for j, elem := range arr {
+				if d := doc.ResolveDict(elem); d != nil {
+					out = append(out, outputIntentRef{d, fmt.Sprintf("page OutputIntents[%d]", j), page.ObjNum})
+				}
+			}
+		}
 	}
+	return out
+}
 
+// checkOutputIntentProfile judges the destination profile of every output
+// intent — the catalog's and, at PDF/A-4, the pages' — once per profile: an
+// intent sharing another's profile adds nothing to check, and every finding
+// names the first intent that carries it. Each finding is under the
+// output-intent clause (6.2.2 at part 1, 6.2.3 later).
+//
+// It does not look at ICCBased colour spaces: checkICCBasedProfiles judges a
+// profile used as one, under its own clause, and a profile that is only an
+// output intent's is not one (audit 2026-09-22 C140).
+func checkOutputIntentProfile(doc core.View, level Level) []Violation {
+	rule := colourClause("outputIntent", level)
 	var errs []Violation
-	for i, elem := range arr {
-		dict := doc.ResolveDict(elem)
-		if dict == nil {
+	report := func(oi outputIntentRef, format string, args ...any) {
+		errs = append(errs, Violation{Rule: rule, Level: level, Object: oi.obj,
+			Message: oi.label + " " + fmt.Sprintf(format, args...)})
+	}
+	judged := map[*object.Stream]bool{}
+	for _, oi := range documentOutputIntents(doc, level) {
+		profStream, ok := doc.Resolve(oi.dict.Get("DestOutputProfile")).(*object.Stream)
+		if !ok || judged[profStream] {
 			continue
 		}
-		profRef := dict.Get("DestOutputProfile")
-		if profRef == nil {
-			continue
-		}
-		profObj := doc.Resolve(profRef)
-		profStream, ok := profObj.(*object.Stream)
-		if !ok {
-			continue
-		}
+		judged[profStream] = true
 		// Validate ICC profile N matches the profile data
 		nObj := profStream.Dict.Get("N")
 		if nObj == nil {
-			errs = append(errs, Violation{
-				Rule:    colourClause("outputIntent", level),
-				Level:   level,
-				Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile must have /N", i),
-			})
+			report(oi, "/DestOutputProfile must have /N")
 			continue
 		}
 		nVal, ok := doc.ResolveInt(nObj)
@@ -768,88 +799,49 @@ func checkOutputIntentProfile(doc core.View, level Level) []Violation {
 			// implement, ciphertext — must not produce a false positive; the
 			// producer recorded the trip.
 			if r == core.ReasonMalformed {
-				errs = append(errs, Violation{
-					Rule:    colourClause("outputIntent", level),
-					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data cannot be decoded (malformed stream data)", i),
-				})
+				report(oi, "/DestOutputProfile ICC data cannot be decoded (malformed stream data)")
 			}
 			continue
 		}
 		if len(data) < 128 {
-			errs = append(errs, Violation{
-				Rule:    colourClause("outputIntent", level),
-				Level:   level,
-				Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data too short (%d bytes, minimum 128)", i, len(data)),
-			})
+			report(oi, "/DestOutputProfile ICC data too short (%d bytes, minimum 128)", len(data))
 			continue
 		}
 		// ICC profile header: bytes 16-19 contain color space signature
-		if len(data) >= 20 {
-			cs := string(data[16:20])
-			var expectedN int
-			switch cs {
-			case "GRAY":
-				expectedN = 1
-			case "RGB ":
-				expectedN = 3
-			case "CMYK":
-				expectedN = 4
-			default:
-				// Invalid or unsupported color space in output intent profile
-				errs = append(errs, Violation{
-					Rule:    colourClause("outputIntent", level),
-					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] ICC profile has unsupported color space %q", i, cs),
-				})
-			}
-			if expectedN > 0 && int(nVal) != expectedN {
-				errs = append(errs, Violation{
-					Rule:    colourClause("outputIntent", level),
-					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] /N=%d does not match ICC profile color space %s (expected %d)", i, nVal, cs, expectedN),
-				})
-			}
+		cs := string(data[16:20])
+		expectedN := 0
+		switch cs {
+		case "GRAY":
+			expectedN = 1
+		case "RGB ":
+			expectedN = 3
+		case "CMYK":
+			expectedN = 4
+		default:
+			report(oi, "ICC profile has unsupported color space %q", cs)
 		}
-		// ICC profile header: bytes 12-15 contain device class
-		if len(data) >= 16 {
-			cls := string(data[12:16])
-			// Output intent profiles must be of class "mntr" (monitor),
-			// "prtr" (printer), or "spac" (color space conversion)
-			switch cls {
-			case "mntr", "prtr", "spac":
-				// OK
-			default:
-				errs = append(errs, Violation{
-					Rule:    colourClause("outputIntent", level),
-					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] ICC profile has invalid device class %q (must be mntr, prtr, or spac)", i, cls),
-				})
-			}
+		if expectedN > 0 && int(nVal) != expectedN {
+			report(oi, "/N=%d does not match ICC profile color space %s (expected %d)", nVal, cs, expectedN)
 		}
-		// Check ICC profile version (bytes 8-11)
-		if len(data) >= 12 {
-			major := data[8]
-			minor := data[9] >> 4
-			if level.Part() == 1 {
-				// PDF/A-1b: ICC profile version must be <= 2.x
-				if major > 2 {
-					errs = append(errs, Violation{
-						Rule:    colourClause("outputIntent", level),
-						Level:   level,
-						Message: fmt.Sprintf("/OutputIntents[%d] ICC profile version %d.%d not allowed for PDF/A-1b (max 2.x)", i, major, minor),
-					})
-				}
-			} else if level.Part() == 2 || level.Part() == 3 {
-				// PDF/A-2b/3b: ICC profile version must be <= 4.x
-				if major > 4 {
-					errs = append(errs, Violation{
-						Rule:    colourClause("outputIntent", level),
-						Level:   level,
-						Message: fmt.Sprintf("/OutputIntents[%d] ICC profile version %d.%d not allowed for PDF/A-2b/3b (max 4.x)", i, major, minor),
-					})
-				}
-			}
+		// ICC profile header: bytes 12-15 contain device class. Output intent
+		// profiles must be of class "mntr" (monitor), "prtr" (printer), or
+		// "spac" (color space conversion).
+		switch cls := string(data[12:16]); cls {
+		case "mntr", "prtr", "spac":
+		default:
+			report(oi, "ICC profile has invalid device class %q (must be mntr, prtr, or spac)", cls)
+		}
+		// ICC profile version (bytes 8-11): at most 2.x at part 1, which is
+		// based on PDF 1.4, and 4.x at parts 2, 3 and 4 (veraPDF 6.2.2 t01,
+		// 6.2.3 t01: version < 3.0, version < 5.0). Part 4 was not checked
+		// here; a v5 output-intent profile at 4 was reported only because the
+		// ICCBased rule took it for a colour space.
+		major, minor := data[8], data[9]>>4
+		switch {
+		case level.Part() == 1 && major > 2:
+			report(oi, "ICC profile version %d.%d not allowed for %s (max 2.x)", major, minor, level)
+		case level.Part() > 1 && major > 4:
+			report(oi, "ICC profile version %d.%d not allowed for %s (max 4.x)", major, minor, level)
 		}
 	}
 	return errs
@@ -3998,52 +3990,34 @@ func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte
 // --- ICCBased color space checks (6.2.4.2) ---
 
 // Rule 6.2.4.2: ICCBased color spaces must reference valid ICC profiles.
+// checkICCBasedProfiles judges every ICC profile used as an ICCBased colour
+// space (ISO 19005-1 6.2.3.2, -2/-3/-4 6.2.4.2): /N is 1, 3 or 4 and matches
+// the profile's colour space, and the profile version is at most 2.x at part 1
+// (PDF 1.4) and 4.x later. Every finding is under the ICCBased clause.
+//
+// A profile is found through an [/ICCBased profile] array, wherever one is
+// written — resources, image dictionaries, Default colour spaces, group /CS,
+// nested inside Indexed, Separation and DeviceN — and judged once. It used to be
+// "every stream with an integer /N", which took an output intent's destination
+// profile for a colour space: a PDF/A-2b skeleton at 1b got its v4 profile
+// reported twice, once as the output intent it is (6.2.2) and once, at a
+// different clause, as an ICCBased colour space the file does not have (audit
+// 2026-09-22 C140).
 func checkICCBasedProfiles(doc core.View, level Level) []Violation {
+	rule := colourClause("iccBased", level)
 	var errs []Violation
-
-	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*object.Stream)
-		if !ok {
-			continue
-		}
-
-		// Check if this stream is used as an ICC profile (has /N key typical of ICC)
-		nObj := stream.Dict.Get("N")
-		if nObj == nil {
-			continue
-		}
-
-		// Structural stream types also carry an integer /N with a different
-		// meaning (an object stream's /N is its object count); they are never
-		// ICC profiles.
-		if t, ok := doc.ResolveName(stream.Dict.Get("Type")); ok && (t == "ObjStm" || t == "XRef") {
-			continue
-		}
-
-		// Verify it's actually an ICC profile by checking for Alternate or being
-		// referenced from a ColorSpace array. We check for the /N key which is
-		// specific to ICC profile streams.
-		n, ok := doc.ResolveInt(nObj)
+	for _, p := range iccBasedProfiles(doc) {
+		n, ok := doc.ResolveInt(p.stream.Dict.Get("N"))
 		if !ok {
 			continue
 		}
 		nVal := int(n)
-
-		// N must be 1, 3, or 4
 		if nVal != 1 && nVal != 3 && nVal != 4 {
-			errs = append(errs, Violation{
-				Rule:    colourClause("iccBased", level),
-				Level:   level,
-				Message: fmt.Sprintf("ICCBased profile /N must be 1, 3, or 4, got %d", nVal),
-				Object:  num,
-			})
+			errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+				Message: fmt.Sprintf("ICCBased profile /N must be 1, 3, or 4, got %d", nVal)})
 			continue
 		}
-
-		// Decompress profile data to check ICC header
-		profileData, _ := doc.ICCProfileData(stream) // reason: the header checks below run only on data that is present; the producer recorded any declined trip
-
-		// Check ICC profile header if data is available
+		profileData, _ := doc.ICCProfileData(p.stream) // reason: the header checks below run only on data that is present; the producer recorded any declined trip
 		if len(profileData) >= 20 {
 			cs := string(profileData[16:20])
 			expectedN := 0
@@ -4056,36 +4030,82 @@ func checkICCBasedProfiles(doc core.View, level Level) []Violation {
 				expectedN = 1
 			}
 			if expectedN > 0 && expectedN != nVal {
-				errs = append(errs, Violation{
-					Rule:    colourClause("iccBased", level),
-					Level:   level,
-					Message: fmt.Sprintf("ICCBased profile /N=%d does not match ICC color space %q", nVal, cs),
-					Object:  num,
-				})
+				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+					Message: fmt.Sprintf("ICCBased profile /N=%d does not match ICC color space %q", nVal, cs)})
 			}
 		}
-
-		// Check ICC profile version
 		if len(profileData) >= 9 {
 			majorVersion := profileData[8]
-			maxVersion := byte(4) // Default max for 2b/3b/4
-			rule := "6.2.4"
+			maxVersion := byte(4)
 			if level.Part() == 1 {
 				maxVersion = 2
-				rule = "6.2.3"
 			}
 			if majorVersion > maxVersion {
-				errs = append(errs, Violation{
-					Rule:    rule,
-					Level:   level,
-					Message: fmt.Sprintf("ICCBased profile version %d.x not allowed (max %d.x)", majorVersion, maxVersion),
-					Object:  num,
-				})
+				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+					Message: fmt.Sprintf("ICCBased profile version %d.x not allowed (max %d.x)", majorVersion, maxVersion)})
 			}
 		}
 	}
-
 	return errs
+}
+
+// iccBasedProfile is a profile stream an ICCBased colour space names, and the
+// object that holds it.
+type iccBasedProfile struct {
+	stream *object.Stream
+	num    int
+}
+
+// iccBasedProfiles finds every profile stream named by an [/ICCBased profile]
+// array anywhere in the document, each once, in object-number order. Each
+// object's value is walked to a bounded depth without following references —
+// a referenced object is walked as its own object — so every array written
+// anywhere is seen exactly as written.
+func iccBasedProfiles(doc core.View) []iccBasedProfile {
+	seen := map[*object.Stream]bool{}
+	var out []iccBasedProfile
+	var walk func(o object.Object, depth int)
+	walk = func(o object.Object, depth int) {
+		if depth > 32 {
+			return
+		}
+		switch v := o.(type) {
+		case object.IndirectRef:
+			// Walked as its own object.
+		case object.Array:
+			if len(v) >= 2 {
+				if name, _ := doc.ResolveName(v[0]); name == "ICCBased" {
+					if s, ok := doc.Resolve(v[1]).(*object.Stream); ok && !seen[s] {
+						seen[s] = true
+						out = append(out, iccBasedProfile{s, resolveObjNum(doc, v[1])})
+					}
+				}
+			}
+			for _, e := range v {
+				walk(e, depth+1)
+			}
+		case *object.Dictionary:
+			for val := range v.Values() {
+				walk(val, depth+1)
+			}
+		case *object.Stream:
+			for val := range v.Dict.Values() {
+				walk(val, depth+1)
+			}
+		}
+	}
+	nums := make([]int, 0, len(doc.Objects))
+	for num := range doc.Objects {
+		nums = append(nums, num)
+	}
+	sort.Ints(nums)
+	for _, num := range nums {
+		if doc.Cancel.Stopped() {
+			break
+		}
+		walk(doc.Objects[num].Value, 0)
+	}
+	return out
 }
 
 // --- Separation/DeviceN checks (6.2.4.4) ---
