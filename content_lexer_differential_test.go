@@ -15,7 +15,7 @@ import (
 )
 
 // TestCorpusContentLexerDifferential compares core.ContentLexer, the one
-// content tokenizer, with the four it replaced (content_lexer_oracle_test.go)
+// content tokenizer, with three it replaced (content_lexer_oracle_test.go)
 // over every content stream in the veraPDF corpus: page contents, form
 // XObjects, tiling patterns and Type 3 glyph procedures.
 //
@@ -45,7 +45,10 @@ import (
 //   - dict-bytes: a dictionary operand ends at its matching ">>" as the lexer
 //     reads it, so a ">>" inside a comment or an inline image in the
 //     dictionary does not end it; ScanContentDict did not skip comments.
-//   - device-ops: ScanStreamForDeviceOps differs only where its tokens did.
+//
+// The fifth tokenizer, ScanStreamForDeviceOps's own, went with the scanner
+// itself when the content interpreter replaced it; the corpus findings diff
+// in that change accounts for it.
 func TestCorpusContentLexerDifferential(t *testing.T) {
 	root := testfiles.VeraPDFCorpus.Path(t)
 	files := testfiles.VeraPDFCorpus.PDFs(t, "")
@@ -159,7 +162,7 @@ type ptok struct {
 func (p ptok) String() string { return p.kind + ":" + fmt.Sprintf("%q", p.val) }
 
 // lexerDifferences compares the new lexer with each old tokenizer over one
-// stream, and ScanStreamForDeviceOps's answer with the old one's.
+// stream.
 func lexerDifferences(content []byte) []lexerDiff {
 	var out []lexerDiff
 	cmp := func(name string, old, new []ptok) {
@@ -190,19 +193,6 @@ func lexerDifferences(content []byte) []lexerDiff {
 	cmp("ForEachContentItem", projectOldItems(content), projectNewItems(content))
 	cmp("ForEachContentToken", projectOldTokens(content), projectNewTokens(content))
 	cmp("TokenizeContent", projectOldTokenize(content), projectNewTokenize(content))
-
-	or, oc, og := oldScanStreamForDeviceOps(core.Canceler{}, content)
-	nr, nc, ng := core.ScanStreamForDeviceOps(core.Canceler{}, content)
-	if or != nr || oc != nc || og != ng {
-		// Explained only when the token streams it reads differ too.
-		class := ""
-		for _, d := range out {
-			if d.class != "" {
-				class = "device-ops"
-			}
-		}
-		out = append(out, lexerDiff{class, fmt.Sprintf("ScanStreamForDeviceOps: old (R%v C%v G%v), new (R%v C%v G%v)", or, oc, og, nr, nc, ng)})
-	}
 	return out
 }
 

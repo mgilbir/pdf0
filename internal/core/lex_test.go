@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mgilbir/pdf0/internal/hostile"
+	"github.com/mgilbir/pdf0/object"
 )
 
 // lexAll renders every token of data as "kind:value", with dictionaries
@@ -138,20 +139,9 @@ func TestContentLexerHostile(t *testing.T) {
 	})
 }
 
-// TestDeviceOpsHonourInlineImageLength is C149: the device-colour scanner had
-// its own inline-image skipper, which ignored /L, so sample bytes after a
-// stray " EI " were read as operators — here a 'k', which is DeviceCMYK.
-func TestDeviceOpsHonourInlineImageLength(t *testing.T) {
-	in := []byte("q BI /W 6 /H 1 /BPC 8 /CS /G /L 6 ID  EI k EI 0 g 0 0 1 1 re f Q")
-	r, c, g := ScanStreamForDeviceOps(Canceler{}, in)
-	if r || c || !g {
-		t.Errorf("device use (RGB %v, CMYK %v, Gray %v), want Gray only: the image's sample bytes were read as operators", r, c, g)
-	}
-}
-
 // TestConsumersSeeTheSameStrings is C150's scenario: the PDF/UA content pass
 // and text extraction (TokenizeContent) and the font-usage walk the PDF/A
-// glyph rules read (buildFontEvents) used to decode the same string operand
+// glyph rules read (then buildFontEvents) used to decode the same string operand
 // differently, so the two validators judged different glyph codes. Each input
 // here decoded differently under at least one pair of the old tokenizers.
 func TestConsumersSeeTheSameStrings(t *testing.T) {
@@ -167,9 +157,12 @@ func TestConsumersSeeTheSameStrings(t *testing.T) {
 				viaTokenize = append(viaTokenize, tk.Str)
 			}
 		}
+		d := newTestDoc("BT /F1 12 Tf "+in+" ET", nil)
+		f1 := d.add(object.NewDictionary(ent("Type", object.Name("Font")), ent("Subtype", object.Name("Type1")), ent("BaseFont", object.Name("Helvetica"))))
+		d.page.Set("Resources", res(sub("Font", ent("F1", f1))))
 		var viaFonts [][]byte
-		for _, ev := range buildFontEvents(Canceler{}, []byte(in)) {
-			viaFonts = append(viaFonts, ev.strings...)
+		if u := CollectFontTextUsage(d.v)[d.v.ResolveDict(f1)]; u != nil {
+			viaFonts = u.Strings
 		}
 		if fmt.Sprintf("%q", viaTokenize) != fmt.Sprintf("%q", viaFonts) {
 			t.Errorf("%q: TokenizeContent saw %q, the font-usage walk %q", in, viaTokenize, viaFonts)

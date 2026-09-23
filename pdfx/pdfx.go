@@ -224,26 +224,26 @@ func pdfxTransferIsIdentity(doc core.View, o object.Object) bool {
 // DeviceCMYK, DeviceGray) is only used where the printing condition is defined —
 // by the GTS_PDFX output intent's ICC destination profile, a Default* colour
 // space in scope, or a covering transparency-group colour space (ISO 15930-7
-// 6.2, PDF Reference device-colour rules). It uses a memoised scan so the
-// per-page content walk stays fast on PDF/VT files that reuse content across
-// very many pages.
+// 6.2, PDF Reference device-colour rules). The device colour a page uses is
+// the content interpreter's answer (core.PageDeviceColourUse), the same one
+// PDF/A reads; its memo keeps the per-page walk fast on PDF/VT files that reuse
+// content across very many pages.
 func pdfxCheckDeviceColor(doc core.View, add func(rule, msg string, obj int)) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return
 	}
 	oiRGB, oiCMYK, oiGray := pdfxOutputIntentCoverage(doc, cat)
-	sc := NewDevColorScanner(doc)
 	for _, page := range doc.Pages(cat.Get("Pages")) {
-		u := sc.PageDeviceUse(page.Dict)
+		rgb, cmyk, gray := core.PageDeviceColourUse(doc, page.Dict)
 		groupRGB, groupCMYK, _ := core.GroupCSCoverage(doc, page.Dict)
-		if u.RGB && !oiRGB && !groupRGB {
+		if rgb && !oiRGB && !groupRGB {
 			add("color", "DeviceRGB used without a matching OutputIntent, DefaultRGB or covering group colour space", page.ObjNum)
 		}
-		if u.CMYK && !oiCMYK && !groupCMYK {
+		if cmyk && !oiCMYK && !groupCMYK {
 			add("color", "DeviceCMYK used without a matching OutputIntent, DefaultCMYK or covering group colour space", page.ObjNum)
 		}
-		if u.Gray && !oiRGB && !oiCMYK && !oiGray {
+		if gray && !oiRGB && !oiCMYK && !oiGray {
 			add("color", "DeviceGray used without any OutputIntent or DefaultGray", page.ObjNum)
 		}
 	}

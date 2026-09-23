@@ -13,8 +13,8 @@ import (
 //
 // It is a document service rather than a validator one. PDF/A asks it whether
 // every shown glyph is embedded; PDF/UA asks it whether every shown glyph maps
-// to Unicode. Both walk the same content streams over the same page tree, and
-// the memos below make that one walk instead of two.
+// to Unicode. Both read the same execution of the content (interp.go), which
+// the run memoises, so that is one walk instead of two.
 
 // FontTextUsage aggregates the text shown with one font dictionary.
 type FontTextUsage struct {
@@ -22,167 +22,9 @@ type FontTextUsage struct {
 	ObjNum   int      // font object number (0 if direct)
 	Strings  [][]byte // raw shown string bytes
 	Modes    map[int]bool
-}
 
-// CollectFontTextUsage walks every page's executed content (including form
-// XObjects and tiling patterns) and records which fonts show which text.
-func CollectFontTextUsage(doc View) map[*object.Dictionary]*FontTextUsage {
-	if c := doc.Run; c != nil && c.fontUsageValid {
-		return c.fontUsage
-	}
-	usage := make(map[*object.Dictionary]*FontTextUsage)
-	if catalog := doc.Catalog(); catalog != nil {
-		seen := make(map[*object.Dictionary]bool)
-		applied := make(map[sfKey]bool)
-		for _, page := range doc.Pages(catalog.Get("Pages")) {
-			data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only walk; the producer recorded any declined trip
-			collectTextFromContainer(doc, page.Dict, data, key, usage, seen, applied)
-		}
-	}
-	if c := doc.Run; c != nil {
-		c.fontUsage = usage
-		c.fontUsageValid = true
-	}
-	return usage
-}
-
-// fontEventKind classifies the replayable events extracted from a content
-// stream by buildFontEvents.
-type fontEventKind uint8
-
-// FontEvent is one entry in a content stream's font-usage skeleton: the
-// container-independent result of tokenizing the stream once. Replaying the
-// skeleton against a container's resources reproduces exactly what a direct
-// walk would attribute to each font, without re-tokenizing the bytes.
-type FontEvent struct {
-	kind    fontEventKind
-	name    string   // evTf: the operand name of the Tf operator
-	mode    int      // evTr: the text rendering mode
-	strings [][]byte // evShow: the strings pending at the show operator
-}
-
-// sfKey identifies a (content stream, /Font resource dictionary) pair. A
-// container's font attribution is fully determined by this pair, so two
-// containers sharing both produce byte-identical contributions to the usage
-// map — the second and later are skipped (see collectTextFromContainer). This
-// is what stops a document that references one content stream from thousands of
-// pages from re-attributing, and re-accumulating, the same shown text per page.
-type sfKey struct {
-	stream  *object.Stream
-	fontRes *object.Dictionary
-}
-
-// collectTextFromContainer attributes the text shown in a container's content
-// (key identifies the single backing stream, if any) to the fonts it selects,
-// then recurses into the form XObjects and tiling patterns it actually invokes.
-// Tokenization is memoized per stream via key, and the font attribution is
-// skipped when an identical (stream, /Font) pair was already processed, so
-// content shared across many containers is handled once rather than per
-// container.
-func collectTextFromContainer(doc View, container *object.Dictionary, data []byte, key *object.Stream, usage map[*object.Dictionary]*FontTextUsage, seen map[*object.Dictionary]bool, applied map[sfKey]bool) {
-	if container == nil || seen[container] {
-		return
-	}
-	seen[container] = true
-	res := doc.Resources(container)
-
-	fontRes := (*object.Dictionary)(nil)
-	if res != nil {
-		fontRes = doc.ResolveDict(res.Get("Font"))
-	}
-	fontFor := func(name string) (*object.Dictionary, int) {
-		if fontRes == nil {
-			return nil, 0
-		}
-		ref := fontRes.Get(object.Name(name))
-		objNum := 0
-		if ir, ok := ref.(object.IndirectRef); ok {
-			objNum = ir.Number
-		}
-		return doc.ResolveDict(ref), objNum
-	}
-
-	// Replay the stream's font-usage skeleton against this container's fonts,
-	// unless an identical (stream, /Font) pair already contributed the same
-	// attribution — its shown text is already recorded.
-	if res != nil {
-		sk := sfKey{key, fontRes}
-		if key == nil || !applied[sk] {
-			if key != nil {
-				applied[sk] = true
-			}
-			var curFont *FontTextUsage
-			mode := 0
-			for _, ev := range doc.ContentFontEvents(data, key) {
-				switch ev.kind {
-				case evTf:
-					if dict, num := fontFor(ev.name); dict != nil {
-						u := usage[dict]
-						if u == nil {
-							u = &FontTextUsage{FontDict: dict, ObjNum: num, Modes: make(map[int]bool)}
-							usage[dict] = u
-						}
-						curFont = u
-					} else {
-						curFont = nil
-					}
-				case evTr:
-					mode = ev.mode
-				case evShow:
-					if curFont != nil {
-						curFont.Strings = append(curFont.Strings, ev.strings...)
-						curFont.Modes[mode] = true
-					}
-				}
-			}
-		}
-	}
-
-	// Recurse into executed forms and patterns. Resolve the candidates first:
-	// learning *which* of them the content executes costs a full pass over the
-	// stream, and a container with no form XObject and no tiling pattern in
-	// scope — a page whose /XObject holds nothing but images, say — has nothing
-	// to recurse into, so that pass would answer a question nobody asks.
-	if res == nil {
-		return
-	}
-	type candidate struct {
-		name   string
-		stream *object.Stream
-	}
-	var forms, patterns []candidate
-	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
-		for name, xref := range xobjDict.All() {
-			if s, ok := doc.Resolve(xref).(*object.Stream); ok {
-				if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
-					forms = append(forms, candidate{string(name), s})
-				}
-			}
-		}
-	}
-	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
-		for name, pref := range patDict.All() {
-			if s, ok := doc.Resolve(pref).(*object.Stream); ok {
-				patterns = append(patterns, candidate{string(name), s})
-			}
-		}
-	}
-	if len(forms) == 0 && len(patterns) == 0 {
-		return
-	}
-	used := doc.ContentUsedNamesCached(data, key)
-	for _, c := range forms {
-		if used.XObjects[c.name] {
-			data, _ := doc.Content(c.stream) // reason: presence-only walk; the producer recorded any declined trip
-			collectTextFromContainer(doc, &c.stream.Dict, data, c.stream, usage, seen, applied)
-		}
-	}
-	for _, c := range patterns {
-		if used.Patterns[c.name] {
-			data, _ := doc.Content(c.stream) // reason: presence-only walk; the producer recorded any declined trip
-			collectTextFromContainer(doc, &c.stream.Dict, data, c.stream, usage, seen, applied)
-		}
-	}
+	// pending is shown strings not yet decoded into Strings (interp.go).
+	pending []rawString
 }
 
 // PredefinedCMapInfo carries the CIDSystemInfo a predefined CMap implies.
@@ -372,32 +214,6 @@ type UsedResourceNames struct {
 	Shadings map[string]bool
 }
 
-const (
-	evTf   fontEventKind = iota // select the font named by `name`
-	evTr                        // set the text rendering mode to `mode`
-	evShow                      // show `strings` with the current font/mode
-)
-
-// ContentFontEvents returns the font-usage skeleton for data, memoized per
-// content stream (key) when a validation cache is present so a stream shared by
-// many containers is tokenized only once.
-func (d View) ContentFontEvents(data []byte, key *object.Stream) []FontEvent {
-	if key != nil {
-		if c := d.Run; c != nil {
-			if ev, ok := c.fontEvents[key]; ok {
-				return ev
-			}
-			ev := buildFontEvents(d.Cancel, data)
-			if c.fontEvents == nil {
-				c.fontEvents = make(map[*object.Stream][]FontEvent)
-			}
-			c.fontEvents[key] = ev
-			return ev
-		}
-	}
-	return buildFontEvents(d.Cancel, data)
-}
-
 // ContentUsedNamesCached returns contentUsedNames(data), memoized per content
 // stream (key) when a validation cache is present.
 func (d View) ContentUsedNamesCached(data []byte, key *object.Stream) UsedResourceNames {
@@ -427,49 +243,6 @@ func (d View) ContentBytesAndKey(ref object.Object) ([]byte, *object.Stream, Rea
 		return data, s, r
 	}
 	return data, nil, r
-}
-
-// buildFontEvents tokenizes a decoded content stream once into a replayable
-// list of font events. Font-name resolution is deliberately deferred to replay
-// (it depends on the container's resources); everything captured here — the
-// operand names, render modes, and shown string bytes — is a pure function of
-// the stream contents.
-func buildFontEvents(cancel Canceler, data []byte) []FontEvent {
-	if data == nil {
-		return nil
-	}
-	var events []FontEvent
-	// lastName and lastNumber are kept as tokens, whose bytes are sub-slices of
-	// data: converting every name and number on arrival cost one allocation
-	// per token — 87% of a PDF/UA run's allocations, since numbers are by far
-	// the most common token and only the rare Tf and Tr read one.
-	var lastName, lastNumber ContentTok
-	var pending [][]byte
-	lx := NewContentLexer(cancel, data)
-	var t ContentTok
-	for lx.Next(&t) {
-		switch t.Kind {
-		case ContentName:
-			lastName = t
-		case ContentNumber:
-			lastNumber = t
-		case ContentString, ContentHexString:
-			pending = append(pending, t.Bytes())
-		case ContentDictStart:
-			lx.SkipDict(&t)
-		case ContentOperator:
-			switch string(t.Raw) {
-			case "Tf":
-				events = append(events, FontEvent{kind: evTf, name: lastName.Name()})
-			case "Tr":
-				events = append(events, FontEvent{kind: evTr, mode: int(lastNumber.Number())})
-			case "Tj", "TJ", "'", "\"":
-				events = append(events, FontEvent{kind: evShow, strings: pending})
-			}
-			pending = nil
-		}
-	}
-	return events
 }
 
 // ContentStreamData extracts and concatenates content stream data.
@@ -509,26 +282,26 @@ func ContentUsedNames(cancel Canceler, data []byte) UsedResourceNames {
 		Patterns: make(map[string]bool),
 		Shadings: make(map[string]bool),
 	}
-	var lastName ContentTok
+	var lastName []byte
 	lx := NewContentLexer(cancel, data)
 	var t ContentTok
 	for lx.Next(&t) {
 		switch t.Kind {
 		case ContentName:
-			lastName = t
+			lastName = t.Raw
 		case ContentDictStart:
 			lx.SkipDict(&t)
 		case ContentOperator:
 			switch string(t.Raw) {
 			case "Do":
-				u.XObjects[lastName.Name()] = true
+				u.XObjects[contentName(lastName)] = true
 			case "sh":
-				u.Shadings[lastName.Name()] = true
+				u.Shadings[contentName(lastName)] = true
 			case "scn", "SCN":
 				// A pattern is set by name; non-pattern scn uses numeric
 				// operands, in which case lastName is stale — over-recording is
 				// harmless (it only widens the scan).
-				u.Patterns[lastName.Name()] = true
+				u.Patterns[contentName(lastName)] = true
 			}
 		}
 	}

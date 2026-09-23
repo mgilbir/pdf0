@@ -120,13 +120,10 @@ type Run struct {
 	// image into minutes of work.
 	psProgs map[*object.Stream]psProgEntry
 
-	// Font usage: which fonts the document shows text in, and the per-stream
-	// skeletons the walk replays. PDF/A and PDF/UA both consume these, which is
-	// why they are here rather than under either.
-	fontUsage      map[*object.Dictionary]*FontTextUsage
-	fontUsageValid bool
-	fontEvents     map[*object.Stream][]FontEvent
-	usedNames      map[*object.Stream]UsedResourceNames
+	// usedNames memoizes, per content stream, the resource names it invokes.
+	// The content interpreter (interp.go), which answers device colour and
+	// font usage, keeps its memo in a slot.
+	usedNames map[*object.Stream]UsedResourceNames
 
 	// dictNum is a reverse index, dictionary value -> object number, backing
 	// DictObjNum. It answers with the lowest number when a dictionary is the
@@ -173,13 +170,12 @@ func Slot[T any](r *Run, key any) *T {
 // to remember.
 func NewRun(trips *Recorder) *Run {
 	return &Run{
-		Trips:      trips,
-		pages:      make(map[int][]PageInfo),
-		content:    make(map[*object.Stream]contentEntry),
-		psProgs:    make(map[*object.Stream]psProgEntry),
-		fontEvents: make(map[*object.Stream][]FontEvent),
-		usedNames:  make(map[*object.Stream]UsedResourceNames),
-		slots:      map[any]any{},
+		Trips:     trips,
+		pages:     make(map[int][]PageInfo),
+		content:   make(map[*object.Stream]contentEntry),
+		psProgs:   make(map[*object.Stream]psProgEntry),
+		usedNames: make(map[*object.Stream]UsedResourceNames),
+		slots:     map[any]any{},
 	}
 }
 
@@ -528,15 +524,4 @@ func (v View) MetadataContent(stream *object.Stream) ([]byte, Reason) {
 		v.Run.contentBytes += int64(len(data))
 	}
 	return data, r
-}
-
-// FontEventsMemoSize reports how many content streams the font-usage walk has
-// tokenized. It exists for the test that pins the sharing: a stream referenced
-// by thousands of pages must be tokenized once, and the only way to see that
-// from outside is to count what the memo holds.
-func (r *Run) FontEventsMemoSize() int {
-	if r == nil {
-		return 0
-	}
-	return len(r.fontEvents)
 }
