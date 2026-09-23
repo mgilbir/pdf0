@@ -2,7 +2,6 @@ package pdf0
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/mgilbir/pdf0/object"
@@ -93,10 +92,11 @@ func (d Destination) destination(page object.IndirectRef) (object.Array, error) 
 		}
 		return object.Array{page, object.Name("FitH"), numberFor(d.Top)}, nil
 	case AtPosition:
-		for name, v := range map[string]float64{
-			"left": d.Left, "top": d.Top, "zoom": d.Zoom,
-		} {
-			if err := checkFinite("the link's destination "+name, v); err != nil {
+		for _, c := range []struct {
+			name string
+			v    float64
+		}{{"left", d.Left}, {"top", d.Top}, {"zoom", d.Zoom}} {
+			if err := checkFinite("the link's destination "+c.name, c.v); err != nil {
 				return nil, err
 			}
 		}
@@ -114,13 +114,6 @@ func (d Destination) destination(page object.IndirectRef) (object.Array, error) 
 	return nil, fmt.Errorf("pdf0: unknown link destination kind %d", d.Kind)
 }
 
-func checkFinite(what string, v float64) error {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return fmt.Errorf("pdf0: %s is %v, which is not a coordinate", what, v)
-	}
-	return nil
-}
-
 // annotation builds the annotation dictionary for a link.
 //
 // The flags are what make it conforming. A non-Popup annotation must declare
@@ -130,8 +123,8 @@ func checkFinite(what string, v float64) error {
 // width because a visible border around every link is a default nobody wants
 // and every producer overrides.
 func (l Link) annotation() (*object.Dictionary, error) {
-	if l.Rect[2] <= l.Rect[0] || l.Rect[3] <= l.Rect[1] {
-		return nil, fmt.Errorf("pdf0: the link's rectangle %v has no area, so nothing could activate it", l.Rect)
+	if err := checkBox("the link's rectangle", l.Rect, "nothing could activate it"); err != nil {
+		return nil, err
 	}
 	switch {
 	case l.URI != "" && l.Page != nil:

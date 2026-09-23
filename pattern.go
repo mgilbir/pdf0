@@ -2,7 +2,6 @@ package pdf0
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
@@ -122,14 +121,13 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	if p.BBox[2] <= p.BBox[0] || p.BBox[3] <= p.BBox[1] {
-		return object.IndirectRef{}, fmt.Errorf(
-			"pdf0: the pattern's cell %v has no area; every tile would be clipped away", p.BBox)
+	// Everything is checked before anything is written (audit 2026-09-22
+	// C131).
+	if err := checkBox("the pattern's cell", p.BBox, "every tile would be clipped away"); err != nil {
+		return object.IndirectRef{}, err
 	}
-	for i, v := range p.BBox {
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return object.IndirectRef{}, fmt.Errorf("pdf0: the pattern's cell has a non-finite bound at %d: %v", i, v)
-		}
+	if err := checkMatrix("the pattern's matrix", p.Matrix); err != nil {
+		return object.IndirectRef{}, err
 	}
 
 	// A step of zero means "tiles that abut", which is the common case and the
@@ -159,18 +157,15 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 		return object.IndirectRef{}, fmt.Errorf("pdf0: unknown tiling spacing %d", p.Spacing)
 	}
 
-	embedded, err := d.embedFaces(p.Faces, p.Fonts)
+	res := newResourceSet(p.Faces, p.Fonts, p.XObjects, p.ExtGStates, p.ColorSpaces, p.Shadings, p.Patterns, p.Properties)
+	if err := res.check(p.Content.Resources()); err != nil {
+		return object.IndirectRef{}, err
+	}
+	faceRefs, err := d.embedFaces(p.Faces)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	resources, err := Page{
-		Content: p.Content, Fonts: embedded, XObjects: p.XObjects,
-		ExtGStates: p.ExtGStates, ColorSpaces: p.ColorSpaces, Shadings: p.Shadings,
-		Patterns: p.Patterns, Properties: p.Properties,
-	}.resources()
-	if err != nil {
-		return object.IndirectRef{}, err
-	}
+	resources := res.build(p.Content.Resources(), faceRefs)
 
 	compressed := core.FlateEncode(drawn)
 	pattern := &object.Stream{Dict: object.Dictionary{}, Data: compressed}
@@ -192,9 +187,6 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 	if p.Matrix != nil {
 		m := object.Array{}
 		for _, v := range p.Matrix {
-			if math.IsNaN(v) || math.IsInf(v, 0) {
-				return object.IndirectRef{}, fmt.Errorf("pdf0: the pattern's matrix has a non-finite entry: %v", v)
-			}
 			m = append(m, numberFor(v))
 		}
 		pattern.Dict.Set("Matrix", m)
@@ -208,11 +200,11 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 // all. The sign is free — a negative step tiles in the other direction — but
 // zero is not a direction and neither is a non-finite number.
 func checkStep(name string, v float64) error {
+	if err := checkFinite("the pattern's "+name, v); err != nil {
+		return err
+	}
 	if v == 0 {
 		return fmt.Errorf("pdf0: the pattern's %s is zero; every tile would land on the last", name)
-	}
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return fmt.Errorf("pdf0: the pattern's %s is %v, which is not a distance", name, v)
 	}
 	return nil
 }

@@ -73,22 +73,23 @@ func (d *Document) AddForm(f Form) (object.IndirectRef, error) {
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	if f.BBox[2] <= f.BBox[0] || f.BBox[3] <= f.BBox[1] {
-		return object.IndirectRef{}, fmt.Errorf(
-			"pdf0: the form's bounding box %v has no area; everything drawn would be clipped away", f.BBox)
+	// Everything is checked before anything is written (audit 2026-09-22
+	// C131).
+	if err := checkBox("the form's bounding box", f.BBox, "everything drawn would be clipped away"); err != nil {
+		return object.IndirectRef{}, err
 	}
-	embedded, err := d.embedFaces(f.Faces, f.Fonts)
+	if err := checkMatrix("the form's matrix", f.Matrix); err != nil {
+		return object.IndirectRef{}, err
+	}
+	res := newResourceSet(f.Faces, f.Fonts, f.XObjects, f.ExtGStates, f.ColorSpaces, f.Shadings, f.Patterns, f.Properties)
+	if err := res.check(f.Content.Resources()); err != nil {
+		return object.IndirectRef{}, err
+	}
+	faceRefs, err := d.embedFaces(f.Faces)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	resources, err := Page{
-		Content: f.Content, Fonts: embedded, XObjects: f.XObjects,
-		ExtGStates: f.ExtGStates, ColorSpaces: f.ColorSpaces, Shadings: f.Shadings,
-		Patterns: f.Patterns, Properties: f.Properties,
-	}.resources()
-	if err != nil {
-		return object.IndirectRef{}, err
-	}
+	resources := res.build(f.Content.Resources(), faceRefs)
 
 	compressed := core.FlateEncode(drawn)
 	form := &object.Stream{Dict: object.Dictionary{}, Data: compressed}

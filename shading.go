@@ -38,6 +38,11 @@ type Stop struct {
 // filled with the end colours rather than left unpainted — which is what CSS
 // does and what a caller almost always means.
 func LinearGradient(x0, y0, x1, y1 float64, stops []Stop) (*object.Dictionary, error) {
+	for i, v := range []float64{x0, y0, x1, y1} {
+		if err := checkFinite(fmt.Sprintf("the linear gradient's coordinate %d", i), v); err != nil {
+			return nil, err
+		}
+	}
 	fn, err := gradientFunction(stops)
 	if err != nil {
 		return nil, err
@@ -63,6 +68,11 @@ func LinearGradient(x0, y0, x1, y1 float64, stops []Stop) (*object.Dictionary, e
 // the same centre; the general two-circle form is what PDF offers, and it also
 // expresses a cone.
 func RadialGradient(x0, y0, r0, x1, y1, r1 float64, stops []Stop) (*object.Dictionary, error) {
+	for i, v := range []float64{x0, y0, r0, x1, y1, r1} {
+		if err := checkFinite(fmt.Sprintf("the radial gradient's coordinate %d", i), v); err != nil {
+			return nil, err
+		}
+	}
 	fn, err := gradientFunction(stops)
 	if err != nil {
 		return nil, err
@@ -114,16 +124,16 @@ func gradientFunction(stops []Stop) (object.Object, error) {
 	}
 	prev := -1.0
 	for i, s := range stops {
-		if s.Offset < 0 || s.Offset > 1 {
-			return nil, fmt.Errorf("pdf0: colour stop %d is at %g, outside [0,1]", i, s.Offset)
+		if err := checkUnit(fmt.Sprintf("colour stop %d's offset", i), s.Offset); err != nil {
+			return nil, err
 		}
 		if s.Offset < prev {
 			return nil, fmt.Errorf("pdf0: colour stop %d is at %g, before the one before it at %g", i, s.Offset, prev)
 		}
 		prev = s.Offset
 		for c, v := range s.Color {
-			if v < 0 || v > 1 {
-				return nil, fmt.Errorf("pdf0: colour stop %d component %d is %g, outside [0,1]", i, c, v)
+			if err := checkUnit(fmt.Sprintf("colour stop %d's component %d", i, c), v); err != nil {
+				return nil, err
 			}
 		}
 	}

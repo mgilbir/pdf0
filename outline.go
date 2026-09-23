@@ -103,6 +103,11 @@ func checkOutline(items []OutlineItem, depth int) error {
 		if it.Page.Number <= 0 {
 			return fmt.Errorf("pdf0: outline entry %q names no page", it.Title)
 		}
+		// The destination is built here as well as when it is written, so a
+		// refusal comes before the first entry is added (audit 2026-09-22 C131).
+		if _, err := it.To.destination(it.Page); err != nil {
+			return fmt.Errorf("outline entry %q: %w", it.Title, err)
+		}
 		if err := checkOutline(it.Children, depth+1); err != nil {
 			return err
 		}

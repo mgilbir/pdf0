@@ -32,8 +32,8 @@ func LuminositySoftMask(form object.Object, backdrop [3]float64) (*object.Dictio
 		return nil, fmt.Errorf("pdf0: a soft mask needs a form XObject to take its shape from")
 	}
 	for i, v := range backdrop {
-		if v < 0 || v > 1 {
-			return nil, fmt.Errorf("pdf0: backdrop component %d is %g, outside [0,1]", i, v)
+		if err := checkUnit(fmt.Sprintf("backdrop component %d", i), v); err != nil {
+			return nil, err
 		}
 	}
 	mask := &object.Dictionary{}
