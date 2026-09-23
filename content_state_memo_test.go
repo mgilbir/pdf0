@@ -81,6 +81,9 @@ func TestCorpusContentStateMemoSound(t *testing.T) {
 			if r != wr || c != wc || g != wg {
 				report("%s page %d: memoised (R%v C%v G%v), unmemoised (R%v C%v G%v)", filepath.Base(f), pg.ObjNum, r, c, g, wr, wc, wg)
 			}
+			if op, wop := core.PageOverprintsICCCMYK(v, pg.Dict), core.PageOverprintsICCCMYKNoMemo(v, pg.Dict); op != wop {
+				report("%s page %d: ICCBased CMYK overprint memoised %v, unmemoised %v", filepath.Base(f), pg.ObjNum, op, wop)
+			}
 		}
 		if got, want := fontUsageSummary(core.CollectFontTextUsage(v)), fontUsageSummary(core.CollectFontTextUsageNoMemo(v)); got != want {
 			report("%s: font usage differs\n memoised:   %s\n unmemoised: %s", filepath.Base(f), got, want)

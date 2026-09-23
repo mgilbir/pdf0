@@ -4613,10 +4613,6 @@ type contentColorUsage struct {
 	fillCS   map[string]bool
 	strokeCS map[string]bool
 	gsNames  map[string]bool
-	// Whether any painting operation of each flavour occurs: setting a
-	// stroke colour space that never strokes is not a use.
-	paintsFill   bool
-	paintsStroke bool
 }
 
 func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage {
@@ -4647,16 +4643,6 @@ func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage 
 			u.strokeCS[lastName] = true
 		case "gs":
 			u.gsNames[lastName] = true
-		case "f", "F", "f*":
-			u.paintsFill = true
-		case "S", "s":
-			u.paintsStroke = true
-		case "B", "B*", "b", "b*":
-			u.paintsFill = true
-			u.paintsStroke = true
-		case "Tj", "TJ", "'", "\"":
-			// Text defaults to fill rendering mode.
-			u.paintsFill = true
 		}
 	}
 	return u
@@ -4745,14 +4731,23 @@ func sameICCProfile(doc core.View, a, b *object.Stream) bool {
 	return bytes.Equal(da, db)
 }
 
-// checkICCBasedUsageRules implements two content-level ICCBased rules:
+// checkICCBasedUsageRules implements the ICCBased overprint rule (ISO
+// 19005-2/-3/-4 6.2.4.2): overprint mode shall not be 1 when an ICCBased CMYK
+// colour space is used for a stroke with stroking overprint on, or for any
+// other painting operation with non-stroking overprint on.
 //
-//   - Overprint (ISO 19005-2/-4): when an ICCBased CMYK colour space is used
-//     for a fill or stroke that overprints, overprint mode shall not be 1.
-//   - Profile identity (ISO 19005-4, 6.2.4.2): an ICCBased colour space used
-//     for rendering shall not embed the same profile as the current PDF/A
-//     output intent or the current transparency blending colour space — the
-//     device colour operators exist for exactly that case.
+// Every part of that is a fact about the graphics state at the painting
+// operator, so the rule is answered by executing the content (see
+// core.PageOverprintsICCCMYK): the overprint parameters are set by gs,
+// restored by Q and inherited by the forms, patterns and Type 3 glyphs the
+// content invokes, and only an operation that paints — with the colour space
+// current at that moment — counts. The rule used to OR every gs a page named,
+// in whatever order and inside or outside q/Q, against every colour space it
+// selected, so "q /GSopm gs Q /GSop gs … f" was reported although the fill ran
+// at overprint mode 0; and forms were never examined (audit 2026-09-22 C65).
+//
+// The rule that an ICCBased space shall not embed the output intent's or the
+// blending space's profile is checkICCProfileIdentity's.
 func checkICCBasedUsageRules(doc core.View, level Level) []Violation {
 	if level.Part() == 1 {
 		return nil
@@ -4761,70 +4756,18 @@ func checkICCBasedUsageRules(doc core.View, level Level) []Violation {
 	if catalog == nil {
 		return nil
 	}
-
 	var errs []Violation
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
-		res := doc.Resources(page.Dict)
-		if res == nil {
-			continue
+		if doc.Cancel.Stopped() {
+			break
 		}
-		data, _ := core.ContentStreamData(doc, page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
-		if data == nil {
-			continue
-		}
-		usage := scanContentColorUsage(doc.Cancel, data)
-
-		// Accumulated overprint state from applied ExtGStates.
-		opm1, opFill, opStroke := false, false, false
-		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
-			for name, gref := range gsDict.All() {
-				if !usage.gsNames[string(name)] {
-					continue
-				}
-				gs := doc.ResolveDict(gref)
-				if gs == nil {
-					continue
-				}
-				if v, ok := doc.ResolveInt(gs.Get("OPM")); ok && v == 1 {
-					opm1 = true
-				}
-				strokeSet, strokeIsSet := doc.ResolveBool(gs.Get("OP"))
-				fillSet, fillIsSet := doc.ResolveBool(gs.Get("op"))
-				if strokeIsSet && bool(strokeSet) {
-					opStroke = true
-				}
-				// op defaults to OP when absent (ISO 32000-1, Table 58).
-				if fillIsSet && bool(fillSet) || !fillIsSet && strokeIsSet && bool(strokeSet) {
-					opFill = true
-				}
-			}
-		}
-
-		csDict := doc.ResolveDict(res.Get("ColorSpace"))
-		if csDict == nil {
-			continue
-		}
-		checkOne := func(name string, stroke bool) {
-			csVal := csDict.Get(object.Name(name))
-			if csVal == nil {
-				return
-			}
-			if cmyk := iccCMYKProfile(doc, csVal); cmyk != nil && opm1 {
-				if (stroke && opStroke && usage.paintsStroke) || (!stroke && opFill && usage.paintsFill) {
-					errs = append(errs, Violation{
-						Rule:    colourClause("iccBased", level),
-						Level:   level,
-						Message: "overprint mode must not be 1 when an ICCBased CMYK colour space is used with overprinting",
-						Object:  page.ObjNum,
-					})
-				}
-			}
-		}
-		for name := range usage.fillCS {
-			checkOne(name, false)
-		}
-		for name := range usage.strokeCS {
-			checkOne(name, true)
+		if core.PageOverprintsICCCMYK(doc, page.Dict) {
+			errs = append(errs, Violation{
+				Rule:    colourClause("iccBased", level),
+				Level:   level,
+				Message: "overprint mode must not be 1 when an ICCBased CMYK colour space is used with overprinting",
+				Object:  page.ObjNum,
+			})
 		}
 	}
 	return errs
