@@ -537,9 +537,8 @@ func TestXRefStreamEntryBombs(t *testing.T) {
 			b.obj(1, "<< /Type /Catalog >>")
 			bombSection(t, b, 2, 0, 0, "")
 			f := b.bytes()
-			if len(f) > 20<<10 {
-				t.Fatalf("bomb is %d bytes; the point is a small file", len(f))
-			}
+			// The audit's file is 19.6 KB decoding to 20 MB of entries, 1000x.
+			assertAmplifies(t, "the bomb", f, n, 250, 256<<10)
 			doc, err := Read(bytes.NewReader(f), int64(len(f)))
 			if err != nil {
 				t.Fatalf("Read: %v", err)
