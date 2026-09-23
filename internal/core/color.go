@@ -26,7 +26,7 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 	}
 
 	seen := make(map[*object.Dictionary]bool)
-	if resourcesUseTransparency(doc, page, seen) {
+	if resourcesUseTransparency(doc, page, seen, 0) {
 		return true
 	}
 	// Check annotations on this page for transparency features
@@ -66,7 +66,7 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 			apObj := doc.Resolve(apEntry)
 			switch v := apObj.(type) {
 			case *object.Stream:
-				if resourcesUseTransparency(doc, &v.Dict, seen) {
+				if resourcesUseTransparency(doc, &v.Dict, seen, 0) {
 					return true
 				}
 				// Check if the appearance stream has its own transparency group
@@ -84,7 +84,7 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 				for stateVal := range v.Values() {
 					stateObj := doc.Resolve(stateVal)
 					if stateStream, ok := stateObj.(*object.Stream); ok {
-						if resourcesUseTransparency(doc, &stateStream.Dict, seen) {
+						if resourcesUseTransparency(doc, &stateStream.Dict, seen, 0) {
 							return true
 						}
 						if stateStream.Dict.Get("Group") != nil {
@@ -104,7 +104,11 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 	return false
 }
 
-func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*object.Dictionary]bool) bool {
+func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*object.Dictionary]bool, depth int) bool {
+	if !doc.Descend(depth) {
+		return false
+	}
+	doc.Charge(1)
 	if seen[container] {
 		return false
 	}
@@ -149,7 +153,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 						}
 					}
 					// Recurse into Form XObject Resources
-					if resourcesUseTransparency(doc, &stream.Dict, seen) {
+					if resourcesUseTransparency(doc, &stream.Dict, seen, depth+1) {
 						return true
 					}
 				} else if subtype == "Image" {
@@ -174,7 +178,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 				}
 				subtype, _ := doc.ResolveName(fd.Get("Subtype"))
 				if subtype == "Type3" {
-					if resourcesUseTransparency(doc, fd, seen) {
+					if resourcesUseTransparency(doc, fd, seen, depth+1) {
 						return true
 					}
 				}
@@ -194,7 +198,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 					continue
 				}
 				// Tiling patterns (PatternType 1) have their own Resources
-				if resourcesUseTransparency(doc, &stream.Dict, seen) {
+				if resourcesUseTransparency(doc, &stream.Dict, seen, depth+1) {
 					return true
 				}
 			}
@@ -368,13 +372,14 @@ func ClassifyCalibratedCS(doc View, csObj object.Object) (coversRGB, coversCMYK,
 // CheckCSForDevice checks if a color space value is or contains a device color space.
 // Handles direct names, arrays (Indexed, Separation, DeviceN, Pattern with base).
 func CheckCSForDevice(doc View, csObj object.Object, usesRGB, usesCMYK, usesGray *bool) {
-	checkCSForDeviceSeen(doc, csObj, usesRGB, usesCMYK, usesGray, make(map[int]bool))
+	checkCSForDeviceSeen(doc, csObj, usesRGB, usesCMYK, usesGray, make(map[int]bool), 0)
 }
 
-func checkCSForDeviceSeen(doc View, csObj object.Object, usesRGB, usesCMYK, usesGray *bool, seen map[int]bool) {
-	if csObj == nil {
+func checkCSForDeviceSeen(doc View, csObj object.Object, usesRGB, usesCMYK, usesGray *bool, seen map[int]bool, depth int) {
+	if csObj == nil || !doc.Descend(depth) {
 		return
 	}
+	doc.Charge(1)
 	if r, ok := csObj.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle through an indirect color-space reference
@@ -399,23 +404,23 @@ func checkCSForDeviceSeen(doc View, csObj object.Object, usesRGB, usesCMYK, uses
 		case "Indexed":
 			// [/Indexed base hival lookup] - check base
 			if len(arr) >= 2 {
-				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen)
+				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen, depth+1)
 			}
 		case "Separation":
 			// A device alternate needs OutputIntent coverage like direct
 			// device colour: the corpus fails a Separation with a
 			// DeviceCMYK alternate absent a CMYK PDF/A intent.
 			if len(arr) >= 3 {
-				checkCSForDeviceSeen(doc, arr[2], usesRGB, usesCMYK, usesGray, seen)
+				checkCSForDeviceSeen(doc, arr[2], usesRGB, usesCMYK, usesGray, seen, depth+1)
 			}
 		case "DeviceN":
 			if len(arr) >= 3 {
-				checkCSForDeviceSeen(doc, arr[2], usesRGB, usesCMYK, usesGray, seen)
+				checkCSForDeviceSeen(doc, arr[2], usesRGB, usesCMYK, usesGray, seen, depth+1)
 			}
 		case "Pattern":
 			// [/Pattern underlyingCS] - check underlying
 			if len(arr) >= 2 {
-				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen)
+				checkCSForDeviceSeen(doc, arr[1], usesRGB, usesCMYK, usesGray, seen, depth+1)
 			}
 		}
 	}

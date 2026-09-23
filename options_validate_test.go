@@ -31,12 +31,10 @@ func everyLimitOption(n int64) map[string]Option {
 		"WithMaxContentStreamBytes":  WithMaxContentStreamBytes(int(n)),
 		"WithMaxICCProfileBytes":     WithMaxICCProfileBytes(int(n)),
 		"WithMaxXMPPacketBytes":      WithMaxXMPPacketBytes(int(n)),
-		"WithMaxCIDRangeSpan":        WithMaxCIDRangeSpan(int(n)),
-		"WithMaxRoleMapSteps":        WithMaxRoleMapSteps(int(n)),
 		"WithMaxTableGridFills":      WithMaxTableGridFills(n),
-		"WithMaxPostScriptSteps":     WithMaxPostScriptSteps(int(n)),
 		"WithMaxCmapWork":            WithMaxCmapWork(int(n)),
 		"WithMaxImagePixels":         WithMaxImagePixels(n),
+		"WithMaxWork":                WithMaxWork(n),
 	}
 }
 

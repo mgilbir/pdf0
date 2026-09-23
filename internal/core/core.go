@@ -44,10 +44,7 @@ const (
 	DefaultMaxContentStreamBytes  = 64 << 20  // 64 MB
 	DefaultMaxICCProfileBytes     = 8 << 20   // 8 MiB
 	DefaultMaxXMPPacketBytes      = 4 << 20   // 4 MiB
-	DefaultMaxCIDRangeSpan        = 65536
-	DefaultMaxRoleMapSteps        = 1 << 20
 	DefaultMaxTableGridFills      = 1 << 24
-	DefaultMaxPostScriptSteps     = 1 << 20
 	DefaultMaxCmapWork            = 1 << 18
 )
 
@@ -79,12 +76,13 @@ type Limits struct {
 	ContentStreamBytes  int
 	ICCProfileBytes     int
 	XMPPacketBytes      int
-	CIDRangeSpan        int
-	RoleMapSteps        int
 	TableGridFills      int64
-	PostScriptSteps     int
 	CmapWork            int
 	ImagePixels         int64
+	// Work is the caller's work budget (WithMaxWork), or 0 for the default,
+	// which depends on the document (Limits.WorkBudget) and so is not filled
+	// in by WithDefaults.
+	Work int64
 }
 
 // DefaultLimits is the configuration a caller who passes no options gets.
@@ -113,17 +111,8 @@ func (l Limits) WithDefaults() Limits {
 	if l.XMPPacketBytes == 0 {
 		l.XMPPacketBytes = DefaultMaxXMPPacketBytes
 	}
-	if l.CIDRangeSpan == 0 {
-		l.CIDRangeSpan = DefaultMaxCIDRangeSpan
-	}
-	if l.RoleMapSteps == 0 {
-		l.RoleMapSteps = DefaultMaxRoleMapSteps
-	}
 	if l.TableGridFills == 0 {
 		l.TableGridFills = DefaultMaxTableGridFills
-	}
-	if l.PostScriptSteps == 0 {
-		l.PostScriptSteps = DefaultMaxPostScriptSteps
 	}
 	if l.CmapWork == 0 {
 		l.CmapWork = DefaultMaxCmapWork
@@ -146,6 +135,10 @@ func (l Limits) ObjStmMaxRaw() int { return l.DecodedStreamBytes / 2 }
 type Canceler struct {
 	ctx  context.Context
 	done <-chan struct{}
+	// meter is the run's work meter, when this signal belongs to a run
+	// (Metered). The scanners and decoders that take a Canceler charge it,
+	// and a spent budget stops them as a cancelled context does.
+	meter *Meter
 }
 
 // NewCanceler builds the signal for ctx. A nil ctx is treated as "never
@@ -170,6 +163,9 @@ func (c Canceler) Cancellable() bool { return c.done != nil }
 
 // Stopped reports whether the operation should stop now.
 func (c Canceler) Stopped() bool {
+	if c.meter != nil && c.meter.dead {
+		return true
+	}
 	select {
 	case <-c.done:
 		return true
@@ -200,16 +196,30 @@ func (c Canceler) Err() error {
 // Write use: neither has a finding channel, and neither may hand back a
 // truncated result that looks whole.
 func (c Canceler) StopErr(what string) error {
+	err := c.Cause()
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", what, err)
+}
+
+// Cause is why the operation was stopped — the context's error, or the run's
+// work meter's (ErrWorkLimit) — or nil when it was not.
+func (c Canceler) Cause() error {
 	if !c.Stopped() {
 		return nil
 	}
 	err := c.Err()
+	if err == nil && c.meter != nil && c.meter.dead {
+		// Not the context: the run's own budget stopped it.
+		err = c.meter.stopError()
+	}
 	if err == nil {
 		// Unreachable in practice: Done is closed only after Err is set. Kept so
 		// a stopped operation can never report success.
 		err = context.Canceled
 	}
-	return fmt.Errorf("%s: %w", what, err)
+	return err
 }
 
 // CancelScanBytes is how many bytes of a content stream one of the token

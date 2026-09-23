@@ -820,9 +820,6 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 		dw = numVal(doc, v)
 	}
 	wMap, wComplete := parseCIDWidths(doc, desc.Get("W"))
-	if !wComplete {
-		doc.Note(core.GuardCIDWidthRange, fmt.Sprintf("a CIDFont /W entry spans more than %s CIDs and was not expanded; the width-consistency check for that font was skipped rather than run against /DW-defaulted widths", core.LimitBound(int64(doc.Limits.CIDRangeSpan), core.DefaultMaxCIDRangeSpan)), u.ObjNum)
-	}
 
 	var errs []Violation
 	reported := map[string]bool{}
@@ -834,7 +831,7 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 		errs = append(errs, Violation{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.ObjNum})
 	}
 	renders := rendersVisibly(u)
-	toUni, _ := doc.ParseToUnicodeMap(fontDict) // reason: only a mapping that is present is acted on below; the producer recorded any declined trip
+	toUni, _ := core.ParseToUnicode(doc, fontDict) // reason: only a mapping that is present is acted on below; the producer recorded any declined trip
 
 	for _, s := range u.Strings {
 		if !haveCMap {
@@ -890,7 +887,7 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 				// the two are the same number only under Identity — for a font
 				// with its own CMap, asking by CID reads whatever entry happens
 				// to sit at that number, or none.
-				if r, ok := toUni[int(code.Value)]; ok && !isGlyphWhitespace(r) {
+				if r, ok := toUni.First(int(code.Value)); ok && !isGlyphWhitespace(r) {
 					report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
 				}
 			}
@@ -899,7 +896,7 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 			}
 
 			pdfW, havePDF := dw, wComplete
-			if w, ok := wMap[cid]; ok {
+			if w, ok := wMap.width(cid); ok {
 				pdfW, havePDF = w, true
 			}
 			if renders && havePDF && haveProg && absf(pdfW-progW) > glyphWidthTolerance {
@@ -1168,23 +1165,87 @@ func cidGlyphEmpty(fp *font.Program, m cidGlyphMap, key int) bool {
 	return m.type2 && fp.GlyphNonEmpty != nil && key >= 0 && key < len(fp.GlyphNonEmpty) && !fp.GlyphNonEmpty[key]
 }
 
-// The number of CIDs a single /W range entry may span defaults to
-// defaultMaxCIDRangeSpan; a caller can change it with WithMaxCIDRangeSpan. CIDs
-// are 16-bit, so a well-formed range covers at most the whole CID space; this
-// matches the ceiling the ToUnicode and CMap scanners already apply.
-
-// parseCIDWidths parses a CIDFont /W array into CID -> width. The second result
-// reports that the CID-range span limit dropped at least one range entry, so
-// the map is missing widths the file does declare.
+// cidWidths is a CIDFont's /W array, answered per CID without being
+// expanded (audit 2026-09-22 C10).
 //
-// This distinction is load-bearing. A missing entry is not "this CID has no
-// declared width" — the caller's fallback for that is /DW, default 1000 — and
-// comparing a defaulted 1000 against the font program's real advance emits
-// "width information for glyphs used for rendering is inconsistent", a
-// violation the file does not commit. Incomplete has to be distinguishable
-// from absent.
-func parseCIDWidths(doc core.View, wObj object.Object) (map[int]float64, bool) {
-	out := make(map[int]float64)
+// /W is a list of entries — "c [w0 w1 …]", widths for c, c+1, …, and
+// "c_first c_last w", one width for the range — and a later entry overrides an
+// earlier one for the CIDs they share. Expanding it into a map is what a
+// hostile file asks for: 2,000 entries "k·65536 k·65536+65535 500" are 38 KB
+// asking for 131 million inserts, and a sub-array referenced 2,000 times is
+// expanded 2,000 times. A per-range span limit bounded one entry and not the
+// sum. Here the entries are resolved once into disjoint CID segments
+// (core.ResolveSpans, the last entry winning), so the cost is O(n log n) in
+// the number of entries whatever they cover, and a lookup is a binary search.
+// A sub-array's elements are read only for the CIDs actually shown.
+type cidWidths struct {
+	doc     core.View
+	entries []cidWidthEntry
+	spans   core.Spans
+}
+
+// cidWidthEntry is one /W entry: first is its first CID, and either arr (the
+// sub-array form) or w (the range form) gives the widths.
+type cidWidthEntry struct {
+	first int64
+	w     float64
+	arr   object.Array
+}
+
+// width is the width /W declares for cid, if it declares one.
+func (c *cidWidths) width(cid int) (float64, bool) {
+	if c == nil || cid < 0 || int64(cid) > math.MaxUint32 {
+		return 0, false
+	}
+	c.doc.Charge(1)
+	sp, ok := c.spans.Find(uint32(cid))
+	if !ok {
+		return 0, false
+	}
+	e := c.entries[sp.Idx]
+	if e.arr != nil {
+		return numVal(c.doc, e.arr[int64(cid)-e.first]), true
+	}
+	return e.w, true
+}
+
+type cidWidthsSlot struct{}
+
+// parseCIDWidths reads a CIDFont /W array. The second result reports whether
+// the widths could be read at all: a /W that is present and not an array is
+// malformed, and the caller's fallback for a CID with no declared width —
+// /DW, default 1000 — would then be compared against numbers the document did
+// not state, which is how a missing width becomes a false "width information
+// ... is inconsistent". An absent /W is complete: every CID takes /DW.
+//
+// A /W named by reference is read once per run, however many fonts share it.
+// The entries are charged to the run's work meter.
+func parseCIDWidths(doc core.View, wObj object.Object) (*cidWidths, bool) {
+	ref, isRef := wObj.(object.IndirectRef)
+	type memo struct {
+		w  *cidWidths
+		ok bool
+	}
+	var cache *map[int]memo
+	if isRef {
+		cache = core.Slot[map[int]memo](doc.Run, cidWidthsSlot{})
+		if m, ok := (*cache)[ref.Number]; ok {
+			doc.Charge(1)
+			return m.w, m.ok
+		}
+	}
+	w, ok := readCIDWidths(doc, wObj)
+	if isRef {
+		if *cache == nil {
+			*cache = map[int]memo{}
+		}
+		(*cache)[ref.Number] = memo{w, ok}
+	}
+	return w, ok
+}
+
+func readCIDWidths(doc core.View, wObj object.Object) (*cidWidths, bool) {
+	out := &cidWidths{doc: doc}
 	resolved := doc.Resolve(wObj)
 	if resolved == nil {
 		// No /W at all, which is legal and complete: §9.7.4.3 makes the array
@@ -1206,36 +1267,36 @@ func parseCIDWidths(doc core.View, wObj object.Object) (map[int]float64, bool) {
 		// not state.
 		return out, false
 	}
-	complete := true
+	doc.Charge(len(arr))
+	var ranges []core.Span
+	add := func(e cidWidthEntry, lo, hi int64) {
+		// CIDs below 0 are never looked up, and none is above 2^32-1.
+		lo = max(lo, 0)
+		hi = min(hi, math.MaxUint32)
+		if hi < lo {
+			return
+		}
+		out.entries = append(out.entries, e)
+		ranges = append(ranges, core.Span{Lo: uint32(lo), Hi: uint32(hi)})
+	}
 	i := 0
 	for i < len(arr) {
-		c := intVal(doc, arr[i])
+		c := int64(intVal(doc, arr[i]))
 		if i+1 < len(arr) {
 			if sub, ok := doc.Resolve(arr[i+1]).(object.Array); ok {
-				for k, wv := range sub {
-					out[c+k] = numVal(doc, wv)
+				if len(sub) > 0 {
+					add(cidWidthEntry{first: c, arr: sub}, c, c+int64(len(sub))-1)
 				}
 				i += 2
 				continue
 			}
 			if i+2 < len(arr) {
-				cLast := intVal(doc, arr[i+1])
+				cLast := int64(intVal(doc, arr[i+1]))
 				w := numVal(doc, arr[i+2])
-				// A hostile /W like [0 2000000000 500] would otherwise drive
-				// ~2e9 map inserts — a memory/CPU DoS reached before any render
-				// gate, since parseCIDWidths runs unconditionally in
-				// checkCIDFontConsistency. Bound the span to the 16-bit CID
-				// ceiling and skip inverted or over-wide ranges (audit C1).
-				switch {
-				case c < 0 || cLast < c:
-					// Malformed, not over-budget: an inverted or negative
-					// range declares nothing, so nothing is missing.
-				case cLast-c >= doc.Limits.CIDRangeSpan:
-					complete = false
-				default:
-					for cid := c; cid <= cLast; cid++ {
-						out[cid] = w
-					}
+				// An inverted or negative range is malformed and declares
+				// nothing, so nothing is missing.
+				if c >= 0 && cLast >= c {
+					add(cidWidthEntry{first: c, w: w}, c, cLast)
 				}
 				i += 3
 				continue
@@ -1243,7 +1304,8 @@ func parseCIDWidths(doc core.View, wObj object.Object) (map[int]float64, bool) {
 		}
 		i++
 	}
-	return out, complete
+	out.spans = core.ResolveSpans(ranges, true)
+	return out, true
 }
 
 // parseFontMatrix reads a Type 3 /FontMatrix (default [0.001 0 0 0.001 0 0]).

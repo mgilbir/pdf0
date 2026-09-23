@@ -68,6 +68,7 @@ const maxCMapArray = maxCMapRangeSpan
 // are the begin…/end… pairs of Table 121 and 9.10.3; an entry is the operands
 // between them taken two or three at a time, in order, with no regard to lines.
 func scanCMap(cancel Canceler, data []byte, v cmapVisitor) {
+	cancel.ChargeScan(len(data)) // a tokenisation; see NewContentLexer
 	lx := &ContentLexer{data: data, cancel: cancel, noInline: true}
 	var t ContentTok
 

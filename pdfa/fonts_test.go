@@ -297,11 +297,23 @@ func TestParseCIDWidths(t *testing.T) {
 	// [ 1 [100 200] 5 7 300 ]  -> CID1=100, CID2=200, CID5..7=300
 	w := object.Array{object.Integer(1), object.Array{object.Integer(100), object.Integer(200)}, object.Integer(5), object.Integer(7), object.Integer(300)}
 	m, _ := parseCIDWidths(doc, w)
-	if m[1] != 100 || m[2] != 200 || m[5] != 300 || m[7] != 300 {
-		t.Errorf("CID width parse wrong: %v", m)
+	for cid, want := range map[int]float64{1: 100, 2: 200, 5: 300, 6: 300, 7: 300} {
+		if got, ok := m.width(cid); !ok || got != want {
+			t.Errorf("width(%d) = %v, %v; want %v", cid, got, ok, want)
+		}
 	}
-	if _, ok := m[3]; ok {
-		t.Error("CID3 should be unset")
+	for _, cid := range []int{0, 3, 4, 8, -1} {
+		if _, ok := m.width(cid); ok {
+			t.Errorf("CID %d should be unset", cid)
+		}
+	}
+	// A later entry overrides an earlier one where they overlap, as the
+	// expansion into a map did.
+	o, _ := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(9), object.Integer(1), object.Integer(4), object.Array{object.Integer(7), object.Integer(8)}})
+	for cid, want := range map[int]float64{0: 1, 3: 1, 4: 7, 5: 8, 6: 1, 9: 1} {
+		if got, ok := o.width(cid); !ok || got != want {
+			t.Errorf("overlap: width(%d) = %v, %v; want %v", cid, got, ok, want)
+		}
 	}
 }
 

@@ -47,13 +47,17 @@ func (d *Document) ExtractImagesContext(ctx context.Context) ([]images.Extracted
 
 func extractImages(d *Document, cancel core.Canceler) ([]images.ExtractedImage, error) {
 	var out []images.ExtractedImage
-	walkImagesCancel(d, cancel, func(im images.ExtractedImage) bool {
+	// The run's canceler carries its work meter, so a spent budget stops the
+	// walk as a cancelled context does and StopErr names the budget.
+	rd := beginRunCancel(d, cancel)
+	stop := rd.canceler()
+	walkImagesRun(rd, func(im images.ExtractedImage) bool {
 		// Keep the image first, then stop: it is already decoded, and throwing
 		// away finished work is not what cancellation is for.
 		out = append(out, im)
-		return !cancel.Stopped()
+		return !stop.Stopped()
 	})
-	return out, cancel.StopErr("extracting images")
+	return out, stop.StopErr("extracting images")
 }
 
 // Images returns an iterator over the image XObjects drawn from the document's
@@ -73,6 +77,11 @@ func walkImages(d *Document, yield func(images.ExtractedImage) bool) {
 }
 
 func walkImagesCancel(d *Document, cancel core.Canceler, yield func(images.ExtractedImage) bool) {
+	walkImagesRun(beginRunCancel(d, cancel), yield)
+}
+
+// walkImagesRun walks the images of a document a run has been begun on.
+func walkImagesRun(rd *Document, yield func(images.ExtractedImage) bool) {
 	// Install a per-run cache on a shallow copy, as the validators do: a tint
 	// transform evaluates per pixel, and without the cache each evaluation
 	// re-decoded the function stream (and re-parsed a type-4 program) — a
@@ -82,5 +91,9 @@ func walkImagesCancel(d *Document, cancel core.Canceler, yield func(images.Extra
 	//
 	// This is the boundary: everything below it reads the document through a
 	// view and never names Document.
-	imagesWalk(beginRunCancel(d, cancel).view(), yield)
+	//
+	// It is also the outermost boundary for the run's work meter: a walk the
+	// meter stops ends here, with each image it had reached already yielded
+	// (an image the meter stopped mid-decode carries a Note saying so).
+	core.Contain(func() { imagesWalk(rd.view(), yield) })
 }

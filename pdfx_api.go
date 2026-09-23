@@ -35,7 +35,9 @@ func validatePDFX(cancel core.Canceler, doc *Document, level pdfx.Level) []pdfx.
 	//
 	// This is the boundary: the checks below it read a view.
 	rd := beginRunCancel(doc, cancel)
-	out := pdfxValidateView(rd.view(), level)
+	// Contain is the work meter's boundary outside the checks' own.
+	var out []pdfx.Violation
+	core.Contain(func() { out = pdfxValidateView(rd.view(), level) })
 
 	// Guard trips are reported under their own rule, not as conformance
 	// failures. Read-time trips live on the Document, so this is here.

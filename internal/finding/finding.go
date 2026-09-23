@@ -79,9 +79,15 @@ func InternalMessage(r any) string {
 // A check that panics on hostile input must not take the run down with it, and
 // must not silently vanish either: its siblings' findings stay, and the caller
 // is told that one check could not be completed.
+//
+// The run's work meter unwinding (core.IsAbort) is not a fault and adds
+// nothing: the trip that stopped the run is reported with the run's other
+// trips. What check reported through add before it was stopped stays; a check
+// that reports as it goes must therefore report only what it has established,
+// which is what every Guarded check does.
 func Guarded(add func(rule, msg string, obj int), check func()) {
 	defer func() {
-		if r := recover(); r != nil {
+		if r := recover(); r != nil && !core.IsAbort(r) {
 			add(InternalRule, InternalMessage(r), 0)
 		}
 	}()

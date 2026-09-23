@@ -95,10 +95,10 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	// Only EXECUTED content is validated: an operator inside a form XObject
 	// that no content stream invokes does not appear on the page (the
 	// corpus passes an UnknownOperator in an uninvoked form).
-	seenContainer := map[*object.Dictionary]bool{}
+	w := &contentWalk{containers: map[*object.Dictionary]bool{}, scanned: map[contentScanKey]bool{}}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
-		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, seenContainer, add)
+		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, w, add, 0)
 	}
 
 	// Annotation appearance streams (their /AP /N) are executed content too:
@@ -106,7 +106,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	// there (ISO 19005-1 6.2.10; Isartor 6.2.10-t01-fail-c).
 	for _, ap := range collectAppearanceStreams(doc) {
 		if data, _ := doc.Content(ap.stream); data != nil { // reason: presence-only; the producer recorded any declined trip
-			checkContentTokens(data, doc.ResolveDict(ap.stream.Dict.Get("Resources")), doc, ap.objNum, add)
+			w.tokens(doc, data, ap.stream, doc.ResolveDict(ap.stream.Dict.Get("Resources")), ap.objNum, add)
 		}
 	}
 
@@ -126,7 +126,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 		for cpVal := range cps.Values() {
 			if cp, ok := doc.Resolve(cpVal).(*object.Stream); ok {
 				if cpData, _ := doc.Content(cp); cpData != nil { // reason: presence-only; the producer recorded any declined trip
-					checkContentTokens(cpData, res, doc, u.ObjNum, add)
+					w.tokens(doc, cpData, cp, res, u.ObjNum, add)
 				}
 			}
 		}
@@ -169,19 +169,60 @@ func collectAppearanceStreams(doc core.View) []appearanceStream {
 	return out
 }
 
+// contentWalk is the state of one checkContentStreamOperators run: the
+// containers already walked, and the (stream, resources) pairs already
+// scanned.
+//
+// A scan's findings depend on nothing but the stream's tokens and the
+// resource dictionary its names resolve in, and every finding is reported
+// once per message, so scanning a pair a second time can only repeat what
+// the first scan said. It used to be done anyway, once per referrer: one
+// 16 MB appearance stream named by a hundred annotations was tokenised a
+// hundred times, eighteen seconds for a 37 KB file (audit 2026-09-22 C39),
+// and the same held for pages sharing a content stream and for Type 3 glyph
+// procedures shared between fonts.
+type contentWalk struct {
+	containers map[*object.Dictionary]bool
+	scanned    map[contentScanKey]bool
+}
+
+type contentScanKey struct {
+	stream *object.Stream
+	res    *object.Dictionary
+}
+
+// tokens runs checkContentTokens once per (stream, resources). A stream that
+// is not one object (a page's /Contents array, which has no key) is always
+// scanned.
+func (w *contentWalk) tokens(doc core.View, data []byte, key *object.Stream, res *object.Dictionary, objNum int, add func(string, int)) {
+	if key != nil {
+		k := contentScanKey{key, res}
+		if w.scanned[k] {
+			doc.Charge(1)
+			return
+		}
+		w.scanned[k] = true
+	}
+	checkContentTokens(data, res, doc, objNum, add)
+}
+
 // walkExecutedContent validates a content stream and recurses into the form
 // XObjects and tiling patterns it actually invokes.
-func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, seen map[*object.Dictionary]bool, add func(string, int)) {
+func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, w *contentWalk, add func(string, int), depth int) {
+	if !doc.Descend(depth) {
+		return
+	}
+	doc.Charge(1)
 	// One invocation scans one content stream and recurses into the forms and
 	// patterns it draws, so this is the per-stream cancellation boundary of the
 	// executed-content model (cancel.go).
-	if container == nil || seen[container] || doc.Cancel.Stopped() {
+	if container == nil || w.containers[container] || doc.Cancel.Stopped() {
 		return
 	}
-	seen[container] = true
+	w.containers[container] = true
 	res := doc.Resources(container)
 	if data != nil {
-		checkContentTokens(data, res, doc, objNum, add)
+		w.tokens(doc, data, key, res, objNum, add)
 	}
 	if res == nil {
 		return
@@ -207,7 +248,7 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 						add("a drawn form XObject dictionary contains a /PS entry", xnum)
 					}
 					data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-					walkExecutedContent(doc, &s.Dict, data, s, xnum, seen, add)
+					walkExecutedContent(doc, &s.Dict, data, s, xnum, w, add, depth+1)
 				}
 			}
 		}
@@ -223,7 +264,7 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 			}
 			if s, ok := doc.Resolve(pref).(*object.Stream); ok {
 				data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-				walkExecutedContent(doc, &s.Dict, data, s, resolveObjNum(doc, pref), seen, add)
+				walkExecutedContent(doc, &s.Dict, data, s, resolveObjNum(doc, pref), w, add, depth+1)
 			}
 		}
 	}
@@ -437,7 +478,7 @@ func checkICCProfileIdentity(doc core.View, level Level) []Violation {
 		}
 		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		blend := groupBlendProfile(doc, page.Dict)
-		walkICCIdentity(doc, page.Dict, data, key, page.ObjNum, oiProfile, blend, seenC, add)
+		walkICCIdentity(doc, page.Dict, data, key, page.ObjNum, oiProfile, blend, seenC, add, 0)
 	}
 	return errs
 }
@@ -463,7 +504,11 @@ func pdfaOutputIntentProfile(doc core.View, container *object.Dictionary) *objec
 	return nil
 }
 
-func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, oi, blend *object.Stream, seen map[*object.Dictionary]bool, add func(string, int)) {
+func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, oi, blend *object.Stream, seen map[*object.Dictionary]bool, add func(string, int), depth int) {
+	if !doc.Descend(depth) {
+		return
+	}
+	doc.Charge(1)
 	if container == nil || seen[container] || data == nil {
 		return
 	}
@@ -516,7 +561,7 @@ func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, k
 				childBlend = gp
 			}
 			data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-			walkICCIdentity(doc, &s.Dict, data, s, resolveObjNum(doc, xref), oi, childBlend, seen, add)
+			walkICCIdentity(doc, &s.Dict, data, s, resolveObjNum(doc, xref), oi, childBlend, seen, add, depth+1)
 		}
 	}
 }

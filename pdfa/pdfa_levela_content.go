@@ -85,7 +85,7 @@ func buildLevelAContentFacts(doc core.View) levelAContentFacts {
 		return f
 	}
 	covered := structActualTextMCIDs(doc, cat)
-	toUni := map[*object.Dictionary]map[int][]rune{}
+	toUni := map[*object.Dictionary]*core.ToUnicode{}
 	for _, pg := range doc.Pages(cat.Get("Pages")) {
 		if doc.Cancel.Stopped() {
 			return f
@@ -98,7 +98,7 @@ func buildLevelAContentFacts(doc core.View) levelAContentFacts {
 // scanLevelAPage walks one page's content stream, recording the /Lang values its
 // marked-content property lists carry and the Private Use Area characters it
 // shows without replacement text.
-func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toUni map[*object.Dictionary]map[int][]rune, f *levelAContentFacts) {
+func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toUni map[*object.Dictionary]*core.ToUnicode, f *levelAContentFacts) {
 	data, _ := core.ContentStreamData(doc, pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 	if len(data) == 0 {
 		return
@@ -171,7 +171,7 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 		}
 		m, ok := toUni[font]
 		if !ok {
-			m, _ = core.ParseToUnicodeRunes(doc, font) // reason: a nil map skips the text below; the producer recorded any declined trip
+			m, _ = core.ParseToUnicode(doc, font) // reason: a nil map skips the text below; the producer recorded any declined trip
 			toUni[font] = m
 		}
 		if m == nil {
@@ -197,7 +197,8 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 				}
 			}
 			for _, c := range cut {
-				for _, r := range m[int(c.Value)] {
+				rs, _ := m.Runes(int(c.Value))
+				for _, r := range rs {
 					if privateUseArea(r) && !reported[r] {
 						reported[r] = true
 						f.pua = append(f.pua, puaSite{objNum: pg.ObjNum, r: r})

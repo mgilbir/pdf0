@@ -48,7 +48,9 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, part string) []pdfvt
 	}
 	// This is the boundary: the checks below read a view.
 	rd := beginRunCancel(doc, cancel)
-	out := pdfvtValidateView(rd.view(), part)
+	// Contain is the work meter's boundary outside the checks' own.
+	var out []pdfvt.Violation
+	core.Contain(func() { out = pdfvtValidateView(rd.view(), part) })
 
 	// Guard trips are reported under their own rule; read-time trips live on
 	// the Document, so this is here.

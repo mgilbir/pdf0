@@ -1,8 +1,6 @@
 package core
 
 import (
-	"fmt"
-
 	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -102,9 +100,10 @@ type StructType struct {
 	NS string
 	// Mapped reports that a standard type (or a MathML one) was reached.
 	Mapped bool
-	// Complete reports that the walk ran to its end. A walk stopped by the
-	// role-map budget leaves Mapped unknown, and no check may report "not
-	// mapped" on its strength.
+	// Complete reports that the walk ran to its end, and no check may report
+	// "not mapped" when it did not. Every walk now does: a run that cannot
+	// afford one is stopped by its work meter rather than answered in part
+	// (ResolveStructType).
 	Complete bool
 	// SameNamespaceMap reports that an element naming its namespace
 	// explicitly is role-mapped, directly or along the chain, to a type in
@@ -147,9 +146,15 @@ func IsStructElem(d View, dict *object.Dictionary) bool {
 // the validators have always read the standard type as final, and the role-map
 // integrity checks report a map that remaps one.
 //
-// The walk is bounded like ResolveRoleMapChain: a seen-set ends a cycle, and
-// the hops are capped by the /RoleMap step budget, a trip on which leaves the
-// answer incomplete.
+// A seen-set ends a cycle, and every hop is charged to the run's work meter.
+// Answers are memoised for the run (structTypeMemo): a type is resolved once
+// however many elements carry it, and a walk in the default namespace answers
+// for every type it crosses, so the whole role map costs one walk. The per-call
+// step budget this replaces bounded one chain and not the elements that each
+// walked it: 2,000 elements tagged with the first type of a 100,000-long chain
+// took ninety seconds without a trip (audit 2026-09-22 C41). The answer is
+// therefore always Complete; a run that cannot afford the walk is stopped by
+// the meter rather than handed a partial one.
 func ResolveStructType(d View, elem *object.Dictionary, roleMap *object.Dictionary) StructType {
 	s, _ := d.ResolveName(elem.Get("S"))
 	return resolveStructType(d, s, d.ResolveDict(elem.Get("NS")), roleMap)
@@ -162,26 +167,113 @@ type structNSKey struct {
 	t  object.Name
 }
 
+// structTypeKey is a type to resolve: its name, the namespace it is in (nil
+// for the default one) and the structure tree root's /RoleMap it is resolved
+// against.
+type structTypeKey struct {
+	roleMap *object.Dictionary
+	ns      *object.Dictionary
+	t       object.Name
+}
+
+type structTypeSlot struct{}
+
 func resolveStructType(d View, s object.Name, ns *object.Dictionary, roleMap *object.Dictionary) StructType {
-	orig := s
 	if s == "" {
 		return StructType{Complete: true}
 	}
+	// A standard type, or one hop from one, is what essentially every element
+	// is, and this runs once per element: those answer without the memo.
+	if r, done := resolveStructTypeShort(d, s, ns, roleMap); done {
+		return r
+	}
+	memo := Slot[map[structTypeKey]StructType](d.Run, structTypeSlot{})
+	if *memo == nil {
+		*memo = map[structTypeKey]StructType{}
+	}
+	key := structTypeKey{roleMap, ns, s}
+	if r, ok := (*memo)[key]; ok {
+		d.Charge(1)
+		return r
+	}
+	r, path := resolveStructTypeWalk(d, s, ns, roleMap, *memo)
+	(*memo)[key] = r
+	// Every type a walk in the default namespace crossed has the same answer
+	// — the same standard type, or unmapped as itself — since the walk from
+	// it follows the same links. (SameNamespaceMap is about a namespace an
+	// element names, which the default namespace is not.)
+	for _, t := range path {
+		pr := r
+		if !r.Mapped {
+			pr.Std = t
+		}
+		(*memo)[structTypeKey{roleMap, nil, t}] = pr
+	}
+	return r
+}
+
+// resolveStructTypeShort answers a type that is standard in its namespace, or
+// one role-map hop in the default namespace from a standard type, or that no
+// role map names, reporting false for anything longer.
+func resolveStructTypeShort(d View, s object.Name, ns *object.Dictionary, roleMap *object.Dictionary) (StructType, bool) {
+	uri := structNamespaceName(d, ns)
+	switch {
+	case uri == NSPDF17 && StandardStructTypes[s],
+		uri == NSPDF20 && isPDF20StandardStructType(s),
+		uri == NSMathML:
+		return StructType{Std: s, NS: uri, Mapped: true, Complete: true}, true
+	}
+	if ns != nil {
+		return StructType{}, false
+	}
+	if roleMap == nil {
+		return StructType{Std: s, NS: uri, Complete: true}, true
+	}
+	next, ok := d.Resolve(roleMap.Get(s)).(object.Name)
+	if !ok || next == "" || next == s {
+		return StructType{Std: s, NS: uri, Complete: true}, true
+	}
+	if StandardStructTypes[next] {
+		return StructType{Std: next, NS: NSPDF17, Mapped: true, Complete: true}, true
+	}
+	return StructType{}, false
+}
+
+// resolveStructTypeWalk is the walk behind resolveStructType, returning the
+// answer and, for a walk that starts in the default namespace, the types it
+// crossed there. An answer memoised for a type the walk reaches in the
+// default namespace ends the walk.
+func resolveStructTypeWalk(d View, s object.Name, ns *object.Dictionary, roleMap *object.Dictionary, memo map[structTypeKey]StructType) (StructType, []object.Name) {
+	orig := s
 	// own is the namespace an element names explicitly, for SameNamespaceMap.
 	own := ""
 	if ns != nil {
 		own = structNamespaceName(d, ns)
 	}
+	defaultNS := ns == nil
+	var path []object.Name
 	sameNS := false
-	budget := d.Limits.RoleMapSteps
 	var seen map[structNSKey]bool // allocated only for a chain of two hops or more
 	for hops := 0; ; hops++ {
+		d.Charge(1)
+		if defaultNS && hops > 0 {
+			if r, ok := memo[structTypeKey{roleMap, nil, s}]; ok {
+				if !r.Mapped {
+					r.Std = orig
+				}
+				return r, path
+			}
+			path = append(path, s)
+		}
 		uri := structNamespaceName(d, ns)
 		switch {
 		case uri == NSPDF17 && StandardStructTypes[s],
 			uri == NSPDF20 && isPDF20StandardStructType(s),
 			uri == NSMathML:
-			return StructType{Std: s, NS: uri, Mapped: true, Complete: true, SameNamespaceMap: sameNS}
+			if len(path) > 0 && path[len(path)-1] == s {
+				path = path[:len(path)-1] // a standard type answers for itself
+			}
+			return StructType{Std: s, NS: uri, Mapped: true, Complete: true, SameNamespaceMap: sameNS}, path
 		}
 		unmapped := StructType{Std: orig, NS: uri, Complete: true, SameNamespaceMap: sameNS}
 
@@ -191,12 +283,7 @@ func resolveStructType(d View, s object.Name, ns *object.Dictionary, roleMap *ob
 			m = d.ResolveDict(ns.Get("RoleMapNS"))
 		}
 		if m == nil {
-			return unmapped
-		}
-		if hops >= budget {
-			noteRoleMapChainLimit(d)
-			unmapped.Complete = false
-			return unmapped
+			return unmapped, path
 		}
 		var next object.Name
 		var nextNS *object.Dictionary
@@ -207,23 +294,23 @@ func resolveStructType(d View, s object.Name, ns *object.Dictionary, roleMap *ob
 			// Only a /RoleMapNS maps into another namespace; the root
 			// /RoleMap's values are names in the default namespace.
 			if ns == nil || len(v) != 2 {
-				return unmapped
+				return unmapped, path
 			}
 			n, ok := d.Resolve(v[0]).(object.Name)
 			target := d.ResolveDict(v[1])
 			if !ok || target == nil {
-				return unmapped
+				return unmapped, path
 			}
 			next, nextNS = n, target
 		default:
-			return unmapped
+			return unmapped, path
 		}
 		if own != "" && structNamespaceName(d, nextNS) == own {
 			sameNS = true
 			unmapped.SameNamespaceMap = true
 		}
 		if next == "" || (next == s && nextNS == ns) {
-			return unmapped
+			return unmapped, path
 		}
 		if hops > 0 {
 			if seen == nil {
@@ -231,7 +318,7 @@ func resolveStructType(d View, s object.Name, ns *object.Dictionary, roleMap *ob
 			}
 			k := structNSKey{nextNS, next}
 			if seen[k] {
-				return unmapped // the chain closes on itself
+				return unmapped, path // the chain closes on itself
 			}
 			seen[k] = true
 		}
@@ -261,10 +348,16 @@ func structNamespaceName(d View, ns *object.Dictionary) string {
 // /RoleMap" and then, because every dependent check saw the raw type instead of
 // P, a spray of 7.2 nesting findings on a conformant file.
 //
-// The walk is bounded twice over. A seen-set ends a cyclic map (which the
-// role-map integrity checks report separately) rather than looping, and the
-// total hops are capped by the same /RoleMap step budget those checks use
-// (WithMaxRoleMapSteps) rather than a second knob of its own.
+// A seen-set ends a cyclic map (which the role-map integrity checks report
+// separately) rather than looping.
+//
+// The answer for each type is resolved once per run and memoised per role map
+// (roleMapCache), and every type on a chain is answered by the walk that
+// crossed it. A per-call step budget used to bound one chain, and a file with
+// a 100,000-long chain and a few thousand elements tagged with its first type
+// then paid for the whole chain once per element — minutes of work with no
+// budget ever tripping (audit 2026-09-22 C41). Now the whole role map costs
+// one walk per run, charged to the run's work meter.
 //
 // It returns the standard type reached (or the input type when none is), whether
 // one was reached, and whether the walk ran to completion. A budget trip leaves
@@ -279,42 +372,79 @@ func ResolveRoleMapChain(d View, s object.Name, roleMap *object.Dictionary) (std
 }
 
 // RoleMapChainCycles reports whether following the /RoleMap from s revisits a
-// type before reaching a standard one, and whether the walk ran to completion.
+// type before reaching a standard one, and whether the answer is complete
+// (always; see ResolveRoleMapChain).
 //
 // It is separate from ResolveRoleMapChain because the two questions have
 // different answers on the same input: a chain that closes on itself resolves to
 // "no standard type" (ResolveRoleMapChain returns mapped=false) and *also* is a
 // cycle, and the PDF/A structure-type rules report those as two distinct
 // findings against two distinct clauses.
+//
+// Answers are memoised per run like ResolveRoleMapChain's. The types a walk
+// crosses after the first share its answer — each is non-standard, so a walk
+// started from it follows the same links — but the first may be a standard
+// type, which this walk (unlike the resolution) leaves without asking, and a
+// walk started elsewhere stops on it. So a standard start answers only for
+// itself.
+// roleMapCycles is the run's memo of RoleMapChainCycles, per role map.
+type roleMapCycles map[*object.Dictionary]map[object.Name]bool
+
+type roleMapCyclesSlot struct{}
+
 func RoleMapChainCycles(d View, s object.Name, roleMap *object.Dictionary) (cyclic, complete bool) {
 	if roleMap == nil || s == "" {
 		return false, true
 	}
-	budget := d.Limits.RoleMapSteps
+	memo := Slot[roleMapCycles](d.Run, roleMapCyclesSlot{})
+	if *memo == nil {
+		*memo = roleMapCycles{}
+	}
+	cyc := (*memo)[roleMap]
+	if cyc == nil {
+		cyc = map[object.Name]bool{}
+		(*memo)[roleMap] = cyc
+	}
+	if r, ok := cyc[s]; ok {
+		d.Charge(1)
+		return r, true
+	}
+	path := []object.Name{s}
 	seen := map[object.Name]bool{s: true}
 	cur := s
-	for steps := 0; steps < budget; steps++ {
+	var res bool
+	for {
+		d.Charge(1)
+		if cur != s {
+			if r, ok := cyc[cur]; ok {
+				res = r
+				break
+			}
+		}
 		next, ok := d.Resolve(roleMap.Get(cur)).(object.Name)
 		if !ok || next == "" {
-			return false, true // the chain simply ends
+			res = false // the chain simply ends
+			break
 		}
 		if seen[next] {
-			return true, true
+			res = true
+			break
 		}
 		if StandardStructTypes[next] {
-			return false, true // a standard type is the end of the chain
+			res = false // a standard type is the end of the chain
+			break
 		}
 		seen[next] = true
+		path = append(path, next)
 		cur = next
 	}
-	noteRoleMapChainLimit(d)
-	return false, false
-}
-
-func noteRoleMapChainLimit(d View) {
-	d.Note(GuardRoleMapWork, fmt.Sprintf(
-		"following one /RoleMap chain to a standard structure type cost more than %s steps; the type could not be resolved",
-		LimitBound(int64(d.Limits.RoleMapSteps), DefaultMaxRoleMapSteps)), 0)
+	if StandardStructTypes[s] {
+		path = path[:1]
+	}
+	for _, t := range path {
+		cyc[t] = res
+	}
+	return res, true
 }
 
 // StructKids returns the /K children of an element as a slice of objects.
@@ -352,6 +482,17 @@ type StructNode struct {
 	Parent     int           // index of the parent node in the list, or -1 at the root
 }
 
+// ChildTypesKey identifies n's ChildTypes slice: nodes whose /K is the same
+// array share one slice, and a consumer that derives something from the
+// child types can compute it once per key. It is nil when there are no child
+// types (and then there is nothing to derive).
+func (n StructNode) ChildTypesKey() *object.Name {
+	if len(n.ChildTypes) == 0 {
+		return nil
+	}
+	return &n.ChildTypes[0]
+}
+
 // structTreeSlot keys the flattened structure tree on the run.
 type structTreeSlot struct{}
 
@@ -376,6 +517,23 @@ func StructTree(d View, cat *object.Dictionary) []StructNode {
 	return nodes
 }
 
+// buildStructTree flattens the tree in pre-order. It is iterative — an
+// explicit stack of (node, parent) pairs, pushed in reverse so they pop in
+// order — because a structure tree is as deep as the file says: a chain of a
+// hundred thousand elements, each the only kid of the last, overflowed the
+// stack of the recursive walk this replaces (audit 2026-09-22 C84).
+//
+// An element's ChildTypes are computed once per /K array, not once per
+// element: /K is usually a direct array, but when it is a reference, every
+// element that names the same array has the same children. A file whose N
+// elements all name one array of those N elements asked the recursive walk
+// for N² child types, which ran out of memory at N = 10,000 in a 1 MB file
+// (audit 2026-09-22 C18). The elements share one slice, which consumers only
+// read. The shared array's kids are also descended once, under the first
+// element that names it: a tree never shares a /K array, so for a real file
+// nothing changes, and for a DAG the walk stays linear in the file rather
+// than quadratic. Every element visited, and every child typed, is charged
+// to the run's work meter.
 func buildStructTree(d View, cat *object.Dictionary) []StructNode {
 	root := d.ResolveDict(cat.Get("StructTreeRoot"))
 	if root == nil {
@@ -384,12 +542,26 @@ func buildStructTree(d View, cat *object.Dictionary) []StructNode {
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
 	var nodes []StructNode
 	seen := map[int]bool{}
-	var walk func(node object.Object, parent int)
-	walk = func(node object.Object, parent int) {
+	sharedKids := map[int][]object.Name{}
+	type item struct {
+		node   object.Object
+		parent int
+	}
+	stack := []item{{root.Get("K"), -1}}
+	push := func(kids []object.Object, parent int) {
+		for i := len(kids) - 1; i >= 0; i-- {
+			stack = append(stack, item{kids[i], parent})
+		}
+	}
+	for len(stack) > 0 {
+		it := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		d.Charge(1)
+		node, parent := it.node, it.parent
 		objNum := -1
 		if ref, ok := node.(object.IndirectRef); ok {
 			if seen[ref.Number] {
-				return
+				continue
 			}
 			seen[ref.Number] = true
 			objNum = ref.Number
@@ -397,24 +569,34 @@ func buildStructTree(d View, cat *object.Dictionary) []StructNode {
 		elem := d.ResolveDict(node)
 		if elem == nil {
 			if arr, ok := d.Resolve(node).(object.Array); ok {
-				for _, kid := range arr {
-					walk(kid, parent)
-				}
+				push(arr, parent)
 			}
-			return
+			continue
 		}
 		rawS, hasS := d.ResolveName(elem.Get("S"))
 		kids := StructKids(d, elem)
-		var childTypes []object.Name
-		for _, kid := range kids {
-			child := d.ResolveDict(kid)
-			if child == nil {
-				continue
+		kref, shared := elem.Get("K").(object.IndirectRef)
+		childTypes, known := sharedKids[kref.Number]
+		if shared && known {
+			// Typed and descended under the first element that named it.
+			kids = nil
+		}
+		if !shared || !known {
+			childTypes = nil
+			for _, kid := range kids {
+				d.Charge(1)
+				child := d.ResolveDict(kid)
+				if child == nil {
+					continue
+				}
+				if _, ok := d.ResolveName(child.Get("S")); !ok {
+					continue
+				}
+				childTypes = append(childTypes, StandardStructType(d, child, roleMap))
 			}
-			if _, ok := d.ResolveName(child.Get("S")); !ok {
-				continue
+			if shared {
+				sharedKids[kref.Number] = childTypes
 			}
-			childTypes = append(childTypes, StandardStructType(d, child, roleMap))
 		}
 		self := len(nodes)
 		rt := ResolveStructType(d, elem, roleMap)
@@ -431,11 +613,8 @@ func buildStructTree(d View, cat *object.Dictionary) []StructNode {
 			ChildTypes: childTypes,
 			Parent:     parent,
 		})
-		for _, kid := range kids {
-			walk(kid, self)
-		}
+		push(kids, self)
 	}
-	walk(root.Get("K"), -1)
 	return nodes
 }
 

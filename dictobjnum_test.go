@@ -24,7 +24,7 @@ func TestDictObjNumCacheConsistency(t *testing.T) {
 		}
 	}
 	// With a cache: reverse index. Must agree.
-	doc.valCache = newValidationCache(core.Canceler{})
+	doc.valCache = newValidationCache(doc, core.Canceler{})
 	for i, d := range dicts {
 		if got := doc.view().DictObjNum(d); got != i {
 			t.Fatalf("cached dictObjNum = %d, want %d", got, i)

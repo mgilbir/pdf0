@@ -105,6 +105,11 @@ type Run struct {
 	// Trips collects the guard trips of this operation. May be nil.
 	Trips *Recorder
 
+	// Meter is the operation's work budget (meter.go). Every walk, expansion,
+	// tokenisation and evaluation of the operation charges it. May be nil, and
+	// then nothing is metered.
+	Meter *Meter
+
 	// pages memoizes the flattened page tree per page-tree node, and content the
 	// decoded bytes of each content stream, with contentBytes charging the
 	// aggregate decode budget across the whole operation.
@@ -171,6 +176,9 @@ func Slot[T any](r *Run, key any) *T {
 // NewRun builds the per-operation state. The memo tables are made here so that
 // every entry point that starts an operation gets them, rather than each having
 // to remember.
+//
+// The run it returns is not metered; an entry point that starts an operation
+// on untrusted input uses NewMeteredRun.
 func NewRun(trips *Recorder) *Run {
 	return &Run{
 		Trips:     trips,
@@ -302,8 +310,6 @@ const (
 	GuardContentTotal  = "decoded-content-total"     // Limits.DecodedContentBytes, WithMaxDecodedContentBytes
 	GuardCmapWork      = "cmap-work"                 // Limits.CmapWork, WithMaxCmapWork
 	GuardGridFills     = "table-grid-fills"          // Limits.TableGridFills, WithMaxTableGridFills
-	GuardRoleMapWork   = "rolemap-work"              // Limits.RoleMapSteps, WithMaxRoleMapSteps
-	GuardCIDWidthRange = "cid-width-range"           // Limits.CIDRangeSpan, WithMaxCIDRangeSpan
 	GuardEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own; the recursive embedded check
 	GuardObjStmTotal   = "objstm-decompressed-total" // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes; the string predates metering materialised objects, and is kept because callers key on it
 	GuardDecodedStream = "decoded-stream-size"       // Limits.DecodedStreamBytes, WithMaxDecodedStreamBytes
@@ -356,7 +362,7 @@ func (v View) Pages(ref object.Object) []PageInfo {
 }
 
 func (v View) collectPages(ref object.Object, pages *[]PageInfo, seen map[int]bool) {
-	v.walkPageTree(ref, seen, InheritedAttrs{}, func(p PageInfo, _ InheritedAttrs) {
+	v.walkPageTree(ref, seen, InheritedAttrs{}, 0, func(p PageInfo, _ InheritedAttrs) {
 		*pages = append(*pages, p)
 	})
 }
@@ -387,7 +393,7 @@ type PageWithAttrs struct {
 // what the file says. It visits exactly the pages Pages does, in the same order.
 func (v View) PagesWithAttrs(ref object.Object) []PageWithAttrs {
 	var out []PageWithAttrs
-	v.walkPageTree(ref, make(map[int]bool), InheritedAttrs{}, func(p PageInfo, a InheritedAttrs) {
+	v.walkPageTree(ref, make(map[int]bool), InheritedAttrs{}, 0, func(p PageInfo, a InheritedAttrs) {
 		out = append(out, PageWithAttrs{PageInfo: p, Attrs: a})
 	})
 	return out
@@ -396,8 +402,14 @@ func (v View) PagesWithAttrs(ref object.Object) []PageWithAttrs {
 // walkPageTree is the one page-tree traversal: nodes typed /Pages are
 // descended, nodes typed /Page are visited, anything else is skipped, and a
 // node reached through a reference already seen is not entered again (a /Kids
-// cycle would otherwise recurse until the stack ran out).
-func (v View) walkPageTree(ref object.Object, seen map[int]bool, inherited InheritedAttrs, visit func(PageInfo, InheritedAttrs)) {
+// cycle would otherwise recurse until the stack ran out). An acyclic tree
+// deeper than MaxWalkDepth is refused by the depth guard, and every node
+// visited is charged to the run's work meter.
+func (v View) walkPageTree(ref object.Object, seen map[int]bool, inherited InheritedAttrs, depth int, visit func(PageInfo, InheritedAttrs)) {
+	if !v.Descend(depth) {
+		return
+	}
+	v.Charge(1)
 	objNum := 0
 	if iref, ok := ref.(object.IndirectRef); ok {
 		objNum = iref.Number
@@ -425,7 +437,7 @@ func (v View) walkPageTree(ref object.Object, seen map[int]bool, inherited Inher
 	}
 	if kids, ok := v.Resolve(node.Get("Kids")).(object.Array); ok {
 		for _, kid := range kids {
-			v.walkPageTree(kid, seen, inherited, visit)
+			v.walkPageTree(kid, seen, inherited, depth+1, visit)
 		}
 	}
 }
@@ -470,6 +482,9 @@ type contentEntry struct {
 // sees nothing must not conclude the file contains nothing.
 func (v View) Content(stream *object.Stream) ([]byte, Reason) {
 	if v.Run != nil {
+		// One unit a request, whether or not it is memoised: a stream asked
+		// for once per referrer costs once per referrer.
+		v.Charge(1)
 		if e, ok := v.Run.content[stream]; ok {
 			return e.data, e.reason
 		}
@@ -493,6 +508,8 @@ func (v View) Content(stream *object.Stream) ([]byte, Reason) {
 // used once, such as image samples, that would only bloat the memo.
 func (v View) DecodeLimited(stream *object.Stream) ([]byte, Reason) {
 	data, r := v.Decode(stream)
+	// Decoding is work in proportion to what it produces.
+	v.ChargeScan(len(data))
 	if r == ReasonOK && len(data) > v.Limits.ContentStreamBytes {
 		v.noteDeclined(stream, ReasonLimit, GuardContentStream, "a stream decodes to "+itoa(int64(len(data)))+" bytes, over the "+LimitBound(int64(v.Limits.ContentStreamBytes), DefaultMaxContentStreamBytes)+"-byte scanning limit; it was not scanned")
 		return nil, ReasonLimit

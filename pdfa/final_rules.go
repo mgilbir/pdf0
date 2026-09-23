@@ -380,8 +380,12 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 	var out []*object.Dictionary
 	seenHT := map[*object.Dictionary]bool{}
 	seenC := map[*object.Dictionary]bool{}
-	var walk func(container *object.Dictionary, data []byte, key *object.Stream)
-	walk = func(container *object.Dictionary, data []byte, key *object.Stream) {
+	var walk func(container *object.Dictionary, data []byte, key *object.Stream, depth int)
+	walk = func(container *object.Dictionary, data []byte, key *object.Stream, depth int) {
+		if !doc.Descend(depth) {
+			return
+		}
+		doc.Charge(1)
 		if container == nil || seenC[container] || data == nil {
 			return
 		}
@@ -415,7 +419,7 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 				if s, ok := doc.Resolve(xref).(*object.Stream); ok {
 					if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
 						data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-						walk(&s.Dict, data, s)
+						walk(&s.Dict, data, s, depth+1)
 					}
 				}
 			}
@@ -423,7 +427,7 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 	}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
-		walk(page.Dict, data, key)
+		walk(page.Dict, data, key, 0)
 	}
 	return out
 }
@@ -489,6 +493,12 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 				continue
 			}
 			compliant, complete := embeddedChecker(doc)(doc.Cancel, data, doc.Limits, doc.EmbeddedDepth+1)
+			// The nested validation shares this run's work meter. If it
+			// spent the budget, or the context ended, its verdict is a
+			// partial one — its reading of the file may have been refused
+			// for that reason — so this check is unwound rather than allowed
+			// to draw a conclusion from it (core.Meter).
+			doc.CheckStopped()
 			if !complete {
 				// The nested run reported a checker finding of its own — a guard
 				// tripped inside it, a check panicked, or the shared context

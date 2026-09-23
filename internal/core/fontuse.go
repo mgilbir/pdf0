@@ -271,6 +271,9 @@ func ContentStreamData(doc View, contentsRef object.Object) ([]byte, Reason) {
 				}
 			}
 		}
+		// The concatenation is a copy made per call, so a /Contents array
+		// shared by many pages costs its size once per page.
+		doc.ChargeCopy(len(result))
 		return result, reason
 	}
 	return nil, ReasonAbsent

@@ -242,9 +242,9 @@ func TestRoleMapChainTerminates(t *testing.T) {
 }
 
 // TestRoleMapChainBudgetDeclines pins the incomplete-result rule for this walk:
-// when the /RoleMap step budget stops the chain the mapping is unknown, so the
-// checker declines to report "neither standard nor mapped" rather than
-// manufacturing a finding out of a truncated answer.
+// when the run's work budget runs out while a chain is followed, the check is
+// unwound — it reports nothing, rather than "neither standard nor mapped"
+// manufactured out of a truncated answer — and the trip is recorded.
 func TestRoleMapChainBudgetDeclines(t *testing.T) {
 	rm := &object.Dictionary{}
 	rm.Set("MyTable", object.Name("TableBase"))
@@ -252,9 +252,13 @@ func TestRoleMapChainBudgetDeclines(t *testing.T) {
 	rm.Set("MyRow", object.Name("RowBase"))
 	rm.Set("RowBase", object.Name("TR"))
 	doc := roleMapChainDoc(rm)
-	doc.Limits.RoleMapSteps = 1 // room for the first hop only
+	rec := &core.Recorder{}
+	doc.Run, doc.Cancel = core.NewMeteredRun(rec, 1, core.Canceler{}) // room for one step
 	cat := doc.ResolveDict(object.IndirectRef{Number: 1})
-	if v := checkUARoleMap(doc, cat); len(v) != 0 {
+	if v := RunCheck(func() []Violation { return checkUARoleMap(doc, cat) }); len(v) != 0 {
 		t.Errorf("budget trip manufactured a role-map finding: %+v", v)
+	}
+	if trips := rec.Snapshot(); len(trips) != 1 || trips[0].Guard() != core.GuardWork {
+		t.Errorf("trips = %v, want one %s", trips, core.GuardWork)
 	}
 }

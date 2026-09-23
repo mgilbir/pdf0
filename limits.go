@@ -180,25 +180,13 @@ func WithMaxICCProfileBytes(n int) Option {
 // will build a node tree for (default 4 MiB). Larger packets are still checked
 // for well-formedness, which streams; only the property-value rules are skipped.
 //
-// Raising this is more expensive than it looks: tree construction is O(n²), so
-// the worst case grows quadratically — roughly 3 s at the 4 MiB default and 12 s
-// at 8 MiB. The largest real packet measured is 1.6 MB.
+// What it bounds is memory. Building the tree is linear in the packet — the
+// quadratic text accumulation this comment used to warn of is gone (audit
+// 2026-09-22 C40) — but a node per comment or text run adds up: a 4 MiB packet
+// of 520,000 comment-interrupted text runs builds in 0.4 s and holds some
+// 300 MB while it is read. The largest real packet measured is 1.6 MB.
 func WithMaxXMPPacketBytes(n int) Option {
 	return positiveLimit("WithMaxXMPPacketBytes", n, func(l *core.Limits, n int) { l.XMPPacketBytes = n })
-}
-
-// WithMaxCIDRangeSpan caps the number of CIDs a single /W range entry may span
-// (default 65536, the size of the CID space). Without it a range such as
-// [0 2000000000 500] would ask for two billion map insertions.
-func WithMaxCIDRangeSpan(n int) Option {
-	return positiveLimit("WithMaxCIDRangeSpan", n, func(l *core.Limits, n int) { l.CIDRangeSpan = n })
-}
-
-// WithMaxRoleMapSteps caps the total /RoleMap chain-follow steps across one
-// PDF/UA structure-type check (default 1<<20), bounding a quadratic blowup on a
-// large hostile role map.
-func WithMaxRoleMapSteps(n int) Option {
-	return positiveLimit("WithMaxRoleMapSteps", n, func(l *core.Limits, n int) { l.RoleMapSteps = n })
 }
 
 // WithMaxTableGridFills caps the number of grid slots the PDF/UA table checks
@@ -206,13 +194,6 @@ func WithMaxRoleMapSteps(n int) Option {
 // /ColSpan claim a multi-million-slot area.
 func WithMaxTableGridFills(n int64) Option {
 	return positiveLimit("WithMaxTableGridFills", n, func(l *core.Limits, n int64) { l.TableGridFills = n })
-}
-
-// WithMaxPostScriptSteps caps the total operators one type-4 (PostScript
-// calculator) function evaluation may execute (default 1<<20), bounding a
-// function whose loops would otherwise not terminate usefully.
-func WithMaxPostScriptSteps(n int) Option {
-	return positiveLimit("WithMaxPostScriptSteps", n, func(l *core.Limits, n int) { l.PostScriptSteps = n })
 }
 
 // WithMaxCmapWork caps the work spent expanding one TrueType cmap subtable of
@@ -228,6 +209,33 @@ func WithMaxPostScriptSteps(n int) Option {
 // positives.
 func WithMaxCmapWork(n int) Option {
 	return positiveLimit("WithMaxCmapWork", n, func(l *core.Limits, n int) { l.CmapWork = n })
+}
+
+// WithMaxWork caps the work one run may do — one validation, one text or
+// image extraction — counted in units of one elementary step, some tens of
+// nanoseconds: a node of the object graph visited, an entry expanded, an
+// operator executed, a range probed, a few bytes tokenised or decoded. By
+// default the budget is 2^28 units plus 512 for every byte of the file the
+// document was read from: real work grows with the file, and amplification —
+// a small file asking for work out of all proportion to its size — is what the
+// budget exists to stop.
+//
+// Every other limit bounds one unit of work: one stream, one range, one
+// evaluation. This one bounds the product, which is what a small hostile file
+// controls — a shared structure referenced from every element, a function
+// evaluated for every pixel, a chain walked from every referrer. When the run
+// reaches it, the check in progress is abandoned rather than finished on a
+// partial result, no further check runs, and the run reports the trip under
+// "limit" (guard "work"); an extraction stops with an error naming it. A
+// context deadline bounds the same work in time rather than in units; the
+// budget is what bounds a caller who set none.
+//
+// Across the veraPDF corpus, the PDF/VT, WTPDF, Factur-X and PDF 2.0 example
+// suites and a 1000-file Common Crawl sample, under every validator and both
+// extractors, no run comes within a factor of nine of its default (the
+// measurement is recorded with core.DefaultMaxWork).
+func WithMaxWork(n int64) Option {
+	return positiveLimit("WithMaxWork", n, func(l *core.Limits, n int64) { l.Work = n })
 }
 
 // WithMaxImagePixels caps the size of an image that extraction will decode

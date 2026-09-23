@@ -44,8 +44,9 @@ func evalType4(d View, stream *object.Stream, dict *object.Dictionary, x []float
 	for _, v := range x {
 		st = append(st, psVal{num: v})
 	}
-	budget := psBudget{max: d.Limits.PostScriptSteps}
+	budget := psBudget{doc: d}
 	st, ok = psExec(prog, st, 0, &budget)
+	budget.flush()
 	if !ok || len(st) < n {
 		return nil, false
 	}
@@ -213,17 +214,49 @@ func psTokenize(data []byte) ([]string, bool) {
 	return toks, true
 }
 
-// psBudget accumulates the operator count across a whole (recursive) type-4
-// (PostScript calculator) evaluation and carries the ceiling it is checked
-// against. The depth and stack caps alone do not stop an if/ifelse program that
-// fans out to exponentially many operators while staying shallow and
-// small-stacked; since a tint function runs once per pixel over an image, an
-// unbounded program is a CPU DoS (audit C21). The ceiling defaults to
-// defaultMaxPostScriptSteps; a caller can change it with
-// WithMaxPostScriptSteps.
+// psBudget counts the operators a type-4 (PostScript calculator) evaluation
+// executes and charges them to the run's work meter. The depth and stack caps
+// alone do not stop an if/ifelse program that fans out to exponentially many
+// operators while staying shallow and small-stacked, and a tint function runs
+// once per pixel: an unbounded program is a CPU DoS (audit 2026-07-26 C21).
+//
+// A per-evaluation step budget used to bound one evaluation and not the
+// image: 590,000 steps an evaluation, well inside it, times 1,600 pixels was
+// twelve seconds, uncancellable (audit 2026-09-22 C51). The steps now charge
+// the run's meter, which bounds the product and polls the context. Outside a
+// run, which has no meter, an evaluation is still held to maxPSStepsUnmetered.
 type psBudget struct {
-	steps int
-	max   int
+	doc   View
+	steps int // not yet charged
+	total int // this evaluation's, for the unmetered bound
+}
+
+// maxPSStepsUnmetered bounds one evaluation that no run meters.
+const maxPSStepsUnmetered = 1 << 20
+
+// psChargeBatch is how many steps are counted locally between charges.
+const psChargeBatch = 256
+
+// step counts one operator, reporting false when an unmetered evaluation has
+// run out. A metered one that runs out does not return (Meter.Charge).
+func (b *psBudget) step() bool {
+	b.steps++
+	if b.steps < psChargeBatch {
+		return true
+	}
+	return b.flush()
+}
+
+// flush charges the steps counted so far.
+func (b *psBudget) flush() bool {
+	b.total += b.steps
+	if b.doc.Run != nil && b.doc.Run.Meter != nil {
+		b.doc.Charge(b.steps)
+		b.steps = 0
+		return true
+	}
+	b.steps = 0
+	return b.total <= maxPSStepsUnmetered
 }
 
 // psExec executes program items against the operand stack.
@@ -233,8 +266,7 @@ func psExec(items []psItem, st []psVal, depth int, budget *psBudget) ([]psVal, b
 	}
 	const maxStack = 4096
 	for _, it := range items {
-		budget.steps++
-		if budget.steps > budget.max {
+		if !budget.step() {
 			return nil, false
 		}
 		if len(st) > maxStack {

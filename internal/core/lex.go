@@ -172,7 +172,15 @@ type ContentLexer struct {
 
 // NewContentLexer returns a lexer over data. It stops early, reporting no
 // further tokens, when cancel fires.
+//
+// A lexer is a tokenisation, so it charges the run's work meter (carried by
+// cancel) for the whole stream up front (Canceler.ChargeScan, which also
+// charges the stream itself, so that a million empty streams cost a million).
+// Charging up front rather than as it scans keeps the scan loop as it is (see
+// CancelScanBytes on its inlining budget), and a scan stopped early has paid
+// for bytes it did not read, which errs the safe way.
 func NewContentLexer(cancel Canceler, data []byte) *ContentLexer {
+	cancel.ChargeScan(len(data))
 	return &ContentLexer{data: data, cancel: cancel}
 }
 
@@ -184,6 +192,9 @@ func (l *ContentLexer) Next(t *ContentTok) bool {
 	for l.pos < n {
 		if l.pos >= l.nextCancel {
 			if l.cancel.Stopped() {
+				// Inside a run this unwinds (Meter.Check): a scan cut short
+				// must not be read as the whole stream.
+				l.cancel.stopScan()
 				l.pos = n
 				return false
 			}

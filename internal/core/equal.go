@@ -28,7 +28,10 @@ import (
 // which two structures are equal unless some finite path tells them apart —
 // and a pair already compared is answered from a memo, so a DAG that shares
 // sub-objects is compared once per distinct pair of objects, not once per
-// path. Nesting deeper than maxResolvedEqualDepth compares unequal.
+// path. Nesting deeper than maxResolvedEqualDepth compares unequal. Every
+// comparison step, and every byte of stream data compared, is charged to the
+// run's work meter: a rule asks this of many pairs, and the pair memo lives
+// only as long as one call.
 func ResolvedEqual(v View, a, b object.Object) bool {
 	c := resolvedEqual{v: v, done: map[[2]int]bool{}, busy: map[[2]int]bool{}}
 	return c.equal(a, b, 0)
@@ -49,6 +52,7 @@ func (c *resolvedEqual) equal(a, b object.Object, depth int) bool {
 	if depth > maxResolvedEqualDepth {
 		return false
 	}
+	c.v.Charge(1)
 	ra, aRef := a.(object.IndirectRef)
 	rb, bRef := b.(object.IndirectRef)
 	if aRef && bRef {
@@ -102,6 +106,7 @@ func (c *resolvedEqual) values(x, y object.Object, depth int) bool {
 		if av == bv {
 			return true
 		}
+		c.v.ChargeCopy(min(len(av.Data), len(bv.Data)))
 		return bytes.Equal(av.Data, bv.Data) && c.dicts(&av.Dict, &bv.Dict, depth)
 	}
 	return object.Equal(a, b)

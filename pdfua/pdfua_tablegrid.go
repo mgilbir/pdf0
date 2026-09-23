@@ -74,17 +74,40 @@ func checkUATableGrid(d core.View, cat *object.Dictionary) []Violation {
 	}
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
 	var v []Violation
+	// Tables whose /K is the same array have the same rows, and so the same
+	// defects: they are laid out once (audit 2026-09-22 C18, the table form).
+	// The slots each layout fills are charged to the run's work meter, so many
+	// distinct tables each at the per-table bound still cost the run what
+	// they cost; TableGridFills stays as the bound on one table's grid, which
+	// is memory.
+	type layout struct {
+		defects  []Violation
+		complete bool
+	}
+	byK := map[int]layout{}
 	for _, n := range structTree(d, cat) {
 		if n.StdType != "Table" {
 			continue
 		}
+		kref, shared := n.Elem.Get("K").(object.IndirectRef)
+		if l, ok := byK[kref.Number]; ok && shared {
+			v = append(v, l.defects...)
+			continue
+		}
+		var l layout
+		l.complete = true
 		if rows := collectTableRows(d, n.Elem, roleMap); len(rows) > 0 {
 			maxFills := d.Limits.TableGridFills
-			defects, complete := gridDefects(rows, maxFills)
-			if !complete {
+			var fills int64
+			l.defects, l.complete, fills = gridLayout(rows, maxFills)
+			d.Charge(int(min(fills, maxFills)))
+			if !l.complete {
 				d.Note(core.GuardGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.ObjNumOf(n.Elem))
 			}
-			v = append(v, defects...)
+			v = append(v, l.defects...)
+		}
+		if shared {
+			byK[kref.Number] = l
 		}
 	}
 	return v
@@ -92,45 +115,53 @@ func checkUATableGrid(d core.View, cat *object.Dictionary) []Violation {
 
 // collectTableRows returns the table's rows in document order, descending
 // through THead/TBody/TFoot row groups (but not into nested tables).
+//
+// The walk is iterative (kids pushed in reverse, so rows come out in document
+// order): a table's structure is as deep as the file says (audit 2026-09-22
+// C84). Each node visited is charged to the run's work meter.
 func collectTableRows(d core.View, table *object.Dictionary, roleMap *object.Dictionary) []tableRow {
 	var rows []tableRow
-	var visit func(node object.Object, top bool)
+	type item struct {
+		node object.Object
+		top  bool
+	}
 	seen := map[int]bool{}
-	visit = func(node object.Object, top bool) {
+	stack := []item{{table, true}}
+	push := func(kids []object.Object) {
+		for i := len(kids) - 1; i >= 0; i-- {
+			stack = append(stack, item{kids[i], false})
+		}
+	}
+	for len(stack) > 0 {
+		it := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		d.Charge(1)
+		node, top := it.node, it.top
 		if ref, ok := node.(object.IndirectRef); ok {
 			if seen[ref.Number] {
-				return
+				continue
 			}
 			seen[ref.Number] = true
 		}
 		elem := d.ResolveDict(node)
 		if elem == nil {
 			if arr, ok := d.Resolve(node).(object.Array); ok {
-				for _, kid := range arr {
-					visit(kid, top)
+				for i := len(arr) - 1; i >= 0; i-- {
+					stack = append(stack, item{arr[i], top})
 				}
 			}
-			return
+			continue
 		}
 		t := standardStructType(d, elem, roleMap)
 		if !top && t == "Table" {
-			return // nested table handled separately
+			continue // nested table handled separately
 		}
-		switch t {
-		case "TR":
+		if t == "TR" {
 			rows = append(rows, collectRowCells(d, elem, roleMap))
-			return
-		case "THead", "TBody", "TFoot":
-			for _, kid := range structKids(d, elem) {
-				visit(kid, false)
-			}
-			return
+			continue
 		}
-		for _, kid := range structKids(d, elem) {
-			visit(kid, false)
-		}
+		push(structKids(d, elem))
 	}
-	visit(table, true)
 	return rows
 }
 
@@ -138,6 +169,7 @@ func collectTableRows(d core.View, table *object.Dictionary, roleMap *object.Dic
 func collectRowCells(d core.View, tr *object.Dictionary, roleMap *object.Dictionary) tableRow {
 	var cells tableRow
 	for _, kid := range structKids(d, tr) {
+		d.Charge(1)
 		c := d.ResolveDict(kid)
 		if c == nil {
 			continue
@@ -191,6 +223,13 @@ func tableAttrDicts(d core.View, cell *object.Dictionary) []*object.Dictionary {
 // second result reports that maxFills stopped the layout, so "no defects" means
 // "not determined" rather than "clean".
 func gridDefects(rows []tableRow, maxFills int64) ([]Violation, bool) {
+	v, complete, _ := gridLayout(rows, maxFills)
+	return v, complete
+}
+
+// gridLayout is gridDefects, also reporting how many slots it filled: the
+// work it did, for the caller to charge.
+func gridLayout(rows []tableRow, maxFills int64) ([]Violation, bool, int64) {
 	nRows := len(rows)
 	// occupied[r] is the set of columns already filled in row r (by a cell in
 	// this or an earlier row via a row span).
@@ -253,7 +292,7 @@ func gridDefects(rows []tableRow, maxFills int64) ([]Violation, bool) {
 		// defects already found (outOfRows, overlap) are discarded with the
 		// rest: they were computed against a grid this function abandoned, and
 		// half a layout is not evidence. The caller reports the trip instead.
-		return nil, false
+		return nil, false, fills
 	}
 
 	// A hole exists if, after placement, some row does not fill the full grid
@@ -286,5 +325,5 @@ func gridDefects(rows []tableRow, maxFills int64) ([]Violation, bool) {
 	if hole {
 		v = append(v, Violation{Clause: "7.2", Message: "table rows do not all span the same number of columns (a grid cell is empty)", Object: 0})
 	}
-	return v, true
+	return v, true, fills + int64(nRows)
 }

@@ -33,11 +33,16 @@ import (
 // bad page does not take down the caller or the other pages. Neither is a
 // statement about the file being wrong, and neither is silent.
 //
-// The content budget is WithMaxDecodedContentBytes (default 512 MB), charged
-// with every content stream tokenized: each page's, and each form XObject's
-// each time it is drawn. A form drawn N times is extracted N times, as it is
-// drawn, so a document that draws a form which draws a form twice, thirty
-// levels deep, asks for 2^30 extractions; the budget is what stops it.
+// Extraction runs as one run, like a validation: it shares the run's memo of
+// decoded streams, parsed ToUnicode and CMaps, and its work meter
+// (WithMaxWork), which every content stream tokenized is charged to — each
+// page's, and each form XObject's each time it is drawn. A form drawn N times
+// is extracted N times, as it is drawn, so a document that draws a form which
+// draws a form twice, thirty levels deep, asks for 2^30 extractions; the
+// budget is what stops it. Pages that share one content stream and one
+// resource dictionary have the same text, which is extracted once (audit
+// 2026-09-22 C79: two hundred pages sharing a 50 MB stream re-decoded and
+// re-read it per page, for a minute and a half).
 func (d *Document) ExtractText() (string, error) {
 	return d.extractText(core.Canceler{})
 }
@@ -83,32 +88,40 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 	if catalog == nil {
 		return "", cancel.StopErr("extracting text")
 	}
-	run := d.newTextRun(cancel)
+	rd := beginRunCancel(d, cancel)
+	// The run's canceler carries its work meter: a spent budget stops the
+	// extraction as a cancelled context does, and StopErr says which.
+	stop := rd.canceler()
+	run := rd.newTextRun()
+	var pages []core.PageInfo
+	if core.Contain(func() { pages = rd.view().Pages(catalog.Get("Pages")) }) {
+		return "", stop.StopErr("extracting text")
+	}
 	var b strings.Builder
 	var errs []error
-	for i, pg := range d.view().Pages(catalog.Get("Pages")) {
+	for i, pg := range pages {
 		// Per page: the coarse boundary. Within a page the tokenizer stops every
 		// cancelScanBytes, so a single enormous page is interruptible too.
-		if err := cancel.StopErr("extracting text"); err != nil {
+		if err := stop.StopErr("extracting text"); err != nil {
 			return b.String(), errors.Join(append(errs, err)...)
 		}
 		if i > 0 {
 			b.WriteByte('\f')
 		}
-		text, err := d.pageText(run, pg.Dict)
+		text, err := rd.pageText(run, pg.Dict)
 		if err != nil {
 			errs = append(errs, &PageTextError{Page: i + 1, Err: err})
-			if run.exhausted != nil {
-				// The budget is the whole run's: every later page would be
-				// refused too, and one error for the rest says so.
-				errs = append(errs, fmt.Errorf("text of the pages after page %d not extracted: %w", i+1, run.exhausted))
+			if serr := stop.StopErr("extracting text"); serr != nil && !errors.Is(serr, context.Canceled) && !errors.Is(serr, context.DeadlineExceeded) {
+				// The work budget is the whole run's: every later page would
+				// be refused too, and one error for the rest says so.
+				errs = append(errs, fmt.Errorf("text of the pages after page %d not extracted: %w", i+1, serr))
 				break
 			}
 			continue
 		}
 		b.WriteString(text)
 	}
-	if err := cancel.StopErr("extracting text"); err != nil {
+	if err := stop.StopErr("extracting text"); err != nil && !errors.Is(err, core.ErrWorkLimit) {
 		errs = append(errs, err)
 	}
 	return b.String(), errors.Join(errs...)
@@ -128,27 +141,55 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 // a context in. Adding a variant here would move that check inside a call that
 // does one page's work either way.
 func (d *Document) ExtractPageText(page *object.Dictionary) (string, error) {
-	text, err := d.pageText(d.newTextRun(core.Canceler{}), page)
+	rd := beginRun(d)
+	text, err := rd.pageText(rd.newTextRun(), page)
 	if err != nil {
 		return "", &PageTextError{Err: err}
 	}
 	return text, nil
 }
 
-// textRun is one extraction's state across its pages: the cancellation signal
-// and the content budget.
+// textRun is one extraction's state across its pages, beyond what the run
+// (core.Run, on the Document the run was begun on) memoises for everyone.
 type textRun struct {
-	cancel core.Canceler
-	lim    core.Limits
-	// spent is the content tokenized so far, charged against
-	// lim.DecodedContentBytes; exhausted is the error once it ran out.
-	spent     int64
-	exhausted error
 	// fonts memoizes fontMapsFrom per resource dictionary. A form drawn many
 	// times would otherwise parse its fonts' ToUnicode CMaps each time, a
 	// cost the content budget does not see: eleven bytes of "/X Do /X Do"
 	// can stand for a ToUnicode stream of megabytes.
 	fonts map[*object.Dictionary]map[string]fontText
+	// pages memoizes a page's text by its content stream and resources, which
+	// are all the text depends on. Pages commonly carry their own copy of
+	// the same resource dictionary, so resources are matched by value
+	// (object.Equal, which does not follow references), against at most
+	// maxPageTextVariants dictionaries per stream.
+	pages map[*object.Stream][]pageTextEntry
+}
+
+type pageTextEntry struct {
+	res  *object.Dictionary
+	text string
+}
+
+// maxPageTextVariants bounds the resource dictionaries remembered per content
+// stream, so that matching one costs a bounded number of comparisons.
+const maxPageTextVariants = 8
+
+// memoized returns the text memoized for (content, res), if any.
+func (r *textRun) memoized(v core.View, content *object.Stream, res *object.Dictionary) (string, bool) {
+	for _, e := range r.pages[content] {
+		v.Charge(1)
+		if e.res == res || (e.res != nil && res != nil && object.Equal(e.res, res)) {
+			return e.text, true
+		}
+	}
+	return "", false
+}
+
+// memoize remembers the text of (content, res).
+func (r *textRun) memoize(content *object.Stream, res *object.Dictionary, text string) {
+	if len(r.pages[content]) < maxPageTextVariants {
+		r.pages[content] = append(r.pages[content], pageTextEntry{res, text})
+	}
 }
 
 // fontMaps is fontMapsFrom(res), once per resource dictionary per run.
@@ -164,22 +205,10 @@ func (r *textRun) fontMaps(d *Document, res *object.Dictionary) map[string]fontT
 	return m
 }
 
-func (d *Document) newTextRun(cancel core.Canceler) *textRun {
-	return &textRun{cancel: cancel, lim: d.lim()}
-}
-
-// charge takes n bytes of content from the budget, and reports whether they
-// fit. Once they do not, every later charge fails too.
-func (r *textRun) charge(n int) bool {
-	if r.exhausted != nil {
-		return false
-	}
-	if int64(n) > r.lim.DecodedContentBytes-r.spent {
-		r.exhausted = r.lim.ContentBudgetError("the content text extraction tokenizes, counting each form XObject each time it is drawn")
-		return false
-	}
-	r.spent += int64(n)
-	return true
+// newTextRun starts the text state of an extraction on d, a Document a run has
+// been begun on (beginRunCancel).
+func (d *Document) newTextRun() *textRun {
+	return &textRun{pages: map[*object.Stream][]pageTextEntry{}}
 }
 
 // textPageHook, when set, runs at the start of each page's extraction. It is
@@ -191,21 +220,36 @@ var textPageHook func(page *object.Dictionary)
 // the other pages are unaffected. The boundary is defence in depth — every
 // crash the extractor has had is also fixed where it happened — and the error
 // keeps it from being silent.
+//
+// It is also where the run's work meter unwinds to: a page the budget or the
+// context stopped is left out, with the error saying which, and its partial
+// text is discarded.
 func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			if core.IsAbort(r) {
+				text, err = "", d.canceler().Cause()
+				return
+			}
 			text, err = "", fmt.Errorf("internal error in text extraction: %v", r)
 		}
 	}()
 	if textPageHook != nil {
 		textPageHook(page)
 	}
-	res := d.ResolveDict(d.view().InheritedPageAttr(page, "Resources"))
-	content, _ := core.ContentStreamData(d.view(), page.Get("Contents")) // reason: extraction returns the text it could decode
+	v := d.view()
+	res := d.ResolveDict(v.InheritedPageAttr(page, "Resources"))
+	content, key, _ := v.ContentBytesAndKey(page.Get("Contents")) // reason: extraction returns the text it could decode
+	if key != nil {
+		if t, ok := run.memoized(v, key, res); ok {
+			v.ChargeCopy(len(t)) // the copy the caller is handed
+			return t, nil
+		}
+	}
 	var out strings.Builder
 	d.extractContentText(run, res, content, &out, map[*object.Stream]bool{}, 0)
-	if run.exhausted != nil {
-		return "", run.exhausted
+	if key != nil {
+		run.memoize(key, res, out.String())
 	}
 	return out.String(), nil
 }
@@ -213,13 +257,14 @@ func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string,
 // maxTextFormDepth bounds recursion through nested form XObjects.
 const maxTextFormDepth = 32
 
-// minContentCharge is the least one content stream costs the budget, however
-// short it is. Entering a stream — resolving its resources, decoding it,
-// starting the tokenizer, recursing — costs about what tokenizing sixty-odd
-// bytes does (measured: some 570 ns against 10 ms a megabyte), so a stream of
-// "/X Do /X Do" charged at its eleven bytes let a fan-out of forms run for
-// half a minute inside the default budget. Charged at this floor, the budget
-// is the same bound in time whatever the streams are made of.
+// minContentCharge is what entering one content stream costs the run's work
+// meter, on top of the bytes its tokenizer charges. Entering a stream —
+// resolving its resources, decoding it, starting the tokenizer, recursing —
+// was measured at some 570 ns, which is a few tens of the meter's units
+// (core.Meter). A stream of "/X Do /X Do" charged for its
+// eleven bytes alone let a fan-out of forms run for half a minute inside the
+// budget; charged this as well, the budget is the same bound in time whatever
+// the streams are made of.
 const minContentCharge = 64
 
 // extractContentText appends the visible text of one content stream — a page or
@@ -234,9 +279,11 @@ const minContentCharge = 64
 // bounds nesting; and the run's content budget bounds the total, which a
 // fan-out of forms drawing forms would otherwise make exponential.
 func (d *Document) extractContentText(run *textRun, res *object.Dictionary, content []byte, out *strings.Builder, onPath map[*object.Stream]bool, depth int) {
-	if len(content) == 0 || depth > maxTextFormDepth || !run.charge(max(len(content), minContentCharge)) {
+	if len(content) == 0 || depth > maxTextFormDepth {
 		return
 	}
+	v := d.view()
+	v.Charge(minContentCharge)
 	fonts := run.fontMaps(d, res)
 	var xobjs *object.Dictionary
 	if res != nil {
@@ -261,7 +308,7 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 			out.WriteRune(r)
 		}
 	}
-	for tk := range core.TokenizeContent(run.cancel, content) {
+	for tk := range core.TokenizeContent(v.Cancel, content) {
 		if tk.Kind != core.KindOp {
 			operands = append(operands, tk)
 			continue
@@ -334,9 +381,6 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 						formData, _ := d.view().Content(st) // reason: extraction returns the text it could decode
 						d.extractContentText(run, formRes, formData, out, onPath, depth+1)
 						delete(onPath, st)
-						if run.exhausted != nil {
-							return
-						}
 					}
 				}
 			}
@@ -378,7 +422,7 @@ func (d *Document) actualText(res *object.Dictionary, operands []core.ContentTok
 type fontText struct {
 	// toUnicode maps a code to every character its ToUnicode entry names — a
 	// ligature's are several.
-	toUnicode map[int][]rune
+	toUnicode *core.ToUnicode
 	// encoding maps a character code to the character it stands for, built
 	// from the font's /Encoding. It is consulted when the font carries no
 	// ToUnicode entry for a code, which is the ordinary case for a simple font
@@ -405,7 +449,7 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 		if f == nil {
 			continue
 		}
-		toUnicode, _ := core.ParseToUnicodeRunes(d.view(), f) // reason: extraction falls back to the font's encoding without a ToUnicode map
+		toUnicode, _ := core.ParseToUnicode(d.view(), f) // reason: extraction falls back to the font's encoding without a ToUnicode map
 		ft := fontText{toUnicode: toUnicode}
 		if st, _ := d.view().ResolveName(f.Get("Subtype")); st == "Type0" {
 			ft.composite = true
@@ -506,7 +550,7 @@ func (f fontText) decode(raw []byte) []rune {
 	var runes []rune
 	if f.composite {
 		for _, c := range f.codes.Codes(raw) {
-			if rs, ok := f.toUnicode[int(c.Value)]; ok {
+			if rs, ok := f.toUnicode.Runes(int(c.Value)); ok {
 				runes = append(runes, rs...)
 			} else if rs, ok := f.codes.Unicode(c); ok {
 				runes = append(runes, rs...)
@@ -516,7 +560,7 @@ func (f fontText) decode(raw []byte) []rune {
 	}
 	for _, b := range raw {
 		code := int(b)
-		if rs, ok := f.toUnicode[code]; ok {
+		if rs, ok := f.toUnicode.Runes(code); ok {
 			runes = append(runes, rs...)
 			continue
 		}

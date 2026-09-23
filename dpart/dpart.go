@@ -92,6 +92,10 @@ func validateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 
 	var walk func(ref object.Object, expectedParent, depth int)
 	walk = func(ref object.Object, expectedParent, depth int) {
+		if !doc.Descend(depth) {
+			return
+		}
+		doc.Charge(1)
 		num := object.RefNum(ref)
 		node := doc.ResolveDict(ref)
 		if node == nil {
@@ -145,6 +149,7 @@ func validateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 					continue
 				}
 				for _, child := range inner {
+					doc.Charge(1)
 					walk(child, num, depth+1)
 				}
 			}
@@ -174,30 +179,47 @@ func validateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 
 		// 14.12.4.2: validate the document part metadata dictionary if present.
 		if dpm := doc.ResolveDict(node.Get("DPM")); dpm != nil {
-			validateDPM(doc, dpm, num, map[*object.Dictionary]bool{}, add)
+			validateDPM(doc, dpm, num, add)
 		}
 	}
 	walk(nodeRef, rootDictNum, 0)
 
 	// 14.12.2 / 14.12.3: leaf ranges, in depth-first order, shall cover every
 	// page exactly once and in page-tree order.
-	covered := make([]int, len(pages))
+	//
+	// How many leaves cover each page is a sweep over the ranges' endpoints —
+	// +1 where a range starts, -1 past where it ends, summed in page order —
+	// which is O(leaves + pages). Filling each range page by page was
+	// O(leaves × pages): 40,000 leaves each spanning 40,000 pages took 38
+	// seconds against a one-second deadline (audit 2026-09-22 C42).
+	delta := make([]int, len(pages)+1)
+	leafAt := map[int]leaf{} // by object number, for the back-reference check
 	expectedNext := 0
 	for _, lf := range leaves {
+		doc.Charge(1)
 		if !lf.ok {
 			continue
 		}
 		if lf.startIdx != expectedNext {
 			add("14.12.3", "DPart leaf page range is not contiguous with the preceding part in page-tree order", lf.objNum)
 		}
-		for i := lf.startIdx; i <= lf.endIdx && i < len(covered); i++ {
-			covered[i]++
+		if lf.startIdx < len(pages) {
+			delta[lf.startIdx]++
+			delta[min(lf.endIdx, len(pages)-1)+1]--
 		}
 		if lf.endIdx+1 > expectedNext {
 			expectedNext = lf.endIdx + 1
 		}
+		if lf.objNum != 0 {
+			leafAt[lf.objNum] = lf
+		}
 	}
-	for i, c := range covered {
+	covered := make([]int, len(pages))
+	c := 0
+	for i := range pages {
+		doc.Charge(1)
+		c += delta[i]
+		covered[i] = c
 		switch {
 		case c == 0:
 			add("14.12.2", "page is not included in any DPart leaf range", pages[i].ObjNum)
@@ -207,15 +229,21 @@ func validateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 	}
 
 	// 14.12.3: each page in a leaf's range shall have a /DPart back-reference to
-	// that leaf, when present.
-	for _, lf := range leaves {
-		if !lf.ok {
+	// that leaf, when present. A page whose back-reference names a leaf that
+	// covers it is in order only if no other leaf covers it too; the finding
+	// is the page's, so it is reported once per page however many leaves
+	// disagree with it.
+	for i, pg := range pages {
+		bp := pg.Dict.Get("DPart")
+		if bp == nil || covered[i] == 0 {
 			continue
 		}
-		for i := lf.startIdx; i <= lf.endIdx && i < len(pages); i++ {
-			if bp := pages[i].Dict.Get("DPart"); bp != nil && object.RefNum(bp) != lf.objNum {
-				add("14.12.3", "page /DPart does not reference the DPart leaf whose range contains it", pages[i].ObjNum)
-			}
+		mine := 0
+		if lf, ok := leafAt[object.RefNum(bp)]; ok && lf.startIdx <= i && i <= lf.endIdx {
+			mine = 1
+		}
+		if covered[i] > mine {
+			add("14.12.3", "page /DPart does not reference the DPart leaf whose range contains it", pg.ObjNum)
 		}
 	}
 
@@ -255,29 +283,48 @@ func validateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 // (e.g. "77u-R2VuZGVy75i2" for a field named "Gender"); they are not literal XML
 // name tokens and validating the raw name would flag conforming files. A
 // decoded check belongs with dedicated PDF/VT-1 (ISO 16612-2) validation.
-func validateDPM(doc core.View, dpm *object.Dictionary, objNum int, seen map[*object.Dictionary]bool, add func(rule, msg string, obj int)) {
-	if seen[dpm] {
-		return
-	}
-	seen[dpm] = true
+//
+// The values are walked iteratively, and every object reached through a
+// reference is visited once, arrays included. The recursive walk this
+// replaces kept its visited set on dictionaries only, so `6 0 obj [6 0 R]`
+// recursed until the stack overflowed, and a DAG of arrays each naming the
+// next twice cost 2^depth (audit 2026-09-22 C17). Each value is charged to the
+// run's work meter; a value that occurs several times in the DAG is judged
+// once, which is all its finding could say.
+func validateDPM(doc core.View, dpm *object.Dictionary, objNum int, add func(rule, msg string, obj int)) {
+	seenRef := map[int]bool{}
+	seenDict := map[*object.Dictionary]bool{dpm: true}
+	var stack []object.Object
 	for _, dval := range dpm.All() {
-		validateDPMValue(doc, dval, objNum, seen, add)
+		stack = append(stack, dval)
 	}
-}
-
-func validateDPMValue(doc core.View, v object.Object, objNum int, seen map[*object.Dictionary]bool, add func(rule, msg string, obj int)) {
-	switch val := doc.Resolve(v).(type) {
-	case object.String, object.Boolean, object.Integer, object.Real:
-		// Permitted scalar value types (text string / date string / boolean /
-		// integer / real).
-	case object.Array:
-		for _, e := range val {
-			validateDPMValue(doc, e, objNum, seen, add)
+	for len(stack) > 0 {
+		v := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		doc.Charge(1)
+		if ref, ok := v.(object.IndirectRef); ok {
+			if seenRef[ref.Number] {
+				continue
+			}
+			seenRef[ref.Number] = true
 		}
-	case *object.Dictionary:
-		validateDPM(doc, val, objNum, seen, add)
-	default:
-		add("14.12.4.2", fmt.Sprintf("DPM value of type %T is not permitted (only string, array, dictionary, boolean, integer, real)", val), objNum)
+		switch val := doc.Resolve(v).(type) {
+		case object.String, object.Boolean, object.Integer, object.Real:
+			// Permitted scalar value types (text string / date string /
+			// boolean / integer / real).
+		case object.Array:
+			stack = append(stack, val...)
+		case *object.Dictionary:
+			if seenDict[val] {
+				continue
+			}
+			seenDict[val] = true
+			for _, dval := range val.All() {
+				stack = append(stack, dval)
+			}
+		default:
+			add("14.12.4.2", fmt.Sprintf("DPM value of type %T is not permitted (only string, array, dictionary, boolean, integer, real)", val), objNum)
+		}
 	}
 }
 

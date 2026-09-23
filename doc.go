@@ -93,8 +93,18 @@
 // can never be mistaken for a clean bill of health. Read, Write and the
 // extractors have no finding channel, so they return an error wrapping
 // ctx.Err() instead. Cancellation is checked at coarse boundaries — per check,
-// per page, per content stream, per megabyte scanned or decompressed — which on
+// per page, per content stream, per megabyte scanned or decompressed — and
+// inside every check, wherever the run's work meter is charged (below), which on
 // that 71 MB file takes effect within about 60 ms.
+//
+// A run also has a work budget, WithMaxWork: every walk over the document,
+// expansion, tokenisation and function evaluation of one validation or one
+// extraction is charged to one meter, whose default grows with the size of the
+// file. Every other limit bounds one unit of work — one stream, one range, one
+// evaluation — and the meter bounds their product, which is what a small
+// hostile file controls. A run that spends it stops, reports the "limit" rule
+// (guard "work"), and never reports a finding from the check it stopped in.
+// See docs/limits.md.
 //
 // Encrypted files using the standard security handler are decrypted on Read
 // when the (empty or supplied) user or owner password is correct: RC4 and
@@ -140,7 +150,11 @@
 // object, then message) and runs its checks under a recover boundary: a check
 // that panics on hostile input is reported as a finding whose rule is
 // "internal" rather than crashing the caller. A stack overflow from unbounded
-// recursion is fatal and is not recoverable; those are prevented at the source.
+// recursion is fatal and is not recoverable, so no walk over the document
+// recurses without a bound: each is iterative, or held to one depth guard
+// (1024 levels) that stops the run and reports the "limit" rule
+// (guard "walk-depth"), and a lint test (internal/lint) fails for a recursion
+// over the object graph that is neither.
 //
 // # Signatures
 //

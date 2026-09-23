@@ -296,6 +296,24 @@ func parseToUnicode(body string) map[int]rune {
 		Limits:  DefaultLimits(),
 		Run:     NewRun(nil),
 	}
-	m, _ := doc.ParseToUnicodeMap(fontDict) // reason: an unfiltered stream in a test; the map is what is asserted
+	tu, _ := ParseToUnicode(doc, fontDict) // reason: an unfiltered stream in a test; the map is what is asserted
+	return tu.firstMap()
+}
+
+// firstMap expands t into the map ParseToUnicodeMap used to return — every
+// mapped code to its first rune, U+0000 left out — for tests to assert on.
+// Tests only: it is the expansion ToUnicode exists to avoid.
+func (t *ToUnicode) firstMap() map[int]rune {
+	m := map[int]rune{}
+	if t == nil {
+		return m
+	}
+	for _, sp := range t.spans {
+		for c := uint64(sp.Lo); c <= uint64(sp.Hi); c++ {
+			if r, ok := t.First(int(c)); ok {
+				m[int(c)] = r
+			}
+		}
+	}
 	return m
 }
