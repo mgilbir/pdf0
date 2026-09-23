@@ -277,50 +277,30 @@ func sortedInts(m map[int]bool) []int {
 // enclosing structure element: a Widget must sit under <Form>, a Link under
 // <Link>, and any other annotation under <Annot> (Matterhorn 28-002/010/011).
 // Annotations not reachable through an OBJR are left to the tagging check.
+//
+// The enclosing element's type is its resolved type: /MyLink role-mapped to
+// /Link is a Link element, and comparing the written /S reported "nested in a
+// <MyLink> element, expected <Link>" on a conforming file (audit 2026-09-22
+// C81). The OBJR is read from the flattened tree, which records the element
+// that holds it as its parent.
 func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
+	nodes := structTree(d, cat)
 	annotParent := map[int]object.Name{}
-	seen := map[int]bool{}
-	var walk func(node object.Object, parentType object.Name)
-	walk = func(node object.Object, parentType object.Name) {
-		if ref, ok := node.(object.IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
+	for _, n := range nodes {
+		// An OBJR references an object (often an annotation).
+		if t, _ := d.ResolveName(n.Elem.Get("Type")); t != "OBJR" {
+			continue
 		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(object.Array); ok {
-				for _, kid := range arr {
-					walk(kid, parentType)
-				}
-			}
-			return
+		ref, ok := n.Elem.Get("Obj").(object.IndirectRef)
+		if !ok {
+			continue
 		}
-		// An OBJR structure element references an object (often an annotation).
-		if t, _ := d.ResolveName(elem.Get("Type")); t == "OBJR" {
-			if ref, ok := elem.Get("Obj").(object.IndirectRef); ok {
-				annotParent[ref.Number] = parentType
-			}
-			return
+		var parentType object.Name
+		if n.Parent >= 0 {
+			parentType = nodes[n.Parent].StdType
 		}
-		s, _ := d.ResolveName(elem.Get("S"))
-		if k := elem.Get("K"); k != nil {
-			switch kids := d.Resolve(k).(type) {
-			case object.Array:
-				for _, kid := range kids {
-					walk(kid, s)
-				}
-			default:
-				walk(k, s)
-			}
-		}
+		annotParent[ref.Number] = parentType
 	}
-	walk(root.Get("K"), "")
 
 	var v []Violation
 	for _, r := range d.ReachableDicts() {

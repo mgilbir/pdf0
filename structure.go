@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 
 	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -137,7 +137,7 @@ func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string
 	if check.usesPDF20 {
 		nsDict := object.NewDictionary(
 			object.Entry{Key: "Type", Value: object.Name("Namespace")},
-			object.Entry{Key: "NS", Value: object.String{Value: []byte(pdf20StructureNamespace)}},
+			object.Entry{Key: "NS", Value: object.String{Value: []byte(core.NSPDF20)}},
 		)
 		ref := d.Add(nsDict)
 		ns = &ref
@@ -205,8 +205,8 @@ func (c *structureCheck) elems(elems []StructElem, depth int, inheritedPage *obj
 			page = inheritedPage
 		}
 		switch {
-		case pdf17StructureTypes[e.Tag]:
-		case isPDF20OnlyStructureType(e.Tag):
+		case core.StandardStructTypes[object.Name(e.Tag)]:
+		case core.IsPDF20OnlyStructType(object.Name(e.Tag)):
 			if !c.pdf20 {
 				return fmt.Errorf(
 					"pdf0: %q is a PDF 2.0 structure type (ISO 32000-2 Annex M), and this is not a PDF 2.0 "+
@@ -257,8 +257,8 @@ func (c *structureCheck) elems(elems []StructElem, depth int, inheritedPage *obj
 func (c *structureCheck) roles() error {
 	for _, from := range slices.Sorted(maps.Keys(c.roleMap)) {
 		to := c.roleMap[from]
-		if !pdf17StructureTypes[to] {
-			if isPDF20OnlyStructureType(to) {
+		if !core.StandardStructTypes[object.Name(to)] {
+			if core.IsPDF20OnlyStructType(object.Name(to)) {
 				return fmt.Errorf("pdf0: the role map sends %q to %q, a PDF 2.0 structure type; "+
 					"the tree root's /RoleMap maps into the PDF 1.7 namespace, where %q does not exist", from, to, to)
 			}
@@ -298,7 +298,7 @@ func (d *Document) writeStructLevel(elems []StructElem, parent object.IndirectRe
 		dict.Set("Type", object.Name("StructElem"))
 		dict.Set("S", object.Name(e.Tag))
 		dict.Set("P", parent)
-		if !pdf17StructureTypes[e.Tag] && isPDF20OnlyStructureType(e.Tag) {
+		if !core.StandardStructTypes[object.Name(e.Tag)] && core.IsPDF20OnlyStructType(object.Name(e.Tag)) {
 			dict.Set("NS", *ns)
 		}
 
@@ -444,60 +444,12 @@ func (d *Document) writeParentTree(treeRoot *object.Dictionary, owners *mcidOwne
 	return nil
 }
 
-// pdf17StructureTypes is the standard structure namespace for PDF 1.7, the
-// default namespace: the types an element with no /NS may have and a reader is
-// required to understand (ISO 32000-1 14.8.4, and ISO 32000-2 Annex M).
-// Anything else needs a role map saying which of these it behaves like, or —
-// in a PDF 2.0 document — is one of the types only the PDF 2.0 namespace has.
-var pdf17StructureTypes = map[string]bool{
-	// Grouping
-	"Document": true, "Part": true, "Sect": true,
-	"Div": true, "NonStruct": true, "Private": true,
-	"Art": true, "BlockQuote": true, "Caption": true, "TOC": true, "TOCI": true,
-	"Index": true,
-
-	// Block-level
-	"P": true, "H": true,
-	"H1": true, "H2": true, "H3": true, "H4": true, "H5": true, "H6": true,
-	"L": true, "LI": true, "Lbl": true, "LBody": true,
-	"Table": true, "TR": true, "TH": true, "TD": true,
-	"THead": true, "TBody": true, "TFoot": true,
-
-	// Inline
-	"Span": true, "Quote": true, "Note": true, "Reference": true,
-	"BibEntry": true, "Code": true, "Link": true, "Annot": true,
-	"Ruby": true, "RB": true, "RT": true, "RP": true,
-	"Warichu": true, "WT": true, "WP": true,
-
-	// Illustration
-	"Figure": true, "Formula": true, "Form": true,
-}
-
-// pdf20StructureNamespace is the namespace name of the PDF 2.0 standard
-// structure namespace (ISO 32000-2 14.8.6.1).
-const pdf20StructureNamespace = "http://iso.org/pdf2/ssn"
-
-// pdf20OnlyStructureTypes are the types only the PDF 2.0 standard structure
-// namespace defines (ISO 32000-2 Annex M), apart from Hn for n > 6, which
-// isPDF20OnlyStructureType recognises. Artifact is content that is not part of
-// the document's meaning — a running header, a page number, a decorative rule.
-var pdf20OnlyStructureTypes = map[string]bool{
-	"DocumentFragment": true, "Aside": true, "Title": true, "FENote": true,
-	"Sub": true, "Em": true, "Strong": true, "Artifact": true,
-}
-
-// isPDF20OnlyStructureType reports whether tag exists only in the PDF 2.0
-// standard structure namespace: an Annex M type, or Hn with n > 6.
-func isPDF20OnlyStructureType(tag string) bool {
-	if pdf20OnlyStructureTypes[tag] {
-		return true
-	}
-	if len(tag) < 2 || tag[0] != 'H' || tag[1] == '0' {
-		return false
-	}
-	n, err := strconv.Atoi(tag[1:])
-	return err == nil && n > 6 && strconv.Itoa(n) == tag[1:]
-}
+// The builder and the validators read one structure vocabulary: the PDF 1.7
+// standard types (core.StandardStructTypes, the default namespace, which an
+// element with no /NS is in), the types only the PDF 2.0 namespace has
+// (core.IsPDF20OnlyStructType, ISO 32000-2 Annex M) and that namespace's name
+// (core.NSPDF20). They were written twice, once here and once in core, and
+// the validator's copy did not know the PDF 2.0 namespace at all.
 
 // clearStructureIndices removes every key into the parent tree: /StructParents
 // on each page and on each XObject its resources reach, and /StructParent on

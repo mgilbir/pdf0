@@ -134,6 +134,13 @@ func ValidateView(doc core.View, part string) []Violation {
 		run(checkUAHeaderVersion)
 	}
 
+	// PDF/UA-2 rules about the PDF 2.0 namespaced structure model, which a
+	// PDF/UA-1 (PDF 1.x) file does not have.
+	if part == "2" {
+		runCat(checkUA2NamespaceRoleMaps)
+		runCat(checkUA2MathParent)
+	}
+
 	// 7.1 — Suspects must not be true; 7.4.4 strong/weak; 7.9 Note IDs.
 	runCat(checkUASuspects)
 	runCat(checkUAStrongWeak)
@@ -236,27 +243,35 @@ func checkUATabOrder(d core.View) []Violation {
 }
 
 // checkUARoleMap flags structure element types that are neither standard nor
-// mapped to a standard type through the structure tree's /RoleMap.
+// mapped to a standard type — through the structure tree's /RoleMap for an
+// element in the default namespace, through its namespace's /RoleMapNS for
+// one that names a namespace (ISO 32000-2 14.8.6.2). A type standard in the
+// namespace the element names is standard: /Title in the PDF 2.0 namespace
+// needs no mapping, though the PDF 1.7 set has no /Title.
+//
+// It reads RawS because its question is about the type as written.
 func checkUARoleMap(d core.View, cat *object.Dictionary) []Violation {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
-	roleMap := d.ResolveDict(root.Get("RoleMap"))
 	var v []Violation
-	// One verdict per distinct type: resolveRoleMapChain walks a chain, so
-	// re-deciding a repeated type would redo that walk on every element.
-	decided := map[object.Name]bool{}
+	// One verdict per distinct written type in each namespace.
+	type key struct {
+		t  object.Name
+		ns *object.Dictionary
+	}
+	decided := map[key]bool{}
 	for _, n := range structTree(d, cat) {
-		st := n.RawS
-		if st == "" || decided[st] {
+		k := key{n.RawS, d.ResolveDict(n.Elem.Get("NS"))}
+		if k.t == "" || decided[k] {
 			continue
 		}
-		decided[st] = true
+		decided[k] = true
 		// A budget trip leaves the mapping unknown; only a completed walk that
 		// found no standard type is evidence of a violation.
-		if _, mapped, complete := resolveRoleMapChain(d, st, roleMap); !mapped && complete {
-			v = append(v, Violation{"7.1", "structure type /" + string(st) + " is neither standard nor mapped in /RoleMap", 0})
+		if !n.Mapped && n.Complete {
+			where := "/RoleMap"
+			if k.ns != nil {
+				where = "its namespace's /RoleMapNS"
+			}
+			v = append(v, Violation{"7.1", "structure type /" + string(k.t) + " is neither standard nor mapped in " + where, 0})
 		}
 	}
 	return v
@@ -1245,11 +1260,13 @@ func fontProgramEmbedded(d core.View, font *object.Dictionary) bool {
 }
 
 // checkFigureAlt walks the structure tree and flags Figure elements that carry
-// neither /Alt nor /ActualText.
+// neither /Alt nor /ActualText. A figure is an element whose resolved type is
+// Figure: a custom /Img role-mapped to /Figure is one, and asking the written
+// /S let it through without alternate text (audit 2026-09-22 C80).
 func checkFigureAlt(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	for _, n := range structTree(d, cat) {
-		if n.RawS != "Figure" {
+		if !n.HasS || n.StdType != "Figure" {
 			continue
 		}
 		if !d.NonEmptyStringOrLocked(n.Elem.Get("Alt")) && !d.NonEmptyStringOrLocked(n.Elem.Get("ActualText")) {
