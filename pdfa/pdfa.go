@@ -1127,29 +1127,18 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 		bad := func(msg string) {
 			errs = append(errs, Violation{Rule: "6.4.3", Level: level, Message: msg, Object: num})
 		}
-		br, ok := doc.Resolve(brObj).(object.Array)
-		if !ok || len(br) != 4 {
+		// The arithmetic on these file-controlled integers is core.ByteRange's,
+		// shared with signature verification: start+len computed unchecked
+		// overflowed there into a panic (audit 2026-09-22 C5), and here into a
+		// wrapped sum.
+		br, ok := core.ReadByteRange(doc, brObj)
+		if !ok {
 			bad("signature /ByteRange must be an array of four integers")
 			continue
 		}
-		var v [4]int64
-		malformed := false
-		for i, e := range br {
-			n, ok := doc.Resolve(e).(object.Integer)
-			if !ok {
-				malformed = true
-				break
-			}
-			v[i] = int64(n)
-		}
-		if malformed {
-			bad("signature /ByteRange must be an array of four integers")
-			continue
-		}
-		// v = [start1, len1, start2, len2]. The digest covers [start1,start1+len1)
+		// [start1, len1, start2, len2]: the digest covers [start1,start1+len1)
 		// and [start2,start2+len2); the hole between them is the /Contents value.
-		start1, len1, start2, len2 := v[0], v[1], v[2], v[3]
-		if start1 != 0 || len1 < 0 || len2 < 0 || start2 < start1+len1 {
+		if !br.Ordered() {
 			bad("signature /ByteRange does not cover the document from its start")
 			continue
 		}
@@ -1158,7 +1147,8 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 		// document. A range that meets or exceeds the file length covers it — the
 		// veraPDF corpus carries stub signatures whose /ByteRange overshoots the
 		// truncated test file, and those are treated as covering (not a defect).
-		if start2+len2 < int64(len(raw)) {
+		// An end too large for an int64 overshoots every file.
+		if end, fits := br.End(); fits && end < int64(len(raw)) {
 			bad("signature /ByteRange does not cover the entire document")
 		}
 
