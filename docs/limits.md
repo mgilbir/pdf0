@@ -5,7 +5,7 @@ each has exactly one home:
 
 | Question | Read | Code |
 | --- | --- | --- |
-| *How do I cap what a document costs?* — the eleven `With*` options, the defaults, which entry points take them | [architecture.md](architecture.md#resource-limits) | `limits.go` |
+| *How do I cap what a document costs?* — the twelve `With*` options, the defaults, which entry points take them | [architecture.md](architecture.md#resource-limits) | `limits.go` |
 | *What happens when a limit trips?* — the `limit` rule, `IsCheckerFinding`, the per-guard classification | this document | `limits_report.go` |
 | *Why is it shaped this way?* — the measurements, the rejected alternatives, which limits were deliberately left internal | [proposals/configurable-limits.md](proposals/configurable-limits.md) | — |
 
@@ -208,12 +208,18 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 ### Image codecs
 
 Every guard in `internal/jbig2`, `internal/ccitt`, `images/`,
-`images/`, `internal/core` (PDF functions, stream filters) is at worst a false negative
+`internal/core` (PDF functions, stream filters) is at worst a false negative
 **for the extraction API**. No PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a
 decoded pixel: the image rules read dictionary keys (`/Alternates`,
 `/Interpolate`, `/OPI`, `/SMask`, `/Filter`, `/ColorSpace`) and
 `checkCSForDevice` judges colour from `/ColorSpace` alone. A budget trip
 surfaces as `ExtractedImage.Note`, not as a finding.
+
+All of the image codecs share one configurable budget, `WithMaxImagePixels`
+(default 2^26 pixels), checked by `core.Limits.CheckImage` before every
+allocation sized from an image's geometry; a refusal's `Note` names the
+`image-pixels` guard. The JBIG2 package constants are ceilings the budget
+cannot raise, not separate knobs. See [images.md](images.md#resource-budgets).
 
 The type-4 budget is in this list because of who calls it, not where it lives.
 The type-4 (PostScript calculator) work budget — `WithMaxPostScriptSteps`, the
@@ -226,7 +232,7 @@ no rule to decline.
 One exception, now fixed: `decodeGenericMMR` indexed `decodeCCITT`'s output as if
 it held every row. `decodeCCITT` stops early when its data runs out and still
 returns a nil error, so a short result produced a slice-bounds panic — and that
-panic is not `errJBIG2Budget`, so `decodeJBIG2`'s recover re-raised it and it
+panic is not `errJBIG2Budget` (now `jbig2.ErrBudget`), so `decodeJBIG2`'s recover re-raised it and it
 escaped `ExtractImages` to the caller. A short decode is now a reported decode
 failure.
 

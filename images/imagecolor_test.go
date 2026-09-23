@@ -1,6 +1,7 @@
 package images
 
 import (
+	"errors"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"image"
@@ -16,9 +17,9 @@ func rgb8(t *testing.T, m image.Image, x, y int) (r, g, b, a uint8) {
 
 func mustBuild(t *testing.T, st *object.Stream, w, h, bpc int) image.Image {
 	t.Helper()
-	m, ok := buildImage(core.View{Limits: core.DefaultLimits()}, st, st.Data, w, h, bpc)
-	if !ok {
-		t.Fatalf("buildImage failed")
+	m, maskErr, err := buildImage(core.View{Limits: core.DefaultLimits()}, st, st.Data, w, h, bpc)
+	if err != nil || maskErr != nil {
+		t.Fatalf("buildImage failed: %v (mask: %v)", err, maskErr)
 	}
 	return m
 }
@@ -200,7 +201,7 @@ func TestBuildImageSeparationFallsBack(t *testing.T) {
 	// declines rendering, so callers fall back to the raw bytes.
 	st := imageXObject(1, 1, 8, "", "", []byte{128})
 	st.Dict.Set("ColorSpace", object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceGray"), object.Integer(0)})
-	if _, ok := buildImage(core.View{Limits: core.DefaultLimits()}, st, st.Data, 1, 1, 8); ok {
+	if _, _, err := buildImage(core.View{Limits: core.DefaultLimits()}, st, st.Data, 1, 1, 8); !errors.Is(err, errUnsupportedLayout) {
 		t.Error("Separation with unusable tint should not be rendered")
 	}
 }

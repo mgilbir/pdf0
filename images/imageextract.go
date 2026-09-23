@@ -2,6 +2,7 @@ package images
 
 import (
 	"bytes"
+	"errors"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"image"
@@ -27,25 +28,40 @@ import (
 
 // decodeJPX decodes a JPEG 2000 (JPXDecode) codestream or JP2 container to a
 // standard-library image using gopenjpeg, a pure-Go port of OpenJPEG. It returns
-// nil for inputs it cannot render (decode error, ICC-only colour, sub-sampled or
-// >16-bit components) so the caller can fall back to the raw bytes.
-// smaskInData is the image dictionary's /SMaskInData value, which governs
-// whether an opacity channel packaged in the codestream is used (see
+// a nil image for inputs it cannot render (decode error, ICC-only colour,
+// sub-sampled or >16-bit components) so the caller can fall back to the raw
+// bytes, and a *core.LimitError for a header whose geometry is over the image
+// budget — checked from the header before the codec allocates a component
+// plane. smaskInData is the image dictionary's /SMaskInData value, which
+// governs whether an opacity channel packaged in the codestream is used (see
 // jpxComponentsToImage).
-func decodeJPX(data []byte, smaskInData int) image.Image {
+func decodeJPX(lim core.Limits, data []byte, smaskInData int) (image.Image, error) {
+	info, err := gopenjpeg.ReadInfo(bytes.NewReader(data))
+	if err != nil {
+		return nil, nil
+	}
+	if info.X1 < info.X0 || info.Y1 < info.Y0 {
+		return nil, nil
+	}
+	if err := lim.CheckImage(int64(info.X1-info.X0), int64(info.Y1-info.Y0), int64(len(info.Components))); err != nil {
+		return nil, err
+	}
 	img, err := gopenjpeg.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	// Normalise colour (sYCC/eYCC/CMYK -> sRGB and upsample sub-sampled
 	// components); images carrying only an ICC profile keep their raw layout.
 	_ = img.ConvertToRGB()
 	if std, err := img.ToStandard(); err == nil {
-		return std
+		return std, nil
 	}
 	// ToStandard declines sub-sampled or many-component images; assemble them from
 	// the component data, upsampling each to the largest component's grid.
-	return jpxComponentsToImage(img, smaskInData)
+	if m := jpxComponentsToImage(lim, img, smaskInData); m != nil {
+		return m, nil
+	}
+	return nil, nil
 }
 
 // jpxComponentsToImage builds a grayscale or RGB image from a decoded JPEG 2000
@@ -63,7 +79,7 @@ func decodeJPX(data []byte, smaskInData int) image.Image {
 // the samples carry an opacity channel (rendered into the alpha of an NRGBA);
 // 2 means the colour channels are premultiplied with the opacity channel
 // (rendered as a premultiplied-alpha RGBA).
-func jpxComponentsToImage(img *gopenjpeg.Image, smaskInData int) image.Image {
+func jpxComponentsToImage(lim core.Limits, img *gopenjpeg.Image, smaskInData int) image.Image {
 	nc := img.NumComponents()
 	if nc == 0 {
 		return nil
@@ -79,6 +95,11 @@ func jpxComponentsToImage(img *gopenjpeg.Image, smaskInData int) image.Image {
 		}
 	}
 	if refW <= 0 || refH <= 0 {
+		return nil
+	}
+	// The reference grid is the largest component's, which a header need not
+	// have declared as the image size; it is what the output is allocated at.
+	if lim.CheckImage(int64(refW), int64(refH), 1) != nil {
 		return nil
 	}
 	// at returns component c's sample covering reference pixel (rx,ry), level-
@@ -234,7 +255,10 @@ type ExtractedImage struct {
 	Image            image.Image // decoded pixels, or nil if the codec was not decoded
 	Encoded          []byte      // the encoded stream bytes when Image is nil
 	Decoded          bool        // whether Image holds decoded pixels
-	Note             string      // why the image was not decoded, when applicable
+	// Note says why the image was not decoded, or — for a decoded image — what
+	// was left out of it (a mask over the image budget). It is empty when the
+	// image decoded whole. A budget refusal names its guard, "image-pixels".
+	Note string
 }
 
 // Walk yields every image XObject reachable from the document's pages: each
@@ -361,9 +385,21 @@ func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 
 	switch img.Filter {
 	case "DCTDecode":
+		// image/jpeg allocates the whole frame from the header's dimensions,
+		// which are the file's to choose: a 65500×65500 header is sixteen
+		// gigabytes of samples behind a few hundred bytes of data. The header is
+		// read first and held to the budget.
+		if cfg, err := jpeg.DecodeConfig(bytes.NewReader(st.Data)); err == nil {
+			if err := d.Limits.CheckImage(int64(cfg.Width), int64(cfg.Height), int64(jpegComponents(cfg.ColorModel))); err != nil {
+				refuseImage(d, &img, st, "DCTDecode", err)
+				break
+			}
+		}
 		if m, err := jpeg.Decode(bytes.NewReader(st.Data)); err == nil {
 			m = applyJPEGDecode(m, jpegDecodeArray(d, st))
-			img.Image, img.Decoded = applyImageMasks(d, st, m), true
+			masked, maskErr := applyImageMasks(d, st, m)
+			img.Image, img.Decoded = masked, true
+			noteMask(&img, maskErr)
 		} else {
 			img.Encoded, img.Note = st.Data, "JPEG decode failed: "+err.Error()
 		}
@@ -375,6 +411,10 @@ func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 			break
 		}
 		samples, err := ccitt.Decode(encoded, params)
+		if errors.Is(err, ccitt.ErrBudget) {
+			refuseImage(d, &img, st, "CCITTFaxDecode", d.Limits.ImageBudgetError("the fax data"))
+			break
+		}
 		if err != nil {
 			img.Encoded = st.Data
 			img.Note = "CCITTFaxDecode failed: " + err.Error()
@@ -388,7 +428,11 @@ func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 			img.Note = "JBIG2Decode preceding filter chain could not be reversed; the raw encoded bytes are provided"
 			break
 		}
-		samples, err := jbig2.Decode(globals, encoded, img.Width, img.Height)
+		samples, err := jbig2.Decode(globals, encoded, img.Width, img.Height, d.Limits.ImagePixelBound())
+		if errors.Is(err, jbig2.ErrBudget) {
+			refuseImage(d, &img, st, "JBIG2Decode", d.Limits.ImageBudgetError("the JBIG2 data"))
+			break
+		}
 		if err != nil {
 			img.Encoded = st.Data
 			img.Note = "JBIG2Decode not decoded (" + err.Error() + "); the raw encoded bytes are provided"
@@ -396,8 +440,15 @@ func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 		}
 		renderBilevelSamples(d, st, &img, samples, "unsupported JBIG2 sample layout")
 	case "JPXDecode":
-		if m := decodeJPX(st.Data, object.Int(d.Resolve(st.Dict.Get("SMaskInData")))); m != nil {
-			img.Image, img.Decoded = applyImageMasks(d, st, m), true
+		m, err := decodeJPX(d.Limits, st.Data, object.Int(d.Resolve(st.Dict.Get("SMaskInData"))))
+		if err != nil {
+			refuseImage(d, &img, st, "JPXDecode", err)
+			break
+		}
+		if m != nil {
+			masked, maskErr := applyImageMasks(d, st, m)
+			img.Image, img.Decoded = masked, true
+			noteMask(&img, maskErr)
 			break
 		}
 		img.Encoded = st.Data
@@ -406,10 +457,46 @@ func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 		// No filter, or a general-purpose filter chain (Flate/LZW/ASCIIHex — the
 		// only ones applyFilter reverses): reverse the chain to raw samples, which
 		// buildImage renders through the colour space, bit depth, /Decode and masks
-		// (image masks keep their own 1-bit stencil rendering).
+		// (image masks keep their own 1-bit stencil rendering). The geometry is
+		// held to the budget before the samples are decoded, so an image that
+		// will be refused costs no decode; buildImage checks again once it knows
+		// the component count.
+		if err := d.Limits.CheckImage(int64(img.Width), int64(img.Height), 1); err != nil {
+			refuseImage(d, &img, st, "image", err)
+			break
+		}
 		renderSamples(d, st, &img, decodeImageSamples(d.Cancel, st, d.Limits), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
 	}
 	return img
+}
+
+// refuseImage marks img as not decoded because a budget refused it: the encoded
+// bytes, a Note carrying the budget's own message (which names the guard and
+// whether the bound was the default or the caller's), and the trip on the run
+// for a caller that reads one.
+func refuseImage(d core.View, img *ExtractedImage, st *object.Stream, codec string, err error) {
+	d.Note(core.GuardImagePixels, err.Error(), img.ObjNum)
+	img.Encoded = st.Data
+	img.Note = codec + " not decoded: " + err.Error() + "; the raw encoded bytes are provided"
+}
+
+// noteMask records on a decoded image that a mask was left out of it, and why.
+func noteMask(img *ExtractedImage, maskErr error) {
+	if maskErr != nil {
+		img.Note = maskErr.Error()
+	}
+}
+
+// jpegComponents is the number of components a decoded JPEG of the given colour
+// model carries, for the sample budget.
+func jpegComponents(m color.Model) int {
+	switch m {
+	case color.GrayModel, color.Gray16Model:
+		return 1
+	case color.CMYKModel:
+		return 4
+	}
+	return 3
 }
 
 // decodeImageSamples reverses a sample stream's filter chain WITHOUT the run
@@ -431,16 +518,28 @@ func decodeImageSamples(cancel core.Canceler, st *object.Stream, lim core.Limits
 // everything else through buildImage, which also composites the stencil /Mask and
 // soft /SMask. It is used by the general-purpose branch.
 func renderSamples(d core.View, st *object.Stream, img *ExtractedImage, samples []byte, unsupportedNote string) {
-	var m image.Image
-	var ok bool
-	if img.ColorSpace == "ImageMask" {
-		m, ok = imageMaskToImage(d, st, samples, img.Width, img.Height)
-	} else {
-		m, ok = buildImage(d, st, samples, img.Width, img.Height, img.BitsPerComponent)
+	if err := d.Limits.CheckImage(int64(img.Width), int64(img.Height), 1); err != nil {
+		refuseImage(d, img, st, "image", err)
+		return
 	}
-	if ok {
-		img.Image, img.Decoded = m, true
+	var m image.Image
+	var maskErr, err error
+	if img.ColorSpace == "ImageMask" {
+		var ok bool
+		if m, ok = imageMaskToImage(d, st, samples, img.Width, img.Height); !ok {
+			err = errUnsupportedLayout
+		}
 	} else {
+		m, maskErr, err = buildImage(d, st, samples, img.Width, img.Height, img.BitsPerComponent)
+	}
+	var limit *core.LimitError
+	switch {
+	case err == nil:
+		img.Image, img.Decoded = m, true
+		noteMask(img, maskErr)
+	case errors.As(err, &limit):
+		refuseImage(d, img, st, "image", err)
+	default:
 		img.Encoded = samples
 		img.Note = unsupportedNote
 	}
@@ -458,8 +557,17 @@ func renderBilevelSamples(d core.View, st *object.Stream, img *ExtractedImage, s
 		renderSamples(d, st, img, samples, unsupportedNote)
 		return
 	}
+	// The codec's output was held to the budget in its own terms (columns ×
+	// rows, the JBIG2 page); what is allocated here is the dictionary's
+	// geometry, which is checked as such.
+	if err := d.Limits.CheckImage(int64(img.Width), int64(img.Height), 1); err != nil {
+		refuseImage(d, img, st, "image", err)
+		return
+	}
 	if m, ok := samplesToImage(samples, img.Width, img.Height, 1, "DeviceGray"); ok {
-		img.Image, img.Decoded = applyImageMasks(d, st, m), true
+		masked, maskErr := applyImageMasks(d, st, m)
+		img.Image, img.Decoded = masked, true
+		noteMask(img, maskErr)
 	} else {
 		img.Encoded = samples
 		img.Note = unsupportedNote
@@ -506,7 +614,7 @@ func ccittEncodedAndParams(d core.View, st *object.Stream, width, height int) (e
 	if columns <= 0 {
 		columns = width
 	}
-	return encoded, ccitt.NewParams(k, columns, rows, byteAlign), true
+	return encoded, ccitt.NewParams(k, columns, rows, byteAlign, d.Limits.ImagePixelBound()), true
 }
 
 // jbig2EncodedAndGlobals returns the JBIG2-encoded bytes for an image XObject

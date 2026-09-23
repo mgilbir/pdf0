@@ -284,6 +284,7 @@ one `Document` from several goroutines stays safe — the property package-level
 | `WithMaxTableGridFills` | 1<<24 | grid slots filled for one PDF/UA table |
 | `WithMaxPostScriptSteps` | 1<<20 | operators one type-4 function evaluation may run |
 | `WithMaxCmapWork` | 1<<18 | work spent expanding one TrueType cmap subtable of format 4 or 12 |
+| `WithMaxImagePixels` | 1<<26 | pixels in one image extraction decodes, for every codec (four samples per pixel beyond that) |
 
 Defaults are evidence-based where the evidence exists: the figures come from
 measuring the veraPDF corpus (2,907 files) and a 978-file Common Crawl sample.

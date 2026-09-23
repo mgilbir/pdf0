@@ -20,17 +20,18 @@ import (
 
 // applyImageMasks applies a stencil /Mask and/or a soft /SMask to a codec-
 // decoded image. It returns m unchanged when neither is present; otherwise it
-// returns a fresh *image.NRGBA with the alpha channel composited in.
-func applyImageMasks(d core.View, st *object.Stream, m image.Image) image.Image {
+// returns a fresh *image.NRGBA with the alpha channel composited in. The error
+// says why a soft mask was left out: its own geometry is over the image budget.
+func applyImageMasks(d core.View, st *object.Stream, m image.Image) (image.Image, error) {
 	if m == nil {
-		return m
+		return m, nil
 	}
 	_, hasSMask := d.Resolve(st.Dict.Get("SMask")).(*object.Stream)
 	stencil, hasStencil := d.Resolve(st.Dict.Get("Mask")).(*object.Stream)
 	if !hasSMask && !hasStencil {
 		// A colour-key /Mask (an object.Array) cannot be applied without the original
 		// samples, so an image carrying only that is left opaque.
-		return m
+		return m, nil
 	}
 
 	// Draw the codec image into a fresh NRGBA so the existing mask helpers,
@@ -43,8 +44,9 @@ func applyImageMasks(d core.View, st *object.Stream, m image.Image) image.Image 
 		_ = stencil
 		applyStencilMask(d, st, im)
 	}
+	var maskErr error
 	if hasSMask {
-		applySoftMask(d, st, im)
+		maskErr = applySoftMask(d, st, im)
 	}
-	return im
+	return im, maskErr
 }

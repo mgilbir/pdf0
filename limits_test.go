@@ -53,6 +53,7 @@ func TestEveryOptionAppliesAndIsIsolated(t *testing.T) {
 		{"TableGridFills", WithMaxTableGridFills(9012), func(l core.Limits) int64 { return l.TableGridFills }, 9012},
 		{"PostScriptSteps", WithMaxPostScriptSteps(1357), func(l core.Limits) int64 { return int64(l.PostScriptSteps) }, 1357},
 		{"CmapWork", WithMaxCmapWork(2468), func(l core.Limits) int64 { return int64(l.CmapWork) }, 2468},
+		{"ImagePixels", WithMaxImagePixels(3579), func(l core.Limits) int64 { return l.ImagePixels }, 3579},
 	}
 	def := core.DefaultLimits()
 	for _, tc := range cases {

@@ -30,7 +30,12 @@ func (d *jbig2Decoder) readPatternDict(seg jbSegment) error {
 	}
 	numPats := int(grayMax) + 1
 	pw, ph := int(hdpw), int(hdph)
+	// The collective bitmap, and then the same pixels again as the patterns it
+	// is sliced into.
 	if err := d.reserve(numPats*pw, ph); err != nil {
+		return err
+	}
+	if err := d.charge(int64(numPats) * int64(pw) * int64(ph)); err != nil {
 		return err
 	}
 
@@ -147,6 +152,14 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 	if bpp < 1 {
 		bpp = 1
 	}
+	// The grid decode is bpp bit-planes of gw×gh cells each — MQ-decoded
+	// whether or not coded data remains, since past-EOF bits cost nothing to
+	// supply — plus the skip plane. That work is independent of the region's
+	// size, which is all the reserve above charged (audit 2026-09-22 C55).
+	cells := int64(gw) * int64(gh)
+	if err := d.charge(cells * int64(bpp+1)); err != nil {
+		return err
+	}
 
 	region, err := newJBBitmap(ri.w, ri.h, defPixel)
 	if err != nil {
@@ -206,7 +219,9 @@ func (d *jbig2Decoder) readHalftoneRegion(seg jbSegment) error {
 			if idx >= len(patterns) {
 				idx = len(patterns) - 1
 			}
-			blitSymbol(region, patterns[idx], x, y, combOp)
+			if err := d.charge(blitSymbol(region, patterns[idx], x, y, combOp)); err != nil {
+				return err
+			}
 		}
 	}
 	if d.page == nil {

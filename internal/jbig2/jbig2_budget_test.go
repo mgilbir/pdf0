@@ -8,7 +8,7 @@ import (
 )
 
 // TestNewJBBitmapBudget pins the single-allocation choke point: a normal bitmap
-// allocates, an over-budget one returns errJBIG2Budget rather than attempting a
+// allocates, an over-budget one returns ErrBudget rather than attempting a
 // multi-gigabyte make (audit C2).
 //
 // It used to panic and be recovered at the Decode boundary. The bound is the
@@ -23,8 +23,8 @@ func TestNewJBBitmapBudget(t *testing.T) {
 
 		// 2^28 pixels > maxJBIG2Pixels (2^26).
 		over, err := newJBBitmap(1<<14, 1<<14, 0)
-		if !errors.Is(err, errJBIG2Budget) {
-			t.Fatalf("over-budget newJBBitmap: err = %v, want errJBIG2Budget", err)
+		if !errors.Is(err, ErrBudget) {
+			t.Fatalf("over-budget newJBBitmap: err = %v, want ErrBudget", err)
 		}
 		if over != nil {
 			t.Error("a refused allocation came back with a bitmap beside the error")
@@ -32,8 +32,8 @@ func TestNewJBBitmapBudget(t *testing.T) {
 
 		// A negative dimension is refused the same way rather than panicking in
 		// make.
-		if _, err := newJBBitmap(-1, 10, 0); !errors.Is(err, errJBIG2Budget) {
-			t.Errorf("a negative width gave %v, want errJBIG2Budget", err)
+		if _, err := newJBBitmap(-1, 10, 0); !errors.Is(err, ErrBudget) {
+			t.Errorf("a negative width gave %v, want ErrBudget", err)
 		}
 	})
 }
@@ -75,8 +75,8 @@ func TestNothingInTheDecoderPanics(t *testing.T) {
 					}
 				}()
 				// The result does not matter; not panicking does.
-				_, _ = Decode(nil, tc.data, 8, 8)
-				_, _ = Decode(tc.data, tc.data, 1<<10, 1<<10)
+				_, _ = Decode(nil, tc.data, 8, 8, testBudget)
+				_, _ = Decode(tc.data, tc.data, 1<<10, 1<<10, testBudget)
 			})
 		}
 	})
@@ -87,14 +87,14 @@ func TestNothingInTheDecoderPanics(t *testing.T) {
 func TestReserveBoundsAggregate(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
 		// A single area over the per-bitmap cap is refused.
-		d := &jbig2Decoder{}
+		d := newDecoder(8, 8, testBudget)
 		if err := d.reserve(1<<14, 1<<13); err == nil { // 2^27 > 2^26
 			t.Fatal("reserve accepted a single over-cap area")
 		}
 
 		// Small areas accumulate until the stream total (2^28) is exceeded. Each is
 		// 2^25 pixels, so exactly maxJBIG2TotalPixels/2^25 fit before rejection.
-		d = &jbig2Decoder{}
+		d = newDecoder(8, 8, testBudget)
 		want := maxJBIG2TotalPixels / (1 << 25)
 		ok := 0
 		for i := 0; i < want+50; i++ {
@@ -127,7 +127,7 @@ func TestDecodeJBIG2RejectsHugeRegion(t *testing.T) {
 			0x00, // external combination op flags
 			0x00, // generic region flags (arithmetic, template 0)
 		}
-		if _, err := Decode(nil, seg, 8, 8); err == nil {
+		if _, err := Decode(nil, seg, 8, 8, testBudget); err == nil {
 			t.Fatal("Decode accepted a generic region declaring a 2^40-pixel bitmap")
 		}
 	})

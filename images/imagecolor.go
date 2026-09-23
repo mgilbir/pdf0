@@ -1,6 +1,8 @@
 package images
 
 import (
+	"errors"
+	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"image"
@@ -44,30 +46,42 @@ func (cs *imgColorSpace) toRGB16Comps(c []float64) (r, g, b uint16) {
 	return uint16(r8) * 257, uint16(g8) * 257, uint16(b8) * 257
 }
 
+// errUnsupportedLayout is buildImage declining a sample layout it cannot
+// render: a colour space it does not know, a bit depth it does not read, data
+// shorter than the geometry. The caller reports it with a codec-specific Note.
+var errUnsupportedLayout = errors.New("unsupported sample layout")
+
 // buildImage converts an image XObject's decoded samples to an image, applying
-// the colour space, bit depth, /Decode array and soft mask. ok is false for a
-// layout it cannot render.
-func buildImage(d core.View, st *object.Stream, raw []byte, w, h, bpc int) (image.Image, bool) {
+// the colour space, bit depth, /Decode array and soft mask. The error is
+// errUnsupportedLayout for a layout it cannot render, or a *core.LimitError for
+// geometry over the image budget.
+// maskErr, when not nil, says why a mask was left out of an image that was
+// otherwise built.
+func buildImage(d core.View, st *object.Stream, raw []byte, w, h, bpc int) (m image.Image, maskErr, err error) {
 	if w <= 0 || h <= 0 || bpc <= 0 {
-		return nil, false
+		return nil, nil, errUnsupportedLayout
 	}
 	cs, ok := resolveColorSpace(d, st.Dict.Get("ColorSpace"))
 	if !ok {
-		return nil, false
+		return nil, nil, errUnsupportedLayout
+	}
+	if err := d.Limits.CheckImage(int64(w), int64(h), int64(cs.ncomp)); err != nil {
+		return nil, nil, err
 	}
 	decode := imageDecode(d, st, cs, bpc)
 	maxval := float64(int(1)<<uint(bpc) - 1)
 	if maxval <= 0 {
-		return nil, false
+		return nil, nil, errUnsupportedLayout
 	}
 	if !sampleDataFits(raw, w, h, cs.ncomp, bpc) {
-		return nil, false
+		return nil, nil, errUnsupportedLayout
 	}
 
 	colorKey := colorKeyMask(d, st, cs.ncomp) // range array making matching samples transparent
 
 	if bpc == 16 {
-		return buildImage16(d, st, raw, w, h, cs, decode, maxval, colorKey)
+		m, maskErr := buildImage16(d, st, raw, w, h, cs, decode, maxval, colorKey)
+		return m, maskErr, nil
 	}
 
 	im := image.NewNRGBA(image.Rect(0, 0, w, h))
@@ -99,15 +113,14 @@ func buildImage(d core.View, st *object.Stream, raw []byte, w, h, bpc int) (imag
 		}
 	}
 	applyStencilMask(d, st, im)
-	applySoftMask(d, st, im)
-	return im, true
+	return im, applySoftMask(d, st, im), nil
 }
 
 // buildImage16 renders a 16-bit-per-component image to an *image.NRGBA64,
 // preserving the full sample precision that an 8-bit *image.NRGBA would discard.
 // It mirrors the 8-bit path but keeps colour arithmetic in floats down to a
 // 16-bit clamp so a DeviceGray sample of 0xFFFF yields R=0xFFFF, 0x8000 ~ 0x8000.
-func buildImage16(d core.View, st *object.Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, bool) {
+func buildImage16(d core.View, st *object.Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, error) {
 	im := image.NewNRGBA64(image.Rect(0, 0, w, h))
 	sr := sampleReader{data: raw, bpc: 16, w: w, ncomp: cs.ncomp}
 	comps := make([]float64, cs.ncomp)
@@ -135,8 +148,7 @@ func buildImage16(d core.View, st *object.Stream, raw []byte, w, h int, cs *imgC
 		}
 	}
 	applyStencilMask64(d, st, im)
-	applySoftMask64(d, st, im)
-	return im, true
+	return im, applySoftMask64(d, st, im)
 }
 
 // colorKeyMask returns the /Mask colour-key range array [min1 max1 …] when
@@ -600,15 +612,18 @@ func imageDecode(d core.View, st *object.Stream, cs *imgColorSpace, bpc int) []f
 }
 
 // applySoftMask composites a /SMask (a DeviceGray image giving per-pixel alpha)
-// onto im, nearest-neighbour scaling the mask to the image's dimensions.
-func applySoftMask(d core.View, st *object.Stream, im *image.NRGBA) {
+// onto im, nearest-neighbour scaling the mask to the image's dimensions. It
+// returns the budget error when the mask's own geometry was refused, so the
+// caller can say why the image carries no mask; a mask that is absent or does
+// not decode is left out silently, as it always was.
+func applySoftMask(d core.View, st *object.Stream, im *image.NRGBA) error {
 	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*object.Stream)
 	if !ok {
-		return
+		return nil
 	}
-	alpha, mw, mh, ok := decodeAlphaMask(d, sm)
-	if !ok || mw <= 0 || mh <= 0 {
-		return
+	alpha, mw, mh, err := decodeAlphaMask(d, sm)
+	if err != nil || alpha == nil {
+		return err
 	}
 	w, h := im.Rect.Dx(), im.Rect.Dy()
 	for y := 0; y < h; y++ {
@@ -619,18 +634,19 @@ func applySoftMask(d core.View, st *object.Stream, im *image.NRGBA) {
 			im.Pix[o+3] = alpha[my*mw+mx]
 		}
 	}
+	return nil
 }
 
 // applySoftMask64 is the *image.NRGBA64 counterpart of applySoftMask. The mask
 // carries one alpha byte per pixel, promoted to 16 bits (byte*257).
-func applySoftMask64(d core.View, st *object.Stream, im *image.NRGBA64) {
+func applySoftMask64(d core.View, st *object.Stream, im *image.NRGBA64) error {
 	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*object.Stream)
 	if !ok {
-		return
+		return nil
 	}
-	alpha, mw, mh, ok := decodeAlphaMask(d, sm)
-	if !ok || mw <= 0 || mh <= 0 {
-		return
+	alpha, mw, mh, err := decodeAlphaMask(d, sm)
+	if err != nil || alpha == nil {
+		return err
 	}
 	w, h := im.Rect.Dx(), im.Rect.Dy()
 	for y := 0; y < h; y++ {
@@ -642,15 +658,24 @@ func applySoftMask64(d core.View, st *object.Stream, im *image.NRGBA64) {
 			im.Pix[o+6], im.Pix[o+7] = uint8(a>>8), uint8(a) // 16-bit alpha, big-endian
 		}
 	}
+	return nil
 }
 
-// decodeAlphaMask decodes a soft-mask image XObject to one alpha byte per pixel.
-func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, ok bool) {
+// decodeAlphaMask decodes a soft-mask image XObject to one alpha byte per
+// pixel. A nil alpha with a nil error is a mask that is absent, malformed or in
+// a codec this path does not read; a *core.LimitError is one whose geometry is
+// over the image budget. The mask's dimensions are its own, independent of the
+// image it masks, so they are held to the budget separately.
+func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, err error) {
 	w = object.Int(d.Resolve(sm.Dict.Get("Width")))
 	h = object.Int(d.Resolve(sm.Dict.Get("Height")))
 	bpc := object.Int(d.Resolve(sm.Dict.Get("BitsPerComponent")))
 	if w <= 0 || h <= 0 || bpc <= 0 {
-		return nil, 0, 0, false
+		return nil, 0, 0, nil
+	}
+	if err := d.Limits.CheckImage(int64(w), int64(h), 1); err != nil {
+		d.Note(core.GuardImagePixels, err.Error(), 0)
+		return nil, 0, 0, fmt.Errorf("the /SMask was not applied: %w", err)
 	}
 	filters := d.StreamFilters(sm)
 	last := ""
@@ -658,11 +683,11 @@ func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, ok
 		last = string(filters[len(filters)-1])
 	}
 	if last == "DCTDecode" || last == "JPXDecode" {
-		return nil, 0, 0, false // decoded elsewhere; rare for a mask
+		return nil, 0, 0, nil // decoded elsewhere; rare for a mask
 	}
 	raw := decodeImageSamples(d.Cancel, sm, d.Limits)
 	if !sampleDataFits(raw, w, h, 1, bpc) {
-		return nil, 0, 0, false
+		return nil, 0, 0, nil
 	}
 	dec := []float64{0, 1}
 	if arr, ok := d.Resolve(sm.Dict.Get("Decode")).(object.Array); ok && len(arr) == 2 {
@@ -678,5 +703,5 @@ func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, ok
 			alpha[y*w+x] = clamp8(v)
 		}
 	}
-	return alpha, w, h, true
+	return alpha, w, h, nil
 }

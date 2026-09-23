@@ -21,8 +21,6 @@ import (
 
 // Default values for every configurable limit. These are the values in force
 // when a caller passes no options.
-// Default values for every configurable limit. These are the values in force
-// when a caller passes no options.
 const (
 	DefaultMaxDecodedStreamBytes  = 100 << 20 // 100 MB
 	DefaultMaxDecodedContentBytes = 512 << 20 // 512 MB
@@ -70,6 +68,7 @@ type Limits struct {
 	TableGridFills      int64
 	PostScriptSteps     int
 	CmapWork            int
+	ImagePixels         int64
 }
 
 // DefaultLimits is the configuration a caller who passes no options gets.
@@ -112,6 +111,9 @@ func (l Limits) WithDefaults() Limits {
 	}
 	if l.CmapWork == 0 {
 		l.CmapWork = DefaultMaxCmapWork
+	}
+	if l.ImagePixels == 0 {
+		l.ImagePixels = DefaultMaxImagePixels
 	}
 	return l
 }

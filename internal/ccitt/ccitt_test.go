@@ -20,7 +20,7 @@ const ccittRowBBBBWWWW = 0x0F
 //
 // = 001 00110101 011 1, byte-padded to {0x26, 0xAE}.
 func TestCCITTGroup4Row(t *testing.T) {
-	got, err := Decode([]byte{0x26, 0xAE}, NewParams(-1, 8, 1, false))
+	got, err := Decode([]byte{0x26, 0xAE}, NewParams(-1, 8, 1, false, testBudget))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestCCITTGroup4Row(t *testing.T) {
 // Row 1 = 001 00110101 011 1 (as above); row 2 = 1 1 1 (three V0). Concatenated
 // and byte-padded: {0x26, 0xAF, 0xC0}.
 func TestCCITTGroup4TwoRows(t *testing.T) {
-	got, err := Decode([]byte{0x26, 0xAF, 0xC0}, NewParams(-1, 8, 2, false))
+	got, err := Decode([]byte{0x26, 0xAF, 0xC0}, NewParams(-1, 8, 2, false, testBudget))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestCCITTGroup4TwoRows(t *testing.T) {
 //
 // = 00110101 011 1011, byte-padded to {0x35, 0x76}.
 func TestCCITTGroup3OneD(t *testing.T) {
-	got, err := Decode([]byte{0x35, 0x76}, NewParams(0, 8, 1, false))
+	got, err := Decode([]byte{0x35, 0x76}, NewParams(0, 8, 1, false, testBudget))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestCCITTGroup3OneD(t *testing.T) {
 func TestCCITTWideMakeup(t *testing.T) {
 	bits := "00110101" + "000011001000" + "0000110111"
 	data := bitsToBytes(bits)
-	got, err := Decode(data, NewParams(0, 128, 1, false))
+	got, err := Decode(data, NewParams(0, 128, 1, false, testBudget))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestCCITTWideMakeup(t *testing.T) {
 func TestCCITTMalformed(t *testing.T) {
 	// A lone 0 bit run is not a complete code; decoding a full row from it must
 	// fail cleanly.
-	if _, err := Decode([]byte{0x00}, NewParams(-1, 1728, 1, false)); err == nil {
+	if _, err := Decode([]byte{0x00}, NewParams(-1, 1728, 1, false, testBudget)); err == nil {
 		t.Fatal("expected an error on truncated data")
 	}
 }

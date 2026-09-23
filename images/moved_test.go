@@ -69,7 +69,10 @@ func TestApplyImageMasks(t *testing.T) {
 	sm := imageXObject(2, 1, 8, "DeviceGray", "", []byte{0, 128})
 	st.Dict.Set("SMask", sm)
 
-	out := applyImageMasks(core.View{Limits: core.DefaultLimits()}, st, src)
+	out, maskErr := applyImageMasks(core.View{Limits: core.DefaultLimits()}, st, src)
+	if maskErr != nil {
+		t.Fatalf("applyImageMasks: %v", maskErr)
+	}
 	nrgba, ok := out.(*image.NRGBA)
 	if !ok {
 		t.Fatalf("expected *image.NRGBA, got %T", out)
@@ -85,7 +88,7 @@ func TestApplyImageMasks(t *testing.T) {
 
 	// With no mask keys, the image is returned unchanged.
 	plain := imageXObject(2, 1, 8, "DeviceRGB", "DCTDecode", nil)
-	if got := applyImageMasks(core.View{Limits: core.DefaultLimits()}, plain, src); got != image.Image(src) {
+	if got, _ := applyImageMasks(core.View{Limits: core.DefaultLimits()}, plain, src); got != image.Image(src) {
 		t.Errorf("no-mask image should be returned unchanged")
 	}
 }

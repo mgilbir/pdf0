@@ -284,6 +284,7 @@ const (
 	GuardEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own; the recursive embedded check
 	GuardObjStmTotal   = "objstm-decompressed-total" // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes
 	GuardDecodedStream = "decoded-stream-size"       // Limits.DecodedStreamBytes, WithMaxDecodedStreamBytes
+	GuardImagePixels   = "image-pixels"              // Limits.ImagePixels, WithMaxImagePixels
 
 	// GuardUnsupportedFilter is not a resource guard: a stream the check
 	// needed is encoded with a filter pdf0 does not implement. It is reported

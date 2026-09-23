@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/gopenjpeg"
+	"github.com/mgilbir/pdf0/internal/core"
 )
 
 // jpxComp builds a w×h test component whose samples are all v.
@@ -35,7 +36,7 @@ func TestJPXTwoComponentImage(t *testing.T) {
 	}
 
 	// SMaskInData 0: the extra channel is ignored; grey only.
-	got := jpxComponentsToImage(build(), 0)
+	got := jpxComponentsToImage(core.DefaultLimits(), build(), 0)
 	g, ok := got.(*image.Gray)
 	if !ok {
 		t.Fatalf("SMaskInData 0: got %T, want *image.Gray (opacity ignored)", got)
@@ -45,7 +46,7 @@ func TestJPXTwoComponentImage(t *testing.T) {
 	}
 
 	// SMaskInData 1: the extra channel is the soft mask; grey + alpha.
-	got = jpxComponentsToImage(build(), 1)
+	got = jpxComponentsToImage(core.DefaultLimits(), build(), 1)
 	n, ok := got.(*image.NRGBA)
 	if !ok {
 		t.Fatalf("SMaskInData 1: got %T, want *image.NRGBA", got)
@@ -55,7 +56,7 @@ func TestJPXTwoComponentImage(t *testing.T) {
 	}
 
 	// SMaskInData 2: colour premultiplied with opacity — Go's RGBA type.
-	got = jpxComponentsToImage(build(), 2)
+	got = jpxComponentsToImage(core.DefaultLimits(), build(), 2)
 	p, ok := got.(*image.RGBA)
 	if !ok {
 		t.Fatalf("SMaskInData 2: got %T, want *image.RGBA (premultiplied)", got)
@@ -73,7 +74,7 @@ func TestJPXCdefFlaggedAlpha(t *testing.T) {
 		jpxComp(2, 2, 77, 1), // flagged opacity, deliberately first
 		jpxComp(2, 2, 200, 0),
 	})
-	got := jpxComponentsToImage(img, 1)
+	got := jpxComponentsToImage(core.DefaultLimits(), img, 1)
 	n, ok := got.(*image.NRGBA)
 	if !ok {
 		t.Fatalf("got %T, want *image.NRGBA", got)
@@ -98,7 +99,7 @@ func TestJPXShortComponentData(t *testing.T) {
 	} {
 		for _, smid := range []int{0, 1, 2} {
 			img := gopenjpeg.NewImage(gopenjpeg.ColorSpaceUnknown, 0, 0, 4, 4, comps)
-			_ = jpxComponentsToImage(img, smid) // must not panic
+			_ = jpxComponentsToImage(core.DefaultLimits(), img, smid) // must not panic
 		}
 	}
 }

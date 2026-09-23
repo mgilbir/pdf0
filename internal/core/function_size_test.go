@@ -18,10 +18,17 @@ func TestType0HostileSize(t *testing.T) {
 		{object.Real(1e300), object.Real(1e300)},
 		{object.Real(1e300), object.Integer(2)},
 		{object.Integer(1 << 40), object.Integer(1 << 40)},
+		// Audit 2026-09-22 C15: one dimension, no overflow in the product, and
+		// a sample offset that used to go negative.
+		{object.Integer(1 << 62)},
 	} {
 		st := &object.Stream{Data: make([]byte, 64)}
 		st.Dict.Set("FunctionType", object.Integer(0))
-		st.Dict.Set("Domain", object.Array{object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1)})
+		domain := object.Array{}
+		for range size {
+			domain = append(domain, object.Integer(0), object.Integer(1))
+		}
+		st.Dict.Set("Domain", domain)
 		st.Dict.Set("Range", object.Array{object.Integer(0), object.Integer(1)})
 		st.Dict.Set("Size", size)
 		st.Dict.Set("BitsPerSample", object.Integer(8))
@@ -33,7 +40,11 @@ func TestType0HostileSize(t *testing.T) {
 					t.Errorf("/Size %v: panic %v", size, r)
 				}
 			}()
-			out, ok = View{Limits: DefaultLimits()}.EvalFunction(st, []float64{0.7, 0.3})
+			in := make([]float64, len(size))
+			for i := range in {
+				in[i] = 0.7
+			}
+			out, ok = View{Limits: DefaultLimits()}.EvalFunction(st, in)
 		}()
 		if ok {
 			t.Errorf("/Size %v: evaluated to %v; want the function refused", size, out)

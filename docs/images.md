@@ -183,19 +183,44 @@ None of them reports a `limit` finding, and that is a consequence of the API
 rather than an omission: extraction returns no findings, so a trip surfaces per
 image in `ExtractedImage.Note` and `Decoded=false`. It is also why no validator
 is affected — no PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a decoded
-pixel. [limits.md](limits.md) classifies these guards on that axis, and records
-why the JBIG2 trio was left un-configurable while the type-4 budget was not.
+pixel. [limits.md](limits.md) classifies these guards on that axis.
 
+- **The image pixel budget** (`WithMaxImagePixels`, default 2^26 — the same
+  bound `images.MaxPixels` puts on an image a caller embeds). One budget, held
+  by `core.Limits.CheckImage` before every allocation sized from an image's
+  geometry, whatever the codec and wherever the geometry came from: the image
+  dictionary on the raw/Flate/LZW path (checked before the samples are even
+  decoded, and again with the component count once the colour space is known),
+  the JPEG frame header (`jpeg.DecodeConfig`, before `image/jpeg` allocates the
+  frame), the JPEG 2000 SIZ header (`gopenjpeg.ReadInfo`, before the codec
+  allocates a component plane), a soft mask's own dictionary, and the fax and
+  JBIG2 decoders, which take the budget as a parameter. An image with more than
+  four components is also held to four samples per pixel. Every product is
+  formed by `internal/checked.Mul`, so a `/Width` of 2^60 is refused rather than
+  wrapped (audit 2026-09-22 C11). An image the budget refuses has
+  `Decoded=false`, its encoded bytes, and a `Note` that names the
+  `image-pixels` guard and says whether the bound was the default or the
+  caller's; a soft mask it refuses leaves the image decoded and unmasked, and
+  the `Note` says so.
+- **CCITT output** (`internal/ccitt`). A Group 4 V0 code is one bit and repeats
+  the reference row, so one byte of data can be eight full rows. The decoder is
+  given the pixel budget and holds `/Columns` × rows to it: before decoding when
+  `/Rows` is known, and at the first row past it when it is not — an error, not
+  a truncated image (audit 2026-09-22 C12). Widths over 2^20 are refused
+  outright.
 - **JBIG2 pixel budgets** (`internal/jbig2/jbig2.go`). Segment headers declare bitmap
   dimensions independently of how much coded data follows, and the MQ decoder
   keeps yielding bits past end-of-input, so a truncated stream does not stop a
-  decode loop early. `maxJBIG2Pixels` (2^26) bounds any single bitmap;
-  `newJBBitmap` is the single allocation choke point and panics with the
-  `errJBIG2Budget` sentinel, recovered at the `decodeJBIG2` boundary so no
-  allocation site can be missed while genuine bugs still propagate.
-  `maxJBIG2TotalPixels` (2^28) bounds the *sum* of all bitmap areas in one
-  stream, via `reserve`, so many individually-legal retained segments cannot add
-  up to an exhaustion. `maxJBIG2GrayCells` (2^20) separately bounds a halftone
+  decode loop early. The caller's pixel budget bounds any single bitmap (never
+  above `maxJBIG2Pixels`, 2^26); `newJBBitmap` is the single allocation choke
+  point and returns `ErrBudget`. The stream's total pixel *work* is bounded at
+  four times the budget (never above `maxJBIG2TotalPixels`, 2^28), charged
+  through `reserve` and `charge`: every bitmap decoded, every halftone grid —
+  its bit-planes are MQ-decoded whatever the region's size (audit 2026-09-22
+  C55) — every refined symbol instance, and every symbol or pattern stamped onto
+  a region, counted by the pixels the stamp actually touches. Many
+  individually-legal segments therefore cannot add up to an exhaustion of
+  either memory or time. `maxJBIG2GrayCells` (2^20) separately bounds a halftone
   grid, amplified by the bitplane count plus an int per cell. Segment-level caps
   back these up: regions ≤ 2^20 per side, symbols ≤ 2^16, ≤ 2^24 text instances,
   ≤ 2^20 referred segments.
@@ -212,11 +237,9 @@ why the JBIG2 trio was left un-configurable while the type-4 budget was not.
   64 MB, and deliberately bypasses the shared content cache: image samples are
   used once, and caching them would starve the cache of the small shared
   streams (palettes, tint functions) it exists for.
-- **CCITT and traversal bounds.** Widths over 2^20 are refused before
-  allocating; a stream with no `/Rows` decodes at most 2^20 rows; code matching
-  stops at 24 bits. Form-XObject recursion is capped at depth 16, and a `seen`
-  set of object numbers stops shared or self-referential XObjects from being
-  revisited.
+- **Traversal bounds.** CCITT code matching stops at 24 bits. Form-XObject
+  recursion is capped at depth 16, and a `seen` set of object numbers stops
+  shared or self-referential XObjects from being revisited.
 
 ## Confirmed limitations
 
