@@ -96,11 +96,17 @@ jobs:
           head -c 8 html.pdf | grep -q '%PDF-'
           rm html.pdf
 
-  # The conformance ratchets: corpus FP=0/missed=0, Isartor, Level A, the
-  # whole-corpus parse sweep, the Arlington structural oracle and the Factur-X
-  # container oracle. Every one is a measurement of specific documents, and none
-  # of them ran in CI before — a change that moved falsePositives off zero went
-  # green, because the tests self-skip when their data is absent.
+  # The oracles: corpus FP=0/missed=0, Isartor, Level A, the whole-corpus parse
+  # sweep, the Arlington structural oracle, the Factur-X container oracle, the
+  # per-rule coverage ratchet (profiles), the WTPDF round trips, the CCITT and
+  # JBIG2 decode oracles and CID-keyed CFF embedding (notocjk). Every one is a
+  # measurement of specific documents, and a test whose data is absent skips —
+  # so a data set with a make target that is not fetched here is a check CI
+  # never makes. TestCIRunsEveryFetchableOracle fails if one is left out.
+  #
+  # The hand-placed sets (Cal Poly, the PDF/UA reference files, the Order-X
+  # examples, the ISO PDFs) are not redistributable and cannot be fetched; their
+  # tests run only on a machine that has them (docs/testing.md#ci).
   #
   # It is a separate job so a cache miss cannot delay the fast signal above.
   corpus:
@@ -113,9 +119,12 @@ jobs:
           go-version: '1.26.x'
 
       # Keyed on the pinned revisions in the Makefile and on the download
-      # manifest, so the key changes only when the corpus is meant to. A hit
-      # makes no request to any upstream host at all; a miss costs one shallow
-      # fetch of one commit per repository.
+      # manifests and scripts, so the key changes only when the data is meant
+      # to. A hit makes no request to any upstream host at all; a miss costs one
+      # shallow fetch of one commit per repository and one download per file.
+      # Where a directory also holds committed files (a manifest and its
+      # downloader), only the fetched files are cached, so that a restore can
+      # never put an old copy of a committed file over the checked-out one.
       - name: restore corpora
         id: corpora
         uses: actions/cache@v4
@@ -124,12 +133,21 @@ jobs:
             testdata/verapdf-corpus
             testdata/arlington-pdf-model
             testdata/pdf20examples
-            testdata/facturx
-          key: corpora-${{ hashFiles('Makefile', 'testdata/facturx/sources.tsv') }}
+            spec/verapdf-profiles
+            testdata/notocjk
+            testdata/facturx/*.pdf
+            testdata/facturx/.ok
+            testdata/wtpdf/*.pdf
+            testdata/wtpdf/.ok
+            testdata/ccitt/*.pdf
+            testdata/ccitt/.ok
+            testdata/jbig2/*.pdf
+            testdata/jbig2/.ok
+          key: corpora-${{ hashFiles('Makefile', 'testdata/*/sources.tsv', 'testdata/*/download.sh') }}
 
       - name: fetch corpora
         if: steps.corpora.outputs.cache-hit != 'true'
-        run: make corpus arlington refpdfs facturx
+        run: make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk
 
       # A half-finished fetch must be red, not green. The corpus-gated tests skip
       # when their directory is empty, and a skip reads as a pass: this repository
@@ -159,6 +177,16 @@ jobs:
           # rather than a fixed number keeps the two from drifting apart.
           want=$(grep -cvE '^[[:space:]]*(#|$)' testdata/facturx/sources.tsv)
           check testdata/facturx                 '*.pdf' "$want"
+          # The sets fetched from a manifest are exactly their manifest, too.
+          want=$(grep -cvE '^[[:space:]]*(#|$)' testdata/wtpdf/sources.tsv)
+          check testdata/wtpdf                   '*.pdf' "$want"
+          want=$(grep -cvE '^[[:space:]]*(#|$)' testdata/ccitt/sources.tsv)
+          check testdata/ccitt                   '*.pdf' "$want"
+          want=$(grep -cvE '^[[:space:]]*(#|$)' testdata/jbig2/sources.tsv)
+          check testdata/jbig2                   '*.pdf' "$want"
+          # 732 profile documents at the pinned revision, PDF/UA's included.
+          check spec/verapdf-profiles            '*.xml'  700
+          check testdata/notocjk                 '*.otf'    1
 
       - name: conformance ratchets
         env:
@@ -168,8 +196,10 @@ jobs:
   # The parser eats bytes nobody designed, and three fuzz targets existed that
   # nothing ever fuzzed: under a plain `go test` a target replays its seed
   # corpus and stops, which is a unit test wearing a fuzzer's name. This runs
-  # them. Short, because the point is to catch a regression that panics on the
-  # next commit rather than to search the space — a long hunt is `make fuzz`.
+  # every one (the Makefile lists them; TestFuzzTargetsAllRun fails if a target
+  # is missing from the list). Short, because the point is to catch a
+  # regression that panics on the next commit rather than to search the space
+  # — a long hunt is `make fuzz` with its default FUZZTIME.
   fuzz:
     runs-on: ubuntu-latest
     steps:
@@ -177,7 +207,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.26.x'
           cache: true
 
       # The corpus Go generates lives in the build cache, so carrying it between
@@ -192,13 +222,7 @@ jobs:
           restore-keys: fuzz-
 
       - name: fuzz
-        run: |
-          set -o pipefail
-          for target in FuzzRead FuzzRoundTrip FuzzWriteSurface; do
-            echo "::group::$target"
-            go test . -run '^$' -fuzz "^${target}\$" -fuzztime=60s
-            echo "::endgroup::"
-          done
+        run: make fuzz FUZZTIME=60s
 
       # A failing input is written to testdata/fuzz/<Target>/ and is the whole
       # value of the run: it is a regression test that reproduces the crash.

@@ -1,2 +1,2 @@
-https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/ccitt_EndOfBlock_false.pdf	pdfjs_ccitt_eob_false.pdf
-https://raw.githubusercontent.com/akretion/PyPDF4/master/tests/fixture_data/testDecodeStreamData/CCITTFaxDecode.pdf	pypdf4_ccitt_g4.pdf
+https://raw.githubusercontent.com/mozilla/pdf.js/b9d5e4f96c255a35ff3b142b26f6657e17258476/test/pdfs/ccitt_EndOfBlock_false.pdf	pdfjs_ccitt_eob_false.pdf
+https://raw.githubusercontent.com/akretion/PyPDF4/fc6cf15c736332248783158241206946eff94899/tests/fixture_data/testDecodeStreamData/CCITTFaxDecode.pdf	pypdf4_ccitt_g4.pdf

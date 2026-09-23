@@ -1,4 +1,4 @@
-.PHONY: test cc-sweep cc-sweep-limited check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk
+.PHONY: test fuzz cc-sweep cc-sweep-limited check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -28,7 +28,14 @@ PROFILES_DIR := spec/verapdf-profiles
 VERAPDF_CORPUS_REF ?= 49de56cd987929932c9e4fbbbe67d052bf44ef83
 ARLINGTON_REF      ?= 3a7cde314d083e4c6d78d6782334b7409d3889f7
 REFPDF_REF         ?= c20f2c17bfcc4baab7cfe62e70fae64caf14d5fa
-CSS_TESTS_REF      ?= 203ce36bffd617db7f118c551e32794561fb273d
+# The profiles as they were when TestRuleCoverage's baselines were measured
+# (2026-07-08): this commit's tree is byte-identical to that checkout.
+PROFILES_REF       ?= c4b3ab5164e4f0ae9bb235f8154db587e0ea483e
+# noto-cjk is a 1 GB repository of which one 4.5 MB file is wanted, so it is
+# fetched by URL at a fixed commit rather than cloned, and its digest checked:
+# a font that changed would move every CID the embedding tests assert.
+NOTOCJK_REF        ?= f8d157532fbfaeda587e826d4cd5b21a49186f7c
+NOTOCJK_SHA256     := dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073
 
 # shallow_at fetches exactly one commit of one repository: no history, no other
 # branches. $(1) directory, $(2) URL, $(3) commit.
@@ -42,6 +49,20 @@ endef
 
 test:
 	go test ./...
+
+# Fuzz each target in turn (Go fuzzes one target per invocation). CI runs this
+# with FUZZTIME=60s to catch a regression that panics on the next commit; a
+# local hunt runs longer, and under a memory cap like any hostile-input run
+# (docs/testing.md#fuzzing). TestFuzzTargetsAllRun fails if a fuzz target
+# exists that this list leaves out.
+FUZZ_TARGETS := FuzzRead FuzzRoundTrip FuzzWriteSurface
+FUZZTIME ?= 10m
+
+fuzz:
+	set -e; for t in $(FUZZ_TARGETS); do \
+		echo "== $$t"; \
+		go test . -run '^$$' -fuzz "^$$t\$$" -fuzztime=$(FUZZTIME); \
+	done
 
 # Both documentation checks.
 check-docs: check-links check-mermaid
@@ -79,7 +100,7 @@ test-corpus: corpus
 profiles: $(PROFILES_DIR)/.ok
 
 $(PROFILES_DIR)/.ok:
-	git clone --depth 1 https://github.com/veraPDF/veraPDF-validation-profiles $(PROFILES_DIR)
+	$(call shallow_at,$(PROFILES_DIR),https://github.com/veraPDF/veraPDF-validation-profiles,$(PROFILES_REF))
 	touch $@
 
 # Report, rule by rule, which veraPDF PDF/A rules this validator detects in the
@@ -238,7 +259,8 @@ notocjk: $(CJK_DIR)/.ok
 $(CJK_DIR)/.ok:
 	mkdir -p $(CJK_DIR)
 	curl -sSfL -o $(CJK_DIR)/NotoSansJP-Regular.otf \
-		https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf
+		https://github.com/notofonts/noto-cjk/raw/$(NOTOCJK_REF)/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf
+	echo "$(NOTOCJK_SHA256)  $(CJK_DIR)/NotoSansJP-Regular.otf" | sha256sum -c -
 	touch $@
 
 clean-notocjk:

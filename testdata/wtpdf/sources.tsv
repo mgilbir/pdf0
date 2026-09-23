@@ -6,22 +6,27 @@
 # Licences vary (CC-BY for the arXiv papers, public domain for the historical
 # texts); see the discussion. Hosted on Google Drive; downloaded via download.sh.
 #
-# Format: <google-drive-file-id><TAB><output-filename>
+# Format: <google-drive-file-id><TAB><output-filename><TAB><sha256>
+#
+# The digest pins the content. A Drive id names a file its owner can replace,
+# so there is no revision to fetch at; the digest is what makes a changed file
+# a failed fetch instead of a silently different test set. They are the files
+# the tests were last measured against (2026-09-23).
 #
 # NOTE: the discussion lists 2401.05361v1-tagged with the same Drive file id as
 # 2401.09436v1-tagged (an apparent copy/paste error in the source); we fetch the
 # id once as 2401.09436v1-tagged.pdf.
-1sBC6JGV2Z7nNBM0HeK078WRDheTZQ9uN	mathml-AF-ex1.pdf
-1aje39vgl8Rm1xL1Lqzxzr_up9xaOHbeg	mathml-AF-ex2.pdf
-1yw59YaKhMg94WNY8prYJI5GEvHhzs8Hx	Sample-AF-Math-LaTeX.pdf
-1snBNo50ZT3GMPtP8m314_EEBe4jbw8en	amsldoc-tagged.pdf
-1wR2lCYb0JGxpna2wjlHrcHjcf1gWK2IT	2401.09965v1-tagged.pdf
-1sXg4aYw7SFygryrXfwgPplUzW5AoCfXC	2401.09436v1-tagged.pdf
-16A6Q2hLD9RvrmtgTv9qDxmpX0un46bLW	47464-t-tagged.pdf
-16YgS2deqg7sAQv1_RXBShSREF356OC7s	macbeth-tagged.pdf
-1B5fboVk2brFB6BBmWcUkMloUJVYIoTVQ	ASV-Bible.pdf
-12u7SV7UD33bGzzxdi1XOFeN4wYLgrvvJ	pg17161-tagged.pdf
-1ARMVgdV0dEFmf-QNTLp8xarc9y1hHlJI	tb139mitt-deims24.pdf
-1OfJWlq0CioRU0ZQwnD6i3hbssYFRr_Pj	pdfa-art.pdf
-1AhC71y0gVVADdvOQrY4atE3EcHVj7Eu2	525Da-23-group-theory.pdf
-1erFAVzHoNJ-yZi19SolAjZ99z82cK0k7	PHY-exam.pdf
+1sBC6JGV2Z7nNBM0HeK078WRDheTZQ9uN	mathml-AF-ex1.pdf	74205f71e4ddd5a3f1f6e14a19aaba5e9275effc27af940d888a8d6b1727d91b
+1aje39vgl8Rm1xL1Lqzxzr_up9xaOHbeg	mathml-AF-ex2.pdf	71c9a69f78616f8acd61861d33f24ca9ab7516a69cc4a22704fc4a753d975ada
+1yw59YaKhMg94WNY8prYJI5GEvHhzs8Hx	Sample-AF-Math-LaTeX.pdf	7329877b2478f016d9ed5ddc9e0c3f94c60ec99f8e0f5eb883f2786b6ad8d1ce
+1snBNo50ZT3GMPtP8m314_EEBe4jbw8en	amsldoc-tagged.pdf	6d7e38e7dd838f23956ff85fbe4bd983c3a5d04582559892954bc018ee232a69
+1wR2lCYb0JGxpna2wjlHrcHjcf1gWK2IT	2401.09965v1-tagged.pdf	ae5f835fa6449533a1f448a2ee7b274e475c08d77a005a2f9b20082fb4a7a767
+1sXg4aYw7SFygryrXfwgPplUzW5AoCfXC	2401.09436v1-tagged.pdf	dde7639d4f52149664c53490c56c5f15833fbaa77f21a27ee97aa626445a8f0d
+16A6Q2hLD9RvrmtgTv9qDxmpX0un46bLW	47464-t-tagged.pdf	0831ccc96444377f4f0010c5afa735557c0a013202778701f0ccc2a26be4eee8
+16YgS2deqg7sAQv1_RXBShSREF356OC7s	macbeth-tagged.pdf	ba0d127d4ec3b72d4bff6a2e1fe79dfe54a9b4e0f8a93c2f066b7493b6eca9e7
+1B5fboVk2brFB6BBmWcUkMloUJVYIoTVQ	ASV-Bible.pdf	7a1fac91e76d0840e6a97b6b11badeef164e70bf00b8bc69bce14e611092ffaf
+12u7SV7UD33bGzzxdi1XOFeN4wYLgrvvJ	pg17161-tagged.pdf	a043cbe21f95d2ca9d13b7d8c54b54d17b62aa6324ebcc7e9e0d695cb031ca5b
+1ARMVgdV0dEFmf-QNTLp8xarc9y1hHlJI	tb139mitt-deims24.pdf	71a3477d20d3eec003012a1ebe87cc1e04e87af2f108ea0e2d3b32c2f4a8ff94
+1OfJWlq0CioRU0ZQwnD6i3hbssYFRr_Pj	pdfa-art.pdf	56e8956533383bedf9aab123d4637cb10fa66fb40266c7fff9ec8638751379a4
+1AhC71y0gVVADdvOQrY4atE3EcHVj7Eu2	525Da-23-group-theory.pdf	736bf2634cd906de07b0c1311ab20d6ff7f8446a8a8f29f2402799edeb781d1f
+1erFAVzHoNJ-yZi19SolAjZ99z82cK0k7	PHY-exam.pdf	b675c506a1c3036067472756501e4371f67c3719a690b5fcdacad260f8bc9002

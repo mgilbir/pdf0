@@ -1,7 +1,7 @@
 #!/bin/bash
 # Download the Well Tagged PDF / PDF/UA-2 example documents listed in
-# sources.tsv from Google Drive. Idempotent: skips files already present and
-# verified as PDFs. Run via `make wtpdf` or directly from this directory.
+# sources.tsv from Google Drive. Idempotent: skips files already present with
+# the pinned sha256. Run via `make wtpdf` or directly from this directory.
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 TSV="$DIR/sources.tsv"
@@ -29,17 +29,31 @@ download_gdrive() {
 }
 
 rc=0
-while IFS=$'\t' read -r id name; do
+# matches <file> <sha256>: whether the file is exactly the pinned content.
+matches() {
+  [ -f "$1" ] && [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]
+}
+
+while IFS=$'\t' read -r id name sum; do
   case "$id" in ''|\#*) continue ;; esac
   out="$DIR/$name"
-  if [ -f "$out" ] && [ "$(head -c4 "$out")" = "%PDF" ]; then
+  if [ -z "$sum" ]; then
+    echo "  FAILED       $name (no sha256 in sources.tsv)"
+    rc=1
+    continue
+  fi
+  if matches "$out" "$sum"; then
     echo "  ok (cached)  $name"
     continue
   fi
   echo "  downloading  $name ..."
   download_gdrive "$id" "$out"
-  if [ "$(head -c4 "$out" 2>/dev/null)" = "%PDF" ]; then
+  if matches "$out" "$sum"; then
     echo "               $(stat -c %s "$out") bytes"
+  elif [ "$(head -c4 "$out" 2>/dev/null)" = "%PDF" ]; then
+    echo "  FAILED       $name (a PDF, but not the pinned one: its sha256 differs)"
+    rm -f "$out"
+    rc=1
   else
     echo "  FAILED       $name (not a PDF; Drive may require a confirm token change)"
     rm -f "$out"
