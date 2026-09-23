@@ -218,8 +218,20 @@ func FuzzWriteSurface(f *testing.F) {
 		if err := doc.Write(&buf); err != nil {
 			return
 		}
-		if _, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
+		written, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if err != nil {
 			t.Fatalf("Write produced %d bytes that Read rejects: %v", buf.Len(), err)
+		}
+		// And what is written can be extracted: its text without a page left
+		// out, and the image it embedded, decoded. The builder produced both,
+		// so neither a limit nor a codec gap is an excuse.
+		if _, err := written.ExtractText(); err != nil {
+			t.Fatalf("text of a written document did not extract: %v", err)
+		}
+		for im := range written.Images() {
+			if !im.Decoded {
+				t.Fatalf("an image pdf0 embedded does not decode: %s", im.Note)
+			}
 		}
 
 		// And the same for Save, which additionally checks the document
