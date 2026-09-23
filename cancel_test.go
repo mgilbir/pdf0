@@ -257,7 +257,6 @@ func TestCancelledRunIsNeverClean(t *testing.T) {
 	ctx := cancelledCtx()
 
 	assertNotClean(t, "ValidatePDFA", ValidatePDFAContext(ctx, doc, pdfa.PDFA2b))
-	assertNotClean(t, "ValidatePDFABytes", ValidatePDFABytesContext(ctx, doc, pdfa.PDFA2b, []byte("%PDF-2.0\n")))
 	assertNotClean(t, "ValidatePDFUA", ValidatePDFUAContext(ctx, doc))
 	assertNotClean(t, "ValidatePDFUA2", ValidatePDFUA2Context(ctx, doc))
 	assertNotClean(t, "ValidatePDFX", ValidatePDFXContext(ctx, doc, pdfx.PDFX4))

@@ -11,7 +11,7 @@ import (
 
 // TestBuilderWriteValidatesClean guards the write path at the byte level, which
 // the model-only round-trip test (DocumentEqual) cannot see. NewPDFADocument
-// produces a conformant document; after Write and re-Read, ValidatePDFABytes —
+// produces a conformant document; after Write and re-Read, ValidatePDFA —
 // including the byte-level structure rules (xref format, stream lengths, no data
 // after %%EOF) — must report zero violations. A writer regression that emits a
 // stale /Length, a malformed xref, or a duplicate/dangling object would surface
@@ -27,7 +27,7 @@ func TestBuilderWriteValidatesClean(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: reparse written output: %v", lvl, err)
 		}
-		if errs := ValidatePDFABytes(rd, lvl, buf.Bytes()); len(errs) != 0 {
+		if errs := ValidatePDFA(rd, lvl); len(errs) != 0 {
 			t.Errorf("%s: written output has %d validation errors (writer regressed):", lvl, len(errs))
 			for _, e := range errs {
 				t.Errorf("   %s", e.Error())

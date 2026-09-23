@@ -86,7 +86,7 @@ func TestType3WidthsAreComparedInGlyphSpace(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			doc := type3WidthDoc(t, c.fm, c.width, c.advance)
-			got := type3WidthFindings(ValidateView(doc, PDFA2b, nil))
+			got := type3WidthFindings(ValidateView(doc, PDFA2b))
 			if c.wantInconsisent && len(got) != 1 {
 				t.Errorf("want one Type 3 width finding, got %v", got)
 			}

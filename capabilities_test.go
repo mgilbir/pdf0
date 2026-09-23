@@ -33,7 +33,7 @@ func validateAtEveryLevel(t *testing.T, build func(*Document) error) {
 			if err != nil {
 				t.Fatalf("reparse: %v", err)
 			}
-			for _, e := range ValidatePDFABytes(rd, level, buf.Bytes()) {
+			for _, e := range ValidatePDFA(rd, level) {
 				t.Errorf("violation: %s", e.Error())
 			}
 		})

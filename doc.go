@@ -10,9 +10,9 @@
 //   - Read parses PDF bytes into a typed object model (see Document), recovering
 //     from common malformations rather than crashing on hostile input.
 //   - Document.Write serializes the object model back to conformant PDF bytes.
-//   - ValidatePDFA and ValidatePDFABytes check a document against PDF/A
-//     conformance levels: PDF/A-1a, -1b, -2a, -2b, -3a, -3b, and -4. The Level A
-//     levels are Level B plus the accessibility requirements.
+//   - ValidatePDFA checks a document against PDF/A conformance levels:
+//     PDF/A-1a, -1b, -2a, -2b, -3a, -3b, and -4. The Level A levels are Level B
+//     plus the accessibility requirements.
 //   - NewPDFADocument (and NewPDFADocumentWithInfo) build a minimal PDF/A
 //     document.
 //
@@ -62,7 +62,7 @@
 // 71 MB, 1256-page file takes about ten seconds to validate. The long-running
 // entry points therefore have Context variants — ReadContext,
 // ReadWithPasswordContext, Document.WriteContext, ValidatePDFAContext,
-// ValidatePDFABytesContext, ValidatePDFUAContext, ValidatePDFUA2Context,
+// ValidatePDFUAContext, ValidatePDFUA2Context,
 // ValidatePDFXContext, ValidatePDFVTContext, ValidatePDFVT2Context,
 // ValidatePDFRContext, ValidateDPartsContext, ValidateFacturXContext,
 // ValidateOrderXContext, Document.ExtractTextContext and
@@ -120,9 +120,10 @@
 //
 // An empty result means no implemented check fired, not a guarantee of full
 // conformance: the validator covers a subset of ISO 19005. Validation does not
-// mutate its Document and is safe to run concurrently on the same Document. Use
-// ValidatePDFABytes when you have the raw file bytes and want the byte-level
-// file-structure checks (e.g. no data after %%EOF) as well.
+// mutate its Document and is safe to run concurrently on the same Document.
+// The byte-level file-structure checks (e.g. no data after %%EOF) read the file
+// the document was read from (Document.Source); a document built in memory has
+// none, and its result carries a checker finding saying they did not run.
 //
 // The other PDF standards follow the same shape: each validator is a free
 // function taking the *Document as its first parameter (ValidatePDFUA,

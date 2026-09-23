@@ -238,8 +238,8 @@ func TestEveryDrawingPathValidatesAtEveryLevel(t *testing.T) {
 				t.Run(path.name, func(t *testing.T) {
 					for _, level := range levels {
 						text := strings.Join(fc.texts, " ")
-						back, raw := drawnDocument(t, base.Clone(), path, text, level, true)
-						for _, v := range ValidatePDFABytes(back, level, raw) {
+						back, _ := drawnDocument(t, base.Clone(), path, text, level, true)
+						for _, v := range ValidatePDFA(back, level) {
 							t.Errorf("%s, %q: %s", level, text, v.Error())
 						}
 					}

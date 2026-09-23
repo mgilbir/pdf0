@@ -117,7 +117,7 @@ func (d *Document) save(cancel core.Canceler, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("pdf0: the document could not be read back for checking: %w", err)
 	}
-	if err := saveVerdict(cancel, level, validatePDFABytes(cancel, reparsed, level, buf.Bytes())); err != nil {
+	if err := saveVerdict(cancel, level, validatePDFA(cancel, reparsed, level)); err != nil {
 		return err
 	}
 	_, err = w.Write(buf.Bytes())

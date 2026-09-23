@@ -43,9 +43,9 @@ func TestADirectFontIsOneFontAtNoObject(t *testing.T) {
 	res := &object.Dictionary{}
 	res.Set("Font", object.NewDictionary(object.Entry{Key: "F1", Value: font}))
 	withPages(d, 3, res, "BT /F1 12 Tf 10 10 Td (Hi) Tj ET\n")
-	r, raw := profileBytes(t, d)
+	r, _ := profileBytes(t, d)
 	var fd []pdfa.Violation
-	for _, v := range ValidatePDFABytes(r, pdfa.PDFA2b, raw) {
+	for _, v := range ValidatePDFA(r, pdfa.PDFA2b) {
 		if v.Object < 0 {
 			t.Errorf("a finding anchored to a negative object: %v", v)
 		}

@@ -113,7 +113,7 @@ func TestValidateFacturXCorpus(t *testing.T) {
 		doc, err := Read(bytes.NewReader(data), int64(len(data)))
 		if strings.HasPrefix(name, "FAIL") {
 			if err == nil {
-				if res := ValidateFacturX(doc, data); len(res.Violations) == 0 {
+				if res := ValidateFacturX(doc); len(res.Violations) == 0 {
 					t.Errorf("%s: expected the corrupt sample to be rejected, got no violations", name)
 				}
 			}
@@ -124,7 +124,7 @@ func TestValidateFacturXCorpus(t *testing.T) {
 			continue
 		}
 		conforming++
-		res := ValidateFacturX(doc, data)
+		res := ValidateFacturX(doc)
 		container := containerFindings(res)
 		if len(container) != 0 {
 			t.Errorf("%s: expected 0 container violations on a conforming invoice, got %d (first: %s)",
@@ -226,7 +226,7 @@ func TestValidateFacturXMutations(t *testing.T) {
 				t.Fatal(err)
 			}
 			tc.mutate(doc)
-			res := ValidateFacturX(doc, data)
+			res := ValidateFacturX(doc)
 			if !hasViolation(res, tc.rule, tc.substr) {
 				t.Errorf("expected %s violation containing %q; got %v", tc.rule, tc.substr, res.Violations)
 			}

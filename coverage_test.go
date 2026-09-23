@@ -63,7 +63,7 @@ func TestRuleCoverage(t *testing.T) {
 				return nil, err
 			}
 			var clauses []string
-			for _, v := range ValidatePDFABytes(doc, level, data) {
+			for _, v := range ValidatePDFA(doc, level) {
 				clauses = append(clauses, v.Rule)
 			}
 			return clauses, nil

@@ -167,11 +167,12 @@ type Result struct {
 }
 
 // ValidateFacturX checks whether doc is a conforming Factur-X invoice container.
-// rawData is the original file bytes, needed for the PDF/A-3 byte-level checks.
+// The PDF/A-3 base's byte-level checks read doc.File, the file the document
+// was read from.
 //
 // It is ValidateFacturXContext with a background context.
-func Validate(doc core.View, rawData []byte) Result {
-	return ValidateContext(context.Background(), doc, rawData)
+func Validate(doc core.View) Result {
+	return ValidateContext(context.Background(), doc)
 }
 
 // ValidateFacturXContext is ValidateFacturX with cancellation.
@@ -187,7 +188,7 @@ func Validate(doc core.View, rawData []byte) Result {
 // same identifier for the same event, so a caller draining Violations has one
 // name to look for across container and invoice findings alike. What cannot
 // happen is an empty result: a cancelled validation never looks clean.
-func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res Result) {
+func ValidateContext(ctx context.Context, doc core.View) (res Result) {
 	cancel := core.NewCanceler(ctx)
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, Violation{Rule: rule, Message: msg, Object: obj})

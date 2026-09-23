@@ -121,7 +121,7 @@ func TestValidateOrderXCorpus(t *testing.T) {
 			t.Errorf("%s: read: %v", filepath.Base(f), err)
 			continue
 		}
-		res := ValidateOrderX(doc, data)
+		res := ValidateOrderX(doc)
 		if res.XMLName == "" {
 			continue // a supporting PDF, not an Order-X container
 		}

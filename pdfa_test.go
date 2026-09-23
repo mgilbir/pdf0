@@ -504,33 +504,57 @@ func TestValidatePDFA_NeedAppearances(t *testing.T) {
 
 // 6.4.3 (parts 2/3): a signature's /ByteRange must start at 0 and cover to the
 // end of the file; a range that stops short leaves unsigned trailing bytes.
+//
+// The file is the one the document was read from: each case writes the
+// document, with the range's end placed relative to the length of the file
+// being written, and validates what reads back.
 func TestValidatePDFA_SignatureByteRange(t *testing.T) {
-	raw := make([]byte, 1000)
-	mk := func(br object.Array) *Document {
-		doc := mustPDFADoc(t, pdfa.PDFA2b)
-		sig := &object.Dictionary{}
-		sig.Set("Type", object.Name("Sig"))
-		sig.Set("SubFilter", object.Name("adbe.pkcs7.detached"))
-		sig.Set("Contents", object.String{Value: []byte("0000"), IsHex: true})
-		sig.Set("ByteRange", br)
-		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: sig}
-		reference(doc, 20)
-		return doc
-	}
-	flagged := func(br object.Array) bool {
-		return hasRule(ValidatePDFABytes(mk(br), pdfa.PDFA2b, raw), "6.4.3")
+	// flagged writes a signed skeleton whose /ByteRange is [start 400 600 x],
+	// with x chosen so the range ends at the file's length plus delta, and
+	// reports whether 6.4.3 fires on the file read back.
+	flagged := func(start, delta int) bool {
+		t.Helper()
+		x := 1000
+		for try := 0; ; try++ {
+			doc := mustPDFADoc(t, pdfa.PDFA2b)
+			sig := &object.Dictionary{}
+			sig.Set("Type", object.Name("Sig"))
+			sig.Set("SubFilter", object.Name("adbe.pkcs7.detached"))
+			sig.Set("Contents", object.String{Value: []byte("0000"), IsHex: true})
+			sig.Set("ByteRange", object.Array{object.Integer(start), object.Integer(400), object.Integer(600), object.Integer(x)})
+			doc.Objects[20] = &object.IndirectObject{Number: 20, Value: sig}
+			reference(doc, 20)
+			var buf bytes.Buffer
+			if err := doc.Write(&buf); err != nil {
+				t.Fatal(err)
+			}
+			// Writing x changes the file's length by its digit count, so
+			// repeat until the end lands where it was asked to.
+			if want := buf.Len() + delta - 600; want != x {
+				if try > 4 {
+					t.Fatalf("the /ByteRange end did not settle (length %d)", buf.Len())
+				}
+				x = want
+				continue
+			}
+			rd, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return hasRule(ValidatePDFA(rd, pdfa.PDFA2b), "6.4.3")
+		}
 	}
 	// [start1 len1 start2 len2]; the gap is /Contents.
-	if flagged(object.Array{object.Integer(0), object.Integer(400), object.Integer(600), object.Integer(400)}) {
-		t.Error("a range reaching EOF (1000) must not be flagged")
+	if flagged(0, 0) {
+		t.Error("a range reaching the end of the file must not be flagged")
 	}
-	if flagged(object.Array{object.Integer(0), object.Integer(400), object.Integer(600), object.Integer(500)}) {
+	if flagged(0, 100) {
 		t.Error("a range overshooting the file must not be flagged (covers all)")
 	}
-	if !flagged(object.Array{object.Integer(0), object.Integer(400), object.Integer(600), object.Integer(300)}) {
-		t.Error("a range stopping short of EOF (900<1000) must be flagged")
+	if !flagged(0, -100) {
+		t.Error("a range stopping short of the end of the file must be flagged")
 	}
-	if !flagged(object.Array{object.Integer(10), object.Integer(400), object.Integer(600), object.Integer(390)}) {
+	if !flagged(10, 0) {
 		t.Error("a range not starting at byte 0 must be flagged")
 	}
 }
@@ -1081,7 +1105,7 @@ func TestValidatePDFA_CleanDocument(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		t.Run(level.String(), func(t *testing.T) {
 			doc := mustPDFADoc(t, level)
-			errs := ValidatePDFA(doc, level)
+			errs := ValidatePDFA(writeRead(t, doc), level)
 			if len(errs) > 0 {
 				t.Errorf("clean %s document has %d validation errors:", level, len(errs))
 				for _, e := range errs {
@@ -1256,7 +1280,7 @@ func TestCorpusIsartor(t *testing.T) {
 			continue
 		}
 		// Isartor is a PDF/A-1b test suite.
-		errs := ValidatePDFABytes(doc, pdfa.PDFA1b, data)
+		errs := ValidatePDFA(doc, pdfa.PDFA1b)
 		if isPass {
 			if len(errs) > 0 {
 				fp++
@@ -1337,7 +1361,7 @@ func TestCorpusConformanceSuites(t *testing.T) {
 				parseErrFiles = append(parseErrFiles, base+" :: "+e.Error())
 				continue
 			}
-			errs := ValidatePDFABytes(doc, s.level, data)
+			errs := ValidatePDFA(doc, s.level)
 			if isPass {
 				if s.checkPassFP && len(errs) > 0 {
 					falsePositives++
@@ -1411,7 +1435,7 @@ func TestCorpusLevelA(t *testing.T) {
 				parseErrors++
 				continue
 			}
-			errs := ValidatePDFABytes(doc, s.level, data)
+			errs := ValidatePDFA(doc, s.level)
 			if isPass {
 				pass++
 				if len(errs) > 0 {
@@ -1482,7 +1506,7 @@ func TestCorpus(t *testing.T) {
 				parseErrors++
 				parseErrFiles = append(parseErrFiles, f.rel)
 			} else {
-				errs := ValidatePDFABytes(doc, level, data)
+				errs := ValidatePDFA(doc, level)
 				if f.isPass {
 					passTotal++
 					if len(errs) > 0 {
@@ -1872,7 +1896,7 @@ func TestNewPDFADocumentWithInfo(t *testing.T) {
 	if !bytes.Contains(meta.Data, []byte("My Title")) || !bytes.Contains(meta.Data, []byte("An Author")) {
 		t.Error("title/author missing from generated XMP")
 	}
-	if errs := ValidatePDFA(doc, pdfa.PDFA2b); len(errs) > 0 {
+	if errs := ValidatePDFA(writeRead(t, doc), pdfa.PDFA2b); len(errs) > 0 {
 		t.Errorf("document with info should validate clean: %v", errs)
 	}
 }

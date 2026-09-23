@@ -142,15 +142,15 @@ func exercise(t *testing.T, doc *Document, data []byte) {
 	}
 	_ = ValidatePDFUA(doc)
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-		_ = ValidatePDFABytes(doc, lvl, data)
+		_ = ValidatePDFA(doc, lvl)
 	}
 	_ = ValidatePDFX(doc, pdfx.PDFX4)
 	_ = ValidatePDFVT(doc)
 	_ = ValidateDParts(doc)
-	if fx := ValidateFacturX(doc, data); len(fx.XML) > 0 {
+	if fx := ValidateFacturX(doc); len(fx.XML) > 0 {
 		_, _ = formalis.Validate(context.Background(), fx.XML, fx.Profile)
 	}
-	_ = ValidateOrderX(doc, data)
+	_ = ValidateOrderX(doc)
 	var buf bytes.Buffer
 	_ = doc.Write(&buf)
 }

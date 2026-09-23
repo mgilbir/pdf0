@@ -97,7 +97,7 @@ func BenchmarkContentHeavyValidation(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = ValidatePDFABytes(doc, pdfa.PDFA4, data)
+		_ = ValidatePDFA(doc, pdfa.PDFA4)
 	}
 }
 
@@ -133,5 +133,5 @@ func TestContentHeavyValidates(t *testing.T) {
 	if got := doc.PageCount(); got != 3 {
 		t.Errorf("PageCount = %d, want 3", got)
 	}
-	_ = ValidatePDFABytes(doc, pdfa.PDFA4, data) // must not panic
+	_ = ValidatePDFA(doc, pdfa.PDFA4) // must not panic
 }

@@ -8,7 +8,7 @@ import (
 // with any validator: every validator installs one, and the packages below the
 // root package reach the shared half through Document.view.
 
-// validationCache memoizes traversals for one ValidatePDFABytes run. It is
+// validationCache memoizes traversals for one validation run. It is
 // installed at the start of a run and dropped at the end, so documents may
 // be mutated freely between validations. The cache lives on a shallow copy of
 // the Document, never on the caller's, so validating the same Document from

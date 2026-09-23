@@ -106,7 +106,7 @@ func embeddedPDFAChecker(budget *embeddedBudget) pdfa.EmbeddedChecker {
 		}
 		edoc.embeddedDepth = depth
 		compliant, complete = true, true
-		for _, e := range validatePDFABudget(cancel, edoc, elevel, data, budget) {
+		for _, e := range validatePDFABudget(cancel, edoc, elevel, budget) {
 			if finding.IsCheckerFinding(e) {
 				complete = false
 				continue

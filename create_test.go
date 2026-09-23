@@ -176,7 +176,7 @@ func TestDescribingAPDFADocumentKeepsItOne(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reparse: %v", err)
 			}
-			if v := ValidatePDFABytes(rd, level, buf.Bytes()); len(v) != 0 {
+			if v := ValidatePDFA(rd, level); len(v) != 0 {
 				t.Errorf("describing the document stopped it being %s: %v", level, v)
 			}
 		})

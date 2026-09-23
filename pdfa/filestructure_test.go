@@ -4,8 +4,40 @@ import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
+	"strconv"
 	"testing"
 )
+
+// fileRecordOf builds the file record Read would for raw, whose objects start
+// at the given offsets: each is parsed where it starts, as Read parses it, and
+// the record keeps where it ends, where its stream keyword is and its direct
+// /Length. It is how these tests hand a byte-level rule a file without the
+// root package's reader.
+func fileRecordOf(t *testing.T, raw []byte, offsets map[int]int64) *core.FileRecord {
+	t.Helper()
+	f := &core.FileRecord{Data: raw}
+	for num, off := range offsets {
+		lx := syntax.NewLexer(raw)
+		lx.SetPosition(off)
+		p := syntax.NewParserFromLexer(lx)
+		iobj, err := p.ParseIndirectObject()
+		if err != nil {
+			t.Fatalf("object %d at %d does not parse: %v", num, off, err)
+		}
+		o := core.FileObject{Num: num, Offset: off, End: p.Offset()}
+		if kw, ok := p.StreamKeyword(); ok {
+			o.Stream, o.StreamKeyword = true, kw
+			if st, ok := iobj.Value.(*object.Stream); ok {
+				if n, ok := st.Dict.Get("Length").(object.Integer); ok {
+					o.Length, o.LengthOK = int64(n), true
+				}
+			}
+		}
+		f.Objects = append(f.Objects, o)
+	}
+	return f
+}
 
 func hasRuleMsg(errs []Violation, rule string) bool {
 	for _, e := range errs {
@@ -46,16 +78,9 @@ func TestFileHeaderBytes(t *testing.T) {
 // Indirect object layout via a synthetic Document with offsets.
 func TestIndirectObjectSyntax(t *testing.T) {
 	build := func(body string) []Violation {
-		off := int64(bytes.Index([]byte(body), []byte(" 0 obj")) - bytes.LastIndexByte([]byte(body[:bytes.Index([]byte(body), []byte(" 0 obj"))]), '\n'))
-		_ = off
-		doc := mkV(core.View{
-			Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: object.Integer(1)}},
-			Offsets: map[int]int64{},
-		})
-		// object.Object header starts right after the first newline.
+		// The object header starts right after the first newline.
 		nl := bytes.IndexByte([]byte(body), '\n')
-		doc.Offsets[1] = int64(nl + 1)
-		return checkIndirectObjectSyntax(doc, PDFA2b, []byte(body))
+		return checkIndirectObjectSyntax(fileRecordOf(t, []byte(body), map[int]int64{1: int64(nl + 1)}), PDFA2b)
 	}
 	// Valid.
 	if hasRuleMsg(build("%bin\n1 0 obj\n42\nendobj\n"), "6.1.9") {
@@ -87,11 +112,7 @@ func TestIndirectObjectHeaderWhitespaceRun(t *testing.T) {
 	// The offset points at the start of the white-space run; the run is longer
 	// than eight bytes and the header itself sits right after an EOL.
 	build := func(body string, off int64) []Violation {
-		doc := mkV(core.View{
-			Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: object.Integer(42)}},
-			Offsets: map[int]int64{1: off},
-		})
-		return checkIndirectObjectSyntax(doc, PDFA2b, []byte(body))
+		return checkIndirectObjectSyntax(fileRecordOf(t, []byte(body), map[int]int64{1: off}), PDFA2b)
 	}
 	has := func(errs []Violation, msg string) bool {
 		for _, e := range errs {
@@ -122,23 +143,27 @@ func TestIndirectObjectHeaderWhitespaceRun(t *testing.T) {
 	}
 }
 
-// Cross-reference table format.
+// Cross-reference table format. The table is at offset 1, where the record
+// says Read found one.
 func TestXRefTableFormat(t *testing.T) {
 	entry := "0000000000 65535 f\r\n0000000009 00000 n\r\n"
 	valid := "xref\n0 2\n" + entry + "trailer\n"
-	if hasRuleMsg(checkXRefTableFormat(core.View{}, PDFA2b, []byte("\n"+valid)), "6.1.4") {
+	check := func(raw string) []Violation {
+		return checkXRefTableFormat(&core.FileRecord{Data: []byte(raw), XRefTables: []int64{1}}, PDFA2b)
+	}
+	if hasRuleMsg(check("\n"+valid), "6.1.4") {
 		t.Error("valid xref flagged")
 	}
 	// xref keyword followed by space.
-	if !hasRuleMsg(checkXRefTableFormat(core.View{}, PDFA2b, []byte("\nxref \n0 2\n"+entry)), "6.1.4") {
+	if !hasRuleMsg(check("\nxref \n0 2\n"+entry), "6.1.4") {
 		t.Error("xref+space not flagged")
 	}
 	// Two EOLs after xref.
-	if !hasRuleMsg(checkXRefTableFormat(core.View{}, PDFA2b, []byte("\nxref\n\n0 2\n"+entry)), "6.1.4") {
+	if !hasRuleMsg(check("\nxref\n\n0 2\n"+entry), "6.1.4") {
 		t.Error("xref double-EOL not flagged")
 	}
 	// Double space in subsection header.
-	if !hasRuleMsg(checkXRefTableFormat(core.View{}, PDFA2b, []byte("\nxref\n0  2\n"+entry)), "6.1.4") {
+	if !hasRuleMsg(check("\nxref\n0  2\n"+entry), "6.1.4") {
 		t.Error("subsection double space not flagged")
 	}
 }
@@ -171,7 +196,8 @@ func TestScanHexStringsSkipsDicts(t *testing.T) {
 func TestStreamKeywordFormat(t *testing.T) {
 	build := func(region string) []Violation {
 		var errs []Violation
-		checkOneStreamKeyword([]byte(region), 0, 1, nil, func(msg string, obj int) {
+		kw := int64(bytes.Index([]byte(region), []byte("stream")))
+		checkOneStreamKeyword([]byte(region), kw, 1, func(msg string, obj int) {
 			errs = append(errs, Violation{Rule: "6.1.7.1", Message: msg})
 		})
 		return errs
@@ -228,22 +254,23 @@ func TestNameUTF8(t *testing.T) {
 }
 
 // TestLinearizedTrailerIDMismatch ensures a linearized file whose first-page
-// and last trailer /ID differ is flagged, and a consistent one is not.
+// and last trailer /ID differ is flagged, and a consistent one is not. The
+// trailers are those of the sections Read parsed, in file order.
 func TestLinearizedTrailerIDMismatch(t *testing.T) {
-	mk := func(id1, id2 string) []byte {
-		return []byte("%PDF-1.4\n<< /Linearized 1 >>\n" +
-			"trailer\n<< /ID [<" + id1 + "> <AAAA>] >>\n" +
-			"trailer\n<< /ID [<" + id2 + "> <BBBB>] >>\n")
+	mk := func(linearized bool, id1, id2 string) *core.FileRecord {
+		return &core.FileRecord{Linearized: linearized, Trailers: []core.FileTrailer{
+			{Offset: 10, ID0: []byte(id1), HasID: true},
+			{Offset: 900, ID0: []byte(id2), HasID: true},
+		}}
 	}
-	if got := len(checkLinearizedTrailerID(mkView(nil, nil), mk("1111", "2222"), PDFA1b)); got == 0 {
+	if got := len(checkLinearizedTrailerID(mk(true, "1111", "2222"), PDFA1b)); got == 0 {
 		t.Error("mismatched linearized trailer IDs not flagged")
 	}
-	if got := len(checkLinearizedTrailerID(mkView(nil, nil), mk("1111", "1111"), PDFA1b)); got != 0 {
+	if got := len(checkLinearizedTrailerID(mk(true, "1111", "1111"), PDFA1b)); got != 0 {
 		t.Errorf("consistent linearized trailer IDs wrongly flagged: %d", got)
 	}
 	// Not linearized -> not this rule's concern.
-	nonLin := []byte("%PDF-1.4\ntrailer\n<< /ID [<1111> <A>] >>\ntrailer\n<< /ID [<2222> <B>] >>\n")
-	if got := len(checkLinearizedTrailerID(mkView(nil, nil), nonLin, PDFA1b)); got != 0 {
+	if got := len(checkLinearizedTrailerID(mk(false, "1111", "2222"), PDFA1b)); got != 0 {
 		t.Errorf("non-linearized file wrongly flagged: %d", got)
 	}
 }
@@ -255,16 +282,10 @@ func TestStreamLengthBytes(t *testing.T) {
 	// object.Object body: "stream\nABCD\nendstream" — 4 data bytes, then a \n EOL that
 	// must not be counted, so the only valid /Length is 4.
 	run := func(length int) int {
-		raw := []byte("%PDF-1.4\n1 0 obj\n<< /Length 0 >>\nstream\nABCD\nendstream\nendobj\n")
+		raw := []byte("%PDF-1.4\n1 0 obj\n<< /Length " + strconv.Itoa(length) + " >>\nstream\nABCD\nendstream\nendobj\n")
 		off := int64(bytesIndexStr(raw, "1 0 obj"))
-		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte("ABCD")}
-		s.Dict.Set("Length", object.Integer(length))
-		doc := mkV(core.View{
-			Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: s}},
-			Offsets: map[int]int64{1: off},
-		})
 		n := 0
-		for _, e := range checkStreamLengthBytes(doc, PDFA1b, raw) {
+		for _, e := range checkStreamLengthBytes(fileRecordOf(t, raw, map[int]int64{1: off}), PDFA1b) {
 			if e.Rule == "6.1.7" {
 				n++
 			}

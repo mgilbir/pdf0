@@ -69,8 +69,10 @@ Workflow when your change moves the counts:
 
 ## Adding a validation rule
 
-1. Write a `func(*Document, pdfa.Level) []pdfa.Violation` (or reuse a byte-level
-   signature) and add it to the `checks` slice in `ValidatePDFABytes` (`pdfa.go`).
+1. Write a `func(core.View, pdfa.Level) []pdfa.Violation` and add it to the
+   `checks` slice in `ValidateView` (`pdfa/pdfa.go`); a rule about the file's
+   bytes is a `func(*core.FileRecord, pdfa.Level) []pdfa.Violation` in
+   `byteChecks` instead, and reads only the file record.
    Group it with related rules by file — see the table in
    [docs/validators.md](docs/validators.md#where-the-rules-live).
 2. Resolve indirect references before type-asserting (`doc.Resolve` /

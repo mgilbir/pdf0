@@ -117,7 +117,7 @@ func TestMetadataSurvivesContentBudget(t *testing.T) {
 	pages.Set("Kids", kids)
 	pages.Set("Count", object.Integer(len(kids)))
 
-	if base := ValidatePDFA(doc, pdfa.PDFA2b); len(base) > 0 {
+	if base := withoutNoSourceFile(ValidatePDFA(doc, pdfa.PDFA2b)); len(base) > 0 {
 		t.Fatalf("fixture is not conformant before the budget is lowered: %v", errMessages(base))
 	}
 

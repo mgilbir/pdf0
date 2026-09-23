@@ -16,7 +16,7 @@ import (
 func TestNewPDFADocumentLevelA(t *testing.T) {
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a} {
 		doc := mustPDFADoc(t, lvl)
-		if errs := ValidatePDFA(doc, lvl); len(errs) > 0 {
+		if errs := ValidatePDFA(writeRead(t, doc), lvl); len(errs) > 0 {
 			t.Errorf("NewPDFADocument(%v) is not conformant: %d error(s)", lvl, len(errs))
 			for _, e := range errs {
 				t.Errorf("  %s", e)
@@ -25,7 +25,7 @@ func TestNewPDFADocumentLevelA(t *testing.T) {
 	}
 	// The b-levels are unaffected.
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-		if errs := ValidatePDFA(mustPDFADoc(t, lvl), lvl); len(errs) > 0 {
+		if errs := ValidatePDFA(writeRead(t, mustPDFADoc(t, lvl)), lvl); len(errs) > 0 {
 			t.Errorf("NewPDFADocument(%v) regressed: %d error(s)", lvl, len(errs))
 		}
 	}
@@ -78,7 +78,7 @@ func TestFacturXInvoiceRulesInline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := ValidateFacturX(rt, buf.Bytes())
+	res := ValidateFacturX(rt)
 	found := false
 	for _, v := range res.Violations {
 		if v.Rule == "BR-02" {
@@ -109,7 +109,7 @@ func TestFacturXRejectsOrderType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := ValidateFacturX(rt, buf.Bytes())
+	res := ValidateFacturX(rt)
 	found := false
 	for _, v := range res.Violations {
 		if v.Rule == "metadata" && strings.Contains(v.Message, `"ORDER" is not INVOICE`) {
@@ -134,7 +134,7 @@ func TestFacturXRejectsOrderType(t *testing.T) {
 func TestNewPDFADocumentVariants4(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA4, pdfa.PDFA4E, pdfa.PDFA4F} {
 		doc := mustPDFADoc(t, level)
-		if errs := ValidatePDFA(doc, level); len(errs) > 0 {
+		if errs := ValidatePDFA(writeRead(t, doc), level); len(errs) > 0 {
 			t.Errorf("NewPDFADocument(%v) does not pass its own validator: %v", level, errs)
 		}
 		// And it round-trips, so the declaration survives being written.
@@ -146,7 +146,7 @@ func TestNewPDFADocumentVariants4(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: reading back: %v", level, err)
 		}
-		if errs := ValidatePDFABytes(back, level, buf.Bytes()); len(errs) > 0 {
+		if errs := ValidatePDFA(back, level); len(errs) > 0 {
 			t.Errorf("%v: after a round trip: %v", level, errs)
 		}
 	}

@@ -146,7 +146,7 @@ func cmdValidate(args []string) error {
 	if err != nil {
 		return err
 	}
-	errs := pdf0.ValidatePDFABytes(doc, lvl, src.in.data)
+	errs := pdf0.ValidatePDFA(doc, lvl)
 	if len(errs) == 0 {
 		if declared, ok := doc.Conformance(); ok && lvl == pdfa.LevelDeclared {
 			lvl = declared // the level the run resolved to, for the report
@@ -335,7 +335,7 @@ func cmdRepair(args []string) error {
 	if err != nil {
 		return fmt.Errorf("the repaired document does not read back (nothing written): %w", err)
 	}
-	remaining := len(pdf0.ValidatePDFABytes(rt, lvl, buf.Bytes()))
+	remaining := len(pdf0.ValidatePDFA(rt, lvl))
 	if err := writeOutput(out, *force, buf.Bytes(), perm); err != nil {
 		return err
 	}

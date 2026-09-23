@@ -537,6 +537,8 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 	doc.source.offsets = offsets
 	ends := make(map[int64]int64)
 	doc.source.ends = ends
+	streams := make(map[int64]streamFact)
+	doc.source.streams = streams
 	lexer := NewLexer(data)
 	// parsedByOffset caches the object parsed at each byte offset. A malformed
 	// cross-reference table can point many distinct object numbers at the same
@@ -627,6 +629,10 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 		doc.Objects[num] = iobj
 		parsedByOffset[off] = iobj
 		ends[off] = parser.Offset()
+		if kw, ok := parser.StreamKeyword(); ok {
+			n, nOK := parser.StreamLength()
+			streams[off] = streamFact{keyword: kw, length: n, lengthOK: nOK}
+		}
 	}
 	return nil
 }
@@ -699,6 +705,7 @@ func (s *Source) finish(doc *Document, chainBroken bool) {
 		}
 	}
 	s.assignRevisions()
+	s.recordFileFacts(doc)
 }
 
 // note raises the high-water mark to n. It is how the object-stream loaders
@@ -1421,7 +1428,7 @@ func (d *Document) graph() core.View {
 // The run state travels with it when there is one, so a trip a subsystem records
 // through the view lands in the same recorder the validators report from.
 func (d *Document) view() core.View {
-	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Locked: d.Locked(), Objects: d.Objects, Offsets: d.Source().offsets, Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, SkippedObjStms: d.skippedObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler(), Alloc: d.allocObjNum}
+	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Locked: d.Locked(), Objects: d.Objects, File: d.Source().fileRecordFunc(), Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, SkippedObjStms: d.skippedObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler(), Alloc: d.allocObjNum}
 	if d.valCache != nil {
 		v.Run = d.valCache.run.shared
 	}

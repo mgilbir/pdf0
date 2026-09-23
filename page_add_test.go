@@ -57,7 +57,7 @@ func TestAddPageProducesAConformingPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+	for _, e := range ValidatePDFA(rd, pdfa.PDFA2b) {
 		t.Errorf("violation: %s", e.Error())
 	}
 	if got := mustExtractText(t, rd); !strings.Contains(got, "Hi") {
@@ -120,7 +120,7 @@ func TestAddPageAppendsRatherThanReplaces(t *testing.T) {
 	if got := rd.PageCount(); got != 3 {
 		t.Errorf("after a round trip PageCount = %d, want 3", got)
 	}
-	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+	for _, e := range ValidatePDFA(rd, pdfa.PDFA2b) {
 		t.Errorf("violation: %s", e.Error())
 	}
 }
@@ -184,7 +184,7 @@ func TestOpacityIsAUsableExtGState(t *testing.T) {
 		t.Fatalf("reparse: %v", err)
 	}
 	// PDF/A-2 permits transparency; a translucent page must not be a finding.
-	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+	for _, e := range ValidatePDFA(rd, pdfa.PDFA2b) {
 		t.Errorf("violation on a translucent page: %s", e.Error())
 	}
 	if _, err := Opacity(1.5, 1); err == nil {

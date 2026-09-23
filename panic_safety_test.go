@@ -25,10 +25,10 @@ func TestEmptyArrayColorSpaceNoPanic(t *testing.T) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatalf("ValidatePDFABytes panicked on empty-array colour space: %v", r)
+			t.Fatalf("ValidatePDFA panicked on empty-array colour space: %v", r)
 		}
 	}()
-	_ = ValidatePDFABytes(doc, pdfa.PDFA2b, nil)
+	_ = ValidatePDFA(doc, pdfa.PDFA2b)
 }
 
 // TestEqualCyclicNoOverflow ensures Equal on a cyclic direct dictionary returns

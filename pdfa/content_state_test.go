@@ -29,7 +29,7 @@ func fontEmbeddingFindings(t *testing.T, content string) []Violation {
 	page.Set("Contents", object.IndirectRef{Number: 22})
 	page.Set("Resources", dictWith("Font", dictWith("F1", object.IndirectRef{Number: 21})))
 	var out []Violation
-	for _, e := range ValidateView(v, PDFA2b, nil) {
+	for _, e := range ValidateView(v, PDFA2b) {
 		if e.Rule == fontClause("embed", PDFA2b) {
 			out = append(out, e)
 		}

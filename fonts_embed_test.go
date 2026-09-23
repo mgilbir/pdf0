@@ -127,7 +127,7 @@ func TestEmbeddedTextValidatesAsPDFA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+	for _, e := range ValidatePDFA(rd, pdfa.PDFA2b) {
 		t.Errorf("violation on a page of embedded text: %s", e.Error())
 	}
 }
@@ -150,7 +150,7 @@ func TestEmbeddedTextValidatesAtEveryLevel(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reparse: %v", err)
 			}
-			for _, e := range ValidatePDFABytes(rd, level, buf.Bytes()) {
+			for _, e := range ValidatePDFA(rd, level) {
 				t.Errorf("violation: %s", e.Error())
 			}
 		})
@@ -382,7 +382,7 @@ func TestShapedTextValidatesAndKeepsItsLigature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+	for _, e := range ValidatePDFA(rd, pdfa.PDFA2b) {
 		t.Errorf("violation on a page of shaped text: %s", e.Error())
 	}
 	// The ligature glyph is what the page shows — code 3, the fixture's ﬁ —
@@ -550,7 +550,7 @@ func TestOpenTypeCFFEmbedsAndValidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+	for _, e := range ValidatePDFA(rd, pdfa.PDFA2b) {
 		t.Errorf("violation on a page set in a CFF-flavoured OpenType face: %s", e.Error())
 	}
 
@@ -748,7 +748,7 @@ func TestCFFSubsetValidatesAtEveryLevel(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reparse: %v", err)
 			}
-			for _, e := range ValidatePDFABytes(rd, level, buf.Bytes()) {
+			for _, e := range ValidatePDFA(rd, level) {
 				t.Errorf("violation: %s", e.Error())
 			}
 		})
@@ -1128,7 +1128,7 @@ func TestSimpleFontValidatesAtEveryLevel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, e := range ValidatePDFABytes(rd, level, buf.Bytes()) {
+			for _, e := range ValidatePDFA(rd, level) {
 				t.Errorf("violation: %s", e.Error())
 			}
 			// And the text reads back, including the characters whose codes lie

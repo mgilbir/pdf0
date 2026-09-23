@@ -136,7 +136,7 @@ func TestSaveWritesAConformingDocument(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reparse: %v", err)
 			}
-			if v := ValidatePDFABytes(rd, level, buf.Bytes()); len(v) != 0 {
+			if v := ValidatePDFA(rd, level); len(v) != 0 {
 				t.Errorf("Save wrote a non-conforming file: %v", v)
 			}
 		})
@@ -230,7 +230,7 @@ func TestLevelForIsTheInverseOfWhatIsWritten(t *testing.T) {
 // that the natural shape of the code invites: Read fails, doc is nil, the error
 // goes unchecked, and the next line validates.
 func TestValidatingNothingIsAFindingNotAPanic(t *testing.T) {
-	v := ValidatePDFABytes(nil, pdfa.PDFA2b, nil)
+	v := ValidatePDFA(nil, pdfa.PDFA2b)
 	if len(v) == 0 {
 		t.Fatal("validating a nil document reported nothing, which reads as a clean bill of health")
 	}

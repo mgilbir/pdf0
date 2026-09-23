@@ -32,7 +32,7 @@ func TestCorpusTWGA025UseCMapIsReadNotSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-		for _, v := range ValidatePDFABytes(doc, level, data) {
+		for _, v := range ValidatePDFA(doc, level) {
 			if IsCheckerFinding(v) {
 				t.Errorf("%v: checker finding %s: %s", level, v.RuleID(), v.Error())
 			}

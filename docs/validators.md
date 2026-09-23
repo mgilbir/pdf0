@@ -52,7 +52,7 @@ for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA2b) {
 
 | Standard | Entry point | Returns | Findings satisfy `Violation` | `…Context` variant |
 |----------|-------------|---------|------------------------------|--------------------|
-| PDF/A (ISO 19005) 1a/1b/2a/2b/2u/3a/3b/3u/4/4e/4f | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]pdfa.Violation` | yes | yes (both) |
+| PDF/A (ISO 19005) 1a/1b/2a/2b/2u/3a/3b/3u/4/4e/4f | `ValidatePDFA(doc, level)` | `[]pdfa.Violation` | yes | yes |
 | PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]pdfua.Violation` | yes | yes |
 | PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]pdfua.Violation` | yes | yes |
 | PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]pdfx.Violation` | yes | yes |
@@ -60,8 +60,8 @@ for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA2b) {
 | PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]pdfvt.Violation` | yes | yes |
 | PDF/R | `ValidatePDFR(doc)` | `[]pdfr.Violation` | yes | yes |
 | DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]dpart.Violation` | yes | yes |
-| Factur-X / ZUGFeRD container | `ValidateFacturX(doc, raw)` | `facturx.Result` | yes (`facturx.Violation`) | yes |
-| Order-X container | `ValidateOrderX(doc, raw)` | `facturx.OrderXResult` | yes (`facturx.OrderXViolation`) | yes |
+| Factur-X / ZUGFeRD container | `ValidateFacturX(doc)` | `facturx.Result` | yes (`facturx.Violation`) | yes |
+| Order-X container | `ValidateOrderX(doc)` | `facturx.OrderXResult` | yes (`facturx.OrderXViolation`) | yes |
 
 The last two columns move together, and that is not a coincidence: cancellation
 is reported *as a finding* under the reserved rule `limit`, so an entry point
@@ -81,7 +81,7 @@ flowchart TD
     Doc[("*Document")]
 
     subgraph pdfstd["PDF-standard validators — free functions, findings satisfy pdf0.Violation"]
-        A["ValidatePDFA / ValidatePDFABytes<br/>→ []pdfa.Violation"]
+        A["ValidatePDFA<br/>→ []pdfa.Violation"]
         UA["ValidatePDFUA / ValidatePDFUA2<br/>→ []pdfua.Violation"]
         X["ValidatePDFX<br/>→ []pdfx.Violation"]
         VT["ValidatePDFVT / ValidatePDFVT2<br/>→ []pdfvt.Violation"]
@@ -90,8 +90,8 @@ flowchart TD
     end
 
     subgraph invoice["Invoice containers — result structs, findings satisfy pdf0.Violation"]
-        FX["ValidateFacturX(doc, raw)<br/>→ facturx.Result{Violations, InvoiceWarnings,<br/>Profile, CIUS, XMLName, XML,<br/>InvoiceNotEvaluated, InvoiceComplete}"]
-        OX["ValidateOrderX(doc, raw)<br/>→ facturx.OrderXResult{Violations, OrderWarnings,<br/>Profile, XMLName, XML,<br/>OrderNotEvaluated, OrderComplete}"]
+        FX["ValidateFacturX(doc)<br/>→ facturx.Result{Violations, InvoiceWarnings,<br/>Profile, CIUS, XMLName, XML,<br/>InvoiceNotEvaluated, InvoiceComplete}"]
+        OX["ValidateOrderX(doc)<br/>→ facturx.OrderXResult{Violations, OrderWarnings,<br/>Profile, XMLName, XML,<br/>OrderNotEvaluated, OrderComplete}"]
     end
 
     Doc --> pdfstd
@@ -124,7 +124,7 @@ the invoice rule engine did not evaluate. The findings inside it are ordinary
 `pdf0.Violation` values and append like the rest:
 
 ```go
-res := pdf0.ValidateFacturX(doc, raw)
+res := pdf0.ValidateFacturX(doc)
 for _, v := range res.Violations {
 	all = append(all, v)
 }
@@ -142,7 +142,7 @@ Three fields on the result are worth reading together:
   and the invoice engine's **fatal** findings. The PDF/A-3 base is validated at
   PDF/A-3b, which a container declaring 3a or 3u also satisfies; whether such a
   container meets the rest of its own claim is a PDF/A question
-  (`ValidatePDFABytes` at `pdfa.LevelDeclared`).
+  (`ValidatePDFA` at `pdfa.LevelDeclared`).
 - `InvoiceWarnings` is the invoice engine's **advisory** findings — CEN flags
   1,168 of the two EN 16931 syntax bindings' assertions `warning`, and a
   conforming Factur-X EXTENDED invoice trips dozens by design, since carrying
@@ -179,8 +179,9 @@ the corpus ratchet, not the API — see [CONTRIBUTING](../CONTRIBUTING.md#the-co
 
 ## How PDF/A validation runs
 
-`ValidatePDFABytes` (`pdfa.go`) runs a fixed list of 59 check functions, then —
-if raw bytes are supplied — the byte-level file-structure checks. Each check runs
+`ValidatePDFA` (`pdfa_api.go`, dispatching to `pdfa.ValidateView`) runs a fixed
+list of 59 check functions, then the byte-level file-structure checks over the
+file the document was read from. Each check runs
 behind a `recover()` boundary so a bug or an adversarial structure in one check
 cannot crash the caller. Validation runs against a shallow copy of the
 `Document`, so it never mutates the caller's document and is safe to run
@@ -188,23 +189,29 @@ concurrently on the same document.
 
 ```mermaid
 flowchart TD
-    A[ValidatePDFABytes doc, level, rawData] --> B[shallow-copy doc,<br/>install per-run cache]
+    A[ValidatePDFA doc, level] --> B[shallow-copy doc,<br/>install per-run cache]
     B --> T{"ResolveTarget: a profile?<br/>LevelDeclared → LevelFor(the document's pdfaid)"}
     T -->|no| R["one 'limit' finding:<br/>not validated"]
     T -->|yes| C[for each check, with the target unflattened]
     C --> D[runCheck: recover panic -> 'internal' violation]
     D --> C
-    C --> E{rawData != nil?}
-    E -->|yes| F[byte-level checks<br/>runByteCheck: recover]
-    E -->|no| G
+    C --> E{"read from a file?<br/>(a file record)"}
+    E -->|yes| F[byte-level checks,<br/>each behind runByteCheck: recover]
+    E -->|no| N["one 'limit' finding:<br/>no file to check"]
+    N --> G
     F --> G[sort violations by Rule, Object, Message]
     G --> I[return violation list]
     R --> I
 ```
 
-`ValidatePDFA(doc, level)` is `ValidatePDFABytes(doc, level, nil)`: it skips the
-byte-level rules because they need the file bytes. Use `ValidatePDFABytes`
-whenever you have them.
+The byte-level rules read the file the document was read from
+(`Document.Source`), as `Read` found it, and nothing else: they judge that file
+even if the document has been edited since. To judge an edited document's bytes,
+write it and read the result. A document built in memory has no file; for it the
+byte-level rules do not run, and the result carries a `no-source-file` checker
+finding saying so. (There used to be a `ValidatePDFABytes` that took the bytes as
+a parameter; bytes that were not the document's own produced findings about
+neither file.)
 
 **The level is a target profile.** A `pdfa.Level` names the part, the
 conformance level and (at part 4) the variant: `PDFA1a`, `PDFA1b`, `PDFA2a`,
@@ -250,7 +257,7 @@ corpus is the oracle for rule semantics
 
 ## Where the rules live
 
-All PDF/A checks are dispatched from the `checks` slice in `ValidatePDFABytes`.
+All PDF/A checks are dispatched from the `checks` slice and `byteChecks` in `ValidateView`.
 They are grouped across files by concern:
 
 | File | Rules |

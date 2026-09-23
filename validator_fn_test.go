@@ -49,7 +49,7 @@ func TestIndirectSubtypeStillFlagged(t *testing.T) {
 	doc := pageDoc(page)
 	doc.Objects[4] = &object.IndirectObject{Number: 4, Value: object.Name("Screen")}
 
-	if got := countRule(ValidatePDFABytes(doc, pdfa.PDFA2b, nil), "6.3.1"); got == 0 {
+	if got := countRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.3.1"); got == 0 {
 		t.Errorf("indirect /Subtype /Screen evaded the subtype rule")
 	}
 }
@@ -74,10 +74,10 @@ func TestAAOnNonWidgetFlagged(t *testing.T) {
 	// widgets and form fields; reporting a plain annotation under it is this
 	// module reading the requirement more broadly, which the corpus allows at
 	// FP=0, but the number still has to be one the reader can look up.
-	if got := countRule(ValidatePDFABytes(doc, pdfa.PDFA2b, nil), "6.4.1"); got == 0 {
+	if got := countRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.4.1"); got == 0 {
 		t.Errorf("/AA on a non-widget annotation was not flagged at 2b")
 	}
-	if got := countRule(ValidatePDFABytes(doc, pdfa.PDFA1b, nil), "6.6.2"); got == 0 {
+	if got := countRule(ValidatePDFA(doc, pdfa.PDFA1b), "6.6.2"); got == 0 {
 		t.Errorf("/AA on a non-widget annotation was not flagged at 1b")
 	}
 	// (At A-4 the same /AA is caught by the per-event trigger rule, which is a
@@ -101,11 +101,11 @@ func TestImageSMaskTransparency1b(t *testing.T) {
 	doc.Objects[4] = &object.IndirectObject{Number: 4, Value: img}
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: &object.Stream{Dict: object.Dictionary{}}}
 
-	if got := countRule(ValidatePDFABytes(doc, pdfa.PDFA1b, nil), "6.4"); got == 0 {
+	if got := countRule(ValidatePDFA(doc, pdfa.PDFA1b), "6.4"); got == 0 {
 		t.Errorf("image /SMask was not flagged as transparency at 1b")
 	}
 	// Not applicable at 2b.
-	if got := countRule(ValidatePDFABytes(doc, pdfa.PDFA2b, nil), "6.4"); got != 0 {
+	if got := countRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.4"); got != 0 {
 		t.Errorf("2b must not use the 1b transparency rule, got %d", got)
 	}
 }

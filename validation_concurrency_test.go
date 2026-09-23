@@ -32,7 +32,7 @@ func TestValidateConcurrentSameDoc(t *testing.T) {
 			wg.Add(1)
 			go func(l pdfa.Level) {
 				defer wg.Done()
-				ValidatePDFABytes(doc, l, b)
+				ValidatePDFA(doc, l)
 			}(lvl)
 		}
 	}
@@ -40,7 +40,7 @@ func TestValidateConcurrentSameDoc(t *testing.T) {
 
 	// Validation must not have mutated the caller's Document.
 	if doc.valCache != nil {
-		t.Errorf("ValidatePDFABytes left a cache on the caller's Document")
+		t.Errorf("ValidatePDFA left a cache on the caller's Document")
 	}
 }
 

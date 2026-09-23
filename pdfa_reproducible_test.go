@@ -64,7 +64,7 @@ func TestAPinnedFileIDMakesTheOutputReproducible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading it back: %v", err)
 	}
-	if errs := ValidatePDFABytes(doc, pdfa.PDFA2b, a); len(errs) != 0 {
+	if errs := ValidatePDFA(doc, pdfa.PDFA2b); len(errs) != 0 {
 		t.Errorf("a reproducible document does not validate: %v", errs)
 	}
 

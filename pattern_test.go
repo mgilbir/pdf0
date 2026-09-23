@@ -238,7 +238,7 @@ func TestPatternPaintsAndValidates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reparse: %v", err)
 			}
-			if v := ValidatePDFABytes(rd, level, buf.Bytes()); len(v) != 0 {
+			if v := ValidatePDFA(rd, level); len(v) != 0 {
 				t.Errorf("a page filled with a pattern is not %s: %v", level, v)
 			}
 

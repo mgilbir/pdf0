@@ -69,19 +69,6 @@ func embeddedNames(d *Document) []string {
 	return out
 }
 
-func writeReadBytes(t *testing.T, d *Document) (*Document, []byte) {
-	t.Helper()
-	var buf bytes.Buffer
-	if err := d.Write(&buf); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	rt, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-	return rt, buf.Bytes()
-}
-
 // TestEmbedFacturXKeepsAttachments is the C44 regression: embedding an invoice
 // into a document that already has attachments inserts it beside them, adds
 // one /AF entry, keeps the rest of the metadata, and embedding again replaces
@@ -126,8 +113,8 @@ func TestEmbedFacturXKeepsAttachments(t *testing.T) {
 		t.Errorf("%d invoice streams in the object table, want 1", invoices)
 	}
 
-	rt, data := writeReadBytes(t, d)
-	res := ValidateFacturX(rt, data)
+	rt := writeRead(t, d)
+	res := ValidateFacturX(rt)
 	if c := containerFindings(res); len(c) != 0 {
 		t.Errorf("container findings after embedding: %v", c)
 	}
@@ -147,8 +134,8 @@ func TestEmbedFacturXKeepsTheConformanceLetter(t *testing.T) {
 	// The container composes a PDF/A-3b pass, whose "must be B" finding is not
 	// a container finding: it is dropped by its Check, so a 3a container is
 	// clean (audit C148's composition by rule identity).
-	rt, data := writeReadBytes(t, d)
-	if c := containerFindings(ValidateFacturX(rt, data)); len(c) != 0 {
+	rt := writeRead(t, d)
+	if c := containerFindings(ValidateFacturX(rt)); len(c) != 0 {
 		t.Errorf("container findings on a PDF/A-3a Factur-X: %v", c)
 	}
 	d4 := mustPDFADoc(t, pdfa.PDFA4)
@@ -254,7 +241,7 @@ func TestFacturXUnreadableInvoiceIsAFinding(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			d, st := facturxWithInvoice(t)
 			c.damage(st)
-			res := ValidateFacturX(d, nil)
+			res := ValidateFacturX(d)
 			found := false
 			for _, v := range res.Violations {
 				if v.Rule == "invoice-xml" && strings.Contains(v.Message, c.want) {
@@ -269,7 +256,7 @@ func TestFacturXUnreadableInvoiceIsAFinding(t *testing.T) {
 	// A filter pdf0 does not implement is pdf0's limit, not the file's defect.
 	d, st := facturxWithInvoice(t)
 	st.Dict.Set("Filter", object.Name("JBIG2Decode"))
-	res := ValidateFacturX(d, nil)
+	res := ValidateFacturX(d)
 	limit := false
 	for _, v := range res.Violations {
 		if v.Rule == "invoice-xml" {
@@ -289,11 +276,11 @@ func TestFacturXUnreadableInvoiceIsAFinding(t *testing.T) {
 // rather than the metadata simply reading as absent.
 func TestFacturXContainerTripsAreReported(t *testing.T) {
 	d, _ := facturxWithInvoice(t)
-	rt, data := writeReadBytes(t, d)
+	rt := writeRead(t, d)
 	rt.limits.XMPPacketBytes = 64
 	// The container half alone: the PDF/A-3 half is a separate run that would
 	// report its own trip over the same packet and hide a dropped one here.
-	res := facturx.Validate(beginRun(rt).view(), data)
+	res := facturx.Validate(beginRun(rt).view())
 	limit := false
 	for _, v := range res.Violations {
 		if v.Rule == finding.LimitRule && strings.Contains(v.Message, core.GuardXMPPacket) {
@@ -325,8 +312,8 @@ func TestFacturXDuplicateInvoices(t *testing.T) {
 		}
 	}
 	cat.Set("AF", reordered)
-	rt, data := writeReadBytes(t, d)
-	res := ValidateFacturX(rt, data)
+	rt := writeRead(t, d)
+	res := ValidateFacturX(rt)
 	if res.XMLName != "factur-x.xml" {
 		t.Errorf("validated %q, want the /Data invoice factur-x.xml", res.XMLName)
 	}
@@ -349,7 +336,7 @@ func TestFacturXNameCase(t *testing.T) {
 	fs, _, _ := facturx.FindAttachment(d.view(), cat)
 	fs.Set("F", object.String{Value: []byte("Factur-X.xml")})
 	fs.Set("UF", object.String{Value: []byte("Factur-X.xml")})
-	res := ValidateFacturX(d, nil)
+	res := ValidateFacturX(d)
 	if res.XMLName != "Factur-X.xml" {
 		t.Fatalf("attachment not found: %q", res.XMLName)
 	}
@@ -393,8 +380,8 @@ func TestOrderXMetadataSymmetry(t *testing.T) {
 	if err := EmbedOrderX(d, orderXML, facturx.OrderXComfort, "ORDER", ""); err != nil {
 		t.Fatal(err)
 	}
-	rt, data := writeReadBytes(t, d)
-	res := ValidateOrderX(rt, data)
+	rt := writeRead(t, d)
+	res := ValidateOrderX(rt)
 	for _, v := range res.Violations {
 		if v.Rule == "metadata" || v.Rule == "attachment" {
 			t.Errorf("container finding on an EmbedOrderX container: %s: %s", v.Rule, v.Message)
@@ -411,7 +398,7 @@ func TestOrderXMetadataSymmetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	cat.Set("Metadata", rt.Add(core.MetadataStream(noVersion)))
-	res = ValidateOrderX(rt, nil)
+	res = ValidateOrderX(rt)
 	missing := false
 	for _, v := range res.Violations {
 		if v.Rule == "metadata" && strings.Contains(v.Message, "fx:Version") {
@@ -427,7 +414,7 @@ func TestOrderXMetadataSymmetry(t *testing.T) {
 	if err := EmbedFacturX(inv, []byte(ciiForProfile(formalis.ProfileBasic)), formalis.ProfileBasic, ""); err != nil {
 		t.Fatal(err)
 	}
-	ores := ValidateOrderX(inv, nil)
+	ores := ValidateOrderX(inv)
 	foreign := false
 	for _, v := range ores.Violations {
 		if v.Rule == "metadata" && strings.Contains(v.Message, "Factur-X namespace") {

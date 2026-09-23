@@ -419,7 +419,7 @@ func TestEmbeddedImageValidatesAsPDFA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
+	for _, e := range ValidatePDFA(rd, pdfa.PDFA2b) {
 		t.Errorf("violation on a page with an embedded image: %s", e.Error())
 	}
 }

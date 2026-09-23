@@ -247,7 +247,7 @@ func FuzzWriteSurface(f *testing.F) {
 		// Save promises the file meets the conformance it claims. Check it,
 		// rather than trusting that the check inside Save ran.
 		if level, claimed := rd.Conformance(); claimed {
-			if v := ValidatePDFABytes(rd, level, saved.Bytes()); len(v) != 0 {
+			if v := ValidatePDFA(rd, level); len(v) != 0 {
 				t.Fatalf("Save wrote a file claiming %s that does not meet it: %v", level, v)
 			}
 		}

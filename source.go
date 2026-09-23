@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"io"
 	"sort"
+	"sync"
 
 	"github.com/mgilbir/pdf0/internal/checked"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
 )
@@ -83,6 +85,25 @@ type Source struct {
 	// revision diff uses it to tell, without parsing again, that an object's
 	// bytes lie wholly inside an earlier revision (see signedFile.Diff).
 	ends map[int64]int64
+
+	// What the byte-level conformance rules need of the file beyond its bytes
+	// and offsets, taken as Read found it — the object graph may be edited
+	// afterwards, and these describe the file (see core.FileRecord):
+	//
+	// streams maps the offset of every stream object Read parsed at the top
+	// level to where its stream keyword is (as the parser took it) and the
+	// /Length it declares, resolved when Read finished. linearized records
+	// that the first object is a linearization dictionary, trailerIDs each
+	// section's first /ID element by section offset, and sigs the /ByteRange
+	// of every signature dictionary.
+	streams    map[int64]streamFact
+	linearized bool
+	trailerIDs map[int64][]byte
+	sigs       []core.FileSignature
+
+	// file is the record built from the above for the byte-level rules, once.
+	fileOnce sync.Once
+	file     *core.FileRecord
 }
 
 // noSource is the empty record a Document built in memory reports.
@@ -177,6 +198,158 @@ func (s *Source) Offsets() map[int]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+// recordFileFacts takes, from the freshly read graph, the values the
+// byte-level conformance rules compare with the file's bytes: each top-level
+// stream's declared /Length, whether the first object is a linearization
+// dictionary, each section's first /ID element and every signature's
+// /ByteRange. It runs once, at the end of Read, so they are the file's values
+// whatever is later done to the graph. The values are resolved through the
+// graph because the file may write any of them indirectly.
+func (s *Source) recordFileFacts(doc *Document) {
+	v := doc.graph()
+	first, firstNum := int64(-1), 0
+	for num, off := range s.offsets {
+		if first < 0 || off < first || off == first && num < firstNum {
+			first, firstNum = off, num
+		}
+		// The parser read most declared lengths already; one it could not
+		// — an indirect /Length in an object stream, or a value of another
+		// type — is resolved here, through the graph as Read left it.
+		sf, ok := s.streams[off]
+		if !ok || sf.lengthOK {
+			continue
+		}
+		if iobj := doc.Objects[num]; iobj != nil {
+			if st, ok := iobj.Value.(*object.Stream); ok {
+				if n, ok := v.ResolveInt(st.Dict.Get("Length")); ok {
+					sf.length, sf.lengthOK = int64(n), true
+					s.streams[off] = sf
+				}
+			}
+		}
+	}
+	if iobj := doc.Objects[firstNum]; first >= 0 && iobj != nil {
+		if d, ok := iobj.Value.(*object.Dictionary); ok {
+			s.linearized = d.Has("Linearized")
+		}
+	}
+	s.trailerIDs = map[int64][]byte{}
+	for _, sec := range s.sections {
+		if sec.trailer == nil {
+			continue
+		}
+		if arr, ok := v.Resolve(sec.trailer.Get("ID")).(object.Array); ok && len(arr) >= 1 {
+			if id, ok := v.Resolve(arr[0]).(object.String); ok { // string: a file identifier, never encrypted (ISO 32000-2 7.6.2)
+				s.trailerIDs[sec.offset] = append([]byte(nil), id.Value...)
+			}
+		}
+	}
+	nums := make([]int, 0, len(doc.Objects))
+	for num, iobj := range doc.Objects {
+		if d, ok := iobj.Value.(*object.Dictionary); ok && d.Has("ByteRange") && d.Has("Contents") {
+			nums = append(nums, num)
+		}
+	}
+	sort.Ints(nums)
+	for _, num := range nums {
+		d := doc.Objects[num].Value.(*object.Dictionary)
+		if t, _ := v.ResolveName(d.Get("Type")); t != "" && t != "Sig" && t != "DocTimeStamp" {
+			continue
+		}
+		br, ok := core.ReadByteRange(v, d.Get("ByteRange"))
+		s.sigs = append(s.sigs, core.FileSignature{Num: num, ByteRange: br, OK: ok})
+	}
+}
+
+// fileRecord returns the record the byte-level conformance rules read, built
+// on first use; nil for an empty record, which has no file to read.
+func (s *Source) fileRecord() *core.FileRecord {
+	if len(s.data) == 0 {
+		return nil
+	}
+	s.fileOnce.Do(func() { s.file = s.buildFileRecord() })
+	return s.file
+}
+
+// streamFact is what Read records of one top-level stream object for the
+// byte-level rules: the offset of the stream keyword its parser took, and the
+// /Length it declares when that is an integer.
+type streamFact struct {
+	keyword  int64
+	length   int64
+	lengthOK bool
+}
+
+// fileRecordFunc is what Document.view hands the packages below as View.File:
+// nil for an empty record, which has no file, and otherwise fileRecord, so the
+// record is built only when something reads it.
+func (s *Source) fileRecordFunc() func() *core.FileRecord {
+	if len(s.data) == 0 {
+		return nil
+	}
+	return s.fileRecord
+}
+
+func (s *Source) buildFileRecord() *core.FileRecord {
+	f := &core.FileRecord{Data: s.data, Linearized: s.linearized, Signatures: s.sigs}
+
+	// Objects in file order, one per offset: the lowest number when several
+	// cross-reference entries point at the same bytes, which Read parsed once
+	// (numeric order is a total order, so the report is reproducible).
+	type numOff struct {
+		num int
+		off int64
+	}
+	all := make([]numOff, 0, len(s.offsets))
+	for num, off := range s.offsets {
+		all = append(all, numOff{num, off})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].off != all[j].off {
+			return all[i].off < all[j].off
+		}
+		return all[i].num < all[j].num
+	})
+	for i, e := range all {
+		if i > 0 && all[i-1].off == e.off {
+			continue
+		}
+		end, ok := s.ends[e.off]
+		if !ok {
+			continue
+		}
+		o := core.FileObject{Num: e.num, Offset: e.off, End: end}
+		if sf, ok := s.streams[e.off]; ok {
+			o.Stream, o.StreamKeyword = true, sf.keyword
+			o.Length, o.LengthOK = sf.length, sf.lengthOK
+		}
+		f.Objects = append(f.Objects, o)
+	}
+
+	// Sections in file order. A table section's offset is where its "xref"
+	// token was read from, which the lexer reached past any white space the
+	// stated offset left before it.
+	secs := append([]XRefSection(nil), s.sections...)
+	sort.SliceStable(secs, func(i, j int) bool { return secs[i].offset < secs[j].offset })
+	for _, sec := range secs {
+		if sec.kind == XRefStreamSection || sec.kind == XRefHybridSection {
+			f.XRefStreams = true
+		}
+		if sec.kind == XRefTableSection || sec.kind == XRefHybridSection {
+			p := sec.offset
+			for p < int64(len(s.data)) && syntax.IsWhitespace(s.data[p]) {
+				p++
+			}
+			if bytes.HasPrefix(s.data[p:], []byte("xref")) {
+				f.XRefTables = append(f.XRefTables, p)
+			}
+		}
+		id, ok := s.trailerIDs[sec.offset]
+		f.Trailers = append(f.Trailers, core.FileTrailer{Offset: sec.offset, ID0: id, HasID: ok})
+	}
+	return f
 }
 
 // nextFree returns the lowest object number above everything the file uses.

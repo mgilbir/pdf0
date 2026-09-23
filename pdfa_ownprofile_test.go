@@ -110,7 +110,7 @@ func TestTheDefaultIsStillPdf0sProfile(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte("sRGB IEC61966-2.1")) {
 		t.Error("the default document no longer carries the sRGB output intent")
 	}
-	if errs := ValidatePDFA(doc, pdfa.PDFA2b); len(errs) != 0 {
+	if errs := ValidatePDFA(writeRead(t, doc), pdfa.PDFA2b); len(errs) != 0 {
 		t.Errorf("the default document stopped validating: %v", errs)
 	}
 }

@@ -103,7 +103,7 @@ func validator(lvl pdfa.Level) rulecov.Validator {
 			return nil, err
 		}
 		var clauses []string
-		for _, v := range pdf0.ValidatePDFABytes(doc, lvl, data) {
+		for _, v := range pdf0.ValidatePDFA(doc, lvl) {
 			clauses = append(clauses, v.Rule)
 		}
 		return clauses, nil

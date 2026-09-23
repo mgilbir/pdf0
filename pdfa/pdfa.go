@@ -17,7 +17,7 @@ import (
 
 // This file is the core of the PDF/A validator: the conformance levels
 // (ISO 19005-1/-2/-3/-4, i.e. 1b/2b/3b/4, plus the entry point into Level A),
-// the ValidatePDFA/ValidatePDFABytes dispatchers, and most of the clause-6
+// the ValidateView dispatcher, and most of the clause-6
 // rule set — file structure (6.1), graphics, colour and fonts (6.2),
 // annotations and font dictionaries (6.3), interactive forms (6.4), actions
 // (6.6) and metadata (6.7). Clause numbering differs between the parts, so a
@@ -100,27 +100,52 @@ func runCheck(doc core.View, level Level, check func(core.View, Level) []Violati
 	return check(doc, level)
 }
 
-// runByteCheck is runCheck for the byte-level checks, which have a different
-// signature.
-func runByteCheck(level Level, check func() []Violation) (out []Violation) {
+// runByteCheck is runCheck for a byte-level check: one rule over the file
+// record, behind its own recover boundary, so a check that fails internally
+// costs its own rule and not the others' (they used to share one boundary, and
+// one out-of-range slice turned all of them into a single "internal").
+func runByteCheck(f *core.FileRecord, level Level, check func(*core.FileRecord, Level) []Violation) (out []Violation) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = []Violation{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
 		}
 	}()
-	return check()
+	return check(f, level)
+}
+
+// byteChecks are the byte-level file-structure rules (filestructure.go). Each
+// reads the file record; the signature rule also asks the document which of
+// the file's signature dictionaries it has (see checkSignatureCoversFile).
+func byteChecks(doc core.View) []func(*core.FileRecord, Level) []Violation {
+	return []func(*core.FileRecord, Level) []Violation{
+		func(f *core.FileRecord, level Level) []Violation { return checkNoDataAfterEOF(f.Data, level) },  // 6.1.3
+		func(f *core.FileRecord, level Level) []Violation { return checkFileHeaderBytes(level, f.Data) }, // 6.1.2
+		checkIndirectObjectSyntax, // 6.1.8 / 6.1.9
+		checkXRefTableFormat,      // 6.1.4
+		checkNoXRefStreams,        // 6.1.4 (PDF/A-1)
+		checkStreamKeywordFormat,  // 6.1.7.1 / 6.1.6
+		checkLinearizedTrailerID,  // 6.1.3
+		checkStreamLengthBytes,    // 6.1.7 / 6.1.6.1
+		func(f *core.FileRecord, level Level) []Violation { return checkSignatureCoversFile(doc, f, level) }, // 6.4.3
+	}
 }
 
 // ValidateView runs the PDF/A pipeline over a view, against the target
 // profile level names (see ResolveTarget for LevelDeclared and invalid
 // levels).
 //
+// The byte-level file-structure rules read doc.FileRecord(), the record of the file
+// the document was read from. A view with none — a document built in memory —
+// has no file to judge: those rules do not run, and the run records a
+// GuardNoSourceFile trip saying so, which the caller reports as a checker
+// finding. They are never skipped silently.
+//
 // There is one pipeline for every level. Each check is handed the target
 // unflattened and asks it what it needs — the part, the conformance level,
 // the variant — so a Level A, Level U or PDF/A-4 variant run is the same run
 // as a Level B one with the families that level adds switched on, and no
 // finding is produced at one level only to be dropped at another.
-func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
+func ValidateView(doc core.View, level Level) []Violation {
 	level, refused := ResolveTarget(doc, level)
 	if refused != nil {
 		return refused
@@ -202,6 +227,15 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 		checkFontDictionaries,
 		// Content-stream operators (6.2.2)
 		checkContentStreamOperators,
+		// Names that must be UTF-8 (6.1.8 / 6.1.7), hexadecimal strings
+		// (6.1.6 / 6.1.5), inline-image filters (6.1.10 / 6.1.9) and
+		// signature contents (6.4.3). They read the object graph, and the
+		// hexadecimal-string rule the file record too when there is one; they
+		// used to run only when the caller passed the file's bytes.
+		checkNameUTF8,
+		checkHexStringFormat,
+		checkInlineImageFilters,
+		checkSignatureContents,
 		// Prohibited catalog/page entries (6.11 / 6.12)
 		checkProhibitedCatalogEntries,
 		// Image interpolation / rendering intent (6.2.4-6.2.9)
@@ -256,13 +290,19 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 		errs = append(errs, runCheck(doc, level, check)...)
 	}
 
-	// Byte-level checks (require raw file data)
-	if rawData != nil && !doc.Cancel.Stopped() {
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkNoDataAfterEOF(rawData, level) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkFileStructureBytes(doc, level, rawData) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkLinearizedTrailerID(doc, rawData, level) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkStreamLengthBytes(doc, level, rawData) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkSignatureByteRange(doc, level, rawData) })...)
+	// Byte-level checks, over the file the document was read from. A
+	// cancelled run has already said that what it did not reach was skipped.
+	switch file := doc.FileRecord(); {
+	case doc.Cancel.Stopped():
+	case file == nil:
+		doc.Note(core.GuardNoSourceFile, "the document was not read from a file, so the byte-level file-structure rules (header, cross-reference tables, object and stream syntax, stream lengths, data after %%EOF, signature coverage) were not checked; write it and read it back to check them", 0)
+	default:
+		for _, check := range byteChecks(doc) {
+			if doc.Cancel.Stopped() {
+				break
+			}
+			errs = append(errs, runByteCheck(file, level, check)...)
+		}
 	}
 
 	finding.Sort(errs)
@@ -1027,12 +1067,13 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// checkSignatureByteRange enforces 6.4.3 (parts 2/3): a signature's digest must
-// be computed over the entire file, so the /ByteRange of each signature must
-// start at byte 0 and its two covered segments plus the excluded /Contents gap
-// must span to the end of the file. Works from the raw bytes; only the single
-// gap (the signature value) may be uncovered.
-func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation {
+// checkSignatureContents enforces the parts of 6.4.3 (PDF/A-2/-3) that are
+// about a signature dictionary's values: /ByteRange is four integers that
+// start at byte 0 with the two covered segments in order, and a PKCS#7/CMS
+// /Contents embeds the signing certificate and holds exactly one SignerInfo.
+// That the range reaches the end of the file is a fact about the file's
+// bytes, and checkSignatureCoversFile's.
+func checkSignatureContents(doc core.View, level Level) []Violation {
 	if level.Part() != 2 && level.Part() != 3 {
 		return nil
 	}
@@ -1070,15 +1111,6 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 			bad("signature /ByteRange does not cover the document from its start")
 			continue
 		}
-		// The signed range must reach the end of the file: if it stops short,
-		// the trailing bytes are unsigned and the digest does not cover the whole
-		// document. A range that meets or exceeds the file length covers it — the
-		// veraPDF corpus carries stub signatures whose /ByteRange overshoots the
-		// truncated test file, and those are treated as covering (not a defect).
-		// An end too large for an int64 overshoots every file.
-		if end, fits := br.End(); fits && end < int64(len(raw)) {
-			bad("signature /ByteRange does not cover the entire document")
-		}
 
 		// The PKCS#7/CMS signature blob in /Contents must embed the signing
 		// certificate and hold exactly one SignerInfo. Only applies when the blob
@@ -1093,6 +1125,40 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 					bad(fmt.Sprintf("signature PKCS#7 data must contain exactly one SignerInfo, found %d", info.SignerInfoCount))
 				}
 			}
+		}
+	}
+	return errs
+}
+
+// checkSignatureCoversFile enforces the byte half of 6.4.3 (PDF/A-2/-3): a
+// signature's digest must be computed over the entire file, so its signed
+// range must reach the end of the file, or the trailing bytes are unsigned.
+// The ranges are the file's own, as Read found them (FileRecord.Signatures);
+// a malformed or out-of-order range is checkSignatureContents' finding. Which
+// of them are the document's signatures is a question about the graph — a
+// signature dictionary nothing reaches signs nothing, the reading
+// checkSignatureContents takes too (audit 2026-09-22 C83) — so the record's
+// signatures are those whose objects the document reaches.
+//
+// A range that meets or exceeds the file length covers it: the veraPDF corpus
+// carries stub signatures whose /ByteRange overshoots the truncated test file,
+// and those are treated as covering (not a defect). An end too large for an
+// int64 overshoots every file.
+func checkSignatureCoversFile(doc core.View, f *core.FileRecord, level Level) []Violation {
+	if level.Part() != 2 && level.Part() != 3 || len(f.Signatures) == 0 {
+		return nil
+	}
+	reached := make(map[int]bool)
+	for _, num := range doc.ReachableObjectNums() {
+		reached[num] = true
+	}
+	var errs []Violation
+	for _, sig := range f.Signatures {
+		if !reached[sig.Num] || !sig.OK || !sig.ByteRange.Ordered() {
+			continue
+		}
+		if end, fits := sig.ByteRange.End(); fits && end < int64(len(f.Data)) {
+			errs = append(errs, Violation{Rule: "6.4.3", Level: level, Message: "signature /ByteRange does not cover the entire document", Object: sig.Num})
 		}
 	}
 	return errs
@@ -4946,14 +5012,14 @@ func allZero(b []byte) bool {
 // exampleFindings collects at most one Violation per distinct rule and
 // message. Several rules report a single representative example rather than
 // every occurrence, and their candidates arrive from a range over doc.Objects,
-// doc.Offsets or collectContentStreamData — Go maps, whose iteration order is
+// the object table or collectContentStreamData — Go maps, whose iteration order is
 // randomised on every run. Keeping whichever candidate the range happened to
 // yield first therefore named a different object each time the same file was
 // validated. Keeping the numerically smallest object number instead is a total
 // order over the candidates, so the report is reproducible. The choice is
 // load-bearing, not incidental: reports are diffed run against run.
 //
-// Emission order is deliberately not part of the contract — ValidatePDFABytes
+// Emission order is deliberately not part of the contract — ValidateView
 // sorts the concatenated findings before returning them.
 type exampleFindings struct {
 	idx  map[string]int // rule+message -> index into errs

@@ -1,7 +1,7 @@
 # Inside the PDF/A validator
 
 [validators.md](validators.md) covers the validator *family* — which entry point
-for which standard, what a result promises, how `ValidatePDFABytes` dispatches.
+for which standard, what a result promises, how `ValidatePDFA` dispatches.
 This doc goes one level down, into the engine. Open it when you are adding a PDF/A
 rule and need to know where it belongs, chasing a false positive and need to know
 which check produced it, or looking at a rule that seems oddly shaped and want the
@@ -57,12 +57,18 @@ and converts a panic into a finding with `Rule: "internal"` rather than crashing
 the caller. Stack overflows from unbounded recursion are not recoverable and are
 prevented at the source instead.
 
-**The byte-level variant** has a different signature — it needs the raw file
-bytes, which `func(*Document, pdfa.Level)` has no room for. Those are called
-through closures wrapped in `runByteCheck(level, func() []pdfa.Violation)`, its
-own recover boundary, and only when `rawData != nil`: `checkNoDataAfterEOF`,
-`checkFileStructureBytes`, `checkLinearizedTrailerID`, `checkStreamLengthBytes`,
-`checkSignatureByteRange`.
+**The byte-level rules** have a different signature: they read a
+`*core.FileRecord` — the file the document was read from, and what `Read`
+learned about it (each object's region, each stream's keyword and declared
+`/Length`, the cross-reference tables and trailers it located) — and nothing of
+the object graph, which a caller may have edited since. `byteChecks` lists them,
+and each runs through `runByteCheck`, its own recover boundary, so one that fails
+internally costs only its own rule: `checkNoDataAfterEOF`, `checkFileHeaderBytes`,
+`checkIndirectObjectSyntax`, `checkXRefTableFormat`, `checkNoXRefStreams`,
+`checkStreamKeywordFormat`, `checkLinearizedTrailerID`,
+`checkStreamLengthBytes`, `checkSignatureCoversFile`. A document built in memory
+has no file record; the byte-level rules do not run for it, and the run records
+a `no-source-file` checker finding saying so.
 
 All findings are concatenated then sorted by `(Rule, Object, Message)` — checks
 iterate map-ordered `doc.Objects`, so without the sort the report order would be
@@ -70,7 +76,7 @@ nondeterministic and undiffable.
 
 ## What is inside `pdfa.go`
 
-The `checks` slice in `ValidatePDFABytes` dispatches **59** functions. Forty of
+The `checks` slice in `ValidateView` dispatches **59** functions. Forty of
 them are defined in `pdfa.go` itself; the other nineteen live in sibling files
 (see "Where the other rule files fit"). `pdfa.go` is organised in `// --- … ---`
 sections, roughly in the order below. Rule IDs vary by part, so the clause column
@@ -113,7 +119,7 @@ Many checks want the same expensive things, and recomputing them per check was
 quadratic: content streams inflated up to three times per page, the page tree was
 collected in about eight checks, and `dictObjNum` rescanned the whole object table
 on every font lookup (audit C34 — a real regression on documents with hundreds of
-thousands of objects). `ValidatePDFABytes` therefore installs a `validationCache`
+thousands of objects). `ValidatePDFA` therefore installs a `validationCache`
 (`pdfa.go`, ~line 301) before the loop, memoising:
 
 - `pages` — page-tree object number → `[]pageInfo` (`collectPages`); `directAnnots`
@@ -247,9 +253,11 @@ is forbidden even inside a `BX`/`EX` compatibility section), the four
 `Do`/`sh`/`gs`/`cs`/`CS`/`Tf`, the drawn-PostScript-XObject prohibition and the
 A-4 ICC profile-identity rule. `walkExecutedContent` lives here — see the diagram.
 
-**`filestructure.go`** — the byte-level clause-6.1 rules, reading the raw file
+**`filestructure.go`** — the byte-level clause-6.1 rules, reading the file record
 rather than the object model: header layout, indirect-object syntax (`obj`/`endobj`
-placement, located via the source record's offsets, `Document.Source`), xref table formatting, hex-string form
+placement, over each object's region as `Read` parsed it), the cross-reference
+tables `Read` located and (at PDF/A-1) the absence of cross-reference streams,
+hex-string form
 (scanned in object bodies *and* in decoded content streams, with an
 inline-image-aware tokenizer), `stream`/`endstream` layout, inline image filters
 and intent, name UTF-8 validity. It also hosts `checkStreamLength` and
@@ -359,8 +367,9 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
 ## Known limitations and edge cases
 
 - **An empty result is not a conformance certificate** — it means no *implemented*
-  check fired. `ValidatePDFA(doc, level)` is `ValidatePDFABytes(doc, level, nil)`
-  and additionally skips all five byte-level groups. A `Rule: "internal"` finding,
+  check fired. For a document built in memory, `ValidatePDFA` also skips every
+  byte-level rule, and says so with a `no-source-file` checker finding. A
+  `Rule: "internal"` finding,
   conversely, is a pdf0 bug rather than a file defect: it is what `runCheck` emits
   after recovering a panic.
 - **Every conformance suite is measured at its own level.** `TestCorpus` runs

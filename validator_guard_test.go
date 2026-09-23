@@ -46,7 +46,7 @@ func corruptCatalogDoc() *Document {
 // TestValidatorPanicContainment is the C27 guard: every non-PDF/A validator
 // runs its checks under a recover boundary, so a panicking check is reported as
 // an "internal" finding instead of crashing the caller — the containment
-// ValidatePDFABytes has had since runCheck was written. (A stack overflow from
+// ValidatePDFA has had since runCheck was written. (A stack overflow from
 // unbounded recursion is still fatal and is not covered here; that class is
 // prevented at its source.)
 func TestValidatorPanicContainment(t *testing.T) {
@@ -66,14 +66,14 @@ func TestValidatorPanicContainment(t *testing.T) {
 		{"ValidateDParts", func(d *Document) []string { return ruleIDs(ValidateDParts(d)) }},
 		{"ValidateFacturX", func(d *Document) []string {
 			var out []string
-			for _, v := range ValidateFacturX(d, nil).Violations {
+			for _, v := range ValidateFacturX(d).Violations {
 				out = append(out, v.Rule)
 			}
 			return out
 		}},
 		{"ValidateOrderX", func(d *Document) []string {
 			var out []string
-			for _, v := range ValidateOrderX(d, nil).Violations {
+			for _, v := range ValidateOrderX(d).Violations {
 				out = append(out, v.Rule)
 			}
 			return out
