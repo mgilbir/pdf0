@@ -230,7 +230,7 @@ func ValidateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 				add("14.12.4.1", fmt.Sprintf("DPartRoot /NodeNameList has %d entries but the hierarchy has %d levels", len(arr), maxDepth), rootDictNum)
 			}
 			for _, n := range arr {
-				name, ok := n.(object.Name)
+				name, ok := doc.ResolveName(n)
 				if !ok {
 					add("14.12.4.1", "DPartRoot /NodeNameList entries shall be names", rootDictNum)
 				} else if !isXMLNameToken(string(name)) {

@@ -250,6 +250,19 @@ func (v View) ResolveBool(obj object.Object) (object.Boolean, bool) {
 	return b, ok
 }
 
+// ResolveNumber resolves obj and returns it as a float64 when it is an
+// Integer or a Real — the two spellings of a PDF number, either of which a
+// widths array, a rectangle or an opacity may use.
+func (v View) ResolveNumber(obj object.Object) (float64, bool) {
+	switch n := v.Resolve(obj).(type) {
+	case object.Integer:
+		return float64(n), true
+	case object.Real:
+		return float64(n), true
+	}
+	return 0, false
+}
+
 // Catalog returns the document catalog, or nil when the trailer names no /Root
 // or names one that is not a dictionary.
 func (v View) Catalog() *object.Dictionary {

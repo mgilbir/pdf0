@@ -339,7 +339,7 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 		}
 		if diffs, ok := doc.Resolve(enc.Get("Differences")).(object.Array); ok {
 			for _, el := range diffs {
-				if name, ok := el.(object.Name); ok {
+				if name, ok := doc.ResolveName(el); ok {
 					if !aglGlyphName(string(name)) {
 						bad("Differences glyph name /%s is not in the Adobe Glyph List", string(name))
 					}
@@ -579,7 +579,7 @@ func simpleFontCodeToName(doc core.View, fontDict *object.Dictionary, symbolic b
 		if diffs, ok := doc.Resolve(enc.Get("Differences")).(object.Array); ok {
 			code := 0
 			for _, el := range diffs {
-				switch v := el.(type) {
+				switch v := doc.Resolve(el).(type) {
 				case object.Integer:
 					code = int(v)
 				case object.Name:
@@ -717,11 +717,11 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 	}
 	enc := simpleFontCodeToName(doc, fontDict, symbolic)
 	baseEncodingModelled := simpleFontBaseEncodingModelled(doc, fontDict, symbolic)
-	firstChar := intVal(doc.Resolve(fontDict.Get("FirstChar")))
+	firstChar := intVal(doc, fontDict.Get("FirstChar"))
 	widths, _ := doc.Resolve(fontDict.Get("Widths")).(object.Array)
 	missingWidth := 0.0
 	if fd != nil {
-		missingWidth = numVal(doc.Resolve(fd.Get("MissingWidth")))
+		missingWidth = numVal(doc, fd.Get("MissingWidth"))
 	}
 
 	var errs []Violation
@@ -786,7 +786,7 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 			}
 
 			// Width consistency (only for visibly rendered glyphs).
-			pdfW, havePDF := simpleDeclaredWidth(widths, firstChar, code, missingWidth)
+			pdfW, havePDF := simpleDeclaredWidth(doc, widths, firstChar, code, missingWidth)
 			if renders && haveProg && havePDF && absf(pdfW-progW) > glyphWidthTolerance {
 				report("width", fmt.Sprintf("width information for glyphs used for rendering is inconsistent in %s font", string(subtype)))
 			}
@@ -815,7 +815,7 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 
 	dw := 1000.0
 	if v := doc.Resolve(desc.Get("DW")); v != nil {
-		dw = numVal(v)
+		dw = numVal(doc, v)
 	}
 	wMap, wComplete := parseCIDWidths(doc, desc.Get("W"))
 	if !wComplete {
@@ -910,7 +910,7 @@ func checkType3Widths(doc core.View, level Level, rule string, fontDict *object.
 		return nil
 	}
 	enc := simpleFontCodeToName(doc, fontDict, false)
-	firstChar := intVal(doc.Resolve(fontDict.Get("FirstChar")))
+	firstChar := intVal(doc, fontDict.Get("FirstChar"))
 	widths, _ := doc.Resolve(fontDict.Get("Widths")).(object.Array)
 	fm := parseFontMatrix(doc, fontDict.Get("FontMatrix"))
 	if !rendersVisibly(u) {
@@ -930,7 +930,7 @@ func checkType3Widths(doc core.View, level Level, rule string, fontDict *object.
 			if !ok {
 				continue
 			}
-			pdfW, havePDF := simpleDeclaredWidth(widths, firstChar, code, 0)
+			pdfW, havePDF := simpleDeclaredWidth(doc, widths, firstChar, code, 0)
 			if !havePDF {
 				continue
 			}
@@ -949,21 +949,17 @@ func checkType3Widths(doc core.View, level Level, rule string, fontDict *object.
 
 // --- small helpers ---
 
-func intVal(o object.Object) int {
-	if i, ok := o.(object.Integer); ok {
-		return int(i)
-	}
-	return 0
+// intVal and numVal read an integer or a number, resolved first: a /Widths
+// element or a /FirstChar may be an indirect reference like any other value.
+// Absent or the wrong type reads as 0.
+func intVal(doc core.View, o object.Object) int {
+	i, _ := doc.ResolveInt(o)
+	return int(i)
 }
 
-func numVal(o object.Object) float64 {
-	switch v := o.(type) {
-	case object.Integer:
-		return float64(v)
-	case object.Real:
-		return float64(v)
-	}
-	return 0
+func numVal(doc core.View, o object.Object) float64 {
+	f, _ := doc.ResolveNumber(o)
+	return f
 }
 
 func absf(x float64) float64 {
@@ -990,10 +986,10 @@ func rendersVisibly(u *core.FontTextUsage) bool {
 
 // simpleDeclaredWidth returns the width the font dictionary declares for a
 // code: Widths[code-FirstChar] when in range, else MissingWidth.
-func simpleDeclaredWidth(widths object.Array, firstChar int, code byte, missingWidth float64) (float64, bool) {
+func simpleDeclaredWidth(doc core.View, widths object.Array, firstChar int, code byte, missingWidth float64) (float64, bool) {
 	idx := int(code) - firstChar
 	if idx >= 0 && idx < len(widths) {
-		return numVal(widths[idx]), true
+		return numVal(doc, widths[idx]), true
 	}
 	if missingWidth != 0 {
 		return missingWidth, true
@@ -1141,18 +1137,18 @@ func parseCIDWidths(doc core.View, wObj object.Object) (map[int]float64, bool) {
 	complete := true
 	i := 0
 	for i < len(arr) {
-		c := intVal(doc.Resolve(arr[i]))
+		c := intVal(doc, arr[i])
 		if i+1 < len(arr) {
 			if sub, ok := doc.Resolve(arr[i+1]).(object.Array); ok {
 				for k, wv := range sub {
-					out[c+k] = numVal(doc.Resolve(wv))
+					out[c+k] = numVal(doc, wv)
 				}
 				i += 2
 				continue
 			}
 			if i+2 < len(arr) {
-				cLast := intVal(doc.Resolve(arr[i+1]))
-				w := numVal(doc.Resolve(arr[i+2]))
+				cLast := intVal(doc, arr[i+1])
+				w := numVal(doc, arr[i+2])
 				// A hostile /W like [0 2000000000 500] would otherwise drive
 				// ~2e9 map inserts — a memory/CPU DoS reached before any render
 				// gate, since parseCIDWidths runs unconditionally in
@@ -1183,7 +1179,7 @@ func parseFontMatrix(doc core.View, o object.Object) [6]float64 {
 	fm := [6]float64{0.001, 0, 0, 0.001, 0, 0}
 	if arr, ok := doc.Resolve(o).(object.Array); ok && len(arr) == 6 {
 		for i := 0; i < 6; i++ {
-			fm[i] = numVal(doc.Resolve(arr[i]))
+			fm[i] = numVal(doc, arr[i])
 		}
 	}
 	return fm
@@ -1204,7 +1200,7 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 	for !found && lx.Next(&t) {
 		switch t.Kind {
 		case core.ContentNumber:
-			nums = append(nums, numVal(parseNumberToken(t.Raw)))
+			nums = append(nums, parseNumberToken(t.Raw))
 		case core.ContentOperator:
 			switch string(t.Raw) {
 			case "d0", "d1":
@@ -1225,13 +1221,13 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 	return w, found
 }
 
-// parseNumberToken parses a numeric content token to a object.Real/object.Integer object.
-func parseNumberToken(b []byte) object.Object {
+// parseNumberToken parses a numeric content token.
+func parseNumberToken(b []byte) float64 {
 	s := string(b)
 	if strings.ContainsAny(s, ".eE") {
 		var f float64
 		font.ParseFloat(s, &f)
-		return object.Real(f)
+		return f
 	}
 	neg := false
 	i := 0
@@ -1245,7 +1241,7 @@ func parseNumberToken(b []byte) object.Object {
 	if neg {
 		v = -v
 	}
-	return object.Integer(v)
+	return float64(v)
 }
 
 // --- subset CharSet / CIDSet completeness ---

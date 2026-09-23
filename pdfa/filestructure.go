@@ -352,6 +352,8 @@ func walkColorantUTF8(doc core.View, obj object.Object, num int, add func(string
 		return
 	}
 	switch v := obj.(type) {
+	case object.IndirectRef:
+		// Visited as its own object.
 	case object.Array:
 		checkColorantArrayUTF8(doc, v, num, add)
 		for _, e := range v {
@@ -374,16 +376,16 @@ func checkColorantArrayUTF8(doc core.View, arr object.Array, num int, add func(s
 	if len(arr) < 2 {
 		return
 	}
-	csType, _ := arr[0].(object.Name)
+	csType, _ := doc.ResolveName(arr[0])
 	switch csType {
 	case "Separation":
-		if name, ok := arr[1].(object.Name); ok && !validUTF8Name(name) {
+		if name, ok := doc.ResolveName(arr[1]); ok && !validUTF8Name(name) {
 			add("the colorant name in a Separation colour space is not a valid UTF-8 string", num)
 		}
 	case "DeviceN":
 		if names, ok := doc.Resolve(arr[1]).(object.Array); ok {
 			for _, el := range names {
-				if name, ok := el.(object.Name); ok && !validUTF8Name(name) {
+				if name, ok := doc.ResolveName(el); ok && !validUTF8Name(name) {
 					add("the colorant name in a DeviceN colour space is not a valid UTF-8 string", num)
 				}
 			}
@@ -411,7 +413,7 @@ func checkA4NameUTF8(doc core.View, dict *object.Dictionary, num int, add func(s
 			if !validUTF8Name(key) {
 				add("the structure type name in RoleMap is not a valid UTF-8 string", num)
 			}
-			if val, ok := rval.(object.Name); ok && !validUTF8Name(val) {
+			if val, ok := doc.ResolveName(rval); ok && !validUTF8Name(val) {
 				add("the structure type name in RoleMap is not a valid UTF-8 string", num)
 			}
 		}
@@ -1078,11 +1080,11 @@ func checkObjectStreamDecodable(doc core.View, level Level) []Violation {
 // the traditional trailers a linearized PDF/A-1 file uses. Gated on
 // /Linearized: a non-linearized incremental-update file legitimately carries
 // several trailers, and comparing them there produced a false positive.
-func checkLinearizedTrailerID(raw []byte, level Level) []Violation {
+func checkLinearizedTrailerID(doc core.View, raw []byte, level Level) []Violation {
 	if !bytes.Contains(raw, []byte("/Linearized")) {
 		return nil
 	}
-	ids := collectTrailerIDFirstElements(raw)
+	ids := collectTrailerIDFirstElements(doc, raw)
 	if len(ids) >= 2 && !bytes.Equal(ids[0], ids[len(ids)-1]) {
 		return []Violation{{
 			Rule:    "6.1.3",
@@ -1094,8 +1096,10 @@ func checkLinearizedTrailerID(raw []byte, level Level) []Violation {
 }
 
 // collectTrailerIDFirstElements returns the first element of the /ID array of
-// every traditional "trailer" dictionary in raw, in file order.
-func collectTrailerIDFirstElements(raw []byte) [][]byte {
+// every traditional "trailer" dictionary in raw, in file order. A trailer is
+// parsed from the bytes, but what it references are objects of the same file,
+// so an indirect /ID (or an indirect element) resolves through the document.
+func collectTrailerIDFirstElements(doc core.View, raw []byte) [][]byte {
 	var ids [][]byte
 	for i := 0; ; {
 		idx := bytes.Index(raw[i:], []byte("trailer"))
@@ -1114,8 +1118,8 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 		if !ok {
 			continue
 		}
-		if arr, ok := d.Get("ID").(object.Array); ok && len(arr) >= 1 {
-			if s, ok := arr[0].(object.String); ok { // string: a trailer's file identifier, parsed from the raw bytes and never encrypted (ISO 32000-2 7.6.2)
+		if arr, ok := doc.Resolve(d.Get("ID")).(object.Array); ok && len(arr) >= 1 {
+			if s, ok := doc.Resolve(arr[0]).(object.String); ok { // string: a trailer's file identifier, parsed from the raw bytes and never encrypted (ISO 32000-2 7.6.2)
 				ids = append(ids, append([]byte(nil), s.Value...))
 			}
 		}

@@ -145,7 +145,7 @@ func checkFileTrailerID(doc core.View, level Level) []Violation {
 	valid := ok && len(arr) == 2
 	if valid {
 		for _, el := range arr {
-			s, ok := el.(object.String) // string: the file identifier is never encrypted (ISO 32000-2 7.6.2), so its bytes are its value even in a Locked document
+			s, ok := doc.Resolve(el).(object.String) // string: the file identifier is never encrypted (ISO 32000-2 7.6.2), so its bytes are its value even in a Locked document
 			if !ok || len(s.Value) == 0 {
 				valid = false
 			}
@@ -453,7 +453,7 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 			if !ok {
 				continue
 			}
-			if !isPDFMIME(stream.Dict.Get("Subtype")) {
+			if !isPDFMIME(doc, stream.Dict.Get("Subtype")) {
 				errs = append(errs, Violation{Rule: "6.9", Level: level,
 					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
 				continue
@@ -527,9 +527,9 @@ func relaxedAsVariant(flag string, variants ...string) bool {
 
 // isPDFMIME reports whether a stream /Subtype names the application/pdf MIME
 // type (stored as the name /application#2Fpdf).
-func isPDFMIME(subtype object.Object) bool {
-	n, ok := subtype.(object.Name)
-	return ok && string(n) == "application/pdf"
+func isPDFMIME(doc core.View, subtype object.Object) bool {
+	n, _ := doc.ResolveName(subtype)
+	return string(n) == "application/pdf"
 }
 
 // checkInheritedPageXObject enforces that an XObject drawn (Do) by a page's

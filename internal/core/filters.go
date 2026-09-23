@@ -229,11 +229,13 @@ func filterEntriesIndirect(stream *object.Stream) bool {
 			}
 		case object.Array:
 			for _, e := range v {
-				if isRef(e) {
+				switch x := e.(type) {
+				case object.IndirectRef:
 					return true
-				}
-				if d, ok := e.(*object.Dictionary); ok && dictHasRef(d) {
-					return true
+				case *object.Dictionary:
+					if dictHasRef(x) {
+						return true
+					}
 				}
 			}
 		}

@@ -235,15 +235,15 @@ func TestLinearizedTrailerIDMismatch(t *testing.T) {
 			"trailer\n<< /ID [<" + id1 + "> <AAAA>] >>\n" +
 			"trailer\n<< /ID [<" + id2 + "> <BBBB>] >>\n")
 	}
-	if got := len(checkLinearizedTrailerID(mk("1111", "2222"), PDFA1b)); got == 0 {
+	if got := len(checkLinearizedTrailerID(mkView(nil, nil), mk("1111", "2222"), PDFA1b)); got == 0 {
 		t.Error("mismatched linearized trailer IDs not flagged")
 	}
-	if got := len(checkLinearizedTrailerID(mk("1111", "1111"), PDFA1b)); got != 0 {
+	if got := len(checkLinearizedTrailerID(mkView(nil, nil), mk("1111", "1111"), PDFA1b)); got != 0 {
 		t.Errorf("consistent linearized trailer IDs wrongly flagged: %d", got)
 	}
 	// Not linearized -> not this rule's concern.
 	nonLin := []byte("%PDF-1.4\ntrailer\n<< /ID [<1111> <A>] >>\ntrailer\n<< /ID [<2222> <B>] >>\n")
-	if got := len(checkLinearizedTrailerID(nonLin, PDFA1b)); got != 0 {
+	if got := len(checkLinearizedTrailerID(mkView(nil, nil), nonLin, PDFA1b)); got != 0 {
 		t.Errorf("non-linearized file wrongly flagged: %d", got)
 	}
 }

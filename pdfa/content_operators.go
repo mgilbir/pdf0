@@ -383,7 +383,7 @@ func checkContentNumberLimit(s string, lim implLimits, objNum int, add func(stri
 		}
 	}
 	if isReal {
-		v := numVal(parseNumberToken([]byte(s)))
+		v := parseNumberToken([]byte(s))
 		if absf(v) > lim.realLimit {
 			add(fmt.Sprintf("a content-stream real value %s exceeds the magnitude limit %g", s, lim.realLimit), objNum)
 		}
@@ -547,7 +547,7 @@ func renderedICCCMYKProfile(doc core.View, csVal object.Object) *object.Stream {
 	if !ok || len(arr) < 3 {
 		return nil
 	}
-	if n, _ := arr[0].(object.Name); n == "Separation" || n == "DeviceN" {
+	if n, _ := doc.ResolveName(arr[0]); n == "Separation" || n == "DeviceN" {
 		return iccCMYKProfile(doc, arr[2])
 	}
 	return nil

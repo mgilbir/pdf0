@@ -266,10 +266,16 @@ func pdfdocBytes(s string) ([]byte, bool) {
 }
 
 func TestIsPDFMIME(t *testing.T) {
-	if !isPDFMIME(object.Name("application/pdf")) {
+	objs := map[int]*object.IndirectObject{}
+	ref := indirect(objs, 9, object.Name("application/pdf"))
+	doc := mkView(objs, nil)
+	if !isPDFMIME(doc, object.Name("application/pdf")) {
 		t.Error("application/pdf not recognized")
 	}
-	if isPDFMIME(object.Name("text/plain")) || isPDFMIME(object.Integer(1)) || isPDFMIME(nil) {
+	if !isPDFMIME(doc, ref) {
+		t.Error("application/pdf written indirectly not recognized")
+	}
+	if isPDFMIME(doc, object.Name("text/plain")) || isPDFMIME(doc, object.Integer(1)) || isPDFMIME(doc, nil) {
 		t.Error("non-pdf MIME wrongly recognized")
 	}
 }

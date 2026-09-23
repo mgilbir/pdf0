@@ -540,7 +540,7 @@ func pdfxRect(doc core.View, o object.Object) ([4]float64, bool) {
 	}
 	var r [4]float64
 	for i, e := range arr {
-		f, ok := pdfxNum(doc.Resolve(e))
+		f, ok := doc.ResolveNumber(e)
 		if !ok {
 			return [4]float64{}, false
 		}
@@ -553,16 +553,6 @@ func pdfxRect(doc core.View, o object.Object) ([4]float64, bool) {
 		r[1], r[3] = r[3], r[1]
 	}
 	return r, true
-}
-
-func pdfxNum(o object.Object) (float64, bool) {
-	switch v := o.(type) {
-	case object.Integer:
-		return float64(v), true
-	case object.Real:
-		return float64(v), true
-	}
-	return 0, false
 }
 
 // rectContains reports whether inner lies within outer, tolerating small

@@ -325,7 +325,7 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 	if rawData != nil && !doc.Cancel.Stopped() {
 		errs = append(errs, runByteCheck(level, func() []Violation { return checkNoDataAfterEOF(rawData, level) })...)
 		errs = append(errs, runByteCheck(level, func() []Violation { return checkFileStructureBytes(doc, level, rawData) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkLinearizedTrailerID(rawData, level) })...)
+		errs = append(errs, runByteCheck(level, func() []Violation { return checkLinearizedTrailerID(doc, rawData, level) })...)
 		errs = append(errs, runByteCheck(level, func() []Violation { return checkStreamLengthBytes(doc, level, rawData) })...)
 		errs = append(errs, runByteCheck(level, func() []Violation { return checkSignatureByteRange(doc, level, rawData) })...)
 	}
@@ -358,7 +358,7 @@ func checkFileID(doc core.View, level Level) []Violation {
 			Message: "trailer must contain /ID array",
 		}}
 	}
-	arr, ok := idObj.(object.Array)
+	arr, ok := doc.Resolve(idObj).(object.Array)
 	if !ok {
 		return []Violation{{
 			Rule:    "6.1.3",
@@ -374,7 +374,7 @@ func checkFileID(doc core.View, level Level) []Violation {
 		}}
 	}
 	for i, elem := range arr {
-		if _, ok := elem.(object.String); !ok { // string: a type check on the file identifier, which is never encrypted (ISO 32000-2 7.6.2)
+		if _, ok := doc.Resolve(elem).(object.String); !ok { // string: a type check on the file identifier, which is never encrypted (ISO 32000-2 7.6.2)
 			return []Violation{{
 				Rule:    "6.1.3",
 				Level:   level,
@@ -531,7 +531,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 
 	var errs []Violation
 
-	if t := stream.Dict.Get("Type"); t == nil || t != object.Name("Metadata") {
+	if t, _ := doc.ResolveName(stream.Dict.Get("Type")); t != "Metadata" {
 		errs = append(errs, Violation{
 			Rule:    "6.7.2",
 			Level:   level,
@@ -539,7 +539,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 		})
 	}
 
-	if st := stream.Dict.Get("Subtype"); st == nil || st != object.Name("XML") {
+	if st, _ := doc.ResolveName(stream.Dict.Get("Subtype")); st != "XML" {
 		errs = append(errs, Violation{
 			Rule:    "6.7.2",
 			Level:   level,
@@ -705,7 +705,7 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 			continue
 		}
 
-		if _, ok := s.(object.Name); !ok {
+		if _, ok := doc.ResolveName(s); !ok {
 			errs = append(errs, Violation{
 				Rule:    colourClause("outputIntent", level),
 				Level:   level,
@@ -835,7 +835,7 @@ func checkOutputIntentProfile(doc core.View, level Level) []Violation {
 			})
 			continue
 		}
-		nVal, ok := nObj.(object.Integer)
+		nVal, ok := doc.ResolveInt(nObj)
 		if !ok {
 			continue
 		}
@@ -1066,7 +1066,7 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		if hasFilter(stream, "LZWDecode") {
+		if hasFilter(doc, stream, "LZWDecode") {
 			errs = append(errs, Violation{
 				Rule:    filterClause(level),
 				Level:   level,
@@ -1078,7 +1078,7 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 		// PDF/A-1, which is based on PDF 1.4. It is a standard filter at 2b/3b/4,
 		// so isStandardFilter accepts it there; forbid it explicitly at PDF/A-1
 		// (audit C17).
-		if level == PDFA1b && hasFilter(stream, "JPXDecode") {
+		if level == PDFA1b && hasFilter(doc, stream, "JPXDecode") {
 			errs = append(errs, Violation{
 				Rule:    filterClause(level),
 				Level:   level,
@@ -1087,7 +1087,7 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 			})
 		}
 		// Check for non-standard filter names
-		if badFilter := getNonStandardFilter(stream); badFilter != "" {
+		if badFilter := getNonStandardFilter(doc, stream); badFilter != "" {
 			errs = append(errs, Violation{
 				Rule:    filterClause(level),
 				Level:   level,
@@ -1180,39 +1180,25 @@ func isStandardFilter(name object.Name) bool {
 	return false
 }
 
-func getNonStandardFilter(stream *object.Stream) string {
-	f := stream.Dict.Get("Filter")
-	if f == nil {
-		return ""
-	}
-	if name, ok := f.(object.Name); ok {
+// getNonStandardFilter returns the first filter on the stream that is not a
+// standard one, or "". The chain is read through StreamFilters, which resolves
+// the /Filter value and each name in it: `/Filter 7 0 R` naming /LZWDecode is
+// as much an LZW stream as the direct spelling (audit C36).
+func getNonStandardFilter(doc core.View, stream *object.Stream) string {
+	for _, name := range doc.StreamFilters(stream) {
 		if !isStandardFilter(name) {
 			return string(name)
-		}
-	}
-	if arr, ok := f.(object.Array); ok {
-		for _, elem := range arr {
-			if name, ok := elem.(object.Name); ok && !isStandardFilter(name) {
-				return string(name)
-			}
 		}
 	}
 	return ""
 }
 
-func hasFilter(stream *object.Stream, filterName string) bool {
-	f := stream.Dict.Get("Filter")
-	if f == nil {
-		return false
-	}
-	if name, ok := f.(object.Name); ok {
-		return string(name) == filterName
-	}
-	if arr, ok := f.(object.Array); ok {
-		for _, elem := range arr {
-			if name, ok := elem.(object.Name); ok && string(name) == filterName {
-				return true
-			}
+// hasFilter reports whether filterName is anywhere in the stream's filter
+// chain, resolved as getNonStandardFilter's is.
+func hasFilter(doc core.View, stream *object.Stream, filterName string) bool {
+	for _, name := range doc.StreamFilters(stream) {
+		if string(name) == filterName {
+			return true
 		}
 	}
 	return false
@@ -1509,7 +1495,10 @@ func collectDirectAnnotations(doc core.View) []annotOccurrence {
 			continue
 		}
 		for _, el := range annots {
-			if dict, ok := el.(*object.Dictionary); ok {
+			switch dict := el.(type) {
+			case object.IndirectRef:
+				// A top-level object, which the object scans already visit.
+			case *object.Dictionary:
 				out = append(out, annotOccurrence{dict: dict, num: page.ObjNum})
 			}
 		}
@@ -1569,17 +1558,6 @@ func checkAnnotationSubtypes(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// annotOpacity returns an annotation /CA value as a float, if it is numeric.
-func annotOpacity(v object.Object) (float64, bool) {
-	switch n := v.(type) {
-	case object.Integer:
-		return float64(n), true
-	case object.Real:
-		return float64(n), true
-	}
-	return 0, false
-}
-
 // Rule 6.3.2-1/2: Non-Popup annotations require F key; flags must have Print set,
 // Hidden/Invisible/ToggleNoView/NoView clear.
 func checkAnnotationFlags(doc core.View, level Level) []Violation {
@@ -1589,7 +1567,7 @@ func checkAnnotationFlags(doc core.View, level Level) []Violation {
 		// — annotation transparency is not permitted. This applies to every
 		// annotation subtype, so it precedes the Popup exemption below.
 		if level == PDFA1b {
-			if ca, ok := annotOpacity(doc.Resolve(dict.Get("CA"))); ok && math.Abs(ca-1.0) > 1e-6 {
+			if ca, ok := doc.ResolveNumber(dict.Get("CA")); ok && math.Abs(ca-1.0) > 1e-6 {
 				errs = append(errs, Violation{
 					Rule:    "6.5.3",
 					Level:   level,
@@ -1714,7 +1692,7 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 		}
 
 		// Exempt zero-area rectangles
-		if isZeroAreaRect(dict.Get("Rect")) {
+		if isZeroAreaRect(doc, dict.Get("Rect")) {
 			return
 		}
 
@@ -1823,21 +1801,21 @@ func annotFieldType(doc core.View, dict *object.Dictionary) object.Name {
 	return ""
 }
 
-func isZeroAreaRect(obj object.Object) bool {
-	arr, ok := obj.(object.Array)
+// isZeroAreaRect reports whether a /Rect has zero width or height. The
+// rectangle and each coordinate are resolved: an indirect /Rect used to read as
+// "not a rectangle", which reported a zero-area annotation as missing its /AP.
+func isZeroAreaRect(doc core.View, obj object.Object) bool {
+	arr, ok := doc.Resolve(obj).(object.Array)
 	if !ok || len(arr) != 4 {
 		return false
 	}
 	vals := make([]float64, 4)
 	for i, elem := range arr {
-		switch v := elem.(type) {
-		case object.Integer:
-			vals[i] = float64(v)
-		case object.Real:
-			vals[i] = float64(v)
-		default:
+		v, ok := doc.ResolveNumber(elem)
+		if !ok {
 			return false
 		}
+		vals[i] = v
 	}
 	// Zero area if width or height is zero
 	return (vals[2]-vals[0]) == 0 || (vals[3]-vals[1]) == 0
@@ -1933,11 +1911,7 @@ func checkNeedAppearances(doc core.View, level Level) []Violation {
 	if af == nil {
 		return nil
 	}
-	na := af.Get("NeedAppearances")
-	if na == nil {
-		return nil
-	}
-	if b, ok := na.(object.Boolean); ok && bool(b) {
+	if doc.IsTrue(af.Get("NeedAppearances")) {
 		return []Violation{{
 			Rule:    "6.4.1",
 			Level:   level,
@@ -2047,7 +2021,10 @@ func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 	// to the object scan above. Check their direct /A actions explicitly (an
 	// indirect /A resolves to a top-level object the scan already covers).
 	for _, a := range collectDirectAnnotations(doc) {
-		if actionDict, ok := a.dict.Get("A").(*object.Dictionary); ok {
+		switch actionDict := a.dict.Get("A").(type) {
+		case object.IndirectRef:
+			// A top-level object: the scan above covered it.
+		case *object.Dictionary:
 			errs = append(errs, checkActionObject(doc, actionDict, a.num, level, conformance)...)
 		}
 	}
@@ -2127,7 +2104,10 @@ func checkNamedActions(doc core.View, level Level) []Violation {
 	// Direct annotations may carry direct action dictionaries that never
 	// appear as top-level objects (an indirect /A is already covered above).
 	for _, a := range collectDirectAnnotations(doc) {
-		if actionDict, ok := a.dict.Get("A").(*object.Dictionary); ok {
+		switch actionDict := a.dict.Get("A").(type) {
+		case object.IndirectRef:
+			// A top-level object: the scan above covered it.
+		case *object.Dictionary:
 			check(actionDict, a.num)
 		}
 	}
@@ -2344,7 +2324,7 @@ func checkNoTransparency(doc core.View, level Level) []Violation {
 
 		smask := gs.Get("SMask")
 		if smask != nil {
-			if n, ok := smask.(object.Name); ok && n == "None" {
+			if n, ok := doc.ResolveName(smask); ok && n == "None" {
 				// acceptable
 			} else {
 				errs = append(errs, Violation{
@@ -2358,7 +2338,7 @@ func checkNoTransparency(doc core.View, level Level) []Violation {
 
 		bm := gs.Get("BM")
 		if bm != nil {
-			if n, ok := bm.(object.Name); ok {
+			if n, ok := doc.ResolveName(bm); ok {
 				if n != "Normal" && n != "Compatible" {
 					errs = append(errs, Violation{
 						Rule:    "6.4",
@@ -2371,15 +2351,7 @@ func checkNoTransparency(doc core.View, level Level) []Violation {
 		}
 
 		for _, key := range []object.Name{"CA", "ca"} {
-			v := gs.Get(key)
-			if v != nil {
-				val := 1.0
-				switch tv := v.(type) {
-				case object.Real:
-					val = float64(tv)
-				case object.Integer:
-					val = float64(tv)
-				}
+			if val, ok := doc.ResolveNumber(gs.Get(key)); ok {
 				if math.Abs(val-1.0) > 1e-6 {
 					errs = append(errs, Violation{
 						Rule:    "6.4",
@@ -2630,7 +2602,7 @@ func checkCatalogVersion(doc core.View, level Level) []Violation {
 		return nil
 	}
 
-	vName, ok := versionObj.(object.Name)
+	vName, ok := doc.ResolveName(versionObj)
 	if !ok {
 		return []Violation{{
 			Rule:    "6.1.12",
@@ -2777,7 +2749,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 
 		// /TR2 must be /Default if present
 		if tr2 := dict.Get("TR2"); tr2 != nil {
-			if n, ok := tr2.(object.Name); !ok || n != "Default" {
+			if n, ok := doc.ResolveName(tr2); !ok || n != "Default" {
 				errs = append(errs, Violation{
 					Rule:    rule,
 					Level:   level,
@@ -2824,7 +2796,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 		// forbidden wholesale by checkNoTransparency.
 		if level != PDFA1b {
 			if bm := dict.Get("BM"); bm != nil {
-				if n, ok := bm.(object.Name); ok {
+				if n, ok := doc.ResolveName(bm); ok {
 					if !isValidBlendMode(n) {
 						errs = append(errs, Violation{
 							Rule:    rule,
@@ -2859,7 +2831,7 @@ func checkHalftoneErrors(doc core.View, htRef object.Object, objNum int, level L
 	}
 
 	if htType := htDict.Get("HalftoneType"); htType != nil {
-		if intVal, ok := htType.(object.Integer); ok {
+		if intVal, ok := doc.ResolveInt(htType); ok {
 			if intVal != 1 && intVal != 5 {
 				*errs = append(*errs, Violation{
 					Rule:    rule,
@@ -3282,7 +3254,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 			switch subtype, _ := doc.ResolveName(stream.Dict.Get("Subtype")); subtype {
 			case "Image":
 				if sm := stream.Dict.Get("SMask"); sm != nil {
-					if n, ok := sm.(object.Name); !ok || n != "None" {
+					if n, ok := doc.ResolveName(sm); !ok || n != "None" {
 						*errs = append(*errs, Violation{
 							Rule:    "6.4",
 							Level:   level,
@@ -3460,7 +3432,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 							Message: "embedded file stream must have /Subtype (MIME type)",
 							Object:  num,
 						})
-					} else if name, ok := st.(object.Name); ok {
+					} else if name, ok := doc.ResolveName(st); ok {
 						if !strings.Contains(string(name), "/") {
 							errs = append(errs, Violation{
 								Rule:    rule,
@@ -3619,7 +3591,7 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 		orderArr, ok := doc.Resolve(orderRef).(object.Array)
 		if ok {
 			referencedOCGs := make(map[int]bool)
-			collectOCGRefs(orderArr, referencedOCGs)
+			collectOCGRefs(doc, orderArr, referencedOCGs, map[int]bool{})
 			for _, ocgRef := range ocgsArr {
 				if iref, ok := ocgRef.(object.IndirectRef); ok {
 					if !referencedOCGs[iref.Number] {
@@ -3637,13 +3609,22 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 	return errs
 }
 
-func collectOCGRefs(arr object.Array, refs map[int]bool) {
+// collectOCGRefs records every OCG an /Order array names, descending into its
+// nested arrays. An optional content group is always a reference (it is a
+// dictionary identified by its object), but a nested array may be one too,
+// so a reference is recorded and, when it names an array, descended into;
+// seen stops an array that contains itself.
+func collectOCGRefs(doc core.View, arr object.Array, refs map[int]bool, seen map[int]bool) {
 	for _, item := range arr {
-		if iref, ok := item.(object.IndirectRef); ok {
-			refs[iref.Number] = true
-		}
-		if subArr, ok := item.(object.Array); ok {
-			collectOCGRefs(subArr, refs)
+		switch v := item.(type) {
+		case object.IndirectRef:
+			refs[v.Number] = true
+			if sub, ok := doc.Resolve(v).(object.Array); ok && !seen[v.Number] {
+				seen[v.Number] = true
+				collectOCGRefs(doc, sub, refs, seen)
+			}
+		case object.Array:
+			collectOCGRefs(doc, v, refs, seen)
 		}
 	}
 }
@@ -3713,6 +3694,9 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 	}
 
 	switch v := obj.(type) {
+	case object.IndirectRef:
+		// The limits are on each object as written: a referenced object is
+		// measured as its own object, at its own nesting depth.
 	case object.Name:
 		if len(string(v)) > lim.nameLen {
 			*errs = append(*errs, Violation{
@@ -3830,14 +3814,11 @@ func checkPageSizeLimits(doc core.View, level Level, errs *[]Violation) {
 			vals := make([]float64, 4)
 			valid := true
 			for i, elem := range arr {
-				switch ev := elem.(type) {
-				case object.Integer:
-					vals[i] = float64(ev)
-				case object.Real:
-					vals[i] = float64(ev)
-				default:
+				v, ok := doc.ResolveNumber(elem)
+				if !ok {
 					valid = false
 				}
+				vals[i] = v
 			}
 			if !valid {
 				continue
@@ -4120,13 +4101,11 @@ func checkICCBasedProfiles(doc core.View, level Level) []Violation {
 		// Verify it's actually an ICC profile by checking for Alternate or being
 		// referenced from a ColorSpace array. We check for the /N key which is
 		// specific to ICC profile streams.
-		nVal := 0
-		switch v := nObj.(type) {
-		case object.Integer:
-			nVal = int(v)
-		default:
+		n, ok := doc.ResolveInt(nObj)
+		if !ok {
 			continue
 		}
+		nVal := int(n)
 
 		// N must be 1, 3, or 4
 		if nVal != 1 && nVal != 3 && nVal != 4 {
@@ -4210,7 +4189,10 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 			// is not a top-level object, so this scan would never visit its
 			// /ColorSpace entries; descend explicitly. Indirect Resources
 			// are separate objects and are visited by the loop itself.
-			if resDict, ok := dict.Get("Resources").(*object.Dictionary); ok {
+			switch resDict := dict.Get("Resources").(type) {
+			case object.IndirectRef:
+				// Visited by the loop as its own object.
+			case *object.Dictionary:
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
 				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
@@ -4223,7 +4205,10 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 			}
 			// Also check direct Resources in Form XObjects (indirect ones
 			// are visited as top-level objects).
-			if resDict, ok := stream.Dict.Get("Resources").(*object.Dictionary); ok {
+			switch resDict := stream.Dict.Get("Resources").(type) {
+			case object.IndirectRef:
+				// Visited by the loop as its own object.
+			case *object.Dictionary:
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
 				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
@@ -4280,7 +4265,7 @@ func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTran
 	if !ok || len(arr) == 0 {
 		return
 	}
-	csType, _ := arr[0].(object.Name)
+	csType, _ := doc.ResolveName(arr[0])
 
 	// Separations inside a DeviceN attributes' Colorants dictionary join
 	// the same consistency pool (the corpus flags NChannel colorants with
@@ -4299,7 +4284,7 @@ func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTran
 	if csType != "Separation" || len(arr) < 4 {
 		return
 	}
-	colorantName, ok := arr[1].(object.Name)
+	colorantName, ok := doc.ResolveName(arr[1])
 	if !ok {
 		return
 	}
@@ -4364,7 +4349,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		return
 	}
 
-	csType, ok := arr[0].(object.Name)
+	csType, ok := doc.ResolveName(arr[0])
 	if !ok {
 		return
 	}
@@ -4393,7 +4378,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 			return
 		}
 		// Check colorant name is not None for PDF/A-2b+ (it's reserved)
-		if name, ok := arr[1].(object.Name); ok && name == "None" {
+		if name, ok := doc.ResolveName(arr[1]); ok && name == "None" {
 			// "None" is a special name in PDF 2.0 only
 			if level != PDFA4 {
 				*errs = append(*errs, Violation{
@@ -4457,7 +4442,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		if level != PDFA1b && namesOk {
 			hasSpot := false
 			for _, nameObj := range namesArr {
-				if name, ok := nameObj.(object.Name); ok && !isProcessColorant(name) {
+				if name, ok := doc.ResolveName(nameObj); ok && !isProcessColorant(name) {
 					hasSpot = true
 					break
 				}
@@ -4491,7 +4476,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 						// Check that each DeviceN colorant name has an entry in Colorants dict
 						if namesOk {
 							for _, nameObj := range namesArr {
-								if name, ok := nameObj.(object.Name); ok {
+								if name, ok := doc.ResolveName(nameObj); ok {
 									if colorantsDict.Get(name) == nil {
 										rule := "6.2.4"
 										if level == PDFA1b {
@@ -4671,7 +4656,7 @@ func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level 
 
 	// If it's an array, recurse to check for nested Separation/DeviceN
 	if arr, ok := resolved.(object.Array); ok && len(arr) >= 2 {
-		if csType, ok := arr[0].(object.Name); ok {
+		if csType, ok := doc.ResolveName(arr[0]); ok {
 			if csType == "Separation" || csType == "DeviceN" {
 				// Nested Separation/DeviceN - check their alternates too
 				if len(arr) >= 3 {
@@ -4751,7 +4736,7 @@ func iccCMYKProfile(doc core.View, csVal object.Object) *object.Stream {
 	if !ok || len(arr) < 2 {
 		return nil
 	}
-	if n, _ := arr[0].(object.Name); n != "ICCBased" {
+	if n, _ := doc.ResolveName(arr[0]); n != "ICCBased" {
 		return nil
 	}
 	stream, ok := doc.Resolve(arr[1]).(*object.Stream)
@@ -4770,7 +4755,7 @@ func iccProfileStream(doc core.View, csVal object.Object) *object.Stream {
 	if !ok || len(arr) < 2 {
 		return nil
 	}
-	if n, _ := arr[0].(object.Name); n != "ICCBased" {
+	if n, _ := doc.ResolveName(arr[0]); n != "ICCBased" {
 		return nil
 	}
 	stream, _ := doc.Resolve(arr[1]).(*object.Stream)
@@ -5002,7 +4987,7 @@ func checkJPXImages(doc core.View, level Level) []Violation {
 	var errs []Violation
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
-		if !ok || !hasFilter(stream, "JPXDecode") {
+		if !ok || !hasFilter(doc, stream, "JPXDecode") {
 			continue
 		}
 		info := parseJP2Header(stream.Data)
