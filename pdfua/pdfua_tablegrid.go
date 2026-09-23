@@ -50,7 +50,7 @@ func checkUATableTHScope(d core.View, cat *object.Dictionary) []Violation {
 		}
 		if !reported[el] {
 			reported[el] = true
-			v = append(v, Violation{"7.5", "table header cell (TH) has neither a Scope attribute nor an /ID", d.ObjNumOf(el)})
+			v = append(v, Violation{Clause: "7.5", Message: "table header cell (TH) has neither a Scope attribute nor an /ID", Object: d.ObjNumOf(el)})
 		}
 	})
 	return v
@@ -278,13 +278,13 @@ func gridDefects(rows []tableRow, maxFills int64) ([]Violation, bool) {
 
 	var v []Violation
 	if outOfRows {
-		v = append(v, Violation{"7.2", "a table cell's RowSpan extends beyond the last row of the table", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "a table cell's RowSpan extends beyond the last row of the table", Object: 0})
 	}
 	if overlap {
-		v = append(v, Violation{"7.2", "table cells overlap on the grid (inconsistent RowSpan/ColSpan)", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table cells overlap on the grid (inconsistent RowSpan/ColSpan)", Object: 0})
 	}
 	if hole {
-		v = append(v, Violation{"7.2", "table rows do not all span the same number of columns (a grid cell is empty)", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table rows do not all span the same number of columns (a grid cell is empty)", Object: 0})
 	}
 	return v, true
 }

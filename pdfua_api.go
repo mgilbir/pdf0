@@ -37,6 +37,9 @@ func ValidatePDFUAContext(ctx context.Context, doc *Document) []pdfua.Violation 
 // part 1 and a PDF 1.x header — are selected here by part rather than filtered
 // out of the result by message text afterwards (audit C39).
 func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Violation {
+	if doc == nil {
+		return []pdfua.Violation{{Clause: finding.LimitRule, Message: nilDocumentMessage, Part: part}}
+	}
 	// Install a per-run cache (page tree, decoded content, font-usage map) on a
 	// shallow copy so the original document is never mutated. Many checks walk
 	// the same structures — core.CollectFontTextUsage alone runs in nine font
@@ -53,7 +56,7 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Vio
 	// on the Document, which is why this is here and not below.
 	v = append(v, limitUAViolations(rd)...)
 	finding.Sort(v)
-	return v
+	return pdfua.WithPart(v, part)
 }
 
 // ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the pdfua.Violation
@@ -68,6 +71,9 @@ func ValidatePDFUA2Context(ctx context.Context, d *Document) []pdfua.Violation {
 	return validatePDFUA2(core.NewCanceler(ctx), d)
 }
 func validatePDFUA2(cancel core.Canceler, d *Document) []pdfua.Violation {
+	if d == nil {
+		return validatePDFUA(cancel, d, "2")
+	}
 	// The shared checks (tagging, structure tree, default language, displayed
 	// title, Unicode mapping, artifacts, headings), parameterized for part 2 so
 	// the identification rule requires pdfuaid:part 2 and the UA-1 header rule
@@ -77,7 +83,7 @@ func validatePDFUA2(cancel core.Canceler, d *Document) []pdfua.Violation {
 	// PDF/UA-2 is defined against PDF 2.0.
 	out = append(out, pdfua.RunCheck(func() []pdfua.Violation {
 		if maj, _, ok := core.ParsePDFVersion(d.Version); ok && maj != 2 {
-			return []pdfua.Violation{{Clause: "4", Message: fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %s", d.Version), Object: 0}}
+			return []pdfua.Violation{{Clause: "4", Message: fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %s", d.Version), Part: "2"}}
 		}
 		return nil
 	})...)

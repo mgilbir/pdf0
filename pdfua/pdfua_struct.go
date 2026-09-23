@@ -90,14 +90,14 @@ func checkUAStructNesting(d core.View, cat *object.Dictionary) []Violation {
 
 		// Parent constraint.
 		if parents, ok := uaAllowedParents[t]; ok && !containsName(parents, parentType) {
-			v = append(v, Violation{"7.2", "<" + string(t) + "> element must be contained in a " + orList(parents) + " element, not <" + string(parentType) + ">", 0})
+			v = append(v, Violation{Clause: "7.2", Message: "<" + string(t) + "> element must be contained in a " + orList(parents) + " element, not <" + string(parentType) + ">", Object: 0})
 		}
 
 		// Child constraint: check each structure-element child's type.
 		if allowed, ok := uaAllowedChildren[t]; ok {
 			for _, ct := range n.ChildTypes {
 				if !allowed[ct] {
-					v = append(v, Violation{"7.2", "<" + string(t) + "> element must not contain a <" + string(ct) + "> element", 0})
+					v = append(v, Violation{Clause: "7.2", Message: "<" + string(t) + "> element must not contain a <" + string(ct) + "> element", Object: 0})
 				}
 			}
 		}
@@ -119,15 +119,15 @@ func checkUATableListStructure(d core.View, cat *object.Dictionary) []Violation 
 			v = append(v, tableStructErrors(kids)...)
 		case "L":
 			if c := countName(kids, "Caption"); c > 1 {
-				v = append(v, Violation{"7.2", "list (L) has more than one Caption", 0})
+				v = append(v, Violation{Clause: "7.2", Message: "list (L) has more than one Caption", Object: 0})
 			} else if c == 1 && firstIndexName(kids, "Caption") != 0 {
-				v = append(v, Violation{"7.2", "list (L) Caption must be the first child", 0})
+				v = append(v, Violation{Clause: "7.2", Message: "list (L) Caption must be the first child", Object: 0})
 			}
 		case "TOC":
 			if c := countName(kids, "Caption"); c > 1 {
-				v = append(v, Violation{"7.2", "table of contents (TOC) has more than one Caption", 0})
+				v = append(v, Violation{Clause: "7.2", Message: "table of contents (TOC) has more than one Caption", Object: 0})
 			} else if c == 1 && firstIndexName(kids, "Caption") != 0 {
-				v = append(v, Violation{"7.2", "table of contents (TOC) Caption must be the first child", 0})
+				v = append(v, Violation{Clause: "7.2", Message: "table of contents (TOC) Caption must be the first child", Object: 0})
 			}
 		}
 	}
@@ -143,21 +143,21 @@ func tableStructErrors(kids []object.Name) []Violation {
 	tfoots := countName(kids, "TFoot")
 	tbodies := countName(kids, "TBody")
 	if captions > 1 {
-		v = append(v, Violation{"7.2", "table has more than one Caption", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table has more than one Caption", Object: 0})
 	}
 	if theads > 1 {
-		v = append(v, Violation{"7.2", "table has more than one THead", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table has more than one THead", Object: 0})
 	}
 	if tfoots > 1 {
-		v = append(v, Violation{"7.2", "table has more than one TFoot", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table has more than one TFoot", Object: 0})
 	}
 	if (theads > 0 || tfoots > 0) && tbodies == 0 {
-		v = append(v, Violation{"7.2", "table has a THead or TFoot but no TBody", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table has a THead or TFoot but no TBody", Object: 0})
 	}
 	if captions == 1 {
 		i := firstIndexName(kids, "Caption")
 		if i != 0 && i != len(kids)-1 {
-			v = append(v, Violation{"7.2", "table Caption must be the first or last child", 0})
+			v = append(v, Violation{Clause: "7.2", Message: "table Caption must be the first or last child", Object: 0})
 		}
 	}
 	return v
@@ -212,14 +212,14 @@ func checkUAHeaderVersion(d core.View) []Violation {
 	if len(d.Version) >= 2 && d.Version[0] == '1' && d.Version[1] == '.' {
 		return nil
 	}
-	return []Violation{{"6.1", "PDF/UA-1 requires a PDF 1.x header, got " + d.Version, 0}}
+	return []Violation{{Clause: "6.1", Message: "PDF/UA-1 requires a PDF 1.x header, got " + d.Version, Object: 0}}
 }
 
 // checkUASuspects: a MarkInfo /Suspects value of true means the tagging may be
 // unreliable and is not permitted.
 func checkUASuspects(d core.View, cat *object.Dictionary) []Violation {
 	if mark := d.ResolveDict(cat.Get("MarkInfo")); mark != nil && d.IsTrue(mark.Get("Suspects")) {
-		return []Violation{{"7.1", "/MarkInfo /Suspects must not be true", 0}}
+		return []Violation{{Clause: "7.1", Message: "/MarkInfo /Suspects must not be true", Object: 0}}
 	}
 	return nil
 }
@@ -237,7 +237,7 @@ func checkUAStrongWeak(d core.View, cat *object.Dictionary) []Violation {
 		}
 	})
 	if hasH && hasHn {
-		return []Violation{{"7.4.4", "document mixes <H> and <H1>–<H6> headings; it must be either strongly or weakly structured", 0}}
+		return []Violation{{Clause: "7.4.4", Message: "document mixes <H> and <H1>–<H6> headings; it must be either strongly or weakly structured", Object: 0}}
 	}
 	return nil
 }
@@ -252,14 +252,14 @@ func checkUANotes(d core.View, cat *object.Dictionary) []Violation {
 		}
 		id, r := d.StringValue(elem.Get("ID"))
 		if !d.NonEmptyStringOrLocked(elem.Get("ID")) {
-			v = append(v, Violation{"7.9", "<Note> structure element has no /ID", 0})
+			v = append(v, Violation{Clause: "7.9", Message: "<Note> structure element has no /ID", Object: 0})
 			return
 		}
 		if r != core.ReasonOK {
 			return // ciphertext: present, but uniqueness cannot be judged
 		}
 		if ids[string(id.Value)] {
-			v = append(v, Violation{"7.9", "<Note> structure elements share a non-unique /ID", 0})
+			v = append(v, Violation{Clause: "7.9", Message: "<Note> structure elements share a non-unique /ID", Object: 0})
 		}
 		ids[string(id.Value)] = true
 	})

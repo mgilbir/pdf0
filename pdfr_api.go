@@ -25,6 +25,9 @@ func ValidatePDFRContext(ctx context.Context, d *Document) []pdfr.Violation {
 	return validatePDFR(core.NewCanceler(ctx), d)
 }
 func validatePDFR(cancel core.Canceler, d *Document) []pdfr.Violation {
+	if d == nil {
+		return []pdfr.Violation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}
+	}
 	// Run against a shallow copy carrying the per-run cache (see beginRun): it
 	// memoizes the shared traversals, applies the aggregate content budget,
 	// carries the cancellation signal, and gives the resource guards somewhere to

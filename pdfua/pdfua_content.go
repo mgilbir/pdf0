@@ -47,7 +47,7 @@ func checkUARealContent(d core.View, cat *object.Dictionary) []Violation {
 	for _, pg := range d.Pages(cat.Get("Pages")) {
 		data, key, _ := d.ContentBytesAndKey(pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		for _, msg := range contentFacts(d, data, key).realMsgs {
-			v = append(v, Violation{"7.1", msg, pg.ObjNum})
+			v = append(v, Violation{Clause: "7.1", Message: msg, Object: pg.ObjNum})
 		}
 	}
 	return v
@@ -239,7 +239,7 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 	var v []Violation
 	for _, num := range sortedInts(mcidForm) {
 		if doCount[num] > 1 {
-			v = append(v, Violation{"7.20", "a form XObject containing marked content (/MCID) is painted by more than one Do operator", num})
+			v = append(v, Violation{Clause: "7.20", Message: "a form XObject containing marked content (/MCID) is painted by more than one Do operator", Object: num})
 		}
 	}
 	return v
@@ -327,7 +327,7 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
 			want = "Link"
 		}
 		if parent != want {
-			v = append(v, Violation{"7.18.1", "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", num})
+			v = append(v, Violation{Clause: "7.18.1", Message: "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", Object: num})
 		}
 	}
 	return v

@@ -31,6 +31,9 @@ func ValidateDPartsContext(ctx context.Context, doc *Document) []dpart.Violation
 	return validateDParts(core.NewCanceler(ctx), doc)
 }
 func validateDParts(cancel core.Canceler, doc *Document) []dpart.Violation {
+	if doc == nil {
+		return []dpart.Violation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}
+	}
 	rd := beginRunCancel(doc, cancel)
 	v := rd
 	var out []dpart.Violation

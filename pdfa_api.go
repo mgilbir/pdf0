@@ -144,7 +144,7 @@ func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, r
 		return []pdfa.Violation{{
 			Rule:    "limit",
 			Level:   level,
-			Message: "no document to validate",
+			Message: nilDocumentMessage,
 		}}
 	}
 	// Validate against a shallow copy of the Document so the per-run cache is
