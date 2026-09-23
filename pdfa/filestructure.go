@@ -31,7 +31,6 @@ func checkFileStructureBytes(doc core.View, level Level, raw []byte) []Violation
 	errs = append(errs, checkHexStringFormat(doc, level, raw)...)
 	errs = append(errs, checkStreamKeywordFormat(doc, level, raw)...)
 	errs = append(errs, checkInlineImageFilters(doc, level)...)
-	errs = append(errs, checkInlineImageIntent(doc, level)...)
 	return errs
 }
 
@@ -921,44 +920,6 @@ var inlineFilterNames = map[string]bool{
 }
 
 var inlineLZWNames = map[string]bool{"LZW": true, "LZWDecode": true}
-
-// checkInlineImageIntent verifies that an inline image /Intent entry, when
-// present, names a standard rendering intent (ISO 19005-2 6.2.6, -4 6.2.9;
-// ISO 32000-1 8.6.5.8).
-func checkInlineImageIntent(doc core.View, level Level) []Violation {
-	rule := "6.2.6"
-	if level.Part() == 4 {
-		rule = "6.2.9"
-	} else if level.Part() == 1 {
-		rule = "6.2.4"
-	}
-	// One example per distinct message, attributed to the lowest object number
-	// that produced it — collectContentStreamData returns a map.
-	var found exampleFindings
-	for num, data := range collectContentStreamData(doc) {
-		for _, intent := range inlineImageIntents(data) {
-			if standardRenderingIntents[intent] {
-				continue
-			}
-			found.add(Violation{Rule: rule, Level: level,
-				Message: "inline image /Intent uses a non-standard rendering intent", Object: num})
-		}
-	}
-	return found.errs
-}
-
-// inlineImageIntents extracts the /Intent value of every inline image.
-func inlineImageIntents(data []byte) []string {
-	var out []string
-	forEachInlineImage(data, func(params []core.InlineImageParam) {
-		for _, p := range params {
-			if p.Key == "Intent" && !p.Array && len(p.Value) == 1 && p.Value[0].Kind == core.ContentName {
-				out = append(out, p.Value[0].Name())
-			}
-		}
-	})
-	return out
-}
 
 // forEachInlineImage calls fn with the parameter entries of every inline image
 // in a content stream.

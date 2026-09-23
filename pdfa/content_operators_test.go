@@ -3,6 +3,7 @@ package pdfa
 import (
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"strings"
 	"testing"
 )
 
@@ -120,10 +121,39 @@ func TestAbsentResourceReference(t *testing.T) {
 }
 
 func TestInlineImageIntent(t *testing.T) {
-	if got := inlineImageIntents([]byte("BI /W 1 /Intent /Perceptual ID xx EI")); len(got) != 1 || got[0] != "Perceptual" {
+	if got := inlineImageEntries([]byte("BI /W 1 /Intent /Perceptual ID xx EI")); len(got) != 1 || got[0]["Intent"] != "Perceptual" {
 		t.Errorf("intent not extracted: %v", got)
 	}
-	if got := inlineImageIntents([]byte("BI /W 1 /Intent /Custom ID xx EI")); len(got) != 1 || got[0] != "Custom" {
+	if got := inlineImageEntries([]byte("BI /W 1 /Intent /Custom ID xx EI")); len(got) != 1 || got[0]["Intent"] != "Custom" {
 		t.Errorf("custom intent not extracted: %v", got)
+	}
+}
+
+// TestAnInlineIntentIsReportedOnce: one non-standard inline /Intent is one
+// finding, from the whole pipeline with the byte checks on (audit 2026-09-22
+// C142 — two rules read it and both reported).
+func TestAnInlineIntentIsReportedOnce(t *testing.T) {
+	doc := mkPageWithContentAndRes("q BI /W 1 /H 1 /BPC 8 /CS /G /Intent /Foo ID \x00 EI Q", nil)
+	var got []Violation
+	for _, v := range ValidateView(doc, PDFA2b, []byte("%PDF-1.7\n")) {
+		if strings.Contains(v.Message, "rendering intent") {
+			got = append(got, v)
+		}
+	}
+	if len(got) != 1 {
+		t.Errorf("one inline /Intent /Foo: want one finding, got %v", got)
+	}
+}
+
+// TestTheInlineDictionaryIsParsedAsADictionary: a nested dictionary, an
+// array holding a string with a slash in it, and data after ID that looks
+// like a key do not leak into the parameters.
+func TestTheInlineDictionaryIsParsedAsADictionary(t *testing.T) {
+	d := inlineImageEntries([]byte("BI /DP << /Intent /Bogus /K -1 >> /CS [/Indexed /DeviceRGB 1 (/Intent) ] /Intent /Perceptual /W 1 ID\n/Intent /Nope EI"))
+	if len(d) != 1 {
+		t.Fatalf("want one inline image, got %v", d)
+	}
+	if d[0]["Intent"] != "Perceptual" || d[0]["W"] != "1" || d[0]["K"] != "" || d[0]["CS"] != "[array]" {
+		t.Errorf("dictionary misread: %v", d[0])
 	}
 }
