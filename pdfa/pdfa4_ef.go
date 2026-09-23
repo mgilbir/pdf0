@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/object"
 )
 
 // The rules that exist only at a PDF/A-4 variant.
@@ -64,9 +63,9 @@ func checkA4E3DStreamSubtype(doc core.View, level Level) []Violation {
 		return nil
 	}
 	var errs []Violation
-	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*object.Stream)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		stream, num := r.Stream, r.ObjNum
+		if stream == nil {
 			continue
 		}
 		if t, _ := doc.ResolveName(stream.Dict.Get("Type")); t != "3D" {

@@ -58,7 +58,7 @@ func TestAWidgetWrittenIndirectlyIsStillAWidget(t *testing.T) {
 				objs[5] = &object.IndirectObject{Number: 5, Value: annot}
 
 				trailer := object.Dictionary{}
-				errs := tc.check(mkView(objs, &trailer), PDFA2b)
+				errs := tc.check(referenced(mkView(objs, &trailer), 5), PDFA2b)
 				if !hasMessage(errs, tc.want) {
 					t.Errorf("%s /Subtype: the rule did not fire: %v", form, errs)
 				}
@@ -115,7 +115,7 @@ func TestAnImageWrittenIndirectlyIsStillAnImage(t *testing.T) {
 	for _, form := range []string{"direct", "indirect"} {
 		objs, img := build(form)
 		img.Dict.Set("Alternates", object.Array{})
-		if errs := checkNoAlternateImages(mkView(objs, nil), PDFA2b); !hasMessage(errs, "/Alternates") {
+		if errs := checkNoAlternateImages(referenced(mkView(objs, nil), 5), PDFA2b); !hasMessage(errs, "/Alternates") {
 			t.Errorf("%s /Subtype: /Alternates was not reported: %v", form, errs)
 		}
 
@@ -125,7 +125,7 @@ func TestAnImageWrittenIndirectlyIsStillAnImage(t *testing.T) {
 		} else {
 			img.Dict.Set("Interpolate", indirect(objs, 10, object.Boolean(true)))
 		}
-		if errs := checkInterpolate(mkView(objs, nil), PDFA2b); !hasMessage(errs, "/Interpolate") {
+		if errs := checkInterpolate(referenced(mkView(objs, nil), 5), PDFA2b); !hasMessage(errs, "/Interpolate") {
 			t.Errorf("%s: /Interpolate true was not reported: %v", form, errs)
 		}
 	}
@@ -212,7 +212,7 @@ func TestAnAnnotationWrittenIndirectlyIsStillAnAnnotation(t *testing.T) {
 		}
 		objs[5] = &object.IndirectObject{Number: 5, Value: annot}
 
-		errs := checkAnnotationFlags(mkView(objs, nil), PDFA2b)
+		errs := checkAnnotationFlags(referenced(mkView(objs, nil), 5), PDFA2b)
 		if !hasMessage(errs, "/F") {
 			t.Errorf("%s /Type: the annotation was not looked at at all: %v", form, errs)
 		}

@@ -151,6 +151,7 @@ func TestColorantUTF8Nested(t *testing.T) {
 	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
 		1: {Number: 1, Value: page},
 	}})
+	referenced(doc, 1)
 	if !hasRuleMsg(checkNameUTF8(doc, PDFA2b), "6.1.8") {
 		t.Error("nested invalid-UTF8 colorant must be flagged")
 	}

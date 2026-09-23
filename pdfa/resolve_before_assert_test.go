@@ -184,6 +184,10 @@ func indirectionCases() []indirectionCase {
 					object.Entry{Key: "ColorSpace", Value: cs},
 				), nil)
 				v.Objects[32] = &object.IndirectObject{Number: 32, Value: img}
+				// Drawn on a page, so the image is part of the document the
+				// rules judge (orphans are not; audit 2026-09-22 C83).
+				addTestPage(v).Set("Resources", object.NewDictionary(object.Entry{Key: "XObject",
+					Value: object.NewDictionary(object.Entry{Key: "Im0", Value: object.IndirectRef{Number: 32}})}))
 			},
 			want: "Separation colorant name /None is reserved",
 		},

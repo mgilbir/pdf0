@@ -274,9 +274,9 @@ func checkCMapEmbedded(doc core.View, level Level) []Violation {
 		return nil
 	}
 	var errs []Violation
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*object.Dictionary)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		dict, num := r.Dict, r.ObjNum
+		if r.Stream != nil {
 			continue
 		}
 		if st, _ := doc.ResolveName(dict.Get("Subtype")); st != "Type0" {
@@ -1372,9 +1372,9 @@ func checkCMapCIDLimit(doc core.View, level Level) []Violation {
 	}
 	var errs []Violation
 	seen := map[int]bool{}
-	for num, iobj := range doc.Objects {
-		fontDict, ok := iobj.Value.(*object.Dictionary)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		fontDict, num := r.Dict, r.ObjNum
+		if r.Stream != nil {
 			continue
 		}
 		if st, _ := doc.ResolveName(fontDict.Get("Subtype")); st != "Type0" {

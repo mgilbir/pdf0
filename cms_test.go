@@ -66,6 +66,7 @@ func TestValidatePDFA_SignaturePKCS7(t *testing.T) {
 		sig.Set("Contents", object.String{Value: contents, IsHex: true})
 		sig.Set("ByteRange", object.Array{object.Integer(0), object.Integer(400), object.Integer(600), object.Integer(400)}) // covers 1000
 		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: sig}
+		reference(doc, 20)
 		return doc
 	}
 	flaggedPKCS7 := func(contents []byte) bool {

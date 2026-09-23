@@ -117,9 +117,9 @@ func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
 
 	// Image XObject /Intent (Interpolate on image XObjects is already
 	// checked by checkInterpolate).
-	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*object.Stream)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		stream, num := r.Stream, r.ObjNum
+		if stream == nil {
 			continue
 		}
 		if st, _ := doc.ResolveName(stream.Dict.Get("Subtype")); st != "Image" {
@@ -235,12 +235,7 @@ func checkA4TriggerEvents(doc core.View, level Level) []Violation {
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		report(doc.ResolveDict(page.Dict.Get("AA")), page.ObjNum)
 	}
-	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(d) {
-			report(doc.ResolveDict(d.Get("AA")), num)
-		}
-	}
-	for _, a := range collectDirectAnnotations(doc) {
+	for _, a := range reachableAnnotations(doc) {
 		report(doc.ResolveDict(a.dict.Get("AA")), a.num)
 	}
 	return errs
@@ -279,11 +274,12 @@ func checkActualTextPUA(doc core.View, level Level) []Violation {
 	}
 
 	// Structure element (and any) dictionaries carrying /ActualText.
-	for num, iobj := range doc.Objects {
-		if d, ok := iobj.Value.(*object.Dictionary); ok {
-			if s, r := doc.StringValue(d.Get("ActualText")); r == core.ReasonOK && stringHasPUA(s.Value) {
-				add("an ActualText entry in a dictionary contains a Unicode Private Use Area value", num)
-			}
+	for _, r := range doc.ReachableDicts() {
+		if r.Stream != nil {
+			continue
+		}
+		if s, reason := doc.StringValue(r.Dict.Get("ActualText")); reason == core.ReasonOK && stringHasPUA(s.Value) {
+			add("an ActualText entry in a dictionary contains a Unicode Private Use Area value", r.ObjNum)
 		}
 	}
 
@@ -449,14 +445,14 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 		return nil
 	}
 	var errs []Violation
-	for num, iobj := range doc.Objects {
+	for _, r := range doc.ReachableDicts() {
 		// One iteration can run a whole nested validation, so this is a
 		// cancellation boundary in its own right (cancel.go).
 		if doc.Cancel.Stopped() {
 			break
 		}
-		dict, ok := iobj.Value.(*object.Dictionary)
-		if !ok {
+		dict, num := r.Dict, r.ObjNum
+		if r.Stream != nil {
 			continue
 		}
 		efDict := doc.ResolveDict(dict.Get("EF"))

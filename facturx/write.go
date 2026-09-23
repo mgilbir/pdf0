@@ -246,6 +246,8 @@ func dropUnreferenced(doc core.View, filespecs []int) {
 	// A reference from a candidate to another candidate does not keep either
 	// alive; any other reference does.
 	referenced := map[int]bool{}
+	// allobjects: this collects garbage rather than judging the document; an
+	// object still referenced from anywhere in the table keeps its target.
 	for num, iobj := range doc.Objects {
 		if candidates[num] {
 			continue

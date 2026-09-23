@@ -344,16 +344,30 @@ func embeddedPDFAFixture(t *testing.T, lim core.Limits) (inner []byte, outer *Do
 	fsEF.Set("F", object.IndirectRef{Number: 2})
 	fs := &object.Dictionary{}
 	fs.Set("Type", object.Name("Filespec"))
+	fs.Set("F", object.String{Value: []byte("inner.pdf")})
+	fs.Set("UF", object.String{Value: []byte("inner.pdf")})
+	fs.Set("AFRelationship", object.Name("Source"))
 	fs.Set("EF", fsEF)
 
+	// The embedded file is named in the catalog's EmbeddedFiles tree, so it is
+	// part of the document the validator judges, and associated with it (/AF)
+	// as PDF/A-4 requires, so the only 6.9 question is the nested verdict.
+	catalog := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Catalog")},
+		object.Entry{Key: "AF", Value: object.Array{object.IndirectRef{Number: 1}}},
+		object.Entry{Key: "Names", Value: object.NewDictionary(object.Entry{Key: "EmbeddedFiles",
+			Value: object.NewDictionary(object.Entry{Key: "Names",
+				Value: object.Array{object.String{Value: []byte("inner.pdf")}, object.IndirectRef{Number: 1}}})})})
 	outer = &Document{
 		Objects: map[int]*object.IndirectObject{
 			1: {Number: 1, Value: fs},
 			2: {Number: 2, Value: ef},
+			3: {Number: 3, Value: catalog},
 		},
 		Version: "2.0",
 		limits:  lim,
 	}
+	outer.Trailer.Set("Root", object.IndirectRef{Number: 3})
 	return inner, outer
 }
 

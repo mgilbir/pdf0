@@ -84,6 +84,7 @@ func TestValidatePDFA_TrailerInfo(t *testing.T) {
 		infoDict := &object.Dictionary{}
 		infoDict.Set("ModDate", object.String{Value: []byte("D:20240101")})
 		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: infoDict}
+		reference(doc, 20)
 		doc.Trailer.Set("Info", object.IndirectRef{Number: 20})
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
@@ -99,6 +100,7 @@ func TestValidatePDFA_TrailerInfo(t *testing.T) {
 		infoDict := &object.Dictionary{}
 		infoDict.Set("Title", object.String{Value: []byte("Test")})
 		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: infoDict}
+		reference(doc, 20)
 		doc.Trailer.Set("Info", object.IndirectRef{Number: 20})
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
@@ -114,6 +116,7 @@ func TestValidatePDFA_TrailerInfo(t *testing.T) {
 		infoDict := &object.Dictionary{}
 		infoDict.Set("ModDate", object.String{Value: []byte("D:20240101")})
 		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: infoDict}
+		reference(doc, 20)
 		doc.Trailer.Set("Info", object.IndirectRef{Number: 20})
 
 		errs := filterRule(ValidatePDFA(doc, pdfa.PDFA4), "6.1.3")
@@ -257,6 +260,7 @@ func TestValidatePDFA_ExternalStreams(t *testing.T) {
 	stream.Dict.Set("F", object.String{Value: []byte("external.dat")})
 	stream.Dict.Set("Length", object.Integer(4))
 	doc.Objects[10] = &object.IndirectObject{Number: 10, Value: stream}
+	reference(doc, 10)
 
 	errs := ValidatePDFA(doc, pdfa.PDFA4)
 	if !hasRule(errs, "6.1.6") {
@@ -290,8 +294,11 @@ func TestValidatePDFA_FontsEmbedded(t *testing.T) {
 	pagesDict.Set("Count", object.Integer(1))
 
 	doc.Objects[10] = &object.IndirectObject{Number: 10, Value: page}
+	reference(doc, 10)
 	doc.Objects[11] = &object.IndirectObject{Number: 11, Value: font}
+	reference(doc, 11)
 	doc.Objects[12] = &object.IndirectObject{Number: 12, Value: resources}
+	reference(doc, 12)
 
 	errs := ValidatePDFA(doc, pdfa.PDFA4)
 	if !hasRule(errs, "6.2.10.4.1") {
@@ -312,6 +319,7 @@ func TestValidatePDFA_ForbiddenActions(t *testing.T) {
 			action := &object.Dictionary{}
 			action.Set("S", actionType)
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: action}
+			reference(doc, 10)
 
 			errs := ValidatePDFA(doc, pdfa.PDFA4)
 			if !hasRule(errs, "6.6.1") {
@@ -330,6 +338,7 @@ func TestValidatePDFA_ForbiddenActions(t *testing.T) {
 				action.Set("N", object.Name("NextPage"))
 			}
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: action}
+			reference(doc, 10)
 
 			errs := filterRule(ValidatePDFA(doc, pdfa.PDFA4), "6.6.3")
 			if len(errs) > 0 {
@@ -343,6 +352,7 @@ func TestValidatePDFA_ForbiddenActions(t *testing.T) {
 		action := &object.Dictionary{}
 		action.Set("S", object.Name("JavaScript"))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: action}
+		reference(doc, 10)
 
 		errs := ValidatePDFA(doc, pdfa.PDFA1b)
 		if !hasRule(errs, "6.6.1") {
@@ -356,6 +366,7 @@ func TestValidatePDFA_OpenAction(t *testing.T) {
 	action := &object.Dictionary{}
 	action.Set("S", object.Name("ImportData"))
 	doc.Objects[20] = &object.IndirectObject{Number: 20, Value: action}
+	reference(doc, 20)
 	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
 	catalog.Set("OpenAction", object.IndirectRef{Number: 20})
 
@@ -373,6 +384,7 @@ func TestValidatePDFA_NamedActions(t *testing.T) {
 			action.Set("S", object.Name("Named"))
 			action.Set("N", name)
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: action}
+			reference(doc, 10)
 
 			errs := filterRule(ValidatePDFA(doc, pdfa.PDFA4), "6.6.3")
 			if len(errs) > 0 {
@@ -387,6 +399,7 @@ func TestValidatePDFA_NamedActions(t *testing.T) {
 		action.Set("S", object.Name("Named"))
 		action.Set("N", object.Name("Print"))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: action}
+		reference(doc, 10)
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
 		if !hasRule(errs, "6.6.1") {
@@ -416,6 +429,7 @@ func TestValidatePDFA_WidgetAA(t *testing.T) {
 			widget.Set("Subtype", object.Name("Widget"))
 			widget.Set("AA", &object.Dictionary{})
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: widget}
+			reference(doc, 10)
 
 			errs := ValidatePDFA(doc, c.level)
 			if !hasRule(errs, c.rule) {
@@ -439,6 +453,7 @@ func TestValidatePDFA_WidgetAA(t *testing.T) {
 		widget.Set("Subtype", object.Name("Widget"))
 		widget.Set("AA", &object.Dictionary{})
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: widget}
+		reference(doc, 10)
 
 		errs := filterRule(ValidatePDFA(doc, pdfa.PDFA4), "6.6.3")
 		if len(errs) > 0 {
@@ -453,6 +468,7 @@ func TestValidatePDFA_WidgetNoAction(t *testing.T) {
 	widget.Set("Subtype", object.Name("Widget"))
 	widget.Set("A", &object.Dictionary{})
 	doc.Objects[10] = &object.IndirectObject{Number: 10, Value: widget}
+	reference(doc, 10)
 
 	errs := ValidatePDFA(doc, pdfa.PDFA4)
 	if !hasRule(errs, "6.4.1") {
@@ -498,6 +514,7 @@ func TestValidatePDFA_SignatureByteRange(t *testing.T) {
 		sig.Set("Contents", object.String{Value: []byte("0000"), IsHex: true})
 		sig.Set("ByteRange", br)
 		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: sig}
+		reference(doc, 20)
 		return doc
 	}
 	flagged := func(br object.Array) bool {
@@ -528,6 +545,7 @@ func TestValidatePDFA_FormXObjectRules(t *testing.T) {
 		form.Dict.Set("Subtype", object.Name("Form"))
 		form.Dict.Set(key, &object.Dictionary{})
 		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: form}
+		reference(doc, 20)
 		return doc
 	}
 	if !hasRule(ValidatePDFA(mk("OPI"), pdfa.PDFA4), "6.2.8.1") {
@@ -544,6 +562,7 @@ func TestValidatePDFA_FormXObjectRules(t *testing.T) {
 	form := &object.Stream{Dict: object.Dictionary{}}
 	form.Dict.Set("Subtype", object.Name("Form"))
 	clean.Objects[20] = &object.IndirectObject{Number: 20, Value: form}
+	reference(clean, 20)
 	if hasRule(ValidatePDFA(clean, pdfa.PDFA4), "6.2.8.2") {
 		t.Error("a form XObject without /Ref must not be flagged")
 	}
@@ -563,6 +582,7 @@ func TestValidatePDFA_AnnotationOpacity(t *testing.T) {
 			annot.Set("CA", ca)
 		}
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+		reference(doc, 10)
 		return doc
 	}
 	if !hasRule(ValidatePDFA(mk(object.Real(0.5)), pdfa.PDFA1b), "6.5.3") {
@@ -589,6 +609,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 		annot.Set("F", object.Integer(0))
 		annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+		reference(doc, 10)
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
 		if !hasRule(errs, "6.3.2") {
@@ -605,6 +626,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 		annot.Set("F", object.Integer(4|2)) // Print + Hidden
 		annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+		reference(doc, 10)
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
 		if !hasRule(errs, "6.3.2") {
@@ -620,6 +642,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		// No /F — should be OK for Popup
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+		reference(doc, 10)
 
 		errs := filterRule(ValidatePDFA(doc, pdfa.PDFA4), "6.3.2")
 		if len(errs) > 0 {
@@ -637,6 +660,7 @@ func TestValidatePDFA_AnnotationAppearance(t *testing.T) {
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		annot.Set("F", object.Integer(4))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+		reference(doc, 10)
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
 		if !hasRule(errs, "6.3.3") {
@@ -652,6 +676,7 @@ func TestValidatePDFA_AnnotationAppearance(t *testing.T) {
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		annot.Set("F", object.Integer(4))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+		reference(doc, 10)
 
 		errs := filterRule(ValidatePDFA(doc, pdfa.PDFA4), "6.3.3")
 		if len(errs) > 0 {
@@ -666,6 +691,7 @@ func TestValidatePDFA_AnnotationAppearance(t *testing.T) {
 		annot.Set("Subtype", object.Name("Popup"))
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+		reference(doc, 10)
 
 		errs := filterRule(ValidatePDFA(doc, pdfa.PDFA4), "6.3.3")
 		if len(errs) > 0 {
@@ -756,6 +782,7 @@ func TestValidatePDFA_MetadataVersion(t *testing.T) {
 // It creates a page (obj 20) with Resources/ExtGState referencing gsObj (obj 10).
 func addExtGStateToDoc(doc *Document, gs *object.Dictionary) {
 	doc.Objects[10] = &object.IndirectObject{Number: 10, Value: gs}
+	reference(doc, 10)
 
 	gsDict := &object.Dictionary{}
 	gsDict.Set("GS0", object.IndirectRef{Number: 10})
@@ -770,6 +797,7 @@ func addExtGStateToDoc(doc *Document, gs *object.Dictionary) {
 	page.Set("Resources", resDict)
 
 	doc.Objects[20] = &object.IndirectObject{Number: 20, Value: page}
+	reference(doc, 20)
 
 	// Update page tree to include this page
 	pagesDict := doc.ResolveDict(object.IndirectRef{Number: 2})
@@ -835,6 +863,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 		img.Dict.Set("Subtype", object.Name("Image"))
 		img.Dict.Set("Alternates", object.Array{})
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: img}
+		reference(doc, 10)
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
 		if !hasRule(errs, "6.2.7.1") {
@@ -848,6 +877,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 		img.Dict.Set("Subtype", object.Name("Image"))
 		img.Dict.Set("Interpolate", object.Boolean(true))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: img}
+		reference(doc, 10)
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
 		if !hasRule(errs, "6.2.7.1") {
@@ -861,6 +891,7 @@ func TestValidatePDFA_ImageChecks(t *testing.T) {
 		img.Dict.Set("Subtype", object.Name("Image"))
 		img.Dict.Set("OPI", &object.Dictionary{})
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: img}
+		reference(doc, 10)
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
 		if !hasRule(errs, "6.2.7.1") {
@@ -1569,6 +1600,7 @@ func addTestPage(doc *Document) *object.Dictionary {
 	page.Set("Parent", object.IndirectRef{Number: 2})
 	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(612), object.Integer(792)})
 	doc.Objects[20] = &object.IndirectObject{Number: 20, Value: page}
+	reference(doc, 20)
 	pages := doc.Objects[2].Value.(*object.Dictionary)
 	pages.Set("Kids", object.Array{object.IndirectRef{Number: 20}})
 	pages.Set("Count", object.Integer(1))
@@ -1673,7 +1705,9 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 		fn.Set("Domain", object.Array{object.Integer(0), object.Integer(1)})
 		fn.Set("N", object.Integer(1))
 		doc.Objects[30] = &object.IndirectObject{Number: 30, Value: fn}
+		reference(doc, 30)
 		doc.Objects[31] = &object.IndirectObject{Number: 31, Value: fn2Body}
+		reference(doc, 31)
 
 		// The alternate must be CIE-based: a device alternate would need
 		// OutputIntent coverage and trip the device-colour rule instead.
@@ -1805,6 +1839,7 @@ func TestContentScanHandlesFilterArrays(t *testing.T) {
 	content.Dict.Set("Filter", object.Array{object.Name("FlateDecode")})
 	content.Dict.Set("Length", object.Integer(z.Len()))
 	doc.Objects[21] = &object.IndirectObject{Number: 21, Value: content}
+	reference(doc, 21)
 	page.Set("Contents", object.IndirectRef{Number: 21})
 
 	if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.1.13") {

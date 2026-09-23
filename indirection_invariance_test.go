@@ -241,42 +241,4 @@ var indirectionAllowlist = map[string]string{
 	"PDF_A-4/6.2 Graphics/6.2.4 Colour spaces/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-fail-d.pdf|pdfa|+|[PDF/A-N N.N.N.N] object N: Separation colorant /Green has inconsistent tint transforms (objects N and N)": "C66",
 	"PDF_A-4/6.2 Graphics/6.2.4 Colour spaces/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-fail-d.pdf|pdfa|+|[PDF/A-N N.N.N.N] object N: Separation colorant /Red has inconsistent tint transforms (objects N and N)":   "C66",
 	"PDF_A-4/6.2 Graphics/6.2.4 Colour spaces/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-pass-a.pdf|pdfa|+|[PDF/A-N N.N.N.N] object N: Separation colorant /Red has inconsistent tint transforms (objects N and N)":   "C66",
-
-	// PDF/A's forbidden-action scan walks doc.Objects and each dictionary's
-	// /A, so an action dictionary written directly inside another (here a
-	// Rendition action in an annotation's /AA) is never seen (the C83 class:
-	// object scans instead of reachable walks, PR 16).
-	"PDF_UA-1/7.18 Annotations/7.18.6 Media/7.18.6.2 Media clip data/7.18.6.2-t01-fail-a.pdf|pdfa|+|[PDF/A-Nb N.N.N] object N: forbidden action type /Rendition": "C83",
-	"PDF_UA-1/7.18 Annotations/7.18.6 Media/7.18.6.2 Media clip data/7.18.6.2-t01-pass-a.pdf|pdfa|+|[PDF/A-Nb N.N.N] object N: forbidden action type /Rendition": "C83",
-	"PDF_UA-1/7.18 Annotations/7.18.6 Media/7.18.6.2 Media clip data/7.18.6.2-t02-fail-a.pdf|pdfa|+|[PDF/A-Nb N.N.N] object N: forbidden action type /Rendition": "C83",
-	"PDF_UA-1/7.18 Annotations/7.18.6 Media/7.18.6.2 Media clip data/7.18.6.2-t02-fail-b.pdf|pdfa|+|[PDF/A-Nb N.N.N] object N: forbidden action type /Rendition": "C83",
-	"PDF_UA-1/7.18 Annotations/7.18.6 Media/7.18.6.2 Media clip data/7.18.6.2-t02-pass-a.pdf|pdfa|+|[PDF/A-Nb N.N.N] object N: forbidden action type /Rendition": "C83",
-
-	// PDF/UA's annotation rules iterate doc.Objects, so an annotation written
-	// directly in a page's /Annots is never seen (audit 2026-09-22 C83,
-	// PR 16).
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.10 Content Streams/isartor-6-2-10-t01-fail-c.pdf|ua1|+|[PDF/UA-N N.N.N] object N: annotation is not tagged (no /StructParent linking it to the structure tree)":                                    "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.10 Content Streams/isartor-6-2-10-t01-fail-c.pdf|ua1|+|[PDF/UA-N N.N.N] object N: annotation of subtype /Circle has no alternate description (/Contents or /Alt)":                                  "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.10 Content Streams/isartor-6-2-10-t01-fail-c.pdf|ua2|+|[PDF/UA-N N.N.N] object N: annotation is not tagged (no /StructParent linking it to the structure tree)":                                    "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.10 Content Streams/isartor-6-2-10-t01-fail-c.pdf|ua2|+|[PDF/UA-N N.N.N] object N: annotation of subtype /Circle has no alternate description (/Contents or /Alt)":                                  "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.3 Colour spaces/6.2.3.3 Uncalibrated colour spaces/isartor-6-2-3-3-t02-fail-j.pdf|ua1|+|[PDF/UA-N N.N.N] object N: annotation is not tagged (no /StructParent linking it to the structure tree)":   "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.3 Colour spaces/6.2.3.3 Uncalibrated colour spaces/isartor-6-2-3-3-t02-fail-j.pdf|ua1|+|[PDF/UA-N N.N.N] object N: annotation of subtype /Circle has no alternate description (/Contents or /Alt)": "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.3 Colour spaces/6.2.3.3 Uncalibrated colour spaces/isartor-6-2-3-3-t02-fail-j.pdf|ua2|+|[PDF/UA-N N.N.N] object N: annotation is not tagged (no /StructParent linking it to the structure tree)":   "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.3 Colour spaces/6.2.3.3 Uncalibrated colour spaces/isartor-6-2-3-3-t02-fail-j.pdf|ua2|+|[PDF/UA-N N.N.N] object N: annotation of subtype /Circle has no alternate description (/Contents or /Alt)": "C83",
-
-	// PDF/X's (and so PDF/VT's) ExtGState transfer-function rule iterates
-	// doc.Objects, so a direct ExtGState dictionary inside /Resources is
-	// never seen (audit 2026-09-22 C83, PR 16).
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t01-fail-a.pdf|vt|+|PDF/VT-N pdfx-N/forbidden: a transfer function (ExtGState /TR) is not permitted (object N)":  "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t01-fail-a.pdf|x1a|+|PDF/X forbidden: a transfer function (ExtGState /TR) is not permitted (object N)":           "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t01-fail-a.pdf|x4|+|PDF/X forbidden: a transfer function (ExtGState /TR) is not permitted (object N)":            "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t01-fail-b.pdf|vt|+|PDF/VT-N pdfx-N/forbidden: a transfer function (ExtGState /TR) is not permitted (object N)":  "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t01-fail-b.pdf|x1a|+|PDF/X forbidden: a transfer function (ExtGState /TR) is not permitted (object N)":           "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t01-fail-b.pdf|x4|+|PDF/X forbidden: a transfer function (ExtGState /TR) is not permitted (object N)":            "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t02-fail-a.pdf|vt|+|PDF/VT-N pdfx-N/forbidden: a transfer function (ExtGState /TRN) is not permitted (object N)": "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t02-fail-a.pdf|x1a|+|PDF/X forbidden: a transfer function (ExtGState /TRN) is not permitted (object N)":          "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t02-fail-a.pdf|x4|+|PDF/X forbidden: a transfer function (ExtGState /TRN) is not permitted (object N)":           "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t02-fail-b.pdf|vt|+|PDF/VT-N pdfx-N/forbidden: a transfer function (ExtGState /TRN) is not permitted (object N)": "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t02-fail-b.pdf|x1a|+|PDF/X forbidden: a transfer function (ExtGState /TRN) is not permitted (object N)":          "C83",
-	"Isartor test files/PDFA-1b/6.2 Graphics/6.2.8 Extended graphics state/isartor-6-2-8-t02-fail-b.pdf|x4|+|PDF/X forbidden: a transfer function (ExtGState /TRN) is not permitted (object N)":           "C83",
 }

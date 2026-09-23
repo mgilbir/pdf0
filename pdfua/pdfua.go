@@ -407,11 +407,17 @@ func checkUASecurity(d core.View) []Violation {
 
 // checkUAAnnotations flags forbidden annotation subtypes. Hidden and Popup
 // annotations are exempt from checkpoint 28.
+//
+// It judges the annotations the document reaches, direct ones included — an
+// annotation written inline in a page's /Annots is as much the page's as one
+// written as its own object — and not an orphan nothing refers to (audit
+// 2026-09-22 C83). A direct annotation is reported against the object it is
+// written in.
 func checkUAAnnotations(d core.View) []Violation {
 	var v []Violation
-	for num, iobj := range d.Objects {
-		a, ok := iobj.Value.(*object.Dictionary)
-		if !ok || !d.IsAnnotation(a) {
+	for _, r := range d.ReachableDicts() {
+		a, num := r.Dict, r.ObjNum
+		if r.Stream != nil || !d.IsAnnotation(a) {
 			continue
 		}
 		st, _ := d.ResolveName(a.Get("Subtype"))
@@ -846,29 +852,32 @@ func isSubsetFont(d core.View, fontDict *object.Dictionary) bool {
 // (7.20).
 func checkUAReferenceXObjects(d core.View) []Violation {
 	var v []Violation
-	walkAllDicts(d, func(dict *object.Dictionary, num int) {
+	for _, r := range d.ReachableDicts() {
+		dict, num := r.Dict, r.ObjNum
 		if st, _ := d.ResolveName(dict.Get("Subtype")); st != "Form" {
-			return
+			continue
 		}
 		if ty, _ := d.ResolveName(dict.Get("Type")); ty != "" && ty != "XObject" {
-			return
+			continue
 		}
 		if dict.Get("Ref") != nil {
 			v = append(v, Violation{"7.20", "reference XObject (Form XObject with /Ref) is not permitted", num})
 		}
-	})
+	}
 	return v
 }
 
 // checkUAMediaClips requires every media clip data dictionary (Type /MediaClip)
 // to carry both the /CT (content type) and /Alt (alternate text) keys
 // (7.18.6.2). Media clips are typically inline dictionaries nested inside a
-// Screen annotation's Rendition action, so the whole object graph is walked.
+// Screen annotation's Rendition action, so every dictionary the document
+// reaches, direct ones included, is examined.
 func checkUAMediaClips(d core.View) []Violation {
 	var v []Violation
-	walkAllDicts(d, func(mc *object.Dictionary, num int) {
+	for _, r := range d.ReachableDicts() {
+		mc, num := r.Dict, r.ObjNum
 		if t, _ := d.ResolveName(mc.Get("Type")); t != "MediaClip" {
-			return
+			continue
 		}
 		if mc.Get("CT") == nil {
 			v = append(v, Violation{"7.18.6.2", "media clip data dictionary has no /CT (content type)", num})
@@ -878,7 +887,7 @@ func checkUAMediaClips(d core.View) []Violation {
 		} else if !altArrayHasText(d, mc.Get("Alt")) {
 			v = append(v, Violation{"7.18.6.2", "media clip data dictionary /Alt is empty", num})
 		}
-	})
+	}
 	return v
 }
 
@@ -895,51 +904,6 @@ func altArrayHasText(d core.View, o object.Object) bool {
 		return false
 	}
 	return d.NonEmptyStringOrLocked(o)
-}
-
-// walkAllDicts visits every dictionary reachable in the object graph — including
-// dictionaries nested inline inside arrays, streams, and other dictionaries —
-// exactly once. objNum is the number of the enclosing top-level object.
-func walkAllDicts(d core.View, fn func(dict *object.Dictionary, objNum int)) {
-	seenRef := map[int]bool{}
-	seenPtr := map[*object.Dictionary]bool{}
-	var visit func(o object.Object, objNum int)
-	visit = func(o object.Object, objNum int) {
-		switch x := o.(type) {
-		case object.IndirectRef:
-			if seenRef[x.Number] {
-				return
-			}
-			seenRef[x.Number] = true
-			if io := d.Objects[x.Number]; io != nil {
-				visit(io.Value, x.Number)
-			}
-		case *object.Dictionary:
-			if seenPtr[x] {
-				return
-			}
-			seenPtr[x] = true
-			fn(x, objNum)
-			for val := range x.Values() {
-				visit(val, objNum)
-			}
-		case *object.Stream:
-			if !seenPtr[&x.Dict] {
-				seenPtr[&x.Dict] = true
-				fn(&x.Dict, objNum)
-				for val := range x.Dict.Values() {
-					visit(val, objNum)
-				}
-			}
-		case object.Array:
-			for _, e := range x {
-				visit(e, objNum)
-			}
-		}
-	}
-	for num, io := range d.Objects {
-		visit(io.Value, num)
-	}
 }
 
 // checkUALang enforces that any /Lang value present — in the catalog or on a
@@ -998,11 +962,16 @@ func checkUAOptionalContent(d core.View, cat *object.Dictionary) []Violation {
 
 // checkUAEmbeddedFiles requires every embedded-file specification (a file spec
 // with an /EF entry) to carry non-empty /F and /UF file names (7.11).
+//
+// A file specification is often written directly — inside the EmbeddedFiles
+// name tree's /Names array or an annotation's /FS — so every dictionary the
+// document reaches is examined, not only those that are objects of their own
+// (audit 2026-09-22 C83).
 func checkUAEmbeddedFiles(d core.View) []Violation {
 	var v []Violation
-	for num, iobj := range d.Objects {
-		fs, ok := iobj.Value.(*object.Dictionary)
-		if !ok || fs.Get("EF") == nil {
+	for _, r := range d.ReachableDicts() {
+		fs, num := r.Dict, r.ObjNum
+		if r.Stream != nil || fs.Get("EF") == nil {
 			continue
 		}
 		if t, _ := d.ResolveName(fs.Get("Type")); t != "" && t != "Filespec" {

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -47,6 +48,11 @@ func TestAnICCBasedProfileIsFoundWhereItIsUsed(t *testing.T) {
 			object.Entry{Key: "ColorSpace", Value: cs},
 		), nil)}
 	}
+	// Both images are drawn on a page: the rules judge the document the
+	// trailer reaches, not an orphan (audit 2026-09-22 C83).
+	addTestPage(v).Set("Resources", object.NewDictionary(object.Entry{Key: "XObject", Value: object.NewDictionary(
+		object.Entry{Key: "Im0", Value: object.IndirectRef{Number: 30}},
+		object.Entry{Key: "Im1", Value: object.IndirectRef{Number: 31}})}))
 	got := findingsWith(checkICCBasedProfiles(v, PDFA1b), "ICCBased profile version 4")
 	if len(got) != 1 || got[0].Rule != "6.2.3.2" || got[0].Object != 5 {
 		t.Errorf("a v4 ICCBased profile at 1b: want one 6.2.3.2 finding at object 5, got %v", got)
@@ -60,6 +66,9 @@ func TestAnICCBasedProfileIsFoundWhereItIsUsed(t *testing.T) {
 	v.Objects[40] = &object.IndirectObject{Number: 40, Value: bad}
 	v.Objects[31].Value.(*object.Stream).Dict.Set("ColorSpace", object.Array{object.Name("Indexed"),
 		object.Array{object.Name("ICCBased"), object.IndirectRef{Number: 40}}, object.Integer(1), object.String{}})
+	// The document changed, so this is a new run: a run's reachable set is
+	// the document as it was when the run first asked.
+	v.Run = core.NewRun(&core.Recorder{})
 	if got := findingsWith(checkICCBasedProfiles(v, PDFA2b), "/N must be 1, 3, or 4"); len(got) != 1 || got[0].Object != 40 || got[0].Rule != "6.2.4.2" {
 		t.Errorf("an ICCBased /N of 2 inside Indexed: %v", got)
 	}

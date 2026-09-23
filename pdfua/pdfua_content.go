@@ -179,17 +179,21 @@ func buildContentFacts(cancel core.Canceler, content []byte) *streamContentFacts
 // it is invoked by more than one Do operator, a single structure element would
 // map to several renderings, breaking the one-to-one structure/content mapping.
 func checkUAFormXObjectMCID(d core.View) []Violation {
+	// The forms the document reaches: an orphan form is painted by nothing and
+	// is not the document's (audit 2026-09-22 C83). A stream is always an
+	// object of its own, so ObjNum is the form's.
+	var forms []core.ReachableDict
 	mcidForm := map[int]bool{}
-	for num, iobj := range d.Objects {
-		s, ok := iobj.Value.(*object.Stream)
-		if !ok {
+	for _, r := range d.ReachableDicts() {
+		if r.Stream == nil {
 			continue
 		}
-		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
+		if st, _ := d.ResolveName(r.Dict.Get("Subtype")); st != "Form" {
 			continue
 		}
-		if data, _ := d.Content(s); containsNameToken(d.Cancel, data, "MCID") { // reason: presence-only; the producer recorded any declined trip
-			mcidForm[num] = true
+		forms = append(forms, r)
+		if data, _ := d.Content(r.Stream); containsNameToken(d.Cancel, data, "MCID") { // reason: presence-only; the producer recorded any declined trip
+			mcidForm[r.ObjNum] = true
 		}
 	}
 	if len(mcidForm) == 0 {
@@ -227,16 +231,9 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 		countDo(data, key, d.ResolveDict(pg.Dict.Get("Resources")))
 	}
 	// Form XObject content sources (a form may invoke another form).
-	for _, iobj := range d.Objects {
-		s, ok := iobj.Value.(*object.Stream)
-		if !ok {
-			continue
-		}
-		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
-			continue
-		}
-		data, _ := d.Content(s) // reason: presence-only (counts invocations); the producer recorded any declined trip
-		countDo(data, s, d.ResolveDict(s.Dict.Get("Resources")))
+	for _, f := range forms {
+		data, _ := d.Content(f.Stream) // reason: presence-only (counts invocations); the producer recorded any declined trip
+		countDo(data, f.Stream, d.ResolveDict(f.Dict.Get("Resources")))
 	}
 
 	var v []Violation
@@ -326,9 +323,9 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
 	walk(root.Get("K"), "")
 
 	var v []Violation
-	for num, iobj := range d.Objects {
-		a, ok := iobj.Value.(*object.Dictionary)
-		if !ok || !d.IsAnnotation(a) {
+	for _, r := range d.ReachableDicts() {
+		a, num := r.Dict, r.ObjNum
+		if r.Stream != nil || !r.Top || !d.IsAnnotation(a) {
 			continue
 		}
 		st, _ := d.ResolveName(a.Get("Subtype"))

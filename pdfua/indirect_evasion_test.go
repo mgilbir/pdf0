@@ -52,7 +52,7 @@ func TestAnAnnotationSubtypeWrittenIndirectlyIsStillRead(t *testing.T) {
 			a.Set("Subtype", indirect(objs, 9, subtype))
 		}
 		objs[5] = &object.IndirectObject{Number: 5, Value: a}
-		return checkUAAnnotations(mkView(objs, nil))
+		return checkUAAnnotations(referenced(mkView(objs, nil), 5))
 	}
 
 	for _, form := range []string{"direct", "indirect"} {

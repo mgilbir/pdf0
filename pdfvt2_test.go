@@ -49,6 +49,7 @@ func TestPDFVT2ReferenceXObjectRelaxed(t *testing.T) {
 		form.Set("Subtype", object.Name("Form"))
 		form.Set("Ref", &object.Dictionary{})
 		d.Objects[200] = &object.IndirectObject{Number: 200, Value: object.NewStream(form, nil)}
+		reference(d, 200)
 	}
 	d1 := buildPDFVT1Doc()
 	addRef(d1)

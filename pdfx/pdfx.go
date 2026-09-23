@@ -148,8 +148,9 @@ func pdfxCheckNoTransparency(doc core.View, add func(rule, msg string, obj int))
 // pdfxCheckForbidden flags features PDF/X-4 does not permit (ISO 15930-7 6.x):
 // interactive actions and JavaScript, OPI proxies, PostScript XObjects,
 // reference (external-content) XObjects, alternate images, non-identity transfer
-// functions, and multimedia annotations. It walks the object list once, so it
-// stays fast regardless of page count.
+// functions, and multimedia annotations. It walks the document's reachable
+// dictionaries once (a list the run shares with the other rules), so it stays
+// fast regardless of page count.
 func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int), addChecked func(check, rule, msg string, obj int)) {
 	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
 		if cat.Get("AA") != nil {
@@ -163,17 +164,12 @@ func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int), addC
 		}
 	}
 
-	for num, iobj := range doc.Objects {
-		var d *object.Dictionary
-		switch v := iobj.Value.(type) {
-		case *object.Dictionary:
-			d = v
-		case *object.Stream:
-			d = &v.Dict
-		}
-		if d == nil {
-			continue
-		}
+	// Every dictionary the document reaches, direct ones included: a Link's
+	// inline /A << /S /JavaScript >> is the shape most producers write, and a
+	// scan of the object table never saw it (audit 2026-09-22 C83). An object
+	// nothing reaches is not part of the document and is not judged.
+	for _, r := range doc.ReachableDicts() {
+		d, num := r.Dict, r.ObjNum
 		sub, _ := doc.ResolveName(d.Get("Subtype"))
 
 		if d.Get("OPI") != nil {
@@ -194,7 +190,9 @@ func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int), addC
 				addChecked(CheckRefXObject, "forbidden", "reference XObjects (/Ref) are not permitted in PDF/X-4", num)
 			}
 		case "Movie", "Sound", "Screen", "FileAttachment":
-			add("forbidden", fmt.Sprintf("annotation subtype %s is not permitted", sub), num)
+			if doc.IsAnnotation(d) {
+				add("forbidden", fmt.Sprintf("annotation subtype %s is not permitted", sub), num)
+			}
 		}
 		if t, _ := doc.ResolveName(d.Get("Type")); t == "ExtGState" {
 			for _, k := range []object.Name{"TR", "TR2"} {
