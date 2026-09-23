@@ -169,7 +169,7 @@ func checkUACatalogBasics(d core.View, cat *object.Dictionary) []Violation {
 	}
 
 	// 7.2 — a default natural language must be set.
-	if s, _ := d.Resolve(cat.Get("Lang")).(object.String); len(s.Value) == 0 {
+	if !d.NonEmptyStringOrLocked(cat.Get("Lang")) {
 		v = append(v, Violation{"7.2", "document does not specify a default language (catalog /Lang)", 0})
 	}
 
@@ -426,15 +426,14 @@ func checkUAAnnotations(d core.View) []Violation {
 		}
 		// 28-012: a Link annotation needs an alternate description in /Contents.
 		if st == "Link" {
-			if c, _ := d.Resolve(a.Get("Contents")).(object.String); len(c.Value) == 0 {
+			if !d.NonEmptyStringOrLocked(a.Get("Contents")) {
 				v = append(v, Violation{"7.18.5", "Link annotation has no alternate description (/Contents)", num})
 			}
 		}
 		// 7.18.1: a form-field Widget must have a non-empty field description /TU
 		// (own or inherited from its parent field) or an /Alt on the widget.
 		if st == "Widget" {
-			alt, _ := d.Resolve(a.Get("Alt")).(object.String)
-			if len(effectiveFieldTU(d, a)) == 0 && len(alt.Value) == 0 {
+			if !effectiveFieldTU(d, a) && !d.NonEmptyStringOrLocked(a.Get("Alt")) {
 				v = append(v, Violation{"7.18.1", "form-field Widget has neither a field description (/TU) nor an /Alt", num})
 			}
 		}
@@ -442,9 +441,7 @@ func checkUAAnnotations(d core.View) []Violation {
 		// TU/Alt rule, and not a PrinterMark artifact) must carry an alternate
 		// description in /Contents or /Alt.
 		if st != "Widget" && st != "Link" && st != "PrinterMark" {
-			c, _ := d.Resolve(a.Get("Contents")).(object.String)
-			alt, _ := d.Resolve(a.Get("Alt")).(object.String)
-			if len(c.Value) == 0 && len(alt.Value) == 0 {
+			if !d.NonEmptyStringOrLocked(a.Get("Contents")) && !d.NonEmptyStringOrLocked(a.Get("Alt")) {
 				v = append(v, Violation{"7.18.1", "annotation of subtype /" + string(st) + " has no alternate description (/Contents or /Alt)", num})
 			}
 		}
@@ -555,14 +552,18 @@ func cidSupplement(d core.View, dict *object.Dictionary) (int, bool) {
 }
 
 // cidSystemInfo returns the Registry and Ordering strings of a dictionary's
-// /CIDSystemInfo, or empty strings if absent.
+// /CIDSystemInfo, or empty strings if absent — or ciphertext, which the caller
+// must not compare either.
 func cidSystemInfo(d core.View, dict *object.Dictionary) (string, string) {
 	si := d.ResolveDict(dict.Get("CIDSystemInfo"))
 	if si == nil {
 		return "", ""
 	}
-	r, _ := d.Resolve(si.Get("Registry")).(object.String)
-	o, _ := d.Resolve(si.Get("Ordering")).(object.String)
+	r, rr := d.StringValue(si.Get("Registry"))
+	o, ro := d.StringValue(si.Get("Ordering"))
+	if rr == core.ReasonLocked || ro == core.ReasonLocked {
+		return "", ""
+	}
 	return string(r.Value), string(o.Value)
 }
 
@@ -583,7 +584,8 @@ func checkUACMapWMode(d core.View) []Violation {
 		if w, ok := d.Resolve(s.Dict.Get("WMode")).(object.Integer); ok {
 			dictWM = int(w)
 		}
-		if inner, found := cmapInnerWMode(d.Content(s)); found && inner != dictWM {
+		data, _ := d.Content(s) // reason: presence-only; an unread CMap declares no /WMode and the producer recorded any declined trip
+		if inner, found := cmapInnerWMode(data); found && inner != dictWM {
 			v = append(v, Violation{"7.21.3.3", fmt.Sprintf("embedded CMap /WMode %d does not match the WMode %d declared in the CMap stream", dictWM, inner), d.DictObjNum(fontDict)})
 		}
 	}
@@ -676,11 +678,11 @@ func checkType1CharSet(d core.View, fontDict *object.Dictionary) []Violation {
 	if fd == nil {
 		return nil
 	}
-	cs, ok := d.Resolve(fd.Get("CharSet")).(object.String)
-	if !ok {
-		return nil
+	cs, r := d.StringValue(fd.Get("CharSet"))
+	if r != core.ReasonOK {
+		return nil // absent, or ciphertext that lists nothing readable
 	}
-	fp := core.LoadFontProgram(d, fd)
+	fp, _ := core.LoadFontProgram(d, fd) // reason: a nil program declines below; the producer recorded any declined trip
 	if fp == nil || fp.GlyphNames == nil {
 		return nil
 	}
@@ -757,11 +759,18 @@ func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []Violation {
 	if !ok {
 		return nil
 	}
-	fp := core.LoadFontProgram(d, fd)
+	fp, _ := core.LoadFontProgram(d, fd) // reason: a nil program declines below; the producer recorded any declined trip
 	if fp == nil || fp.GlyphNonEmpty == nil {
 		return nil
 	}
-	present := core.DecodeCIDSet(d, cidSetStream)
+	present, r := core.DecodeCIDSet(d, cidSetStream)
+	if r.Declined() {
+		// Not read — a limit, a filter, ciphertext. An unread CIDSet lists
+		// nothing, and saying so would be a finding about pdf0 (audit
+		// 2026-09-22 C47); the producer recorded the trip. A CIDSet whose data
+		// is malformed does not list the glyphs, and the rule says so below.
+		return nil
+	}
 	for gid, nonEmpty := range fp.GlyphNonEmpty {
 		if !nonEmpty || gid == 0 {
 			continue
@@ -793,20 +802,13 @@ func checkUANotdefCID(d core.View) []Violation {
 		// predefined name is data this module does not have, and the check is
 		// skipped rather than run against a guess — reading UniJIS-UCS2-H as
 		// Identity would find CID 0 wherever the file happens to hold two zero
-		// bytes, which is a report about nothing.
-		cmap, ok := core.LoadCMap(d, fontDict)
-		if !ok {
-			// u is checked first because the entry may carry no usage record,
-			// and the object number for the report comes out of it.
-			if name, skipped := core.PredefinedCMapName(d, fontDict); skipped && u != nil {
-				d.Note(core.GuardPredefinedCMap, fmt.Sprintf("the font's CMap /%s is "+
-					"predefined and its code-to-CID data is not carried, so the "+
-					"check that no .notdef glyph is shown was skipped for that font",
-					name), u.ObjNum)
-			}
+		// bytes, which is a report about nothing. LoadCMap records that skip
+		// itself, so it is asked only for a font that shows text.
+		if u == nil {
 			continue
 		}
-		if u == nil {
+		cmap, r := core.LoadCMap(d, fontDict)
+		if r != core.ReasonOK {
 			continue
 		}
 		found := false
@@ -884,17 +886,15 @@ func checkUAMediaClips(d core.View) []Violation {
 // text string. Media-clip /Alt is an array of alternating culture/text strings;
 // a plain string is also accepted.
 func altArrayHasText(d core.View, o object.Object) bool {
-	switch a := d.Resolve(o).(type) {
-	case object.String:
-		return len(a.Value) > 0
-	case object.Array:
+	if a, ok := d.Resolve(o).(object.Array); ok {
 		for _, e := range a {
-			if s, ok := d.Resolve(e).(object.String); ok && len(s.Value) > 0 {
+			if d.NonEmptyStringOrLocked(e) {
 				return true
 			}
 		}
+		return false
 	}
-	return false
+	return d.NonEmptyStringOrLocked(o)
 }
 
 // walkAllDicts visits every dictionary reachable in the object graph — including
@@ -950,11 +950,14 @@ func checkUALang(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	// /Lang is a text string, and a UTF-16 "en-US" is as valid a language tag
 	// as a PDFDocEncoded one: decode before judging it.
-	if s, ok := d.Resolve(cat.Get("Lang")).(object.String); ok && len(s.Value) > 0 && !core.ValidBCP47(core.DecodePDFTextString(s.Value)) {
+	// A Locked document's /Lang is ciphertext, and judging it was how every
+	// encrypted file got a "not a valid language identifier" (audit 2026-09-22
+	// C63): only a value that was read is judged.
+	if s, r := d.StringValue(cat.Get("Lang")); r == core.ReasonOK && len(s.Value) > 0 && !core.ValidBCP47(core.DecodePDFTextString(s.Value)) {
 		v = append(v, Violation{"7.2", "catalog /Lang " + quote(core.DecodePDFTextString(s.Value)) + " is not a valid language identifier", 0})
 	}
 	walkStructElems(d, cat, func(elem *object.Dictionary, _ object.Name) {
-		if s, ok := d.Resolve(elem.Get("Lang")).(object.String); ok && len(s.Value) > 0 && !core.ValidBCP47(core.DecodePDFTextString(s.Value)) {
+		if s, r := d.StringValue(elem.Get("Lang")); r == core.ReasonOK && len(s.Value) > 0 && !core.ValidBCP47(core.DecodePDFTextString(s.Value)) {
 			v = append(v, Violation{"7.2", "structure element /Lang " + quote(core.DecodePDFTextString(s.Value)) + " is not a valid language identifier", 0})
 		}
 	})
@@ -977,7 +980,7 @@ func checkUAOptionalContent(d core.View, cat *object.Dictionary) []Violation {
 		if cfg == nil {
 			return
 		}
-		if name, _ := d.Resolve(cfg.Get("Name")).(object.String); len(name.Value) == 0 {
+		if !d.NonEmptyStringOrLocked(cfg.Get("Name")) {
 			v = append(v, Violation{"7.10", "optional-content configuration dictionary has no non-empty /Name", 0})
 		}
 		if cfg.Get("AS") != nil {
@@ -1005,29 +1008,28 @@ func checkUAEmbeddedFiles(d core.View) []Violation {
 		if t, _ := d.ResolveName(fs.Get("Type")); t != "" && t != "Filespec" {
 			continue
 		}
-		f, _ := d.Resolve(fs.Get("F")).(object.String)
-		uf, _ := d.Resolve(fs.Get("UF")).(object.String)
-		if len(f.Value) == 0 || len(uf.Value) == 0 {
+		if !d.NonEmptyStringOrLocked(fs.Get("F")) || !d.NonEmptyStringOrLocked(fs.Get("UF")) {
 			v = append(v, Violation{"7.11", "embedded-file specification must have non-empty /F and /UF keys", num})
 		}
 	}
 	return v
 }
 
-// effectiveFieldTU returns a Widget/field's user-facing description (/TU),
-// following the /Parent field chain (bounded and cycle-guarded) since a terminal
-// Widget may inherit /TU from its parent field.
-func effectiveFieldTU(d core.View, a *object.Dictionary) []byte {
+// effectiveFieldTU reports whether a Widget/field has a user-facing
+// description (/TU), following the /Parent field chain (bounded and
+// cycle-guarded) since a terminal Widget may inherit /TU from its parent
+// field. A /TU that is ciphertext counts as one (NonEmptyStringOrLocked).
+func effectiveFieldTU(d core.View, a *object.Dictionary) bool {
 	seen := map[*object.Dictionary]bool{}
 	cur := a
 	for i := 0; i < 32 && cur != nil && !seen[cur]; i++ {
 		seen[cur] = true
-		if tu, _ := d.Resolve(cur.Get("TU")).(object.String); len(tu.Value) > 0 {
-			return tu.Value
+		if d.NonEmptyStringOrLocked(cur.Get("TU")) {
+			return true
 		}
 		cur = d.ResolveDict(cur.Get("Parent"))
 	}
-	return nil
+	return false
 }
 
 // checkUAFieldDescription enforces 7.18.1 for form fields with multiple widgets:
@@ -1056,17 +1058,19 @@ func checkUAFieldDescription(d core.View, cat *object.Dictionary) []Violation {
 			return
 		}
 		_, hasFT := d.ResolveName(fd.Get("FT"))
-		ftu, _ := d.Resolve(fd.Get("TU")).(object.String)
 		kids, _ := d.Resolve(fd.Get("Kids")).(object.Array)
-		if hasFT && len(ftu.Value) == 0 {
+		if hasFT && !d.NonEmptyStringOrLocked(fd.Get("TU")) {
 			for _, kr := range kids {
 				kd := d.ResolveDict(kr)
 				if kd == nil {
 					continue
 				}
 				st, _ := d.ResolveName(kd.Get("Subtype"))
-				kt, _ := d.Resolve(kd.Get("T")).(object.String)
-				ktu, _ := d.Resolve(kd.Get("TU")).(object.String)
+				kt, rt := d.StringValue(kd.Get("T"))
+				ktu, rtu := d.StringValue(kd.Get("TU"))
+				if rt == core.ReasonLocked || rtu == core.ReasonLocked {
+					continue // ciphertext: which of the two is empty is unknown
+				}
 				if st == "Widget" && len(kt.Value) == 0 && len(ktu.Value) > 0 {
 					v = append(v, Violation{"7.18.1", "form field has no /TU; its accessible description is misplaced on a widget annotation", d.DictObjNum(fd)})
 					break
@@ -1095,11 +1099,12 @@ func checkUAXFA(d core.View, cat *object.Dictionary) []Violation {
 	var xfa []byte
 	switch v := d.Resolve(form.Get("XFA")).(type) {
 	case *object.Stream:
-		xfa = d.Content(v)
+		xfa, _ = d.Content(v) // reason: presence-only; the producer recorded any declined trip
 	case object.Array:
 		for _, e := range v {
 			if st, ok := d.Resolve(e).(*object.Stream); ok {
-				xfa = append(xfa, d.Content(st)...)
+				data, _ := d.Content(st) // reason: presence-only; the producer recorded any declined trip
+				xfa = append(xfa, data...)
 			}
 		}
 	}
@@ -1278,9 +1283,7 @@ func checkFigureAlt(d core.View, cat *object.Dictionary) []Violation {
 		if n.RawS != "Figure" {
 			continue
 		}
-		alt, _ := d.Resolve(n.Elem.Get("Alt")).(object.String)
-		actual, _ := d.Resolve(n.Elem.Get("ActualText")).(object.String)
-		if len(alt.Value) == 0 && len(actual.Value) == 0 {
+		if !d.NonEmptyStringOrLocked(n.Elem.Get("Alt")) && !d.NonEmptyStringOrLocked(n.Elem.Get("ActualText")) {
 			v = append(v, Violation{"7.3", "figure structure element has no non-empty alternate text (/Alt or /ActualText)", 0})
 		}
 	}

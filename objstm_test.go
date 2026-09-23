@@ -43,7 +43,7 @@ func TestParseObjStmIndex(t *testing.T) {
 		6: "42",
 	}, []int{4, 5, 6}, true)
 
-	data, entries, first, err := parseObjStmIndex(core.Canceler{}, stream, core.DefaultLimits())
+	data, entries, first, err := parseObjStmIndex(core.Canceler{}, stream, core.DefaultLimits(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestParseObjStmIndexRejectsBadDict(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stream := makeObjStm(t, map[int]string{4: "42"}, []int{4}, false)
 			tc.mutig(stream)
-			if _, _, _, err := parseObjStmIndex(core.Canceler{}, stream, core.DefaultLimits()); err == nil {
+			if _, _, _, err := parseObjStmIndex(core.Canceler{}, stream, core.DefaultLimits(), nil); err == nil {
 				t.Error("expected error")
 			}
 		})

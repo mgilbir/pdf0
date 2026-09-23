@@ -1145,8 +1145,18 @@ func checkXMPWellFormed(doc core.View, level Level) []Violation {
 	if !ok {
 		return nil
 	}
-	raw, err := core.DecodeStreamData(doc.Cancel, stream, doc.Limits)
-	if err != nil {
+	raw, r := doc.Decode(stream)
+	switch {
+	case r.Declined():
+		// Not decoded — a size limit, an unimplemented filter, ciphertext.
+		// Judging the still-encoded bytes as XML would report a well-formed
+		// packet as broken; the producer recorded the trip (audit 2026-09-22
+		// C47).
+		return nil
+	case r == core.ReasonMalformed:
+		// The stream's data does not decode, so there is no packet: judged as
+		// the bytes the file holds, which is what a reader that cannot decode
+		// them has.
 		raw = stream.Data
 	}
 

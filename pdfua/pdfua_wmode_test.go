@@ -43,7 +43,8 @@ func TestUACMapWMode(t *testing.T) {
 	// so exercise cmapInnerWMode directly against the mismatch scenario.
 	doc := mk(1, "/WMode 0 def")
 	s := doc.Objects[10].Value.(*object.Dictionary).Get("Encoding").(*object.Stream)
-	inner, ok := cmapInnerWMode(doc.Content(s))
+	data, _ := doc.Content(s) // reason: an unfiltered test stream
+	inner, ok := cmapInnerWMode(data)
 	if !ok || inner != 0 {
 		t.Fatalf("inner WMode = (%d,%v), want (0,true)", inner, ok)
 	}

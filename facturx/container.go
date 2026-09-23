@@ -2,7 +2,6 @@ package facturx
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 
 	"github.com/mgilbir/pdf0/internal/core"
@@ -120,20 +119,15 @@ func checkAttachment(doc core.View, cat *object.Dictionary, f family, what, miss
 	if sub, _ := doc.ResolveName(st.Dict.Get("Subtype")); !facturxIsXMLSubtype(sub) {
 		add("attachment", fmt.Sprintf("the %s embedded-file /Subtype should be text/xml, got %s", what, sub), num)
 	}
-	stNum := object.RefNum(ef.Get("F"))
-	decoded, err := core.DecodeStreamData(doc.Cancel, st, doc.Limits)
+	// The producer records a declined decode (a limit, a filter, ciphertext,
+	// against the stream's object), so only the malformed case is this
+	// check's to report.
+	decoded, r := doc.Decode(st)
 	switch {
-	case err != nil && doc.Cancel.Stopped():
-		// The run is over; the cancellation finding says so.
+	case r.Declined():
 		return name, nil, num
-	case errors.Is(err, core.ErrDecodeLimit):
-		doc.Note(core.GuardDecodedStream, fmt.Sprintf("the embedded %s XML decodes to more than the per-stream limit, so it was not validated", what), stNum)
-		return name, nil, num
-	case errors.Is(err, core.ErrUnsupportedFilter):
-		doc.Note(core.GuardUnsupportedFilter, fmt.Sprintf("the embedded %s XML is encoded with a filter pdf0 does not implement (%v), so it was not validated", what, err), stNum)
-		return name, nil, num
-	case err != nil:
-		add(xmlRule, fmt.Sprintf("the embedded %s XML could not be decoded: %v", what, err), num)
+	case r == core.ReasonMalformed:
+		add(xmlRule, fmt.Sprintf("the embedded %s XML could not be decoded (malformed stream data)", what), num)
 		return name, nil, num
 	case len(bytes.TrimSpace(decoded)) == 0:
 		add(xmlRule, fmt.Sprintf("the embedded %s XML file is empty", what), num)
@@ -179,7 +173,7 @@ func flushTrips(doc core.View, add func(rule, msg string, obj int)) {
 // /UF entry (decoded from its UTF-16 or PDFDoc encoding) over /F.
 func fileSpecName(doc core.View, fs *object.Dictionary) string {
 	for _, key := range []object.Name{"UF", "F"} {
-		if s, ok := doc.Resolve(fs.Get(key)).(object.String); ok {
+		if s, r := doc.StringValue(fs.Get(key)); r == core.ReasonOK {
 			if name := core.DecodePDFTextString(s.Value); name != "" {
 				return name
 			}

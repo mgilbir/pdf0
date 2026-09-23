@@ -2,23 +2,26 @@ package core
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/zlib"
 	"errors"
 	"fmt"
+	"io"
+	"math"
+	"sync"
+
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
-	"io"
-	"sync"
 )
 
-// This file implements the stream filters of ISO 32000-2 7.4 that the Go
-// standard library does not provide: the LZWDecode decoder (7.4.4) and the
-// reversal of the /DecodeParms predictors shared by LZW and Flate (7.4.4.4) —
-// TIFF horizontal differencing and the PNG per-row filters. FlateDecode itself
-// and the /Filter dispatch live in xref.go.
+// This file implements the general-purpose stream filters of ISO 32000-2 7.4 —
+// FlateDecode, LZWDecode, ASCIIHexDecode, ASCII85Decode, RunLengthDecode and the
+// /DecodeParms predictors shared by LZW and Flate (7.4.4.4), TIFF horizontal
+// differencing and the PNG per-row filters — and the /Filter dispatch over them
+// (FilterChain, DecodeStreamData). The image codecs live in the images package.
 //
 // Every entry point here consumes attacker-controlled bytes: output is capped at
-// maxDecodeSize against decompression bombs, and predictor parameters are
+// Limits.DecodedStreamBytes against decompression bombs, and predictor parameters are
 // range-checked before any row arithmetic, since Colors, Columns and
 // BitsPerComponent come straight from the file.
 
@@ -75,7 +78,7 @@ func LZWDecode(cancel Canceler, data []byte, earlyChange int, lim Limits) ([]byt
 	// output — the same granularity flate gets through cancelReader, expressed
 	// against the output here because LZW's cost tracks what it produces, not
 	// what it consumes (cancel.go).
-	nextCancelCheck := lim.DecodedStreamBytes + 1 // never reached when cancel cannot fire
+	nextCancelCheck := math.MaxInt // never reached when cancel cannot fire
 	if cancel.Cancellable() {
 		nextCancelCheck = 0
 	}
@@ -140,29 +143,149 @@ type PredictorParms struct {
 	Columns          int
 }
 
-// ParmsDictAt returns the decode-parms dictionary for the i-th filter in the
-// chain, or nil if there is none. parms is the raw /DecodeParms value: a
-// dictionary (single filter) or an array parallel to the /Filter array, whose
-// elements are dictionaries or null.
-func ParmsDictAt(parms object.Object, i int) *object.Dictionary {
-	switch p := parms.(type) {
-	case *object.Dictionary:
-		if i == 0 {
-			return p
-		}
+// Resolver follows an indirect reference to the object it names, returning any
+// other object unchanged. View.Resolve is one. A decode is given one because
+// ISO 32000 lets /Filter, /DecodeParms, each element of either array and each
+// value inside a decode-parms dictionary be indirect, and a decoder that only
+// understands direct values silently skips a predictor and hands back garbage
+// (audit 2026-09-22 C151). A nil Resolver means no object graph is available;
+// a reference is then not followed, and a filter entry that is one makes the
+// decode fail rather than guess.
+type Resolver func(object.Object) object.Object
+
+func (r Resolver) resolve(o object.Object) object.Object {
+	if r == nil {
+		return o
+	}
+	return r(o)
+}
+
+// FilterStep is one stage of a stream's filter chain, with its decode
+// parameters resolved: Parms holds no indirect references at its top level.
+type FilterStep struct {
+	Name  object.Name
+	Parms *object.Dictionary
+}
+
+// FilterChain returns a stream's filters in the order they are applied to
+// decode it, each with its decode parameters, every indirect reference among
+// them resolved. An absent /Filter is an empty chain.
+//
+// It is the one reading of /Filter and /DecodeParms: DecodeStreamData decodes
+// by it, and every stage goes through ApplyFilter, which asks FilterSupported
+// first — so "can pdf0 decode this stream?" and "what does decoding it do?"
+// are answered by the same code. (StreamFiltersSupported, which answered the
+// first question from a table of its own that knew nothing of indirect
+// parameters, is gone: a caller gets the answer as the decode's Reason.)
+func FilterChain(stream *object.Stream, resolve Resolver) ([]FilterStep, error) {
+	if resolve == nil && filterEntriesIndirect(stream) {
+		// Nothing to follow the reference with — a cross-reference stream is
+		// decoded before there is an object table, and ISO 32000-2 7.5.8.2
+		// requires its entries to be direct. Decoding without the parameters
+		// would silently skip a predictor and return garbage.
+		return nil, errors.New("/Filter or /DecodeParms holds an indirect reference, which cannot be resolved here")
+	}
+	filter := resolve.resolve(stream.Dict.Get("Filter"))
+	parms := resolve.resolve(stream.Dict.Get("DecodeParms"))
+	switch f := filter.(type) {
+	case nil, object.Null:
+		return nil, nil
+	case object.Name:
+		return []FilterStep{{Name: f, Parms: ParmsDictAt(parms, 0, resolve)}}, nil
 	case object.Array:
-		if i < len(p) {
-			if d, ok := p[i].(*object.Dictionary); ok {
-				return d
+		steps := make([]FilterStep, 0, len(f))
+		for i, e := range f {
+			name, ok := resolve.resolve(e).(object.Name)
+			if !ok {
+				return nil, fmt.Errorf("filter array element %d is not a name", i)
+			}
+			steps = append(steps, FilterStep{Name: name, Parms: ParmsDictAt(parms, i, resolve)})
+		}
+		return steps, nil
+	default:
+		return nil, fmt.Errorf("/Filter is a %T, not a name or an array", filter)
+	}
+}
+
+// filterEntriesIndirect reports whether /Filter or /DecodeParms, an element of
+// either, or a value in a decode-parms dictionary is an indirect reference.
+func filterEntriesIndirect(stream *object.Stream) bool {
+	isRef := func(o object.Object) bool { _, ok := o.(object.IndirectRef); return ok }
+	dictHasRef := func(d *object.Dictionary) bool {
+		for v := range d.Values() {
+			if isRef(v) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, key := range []object.Name{"Filter", "DecodeParms"} {
+		switch v := stream.Dict.Get(key).(type) {
+		case object.IndirectRef:
+			return true
+		case *object.Dictionary:
+			if dictHasRef(v) {
+				return true
+			}
+		case object.Array:
+			for _, e := range v {
+				if isRef(e) {
+					return true
+				}
+				if d, ok := e.(*object.Dictionary); ok && dictHasRef(d) {
+					return true
+				}
 			}
 		}
 	}
-	return nil
+	return false
+}
+
+// ParmsDictAt returns the decode-parms dictionary for the i-th filter in the
+// chain, or nil if there is none. parms is the /DecodeParms value: a
+// dictionary (single filter) or an array parallel to the /Filter array, whose
+// elements are dictionaries or null. Every indirect reference — the value
+// itself, an array element, a value inside the dictionary — is resolved
+// through resolve; when the dictionary holds one, a resolved copy is returned
+// and the document's own dictionary is left alone.
+func ParmsDictAt(parms object.Object, i int, resolve Resolver) *object.Dictionary {
+	var d *object.Dictionary
+	switch p := resolve.resolve(parms).(type) {
+	case *object.Dictionary:
+		if i == 0 {
+			d = p
+		}
+	case object.Array:
+		if i < len(p) {
+			d, _ = resolve.resolve(p[i]).(*object.Dictionary)
+		}
+	}
+	if d == nil || resolve == nil {
+		return d
+	}
+	direct := true
+	for v := range d.Values() {
+		if _, isRef := v.(object.IndirectRef); isRef {
+			direct = false
+			break
+		}
+	}
+	if direct {
+		return d
+	}
+	out := d.Clone()
+	for k, v := range d.All() {
+		if _, isRef := v.(object.IndirectRef); isRef {
+			out.Set(k, resolve(v))
+		}
+	}
+	return out
 }
 
 // PredictorFromDict extracts predictor parameters from a decode-parms
 // dictionary, applying the spec defaults (Predictor 1, Colors 1,
-// BitsPerComponent 8, Columns 1).
+// BitsPerComponent 8, Columns 1). d is expected to come from ParmsDictAt, which
+// has resolved its values.
 func PredictorFromDict(d *object.Dictionary) PredictorParms {
 	p := PredictorParms{Predictor: 1, Colors: 1, BitsPerComponent: 8, Columns: 1}
 	if d == nil {
@@ -259,7 +382,7 @@ func applyTIFFPredictor(data []byte, p PredictorParms) ([]byte, error) {
 			}
 		}
 	default:
-		return nil, fmt.Errorf("TIFF predictor with BitsPerComponent %d not supported", p.BitsPerComponent)
+		return nil, fmt.Errorf("%w: TIFF predictor with BitsPerComponent %d", ErrUnsupportedFilter, p.BitsPerComponent)
 	}
 	return data, nil
 }
@@ -272,7 +395,17 @@ func applyPNGPredictor(data []byte, p PredictorParms) ([]byte, error) {
 		return nil, err
 	}
 	rowLen := p.rowLength()
-	if len(data)%(rowLen+1) != 0 {
+	// Every allocation below is sized by rowLen, which the file chooses (up to
+	// 64 colours x 16 bits x 2^24 columns: 2 GiB), so rowLen is bounded by the
+	// data before anything is allocated. A row is rowLen+1 bytes of input, so
+	// no row buffer can be larger than the decoded data it came from, and that
+	// is already capped by the decode limit. Empty data is zero rows, not one
+	// row of zeros: 0 mod (rowLen+1) is 0, which is how an empty stream used to
+	// allocate the file's full row length (audit 2026-09-22 C8).
+	if len(data) == 0 {
+		return data, nil
+	}
+	if rowLen+1 > len(data) || len(data)%(rowLen+1) != 0 {
 		return nil, fmt.Errorf("PNG predictor: data length %d is not a multiple of row length %d", len(data), rowLen+1)
 	}
 	bpp := p.bytesPerPixel()
@@ -340,43 +473,63 @@ func abs(x int) int {
 	return x
 }
 
-// DecodeStreamData decompresses stream data based on the /Filter and
-// /DecodeParms entries.
-func DecodeStreamData(cancel Canceler, stream *object.Stream, lim Limits) ([]byte, error) {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		// No filter, return raw data
-		return stream.Data, nil
+// DecodeStreamData decodes a stream through its filter chain (FilterChain),
+// every stage capped at lim.DecodedStreamBytes of output. resolve follows the
+// indirect references /Filter and /DecodeParms may contain; see Resolver.
+//
+// The error says why the data could not be produced, and callers classify it
+// with ReasonOf: ErrDecodeLimit and ErrUnsupportedFilter mean pdf0 declined, a
+// wrapped context error means the operation was cancelled, and anything else
+// means the stream's data is not what its filters say it is.
+func DecodeStreamData(cancel Canceler, stream *object.Stream, lim Limits, resolve Resolver) ([]byte, error) {
+	chain, err := FilterChain(stream, resolve)
+	if err != nil {
+		return nil, err
 	}
-	parms := stream.Dict.Get("DecodeParms")
-
-	filterName, ok := filter.(object.Name)
-	if !ok {
-		// Could be an array of filters
-		filterArr, ok := filter.(object.Array)
-		if !ok {
-			return nil, fmt.Errorf("unsupported filter type: %T", filter)
+	data := stream.Data
+	for _, step := range chain {
+		if data, err = ApplyFilter(cancel, step.Name, data, step.Parms, lim); err != nil {
+			return nil, err
 		}
-		// Apply filters in order
-		data := stream.Data
-		for i, f := range filterArr {
-			fname, ok := f.(object.Name)
-			if !ok {
-				return nil, fmt.Errorf("filter array element is not a Name")
-			}
-			var err error
-			data, err = ApplyFilter(cancel, fname, data, ParmsDictAt(parms, i), lim)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return data, nil
 	}
-
-	return ApplyFilter(cancel, filterName, stream.Data, ParmsDictAt(parms, 0), lim)
+	return data, nil
 }
 
+// FilterSupported reports, as ErrUnsupportedFilter, a filter stage pdf0 does
+// not implement, and nil for one ApplyFilter decodes. ApplyFilter asks it
+// first, so the two cannot disagree: a stage this accepts never fails for
+// being unsupported, and one it refuses is never attempted.
+//
+// The image codecs (DCTDecode, JPXDecode, CCITTFaxDecode, JBIG2Decode) are not
+// here. They produce pixels rather than bytes, and the image package decodes
+// them itself; a general-purpose decode of a stream that uses one is
+// unsupported, which is the truth for every caller that wants the bytes.
+func FilterSupported(name object.Name, parms *object.Dictionary) error {
+	switch name {
+	case "FlateDecode", "LZWDecode":
+		// Predictor 2 (TIFF) is implemented for 8- and 16-bit components only.
+		// 1, 2 and 4 are legal and rare; any other value is not legal at all,
+		// which ApplyPredictor reports as malformed.
+		if p := PredictorFromDict(parms); p.Predictor == 2 {
+			switch p.BitsPerComponent {
+			case 1, 2, 4:
+				return fmt.Errorf("%w: TIFF predictor with BitsPerComponent %d", ErrUnsupportedFilter, p.BitsPerComponent)
+			}
+		}
+		return nil
+	case "ASCIIHexDecode", "ASCII85Decode", "RunLengthDecode", "Crypt":
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrUnsupportedFilter, name)
+}
+
+// ApplyFilter reverses one filter stage. parms must already be resolved, as
+// ParmsDictAt and FilterChain return it. Output is capped at
+// lim.DecodedStreamBytes, whatever the filter.
 func ApplyFilter(cancel Canceler, name object.Name, data []byte, parms *object.Dictionary, lim Limits) ([]byte, error) {
+	if err := FilterSupported(name, parms); err != nil {
+		return nil, err
+	}
 	switch name {
 	case "FlateDecode":
 		decoded, err := FlateDecode(cancel, data, lim)
@@ -397,48 +550,100 @@ func ApplyFilter(cancel Canceler, name object.Name, data []byte, parms *object.D
 		}
 		return ApplyPredictor(decoded, PredictorFromDict(parms))
 	case "ASCIIHexDecode":
-		return asciiHexDecode(data)
-	case "Crypt":
+		return asciiHexDecode(data, lim.DecodedStreamBytes)
+	case "ASCII85Decode":
+		return ascii85Decode(data, lim.DecodedStreamBytes)
+	case "RunLengthDecode":
+		return runLengthDecode(data, lim.DecodedStreamBytes)
+	default: // "Crypt", the one other stage FilterSupported accepts
 		// A stream's own crypt filter (ISO 32000-2 7.4.10) is applied by the
 		// security handler when Read decrypts the document, so the data here
 		// is already past it. On a document that was not decrypted it is
 		// ciphertext, but so is every other stream: that state is Locked, and
-		// callers check it.
+		// View.Decode reports it before any filter runs.
 		return data, nil
-	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnsupportedFilter, name)
 	}
 }
 
 // Decode errors a caller must be able to tell from a corrupt stream: the
 // stream may be perfectly good, and pdf0 declined (a size limit) or does not
 // implement the filter. Reporting either as a defect of the file would be a
-// false non-conformance; a validator reports them as "limit" instead.
+// false non-conformance; ReasonOf classifies them, and a validator reports them
+// as "limit" instead.
 var (
 	ErrDecodeLimit       = errors.New("decompressed data exceeds maximum size")
 	ErrUnsupportedFilter = errors.New("unsupported filter")
 )
 
-func FlateDecode(cancel Canceler, data []byte, lim Limits) ([]byte, error) {
-	r, err := zlib.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("zlib: %w", err)
-	}
-	defer r.Close()
+// errOverCap is the error for output that would pass max bytes.
+func errOverCap(what string, max int) error {
+	return fmt.Errorf("%s: %w (%d bytes)", what, ErrDecodeLimit, max)
+}
 
-	maxDecode := lim.DecodedStreamBytes
-	limited := io.LimitReader(r, int64(maxDecode)+1)
-	decoded, err := io.ReadAll(CancelReader(cancel, limited))
-	if err != nil {
-		return nil, fmt.Errorf("zlib decompress: %w", err)
+// readCapped reads r to the end, refusing more than max bytes of it. It reads
+// at most max+1 bytes, the one extra being how "exactly max" is told from
+// "more than max" — computed without overflow, since max is a caller's option
+// and math.MaxInt is the natural way to write "no practical limit". The
+// unguarded int64(max)+1 wrapped negative there, and io.LimitReader with a
+// negative limit reads nothing, so every stream decoded to empty with no error
+// (audit 2026-09-22 C48).
+func readCapped(r io.Reader, max int, what string) ([]byte, error) {
+	n := int64(max)
+	if n < math.MaxInt64 {
+		n++
 	}
-	if len(decoded) > maxDecode {
-		return nil, fmt.Errorf("%w (%d bytes)", ErrDecodeLimit, maxDecode)
+	b, err := io.ReadAll(io.LimitReader(r, n))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > max {
+		return nil, errOverCap(what, max)
+	}
+	return b, nil
+}
+
+// FlateDecode inflates a zlib stream (RFC 1950 wrapping RFC 1951), capped at
+// lim.DecodedStreamBytes of output.
+//
+// The deflate data is decoded to its final block and the stream is its
+// content. The Adler-32 checksum that follows is not required: a stream whose
+// deflate data is complete decodes whether its checksum is present, truncated
+// or wrong. That is what the readers PDF files are made for do — Acrobat,
+// pdf.js, Poppler, MuPDF and PDFium all render such a stream — so a producer
+// that writes one ships it, and a validator that dropped it would be judging a
+// file nobody sees: its content vanished from every check with no finding at
+// all, so a device-colour violation in it went unreported (audit 2026-09-22
+// C46). A deflate stream that ends before its final block, or whose data does
+// not decode, is malformed: what came out is a prefix of the content, and a
+// prefix is not the content.
+func FlateDecode(cancel Canceler, data []byte, lim Limits) ([]byte, error) {
+	if len(data) < 2 {
+		return nil, fmt.Errorf("zlib: %w", io.ErrUnexpectedEOF)
+	}
+	cmf, flg := data[0], data[1]
+	if cmf&0x0f != 8 || cmf>>4 > 7 || (uint16(cmf)<<8|uint16(flg))%31 != 0 {
+		return nil, fmt.Errorf("zlib: %w", zlib.ErrHeader)
+	}
+	if flg&0x20 != 0 {
+		// A preset dictionary (FDICT) names data the stream does not carry.
+		return nil, fmt.Errorf("zlib: %w", zlib.ErrDictionary)
+	}
+	fr := flate.NewReader(bytes.NewReader(data[2:]))
+	defer fr.Close()
+	decoded, err := readCapped(CancelReader(cancel, fr), lim.DecodedStreamBytes, "flate")
+	if err != nil {
+		if errors.Is(err, ErrDecodeLimit) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("zlib decompress: %w", err)
 	}
 	return decoded, nil
 }
 
-func asciiHexDecode(data []byte) ([]byte, error) {
+// asciiHexDecode reverses ASCIIHexDecode (ISO 32000-2 7.4.2). Output is half
+// the input at most, but it is still held to max so that every filter honours
+// the same cap.
+func asciiHexDecode(data []byte, max int) ([]byte, error) {
 	// Filter out whitespace and stop at '>'
 	var hexDigits []byte
 	for _, b := range data {
@@ -450,7 +655,148 @@ func asciiHexDecode(data []byte) ([]byte, error) {
 		}
 		hexDigits = append(hexDigits, b)
 	}
+	if (len(hexDigits)+1)/2 > max {
+		return nil, errOverCap("ASCIIHex", max)
+	}
 	return syntax.DecodeHex(hexDigits)
+}
+
+// ascii85Decode reverses ASCII85Decode (ISO 32000-2 7.4.3): each group of five
+// characters '!'..'u' is a base-85 number giving four bytes, 'z' stands for
+// four zero bytes, white space is ignored, "~>" ends the data, and a final
+// partial group of n characters gives n-1 bytes. 'z' expands one byte to four,
+// so output is checked against max as it grows.
+//
+// The end-of-data marker is not required: the stream's own length already ends
+// the data, and a producer that omitted the marker wrote every byte it meant
+// to. Anything else outside the alphabet is malformed.
+func ascii85Decode(data []byte, max int) ([]byte, error) {
+	out := make([]byte, 0, min(len(data)/5*4+4, max))
+	var group [5]byte
+	n := 0
+	emit := func(count int) error {
+		var v uint64
+		for _, c := range group {
+			v = v*85 + uint64(c)
+		}
+		if v > math.MaxUint32 {
+			return fmt.Errorf("ASCII85: group value %d exceeds 32 bits", v)
+		}
+		if len(out)+count > max {
+			return errOverCap("ASCII85", max)
+		}
+		b := [4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
+		out = append(out, b[:count]...)
+		return nil
+	}
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		switch {
+		case syntax.IsWhitespace(c):
+			continue
+		case c == '~':
+			// "~>" is end of data; a '~' followed by anything else is not
+			// part of the alphabet.
+			j := i + 1
+			for j < len(data) && syntax.IsWhitespace(data[j]) {
+				j++
+			}
+			if j < len(data) && data[j] != '>' {
+				return nil, fmt.Errorf("ASCII85: '~' not followed by '>' at offset %d", i)
+			}
+			i = len(data)
+		case c == 'z':
+			if n != 0 {
+				return nil, fmt.Errorf("ASCII85: 'z' inside a group at offset %d", i)
+			}
+			group = [5]byte{}
+			if err := emit(4); err != nil {
+				return nil, err
+			}
+		case c >= '!' && c <= 'u':
+			group[n] = c - '!'
+			n++
+			if n == 5 {
+				if err := emit(4); err != nil {
+					return nil, err
+				}
+				n = 0
+			}
+		default:
+			return nil, fmt.Errorf("ASCII85: invalid character %#x at offset %d", c, i)
+		}
+	}
+	switch n {
+	case 0:
+	case 1:
+		return nil, errors.New("ASCII85: a final group of one character encodes no byte")
+	default:
+		// A final group of n characters is padded with 'u' (84) to five and
+		// yields its first n-1 bytes.
+		for k := n; k < 5; k++ {
+			group[k] = 84
+		}
+		if err := emit(n - 1); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// runLengthDecode reverses RunLengthDecode (ISO 32000-2 7.4.5): a length byte
+// 0..127 is followed by that many plus one literal bytes, 129..255 by one byte
+// repeated 257 minus the length times, and 128 ends the data.
+//
+// Two bytes of input can ask for 128 bytes of output, so the output size is
+// computed in a first pass that allocates nothing and checked against max
+// before the one allocation. A literal run cut short by the end of the data is
+// malformed; a missing end-of-data byte is not, for the reason ascii85Decode
+// gives.
+func runLengthDecode(data []byte, max int) ([]byte, error) {
+	size := 0
+	i := 0
+	for i < len(data) {
+		l := int(data[i])
+		i++
+		switch {
+		case l == 128:
+			i = len(data) + 1
+			continue
+		case l < 128:
+			if i+l+1 > len(data) {
+				return nil, fmt.Errorf("RunLength: literal run of %d bytes at offset %d runs past the end of the data", l+1, i-1)
+			}
+			size += l + 1
+			i += l + 1
+		default:
+			if i >= len(data) {
+				return nil, fmt.Errorf("RunLength: repeat run at offset %d has no byte to repeat", i-1)
+			}
+			size += 257 - l
+			i++
+		}
+		if size > max {
+			return nil, errOverCap("RunLength", max)
+		}
+	}
+	out := make([]byte, 0, size)
+	for i = 0; i < len(data); {
+		l := int(data[i])
+		i++
+		switch {
+		case l == 128:
+			return out, nil
+		case l < 128:
+			out = append(out, data[i:i+l+1]...)
+			i += l + 1
+		default:
+			for k := 0; k < 257-l; k++ {
+				out = append(out, data[i])
+			}
+			i++
+		}
+	}
+	return out, nil
 }
 
 // flateWriters pools the zlib compressors FlateEncode uses.

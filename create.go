@@ -247,7 +247,7 @@ func describeInXMP(p *xmp.Packet, info DocumentInfo) error {
 // new empty packet when the document has none (core.EditableXMP).
 func (d *Document) editableMetadata(catalog *object.Dictionary) (*xmp.Packet, error) {
 	stream, _ := d.Resolve(catalog.Get("Metadata")).(*object.Stream)
-	p, err := core.EditableXMP(d.canceler(), stream, d.lim())
+	p, err := core.EditableXMP(d.view(), stream)
 	if err != nil {
 		return nil, fmt.Errorf("pdf0: %w", err)
 	}

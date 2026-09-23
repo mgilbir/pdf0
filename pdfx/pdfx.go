@@ -273,7 +273,7 @@ func pdfxOutputIntentCoverage(doc core.View, cat *object.Dictionary) (rgb, cmyk,
 			}
 			continue
 		}
-		data := core.ICCProfileData(stream, doc.Limits)
+		data, _ := doc.ICCProfileData(stream) // reason: an unread profile is taken to cover every family below, so no finding rests on it; the producer recorded any declined trip
 		if len(data) < 20 {
 			rgb, cmyk = true, true
 			continue
@@ -317,8 +317,11 @@ func pdfxCheckIdentification(doc core.View, level Level, add func(rule, msg stri
 	if claimed == "" {
 		if info := doc.ResolveDict(doc.Trailer.Get("Info")); info != nil {
 			// A text string: decoded, so a UTF-16 identifier reads as itself.
-			if s, ok := doc.Resolve(info.Get("GTS_PDFXVersion")).(object.String); ok {
+			switch s, r := doc.StringValue(info.Get("GTS_PDFXVersion")); r {
+			case core.ReasonOK:
 				claimed = strings.TrimSpace(core.DecodePDFTextString(s.Value))
+			case core.ReasonLocked:
+				unread = true // ciphertext: the claim cannot be read
 			}
 		}
 	}
@@ -363,7 +366,7 @@ func pdfxCheckOutputIntent(doc core.View, level Level, add func(rule, msg string
 			continue
 		}
 		found = true
-		if oci, ok := doc.Resolve(oi.Get("OutputConditionIdentifier")).(object.String); !ok || len(oci.Value) == 0 {
+		if !doc.NonEmptyStringOrLocked(oi.Get("OutputConditionIdentifier")) {
 			add("output-intent", "GTS_PDFX output intent lacks a non-empty /OutputConditionIdentifier", object.RefNum(e))
 		}
 		prof := oi.Get("DestOutputProfile")

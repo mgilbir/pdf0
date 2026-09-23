@@ -46,7 +46,7 @@ func uaMemo(d core.View) *uaCache {
 func checkUARealContent(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	for _, pg := range d.Pages(cat.Get("Pages")) {
-		data, key := d.ContentBytesAndKey(pg.Dict.Get("Contents"))
+		data, key, _ := d.ContentBytesAndKey(pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		for _, msg := range contentFacts(d, data, key).realMsgs {
 			v = append(v, Violation{"7.1", msg, pg.ObjNum})
 		}
@@ -189,7 +189,7 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
 			continue
 		}
-		if bytesContainsToken(d.Content(s), "/MCID") {
+		if data, _ := d.Content(s); bytesContainsToken(data, "/MCID") { // reason: presence-only; the producer recorded any declined trip
 			mcidForm[num] = true
 		}
 	}
@@ -224,7 +224,7 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 	}
 	// Page content sources.
 	for _, pg := range d.Pages(d.CatalogPages()) {
-		data, key := d.ContentBytesAndKey(pg.Dict.Get("Contents"))
+		data, key, _ := d.ContentBytesAndKey(pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		countDo(data, key, d.ResolveDict(pg.Dict.Get("Resources")))
 	}
 	// Form XObject content sources (a form may invoke another form).
@@ -236,7 +236,8 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
 			continue
 		}
-		countDo(d.Content(s), s, d.ResolveDict(s.Dict.Get("Resources")))
+		data, _ := d.Content(s) // reason: presence-only (counts invocations); the producer recorded any declined trip
+		countDo(data, s, d.ResolveDict(s.Dict.Get("Resources")))
 	}
 
 	var v []Violation

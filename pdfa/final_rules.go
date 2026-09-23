@@ -145,7 +145,7 @@ func checkFileTrailerID(doc core.View, level Level) []Violation {
 	valid := ok && len(arr) == 2
 	if valid {
 		for _, el := range arr {
-			s, ok := el.(object.String)
+			s, ok := el.(object.String) // string: the file identifier is never encrypted (ISO 32000-2 7.6.2), so its bytes are its value even in a Locked document
 			if !ok || len(s.Value) == 0 {
 				valid = false
 			}
@@ -324,7 +324,7 @@ func checkActualTextPUA(doc core.View, level Level) []Violation {
 	// Structure element (and any) dictionaries carrying /ActualText.
 	for num, iobj := range doc.Objects {
 		if d, ok := iobj.Value.(*object.Dictionary); ok {
-			if s, ok := doc.Resolve(d.Get("ActualText")).(object.String); ok && stringHasPUA(s.Value) {
+			if s, r := doc.StringValue(d.Get("ActualText")); r == core.ReasonOK && stringHasPUA(s.Value) {
 				add("an ActualText entry in a dictionary contains a Unicode Private Use Area value", num)
 			}
 		}
@@ -477,14 +477,15 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 				}
 				if s, ok := doc.Resolve(xref).(*object.Stream); ok {
 					if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
-						walk(&s.Dict, doc.Content(s), s)
+						data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
+						walk(&s.Dict, data, s)
 					}
 				}
 			}
 		}
 	}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
-		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
+		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		walk(page.Dict, data, key)
 	}
 	return out
@@ -529,8 +530,19 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
 				continue
 			}
-			data, err := core.DecodeStreamData(doc.Cancel, stream, doc.Limits)
-			if err != nil || len(data) == 0 {
+			data, r := doc.Decode(stream)
+			if r.Declined() {
+				continue // not read: the producer recorded the trip
+			}
+			if r == core.ReasonMalformed {
+				// The embedded file's data does not decode, so whatever it was
+				// meant to be, it is not a PDF/A document anyone can open. It
+				// used to be skipped, which reported nothing at all.
+				errs = append(errs, Violation{Rule: "6.9", Level: level,
+					Message: "an embedded PDF file's stream data does not decode, so it is not a valid PDF/A document", Object: num})
+				continue
+			}
+			if len(data) == 0 {
 				continue
 			}
 			compliant, complete := embeddedChecker(doc)(doc.Cancel, data, doc.Limits)
@@ -604,7 +616,7 @@ func checkInheritedPageXObject(doc core.View, level Level) []Violation {
 	}
 	var errs []Violation
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
-		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
+		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		if data == nil {
 			continue
 		}

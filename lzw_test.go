@@ -74,14 +74,14 @@ func TestLZWStreamDecoded(t *testing.T) {
 	parms.Set("EarlyChange", object.Integer(0))
 	s.Dict.Set("DecodeParms", parms)
 
-	got, err := core.DecodeStreamData(core.Canceler{}, s, core.DefaultLimits())
+	got, err := core.DecodeStreamData(core.Canceler{}, s, core.DefaultLimits(), nil)
 	if err != nil {
 		t.Fatalf("decodeStreamData: %v", err)
 	}
 	if !bytes.Equal(got, payload) {
 		t.Errorf("decoded %q, want %q", got, payload)
 	}
-	if !core.IsSupportedFilter("LZWDecode") {
+	if core.FilterSupported("LZWDecode", nil) != nil {
 		t.Errorf("LZWDecode should report as supported")
 	}
 }

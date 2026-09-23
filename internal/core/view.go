@@ -44,7 +44,13 @@ type View struct {
 	// known-good key. UsedXRefStream records that the primary cross-reference
 	// section was a stream. EmbeddedDepth is 0 for a top-level document and 1
 	// inside the recursive embedded-PDF/A check, which is what stops it recursing.
+	//
+	// SkippedObjStms lists the containers Read did not unpack by request — over
+	// the object-stream budget, a filter pdf0 does not implement, or ciphertext
+	// it could not decrypt — each with the Reason. They are not malformed, and
+	// no rule may say they are; the trip was recorded when Read met it.
 	BrokenObjStms   []int
+	SkippedObjStms  []SkippedObjStm
 	DecryptFailures []int
 	UsedXRefStream  bool
 	EmbeddedDepth   int
@@ -52,6 +58,11 @@ type View struct {
 	// the flag, not a question about whether the content is currently readable:
 	// a file decrypted on Read keeps it set.
 	Encrypted bool
+	// Locked reports that the file is encrypted and was not decrypted: every
+	// string and stream (bar the exemptions of ISO 32000-2 7.6.2) is
+	// ciphertext. Producers answer ReasonLocked for such data and record the
+	// trip; the string readers a check uses decline the same way (TextString).
+	Locked bool
 	// Limits is the resolved resource budget for this document — resolved, not
 	// raw. Document.view fills it through Document.lim, which applies the
 	// defaults.
@@ -100,7 +111,7 @@ type Run struct {
 	// the aggregate budget only means anything if all of them charge the same
 	// counter.
 	pages        map[int][]PageInfo
-	content      map[*object.Stream][]byte
+	content      map[*object.Stream]contentEntry
 	contentBytes int64
 
 	// psProgs memoizes parsed type-4 (PostScript calculator) function programs.
@@ -164,7 +175,7 @@ func NewRun(trips *Recorder) *Run {
 	return &Run{
 		Trips:      trips,
 		pages:      make(map[int][]PageInfo),
-		content:    make(map[*object.Stream][]byte),
+		content:    make(map[*object.Stream]contentEntry),
 		psProgs:    make(map[*object.Stream]psProgEntry),
 		fontEvents: make(map[*object.Stream][]FontEvent),
 		usedNames:  make(map[*object.Stream]UsedResourceNames),
@@ -297,7 +308,7 @@ const (
 	// It is reported through the same mechanism because the consequence is the
 	// same one a budget has — a check did not run, and a caller who is told
 	// only "no violations" would read that as "checked and clean".
-	GuardPredefinedCMap = "predefined-cmap" // no bound; see PredefinedCMapName
+	GuardPredefinedCMap = "predefined-cmap" // no bound; LoadCMap reports it
 )
 
 // Pages returns the page tree under ref flattened into document order,
@@ -416,38 +427,53 @@ func (v View) InheritedPageAttr(page *object.Dictionary, key object.Name) object
 	return nil
 }
 
+// contentEntry is one memoized Content result. overTotal marks a refusal
+// because the run's aggregate was spent, which MetadataContent does not honour.
+type contentEntry struct {
+	data      []byte
+	reason    Reason
+	overTotal bool
+}
+
 // Content returns a content stream's decoded bytes, memoized for the operation
-// and charged against two budgets.
+// and charged against two budgets, with the Reason they are what they are.
 //
 // A stream over the per-stream scanning limit, and every stream once the
-// aggregate has been spent, decode to nil — and the nil is cached, so the
-// decision is stable across the several checks that walk the same page rather
-// than being re-taken as the budget moves. Both refusals are reported, because
-// a check that sees nothing here must not conclude the file contains nothing.
-func (v View) Content(stream *object.Stream) []byte {
+// aggregate has been spent, decode to nil with ReasonLimit — and the result is
+// cached, so the decision is stable across the several checks that walk the
+// same page rather than being re-taken as the budget moves. Every declined
+// outcome is recorded here, by the producer (see Reason), because a check that
+// sees nothing must not conclude the file contains nothing.
+func (v View) Content(stream *object.Stream) ([]byte, Reason) {
 	if v.Run != nil {
-		if data, ok := v.Run.content[stream]; ok {
-			return data
+		if e, ok := v.Run.content[stream]; ok {
+			return e.data, e.reason
 		}
 		if v.Run.contentBytes >= v.Limits.DecodedContentBytes {
-			v.Run.content[stream] = nil
-			v.Note(GuardContentTotal, "this run has already decoded "+itoa(v.Run.contentBytes)+" bytes of content, reaching the "+LimitBound(v.Limits.DecodedContentBytes, DefaultMaxDecodedContentBytes)+"-byte budget for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", 0)
-			return nil
+			v.Run.content[stream] = contentEntry{reason: ReasonLimit, overTotal: true}
+			v.Note(GuardContentTotal, "this run reached the "+LimitBound(v.Limits.DecodedContentBytes, DefaultMaxDecodedContentBytes)+"-byte budget of decoded content for one run; the remaining content streams were not decoded, so no content-driven rule was applied to them", 0)
+			return nil, ReasonLimit
 		}
 	}
-	var data []byte
-	decoded, err := DecodeStreamData(v.Cancel, stream, v.Limits)
-	switch {
-	case err == nil && len(decoded) <= v.Limits.ContentStreamBytes:
-		data = decoded
-	case err == nil:
-		v.Note(GuardContentStream, "a content stream decodes to "+itoa(int64(len(decoded)))+" bytes, over the "+LimitBound(int64(v.Limits.ContentStreamBytes), DefaultMaxContentStreamBytes)+"-byte scanning limit; it was not scanned", 0)
-	}
+	data, r := v.DecodeLimited(stream)
 	if v.Run != nil {
-		v.Run.content[stream] = data
+		v.Run.content[stream] = contentEntry{data: data, reason: r}
 		v.Run.contentBytes += int64(len(data))
 	}
-	return data
+	return data, r
+}
+
+// DecodeLimited decodes stream and holds the result to the per-stream scanning
+// limit (Limits.ContentStreamBytes), reporting either refusal. Unlike Content
+// it is neither memoized nor charged to the run's aggregate: it is for data
+// used once, such as image samples, that would only bloat the memo.
+func (v View) DecodeLimited(stream *object.Stream) ([]byte, Reason) {
+	data, r := v.Decode(stream)
+	if r == ReasonOK && len(data) > v.Limits.ContentStreamBytes {
+		v.noteDeclined(stream, ReasonLimit, GuardContentStream, "a stream decodes to "+itoa(int64(len(data)))+" bytes, over the "+LimitBound(int64(v.Limits.ContentStreamBytes), DefaultMaxContentStreamBytes)+"-byte scanning limit; it was not scanned")
+		return nil, ReasonLimit
+	}
+	return data, r
 }
 
 // StreamFilters returns a stream's /Filter chain as a list of names, whether it
@@ -484,21 +510,18 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 // It is still bounded per stream by the scanning limit, and the bytes are still
 // charged, so the exemption does not unbound the operation: it only stops one
 // stream being refused because of what other streams already cost.
-func (v View) MetadataContent(stream *object.Stream) []byte {
+func (v View) MetadataContent(stream *object.Stream) ([]byte, Reason) {
 	if v.Run != nil {
-		if data, ok := v.Run.content[stream]; ok {
-			return data
+		if e, ok := v.Run.content[stream]; ok && !e.overTotal {
+			return e.data, e.reason
 		}
 	}
-	var data []byte
-	if decoded, err := DecodeStreamData(v.Cancel, stream, v.Limits); err == nil && len(decoded) <= v.Limits.ContentStreamBytes {
-		data = decoded
-	}
+	data, r := v.DecodeLimited(stream)
 	if v.Run != nil {
-		v.Run.content[stream] = data
+		v.Run.content[stream] = contentEntry{data: data, reason: r}
 		v.Run.contentBytes += int64(len(data))
 	}
-	return data
+	return data, r
 }
 
 // FontEventsMemoSize reports how many content streams the font-usage walk has

@@ -361,7 +361,8 @@ func DSSRevocationMaterial(d core.View) (crls, ocsps [][]byte) {
 		arr, _ := d.Resolve(dss.Get(key)).(object.Array)
 		for _, ref := range arr {
 			if st, ok := d.Resolve(ref).(*object.Stream); ok {
-				out = append(out, d.Content(st))
+				data, _ := d.Content(st) // reason: undecoded revocation data is no evidence, and is never read as evidence of anything
+				out = append(out, data)
 			}
 		}
 		return out
@@ -384,7 +385,8 @@ func DSSCerts(d core.View) []*x509.Certificate {
 	arr, _ := d.Resolve(dss.Get("Certs")).(object.Array)
 	for _, ref := range arr {
 		if st, ok := d.Resolve(ref).(*object.Stream); ok {
-			if c, err := x509.ParseCertificate(d.Content(st)); err == nil {
+			data, _ := d.Content(st) // reason: an undecoded certificate is not a certificate; nothing is concluded from its absence
+			if c, err := x509.ParseCertificate(data); err == nil {
 				out = append(out, c)
 			}
 		}

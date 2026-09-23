@@ -63,7 +63,11 @@ func toUnicodeExempt(doc core.View, fontDict *object.Dictionary, u *core.FontTex
 		if csi == nil {
 			return true
 		}
-		switch pdfTextString(doc, csi.Get("Ordering")) {
+		ordering, known := pdfTextString(doc, csi.Get("Ordering"))
+		if !known {
+			return true // ciphertext: not evidence of a violation
+		}
+		switch ordering {
 		case "GB1", "CNS1", "Japan1", "Korea1":
 			return true
 		}
@@ -125,7 +129,7 @@ func predefinedLatinEncoding(doc core.View, fontDict *object.Dictionary) bool {
 func referencedGlyphNames(doc core.View, fontDict *object.Dictionary, u *core.FontTextUsage) (map[string]bool, bool) {
 	fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
 	if fd != nil {
-		if cs, ok := doc.Resolve(fd.Get("CharSet")).(object.String); ok && len(cs.Value) > 0 {
+		if cs, r := doc.StringValue(fd.Get("CharSet")); r == core.ReasonOK && len(cs.Value) > 0 {
 			return core.ParseCharSet(string(cs.Value)), true
 		}
 	}

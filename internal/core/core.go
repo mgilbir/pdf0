@@ -292,6 +292,9 @@ func (t Trip) Message() string {
 	if t.guard == GuardUnsupportedFilter {
 		return fmt.Sprintf("not implemented (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
 	}
+	if t.guard == GuardLocked {
+		return fmt.Sprintf("not decrypted (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
+	}
 	if t.guard == GuardPredefinedCMap {
 		// No budget was reached, so saying one was would send a reader to the
 		// limits knobs to raise something that does not exist.

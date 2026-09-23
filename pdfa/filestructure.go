@@ -732,7 +732,7 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 			if doc.Cancel.Stopped() {
 				return out
 			}
-			if data := core.ContentStreamData(doc, page.Dict.Get("Contents")); data != nil {
+			if data, _ := core.ContentStreamData(doc, page.Dict.Get("Contents")); data != nil { // reason: every consumer scans for what is present; the producer recorded any declined trip
 				out[page.ObjNum] = data
 			}
 		}
@@ -750,7 +750,7 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 		if !isContent {
 			continue
 		}
-		if data := doc.Content(s); data != nil {
+		if data, _ := doc.Content(s); data != nil { // reason: as above
 			out[num] = data
 		}
 	}
@@ -778,7 +778,7 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 				continue
 			}
 			if s, ok := doc.Resolve(val).(*object.Stream); ok {
-				if data := doc.Content(s); data != nil {
+				if data, _ := doc.Content(s); data != nil { // reason: as above
 					out[num] = data
 				}
 			}
@@ -1269,7 +1269,7 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 			continue
 		}
 		if arr, ok := d.Get("ID").(object.Array); ok && len(arr) >= 1 {
-			if s, ok := arr[0].(object.String); ok {
+			if s, ok := arr[0].(object.String); ok { // string: a trailer's file identifier, parsed from the raw bytes and never encrypted (ISO 32000-2 7.6.2)
 				ids = append(ids, append([]byte(nil), s.Value...))
 			}
 		}

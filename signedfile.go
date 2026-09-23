@@ -294,6 +294,30 @@ func (s *revisionState) load(num int) (object.Object, error) {
 	return p.ParseObject()
 }
 
+// resolveUncompressed is the Resolver a container's /Filter and /DecodeParms
+// are read through: it follows a reference to an uncompressed object of this
+// state, and no further. A reference into an object stream is left
+// unresolved, and the decode fails rather than guess — following it could
+// need the very container being decoded.
+func (s *revisionState) resolveUncompressed(o object.Object) object.Object {
+	for hops := 0; hops < 64; hops++ {
+		ref, ok := o.(object.IndirectRef)
+		if !ok {
+			return o
+		}
+		e, ok := s.table.Entries[ref.Number]
+		if !ok || e.Compressed {
+			return o
+		}
+		iobj, err := s.parseAt(e.Offset)
+		if err != nil || iobj == nil {
+			return nil
+		}
+		o = iobj.Value
+	}
+	return nil
+}
+
 // parseAt parses the indirect object at off in this state's bytes, resolving
 // an indirect stream /Length through this state's table, as Read does. It
 // returns nil, nil for an offset outside the bytes.
@@ -353,7 +377,7 @@ func (s *revisionState) objStm(num int) (*decodedObjStm, error) {
 				c.err = fmt.Errorf("object stream %d not decoded: the %d-byte object-stream budget is spent", num, s.f.lim.ObjectStreamBytes)
 				break
 			}
-			c.data, c.index, c.first, c.err = parseObjStmIndex(s.f.cancel, st, s.f.lim)
+			c.data, c.index, c.first, c.err = parseObjStmIndex(s.f.cancel, st, s.f.lim, s.resolveUncompressed)
 			s.f.decoded += int64(len(c.data))
 		}
 	}

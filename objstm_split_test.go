@@ -65,7 +65,7 @@ func TestObjectStreamSplitBudget(t *testing.T) {
 	}
 	for cnum := range containers {
 		st := writeSet[cnum].Value.(*object.Stream)
-		raw, err := core.DecodeStreamData(core.Canceler{}, st, lim)
+		raw, err := core.DecodeStreamData(core.Canceler{}, st, lim, nil)
 		if err != nil {
 			t.Fatalf("container %d: decode: %v", cnum, err)
 		}

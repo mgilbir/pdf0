@@ -62,7 +62,7 @@ var pdfrTextOrVectorOps = map[string]bool{
 
 func CheckPage(d core.View, page *object.Dictionary, objNum int, add func(rule, msg string, obj int)) {
 	// The page content must draw raster images only — no text or vector marks.
-	data := core.ContentStreamData(d, page.Get("Contents"))
+	data, _ := core.ContentStreamData(d, page.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 	flagged := map[string]bool{}
 	core.ForEachContentToken(d.Cancel, data, func(tok []byte, isName bool) {
 		if isName {

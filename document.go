@@ -229,6 +229,17 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		}
 		xrefTable = t
 		rebuilt, firstErr = true, err
+		// A cross-reference stream pdf0 declined to decode is not a broken
+		// table: the scan rebuilds one, but it cannot see what only the stream
+		// said (compressed objects' containers, free entries), so the reader
+		// must be told why the table is a reconstruction (audit 2026-09-22
+		// C47). A table that is malformed rebuilds silently, as it always has.
+		switch core.ReasonOf(err) {
+		case core.ReasonLimit:
+			doc.noteReadLimit(core.GuardDecodedStream, fmt.Sprintf("the cross-reference stream decodes to more than the %s-byte per-stream limit, so the table was rebuilt by scanning the file; an object only that stream located may be missing", core.LimitBound(int64(lim.DecodedStreamBytes), core.DefaultMaxDecodedStreamBytes)), 0)
+		case core.ReasonUnsupported:
+			doc.noteReadLimit(core.GuardUnsupportedFilter, "the cross-reference stream is encoded in a way pdf0 does not implement ("+err.Error()+"), so the table was rebuilt by scanning the file; an object only that stream located may be missing", 0)
+		}
 		if tr := findTrailerByScan(data); tr != nil {
 			doc.Trailer = *tr // dictcopy: a fresh parse of the scanned trailer; nothing else holds it
 		}
@@ -1374,7 +1385,7 @@ func (d *Document) graph() core.View {
 // The run state travels with it when there is one, so a trip a subsystem records
 // through the view lands in the same recorder the validators report from.
 func (d *Document) view() core.View {
-	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Objects: d.Objects, Offsets: d.Source().offsets, Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler(), Alloc: d.allocObjNum}
+	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Locked: d.Locked(), Objects: d.Objects, Offsets: d.Source().offsets, Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler(), Alloc: d.allocObjNum}
 	if d.valCache != nil {
 		v.Run = d.valCache.run.shared
 	}

@@ -3,6 +3,7 @@ package pdf0
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
@@ -48,5 +49,10 @@ func (d *Document) streamData(cancel core.Canceler, s *object.Stream) ([]byte, e
 	if d.Locked() {
 		return nil, errors.New("pdf0: the document is encrypted and was not decrypted, so its streams are ciphertext")
 	}
-	return core.DecodeStreamData(cancel, s, d.lim())
+	for _, num := range d.decryptFailures {
+		if iobj, ok := d.Objects[num]; ok && iobj.Value == object.Object(s) {
+			return nil, fmt.Errorf("pdf0: stream object %d did not decrypt under the document's key, so its data is unrecoverable", num)
+		}
+	}
+	return core.DecodeStreamData(cancel, s, d.lim(), d.Resolve)
 }

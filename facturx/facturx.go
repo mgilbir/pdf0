@@ -224,6 +224,15 @@ func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res Re
 	// a "pdfa-3/" namespace — except the reserved checker identifiers, which keep
 	// their names (adoptPDFAFindings).
 	adoptPDFAFindings(add, "pdfa-3/", pdfaFindings(doc))
+	if doc.Locked {
+		// Every container check reads an attachment's name (a string), its
+		// data or the metadata (streams), and in a document that was not
+		// decrypted all of them are ciphertext. The PDF/A-3 findings above
+		// carry the up-front "not decrypted" finding; asserting "no invoice
+		// attached" from ciphertext names would be a finding about pdf0
+		// (audit 2026-09-22 C63).
+		return res
+	}
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {

@@ -43,7 +43,7 @@ type objStmEntry struct {
 // 7.5.7) and parses its leading index of N (object number, offset) pairs.
 // It returns the decoded data alongside the index so callers can parse
 // individual objects without decoding twice.
-func parseObjStmIndex(cancel core.Canceler, stream *object.Stream, lim core.Limits) (data []byte, entries []objStmEntry, first int, err error) {
+func parseObjStmIndex(cancel core.Canceler, stream *object.Stream, lim core.Limits, resolve core.Resolver) (data []byte, entries []objStmEntry, first int, err error) {
 	if t, ok := stream.Dict.Get("Type").(object.Name); ok && t != "ObjStm" {
 		return nil, nil, 0, fmt.Errorf("not an object stream: /Type %s", t)
 	}
@@ -56,7 +56,7 @@ func parseObjStmIndex(cancel core.Canceler, stream *object.Stream, lim core.Limi
 		return nil, nil, 0, fmt.Errorf("object stream /First missing or invalid")
 	}
 
-	data, err = core.DecodeStreamData(cancel, stream, lim)
+	data, err = core.DecodeStreamData(cancel, stream, lim, resolve)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("decoding object stream: %w", err)
 	}
@@ -141,7 +141,7 @@ func (d *Document) materializeScannedObjStms(cancel core.Canceler) error {
 			d.noteReadLimit(limitObjStmTotal, fmt.Sprintf("object stream %d was not unpacked: this read has already decompressed %d bytes of object streams, reaching the %s-byte budget for one read; its objects are missing from the document, so any finding of the form \"X is absent\" may be a consequence of that", cnum, decompressed, core.LimitBound(objStmBudget, core.DefaultMaxObjectStreamBytes)), cnum)
 			continue
 		}
-		data, index, first, err := parseObjStmIndex(cancel, st, d.lim())
+		data, index, first, err := parseObjStmIndex(cancel, st, d.lim(), d.Resolve)
 		if err != nil {
 			d.brokenObjStms = append(d.brokenObjStms, cnum)
 			continue
@@ -248,7 +248,7 @@ func (d *Document) loadCompressedObjects(cancel core.Canceler, table *XRefTable)
 		// objects unavailable; recording it lets validation report the defect
 		// while the rest of the document is still parsed rather than aborting
 		// the whole read.
-		data, index, first, err := parseObjStmIndex(cancel, stream, d.lim())
+		data, index, first, err := parseObjStmIndex(cancel, stream, d.lim(), d.Resolve)
 		if err != nil {
 			d.brokenObjStms = append(d.brokenObjStms, containerNum)
 			continue

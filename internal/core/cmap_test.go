@@ -45,8 +45,8 @@ end
 // space and a two-byte one, and which a code belongs to is decided before
 // anything asks whether the code is in range.
 func TestCMapCutsCodesByTheirFirstByte(t *testing.T) {
-	c, ok := ParseCMap(mixedWidthCMap)
-	if !ok {
+	c, r := ParseCMap(mixedWidthCMap)
+	if r != ReasonOK {
 		t.Fatal("the CMap did not parse")
 	}
 
@@ -154,13 +154,13 @@ func TestIdentityCMapIsTwoBytesAndItself(t *testing.T) {
 // codes, and a map that answers for no code is worse than no map: it reports
 // every string as defining nothing.
 func TestACMapWithNoCodespaceIsRefused(t *testing.T) {
-	if _, ok := ParseCMap("begincmap\n1 begincidrange\n<20> <7E> 1\nendcidrange\nendcmap"); ok {
+	if _, r := ParseCMap("begincmap\n1 begincidrange\n<20> <7E> 1\nendcidrange\nendcmap"); r != ReasonMalformed {
 		t.Error("a CMap with no codespacerange was accepted")
 	}
-	if _, ok := ParseCMap(""); ok {
+	if _, r := ParseCMap(""); r != ReasonMalformed {
 		t.Error("an empty CMap was accepted")
 	}
-	if _, ok := ParseCMap("not a cmap at all"); ok {
+	if _, r := ParseCMap("not a cmap at all"); r != ReasonMalformed {
 		t.Error("a non-CMap was accepted")
 	}
 }
@@ -175,7 +175,7 @@ func TestACMapThatDefersToAnotherIsRefused(t *testing.T) {
 <0000> <FFFF>
 endcodespacerange
 endcmap`
-	if _, ok := ParseCMap(src); ok {
+	if _, r := ParseCMap(src); r != ReasonUnsupported {
 		t.Error("a CMap deferring to a predefined one was accepted; the codes it " +
 			"does not define would read as undefined rather than unknown")
 	}
@@ -198,7 +198,7 @@ endcodespacerange
 <00000000> <FFFFFFFF> 1
 endcidrange
 endcmap`
-		if _, ok := ParseCMap(huge); ok {
+		if _, r := ParseCMap(huge); r != ReasonLimit {
 			t.Error("a cidrange spanning four billion codes was accepted")
 		}
 
@@ -211,7 +211,7 @@ endcmap`
 			b = append(b, []byte("<"+hex4(i*16)+"> <"+hex4(i*16+15)+"> 1\n")...)
 		}
 		b = append(b, "endcidrange\nendcmap"...)
-		if _, ok := ParseCMap(string(b)); !ok {
+		if _, r := ParseCMap(string(b)); r != ReasonOK {
 			t.Error("a three-thousand-range CMap was refused; the bound is too tight " +
 				"for a real font")
 		}
@@ -275,5 +275,6 @@ func parseToUnicode(body string) map[int]rune {
 		Limits:  DefaultLimits(),
 		Run:     NewRun(nil),
 	}
-	return doc.ParseToUnicodeMap(fontDict)
+	m, _ := doc.ParseToUnicodeMap(fontDict) // reason: an unfiltered stream in a test; the map is what is asserted
+	return m
 }

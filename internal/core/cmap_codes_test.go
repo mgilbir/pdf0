@@ -97,7 +97,7 @@ func TestFontCodesFromARefusedEmbeddedCMap(t *testing.T) {
 		"1 begincidrange <F040> <F9FC> 8000 endcidrange\nendcmap\n"
 	st := object.NewStream(&object.Dictionary{}, []byte(src))
 	v, f := fontView(object.IndirectRef{Number: 2}, st)
-	if _, ok := LoadCMap(v, f); ok {
+	if _, r := LoadCMap(v, f); r == ReasonOK {
 		t.Fatal("the fixture must be a CMap LoadCMap refuses")
 	}
 	fc, ok := LoadFontCodes(v, f)

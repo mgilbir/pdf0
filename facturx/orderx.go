@@ -155,6 +155,9 @@ func ValidateOrderContext(ctx context.Context, doc core.View, rawData []byte) (r
 
 	// An Order-X file shall be PDF/A-3, adopted exactly as for Factur-X.
 	adoptPDFAFindings(add, "pdfa-3/", pdfaFindings(doc))
+	if doc.Locked {
+		return res // ciphertext throughout; see the same check in ValidateContext
+	}
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {

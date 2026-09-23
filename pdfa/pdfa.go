@@ -374,7 +374,7 @@ func checkFileID(doc core.View, level Level) []Violation {
 		}}
 	}
 	for i, elem := range arr {
-		if _, ok := elem.(object.String); !ok {
+		if _, ok := elem.(object.String); !ok { // string: a type check on the file identifier, which is never encrypted (ISO 32000-2 7.6.2)
 			return []Violation{{
 				Rule:    "6.1.3",
 				Level:   level,
@@ -840,17 +840,17 @@ func checkOutputIntentProfile(doc core.View, level Level) []Violation {
 			continue
 		}
 		// Decompress and check ICC profile header
-		data, err := core.DecodeStreamData(doc.Cancel, profStream, doc.Limits)
-		if err != nil {
-			// Only treat a decode failure as a violation when we actually
-			// support every filter on the stream. A legal profile encoded with
-			// a filter we don't decode (e.g. ASCII85Decode, RunLengthDecode, or
-			// a filter array) must not produce a false positive.
-			if core.StreamFiltersSupported(profStream) {
+		data, r := doc.ICCProfileData(profStream)
+		if r != core.ReasonOK {
+			// Only malformed data is a violation. A profile pdf0 declined to
+			// decode — over the ICC or decode limit, a filter it does not
+			// implement, ciphertext — must not produce a false positive; the
+			// producer recorded the trip.
+			if r == core.ReasonMalformed {
 				errs = append(errs, Violation{
 					Rule:    colourClause("outputIntent", level),
 					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data cannot be decoded: %v", i, err),
+					Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data cannot be decoded (malformed stream data)", i),
 				})
 			}
 			continue
@@ -1156,7 +1156,7 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 		// certificate and hold exactly one SignerInfo. Only applies when the blob
 		// parses as CMS SignedData — an adbe.x509.rsa_sha1 signature stores a raw
 		// value and its certificate in /Cert instead.
-		if c, ok := doc.Resolve(dict.Get("Contents")).(object.String); ok {
+		if c, ok := doc.Resolve(dict.Get("Contents")).(object.String); ok { // string: a signature's /Contents is never encrypted (ISO 32000-2 7.6.2)
 			if info := core.ParseCMSSignedData(c.Value); info.Parsed {
 				if !info.HasCertificate {
 					bad("signature PKCS#7 data must contain the signing certificate")
@@ -1694,7 +1694,7 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 			oiKnown = true
 			if cat := doc.Catalog(); cat != nil {
 				if p := pdfaOutputIntentProfile(doc, cat); p != nil {
-					data := core.ICCProfileData(p, doc.Limits)
+					data, _ := doc.ICCProfileData(p) // reason: an unread profile is "not known" below and the check declines; the producer recorded any declined trip
 					if len(data) < 20 {
 						oiKnown = false
 					} else {
@@ -2957,14 +2957,17 @@ func checkInfoXMPConsistency(doc core.View, level Level) []Violation {
 		if _, isNull := resolved.(object.Null); isNull || resolved == nil {
 			continue // an indirect null value is equivalent to absence
 		}
-		strVal, isStr := resolved.(object.String)
-		if !isStr {
+		strVal, r := doc.StringValue(resolved)
+		if r == core.ReasonAbsent {
 			errs = append(errs, Violation{
 				Rule:    "6.7.3",
 				Level:   level,
 				Message: fmt.Sprintf("Info /%s is not a string value", p.infoKey),
 			})
 			continue
+		}
+		if r != core.ReasonOK {
+			continue // ciphertext: nothing to compare
 		}
 		infoVal := core.DecodePDFTextString(strVal.Value)
 		if infoVal == "" {
@@ -3594,7 +3597,7 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 			continue
 		}
 		if nameObj := cfgDict.Get("Name"); nameObj != nil {
-			if s, ok := nameObj.(object.String); ok {
+			if s, r := doc.StringValue(nameObj); r == core.ReasonOK {
 				// A text string: the same name in UTF-16 and in PDFDocEncoding
 				// is the same name.
 				n := core.DecodePDFTextString(s.Value)
@@ -3886,7 +3889,7 @@ func checkQNestingDepth(doc core.View, level Level, rule string, errs *[]Violati
 		if contentsRef == nil {
 			continue
 		}
-		if data := core.ContentStreamData(doc, contentsRef); data != nil {
+		if data, _ := core.ContentStreamData(doc, contentsRef); data != nil { // reason: presence-only; the producer recorded any declined trip
 			report(data, page.ObjNum)
 		}
 	}
@@ -4033,7 +4036,7 @@ func getOutputIntentCoverage(doc core.View, catalog *object.Dictionary) (hasRGB,
 		}
 
 		// Decompress the profile data to read the ICC header
-		profileData := core.ICCProfileData(stream, doc.Limits)
+		profileData, _ := doc.ICCProfileData(stream) // reason: an unread profile is taken to cover both spaces below; the producer recorded any declined trip
 		if len(profileData) < 20 {
 			// Can't read profile header; assume it covers both spaces
 			// to avoid false positives.
@@ -4073,19 +4076,13 @@ func inheritedPageAttr(doc core.View, page *object.Dictionary, key object.Name) 
 	return doc.InheritedPageAttr(page, key)
 }
 
-// from the aggregate does not unbound the run; the bytes are still charged, so
-// they still count against genuinely unbounded content.
-func decodeMetadataStream(doc core.View, stream *object.Stream) []byte {
-	return doc.MetadataContent(stream)
-}
-
 // scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
 // for device color operators (rg/RG, k/K, g/G).
 func scanContentsForDeviceOps(doc core.View, contentsRef object.Object) (usesRGB, usesCMYK, usesGray bool) {
 	resolved := doc.Resolve(contentsRef)
 	switch v := resolved.(type) {
 	case *object.Stream:
-		data := doc.Content(v)
+		data, _ := doc.Content(v) // reason: presence-only; the producer recorded any declined trip
 		if data == nil {
 			return
 		}
@@ -4097,7 +4094,7 @@ func scanContentsForDeviceOps(doc core.View, contentsRef object.Object) (usesRGB
 		for _, elem := range v {
 			streamObj := doc.Resolve(elem)
 			if s, ok := streamObj.(*object.Stream); ok {
-				data := doc.Content(s)
+				data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
 				if data == nil {
 					continue
 				}
@@ -4172,7 +4169,7 @@ func checkICCBasedProfiles(doc core.View, level Level) []Violation {
 		}
 
 		// Decompress profile data to check ICC header
-		profileData := core.ICCProfileData(stream, doc.Limits)
+		profileData, _ := doc.ICCProfileData(stream) // reason: the header checks below run only on data that is present; the producer recorded any declined trip
 
 		// Check ICC profile header if data is available
 		if len(profileData) >= 20 {
@@ -4811,8 +4808,10 @@ func sameICCProfile(doc core.View, a, b *object.Stream) bool {
 	if a == b {
 		return true
 	}
-	da := core.ICCProfileData(a, doc.Limits)
-	db := core.ICCProfileData(b, doc.Limits)
+	// An unread profile compares unequal, and "the same profile" is the only
+	// thing a caller asserts: the producer recorded any declined trip.
+	da, _ := doc.ICCProfileData(a) // reason: see above
+	db, _ := doc.ICCProfileData(b) // reason: see above
 	if len(da) == 0 || len(da) != len(db) {
 		return false
 	}
@@ -4871,7 +4870,7 @@ func checkICCBasedUsageRules(doc core.View, level Level) []Violation {
 		if res == nil {
 			continue
 		}
-		data := core.ContentStreamData(doc, page.Dict.Get("Contents"))
+		data, _ := core.ContentStreamData(doc, page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		if data == nil {
 			continue
 		}

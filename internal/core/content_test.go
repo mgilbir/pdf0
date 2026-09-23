@@ -36,8 +36,8 @@ func TestDecodeContentStreamBudget(t *testing.T) {
 
 		// A ~1 MB content stream decodes fine while under budget.
 		s1 := makeFlateContentStream(1 << 20)
-		if got := v.Content(s1); len(got) != 1<<20 {
-			t.Fatalf("under budget: decoded %d bytes, want %d", len(got), 1<<20)
+		if got, r := v.Content(s1); len(got) != 1<<20 || r != ReasonOK {
+			t.Fatalf("under budget: decoded %d bytes (%v), want %d (ok)", len(got), r, 1<<20)
 		}
 		if v.Run.contentBytes != 1<<20 {
 			t.Fatalf("contentBytes = %d, want %d", v.Run.contentBytes, 1<<20)
@@ -46,12 +46,12 @@ func TestDecodeContentStreamBudget(t *testing.T) {
 		// Simulate the run having reached the budget.
 		v.Run.contentBytes = v.Limits.DecodedContentBytes
 		s2 := makeFlateContentStream(1 << 20)
-		if got := v.Content(s2); got != nil {
-			t.Fatalf("over budget: decoded %d bytes, want nil (budget must skip decoding)", len(got))
+		if got, r := v.Content(s2); got != nil || r != ReasonLimit {
+			t.Fatalf("over budget: decoded %d bytes (%v), want nil (limit): the budget must skip decoding", len(got), r)
 		}
 		// The decision is negatively cached and stable on re-request.
-		if got := v.Content(s2); got != nil {
-			t.Fatalf("over budget (cached): got %d bytes, want nil", len(got))
+		if got, r := v.Content(s2); got != nil || r != ReasonLimit {
+			t.Fatalf("over budget (cached): got %d bytes (%v), want nil (limit)", len(got), r)
 		}
 	})
 }

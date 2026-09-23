@@ -303,7 +303,10 @@ func TestParseToUnicodeMapSpaceless(t *testing.T) {
 	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: s}
 	fontDict := &object.Dictionary{}
 	fontDict.Set("ToUnicode", object.IndirectRef{Number: 1})
-	m := doc.ParseToUnicodeMap(fontDict)
+	m, r := doc.ParseToUnicodeMap(fontDict)
+	if r != core.ReasonOK {
+		t.Fatalf("ParseToUnicodeMap reason = %v, want ok", r)
+	}
 	if m[3] != 0x20 || m[0x28] != 0x48 {
 		t.Errorf("bfrange parse wrong: %v", m)
 	}
@@ -324,7 +327,7 @@ func TestParseToUnicodeMapMalformed(t *testing.T) {
 		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: s}
 		fontDict := &object.Dictionary{}
 		fontDict.Set("ToUnicode", object.IndirectRef{Number: 1})
-		_ = doc.ParseToUnicodeMap(fontDict) // just must not panic
+		_, _ = doc.ParseToUnicodeMap(fontDict) // just must not panic
 	}
 }
 

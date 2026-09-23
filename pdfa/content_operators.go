@@ -97,7 +97,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	// corpus passes an UnknownOperator in an uninvoked form).
 	seenContainer := map[*object.Dictionary]bool{}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
-		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
+		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, seenContainer, add)
 	}
 
@@ -105,7 +105,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	// an operator not defined in the PDF imaging model is equally forbidden
 	// there (ISO 19005-1 6.2.10; Isartor 6.2.10-t01-fail-c).
 	for _, ap := range collectAppearanceStreams(doc) {
-		if data := doc.Content(ap.stream); data != nil {
+		if data, _ := doc.Content(ap.stream); data != nil { // reason: presence-only; the producer recorded any declined trip
 			checkContentTokens(data, doc.ResolveDict(ap.stream.Dict.Get("Resources")), doc, ap.objNum, add)
 		}
 	}
@@ -125,7 +125,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 		}
 		for cpVal := range cps.Values() {
 			if cp, ok := doc.Resolve(cpVal).(*object.Stream); ok {
-				if cpData := doc.Content(cp); cpData != nil {
+				if cpData, _ := doc.Content(cp); cpData != nil { // reason: presence-only; the producer recorded any declined trip
 					checkContentTokens(cpData, res, doc, u.ObjNum, add)
 				}
 			}
@@ -211,7 +211,8 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 					if s.Dict.Get("PS") != nil {
 						add("a drawn form XObject dictionary contains a /PS entry", xnum)
 					}
-					walkExecutedContent(doc, &s.Dict, doc.Content(s), s, xnum, seen, add)
+					data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
+					walkExecutedContent(doc, &s.Dict, data, s, xnum, seen, add)
 				}
 			}
 		}
@@ -227,7 +228,8 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 				continue
 			}
 			if s, ok := doc.Resolve(pref).(*object.Stream); ok {
-				walkExecutedContent(doc, &s.Dict, doc.Content(s), s, i, seen, add)
+				data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
+				walkExecutedContent(doc, &s.Dict, data, s, i, seen, add)
 			}
 		}
 	}
@@ -426,7 +428,7 @@ func checkICCProfileIdentity(doc core.View, level Level) []Violation {
 		if p := pdfaOutputIntentProfile(doc, page.Dict); p != nil {
 			oiProfile = p
 		}
-		data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
+		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		blend := groupBlendProfile(doc, page.Dict)
 		walkICCIdentity(doc, page.Dict, data, key, page.ObjNum, oiProfile, blend, seenC, add)
 	}
@@ -506,7 +508,8 @@ func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, k
 			if gp := groupBlendProfile(doc, &s.Dict); gp != nil {
 				childBlend = gp
 			}
-			walkICCIdentity(doc, &s.Dict, doc.Content(s), s, resolveObjNum(doc, xref), oi, childBlend, seen, add)
+			data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
+			walkICCIdentity(doc, &s.Dict, data, s, resolveObjNum(doc, xref), oi, childBlend, seen, add)
 		}
 	}
 }

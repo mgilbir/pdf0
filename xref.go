@@ -413,7 +413,9 @@ func parseXRefStream(cancel core.Canceler, stream *object.Stream, lim core.Limit
 	}
 
 	// Decompress stream data
-	streamData, err := core.DecodeStreamData(cancel, stream, lim)
+	// No resolver: this runs before there is an object table, and ISO 32000-2
+	// 7.5.8.2 requires the dictionary's entries to be direct.
+	streamData, err := core.DecodeStreamData(cancel, stream, lim, nil)
 	if err != nil {
 		return nil, fmt.Errorf("decoding xref stream data: %w", err)
 	}
