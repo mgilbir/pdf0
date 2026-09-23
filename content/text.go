@@ -383,8 +383,8 @@ func (b *Builder) BeginMarkedProperties(tag, properties object.Name) *Builder {
 // the order the content is drawn. Nesting is allowed and is how a heading
 // inside a section is expressed; every BeginTagged needs its EndMarked.
 func (b *Builder) BeginTagged(tag object.Name, mcid int) *Builder {
-	if mcid < 0 {
-		return b.fail("marked-content identifier %d is negative", mcid)
+	if mcid < 0 || mcid > MaxMCID {
+		return b.fail("marked-content identifier %d is outside [0, %d]", mcid, MaxMCID)
 	}
 	var props []byte
 	props = append(props, "<</MCID "...)
@@ -392,6 +392,17 @@ func (b *Builder) BeginTagged(tag object.Name, mcid int) *Builder {
 	props = append(props, ">>"...)
 	return b.beginMarked("BDC", tag, props)
 }
+
+// MaxMCID is the largest marked-content identifier BeginTagged writes and
+// pdf0's SetStructureTree accepts.
+//
+// A page's entry in the structure tree's parent tree is an array indexed by
+// identifier (ISO 32000-2 14.7.5.4), so it is as long as the page's largest
+// identifier whatever the others are: one identifier of 1<<28 is an array of a
+// quarter of a billion entries. Identifiers are conventionally assigned from
+// zero in drawing order, and no page carries a million marked spans; the bound
+// is far above any real page and far below an allocation that matters.
+const MaxMCID = 1<<20 - 1
 
 // EndMarked closes the innermost open marked-content sequence (EMC).
 //

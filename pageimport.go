@@ -1060,13 +1060,7 @@ func (g *pageImporter) carryOptionalContent(srcCat, dstCat *object.Dictionary) {
 // sourceVersion is the PDF version the source declares: its header, or its
 // catalog's /Version when that is later (ISO 32000-2 7.7.2).
 func (g *pageImporter) sourceVersion() string {
-	v := g.src.Version
-	if cat := g.sg.Catalog(); cat != nil {
-		if n, ok := g.sg.Resolve(cat.Get("Version")).(object.Name); ok {
-			v = maxVersion(v, string(n))
-		}
-	}
-	return v
+	return g.src.declaredVersion()
 }
 
 // maxVersion returns the later of two "major.minor" PDF versions. A value that

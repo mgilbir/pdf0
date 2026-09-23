@@ -2,7 +2,11 @@ package pdf0
 
 import (
 	"fmt"
+	"maps"
+	"slices"
+	"strconv"
 
+	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -37,6 +41,12 @@ type StructElem struct {
 	// the standard types, or a name the RoleMap passed to SetStructureTree maps
 	// onto one — a reader that meets a tag it cannot interpret and cannot map
 	// treats the element as meaningless.
+	//
+	// The types PDF 2.0 added (Annex M: DocumentFragment, Aside, Title,
+	// FENote, Sub, Em, Strong, Artifact, and Hn for n > 6) exist only in the
+	// PDF 2.0 standard structure namespace. In a PDF 2.0 document such an
+	// element is written with an /NS naming that namespace; below PDF 2.0
+	// there are no namespaces, and one is refused.
 	Tag string
 
 	// Alt is alternate text: what the element says, for a reader that cannot
@@ -60,7 +70,8 @@ type StructElem struct {
 	Page *object.IndirectRef
 
 	// Content are the marked-content identifiers on Page that make up this
-	// element — the numbers passed to content.Builder.BeginTagged.
+	// element — the numbers passed to content.Builder.BeginTagged. Each is at
+	// most content.MaxMCID.
 	Content []int
 
 	// Children are the elements nested inside this one.
@@ -70,11 +81,23 @@ type StructElem struct {
 // SetStructureTree replaces the document's logical structure.
 //
 // roleMap maps any non-standard tag onto the standard type it behaves like. It
-// may be nil when only standard tags are used, which is the usual case.
+// may be nil when only standard tags are used, which is the usual case. It is
+// written as the tree root's /RoleMap, which maps into the default (PDF 1.7)
+// standard structure namespace, so a role maps onto a PDF 1.7 type.
 //
 // The document is marked as tagged, every page that carries content gets its
 // index into the parent tree, and the parent tree is built so that a reader
 // starting from any mark on any page can find the element that owns it.
+//
+// It replaces: whatever indexed the previous tree is cleared first — the
+// /StructParents of every page and of every XObject its resources reach, and
+// the /StructParent of every annotation on a page. Left in place, an index into
+// the old tree would name an entry of the new one, and a reader would attribute
+// the marks to whichever element now has that slot. An empty root removes the
+// tree, those indices and the /MarkInfo claim that the document is tagged.
+//
+// The tree is checked whole before anything is written, so a refused tree
+// leaves the document as it was.
 func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string) error {
 	if d == nil {
 		return errNilDocument
@@ -87,26 +110,45 @@ func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string
 		return fmt.Errorf("pdf0: the document has no catalog to attach a structure tree to")
 	}
 	if len(root) == 0 {
+		d.clearStructureIndices()
 		catalog.Delete("StructTreeRoot")
 		catalog.Delete("MarkInfo")
 		return nil
 	}
-	if err := checkStructure(root, roleMap, 0, nil); err != nil {
+	check := structureCheck{roleMap: roleMap, pdf20: d.isPDF20(), claimed: map[int]map[int]bool{}}
+	if err := check.elems(root, 0, nil); err != nil {
+		return err
+	}
+	if err := check.roles(); err != nil {
 		return err
 	}
 	if err := d.checkStructurePages(root); err != nil {
 		return err
 	}
 
+	// Nothing past this point can be refused.
+	d.clearStructureIndices()
 	treeRoot := &object.Dictionary{}
 	treeRoot.Set("Type", object.Name("StructTreeRoot"))
 	rootRef := d.Add(treeRoot)
+
+	// The PDF 2.0 namespace, declared once when an element needs it.
+	var ns *object.IndirectRef
+	if check.usesPDF20 {
+		nsDict := object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("Namespace")},
+			object.Entry{Key: "NS", Value: object.String{Value: []byte(pdf20StructureNamespace)}},
+		)
+		ref := d.Add(nsDict)
+		ns = &ref
+		treeRoot.Set("Namespaces", object.Array{ref})
+	}
 
 	// owners collects, per page, which element owns each identifier. It is
 	// filled as the tree is written and turned into the parent tree afterwards,
 	// because an element's reference does not exist until it is written.
 	owners := newMCIDOwners()
-	kids, err := d.writeStructLevel(root, rootRef, nil, owners)
+	kids, err := d.writeStructLevel(root, rootRef, nil, owners, ns)
 	if err != nil {
 		return err
 	}
@@ -133,16 +175,23 @@ func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string
 // mistake or an attack; either way no reader would present it.
 const maxStructureDepth = 64
 
-// checkStructure validates the tree before anything is written, so a rejected
-// tree leaves no half-written objects behind.
-//
-// It carries the inherited page down exactly as the writer does, because an
+// structureCheck validates the tree before anything is written, so a rejected
+// tree leaves no half-written objects behind — including the checks that
+// depend on the whole tree, such as an identifier claimed twice.
+type structureCheck struct {
+	roleMap map[string]string
+	// pdf20 is whether the document is PDF 2.0, which is what makes the PDF
+	// 2.0 structure namespace available; usesPDF20 whether an element needs it.
+	pdf20, usesPDF20 bool
+	// claimed is, per page object number, the identifiers already owned.
+	claimed map[int]map[int]bool
+}
+
+// elems carries the inherited page down exactly as the writer does, because an
 // element's page may come from an ancestor: a section states the page once and
 // the paragraphs inside it do not repeat it. Checking without that inheritance
 // would reject the ordinary shape of a tree.
-func checkStructure(elems []StructElem, roleMap map[string]string, depth int,
-	inheritedPage *object.IndirectRef) error {
-
+func (c *structureCheck) elems(elems []StructElem, depth int, inheritedPage *object.IndirectRef) error {
 	if depth > maxStructureDepth {
 		return fmt.Errorf("pdf0: the structure tree is nested more than %d deep", maxStructureDepth)
 	}
@@ -154,16 +203,21 @@ func checkStructure(elems []StructElem, roleMap map[string]string, depth int,
 		if page == nil {
 			page = inheritedPage
 		}
-		if !standardStructureTypes[e.Tag] {
-			if _, mapped := roleMap[e.Tag]; !mapped {
+		switch {
+		case pdf17StructureTypes[e.Tag]:
+		case isPDF20OnlyStructureType(e.Tag):
+			if !c.pdf20 {
+				return fmt.Errorf(
+					"pdf0: %q is a PDF 2.0 structure type (ISO 32000-2 Annex M), and this is not a PDF 2.0 "+
+						"document: without the PDF 2.0 namespace it is a non-standard type; "+
+						"map a tag of your own onto a PDF 1.7 type instead", e.Tag)
+			}
+			c.usesPDF20 = true
+		default:
+			if _, mapped := c.roleMap[e.Tag]; !mapped {
 				return fmt.Errorf(
 					"pdf0: %q is not a standard structure type and the role map does not say what it is; "+
 						"a reader would treat the element as meaningless", e.Tag)
-			}
-		}
-		for _, mcid := range e.Content {
-			if mcid < 0 {
-				return fmt.Errorf("pdf0: structure element %q names a negative marked-content identifier", e.Tag)
 			}
 		}
 		if len(e.Content) > 0 && page == nil {
@@ -171,12 +225,42 @@ func checkStructure(elems []StructElem, roleMap map[string]string, depth int,
 				"pdf0: structure element %q names marked content but no page, and no ancestor states one; "+
 					"an identifier is only unique within one page", e.Tag)
 		}
-		if err := checkStructure(e.Children, roleMap, depth+1, page); err != nil {
+		for _, mcid := range e.Content {
+			if mcid < 0 || mcid > content.MaxMCID {
+				return fmt.Errorf("pdf0: structure element %q names marked-content identifier %d, outside [0, %d]; "+
+					"a page's parent-tree entry is an array as long as its largest identifier",
+					e.Tag, mcid, content.MaxMCID)
+			}
+			on := c.claimed[page.Number]
+			if on == nil {
+				on = map[int]bool{}
+				c.claimed[page.Number] = on
+			}
+			if on[mcid] {
+				return fmt.Errorf(
+					"pdf0: marked-content identifier %d on page %d is claimed twice; "+
+						"the second claim is by %q, and an identifier belongs to one element",
+					mcid, page.Number, e.Tag)
+			}
+			on[mcid] = true
+		}
+		if err := c.elems(e.Children, depth+1, page); err != nil {
 			return err
 		}
 	}
-	for from, to := range roleMap {
-		if !standardStructureTypes[to] {
+	return nil
+}
+
+// roles checks the role map: every role lands on a type of the default
+// namespace, which is the one a root /RoleMap maps into.
+func (c *structureCheck) roles() error {
+	for _, from := range slices.Sorted(maps.Keys(c.roleMap)) {
+		to := c.roleMap[from]
+		if !pdf17StructureTypes[to] {
+			if isPDF20OnlyStructureType(to) {
+				return fmt.Errorf("pdf0: the role map sends %q to %q, a PDF 2.0 structure type; "+
+					"the tree root's /RoleMap maps into the PDF 1.7 namespace, where %q does not exist", from, to, to)
+			}
 			return fmt.Errorf("pdf0: the role map sends %q to %q, which is not a standard structure type", from, to)
 		}
 	}
@@ -205,7 +289,7 @@ func (d *Document) checkStructurePages(elems []StructElem) error {
 // writeStructLevel writes one level of the tree and returns what its parent's
 // /K should hold.
 func (d *Document) writeStructLevel(elems []StructElem, parent object.IndirectRef,
-	inheritedPage *object.IndirectRef, owners *mcidOwners) (object.Object, error) {
+	inheritedPage *object.IndirectRef, owners *mcidOwners, ns *object.IndirectRef) (object.Object, error) {
 
 	out := make(object.Array, 0, len(elems))
 	for _, e := range elems {
@@ -213,6 +297,9 @@ func (d *Document) writeStructLevel(elems []StructElem, parent object.IndirectRe
 		dict.Set("Type", object.Name("StructElem"))
 		dict.Set("S", object.Name(e.Tag))
 		dict.Set("P", parent)
+		if !pdf17StructureTypes[e.Tag] && isPDF20OnlyStructureType(e.Tag) {
+			dict.Set("NS", *ns)
+		}
 
 		page := e.Page
 		if page == nil {
@@ -242,7 +329,7 @@ func (d *Document) writeStructLevel(elems []StructElem, parent object.IndirectRe
 			kids = append(kids, object.Integer(mcid))
 		}
 		if len(e.Children) > 0 {
-			childKids, err := d.writeStructLevel(e.Children, ref, page, owners)
+			childKids, err := d.writeStructLevel(e.Children, ref, page, owners, ns)
 			if err != nil {
 				return nil, err
 			}
@@ -356,35 +443,115 @@ func (d *Document) writeParentTree(treeRoot *object.Dictionary, owners *mcidOwne
 	return nil
 }
 
-// standardStructureTypes is the set a reader is required to understand
-// (ISO 32000-2 14.8.4). Anything else needs a role map saying which of these it
-// behaves like.
-var standardStructureTypes = map[string]bool{
+// pdf17StructureTypes is the standard structure namespace for PDF 1.7, the
+// default namespace: the types an element with no /NS may have and a reader is
+// required to understand (ISO 32000-1 14.8.4, and ISO 32000-2 Annex M).
+// Anything else needs a role map saying which of these it behaves like, or —
+// in a PDF 2.0 document — is one of the types only the PDF 2.0 namespace has.
+var pdf17StructureTypes = map[string]bool{
 	// Grouping
-	"Document": true, "DocumentFragment": true, "Part": true, "Sect": true,
-	"Div": true, "Aside": true, "NonStruct": true, "Private": true,
+	"Document": true, "Part": true, "Sect": true,
+	"Div": true, "NonStruct": true, "Private": true,
 	"Art": true, "BlockQuote": true, "Caption": true, "TOC": true, "TOCI": true,
 	"Index": true,
 
 	// Block-level
 	"P": true, "H": true,
 	"H1": true, "H2": true, "H3": true, "H4": true, "H5": true, "H6": true,
-	"Title": true,
-	"L":     true, "LI": true, "Lbl": true, "LBody": true,
+	"L": true, "LI": true, "Lbl": true, "LBody": true,
 	"Table": true, "TR": true, "TH": true, "TD": true,
 	"THead": true, "TBody": true, "TFoot": true,
 
 	// Inline
 	"Span": true, "Quote": true, "Note": true, "Reference": true,
 	"BibEntry": true, "Code": true, "Link": true, "Annot": true,
-	"Em": true, "Strong": true, "Sub": true, "FENote": true,
 	"Ruby": true, "RB": true, "RT": true, "RP": true,
 	"Warichu": true, "WT": true, "WP": true,
 
 	// Illustration
 	"Figure": true, "Formula": true, "Form": true,
+}
 
-	// Artifact: content that is not part of the document's meaning — a running
-	// header, a page number, a decorative rule.
-	"Artifact": true,
+// pdf20StructureNamespace is the namespace name of the PDF 2.0 standard
+// structure namespace (ISO 32000-2 14.8.6.1).
+const pdf20StructureNamespace = "http://iso.org/pdf2/ssn"
+
+// pdf20OnlyStructureTypes are the types only the PDF 2.0 standard structure
+// namespace defines (ISO 32000-2 Annex M), apart from Hn for n > 6, which
+// isPDF20OnlyStructureType recognises. Artifact is content that is not part of
+// the document's meaning — a running header, a page number, a decorative rule.
+var pdf20OnlyStructureTypes = map[string]bool{
+	"DocumentFragment": true, "Aside": true, "Title": true, "FENote": true,
+	"Sub": true, "Em": true, "Strong": true, "Artifact": true,
+}
+
+// isPDF20OnlyStructureType reports whether tag exists only in the PDF 2.0
+// standard structure namespace: an Annex M type, or Hn with n > 6.
+func isPDF20OnlyStructureType(tag string) bool {
+	if pdf20OnlyStructureTypes[tag] {
+		return true
+	}
+	if len(tag) < 2 || tag[0] != 'H' || tag[1] == '0' {
+		return false
+	}
+	n, err := strconv.Atoi(tag[1:])
+	return err == nil && n > 6 && strconv.Itoa(n) == tag[1:]
+}
+
+// clearStructureIndices removes every key into the parent tree: /StructParents
+// on each page and on each XObject its resources reach, and /StructParent on
+// each of its annotations. It runs before a tree is replaced or removed, so
+// that nothing indexes a tree that is gone.
+func (d *Document) clearStructureIndices() {
+	seen := map[*object.Dictionary]bool{}
+	for _, page := range d.PageList() {
+		page.Delete("StructParents")
+		if annots, ok := d.Resolve(page.Get("Annots")).(object.Array); ok {
+			for _, a := range annots {
+				if ad := d.ResolveDict(a); ad != nil {
+					ad.Delete("StructParent")
+				}
+			}
+		}
+		d.clearXObjectStructParents(d.ResolveDict(page.Get("Resources")), 0, seen)
+	}
+}
+
+// clearXObjectStructParents clears /StructParents on the XObjects a resource
+// dictionary names, and on those their own resources name, to the depth a
+// content stream can nest.
+func (d *Document) clearXObjectStructParents(res *object.Dictionary, depth int, seen map[*object.Dictionary]bool) {
+	if res == nil || depth > content.MaxNestingDepth || seen[res] {
+		return
+	}
+	seen[res] = true
+	xobjects := d.ResolveDict(res.Get("XObject"))
+	if xobjects == nil {
+		return
+	}
+	for v := range xobjects.Values() {
+		if st, ok := d.Resolve(v).(*object.Stream); ok {
+			st.Dict.Delete("StructParents")
+			d.clearXObjectStructParents(d.ResolveDict(st.Dict.Get("Resources")), depth+1, seen)
+		}
+	}
+}
+
+// isPDF20 reports whether the document is PDF 2.0 or later: by its header, or
+// by its catalog's /Version when that is later (ISO 32000-2 7.7.2).
+func (d *Document) isPDF20() bool {
+	v, ok := parseVersion(d.declaredVersion())
+	return ok && v[0] >= 2
+}
+
+// declaredVersion is the PDF version the document declares: its header, or
+// its catalog's /Version when that is later.
+func (d *Document) declaredVersion() string {
+	v := d.Version
+	if cat := d.ResolveDict(d.Trailer.Get("Root")); cat != nil {
+		if n, ok := d.Resolve(cat.Get("Version")).(object.Name); ok {
+			v = maxVersion(v, string(n))
+		}
+	}
+	return v
 }
