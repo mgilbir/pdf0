@@ -57,6 +57,37 @@ func TestUndefinedOperatorFlagged(t *testing.T) {
 	}
 }
 
+// TestATilingPatternsFindingNamesThePattern: an undefined operator inside a
+// tiling pattern the page paints with is reported against the pattern's own
+// object, not the pattern's position in /Pattern (audit 2026-09-22 C143).
+func TestATilingPatternsFindingNamesThePattern(t *testing.T) {
+	pattern := object.NewStream(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Pattern")},
+		object.Entry{Key: "PatternType", Value: object.Integer(1)},
+		object.Entry{Key: "PaintType", Value: object.Integer(1)},
+		object.Entry{Key: "TilingType", Value: object.Integer(1)},
+		object.Entry{Key: "BBox", Value: object.Array{object.Integer(0), object.Integer(0), object.Integer(10), object.Integer(10)}},
+		object.Entry{Key: "XStep", Value: object.Integer(10)},
+		object.Entry{Key: "YStep", Value: object.Integer(10)},
+		object.Entry{Key: "Resources", Value: &object.Dictionary{}},
+	), []byte("0 0 5 5 re BogusOp f"))
+	res := object.NewDictionary(object.Entry{Key: "Pattern", Value: object.NewDictionary(
+		object.Entry{Key: "P0", Value: object.IndirectRef{Number: 44}},
+		object.Entry{Key: "P1", Value: object.IndirectRef{Number: 44}},
+	)})
+	doc := mkPageWithContentAndRes("/Pattern cs /P1 scn 0 0 10 10 re f", res)
+	doc.Objects[44] = &object.IndirectObject{Number: 44, Value: pattern}
+	var got []Violation
+	for _, v := range ValidateView(doc, PDFA2b, nil) {
+		if v.Rule == "6.2.2" {
+			got = append(got, v)
+		}
+	}
+	if len(got) != 1 || got[0].Object != 44 {
+		t.Errorf("the pattern's undefined operator: want one 6.2.2 finding at object 44, got %v", got)
+	}
+}
+
 func TestRenderingIntentOperator(t *testing.T) {
 	doc := mkPageWithContentAndRes("/Perceptual ri", nil)
 	if hasRuleMsg(ValidateView(doc, PDFA2b, nil), "6.2.2") {

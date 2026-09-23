@@ -218,18 +218,17 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 		}
 	}
 	if pat := doc.ResolveDict(res.Get("Pattern")); pat != nil {
-		// i is the entry's position, passed on as the object number exactly as
-		// before this loop moved to Dictionary.All; that it is a position and
-		// not an object number is audit 2026-09-22 C143, fixed separately.
-		i := -1
+		// A tiling pattern's findings anchor to the pattern's own object, as a
+		// form XObject's do above. It used to be the entry's position in the
+		// /Pattern dictionary, so a report named an object that had nothing to
+		// do with the pattern (audit 2026-09-22 C143).
 		for key, pref := range pat.All() {
-			i++
 			if !used.Patterns[string(key)] {
 				continue
 			}
 			if s, ok := doc.Resolve(pref).(*object.Stream); ok {
 				data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-				walkExecutedContent(doc, &s.Dict, data, s, i, seen, add)
+				walkExecutedContent(doc, &s.Dict, data, s, resolveObjNum(doc, pref), seen, add)
 			}
 		}
 	}
