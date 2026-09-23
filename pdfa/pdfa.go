@@ -4076,38 +4076,6 @@ func inheritedPageAttr(doc core.View, page *object.Dictionary, key object.Name) 
 	return doc.InheritedPageAttr(page, key)
 }
 
-// scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
-// for device color operators (rg/RG, k/K, g/G).
-func scanContentsForDeviceOps(doc core.View, contentsRef object.Object) (usesRGB, usesCMYK, usesGray bool) {
-	resolved := doc.Resolve(contentsRef)
-	switch v := resolved.(type) {
-	case *object.Stream:
-		data, _ := doc.Content(v) // reason: presence-only; the producer recorded any declined trip
-		if data == nil {
-			return
-		}
-		r, c, g := core.ScanStreamForDeviceOps(doc.Cancel, data)
-		usesRGB = usesRGB || r
-		usesCMYK = usesCMYK || c
-		usesGray = usesGray || g
-	case object.Array:
-		for _, elem := range v {
-			streamObj := doc.Resolve(elem)
-			if s, ok := streamObj.(*object.Stream); ok {
-				data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-				if data == nil {
-					continue
-				}
-				r, c, g := core.ScanStreamForDeviceOps(doc.Cancel, data)
-				usesRGB = usesRGB || r
-				usesCMYK = usesCMYK || c
-				usesGray = usesGray || g
-			}
-		}
-	}
-	return
-}
-
 // forEachContentOperator tokenizes a decoded content stream and calls fn for
 // each operator-position token (anything that is not a string, hex string,
 // dictionary marker, array/procedure delimiter, comment, or name). String

@@ -117,16 +117,6 @@ func scanResourcesForDeviceCS(doc View, container *object.Dictionary, seen map[*
 // contribute (the corpus passes a DeviceCMYK form that no content stream
 // draws), so the resource walks below are gated on the names the content
 // actually uses.
-
-// scanContainerForDeviceCS scans one content container — a page (content
-// behind /Contents), a form XObject, tiling pattern, or appearance stream
-// (content in the stream body, passed as data) — for device colour usage.
-//
-// Only EXECUTED resources count: a form XObject or pattern that is listed in
-// the resource dictionary but never invoked by a Do/scn/sh operator does not
-// contribute (the corpus passes a DeviceCMYK form that no content stream
-// draws), so the resource walks below are gated on the names the content
-// actually uses.
 func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byte, key *object.Stream, seen map[*object.Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
 	if seen[container] {
 		return
@@ -311,34 +301,3 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 		}
 	}
 }
-
-// The maximum decoded content stream size we'll scan defaults to
-// defaultMaxContentStreamBytes; a caller can change it with
-// WithMaxContentStreamBytes. Larger streams are skipped to bound memory on
-// hostile input. The previous 1 MB cap (and Flate-only, no-filter-array
-// decoding) silently hid ordinary content from every scanner — an oversize or
-// [/FlateDecode]-wrapped stream full of DeviceRGB validated clean. A stream
-// skipped for this reason is reported (limitContentStream): every
-// content-driven rule then sees nothing from it, which is the failure the old
-// cap caused silently.
-//
-// The aggregate size of decoded content that one validation run will
-// materialize defaults to defaultMaxDecodedContentBytes
-// (WithMaxDecodedContentBytes). The per-stream cap stops a single stream from
-// exploding, but a small file can carry many content streams that each
-// decompress near that cap (a flate bomb): 100 pages whose contents each inflate
-// to ~60 MB is a ~12 MB file that would otherwise decode and tokenize ~6 GB of
-// content, driving validation past 9 GB of memory. Once this budget is reached,
-// further content streams are treated as undecodable (nil), so they are neither
-// decoded nor tokenized and the work stays bounded. object.Real documents decode far
-// less than this, so the budget never affects their validation; it only
-// truncates pathologically amplified input — the heaviest document measured
-// across the veraPDF corpus and a Common Crawl sample needs 218 MB. Exhausting
-// it is reported too (limitContentTotal), because from there on "the content
-// does not do X" is no longer something this run can say.
-
-// decodeContentStream decodes a stream for content scanning through the full
-// filter pipeline (filter arrays, ASCIIHex, predictors). Results are
-// memoized per validation run: several checks re-decode the same page
-// contents. Returns nil if the stream cannot be decoded, or if the run's
-// aggregate decoded-content budget is exhausted.

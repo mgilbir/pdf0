@@ -16,13 +16,10 @@ import (
 // maliciously nested function cannot exhaust the stack.
 const maxFunctionDepth = 32
 
-// evalFunction evaluates the PDF function fn (a dictionary or stream) for the
-// input vector in, returning the output vector. ok is false for a function it
-// cannot evaluate or malformed input. Inputs are clamped to /Domain and outputs
-// to /Range.
 // EvalFunction evaluates a PDF function (ISO 32000-2 7.10) — a dictionary or a
-// stream — for the given inputs, returning ok=false when the object is not a
-// function this package can evaluate.
+// stream — for the input vector in, returning the output vector. ok is false
+// when the object is not a function this package can evaluate, or the input is
+// malformed. Inputs are clamped to /Domain and outputs to /Range.
 func (d View) EvalFunction(fn object.Object, in []float64) (out []float64, ok bool) {
 	return evalFunctionDepth(d, fn, in, 0)
 }

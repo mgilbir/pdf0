@@ -377,14 +377,6 @@ func ParseSFNTCFF(data []byte) *font.Program {
 	return nil
 }
 
-// IsIdentityEncoding reports whether a Type0 font uses Identity-H/V.
-func IsIdentityEncoding(doc View, fontDict *object.Dictionary) bool {
-	if n, ok := doc.Resolve(fontDict.Get("Encoding")).(object.Name); ok {
-		return n == "Identity-H" || n == "Identity-V"
-	}
-	return false
-}
-
 // ParseCharSet parses a Type 1 /CharSet string ("/name1/name2/...") into a
 // set of glyph names.
 func ParseCharSet(s string) map[string]bool {
@@ -599,14 +591,6 @@ func ContentUsedNames(cancel Canceler, data []byte) UsedResourceNames {
 
 type ContentItemKind int
 
-// ForEachContentItem tokenizes a decoded content stream like
-// forEachContentToken, additionally reporting decoded string operands and
-// distinguishing numbers from operators.
-//
-// The scan stops when cancel fires. Together with forEachContentToken this is
-// about two thirds of a large document's validation time, which is why the
-// check is gated on the scan position — one comparison per token, the poll
-// itself once per cancelScanBytes. See cancel.go.
 // ScanContentDict returns the index just past the >> that closes the dictionary
 // starting at i (which must be a <<). Nested dictionaries, literal strings and
 // hex strings are stepped over, so a ">>" inside "(a>>b)" does not end the scan.
@@ -651,6 +635,14 @@ func ScanContentDict(data []byte, i int) int {
 	return n
 }
 
+// ForEachContentItem tokenizes a decoded content stream like
+// forEachContentToken, additionally reporting decoded string operands and
+// distinguishing numbers from operators.
+//
+// The scan stops when cancel fires. Together with forEachContentToken this is
+// about two thirds of a large document's validation time, which is why the
+// check is gated on the scan position — one comparison per token, the poll
+// itself once per cancelScanBytes. See cancel.go.
 func ForEachContentItem(cancel Canceler, data []byte, fn func(kind ContentItemKind, payload []byte)) {
 	n := len(data)
 	i := 0
