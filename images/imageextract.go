@@ -309,24 +309,35 @@ func Walk(d core.View, yield func(ExtractedImage) bool) {
 // which is either a form-XObject stream or a subdictionary of appearance states
 // (each value a stream), following each into its resources. It returns false
 // once yield does.
+//
+// The subdictionary is one level deep by definition (ISO 32000-2 12.5.5), and
+// only one level is followed. It used to recurse into any dictionary value, so
+// a state dictionary that named itself recursed until the stack overflowed.
 func collectAppearanceImages(d core.View, entry object.Object, seen map[int]bool, yield func(ExtractedImage) bool) bool {
 	switch v := d.Resolve(entry).(type) {
 	case *object.Stream:
-		if num := object.RefNum(entry); num > 0 {
-			if seen[num] {
-				return true
-			}
-			seen[num] = true
-		}
-		return collectImagesFrom(d, d.ResolveDict(v.Dict.Get("Resources")), seen, 1, yield)
+		return collectAppearanceStream(d, entry, v, seen, yield)
 	case *object.Dictionary:
 		for state := range v.Values() {
-			if !collectAppearanceImages(d, state, seen, yield) {
-				return false
+			if st, ok := d.Resolve(state).(*object.Stream); ok {
+				if !collectAppearanceStream(d, state, st, seen, yield) {
+					return false
+				}
 			}
 		}
 	}
 	return true
+}
+
+// collectAppearanceStream follows one appearance stream into its resources.
+func collectAppearanceStream(d core.View, ref object.Object, st *object.Stream, seen map[int]bool, yield func(ExtractedImage) bool) bool {
+	if num := object.RefNum(ref); num > 0 {
+		if seen[num] {
+			return true
+		}
+		seen[num] = true
+	}
+	return collectImagesFrom(d, d.ResolveDict(st.Dict.Get("Resources")), seen, 1, yield)
 }
 
 // collectImagesFrom walks a resource dictionary's /XObject entries, extracting
@@ -539,9 +550,14 @@ func renderSamples(d core.View, st *object.Stream, img *ExtractedImage, samples 
 		noteMask(img, maskErr)
 	case errors.As(err, &limit):
 		refuseImage(d, img, st, "image", err)
-	default:
+	case errors.Is(err, errUnsupportedLayout):
 		img.Encoded = samples
 		img.Note = unsupportedNote
+	default:
+		// A colour space the resolver refused to follow: say why, since
+		// "unsupported" alone would read as a missing feature.
+		img.Encoded = samples
+		img.Note = unsupportedNote + ": " + err.Error()
 	}
 }
 

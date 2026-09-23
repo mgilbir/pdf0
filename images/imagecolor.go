@@ -53,17 +53,18 @@ var errUnsupportedLayout = errors.New("unsupported sample layout")
 
 // buildImage converts an image XObject's decoded samples to an image, applying
 // the colour space, bit depth, /Decode array and soft mask. The error is
-// errUnsupportedLayout for a layout it cannot render, or a *core.LimitError for
-// geometry over the image budget.
+// errUnsupportedLayout for a layout it cannot render, a *core.LimitError for
+// geometry over the image budget, or the colour-space resolver's refusal of a
+// space that is cyclic or nested too deeply.
 // maskErr, when not nil, says why a mask was left out of an image that was
 // otherwise built.
 func buildImage(d core.View, st *object.Stream, raw []byte, w, h, bpc int) (m image.Image, maskErr, err error) {
 	if w <= 0 || h <= 0 || bpc <= 0 {
 		return nil, nil, errUnsupportedLayout
 	}
-	cs, ok := resolveColorSpace(d, st.Dict.Get("ColorSpace"))
-	if !ok {
-		return nil, nil, errUnsupportedLayout
+	cs, err := resolveColorSpace(d, st.Dict.Get("ColorSpace"))
+	if err != nil {
+		return nil, nil, err
 	}
 	if err := d.Limits.CheckImage(int64(w), int64(h), int64(cs.ncomp)); err != nil {
 		return nil, nil, err
@@ -327,40 +328,109 @@ func sampleDataFits(data []byte, w, h, ncomp, bpc int) bool {
 	return int64(h) <= int64(len(data))/rowBytes
 }
 
-// resolveColorSpace resolves a PDF colour-space object to an imgColorSpace, or
-// (nil,false) for one this decoder cannot render.
-func resolveColorSpace(d core.View, obj object.Object) (*imgColorSpace, bool) {
+// maxColorSpaceDepth bounds how deeply colour spaces may nest: an Indexed base,
+// a Separation or DeviceN alternate, an ICCBased /Alternate, each of which is a
+// colour space in its own right. Real files nest two or three deep (an Indexed
+// over an ICCBased with a device alternate); sixteen is the bound the other
+// file-structure walks in this package use.
+const maxColorSpaceDepth = 16
+
+// errColorSpaceDepth is a colour space nested past maxColorSpaceDepth.
+var errColorSpaceDepth = fmt.Errorf("colour space nested more than %d deep", maxColorSpaceDepth)
+
+// colorSpaceCycleError is a colour space that contains itself: object n is its
+// own base or alternate, directly or through others. Every one of those is a
+// reference the file controls, and the resolver used to follow them until the
+// stack overflowed — a fatal error, not a recoverable panic (audit 2026-09-22
+// C13).
+type colorSpaceCycleError int
+
+func (e colorSpaceCycleError) Error() string {
+	return fmt.Sprintf("colour space object %d contains itself", int(e))
+}
+
+// csResolver resolves one image's colour space. It carries the depth and the
+// object numbers on the path from the image's /ColorSpace to the space being
+// resolved, so that a space reached again through its own base or alternate is
+// refused as a cycle and a chain that is merely long is refused at the depth
+// bound. The path is unwound as each level returns: a space may legitimately
+// be reached twice by different routes, and only a revisit on the current path
+// is a cycle. Each level has at most one nested space, so the walk is a chain
+// and the depth bound alone bounds its cost.
+type csResolver struct {
+	d     core.View
+	depth int
+	path  []int
+}
+
+// resolveColorSpace resolves a PDF colour-space object to an imgColorSpace. The
+// error is errUnsupportedLayout for a space this decoder cannot render,
+// errColorSpaceDepth or a colorSpaceCycleError for one it refuses to follow.
+func resolveColorSpace(d core.View, obj object.Object) (*imgColorSpace, error) {
+	r := &csResolver{d: d}
+	return r.resolve(obj)
+}
+
+func (r *csResolver) resolve(obj object.Object) (*imgColorSpace, error) {
+	if r.depth >= maxColorSpaceDepth {
+		return nil, errColorSpaceDepth
+	}
+	if ref, ok := obj.(object.IndirectRef); ok {
+		for _, n := range r.path {
+			if n == ref.Number {
+				return nil, colorSpaceCycleError(n)
+			}
+		}
+		r.path = append(r.path, ref.Number)
+		defer func() { r.path = r.path[:len(r.path)-1] }()
+	}
+	r.depth++
+	defer func() { r.depth-- }()
+
+	d := r.d
 	switch cs := d.Resolve(obj).(type) {
 	case object.Name:
 		return deviceColorSpace(string(cs))
 	case object.Array:
 		if len(cs) == 0 {
-			return nil, false
+			return nil, errUnsupportedLayout
 		}
 		head, _ := d.Resolve(cs[0]).(object.Name)
 		switch head {
 		case "ICCBased":
-			return iccBasedColorSpace(d, cs)
+			return r.iccBased(cs)
 		case "CalRGB":
 			return deviceColorSpace("DeviceRGB")
 		case "CalGray":
 			return deviceColorSpace("DeviceGray")
 		case "Lab":
-			return labColorSpace(d, cs)
+			return labColorSpace(d, cs), nil
 		case "Indexed", "I":
-			return indexedColorSpace(d, cs)
+			return r.indexed(cs)
 		case "DeviceGray", "DeviceRGB", "DeviceCMYK", "G", "RGB", "CMYK":
 			return deviceColorSpace(string(head))
 		case "Separation":
-			return separationColorSpace(d, cs)
+			if len(cs) < 4 {
+				return nil, errUnsupportedLayout
+			}
+			return r.tint(1, cs[2], cs[3])
 		case "DeviceN":
-			return deviceNColorSpace(d, cs)
+			// [/DeviceN names altSpace tintFn]: len(names) tint components fed
+			// through tintFn into the alternate space.
+			if len(cs) < 4 {
+				return nil, errUnsupportedLayout
+			}
+			names, ok := d.Resolve(cs[1]).(object.Array)
+			if !ok || len(names) == 0 {
+				return nil, errUnsupportedLayout
+			}
+			return r.tint(len(names), cs[2], cs[3])
 		}
 	}
-	return nil, false
+	return nil, errUnsupportedLayout
 }
 
-func deviceColorSpace(name string) (*imgColorSpace, bool) {
+func deviceColorSpace(name string) (*imgColorSpace, error) {
 	switch name {
 	case "DeviceGray", "CalGray", "G":
 		return &imgColorSpace{ncomp: 1, decode: []float64{0, 1}, toRGB: func(c []float64) (uint8, uint8, uint8) {
@@ -369,31 +439,31 @@ func deviceColorSpace(name string) (*imgColorSpace, bool) {
 		}, toRGB16: func(c []float64) (uint16, uint16, uint16) {
 			v := clamp16(c[0])
 			return v, v, v
-		}}, true
+		}}, nil
 	case "DeviceRGB", "CalRGB", "RGB":
 		return &imgColorSpace{ncomp: 3, decode: []float64{0, 1, 0, 1, 0, 1}, toRGB: func(c []float64) (uint8, uint8, uint8) {
 			return clamp8(c[0]), clamp8(c[1]), clamp8(c[2])
 		}, toRGB16: func(c []float64) (uint16, uint16, uint16) {
 			return clamp16(c[0]), clamp16(c[1]), clamp16(c[2])
-		}}, true
+		}}, nil
 	case "DeviceCMYK", "CMYK":
-		return &imgColorSpace{ncomp: 4, decode: []float64{0, 1, 0, 1, 0, 1, 0, 1}, toRGB: cmykToRGB, toRGB16: cmykToRGB16}, true
+		return &imgColorSpace{ncomp: 4, decode: []float64{0, 1, 0, 1, 0, 1, 0, 1}, toRGB: cmykToRGB, toRGB16: cmykToRGB16}, nil
 	}
-	return nil, false
+	return nil, errUnsupportedLayout
 }
 
-// iccBasedColorSpace renders an ICCBased space by its component count (/N): 1 as
+// iccBased renders an ICCBased space by its component count (/N): 1 as
 // grayscale, 3 as RGB, 4 as CMYK, matching the profile's device class. A
 // present /Alternate is used when /N is absent or unusual.
-func iccBasedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
+func (r *csResolver) iccBased(cs object.Array) (*imgColorSpace, error) {
 	if len(cs) < 2 {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
-	st, ok := d.Resolve(cs[1]).(*object.Stream)
+	st, ok := r.d.Resolve(cs[1]).(*object.Stream)
 	if !ok {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
-	switch object.Int(d.Resolve(st.Dict.Get("N"))) {
+	switch object.Int(r.d.Resolve(st.Dict.Get("N"))) {
 	case 1:
 		return deviceColorSpace("DeviceGray")
 	case 3:
@@ -402,24 +472,28 @@ func iccBasedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 		return deviceColorSpace("DeviceCMYK")
 	}
 	if alt := st.Dict.Get("Alternate"); alt != nil {
-		return resolveColorSpace(d, alt)
+		return r.resolve(alt)
 	}
-	return nil, false
+	return nil, errUnsupportedLayout
 }
 
-// indexedColorSpace resolves [/Indexed base hival lookup] into a palette lookup
-// over its base colour space.
-func indexedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
+// indexed resolves [/Indexed base hival lookup] into a palette lookup over its
+// base colour space.
+func (r *csResolver) indexed(cs object.Array) (*imgColorSpace, error) {
 	if len(cs) < 4 {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
-	base, ok := resolveColorSpace(d, cs[1])
-	if !ok || base.indexed {
-		return nil, false
+	base, err := r.resolve(cs[1])
+	if err != nil {
+		return nil, err
 	}
+	if base.indexed {
+		return nil, errUnsupportedLayout
+	}
+	d := r.d
 	hival := object.Int(d.Resolve(cs[2]))
 	if hival < 0 || hival > 65535 {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
 	var lookup []byte
 	switch t := d.Resolve(cs[3]).(type) {
@@ -428,10 +502,10 @@ func indexedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 	case *object.Stream:
 		lookup = d.Content(t)
 	default:
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
 	if len(lookup) < (hival+1)*base.ncomp {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
 	return &imgColorSpace{
 		ncomp:   1,
@@ -440,45 +514,28 @@ func indexedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 		lookup:  lookup,
 		base:    base,
 		decode:  []float64{0, float64(hival)},
-	}, true
+	}, nil
 }
 
-// separationColorSpace resolves [/Separation name altSpace tintFn]: one tint
-// component fed through tintFn into the alternate space.
-func separationColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
-	if len(cs) < 4 {
-		return nil, false
+// tint builds an imgColorSpace with ncomp tint components (one for Separation,
+// one per colorant for DeviceN) whose toRGB runs the tint-transform function
+// into the alternate space's toRGB. It refuses the space if the tint function
+// does not evaluate for a probe input, so callers fall back to the raw bytes
+// rather than render garbage.
+func (r *csResolver) tint(ncomp int, altObj, tintFn object.Object) (*imgColorSpace, error) {
+	alt, err := r.resolve(altObj)
+	if err != nil {
+		return nil, err
 	}
-	return tintColorSpace(d, 1, cs[2], cs[3])
-}
-
-// deviceNColorSpace resolves [/DeviceN names altSpace tintFn]: len(names) tint
-// components fed through tintFn into the alternate space.
-func deviceNColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
-	if len(cs) < 4 {
-		return nil, false
+	if alt.indexed {
+		return nil, errUnsupportedLayout
 	}
-	names, ok := d.Resolve(cs[1]).(object.Array)
-	if !ok || len(names) == 0 {
-		return nil, false
-	}
-	return tintColorSpace(d, len(names), cs[2], cs[3])
-}
-
-// tintColorSpace builds an imgColorSpace with ncomp tint components whose toRGB
-// runs the tint-transform function into the alternate space's toRGB. It refuses
-// the space if the tint function does not evaluate for a probe input, so callers
-// fall back to the raw bytes rather than render garbage.
-func tintColorSpace(d core.View, ncomp int, altObj, tintFn object.Object) (*imgColorSpace, bool) {
-	alt, ok := resolveColorSpace(d, altObj)
-	if !ok || alt.indexed {
-		return nil, false
-	}
+	d := r.d
 	// Verify the tint function evaluates to the alternate space's arity.
 	probe := make([]float64, ncomp)
 	altComps, ok := d.EvalFunction(tintFn, probe)
 	if !ok || len(altComps) != alt.ncomp {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
 	decode := make([]float64, 2*ncomp)
 	for i := 0; i < ncomp; i++ {
@@ -496,12 +553,12 @@ func tintColorSpace(d core.View, ncomp int, altObj, tintFn object.Object) (*imgC
 			}
 			return alt.toRGB(comps)
 		},
-	}, true
+	}, nil
 }
 
 // labColorSpace resolves a [/Lab dict] space; toRGB converts CIE L*a*b* (D50) to
 // sRGB.
-func labColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
+func labColorSpace(d core.View, cs object.Array) *imgColorSpace {
 	wp := [3]float64{0.9642, 1.0, 0.8249} // D50, the usual Lab reference white
 	amin, amax, bmin, bmax := -100.0, 100.0, -100.0, 100.0
 	if len(cs) >= 2 {
@@ -528,7 +585,7 @@ func labColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 			r, g, b := labToSRGB(c[0], c[1], c[2], wp)
 			return clamp16(r), clamp16(g), clamp16(b)
 		},
-	}, true
+	}
 }
 
 func cmykToRGB(c []float64) (uint8, uint8, uint8) {

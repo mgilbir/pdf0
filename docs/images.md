@@ -239,7 +239,25 @@ pixel. [limits.md](limits.md) classifies these guards on that axis.
   streams (palettes, tint functions) it exists for.
 - **Traversal bounds.** CCITT code matching stops at 24 bits. Form-XObject
   recursion is capped at depth 16, and a `seen` set of object numbers stops
-  shared or self-referential XObjects from being revisited.
+  shared or self-referential XObjects from being revisited. An annotation's
+  appearance subdictionary is followed one level, as ISO 32000-2 12.5.5 defines
+  it; following any dictionary value recursed forever on a state dictionary that
+  named itself.
+- **Colour-space nesting** (`csResolver` in `images/imagecolor.go`). An Indexed
+  base, a Separation or DeviceN alternate and an ICCBased `/Alternate` are
+  colour spaces in their own right, reached through references the file
+  controls. The resolver carries the object numbers on its current path and the
+  depth: a space that reaches itself again is refused as a cycle, and a chain
+  deeper than 16 as too deep, each with its reason in the image's `Note` (audit
+  2026-09-22 C13 — a Separation naming itself as its alternate was a fatal stack
+  overflow). The path is unwound as each level returns, so a space reached twice
+  by different routes is not a cycle.
+- **Type-4 program parse bounds** (`internal/core/function_ps.go`). The parser is
+  iterative, with procedure nesting capped at 128, the program at 1 MiB and
+  2^18 tokens (audit 2026-09-22 C14: three million `{`, 6.6 KB of Flate, overflowed
+  the stack of the recursive parser). The largest program in the corpora is 267
+  bytes. A program past a bound does not parse, so its colour space is declined
+  like any other unusable one.
 
 ## Confirmed limitations
 

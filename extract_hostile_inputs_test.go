@@ -127,6 +127,23 @@ func hugeJPX() []byte {
 	panic("no SIZ in an encoded codestream")
 }
 
+// iccChainPage draws a one-pixel image whose colour space is n ICCBased spaces
+// deep, each with an unusable /N and the next as its /Alternate, ending in
+// DeviceGray. Object 6 is the first space.
+func iccChainPage(n int) []byte {
+	var extra []rawObj
+	for i := 0; i < n; i++ {
+		next := "/DeviceGray"
+		if i < n-1 {
+			next = fmt.Sprintf("%d 0 R", 6+2*(i+1))
+		}
+		extra = append(extra,
+			rawObj{dict: fmt.Sprintf("[/ICCBased %d 0 R]", 7+2*i)},
+			rawObj{dict: "<</N 2/Alternate " + next + ">>", stream: []byte{0}})
+	}
+	return rawImagePage("<</Type/XObject/Subtype/Image/Width 1/Height 1/BitsPerComponent 8/ColorSpace 6 0 R>>", []byte{0x80}, extra...)
+}
+
 // hostileInput is one file and what it is. The file is built on demand: some
 // are tens of megabytes of zeros before compression, and a test that wants one
 // input should not pay for all of them inside its memory cap.
@@ -188,6 +205,20 @@ func hostileExtractionInputs() []hostileInput {
 			return rawImagePage(oneByte, []byte{0},
 				rawObj{dict: "[/Indexed 7 0 R 0 <00>]"},
 				rawObj{dict: "[/Separation/Spot 6 0 R" + tint + "]"})
+		}},
+		// C13's depth half: an acyclic chain of ICCBased spaces, each naming
+		// the next as its /Alternate, twenty deep.
+		{"cs-iccbased-chain-20", func() []byte { return iccChainPage(20) }},
+		// A sibling of C13 in the image walk: an appearance state dictionary
+		// that names itself.
+		{"ap-state-cycle", func() []byte {
+			objs := rawPage("q 1 0 0 1 0 0 cm /Im0 Do Q", "<</XObject<</Im0 5 0 R>>>>")
+			objs[2].dict = "<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Contents 4 0 R/Resources<</XObject<</Im0 5 0 R>>>>/Annots[6 0 R]>>"
+			objs = append(objs,
+				rawObj{dict: "<</Type/XObject/Subtype/Image/Width 1/Height 1/BitsPerComponent 8/ColorSpace/DeviceGray>>", stream: []byte{0x80}},
+				rawObj{dict: "<</Type/Annot/Subtype/Widget/Rect[0 0 1 1]/AP<</N 7 0 R>>>>"},
+				rawObj{dict: "<</On 7 0 R/Off 7 0 R>>"})
+			return buildRawPDF(objs)
 		}},
 		// C14: three million nested procedures, 6.6 KB once compressed.
 		{"ps-brace-nest", func() []byte {
