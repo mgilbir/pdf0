@@ -31,10 +31,11 @@ type Allocator interface {
 // it themselves and use EmbedJPEG, which stores encoded bytes without
 // expanding them.
 //
-// It is the same number as the default extraction budget
-// (core.DefaultMaxImagePixels, configurable with pdf0.WithMaxImagePixels), so
-// an image this package writes is one extraction reads back by default.
-const MaxPixels = core.DefaultMaxImagePixels // 67 megapixels
+// It is the same number as the default extraction budget (configurable with
+// pdf0.WithMaxImagePixels), so an image this package writes is one extraction
+// reads back by default. TestMaxPixelsIsTheExtractionDefault holds the two
+// together.
+const MaxPixels = 1 << 26 // 67 megapixels
 
 // Embed writes a Go image into doc as an image XObject and returns the
 // reference to put in a page's /Resources /XObject.
