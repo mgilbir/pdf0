@@ -160,36 +160,8 @@ type textRun struct {
 	// pages memoizes a page's text by its content stream and resources, which
 	// are all the text depends on. Pages commonly carry their own copy of
 	// the same resource dictionary, so resources are matched by value
-	// (object.Equal, which does not follow references), against at most
-	// maxPageTextVariants dictionaries per stream.
-	pages map[*object.Stream][]pageTextEntry
-}
-
-type pageTextEntry struct {
-	res  *object.Dictionary
-	text string
-}
-
-// maxPageTextVariants bounds the resource dictionaries remembered per content
-// stream, so that matching one costs a bounded number of comparisons.
-const maxPageTextVariants = 8
-
-// memoized returns the text memoized for (content, res), if any.
-func (r *textRun) memoized(v core.View, content *object.Stream, res *object.Dictionary) (string, bool) {
-	for _, e := range r.pages[content] {
-		v.Charge(1)
-		if e.res == res || (e.res != nil && res != nil && object.Equal(e.res, res)) {
-			return e.text, true
-		}
-	}
-	return "", false
-}
-
-// memoize remembers the text of (content, res).
-func (r *textRun) memoize(content *object.Stream, res *object.Dictionary, text string) {
-	if len(r.pages[content]) < maxPageTextVariants {
-		r.pages[content] = append(r.pages[content], pageTextEntry{res, text})
-	}
+	// (core.ResMemo).
+	pages core.ResMemo[string]
 }
 
 // fontMaps is fontMapsFrom(res), once per resource dictionary per run.
@@ -208,7 +180,7 @@ func (r *textRun) fontMaps(d *Document, res *object.Dictionary) map[string]fontT
 // newTextRun starts the text state of an extraction on d, a Document a run has
 // been begun on (beginRunCancel).
 func (d *Document) newTextRun() *textRun {
-	return &textRun{pages: map[*object.Stream][]pageTextEntry{}}
+	return &textRun{}
 }
 
 // textPageHook, when set, runs at the start of each page's extraction. It is
@@ -241,7 +213,7 @@ func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string,
 	res := d.ResolveDict(v.InheritedPageAttr(page, "Resources"))
 	content, key, _ := v.ContentBytesAndKey(page.Get("Contents")) // reason: extraction returns the text it could decode
 	if key != nil {
-		if t, ok := run.memoized(v, key, res); ok {
+		if t, ok := run.pages.Get(v, key, res); ok {
 			v.ChargeCopy(len(t)) // the copy the caller is handed
 			return t, nil
 		}
@@ -249,7 +221,7 @@ func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string,
 	var out strings.Builder
 	d.extractContentText(run, res, content, &out, map[*object.Stream]bool{}, 0)
 	if key != nil {
-		run.memoize(key, res, out.String())
+		run.pages.Put(key, res, out.String())
 	}
 	return out.String(), nil
 }

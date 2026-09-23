@@ -121,10 +121,10 @@ func TestAbsentResourceReference(t *testing.T) {
 }
 
 func TestInlineImageIntent(t *testing.T) {
-	if got := inlineImageEntries([]byte("BI /W 1 /Intent /Perceptual ID xx EI")); len(got) != 1 || got[0]["Intent"] != "Perceptual" {
+	if got := inlineImageEntries(core.Canceler{}, []byte("BI /W 1 /Intent /Perceptual ID xx EI")); len(got) != 1 || got[0]["Intent"] != "Perceptual" {
 		t.Errorf("intent not extracted: %v", got)
 	}
-	if got := inlineImageEntries([]byte("BI /W 1 /Intent /Custom ID xx EI")); len(got) != 1 || got[0]["Intent"] != "Custom" {
+	if got := inlineImageEntries(core.Canceler{}, []byte("BI /W 1 /Intent /Custom ID xx EI")); len(got) != 1 || got[0]["Intent"] != "Custom" {
 		t.Errorf("custom intent not extracted: %v", got)
 	}
 }
@@ -149,7 +149,7 @@ func TestAnInlineIntentIsReportedOnce(t *testing.T) {
 // array holding a string with a slash in it, and data after ID that looks
 // like a key do not leak into the parameters.
 func TestTheInlineDictionaryIsParsedAsADictionary(t *testing.T) {
-	d := inlineImageEntries([]byte("BI /DP << /Intent /Bogus /K -1 >> /CS [/Indexed /DeviceRGB 1 (/Intent) ] /Intent /Perceptual /W 1 ID\n/Intent /Nope EI"))
+	d := inlineImageEntries(core.Canceler{}, []byte("BI /DP << /Intent /Bogus /K -1 >> /CS [/Indexed /DeviceRGB 1 (/Intent) ] /Intent /Perceptual /W 1 ID\n/Intent /Nope EI"))
 	if len(d) != 1 {
 		t.Fatalf("want one inline image, got %v", d)
 	}

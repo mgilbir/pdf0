@@ -88,7 +88,7 @@ func TestFileTrailerID(t *testing.T) {
 }
 
 func TestInlineImageEntries(t *testing.T) {
-	entries := inlineImageEntries([]byte("BI /W 1 /H 2 /I true /Intent /Custom ID xx EI"))
+	entries := inlineImageEntries(core.Canceler{}, []byte("BI /W 1 /H 2 /I true /Intent /Custom ID xx EI"))
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 inline image, got %d", len(entries))
 	}
@@ -148,7 +148,7 @@ func TestPUADetection(t *testing.T) {
 }
 
 func TestContentActualTexts(t *testing.T) {
-	got := contentActualTexts([]byte("/Span << /ActualText <FEFF0041> >> BDC (x) Tj EMC"))
+	got := contentActualTexts(core.Canceler{}, []byte("/Span << /ActualText <FEFF0041> >> BDC (x) Tj EMC"))
 	if len(got) != 1 || string(got[0]) != "\xfe\xff\x00A" {
 		t.Errorf("ActualText extraction wrong: %q", got)
 	}

@@ -674,3 +674,66 @@ func TestHostileSharedPageContent(t *testing.T) {
 		honoursDeadline(t, "ValidatePDFAContext", func(ctx context.Context) { ValidatePDFAContext(ctx, doc, pdfa.PDFA2b) })
 	})
 }
+
+// Pages that share their content — one stream every page names, or one
+// /Contents array per page naming the same streams — each with its own copy of
+// the same resources, as a template or a stamped letterhead is written. It is
+// a legitimate shape, and validating it must cost about what reading its
+// content once costs, not once per page: before the rules that read content
+// were memoised per (content, resources), a 104 KB file of twenty such pages
+// took 21 s at PDF/A-2b and ended in the work meter's "limit" finding instead
+// of a verdict.
+//
+// Each validator is held to a bound that is a multiple of one scan of the
+// content, measured here, so that the test says "about one scan" on any
+// machine, and must return a verdict: no "limit" or "internal" finding.
+func TestHostileSharedContentIsReadOnce(t *testing.T) {
+	const np = 200
+	c := []byte("/P <</MCID 0 /Lang (en)>> BDC BT /F1 12 Tf <41> Tj ET EMC\n" +
+		"q BI /W 1 /H 1 /BPC 8 /CS /G /F /AHx ID 00> EI Q\n" +
+		strings.Repeat("0 0 1 1 re f\n", 8<<20/13))
+	build := func(contents string) *Document {
+		kids := ""
+		objs := []rawObj{
+			{dict: "<</Type/Catalog/Pages 2 0 R>>"}, {},
+			{dict: "<</Filter/FlateDecode>>", stream: zlibBytes(c)},
+			{dict: "<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>"},
+		}
+		for i := 0; i < np; i++ {
+			kids += fmt.Sprintf("%d 0 R ", len(objs)+1)
+			objs = append(objs, rawObj{dict: "<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]/Contents " + contents + "/Resources<</Font<</F1 4 0 R>>>>>>"})
+		}
+		objs[1] = rawObj{dict: fmt.Sprintf("<</Type/Pages/Kids[%s]/Count %d>>", kids, np)}
+		return readRaw(t, buildRawPDF(objs))
+	}
+	for _, tc := range []struct{ name, contents string }{
+		{"one shared stream", "3 0 R"},
+		{"an array per page", "[3 0 R]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hostile.Run(t, hostileWorkLimits, func(t *testing.T) {
+				doc := build(tc.contents)
+				start := time.Now()
+				for range core.TokenizeContent(core.Canceler{}, c) {
+				}
+				bound := 250*time.Millisecond + 20*time.Since(start)
+				for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2a, pdfa.PDFA2b, pdfa.PDFA4} {
+					var msgs []string
+					timed(t, "ValidatePDFA "+level.String(), bound, func() { msgs = findingMessages(ValidatePDFA(doc, level)) })
+					noCheckerFindings(t, level.String(), msgs)
+				}
+				var msgs []string
+				timed(t, "ValidatePDFUA", bound, func() { msgs = findingMessages(ValidatePDFUA(doc)) })
+				noCheckerFindings(t, "PDF/UA", msgs)
+				timed(t, "ValidatePDFX", bound, func() { msgs = findingMessages(ValidatePDFX(doc, pdfx.PDFX4)) })
+				noCheckerFindings(t, "PDF/X-4", msgs)
+				var text string
+				var err error
+				timed(t, "ExtractText", bound, func() { text, err = doc.ExtractText() })
+				if err != nil || strings.Count(text, "A") != np {
+					t.Errorf("ExtractText: %d pages' text, err %v; want every page's", strings.Count(text, "A"), err)
+				}
+			})
+		})
+	}
+}

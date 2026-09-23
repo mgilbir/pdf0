@@ -590,42 +590,70 @@ func checkHexStringFormat(doc core.View, level Level) []Violation {
 	// String objects also occur as operands inside content streams; scan the
 	// decoded content of pages, form XObjects, and tiling patterns with a
 	// content-aware tokenizer that skips inline-image binary data.
-	for num, cs := range collectContentStreamData(doc) {
-		scanContentHexStrings(cs, func(content []byte) {
-			checkOneHexString(content, num, add)
-		})
+	// The content lexer reads every hexadecimal string operand, inside
+	// dictionary operands too, so strings, comments and inline-image data are
+	// never mistaken for one (contentBytesFacts).
+	for num, f := range contentBytesFactsOf(doc) {
+		if f.hexOdd {
+			add(hexOddMsg, num)
+		}
+		if f.hexNonDigit {
+			add(hexNonDigitMsg, num)
+		}
 	}
 	return found.errs
 }
 
-// scanContentHexStrings reports the raw content of each hexadecimal string
-// operand in a content stream — inside dictionary operands too — as the
-// content lexer reads them, so strings, comments and inline-image data are
-// never mistaken for one.
-func scanContentHexStrings(data []byte, fn func(content []byte)) {
-	lx := core.NewContentLexer(core.Canceler{}, data)
-	var t core.ContentTok
-	for lx.Next(&t) {
-		if t.Kind == core.ContentHexString {
-			fn(t.HexBody())
-		}
-	}
-}
+const (
+	hexOddMsg      = "a hexadecimal string object contains an odd number of non-white-space characters"
+	hexNonDigitMsg = "a hexadecimal string object contains characters outside 0-9, A-F, a-f"
+)
 
 func checkOneHexString(content []byte, obj int, add func(string, int)) {
 	if !hexStringEven(content) {
-		add("a hexadecimal string object contains an odd number of non-white-space characters", obj)
+		add(hexOddMsg, obj)
 	}
 	if !hexStringDigitsOnly(content) {
-		add("a hexadecimal string object contains characters outside 0-9, A-F, a-f", obj)
+		add(hexNonDigitMsg, obj)
 	}
 }
 
 // collectContentStreamData returns the decoded bytes of every content stream
 // (page Contents, form XObjects, tiling patterns, Type3 CharProcs), keyed by
-// object number.
+// object number, each distinct content once.
+//
+// Its consumers are byte-level rules whose findings depend on nothing but the
+// bytes, and which report one example per message, attributed to the lowest
+// object number that produced it (exampleFindings). Content that several
+// holders share — one stream every page names, or one /Contents array per
+// page naming the same streams — is therefore listed once, under the lowest
+// object number among its holders, which is where each of its findings was
+// reported when it was listed once per holder. Listing it per holder made
+// every consumer scan it once per page: a template drawn on 20 pages was
+// tokenised 20 times by each of five rules. The result is memoised per run,
+// since those five rules all ask for it.
 func collectContentStreamData(doc core.View) map[int][]byte {
+	memo := core.Slot[map[int][]byte](doc.Run, contentStreamDataSlot{})
+	if *memo != nil {
+		return *memo
+	}
 	out := make(map[int][]byte)
+	// holder is the object number each distinct content is listed under.
+	holder := map[*object.Stream]int{}
+	put := func(num int, key *object.Stream, data []byte) {
+		if key == nil {
+			out[num] = data
+			return
+		}
+		if prev, ok := holder[key]; ok {
+			if num >= prev {
+				return
+			}
+			delete(out, prev)
+		}
+		holder[key] = num
+		out[num] = data
+	}
 	catalog := doc.Catalog()
 	if catalog != nil {
 		for _, page := range doc.Pages(catalog.Get("Pages")) {
@@ -634,8 +662,8 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 			if doc.Cancel.Stopped() {
 				return out
 			}
-			if data, _ := core.ContentStreamData(doc, page.Dict.Get("Contents")); data != nil { // reason: every consumer scans for what is present; the producer recorded any declined trip
-				out[page.ObjNum] = data
+			if data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")); data != nil { // reason: every consumer scans for what is present; the producer recorded any declined trip
+				put(page.ObjNum, key, data)
 			}
 		}
 	}
@@ -654,7 +682,7 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 			continue
 		}
 		if data, _ := doc.Content(s); data != nil { // reason: as above
-			out[num] = data
+			put(num, s, data)
 		}
 	}
 	// Type3 glyph procedures are content streams too, but carry no
@@ -682,13 +710,18 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 			}
 			if s, ok := doc.Resolve(val).(*object.Stream); ok {
 				if data, _ := doc.Content(s); data != nil { // reason: as above
-					out[num] = data
+					put(num, s, data)
 				}
 			}
 		}
 	}
+	if !doc.Cancel.Stopped() {
+		*memo = out
+	}
 	return out
 }
+
+type contentStreamDataSlot struct{}
 
 // scanHexStrings tokenises PDF object syntax and reports the content of each
 // hexadecimal string (<...>), correctly skipping << >> dictionary markers,
@@ -883,20 +916,20 @@ func checkInlineImageFilters(doc core.View, level Level) []Violation {
 		rule = "6.1.7"
 	}
 	// One example per distinct message, attributed to the lowest object number
-	// that produced it — collectContentStreamData returns a map.
+	// that produced it — contentBytesFactsOf returns a map.
 	var found exampleFindings
 	add := func(msg string, obj int) {
 		found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
-	for num, data := range collectContentStreamData(doc) {
-		for _, filters := range inlineImageFilters(data) {
-			for _, f := range filters {
+	for num, f := range contentBytesFactsOf(doc) {
+		for _, filters := range f.inlineFilters {
+			for _, name := range filters {
 				switch {
-				case inlineLZWNames[f]:
+				case inlineLZWNames[name]:
 					add("LZW compression is used in an inline image", num)
-				case !inlineFilterNames[f]:
-					add(fmt.Sprintf("the inline image /F filter %q is not a permitted filter name", f), num)
+				case !inlineFilterNames[name]:
+					add(fmt.Sprintf("the inline image /F filter %q is not a permitted filter name", name), num)
 				}
 			}
 		}
@@ -904,9 +937,10 @@ func checkInlineImageFilters(doc core.View, level Level) []Violation {
 	return found.errs
 }
 
-// inlineImageFilters is core.InlineImageFilters, which PDF/R reads too.
-func inlineImageFilters(data []byte) [][]string {
-	return core.InlineImageFilters(core.Canceler{}, data)
+// inlineImageFilters is the /F names of each inline image in data that
+// declares any, as contentBytesFacts reads them.
+func inlineImageFilters(cancel core.Canceler, data []byte) [][]string {
+	return scanContentBytes(cancel, data).inlineFilters
 }
 
 // checkStreamLength enforces that a stream's /Length entry equals the actual

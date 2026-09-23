@@ -15,20 +15,26 @@ func InlineImageFilters(cancel Canceler, data []byte) [][]string {
 		if t.Kind != ContentInlineImage {
 			continue
 		}
-		var filters []string
-		for _, p := range ParseInlineImageParams(t.Params) {
-			if p.Key != "F" && p.Key != "Filter" {
-				continue
-			}
-			for _, v := range p.Value {
-				if v.Kind == ContentName {
-					filters = append(filters, v.Name())
-				}
-			}
-		}
-		if filters != nil {
+		if filters := InlineFilterNames(ParseInlineImageParams(t.Params)); filters != nil {
 			out = append(out, filters)
 		}
 	}
 	return out
+}
+
+// InlineFilterNames returns the filter names an inline image's parameters
+// declare under /F (or /Filter), in order; nil when it declares none.
+func InlineFilterNames(params []InlineImageParam) []string {
+	var filters []string
+	for _, p := range params {
+		if p.Key != "F" && p.Key != "Filter" {
+			continue
+		}
+		for _, v := range p.Value {
+			if v.Kind == ContentName {
+				filters = append(filters, v.Name())
+			}
+		}
+	}
+	return filters
 }

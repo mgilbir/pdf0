@@ -345,7 +345,7 @@ flowchart TD
     P --> W["walkExecutedContent<br/>container, data, key, objNum, seen"]
     W --> S{"seen[container]?"}
     S -->|yes| STOP["return — cycle guard"]
-    S -->|no| T["checkContentTokens<br/>operator whitelist, ri operand,<br/>named resource present"]
+    S -->|no| T["contentWalk.tokens<br/>operator whitelist, ri operand,<br/>named resource present<br/>(tokenised once per stream,<br/>judged once per resources value)"]
     T --> R["resolveResources — own or inherited"]
     R --> U["contentUsedNamesCached<br/>names actually invoked by Do and scn"]
     U --> X{"resource named<br/>in used set?"}

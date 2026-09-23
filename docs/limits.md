@@ -187,6 +187,29 @@ because real work grows with the file and amplification does not.
 corpus the suite can see and holds each run to an eighth of its file's default;
 the measurement the defaults were set from is in `internal/core/meter.go`.
 
+A budget is only half of the answer. A bounded worst case must also be rare on
+legitimate input, or the meter turns slowness into a refusal: a file that used
+to take twenty seconds and pass now takes twenty seconds and says `limit`. The
+shape that first did so is common — pages that share their content, a template
+or a stamped letterhead, each page with its own copy of the same resources —
+and every rule that read content read it once per page. A 104 KB file of twenty
+such pages over 50 MB of content ran 21 s at PDF/A-2b and ended in a `limit`
+finding. So what is derived from content is derived once per distinct content:
+a key per stream, and per distinct sequence of streams for a `/Contents` array
+(`View.ContentBytesAndKey`, which memoises the concatenation per run); and,
+where the answer depends on the resources the content is drawn with, once per
+distinct resources *value* — `core.ResMemo` matches a resource dictionary by
+`object.Equal`, and the content interpreter's memo key interns each resource
+sub-dictionary by value (`core.DictInterner`). The five PDF/A rules that judge
+content by its tokens alone (the content-stream limits, hexadecimal strings,
+inline-image filters and entries, marked-content ActualText) share one pass per
+stream (`pdfa/content_facts.go`), over each distinct content once. That file now
+validates in about two seconds at any page count, with a verdict.
+`TestHostileSharedContentIsReadOnce` holds every validator and text extraction
+over 200 pages sharing 8 MB of content — one stream, and one array per page —
+to a small multiple of one scan of that content, and to no `limit` finding; a
+per-page rescan planted back into any of the memoised rules fails it.
+
 The per-unit guards the meter measures the same thing as were folded into it
 rather than kept alongside: the per-chain `/RoleMap` step budget
 (`WithMaxRoleMapSteps`), the per-range `/W` span (`WithMaxCIDRangeSpan`), the
@@ -246,7 +269,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | ICC profile size (`WithMaxICCProfileBytes`) | `internal/core/color.go`, `pdfa.go`, `pdfx.go` | Was **silently lossy**, fail-open by design | `getOutputIntentCoverage` sets `hasRGB=hasCMYK=true` on an unreadable profile precisely to avoid a false positive — and nothing said the profile had not been read, so a lowered bound turned every ICC rule off with no finding (audit 2026-09-22 C109). | Fixed. `View.ICCProfileData` reports the trip as `icc-profile-size`; the consumers still fail open. It also decodes through the full filter chain now, not Flate alone. |
 | XMP packet size (`WithMaxXMPPacketBytes`), XMP nesting depth (`xmp.MaxDepth`, no knob) | `internal/core/xmp.go` (`DocumentXMPPacket`) | Was **silently lossy** | Over the cap `checkXMPProperties` read "no properties to check", and the identification scrapers read the text anyway. | Fixed (audit 2026-09-22). One model, one gate: over either bound the packet is not modelled, an `xmp-packet-size` / `xmp-depth` trip is noted (a "limit" finding), and every reader — property checks, pdfaid/pdfuaid/pdfxid/pdfvtid/fx identification, Info↔XMP — declines rather than guessing or reporting a property missing. Never a violation. Well-formedness still runs: `xmpWellFormed` is O(n) over the token stream and needs no tree. The metadata writers refuse to edit such a packet. |
 | embedded PDF/A validation (no bound of its own) | `final_rules.go` | Was **silently wrong** | `checkEmbeddedPDFA` treated *any* non-empty result from the nested validation as non-conformance, so a guard trip or a recovered panic inside the embedded document became *"an embedded PDF file is not compliant with PDF/A"* (6.9). | Fixed. `embeddedPDFACompliant` returns completeness alongside the verdict; a nested `IsCheckerFinding` declines the 6.9 finding and reports `embedded-pdfa` instead. The nested read and validation now also inherit the outer document's resolved limits rather than the defaults — the one place a hostile file could otherwise spend a whole second document's budget unconfigured. Because that makes a *lowered* ceiling a possible cause of "did not read" and "declares no level", those two exits also withhold the verdict whenever the limits in force are not the defaults, which is fail-open (a missed finding, never a manufactured one). Under the defaults nothing changes. |
-| Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx/pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Device colour and font usage: replaced by the content interpreter's memo (`internal/core/interp.go`), keyed by (stream, resources, inherited graphics state), so a second visit in a different state is executed, not dropped; a result computed while a caller was still in progress (a cycle) is not memoised. `content_operators.go`: unchanged. |
+| Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx/pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Device colour and font usage: replaced by the content interpreter's memo (`internal/core/interp.go`), keyed by (stream, resources, inherited graphics state), so a second visit in a different state is executed, not dropped; a result computed while a caller was still in progress (a cycle) is not memoised. The resources in the key are interned by value, so pages that each write their own copy of the same `/Font` dictionary share an entry. `content_operators.go`: the containers walked keep their seen-set; each stream's tokens are read once and judged once per distinct resources value, which reports what a scan per container reported. |
 | content interpreter depth (`maxExecDepth` 64) | `internal/core/interp.go` | Loud | Device-colour and font-usage rules over content not executed. | Reported as `content-state-work`. It bounds the stack; the interpreter's work — its executions and the bytes they read, which had bounds of their own — is charged to the run's work meter. The q/Q stack is capped at 256 entries with deeper pushes counted, so it costs a counter rather than memory. |
 | embedded CMap building on a CMap that is neither predefined nor embedded | `internal/core/cmap.go` | Was **silently skipped** | Glyph coverage, `.notdef`, widths, CIDSet for the codes left to that CMap. | Reported as `embedded-cmap` when a check first meets such a code. A CMap past its bounds is `cmap-size` (above); one with no codespace is malformed, the file's fault, and not a skip. |
 

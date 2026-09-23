@@ -1,6 +1,8 @@
 package pdfa
 
 import (
+	"fmt"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
@@ -86,30 +88,95 @@ func buildLevelAContentFacts(doc core.View) levelAContentFacts {
 	}
 	covered := structActualTextMCIDs(doc, cat)
 	toUni := map[*object.Dictionary]*core.ToUnicode{}
+	var traces core.ResMemo[*levelATrace]
 	for _, pg := range doc.Pages(cat.Get("Pages")) {
 		if doc.Cancel.Stopped() {
 			return f
 		}
-		scanLevelAPage(doc, pg, covered, toUni, &f)
+		data, key, _ := doc.ContentBytesAndKey(pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
+		if len(data) == 0 {
+			continue
+		}
+		res := doc.Resources(pg.Dict)
+		tr, ok := traces.Get(doc, key, res)
+		if !ok {
+			tr = scanLevelATrace(doc, data, res, toUni)
+			if !doc.Cancel.Stopped() {
+				traces.Put(key, res, tr)
+			}
+		}
+		tr.replay(doc, pg.ObjNum, covered, &f)
 	}
 	return f
 }
 
-// scanLevelAPage walks one page's content stream, recording the /Lang values its
-// marked-content property lists carry and the Private Use Area characters it
-// shows without replacement text.
-func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toUni map[*object.Dictionary]*core.ToUnicode, f *levelAContentFacts) {
-	data, _ := core.ContentStreamData(doc, pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
-	if len(data) == 0 {
-		return
+// levelATrace is what one page content stream, drawn with one set of
+// resources, says for the Level A content rules — everything but what depends
+// on the page it is drawn on, which is the page's object number and which of
+// its marked-content identifiers a structure element covers with replacement
+// text. Pages commonly share their content (a template, a letterhead), and the
+// scan is kept per (content, resources) so that such content is tokenised
+// once rather than once per page.
+type levelATrace struct {
+	// langs is each distinct /Lang value a property list carries.
+	langs []string
+	// shows is each distinct (open marked-content identifiers, Private Use
+	// Area character) pair shown with no ActualText on an enclosing property
+	// list, in the order first shown.
+	shows []puaShow
+	// untagged is whether anything is painted outside every marked-content
+	// sequence.
+	untagged bool
+}
+
+// puaShow is a Private Use Area character shown inside the marked-content
+// sequences whose identifiers are mcids (the open ones that have one).
+type puaShow struct {
+	mcids []int
+	r     rune
+}
+
+// replay records the trace's facts for the page objNum: its /Lang values, the
+// Private Use Area characters it shows that no structure element covers with
+// replacement text on this page, each once, and whether it is untagged.
+func (tr *levelATrace) replay(doc core.View, objNum int, covered map[mcKey]bool, f *levelAContentFacts) {
+	for _, l := range tr.langs {
+		doc.Charge(1)
+		f.langs = append(f.langs, langSite{value: l, objNum: objNum})
 	}
-	res := doc.Resources(pg.Dict)
+	reported := map[rune]bool{}
+shows:
+	for _, s := range tr.shows {
+		doc.Charge(1 + len(s.mcids))
+		if reported[s.r] {
+			continue
+		}
+		for _, id := range s.mcids {
+			if covered[mcKey{objNum, id}] {
+				continue shows
+			}
+		}
+		reported[s.r] = true
+		f.pua = append(f.pua, puaSite{objNum: objNum, r: s.r})
+	}
+	if tr.untagged {
+		f.untagged = append(f.untagged, objNum)
+	}
+}
+
+// scanLevelATrace walks one page content stream drawn with res, recording the
+// /Lang values its marked-content property lists carry and the Private Use
+// Area characters it shows without replacement text on a property list.
+func scanLevelATrace(doc core.View, data []byte, res *object.Dictionary, toUni map[*object.Dictionary]*core.ToUnicode) *levelATrace {
+	tr := &levelATrace{}
 	var fontRes, propRes *object.Dictionary
 	if res != nil {
 		fontRes = doc.ResolveDict(res.Get("Font"))
 		propRes = doc.ResolveDict(res.Get("Properties"))
 	}
 	fontCodes := map[*object.Dictionary]*core.FontCodes{}
+	seenLang := map[string]bool{}
+	seenShow := map[string]bool{}
 
 	var stack []mcFrame
 	var untagged bool
@@ -118,7 +185,6 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 	var lastDict *object.Dictionary
 	var dictIsLatest bool
 	var pending [][]byte
-	reported := map[rune]bool{}
 
 	// propsFor returns the property list an operator's operands name: an inline
 	// dictionary when one was the last operand, otherwise the named entry of the
@@ -146,7 +212,12 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 				fr.mcid = int(n)
 			}
 			if s, r := doc.StringValue(props.Get("Lang")); r == core.ReasonOK && len(s.Value) > 0 {
-				f.langs = append(f.langs, langSite{value: core.DecodePDFTextString(s.Value), objNum: pg.ObjNum})
+				// Each distinct value once: a property list repeated on
+				// every line would otherwise repeat the same finding.
+				if l := core.DecodePDFTextString(s.Value); !seenLang[l] {
+					seenLang[l] = true
+					tr.langs = append(tr.langs, l)
+				}
 			}
 		}
 		// A crafted stream of nothing but BDC must not grow the stack without
@@ -163,10 +234,17 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 			pending = nil
 			return
 		}
+		// Replacement text on an enclosing property list covers the show
+		// wherever it is drawn; a structure element's covers it on the pages
+		// where the element's identifiers are, which replay decides.
+		var mcids []int
 		for _, fr := range stack {
-			if fr.actualText || (fr.mcid >= 0 && covered[mcKey{pg.ObjNum, fr.mcid}]) {
+			if fr.actualText {
 				pending = nil
 				return
+			}
+			if fr.mcid >= 0 {
+				mcids = append(mcids, fr.mcid)
 			}
 		}
 		m, ok := toUni[font]
@@ -199,9 +277,12 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 			for _, c := range cut {
 				rs, _ := m.Runes(int(c.Value))
 				for _, r := range rs {
-					if privateUseArea(r) && !reported[r] {
-						reported[r] = true
-						f.pua = append(f.pua, puaSite{objNum: pg.ObjNum, r: r})
+					if privateUseArea(r) {
+						k := fmt.Sprint(r, mcids)
+						if !seenShow[k] {
+							seenShow[k] = true
+							tr.shows = append(tr.shows, puaShow{mcids: mcids, r: r})
+						}
 					}
 				}
 			}
@@ -256,9 +337,8 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 			dictIsLatest = false
 		}
 	}
-	if untagged {
-		f.untagged = append(f.untagged, pg.ObjNum)
-	}
+	tr.untagged = untagged
+	return tr
 }
 
 // paintingOperators are the operators that put marks on the page, other than

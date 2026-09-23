@@ -3852,8 +3852,18 @@ func checkPageSizeLimits(doc core.View, level Level, errs *[]Violation) {
 func checkQNestingDepth(doc core.View, level Level, rule string, errs *[]Violation) {
 	const maxQDepth = 28
 
-	report := func(data []byte, objNum int) {
-		if d := qNestingMaxDepth(doc.Cancel, data); d > maxQDepth {
+	// The depth is a property of the bytes alone, so content that several
+	// pages share is measured once; each page is still reported.
+	depths := map[*object.Stream]int{}
+	report := func(data []byte, key *object.Stream, objNum int) {
+		d, ok := depths[key]
+		if !ok || key == nil {
+			d = qNestingMaxDepth(doc.Cancel, data)
+			if key != nil {
+				depths[key] = d
+			}
+		}
+		if d > maxQDepth {
 			*errs = append(*errs, Violation{
 				Rule:    rule,
 				Level:   level,
@@ -3880,8 +3890,8 @@ func checkQNestingDepth(doc core.View, level Level, rule string, errs *[]Violati
 		if contentsRef == nil {
 			continue
 		}
-		if data, _ := core.ContentStreamData(doc, contentsRef); data != nil { // reason: presence-only; the producer recorded any declined trip
-			report(data, page.ObjNum)
+		if data, key, _ := doc.ContentBytesAndKey(contentsRef); data != nil { // reason: presence-only; the producer recorded any declined trip
+			report(data, key, page.ObjNum)
 		}
 	}
 }
@@ -4741,6 +4751,31 @@ type contentColorUsage struct {
 	strokeCS map[string]bool
 	gsNames  map[string]bool
 }
+
+// contentColorUsageOf is scanContentColorUsage(data), once per content (key,
+// from View.ContentBytesAndKey or the stream itself) per run: the usage is a
+// property of the bytes alone, and the rules that ask for it walk every
+// container, so content that many pages share was otherwise scanned once per
+// page. A nil key is scanned every time.
+func contentColorUsageOf(doc core.View, data []byte, key *object.Stream) contentColorUsage {
+	memo := core.Slot[map[*object.Stream]contentColorUsage](doc.Run, contentColorUsageSlot{})
+	if key != nil {
+		if u, ok := (*memo)[key]; ok {
+			doc.Charge(1)
+			return u
+		}
+	}
+	u := scanContentColorUsage(doc.Cancel, data)
+	if key != nil && !doc.Cancel.Stopped() {
+		if *memo == nil {
+			*memo = map[*object.Stream]contentColorUsage{}
+		}
+		(*memo)[key] = u
+	}
+	return u
+}
+
+type contentColorUsageSlot struct{}
 
 func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage {
 	u := contentColorUsage{

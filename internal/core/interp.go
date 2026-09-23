@@ -148,7 +148,9 @@ const (
 // resKey identifies a resource dictionary by the sub-dictionaries the
 // interpreter reads. Two pages whose /Resources are different dictionaries
 // referring to the same /Font, /XObject … dictionaries execute a shared
-// content stream identically, and must share its memo entry.
+// content stream identically, and must share its memo entry. In a memo key
+// each sub-dictionary is its value's representative (memoKey), so two pages
+// that each write their own copy of the same /Font dictionary share it too.
 type resKey struct {
 	font, xobj, cs, pat, sh, gs *object.Dictionary
 }
@@ -208,6 +210,8 @@ type contentEngine struct {
 	allPagesDone bool
 	allAnnotDone bool
 	type3Enc     map[*object.Dictionary]map[byte]object.Name
+	// canon interns resource sub-dictionaries by value for memo keys.
+	canon DictInterner
 
 	// csUsed is every colour-space value executed content has used, each
 	// once (csSeen), in the order first used; see noteColourSpace.
@@ -264,6 +268,21 @@ func (e *contentEngine) resKeyOf(res *object.Dictionary) resKey {
 		pat:  d.ResolveDict(res.Get("Pattern")),
 		sh:   d.ResolveDict(res.Get("Shading")),
 		gs:   d.ResolveDict(res.Get("ExtGState")),
+	}
+}
+
+// memoKey is rk with each sub-dictionary replaced by its value's
+// representative. Only the memo key is interned: an execution reads the
+// dictionaries it was given, and one that is a memo hit reads none.
+func (e *contentEngine) memoKey(rk resKey) resKey {
+	d := e.doc
+	return resKey{
+		font: e.canon.Of(d, rk.font),
+		xobj: e.canon.Of(d, rk.xobj),
+		cs:   e.canon.Of(d, rk.cs),
+		pat:  e.canon.Of(d, rk.pat),
+		sh:   e.canon.Of(d, rk.sh),
+		gs:   e.canon.Of(d, rk.gs),
 	}
 }
 
@@ -375,7 +394,7 @@ func setOverprint(d View, gs *object.Dictionary, st *gstate) {
 func (e *contentEngine) run(data []byte, stream *object.Stream, res *object.Dictionary, entry gstate, kind execKind, annot bool) (devSet, int) {
 	e.doc.Charge(1)
 	rk := e.resKeyOf(res)
-	key := execKey{stream: stream, res: rk, entry: entry, kind: kind, annot: annot}
+	key := execKey{stream: stream, res: e.memoKey(rk), entry: entry, kind: kind, annot: annot}
 	if stream != nil {
 		if d, ok := e.inProg[key]; ok {
 			return 0, d // a cycle back to the execution at depth d
