@@ -137,7 +137,7 @@ type Document struct {
 // to change them. The resolved limits are stored on the returned Document, so
 // every validator and extractor that runs on it inherits the same configuration.
 func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(core.Canceler{}, r, size, "", resolveLimits(opts))
+	return readWithOptions(core.Canceler{}, r, size, "", opts)
 }
 
 // ReadWithPassword is Read with a user or owner password for an encrypted file.
@@ -147,7 +147,7 @@ func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
 // bytes are tried as well, for files written by producers that skip the
 // preparation; either must still match the file's password hash.
 func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(core.Canceler{}, r, size, password, resolveLimits(opts))
+	return readWithOptions(core.Canceler{}, r, size, password, opts)
 }
 
 // ReadContext is Read with cancellation. Parsing is not usually the expensive
@@ -163,12 +163,22 @@ func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option
 // genuinely lacks them, and every validator would then report the absence as a
 // conformance failure. See cancel.go.
 func ReadContext(ctx context.Context, r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(core.NewCanceler(ctx), r, size, "", resolveLimits(opts))
+	return readWithOptions(core.NewCanceler(ctx), r, size, "", opts)
 }
 
 // ReadWithPasswordContext is ReadWithPassword with cancellation; see ReadContext.
 func ReadWithPasswordContext(ctx context.Context, r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(core.NewCanceler(ctx), r, size, password, resolveLimits(opts))
+	return readWithOptions(core.NewCanceler(ctx), r, size, password, opts)
+}
+
+// readWithOptions is the Read entry points' shared front: an option value it
+// cannot honour is an error before anything is read (resolveLimits).
+func readWithOptions(cancel core.Canceler, r io.ReaderAt, size int64, password string, opts []Option) (*Document, error) {
+	lim, err := resolveLimits(opts)
+	if err != nil {
+		return nil, err
+	}
+	return readDocument(cancel, r, size, password, lim)
 }
 
 func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password string, lim core.Limits) (doc *Document, err error) {

@@ -330,8 +330,12 @@ func ParseXRefStream(stream *object.Stream, opts ...Option) (*XRefTable, error) 
 	if stream == nil {
 		return nil, fmt.Errorf("xref stream is nil")
 	}
+	lim, err := resolveLimits(opts)
+	if err != nil {
+		return nil, err
+	}
 	budget := &inUseBudget{left: inUseBudgetFloor + 64*int64(len(stream.Data))}
-	return parseXRefStream(core.Canceler{}, stream, resolveLimits(opts), budget)
+	return parseXRefStream(core.Canceler{}, stream, lim, budget)
 }
 
 // maxXRefFieldWidth is the widest /W field pdf0 reads: eight bytes, the width

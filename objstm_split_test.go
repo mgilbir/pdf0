@@ -24,7 +24,7 @@ import (
 func TestObjectStreamSplitBudget(t *testing.T) {
 	// 8192 makes objStmMaxRaw 4096 — small enough that a few padded objects need
 	// several containers.
-	lim := resolveLimits([]Option{WithMaxDecodedStreamBytes(8192)})
+	lim := mustResolveLimits([]Option{WithMaxDecodedStreamBytes(8192)})
 
 	const n = 200
 	doc := &Document{

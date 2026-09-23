@@ -125,7 +125,7 @@ func TestMetadataSurvivesContentBudget(t *testing.T) {
 	// page — and, before the fix, /Metadata — is never decoded. The budget is
 	// per-Document (limits.go), so lowering it here cannot leak into any other
 	// test, which is what the package-level var it replaced could not promise.
-	doc.limits = resolveLimits([]Option{WithMaxDecodedContentBytes(100)})
+	doc.limits = mustResolveLimits([]Option{WithMaxDecodedContentBytes(100)})
 
 	msgs := errMessages(ValidatePDFA(doc, pdfa.PDFA2b))
 	var bad []string
@@ -385,7 +385,7 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	// The nested read and validation inherit the outer document's limits, so a
 	// cap the embedded document cannot be validated under withholds the verdict
 	// rather than turning it into a 6.9 finding.
-	strict := resolveLimits([]Option{WithMaxDecodedContentBytes(1)})
+	strict := mustResolveLimits([]Option{WithMaxDecodedContentBytes(1)})
 	if _, complete := embeddedPDFACompliant(core.Canceler{}, innerBytes, strict); complete {
 		t.Error("a nested run that reported a checker finding must be reported as incomplete")
 	}
@@ -396,7 +396,7 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	// undecodable, so declaredPDFALevel reports "not PDF/A" for a file that may
 	// well be one. That is the checker's doing, not the file's, and it must
 	// withhold rather than condemn.
-	noMeta := resolveLimits([]Option{WithMaxContentStreamBytes(1)})
+	noMeta := mustResolveLimits([]Option{WithMaxContentStreamBytes(1)})
 	if compliant, complete := embeddedPDFACompliant(core.Canceler{}, innerBytes, noMeta); compliant || complete {
 		t.Errorf("metadata undecodable under a lowered cap: compliant=%v complete=%v, want false/false",
 			compliant, complete)

@@ -16,8 +16,8 @@ import (
 func TestLimitsZeroValueMeansDefaults(t *testing.T) {
 	want := core.DefaultLimits()
 
-	if got := resolveLimits(nil); got != want {
-		t.Errorf("resolveLimits(nil) = %+v, want %+v", got, want)
+	if got := mustResolveLimits(nil); got != want {
+		t.Errorf("mustResolveLimits(nil) = %+v, want %+v", got, want)
 	}
 	if got := (&Document{}).lim(); got != want {
 		t.Errorf("hand-built Document limits = %+v, want %+v", got, want)
@@ -57,7 +57,7 @@ func TestEveryOptionAppliesAndIsIsolated(t *testing.T) {
 	}
 	def := core.DefaultLimits()
 	for _, tc := range cases {
-		got := resolveLimits([]Option{tc.opt})
+		got := mustResolveLimits([]Option{tc.opt})
 		if v := tc.get(got); v != tc.want {
 			t.Errorf("%s: got %d, want %d", tc.name, v, tc.want)
 		}
@@ -77,7 +77,7 @@ func TestEveryOptionAppliesAndIsIsolated(t *testing.T) {
 // Options apply in order, so a later one wins — the usual functional-option
 // contract.
 func TestLaterOptionWins(t *testing.T) {
-	l := resolveLimits([]Option{WithMaxDecodedStreamBytes(1 << 20), WithMaxDecodedStreamBytes(2 << 20)})
+	l := mustResolveLimits([]Option{WithMaxDecodedStreamBytes(1 << 20), WithMaxDecodedStreamBytes(2 << 20)})
 	if l.DecodedStreamBytes != 2<<20 {
 		t.Errorf("got %d, want %d", l.DecodedStreamBytes, 2<<20)
 	}
@@ -87,7 +87,7 @@ func TestLaterOptionWins(t *testing.T) {
 // set independently: a container the writer emits but the reader refuses loses
 // every object it holds.
 func TestObjStmMaxRawDerivesFromDecodedStreamLimit(t *testing.T) {
-	l := resolveLimits([]Option{WithMaxDecodedStreamBytes(8192)})
+	l := mustResolveLimits([]Option{WithMaxDecodedStreamBytes(8192)})
 	if got := l.ObjStmMaxRaw(); got != 4096 {
 		t.Errorf("objStmMaxRaw = %d, want 4096", got)
 	}
@@ -179,7 +179,7 @@ func TestDecodedStreamLimitIsEnforced(t *testing.T) {
 		var buf bytes.Buffer
 		buf.Write(core.FlateEncode(payload))
 
-		lim := resolveLimits([]Option{WithMaxDecodedStreamBytes(64 << 10)})
+		lim := mustResolveLimits([]Option{WithMaxDecodedStreamBytes(64 << 10)})
 		if _, err := core.FlateDecode(core.Canceler{}, buf.Bytes(), lim); err == nil {
 			t.Error("expected the lowered decoded-stream cap to reject a 256 KiB payload")
 		}
