@@ -225,16 +225,18 @@ none of those document-level defects were present, not that the file is clean.
 says nothing about bytes outside that range, and nothing about whether the
 certificate is trustworthy. From the godoc:
 
-> A signed document can be modified after signing by an incremental update — the
-> original signed range stays intact (Valid == true) while the rendered content
-> changes (CoversWholeDocument == false). Use DocumentUnmodified for the combined
-> "signed and nothing was changed" verdict.
+> Intact: Valid, and every change made after signing is a permitted one
+> (ChangesAllowed): a Document Security Store or document time-stamp added for
+> long-term validation, say. A timestamp never makes a change permitted; it
+> proves only when bytes existed.
 
-Use `result.DocumentUnmodified()` (`Valid && CoversWholeDocument`) as your
-baseline verdict. For trust, `VerifySignatures` builds no chain at all — you must
-call `VerifySignaturesWithRoots(raw, roots)` and check `TrustedChain` / `ChainErr`,
-which are reported separately and never affect `Valid`. For long-term validation
-(PAdES B-T through B-LTA, timestamps, revocation) see
+Use `result.Intact()` (`Valid && ChangesAllowed`) as your baseline verdict, or
+`result.DocumentUnmodified()` (`Valid && CoversWholeDocument`) when nothing may
+have changed at all; `DisallowedChanges` names what changed. For trust,
+`VerifySignatures` builds a chain only to the roots you pass in
+`sign.VerifyOptions{Roots: …}` — with none, `TrustedChain` is always false —
+and reports `TrustedChain` / `ChainErr` separately; they never affect `Valid`.
+For long-term validation (PAdES B-T through B-LTA, timestamps, revocation) see
 [docs/signing.md](signing.md).
 
 ## An image came back with `Decoded=false`

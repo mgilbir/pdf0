@@ -143,11 +143,15 @@
 //
 // # Signatures
 //
-// Document.VerifySignatures reports one sign.Result per signature. Read the
-// verdict with sign.Result.DocumentUnmodified, which is Valid AND
-// CoversWholeDocument: Valid alone accepts a document whose content was changed
-// by a post-signing incremental update. VerifySignatures performs no trust-chain
-// check at all — use Document.VerifySignaturesWithRoots to populate TrustedChain.
+// Document.VerifySignatures reports one sign.Result per signature and document
+// time-stamp, verified against the file the document was read from. Read the
+// integrity verdict with sign.Result.Intact — Valid, and every change made after
+// signing a permitted one (a DSS or document time-stamp added for long-term
+// validation) — or sign.Result.DocumentUnmodified when nothing may have changed
+// at all: Valid alone accepts a document whose content was changed by a
+// post-signing incremental update. Trust comes only from the roots passed in
+// sign.VerifyOptions: with none, TrustedChain is always false. Pass the roots of
+// the signers you accept, never a web PKI pool such as x509.SystemCertPool.
 //
 // See docs/architecture.md for how bytes flow through Read and Write,
 // docs/validators.md for the validator family, and docs/signing.md for signing

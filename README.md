@@ -50,9 +50,10 @@ go get github.com/mgilbir/pdf0
 - **Sign and verify** digital signatures (`WriteSigned` / `VerifySignatures`,
   CMS/PKCS#7), including PAdES B-B through B-LTA (`ValidatePAdES`), RFC 3161
   timestamps, and CRL/OCSP revocation. Read the verdict with
-  `sign.Result.DocumentUnmodified()`, not `Valid` alone — `Valid` accepts a
-  document altered by a post-signing incremental update. `VerifySignatures`
-  performs no trust-chain check; use `VerifySignaturesWithRoots` for that.
+  `sign.Result.Intact()` (or `DocumentUnmodified()`), not `Valid` alone —
+  `Valid` accepts a document altered by a post-signing incremental update.
+  Trust is established only against the roots you pass in
+  `sign.VerifyOptions`; with none, no signer is trusted.
 - **Extract** text (`ExtractText`, which reports any page it had to leave
   out) and images (`ExtractImages`, or the lazy
   `Images` iterator for bounded memory on large scan files; decoding

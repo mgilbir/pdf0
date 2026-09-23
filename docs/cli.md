@@ -409,8 +409,8 @@ Everything below is implemented in the library and has **no** CLI surface. Absen
 | PDF/X, PDF/VT, PDF/VT-2, PDF/R | `ValidatePDFX(doc, pdfx.Level)`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR` |
 | DPart / document-part hierarchy | `ValidateDParts(doc)` |
 | Factur-X / ZUGFeRD, Order-X | `ValidateFacturX`, `ValidateOrderX`, `EmbedFacturX` |
-| Signature verification, PAdES | `VerifySignatures`, `VerifySignaturesWithRoots`, `ValidatePAdES(raw)`, `CheckCertRevocation`, `DSSCerts`, `DSSRevocationMaterial` |
-| Signing and timestamping | `WriteSigned`, `WriteSignedIncremental`, `WriteSignedTimestamped`, `WriteArchivalTimestamp` |
+| Signature verification, PAdES | `VerifySignatures`, `ValidatePAdES`, `CheckCertRevocation`, `DSSCerts`, `DSSRevocationMaterial` |
+| Signing and timestamping | `WriteSigned`, `WriteSignedIncremental` (with `WithSignatureTimestamp` for B-T), `WriteArchivalTimestamp` |
 | Image extraction | `ExtractImages()`, `Images()` (lazy iterator) |
 | Page extraction / subsetting | `ExtractPages(indices)` (returns the new document and an `ImportReport` of what was not carried); per-page text via `ExtractPageText(page)` |
 | Incremental write | `WriteIncremental(w, changed)`; the file it appends to is `Source()` |
