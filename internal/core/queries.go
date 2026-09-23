@@ -17,10 +17,24 @@ import (
 // was reached through, whether a dictionary is an annotation, the header version,
 // and an XMP packet decoded to UTF-8.
 
-// dictObjNum finds the object number whose value is the given dictionary. During
-// a validation run a reverse index is built once in the cache and reused, so the
-// many per-font and per-cell lookups do not each scan the whole object table
-// (which is quadratic on large documents — hundreds of thousands of objects).
+// ObjNumOf is the object number a finding about target anchors to: the object
+// whose value it is, or 0 — every validator's "no object" — for a dictionary
+// written directly inside another. DictObjNum's -1 is a sentinel for code that
+// needs to tell the two apart; in a finding it read as "object -1" (audit
+// 2026-09-22 C138). Validators anchor through this one (internal/lint's
+// TestValidatorsAnchorThroughObjNumOf).
+func (d View) ObjNumOf(target *object.Dictionary) int {
+	if n := d.DictObjNum(target); n > 0 {
+		return n
+	}
+	return 0
+}
+
+// DictObjNum finds the object number whose value is the given dictionary, or
+// -1. During a validation run a reverse index is built once in the cache and
+// reused, so the many per-font and per-cell lookups do not each scan the whole
+// object table (which is quadratic on large documents — hundreds of thousands
+// of objects).
 func (d View) DictObjNum(target *object.Dictionary) int {
 	// Two cross-reference slots may point at the same bytes, in which case Read
 	// stores one parsed value under both object numbers (see parsedByOffset), so

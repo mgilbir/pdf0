@@ -143,3 +143,49 @@ func typeCheckSnippet(t *testing.T, fset *token.FileSet, src string) (*ast.File,
 	}
 	return f, info, pkg
 }
+
+// TestValidatorsAnchorThroughObjNumOf catches a finding anchored to "object
+// -1". View.DictObjNum answers -1 for a dictionary written directly inside
+// another, a sentinel for code that must tell the two apart; passed straight
+// into a finding it read as "object -1", and used as a dedup key it merged
+// every direct dictionary into one report (audit 2026-09-22 C138). The
+// validators anchor through View.ObjNumOf, which answers 0, their "no object".
+func TestValidatorsAnchorThroughObjNumOf(t *testing.T) {
+	m := load(t)
+	var found []string
+	for _, p := range m.pkgs {
+		if !validatorPackages[p.path] {
+			continue
+		}
+		for _, f := range p.files {
+			found = append(found, dictObjNumCalls(m.fset, p.info, f)...)
+		}
+	}
+	sort.Strings(found)
+	for _, s := range found {
+		t.Errorf("%s: View.DictObjNum in a validator; anchor a finding with View.ObjNumOf", s)
+	}
+}
+
+// dictObjNumCalls returns "file:line" for every DictObjNum method call on an
+// internal/core View.
+func dictObjNumCalls(fset *token.FileSet, info *types.Info, f *ast.File) []string {
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "DictObjNum" {
+			return true
+		}
+		tv, ok := info.Types[sel.X]
+		if !ok {
+			return true
+		}
+		named, ok := tv.Type.(*types.Named)
+		if ok && named.Obj().Name() == "View" && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == "github.com/mgilbir/pdf0/internal/core" {
+			pos := fset.Position(sel.Pos())
+			out = append(out, fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line))
+		}
+		return true
+	})
+	return out
+}

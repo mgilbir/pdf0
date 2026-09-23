@@ -54,3 +54,38 @@ func TestUATableTHScope(t *testing.T) {
 		t.Error("TH with ID wrongly flagged")
 	}
 }
+
+// TestUATableTHScopeDirectCells: header cells written directly in their row
+// are each reported, at no object — not merged into one report under the
+// "object -1" every direct cell used to share (audit 2026-09-22 C138).
+func TestUATableTHScopeDirectCells(t *testing.T) {
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
+	th := func() *object.Dictionary {
+		d := &object.Dictionary{}
+		d.Set("S", object.Name("TH"))
+		return d
+	}
+	tr := &object.Dictionary{}
+	tr.Set("S", object.Name("TR"))
+	tr.Set("K", object.Array{th(), th(), th()})
+	table := &object.Dictionary{}
+	table.Set("S", object.Name("Table"))
+	table.Set("K", tr)
+	root := &object.Dictionary{}
+	root.Set("Type", object.Name("StructTreeRoot"))
+	root.Set("K", table)
+	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: root}
+	cat := &object.Dictionary{}
+	cat.Set("StructTreeRoot", object.IndirectRef{Number: 2})
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+
+	v := checkUATableTHScope(doc, cat)
+	if len(v) != 3 {
+		t.Fatalf("three direct header cells without Scope: want three findings, got %v", v)
+	}
+	for _, e := range v {
+		if e.Object != 0 {
+			t.Errorf("a direct cell anchored to object %d, want 0: %v", e.Object, e)
+		}
+	}
+}

@@ -1181,7 +1181,7 @@ func checkFontsEmbedded(doc core.View, level Level) []Violation {
 	// collectFonts walks, so they would escape the embedding rule. Include the
 	// executed-content fonts too (audit C21), deduped by dictionary pointer.
 	checked := make(map[*object.Dictionary]bool, len(fonts))
-	for objNum, fontDict := range fonts {
+	for fontDict, objNum := range fonts {
 		checked[fontDict] = true
 		if exemptInvisible[fontDict] {
 			continue
@@ -1208,10 +1208,7 @@ func checkFontsEmbedded(doc core.View, level Level) []Violation {
 // convention here matches the "unknown object" sentinel used in
 // Violation.Object; dictObjNum itself reports -1 on miss.
 func objNumForDict(doc core.View, dict *object.Dictionary) int {
-	if n := doc.DictObjNum(dict); n >= 0 {
-		return n
-	}
-	return 0
+	return doc.ObjNumOf(dict)
 }
 
 // fontObjNum returns the object number of a font dictionary, or 0 if it is a
@@ -1280,13 +1277,21 @@ func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int
 	}}
 }
 
-func collectFonts(doc core.View, pageTreeRef object.Object) map[int]*object.Dictionary {
-	fonts := make(map[int]*object.Dictionary)
+// collectFonts returns every font dictionary named in the page tree's
+// /Resources, each once, with the object number that holds it — 0 for a font
+// written directly inside a /Font dictionary.
+//
+// A font is identified by its dictionary, not by a number. Keyed by number, a
+// direct font had none, so each sighting got a fresh negative one: the same
+// font was reported once per page that reached it, as "object -1", "object
+// -2"... (audit 2026-09-22 C138).
+func collectFonts(doc core.View, pageTreeRef object.Object) map[*object.Dictionary]int {
+	fonts := make(map[*object.Dictionary]int)
 	collectFontsRecursive(doc, pageTreeRef, fonts, make(map[int]bool))
 	return fonts
 }
 
-func collectFontsRecursive(doc core.View, ref object.Object, fonts map[int]*object.Dictionary, seen map[int]bool) {
+func collectFontsRecursive(doc core.View, ref object.Object, fonts map[*object.Dictionary]int, seen map[int]bool) {
 	if r, ok := ref.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle in the page tree
@@ -1313,7 +1318,7 @@ func collectFontsRecursive(doc core.View, ref object.Object, fonts map[int]*obje
 	}
 }
 
-func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fonts map[int]*object.Dictionary) {
+func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fonts map[*object.Dictionary]int) {
 	resRef := pageOrPages.Get("Resources")
 	if resRef == nil {
 		return
@@ -1333,19 +1338,13 @@ func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fo
 	}
 
 	for fontRef := range fontDict.Values() {
-		objNum := 0
-		if iref, ok := fontRef.(object.IndirectRef); ok {
-			objNum = iref.Number
-		}
-
 		fd := doc.ResolveDict(fontRef)
 		if fd == nil {
 			continue
 		}
-		if objNum == 0 {
-			objNum = -len(fonts) - 1
+		if _, seen := fonts[fd]; !seen {
+			fonts[fd] = resolveObjNum(doc, fontRef)
 		}
-		fonts[objNum] = fd
 	}
 }
 
@@ -2572,7 +2571,7 @@ func checkFontSubsets(doc core.View, level Level) []Violation {
 	fonts := collectFonts(doc, pagesRef)
 	var errs []Violation
 
-	for objNum, fontDict := range fonts {
+	for fontDict, objNum := range fonts {
 		subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 		baseFont, _ := doc.ResolveName(fontDict.Get("BaseFont"))
 
