@@ -6,6 +6,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"math"
 	"strings"
 	"unicode"
 )
@@ -901,10 +902,27 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 	return errs
 }
 
+// checkType3Widths compares a Type 3 glyph's advance — the wx operand of the
+// d0/d1 operator that starts its CharProc — with the font's /Widths entry for
+// its code (ISO 32000-1 9.6.5, 9.10).
+//
+// Both numbers are in glyph space: Table 112 says so of a Type 3 font's
+// /Widths, unlike every other simple font's, and d0/d1 take glyph-space
+// operands. They are therefore compared as written, with no FontMatrix in
+// between. The check used to scale the advance into thousandths of text space
+// and compare that with the glyph-space /Widths, which agreed only when the
+// FontMatrix scale happened to be 0.001: a [1/2048 0 0 1/2048 0 0] font with
+// matching widths was reported, and so was every font with a rotated matrix,
+// whose a is 0 (audit 2026-09-22 C67).
+//
+// The FontMatrix still sets the tolerance. The other font kinds allow
+// glyphWidthTolerance thousandths of text space, and a glyph-space unit is
+// |FontMatrix·(1,0)| text-space units long, so the same allowance is
+// glyphWidthTolerance / (1000·|(a, b)|) glyph units: one unit for the usual
+// 0.001 matrix, and a thousandth of one for an identity matrix, whose glyph
+// space is text space. A matrix that maps the x axis to nothing gives no
+// length to compare on, and the check declines.
 func checkType3Widths(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
-	// A Type 3 glyph's advance is the w operand of its d0/d1 operator in the
-	// CharProc, transformed by the FontMatrix; it must match the Widths
-	// array (ISO 32000-1, 9.6.5 / 9.10). Compare in glyph space.
 	charProcs := doc.ResolveDict(fontDict.Get("CharProcs"))
 	if charProcs == nil {
 		return nil
@@ -916,6 +934,11 @@ func checkType3Widths(doc core.View, level Level, rule string, fontDict *object.
 	if !rendersVisibly(u) {
 		return nil
 	}
+	unit := math.Hypot(fm[0], fm[1]) // text-space length of one glyph-space x unit
+	if unit == 0 || math.IsNaN(unit) || math.IsInf(unit, 0) {
+		return nil
+	}
+	tolerance := glyphWidthTolerance / (1000 * unit)
 
 	var errs []Violation
 	reported := false
@@ -934,10 +957,7 @@ func checkType3Widths(doc core.View, level Level, rule string, fontDict *object.
 			if !havePDF {
 				continue
 			}
-			// Transform glyph-space width to text space via the FontMatrix
-			// x-scale, then to 1/1000 units.
-			progW := glyphW * fm[0] * 1000
-			if absf(pdfW-progW) > glyphWidthTolerance && !reported {
+			if absf(pdfW-glyphW) > tolerance && !reported {
 				reported = true
 				errs = append(errs, Violation{Rule: fontClause("width", level), Level: level,
 					Message: "width information for glyphs used for rendering is inconsistent in Type3 font", Object: u.ObjNum})
