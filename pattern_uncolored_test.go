@@ -147,6 +147,35 @@ func TestUncoloredPatternRefusesWhatItWouldIgnore(t *testing.T) {
 	}
 }
 
+// TestUncoloredCellSeesInlineImages: a form carried over from a read document
+// can paint an inline image, which the content lexer reports whole. One that
+// is not a stencil mask is refused like an image XObject; a stencil mask
+// (/IM true) is allowed. Binary sample bytes that spell an operator are not
+// read as one.
+func TestUncoloredCellSeesInlineImages(t *testing.T) {
+	doc := NewDocument()
+	form := func(body string) object.Object {
+		return doc.Add(object.NewStream(object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("XObject")},
+			object.Entry{Key: "Subtype", Value: object.Name("Form")},
+			object.Entry{Key: "BBox", Value: object.Array{object.Integer(0), object.Integer(0), object.Integer(1), object.Integer(1)}},
+			object.Entry{Key: "Length", Value: object.Integer(len(body))},
+		), []byte(body)))
+	}
+	var b content.Builder
+	b.Draw("Fm0")
+	colour := uncolored(&b, map[object.Name]object.Object{"Fm0": form("q BI /W 1 /H 1 /CS /G /BPC 8 ID \x00 EI Q")}, nil)
+	if _, err := doc.AddTilingPattern(colour); err == nil || !strings.Contains(err.Error(), "inline image") {
+		t.Errorf("a colour inline image in the cell's form: err = %v, want the inline image refused", err)
+	}
+	var b2 content.Builder
+	b2.Draw("Fm0")
+	mask := uncolored(&b2, map[object.Name]object.Object{"Fm0": form("q BI /W 8 /H 1 /IM true /L 2 ID rg EI Q")}, nil)
+	if _, err := doc.AddTilingPattern(mask); err != nil {
+		t.Errorf("a stencil-mask inline image whose data spells rg was refused: %v", err)
+	}
+}
+
 // TestUncoloredCheckStopsAtACycle pins that a form that draws itself, which a
 // read document can contain, ends the walk rather than recursing for ever.
 func TestUncoloredCheckStopsAtACycle(t *testing.T) {

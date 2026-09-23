@@ -208,17 +208,20 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 		pending = nil
 	}
 
-	core.ForEachContentItem(doc.Cancel, data, func(kind core.ContentItemKind, payload []byte) {
-		switch kind {
-		case core.ItemName:
-			lastName = string(payload)
+	lx := core.NewContentLexer(doc.Cancel, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentName:
+			lastName = t.Name()
 			dictIsLatest = false
-		case core.ItemDict:
-			lastDict = parseContentDict(payload)
+		case core.ContentDictStart:
+			lastDict = parseContentDict(lx.SkipDict(&t))
 			dictIsLatest = true
-		case core.ItemString:
-			pending = append(pending, payload)
-		case core.ItemOperator:
+		case core.ContentString, core.ContentHexString:
+			pending = append(pending, t.Bytes())
+		case core.ContentOperator:
+			payload := t.Raw
 			switch string(payload) {
 			case "Tf":
 				font = nil
@@ -251,7 +254,7 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 			}
 			dictIsLatest = false
 		}
-	})
+	}
 	if untagged {
 		f.untagged = append(f.untagged, pg.ObjNum)
 	}

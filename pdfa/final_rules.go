@@ -159,87 +159,31 @@ func checkFileTrailerID(doc core.View, level Level) []Violation {
 }
 
 // inlineImageEntries returns the parameter dictionary of every inline image
-// in a content stream as key -> first-value-token maps.
+// in a content stream as key -> first-value-token maps: a name without its
+// slash, a bareword or number as written, and "[array]" for an array.
 func inlineImageEntries(data []byte) []map[string]string {
 	var out []map[string]string
-	n := len(data)
-	i := 0
-	for i < n {
-		if data[i] == 'B' && i+1 < n && data[i+1] == 'I' &&
-			(i == 0 || core.IsContentWS(data[i-1]) || core.IsContentDelim(data[i-1])) &&
-			(i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2])) {
-			i += 2
-			out = append(out, parseInlineDictEntries(data, &i))
+	lx := core.NewContentLexer(core.Canceler{}, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		if t.Kind != core.ContentInlineImage {
 			continue
 		}
-		i++
+		entries := map[string]string{}
+		for _, p := range core.ParseInlineImageParams(t.Params) {
+			switch {
+			case p.Array:
+				entries[p.Key] = "[array]"
+			case len(p.Value) == 0:
+			case p.Value[0].Kind == core.ContentName:
+				entries[p.Key] = p.Value[0].Name()
+			default:
+				entries[p.Key] = string(p.Value[0].Raw)
+			}
+		}
+		out = append(out, entries)
 	}
 	return out
-}
-
-// parseInlineDictEntries reads an inline image parameter dictionary up to ID,
-// returning each key mapped to its first value token (names without the
-// leading slash, or barewords such as true/false/numbers).
-func parseInlineDictEntries(data []byte, pos *int) map[string]string {
-	entries := map[string]string{}
-	n := len(data)
-	i := *pos
-	var pendingKey string
-	readToken := func() string {
-		start := i
-		if i < n && data[i] == '/' {
-			i++
-			start = i
-		}
-		for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-			i++
-		}
-		return string(data[start:i])
-	}
-	for i < n {
-		switch b := data[i]; {
-		case core.IsContentWS(b):
-			i++
-		case b == 'I' && i+1 < n && data[i+1] == 'D' &&
-			(i+2 >= n || core.IsContentWS(data[i+2])):
-			*pos = i + 2
-			core.SkipInlineImage(data, pos)
-			return entries
-		case b == '/':
-			name := readToken()
-			if pendingKey == "" {
-				pendingKey = name
-			} else {
-				entries[pendingKey] = name
-				pendingKey = ""
-			}
-		case b == '[':
-			// Array value: record it opaquely and skip to ']'.
-			i++
-			for i < n && data[i] != ']' {
-				i++
-			}
-			if i < n {
-				i++
-			}
-			if pendingKey != "" {
-				entries[pendingKey] = "[array]"
-				pendingKey = ""
-			}
-		default:
-			tok := readToken()
-			if tok == "" {
-				i++
-				continue
-			}
-			if pendingKey != "" {
-				entries[pendingKey] = tok
-				pendingKey = ""
-			}
-		}
-	}
-	*pos = i
-	return entries
 }
 
 // forbiddenAAEvents are the additional-action trigger events prohibited by
@@ -343,35 +287,19 @@ func checkActualTextPUA(doc core.View, level Level) []Violation {
 }
 
 // contentActualTexts extracts the (decoded) value of every /ActualText entry
-// appearing in a content stream's inline marked-content property lists.
+// appearing in a content stream's inline marked-content property lists: a
+// name token /ActualText followed by a string. Dictionaries are read token by
+// token, not skipped, because that is where the entry lives.
 func contentActualTexts(data []byte) [][]byte {
 	var out [][]byte
-	n := len(data)
-	i := 0
-	for i < n {
-		// Find "/ActualText" as a name token.
-		if data[i] == '/' && i+11 <= n && string(data[i+1:i+11]) == "ActualText" {
-			i += 11
-			for i < n && core.IsContentWS(data[i]) {
-				i++
-			}
-			if i < n && data[i] == '<' {
-				j := i + 1
-				for j < n && data[j] != '>' {
-					j++
-				}
-				out = append(out, decodeHexBytes(data[i+1:j]))
-				i = j + 1
-				continue
-			}
-			if i < n && data[i] == '(' {
-				str, next := core.DecodeContentLiteralString(data, i)
-				out = append(out, str)
-				i = next
-				continue
-			}
+	lx := core.NewContentLexer(core.Canceler{}, data)
+	var t core.ContentTok
+	afterKey := false
+	for lx.Next(&t) {
+		if afterKey && (t.Kind == core.ContentString || t.Kind == core.ContentHexString) {
+			out = append(out, t.Bytes())
 		}
-		i++
+		afterKey = t.Kind == core.ContentName && t.Name() == "ActualText"
 	}
 	return out
 }

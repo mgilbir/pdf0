@@ -350,114 +350,34 @@ func (l *Lexer) scanToken() (Token, error) {
 	}
 }
 
-// scanLiteralString scans a parenthesized string with balanced parens and escapes.
+// scanLiteralString scans a parenthesized string with balanced parens and
+// escapes, through the shared decoder (decode.go).
 func (l *Lexer) scanLiteralString(offset int64) (Token, error) {
-	l.advance() // consume '('
-	var buf bytes.Buffer
-	depth := 1
-
-	for !l.atEnd() {
-		b := l.advance()
-		switch b {
-		case '(':
-			depth++
-			buf.WriteByte('(')
-		case ')':
-			depth--
-			if depth == 0 {
-				return Token{
-					Type:   TokenString,
-					Value:  buf.Bytes(),
-					Offset: offset,
-				}, nil
-			}
-			buf.WriteByte(')')
-		case '\\':
-			if l.atEnd() {
-				return Token{}, fmt.Errorf("unexpected end of input in string escape at offset %d", offset)
-			}
-			next := l.advance()
-			switch next {
-			case 'n':
-				buf.WriteByte('\n')
-			case 'r':
-				buf.WriteByte('\r')
-			case 't':
-				buf.WriteByte('\t')
-			case 'b':
-				buf.WriteByte('\b')
-			case 'f':
-				buf.WriteByte('\f')
-			case '(':
-				buf.WriteByte('(')
-			case ')':
-				buf.WriteByte(')')
-			case '\\':
-				buf.WriteByte('\\')
-			case '\r':
-				// Line continuation: \<CR> or \<CR><LF>
-				if !l.atEnd() && l.peek() == '\n' {
-					l.advance()
-				}
-			case '\n':
-				// Line continuation: \<LF>
-			default:
-				// Octal escape: 1-3 octal digits
-				if next >= '0' && next <= '7' {
-					octal := int(next - '0')
-					for i := 0; i < 2; i++ {
-						if !l.atEnd() && l.peek() >= '0' && l.peek() <= '7' {
-							octal = octal*8 + int(l.advance()-'0')
-						} else {
-							break
-						}
-					}
-					buf.WriteByte(byte(octal))
-				} else {
-					// Unknown escape: just emit the character
-					buf.WriteByte(next)
-				}
-			}
-		case '\r':
-			// Normalize \r and \r\n to \n within strings
-			if !l.atEnd() && l.peek() == '\n' {
-				l.advance()
-			}
-			buf.WriteByte('\n')
-		default:
-			buf.WriteByte(b)
-		}
+	value, end, ok := DecodeLiteralString(l.data, int(l.pos))
+	if !ok {
+		l.pos = int64(len(l.data))
+		return Token{}, fmt.Errorf("unterminated literal string starting at offset %d", offset)
 	}
-
-	return Token{}, fmt.Errorf("unterminated literal string starting at offset %d", offset)
+	l.pos = int64(end)
+	return Token{Type: TokenString, Value: value, Offset: offset}, nil
 }
 
-// scanHexString scans a hex-encoded string <...>.
+// scanHexString scans a hex-encoded string <...>, through the shared decoder
+// (decode.go). A byte that is neither a hex digit nor white space makes the
+// string invalid: the object lexer is strict where the content lexer is not.
 func (l *Lexer) scanHexString(offset int64) (Token, error) {
-	l.advance() // consume '<'
-	var hexDigits []byte
-
-	for !l.atEnd() {
-		b := l.advance()
-		if b == '>' {
-			// Decode hex digits
-			decoded, err := DecodeHex(hexDigits)
-			if err != nil {
-				return Token{}, fmt.Errorf("invalid hex string at offset %d: %w", offset, err)
-			}
-			return Token{
-				Type:   TokenString,
-				Value:  decoded,
-				Offset: offset,
-			}, nil
-		}
-		if IsWhitespace(b) {
-			continue // ignore whitespace in hex strings
-		}
-		hexDigits = append(hexDigits, b)
+	start := int(l.pos) + 1 // past '<'
+	rel := bytes.IndexByte(l.data[start:], '>')
+	if rel < 0 {
+		l.pos = int64(len(l.data))
+		return Token{}, fmt.Errorf("unterminated hex string starting at offset %d", offset)
 	}
-
-	return Token{}, fmt.Errorf("unterminated hex string starting at offset %d", offset)
+	l.pos = int64(start + rel + 1)
+	decoded, ok := DecodeHexString(l.data[start : start+rel])
+	if !ok {
+		return Token{}, fmt.Errorf("invalid hex string at offset %d: a byte that is neither a hex digit nor white space", offset)
+	}
+	return Token{Type: TokenString, Value: decoded, Offset: offset}, nil
 }
 
 // DecodeHex decodes hex digit bytes into a byte slice.
@@ -493,46 +413,23 @@ func hexVal(b byte) (byte, error) {
 	return 0, fmt.Errorf("invalid hex digit: %c", b)
 }
 
-// scanName scans a PDF name token.
+// scanName scans a PDF name token, expanding #xx escapes through the shared
+// decoder (decode.go).
 func (l *Lexer) scanName(offset int64) (Token, error) {
 	l.advance() // consume '/'
-	var buf bytes.Buffer
-
-	for !l.atEnd() {
-		b := l.peek()
-		if IsWhitespace(b) || IsDelimiter(b) {
-			break
-		}
+	start := l.pos
+	for !l.atEnd() && IsRegular(l.peek()) {
 		l.advance()
-		if b == '#' {
-			// Hex-encoded character
-			if l.pos+1 >= l.size {
-				return Token{}, fmt.Errorf("incomplete hex escape in name at offset %d", offset)
-			}
-			hi, err := hexVal(l.advance())
-			if err != nil {
-				return Token{}, fmt.Errorf("invalid hex escape in name at offset %d: %w", offset, err)
-			}
-			lo, err := hexVal(l.advance())
-			if err != nil {
-				return Token{}, fmt.Errorf("invalid hex escape in name at offset %d: %w", offset, err)
-			}
-			if hi<<4|lo == 0 {
-				// The spec forbids NUL in names (7.3.5): #00 has no valid
-				// meaning and is a common smuggling vector.
-				return Token{}, fmt.Errorf("name contains #00 (NUL) at offset %d", offset)
-			}
-			buf.WriteByte(hi<<4 | lo)
-		} else {
-			buf.WriteByte(b)
-		}
 	}
-
-	return Token{
-		Type:   TokenName,
-		Value:  buf.Bytes(),
-		Offset: offset,
-	}, nil
+	raw := l.data[start:l.pos]
+	value, err := DecodeName(raw)
+	if err != nil {
+		return Token{}, fmt.Errorf("%w at offset %d", err, offset)
+	}
+	if len(value) > 0 && &value[0] == &raw[0] {
+		value = append([]byte(nil), raw...) // a token's Value never aliases the source
+	}
+	return Token{Type: TokenName, Value: value, Offset: offset}, nil
 }
 
 // scanNumber scans an integer or real number token.

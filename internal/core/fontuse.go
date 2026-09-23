@@ -493,41 +493,36 @@ func buildFontEvents(cancel Canceler, data []byte) []FontEvent {
 		return nil
 	}
 	var events []FontEvent
-	// lastName/lastNumber hold the raw operand bytes, which forEachContentItem
-	// reports as sub-slices of data. Converting them to strings on arrival cost
-	// one allocation per token — 87% of the whole PDF/UA run's allocations, since
-	// numbers are by far the most common token and only the rare Tr ever reads
-	// one. The conversion now happens where the value is consumed.
-	var lastName, lastNumber []byte
+	// lastName and lastNumber are kept as tokens, whose bytes are sub-slices of
+	// data: converting every name and number on arrival cost one allocation
+	// per token — 87% of a PDF/UA run's allocations, since numbers are by far
+	// the most common token and only the rare Tf and Tr read one.
+	var lastName, lastNumber ContentTok
 	var pending [][]byte
-	ForEachContentItem(cancel, data, func(kind ContentItemKind, payload []byte) {
-		switch kind {
-		case ItemName:
-			lastName = payload
-		case ItemNumber:
-			lastNumber = payload
-		case ItemString:
-			pending = append(pending, append([]byte(nil), payload...))
-		case ItemOperator:
-			switch string(payload) {
+	lx := NewContentLexer(cancel, data)
+	var t ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case ContentName:
+			lastName = t
+		case ContentNumber:
+			lastNumber = t
+		case ContentString, ContentHexString:
+			pending = append(pending, t.Bytes())
+		case ContentDictStart:
+			lx.SkipDict(&t)
+		case ContentOperator:
+			switch string(t.Raw) {
 			case "Tf":
-				events = append(events, FontEvent{kind: evTf, name: string(lastName)})
-				pending = nil
+				events = append(events, FontEvent{kind: evTf, name: lastName.Name()})
 			case "Tr":
-				m := 0
-				if len(lastNumber) > 0 {
-					fmt.Sscanf(string(lastNumber), "%d", &m)
-				}
-				events = append(events, FontEvent{kind: evTr, mode: m})
-				pending = nil
+				events = append(events, FontEvent{kind: evTr, mode: int(lastNumber.Number())})
 			case "Tj", "TJ", "'", "\"":
 				events = append(events, FontEvent{kind: evShow, strings: pending})
-				pending = nil
-			default:
-				pending = nil
 			}
+			pending = nil
 		}
-	})
+	}
 	return events
 }
 
@@ -568,391 +563,50 @@ func ContentUsedNames(cancel Canceler, data []byte) UsedResourceNames {
 		Patterns: make(map[string]bool),
 		Shadings: make(map[string]bool),
 	}
-	var lastName string
-	ForEachContentToken(cancel, data, func(tok []byte, isName bool) {
-		if isName {
-			lastName = string(tok)
-			return
+	var lastName ContentTok
+	lx := NewContentLexer(cancel, data)
+	var t ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case ContentName:
+			lastName = t
+		case ContentDictStart:
+			lx.SkipDict(&t)
+		case ContentOperator:
+			switch string(t.Raw) {
+			case "Do":
+				u.XObjects[lastName.Name()] = true
+			case "sh":
+				u.Shadings[lastName.Name()] = true
+			case "scn", "SCN":
+				// A pattern is set by name; non-pattern scn uses numeric
+				// operands, in which case lastName is stale — over-recording is
+				// harmless (it only widens the scan).
+				u.Patterns[lastName.Name()] = true
+			}
 		}
-		switch string(tok) {
-		case "Do":
-			u.XObjects[lastName] = true
-		case "sh":
-			u.Shadings[lastName] = true
-		case "scn", "SCN":
-			// A pattern is set by name; non-pattern scn uses numeric
-			// operands, in which case lastName is stale — over-recording is
-			// harmless (it only widens the scan).
-			u.Patterns[lastName] = true
-		}
-	})
+	}
 	return u
 }
 
-type ContentItemKind int
-
-// ScanContentDict returns the index just past the >> that closes the dictionary
-// starting at i (which must be a <<). Nested dictionaries, literal strings and
-// hex strings are stepped over, so a ">>" inside "(a>>b)" does not end the scan.
-//
-// An unterminated dictionary returns len(data): a truncated content stream must
-// leave the caller at the end of the input rather than at the delimiter it was
-// looking at, which would not advance the scan. Nesting is capped for the same
-// reason every other content walk is — the input is untrusted, and a file of
-// nothing but "<<" must cost time proportional to its length, not to its depth.
-func ScanContentDict(data []byte, i int) int {
-	const maxDepth = 64
-	n := len(data)
-	depth := 0
-	for i < n {
-		switch {
-		case data[i] == '<' && i+1 < n && data[i+1] == '<':
-			depth++
-			i += 2
-			if depth > maxDepth {
-				return n
-			}
-		case data[i] == '>' && i+1 < n && data[i+1] == '>':
-			depth--
-			i += 2
-			if depth == 0 {
-				return i
-			}
-		case data[i] == '(':
-			_, i = DecodeContentLiteralString(data, i)
-		case data[i] == '<':
-			i++
-			for i < n && data[i] != '>' {
-				i++
-			}
-			if i < n {
-				i++
-			}
-		default:
-			i++
-		}
-	}
-	return n
-}
-
-// ForEachContentItem tokenizes a decoded content stream like
-// forEachContentToken, additionally reporting decoded string operands and
-// distinguishing numbers from operators.
-//
-// The scan stops when cancel fires. Together with forEachContentToken this is
-// about two thirds of a large document's validation time, which is why the
-// check is gated on the scan position — one comparison per token, the poll
-// itself once per cancelScanBytes. See cancel.go.
-func ForEachContentItem(cancel Canceler, data []byte, fn func(kind ContentItemKind, payload []byte)) {
-	n := len(data)
-	i := 0
-	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
-	for i < n {
-		if i >= nextCancelCheck {
-			if cancel.Stopped() {
-				return
-			}
-			nextCancelCheck = i + CancelScanBytes
-		}
-		for i < n && IsContentWS(data[i]) {
-			i++
-		}
-		if i >= n {
-			return
-		}
-		switch b := data[i]; {
-		case b == '%':
-			for i < n && data[i] != '\n' && data[i] != '\r' {
-				i++
-			}
-		case b == '(':
-			str, next := DecodeContentLiteralString(data, i)
-			fn(ItemString, str)
-			i = next
-		case b == '<' && i+1 < n && data[i+1] == '<':
-			end := ScanContentDict(data, i)
-			fn(ItemDict, data[i:end])
-			i = end
-		case b == '<':
-			i++
-			start := i
-			for i < n && data[i] != '>' {
-				i++
-			}
-			fn(ItemString, decodeHexBytes(data[start:i]))
-			if i < n {
-				i++
-			}
-		case b == '>':
-			i++
-			if i < n && data[i] == '>' {
-				i++
-			}
-		case b == '[' || b == ']' || b == '{' || b == '}' || b == ')':
-			// A stray ')' (unbalanced by any '(') is not the start of a token;
-			// consume it so the scan always advances. Without this, a content
-			// stream with an unmatched ')' — e.g. leaked inline-image sample
-			// data — spins forever, since ')' is a delimiter the default token
-			// scan below cannot consume (a parser DoS on untrusted input).
-			i++
-		case b == '/':
-			i++
-			start := i
-			for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-				i++
-			}
-			fn(ItemName, data[start:i])
-		default:
-			start := i
-			// Numeric tokens may be arbitrarily long (Annex C allows huge
-			// precision); read them whole. Non-numeric keyword tokens are
-			// capped to bound scanning over stray binary data.
-			numeric := data[i] >= '0' && data[i] <= '9' || data[i] == '+' || data[i] == '-' || data[i] == '.'
-			for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-				i++
-			}
-			if i == start {
-				// Defensive: an unhandled delimiter would yield no token and no
-				// progress. Skip it so the scan can never stall.
-				i++
-				continue
-			}
-			if !numeric && i-start > MaxContentTokenLen {
-				continue // binary run, not a keyword; see scanStreamForDeviceOps
-			}
-			tok := data[start:i]
-			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
-				SkipInlineImage(data, &i)
-				continue
-			}
-			if numeric {
-				fn(ItemNumber, tok)
-				continue
-			}
-			fn(ItemOperator, tok)
-		}
-	}
-}
-
-// ForEachContentToken is forEachContentOperator's core walker; it also
-// reports name tokens (without the leading slash) so callers can associate
-// operand names with the operators that consume them.
-//
-// The scan stops when cancel fires, checked every cancelScanBytes of input;
-// see cancel.go for why the check is gated on the scan position rather than
-// run per token.
-func ForEachContentToken(cancel Canceler, data []byte, fn func(tok []byte, isName bool)) {
-	n := len(data)
-	i := 0
-	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
-	for i < n {
-		if i >= nextCancelCheck {
-			if cancel.Stopped() {
-				return
-			}
-			nextCancelCheck = i + CancelScanBytes
-		}
-		for i < n && IsContentWS(data[i]) {
-			i++
-		}
-		if i >= n {
-			return
-		}
-		switch b := data[i]; {
-		case b == '%': // comment to end of line
-			for i < n && data[i] != '\n' && data[i] != '\r' {
-				i++
-			}
-		case b == '(': // string literal with escapes and balanced parens
-			depth := 1
-			i++
-			for i < n && depth > 0 {
-				switch data[i] {
-				case '\\':
-					i++ // skip escaped char
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
-				i++
-			}
-		case b == '<':
-			i++
-			if i < n && data[i] == '<' {
-				i++ // <<
-			} else { // hex string
-				for i < n && data[i] != '>' {
-					i++
-				}
-				if i < n {
-					i++
-				}
-			}
-		case b == '>':
-			i++
-			if i < n && data[i] == '>' {
-				i++
-			}
-		case b == '[' || b == ']' || b == '{' || b == '}' || b == ')':
-			// A stray ')' is a delimiter, not a token start; consume it so the
-			// scan always advances (an unmatched ')' would otherwise spin
-			// forever — a DoS on untrusted content).
-			i++
-		case b == '/':
-			i++
-			start := i
-			for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-				i++
-			}
-			fn(data[start:i], true)
-		default:
-			start := i
-			for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-				i++
-			}
-			if i == start {
-				// Defensive: an unhandled delimiter yields no progress; skip it.
-				i++
-				continue
-			}
-			if i-start > MaxContentTokenLen {
-				continue // binary run, not a token; see scanStreamForDeviceOps
-			}
-			tok := data[start:i]
-			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
-				SkipInlineImage(data, &i)
-				continue
-			}
-			fn(tok, false)
-		}
-	}
-}
-
-const (
-	ItemOperator ContentItemKind = iota
-	ItemName
-	ItemString
-	ItemNumber
-	// ItemDict reports a dictionary operand — a BDC/DP property list — as the
-	// raw bytes from << to the matching >>. It is delivered whole rather than as
-	// the loose tokens between the delimiters because a property list is a PDF
-	// object: only a parser can tell /Lang's value from a name that happens to
-	// follow it. Callers that do not care simply omit the case.
-	ItemDict
-)
-
 // MaxContentTokenLen is the longest run of non-delimiter bytes the content
-// tokenizers will hand to a caller as a token. Every PDF operator is at most
+// lexer will hand to a caller as a keyword. Every PDF operator is at most
 // three characters and no keyword operand comes close to this, so a longer run
 // is binary data that a delimiter never terminated — most often the sample
 // bytes of an inline image whose EI was not found.
 //
-// The scanners drop such a run whole. They used to stop reading at the cap and
-// let the scan re-enter mid-run, which manufactured tokens out of binary: a
+// The lexer drops such a run whole. Scanners used to stop reading at the cap
+// and let the scan re-enter mid-run, which manufactured tokens out of binary: a
 // 300-byte run whose 257th byte was 'k' produced a one-byte "k" operator and
 // with it "DeviceCMYK used without matching OutputIntent or DefaultCMYK", and
 // an alphabetic fragment produced "content stream contains an operator not
-// defined in ISO 32000" — findings the complete token never supports. Reading
-// the run to its end costs the same single linear pass the chunked version did.
+// defined in ISO 32000" — findings the complete token never supports.
 //
 // This one is not configurable, and deliberately: it is not a resource ceiling
 // a caller might want to spend more on but a statement about what a PDF token
 // can be. Moving it would change which byte runs count as operators, i.e. what
 // the tokenizer means, not how much of it runs.
 const MaxContentTokenLen = 256
-
-// decodeHexBytes decodes hex-string content, tolerating white space and
-// padding an odd digit count. The root package keeps its own copy for the
-// file-structure rules; the function is frozen by the syntax of a PDF hex
-// string, so there is nothing for the two to drift about.
-func decodeHexBytes(b []byte) []byte {
-	var digits []byte
-	for _, c := range b {
-		switch {
-		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
-			digits = append(digits, c)
-		}
-	}
-	if len(digits)%2 == 1 {
-		digits = append(digits, '0')
-	}
-	out := make([]byte, len(digits)/2)
-	hv := func(c byte) byte {
-		switch {
-		case c <= '9':
-			return c - '0'
-		case c >= 'a':
-			return c - 'a' + 10
-		}
-		return c - 'A' + 10
-	}
-	for i := 0; i < len(out); i++ {
-		out[i] = hv(digits[2*i])<<4 | hv(digits[2*i+1])
-	}
-	return out
-}
-
-func DecodeContentLiteralString(data []byte, i int) ([]byte, int) {
-	n := len(data)
-	var out []byte
-	depth := 1
-	i++
-	for i < n && depth > 0 {
-		c := data[i]
-		switch c {
-		case '\\':
-			i++
-			if i >= n {
-				break
-			}
-			e := data[i]
-			switch e {
-			case 'n':
-				out = append(out, '\n')
-			case 'r':
-				out = append(out, '\r')
-			case 't':
-				out = append(out, '\t')
-			case 'b':
-				out = append(out, '\b')
-			case 'f':
-				out = append(out, '\f')
-			case '\n': // line continuation
-			case '\r':
-				if i+1 < n && data[i+1] == '\n' {
-					i++
-				}
-			default:
-				if e >= '0' && e <= '7' {
-					v := int(e - '0')
-					for k := 0; k < 2 && i+1 < n && data[i+1] >= '0' && data[i+1] <= '7'; k++ {
-						i++
-						v = v<<3 | int(data[i]-'0')
-					}
-					out = append(out, byte(v))
-				} else {
-					out = append(out, e)
-				}
-			}
-			i++
-		case '(':
-			depth++
-			out = append(out, c)
-			i++
-		case ')':
-			depth--
-			if depth > 0 {
-				out = append(out, c)
-			}
-			i++
-		default:
-			out = append(out, c)
-			i++
-		}
-	}
-	return out, i
-}
 
 // Has reports whether CID i is marked present.
 func (c CIDSet) Has(i int) bool {

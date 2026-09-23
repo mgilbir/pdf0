@@ -18,40 +18,6 @@ import (
 
 // --- content walking: text usage per font ---
 
-// core.ContentItemKind classifies items reported by core.ForEachContentItem.
-
-// core.DecodeContentLiteralString decodes a (...) string starting at open paren;
-// returns the decoded bytes and the index just past the closing paren.
-
-// decodeHexBytes decodes hex-string content (whitespace tolerated, odd
-// length padded with 0).
-func decodeHexBytes(b []byte) []byte {
-	var digits []byte
-	for _, c := range b {
-		switch {
-		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
-			digits = append(digits, c)
-		}
-	}
-	if len(digits)%2 == 1 {
-		digits = append(digits, '0')
-	}
-	out := make([]byte, len(digits)/2)
-	hv := func(c byte) byte {
-		switch {
-		case c <= '9':
-			return c - '0'
-		case c >= 'a':
-			return c - 'a' + 10
-		}
-		return c - 'A' + 10
-	}
-	for i := 0; i < len(out); i++ {
-		out[i] = hv(digits[2*i])<<4 | hv(digits[2*i+1])
-	}
-	return out
-}
-
 // --- predefined CMaps (ISO 32000-1, 9.7.5.2, Table 118) ---
 
 // --- dictionary-level font checks ---
@@ -1250,15 +1216,14 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 	var nums []float64
 	found := false
 	var w float64
-	core.ForEachContentItem(doc.Cancel, data, func(kind core.ContentItemKind, payload []byte) {
-		if found {
-			return
-		}
-		switch kind {
-		case core.ItemNumber:
-			nums = append(nums, numVal(parseNumberToken(payload)))
-		case core.ItemOperator:
-			switch string(payload) {
+	lx := core.NewContentLexer(doc.Cancel, data)
+	var t core.ContentTok
+	for !found && lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentNumber:
+			nums = append(nums, numVal(parseNumberToken(t.Raw)))
+		case core.ContentOperator:
+			switch string(t.Raw) {
 			case "d0", "d1":
 				if len(nums) >= 1 {
 					w = nums[0]
@@ -1267,10 +1232,13 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 			default:
 				nums = nums[:0]
 			}
+		case core.ContentDictStart:
+			lx.SkipDict(&t)
+			nums = nums[:0]
 		default:
 			nums = nums[:0]
 		}
-	})
+	}
 	return w, found
 }
 

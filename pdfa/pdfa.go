@@ -4076,17 +4076,20 @@ func inheritedPageAttr(doc core.View, page *object.Dictionary, key object.Name) 
 	return doc.InheritedPageAttr(page, key)
 }
 
-// forEachContentOperator tokenizes a decoded content stream and calls fn for
-// each operator-position token (anything that is not a string, hex string,
-// dictionary marker, array/procedure delimiter, comment, or name). String
-// literals, comments, and inline-image binary data (BI ... ID <binary> EI)
-// are skipped, so operator bytes occurring inside them are never reported.
+// forEachContentOperator calls fn for each operator of a decoded content
+// stream, as the content lexer reads them: bytes inside strings, comments,
+// dictionary operands and inline-image data are never operators.
 func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte)) {
-	core.ForEachContentToken(cancel, data, func(tok []byte, isName bool) {
-		if !isName {
-			fn(tok)
+	lx := core.NewContentLexer(cancel, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentOperator:
+			fn(t.Raw)
+		case core.ContentDictStart:
+			lx.SkipDict(&t)
 		}
-	})
+	}
 }
 
 // --- ICCBased color space checks (6.2.4.2) ---
@@ -4705,12 +4708,21 @@ func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage 
 		gsNames:  make(map[string]bool),
 	}
 	var lastName string
-	core.ForEachContentToken(cancel, data, func(tok []byte, isName bool) {
-		if isName {
-			lastName = string(tok)
-			return
+	lx := core.NewContentLexer(cancel, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentName:
+			lastName = t.Name()
+			continue
+		case core.ContentDictStart:
+			lx.SkipDict(&t)
+			continue
+		case core.ContentOperator:
+		default:
+			continue
 		}
-		switch string(tok) {
+		switch string(t.Raw) {
 		case "cs":
 			u.fillCS[lastName] = true
 		case "CS":
@@ -4728,7 +4740,7 @@ func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage 
 			// Text defaults to fill rendering mode.
 			u.paintsFill = true
 		}
-	})
+	}
 	return u
 }
 

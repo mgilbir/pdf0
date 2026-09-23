@@ -45,11 +45,20 @@ func TestUAFormXObjectMCID(t *testing.T) {
 	}
 }
 
-func TestBytesContainsToken(t *testing.T) {
-	if !bytesContainsToken([]byte("<</MCID 0>>"), "/MCID") {
-		t.Error("/MCID token not found")
-	}
-	if bytesContainsToken([]byte("/MCIDExtra 0"), "/MCID") {
-		t.Error("/MCID wrongly matched inside /MCIDExtra")
+func TestContainsNameToken(t *testing.T) {
+	for _, tc := range []struct {
+		content string
+		want    bool
+	}{
+		{"/P <</MCID 0>> BDC", true},
+		{"/P <</MC#49D 0>> BDC", true}, // #49 is I: the same name, escaped
+		{"/MCIDExtra 0", false},
+		{"(/MCID 0) Tj", false},             // inside a string
+		{"% /MCID 0\n", false},              // inside a comment
+		{"BI /W 1 /H 1 ID /MCID EI", false}, // inside inline-image data
+	} {
+		if got := containsNameToken(core.Canceler{}, []byte(tc.content), "MCID"); got != tc.want {
+			t.Errorf("%q: containsNameToken = %v, want %v", tc.content, got, tc.want)
+		}
 	}
 }
