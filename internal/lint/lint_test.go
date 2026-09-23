@@ -92,7 +92,8 @@ func loadModule() (*module, error) {
 			}
 			p.files = append(p.files, f)
 		}
-		p.info = &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}}
+		p.info = &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{},
+			Selections: map[*ast.SelectorExpr]*types.Selection{}}
 		conf := types.Config{Importer: imp}
 		p.types, err = conf.Check(p.path, fset, p.files, p.info)
 		if err != nil {

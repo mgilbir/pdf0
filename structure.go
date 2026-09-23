@@ -154,9 +154,10 @@ func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string
 	}
 	treeRoot.Set("K", kids)
 	if len(roleMap) > 0 {
+		// In key order: map iteration order must not reach the file (C95).
 		rm := &object.Dictionary{}
-		for from, to := range roleMap {
-			rm.Set(object.Name(from), object.Name(to))
+		for _, from := range slices.Sorted(maps.Keys(roleMap)) {
+			rm.Set(object.Name(from), object.Name(roleMap[from]))
 		}
 		treeRoot.Set("RoleMap", rm)
 	}
