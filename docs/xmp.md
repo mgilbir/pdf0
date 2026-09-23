@@ -5,62 +5,111 @@ Every conformance standard pdf0 validates declares itself in XMP: PDF/A writes
 `pdfvtid:GTS_PDFVTVersion`, Factur-X the `fx:` block. The XMP subsystem is
 therefore load-bearing for all of them, not a PDF/A detail — and it carries
 rules of its own, since PDF/A constrains which properties may appear, in which
-schema, with which value form. Two files implement it: `xmp.go` (parsing) and
-`xmp_schemas.go` (schema tables, property and extension-schema checks), with
-the encoding helpers in `pdfa.go`. Open this doc before touching a schema
-table, before adding a rule that reads metadata, or when a metadata finding
-looks wrong; for how the PDF/A validator runs, see
-[validators.md](validators.md).
+schema, with which value form. The model every reader and writer goes through
+is `internal/xmp`; the PDF/A rules over it are in `pdfa/xmp.go` (the glue and
+the streaming well-formedness check), `pdfa/xmp_schemas.go` (schema tables,
+property and extension-schema checks) and `pdfa/identification.go` (the pdfaid
+reader). Open this doc before touching a schema table, before adding a rule
+that reads metadata, before writing metadata, or when a metadata finding looks
+wrong; for how the PDF/A validator runs, see [validators.md](validators.md).
 
 ## The pipeline
 
 ```mermaid
 flowchart TD
-    S["catalog /Metadata stream"] --> F["decodeContentStream<br/>— applies /Filter, e.g. FlateDecode"]
-    F --> E["decodeXMPToUTF8<br/>UTF-8 / UTF-16 / UTF-32, BOM or not"]
+    S["catalog /Metadata stream"] --> F["decode the stream<br/>— applies /Filter, e.g. FlateDecode"]
+    F --> E["DecodeXMPToUTF8<br/>UTF-8 / UTF-16 / UTF-32, BOM or not"]
     E --> W["xmpWellFormed — streaming<br/>well-formed? properly namespaced rdf:RDF?"]
     E --> C{"packet ≤ `WithMaxXMPPacketBytes`?"}
-    C -->|no| SKIP["no properties checked<br/>— never a violation"]
-    C -->|yes| T["parseXMLTree + parseXMPProperties<br/>→ []xmpProperty"]
-    T --> P["per-level schema check<br/>predefinedXMPSchemas + extension declarations"]
-    F --> R["raw-text scanners<br/>extractXMPValue / xmpHasKey / prefix checks"]
-    R --> ID["conformance identifiers<br/>pdfaid, pdfuaid, pdfxid, pdfvtid, fx"]
+    C -->|no| LIM["no model — a trip on the run,<br/>reported as a limit finding"]
+    C -->|yes| M["xmp.Parse → the model<br/>(View.DocumentXMPPacket, memoised per run)"]
+    M --> P["per-level schema check<br/>predefinedXMPSchemas + extension declarations"]
+    M --> ID["conformance identifiers, by namespace URI<br/>pdfaid, pdfuaid, pdfxid, pdfvtid, fx"]
+    M --> IX["Info ↔ XMP comparison (PDF/A-1)"]
 ```
 
-Two readers coexist on purpose: the DOM path (`parseXMPProperties`) where
-structure matters, and the substring scanners (`extractXMPValue`, `xmpHasKey`
-in `pdfa.go`) where one literal value is wanted — which is what every
-non-PDF/A validator uses.
+There is one reader. It used to be two: a DOM for the schema checks and
+substring scrapers (`ExtractXMPValue`, `xmpHasKey`, `ExtractXMPAttr`) for every
+identification — and the scrapers read a value out of a comment, missed one
+written with whitespace around `=` or on an element that carried an attribute,
+assumed the canonical prefix, and compared the escaped text (`Smith &amp; Sons`)
+with the unescaped Info entry (audit 2026-09-22 C35, C141). Every reader asks
+the model for a property by **namespace URI and local name**, and gets a value
+the XML parser has already unescaped.
 
-## Parsing — `xmp.go`
+`core.View.DocumentXMPPacket` returns the model and a status: parsed, absent,
+malformed (the well-formedness rule's to report) or limit (a trip has been
+noted, and the reader must neither guess a value nor report one missing).
+
+## The model — `internal/xmp`
 
 Parsing is stdlib `encoding/xml` only; the library has no XML dependency.
-`parseXMLTree` streams tokens into a minimal `xmlNode` DOM using an explicit
-stack rather than recursion, and its `CharsetReader` returns the input
-unchanged — packets are already UTF-8 by then, but many still carry an
+`xmp.Parse` tokenises with `RawToken` and resolves namespaces itself, so every
+element keeps both the prefix it was written with and the URI that prefix
+means; it checks tag matching, and judges well-formedness exactly as
+`encoding/xml`'s `Token` does (a corpus test asserts the agreement on every
+packet). The tree keeps everything: processing instructions, comments,
+whitespace, namespace declarations, unknown elements, and — per node — the
+source bytes it was parsed from. The `CharsetReader` returns its input
+unchanged: packets are already UTF-8 by then, but many still carry an
 `encoding=` declaration that would otherwise fail the decoder, and nothing is
-fetched from outside. `parseXMPProperties` finds `rdf:RDF` anywhere under the
-root (`findRDF`), walks each `rdf:Description` child, and emits one
-`xmpProperty` per property in either serialisation: **attribute form** (any
+fetched from outside.
+
+`Packet.Properties` walks every `rdf:Description` child of every `rdf:RDF` (a
+real Factur-X file carries its `fx` block in a second `rdf:RDF`) and yields one
+`Property` per property in either serialisation: **attribute form** (any
 attribute that is neither a namespace declaration nor in the RDF/`xml:`
 namespace) and **element form** (any child element outside the RDF namespace).
+`Get`, `Lookup` and `Text` look one up.
 
-`parseXMPValue` classifies the value into an `xmpKind` — `xmpSimple`,
-`xmpStruct`, `xmpBag`, `xmpSeq`, `xmpAlt`. The subtle cases, each pinned by
-`TestParseXMPPropertyForms`:
+Values classify into a `Kind` — `Simple`, `Struct`, `Bag`, `Seq`, `Alt`. The
+subtle cases, each pinned by `TestParseXMPPropertyForms`:
 
 - `rdf:parseType="Resource"` normally means a structure — **unless** it
   contains an `rdf:value` child, which makes it a *qualified simple value* (the
   siblings are qualifiers, e.g. `xmpidq:Scheme` on `xmp:Identifier` items). The
   same applies to the nested-`rdf:Description` form.
 - `rdf:resource="…"` is a simple value flagged `IsURI`; `xml:lang` sets
-  `HasLang`, which is what the language-alternative rule tests. Non-RDF children
-  with no `parseType` become structure fields, and non-namespace attributes on
-  a structure are shorthand fields.
+  `HasLang` and `Lang`, which is what the language-alternative rule tests and
+  what `Value.AltText("x-default")` selects by. Non-RDF children with no
+  `parseType` become structure fields, and non-namespace attributes on a
+  structure are shorthand fields.
+- Element text is whitespace-trimmed; an attribute value is not — veraPDF's
+  6-1-5 pass files carry a trailing space in an attribute-form `pdf:Producer`
+  that matches the Info entry's.
+
+### Writing: edit, don't regenerate
+
+Every metadata writer — `SetDocumentInfo`, `NewPDFADocument…` /
+`GenerateXMPMetadata`, `EmbedFacturX` / `EmbedOrderX` / `facturx.XMPPacket` —
+edits a packet through the model (`core.EditableXMP` parses the document's own).
+`SetText`, `SetAltText` (one language item; the others are kept), `SetSeq`,
+`SetBag`, `Remove` and `SetExtensionSchema` (replace the declaration for one
+namespace, keep the rest) change one property and remove its duplicates, in
+either form; a new namespace is declared with the preferred prefix when it is
+free and another when that prefix already means something else in scope.
+Writers used to build a fresh packet, which destroyed every property another
+writer had put there — the Factur-X, PDF/UA, PDF/X and PDF/VT identification
+among them (C32, C44).
+
+`Packet.Bytes` writes every node an edit did not reach from its source bytes:
+an unmodified packet comes back byte for byte, and an edited one differs only
+where it was edited. Values are checked on the way in (`xmp.CheckText`: valid
+UTF-8, XML 1.0 characters only — `ErrInvalidText`, surfaced as
+`pdf0.ErrInvalidMetadataText`), escaping happens in one place, and `Bytes`
+re-parses its own output before returning it, so a writer cannot produce a
+packet that is not well-formed (C72). A packet that cannot be edited — not
+well-formed, no `rdf:RDF`, over the packet limit — is an error, never replaced.
+
+`TestCorpusXMPRoundTrip` proves this on every packet in the veraPDF and
+Factur-X corpora: the model parses exactly when `encoding/xml` does, an
+unmodified packet round-trips byte for byte, a packet rewritten entirely from
+the model (`Packet.Rewrite`, ignoring source bytes) parses to an `Equivalent`
+tree, and setting one property changes nothing else a reader can see.
 
 ## Encoding normalisation
 
-`decodeXMPToUTF8` (`pdfa.go`) accepts XMP in UTF-8, UTF-16 or UTF-32, with or
+`DecodeXMPToUTF8` (`internal/core`) accepts XMP in UTF-8, UTF-16 or UTF-32, with or
 without a BOM, and returns UTF-8. Order of tests:
 
 1. UTF-32 BOMs (`00 00 FE FF`, `FF FE 00 00`), then UTF-16 BOMs
@@ -82,30 +131,34 @@ case — BOM-less UTF-16, detected because a real UTF-8 packet starts with
 printable ASCII (`<?xpacket`, `<x:xmpmeta`), so a NUL in the first two bytes
 can only mean UTF-16.
 
-`decodePDFTextString` (`pdfa.go`) is the other half: it converts an
+`DecodePDFTextString` (`internal/core`) is the other half: it converts an
 **Info-dictionary** string — UTF-16BE with a BOM (surrogate pairs handled),
-UTF-8 with a BOM in PDF 2.0, or PDFDocEncoding — to UTF-8 so it can be compared
-against an XMP value; without it every UTF-16 Info entry looked "inconsistent"
-with its metadata counterpart. The Info↔XMP consistency check
+UTF-8 with a BOM in PDF 2.0, or PDFDocEncoding (ISO 32000-2 Annex D.3, via
+`internal/pdfdoc`) — to UTF-8 so it can be compared against an XMP value;
+without it every UTF-16 Info entry looked "inconsistent" with its metadata
+counterpart, and until audit C77 a PDFDocEncoded `(Caf\351)` read as the
+invalid UTF-8 `"Caf\xe9"` and mismatched `Café`. The Info↔XMP consistency check
 (`checkInfoXMPConsistency`, ISO 19005-1 6.7.3, **PDF/A-1b only**) uses it on
-eight pairs (Title/`dc:title`, Author/`dc:creator`, …), the two dates compared
-through `normalizePDFDate` / `normalizeXMPDate` so `+00:00` and `Z` agree.
+eight pairs (Title/`dc:title`, Author/`dc:creator`, …), each XMP side read
+through the model — a language alternative at its `x-default` item, a sequence
+at its first — and the two dates compared through `normalizePDFDate` /
+`normalizeXMPDate` so `+00:00` and `Z` agree.
 
 ## The conformance declarations
 
 | Standard | Property read | Notes |
 |---|---|---|
-| PDF/A | `pdfaid:part`, `pdfaid:conformance`, `pdfaid:rev` | ns `http://www.aiim.org/pdfa/ns/id/`, verified when any `pdfaid:` appears. `conformance` must be `B` at 1b/2b/3b; at A-4 it must be absent, `F` or `E`, and `rev` must be `2020`. The schema table also knows `amd` and `corr` (`corr` is dropped at 1b). |
-| PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid`, checked via `xmpBindsPrefixTo` (`pdfua/pdfua.go`). |
-| PDF/X | `pdfxid:GTS_PDFXVersion` | bare `GTS_PDFXVersion` accepted as a fallback, and Info `/GTS_PDFXVersion` for the older parts. |
-| PDF/VT | `pdfvtid:GTS_PDFVTVersion` | XMP only — no Info fallback. |
-| Factur-X / ZUGFeRD | `fx:DocumentType`, `fx:Version`, `fx:DocumentFileName`, `fx:ConformanceLevel` | `zf:` is accepted as the ZUGFeRD-era equivalent. |
+| PDF/A | `pdfaid:part`, `pdfaid:conformance`, `pdfaid:rev` | ns `http://www.aiim.org/pdfa/ns/id/`, read by `readPDFAIdentification` (`pdfa/identification.go`) for every reader: the identification rule, Level A, the A-4 variants and their relaxations, `DeclaredLevel`, `Document.Conformance`/`Save`. `conformance` must be `B` at 1b/2b/3b; at A-4 it must be absent, `F` or `E`, and `rev` must be `2020`. The prefix must be `pdfaid` (ISO 19005-1 Table 3, -2/-3 6.6.4), and a `pdfaid:` prefix bound to another namespace is reported. The schema table also knows `amd` and `corr` (`corr` is dropped at 1b). |
+| PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid` for `part`, `amd` and `corr`. |
+| PDF/X | `pdfxid:GTS_PDFXVersion` | ns `http://www.npes.org/pdfx/ns/id/`; a no-namespace `GTS_PDFXVersion` property is accepted as a fallback, and Info `/GTS_PDFXVersion` (decoded as a text string) for the older parts. |
+| PDF/VT | `pdfvtid:GTS_PDFVTVersion` | ns `http://www.npes.org/pdfvt/ns/id/`. XMP only — no Info fallback. |
+| Factur-X / ZUGFeRD | `DocumentType`, `Version`, `DocumentFileName`, `ConformanceLevel` | in `urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#`, or the ZUGFeRD 2.0 / 1.0 invoice namespaces. |
+| Order-X | the same four | in `urn:factur-x:pdfa:CrossIndustryDocument:1p0#` (the Order-X specification's XMP example writes it with the prefix `fx_1_`, which the scraper could not read). Each family's validator reports metadata found in the other family's namespace. |
 
-All of these go through `extractXMPValue`, which handles `<key>value</key>` and
-both `key="value"` and `key='value'` attribute forms (single quotes were audit
-C32/C33). Because it matches the literal prefixed name it assumes the canonical
-prefix — which is why `checkMetadataVersion` separately verifies that
-`xmlns:pdfaid` is bound to the right URI, and PDF/UA checks prefix bindings.
+All of these are read by namespace URI. When the packet was over the size limit
+the reader reports nothing about the property — the limit finding already says
+the metadata was not read — and when it is not well-formed the well-formedness
+rule says so.
 
 ## Schema validation — `xmp_schemas.go`
 
@@ -153,14 +206,13 @@ field definitions require `name`/`valueType`/`description`, and a field's value
 type must be a standard XMP type (`standardXMPValueTypes`) or one the same
 schema declares (Isartor 6.7.8-t02-fail-j/k).
 
-**The prefix rule is checked against raw text, not the parsed tree.** The
-container namespaces must use the prefixes `pdfaExtension`, `pdfaSchema`,
-`pdfaProperty`, `pdfaType`, `pdfaField` — binding the right URI to a different
-prefix is itself a violation — but `encoding/xml` resolves prefixes to URIs and
-discards them, so the tree cannot answer the question. The check scans the
-packet text for `="URI"` and `='URI'` (both quote styles: matching only double
-quotes let a single-quoted `xmlns` declaration evade the rule, audit C33),
-walks back to the `xmlns:` marker and compares the prefix it finds.
+**The prefix rule is checked against the namespace declarations the model
+found** (`Packet.Declarations`). The container namespaces must use the prefixes
+`pdfaExtension`, `pdfaSchema`, `pdfaProperty`, `pdfaType`, `pdfaField` —
+binding the right URI to a different prefix is itself a violation. This used to
+be a scan of the packet text for `="URI"`, which had to be taught both quote
+styles (audit C33) and still counted a declaration inside a comment; the
+declarations are now read as XML declares them, in any spelling.
 
 ## PDF/A-4 deliberately skips property-value validation
 
@@ -213,19 +265,19 @@ vendored but pdf0 has no predefined `pdfuaid` table, so the test skips it.
 XMP arrives from untrusted files, and the validator is often the first thing to
 touch one.
 
-- **XMP packet size** (`WithMaxXMPPacketBytes`, default 4 MiB). Building the
-  node tree is O(n²) in practice: a large packet yields hundreds of thousands of
-  nodes whose incremental construction triggers thousands of GC cycles, each
-  rescanning the growing live tree — a 14 MB packet took ~37 s. Over the cap
-  `parseXMPProperties` errors and callers treat it as "no properties to check" —
-  **never** a violation, so a large valid file is not failed.
+- **XMP packet size** (`WithMaxXMPPacketBytes`, default 4 MiB). Above it the
+  packet is not modelled: `DocumentXMPPacket` notes an `xmp-packet-size` trip,
+  which reaches the report as a "limit" finding, and every reader declines —
+  **never** a violation, and never a clean result either. (Until audit
+  2026-09-22 the skip was silent.) The writers refuse to edit such a packet.
 
   The default was 2 MiB, justified by the largest packet in the veraPDF corpus
   being 66 KB. A 978-file Common Crawl sample falsified that: the largest real
   packet there is 1,639,865 bytes — 25x the corpus maximum, and 78% of the old
-  cap. It is now 4 MiB rather than 8 because the cost is quadratic: the worst
-  case runs roughly 3 s at 4 MiB but about 12 s at 8 MiB. Raise it with the
-  option if you have packets that need it and can afford the time.
+  cap. It is 4 MiB rather than 8 because building the old tree was quadratic
+  (a 14 MB packet took ~37 s, from string concatenation and GC over the live
+  tree); the model's construction is linear, but the bound stays until it has
+  been measured again.
 - **Streaming well-formedness.** `xmpWellFormed` answers "well-formed?" and
   "has a properly namespaced `rdf:RDF`?" from the token stream with no tree, so
   it stays O(n) and those two rules still apply to a packet too big to analyse
@@ -236,15 +288,13 @@ touch one.
   entity` (verified directly), surfacing as a "not well-formed XML" finding
   rather than memory exhaustion. The `CharsetReader` hooks return their input
   unchanged, so nothing external is loaded either.
-- **No explicit nesting-depth cap.** `parseXMLTree` is iterative, but
-  `parseXMPValue`/`parseXMPFields` recurse once per nesting level, so the size
-  cap is the only bound on depth. That cap has since moved — 2 MiB to the 4 MiB
-  default above, and `WithMaxXMPPacketBytes` lets a caller raise it further — so
-  this is the guard to revisit before raising it again, not one that was left
-  behind by the last raise.
+- **Nesting depth.** The value readers and the serialiser recurse once per
+  level, so `xmp.Parse` refuses a packet nested deeper than `xmp.MaxDepth`
+  (256) with `ErrLimit`; the reader reports it as an `xmp-depth` trip. Real
+  packets nest about a dozen levels.
 
-Regression tests: `TestXMPLargePacketBounded` (cap lowered to 4 KiB: property
-extraction refused, well-formedness still clean) and `TestXMPManyElementsFast`
+Regression tests: `TestXMPLargePacketBounded` (cap lowered to 4 KiB: not
+modelled, a trip noted, well-formedness still clean), `TestDepthLimit` and `TestXMPManyElementsFast`
 (200 000 elements under 5 s; tens of seconds before the tree build was
 bypassed).
 
@@ -267,14 +317,14 @@ Confirmed limitations:
 - Structure *fields* are validated only for extension-declared custom types;
   predefined structured types (`ResourceRef`, `Thumbnail`, …) are checked for
   form, not field names.
-- Identifier extraction is literal-prefix substring matching, so it assumes the
-  canonical prefix; only the pdfaid and pdfuaid bindings are verified separately.
-- An oversized packet skips property and extension-schema checks entirely; only
-  well-formedness and the packet-header rules still apply.
+- An oversized packet skips property, extension-schema and identification
+  checks, and says so with a limit finding; only well-formedness and the
+  packet-header rules still apply.
 
-On the writing side, `GenerateXMPMetadata` (`pdfa_create.go`) emits the packet
-pdf0's PDF/A builder embeds: a UTF-8 BOM, an `<?xpacket?>` header with neither
-a `bytes` nor an `encoding` attribute (both forbidden by 6.7.5 / 6.6.2.1 /
-6.7.2.1), the `pdfaid` part/conformance/rev block, optional `dc:title` and
-`dc:creator`, and `xmp:CreatorTool`. `xmlEscape` drops control characters
-illegal in XML 1.0 even when escaped, which previously produced malformed XMP.
+On the writing side, `GenerateXMPMetadata` (`pdfa/create.go`) builds the
+packet pdf0's PDF/A builder embeds, through the model: the wrapper `xmp.New`
+writes (a BOM as the `begin` value, and an `<?xpacket?>` header with neither a
+`bytes` nor an `encoding` attribute, both forbidden by 6.7.5 / 6.6.2.1 /
+6.7.2.1), the `pdfaid` part/conformance/rev properties, optional `dc:title`
+and `dc:creator`, and `xmp:CreatorTool`. A title or author XML cannot carry is
+an error, not a character silently dropped.

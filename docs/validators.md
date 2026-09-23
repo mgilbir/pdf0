@@ -173,7 +173,7 @@ concurrently on the same document.
 ```mermaid
 flowchart TD
     A[ValidatePDFABytes doc, level, rawData] --> LA{level is 1a/2a/3a?}
-    LA -->|yes| LB["validatePDFALevelA:<br/>run the Level B pipeline at level.baseB(),<br/>drop the 'conformance must be B' finding,<br/>add tagged-structure + language + conformance checks"]
+    LA -->|yes| LB["validatePDFALevelA:<br/>run the Level B pipeline at level.baseB(),<br/>drop the conformance-letter finding,<br/>found by its Check (CheckPDFAIDConformance),<br/>add tagged-structure + language + conformance checks"]
     LA -->|no| B[shallow-copy doc,<br/>install per-run cache]
     B --> C[for each of 59 checks]
     C --> D[runCheck: recover panic -> 'internal' violation]
