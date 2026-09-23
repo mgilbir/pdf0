@@ -20,39 +20,55 @@ tree of *structure elements*: dictionaries whose `/S` names a structure type
 holds children, and whose `/P` points back at the parent. A child in `/K` is one
 of three things: another structure element, an integer **MCID** naming a
 marked-content sequence in a page's content stream, or an **OBJR** dictionary
-pointing at an object (in practice an annotation). `/RoleMap` on the structure
-tree root maps non-standard types onto the ISO 32000 standard set, which
-`standardStructTypes` in `pdfua/pdfua.go` enumerates (Table 333/337).
+pointing at an object (in practice an annotation).
 
-`pdfua/pdfua_struct.go` builds this once per run. `buildStructTree` walks `/K`
-depth-first, descending transparently through arrays, and flattens the tree into
-a pre-order `[]structNode`. Each node records the element dictionary, its object
-number (`-1` when reached directly), `rawS` (the type **as written**), `stdType`
-(the type **after `/RoleMap` resolution**) and `childTypes` (the resolved types
-of its `/S` children, in order). The `rawS`/`stdType` split is load-bearing: the
-role-map check reports on `rawS` — it is the written type that is unmapped —
-while every other check compares `stdType`, so a custom type mapped to `H2`
-counts as a heading. `structTree` memoizes the list in the per-run
-`validationCache` (`pdfa.go`), and `walkStructElems` filters it down to the `/S`
-nodes. Before this existed, each check re-descended the tree.
+Every element is in a structure **namespace** (ISO 32000-2 14.7.4, 14.8.6). One
+with no `/NS` is in the default namespace — the PDF 1.7 standard one, in a PDF
+2.0 file as in any other — and a non-standard type there is mapped by
+`/RoleMap` on the structure tree root. One whose `/NS` names a namespace
+dictionary is mapped by that dictionary's `/RoleMapNS`, into the default
+namespace by name or into another by `[name nsdict]`. A type is resolved when
+it is standard in the namespace it is in: the PDF 1.7 set
+(`core.StandardStructTypes`, Table 333/337), the PDF 2.0 set (Annex M: without
+Art, BlockQuote, TOC, TOCI, Index, Private, Quote, Note, Reference, BibEntry and
+Code; with DocumentFragment, Aside, Title, FENote, Sub, Em, Strong, Artifact and
+Hn for every n), or MathML, which needs no mapping. `core.ResolveStructType`
+(`internal/core/structtree.go`) is the one resolver.
+
+`internal/core/structtree.go` builds the tree once per run, because PDF/A Level
+A asks it the same questions. `buildStructTree` walks `/K` depth-first,
+descending transparently through arrays, and flattens the tree into a pre-order
+`[]core.StructNode`. Each node records the element dictionary, its object number
+(`-1` when reached directly), `RawS` (the type **as written**), `StdType`,
+`NS`, `Mapped` and `Complete` (the resolution), `ChildTypes` (the resolved types
+of its `/S` children, in order) and `Parent`. The `RawS`/`StdType` split is
+load-bearing: the role-map checks report on `RawS` — it is the written type that
+is unmapped — while every other check compares `StdType`, so a custom type
+mapped to `H2` counts as a heading and an `/Img` mapped to `Figure` needs
+alternate text. `internal/lint`'s `TestStructureChecksReadTheResolvedType` holds
+that line: it fails on a read of `RawS` outside the role-map checks, and on a
+validator function that walks `/K` itself and reads `/S`. `core.StructTree`
+memoizes the list on the run, and `walkStructElems` filters it down to the `/S`
+nodes; the nesting and annotation-placement checks read the list too, rather
+than descending the tree again.
 
 Guards on untrusted input, all verified in source. **Cycles:** every walk
-(`buildStructTree`, `checkUAStructNesting`, `checkUAAnnotStructType`,
-`collectTableRows`, `checkUAFieldDescription`) dedupes on `IndirectRef.Number`,
+(`buildStructTree`, `collectTableRows`, `checkUAFieldDescription`) dedupes on
+`IndirectRef.Number`,
 so a `/K` pointing back at an ancestor terminates —
 `TestStructTreeFlatten` builds exactly that and asserts the visit list.
 **`/RoleMap` chains:** a role map may reach a standard type through intermediate
 custom types (`MyPara → Para → P`), so both users of the map follow chains rather
 than a single hop. `checkUARoleMapIntegrity` walks each key's chain to detect a
-cycle; `resolveRoleMapChain` (`pdfua/pdfua_struct.go`) walks it to resolve a type, and
-is what `standardStructType` and `checkUARoleMap` are built on. Both are bounded
-by a seen-set, so a cyclic map terminates, and by `WithMaxRoleMapSteps` (2^20
-steps) — `checkUARoleMapIntegrity` capping its *total* work across keys and
-`resolveRoleMapChain` capping one chain — since `Dictionary.Get` is linear and an
-adversarial role map was an O(N³) CPU sink (audit C20). `resolveRoleMapChain`
-also reports whether it ran to completion: on a budget trip the mapping is
-unknown, so `checkUARoleMap` declines to report *"neither standard nor mapped"*
-rather than manufacturing a finding from a truncated walk
+cycle; `core.ResolveStructType` walks it to resolve a type, across namespaces.
+Both are bounded by a seen-set, so a cyclic map terminates, and by
+`WithMaxRoleMapSteps` (2^20 steps) — `checkUARoleMapIntegrity` capping its
+*total* work across keys and the resolver capping one chain — since an
+adversarial role map was an O(N³) CPU sink before dictionaries were indexed
+(audit C20). The resolver also reports whether it ran to completion: on a
+budget trip the mapping is unknown, so `checkUARoleMap` declines to report
+*"neither standard nor mapped"* rather than manufacturing a finding from a
+truncated walk
 (`TestRoleMapChainResolves`, `TestRoleMapChainTerminates`,
 `TestRoleMapChainBudgetDeclines`). **Mutation:** `validatePDFUA` installs the cache on a
 **shallow copy** of the `Document`, so the caller's document is never touched
@@ -74,7 +90,7 @@ flowchart TD
     OBJR -.->|"points at"| ANN["annotation dict<br/>/StructParent"]
     Pages --> ANN
 
-    STR --> FLAT["structTree: flattened pre-order structNode list<br/>rawS, stdType, childTypes — memoized per run"]
+    STR --> FLAT["core.StructTree: flattened pre-order StructNode list<br/>RawS, StdType, NS, ChildTypes — memoized per run"]
 ```
 
 ## The rule families
@@ -103,7 +119,7 @@ rule, noted in the source comments.
 | Annotation placement | 7.18.1 | `checkUAAnnotStructType` | an OBJR-reached annotation under the wrong structure type: `Widget` wants `<Form>`, `Link` wants `<Link>`, everything else `<Annot>` |
 | Tab order | 7.18.3 | `checkUATabOrder` | a page carrying `/Annots` without `/Tabs /S` |
 | Form fields | 7.18.1, 7.15 | `checkUAFieldDescription`, `checkUAXFA` (and the `Widget` arm of `checkUAAnnotations`) | a field with no `/TU` whose description sits on a pure-widget child, a `Widget` with neither an effective `/TU` (inherited up `/Parent`, bounded to 32 hops) nor an `/Alt`, and a dynamic XFA form (`dynamicRender` required, detected in the *decoded* packet) |
-| Media clips | 7.18.6.2 | `checkUAMediaClips` | a `/Type /MediaClip` dictionary anywhere in the object graph missing `/CT`, missing `/Alt`, or with an `/Alt` carrying no non-empty string |
+| Media clips | 7.18.6.2 | `checkUAMediaClips` | a `/Type /MediaClip` dictionary anywhere in the document (`core.View.ReachableDicts`, direct dictionaries included) missing `/CT`, missing `/Alt`, or with an `/Alt` carrying no non-empty string |
 | Fonts | 7.21.3.1–7.21.8, 7.21.4.1/.2, 7.21.6 | `checkUAFonts`, `checkUAFontDicts`, `checkUACMaps`, `checkUACMapWMode`, `checkUACIDSystemInfo`, `checkUAToUnicodeValues`, `checkUAFontSubsetGlyphs`, `checkUANotdefCID` | not embedded, `CIDFontType2` without `/CIDToGIDMap` or with a non-`Identity` name, symbolic TrueType with an `/Encoding`, non-symbolic TrueType not on MacRoman/WinAnsi, a CMap neither predefined nor embedded, an embedded CMap whose `/WMode` disagrees with the stream's own, a `CIDSystemInfo` Registry/Ordering/Supplement mismatch with the CMap, a `ToUnicode` mapping to U+0000/U+FEFF/U+FFFE, a subset `/CharSet` or `/CIDSet` disagreeing with the embedded program, and a shown CID 0 (`.notdef`) |
 | Character mapping | 7.2 | `checkUACharMapping` | text shown with a Type 0 Identity-encoded font that has no `ToUnicode` (Matterhorn 10-001) — the deliberately narrow, false-positive-free case |
 | Real content vs artifacts | 7.1 | `checkUARealContent` | see [Content-level checking](#content-level-checking) |
@@ -211,21 +227,23 @@ Only the *presence* of `Scope` is checked, not its value.
 
 ## PDF/UA-2
 
-`pdfua/pdfua2.go` is 34 lines and does two things: it calls `validatePDFUA(d, "2")`,
-and it flags a file whose header major version is not 2. Parameterizing by `part`
-(rather than post-filtering findings by message text, as an earlier version did —
-audit C39) is what makes the identification rule demand `pdfuaid:part 2` and
-makes the UA-1 `1.x`-header rule not run at all. Findings reuse `pdfua.Violation`,
-but the `Clause` strings are ISO 14289-**2** identifiers while `Error()` still
-prefixes `[PDF/UA-1 …]` — read the clause against the standard you invoked.
+`ValidatePDFUA2` runs the same checks with `part` "2" (`pdfua/pdfua2.go` holds
+only the package comment that says so). Parameterizing by `part` (rather than
+post-filtering findings by message text, as an earlier version did — audit C39)
+is what makes the identification rule demand `pdfuaid:part 2`, makes the UA-1
+`1.x`-header rule not run at all, and adds the rules only part 2 has: the
+declared version (the header, or a later catalog `/Version`) must be 2.0 — one
+that cannot be read is not; a type in an explicit namespace must not be
+role-mapped back into that namespace (ISO 14289-2 8.2.4); and MathML's `math`
+must sit in a `Formula` (8.2.5.29). Every finding carries `Part`, and `Error()`
+prints it: `[PDF/UA-2 …]`. The shared rules keep their ISO 14289-1 clause
+numbers; read the clause against the standard you invoked.
 
-Be honest about what this is. The file says so itself:
-
-> Known scope limits: the structure-type checks resolve against the ISO 32000-1
-> standard types and the classic /RoleMap only — a file using the PDF 2.0
-> namespaced structure model (/NS, /RoleMapNS, the 2.0 structure namespace) in
-> ways PDF/UA-2 permits may be over-flagged — and no PDF/UA-2 conformance corpus
-> is bundled, so this does not assert full ISO 14289-2 conformance.
+Structure types are resolved in the element's namespace (above), so a `/Title`
+in the PDF 2.0 namespace is a standard type. What is not done: PDF/UA-2's own
+rules for the 2.0-only types (FENote, Title, Artifact elements) beyond those
+two, and no PDF/UA-2 corpus beyond the veraPDF suite is bundled, so this does
+not assert full ISO 14289-2 conformance.
 
 `ValidatePDFUA2` is also unreachable from the CLI: `pdf0 ua` only ever calls
 `ValidatePDFUA` ([cli.md](cli.md)).
@@ -261,10 +279,10 @@ tabulated in [testing.md](testing.md).
 | File | Owns | Governing clauses |
 |---|---|---|
 | `pdfua/pdfua.go` | `pdfua.Violation`, `ValidatePDFUA`, the `validatePDFUA(doc, part)` dispatch, and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, language, headings, figures | 5, 6.1, 7.1–7.4, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x |
-| `pdfua/pdfua_struct.go` | The flattened `structTree` model and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version | 7.1, 7.2, 7.4.4, 7.9, 6.1 (and ISO 32000-1 14.8.4.3) |
+| `pdfua/pdfua_struct.go` | Its names for `core.StructTree` and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version, the two PDF/UA-2 namespace rules | 7.1, 7.2, 7.4.4, 7.9, 6.1, UA-2 8.2.4 and 8.2.5.29 (and ISO 32000-1 14.8.4.3) |
 | `pdfua/pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
 | `pdfua/pdfua_tablegrid.go` | `TH` identifiability and the table grid reconstruction | 7.2, 7.5 |
-| `pdfua/pdfua2.go` | `ValidatePDFUA2` — the part-2 identification and PDF 2.0 version rules over the shared checks | ISO 14289-2 clause 4 and the shared clauses |
+| `pdfua/pdfua2.go` | The PDF/UA-2 package comment: what part 2 adds over the shared checks (the rules themselves are in the files above, selected by `part`) | ISO 14289-2 clauses 4, 8.2.4, 8.2.5.29 and the shared clauses |
 
 Shared machinery lives outside these files: `collectFontTextUsage` and the
 `validationCache` in `pdfa.go`, `tokenizeContent` in the content-operator layer,

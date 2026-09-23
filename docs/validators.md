@@ -11,7 +11,7 @@ validated concurrently (`TestValidateConcurrentSameDoc`, `TestUAValidationCacheI
 Three further properties hold across the family:
 
 - **Panic safety.** Every check runs behind a `recover()` boundary — `runCheck`
-  for PDF/A, the helpers in `validator_guard.go` for the rest. A check that
+  for PDF/A, `finding.Guarded` and `pdfua.RunCheck` for the rest. A check that
   panics on hostile input is reported as a finding with the rule `internal`
   rather than crashing the caller, and findings collected before the panic
   survive. The honest limit, the same one `runCheck` has always carried: a stack
@@ -20,8 +20,16 @@ Three further properties hold across the family:
   before that, only PDF/A had a boundary.)
 - **Deterministic order.** Every validator sorts its findings by rule, then
   object, then message before returning — through the one shared
-  `sortViolations`, on every return path including the early ones — so results
+  `finding.Sort`, on every return path including the early ones — so results
   are stable across runs and safe to diff or snapshot.
+- **A nil document is a checker finding.** Every validator answers a nil
+  `*Document` with one finding under `limit` ("no document to validate"),
+  before touching it (`validator_guard.go`, `TestEveryValidatorAnswersANilDocument`).
+- **Rules judge the document, not the object table.** A rule about what the
+  document contains walks `core.View.ReachableDicts` — every dictionary the
+  trailer reaches, direct ones included, orphans not — and only a rule about
+  the file's syntax ranges over every object, marked `// allobjects:`
+  (`internal/lint`'s `TestValidatorsWalkTheReachableGraph`).
 - **A checker that stops early says so.** A tripped resource guard, a recovered
   panic and a cancelled context are all reported as findings under a *reserved*
   rule identifier — `limit` or `internal` — which `IsCheckerFinding` separates
@@ -161,7 +169,12 @@ is a `metadata` finding rather than a guess. See
 Nothing fired that pdf0 checks. It is **not** a conformance guarantee: the PDF/A
 validator implements a subset of ISO 19005, and the other validators are
 narrower still (`ValidatePDFVT2` does not assert the PDF/X-5 external-reference
-rules; `ValidatePDFUA2` does not assert full ISO 14289-2). The measured claim is
+rules; `ValidatePDFUA2` does not assert full ISO 14289-2). Three rule sets rest
+on the author's knowledge of standards this repository does not hold, and say
+so in their source: the PDF/X per-level table (`pdfx/levels.go`, ISO 15930;
+PDF/X-4 is also calibrated against the Cal Poly suite), PDF/R (`pdfr/pdfr.go`,
+ISO 23504, including its identification schema), and the X-1a colour rule,
+which covers device RGB but not CIE-based spaces. The measured claim is
 the corpus ratchet, not the API — see [CONTRIBUTING](../CONTRIBUTING.md#the-corpus-ratchet--read-this-before-changing-a-validation-rule).
 
 ## How PDF/A validation runs
@@ -253,7 +266,7 @@ They are grouped across files by concern:
 | `internal/core` (PDF functions) | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
 
 The other standards each own their file(s): `pdfua/pdfua.go`, `pdfua/pdfua_content.go`,
-`pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go`, `pdfua/pdfua2.go`, `pdfx/pdfx.go`,
+`pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go`, `pdfua/pdfua2.go`, `pdfx/pdfx.go`, `pdfx/levels.go`,
 `pdfvt/pdfvt.go`, `pdfr/pdfr.go`, `dpart/dpart.go`, `facturx.go`, `order_x.go`. `violations.go`
 holds the shared `Violation` interface and is the canonical statement of the
 contract above.
