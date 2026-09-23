@@ -213,7 +213,7 @@ func TestEveryDrawingPathRoundTripsInEveryFaceKind(t *testing.T) {
 						// ToUnicode CMap. The clone shares the parse, which for
 						// the CJK face is most of the cost.
 						back, _ := drawnDocument(t, base.Clone(), path, text, pdfa.PDFA4, fc.embedded)
-						if got := strings.TrimSpace(back.ExtractText()); got != text {
+						if got := strings.TrimSpace(mustExtractText(t, back)); got != text {
 							t.Errorf("%q extracted as %q", text, got)
 						}
 					}

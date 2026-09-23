@@ -60,7 +60,7 @@ func TestAddPageProducesAConformingPage(t *testing.T) {
 	for _, e := range ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()) {
 		t.Errorf("violation: %s", e.Error())
 	}
-	if got := rd.ExtractText(); !strings.Contains(got, "Hi") {
+	if got := mustExtractText(t, rd); !strings.Contains(got, "Hi") {
 		t.Errorf("extracted %q, want it to contain %q", got, "Hi")
 	}
 }

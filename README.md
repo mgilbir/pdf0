@@ -53,7 +53,8 @@ go get github.com/mgilbir/pdf0
   `sign.Result.DocumentUnmodified()`, not `Valid` alone — `Valid` accepts a
   document altered by a post-signing incremental update. `VerifySignatures`
   performs no trust-chain check; use `VerifySignaturesWithRoots` for that.
-- **Extract** text (`ExtractText`) and images (`ExtractImages`, or the lazy
+- **Extract** text (`ExtractText`, which reports any page it had to leave
+  out) and images (`ExtractImages`, or the lazy
   `Images` iterator for bounded memory on large scan files; decoding
   DCTDecode, CCITTFax, JBIG2 and JPXDecode), **repair** common conformance
   failures (`Repair`), and **manipulate pages** (`ExtractPages`, `AppendPages`).

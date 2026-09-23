@@ -58,7 +58,7 @@ func TestExtractTextHonoursActualText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(back.ExtractText()); got != "AinlinenamedB" {
+	if got := strings.TrimSpace(mustExtractText(t, back)); got != "AinlinenamedB" {
 		t.Errorf("extracted %q, want %q", got, "AinlinenamedB")
 	}
 }
@@ -96,7 +96,7 @@ func TestAFontSelectedInsideActualTextOutlivesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(back.ExtractText()); got != "xHi" {
+	if got := strings.TrimSpace(mustExtractText(t, back)); got != "xHi" {
 		t.Errorf("extracted %q, want %q", got, "xHi")
 	}
 }
@@ -120,7 +120,7 @@ func TestExtractTextSurvivesAStrayEMC(t *testing.T) {
 	stream := object.NewStream(nil, []byte("EMC EMC BT /F1 12 Tf (A) Tj ET"))
 	stream.Dict.Set("Length", object.Integer(len(stream.Data)))
 	pg.Set("Contents", doc.Add(stream))
-	if got := strings.TrimSpace(doc.ExtractText()); got != "A" {
+	if got := strings.TrimSpace(mustExtractText(t, doc)); got != "A" {
 		t.Errorf("extracted %q, want %q", got, "A")
 	}
 }

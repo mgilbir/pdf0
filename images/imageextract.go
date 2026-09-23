@@ -3,6 +3,7 @@ package images
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"image"
@@ -365,7 +366,7 @@ func collectImagesFrom(d core.View, res *object.Dictionary, seen map[int]bool, d
 		}
 		switch sub, _ := d.ResolveName(st.Dict.Get("Subtype")); sub {
 		case "Image":
-			if !yield(extractImage(d, st, object.RefNum(ref))) {
+			if !yield(extractImageSafely(d, st, object.RefNum(ref))) {
 				return false
 			}
 		case "Form":
@@ -375,6 +376,35 @@ func collectImagesFrom(d core.View, res *object.Dictionary, seen map[int]bool, d
 		}
 	}
 	return true
+}
+
+// extractImageHook, when set, runs at the start of each image's decode. It is
+// how a test plants the fault the per-image recover exists for.
+var extractImageHook func(num int)
+
+// extractImageSafely is extractImage behind a recover: a panic while decoding
+// one image becomes that image's Note, with Decoded false and the encoded
+// bytes, and the walk goes on to the next image (audit 2026-09-22 C54).
+//
+// It is the boundary for exactly the decode. The walk's own yield — the
+// caller's loop body — runs outside it, so a panic there is the caller's and
+// propagates. And it is defence in depth: each crash extraction has had is
+// also fixed where it happened, and a Note naming an internal error is a bug
+// report, not an outcome.
+func extractImageSafely(d core.View, st *object.Stream, num int) (img ExtractedImage) {
+	defer func() {
+		if r := recover(); r != nil {
+			img = ExtractedImage{
+				ObjNum:  num,
+				Encoded: st.Data,
+				Note:    fmt.Sprintf("internal error while decoding the image, which was not decoded: %v", r),
+			}
+		}
+	}()
+	if extractImageHook != nil {
+		extractImageHook(num)
+	}
+	return extractImage(d, st, num)
 }
 
 func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {

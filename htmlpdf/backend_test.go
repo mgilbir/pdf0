@@ -99,7 +99,7 @@ func TestRenderInEveryFaceKindRoundTrips(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, text := range tc.texts {
 				doc, raw := roundTrip(t, Input{HTML: "<p>" + text + "</p>", Fonts: tc.fonts(t)}, Options{})
-				if got := strings.TrimSpace(doc.ExtractText()); got != text {
+				if got := strings.TrimSpace(mustExtractText(t, doc)); got != text {
 					t.Errorf("%q extracted as %q", text, got)
 				}
 				if tc.name == "standard" {
@@ -181,7 +181,7 @@ func TestTheGlyphsDrawnAreTheOnesLaidOut(t *testing.T) {
 	if len(shown) != 12 {
 		t.Errorf("the page shows %d bytes for six letters; want 12", len(shown))
 	}
-	if got := strings.TrimSpace(doc.ExtractText()); got != "office" {
+	if got := strings.TrimSpace(mustExtractText(t, doc)); got != "office" {
 		t.Errorf("extracted %q", got)
 	}
 }
@@ -268,7 +268,7 @@ func TestFullyTransparentMarksPaintNothing(t *testing.T) {
 	if !bytes.Contains(stream, []byte("3 Tr")) {
 		t.Errorf("transparent text was not drawn invisible:\n%s", stream)
 	}
-	if got := strings.TrimSpace(doc.ExtractText()); got != "hidden" {
+	if got := strings.TrimSpace(mustExtractText(t, doc)); got != "hidden" {
 		t.Errorf("extracted %q", got)
 	}
 }

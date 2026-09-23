@@ -51,7 +51,7 @@ Each yielded value is an `ExtractedImage`:
 | `Image` | Decoded pixels, or `nil` |
 | `Decoded` | Whether `Image` holds pixels |
 | `Encoded` | The bytes that could not be turned into pixels |
-| `Note` | Why decoding did not happen |
+| `Note` | Why decoding did not happen, or — for a decoded image — what was left out of it (a soft mask over the image budget) |
 
 When a codec is not handled — or handled but the input fails — `Decoded` is
 false, `Image` is nil, and `Note` explains. `Encoded` is *not* uniformly the raw
@@ -119,7 +119,12 @@ a fresh `*image.NRGBA` first.
 the validators do, memoising page collection, decoded content streams and parsed
 type-4 function programs. The whole traversal runs over untrusted input: it
 reports failures as `Note` strings rather than panicking, and one bad image does
-not abort the walk.
+not abort the walk. That promise is kept by a recover around each image's decode
+(`extractImageSafely`): a panic becomes that image's `Note`, naming it an
+internal error, with `Decoded=false` and the encoded bytes (audit 2026-09-22
+C54). The boundary is the decode only — a panic in the caller's own loop body
+is the caller's and propagates — and it is defence in depth: every crash the
+extractor is known to have had is also fixed where it happened.
 
 ## File map
 

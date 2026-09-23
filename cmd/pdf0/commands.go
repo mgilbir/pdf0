@@ -265,8 +265,17 @@ func cmdExtract(args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(stdout, doc.ExtractText())
-	return err
+	// The text of every page that could be extracted is written either way;
+	// a page left out is an error, so the exit status says the output is
+	// incomplete rather than letting it pass for the whole document.
+	text, xerr := doc.ExtractText()
+	if _, err := io.WriteString(stdout, text); err != nil {
+		return err
+	}
+	if xerr != nil {
+		return fmt.Errorf("extract: %w", xerr)
+	}
+	return nil
 }
 
 func cmdRepair(args []string) error {

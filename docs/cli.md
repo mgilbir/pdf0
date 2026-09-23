@@ -311,7 +311,11 @@ Hello, PDF 2.0!
 
 Piping details: pages are separated by a form feed (`\f`, 0x0C) and there is **no trailing
 newline**; the blank line above is text the document actually contains, not a separator. A
-document with no text prints nothing and exits 0. A locked file is refused, exit 3.
+document with no text prints nothing and exits 0. A locked file is refused, exit 3. A page
+whose text could not be extracted — the content budget ran out, or the extractor failed
+internally — is left out: the other pages' text is printed, still separated by form feeds,
+and the command reports the page on stderr and exits 3, so the output is never taken for
+the whole document.
 
 ## `repair`
 

@@ -31,9 +31,9 @@ func TestInlineImageDeclaredLengthOverflow(t *testing.T) {
 						t.Errorf("ExtractText panicked: %v", r)
 					}
 				}()
-				text := doc.ExtractText()
-				if !strings.Contains(text, "hi") || !strings.Contains(text, "there") {
-					t.Errorf("ExtractText = %q, want both runs of text", text)
+				text, err := doc.ExtractText()
+				if err != nil || !strings.Contains(text, "hi") || !strings.Contains(text, "there") {
+					t.Errorf("ExtractText = %q, %v; want both runs of text and no error", text, err)
 				}
 			}()
 

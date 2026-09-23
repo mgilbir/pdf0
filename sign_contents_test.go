@@ -69,7 +69,7 @@ func TestSignDocumentWithPageContents(t *testing.T) {
 	if len(pages) != 1 {
 		t.Fatalf("got %d pages, want 1", len(pages))
 	}
-	if got := signed.ExtractText(); !bytes.Contains([]byte(got), []byte("hello")) {
+	if got := mustExtractText(t, signed); !bytes.Contains([]byte(got), []byte("hello")) {
 		t.Errorf("page content lost or corrupted by signing: %q", got)
 	}
 

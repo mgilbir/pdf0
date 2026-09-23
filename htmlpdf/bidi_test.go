@@ -548,7 +548,7 @@ func TestExtractedTextKeepsTheRunsInReadingOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading back: %v", err)
 	}
-	text := doc.ExtractText()
+	text := mustExtractText(t, doc)
 
 	// The two overridden words are drawn "fed" first and "cba" second — that is
 	// the reordering. Extracted, they must be in the order they were written,

@@ -2,27 +2,44 @@ package pdf0
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
+
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"strings"
 )
 
 // This file implements text extraction: the visible text of a whole document
 // or of a single page, decoded through each font's ToUnicode CMap (ISO 32000-2
-// clause 9.10.3) and recursing into invoked form XObjects. It carries its own
-// lenient content-stream tokenizer, distinct from the validator's, because
-// extraction must survive a malformed stream rather than diagnose it. There is
-// no layout model, so the output is approximate rather than faithful.
+// clause 9.10.3) and recursing into invoked form XObjects. It reads content
+// through the shared lenient tokenizer, which survives a malformed stream
+// rather than diagnosing it. There is no layout model, so the output is
+// approximate rather than faithful.
 
 // ExtractText returns the visible text of every page in reading order, pages
 // separated by a form feed. Text is decoded through each font's ToUnicode CMap;
 // glyphs without a ToUnicode mapping are dropped. Layout is approximate: line
 // breaks follow the text-positioning operators and wide inter-glyph gaps become
 // spaces.
-func (d *Document) ExtractText() string {
-	text, _ := d.extractText(core.Canceler{})
-	return text
+//
+// The error is nil exactly when every page's text is in the result. Otherwise
+// it reports each page that is not, as a *PageTextError, and the result holds
+// the text of the others, still separated by form feeds so that the n-th page's
+// text stays after the (n-1)-th feed. Two things leave a page out: the content
+// budget running out (the page and every one after it, see below), and an
+// internal error — a panic in the extractor, recovered at the page so that one
+// bad page does not take down the caller or the other pages. Neither is a
+// statement about the file being wrong, and neither is silent.
+//
+// The content budget is WithMaxDecodedContentBytes (default 512 MB), charged
+// with every content stream tokenized: each page's, and each form XObject's
+// each time it is drawn. A form drawn N times is extracted N times, as it is
+// drawn, so a document that draws a form which draws a form twice, thirty
+// levels deep, asks for 2^30 extractions; the budget is what stops it.
+func (d *Document) ExtractText() (string, error) {
+	return d.extractText(core.Canceler{})
 }
 
 // ExtractTextContext is ExtractText with cancellation.
@@ -35,29 +52,66 @@ func (d *Document) ExtractText() string {
 // cancel.go and docs/limits.md) — so the error is the only place that fact can
 // live, and a caller who ignores it gets a silently short document.
 //
-// The error is nil exactly when the extraction ran to completion.
+// The error is nil exactly when the extraction ran to completion, with every
+// page's text in the result; it joins the cancellation with any
+// *PageTextError, as ExtractText reports them.
 func (d *Document) ExtractTextContext(ctx context.Context) (string, error) {
 	return d.extractText(core.NewCanceler(ctx))
 }
+
+// PageTextError reports a page whose text an extraction left out, and why.
+type PageTextError struct {
+	// Page is the 1-based page number in document order, or 0 from
+	// ExtractPageText, which is given the page rather than its number.
+	Page int
+	// Err says why: a resource limit (its message begins "resource limit
+	// reached" and names the guard) or an internal error in the extractor.
+	Err error
+}
+
+func (e *PageTextError) Error() string {
+	if e.Page == 0 {
+		return "text of the page not extracted: " + e.Err.Error()
+	}
+	return fmt.Sprintf("text of page %d not extracted: %v", e.Page, e.Err)
+}
+
+func (e *PageTextError) Unwrap() error { return e.Err }
 
 func (d *Document) extractText(cancel core.Canceler) (string, error) {
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
 		return "", cancel.StopErr("extracting text")
 	}
+	run := d.newTextRun(cancel)
 	var b strings.Builder
+	var errs []error
 	for i, pg := range d.view().Pages(catalog.Get("Pages")) {
 		// Per page: the coarse boundary. Within a page the tokenizer stops every
 		// cancelScanBytes, so a single enormous page is interruptible too.
 		if err := cancel.StopErr("extracting text"); err != nil {
-			return b.String(), err
+			return b.String(), errors.Join(append(errs, err)...)
 		}
 		if i > 0 {
 			b.WriteByte('\f')
 		}
-		b.WriteString(d.extractPageText(cancel, pg.Dict))
+		text, err := d.pageText(run, pg.Dict)
+		if err != nil {
+			errs = append(errs, &PageTextError{Page: i + 1, Err: err})
+			if run.exhausted != nil {
+				// The budget is the whole run's: every later page would be
+				// refused too, and one error for the rest says so.
+				errs = append(errs, fmt.Errorf("text of the pages after page %d not extracted: %w", i+1, run.exhausted))
+				break
+			}
+			continue
+		}
+		b.WriteString(text)
 	}
-	return b.String(), cancel.StopErr("extracting text")
+	if err := cancel.StopErr("extracting text"); err != nil {
+		errs = append(errs, err)
+	}
+	return b.String(), errors.Join(errs...)
 }
 
 // ExtractPageText returns the visible text of a single page dictionary. It
@@ -65,34 +119,125 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 // recurses into invoked form XObjects, so text drawn via inherited fonts or
 // inside a form is not dropped.
 //
+// The error is a *PageTextError, with Page 0, when the page's text could not
+// be extracted — the content budget ran out, or the extractor failed
+// internally — and the text is then empty. See ExtractText.
+//
 // There is deliberately no ExtractPageTextContext: one page is the unit of work,
 // and a caller extracting several pages already has a loop of its own to check
 // a context in. Adding a variant here would move that check inside a call that
 // does one page's work either way.
-func (d *Document) ExtractPageText(page *object.Dictionary) string {
-	return d.extractPageText(core.Canceler{}, page)
+func (d *Document) ExtractPageText(page *object.Dictionary) (string, error) {
+	text, err := d.pageText(d.newTextRun(core.Canceler{}), page)
+	if err != nil {
+		return "", &PageTextError{Err: err}
+	}
+	return text, nil
 }
 
-func (d *Document) extractPageText(cancel core.Canceler, page *object.Dictionary) string {
+// textRun is one extraction's state across its pages: the cancellation signal
+// and the content budget.
+type textRun struct {
+	cancel core.Canceler
+	lim    core.Limits
+	// spent is the content tokenized so far, charged against
+	// lim.DecodedContentBytes; exhausted is the error once it ran out.
+	spent     int64
+	exhausted error
+	// fonts memoizes fontMapsFrom per resource dictionary. A form drawn many
+	// times would otherwise parse its fonts' ToUnicode CMaps each time, a
+	// cost the content budget does not see: eleven bytes of "/X Do /X Do"
+	// can stand for a ToUnicode stream of megabytes.
+	fonts map[*object.Dictionary]map[string]fontText
+}
+
+// fontMaps is fontMapsFrom(res), once per resource dictionary per run.
+func (r *textRun) fontMaps(d *Document, res *object.Dictionary) map[string]fontText {
+	if m, ok := r.fonts[res]; ok {
+		return m
+	}
+	m := d.fontMapsFrom(res)
+	if r.fonts == nil {
+		r.fonts = map[*object.Dictionary]map[string]fontText{}
+	}
+	r.fonts[res] = m
+	return m
+}
+
+func (d *Document) newTextRun(cancel core.Canceler) *textRun {
+	return &textRun{cancel: cancel, lim: d.lim()}
+}
+
+// charge takes n bytes of content from the budget, and reports whether they
+// fit. Once they do not, every later charge fails too.
+func (r *textRun) charge(n int) bool {
+	if r.exhausted != nil {
+		return false
+	}
+	if int64(n) > r.lim.DecodedContentBytes-r.spent {
+		r.exhausted = r.lim.ContentBudgetError("the content text extraction tokenizes, counting each form XObject each time it is drawn")
+		return false
+	}
+	r.spent += int64(n)
+	return true
+}
+
+// textPageHook, when set, runs at the start of each page's extraction. It is
+// how a test plants the fault the per-page recover exists for.
+var textPageHook func(page *object.Dictionary)
+
+// pageText extracts one page. It is the boundary a panic stops at: the page's
+// text is discarded and the panic returned as an error, so that the caller and
+// the other pages are unaffected. The boundary is defence in depth — every
+// crash the extractor has had is also fixed where it happened — and the error
+// keeps it from being silent.
+func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			text, err = "", fmt.Errorf("internal error in text extraction: %v", r)
+		}
+	}()
+	if textPageHook != nil {
+		textPageHook(page)
+	}
 	res := d.ResolveDict(d.view().InheritedPageAttr(page, "Resources"))
 	content := core.ContentStreamData(d.view(), page.Get("Contents"))
 	var out strings.Builder
-	d.extractContentText(cancel, res, content, &out, map[*object.Stream]bool{}, 0)
-	return out.String()
+	d.extractContentText(run, res, content, &out, map[*object.Stream]bool{}, 0)
+	if run.exhausted != nil {
+		return "", run.exhausted
+	}
+	return out.String(), nil
 }
 
 // maxTextFormDepth bounds recursion through nested form XObjects.
 const maxTextFormDepth = 32
 
+// minContentCharge is the least one content stream costs the budget, however
+// short it is. Entering a stream — resolving its resources, decoding it,
+// starting the tokenizer, recursing — costs about what tokenizing sixty-odd
+// bytes does (measured: some 570 ns against 10 ms a megabyte), so a stream of
+// "/X Do /X Do" charged at its eleven bytes let a fan-out of forms run for
+// half a minute inside the default budget. Charged at this floor, the budget
+// is the same bound in time whatever the streams are made of.
+const minContentCharge = 64
+
 // extractContentText appends the visible text of one content stream — a page or
 // a form XObject — to out. Fonts are resolved from res; a Do that invokes a form
-// XObject recurses into it with the form's own resources (audit C28). seen guards
-// cyclic form references and depth bounds nesting.
-func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictionary, content []byte, out *strings.Builder, seen map[*object.Stream]bool, depth int) {
-	if len(content) == 0 || depth > maxTextFormDepth {
+// XObject recurses into it with the form's own resources (audit C28).
+//
+// A form is extracted each time it is drawn (audit 2026-09-22 C87: the guard
+// against a form that draws itself was a visited set that was never cleared,
+// so a form drawn three times extracted once). onPath holds the forms being
+// extracted on the way down to this one and is cleared on the way back, so it
+// stops only a form that draws itself, directly or through others; depth
+// bounds nesting; and the run's content budget bounds the total, which a
+// fan-out of forms drawing forms would otherwise make exponential.
+func (d *Document) extractContentText(run *textRun, res *object.Dictionary, content []byte, out *strings.Builder, onPath map[*object.Stream]bool, depth int) {
+	if len(content) == 0 || depth > maxTextFormDepth || !run.charge(max(len(content), minContentCharge)) {
 		return
 	}
-	fonts := d.fontMapsFrom(res)
+	fonts := run.fontMaps(d, res)
 	var xobjs *object.Dictionary
 	if res != nil {
 		xobjs = d.ResolveDict(res.Get("XObject"))
@@ -116,7 +261,7 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 			out.WriteRune(r)
 		}
 	}
-	for tk := range core.TokenizeContent(cancel, content) {
+	for tk := range core.TokenizeContent(run.cancel, content) {
 		if tk.Kind != core.KindOp {
 			operands = append(operands, tk)
 			continue
@@ -180,13 +325,17 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 		case "Do":
 			if xobjs != nil && len(operands) >= 1 {
 				if st, ok := d.Resolve(xobjs.Get(object.Name(operands[len(operands)-1].Name))).(*object.Stream); ok {
-					if sub, _ := d.view().ResolveName(st.Dict.Get("Subtype")); sub == "Form" && !seen[st] {
-						seen[st] = true
+					if sub, _ := d.view().ResolveName(st.Dict.Get("Subtype")); sub == "Form" && !onPath[st] {
+						onPath[st] = true
 						formRes := d.ResolveDict(st.Dict.Get("Resources"))
 						if formRes == nil {
 							formRes = res // a form may draw with the calling context's resources
 						}
-						d.extractContentText(cancel, formRes, d.view().Content(st), out, seen, depth+1)
+						d.extractContentText(run, formRes, d.view().Content(st), out, onPath, depth+1)
+						delete(onPath, st)
+						if run.exhausted != nil {
+							return
+						}
 					}
 				}
 			}

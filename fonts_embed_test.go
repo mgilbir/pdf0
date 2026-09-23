@@ -172,7 +172,7 @@ func TestEmbeddedTextIsExtractable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	got := rd.ExtractText()
+	got := mustExtractText(t, rd)
 	if !strings.Contains(got, want) {
 		t.Errorf("extracted %q, which does not contain %q", got, want)
 	}
@@ -397,7 +397,7 @@ func TestShapedTextValidatesAndKeepsItsLigature(t *testing.T) {
 	// And the text comes back as it was written: the ligature's ToUnicode
 	// entry is the "fi" it was drawn for, not the U+FB01 the cmap registers
 	// the glyph under.
-	if got := strings.TrimSpace(rd.ExtractText()); got != "fix" {
+	if got := strings.TrimSpace(mustExtractText(t, rd)); got != "fix" {
 		t.Errorf("extracted %q, want %q", got, "fix")
 	}
 }
@@ -1133,7 +1133,7 @@ func TestSimpleFontValidatesAtEveryLevel(t *testing.T) {
 			}
 			// And the text reads back, including the characters whose codes lie
 			// where WinAnsiEncoding and Latin-1 disagree.
-			if got := rd.ExtractText(); !strings.Contains(got, "—") || !strings.Contains(got, "café") {
+			if got := mustExtractText(t, rd); !strings.Contains(got, "—") || !strings.Contains(got, "café") {
 				t.Errorf("extracted %q, which is missing the typographic characters", got)
 			}
 		})
@@ -1317,7 +1317,7 @@ func TestACJKDocumentIsWrittenAndReadsBack(t *testing.T) {
 
 	// The ToUnicode CMap is written from the same CIDs the codes are, so the
 	// text comes back only if every one of them agrees.
-	if got := back.ExtractText(); !strings.Contains(got, text) {
+	if got := mustExtractText(t, back); !strings.Contains(got, text) {
 		t.Errorf("the extracted text is %q, want it to contain %q", got, text)
 	}
 	// And this repository's own validator, which checks /CIDSet against the

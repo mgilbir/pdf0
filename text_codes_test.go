@@ -54,7 +54,7 @@ func extractTextOf(t *testing.T, pdf []byte) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return doc.ExtractText()
+	return mustExtractText(t, doc)
 }
 
 func TestExtractTextCutsType0CodesByTheCMap(t *testing.T) {

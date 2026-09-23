@@ -19,8 +19,19 @@ func TestExtractText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := strings.TrimSpace(doc.ExtractText())
+	got := strings.TrimSpace(mustExtractText(t, doc))
 	if !strings.Contains(got, "Hello World") {
 		t.Errorf("extracted text %q does not contain %q", got, "Hello World")
 	}
+}
+
+// mustExtractText is ExtractText for a test that expects every page's text:
+// an error fails the test.
+func mustExtractText(t testing.TB, d *Document) string {
+	t.Helper()
+	text, err := d.ExtractText()
+	if err != nil {
+		t.Fatalf("ExtractText: %v", err)
+	}
+	return text
 }

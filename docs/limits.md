@@ -117,7 +117,7 @@ granularity; `cancel.go` carries the design record.
 | Reached | Not reached |
 | --- | --- |
 | All PDF/A, PDF/UA, PDF/UA-2, PDF/X, PDF/VT, PDF/R and DPart checks (each installs or joins a run). | The lexer and parser (`maxTokenGap`, `maxParseDepth`): they take bytes, not a `*Document`, and threading state through them for a guard that already surfaces as a parse error would be ceremony, not reach. |
-| Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures already surface per image in `ExtractedImage.Note`; text truncation surfaces as missing text. |
+| Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures, budget refusals (`image-pixels`) and recovered panics surface per image in `ExtractedImage.Note`; a page whose text is left out — the content budget ran out, or a recovered panic — is a `*PageTextError` in `ExtractText`'s error, never missing text alone. |
 | Font-program guards, forwarded from the parsed program. | `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
 | Nested embedded-PDF/A validation (6.9), as `embedded-pdfa`. | `Equal` / `DocumentEqual`: they return a `bool`, so there is nowhere to say "too deep to tell". `maxCompareDepth` is *silently wrong by construction* (see the parsing table) and stays that way; no validator rule compares structures that deep. |
 | Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error. |
@@ -166,6 +166,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | `font.ParseCmapSubtable` nil-on-unreadable | forme's `font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
+| text content budget (`WithMaxDecodedContentBytes`) | `text.go` | Unbounded before a form was extracted each time it is drawn (audit 2026-09-22 C87) | `ExtractText` only. Every content stream tokenized — each page's, and each form's each time it is drawn, at least 64 bytes apiece — is charged against the run's content budget, which a fan-out of forms drawing forms would otherwise make exponential. | **Loud**: the page and every one after it are left out and reported as `*PageTextError`, whose message names `decoded-content-total`. |
 | sfnt/CFF/Type1 structural bails (`return nil`) | forme's `font/fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
 
 ### Content scanning

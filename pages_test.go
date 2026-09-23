@@ -45,8 +45,8 @@ func TestExtractAndMergePages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read extracted: %v", err)
 	}
-	if !strings.Contains(re.ExtractText(), "Hello World") {
-		t.Errorf("extracted page lost its text: %q", re.ExtractText())
+	if !strings.Contains(mustExtractText(t, re), "Hello World") {
+		t.Errorf("extracted page lost its text: %q", mustExtractText(t, re))
 	}
 
 	// Merge two copies → two pages.

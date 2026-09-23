@@ -168,7 +168,11 @@ func pageTexts(t *testing.T, d *Document) []string {
 	t.Helper()
 	var out []string
 	for _, pg := range d.PageList() {
-		out = append(out, strings.TrimSpace(d.ExtractPageText(pg)))
+		text, err := d.ExtractPageText(pg)
+		if err != nil {
+			t.Fatalf("ExtractPageText: %v", err)
+		}
+		out = append(out, strings.TrimSpace(text))
 	}
 	return out
 }

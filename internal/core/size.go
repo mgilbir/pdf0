@@ -62,6 +62,13 @@ func (l Limits) ImageBudgetError(what string) error {
 	return &LimitError{Guard: GuardImagePixels, What: what, Unit: "pixels", Need: -1, Bound: l.ImagePixelBound(), def: DefaultMaxImagePixels}
 }
 
+// ContentBudgetError is the error for work the run's content budget
+// (Limits.DecodedContentBytes, WithMaxDecodedContentBytes) refused, for an
+// operation that reports by error rather than by trip — text extraction.
+func (l Limits) ContentBudgetError(what string) error {
+	return &LimitError{Guard: GuardContentTotal, What: what, Unit: "bytes", Need: -1, Bound: l.WithDefaults().DecodedContentBytes, def: DefaultMaxDecodedContentBytes}
+}
+
 // ImagePixelBound is the resolved pixel budget.
 func (l Limits) ImagePixelBound() int64 { return l.WithDefaults().ImagePixels }
 

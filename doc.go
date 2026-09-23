@@ -76,7 +76,7 @@
 // Option is stored on the Document and inherited by every later call, which is
 // the wrong lifetime for a context and would make cancellation invisible at the
 // call site; limits describe what a document may cost, contexts describe how
-// long an operation may take. Every original signature is unchanged, and an
+// long an operation may take. Adding them changed no original signature, and an
 // entry point whose cost is bounded rather than document-scale — ExtractPageText
 // (one page), Images (an iterator the caller can break out of),
 // Document.VerifySignatures — deliberately has no variant. ValidateFacturX and

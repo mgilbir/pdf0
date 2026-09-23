@@ -69,7 +69,7 @@ func TestRenderProducesAReadablePDF(t *testing.T) {
 	}
 
 	// The text reached the page, which is the whole point.
-	text := doc.ExtractText()
+	text := mustExtractText(t, doc)
 	for _, want := range []string{"A heading", "Some text in a paragraph."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the extracted text does not contain %q; it is %q", want, text)
@@ -646,7 +646,7 @@ func TestHTMLAndCSSAndAPageSizeMakeAPDF(t *testing.T) {
 	}
 
 	// The text arrived, in reading order.
-	text := doc.ExtractText()
+	text := mustExtractText(t, doc)
 	for _, want := range []string{"Aurora", "Grating", "445.50", "Payment within 30 days."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the extracted text is missing %q; it is %q", want, text)
@@ -732,4 +732,15 @@ func hasSize(sizes []float64, want float64) bool {
 		}
 	}
 	return false
+}
+
+// mustExtractText is ExtractText for a test that expects every page's text:
+// an error fails the test.
+func mustExtractText(t testing.TB, d *pdf0.Document) string {
+	t.Helper()
+	text, err := d.ExtractText()
+	if err != nil {
+		t.Fatalf("ExtractText: %v", err)
+	}
+	return text
 }
