@@ -1,9 +1,11 @@
 package pdf0
 
 import (
-	"github.com/mgilbir/pdf0/object"
 	"slices"
 	"testing"
+
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 func TestParseBoolean(t *testing.T) {
@@ -15,7 +17,7 @@ func TestParseBoolean(t *testing.T) {
 		{"false", false},
 	}
 	for _, tt := range tests {
-		p := NewParser([]byte(tt.input))
+		p := syntax.NewParser([]byte(tt.input))
 		obj, err := p.ParseObject()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -43,7 +45,7 @@ func TestParseInteger(t *testing.T) {
 		{"0", 0},
 	}
 	for _, tt := range tests {
-		p := NewParser([]byte(tt.input))
+		p := syntax.NewParser([]byte(tt.input))
 		obj, err := p.ParseObject()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -72,7 +74,7 @@ func TestParseReal(t *testing.T) {
 		{"34.", 34.0},
 	}
 	for _, tt := range tests {
-		p := NewParser([]byte(tt.input))
+		p := syntax.NewParser([]byte(tt.input))
 		obj, err := p.ParseObject()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -90,7 +92,7 @@ func TestParseReal(t *testing.T) {
 }
 
 func TestParseLiteralString(t *testing.T) {
-	p := NewParser([]byte("(Hello World)"))
+	p := syntax.NewParser([]byte("(Hello World)"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +110,7 @@ func TestParseLiteralString(t *testing.T) {
 }
 
 func TestParseHexString(t *testing.T) {
-	p := NewParser([]byte("<48656C6C6F>"))
+	p := syntax.NewParser([]byte("<48656C6C6F>"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +136,7 @@ func TestParseName(t *testing.T) {
 		{"/Adobe#20Green", "Adobe Green"},
 	}
 	for _, tt := range tests {
-		p := NewParser([]byte(tt.input))
+		p := syntax.NewParser([]byte(tt.input))
 		obj, err := p.ParseObject()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -152,7 +154,7 @@ func TestParseName(t *testing.T) {
 }
 
 func TestParseNull(t *testing.T) {
-	p := NewParser([]byte("null"))
+	p := syntax.NewParser([]byte("null"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +165,7 @@ func TestParseNull(t *testing.T) {
 }
 
 func TestParseArray(t *testing.T) {
-	p := NewParser([]byte("[1 2.0 (hello) /Name true null]"))
+	p := syntax.NewParser([]byte("[1 2.0 (hello) /Name true null]"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +200,7 @@ func TestParseArray(t *testing.T) {
 }
 
 func TestParseNestedArray(t *testing.T) {
-	p := NewParser([]byte("[[1 2] [3 4]]"))
+	p := syntax.NewParser([]byte("[[1 2] [3 4]]"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +223,7 @@ func TestParseNestedArray(t *testing.T) {
 
 func TestParseDictionary(t *testing.T) {
 	input := "<< /Type /Catalog /Pages 3 0 R /Count 5 >>"
-	p := NewParser([]byte(input))
+	p := syntax.NewParser([]byte(input))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +275,7 @@ func TestParseDictionary(t *testing.T) {
 
 func TestParseNestedDictionary(t *testing.T) {
 	input := "<< /Key1 << /Nested true >> /Key2 42 >>"
-	p := NewParser([]byte(input))
+	p := syntax.NewParser([]byte(input))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -297,7 +299,7 @@ func TestParseNestedDictionary(t *testing.T) {
 }
 
 func TestParseIndirectRef(t *testing.T) {
-	p := NewParser([]byte("10 0 R"))
+	p := syntax.NewParser([]byte("10 0 R"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +315,7 @@ func TestParseIndirectRef(t *testing.T) {
 
 func TestParseIndirectObject(t *testing.T) {
 	input := "1 0 obj\n<< /Type /Catalog >>\nendobj"
-	p := NewParser([]byte(input))
+	p := syntax.NewParser([]byte(input))
 	obj, err := p.ParseIndirectObject()
 	if err != nil {
 		t.Fatal(err)
@@ -336,10 +338,10 @@ func TestParseIndirectObject(t *testing.T) {
 // definition is parsed via ParseIndirectObject.
 func TestParseObjectRejectsDefinition(t *testing.T) {
 	input := "1 0 obj\n42\nendobj"
-	if _, err := NewParser([]byte(input)).ParseObject(); err == nil {
+	if _, err := syntax.NewParser([]byte(input)).ParseObject(); err == nil {
 		t.Error("ParseObject must reject an indirect object definition (use ParseIndirectObject)")
 	}
-	obj, err := NewParser([]byte(input)).ParseIndirectObject()
+	obj, err := syntax.NewParser([]byte(input)).ParseIndirectObject()
 	if err != nil {
 		t.Fatalf("ParseIndirectObject: %v", err)
 	}
@@ -353,7 +355,7 @@ func TestParseObjectRejectsDefinition(t *testing.T) {
 
 func TestParseStream(t *testing.T) {
 	input := "1 0 obj\n<< /Length 11 >>\nstream\r\nHello World\nendstream\nendobj"
-	p := NewParser([]byte(input))
+	p := syntax.NewParser([]byte(input))
 	obj, err := p.ParseIndirectObject()
 	if err != nil {
 		t.Fatal(err)
@@ -369,7 +371,7 @@ func TestParseStream(t *testing.T) {
 
 func TestParseStreamLFOnly(t *testing.T) {
 	input := "1 0 obj\n<< /Length 11 >>\nstream\nHello World\nendstream\nendobj"
-	p := NewParser([]byte(input))
+	p := syntax.NewParser([]byte(input))
 	obj, err := p.ParseIndirectObject()
 	if err != nil {
 		t.Fatal(err)
@@ -385,7 +387,7 @@ func TestParseStreamLFOnly(t *testing.T) {
 
 func TestParseIntegerAmbiguity(t *testing.T) {
 	// "42" alone should be Integer, not part of a ref
-	p := NewParser([]byte("42"))
+	p := syntax.NewParser([]byte("42"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -397,7 +399,7 @@ func TestParseIntegerAmbiguity(t *testing.T) {
 
 func TestParseIntegerFollowedByNonRef(t *testing.T) {
 	// "42 /Name" - the 42 should be parsed as Integer
-	p := NewParser([]byte("42 /Name"))
+	p := syntax.NewParser([]byte("42 /Name"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -409,7 +411,7 @@ func TestParseIntegerFollowedByNonRef(t *testing.T) {
 
 func TestParseArrayWithRefs(t *testing.T) {
 	input := "[1 0 R 2 0 R 42]"
-	p := NewParser([]byte(input))
+	p := syntax.NewParser([]byte(input))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -449,7 +451,7 @@ endobj
 << /Type /Pages /Count 0 /Kids [] >>
 endobj`
 
-	p := NewParser([]byte(input))
+	p := syntax.NewParser([]byte(input))
 
 	obj1, err := p.ParseIndirectObject()
 	if err != nil {
@@ -469,7 +471,7 @@ endobj`
 }
 
 func TestParseEmptyDict(t *testing.T) {
-	p := NewParser([]byte("<< >>"))
+	p := syntax.NewParser([]byte("<< >>"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -484,7 +486,7 @@ func TestParseEmptyDict(t *testing.T) {
 }
 
 func TestParseEmptyArray(t *testing.T) {
-	p := NewParser([]byte("[]"))
+	p := syntax.NewParser([]byte("[]"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)

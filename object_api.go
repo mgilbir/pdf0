@@ -13,9 +13,18 @@ import (
 // or inspect a PDF without writing Dictionary, Name and Integer — Document's
 // own Trailer is an object.Dictionary and its Objects a map of
 // *object.IndirectObject — so requiring a second import for the one group every
-// caller touches buys nothing. Nothing else is re-exported: a PDF/A finding is
-// pdfa.Violation, a conformance level is pdfa.PDFA2b, and each is named from
-// the package that owns it.
+// caller touches buys nothing.
+//
+// Nothing else is re-exported. This package declares the entry points over a
+// Document and what they own — their options, results and errors — and every
+// other name lives only in the package that owns it: a PDF/A finding is
+// pdfa.Violation, a conformance level is pdfa.PDFA2b, the builder's options are
+// pdfa.SkeletonOptions, the parser is syntax.NewParser, object comparison is
+// object.Equal and a revocation check is sign.CheckCertRevocation. The errors
+// that come from internal packages (ErrWrongPassword, ErrInvalidMetadataText
+// and the rest) are declared here because this is their only public home; that
+// is ownership, not a second name. The lint TestRootReexportsOnlyTheObjectModel
+// (internal/lint) holds the policy.
 //
 // An alias is the same type, not a wrapper: pdf0.Dictionary and
 // object.Dictionary are interchangeable in every position, and every method is

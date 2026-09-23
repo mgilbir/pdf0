@@ -2,9 +2,10 @@ package pdf0
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"testing"
 )
 
 // This file systematically exercises the re-encryption path (decrypt on Read →
@@ -123,7 +124,7 @@ func docsEqualModuloLength(d1, d2 *Document) bool {
 	}
 	for num, io1 := range d1.Objects {
 		io2, ok := d2.Objects[num]
-		if !ok || !Equal(stripStreamLength(io1.Value), stripStreamLength(io2.Value)) {
+		if !ok || !object.Equal(stripStreamLength(io1.Value), stripStreamLength(io2.Value)) {
 			return false
 		}
 	}

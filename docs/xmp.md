@@ -81,7 +81,7 @@ subtle cases, each pinned by `TestParseXMPPropertyForms`:
 ### Writing: edit, don't regenerate
 
 Every metadata writer — `SetDocumentInfo`, `NewPDFADocument…` /
-`GenerateXMPMetadata`, `EmbedFacturX` / `EmbedOrderX` / `facturx.XMPPacket` —
+`pdfa.GenerateXMPMetadata`, `EmbedFacturX` / `EmbedOrderX` / `facturx.XMPPacket` —
 edits a packet through the model (`core.EditableXMP` parses the document's own).
 `SetText`, `SetAltText` (one language item; the others are kept), `SetSeq`,
 `SetBag`, `Remove` and `SetExtensionSchema` (replace the declaration for one

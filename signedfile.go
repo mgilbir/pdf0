@@ -8,6 +8,7 @@ import (
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // This file gives the signature verifier (package sign) what it needs from the
@@ -294,7 +295,7 @@ func (s *revisionState) load(num int) (object.Object, error) {
 	if ie.Number != num {
 		return nil, fmt.Errorf("object stream %d index %d holds object %d", e.StreamObjNum, e.IndexInStream, ie.Number)
 	}
-	p := NewParser(c.data)
+	p := syntax.NewParser(c.data)
 	p.Budget = &s.f.objStmLeft
 	p.SetOffset(int64(c.first + ie.Offset))
 	return p.ParseObject()
@@ -332,17 +333,17 @@ func (s *revisionState) parseAt(off int64) (*object.IndirectObject, error) {
 	if off < 0 || off >= size {
 		return nil, nil
 	}
-	lx := NewLexer(s.data)
+	lx := syntax.NewLexer(s.data)
 	lx.SetPosition(off)
-	p := NewParserFromLexer(lx)
+	p := syntax.NewParserFromLexer(lx)
 	p.ResolveLength = func(ref object.IndirectRef) (int64, bool) {
 		le, ok := s.table.Entries[ref.Number]
 		if !ok || le.Compressed || le.Offset < 0 || le.Offset >= size {
 			return 0, false
 		}
-		llx := NewLexer(s.data)
+		llx := syntax.NewLexer(s.data)
 		llx.SetPosition(le.Offset)
-		return NewParserFromLexer(llx).IntegerObjectValue()
+		return syntax.NewParserFromLexer(llx).IntegerObjectValue()
 	}
 	return p.ParseIndirectObject()
 }

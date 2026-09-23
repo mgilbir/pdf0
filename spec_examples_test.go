@@ -12,12 +12,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/syntax"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // specExample represents a single example extracted from the spec.
@@ -282,7 +283,7 @@ func TestSpecExamplesLex(t *testing.T) {
 				t.Skip("no PDF syntax content after extraction")
 			}
 
-			lexer := NewLexer([]byte(content))
+			lexer := syntax.NewLexer([]byte(content))
 			tokenCount := 0
 			for {
 				tok, err := lexer.NextToken()
@@ -339,7 +340,7 @@ func TestSpecExamplesParse(t *testing.T) {
 			}
 
 			if containsIndirectObj(content) {
-				p := NewParser([]byte(content))
+				p := syntax.NewParser([]byte(content))
 				obj, err := p.ParseIndirectObject()
 				if err != nil {
 					t.Logf("could not parse indirect object: %v", err)
@@ -401,7 +402,7 @@ func TestSpecExamplesRoundTrip(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Logf("Breadcrumb: %s", ex.breadcrumb())
 
-			p := NewParser([]byte(content))
+			p := syntax.NewParser([]byte(content))
 			obj, err := p.ParseIndirectObject()
 			if err != nil {
 				t.Fatalf("parse: %v\nContent:\n%s", err, content)
@@ -409,20 +410,20 @@ func TestSpecExamplesRoundTrip(t *testing.T) {
 
 			// Serialize
 			var buf bytes.Buffer
-			s := NewSerializer(&buf)
+			s := syntax.NewSerializer(&buf)
 			if err := s.WriteIndirectObject(obj); err != nil {
 				t.Fatalf("serialize: %v", err)
 			}
 
 			// Re-parse
-			p2 := NewParser(buf.Bytes())
+			p2 := syntax.NewParser(buf.Bytes())
 			obj2, err := p2.ParseIndirectObject()
 			if err != nil {
 				t.Fatalf("re-parse after round-trip: %v\nSerialized:\n%s", err, buf.String())
 			}
 
 			// Compare
-			if !Equal(obj, obj2) {
+			if !object.Equal(obj, obj2) {
 				t.Errorf("round-trip mismatch:\n  original: %v\n  after:    %v", obj, obj2)
 			}
 			roundTripped++
@@ -434,7 +435,7 @@ func TestSpecExamplesRoundTrip(t *testing.T) {
 // tryParseObject attempts to parse content as a PDF object.
 func tryParseObject(t *testing.T, content string) {
 	t.Helper()
-	p := NewParser([]byte(content))
+	p := syntax.NewParser([]byte(content))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Logf("parse object: %v (content starts with: %.80s)", err, content)
@@ -447,20 +448,20 @@ func tryParseObject(t *testing.T, content string) {
 func tryRoundTrip(t *testing.T, obj *object.IndirectObject) {
 	t.Helper()
 	var buf bytes.Buffer
-	s := NewSerializer(&buf)
+	s := syntax.NewSerializer(&buf)
 	if err := s.WriteIndirectObject(obj); err != nil {
 		t.Logf("serialize: %v", err)
 		return
 	}
 
-	p := NewParser(buf.Bytes())
+	p := syntax.NewParser(buf.Bytes())
 	obj2, err := p.ParseIndirectObject()
 	if err != nil {
 		t.Logf("re-parse: %v\nSerialized:\n%s", err, buf.String())
 		return
 	}
 
-	if !Equal(obj, obj2) {
+	if !object.Equal(obj, obj2) {
 		t.Errorf("round-trip mismatch for object %d %d", obj.Number, obj.Generation)
 	}
 }

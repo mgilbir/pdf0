@@ -3,12 +3,13 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
-	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/syntax"
 	"math"
 	"sort"
 	"strconv"
+
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // This file implements the cross-reference machinery: parsing traditional xref
@@ -647,9 +648,9 @@ func findTrailerByScan(data []byte) *object.Dictionary {
 		if pos+7 < len(data) && !syntax.IsWhitespace(data[pos+7]) && !syntax.IsDelimiter(data[pos+7]) {
 			continue
 		}
-		lx := NewLexer(data)
+		lx := syntax.NewLexer(data)
 		lx.SetPosition(int64(pos + 7))
-		dict, err := NewParserFromLexer(lx).ParseObject()
+		dict, err := syntax.NewParserFromLexer(lx).ParseObject()
 		if err != nil {
 			continue
 		}

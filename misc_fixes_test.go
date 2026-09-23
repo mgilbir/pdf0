@@ -2,9 +2,11 @@ package pdf0
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"testing"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // TestDictionaryEqualDuplicateKeys guards audit C26 (first-occurrence
@@ -18,14 +20,14 @@ func TestDictionaryEqualDuplicateKeys(t *testing.T) {
 	if dup11.Len() != 1 {
 		t.Errorf("{A:1,A:1} holds %d entries, want 1", dup11.Len())
 	}
-	if Equal(dup11, a1b99) {
+	if object.Equal(dup11, a1b99) {
 		t.Errorf("{A:1,A:1} must not equal {A:1,B:99}")
 	}
 	dup12 := object.NewDictionary(e("A", 1), e("A", 2))
-	if !Equal(dup12, dup12) {
+	if !object.Equal(dup12, dup12) {
 		t.Errorf("a dictionary built with a duplicate key must equal itself")
 	}
-	if !Equal(dup12, object.NewDictionary(e("A", 2))) || Equal(dup12, object.NewDictionary(e("A", 1))) {
+	if !object.Equal(dup12, object.NewDictionary(e("A", 2))) || object.Equal(dup12, object.NewDictionary(e("A", 1))) {
 		t.Errorf("{A:1,A:2} must equal {A:2} and not {A:1}")
 	}
 }
@@ -34,7 +36,7 @@ func TestDictionaryEqualDuplicateKeys(t *testing.T) {
 // as unparseable "#00" (audit C31).
 func TestWriteNameRejectsNUL(t *testing.T) {
 	var buf bytes.Buffer
-	if err := NewSerializer(&buf).WriteObject(object.Name("a\x00b")); err == nil {
+	if err := syntax.NewSerializer(&buf).WriteObject(object.Name("a\x00b")); err == nil {
 		t.Errorf("expected an error serializing a name containing NUL, got nil")
 	}
 }

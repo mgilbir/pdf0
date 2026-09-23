@@ -3,13 +3,15 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
-	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/internal/hostile"
-	"github.com/mgilbir/pdf0/object"
 	"math"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // noPanic runs fn and fails the test if it panics instead of returning an error.
@@ -81,7 +83,7 @@ func TestObjStmHugeNPanic(t *testing.T) {
 // endstream search instead of aborting the parse (audit C17).
 func TestStreamWrongTypedLengthRecovers(t *testing.T) {
 	src := "5 0 obj\n<< /Length 11.0 >>\nstream\nHello World\nendstream\nendobj\n"
-	p := NewParser([]byte(src))
+	p := syntax.NewParser([]byte(src))
 	iobj, err := p.ParseIndirectObject()
 	if err != nil {
 		t.Fatalf("expected recovery via endstream search, got err=%v", err)

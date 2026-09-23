@@ -36,9 +36,10 @@ import (
 //
 // No other exported entry point takes options, and that is not an oversight:
 // the validators and extractors read the configuration off the Document they
-// are given, and the remaining constructors (ParseXRefTable, NewLexer,
-// NewParser, NewSerializer) enforce only limits that were deliberately left
-// internal — the depth caps and the lexer's token gap. See
+// are given, and the remaining constructors (ParseXRefTable here;
+// syntax.NewLexer, syntax.NewParser and syntax.NewSerializer) enforce only
+// limits that were deliberately left internal — the depth caps and the
+// lexer's token gap. See
 // docs/proposals/configurable-limits.md §5, Group D.
 //
 // This file answers "what is a limit"; limits_report.go answers "what happens

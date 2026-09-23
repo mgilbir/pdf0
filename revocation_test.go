@@ -6,12 +6,13 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"github.com/mgilbir/pdf0/internal/signtest"
-	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/sign"
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 )
 
 func TestCheckCertRevocation(t *testing.T) {
@@ -25,18 +26,18 @@ func TestCheckCertRevocation(t *testing.T) {
 	// used to assert the opposite — "OCSP is consulted first; a good OCSP
 	// wins" — which is audit 2026-09-22 C154: whichever source was read first
 	// decided, so the revocation was masked.)
-	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, [][]byte{good}, now); info.Status != sign.RevocationRevoked || info.Source != "CRL" {
+	if info := sign.CheckCertRevocation(leaf, ca, [][]byte{revoked}, [][]byte{good}, now); info.Status != sign.RevocationRevoked || info.Source != "CRL" {
 		t.Errorf("a revoking CRL must win over a good OCSP response: %+v", info)
 	}
-	if info := CheckCertRevocation(leaf, ca, nil, [][]byte{good}, now); info.Status != sign.RevocationGood || info.Source != "OCSP" {
+	if info := sign.CheckCertRevocation(leaf, ca, nil, [][]byte{good}, now); info.Status != sign.RevocationGood || info.Source != "OCSP" {
 		t.Errorf("a good OCSP response on its own is good: %+v", info)
 	}
 	// CRL is used when no OCSP is available.
-	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, nil, now); info.Status != sign.RevocationRevoked || info.Source != "CRL" {
+	if info := sign.CheckCertRevocation(leaf, ca, [][]byte{revoked}, nil, now); info.Status != sign.RevocationRevoked || info.Source != "CRL" {
 		t.Errorf("expected CRL revoked: %+v", info)
 	}
 	// No material -> unknown.
-	if info := CheckCertRevocation(leaf, ca, nil, nil, now); info.Status != sign.RevocationUnknown {
+	if info := sign.CheckCertRevocation(leaf, ca, nil, nil, now); info.Status != sign.RevocationUnknown {
 		t.Errorf("expected unknown with no material: %+v", info)
 	}
 }
@@ -65,7 +66,7 @@ func TestDSSRevocationMaterial(t *testing.T) {
 	if len(crls) != 1 || len(ocsps) != 1 {
 		t.Fatalf("DSS material: got %d CRLs, %d OCSPs", len(crls), len(ocsps))
 	}
-	if info := CheckCertRevocation(leaf, ca, crls, ocsps, time.Now()); info.Status != sign.RevocationRevoked {
+	if info := sign.CheckCertRevocation(leaf, ca, crls, ocsps, time.Now()); info.Status != sign.RevocationRevoked {
 		t.Errorf("the DSS CRL revokes the leaf, which a good OCSP response in the same DSS must not hide: %+v", info)
 	}
 }

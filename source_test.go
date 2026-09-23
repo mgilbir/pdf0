@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
-	"github.com/mgilbir/pdf0/sign"
 	"math"
 	"os"
 	"path/filepath"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mgilbir/pdf0/sign"
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/hostile"
@@ -488,7 +489,7 @@ func TestHybridCorpusManual(t *testing.T) {
 	}
 	for num, iobj := range doc.Objects {
 		o2 := doc2.Objects[num]
-		if o2 == nil || !Equal(iobj.Value, o2.Value) {
+		if o2 == nil || !object.Equal(iobj.Value, o2.Value) {
 			t.Errorf("object %d changed in the round trip", num)
 		}
 	}
@@ -680,7 +681,7 @@ func TestBrokenContainerDoesNotFailRead(t *testing.T) {
 // generation does not fit the 5-digit field is refused by the parser and by
 // the rebuild scan alike, and nothing pdf0 writes carries one.
 func TestGenerationAbove65535(t *testing.T) {
-	p := NewParser([]byte("2 999999 obj\n<< >>\nendobj"))
+	p := syntax.NewParser([]byte("2 999999 obj\n<< >>\nendobj"))
 	if _, err := p.ParseIndirectObject(); err == nil || !strings.Contains(err.Error(), "generation") {
 		t.Errorf("ParseIndirectObject(2 999999 obj) = %v, want a generation error", err)
 	}
@@ -734,7 +735,7 @@ func TestGenerationAbove65535(t *testing.T) {
 	} {
 		o.Value = object.Null{}
 		var buf bytes.Buffer
-		if err := NewSerializer(&buf).WriteIndirectObject(o); err == nil || buf.Len() != 0 {
+		if err := syntax.NewSerializer(&buf).WriteIndirectObject(o); err == nil || buf.Len() != 0 {
 			t.Errorf("WriteIndirectObject(%d %d) = %v with %d bytes, want an error and nothing written", o.Number, o.Generation, err, buf.Len())
 		}
 	}

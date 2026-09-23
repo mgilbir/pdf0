@@ -12,11 +12,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/mgilbir/pdf0/syntax"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // spec17Example represents a single example extracted from the PDF 1.7 spec.
@@ -90,7 +92,7 @@ func TestSpec17ExamplesLex(t *testing.T) {
 				t.Skip("no PDF syntax content after extraction")
 			}
 
-			lexer := NewLexer([]byte(content))
+			lexer := syntax.NewLexer([]byte(content))
 			tokenCount := 0
 			for {
 				tok, err := lexer.NextToken()
@@ -144,7 +146,7 @@ func TestSpec17ExamplesParse(t *testing.T) {
 			}
 
 			if containsIndirectObj(content) {
-				p := NewParser([]byte(content))
+				p := syntax.NewParser([]byte(content))
 				obj, err := p.ParseIndirectObject()
 				if err != nil {
 					t.Logf("could not parse indirect object: %v", err)
@@ -206,7 +208,7 @@ func TestSpec17ExamplesRoundTrip(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Logf("Breadcrumb: %s", ex.breadcrumb17())
 
-			p := NewParser([]byte(content))
+			p := syntax.NewParser([]byte(content))
 			obj, err := p.ParseIndirectObject()
 			if err != nil {
 				t.Fatalf("parse: %v\nContent:\n%s", err, content)
@@ -214,20 +216,20 @@ func TestSpec17ExamplesRoundTrip(t *testing.T) {
 
 			// Serialize
 			var buf bytes.Buffer
-			s := NewSerializer(&buf)
+			s := syntax.NewSerializer(&buf)
 			if err := s.WriteIndirectObject(obj); err != nil {
 				t.Fatalf("serialize: %v", err)
 			}
 
 			// Re-parse
-			p2 := NewParser(buf.Bytes())
+			p2 := syntax.NewParser(buf.Bytes())
 			obj2, err := p2.ParseIndirectObject()
 			if err != nil {
 				t.Fatalf("re-parse after round-trip: %v\nSerialized:\n%s", err, buf.String())
 			}
 
 			// Compare
-			if !Equal(obj, obj2) {
+			if !object.Equal(obj, obj2) {
 				t.Errorf("round-trip mismatch:\n  original: %v\n  after:    %v", obj, obj2)
 			}
 			roundTripped++

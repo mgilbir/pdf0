@@ -232,7 +232,7 @@ embedded-PDF/A rule share). A document whose declaration cannot be read or names
 no level — and a `Level` that names no profile at all, such as `pdfa.Level(99)` —
 gets exactly one finding under the `limit` rule (`IsCheckerFinding` reports it)
 and is not validated. The builders (`NewPDFADocument`, `NewPDFADocumentWith`,
-`GenerateXMPMetadata`) refuse both with an error.
+`pdfa.GenerateXMPMetadata`) refuse both with an error.
 
 **Level A** (1a/2a/3a) and **Level U** (2u/3u) are Level B plus more. Level U
 adds the Unicode character-map requirement: every font used for rendering has a

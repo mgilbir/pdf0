@@ -147,7 +147,7 @@ func (d *Document) incrementalUpdate(changed []int) ([]byte, error) {
 	if last := src.data[base-1]; last != '\n' && last != '\r' {
 		buf.WriteByte('\n')
 	}
-	s := NewSerializer(&buf)
+	s := syntax.NewSerializer(&buf)
 
 	var entries []xrefUpdateEntry
 	var freed []int

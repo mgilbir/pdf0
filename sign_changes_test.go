@@ -226,9 +226,9 @@ func TestRedefinedObjectStreamIsAChange(t *testing.T) {
 	// The container, re-encoded with /Rotate 90 on the /Pages node, which
 	// the page inherits: the page turns on its side.
 	ce, _ := d.Source().Entry(e.StreamObjNum)
-	lx := NewLexer(d.Source().data)
+	lx := syntax.NewLexer(d.Source().data)
 	lx.SetPosition(ce.Offset)
-	cobj, err := NewParserFromLexer(lx).ParseIndirectObject()
+	cobj, err := syntax.NewParserFromLexer(lx).ParseIndirectObject()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestRedefinedObjectStreamIsAChange(t *testing.T) {
 	}
 	var head, body bytes.Buffer
 	for _, ie := range index {
-		p := NewParser(data)
+		p := syntax.NewParser(data)
 		p.SetOffset(int64(first + ie.Offset))
 		obj, err := p.ParseObject()
 		if err != nil {

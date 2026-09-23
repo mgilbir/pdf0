@@ -56,7 +56,7 @@ func TestMetadataWritersRefuseALockedDocument(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/plaintext-metadata=%v", name, plainXMP), func(t *testing.T) {
 				d := lockedPDFA3(t)
 				if plainXMP {
-					packet, err := GenerateXMPMetadata(pdfa.PDFA3b, "", "")
+					packet, err := pdfa.GenerateXMPMetadata(pdfa.PDFA3b, "", "")
 					if err != nil {
 						t.Fatal(err)
 					}

@@ -34,7 +34,7 @@ would silently mask truncated input.
 **What to do:** pass the real size. From a file, `fi, _ := f.Stat(); pdf0.Read(f,
 fi.Size())`. From a `[]byte`, `pdf0.Read(bytes.NewReader(b), int64(len(b)))` —
 never a hard-coded or estimated length. If the size is right, the file really is
-truncated; re-fetch it. The same error comes from `NewLexerFromReaderAt` for the
+truncated; re-fetch it. The same error comes from `syntax.NewLexerFromReaderAt` for the
 same reason.
 
 ## Encrypted files

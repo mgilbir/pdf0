@@ -193,8 +193,8 @@ func TestLevelsThatNameNoProfileAreRefused(t *testing.T) {
 			t.Errorf("NewPDFADocument(%v) built a document", bad)
 		}
 	}
-	if _, err := NewPDFADocumentWith(PDFAOptions{}); err == nil {
-		t.Error("the zero PDFAOptions built a document; it names no level")
+	if _, err := NewPDFADocumentWith(pdfa.SkeletonOptions{}); err == nil {
+		t.Error("the zero pdfa.SkeletonOptions built a document; it names no level")
 	}
 
 	// The zero Level is LevelDeclared: the document's own claim.

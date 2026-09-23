@@ -2,9 +2,10 @@ package pdf0
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"testing"
 )
 
 // TestObjectStreamSplitBudget guards that Write never packs more objects into a
@@ -94,7 +95,7 @@ func TestObjectStreamSplitBudget(t *testing.T) {
 		if !ok {
 			t.Fatalf("object %d lost across the round trip", num)
 		}
-		if !Equal(orig.Value, got.Value) {
+		if !object.Equal(orig.Value, got.Value) {
 			t.Errorf("object %d changed across the round trip", num)
 		}
 	}

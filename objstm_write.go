@@ -8,6 +8,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // This file implements the write side of object streams (ISO 32000-2 7.5.7):
@@ -142,7 +143,7 @@ func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]i
 	bodies := make(map[int][]byte, len(packable))
 	for _, num := range packable {
 		var buf bytes.Buffer
-		if err := NewSerializer(&buf).WriteObject(d.Objects[num].Value); err != nil {
+		if err := syntax.NewSerializer(&buf).WriteObject(d.Objects[num].Value); err != nil {
 			return nil, nil, fmt.Errorf("serializing object %d: %w", num, err)
 		}
 		bodies[num] = buf.Bytes()

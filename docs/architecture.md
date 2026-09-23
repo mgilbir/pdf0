@@ -29,10 +29,18 @@ the split follows two rules.
 
 **Each type is declared in exactly one place, and named from there.** A
 dictionary is `object.Dictionary`, a PDF/A finding is `pdfa.Violation`, a
-conformance level is `pdfa.PDFA2b`. The root package holds the entry points —
-`Read`, `Document` and its methods, one validator function per standard — and
-re-exports nothing. A caller that builds an object graph or reads a finding
-imports the package that owns the type.
+conformance level is `pdfa.PDFA2b`. The root package declares the entry points
+over a document — `Read`, `Document` and its methods, one validator function per
+standard, the builders — and what those entry points own: their options,
+results and errors. It re-exports exactly one group of names: the twelve object
+types in `object_api.go` (`pdf0.Dictionary` is `object.Dictionary`), because
+every caller writes them and a second import for them would buy nothing.
+Everything else is named from the package that owns it — `pdfa.SkeletonOptions`,
+`syntax.NewParser`, `object.Equal`, `sign.CheckCertRevocation` — and the root
+package declares no second name for it. The errors that come from internal
+packages (`ErrWrongPassword`, `ErrInvalidMetadataText`, …) are declared in the
+root because it is their only public home; that is ownership, not a second
+name.
 
 **A subsystem is a regular package if it carries public API, `internal/` if it
 does not.** `internal/crypt` is the clear case of the second: its whole exported
@@ -390,7 +398,7 @@ images — rather than to a bounded structural count.
 
 | Has a `…Context` variant | Deliberately does not | Why not |
 |---|---|---|
-| `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
+| `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `object.Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
 | `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
 | All ten validators (`ValidatePDFA`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `facturx.Violation` / `facturx.OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
 | `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. Like `ExtractText`, it returns an error for a page it had to leave out. |

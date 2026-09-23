@@ -11,6 +11,7 @@ import (
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // Builders validate at the call, not at Write (audit 2026-09-22 C131). A NaN,
@@ -28,7 +29,7 @@ func docSnapshot(t *testing.T, d *Document) string {
 	}
 	sort.Ints(nums)
 	var buf bytes.Buffer
-	s := NewSerializer(&buf)
+	s := syntax.NewSerializer(&buf)
 	for _, n := range nums {
 		fmt.Fprintf(&buf, "%d: ", n)
 		if err := s.WriteObject(d.Objects[n].Value); err != nil {

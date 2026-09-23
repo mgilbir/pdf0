@@ -244,7 +244,11 @@ inspects a finding imports the package that owns it. Underneath the root:
   one per validator (`pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`). Each
   type is declared in exactly one place and named from there: a dictionary is
   `object.Dictionary`, a PDF/UA finding is `pdfua.Violation`, a conformance
-  level is `pdfa.PDFA2b`. The root package does not re-export them.
+  level is `pdfa.PDFA2b`. The root package re-exports one group of names, the
+  twelve object types (`pdf0.Dictionary` is `object.Dictionary`), because every
+  caller writes them; everything else — `pdfa.SkeletonOptions`,
+  `syntax.NewParser`, `object.Equal`, `sign.CheckCertRevocation` — has one
+  name, in the package that owns it.
 - **`internal/`** for implementation whose API is not meant for callers:
   `core` (the document seen from below — see below), `finding` (the shared
   validator harness), `crypt` (the standard security handler, reached only
@@ -254,7 +258,7 @@ A subsystem does not name `Document`. It takes a `core.View`: the object graph,
 the trailer, what `Read` found in the file, the resolved budget, the
 cancellation signal, and a per-run state for memos. `Document` stays at the top
 as the facade — a method must be declared in the package that declares its type,
-and `Document`'s twenty-eight exported methods are the public API, so it cannot
+and `Document`'s exported methods are the public API, so it cannot
 move below the packages that would need it. Passing a view *down* keeps the
 dependency arrows pointing one way.
 

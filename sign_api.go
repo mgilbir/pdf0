@@ -3,7 +3,6 @@ package pdf0
 import (
 	"crypto/x509"
 	"fmt"
-	"time"
 
 	"github.com/mgilbir/pdf0/sign"
 )
@@ -14,16 +13,6 @@ import (
 // Document. Signature *production* stays in this package (sign.go,
 // doctimestamp.go): writing a signed file means laying out a whole new
 // document, which is the writer's job, not the verifier's.
-
-// CheckCertRevocation reports what the supplied CRLs and OCSP responses say
-// about cert at time at (pass time.Now() for a live check). issuer must be the
-// certificate that issued cert — the next certificate of a chain you have
-// verified — and only material that issuer authenticates is consulted. A
-// revocation from any source wins over a "good" from another; see
-// sign.CheckCertRevocation for the freshness rules.
-func CheckCertRevocation(cert, issuer *x509.Certificate, crls, ocsps [][]byte, at time.Time) sign.RevocationInfo {
-	return sign.CheckCertRevocation(cert, issuer, crls, ocsps, at)
-}
 
 // VerifySignatures verifies every signature and document time-stamp in the
 // document against the file it was read from (Document.Source): a signature

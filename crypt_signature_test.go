@@ -9,12 +9,14 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"testing"
+
 	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/sign"
-	"strings"
-	"testing"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // A signature dictionary's /Contents is exempt from encryption (ISO 32000-2,
@@ -143,7 +145,7 @@ func appendClearSignature(t *testing.T, enc []byte, cert *x509.Certificate, key 
 	trailer := edoc.Trailer.Clone()
 	trailer.Set("Size", object.Integer(sigNum+1))
 	trailer.Set("Prev", object.Integer(prevXref))
-	s := NewSerializer(&out)
+	s := syntax.NewSerializer(&out)
 	if err := s.WriteDictionary(trailer); err != nil {
 		t.Fatal(err)
 	}

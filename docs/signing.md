@@ -284,7 +284,7 @@ because `ChangesAllowed` is true, not because a time-stamp covers the rest.
 
 ## Revocation
 
-`CheckCertRevocation(cert, issuer, crls, ocsps, at)` returns a
+`sign.CheckCertRevocation(cert, issuer, crls, ocsps, at)` returns a
 `RevocationInfo` (`Status` — `sign.RevocationUnknown`/`Good`/`Revoked` — plus
 `Source`, `"OCSP"` or `"CRL"`, and `RevokedAt`) for the time `at`. Inside
 `VerifySignatures` the issuer is the next certificate of the verified chain
@@ -318,7 +318,7 @@ time-stamp authority: a revoked authority certificate or intermediate makes
 its time-stamps untrusted, whatever the time-stamp's own date — a
 deliberately conservative reading, since the revocation reason (key
 compromise or not) is not weighed. For live revocation, fetch the material
-yourself and call `CheckCertRevocation` directly.
+yourself and call `sign.CheckCertRevocation` directly.
 
 ## Limitations and edge cases
 

@@ -411,13 +411,13 @@ Everything below is implemented in the library and has **no** CLI surface. Absen
 | PDF/X, PDF/VT, PDF/VT-2, PDF/R | `ValidatePDFX(doc, pdfx.Level)`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR` |
 | DPart / document-part hierarchy | `ValidateDParts(doc)` |
 | Factur-X / ZUGFeRD, Order-X | `ValidateFacturX`, `ValidateOrderX`, `EmbedFacturX` |
-| Signature verification, PAdES | `VerifySignatures`, `ValidatePAdES`, `CheckCertRevocation`, `DSSCerts`, `DSSRevocationMaterial` |
+| Signature verification, PAdES | `VerifySignatures`, `ValidatePAdES`, `DSSCerts`, `DSSRevocationMaterial`; `sign.CheckCertRevocation` |
 | Signing and timestamping | `WriteSigned`, `WriteSignedIncremental` (with `WithSignatureTimestamp` for B-T), `WriteArchivalTimestamp` |
 | Image extraction | `ExtractImages()`, `Images()` (lazy iterator) |
 | Page extraction / subsetting | `ExtractPages(indices)` (returns the new document and an `ImportReport` of what was not carried); per-page text via `ExtractPageText(page)` |
 | Incremental write | `WriteIncremental(w, changed)`; the file it appends to is `Source()` |
-| Building conformant documents | `NewPDFADocument`, `NewPDFADocumentWithInfo`, `NewPDFADocumentWith` (bring your own output intent), `GenerateXMPMetadata`, `DefaultSRGBProfile` |
-| Comparison, low-level parsing | `DocumentEqual`, `Equal`, `NewLexer`, `NewParser`, `NewSerializer`, `ParseXRefTable`, `ParseXRefStream` |
+| Building conformant documents | `NewPDFADocument`, `NewPDFADocumentWithInfo`, `NewPDFADocumentWith` (bring your own output intent); `pdfa.GenerateXMPMetadata`, `pdfa.DefaultSRGBProfile` |
+| Comparison, low-level parsing | `DocumentEqual`, `ParseXRefTable`, `ParseXRefStream`; `object.Equal`, `syntax.NewLexer`, `syntax.NewParser`, `syntax.NewSerializer` |
 
 Two encryption nuances the CLI flattens: `decrypt` is exactly `RemoveEncryption()` +
 `Write()` on a document unlocked at `Read` time — it cannot keep an `/Encrypt` dictionary

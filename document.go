@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"sort"
+	"strconv"
+
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
-	"io"
-	"sort"
-	"strconv"
 )
 
 // This file implements whole-file I/O: the Document type, Read's pipeline over
@@ -539,7 +540,7 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 	doc.source.ends = ends
 	streams := make(map[int64]streamFact)
 	doc.source.streams = streams
-	lexer := NewLexer(data)
+	lexer := syntax.NewLexer(data)
 	// parsedByOffset caches the object parsed at each byte offset. A malformed
 	// cross-reference table can point many distinct object numbers at the same
 	// offset; parsing it once per number would re-materialize the object, and if
@@ -566,9 +567,9 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 		if lo < 0 || lo >= size {
 			return 0, false
 		}
-		lx := NewLexer(data)
+		lx := syntax.NewLexer(data)
 		lx.SetPosition(lo)
-		return NewParserFromLexer(lx).IntegerObjectValue()
+		return syntax.NewParserFromLexer(lx).IntegerObjectValue()
 	}
 	for num, entry := range xrefTable.Entries {
 		// Per object: the unit of work here is one object parse, which for a
@@ -610,7 +611,7 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 			continue
 		}
 		lexer.SetPosition(off)
-		parser := NewParserFromLexer(lexer)
+		parser := syntax.NewParserFromLexer(lexer)
 		parser.ResolveLength = resolveLen
 		iobj, err := parser.ParseIndirectObject()
 		if err != nil {
@@ -764,7 +765,7 @@ func (d *Document) normalizeStructure() {
 // here instead let an older section's stream shadow a newer section's
 // redefinition of its number (audit 2026-09-22 C3).
 func parseXRefSection(cancel core.Canceler, data []byte, offset, adjust int64, lim core.Limits, budget *inUseBudget) (XRefSection, error) {
-	lexer := NewLexer(data)
+	lexer := syntax.NewLexer(data)
 	lexer.SetPosition(offset)
 	tok, err := lexer.NextToken()
 	if err != nil {
@@ -825,9 +826,9 @@ func parseXRefStreamAt(cancel core.Canceler, data []byte, offset int64, lim core
 	if offset < 0 || offset >= int64(len(data)) {
 		return nil, 0, nil, fmt.Errorf("xref stream offset %d outside file (size %d)", offset, len(data))
 	}
-	lexer := NewLexer(data)
+	lexer := syntax.NewLexer(data)
 	lexer.SetPosition(offset)
-	iobj, err := NewParserFromLexer(lexer).ParseIndirectObject()
+	iobj, err := syntax.NewParserFromLexer(lexer).ParseIndirectObject()
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("parsing xref stream object: %w", err)
 	}
@@ -924,7 +925,7 @@ func findTrailer(data []byte, afterPos int64) (*object.Dictionary, error) {
 
 	// Parse the dictionary after "trailer"
 	dictStart := afterPos + int64(idx) + int64(len("trailer"))
-	parser := NewParser(data)
+	parser := syntax.NewParser(data)
 	parser.Lexer().SetPosition(dictStart)
 	obj, err := parser.ParseObject()
 	if err != nil {
@@ -1028,7 +1029,7 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 		return fmt.Errorf("cannot write: object(s) %v could not be decrypted on read, so their content is missing", d.decryptFailures)
 	}
 
-	s := NewSerializer(w)
+	s := syntax.NewSerializer(w)
 
 	// When re-encrypting, serialize encrypted copies rather than the in-memory
 	// plaintext (which stays untouched for the caller). The /Encrypt dictionary

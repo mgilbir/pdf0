@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"testing"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"testing"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 func makeObjStm(t *testing.T, objects map[int]string, order []int, compress bool) *object.Stream {
@@ -54,7 +56,7 @@ func TestParseObjStmIndex(t *testing.T) {
 		t.Errorf("wrong object numbers: %+v", entries)
 	}
 	// Parse the middle object from its recorded offset
-	parser := NewParser(data)
+	parser := syntax.NewParser(data)
 	parser.Lexer().SetPosition(int64(first + entries[1].Offset))
 	obj, err := parser.ParseObject()
 	if err != nil {
