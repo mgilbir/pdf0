@@ -103,6 +103,12 @@ const (
 // As with AddPage, a name the drawing used and no resource map defines is an
 // error rather than a pattern that paints with something missing.
 func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error) {
+	if d == nil {
+		return object.IndirectRef{}, errNilDocument
+	}
+	if d.Locked() {
+		return object.IndirectRef{}, errLockedTarget("adding a tiling pattern")
+	}
 	if p.Content == nil {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: the pattern has no content")
 	}

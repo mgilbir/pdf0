@@ -86,8 +86,20 @@ type Page struct {
 // The content stream is Flate-compressed, which is what a producer does and
 // what every reader expects; StreamData reads it back. The page is appended to
 // the tree the catalog names, so a document that has none is an error rather
-// than a page nothing points at.
+// than a page nothing points at. The tree may be any shape a file has: /Count
+// stays the number of pages, and where the tree states a /Rotate or /CropBox
+// the page would otherwise inherit, the page states its own.
+//
+// A link's Page must already be a page of this document, so a link can only
+// lead backwards; a Locked document is refused, since Write passes its content
+// through as ciphertext and the new page would be read back as noise.
 func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
+	if d == nil {
+		return object.IndirectRef{}, errNilDocument
+	}
+	if d.Locked() {
+		return object.IndirectRef{}, errLockedTarget("adding a page")
+	}
 	if p.Content == nil {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: the page has no content")
 	}
@@ -101,6 +113,25 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	if p.Rotate%90 != 0 {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: page rotation %d is not a multiple of 90", p.Rotate)
 	}
+	// Validate the tree before anything is written, so a refusal leaves no
+	// objects behind. (A direct /Pages root is promoted here; that is a repair,
+	// not a partial page.)
+	if _, _, err := d.pageTreeRoot(); err != nil {
+		return object.IndirectRef{}, err
+	}
+	links := make([]*object.Dictionary, 0, len(p.Links))
+	for i, l := range p.Links {
+		if l.Page != nil {
+			if err := d.requirePage(*l.Page, fmt.Sprintf("link %d", i)); err != nil {
+				return object.IndirectRef{}, err
+			}
+		}
+		a, err := l.annotation()
+		if err != nil {
+			return object.IndirectRef{}, fmt.Errorf("link %d: %w", i, err)
+		}
+		links = append(links, a)
+	}
 	// After the content is final, which is what makes subsetting correct, and
 	// before the resources are checked, which is what the names have to satisfy.
 	if p.Fonts, err = d.embedFaces(p.Faces, p.Fonts); err != nil {
@@ -111,20 +142,15 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 		return object.IndirectRef{}, err
 	}
 
-	pagesRef, pages, err := d.pageTree()
-	if err != nil {
-		return object.IndirectRef{}, err
-	}
-
 	compressed := core.FlateEncode(drawn)
-	stream := &object.Stream{Dict: object.Dictionary{}, Data: compressed}
-	stream.Dict.Set("Filter", object.Name("FlateDecode"))
-	stream.Dict.Set("Length", object.Integer(len(compressed)))
+	stream := object.NewStream(object.NewDictionary(
+		object.Entry{Key: "Filter", Value: object.Name("FlateDecode")},
+		object.Entry{Key: "Length", Value: object.Integer(len(compressed))},
+	), compressed)
 	contentRef := d.Add(stream)
 
 	page := &object.Dictionary{}
 	page.Set("Type", object.Name("Page"))
-	page.Set("Parent", pagesRef)
 	page.Set("MediaBox", object.Array{
 		object.Integer(0), object.Integer(0),
 		numberFor(p.Width), numberFor(p.Height),
@@ -145,22 +171,20 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 		group.Set("CS", object.Name("DeviceRGB"))
 		page.Set("Group", group)
 	}
-	if len(p.Links) > 0 {
-		annots := make(object.Array, 0, len(p.Links))
-		for i, l := range p.Links {
-			a, err := l.annotation()
-			if err != nil {
-				return object.IndirectRef{}, fmt.Errorf("link %d: %w", i, err)
-			}
+	if len(links) > 0 {
+		annots := make(object.Array, 0, len(links))
+		for _, a := range links {
 			annots = append(annots, d.Add(a))
 		}
 		page.Set("Annots", annots)
 	}
 	pageRef := d.Add(page)
-
-	kids, _ := d.Resolve(pages.Get("Kids")).(object.Array)
-	pages.Set("Kids", append(kids, pageRef))
-	pages.Set("Count", object.Integer(len(kids)+1))
+	// The tree code sets /Parent, keeps /Count the number of pages, and writes
+	// /Rotate 0 or a /CropBox when the tree above would otherwise lend the page
+	// its own (audit 2026-09-22 C29).
+	if err := d.appendToPageTree([]object.IndirectRef{pageRef}); err != nil {
+		return object.IndirectRef{}, err
+	}
 	return pageRef, nil
 }
 
@@ -195,27 +219,6 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face, refs map[object
 		merged[name] = ref
 	}
 	return merged, nil
-}
-
-// pageTree finds the /Pages node the catalog names, which is what a new page is
-// appended to.
-func (d *Document) pageTree() (object.IndirectRef, *object.Dictionary, error) {
-	catalog := d.ResolveDict(d.Trailer.Get("Root"))
-	if catalog == nil {
-		return object.IndirectRef{}, nil, fmt.Errorf("pdf0: the document has no catalog to add a page to")
-	}
-	ref, ok := catalog.Get("Pages").(object.IndirectRef)
-	if !ok {
-		return object.IndirectRef{}, nil, fmt.Errorf("pdf0: the catalog names no page tree")
-	}
-	pages := d.ResolveDict(ref)
-	if pages == nil {
-		return object.IndirectRef{}, nil, fmt.Errorf("pdf0: the catalog's page tree is missing")
-	}
-	// A page tree with its own /Kids of page-tree nodes would need the new page
-	// placed in one of them; this appends to a flat tree, which is what
-	// NewPDFADocument builds and what this package writes.
-	return ref, pages, nil
 }
 
 // resources builds the page's /Resources, and reports any name the drawing used

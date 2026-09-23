@@ -1,16 +1,15 @@
 package pdf0
 
 import (
+	"fmt"
+
 	"github.com/mgilbir/pdf0/object"
 )
 
-// This file implements the page-level document API: listing a document's
-// pages, extracting a subset of them into a new document, and appending one
-// document's pages to another. All of it rests on a cycle-safe graph copier
-// that renumbers objects and remaps every indirect reference. The copy is
-// structural, not semantic: a page is re-parented onto a fresh /Pages node, so
-// attributes it inherited from its former ancestors (/Resources, /MediaBox,
-// /Rotate — ISO 32000-2 clause 7.7.3.4) are not materialised onto the copy.
+// This file implements the page-level document API: listing a document's pages,
+// extracting a subset of them into a new document, and appending one
+// document's pages to another. The copying is done by the page importer
+// (pageimport.go) and the target's page tree is maintained by pagetree.go.
 
 // PageList returns the document's page dictionaries in reading order.
 func (d *Document) PageList() []*object.Dictionary {
@@ -24,76 +23,9 @@ func (d *Document) PageList() []*object.Dictionary {
 // PageCount returns the number of pages.
 func (d *Document) PageCount() int { return len(d.PageList()) }
 
-// graphCopier copies an object graph from a source document into a destination,
-// assigning fresh object numbers and remapping indirect references. It is
-// cycle-safe: each source object is copied once.
-//
-// Destination numbers come from the destination's allocator (allocObjNum), so a
-// copy appended to a document read from a file never lands on a number the
-// file's object streams or cross-reference streams use.
-type graphCopier struct {
-	src     *Document
-	dst     *Document
-	mapping map[int]int // source object number → destination object number
-}
-
-func newGraphCopier(src, dst *Document) *graphCopier {
-	return &graphCopier{src: src, dst: dst, mapping: map[int]int{}}
-}
-
-// copyRef copies the object referenced by ref (and its graph) into dst, skipping
-// the given keys on the top object (used to drop a page's /Parent up-link).
-func (g *graphCopier) copyRef(ref object.IndirectRef, skip map[object.Name]bool) object.IndirectRef {
-	if n, ok := g.mapping[ref.Number]; ok {
-		return object.IndirectRef{Number: n}
-	}
-	dstNum := g.dst.allocObjNum()
-	g.mapping[ref.Number] = dstNum
-
-	src := g.src.Objects[ref.Number]
-	if src == nil {
-		g.dst.Objects[dstNum] = &object.IndirectObject{Number: dstNum, Value: object.Null{}}
-		return object.IndirectRef{Number: dstNum}
-	}
-	placeholder := &object.IndirectObject{Number: dstNum, Value: object.Null{}}
-	g.dst.Objects[dstNum] = placeholder
-	placeholder.Value = g.copyValue(src.Value, skip)
-	return object.IndirectRef{Number: dstNum}
-}
-
-func (g *graphCopier) copyValue(o object.Object, skip map[object.Name]bool) object.Object {
-	switch v := o.(type) {
-	case object.IndirectRef:
-		return g.copyRef(v, nil)
-	case *object.Dictionary:
-		return g.copyDict(v, skip)
-	case object.Array:
-		cp := make(object.Array, len(v))
-		for i := range v {
-			cp[i] = g.copyValue(v[i], nil)
-		}
-		return cp
-	case *object.Stream:
-		d := g.copyDict(&v.Dict, skip)
-		return object.NewStream(d, append([]byte(nil), v.Data...))
-	}
-	return o // scalars are immutable
-}
-
-func (g *graphCopier) copyDict(d *object.Dictionary, skip map[object.Name]bool) *object.Dictionary {
-	cp := &object.Dictionary{}
-	for key, val := range d.All() {
-		if skip[key] {
-			continue
-		}
-		cp.Set(key, g.copyValue(val, nil))
-	}
-	return cp
-}
-
 // newDocWithPageTree creates an empty document with a catalog (object 1) and an
 // empty /Pages node (object 2), ready to receive pages.
-func newDocWithPageTree(version string) (*Document, int, int) {
+func newDocWithPageTree(version string) *Document {
 	if version == "" {
 		version = "2.0"
 	}
@@ -109,78 +41,54 @@ func newDocWithPageTree(version string) (*Document, int, int) {
 	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
 	doc.Trailer = object.Dictionary{}
 	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
-	return doc, 1, 2
+	return doc
 }
 
-// pageRefsOf returns the indirect references to each page in the document.
-func (d *Document) pageRefsOf() []object.IndirectRef {
-	var refs []object.IndirectRef
-	for _, pg := range d.view().Pages(d.view().CatalogPages()) {
-		refs = append(refs, object.IndirectRef{Number: pg.ObjNum})
+// ExtractPages returns a new document holding copies of the given pages
+// (0-based, in the order given; an index may repeat, and each repetition is a
+// page of its own). The source is not modified.
+//
+// Each copy is a standalone page: the attributes it inherited from the source's
+// page tree (/Resources, /MediaBox, /CropBox, /Rotate) are written on it, and
+// nothing of the source is copied beyond what the pages use. Links between
+// extracted pages are rewritten to the copies; links to pages left behind are
+// removed. The report says what else was carried and what was not — see
+// ImportReport and the policy described in pageimport.go.
+//
+// A Locked source (encrypted, not decrypted) is refused: its pages are
+// ciphertext, and the extract would be written in the clear.
+func (d *Document) ExtractPages(indices []int) (*Document, ImportReport, error) {
+	if d == nil {
+		return nil, ImportReport{}, errNilDocument
 	}
-	return refs
-}
-
-// appendPageInto copies one page (by its source reference) into dst under its
-// /Pages node, re-pointing /Parent and inheriting nothing.
-func appendPageInto(g *graphCopier, dst *Document, pagesNum int, srcPageRef object.IndirectRef) {
-	newRef := g.copyRef(srcPageRef, map[object.Name]bool{"Parent": true})
-	// A source page held as a direct (inline) dictionary in /Kids has no object
-	// number, so copyRef installs a Null placeholder; skip it instead of panicking
-	// on the type assertion (audit C16).
-	iobj := dst.Objects[newRef.Number]
-	if iobj == nil {
-		return
-	}
-	pageObj, ok := iobj.Value.(*object.Dictionary)
-	if !ok {
-		return
-	}
-	pageObj.Set("Parent", object.IndirectRef{Number: pagesNum})
-
-	pages, ok := dst.Objects[pagesNum].Value.(*object.Dictionary)
-	if !ok {
-		return
-	}
-	// Resolve /Kids: the destination's page tree may store it as an indirect
-	// reference to an array. Reading it directly (the previous code) yielded nil
-	// and silently dropped every existing page (audit C15).
-	kids, _ := dst.Resolve(pages.Get("Kids")).(object.Array)
-	pages.Set("Kids", append(append(object.Array{}, kids...), newRef))
-	pages.Set("Count", object.Integer(len(kids)+1))
-}
-
-// ExtractPages returns a new document containing only the given pages (0-based,
-// in the order given). The source is not modified.
-func (d *Document) ExtractPages(indices []int) (*Document, error) {
-	srcPages := d.pageRefsOf()
-	out, _, pagesNum := newDocWithPageTree(d.Version)
-	g := newGraphCopier(d, out)
-	for _, idx := range indices {
-		if idx < 0 || idx >= len(srcPages) {
-			return nil, errPageOutOfRange(idx, len(srcPages))
-		}
-		appendPageInto(g, out, pagesNum, srcPages[idx])
+	out := newDocWithPageTree(d.Version)
+	report, err := importPages(d, out, indices, true)
+	if err != nil {
+		return nil, report, err
 	}
 	finalizeSize(out)
-	return out, nil
+	return out, report, nil
 }
 
-// AppendPages copies every page of other onto the end of this document.
-func (d *Document) AppendPages(other *Document) {
-	catalog := d.ResolveDict(d.Trailer.Get("Root"))
-	if catalog == nil {
-		return
+// AppendPages copies every page of other onto the end of this document, with
+// the same semantics as ExtractPages: each copy is standalone, links among the
+// appended pages follow the copies, form fields join this document's form, and
+// what is not carried is reported. other may be d itself.
+//
+// Either document being Locked is refused, as is a nil one; on error this
+// document is unchanged.
+func (d *Document) AppendPages(other *Document) (ImportReport, error) {
+	if d == nil {
+		return ImportReport{}, errNilDocument
 	}
-	pages := d.ResolveDict(catalog.Get("Pages"))
-	if pages == nil {
-		return
+	if other == nil {
+		return ImportReport{}, fmt.Errorf("pdf0: the document to append is nil")
 	}
-	pagesNum := d.view().DictObjNum(pages)
-	g := newGraphCopier(other, d)
-	for _, ref := range other.pageRefsOf() {
-		appendPageInto(g, d, pagesNum, ref)
+	indices := make([]int, other.PageCount())
+	for i := range indices {
+		indices[i] = i
 	}
+	return importPages(other, d, indices, false)
 }
 
 // finalizeSize records /Size on a document ExtractPages built, which has no
@@ -200,7 +108,7 @@ type pageRangeError struct {
 }
 
 func (e pageRangeError) Error() string {
-	return "page index out of range"
+	return fmt.Sprintf("pdf0: page index %d is out of range; the document has %d page(s)", e.idx, e.count)
 }
 
 func errPageOutOfRange(idx, count int) error { return pageRangeError{idx, count} }

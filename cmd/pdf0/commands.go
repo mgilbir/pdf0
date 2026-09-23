@@ -380,7 +380,22 @@ func cmdMerge(args []string) error {
 			merged = doc
 			continue
 		}
-		merged.AppendPages(doc)
+		report, err := merged.AppendPages(doc)
+		if err != nil {
+			return fmt.Errorf("%s: %w", in.name, err)
+		}
+		// What the merge could not carry (an outline, a structure tree, links
+		// to pages of another input …) is said, not silently lost. It goes to
+		// stderr: stdout may be the merged PDF itself.
+		for _, o := range report.Omitted {
+			fmt.Fprintf(os.Stderr, "%s: not carried: %s: %s\n", in.name, o.Entry, o.Reason)
+		}
+		for _, r := range report.FieldsRenamed {
+			fmt.Fprintf(os.Stderr, "%s: form field %q renamed to %q: the merged document already has one of that name\n", in.name, r.From, r.To)
+		}
+		if report.DestinationsDropped > 0 {
+			fmt.Fprintf(os.Stderr, "%s: %d link(s) or action(s) removed: they led to pages outside it\n", in.name, report.DestinationsDropped)
+		}
 	}
 	return writeDoc(merged, out, *force, permOutput)
 }

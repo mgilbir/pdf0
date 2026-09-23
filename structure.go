@@ -56,6 +56,7 @@ type StructElem struct {
 	// Page is the page whose content stream carries this element's marks. It is
 	// required when Content is non-empty, and inherited by children that do not
 	// state their own.
+	// It must be one of PageList's pages.
 	Page *object.IndirectRef
 
 	// Content are the marked-content identifiers on Page that make up this
@@ -75,6 +76,12 @@ type StructElem struct {
 // index into the parent tree, and the parent tree is built so that a reader
 // starting from any mark on any page can find the element that owns it.
 func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string) error {
+	if d == nil {
+		return errNilDocument
+	}
+	if d.Locked() {
+		return errLockedTarget("setting the structure tree")
+	}
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
 		return fmt.Errorf("pdf0: the document has no catalog to attach a structure tree to")
@@ -85,6 +92,9 @@ func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string
 		return nil
 	}
 	if err := checkStructure(root, roleMap, 0, nil); err != nil {
+		return err
+	}
+	if err := d.checkStructurePages(root); err != nil {
 		return err
 	}
 
@@ -168,6 +178,25 @@ func checkStructure(elems []StructElem, roleMap map[string]string, depth int,
 	for from, to := range roleMap {
 		if !standardStructureTypes[to] {
 			return fmt.Errorf("pdf0: the role map sends %q to %q, which is not a standard structure type", from, to)
+		}
+	}
+	return nil
+}
+
+// checkStructurePages checks that every page an element names is a page of
+// this document (audit 2026-09-22 C136): /Pg on the element and /StructParents
+// on the page are both written from it, so a reference to anything else would
+// put a page-only key on whatever object it happens to name. checkStructure has
+// already bounded the depth.
+func (d *Document) checkStructurePages(elems []StructElem) error {
+	for _, e := range elems {
+		if e.Page != nil {
+			if err := d.requirePage(*e.Page, fmt.Sprintf("structure element %q", e.Tag)); err != nil {
+				return err
+			}
+		}
+		if err := d.checkStructurePages(e.Children); err != nil {
+			return err
 		}
 	}
 	return nil

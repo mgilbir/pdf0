@@ -30,7 +30,7 @@ func TestExtractAndMergePages(t *testing.T) {
 	}
 
 	// Extract page 0 into a new document.
-	sub, err := src.ExtractPages([]int{0})
+	sub, _, err := src.ExtractPages([]int{0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +51,13 @@ func TestExtractAndMergePages(t *testing.T) {
 
 	// Merge two copies → two pages.
 	other := readRef(t, "Simple PDF 2.0 file.pdf")
-	merged, _ := src.ExtractPages([]int{0})
-	merged.AppendPages(other)
+	merged, _, err := src.ExtractPages([]int{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := merged.AppendPages(other); err != nil {
+		t.Fatal(err)
+	}
 	if merged.PageCount() != 2 {
 		t.Errorf("merged page count = %d, want 2", merged.PageCount())
 	}

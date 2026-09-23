@@ -30,6 +30,7 @@ type Link struct {
 	URI string
 
 	// Page is a reference to a page in this document, for a link within it.
+	// It must be one of PageList's pages; anything else is refused by AddPage.
 	Page *object.IndirectRef
 
 	// To says where on that page to go. The zero value shows the whole page,

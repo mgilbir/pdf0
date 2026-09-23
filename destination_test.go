@@ -99,9 +99,14 @@ func TestDestinationRefusesWhatIsNotACoordinate(t *testing.T) {
 // out into a written file.
 func TestLinkCarriesItsDestination(t *testing.T) {
 	doc := NewDocument()
-	target := aPage()
 	var b content.Builder
 	b.Rect(0, 0, 10, 10).Fill()
+	// The link goes to a page of the document: one that is not is refused
+	// (TestDestinationsMustNameAPage).
+	target, err := doc.AddPage(Page{Width: 200, Height: 200, Content: &b})
+	if err != nil {
+		t.Fatalf("adding the target page: %v", err)
+	}
 	pageRef, err := doc.AddPage(Page{
 		Width: 200, Height: 200, Content: &b,
 		Links: []Link{{

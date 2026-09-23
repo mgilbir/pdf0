@@ -368,10 +368,22 @@ encrypted: false
 locked:    false
 ```
 
-The result inherits the **first** input's header version — merging a 1.7 file first with a
-2.0 file second yields `version: 1.7`; it does not take the maximum. `merge` takes **no
-password**, and every input is checked, so an encrypted file in any position is an
-operational error — copying ciphertext into a plaintext container would corrupt the result:
+The result keeps the **first** input's catalog (its outline, metadata, form, …) and takes the
+**highest** PDF version of the inputs — merging a 1.7 file first with a 2.0 file second
+yields `version: 2.0`, since the 2.0 pages may use 2.0 features. Each appended page is
+standalone: the attributes it inherited in its own file (`/Resources`, `/MediaBox`,
+`/CropBox`, `/Rotate`) are written on it, its form fields join the merged form (renamed
+when the name is taken), and links between its pages follow the copies. What an input
+had that the merge does not carry is said on stderr, one line each, and is not an error:
+
+```
+$ pdf0 merge m.pdf s17.pdf annotated.pdf                  # exit 0
+annotated.pdf: not carried: Metadata: a document-level entry of the source; a page import does not carry it
+```
+
+`merge` takes **no password**, and every input is checked, so an encrypted file in any
+position is an operational error — copying ciphertext into a plaintext container would
+corrupt the result:
 
 ```
 $ pdf0 merge m.pdf simple.pdf enc.pdf
@@ -396,7 +408,7 @@ Everything below is implemented in the library and has **no** CLI surface. Absen
 | Signature verification, PAdES | `VerifySignatures`, `VerifySignaturesWithRoots`, `ValidatePAdES(raw)`, `CheckCertRevocation`, `DSSCerts`, `DSSRevocationMaterial` |
 | Signing and timestamping | `WriteSigned`, `WriteSignedIncremental`, `WriteSignedTimestamped`, `WriteArchivalTimestamp` |
 | Image extraction | `ExtractImages()`, `Images()` (lazy iterator) |
-| Page extraction / subsetting | `ExtractPages(indices)`; per-page text via `ExtractPageText(page)` |
+| Page extraction / subsetting | `ExtractPages(indices)` (returns the new document and an `ImportReport` of what was not carried); per-page text via `ExtractPageText(page)` |
 | Incremental write | `WriteIncremental(w, changed)`; the file it appends to is `Source()` |
 | Building conformant documents | `NewPDFADocument`, `NewPDFADocumentWithInfo`, `NewPDFADocumentWith` (bring your own output intent), `GenerateXMPMetadata`, `DefaultSRGBProfile` |
 | Comparison, low-level parsing | `DocumentEqual`, `Equal`, `NewLexer`, `NewParser`, `NewSerializer`, `ParseXRefTable`, `ParseXRefStream` |
