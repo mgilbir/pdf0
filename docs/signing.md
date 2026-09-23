@@ -6,9 +6,10 @@ baseline assessment (`ValidatePAdES`), RFC 3161 time-stamps, and CRL/OCSP
 revocation from the document's own Document Security Store. Reach for it to
 produce a signed PDF from a certificate and a `crypto.Signer`, or to decide
 whether a PDF you received is the document that was signed, by the party you
-expect. The verifier lives in the `sign` package (`verify.go`, `cmsverify.go`,
-`byterange.go`, `trust.go`, `revocation.go`, `changes.go`, `pades.go`,
-`timestamp.go`); the writers are `sign.go`, `doctimestamp.go` and
+expect. The verifier lives in the `sign` package (`sign/verify.go`,
+`sign/cmsverify.go`, `sign/byterange.go`, `sign/trust.go`,
+`sign/revocation.go`, `sign/changes.go`, `sign/pades.go`,
+`sign/timestamp.go`); the writers are `sign.go`, `doctimestamp.go` and
 `incremental.go` in the root package, and `signedfile.go` gives the verifier
 the file's revisions — see [architecture.md](architecture.md) for how they sit
 in the package.
@@ -22,6 +23,9 @@ not a safe check, and trust comes *only* from the roots you pass: with
 always `false` and a signature from an entirely unknown signer looks exactly
 like one from your CA.
 
+<!-- snippet
+var caCert *x509.Certificate
+-->
 ```go
 data, _ := os.ReadFile("signed.pdf")
 doc, err := pdf0.Read(bytes.NewReader(data), int64(len(data)))
@@ -95,7 +99,7 @@ results are then nil and must not be read as "no signatures".
 Every dictionary with `/ByteRange` and `/Contents` whose `/Type` is absent,
 `/Sig` or `/DocTimeStamp` is verified, in this order:
 
-1. **The byte range** (`byterange.go`). Exactly one layout is accepted: four
+1. **The byte range** (`sign/byterange.go`). Exactly one layout is accepted: four
    non-negative integers `[0 len1 start2 len2]`, both spans inside the file —
    each length compared against what remains after its start, never a sum
    against the size, so no value can overflow — and the gap between them
@@ -107,7 +111,7 @@ Every dictionary with `/ByteRange` and `/Contents` whose `/Type` is absent,
    never by gathering them into a buffer. Signatures are hashed in file order
    and share the hash of the prefix they have in common, so verifying a file
    with thousands of revisions costs about one pass over it.
-3. **The CMS** (`cmsverify.go`): one `SignerInfo`, signed attributes present, a
+3. **The CMS** (`sign/cmsverify.go`): one `SignerInfo`, signed attributes present, a
    `message-digest` equal to the digest, a `content-type` equal to the
    `eContentType` (`id-data`, and no encapsulated content, for a document
    signature), an ESS `signing-certificate`/`signing-certificate-v2` that — when
@@ -285,7 +289,7 @@ because `ChangesAllowed` is true, not because a time-stamp covers the rest.
 ## Revocation
 
 `sign.CheckCertRevocation(cert, issuer, crls, ocsps, at)` returns a
-`RevocationInfo` (`Status` — `sign.RevocationUnknown`/`Good`/`Revoked` — plus
+`RevocationInfo` (`Status` — `sign.RevocationUnknown`, `sign.RevocationGood` or `sign.RevocationRevoked` — plus
 `Source`, `"OCSP"` or `"CRL"`, and `RevokedAt`) for the time `at`. Inside
 `VerifySignatures` the issuer is the next certificate of the verified chain
 (without roots, a certificate whose key verifiably issued the signer's), never

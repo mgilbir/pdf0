@@ -1,4 +1,4 @@
-.PHONY: test fuzz cc-sweep cc-sweep-limited check-docs check-mermaid check-links corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk
+.PHONY: test fuzz cc-sweep cc-sweep-limited check-docs check-mermaid check-links check-doc-code corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -64,8 +64,15 @@ fuzz:
 		go test . -run '^$$' -fuzz "^$$t\$$" -fuzztime=$(FUZZTIME); \
 	done
 
-# Both documentation checks.
-check-docs: check-links check-mermaid
+# Every documentation check.
+check-docs: check-links check-mermaid check-doc-code
+
+# The documentation checks that need the Go toolchain (internal/lint): every Go
+# snippet type-checks, every code span, command and quoted message resolves,
+# no prose states a count of the code, and the generated sections are current.
+# They run in CI with the rest of go test; this is the fast way to run only them.
+check-doc-code:
+	go test ./internal/lint -count=1 -run 'TestDoc|TestGeneratedDocSections|TestCommentsNameWhatExists|TestCIRunsEveryFetchableOracle|TestFuzzTargetsAllRun|TestGitignoreCoversEveryCommand'
 
 # Check every relative Markdown link, including "#fragment" anchors. Moving a
 # section between docs leaves the file existing and the anchor dangling, and

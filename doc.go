@@ -10,24 +10,29 @@
 //   - Read parses PDF bytes into a typed object model (see Document), recovering
 //     from common malformations rather than crashing on hostile input.
 //   - Document.Write serializes the object model back to conformant PDF bytes.
-//   - ValidatePDFA checks a document against PDF/A conformance levels:
-//     PDF/A-1a, -1b, -2a, -2b, -3a, -3b, and -4. The Level A levels are Level B
-//     plus the accessibility requirements.
-//   - NewPDFADocument (and NewPDFADocumentWithInfo) build a minimal PDF/A
-//     document.
+//   - ValidatePDFA checks a document against a PDF/A level (a pdfa.Level;
+//     pdfa.Levels lists every one). The Level A levels are Level B plus the
+//     accessibility requirements; Level U adds Unicode mapping.
+//   - NewPDFADocument (and NewPDFADocumentWithInfo, NewPDFADocumentWith) build
+//     a minimal PDF/A document, and Document.Save writes one only if it passes
+//     the level it claims.
 //
 // Built on those: encryption (ReadWithPassword, Document.SetEncryption,
 // Document.RemoveEncryption), digital signatures (Document.WriteSigned,
 // Document.VerifySignatures, Document.ValidatePAdES), extraction
 // (Document.ExtractText, Document.ExtractImages, Document.Images), page
-// operations (Document.ExtractPages, Document.AppendPages), conformance repair
-// (Document.Repair), incremental writing (Document.WriteIncremental), and nine
-// conformance validators besides PDF/A.
+// operations (Document.ExtractPages, Document.AppendPages, each returning an
+// ImportReport of what was not carried), conformance repair (Document.Repair),
+// incremental writing (Document.WriteIncremental), and validators for PDF/UA,
+// PDF/X, PDF/VT, PDF/R, DPart hierarchies and the Factur-X and Order-X
+// containers.
 //
 // # Reading and writing
 //
 //	doc, err := pdf0.Read(bytes.NewReader(data), int64(len(data)))
-//	if err != nil { /* malformed beyond recovery */ }
+//	if err != nil {
+//		return err // malformed beyond recovery
+//	}
 //	var out bytes.Buffer
 //	err = doc.Write(&out)
 //
@@ -39,15 +44,18 @@
 // 978-file Common Crawl sample comes within 2x of any of them, so a caller who
 // configures nothing needs to do nothing.
 //
-// Eleven of those caps are settable per document, as variadic Option values on
-// Read, ReadWithPassword, their Context variants and ParseXRefStream (see
-// WithMaxDecodedStreamBytes and the other With* functions). They resolve once
-// and are stored on the Document, so validation and extraction inherit whatever
-// Read was given, and two documents read with different limits never interfere:
+// The caps a caller has a reason to change are settable per document, as
+// variadic Option values on Read, ReadWithPassword, their Context variants and
+// ParseXRefStream (see WithMaxDecodedStreamBytes and the other With*
+// functions). They resolve once and are stored on the Document, so validation
+// and extraction inherit whatever Read was given, and two documents read with
+// different limits never interfere. Each option's documentation gives the
+// largest real value measured; set a cap below that and real documents are
+// refused. These are stricter than the defaults and still above it:
 //
 //	doc, err := pdf0.Read(r, size,
-//		pdf0.WithMaxDecodedStreamBytes(8<<20),
-//		pdf0.WithMaxDecodedContentBytes(64<<20),
+//		pdf0.WithMaxDecodedStreamBytes(48<<20),
+//		pdf0.WithMaxDecodedContentBytes(256<<20),
 //	)
 //
 // When a cap does stop a check, the validators say so rather than guess: the
@@ -68,9 +76,11 @@
 // ValidateOrderXContext, Document.ExtractTextContext and
 // Document.ExtractImagesContext:
 //
-//	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+//	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 //	defer cancel()
-//	for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdf0.PDFA4) { ... }
+//	for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA4) {
+//		fmt.Println(e)
+//	}
 //
 // A context is a first parameter rather than a With* Option deliberately. An
 // Option is stored on the Document and inherited by every later call, which is
@@ -124,8 +134,8 @@
 //
 // # Validating
 //
-//	for _, e := range pdf0.ValidatePDFA(doc, pdf0.PDFA4) {
-//	    fmt.Println(e) // e.g. [PDF/A-4 6.2.10] object 12: font ... must be embedded
+//	for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA4) {
+//		fmt.Println(e) // e.g. [PDF/A-4 6.2.10] object 12: font ... must be embedded
 //	}
 //
 // An empty result means no implemented check fired, not a guarantee of full
@@ -161,9 +171,8 @@
 // Document.VerifySignatures reports one sign.Result per signature and document
 // time-stamp, verified against the file the document was read from. Read the
 // integrity verdict with sign.Result.Intact — Valid, and every change made after
-// signing a permitted one (a DSS or document time-stamp added for long-term
-// validation) — or sign.Result.DocumentUnmodified when nothing may have changed
-// at all: Valid alone accepts a document whose content was changed by a
+// signing a permitted one (see sign.Result.ChangesAllowed) — or
+// sign.Result.DocumentUnmodified when nothing may have changed at all: Valid alone accepts a document whose content was changed by a
 // post-signing incremental update. Trust comes only from the roots passed in
 // sign.VerifyOptions: with none, TrustedChain is always false. Pass the roots of
 // the signers you accept, never a web PKI pool such as x509.SystemCertPool.

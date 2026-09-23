@@ -72,9 +72,9 @@ seconds, without ever tripping). A run whose budget runs out while a chain is
 followed is stopped, and the check unwound, so `checkUARoleMap` never reports
 *"neither standard nor mapped"* from a truncated walk
 (`TestRoleMapChainResolves`, `TestRoleMapChainTerminates`,
-`TestRoleMapChainBudgetDeclines`). **Mutation:** `validatePDFUA` installs the cache on a
-**shallow copy** of the `Document`, so the caller's document is never touched
-(`TestUAValidationCacheIsolation`).
+`TestRoleMapChainBudgetDeclines`). **Mutation:** validation installs its
+per-run cache on a **shallow copy** of the `Document`, so the caller's document
+is never touched (`TestUAValidationCacheIsolation`).
 
 ```mermaid
 flowchart TD
@@ -116,7 +116,7 @@ rule, noted in the source comments.
 | Headings | 7.4, 7.4.2, 7.4.4 | `checkUAHeadings`, `checkUAOneHPerNode`, `checkUAStrongWeak` | a skipped level (`H1` then `H3`), a first numbered heading that is not `H1`, more than one child `<H>` under one node, a document mixing `<H>` with `<H1>`–`<H6>` |
 | Figures | 7.3 | `checkFigureAlt` | a `Figure` with neither `/Alt` nor `/ActualText` non-empty |
 | Notes | 7.9 | `checkUANotes` | a `Note` with no `/ID`, or two `Note`s sharing one |
-| Language | 7.2 | `checkUALang` | a *present* `/Lang` (catalog or structure element) that is not syntactically valid BCP 47 (`validBCP47`). An absent `/Lang` on an element is fine — it defers to an ancestor |
+| Language | 7.2 | `checkUALang` | a *present* `/Lang` (catalog or structure element) that is not syntactically valid BCP 47 (`core.ValidBCP47`). An absent `/Lang` on an element is fine — it defers to an ancestor |
 | Annotations | 7.18.1, 7.18.2, 7.18.5, 7.18.8 | `checkUAAnnotations` | `TrapNet` present, a `Link` with no `/Contents`, any other visible non-`Widget` annotation with neither `/Contents` nor `/Alt`, a visible annotation with no `/StructParent`, a `PrinterMark` that *has* a `/StructParent`. Hidden (`/F` bit 2) and `Popup` annotations are exempt throughout |
 | Annotation placement | 7.18.1 | `checkUAAnnotStructType` | an OBJR-reached annotation under the wrong structure type: `Widget` wants `<Form>`, `Link` wants `<Link>`, everything else `<Annot>` |
 | Tab order | 7.18.3 | `checkUATabOrder` | a page carrying `/Annots` without `/Tabs /S` |
@@ -130,17 +130,18 @@ rule, noted in the source comments.
 | Optional content | 7.10 | `checkUAOptionalContent` | an OC configuration (`/D` or an entry of `/Configs`) with an empty `/Name`, or carrying `/AS` |
 | Embedded files | 7.11 | `checkUAEmbeddedFiles` | a file specification with `/EF` whose `/F` or `/UF` is empty |
 
-Every font family above iterates `collectFontTextUsage(d)` — the same
+Every font family above iterates `core.CollectFontTextUsage` — the same
 **executed-content model** PDF/A uses ([ADR 0004](adr/0004-executed-content-model.md)):
-a font dictionary that is never used to *show text* is not checked. The map is
-memoized in the shared validation cache, which is why `validatePDFUA` installs
-one before doing anything else; nine font checks consume it.
+a font dictionary that is never used to *show text* is not checked. The content
+interpreter behind it memoises its executions on the run, so every font check
+reads the same answer and the content is executed once.
 
 ## Content-level checking
 
 `pdfua/pdfua_content.go` is the only place UA validation reads page content streams.
-It tokenizes each stream once (`tokenizeContent`) and derives a
-`streamContentFacts` — memoized per `*Stream` in `valCache.streamFacts` — holding
+It tokenizes each stream once, with the one content lexer (`core.ContentLexer`),
+and derives a `streamContentFacts` — memoized per `*Stream` in the run's PDF/UA
+slot (`core.Slot`) — holding
 the distinct real-content violation messages and the sequence of XObject names in
 effect at each `Do`. The real-content model (Matterhorn checkpoint 01) classifies
 each marked-content sequence as `BDC`/`BMC` opens it: **artifact** (first operand
@@ -154,8 +155,8 @@ opened inside a tagged ancestor is 01-003, and tagged content opened inside an
 artifact ancestor is 01-004. `TestUARealContent` pins all three plus the
 `/OC`-wrapping case that must stay clean.
 
-`tokenizeContent` yields tokens one at a time (an `iter.Seq`) rather than
-returning a slice of them, and the analysis keeps no operand buffer — only the
+The lexer yields tokens one at a time into a reused token rather than returning
+a slice of them, and the analysis keeps no operand buffer — only the
 three facts a `BDC`/`BMC` actually consults. The two are the same point: a real
 document's page can hold millions of operands, none of which any rule reads back,
 and materializing them cost more than the whole scan. On a 117 MB file the token
@@ -282,15 +283,16 @@ tabulated in [testing.md](testing.md).
 
 | File | Owns | Governing clauses |
 |---|---|---|
-| `pdfua/pdfua.go` | `pdfua.Violation`, `ValidatePDFUA`, the `validatePDFUA(doc, part)` dispatch, and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, language, headings, figures | 5, 6.1, 7.1–7.4, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x |
+| `pdfua/pdfua.go` | `pdfua.Violation`, the `validateView(doc, part)` dispatch (reached from the root's `ValidatePDFUA` and `ValidatePDFUA2` in `pdfua_api.go`), and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, language, headings, figures | 5, 6.1, 7.1–7.4, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x |
 | `pdfua/pdfua_struct.go` | Its names for `core.StructTree` and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version, the two PDF/UA-2 namespace rules | 7.1, 7.2, 7.4.4, 7.9, 6.1, UA-2 8.2.4 and 8.2.5.29 (and ISO 32000-1 14.8.4.3) |
 | `pdfua/pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
 | `pdfua/pdfua_tablegrid.go` | `TH` identifiability and the table grid reconstruction | 7.2, 7.5 |
 | `pdfua/pdfua2.go` | The PDF/UA-2 package comment: what part 2 adds over the shared checks (the rules themselves are in the files above, selected by `part`) | ISO 14289-2 clauses 4, 8.2.4, 8.2.5.29 and the shared clauses |
 
-Shared machinery lives outside these files: `collectFontTextUsage` and the
-`validationCache` in `pdfa.go`, `tokenizeContent` in the content-operator layer,
-`decodeXMPToUTF8` in `xmp.go`, `loadFontProgram` in forme's `font/fontprog.go`.
+Shared machinery lives outside these files, in `internal/core`: the content
+interpreter behind `core.CollectFontTextUsage`, the run and its memos
+(`core.Run`), the content lexer (`core.ContentLexer`), `core.DecodeXMPToUTF8`,
+and `core.LoadFontProgram` over forme's font parsers.
 
 ## Confirmed limitations
 

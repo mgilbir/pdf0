@@ -147,7 +147,7 @@ func IsStructElem(d View, dict *object.Dictionary) bool {
 // integrity checks report a map that remaps one.
 //
 // A seen-set ends a cycle, and every hop is charged to the run's work meter.
-// Answers are memoised for the run (structTypeMemo): a type is resolved once
+// Answers are memoised for the run (a Slot keyed by structTypeKey): a type is resolved once
 // however many elements carry it, and a walk in the default namespace answers
 // for every type it crosses, so the whole role map costs one walk. The per-call
 // step budget this replaces bounded one chain and not the elements that each
@@ -352,7 +352,7 @@ func structNamespaceName(d View, ns *object.Dictionary) string {
 // separately) rather than looping.
 //
 // The answer for each type is resolved once per run and memoised per role map
-// (roleMapCache), and every type on a chain is answered by the walk that
+// (the same run Slot as ResolveStructType), and every type on a chain is answered by the walk that
 // crossed it. A per-call step budget used to bound one chain, and a file with
 // a 100,000-long chain and a few thousand elements tagged with its first type
 // then paid for the whole chain once per element — minutes of work with no

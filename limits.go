@@ -211,13 +211,14 @@ func WithMaxCmapWork(n int) Option {
 	return positiveLimit("WithMaxCmapWork", n, func(l *core.Limits, n int) { l.CmapWork = n })
 }
 
-// WithMaxWork caps the work one run may do — one validation, one text or
-// image extraction — counted in units of one elementary step, some tens of
-// nanoseconds: a node of the object graph visited, an entry expanded, an
-// operator executed, a range probed, a few bytes tokenised or decoded. By
-// default the budget is 2^28 units plus 512 for every byte of the file the
-// document was read from: real work grows with the file, and amplification —
-// a small file asking for work out of all proportion to its size — is what the
+// WithMaxWork caps the work one run may do (default 2^28 units plus 512 for
+// every byte of the file the document was read from). A run is one
+// validation or one text or image extraction, and a unit is one elementary
+// step, some tens of nanoseconds: a node of the object graph visited, an
+// entry expanded, an operator executed, a range probed, a few bytes tokenised
+// or decoded. The
+// default grows with the file because real work does, and amplification — a
+// small file asking for work out of all proportion to its size — is what the
 // budget exists to stop.
 //
 // Every other limit bounds one unit of work: one stream, one range, one

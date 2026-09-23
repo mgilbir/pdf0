@@ -5,22 +5,23 @@ for which standard, what a result promises, how `ValidatePDFA` dispatches.
 This doc goes one level down, into the engine. Open it when you are adding a PDF/A
 rule and need to know where it belongs, chasing a false positive and need to know
 which check produced it, or looking at a rule that seems oddly shaped and want the
-reason. `pdfa.go` alone is ~6,600 lines; this is its map. The ratchet workflow that
+reason. `pdfa/pdfa.go` is most of the engine; this is its map. The ratchet workflow that
 gates any rule change lives in
 [CONTRIBUTING](../CONTRIBUTING.md#the-corpus-ratchet--read-this-before-changing-a-validation-rule).
 
 ## The anatomy of a rule
 
-A PDF/A rule is a plain `func(*Document, pdfa.Level) []pdfa.Violation`: it takes
-the document and the level being validated, returns the violations it found and
-`nil` when there are none, and must not mutate the document. A complete one,
-verbatim from `pdfa.go`:
+A PDF/A rule is a plain `func(core.View, Level) []Violation` in package `pdfa`:
+it takes the document as seen from below (`core.View`) and the level being
+validated, returns the violations it found and `nil` when there are none, and
+must not mutate the document. A complete one, verbatim from `pdfa/pdfa.go`:
 
+<!-- snippet verbatim pdfa/pdfa.go -->
 ```go
 // Rule 6.1.3-2: Encrypt key must not be present in trailer dictionary.
-func checkNoEncrypt(doc *Document, level pdfa.Level) []pdfa.Violation {
+func checkNoEncrypt(doc core.View, level Level) []Violation {
 	if doc.Trailer.Get("Encrypt") != nil {
-		return []pdfa.Violation{{
+		return []Violation{{
 			Rule:    "6.1.3",
 			Level:   level,
 			Message: "trailer must not contain /Encrypt",
@@ -41,8 +42,8 @@ Two conventions matter more than they look. **Resolve before type-asserting** �
 `doc.ResolveName(dict.Get("Subtype"))`, not `dict.Get("Subtype").(Name)`, and
 `doc.ResolveNumber(arr[i])` for an array element; a value hidden behind an
 indirect reference (`/Subtype 12 0 R`) must neither evade a prohibition nor fail a
-requirement. It has shipped at dozens of sites (audits C12, C18, C36), so
-`internal/lint`'s `TestValidatorsResolveBeforeAssert` now fails on a type
+requirement. It has shipped at dozens of sites (2026-07-26 audit C12, C18;
+2026-09-22 audit C36), so `internal/lint`'s `TestResolveBeforeAssert` now fails on a type
 assertion, type switch or `==`/`!=` comparison against a `Dictionary.Get` or
 `Lookup` result, an array element, a dictionary's `All`/`Values` value or an
 `object.Object` parameter, in every validator package, with no allowlist. A
@@ -70,82 +71,80 @@ internally costs only its own rule: `checkNoDataAfterEOF`, `checkFileHeaderBytes
 has no file record; the byte-level rules do not run for it, and the run records
 a `no-source-file` checker finding saying so.
 
-All findings are concatenated then sorted by `(Rule, Object, Message)` — checks
-iterate map-ordered `doc.Objects`, so without the sort the report order would be
-nondeterministic and undiffable.
+All findings are concatenated then sorted by `(Rule, Object, Message)`
+(`finding.Sort`), so the report is the same on every run and diffs cleanly.
 
-## What is inside `pdfa.go`
+## What is inside `pdfa/pdfa.go`
 
-The `checks` slice in `validateView` dispatches **59** functions. Forty of
-them are defined in `pdfa.go` itself; the other nineteen live in sibling files
-(see "Where the other rule files fit"). `pdfa.go` is organised in `// --- … ---`
-sections, roughly in the order below. Rule IDs vary by part, so the clause column
-shows the 1b / 2b-3b / 4 spread where a helper table (`colourClause`,
-`annotActionClause`, `metadataClause`, `imageClause`, `xobjectClause`,
-`filterClause`) resolves it.
+The `checks` slice in `validateView` dispatches the object-model rules; most are
+defined in `pdfa/pdfa.go` itself, the rest in sibling files (see "Where the other
+rule files fit"). `pdfa/pdfa.go` is organised in `// --- … ---` sections, roughly
+in the order below. Rule IDs vary by part, so the clause column shows the 1b /
+2b-3b / 4 spread where a helper table (`colourClause`, `annotActionClause`,
+`metadataClause`, `imageClause`, `xobjectClause`, `filterClause`) resolves it.
 
-| Family | Checks | Clause | Approx. line |
-|---|---|---|---|
-| File structure | `checkNoEncrypt`, `checkFileID`, `checkHeader`, `checkTrailerInfo` (+ the byte check `checkNoDataAfterEOF`) | 6.1.2–6.1.3 | 330 |
-| Catalog | `checkMetadataStream`, `checkOutputIntents`, `checkOutputIntentProfile`, `checkNoCatalogAA`, `checkNoOCProperties`, `checkPermsDict` | 6.1.12, 6.2.2/6.2.3 | 481 |
-| Streams & filters | `checkNoLZW`, `checkNoExternalStreams`, `checkSignatureByteRange` | 6.1.6 (`filterClause`) | 1045 |
-| Fonts (embedding) | `checkFontsEmbedded` | 6.2.10 / 6.2.11 | 1253 |
-| Annotations | `checkAnnotationSubtypes`, `checkAnnotationFlags`, `checkAnnotationAppearance` | 6.5.x / 6.3.x | 1455 |
-| Interactive forms | `checkWidgetNoAction`, `checkNoXFA`, `checkNeedAppearances` | 6.6.2 / 6.4.1 | 1803 |
-| Actions & trigger events | `checkNoForbiddenActions`, `checkNamedActions`, `checkAnnotationAA` | 6.6.1 / 6.5.x | 1885 |
-| Metadata / XMP | `checkIdentification`, `checkInfoXMPConsistency` | 6.7.11 / 6.6.4 / 6.7.3 | 2115, 2872 |
-| Transparency (1b prohibition) | `checkNoTransparency` | 6.2.4 (1b only) | 2296 |
-| Images | `checkNoAlternateImages`, `checkInterpolate`, `checkNoOPI`, `checkJPXImages` | 6.2.7, 6.2.8.3 | 2462, 6460 |
-| Version identification | `checkCatalogVersion` (A-4 only, `/Version` must be `2.N`) | 6.1.12 | 2594 |
-| Font subsets | `checkFontSubsets` (CharSet/CIDSet presence, 1b only) | 6.3.5 | 2633 |
-| ExtGState & halftones | `checkExtGState` (+ `checkHalftoneErrors`) | 6.2.5 | 2728 |
-| Transparency groups | `checkTransparencyBlending` | 6.2.4 | 3183 |
-| Embedded files | `checkEmbeddedFiles` (+ `checkEmbeddedFileSpecs`, `/AF`) | 6.1.11 / 6.1.12 | 3673 |
-| Optional content | `checkOptionalContent` | 6.9 / 6.10 | 3857 |
-| Implementation limits | `checkImplementationLimits` (Annex C, q/Q nesting, page size) | 6.1.12 / 6.1.13 | 3989 |
-| Device colour | `checkDeviceColorSpaces` (+ output-intent coverage, `Default*`, group `/CS`) | 6.2.3.3 / 6.2.4.3 | 4284 |
-| ICCBased | `checkICCBasedProfiles`, `checkICCBasedUsageRules` | 6.2.3.2 / 6.2.4.2 | 5530, 6256 |
-| Separation / DeviceN | `checkSeparationDeviceN` (tint-transform consistency) | 6.2.4.4 | 5625 |
+| Family | Checks | Clause |
+|---|---|---|
+| File structure | `checkNoEncrypt`, `checkFileID`, `checkHeader`, `checkTrailerInfo` (+ the byte check `checkNoDataAfterEOF`) | 6.1.2–6.1.3 |
+| Catalog | `checkMetadataStream`, `checkOutputIntents`, `checkOutputIntentProfile`, `checkNoCatalogAA`, `checkNoOCProperties`, `checkPermsDict` | 6.1.12, 6.2.2/6.2.3 |
+| Streams & filters | `checkNoLZW`, `checkNoExternalStreams` (+ the byte check `checkSignatureCoversFile`) | 6.1.6 (`filterClause`) |
+| Fonts (embedding) | `checkFontsEmbedded` | 6.2.10 / 6.2.11 |
+| Annotations | `checkAnnotationSubtypes`, `checkAnnotationFlags`, `checkAnnotationAppearance` | 6.5.x / 6.3.x |
+| Interactive forms | `checkWidgetNoAction`, `checkNoXFA`, `checkNeedAppearances` | 6.6.2 / 6.4.1 |
+| Actions & trigger events | `checkNoForbiddenActions`, `checkNamedActions`, `checkAnnotationAA` | 6.6.1 / 6.5.x |
+| Metadata / XMP | `checkIdentification`, `checkInfoXMPConsistency` | 6.7.11 / 6.6.4 / 6.7.3 |
+| Transparency (1b prohibition) | `checkNoTransparency` | 6.2.4 (1b only) |
+| Images | `checkNoAlternateImages`, `checkInterpolate`, `checkNoOPI`, `checkJPXImages` | 6.2.7, 6.2.8.3 |
+| Version identification | `checkCatalogVersion` (A-4 only, `/Version` must be `2.N`) | 6.1.12 |
+| Font subsets | `checkFontSubsets` (CharSet/CIDSet presence, 1b only) | 6.3.5 |
+| ExtGState & halftones | `checkExtGState` (+ `checkHalftoneErrors`) | 6.2.5 |
+| Transparency groups | `checkTransparencyBlending` | 6.2.4 |
+| Embedded files | `checkEmbeddedFiles` (+ `checkEmbeddedFileSpecs`, `/AF`) | 6.1.11 / 6.1.12 |
+| Optional content | `checkOptionalContent` | 6.9 / 6.10 |
+| Implementation limits | `checkImplementationLimits` (Annex C, q/Q nesting, page size) | 6.1.12 / 6.1.13 |
+| Device colour | `checkDeviceColorSpaces` (+ output-intent coverage, `Default*`, group `/CS`) | 6.2.3.3 / 6.2.4.3 |
+| ICCBased | `checkICCBasedProfiles`, `checkICCBasedUsageRules` | 6.2.3.2 / 6.2.4.2 |
+| Separation / DeviceN | `checkSeparationDeviceN` (tint-transform consistency) | 6.2.4.4 |
 
 Section labels `MR-n` / `FP-n` / `C-n` are legacy audit IDs, not ISO numbering.
-Two stretches are not rules at all: ~4915–5530 is the shared content-stream
-tokenizer (`forEachContentOperator`, `forEachContentToken`, `contentUsedNames`,
-`skipInlineImage`), and ~6120–6243 the XMP encoding helpers (UTF-32 must be
-probed before UTF-16 — both carry null bytes).
+Content is not tokenised here: every rule that reads a content stream does it
+through the one content lexer, `core.ContentLexer`, and the content interpreter
+(`internal/core/interp.go`) that executes it with a graphics state.
 
 ## The per-run cache
 
 Many checks want the same expensive things, and recomputing them per check was
 quadratic: content streams inflated up to three times per page, the page tree was
-collected in about eight checks, and `dictObjNum` rescanned the whole object table
-on every font lookup (audit C34 — a real regression on documents with hundreds of
-thousands of objects). `ValidatePDFA` therefore installs a `validationCache`
-(`pdfa.go`, ~line 301) before the loop, memoising:
+collected in about eight checks, and the dictionary → object number lookup
+rescanned the whole object table on every font lookup (2026-07-26 audit C34 — a
+real regression on documents with hundreds of thousands of objects). Every
+validation therefore installs a per-run cache (`validationCache`, in the root
+package's `runcache.go`) before the first check, and the subsystems reach its
+shared half — a `core.Run`, carried on their `core.View` — through
+`Document.view`. It memoises:
 
-- `pages` — page-tree object number → `[]pageInfo` (`collectPages`); `directAnnots`
-  — annotations written as *direct* dictionaries inside page `/Annots`, which a
-  scan of `doc.Objects` can never see (audit A9); `dictNum` — the `*Dictionary` →
-  object number reverse index behind `dictObjNum` / `objNumForDict`
-- `content` — `*Stream` → decoded bytes, under an aggregate 512 MB budget
-  (`WithMaxDecodedContentBytes`) that negatively caches once exhausted, bounding what
-  a flate bomb can force
-- `fontUsage`, `fontEvents`, `usedNames`, `streamFacts` — per-stream results of
-  the executed-content walk; `psProgs` — parsed type-4 PostScript programs (a tint
-  transform is evaluated per pixel); `structTree` — the flattened struct tree,
-  shared with the PDF/UA validators
+- the page tree (`core.View.Pages`), and the decoded bytes of each content
+  stream, under the aggregate `WithMaxDecodedContentBytes` budget that negatively
+  caches once exhausted, bounding what a flate bomb can force;
+- the resource names each content stream invokes, parsed type-4 PostScript
+  programs (a tint transform is evaluated per pixel), and the dictionary →
+  object number reverse index behind `core.View.DictObjNum`;
+- per-subsystem memos in slots (`core.Slot`), keyed by a type the subsystem
+  owns: the content interpreter's executions, the flattened structure tree the
+  PDF/UA validators share, and so on.
 
-**It is installed on a shallow copy** — `runDoc := *doc; runDoc.valCache = …; doc
-= &runDoc`. The copy shares the (read-only during validation)
-`Objects`/`Trailer` and the immutable source record, so it is cheap, and the caller's `*Document` is
-never touched. That is what makes validation non-mutating and lets one document be
-validated concurrently, at several levels at once.
+**It is installed on a shallow copy** of the `Document`. The copy shares the
+(read-only during validation) `Objects`/`Trailer` and the immutable source
+record, so it is cheap, and the caller's `*Document` is never touched. That is
+what makes validation non-mutating and lets one document be validated
+concurrently, at several levels at once.
 
-**Lifetime rule.** The cache lives for exactly one run and assumes the document
+**Lifetime rule.** The memos live for exactly one run and assume the document
 does not change underneath it. Never mutate a dictionary, stream or the object
-table from inside a check, and never stash a `validationCache` or a value from it
-beyond the call. Key new memo fields by pointer identity (`*Stream`,
-`*Dictionary`) like the existing ones, with an explicit `…Valid bool` when `nil`
-is a legitimate cached answer.
+table from inside a check, and never keep a value from a memo beyond the call.
+Key new memo fields by pointer identity (`*Stream`, `*Dictionary`) like the
+existing ones, with an explicit `…Valid bool` when `nil` is a legitimate cached
+answer.
 
 ## Level differences
 
@@ -165,7 +164,7 @@ There is one pipeline for every level, and every check receives the target
 `level.requiresUnicode()` — and never compares a `Level` with a constant:
 `level == PDFA4` is false at 4e and 4f, and that is how the variants' own rules
 once became unreachable (audit C64). `internal/lint`'s
-`TestPDFAChecksAskTheProfile` enforces it outside `level.go`. One rule body
+`TestPDFAChecksAskTheProfile` enforces it outside `pdfa/level.go`. One rule body
 serves every level, via four idioms.
 
 **Early return** where the rule does not apply at all: `checkNoTransparency` opens
@@ -201,7 +200,7 @@ file declaring `F` validated as plain PDF/A-4 gets neither, plus the
 identification finding. To check a file against whatever it claims, ask for
 `LevelDeclared`.
 
-**An inline `if level == PDFA4` branch** where the requirement itself differs. The
+**An inline `if level.Part() == 4` branch** where the requirement itself differs. The
 genuine PDF/A-4 divergences:
 
 - **Page-level output intents.** `checkOutputIntents` runs a separate A-4-only
@@ -217,7 +216,7 @@ genuine PDF/A-4 divergences:
 - **No implementation limits.** `checkImplementationLimits` returns `nil` at A-4:
   PDF 2.0 abolished the Annex C limits and ISO 19005-4 has no such clause.
 - **XMP property validation deliberately off.** `checkXMPProperties`
-  (`xmp_schemas.go`) returns `nil` at A-4. This is a decision, not a TODO —
+  (`pdfa/xmp_schemas.go`) returns `nil` at A-4. This is a decision, not a TODO —
   enabling the 1b/2b/3b property checks at A-4 false-positives on conformant
   corpus files. The evidence, and the warning not to "implement" it, are in
   [xmp.md](xmp.md#pdfa-4-deliberately-skips-property-value-validation), which owns this
@@ -228,11 +227,11 @@ the document-level `/AF` requirement on embedded files is relaxed and embedded
 files need not be PDF/A; `PDFA4E` additionally permits `3D` and `RichMedia`
 annotations and the 3D/multimedia actions plain A-4 forbids. In exchange 4f must
 carry `/EmbeddedFiles` and 4e's 3D streams must be `/U3D` or `/PRC`
-(`pdfa4_ef.go`).
+(`pdfa/pdfa4_ef.go`).
 
 ## Where the other rule files fit
 
-**`final_rules.go`** — the low-frequency rules that arrived late and had no natural
+**`pdfa/final_rules.go`** — the low-frequency rules that arrived late and had no natural
 home: prohibited catalog/page entries (6.11/6.12), image `/Interpolate` and
 rendering intent on XObjects and inline images, file trailer `/ID` validity, A-4
 trigger events (6.6.3), ActualText Private Use Area values (6.2.10.8), Type 5
@@ -246,14 +245,14 @@ decode limit in bytes), so fan-out at each level cannot multiply the work. A
 document deeper than the cap, or past the budget, is not validated and the run
 says so under `limit`.
 
-**`content_operators.go`** — everything decided by reading content: the operator
+**`pdfa/content_operators.go`** — everything decided by reading content: the operator
 whitelist (`contentOperators`, ISO 32000-1 Annex A Table A.1; anything outside it
 is forbidden even inside a `BX`/`EX` compatibility section), the four
 `standardRenderingIntents` for the `ri` operand, named-resource resolution for
 `Do`/`sh`/`gs`/`cs`/`CS`/`Tf`, the drawn-PostScript-XObject prohibition and the
 A-4 ICC profile-identity rule. `walkExecutedContent` lives here — see the diagram.
 
-**`filestructure.go`** — the byte-level clause-6.1 rules, reading the file record
+**`pdfa/filestructure.go`** — the byte-level clause-6.1 rules, reading the file record
 rather than the object model: header layout, indirect-object syntax (`obj`/`endobj`
 placement, over each object's region as `Read` parsed it), the cross-reference
 tables `Read` located and (at PDF/A-1) the absence of cross-reference streams,
@@ -264,7 +263,7 @@ and intent, name UTF-8 validity. It also hosts `checkStreamLength` and
 `checkObjectStreamDecodable`, object-model checks reporting defects the parser
 recovered from during `Read`.
 
-**`pdfa_levela.go`, `pdfa_levela_content.go`, `pdfa_levela_fonts.go`** — the
+**`pdfa/pdfa_levela.go`, `pdfa/pdfa_levela_content.go`, `pdfa/pdfa_levela_fonts.go`** — the
 Level A families (Tagged PDF, artifacts, structure types, language, ActualText
 for Private Use Area code points), each returning early unless `level.IsA()`,
 and the Unicode character-map rule shared by Level A and Level U
@@ -274,7 +273,7 @@ ToUnicode may not map to U+0000, U+FEFF or U+FFFE. The glyph-name exemption read
 the names of the glyphs actually shown, through the font's encoding or, for a
 symbolic Type 1 font with no `/Encoding`, the program's built-in encoding.
 
-**`create.go`** — the write side. `NewPDFADocument` /
+**`pdfa/create.go`** — the write side. `NewPDFADocument` /
 `NewPDFADocumentWithInfo` / `NewPDFADocumentWith` build a five-object skeleton
 (catalog, page tree, XMP metadata, output intent, ICC profile) that passes
 pdf0's own validator at every level. All three return an error; the build →
@@ -297,6 +296,9 @@ it exists to tell this file from every other — so it is offered rather than
 removed: set `pdfa.SkeletonOptions.FileID` and the bytes become a function of the
 content alone. A digest of that content is the usual choice.
 
+<!-- snippet
+var contentDigest [32]byte
+-->
 ```go
 doc, err := pdf0.NewPDFADocumentWith(pdfa.SkeletonOptions{
     Level:        pdfa.PDFA4,
@@ -326,7 +328,7 @@ colour space a PDF/A output intent may not use (only GRAY, RGB and CMYK), or
 that is ICC v4 at a level based on PDF 1.4, is refused rather than embedded —
 which is what the error on these constructors is for.
 
-**`preflight.go`** — `(*Document).Repair(level)`, the deliberately narrow repair
+**`preflight.go`** (in the root package) — `(*Document).Repair(level)`, the deliberately narrow repair
 path: it removes encryption and the additional-action trigger events `level`
 forbids — every `/AA` on the catalog, pages, annotations (through each page's
 `/Annots`) and AcroForm fields before PDF/A-4, only the events 6.6.3 forbids at
@@ -380,10 +382,10 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
   only. `TestRuleCoverage` reads only the 1b/2b/3b/4 profiles.
 - **The corpus has no Level U suite for part 3** and no 3a suite; `PDFA3u` and
   `PDFA3a` are the part-2 rules at part 3's clause numbers.
-- **Content decoding is budgeted.** A stream over `WithMaxContentStreamBytes` (64 MB)
-  decoded, or any stream once the run has spent `WithMaxDecodedContentBytes` (512 MB),
-  yields `nil` — indistinguishable from "undecodable". A rule reading `nil` content
-  as "clean" silently under-reports on a hostile file; treat it as "unknown".
+- **Content decoding is budgeted.** A stream over `WithMaxContentStreamBytes`
+  decoded, or any stream once the run has spent `WithMaxDecodedContentBytes`,
+  is not decoded, and the producer says why (`core.Reason`): a rule must read a
+  declined stream as "unknown", never as "clean".
   Both trips *are* reported, under the reserved rule `limit`
   (`content-stream-size`, `decoded-content-total`) — see
   [limits.md](limits.md). `limit` and `internal` are the two rule identifiers a
@@ -393,6 +395,5 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
 - **Rule IDs are load-bearing.** `TestRuleCoverage` checks that each corpus
   fail file is reported under its veraPDF rule's clause, so emitting a working
   check under a different clause number breaks the coverage ratchet even when
-  the file is still rejected. (Related sentinel asymmetry:
-  `objNumForDict` returns 0 on a miss to match `pdfa.Violation.Object`, while
-  the underlying `dictObjNum` returns -1.)
+  the file is still rejected. A finding about a dictionary that is not an
+  object of its own anchors to object 0 (`core.View.ObjNumOf`), never to -1.

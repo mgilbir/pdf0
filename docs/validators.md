@@ -1,14 +1,16 @@
 # Validators
 
-pdf0 validates a `*Document` against ten conformance standards. Reach for this
+pdf0 validates a `*Document` against the PDF conformance standards. Reach for this
 doc to pick an entry point, to understand what a result type does and does not
 promise, or before adding a rule.
 
-Every validator is **read-only**: each installs its per-run cache on a shallow
-copy, so the caller's document is never mutated and the same document can be
-validated concurrently (`TestValidateConcurrentSameDoc`, `TestUAValidationCacheIsolation`).
+Every validator is **read-only**: each installs its per-run cache
+(`validationCache`, `runcache.go`, which carries the run's shared state, a
+`core.Run`) on a shallow copy of the `Document`, so the caller's document is
+never mutated and the same document can be validated concurrently
+(`TestValidateConcurrentSameDoc`, `TestUAValidationCacheIsolation`).
 
-Three further properties hold across the family:
+These further properties hold across the family:
 
 - **Panic safety.** Every check runs behind a `recover()` boundary — `runCheck`
   for PDF/A, `finding.Guarded` and `pdfua.RunCheck` for the rest. A check that
@@ -139,7 +141,7 @@ flowchart TD
 
 ### Combining findings
 
-The six PDF-standard validators keep their own concrete finding types but all
+The PDF-standard validators keep their own concrete finding types but all
 satisfy `pdf0.Violation` (`error` + `RuleID()` + `ObjectNum()`), so a
 multi-standard report is a plain append:
 
@@ -159,6 +161,9 @@ extracted invoice XML, the conformance level the container declared, and what
 the invoice rule engine did not evaluate. The findings inside it are ordinary
 `pdf0.Violation` values and append like the rest:
 
+<!-- snippet
+var all []pdf0.Violation
+-->
 ```go
 res := pdf0.ValidateFacturX(doc)
 for _, v := range res.Violations {
@@ -215,17 +220,17 @@ the corpus ratchet, not the API — see [CONTRIBUTING](../CONTRIBUTING.md#the-co
 
 ## How PDF/A validation runs
 
-`ValidatePDFA` (`pdfa_api.go`, dispatching to `pdfa`'s `validateView` through `internal/bridge`) runs a fixed
-list of 59 check functions, then the byte-level file-structure checks over the
-file the document was read from. Each check runs
+`ValidatePDFA` (`pdfa_api.go`, dispatching to `pdfa`'s `validateView` through
+`internal/bridge`) runs a fixed list of check functions, then the byte-level
+file-structure checks over the file the document was read from. Each check runs
 behind a `recover()` boundary so a bug or an adversarial structure in one check
 cannot crash the caller. Validation runs against a shallow copy of the
-`Document`, so it never mutates the caller's document and is safe to run
-concurrently on the same document.
+`Document` carrying its per-run cache, so it never mutates the caller's document
+and is safe to run concurrently on the same document.
 
 ```mermaid
 flowchart TD
-    A[ValidatePDFA doc, level] --> B[shallow-copy doc,<br/>install per-run cache]
+    A[ValidatePDFA doc, level] --> B[shallow-copy doc,<br/>install per-run cache and its core.Run]
     B --> T{"resolveTarget: a profile?<br/>LevelDeclared → LevelFor(the document's pdfaid)"}
     T -->|no| R["one 'limit' finding:<br/>not validated"]
     T -->|yes| C[for each check, with the target unflattened]
@@ -245,8 +250,8 @@ The byte-level rules read the file the document was read from
 even if the document has been edited since. To judge an edited document's bytes,
 write it and read the result. A document built in memory has no file; for it the
 byte-level rules do not run, and the result carries a `no-source-file` checker
-finding saying so. (There used to be a `ValidatePDFABytes` that took the bytes as
-a parameter; bytes that were not the document's own produced findings about
+finding saying so. (There used to be a variant that took the bytes as a
+parameter; bytes that were not the document's own produced findings about
 neither file.)
 
 **The level is a target profile.** A `pdfa.Level` names the part, the
@@ -282,11 +287,11 @@ levels (`TestCorpusLevelA`, FP=0, missed=0); part 3 has no a or u suite.
 
 **Executed-content model.** Many PDF/A rules apply only to content that is
 actually *used*, not merely present. (Two font rules are deliberate exceptions
-and scan `Document.Objects` directly: `checkCMapEmbedded` and
+and walk every dictionary the document reaches: `checkCMapEmbedded` and
 `checkCMapCIDLimit`.) Colour spaces, fonts, and ExtGState
 parameters are checked when a page (or a form XObject / pattern / Type3 glyph it
 invokes) actually references them — see `walkExecutedContent` and
-`collectFontTextUsage`. A form XObject that is never drawn does not trigger
+`core.CollectFontTextUsage`. A form XObject that is never drawn does not trigger
 font-embedding or colour rules. This mirrors what veraPDF does, and it is why the
 corpus is the oracle for rule semantics
 ([ADR 0001](adr/0001-corpus-as-oracle.md), [ADR 0004](adr/0004-executed-content-model.md)).
@@ -298,21 +303,24 @@ They are grouped across files by concern:
 
 | File | Rules |
 |------|-------|
-| `pdfa.go` | Dispatch + most rules (font embedding, colour, metadata, annotations, output intents, transparency) |
-| `level.go` | The target profile: levels, `LevelFor`, `resolveTarget`, the conformance hierarchy |
-| `pdfa_levela.go` / `pdfa_levela_fonts.go` | Level A: tagged structure, artifacts, structure types, language, ActualText; Level A and U: Unicode character maps |
-| `final_rules.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects |
-| `content_operators.go` | Content-stream operator whitelist, named resources |
-| `filestructure.go` | Byte-level structure rules over the raw file (the source record's offsets, `Document.Source`) |
-| `fonts.go` / forme `font/fontprog.go`, `font/font_encodings.go`, `font/cff_strings.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
-| `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
-| `internal/core` (PDF functions) | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
+| `pdfa/pdfa.go` | Dispatch + most rules (font embedding, colour, metadata, annotations, output intents, transparency) |
+| `pdfa/level.go` | The target profile: levels, `LevelFor`, `resolveTarget`, the conformance hierarchy |
+| `pdfa/identification.go` | Reading the pdfaid declaration through the XMP model |
+| `pdfa/pdfa_levela.go`, `pdfa/pdfa_levela_content.go`, `pdfa/pdfa_levela_fonts.go` | Level A: tagged structure, artifacts, structure types, language, ActualText; Level A and U: Unicode character maps |
+| `pdfa/final_rules.go`, `pdfa/trigger_events.go`, `pdfa/pdfa4_ef.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects, embedded PDF/A files; the PDF/A-4 variants |
+| `pdfa/outputintent.go` | Output intents and their destination profiles |
+| `pdfa/content_operators.go` | Content-stream operator whitelist, named resources |
+| `pdfa/filestructure.go` | Byte-level structure rules over the file record (`Document.Source`) |
+| `pdfa/fonts.go` / forme `font/fontprog.go`, `font/font_encodings.go`, `font/cff_strings.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
+| `pdfa/xmp.go` / `pdfa/xmp_schemas.go` | XMP metadata parsing and schema validation |
+| `internal/core/function.go` | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |
 
-The other standards each own their file(s): `pdfua/pdfua.go`, `pdfua/pdfua_content.go`,
-`pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go`, `pdfua/pdfua2.go`, `pdfx/pdfx.go`, `pdfx/levels.go`,
-`pdfvt/pdfvt.go`, `pdfr/pdfr.go`, `dpart/dpart.go`, `facturx.go`, `order_x.go`. `violations.go`
-holds the shared `Violation` interface and is the canonical statement of the
-contract above.
+The other standards each own their package: `pdfua/pdfua.go`, `pdfua/pdfua_content.go`,
+`pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go`, `pdfua/pdfua2.go`, `pdfx/pdfx.go`,
+`pdfx/levels.go`, `pdfvt/pdfvt.go`, `pdfr/pdfr.go`, `dpart/dpart.go`, and
+`facturx/` for Factur-X and Order-X, each reached from its `*_api.go` file in the
+root. `violations.go` holds the shared `Violation` interface and is the
+canonical statement of the contract above.
 
 To add a rule, see
 [CONTRIBUTING](../CONTRIBUTING.md#adding-a-validation-rule).

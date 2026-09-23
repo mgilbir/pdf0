@@ -29,8 +29,8 @@ flowchart TD
 ```
 
 There is one reader. It used to be two: a DOM for the schema checks and
-substring scrapers (`ExtractXMPValue`, `xmpHasKey`, `ExtractXMPAttr`) for every
-identification — and the scrapers read a value out of a comment, missed one
+substring scrapers (ExtractXMPValue, xmpHasKey and ExtractXMPAttr, all since
+removed) for every identification — and the scrapers read a value out of a comment, missed one
 written with whitespace around `=` or on an element that carried an attribute,
 assumed the canonical prefix, and compared the escaped text (`Smith &amp; Sons`)
 with the unescaped Info entry (audit 2026-09-22 C35, C141). Every reader asks
@@ -160,7 +160,7 @@ the reader reports nothing about the property — the limit finding already says
 the metadata was not read — and when it is not well-formed the well-formedness
 rule says so.
 
-## Schema validation — `xmp_schemas.go`
+## Schema validation — `pdfa/xmp_schemas.go`
 
 A property in a *predefined* schema must exist in that schema's table and match
 its value form; a property in any other namespace must be declared by an
@@ -233,7 +233,7 @@ in 2026-07-12 and the conclusion held even for conservative variants.
 
 ## The RelaxNG cross-check
 
-`xmp_rng_test.go` (`TestXMPTablesMatchRNG`) validates pdf0's hand-written
+`pdfa/xmp_rng_test.go` (`TestXMPTablesMatchRNG`) validates pdf0's hand-written
 tables against the ISO 16684 RELAX NG schemas vendored in `testdata/xmp-rng/`
 (15 `XMP_Properties-*.rng` files from ceztko/XMP-RNG-Schema, MIT; see the
 directory's `NOTICE.md`). Unlike the veraPDF corpus and the Arlington model,
@@ -304,7 +304,7 @@ bypassed).
 
 The schema tables are **hand-written** from the XMP specifications — not
 generated, unlike forme's `font/cff_strings.go` and `font/font_encodings.go`. To change one: edit
-the table in `xmp_schemas.go`, run `TestXMPTablesMatchRNG`, add an
+the table in `pdfa/xmp_schemas.go`, run `TestXMPTablesMatchRNG`, add an
 `xmpRNGAllowlist` entry *with a rationale* only when pdf0 is deliberately
 spec-correct against the RNG, then re-run the corpus ratchet — the corpus, not
 a spec reading, is the oracle ([ADR 0001](adr/0001-corpus-as-oracle.md)).

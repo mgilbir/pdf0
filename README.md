@@ -25,11 +25,11 @@ go get github.com/mgilbir/pdf0
   parser, the cascade, the box model, floats, tables, bidirectional text — is
   [forme](https://github.com/mgilbir/forme); what is here is the backend that
   writes its display list into a document. See [htmlpdf.md](docs/htmlpdf.md).
-- **Validate** against ten conformance standards:
+- **Validate** against the PDF conformance standards:
 
   | Standard | Entry point | Findings satisfy `Violation` |
   |----------|-------------|------------------------------|
-  | PDF/A 1a/1b, 2a/2b, 3a/3b, 4 | `ValidatePDFA` | yes |
+  | PDF/A-1 to PDF/A-4, every conformance level (`pdfa.Levels`) | `ValidatePDFA` | yes |
   | PDF/UA-1, PDF/UA-2 | `ValidatePDFUA` / `ValidatePDFUA2` | yes |
   | PDF/X-1a/3/4/4p/6 | `ValidatePDFX` | yes |
   | PDF/VT-1, PDF/VT-2 | `ValidatePDFVT` / `ValidatePDFVT2` | yes |
@@ -37,7 +37,7 @@ go get github.com/mgilbir/pdf0
   | DPart hierarchy | `ValidateDParts` | yes |
   | Factur-X, Order-X containers | `ValidateFacturX` / `ValidateOrderX` | yes — in a result struct, see below |
 
-  The six PDF-standard validators are free functions taking the `*Document`
+  The PDF-standard validators are free functions taking the `*Document`
   first and returning findings that satisfy the shared `Violation` interface, so
   results combine across validators. Factur-X and Order-X return a result
   *struct* rather than a slice, because they also carry the extracted invoice
@@ -54,13 +54,15 @@ go get github.com/mgilbir/pdf0
   `Valid` accepts a document altered by a post-signing incremental update.
   Trust is established only against the roots you pass in
   `sign.VerifyOptions`; with none, no signer is trusted.
-- **Extract** text (`ExtractText`, which reports any page it had to leave
+- **Extract** text (`ExtractText`, whose error names any page it had to leave
   out) and images (`ExtractImages`, or the lazy
   `Images` iterator for bounded memory on large scan files; decoding
   DCTDecode, CCITTFax, JBIG2 and JPXDecode), **repair** common conformance
-  failures (`Repair`), and **manipulate pages** (`ExtractPages`, `AppendPages`).
-- **Write incrementally** (`WriteIncremental`) and **build** a minimal
-  conformant PDF/A document (`NewPDFADocument`).
+  failures at a level (`Repair`), and **manipulate pages** (`ExtractPages`,
+  `AppendPages`, each returning an `ImportReport` of what was not carried).
+- **Write incrementally** (`WriteIncremental`), **build** a minimal PDF/A
+  document (`NewPDFADocument`), and **save** it only if it passes the level it
+  claims (`Document.Save`).
 
 ## Quick start
 
@@ -110,13 +112,15 @@ memory has no file, and its result carries a checker finding saying those
 checks did not run — write it and read it back to check them.
 
 For untrusted input, every unbounded loop and every file-sized allocation is
-already capped, and eleven of those caps are settable per document as options on
-`Read`:
+already capped, and the caps worth tuning are settable per document as options
+on `Read`. Each option's documentation gives the largest real value measured —
+a cap below it refuses real documents. These are stricter than the defaults and
+still above it:
 
 ```go
 doc, err := pdf0.Read(r, size,
-	pdf0.WithMaxDecodedStreamBytes(8<<20),   // stricter decompression-bomb ceiling
-	pdf0.WithMaxDecodedContentBytes(64<<20), // stricter whole-run content budget
+	pdf0.WithMaxDecodedStreamBytes(48<<20),   // decompression-bomb ceiling
+	pdf0.WithMaxDecodedContentBytes(256<<20), // whole-run content budget
 )
 ```
 
@@ -132,20 +136,27 @@ Under a deadline, use the `…Context` variants — `ReadContext`,
 `Document.ExtractTextContext` and the rest:
 
 ```go
-ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 defer cancel()
 errs := pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA4)
 ```
 
 A cancelled validation returns the findings it had gathered plus one under the
 rule `"limit"`, so it can never be mistaken for a clean result; `Read`, `Write`
-and the extractors return an error wrapping `ctx.Err()` instead. Every original
-signature is unchanged. See
+and the extractors return an error wrapping `ctx.Err()` instead. See
 [docs/architecture.md](docs/architecture.md#cancellation) for which entry points
 have a variant, why, and the measured cancellation latency.
 
-See [`examples/`](examples/) for runnable programs (`simple_pdf`, `simple_pdf17`,
-`simple_pdfa`); run one with `go run ./examples/simple_pdfa`.
+To write a PDF/A document, build it and write it with `Save` rather than
+`Write`: `Save` checks the written bytes against the level the document claims
+and refuses to write one that fails.
+
+See [`examples/`](examples/) for runnable programs, one per directory, each
+with a comment at the top saying what it shows. The ones that produce a PDF
+write it to stdout (`flavored`, which produces several, to the directory `-o`
+names, or a fresh temporary one), so run one as
+`go run ./examples/simple_pdfa > out.pdf` rather than building a binary into
+the repository.
 
 ## Build and test
 
@@ -185,7 +196,8 @@ make test-corpus   # run TestCorpus against it
 `TestCorpus` is a **ratcheting baseline**: it measures aggregate outcomes
 (false positives, missed violations, parse errors) and fails only if any gets
 worse than the recorded baseline in `pdfa_test.go`. It skips when the corpus is
-absent, so a fresh clone's `go test ./...` stays green.
+absent, so a fresh clone's `go test ./...` stays green; CI fetches the corpus
+and runs it (see [CONTRIBUTING.md](CONTRIBUTING.md#what-ci-checks)).
 
 ## Status and limitations
 
@@ -220,13 +232,15 @@ Known limitations:
   layout (object order, which objects share a stream) is regenerated, not
   preserved.
 - The PDF/A validator implements a subset of the ISO 19005 rules. Against the
-  veraPDF corpus it currently reports no false positives, no missed violations,
-  and no parse errors (tracked by `TestCorpus`), with one known missed violation
-  in the Isartor PDF/A-1b fail suite (`corpusMaxIsartorMissed`, tracked
-  separately by `TestCorpusIsartor`). Coverage beyond the corpus is not
-  guaranteed — an empty validation result is not a conformance guarantee.
-- **No release tags yet.** The API is not frozen; `go get` resolves a
-  pseudo-version, and exported names may change until a v1 is tagged.
+  veraPDF corpus it reports no false positives, no missed violations and no
+  parse errors, and it misses nothing in the Isartor PDF/A-1b fail suite; the
+  ratchets `TestCorpus` and `TestCorpusIsartor` fail if any of that changes.
+  Coverage beyond the corpus is not guaranteed — an empty validation result is
+  not a conformance guarantee.
+- **Pre-v1.** Releases are tagged (`go get` resolves the newest), but the API is
+  not frozen: exported names and signatures may change in any release until a
+  v1. v0.2.0 through v0.3.1 are retracted (`go.mod` says why), so `go get`
+  skips them.
 
 See [`docs/audits/`](docs/audits/README.md) for the audit history (point-in-time
 findings, not a description of how the code works — for that start at
@@ -240,42 +254,50 @@ subpackages and named from there, so a caller that builds an object graph or
 inspects a finding imports the package that owns it. Underneath the root:
 
 - **Regular packages** for pieces that carry public API — `object` (the value
-  types), `syntax` (lexer, parser, serializer), `images`, `sign`, `facturx`, and
-  one per validator (`pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`). Each
-  type is declared in exactly one place and named from there: a dictionary is
+  types), `syntax` (lexer, parser, serializer), `content` (the content-stream
+  builder), `fonts`, `htmlpdf`, `images`, `sign`, `facturx`, and one per
+  validator (`pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`). Each type is
+  declared in exactly one place and named from there: a dictionary is
   `object.Dictionary`, a PDF/UA finding is `pdfua.Violation`, a conformance
-  level is `pdfa.PDFA2b`. The root package re-exports one group of names, the
-  twelve object types (`pdf0.Dictionary` is `object.Dictionary`), because every
-  caller writes them; everything else — `pdfa.SkeletonOptions`,
+  level is `pdfa.PDFA2b`. The root package gives a second name to one group
+  only, the object model's types (`pdf0.Dictionary` is `object.Dictionary`),
+  because every caller writes them; everything else — `pdfa.SkeletonOptions`,
   `syntax.NewParser`, `object.Equal`, `sign.CheckCertRevocation` — has one
-  name, in the package that owns it.
+  name, in the package that owns it. The lint
+  `TestRootReexportsOnlyTheObjectModel` holds that policy.
 - **`internal/`** for implementation whose API is not meant for callers:
   `core` (the document seen from below — see below), `finding` (the shared
   validator harness), `crypt` (the standard security handler, reached only
-  through `Document`), `ccitt`, `jbig2`.
+  through `Document`), `xmp` (the one XMP model every writer edits), `bridge`
+  (how the root package reaches each subsystem's `core.View` entry point),
+  `ccitt`, `jbig2`.
 
 A subsystem does not name `Document`. It takes a `core.View`: the object graph,
-the trailer, what `Read` found in the file, the resolved budget, the
-cancellation signal, and a per-run state for memos. `Document` stays at the top
-as the facade — a method must be declared in the package that declares its type,
-and `Document`'s exported methods are the public API, so it cannot
-move below the packages that would need it. Passing a view *down* keeps the
-dependency arrows pointing one way.
+the trailer, the source record of the file it was read from, the resolved
+budget, the cancellation signal, and a per-run state for memos. `Document`
+stays at the top as the facade — a method must be declared in the package that
+declares its type, and `Document`'s exported methods are the public API, so it
+cannot move below the packages that would need it. Passing a view *down* keeps
+the dependency arrows pointing one way. The functions that take a `core.View`
+are not exported from the public packages — a caller outside the module could
+not construct one — and reach the root through `internal/bridge`;
+`TestPublicAPIMentionsNoInternalType` fails if one leaks back.
 
 The subsystems, and the doc that maps each:
 
-| Subsystem | Files | Map |
+| Subsystem | Where | Map |
 |-----------|-------|-----|
-| Core object model, parser, serializer | `object/`, `syntax/`, `compare.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `filters.go`, `document.go`, `incremental.go` | [architecture.md](docs/architecture.md) |
-| PDF/A validation | `pdfa.go`, `pdfa_levela.go`, `final_rules.go`, `content_operators.go`, `filestructure.go`, `pdfa_create.go`, `embedded.go`, `preflight.go` | [pdfa.md](docs/pdfa.md) |
-| The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/` with their `*_api.go` boundaries in root, `facturx*.go`, `order_x.go`, `violations.go`, `internal/finding` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
-| Fonts | `fonts.go`, `fonts/`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [fonts.md](docs/fonts.md) |
+| Core object model, parser, serializer | `object/`, `syntax/`, `document.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `source.go`, `incremental.go`, `compare.go`, `internal/core/filters.go` | [architecture.md](docs/architecture.md) |
+| PDF/A validation | `pdfa/` (rules in `pdfa/pdfa.go`, `pdfa/final_rules.go`, `pdfa/fonts.go`, `pdfa/content_operators.go`, `pdfa/filestructure.go`, `pdfa/pdfa_levela.go`; the builder in `pdfa/create.go`), with `pdfa_api.go`, `embedded.go`, `preflight.go` and `save.go` in the root | [pdfa.md](docs/pdfa.md) |
+| The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/`, `facturx/`, with their `*_api.go` entry points in the root, `violations.go`, `internal/finding` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
+| Content, pages and building | `content/`, `pages.go`, `pagetree.go`, `pageimport.go`, `page_add.go`, `create.go`, `structure.go`, `outline.go`, `annotation.go`, `form.go` | [architecture.md](docs/architecture.md) |
+| Fonts | `fonts/`, `faceembed.go`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [fonts.md](docs/fonts.md) |
 | HTML and CSS to PDF | `htmlpdf/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](docs/htmlpdf.md) |
-| XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
-| Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
+| XMP metadata | `internal/xmp` (the model every writer edits), `pdfa/xmp.go`, `pdfa/xmp_schemas.go` (the validator's reading) | [xmp.md](docs/xmp.md) |
+| Signatures and PAdES | `sign/`, with `sign.go`, `sign_api.go`, `signedfile.go` and `doctimestamp.go` in the root | [signing.md](docs/signing.md) |
 | Encryption (standard security handler) | `crypt_api.go`, `internal/crypt`, `internal/saslprep`, `internal/pdfdoc` | [encryption.md](docs/encryption.md) |
-| Images and codecs | `images/`, `images_api.go`, `internal/ccitt`, `internal/jbig2`, `internal/core` (PDF functions) | [images.md](docs/images.md) |
-| Text and pages | `text.go`, `pages.go` | [architecture.md](docs/architecture.md) |
+| Images and codecs | `images/`, `images_api.go`, `internal/ccitt`, `internal/jbig2`, `internal/core/function.go` (PDF functions) | [images.md](docs/images.md) |
+| Text extraction | `text.go`, `internal/core/tounicode.go`, `internal/core/cmap.go` | [fonts.md](docs/fonts.md) |
 | Command-line front end (dev aid, not the supported surface) | `cmd/pdf0` | [cli.md](docs/cli.md) |
 
 Every file carries a header comment saying what it owns and which spec clause it
