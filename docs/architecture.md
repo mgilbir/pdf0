@@ -318,12 +318,10 @@ one `Document` from several goroutines stays safe — the property package-level
 | `WithMaxContentStreamBytes` | 64 MB | one content stream or image sample buffer |
 | `WithMaxICCProfileBytes` | 8 MiB | a decoded ICC profile |
 | `WithMaxXMPPacketBytes` | 4 MiB | an XMP packet the property checks build a tree for |
-| `WithMaxCIDRangeSpan` | 65536 | CIDs one `/W` range entry may span |
-| `WithMaxRoleMapSteps` | 1<<20 | `/RoleMap` chain-follow steps per PDF/UA check |
 | `WithMaxTableGridFills` | 1<<24 | grid slots filled for one PDF/UA table |
-| `WithMaxPostScriptSteps` | 1<<20 | operators one type-4 function evaluation may run |
 | `WithMaxCmapWork` | 1<<18 | work spent expanding one TrueType cmap subtable of format 4 or 12 |
 | `WithMaxImagePixels` | 1<<26 | pixels in one image extraction decodes, for every codec (four samples per pixel beyond that) |
+| `WithMaxWork` | 2^28 + 512 a byte of the file | the work of one run — a validation or an extraction — in units of some tens of nanoseconds; see [limits.md](limits.md#the-work-meter-one-budget-for-a-whole-run) |
 
 Every value must be positive: `Read` (and `ParseXRefStream`) returns an error
 wrapping `ErrInvalidOption` for 0 or a negative value, which could only mean

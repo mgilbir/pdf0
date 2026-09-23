@@ -229,12 +229,16 @@ pixel. [limits.md](limits.md) classifies these guards on that axis.
   grid, amplified by the bitplane count plus an int per cell. Segment-level caps
   back these up: regions ≤ 2^20 per side, symbols ≤ 2^16, ≤ 2^24 text instances,
   ≤ 2^20 referred segments.
-- **Type-4 function work budget** (`internal/core/function_ps.go`). A tint transform is
-  evaluated once per pixel, so an unbounded program is a CPU denial of service.
-  `WithMaxPostScriptSteps` (2^20 operators per evaluation) bounds it; depth and stack caps
-  alone do not, because an `if`/`ifelse` program can fan out to exponentially
-  many operators while staying shallow. `maxFunctionDepth` (32) bounds type-3
-  stitching recursion.
+- **Type-4 function work** (`internal/core/function_ps.go`). A tint transform
+  used to be evaluated once per pixel; it is now evaluated once per distinct
+  input (an 8-bit Separation has 256), and every operator executed is charged
+  to the run's work meter (`WithMaxWork`), which bounds the image and the run
+  rather than one evaluation (audit 2026-09-22 C51). Depth and stack caps alone
+  do not bound it, because an `if`/`ifelse` program can fan out to
+  exponentially many operators while staying shallow. `maxFunctionDepth` (32)
+  bounds type-3 stitching recursion. A type-0 function interpolates over the
+  corners of the dimensions its input falls between samples in, not all 2^m of
+  them (C50).
 - **Per-run memoisation** (`walkImages`, `psProgram`). Not a cap but the same
   concern: without the run cache each per-pixel tint evaluation re-decoded and
   re-parsed the function stream, turning a sub-megabyte image into minutes.
