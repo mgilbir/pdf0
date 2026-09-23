@@ -44,26 +44,8 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 		if annotDict == nil {
 			continue
 		}
-		// Check /BM on annotation itself
-		if bm := annotDict.Get("BM"); bm != nil {
-			if n, ok := bm.(object.Name); ok && n != "Normal" && n != "Compatible" {
-				return true
-			}
-		}
-		// Check /CA or /ca on annotation
-		for _, key := range []object.Name{"CA", "ca"} {
-			if v := annotDict.Get(key); v != nil {
-				fval := 1.0
-				switch tv := v.(type) {
-				case object.Real:
-					fval = float64(tv)
-				case object.Integer:
-					fval = float64(tv)
-				}
-				if math.Abs(fval-1.0) > 1e-6 {
-					return true
-				}
-			}
+		if blendOrAlphaIsTransparent(doc, annotDict) {
+			return true
 		}
 		// Check appearance streams for transparency
 		ap := annotDict.Get("AP")
@@ -236,33 +218,37 @@ func extGStateUsesTransparency(doc View, res *object.Dictionary) bool {
 		if gs == nil {
 			continue
 		}
-		// Check CA/ca for non-opaque values
-		for _, key := range []object.Name{"CA", "ca"} {
-			v := gs.Get(key)
-			if v != nil {
-				fval := 1.0
-				switch tv := v.(type) {
-				case object.Real:
-					fval = float64(tv)
-				case object.Integer:
-					fval = float64(tv)
-				}
-				if math.Abs(fval-1.0) > 1e-6 {
-					return true
-				}
-			}
+		if blendOrAlphaIsTransparent(doc, gs) {
+			return true
 		}
-		// Non-Normal blend modes are transparency features
-		if bm := gs.Get("BM"); bm != nil {
-			if n, ok := bm.(object.Name); ok && n != "Normal" && n != "Compatible" {
-				return true
-			}
-		}
-		// Check SMask for non-None values
-		if smask := gs.Get("SMask"); smask != nil {
+		// A soft mask other than /None is a transparency feature.
+		if smask := doc.Resolve(gs.Get("SMask")); smask != nil {
 			if n, ok := smask.(object.Name); !ok || n != "None" {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// blendOrAlphaIsTransparent reports whether a graphics-state or annotation
+// dictionary selects a blend mode other than Normal/Compatible, or a constant
+// alpha (/CA or /ca) other than 1. Each value is resolved first: any of them
+// may be written as an indirect reference.
+func blendOrAlphaIsTransparent(doc View, d *object.Dictionary) bool {
+	if n, ok := doc.ResolveName(d.Get("BM")); ok && n != "Normal" && n != "Compatible" {
+		return true
+	}
+	for _, key := range []object.Name{"CA", "ca"} {
+		fval := 1.0
+		switch tv := doc.Resolve(d.Get(key)).(type) {
+		case object.Real:
+			fval = float64(tv)
+		case object.Integer:
+			fval = float64(tv)
+		}
+		if math.Abs(fval-1.0) > 1e-6 {
+			return true
 		}
 	}
 	return false
@@ -353,21 +339,21 @@ func ClassifyCalibratedCS(doc View, csObj object.Object) (coversRGB, coversCMYK,
 	if !ok || len(arr) < 2 {
 		return
 	}
-	csType, _ := arr[0].(object.Name)
+	csType, _ := doc.ResolveName(arr[0])
 	switch csType {
 	case "ICCBased":
-		profileObj := doc.Resolve(arr[1])
-		if stream, ok := profileObj.(*object.Stream); ok {
-			if nObj := stream.Dict.Get("N"); nObj != nil {
-				if n, ok := nObj.(object.Integer); ok {
-					switch int(n) {
-					case 1:
-						coversGray = true
-					case 3:
-						coversRGB = true
-					case 4:
-						coversCMYK = true
-					}
+		// /N may be indirect like any other value; reading it only when direct
+		// lost the group's coverage and reported its device colour as
+		// uncovered (audit 2026-09-22 C152).
+		if stream, ok := doc.Resolve(arr[1]).(*object.Stream); ok {
+			if n, ok := doc.ResolveInt(stream.Dict.Get("N")); ok {
+				switch int(n) {
+				case 1:
+					coversGray = true
+				case 3:
+					coversRGB = true
+				case 4:
+					coversCMYK = true
 				}
 			}
 		}
@@ -408,7 +394,7 @@ func checkCSForDeviceSeen(doc View, csObj object.Object, usesRGB, usesCMYK, uses
 		return
 	}
 	if arr, ok := resolved.(object.Array); ok && len(arr) >= 2 {
-		csType, _ := arr[0].(object.Name)
+		csType, _ := doc.ResolveName(arr[0])
 		switch csType {
 		case "Indexed":
 			// [/Indexed base hival lookup] - check base

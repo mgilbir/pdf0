@@ -205,7 +205,7 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 				if st == "PS" {
 					add("a drawn PostScript XObject is not permitted", xnum)
 				} else if st == "Form" {
-					if s2, _ := s.Dict.Get("Subtype2").(object.Name); s2 == "PS" {
+					if s2, _ := doc.ResolveName(s.Dict.Get("Subtype2")); s2 == "PS" {
 						add("a drawn form XObject has /Subtype2 /PS (PostScript)", xnum)
 					}
 					if s.Dict.Get("PS") != nil {
