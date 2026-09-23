@@ -214,7 +214,7 @@ type UsedResourceNames struct {
 	Shadings map[string]bool
 }
 
-// ContentUsedNamesCached returns contentUsedNames(data), memoized per content
+// ContentUsedNamesCached returns ContentUsedNames(data), memoized per content
 // stream (key) when a validation cache is present.
 func (d View) ContentUsedNamesCached(data []byte, key *object.Stream) UsedResourceNames {
 	if key != nil {

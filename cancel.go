@@ -56,9 +56,9 @@ import (
 //
 //   - per check, in every validator's check loop;
 //   - per page, per content stream, per image, per embedded PDF;
-//   - per cancelScanBytes inside the three token scanners, which are two thirds
-//     of a large document's validation time;
-//   - per cancelReadChunk inside flate (cancelReader) and LZW decoding, which is
+//   - per core.CancelScanBytes inside the content lexer, which is most of a
+//     large document's validation time;
+//   - per core.CancelReadChunk inside flate (core.CancelReader) and LZW decoding, which is
 //     the longest single uninterruptible step there is;
 //   - per object in Read's load loops and Write's emit loop.
 //

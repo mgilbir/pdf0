@@ -271,8 +271,8 @@ func (c *structureCheck) roles() error {
 // checkStructurePages checks that every page an element names is a page of
 // this document (audit 2026-09-22 C136): /Pg on the element and /StructParents
 // on the page are both written from it, so a reference to anything else would
-// put a page-only key on whatever object it happens to name. checkStructure has
-// already bounded the depth.
+// put a page-only key on whatever object it happens to name. The structure
+// check (structureCheck.elems) has already bounded the depth.
 func (d *Document) checkStructurePages(elems []StructElem) error {
 	for _, e := range elems {
 		if e.Page != nil {

@@ -483,7 +483,7 @@ func TestRunsAreSplitAtALevelBoundary(t *testing.T) {
 // are drawn and rule L4's mirroring is applied.
 //
 // It is checked through the shaper rather than by inspecting the string, because
-// the string is not the claim — a test that shapedText prefixes some character
+// the string is not the claim — a test that the shaped text prefixes some character
 // would pass just as well with a character the shaper ignores.
 func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
 	face, err := fonts.Standard("Helvetica")
@@ -626,7 +626,7 @@ const hebrewHV = "הו" // he vav
 // TestABrokenWordDoesNotDisorderWhatSharesItsLine is the bidi range of the
 // halves of a word cut by overflow-wrap.
 //
-// splitItem is handed an offset into the string and the range it has to move
+// The line splitter is handed an offset into the string and the range it has to move
 // counts runes: the paragraph the levels were resolved over is a []rune. Adding
 // the byte offset to it is right for Latin and wrong for every script that needs
 // the algorithm, and the tail then reads its level from a position past its own

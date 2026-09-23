@@ -36,7 +36,7 @@ func errMessages(errs []pdfa.Violation) []string {
 }
 
 // budgetBustingCmap builds a format-4 subtable whose segments cost more work
-// than defaultMaxCmapWork allows. The first five segments each span the whole
+// than core.DefaultMaxCmapWork allows. The first five segments each span the whole
 // BMP with a delta chosen so code 0x41 ('A') maps to glyph 0 and is therefore
 // not recorded; the sixth segment, the only one that maps 'A' to a real glyph,
 // is never reached because the budget runs out inside the fifth. The result is
@@ -376,7 +376,7 @@ func embeddedPDFAFixture(t *testing.T, lim core.Limits) (inner []byte, outer *Do
 // result from the nested validation as "this embedded file is not PDF/A" — so a
 // guard trip or a recovered panic *inside* the embedded document, which says
 // only that pdf0 could not finish, became a conformance finding against the
-// outer file. It also read the embedded bytes under defaultLimits() rather than
+// outer file. It also read the embedded bytes under core.DefaultLimits() rather than
 // the outer document's, so a caller's configured ceiling did not reach the one
 // place a hostile file gets a whole second document validated.
 // embeddedPDFACompliant runs the embedded-PDF/A check on one document at depth
@@ -411,7 +411,7 @@ func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	// The same rule reaches the two exits that never see a nested finding at
 	// all, because the nested run did not get far enough to produce one. A
 	// lowered per-stream cap leaves the embedded document's own metadata
-	// undecodable, so declaredPDFALevel reports "not PDF/A" for a file that may
+	// undecodable, so its declared conformance reads as "not PDF/A" for a file that may
 	// well be one. That is the checker's doing, not the file's, and it must
 	// withhold rather than condemn.
 	noMeta := mustResolveLimits([]Option{WithMaxContentStreamBytes(1)})

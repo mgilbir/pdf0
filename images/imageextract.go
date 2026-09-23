@@ -554,7 +554,7 @@ func jpegComponents(m color.Model) int {
 }
 
 // decodeImageSamples reverses a sample stream's filter chain WITHOUT the run
-// cache (unlike decodeContentStream): image-sized sample data is used once,
+// cache (unlike content streams, core.View.Content): image-sized sample data is used once,
 // and retaining it in the cache for the whole run — or charging it against
 // the shared content budget — would bloat memory and starve the small shared
 // streams (tint functions, palettes) the cache exists for. The same 64MB

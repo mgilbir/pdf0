@@ -836,7 +836,7 @@ func parseXRefStreamAt(cancel core.Canceler, data []byte, offset int64, lim core
 	if !ok {
 		return nil, 0, nil, fmt.Errorf("xref stream object is not a stream")
 	}
-	// The document's own resolved limits, not defaultLimits(): a
+	// The document's own resolved limits, not core.DefaultLimits(): a
 	// cross-reference stream is a Flate stream the file controls like any
 	// other, so a caller who lowered WithMaxDecodedStreamBytes for untrusted
 	// uploads has to get that ceiling here too.

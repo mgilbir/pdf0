@@ -475,7 +475,7 @@ const maxPageTreeDepth = 64
 //
 // Only the dictionary is returned, deliberately. The widget's /P must be an
 // indirect reference to the page whose /Annots carries it (Table 166), and the
-// caller takes that object number from signingObjNums, which derives it from
+// caller takes that object number from signingTarget, which derives it from
 // this very dictionary — so the annotation and its /P cannot name different
 // objects. A separate helper that re-walked the tree for the reference is what
 // made them disagree: it returned the root's first /Kids entry whether or not

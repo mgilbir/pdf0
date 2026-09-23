@@ -74,8 +74,8 @@ func LZWDecode(cancel Canceler, data []byte, earlyChange int, lim Limits) ([]byt
 		return int(bitBuf>>uint(bitCnt)) & ((1 << uint(codeWidth)) - 1), true
 	}
 
-	// The decode stops when cancel fires, checked every cancelReadChunk bytes of
-	// output — the same granularity flate gets through cancelReader, expressed
+	// The decode stops when cancel fires, checked every CancelReadChunk bytes of
+	// output — the same granularity flate gets through CancelReader, expressed
 	// against the output here because LZW's cost tracks what it produces, not
 	// what it consumes (cancel.go).
 	nextCancelCheck := math.MaxInt // never reached when cancel cannot fire

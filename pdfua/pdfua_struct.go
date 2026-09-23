@@ -14,8 +14,8 @@ import (
 // re-descending the tree.
 
 // Structure-element nesting constraints from the veraPDF PDF/UA-1 profile
-// (clause 7.2). allowedParents maps a child type to the parent types that may
-// contain it; allowedChildren maps a parent type to the only child types it may
+// (clause 7.2). uaAllowedParents maps a child type to the parent types that may
+// contain it; uaAllowedChildren maps a parent type to the only child types it may
 // contain. Types are compared after resolving through the structure tree's
 // /RoleMap.
 var uaAllowedParents = map[object.Name][]object.Name{

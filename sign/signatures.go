@@ -376,7 +376,7 @@ func buildSignedData(cert *x509.Certificate, key crypto.Signer, content []byte) 
 	return BuildSignedDataFull(cert, key, content, nil, nil)
 }
 
-// buildSignedDataFull builds a detached CMS SignedData over content. When a TSA
+// BuildSignedDataFull builds a detached CMS SignedData over content. When a TSA
 // certificate and key are supplied it also embeds an RFC 3161 signature time-
 // stamp over the signature value as an unsigned attribute, producing a PAdES-B-T
 // signature.
