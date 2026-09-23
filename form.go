@@ -38,7 +38,9 @@ type Form struct {
 	Content *content.Builder
 
 	// Group makes the form a transparency group, so that opacity and blending
-	// apply to its result as a whole rather than to each mark separately.
+	// apply to its result as a whole rather than to each mark separately. The
+	// group is isolated and blends in DeviceRGB. A form a soft mask is taken
+	// from has to be one (LuminositySoftMask, AlphaSoftMask).
 	Group bool
 
 	// Faces are fonts to embed and name, as for Page.

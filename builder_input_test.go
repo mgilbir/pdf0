@@ -198,6 +198,15 @@ func TestFreeBuildersRefuseBadNumbers(t *testing.T) {
 		return []Stop{{Offset: 0, Color: [3]float64{0, 0, 0}}, {Offset: off, Color: [3]float64{c, 1, 1}}, {Offset: 1, Color: [3]float64{1, 1, 1}}}
 	}
 	good := stops(0.5, 0.5)
+	grad, err := LinearGradient(0, 0, 1, 0, good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maskDoc := NewDocument()
+	maskForm, err := maskDoc.AddForm(Form{BBox: [4]float64{0, 0, 1, 1}, Content: square(), Group: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]func() error{}
 	for _, v := range []float64{nan, inf, -inf} {
 		v := v
@@ -212,7 +221,11 @@ func TestFreeBuildersRefuseBadNumbers(t *testing.T) {
 			"RadialGradient centre": func() error { _, err := RadialGradient(v, 0, 0, 1, 1, 5, good); return err },
 			"RadialGradient radius": func() error { _, err := RadialGradient(0, 0, 0, 1, 1, v, good); return err },
 			"LuminositySoftMask": func() error {
-				_, err := LuminositySoftMask(object.IndirectRef{Number: 1}, [3]float64{v, 0, 0})
+				_, err := maskDoc.LuminositySoftMask(maskForm, []float64{v, 0, 0})
+				return err
+			},
+			"ShadingPattern matrix": func() error {
+				_, err := ShadingPattern(grad, &[6]float64{1, 0, 0, 1, v, 0})
 				return err
 			},
 		} {
