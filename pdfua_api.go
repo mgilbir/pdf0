@@ -61,14 +61,14 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Vio
 
 // ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the pdfua.Violation
 // type; clause identifiers follow ISO 14289-2.
-func ValidatePDFUA2(d *Document) []pdfua.Violation {
-	return validatePDFUA2(core.Canceler{}, d)
+func ValidatePDFUA2(doc *Document) []pdfua.Violation {
+	return validatePDFUA2(core.Canceler{}, doc)
 }
 
 // ValidatePDFUA2Context is ValidatePDFUA2 with cancellation; see
 // ValidatePDFUAContext for how a cancelled run reports itself.
-func ValidatePDFUA2Context(ctx context.Context, d *Document) []pdfua.Violation {
-	return validatePDFUA2(core.NewCanceler(ctx), d)
+func ValidatePDFUA2Context(ctx context.Context, doc *Document) []pdfua.Violation {
+	return validatePDFUA2(core.NewCanceler(ctx), doc)
 }
 func validatePDFUA2(cancel core.Canceler, d *Document) []pdfua.Violation {
 	if d == nil {

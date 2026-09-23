@@ -12,16 +12,16 @@ import (
 // through a core.View; this is the boundary that starts the run and reports the
 // guards that tripped while the file was read.
 
-// ValidatePDFX checks whether v conforms to the given PDF/X level. An empty
+// ValidatePDFX checks whether doc conforms to the given PDF/X level. An empty
 // result means no violations were found.
-func ValidatePDFX(v *Document, level pdfx.Level) []pdfx.Violation {
-	return validatePDFX(core.Canceler{}, v, level)
+func ValidatePDFX(doc *Document, level pdfx.Level) []pdfx.Violation {
+	return validatePDFX(core.Canceler{}, doc, level)
 }
 
 // ValidatePDFXContext is ValidatePDFX with cancellation; a cancelled run reports
 // itself under the rule "limit" (see cancel.go).
-func ValidatePDFXContext(ctx context.Context, v *Document, level pdfx.Level) []pdfx.Violation {
-	return validatePDFX(core.NewCanceler(ctx), v, level)
+func ValidatePDFXContext(ctx context.Context, doc *Document, level pdfx.Level) []pdfx.Violation {
+	return validatePDFX(core.NewCanceler(ctx), doc, level)
 }
 func validatePDFX(cancel core.Canceler, doc *Document, level pdfx.Level) []pdfx.Violation {
 	if doc == nil {

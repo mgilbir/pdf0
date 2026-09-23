@@ -76,6 +76,42 @@ Both have lapsed, so both columns say yes.
 Signature and PAdES assessment are `*Document` methods with their own result
 types; see [signing.md](signing.md).
 
+### One shape
+
+Every conformance validator has the same shape, and `internal/lint` holds it
+(`TestValidatorsHaveOneShape`, `TestEveryFindingTypeIsAViolation`):
+
+- **A free function of the root package**, `ValidateX(doc *Document, …)`. What
+  follows `doc` is what the standard itself varies by — a PDF/A or PDF/X level —
+  and nothing else. The document parameter is `doc` in every one.
+- **A `…Context` twin**, `ValidateXContext(ctx context.Context, doc *Document, …)`,
+  with the same parameters after `ctx` and the same result.
+- **Findings of the standard's own type**, returned as a slice, or inside a
+  result struct when the validator has more than findings to return (the
+  invoice containers return the invoice XML and its rule coverage too). Every
+  finding type satisfies `pdf0.Violation`, so findings combine across standards
+  and `IsCheckerFinding` classifies all of them. It reads `RuleID()`, which
+  returns the `Rule` field on every finding type except `pdfua.Violation`, whose
+  field is named for what ISO 14289 calls it, `Clause`.
+- **No raw bytes.** A rule about the file's bytes reads the file the document
+  was read from (`Document.Source`), never a parameter that could name another
+  file.
+- **A nil document is one `limit` finding**, never a panic (see above).
+
+Why standards are free functions and signatures are methods: a conformance
+validator answers "does this document conform to standard S?", and several of
+them are asked of one document; the standard is the subject, so the function is
+named for it and takes the document, and a nil document still has a finding type
+to be reported in. Signature verification (`Document.VerifySignatures`,
+`Document.ValidatePAdES`, `Document.DSSCerts`) answers questions about material
+the document carries, and it returns `(results, error)`: its results are not
+findings, and a run that could not finish — an internal failure on a hostile
+file — has no finding type to become, so it is an error.
+
+The functions the validators are built from take the internal `core.View` and
+are not exported; see
+[architecture.md](architecture.md#crossing-the-boundary-internalbridge).
+
 ```mermaid
 flowchart TD
     Doc[("*Document")]
