@@ -807,6 +807,7 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 		return damagedFontProgramError(doc, level, rule, fontDict, fd, u, r)
 	}
 	cidSub, _ := doc.ResolveName(desc.Get("Subtype"))
+	gmap := loadCIDGlyphMap(doc, desc, cidSub)
 	// The CMap: how this font's character codes become CIDs. Identity-H is one
 	// answer and an embedded CMap stream is another; a predefined name is data
 	// this module does not carry, and cmap is nil for it — LoadCMap records
@@ -867,13 +868,20 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 			}
 			cid := code.CID
 
-			progW, haveProg := cidGlyphWidth(fp, desc, doc, cidSub, cid)
-			exists := cidGlyphExists(fp, cidSub, cid)
+			// The glyph the CID selects, once, for every check below. A map
+			// pdf0 could not read names none, and nothing is asserted about
+			// the glyph.
+			key, keyKnown := gmap.glyph(cid)
+			progW, haveProg := 0.0, false
+			exists := true
+			if keyKnown {
+				progW, haveProg = cidGlyphWidth(fp, gmap, key)
+				exists = cidGlyphExists(fp, gmap, key)
+			}
 
 			if renders && !exists {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
-			} else if renders && exists && cidSub == "CIDFontType2" && fp.GlyphNonEmpty != nil &&
-				cid < len(fp.GlyphNonEmpty) && !fp.GlyphNonEmpty[cid] {
+			} else if renders && keyKnown && cidGlyphEmpty(fp, gmap, key) {
 				// A subset must embed an outline for every rendered glyph; an
 				// empty glyf entry is acceptable only for a whitespace
 				// character (ISO 19005 6.2.11.4.1/6.2.10.4.1).
@@ -1056,64 +1064,108 @@ func isNotdefGlyph(fp *font.Program, subtype object.Name, symbolic bool, code by
 	return false
 }
 
-// cidGlyphWidth returns a CID's advance from the embedded CIDFont program.
-func cidGlyphWidth(fp *font.Program, desc *object.Dictionary, doc core.View, cidSub object.Name, cid int) (float64, bool) {
-	if cidSub == "CIDFontType2" {
-		gid, ok := cidToGID(doc, desc, cid)
-		if !ok || gid >= len(fp.WidthByGID) {
+// cidGlyphMap is how a CIDFont's CIDs select glyphs in its program, read once
+// per font.
+//
+// A CIDFontType2 selects them through its CIDToGIDMap (ISO 32000-1 9.7.4.2,
+// Table 117): /Identity, or absent, makes the glyph index the CID; a stream
+// holds the glyph index of CID c in bytes 2c and 2c+1. A CIDFontType0 has no
+// map: its CFF program is keyed by the CID itself (a CID-keyed charset, or
+// GID == CID for a font that is not CID-keyed), so its "glyph" is the CID.
+//
+// Every check on a shown CID — does its glyph exist, is its outline empty, is
+// its width what the dictionary says — is about the same glyph, so the glyph
+// is resolved once and handed to all of them. The width check used to map and
+// the existence and emptiness checks did not, so a font whose map sent CID
+// 0x9000 to glyph 1 was reported as not defining CID 36864 (audit 2026-09-22
+// C68).
+type cidGlyphMap struct {
+	type2 bool
+	// For a CIDFontType2 with a stream map: that it has one, whether pdf0
+	// read it, and the map. A map pdf0 did not read names no glyph.
+	stream   bool
+	readable bool
+	data     []byte
+}
+
+// loadCIDGlyphMap reads a descendant font's glyph selection. A CIDToGIDMap
+// name other than /Identity, or a value of the wrong type, is its own finding
+// (the CIDToGIDMap rule) and is read as Identity here, the only selection the
+// font could mean.
+func loadCIDGlyphMap(doc core.View, desc *object.Dictionary, cidSub object.Name) cidGlyphMap {
+	m := cidGlyphMap{type2: cidSub == "CIDFontType2"}
+	if !m.type2 {
+		return m
+	}
+	if s, ok := doc.Resolve(desc.Get("CIDToGIDMap")).(*object.Stream); ok {
+		data, r := doc.Content(s)
+		// A map pdf0 declined to decode names no glyph (glyph reports !ok),
+		// and the producer recorded why.
+		m.stream, m.readable, m.data = true, r == core.ReasonOK, data
+	}
+	return m
+}
+
+// glyph returns the key a CID's glyph is stored under in the program: its
+// glyph index for a CIDFontType2, the CID for a CIDFontType0. ok is false when
+// the map could not be read and no glyph can be named: guessing Identity would
+// judge some other glyph. A CID past the end of a stream map has no entry, and
+// selects glyph 0 — no glyph.
+func (m cidGlyphMap) glyph(cid int) (key int, ok bool) {
+	if !m.stream {
+		return cid, true
+	}
+	if !m.readable {
+		return 0, false
+	}
+	if cid >= 0 && 2*cid+1 < len(m.data) {
+		return int(m.data[2*cid])<<8 | int(m.data[2*cid+1]), true
+	}
+	return 0, true
+}
+
+// cidGlyphWidth returns the advance of the glyph a CID selected (key, from
+// cidGlyphMap.glyph) in the embedded CIDFont program.
+func cidGlyphWidth(fp *font.Program, m cidGlyphMap, key int) (float64, bool) {
+	if m.type2 {
+		if key < 0 || key >= len(fp.WidthByGID) {
 			return 0, false
 		}
-		return fp.WidthByGID[gid], true
+		return fp.WidthByGID[key], true
 	}
 	// CIDFontType0 (CFF): CID-keyed by CID, or GID==CID for non-CID CFF.
 	if fp.WidthByCID != nil {
-		w, ok := fp.WidthByCID[cid]
+		w, ok := fp.WidthByCID[key]
 		return w, ok
 	}
-	if cid < len(fp.WidthByGID) {
-		return fp.WidthByGID[cid], true
+	if key >= 0 && key < len(fp.WidthByGID) {
+		return fp.WidthByGID[key], true
 	}
 	return 0, false
 }
 
-func cidGlyphExists(fp *font.Program, cidSub object.Name, cid int) bool {
-	if cidSub == "CIDFontType2" {
-		if cid <= 0 || cid >= fp.NumGlyphs {
+// cidGlyphExists reports whether the glyph a CID selected is in the program.
+// Glyph 0 is .notdef, which is no glyph of the font's own.
+func cidGlyphExists(fp *font.Program, m cidGlyphMap, key int) bool {
+	if m.type2 {
+		if key <= 0 || key >= fp.NumGlyphs {
 			return false
 		}
 		if fp.GlyphPresent != nil {
-			return fp.GlyphPresent[cid]
+			return fp.GlyphPresent[key]
 		}
 		return true
 	}
 	if fp.CIDGIDs != nil {
-		return fp.CIDGIDs[cid]
+		return fp.CIDGIDs[key]
 	}
-	return cid > 0 && cid < fp.NumGlyphs
+	return key > 0 && key < fp.NumGlyphs
 }
 
-// cidToGID resolves a CID to a glyph index via the CIDToGIDMap (name Identity
-// or a 2-byte-per-CID stream).
-func cidToGID(doc core.View, desc *object.Dictionary, cid int) (int, bool) {
-	switch v := doc.Resolve(desc.Get("CIDToGIDMap")).(type) {
-	case object.Name:
-		if v == "Identity" {
-			return cid, true
-		}
-	case *object.Stream:
-		data, r := doc.Content(v)
-		if r != core.ReasonOK {
-			// Not read, or not readable: no GID can be named, and guessing
-			// Identity would compare the width of some other glyph.
-			return 0, false
-		}
-		if 2*cid+1 < len(data) {
-			return int(data[2*cid])<<8 | int(data[2*cid+1]), true
-		}
-	case nil:
-		return cid, true // default Identity
-	}
-	return cid, true
+// cidGlyphEmpty reports whether the glyph a CID selected is a TrueType glyph
+// with no outline. Only a CIDFontType2's glyf table can say so.
+func cidGlyphEmpty(fp *font.Program, m cidGlyphMap, key int) bool {
+	return m.type2 && fp.GlyphNonEmpty != nil && key >= 0 && key < len(fp.GlyphNonEmpty) && !fp.GlyphNonEmpty[key]
 }
 
 // The number of CIDs a single /W range entry may span defaults to
@@ -1491,13 +1543,27 @@ func checkCIDSetProgramComplete(doc core.View, level Level) []Violation {
 					break
 				}
 			}
-		} else if cgm, _ := doc.Resolve(desc.Get("CIDToGIDMap")).(object.Name); (cgm == "Identity" || cgm == "") && fp.GlyphNonEmpty != nil {
-			// CIDFontType2 with an Identity map: CID == glyph index, so every
-			// present (non-empty) glyph must be listed.
-			for gid, ne := range fp.GlyphNonEmpty {
-				if ne && !present.Has(gid) {
-					missing = true
-					break
+		} else if cidSub, _ := doc.ResolveName(desc.Get("Subtype")); cidSub == "CIDFontType2" && fp.GlyphNonEmpty != nil {
+			// CIDFontType2: a CID's glyph is present when the glyph its
+			// CIDToGIDMap selects has an outline, and every such CID must be
+			// listed. With an Identity map that is every non-empty glyph
+			// index; with a stream map it is every CID the map sends to one
+			// (the same glyph selection the width and existence checks use).
+			// A map pdf0 could not read names no glyph, and nothing is said.
+			switch gmap := loadCIDGlyphMap(doc, desc, cidSub); {
+			case !gmap.stream:
+				for gid, ne := range fp.GlyphNonEmpty {
+					if ne && !present.Has(gid) {
+						missing = true
+						break
+					}
+				}
+			case gmap.readable:
+				for cid := 1; 2*cid+1 < len(gmap.data); cid++ {
+					if gid, _ := gmap.glyph(cid); gid > 0 && gid < len(fp.GlyphNonEmpty) && fp.GlyphNonEmpty[gid] && !present.Has(cid) {
+						missing = true
+						break
+					}
 				}
 			}
 		}
