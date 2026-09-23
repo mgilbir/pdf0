@@ -123,7 +123,24 @@ func (c *CMap) Decode(s []byte) []Code {
 //
 // So the first byte picks the length, the shortest when several ranges could
 // take it, and containment is a separate question the mapping answers.
+//
+// Except where the bytes do make a valid code: a code that lies wholly inside
+// a range — every byte within that range's bounds for its position, which is
+// how a codespace range is defined — is that range's length, shortest first.
+// The first-byte rule is for the bytes that make no valid code. The two agree
+// on every CMap whose ranges of different lengths start with different bytes,
+// which is nearly all of them; they part on GB 18030 (GBK2K), whose two- and
+// four-byte ranges share their first bytes and differ in the second: 81 30 81
+// 30 is one four-byte code, and the first-byte rule alone would read it as two
+// invalid two-byte ones.
 func (c *CMap) codeAt(s []byte) (n int, v uint32, ok bool) {
+	for length := 1; length <= 4 && length <= len(s); length++ {
+		for _, r := range c.codespace {
+			if r.bytes == length && r.contains(s[:length]) {
+				return length, codeValue(s[:length]), true
+			}
+		}
+	}
 	best := 0
 	for _, r := range c.codespace {
 		if r.bytes > len(s) {
@@ -141,11 +158,27 @@ func (c *CMap) codeAt(s []byte) (n int, v uint32, ok bool) {
 	if best == 0 {
 		return 0, 0, false
 	}
-	var acc uint32
-	for k := 0; k < best; k++ {
-		acc = acc<<8 | uint32(s[k])
+	return best, codeValue(s[:best]), true
+}
+
+// contains reports whether code, of r's length, lies inside r byte by byte.
+func (r codespaceRange) contains(code []byte) bool {
+	for k, b := range code {
+		shift := uint(8 * (r.bytes - 1 - k))
+		if b < byte(r.lo>>shift) || b > byte(r.hi>>shift) {
+			return false
+		}
 	}
-	return best, acc, true
+	return true
+}
+
+// codeValue is the big-endian value of a code of at most four bytes.
+func codeValue(code []byte) uint32 {
+	var acc uint32
+	for _, b := range code {
+		acc = acc<<8 | uint32(b)
+	}
+	return acc
 }
 
 // lookup is the code's CID.

@@ -480,13 +480,28 @@ not to notice `.notdef`.
 The corpus says where the value is: of 223 Type 0 fonts, 149 use Identity, **69
 embed a CMap** and 5 name a predefined one.
 
-**Code length comes from the first byte, not from containment** (§9.7.6.2). A
+**A valid code is cut by containment; an invalid one by its first byte**
+(§9.7.6.2). A code that lies wholly inside a codespace range — every byte within
+the range's bounds for its position — is that range's length, shortest first.
+Bytes that make no valid code take their length from the first byte: a
 mixed-width CMap has a one-byte space `<00>–<80>` and a two-byte one
-`<8140>–<9FFC>`; the string `81 20` is a *two-byte* code — invalid, outside the
-range, but two bytes. Deciding by containment reads it as one byte and the `20`
-becomes the start of the next code, so every code after it in the string is
-wrong. That is the whole of mixed-width CJK and it is what `codeAt` is careful
-about.
+`<8140>–<9FFC>`, and the string `81 20` is a *two-byte* code — invalid, outside
+the range, but two bytes. Reading it as one byte makes the `20` the start of the
+next code, so every code after it in the string is wrong. That is the whole of
+mixed-width CJK and it is what `codeAt` is careful about. The two rules agree
+wherever ranges of different lengths start with different bytes, which is
+nearly everywhere; they part on GB 18030 (`GBK2K-H`), whose two- and four-byte
+ranges share first bytes, where `81 30 81 30` is one four-byte code.
+
+Text extraction and the PDF/A Level A Private Use scan cut codes the same way,
+through `core.LoadFontCodes`: the full CMap where `LoadCMap` reads one, and
+otherwise the codespace alone — a predefined CMap's, from a table transcribed
+from Adobe's published CMaps (`cmap_predefined.go`), or an embedded CMap's own
+ranges plus those of the predefined CMap it names with `usecmap`. A codespace is
+enough to cut codes, which is all those two readers need before looking each
+code up in the ToUnicode map; the codes of the `Uni*-UCS2` and `Uni*-UTF16`
+CMaps are Unicode themselves. Both readers used to cut every Type 0 string into
+two-byte codes (audit 2026-09-22 C88).
 
 Every check that turns a shown string into glyph references goes through it:
 the PDF/A glyph, `.notdef` and width rules, the `/CIDSet` completeness rule, and

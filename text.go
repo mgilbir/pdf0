@@ -98,9 +98,7 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 		xobjs = d.ResolveDict(res.Get("XObject"))
 	}
 
-	var curMap map[int][]rune
-	var curEncoding map[int]rune
-	curTwoByte := false
+	var cur fontText
 	var operands []core.ContentToken
 
 	// marked is the stack of open marked-content sequences, true for one
@@ -114,7 +112,7 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 		if replaced > 0 {
 			return
 		}
-		for _, r := range decodeShown(raw, curMap, curEncoding, curTwoByte) {
+		for _, r := range cur.decode(raw) {
 			out.WriteRune(r)
 		}
 	}
@@ -157,11 +155,7 @@ func (d *Document) extractContentText(cancel core.Canceler, res *object.Dictiona
 			}
 		case "Tf":
 			if len(operands) >= 1 {
-				if f, ok := fonts[operands[0].Name]; ok {
-					curMap, curEncoding, curTwoByte = f.toUnicode, f.encoding, f.twoByte
-				} else {
-					curMap, curEncoding, curTwoByte = nil, nil, false
-				}
+				cur = fonts[operands[0].Name] // the zero fontText for a font not in the resources
 			}
 		case "Tj", "'", "\"":
 			if tk.Op != "Tj" {
@@ -240,7 +234,10 @@ type fontText struct {
 	// ToUnicode entry for a code, which is the ordinary case for a simple font
 	// naming one of the standard encodings.
 	encoding map[int]rune
-	twoByte  bool
+	// composite is a Type 0 font, whose strings codes cuts into codes of one
+	// to four bytes by its CMap's codespace. A simple font's codes are bytes.
+	composite bool
+	codes     core.FontCodes
 }
 
 // fontMapsFrom resolves a resource dictionary's /Font entries to their ToUnicode maps.
@@ -258,15 +255,17 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 		if f == nil {
 			continue
 		}
-		twoByte := false
+		ft := fontText{toUnicode: core.ParseToUnicodeRunes(d.view(), f)}
 		if st, _ := d.view().ResolveName(f.Get("Subtype")); st == "Type0" {
-			twoByte = true
+			ft.composite = true
+			var ok bool
+			if ft.codes, ok = core.LoadFontCodes(d.view(), f); !ok {
+				ft.codes = core.TwoByteFontCodes()
+			}
+		} else {
+			ft.encoding = d.simpleEncoding(f)
 		}
-		out[string(name)] = fontText{
-			toUnicode: core.ParseToUnicodeRunes(d.view(), f),
-			encoding:  d.simpleEncoding(f, twoByte),
-			twoByte:   twoByte,
-		}
+		out[string(name)] = ft
 	}
 	return out
 }
@@ -279,10 +278,7 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 // curly quotes, the dashes, the bullet, the ellipsis and the euro live — so a
 // document setting a quotation mark is exactly the document the byte value gets
 // wrong.
-func (d *Document) simpleEncoding(f *object.Dictionary, twoByte bool) map[int]rune {
-	if twoByte {
-		return nil // a composite font is decoded by its CMap, not by an encoding
-	}
+func (d *Document) simpleEncoding(f *object.Dictionary) map[int]rune {
 	base := font.StandardEncodingNames
 	var differences object.Array
 	switch enc := d.Resolve(f.Get("Encoding")).(type) {
@@ -343,30 +339,41 @@ func baseEncodingNames(n object.Name, current map[byte]string) map[byte]string {
 	return current
 }
 
-// decodeShown maps a shown byte string to runes. It prefers the font's
-// ToUnicode CMap, then the font's own /Encoding, and only then the byte value
-// as Latin-1 — which is right for ASCII and wrong exactly where an encoding
-// would have said so.
-func decodeShown(raw []byte, toUnicode map[int][]rune, encoding map[int]rune, twoByte bool) []rune {
+// decode maps a shown byte string to runes.
+//
+// A simple font's codes are its bytes. It prefers the font's ToUnicode CMap,
+// then the font's own /Encoding, and only then the byte value as Latin-1 —
+// which is right for ASCII and wrong exactly where an encoding would have said
+// so.
+//
+// A composite font's codes are cut by its CMap (ISO 32000-2 9.7.6.2), one to
+// four bytes each, and looked up in its ToUnicode CMap; a code it has no entry
+// for is Unicode only when the CMap is one of the predefined Uni* CMaps, whose
+// codes are UTF-16 (9.10.2). Otherwise it is dropped: the CID-to-Unicode data
+// for the other predefined CMaps is not carried.
+func (f fontText) decode(raw []byte) []rune {
 	var runes []rune
-	step := 1
-	if twoByte {
-		step = 2
-	}
-	for i := 0; i+step <= len(raw); i += step {
-		code := int(raw[i])
-		if twoByte {
-			code = int(raw[i])<<8 | int(raw[i+1])
+	if f.composite {
+		for _, c := range f.codes.Codes(raw) {
+			if rs, ok := f.toUnicode[int(c.Value)]; ok {
+				runes = append(runes, rs...)
+			} else if rs, ok := f.codes.Unicode(c); ok {
+				runes = append(runes, rs...)
+			}
 		}
-		if rs, ok := toUnicode[code]; ok {
+		return runes
+	}
+	for _, b := range raw {
+		code := int(b)
+		if rs, ok := f.toUnicode[code]; ok {
 			runes = append(runes, rs...)
 			continue
 		}
-		if r, ok := encoding[code]; ok {
+		if r, ok := f.encoding[code]; ok {
 			runes = append(runes, r)
 			continue
 		}
-		if !twoByte && code >= 32 && code < 256 {
+		if code >= 32 {
 			runes = append(runes, rune(code))
 		}
 	}

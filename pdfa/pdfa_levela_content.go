@@ -109,6 +109,7 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 		fontRes = doc.ResolveDict(res.Get("Font"))
 		propRes = doc.ResolveDict(res.Get("Properties"))
 	}
+	fontCodes := map[*object.Dictionary]*core.FontCodes{}
 
 	var stack []mcFrame
 	var untagged bool
@@ -174,17 +175,26 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 			pending = nil
 			return
 		}
-		width := 1
-		if st, _ := doc.ResolveName(font.Get("Subtype")); st == "Type0" {
-			width = 2
+		// A composite font's codes are cut by its CMap, one to four bytes each
+		// (audit 2026-09-22 C88: a fixed two-byte cut misread every mixed-width
+		// CMap); a simple font's codes are its bytes.
+		codes, ok := fontCodes[font]
+		if !ok {
+			codes = pendingFontCodes(doc, font)
+			fontCodes[font] = codes
 		}
 		for _, s := range pending {
-			for i := 0; i+width <= len(s); i += width {
-				code := int(s[i])
-				if width == 2 {
-					code = code<<8 | int(s[i+1])
+			var cut []core.Code
+			if codes != nil {
+				cut = codes.Codes(s)
+			} else {
+				cut = make([]core.Code, len(s))
+				for i, b := range s {
+					cut[i] = core.Code{Value: uint32(b), Bytes: 1}
 				}
-				for _, r := range m[code] {
+			}
+			for _, c := range cut {
+				for _, r := range m[int(c.Value)] {
 					if privateUseArea(r) && !reported[r] {
 						reported[r] = true
 						f.pua = append(f.pua, puaSite{objNum: pg.ObjNum, r: r})
@@ -276,6 +286,21 @@ func parseContentDict(raw []byte) *object.Dictionary {
 	}
 	d, _ := obj.(*object.Dictionary)
 	return d
+}
+
+// pendingFontCodes is how the Level A scan cuts a font's shown strings into
+// codes: nil for a simple font, whose codes are its bytes, and the font's CMap
+// codespace for a composite one — or, when its /Encoding gives none, the
+// two-byte guess, which is what the scan always assumed.
+func pendingFontCodes(doc core.View, font *object.Dictionary) *core.FontCodes {
+	if st, _ := doc.ResolveName(font.Get("Subtype")); st != "Type0" {
+		return nil
+	}
+	codes, ok := core.LoadFontCodes(doc, font)
+	if !ok {
+		codes = core.TwoByteFontCodes()
+	}
+	return &codes
 }
 
 // privateUseArea reports whether r lies in one of Unicode's three Private Use
