@@ -30,9 +30,14 @@ import (
 //     whatever the certification level (ISO 32000-2 Table 257): a Document
 //     Security Store and what it holds, and document time-stamp fields with
 //     their signature dictionaries and widgets.
-//   - Signing, when a certification signature's DocMDP transform permits it
-//     (P 2 or 3): a new signature field and its value, or a value given to a
-//     signature field the signed revision left empty.
+//   - Signing, unless a certification signature in the signed revision forbids
+//     it (DocMDP P 1): a new signature field and its value, or a value given
+//     to a signature field the signed revision left empty and no FieldMDP
+//     transform of an earlier signature locked. Without a certification
+//     signature no modification-detection restriction applies (ISO 32000-2
+//     12.8.2.2), and adding signatures in later revisions is the ordinary
+//     multi-signer workflow ETSI EN 319 142-1 and the reference validators
+//     accept.
 //   - The edits to existing objects that attaching those requires, and nothing
 //     else in them: the catalog gains or changes /DSS and /AcroForm; the
 //     interactive form gains fields at the end of /Fields and signature bits
@@ -42,9 +47,7 @@ import (
 // documented gap, the form filling and annotation changes DocMDP P 2 and 3
 // also permit: recognising them faithfully means judging every field type's
 // value and appearance, which this analysis does not do, so they are reported
-// as not permitted rather than waved through. An approval signature added
-// after another signature, in a document no certification signature governs,
-// is likewise reported: nothing in the signed revision permitted it.
+// as not permitted rather than waved through.
 //
 // The comparison is between objects as the file stores them (see
 // core.RevisionDiff), and it is conservative: an edit to an existing object is
@@ -112,6 +115,10 @@ type changeClassifier struct {
 	// docMDP is the P value of the signed revision's certification signature,
 	// or 0 when no certification signature governs it.
 	docMDP int
+	// locks are the FieldMDP transforms of the signed revision's signatures,
+	// and names the qualified name of each field of its form.
+	locks []fieldLock
+	names map[int]string
 
 	// explained records the changes already found permitted.
 	explained map[int]bool
@@ -152,6 +159,7 @@ func disallowedChanges(diff *core.RevisionDiff) []string {
 		bad = append(bad, "the document catalog cannot be read in both revisions")
 	} else {
 		c.docMDP = docMDPLevel(c.old, oldCat)
+		c.collectFieldLocks(oldCat)
 		c.classify(oldCat, newCat, refTarget(newT.Get("Root")))
 	}
 
@@ -315,8 +323,8 @@ func (c *changeClassifier) addedSignatureField(n int) {
 	case "DocTimeStamp":
 		archival = true
 	case "", "Sig":
-		if c.docMDP != 2 && c.docMDP != 3 {
-			c.notes[n] = "a signature field added after this signature, which no certification signature (DocMDP P 2 or 3) permits"
+		if c.docMDP == 1 {
+			c.notes[n] = "a signature added after a certification signature whose DocMDP permission level (P 1) forbids every change"
 			return
 		}
 	default:
@@ -611,12 +619,18 @@ func (c *changeClassifier) appendedOnly(before, after object.Array, allowed map[
 
 // signedExistingField reports whether object n is a signature field the
 // signed revision left without a value, now given a new signature — signing,
-// which DocMDP P 2 and 3 permit — changing nothing but its /V and appearance.
+// which only a DocMDP P 1 certification forbids — changing nothing but its /V
+// and appearance, in a field no earlier signature's FieldMDP transform locked.
 func (c *changeClassifier) signedExistingField(n int, oldField, newField *object.Dictionary) bool {
-	if c.docMDP != 2 && c.docMDP != 3 {
+	if c.old.name(oldField.Get("FT")) != "Sig" || oldField.Get("V") != nil {
 		return false
 	}
-	if c.old.name(oldField.Get("FT")) != "Sig" || oldField.Get("V") != nil {
+	if c.docMDP == 1 {
+		c.notes[n] = "a signature added after a certification signature whose DocMDP permission level (P 1) forbids every change"
+		return false
+	}
+	if name := c.names[n]; name != "" && c.locked(name) {
+		c.notes[n] = "field " + name + " is locked by an earlier signature's FieldMDP transform"
 		return false
 	}
 	v := refTarget(newField.Get("V"))
@@ -739,4 +753,95 @@ func dictOf(o object.Object) (*object.Dictionary, *object.Stream) {
 		return &v.Dict, v
 	}
 	return nil, nil
+}
+
+// fieldLock is one FieldMDP transform (ISO 32000-2 12.8.2.4, Table 258): the
+// fields a signature locked when it was applied.
+type fieldLock struct {
+	action object.Name // All, Include or Exclude
+	fields map[string]bool
+}
+
+// locked reports whether any FieldMDP transform of the signed revision locks
+// the field with this qualified name.
+func (c *changeClassifier) locked(name string) bool {
+	for _, l := range c.locks {
+		switch l.action {
+		case "All":
+			return true
+		case "Include":
+			if l.fields[name] {
+				return true
+			}
+		case "Exclude":
+			if !l.fields[name] {
+				return true
+			}
+		default:
+			return true // an action this reader does not know locks everything
+		}
+	}
+	return false
+}
+
+// collectFieldLocks walks the signed revision's form, recording each field's
+// qualified name and the FieldMDP transforms of the signatures its fields
+// hold. The walk is bounded like the verifier's field walks.
+func (c *changeClassifier) collectFieldLocks(cat *object.Dictionary) {
+	c.names = map[int]string{}
+	form := c.old.dict(cat.Get("AcroForm"))
+	if form == nil {
+		return
+	}
+	seen := map[int]bool{}
+	var walk func(node object.Object, prefix string, depth int)
+	walk = func(node object.Object, prefix string, depth int) {
+		if depth > MaxFieldTreeDepth {
+			return
+		}
+		n := refTarget(node)
+		if n != 0 {
+			if seen[n] {
+				return
+			}
+			seen[n] = true
+		}
+		fd := c.old.dict(node)
+		if fd == nil {
+			return
+		}
+		part := ""
+		if t, ok := c.old.resolve(fd.Get("T")).(object.String); ok {
+			part = core.DecodePDFTextString(t.Value)
+		}
+		name := JoinFieldName(prefix, part)
+		if n != 0 {
+			c.names[n] = name
+		}
+		if sig := c.old.dict(fd.Get("V")); sig != nil && sig.Get("ByteRange") != nil {
+			for _, r := range c.old.array(sig.Get("Reference")) {
+				ref := c.old.dict(r)
+				if ref == nil || c.old.name(ref.Get("TransformMethod")) != "FieldMDP" {
+					continue
+				}
+				params := c.old.dict(ref.Get("TransformParams"))
+				l := fieldLock{fields: map[string]bool{}}
+				if params != nil {
+					l.action = c.old.name(params.Get("Action"))
+					for _, f := range c.old.array(params.Get("Fields")) {
+						if s, ok := c.old.resolve(f).(object.String); ok {
+							l.fields[core.DecodePDFTextString(s.Value)] = true
+						}
+					}
+				}
+				c.locks = append(c.locks, l)
+			}
+		}
+		for _, k := range c.old.array(fd.Get("Kids")) {
+			walk(k, name, depth+1)
+		}
+	}
+	for _, f := range c.old.array(form.Get("Fields")) {
+		walk(f, "", 0)
+	}
 }

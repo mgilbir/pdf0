@@ -45,6 +45,9 @@ type ValidationData struct {
 // done before the last one's authority certificate expires, therefore keeps
 // every earlier piece of revocation evidence (audit 2026-09-22 C60).
 func (d *Document) WriteArchivalTimestamp(w io.Writer, data ValidationData, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
+	if err := d.signable("timestamp"); err != nil {
+		return err
+	}
 	doc, changed, err := withArchivalTimestamp(d, data)
 	if err != nil {
 		return err

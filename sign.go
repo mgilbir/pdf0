@@ -92,6 +92,23 @@ func (d *Document) hasSignatures() bool {
 	return false
 }
 
+// signable refuses a document a signing writer cannot work on: a nil one, and
+// an encrypted one — with the page-tree and metadata writers' refusal when it
+// is Locked (the content is still ciphertext), and in any case because a
+// signature covers the file's bytes, which encrypting after signing would
+// change: sign the plaintext document, then encrypt it.
+func (d *Document) signable(op string) error {
+	switch {
+	case d == nil:
+		return errNilDocument
+	case d.Locked():
+		return errLockedTarget(op)
+	case d.Encrypted || d.security != nil:
+		return fmt.Errorf("pdf0: %s: cannot sign an encrypted document", op)
+	}
+	return nil
+}
+
 // WriteSigned writes the document with an appended digital signature over its
 // whole content: it adds a signature field, serializes with placeholders,
 // computes the /ByteRange, signs the covered bytes with key (certificate cert
@@ -112,8 +129,8 @@ func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.S
 	if err != nil {
 		return err
 	}
-	if d.Encrypted || d.security != nil {
-		return errors.New("cannot sign an encrypted document")
+	if err := d.signable("signing"); err != nil {
+		return err
 	}
 	if !cfg.invalidateExisting && d.hasSignatures() {
 		return ErrAlreadySigned
@@ -142,16 +159,17 @@ func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.S
 // every number that file uses. With WithSignatureTimestamp the signature
 // carries a signature time-stamp (PAdES B-T).
 //
-// A verifier reports the new signature as a change made after each earlier
-// signature: permitted only where a certification signature's DocMDP level
-// allows signing (see sign.Result.ChangesAllowed).
+// A verifier accepts the new signature as a permitted change after each
+// earlier signature, unless a certification signature with DocMDP P 1 — or a
+// FieldMDP lock on the field signed — forbids it (see
+// sign.Result.ChangesAllowed).
 func (d *Document) WriteSignedIncremental(w io.Writer, cert *x509.Certificate, key crypto.Signer, opts ...SignOption) error {
 	cfg, err := signOptions(opts)
 	if err != nil {
 		return err
 	}
-	if d.Encrypted || d.security != nil {
-		return errors.New("cannot sign an encrypted document")
+	if err := d.signable("signing"); err != nil {
+		return err
 	}
 	signedDoc, changed, err := withSignatureField(d)
 	if err != nil {

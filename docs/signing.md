@@ -70,7 +70,7 @@ Every field of `sign.Result`, and the exact limit of what it promises:
 | `SigningTime time.Time` | the `signing-time` signed attribute, if the CMS carries one | a trustworthy time: the signer asserts it and nothing verifies it. It is never used as the validation time |
 | `TimestampTime time.Time` | the time a verified time-stamp asserts: a B-T signature's signature time-stamp, or a document time-stamp's own | a trustworthy time unless `TimestampTrusted` |
 | `TimestampTrusted bool` | that time-stamp's authority chains to your time-stamp roots with the `id-kp-timeStamping` purpose | |
-| `Revocation RevocationInfo` | status at `ValidationTime` from the CRLs/OCSP responses in the document's `/DSS`, authenticated by the certificate's real issuer; a revocation from any source wins | any network lookup; the status of intermediate certificates |
+| `Revocation RevocationInfo` | status at `ValidationTime` from the CRLs/OCSP responses in the document's `/DSS`, authenticated by the certificate's real issuer; a revocation from any source wins; a revoked intermediate is reported here too | any network lookup |
 | `DocTimestamp bool` | the result is a document time-stamp (`/Type /DocTimeStamp`), not an approval signature | |
 | `Err error` | why verification failed, when it did | |
 | `Field string` | the fully qualified name (ISO 32000-2 §12.7.4.2 — the `/T` chain joined with `.`) of the form field whose `/V` references this signature, e.g. `Signature1` | a name at all when no field references the signature dictionary; then it is empty |
@@ -138,12 +138,16 @@ classifies every object that differs:
   Document Security Store with its `/Certs`, `/CRLs`, `/OCSPs` and `/VRI`, and
   a document time-stamp field with its signature dictionary and widget (a
   time-stamp widget may carry an appearance only if its `/Rect` has no area).
-- **Signing is permitted only where a certification signature allows it**: when
-  the signed revision's catalog `/Perms /DocMDP` names a signature whose DocMDP
-  transform has `P` 2 or 3, a new signature field, or a value in a signature
-  field the signed revision left empty, is permitted. At `P` 1, or with no
-  certification signature at all, a later approval signature is reported as a
-  change nothing permitted.
+- **Signing is permitted unless a certification signature forbids it**: a new
+  signature field with its widget and signature dictionary, or a signature
+  value in a field the signed revision left empty, is permitted — the ordinary
+  multi-signer workflow, which ISO 32000-2 §12.8.2.2 leaves unrestricted when
+  no DocMDP certification applies and which ETSI EN 319 142-1 and the
+  reference validators accept. It is refused when the signed revision's
+  catalog `/Perms /DocMDP` names a certification signature with `P` 1, and
+  signing an existing field is refused when an earlier signature's FieldMDP
+  transform (`/TransformMethod /FieldMDP`, `/Action` `/All`, `/Include` or
+  `/Exclude` over `/Fields`) locks that field.
 - **Edits to existing objects are permitted only as far as attaching those
   requires**: the catalog may change `/DSS` and `/AcroForm`; the interactive
   form may gain the new fields at the end of `/Fields` and the signature bits
@@ -173,8 +177,7 @@ permitted.
 **Known gaps, reported rather than guessed:** DocMDP `P` 2 and 3 also permit
 form filling, page templates and (at 3) annotation changes; recognising those
 faithfully means judging each field type's value and appearance, which is not
-done, so such changes are reported as not permitted. FieldMDP (`/Lock`)
-restrictions are not evaluated.
+done, so such changes are reported as not permitted.
 
 ## Trust
 
@@ -201,10 +204,14 @@ The **validation time** is the earliest time a verified, trusted time-stamp
 proves the signature existed — its own signature time-stamp, or a document
 time-stamp over a later revision — and otherwise the current time. The
 signer's own `signing-time` attribute is never used: the signer asserts it, and
-a holder of an expired or revoked certificate could backdate it. Time-stamp
-authorities' own chains are judged at the current time; nested archive
-time-stamp validation (renewing trust in an expired authority through a later
-time-stamp) is not done.
+a holder of an expired or revoked certificate could backdate it.
+
+A time-stamp authority's own chain is judged the same way: at the earliest
+time a trusted document time-stamp covering the token proves it existed, or
+now. Document time-stamps are settled from the outermost inwards, so an
+authority whose certificate has since expired stays trusted for the tokens a
+later, trusted archive time-stamp preserved — the nested B-LTA case — and the
+chain of trust ends at the newest time-stamp, judged now.
 
 ## Signing
 
@@ -300,9 +307,18 @@ response without one is current only at the moment it was produced (RFC 6960
 `/CRLs` + `/OCSPs` out of the catalog's `/DSS`, decoding the streams. **Nothing
 is ever fetched from the network** — not OCSP, not CRL distribution points, not
 AIA issuer certificates. No DSS material, or no authenticated issuer, yields
-`RevocationUnknown`. Only the signer's own certificate is checked; the status
-of intermediate certificates is not. For live revocation, fetch it yourself
-and call `CheckCertRevocation` directly.
+`RevocationUnknown`.
+
+**Revocation covers the whole path** (RFC 5280 §6.1.3): every certificate
+between the signer and the trust anchor is checked, each against the next
+certificate of the verified chain, at the validation time. A revoked
+intermediate makes the chain untrusted — `TrustedChain` false, `ChainErr`
+naming it, and `Revocation` reporting that revocation. The same applies to a
+time-stamp authority: a revoked authority certificate or intermediate makes
+its time-stamps untrusted, whatever the time-stamp's own date — a
+deliberately conservative reading, since the revocation reason (key
+compromise or not) is not weighed. For live revocation, fetch the material
+yourself and call `CheckCertRevocation` directly.
 
 ## Limitations and edge cases
 

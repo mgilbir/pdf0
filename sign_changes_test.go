@@ -76,9 +76,11 @@ func firstSignature(t *testing.T, data []byte) sign.Result {
 
 // TestDocMDPGovernsLaterSigning pins what each certification level permits
 // after the certification signature (ISO 32000-2 Table 257): a DSS and a
-// document time-stamp at every level, a further signature at P 2 and 3 but
-// not P 1, and a further signature not at all where no certification
-// signature governs the document. A page change is never permitted.
+// document time-stamp at every level, and a further signature at P 2 and 3
+// but not P 1. Where no certification signature governs the document no
+// modification-detection restriction applies (12.8.2.2), and a further
+// approval signature — the multi-signer workflow — is permitted too. A page
+// change is never permitted.
 func TestDocMDPGovernsLaterSigning(t *testing.T) {
 	cert, key := signtest.CertKey(t)
 	tsaCert, tsaKey := signtest.TSACertKey(t)
@@ -93,7 +95,7 @@ func TestDocMDPGovernsLaterSigning(t *testing.T) {
 		p                     int // 0: an approval signature, no certification
 		archival, signing, pg bool
 	}{
-		{p: 0, archival: true, signing: false},
+		{p: 0, archival: true, signing: true},
 		{p: 1, archival: true, signing: false},
 		{p: 2, archival: true, signing: true},
 		{p: 3, archival: true, signing: true},
@@ -115,8 +117,8 @@ func TestDocMDPGovernsLaterSigning(t *testing.T) {
 			if r.ChangesAllowed != tc.signing {
 				t.Errorf("after a second signature ChangesAllowed = %v, want %v: %v", r.ChangesAllowed, tc.signing, r.DisallowedChanges)
 			}
-			if !tc.signing && !anyContains(r.DisallowedChanges, "DocMDP") {
-				t.Errorf("the refusal should say signing needs DocMDP P 2 or 3: %v", r.DisallowedChanges)
+			if !tc.signing && !anyContains(r.DisallowedChanges, "DocMDP permission level (P 1)") {
+				t.Errorf("the refusal should name the P 1 certification: %v", r.DisallowedChanges)
 			}
 			if r := firstSignature(t, tamperPage(t, base)); r.ChangesAllowed || !anyContains(r.DisallowedChanges, "MediaBox") {
 				t.Errorf("a page change is never permitted: %+v", r.DisallowedChanges)
@@ -321,5 +323,154 @@ func TestWriteSignedRefusesASignedDocument(t *testing.T) {
 	}
 	if _, err := signOptions([]SignOption{WithSignatureTimestamp(nil, key)}); err == nil || !strings.Contains(err.Error(), "both") {
 		t.Errorf("a time-stamp option with no certificate must be refused: %v", err)
+	}
+}
+
+// TestSuccessiveApprovalSignaturesAreAllIntact: in the multi-signer workflow
+// each signer adds an approval signature in a new revision, and no signature
+// may invalidate the ones before it. Every signature and the archival
+// time-stamp after them stay intact, and the first stays a conformant PAdES
+// signature.
+func TestSuccessiveApprovalSignaturesAreAllIntact(t *testing.T) {
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
+	data := signMinimal(t)
+	for i := 0; i < 2; i++ {
+		var out bytes.Buffer
+		if err := readBytes(t, data).WriteSignedIncremental(&out, cert, key); err != nil {
+			t.Fatal(err)
+		}
+		data = out.Bytes()
+	}
+	data = archive(t, data, ValidationData{}, tsaCert, tsaKey)
+	d := readBytes(t, data)
+	res := verifySigs(t, d, sign.VerifyOptions{})
+	if len(res) != 4 {
+		t.Fatalf("got %d results, want three signatures and a time-stamp", len(res))
+	}
+	for _, r := range res {
+		if !r.Intact() {
+			t.Errorf("%s is not intact: valid=%v disallowed=%v", r.Field, r.Valid, r.DisallowedChanges)
+		}
+	}
+	for _, p := range padesOf(t, d, sign.VerifyOptions{}) {
+		if !p.Conformant || !p.ChangesAllowed {
+			t.Errorf("%s: conformant=%v issues=%v", p.Field, p.Conformant, p.Issues)
+		}
+	}
+}
+
+// fieldMDPSigned signs a document whose form holds, besides the signature, an
+// empty signature field "Witness", with a FieldMDP transform (ISO 32000-2
+// Table 258) of the given action and field list on the signature.
+func fieldMDPSigned(t *testing.T, action string, fields []string) []byte {
+	t.Helper()
+	cert, key := signtest.CertKey(t)
+	d := readBytes(t, buildMinimalPDF())
+	clone, _, err := withSignatureField(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sigNum, formNum int
+	for n, iobj := range clone.Objects {
+		if sd, ok := iobj.Value.(*object.Dictionary); ok {
+			if sd.Get("ByteRange") != nil {
+				sigNum = n
+			}
+			if sd.Get("SigFlags") != nil {
+				formNum = n
+			}
+		}
+	}
+	var list object.Array
+	for _, f := range fields {
+		list = append(list, object.String{Value: []byte(f)})
+	}
+	clone.Objects[sigNum].Value.(*object.Dictionary).Set("Reference", object.Array{object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("SigRef")},
+		object.Entry{Key: "TransformMethod", Value: object.Name("FieldMDP")},
+		object.Entry{Key: "TransformParams", Value: object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("TransformParams")},
+			object.Entry{Key: "Action", Value: object.Name(action)},
+			object.Entry{Key: "Fields", Value: list},
+			object.Entry{Key: "V", Value: object.Name("1.2")},
+		)},
+	)})
+	witness := clone.Add(object.NewDictionary(
+		object.Entry{Key: "FT", Value: object.Name("Sig")},
+		object.Entry{Key: "T", Value: object.String{Value: []byte("Witness")}},
+	))
+	form := clone.Objects[formNum].Value.(*object.Dictionary)
+	fl, _ := form.Get("Fields").(object.Array)
+	form.Set("Fields", append(fl, witness))
+	var buf bytes.Buffer
+	if err := clone.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out, err := patchSignature(buf.Bytes(), cert, key, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// fillWitness appends an update giving the empty "Witness" field a signature
+// value — signing a field the signed revision left empty.
+func fillWitness(t *testing.T, data []byte) []byte {
+	t.Helper()
+	d := readBytes(t, data)
+	num := -1
+	for n, iobj := range d.Objects {
+		if fd, ok := iobj.Value.(*object.Dictionary); ok {
+			if s, ok := fd.Get("T").(object.String); ok && string(s.Value) == "Witness" {
+				num = n
+			}
+		}
+	}
+	if num < 0 {
+		t.Fatal("no Witness field")
+	}
+	sig := d.Add(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Sig")},
+		object.Entry{Key: "ByteRange", Value: object.Array{object.Integer(0), object.Integer(1), object.Integer(2), object.Integer(1)}},
+		object.Entry{Key: "Contents", Value: object.String{Value: []byte{0}, IsHex: true}},
+	))
+	fd := d.Objects[num].Value.(*object.Dictionary).Clone()
+	fd.Set("V", sig)
+	d.Objects[num] = &object.IndirectObject{Number: num, Value: fd}
+	var out bytes.Buffer
+	if err := d.WriteIncremental(&out, []int{num, sig.Number}); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+// TestFieldMDPLocksFields: a signature whose FieldMDP transform locks a field
+// forbids later signing of that field, and only that field.
+func TestFieldMDPLocksFields(t *testing.T) {
+	for _, tc := range []struct {
+		action  string
+		fields  []string
+		allowed bool
+	}{
+		{"All", nil, false},
+		{"Include", []string{"Witness"}, false},
+		{"Include", []string{"Other"}, true},
+		{"Exclude", []string{"Witness"}, true},
+		{"Exclude", []string{"Other"}, false},
+	} {
+		t.Run(fmt.Sprintf("%s%v", tc.action, tc.fields), func(t *testing.T) {
+			base := fieldMDPSigned(t, tc.action, tc.fields)
+			if r := firstSignature(t, base); !r.DocumentUnmodified() {
+				t.Fatalf("the signature must verify over its own file: %+v", r)
+			}
+			r := firstSignature(t, fillWitness(t, base))
+			if r.ChangesAllowed != tc.allowed {
+				t.Errorf("ChangesAllowed = %v, want %v: %v", r.ChangesAllowed, tc.allowed, r.DisallowedChanges)
+			}
+			if !tc.allowed && !anyContains(r.DisallowedChanges, "locked by an earlier signature's FieldMDP") {
+				t.Errorf("the refusal should name the lock: %v", r.DisallowedChanges)
+			}
+		})
 	}
 }
