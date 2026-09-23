@@ -123,7 +123,7 @@ func (s OutputIntentSpec) resolve(level Level) (profile []byte, n int, id, regis
 	if err != nil {
 		return nil, 0, "", "", "", err
 	}
-	if level.BaseB() == PDFA1b && iccMajorVersion(s.ICCProfile) > 2 {
+	if level.Part() == 1 && iccMajorVersion(s.ICCProfile) > 2 {
 		return nil, 0, "", "", "", fmt.Errorf("pdfa: the profile is ICC v%d and %s "+
 			"is based on PDF 1.4, which permits only ICC v2",
 			iccMajorVersion(s.ICCProfile), level)

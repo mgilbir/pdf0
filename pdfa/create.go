@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"fmt"
 	"strconv"
-	"strings"
 
 	lcms2 "github.com/mgilbir/golittlecms"
 	"github.com/mgilbir/pdf0/internal/core"
@@ -71,6 +70,12 @@ type SkeletonOptions struct {
 // document that should not be built rather than one built wrongly.
 func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.Dictionary, string, error) {
 	level, title, author := opts.Level, opts.Title, opts.Author
+	if !level.Valid() {
+		// LevelDeclared included: there is no document yet to take a
+		// declaration from, and a level that names no profile names nothing
+		// to build.
+		return nil, object.Dictionary{}, "", fmt.Errorf("pdfa: %s is not a level a document can be built at", level)
+	}
 	iccData, iccN, intentID, intentRegistry, intentInfo, err := opts.OutputIntent.resolve(level)
 	if err != nil {
 		return nil, object.Dictionary{}, "", err
@@ -102,7 +107,7 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 		structTreeRoot.Set("Type", object.Name("StructTreeRoot"))
 		catalog.Set("StructTreeRoot", structTreeRoot)
 	}
-	if level == PDFA4F {
+	if level.variant() == "F" {
 		// A PDF/A-4f file shall contain an /EmbeddedFiles key in the catalog's
 		// name dictionary (6.9). The skeleton has nothing to attach yet, so it
 		// gets the empty name tree — the same answer Level A gets above, for
@@ -167,87 +172,14 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 }
 
 func pdfaVersion(level Level) string {
-	switch level.BaseB() {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return "1.4"
-	case PDFA2b, PDFA3b:
+	case 2, 3:
 		return "1.7"
 	default:
 		return "2.0"
 	}
-}
-
-func pdfaPart(level Level) int {
-	switch level.BaseB() {
-	case PDFA1b:
-		return 1
-	case PDFA2b:
-		return 2
-	case PDFA3b:
-		return 3
-	default:
-		return 4
-	}
-}
-
-func pdfaConformance(level Level) string {
-	switch {
-	case level.IsA():
-		return "A"
-	case level.Is4Variant():
-		return level.variantConformance() // "E" or "F"
-	case level == PDFA4:
-		return "" // plain PDF/A-4 has no conformance level
-	default:
-		return "B"
-	}
-}
-
-// LevelFor maps a pdfaid identification — the part and conformance a document's
-// metadata claims — onto the level it names.
-//
-// It is the inverse of what Skeleton writes, and it exists so that a document
-// can be checked against its own claim rather than against a level a caller
-// remembered to pass in. The claim is in the file; asking the file is the only
-// way the two cannot drift apart.
-//
-// Conformance U (PDF/A-2u and -3u) maps to the corresponding B level. U is B
-// plus the requirement that every glyph shown maps to Unicode, and that
-// requirement is not among the implemented checks — so what comes back is the
-// part of the claim this package can actually verify, and ok is true. The
-// second return is false only for a part number that names no level at all.
-func LevelFor(part, conformance string) (Level, bool) {
-	isA := strings.EqualFold(conformance, "A")
-	switch part {
-	case "1":
-		if isA {
-			return PDFA1a, true
-		}
-		return PDFA1b, true
-	case "2":
-		if isA {
-			return PDFA2a, true
-		}
-		return PDFA2b, true
-	case "3":
-		if isA {
-			return PDFA3a, true
-		}
-		return PDFA3b, true
-	case "4":
-		// PDF/A-4 itself has no conformance letter; E and F name its two
-		// variants, which are levels of their own.
-		switch strings.ToUpper(conformance) {
-		case "E":
-			return PDFA4E, true
-		case "F":
-			return PDFA4F, true
-		case "":
-			return PDFA4, true
-		}
-		return 0, false
-	}
-	return 0, false
 }
 
 // GenerateXMPMetadata creates the XMP metadata packet for the given PDF/A
@@ -288,18 +220,21 @@ func GenerateXMPMetadata(level Level, title, author string) ([]byte, error) {
 // revision PDF/A-4 requires. A conformance letter already in the packet is
 // removed when the level has none (plain PDF/A-4).
 func setPDFAIdentification(p *xmp.Packet, level Level) error {
-	if err := p.SetText(xmp.NSPDFAID, pdfaIDPrefix, "part", strconv.Itoa(pdfaPart(level))); err != nil {
+	if !level.Valid() {
+		return fmt.Errorf("pdfa: %s names no level to identify a document as", level)
+	}
+	if err := p.SetText(xmp.NSPDFAID, pdfaIDPrefix, "part", strconv.Itoa(level.Part())); err != nil {
 		return err
 	}
-	if c := pdfaConformance(level); c != "" {
+	if c := level.Conformance(); c != "" {
 		if err := p.SetText(xmp.NSPDFAID, pdfaIDPrefix, "conformance", c); err != nil {
 			return err
 		}
 	} else {
 		p.Remove(xmp.NSPDFAID, "conformance")
 	}
-	if level.BaseB() == PDFA4 {
-		return p.SetText(xmp.NSPDFAID, pdfaIDPrefix, "rev", "2020")
+	if rev := level.revision(); rev != "" {
+		return p.SetText(xmp.NSPDFAID, pdfaIDPrefix, "rev", rev)
 	}
 	p.Remove(xmp.NSPDFAID, "rev")
 	return nil
@@ -346,7 +281,7 @@ var srgbV43 []byte
 // The returned slice is the embedded one. Callers put it in a stream and do
 // not modify it; copyProfile is there for any that would.
 func sRGBProfile(level Level) []byte {
-	if level.BaseB() == PDFA1b {
+	if level.Part() == 1 {
 		return srgbV21
 	}
 	return srgbV43

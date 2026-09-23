@@ -416,7 +416,7 @@ func checkContentNumberLimit(s string, lim implLimits, objNum int, add func(stri
 // blending colour space. Content is followed through invoked form XObjects,
 // carrying the enclosing group's blending profile.
 func checkICCProfileIdentity(doc core.View, level Level) []Violation {
-	if level != PDFA4 {
+	if level.Part() != 4 {
 		return nil
 	}
 	catalog := doc.Catalog()

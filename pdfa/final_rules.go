@@ -1,9 +1,10 @@
 package pdfa
 
 import (
+	"fmt"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"strings"
 )
 
 // This file collects the remaining low-frequency PDF/A rules: prohibited
@@ -28,7 +29,19 @@ import (
 // file, and whether the check ran to completion. Reading a whole document out
 // of a byte slice needs the parser, which these checks deliberately do not
 // depend on, so the caller hands one in per run.
-type EmbeddedChecker func(cancel core.Canceler, data []byte, lim core.Limits) (compliant, complete bool)
+//
+// depth is the embedded document's own depth: 1 for a file embedded in the
+// top-level document, 2 for one embedded in that, and so on. The checker
+// validates the nested document at that depth, so its own embedded files are
+// checked in turn, down to MaxEmbeddedDepth.
+type EmbeddedChecker func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (compliant, complete bool)
+
+// MaxEmbeddedDepth is how deep the embedded-PDF/A rule follows embedded files
+// into embedded files. A document nested deeper is not validated: the rule
+// notes that it stopped (a "limit" finding), rather than passing it — which is
+// what it did at every depth below the first before (audit 2026-09-22 C137).
+// The file-type requirement is not a matter of depth and holds at all of them.
+const MaxEmbeddedDepth = 4
 
 type embeddedSlot struct{}
 
@@ -48,11 +61,11 @@ func embeddedChecker(v core.View) EmbeddedChecker {
 	if h := core.Slot[embeddedHolder](v.Run, embeddedSlot{}); h.check != nil {
 		return h.check
 	}
-	return func(core.Canceler, []byte, core.Limits) (bool, bool) { return false, false }
+	return func(core.Canceler, []byte, core.Limits, int) (bool, bool) { return false, false }
 }
 
 func checkProhibitedCatalogEntries(doc core.View, level Level) []Violation {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil // 6.11 / 6.12 are clauses of ISO 19005 parts 2 and later
 	}
 	catalog := doc.Catalog()
@@ -61,7 +74,7 @@ func checkProhibitedCatalogEntries(doc core.View, level Level) []Violation {
 	}
 	var errs []Violation
 	// 6.12 (embedded-file requirements) applies only to PDF/A-4.
-	if level == PDFA4 && catalog.Get("Requirements") != nil {
+	if level.Part() == 4 && catalog.Get("Requirements") != nil {
 		errs = append(errs, Violation{Rule: "6.12", Level: level,
 			Message: "document catalog must not contain a /Requirements entry"})
 	}
@@ -89,10 +102,10 @@ func checkProhibitedCatalogEntries(doc core.View, level Level) []Violation {
 func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
 	interpRule := "6.2.7"
 	intentRule := "6.2.9"
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		interpRule, intentRule = "6.2.4", "6.2.4"
-	case PDFA2b, PDFA3b:
+	case 2, 3:
 		interpRule, intentRule = "6.2.8", "6.2.6"
 	}
 	// One example per distinct rule and message, attributed to the lowest object
@@ -198,7 +211,7 @@ var forbiddenAAEvents = map[object.Name]bool{
 // checkA4TriggerEvents flags AA dictionaries — on the catalog, pages, or
 // annotations — that define a forbidden trigger event.
 func checkA4TriggerEvents(doc core.View, level Level) []Violation {
-	if level != PDFA4 {
+	if level.Part() != 4 {
 		return nil
 	}
 	catalog := doc.Catalog()
@@ -255,7 +268,7 @@ func stringHasPUA(b []byte) bool {
 // a structure element dictionary or a marked-content property list — must not
 // contain Unicode Private Use Area values, which have no defined meaning.
 func checkActualTextPUA(doc core.View, level Level) []Violation {
-	if level != PDFA4 {
+	if level.Part() != 4 {
 		return nil
 	}
 	// One example per distinct message, attributed to the lowest object number
@@ -319,7 +332,7 @@ var halftoneReserved = map[object.Name]bool{"Type": true, "HalftoneType": true, 
 // for a process (primary) colorant must not contain a TransferFunction, and
 // a component for a non-primary colorant must contain one.
 func checkType5Halftones(doc core.View, level Level) []Violation {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil // 1b forbids transparency/halftone features via other rules
 	}
 	var errs []Violation
@@ -420,17 +433,19 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 }
 
 // checkEmbeddedPDFA enforces ISO 19005-4 6.9: an embedded file whose MIME
-// subtype is application/pdf shall itself be a valid PDF/A document. Each
-// such file is decoded and validated one level deep (a depth guard prevents
-// unbounded recursion).
+// subtype is application/pdf shall itself be a valid PDF/A document, at
+// whatever level it declares. Each such file is decoded and validated in turn,
+// which applies this rule to its own embedded files, down to MaxEmbeddedDepth
+// levels of nesting; below that a PDF is noted as not validated. The file-type
+// requirement — every embedded file is a PDF — is checked at every depth.
 func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
-	if level != PDFA4 || doc.EmbeddedDepth > 0 {
+	if level.Part() != 4 {
 		return nil
 	}
 	// PDF/A-4f and PDF/A-4e permit arbitrary embedded files; plain PDF/A-4
 	// requires every embedded file to itself be a compliant PDF/A document
 	// (ISO 19005-4 6.9).
-	if relaxedAsVariant(pdfaConformanceFlag(doc), "F", "E") {
+	if level.variant() != "" {
 		return nil
 	}
 	var errs []Violation
@@ -458,6 +473,10 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
 				continue
 			}
+			if doc.EmbeddedDepth >= MaxEmbeddedDepth {
+				doc.Note(core.GuardEmbeddedPDFA, fmt.Sprintf("an embedded PDF file is nested more than %d levels deep, so its PDF/A conformance (6.9) was not checked", MaxEmbeddedDepth), num)
+				continue
+			}
 			data, r := doc.Decode(stream)
 			if r.Declined() {
 				continue // not read: the producer recorded the trip
@@ -473,7 +492,7 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 			if len(data) == 0 {
 				continue
 			}
-			compliant, complete := embeddedChecker(doc)(doc.Cancel, data, doc.Limits)
+			compliant, complete := embeddedChecker(doc)(doc.Cancel, data, doc.Limits, doc.EmbeddedDepth+1)
 			if !complete {
 				// The nested run reported a checker finding of its own — a guard
 				// tripped inside it, a check panicked, or the shared context
@@ -491,38 +510,6 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 		}
 	}
 	return errs
-}
-
-// conformanceUnread is what pdfaConformanceFlag returns when the metadata was
-// over the XMP packet limit and so was not read: the document may declare a
-// variant or not, and pdf0 does not know which. A relaxation a variant grants
-// is then applied rather than withheld — the limit finding already says the
-// run was incomplete, and withholding it would assert a violation the
-// document's own declaration may excuse.
-const conformanceUnread = "?"
-
-// pdfaConformanceFlag returns the document's XMP pdfaid:conformance value,
-// uppercased ("F", "E", "B", "A", ...), "" if absent, or conformanceUnread.
-func pdfaConformanceFlag(doc core.View) string {
-	id := readPDFAIdentification(doc)
-	if id.status == core.XMPLimit {
-		return conformanceUnread
-	}
-	return strings.ToUpper(id.conformance)
-}
-
-// relaxedAsVariant reports whether a relaxation that PDF/A-4e or -4f grants
-// applies: the document declares that variant, or its declaration was not read.
-func relaxedAsVariant(flag string, variants ...string) bool {
-	if flag == conformanceUnread {
-		return true
-	}
-	for _, v := range variants {
-		if flag == v {
-			return true
-		}
-	}
-	return false
 }
 
 // isPDFMIME reports whether a stream /Subtype names the application/pdf MIME

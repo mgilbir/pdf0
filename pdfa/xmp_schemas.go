@@ -448,7 +448,7 @@ func predefinedXMPSchemas(level Level) map[string]map[string]xmpPropType {
 		nsEXIF:      xmpEXIFProperties,
 		nsPDFAID:    xmpPDFAIDProperties,
 	}
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		schemas[nsEXIFAux] = xmpEXIFAuxProperties
 		schemas[nsXMPDM] = xmpDMProperties
 		schemas[nsCameraRaw] = xmpCameraRawProperties
@@ -742,7 +742,7 @@ func checkXMPProperties(doc core.View, level Level) []Violation {
 	// well-formedness and UTF-8 requirements, which are checked separately (see
 	// checkXMPWellFormed). Do not "implement" property-value validation here for
 	// A-4 without corpus evidence that veraPDF requires it.
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		return nil
 	}
 	// Absent metadata and malformed XML are checked elsewhere; a packet over
@@ -952,7 +952,7 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 	// undefinedFieldsRule is the clause for an extension-schema object carrying a
 	// field not defined by the spec (ISO 19005-1 6.7.8; -2/-3 6.6.2.3.2).
 	undefinedFieldsRule := "6.7.8"
-	if level == PDFA2b || level == PDFA3b {
+	if level.Part() == 2 || level.Part() == 3 {
 		undefinedFieldsRule = "6.6.2.3.2"
 	}
 	requireFields := func(what string, v xmpValue, ns string, required, optional []string) map[string]xmpValue {
@@ -1131,10 +1131,10 @@ func checkXMPWellFormed(doc core.View, level Level) []Violation {
 	// PDF/A-1 onward (ISO 19005-1 6.7.5 / 6.7.9). PDF/A-1 was previously skipped
 	// entirely, missing both.
 	attrRule, wfRule := "6.6.2.1", "6.6.2.1"
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		attrRule, wfRule = "6.7.5", "6.7.9"
-	case PDFA4:
+	case 4:
 		attrRule, wfRule = "6.7.2.1", "6.7.2.1"
 	}
 	catalog := doc.Catalog()
@@ -1172,7 +1172,7 @@ func checkXMPWellFormed(doc core.View, level Level) []Violation {
 		}
 	}
 
-	if level == PDFA4 && !xmpIsUTF8(raw) {
+	if level.Part() == 4 && !xmpIsUTF8(raw) {
 		errs = append(errs, Violation{Rule: attrRule, Level: level, Message: "the XMP packet is not encoded as UTF-8"})
 	}
 

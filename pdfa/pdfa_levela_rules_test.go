@@ -296,7 +296,7 @@ func TestLevelAToUnicodeExemptions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		b := levelAFontPage(tc.font)
-		v := checkLevelAToUnicode(b.view, PDFA1a)
+		v := checkUnicodeMapping(b.view, PDFA1a)
 		if tc.exempt && len(v) != 0 {
 			t.Errorf("%s: exempt font flagged: %v", tc.name, v)
 		}
@@ -332,11 +332,11 @@ func TestLevelAToUnicodeCompositeCollections(t *testing.T) {
 		return b
 	}
 	for _, ordering := range []string{"Japan1", "Korea1", "GB1", "CNS1"} {
-		if v := checkLevelAToUnicode(composite(ordering).view, PDFA1a); len(v) != 0 {
+		if v := checkUnicodeMapping(composite(ordering).view, PDFA1a); len(v) != 0 {
 			t.Errorf("Adobe-%s was flagged: %v", ordering, v)
 		}
 	}
-	if v := checkLevelAToUnicode(composite("Identity").view, PDFA1a); !hasMsg(v, "no ToUnicode CMap") {
+	if v := checkUnicodeMapping(composite("Identity").view, PDFA1a); !hasMsg(v, "no ToUnicode CMap") {
 		t.Errorf("an Identity-ordered composite font without ToUnicode was accepted: %v", v)
 	}
 }

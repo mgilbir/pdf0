@@ -365,6 +365,12 @@ func embeddedPDFAFixture(t *testing.T, lim core.Limits) (inner []byte, outer *Do
 // outer file. It also read the embedded bytes under defaultLimits() rather than
 // the outer document's, so a caller's configured ceiling did not reach the one
 // place a hostile file gets a whole second document validated.
+// embeddedPDFACompliant runs the embedded-PDF/A check on one document at depth
+// 1, with a fresh budget of its own, which is what these tests mean by it.
+func embeddedPDFACompliant(cancel core.Canceler, data []byte, lim core.Limits) (compliant, complete bool) {
+	return embeddedPDFAChecker(newEmbeddedBudget(core.DefaultLimits()))(cancel, data, lim, 1)
+}
+
 func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {
 	innerBytes, _ := embeddedPDFAFixture(t, core.DefaultLimits())
 

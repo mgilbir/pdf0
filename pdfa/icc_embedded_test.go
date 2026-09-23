@@ -97,7 +97,7 @@ func TestTheProfileForALevelIsTheOneThatLevelAllows(t *testing.T) {
 		t.Error("PDF/A-1b did not get the ICC v2.1 profile")
 	}
 	if got := sRGBProfile(PDFA1a); !bytes.Equal(got, srgbV21) {
-		t.Error("PDF/A-1a did not get the ICC v2.1 profile; BaseB should map it to 1b")
+		t.Error("PDF/A-1a did not get the ICC v2.1 profile; it is part 1, like 1b")
 	}
 	for _, l := range []Level{PDFA2b, PDFA3b, PDFA4, PDFA2a, PDFA3a} {
 		if got := sRGBProfile(l); !bytes.Equal(got, srgbV43) {

@@ -54,9 +54,14 @@ func (l Level) String() string {
 	case PDFX6:
 		return "PDF/X-6"
 	default:
-		return "PDF/X"
+		return fmt.Sprintf("PDFXLevel(%d)", int(l))
 	}
 }
+
+// valid reports whether l names a PDF/X level. Anything else — an arbitrary
+// integer converted to Level — used to be validated as PDF/X-4 by every
+// default branch below (audit 2026-09-22 C139).
+func (l Level) valid() bool { return l >= PDFX4 && l <= PDFX6 }
 
 // pdfxVersionPrefix is the GTS_PDFXVersion identifier prefix a level requires.
 func (l Level) pdfxVersionPrefix() string {
@@ -566,6 +571,9 @@ func rectContains(outer, inner [4]float64) bool {
 // ValidateView runs the PDF/X checks over a view. The caller starts the run,
 // builds the view, and reports the guards that tripped while the file was read.
 func ValidateView(v core.View, level Level) []Violation {
+	if !level.valid() {
+		return []Violation{{Rule: finding.LimitRule, Message: fmt.Sprintf("not validated: %s names no PDF/X level", level)}}
+	}
 	var out []Violation
 	add := func(rule, msg string, obj int) {
 		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})

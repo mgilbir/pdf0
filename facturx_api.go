@@ -22,6 +22,11 @@ func facturxRun(ctx context.Context, doc *Document, rawData []byte) core.View {
 	runDoc.valCache = newValidationCache(core.NewCanceler(ctx))
 	v := runDoc.view()
 	facturx.SetPDFAChecker(v, func(core.View) []pdfa.Violation {
+		// PDF/A-3b: what a Factur-X or Order-X container is required to be.
+		// A container declaring 3a or 3u satisfies it too — a 3b target
+		// accepts the letters above it — and is not held here to the rest of
+		// its own claim, which is a PDF/A question: ValidatePDFABytes at
+		// LevelDeclared answers it.
 		return ValidatePDFABytesContext(ctx, doc, pdfa.PDFA3b, rawData)
 	})
 	return v

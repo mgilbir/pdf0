@@ -7,23 +7,23 @@ import (
 	"github.com/mgilbir/pdf0/object"
 )
 
-// The rules that only exist because a PDF/A-4 file said it was an E or an F.
+// The rules that exist only at a PDF/A-4 variant.
 //
 // ISO 19005-4 has two named variants on top of the base part. A PDF/A-4f file
 // carries attachments, and declares that with pdfaid:conformance F; a PDF/A-4e
 // file carries 3D artwork, and declares E. Each relaxes something the base part
 // forbids — arbitrary embedded files for F, 3D and RichMedia annotations for E
-// — and each adds requirements in exchange. pdf0 already honours the
-// relaxations; what follows is the other half of the bargain.
+// — and each adds requirements in exchange. What follows is the other half of
+// the bargain.
 //
-// The conformance is read from the file's own XMP rather than chosen by the
-// caller, which is the same way the relaxations are already gated. That works
-// for everything here and does not work for one thing: whether a file *should*
-// have said E or F. A file with pdfaid:part 4 and no conformance is a valid
-// plain PDF/A-4 file — base rule 6.7.3-3 says a file conforming to neither
-// variant shall not provide one — so "this ought to have been an E" is a
-// question only a caller who asked for PDF/A-4e can answer. That needs
-// PDFA4E/PDFA4F as levels of their own.
+// Both halves are gated on the target, never on the document's declaration:
+// validating at PDFA4F applies 4f whatever the file says, and a file that
+// declares F but is validated as plain PDF/A-4 gets neither the relaxations
+// nor these requirements — it gets the identification finding, which says its
+// declaration is not the one the target accepts. (Before, the gates read the
+// declaration after the run had flattened PDFA4F to PDFA4, so a PDFA4F run on
+// a file declaring nothing never reached them: audit 2026-09-22 C64.) To
+// validate a file against whatever it declares, ask for LevelDeclared.
 
 // checkA4FEmbeddedFilesPresent: a PDF/A-4f file shall contain an EmbeddedFiles
 // key in the name dictionary of the document catalog (ISO 19005-4 6.9).
@@ -32,7 +32,7 @@ import (
 // contradiction rather than a harmless overstatement: a reader that honours the
 // declaration goes looking for attachments that are not there.
 func checkA4FEmbeddedFilesPresent(doc core.View, level Level) []Violation {
-	if level.BaseB() != PDFA4 || effectiveVariant(doc, level) != "F" {
+	if level.variant() != "F" {
 		return nil
 	}
 	catalog := doc.Catalog()
@@ -60,7 +60,7 @@ func checkA4FEmbeddedFilesPresent(doc core.View, level Level) []Violation {
 // Elsewhere the annotation carrying it is the violation, and reporting the
 // artwork format as well would be answering a question nobody reached.
 func checkA4E3DStreamSubtype(doc core.View, level Level) []Violation {
-	if level.BaseB() != PDFA4 || effectiveVariant(doc, level) != "E" {
+	if level.variant() != "E" {
 		return nil
 	}
 	var errs []Violation

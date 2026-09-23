@@ -271,10 +271,10 @@ func checkOneObjectSyntax(raw []byte, off, regionEnd int64, num int, add func(st
 }
 
 func indirectRule(level Level) string {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return "6.1.8"
 	}
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		return "6.1.8"
 	}
 	return "6.1.9"
@@ -319,11 +319,11 @@ func min64(a, b int64) int64 {
 // structure type names and RoleMap names at PDF/A-4 (PDF 2.0, where names
 // are defined as UTF-8, ISO 32000-2 7.3.5).
 func checkNameUTF8(doc core.View, level Level) []Violation {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil // PDF/A-1 predates the UTF-8 name requirement
 	}
 	rule := "6.1.8"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.1.7"
 	}
 	// One example per distinct message, attributed to the lowest object number
@@ -335,7 +335,7 @@ func checkNameUTF8(doc core.View, level Level) []Violation {
 
 	for num, iobj := range doc.Objects {
 		walkColorantUTF8(doc, iobj.Value, num, add, 0)
-		if level == PDFA4 {
+		if level.Part() == 4 {
 			if d, ok := iobj.Value.(*object.Dictionary); ok {
 				checkA4NameUTF8(doc, d, num, add)
 			}
@@ -597,7 +597,7 @@ func checkHexStringFormat(doc core.View, level Level, raw []byte) []Violation {
 		return nil
 	}
 	rule := "6.1.6"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.1.5"
 	}
 	var errs []Violation
@@ -833,9 +833,9 @@ func checkStreamKeywordFormat(doc core.View, level Level, raw []byte) []Violatio
 		return nil
 	}
 	rule := "6.1.7.1"
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		rule = "6.1.6"
-	} else if level == PDFA4 {
+	} else if level.Part() == 4 {
 		rule = "6.1.6"
 	}
 	var errs []Violation
@@ -927,9 +927,9 @@ var inlineLZWNames = map[string]bool{"LZW": true, "LZWDecode": true}
 // ISO 32000-1 8.6.5.8).
 func checkInlineImageIntent(doc core.View, level Level) []Violation {
 	rule := "6.2.6"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.2.9"
-	} else if level == PDFA1b {
+	} else if level.Part() == 1 {
 		rule = "6.2.4"
 	}
 	// One example per distinct message, attributed to the lowest object number
@@ -976,9 +976,9 @@ func forEachInlineImage(data []byte, fn func([]core.InlineImageParam)) {
 // entry uses only permitted filters and never LZW.
 func checkInlineImageFilters(doc core.View, level Level) []Violation {
 	rule := "6.1.10"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.1.9"
-	} else if level == PDFA1b {
+	} else if level.Part() == 1 {
 		rule = "6.1.7"
 	}
 	// One example per distinct message, attributed to the lowest object number
@@ -1033,10 +1033,10 @@ func inlineImageFilters(data []byte) [][]string {
 // the true byte count and a divergence from the declared value is a mismatch.
 func checkStreamLength(doc core.View, level Level) []Violation {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
-	switch level {
-	case PDFA4:
+	switch level.Part() {
+	case 4:
 		rule = "6.1.6.1"
-	case PDFA2b, PDFA3b:
+	case 2, 3:
 		rule = "6.1.7.1"
 	}
 	var errs []Violation
@@ -1063,7 +1063,7 @@ func checkStreamLength(doc core.View, level Level) []Violation {
 // and the objects it should provide are unavailable.
 func checkObjectStreamDecodable(doc core.View, level Level) []Violation {
 	rule := "6.1.7"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.1.6"
 	}
 	var errs []Violation
@@ -1144,10 +1144,10 @@ func collectTrailerIDFirstElements(doc core.View, raw []byte) [][]byte {
 //     one that wrongly includes the whole EOL — is a violation.
 func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []Violation {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
-	switch level {
-	case PDFA4:
+	switch level.Part() {
+	case 4:
 		rule = "6.1.6.1"
-	case PDFA2b, PDFA3b:
+	case 2, 3:
 		rule = "6.1.7.1"
 	}
 	// Locate every delimited "stream" and "endobj" keyword once, up front, so

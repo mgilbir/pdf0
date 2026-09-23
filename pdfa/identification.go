@@ -8,7 +8,7 @@ import (
 // The PDF/A identification, read once, through the XMP model.
 //
 // Every reader of pdfaid — the identification rule, the Level A and PDF/A-4
-// variant rules, the relaxations they gate, DeclaredLevel and the embedded-file
+// variant rules, the relaxations they gated, DeclaredLevel and the embedded-file
 // check — used to scrape the packet text for "<pdfaid:conformance>" or
 // `pdfaid:conformance="`, each slightly differently. A comment holding an old
 // value, whitespace around "=", an attribute on the element or a prefix other
@@ -17,10 +17,10 @@ import (
 // done by the parser.
 
 // CheckPDFAIDConformance is the Check of the finding that pdfaid:conformance is
-// not the value the requested level requires. The Level A and PDF/A-4 variant
-// validators, and the Factur-X container, compose on the base validator and
-// replace exactly that finding with their own; they find it by this
-// identifier, not by the words of its message.
+// not one the target level accepts (Level.acceptsConformance). A validator that
+// composes on the PDF/A result and needs to tell that requirement apart from
+// the rest of its clause finds it by this identifier, not by the words of its
+// message.
 const CheckPDFAIDConformance = "pdfaid-conformance"
 
 // pdfaIDPrefix is the prefix ISO 19005 requires for the identification schema

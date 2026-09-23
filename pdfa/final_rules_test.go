@@ -3,6 +3,7 @@ package pdfa
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
@@ -280,24 +281,42 @@ func TestIsPDFMIME(t *testing.T) {
 	}
 }
 
-func TestDeclaredPDFALevel(t *testing.T) {
+// TestLevelDeclaredTakesTheTargetFromTheDocument: a LevelDeclared run
+// validates against the level the identification names, through LevelFor, and
+// refuses — with one checker finding — a document that names none.
+func TestLevelDeclaredTakesTheTargetFromTheDocument(t *testing.T) {
 	const ns = `http://www.aiim.org/pdfa/ns/id/`
-	attrForm := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
-		`<rdf:Description rdf:about="" xmlns:pdfaid="` + ns + `" pdfaid:part="4" pdfaid:conformance="B"/></rdf:RDF></x:xmpmeta>`
-	if lvl, ok := DeclaredLevel(docWithXMP([]byte(attrForm))); !ok || lvl != PDFA4 {
-		t.Errorf("part=4 attr: got %v %v", lvl, ok)
+	attr := func(part, conf string) []byte {
+		return []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+			`<rdf:Description rdf:about="" xmlns:pdfaid="` + ns + `" pdfaid:part="` + part + `" pdfaid:conformance="` + conf + `"/></rdf:RDF></x:xmpmeta>`)
 	}
-	elemForm := validXMP(`<pdfaid:part xmlns:pdfaid="` + ns + `">2</pdfaid:part>`)
-	if lvl, ok := DeclaredLevel(docWithXMP([]byte(elemForm))); !ok || lvl != PDFA2b {
-		t.Errorf("part=2 elem: got %v %v", lvl, ok)
+	for _, tc := range []struct {
+		packet []byte
+		want   Level
+	}{
+		{attr("2", "U"), PDFA2u},
+		{attr("3", "A"), PDFA3a},
+		{attr("4", "F"), PDFA4F},
+		{[]byte(validXMP(`<pdfaid:part xmlns:pdfaid="` + ns + `">1</pdfaid:part><pdfaid:conformance xmlns:pdfaid="` + ns + `">B</pdfaid:conformance>`)), PDFA1b},
+	} {
+		got, refused := ResolveTarget(docWithXMP(tc.packet), LevelDeclared)
+		if refused != nil || got != tc.want {
+			t.Errorf("declared %s: got %v %v, want %v", tc.packet, got, refused, tc.want)
+		}
 	}
-	// A value inside a comment is not a declaration (audit C141).
-	commented := validXMP(`<!-- <pdfaid:part xmlns:pdfaid="` + ns + `">2</pdfaid:part> -->`)
-	if _, ok := DeclaredLevel(docWithXMP([]byte(commented))); ok {
-		t.Error("a pdfaid:part inside a comment was read as a declaration")
-	}
-	if _, ok := DeclaredLevel(docWithXMP([]byte(validXMP(``)))); ok {
-		t.Error("document without pdfaid must not be PDF/A")
+	for name, packet := range map[string][]byte{
+		// Part 4 has no Level B: the old DeclaredLevel read this as PDFA4.
+		"part 4 conformance B": attr("4", "B"),
+		// Parts 1-3 require a conformance letter.
+		"part 2 without conformance": []byte(validXMP(`<pdfaid:part xmlns:pdfaid="` + ns + `">2</pdfaid:part>`)),
+		// A value inside a comment is not a declaration (audit C141).
+		"part in a comment": []byte(validXMP(`<!-- <pdfaid:part xmlns:pdfaid="` + ns + `">2</pdfaid:part> -->`)),
+		"no pdfaid":         []byte(validXMP(``)),
+	} {
+		_, refused := ResolveTarget(docWithXMP(packet), LevelDeclared)
+		if len(refused) != 1 || !finding.IsCheckerFinding(refused[0]) {
+			t.Errorf("%s: want one checker finding, got %v", name, refused)
+		}
 	}
 }
 func TestParseToUnicodeMapSpaceless(t *testing.T) {
@@ -383,15 +402,15 @@ func TestInheritedPageXObject(t *testing.T) {
 func TestA4EConformanceRelaxations(t *testing.T) {
 	// isForbiddenAction: SetOCGState/GoTo3DView allowed only at conformance E.
 	for _, act := range []object.Name{"SetOCGState", "GoTo3DView"} {
-		if !isForbiddenAction(act, PDFA4, "") {
+		if !isForbiddenAction(act, PDFA4) {
 			t.Errorf("plain PDF/A-4 should forbid /%s", act)
 		}
-		if isForbiddenAction(act, PDFA4, "E") {
+		if isForbiddenAction(act, PDFA4E) {
 			t.Errorf("PDF/A-4e should permit /%s", act)
 		}
 	}
 	// SetState/NOP stay forbidden even at 4e.
-	if !isForbiddenAction("SetState", PDFA4, "E") {
+	if !isForbiddenAction("SetState", PDFA4E) {
 		t.Error("PDF/A-4e must still forbid /SetState")
 	}
 }

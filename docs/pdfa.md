@@ -38,11 +38,17 @@ rule's clause, so it is not free-form. `Level` is echoed from the argument, `Mes
 `object N:` segment when `Object` is 0.
 
 Two conventions matter more than they look. **Resolve before type-asserting** —
-`resolveName(doc, dict.Get("Subtype"))`, not `dict.Get("Subtype").(Name)`; a value
-hidden behind an indirect reference (`/Subtype 12 0 R`) must not evade a rule, and
-`resolveName`'s comment records this as an actual past bug (audit C12).
-`doc.Resolve` follows ref→ref chains with a bounded hop count that doubles as a
-cycle guard. **Guard every recursion** — the validator eats untrusted files, so
+`doc.ResolveName(dict.Get("Subtype"))`, not `dict.Get("Subtype").(Name)`, and
+`doc.ResolveNumber(arr[i])` for an array element; a value hidden behind an
+indirect reference (`/Subtype 12 0 R`) must neither evade a prohibition nor fail a
+requirement. It has shipped at dozens of sites (audits C12, C18, C36), so
+`internal/lint`'s `TestValidatorsResolveBeforeAssert` now fails on a type
+assertion, type switch or `==`/`!=` comparison against a `Dictionary.Get` or
+`Lookup` result, an array element, a dictionary's `All`/`Values` value or an
+`object.Object` parameter, in every validator package, with no allowlist. A
+structural walk that deliberately visits each indirect object on its own says so
+with a `case object.IndirectRef:`. `doc.Resolve` follows ref→ref chains with a
+bounded hop count that doubles as a cycle guard. **Guard every recursion** — the validator eats untrusted files, so
 recursive helpers thread a visited set (`map[*Dictionary]bool` or `map[int]bool`)
 or a depth counter, and `arr[0]` is always length-checked.
 
@@ -81,7 +87,7 @@ shows the 1b / 2b-3b / 4 spread where a helper table (`colourClause`,
 | Annotations | `checkAnnotationSubtypes`, `checkAnnotationFlags`, `checkAnnotationAppearance` | 6.5.x / 6.3.x | 1455 |
 | Interactive forms | `checkWidgetNoAction`, `checkNoXFA`, `checkNeedAppearances` | 6.6.2 / 6.4.1 | 1803 |
 | Actions & trigger events | `checkNoForbiddenActions`, `checkNamedActions`, `checkAnnotationAA` | 6.6.1 / 6.5.x | 1885 |
-| Metadata / XMP | `checkMetadataVersion`, `checkInfoXMPConsistency` | 6.7.11 / 6.6.4 / 6.7.3 | 2115, 2872 |
+| Metadata / XMP | `checkIdentification`, `checkInfoXMPConsistency` | 6.7.11 / 6.6.4 / 6.7.3 | 2115, 2872 |
 | Transparency (1b prohibition) | `checkNoTransparency` | 6.2.4 (1b only) | 2296 |
 | Images | `checkNoAlternateImages`, `checkInterpolate`, `checkNoOPI`, `checkJPXImages` | 6.2.7, 6.2.8.3 | 2462, 6460 |
 | Version identification | `checkCatalogVersion` (A-4 only, `/Version` must be `2.N`) | 6.1.12 | 2594 |
@@ -137,13 +143,31 @@ is a legitimate cached answer.
 
 ## Level differences
 
-One rule body serves 1b, 2b, 3b and 4, via three idioms.
+A `pdfa.Level` names one **target profile** (`pdfa/level.go`): the part of ISO
+19005, the conformance level (a, b or u at parts 1-3) and, at part 4, the variant
+(e or f). The levels are `PDFA1a`, `PDFA1b`, `PDFA2a`, `PDFA2b`, `PDFA2u`,
+`PDFA3a`, `PDFA3b`, `PDFA3u`, `PDFA4`, `PDFA4E` and `PDFA4F` (`pdfa.Levels()`).
+The zero value is `LevelDeclared`, which is not a profile: it asks for the level
+the document declares, resolved by `ResolveTarget` through `LevelFor` before
+anything runs. A document whose declaration cannot be read or names no level, and
+a `Level` that names no profile, get one finding under the `limit` rule and are
+not validated.
+
+There is one pipeline for every level, and every check receives the target
+**unflattened**. A check asks the profile what it means — `level.Part()`,
+`level.Conformance()`, `level.IsA()`, `level.variant()`,
+`level.requiresUnicode()` — and never compares a `Level` with a constant:
+`level == PDFA4` is false at 4e and 4f, and that is how the variants' own rules
+once became unreachable (audit C64). `internal/lint`'s
+`TestPDFAChecksAskTheProfile` enforces it outside `level.go`. One rule body
+serves every level, via four idioms.
 
 **Early return** where the rule does not apply at all: `checkNoTransparency` opens
-with `if level != PDFA1b { return nil }` — only Part 1 bans transparency outright
+with `if level.Part() != 1 { return nil }` — only Part 1 bans transparency outright
 — and `checkNoOCProperties`, `checkFontSubsets` and `checkInfoXMPConsistency` are
-1b-only the same way, each with a comment recording the corpus evidence that
-Part 2 relaxed them.
+Part-1-only the same way, each with a comment recording the corpus evidence that
+Part 2 relaxed them. The Level A families return early unless `level.IsA()`, and
+the Unicode-mapping rule unless `level.requiresUnicode()` (A or U).
 
 **A clause-helper table** for the rule ID, since the same requirement is numbered
 differently per part: helpers hold a `[1b, 2b/3b, 4]` triple and switch on the
@@ -154,25 +178,22 @@ it: it validates each corpus fail file at its level and ratchets how many veraPD
 rules are reported under their own clause (see
 [testing.md](testing.md#rule-coverage)).
 
-**A level of its own** where the target, not the document, decides. PDF/A-4e and
-PDF/A-4f are `PDFA4E` and `PDFA4F`, and validate the way Level A does: run the
-base pipeline at `level.BaseB()` — which is `PDFA4` for both — adopt its
-findings at this level, then add what the variant asks for
-(`ValidateVariant4View`).
-
-Most of what the variants need does not require this. A document that declares
-`pdfaid:conformance F` gets 4f's relaxation (arbitrary embedded files) and 4f's
-requirement (it must actually carry some) whatever level it is validated at,
-because `effectiveVariant` reads the declaration. What needs the level is the
-one question the document cannot answer about itself: a part-4 file carrying no
-conformance is a valid **plain** PDF/A-4 file — base rule 6.7.3-3 says a file
-conforming to neither variant shall not provide one — so *"this should have
-declared E"* is meaningful only against a caller who asked for PDF/A-4e.
-
-Note that `pdfaConformanceFlag` uppercases and the conformance *value* rule does
-not. The first is right for the relaxations: a file saying `e` is trying to be a
-4e, so the stricter rules should apply to it rather than be skipped. The second
-is right for the rule: the property is case-sensitive, and `e` is not `E`.
+**The declaration is judged in one place.** `checkIdentification` compares the
+document's pdfaid identification (read through the XMP model,
+`readPDFAIdentification`) with the target: the part must be the target's, part 4
+must carry `pdfaid:rev 2020`, and the conformance letter must be one the target
+accepts — `Level.acceptsConformance`, the one statement of the conformance
+hierarchy. Following the veraPDF identification tests: a 2b/3b target accepts
+`B`, `U` or `A`; 2u/3u accept `U` or `A`; 2a/3a only `A`; 1b accepts `B` or `A`
+(ISO 19005-1 has no Level U) and 1a only `A`. Part 4 has no hierarchy: plain
+PDF/A-4 accepts no conformance entry, 4e exactly `E`, 4f exactly `F`. The
+comparison is case-sensitive (`e` is not `E`, the corpus's 6-7-3-t01-fail-c),
+while `LevelFor` maps a letter case-insensitively, so a file writing `e` is held
+to 4e and told about the case. No other rule reads the declaration: the PDF/A-4
+variant relaxations and requirements are gated on the target's variant, so a
+file declaring `F` validated as plain PDF/A-4 gets neither, plus the
+identification finding. To check a file against whatever it claims, ask for
+`LevelDeclared`.
 
 **An inline `if level == PDFA4` branch** where the requirement itself differs. The
 genuine PDF/A-4 divergences:
@@ -194,10 +215,12 @@ genuine PDF/A-4 divergences:
   [xmp.md](xmp.md#pdfa-4-deliberately-skips-property-value-validation), which owns this
   decision.
 
-A-4 also has conformance flavours. `pdfaConformanceFlag(doc)` (`final_rules.go`)
-reads `pdfaid:conformance` from the XMP: `F` and `E` both relax the document-level
-`/AF` requirement on embedded files, and `E` additionally permits `3D` and
-`RichMedia` annotations that plain A-4 forbids.
+A-4 also has its variants, gated on `level.variant()`: at `PDFA4F` and `PDFA4E`
+the document-level `/AF` requirement on embedded files is relaxed and embedded
+files need not be PDF/A; `PDFA4E` additionally permits `3D` and `RichMedia`
+annotations and the 3D/multimedia actions plain A-4 forbids. In exchange 4f must
+carry `/EmbeddedFiles` and 4e's 3D streams must be `/U3D` or `/PRC`
+(`pdfa4_ef.go`).
 
 ## Where the other rule files fit
 
@@ -205,8 +228,15 @@ reads `pdfaid:conformance` from the XMP: `F` and `E` both relax the document-lev
 home: prohibited catalog/page entries (6.11/6.12), image `/Interpolate` and
 rendering intent on XObjects and inline images, file trailer `/ID` validity, A-4
 trigger events (6.6.3), ActualText Private Use Area values (6.2.10.8), Type 5
-halftone components (6.2.5), embedded PDF/A files (6.9 — re-read under
-`Document.embeddedDepth`) and the inherited-page-XObject rule (6.2.2).
+halftone components (6.2.5), embedded PDF/A files (6.9) and the
+inherited-page-XObject rule (6.2.2). Each embedded PDF is re-read and validated
+at the level it declares (`Document.Conformance`, i.e. `LevelFor`), which applies
+6.9 to its own embedded files in turn, down to `pdfa.MaxEmbeddedDepth` levels;
+the file-type requirement holds at every depth. All nested validations of one
+run share a budget (`maxEmbeddedPDFADocs` documents, and the run's per-stream
+decode limit in bytes), so fan-out at each level cannot multiply the work. A
+document deeper than the cap, or past the budget, is not validated and the run
+says so under `limit`.
 
 **`content_operators.go`** — everything decided by reading content: the operator
 whitelist (`contentOperators`, ISO 32000-1 Annex A Table A.1; anything outside it
@@ -224,10 +254,15 @@ and intent, name UTF-8 validity. It also hosts `checkStreamLength` and
 `checkObjectStreamDecodable`, object-model checks reporting defects the parser
 recovered from during `Read`.
 
-**`pdfa_levela.go`** — 1a/2a/3a: run the Level B pipeline at `level.baseB()`, drop
-the one finding saying `pdfaid:conformance` must be `B`, relabel the rest at the A
-level, then add `checkLevelAConformance`, `checkLevelAStructure` and
-`checkLevelALanguage`, each through `runCheck` so the panic boundary is not lost.
+**`pdfa_levela.go`, `pdfa_levela_content.go`, `pdfa_levela_fonts.go`** — the
+Level A families (Tagged PDF, artifacts, structure types, language, ActualText
+for Private Use Area code points), each returning early unless `level.IsA()`,
+and the Unicode character-map rule shared by Level A and Level U
+(`checkUnicodeMapping`, gated on `level.requiresUnicode()`): a rendered font
+needs a ToUnicode CMap or one of the three exemptions, and at parts 2/3 a
+ToUnicode may not map to U+0000, U+FEFF or U+FFFE. The glyph-name exemption reads
+the names of the glyphs actually shown, through the font's encoding or, for a
+symbolic Type 1 font with no `/Encoding`, the program's built-in encoding.
 
 **`create.go`** — the write side. `NewPDFADocument` /
 `NewPDFADocumentWithInfo` / `NewPDFADocumentWith` build a five-object skeleton
@@ -326,20 +361,14 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
   and additionally skips all five byte-level groups. A `Rule: "internal"` finding,
   conversely, is a pdf0 bug rather than a file defect: it is what `runCheck` emits
   after recovering a panic.
-- **Level A is not corpus-covered.** `TestCorpus` runs only the `PDF_A-1b/2b/3b/4`
-  suites, and `TestCorpusConformanceSuites` validates the `PDF_A-1a`/`PDF_A-2a`
-  directories at `PDFA1b`/`PDFA2b`, so `validatePDFALevelA` has no ratcheted
-  oracle. `TestRuleCoverage` likewise reads only the 1b/2b/3b/4 profiles.
-- **Level A's "Unicode character mapping" requirement is not implemented.** The
-  header comment in `pdfa_levela.go` lists it, but only three Level A checks
-  exist: conformance declaration, `MarkInfo`/`StructTreeRoot` *presence*, and
-  catalog `/Lang` syntax. Nothing validates the structure tree's contents, and no
-  check is gated on `level.isA()` outside the dispatcher and the builder.
-- **`corpusMaxIsartorMissed = 1`** — one Isartor PDF/A-1b fail file is still not
-  flagged (the constant's comment carries the full 18 → 1 history). And in
-  `TestCorpusConformanceSuites` only `PDF_A-4f`/`PDF_A-4e` assert FP=0 on their
-  pass files; the a/u/UA pass files are minimal per-clause fixtures that
-  false-positive by design.
+- **Every conformance suite is measured at its own level.** `TestCorpus` runs
+  the `PDF_A-1b/2b/3b/4` suites, `TestCorpusLevelA` runs `PDF_A-1a`, `PDF_A-2a`
+  and `PDF_A-2u` at `PDFA1a`/`PDFA2a`/`PDFA2u`, and `TestCorpusConformanceSuites`
+  runs `PDF_A-4f`/`PDF_A-4e` at `PDFA4F`/`PDFA4E`, all at FP=0 and missed=0.
+  The PDF/UA suites are walked at `PDFA2b`/`PDFA4` as a fail-file regression net
+  only. `TestRuleCoverage` reads only the 1b/2b/3b/4 profiles.
+- **The corpus has no Level U suite for part 3** and no 3a suite; `PDFA3u` and
+  `PDFA3a` are the part-2 rules at part 3's clause numbers.
 - **Content decoding is budgeted.** A stream over `WithMaxContentStreamBytes` (64 MB)
   decoded, or any stream once the run has spent `WithMaxDecodedContentBytes` (512 MB),
   yields `nil` — indistinguishable from "undecodable". A rule reading `nil` content

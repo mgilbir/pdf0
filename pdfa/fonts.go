@@ -35,10 +35,10 @@ func checkFontDictionaries(doc core.View, level Level) []Violation {
 }
 
 func fontRule(level Level) string {
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return "6.3"
-	case PDFA4:
+	case 4:
 		return "6.2.10"
 	}
 	return "6.2.11"
@@ -68,10 +68,10 @@ func fontClause(concept string, level Level) string {
 	if !ok {
 		return fontRule(level)
 	}
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return c[0]
-	case PDFA4:
+	case 4:
 		return c[2]
 	default:
 		return c[1]
@@ -177,7 +177,7 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 				// CIDFont with the Supplement-2 Adobe-Japan1-2 CMap and is a
 				// pass file; the veraPDF profiles agree — "Supplement"
 				// appears in PDFA-2*/3*/4* but in neither 1A nor 1B.
-				if level != PDFA1b && cmapStreamInfo != nil {
+				if level.Part() != 1 && cmapStreamInfo != nil {
 					if supp, ok := doc.Resolve(cidInfo.Get("Supplement")).(object.Integer); ok && supp > cmSupp {
 						bad("cidSystemInfo", "CIDFont CIDSystemInfo Supplement %d is greater than the CMap's %d", int(supp), int(cmSupp))
 					}
@@ -217,7 +217,7 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 	}
 
 	// ToUnicode values (A-4): no mapping may target U+0000, U+FEFF, U+FFFE.
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		if tu, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*object.Stream); ok {
 			if core.HasForbiddenUnicodeTargets(doc, tu) {
 				bad("toUnicode", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)")
@@ -270,7 +270,7 @@ func cmapUseCMap(doc core.View, stream *object.Stream) (string, bool) {
 // stream), not referenced by a predefined name. Parts 2 and later permit
 // predefined CMaps by name, so this is a PDF/A-1-only rule.
 func checkCMapEmbedded(doc core.View, level Level) []Violation {
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		return nil
 	}
 	var errs []Violation
@@ -1249,10 +1249,10 @@ func parseNumberToken(b []byte) float64 {
 // subsetRule returns the clause a subset-embedding violation is reported
 // under: 19005-1 6.3.5, 19005-2/-3 6.2.11.4.2, 19005-4 6.2.10.4.2.
 func subsetRule(level Level) string {
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return "6.3.5"
-	case PDFA4:
+	case 4:
 		return "6.2.10.4.2"
 	}
 	return "6.2.11.4.2"
@@ -1363,11 +1363,11 @@ func usedGlyphMissing(u *core.FontTextUsage, enc map[byte]string, listed map[str
 // embedded CMap exceeds 65535 (ISO 19005-1 6.1.12, -2/-3 6.1.13; the CID is
 // a 16-bit value per ISO 32000-1 9.7.4).
 func checkCMapCIDLimit(doc core.View, level Level) []Violation {
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		return nil // PDF/A-4 has no implementation-limits clause
 	}
 	rule := "6.1.12"
-	if level == PDFA2b || level == PDFA3b {
+	if level.Part() == 2 || level.Part() == 3 {
 		rule = "6.1.13"
 	}
 	var errs []Violation
@@ -1407,7 +1407,7 @@ func checkCMapCIDLimit(doc core.View, level Level) []Violation {
 // program. (PDF/A-2/-3 only require the CIDSet to cover the CIDs actually
 // used for rendering, handled by checkFontSubsetCompleteness.)
 func checkCIDSetProgramComplete(doc core.View, level Level) []Violation {
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		return nil
 	}
 	catalog := doc.Catalog()

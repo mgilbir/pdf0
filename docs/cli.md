@@ -41,11 +41,11 @@ pdf0 — inspect, validate, and (de)encrypt PDF files
 
 usage:
   pdf0 info     [-password-file F] <file>
-  pdf0 validate [-level 1b|2b|3b|4] [-password-file F] <file>
+  pdf0 validate [-level LEVEL|declared] [-password-file F] <file>
   pdf0 decrypt  [-force] [-password-file F] <in> <out>
   pdf0 encrypt  [-force] [-user-password-file F] [-owner-password-file F] <in> <out>
   pdf0 extract  [-password-file F] <file>
-  pdf0 repair   [-force] [-level 1b|2b|3b|4] [-password-file F] <in> <out>
+  pdf0 repair   [-force] [-level LEVEL] [-password-file F] <in> <out>
   pdf0 merge    [-force] <out> <in1> <in2> [in3 ...]
   pdf0 ua       [-password-file F] <file>
 
@@ -209,11 +209,11 @@ or directory`, `error: x.txt: PDF header not found`, `error: read /tmp: is a dir
 
 ## `validate`
 
-`pdf0 validate [-level 1b|2b|3b|4] [-password-file F] <file>`
+`pdf0 validate [-level LEVEL|declared] [-password-file F] <file>`
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-level` | `2b` | PDF/A level: `1b`, `2b`, `3b`, or `4` — nothing else |
+| `-level` | `2b` | PDF/A level: `1b`, `1a`, `2b`, `2u`, `2a`, `3b`, `3u`, `3a`, `4`, `4e` or `4f`; or `declared`, the level the file's own metadata declares |
 | `-password-file` | — | see [Passwords](#passwords) |
 
 Runs `ValidatePDFABytes`: the object model *and* the raw bytes, so the byte-level clause
@@ -230,8 +230,9 @@ $ pdf0 validate -level 1b clean2b.pdf
 error: 3 violation(s) found                              # stderr, exit 1
 ```
 
-Any other `-level` is a **usage** error (exit 2), including the Level A names the library
-does implement: `error: unknown level "1a" (want 1b, 2b, 3b, or 4)`.
+Any other `-level` is a **usage** error (exit 2): `error: unknown level "5b" (want 1b, 1a,
+2b, 2u, 2a, 3b, 3u, 3a, 4, 4e, 4f, or declared)`. With `-level declared`, a file that
+declares no PDF/A level is reported with one `limit` finding and not validated.
 
 A locked file is refused rather than validated against ciphertext, exit **3**, with the
 [missing- or wrong-password message](#passwords). With the password it validates normally
@@ -319,7 +320,7 @@ the whole document.
 
 ## `repair`
 
-`pdf0 repair [-force] [-level 1b|2b|3b|4] [-password-file F] <in> <out>` — `-level`
+`pdf0 repair [-force] [-level LEVEL] [-password-file F] <in> <out>` — `-level`
 defaults to `2b` ("target PDF/A level").
 
 Calls `Document.Repair(level)`, which removes forbidden **document-level** constructs only
@@ -353,7 +354,7 @@ written.
   written — never "0 violation(s) remain".
 - **To stdout** (`<out>` is `-`), the `fixed:` lines and the summary go to stderr.
 
-Bad `-level` is exit 2: `error: unknown level "9z" (want 1b, 2b, 3b, or 4)`.
+Bad `-level` is exit 2: `error: unknown level "9z" (want 1b, 1a, 2b, 2u, 2a, 3b, 3u, 3a, 4, 4e, 4f)`.
 
 ## `merge`
 

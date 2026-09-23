@@ -7,12 +7,11 @@ import (
 
 // PDF/A-4e and PDF/A-4f as levels.
 //
-// Everything else about the variants can be read out of the file: a document
-// that declares itself a 4f gets 4f's relaxations and 4f's requirements. One
-// thing cannot. A part-4 file carrying no pdfaid:conformance is a valid plain
-// PDF/A-4 file — base rule 6.7.3-3 says a file conforming to neither variant
-// shall not provide one — so "this should have declared E" is a question only a
-// caller who asked for PDF/A-4e can pose.
+// A part-4 file carrying no pdfaid:conformance is a valid plain PDF/A-4 file —
+// base rule 6.7.3-3 says a file conforming to neither variant shall not provide
+// one — so "this should have declared E" is a question only a caller who asked
+// for PDF/A-4e can pose. The variants' relaxations and requirements are gated
+// on the target for the same reason, never on the declaration.
 
 func TestTheVariantLevelsKnowWhatTheyAre(t *testing.T) {
 	for _, tc := range []struct {
@@ -26,24 +25,27 @@ func TestTheVariantLevelsKnowWhatTheyAre(t *testing.T) {
 		if got := tc.level.String(); got != tc.name {
 			t.Errorf("String() = %q, want %q", got, tc.name)
 		}
-		if got := tc.level.variantConformance(); got != tc.conf {
+		if got := tc.level.Conformance(); got != tc.conf {
 			t.Errorf("%s wants conformance %q, got %q", tc.name, tc.conf, got)
+		}
+		if got := tc.level.variant(); got != tc.conf {
+			t.Errorf("%s.variant() = %q, want %q", tc.name, got, tc.conf)
 		}
 		if !tc.level.Is4Variant() {
 			t.Errorf("%s does not report itself a PDF/A-4 variant", tc.name)
 		}
 		// Every base PDF/A-4 requirement applies to a variant, which is what
-		// lets the rules written against the base part answer for one.
-		if got := tc.level.BaseB(); got != PDFA4 {
-			t.Errorf("%s.BaseB() = %v, want PDF/A-4", tc.name, got)
+		// lets the rules written against the part answer for one.
+		if got := tc.level.Part(); got != 4 {
+			t.Errorf("%s.Part() = %v, want 4", tc.name, got)
 		}
 		if tc.level.IsA() {
 			t.Errorf("%s reports itself a Level A", tc.name)
 		}
 	}
 	// And the levels that are not variants say so, including plain PDF/A-4.
-	for _, l := range []Level{PDFA1b, PDFA2b, PDFA3b, PDFA4, PDFA1a, PDFA2a, PDFA3a} {
-		if l.Is4Variant() || l.variantConformance() != "" {
+	for _, l := range []Level{PDFA1b, PDFA2b, PDFA3b, PDFA4, PDFA1a, PDFA2a, PDFA3a, PDFA2u, PDFA3u} {
+		if l.Is4Variant() || l.variant() != "" {
 			t.Errorf("%s reports itself a PDF/A-4 variant", l)
 		}
 	}
@@ -63,7 +65,11 @@ func TestLevelForNamesTheVariants(t *testing.T) {
 		{"4", "", PDFA4, true},
 		{"4", "B", 0, false}, // no such thing
 		{"1", "A", PDFA1a, true},
-		{"2", "", PDFA2b, true},
+		{"1", "U", 0, false}, // ISO 19005-1 has no Level U
+		{"2", "U", PDFA2u, true},
+		{"3", "u", PDFA3u, true},
+		{"2", "", 0, false}, // parts 1-3 require a conformance letter
+		{"5", "B", 0, false},
 	} {
 		got, ok := LevelFor(tc.part, tc.conf)
 		if ok != tc.ok || (ok && got != tc.want) {
@@ -89,7 +95,7 @@ func TestAVariantMustSayWhichVariantItIs(t *testing.T) {
 		{"a 4e that says F", `<pdfaid:conformance>F</pdfaid:conformance>`, PDFA4E, `is "F"`},
 		// Case matters: the property is case-sensitive, and "e" is not "E".
 		{"a 4e that says e", `<pdfaid:conformance>e</pdfaid:conformance>`, PDFA4E, `is "e"`},
-		{"a 4e with an empty value", `<pdfaid:conformance></pdfaid:conformance>`, PDFA4E, "present but empty"},
+		{"a 4e with an empty value", `<pdfaid:conformance></pdfaid:conformance>`, PDFA4E, `is ""`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			doc := xmpView(`<?xpacket begin=""?><x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -98,7 +104,7 @@ func TestAVariantMustSayWhichVariantItIs(t *testing.T) {
 <pdfaid:part>4</pdfaid:part><pdfaid:rev>2020</pdfaid:rev>` + tc.xmp + `
 </rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="r"?>`)
 
-			errs := checkVariant4Conformance(doc, tc.level)
+			errs := filterCheck(checkIdentification(doc, tc.level), CheckPDFAIDConformance)
 			if tc.want == "" {
 				if len(errs) != 0 {
 					t.Errorf("a conforming declaration was reported: %v", errs)
@@ -124,20 +130,19 @@ func TestAVariantMustSayWhichVariantItIs(t *testing.T) {
 <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
 <pdfaid:part>4</pdfaid:part><pdfaid:rev>2020</pdfaid:rev>
 </rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="r"?>`)
-	for _, l := range []Level{PDFA4, PDFA2b, PDFA1b} {
-		if errs := checkVariant4Conformance(doc, l); len(errs) != 0 {
-			t.Errorf("%s asked for a variant conformance: %v", l, errs)
-		}
+	if errs := checkIdentification(doc, PDFA4); len(errs) != 0 {
+		t.Errorf("plain PDF/A-4 asked for a conformance: %v", errs)
 	}
 }
 
-// TestTheVariantRequirementsApplyFromTheLevelAsWellAsTheFile.
+// TestTheVariantRequirementsApplyFromTheTarget.
 //
-// Before the levels, 4f's and 4e's own requirements were gated on what the
-// document declared, which cannot reach a document that declares nothing. Both
-// routes work now, and the level is the one that does not depend on the file
-// being honest about itself.
-func TestTheVariantRequirementsApplyFromTheLevelAsWellAsTheFile(t *testing.T) {
+// 4f's and 4e's own requirements are gated on the target alone. A document
+// that declares F but is validated as plain PDF/A-4 is not held to them — it
+// is reported by the identification rule instead, since plain PDF/A-4 accepts
+// no conformance entry — and a caller who wants "whatever it says it is" asks
+// for LevelDeclared.
+func TestTheVariantRequirementsApplyFromTheTarget(t *testing.T) {
 	// No conformance declared at all.
 	bare := efDoc("", nil, nil)
 
@@ -149,9 +154,11 @@ func TestTheVariantRequirementsApplyFromTheLevelAsWellAsTheFile(t *testing.T) {
 		t.Errorf("plain PDF/A-4 applied 4f's requirement to a document that never "+
 			"claimed it: %v", v)
 	}
-	// And the file-driven route still works, which is how a document that says
-	// it is a 4f is held to 4f without the caller knowing.
-	if v := checkA4FEmbeddedFilesPresent(efDoc("F", nil, nil), PDFA4); len(v) == 0 {
-		t.Error("a document declaring F was not held to the attachment requirement")
+	if v := checkA4FEmbeddedFilesPresent(efDoc("F", nil, nil), PDFA4); len(v) != 0 {
+		t.Errorf("plain PDF/A-4 applied 4f's requirement because the document "+
+			"declared F: %v", v)
+	}
+	if v := filterCheck(checkIdentification(efDoc("F", nil, nil), PDFA4), CheckPDFAIDConformance); len(v) != 1 {
+		t.Errorf("a document declaring F at plain PDF/A-4: want the identification finding, got %v", v)
 	}
 }
