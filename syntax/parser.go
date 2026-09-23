@@ -56,6 +56,11 @@ type Parser struct {
 	head, n int
 	depth   int   // current nesting depth (arrays/dictionaries)
 	end     int64 // offset just past the last consumed token; see Offset
+	// streamKW is the offset of the stream keyword of the last stream parsed,
+	// and -1 before one is; streamLen is the /Length that stream declared, as
+	// the parse read it (-1 when it did not come to a non-negative integer).
+	// See StreamKeyword.
+	streamKW, streamLen int64
 
 	// ResolveLength, when set, resolves an indirect stream /Length reference to
 	// its integer value (typically via the cross-reference table). It lets
@@ -119,8 +124,10 @@ func NewParser(data []byte) *Parser {
 // the lexer's current position.
 func NewParserFromLexer(lexer *Lexer) *Parser {
 	return &Parser{
-		lexer: lexer,
-		end:   lexer.pos,
+		lexer:     lexer,
+		end:       lexer.pos,
+		streamKW:  -1,
+		streamLen: -1,
 	}
 }
 
@@ -137,6 +144,28 @@ func (p *Parser) Lexer() *Lexer {
 // counted, so parsing "5" from "5 /Next 7" leaves Offset at 1.
 func (p *Parser) Offset() int64 {
 	return p.end
+}
+
+// StreamKeyword returns the offset of the stream keyword of the last stream
+// the parser read, and false when it has read none. After ParseIndirectObject
+// returns a stream, it is where that stream's data begins to be introduced:
+// the keyword the parser actually took, which the byte-level conformance
+// rules measure from rather than searching for the word again (a search
+// cannot tell the keyword from the same letters in a string, and must be
+// told that ">>stream" is a keyword too).
+func (p *Parser) StreamKeyword() (int64, bool) {
+	return p.streamKW, p.streamKW >= 0
+}
+
+// StreamLength returns the /Length the last stream the parser read declares,
+// as the parse read it: a direct integer, or an indirect one ResolveLength
+// resolved. It is false when the parser has read no stream, or the value did
+// not come to a non-negative integer — absent, of another type, or a
+// reference ResolveLength could not follow — in which case a caller that
+// needs it resolves it itself. It is the declared value, whatever the data
+// turned out to hold.
+func (p *Parser) StreamLength() (int64, bool) {
+	return p.streamLen, p.streamKW >= 0 && p.streamLen >= 0
 }
 
 // SetOffset moves the parser to offset, discarding any look-ahead.
@@ -483,6 +512,7 @@ func (p *Parser) parseDictOrStream() (object.Object, error) {
 // parseStream parses stream data after the dictionary has been parsed.
 func (p *Parser) parseStream(dict *object.Dictionary, streamTok Token) (object.Object, error) {
 	p.consumeToken() // consume 'stream'
+	p.streamKW = streamTok.Offset
 	// The data is read from the bytes after the keyword, not through the
 	// lexer, so nothing may be buffered past it. Look-ahead never reaches past
 	// "stream" (it follows ">>", which ends any look-ahead), but a stale token
@@ -557,6 +587,7 @@ func (p *Parser) parseStream(dict *object.Dictionary, streamTok Token) (object.O
 		length = -1
 	}
 
+	p.streamLen = length
 	var data []byte
 	// A declared Length is authoritative only when the endstream keyword
 	// actually follows the indicated data (allowing one EOL). If it does not
