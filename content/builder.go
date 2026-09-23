@@ -17,7 +17,14 @@
 //   - q and Q are balanced, and nesting stays inside the 28 levels PDF/A allows.
 //   - Text operators appear only between BT and ET, and text objects do not
 //     nest.
+//   - Marked-content sequences (BMC and BDC, each closed by EMC) are balanced,
+//     and nest with text objects: a sequence begun inside BT ends before ET,
+//     and one begun outside does not end inside one.
 //   - A path is painted or explicitly discarded before anything else is drawn.
+//     Between m or re and the painting operator only path construction and
+//     clipping operators may appear, and after W or W* only the painting
+//     operator (ISO 32000-2 8.2, Figure 9). A colour, graphics-state,
+//     marked-content, sh or Do operator inside a path is refused.
 //   - Every number written is finite. A NaN reaching a content stream is not a
 //     rendering bug, it is a malformed file, and the layout of a hostile input
 //     is exactly where one would come from.
@@ -58,11 +65,19 @@ type Builder struct {
 	buf []byte
 	err error
 
-	depth   int  // current q/Q nesting
-	maxDep  int  // deepest nesting reached, for the limit check
-	inText  bool // between BT and ET
-	inPath  bool // a path is under construction
-	pending bool // a clip (W/W*) awaits its painting operator
+	depth  int  // current q/Q nesting
+	inText bool // between BT and ET
+	inPath bool // a path is under construction
+	// clipped records a W or W* awaiting the painting operator that applies
+	// it: Figure 9 admits nothing else there, not even path construction.
+	clipped bool
+
+	// marked is the current marked-content nesting (BMC/BDC not yet closed by
+	// EMC), and textFloor what it was when the open text object began: the
+	// sequences opened inside BT are the ones above the floor, and they have
+	// to close before ET.
+	marked    int
+	textFloor int
 
 	// setsColor records that the stream chose a colour or a colour space. It is
 	// not a question about the drawing but about where the drawing may be used:
@@ -103,10 +118,12 @@ func (b *Builder) SetsColor() bool { return b.setsColor }
 // Bytes returns the finished content stream, or the first error that made it
 // invalid.
 //
-// It is an error to finish with unbalanced q/Q, inside a text object, or with
-// an unpainted path: each leaves a stream whose meaning depends on what a
-// consumer does with the leftover state, and none of them is recoverable by the
-// caller after the fact.
+// It is an error to finish with unbalanced q/Q, inside a text object, inside a
+// marked-content sequence, or with an unpainted path: each leaves a stream
+// whose meaning depends on what a consumer does with the leftover state, and
+// none of them is recoverable by the caller after the fact. An unclosed
+// sequence is not harmless either: it runs on into whatever the reader
+// appends, and a tagged page's structure then claims content it never marked.
 func (b *Builder) Bytes() ([]byte, error) {
 	if b.err != nil {
 		return nil, b.err
@@ -118,6 +135,8 @@ func (b *Builder) Bytes() ([]byte, error) {
 		return nil, fmt.Errorf("content: stream ends inside a text object (BeginText without EndText)")
 	case b.inPath:
 		return nil, fmt.Errorf("content: stream ends with an unpainted path")
+	case b.marked != 0:
+		return nil, fmt.Errorf("content: %d unclosed marked-content sequence(s) (BeginMarked or BeginTagged without EndMarked)", b.marked)
 	}
 	return b.buf, nil
 }
@@ -140,6 +159,18 @@ func (b *Builder) fail(format string, args ...any) *Builder {
 func (b *Builder) op(name string, operands ...any) *Builder {
 	if b.err != nil {
 		return b
+	}
+	// The path object of Figure 9, checked here for every operator rather than
+	// in each method, so that a method added later cannot forget it. The
+	// painting operators clear inPath before they get here.
+	if b.inPath {
+		if b.clipped && !paintingOps[name] {
+			return b.fail("%s after a clip (W or W*): only the painting operator that applies the clip may follow", name)
+		}
+		if !pathOps[name] {
+			return b.fail("%s with a path under construction: between m or re and the painting operator only "+
+				"path construction and clipping operators are permitted (ISO 32000-2 8.2, Figure 9)", name)
+		}
 	}
 	for _, o := range operands {
 		switch v := o.(type) {
@@ -170,6 +201,21 @@ func (b *Builder) op(name string, operands ...any) *Builder {
 		b.setsColor = true
 	}
 	return b
+}
+
+// pathOps are the operators Figure 9 admits inside a path object: path
+// construction, clipping, and the painting operators that end it.
+var pathOps = map[string]bool{
+	"m": true, "l": true, "c": true, "v": true, "y": true, "h": true, "re": true,
+	"W": true, "W*": true,
+	"f": true, "F": true, "f*": true, "S": true, "s": true, "B": true, "B*": true,
+	"b": true, "b*": true, "n": true,
+}
+
+// paintingOps are the operators that end a path object.
+var paintingOps = map[string]bool{
+	"f": true, "F": true, "f*": true, "S": true, "s": true, "B": true, "B*": true,
+	"b": true, "b*": true, "n": true,
 }
 
 // num appends a PDF number, refusing the non-finite values that would make the

@@ -19,6 +19,7 @@ func (b *Builder) BeginText() *Builder {
 		return b.fail("BeginText with a path under construction")
 	}
 	b.inText = true
+	b.textFloor = b.marked
 	return b.op("BT")
 }
 
@@ -26,6 +27,10 @@ func (b *Builder) BeginText() *Builder {
 func (b *Builder) EndText() *Builder {
 	if !b.inText {
 		return b.fail("EndText without a matching BeginText")
+	}
+	if b.marked > b.textFloor {
+		return b.fail("EndText with %d marked-content sequence(s) begun inside the text object still open; "+
+			"a sequence and a text object nest, so it has to end first", b.marked-b.textFloor)
 	}
 	b.inText = false
 	return b.op("ET")
@@ -288,7 +293,7 @@ func (b *Builder) BeginActualText(text string) *Builder {
 	props := append([]byte(nil), "<</ActualText <FEFF"...)
 	props = appendUTF16BEHex(props, text)
 	props = append(props, ">>>"...)
-	return b.op("BDC", object.Name("Span"), props)
+	return b.beginMarked("BDC", object.Name("Span"), props)
 }
 
 // appendUTF16BEHex writes text as the hexadecimal digits of its UTF-16BE form,
@@ -338,14 +343,27 @@ func encodeString(codes []byte) []byte {
 // These carry the structure a tagged PDF needs. They are here from the start
 // because retrofitting them means re-deriving where each mark belonged.
 
+// beginMarked writes BMC or BDC and opens the sequence it begins. Every
+// sequence needs its EndMarked: Bytes refuses a stream that leaves one open.
+func (b *Builder) beginMarked(operator string, operands ...any) *Builder {
+	if b.err != nil {
+		return b
+	}
+	b.op(operator, operands...)
+	if b.err == nil {
+		b.marked++
+	}
+	return b
+}
+
 // BeginMarked opens a marked-content sequence with a tag alone (BMC).
-func (b *Builder) BeginMarked(tag object.Name) *Builder { return b.op("BMC", tag) }
+func (b *Builder) BeginMarked(tag object.Name) *Builder { return b.beginMarked("BMC", tag) }
 
 // BeginMarkedProperties opens a marked-content sequence whose properties are a
 // named entry in the page's /Resources /Properties (BDC).
 func (b *Builder) BeginMarkedProperties(tag, properties object.Name) *Builder {
 	record(&b.res.Properties, properties)
-	return b.op("BDC", tag, properties)
+	return b.beginMarked("BDC", tag, properties)
 }
 
 // BeginTagged opens a marked-content sequence carrying a marked-content
@@ -372,11 +390,31 @@ func (b *Builder) BeginTagged(tag object.Name, mcid int) *Builder {
 	props = append(props, "<</MCID "...)
 	props = strconv.AppendInt(props, int64(mcid), 10)
 	props = append(props, ">>"...)
-	return b.op("BDC", tag, props)
+	return b.beginMarked("BDC", tag, props)
 }
 
-// EndMarked closes a marked-content sequence (EMC).
-func (b *Builder) EndMarked() *Builder { return b.op("EMC") }
+// EndMarked closes the innermost open marked-content sequence (EMC).
+//
+// One with nothing open is refused, and so is one inside a text object that
+// would close a sequence begun outside it: that EMC would end a sequence the
+// text object sits inside, and the two no longer nest.
+func (b *Builder) EndMarked() *Builder {
+	if b.err != nil {
+		return b
+	}
+	if b.marked == 0 {
+		return b.fail("EndMarked without a matching BeginMarked or BeginTagged")
+	}
+	if b.inText && b.marked == b.textFloor {
+		return b.fail("EndMarked inside a text object would close a sequence begun outside it; " +
+			"end the text object first")
+	}
+	b.op("EMC")
+	if b.err == nil {
+		b.marked--
+	}
+	return b
+}
 
 // MarkPoint records a marked-content point: a place in the stream rather than a
 // span of it (MP). It is what an anchor, a footnote reference or a
