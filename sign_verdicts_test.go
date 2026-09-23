@@ -361,3 +361,148 @@ func TestSignerPurposePolicy(t *testing.T) {
 		t.Errorf("a signer under an intermediate restricted to serverAuth must not be trusted: trusted=%v chainErr=%v", approval[0].TrustedChain, approval[0].ChainErr)
 	}
 }
+
+// intermediateCA issues an intermediate CA under ca.
+func intermediateCA(t *testing.T, ca *x509.Certificate, caKey crypto.Signer, cn string) (*x509.Certificate, crypto.Signer) {
+	t.Helper()
+	c, k := signtest.Issue(t, &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: cn},
+		NotBefore: signtest.NotBefore, NotAfter: signtest.NotAfter, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}, ca, caKey)
+	return c, k
+}
+
+// TestRevokedIntermediateBreaksTheChain: revocation covers the whole path
+// (RFC 5280 6.1.3), not only the signer. A root revoking the intermediate CA
+// that issued the signer makes the chain untrusted, and the revocation is
+// reported, whatever the signer's own status says.
+func TestRevokedIntermediateBreaksTheChain(t *testing.T) {
+	ca, caKey := signtest.CA(t, "pdf0 path root")
+	inter, interKey := intermediateCA(t, ca, caKey, "pdf0 path intermediate")
+	signed, leaf := signedByLeaf(t, inter, interKey, leafTemplate("pdf0 path signer"))
+	tsaCert, tsaKey := signtest.TSACertKey(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	leafGood := signtest.MakeOCSP(t, leaf, inter, interKey, "good")
+	for _, tc := range []struct {
+		name    string
+		crls    [][]byte
+		trusted bool
+		status  sign.RevocationStatus
+	}{
+		{"intermediate not revoked", [][]byte{signtest.MakeCRL(t, ca, caKey, nil)}, true, sign.RevocationGood},
+		{"intermediate revoked", [][]byte{signtest.MakeCRL(t, ca, caKey, []*x509.Certificate{inter})}, false, sign.RevocationRevoked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vd := ValidationData{Certs: []*x509.Certificate{inter}, CRLs: tc.crls, OCSPs: [][]byte{leafGood}}
+			approval, _ := approvalAndTimestamps(verifySigs(t, readBytes(t, archive(t, signed, vd, tsaCert, tsaKey)), sign.VerifyOptions{Roots: roots}))
+			if len(approval) != 1 || !approval[0].Intact() {
+				t.Fatalf("want one intact signature: %+v", approval)
+			}
+			r := approval[0]
+			if r.TrustedChain != tc.trusted || r.Revocation.Status != tc.status {
+				t.Fatalf("trusted=%v revocation=%v chainErr=%v, want trusted=%v %v", r.TrustedChain, r.Revocation.Status, r.ChainErr, tc.trusted, tc.status)
+			}
+			if !tc.trusted && (r.ChainErr == nil || !strings.Contains(r.ChainErr.Error(), "pdf0 path intermediate")) {
+				t.Errorf("ChainErr should name the revoked intermediate: %v", r.ChainErr)
+			}
+		})
+	}
+}
+
+// TestRevokedTSAIsNotTrusted: a time-stamp authority whose certificate — or
+// the intermediate above it — is revoked vouches for no time. Its tokens
+// still verify, but neither the signature time-stamp nor the document
+// time-stamp is trusted, and the signature falls back to the current time.
+func TestRevokedTSAIsNotTrusted(t *testing.T) {
+	ca, caKey := signtest.CA(t, "pdf0 TSA root")
+	inter, interKey := intermediateCA(t, ca, caKey, "pdf0 TSA intermediate")
+	tsaCert, tsaKey := signtest.TSAIssuedBy(t, inter, interKey)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	signed := signMinimal(t, WithSignatureTimestamp(tsaCert, tsaKey))
+	for _, tc := range []struct {
+		name    string
+		crls    [][]byte
+		trusted bool
+	}{
+		{"nothing revoked", [][]byte{signtest.MakeCRL(t, ca, caKey, nil), signtest.MakeCRL(t, inter, interKey, nil)}, true},
+		{"TSA certificate revoked", [][]byte{signtest.MakeCRL(t, ca, caKey, nil), signtest.MakeCRL(t, inter, interKey, []*x509.Certificate{tsaCert})}, false},
+		{"TSA intermediate revoked", [][]byte{signtest.MakeCRL(t, ca, caKey, []*x509.Certificate{inter})}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vd := ValidationData{Certs: []*x509.Certificate{inter}, CRLs: tc.crls}
+			approval, stamps := approvalAndTimestamps(verifySigs(t, readBytes(t, archive(t, signed, vd, tsaCert, tsaKey)), sign.VerifyOptions{TSARoots: roots}))
+			if len(approval) != 1 || len(stamps) != 1 {
+				t.Fatalf("want a signature and a time-stamp: %d, %d", len(approval), len(stamps))
+			}
+			a, ts := approval[0], stamps[0]
+			if !a.Valid || !ts.Valid {
+				t.Fatalf("the tokens themselves verify: %v %v", a.Err, ts.Err)
+			}
+			if a.TimestampTrusted != tc.trusted || ts.TrustedChain != tc.trusted || ts.TimestampTrusted != tc.trusted {
+				t.Fatalf("signature time-stamp trusted=%v, document time-stamp trusted=%v (%v), want %v", a.TimestampTrusted, ts.TrustedChain, ts.ChainErr, tc.trusted)
+			}
+			if !tc.trusted {
+				if ts.Revocation.Status != sign.RevocationRevoked {
+					t.Errorf("the time-stamp's revocation should be reported: %+v", ts.Revocation)
+				}
+				if a.ValidationTime.Equal(a.TimestampTime) {
+					t.Error("an untrusted time-stamp must not set the validation time")
+				}
+			} else if !a.ValidationTime.Equal(a.TimestampTime) {
+				t.Errorf("a trusted signature time-stamp sets the validation time: %v vs %v", a.ValidationTime, a.TimestampTime)
+			}
+		})
+	}
+}
+
+// TestOuterTimestampSetsTheTSAValidationTime is the nested B-LTA case: an
+// authority whose certificate has expired stays trusted for the tokens a
+// later, trusted archive time-stamp preserved, because the chain is judged at
+// the outer time-stamp's time; with no outer time-stamp it is judged now and
+// fails.
+func TestOuterTimestampSetsTheTSAValidationTime(t *testing.T) {
+	ca, caKey := signtest.CA(t, "pdf0 nesting root")
+	longTSA, longKey := signtest.TSAIssuedBy(t, ca, caKey)
+	signer, signerKey := signtest.CertKey(t)
+	unsigned := readBytes(t, buildMinimalPDF())
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	// Every key is made before the short-lived authority is issued, so its
+	// few seconds of life cover only the signing and the two updates.
+	notAfter := time.Now().Add(5 * time.Second).Truncate(time.Second)
+	shortLived, shortKey := signtest.Issue(t, &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "pdf0 expiring TSA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: notAfter,
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+	}, ca, caKey)
+	var sb bytes.Buffer
+	if err := unsigned.WriteSigned(&sb, signer, signerKey, WithSignatureTimestamp(shortLived, shortKey)); err != nil {
+		t.Fatal(err)
+	}
+	first := archive(t, sb.Bytes(), ValidationData{}, shortLived, shortKey)
+	second := archive(t, first, ValidationData{}, longTSA, longKey)
+	if time.Now().After(notAfter) {
+		t.Fatal("building the file took longer than the authority's lifetime; the test cannot tell expiry from nesting")
+	}
+	time.Sleep(time.Until(notAfter) + 1500*time.Millisecond) // the short-lived authority has now expired
+
+	_, alone := approvalAndTimestamps(verifySigs(t, readBytes(t, first), sign.VerifyOptions{TSARoots: roots}))
+	if len(alone) != 1 || alone[0].TrustedChain {
+		t.Fatalf("with no outer time-stamp the expired authority is judged now and not trusted: %+v", alone)
+	}
+	approval, stamps := approvalAndTimestamps(verifySigs(t, readBytes(t, second), sign.VerifyOptions{TSARoots: roots}))
+	if len(approval) != 1 || len(stamps) != 2 {
+		t.Fatalf("want a signature and two time-stamps: %d, %d", len(approval), len(stamps))
+	}
+	for _, ts := range stamps {
+		if !ts.TrustedChain {
+			t.Errorf("%s: an outer trusted time-stamp covers it, so its authority is judged at that time and trusted: %v", ts.Field, ts.ChainErr)
+		}
+	}
+	if !approval[0].TimestampTrusted {
+		t.Error("the signature time-stamp is covered by a trusted archive time-stamp and should be trusted")
+	}
+}

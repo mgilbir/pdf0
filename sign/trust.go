@@ -185,3 +185,61 @@ func signingIssuers(cert *x509.Certificate, candidates []*x509.Certificate) []*x
 	}
 	return out
 }
+
+// revocationMaterial is the Document Security Store's validation material.
+type revocationMaterial struct {
+	certs       []*x509.Certificate
+	crls, ocsps [][]byte
+}
+
+// unrevokedChains drops every chain with a revoked certificate between its
+// leaf and its trust anchor, each checked against the next certificate of the
+// chain as its issuer at time at. When none is left it reports the revocation
+// and an error naming the certificate.
+func unrevokedChains(chains [][]*x509.Certificate, m revocationMaterial, at time.Time) ([][]*x509.Certificate, RevocationInfo, error) {
+	if len(m.crls) == 0 && len(m.ocsps) == 0 {
+		return chains, RevocationInfo{}, nil
+	}
+	var ok [][]*x509.Certificate
+	var revoked RevocationInfo
+	var err error
+chains:
+	for _, ch := range chains {
+		for i := 1; i < len(ch)-1; i++ {
+			info := CheckCertRevocation(ch[i], ch[i+1], m.crls, m.ocsps, at)
+			if info.Status == RevocationRevoked {
+				revoked = info
+				err = fmt.Errorf("intermediate certificate %q is revoked (%s, at %v)", ch[i].Subject.CommonName, info.Source, info.RevokedAt)
+				continue chains
+			}
+		}
+		ok = append(ok, ch)
+	}
+	if len(ok) == 0 {
+		return nil, revoked, err
+	}
+	return ok, RevocationInfo{}, nil
+}
+
+// leafRevocation reports cert's status through any of its issuers: several
+// verified chains can name different ones (a re-issued CA certificate,
+// cross-certification). A revocation through any of them wins; otherwise the
+// first "good", otherwise the first answer at all.
+func leafRevocation(cert *x509.Certificate, issuers []*x509.Certificate, m revocationMaterial, at time.Time) RevocationInfo {
+	var good, unknown RevocationInfo
+	for _, iss := range issuers {
+		info := CheckCertRevocation(cert, iss, m.crls, m.ocsps, at)
+		switch {
+		case info.Status == RevocationRevoked:
+			return info
+		case info.Status == RevocationGood && good.Status != RevocationGood:
+			good = info
+		case info.Source != "" && unknown.Source == "":
+			unknown = info
+		}
+	}
+	if good.Status == RevocationGood {
+		return good
+	}
+	return unknown
+}

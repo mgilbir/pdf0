@@ -118,12 +118,16 @@ type Result struct {
 	// own signature time-stamp, or a document time-stamp covering it — or the
 	// current time when there is none.
 	ValidationTime time.Time
-	// Revocation is the signer certificate's status at ValidationTime, from
-	// the CRLs and OCSP responses in the document's Document Security Store,
-	// authenticated by the certificate's issuer: the next certificate of the
-	// verified chain, or, without roots, a certificate whose key verifiably
-	// issued it. A revocation from any authenticated source wins over a
-	// "good" from another. Nothing is fetched from the network.
+	// Revocation is the signer certificate's status at ValidationTime (for a
+	// document time-stamp, its authority's), from the CRLs and OCSP responses
+	// in the document's Document Security Store, authenticated by the
+	// certificate's issuer: the next certificate of the verified chain, or,
+	// without roots, a certificate whose key verifiably issued it. A
+	// revocation from any authenticated source wins over a "good" from
+	// another. Every intermediate of the chain is checked too: a revoked one
+	// makes the chain untrusted, and its revocation is what Revocation then
+	// reports, with ChainErr naming the certificate. Nothing is fetched from
+	// the network.
 	Revocation RevocationInfo
 	// Revision is the index, into the file's revisions (Source.Revisions), of
 	// the revision the signature covers, or -1 when it covers none: a
@@ -141,6 +145,7 @@ type Result struct {
 	Err error
 
 	// Not exported: what ValidatePAdES reuses.
+	tsTok         *timestampToken
 	num           int
 	rg            signedRange
 	sd            *signedData
@@ -241,10 +246,7 @@ func verifyAll(d core.View, file core.SignedFile, opts VerifyOptions) []Result {
 			}
 			r.Valid = true
 			r.TimestampTime = tok.genTime
-			r.ValidationTime = now
-			chains, err := tsaChains(tok.cert, tok.certs, opts.tsaRoots(), now)
-			r.TrustedChain, r.ChainErr = err == nil && len(chains) > 0, err
-			r.TimestampTrusted = r.TrustedChain
+			r.tsTok = tok
 			continue
 		}
 		sd, err := parseSignedData(contents.Value)
@@ -282,15 +284,14 @@ func verifyAll(d core.View, file core.SignedFile, opts VerifyOptions) []Result {
 				r.tsErr = err
 			} else {
 				r.TimestampTime = tok.genTime
-				if chains, err := tsaChains(tok.cert, tok.certs, opts.tsaRoots(), now); err == nil && len(chains) > 0 {
-					r.TimestampTrusted = true
-				}
+				r.tsTok = tok
 			}
 		}
 	}
 
-	dssCerts := DSSCerts(d)
-	crls, ocsps := DSSRevocationMaterial(d)
+	m := revocationMaterial{certs: DSSCerts(d)}
+	m.crls, m.ocsps = DSSRevocationMaterial(d)
+	trustTimestamps(results, m, opts.tsaRoots(), now)
 	for i := range results {
 		r := &results[i]
 		if !r.Valid {
@@ -299,7 +300,7 @@ func verifyAll(d core.View, file core.SignedFile, opts VerifyOptions) []Result {
 		}
 		if !r.DocTimestamp {
 			r.ValidationTime = validationTime(r, results, now)
-			establishTrust(r, dssCerts, crls, ocsps, opts)
+			establishTrust(r, m, opts)
 		}
 		r.ChangesAllowed, r.DisallowedChanges = changesAfter(file, ends, r)
 	}
@@ -369,16 +370,28 @@ func validationTime(r *Result, all []Result, now time.Time) time.Time {
 	return best
 }
 
-// establishTrust builds the signer's chain at the validation time and reads
-// the revocation data in the document for its issuer.
-func establishTrust(r *Result, dssCerts []*x509.Certificate, crls, ocsps [][]byte, opts VerifyOptions) {
+// establishTrust builds the signer's chain at the validation time and checks
+// the revocation status of every certificate on it but the trust anchor
+// (RFC 5280 6.1.3): a chain through a revoked intermediate is not trusted, and
+// its revocation is reported.
+func establishTrust(r *Result, m revocationMaterial, opts VerifyOptions) {
 	cert := r.sd.cert
-	pool := append(append([]*x509.Certificate(nil), r.sd.certs...), dssCerts...)
+	pool := append(append([]*x509.Certificate(nil), r.sd.certs...), m.certs...)
 	var issuers []*x509.Certificate
 	if opts.Roots != nil {
 		chains, err := signerChains(cert, pool, opts.Roots, r.ValidationTime)
+		if err == nil {
+			var revoked RevocationInfo
+			chains, revoked, err = unrevokedChains(chains, m, r.ValidationTime)
+			if err != nil {
+				r.Revocation = revoked
+			}
+		}
 		if err != nil {
 			r.ChainErr = err
+			if r.Revocation.Status == RevocationRevoked {
+				return
+			}
 		} else {
 			r.TrustedChain = true
 			issuers = chainIssuers(chains)
@@ -387,30 +400,70 @@ func establishTrust(r *Result, dssCerts []*x509.Certificate, crls, ocsps [][]byt
 	if !r.TrustedChain {
 		issuers = signingIssuers(cert, pool)
 	}
-	if len(crls) == 0 && len(ocsps) == 0 {
-		return
-	}
-	// Several verified chains can name different issuers (a re-issued CA
-	// certificate, cross-certification). A revocation through any of them
-	// wins; otherwise the first "good", otherwise the first answer at all.
-	var good, unknown RevocationInfo
-	for _, iss := range issuers {
-		info := CheckCertRevocation(cert, iss, crls, ocsps, r.ValidationTime)
-		switch {
-		case info.Status == RevocationRevoked:
-			r.Revocation = info
-			return
-		case info.Status == RevocationGood && good.Status != RevocationGood:
-			good = info
-		case info.Source != "" && unknown.Source == "":
-			unknown = info
+	r.Revocation = leafRevocation(cert, issuers, m, r.ValidationTime)
+}
+
+// trustTimestamps decides which time-stamps are trusted: their authority
+// chains to the time-stamp roots with the time-stamping purpose, and neither
+// its certificate nor any intermediate is revoked. Each is judged at the
+// earliest time a trusted document time-stamp covering it proves it existed —
+// so an authority whose certificate has since expired stays trusted for the
+// tokens an archive time-stamp preserved (the nested B-LTA case) — or now.
+// Document time-stamps are settled from the outermost inwards, so every
+// covering one is decided before those it covers; signature time-stamps last.
+func trustTimestamps(results []Result, m revocationMaterial, roots *x509.CertPool, now time.Time) {
+	var dts []int
+	for i := range results {
+		if results[i].DocTimestamp && results[i].tsTok != nil {
+			dts = append(dts, i)
 		}
 	}
-	if good.Status == RevocationGood {
-		r.Revocation = good
-	} else {
-		r.Revocation = unknown
+	sort.Slice(dts, func(a, b int) bool { return results[dts[a]].rg.gapStart > results[dts[b]].rg.gapStart })
+	outer := func(end int64) time.Time {
+		var best time.Time
+		for _, j := range dts {
+			o := &results[j]
+			if o.TimestampTrusted && o.rg.gapStart >= end && (best.IsZero() || o.TimestampTime.Before(best)) {
+				best = o.TimestampTime
+			}
+		}
+		if best.IsZero() || best.After(now) {
+			return now
+		}
+		return best
 	}
+	for _, i := range dts {
+		r := &results[i]
+		r.ValidationTime = outer(r.rg.end)
+		r.TrustedChain, r.Revocation, r.ChainErr = tsaTrust(r.tsTok, m, roots, r.ValidationTime)
+		r.TimestampTrusted = r.TrustedChain
+	}
+	for i := range results {
+		r := &results[i]
+		if r.DocTimestamp || r.tsTok == nil {
+			continue
+		}
+		r.TimestampTrusted, _, _ = tsaTrust(r.tsTok, m, roots, outer(r.rg.end))
+	}
+}
+
+// tsaTrust reports whether a time-stamp authority is trusted at time at, the
+// status of its certificate, and why not.
+func tsaTrust(tok *timestampToken, m revocationMaterial, roots *x509.CertPool, at time.Time) (bool, RevocationInfo, error) {
+	pool := append(append([]*x509.Certificate(nil), tok.certs...), m.certs...)
+	chains, err := tsaChains(tok.cert, pool, roots, at)
+	if err != nil {
+		return false, RevocationInfo{}, err
+	}
+	chains, revoked, err := unrevokedChains(chains, m, at)
+	if err != nil {
+		return false, revoked, err
+	}
+	info := leafRevocation(tok.cert, chainIssuers(chains), m, at)
+	if info.Status == RevocationRevoked {
+		return false, info, fmt.Errorf("the time-stamp authority certificate %q is revoked (%s, at %v)", tok.cert.Subject.CommonName, info.Source, info.RevokedAt)
+	}
+	return true, info, nil
 }
 
 // changesAfter judges the changes made to the file after the revision a valid
