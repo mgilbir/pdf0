@@ -1026,7 +1026,10 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// When re-encrypting, serialize encrypted copies rather than the in-memory
 	// plaintext (which stays untouched for the caller). The /Encrypt dictionary
 	// and /ID remain in the trailer and are written as-is.
-	writeObjects, xrefType2 := d.buildWriteSet()
+	writeObjects, xrefType2, err := d.buildWriteSet()
+	if err != nil {
+		return err
+	}
 	if d.security != nil {
 		// Which crypt filter a stream uses depends on the document (embedded
 		// files follow /EFF, the catalog's metadata may be exempt), so the

@@ -3,9 +3,11 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
-	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/object"
 	"sort"
+
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/object"
 )
 
 // This file implements the write side of object streams (ISO 32000-2 7.5.7):
@@ -69,10 +71,14 @@ func buildObjectStream(nums []int, bodies map[int][]byte, objStmNum int) (*objec
 // the cross-reference stream's type-2 entries. Otherwise it returns d.Objects
 // unchanged with a nil map.
 //
-// It never mutates d.Objects: packing builds a fresh map.
-func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]int) {
+// It never mutates d.Objects: packing builds a fresh map. An object that does
+// not serialise is an error, as it is on the traditional-table path: the
+// packed body used to be written with the error dropped, so a NaN in an array
+// produced a container that no reader, pdf0 included, could parse back (audit
+// 2026-09-22 C100).
+func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]int, error) {
 	if !d.usedXRefStream {
-		return d.Objects, nil
+		return d.Objects, nil, nil
 	}
 	// An encrypted document we could not decrypt is written back as a passthrough:
 	// each object still holds its original per-object-encrypted bytes. Packing
@@ -80,7 +86,7 @@ func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]i
 	// per-object decryption to objects inside an /ObjStm — so leave every object
 	// individually addressable and let Write emit an all-uncompressed xref stream.
 	if d.Locked() {
-		return d.Objects, nil
+		return d.Objects, nil, nil
 	}
 
 	encNum := -1
@@ -113,18 +119,21 @@ func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]i
 			maxObj = num
 		}
 		// Streams, non-zero generations, the /Encrypt dictionary (and anything it
-		// references), and indirect /Length targets cannot (or must not) be
-		// compressed.
+		// references), indirect /Length targets, and anything holding a
+		// signature dictionary cannot (or must not) be compressed.
 		if num == encNum || encReachable[num] || iobj.Generation != 0 || lengthTargets[num] {
 			continue
 		}
 		if _, isStream := iobj.Value.(*object.Stream); isStream {
 			continue
 		}
+		if holdsSignatureDict(iobj.Value) {
+			continue
+		}
 		packable = append(packable, num)
 	}
 	if len(packable) < 2 {
-		return d.Objects, nil // not worth an object stream
+		return d.Objects, nil, nil // not worth an object stream
 	}
 	sort.Ints(packable)
 
@@ -133,7 +142,9 @@ func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]i
 	bodies := make(map[int][]byte, len(packable))
 	for _, num := range packable {
 		var buf bytes.Buffer
-		NewSerializer(&buf).WriteObject(d.Objects[num].Value)
+		if err := NewSerializer(&buf).WriteObject(d.Objects[num].Value); err != nil {
+			return nil, nil, fmt.Errorf("serializing object %d: %w", num, err)
+		}
 		bodies[num] = buf.Bytes()
 	}
 
@@ -182,9 +193,44 @@ func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]i
 	flush()
 
 	if len(type2) == 0 {
-		return d.Objects, nil // nothing packable after all
+		return d.Objects, nil, nil // nothing packable after all
 	}
-	return out, type2
+	return out, type2, nil
+}
+
+// holdsSignatureDict reports whether v is, or directly contains, a signature
+// dictionary (crypt.IsSignatureDict): one whose /ByteRange and /Contents must
+// appear literally in the file.
+//
+// Such an object must never be packed into an object stream. Signing writes a
+// placeholder /ByteRange and /Contents and patches the real values into the
+// output bytes afterwards, which it can only do if the placeholder is there to
+// find: packed into a compressed container it never appears, and WriteSigned
+// failed on every document read from an xref-stream file (audit 2026-09-22
+// C21). A filled signature must stay literal too — its /ByteRange names byte
+// offsets of the file it is in — and ISO 32000-2 7.6.2 exempts its /Contents
+// from encryption, which an object inside an encrypted container cannot be.
+// The walk goes through direct values only: a signature dictionary reached by
+// reference is its own object and is judged on its own.
+func holdsSignatureDict(v object.Object) bool {
+	switch o := v.(type) {
+	case *object.Dictionary:
+		if crypt.IsSignatureDict(o) {
+			return true
+		}
+		for val := range o.Values() {
+			if holdsSignatureDict(val) {
+				return true
+			}
+		}
+	case object.Array:
+		for _, e := range o {
+			if holdsSignatureDict(e) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // encryptReachable returns the object numbers reachable from the /Encrypt

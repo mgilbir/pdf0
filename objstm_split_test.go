@@ -55,7 +55,10 @@ func TestObjectStreamSplitBudget(t *testing.T) {
 	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	// The write set must span more than one container, and none may exceed the cap.
-	writeSet, type2 := doc.buildWriteSet()
+	writeSet, type2, err := doc.buildWriteSet()
+	if err != nil {
+		t.Fatalf("buildWriteSet: %v", err)
+	}
 	containers := map[int]bool{}
 	for _, loc := range type2 {
 		containers[loc[0]] = true
