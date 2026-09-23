@@ -3616,7 +3616,9 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 		}
 		if nameObj := cfgDict.Get("Name"); nameObj != nil {
 			if s, ok := nameObj.(object.String); ok {
-				n := string(s.Value)
+				// A text string: the same name in UTF-16 and in PDFDocEncoding
+				// is the same name.
+				n := core.DecodePDFTextString(s.Value)
 				if names[n] {
 					errs = append(errs, Violation{
 						Rule:    ocRule,

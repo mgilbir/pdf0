@@ -1003,12 +1003,14 @@ func walkAllDicts(d core.View, fn func(dict *object.Dictionary, objNum int)) {
 // ancestor); a present but malformed tag is not.
 func checkUALang(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
-	if s, ok := d.Resolve(cat.Get("Lang")).(object.String); ok && len(s.Value) > 0 && !core.ValidBCP47(string(s.Value)) {
-		v = append(v, Violation{"7.2", "catalog /Lang " + quote(string(s.Value)) + " is not a valid language identifier", 0})
+	// /Lang is a text string, and a UTF-16 "en-US" is as valid a language tag
+	// as a PDFDocEncoded one: decode before judging it.
+	if s, ok := d.Resolve(cat.Get("Lang")).(object.String); ok && len(s.Value) > 0 && !core.ValidBCP47(core.DecodePDFTextString(s.Value)) {
+		v = append(v, Violation{"7.2", "catalog /Lang " + quote(core.DecodePDFTextString(s.Value)) + " is not a valid language identifier", 0})
 	}
 	walkStructElems(d, cat, func(elem *object.Dictionary, _ object.Name) {
-		if s, ok := d.Resolve(elem.Get("Lang")).(object.String); ok && len(s.Value) > 0 && !core.ValidBCP47(string(s.Value)) {
-			v = append(v, Violation{"7.2", "structure element /Lang " + quote(string(s.Value)) + " is not a valid language identifier", 0})
+		if s, ok := d.Resolve(elem.Get("Lang")).(object.String); ok && len(s.Value) > 0 && !core.ValidBCP47(core.DecodePDFTextString(s.Value)) {
+			v = append(v, Violation{"7.2", "structure element /Lang " + quote(core.DecodePDFTextString(s.Value)) + " is not a valid language identifier", 0})
 		}
 	})
 	return v
