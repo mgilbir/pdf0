@@ -968,27 +968,9 @@ func checkInlineImageFilters(doc core.View, level Level) []Violation {
 	return found.errs
 }
 
-// inlineImageFilters extracts the /F (or /Filter) filter name(s) of every
-// inline image in a content stream that declares any.
+// inlineImageFilters is core.InlineImageFilters, which PDF/R reads too.
 func inlineImageFilters(data []byte) [][]string {
-	var out [][]string
-	forEachInlineImage(data, func(params []core.InlineImageParam) {
-		var filters []string
-		for _, p := range params {
-			if p.Key != "F" && p.Key != "Filter" {
-				continue
-			}
-			for _, v := range p.Value {
-				if v.Kind == core.ContentName {
-					filters = append(filters, v.Name())
-				}
-			}
-		}
-		if filters != nil {
-			out = append(out, filters)
-		}
-	})
-	return out
+	return core.InlineImageFilters(core.Canceler{}, data)
 }
 
 // checkStreamLength enforces that a stream's /Length entry equals the actual

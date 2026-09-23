@@ -1064,29 +1064,4 @@ func (g *pageImporter) sourceVersion() string {
 
 // maxVersion returns the later of two "major.minor" PDF versions. A value that
 // does not parse loses to one that does.
-func maxVersion(a, b string) string {
-	pa, oka := parseVersion(a)
-	pb, okb := parseVersion(b)
-	switch {
-	case !oka:
-		return b
-	case !okb:
-		return a
-	case pb[0] > pa[0] || (pb[0] == pa[0] && pb[1] > pa[1]):
-		return b
-	}
-	return a
-}
-
-func parseVersion(s string) ([2]int, bool) {
-	major, minor, ok := bytes.Cut([]byte(s), []byte("."))
-	if !ok {
-		return [2]int{}, false
-	}
-	ma, err1 := strconv.Atoi(string(major))
-	mi, err2 := strconv.Atoi(string(minor))
-	if err1 != nil || err2 != nil {
-		return [2]int{}, false
-	}
-	return [2]int{ma, mi}, true
-}
+func maxVersion(a, b string) string { return core.MaxPDFVersion(a, b) }

@@ -450,16 +450,16 @@ func ValidateView(v core.View, level Level) []Violation {
 
 		// Version: each PDF/X level is defined for a specific PDF version. PDF/X-1a
 		// and -3 for PDF 1.3/1.4, PDF/X-4/-4p for 1.6, PDF/X-6 for PDF 2.0. A newer
-		// version than the level allows is out of scope.
-		if maj, min, ok := core.ParsePDFVersion(v.Version); ok {
-			maxMinor, pdf2 := r.maxMinor, r.pdf2
-			if pdf2 {
-				if maj != 2 {
-					add("version", fmt.Sprintf("%s is defined for PDF 2.0; file declares %s", level, v.Version), 0)
-				}
-			} else if maj != 1 || min > maxMinor {
-				add("version", fmt.Sprintf("%s is defined for PDF 1.%d; file declares %s", level, maxMinor, v.Version), 0)
-			}
+		// version than the level allows is out of scope. The version is the
+		// declared one — the header, or a later catalog /Version — and one that
+		// cannot be read is not within any bound (audit 2026-09-22 C146).
+		declared := v.DeclaredVersion()
+		maj, min, ok := core.ParsePDFVersion(declared)
+		switch {
+		case r.pdf2 && (!ok || maj != 2):
+			add("version", fmt.Sprintf("%s is defined for PDF 2.0; file declares %q", level, declared), 0)
+		case !r.pdf2 && (!ok || maj != 1 || min > r.maxMinor):
+			add("version", fmt.Sprintf("%s is defined for PDF 1.%d; file declares %q", level, r.maxMinor, declared), 0)
 		}
 	})
 

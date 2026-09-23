@@ -2,13 +2,13 @@ package core
 
 import (
 	"encoding/asn1"
-	"fmt"
 
 	"sort"
 	"strings"
 
 	"unicode/utf8"
 
+	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/pdfdoc"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -219,16 +219,52 @@ func (v View) IsAnnotation(dict *object.Dictionary) bool {
 	return false
 }
 
-// parsePDFVersion splits a "1.6"-style version string into major and minor.
+// ParsePDFVersion splits a "1.6"-style version string into major and minor.
+// Both parts are decimal digits and nothing else: "2.0x" or "1.-7" is not a
+// version, and a rule that needs one must treat it as unknown, never as a pass
+// (audit 2026-09-22 C146: an unparseable version passed the PDF/R and PDF/UA-2
+// "defined for PDF 2.0" rules).
 func ParsePDFVersion(v string) (major, minor int, ok bool) {
-	dot := strings.IndexByte(v, '.')
-	if dot <= 0 || dot == len(v)-1 {
+	ma, mi, found := strings.Cut(v, ".")
+	if !found {
 		return 0, 0, false
 	}
-	if _, err := fmt.Sscanf(v, "%d.%d", &major, &minor); err != nil {
+	a, na, fa := checked.Decimal(ma)
+	b, nb, fb := checked.Decimal(mi)
+	if na == 0 || nb == 0 || na != len(ma) || nb != len(mi) || !fa || !fb || a > 99 || b > 99 {
 		return 0, 0, false
 	}
-	return major, minor, true
+	return int(a), int(b), true
+}
+
+// MaxPDFVersion returns the later of two version strings; an unreadable one
+// loses to a readable one.
+func MaxPDFVersion(a, b string) string {
+	ma, na, oka := ParsePDFVersion(a)
+	mb, nb, okb := ParsePDFVersion(b)
+	switch {
+	case !oka:
+		return b
+	case !okb:
+		return a
+	case mb > ma || (mb == ma && nb > na):
+		return b
+	}
+	return a
+}
+
+// DeclaredVersion is the PDF version the document declares: its header, or
+// its catalog's /Version when that is later (ISO 32000-2 7.7.2). A rule about
+// which PDF version a file is reads this, not the header alone: a PDF 2.0 file
+// updated incrementally from a 1.7 one says so in its catalog.
+func (v View) DeclaredVersion() string {
+	ver := v.Version
+	if cat := v.Catalog(); cat != nil {
+		if n, ok := v.ResolveName(cat.Get("Version")); ok {
+			ver = MaxPDFVersion(ver, string(n))
+		}
+	}
+	return ver
 }
 
 // CatalogPages returns the catalog's /Pages value, the root of the page tree,

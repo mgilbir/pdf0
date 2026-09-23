@@ -493,18 +493,10 @@ func (d *Document) clearXObjectStructParents(res *object.Dictionary, depth int, 
 // isPDF20 reports whether the document is PDF 2.0 or later: by its header, or
 // by its catalog's /Version when that is later (ISO 32000-2 7.7.2).
 func (d *Document) isPDF20() bool {
-	v, ok := parseVersion(d.declaredVersion())
-	return ok && v[0] >= 2
+	maj, _, ok := core.ParsePDFVersion(d.declaredVersion())
+	return ok && maj >= 2
 }
 
 // declaredVersion is the PDF version the document declares: its header, or
 // its catalog's /Version when that is later.
-func (d *Document) declaredVersion() string {
-	v := d.Version
-	if cat := d.ResolveDict(d.Trailer.Get("Root")); cat != nil {
-		if n, ok := d.Resolve(cat.Get("Version")).(object.Name); ok {
-			v = maxVersion(v, string(n))
-		}
-	}
-	return v
-}
+func (d *Document) declaredVersion() string { return d.view().DeclaredVersion() }

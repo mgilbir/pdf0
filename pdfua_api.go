@@ -80,10 +80,13 @@ func validatePDFUA2(cancel core.Canceler, d *Document) []pdfua.Violation {
 	// is not run at all.
 	out := validatePDFUA(cancel, d, "2")
 
-	// PDF/UA-2 is defined against PDF 2.0.
+	// PDF/UA-2 is defined against PDF 2.0: the declared version (the header,
+	// or a later catalog /Version), and one that cannot be read is not 2.0 —
+	// it used to pass (audit 2026-09-22 C146).
 	out = append(out, pdfua.RunCheck(func() []pdfua.Violation {
-		if maj, _, ok := core.ParsePDFVersion(d.Version); ok && maj != 2 {
-			return []pdfua.Violation{{Clause: "4", Message: fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %s", d.Version), Part: "2"}}
+		declared := d.view().DeclaredVersion()
+		if maj, _, ok := core.ParsePDFVersion(declared); !ok || maj != 2 {
+			return []pdfua.Violation{{Clause: "4", Message: fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %q", declared), Part: "2"}}
 		}
 		return nil
 	})...)

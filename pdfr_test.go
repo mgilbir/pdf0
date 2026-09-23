@@ -3,6 +3,7 @@ package pdf0
 import (
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfr"
+	"strings"
 	"testing"
 )
 
@@ -48,8 +49,8 @@ func buildPDFRDoc() *Document {
 	set(5, object.NewStream(img, []byte{0x78, 0x9c, 0x00}))
 
 	xmp := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
-		`<rdf:Description xmlns:pdfr="http://www.iso.org/pdf/r/">` +
-		`<pdfr:conformance>PDF/R-1</pdfr:conformance></rdf:Description></rdf:RDF></x:xmpmeta>`
+		`<rdf:Description xmlns:pdfrid="http://www.aiim.org/pdfr/ns/id/">` +
+		`<pdfrid:part>1</pdfrid:part></rdf:Description></rdf:RDF></x:xmpmeta>`
 	md := &object.Dictionary{}
 	md.Set("Type", object.Name("Metadata"))
 	md.Set("Subtype", object.Name("XML"))
@@ -114,5 +115,55 @@ func TestValidatePDFRViolations(t *testing.T) {
 				t.Errorf("expected %q violation; got %v", tc.rule, v)
 			}
 		})
+	}
+}
+
+// TestPDFRReadsWhatItClaims is C146: identification is a property in the
+// PDF/R identification namespace, not the letters "pdf/r" anywhere in the
+// packet; a version that cannot be read is not PDF 2.0 (the same holds for
+// PDF/UA-2), while a 1.7 header raised to 2.0 by the catalog is; and an inline
+// image's filters are held to the same list as an image XObject's.
+func TestPDFRReadsWhatItClaims(t *testing.T) {
+	d := buildPDFRDoc()
+	d.Objects[6].Value.(*object.Stream).Data = []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+		`<rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/"><xmp:CreatorTool>Acme PDF/Reader pdfr</xmp:CreatorTool></rdf:Description></rdf:RDF></x:xmpmeta>`)
+	if v := ValidatePDFR(d); !hasPDFRRule(v, "identification") {
+		t.Errorf("a producer string naming PDF/Reader identified the file as PDF/R: %v", v)
+	}
+
+	for _, ver := range []string{"2.x", "", "2"} {
+		d := buildPDFRDoc()
+		d.Version = ver
+		if v := ValidatePDFR(d); !hasPDFRRule(v, "version") {
+			t.Errorf("PDF/R version %q passed: %v", ver, v)
+		}
+		ua := false
+		for _, e := range ValidatePDFUA2(d) {
+			ua = ua || (e.Clause == "4" && strings.Contains(e.Message, "defined for PDF 2.0"))
+		}
+		if !ua {
+			t.Errorf("PDF/UA-2 version %q passed", ver)
+		}
+	}
+	raised := buildPDFRDoc()
+	raised.Version = "1.7"
+	raised.ResolveDict(raised.Trailer.Get("Root")).Set("Version", object.Name("2.0"))
+	if v := ValidatePDFR(raised); hasPDFRRule(v, "version") {
+		t.Errorf("a 1.7 header with catalog /Version 2.0 is PDF 2.0: %v", v)
+	}
+
+	for _, c := range []struct {
+		content string
+		bad     bool
+	}{
+		{"q 1 0 0 1 0 0 cm BI /W 1 /H 1 /BPC 1 /IM true /F /AHx ID 00> EI Q", true},
+		{"q 1 0 0 1 0 0 cm BI /W 1 /H 1 /BPC 1 /IM true /F [/AHx /CCF] ID 00> EI Q", true},
+		{"q 1 0 0 1 0 0 cm BI /W 1 /H 1 /BPC 1 /IM true /F /CCF ID \x00 EI Q", false},
+	} {
+		d := buildPDFRDoc()
+		d.Objects[4].Value.(*object.Stream).Data = []byte(c.content)
+		if got := hasPDFRRule(ValidatePDFR(d), "image-filter"); got != c.bad {
+			t.Errorf("%q: image-filter reported = %v, want %v", c.content, got, c.bad)
+		}
 	}
 }
