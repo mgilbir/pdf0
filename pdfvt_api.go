@@ -48,7 +48,7 @@ func validatePDFVTImpl(cancel core.Canceler, doc *Document, part string) []pdfvt
 	}
 	// This is the boundary: the checks below read a view.
 	rd := beginRunCancel(doc, cancel)
-	out := pdfvt.ValidateView(rd.view(), part)
+	out := pdfvtValidateView(rd.view(), part)
 
 	// Guard trips are reported under their own rule; read-time trips live on
 	// the Document, so this is here.

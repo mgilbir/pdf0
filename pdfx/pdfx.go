@@ -415,9 +415,9 @@ func rectContains(outer, inner [4]float64) bool {
 		inner[2] <= outer[2]+eps && inner[3] <= outer[3]+eps
 }
 
-// ValidateView runs the PDF/X checks over a view. The caller starts the run,
+// validateView runs the PDF/X checks over a view. The caller starts the run,
 // builds the view, and reports the guards that tripped while the file was read.
-func ValidateView(v core.View, level Level) []Violation {
+func validateView(v core.View, level Level) []Violation {
 	r, ok := level.rules()
 	if !ok {
 		return []Violation{{Rule: finding.LimitRule, Message: fmt.Sprintf("not validated: %s names no PDF/X level", level)}}

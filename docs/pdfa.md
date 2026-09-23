@@ -76,7 +76,7 @@ nondeterministic and undiffable.
 
 ## What is inside `pdfa.go`
 
-The `checks` slice in `ValidateView` dispatches **59** functions. Forty of
+The `checks` slice in `validateView` dispatches **59** functions. Forty of
 them are defined in `pdfa.go` itself; the other nineteen live in sibling files
 (see "Where the other rule files fit"). `pdfa.go` is organised in `// --- … ---`
 sections, roughly in the order below. Rule IDs vary by part, so the clause column
@@ -154,7 +154,7 @@ A `pdfa.Level` names one **target profile** (`pdfa/level.go`): the part of ISO
 (e or f). The levels are `PDFA1a`, `PDFA1b`, `PDFA2a`, `PDFA2b`, `PDFA2u`,
 `PDFA3a`, `PDFA3b`, `PDFA3u`, `PDFA4`, `PDFA4E` and `PDFA4F` (`pdfa.Levels()`).
 The zero value is `LevelDeclared`, which is not a profile: it asks for the level
-the document declares, resolved by `ResolveTarget` through `LevelFor` before
+the document declares, resolved by `resolveTarget` through `LevelFor` before
 anything runs. A document whose declaration cannot be read or names no level, and
 a `Level` that names no profile, get one finding under the `limit` rule and are
 not validated.

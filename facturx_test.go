@@ -215,7 +215,7 @@ func TestValidateFacturXMutations(t *testing.T) {
 		}, "attachment", "no embedded invoice XML"},
 		{"bad AFRelationship", func(doc *Document) {
 			cat := doc.ResolveDict(doc.Trailer.Get("Root"))
-			fs, _, _ := facturx.FindAttachment(doc.view(), cat)
+			fs, _, _ := facturxFindAttachment(doc.view(), cat)
 			fs.Set("AFRelationship", object.Name("Unspecified"))
 		}, "attachment", "AFRelationship"},
 	}

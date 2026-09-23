@@ -48,12 +48,12 @@ func mkPageWithContentAndRes(content string, res *object.Dictionary) core.View {
 
 func TestUndefinedOperatorFlagged(t *testing.T) {
 	doc := mkPageWithContentAndRes("q\nBogusOp\nQ", nil)
-	if !hasRuleMsg(ValidateView(doc, PDFA2b), "6.2.2") {
+	if !hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
 		t.Error("undefined operator must be flagged")
 	}
 	// Valid operators pass.
 	doc = mkPageWithContentAndRes("q 1 0 0 1 0 0 cm 0 0 10 10 re f Q", nil)
-	if hasRuleMsg(ValidateView(doc, PDFA2b), "6.2.2") {
+	if hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
 		t.Error("valid content flagged")
 	}
 }
@@ -79,7 +79,7 @@ func TestATilingPatternsFindingNamesThePattern(t *testing.T) {
 	doc := mkPageWithContentAndRes("/Pattern cs /P1 scn 0 0 10 10 re f", res)
 	doc.Objects[44] = &object.IndirectObject{Number: 44, Value: pattern}
 	var got []Violation
-	for _, v := range ValidateView(doc, PDFA2b) {
+	for _, v := range validateView(doc, PDFA2b) {
 		if v.Rule == "6.2.2" {
 			got = append(got, v)
 		}
@@ -91,11 +91,11 @@ func TestATilingPatternsFindingNamesThePattern(t *testing.T) {
 
 func TestRenderingIntentOperator(t *testing.T) {
 	doc := mkPageWithContentAndRes("/Perceptual ri", nil)
-	if hasRuleMsg(ValidateView(doc, PDFA2b), "6.2.2") {
+	if hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
 		t.Error("standard rendering intent must pass")
 	}
 	doc = mkPageWithContentAndRes("/CustomIntent ri", nil)
-	if !hasRuleMsg(ValidateView(doc, PDFA2b), "6.2.2") {
+	if !hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
 		t.Error("custom rendering intent must be flagged")
 	}
 }
@@ -105,17 +105,17 @@ func TestAbsentResourceReference(t *testing.T) {
 	res := &object.Dictionary{}
 	res.Set("XObject", &object.Dictionary{}) // empty
 	doc := mkPageWithContentAndRes("q /X0 Do Q", res)
-	if !hasRuleMsg(ValidateView(doc, PDFA2b), "6.2.2") {
+	if !hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
 		t.Error("absent XObject reference must be flagged")
 	}
 	// cs referencing an absent colour space.
 	doc = mkPageWithContentAndRes("/CS0 cs 0.5 sc 0 0 5 5 re f", &object.Dictionary{})
-	if !hasRuleMsg(ValidateView(doc, PDFA2b), "6.2.2") {
+	if !hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
 		t.Error("absent colour-space reference must be flagged")
 	}
 	// Built-in device space needs no resource.
 	doc = mkPageWithContentAndRes("/DeviceRGB cs 0 0 0 sc", nil)
-	if hasRuleMsg(ValidateView(doc, PDFA2b), "6.2.2") {
+	if hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
 		t.Error("built-in device colour space must not be flagged")
 	}
 }
@@ -135,7 +135,7 @@ func TestInlineImageIntent(t *testing.T) {
 func TestAnInlineIntentIsReportedOnce(t *testing.T) {
 	doc := mkPageWithContentAndRes("q BI /W 1 /H 1 /BPC 8 /CS /G /Intent /Foo ID \x00 EI Q", nil)
 	var got []Violation
-	for _, v := range ValidateView(doc, PDFA2b) {
+	for _, v := range validateView(doc, PDFA2b) {
 		if strings.Contains(v.Message, "rendering intent") {
 			got = append(got, v)
 		}

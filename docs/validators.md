@@ -179,7 +179,7 @@ the corpus ratchet, not the API — see [CONTRIBUTING](../CONTRIBUTING.md#the-co
 
 ## How PDF/A validation runs
 
-`ValidatePDFA` (`pdfa_api.go`, dispatching to `pdfa.ValidateView`) runs a fixed
+`ValidatePDFA` (`pdfa_api.go`, dispatching to `pdfa`'s `validateView` through `internal/bridge`) runs a fixed
 list of 59 check functions, then the byte-level file-structure checks over the
 file the document was read from. Each check runs
 behind a `recover()` boundary so a bug or an adversarial structure in one check
@@ -190,7 +190,7 @@ concurrently on the same document.
 ```mermaid
 flowchart TD
     A[ValidatePDFA doc, level] --> B[shallow-copy doc,<br/>install per-run cache]
-    B --> T{"ResolveTarget: a profile?<br/>LevelDeclared → LevelFor(the document's pdfaid)"}
+    B --> T{"resolveTarget: a profile?<br/>LevelDeclared → LevelFor(the document's pdfaid)"}
     T -->|no| R["one 'limit' finding:<br/>not validated"]
     T -->|yes| C[for each check, with the target unflattened]
     C --> D[runCheck: recover panic -> 'internal' violation]
@@ -257,13 +257,13 @@ corpus is the oracle for rule semantics
 
 ## Where the rules live
 
-All PDF/A checks are dispatched from the `checks` slice and `byteChecks` in `ValidateView`.
+All PDF/A checks are dispatched from the `checks` slice and `byteChecks` in `validateView`.
 They are grouped across files by concern:
 
 | File | Rules |
 |------|-------|
 | `pdfa.go` | Dispatch + most rules (font embedding, colour, metadata, annotations, output intents, transparency) |
-| `level.go` | The target profile: levels, `LevelFor`, `ResolveTarget`, the conformance hierarchy |
+| `level.go` | The target profile: levels, `LevelFor`, `resolveTarget`, the conformance hierarchy |
 | `pdfa_levela.go` / `pdfa_levela_fonts.go` | Level A: tagged structure, artifacts, structure types, language, ActualText; Level A and U: Unicode character maps |
 | `final_rules.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects |
 | `content_operators.go` | Content-stream operator whitelist, named resources |

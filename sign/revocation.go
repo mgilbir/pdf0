@@ -345,9 +345,9 @@ func sigAlgoFromOID(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, bool) {
 	return 0, false
 }
 
-// DSSRevocationMaterial returns the CRLs and OCSP responses (DER) stored in the
+// dssRevocationMaterial returns the CRLs and OCSP responses (DER) stored in the
 // document's DSS (Document Security Store), decoded through their stream filters.
-func DSSRevocationMaterial(d core.View) (crls, ocsps [][]byte) {
+func dssRevocationMaterial(d core.View) (crls, ocsps [][]byte) {
 	cat := d.Catalog()
 	if cat == nil {
 		return nil, nil
@@ -370,9 +370,9 @@ func DSSRevocationMaterial(d core.View) (crls, ocsps [][]byte) {
 	return collect("CRLs"), collect("OCSPs")
 }
 
-// DSSCerts returns the certificates stored in the document's DSS /Certs (the
+// dssCerts returns the certificates stored in the document's DSS /Certs (the
 // chain material a long-term signature carries).
-func DSSCerts(d core.View) []*x509.Certificate {
+func dssCerts(d core.View) []*x509.Certificate {
 	cat := d.Catalog()
 	if cat == nil {
 		return nil

@@ -17,7 +17,7 @@ import (
 
 // This file is the core of the PDF/A validator: the conformance levels
 // (ISO 19005-1/-2/-3/-4, i.e. 1b/2b/3b/4, plus the entry point into Level A),
-// the ValidateView dispatcher, and most of the clause-6
+// the validateView dispatcher, and most of the clause-6
 // rule set — file structure (6.1), graphics, colour and fonts (6.2),
 // annotations and font dictionaries (6.3), interactive forms (6.4), actions
 // (6.6) and metadata (6.7). Clause numbering differs between the parts, so a
@@ -130,8 +130,8 @@ func byteChecks(doc core.View) []func(*core.FileRecord, Level) []Violation {
 	}
 }
 
-// ValidateView runs the PDF/A pipeline over a view, against the target
-// profile level names (see ResolveTarget for LevelDeclared and invalid
+// validateView runs the PDF/A pipeline over a view, against the target
+// profile level names (see resolveTarget for LevelDeclared and invalid
 // levels).
 //
 // The byte-level file-structure rules read doc.FileRecord(), the record of the file
@@ -145,8 +145,8 @@ func byteChecks(doc core.View) []func(*core.FileRecord, Level) []Violation {
 // the variant — so a Level A, Level U or PDF/A-4 variant run is the same run
 // as a Level B one with the families that level adds switched on, and no
 // finding is produced at one level only to be dropped at another.
-func ValidateView(doc core.View, level Level) []Violation {
-	level, refused := ResolveTarget(doc, level)
+func validateView(doc core.View, level Level) []Violation {
+	level, refused := resolveTarget(doc, level)
 	if refused != nil {
 		return refused
 	}
@@ -5019,7 +5019,7 @@ func allZero(b []byte) bool {
 // order over the candidates, so the report is reproducible. The choice is
 // load-bearing, not incidental: reports are diffed run against run.
 //
-// Emission order is deliberately not part of the contract — ValidateView
+// Emission order is deliberately not part of the contract — validateView
 // sorts the concatenated findings before returning them.
 type exampleFindings struct {
 	idx  map[string]int // rule+message -> index into errs

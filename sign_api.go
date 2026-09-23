@@ -46,7 +46,7 @@ func (d *Document) VerifySignatures(opts sign.VerifyOptions) (res []sign.Result,
 			res, err = nil, fmt.Errorf("verifying signatures: recovered from panic: %v", r)
 		}
 	}()
-	return sign.VerifySignatures(d.view(), d.signedFile(d.canceler()), opts), nil
+	return signVerifySignatures(d.view(), d.signedFile(d.canceler()), opts), nil
 }
 
 // ValidatePAdES reports, for each approval signature, the PAdES baseline level
@@ -59,17 +59,17 @@ func (d *Document) ValidatePAdES(opts sign.VerifyOptions) (res []sign.PAdESResul
 			res, err = nil, fmt.Errorf("validating PAdES signatures: recovered from panic: %v", r)
 		}
 	}()
-	return sign.ValidatePAdES(d.view(), d.signedFile(d.canceler()), opts), nil
+	return signValidatePAdES(d.view(), d.signedFile(d.canceler()), opts), nil
 }
 
 // DSSRevocationMaterial returns the CRLs and OCSP responses the document's
 // Document Security Store carries.
 func (d *Document) DSSRevocationMaterial() (crls, ocsps [][]byte) {
-	return sign.DSSRevocationMaterial(d.view())
+	return signDSSRevocationMaterial(d.view())
 }
 
 // DSSCerts returns the certificates the document's Document Security Store
 // carries.
 func (d *Document) DSSCerts() []*x509.Certificate {
-	return sign.DSSCerts(d.view())
+	return signDSSCerts(d.view())
 }

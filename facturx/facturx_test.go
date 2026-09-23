@@ -59,7 +59,7 @@ func TestFacturXAttachmentDetection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := afDoc(tc.name, "Data", "text/xml")
 			cat := d.ResolveDict(d.Trailer.Get("Root"))
-			fs, got, _ := FindAttachment(d, cat)
+			fs, got, _ := findAttachment(d, cat)
 			if tc.wantFind {
 				if fs == nil {
 					t.Fatalf("expected to find attachment %q, found none", tc.name)

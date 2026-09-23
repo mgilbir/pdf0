@@ -82,5 +82,5 @@ func walkImagesCancel(d *Document, cancel core.Canceler, yield func(images.Extra
 	//
 	// This is the boundary: everything below it reads the document through a
 	// view and never names Document.
-	images.Walk(beginRunCancel(d, cancel).view(), yield)
+	imagesWalk(beginRunCancel(d, cancel).view(), yield)
 }

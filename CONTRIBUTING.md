@@ -70,7 +70,7 @@ Workflow when your change moves the counts:
 ## Adding a validation rule
 
 1. Write a `func(core.View, pdfa.Level) []pdfa.Violation` and add it to the
-   `checks` slice in `ValidateView` (`pdfa/pdfa.go`); a rule about the file's
+   `checks` slice in `validateView` (`pdfa/pdfa.go`); a rule about the file's
    bytes is a `func(*core.FileRecord, pdfa.Level) []pdfa.Violation` in
    `byteChecks` instead, and reads only the file record.
    Group it with related rules by file — see the table in

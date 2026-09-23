@@ -422,7 +422,7 @@ func usedFieldNames(d *Document, catalog *object.Dictionary) map[string]bool {
 		if fd.Get("FT") == nil && fd.Get("V") == nil {
 			continue // not a form field
 		}
-		if name := sign.QualifiedFieldName(d.view(), fd); name != "" {
+		if name := signQualifiedFieldName(d.view(), fd); name != "" {
 			used[name] = true
 		}
 	}
@@ -446,7 +446,7 @@ func collectUsedFieldNames(d *Document, node object.Object, prefix string, seen 
 	if fd == nil {
 		return
 	}
-	name := sign.JoinFieldName(prefix, sign.FieldPartialName(d.view(), fd))
+	name := sign.JoinFieldName(prefix, signFieldPartialName(d.view(), fd))
 	if name != "" {
 		used[name] = true
 	}

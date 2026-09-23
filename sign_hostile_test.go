@@ -277,7 +277,7 @@ func TestRevisionDiffBudgetIsNeverPermission(t *testing.T) {
 	}
 	f := d.signedFile(d.canceler())
 	f.work = 1
-	approval, _ := approvalAndTimestamps(sign.VerifySignatures(d.view(), f, sign.VerifyOptions{}))
+	approval, _ := approvalAndTimestamps(signVerifySignatures(d.view(), f, sign.VerifyOptions{}))
 	if len(approval) != 1 || approval[0].ChangesAllowed || !anyContains(approval[0].DisallowedChanges, "work budget") {
 		t.Fatalf("an exhausted budget must leave the changes unknown and not permitted: %+v", approval)
 	}

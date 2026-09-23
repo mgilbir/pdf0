@@ -166,16 +166,9 @@ type Result struct {
 	InvoiceComplete bool
 }
 
-// ValidateFacturX checks whether doc is a conforming Factur-X invoice container.
-// The PDF/A-3 base's byte-level checks read doc.File, the file the document
-// was read from.
-//
-// It is ValidateFacturXContext with a background context.
-func Validate(doc core.View) Result {
-	return ValidateContext(context.Background(), doc)
-}
-
-// ValidateFacturXContext is ValidateFacturX with cancellation.
+// validateContext checks whether doc is a conforming Factur-X invoice
+// container, for pdf0.ValidateFacturXContext. The PDF/A-3 base's byte-level
+// checks read doc.File, the file the document was read from.
 //
 // Both halves of the work honour ctx: the PDF/A-3 container validation, which is
 // the larger of the two on every file in this repository's Factur-X corpus, and
@@ -188,7 +181,7 @@ func Validate(doc core.View) Result {
 // same identifier for the same event, so a caller draining Violations has one
 // name to look for across container and invoice findings alike. What cannot
 // happen is an empty result: a cancelled validation never looks clean.
-func ValidateContext(ctx context.Context, doc core.View) (res Result) {
+func validateContext(ctx context.Context, doc core.View) (res Result) {
 	cancel := core.NewCanceler(ctx)
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, Violation{Rule: rule, Message: msg, Object: obj})
@@ -337,14 +330,14 @@ func (res Result) ValidateInvoiceXML(ctx context.Context) (formalis.Report, erro
 	return formalis.Validate(ctx, res.XML, res.Profile)
 }
 
-// FindAttachment returns the file specification of the embedded invoice XML
+// findAttachment returns the file specification of the embedded invoice XML
 // the catalog /AF designates, its decoded file name, and its object number.
 //
 // When /AF lists more than one invoice, the one returned is the first whose
 // /AFRelationship is one the specification allows — the one ValidateFacturX
 // checks, and reports the others beside. Names match ignoring case, so a
 // misspelt Factur-X.xml is still found.
-func FindAttachment(doc core.View, cat *object.Dictionary) (*object.Dictionary, string, int) {
+func findAttachment(doc core.View, cat *object.Dictionary) (*object.Dictionary, string, int) {
 	listed, _ := familyAttachments(doc, cat, invoiceFamily)
 	if len(listed) == 0 {
 		return nil, "", 0

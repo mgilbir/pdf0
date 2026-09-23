@@ -49,7 +49,7 @@ func WithPart(vs []Violation, part string) []Violation {
 	return vs
 }
 
-func ValidateView(doc core.View, part string) []Violation {
+func validateView(doc core.View, part string) []Violation {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		// Even here the guard trips are reported: "no catalog" is exactly the

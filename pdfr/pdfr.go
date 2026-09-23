@@ -60,9 +60,9 @@ func (v Violation) Error() string {
 	return fmt.Sprintf("PDF/R %s: %s", v.Rule, v.Message)
 }
 
-// ValidateView runs the PDF/R checks over a view. The caller starts the run
+// validateView runs the PDF/R checks over a view. The caller starts the run
 // and reports the guards that tripped while the file was read.
-func ValidateView(v core.View) []Violation {
+func validateView(v core.View) []Violation {
 	var out []Violation
 	add := func(rule, msg string, obj int) {
 		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})
@@ -104,7 +104,7 @@ func ValidateView(v core.View) []Violation {
 		}
 	})
 	for _, page := range pages {
-		run(func() { CheckPage(v, page.Dict, page.ObjNum, add) })
+		run(func() { checkPage(v, page.Dict, page.ObjNum, add) })
 	}
 	return out
 }
@@ -163,9 +163,9 @@ var pdfrTextOrVectorOps = map[string]bool{
 	"sh": true, // shading
 }
 
-// CheckPage checks one page: raster-only content, image XObjects only, and
+// checkPage checks one page: raster-only content, image XObjects only, and
 // permitted image and inline-image filters.
-func CheckPage(d core.View, page *object.Dictionary, objNum int, add func(rule, msg string, obj int)) {
+func checkPage(d core.View, page *object.Dictionary, objNum int, add func(rule, msg string, obj int)) {
 	// The page content must draw raster images only — no text or vector marks.
 	data, _ := core.ContentStreamData(d, page.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 	flagged := map[string]bool{}

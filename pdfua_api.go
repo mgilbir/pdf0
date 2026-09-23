@@ -48,7 +48,7 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Vio
 	//
 	// This is the boundary: everything below reads the document through a view.
 	rd := beginRunCancel(doc, cancel)
-	v := pdfua.ValidateView(rd.view(), part)
+	v := pdfuaValidateView(rd.view(), part)
 
 	// Resource guards that tripped during the run (or while the file was read)
 	// are reported under the "limit" clause, so a caller can tell "a check could

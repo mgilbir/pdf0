@@ -25,7 +25,7 @@ import (
 // PDF/A-4: alternate presentations, page presentation steps, and the
 // Requirements dictionary (ISO 19005-4 6.11, 6.12).
 
-// EmbeddedChecker reports whether embedded PDF bytes are a conforming PDF/A
+// embeddedCheckFunc reports whether embedded PDF bytes are a conforming PDF/A
 // file, and whether the check ran to completion. Reading a whole document out
 // of a byte slice needs the parser, which these checks deliberately do not
 // depend on, so the caller hands one in per run.
@@ -34,7 +34,7 @@ import (
 // top-level document, 2 for one embedded in that, and so on. The checker
 // validates the nested document at that depth, so its own embedded files are
 // checked in turn, down to MaxEmbeddedDepth.
-type EmbeddedChecker func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (compliant, complete bool)
+type embeddedCheckFunc func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (compliant, complete bool)
 
 // MaxEmbeddedDepth is how deep the embedded-PDF/A rule follows embedded files
 // into embedded files. A document nested deeper is not validated: the rule
@@ -45,19 +45,19 @@ const MaxEmbeddedDepth = 4
 
 type embeddedSlot struct{}
 
-type embeddedHolder struct{ check EmbeddedChecker }
+type embeddedHolder struct{ check embeddedCheckFunc }
 
-// SetEmbeddedChecker installs the recursive embedded-file check for this run.
+// setEmbeddedChecker installs the recursive embedded-file check for this run.
 // It is per run rather than a package-level variable so that nothing is shared
 // between concurrent validations.
-func SetEmbeddedChecker(v core.View, f EmbeddedChecker) {
+func setEmbeddedChecker(v core.View, f embeddedCheckFunc) {
 	core.Slot[embeddedHolder](v.Run, embeddedSlot{}).check = f
 }
 
 // embeddedChecker returns the run's checker, or one that declines to answer.
 // Declining is the safe default: "we could not tell" must not be reported as
 // "the embedded file is not PDF/A".
-func embeddedChecker(v core.View) EmbeddedChecker {
+func embeddedChecker(v core.View) embeddedCheckFunc {
 	if h := core.Slot[embeddedHolder](v.Run, embeddedSlot{}); h.check != nil {
 		return h.check
 	}

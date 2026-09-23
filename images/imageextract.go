@@ -262,14 +262,14 @@ type ExtractedImage struct {
 	Note string
 }
 
-// Walk yields every image XObject reachable from the document's pages: each
+// walk yields every image XObject reachable from the document's pages: each
 // page's resources, the form XObjects nested in them, and every annotation
 // appearance stream. Each image is yielded once; yield returning false stops
 // the traversal.
 //
 // It takes a view rather than a document so that this package never names the
 // root package's central type. The caller starts the run and builds the view.
-func Walk(d core.View, yield func(ExtractedImage) bool) {
+func walk(d core.View, yield func(ExtractedImage) bool) {
 	cat := d.Catalog()
 	if cat == nil {
 		return

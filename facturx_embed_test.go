@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"sort"
 	"strings"
@@ -207,7 +208,7 @@ func facturxWithInvoice(t *testing.T) (*Document, *object.Stream) {
 		t.Fatal(err)
 	}
 	cat := d.ResolveDict(d.Trailer.Get("Root"))
-	fs, _, _ := facturx.FindAttachment(d.view(), cat)
+	fs, _, _ := facturxFindAttachment(d.view(), cat)
 	st, _ := d.Resolve(d.ResolveDict(fs.Get("EF")).Get("F")).(*object.Stream)
 	return d, st
 }
@@ -280,7 +281,7 @@ func TestFacturXContainerTripsAreReported(t *testing.T) {
 	rt.limits.XMPPacketBytes = 64
 	// The container half alone: the PDF/A-3 half is a separate run that would
 	// report its own trip over the same packet and hide a dropped one here.
-	res := facturx.Validate(beginRun(rt).view())
+	res := facturxValidateContext(context.Background(), beginRun(rt).view())
 	limit := false
 	for _, v := range res.Violations {
 		if v.Rule == finding.LimitRule && strings.Contains(v.Message, core.GuardXMPPacket) {
@@ -333,7 +334,7 @@ func TestFacturXDuplicateInvoices(t *testing.T) {
 func TestFacturXNameCase(t *testing.T) {
 	d, _ := facturxWithInvoice(t)
 	cat := d.ResolveDict(d.Trailer.Get("Root"))
-	fs, _, _ := facturx.FindAttachment(d.view(), cat)
+	fs, _, _ := facturxFindAttachment(d.view(), cat)
 	fs.Set("F", object.String{Value: []byte("Factur-X.xml")})
 	fs.Set("UF", object.String{Value: []byte("Factur-X.xml")})
 	res := ValidateFacturX(d)

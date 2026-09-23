@@ -55,6 +55,7 @@ regular package.
 | `internal/crypt` | The standard security handler. No public API of its own. |
 | `fonts` | Setting text with a font: shaped glyphs into content-stream operators, and the font into the document. The shaping itself, and the sfnt/CFF/Type 1 program reader under it, are [github.com/mgilbir/forme](https://github.com/mgilbir/forme). |
 | `internal/finding` | The panic boundary, the reserved rule identifiers, deterministic ordering. |
+| `internal/bridge` | The entry points the public packages keep unexported because they take `core.View`; see below. |
 | `internal/signtest` | Fixtures shared by tests in packages that cannot share a `_test.go`. The font-program equivalent is [forme](https://github.com/mgilbir/forme)'s `fonttest`, exported rather than internal because two modules read font programs and one copy of the fixtures is the point. |
 
 ### `core.View`: the document seen from below
@@ -69,14 +70,38 @@ It carries a `*core.Run` for per-operation state, so the memo tables a
 validation builds are private to that run and two concurrent validations of the
 same document cannot see each other's.
 
+### Crossing the boundary: `internal/bridge`
+
+The rules of `pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`, `facturx`,
+`sign` and `images` run over a `core.View`, and the root package has to call
+them. A function that takes a `core.View` cannot be exported from a public
+package: no caller outside the module can name the type, so it would be listed
+on pkg.go.dev as API nobody can call (it was, about thirty times over: audit
+2026-09-22 C163). So those entry points are unexported, and each package
+installs them in `internal/bridge` from an `init` function. The root package
+resolves each one into a typed variable of its own when it is initialised
+(`bridge.go`), and so does `pdfvt` for the PDF/X and DPart passes it builds on.
+
+The entries are typed `any` inside the bridge, because the signatures carry the
+public packages' own types and the bridge cannot import the packages that import
+it. The type is checked once, when the consumer is initialised: a missing
+install or a mismatched signature panics at the start of every binary and test
+that links the consumer, never on a later call. After initialisation the
+entries are read-only. `TestBridgeEntriesInstalledAndResolved` checks that no
+entry is left unresolved, and the lint
+`TestPublicAPIMentionsNoInternalType` (`internal/lint`) fails on any exported
+identifier of a public package whose signature, fields or methods mention an
+internal type.
+
 ### Handing work back across the boundary
 
 Two rules need something the root package has and their own package must not
 depend on: the PDF/A embedded-file rule needs the *reader*, and the Factur-X
 container needs the PDF/A-3 verdict, which needs the reader and the read-time
 limit report. Neither is a package-level variable. The caller installs the
-function on the run — `pdfa.SetEmbeddedChecker`, `facturx.SetPDFAChecker` — so
-nothing is shared between concurrent operations, and the default when none is
+function on the run — `pdfa`'s `setEmbeddedChecker` and `facturx`'s
+`setPDFAChecker`, both reached through the bridge — so nothing is shared
+between concurrent operations, and the default when none is
 installed *declines to answer* rather than guessing: "pdf0 could not tell" must
 never reach a caller as "the document is wrong."
 

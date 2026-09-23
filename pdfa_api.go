@@ -163,7 +163,7 @@ func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, b
 	// declares, and a level that names no profile — or a declaration that
 	// names none — is one checker finding and nothing else: nothing below
 	// runs against a profile it cannot state.
-	target, refused := pdfa.ResolveTarget(v, level)
+	target, refused := pdfaResolveTarget(v, level)
 	if refused != nil {
 		return refused
 	}
@@ -173,9 +173,9 @@ func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, b
 	if budget == nil {
 		budget = newEmbeddedBudget(runDoc.lim())
 	}
-	pdfa.SetEmbeddedChecker(v, embeddedPDFAChecker(budget))
+	pdfaSetEmbeddedChecker(v, embeddedPDFAChecker(budget))
 
-	errs := pdfa.ValidateView(v, target)
+	errs := pdfaValidateView(v, target)
 
 	// Any resource guard that tripped during the run (or while the file was
 	// read) is reported under the "limit" rule: the checks that depended on the

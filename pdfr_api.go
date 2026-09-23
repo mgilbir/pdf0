@@ -33,7 +33,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []pdfr.Violation {
 	//
 	// This is the boundary: the checks below read a view.
 	rd := beginRunCancel(d, cancel)
-	out := pdfr.ValidateView(rd.view())
+	out := pdfrValidateView(rd.view())
 
 	// Guard trips are reported under their own rule, not as conformance
 	// failures (see limits.go). Read-time trips live on the Document, so this

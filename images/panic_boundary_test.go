@@ -47,7 +47,7 @@ func TestOnePanickingImageDoesNotAbortTheWalk(t *testing.T) {
 	defer func() { extractImageHook = nil }()
 
 	var got []ExtractedImage
-	Walk(twoImageView(), func(im ExtractedImage) bool {
+	walk(twoImageView(), func(im ExtractedImage) bool {
 		got = append(got, im)
 		return true
 	})
@@ -75,6 +75,6 @@ func TestAPanicInTheCallersLoopPropagates(t *testing.T) {
 			t.Errorf("recovered %v, want the caller's own panic", r)
 		}
 	}()
-	Walk(twoImageView(), func(ExtractedImage) bool { panic("caller's") })
+	walk(twoImageView(), func(ExtractedImage) bool { panic("caller's") })
 	t.Error("Walk returned after its yield panicked")
 }
