@@ -130,7 +130,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := doc.WriteArchivalTimestamp(&buf, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := doc.WriteArchivalTimestamp(&buf, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	out := buf.Bytes()
@@ -174,7 +174,7 @@ func TestArchivalTimestampPromotesDirectAcroForm(t *testing.T) {
 	}
 	// The whole point of the exercise: the archival time-stamp must verify over
 	// the produced bytes.
-	if !sign.CoveringDocTimestamp(d2.view(), out) {
+	if !coveringDocTimestamp(t, d2) {
 		t.Error("the archival time-stamp does not verify over the file it seals")
 	}
 }
@@ -193,7 +193,7 @@ func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b1 bytes.Buffer
-	if err := doc.WriteSignedTimestamped(&b1, cert, key, tsaCert, tsaKey); err != nil {
+	if err := doc.WriteSigned(&b1, cert, key, WithSignatureTimestamp(tsaCert, tsaKey)); err != nil {
 		t.Fatalf("WriteSignedTimestamped: %v", err)
 	}
 	o1 := b1.Bytes()
@@ -204,7 +204,7 @@ func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	out := b2.Bytes()
@@ -220,7 +220,7 @@ func TestArchivalTimestampOnSignedDirectFormDocument(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("form fields = %v, want %v", got, want)
 	}
-	if res := d2.ValidatePAdES(out); len(res) != 1 || res[0].Level != sign.PAdESBLTA || !res[0].Valid {
+	if res := padesOf(t, d2, sign.VerifyOptions{}); len(res) != 1 || res[0].Level != sign.PAdESBLTA || !res[0].Valid {
 		t.Errorf("expected one valid B-LTA signature, got %+v", res)
 	}
 }
@@ -265,7 +265,7 @@ func TestSignPromotesDirectAcroForm(t *testing.T) {
 			if strings.Join(got, ",") != "Applicant,Signature1" {
 				t.Errorf("form fields = %v, want [Applicant Signature1]", got)
 			}
-			results := signed.VerifySignatures(out)
+			results := verifySigs(t, signed, sign.VerifyOptions{})
 			if len(results) != 1 || !results[0].Valid {
 				t.Fatalf("signature did not verify: %+v", results)
 			}
@@ -298,13 +298,13 @@ func TestSigningRefusesDirectCatalogOrPage(t *testing.T) {
 		}{
 			{"WriteSigned", func(d *Document, _ []byte, b *bytes.Buffer) error { return d.WriteSigned(b, cert, key) }},
 			{"WriteSignedTimestamped", func(d *Document, _ []byte, b *bytes.Buffer) error {
-				return d.WriteSignedTimestamped(b, cert, key, tsaCert, tsaKey)
+				return d.WriteSigned(b, cert, key, WithSignatureTimestamp(tsaCert, tsaKey))
 			}},
 			{"WriteSignedIncremental", func(d *Document, raw []byte, b *bytes.Buffer) error {
 				return d.WriteSignedIncremental(b, cert, key)
 			}},
 			{"WriteArchivalTimestamp", func(d *Document, raw []byte, b *bytes.Buffer) error {
-				return d.WriteArchivalTimestamp(b, []*x509.Certificate{cert}, tsaCert, tsaKey)
+				return d.WriteArchivalTimestamp(b, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey)
 			}},
 		} {
 			t.Run(doc.name+"/"+w.name, func(t *testing.T) {

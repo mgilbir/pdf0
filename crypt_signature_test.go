@@ -226,7 +226,7 @@ func TestEncryptedSignedFileVerifies(t *testing.T) {
 		t.Fatal("no signature dictionary in the re-read document")
 	}
 
-	res := got.VerifySignatures(file)
+	res := verifySigs(t, got, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}

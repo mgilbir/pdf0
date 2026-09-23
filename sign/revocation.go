@@ -38,54 +38,97 @@ func (s RevocationStatus) String() string {
 
 // RevocationInfo reports a certificate's revocation status and where it came from.
 type RevocationInfo struct {
-	Status    RevocationStatus
-	Source    string    // "OCSP", "CRL" or "" when unknown
-	RevokedAt time.Time // when the certificate was revoked, if revoked
+	Status RevocationStatus
+	// Source is "OCSP" or "CRL": the kind of source that decided Status, or
+	// "" when nothing did.
+	Source string
+	// RevokedAt is when the certificate was revoked, as the deciding source
+	// states it; set only when Status is RevocationRevoked. A certificate
+	// revoked after the validation time was still unrevoked at it: compare the
+	// two when that matters (a time-stamped signature made before the
+	// revocation).
+	RevokedAt time.Time
 }
 
-// CheckCertRevocation determines the revocation status of cert (issued by issuer)
-// from the supplied CRLs and OCSP responses (DER). Each source must be signed by
-// issuer to be trusted. OCSP is consulted first; a definite verdict (good or
-// revoked) is returned as soon as one source gives it.
-func CheckCertRevocation(cert, issuer *x509.Certificate, crls, ocsps [][]byte) RevocationInfo {
-	if cert == nil || issuer == nil {
+// CheckCertRevocation reports what the supplied CRLs and OCSP responses (DER)
+// say about cert at time at. issuer must be the certificate that issued cert:
+// the next certificate in a chain you have verified. A source is consulted only
+// if it is authenticated by issuer — a CRL signed by it, or an OCSP response
+// signed by it or by a responder certificate it issued with the OCSP-signing
+// extended key usage — and cert must itself verify under issuer's key, so a
+// look-alike issuer carrying the real one's name decides nothing.
+//
+// Every authenticated source is read, and a revocation from any of them wins:
+// a fresh "good" from one source never hides a "revoked" from another (audit
+// 2026-09-22 C154). A revocation needs no freshness: it is permanent, and a
+// source issued at any time that records it is evidence of it.
+//
+// A "good" counts only from a source current at at: thisUpdate <= at <=
+// nextUpdate, with five minutes of clock skew either side. RFC 5280 5.1.2.5
+// requires a CRL to carry nextUpdate, so a CRL without one is not current at
+// any time. An OCSP response without nextUpdate says newer information is
+// always available (RFC 6960 4.2.2.1); it is taken as current only within the
+// skew of its own thisUpdate — at the moment it was produced, not for ever.
+func CheckCertRevocation(cert, issuer *x509.Certificate, crls, ocsps [][]byte, at time.Time) RevocationInfo {
+	if cert == nil || issuer == nil || cert.CheckSignatureFrom(issuer) != nil {
 		return RevocationInfo{}
 	}
-	for _, der := range ocsps {
-		if info, ok := revocationFromOCSP(cert, issuer, der); ok {
-			return info
+	var good, unknown RevocationInfo
+	consider := func(info RevocationInfo) (revoked bool) {
+		switch info.Status {
+		case RevocationRevoked:
+			return true
+		case RevocationGood:
+			if good.Status == RevocationUnknown {
+				good = info
+			}
+		default:
+			if info.Source != "" && unknown.Source == "" {
+				unknown = info
+			}
 		}
+		return false
 	}
 	for _, der := range crls {
-		if info, ok := revocationFromCRL(cert, issuer, der); ok {
+		if info, ok := revocationFromCRL(cert, issuer, der, at); ok && consider(info) {
 			return info
 		}
 	}
-	return RevocationInfo{}
+	for _, der := range ocsps {
+		if info, ok := revocationFromOCSP(cert, issuer, der, at); ok && consider(info) {
+			return info
+		}
+	}
+	if good.Status == RevocationGood {
+		return good
+	}
+	return unknown
 }
 
 // revocationClockSkew tolerates modest clock differences when checking the
 // validity window of revocation material.
 const revocationClockSkew = 5 * time.Minute
 
-// revocationFresh reports whether revocation material with the given thisUpdate
-// and (optional) nextUpdate is currently within its validity window. A zero
-// nextUpdate means the material carries no expiry.
-func revocationFresh(thisUpdate, nextUpdate time.Time) bool {
-	now := time.Now()
-	if !thisUpdate.IsZero() && thisUpdate.After(now.Add(revocationClockSkew)) {
-		return false // not yet in force
+// currentAt reports whether revocation material issued at thisUpdate, and
+// superseded at nextUpdate (zero when the material names no such time), is
+// current at time at. See CheckCertRevocation for what a missing nextUpdate
+// means; ocsp selects the OCSP reading of it.
+func currentAt(thisUpdate, nextUpdate, at time.Time, ocsp bool) bool {
+	if thisUpdate.IsZero() || thisUpdate.After(at.Add(revocationClockSkew)) {
+		return false // not yet issued at the validation time
 	}
-	if !nextUpdate.IsZero() && now.After(nextUpdate.Add(revocationClockSkew)) {
-		return false // expired or superseded
+	if nextUpdate.IsZero() {
+		return ocsp && !at.After(thisUpdate.Add(revocationClockSkew))
 	}
-	return true
+	return !at.After(nextUpdate.Add(revocationClockSkew))
 }
 
-// revocationFromCRL checks cert against a CRL (DER) that must be signed by issuer.
-// A missing or mis-signed CRL yields (unknown, false); a valid CRL yields a
-// definite good/revoked verdict.
-func revocationFromCRL(cert, issuer *x509.Certificate, der []byte) (RevocationInfo, bool) {
+// revocationFromCRL checks cert against a CRL (DER) that must be signed by
+// issuer. An unparseable or mis-signed CRL yields (unknown, false). A CRL that
+// lists cert yields revoked whatever its dates; one that does not yields good
+// only if it is current at at (a superseded CRL replayed in the DSS must not
+// mask a revocation published after it, audit 2026-07-26 C13).
+func revocationFromCRL(cert, issuer *x509.Certificate, der []byte, at time.Time) (RevocationInfo, bool) {
 	crl, err := x509.ParseRevocationList(der)
 	if err != nil {
 		return RevocationInfo{}, false
@@ -93,16 +136,13 @@ func revocationFromCRL(cert, issuer *x509.Certificate, der []byte) (RevocationIn
 	if crl.CheckSignatureFrom(issuer) != nil {
 		return RevocationInfo{}, false
 	}
-	// A CRL that is not yet in force or whose next update has passed is not
-	// authoritative: an expired or superseded CRL replayed in the DSS could
-	// otherwise mask a revocation published after it (audit C13).
-	if !revocationFresh(crl.ThisUpdate, crl.NextUpdate) {
-		return RevocationInfo{}, false
-	}
 	for _, e := range crl.RevokedCertificateEntries {
 		if e.SerialNumber.Cmp(cert.SerialNumber) == 0 {
 			return RevocationInfo{Status: RevocationRevoked, Source: "CRL", RevokedAt: e.RevocationTime}, true
 		}
+	}
+	if !currentAt(crl.ThisUpdate, crl.NextUpdate, at, false) {
+		return RevocationInfo{}, false
 	}
 	return RevocationInfo{Status: RevocationGood, Source: "CRL"}, true
 }
@@ -156,11 +196,13 @@ type revokedInfoASN struct {
 	Reason         asn1.RawValue `asn1:"optional,explicit,tag:0"`
 }
 
-// revocationFromOCSP checks cert against an OCSP response (DER). The response must
-// be signed by issuer (directly, or by a delegated responder certificate issued
-// by issuer with the OCSP-signing extended key usage), and carry a status for
-// cert. Otherwise it yields (unknown, false).
-func revocationFromOCSP(cert, issuer *x509.Certificate, der []byte) (RevocationInfo, bool) {
+// revocationFromOCSP checks cert against an OCSP response (DER). The response
+// must be signed by issuer, or by a delegated responder certificate issued by
+// issuer, carrying the OCSP-signing extended key usage and valid at at, and
+// carry a status for cert. Otherwise it yields (unknown, false). A "revoked"
+// status is returned whatever the response's dates; "good" and "unknown" only
+// when the response is current at at.
+func revocationFromOCSP(cert, issuer *x509.Certificate, der []byte, at time.Time) (RevocationInfo, bool) {
 	var resp ocspResponseASN
 	if _, err := asn1.Unmarshal(der, &resp); err != nil {
 		return RevocationInfo{}, false
@@ -172,43 +214,47 @@ func revocationFromOCSP(cert, issuer *x509.Certificate, der []byte) (RevocationI
 	if _, err := asn1.Unmarshal(resp.ResponseBytes.Response, &basic); err != nil {
 		return RevocationInfo{}, false
 	}
-	if !verifyOCSPSignature(&basic, issuer) {
+	if !verifyOCSPSignature(&basic, issuer, at) {
 		return RevocationInfo{}, false
 	}
 	var rd responseDataASN
 	if _, err := asn1.Unmarshal(basic.TBSResponseData.FullBytes, &rd); err != nil {
 		return RevocationInfo{}, false
 	}
+	var found RevocationInfo
+	ok := false
 	for _, sr := range rd.Responses {
 		if !matchesCertID(cert, issuer, sr.CertID) {
 			continue
 		}
-		// A response outside its validity window (not yet in force, or past its
-		// nextUpdate) is not authoritative — a stale "good" captured before a
-		// later revocation must not be honoured (audit C13).
-		if !revocationFresh(sr.ThisUpdate, sr.NextUpdate) {
-			return RevocationInfo{}, false
-		}
-		switch {
-		case sr.CertStatus.Class == 2 && sr.CertStatus.Tag == 0: // good
-			return RevocationInfo{Status: RevocationGood, Source: "OCSP"}, true
-		case sr.CertStatus.Class == 2 && sr.CertStatus.Tag == 1: // revoked
+		if sr.CertStatus.Class == 2 && sr.CertStatus.Tag == 1 { // revoked
 			info := RevocationInfo{Status: RevocationRevoked, Source: "OCSP"}
 			var ri revokedInfoASN
 			if _, err := asn1.UnmarshalWithParams(sr.CertStatus.FullBytes, &ri, "tag:1"); err == nil {
 				info.RevokedAt = ri.RevocationTime
 			}
 			return info, true
+		}
+		// A response outside its validity window is not authoritative — a stale
+		// "good" captured before a later revocation must not be honoured.
+		if ok || !currentAt(sr.ThisUpdate, sr.NextUpdate, at, true) {
+			continue
+		}
+		switch {
+		case sr.CertStatus.Class == 2 && sr.CertStatus.Tag == 0: // good
+			found, ok = RevocationInfo{Status: RevocationGood, Source: "OCSP"}, true
 		default: // unknown
-			return RevocationInfo{Status: RevocationUnknown, Source: "OCSP"}, true
+			found, ok = RevocationInfo{Status: RevocationUnknown, Source: "OCSP"}, true
 		}
 	}
-	return RevocationInfo{}, false
+	return found, ok
 }
 
 // verifyOCSPSignature verifies the BasicOCSPResponse signature over its
-// ResponseData, by the issuer directly or a delegated OCSP-signing responder.
-func verifyOCSPSignature(basic *basicOCSPResponseASN, issuer *x509.Certificate) bool {
+// ResponseData, by the issuer directly or by a delegated responder: a
+// certificate the issuer signed, carrying id-kp-OCSPSigning (RFC 6960 4.2.2.2)
+// and valid at at.
+func verifyOCSPSignature(basic *basicOCSPResponseASN, issuer *x509.Certificate, at time.Time) bool {
 	algo, ok := sigAlgoFromOID(basic.SignatureAlgo.Algorithm)
 	if !ok {
 		return false
@@ -226,6 +272,9 @@ func verifyOCSPSignature(basic *basicOCSPResponseASN, issuer *x509.Certificate) 
 	}
 	for _, c := range certs {
 		if c.CheckSignatureFrom(issuer) != nil {
+			continue
+		}
+		if at.Before(c.NotBefore) || at.After(c.NotAfter) {
 			continue
 		}
 		delegated := false
@@ -294,17 +343,6 @@ func sigAlgoFromOID(oid asn1.ObjectIdentifier) (x509.SignatureAlgorithm, bool) {
 		return x509.ECDSAWithSHA512, true
 	}
 	return 0, false
-}
-
-// issuerOf returns the certificate in certs that issued cert (its subject equals
-// cert's issuer), or nil.
-func issuerOf(cert *x509.Certificate, certs []*x509.Certificate) *x509.Certificate {
-	for _, c := range certs {
-		if c != cert && bytes.Equal(c.RawSubject, cert.RawIssuer) {
-			return c
-		}
-	}
-	return nil
 }
 
 // DSSRevocationMaterial returns the CRLs and OCSP responses (DER) stored in the

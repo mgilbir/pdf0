@@ -1,6 +1,7 @@
 package sign
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/x509"
@@ -154,42 +155,73 @@ func buildSignedDataEmbedded(cert *x509.Certificate, key crypto.Signer, content 
 	return asn1.Marshal(contentInfoMarshal{ContentType: oidSignedData, Content: asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: sdDER}})
 }
 
-// verifyTimestampToken verifies a time-stamp token: it checks the TSA signature
-// over the embedded TSTInfo and that the token's message imprint matches imprint
-// (the bytes that were supposed to be time-stamped). It returns the asserted time
-// and the TSA certificate.
-func verifyTimestampToken(tokenDER, imprint []byte) (time.Time, *x509.Certificate, error) {
-	tstDER, err := extractEContent(tokenDER)
-	if err != nil {
-		return time.Time{}, nil, err
+// timestampToken is what verifying an RFC 3161 time-stamp token established:
+// the time the authority asserts, and the authority's certificate with the
+// others the token carried, for building its chain.
+type timestampToken struct {
+	genTime time.Time
+	cert    *x509.Certificate
+	certs   []*x509.Certificate
+}
+
+// verifyTimestampToken verifies an RFC 3161 time-stamp token over the data
+// whose digest imprint returns:
+//
+//   - it is a SignedData whose eContentType is id-ct-TSTInfo (RFC 3161 2.4.2;
+//     a SignedData of any other content is not a time-stamp, however it is
+//     signed — audit 2026-09-22 C154);
+//   - the authority's signature over the TSTInfo verifies;
+//   - the authority's certificate carries the id-kp-timeStamping extended key
+//     usage (RFC 3161 2.3);
+//   - the TSTInfo's message imprint is the digest of the data, under the
+//     imprint's own algorithm, which must not be SHA-1 or MD5.
+//
+// It does not establish that the authority is trusted — that is a chain to
+// the caller's roots (trust.go) — so the time it returns is only what the
+// token asserts.
+func verifyTimestampToken(tokenDER []byte, imprint contentDigest) (*timestampToken, error) {
+	sd, err := parseSignedData(tokenDER)
+	if sd == nil {
+		return nil, fmt.Errorf("time-stamp token: %w", err)
 	}
-	// Verify the TSA's signature over the TSTInfo.
-	cert, _, _, err := VerifyCMS(tokenDER, tstDER)
+	tok := &timestampToken{cert: sd.cert, certs: sd.certs}
 	if err != nil {
-		return time.Time{}, cert, fmt.Errorf("time-stamp token signature: %w", err)
+		return tok, fmt.Errorf("time-stamp token: %w", err)
 	}
-	// A time-stamp authority certificate must carry the id-kp-timeStamping
-	// extended key usage (RFC 3161 2.3). Without this check any self-signed
-	// certificate would be accepted as a TSA, letting an attacker forge a
-	// document time-stamp asserting an arbitrary time and, via a covering
-	// DocTimeStamp, "seal" tampered content (audit C10).
-	if err := requireTimeStampingEKU(cert); err != nil {
-		return time.Time{}, cert, err
+	if !sd.eContentType.Equal(oidTSTInfo) {
+		return tok, errors.New("time-stamp token content is not id-ct-TSTInfo")
+	}
+	if !sd.hasEContent || len(sd.eContent) == 0 {
+		return tok, errors.New("time-stamp token carries no TSTInfo")
+	}
+	if _, err := sd.verify(digestOf(sd.eContent)); err != nil {
+		return tok, fmt.Errorf("time-stamp token signature: %w", err)
+	}
+	// Without the EKU check any certificate would do as a TSA, letting anyone
+	// assert any time (audit 2026-07-26 C10).
+	if err := requireTimeStampingEKU(sd.cert); err != nil {
+		return tok, err
 	}
 	var info tstInfo
-	if _, err := asn1.Unmarshal(tstDER, &info); err != nil {
-		return time.Time{}, cert, fmt.Errorf("parsing TSTInfo: %w", err)
+	if _, err := asn1.Unmarshal(sd.eContent, &info); err != nil {
+		return tok, fmt.Errorf("parsing TSTInfo: %w", err)
 	}
 	hashFn, ok := hashForOID(info.MessageImprint.HashAlgorithm.Algorithm)
 	if !ok {
-		return time.Time{}, cert, errors.New("unsupported message-imprint hash algorithm")
+		return tok, errors.New("unsupported message-imprint hash algorithm")
 	}
-	h := hashFn.New()
-	h.Write(imprint)
-	if !bytesEqual(h.Sum(nil), info.MessageImprint.HashedMessage) {
-		return time.Time{}, cert, errors.New("time-stamp message imprint does not match the signature")
+	if hashFn == crypto.SHA1 || hashFn == crypto.MD5 {
+		return tok, errors.New("weak message-imprint hash algorithm (SHA-1/MD5) is not accepted")
 	}
-	return info.GenTime, cert, nil
+	want, err := imprint(hashFn)
+	if err != nil {
+		return tok, err
+	}
+	if !bytes.Equal(want, info.MessageImprint.HashedMessage) {
+		return tok, errors.New("time-stamp message imprint does not match the time-stamped data")
+	}
+	tok.genTime = info.GenTime
+	return tok, nil
 }
 
 // requireTimeStampingEKU reports whether a certificate is usable as a TSA: it
@@ -204,48 +236,4 @@ func requireTimeStampingEKU(cert *x509.Certificate) error {
 		}
 	}
 	return errors.New("time-stamp certificate lacks the id-kp-timeStamping extended key usage")
-}
-
-// extractEContent returns the eContent bytes of a CMS SignedData (the payload of
-// a time-stamp token: the TSTInfo DER).
-func extractEContent(der []byte) ([]byte, error) {
-	var ci struct {
-		ContentType asn1.ObjectIdentifier
-		Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
-	}
-	if _, err := asn1.Unmarshal(der, &ci); err != nil || !ci.ContentType.Equal(oidSignedData) {
-		return nil, errors.New("not a CMS SignedData")
-	}
-	var sd struct {
-		Version          int
-		DigestAlgorithms asn1.RawValue
-		EncapContentInfo asn1.RawValue
-		Rest             asn1.RawValue `asn1:"optional"`
-	}
-	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil {
-		return nil, fmt.Errorf("parsing SignedData: %w", err)
-	}
-	var eci struct {
-		ContentType asn1.ObjectIdentifier
-		EContent    []byte `asn1:"explicit,optional,tag:0"`
-	}
-	if _, err := asn1.Unmarshal(sd.EncapContentInfo.FullBytes, &eci); err != nil {
-		return nil, fmt.Errorf("parsing EncapContentInfo: %w", err)
-	}
-	if len(eci.EContent) == 0 {
-		return nil, errors.New("time-stamp token carries no content")
-	}
-	return eci.EContent, nil
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

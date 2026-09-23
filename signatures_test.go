@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/sign"
 	"testing"
 )
 
@@ -30,7 +31,7 @@ func TestVerifySignaturesWithRoots(t *testing.T) {
 
 	roots := x509.NewCertPool()
 	roots.AddCert(cert)
-	res := signed.VerifySignaturesWithRoots(out, roots)
+	res := verifySigs(t, signed, sign.VerifyOptions{Roots: roots})
 	if len(res) != 1 || !res[0].Valid {
 		t.Fatalf("expected one valid signature, got %+v", res)
 	}
@@ -38,7 +39,7 @@ func TestVerifySignaturesWithRoots(t *testing.T) {
 		t.Errorf("chain should be trusted against its own root: %v", res[0].ChainErr)
 	}
 
-	res = signed.VerifySignaturesWithRoots(out, x509.NewCertPool())
+	res = verifySigs(t, signed, sign.VerifyOptions{Roots: x509.NewCertPool()})
 	if res[0].TrustedChain {
 		t.Error("an empty root store must not trust the chain")
 	}

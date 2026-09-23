@@ -11,6 +11,7 @@ import (
 	"github.com/mgilbir/pdf0/sign"
 	"math/big"
 	"testing"
+	"time"
 )
 
 func TestCheckCertRevocation(t *testing.T) {
@@ -18,16 +19,24 @@ func TestCheckCertRevocation(t *testing.T) {
 	good := signtest.MakeOCSP(t, leaf, ca, caKey, "good")
 	revoked := signtest.MakeCRL(t, ca, caKey, []*x509.Certificate{leaf})
 
-	// OCSP is consulted first; a good OCSP wins even if a CRL would say revoked.
-	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, [][]byte{good}); info.Status != sign.RevocationGood || info.Source != "OCSP" {
-		t.Errorf("expected OCSP good to win: %+v", info)
+	now := time.Now()
+	// A revocation from any authenticated source wins: a fresh "good" OCSP
+	// response must not hide a CRL that revokes the certificate. (This test
+	// used to assert the opposite — "OCSP is consulted first; a good OCSP
+	// wins" — which is audit 2026-09-22 C154: whichever source was read first
+	// decided, so the revocation was masked.)
+	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, [][]byte{good}, now); info.Status != sign.RevocationRevoked || info.Source != "CRL" {
+		t.Errorf("a revoking CRL must win over a good OCSP response: %+v", info)
+	}
+	if info := CheckCertRevocation(leaf, ca, nil, [][]byte{good}, now); info.Status != sign.RevocationGood || info.Source != "OCSP" {
+		t.Errorf("a good OCSP response on its own is good: %+v", info)
 	}
 	// CRL is used when no OCSP is available.
-	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, nil); info.Status != sign.RevocationRevoked || info.Source != "CRL" {
+	if info := CheckCertRevocation(leaf, ca, [][]byte{revoked}, nil, now); info.Status != sign.RevocationRevoked || info.Source != "CRL" {
 		t.Errorf("expected CRL revoked: %+v", info)
 	}
 	// No material -> unknown.
-	if info := CheckCertRevocation(leaf, ca, nil, nil); info.Status != sign.RevocationUnknown {
+	if info := CheckCertRevocation(leaf, ca, nil, nil, now); info.Status != sign.RevocationUnknown {
 		t.Errorf("expected unknown with no material: %+v", info)
 	}
 }
@@ -56,8 +65,8 @@ func TestDSSRevocationMaterial(t *testing.T) {
 	if len(crls) != 1 || len(ocsps) != 1 {
 		t.Fatalf("DSS material: got %d CRLs, %d OCSPs", len(crls), len(ocsps))
 	}
-	if info := CheckCertRevocation(leaf, ca, crls, ocsps); info.Status != sign.RevocationGood {
-		t.Errorf("DSS-driven revocation check: %+v", info)
+	if info := CheckCertRevocation(leaf, ca, crls, ocsps, time.Now()); info.Status != sign.RevocationRevoked {
+		t.Errorf("the DSS CRL revokes the leaf, which a good OCSP response in the same DSS must not hide: %+v", info)
 	}
 }
 
@@ -115,7 +124,7 @@ func TestSignatureRevocationFromDSS(t *testing.T) {
 		dss.Set("CRLs", object.Array{object.IndirectRef{Number: matNum}})
 		signed.Objects[dssNum] = &object.IndirectObject{Number: dssNum, Value: dss}
 		signed.ResolveDict(signed.Trailer.Get("Root")).Set("DSS", object.IndirectRef{Number: dssNum})
-		return signed.VerifySignatures(out)
+		return verifySigs(t, signed, sign.VerifyOptions{})
 	}
 
 	res := inject("revoked")

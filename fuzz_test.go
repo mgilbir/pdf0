@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"github.com/mgilbir/pdf0/sign"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -131,8 +132,14 @@ func exercise(t *testing.T, doc *Document, data []byte) {
 			t.Fatalf("image extraction recovered a panic: %s", im.Note)
 		}
 	}
-	_ = doc.VerifySignatures(data)
-	_ = doc.ValidatePAdES(data)
+	// Signature verification reads the file the document was read from, and
+	// its error means only one thing: a panic it recovered.
+	if _, err := doc.VerifySignatures(sign.VerifyOptions{}); err != nil {
+		t.Fatalf("signature verification recovered a panic: %v", err)
+	}
+	if _, err := doc.ValidatePAdES(sign.VerifyOptions{}); err != nil {
+		t.Fatalf("PAdES validation recovered a panic: %v", err)
+	}
 	_ = ValidatePDFUA(doc)
 	for _, lvl := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
 		_ = ValidatePDFABytes(doc, lvl, data)

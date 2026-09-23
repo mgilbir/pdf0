@@ -7,6 +7,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 	"testing"
 	"time"
 )
@@ -154,7 +155,7 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 			return d.WriteSignedIncremental(b, cert, key)
 		}},
 		{"WriteArchivalTimestamp", func(d *Document, raw []byte, b *bytes.Buffer) error {
-			return d.WriteArchivalTimestamp(b, []*x509.Certificate{cert}, tsaCert, tsaKey)
+			return d.WriteArchivalTimestamp(b, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey)
 		}},
 	}
 	bases := []struct {
@@ -232,7 +233,7 @@ func TestSignDocumentWithNestedPageTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 || !res[0].Valid {
 		t.Fatalf("signature did not verify: %+v", res)
 	}

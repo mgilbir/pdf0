@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/sign"
 	"testing"
 )
 
@@ -24,7 +25,7 @@ func TestSignAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read signed: %v", err)
 	}
-	results := signed.VerifySignatures(out)
+	results := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(results) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(results))
 	}
@@ -42,7 +43,7 @@ func TestSignAndVerify(t *testing.T) {
 	// Any change to the signed bytes must break verification.
 	out[len(out)/2] ^= 0xFF
 	if again, err := Read(bytes.NewReader(out), int64(len(out))); err == nil {
-		if res := again.VerifySignatures(out); len(res) == 1 && res[0].Valid {
+		if res := verifySigs(t, again, sign.VerifyOptions{}); len(res) == 1 && res[0].Valid {
 			t.Error("tampered signed document still verified")
 		}
 	}
@@ -70,7 +71,7 @@ func TestSignIncremental(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 || !res[0].Valid {
 		t.Fatalf("incremental signature did not verify: %+v", res)
 	}

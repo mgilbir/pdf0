@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"github.com/mgilbir/pdf0/sign"
 	"math"
 	"os"
 	"path/filepath"
@@ -342,7 +343,7 @@ func TestSignIncrementalOnXRefStreamFile(t *testing.T) {
 	}
 	signed := out.Bytes()
 	doc2 := readBytes(t, signed)
-	res := doc2.VerifySignatures(signed)
+	res := verifySigs(t, doc2, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("VerifySignatures found %d signatures, want 1", len(res))
 	}

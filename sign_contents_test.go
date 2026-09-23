@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/sign"
 	"testing"
 )
 
@@ -73,7 +74,7 @@ func TestSignDocumentWithPageContents(t *testing.T) {
 		t.Errorf("page content lost or corrupted by signing: %q", got)
 	}
 
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}
@@ -109,7 +110,7 @@ func TestSignIncrementalWithPageContents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 || !res[0].Valid || !res[0].CoversWholeDocument {
 		t.Fatalf("incremental signature did not verify: %+v", res)
 	}
@@ -157,7 +158,7 @@ func TestSignIncrementalSecondSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read twice-signed: %v", err)
 	}
-	res := twice.VerifySignatures(out)
+	res := verifySigs(t, twice, sign.VerifyOptions{})
 	if len(res) != 2 {
 		t.Fatalf("got %d signatures, want 2", len(res))
 	}

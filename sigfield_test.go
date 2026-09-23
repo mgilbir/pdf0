@@ -7,6 +7,8 @@ import (
 	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,7 +34,7 @@ func TestSignedDocumentReportsFieldName(t *testing.T) {
 		t.Fatalf("re-read signed: %v", err)
 	}
 
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}
@@ -43,7 +45,7 @@ func TestSignedDocumentReportsFieldName(t *testing.T) {
 		t.Errorf("SignatureResult.Field = %q, want %q", res[0].Field, "Signature1")
 	}
 
-	pades := signed.ValidatePAdES(out)
+	pades := padesOf(t, signed, sign.VerifyOptions{})
 	if len(pades) != 1 {
 		t.Fatalf("got %d PAdES results, want 1", len(pades))
 	}
@@ -54,10 +56,11 @@ func TestSignedDocumentReportsFieldName(t *testing.T) {
 
 // sigFieldTestDoc builds an in-memory document holding one signature dictionary
 // (object sigNum) plus whatever field/catalog objects the caller supplies, and
-// the raw bytes whose /ByteRange the signature covers. The signature itself is
+// a /ByteRange shaped like a real one. The document has no source file, so no
+// signature in it verifies: the signature itself is
 // not cryptographically valid — these tests are about naming and ordering, which
 // are reported regardless of the verification verdict.
-func sigFieldTestDoc(sigNums ...int) (*Document, []byte) {
+func sigFieldTestDoc(sigNums ...int) *Document {
 	raw := []byte("%PDF-2.0 signature placeholder <00> %%EOF")
 	doc := &Document{Objects: map[int]*object.IndirectObject{}}
 	for _, num := range sigNums {
@@ -68,7 +71,7 @@ func sigFieldTestDoc(sigNums ...int) (*Document, []byte) {
 		sig.Set("ByteRange", object.Array{object.Integer(0), object.Integer(31), object.Integer(35), object.Integer(len(raw) - 35)})
 		doc.Objects[num] = &object.IndirectObject{Number: num, Value: sig}
 	}
-	return doc, raw
+	return doc
 }
 
 // setCatalogWithFields gives doc a catalog (object 1) whose /AcroForm (object 2)
@@ -89,7 +92,7 @@ func setCatalogWithFields(doc *Document, fields object.Array) {
 // a child in a hierarchy: the reported name is the parent chain's /T values
 // joined with "." (ISO 32000-2 §12.7.4.2), not the bare partial name.
 func TestSignatureFieldFullyQualifiedName(t *testing.T) {
-	doc, raw := sigFieldTestDoc(10)
+	doc := sigFieldTestDoc(10)
 
 	child := &object.Dictionary{}
 	child.Set("Type", object.Name("Annot"))
@@ -107,14 +110,14 @@ func TestSignatureFieldFullyQualifiedName(t *testing.T) {
 
 	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 4}})
 
-	res := doc.VerifySignatures(raw)
+	res := verifySigs(t, doc, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}
 	if want := "Approvals.Countersign"; res[0].Field != want {
 		t.Errorf("SignatureResult.Field = %q, want %q", res[0].Field, want)
 	}
-	pades := doc.ValidatePAdES(raw)
+	pades := padesOf(t, doc, sign.VerifyOptions{})
 	if len(pades) != 1 {
 		t.Fatalf("got %d PAdES results, want 1", len(pades))
 	}
@@ -127,7 +130,7 @@ func TestSignatureFieldFullyQualifiedName(t *testing.T) {
 // /AcroForm does not list: the name is still recovered, from the widget's own
 // /Parent chain.
 func TestSignatureFieldFromPageOnlyWidget(t *testing.T) {
-	doc, raw := sigFieldTestDoc(10)
+	doc := sigFieldTestDoc(10)
 
 	field := &object.Dictionary{}
 	field.Set("Type", object.Name("Annot"))
@@ -138,7 +141,7 @@ func TestSignatureFieldFromPageOnlyWidget(t *testing.T) {
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: field}
 	setCatalogWithFields(doc, object.Array{}) // an AcroForm that lists no fields at all
 
-	res := doc.VerifySignatures(raw)
+	res := verifySigs(t, doc, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}
@@ -150,8 +153,8 @@ func TestSignatureFieldFromPageOnlyWidget(t *testing.T) {
 // TestBareSignatureHasNoFieldName documents the legitimately empty case: a
 // signature dictionary that no field's /V references cannot be named.
 func TestBareSignatureHasNoFieldName(t *testing.T) {
-	doc, raw := sigFieldTestDoc(10)
-	res := doc.VerifySignatures(raw)
+	doc := sigFieldTestDoc(10)
+	res := verifySigs(t, doc, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}
@@ -165,7 +168,7 @@ func TestBareSignatureHasNoFieldName(t *testing.T) {
 // Document.Objects. The field names are deliberately the reverse of the object
 // order so an accidental pass is not possible.
 func TestSignatureResultOrderIsByObjectNumber(t *testing.T) {
-	doc, raw := sigFieldTestDoc(11, 20)
+	doc := sigFieldTestDoc(11, 20)
 
 	first := &object.Dictionary{}
 	first.Set("FT", object.Name("Sig"))
@@ -183,14 +186,15 @@ func TestSignatureResultOrderIsByObjectNumber(t *testing.T) {
 
 	// Give the two signatures distinguishable verdicts as well, so the order is
 	// pinned by something other than the field name: object 11 gets a malformed
-	// /ByteRange, object 20 keeps a well-formed one.
+	// /ByteRange, object 20 keeps a well-formed one — which, in a document with
+	// no source file, reaches past the end of the (empty) file.
 	sig11 := doc.Objects[11].Value.(*object.Dictionary)
 	sig11.Set("ByteRange", object.Array{object.Name("bogus")})
 
 	wantNames := []string{"Zulu", "Alpha"} // objects 11 then 20
-	wantErrs := []string{"malformed /ByteRange", "not a CMS SignedData"}
+	wantErrs := []string{"malformed /ByteRange", "/ByteRange extends beyond the end of the file"}
 	for run := 0; run < 20; run++ {
-		res := doc.VerifySignatures(raw)
+		res := verifySigs(t, doc, sign.VerifyOptions{})
 		if len(res) != 2 {
 			t.Fatalf("got %d signatures, want 2", len(res))
 		}
@@ -198,11 +202,11 @@ func TestSignatureResultOrderIsByObjectNumber(t *testing.T) {
 			if res[i].Field != wantNames[i] {
 				t.Fatalf("run %d: result %d Field = %q, want %q (results must be in object-number order)", run, i, res[i].Field, wantNames[i])
 			}
-			if res[i].Err == nil || res[i].Err.Error() != wantErrs[i] {
+			if res[i].Err == nil || !strings.HasPrefix(res[i].Err.Error(), wantErrs[i]) {
 				t.Fatalf("run %d: result %d Err = %v, want %q (results must be in object-number order)", run, i, res[i].Err, wantErrs[i])
 			}
 		}
-		pades := doc.ValidatePAdES(raw)
+		pades := padesOf(t, doc, sign.VerifyOptions{})
 		if len(pades) != 2 {
 			t.Fatalf("got %d PAdES results, want 2", len(pades))
 		}
@@ -229,7 +233,7 @@ func TestTwoRealSignaturesOrderAndNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b1 bytes.Buffer
-	if err := doc.WriteSignedTimestamped(&b1, cert, key, tsaCert, tsaKey); err != nil {
+	if err := doc.WriteSigned(&b1, cert, key, WithSignatureTimestamp(tsaCert, tsaKey)); err != nil {
 		t.Fatalf("WriteSignedTimestamped: %v", err)
 	}
 	o1 := b1.Bytes()
@@ -238,7 +242,7 @@ func TestTwoRealSignaturesOrderAndNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	out := b2.Bytes()
@@ -247,7 +251,7 @@ func TestTwoRealSignaturesOrderAndNames(t *testing.T) {
 		t.Fatalf("re-read: %v", err)
 	}
 
-	res := d2.VerifySignaturesWithRoots(out, nil)
+	res := verifySigs(t, d2, sign.VerifyOptions{Roots: nil})
 	if len(res) != 2 {
 		t.Fatalf("got %d signature dictionaries, want 2 (%+v)", len(res), res)
 	}
@@ -260,7 +264,7 @@ func TestTwoRealSignaturesOrderAndNames(t *testing.T) {
 	}
 
 	// ValidatePAdES assesses only the approval signature, and names it too.
-	pades := d2.ValidatePAdES(out)
+	pades := padesOf(t, d2, sign.VerifyOptions{})
 	if len(pades) != 1 {
 		t.Fatalf("got %d PAdES results, want 1", len(pades))
 	}
@@ -274,7 +278,7 @@ func TestTwoRealSignaturesOrderAndNames(t *testing.T) {
 // reference, so the field must be matched by object number rather than by
 // pointer equality on the unresolved value.
 func TestSignatureFieldNameIndirectValue(t *testing.T) {
-	doc, raw := sigFieldTestDoc(10)
+	doc := sigFieldTestDoc(10)
 	// Object 7 is an indirect reference to the signature dictionary; the field's
 	// /V points at object 7, so resolving the chain is required.
 	doc.Objects[7] = &object.IndirectObject{Number: 7, Value: object.IndirectRef{Number: 10}}
@@ -286,7 +290,7 @@ func TestSignatureFieldNameIndirectValue(t *testing.T) {
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: field}
 	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 5}})
 
-	res := doc.VerifySignatures(raw)
+	res := verifySigs(t, doc, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}
@@ -300,7 +304,7 @@ func TestSignatureFieldNameIndirectValue(t *testing.T) {
 // files).
 func TestSignatureFieldCyclicHierarchy(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
-		doc, raw := sigFieldTestDoc(10)
+		doc := sigFieldTestDoc(10)
 
 		a := &object.Dictionary{}
 		a.Set("T", object.String{Value: []byte("A")})
@@ -317,7 +321,7 @@ func TestSignatureFieldCyclicHierarchy(t *testing.T) {
 
 		setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 5}})
 
-		res := doc.VerifySignatures(raw)
+		res := verifySigs(t, doc, sign.VerifyOptions{})
 		if len(res) != 1 {
 			t.Fatalf("got %d signatures, want 1", len(res))
 		}
@@ -330,7 +334,7 @@ func TestSignatureFieldCyclicHierarchy(t *testing.T) {
 // TestSignatureFieldNameUTF16 checks that a /T stored as a UTF-16BE PDF text
 // string is decoded, not returned as raw bytes.
 func TestSignatureFieldNameUTF16(t *testing.T) {
-	doc, raw := sigFieldTestDoc(10)
+	doc := sigFieldTestDoc(10)
 	utf16Name, err := hex.DecodeString("FEFF0053006900670144") // BOM + "Sig" + U+0144
 	if err != nil {
 		t.Fatal(err)
@@ -342,7 +346,7 @@ func TestSignatureFieldNameUTF16(t *testing.T) {
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: field}
 	setCatalogWithFields(doc, object.Array{object.IndirectRef{Number: 5}})
 
-	res := doc.VerifySignatures(raw)
+	res := verifySigs(t, doc, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}

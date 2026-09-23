@@ -3,34 +3,33 @@ package pdf0
 import (
 	"bytes"
 	"crypto/x509"
+	"strings"
+	"testing"
+
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/sign"
-	"strings"
-	"testing"
 )
+
+// signMinimal signs buildMinimalPDF with WriteSigned and the given options,
+// and returns the signed file.
+func signMinimal(t *testing.T, opts ...SignOption) []byte {
+	t.Helper()
+	cert, key := signtest.CertKey(t)
+	base := buildMinimalPDF()
+	var buf bytes.Buffer
+	if err := readBytes(t, base).WriteSigned(&buf, cert, key, opts...); err != nil {
+		t.Fatalf("WriteSigned: %v", err)
+	}
+	return buf.Bytes()
+}
 
 // TestPAdESRoundTrip signs a document (pdf0 now produces PAdES-B-B: the
 // ETSI.CAdES.detached sub-filter and a CAdES signing-certificate attribute) and
 // checks that ValidatePAdES reports a conformant B-B signature.
 func TestPAdESRoundTrip(t *testing.T) {
-	cert, key := signtest.CertKey(t)
-	base := buildMinimalPDF()
-	doc, err := Read(bytes.NewReader(base), int64(len(base)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	if err := doc.WriteSigned(&buf, cert, key); err != nil {
-		t.Fatalf("WriteSigned: %v", err)
-	}
-	out := buf.Bytes()
-
-	signed, err := Read(bytes.NewReader(out), int64(len(out)))
-	if err != nil {
-		t.Fatalf("re-read: %v", err)
-	}
-	res := signed.ValidatePAdES(out)
+	out := signMinimal(t)
+	res := padesOf(t, readBytes(t, out), sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d PAdES results, want 1", len(res))
 	}
@@ -41,8 +40,8 @@ func TestPAdESRoundTrip(t *testing.T) {
 	if !r.Valid {
 		t.Error("signature should verify")
 	}
-	if !r.CoversDocument {
-		t.Error("signature should cover the document")
+	if !r.CoversDocument || !r.ChangesAllowed {
+		t.Errorf("signature should cover the document (covers=%v allowed=%v)", r.CoversDocument, r.ChangesAllowed)
 	}
 	if !r.Conformant {
 		t.Errorf("expected a conformant B-B signature, got issues: %v", r.Issues)
@@ -53,25 +52,18 @@ func TestPAdESRoundTrip(t *testing.T) {
 }
 
 // TestPAdESTamperDetected confirms that modifying the signed content makes the
-// signature non-conformant (it no longer verifies).
+// signature non-conformant (it no longer verifies). The file is changed in
+// place, inside the signed range, and read back: verification reads the file
+// a document was read from, so the tampered file is what it judges.
 func TestPAdESTamperDetected(t *testing.T) {
-	cert, key := signtest.CertKey(t)
-	base := buildMinimalPDF()
-	doc, _ := Read(bytes.NewReader(base), int64(len(base)))
-	var buf bytes.Buffer
-	if err := doc.WriteSigned(&buf, cert, key); err != nil {
-		t.Fatal(err)
+	out := signMinimal(t)
+	i := bytes.Index(out, []byte("612 792"))
+	if i < 0 {
+		t.Fatal("no MediaBox to tamper with")
 	}
-	out := buf.Bytes()
-	signed, err := Read(bytes.NewReader(out), int64(len(out)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Verify against tampered bytes (reusing the clean parse, as the CMS digest
-	// is recomputed over the supplied bytes): flipping a signed byte breaks it.
 	tampered := append([]byte(nil), out...)
-	tampered[0] ^= 0xFF
-	res := signed.ValidatePAdES(tampered)
+	tampered[i] = '9' // 612 -> 912: the same length, still a valid file
+	res := padesOf(t, readBytes(t, tampered), sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d results, want 1", len(res))
 	}
@@ -86,21 +78,10 @@ func TestPAdESTamperDetected(t *testing.T) {
 // TestPAdESLegacyNotPAdES confirms a legacy adbe.pkcs7.detached signature is
 // reported as not PAdES (but still cryptographically assessed).
 func TestPAdESLegacyNotPAdES(t *testing.T) {
-	cert, key := signtest.CertKey(t)
-	base := buildMinimalPDF()
-	doc, _ := Read(bytes.NewReader(base), int64(len(base)))
-	var buf bytes.Buffer
-	if err := doc.WriteSigned(&buf, cert, key); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.Bytes()
+	out := signMinimal(t)
 	// Rewrite the sub-filter in the output to the legacy value (same length).
 	out = bytes.Replace(out, []byte("/ETSI.CAdES.detached"), []byte("/adbe.pkcs7.detached"), 1)
-	signed, err := Read(bytes.NewReader(out), int64(len(out)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	res := signed.ValidatePAdES(out)
+	res := padesOf(t, readBytes(t, out), sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d results, want 1", len(res))
 	}
@@ -112,55 +93,31 @@ func TestPAdESLegacyNotPAdES(t *testing.T) {
 	}
 }
 
-// TestPAdESLevelBLT constructs the document-level long-term material (a /DSS in
-// the catalog) and a signature timestamp, and checks the level rises to B-LT.
+// TestPAdESLevelDetection checks the level ordering: a catalog /DSS without a
+// signature time-stamp does not reach B-LT, since each level requires the
+// previous.
 func TestPAdESLevelDetection(t *testing.T) {
-	cert, key := signtest.CertKey(t)
-	base := buildMinimalPDF()
-	doc, _ := Read(bytes.NewReader(base), int64(len(base)))
-	var buf bytes.Buffer
-	if err := doc.WriteSigned(&buf, cert, key); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.Bytes()
-	signed, err := Read(bytes.NewReader(out), int64(len(out)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := signMinimal(t)
+	signed := readBytes(t, out)
 	// Baseline: no DSS, no timestamp -> B-B.
-	if got := signed.ValidatePAdES(out)[0].Level; got != sign.PAdESBB {
+	if got := padesOf(t, signed, sign.VerifyOptions{})[0].Level; got != sign.PAdESBB {
 		t.Fatalf("baseline level = %q, want B-B", got)
 	}
-	// Add a catalog /DSS. Without a signature timestamp the level stays B-B
-	// (each PAdES level requires the previous), which guards the ordering.
 	cat := signed.view().Catalog()
 	cat.Set("DSS", &object.Dictionary{})
-	if got := signed.ValidatePAdES(out)[0].Level; got != sign.PAdESBB {
+	if got := padesOf(t, signed, sign.VerifyOptions{})[0].Level; got != sign.PAdESBB {
 		t.Errorf("DSS without a timestamp must not reach B-LT; level = %q", got)
 	}
 }
 
 // TestPAdESBTTimestamp signs with an RFC 3161 signature time-stamp (a local TSA)
 // and checks that ValidatePAdES reaches level B-T with a cryptographically
-// verified time-stamp.
+// verified time-stamp — trusted only when the TSA is among the roots.
 func TestPAdESBTTimestamp(t *testing.T) {
-	cert, key := signtest.CertKey(t)
 	tsaCert, tsaKey := signtest.TSACertKey(t)
-	base := buildMinimalPDF()
-	doc, err := Read(bytes.NewReader(base), int64(len(base)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	if err := doc.WriteSignedTimestamped(&buf, cert, key, tsaCert, tsaKey); err != nil {
-		t.Fatalf("WriteSignedTimestamped: %v", err)
-	}
-	out := buf.Bytes()
-	signed, err := Read(bytes.NewReader(out), int64(len(out)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	res := signed.ValidatePAdES(out)
+	out := signMinimal(t, WithSignatureTimestamp(tsaCert, tsaKey))
+	signed := readBytes(t, out)
+	res := padesOf(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d PAdES results, want 1", len(res))
 	}
@@ -171,6 +128,9 @@ func TestPAdESBTTimestamp(t *testing.T) {
 	if !r.TimestampValid {
 		t.Errorf("signature time-stamp should verify; issues: %v", r.Issues)
 	}
+	if r.TimestampTrusted {
+		t.Error("a time-stamp is trusted only against roots, and none were given")
+	}
 	if r.TimestampTime.IsZero() {
 		t.Error("expected a time-stamp time")
 	}
@@ -180,40 +140,33 @@ func TestPAdESBTTimestamp(t *testing.T) {
 	if !r.Conformant {
 		t.Errorf("expected a conformant signature, issues: %v", r.Issues)
 	}
+	tsaRoots := x509.NewCertPool()
+	tsaRoots.AddCert(tsaCert)
+	if r := padesOf(t, signed, sign.VerifyOptions{TSARoots: tsaRoots})[0]; !r.TimestampTrusted {
+		t.Error("with the TSA among the time-stamp roots its time-stamp should be trusted")
+	}
 }
 
 // TestPAdESBLTA signs B-T, then adds a DSS and a document time-stamp as an
 // incremental update, and checks the signature is assessed at level B-LTA with
 // its original signature still valid.
+//
+// The signature no longer covers the file — the archival revision follows it
+// — and it is conformant because every change in that revision is a permitted
+// archival addition (ChangesAllowed), not because the document time-stamp
+// "seals" it: an earlier version of this test asserted that sealing, which is
+// the relaxation that let a time-stamp excuse any tampering (audit
+// 2026-09-22 C1; see TestPAdESTimestampDoesNotExcuseTampering).
 func TestPAdESBLTA(t *testing.T) {
-	cert, key := signtest.CertKey(t)
+	cert, _ := signtest.CertKey(t)
 	tsaCert, tsaKey := signtest.TSACertKey(t)
-	base := buildMinimalPDF()
-	doc, err := Read(bytes.NewReader(base), int64(len(base)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var b1 bytes.Buffer
-	if err := doc.WriteSignedTimestamped(&b1, cert, key, tsaCert, tsaKey); err != nil {
-		t.Fatalf("WriteSignedTimestamped: %v", err)
-	}
-	o1 := b1.Bytes()
+	o1 := signMinimal(t, WithSignatureTimestamp(tsaCert, tsaKey))
 
-	d1, err := Read(bytes.NewReader(o1), int64(len(o1)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := readBytes(t, o1).WriteArchivalTimestamp(&b2, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
-	o2 := b2.Bytes()
-
-	d2, err := Read(bytes.NewReader(o2), int64(len(o2)))
-	if err != nil {
-		t.Fatalf("re-read: %v", err)
-	}
-	res := d2.ValidatePAdES(o2)
+	res := padesOf(t, readBytes(t, b2.Bytes()), sign.VerifyOptions{})
 	var lta *sign.PAdESResult
 	for i := range res {
 		if res[i].Level == sign.PAdESBLTA {
@@ -226,59 +179,37 @@ func TestPAdESBLTA(t *testing.T) {
 	if !lta.Valid {
 		t.Error("the approval signature should still verify after the archival timestamp")
 	}
-	// The approval signature covers only its own revision — the appended DSS and
-	// document time-stamp are not under its /ByteRange — yet it stays conformant
-	// because the covering document time-stamp seals the rest.
 	if lta.CoversDocument {
 		t.Error("the approval signature should not cover the appended archival revision")
 	}
-	for _, iss := range lta.Issues {
-		if strings.Contains(iss, "does not cover the whole document") {
-			t.Errorf("byte-range issue should be relaxed under a covering document time-stamp: %q", iss)
-		}
+	if !lta.ChangesAllowed || len(lta.DisallowedChanges) != 0 {
+		t.Errorf("the archival revision holds only permitted changes; disallowed: %v", lta.DisallowedChanges)
 	}
 	if !lta.Conformant {
-		t.Errorf("a sealed B-LTA approval signature should be conformant; issues: %v", lta.Issues)
+		t.Errorf("a B-LTA approval signature followed only by archival changes should be conformant; issues: %v", lta.Issues)
 	}
 }
 
-// TestPAdESUncoveredNotSealed checks the relaxation is specific: an approval
-// signature that does not cover the whole document is still flagged when there is
-// no covering, verifying document time-stamp to seal the trailing bytes.
-func TestPAdESUncoveredNotSealed(t *testing.T) {
-	cert, key := signtest.CertKey(t)
-	base := buildMinimalPDF()
-	doc, err := Read(bytes.NewReader(base), int64(len(base)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var b1 bytes.Buffer
-	if err := doc.WriteSigned(&b1, cert, key); err != nil {
-		t.Fatalf("WriteSigned: %v", err)
-	}
-	o1 := b1.Bytes()
-	// Append arbitrary bytes so the signature no longer reaches the end of file,
-	// with no document time-stamp covering them.
+// TestPAdESUncoveredBytesAreFlagged checks that bytes appended after the
+// signed revision, which no revision accounts for, are reported: they are not
+// a permitted change.
+func TestPAdESUncoveredBytesAreFlagged(t *testing.T) {
+	o1 := signMinimal(t)
 	o1 = append(o1, []byte("\n% trailing bytes not covered by any signature\n")...)
-
-	d1, err := Read(bytes.NewReader(o1), int64(len(o1)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	res := d1.ValidatePAdES(o1)
+	res := padesOf(t, readBytes(t, o1), sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("expected one signature; got %d", len(res))
 	}
-	if res[0].CoversDocument {
-		t.Fatal("the signature should not cover the appended bytes")
+	if res[0].CoversDocument || res[0].ChangesAllowed || res[0].Conformant {
+		t.Fatalf("the signature should neither cover nor permit the appended bytes: %+v", res[0])
 	}
 	found := false
 	for _, iss := range res[0].Issues {
-		if strings.Contains(iss, "does not cover the whole document") {
+		if strings.Contains(iss, "does not cover the whole document") && strings.Contains(iss, "not part of any revision") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("an uncovered signature without a sealing time-stamp should be flagged; issues: %v", res[0].Issues)
+		t.Errorf("the appended bytes should be named as a disallowed change; issues: %v", res[0].Issues)
 	}
 }

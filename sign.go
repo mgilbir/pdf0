@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/sign"
 	"io"
@@ -32,17 +33,90 @@ const sigContentsBytes = 8192
 
 const byteRangePlaceholder = "0 9999999999 9999999999 9999999999"
 
+// SignOption configures WriteSigned and WriteSignedIncremental.
+type SignOption func(*signConfig)
+
+type signConfig struct {
+	tsaCert            *x509.Certificate
+	tsaKey             crypto.Signer
+	invalidateExisting bool
+}
+
+// WithSignatureTimestamp embeds an RFC 3161 signature time-stamp over the
+// signature value, issued in-process by the time-stamp authority whose
+// certificate and key are given, making the signature PAdES B-T. The
+// certificate must carry the id-kp-timeStamping extended key usage for a
+// verifier to accept the token, and must chain to the verifier's time-stamp
+// roots for it to be trusted.
+func WithSignatureTimestamp(tsaCert *x509.Certificate, tsaKey crypto.Signer) SignOption {
+	return func(c *signConfig) { c.tsaCert, c.tsaKey = tsaCert, tsaKey }
+}
+
+// InvalidatingExistingSignatures lets WriteSigned rewrite a document that
+// already carries signatures. The rewrite moves every byte the existing
+// signatures cover, so they no longer verify: their dictionaries are written
+// out, but a verifier reports them invalid. Pass it only when that is what you
+// intend; to add a signature and keep the existing ones valid, use
+// WriteSignedIncremental. It has no effect on WriteSignedIncremental.
+func InvalidatingExistingSignatures() SignOption {
+	return func(c *signConfig) { c.invalidateExisting = true }
+}
+
+// ErrAlreadySigned is returned by WriteSigned for a document that carries
+// signatures (or document time-stamps), which a full rewrite would invalidate.
+var ErrAlreadySigned = errors.New("signing: the document already carries signatures, which rewriting it would invalidate; use WriteSignedIncremental to add a signature, or pass InvalidatingExistingSignatures")
+
+func signOptions(opts []SignOption) (signConfig, error) {
+	var c signConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	if (c.tsaCert == nil) != (c.tsaKey == nil) {
+		return c, errors.New("signing: a signature time-stamp needs both the authority's certificate and its key")
+	}
+	return c, nil
+}
+
+// hasSignatures reports whether any object of d is a signature or document
+// time-stamp dictionary — the same test the encryption layer and the verifier
+// use to find one (crypt.IsSignatureDict).
+func (d *Document) hasSignatures() bool {
+	for _, iobj := range d.Objects {
+		if iobj == nil {
+			continue
+		}
+		if dict, ok := iobj.Value.(*object.Dictionary); ok && crypt.IsSignatureDict(dict) {
+			return true
+		}
+	}
+	return false
+}
+
 // WriteSigned writes the document with an appended digital signature over its
 // whole content: it adds a signature field, serializes with placeholders,
 // computes the /ByteRange, signs the covered bytes with key (certificate cert
-// embedded, adbe.pkcs7.detached, SHA-256), and fills /Contents. The in-memory
-// document is not modified.
+// embedded, ETSI.CAdES.detached, SHA-256), and fills /Contents. The in-memory
+// document is not modified. With WithSignatureTimestamp the signature carries a
+// signature time-stamp (PAdES B-T).
+//
+// It rewrites the whole file, so it refuses a document that already carries a
+// signature, with ErrAlreadySigned: the rewrite would silently invalidate it.
+// Add a signature to a signed document with WriteSignedIncremental, which
+// appends to the file instead; pass InvalidatingExistingSignatures only to
+// replace the file and discard the old signatures on purpose.
 //
 // The document must not be encrypted (sign a plaintext document, or encrypt a
 // signed one afterwards).
-func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.Signer) error {
+func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.Signer, opts ...SignOption) error {
+	cfg, err := signOptions(opts)
+	if err != nil {
+		return err
+	}
 	if d.Encrypted || d.security != nil {
 		return errors.New("cannot sign an encrypted document")
+	}
+	if !cfg.invalidateExisting && d.hasSignatures() {
+		return ErrAlreadySigned
 	}
 	signedDoc, _, err := withSignatureField(d)
 	if err != nil {
@@ -52,31 +126,7 @@ func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.S
 	if err := signedDoc.Write(&buf); err != nil {
 		return err
 	}
-	out, err := patchSignature(buf.Bytes(), cert, key, nil, nil)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(out)
-	return err
-}
-
-// WriteSignedTimestamped signs the document like WriteSigned and additionally
-// embeds an RFC 3161 signature time-stamp over the signature value, produced by
-// the supplied time-stamp authority certificate and key, yielding a PAdES-B-T
-// signature.
-func (d *Document) WriteSignedTimestamped(w io.Writer, cert *x509.Certificate, key crypto.Signer, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
-	if d.Encrypted || d.security != nil {
-		return errors.New("cannot sign an encrypted document")
-	}
-	signedDoc, _, err := withSignatureField(d)
-	if err != nil {
-		return err
-	}
-	var buf bytes.Buffer
-	if err := signedDoc.Write(&buf); err != nil {
-		return err
-	}
-	out, err := patchSignature(buf.Bytes(), cert, key, tsaCert, tsaKey)
+	out, err := patchSignature(buf.Bytes(), cert, key, cfg.tsaCert, cfg.tsaKey)
 	if err != nil {
 		return err
 	}
@@ -86,11 +136,20 @@ func (d *Document) WriteSignedTimestamped(w io.Writer, cert *x509.Certificate, k
 
 // WriteSignedIncremental signs the document as an incremental update of the
 // file it was read from: those bytes are preserved verbatim and only the
-// signature objects are appended (see WriteIncremental). This is the correct way
-// to add a signature without invalidating any signature already present. The
+// signature objects are appended (see WriteIncremental). This is the way to add
+// a signature without invalidating any signature already present. The
 // document must have been read from a file; the new objects are numbered above
-// every number that file uses.
-func (d *Document) WriteSignedIncremental(w io.Writer, cert *x509.Certificate, key crypto.Signer) error {
+// every number that file uses. With WithSignatureTimestamp the signature
+// carries a signature time-stamp (PAdES B-T).
+//
+// A verifier reports the new signature as a change made after each earlier
+// signature: permitted only where a certification signature's DocMDP level
+// allows signing (see sign.Result.ChangesAllowed).
+func (d *Document) WriteSignedIncremental(w io.Writer, cert *x509.Certificate, key crypto.Signer, opts ...SignOption) error {
+	cfg, err := signOptions(opts)
+	if err != nil {
+		return err
+	}
 	if d.Encrypted || d.security != nil {
 		return errors.New("cannot sign an encrypted document")
 	}
@@ -102,7 +161,7 @@ func (d *Document) WriteSignedIncremental(w io.Writer, cert *x509.Certificate, k
 	if err != nil {
 		return err
 	}
-	out, err := patchSignature(data, cert, key, nil, nil)
+	out, err := patchSignature(data, cert, key, cfg.tsaCert, cfg.tsaKey)
 	if err != nil {
 		return err
 	}

@@ -83,7 +83,7 @@ func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b1 bytes.Buffer
-	if err := d0.WriteArchivalTimestamp(&b1, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d0.WriteArchivalTimestamp(&b1, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("first WriteArchivalTimestamp: %v", err)
 	}
 	o1 := b1.Bytes()
@@ -96,7 +96,7 @@ func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
 	}
 
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("second WriteArchivalTimestamp: %v", err)
 	}
 	o2 := b2.Bytes()
@@ -118,14 +118,14 @@ func TestTwoArchivalTimestampsGetDistinctNames(t *testing.T) {
 	}
 	// The names are only useful if the results carry them: two time-stamps, two
 	// distinct field names, in object-number order.
-	res := d2.VerifySignaturesWithRoots(o2, nil)
+	res := verifySigs(t, d2, sign.VerifyOptions{Roots: nil})
 	if len(res) != 2 {
 		t.Fatalf("got %d signature dictionaries, want 2 (%+v)", len(res), res)
 	}
 	if res[0].Field != "Timestamp1" || res[1].Field != "Timestamp2" {
 		t.Errorf("result fields = [%q %q], want [Timestamp1 Timestamp2]", res[0].Field, res[1].Field)
 	}
-	if !sign.CoveringDocTimestamp(d2.view(), o2) {
+	if !coveringDocTimestamp(t, d2) {
 		t.Error("the outermost archival time-stamp does not verify over the file it seals")
 	}
 }
@@ -143,7 +143,7 @@ func TestArchivalTimestampSkipsTakenTimestampName(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := doc.WriteArchivalTimestamp(&buf, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := doc.WriteArchivalTimestamp(&buf, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	out := buf.Bytes()
@@ -173,7 +173,7 @@ func TestSignatureThenTimestampNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b1 bytes.Buffer
-	if err := d0.WriteSignedTimestamped(&b1, cert, key, tsaCert, tsaKey); err != nil {
+	if err := d0.WriteSigned(&b1, cert, key, WithSignatureTimestamp(tsaCert, tsaKey)); err != nil {
 		t.Fatalf("WriteSignedTimestamped: %v", err)
 	}
 	o1 := b1.Bytes()
@@ -186,7 +186,7 @@ func TestSignatureThenTimestampNames(t *testing.T) {
 	}
 
 	var b2 bytes.Buffer
-	if err := d1.WriteArchivalTimestamp(&b2, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+	if err := d1.WriteArchivalTimestamp(&b2, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey); err != nil {
 		t.Fatalf("WriteArchivalTimestamp: %v", err)
 	}
 	o2 := b2.Bytes()
@@ -199,7 +199,7 @@ func TestSignatureThenTimestampNames(t *testing.T) {
 	if strings.Join(got, ",") != "Signature1,Timestamp1" {
 		t.Errorf("/AcroForm /Fields = %v, want [Signature1 Timestamp1]", got)
 	}
-	if res := d2.ValidatePAdES(o2); len(res) != 1 || res[0].Field != "Signature1" || res[0].Level != sign.PAdESBLTA {
+	if res := padesOf(t, d2, sign.VerifyOptions{}); len(res) != 1 || res[0].Field != "Signature1" || res[0].Level != sign.PAdESBLTA {
 		t.Errorf("ValidatePAdES = %+v, want one B-LTA result for Signature1", res)
 	}
 }

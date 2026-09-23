@@ -3,7 +3,9 @@ package pdf0
 import (
 	"bytes"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -270,15 +272,38 @@ func head(s []int) []int {
 
 // TestCorpusIncrementalUpdatesOfXRefStreamFiles: every file in the veraPDF
 // corpus whose newest cross-reference section is a stream takes an incremental
-// update, an incremental signature and an archival time-stamp, and each result
-// reads back with the new objects resolving and every original object intact.
+// update, an incremental PAdES B-T signature and an archival time-stamp with
+// revocation material (B-LTA), and each result reads back with the new objects
+// resolving and every original object intact.
+//
+// The verifier's verdicts are checked on real files too: the new signature
+// must be intact over the signed file, and after the archival update — which
+// changes the catalog, the form and a page of a file pdf0 did not write — every
+// change must still be recognised as permitted (ChangesAllowed), the
+// signature chain to the CA and the time-stamp to the TSA root, the leaf read
+// as not revoked, and the PAdES assessment a conformant B-LTA.
 //
 // Every such file, not a sample: they are 400-odd small files and the whole
 // run takes seconds. Files the writers refuse on purpose are counted, by
 // reason, and must stay a minority.
 func TestCorpusIncrementalUpdatesOfXRefStreamFiles(t *testing.T) {
-	cert, key := signtest.CertKey(t)
-	tsaCert, tsaKey := signtest.TSACertKey(t)
+	ca, caKey := signtest.CA(t, "pdf0 corpus CA")
+	cert, key := signtest.Issue(t, &x509.Certificate{
+		SerialNumber: big.NewInt(4242),
+		Subject:      pkix.Name{CommonName: "pdf0 corpus signer"},
+		NotBefore:    signtest.NotBefore,
+		NotAfter:     signtest.NotAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}, ca, caKey)
+	tsaCert, tsaKey := signtest.TSAIssuedBy(t, ca, caKey)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	opts := sign.VerifyOptions{Roots: roots}
+	material := ValidationData{
+		Certs: []*x509.Certificate{ca, tsaCert},
+		CRLs:  [][]byte{signtest.MakeCRL(t, ca, caKey, nil)},
+		OCSPs: [][]byte{signtest.MakeOCSP(t, cert, ca, caKey, "good")},
+	}
 	root := corpusRoot(t)
 	var eligible, refused int
 	reasons := map[string]int{}
@@ -348,7 +373,7 @@ func TestCorpusIncrementalUpdatesOfXRefStreamFiles(t *testing.T) {
 		// 2. Sign incrementally; the new signature must verify over the whole
 		// file.
 		out.Reset()
-		if err := readBytes(t, data).WriteSignedIncremental(&out, cert, key); err != nil {
+		if err := readBytes(t, data).WriteSignedIncremental(&out, cert, key, WithSignatureTimestamp(tsaCert, tsaKey)); err != nil {
 			if isSigningPrecondition(err) {
 				reasons["signing: "+err.Error()]++
 				continue
@@ -362,20 +387,20 @@ func TestCorpusIncrementalUpdatesOfXRefStreamFiles(t *testing.T) {
 			fail(rel, "re-read after signing: %v", err)
 			continue
 		}
-		ours := ourSignature(sd.VerifySignatures(signed), cert)
+		ours := ourSignature(verifySigs(t, sd, opts), cert)
 		if ours == nil {
 			fail(rel, "VerifySignatures did not find the new signature")
 			continue
 		}
-		if !ours.DocumentUnmodified() {
-			fail(rel, "the new signature does not cover an unmodified document: valid=%v covers=%v err=%v", ours.Valid, ours.CoversWholeDocument, ours.Err)
+		if !ours.DocumentUnmodified() || !ours.Intact() || !ours.TrustedChain || !ours.TimestampTrusted {
+			fail(rel, "the new signature is not an intact, trusted, time-stamped signature over an unmodified document: valid=%v covers=%v allowed=%v trusted=%v ts=%v err=%v chainErr=%v", ours.Valid, ours.CoversWholeDocument, ours.ChangesAllowed, ours.TrustedChain, ours.TimestampTrusted, ours.Err, ours.ChainErr)
 		}
 		compareUnchanged(rel, orig, sd, changedBySigning(orig, sd), fail)
 
 		// 3. Archive-time-stamp the signed file: the signature stays valid but
 		// no longer covers the whole file, and the time-stamp does.
 		out.Reset()
-		if err := sd.WriteArchivalTimestamp(&out, []*x509.Certificate{cert}, tsaCert, tsaKey); err != nil {
+		if err := sd.WriteArchivalTimestamp(&out, material, tsaCert, tsaKey); err != nil {
 			fail(rel, "WriteArchivalTimestamp: %v", err)
 			continue
 		}
@@ -385,9 +410,22 @@ func TestCorpusIncrementalUpdatesOfXRefStreamFiles(t *testing.T) {
 			fail(rel, "re-read after time-stamping: %v", err)
 			continue
 		}
-		after := ourSignature(td.VerifySignatures(stamped), cert)
+		after := ourSignature(verifySigs(t, td, opts), cert)
 		if after == nil || !after.Valid || after.CoversWholeDocument {
 			fail(rel, "after the time-stamp the signature is %+v; want valid, not covering the new revision", after)
+			continue
+		}
+		if !after.Intact() || !after.TrustedChain || after.Revocation.Status != sign.RevocationGood {
+			fail(rel, "after the archival update the signature is not intact, trusted and unrevoked: allowed=%v disallowed=%v trusted=%v revocation=%v", after.ChangesAllowed, after.DisallowedChanges, after.TrustedChain, after.Revocation)
+		}
+		var lta *sign.PAdESResult
+		for _, p := range padesOf(t, td, opts) {
+			if p.SignerCommonName == cert.Subject.CommonName {
+				lta = &p
+			}
+		}
+		if lta == nil || lta.Level != sign.PAdESBLTA || !lta.Conformant || !lta.ChangesAllowed {
+			fail(rel, "the archived signature is not a conformant B-LTA: %+v", lta)
 		}
 		if !docTimeStampCovers(td, int64(len(stamped))) {
 			fail(rel, "no document time-stamp covers the whole time-stamped file")

@@ -2,9 +2,9 @@ package sign
 
 import (
 	"encoding/asn1"
-	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/object"
 	"time"
+
+	"github.com/mgilbir/pdf0/internal/core"
 )
 
 // This file validates PDF Advanced Electronic Signatures (PAdES, ETSI EN 319
@@ -33,112 +33,82 @@ type PAdESResult struct {
 	// partial names of the field and its ancestors joined with "." (ISO 32000-2
 	// §12.7.4.2). It is empty when no field references the signature, or when no
 	// field in the chain carries a /T.
-	Field            string
-	SubFilter        string     // the signature /SubFilter
-	IsPAdES          bool       // uses a PAdES sub-filter
-	Level            PAdESLevel // baseline level reached (PAdESNone if not PAdES)
-	Conformant       bool       // meets the PAdES B-B baseline requirements
-	Valid            bool       // the CMS signature cryptographically verifies
-	CoversDocument   bool       // the /ByteRange reaches the end of the file
-	SignerCommonName string
-	TimestampValid   bool      // the signature time-stamp verifies (imprint + TSA signature)
-	TimestampTime    time.Time // the time asserted by a verified signature time-stamp
-	Issues           []string  // PAdES conformance problems
+	Field     string
+	SubFilter string // the signature /SubFilter
+	IsPAdES   bool   // uses the PAdES sub-filter, ETSI.CAdES.detached
+	// Level is the baseline level whose material is present (PAdESNone if not
+	// PAdES): B-B, plus a signature time-stamp for B-T, plus a catalog /DSS
+	// for B-LT, plus a document time-stamp in a later revision for B-LTA. It
+	// says what is there; Conformant says whether it holds up.
+	Level PAdESLevel
+	// Conformant: the B-B baseline requirements hold, the material Level
+	// reports verifies, and every change made after the signature is
+	// permitted — the Issues list is empty. A time-stamp never excuses a
+	// change: it proves when bytes existed, not that a change was allowed.
+	// Trust is reported separately (TrustedChain, TimestampTrusted).
+	Conformant bool
+	// Valid: the CMS signature cryptographically verifies (Result.Valid).
+	Valid bool
+	// CoversDocument: the /ByteRange covers the whole file except the
+	// signature value (Result.CoversWholeDocument). A B-LT or B-LTA signature
+	// never does — the validation material is added after it — and is judged
+	// by ChangesAllowed instead.
+	CoversDocument bool
+	// ChangesAllowed and DisallowedChanges are Result's: whether every change
+	// after the signature is permitted, and each one that is not.
+	ChangesAllowed    bool
+	DisallowedChanges []string
+	SignerCommonName  string
+	// TrustedChain is Result.TrustedChain: the signer chains to your roots
+	// for document signing.
+	TrustedChain bool
+	// TimestampValid: the signature time-stamp verifies — its authority's
+	// signature, the time-stamping purpose, and an imprint of this signature.
+	TimestampValid bool
+	// TimestampTrusted: the time-stamp authority chains to your time-stamp
+	// roots. Without it, TimestampTime is only what the token asserts.
+	TimestampTrusted bool
+	// TimestampTime is the time the signature time-stamp asserts.
+	TimestampTime time.Time
+	// Issues lists the PAdES conformance problems.
+	Issues []string
 }
 
-// ValidatePAdES assesses every signature in the document for PAdES conformance
-// against the original file bytes. Results are ordered by the object number of
-// the signature dictionary, the same deterministic order VerifySignatures uses.
-func ValidatePAdES(d core.View, raw []byte) []PAdESResult {
-	// Document-level long-term material: a catalog /DSS holds validation data
-	// (certificates, OCSP, CRLs); a document timestamp (/Type /DocTimeStamp)
-	// archives it for the B-LTA level.
+// ValidatePAdES assesses every approval signature in the document for PAdES
+// baseline conformance (ETSI EN 319 142-1), against the file the document was
+// read from. Document time-stamps are long-term material rather than approval
+// signatures, and are assessed as part of the signatures they archive. Results
+// are ordered by the object number of the signature dictionary, the same
+// deterministic order VerifySignatures uses.
+func ValidatePAdES(d core.View, file core.SignedFile, opts VerifyOptions) []PAdESResult {
+	all := verifyAll(d, file, opts)
 	hasDSS := false
 	if cat := d.Catalog(); cat != nil {
 		hasDSS = d.ResolveDict(cat.Get("DSS")) != nil
 	}
-	hasDocTimestamp := false
-	for _, iobj := range d.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok {
-			if t, _ := d.ResolveName(dict.Get("Type")); t == "DocTimeStamp" && dict.Get("ByteRange") != nil {
-				hasDocTimestamp = true
-			}
-		}
-	}
-
-	// A document time-stamp whose /ByteRange covers the whole file and whose
-	// RFC 3161 token verifies seals every earlier revision. When one is present,
-	// an approval signature that only covers its own (earlier) revision is still
-	// PAdES-conformant — the trailing bytes are the DSS and the document
-	// time-stamp, protected by the time-stamp rather than the signature.
-	sealed := CoveringDocTimestamp(d, raw)
-
-	// Document time-stamps are assessed as long-term material, not as approval
-	// signatures, so they are excluded here.
-	sigs := documentSignatures(d, false)
-	names := signatureFieldNames(d, sigs)
 	var out []PAdESResult
-	for _, s := range sigs {
-		res := assessPAdES(d, s.dict, raw, hasDSS, hasDocTimestamp, sealed)
-		res.Field = names[s.num]
-		out = append(out, res)
+	for i := range all {
+		if all[i].DocTimestamp {
+			continue
+		}
+		out = append(out, assessPAdES(&all[i], all, hasDSS))
 	}
 	return out
 }
 
-// CoveringDocTimestamp reports whether the document carries a document time-stamp
-// (/Type /DocTimeStamp) whose /ByteRange covers the whole file and whose RFC 3161
-// token verifies over those bytes.
-// CoveringDocTimestamp reports whether the document carries a document
-// time-stamp whose /ByteRange covers the whole of raw and whose token verifies
-// over those bytes. That is what makes a signature PAdES B-LTA: the outermost
-// seal has to be over the file as it now stands, not over some earlier state of
-// it.
-func CoveringDocTimestamp(d core.View, raw []byte) bool {
-	for _, iobj := range d.Objects {
-		dict, ok := iobj.Value.(*object.Dictionary)
-		if !ok {
-			continue
-		}
-		if t, _ := d.ResolveName(dict.Get("Type")); t != "DocTimeStamp" {
-			continue
-		}
-		segs, covers, ok := byteRangeSegments(d, dict.Get("ByteRange"), int64(len(raw)))
-		if !ok || !covers {
-			continue
-		}
-		contents, _ := d.Resolve(dict.Get("Contents")).(object.String)
-		signed := make([]byte, 0, len(raw))
-		bad := false
-		for _, s := range segs {
-			if s[0] < 0 || s[1] < 0 || s[0]+s[1] > int64(len(raw)) {
-				bad = true
-				break
-			}
-			signed = append(signed, raw[s[0]:s[0]+s[1]]...)
-		}
-		if bad {
-			continue
-		}
-		if _, _, err := verifyTimestampToken(contents.Value, signed); err == nil {
-			return true
-		}
+func assessPAdES(v *Result, all []Result, hasDSS bool) PAdESResult {
+	res := PAdESResult{
+		Field:             v.Field,
+		SubFilter:         string(v.subFilter),
+		Valid:             v.Valid,
+		CoversDocument:    v.CoversWholeDocument,
+		ChangesAllowed:    v.ChangesAllowed,
+		DisallowedChanges: v.DisallowedChanges,
+		SignerCommonName:  v.SignerCommonName,
+		TrustedChain:      v.TrustedChain,
+		TimestampTrusted:  v.TimestampTrusted,
 	}
-	return false
-}
-
-func assessPAdES(d core.View, sig *object.Dictionary, raw []byte, hasDSS, hasDocTimestamp, sealed bool) PAdESResult {
-	var res PAdESResult
-	sub, _ := d.ResolveName(sig.Get("SubFilter"))
-	res.SubFilter = string(sub)
-
-	// Reuse the CMS verification for cryptographic validity and signer identity.
-	v := verifyOneSignature(d, sig, raw, nil)
-	res.Valid = v.Valid
-	res.CoversDocument = v.CoversWholeDocument
-	res.SignerCommonName = v.SignerCommonName
-
-	if sub != "ETSI.CAdES.detached" {
+	if v.subFilter != "ETSI.CAdES.detached" {
 		// A legacy (adbe.*) or timestamp sub-filter is not a PAdES approval
 		// signature; report it but do not assess a level.
 		res.Issues = append(res.Issues, "sub-filter is not ETSI.CAdES.detached; not a PAdES signature")
@@ -154,87 +124,58 @@ func assessPAdES(d core.View, sig *object.Dictionary, raw []byte, hasDSS, hasDoc
 			res.Issues = append(res.Issues, "signature does not verify")
 		}
 	}
-	if sig.Get("Cert") != nil {
+	if v.hasCertInDict {
 		res.Issues = append(res.Issues, "the signature dictionary must not contain /Cert; the certificate belongs in the CMS")
 	}
-	if !v.CoversWholeDocument && !sealed {
-		res.Issues = append(res.Issues, "the /ByteRange does not cover the whole document")
+	if v.Valid && !v.ChangesAllowed {
+		for _, c := range v.DisallowedChanges {
+			res.Issues = append(res.Issues, "the /ByteRange does not cover the whole document, and a change after it is not permitted: "+c)
+		}
 	}
-
-	contents, _ := d.Resolve(sig.Get("Contents")).(object.String)
-	hasSigningCert, hasSigTimestamp := cmsPAdESFacts(contents.Value)
+	hasSigningCert := false
+	if v.sd != nil {
+		signed := attrTypesPresent(v.sd.si.SignedAttrs.Bytes)
+		hasSigningCert = signed[oidSigningCertificate.String()] || signed[oidSigningCertificateV2.String()]
+	}
 	if !hasSigningCert {
 		res.Issues = append(res.Issues, "the CMS lacks a signing-certificate attribute (required for CAdES-BES)")
 	}
-
-	// Cryptographically verify the B-T signature time-stamp: its TSA signature and
-	// that its message imprint is the hash of the outer signature value.
-	if hasSigTimestamp {
-		if token, sigValue, ok := extractSignatureTimestamp(contents.Value); ok {
-			if genTime, _, err := verifyTimestampToken(token, sigValue); err == nil {
-				res.TimestampValid = true
-				res.TimestampTime = genTime
-			} else {
-				res.Issues = append(res.Issues, "signature time-stamp does not verify: "+err.Error())
-			}
+	if v.tsPresent {
+		if v.tsErr != nil {
+			res.Issues = append(res.Issues, "signature time-stamp does not verify: "+v.tsErr.Error())
+		} else {
+			res.TimestampValid = true
+			res.TimestampTime = v.TimestampTime
 		}
 	}
-
-	res.Conformant = len(res.Issues) == 0
 
 	// Baseline level: each level requires the previous. A non-conformant B-B
 	// still reports the highest material present, but Conformant stays false.
 	res.Level = PAdESBB
-	if hasSigTimestamp {
+	if v.tsPresent {
 		res.Level = PAdESBT
 		if hasDSS {
 			res.Level = PAdESBLT
-			if hasDocTimestamp {
+			// B-LTA: a document time-stamp over a later revision, which covers
+			// this signature and the validation material; it must verify.
+			found, verifies := false, false
+			for i := range all {
+				ts := &all[i]
+				if ts.DocTimestamp && ts.rg.end > v.rg.end && ts.rg.gapStart >= v.rg.end {
+					found = true
+					verifies = verifies || ts.Valid
+				}
+			}
+			if found {
 				res.Level = PAdESBLTA
+				if !verifies {
+					res.Issues = append(res.Issues, "no document time-stamp after the signature verifies")
+				}
 			}
 		}
 	}
+	res.Conformant = len(res.Issues) == 0
 	return res
-}
-
-// extractSignatureTimestamp returns the signature time-stamp token and the outer
-// signature value it is computed over, from a CMS SignedData.
-func extractSignatureTimestamp(der []byte) (token, sigValue []byte, ok bool) {
-	var ci struct {
-		ContentType asn1.ObjectIdentifier
-		Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
-	}
-	if _, err := asn1.Unmarshal(der, &ci); err != nil || !ci.ContentType.Equal(oidSignedData) {
-		return nil, nil, false
-	}
-	var sd struct {
-		Version          int
-		DigestAlgorithms asn1.RawValue
-		EncapContentInfo asn1.RawValue
-		Certificates     asn1.RawValue   `asn1:"optional,tag:0"`
-		CRLs             asn1.RawValue   `asn1:"optional,tag:1"`
-		SignerInfos      []asn1.RawValue `asn1:"set"`
-	}
-	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil || len(sd.SignerInfos) == 0 {
-		return nil, nil, false
-	}
-	var si struct {
-		Version         int
-		SID             asn1.RawValue
-		DigestAlgorithm asn1.RawValue
-		SignedAttrs     asn1.RawValue `asn1:"optional,tag:0"`
-		SignatureAlgo   asn1.RawValue
-		Signature       []byte
-		UnsignedAttrs   asn1.RawValue `asn1:"optional,tag:1"`
-	}
-	if _, err := asn1.Unmarshal(sd.SignerInfos[0].FullBytes, &si); err != nil {
-		return nil, nil, false
-	}
-	token = attrValue(si.UnsignedAttrs.Bytes, oidSignatureTimeStamp)
-	if token == nil {
-		return nil, nil, false
-	}
-	return token, si.Signature, true
 }
 
 // attrValue returns the first value of the attribute with the given type in a DER
@@ -259,47 +200,6 @@ func attrValue(setBytes []byte, oid asn1.ObjectIdentifier) []byte {
 		}
 	}
 	return nil
-}
-
-// cmsPAdESFacts reports whether a CMS SignedData carries the CAdES signing-
-// certificate signed attribute and a signature-timestamp unsigned attribute.
-// It is best-effort: a parse failure returns false, false.
-func cmsPAdESFacts(der []byte) (hasSigningCert, hasSigTimestamp bool) {
-	var ci struct {
-		ContentType asn1.ObjectIdentifier
-		Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
-	}
-	if _, err := asn1.Unmarshal(der, &ci); err != nil || !ci.ContentType.Equal(oidSignedData) {
-		return
-	}
-	var sd struct {
-		Version          int
-		DigestAlgorithms asn1.RawValue
-		EncapContentInfo asn1.RawValue
-		Certificates     asn1.RawValue   `asn1:"optional,tag:0"`
-		CRLs             asn1.RawValue   `asn1:"optional,tag:1"`
-		SignerInfos      []asn1.RawValue `asn1:"set"`
-	}
-	if _, err := asn1.Unmarshal(ci.Content.Bytes, &sd); err != nil || len(sd.SignerInfos) == 0 {
-		return
-	}
-	var si struct {
-		Version         int
-		SID             asn1.RawValue
-		DigestAlgorithm asn1.RawValue
-		SignedAttrs     asn1.RawValue `asn1:"optional,tag:0"`
-		SignatureAlgo   asn1.RawValue
-		Signature       []byte
-		UnsignedAttrs   asn1.RawValue `asn1:"optional,tag:1"`
-	}
-	if _, err := asn1.Unmarshal(sd.SignerInfos[0].FullBytes, &si); err != nil {
-		return
-	}
-	signed := attrTypesPresent(si.SignedAttrs.Bytes)
-	hasSigningCert = signed[oidSigningCertificate.String()] || signed[oidSigningCertificateV2.String()]
-	unsigned := attrTypesPresent(si.UnsignedAttrs.Bytes)
-	hasSigTimestamp = unsigned[oidSignatureTimeStamp.String()]
-	return
 }
 
 // attrTypesPresent returns the set of attribute-type OIDs present in a DER

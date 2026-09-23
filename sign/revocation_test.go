@@ -8,20 +8,21 @@ import (
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"math/big"
 	"testing"
+	"time"
 )
 
 func TestRevocationCRL(t *testing.T) {
 	ca, caKey, leaf := signtest.CAAndLeaf(t)
 
 	revoked := signtest.MakeCRL(t, ca, caKey, []*x509.Certificate{leaf})
-	if info, ok := revocationFromCRL(leaf, ca, revoked); !ok || info.Status != RevocationRevoked {
+	if info, ok := revocationFromCRL(leaf, ca, revoked, time.Now()); !ok || info.Status != RevocationRevoked {
 		t.Errorf("revoked CRL: got %+v ok=%v", info, ok)
 	} else if !info.RevokedAt.Equal(signtest.RevTime) {
 		t.Errorf("revocation time = %v, want %v", info.RevokedAt, signtest.RevTime)
 	}
 
 	clean := signtest.MakeCRL(t, ca, caKey, nil)
-	if info, ok := revocationFromCRL(leaf, ca, clean); !ok || info.Status != RevocationGood {
+	if info, ok := revocationFromCRL(leaf, ca, clean, time.Now()); !ok || info.Status != RevocationGood {
 		t.Errorf("clean CRL: got %+v ok=%v", info, ok)
 	}
 
@@ -29,7 +30,7 @@ func TestRevocationCRL(t *testing.T) {
 	otherCA, otherKey, _ := signtest.CAAndLeaf(t)
 	_ = otherCA
 	wrong := signtest.MakeCRL(t, ca, otherKey, []*x509.Certificate{leaf})
-	if _, ok := revocationFromCRL(leaf, ca, wrong); ok {
+	if _, ok := revocationFromCRL(leaf, ca, wrong, time.Now()); ok {
 		t.Error("CRL with a wrong issuer signature must not be trusted")
 	}
 }
@@ -46,7 +47,7 @@ func TestRevocationOCSP(t *testing.T) {
 		{"unknown", RevocationUnknown},
 	} {
 		der := signtest.MakeOCSP(t, leaf, ca, caKey, tc.status)
-		info, ok := revocationFromOCSP(leaf, ca, der)
+		info, ok := revocationFromOCSP(leaf, ca, der, time.Now())
 		if !ok || info.Status != tc.want {
 			t.Errorf("OCSP %s: got %+v ok=%v, want %v", tc.status, info, ok, tc.want)
 		}
@@ -58,14 +59,14 @@ func TestRevocationOCSP(t *testing.T) {
 	// A tampered signature must not verify.
 	der := signtest.MakeOCSP(t, leaf, ca, caKey, "good")
 	der[len(der)-1] ^= 0xFF
-	if _, ok := revocationFromOCSP(leaf, ca, der); ok {
+	if _, ok := revocationFromOCSP(leaf, ca, der, time.Now()); ok {
 		t.Error("a tampered OCSP response must not be trusted")
 	}
 
 	// A response signed by the wrong key must not verify.
 	_, otherKey, _ := signtest.CAAndLeaf(t)
 	wrong := signtest.MakeOCSP(t, leaf, ca, otherKey, "good")
-	if _, ok := revocationFromOCSP(leaf, ca, wrong); ok {
+	if _, ok := revocationFromOCSP(leaf, ca, wrong, time.Now()); ok {
 		t.Error("an OCSP response signed by the wrong key must not be trusted")
 	}
 
@@ -76,7 +77,7 @@ func TestRevocationOCSP(t *testing.T) {
 	otherDER, _ := x509.CreateCertificate(rand.Reader, otherTmpl, ca, &otherKey2.PublicKey, caKey)
 	otherLeaf, _ := x509.ParseCertificate(otherDER)
 	mismatch := signtest.MakeOCSP(t, otherLeaf, ca, caKey, "revoked")
-	if _, ok := revocationFromOCSP(leaf, ca, mismatch); ok {
+	if _, ok := revocationFromOCSP(leaf, ca, mismatch, time.Now()); ok {
 		t.Error("an OCSP response for another certificate must not apply")
 	}
 }
