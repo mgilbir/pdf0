@@ -98,6 +98,10 @@ type DocumentInfo struct {
 // property, and the dates are xmp:CreateDate and xmp:ModifyDate — and the
 // alternative is a file that says it is PDF/A-4 and is not.
 //
+// A nil document, and a Locked one — encrypted and not decrypted, whose
+// content Write passes through as ciphertext — are refused: the Info
+// dictionary and the packet would be written in the clear under its /Encrypt.
+//
 // It returns an error, and changes nothing, when a field cannot be written as
 // XMP text (invalid UTF-8, or a character XML does not allow; the error wraps
 // xmp.ErrInvalidText), and when the document's existing metadata cannot be
@@ -106,6 +110,12 @@ type DocumentInfo struct {
 // says, so the caller decides — removing the catalog's /Metadata first is how
 // to ask for a fresh one.
 func (d *Document) SetDocumentInfo(info DocumentInfo) error {
+	if d == nil {
+		return errNilDocument
+	}
+	if d.Locked() {
+		return errLockedTarget("describing the document")
+	}
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
 		return fmt.Errorf("pdf0: the document has no catalog to describe")
@@ -236,9 +246,6 @@ func describeInXMP(p *xmp.Packet, info DocumentInfo) error {
 // editableMetadata returns the document's XMP packet parsed for editing, or a
 // new empty packet when the document has none (core.EditableXMP).
 func (d *Document) editableMetadata(catalog *object.Dictionary) (*xmp.Packet, error) {
-	if d.Locked() {
-		return nil, fmt.Errorf("pdf0: the document is encrypted and was not decrypted, so its metadata cannot be edited")
-	}
 	stream, _ := d.Resolve(catalog.Get("Metadata")).(*object.Stream)
 	p, err := core.EditableXMP(d.canceler(), stream, d.lim())
 	if err != nil {
