@@ -24,9 +24,12 @@ import (
 // A coloured pattern carries its own colours. An uncoloured one carries only
 // shape, and takes its colour from wherever it is painted — the same cell in
 // black on one element and red on another, stated once. The distinction is not
-// a hint: the contents of an uncoloured pattern's cell *may not* set a colour,
-// and a file that does so is undefined rather than wrong, which means it looks
-// different in different readers. AddTilingPattern refuses it.
+// a hint: in an uncoloured pattern's cell, and in every content stream it
+// invokes, the colour operators, ri, sh, the colour-related graphics-state
+// entries and every image but a stencil mask are *ignored* (ISO 32000-2 8.6.8,
+// 8.7.3.3). A reader skips them and carries on, so the file is not malformed —
+// it silently draws something other than what was written. AddTilingPattern
+// refuses such a cell.
 
 // TilingPattern is a drawing that repeats to fill whatever is painted with it.
 type TilingPattern struct {
@@ -58,7 +61,10 @@ type TilingPattern struct {
 	Content *content.Builder
 
 	// Uncolored makes the pattern carry shape without colour, taking its colour
-	// from wherever it is painted. Its Content may then not set any colour.
+	// from wherever it is painted. Its Content, and anything it draws, may then
+	// not set a colour or a rendering intent, paint a shading or an image
+	// other than a stencil mask, or use a graphics state with a colour-related
+	// entry: a reader ignores all of them there.
 	Uncolored bool
 
 	// Spacing chooses how a reader may adjust the step to the device's pixel
@@ -144,10 +150,10 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 		return object.IndirectRef{}, err
 	}
 
-	if p.Uncolored && p.Content.SetsColor() {
-		return object.IndirectRef{}, fmt.Errorf(
-			"pdf0: an uncoloured pattern takes its colour from where it is painted, " +
-				"so its cell may not set one (ISO 32000-2 8.7.3.1)")
+	if p.Uncolored {
+		if err := d.checkUncoloredCell(p); err != nil {
+			return object.IndirectRef{}, err
+		}
 	}
 	if p.Spacing < ConstantSpacing || p.Spacing > FasterConstantSpacing {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: unknown tiling spacing %d", p.Spacing)

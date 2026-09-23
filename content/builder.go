@@ -79,11 +79,10 @@ type Builder struct {
 	marked    int
 	textFloor int
 
-	// setsColor records that the stream chose a colour or a colour space. It is
-	// not a question about the drawing but about where the drawing may be used:
-	// an uncoloured tiling pattern takes its colour from the place it is
-	// painted, and its cell is only defined if it sets none.
-	setsColor bool
+	// colorOp is the first operator the stream used that an uncoloured tiling
+	// pattern's cell has ignored (see ColorOperator). It is not a question
+	// about the drawing but about where the drawing may be used.
+	colorOp string
 
 	res Resources
 }
@@ -106,14 +105,19 @@ type Resources struct {
 // order and carry no duplicates.
 func (b *Builder) Resources() Resources { return b.res }
 
-// SetsColor reports whether the stream chose a colour or a colour space.
+// ColorOperator returns the first operator the stream used that sets a colour,
+// a colour space or the rendering intent, or paints a shading — "" if it used
+// none.
 //
-// It exists for one caller: an uncoloured tiling pattern (PaintType 2) takes
-// its colour from wherever it is painted, and ISO 32000-2 8.7.3.1 leaves the
-// result undefined if its cell sets one. Undefined means each reader picks, so
-// the file looks different in different viewers — which is exactly the kind of
-// fault that is never traced back to the pattern.
-func (b *Builder) SetsColor() bool { return b.setsColor }
+// Those are the operators ISO 32000-2 8.6.8 lists as *ignored* in the content
+// stream of an uncoloured tiling pattern (PaintType 2, 8.7.3.3), which takes
+// its colour from wherever it is painted: CS cs SC SCN sc scn G g RG rg K k ri
+// sh. A reader skips them and carries on, so a cell that uses one draws
+// something other than what was written, silently. AddTilingPattern asks this
+// to refuse such a cell while the mistake can still be attributed. (Images
+// other than stencil masks are ignored there too; which kind of image a Do
+// paints is the document's to say, and AddTilingPattern checks it.)
+func (b *Builder) ColorOperator() string { return b.colorOp }
 
 // Bytes returns the finished content stream, or the first error that made it
 // invalid.
@@ -194,11 +198,13 @@ func (b *Builder) op(name string, operands ...any) *Builder {
 	b.buf = append(b.buf, name...)
 	b.buf = append(b.buf, '\n')
 	switch name {
-	// Every operator that sets a colour or a colour space, recorded in one place
-	// rather than in each setter, so that a setter added later cannot forget to.
-	// An uncoloured tiling pattern is defined only when its cell sets none.
-	case "g", "G", "rg", "RG", "k", "K", "cs", "CS", "sc", "SC", "scn", "SCN":
-		b.setsColor = true
+	// Every operator an uncoloured tiling pattern ignores (ISO 32000-2 8.6.8),
+	// recorded in one place rather than in each method, so that a method added
+	// later cannot forget to.
+	case "g", "G", "rg", "RG", "k", "K", "cs", "CS", "sc", "SC", "scn", "SCN", "ri", "sh":
+		if b.colorOp == "" {
+			b.colorOp = name
+		}
 	}
 	return b
 }
