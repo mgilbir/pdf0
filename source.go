@@ -78,6 +78,11 @@ type Source struct {
 	maxNum  int
 	size    int
 	offsets map[int]int64
+	// ends maps the offset of every object Read parsed at the top level of
+	// the file to the offset just past its endobj. The signature verifier's
+	// revision diff uses it to tell, without parsing again, that an object's
+	// bytes lie wholly inside an earlier revision (see signedFile.Diff).
+	ends map[int64]int64
 }
 
 // noSource is the empty record a Document built in memory reports.

@@ -486,6 +486,8 @@ func mergeSections(sections []XRefSection) *XRefTable {
 func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size int64, xrefTable *XRefTable, lenient bool) error {
 	offsets := make(map[int]int64)
 	doc.source.offsets = offsets
+	ends := make(map[int64]int64)
+	doc.source.ends = ends
 	lexer := NewLexer(data)
 	// parsedByOffset caches the object parsed at each byte offset. A malformed
 	// cross-reference table can point many distinct object numbers at the same
@@ -575,6 +577,7 @@ func (doc *Document) loadObjectsFromXref(cancel core.Canceler, data []byte, size
 		iobj.Number = num
 		doc.Objects[num] = iobj
 		parsedByOffset[off] = iobj
+		ends[off] = parser.Offset()
 	}
 	return nil
 }
