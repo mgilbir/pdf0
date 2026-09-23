@@ -200,6 +200,24 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	return doc.Add(fd), nil
 }
 
+// EmbedRevision is a number that changes whenever what Embed would write for
+// the face changes: when the face sets a glyph it had not set before, or
+// learns what a glyph was drawn for. It never decreases.
+//
+// It is for a caller that embeds a face once per document and keeps that one
+// font current as the document grows — pdf0's AddPage does — rather than
+// writing a new, larger subset for every page: an embedding written at
+// revision r covers every use of the face exactly while EmbedRevision is still
+// r. Everything else Embed reads — the program, the metrics, the licence — is
+// fixed when the face is loaded.
+func (f *Face) EmbedRevision() int {
+	n := len(f.Used())
+	if f.rec != nil {
+		n += len(f.rec.byGID)
+	}
+	return n
+}
+
 // embedSimple writes the font dictionary, descriptor and subsetted program for
 // a simple font.
 //

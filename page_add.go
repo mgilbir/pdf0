@@ -66,8 +66,12 @@ type Page struct {
 	// know and cannot be reminded of.
 	//
 	// Naming the face here removes the question: the drawing is complete by the
-	// time a page is added, so this embeds it then. Use Fonts instead only for
-	// a font dictionary built some other way.
+	// time a page is added, so this embeds it then. A face is embedded once
+	// per document: every page, form and pattern naming it refers to one font,
+	// and when a later page sets glyphs that font lacks it is rewritten in
+	// place, under the same object numbers, as a subset of everything the face
+	// has set. Use Fonts instead only for a font dictionary built some other
+	// way — a face embedded with Face.Embed is a separate font per call.
 	Faces map[object.Name]*fonts.Face
 
 	// The resources the drawing named, by the name it used.
@@ -193,31 +197,6 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 		return object.IndirectRef{}, err
 	}
 	return pageRef, nil
-}
-
-// embedFaces writes each named face into the document and returns the
-// reference each name is to resolve to.
-//
-// It is called once the content stream is final: a face is subsetted to the
-// glyphs it was asked to set, so embedding it any earlier produces a font that
-// contains nothing the page uses. Its objects are staged and added together,
-// so a face that cannot be embedded leaves no other face's objects behind.
-func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Name]object.IndirectRef, error) {
-	if len(faces) == 0 {
-		return nil, nil
-	}
-	stage := d.stageAdds()
-	refs := make(map[object.Name]object.IndirectRef, len(faces))
-	for _, name := range sortedNames(faces) {
-		ref, err := faces[name].Embed(stage)
-		if err != nil {
-			stage.abort()
-			return nil, fmt.Errorf("embedding the face named %s: %w", name, err)
-		}
-		refs[name] = ref
-	}
-	stage.commit()
-	return refs, nil
 }
 
 // resourceSet is the resources a page, form or pattern was given: the faces to

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/object"
@@ -55,6 +56,10 @@ type Document struct {
 	// nextObjNum is the object-number allocator's hint; see allocObjNum. Zero
 	// until the first allocation.
 	nextObjNum int
+
+	// faces is every face Page.Faces (or a form's or pattern's) has embedded
+	// in this document, so each is embedded once; see faceembed.go.
+	faces map[*fonts.Face]*faceEmbedding
 
 	// embeddedDepth guards the recursive validation of embedded PDF/A files
 	// (see checkEmbeddedPDFA); it is 0 for a top-level document.
