@@ -215,30 +215,49 @@ func TestHostileRoleMapChain(t *testing.T) {
 
 // C42: 40,000 leaves each spanning all 40,000 pages filled the coverage page by
 // page: 38 seconds.
+//
+// The bound is relative: the same number of leaves, each spanning one page,
+// is the linear case, and the overlapping file may take a few times as long
+// but not the leaves × pages the fill took. The fill is only an increment per
+// page, so at 40,000 it was cheap enough to hide under an absolute bound; at
+// 80,000 it is 6.4 billion of them.
 func TestHostileDPartLeavesTimesPages(t *testing.T) {
 	hostile.Run(t, hostileWorkLimits, func(t *testing.T) {
-		const n = 40000
+		const n = 80000
 		firstPage, firstLeaf := 5, 5+n
-		var kids, leaves strings.Builder
-		for i := 0; i < n; i++ {
-			fmt.Fprintf(&kids, "%d 0 R ", firstPage+i)
-			fmt.Fprintf(&leaves, "%d 0 R ", firstLeaf+i)
+		build := func(overlap bool) *Document {
+			var kids, leaves strings.Builder
+			for i := 0; i < n; i++ {
+				fmt.Fprintf(&kids, "%d 0 R ", firstPage+i)
+				fmt.Fprintf(&leaves, "%d 0 R ", firstLeaf+i)
+			}
+			objs := []rawObj{
+				{dict: "<< /Type /Catalog /Pages 2 0 R /DPartRoot 3 0 R >>"},
+				{dict: fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", kids.String(), n)},
+				{dict: "<< /Type /DPartRoot /DPartRootNode 4 0 R >>"},
+				{dict: fmt.Sprintf("<< /Type /DPart /Parent 3 0 R /DParts [[%s]] >>", leaves.String())},
+			}
+			for i := 0; i < n; i++ {
+				objs = append(objs, rawObj{dict: "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] >>"})
+			}
+			for i := 0; i < n; i++ {
+				start, end := firstPage+i, firstPage+i
+				if overlap {
+					start, end = firstPage, firstPage+n-1
+				}
+				objs = append(objs, rawObj{dict: fmt.Sprintf("<< /Type /DPart /Parent 4 0 R /Start %d 0 R /End %d 0 R >>", start, end)})
+			}
+			return readRaw(t, buildRawPDF(objs))
 		}
-		objs := []rawObj{
-			{dict: "<< /Type /Catalog /Pages 2 0 R /DPartRoot 3 0 R >>"},
-			{dict: fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", kids.String(), n)},
-			{dict: "<< /Type /DPartRoot /DPartRootNode 4 0 R >>"},
-			{dict: fmt.Sprintf("<< /Type /DPart /Parent 3 0 R /DParts [[%s]] >>", leaves.String())},
+		control := build(false)
+		start := time.Now()
+		if msgs := findingMessages(ValidateDParts(control)); len(msgs) != 0 {
+			t.Fatalf("control: one leaf per page is conformant, got %v", msgs[:min(len(msgs), 3)])
 		}
-		for i := 0; i < n; i++ {
-			objs = append(objs, rawObj{dict: "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] >>"})
-		}
-		for i := 0; i < n; i++ {
-			objs = append(objs, rawObj{dict: fmt.Sprintf("<< /Type /DPart /Parent 4 0 R /Start %d 0 R /End %d 0 R >>", firstPage, firstPage+n-1)})
-		}
-		doc := readRaw(t, buildRawPDF(objs))
+		bound := 250*time.Millisecond + 5*time.Since(start)
+		doc := build(true)
 		var msgs []string
-		timed(t, "ValidateDParts over overlapping leaves", 10*time.Second, func() { msgs = findingMessages(ValidateDParts(doc)) })
+		timed(t, "ValidateDParts over overlapping leaves", bound, func() { msgs = findingMessages(ValidateDParts(doc)) })
 		noCheckerFindings(t, "ValidateDParts", msgs)
 		// Every page is covered by every leaf, and every leaf but the first
 		// restarts at page 1: the findings the page-by-page fill made.
