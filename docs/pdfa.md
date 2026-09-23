@@ -282,8 +282,12 @@ that is ICC v4 at a level based on PDF 1.4, is refused rather than embedded —
 which is what the error on these constructors is for.
 
 **`preflight.go`** — `(*Document).Repair(level)`, the deliberately narrow repair
-path: it removes encryption and catalog/page/annotation `/AA` dictionaries and
-synthesizes a missing `/ID`. Every fix is information-free — it deletes something
+path: it removes encryption and the additional-action trigger events `level`
+forbids — every `/AA` on the catalog, pages, annotations (through each page's
+`/Annots`) and AcroForm fields before PDF/A-4, only the events 6.6.3 forbids at
+PDF/A-4, per `pdfa.TriggerEventForbidden`, the validator's own classification —
+and synthesizes a missing `/ID`. It refuses a Locked document and an unknown
+level. Every fix is information-free — it deletes something
 forbidden or supplies a value the producer may choose — so it can never turn a
 conforming document non-conforming. Anything needing information the file does not
 carry is left to the caller. Do not add a fix that has to guess.

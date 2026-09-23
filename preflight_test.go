@@ -39,7 +39,10 @@ func TestRepairCatalogAA(t *testing.T) {
 	if before == 0 {
 		t.Fatal("expected a catalog /AA violation before repair")
 	}
-	actions := doc.Repair(pdfa.PDFA2b)
+	actions, err := doc.Repair(pdfa.PDFA2b)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(actions) == 0 {
 		t.Error("Repair reported no actions")
 	}
@@ -68,7 +71,9 @@ func TestRepairEncryption(t *testing.T) {
 	if countEncryptViolations(ValidatePDFA(doc, pdfa.PDFA2b)) == 0 {
 		t.Fatal("expected an /Encrypt violation before repair")
 	}
-	doc.Repair(pdfa.PDFA2b)
+	if _, err := doc.Repair(pdfa.PDFA2b); err != nil {
+		t.Fatal(err)
+	}
 	if n := countEncryptViolations(ValidatePDFA(doc, pdfa.PDFA2b)); n != 0 {
 		t.Errorf("%d /Encrypt violation(s) remain after repair", n)
 	}

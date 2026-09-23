@@ -316,7 +316,10 @@ func cmdRepair(args []string) error {
 	if out == "-" {
 		report = os.Stderr
 	}
-	actions := doc.Repair(lvl)
+	actions, err := doc.Repair(lvl)
+	if err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	if err := doc.Write(&buf); err != nil {
 		return err
