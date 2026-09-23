@@ -2,7 +2,10 @@ package core
 
 import (
 	"iter"
+	"math"
 	"strconv"
+
+	"github.com/mgilbir/pdf0/internal/checked"
 )
 
 // The content-stream tokenizer. It is a document service rather than a
@@ -316,18 +319,18 @@ func SkipInlineImage(data []byte, pos *int) {
 	// confirm EI follows; only fall back to the search if it is absent or
 	// inconsistent, so behaviour never regresses (audit C25).
 	binaryStart := i
-	if declLen, ok := InlineImageDeclaredLength(data[paramStart:binaryStart]); ok {
-		end := binaryStart + declLen
-		if end <= n {
-			j := end
-			for j < n && IsContentWS(data[j]) {
-				j++
-			}
-			if j+1 < n && data[j] == 'E' && data[j+1] == 'I' &&
-				(j+2 >= n || IsContentWS(data[j+2]) || IsContentDelim(data[j+2])) {
-				*pos = j + 2
-				return
-			}
+	// The length is the file's number: it is used only when it lies inside the
+	// stream, compared against the room left rather than added to the offset,
+	// so that no value of it can wrap (audit 2026-09-22 C16).
+	if declLen, ok := InlineImageDeclaredLength(data[paramStart:binaryStart]); ok && declLen <= n-binaryStart {
+		j := binaryStart + declLen
+		for j < n && IsContentWS(data[j]) {
+			j++
+		}
+		if j+1 < n && data[j] == 'E' && data[j+1] == 'I' &&
+			(j+2 >= n || IsContentWS(data[j+2]) || IsContentDelim(data[j+2])) {
+			*pos = j + 2
+			return
 		}
 	}
 
@@ -378,7 +381,9 @@ var contentByteClass = func() (t [256]byte) {
 
 // InlineImageDeclaredLength extracts the /L (or /Length) value from an inline
 // image's parameter region, if present. It reports the declared byte count of
-// the binary sample data.
+// the binary sample data: a non-negative int, or false when the value is
+// absent or does not fit one. A caller must still check it against the bytes
+// that remain.
 func InlineImageDeclaredLength(params []byte) (int, bool) {
 	for i := 0; i < len(params); i++ {
 		if params[i] != '/' {
@@ -397,16 +402,14 @@ func InlineImageDeclaredLength(params []byte) (int, bool) {
 		for j < len(params) && IsContentWS(params[j]) {
 			j++
 		}
-		start := j
-		v := 0
-		for j < len(params) && params[j] >= '0' && params[j] <= '9' {
-			v = v*10 + int(params[j]-'0')
-			j++
-		}
-		if j == start {
+		v, digits, fits := checked.Decimal(params[j:])
+		if digits == 0 {
 			continue
 		}
-		return v, true
+		if !fits || v > math.MaxInt {
+			return 0, false
+		}
+		return int(v), true
 	}
 	return 0, false
 }

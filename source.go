@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 
+	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
 )
@@ -384,13 +385,11 @@ func eofEnds(data []byte) eofIndex {
 		for p < len(data) && syntax.IsWhitespace(data[p]) {
 			p++
 		}
-		start := p
-		var v int64
-		for p < len(data) && data[p] >= '0' && data[p] <= '9' && p-start < 19 {
-			v = v*10 + int64(data[p]-'0')
-			p++
-		}
-		if p == start {
+		// An offset too large for an int64 points nowhere in the file; it
+		// used to be cut at 19 digits, which still wrapped for the largest.
+		v, digits, fits := checked.Decimal(data[p:])
+		p += digits
+		if digits == 0 || !fits {
 			continue
 		}
 		for p < len(data) && syntax.IsWhitespace(data[p]) {

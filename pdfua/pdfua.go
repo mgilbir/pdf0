@@ -2,10 +2,12 @@ package pdfua
 
 import (
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
+	"math"
 	"strings"
 )
 
@@ -600,18 +602,12 @@ func cmapInnerWMode(data []byte) (int, bool) {
 	for j < len(data) && (data[j] == ' ' || data[j] == '\t' || data[j] == '\r' || data[j] == '\n') {
 		j++
 	}
-	start := j
-	for j < len(data) && data[j] >= '0' && data[j] <= '9' {
-		j++
-	}
-	if j == start {
+	n, digits, _ := checked.Decimal(data[j:])
+	if digits == 0 {
 		return 0, false
 	}
-	n := 0
-	for _, c := range data[start:j] {
-		n = n*10 + int(c-'0')
-	}
-	return n, true
+	// A value too large for an int saturates; it is compared with 0 and 1.
+	return int(min(n, math.MaxInt)), true
 }
 
 func checkOneUACMap(d core.View, fontDict *object.Dictionary) []Violation {

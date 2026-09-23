@@ -230,9 +230,13 @@ func hostileExtractionInputs() []hostileInput {
 			return rawImagePage(sep, []byte{0xFF},
 				rawObj{dict: "<</FunctionType 0/Domain[0 1]/Range[0 1]/Size[4611686018427387904]/BitsPerSample 32>>", stream: []byte{1, 2, 3, 4}})
 		}},
-		// C16: an inline image whose /L is MaxInt64.
+		// C16: an inline image whose /L is MaxInt64, between two runs of text.
 		{"inline-image-L-maxint", func() []byte {
-			return buildRawPDF(rawPage("BT /F1 12 Tf (hi) Tj ET\nBI /W 1 /H 1 /BPC 8 /CS /G /L 9223372036854775807 ID \x00 EI\n", "<<>>"))
+			return buildRawPDF(rawPage("BT /F1 12 Tf (hi) Tj ET\nBI /W 1 /H 1 /BPC 8 /CS /G /L 9223372036854775807 ID \x00 EI\nBT /F1 12 Tf (there) Tj ET\n", "<<>>"))
+		}},
+		// C16's sibling: an /L too long for an int64 at all.
+		{"inline-image-L-overflow", func() []byte {
+			return buildRawPDF(rawPage("BT /F1 12 Tf (hi) Tj ET\nBI /W 1 /H 1 /BPC 8 /CS /G /L 99999999999999999999999 ID \x00 EI\nBT /F1 12 Tf (there) Tj ET\n", "<<>>"))
 		}},
 	}
 }

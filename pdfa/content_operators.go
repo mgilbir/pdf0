@@ -6,6 +6,8 @@ import "github.com/mgilbir/pdf0/internal/core"
 
 import "fmt"
 
+import "github.com/mgilbir/pdf0/internal/checked"
+
 // This file implements the PDF/A rules that are decided by reading content
 // streams: the operator whitelist and rendering-intent operand (ISO 19005
 // 6.2.2 over ISO 32000-1 Annex A Table A.1), resolution of named resources
@@ -380,18 +382,11 @@ func checkContentNumberLimit(s string, lim implLimits, objNum int, add func(stri
 		neg = s[i] == '-'
 		i++
 	}
-	var v int64
-	overflow := false
-	for ; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return
-		}
-		v = v*10 + int64(s[i]-'0')
-		if v > 1<<40 {
-			overflow = true
-			break
-		}
+	v, digits, fits := checked.Decimal(s[i:])
+	if digits != len(s)-i {
+		return
 	}
+	overflow := !fits
 	if neg {
 		v = -v
 	}

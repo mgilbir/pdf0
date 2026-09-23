@@ -1,6 +1,7 @@
 package core
 
 import (
+	"github.com/mgilbir/pdf0/internal/checked"
 	"strings"
 
 	"github.com/mgilbir/pdf0/object"
@@ -388,20 +389,14 @@ func trailingInt(line string) (int, bool) {
 	if s == "" {
 		return 0, false
 	}
-	n := 0
-	for k := 0; k < len(s); k++ {
-		if s[k] < '0' || s[k] > '9' {
-			if k == 0 {
-				return 0, false
-			}
-			break
-		}
-		n = n*10 + int(s[k]-'0')
-		if n > 1<<21 {
-			// Far past any CID in any published collection, and past what a
-			// glyph index can be. A number this large is a malformed file.
-			return 0, false
-		}
+	n, digits, fits := checked.Decimal(s)
+	if digits == 0 {
+		return 0, false
 	}
-	return n, true
+	if !fits || n > 1<<21 {
+		// Far past any CID in any published collection, and past what a
+		// glyph index can be. A number this large is a malformed file.
+		return 0, false
+	}
+	return int(n), true
 }
