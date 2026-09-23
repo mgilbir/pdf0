@@ -45,6 +45,19 @@ import (
 // of bytes, and the pages of one real document concatenating their /Contents
 // arrays for each check charged a gigabyte in two seconds.
 //
+// The rates are calibrated to cost (2026-09-23, the corpora and a Common Crawl
+// sample): inflating a stream measured 25 ns a unit, tokenising a content
+// stream 26, and a CMap program — nearly all hexadecimal strings and numbers —
+// 102, so a CMap is charged four times a content stream's rate. Over every
+// validator and text-extraction run above 5 million units, a unit costs 32 ns
+// at the median and 55 at the 90th percentile. The worst, 225 ns, is a real
+// PDF/VT file whose run is dominated by allocating 28,000 findings, which is
+// output, not amplification. Image extraction is not calibrated this way: a
+// decoded image is bounded by the pixel budget rather than the meter, and its
+// codecs cost per pixel, not per byte, so an extraction charges about 200 ns a
+// unit on average; charging pixels instead would charge a legitimate scan
+// (a JBIG2 page is 8 million pixels from 30 KB) past its file's budget.
+//
 // The steps still differ in cost, by a few times, which does not matter: the
 // default is set far above what any real document charges (see
 // DefaultMaxWork) and far below what an amplifying file asks for.
@@ -73,13 +86,15 @@ import (
 // files — the veraPDF corpus, the PDF 2.0 examples, the Cal Poly PDF/VT suite's
 // variants up to 32 MB, WTPDF, Factur-X and a 1000-file Common Crawl sample —
 // under every validator and both extractors, 36,036 runs. The heaviest
-// relative to its budget is PDF/A-2a over a 5.3 MB Common Crawl file: 306
+// relative to its budget was PDF/A-2a over a 5.3 MB Common Crawl file: 306
 // million units in 13 seconds, 58 units a byte of the file, and a tenth of its
 // default. No file under 4 MB charged more than 23 million. The per-byte
 // allowance is eight times the heaviest ratio measured, and the base is ten
-// times the heaviest small file. A unit measured 16 to 630 nanoseconds, median
-// 48, so the base is some seconds of work: the ceiling a small file that
-// reaches it pays before the run stops.
+// times the heaviest small file. Since content that pages share is read once
+// (see View.ContentBytesAndKey), the same file charges 199 million units in 5
+// seconds, and every run is at least fifteen times inside its default. At the
+// median unit cost the base is about nine seconds of work: the ceiling a small
+// file that reaches it pays before the run stops.
 const (
 	DefaultMaxWork           int64 = 1 << 28
 	DefaultWorkPerSourceByte int64 = 512
