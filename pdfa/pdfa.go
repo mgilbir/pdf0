@@ -7,8 +7,10 @@ import (
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
+	"maps"
 	"math"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -4104,9 +4106,6 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 
 	var errs []Violation
 
-	// Track tint transform references by colorant name for consistency check
-	tintTransforms := make(map[object.Name]sepColorantSeen) // colorant name → first seen definition
-
 	// Scan the objects the document reaches for color space arrays used in
 	// Resources; an orphan colour space colours nothing (audit 2026-09-22 C83).
 	for _, num := range doc.ReachableObjectNums() {
@@ -4117,7 +4116,6 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 		// Check dictionary Resources/ColorSpace
 		if isDict {
 			checkDictForSepDeviceN(doc, dict, num, level, &errs)
-			collectTintTransforms(doc, dict, tintTransforms, num, level, &errs)
 			// A direct /Resources sub-dictionary (the common case on pages)
 			// is not a top-level object, so this scan would never visit its
 			// /ColorSpace entries; descend explicitly. Indirect Resources
@@ -4127,7 +4125,6 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 				// Visited by the loop as its own object.
 			case *object.Dictionary:
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
-				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
 		}
 		// Check stream dict (e.g., Form XObjects, Image XObjects)
@@ -4143,112 +4140,131 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 				// Visited by the loop as its own object.
 			case *object.Dictionary:
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
-				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
 		}
 	}
 
-	return errs
+	return append(errs, checkSeparationConsistency(doc, level)...)
 }
 
-// collectTintTransforms tracks Separation color spaces by colorant name
-// and flags inconsistent tint transforms for the same colorant name.
-// sepColorantSeen records the first Separation definition seen for a
-// colorant name, for the same-tint-transform/same-alternate consistency rule.
-type sepColorantSeen struct {
-	objNum int
-	tint   object.Object
-	alt    object.Object
+// sepDefinition is one Separation colour space the executed content uses.
+type sepDefinition struct {
+	alt, tint object.Object // as written
+	tintNum   int           // the tint transform's object number; 0 when written inline
 }
 
-func collectTintTransforms(doc core.View, dict *object.Dictionary, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]Violation) {
-	csRef := dict.Get("ColorSpace")
-	if csRef == nil {
-		return
-	}
-	csDict := doc.ResolveDict(csRef)
-	if csDict == nil {
-		return
-	}
-	for val := range csDict.Values() {
-		collectSeparationConsistency(doc, val, tintTransforms, objNum, level, errs)
-	}
-}
-
-// collectSeparationConsistency records a Separation definition (top-level or
-// inside a DeviceN/NChannel Colorants dictionary) and flags same-name
-// definitions whose tint transform or alternate space differ.
-func collectSeparationConsistency(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]Violation) {
-	collectSeparationConsistencySeen(doc, val, tintTransforms, objNum, level, errs, make(map[int]bool))
-}
-
-func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]Violation, seen map[int]bool) {
-	// Guard against a DeviceN whose /Colorants entry cycles back to itself: a
-	// self-referential colorant would otherwise recurse until the goroutine
-	// stack overflows (an unrecoverable fatal error), like the other
-	// colour-space walkers this thread a visited-set keyed on object number.
-	if ref, ok := val.(object.IndirectRef); ok {
-		if seen[ref.Number] {
+// checkSeparationConsistency enforces that all Separation colour spaces with
+// the same colorant name have the same tint transform and the same alternate
+// space (ISO 19005-2/-3/-4 6.2.4.4, 19005-1 6.2.3.4).
+//
+// Which definitions: those of the colour spaces executed content uses —
+// selected by cs/CS, an image's, a shading's, a transparency group's (see
+// core.UsedColourSpaces) — and the Separations inside them: a DeviceN space's
+// /Colorants, an Indexed space's base, a pattern space's underlying space. A
+// colour space in a resource dictionary nothing draws defines nothing that is
+// rendered, which is the executed-content model the other colour rules follow.
+//
+// "The same" is a question about content, not objects: two tint transforms
+// written as separate but identical objects are the same function, which the
+// corpus confirms (6-2-4-4-t03-pass-a). They are compared with
+// core.ResolvedEqual, which follows references all the way down; object.Equal
+// compared nested references by number.
+//
+// The report does not depend on the order anything was found in. It used to:
+// the "first definition" every other was compared against came from ranging
+// over doc.Objects, a Go map, so one parsed document gave three different
+// reports across fifty runs (audit 2026-09-22 C66). The definitions of each
+// colorant are now partitioned into classes of equal tint transforms (and of
+// equal alternates), in object-number order, and more than one class is one
+// finding per colorant, naming the tint transforms that begin the first two
+// classes (0 for one written inline). The finding is about the document — two
+// definitions disagreeing — and anchors to no object.
+func checkSeparationConsistency(doc core.View, level Level) []Violation {
+	defs := map[object.Name][]sepDefinition{}
+	visited := map[int]bool{}
+	var walk func(cs object.Object, depth int)
+	walk = func(cs object.Object, depth int) {
+		if depth > 16 {
 			return
 		}
-		seen[ref.Number] = true
-	}
-	resolved := doc.Resolve(val)
-	arr, ok := resolved.(object.Array)
-	if !ok || len(arr) == 0 {
-		return
-	}
-	csType, _ := doc.ResolveName(arr[0])
-
-	// Separations inside a DeviceN attributes' Colorants dictionary join
-	// the same consistency pool (the corpus flags NChannel colorants with
-	// same-name/different-transform Separations).
-	if csType == "DeviceN" && len(arr) >= 5 {
-		if attrDict := doc.ResolveDict(arr[4]); attrDict != nil {
-			if colorantsDict := doc.ResolveDict(attrDict.Get("Colorants")); colorantsDict != nil {
-				for cval := range colorantsDict.Values() {
-					collectSeparationConsistencySeen(doc, cval, tintTransforms, objNum, level, errs, seen)
+		if r, ok := cs.(object.IndirectRef); ok {
+			if visited[r.Number] {
+				return
+			}
+			visited[r.Number] = true
+		}
+		arr, ok := doc.Resolve(cs).(object.Array)
+		if !ok || len(arr) < 2 {
+			return
+		}
+		switch family, _ := doc.ResolveName(arr[0]); family {
+		case "Separation":
+			if len(arr) < 4 {
+				return
+			}
+			if colorant, ok := doc.ResolveName(arr[1]); ok {
+				defs[colorant] = append(defs[colorant], sepDefinition{alt: arr[2], tint: arr[3], tintNum: object.RefNum(arr[3])})
+			}
+		case "DeviceN", "NChannel":
+			if len(arr) < 5 {
+				return
+			}
+			if attrs := doc.ResolveDict(arr[4]); attrs != nil {
+				if colorants := doc.ResolveDict(attrs.Get("Colorants")); colorants != nil {
+					for _, k := range slices.Sorted(colorants.Keys()) {
+						walk(colorants.Get(k), depth+1)
+					}
 				}
 			}
+		case "Indexed", "Pattern":
+			walk(arr[1], depth+1)
 		}
-		return
+	}
+	for _, cs := range core.UsedColourSpaces(doc) {
+		if doc.Cancel.Stopped() {
+			return nil
+		}
+		walk(cs, 0)
 	}
 
-	if csType != "Separation" || len(arr) < 4 {
-		return
+	// classes partitions a colorant's definitions by one of their parts, and
+	// returns the first definition of each class.
+	classes := func(ds []sepDefinition, part func(sepDefinition) object.Object) []sepDefinition {
+		var firsts []sepDefinition
+		for _, d := range ds {
+			found := false
+			for _, f := range firsts {
+				if core.ResolvedEqual(doc, part(f), part(d)) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				firsts = append(firsts, d)
+			}
+		}
+		return firsts
 	}
-	colorantName, ok := doc.ResolveName(arr[1])
-	if !ok {
-		return
-	}
-	tintRef, isRef := arr[3].(object.IndirectRef)
-	if !isRef {
-		return
-	}
-	if prev, exists := tintTransforms[colorantName]; exists {
-		// Different objects may still hold identical content, which is
-		// conformant: the rule requires the SAME tint transform and
-		// alternate space, and veraPDF accepts equal-by-content duplicates.
-		sameTint := prev.objNum == tintRef.Number || object.Equal(doc.Resolve(prev.tint), doc.Resolve(tintRef))
-		if !sameTint {
-			*errs = append(*errs, Violation{
+	var errs []Violation
+	for _, colorant := range slices.Sorted(maps.Keys(defs)) {
+		ds := defs[colorant]
+		sort.SliceStable(ds, func(i, j int) bool { return ds[i].tintNum < ds[j].tintNum })
+		if tc := classes(ds, func(d sepDefinition) object.Object { return d.tint }); len(tc) > 1 {
+			errs = append(errs, Violation{
 				Rule:    colourClause("spot", level),
 				Level:   level,
-				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", string(colorantName), prev.objNum, tintRef.Number),
-				Object:  objNum,
+				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", string(colorant), tc[0].tintNum, tc[1].tintNum),
 			})
 		}
-		if !object.Equal(doc.Resolve(prev.alt), doc.Resolve(arr[2])) {
-			*errs = append(*errs, Violation{
+		if ac := classes(ds, func(d sepDefinition) object.Object { return d.alt }); len(ac) > 1 {
+			errs = append(errs, Violation{
 				Rule:    colourClause("spot", level),
 				Level:   level,
-				Message: fmt.Sprintf("Separation colorant /%s has inconsistent alternate color spaces", string(colorantName)),
-				Object:  objNum,
+				Message: fmt.Sprintf("Separation colorant /%s has inconsistent alternate color spaces", string(colorant)),
 			})
 		}
-	} else {
-		tintTransforms[colorantName] = sepColorantSeen{objNum: tintRef.Number, tint: tintRef, alt: arr[2]}
 	}
+	return errs
 }
 
 func checkDictForSepDeviceN(doc core.View, dict *object.Dictionary, objNum int, level Level, errs *[]Violation) {

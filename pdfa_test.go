@@ -1720,6 +1720,11 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 		resources := &object.Dictionary{}
 		resources.Set("ColorSpace", csDict)
 		page.Set("Resources", resources)
+		// The page paints in both: the rule is about colour spaces the
+		// content uses (the executed-content model, audit 2026-09-22 C66).
+		doc.Objects[32] = &object.IndirectObject{Number: 32, Value: object.NewStream(&object.Dictionary{},
+			[]byte("/CS0 cs 1 sc 0 0 1 1 re f /CS1 cs 1 sc 1 1 1 1 re f"))}
+		page.Set("Contents", object.IndirectRef{Number: 32})
 		return doc
 	}
 

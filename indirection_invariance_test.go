@@ -228,17 +228,4 @@ func indirectify(doc *Document) {
 
 // indirectionAllowlist: each difference the rewrite still makes, and the
 // finding that owns it. Burn it down.
-var indirectionAllowlist = map[string]string{
-	// Separation tint-transform consistency compares two transforms with
-	// object.Equal, which compares a nested reference by its number rather
-	// than by what it names, so two identical functions whose sub-values are
-	// separate objects read as different (audit 2026-09-22 C66, PR 14).
-	"PDF_A-2b/6.2 Graphics/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-fail-d.pdf|pdfa|+|[PDF/A-Nb N.N.N.N] object N: Separation colorant /Blue has inconsistent tint transforms (objects N and N)":                    "C66",
-	"PDF_A-2b/6.2 Graphics/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-fail-d.pdf|pdfa|+|[PDF/A-Nb N.N.N.N] object N: Separation colorant /Red has inconsistent tint transforms (objects N and N)":                     "C66",
-	"PDF_A-2b/6.2 Graphics/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-pass-a.pdf|pdfa|+|[PDF/A-Nb N.N.N.N] object N: Separation colorant /Red has inconsistent tint transforms (objects N and N)":                     "C66",
-	"PDF_A-4/6.2 Graphics/6.2.4 Colour spaces/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-fail-b.pdf|pdfa|+|[PDF/A-N N.N.N.N] object N: Separation colorant /Red has inconsistent tint transforms (objects N and N)":   "C66",
-	"PDF_A-4/6.2 Graphics/6.2.4 Colour spaces/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-fail-d.pdf|pdfa|+|[PDF/A-N N.N.N.N] object N: Separation colorant /Blue has inconsistent tint transforms (objects N and N)":  "C66",
-	"PDF_A-4/6.2 Graphics/6.2.4 Colour spaces/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-fail-d.pdf|pdfa|+|[PDF/A-N N.N.N.N] object N: Separation colorant /Green has inconsistent tint transforms (objects N and N)": "C66",
-	"PDF_A-4/6.2 Graphics/6.2.4 Colour spaces/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-fail-d.pdf|pdfa|+|[PDF/A-N N.N.N.N] object N: Separation colorant /Red has inconsistent tint transforms (objects N and N)":   "C66",
-	"PDF_A-4/6.2 Graphics/6.2.4 Colour spaces/6.2.4.4 Separation and DeviceN colour spaces/veraPDF test suite 6-2-4-4-t03-pass-a.pdf|pdfa|+|[PDF/A-N N.N.N.N] object N: Separation colorant /Red has inconsistent tint transforms (objects N and N)":   "C66",
-}
+var indirectionAllowlist = map[string]string{}

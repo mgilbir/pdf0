@@ -206,7 +206,13 @@ type contentEngine struct {
 	fontUsage    map[*object.Dictionary]*FontTextUsage
 	pendingFonts []*FontTextUsage // fonts with shown strings not yet decoded into Strings
 	allPagesDone bool
+	allAnnotDone bool
 	type3Enc     map[*object.Dictionary]map[byte]object.Name
+
+	// csUsed is every colour-space value executed content has used, each
+	// once (csSeen), in the order first used; see noteColourSpace.
+	csUsed []object.Object
+	csSeen map[usedCSKey]bool
 }
 
 type contentEngineSlot struct{}
@@ -223,6 +229,7 @@ func engineFor(doc View) *contentEngine {
 			stateIdx:  map[gstate]int32{},
 			fontUsage: map[*object.Dictionary]*FontTextUsage{},
 			type3Enc:  map[*object.Dictionary]map[byte]object.Name{},
+			csSeen:    map[usedCSKey]bool{},
 		}
 	}
 	return e
@@ -283,9 +290,42 @@ func scopeDefaults(rk resKey) devSet {
 // csFamilies is the device families a colour space value uses: itself, or
 // the base or alternate of an Indexed, Separation, DeviceN or Pattern space.
 func (e *contentEngine) csFamilies(cs object.Object) devSet {
+	e.noteColourSpace(cs)
 	var r, c, g bool
 	CheckCSForDevice(e.doc, cs, &r, &c, &g)
 	return devSetOf(r, c, g)
+}
+
+// noteColourSpace records a colour-space value the executed content used,
+// once: every value the interpreter reads a colour space from passes through
+// csFamilies — a space selected by cs or CS, an image's, an inline image's
+// named one, a shading's, a transparency group's, an uncoloured pattern's
+// underlying space. A value written as a reference is identified by its
+// number, and a direct array by its backing store; a name (a device space) is
+// not recorded.
+func (e *contentEngine) noteColourSpace(cs object.Object) {
+	var key usedCSKey
+	switch v := cs.(type) {
+	case object.IndirectRef:
+		key.num = v.Number
+	case object.Array:
+		if len(v) == 0 {
+			return
+		}
+		key.arr = &v[0]
+	default:
+		return
+	}
+	if e.csSeen[key] {
+		return
+	}
+	e.csSeen[key] = true
+	e.csUsed = append(e.csUsed, cs)
+}
+
+type usedCSKey struct {
+	num int
+	arr *object.Object
 }
 
 // isICCBasedCMYK reports whether a colour space value is [/ICCBased profile]
@@ -965,6 +1005,34 @@ func PageDeviceColourUse(doc View, page *object.Dictionary) (usesRGB, usesCMYK, 
 func PageOverprintsICCCMYK(doc View, page *object.Dictionary) bool {
 	e := engineFor(doc)
 	return (e.pageContent(page)|e.pageAnnotations(page))&overprintICCCMYK != 0
+}
+
+// UsedColourSpaces executes every page's content and its annotations'
+// appearance streams — memoised with the device-colour and font-usage
+// questions, so content already executed is not executed again — and returns
+// every colour-space value the executed content used, each once. The values
+// are as written, references unresolved; a consumer that compares them should
+// resolve. The order is the order first used, which depends on which question
+// the run asked first; a rule whose report must not depend on that should
+// impose its own.
+func UsedColourSpaces(doc View) []object.Object {
+	e := engineFor(doc)
+	if !e.allAnnotDone {
+		if catalog := doc.Catalog(); catalog != nil {
+			for _, page := range doc.Pages(catalog.Get("Pages")) {
+				if doc.Cancel.Stopped() {
+					break
+				}
+				e.pageContent(page.Dict)
+				e.pageAnnotations(page.Dict)
+				if g := doc.ResolveDict(page.Dict.Get("Group")); g != nil {
+					e.csFamilies(g.Get("CS"))
+				}
+			}
+		}
+		e.allAnnotDone = !doc.Cancel.Stopped()
+	}
+	return append([]object.Object(nil), e.csUsed...)
 }
 
 // PageOverprintsICCCMYKNoMemo is PageOverprintsICCCMYK on an engine of its own
