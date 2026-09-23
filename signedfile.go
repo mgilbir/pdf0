@@ -42,9 +42,13 @@ type signedFile struct {
 	// work is what remains of the budget, in units of one cross-reference
 	// entry compared or one object parsed.
 	work int64
-	// decoded is the object-stream data decoded so far, charged against the
-	// document's aggregate object-stream budget like a Read.
-	decoded int64
+	// objStmLeft is what remains of the document's object-stream budget
+	// (Limits.ObjectStreamBytes), metered as Read meters it: the decoded
+	// bytes of every container, which are memoized here and so charged for
+	// good, and the parser's estimate of every object unpacked from one
+	// (syntax.Parser.Budget). Metering decoded bytes alone let the objects
+	// take several times the bound (audit 2026-09-22 C9).
+	objStmLeft int64
 
 	final *revisionState
 	diffs map[int]*core.RevisionDiff
@@ -56,6 +60,7 @@ type signedFile struct {
 func (d *Document) signedFile(cancel core.Canceler) *signedFile {
 	src := d.Source()
 	f := &signedFile{src: src, lim: d.lim(), cancel: cancel, diffs: map[int]*core.RevisionDiff{}}
+	f.objStmLeft = f.lim.ObjectStreamBytes
 	entries := 0
 	if src.merged != nil {
 		entries = len(src.merged.Entries)
@@ -290,6 +295,7 @@ func (s *revisionState) load(num int) (object.Object, error) {
 		return nil, fmt.Errorf("object stream %d index %d holds object %d", e.StreamObjNum, e.IndexInStream, ie.Number)
 	}
 	p := NewParser(c.data)
+	p.Budget = &s.f.objStmLeft
 	p.SetOffset(int64(c.first + ie.Offset))
 	return p.ParseObject()
 }
@@ -373,12 +379,18 @@ func (s *revisionState) objStm(num int) (*decodedObjStm, error) {
 				c.err = fmt.Errorf("object %d is not an object stream", num)
 				break
 			}
-			if s.f.decoded >= s.f.lim.ObjectStreamBytes {
+			if s.f.objStmLeft <= 0 {
 				c.err = fmt.Errorf("object stream %d not decoded: the %d-byte object-stream budget is spent", num, s.f.lim.ObjectStreamBytes)
 				break
 			}
-			c.data, c.index, c.first, c.err = parseObjStmIndex(s.f.cancel, st, s.f.lim, s.resolveUncompressed)
-			s.f.decoded += int64(len(c.data))
+			// The decode is held to what the budget has left, so the check
+			// includes this container.
+			lim := s.f.lim
+			if s.f.objStmLeft < int64(lim.DecodedStreamBytes) {
+				lim.DecodedStreamBytes = int(s.f.objStmLeft)
+			}
+			c.data, c.index, c.first, c.err = parseObjStmIndex(s.f.cancel, st, lim, s.resolveUncompressed)
+			s.f.objStmLeft -= int64(len(c.data))
 		}
 	}
 	s.objStms[num] = c

@@ -86,6 +86,13 @@ func (h *Handler) noteDecryptFailure(num int) {
 	h.failedObjects[num] = true
 }
 
+// DecryptFailed reports whether object num's ciphertext did not decrypt under
+// this handler so far. Read asks it about an object-stream container before
+// unpacking it: a container that did not decrypt is ciphertext, and its
+// objects are missing because pdf0 could not read them, not because the file
+// is malformed.
+func (h *Handler) DecryptFailed(num int) bool { return h != nil && h.failedObjects[num] }
+
 // Open validates the trailer's /Encrypt dictionary and derives the file key
 // for the given password (empty for the common case), trying it as both the
 // user and the owner password.

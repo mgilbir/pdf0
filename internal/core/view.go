@@ -293,7 +293,7 @@ const (
 	GuardRoleMapWork   = "rolemap-work"              // Limits.RoleMapSteps, WithMaxRoleMapSteps
 	GuardCIDWidthRange = "cid-width-range"           // Limits.CIDRangeSpan, WithMaxCIDRangeSpan
 	GuardEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own; the recursive embedded check
-	GuardObjStmTotal   = "objstm-decompressed-total" // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes
+	GuardObjStmTotal   = "objstm-decompressed-total" // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes; the string predates metering materialised objects, and is kept because callers key on it
 	GuardDecodedStream = "decoded-stream-size"       // Limits.DecodedStreamBytes, WithMaxDecodedStreamBytes
 	GuardImagePixels   = "image-pixels"              // Limits.ImagePixels, WithMaxImagePixels
 

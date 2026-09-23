@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/hostile"
 	"strings"
 	"testing"
@@ -77,9 +78,10 @@ func buildTwoObjStmPDF(t *testing.T, fillerBytes int) []byte {
 }
 
 // TestObjStmDecompressionBudget verifies that once the aggregate object-stream
-// decompression budget is exhausted, further object streams are left
-// unmaterialized (recorded as broken) rather than parsed — bounding the work a
-// small, heavily-amplified file can force — while a normal budget loads both.
+// materialisation budget is spent, further object streams are left
+// unmaterialized (recorded as skipped, not broken) rather than parsed —
+// bounding the work a small, heavily-amplified file can force — while a normal
+// budget loads both.
 func TestObjStmDecompressionBudget(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
 		const filler = 4000
@@ -95,32 +97,51 @@ func TestObjStmDecompressionBudget(t *testing.T) {
 				t.Fatalf("under default budget, compressed object %d not loaded", n)
 			}
 		}
-		if len(doc.brokenObjStms) != 0 {
-			t.Fatalf("under default budget, unexpected broken object streams: %v", doc.brokenObjStms)
+		if len(doc.brokenObjStms) != 0 || len(doc.skippedObjStms) != 0 {
+			t.Fatalf("under default budget, unexpected broken or skipped object streams: %v %v", doc.brokenObjStms, doc.skippedObjStms)
 		}
 
-		// Lower the budget below one stream's decompressed size: the first stream
-		// (container 1) still loads because the budget is only consulted before a
-		// stream is decoded (it starts at zero), but it exhausts the budget, so the
-		// second stream (container 7) is skipped.
-		doc2, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxObjectStreamBytes(int64(filler/2)))
+		// Each container decodes to about 4 KB and materialises a dictionary
+		// the meter charges about 4.3 KB for (syntax.MaterialCost per value
+		// and key, plus the string's bytes). While one is unpacked its decoded
+		// bytes are charged too, so the first needs about 8.4 KB and, once its
+		// decoded bytes are returned, leaves 4.3 KB charged.
+		//
+		// A budget of 10 KB fits the first and not the second: object 6 loads,
+		// object 8 does not, and container 7 is recorded as not unpacked by
+		// request — never as broken (audit 2026-09-22 C47).
+		doc2, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxObjectStreamBytes(10_000))
 		if err != nil {
 			t.Fatalf("read with lowered budget: %v", err)
 		}
 		if _, ok := doc2.Objects[6]; !ok {
-			t.Error("object 6 (first object stream) should still load within budget")
+			t.Error("object 6 (first object stream) should load within the budget")
 		}
 		if _, ok := doc2.Objects[8]; ok {
-			t.Error("object 8 (second object stream) should be skipped once the budget is exhausted")
+			t.Error("object 8 (second object stream) should be skipped once the budget is spent")
 		}
-		found := false
-		for _, n := range doc2.brokenObjStms {
-			if n == 7 {
-				found = true
+		if len(doc2.brokenObjStms) != 0 {
+			t.Errorf("a container skipped for the budget was recorded as broken: %v", doc2.brokenObjStms)
+		}
+		if len(doc2.skippedObjStms) != 1 || doc2.skippedObjStms[0] != (core.SkippedObjStm{Num: 7, Reason: core.ReasonLimit}) {
+			t.Errorf("skipped = %v, want container 7 for the limit", doc2.skippedObjStms)
+		}
+
+		// A budget below one container's own size admits neither: the check
+		// includes the container being unpacked (audit 2026-09-22 C9). It used
+		// to be consulted only before a container, so the first one always
+		// loaded whatever the budget.
+		doc3, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxObjectStreamBytes(int64(filler/2)))
+		if err != nil {
+			t.Fatalf("read with a budget below one container: %v", err)
+		}
+		for _, n := range []int{6, 8} {
+			if _, ok := doc3.Objects[n]; ok {
+				t.Errorf("object %d loaded under a budget smaller than its container", n)
 			}
 		}
-		if !found {
-			t.Errorf("object stream 7 should be recorded as broken; got %v", doc2.brokenObjStms)
+		if len(doc3.skippedObjStms) != 2 || len(doc3.brokenObjStms) != 0 {
+			t.Errorf("skipped %v, broken %v; want both containers skipped and none broken", doc3.skippedObjStms, doc3.brokenObjStms)
 		}
 	})
 }

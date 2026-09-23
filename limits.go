@@ -109,11 +109,21 @@ func WithMaxDecodedContentBytes(n int64) Option {
 	return optionFunc(func(l *core.Limits) { l.DecodedContentBytes = n })
 }
 
-// WithMaxObjectStreamBytes caps the aggregate decompressed size of all object
-// streams in one document (default 512 MB). Object streams are the other
-// compression-amplification path into a document: a small file can carry many
-// containers that each inflate near the per-stream cap. The heaviest real
-// document measured needs 9 MB.
+// WithMaxObjectStreamBytes caps the memory Read may spend on the objects it
+// unpacks from object streams in one document (default 512 MB): the parser's
+// estimate of every object it builds (syntax.MaterialCost, twice the measured
+// live cost), plus the decoded bytes of the container being unpacked. Object
+// streams are the other compression-amplification path into a document: a
+// 403 KB file can carry three containers that inflate to 270 MB of "1 0 R",
+// which is five times that in memory. A container that would take the total
+// past the bound is not unpacked, its objects are missing, and every validator
+// reports the trip under "limit".
+//
+// The heaviest real document measured — across the veraPDF corpus, the
+// Factur-X, WTPDF and PDF/VT suites and a 1000-file Common Crawl sample —
+// charges 64 MB, so the default leaves eight times that. The bound used to
+// meter decoded bytes instead (the heaviest document then measured needed
+// 9 MB of them), which let the objects take five times the bound in memory.
 func WithMaxObjectStreamBytes(n int64) Option {
 	return optionFunc(func(l *core.Limits) { l.ObjectStreamBytes = n })
 }
