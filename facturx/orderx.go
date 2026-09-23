@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
-	"github.com/mgilbir/pdf0/object"
 	"strings"
 
 	"github.com/mgilbir/formalis"
@@ -42,12 +41,6 @@ func orderXProfileFor(level string) (OrderXProfile, bool) {
 		return OrderXExtended, true
 	}
 	return "", false
-}
-
-// The embedded order XML is named order-x.xml; zugferd-order.xml is also seen.
-var orderXMLNames = map[string]bool{
-	"order-x.xml":       true,
-	"zugferd-order.xml": true,
 }
 
 // The XMP fx:DocumentType values Order-X uses for its three message kinds.
@@ -155,6 +148,7 @@ func ValidateOrderContext(ctx context.Context, doc core.View, rawData []byte) (r
 		if r := recover(); r != nil {
 			add(finding.InternalRule, finding.InternalMessage(r), 0)
 		}
+		flushTrips(doc, add)
 		finding.ReportCancellation(cancel, res.Violations, add)
 		finding.Sort(res.Violations)
 	}()
@@ -168,51 +162,24 @@ func ValidateOrderContext(ctx context.Context, doc core.View, rawData []byte) (r
 		return res
 	}
 
-	// Locate the embedded order XML as an associated file (/AF).
-	fs, name, num := findOrderXAttachment(doc, cat)
-	if fs == nil {
-		add("attachment", "no embedded order XML (order-x.xml) is present as an associated file", 0)
-	} else {
-		res.XMLName = name
-		if rel, ok := doc.ResolveName(fs.Get("AFRelationship")); !ok || !facturxRelationships[rel] {
-			add("attachment", "the order XML /AFRelationship shall be /Data, /Alternative or /Source", num)
-		}
-		if ef := doc.ResolveDict(fs.Get("EF")); ef != nil {
-			if st, ok := doc.Resolve(ef.Get("F")).(*object.Stream); ok {
-				res.XML = doc.Content(st)
-				if sub, _ := doc.ResolveName(st.Dict.Get("Subtype")); !facturxIsXMLSubtype(sub) {
-					add("attachment", fmt.Sprintf("the order embedded-file /Subtype should be text/xml, got %s", sub), num)
-				}
-			} else {
-				add("attachment", "the order file specification has no embedded file stream (/EF /F)", num)
-			}
-		} else {
-			add("attachment", "the order file specification has no /EF entry", num)
-		}
-	}
+	// Locate, check and read the embedded order XML, exactly as Factur-X does
+	// its invoice (container.go).
+	name, data, num := checkAttachment(doc, cat, orderFamily, "order",
+		"no embedded order XML (order-x.xml) is present as an associated file",
+		orderXMLRule, add)
+	res.XMLName, res.XML = name, data
 
-	// XMP metadata (fx: namespace; zf: is the ZUGFeRD equivalent).
-	xmp := facturxXMP(doc, cat)
-	if xmp == "" {
-		add("metadata", "document has no XMP metadata", 0)
-	} else {
-		get := func(prop string) string {
-			if v := strings.TrimSpace(core.ExtractXMPValue(xmp, "fx:"+prop)); v != "" {
-				return v
-			}
-			return strings.TrimSpace(core.ExtractXMPValue(xmp, "zf:"+prop))
-		}
-		if dt := get("DocumentType"); dt == "" {
+	// XMP metadata, read through the XMP model from the Order-X namespace. The
+	// shared checks include fx:Version, which the Order-X copy of this code used
+	// not to check (audit C148).
+	m := readContainerMetadata(doc, orderFamily, invoiceFamily)
+	if checkCommonMetadata(m, orderFamily, invoiceFamily, name, add) {
+		if dt := m.docType; dt == "" {
 			add("metadata", "missing XMP fx:DocumentType", 0)
 		} else if !orderXDocumentTypes[dt] {
 			add("metadata", fmt.Sprintf("XMP fx:DocumentType %q is not an Order-X document type (ORDER/ORDER_CHANGE/ORDER_RESPONSE)", dt), 0)
 		}
-		if fn := get("DocumentFileName"); fn == "" {
-			add("metadata", "missing XMP fx:DocumentFileName", 0)
-		} else if name != "" && fn != name {
-			add("metadata", fmt.Sprintf("XMP fx:DocumentFileName %q does not match the embedded file name %q", fn, name), 0)
-		}
-		if level := get("ConformanceLevel"); level == "" {
+		if level := m.level; level == "" {
 			add("metadata", "missing XMP fx:ConformanceLevel", 0)
 		} else if p, ok := orderXProfileFor(level); !ok {
 			add("metadata", fmt.Sprintf("XMP fx:ConformanceLevel %q is not an Order-X profile", level), 0)
@@ -220,7 +187,6 @@ func ValidateOrderContext(ctx context.Context, doc core.View, rawData []byte) (r
 			res.Profile = p
 		}
 	}
-
 	// Order document head: a well-formed Cross Industry Order with the mandatory
 	// head terms (order number, issue date, type code, buyer and seller).
 	if len(res.XML) > 0 {
@@ -236,23 +202,4 @@ func ValidateOrderContext(ctx context.Context, doc core.View, rawData []byte) (r
 		adoptInvoiceFindings(adopt, rep)
 	}
 	return res
-}
-
-// findOrderXAttachment returns the file specification for the embedded order XML.
-func findOrderXAttachment(doc core.View, cat *object.Dictionary) (*object.Dictionary, string, int) {
-	af, ok := doc.Resolve(cat.Get("AF")).(object.Array)
-	if !ok {
-		return nil, "", 0
-	}
-	for _, e := range af {
-		fs := doc.ResolveDict(e)
-		if fs == nil {
-			continue
-		}
-		name := facturxFileSpecName(doc, fs)
-		if orderXMLNames[strings.ToLower(name)] {
-			return fs, name, object.RefNum(e)
-		}
-	}
-	return nil, "", 0
 }

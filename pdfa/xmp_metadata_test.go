@@ -48,12 +48,14 @@ func TestXMPIsUTF8BOMless(t *testing.T) {
 // TestXMPSingleQuotedAttributes ensures single-quoted XML attributes are read
 // like double-quoted ones (audit C32).
 func TestXMPSingleQuotedAttributes(t *testing.T) {
-	xmp := `<rdf:Description pdfaid:part='2' pdfaid:conformance='B'/>`
-	if got := core.ExtractXMPValue(xmp, "pdfaid:part"); got != "2" {
-		t.Errorf("single-quoted pdfaid:part = %q, want 2", got)
+	xmp := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+		`<rdf:Description rdf:about='' xmlns:pdfaid='http://www.aiim.org/pdfa/ns/id/' pdfaid:part='2' pdfaid:conformance='B'/></rdf:RDF></x:xmpmeta>`
+	id := readPDFAIdentification(docWithXMP([]byte(xmp)))
+	if id.part != "2" {
+		t.Errorf("single-quoted pdfaid:part = %q, want 2", id.part)
 	}
-	if !xmpHasKey(xmp, "pdfaid:conformance") {
-		t.Errorf("single-quoted pdfaid:conformance not detected")
+	if !id.hasConformance || id.conformance != "B" {
+		t.Errorf("single-quoted pdfaid:conformance not read: %q %v", id.conformance, id.hasConformance)
 	}
 }
 
@@ -61,11 +63,12 @@ func TestXMPSingleQuotedAttributes(t *testing.T) {
 // other values are still rejected (audit C23).
 func TestA4ConformanceFE(t *testing.T) {
 	mk := func(conf string) core.View {
-		xmp := `<?xpacket?><rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" pdfaid:part="4" pdfaid:rev="2020"`
+		xmp := `<?xpacket?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+			`<rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" pdfaid:part="4" pdfaid:rev="2020"`
 		if conf != "" {
 			xmp += ` pdfaid:conformance="` + conf + `"`
 		}
-		xmp += `/>`
+		xmp += `/></rdf:RDF></x:xmpmeta>`
 		meta := &object.Stream{Dict: object.Dictionary{}, Data: []byte(xmp)}
 		meta.Dict.Set("Type", object.Name("Metadata"))
 		cat := &object.Dictionary{}

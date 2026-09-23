@@ -1,8 +1,10 @@
 package pdfa
 
 import (
+	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"strings"
 	"testing"
 )
 
@@ -197,15 +199,70 @@ func TestType5HalftoneTransferFunction(t *testing.T) {
 	}
 }
 
+// docWithInfoAndXMP is a PDF/A-1b-shaped document carrying an Info dictionary
+// and an XMP packet.
+func docWithInfoAndXMP(info *object.Dictionary, packet string) core.View {
+	doc := docWithXMP([]byte(packet))
+	doc.Objects[9] = &object.IndirectObject{Number: 9, Value: info}
+	doc.Trailer.Set("Info", object.IndirectRef{Number: 9})
+	return doc
+}
+
 func TestInfoAuthorMultiEntry(t *testing.T) {
-	xmp := `<dc:creator><rdf:Seq><rdf:li>A</rdf:li><rdf:li>B</rdf:li></rdf:Seq></dc:creator>`
-	if countXMPListEntries(xmp, "dc:creator") != 2 {
-		t.Errorf("expected 2 creator entries, got %d", countXMPListEntries(xmp, "dc:creator"))
+	info := object.NewDictionary(object.Entry{Key: "Author", Value: object.String{Value: []byte("A")}})
+	two := docWithInfoAndXMP(info, validXMP(`<dc:creator><rdf:Seq><rdf:li>A</rdf:li><rdf:li>B</rdf:li></rdf:Seq></dc:creator>`))
+	if !hasMsg(checkInfoXMPConsistency(two, PDFA1b), "more than one entry") {
+		t.Error("two dc:creator entries with Info /Author present must be flagged")
 	}
-	single := `<dc:creator><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>`
-	if countXMPListEntries(single, "dc:creator") != 1 {
-		t.Error("expected 1 creator entry")
+	one := docWithInfoAndXMP(info, validXMP(`<dc:creator><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>`))
+	if errs := checkInfoXMPConsistency(one, PDFA1b); len(errs) != 0 {
+		t.Errorf("one matching dc:creator entry must pass, got %v", errs)
 	}
+}
+
+// TestInfoXMPComparedUnescaped is the C35 regression: the XMP side of the 1b
+// Info↔XMP comparison is the value the packet means, not its escaped spelling,
+// and a language alternative is read at its x-default item.
+func TestInfoXMPComparedUnescaped(t *testing.T) {
+	for _, title := range []string{"Smith & Sons", "a < b > c", "Café é"} {
+		info := object.NewDictionary(object.Entry{Key: "Title", Value: object.String{Value: []byte(title)}})
+		var esc strings.Builder
+		for _, r := range title {
+			// Every non-ASCII character as a numeric reference, markup escaped.
+			switch {
+			case r == '&':
+				esc.WriteString("&amp;")
+			case r == '<':
+				esc.WriteString("&lt;")
+			case r == '>':
+				esc.WriteString("&#62;")
+			case r > 0x7E:
+				fmt.Fprintf(&esc, "&#x%X;", r)
+			default:
+				esc.WriteRune(r)
+			}
+		}
+		packet := validXMP(`<dc:title><rdf:Alt><rdf:li xml:lang="de">Anders</rdf:li><rdf:li xml:lang="x-default">` + esc.String() + `</rdf:li></rdf:Alt></dc:title>`)
+		// Café in the Info dictionary is PDFDocEncoded, where é is the byte
+		// 0xE9 (audit C77); build that rather than UTF-8.
+		if pd, ok := pdfdocBytes(title); ok {
+			info.Set("Title", object.String{Value: pd})
+		}
+		if errs := checkInfoXMPConsistency(docWithInfoAndXMP(info, packet), PDFA1b); len(errs) != 0 {
+			t.Errorf("title %q: %v", title, errs)
+		}
+	}
+}
+
+func pdfdocBytes(s string) ([]byte, bool) {
+	out := make([]byte, 0, len(s))
+	for _, r := range s {
+		if r > 0xFF {
+			return nil, false
+		}
+		out = append(out, byte(r))
+	}
+	return out, true
 }
 
 func TestIsPDFMIME(t *testing.T) {
@@ -218,44 +275,25 @@ func TestIsPDFMIME(t *testing.T) {
 }
 
 func TestDeclaredPDFALevel(t *testing.T) {
-	mk := func(xmp string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, nil)
-		cat := &object.Dictionary{}
-		cat.Set("Type", object.Name("Catalog"))
-		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte(xmp)}
-		s.Dict.Set("Length", object.Integer(len(xmp)))
-		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
-		doc.Objects[2] = &object.IndirectObject{Number: 2, Value: s}
-		cat.Set("Metadata", object.IndirectRef{Number: 2})
-		doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
-		return doc
-	}
-	// Attribute form.
-	if lvl, ok := DeclaredLevel(mk(`<rdf:Description pdfaid:part="4" pdfaid:conformance="B"/>`)); !ok || lvl != PDFA4 {
+	const ns = `http://www.aiim.org/pdfa/ns/id/`
+	attrForm := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+		`<rdf:Description rdf:about="" xmlns:pdfaid="` + ns + `" pdfaid:part="4" pdfaid:conformance="B"/></rdf:RDF></x:xmpmeta>`
+	if lvl, ok := DeclaredLevel(docWithXMP([]byte(attrForm))); !ok || lvl != PDFA4 {
 		t.Errorf("part=4 attr: got %v %v", lvl, ok)
 	}
-	// Element form.
-	if lvl, ok := DeclaredLevel(mk(`<pdfaid:part>2</pdfaid:part>`)); !ok || lvl != PDFA2b {
+	elemForm := validXMP(`<pdfaid:part xmlns:pdfaid="` + ns + `">2</pdfaid:part>`)
+	if lvl, ok := DeclaredLevel(docWithXMP([]byte(elemForm))); !ok || lvl != PDFA2b {
 		t.Errorf("part=2 elem: got %v %v", lvl, ok)
 	}
-	// No pdfaid: not PDF/A.
-	if _, ok := DeclaredLevel(mk(`<rdf:Description/>`)); ok {
+	// A value inside a comment is not a declaration (audit C141).
+	commented := validXMP(`<!-- <pdfaid:part xmlns:pdfaid="` + ns + `">2</pdfaid:part> -->`)
+	if _, ok := DeclaredLevel(docWithXMP([]byte(commented))); ok {
+		t.Error("a pdfaid:part inside a comment was read as a declaration")
+	}
+	if _, ok := DeclaredLevel(docWithXMP([]byte(validXMP(``)))); ok {
 		t.Error("document without pdfaid must not be PDF/A")
 	}
 }
-
-func TestExtractXMPAttr(t *testing.T) {
-	if got := ExtractXMPAttr(`x pdfaid:part="4" y`, "pdfaid:part"); got != "4" {
-		t.Errorf("double-quote attr: %q", got)
-	}
-	if got := ExtractXMPAttr(`x pdfaid:part='3' y`, "pdfaid:part"); got != "3" {
-		t.Errorf("single-quote attr: %q", got)
-	}
-	if got := ExtractXMPAttr(`x y`, "pdfaid:part"); got != "" {
-		t.Errorf("missing attr should be empty: %q", got)
-	}
-}
-
 func TestParseToUnicodeMapSpaceless(t *testing.T) {
 	// bfrange with no separators between <hhhh> tokens (real-world format).
 	cmap := "begincmap\n2 beginbfrange\n<0003><0003><0020>\n<0028><0028><0048>\nendbfrange\nendcmap"

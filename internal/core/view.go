@@ -283,6 +283,12 @@ const (
 	GuardCIDWidthRange = "cid-width-range"           // Limits.CIDRangeSpan, WithMaxCIDRangeSpan
 	GuardEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own; the recursive embedded check
 	GuardObjStmTotal   = "objstm-decompressed-total" // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes
+	GuardDecodedStream = "decoded-stream-size"       // Limits.DecodedStreamBytes, WithMaxDecodedStreamBytes
+
+	// GuardUnsupportedFilter is not a resource guard: a stream the check
+	// needed is encoded with a filter pdf0 does not implement. It is reported
+	// the same way for the reason GuardPredefinedCMap is.
+	GuardUnsupportedFilter = "unsupported-filter" // no bound
 
 	// GuardPredefinedCMap is not a resource guard either. No budget stopped
 	// anything: the code-to-CID data for the predefined CJK CMaps is not

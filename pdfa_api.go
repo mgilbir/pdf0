@@ -6,6 +6,7 @@ import (
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/pdfa"
 )
 
@@ -15,9 +16,21 @@ import (
 // tripped while the file was read.
 
 // GenerateXMPMetadata builds the pdfaid identification XMP packet for a level.
-func GenerateXMPMetadata(level pdfa.Level, title, author string) []byte {
+// A title or author that cannot be written as XMP text — invalid UTF-8, or a
+// character XML does not allow — is an error wrapping ErrInvalidMetadataText,
+// never a packet that is not well-formed.
+func GenerateXMPMetadata(level pdfa.Level, title, author string) ([]byte, error) {
 	return pdfa.GenerateXMPMetadata(level, title, author)
 }
+
+// ErrInvalidMetadataText is wrapped by the errors of every metadata writer —
+// SetDocumentInfo, NewPDFADocumentWithInfo, GenerateXMPMetadata, EmbedFacturX —
+// when a value cannot be written as XMP text: it is not valid UTF-8, or holds a
+// character XML 1.0 does not allow even as a reference (a C0 control other than
+// tab, LF and CR; U+FFFE; U+FFFF). Such a value is refused rather than dropped
+// or altered, since a value changed on the way in is not the value the caller
+// wrote.
+var ErrInvalidMetadataText = xmp.ErrInvalidText
 
 // DefaultSRGBProfile returns the sRGB ICC profile embedded in generated
 // PDF/A documents. The error is always nil; see pdfa.Skeleton for why it is

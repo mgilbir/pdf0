@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/hostile"
@@ -897,7 +898,10 @@ func TestValidatePDFA_RoundTrip(t *testing.T) {
 
 func TestGenerateXMPMetadata(t *testing.T) {
 	t.Run("PDFA-4", func(t *testing.T) {
-		xmp := GenerateXMPMetadata(pdfa.PDFA4, "Test Title", "Test Author")
+		xmp, err := GenerateXMPMetadata(pdfa.PDFA4, "Test Title", "Test Author")
+		if err != nil {
+			t.Fatal(err)
+		}
 		s := string(xmp)
 
 		if !strings.Contains(s, "<pdfaid:part>4</pdfaid:part>") {
@@ -921,7 +925,10 @@ func TestGenerateXMPMetadata(t *testing.T) {
 	})
 
 	t.Run("PDFA-1b", func(t *testing.T) {
-		xmp := GenerateXMPMetadata(pdfa.PDFA1b, "", "")
+		xmp, err := GenerateXMPMetadata(pdfa.PDFA1b, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
 		s := string(xmp)
 
 		if !strings.Contains(s, "<pdfaid:part>1</pdfaid:part>") {
@@ -933,7 +940,10 @@ func TestGenerateXMPMetadata(t *testing.T) {
 	})
 
 	t.Run("XML escaping", func(t *testing.T) {
-		xmp := GenerateXMPMetadata(pdfa.PDFA4, "Title <with> & \"special\" chars", "")
+		xmp, err := GenerateXMPMetadata(pdfa.PDFA4, "Title <with> & \"special\" chars", "")
+		if err != nil {
+			t.Fatal(err)
+		}
 		s := string(xmp)
 
 		if strings.Contains(s, "<with>") {
@@ -1080,25 +1090,6 @@ func TestPDFALevelString(t *testing.T) {
 		if got := level.String(); got != want {
 			t.Errorf("PDFALevel(%d).String() = %q, want %q", int(level), got, want)
 		}
-	}
-}
-
-func TestExtractXMPValue(t *testing.T) {
-	xmp := `<pdfaid:part>4</pdfaid:part>
-      <pdfaid:rev>2020</pdfaid:rev>
-      pdfaid:conformance="B"`
-
-	if v := core.ExtractXMPValue(xmp, "pdfaid:part"); v != "4" {
-		t.Errorf("part = %q, want 4", v)
-	}
-	if v := core.ExtractXMPValue(xmp, "pdfaid:rev"); v != "2020" {
-		t.Errorf("rev = %q, want 2020", v)
-	}
-	if v := core.ExtractXMPValue(xmp, "pdfaid:conformance"); v != "B" {
-		t.Errorf("conformance = %q, want B", v)
-	}
-	if v := core.ExtractXMPValue(xmp, "pdfaid:nonexistent"); v != "" {
-		t.Errorf("nonexistent = %q, want empty", v)
 	}
 }
 
@@ -1858,14 +1849,31 @@ func TestNewPDFADocumentWithInfo(t *testing.T) {
 	}
 }
 
-// C30: XML-illegal control characters are stripped from XMP values.
-func TestXMLEscapeControlChars(t *testing.T) {
-	got := pdfa.XMLEscape("a\x00b\x1Fc\td\ne")
-	if got != "abc\td\ne" {
-		t.Errorf("expected control chars stripped, got %q", got)
+// C72 (and the earlier C30): a value XML cannot carry is refused with an error,
+// never dropped, altered or written into a packet that does not parse.
+func TestXMPRefusesXMLIllegalText(t *testing.T) {
+	for _, bad := range []string{"a\x00b", "bell\x07", "bad\xffutf8", "a\uFFFEb", "a\uFFFFb"} {
+		if _, err := GenerateXMPMetadata(pdfa.PDFA1b, bad, ""); !errors.Is(err, ErrInvalidMetadataText) {
+			t.Errorf("GenerateXMPMetadata(title %q) = %v, want ErrInvalidMetadataText", bad, err)
+		}
+		if _, err := NewPDFADocumentWithInfo(pdfa.PDFA2b, "ok", bad); !errors.Is(err, ErrInvalidMetadataText) {
+			t.Errorf("NewPDFADocumentWithInfo(author %q) = %v, want ErrInvalidMetadataText", bad, err)
+		}
+		doc := NewDocument()
+		if err := doc.SetDocumentInfo(DocumentInfo{Title: bad}); !errors.Is(err, ErrInvalidMetadataText) {
+			t.Errorf("SetDocumentInfo(title %q) = %v, want ErrInvalidMetadataText", bad, err)
+		}
+		if doc.Trailer.Get("Info") != nil {
+			t.Errorf("SetDocumentInfo(title %q) failed but still wrote an Info dictionary", bad)
+		}
 	}
-	if pdfa.XMLEscape("<&>") != "&lt;&amp;&gt;" {
-		t.Error("metacharacter escaping broken")
+	// Tab, LF and CR are legal, and the metacharacters are escaped.
+	x, err := GenerateXMPMetadata(pdfa.PDFA1b, "a\tb\nc <&>", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(x), "&lt;&amp;&gt;") {
+		t.Errorf("metacharacters not escaped: %s", x)
 	}
 }
 

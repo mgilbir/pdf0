@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
@@ -93,7 +94,16 @@ type Violation struct {
 	Rule    string // short rule identifier, e.g. "output-intent"
 	Message string
 	Object  int // object number the violation anchors to, 0 if N/A
+	// Check identifies the specific requirement within Rule, for the findings
+	// another validator composes on: PDF/VT-2 lifts exactly the reference-XObject
+	// prohibition (CheckRefXObject) from its PDF/X-4 base, and finds that finding
+	// by this rather than by the words of its message. Empty otherwise.
+	Check string
 }
+
+// CheckRefXObject is the Check of the finding that a reference XObject (/Ref)
+// is present, which PDF/X-4 forbids and PDF/X-5 (so PDF/VT-2) permits.
+const CheckRefXObject = "ref-xobject"
 
 // RuleID returns the PDF/X rule identifier.
 func (v Violation) RuleID() string { return v.Rule }
@@ -135,7 +145,7 @@ func pdfxCheckNoTransparency(doc core.View, add func(rule, msg string, obj int))
 // reference (external-content) XObjects, alternate images, non-identity transfer
 // functions, and multimedia annotations. It walks the object list once, so it
 // stays fast regardless of page count.
-func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int)) {
+func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int), addChecked func(check, rule, msg string, obj int)) {
 	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
 		if cat.Get("AA") != nil {
 			add("forbidden", "the document catalog shall not carry additional actions (/AA)", 0)
@@ -176,7 +186,7 @@ func pdfxCheckForbidden(doc core.View, add func(rule, msg string, obj int)) {
 			}
 		case "Form":
 			if d.Get("Ref") != nil {
-				add("forbidden", "reference XObjects (/Ref) are not permitted in PDF/X-4", num)
+				addChecked(CheckRefXObject, "forbidden", "reference XObjects (/Ref) are not permitted in PDF/X-4", num)
 			}
 		case "Movie", "Sound", "Screen", "FileAttachment":
 			add("forbidden", fmt.Sprintf("annotation subtype %s is not permitted", sub), num)
@@ -288,23 +298,36 @@ func pdfxOutputIntentCoverage(doc core.View, cat *object.Dictionary) (rgb, cmyk,
 // a fallback.
 func pdfxCheckIdentification(doc core.View, level Level, add func(rule, msg string, obj int)) {
 	claimed := ""
-	if cat := doc.ResolveDict(doc.Trailer.Get("Root")); cat != nil {
-		if ms, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream); ok {
-			xmp := doc.XMPText(ms)
-			claimed = strings.TrimSpace(core.ExtractXMPValue(xmp, "pdfxid:GTS_PDFXVersion"))
-			if claimed == "" {
-				claimed = strings.TrimSpace(core.ExtractXMPValue(xmp, "GTS_PDFXVersion"))
-			}
+	unread := false
+	// The XMP identification is read through the XMP model, by namespace URI,
+	// so a comment, an attribute-form property or another prefix cannot hide
+	// or forge it (audit C141). A property named GTS_PDFXVersion in no
+	// namespace at all is also accepted, as the substring reader this replaced
+	// accepted it.
+	switch packet, status := doc.DocumentXMPPacket(); status {
+	case core.XMPParsed:
+		if v, ok := packet.Text(xmp.NSPDFXID, "GTS_PDFXVersion"); ok {
+			claimed = v
+		} else if v, ok := packet.Text("", "GTS_PDFXVersion"); ok {
+			claimed = v
 		}
+	case core.XMPLimit:
+		unread = true
 	}
 	if claimed == "" {
 		if info := doc.ResolveDict(doc.Trailer.Get("Info")); info != nil {
-			if s, ok := info.Get("GTS_PDFXVersion").(object.String); ok {
-				claimed = strings.TrimSpace(string(s.Value))
+			// A text string: decoded, so a UTF-16 identifier reads as itself.
+			if s, ok := doc.Resolve(info.Get("GTS_PDFXVersion")).(object.String); ok {
+				claimed = strings.TrimSpace(core.DecodePDFTextString(s.Value))
 			}
 		}
 	}
 	if claimed == "" {
+		if unread {
+			// The XMP packet was not read (a limit, already on the run), so
+			// whether it identifies the file is unknown.
+			return
+		}
 		add("identification", "file is not identified as PDF/X (no pdfxid:GTS_PDFXVersion or Info /GTS_PDFXVersion)", 0)
 		return
 	}
@@ -554,6 +577,9 @@ func ValidateView(v core.View, level Level) []Violation {
 	add := func(rule, msg string, obj int) {
 		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})
 	}
+	addChecked := func(check, rule, msg string, obj int) {
+		out = append(out, Violation{Rule: rule, Message: msg, Object: obj, Check: check})
+	}
 
 	// Every check runs under a recover boundary, so a panic on hostile input
 	// becomes an "internal" finding instead of crashing the caller, and one bad
@@ -594,7 +620,7 @@ func ValidateView(v core.View, level Level) []Violation {
 	run(func() { pdfxCheckPageBoxes(v, add) })
 	run(func() { pdfxCheckFontsEmbedded(v, add) })
 	run(func() { pdfxCheckDeviceColor(v, add) })
-	run(func() { pdfxCheckForbidden(v, add) })
+	run(func() { pdfxCheckForbidden(v, add, addChecked) })
 	if level.noTransparency() {
 		run(func() { pdfxCheckNoTransparency(v, add) })
 	}

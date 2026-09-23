@@ -13,6 +13,17 @@ import (
 // buildPDFVT1Doc extends the conforming PDF/X-4 document with the two things
 // PDF/VT-1 adds: a document part hierarchy over its page and PDF/VT-1
 // identification in XMP.
+//
+// editVTPacket rewrites the fixture's metadata packet. It edits the real
+// packet rather than substituting a fragment: identification is read through
+// the XMP model, by namespace, so a fragment with undeclared prefixes carries
+// no identification at all and would pass or fail these tests for the wrong
+// reason.
+func editVTPacket(d *Document, old, new string) {
+	s := d.Objects[6].Value.(*object.Stream)
+	s.Data = []byte(strings.Replace(string(s.Data), old, new, 1))
+}
+
 func buildPDFVT1Doc() *Document {
 	d := buildPDFX4Doc()
 
@@ -60,15 +71,11 @@ func TestValidatePDFVTViolations(t *testing.T) {
 		substr string
 	}{
 		{"no VT identification", func(d *Document) {
-			md := &object.Dictionary{}
-			md.Set("Type", object.Name("Metadata"))
 			// XMP with only the PDF/X identification, no pdfvtid.
-			d.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(md, []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"))}
+			editVTPacket(d, "<pdfvtid:GTS_PDFVTVersion>PDF/VT-1</pdfvtid:GTS_PDFVTVersion>", "")
 		}, "identification", "not identified as PDF/VT"},
 		{"wrong VT version", func(d *Document) {
-			md := &object.Dictionary{}
-			md.Set("Type", object.Name("Metadata"))
-			d.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(md, []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion><pdfvtid:GTS_PDFVTVersion>PDF/VT-2</pdfvtid:GTS_PDFVTVersion>"))}
+			editVTPacket(d, ">PDF/VT-1<", ">PDF/VT-2<")
 		}, "identification", "does not identify PDF/VT-1"},
 		{"no DPart hierarchy", func(d *Document) {
 			d.Objects[1].Value.(*object.Dictionary).Delete("DPartRoot")

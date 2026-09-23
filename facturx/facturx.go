@@ -24,13 +24,8 @@ import (
 // The checks are calibrated against a corpus of conforming Factur-X / ZUGFeRD
 // invoices across all profiles (MINIMUM, BASIC WL, BASIC, EN 16931, EXTENDED).
 
-// The embedded invoice XML is named factur-x.xml (Factur-X and ZUGFeRD 2.1+);
-// zugferd-invoice.xml (ZUGFeRD 2.0) and xrechnung.xml are also seen in practice.
-var facturxXMLNames = map[string]bool{
-	"factur-x.xml":        true,
-	"zugferd-invoice.xml": true,
-	"xrechnung.xml":       true,
-}
+// The names the embedded invoice may carry are invoiceFamily.fileNames
+// (metadata.go).
 
 // The invoice file is associated with the document; the relationship is /Data or
 // /Alternative in the Factur-X spec, and /Source is used by some producers.
@@ -220,6 +215,7 @@ func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res Re
 		if r := recover(); r != nil {
 			add(finding.InternalRule, finding.InternalMessage(r), 0)
 		}
+		flushTrips(doc, add)
 		finding.ReportCancellation(cancel, res.Violations, add)
 		finding.Sort(res.Violations)
 	}()
@@ -235,44 +231,18 @@ func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res Re
 		return res
 	}
 
-	// Locate the embedded invoice XML as an associated file (/AF).
-	fs, name, num := FindAttachment(doc, cat)
-	if fs == nil {
-		add("attachment", "no embedded invoice XML (factur-x.xml or zugferd-invoice.xml) is present as an associated file", 0)
-	} else {
-		res.XMLName = name
-		if rel, ok := doc.ResolveName(fs.Get("AFRelationship")); !ok || !facturxRelationships[rel] {
-			add("attachment", "the invoice XML /AFRelationship shall be /Data, /Alternative or /Source", num)
-		}
-		if ef := doc.ResolveDict(fs.Get("EF")); ef != nil {
-			if st, ok := doc.Resolve(ef.Get("F")).(*object.Stream); ok {
-				res.XML = doc.Content(st)
-				if sub, _ := doc.ResolveName(st.Dict.Get("Subtype")); !facturxIsXMLSubtype(sub) {
-					add("attachment", fmt.Sprintf("the invoice embedded-file /Subtype should be text/xml, got %s", sub), num)
-				}
-			} else {
-				add("attachment", "the invoice file specification has no embedded file stream (/EF /F)", num)
-			}
-		} else {
-			add("attachment", "the invoice file specification has no /EF entry", num)
-		}
-	}
+	// Locate, check and read the embedded invoice XML (container.go). A file
+	// that is attached but yields no XML is reported there, never skipped.
+	name, data, num := checkAttachment(doc, cat, invoiceFamily, "invoice",
+		"no embedded invoice XML (factur-x.xml or zugferd-invoice.xml) is present as an associated file",
+		facturxXMLRule, add)
+	res.XMLName, res.XML = name, data
 
-	// Factur-X XMP metadata (the fx: namespace; zf: is the ZUGFeRD equivalent).
-	xmp := facturxXMP(doc, cat)
-	if xmp == "" {
-		add("metadata", "document has no XMP metadata", 0)
-	} else {
-		get := func(prop string) string {
-			if v := strings.TrimSpace(core.ExtractXMPValue(xmp, "fx:"+prop)); v != "" {
-				return v
-			}
-			return strings.TrimSpace(core.ExtractXMPValue(xmp, "zf:"+prop))
-		}
-		docType := get("DocumentType")
-		fileName := get("DocumentFileName")
-		version := get("Version")
-		level := get("ConformanceLevel")
+	// Factur-X XMP metadata, read through the XMP model from the Factur-X
+	// (or ZUGFeRD) invoice namespace.
+	m := readContainerMetadata(doc, invoiceFamily, orderFamily)
+	if checkCommonMetadata(m, invoiceFamily, orderFamily, name, add) {
+		docType, level := m.docType, m.level
 
 		// Factur-X is the invoice member of the family; an ORDER document
 		// belongs to ValidateOrderX (audit C44).
@@ -280,14 +250,6 @@ func ValidateContext(ctx context.Context, doc core.View, rawData []byte) (res Re
 			add("metadata", "missing XMP fx:DocumentType", 0)
 		} else if docType != "INVOICE" {
 			add("metadata", fmt.Sprintf("XMP fx:DocumentType %q is not INVOICE", docType), 0)
-		}
-		if version == "" {
-			add("metadata", "missing XMP fx:Version", 0)
-		}
-		if fileName == "" {
-			add("metadata", "missing XMP fx:DocumentFileName", 0)
-		} else if name != "" && fileName != name {
-			add("metadata", fmt.Sprintf("XMP fx:DocumentFileName %q does not match the embedded file name %q", fileName, name), 0)
 		}
 		// The level answers one of two questions and never both: how rich the data
 		// claims to be (a Factur-X profile) or which national rule set it claims to
@@ -365,50 +327,23 @@ func (res Result) ValidateInvoiceXML(ctx context.Context) (formalis.Report, erro
 	return formalis.Validate(ctx, res.XML, res.Profile)
 }
 
-// FindAttachment returns the file specification for the embedded invoice
-// XML (located via the catalog /AF associated-files array), its decoded file
-// name, and its object number.
+// FindAttachment returns the file specification of the embedded invoice XML
+// the catalog /AF designates, its decoded file name, and its object number.
+//
+// When /AF lists more than one invoice, the one returned is the first whose
+// /AFRelationship is one the specification allows — the one ValidateFacturX
+// checks, and reports the others beside. Names match ignoring case, so a
+// misspelt Factur-X.xml is still found.
 func FindAttachment(doc core.View, cat *object.Dictionary) (*object.Dictionary, string, int) {
-	af, ok := doc.Resolve(cat.Get("AF")).(object.Array)
-	if !ok {
+	listed, _ := familyAttachments(doc, cat, invoiceFamily)
+	if len(listed) == 0 {
 		return nil, "", 0
 	}
-	for _, e := range af {
-		fs := doc.ResolveDict(e)
-		if fs == nil {
-			continue
-		}
-		name := facturxFileSpecName(doc, fs)
-		if facturxXMLNames[strings.ToLower(name)] {
-			return fs, name, object.RefNum(e)
-		}
-	}
-	return nil, "", 0
-}
-
-// facturxFileSpecName returns a file specification's name, preferring the
-// Unicode /UF entry (decoded from its UTF-16 or PDFDoc encoding) over /F.
-func facturxFileSpecName(doc core.View, fs *object.Dictionary) string {
-	for _, key := range []object.Name{"UF", "F"} {
-		if s, ok := doc.Resolve(fs.Get(key)).(object.String); ok {
-			if name := core.DecodePDFTextString(s.Value); name != "" {
-				return name
-			}
-		}
-	}
-	return ""
+	a := designated(doc, listed)
+	return a.fs, a.name, a.num
 }
 
 func facturxIsXMLSubtype(sub object.Name) bool {
 	s := strings.ToLower(string(sub))
 	return s == "text/xml" || s == "application/xml"
-}
-
-// facturxXMP returns the document's decoded XMP metadata packet, or "".
-func facturxXMP(doc core.View, cat *object.Dictionary) string {
-	ms, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream)
-	if !ok {
-		return ""
-	}
-	return doc.XMPText(ms)
 }

@@ -17,7 +17,11 @@ import (
 func facturxTestDoc(profile formalis.Profile, xml string) core.View {
 	d := afDoc("factur-x.xml", "Data", "text/xml")
 	d.Objects[10].Value.(*object.Stream).Data = []byte(xml)
-	meta := &object.Stream{Dict: object.Dictionary{}, Data: XMPPacket(profile, "INVOICE", "")}
+	packet, err := XMPPacket(profile, "INVOICE", "")
+	if err != nil {
+		panic(err)
+	}
+	meta := &object.Stream{Dict: object.Dictionary{}, Data: packet}
 	meta.Dict.Set("Type", object.Name("Metadata"))
 	meta.Dict.Set("Subtype", object.Name("XML"))
 	d.Objects[20] = &object.IndirectObject{Number: 20, Value: meta}

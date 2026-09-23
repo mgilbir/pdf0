@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"math"
 	"strings"
@@ -134,6 +135,12 @@ type Violation struct {
 	Level   Level  // the level that requires this rule
 	Message string
 	Object  int // object number, 0 if N/A
+	// Check identifies the specific requirement within Rule, for the findings
+	// another validator composes on (CheckPDFAIDConformance). A clause covers
+	// several requirements and a message is prose that may be reworded; a
+	// validator that replaces one base finding with its own keys on this.
+	// Empty on findings nothing composes on.
+	Check string
 }
 
 // RuleID returns the ISO 19005 clause identifier.
@@ -1541,7 +1548,7 @@ func checkAnnotationSubtypes(doc core.View, level Level) []Violation {
 	// PDF/A-4e permits 3D and RichMedia annotations (they carry the embedded
 	// 3D/multimedia content that "e" stands for); plain PDF/A-4 forbids them.
 	extra := map[object.Name]bool{}
-	if level == PDFA4 && pdfaConformanceFlag(doc) == "E" {
+	if level == PDFA4 && relaxedAsVariant(pdfaConformanceFlag(doc), "E") {
 		extra["3D"] = true
 		extra["RichMedia"] = true
 	}
@@ -1686,6 +1693,28 @@ func checkAnnotationFlags(doc core.View, level Level) []Violation {
 // Rule 6.3.3-1: Annotations need AP except Popup, Link, Projection, and zero-area rects.
 func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 	var errs []Violation
+	// The colour space of the catalog's PDF/A output intent profile, read once:
+	// "" with known=true when there is no such intent; known=false when there
+	// is one whose profile pdf0 could not read.
+	var oiSpace string
+	var oiKnown, oiRead bool
+	pdfa1OutputIntentSpace := func() (string, bool) {
+		if !oiRead {
+			oiRead = true
+			oiKnown = true
+			if cat := doc.Catalog(); cat != nil {
+				if p := pdfaOutputIntentProfile(doc, cat); p != nil {
+					data := core.ICCProfileData(p, doc.Limits)
+					if len(data) < 20 {
+						oiKnown = false
+					} else {
+						oiSpace = string(data[16:20])
+					}
+				}
+			}
+		}
+		return oiSpace, oiKnown
+	}
 	check := func(dict *object.Dictionary, num int) {
 		st, _ := doc.ResolveName(dict.Get("Subtype"))
 
@@ -1737,13 +1766,44 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 		}
 
 		// For a Widget of button field type (FT Btn), the N appearance shall
-		// be a sub-dictionary of appearance states, not a single stream.
+		// be a sub-dictionary of appearance states, not a single stream; for
+		// every other annotation it shall be an appearance stream (ISO 19005-1
+		// 6.5.3 as corrected, -2/-3 6.3.3; Isartor 6-5-3-t04-fail-d).
 		if st == "Widget" && annotFieldType(doc, dict) == "Btn" {
 			if _, ok := doc.Resolve(apDict.Get("N")).(*object.Dictionary); !ok {
 				errs = append(errs, Violation{
 					Rule:    annotActionClause("appearance", level),
 					Level:   level,
 					Message: "button Widget /AP /N must be an appearance sub-dictionary of states, not a stream",
+					Object:  num,
+				})
+			}
+		} else if n := doc.Resolve(apDict.Get("N")); n != nil {
+			if _, ok := n.(*object.Stream); !ok {
+				errs = append(errs, Violation{
+					Rule:    annotActionClause("appearance", level),
+					Level:   level,
+					Message: "annotation /AP /N must be an appearance stream (only a button Widget's is a dictionary of states)",
+					Object:  num,
+				})
+			}
+		}
+
+		// PDF/A-1: an annotation may carry a colour (/C) or interior colour
+		// (/IC) — which are given in DeviceRGB — only when the PDF/A output
+		// intent's destination profile is RGB (ISO 19005-1 6.5.3). An output
+		// intent whose profile could not be read is not judged.
+		if level == PDFA1b && (dict.Get("C") != nil || dict.Get("IC") != nil) {
+			space, known := pdfa1OutputIntentSpace()
+			if known && space != "RGB " {
+				why := "there is no PDF/A output intent"
+				if space != "" {
+					why = fmt.Sprintf("the PDF/A output intent's profile is %q, not RGB", strings.TrimSpace(space))
+				}
+				errs = append(errs, Violation{
+					Rule:    annotActionClause("appearance", level),
+					Level:   level,
+					Message: "annotation /C or /IC colour is present but " + why,
 					Object:  num,
 				})
 			}
@@ -1933,7 +1993,7 @@ func isForbiddenAction(s object.Name, level Level, conformance string) bool {
 		// PDF/A-4e permits the 3D/multimedia navigation actions SetOCGState and
 		// GoTo3DView; plain PDF/A-4 forbids them. SetState/NOP (deprecated) stay
 		// forbidden at every part-4 conformance.
-		if conformance == "E" {
+		if relaxedAsVariant(conformance, "E") {
 			return s == "SetState" || s == "NOP"
 		}
 		forbidden4 := map[object.Name]bool{
@@ -2169,41 +2229,39 @@ func checkMetadataVersion(doc core.View, level Level) []Violation {
 	if catalog == nil {
 		return nil
 	}
-
-	metaRef := catalog.Get("Metadata")
-	if metaRef == nil {
+	if _, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream); !ok {
 		return nil // already reported by checkMetadataStream
 	}
 
-	metaObj := doc.Resolve(metaRef)
-	if metaObj == nil {
+	id := readPDFAIdentification(doc)
+	switch id.status {
+	case core.XMPLimit:
+		// Not modelled; the trip is on the run and becomes a "limit" finding.
+		// Reporting the identification missing would be a guess.
+		return nil
+	case core.XMPMalformed:
+		// The packet is not XML, which checkXMPWellFormed reports. It
+		// identifies nothing, and saying so again per property adds nothing.
 		return nil
 	}
-
-	stream, ok := metaObj.(*object.Stream)
-	if !ok {
-		return nil
-	}
-
-	xmp := doc.XMPText(stream)
+	rule := metadataClause("version", level)
 	var errs []Violation
-
-	// Check pdfaid namespace URI. XML allows either quote style around the value,
-	// so accept both — matching only double quotes falsely flagged a legal
-	// single-quoted declaration (audit C33).
-	if strings.Contains(xmp, "pdfaid:") {
-		const ns = "http://www.aiim.org/pdfa/ns/id/"
-		if !strings.Contains(xmp, `xmlns:pdfaid="`+ns+`"`) && !strings.Contains(xmp, `xmlns:pdfaid='`+ns+`'`) {
-			errs = append(errs, Violation{
-				Rule:    metadataClause("version", level),
-				Level:   level,
-				Message: "pdfaid namespace must be http://www.aiim.org/pdfa/ns/id/",
-			})
-			return errs
-		}
+	report := func(check, msg string) {
+		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Check: check})
 	}
 
-	// Check pdfaid:part
+	// A property written as pdfaid: whose prefix means some other namespace is
+	// not an identification at all, however much it looks like one.
+	if id.impostor {
+		report("", "pdfaid namespace must be http://www.aiim.org/pdfa/ns/id/")
+		return errs
+	}
+	// The identification schema's prefix is normative, not a convention
+	// (ISO 19005-1 Table 3; -2/-3 6.6.4; -4 6.7.3).
+	for _, p := range id.otherPrefixes {
+		report("", fmt.Sprintf("the PDF/A identification schema must use the namespace prefix pdfaid, found %q", p))
+	}
+
 	expectedPart := ""
 	switch level {
 	case PDFA1b:
@@ -2215,80 +2273,33 @@ func checkMetadataVersion(doc core.View, level Level) []Violation {
 	case PDFA4:
 		expectedPart = "4"
 	}
-
-	part := core.ExtractXMPValue(xmp, "pdfaid:part")
-	if part == "" {
-		errs = append(errs, Violation{
-			Rule:    metadataClause("version", level),
-			Level:   level,
-			Message: "metadata must contain pdfaid:part",
-		})
-	} else if part != expectedPart {
-		errs = append(errs, Violation{
-			Rule:    metadataClause("version", level),
-			Level:   level,
-			Message: fmt.Sprintf("pdfaid:part must be %s, got %s", expectedPart, part),
-		})
+	switch {
+	case id.part == "":
+		report("", "metadata must contain pdfaid:part")
+	case id.part != expectedPart:
+		report("", fmt.Sprintf("pdfaid:part must be %s, got %s", expectedPart, id.part))
 	}
 
-	// Check pdfaid:conformance
 	switch level {
 	case PDFA1b, PDFA2b, PDFA3b:
-		conf := core.ExtractXMPValue(xmp, "pdfaid:conformance")
-		if conf != "B" {
-			errs = append(errs, Violation{
-				Rule:    metadataClause("version", level),
-				Level:   level,
-				Message: fmt.Sprintf("pdfaid:conformance must be B, got %q", conf),
-			})
+		if id.conformance != "B" {
+			report(CheckPDFAIDConformance, fmt.Sprintf("pdfaid:conformance must be B, got %q", id.conformance))
 		}
 	case PDFA4:
 		// PDF/A-4: conformance is absent for plain A-4, but "F" (A-4f) and "E"
 		// (A-4e) are valid — a compliant 4f/4e file (e.g. an embedded one) must
 		// not be rejected for carrying it (audit C23).
-		if xmpHasKey(xmp, "pdfaid:conformance") {
-			conf := core.ExtractXMPValue(xmp, "pdfaid:conformance")
-			if conf != "F" && conf != "E" {
-				errs = append(errs, Violation{
-					Rule:    metadataClause("version", level),
-					Level:   level,
-					Message: fmt.Sprintf("PDF/A-4 pdfaid:conformance must be absent, F, or E, got %q", conf),
-				})
-			}
+		if id.hasConformance && id.conformance != "F" && id.conformance != "E" {
+			report(CheckPDFAIDConformance, fmt.Sprintf("PDF/A-4 pdfaid:conformance must be absent, F, or E, got %q", id.conformance))
 		}
-
-		// Check pdfaid:rev must be "2020" for PDF/A-4
-		rev := core.ExtractXMPValue(xmp, "pdfaid:rev")
-		if rev == "" {
-			errs = append(errs, Violation{
-				Rule:    metadataClause("version", level),
-				Level:   level,
-				Message: "PDF/A-4 metadata must contain pdfaid:rev",
-			})
-		} else if rev != "2020" {
-			errs = append(errs, Violation{
-				Rule:    metadataClause("version", level),
-				Level:   level,
-				Message: fmt.Sprintf("pdfaid:rev must be 2020, got %q", rev),
-			})
+		switch {
+		case id.rev == "":
+			report("", "PDF/A-4 metadata must contain pdfaid:rev")
+		case id.rev != "2020":
+			report("", fmt.Sprintf("pdfaid:rev must be 2020, got %q", id.rev))
 		}
 	}
-
 	return errs
-}
-
-// xmpHasKey returns true if the key is present in the XMP data at all,
-// even if its value is empty. This distinguishes "not present" from "present but empty".
-func xmpHasKey(xmp, key string) bool {
-	// Check element form: <key>...</key> or <key/>
-	if strings.Contains(xmp, "<"+key+">") || strings.Contains(xmp, "<"+key+"/>") {
-		return true
-	}
-	// Check attribute form: key="..." or key='...' (both legal XML).
-	if strings.Contains(xmp, key+"=\"") || strings.Contains(xmp, key+"='") {
-		return true
-	}
-	return false
 }
 
 // --- Transparency checks (PDFA-1b only) ---
@@ -2913,35 +2924,36 @@ func checkInfoXMPConsistency(doc core.View, level Level) []Violation {
 	if catalog == nil {
 		return nil
 	}
-	metaRef := catalog.Get("Metadata")
-	if metaRef == nil {
+	if _, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream); !ok {
 		return nil
 	}
-	metaObj := doc.Resolve(metaRef)
-	if metaObj == nil {
+	// The XMP side is read through the model, so a value is compared as the
+	// packet means it — "Smith &amp; Sons" is "Smith & Sons" — and a language
+	// alternative contributes its x-default item rather than whichever came
+	// first (audit C35). A packet pdf0 did not model (a limit, already on the
+	// run) or could not (malformed, reported by the well-formedness rule) has no
+	// values to compare, which is different from values that disagree.
+	packet, status := doc.DocumentXMPPacket()
+	if status == core.XMPLimit || status == core.XMPMalformed {
 		return nil
 	}
-	stream, ok := metaObj.(*object.Stream)
-	if !ok {
-		return nil
-	}
-	xmp := doc.XMPText(stream)
 
 	var errs []Violation
 
 	pairs := []struct {
 		infoKey string
-		xmpKey  string
-		isList  bool
+		ns      string
+		xmpKey  string // for messages
+		name    string
 	}{
-		{"Title", "dc:title", true},
-		{"Author", "dc:creator", true},
-		{"Subject", "dc:description", true},
-		{"Keywords", "pdf:Keywords", false},
-		{"Creator", "xmp:CreatorTool", false},
-		{"Producer", "pdf:Producer", false},
-		{"CreationDate", "xmp:CreateDate", false},
-		{"ModDate", "xmp:ModifyDate", false},
+		{"Title", xmp.NSDC, "dc:title", "title"},
+		{"Author", xmp.NSDC, "dc:creator", "creator"},
+		{"Subject", xmp.NSDC, "dc:description", "description"},
+		{"Keywords", xmp.NSPDF, "pdf:Keywords", "Keywords"},
+		{"Creator", xmp.NSXMP, "xmp:CreatorTool", "CreatorTool"},
+		{"Producer", xmp.NSPDF, "pdf:Producer", "Producer"},
+		{"CreationDate", xmp.NSXMP, "xmp:CreateDate", "CreateDate"},
+		{"ModDate", xmp.NSXMP, "xmp:ModifyDate", "ModifyDate"},
 	}
 
 	for _, p := range pairs {
@@ -2969,9 +2981,15 @@ func checkInfoXMPConsistency(doc core.View, level Level) []Violation {
 			continue
 		}
 
+		var prop xmp.Property
+		var present bool
+		if packet != nil {
+			prop, present = packet.Get(p.ns, p.name)
+		}
+
 		// When Info /Author is present, XMP dc:creator shall contain
 		// exactly one entry (ISO 19005-1 6.7.3).
-		if p.infoKey == "Author" && countXMPListEntries(xmp, "dc:creator") > 1 {
+		if p.infoKey == "Author" && present && len(prop.Value.Items) > 1 {
 			errs = append(errs, Violation{
 				Rule:    "6.7.3",
 				Level:   level,
@@ -2980,13 +2998,10 @@ func checkInfoXMPConsistency(doc core.View, level Level) []Violation {
 			continue
 		}
 
-		var xmpVal string
-		if p.isList {
-			xmpVal = extractXMPListValue(xmp, p.xmpKey)
-		} else {
-			xmpVal = core.ExtractXMPValue(xmp, p.xmpKey)
+		xmpVal := ""
+		if present {
+			xmpVal = xmpComparableText(prop.Value)
 		}
-
 		if xmpVal == "" {
 			errs = append(errs, Violation{
 				Rule:    "6.7.3",
@@ -3021,53 +3036,27 @@ func checkInfoXMPConsistency(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// countXMPListEntries counts the rdf:li entries inside an XMP list-valued
-// property (rdf:Seq/rdf:Bag/rdf:Alt).
-func countXMPListEntries(xmp, key string) int {
-	openTag := "<" + key + ">"
-	closeTag := "</" + key + ">"
-	i := strings.Index(xmp, openTag)
-	if i < 0 {
-		return 0
+// xmpComparableText is the text an Info entry is compared with: a simple
+// value's own text; a language alternative's x-default item (xmp.Value.AltText);
+// the first item of a Seq or Bag, which for dc:creator is the one author the
+// rule allows.
+func xmpComparableText(v xmp.Value) string {
+	// No trimming beyond what the model does (element text is trimmed, an
+	// attribute value is not): a trailing space in an attribute-form value is
+	// part of the value, and veraPDF's 6-1-5 pass files depend on it matching
+	// the Info entry's.
+	switch v.Kind {
+	case xmp.Simple:
+		return v.Text
+	case xmp.Alt:
+		t, _ := v.AltText("x-default")
+		return t
+	case xmp.Seq, xmp.Bag:
+		if len(v.Items) > 0 {
+			return v.Items[0].Text
+		}
 	}
-	i += len(openTag)
-	end := strings.Index(xmp[i:], closeTag)
-	if end < 0 {
-		return 0
-	}
-	section := xmp[i : i+end]
-	return strings.Count(section, "<rdf:li")
-}
-
-func extractXMPListValue(xmp, key string) string {
-	// Extract first rdf:li from an rdf:Seq/rdf:Bag/rdf:Alt container
-	openTag := "<" + key + ">"
-	closeTag := "</" + key + ">"
-	idx := strings.Index(xmp, openTag)
-	if idx < 0 {
-		return core.ExtractXMPValue(xmp, key)
-	}
-	start := idx + len(openTag)
-	endIdx := strings.Index(xmp[start:], closeTag)
-	if endIdx < 0 {
-		return ""
-	}
-	inner := xmp[start : start+endIdx]
-
-	liOpen := strings.Index(inner, "<rdf:li")
-	if liOpen < 0 {
-		return ""
-	}
-	gtIdx := strings.Index(inner[liOpen:], ">")
-	if gtIdx < 0 {
-		return ""
-	}
-	valStart := liOpen + gtIdx + 1
-	liClose := strings.Index(inner[valStart:], "</rdf:li>")
-	if liClose < 0 {
-		return ""
-	}
-	return strings.TrimSpace(inner[valStart : valStart+liClose])
+	return ""
 }
 
 func normalizePDFDate(s string) string {
@@ -3413,7 +3402,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 	if level == PDFA4 {
 		conformance = pdfaConformanceFlag(doc)
 	}
-	relaxAF := conformance == "F" || conformance == "E"
+	relaxAF := relaxedAsVariant(conformance, "F", "E")
 	if level != PDFA2b && !relaxAF && documentHasEmbeddedFiles(doc, catalog) && !documentHasAF(doc) {
 		errs = append(errs, Violation{
 			Rule:    rule,

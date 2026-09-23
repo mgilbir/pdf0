@@ -5,7 +5,6 @@ import (
 	"compress/zlib"
 	"io"
 	"math"
-	"strings"
 
 	"github.com/mgilbir/pdf0/object"
 )
@@ -13,33 +12,6 @@ import (
 // Colour-space and transparency queries the PDF/A and PDF/X engines both make:
 // which device colour a page reaches for, what a group or Default* entry covers,
 // and whether a page uses transparency at all.
-
-// ExtractXMPValue extracts a simple value from XMP for a given key.
-// Handles both <key>value</key> and key="value" attribute forms.
-func ExtractXMPValue(xmp, key string) string {
-	// Try element form: <key>value</key>
-	openTag := "<" + key + ">"
-	closeTag := "</" + key + ">"
-	if idx := strings.Index(xmp, openTag); idx >= 0 {
-		start := idx + len(openTag)
-		if end := strings.Index(xmp[start:], closeTag); end >= 0 {
-			return strings.TrimSpace(xmp[start : start+end])
-		}
-	}
-
-	// Try attribute form: key="value" or key='value' (both legal XML).
-	for _, q := range []byte{'"', '\''} {
-		attrPrefix := key + "=" + string(q)
-		if idx := strings.Index(xmp, attrPrefix); idx >= 0 {
-			start := idx + len(attrPrefix)
-			if end := bytes.IndexByte([]byte(xmp[start:]), q); end >= 0 {
-				return xmp[start : start+end]
-			}
-		}
-	}
-
-	return ""
-}
 
 // PageUsesTransparency checks if a page's resources reference transparency features.
 // It checks ExtGState entries for CA/ca != 1.0, BM != Normal/Compatible, and SMask != None,

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/mgilbir/formalis"
 
@@ -55,9 +56,27 @@ func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) f
 
 // EmbedFacturX embeds the CII invoice XML into doc as the associated file a
 // Factur-X container requires, and writes the Factur-X XMP extension schema and
-// identification into the document's metadata. doc must already be PDF/A-3; the
-// result is a Factur-X container that ValidateFacturX accepts after a round
-// trip through Write and Read.
+// identification into the document's metadata. doc must already be PDF/A-3 (or
+// claim no PDF/A part, and then claims 3b); the result is a Factur-X container
+// that ValidateFacturX accepts after a round trip through Write and Read.
+//
+// It edits the document rather than rebuilding any of it: other attachments,
+// other metadata and the PDF/A conformance letter are kept, and an invoice the
+// document already carries is replaced, so embedding twice leaves one invoice.
+// See facturx.Embed for what it refuses — empty or non-XML input among it.
 func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, title string) error {
+	if doc.Locked() {
+		return fmt.Errorf("pdf0: the document is encrypted and was not decrypted, so it cannot be edited")
+	}
 	return facturx.Embed(doc.view(), invoiceXML, profile, title)
+}
+
+// EmbedOrderX is EmbedFacturX for an Order-X order: the Cross Industry Order
+// XML is embedded as order-x.xml and identified in the Order-X XMP namespace.
+// docType is ORDER, ORDER_CHANGE or ORDER_RESPONSE.
+func EmbedOrderX(doc *Document, orderXML []byte, profile facturx.OrderXProfile, docType, title string) error {
+	if doc.Locked() {
+		return fmt.Errorf("pdf0: the document is encrypted and was not decrypted, so it cannot be edited")
+	}
+	return facturx.EmbedOrder(doc.view(), orderXML, profile, docType, title)
 }

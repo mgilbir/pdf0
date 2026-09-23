@@ -5,7 +5,6 @@ import (
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
-	"strings"
 )
 
 // This file implements PDF/A Level A (accessible) conformance. Level A is Level
@@ -24,7 +23,7 @@ func ValidateLevelAView(doc core.View, level Level, rawData []byte) []Violation 
 	base := ValidateView(doc, level.BaseB(), rawData)
 	errs := make([]Violation, 0, len(base))
 	for _, e := range base {
-		if strings.Contains(e.Message, "pdfaid:conformance must be B") {
+		if e.Check == CheckPDFAIDConformance {
 			continue
 		}
 		e.Level = level
@@ -99,22 +98,27 @@ func levelAClause(concept string, level Level) string {
 // checkLevelAConformance verifies the XMP declares Level A conformance
 // (pdfaid:conformance = "A").
 func checkLevelAConformance(doc core.View, level Level) []Violation {
-	xmp := doc.DocumentXMP()
-	if xmp == "" {
-		return nil // a missing metadata stream is reported by the Level B checks
+	id := readPDFAIdentification(doc)
+	if id.status != core.XMPParsed {
+		// Missing metadata is reported by the Level B checks, a malformed
+		// packet by the well-formedness rule, and one pdf0 declined to model
+		// by the limit finding already on the run.
+		return nil
 	}
-	if !xmpHasKey(xmp, "pdfaid:conformance") {
+	if !id.hasConformance {
 		return []Violation{{
 			Rule:    levelAClause("conformance", level),
 			Level:   level,
 			Message: "metadata must declare pdfaid:conformance A for Level A",
+			Check:   CheckPDFAIDConformance,
 		}}
 	}
-	if conf := core.ExtractXMPValue(xmp, "pdfaid:conformance"); conf != "A" {
+	if id.conformance != "A" {
 		return []Violation{{
 			Rule:    levelAClause("conformance", level),
 			Level:   level,
-			Message: fmt.Sprintf("pdfaid:conformance must be A, got %q", conf),
+			Message: fmt.Sprintf("pdfaid:conformance must be A, got %q", id.conformance),
+			Check:   CheckPDFAIDConformance,
 		}}
 	}
 	return nil

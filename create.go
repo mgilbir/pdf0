@@ -2,10 +2,10 @@ package pdf0
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -82,9 +82,13 @@ type DocumentInfo struct {
 // agree, so writing them together from one source is also the only way to be
 // sure they do.
 //
-// An existing XMP packet's PDF/A identification is carried across. Describing a
-// PDF/A document must not quietly stop it being one, and the identification is
-// the part of the packet that says what it is.
+// Both are edited, not replaced. The fields info sets are set; everything else
+// either one already holds is kept — another writer's entries in the
+// information dictionary (a PDF/X-1a /GTS_PDFXVersion, a /Trapped), and in the
+// XMP packet every property, namespace, extension schema and comment it had:
+// the PDF/A, PDF/UA, PDF/X and PDF/VT identification, the Factur-X
+// properties. Describing a document must not quietly stop it being what it
+// says it is. A field left empty in info is left as the document has it.
 //
 // The one exception to writing both is PDF/A-4, which does not merely deprecate
 // the information dictionary but restricts it: a conforming file that has one
@@ -93,6 +97,14 @@ type DocumentInfo struct {
 // described in XMP alone. Nothing is lost by it — every field has an XMP
 // property, and the dates are xmp:CreateDate and xmp:ModifyDate — and the
 // alternative is a file that says it is PDF/A-4 and is not.
+//
+// It returns an error, and changes nothing, when a field cannot be written as
+// XMP text (invalid UTF-8, or a character XML does not allow; the error wraps
+// xmp.ErrInvalidText), and when the document's existing metadata cannot be
+// edited: a packet that is not well-formed XML, has no rdf:RDF, or is larger
+// than the XMP packet limit. Replacing such a packet would destroy whatever it
+// says, so the caller decides — removing the catalog's /Metadata first is how
+// to ask for a fresh one.
 func (d *Document) SetDocumentInfo(info DocumentInfo) error {
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
@@ -101,14 +113,42 @@ func (d *Document) SetDocumentInfo(info DocumentInfo) error {
 	if info.Producer == "" {
 		info.Producer = "pdf0"
 	}
-	identification := d.existingPDFAIdentification()
-
-	if identification.part == "4" {
-		d.writeMetadata(catalog, info, identification)
-		return nil
+	for _, f := range []struct{ name, value string }{
+		{"Title", info.Title}, {"Author", info.Author}, {"Subject", info.Subject},
+		{"Keywords", info.Keywords}, {"Creator", info.Creator}, {"Producer", info.Producer},
+	} {
+		if err := xmp.CheckText(f.value); err != nil {
+			return fmt.Errorf("pdf0: document info %s: %w", f.name, err)
+		}
 	}
 
+	packet, err := d.editableMetadata(catalog)
+	if err != nil {
+		return err
+	}
+	if err := describeInXMP(packet, info); err != nil {
+		return err
+	}
+	data, err := packet.Bytes()
+	if err != nil {
+		return err
+	}
+
+	// Everything that can fail has; from here the document changes.
+	if part, _ := packet.Text(xmp.NSPDFAID, "part"); part != "4" {
+		d.setInfoDictionary(info)
+	}
+	d.setMetadataStream(catalog, data)
+	return nil
+}
+
+// setInfoDictionary sets info's fields in the information dictionary, keeping
+// every entry it does not set.
+func (d *Document) setInfoDictionary(info DocumentInfo) {
 	dict := &object.Dictionary{}
+	if existing := d.ResolveDict(d.Trailer.Get("Info")); existing != nil {
+		dict = existing.Clone()
+	}
 	for _, e := range []struct {
 		key   object.Name
 		value string
@@ -130,20 +170,93 @@ func (d *Document) SetDocumentInfo(info DocumentInfo) error {
 	if !info.Modified.IsZero() {
 		dict.Set("ModDate", object.String{Value: []byte(pdfDate(info.Modified))})
 	}
+	// The same object when there is one, so nothing that points at it is
+	// left pointing at a stale copy.
+	if n := object.RefNum(d.Trailer.Get("Info")); n != 0 && d.Objects[n] != nil {
+		d.Objects[n].Value = dict
+		return
+	}
 	d.Trailer.Set("Info", d.Add(dict))
-	d.writeMetadata(catalog, info, identification)
+}
+
+// describeInXMP sets info's fields as XMP properties.
+func describeInXMP(p *xmp.Packet, info DocumentInfo) error {
+	set := func(err error) error {
+		if err != nil {
+			return fmt.Errorf("pdf0: document metadata: %w", err)
+		}
+		return nil
+	}
+	if info.Title != "" {
+		// dc:title is a language alternative, not a string: the same document
+		// may carry a title in several languages, and x-default is the one to
+		// show when none matches. The others are kept.
+		if err := set(p.SetAltText(xmp.NSDC, "dc", "title", "x-default", info.Title)); err != nil {
+			return err
+		}
+	}
+	if info.Author != "" {
+		// dc:creator is an ordered sequence; the information dictionary has one
+		// author, and PDF/A-1 requires the sequence to hold exactly that one
+		// when the dictionary names it.
+		if err := set(p.SetSeq(xmp.NSDC, "dc", "creator", []string{info.Author})); err != nil {
+			return err
+		}
+	}
+	if info.Subject != "" {
+		if err := set(p.SetAltText(xmp.NSDC, "dc", "description", "x-default", info.Subject)); err != nil {
+			return err
+		}
+	}
+	for _, e := range []struct{ ns, prefix, name, value string }{
+		{xmp.NSPDF, "pdf", "Keywords", info.Keywords},
+		{xmp.NSXMP, "xmp", "CreatorTool", info.Creator},
+		{xmp.NSPDF, "pdf", "Producer", info.Producer},
+	} {
+		if e.value == "" {
+			continue
+		}
+		if err := set(p.SetText(e.ns, e.prefix, e.name, e.value)); err != nil {
+			return err
+		}
+	}
+	if !info.Created.IsZero() {
+		if err := set(p.SetText(xmp.NSXMP, "xmp", "CreateDate", info.Created.Format(time.RFC3339))); err != nil {
+			return err
+		}
+	}
+	if !info.Modified.IsZero() {
+		if err := set(p.SetText(xmp.NSXMP, "xmp", "ModifyDate", info.Modified.Format(time.RFC3339))); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// writeMetadata replaces the document's XMP packet.
-func (d *Document) writeMetadata(catalog *object.Dictionary, info DocumentInfo, id pdfaIdentification) {
-	packet := buildXMP(info, id)
-	stream := &object.Stream{Dict: object.Dictionary{}, Data: packet}
-	stream.Dict.Set("Type", object.Name("Metadata"))
-	stream.Dict.Set("Subtype", object.Name("XML"))
-	// Deliberately unfiltered: a metadata stream is meant to be findable by a
-	// tool scanning the bytes without parsing the file (ISO 32000-2 14.3.2).
-	stream.Dict.Set("Length", object.Integer(len(packet)))
+// editableMetadata returns the document's XMP packet parsed for editing, or a
+// new empty packet when the document has none (core.EditableXMP).
+func (d *Document) editableMetadata(catalog *object.Dictionary) (*xmp.Packet, error) {
+	if d.Locked() {
+		return nil, fmt.Errorf("pdf0: the document is encrypted and was not decrypted, so its metadata cannot be edited")
+	}
+	stream, _ := d.Resolve(catalog.Get("Metadata")).(*object.Stream)
+	p, err := core.EditableXMP(d.canceler(), stream, d.lim())
+	if err != nil {
+		return nil, fmt.Errorf("pdf0: %w", err)
+	}
+	return p, nil
+}
+
+// setMetadataStream stores an XMP packet as the catalog's /Metadata stream,
+// in the existing stream object when there is one.
+func (d *Document) setMetadataStream(catalog *object.Dictionary, packet []byte) {
+	stream := core.MetadataStream(packet)
+	if n := object.RefNum(catalog.Get("Metadata")); n != 0 && d.Objects[n] != nil {
+		if _, ok := d.Objects[n].Value.(*object.Stream); ok {
+			d.Objects[n].Value = stream
+			return
+		}
+	}
 	catalog.Set("Metadata", d.Add(stream))
 }
 
@@ -162,159 +275,23 @@ func pdfDate(t time.Time) string {
 }
 
 // pdfaIdentification is the part of an XMP packet that says a document claims a
-// PDF/A level. It is carried across when the metadata is rewritten.
+// PDF/A level, read through the XMP model like every other reader of it.
 type pdfaIdentification struct {
-	part        string
-	conformance string
-	rev         string
+	part, conformance string
+	// status says whether the packet was read at all. A packet that is not
+	// well-formed, or over the XMP packet limit, claims something pdf0 cannot
+	// see — which is not the same as claiming nothing.
+	status core.XMPStatus
 }
-
-func (p pdfaIdentification) empty() bool { return p.part == "" }
 
 // existingPDFAIdentification reads the pdfaid properties out of the document's
 // current metadata, if it has any.
-//
-// It reads the raw packet rather than going through the XMP parser because the
-// question is narrow — three properties whose values are short literals — and
-// because this must not fail on a packet the parser would reject. A document
-// whose metadata cannot be understood keeps whatever claim it had, or none.
 func (d *Document) existingPDFAIdentification() pdfaIdentification {
-	catalog := d.ResolveDict(d.Trailer.Get("Root"))
-	if catalog == nil {
-		return pdfaIdentification{}
+	packet, status := d.view().DocumentXMPPacket()
+	id := pdfaIdentification{status: status}
+	if status == core.XMPParsed {
+		id.part, _ = packet.Text(xmp.NSPDFAID, "part")
+		id.conformance, _ = packet.Text(xmp.NSPDFAID, "conformance")
 	}
-	stream, ok := d.Resolve(catalog.Get("Metadata")).(*object.Stream)
-	if !ok {
-		return pdfaIdentification{}
-	}
-	data, err := d.StreamData(stream)
-	if err != nil {
-		return pdfaIdentification{}
-	}
-	text := string(data)
-	return pdfaIdentification{
-		part:        xmlElementText(text, "pdfaid:part"),
-		conformance: xmlElementText(text, "pdfaid:conformance"),
-		rev:         xmlElementText(text, "pdfaid:rev"),
-	}
-}
-
-// xmlElementText pulls the text of the first <tag>…</tag> out of a packet.
-//
-// The values it is used for are short literals — a part number, a single
-// letter, a year — so there is nothing to unescape and nothing nested. Anything
-// longer than that is not an identification and is ignored.
-func xmlElementText(doc, tag string) string {
-	open := "<" + tag + ">"
-	i := strings.Index(doc, open)
-	if i < 0 {
-		return ""
-	}
-	rest := doc[i+len(open):]
-	j := strings.Index(rest, "</"+tag+">")
-	if j < 0 || j > 64 {
-		return ""
-	}
-	value := strings.TrimSpace(rest[:j])
-	for _, r := range value {
-		// A value carrying markup is not one of the literals this reads.
-		if r == '<' || r == '&' || r == '>' {
-			return ""
-		}
-	}
-	return value
-}
-
-// buildXMP writes the metadata packet.
-//
-// It is assembled as text rather than through an XML encoder because an XMP
-// packet is not free-form XML: it opens and closes with processing
-// instructions a scanner looks for, and the padding and the exact packet
-// wrapper are part of the format. An encoder would produce valid XML that is
-// not a valid packet.
-func buildXMP(info DocumentInfo, id pdfaIdentification) []byte {
-	var b strings.Builder
-	// The packet header carries a byte-order mark as its "begin" value, and the
-	// identifier is a fixed magic string: both are how a scanner recognises a
-	// packet in a file it is not parsing. Written as an escape because Go does
-	// not allow a byte-order mark in the middle of a source file.
-	b.WriteString("<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n")
-	b.WriteString(`<x:xmpmeta xmlns:x="adobe:ns:meta/">` + "\n")
-	b.WriteString(`  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` + "\n")
-	b.WriteString(`    <rdf:Description rdf:about=""` + "\n")
-	b.WriteString(`      xmlns:dc="http://purl.org/dc/elements/1.1/"` + "\n")
-	b.WriteString(`      xmlns:pdf="http://ns.adobe.com/pdf/1.3/"` + "\n")
-	if !id.empty() {
-		b.WriteString(`      xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"` + "\n")
-	}
-	b.WriteString(`      xmlns:xmp="http://ns.adobe.com/xap/1.0/">` + "\n")
-
-	if !id.empty() {
-		fmt.Fprintf(&b, "      <pdfaid:part>%s</pdfaid:part>\n", xmlEscape(id.part))
-		if id.conformance != "" {
-			fmt.Fprintf(&b, "      <pdfaid:conformance>%s</pdfaid:conformance>\n", xmlEscape(id.conformance))
-		}
-		if id.rev != "" {
-			fmt.Fprintf(&b, "      <pdfaid:rev>%s</pdfaid:rev>\n", xmlEscape(id.rev))
-		}
-	}
-	if info.Title != "" {
-		// dc:title is a language alternative, not a string: the same document
-		// may carry a title in several languages, and x-default is the one to
-		// show when none matches.
-		fmt.Fprintf(&b, "      <dc:title>\n        <rdf:Alt>\n          <rdf:li xml:lang=\"x-default\">%s</rdf:li>\n        </rdf:Alt>\n      </dc:title>\n", xmlEscape(info.Title))
-	}
-	if info.Author != "" {
-		// dc:creator is an ordered sequence, because a document may have
-		// several authors and the order is meaningful.
-		fmt.Fprintf(&b, "      <dc:creator>\n        <rdf:Seq>\n          <rdf:li>%s</rdf:li>\n        </rdf:Seq>\n      </dc:creator>\n", xmlEscape(info.Author))
-	}
-	if info.Subject != "" {
-		fmt.Fprintf(&b, "      <dc:description>\n        <rdf:Alt>\n          <rdf:li xml:lang=\"x-default\">%s</rdf:li>\n        </rdf:Alt>\n      </dc:description>\n", xmlEscape(info.Subject))
-	}
-	if info.Keywords != "" {
-		fmt.Fprintf(&b, "      <pdf:Keywords>%s</pdf:Keywords>\n", xmlEscape(info.Keywords))
-	}
-	if info.Creator != "" {
-		fmt.Fprintf(&b, "      <xmp:CreatorTool>%s</xmp:CreatorTool>\n", xmlEscape(info.Creator))
-	}
-	fmt.Fprintf(&b, "      <pdf:Producer>%s</pdf:Producer>\n", xmlEscape(info.Producer))
-	if !info.Created.IsZero() {
-		fmt.Fprintf(&b, "      <xmp:CreateDate>%s</xmp:CreateDate>\n", info.Created.Format(time.RFC3339))
-	}
-	if !info.Modified.IsZero() {
-		fmt.Fprintf(&b, "      <xmp:ModifyDate>%s</xmp:ModifyDate>\n", info.Modified.Format(time.RFC3339))
-	}
-
-	b.WriteString("    </rdf:Description>\n  </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>")
-	return []byte(b.String())
-}
-
-// xmlEscape makes a string safe to place in element content.
-//
-// Control characters are dropped rather than escaped: they are illegal in XML
-// 1.0 even as character references, so escaping one produces a packet no parser
-// will read.
-func xmlEscape(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch r {
-		case '<':
-			b.WriteString("&lt;")
-		case '>':
-			b.WriteString("&gt;")
-		case '&':
-			b.WriteString("&amp;")
-		case '"':
-			b.WriteString("&quot;")
-		case '\'':
-			b.WriteString("&apos;")
-		default:
-			if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
-				continue
-			}
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return id
 }

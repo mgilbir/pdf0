@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/hostile"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
@@ -62,8 +63,9 @@ func TestXMPWellFormedStreaming(t *testing.T) {
 }
 
 // TestXMPStreamingMatchesTree confirms the streaming well-formedness check
-// agrees with the previous parseXMLTree + findRDF result across representative
-// packets — the streaming path must not change any validation outcome.
+// agrees with the XMP model the property readers use, across representative
+// packets: a packet the well-formedness rule accepts is one the readers can
+// read, and one it rejects is one they cannot.
 func TestXMPStreamingMatchesTree(t *testing.T) {
 	packets := []string{
 		validXMP(`<dc:title>hello</dc:title>`),
@@ -75,20 +77,20 @@ func TestXMPStreamingMatchesTree(t *testing.T) {
 	}
 	for i, p := range packets {
 		wf, rdf := xmpWellFormed([]byte(p))
-		tree, err := parseXMLTree([]byte(p))
+		packet, err := xmp.Parse([]byte(p))
 		treeWF := err == nil
-		treeRDF := treeWF && findRDF(tree) != nil
+		treeRDF := treeWF && packet.HasRDF()
 		if wf != treeWF || rdf != treeRDF {
 			t.Errorf("packet %d: streaming (%v,%v) != tree (%v,%v)", i, wf, rdf, treeWF, treeRDF)
 		}
 	}
 }
 
-// TestXMPLargePacketBounded is the DoS regression: a large but perfectly
-// well-formed XMP packet must not build a node tree (an O(n²) blow-up), yet its
-// well-formedness must still be validated and no false positive raised. With the
-// property-parse cap lowered, the property extraction is skipped while the
-// streaming well-formedness check still passes.
+// TestXMPLargePacketBounded is the DoS regression: a packet over the XMP
+// packet limit must not have a node tree built for it, yet its well-formedness
+// must still be validated and no false positive raised. With the limit lowered,
+// the property checks are skipped — and say so, with a trip on the run that
+// becomes a "limit" finding, rather than looking clean (audit C109's XMP half).
 func TestXMPLargePacketBounded(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
 		const capBytes = 4 << 10 // 4 KiB, for the test
@@ -104,10 +106,18 @@ func TestXMPLargePacketBounded(t *testing.T) {
 		// resolves to exactly this field.
 		doc.Limits.XMPPacketBytes = capBytes
 
-		// Property extraction is skipped (capped), reported as an error the caller
-		// turns into "no properties to check" — never a violation.
-		if _, err := parseXMPProperties([]byte(xmp), capBytes); err == nil {
-			t.Error("expected parseXMPProperties to refuse the oversized packet")
+		// The model declines the oversized packet and notes the trip.
+		if _, status := doc.DocumentXMPPacket(); status != core.XMPLimit {
+			t.Errorf("DocumentXMPPacket status = %v, want XMPLimit", status)
+		}
+		tripped := false
+		for _, tr := range doc.Run.Trips.Snapshot() {
+			if strings.Contains(tr.Message(), core.GuardXMPPacket) {
+				tripped = true
+			}
+		}
+		if !tripped {
+			t.Error("the oversized packet was skipped without a trip")
 		}
 		// Well-formedness still validated by streaming, with no false positive.
 		for _, e := range checkXMPWellFormed(doc, PDFA1b) {

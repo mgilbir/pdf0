@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 )
@@ -261,116 +262,64 @@ func checkUARoleMap(d core.View, cat *object.Dictionary) []Violation {
 
 // checkUAIdentifier requires an XMP metadata stream declaring the given
 // PDF/UA part.
+//
+// The packet is read through the XMP model, by namespace URI: the value is
+// pdfuaid:part whatever prefix it is written with, found in element or
+// attribute form, and unaffected by a comment or an escaped character — none
+// of which the substring reader this replaced could say (audit C141).
 func checkUAIdentifier(d core.View, cat *object.Dictionary, want string) []Violation {
 	stream, ok := d.Resolve(cat.Get("Metadata")).(*object.Stream)
 	if !ok {
 		return []Violation{{"5", "document has no XMP metadata (a PDF/UA identifier is required)", 0}}
 	}
-	xmp := d.XMPText(stream)
-	if !strings.Contains(xmp, "pdfuaid:part") {
+	packet, status := d.XMPPacketOf(stream, object.RefNum(cat.Get("Metadata")))
+	switch status {
+	case core.XMPLimit:
+		// Not read: the trip is on the run and reaches the report as a
+		// "limit" finding. Saying the part is missing would be a guess.
+		return nil
+	case core.XMPMalformed:
+		return []Violation{{"5", "XMP metadata is not well-formed XML, so it declares no PDF/UA part (pdfuaid:part)", 0}}
+	case core.XMPAbsent:
 		return []Violation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
 	}
-	if part := xmpPDFUAPart(xmp); part != "" && part != want {
-		return []Violation{{"5", "pdfuaid:part must be " + want + " for PDF/UA-" + want + ", got " + part, 0}}
+	part, has := packet.Text(xmp.NSPDFUAID, "part")
+	if !has {
+		return []Violation{{"5", "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", 0}}
 	}
-	return checkUAIdentifierPrefix(d, xmp)
+	if part != want {
+		got := part
+		if got == "" {
+			got = `""` // present and empty, which is not the part either
+		}
+		return []Violation{{"5", "pdfuaid:part must be " + want + " for PDF/UA-" + want + ", got " + got, 0}}
+	}
+	return checkUAIdentifierPrefix(packet)
 }
-
-// pdfuaidNamespaceURI is the namespace of the PDF/UA Identification Schema.
-const pdfuaidNamespaceURI = "http://www.aiim.org/pdfua/ns/id/"
 
 // checkUAIdentifierPrefix flags a PDF/UA Identification Schema property (part,
 // amd, corr) that is written with a namespace prefix other than the required
-// "pdfuaid" (clause 5). It considers only prefixes bound to the PDF/UA-id
-// namespace URI, so an unrelated element named amd/corr elsewhere is ignored.
-func checkUAIdentifierPrefix(d core.View, xmp string) []Violation {
+// "pdfuaid" (clause 5). Only properties in the PDF/UA-id namespace are
+// considered, so an unrelated property named amd or corr is ignored; a property
+// in the default namespace has no prefix to judge.
+func checkUAIdentifierPrefix(packet *xmp.Packet) []Violation {
 	var v []Violation
-	for _, prop := range []string{"part", "amd", "corr"} {
-		for _, prefix := range xmpElementPrefixes(xmp, prop) {
-			if prefix == "pdfuaid" || prefix == "" {
-				continue
-			}
-			if xmpBindsPrefixTo(xmp, prefix, pdfuaidNamespaceURI) {
-				v = append(v, Violation{"5", "PDF/UA identification property '" + prop + "' uses namespace prefix '" + prefix + "', must be 'pdfuaid'", 0})
-			}
+	seen := map[string]bool{}
+	for _, p := range packet.Properties() {
+		if p.NS != xmp.NSPDFUAID || p.Prefix == "pdfuaid" || p.Prefix == "" {
+			continue
+		}
+		switch p.Name {
+		case "part", "amd", "corr":
+		default:
+			continue
+		}
+		if key := p.Name + "\x00" + p.Prefix; !seen[key] {
+			seen[key] = true
+			v = append(v, Violation{"5", "PDF/UA identification property '" + p.Name + "' uses namespace prefix '" + p.Prefix + "', must be 'pdfuaid'", 0})
 		}
 	}
 	return v
-}
-
-// xmpElementPrefixes returns the distinct prefixes used on elements with the
-// given local name (e.g. "<pdfuaia:amd>" yields "pdfuaia").
-func xmpElementPrefixes(xmp, local string) []string {
-	seen := map[string]bool{}
-	var out []string
-	needle := ":" + local
-	for i := 0; ; {
-		j := strings.Index(xmp[i:], needle)
-		if j < 0 {
-			break
-		}
-		pos := i + j
-		i = pos + len(needle)
-		// The character after the local name must end the element name.
-		if i < len(xmp) {
-			if c := xmp[i]; c != '>' && c != ' ' && c != '\t' && c != '\r' && c != '\n' && c != '/' {
-				continue
-			}
-		}
-		// Walk back over the prefix (letters/digits) to the '<'.
-		k := pos
-		for k > 0 && isXMLNameChar(xmp[k-1]) {
-			k--
-		}
-		if k > 0 && xmp[k-1] == '<' {
-			prefix := xmp[k:pos]
-			if prefix != "" && !seen[prefix] {
-				seen[prefix] = true
-				out = append(out, prefix)
-			}
-		}
-	}
-	return out
-}
-
-// xmpBindsPrefixTo reports whether the XMP declares xmlns:prefix="uri".
-func xmpBindsPrefixTo(xmp, prefix, uri string) bool {
-	return strings.Contains(xmp, "xmlns:"+prefix+"=\""+uri+"\"") ||
-		strings.Contains(xmp, "xmlns:"+prefix+"='"+uri+"'")
-}
-
-func isXMLNameChar(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.'
-}
-
-// xmpPDFUAPart extracts the pdfuaid:part value from an XMP packet, handling both
-// the attribute form (pdfuaid:part="1") and the element form
-// (<pdfuaid:part>1</pdfuaid:part>). It returns "" if no value is found.
-func xmpPDFUAPart(xmp string) string {
-	i := strings.Index(xmp, "pdfuaid:part")
-	if i < 0 {
-		return ""
-	}
-	rest := xmp[i+len("pdfuaid:part"):]
-	// Attribute form: ="N"
-	if j := strings.IndexAny(rest, "=>"); j >= 0 && rest[j] == '=' {
-		k := strings.IndexAny(rest[j:], "\"'")
-		if k >= 0 {
-			q := rest[j+k+1:]
-			if e := strings.IndexAny(q, "\"'"); e >= 0 {
-				return strings.TrimSpace(q[:e])
-			}
-		}
-		return ""
-	}
-	// Element form: >N<
-	if j := strings.IndexByte(rest, '>'); j >= 0 {
-		q := rest[j+1:]
-		if e := strings.IndexByte(q, '<'); e >= 0 {
-			return strings.TrimSpace(q[:e])
-		}
-	}
-	return ""
 }
 
 // checkUAStructParent flags a structure element that lacks the required /P
@@ -1185,10 +1134,20 @@ func checkUATitle(d core.View, cat *object.Dictionary) []Violation {
 	if !ok {
 		return nil // absence of metadata is already reported by the identifier check
 	}
-	if !strings.Contains(d.XMPText(stream), "dc:title") {
-		return []Violation{{"7.1", "XMP metadata has no document title (dc:title)", 0}}
+	// Read through the XMP model: a dc:title is a property in the Dublin Core
+	// namespace, not the string "dc:title" somewhere in the packet — which a
+	// comment, or a title that merely mentions it, would supply.
+	packet, status := d.XMPPacketOf(stream, object.RefNum(cat.Get("Metadata")))
+	switch status {
+	case core.XMPLimit, core.XMPMalformed:
+		// Not read; the limit finding or the identifier check says why.
+		return nil
+	case core.XMPParsed:
+		if _, ok := packet.Get(xmp.NSDC, "title"); ok {
+			return nil
+		}
 	}
-	return nil
+	return []Violation{{"7.1", "XMP metadata has no document title (dc:title)", 0}}
 }
 
 // checkUAFonts flags fonts used for rendering but not embedded. It considers

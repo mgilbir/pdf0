@@ -50,6 +50,12 @@ func embeddedPDFACompliant(cancel core.Canceler, data []byte, lim core.Limits) (
 	if err != nil {
 		return false, !checkerMayHaveRefused
 	}
+	if _, status := edoc.view().DocumentXMPPacket(); status == core.XMPLimit {
+		// The embedded document's metadata is over the XMP packet limit, so
+		// what level it declares is unknown to pdf0 — not "none". Withheld,
+		// like every other verdict the checker could not reach.
+		return false, false
+	}
 	elevel, ok := pdfa.DeclaredLevel(edoc.view())
 	if !ok {
 		// An embedded PDF that is not PDF/A at all — or whose own metadata

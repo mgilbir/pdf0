@@ -2,11 +2,9 @@ package pdfa
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
-	"github.com/mgilbir/pdf0/object"
 )
 
 // PDF/A-4e and PDF/A-4f, ISO 19005-4 Annexes B and A.
@@ -35,7 +33,7 @@ func ValidateVariant4View(doc core.View, level Level, rawData []byte) []Violatio
 	base := ValidateView(doc, level.BaseB(), rawData)
 	errs := make([]Violation, 0, len(base))
 	for _, e := range base {
-		if strings.Contains(e.Message, "pdfaid:conformance must be absent, F, or E") {
+		if e.Check == CheckPDFAIDConformance {
 			continue
 		}
 		e.Level = level
@@ -79,33 +77,6 @@ func effectiveVariant(doc core.View, level Level) string {
 	return ""
 }
 
-// conformanceAsWritten is pdfaid:conformance exactly as the document spells it,
-// and whether the property is there at all.
-//
-// pdfaConformanceFlag uppercases, which is what the relaxations want — a file
-// saying "e" is trying to be a 4e and is treated as one, so the stricter rules
-// apply to it rather than being skipped. The value rule is the opposite: the
-// property is case-sensitive and "e" is not "E", which is exactly what
-// 6-7-3-t01-fail-c is built to catch.
-func conformanceAsWritten(doc core.View) (string, bool) {
-	catalog := doc.Catalog()
-	if catalog == nil {
-		return "", false
-	}
-	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream)
-	if !ok {
-		return "", false
-	}
-	xmp := doc.XMPText(stream)
-	if !xmpHasKey(xmp, "pdfaid:conformance") {
-		return "", false
-	}
-	if v := core.ExtractXMPValue(xmp, "pdfaid:conformance"); v != "" {
-		return v, true
-	}
-	return ExtractXMPAttr(xmp, "pdfaid:conformance"), true
-}
-
 // checkVariant4Conformance: a PDF/A-4e file shall declare pdfaid:conformance E,
 // and a PDF/A-4f file shall declare F (ISO 19005-4 6.7.3).
 //
@@ -118,25 +89,37 @@ func checkVariant4Conformance(doc core.View, level Level) []Violation {
 	if want == "" {
 		return nil
 	}
-	got, present := conformanceAsWritten(doc)
+	id := readPDFAIdentification(doc)
+	if id.status == core.XMPLimit || id.status == core.XMPMalformed {
+		// Unread, not undeclared: the limit finding or the well-formedness
+		// finding says why, and this rule has nothing to judge.
+		return nil
+	}
+	// The value exactly as written. pdfaConformanceFlag uppercases, which is
+	// what the relaxations want — a file saying "e" is trying to be a 4e and is
+	// treated as one, so the stricter rules apply to it rather than being
+	// skipped. The value rule is the opposite: the property is case-sensitive
+	// and "e" is not "E", which is exactly what 6-7-3-t01-fail-c is built to
+	// catch.
+	got, present := id.conformance, id.hasConformance
 	if got == want {
 		return nil
 	}
 	rule := metadataClause("version", level.BaseB())
 	switch {
 	case !present:
-		return []Violation{{Rule: rule, Level: level,
+		return []Violation{{Rule: rule, Level: level, Check: CheckPDFAIDConformance,
 			Message: fmt.Sprintf("the document declares no pdfaid:conformance, so it "+
 				"identifies itself as plain PDF/A-4 rather than %s, which must declare %q",
 				level, want)}}
 	case got == "":
-		return []Violation{{Rule: rule, Level: level,
+		return []Violation{{Rule: rule, Level: level, Check: CheckPDFAIDConformance,
 			Message: fmt.Sprintf("pdfaid:conformance is present but empty; %s must declare %q",
 				level, want)}}
 	default:
 		// Including the right letter in the wrong case, which is the whole of
 		// the difference for a case-sensitive property.
-		return []Violation{{Rule: rule, Level: level,
+		return []Violation{{Rule: rule, Level: level, Check: CheckPDFAIDConformance,
 			Message: fmt.Sprintf("pdfaid:conformance is %q; %s must declare %q", got, level, want)}}
 	}
 }

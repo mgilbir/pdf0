@@ -2,6 +2,7 @@ package pdfa
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ func wrapXMP(body string) string {
 }
 
 func TestParseXMPPropertyForms(t *testing.T) {
-	xmp := wrapXMP(`
+	xmpText := wrapXMP(`
 		<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="tool">
 			<xmp:Identifier><rdf:Bag>
 				<rdf:li>plain</rdf:li>
@@ -35,10 +36,11 @@ func TestParseXMPPropertyForms(t *testing.T) {
 			</xmpMM:DerivedFrom>
 		</rdf:Description>`)
 
-	props, err := parseXMPProperties([]byte(xmp), core.DefaultMaxXMPPacketBytes)
+	packet, err := xmp.Parse([]byte(xmpText))
 	if err != nil {
 		t.Fatal(err)
 	}
+	props := packet.Properties()
 	byName := map[string]xmpValue{}
 	for _, p := range props {
 		byName[p.Name] = p.Value
@@ -97,7 +99,7 @@ func TestXMPSyntaxValidators(t *testing.T) {
 // a standard type nor declared by the extension schema is flagged
 // (ISO 19005-1 6.7.8).
 func TestExtensionFieldUndeclaredType(t *testing.T) {
-	xmp := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+	xmpText := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#" xmlns:pdfaType="http://www.aiim.org/pdfa/ns/type#" xmlns:pdfaField="http://www.aiim.org/pdfa/ns/field#">
 <pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">
 <pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://x/</pdfaSchema:namespaceURI><pdfaSchema:prefix>x</pdfaSchema:prefix>
@@ -109,11 +111,11 @@ func TestExtensionFieldUndeclaredType(t *testing.T) {
 </rdf:li></rdf:Seq></pdfaSchema:valueType>
 </rdf:li></rdf:Bag></pdfaExtension:schemas>
 </rdf:Description></rdf:RDF></x:xmpmeta>`
-	props, err := parseXMPProperties([]byte(xmp), core.DefaultMaxXMPPacketBytes)
+	packet, err := xmp.Parse([]byte(xmpText))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	errs := checkXMPExtensionContainer(xmp, props, "6.7.8", PDFA1b)
+	errs := checkXMPExtensionContainer(packet.Declarations(), packet.Properties(), "6.7.8", PDFA1b)
 	found := false
 	for _, e := range errs {
 		if strings.Contains(e.Message, `"CT"`) {
