@@ -309,6 +309,12 @@ const (
 	// same one a budget has — a check did not run, and a caller who is told
 	// only "no violations" would read that as "checked and clean".
 	GuardPredefinedCMap = "predefined-cmap" // no bound; LoadCMap reports it
+
+	// GuardEmbeddedCMap is an embedded CMap that builds on a CMap which is
+	// neither predefined nor embedded: the codes it leaves to that CMap have
+	// no known CID, and the checks that need one are skipped for them, and
+	// say so (LoadCMap).
+	GuardEmbeddedCMap = "embedded-cmap" // no bound; see LoadCMap
 )
 
 // Pages returns the page tree under ref flattened into document order,

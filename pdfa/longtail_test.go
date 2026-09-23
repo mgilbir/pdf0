@@ -42,12 +42,18 @@ func TestContentStreamNumberLimits(t *testing.T) {
 
 func TestMaxCMapCID(t *testing.T) {
 	cmap := "begincidrange\n<0000> <00ff> 0\n<2100> <21ff> 65400\nendcidrange"
-	if got := maxCMapCID([]byte(cmap)); got != 65400+0xff {
+	if got := core.CMapMaxCID(core.Canceler{}, []byte(cmap)); got != 65400+0xff {
 		t.Errorf("range CID max: got %d", got)
 	}
 	cmap2 := "begincidchar\n<0041> 70000\nendcidchar"
-	if got := maxCMapCID([]byte(cmap2)); got != 70000 {
+	if got := core.CMapMaxCID(core.Canceler{}, []byte(cmap2)); got != 70000 {
 		t.Errorf("char CID max: got %d", got)
+	}
+	// Entries on one line, and lines ended by CR alone, are entries all the
+	// same: the line-based reader saw only the first of each line.
+	cmap3 := "begincidrange <0000> <00ff> 0 <2100> <21ff> 65400 endcidrange\rbegincidchar\r<0041> 70000\rendcidchar"
+	if got := core.CMapMaxCID(core.Canceler{}, []byte(cmap3)); got != 70000 {
+		t.Errorf("one-line and CR-only CMap: CID max %d, want 70000", got)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/mgilbir/pdf0/object"
@@ -88,17 +89,42 @@ func TestFontCodesUnicode(t *testing.T) {
 	}
 }
 
-// An embedded CMap LoadCMap refuses still cuts codes: its own codespace, plus
-// that of the predefined CMap it defers to.
-func TestFontCodesFromARefusedEmbeddedCMap(t *testing.T) {
+// An embedded CMap that defers to a predefined one cuts codes by its own
+// codespace plus that of the predefined CMap. LoadCMap reads it (the base is
+// opaque, its codespace carried), and cutting codes records no skip: the
+// cutter is not a check.
+func TestFontCodesFromAnEmbeddedCMapOverAPredefinedOne(t *testing.T) {
 	src := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
 		"/90ms-RKSJ-H usecmap\n" +
 		"1 begincodespacerange <F040> <F9FC> endcodespacerange\n" +
 		"1 begincidrange <F040> <F9FC> 8000 endcidrange\nendcmap\n"
 	st := object.NewStream(&object.Dictionary{}, []byte(src))
 	v, f := fontView(object.IndirectRef{Number: 2}, st)
-	if _, r := LoadCMap(v, f); r == ReasonOK {
-		t.Fatal("the fixture must be a CMap LoadCMap refuses")
+	v.Run = NewRun(&Recorder{})
+	fc, ok := LoadFontCodes(v, f)
+	if !ok {
+		t.Fatal("no code cutter")
+	}
+	if got := codeLengths(fc.Codes([]byte{'A', 0xF0, 0x40, 0x88, 0x9F})); fmt.Sprint(got) != "[1 2 2]" {
+		t.Errorf("cut into %v, want [1 2 2]", got)
+	}
+	if tr := v.Run.Trips.Snapshot(); len(tr) != 0 {
+		t.Errorf("cutting codes recorded %v", tr)
+	}
+}
+
+// An embedded CMap LoadCMap refuses (here, a range past the expansion bound)
+// still cuts codes: its own codespace, plus that of the predefined CMap it
+// defers to.
+func TestFontCodesFromARefusedEmbeddedCMap(t *testing.T) {
+	src := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+		"/90ms-RKSJ-H usecmap\n" +
+		"1 begincodespacerange <F040> <F9FC> endcodespacerange\n" +
+		"1 begincidrange <00000000> <FFFFFFFF> 1 endcidrange\nendcmap\n"
+	st := object.NewStream(&object.Dictionary{}, []byte(src))
+	v, f := fontView(object.IndirectRef{Number: 2}, st)
+	if _, r := LoadCMap(v, f); r != ReasonLimit {
+		t.Fatalf("the fixture must be a CMap LoadCMap refuses (limit), got %v", r)
 	}
 	fc, ok := LoadFontCodes(v, f)
 	if !ok {
@@ -150,9 +176,11 @@ func TestPredefinedCodespacesMatchAdobe(t *testing.T) {
 		for _, b := range block.FindAllStringSubmatch(string(data), -1) {
 			toks := hexTok.FindAllStringSubmatch(b[1], -1)
 			for i := 0; i+1 < len(toks); i += 2 {
-				lo, n := hexCode("<" + toks[i][1] + ">")
-				hi, _ := hexCode("<" + toks[i+1][1] + ">")
-				out = append(out, codespaceRange{bytes: n, lo: lo, hi: hi})
+				// Read here with strconv rather than with the CMap reader, so
+				// the oracle does not share the code it checks.
+				lo, _ := strconv.ParseUint(toks[i][1], 16, 32)
+				hi, _ := strconv.ParseUint(toks[i+1][1], 16, 32)
+				out = append(out, codespaceRange{bytes: len(toks[i][1]) / 2, lo: uint32(lo), hi: uint32(hi)})
 			}
 		}
 		if len(out) == 0 && depth < 4 {

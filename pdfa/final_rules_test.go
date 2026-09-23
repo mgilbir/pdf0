@@ -331,19 +331,6 @@ func TestParseToUnicodeMapMalformed(t *testing.T) {
 	}
 }
 
-func TestAngleTokens(t *testing.T) {
-	got := core.AngleTokens("<0003><0003><0020>")
-	if len(got) != 3 || got[0] != "<0003>" || got[2] != "<0020>" {
-		t.Errorf("angleTokens wrong: %v", got)
-	}
-	if len(core.AngleTokens("no tokens here")) != 0 {
-		t.Error("expected no tokens")
-	}
-	if len(core.AngleTokens("<unterminated")) != 0 {
-		t.Error("unterminated must yield nothing")
-	}
-}
-
 func TestInheritedPageXObject(t *testing.T) {
 	mk := func(pageHasOwn bool) core.View {
 		doc := mkView(map[int]*object.IndirectObject{}, nil)

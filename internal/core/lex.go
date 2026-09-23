@@ -163,10 +163,11 @@ type ContentLexer struct {
 	pos        int
 	cancel     Canceler
 	nextCancel int
-	// params marks a lexer reading an inline image's parameter region, where
-	// BI is not an operator. Without it a region of nothing but "BI BI BI …"
-	// would recurse once per BI.
-	params bool
+	// noInline turns the inline-image hook off, for input in which BI is not
+	// an operator: an inline image's own parameter region (where a region of
+	// nothing but "BI BI BI …" would otherwise recurse once per BI), and a
+	// CMap program, which is PostScript and has no inline images.
+	noInline bool
 }
 
 // NewContentLexer returns a lexer over data. It stops early, reporting no
@@ -253,7 +254,7 @@ func (l *ContentLexer) Next(t *ContentTok) bool {
 			l.pos = j
 			continue
 		}
-		if j-i == 2 && data[i] == 'B' && data[i+1] == 'I' && !l.params {
+		if j-i == 2 && data[i] == 'B' && data[i+1] == 'I' && !l.noInline {
 			l.inlineImage(t, i, j)
 			return true
 		}
@@ -288,7 +289,7 @@ func (l *ContentLexer) inlineImage(t *ContentTok, start, afterBI int) {
 
 	params := data[afterBI:end]
 	var body []byte
-	sub := ContentLexer{data: data[:end], pos: afterBI, nextCancel: len(data), params: true}
+	sub := ContentLexer{data: data[:end], pos: afterBI, nextCancel: len(data), noInline: true}
 	var tk ContentTok
 	for sub.Next(&tk) {
 		if tk.Is("ID") {
@@ -358,7 +359,7 @@ type InlineImageParam struct {
 // ContentInlineImage token's Params) into its entries, in order.
 func ParseInlineImageParams(params []byte) []InlineImageParam {
 	var out []InlineImageParam
-	lx := ContentLexer{data: params, nextCancel: len(params) + 1, params: true}
+	lx := ContentLexer{data: params, nextCancel: len(params) + 1, noInline: true}
 	var t ContentTok
 	var cur *InlineImageParam
 	for lx.Next(&t) {

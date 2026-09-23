@@ -239,60 +239,6 @@ func Type0Descendant(doc View, fontDict *object.Dictionary) *object.Dictionary {
 	return doc.ResolveDict(arr[0])
 }
 
-// HasForbiddenUnicodeTargets scans a ToUnicode CMap for mappings to U+0000,
-// U+FEFF, or U+FFFE in bfchar/bfrange destinations.
-func HasForbiddenUnicodeTargets(doc View, stream *object.Stream) bool {
-	data, _ := doc.Content(stream) // reason: presence-only; a stream not read finds nothing and the producer recorded any declined trip
-	if data == nil {
-		return false
-	}
-	s := string(data)
-	scanSection := func(begin, end string, dstIndex int) bool {
-		rest := s
-		for {
-			b := strings.Index(rest, begin)
-			if b < 0 {
-				return false
-			}
-			e := strings.Index(rest[b:], end)
-			if e < 0 {
-				return false
-			}
-			section := rest[b+len(begin) : b+e]
-			// Collect hex strings in order; every dstIndex-th (per group)
-			// is a destination.
-			var hexes []string
-			for {
-				lt := strings.IndexByte(section, '<')
-				if lt < 0 {
-					break
-				}
-				gt := strings.IndexByte(section[lt:], '>')
-				if gt < 0 {
-					break
-				}
-				hexes = append(hexes, section[lt+1:lt+gt])
-				section = section[lt+gt+1:]
-			}
-			group := dstIndex + 1
-			for i := dstIndex; i < len(hexes); i += group {
-				h := strings.TrimSpace(hexes[i])
-				for len(h) >= 4 {
-					switch strings.ToLower(h[:4]) {
-					case "0000", "feff", "fffe":
-						return true
-					}
-					h = h[4:]
-				}
-			}
-			rest = rest[b+e+len(end):]
-		}
-	}
-	// bfchar: <src> <dst> pairs; bfrange: <lo> <hi> <dst> triples.
-	return scanSection("beginbfchar", "endbfchar", 1) ||
-		scanSection("beginbfrange", "endbfrange", 2)
-}
-
 // LoadFontProgram parses the embedded font program of a descriptor.
 //
 // The Reason says what a nil program means, and the difference is the one a
