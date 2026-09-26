@@ -131,16 +131,29 @@ each rule's description.
 godoc: *"An empty result means 'none of the implemented checks fired', not a
 guarantee of full conformance: the validator covers a subset of ISO 19005."*
 
-**Use `ValidatePDFABytes` when you have the file bytes.** `ValidatePDFA(doc,
-level)` is exactly `ValidatePDFABytes(doc, level, nil)`, and passing `nil` skips
-**every byte-level file-structure rule** — things like "no data after `%%EOF`",
-the byte-level stream `/Length` check, and hex-string scanning, which need the
-raw file and cannot be recovered from the object model. If you read the file into
-a `[]byte` anyway, always pass it:
+**The byte-level rules judge the file you read.** Rules like "no data after
+`%%EOF`", the byte-level stream `/Length` check and the cross-reference table
+layout need the file itself, not the object model. `ValidatePDFA` runs them on
+the file the document was read from, which the `Document` keeps
+(`Document.Source`), as `Read` found it — edits to the document since do not
+change what they say. To judge the bytes of an edited document, write it and
+read the result:
 
 ```go
-errs := pdf0.ValidatePDFABytes(doc, pdfa.PDFA4, data)
+var buf bytes.Buffer
+if err := doc.Write(&buf); err != nil {
+	return err
+}
+written, err := pdf0.Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+if err != nil {
+	return err
+}
+errs := pdf0.ValidatePDFA(written, pdfa.PDFA4)
 ```
+
+A document built in memory has no file at all: its result carries one checker
+finding, **`[… limit] no file to check (no-source-file)`**, saying the byte-level
+rules did not run.
 
 **`[… internal] internal validator error: …`** means a check panicked and was
 recovered so the rest could run. It is a bug in pdf0, not in your file.
@@ -157,7 +170,7 @@ it before deciding whether a file is conformant, because a checker finding means
 
 ```go
 var real []pdf0.Violation
-for _, e := range pdf0.ValidatePDFABytes(doc, pdfa.PDFA4, data) {
+for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA4) {
 	if !pdf0.IsCheckerFinding(e) {
 		real = append(real, e)
 	}

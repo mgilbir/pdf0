@@ -29,7 +29,7 @@ go get github.com/mgilbir/pdf0
 
   | Standard | Entry point | Findings satisfy `Violation` |
   |----------|-------------|------------------------------|
-  | PDF/A 1a/1b, 2a/2b, 3a/3b, 4 | `ValidatePDFA` / `ValidatePDFABytes` | yes |
+  | PDF/A 1a/1b, 2a/2b, 3a/3b, 4 | `ValidatePDFA` | yes |
   | PDF/UA-1, PDF/UA-2 | `ValidatePDFUA` / `ValidatePDFUA2` | yes |
   | PDF/X-1a/3/4/4p/6 | `ValidatePDFX` | yes |
   | PDF/VT-1, PDF/VT-2 | `ValidatePDFVT` / `ValidatePDFVT2` | yes |
@@ -104,8 +104,10 @@ for _, e := range errs {
 `ValidatePDFA` returns `nil` when none of the implemented checks fire. Note that
 the validator does not yet implement every PDF/A rule (see **Status** below), so
 an empty result means "nothing I check flagged this," not a guarantee of full
-conformance. Use `ValidatePDFABytes` when you have the raw file bytes and want
-the additional byte-level checks (e.g. no data after `%%EOF`).
+conformance. The byte-level checks (e.g. no data after `%%EOF`) read the file
+the document was read from, which the `Document` keeps; a document you built in
+memory has no file, and its result carries a checker finding saying those
+checks did not run — write it and read it back to check them.
 
 For untrusted input, every unbounded loop and every file-sized allocation is
 already capped, and eleven of those caps are settable per document as options on

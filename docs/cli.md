@@ -216,8 +216,8 @@ or directory`, `error: x.txt: PDF header not found`, `error: read /tmp: is a dir
 | `-level` | `2b` | PDF/A level: `1b`, `1a`, `2b`, `2u`, `2a`, `3b`, `3u`, `3a`, `4`, `4e` or `4f`; or `declared`, the level the file's own metadata declares |
 | `-password-file` | — | see [Passwords](#passwords) |
 
-Runs `ValidatePDFABytes`: the object model *and* the raw bytes, so the byte-level clause
-6.1 file-structure rules apply.
+Runs `ValidatePDFA` on the document read from the file: the object model *and*,
+from the same file, the byte-level clause 6.1 file-structure rules.
 
 ```
 $ pdf0 validate clean2b.pdf
@@ -406,8 +406,7 @@ Everything below is implemented in the library and has **no** CLI surface. Absen
 
 | Capability | Library entry point |
 |---|---|
-| PDF/A Level A (1a, 2a, 3a) | `PDFA1a`/`PDFA2a`/`PDFA3a` with `ValidatePDFA(Bytes)` — the constants exist; `-level` rejects those names with exit 2 |
-| Model-only PDF/A (skips clause 6.1 byte rules) | `ValidatePDFA(doc, level)` — the CLI always uses `ValidatePDFABytes` |
+| PDF/A Level A (1a, 2a, 3a) | `PDFA1a`/`PDFA2a`/`PDFA3a` with `ValidatePDFA` — the constants exist; `-level` rejects those names with exit 2 |
 | PDF/UA-2 | `ValidatePDFUA2(doc)`; `ua` only ever calls `ValidatePDFUA` (UA-1) |
 | PDF/X, PDF/VT, PDF/VT-2, PDF/R | `ValidatePDFX(doc, pdfx.Level)`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR` |
 | DPart / document-part hierarchy | `ValidateDParts(doc)` |

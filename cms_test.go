@@ -55,22 +55,23 @@ func buildCMS(t *testing.T, hasCert bool, nSigners int) []byte {
 }
 
 // 6.4.3 t2/t3: the PKCS#7 blob must embed the signing certificate and hold
-// exactly one SignerInfo.
+// exactly one SignerInfo. These are rules about the dictionary's values, so
+// they run on a document built in memory, which has no file for the byte
+// half of 6.4.3 (coverage of the file) to measure.
 func TestValidatePDFA_SignaturePKCS7(t *testing.T) {
-	raw := make([]byte, 1000)
 	mk := func(contents []byte) *Document {
 		doc := mustPDFADoc(t, pdfa.PDFA2b)
 		sig := &object.Dictionary{}
 		sig.Set("Type", object.Name("Sig"))
 		sig.Set("SubFilter", object.Name("adbe.pkcs7.detached"))
 		sig.Set("Contents", object.String{Value: contents, IsHex: true})
-		sig.Set("ByteRange", object.Array{object.Integer(0), object.Integer(400), object.Integer(600), object.Integer(400)}) // covers 1000
+		sig.Set("ByteRange", object.Array{object.Integer(0), object.Integer(400), object.Integer(600), object.Integer(400)})
 		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: sig}
 		reference(doc, 20)
 		return doc
 	}
 	flaggedPKCS7 := func(contents []byte) bool {
-		for _, e := range ValidatePDFABytes(mk(contents), pdfa.PDFA2b, raw) {
+		for _, e := range ValidatePDFA(mk(contents), pdfa.PDFA2b) {
 			if e.Rule == "6.4.3" && strings.Contains(e.Message, "PKCS#7") {
 				return true
 			}

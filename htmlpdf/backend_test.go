@@ -74,7 +74,7 @@ func roundTrip(t *testing.T, in Input, opts Options) (*pdf0.Document, []byte) {
 // the document claims no PDF/A level, so everything else is about the claim.
 func fontFindings(doc *pdf0.Document, raw []byte) []string {
 	var out []string
-	for _, v := range pdf0.ValidatePDFABytes(doc, pdfa.PDFA4, raw) {
+	for _, v := range pdf0.ValidatePDFA(doc, pdfa.PDFA4) {
 		if strings.HasPrefix(v.Rule, "6.2.10") {
 			out = append(out, v.Error())
 		}

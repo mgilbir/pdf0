@@ -316,6 +316,10 @@ func (t Trip) Message() string {
 		// budget was reached, and there is nothing a caller can raise.
 		return fmt.Sprintf("data could not be read (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
 	}
+	if t.guard == GuardNoSourceFile {
+		// Nothing was exhausted and nothing can be raised: there is no file.
+		return fmt.Sprintf("no file to check (%s): %s; this document is therefore neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
+	}
 	if t.guard == GuardPredefinedCMap {
 		// No budget was reached, so saying one was would send a reader to the
 		// limits knobs to raise something that does not exist.

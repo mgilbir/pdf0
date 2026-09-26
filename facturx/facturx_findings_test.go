@@ -48,7 +48,7 @@ func findRule[T violation](v []T, rule string) (T, bool) {
 // whose invoice passed.
 func TestUnreadableInvoiceXMLIsNotACleanResult(t *testing.T) {
 	doc := facturxTestDoc(formalis.ProfileEN16931, "<not-xml")
-	res := ValidateContext(context.Background(), doc, nil)
+	res := ValidateContext(context.Background(), doc)
 
 	v, ok := findRule(res.Violations, facturxXMLRule)
 	if !ok {
@@ -76,7 +76,7 @@ func TestUnreadableInvoiceXMLIsNotACleanResult(t *testing.T) {
 func TestUnreadableOrderXMLIsNotACleanResult(t *testing.T) {
 	d := afDoc("order-x.xml", "Data", "text/xml")
 	d.Objects[10].Value.(*object.Stream).Data = []byte("<not-xml")
-	res := ValidateOrderContext(context.Background(), d, nil)
+	res := ValidateOrderContext(context.Background(), d)
 	if _, ok := findRule(res.Violations, orderXMLRule); !ok {
 		t.Fatalf("an unreadable order XML must be reported under %q; got %v", orderXMLRule, res.Violations)
 	}

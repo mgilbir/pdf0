@@ -127,7 +127,7 @@ func writeAndValidate(t *testing.T, d *Document, level pdfa.Level) []pdfa.Violat
 	if err != nil {
 		t.Fatalf("reparse: %v", err)
 	}
-	return ValidatePDFABytes(rd, level, buf.Bytes())
+	return ValidatePDFA(rd, level)
 }
 
 // TestRepairValidatesCleanAtItsLevel is the claim Repair makes: what it

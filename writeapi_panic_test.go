@@ -301,7 +301,7 @@ func TestFreeFunctionsSurviveDegenerateArguments(t *testing.T) {
 			return err
 		},
 		"validate a nil document": func() error {
-			_ = ValidatePDFABytes(nil, pdfa.PDFA2b, nil)
+			_ = ValidatePDFA(nil, pdfa.PDFA2b)
 			return nil
 		},
 	}

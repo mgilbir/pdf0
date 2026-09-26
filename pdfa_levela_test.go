@@ -44,10 +44,10 @@ func TestLevelACorpus(t *testing.T) {
 			}
 			checked++
 			bmsgs := map[string]bool{}
-			for _, e := range ValidatePDFABytes(doc, tc.b, data) {
+			for _, e := range ValidatePDFA(doc, tc.b) {
 				bmsgs[e.Rule+e.Message] = true
 			}
-			for _, e := range ValidatePDFABytes(doc, tc.a, data) {
+			for _, e := range ValidatePDFA(doc, tc.a) {
 				if !bmsgs[e.Rule+e.Message] {
 					aFP++
 					t.Errorf("%s [%s]: Level A false positive: %s %s", base, tc.a, e.Rule, e.Message)

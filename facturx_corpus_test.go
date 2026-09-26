@@ -40,7 +40,7 @@ func TestValidateFacturXInvoiceCorpus(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		res := ValidateFacturX(doc, data)
+		res := ValidateFacturX(doc)
 		if len(res.XML) == 0 {
 			continue
 		}

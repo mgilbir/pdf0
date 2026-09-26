@@ -85,11 +85,25 @@ func (s devSet) split() (rgb, cmyk, gray bool) {
 	return s&devRGB != 0, s&devCMYK != 0, s&devGray != 0
 }
 
+// overprintICCCMYK is not a colour family but an event the execution records
+// alongside them: something was painted in an ICCBased CMYK colour space while
+// overprinting was on for that painting operation and the overprint mode was
+// 1 (ISO 19005-2/-3/-4 6.2.4.2). It travels in the same set as the families so
+// that it is unioned, memoised and inherited through forms, patterns and Type 3
+// glyphs exactly as they are; nothing that masks device families (Default*
+// spaces, an isolated group's calibrated space) touches it, and split ignores
+// it.
+const overprintICCCMYK devSet = 1 << 3
+
 // paint is a fill or stroke colour: the device families painting with it uses
 // (already masked by the Default* spaces where it was selected), or the
 // pattern it is.
 type paint struct {
-	dev       devSet
+	dev devSet
+	// iccCMYK: the colour space selected is an ICCBased CMYK space — named
+	// directly, or DeviceCMYK standing for an ICCBased CMYK DefaultCMYK
+	// (8.6.5.6), which is then the space in use.
+	iccCMYK   bool
 	isPattern bool
 	// For a pattern colour: the pattern (a tiling pattern stream, or a
 	// shading pattern dictionary), the families of the underlying space an
@@ -108,6 +122,10 @@ type gstate struct {
 	mode         int8
 	font         *object.Dictionary
 	fontNum      int
+	// The overprint parameters (ISO 32000-2 8.6.7, Table 57), as gs sets them:
+	// OP for stroking, op for every other painting operation, and whether the
+	// overprint mode is 1. All three start false (OP and op false, OPM 0).
+	opStroke, opFill, opm1 bool
 }
 
 // initialState is the initial graphics state of a content stream whose
@@ -188,7 +206,13 @@ type contentEngine struct {
 	fontUsage    map[*object.Dictionary]*FontTextUsage
 	pendingFonts []*FontTextUsage // fonts with shown strings not yet decoded into Strings
 	allPagesDone bool
+	allAnnotDone bool
 	type3Enc     map[*object.Dictionary]map[byte]object.Name
+
+	// csUsed is every colour-space value executed content has used, each
+	// once (csSeen), in the order first used; see noteColourSpace.
+	csUsed []object.Object
+	csSeen map[usedCSKey]bool
 }
 
 type contentEngineSlot struct{}
@@ -205,6 +229,7 @@ func engineFor(doc View) *contentEngine {
 			stateIdx:  map[gstate]int32{},
 			fontUsage: map[*object.Dictionary]*FontTextUsage{},
 			type3Enc:  map[*object.Dictionary]map[byte]object.Name{},
+			csSeen:    map[usedCSKey]bool{},
 		}
 	}
 	return e
@@ -265,9 +290,80 @@ func scopeDefaults(rk resKey) devSet {
 // csFamilies is the device families a colour space value uses: itself, or
 // the base or alternate of an Indexed, Separation, DeviceN or Pattern space.
 func (e *contentEngine) csFamilies(cs object.Object) devSet {
+	e.noteColourSpace(cs)
 	var r, c, g bool
 	CheckCSForDevice(e.doc, cs, &r, &c, &g)
 	return devSetOf(r, c, g)
+}
+
+// noteColourSpace records a colour-space value the executed content used,
+// once: every value the interpreter reads a colour space from passes through
+// csFamilies — a space selected by cs or CS, an image's, an inline image's
+// named one, a shading's, a transparency group's, an uncoloured pattern's
+// underlying space. A value written as a reference is identified by its
+// number, and a direct array by its backing store; a name (a device space) is
+// not recorded.
+func (e *contentEngine) noteColourSpace(cs object.Object) {
+	var key usedCSKey
+	switch v := cs.(type) {
+	case object.IndirectRef:
+		key.num = v.Number
+	case object.Array:
+		if len(v) == 0 {
+			return
+		}
+		key.arr = &v[0]
+	default:
+		return
+	}
+	if e.csSeen[key] {
+		return
+	}
+	e.csSeen[key] = true
+	e.csUsed = append(e.csUsed, cs)
+}
+
+type usedCSKey struct {
+	num int
+	arr *object.Object
+}
+
+// isICCBasedCMYK reports whether a colour space value is [/ICCBased profile]
+// with a four-component profile (/N 4).
+func isICCBasedCMYK(d View, cs object.Object) bool {
+	arr, ok := d.Resolve(cs).(object.Array)
+	if !ok || len(arr) < 2 {
+		return false
+	}
+	if n, _ := d.ResolveName(arr[0]); n != "ICCBased" {
+		return false
+	}
+	s, ok := d.Resolve(arr[1]).(*object.Stream)
+	if !ok {
+		return false
+	}
+	n, ok := d.ResolveInt(s.Dict.Get("N"))
+	return ok && n == 4
+}
+
+// setOverprint applies an ExtGState's overprint entries to st (ISO 32000-2
+// Table 57): OP sets stroking overprint and, when the dictionary has no op,
+// the non-stroking one too; op sets the non-stroking one; OPM sets the mode.
+// An entry that is absent, or not of its type, leaves the parameter as it was.
+func setOverprint(d View, gs *object.Dictionary, st *gstate) {
+	op, hasOp := d.ResolveBool(gs.Get("op"))
+	if v, ok := d.ResolveBool(gs.Get("OP")); ok {
+		st.opStroke = bool(v)
+		if !hasOp {
+			st.opFill = bool(v)
+		}
+	}
+	if hasOp {
+		st.opFill = bool(op)
+	}
+	if v, ok := d.ResolveInt(gs.Get("OPM")); ok {
+		st.opm1 = v == 1
+	}
 }
 
 // run executes one content stream and returns the device families it uses,
@@ -354,7 +450,13 @@ func (e *contentEngine) interpret(data []byte, res *object.Dictionary, rk resKey
 	var lastName, lastNum []byte
 	var strs []rawString
 
-	use := func(p paint) {
+	// use paints with p, as a stroke or as anything else (a fill, text in a
+	// fill mode, an image mask). Overprinting is decided per operation: OP
+	// governs stroking and op everything else, both as they stand now.
+	use := func(p paint, stroke bool) {
+		if p.iccCMYK && st.opm1 && (stroke && st.opStroke || !stroke && st.opFill) {
+			used |= overprintICCCMYK
+		}
 		if !p.isPattern {
 			used |= p.dev
 			return
@@ -370,6 +472,9 @@ func (e *contentEngine) interpret(data []byte, res *object.Dictionary, rk resKey
 	// caller, come to be used.
 	device := func(fam devSet) paint {
 		p := paint{dev: fam &^ defaults, patEntry: -1}
+		if fam == devCMYK && defaults&devCMYK != 0 {
+			p.iccCMYK = isICCBasedCMYK(d, rk.cs.Get("DefaultCMYK"))
+		}
 		used |= p.dev
 		return p
 	}
@@ -398,7 +503,7 @@ func (e *contentEngine) interpret(data []byte, res *object.Dictionary, rk resKey
 				return p
 			}
 		}
-		p := paint{dev: e.csFamilies(cs) &^ defaults, patEntry: -1}
+		p := paint{dev: e.csFamilies(cs) &^ defaults, iccCMYK: isICCBasedCMYK(d, cs), patEntry: -1}
 		used |= p.dev
 		return p
 	}
@@ -443,12 +548,12 @@ func (e *contentEngine) interpret(data []byte, res *object.Dictionary, rk resKey
 		}
 		switch st.mode {
 		case 0, 4:
-			use(st.fill)
+			use(st.fill, false)
 		case 1, 5:
-			use(st.stroke)
+			use(st.stroke, true)
 		case 2, 6:
-			use(st.fill)
-			use(st.stroke)
+			use(st.fill, false)
+			use(st.stroke, true)
 		}
 	}
 
@@ -528,12 +633,12 @@ func (e *contentEngine) interpret(data []byte, res *object.Dictionary, rk resKey
 				d1 = true
 			}
 		case "f", "F", "f*":
-			use(st.fill)
+			use(st.fill, false)
 		case "S", "s":
-			use(st.stroke)
+			use(st.stroke, true)
 		case "B", "B*", "b", "b*":
-			use(st.fill)
-			use(st.stroke)
+			use(st.fill, false)
+			use(st.stroke, true)
 		case "sh":
 			if rk.sh != nil {
 				sh := d.Resolve(rk.sh.Get(object.Name(contentName(lastName))))
@@ -561,6 +666,7 @@ func (e *contentEngine) interpret(data []byte, res *object.Dictionary, rk resKey
 						st.font = d.ResolveDict(fa[0])
 						st.fontNum = object.RefNum(fa[0])
 					}
+					setOverprint(d, gs, &st)
 				}
 			}
 		case "Do":
@@ -626,7 +732,7 @@ func (e *contentEngine) paintPattern(p paint, defaults devSet, annot bool) (devS
 
 // doXObject executes a Do: an image paints in its colour space (an image
 // mask in the fill colour), a form runs in the current state.
-func (e *contentEngine) doXObject(name string, rk resKey, defaults devSet, st gstate, annot bool, use func(paint)) (devSet, int) {
+func (e *contentEngine) doXObject(name string, rk resKey, defaults devSet, st gstate, annot bool, use func(paint, bool)) (devSet, int) {
 	d := e.doc
 	if rk.xobj == nil {
 		return 0, clean
@@ -641,7 +747,7 @@ func (e *contentEngine) doXObject(name string, rk resKey, defaults devSet, st gs
 		return e.applyGroup(s, r), taint
 	case "Image":
 		if im, _ := d.ResolveBool(s.Dict.Get("ImageMask")); im {
-			use(st.fill)
+			use(st.fill, false)
 			return 0, clean
 		}
 		return e.csFamilies(s.Dict.Get("ColorSpace")) &^ defaults, clean
@@ -671,7 +777,7 @@ func (e *contentEngine) applyGroup(s *object.Stream, used devSet) devSet {
 
 // inlineImage paints an inline image: in its colour space, or as a mask in the
 // fill colour.
-func (e *contentEngine) inlineImage(params []byte, rk resKey, defaults devSet, st gstate, use func(paint)) devSet {
+func (e *contentEngine) inlineImage(params []byte, rk resKey, defaults devSet, st gstate, use func(paint, bool)) devSet {
 	var used devSet
 	mask := false
 	for _, p := range ParseInlineImageParams(params) {
@@ -685,7 +791,7 @@ func (e *contentEngine) inlineImage(params []byte, rk resKey, defaults devSet, s
 		}
 	}
 	if mask {
-		use(st.fill)
+		use(st.fill, false)
 		return 0
 	}
 	return used
@@ -886,6 +992,57 @@ func PageDeviceColourUse(doc View, page *object.Dictionary) (usesRGB, usesCMYK, 
 		used |= e.csFamilies(g.Get("CS"))
 	}
 	return used.split()
+}
+
+// PageOverprintsICCCMYK reports whether a page's content, or the appearance
+// streams of its annotations, paints in an ICCBased CMYK colour space while
+// overprinting is on for that operation — OP for a stroke, op for anything
+// else — and the overprint mode is 1, all as the graphics state stands at the
+// painting operator: set by gs, restored by Q, and inherited by the forms,
+// patterns and Type 3 glyphs the content invokes (ISO 19005-2/-3/-4 6.2.4.2).
+// It is answered by the same execution as PageDeviceColourUse, and memoised
+// with it.
+func PageOverprintsICCCMYK(doc View, page *object.Dictionary) bool {
+	e := engineFor(doc)
+	return (e.pageContent(page)|e.pageAnnotations(page))&overprintICCCMYK != 0
+}
+
+// UsedColourSpaces executes every page's content and its annotations'
+// appearance streams — memoised with the device-colour and font-usage
+// questions, so content already executed is not executed again — and returns
+// every colour-space value the executed content used, each once. The values
+// are as written, references unresolved; a consumer that compares them should
+// resolve. The order is the order first used, which depends on which question
+// the run asked first; a rule whose report must not depend on that should
+// impose its own.
+func UsedColourSpaces(doc View) []object.Object {
+	e := engineFor(doc)
+	if !e.allAnnotDone {
+		if catalog := doc.Catalog(); catalog != nil {
+			for _, page := range doc.Pages(catalog.Get("Pages")) {
+				if doc.Cancel.Stopped() {
+					break
+				}
+				e.pageContent(page.Dict)
+				e.pageAnnotations(page.Dict)
+				if g := doc.ResolveDict(page.Dict.Get("Group")); g != nil {
+					e.csFamilies(g.Get("CS"))
+				}
+			}
+		}
+		e.allAnnotDone = !doc.Cancel.Stopped()
+	}
+	return append([]object.Object(nil), e.csUsed...)
+}
+
+// PageOverprintsICCCMYKNoMemo is PageOverprintsICCCMYK on an engine of its own
+// with no memo: the oracle for the memo-soundness test.
+func PageOverprintsICCCMYKNoMemo(doc View, page *object.Dictionary) bool {
+	run := doc
+	run.Run = nil
+	e := engineFor(run)
+	e.noMemo = true
+	return (e.pageContent(page)|e.pageAnnotations(page))&overprintICCCMYK != 0
 }
 
 // PageDeviceColourUseNoMemo is PageDeviceColourUse with every execution run

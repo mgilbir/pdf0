@@ -123,7 +123,7 @@ func TestCancelledFacturXIsNeverClean(t *testing.T) {
 	}{
 		{"ValidateFacturX", func() []Violation {
 			var out []Violation
-			for _, v := range ValidateFacturXContext(ctx, facturxTestDoc(formalis.ProfileEN16931, validCII), nil).Violations {
+			for _, v := range ValidateFacturXContext(ctx, facturxTestDoc(formalis.ProfileEN16931, validCII)).Violations {
 				out = append(out, v)
 			}
 			return out
@@ -132,7 +132,7 @@ func TestCancelledFacturXIsNeverClean(t *testing.T) {
 			d := afDoc("order-x.xml", "Data", "text/xml")
 			d.Objects[10].Value.(*object.Stream).Data = []byte(validOrderXML)
 			var out []Violation
-			for _, v := range ValidateOrderXContext(ctx, d, nil).Violations {
+			for _, v := range ValidateOrderXContext(ctx, d).Violations {
 				out = append(out, v)
 			}
 			return out
@@ -215,7 +215,7 @@ func TestFacturXReportsWhatItDidNotEvaluate(t *testing.T) {
 	// set, so it always has a published gap to name.
 	d := afDoc("order-x.xml", "Data", "text/xml")
 	d.Objects[10].Value.(*object.Stream).Data = []byte(validOrderXML)
-	res := ValidateOrderXContext(context.Background(), d, nil)
+	res := ValidateOrderXContext(context.Background(), d)
 
 	if len(res.OrderNotEvaluated) == 0 {
 		t.Fatal("a rule set with published gaps must name them on the result")
@@ -255,7 +255,7 @@ func TestFacturXCarriesPDFABaseFindings(t *testing.T) {
 	d := afDoc("factur-x.xml", "Data", "text/xml")
 
 	n := 0
-	for _, v := range ValidateFacturX(d, nil).Violations {
+	for _, v := range ValidateFacturX(d).Violations {
 		if strings.HasPrefix(v.Rule, "pdfa-3/") {
 			n++
 		}
@@ -266,7 +266,7 @@ func TestFacturXCarriesPDFABaseFindings(t *testing.T) {
 
 	// The Order-X container composes the same base, by the same route.
 	n = 0
-	for _, v := range ValidateOrderX(d, nil).Violations {
+	for _, v := range ValidateOrderX(d).Violations {
 		if strings.HasPrefix(v.Rule, "pdfa-3/") {
 			n++
 		}

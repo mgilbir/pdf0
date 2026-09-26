@@ -31,10 +31,13 @@ type View struct {
 	Trailer *object.Dictionary
 	// Version is the header version, "1.7" or "2.0".
 	Version string
-	// Offsets records the absolute byte offset of each uncompressed indirect
-	// object, for the byte-level file-structure rules. Objects materialised from
-	// object streams are absent.
-	Offsets map[int]int64
+	// File returns the record of the file the document was read from, for the
+	// byte-level file-structure rules: its bytes and what Read learned about
+	// them (see FileRecord). It is nil for a document built in memory. It is a
+	// function, and the record is built on its first call, so that operations
+	// that never read the file's bytes do not pay for it; read it through
+	// FileRecord.
+	File func() *FileRecord
 	// What Read found in this file. The byte-level and embedded-file rules read
 	// these: a checker must be able to say "this object stream would not decode"
 	// rather than silently reporting the objects it could not see as absent.
@@ -324,6 +327,12 @@ const (
 	// no known CID, and the checks that need one are skipped for them, and
 	// say so (LoadCMap).
 	GuardEmbeddedCMap = "embedded-cmap" // no bound; see LoadCMap
+
+	// GuardNoSourceFile is not a resource guard: the document was built in
+	// memory, so there is no file for the byte-level rules to read (View.File
+	// is nil). They did not run, and a caller told only "no violations" would
+	// read that as "checked and clean".
+	GuardNoSourceFile = "no-source-file" // no bound; see FileRecord
 )
 
 // Pages returns the page tree under ref flattened into document order,

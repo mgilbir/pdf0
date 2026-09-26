@@ -1,5 +1,6 @@
-// simple_pdfa builds a conforming PDF/A-4 document and validates it before
-// writing, so that the file this produces is one the validator accepts.
+// simple_pdfa builds a conforming PDF/A-4 document and writes it with Save,
+// which checks the bytes it is about to emit against the level the document
+// claims and refuses to write them if they do not conform.
 //
 // It draws vector graphics rather than text, deliberately. PDF/A requires every
 // font a document shows to be embedded in it, and this repository ships no font
@@ -48,23 +49,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Validate before writing. An example that produced a file it calls PDF/A
-	// without checking would be teaching the wrong habit.
-	if errs := pdf.ValidatePDFA(doc, pdfa.PDFA4); len(errs) > 0 {
-		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "not conforming: %s\n", e.Error())
-		}
-		os.Exit(1)
-	}
-
+	// Save, not Write. An example that produced a file it calls PDF/A without
+	// checking would be teaching the wrong habit, and checking the model is not
+	// enough: the file-structure rules (header, cross-reference table, stream
+	// lengths, data after %%EOF) judge bytes, and a document built in memory
+	// has none until it is written. Save writes to memory, reads the result
+	// back, validates it at the level the document claims, and only then
+	// copies it to the writer, so nothing reaches stdout unless the whole file
+	// passed. Its error says which rules failed, or that a check could not
+	// finish.
+	//
 	// To stdout, so the example composes and leaves nothing behind:
 	//
 	//	go run ./examples/simple_pdfa > out.pdf
-	//
-	// It used to write output.pdf into whatever directory it was run from.
-	if err := doc.Write(os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "writing: %v\n", err)
+	if err := doc.Save(os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "not written: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "wrote a PDF/A-4 document, validated to stdout")
+	fmt.Fprintln(os.Stderr, "wrote a PDF/A-4 document, checked as written, to stdout")
 }

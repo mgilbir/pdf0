@@ -128,7 +128,7 @@ func TestANoSubsettingFontIsEmbeddedWhole(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			back, raw, err := embedWith(t, face, level)
+			back, _, err := embedWith(t, face, level)
 			if err != nil {
 				t.Fatalf("%s %s: %v", kind, level, err)
 			}
@@ -149,7 +149,7 @@ func TestANoSubsettingFontIsEmbeddedWhole(t *testing.T) {
 			if name, _ := back.Resolve(fd.Get("FontName")).(object.Name); strings.Contains(string(name), "+") {
 				t.Errorf("%s: a whole font was named as a subset: %s", kind, name)
 			}
-			for _, v := range ValidatePDFABytes(back, level, raw) {
+			for _, v := range ValidatePDFA(back, level) {
 				t.Errorf("%s %s: %s", kind, level, v.Error())
 			}
 		}

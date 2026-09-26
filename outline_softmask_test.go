@@ -208,7 +208,7 @@ func TestSoftMaskShapesTransparency(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, e := range ValidatePDFABytes(rd, level, buf.Bytes()) {
+			for _, e := range ValidatePDFA(rd, level) {
 				t.Errorf("violation: %s", e.Error())
 			}
 		})

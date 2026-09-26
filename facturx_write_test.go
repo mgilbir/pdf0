@@ -91,7 +91,7 @@ func TestEmbedFacturXRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("re-Read: %v", err)
 			}
-			res := ValidateFacturX(rt, buf.Bytes())
+			res := ValidateFacturX(rt)
 			if len(res.Violations) != 0 {
 				t.Fatalf("produced file has %d Factur-X violation(s): %s: %s",
 					len(res.Violations), res.Violations[0].Rule, res.Violations[0].Message)

@@ -21,14 +21,14 @@ func TestICCLimitIsReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := buf.Bytes()
-	if vs := ValidatePDFABytes(readRaw(t, raw), pdfa.PDFA4, raw); len(vs) != 0 {
+	if vs := ValidatePDFA(readRaw(t, raw), pdfa.PDFA4); len(vs) != 0 {
 		t.Fatalf("control: the skeleton is not clean: %v", findingKeys(vs))
 	}
 	for name, opts := range map[string][]Option{
 		"ICC bound":            {WithMaxICCProfileBytes(1)},
 		"ICC and decode bound": {WithMaxICCProfileBytes(1), WithMaxDecodedStreamBytes(1)},
 	} {
-		vs := ValidatePDFABytes(readRaw(t, raw, opts...), pdfa.PDFA4, raw)
+		vs := ValidatePDFA(readRaw(t, raw, opts...), pdfa.PDFA4)
 		if !hasFinding(vs, "limit", "") {
 			t.Errorf("%s: no limit finding at all: %v", name, findingKeys(vs))
 		}
@@ -38,7 +38,7 @@ func TestICCLimitIsReported(t *testing.T) {
 			}
 		}
 	}
-	if vs := ValidatePDFABytes(readRaw(t, raw, WithMaxICCProfileBytes(1)), pdfa.PDFA4, raw); !hasFinding(vs, "limit", core.GuardICCProfile) {
+	if vs := ValidatePDFA(readRaw(t, raw, WithMaxICCProfileBytes(1)), pdfa.PDFA4); !hasFinding(vs, "limit", core.GuardICCProfile) {
 		t.Errorf("the ICC bound's trip does not name it: %v", findingKeys(vs))
 	}
 }
@@ -61,10 +61,10 @@ func TestCompressedMetadataOverALimitIsNotJudged(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := buf.Bytes()
-	if vs := ValidatePDFABytes(readRaw(t, raw), pdfa.PDFA2b, raw); len(vs) != 0 {
+	if vs := ValidatePDFA(readRaw(t, raw), pdfa.PDFA2b); len(vs) != 0 {
 		t.Fatalf("control: the skeleton with compressed metadata is not clean: %v", findingKeys(vs))
 	}
-	vs := ValidatePDFABytes(readRaw(t, raw, WithMaxDecodedStreamBytes(64)), pdfa.PDFA2b, raw)
+	vs := ValidatePDFA(readRaw(t, raw, WithMaxDecodedStreamBytes(64)), pdfa.PDFA2b)
 	for _, v := range vs {
 		if !IsCheckerFinding(v) {
 			t.Errorf("a conformance finding from metadata pdf0 did not decode: %s %s", v.Rule, v.Message)

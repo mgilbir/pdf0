@@ -8,31 +8,20 @@ import (
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
 	"math"
-	"slices"
-	"sort"
 	"unicode/utf8"
 )
 
 // This file implements the byte-level PDF/A file-structure rules (ISO 19005
-// clause 6.1), which operate on the raw file bytes rather than the parsed
-// object model. They are grounded in ISO 32000-1 clause 7.5 (File Structure)
-// and Annex C / 6.1.7 implementation limits.
-
-// checkFileStructureBytes runs every raw-byte file-structure check.
-func checkFileStructureBytes(doc core.View, level Level, raw []byte) []Violation {
-	if raw == nil {
-		return nil
-	}
-	var errs []Violation
-	errs = append(errs, checkFileHeaderBytes(level, raw)...)
-	errs = append(errs, checkIndirectObjectSyntax(doc, level, raw)...)
-	errs = append(errs, checkNameUTF8(doc, level)...)
-	errs = append(errs, checkXRefTableFormat(doc, level, raw)...)
-	errs = append(errs, checkHexStringFormat(doc, level, raw)...)
-	errs = append(errs, checkStreamKeywordFormat(doc, level, raw)...)
-	errs = append(errs, checkInlineImageFilters(doc, level)...)
-	return errs
-}
+// clause 6.1), which operate on the file's bytes rather than the parsed object
+// model. They are grounded in ISO 32000-1 clause 7.5 (File Structure) and
+// Annex C / 6.1.7 implementation limits.
+//
+// Every one of them reads a core.FileRecord — the bytes of the file the
+// document was read from and what Read learned about them — and nothing else:
+// not a caller's bytes, which need not be that file's (audit 2026-09-22 C69),
+// and not the object graph, which a caller may have edited since. Each is
+// dispatched on its own from ValidateView, so one that fails internally costs
+// only its own rule.
 
 // checkFileHeaderBytes validates the file header per ISO 19005 6.1.2,
 // grounded in ISO 32000-1 7.5.2: the header shall begin at byte offset 0,
@@ -113,21 +102,6 @@ func min2(a, b int) int {
 // isEOLByte reports whether b is a PDF end-of-line marker byte.
 func isEOLByte(b byte) bool { return b == '\n' || b == '\r' }
 
-// recordLowestObjAt records num as the object living at byte offset off, keeping
-// the lowest number when several objects share one offset. Two cross-reference
-// slots may point at the same bytes (Read stores the parsed value under both
-// numbers, see parsedByOffset), and the byte-level rules below identify an
-// object by its offset — so a finding in that shared region would otherwise be
-// attributed to whichever number doc.Offsets, a Go map with randomised
-// iteration order, happened to yield first, changing the report between runs
-// over the same file. Numeric order is a total order, so this is reproducible.
-func recordLowestObjAt(offToNum map[int64]int, off int64, num int) {
-	if prev, dup := offToNum[off]; dup && prev <= num {
-		return
-	}
-	offToNum[off] = num
-}
-
 // isPDFWhite reports whether b is PDF white space.
 func isPDFWhite(b byte) bool {
 	return b == 0 || b == '\t' || b == '\n' || b == '\f' || b == '\r' || b == ' '
@@ -139,24 +113,13 @@ func isPDFWhite(b byte) bool {
 // the object number preceded by an EOL marker, the obj keyword followed by
 // an EOL marker, and the endobj keyword preceded and followed by an EOL
 // marker (with no extra spaces).
-func checkIndirectObjectSyntax(doc core.View, level Level, raw []byte) []Violation {
-	if doc.Offsets == nil {
-		return nil
-	}
+//
+// Each object is examined over its own region, [Offset, End) as Read parsed
+// it. The region used to run to the next object's offset, so bytes between
+// objects — and, once Read dropped them from the offsets, whole
+// cross-reference streams — were read as part of the object before.
+func checkIndirectObjectSyntax(f *core.FileRecord, level Level) []Violation {
 	rule := indirectRule(level)
-
-	// Sort offsets ascending to bound each object's region.
-	var offs []int64
-	offToNum := make(map[int64]int)
-	for num, off := range doc.Offsets {
-		if _, ok := doc.Objects[num]; !ok {
-			continue // dropped structural object
-		}
-		offs = append(offs, off)
-		recordLowestObjAt(offToNum, off, num)
-	}
-	sortInt64(offs)
-
 	var errs []Violation
 	seen := map[string]bool{}
 	add := func(msg string, obj int) {
@@ -166,17 +129,11 @@ func checkIndirectObjectSyntax(doc core.View, level Level, raw []byte) []Violati
 		seen[msg] = true
 		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
-
-	for i, off := range offs {
-		num := offToNum[off]
-		regionEnd := int64(len(raw))
-		if i+1 < len(offs) {
-			regionEnd = offs[i+1]
-		}
-		if off < 0 || off >= int64(len(raw)) {
+	for _, o := range f.Objects {
+		if o.Offset < 0 || o.Offset >= int64(len(f.Data)) || o.End <= o.Offset {
 			continue
 		}
-		checkOneObjectSyntax(raw, off, regionEnd, num, add)
+		checkOneObjectSyntax(f.Data, o.Offset, o.End, o.Num, add)
 	}
 	return errs
 }
@@ -294,14 +251,6 @@ func lastIndexToken(b []byte, kw string) int {
 		}
 	}
 	return -1
-}
-
-// sortInt64 sorts a slice of object byte offsets ascending. The offsets are
-// collected from a map (doc.Offsets) in random order, so an insertion sort was
-// quadratic: a 46 MB file with many objects spent ~30s here, dominating
-// validation. slices.Sort is O(n log n) and produces the same ordering.
-func sortInt64(a []int64) {
-	slices.Sort(a)
 }
 
 func min64(a, b int64) int64 {
@@ -435,7 +384,12 @@ func utf8Valid(b []byte) bool { return utf8.Valid(b) }
 // cross-reference table: the xref keyword followed by a single EOL, each
 // subsection header "start count" separated by exactly one space, and each
 // entry line in the fixed 20-byte form.
-func checkXRefTableFormat(doc core.View, level Level, raw []byte) []Violation {
+//
+// The tables are the ones Read located through startxref and the /Prev chain
+// (FileRecord.XRefTables). It used to take every delimited "xref" in the file
+// for a table, so a string or a comment saying "see the xref table" was
+// reported under 6.1.4 (audit 2026-09-22 C71).
+func checkXRefTableFormat(f *core.FileRecord, level Level) []Violation {
 	rule := "6.1.4"
 	var errs []Violation
 	seen := map[string]bool{}
@@ -446,22 +400,31 @@ func checkXRefTableFormat(doc core.View, level Level, raw []byte) []Violation {
 		seen[msg] = true
 		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg})
 	}
-
-	// Each delimited "xref" keyword (not "startxref", whose preceding byte
-	// is the regular char 't') introduces a cross-reference table.
-	for i := 0; i+4 <= len(raw); i++ {
-		if !bytes.Equal(raw[i:i+4], []byte("xref")) {
+	for _, kw := range f.XRefTables {
+		if kw < 0 || kw+4 > int64(len(f.Data)) || string(f.Data[kw:kw+4]) != "xref" {
 			continue
 		}
-		if i > 0 && syntax.IsRegular(raw[i-1]) {
-			continue // startxref or similar
-		}
-		if i+4 >= len(raw) || syntax.IsRegular(raw[i+4]) {
-			continue // xref stream object header etc.
-		}
-		validateXRefSectionFormat(raw, i+4, add)
+		validateXRefSectionFormat(f.Data, int(kw)+4, add)
 	}
 	return errs
+}
+
+// checkNoXRefStreams enforces ISO 19005-1 6.1.4 (veraPDF 6.1.4-t03): a
+// PDF/A-1 file shall not use cross-reference streams, which PDF 1.4 does not
+// have. The later parts are built on PDF 1.7 and 2.0 and allow them.
+//
+// The veraPDF fail file for it (6-1-4-t03-fail-a) used to be caught only by
+// accident: its outline carries the title "Cross reference table contains the
+// xref stream", and the old xref-table check took that " xref " for a table
+// whose keyword was not followed by an EOL (audit 2026-09-22 C71). Once only
+// the tables Read located were checked, the file had no finding at all, which
+// is what showed this rule was missing.
+func checkNoXRefStreams(f *core.FileRecord, level Level) []Violation {
+	if level.Part() != 1 || !f.XRefStreams {
+		return nil
+	}
+	return []Violation{{Rule: "6.1.4", Level: level,
+		Message: "the file uses a cross-reference stream, which PDF/A-1 does not allow"}}
 }
 
 func validateXRefSectionFormat(raw []byte, p int, add func(string)) {
@@ -592,51 +555,38 @@ func consumeSingleEOL(raw []byte, p int) int {
 // checkHexStringFormat verifies that every hexadecimal string object contains
 // only hexadecimal digits and white space, and an even number of them
 // (PDF/A forbids the implicit trailing-zero padding of an odd-length hex
-// string). Object bodies are tokenised up to the stream keyword so binary
-// stream data is never misread as a hex string.
-func checkHexStringFormat(doc core.View, level Level, raw []byte) []Violation {
-	if doc.Offsets == nil {
-		return nil
-	}
+// string).
+//
+// Hexadecimal strings are found in two places. In the file's object bodies,
+// read from the file record (a document built in memory has none): each
+// object's region up to its stream keyword, so stream data is never misread
+// as syntax. And in the decoded content streams the document draws with,
+// read from the graph whatever the document's origin — this half is not a
+// byte-level rule, and used to be skipped whenever the caller passed no bytes.
+//
+// One finding per distinct message, attributed to the lowest object number
+// that produced it: the content streams come from a map, and taking the first
+// one found made the report vary between runs.
+func checkHexStringFormat(doc core.View, level Level) []Violation {
 	rule := "6.1.6"
 	if level.Part() == 4 {
 		rule = "6.1.5"
 	}
-	var errs []Violation
-	seen := map[string]bool{}
+	var found exampleFindings
 	add := func(msg string, obj int) {
-		if seen[msg] {
-			return
-		}
-		seen[msg] = true
-		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Object: obj})
+		found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
-
-	var offs []int64
-	offToNum := map[int64]int{}
-	for num, off := range doc.Offsets {
-		if _, ok := doc.Objects[num]; ok {
-			offs = append(offs, off)
-			recordLowestObjAt(offToNum, off, num)
+	if f := doc.FileRecord(); f != nil {
+		for _, o := range f.Objects {
+			body := f.Region(o)
+			if o.Stream && o.StreamKeyword >= o.Offset && o.StreamKeyword-o.Offset <= int64(len(body)) {
+				body = body[:o.StreamKeyword-o.Offset]
+			}
+			scanHexStrings(body, func(content []byte) {
+				checkOneHexString(content, o.Num, add)
+			})
 		}
 	}
-	sortInt64(offs)
-
-	for i, off := range offs {
-		regionEnd := int64(len(raw))
-		if i+1 < len(offs) {
-			regionEnd = offs[i+1]
-		}
-		body := raw[int(off):min64(regionEnd, int64(len(raw)))]
-		// Restrict to the object's dictionary/value, before any stream data.
-		if s := indexToken(body, "stream"); s >= 0 {
-			body = body[:s]
-		}
-		scanHexStrings(body, func(content []byte) {
-			checkOneHexString(content, offToNum[off], add)
-		})
-	}
-
 	// String objects also occur as operands inside content streams; scan the
 	// decoded content of pages, form XObjects, and tiling patterns with a
 	// content-aware tokenizer that skips inline-image binary data.
@@ -645,7 +595,7 @@ func checkHexStringFormat(doc core.View, level Level, raw []byte) []Violation {
 			checkOneHexString(content, num, add)
 		})
 	}
-	return errs
+	return found.errs
 }
 
 // scanContentHexStrings reports the raw content of each hexadecimal string
@@ -831,10 +781,11 @@ func indexToken(b []byte, kw string) int {
 // checkStreamKeywordFormat verifies that the stream keyword is followed by
 // CRLF or a single LF (not a bare CR, and with no extra white space before
 // the EOL), and that endstream is preceded by an EOL marker.
-func checkStreamKeywordFormat(doc core.View, level Level, raw []byte) []Violation {
-	if doc.Offsets == nil {
-		return nil
-	}
+//
+// The keyword is the one Read's parser took (FileObject.StreamKeyword), not
+// the first word "stream" a search finds, and endstream is looked for inside
+// the object's own region.
+func checkStreamKeywordFormat(f *core.FileRecord, level Level) []Violation {
 	rule := "6.1.7.1"
 	if level.Part() == 1 {
 		rule = "6.1.6"
@@ -850,38 +801,22 @@ func checkStreamKeywordFormat(doc core.View, level Level, raw []byte) []Violatio
 		seen[msg] = true
 		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
-
-	var offs []int64
-	offToNum := map[int64]int{}
-	for num, off := range doc.Offsets {
-		iobj, ok := doc.Objects[num]
-		if !ok {
+	for _, o := range f.Objects {
+		if !o.Stream {
 			continue
 		}
-		if _, ok := iobj.Value.(*object.Stream); ok {
-			offs = append(offs, off)
-			recordLowestObjAt(offToNum, off, num)
-		}
-	}
-	sortInt64(offs)
-
-	for i, off := range offs {
-		regionEnd := int64(len(raw))
-		if i+1 < len(offs) {
-			regionEnd = offs[i+1]
-		}
-		region := raw[int(off):min64(regionEnd, int64(len(raw)))]
-		checkOneStreamKeyword(region, int(off), offToNum[off], raw, add)
+		checkOneStreamKeyword(f.Region(o), o.StreamKeyword-o.Offset, o.Num, add)
 	}
 	return errs
 }
 
-func checkOneStreamKeyword(region []byte, base, num int, raw []byte, add func(string, int)) {
-	s := indexToken(region, "stream")
-	if s < 0 {
+// checkOneStreamKeyword checks one stream object's keyword layout. region is
+// the object's bytes and kw the stream keyword's offset in it.
+func checkOneStreamKeyword(region []byte, kw int64, num int, add func(string, int)) {
+	if kw < 0 || kw+int64(len("stream")) > int64(len(region)) {
 		return
 	}
-	p := s + len("stream")
+	p := int(kw) + len("stream")
 	// After the stream keyword: CRLF or a single LF.
 	switch {
 	case p < len(region) && region[p] == '\r':
@@ -896,14 +831,15 @@ func checkOneStreamKeyword(region []byte, base, num int, raw []byte, add func(st
 		add("the stream keyword is not followed by an EOL marker", num)
 	}
 
-	// endstream must be preceded by an EOL marker. Use the last substring
-	// occurrence: the real terminator is the last "endstream" in the
-	// object's region, and it may be glued directly to the stream data
-	// (which is itself the violation).
-	e := bytes.LastIndex(region, []byte("endstream"))
-	if e <= 0 {
+	// endstream must be preceded by an EOL marker. Use the last occurrence in
+	// the object's region: the real terminator is the one just before endobj,
+	// and it may be glued directly to the stream data (which is itself the
+	// violation).
+	e := bytes.LastIndex(region[p:], []byte("endstream"))
+	if e < 0 {
 		return
 	}
+	e += p
 	if region[e-1] != '\r' && region[e-1] != '\n' {
 		add("the endstream keyword is not preceded by an EOL marker", num)
 	}
@@ -1025,15 +961,25 @@ func checkObjectStreamDecodable(doc core.View, level Level) []Violation {
 
 // checkLinearizedTrailerID enforces ISO 19005-1 6.1.3 for linearized files: the
 // file identifier (/ID) in the first-page trailer and the last trailer shall be
-// the same. encoding/xml is not involved here — this is a byte-level scan of
-// the traditional trailers a linearized PDF/A-1 file uses. Gated on
-// /Linearized: a non-linearized incremental-update file legitimately carries
+// the same. A non-linearized incremental-update file legitimately carries
 // several trailers, and comparing them there produced a false positive.
-func checkLinearizedTrailerID(doc core.View, raw []byte, level Level) []Violation {
-	if !bytes.Contains(raw, []byte("/Linearized")) {
+//
+// Both facts come from the file record: the file is linearized when its first
+// object is a linearization dictionary, and the trailers are those of the
+// cross-reference sections Read parsed, in file order. The check used to call
+// a file linearized when "/Linearized" occurred anywhere in its bytes, and to
+// parse a trailer after every "trailer" in them, stream data included — the
+// sibling of the "xref" mistake (audit 2026-09-22 C71).
+func checkLinearizedTrailerID(f *core.FileRecord, level Level) []Violation {
+	if !f.Linearized {
 		return nil
 	}
-	ids := collectTrailerIDFirstElements(doc, raw)
+	var ids [][]byte
+	for _, t := range f.Trailers {
+		if t.HasID {
+			ids = append(ids, t.ID0)
+		}
+	}
 	if len(ids) >= 2 && !bytes.Equal(ids[0], ids[len(ids)-1]) {
 		return []Violation{{
 			Rule:    "6.1.3",
@@ -1044,54 +990,27 @@ func checkLinearizedTrailerID(doc core.View, raw []byte, level Level) []Violatio
 	return nil
 }
 
-// collectTrailerIDFirstElements returns the first element of the /ID array of
-// every traditional "trailer" dictionary in raw, in file order. A trailer is
-// parsed from the bytes, but what it references are objects of the same file,
-// so an indirect /ID (or an indirect element) resolves through the document.
-func collectTrailerIDFirstElements(doc core.View, raw []byte) [][]byte {
-	var ids [][]byte
-	for i := 0; ; {
-		idx := bytes.Index(raw[i:], []byte("trailer"))
-		if idx < 0 {
-			break
-		}
-		at := i + idx
-		i = at + 7
-		p := syntax.NewParser(raw)
-		p.Lexer().SetPosition(int64(at + 7))
-		obj, err := p.ParseObject()
-		if err != nil {
-			continue
-		}
-		d, ok := obj.(*object.Dictionary)
-		if !ok {
-			continue
-		}
-		if arr, ok := doc.Resolve(d.Get("ID")).(object.Array); ok && len(arr) >= 1 {
-			if s, ok := doc.Resolve(arr[0]).(object.String); ok { // string: a trailer's file identifier, parsed from the raw bytes and never encrypted (ISO 32000-2 7.6.2)
-				ids = append(ids, append([]byte(nil), s.Value...))
-			}
-		}
-	}
-	return ids
-}
-
 // checkStreamLengthBytes verifies each uncompressed stream's /Length against the
-// byte extent measured from the raw file (ISO 32000-1 7.3.8.2; PDF/A 6.1.7 /
+// byte extent measured in the file (ISO 32000-1 7.3.8.2; PDF/A 6.1.7 /
 // 6.1.6). The parser recovers from a wrong /Length by searching for endstream,
-// so the in-memory object.Stream.Data can mask the defect; this measures the file
-// directly.
+// so the in-memory object.Stream.Data can mask the defect; this measures the
+// file directly.
 //
-// Two spec facts make the measurement unambiguous and false-positive-free:
-//   - Only white space may appear between endstream and endobj (7.3.8.1), so the
-//     real endstream is the one just before endobj even when the stream data
-//     itself contains the bytes "endstream".
-//   - The optional end-of-line marker before endstream is not counted in the
-//     length, and a lone CARRIAGE RETURN may be data (NOTE 2). The declared
-//     length is therefore valid within [raw-eol, raw-1] when an EOL is present
-//     (raw exactly when none is), and only a length outside that range — such as
-//     one that wrongly includes the whole EOL — is a violation.
-func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []Violation {
+// The extent runs from the end of the line after the stream keyword the parser
+// took to the endstream just before the object's endobj. Only white space may
+// appear between endstream and endobj (7.3.8.1), so that endstream is the real
+// one even when the data itself contains the bytes "endstream". The keyword
+// used to be found by searching the file for a white-space-preceded "stream"
+// from the object's offset, which stepped over the legal ">>stream" and
+// measured the next object's stream instead (audit 2026-09-22 C70). The
+// declared length is the file's own, taken when Read finished.
+//
+// The optional end-of-line marker before endstream is not counted in the
+// length, and a lone CARRIAGE RETURN may be data (NOTE 2). The declared length
+// is therefore valid within [raw-eol, raw-1] when an EOL is present (raw
+// exactly when none is), and only a length outside that range — such as one
+// that wrongly includes the whole EOL — is a violation.
+func checkStreamLengthBytes(f *core.FileRecord, level Level) []Violation {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
 	switch level.Part() {
 	case 4:
@@ -1099,29 +1018,12 @@ func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []Violation 
 	case 2, 3:
 		rule = "6.1.7.1"
 	}
-	// Locate every delimited "stream" and "endobj" keyword once, up front, so
-	// each object's extent is a binary search rather than a fresh forward scan.
-	// Searching per object made this O(objects × filesize): a 27 MB file with
-	// ~40k streams spent >80 s here because each scan restarted from the object's
-	// offset. The single-pass precompute is O(filesize) total.
-	streamKW := allDelimitedKeywords(raw, "stream", true)
-	endobjKW := allDelimitedKeywords(raw, "endobj", true)
-
 	var errs []Violation
-	for num, off := range doc.Offsets {
-		iobj := doc.Objects[num]
-		if iobj == nil {
+	for _, o := range f.Objects {
+		if !o.Stream || !o.LengthOK {
 			continue
 		}
-		s, ok := iobj.Value.(*object.Stream)
-		if !ok {
-			continue
-		}
-		declared, ok := doc.Resolve(s.Dict.Get("Length")).(object.Integer)
-		if !ok {
-			continue
-		}
-		rawLen, eol, ok := streamByteExtent(raw, off, streamKW, endobjKW)
+		rawLen, eol, ok := streamByteExtent(f.Region(o), o.StreamKeyword-o.Offset)
 		if !ok {
 			continue
 		}
@@ -1130,91 +1032,51 @@ func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []Violation 
 			hi = rawLen - 1
 		}
 		lo := rawLen - eol
-		if int64(declared) < lo || int64(declared) > hi {
+		if o.Length < lo || o.Length > hi {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
 				Message: "the value of the Length key does not match the actual number of bytes in the stream",
-				Object:  num,
+				Object:  o.Num,
 			})
 		}
 	}
 	return errs
 }
 
-// allDelimitedKeywords returns, in ascending order, every offset where keyword
-// occurs as a delimited token in data: preceded by whitespace (when
-// requireLeadingWS) and followed by a non-regular byte or end of input — the
-// same match syntax.FindDelimitedKeyword makes, collected in a single O(filesize) pass
-// so callers can binary-search instead of re-scanning per object.
-func allDelimitedKeywords(data []byte, keyword string, requireLeadingWS bool) []int64 {
-	marker := []byte(keyword)
-	var out []int64
-	for from := 0; from < len(data); {
-		idx := bytes.Index(data[from:], marker)
-		if idx < 0 {
-			break
-		}
-		at := from + idx
-		end := at + len(marker)
-		beforeOK := !requireLeadingWS || at == 0 || syntax.IsWhitespace(data[at-1])
-		afterOK := end >= len(data) || !syntax.IsRegular(data[end])
-		if beforeOK && afterOK {
-			out = append(out, int64(at))
-		}
-		from = at + 1
-	}
-	return out
-}
-
-// firstKeywordAtOrAfter returns the first offset in the ascending slice that is
-// >= pos, or -1 if none — the binary-search equivalent of a forward keyword scan
-// from pos.
-func firstKeywordAtOrAfter(sorted []int64, pos int64) int64 {
-	i := sort.Search(len(sorted), func(i int) bool { return sorted[i] >= pos })
-	if i < len(sorted) {
-		return sorted[i]
-	}
-	return -1
-}
-
-// streamByteExtent returns, for the stream object beginning at objStart, the
-// number of raw bytes between the EOL after the stream keyword and the real
-// endstream (anchored on endobj), and the length of the trailing EOL before
-// that endstream (0, 1, or 2). ok is false if the structure cannot be located.
-// streamKW and endobjKW are the precomputed delimited-keyword offsets (see
-// allDelimitedKeywords).
-func streamByteExtent(data []byte, objStart int64, streamKW, endobjKW []int64) (rawLen, eol int64, ok bool) {
-	// Locate the stream keyword as a delimited token, not a substring: an
-	// embedded-file dictionary can contain the letters "stream" in a value, and
-	// matching that would place the data start too early.
-	sk := firstKeywordAtOrAfter(streamKW, objStart)
-	if sk < 0 {
+// streamByteExtent returns, for a stream object's region whose stream keyword
+// is at kw, the number of bytes between the EOL after the keyword and the
+// endstream that precedes the region's closing endobj, and the length of the
+// EOL before that endstream (0, 1 or 2). ok is false when the region does not
+// end "endstream <white space> endobj".
+func streamByteExtent(region []byte, kw int64) (rawLen, eol int64, ok bool) {
+	n := int64(len(region))
+	if kw < 0 || kw+6 > n {
 		return 0, 0, false
 	}
-	ds := sk + 6
-	if ds < int64(len(data)) && data[ds] == '\r' {
+	ds := kw + 6
+	if ds < n && region[ds] == '\r' {
 		ds++
 	}
-	if ds < int64(len(data)) && data[ds] == '\n' {
+	if ds < n && region[ds] == '\n' {
 		ds++
 	}
-	endobj := firstKeywordAtOrAfter(endobjKW, ds)
-	if endobj < 0 {
+	endobj := n - int64(len("endobj"))
+	if endobj < ds || string(region[endobj:]) != "endobj" {
 		return 0, 0, false
 	}
 	j := endobj - 1
-	for j >= ds && syntax.IsWhitespace(data[j]) {
+	for j >= ds && syntax.IsWhitespace(region[j]) {
 		j--
 	}
-	if j-8 < ds || string(data[j-8:j+1]) != "endstream" {
+	if j-8 < ds || string(region[j-8:j+1]) != "endstream" {
 		return 0, 0, false
 	}
 	esStart := j - 8
 	rawLen = esStart - ds
-	if esStart-2 >= ds && data[esStart-1] == '\n' && data[esStart-2] == '\r' {
+	if esStart-2 >= ds && region[esStart-1] == '\n' && region[esStart-2] == '\r' {
 		eol = 2
-	} else if esStart-1 >= ds && (data[esStart-1] == '\n' || data[esStart-1] == '\r') {
+	} else if esStart-1 >= ds && (region[esStart-1] == '\n' || region[esStart-1] == '\r') {
 		eol = 1
 	}
 	return rawLen, eol, true

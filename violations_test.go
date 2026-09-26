@@ -70,17 +70,16 @@ func TestViolationsCombine(t *testing.T) {
 func TestValidatorsAreFreeFunctions(t *testing.T) {
 	docType := reflect.TypeOf((*Document)(nil))
 	for name, fn := range map[string]any{
-		"ValidatePDFA":      ValidatePDFA,
-		"ValidatePDFABytes": ValidatePDFABytes,
-		"ValidatePDFUA":     ValidatePDFUA,
-		"ValidatePDFUA2":    ValidatePDFUA2,
-		"ValidatePDFX":      ValidatePDFX,
-		"ValidatePDFVT":     ValidatePDFVT,
-		"ValidatePDFVT2":    ValidatePDFVT2,
-		"ValidatePDFR":      ValidatePDFR,
-		"ValidateDParts":    ValidateDParts,
-		"ValidateFacturX":   ValidateFacturX,
-		"ValidateOrderX":    ValidateOrderX,
+		"ValidatePDFA":    ValidatePDFA,
+		"ValidatePDFUA":   ValidatePDFUA,
+		"ValidatePDFUA2":  ValidatePDFUA2,
+		"ValidatePDFX":    ValidatePDFX,
+		"ValidatePDFVT":   ValidatePDFVT,
+		"ValidatePDFVT2":  ValidatePDFVT2,
+		"ValidatePDFR":    ValidatePDFR,
+		"ValidateDParts":  ValidateDParts,
+		"ValidateFacturX": ValidateFacturX,
+		"ValidateOrderX":  ValidateOrderX,
 	} {
 		ft := reflect.TypeOf(fn)
 		if ft.Kind() != reflect.Func || ft.NumIn() == 0 || ft.In(0) != docType {

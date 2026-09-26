@@ -212,10 +212,10 @@ func TestCorpusFacturXSetDocumentInfoKeepsFindings(t *testing.T) {
 	}
 	findings := func(d *Document, data []byte) []string {
 		var out []string
-		for _, v := range ValidateFacturX(d, data).Violations {
+		for _, v := range ValidateFacturX(d).Violations {
 			out = append(out, "FX "+v.Rule+": "+v.Message)
 		}
-		for _, v := range ValidatePDFABytes(d, pdfa.PDFA3b, data) {
+		for _, v := range ValidatePDFA(d, pdfa.PDFA3b) {
 			out = append(out, "A "+v.Rule+": "+v.Message)
 		}
 		sort.Strings(out)
@@ -379,7 +379,7 @@ func TestEscapedTitlesValidateAt1b(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, v := range ValidatePDFABytes(rt, pdfa.PDFA1b, buf.Bytes()) {
+		for _, v := range ValidatePDFA(rt, pdfa.PDFA1b) {
 			t.Errorf("%v", v)
 		}
 	}

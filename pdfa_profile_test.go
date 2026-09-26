@@ -54,15 +54,15 @@ func hasViolationMessage(vs []pdfa.Violation, sub string) bool {
 // Factur-X invoice needs.
 func TestLevelUIsALevel(t *testing.T) {
 	for _, level := range []pdfa.Level{pdfa.PDFA2u, pdfa.PDFA3u} {
-		r, raw := profileBytes(t, mustPDFADoc(t, level))
-		if vs := ValidatePDFABytes(r, level, raw); len(vs) != 0 {
+		r, _ := profileBytes(t, mustPDFADoc(t, level))
+		if vs := ValidatePDFA(r, level); len(vs) != 0 {
 			t.Errorf("a %s skeleton at %s: %v", level, level, vs)
 		}
 		declared, ok := r.Conformance()
 		if !ok || declared != level {
 			t.Fatalf("a %s document declares (%v, %v)", level, declared, ok)
 		}
-		if vs := ValidatePDFABytes(r, declared, raw); len(vs) != 0 {
+		if vs := ValidatePDFA(r, declared); len(vs) != 0 {
 			t.Errorf("a %s skeleton at its declared level: %v", level, vs)
 		}
 		var buf bytes.Buffer
@@ -74,14 +74,14 @@ func TestLevelUIsALevel(t *testing.T) {
 		{pdfa.PDFA2u, pdfa.PDFA2b}, {pdfa.PDFA2a, pdfa.PDFA2b}, {pdfa.PDFA2a, pdfa.PDFA2u},
 		{pdfa.PDFA3u, pdfa.PDFA3b}, {pdfa.PDFA1a, pdfa.PDFA1b},
 	} {
-		r, raw := profileBytes(t, mustPDFADoc(t, tc.doc))
-		if vs := ValidatePDFABytes(r, tc.target, raw); len(vs) != 0 {
+		r, _ := profileBytes(t, mustPDFADoc(t, tc.doc))
+		if vs := ValidatePDFA(r, tc.target); len(vs) != 0 {
 			t.Errorf("a %s document at %s: %v", tc.doc, tc.target, vs)
 		}
 	}
 	// And not the other way: a 2b file is not a 2u file.
-	r, raw := profileBytes(t, mustPDFADoc(t, pdfa.PDFA2b))
-	if vs := ValidatePDFABytes(r, pdfa.PDFA2u, raw); !hasViolationMessage(vs, `accepts "U" or "A"`) {
+	r, _ := profileBytes(t, mustPDFADoc(t, pdfa.PDFA2b))
+	if vs := ValidatePDFA(r, pdfa.PDFA2u); !hasViolationMessage(vs, `accepts "U" or "A"`) {
 		t.Errorf("a 2b document at PDF/A-2u was not reported: %v", vs)
 	}
 }
@@ -95,8 +95,8 @@ func TestEmbeddedFilesAreValidatedAtTheirOwnLevel(t *testing.T) {
 		_, innerBytes := profileBytes(t, mustPDFADoc(t, inner))
 		outer := mustPDFADoc(t, pdfa.PDFA4)
 		attachPDF(t, outer, "inner.pdf", innerBytes)
-		r, raw := profileBytes(t, outer)
-		if vs := ValidatePDFABytes(r, pdfa.PDFA4, raw); len(vs) != 0 {
+		r, _ := profileBytes(t, outer)
+		if vs := ValidatePDFA(r, pdfa.PDFA4); len(vs) != 0 {
 			t.Errorf("a PDF/A-4 file embedding a conforming %s file: %v", inner, vs)
 		}
 	}
@@ -110,8 +110,8 @@ func TestEmbeddedFilesAreValidatedAtTheirOwnLevel(t *testing.T) {
 	_, badBytes := profileBytes(t, bad)
 	outer := mustPDFADoc(t, pdfa.PDFA4)
 	attachPDF(t, outer, "bad.pdf", badBytes)
-	r, raw := profileBytes(t, outer)
-	if vs := ValidatePDFABytes(r, pdfa.PDFA4, raw); !hasViolationMessage(vs, "an embedded PDF file is not compliant") {
+	r, _ := profileBytes(t, outer)
+	if vs := ValidatePDFA(r, pdfa.PDFA4); !hasViolationMessage(vs, "an embedded PDF file is not compliant") {
 		t.Errorf("a non-conforming embedded 2u file was not reported: %v", vs)
 	}
 }
@@ -121,8 +121,8 @@ func TestEmbeddedFilesAreValidatedAtTheirOwnLevel(t *testing.T) {
 // public entry point, where the run used to flatten the level to PDF/A-4
 // before any check saw it.
 func TestTheVariantIsTheTargets(t *testing.T) {
-	r, raw := profileBytes(t, mustPDFADoc(t, pdfa.PDFA4))
-	vs := ValidatePDFABytes(r, pdfa.PDFA4F, raw)
+	r, _ := profileBytes(t, mustPDFADoc(t, pdfa.PDFA4))
+	vs := ValidatePDFA(r, pdfa.PDFA4F)
 	if !hasViolationMessage(vs, "must contain an /EmbeddedFiles key") {
 		t.Errorf("a plain PDF/A-4 file at PDF/A-4f was not held to the attachment requirement: %v", vs)
 	}
@@ -158,8 +158,8 @@ func TestTheVariantIsTheTargets(t *testing.T) {
 		object.Entry{Key: "3DD", Value: artwork},
 	))
 	d.ResolveDict(pageRef).Set("Annots", object.Array{annot})
-	r, raw = profileBytes(t, d)
-	if vs := ValidatePDFABytes(r, pdfa.PDFA4E, raw); !hasViolationMessage(vs, "/STL; it must be /U3D or /PRC") {
+	r, _ = profileBytes(t, d)
+	if vs := ValidatePDFA(r, pdfa.PDFA4E); !hasViolationMessage(vs, "/STL; it must be /U3D or /PRC") {
 		t.Errorf("PDF/A-4e did not apply its artwork rule to a file declaring nothing: %v", vs)
 	}
 
@@ -168,11 +168,11 @@ func TestTheVariantIsTheTargets(t *testing.T) {
 	// identification rule says why.
 	f := mustPDFADoc(t, pdfa.PDFA4F)
 	attach(t, f, "notes.txt", []byte("notes"))
-	r, raw = profileBytes(t, f)
-	if vs := ValidatePDFABytes(r, pdfa.PDFA4F, raw); len(vs) != 0 {
+	r, _ = profileBytes(t, f)
+	if vs := ValidatePDFA(r, pdfa.PDFA4F); len(vs) != 0 {
 		t.Errorf("a conforming 4f file at PDF/A-4f: %v", vs)
 	}
-	vs = ValidatePDFABytes(r, pdfa.PDFA4, raw)
+	vs = ValidatePDFA(r, pdfa.PDFA4)
 	if !hasViolationMessage(vs, "non-PDF type not permitted") || !hasViolationMessage(vs, `pdfaid:conformance is "F"`) {
 		t.Errorf("a 4f file at plain PDF/A-4: %v", vs)
 	}
@@ -183,9 +183,9 @@ func TestTheVariantIsTheTargets(t *testing.T) {
 // reported as a PDF/A result; LevelDeclared — the zero value — takes the
 // target from the document; and a builder refuses both.
 func TestLevelsThatNameNoProfileAreRefused(t *testing.T) {
-	r, raw := profileBytes(t, mustPDFADoc(t, pdfa.PDFA2b))
+	r, _ := profileBytes(t, mustPDFADoc(t, pdfa.PDFA2b))
 	for _, bad := range []pdfa.Level{pdfa.Level(99), pdfa.Level(-1)} {
-		vs := ValidatePDFABytes(r, bad, raw)
+		vs := ValidatePDFA(r, bad)
 		if len(vs) != 1 || !IsCheckerFinding(vs[0]) || !strings.Contains(vs[0].Message, "names no PDF/A level") {
 			t.Errorf("%v: want one checker finding, got %v", bad, vs)
 		}
@@ -203,8 +203,8 @@ func TestLevelsThatNameNoProfileAreRefused(t *testing.T) {
 		t.Fatalf("the zero Level is %v, want LevelDeclared", unset)
 	}
 	for _, level := range pdfa.Levels() {
-		r, raw := profileBytes(t, mustPDFADoc(t, level))
-		if vs := ValidatePDFABytes(r, unset, raw); len(vs) != 0 {
+		r, _ := profileBytes(t, mustPDFADoc(t, level))
+		if vs := ValidatePDFA(r, unset); len(vs) != 0 {
 			t.Errorf("a %s document validated as declared: %v", level, vs)
 		}
 	}
@@ -213,15 +213,15 @@ func TestLevelsThatNameNoProfileAreRefused(t *testing.T) {
 	af := &object.Dictionary{}
 	af.Set("NeedAppearances", object.Boolean(true))
 	d.ResolveDict(d.Trailer.Get("Root")).Set("AcroForm", af)
-	r, raw = profileBytes(t, d)
-	vs := ValidatePDFABytes(r, pdfa.LevelDeclared, raw)
+	r, _ = profileBytes(t, d)
+	vs := ValidatePDFA(r, pdfa.LevelDeclared)
 	if len(vs) == 0 || vs[0].Level != pdfa.PDFA2u {
 		t.Errorf("a declared 2u document's findings: %v", vs)
 	}
 	// A document that declares nothing is not validated against anything.
 	plain := NewDocument()
-	r, raw = profileBytes(t, plain)
-	if vs := ValidatePDFABytes(r, pdfa.LevelDeclared, raw); len(vs) != 1 || !IsCheckerFinding(vs[0]) {
+	r, _ = profileBytes(t, plain)
+	if vs := ValidatePDFA(r, pdfa.LevelDeclared); len(vs) != 1 || !IsCheckerFinding(vs[0]) {
 		t.Errorf("a document declaring no level, as declared: %v", vs)
 	}
 
@@ -252,7 +252,7 @@ func TestEmbeddedFilesAreFollowedDown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return ValidatePDFABytes(r, pdfa.PDFA4, data)
+		return ValidatePDFA(r, pdfa.PDFA4)
 	}
 	leaf := mustPDFADoc(t, pdfa.PDFA4)
 	attach(t, leaf, "notes.txt", []byte("not a PDF"))
@@ -292,8 +292,8 @@ func TestEmbeddedValidationSharesOneBudget(t *testing.T) {
 	for i := 0; i < maxEmbeddedPDFADocs+1; i++ {
 		attachPDF(t, d, "inner"+strings.Repeat("x", i)+".pdf", cleanBytes)
 	}
-	r, raw := profileBytes(t, d)
-	vs := ValidatePDFABytes(r, pdfa.PDFA4, raw)
+	r, _ := profileBytes(t, d)
+	vs := ValidatePDFA(r, pdfa.PDFA4)
 	if len(vs) == 0 {
 		t.Fatal("the embedded files past the budget were passed without a checker finding")
 	}

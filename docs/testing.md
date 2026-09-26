@@ -169,7 +169,7 @@ Two take a whole file:
 - **`FuzzRead`** — `Read` must never panic on arbitrary input, and any document it
   returns must survive text and image extraction (`ExtractText`, `Images`),
   signature verification (`VerifySignatures`, `ValidatePAdES`), every validator
-  (`ValidatePDFUA`, `ValidatePDFABytes` at all four levels, `ValidatePDFX`,
+  (`ValidatePDFUA`, `ValidatePDFA` at all four levels, `ValidatePDFX`,
   `ValidatePDFVT`, `ValidateDParts`, `ValidateFacturX`) and `Write` without
   panicking. `Read` recovers panics internally; the validators do not, so this
   is their primary crash-safety net. The extractors do recover, per image and

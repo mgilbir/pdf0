@@ -14,7 +14,8 @@ import (
 // the stream keyword with no whitespace before it ("...>>stream"), the per-object
 // forward search for a whitespace-delimited "stream" matched none and scanned to
 // end of file every time; a real 27 MB file with ~40k such streams spent >80 s in
-// this one check. With the single-pass precompute the whole validation stays fast.
+// this one check. Each stream is now measured from the keyword Read's parser
+// recorded, inside the object's own region, so the check is linear.
 func TestCheckStreamLengthNoQuadraticScan(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 512 << 20, Timeout: 90 * time.Second}, func(t *testing.T) {
 		const n = 25000     // stream objects
@@ -53,14 +54,14 @@ func TestCheckStreamLengthNoQuadraticScan(t *testing.T) {
 
 		start := time.Now()
 		done := make(chan struct{}, 1)
-		go func() { _ = ValidatePDFABytes(doc, pdfa.PDFA4, raw); done <- struct{}{} }()
+		go func() { _ = ValidatePDFA(doc, pdfa.PDFA4); done <- struct{}{} }()
 		select {
 		case <-done:
 		case <-time.After(40 * time.Second):
 			t.Fatal("ValidatePDFA did not finish within 40s on a many-stream file; the byte-level length check is scanning per object again")
 		}
 		if el := time.Since(start); el > 20*time.Second {
-			t.Errorf("validation took %v on %d streams; expected the single-pass keyword precompute to keep it near-linear", el, n)
+			t.Errorf("validation took %v on %d streams; expected measuring each stream from its recorded keyword to keep it near-linear", el, n)
 		}
 	})
 }

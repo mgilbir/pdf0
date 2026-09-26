@@ -7,15 +7,17 @@ import (
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
+	"maps"
 	"math"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 // This file is the core of the PDF/A validator: the conformance levels
 // (ISO 19005-1/-2/-3/-4, i.e. 1b/2b/3b/4, plus the entry point into Level A),
-// the ValidatePDFA/ValidatePDFABytes dispatchers, and most of the clause-6
+// the ValidateView dispatcher, and most of the clause-6
 // rule set — file structure (6.1), graphics, colour and fonts (6.2),
 // annotations and font dictionaries (6.3), interactive forms (6.4), actions
 // (6.6) and metadata (6.7). Clause numbering differs between the parts, so a
@@ -98,27 +100,52 @@ func runCheck(doc core.View, level Level, check func(core.View, Level) []Violati
 	return check(doc, level)
 }
 
-// runByteCheck is runCheck for the byte-level checks, which have a different
-// signature.
-func runByteCheck(level Level, check func() []Violation) (out []Violation) {
+// runByteCheck is runCheck for a byte-level check: one rule over the file
+// record, behind its own recover boundary, so a check that fails internally
+// costs its own rule and not the others' (they used to share one boundary, and
+// one out-of-range slice turned all of them into a single "internal").
+func runByteCheck(f *core.FileRecord, level Level, check func(*core.FileRecord, Level) []Violation) (out []Violation) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = []Violation{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
 		}
 	}()
-	return check()
+	return check(f, level)
+}
+
+// byteChecks are the byte-level file-structure rules (filestructure.go). Each
+// reads the file record; the signature rule also asks the document which of
+// the file's signature dictionaries it has (see checkSignatureCoversFile).
+func byteChecks(doc core.View) []func(*core.FileRecord, Level) []Violation {
+	return []func(*core.FileRecord, Level) []Violation{
+		func(f *core.FileRecord, level Level) []Violation { return checkNoDataAfterEOF(f.Data, level) },  // 6.1.3
+		func(f *core.FileRecord, level Level) []Violation { return checkFileHeaderBytes(level, f.Data) }, // 6.1.2
+		checkIndirectObjectSyntax, // 6.1.8 / 6.1.9
+		checkXRefTableFormat,      // 6.1.4
+		checkNoXRefStreams,        // 6.1.4 (PDF/A-1)
+		checkStreamKeywordFormat,  // 6.1.7.1 / 6.1.6
+		checkLinearizedTrailerID,  // 6.1.3
+		checkStreamLengthBytes,    // 6.1.7 / 6.1.6.1
+		func(f *core.FileRecord, level Level) []Violation { return checkSignatureCoversFile(doc, f, level) }, // 6.4.3
+	}
 }
 
 // ValidateView runs the PDF/A pipeline over a view, against the target
 // profile level names (see ResolveTarget for LevelDeclared and invalid
 // levels).
 //
+// The byte-level file-structure rules read doc.FileRecord(), the record of the file
+// the document was read from. A view with none — a document built in memory —
+// has no file to judge: those rules do not run, and the run records a
+// GuardNoSourceFile trip saying so, which the caller reports as a checker
+// finding. They are never skipped silently.
+//
 // There is one pipeline for every level. Each check is handed the target
 // unflattened and asks it what it needs — the part, the conformance level,
 // the variant — so a Level A, Level U or PDF/A-4 variant run is the same run
 // as a Level B one with the families that level adds switched on, and no
 // finding is produced at one level only to be dropped at another.
-func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
+func ValidateView(doc core.View, level Level) []Violation {
 	level, refused := ResolveTarget(doc, level)
 	if refused != nil {
 		return refused
@@ -200,6 +227,15 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 		checkFontDictionaries,
 		// Content-stream operators (6.2.2)
 		checkContentStreamOperators,
+		// Names that must be UTF-8 (6.1.8 / 6.1.7), hexadecimal strings
+		// (6.1.6 / 6.1.5), inline-image filters (6.1.10 / 6.1.9) and
+		// signature contents (6.4.3). They read the object graph, and the
+		// hexadecimal-string rule the file record too when there is one; they
+		// used to run only when the caller passed the file's bytes.
+		checkNameUTF8,
+		checkHexStringFormat,
+		checkInlineImageFilters,
+		checkSignatureContents,
 		// Prohibited catalog/page entries (6.11 / 6.12)
 		checkProhibitedCatalogEntries,
 		// Image interpolation / rendering intent (6.2.4-6.2.9)
@@ -254,13 +290,19 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 		errs = append(errs, runCheck(doc, level, check)...)
 	}
 
-	// Byte-level checks (require raw file data)
-	if rawData != nil && !doc.Cancel.Stopped() {
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkNoDataAfterEOF(rawData, level) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkFileStructureBytes(doc, level, rawData) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkLinearizedTrailerID(doc, rawData, level) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkStreamLengthBytes(doc, level, rawData) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkSignatureByteRange(doc, level, rawData) })...)
+	// Byte-level checks, over the file the document was read from. A
+	// cancelled run has already said that what it did not reach was skipped.
+	switch file := doc.FileRecord(); {
+	case doc.Cancel.Stopped():
+	case file == nil:
+		doc.Note(core.GuardNoSourceFile, "the document was not read from a file, so the byte-level file-structure rules (header, cross-reference tables, object and stream syntax, stream lengths, data after %%EOF, signature coverage) were not checked; write it and read it back to check them", 0)
+	default:
+		for _, check := range byteChecks(doc) {
+			if doc.Cancel.Stopped() {
+				break
+			}
+			errs = append(errs, runByteCheck(file, level, check)...)
+		}
 	}
 
 	finding.Sort(errs)
@@ -1025,12 +1067,13 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// checkSignatureByteRange enforces 6.4.3 (parts 2/3): a signature's digest must
-// be computed over the entire file, so the /ByteRange of each signature must
-// start at byte 0 and its two covered segments plus the excluded /Contents gap
-// must span to the end of the file. Works from the raw bytes; only the single
-// gap (the signature value) may be uncovered.
-func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation {
+// checkSignatureContents enforces the parts of 6.4.3 (PDF/A-2/-3) that are
+// about a signature dictionary's values: /ByteRange is four integers that
+// start at byte 0 with the two covered segments in order, and a PKCS#7/CMS
+// /Contents embeds the signing certificate and holds exactly one SignerInfo.
+// That the range reaches the end of the file is a fact about the file's
+// bytes, and checkSignatureCoversFile's.
+func checkSignatureContents(doc core.View, level Level) []Violation {
 	if level.Part() != 2 && level.Part() != 3 {
 		return nil
 	}
@@ -1068,15 +1111,6 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 			bad("signature /ByteRange does not cover the document from its start")
 			continue
 		}
-		// The signed range must reach the end of the file: if it stops short,
-		// the trailing bytes are unsigned and the digest does not cover the whole
-		// document. A range that meets or exceeds the file length covers it — the
-		// veraPDF corpus carries stub signatures whose /ByteRange overshoots the
-		// truncated test file, and those are treated as covering (not a defect).
-		// An end too large for an int64 overshoots every file.
-		if end, fits := br.End(); fits && end < int64(len(raw)) {
-			bad("signature /ByteRange does not cover the entire document")
-		}
 
 		// The PKCS#7/CMS signature blob in /Contents must embed the signing
 		// certificate and hold exactly one SignerInfo. Only applies when the blob
@@ -1091,6 +1125,40 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 					bad(fmt.Sprintf("signature PKCS#7 data must contain exactly one SignerInfo, found %d", info.SignerInfoCount))
 				}
 			}
+		}
+	}
+	return errs
+}
+
+// checkSignatureCoversFile enforces the byte half of 6.4.3 (PDF/A-2/-3): a
+// signature's digest must be computed over the entire file, so its signed
+// range must reach the end of the file, or the trailing bytes are unsigned.
+// The ranges are the file's own, as Read found them (FileRecord.Signatures);
+// a malformed or out-of-order range is checkSignatureContents' finding. Which
+// of them are the document's signatures is a question about the graph — a
+// signature dictionary nothing reaches signs nothing, the reading
+// checkSignatureContents takes too (audit 2026-09-22 C83) — so the record's
+// signatures are those whose objects the document reaches.
+//
+// A range that meets or exceeds the file length covers it: the veraPDF corpus
+// carries stub signatures whose /ByteRange overshoots the truncated test file,
+// and those are treated as covering (not a defect). An end too large for an
+// int64 overshoots every file.
+func checkSignatureCoversFile(doc core.View, f *core.FileRecord, level Level) []Violation {
+	if level.Part() != 2 && level.Part() != 3 || len(f.Signatures) == 0 {
+		return nil
+	}
+	reached := make(map[int]bool)
+	for _, num := range doc.ReachableObjectNums() {
+		reached[num] = true
+	}
+	var errs []Violation
+	for _, sig := range f.Signatures {
+		if !reached[sig.Num] || !sig.OK || !sig.ByteRange.Ordered() {
+			continue
+		}
+		if end, fits := sig.ByteRange.End(); fits && end < int64(len(f.Data)) {
+			errs = append(errs, Violation{Rule: "6.4.3", Level: level, Message: "signature /ByteRange does not cover the entire document", Object: sig.Num})
 		}
 	}
 	return errs
@@ -4104,9 +4172,6 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 
 	var errs []Violation
 
-	// Track tint transform references by colorant name for consistency check
-	tintTransforms := make(map[object.Name]sepColorantSeen) // colorant name → first seen definition
-
 	// Scan the objects the document reaches for color space arrays used in
 	// Resources; an orphan colour space colours nothing (audit 2026-09-22 C83).
 	for _, num := range doc.ReachableObjectNums() {
@@ -4117,7 +4182,6 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 		// Check dictionary Resources/ColorSpace
 		if isDict {
 			checkDictForSepDeviceN(doc, dict, num, level, &errs)
-			collectTintTransforms(doc, dict, tintTransforms, num, level, &errs)
 			// A direct /Resources sub-dictionary (the common case on pages)
 			// is not a top-level object, so this scan would never visit its
 			// /ColorSpace entries; descend explicitly. Indirect Resources
@@ -4127,7 +4191,6 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 				// Visited by the loop as its own object.
 			case *object.Dictionary:
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
-				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
 		}
 		// Check stream dict (e.g., Form XObjects, Image XObjects)
@@ -4143,112 +4206,131 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 				// Visited by the loop as its own object.
 			case *object.Dictionary:
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
-				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
 		}
 	}
 
-	return errs
+	return append(errs, checkSeparationConsistency(doc, level)...)
 }
 
-// collectTintTransforms tracks Separation color spaces by colorant name
-// and flags inconsistent tint transforms for the same colorant name.
-// sepColorantSeen records the first Separation definition seen for a
-// colorant name, for the same-tint-transform/same-alternate consistency rule.
-type sepColorantSeen struct {
-	objNum int
-	tint   object.Object
-	alt    object.Object
+// sepDefinition is one Separation colour space the executed content uses.
+type sepDefinition struct {
+	alt, tint object.Object // as written
+	tintNum   int           // the tint transform's object number; 0 when written inline
 }
 
-func collectTintTransforms(doc core.View, dict *object.Dictionary, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]Violation) {
-	csRef := dict.Get("ColorSpace")
-	if csRef == nil {
-		return
-	}
-	csDict := doc.ResolveDict(csRef)
-	if csDict == nil {
-		return
-	}
-	for val := range csDict.Values() {
-		collectSeparationConsistency(doc, val, tintTransforms, objNum, level, errs)
-	}
-}
-
-// collectSeparationConsistency records a Separation definition (top-level or
-// inside a DeviceN/NChannel Colorants dictionary) and flags same-name
-// definitions whose tint transform or alternate space differ.
-func collectSeparationConsistency(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]Violation) {
-	collectSeparationConsistencySeen(doc, val, tintTransforms, objNum, level, errs, make(map[int]bool))
-}
-
-func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTransforms map[object.Name]sepColorantSeen, objNum int, level Level, errs *[]Violation, seen map[int]bool) {
-	// Guard against a DeviceN whose /Colorants entry cycles back to itself: a
-	// self-referential colorant would otherwise recurse until the goroutine
-	// stack overflows (an unrecoverable fatal error), like the other
-	// colour-space walkers this thread a visited-set keyed on object number.
-	if ref, ok := val.(object.IndirectRef); ok {
-		if seen[ref.Number] {
+// checkSeparationConsistency enforces that all Separation colour spaces with
+// the same colorant name have the same tint transform and the same alternate
+// space (ISO 19005-2/-3/-4 6.2.4.4, 19005-1 6.2.3.4).
+//
+// Which definitions: those of the colour spaces executed content uses —
+// selected by cs/CS, an image's, a shading's, a transparency group's (see
+// core.UsedColourSpaces) — and the Separations inside them: a DeviceN space's
+// /Colorants, an Indexed space's base, a pattern space's underlying space. A
+// colour space in a resource dictionary nothing draws defines nothing that is
+// rendered, which is the executed-content model the other colour rules follow.
+//
+// "The same" is a question about content, not objects: two tint transforms
+// written as separate but identical objects are the same function, which the
+// corpus confirms (6-2-4-4-t03-pass-a). They are compared with
+// core.ResolvedEqual, which follows references all the way down; object.Equal
+// compared nested references by number.
+//
+// The report does not depend on the order anything was found in. It used to:
+// the "first definition" every other was compared against came from ranging
+// over doc.Objects, a Go map, so one parsed document gave three different
+// reports across fifty runs (audit 2026-09-22 C66). The definitions of each
+// colorant are now partitioned into classes of equal tint transforms (and of
+// equal alternates), in object-number order, and more than one class is one
+// finding per colorant, naming the tint transforms that begin the first two
+// classes (0 for one written inline). The finding is about the document — two
+// definitions disagreeing — and anchors to no object.
+func checkSeparationConsistency(doc core.View, level Level) []Violation {
+	defs := map[object.Name][]sepDefinition{}
+	visited := map[int]bool{}
+	var walk func(cs object.Object, depth int)
+	walk = func(cs object.Object, depth int) {
+		if depth > 16 {
 			return
 		}
-		seen[ref.Number] = true
-	}
-	resolved := doc.Resolve(val)
-	arr, ok := resolved.(object.Array)
-	if !ok || len(arr) == 0 {
-		return
-	}
-	csType, _ := doc.ResolveName(arr[0])
-
-	// Separations inside a DeviceN attributes' Colorants dictionary join
-	// the same consistency pool (the corpus flags NChannel colorants with
-	// same-name/different-transform Separations).
-	if csType == "DeviceN" && len(arr) >= 5 {
-		if attrDict := doc.ResolveDict(arr[4]); attrDict != nil {
-			if colorantsDict := doc.ResolveDict(attrDict.Get("Colorants")); colorantsDict != nil {
-				for cval := range colorantsDict.Values() {
-					collectSeparationConsistencySeen(doc, cval, tintTransforms, objNum, level, errs, seen)
+		if r, ok := cs.(object.IndirectRef); ok {
+			if visited[r.Number] {
+				return
+			}
+			visited[r.Number] = true
+		}
+		arr, ok := doc.Resolve(cs).(object.Array)
+		if !ok || len(arr) < 2 {
+			return
+		}
+		switch family, _ := doc.ResolveName(arr[0]); family {
+		case "Separation":
+			if len(arr) < 4 {
+				return
+			}
+			if colorant, ok := doc.ResolveName(arr[1]); ok {
+				defs[colorant] = append(defs[colorant], sepDefinition{alt: arr[2], tint: arr[3], tintNum: object.RefNum(arr[3])})
+			}
+		case "DeviceN", "NChannel":
+			if len(arr) < 5 {
+				return
+			}
+			if attrs := doc.ResolveDict(arr[4]); attrs != nil {
+				if colorants := doc.ResolveDict(attrs.Get("Colorants")); colorants != nil {
+					for _, k := range slices.Sorted(colorants.Keys()) {
+						walk(colorants.Get(k), depth+1)
+					}
 				}
 			}
+		case "Indexed", "Pattern":
+			walk(arr[1], depth+1)
 		}
-		return
+	}
+	for _, cs := range core.UsedColourSpaces(doc) {
+		if doc.Cancel.Stopped() {
+			return nil
+		}
+		walk(cs, 0)
 	}
 
-	if csType != "Separation" || len(arr) < 4 {
-		return
+	// classes partitions a colorant's definitions by one of their parts, and
+	// returns the first definition of each class.
+	classes := func(ds []sepDefinition, part func(sepDefinition) object.Object) []sepDefinition {
+		var firsts []sepDefinition
+		for _, d := range ds {
+			found := false
+			for _, f := range firsts {
+				if core.ResolvedEqual(doc, part(f), part(d)) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				firsts = append(firsts, d)
+			}
+		}
+		return firsts
 	}
-	colorantName, ok := doc.ResolveName(arr[1])
-	if !ok {
-		return
-	}
-	tintRef, isRef := arr[3].(object.IndirectRef)
-	if !isRef {
-		return
-	}
-	if prev, exists := tintTransforms[colorantName]; exists {
-		// Different objects may still hold identical content, which is
-		// conformant: the rule requires the SAME tint transform and
-		// alternate space, and veraPDF accepts equal-by-content duplicates.
-		sameTint := prev.objNum == tintRef.Number || object.Equal(doc.Resolve(prev.tint), doc.Resolve(tintRef))
-		if !sameTint {
-			*errs = append(*errs, Violation{
+	var errs []Violation
+	for _, colorant := range slices.Sorted(maps.Keys(defs)) {
+		ds := defs[colorant]
+		sort.SliceStable(ds, func(i, j int) bool { return ds[i].tintNum < ds[j].tintNum })
+		if tc := classes(ds, func(d sepDefinition) object.Object { return d.tint }); len(tc) > 1 {
+			errs = append(errs, Violation{
 				Rule:    colourClause("spot", level),
 				Level:   level,
-				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", string(colorantName), prev.objNum, tintRef.Number),
-				Object:  objNum,
+				Message: fmt.Sprintf("Separation colorant /%s has inconsistent tint transforms (objects %d and %d)", string(colorant), tc[0].tintNum, tc[1].tintNum),
 			})
 		}
-		if !object.Equal(doc.Resolve(prev.alt), doc.Resolve(arr[2])) {
-			*errs = append(*errs, Violation{
+		if ac := classes(ds, func(d sepDefinition) object.Object { return d.alt }); len(ac) > 1 {
+			errs = append(errs, Violation{
 				Rule:    colourClause("spot", level),
 				Level:   level,
-				Message: fmt.Sprintf("Separation colorant /%s has inconsistent alternate color spaces", string(colorantName)),
-				Object:  objNum,
+				Message: fmt.Sprintf("Separation colorant /%s has inconsistent alternate color spaces", string(colorant)),
 			})
 		}
-	} else {
-		tintTransforms[colorantName] = sepColorantSeen{objNum: tintRef.Number, tint: tintRef, alt: arr[2]}
 	}
+	return errs
 }
 
 func checkDictForSepDeviceN(doc core.View, dict *object.Dictionary, objNum int, level Level, errs *[]Violation) {
@@ -4613,10 +4695,6 @@ type contentColorUsage struct {
 	fillCS   map[string]bool
 	strokeCS map[string]bool
 	gsNames  map[string]bool
-	// Whether any painting operation of each flavour occurs: setting a
-	// stroke colour space that never strokes is not a use.
-	paintsFill   bool
-	paintsStroke bool
 }
 
 func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage {
@@ -4647,16 +4725,6 @@ func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage 
 			u.strokeCS[lastName] = true
 		case "gs":
 			u.gsNames[lastName] = true
-		case "f", "F", "f*":
-			u.paintsFill = true
-		case "S", "s":
-			u.paintsStroke = true
-		case "B", "B*", "b", "b*":
-			u.paintsFill = true
-			u.paintsStroke = true
-		case "Tj", "TJ", "'", "\"":
-			// Text defaults to fill rendering mode.
-			u.paintsFill = true
 		}
 	}
 	return u
@@ -4745,14 +4813,23 @@ func sameICCProfile(doc core.View, a, b *object.Stream) bool {
 	return bytes.Equal(da, db)
 }
 
-// checkICCBasedUsageRules implements two content-level ICCBased rules:
+// checkICCBasedUsageRules implements the ICCBased overprint rule (ISO
+// 19005-2/-3/-4 6.2.4.2): overprint mode shall not be 1 when an ICCBased CMYK
+// colour space is used for a stroke with stroking overprint on, or for any
+// other painting operation with non-stroking overprint on.
 //
-//   - Overprint (ISO 19005-2/-4): when an ICCBased CMYK colour space is used
-//     for a fill or stroke that overprints, overprint mode shall not be 1.
-//   - Profile identity (ISO 19005-4, 6.2.4.2): an ICCBased colour space used
-//     for rendering shall not embed the same profile as the current PDF/A
-//     output intent or the current transparency blending colour space — the
-//     device colour operators exist for exactly that case.
+// Every part of that is a fact about the graphics state at the painting
+// operator, so the rule is answered by executing the content (see
+// core.PageOverprintsICCCMYK): the overprint parameters are set by gs,
+// restored by Q and inherited by the forms, patterns and Type 3 glyphs the
+// content invokes, and only an operation that paints — with the colour space
+// current at that moment — counts. The rule used to OR every gs a page named,
+// in whatever order and inside or outside q/Q, against every colour space it
+// selected, so "q /GSopm gs Q /GSop gs … f" was reported although the fill ran
+// at overprint mode 0; and forms were never examined (audit 2026-09-22 C65).
+//
+// The rule that an ICCBased space shall not embed the output intent's or the
+// blending space's profile is checkICCProfileIdentity's.
 func checkICCBasedUsageRules(doc core.View, level Level) []Violation {
 	if level.Part() == 1 {
 		return nil
@@ -4761,70 +4838,18 @@ func checkICCBasedUsageRules(doc core.View, level Level) []Violation {
 	if catalog == nil {
 		return nil
 	}
-
 	var errs []Violation
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
-		res := doc.Resources(page.Dict)
-		if res == nil {
-			continue
+		if doc.Cancel.Stopped() {
+			break
 		}
-		data, _ := core.ContentStreamData(doc, page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
-		if data == nil {
-			continue
-		}
-		usage := scanContentColorUsage(doc.Cancel, data)
-
-		// Accumulated overprint state from applied ExtGStates.
-		opm1, opFill, opStroke := false, false, false
-		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
-			for name, gref := range gsDict.All() {
-				if !usage.gsNames[string(name)] {
-					continue
-				}
-				gs := doc.ResolveDict(gref)
-				if gs == nil {
-					continue
-				}
-				if v, ok := doc.ResolveInt(gs.Get("OPM")); ok && v == 1 {
-					opm1 = true
-				}
-				strokeSet, strokeIsSet := doc.ResolveBool(gs.Get("OP"))
-				fillSet, fillIsSet := doc.ResolveBool(gs.Get("op"))
-				if strokeIsSet && bool(strokeSet) {
-					opStroke = true
-				}
-				// op defaults to OP when absent (ISO 32000-1, Table 58).
-				if fillIsSet && bool(fillSet) || !fillIsSet && strokeIsSet && bool(strokeSet) {
-					opFill = true
-				}
-			}
-		}
-
-		csDict := doc.ResolveDict(res.Get("ColorSpace"))
-		if csDict == nil {
-			continue
-		}
-		checkOne := func(name string, stroke bool) {
-			csVal := csDict.Get(object.Name(name))
-			if csVal == nil {
-				return
-			}
-			if cmyk := iccCMYKProfile(doc, csVal); cmyk != nil && opm1 {
-				if (stroke && opStroke && usage.paintsStroke) || (!stroke && opFill && usage.paintsFill) {
-					errs = append(errs, Violation{
-						Rule:    colourClause("iccBased", level),
-						Level:   level,
-						Message: "overprint mode must not be 1 when an ICCBased CMYK colour space is used with overprinting",
-						Object:  page.ObjNum,
-					})
-				}
-			}
-		}
-		for name := range usage.fillCS {
-			checkOne(name, false)
-		}
-		for name := range usage.strokeCS {
-			checkOne(name, true)
+		if core.PageOverprintsICCCMYK(doc, page.Dict) {
+			errs = append(errs, Violation{
+				Rule:    colourClause("iccBased", level),
+				Level:   level,
+				Message: "overprint mode must not be 1 when an ICCBased CMYK colour space is used with overprinting",
+				Object:  page.ObjNum,
+			})
 		}
 	}
 	return errs
@@ -4987,14 +5012,14 @@ func allZero(b []byte) bool {
 // exampleFindings collects at most one Violation per distinct rule and
 // message. Several rules report a single representative example rather than
 // every occurrence, and their candidates arrive from a range over doc.Objects,
-// doc.Offsets or collectContentStreamData — Go maps, whose iteration order is
+// the object table or collectContentStreamData — Go maps, whose iteration order is
 // randomised on every run. Keeping whichever candidate the range happened to
 // yield first therefore named a different object each time the same file was
 // validated. Keeping the numerically smallest object number instead is a total
 // order over the candidates, so the report is reproducible. The choice is
 // load-bearing, not incidental: reports are diffed run against run.
 //
-// Emission order is deliberately not part of the contract — ValidatePDFABytes
+// Emission order is deliberately not part of the contract — ValidateView
 // sorts the concatenated findings before returning them.
 type exampleFindings struct {
 	idx  map[string]int // rule+message -> index into errs

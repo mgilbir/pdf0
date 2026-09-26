@@ -43,7 +43,7 @@ func TestWrittenXrefIs20Bytes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("level %v: reparse: %v", lvl, err)
 		}
-		for _, e := range ValidatePDFABytes(rd, lvl, buf.Bytes()) {
+		for _, e := range ValidatePDFA(rd, lvl) {
 			if e.Rule == "6.1.4" {
 				t.Errorf("level %v: written file still fails 6.1.4: %s", lvl, e.Error())
 			}

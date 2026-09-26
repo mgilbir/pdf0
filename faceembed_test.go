@@ -225,7 +225,7 @@ func TestAFaceIsEmbeddedOncePerDocument(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if v := ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()); len(v) != 0 {
+			if v := ValidatePDFA(rd, pdfa.PDFA2b); len(v) != 0 {
 				t.Errorf("the document does not validate: %v", v)
 			}
 			all, err := rd.ExtractText()
@@ -406,7 +406,7 @@ func TestARewriteOfADifferentSizeKeepsTheFontNumber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := ValidatePDFABytes(rd, pdfa.PDFA2b, buf.Bytes()); len(v) != 0 {
+	if v := ValidatePDFA(rd, pdfa.PDFA2b); len(v) != 0 {
 		t.Errorf("the document does not validate: %v", v)
 	}
 }

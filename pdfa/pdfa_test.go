@@ -29,7 +29,7 @@ func TestNewPDFADocument(t *testing.T) {
 				t.Error("trailer missing /ID")
 			}
 
-			errs := ValidateView(doc, level, nil)
+			errs := ValidateView(doc, level)
 			if len(errs) > 0 {
 				for _, e := range errs {
 					t.Errorf("validation error: %v", e)
@@ -49,7 +49,7 @@ func TestValidatePDFA_LZW(t *testing.T) {
 				stream.Dict.Set("Length", object.Integer(4))
 				doc.Objects[10] = &object.IndirectObject{Number: 10, Value: stream}
 
-				errs := ValidateView(doc, level, nil)
+				errs := ValidateView(doc, level)
 				if !hasRule(errs, filterClause(level)) {
 					t.Errorf("expected %s error for LZW filter in %s", filterClause(level), level)
 				}
@@ -85,7 +85,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 			addTestPage(doc).Set("Annots", object.Array{object.IndirectRef{Number: 10}})
 
-			errs := ValidateView(doc, tt.level, nil)
+			errs := ValidateView(doc, tt.level)
 			if !hasRule(errs, annotActionClause("subtype", tt.level)) {
 				t.Errorf("expected 6.3.1 error for forbidden subtype /%s", tt.subtype)
 			}
@@ -105,7 +105,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 			addTestPage(doc).Set("Annots", object.Array{object.IndirectRef{Number: 10}})
 
-			errs := filterRule(ValidateView(doc, PDFA4, nil), "6.3.1")
+			errs := filterRule(ValidateView(doc, PDFA4), "6.3.1")
 			if len(errs) > 0 {
 				t.Errorf("subtype /%s should be allowed in PDF/A-4", st)
 			}

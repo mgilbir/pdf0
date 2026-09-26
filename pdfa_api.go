@@ -92,11 +92,26 @@ func NewPDFADocumentWith(opts pdfa.SkeletonOptions) (*Document, error) {
 // ValidatePDFA checks doc against the implemented rules for the given PDF/A
 // level and returns the violations found. An empty result means "none of the
 // implemented checks fired", not a guarantee of full conformance: the validator
-// covers a subset of ISO 19005 (see the package README). Because it takes no
-// raw bytes, it also skips every byte-level file-structure rule — use
-// ValidatePDFABytes when you have the file bytes and want those too.
+// covers a subset of ISO 19005 (see the package README).
+//
+// The byte-level file-structure rules (the header, cross-reference tables,
+// object and stream syntax, stream lengths, data after %%EOF, signature
+// coverage) read the file doc was read from, which the document keeps
+// (Document.Source). They judge that file as Read found it, whatever has been
+// done to doc since: to judge the bytes of an edited document, write it and
+// read the result. A document built in memory has no file, so for it those
+// rules do not run, and the result says so with a checker finding under the
+// rule "limit" (IsCheckerFinding) rather than passing in silence.
+//
+// There is no variant that takes the file's bytes. There used to be
+// (ValidatePDFABytes), and it trusted them: bytes that were not the ones doc
+// was read from — a rewritten file, a truncated buffer — were measured against
+// doc's offsets, producing findings about neither, or an out-of-range slice
+// that collapsed every byte rule into one "internal" finding (audit 2026-09-22
+// C69). The only bytes that can be right are the ones the document already
+// holds.
 func ValidatePDFA(doc *Document, level pdfa.Level) []pdfa.Violation {
-	return ValidatePDFABytes(doc, level, nil)
+	return validatePDFA(core.Canceler{}, doc, level)
 }
 
 // ValidatePDFAContext is ValidatePDFA with cancellation. Validating a large
@@ -109,32 +124,18 @@ func ValidatePDFA(doc *Document, level pdfa.Level) []pdfa.Violation {
 // clean bill of health: an empty result is impossible, and the caller can tell
 // "no violations found" apart from "pdf0 did not get to look". See cancel.go.
 func ValidatePDFAContext(ctx context.Context, doc *Document, level pdfa.Level) []pdfa.Violation {
-	return ValidatePDFABytesContext(ctx, doc, level, nil)
+	return validatePDFA(core.NewCanceler(ctx), doc, level)
 }
 
-// ValidatePDFABytes checks doc against the implemented rules for the given
-// PDF/A level and returns the violations found. If rawData is non-nil, the
-// byte-level file-structure rules run too (e.g. no data after %%EOF). An empty
-// result means no implemented check fired, not a guarantee of full conformance
-// (the validator covers a subset of ISO 19005).
-func ValidatePDFABytes(doc *Document, level pdfa.Level, rawData []byte) []pdfa.Violation {
-	return validatePDFABytes(core.Canceler{}, doc, level, rawData)
+func validatePDFA(cancel core.Canceler, doc *Document, level pdfa.Level) []pdfa.Violation {
+	return validatePDFABudget(cancel, doc, level, nil)
 }
 
-// ValidatePDFABytesContext is ValidatePDFABytes with cancellation; see
-// ValidatePDFAContext for how a cancelled run reports itself.
-func ValidatePDFABytesContext(ctx context.Context, doc *Document, level pdfa.Level, rawData []byte) []pdfa.Violation {
-	return validatePDFABytes(core.NewCanceler(ctx), doc, level, rawData)
-}
-func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, rawData []byte) []pdfa.Violation {
-	return validatePDFABudget(cancel, doc, level, rawData, nil)
-}
-
-// validatePDFABudget is validatePDFABytes for a run that may be nested inside
+// validatePDFABudget is validatePDFA for a run that may be nested inside
 // another: the embedded-PDF/A check validates each embedded document through
 // here with the top-level run's budget, so the whole tree of embedded files
 // shares one (see embeddedBudget). A nil budget starts a fresh one.
-func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, rawData []byte, budget *embeddedBudget) []pdfa.Violation {
+func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, budget *embeddedBudget) []pdfa.Violation {
 	if doc == nil {
 		// A nil document is a caller mistake, and the useful answer is a finding
 		// rather than a panic: this is the API a caller reaches for after a
@@ -174,7 +175,7 @@ func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, r
 	}
 	pdfa.SetEmbeddedChecker(v, embeddedPDFAChecker(budget))
 
-	errs := pdfa.ValidateView(v, target, rawData)
+	errs := pdfa.ValidateView(v, target)
 
 	// Any resource guard that tripped during the run (or while the file was
 	// read) is reported under the "limit" rule: the checks that depended on the
