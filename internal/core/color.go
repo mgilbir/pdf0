@@ -1,9 +1,6 @@
 package core
 
 import (
-	"bytes"
-	"compress/zlib"
-	"io"
 	"math"
 
 	"github.com/mgilbir/pdf0/object"
@@ -271,11 +268,13 @@ func extGStateUsesTransparency(doc View, res *object.Dictionary) bool {
 	return false
 }
 
-// ICCProfileData returns the decompressed ICC profile data from a stream.
-// Returns the raw stream data if no filter or decoding fails. The decoded size
-// is bounded to prevent decompression bombs; the default is
-// defaultMaxICCProfileBytes and a caller can change it with
-// WithMaxICCProfileBytes.
+// ICCProfileData returns the decoded ICC profile data of a stream, through the
+// same filter chain as every other stream, with the Reason. The decoded size
+// is bounded to prevent decompression bombs: the default is
+// DefaultMaxICCProfileBytes and a caller can change it with
+// WithMaxICCProfileBytes. A profile over the bound is ReasonLimit, and the trip
+// is recorded here — it used to return nil and record nothing, so a caller's
+// lowered bound silently removed every ICC rule (audit 2026-09-22 C109).
 //
 // The default was raised from 2 MiB to 8 MiB: the largest real profile measured
 // across the veraPDF corpus and a 978-file Common Crawl sample is 1,829,093
@@ -283,42 +282,14 @@ func extGStateUsesTransparency(doc View, res *object.Dictionary) bool {
 // silently dropping the ICC rules for that file. Unlike the XMP packet bound,
 // the cost here is linear (a profile is read once and scanned, not expanded),
 // so headroom is cheap.
-func ICCProfileData(stream *object.Stream, lim Limits) []byte {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		if len(stream.Data) > lim.ICCProfileBytes {
-			return nil
-		}
-		return stream.Data
+func (v View) ICCProfileData(stream *object.Stream) ([]byte, Reason) {
+	limit := v.Limits.ICCProfileBytes
+	if d := v.Limits.DecodedStreamBytes; d < limit {
+		// The per-stream decode cap applies to a profile as to any stream; the
+		// profile bound only ever lowers it.
+		return v.decodeCapped(stream, d, GuardDecodedStream, DefaultMaxDecodedStreamBytes, "decoded-stream")
 	}
-
-	filterName, ok := filter.(object.Name)
-	if !ok {
-		return nil
-	}
-	if filterName != "FlateDecode" {
-		return nil
-	}
-
-	if len(stream.Data) == 0 {
-		return nil
-	}
-
-	r, err := zlib.NewReader(bytes.NewReader(stream.Data))
-	if err != nil {
-		return nil
-	}
-	defer r.Close()
-
-	limited := io.LimitReader(r, int64(lim.ICCProfileBytes)+1)
-	decoded, err := io.ReadAll(limited)
-	if err != nil {
-		return nil
-	}
-	if len(decoded) > lim.ICCProfileBytes {
-		return nil
-	}
-	return decoded
+	return v.decodeCapped(stream, limit, GuardICCProfile, DefaultMaxICCProfileBytes, "ICC profile")
 }
 
 // DefaultColorSpaces checks if a page defines DefaultRGB, DefaultCMYK, or DefaultGray

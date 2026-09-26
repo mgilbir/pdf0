@@ -123,6 +123,7 @@ flowchart TD
     F --> G["validate /Encrypt, derive the key<br/>decrypt strings + /ObjStm containers<br/>(or record why it stays Locked)"]
     G --> H[loadCompressedObjects<br/>materialize /ObjStm entries]
     H -->|decode fails, container missing<br/>or not a stream| H2[record brokenObjStms<br/>non-fatal]
+    H -->|budget, limit, filter<br/>or ciphertext| H3[record skippedObjStms<br/>+ a limit trip, non-fatal]
     H --> G2["decrypt the remaining streams<br/>(their crypt filter can depend on the whole graph)"]
     G2 --> S[source record: high-water mark,<br/>/Size, sections, revisions]
     S --> I[normalizeStructure<br/>drop XRef/ObjStm objects + their offsets]
@@ -147,7 +148,12 @@ Most defects are recovered rather than fatal. A wrong or wrong-typed stream
 `/Length` falls back to searching for `endstream`; an offset-shifted
 cross-reference is probed absolute-vs-header-relative; an object stream that
 does not decode, is missing, is not a stream, or holds an object that does not
-parse is recorded in `brokenObjStms` and its objects are simply absent.
+parse is recorded in `brokenObjStms` and its objects are simply absent. One
+pdf0 declines to unpack — over the materialisation budget or a decode limit,
+under a filter it does not implement, still ciphertext — is recorded in
+`skippedObjStms` instead, with a trip every validator reports under "limit";
+it is never reported as malformed. Both leave objects missing, so Write
+refuses either.
 
 The cross-reference table has the deepest recovery, because a damaged xref is the
 most common way a real-world file is broken. `Read` escalates through a ladder
@@ -209,7 +215,7 @@ traditional table.
 
 ```mermaid
 flowchart TD
-    A[Document.Write] --> B{locked encryption,<br/>in-use object 0,<br/>or brokenObjStms?}
+    A[Document.Write] --> B{locked encryption,<br/>in-use object 0,<br/>or broken/skipped ObjStms?}
     B -->|yes| X[return error]
     B -->|no| C[compute indirect /Length overrides<br/>re-encrypt if a handler is retained]
     C --> D[write header + binary comment]
@@ -275,7 +281,7 @@ one `Document` from several goroutines stays safe — the property package-level
 |--------|---------|--------|
 | `WithMaxDecodedStreamBytes` | 100 MB | decompressed size of any one stream — the bomb ceiling |
 | `WithMaxDecodedContentBytes` | 512 MB | total content decoded by one validation run |
-| `WithMaxObjectStreamBytes` | 512 MB | total decompressed `/ObjStm` in one document |
+| `WithMaxObjectStreamBytes` | 512 MB | estimated memory of the objects unpacked from `/ObjStm` containers in one document |
 | `WithMaxContentStreamBytes` | 64 MB | one content stream or image sample buffer |
 | `WithMaxICCProfileBytes` | 8 MiB | a decoded ICC profile |
 | `WithMaxXMPPacketBytes` | 4 MiB | an XMP packet the property checks build a tree for |
@@ -285,6 +291,11 @@ one `Document` from several goroutines stays safe — the property package-level
 | `WithMaxPostScriptSteps` | 1<<20 | operators one type-4 function evaluation may run |
 | `WithMaxCmapWork` | 1<<18 | work spent expanding one TrueType cmap subtable of format 4 or 12 |
 | `WithMaxImagePixels` | 1<<26 | pixels in one image extraction decodes, for every codec (four samples per pixel beyond that) |
+
+Every value must be positive: `Read` (and `ParseXRefStream`) returns an error
+wrapping `ErrInvalidOption` for 0 or a negative value, which could only mean
+something surprising. The type's maximum (`math.MaxInt`, `math.MaxInt64`) is
+honoured as "no practical limit".
 
 Defaults are evidence-based where the evidence exists: the figures come from
 measuring the veraPDF corpus (2,907 files) and a 978-file Common Crawl sample.

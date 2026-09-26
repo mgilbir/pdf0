@@ -287,10 +287,13 @@ func checkUANotes(d core.View, cat *object.Dictionary) []Violation {
 		if t != "Note" {
 			return
 		}
-		id, _ := d.Resolve(elem.Get("ID")).(object.String)
-		if len(id.Value) == 0 {
+		id, r := d.StringValue(elem.Get("ID"))
+		if !d.NonEmptyStringOrLocked(elem.Get("ID")) {
 			v = append(v, Violation{"7.9", "<Note> structure element has no /ID", 0})
 			return
+		}
+		if r != core.ReasonOK {
+			return // ciphertext: present, but uniqueness cannot be judged
 		}
 		if ids[string(id.Value)] {
 			v = append(v, Violation{"7.9", "<Note> structure elements share a non-unique /ID", 0})

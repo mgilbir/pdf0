@@ -24,14 +24,16 @@ const (
 	XMPAbsent XMPStatus = iota
 	// XMPParsed: the packet was modelled; the *xmp.Packet is non-nil.
 	XMPParsed
-	// XMPMalformed: the packet is not well-formed XML. That is a fact about
-	// the document, which the well-formedness rule reports; a reader of a
-	// property has nothing to read.
+	// XMPMalformed: the packet is not well-formed XML, or the stream holding
+	// it does not decode. That is a fact about the document, which the
+	// well-formedness rule reports; a reader of a property has nothing to read.
 	XMPMalformed
 	// XMPLimit: pdf0 declined to model the packet — larger than
-	// Limits.XMPPacketBytes, or nested deeper than xmp.MaxDepth. The trip has
-	// been noted on the run, so it reaches the report as a "limit" finding. A
-	// reader must neither guess a value nor report one as missing.
+	// Limits.XMPPacketBytes, nested deeper than xmp.MaxDepth, or held in a
+	// stream it did not decode (a size limit, an unimplemented filter,
+	// ciphertext: a declined Reason). The trip has been noted on the run, so it
+	// reaches the report as a "limit" finding. A reader must neither guess a
+	// value nor report one as missing.
 	XMPLimit
 )
 
@@ -74,7 +76,17 @@ func (doc View) XMPPacketOf(stream *object.Stream, objNum int) (*xmp.Packet, XMP
 }
 
 func (doc View) parseXMP(stream *object.Stream, objNum int) (*xmp.Packet, XMPStatus) {
-	text := doc.XMPText(stream)
+	text, r := doc.XMPText(stream)
+	switch {
+	case r.Declined():
+		// Not decoded: over a limit, an unimplemented filter, ciphertext. The
+		// producer recorded the trip; the packet's properties are unknown.
+		return nil, XMPLimit
+	case r == ReasonMalformed:
+		// The stream's data does not decode, so there is no packet to read: a
+		// fact about the file, reported like a packet that is not XML.
+		return nil, XMPMalformed
+	}
 	if text == "" {
 		return nil, XMPAbsent
 	}
@@ -103,11 +115,12 @@ func (doc View) parseXMP(stream *object.Stream, objNum int) (*xmp.Packet, XMPSta
 // (audit C32, C44). A packet that cannot be decoded, is not well-formed, has no
 // rdf:RDF or is larger than lim.XMPPacketBytes is an error: replacing it would
 // lose whatever it says, and that is the caller's decision to make.
-func EditableXMP(cancel Canceler, stream *object.Stream, lim Limits) (*xmp.Packet, error) {
+func EditableXMP(v View, stream *object.Stream) (*xmp.Packet, error) {
+	lim := v.Limits
 	if stream == nil {
 		return xmp.New(), nil
 	}
-	raw, err := DecodeStreamData(cancel, stream, lim)
+	raw, err := DecodeStreamData(v.Cancel, stream, lim, v.Resolve)
 	if err != nil {
 		return nil, fmt.Errorf("the existing XMP metadata cannot be decoded, so it cannot be edited: %w", err)
 	}

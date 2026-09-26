@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
@@ -78,8 +79,10 @@ func TestEncryptedPassthroughRefusesIncompleteModel(t *testing.T) {
 			1: {Number: 1, Value: &object.Dictionary{}},
 			9: {Number: 9, Value: encDict},
 		},
-		Encrypted:     true,
-		brokenObjStms: []int{5},
+		Encrypted: true,
+		// Read records a container it could not decrypt as not unpacked, with
+		// the reason (objstm.go), not as a malformed one.
+		skippedObjStms: []core.SkippedObjStm{{Num: 5, Reason: core.ReasonLocked}},
 	}
 	d.Trailer = object.Dictionary{}
 	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
@@ -87,9 +90,9 @@ func TestEncryptedPassthroughRefusesIncompleteModel(t *testing.T) {
 	var buf bytes.Buffer
 	err := d.Write(&buf)
 	if err == nil {
-		t.Fatal("expected Write to refuse an encrypted document with a broken object stream")
+		t.Fatal("expected Write to refuse an encrypted document with an object stream it could not unpack")
 	}
-	if !bytes.Contains([]byte(err.Error()), []byte("could not be decrypted")) {
+	if !bytes.Contains([]byte(err.Error()), []byte("undecrypted data")) {
 		t.Errorf("refusal message = %q, want it to mention the undecryptable object stream", err)
 	}
 }
@@ -127,7 +130,7 @@ func TestEncryptedPassthroughAESCorpus(t *testing.T) {
 		if err := doc.Write(&buf); err != nil {
 			// An object-stream file the wrong password could not decrypt is
 			// legitimately refused (incomplete model); skip those.
-			if len(doc.brokenObjStms) > 0 {
+			if doc.missingObjectsErr("") != nil {
 				continue
 			}
 			t.Fatalf("%s: passthrough Write: %v", sub, err)

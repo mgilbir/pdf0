@@ -119,9 +119,8 @@ func checkImportSource(src *Document) error {
 		return fmt.Errorf("pdf0: the source document is encrypted and was not decrypted (Locked), "+
 			"so its pages are ciphertext; read it with the password first: %w", src.LockReason())
 	}
-	if len(src.brokenObjStms) > 0 {
-		return fmt.Errorf("pdf0: %d object stream(s) of the source failed to decode on read, "+
-			"so objects its pages may use are missing", len(src.brokenObjStms))
+	if err := src.missingObjectsErr("pdf0: the source document"); err != nil {
+		return err
 	}
 	if len(src.decryptFailures) > 0 {
 		return fmt.Errorf("pdf0: object(s) %v of the source could not be decrypted on read, "+

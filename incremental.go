@@ -116,8 +116,8 @@ func (d *Document) incrementalUpdate(changed []int) ([]byte, error) {
 	// Write refuses such a document (audit C19) because the object graph it
 	// writes is incomplete; an update over it would reference objects that are
 	// missing, so it refuses for the same reason.
-	if len(d.brokenObjStms) > 0 {
-		return nil, fmt.Errorf("incremental: %d object stream(s) failed to decode on read, so some objects are missing", len(d.brokenObjStms))
+	if err := d.missingObjectsErr("incremental"); err != nil {
+		return nil, err
 	}
 
 	nums := append([]int(nil), changed...)

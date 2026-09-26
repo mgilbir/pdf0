@@ -207,7 +207,7 @@ func evalType0(d View, stream *object.Stream, dict *object.Dictionary, domain []
 	if len(decode) != 2*n {
 		return nil, false
 	}
-	data := d.Content(stream)
+	data, _ := d.Content(stream) // reason: a table that did not decode is too short below, so the function is not evaluated; the producer recorded any declined trip
 	// Guard against a sample table that does not hold every grid sample:
 	// total*n samples of bps bits each, compared by division so that no
 	// product of file-supplied numbers can overflow. Every sample offset below

@@ -181,16 +181,21 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 					haveCMapInfo = string(name) != "Identity-H" && string(name) != "Identity-V"
 				}
 			} else if cmapStreamInfo != nil {
-				cmReg = pdfTextString(doc, cmapStreamInfo.Get("Registry"))
-				cmOrd = pdfTextString(doc, cmapStreamInfo.Get("Ordering"))
+				var regKnown, ordKnown bool
+				cmReg, regKnown = pdfTextString(doc, cmapStreamInfo.Get("Registry"))
+				cmOrd, ordKnown = pdfTextString(doc, cmapStreamInfo.Get("Ordering"))
 				if s, ok := doc.Resolve(cmapStreamInfo.Get("Supplement")).(object.Integer); ok {
 					cmSupp = s
 				}
-				haveCMapInfo = true
+				haveCMapInfo = regKnown && ordKnown
 			}
-			if cidInfo != nil && haveCMapInfo {
-				reg := pdfTextString(doc, cidInfo.Get("Registry"))
-				ord := pdfTextString(doc, cidInfo.Get("Ordering"))
+			reg, regKnown := "", false
+			ord, ordKnown := "", false
+			if cidInfo != nil {
+				reg, regKnown = pdfTextString(doc, cidInfo.Get("Registry"))
+				ord, ordKnown = pdfTextString(doc, cidInfo.Get("Ordering"))
+			}
+			if cidInfo != nil && haveCMapInfo && regKnown && ordKnown {
 				if reg != cmReg {
 					bad("cidSystemInfo", "CIDFont CIDSystemInfo Registry %q does not match the CMap's %q", reg, cmReg)
 				}
@@ -261,16 +266,17 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 	return errs
 }
 
-func pdfTextString(doc core.View, v object.Object) string {
-	if s, ok := doc.Resolve(v).(object.String); ok {
-		return core.DecodePDFTextString(s.Value)
-	}
-	return ""
+// pdfTextString is v as a decoded text string ("" when it is not a string),
+// and whether its value is known: false in a Locked document, whose strings
+// are ciphertext and must not be compared (core.View.StringValue).
+func pdfTextString(doc core.View, v object.Object) (string, bool) {
+	s, r := doc.TextString(v)
+	return s, r != core.ReasonLocked
 }
 
 // cmapContentWMode extracts "/WMode N def" from an embedded CMap stream.
 func cmapContentWMode(doc core.View, stream *object.Stream) (int, bool) {
-	data := doc.Content(stream)
+	data, _ := doc.Content(stream) // reason: presence-only; the producer recorded any declined trip
 	if data == nil {
 		return 0, false
 	}
@@ -287,7 +293,7 @@ func cmapContentWMode(doc core.View, stream *object.Stream) (int, bool) {
 
 // cmapUseCMap extracts a "/Name usecmap" reference from an embedded CMap.
 func cmapUseCMap(doc core.View, stream *object.Stream) (string, bool) {
-	data := doc.Content(stream)
+	data, _ := doc.Content(stream) // reason: presence-only; the producer recorded any declined trip
 	if data == nil {
 		return "", false
 	}
@@ -707,8 +713,14 @@ func checkFontProgramConsistency(doc core.View, level Level, rule string, fontDi
 // program at all), and only when a FontFile is present (a missing program is
 // the separate embedding rule). Across the corpus, every valid embedded program
 // parses, so this raises no false positive.
-func damagedFontProgramError(doc core.View, level Level, rule string, fontDict, fd *object.Dictionary, u *core.FontTextUsage) []Violation {
-	if fd == nil || !rendersVisibly(u) || !hasEmbeddedFontProgram(doc, fd) {
+//
+// Only ReasonMalformed is damage. A program pdf0 declined to read — over a
+// size limit, under a filter it does not implement, ciphertext — says nothing
+// about the font, and LoadFontProgram has recorded the trip; a 760 KB font
+// read under a 100 KB scanning limit used to be reported as damaged here
+// (audit 2026-09-22 C47).
+func damagedFontProgramError(doc core.View, level Level, rule string, fontDict, fd *object.Dictionary, u *core.FontTextUsage, r core.Reason) []Violation {
+	if r != core.ReasonMalformed || fd == nil || !rendersVisibly(u) || !hasEmbeddedFontProgram(doc, fd) {
 		return nil
 	}
 	subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
@@ -748,9 +760,9 @@ func fontKindClause(kind string, level Level) string {
 
 func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
 	fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
-	fp := core.LoadFontProgram(doc, fd)
+	fp, r := core.LoadFontProgram(doc, fd)
 	if fp == nil {
-		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
+		return damagedFontProgramError(doc, level, rule, fontDict, fd, u, r)
 	}
 	subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 	symbolic := false
@@ -845,23 +857,17 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 		return nil
 	}
 	fd := doc.ResolveDict(desc.Get("FontDescriptor"))
-	fp := core.LoadFontProgram(doc, fd)
+	fp, r := core.LoadFontProgram(doc, fd)
 	if fp == nil {
-		return damagedFontProgramError(doc, level, rule, fontDict, fd, u)
+		return damagedFontProgramError(doc, level, rule, fontDict, fd, u, r)
 	}
 	cidSub, _ := doc.ResolveName(desc.Get("Subtype"))
 	// The CMap: how this font's character codes become CIDs. Identity-H is one
 	// answer and an embedded CMap stream is another; a predefined name is data
-	// this module does not carry, and cmap is nil for it.
-	cmap, haveCMap := core.LoadCMap(doc, fontDict)
-	if !haveCMap {
-		if name, skipped := core.PredefinedCMapName(doc, fontDict); skipped {
-			doc.Note(core.GuardPredefinedCMap, fmt.Sprintf("the font's CMap /%s is "+
-				"predefined and its code-to-CID data is not carried, so the glyph "+
-				"coverage, .notdef and width-consistency checks were skipped for "+
-				"that font rather than run against a guess", name), u.ObjNum)
-		}
-	}
+	// this module does not carry, and cmap is nil for it — LoadCMap records
+	// that skip itself.
+	cmap, cmapReason := core.LoadCMap(doc, fontDict)
+	haveCMap := cmapReason == core.ReasonOK
 
 	dw := 1000.0
 	if v := doc.Resolve(desc.Get("DW")); v != nil {
@@ -882,7 +888,7 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 		errs = append(errs, Violation{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.ObjNum})
 	}
 	renders := rendersVisibly(u)
-	toUni := doc.ParseToUnicodeMap(fontDict)
+	toUni, _ := doc.ParseToUnicodeMap(fontDict) // reason: only a mapping that is present is acted on below; the producer recorded any declined trip
 
 	for _, s := range u.Strings {
 		if !haveCMap {
@@ -1130,8 +1136,13 @@ func cidToGID(doc core.View, desc *object.Dictionary, cid int) (int, bool) {
 			return cid, true
 		}
 	case *object.Stream:
-		data := doc.Content(v)
-		if data != nil && 2*cid+1 < len(data) {
+		data, r := doc.Content(v)
+		if r != core.ReasonOK {
+			// Not read, or not readable: no GID can be named, and guessing
+			// Identity would compare the width of some other glyph.
+			return 0, false
+		}
+		if 2*cid+1 < len(data) {
 			return int(data[2*cid])<<8 | int(data[2*cid+1]), true
 		}
 	case nil:
@@ -1232,7 +1243,7 @@ func parseFontMatrix(doc core.View, o object.Object) [6]float64 {
 // type3GlyphWidth reads the w operand of the leading d0/d1 operator of a
 // Type 3 CharProc content stream (glyph-space units).
 func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
-	data := doc.Content(cp)
+	data, _ := doc.Content(cp) // reason: no data is no width, and the width check declines; the producer recorded any declined trip
 	if data == nil {
 		return 0, false
 	}
@@ -1316,9 +1327,9 @@ func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 			if fd == nil {
 				continue
 			}
-			cs, ok := doc.Resolve(fd.Get("CharSet")).(object.String)
-			if !ok {
-				continue
+			cs, r := doc.StringValue(fd.Get("CharSet"))
+			if r != core.ReasonOK {
+				continue // absent, or ciphertext that lists nothing readable
 			}
 			listed := core.ParseCharSet(string(cs.Value))
 			symbolic := descriptorSymbolic(doc, fd)
@@ -1346,17 +1357,15 @@ func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 			}
 			// The same CMap question as the width and coverage checks: without
 			// one, the string cannot be cut into codes and no CID can be named.
-			cmap, ok := core.LoadCMap(doc, fontDict)
-			if !ok {
-				if name, skipped := core.PredefinedCMapName(doc, fontDict); skipped {
-					doc.Note(core.GuardPredefinedCMap, fmt.Sprintf("the font's CMap "+
-						"/%s is predefined and its code-to-CID data is not carried, "+
-						"so the /CIDSet completeness check was skipped for that font",
-						name), u.ObjNum)
-				}
+			// LoadCMap records a skip it cannot help (a predefined CMap).
+			cmap, r := core.LoadCMap(doc, fontDict)
+			if r != core.ReasonOK {
 				continue
 			}
-			present := core.DecodeCIDSet(doc, cidSetStream)
+			present, r := core.DecodeCIDSet(doc, cidSetStream)
+			if r.Declined() {
+				continue // an unread CIDSet lists nothing; the producer recorded the trip (C47)
+			}
 			missing := false
 			for _, s := range u.Strings {
 				for _, code := range cmap.Decode([]byte(s)) {
@@ -1428,7 +1437,7 @@ func checkCMapCIDLimit(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		data := doc.Content(enc)
+		data, _ := doc.Content(enc) // reason: presence-only; the producer recorded any declined trip
 		if data == nil {
 			continue
 		}
@@ -1534,11 +1543,16 @@ func checkCIDSetProgramComplete(doc core.View, level Level) []Violation {
 		if !ok {
 			continue // presence is checked by checkFontSubsets
 		}
-		fp := core.LoadFontProgram(doc, fd)
+		fp, _ := core.LoadFontProgram(doc, fd) // reason: a nil program skips the check; the producer recorded any declined trip
 		if fp == nil {
 			continue
 		}
-		present := core.DecodeCIDSet(doc, cidSetStream)
+		present, r := core.DecodeCIDSet(doc, cidSetStream)
+		if r.Declined() {
+			// Not read: an unread CIDSet is not an empty one (audit 2026-09-22
+			// C47). The producer recorded the trip.
+			continue
+		}
 		num := 0
 		if ir, ok := doc.Resolve(fontDict.Get("DescendantFonts")).(object.Array); ok && len(ir) > 0 {
 			num = resolveObjNum(doc, ir[0])

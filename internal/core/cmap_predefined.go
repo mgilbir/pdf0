@@ -3,7 +3,7 @@ package core
 // predefinedCodespaces is the codespace of every CMap in PredefinedCMaps.
 //
 // A predefined CMap's code-to-CID data is megabytes this module does not carry
-// (see PredefinedCMapName), but its codespace is a line or two, and the
+// (LoadCMap reports it as ReasonUnsupported), but its codespace is a line or two, and the
 // codespace alone is what cuts a string into codes. That is all text
 // extraction needs from it: the codes are then looked up in the font's
 // ToUnicode map, or — for the Uni* CMaps, whose codes are UCS-2 or UTF-16 —

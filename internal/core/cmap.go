@@ -1,6 +1,8 @@
 package core
 
 import (
+	"fmt"
+
 	"github.com/mgilbir/pdf0/internal/checked"
 	"strings"
 
@@ -201,54 +203,53 @@ func (c *CMap) lookup(v uint32, n int) (int, bool) {
 // shortcut for it.
 func (c *CMap) Identity() bool { return c != nil && c.identity }
 
-// LoadCMap is the CMap a Type 0 font's /Encoding names or carries, and whether
-// there is one this module can read.
+// LoadCMap is the CMap a Type 0 font's /Encoding names or carries, and why
+// there is none when there is none.
 //
 // Three shapes. Identity-H and Identity-V are built in. A stream is a CMap
 // program embedded in the document, which is parsed. Any other name is one of
 // Adobe's predefined CMaps — data this module does not carry, so the answer is
-// no and the caller skips rather than guesses.
-func LoadCMap(doc View, fontDict *object.Dictionary) (*CMap, bool) {
+// ReasonUnsupported and the caller skips rather than guesses — or a name that
+// is no CMap at all, which is ReasonMalformed (the CMap-legality rule reports
+// it). A caller that needs the CMap only calls this for a font it is about to
+// check: a declined outcome is recorded here, by the producer, once per font.
+func LoadCMap(doc View, fontDict *object.Dictionary) (*CMap, Reason) {
 	switch e := doc.Resolve(fontDict.Get("Encoding")).(type) {
 	case object.Name:
 		if e == "Identity-H" || e == "Identity-V" {
-			return IdentityCMap(), true
+			return IdentityCMap(), ReasonOK
 		}
-		return nil, false
+		if _, known := PredefinedCMaps[string(e)]; !known {
+			return nil, ReasonMalformed
+		}
+		doc.noteDeclinedFor(fontDict, doc.DictObjNum(fontDict), ReasonUnsupported, GuardPredefinedCMap, fmt.Sprintf("the font's CMap /%s is "+
+			"predefined and its code-to-CID data is not carried, so the checks that "+
+			"need it (glyph coverage, .notdef, width consistency, /CIDSet completeness) "+
+			"were skipped for that font rather than run against a guess", string(e)))
+		return nil, ReasonUnsupported
 	case *object.Stream:
 		// Through the same budgeted decode every other stream goes through: a
 		// CMap is compressed like anything else, and a compression bomb in one
 		// is a bomb.
-		data, err := DecodeStreamData(doc.Cancel, e, doc.Limits)
-		if err != nil || len(data) > doc.Limits.ContentStreamBytes {
-			return nil, false
+		data, r := doc.Content(e)
+		if r != ReasonOK {
+			return nil, r
 		}
-		return ParseCMap(string(data))
+		c, r := ParseCMap(string(data))
+		switch r {
+		case ReasonUnsupported:
+			// usecmap is not resolved, and deliberately not recorded here yet:
+			// ParseCMap still detects it as a substring (audit 2026-09-22 C75,
+			// whose fix gives the CMap a token parser), and a conforming corpus
+			// file (TWG A025-pdfa2-pass-a, "/KSCms-UHC-H usecmap") would gain a
+			// checker finding it cannot be allowed. The consumers decline on the
+			// Reason; recording the trip is left to the usecmap fix.
+		case ReasonLimit:
+			doc.noteDeclinedFor(e, doc.StreamObjNum(e), r, GuardCMapSize, "an embedded CMap declares more code ranges, or wider ones, than pdf0 expands, so the checks that need its code-to-CID mapping were skipped for that font")
+		}
+		return c, r
 	}
-	return nil, false
-}
-
-// PredefinedCMapName is the predefined CMap a Type 0 font's /Encoding names,
-// when that is a name whose data this module does not carry.
-//
-// It exists so that the skip can be reported rather than taken silently. Three
-// checks need a code-to-CID mapping — whether every code shown has a glyph,
-// whether .notdef is drawn, and whether /W agrees with the program's own
-// advances — and for these fonts none of them can run.
-//
-// Two cases are deliberately not skips. Identity-H and Identity-V are answered
-// by LoadCMap, and an embedded stream is read. A name that is not predefined at
-// all is not reported here either: that is a violation of Table 118 and the
-// CMap-legality rule says so, which is a stronger statement than "not checked".
-func PredefinedCMapName(v View, fontDict *object.Dictionary) (string, bool) {
-	name, ok := v.ResolveName(fontDict.Get("Encoding"))
-	if !ok || name == "Identity-H" || name == "Identity-V" {
-		return "", false
-	}
-	if _, known := PredefinedCMaps[string(name)]; !known {
-		return "", false
-	}
-	return string(name), true
+	return nil, ReasonMalformed
 }
 
 // ParseCMap reads the CID half of a CMap program.
@@ -262,22 +263,24 @@ func PredefinedCMapName(v View, fontDict *object.Dictionary) (string, bool) {
 // A CMap that names another with usecmap is not resolved. Nearly every embedded
 // one that does so names a predefined CMap, which is data this module does not
 // have, so the result would be a map with holes in it that reported nothing.
-// Saying no is the honest answer and the caller skips the font.
-func ParseCMap(src string) (*CMap, bool) {
+// Saying no is the honest answer (ReasonUnsupported) and the caller skips the
+// font. A CMap with no codespace is ReasonMalformed; one whose ranges exceed
+// the fixed expansion bounds is ReasonLimit.
+func ParseCMap(src string) (*CMap, Reason) {
 	if strings.Contains(src, "usecmap") {
-		return nil, false
+		return nil, ReasonUnsupported
 	}
 	c := &CMap{single: map[uint32]int{}}
 	parseCodespaces(c, src)
 	if len(c.codespace) == 0 {
 		// Without a codespace nothing can be cut into codes. A CMap is required
 		// to have one; a file that omits it has not said how to read itself.
-		return nil, false
+		return nil, ReasonMalformed
 	}
 	if !parseCIDMappings(c, src) {
-		return nil, false
+		return nil, ReasonLimit
 	}
-	return c, true
+	return c, ReasonOK
 }
 
 // parseCodespaces reads begincodespacerange blocks.

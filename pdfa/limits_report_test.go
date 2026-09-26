@@ -108,7 +108,7 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 			9: {Number: 9, Value: &object.Stream{Dict: object.Dictionary{}, Data: prog}},
 		}})
 
-		if fp := core.LoadFontProgram(doc, fd); fp == nil || !fp.CmapPartial {
+		if fp, _ := core.LoadFontProgram(doc, fd); fp == nil || !fp.CmapPartial { // reason: the fixture check is on the program itself
 			t.Fatalf("fixture wrong: font program parsed=%v, cmapPartial=%v", fp != nil, fp != nil && fp.CmapPartial)
 		}
 

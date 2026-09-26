@@ -35,11 +35,14 @@ type FontCodes struct {
 // Either is enough to cut codes, though not to map them to CIDs, and the
 // returned value is not a CMap a caller could ask for CIDs.
 func LoadFontCodes(doc View, fontDict *object.Dictionary) (FontCodes, bool) {
-	if c, ok := LoadCMap(doc, fontDict); ok {
-		return FontCodes{cmap: c}, true
-	}
 	switch e := doc.Resolve(fontDict.Get("Encoding")).(type) {
 	case object.Name:
+		// A name is answered here rather than through LoadCMap: a predefined
+		// CMap's codespace is carried, so cutting its codes is not a skip, and
+		// LoadCMap would report the missing code-to-CID data as one.
+		if e == "Identity-H" || e == "Identity-V" {
+			return FontCodes{cmap: IdentityCMap()}, true
+		}
 		ranges, ok := predefinedCodespaces[string(e)]
 		if !ok {
 			return FontCodes{}, false
@@ -48,8 +51,12 @@ func LoadFontCodes(doc View, fontDict *object.Dictionary) (FontCodes, bool) {
 		uni := strings.HasPrefix(name, "Uni") && (strings.Contains(name, "-UCS2-") || strings.Contains(name, "-UTF16-"))
 		return FontCodes{cmap: &CMap{codespace: ranges}, unicode: uni}, true
 	case *object.Stream:
-		data, err := DecodeStreamData(doc.Cancel, e, doc.Limits)
-		if err != nil || len(data) > doc.Limits.ContentStreamBytes {
+		if c, r := LoadCMap(doc, fontDict); r == ReasonOK {
+			return FontCodes{cmap: c}, true
+		}
+		// Through the same producer: a declined decode is recorded there.
+		data, r := doc.Content(e)
+		if r != ReasonOK {
 			return FontCodes{}, false
 		}
 		c := &CMap{}

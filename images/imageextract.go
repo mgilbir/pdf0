@@ -445,10 +445,10 @@ func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 			img.Encoded, img.Note = st.Data, "JPEG decode failed: "+err.Error()
 		}
 	case "CCITTFaxDecode":
-		encoded, params, ok := ccittEncodedAndParams(d, st, img.Width, img.Height)
-		if !ok {
+		encoded, params, r := ccittEncodedAndParams(d, st, img.Width, img.Height)
+		if r != core.ReasonOK {
 			img.Encoded = st.Data
-			img.Note = "CCITTFaxDecode preceding filter chain could not be reversed; the raw encoded bytes are provided"
+			img.Note = "CCITTFaxDecode preceding filter chain could not be reversed (" + r.String() + "); the raw encoded bytes are provided"
 			break
 		}
 		samples, err := ccitt.Decode(encoded, params)
@@ -463,10 +463,10 @@ func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 		}
 		renderBilevelSamples(d, st, &img, samples, "unsupported CCITT sample layout")
 	case "JBIG2Decode":
-		encoded, globals, ok := jbig2EncodedAndGlobals(d, st)
-		if !ok {
+		encoded, globals, r := jbig2EncodedAndGlobals(d, st)
+		if r != core.ReasonOK {
 			img.Encoded = st.Data
-			img.Note = "JBIG2Decode preceding filter chain could not be reversed; the raw encoded bytes are provided"
+			img.Note = "JBIG2Decode preceding filter chain could not be reversed (" + r.String() + "); the raw encoded bytes are provided"
 			break
 		}
 		samples, err := jbig2.Decode(globals, encoded, img.Width, img.Height, d.Limits.ImagePixelBound())
@@ -495,18 +495,23 @@ func extractImage(d core.View, st *object.Stream, num int) ExtractedImage {
 		img.Encoded = st.Data
 		img.Note = "JPXDecode not decoded; raw bytes provided"
 	default:
-		// No filter, or a general-purpose filter chain (Flate/LZW/ASCIIHex — the
-		// only ones applyFilter reverses): reverse the chain to raw samples, which
-		// buildImage renders through the colour space, bit depth, /Decode and masks
-		// (image masks keep their own 1-bit stencil rendering). The geometry is
-		// held to the budget before the samples are decoded, so an image that
-		// will be refused costs no decode; buildImage checks again once it knows
-		// the component count.
+		// No filter, or a general-purpose filter chain (the ones core.ApplyFilter
+		// reverses): reverse the chain to raw samples, which buildImage renders
+		// through the colour space, bit depth, /Decode and masks (image masks keep
+		// their own 1-bit stencil rendering). The geometry is held to the budget
+		// before the samples are decoded, so an image that will be refused costs
+		// no decode; buildImage checks again once it knows the component count.
 		if err := d.Limits.CheckImage(int64(img.Width), int64(img.Height), 1); err != nil {
 			refuseImage(d, &img, st, "image", err)
 			break
 		}
-		renderSamples(d, st, &img, decodeImageSamples(d.Cancel, st, d.Limits), "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
+		samples, r := decodeImageSamples(d, st)
+		if r != core.ReasonOK {
+			img.Encoded = st.Data
+			img.Note = "image data not decoded (" + r.String() + "); raw bytes provided"
+			break
+		}
+		renderSamples(d, st, &img, samples, "unsupported sample layout (colour space "+img.ColorSpace+", "+strconv.Itoa(img.BitsPerComponent)+" bpc)")
 	}
 	return img
 }
@@ -546,11 +551,12 @@ func jpegComponents(m color.Model) int {
 // the shared content budget — would bloat memory and starve the small shared
 // streams (tint functions, palettes) the cache exists for. The same 64MB
 // per-stream bound applies.
-func decodeImageSamples(cancel core.Canceler, st *object.Stream, lim core.Limits) []byte {
-	if decoded, err := core.DecodeStreamData(cancel, st, lim); err == nil && len(decoded) <= lim.ContentStreamBytes {
-		return decoded
-	}
-	return nil
+//
+// The Reason says why there are no samples when there are none: a stream that
+// did not decode is not the same thing as one pdf0 declined to decode, and the
+// caller says which in the image's Note.
+func decodeImageSamples(d core.View, st *object.Stream) ([]byte, core.Reason) {
+	return d.DecodeLimited(st)
 }
 
 // renderSamples turns decoded image samples into an image.Image, applying the
@@ -623,25 +629,22 @@ func renderBilevelSamples(d core.View, st *object.Stream, img *ExtractedImage, s
 // ccittEncodedAndParams returns the CCITT-encoded bytes for an image XObject —
 // reversing any general-purpose filters (Flate/LZW/ASCIIHex) that precede the
 // CCITTFaxDecode codec in the filter chain — together with the /DecodeParms that
-// steer the fax decoder. ok is false when a preceding filter cannot be reversed.
-func ccittEncodedAndParams(d core.View, st *object.Stream, width, height int) (encoded []byte, params ccitt.Params, ok bool) {
+// steer the fax decoder, and the Reason when a preceding filter cannot be
+// reversed (a declined one is recorded by the producer).
+func ccittEncodedAndParams(d core.View, st *object.Stream, width, height int) (encoded []byte, params ccitt.Params, r core.Reason) {
 	filters := d.StreamFilters(st)
 	if len(filters) == 0 {
-		return nil, params, false
+		return nil, params, core.ReasonMalformed
 	}
 	last := len(filters) - 1
-	parms := d.Resolve(st.Dict.Get("DecodeParms"))
-
-	encoded = st.Data
-	for i := 0; i < last; i++ {
-		out, err := core.ApplyFilter(d.Cancel, filters[i], encoded, core.ParmsDictAt(parms, i), d.Limits)
-		if err != nil {
-			return nil, params, false
-		}
-		encoded = out
+	encoded, stages, r := d.DecodeStages(st, last)
+	if r != core.ReasonOK {
+		return nil, params, r
 	}
-
-	cp := core.ParmsDictAt(parms, last)
+	var cp *object.Dictionary
+	if last < len(stages) {
+		cp = stages[last]
+	}
 	k, columns, rows, byteAlign := 0, 1728, height, false
 	if cp != nil {
 		if v, kOK := d.Resolve(cp.Get("K")).(object.Integer); kOK {
@@ -660,38 +663,31 @@ func ccittEncodedAndParams(d core.View, st *object.Stream, width, height int) (e
 	if columns <= 0 {
 		columns = width
 	}
-	return encoded, ccitt.NewParams(k, columns, rows, byteAlign, d.Limits.ImagePixelBound()), true
+	return encoded, ccitt.NewParams(k, columns, rows, byteAlign, d.Limits.ImagePixelBound()), core.ReasonOK
 }
 
 // jbig2EncodedAndGlobals returns the JBIG2-encoded bytes for an image XObject
 // (reversing any general-purpose filters that precede JBIG2Decode) and the
-// decoded /JBIG2Globals shared-segment stream when present. ok is false when a
-// preceding filter cannot be reversed.
-func jbig2EncodedAndGlobals(d core.View, st *object.Stream) (encoded, globals []byte, ok bool) {
+// decoded /JBIG2Globals shared-segment stream when present, and the Reason
+// when a preceding filter cannot be reversed.
+func jbig2EncodedAndGlobals(d core.View, st *object.Stream) (encoded, globals []byte, r core.Reason) {
 	filters := d.StreamFilters(st)
 	if len(filters) == 0 {
-		return nil, nil, false
+		return nil, nil, core.ReasonMalformed
 	}
 	last := len(filters) - 1
-	parms := d.Resolve(st.Dict.Get("DecodeParms"))
-
-	encoded = st.Data
-	for i := 0; i < last; i++ {
-		out, err := core.ApplyFilter(d.Cancel, filters[i], encoded, core.ParmsDictAt(parms, i), d.Limits)
-		if err != nil {
-			return nil, nil, false
-		}
-		encoded = out
+	encoded, stages, r := d.DecodeStages(st, last)
+	if r != core.ReasonOK {
+		return nil, nil, r
 	}
-
-	if cp := core.ParmsDictAt(parms, last); cp != nil {
-		if gs, ok := d.Resolve(cp.Get("JBIG2Globals")).(*object.Stream); ok {
-			if data, err := core.DecodeStreamData(d.Cancel, gs, d.Limits); err == nil {
+	if last < len(stages) && stages[last] != nil {
+		if gs, ok := d.Resolve(stages[last].Get("JBIG2Globals")).(*object.Stream); ok {
+			if data, gr := d.Decode(gs); gr == core.ReasonOK {
 				globals = data
 			}
 		}
 	}
-	return encoded, globals, true
+	return encoded, globals, core.ReasonOK
 }
 
 // samplesToImage builds an image from decoded PDF sample bytes for the common

@@ -268,9 +268,10 @@ pixel. [limits.md](limits.md) classifies these guards on that axis.
 
 - **Inline images** (`BI … ID … EI` in a content stream) are not extracted;
   only image XObjects are.
-- Only `FlateDecode`, `LZWDecode` and `ASCIIHexDecode` can be reversed. An
-  image whose samples are wrapped in `RunLengthDecode` or `ASCII85Decode` is
-  reported undecoded with an empty `Encoded`.
+- The general-purpose filters — `FlateDecode`, `LZWDecode`, `ASCIIHexDecode`,
+  `ASCII85Decode` and `RunLengthDecode` — are reversed. An image whose samples
+  do not decode is reported undecoded with its raw bytes in `Encoded` and a
+  `Note` saying why (malformed, a limit, an unsupported filter).
 - `DCTDecode` and `JPXDecode` do not reverse preceding general-purpose filters;
   such a chain fails to decode.
 - JPEG decoding is the standard library's, so arithmetic-coded, 12-bit and

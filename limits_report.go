@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"context"
+	"fmt"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/pdfa"
@@ -109,6 +111,21 @@ func runLimitTrips(doc *Document) []core.Trip {
 		return nil
 	}
 	var out []core.Trip
+	// Undecrypted content is reported once, up front, whatever the run went
+	// on to read: every string and stream a check could have read is
+	// ciphertext, the producers declined each of them (core.Reason), and a
+	// report of "no findings" would otherwise say "checked and clean" about a
+	// file nothing was checked in (audit 2026-09-22 C63).
+	switch {
+	case doc.Locked():
+		why := "no password was supplied or it was wrong"
+		if err := doc.LockReason(); err != nil {
+			why = err.Error()
+		}
+		out = append(out, core.NewTrip(core.GuardLocked, "the document is encrypted and was not decrypted ("+why+"), so its strings and streams are ciphertext and every check that reads them was skipped", 0))
+	case len(doc.decryptFailures) > 0:
+		out = append(out, core.NewTrip(core.GuardLocked, fmt.Sprintf("%d object(s) did not decrypt under the document's key (%v), so their strings and streams are unrecoverable and the checks that read them were skipped", len(doc.decryptFailures), doc.decryptFailures), 0))
+	}
 	if doc.readLimits != nil {
 		out = append(out, doc.readLimits.Snapshot()...)
 	}

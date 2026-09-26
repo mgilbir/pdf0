@@ -73,7 +73,20 @@ type Document struct {
 	// brokenObjStms lists object-stream container numbers whose contents could
 	// not be decoded during Read. The document parses without them so that
 	// validation can report the defect (see checkStreamLength / objstm rules).
-	brokenObjStms []int
+	// skippedObjStms lists the containers Read did not unpack by its own
+	// choice or inability — the materialisation budget, a decode limit, an
+	// unsupported filter, ciphertext — which are not defects of the file and
+	// must never be reported as one (objstm.go). Either leaves objects missing.
+	brokenObjStms  []int
+	skippedObjStms []core.SkippedObjStm
+
+	// objStmLeft is the object-stream materialisation meter of the Read in
+	// progress (objStmMeter), valid once objStmMetered is set, and
+	// objStmCiphertext says whether a container is ciphertext pdf0 could not
+	// decrypt. Both are Read's working state and mean nothing after it.
+	objStmLeft       int64
+	objStmMetered    bool
+	objStmCiphertext func(num int) bool
 
 	// decryptFailures lists the object numbers whose ciphertext did not decrypt
 	// under a known-good file key — corrupt AES data, data that was never
@@ -124,7 +137,7 @@ type Document struct {
 // to change them. The resolved limits are stored on the returned Document, so
 // every validator and extractor that runs on it inherits the same configuration.
 func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(core.Canceler{}, r, size, "", resolveLimits(opts))
+	return readWithOptions(core.Canceler{}, r, size, "", opts)
 }
 
 // ReadWithPassword is Read with a user or owner password for an encrypted file.
@@ -134,7 +147,7 @@ func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
 // bytes are tried as well, for files written by producers that skip the
 // preparation; either must still match the file's password hash.
 func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(core.Canceler{}, r, size, password, resolveLimits(opts))
+	return readWithOptions(core.Canceler{}, r, size, password, opts)
 }
 
 // ReadContext is Read with cancellation. Parsing is not usually the expensive
@@ -150,12 +163,22 @@ func ReadWithPassword(r io.ReaderAt, size int64, password string, opts ...Option
 // genuinely lacks them, and every validator would then report the absence as a
 // conformance failure. See cancel.go.
 func ReadContext(ctx context.Context, r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
-	return readDocument(core.NewCanceler(ctx), r, size, "", resolveLimits(opts))
+	return readWithOptions(core.NewCanceler(ctx), r, size, "", opts)
 }
 
 // ReadWithPasswordContext is ReadWithPassword with cancellation; see ReadContext.
 func ReadWithPasswordContext(ctx context.Context, r io.ReaderAt, size int64, password string, opts ...Option) (*Document, error) {
-	return readDocument(core.NewCanceler(ctx), r, size, password, resolveLimits(opts))
+	return readWithOptions(core.NewCanceler(ctx), r, size, password, opts)
+}
+
+// readWithOptions is the Read entry points' shared front: an option value it
+// cannot honour is an error before anything is read (resolveLimits).
+func readWithOptions(cancel core.Canceler, r io.ReaderAt, size int64, password string, opts []Option) (*Document, error) {
+	lim, err := resolveLimits(opts)
+	if err != nil {
+		return nil, err
+	}
+	return readDocument(cancel, r, size, password, lim)
 }
 
 func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password string, lim core.Limits) (doc *Document, err error) {
@@ -229,6 +252,17 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		}
 		xrefTable = t
 		rebuilt, firstErr = true, err
+		// A cross-reference stream pdf0 declined to decode is not a broken
+		// table: the scan rebuilds one, but it cannot see what only the stream
+		// said (compressed objects' containers, free entries), so the reader
+		// must be told why the table is a reconstruction (audit 2026-09-22
+		// C47). A table that is malformed rebuilds silently, as it always has.
+		switch core.ReasonOf(err) {
+		case core.ReasonLimit:
+			doc.noteReadLimit(core.GuardDecodedStream, fmt.Sprintf("the cross-reference stream decodes to more than the %s-byte per-stream limit, so the table was rebuilt by scanning the file; an object only that stream located may be missing", core.LimitBound(int64(lim.DecodedStreamBytes), core.DefaultMaxDecodedStreamBytes)), 0)
+		case core.ReasonUnsupported:
+			doc.noteReadLimit(core.GuardUnsupportedFilter, "the cross-reference stream is encoded in a way pdf0 does not implement ("+err.Error()+"), so the table was rebuilt by scanning the file; an object only that stream located may be missing", 0)
+		}
 		if tr := findTrailerByScan(data); tr != nil {
 			doc.Trailer = *tr // dictcopy: a fresh parse of the scanned trailer; nothing else holds it
 		}
@@ -314,6 +348,15 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 			doc.security = h
 			doc.encryptWarnings = h.Warnings
 		}
+		// A container that is still ciphertext — the whole document when no
+		// handler could be built, one container when its data did not decrypt
+		// — is not unpacked, and is recorded as such rather than as a malformed
+		// object stream (audit 2026-09-22 C47, C63).
+		if h := doc.security; h == nil {
+			doc.objStmCiphertext = func(int) bool { return true }
+		} else {
+			doc.objStmCiphertext = h.DecryptFailed
+		}
 	}
 
 	// 5. Materialize objects stored in object streams (type-2 entries). The
@@ -329,6 +372,7 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 			return nil, err
 		}
 	}
+	doc.objStmCiphertext = nil // Read's working state (see the field)
 
 	// 5.5. Decrypt the remaining streams, now that every object is loaded.
 	if pending != nil {
@@ -935,8 +979,8 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 		if d.ResolveDict(d.Trailer.Get("Encrypt")) == nil {
 			return fmt.Errorf("cannot write encrypted document: its /Encrypt dictionary is unresolvable, so the encryption state is unknown")
 		}
-		if len(d.brokenObjStms) > 0 {
-			return fmt.Errorf("cannot write encrypted document: %d object stream(s) could not be decrypted, so some objects are missing", len(d.brokenObjStms))
+		if err := d.missingObjectsErr("cannot write encrypted document"); err != nil {
+			return err
 		}
 	}
 	// Object number 0 is reserved as the free-list head (ISO 32000-1 7.5.4); it
@@ -965,11 +1009,11 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	if worst < 0 {
 		return fmt.Errorf("object number %d is not a valid object number (ISO 32000-2 7.3.10 requires a positive integer)", worst)
 	}
-	// A broken object stream left some objects unmaterialised during Read; the
-	// document may reference them, so writing would emit dangling references
-	// (audit C19).
-	if len(d.brokenObjStms) > 0 {
-		return fmt.Errorf("cannot write: %d object stream(s) failed to decode on read, so some objects are missing", len(d.brokenObjStms))
+	// A broken or skipped object stream left some objects unmaterialised during
+	// Read; the document may reference them, so writing would emit dangling
+	// references (audit C19).
+	if err := d.missingObjectsErr("cannot write"); err != nil {
+		return err
 	}
 	// Objects whose ciphertext did not decrypt hold nothing; writing them would
 	// silently replace their content with empty values.
@@ -982,7 +1026,10 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// When re-encrypting, serialize encrypted copies rather than the in-memory
 	// plaintext (which stays untouched for the caller). The /Encrypt dictionary
 	// and /ID remain in the trailer and are written as-is.
-	writeObjects, xrefType2 := d.buildWriteSet()
+	writeObjects, xrefType2, err := d.buildWriteSet()
+	if err != nil {
+		return err
+	}
 	if d.security != nil {
 		// Which crypt filter a stream uses depends on the document (embedded
 		// files follow /EFF, the catalog's metadata may be exempt), so the
@@ -1374,7 +1421,7 @@ func (d *Document) graph() core.View {
 // The run state travels with it when there is one, so a trip a subsystem records
 // through the view lands in the same recorder the validators report from.
 func (d *Document) view() core.View {
-	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Objects: d.Objects, Offsets: d.Source().offsets, Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler(), Alloc: d.allocObjNum}
+	v := core.View{Version: d.Version, Encrypted: d.Encrypted, Locked: d.Locked(), Objects: d.Objects, Offsets: d.Source().offsets, Trailer: &d.Trailer, BrokenObjStms: d.brokenObjStms, SkippedObjStms: d.skippedObjStms, DecryptFailures: d.decryptFailures, UsedXRefStream: d.usedXRefStream, EmbeddedDepth: d.embeddedDepth, Limits: d.lim(), Cancel: d.canceler(), Alloc: d.allocObjNum}
 	if d.valCache != nil {
 		v.Run = d.valCache.run.shared
 	}

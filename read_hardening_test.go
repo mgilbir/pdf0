@@ -70,7 +70,7 @@ func TestObjStmHugeNPanic(t *testing.T) {
 		s.Dict.Set("N", object.Integer(math.MaxInt64))
 		s.Dict.Set("First", object.Integer(8))
 		noPanic(t, "objstm huge N", func() {
-			if _, _, _, err := parseObjStmIndex(core.Canceler{}, s, core.DefaultLimits()); err == nil {
+			if _, _, _, err := parseObjStmIndex(core.Canceler{}, s, core.DefaultLimits(), nil); err == nil {
 				t.Fatalf("expected an error for an absurd /N, got nil")
 			}
 		})

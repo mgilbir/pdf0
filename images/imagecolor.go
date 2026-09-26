@@ -187,7 +187,7 @@ func stencilMask(d core.View, st *object.Stream) (data []byte, mw, mh int, hideB
 	}
 	mw = object.Int(d.Resolve(mk.Dict.Get("Width")))
 	mh = object.Int(d.Resolve(mk.Dict.Get("Height")))
-	data = decodeImageSamples(d.Cancel, mk, d.Limits)
+	data, _ = decodeImageSamples(d, mk) // reason: extraction; an undecoded mask is not applied
 	if mw <= 0 || mh <= 0 || !sampleDataFits(data, mw, mh, 1, 1) {
 		return nil, 0, 0, 0, false
 	}
@@ -500,7 +500,7 @@ func (r *csResolver) indexed(cs object.Array) (*imgColorSpace, error) {
 	case object.String:
 		lookup = t.Value
 	case *object.Stream:
-		lookup = d.Content(t)
+		lookup, _ = d.Content(t) // reason: extraction; a lookup that did not decode is too short below and the image is not rendered
 	default:
 		return nil, errUnsupportedLayout
 	}
@@ -742,7 +742,7 @@ func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, er
 	if last == "DCTDecode" || last == "JPXDecode" {
 		return nil, 0, 0, nil // decoded elsewhere; rare for a mask
 	}
-	raw := decodeImageSamples(d.Cancel, sm, d.Limits)
+	raw, _ := decodeImageSamples(d, sm) // reason: extraction; an undecoded soft mask is not applied
 	if !sampleDataFits(raw, w, h, 1, bpc) {
 		return nil, 0, 0, nil
 	}

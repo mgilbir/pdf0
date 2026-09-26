@@ -58,11 +58,12 @@ func (d View) DictObjNum(target *object.Dictionary) int {
 	return best
 }
 
-// xmpText decodes an XMP packet to UTF-8 text. Every XMP consumer goes through
-// it so no site can route the document's identification back through the
-// content budget.
-func (doc View) XMPText(stream *object.Stream) string {
-	return DecodeXMPToUTF8(doc.MetadataContent(stream))
+// XMPText decodes an XMP packet to UTF-8 text, with MetadataContent's Reason.
+// Every XMP consumer goes through it so no site can route the document's
+// identification back through the content budget.
+func (doc View) XMPText(stream *object.Stream) (string, Reason) {
+	data, r := doc.MetadataContent(stream)
+	return DecodeXMPToUTF8(data), r
 }
 
 func DecodeXMPToUTF8(data []byte) string {
@@ -306,15 +307,16 @@ func allAlnum(s string) bool {
 	return true
 }
 
-// DocumentXMP returns the document's decoded XMP metadata packet, or "".
-func (doc View) DocumentXMP() string {
+// DocumentXMP returns the document's decoded XMP metadata packet, or "", with
+// the Reason: ReasonAbsent when the catalog names no metadata stream.
+func (doc View) DocumentXMP() (string, Reason) {
 	cat := doc.Catalog()
 	if cat == nil {
-		return ""
+		return "", ReasonAbsent
 	}
 	stream, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream)
 	if !ok {
-		return ""
+		return "", ReasonAbsent
 	}
 	return doc.XMPText(stream)
 }
@@ -354,14 +356,18 @@ func DecodePDFTextString(b []byte) string {
 // parseToUnicodeMap parses a font's ToUnicode CMap into a map from character
 // code to the first Unicode scalar value it produces. Used to tell whether a
 // rendered glyph represents whitespace (ISO 32000-1 9.10.3).
-func (doc View) ParseToUnicodeMap(fontDict *object.Dictionary) map[int]rune {
+//
+// The Reason is ReasonAbsent when the font has no ToUnicode stream, and the
+// stream's decode outcome otherwise: a nil map with a declined Reason means
+// pdf0 did not read the mappings, not that there are none.
+func (doc View) ParseToUnicodeMap(fontDict *object.Dictionary) (map[int]rune, Reason) {
 	s, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*object.Stream)
 	if !ok {
-		return nil
+		return nil, ReasonAbsent
 	}
-	data := doc.Content(s)
-	if data == nil {
-		return nil
+	data, r := doc.Content(s)
+	if r != ReasonOK {
+		return nil, r
 	}
 	m := map[int]rune{}
 	str := string(data)
@@ -417,7 +423,7 @@ func (doc View) ParseToUnicodeMap(fontDict *object.Dictionary) map[int]rune {
 	}
 	scan("beginbfchar", "endbfchar", false)
 	scan("beginbfrange", "endbfrange", true)
-	return m
+	return m, ReasonOK
 }
 
 // ParseToUnicodeRunes parses a font's ToUnicode CMap into a map from character
@@ -429,14 +435,16 @@ func (doc View) ParseToUnicodeMap(fontDict *object.Dictionary) map[int]rune {
 // a code point above the BMP arrives as a surrogate pair, and reading only the
 // first unit reports the high surrogate D840 instead of U+10016D — a value that
 // is in no Private Use Area, on a file that is in one.
-func ParseToUnicodeRunes(doc View, fontDict *object.Dictionary) map[int][]rune {
+//
+// The Reason is ParseToUnicodeMap's.
+func ParseToUnicodeRunes(doc View, fontDict *object.Dictionary) (map[int][]rune, Reason) {
 	s, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*object.Stream)
 	if !ok {
-		return nil
+		return nil, ReasonAbsent
 	}
-	data := doc.Content(s)
-	if data == nil {
-		return nil
+	data, r := doc.Content(s)
+	if r != ReasonOK {
+		return nil, r
 	}
 	m := map[int][]rune{}
 	str := string(data)
@@ -479,7 +487,7 @@ func ParseToUnicodeRunes(doc View, fontDict *object.Dictionary) map[int][]rune {
 	}
 	scan("beginbfchar", "endbfchar", false)
 	scan("beginbfrange", "endbfrange", true)
-	return m
+	return m, ReasonOK
 }
 
 // applyBFRange records one bfrange entry: a code range and either a single
@@ -637,58 +645,6 @@ func (doc View) SortedObjectNums() []int {
 	}
 	sort.Ints(nums)
 	return nums
-}
-
-// streamFiltersSupported reports whether every filter on the stream is one that
-// decodeStreamData can actually apply. Callers use this to tell "we could not
-// inspect this stream" apart from "this stream is corrupt": a decode failure on
-// an unsupported-but-legal filter must not be reported as a violation.
-func StreamFiltersSupported(stream *object.Stream) bool {
-	filter := stream.Dict.Get("Filter")
-	if filter == nil {
-		return true
-	}
-	parms := stream.Dict.Get("DecodeParms")
-	switch f := filter.(type) {
-	case object.Name:
-		return IsSupportedFilter(f) && predictorSupported(PredictorFromDict(ParmsDictAt(parms, 0)))
-	case object.Array:
-		for i, e := range f {
-			name, ok := e.(object.Name)
-			if !ok || !IsSupportedFilter(name) {
-				return false
-			}
-			if !predictorSupported(PredictorFromDict(ParmsDictAt(parms, i))) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// IsSupportedFilter reports whether applyFilter can decode the named filter.
-func IsSupportedFilter(name object.Name) bool {
-	switch name {
-	case "FlateDecode", "LZWDecode", "ASCIIHexDecode", "Crypt":
-		return true
-	}
-	return false
-}
-
-// predictorSupported reports whether applyPredictor can reverse the given
-// predictor parameters. TIFF horizontal differencing with sub-byte components
-// is the one legal-but-unimplemented combination.
-func predictorSupported(p PredictorParms) bool {
-	switch {
-	case p.Predictor == 1:
-		return true
-	case p.Predictor == 2:
-		return p.BitsPerComponent == 8 || p.BitsPerComponent == 16
-	case p.Predictor >= 10 && p.Predictor <= 15:
-		return true
-	}
-	return false
 }
 
 type CMSSignedData struct {

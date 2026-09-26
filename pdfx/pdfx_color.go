@@ -68,7 +68,7 @@ func (s *DevColorScanner) PageDeviceUse(page *object.Dictionary) DevUse {
 	var data []byte
 	var key *object.Stream
 	if c := page.Get("Contents"); c != nil {
-		data, key = s.doc.ContentBytesAndKey(c)
+		data, key, _ = s.doc.ContentBytesAndKey(c) // reason: presence-only scan; the producer recorded any declined trip
 	}
 	u := s.container(page, data, key)
 
@@ -211,7 +211,7 @@ func (s *DevColorScanner) container(c *object.Dictionary, data []byte, key *obje
 					if cp := s.doc.ResolveDict(fd.Get("CharProcs")); cp != nil {
 						for cpv := range cp.Values() {
 							if st, ok := s.doc.Resolve(cpv).(*object.Stream); ok {
-								if d := s.doc.Content(st); d != nil {
+								if d, _ := s.doc.Content(st); d != nil { // reason: presence-only scan; the producer recorded any declined trip
 									r, cc, g := core.ScanStreamForDeviceOps(s.doc.Cancel, d)
 									nested.RGB = nested.RGB || r
 									nested.CMYK = nested.CMYK || cc
@@ -247,7 +247,8 @@ func (s *DevColorScanner) streamEscape(st *object.Stream, applyGroup bool) DevUs
 	}
 	s.inProg[st] = true
 
-	u := s.container(&st.Dict, s.doc.Content(st), st)
+	data, _ := s.doc.Content(st) // reason: presence-only scan; the producer recorded any declined trip
+	u := s.container(&st.Dict, data, st)
 	if applyGroup {
 		if g := s.doc.ResolveDict(st.Dict.Get("Group")); g != nil {
 			core.CheckCSForDevice(s.doc, g.Get("CS"), &u.RGB, &u.CMYK, &u.Gray)

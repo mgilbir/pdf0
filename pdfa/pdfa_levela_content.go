@@ -99,7 +99,7 @@ func buildLevelAContentFacts(doc core.View) levelAContentFacts {
 // marked-content property lists carry and the Private Use Area characters it
 // shows without replacement text.
 func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toUni map[*object.Dictionary]map[int][]rune, f *levelAContentFacts) {
-	data := core.ContentStreamData(doc, pg.Dict.Get("Contents"))
+	data, _ := core.ContentStreamData(doc, pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 	if len(data) == 0 {
 		return
 	}
@@ -136,13 +136,16 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 	push := func(props *object.Dictionary) {
 		fr := mcFrame{mcid: -1}
 		if props != nil {
-			if s, ok := doc.Resolve(props.Get("ActualText")).(object.String); ok && len(s.Value) > 0 {
+			// Content is read only when it decoded, so a Locked document never
+			// reaches here; a string that is ciphertext would still read as
+			// "present", which only exempts.
+			if s, r := doc.StringValue(props.Get("ActualText")); r == core.ReasonLocked || (r == core.ReasonOK && len(s.Value) > 0) {
 				fr.actualText = true
 			}
 			if n, ok := doc.Resolve(props.Get("MCID")).(object.Integer); ok {
 				fr.mcid = int(n)
 			}
-			if s, ok := doc.Resolve(props.Get("Lang")).(object.String); ok && len(s.Value) > 0 {
+			if s, r := doc.StringValue(props.Get("Lang")); r == core.ReasonOK && len(s.Value) > 0 {
 				f.langs = append(f.langs, langSite{value: core.DecodePDFTextString(s.Value), objNum: pg.ObjNum})
 			}
 		}
@@ -168,7 +171,7 @@ func scanLevelAPage(doc core.View, pg core.PageInfo, covered map[mcKey]bool, toU
 		}
 		m, ok := toUni[font]
 		if !ok {
-			m = core.ParseToUnicodeRunes(doc, font)
+			m, _ = core.ParseToUnicodeRunes(doc, font) // reason: a nil map skips the text below; the producer recorded any declined trip
 			toUni[font] = m
 		}
 		if m == nil {
@@ -334,7 +337,9 @@ func structActualTextMCIDs(doc core.View, cat *object.Dictionary) map[mcKey]bool
 			actual[i] = actual[n.Parent]
 			page[i] = page[n.Parent]
 		}
-		if s, ok := doc.Resolve(n.Elem.Get("ActualText")).(object.String); ok && len(s.Value) > 0 {
+		// A Locked document's ActualText is ciphertext: it is there, and that
+		// only exempts.
+		if s, r := doc.StringValue(n.Elem.Get("ActualText")); r == core.ReasonLocked || (r == core.ReasonOK && len(s.Value) > 0) {
 			actual[i] = true
 		}
 		if ref, ok := n.Elem.Get("Pg").(object.IndirectRef); ok {

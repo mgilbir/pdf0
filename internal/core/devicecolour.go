@@ -92,7 +92,8 @@ func scanContentStreamForDeviceCS(doc View, stream *object.Stream, seen map[*obj
 	if seen[&stream.Dict] {
 		return
 	}
-	scanContainerForDeviceCS(doc, &stream.Dict, doc.Content(stream), stream, seen, usesRGB, usesCMYK, usesGray)
+	data, _ := doc.Content(stream) // reason: presence-only scan; the producer recorded any declined trip
+	scanContainerForDeviceCS(doc, &stream.Dict, data, stream, seen, usesRGB, usesCMYK, usesGray)
 }
 
 func scanResourcesForDeviceCS(doc View, container *object.Dictionary, seen map[*object.Dictionary]bool, usesRGB, usesCMYK, usesGray *bool) {
@@ -102,7 +103,7 @@ func scanResourcesForDeviceCS(doc View, container *object.Dictionary, seen map[*
 	var data []byte
 	var key *object.Stream
 	if contentsRef := container.Get("Contents"); contentsRef != nil {
-		data, key = doc.ContentBytesAndKey(contentsRef)
+		data, key, _ = doc.ContentBytesAndKey(contentsRef) // reason: presence-only scan; the producer recorded any declined trip
 	}
 	scanContainerForDeviceCS(doc, container, data, key, seen, usesRGB, usesCMYK, usesGray)
 }
@@ -295,7 +296,7 @@ func scanContainerForDeviceCS(doc View, container *object.Dictionary, data []byt
 						for cpVal := range cpDict.Values() {
 							cpObj := doc.Resolve(cpVal)
 							if cpStream, ok := cpObj.(*object.Stream); ok {
-								data := doc.Content(cpStream)
+								data, _ := doc.Content(cpStream) // reason: presence-only scan; the producer recorded any declined trip
 								if data != nil {
 									r, c, g := ScanStreamForDeviceOps(doc.Cancel, data)
 									*usesRGB = *usesRGB || r

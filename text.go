@@ -201,7 +201,7 @@ func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string,
 		textPageHook(page)
 	}
 	res := d.ResolveDict(d.view().InheritedPageAttr(page, "Resources"))
-	content := core.ContentStreamData(d.view(), page.Get("Contents"))
+	content, _ := core.ContentStreamData(d.view(), page.Get("Contents")) // reason: extraction returns the text it could decode
 	var out strings.Builder
 	d.extractContentText(run, res, content, &out, map[*object.Stream]bool{}, 0)
 	if run.exhausted != nil {
@@ -331,7 +331,8 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 						if formRes == nil {
 							formRes = res // a form may draw with the calling context's resources
 						}
-						d.extractContentText(run, formRes, d.view().Content(st), out, onPath, depth+1)
+						formData, _ := d.view().Content(st) // reason: extraction returns the text it could decode
+						d.extractContentText(run, formRes, formData, out, onPath, depth+1)
 						delete(onPath, st)
 						if run.exhausted != nil {
 							return
@@ -404,7 +405,8 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 		if f == nil {
 			continue
 		}
-		ft := fontText{toUnicode: core.ParseToUnicodeRunes(d.view(), f)}
+		toUnicode, _ := core.ParseToUnicodeRunes(d.view(), f) // reason: extraction falls back to the font's encoding without a ToUnicode map
+		ft := fontText{toUnicode: toUnicode}
 		if st, _ := d.view().ResolveName(f.Get("Subtype")); st == "Type0" {
 			ft.composite = true
 			var ok bool

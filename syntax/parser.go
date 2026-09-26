@@ -64,6 +64,41 @@ type Parser struct {
 	// parseStream). It returns false when the reference cannot be resolved to a
 	// plain non-negative integer, in which case the search fallback is used.
 	ResolveLength func(ref object.IndirectRef) (int64, bool)
+
+	// Budget, when non-nil, meters the memory the parse materialises. Every
+	// object ParseObject builds is charged MaterialCost for it (plus the bytes
+	// of a string's or name's value) against *Budget, and once *Budget is
+	// negative the parse stops with ErrBudget. It is for input whose size does
+	// not bound its cost: an object stream is a few hundred kilobytes of
+	// compressed "1 0 R " that becomes tens of millions of objects, each
+	// several times larger in memory than in the file (audit 2026-09-22 C9).
+	// Metering the decoded bytes instead let one container overshoot by five
+	// times what it was charged.
+	Budget *int64
+}
+
+// MaterialCost is what the parser charges Budget for one object: a
+// conservative estimate, in bytes, of what one parsed value costs in memory.
+// It covers the value's slot in its parent (an interface: 16 bytes), the
+// boxed value itself (16 to 32 bytes: an IndirectRef, a String header), and
+// the parent's growth slack (a slice grown by doubling holds up to twice what
+// it uses, and while it grows the old array and the new one are both live).
+// Measured on an array of fifteen million "1 0 R" references, the live heap
+// after the parse is 32.5 bytes per element; 64 is twice that, which keeps the
+// estimate above the cost through the growth.
+const MaterialCost = 64
+
+// ErrBudget is returned when a parse would materialise more than its Budget.
+var ErrBudget = errors.New("parse budget exhausted: the input materialises more objects than the budget allows")
+
+// charge debits the budget for one value of n payload bytes, and reports
+// whether the parse may go on.
+func (p *Parser) charge(n int) bool {
+	if p.Budget == nil {
+		return true
+	}
+	*p.Budget -= MaterialCost + int64(n)
+	return *p.Budget >= 0
 }
 
 // maxLookahead is the most tokens the parser holds before consuming one.
@@ -175,6 +210,15 @@ func (p *Parser) ParseObject() (object.Object, error) {
 	tok, err := p.peekToken(0)
 	if err != nil {
 		return nil, err
+	}
+	if p.Budget != nil {
+		n := 0
+		if tok.Type == TokenString || tok.Type == TokenName {
+			n = len(tok.Value)
+		}
+		if !p.charge(n) {
+			return nil, ErrBudget
+		}
 	}
 
 	switch tok.Type {
@@ -407,6 +451,11 @@ func (p *Parser) parseDictOrStream() (object.Object, error) {
 		}
 		p.consumeToken()
 		key := object.Name(tok.Value)
+		// A key is an entry of its own: the key, the value slot and the
+		// dictionary's index entry for it.
+		if p.Budget != nil && !p.charge(len(tok.Value)) {
+			return nil, ErrBudget
+		}
 
 		// Value
 		val, err := p.ParseObject()

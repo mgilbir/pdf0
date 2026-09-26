@@ -341,17 +341,24 @@ func TestDamagedFontProgramFlagged(t *testing.T) {
 	}})
 	// A usage that renders visible text.
 	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{[]byte("Hi")}, Modes: map[int]bool{0: true}}
-	if core.LoadFontProgram(doc, fd) != nil {
-		t.Fatal("the fixture no longer exercises the rule: its garbage stream parsed as a font program")
+	fp, r := core.LoadFontProgram(doc, fd)
+	if fp != nil || r != core.ReasonMalformed {
+		t.Fatalf("the fixture no longer exercises the rule: LoadFontProgram = (%v, %v), want (nil, malformed)", fp != nil, r)
 	}
-	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd, u)); got == 0 {
+	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd, u, r)); got == 0 {
 		t.Error("damaged embedded font program not flagged for a rendered font")
 	}
 	// Not embedded -> not this rule's concern (embedding is a separate check).
 	fd2 := &object.Dictionary{}
 	fd2.Set("Flags", object.Integer(32))
-	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd2, u)); got != 0 {
+	if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd2, u, core.ReasonAbsent)); got != 0 {
 		t.Errorf("non-embedded font wrongly flagged as damaged: %d", got)
+	}
+	// A program pdf0 declined to read is not damaged (audit 2026-09-22 C47).
+	for _, declined := range []core.Reason{core.ReasonLimit, core.ReasonUnsupported, core.ReasonLocked, core.ReasonCanceled} {
+		if got := len(damagedFontProgramError(doc, PDFA1b, "6.3", font, fd, u, declined)); got != 0 {
+			t.Errorf("a font program not read (%v) was reported as damaged", declined)
+		}
 	}
 }
 

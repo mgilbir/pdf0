@@ -286,9 +286,9 @@ func checkLevelALanguage(doc core.View, level Level) []Violation {
 	// Cyrillic tag the corpus offers is written as UTF-16BE precisely so that a
 	// checker reading raw bytes sees eight ASCII-looking ones.
 	check := func(where string, o object.Object, obj int) {
-		s, ok := doc.Resolve(o).(object.String)
-		if !ok || len(s.Value) == 0 {
-			return
+		s, r := doc.StringValue(o)
+		if r != core.ReasonOK || len(s.Value) == 0 {
+			return // absent, or ciphertext whose tag cannot be judged
 		}
 		if lang := core.DecodePDFTextString(s.Value); !core.ValidLanguageTag(lang, digits) {
 			bad(where, lang, obj)

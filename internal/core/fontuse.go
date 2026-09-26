@@ -35,7 +35,7 @@ func CollectFontTextUsage(doc View) map[*object.Dictionary]*FontTextUsage {
 		seen := make(map[*object.Dictionary]bool)
 		applied := make(map[sfKey]bool)
 		for _, page := range doc.Pages(catalog.Get("Pages")) {
-			data, key := doc.ContentBytesAndKey(page.Dict.Get("Contents"))
+			data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only walk; the producer recorded any declined trip
 			collectTextFromContainer(doc, page.Dict, data, key, usage, seen, applied)
 		}
 	}
@@ -173,12 +173,14 @@ func collectTextFromContainer(doc View, container *object.Dictionary, data []byt
 	used := doc.ContentUsedNamesCached(data, key)
 	for _, c := range forms {
 		if used.XObjects[c.name] {
-			collectTextFromContainer(doc, &c.stream.Dict, doc.Content(c.stream), c.stream, usage, seen, applied)
+			data, _ := doc.Content(c.stream) // reason: presence-only walk; the producer recorded any declined trip
+			collectTextFromContainer(doc, &c.stream.Dict, data, c.stream, usage, seen, applied)
 		}
 	}
 	for _, c := range patterns {
 		if used.Patterns[c.name] {
-			collectTextFromContainer(doc, &c.stream.Dict, doc.Content(c.stream), c.stream, usage, seen, applied)
+			data, _ := doc.Content(c.stream) // reason: presence-only walk; the producer recorded any declined trip
+			collectTextFromContainer(doc, &c.stream.Dict, data, c.stream, usage, seen, applied)
 		}
 	}
 }
@@ -240,7 +242,7 @@ func Type0Descendant(doc View, fontDict *object.Dictionary) *object.Dictionary {
 // HasForbiddenUnicodeTargets scans a ToUnicode CMap for mappings to U+0000,
 // U+FEFF, or U+FFFE in bfchar/bfrange destinations.
 func HasForbiddenUnicodeTargets(doc View, stream *object.Stream) bool {
-	data := doc.Content(stream)
+	data, _ := doc.Content(stream) // reason: presence-only; a stream not read finds nothing and the producer recorded any declined trip
 	if data == nil {
 		return false
 	}
@@ -291,35 +293,55 @@ func HasForbiddenUnicodeTargets(doc View, stream *object.Stream) bool {
 		scanSection("beginbfrange", "endbfrange", 2)
 }
 
-// LoadFontProgram parses the embedded font program of a descriptor, or nil
-// when none is embedded or it cannot be parsed.
-func LoadFontProgram(doc View, fd *object.Dictionary) *font.Program {
+// LoadFontProgram parses the embedded font program of a descriptor.
+//
+// The Reason says what a nil program means, and the difference is the one a
+// check needs: ReasonAbsent (no program embedded — the embedding rule's
+// business), ReasonMalformed (the stream does not decode or the program does
+// not parse: the program is damaged), or a declined reason (pdf0 did not read
+// it — a size limit, an unimplemented filter, ciphertext — and nothing may be
+// concluded about the font). A declined program used to come back as the same
+// nil as a damaged one, and a 760 KB font read under a 100 KB scanning limit
+// was reported as "damaged" (audit 2026-09-22 C47).
+func LoadFontProgram(doc View, fd *object.Dictionary) (*font.Program, Reason) {
 	if fd == nil {
-		return nil
+		return nil, ReasonAbsent
+	}
+	program := func(fp *font.Program) (*font.Program, Reason) {
+		if fp == nil {
+			return nil, ReasonMalformed
+		}
+		return noteFontProgramLimits(doc, fp), ReasonOK
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile")).(*object.Stream); ok {
-		if data := doc.Content(s); data != nil {
-			return noteFontProgramLimits(doc, font.ParseType1(data))
+		data, r := doc.Content(s)
+		if r != ReasonOK {
+			return nil, r
 		}
+		return program(font.ParseType1(data))
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile2")).(*object.Stream); ok {
-		if data := doc.Content(s); data != nil {
-			return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.Limits.CmapWork))
+		data, r := doc.Content(s)
+		if r != ReasonOK {
+			return nil, r
 		}
+		return program(font.ParseSFNT(data, doc.Limits.CmapWork))
 	}
 	if s, ok := doc.Resolve(fd.Get("FontFile3")).(*object.Stream); ok {
-		if data := doc.Content(s); data != nil {
-			subtype, _ := doc.ResolveName(s.Dict.Get("Subtype"))
-			if subtype == "OpenType" {
-				if fp := ParseSFNTCFF(data); fp != nil {
-					return noteFontProgramLimits(doc, fp)
-				}
-				return noteFontProgramLimits(doc, font.ParseSFNT(data, doc.Limits.CmapWork))
-			}
-			return noteFontProgramLimits(doc, font.ParseCFF(data))
+		data, r := doc.Content(s)
+		if r != ReasonOK {
+			return nil, r
 		}
+		subtype, _ := doc.ResolveName(s.Dict.Get("Subtype"))
+		if subtype == "OpenType" {
+			if fp := ParseSFNTCFF(data); fp != nil {
+				return program(fp)
+			}
+			return program(font.ParseSFNT(data, doc.Limits.CmapWork))
+		}
+		return program(font.ParseCFF(data))
 	}
-	return nil
+	return nil, ReasonAbsent
 }
 
 // noteFontProgramLimits reports the guard trips the font-program parsers
@@ -394,8 +416,11 @@ func ParseCharSet(s string) map[string]bool {
 type CIDSet []byte
 
 // DecodeCIDSet decodes a CIDSet stream into a cidSet for membership testing.
-func DecodeCIDSet(doc View, s *object.Stream) CIDSet {
-	return CIDSet(doc.Content(s))
+// A CIDSet that was not decoded is nil with a Reason other than ReasonOK; only
+// ReasonOK makes an empty set mean "lists no CID".
+func DecodeCIDSet(doc View, s *object.Stream) (CIDSet, Reason) {
+	data, r := doc.Content(s)
+	return CIDSet(data), r
 }
 
 // UsedResourceNames records which named resources a content stream actually
@@ -457,13 +482,13 @@ func (d View) ContentUsedNamesCached(data []byte, key *object.Stream) UsedResour
 // ContentBytesAndKey resolves a container's content reference to its decoded
 // bytes and, when the reference is a single stream, that stream (usable as a
 // per-stream memoization key). object.Array contents are container-specific
-// concatenations and get no key.
-func (d View) ContentBytesAndKey(ref object.Object) ([]byte, *object.Stream) {
-	data := ContentStreamData(d, ref)
+// concatenations and get no key. The Reason is ContentStreamData's.
+func (d View) ContentBytesAndKey(ref object.Object) ([]byte, *object.Stream, Reason) {
+	data, r := ContentStreamData(d, ref)
 	if s, ok := d.Resolve(ref).(*object.Stream); ok {
-		return data, s
+		return data, s, r
 	}
-	return data, nil
+	return data, nil, r
 }
 
 // buildFontEvents tokenizes a decoded content stream once into a replayable
@@ -516,26 +541,33 @@ func buildFontEvents(cancel Canceler, data []byte) []FontEvent {
 
 // ContentStreamData extracts and concatenates content stream data.
 // Handles both single stream references and arrays of stream references.
-func ContentStreamData(doc View, contentsRef object.Object) []byte {
+//
+// For an array the result is every part that decoded, and the Reason is the
+// worst of the parts (Reason.Worse): a check may assert on what the decoded
+// parts contain, but not on what they lack unless the Reason is ReasonOK.
+// No /Contents at all is ReasonAbsent — an empty page, which is legal.
+func ContentStreamData(doc View, contentsRef object.Object) ([]byte, Reason) {
 	resolved := doc.Resolve(contentsRef)
 	switch v := resolved.(type) {
 	case *object.Stream:
 		return doc.Content(v)
 	case object.Array:
 		var result []byte
+		reason := ReasonOK
 		for _, elem := range v {
 			streamObj := doc.Resolve(elem)
 			if stream, ok := streamObj.(*object.Stream); ok {
-				data := doc.Content(stream)
+				data, r := doc.Content(stream)
+				reason = reason.Worse(r)
 				if data != nil {
 					result = append(result, ' ')
 					result = append(result, data...)
 				}
 			}
 		}
-		return result
+		return result, reason
 	}
-	return nil
+	return nil, ReasonAbsent
 }
 
 func ContentUsedNames(cancel Canceler, data []byte) UsedResourceNames {

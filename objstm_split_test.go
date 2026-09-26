@@ -24,7 +24,7 @@ import (
 func TestObjectStreamSplitBudget(t *testing.T) {
 	// 8192 makes objStmMaxRaw 4096 — small enough that a few padded objects need
 	// several containers.
-	lim := resolveLimits([]Option{WithMaxDecodedStreamBytes(8192)})
+	lim := mustResolveLimits([]Option{WithMaxDecodedStreamBytes(8192)})
 
 	const n = 200
 	doc := &Document{
@@ -55,7 +55,10 @@ func TestObjectStreamSplitBudget(t *testing.T) {
 	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
 	// The write set must span more than one container, and none may exceed the cap.
-	writeSet, type2 := doc.buildWriteSet()
+	writeSet, type2, err := doc.buildWriteSet()
+	if err != nil {
+		t.Fatalf("buildWriteSet: %v", err)
+	}
 	containers := map[int]bool{}
 	for _, loc := range type2 {
 		containers[loc[0]] = true
@@ -65,7 +68,7 @@ func TestObjectStreamSplitBudget(t *testing.T) {
 	}
 	for cnum := range containers {
 		st := writeSet[cnum].Value.(*object.Stream)
-		raw, err := core.DecodeStreamData(core.Canceler{}, st, lim)
+		raw, err := core.DecodeStreamData(core.Canceler{}, st, lim, nil)
 		if err != nil {
 			t.Fatalf("container %d: decode: %v", cnum, err)
 		}

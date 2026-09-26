@@ -110,7 +110,10 @@ func withArchivalTimestamp(d *Document, data ValidationData) (*Document, []int, 
 		held := map[string]bool{}
 		for _, ref := range have {
 			if st, ok := d.Resolve(ref).(*object.Stream); ok {
-				held[string(d.view().Content(st))] = true
+				// reason: an item that did not decode matches nothing, so the new
+				// one is added beside it; nothing is lost either way.
+				data, _ := d.view().Content(st) // reason: see above
+				held[string(data)] = true
 			}
 		}
 		for _, item := range list.items {

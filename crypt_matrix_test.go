@@ -188,7 +188,7 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 			}
 			// The content stream must still inflate — proof it decrypted correctly.
 			if st, ok := back.Objects[4].Value.(*object.Stream); ok {
-				if _, err := core.DecodeStreamData(core.Canceler{}, st, core.DefaultLimits()); err != nil {
+				if _, err := core.DecodeStreamData(core.Canceler{}, st, core.DefaultLimits(), nil); err != nil {
 					t.Errorf("content stream does not inflate after round-trip: %v", err)
 				}
 			}

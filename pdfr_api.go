@@ -64,7 +64,11 @@ func validatePDFR(cancel core.Canceler, d *Document) []pdfr.Violation {
 		return out
 	}
 	run(func() {
-		if xmp := v.view().DocumentXMP(); xmp == "" {
+		xmp, r := v.view().DocumentXMP()
+		if r.Declined() {
+			return // not read; the producer recorded the trip
+		}
+		if xmp == "" && r != core.ReasonMalformed {
 			add("metadata", "a PDF/R file requires an XMP metadata stream", 0)
 		} else if !strings.Contains(strings.ToLower(xmp), "pdf/r") && !strings.Contains(strings.ToLower(xmp), "pdfr") {
 			add("identification", "the XMP metadata does not identify the file as PDF/R", 0)

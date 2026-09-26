@@ -1,6 +1,9 @@
 package pdf0
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/mgilbir/pdf0/internal/core"
 )
 
@@ -58,22 +61,53 @@ import (
 // values are inherited by every validator and extractor that runs on the
 // resulting Document.
 type Option interface {
-	apply(*core.Limits)
+	apply(*core.Limits) error
 }
 
-type optionFunc func(*core.Limits)
+type optionFunc func(*core.Limits) error
 
-func (f optionFunc) apply(l *core.Limits) { f(l) }
+func (f optionFunc) apply(l *core.Limits) error { return f(l) }
 
-// resolveLimits applies options over the zero struct and fills in defaults.
-func resolveLimits(opts []Option) core.Limits {
+// ErrInvalidOption is wrapped by the error an entry point returns for an
+// option whose value it cannot honour.
+var ErrInvalidOption = errors.New("pdf0: invalid option")
+
+// resolveLimits applies options over the zero struct and fills in defaults. An
+// option with a value it cannot honour is an error, returned by the entry
+// point before anything is read.
+func resolveLimits(opts []Option) (core.Limits, error) {
 	var l core.Limits
 	for _, o := range opts {
 		if o != nil {
-			o.apply(&l)
+			if err := o.apply(&l); err != nil {
+				return core.Limits{}, err
+			}
 		}
 	}
-	return l.WithDefaults()
+	return l.WithDefaults(), nil
+}
+
+// positiveLimit is the one validation every limit option shares.
+//
+// A bound is a count of bytes or of steps, and every one of them is positive.
+// Zero and negative values are refused rather than given a meaning, because
+// every meaning they could have is a surprise to someone: 0 reads as "no
+// limit" to one caller and "allow nothing" to another, and internally it meant
+// "the default", so WithMaxDecodedStreamBytes(0) silently did nothing; -1 made
+// every stream fail with "exceeds maximum size (-1 bytes)" (audit 2026-09-22
+// C48). The way to ask for no practical bound is the type's maximum —
+// math.MaxInt, or math.MaxInt64 for the int64 options — which is honoured as
+// written: every guard compares against it without arithmetic that could
+// overflow (the decoders' "+1" read-ahead used to wrap it negative, so
+// math.MaxInt decoded every stream to nothing).
+func positiveLimit[T int | int64](option string, n T, set func(*core.Limits, T)) Option {
+	return optionFunc(func(l *core.Limits) error {
+		if n <= 0 {
+			return fmt.Errorf("%w: %s(%d): a limit must be positive; for no practical limit pass the type's maximum (math.MaxInt or math.MaxInt64)", ErrInvalidOption, option, n)
+		}
+		set(l, n)
+		return nil
+	})
 }
 
 // lim returns the resolved limits for a document. Reading through this accessor
@@ -97,7 +131,7 @@ func (d *Document) lim() core.Limits {
 // makes Write emit smaller object-stream containers that the same configuration
 // can read back.
 func WithMaxDecodedStreamBytes(n int) Option {
-	return optionFunc(func(l *core.Limits) { l.DecodedStreamBytes = n })
+	return positiveLimit("WithMaxDecodedStreamBytes", n, func(l *core.Limits, n int) { l.DecodedStreamBytes = n })
 }
 
 // WithMaxDecodedContentBytes caps the total decoded content one validation run
@@ -106,29 +140,39 @@ func WithMaxDecodedStreamBytes(n int) Option {
 // upload must not exhaust my process". The heaviest real document measured
 // needs 218 MB.
 func WithMaxDecodedContentBytes(n int64) Option {
-	return optionFunc(func(l *core.Limits) { l.DecodedContentBytes = n })
+	return positiveLimit("WithMaxDecodedContentBytes", n, func(l *core.Limits, n int64) { l.DecodedContentBytes = n })
 }
 
-// WithMaxObjectStreamBytes caps the aggregate decompressed size of all object
-// streams in one document (default 512 MB). Object streams are the other
-// compression-amplification path into a document: a small file can carry many
-// containers that each inflate near the per-stream cap. The heaviest real
-// document measured needs 9 MB.
+// WithMaxObjectStreamBytes caps the memory Read may spend on the objects it
+// unpacks from object streams in one document (default 512 MB): the parser's
+// estimate of every object it builds (syntax.MaterialCost, twice the measured
+// live cost), plus the decoded bytes of the container being unpacked. Object
+// streams are the other compression-amplification path into a document: a
+// 403 KB file can carry three containers that inflate to 270 MB of "1 0 R",
+// which is five times that in memory. A container that would take the total
+// past the bound is not unpacked, its objects are missing, and every validator
+// reports the trip under "limit".
+//
+// The heaviest real document measured — across the veraPDF corpus, the
+// Factur-X, WTPDF and PDF/VT suites and a 1000-file Common Crawl sample —
+// charges 64 MB, so the default leaves eight times that. The bound used to
+// meter decoded bytes instead (the heaviest document then measured needed
+// 9 MB of them), which let the objects take five times the bound in memory.
 func WithMaxObjectStreamBytes(n int64) Option {
-	return optionFunc(func(l *core.Limits) { l.ObjectStreamBytes = n })
+	return positiveLimit("WithMaxObjectStreamBytes", n, func(l *core.Limits, n int64) { l.ObjectStreamBytes = n })
 }
 
 // WithMaxContentStreamBytes caps the decoded size of a single content stream or
 // image sample buffer that will be scanned (default 64 MB). Larger streams are
 // skipped. The largest real content stream measured is 29 MB.
 func WithMaxContentStreamBytes(n int) Option {
-	return optionFunc(func(l *core.Limits) { l.ContentStreamBytes = n })
+	return positiveLimit("WithMaxContentStreamBytes", n, func(l *core.Limits, n int) { l.ContentStreamBytes = n })
 }
 
 // WithMaxICCProfileBytes caps the decoded size of an ICC profile (default
 // 8 MiB). The largest real profile measured is 1.8 MB.
 func WithMaxICCProfileBytes(n int) Option {
-	return optionFunc(func(l *core.Limits) { l.ICCProfileBytes = n })
+	return positiveLimit("WithMaxICCProfileBytes", n, func(l *core.Limits, n int) { l.ICCProfileBytes = n })
 }
 
 // WithMaxXMPPacketBytes caps the size of an XMP packet that the property checks
@@ -139,35 +183,35 @@ func WithMaxICCProfileBytes(n int) Option {
 // the worst case grows quadratically — roughly 3 s at the 4 MiB default and 12 s
 // at 8 MiB. The largest real packet measured is 1.6 MB.
 func WithMaxXMPPacketBytes(n int) Option {
-	return optionFunc(func(l *core.Limits) { l.XMPPacketBytes = n })
+	return positiveLimit("WithMaxXMPPacketBytes", n, func(l *core.Limits, n int) { l.XMPPacketBytes = n })
 }
 
 // WithMaxCIDRangeSpan caps the number of CIDs a single /W range entry may span
 // (default 65536, the size of the CID space). Without it a range such as
 // [0 2000000000 500] would ask for two billion map insertions.
 func WithMaxCIDRangeSpan(n int) Option {
-	return optionFunc(func(l *core.Limits) { l.CIDRangeSpan = n })
+	return positiveLimit("WithMaxCIDRangeSpan", n, func(l *core.Limits, n int) { l.CIDRangeSpan = n })
 }
 
 // WithMaxRoleMapSteps caps the total /RoleMap chain-follow steps across one
 // PDF/UA structure-type check (default 1<<20), bounding a quadratic blowup on a
 // large hostile role map.
 func WithMaxRoleMapSteps(n int) Option {
-	return optionFunc(func(l *core.Limits) { l.RoleMapSteps = n })
+	return positiveLimit("WithMaxRoleMapSteps", n, func(l *core.Limits, n int) { l.RoleMapSteps = n })
 }
 
 // WithMaxTableGridFills caps the number of grid slots the PDF/UA table checks
 // will fill for one table (default 1<<24), bounding a cell whose /RowSpan and
 // /ColSpan claim a multi-million-slot area.
 func WithMaxTableGridFills(n int64) Option {
-	return optionFunc(func(l *core.Limits) { l.TableGridFills = n })
+	return positiveLimit("WithMaxTableGridFills", n, func(l *core.Limits, n int64) { l.TableGridFills = n })
 }
 
 // WithMaxPostScriptSteps caps the total operators one type-4 (PostScript
 // calculator) function evaluation may execute (default 1<<20), bounding a
 // function whose loops would otherwise not terminate usefully.
 func WithMaxPostScriptSteps(n int) Option {
-	return optionFunc(func(l *core.Limits) { l.PostScriptSteps = n })
+	return positiveLimit("WithMaxPostScriptSteps", n, func(l *core.Limits, n int) { l.PostScriptSteps = n })
 }
 
 // WithMaxCmapWork caps the work spent expanding one TrueType cmap subtable of
@@ -182,7 +226,7 @@ func WithMaxPostScriptSteps(n int) Option {
 // glyph-presence rules on large fonts; it never turns them into false
 // positives.
 func WithMaxCmapWork(n int) Option {
-	return optionFunc(func(l *core.Limits) { l.CmapWork = n })
+	return positiveLimit("WithMaxCmapWork", n, func(l *core.Limits, n int) { l.CmapWork = n })
 }
 
 // WithMaxImagePixels caps the size of an image that extraction will decode
@@ -202,5 +246,5 @@ func WithMaxCmapWork(n int) Option {
 // false, its encoded bytes, and a Note naming the image-pixels guard, and the
 // walk continues with the next image.
 func WithMaxImagePixels(n int64) Option {
-	return optionFunc(func(l *core.Limits) { l.ImagePixels = n })
+	return positiveLimit("WithMaxImagePixels", n, func(l *core.Limits, n int64) { l.ImagePixels = n })
 }

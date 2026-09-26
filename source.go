@@ -476,6 +476,7 @@ func (d *Document) updateClone(extra int) *Document {
 		nextObjNum:      d.nextObjNum,
 		limits:          d.limits,
 		brokenObjStms:   d.brokenObjStms,
+		skippedObjStms:  d.skippedObjStms,
 		decryptFailures: d.decryptFailures,
 		readLimits:      d.readLimits,
 		usedXRefStream:  d.usedXRefStream,

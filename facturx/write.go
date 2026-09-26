@@ -87,7 +87,7 @@ func embed(doc core.View, f family, data []byte, fileName, docType, level, desc,
 	// has been changed yet.
 	metaRef := cat.Get("Metadata")
 	metaStream, _ := doc.Resolve(metaRef).(*object.Stream)
-	packet, err := core.EditableXMP(doc.Cancel, metaStream, doc.Limits)
+	packet, err := core.EditableXMP(doc, metaStream)
 	if err != nil {
 		return err
 	}

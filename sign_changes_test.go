@@ -232,7 +232,7 @@ func TestRedefinedObjectStreamIsAChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, index, first, err := parseObjStmIndex(core.Canceler{}, cobj.Value.(*object.Stream), d.lim())
+	data, index, first, err := parseObjStmIndex(core.Canceler{}, cobj.Value.(*object.Stream), d.lim(), d.Resolve)
 	if err != nil {
 		t.Fatal(err)
 	}

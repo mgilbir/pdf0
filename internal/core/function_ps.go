@@ -117,7 +117,7 @@ const (
 )
 
 func parsePSProgram(d View, stream *object.Stream) ([]psItem, bool) {
-	data := d.Content(stream)
+	data, _ := d.Content(stream) // reason: an empty program does not parse, so the function is not evaluated; the producer recorded any declined trip
 	if len(data) > maxPSProgramBytes {
 		return nil, false
 	}
